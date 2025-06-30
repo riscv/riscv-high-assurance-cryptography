@@ -12,17 +12,13 @@
 # This Makefile is designed to automate the process of building and packaging
 # the Doc Template for RISC-V Extensions.
 
-
-
 DOCS := \
 	ace.adoc
 
 DATE ?= $(shell date +%Y-%m-%d)
 VERSION ?= v0.0.0
-REMARK ?= Draft
+REVMARK ?= Draft
 DOCKER_IMG := docker.io/riscvintl/riscv-docs-base-container-image:latest
-# DOCKER_IMG := docker-registry.qualcomm.com/proxy-cache-qcom/riscvintl/riscv-docs-base-container-image:latest
-# DOCKER_IMG := docker-registry.qualcomm.com/library/asciidoctor:latest
 DOCKER_BIN ?= docker
 ifneq ($(SKIP_DOCKER),true)
 	DOCKER_IS_PODMAN = \
