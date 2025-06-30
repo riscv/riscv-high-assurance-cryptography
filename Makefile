@@ -19,7 +19,7 @@ DOCS := \
 
 DATE ?= $(shell date +%Y-%m-%d)
 VERSION ?= v0.0.0
-REVMARK ?= Draft
+REMARK ?= Draft
 DOCKER_IMG := docker.io/riscvintl/riscv-docs-base-container-image:latest
 # DOCKER_IMG := docker-registry.qualcomm.com/proxy-cache-qcom/riscvintl/riscv-docs-base-container-image:latest
 # DOCKER_IMG := docker-registry.qualcomm.com/library/asciidoctor:latest
