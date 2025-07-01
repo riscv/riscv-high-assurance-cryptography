@@ -5,26 +5,28 @@
 
 ==== Privilege Levels and Security States
 
-We assume a generic architecture that implements a hierarchy of Privilege Levels (PL) and, optionally, separate, coexisting Worlds (an example is provided by the Secure and Non-Secure Security States in the ARM Architecture). Its properties are:
+// We assume a generic architecture that implements a hierarchy of Privilege Levels (PL) and, optionally, separate, coexisting Worlds (an example is provided by the Secure and Non-Secure Security States in the ARM Architecture). Its properties are:
+// [arabic]
+// . There are several PLs, such as: *User*, *OS/VM*, *Supervisor*, and *Machine Mode.*
+// . These PLs are abbreviated as UL (as in User Land), OS, SV, and MM.
+// . Different architectures may support a different number of levels.
+// . There are at least two levels, one of which is MM.
+// . MM is always the highest privilege level.
+// . There is always one and only one instance of the MM and corresponding Software/Firmware stack.
+// . A *world* is a hierarchy of PLs different from MM. Inside a world, a SW hierarchy exists, which may vary in complexity from of a single process to a full stack including a Hypervisor, multiple operating systems managed by the latter, and multiple user processes running under the operating systems.
+// . These SW entities correspond to the three PLs that can be implemented inside a World: SV, VM, and UL.
+// . There is at least one World.
+// . The separation between Worlds correspond to same protection commonly found in Trusted Execution Environments (TEE) or Supervisor Domains.
+// . If a world contains more than one PL, the effectiveness of the separation of the PLs and the enforcement of their hierarchy typically depends on how the SL software stack is implemented, on the architectural access control features on memory, and hardware support.
+// . Access Control based separation of the Worlds is assumed.
+// . Cryptographic RAM protection (i.e., encryption or better) is not assumed.
+// . In traditional environments, OL and SL directly manage page tables. However, in Confidential Computing Environments (CCE), the MM may ensure the CCE guarantees by verifying or managing these tables.
+// The mapping of our terminology to the various solutions on the market is straightforward.
 
-* There are several PLs, such as: *User*, *OS/VM*, *Supervisor*, and *Machine Mode.*
-* These PLs are abbreviated as UL (as in User Land), OS, SV, and MM.
-* Different architectures may support a different number of levels.
-* There are at least two levels, one of which is MM.
-* MM is always the highest privilege level.
-* There is always one and only one instance of the MM and corresponding Software/Firmware stack.
-* A *world* is a hierarchy of PLs different from MM. Inside a world, a SW hierarchy exists, which may vary in complexity from of a single process to a full stack including a Hypervisor, multiple operating systems managed by the latter, and multiple user processes running under the operating systems.
-* These SW entities correspond to the three PLs that can be implemented inside a World: SV, VM, and UL.
-* There is at least one World.
-* The separation between Worlds correspond to same protection commonly found in Trusted Execution Environments (TEE) or Supervisor Domains.
-* If a world contains more than one PL, the effectiveness of the separation of the PLs and the enforcement of their hierarchy typically depends on how the SL software stack is implemented, on the architectural access control features on memory, and hardware support.
-* Access Control based separation of the Worlds is assumed.
-* Cryptographic RAM protection (i.e., encryption or better) is not assumed.
-* In traditional environments, OL and SL directly manage page tables. However, in Confidential Computing Environments (CCE), the MM may ensure the CCE guarantees by verifying or managing these tables.
+We assume a generic architecture that implements a hierarchy of Privilege Levels (PL) and, optionally, separate, coexisting Worlds.
+There are at least two levels, one of which is MM (Machine).
+The current PL (CURRENTPL) and World are discoverable.
 
-The mapping of our terminology to the various solutions on the market is straightforward.
-
-The current PL and World must be discoverable through read only system registers which we denote by CURRENTPL and CURRENTWORLD.
 
 ==== Processing Elements and Subsystems
 
@@ -44,7 +46,7 @@ Support must be provided for opaque keys of three different types:
 [arabic]
 . *Software Keys*, where its key value is explicitly set by SW. The key may be set by an agent running in a SW environment for use in a different one.
 . *Immutable* *System Keys (ISKs)*, i.e. keys which are provided to a SS by the system outside the SS that implements the feature, for instance by a key management engine. There is one table of ISKs per SS. The values of these keys are often not available to any SW environment and must not leak. Such keys are immutable during a boot session and are provided to a SS as a single table only once per boot.
-. *System Derived Keys*_._ These keys resemble system keys in that they are provided by the system. But the similarities end here. They are dynamically generated or derived and can be provided upon request at any time. They are also provided to a SW environment, not to the entire SS.
+. *System Derived Keys.* These keys resemble system keys in that they are provided by the system. But the similarities end here. They are dynamically generated or derived and can be provided upon request at any time. They are also provided to a SW environment, not to the entire SS.
 
 We have already mentioned that policies are associated with opaque keys to allow their use only with specific cryptographic algorithms. In the case of System or System derived keys, these policies are mandated by the system and cannot be altered by SW.
 
@@ -74,13 +76,21 @@ ACE does not provide ad-hoc debugging support. If HW debug is enabled, it must b
 
 ==== Storage of the keys
 
-As mentioned in the introduction, there are architectural registers, the CHRs, where te keys are stored together with their policies. We recall that “architectural” means that these registers are per hart, like the integer, floating point, and vector registers.
+As mentioned in the introduction, there are architectural registers, the CHRs, where the keys are stored together with their policies.
+We recall that "architectural" means that these registers are per hart, like the integer, floating point, and vector registers.
+The CHRs are denoted by the letter `c` and an integer number from 0 to 31, and therefore are named `c0`, `c1`, ..., `c31`.
+This also means that, like any other registers in the RV architecture, they are encoded in a 5-bit field.
+The last CHR, namely `c31` is reserved for system use and is only accessible to Machine mode.
 
-However, any limited number of CHRs is not sufficient to cover all use cases, so we have defined export and import operations that create and consume the SCCs.
+Now, any limited number of CHRs is not sufficient to cover all use cases, and in any case they would not be sufficient to provide keys to all processes.
+Therefore, we have defined export and import operations that create and consume the SCCs.
 
-The ISKs are stored in internal RAM, which is architecturally common to all PEs in a single SS. This table can be copied to internal RAM common to one or more CPUs or clusters. Once provisioned, it is write locked and cannot be modified until the next boot.
+The ISKs are stored in internal RAM, which is architecturally common to all PEs in a single SS.
+This table can be copied to internal, non user accessible, RAM common to one or more CPUs or clusters.
+Once provisioned, it is write locked and cannot be modified until the next boot.
 
-System-derived keys are provided directly to SW entities and are not stored in the ISK table. They are provided as bit strings, and the SCC import instructions recognize this format and import them into CHRs.
+System-derived keys are provided directly to SW entities and are not stored in the ISK table.
+CnThey are provided as bit strings, and the SCC import instructions recognize this format and import them into CHRs.
 
 ==== Sealed Cryptographic Contexts, Import and Export
 
@@ -106,10 +116,11 @@ The (Deterministic) Authenticated Encryption used to generate SCCs is 256-bit AE
 
 *The MM exclusively controls the Context Transport Key (CTK), which is used for wrapping/unwrapping CHR contents to/from SCCs.*
 
-The CTK resides in C31, a special 256-bit MM-only read/write register. While encoded as CHR #31 for instruction compatibility, C31 differs from standard CHRs: it has fixed usage policies, no metadata storage, and the export/import operations do not apply.
+The CTK resides in `c31`, a special 256-bit MM-only read/write register.
+While encoded as the 31^rst^ CHR for instruction compatibility, `c31` differs from the other CHRs:
+it has fixed usage policies, no metadata storage, and the export/import operations do not apply to it.
 
 *The MM can reconfigure the CTK at any time, enabling various configurations of the system as a whole:*
-
 * System-wide configuration at boot.
 * Different keys for each Security State.
 * Custom keys for individual VMs or VM groups (upon secure Hypervisor request).
@@ -148,18 +159,44 @@ The MM, which controls the CTK, can the
 . Export the key for the Requester's use.
 . Relinquish control to the Requester.
 
-This is the most generic approach and allows each piece of software to use a CHR of choice to generate and import SCCs. Furthermore, it protects the key from other SW environments that may be crossed while transferring control between the Requester process, the MM, and the Key Management application.
+This is the most generic approach and allows each piece of software to use a CHR of choice to generate and import SCCs.
+Furthermore, it protects the key from other SW environments that may be crossed while transferring control between the Requester process, the MM, and the Key Management application.
 
-Various optimizations are possible, which can be interesting for embedded environments: steps 3., 5., and 6. can be omitted if the CHR used for these operations is fixed and the overall SW/FW stack is simple enough. Similarly, step 8. can be omitted. These are choices of the ABI architect of a specific SW/FW stack.
+Various optimizations are possible, which can be interesting for embedded environments: Steps 3., 5., and 6. can be omitted if the CHR used for these operations is fixed and the overall SW/FW stack is simple enough.
+Similarly, Step 8. can be omitted.
+These are choices of the ABI architect of a specific SW/FW stack.
 
-==== Binding of Contexts to their Lifecycles, Derived CTKs
+[[Context-Binding]]
+==== Binding of Contexts to Lifecycles and Domains, Derived CTKs
 
-As noted in <<Goals-Regarding-Key-Types>>, different keys may require distinct lifecycles based on specific requirements (e.g., DRM-protected content limited to certain devices). The system manages these lifecycles through:
+[CAUTION]
+====
+We need to define the Domain as a concatenation of domain strings for each of the levels.
+For instance, if we are not using the Hypervisor extension, then we have strings for User and Supervisor modes.
+If we are using the Hypervisor extension, then we have strings for Virtual User, Virtual Supervisor, and Supervisor (Hypervisor) modes.
+Let us call these values the Domain Unique Values.
+They are set by the local software environment, they are 32 (or 64? 128?) bit values, and are set by the immediately superior environment.
+They are not required to be secret, so they are just set by programming a register (*is this ok?*)
 
-* Lifecycle information stored in CHR metadata
-* Lifecycle Specific Context Transport Keys (LSCTKs) for key export/import
+So, we have DUV_U, DUV_S, set by S and M, without the Hypervisor extension, and
+DUV_VU, DUV_VS, DUV_VS, set by VS, S, and M, if the the Hypervisor extension is set.
+They are meant to be an alternative to reprogramming the CTK for each SW environment in order to make switching domains faster.
+Reprogramming the CTK is still useful for VM migration or to more strongly isolate Worlds.
 
-LSCTKs are derived by combining the original CTK with a Lifecycle Type Secret (LTS) that matches the desired lifecycle encoded in the CHR metadata.
+If there DUV_xx values are not set by the system, they have a default value of zero.
+If the hardware does not support them, then they are not writeable and they are always read as zero, but are otherwise unused.
+If the hardware supports them, then there must be a register to lock them, so that they they become WARZ even to the hardware.
+====
+
+As noted in <<Goals-Regarding-Key-Types>>, different keys may require distinct lifecycles based on specific requirements (e.g., DRM-protected content limited to certain devices).
+The same mechanism is used to bind keys to specific domains.
+
+The system manages these lifecycles through:
+* Lifecycle and Domain information stored in CHR metadata
+* Lifecycle/Domain Specific Context Transport Keys (LSCTKs) for key export/import
+
+LSCTKs are derived by combining the original CTK with a Lifecycle Type Secret (LTS) and a Domain Secret (DOS)
+that matches the desired Lifecycle/Domain encoded in the CHR metadata.
 
 When an LTS expires and therefore it is erased, or is changed, all associated LSCTK-exported SCCs become invalid because they can not be reimported. However, any value in a CHR remains usable and can be exported under a new key associated with the LTS. This is not a concern since LTSs are not expected to be dynamically invalidated or changed during SW execution, but only between boot sessions.
 
@@ -182,10 +219,17 @@ These keys are stored in the Lifecycle Secret Table (LST), a subset of the ISK T
 
 A Lifecycle Type is configured through metadata by having a field with the same index. This field determines how a key is exported and reimported.
 
-* If the lifecycle is not restricted, then the CTK in C31 is used directly.
+* If the lifecycle is not restricted, then the CTK in `c31` is used directly.
 * Otherwise, a LSCTK will be computed using a special function (TBD) +
-Derived++_++CTK = Uniquify(CTK,LTST++[++index++]++}) +
-and the Derived++_++CTK is used to encrypt and authenticate the SCC.
+`Derived_CTK = Uniquify(CTK,LTST[index])`, +
+`Derived_CTK = Uniquify(CTK,LTST[index] || DUV_U || DUV_S })` or +
+`Derived_CTK = Uniquify(CTK,LTST[index] || DUV_VU || DUV_VS || DUV_S})` +
+and the `Derived_CTK` is value used to encrypt and authenticate the SCC.
+
+[CAUTION]
+====
+This function must be as fast as possible. We cannot use a cryptographic hash or too many chained AES invocations. Roberto: what to do?
+====
 
 [[Support-dynamically-generated-system-keys]]
 ==== Support for dynamically generated system keys
