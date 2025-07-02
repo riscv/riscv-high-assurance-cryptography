@@ -6,10 +6,11 @@
 * Let us recall that the length of the vector registers is encoded in the value `vl`.
 * `xn` = Integer register, assumed to be at least 64-bit wide. We use here the architectural name of the registers and not the ABI name.
 * `vn` = Vector register, assumed to be at least 128-bit wide.
-* `cn` = Context Holding Register, defined in Section 2.4.1.
+* `cn` = Context Holding Register, defined in <<Storage-of-the-keys>>.
 
 === Data Structures
 
+[[CHR-Format]]
 ==== Format of Context Holding Registers
 
 The CHRs can be very large, but their implementation cost is mitigated by two factors:
@@ -153,7 +154,7 @@ A system register ACE_CHR_VALID_x should be provided for PL x = UL, OL, HL, to r
 
 Only an execution level higher than ELx can directly clear the content of ACE_CHR_VALID_x. The instruction provided by the ISA to manipulate CSRs are used for this purpose and are not architected by ACE.
 
-The register should implement as many bits as CHRs, except for `c31`. In other words, each ACE_CHR_VALID_x contains at most 31 bits and bit 31 is WARZ.
+The register should implement as many bits as CHRs, except for c31 In other words, each ACE_CHR_VALID_x contains at most 31 bits and bit 31 is WARZ.
 
 [[System-Keys]]
 === System Keys
@@ -272,13 +273,12 @@ In this section we write, AES256_Encrypt(K,P) for the encryption of P using AES-
 
 ACE may or may not be implemented as part of the VXU. The HW block or component implementing the feature is called the *Cryptography Execution Unit* (CXU). It may share components with other cryptographic functionality or instructions of the PE, however extra care must be taken to prevent leakage of CHR contents.
 
-==== ­ace.set/ace.clear
+[[ace-set-clear]]
+==== ace.set/ace.clear
 
 *ace.set* configures a CHR with a key/metadata pair, or a system key number.
 
 *ace.clear* clears the contents of `cd`, including setting C[d].metadata[VALID] to zero, and mark it as unused in the corresponding ACE_CHR_VALID_x, by setting the d-th bit to zero. This serves to notify the parent environment that the process is finished using that CHR and it does not need to be saved and restored by upon context switch.
-
-ace.clear is encoded as a _pseudoinstruction_, namely *ace.set `cd`, `xn`,`va`* with `xn`=0.
 
 ____
 *Remark:* _Clearing a CHR after it has been used is good hygiene to reduce the likelihood that another process may use its contents. In a SW architecture, processes should inform the OS via a system call that they are going to use the feature. This will allow the OS to clear all CHRs when switching to a process that is not using the feature._
@@ -292,22 +292,18 @@ There are two main ways the instruction operates:
 
 [arabic]
 . The key is a SW key (KeyType 0 in the metadata), then the key is an explicitly given bit-string in the vector register `va`, or in the pair [V[a+1]:`va`].
-. If the KeyType field t is equal to 1, then the bit string `va` is a descriptor for an immutable system key (also called a HW key)
+. If the KeyType field `t` is equal to 1, then the bit string `va` is a descriptor for an immutable system key (also called a HW key)
 
 Bit 63 of the metadata field is always set to 1 to properly configure a CHR.
 
-[width="100%",cols="^3%,^3%,^3%,^3%,^3%,^3%,^3%,^3%,^3%,^3%,^3%,^3%,^3%,^3%,^3%,^3%,^3%,^3%,^3%,^3%,^3%,^3%,^3%,^3%,^3%,^3%,^3%,^3%,^3%,^3%,^3%,^3%",options="header",]
-|===
-|3 |3 |2 |2 |2 |2 |2 |2 |2 |2 |2 |2 |1 |1 |1 |1 |1 |1 |1 |1 |1 |1 |0 |0 |0 |0 |0 |0 |0 |0 |0 |0
-|1 |0 |9 |8 |7 |6 |5 |4 |3 |2 |1 |0 |9 |8 |7 |6 |5 |4 |3 |2 |1 |0 |9 |8 |7 |6 |5 |4 |3 |2 |1 |0
-|1 |1 |0 |1 |1 |1 |0 |0 |1 |1 |`[small]#xn#` | | | | | |1 |1 |0 |0 |0 |a |`[small]#va xa#` | | | | |`[small]#cd#` | | | |
-|===
 
 *_Encoding_*
 
-* *ace.set* `cd`, `xn`, `va`
-* *ace.set* `cd`, `xn`, [`xa`]
-* *ace.clear* `cd`
+* `ace.set` `cd`, `xn`, `va` --- use R-type encoding with `cd` as the destination.
+* `ace.set` `cd`, `xn`, [`xa`] --- use R-type encoding with `cd` as the destination.
+* `ace.clear` `cd` --- use R-type encoding with `cd` as the destination.
+* ace.clear is encoded as _pseudoinstruction_ `ace.set` `cd`, `xn`,`va` with `xn`=0, i.e. with null metadata.
+* The encoding also contains two special bits, `a` and `t`.
 
 *_Decode for this encoding_*
 
@@ -323,9 +319,9 @@ integer key = UInt(`va`) if a == 0, else *`xa`
 
 * `cd` is the name of the destination CHR.
 * `va` is the name of the (first) source vector register holding the key or the system key descriptor.
-* `xa` is the name of the register containing the addess of a key (if very long or consisting of the concatenation of several keys). It is used in place of `va`. We do not preclude a priori the use of different addressing methods if the architecture supports them.
-* `xn` is the name of the integer register containing the metadata. Bit 63 of this register is ignored and
-* always set to 1 by this instruction
+* `xa` is the name of the register containing the addess of a key (if very long or consisting of the concatenation of several keys). It is used in place of `va`.
+//We do not preclude a priori the use of different addressing methods if the architecture supports them.
+* `xn` is the name of the integer register containing the metadata. Bit 63 of this register is ignored and always set to 1 by this instruction.
 
 *_Operation_*
 
@@ -338,7 +334,7 @@ integer key_blocks;
 
 if !ACE_is_Implemented() then UNDEFINED;
 
-// Only the MM may touch `c31`.
+// Only the MM may touch c31.
 if (d == 31) && (CURRENTPL != MM) then
     *Error!*
 
@@ -391,24 +387,17 @@ else
 Perform any additional operations on the state that are required by the algorithm, such as creating shares for a threshold implementation.
 ----
 
+[[ace-export]]
 ==== ace.export
 
 The instruction exports a CHR to external, untrusted memory.
 
-For simplicity, in the example below we implement only one addressing mode.
-
-Additional addressing modes are possible if supported by the architecture. We do not write their ASL to focus on the essentials.
-
-[width="100%",cols="^3%,^3%,^3%,^3%,^3%,^3%,^3%,^3%,^3%,^3%,^3%,^3%,^3%,^3%,^3%,^3%,^3%,^3%,^3%,^3%,^3%,^3%,^3%,^3%,^3%,^3%,^3%,^3%,^3%,^3%,^3%,^3%",options="header",]
-|===
-|3 |3 |2 |2 |2 |2 |2 |2 |2 |2 |2 |2 |1 |1 |1 |1 |1 |1 |1 |1 |1 |1 |0 |0 |0 |0 |0 |0 |0 |0 |0 |0
-|1 |0 |9 |8 |7 |6 |5 |4 |3 |2 |1 |0 |9 |8 |7 |6 |5 |4 |3 |2 |1 |0 |9 |8 |7 |6 |5 |4 |3 |2 |1 |0
-|1 |1 |0 |1 |1 |1 |0 |0 |1 |1 |? | | | | | |1 |1 |0 |0 |0 |0 |`xn` | | | | |Cs | | | |
-|===
+// For simplicity, in the example below we implement only one addressing mode.
+// Additional addressing modes are possible if supported by the architecture. We do not write their ASL to focus on the essentials.
 
 *_Encoding_*
 
-* ace.export [`xn`], Cs;
+* ace.export [`xn`], `cs`; -- Use R-type encoding, with `xn` as the destination.
 
 *_Decode for this encoding_*
 
@@ -416,12 +405,12 @@ Additional addressing modes are possible if supported by the architecture. We do
 ----
 integer n = UInt(`xn`);
 bits(64) address = X[n];
-integer s = Uint(Cs);
+integer s = Uint(`cs`);
 ----
 
 *_Assembler symbols_*
 
-* Cs is the name of the source CHR to be exported
+* `cs` is the name of the source CHR to be exported
 * `xn` is an integer register containing the base address of the buffer where to store the SCC
 
 *_Operation_*
@@ -448,7 +437,7 @@ if metadata.ACPOLICY[CURRENTPL,CURRENTWORLD] == False then *Error!*
 if metadata[VALID] == 0 then *Error!*
 
 // The MM is supposed to know and keep the values.
-// We also explicitly disable exporting of `c31` for the MM, as its own
+// We also explicitly disable exporting of c31 for the MM, as its own
 // knowledge would be needed to recover it.
 if s == 31 then *Error!*
 
@@ -479,30 +468,24 @@ The instruction may, optionally, implement an operation to import a table of imm
 
 The instruction may, optionally, also implement a system defined import mechanism for dynamic system keys. Note that, ACE can only import such keys and cannot export in that format.
 
-The same remark as for ace.export applies regarding memory addressing modes.
+//The same remark as for ace.export applies regarding memory addressing modes.
 
-[width="100%",cols="^3%,^3%,^3%,^3%,^3%,^3%,^3%,^3%,^3%,^3%,^3%,^3%,^3%,^3%,^3%,^3%,^3%,^3%,^3%,^3%,^3%,^3%,^3%,^3%,^3%,^3%,^3%,^3%,^3%,^3%,^3%,^3%",options="header",]
-|===
-|3 |3 |2 |2 |2 |2 |2 |2 |2 |2 |2 |2 |1 |1 |1 |1 |1 |1 |1 |1 |1 |1 |0 |0 |0 |0 |0 |0 |0 |0 |0 |0
-|1 |0 |9 |8 |7 |6 |5 |4 |3 |2 |1 |0 |9 |8 |7 |6 |5 |4 |3 |2 |1 |0 |9 |8 |7 |6 |5 |4 |3 |2 |1 |0
-|1 |1 |0 |1 |1 |1 |0 |0 |1 |1 |0 |0 |0 |0 |0 |0 |1 |1 |0 |0 |t |y | `[small]#xn vn`# | | | | |`[small]#cd#` | | | |
-|===
 
 *_Encoding_*
 
-* *ace.import `cd`, [`xn`]*
+* *ace.import `cd`, [`xn`]*  -- use R-Type or I-Type encoding with `xn` as the first source.
 
-Optionally, one of the following three variants (when bit t == 1)
+Optionally, one of the following three variants (when a specific bit `t` in the encoding == 1)
 
-* *ace.import.system_table `xn`*
-* *ace.import.system_table [`xn`]*
-* *ace.import.system_table `vn`*
+* *ace.import.system_table `xn`* -- use R-Type or I-Type encoding with `xn` as the first source.
+* *ace.import.system_table [`xn`]* -- use R-Type or I-Type encoding with `xn` as the first source.
+//* *ace.import.system_table `vn`*
 
 Optionally, one of the following three variants (when bit y == 1)
 
 * *ace.import.system_dynamic `cd`, `xn`*
 * *ace.import.system_dynamic `cd`, [`xn`]*
-* *ace.import.system_dynamic `cd`, `vn`*
+//* *ace.import.system_dynamic `cd`, `vn`*
 
 *_Decode for this encoding_*
 
@@ -517,10 +500,10 @@ bool is_system_table = t;
 
 *_Assembler symbols_*
 
-* `cd` is the name of the destination CHR to be exported
-* `xn` is the name of an integer register containing the base address of the SCC’s buffer
-* t true if the internal key table is being initialized with an impdef mechanism
-* y true if the key is dynamically generated (“d” is already used, so we use the second letter in the word, it is in a system defined format and not the format defined by the ACE architecture
+* `cd` is the name of the destination CHR to be exported;
+* `xn` is the name of an integer register containing the base address of the SCC’s buffer;
+* `t` true if the internal key table is being initialized with an impdef mechanism;
+* y true if the key is dynamically generated (“d” is already used, so we use the second letter in the word, it is in a system defined format and not the format defined by the ACE architecture.
 
 *_Dependencies_*
 
@@ -585,7 +568,7 @@ if is_system_table == True then
         *Error!*
 
 // The MM is supposed to know and keep the value for VM/process migration purposes.
-// Therefore, we explicitly disable importing into `c31` *also* for the MM
+// Therefore, we explicitly disable importing into c31 *also* for the MM
 if d == 31 then *Error!*
 
 if is_system_dynamic == True then
@@ -615,21 +598,14 @@ ACE_CHR_VALID_x[d] = 1;
 
 This instruction applies the cryptographic primitive defined in a CHR, parametrized by the corresponding key, to a user given input.
 
-[width="100%",cols="^3%,^3%,^3%,^3%,^3%,^3%,^3%,^3%,^3%,^3%,^3%,^3%,^3%,^3%,^3%,^3%,^3%,^3%,^3%,^3%,^3%,^3%,^3%,^3%,^3%,^3%,^3%,^3%,^3%,^3%,^3%,^3%",options="header",]
-|===
-|3 |3 |2 |2 |2 |2 |2 |2 |2 |2 |2 |2 |1 |1 |1 |1 |1 |1 |1 |1 |1 |1 |0 |0 |0 |0 |0 |0 |0 |0 |0 |0
-|1 |0 |9 |8 |7 |6 |5 |4 |3 |2 |1 |0 |9 |8 |7 |6 |5 |4 |3 |2 |1 |0 |9 |8 |7 |6 |5 |4 |3 |2 |1 |0
-|1 |1 |0 |1 |1 |1 |0 |0 |1 |1 |t |Vi2 | | | | |d |Vo | | | | |Vi | | | | |Cs | | | |
-|===
-
 *_Encoding_*
 
-* ace.execute Vo, Vi, Cs, d (with t == 0)
-* ace.execute Vo, Vi, `vn`, Cs, d (with t == 1)
+* ace.execute `vo`, `vi`, `cs`, d (with `t` == 0) -- not clear at the moment, we may need to overwrite an input (such as
+* ace.execute `vo`, `vi`, `vn`, `cs`, d (with `t` == 1)
 
 *_Decode for this encoding_*
 
-integer s = Uint(Cs);
+integer s = Uint(`cs`);
 
 integer direction = UInt(d);
 
@@ -637,9 +613,9 @@ integer hasSecondInput = UInt(t); // This serves only with algorithms that have
 
 // tweaks or IVs, otherwise ignored.
 
-integer input = UInt(Vi);
+integer input = UInt(`vi`);
 
-integer output = UInt(Vo);
+integer output = UInt(`vo`);
 
 *_Remark_*
 
@@ -647,14 +623,14 @@ hasSecondInput has been defined as a separate bit independently in order to simp
 
 *_Assembler symbols_*
 
-* Cs is the name of the CHR that selects the algorithm and provides the key to be used
-* Vi is the name of the vector register containing the input to the algorithm
-* Vo is the name of the vector register where the output of the algorithm is stored
-* Vi2 is the name of the vector register containing a second input to the algorithm if defined (this applies for instance to tweakable ciphers)
+* `cs` is the name of the CHR that selects the algorithm and provides the key to be used
+* `vi` is the name of the vector register containing the input to the algorithm
+* `vo` is the name of the vector register where the output of the algorithm is stored
+* `vi`2 is the name of the vector register containing a second input to the algorithm if defined (this applies for instance to tweakable ciphers)
 
 *_Issues_*
 
-The encoding space is limited. If we need to support more than two “directions”, for instance for a hash function or a mode of operation with different phases (AEAD, modes with ciphertext sealing), then we may need a wider field. However, if such operations (to be verified!) do not need the Vi2 input, so the field can be used to determine which stage of the underlying algorithm is being invoked by ace.execute, instead of holding a vector register number. Alternatively, the “stage” is set by the ace.message operation.
+The encoding space is limited. If we need to support more than two “directions”, for instance for a hash function or a mode of operation with different phases (AEAD, modes with ciphertext sealing), then we may need a wider field. However, if such operations (to be verified!) do not need the `vi`2 input, so the field can be used to determine which stage of the underlying algorithm is being invoked by ace.execute, instead of holding a vector register number. Alternatively, the “stage” is set by the ace.message operation.
 
 *_Operation_*
 
@@ -664,7 +640,7 @@ The encoding space is limited. If we need to support more than two “directions
 if !ACE_is_Implemented() then UNDEFINED;
 integer algorithm = C[s].metadata.ALGORITHM;
 
-// Only the MM may use `c31`.
+// Only the MM may use c31.
 if s == 31 then *Error!*
 if CURRENTPL != MM then *Error!*
 if C[s].metadata[VALID] == 0 then *Error!*;
@@ -705,7 +681,7 @@ It depends heavily on the algorithm, so this definition is just a simple interfa
 
 ==== ace.size
 
-*ace.size `xd`, Cs* stores the size in bytes of the SCC resulting from exporting CHR Cs into integer register `xd`.
+*ace.size `xd`, `cs`* stores into register `xd` the size in bytes of the SCC resulting from exporting CHR `cs`.
 
 There is no need for a more detailed description of this instruction for the purpose of this proposal.
 
