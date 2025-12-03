@@ -28,24 +28,26 @@ Of course, an implementation integrated into a CPU core is permitted.
 === Features
 
 . ACE is an ISE for full-round, block-wise cryptographic operations without exposing the key.
+. ACE supports multiple different cryptographic primitives and modes, including SCA resistant versions.
+ Supported algorithms are discoverable. There is a mandatory list of algorithms, optional architected ones, and support for custom algorithms.
 . Keys are stored in architectural states called "Cryptographic Contexts" (CC) together with metadata that restricts the usage of the key.
-. There is no mechanism to extract the original value of a key from a CC: CCs are not read/write as registers are.
-. By writing a key into a CC, a key is thus made _opaque_ (concealed).
-.. Besides SW, additional optional sources for keys are: (i) A System Specific Key Table (SSK Table);  (ii) External blocks for dynamic key generation.
-. ACE instructions use a CC instead of directly accessing the key.
+. ACE instructions use CCs instead of directly accessing the keys.
 . ACE supports multiple CCs active at the same time.
-. ACE allows isolated, protected, or trusted software to deliver keys to less trusted environments to perform cryptographic operations without getting visibility in the value of the key.
+. There is no mechanism to extract the original value of a key from a CC: CCs are not read/write in the same sense as registers are.
+. By writing a key into a CC, a key is thus made _opaque_ (concealed). +
+  Besides SW, additional optional sources for keys are:
+.. A System Specific Key Table (SSK Table);
+.. External blocks for dynamic key generation.
+. ACE allows isolated, protected, or trusted SW or HW entity to deliver opaque keys to less trusted environments to perform cryptographic operations without getting visibility in the value of the key.
+ Once this has been done, the opaque key can be re-used without having to call the trusted entity each time.
 . ACE can associate a lifecycle to an opaque key, such as: Keys can be bound to devices, classes of devices, software environments, or be bound to a single boot cycle.
-. ACE can support different primitives and modes, including SCA resistant versions.
-.. Supported algorithms must be discoverable. There is a mandatory list of algorithms, optional architected ones, and an encoding space (in the metadata) for custom algorithms.
 . ACE can restrict which process can use a given opaque key. In particular:
 .. ACE supports separation of keys belonging to different domains.
 .. ACE provides support for key preservation upon process or VM migration.
    Note that by migration here we only understand the transfer of processes and VMs from a device to another, not a migration between harts in the same device.
 . ACE scales from from embedded cores to large application/server cores, with same ISA and ABI: certain features may be omitted in smaller cores without requiring changes in User SW.
 
-The latter is needed for cloud and edge deployment.
-ACE provides the minimum necessary support to enable secure key migration between machines.
+// The latter is needed for cloud and edge deployment. ACE provides the minimum necessary support to enable secure key migration between machines.
 
 // Currently, this often involves both changing context and potentially blocking operations to program keys or to perform cryptographic operations in cryptographic accelerators. This can result in large delays. ACE enables SW to set and use these keys with reduced overheads.
 
@@ -62,7 +64,7 @@ ACE is necessary because current solutions are inadequate:
 * External IP blocks with mem-mapped/coprocessor interfaces require long switching time and/or synchronization and substantial work in system stack to configure shared memory buffers and copy data around.
 * Key Management (resp. KM building blocks) is not provided — except in external IP blocks.
 * In modes such as AES-GCM-SIV, encryption and authentication derived keys should also not leak, hence supporting primitives only is not always sufficient.
-* No current standardized/architected solution offers: fast access, key management, and trust.
+* No current standardized/architected solution offers fast execution, key management, and trust.
 
 === Further Implied Features
 
@@ -100,8 +102,10 @@ ACE provides the following instructions:
 . `ace.config`, to load the clear value of a key (and some metadata) in a Cryptographic Context (CC);
 . `ace.clear`, to erase/invalidate the content of a CC;
 . `ace.export`, to encrypt and authenticate a CC and store it to memory as a SCC;
-. `ace.import`, to authenticate, decrypt a SCC from memory and import it into a CC; and
-. `ace.exec`, to perform a cryptographic operation on a block (e.g., 128 bits) of the input
+. `ace.import`, to authenticate, decrypt a SCC from memory and import it into a CC;
+. `ace.exec`, to perform a cryptographic operation on a block (e.g., 128 bits) of the input;
+. `ace.set_stage`, to configure the CC for encryption/decryption or move from one stage of an algorithm to another; and
+. `ace.error`, to report an error condition, which can be implemented as a read operation from a CSR.
 
 Other instructions are provided and these will be discussed in detail later.
 
@@ -110,6 +114,22 @@ The inputs and outputs of the ACE operations are:
 . Cryptographic Contexts,
 . Vector registers (*), and
 . External memory. Memory is addressed using GPRs.
+
+CCs are referred by a 5-bit immediate value or by the value of a GPR. +
+They are denoted by `Cn`, with stem:[n \in \[0..31\]].
+
+==== Differences been Cryptographic Contexts and Architectural Registers
+
+The size of the data in a CC is variable, and this size is independent for each CC — this is an important difference with respect to GPRs and vector registers, which always have the same size. The total amount of internal "register memory" for CCs can also be exhausted when a subset of the CCs are used.
+CCs contain different fields: metadata, key material, and internal state.
+All three need to be architected.
+
+The fact that CCs can be addressed indirectly has two implications:
+
+. Adding renaming to to CCs would complicate the microarchitecture too much. Luckily, we can assume that are changed rarely, except for internal implied changes, and therefore we can assume that CCs are not renamed without performance issues.
+. We need to use one bit in the instruction encoding to determine whether a CC is given by an immed or by a GPR. (Two bits for the ACE.CLONE operation.)
+
+
 
 
 ==== Remark On Direct Memory Access
@@ -123,6 +143,46 @@ While splitting these instructions into multiple ones is possible, even reducing
 //
 // into multiple instructions, and in particular the CC load/stores into sequences of shorter load/stores explicitly would make SW very complicated // and raise all sorts of limitations on how internally the ACE implementation can work. It adds complexity while adding no advantage.
 
+
+=== An Example
+
+In the following example, a process wants to AES-encrypt some data using a key they are not allowed to know, which belongs to a recipient.
+
+.Simple Example: Encryption, no Authentication
+[%linenums,C]
+----
+Call OS API to get an AES-encrypt SCC from a key management applet or HW block. X5 points to the SCC.
+Allocate memory for ciphertext buffer.
+// Import the SCC into Cryptographic Context C0, say:
+ace.import C0, [X5]                 // This sets the op type ace.exec performs when used with CC C0
+ace.error X1, C0
+If X1 <> 0 then handle error
+ace.set_stage C0, #ace_const_encrypt// Risc-V specific: configure 128-bit vectors.
+ace.error X1, C0
+if X1 <> 0 then handle error        // If encryption is not allowed
+for i = 0 to ceil(len_in_bytes(plaintext)/16)-1 do
+    load V0 from *(plaintext+16*i)
+    ace.exec V0, C0, V              // Encrypt one block of the plaintext
+    store V0 at ciphertext+16       // Write to ciphertext buffer
+----
+
+
+=== Algorithms
+
+We architect support for several algorithms, and also define a minimal subset (current suggestion):
+
+* AES-128 and AES-256 encryption and decryption.
+* AES-CTR, AES-GCM, AES-GCM-SIV, AES-XTS, AES-CMAC using AES-128/256.
+* SHA-2, SHA-2-HMAC.
+
+The list of other architected algorithms is TBD, but it should include at least
+* AES-192, alone and with the above modes.
+* SM4 Block Cipher.
+* The Ascon suite (Ascon-128/128a-AEAD, Ascon-Hash, Ascon-XOF, Ascon-80pq).
+* SHA-3, SHA-3-HMAC.
+* SM3 Secure Hash.
+
+The list can be extended by the architecture owner --- there is an interval of the algorithm encoding space in the metadata for custom algorithms.
 
 
 === Terminology / Glossary
@@ -153,7 +213,5 @@ Vector Registers are denoted by Vn.
 === Outline
 
 The remainder of this document described the extension in full detail.
-
-//In <<Assumptions>> we give a high-level presentation of the features of ACE, together with Goals and non-Goals of the architecture, as well as Rules that govern it.
 
 //In <<Details>> the technical details of the architecture are presented, including a listing of the instructions and their semantics.
