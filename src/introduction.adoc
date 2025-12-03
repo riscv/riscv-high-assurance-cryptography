@@ -1,6 +1,110 @@
 [[Introduction]]
 == Introduction
 
+=== Objectives
+
+ACE, the Atomic Cryptographic Extension, is an instruction set extension designed to provide high assurance cryptographic operations.
+The main features are the concealment of key values, restrictions on their usage, and support for hardened implementations, with a single, streamlined instruction set.
+
+The development of ACE is prompted by the needs of key use cases such as:
+
+* Content protection,
+* Local decryption of LLMs,
+* Key management,
+* Identity management,
+* Communications (bulk encryption for TLS/MACsec),
+* Storage encryption,
+* Any cryptographic operations for Confidential VMs/Realms/TEEs,
+* Secure boot and/or attestation in bootloaders without invoking a separate HW block,
+* Page-fault-driven page-based memory encryption in SW (SoftME, MemShield, …),
+
+and in general any application where cryptographic operations are required and it is desirable to offer a high level of protection to keys and intermediate values.
+
+ACE is _architected_ as an _attached_ unit, in other words as a coprocessor with a special, fast interface to the CPU.
+This is similar to the so-called streaming features of the Arm architecture or Risc-V AME.
+An ACE implementation can be shared by multiple cores, with per-hart architectural state, and can operate in parallel with the CPU cores, even if the latter are in-order.
+Of course, an implementation integrated into a CPU core is permitted.
+
+=== Features
+
+. ACE is an ISE for full-round, block-wise cryptographic operations without exposing the key.
+. Keys are stored in architectural states called "Cryptographic Contexts" (CC) together with metadata that restricts the usage of the key.
+. There is no mechanism to extract the original value of a key from a CC: CCs are not read/write as registers are.
+. By writing a key into a CC, a key is thus made _opaque_ (concealed).
+. ACE instructions use a CC instead of directly accessing the key.
+. ACE allows isolated, protected, or trusted software to deliver keys to less trusted environments to perform cryptographic operations without getting visibility in the value of the key.
+. ACE can associate a lifecycle to an opaque key, such as: Keys can be bound to devices, classes of devices, software environments, or be bound to a single boot cycle.
+. ACE can support different primitives and modes, including SCA resistant versions.
+. ACE can restrict which process can use a given opaque key. In particular:
+.. ACE supports separation of keys belonging to different domains.
+.. ACE provides support for key preservation upon process or VM migration.
+   Note that by migration here we only understand the transfer of processes and VMs from a device to another, not a migration between harts in the same device.
+
+The latter is needed for cloud and edge deployment.
+ACE provides the minimum necessary support to enable secure key migration between machines.
+
+// Currently, this often involves both changing context and potentially blocking operations to program keys or to perform cryptographic operations in cryptographic accelerators. This can result in large delays. ACE enables SW to set and use these keys with reduced overheads.
+
+// ACE can be used to provide hardened primitives for TEEs and TPMs to minimize explicit key handling and reduce the attack surface.
+// The cryptographic operations are per-block atomic (“one-shot instructions”), as opposed to common round-based ISAs. Besides the already stated goal of preventing direct key leakage or exposure (which is unavoidable by design in round-based extensions like AES-NI), but also to enable masked implementation for protection against side-channel attacks. The fact that these operations are performed atomically gives the extension its name.
+// ACE further reduces the attack surface of key misuse attacks by binding key usage policies to specific algorithms and authorized SW environments.
+
+=== Rationale
+
+ACE is necessary because current solutions are inadequate:
+
+* Round-based ISAs need to explicitly add the key between the rounds.
+* Current ISAs do not provide trustworthy mechanisms for cryptographic operations. Trust is provided only in external IP blocks or by relying on costly context switch to TEEs (TZ, etc) for each cryptographic operation.
+* External IP blocks with mem-mapped/coprocessor interfaces require long switching time and/or synchronization and substantial work in system stack to configure shared memory buffers and copy data around.
+* Key Management (resp. KM building blocks) is not provided — except in external IP blocks.
+* In modes such as AES-GCM-SIV, encryption and authentication derived keys should also not leak, hence supporting primitives only is not always sufficient.
+* No current standardized/architected solution offers: fast access, key management, and trust.
+
+=== Further Implied Features
+
+Some additional features are necessary in order to make ACE actually useable and address the issues of the current solutions.
+For instance, it is not desirable to have to switch to a different environment each time we need to use a certain key, and also context switches need to be supported by the software stack.  This means that while the value of a key cannot be extracted from a CC, there must be a mechanism to export the contents of a CC in a secure way, i.e., a way that does not compromise the confidentiality and the integrity of the key and its metadata.
+
+[start=10]
+. ACE allows software to securely export the contents of a CC to memory by encrypting and authenticating it, as a "Sealed Cryptographic Context" (SCC).
+  A SCC can then be authenticated, decrypted, and re-imported into a CC.
+.. Any metadata that does not need to be encrypted and can be used to reduce overheads (for instance, to determine the total length of an input, or its expected structure) is kept in the clear.
+.. Since we have public and private metadata, and keys (obviously private), we need to use an AEAD mode of operation for the export/import operations (AES-GCM-SIV as per RFC 8452).
+.. Since an AEAD mode of operation is needed, ACE exposes (a variant of) it to user. For this reason, we support modes in general in ACE.
+. A "secret" Cryptographic Context Transport Key (CTK) must be used for import and export. ACE optionally allows Machine to configure the CTK.
+  CTK reconfigurability is one of the mechanisms by which keys can be domain separated: if Machine configures two different CTKs for two different domains, the one domain cannot authenticate and decrypt an SCC created for the other domain.
+
+We apply the term “*opaque keys*” to both keys in CHRs and exported SCCs. Opaque keys are cryptographic keys that can be used without revealing their value.
+“Opaque” means the actual key value can’t be extracted from a CHR or SCC in the clear.
+The environment that generated the key will of course know its value.
+
+=== Non-Features
+
+Certain features are intentionally not supported by ACE:
+
+* ACE does not support the processing of entire variable-length inputs.
+* ACE does not provide complete secure key management and provisioning features, but offers building blocks that can be used to implement them, Key management can be delegated to applets in a TEE or secure VM, possibly from different owners. These applets can implement complex key management software. The feature allows entities to set up and deliver keys opaquely to less trusted SW domains. ACE does not support external schemes for directly provisioning keys into a key store.
+* ACE cannot fully prevent misuse by compromised processes. If a process is compromised, the attacker obtains access to the CCs and can perform cryptographic operations — even if they do not elicit the key. Therefore, ACE complements existing security measures such as SW vulnerability exploitation countermeasures and process isolation (including TEE-like inverse sandboxing).
+* Other risks remain. For instance: In counter-mode encryption, the same method enables both encryption and decryption. Similarly, MAC verification capability also enables MAC creation. Malicious processes can still misuse these operations. This also leads to the need to protect derived keys in modes of operation like AES-GCM-SIV which rely on counter-mode encryption using a derived key.
+
+
+=== High Level View of the Extension
+
+ACE provides the following instructions:
+
+. `ace.config`, to load the clear value of a key (and some metadata) in a Cryptographic Context (CC);
+. `ace.clear`, to erase/invalidate the content of a CC;
+. `ace.export`, to encrypt and authenticate a CC and store it to memory as a SCC;
+. `ace.import`, to authenticate, decrypt a SCC from memory and import it into a CC; and
+. `ace.exec`, to perform a cryptographic operation on a block (e.g., 128 bits) of the input
+
+Other instructions are provided and these will be discussed in detail later.
+
+The inputs and outputs of the ACE operations are:
+
+. Cryptographic Contexts,
+. Vector registers (*), and
+. External memory. Memory is addressed using GPRs.
 
 === Terminology / Glossary
 
@@ -27,104 +131,7 @@ GPRs are denoted by Xn.
 
 Vector Registers are denoted by Vn.
 
-
-
-
-=== Example Use Cases
-
-ACE is designed to address the needs of key use cases such as:
-
-* Content protection,
-* Local decryption of LLMs,
-* Key management,
-* Identity management,
-* Communications (bulk encryption for TLS/MACsec),
-* Storage encryption,
-* Any cryptographic operations for Confidential VMs/Realms/TEEs,
-* Secure boot and/or attestation in bootloaders without invoking a separate HW block,
-* Page-fault-driven page-based memory encryption in SW (SoftME, MemShield, …),
-
-and in general any application where cryptographic operations are required and it is desirable to offer a high level of protection to keys and intermediate values.
-
-=== Features
-
-. ACE is an ISE for full-round, block-wise cryptographic operations without exposing the key.
-. Keys are made opaque by making them unreadable once written into an architectural state called "Cryptographic Context" (CC), together with some metadata that restricts the usage of the key.
-  ACE instructions use a CC instead of directly accessing the key.
-. ACE allows isolated, protected, or trusted software to deliver keys to less trusted environments to perform cryptographic operations without getting visibility in the value of the key.
-. ACE can associate a lifecycle to an opaque key, such as: Keys can be bound to devices, classes of devices, software environments, or be bound to a single boot cycle.
-. ACE can support different primitives and modes, including SCA resistant versions.
-. ACE can restrict which process can use a given opaque key. In particular:
-.. ACE supports separation of keys belonging to different domains.
-.. ACE provides support for key preservation upon process or VM migration.
-   Note that by migration here we only understand the transfer of processes and VMs from a device to another, not a migration between harts in the same device.
-
-The latter is needed for cloud and edge deployment.
-ACE provides the minimum necessary support to enable secure key migration between machines.
-
-// Currently, this often involves both changing context and potentially blocking operations to program keys or to perform cryptographic operations in cryptographic accelerators. This can result in large delays. ACE enables SW to set and use these keys with reduced overheads.
-
-// ACE can be used to provide hardened primitives for TEEs and TPMs to minimize explicit key handling and reduce the attack surface.
-// The cryptographic operations are per-block atomic (“one-shot instructions”), as opposed to common round-based ISAs. Besides the already stated goal of preventing direct key leakage or exposure (which is unavoidable by design in round-based extensions like AES-NI), but also to enable masked implementation for protection against side-channel attacks. The fact that these operations are performed atomically gives the extension its name.
-// ACE further reduces the attack surface of key misuse attacks by binding key usage policies to specific algorithms and authorized SW environments.
-
-=== Rationale
-
-ACE is necessary because current solutions are inadequate:
-
-. Round-based ISAs need to explicitly add the key between the rounds.
-. Current ISAs do not provide trustworthy mechanisms for cryptographic operations. Trust is provided only in external IP blocks or by relying on costly context switch to TEEs (TZ, etc) for each cryptographic operation.
-. External IP blocks with mem-mapped/coprocessor interfaces require long switching time and/or synchronization and substantial work in system stack to configure shared memory buffers and copy data around.
-. Key Management (resp. KM building blocks) is not provided — except in external IP blocks.
-. In modes such as AES-GCM-SIV, encryption and authentication derived keys should also not leak, hence supporting primitives only is not always sufficient.
-. No current standardized/architected solution offers: fast access, key management, and trust.
-
-
-==== Non-Features
-
-Certain features are intentionally not supported by ACE:
-
-* ACE does not support the processing of entire variable-length inputs.
-* ACE does not provide complete secure key management and provisioning features, but offers building blocks that can be used to implement them, Key management can be delegated to applets in a TEE or secure VM, possibly from different owners. These applets can implement complex key management software. The feature allows entities to set up and deliver keys opaquely to less trusted SW domains. ACE does not support external schemes for directly provisioning keys into a key store.
-
-==== Additional Features Implied by the Basic Feature Set
-
-. In order to be able to save/set keys securely without having to call into some special HW/SW environment each time, ACE allows software to securely export keys to memory by encrypting and authenticating them, as a "Sealed Cryptographic Context" (SCC).
-. A SCC can then be re-imported into a CC.
-. Any metadata that does not need to be encrypted and can be used to reduce overheads (for instance, to determine the total length of an input, or its expected structure) is kept in the clear.
-.Since we have public and private metadata, and keys (obviously private), we need to use an AEAD mode of operation to export/import (AES-GCM-SIV as per RFC 8452).
-. A "secret" Cryptographic Context Transport Key (CTK) must be used for import and export.
-. Since an AEAD mode of operation is needed, ACE can also expose it to user.
-
-=== High Level View of the Feature
-
-ACE provides the following instructions:
-
-. `ace.config`, to load the clear value of a key (and some metadata) in a Cryptographic Context (CC);
-. `ace.clear`, to erase/invalidate the content of a CC;
-. `ace.export`, to encrypt and authenticate a CC and store it to memory as a SCC;
-. `ace.import`, to authenticate, decrypt a SCC from memory and import it into a CC; and
-. `ace.exec`, to perform a cryptographic operation on a block (e.g., 128 bits) of the input
-
-Other instructions are provided and these will be discussed in detail later.
-
-The inputs/outputs of the ACE Execution Unit (XU) are:
-
-. Cryptographic Contexts,
-. Vector registers (*), and
-. External memory. Memory is addressed using GPRs.
-
-
-=== Residual Risks
-
-* ACE cannot fully prevent misuse by compromised processes. If a process is compromised, the attacker obtains access to the CCs and can perform cryptographic operations — even if they do not elicit the key. Therefore, ACE complements existing security measures such as SW vulnerability exploitation countermeasures and process isolation (including TEE-like inverse sandboxing).
-
-* Other risks remain. For instance: In counter-mode encryption, the same method enables both encryption and decryption. Similarly, MAC verification capability also enables MAC creation. Malicious processes can still misuse these operations. This also leads to the need to protect derived keys in modes of operation like AES-GCM-SIV which rely on counter-mode encryption using a derived key.
-
-
-We apply the term “*opaque keys*” to both keys in CHRs and exported SCCs. Opaque keys are cryptographic keys that can be used without revealing their value. “Opaque” means the actual key value can’t be extracted from a CHR or SCC in the clear. The environment that generated the key will of course know its value.
-
-*Outline*
+=== Outline
 
 The remainder of this document described the extension in full detail.
 
