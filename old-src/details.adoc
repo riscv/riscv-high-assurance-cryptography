@@ -1,0 +1,736 @@
+[[Details]]
+== Details of the Feature
+
+=== Nomenclature
+
+* Let us recall that the length of the vector registers is encoded in the value `vl`.
+* `xn` = Integer register, assumed to be at least 64-bit wide. We use here the architectural name of the registers and not the ABI name.
+* `vn` = Vector register, assumed to be at least 128-bit wide.
+* `cn` = Context Holding Register, defined in <<Storage-of-the-keys>>.
+
+=== Data Structures
+
+[[CHR-Format]]
+==== Format of Context Holding Registers
+
+The CHRs can be very large, but their implementation cost is mitigated by two factors:
+[arabic]
+. They are rarely written to, and we should avoid speculating on key values anyway. Therefore, having a large renamed physical CHR file is unnecessary for performance.
+. Only a few key values need to be available simultaneously.
+
+Based on these factors, we recommend to implement 8 CHRs (plus CHR 31 for CTK storage), with 4 CHRs as an absolute minimum. The number of CHRs (excluding CHR 31) should be discoverable.
+
+A CHR has two fields:
+
+bits(64) metadata
+
+bits(128* MAX_CHR_STATE_LENGTH) state
+
+The state field stores the cryptographic key and optional additional data.
+
+The key length is determined by:
+
+[arabic]
+. The cryptographic algorithm requirements.
+. The number of shares used for threshold implementations to enhance side-channel protection.
+
+For example, a system based on the XEX mode operation using AES-128 with two independent keys and three shares requires:
+
+[arabic]
+. 768 bits total storage (2 keys * 128 bits * 3 shares).
+. Only 256 bits when passing the key value through a vector register.
+. Full state import/export when the key is split into shares.
+
+The state length is specified by a 6-bit value (the maximum value is 62) that defines the architectural state field length in 128-bit blocks. This is controlled by the MAX_CHR_STATE_LENGTH system register (range 1-62), limiting the maximum state length to 7936 bits. In practice, a mode of operation using two 256-bit encryption keys and one 256-bit hashing key, and keeping internally a 256-bit counter, all divided into three shares, uses 3072 bits. Thus, MAX_CHR_STATE_LENGTH can be taken as, say, 24. Together with the metadata, this amounts to 3136 bits, whereas, externally, a SCC would be 3200+128=3328 bits. We view this as a maximum CHR state length, and in practice we expect most implementations to implement a smaller state.
+
+To circumvent the problem of potentially small states, two or more CHRs may be “pooled/grouped” (as in some vector extensions) to combine their storage. In this case only the first CHR of a group would be accessible through the instructions and export operations would fail if invoked on one of the chained CHRs. Import operations on any CHR in a group would invalidate all CHRs in the group that are not directly overwritten by the import operation. This may increase the number of registers from 8 to 16, all with 1024 bit states?
+
+The metadata field is structured as follows: (TODO: add also the fields to define multi-CHR contexts).
+
+[width="100%",cols="15%,15%,70%",options="header",]
+|===
+|Field |Name |Description
+
+|metadata[15:0] |*ALGORITHM* a| Initially defined values:
+
+16’h0000 → AES-128 (not a threshold implementation)
+
+16’h0001 → AES-192 (same)
+
+16’h0002 → AES-256 (same)
+
+16’h0080 → QARMAv2_128-128 (same)
+
+16’h0081 → QARMAv2_128-192 (same)
+
+16’h0082 → QARMAv2_128-256 (same)
+
+Other values → Currently undefined.
+
+|metadata[16] |*FWD_ALLOW* |Forward direction allowed (e.g., encryption)
+
+|metadata[17] |*BCK_ALLOW* |Backward direction allowed (e.g., decryption)
+
+|metadata[23:18] |*—* |Reserved, currently WARZ
+
+|metadata[24] |*KEYTYPE* a| 1’b0 → SW_KEY = an explicitly given key (SW key) or a system generated key
+
+1’b1 → HW_KEY = a system immutable key
+
+|metadata[28:25]
+
+(with [32:29] reserved) |*LIFECYCLE* a|4’b0000 means that the lifecycle is unrestricted. A value _i_ <> 0 mean that the _i_-th lifecycle key has to be used to restrict the lifecycle of the key.
+
+This field can be set explicitly by SW or taken from the metadata associated with a system key, or by local key derivation hardware (such as the TME on Qualcomm devices).
+
+This field overlaps with the next: They are mutually exclusive, and the meaning of these bits is determined by the KEYTYPE bit0x
+
+|metadata[32:25] |*ISKT_INDEX* a| If KEYTYPE != HW_KEY, then
+
+Reserved for future use, currently WARZ
+
+else
+
+Immutable System Key Table Index
+
+(see Section ?0 for more details). +
+There is a maximum of 256 system keys.
+
+|metadata[X:33] |*ACPOLICY* a|
+One bit per PL and World, except for the MM. The notation is Metadata.ACPOLICY[ELn/SS]
+
+The default value should be “all ones”, and we strongly recommend to use this mask in most cases, since the same, unmodified user space process may run in user space or in a TEE, and the different security states are usually well isolated anyway. If the key is a system key or a system generated key, then this may be restricted to the target.
+
+This policy affects all uses except overwrite (including clearing the contents). Therefore, a PL/SS that cannot use the key cannot even export of import it. If a process prevents its parent from exporting the key, then they will effectively prevent proper save and restore of keys upon context. switching and this may lead to unpredictable behavior.
+
+Alternatively, this field may contain a short list of worlds allowed to work with this Context. There should be room for at least two world identifiers, if worlds are implemented, and only these two and MM may export, import, or use this context.
+
+|metadata[62:X+1] |*—* |Reserved for future use, currently WARZ.
+
+|metadata[63] |*VALID* |Set if the CHR is in use. This bit cannot be set directly by the user, and bit 63 of a metadata input should *always* be equal to one.
+
+|===
+
+==== Internal Structures
+
+The ACE architecture implements two functions related to key and state size:
+
+* AlgoKeyLength: Maps algorithm IDs to their required key lengths
+** Represented as AlgoKeyLength (n) where n is the algorithm ID
+** Uses 4 bits to specify key length in 128-bit blocks.
+** All lengths are rounded up to nearest 128-bit multiple.
+
+* AlgoStateLength: Maps algorithm IDs to their required export/import state lengths:
+** Includes the key length plus metadata length and additional state data.
+** Uses 6 bits to specify key length in 128-bit blocks.
+** All lengths are rounded up to nearest 128-bit multiple.
+** Needed for: Key expansion for threshold implementations; Key schedule storage (discouraged); Stateful algorithm requirements.
+
+The exportable/importable state consists of contiguous CHR (Cryptographic Hardware Register) content. The metadata is exported as a 128-bit field even if currently it is defined as a 64-bit registers.
+
+____
+*Remark:* _Even though in general the length of a field is expressed as the number of 128-bit blocks it requires, we do not do this for the key length since we do not envision other key lengths (192-bit keys are stored as a 256-bit value, with the topmost 64 bits simply ignored), and therefore we can save one bit._
+____
+
+==== Format of a Sealed Cryptographic Context
+
+The format of the SCC is very simple
+
+____
+Byte 0 Key type and State length
+
+Bytes 1 to 15 SIV
+
+Bytes 16 to end Encrypted metadata (padded with zeros to 128 bits) and State
+____
+
+The recommended algorithm to create the SCC is 256-bit AES-GCM-SIV as per RFC8452, with the only difference is that the SIV is truncated to 120 bits (removing bits 0:7 and replacing it with zeros for the purpose of performing the CTR encryption. Therefore, when the SIV is re-computed for integrity verification, these bits are ignored in the comparison.
+
+The length of a SCC should be as small as possible, in other words only contain the state which is used by the algorithm specified in the metadata, and not the entire length of the CHR. This allows for faster context switching times.
+
+=== The ACE_CHR_VALID Status Registers
+
+A system register ACE_CHR_VALID_x should be provided for PL x = UL, OL, HL, to report whether a CHR has been set or used by a process. This is used to determine whether the contents must be saved by the parent PL upon context switch.
+
+Only an execution level higher than ELx can directly clear the content of ACE_CHR_VALID_x. The instruction provided by the ISA to manipulate CSRs are used for this purpose and are not architected by ACE.
+
+The register should implement as many bits as CHRs, except for c31 In other words, each ACE_CHR_VALID_x contains at most 31 bits and bit 31 is WARZ.
+
+[[System-Keys]]
+=== System Keys
+
+In current SoCs, _system keys_ mostly come in two flavors.
+
+[arabic]
+. *A Table of Immutable System Keys, the ISKT*, which is provided at boot. We shall assume that this table is made available to the CPU as an array of keys and metadata in an internal RAM. This table can be provided either as a data package in memory or transmitted using an internal HW channel. +
+Since such operations can be expensive, the operation is allowed to return immediately and delay successive operations that access the key table RAM.
+
+____
+This can speed up the boot process significantly.
+
+This table shall contain the table of the Lifecycle Type Secrets (LTS), i.e. LTST, which are used to bind SCCs to a lifecycle, at a HW defined offset from the start of the ISK Table. These keys cannot be read or used by the ACE instructions directly. The first entries of the LTST are architected as such:
+____
+
+[width="100%",cols=">14%,86%",options="header",]
+|===
+|*Index* |*Lifecycle Type Secret*
+|0 |Boot Unique Secret, which is randomly regenerated at each boot.
+|1 |Device Unique Secret, which is permanent and uniquely identifies a device.
+|2 |SiP Unique Secret: Identifies the manufacturer of the SoC.
+|3 |Chip Model Unique Secret: Identifies a specific Chip model/family.
+|4 |Device-Type Unique Secret, which is unique to the _device_ type or model within the portfolio of a SiP.
+|5 |OEM Unique Secret. Similarly provisioned by the OEM, in order to distinguish their complete products from the competition.
+|===
+
+____
+The index of a Lifecycle Type Key is stored in the metadata as the LIFECYCLE field. This number is sufficient to bind a Context to the Lifecycle of the key it indexes. The Derived CTK ensures this binding upon export. The details of the Lifecycles are not an architectural feature but the responsibility of system architects and users. However, some IDs must be defined for interoperability and portability, as in the Table above.
+
+The ACE architecture can’t enforce these policies.
+____
+
+[arabic, start=2]
+. *Dynamically Generated Keys* which can be obtained by sending a request to a special HW block. The delivery of such keys may be very different from SiP to SiP and even within the product portfolio of a single SiP. __We only require that such operation stores key and compatible policies in a specified CHR. +
+__The two ways such keys can be transferred to a SS are mentioned in <<Support-dynamically-generated-system-keys>> and to address the import of a foreign key format, the import operation can be extended to support such formats. +
+Since such operations can be expensive, they may operate asynchronously and return immediately, blocking any successive operations that access the destination CHR.
+
+____
+*Example:* _On certain chips,
+keys are transferred using a mailbox interface from a key management hardware to key consumer end points.
+the communication channel can be created by first transferring a wrapping key from the key management hardware to the key consumer end points, or by using RTL keys.  Different end points may use different wrapping keys, thus guaranteeing the separation of Subsystems.
+Thereafter each end point can authenticate and decrypt keys provided by the key management hardware as data blobs in shared RAM._
+
+_Such end points usually, authenticates and decrypt a key table at boot.
+The key table itself can vary according to the receiving end.
+ACE can receive such a table.
+The contents of the table shall not be revealed to any SW environment.
+However, ACE can refer to the keys in the table by an index, and we allow such keys to be referred by index or, if internal metadata allows, by value in CHRs._
+____
+
+Although such an approach might seem redundant, it allows for faster export and import of these keys into the local CXU pipelines, ultimately saving time.
+
+=== Initialization at system boot
+
+Most functionality of the extension does not require special initialization.
+
+In <<System-Keys>> (see also <<Goals-Regarding-Key-Types>>) we described how a system, optionally, may have various system keys. It is the responsibility of the implementor to design the mechanisms to collect and collate the keys the CXU is allowed to use. These keys are placed, together with their metadata, in the ISKT in an internal RAM. It is critical that any policy associated with them is suitably translated to compatible ones as defined by the ACE architecture.
+
+There is no need for the system key RAM to be per hart. In fact, it would be a waste of resources. A single memory block per cluster, or even shared in the entire Subsystem is suitable for the purpose. After the list has been initialized, it is write locked, and it cannot be modified until the next reboot.
+
+Hence, after boot, the system has access to a read-only table of key/metadata pairs:
+
+systemKeys[MAX_SYSTEM_KEYS].{key, sk_metadata}
+
+where the metadata field here must contain at least the following information:
+
+[width="100%",cols="28%,72%",options="header",]
+|===
+|Field |Description
+|sk_metadata[15:0] |ALGORITHM: Same as in in Section 3.1.1
+|sk_metadata[16] |FWD_ALLOW: Forward direction allowed (for instance, encryption)
+|sk_metadata[17] |BCK_ALLOW: Backward direction allowed (for instance, decryption)
+|sk_metadata[18] |CAN_USE: if the system key can be used directly, 0 if not
+|sk_metadata[?:19] a|
+ACPOLICY: a list of Els/SSs/master combinations that are allowed to use this key at all. This is highly implementation dependent. We write +
+if sk_metadata.ACPOLICY[current /WORLD/master] == 0/1 +
+for the corresponding AC verification (0 = false, 1 = true)
+
+This field may be longer than the one in the CHR.metadata, because a key may be, say, available only to LPASS and not to the APSS, and therefore it would not be mapped to the key list in the APSS.
+
+|===
+
+This metadata table is only an example. If modes of operations and primitives that admit more than two sub-operations/variations are implemented, additional bits may be included. This table is only for internal use by the microarchitecture, and its format is implementation dependent. Only the named fields are mandatory. It is the responsibility of the implementation to properly translate the system key policies (for instance the Levels in Qualcomm Key Tables) into compatible ACE policies.
+
+=== Derivation of Lifecycle CTKs
+
+This derivation is implementation specific, however the requirement is that the output depends in a cryptographically strong way (as in the sense of a PRF) from both the CTK and the DUDEK.
+
+The operation is written as
+
+*Lifecycle Specific CTK = Uniquify(CTK,LTST[i])*
+
+in the pseudocode.
+
+The default computation of Uniquify is simply the XOR of the current CTK with *`LTST[i]`*.
+
+We are open to consider more sophisticated merges, such as separate encryption of the two 128-bit halves of *LTST[i]* using the CTK as the key, or a single-round Benes construction. This construction would be defined as:
+
+IN_HI = LTST[i][8:15]
+
+IN_LO = LTST[i][0:7]
+
+OUT_HI = IN_HI ^ AES-256(IN_LO; CTK)
+
+OUT_LO = IN_LO ^ AES-256(IN_HI ^ 128h’0...01; CTK)
+
+return OUT_HI || OUT_LO
+
+Further computations are not needed since the result is used only as a key and is never directly revealed.
+
+=== Instructions
+
+All instruction encodings are just examples. They represent, mostly, exercises to verify whether the instructions can be safely encoded in 32 bits. No attempt has been made to verify whether there is sufficient encoding space in existing architectures to add them.
+
+In this section we write, AES256_Encrypt(K,P) for the encryption of P using AES-256 under the key K.
+
+ACE may or may not be implemented as part of the VXU. The HW block or component implementing the feature is called the *Cryptography Execution Unit* (CXU). It may share components with other cryptographic functionality or instructions of the PE, however extra care must be taken to prevent leakage of CHR contents.
+
+[[ace-set-clear]]
+==== ace.set/ace.clear
+
+*ace.set* configures a CHR with a key/metadata pair, or a system key number.
+
+*ace.clear* clears the contents of `cd`, including setting C[d].metadata[VALID] to zero, and mark it as unused in the corresponding ACE_CHR_VALID_x, by setting the d-th bit to zero. This serves to notify the parent environment that the process is finished using that CHR and it does not need to be saved and restored by upon context switch.
+
+____
+*Remark:* _Clearing a CHR after it has been used is good hygiene to reduce the likelihood that another process may use its contents. In a SW architecture, processes should inform the OS via a system call that they are going to use the feature. This will allow the OS to clear all CHRs when switching to a process that is not using the feature._
+____
+
+The CHR `cd` is the CHR to be configured.
+
+The integer register `xn` contains the metadata.
+
+There are two main ways the instruction operates:
+
+[arabic]
+. The key is a SW key (KeyType 0 in the metadata), then the key is an explicitly given bit-string in the vector register `va`, or in the pair [V[a+1]:`va`].
+. If the KeyType field `t` is equal to 1, then the bit string `va` is a descriptor for an immutable system key (also called a HW key)
+
+Bit 63 of the metadata field is always set to 1 to properly configure a CHR.
+
+
+*_Encoding_*
+
+* `ace.set` `cd`, `xn`, `va` -- use R-type encoding with `cd` as the destination.
+* `ace.set` `cd`, `xn`, [`xa`] -- use R-type encoding with `cd` as the destination.
+* `ace.clear` `cd` -- use R-type encoding with `cd` as the destination.
+* ace.clear is encoded as _pseudoinstruction_ `ace.set` `cd`, `xn`,`va` with `xn`=0, i.e. with null metadata.
+* The encoding also contains two special bits, `a` and `t`.
+
+*_Decode for this encoding_*
+
+[subs="specialcharacters,quotes"]
+----
+integer metadata = UInt(`xn`);
+integer d = UInt(`cd`);
+bit a = 0 if key passed through `va` (or `va` and the following registers in groups of 2, 4, or 8 registers, as per RVV extension) or memory addressed;
+integer key = UInt(`va`) if a == 0, else *`xa`
+----
+
+*_Assembler symbols_*
+
+* `cd` is the name of the destination CHR.
+* `va` is the name of the (first) source vector register holding the key or the system key descriptor.
+* `xa` is the name of the register containing the addess of a key (if very long or consisting of the concatenation of several keys). It is used in place of `va`.
+//We do not preclude a priori the use of different addressing methods if the architecture supports them.
+* `xn` is the name of the integer register containing the metadata. Bit 63 of this register is ignored and always set to 1 by this instruction.
+
+*_Operation_*
+
+.Pseudocode for ace.set/ace.clear
+[subs="specialcharacters,quotes"]
+----
+integer type;
+integer algorithm;
+integer key_blocks;
+
+if !ACE_is_Implemented() then UNDEFINED;
+
+// Only the MM may touch c31.
+if (d == 31) && (CURRENTPL != MM) then
+    *Error!*
+
+bits(256) K; // Can be larger is longer keys are supported
+if d != 31 then
+    type = metadata.KEYTYPE;
+    algorithm = metadata.ALGORITHM;
+    key_blocks = AlgoKeyLength(algorithm);
+else
+    type = SW_KEY;
+    key_blocks = 2; // Algorithm is implicit for the CTK
+if (metadata[VALID] == 0) && (d != 31) then
+    if metadata == 0 then
+        // Implement ace.clear
+        ACE_CHR_VALID_x[d] = 0;
+        C[d].state = 0;
+        C[d].metadata = 0;
+        Return;
+    else
+        *Error!*
+
+// If it is a SW-defined key –– simplified code handling only 128 and 256 bit
+// keys and vector register length
+if type == SW_KEY then
+    if a == 0 then // read from registers
+        if key_blocks == 2 && `vl` == 128 then
+            K = V[key]:V[key+1];
+        else if key_blocks == 2 && `vl` == 256 then
+            K = V[key];
+        else if key_blocks == 1 then
+            K = 0^128^ :V[key][127:0];
+        else
+            (manage other lengths)
+    else
+        K = [`xa`] // read key_blocks 128-bit blocks
+    C[d].state[key_blocks * 128 – 1 : 0] = K;
+else
+    index = metadata.INDEX;
+    K = ISKT[index].key;
+    metadata = _merge ISKT[index].sk_metadata with original metadata_
+    // TODO, which fields to pick, exemplarily
+    metadata.INDEX = index;
+    _if (encryption/decryption bits are incompatible with K’s policies,_
+        _according to an internal table) then *Error!*_
+    C[d].state[key_blocks * 128 - 1:0]= K;
+    if d != 31 then
+        C[d].metadata = metadata; // note that bit 63 is equal to 1
+        ACE_CHR_VALID_x[d] = 1;
+
+Perform any additional operations on the state that are required by the algorithm, such as creating shares for a threshold implementation.
+----
+
+[[ace-export]]
+==== ace.export
+
+The instruction exports a CHR to external, untrusted memory.
+
+// For simplicity, in the example below we implement only one addressing mode.
+// Additional addressing modes are possible if supported by the architecture. We do not write their ASL to focus on the essentials.
+
+*_Encoding_*
+
+* ace.export [`xn`], `cs`; -- Use R-type encoding, with `xn` as the destination.
+
+*_Decode for this encoding_*
+
+[subs="specialcharacters,quotes"]
+----
+integer n = UInt(`xn`);
+bits(64) address = X[n];
+integer s = Uint(`cs`);
+----
+
+*_Assembler symbols_*
+
+* `cs` is the name of the source CHR to be exported
+* `xn` is an integer register containing the base address of the buffer where to store the SCC
+
+*_Operation_*
+
+.Pseudocode for ace.export
+[subs="specialcharacters,quotes"]
+----
+if !ACE_is_Implemented() then UNDEFINED;
+
+bits(64) storage = X[n]; // Memory Address to store SCC.
+bits(256) transport_key = C[31].key; // At least initially
+bits(64) metadata = C[s].metadata;
+bits(128) SIV;
+integer keytype = metadata.KEYTYPE;
+integer algorithm = metadata.ALGORITHM;
+bits(4) lifecycle = metadata.LIFECYCLE if keytype == SW_KEY;
+bits(8) ISKT_index = metadata.ISKT_INDEX if keytype == HW_KEY;
+bits(6) state_blocks; // Includes the key and any additional data.
+
+// Do we have privileges?
+if metadata.ACPOLICY[CURRENTPL,CURRENTWORLD] == False then *Error!*
+
+// Sanity check.
+if metadata[VALID] == 0 then *Error!*
+
+// The MM is supposed to know and keep the values.
+// We also explicitly disable exporting of c31 for the MM, as its own
+// knowledge would be needed to recover it.
+if s == 31 then *Error!*
+
+// Determine number of blocks beside the metadata half block.
+// It includes the key and additional information.
+state_blocks = AlgoStateLength(algorithm);
+
+if type == HW_KEY then
+    transport_key = Uniquify(transport_key, LTST[bootunique_key_index]);
+else if metadata.LIFECYCLE != 0 then
+    transport_key = Uniquify(transport_key, LTST[lifecycle]);
+else
+    transport_key = transport_key; // actually do nothing
+
+Encrypt padded(metadata)||state using AES-GCM-SIV-256 as per RFC8452
+Mem[storage] = key_type || lifecycle
+Mem[storage+1:15] = SIV
+Mem[storage+16:storage+16*(1+state_blocks)] = ciphertext
+----
+
+==== ace.import
+
+ace.import is the inverse of ace.export.
+
+It verifies the tag in the exported CHR, and if verification fails, then the content of the CHR is not overwritten (nor invalidated) and the instruction shall raise an exception, otherwise the content is successfully imported.
+
+The instruction may, optionally, implement an operation to import a table of immutable keys. Such instruction may be invoked only once per boot cycle and takes a system defined table and imports it into the internal RAM. Those keys may not be imported.
+
+The instruction may, optionally, also implement a system defined import mechanism for dynamic system keys. Note that, ACE can only import such keys and cannot export in that format.
+
+//The same remark as for ace.export applies regarding memory addressing modes.
+
+
+*_Encoding_*
+
+* *ace.import `cd`, [`xn`]*  -- use R-Type or I-Type encoding with `xn` as the first source.
+
+Optionally, one of the following three variants (when a specific bit `t` in the encoding == 1)
+
+* *ace.import.system_table `xn`* -- use R-Type or I-Type encoding with `xn` as the first source.
+* *ace.import.system_table [`xn`]* -- use R-Type or I-Type encoding with `xn` as the first source.
+//* *ace.import.system_table `vn`*
+
+Optionally, one of the following three variants (when bit y == 1)
+
+* *ace.import.system_dynamic `cd`, `xn`*
+* *ace.import.system_dynamic `cd`, [`xn`]*
+//* *ace.import.system_dynamic `cd`, `vn`*
+
+*_Decode for this encoding_*
+
+[subs="specialcharacters,quotes"]
+----
+integer n = UInt(`xn`);
+bits(64) address = X[n];
+integer d = Uint(`cd`);
+bool is_system_dynamic = y;
+bool is_system_table = t;
+----
+
+*_Assembler symbols_*
+
+* `cd` is the name of the destination CHR to be exported;
+* `xn` is the name of an integer register containing the base address of the SCC’s buffer;
+* `t` true if the internal key table is being initialized with an impdef mechanism;
+* y true if the key is dynamically generated (“d” is already used, so we use the second letter in the word, it is in a system defined format and not the format defined by the ACE architecture.
+
+*_Dependencies_*
+
+The function optionally supports the “t” (Table initialization) bit, which allows initialization of an internal key table. It relies on the operation
+
+success = ACE_ImportSystemTable({address|token})
+
+that imports a table, which can be in memory (the, the address is provided in `xn`) or described by a token (a value that is stored in `xn` or `vn`). The Boolean value success, which is true if the operation is successful.
+
+In this case there is also an internal flag
+
+ACE_keyRAMInitialized
+
+that is reset to false at each boot and set to true once this version of the instruction is successfully executed.
+
+The function can optionally support the “s” (System Transported) bit, which relies on the following operation.
+
+success, K, metadata = ACE_ImportSystemKey({address|token})
+
+That returns three values:
+
+* A Boolean value success, which is true if all following conditions are satisfied:
+** verification and decryption of the blob has succeeded,
+** the key length is admissible,
+** the associated algorithm is supported or there is functionality available in the CXU that allows to implement it without reducing the required security posture.
+** the key’s access policies are compatible with the current PE/SS/EL, and
+** the metadata has an equivalent in the configuration offered by the CXU.
+* A key K
+* A metadata values metadata, which is expressed in the format offered by the CXU.
+
+*_Operation_*
+
+.Pseudocode for ace.import
+[subs="specialcharacters,quotes"]
+----
+if !ACE_is_Implemented() then UNDEFINED;
+
+bits(64) storage;
+bits(64, 128 or 256) token;
+bool success;
+bits(256) transport_key = C[31].key;
+bits(128) SIV = Mem[storage,16];
+integer algorithm;
+bits(4) state_blocks;
+bits(64) tmp_metadata;
+bits(MAX_STATE_LENGTH*128) tmp_state;
+bits(6) lifecycle;
+bits(8) type = SIV[0]
+
+key_type || lifecycle = type
+if is_system_table == True then
+    if ACE_keyRAMInitialized == True then
+        *Error!*
+    Set *one* of the following two values // system specific
+        a. storage = X[n];                // Address of the key table in memory
+        b. token = X[n] or V[n];          // System specific
+    success = ACE_ImportSystemKey({storage|token}) // System specific
+    if success == True
+        ACE_keyRAMInitialized = True
+        Return
+    else
+        *Error!*
+
+// The MM is supposed to know and keep the value for VM/process migration purposes.
+// Therefore, we explicitly disable importing into c31 *also* for the MM
+if d == 31 then *Error!*
+
+if is_system_dynamic == True then
+    Set *one* of the following two values
+        a. storage = X[n]; // Address of system wrapped key in memory
+        b. token = X[n] or V[n]; // System specific
+    success, K, metadata = ACE_ImportSystemKey({storage|token}) // System specific
+    if success == True
+        C[d].state[255:0] = K
+        C[d].metadata = metadada
+        ACE_CHR_VALID_x[d] = 1
+        Return
+    else
+        *Error!*
+
+// Sanity check.
+if lifecycle != 0 then
+    transport_key = Uniquify(transport_key, LTST[lifecycle]);
+
+SIV[0] = 0
+Decrypt and verify SSC into CHR[d].metadata and CHR[d].state using using AES-GCM-SIV-256 as per RFC8452, with a 120-bit SIV.
+Perform any additional operations on the state that are required by the algorithm.
+ACE_CHR_VALID_x[d] = 1;
+----
+
+==== ace.execute
+
+This instruction applies the cryptographic primitive defined in a CHR, parametrized by the corresponding key, to a user given input.
+
+*_Encoding_*
+
+* ace.execute `vo`, `vi`, `cs`, d (with `t` == 0) -- R-type encoding.
+* ace.execute `vo`, `vi`, `vn`, `cs`, d (with `t` == 1) -- encoding not clear at the moment, we may need to overwrite an input or use the R4-Type.
+
+*_Decode for this encoding_*
+
+integer s = Uint(`cs`);
+
+integer direction = UInt(d);
+
+integer hasSecondInput = UInt(t); // This serves only with algorithms that have
+
+// tweaks or IVs, otherwise ignored.
+
+integer input = UInt(`vi`);
+
+integer output = UInt(`vo`);
+
+*_Remark_*
+
+hasSecondInput has been defined as a separate bit independently in order to simplify decoding and renaming: if the need for a specific register is determined only after another one is read, then the logic is much more complex, and it may also cause delays in the pipeline.
+
+*_Assembler symbols_*
+
+* `cs` is the name of the CHR that selects the algorithm and provides the key to be used
+* `vi` is the name of the vector register containing the input to the algorithm
+* `vo` is the name of the vector register where the output of the algorithm is stored
+* `vi2` is the name of the vector register containing a second input to the algorithm if defined (this applies for instance to tweakable ciphers)
+
+*_Issues_*
+
+The encoding space is limited. If we need to support more than two “directions”, for instance for a hash function or a mode of operation with different phases (AEAD, modes with ciphertext sealing), then we may need a wider field. However, if such operations (to be verified!) do not need the `vi2` input, so the field can be used to determine which stage of the underlying algorithm is being invoked by ace.execute, instead of holding a vector register number. Alternatively, the “stage” is set by the ace.message operation.
+
+*_Operation_*
+
+.Pseudocode for ace.execute
+[subs="specialcharacters,quotes"]
+----
+if !ACE_is_Implemented() then UNDEFINED;
+integer algorithm = C[s].metadata.ALGORITHM;
+
+// Only the MM may use c31.
+if s == 31 then *Error!*
+if CURRENTPL != MM then *Error!*
+if C[s].metadata[VALID] == 0 then *Error!*;
+// Sanity checks
+if (t == True) and (Algorithm does not need a require a second input) then
+    *Error!* (invalid value/instruction);
+if (t == False) and (Algorithm requires a second input) then
+    *Error!* (invalid value/instruction);
+ACE_CHR_VALID_x[s] = 1;
+if algorithm == AES-128 then
+    if direction == 0 then
+        if C[s].metadata.FWD_ALLOW == 1 then
+            V[o] = AES128_Encrypt(V[i], C[s].key);
+        else
+            *Error!*
+    else // direction == 1
+        if C[s].metadata.BCK_ALLOW == 1 then
+            V[o] = AES128_Decrypt(V[i], C[s].key);
+        else
+            *Error!*
+else if algorithm == AES-192 then
+etc...
+----
+
+
+For obvious reasons, the description of this operation is very sketchy. The provided pseudocode should be sufficient to understand how the instruction would be implemented in case of other ciphers.
+
+
+==== ace.message
+
+*ace.message `xd`, `ca`, #immed8*
+
+*ace.message `xd`, `ca`, `xs`*
+
+*ace.message `xd`, `ca`, [`xa`]*
+
+It depends heavily on the algorithm, so this definition is just a simple interface accepting a destination CHR index and an immediate, a value in a register, or an address. A return value is written to integer register `xd` (ignored if `xd`=X0 is hardwired to zero in the ISA) and it is also algorithm specific, with the value 0 understood as “ok/no error”.
+
+==== ace.size
+
+*ace.size `xd`, `cs`* stores into register `xd` the size in bytes of the SCC resulting from exporting CHR `cs`.
+
+There is no need for a more detailed description of this instruction for the purpose of this proposal.
+
+____
+*Example:* _If a 128-bit key is programmed in the given CHR,the instruction would write the value 40 in `xd`, (as in 40 bytes), and if a 256-bit key is programmed in the given CHR, it would write 56 in `xd` (as in 56 bytes)._
+____
+
+==== ace.available/ace.PSCAH
+
+*ace.available `xd`, #immed8*
+
+*ace.available `xd`, `xs`*
+
+*ace.PSCAH `xd`, #immed8q*
+
+*ace.PSCAH `xd`, `xs`*
+
+ace.available writes 1 (True) in `xd` if the algorithm expressed by the immed8 or by the least significant 8 bits of `xs` is implemented by the microarchitecture, otherwise 0 (false).
+
+ace.PSCAH will return a bit-string that described the level of hardening against physical side channel attack the implementation provides. The value shall contain
+
+[arabic]
+. One bit for timing (not meaningful for AES and QARMA, or Galois Multiplication, but may be useful for future algorithms);
+. Order of hardness against POWER CONSUMPTION SCAs. We suggest using 4 bits to encode values from 0 (no protection) to 8 at least, and one bit regarding template attacks;
+. Order of hardness against EM emission SCAs: Also 5 bits;
+. Order of hardness against photon emission SCAs: Also 5 bits;
+. Order of hardness against acoustic crypanalysis: Also 5 bits; and
+. Fields for any other relevant physical side channel attack vector.
+
+The values must be obtained by an evaluation performed by an external third-party and then hardwired in production runs or provisioned in some form of OTP memory. We do not define here the bit string in higher detail, as it will be done as part of the normal ISA standardization process.
+
+There is no need for a more detailed description of this instruction for the purpose of this proposal.
+
+*Remark:* _If ACE becomes part of an ISA then this will be reflected in ID register. However, we would not want to add a bit for every possible algorithm, since we have room for up to 256, even though in practice there would be very few. Therefore, the SW should check only whether the extension is available and, if so, use this instruction to verify whether a given algorithm is supported._
+
+//== Example of data flow in SW
+//image:media/image2.emf[media/image2,width=624,height=616]
+
+//== Example of design of an implementation
+//
+//image:media/image3.emf[media/image3,width=570,height=509]
+
+//The Key Table needs only be unique _per_ _subsystem_. So. the APSS would have one Key Table. It is up to implementors to decide whether, once it has been provisioned and locked, it shall be broadcast to local copies in each cluster. This is represented in the next Figure.
+
+//image:media/image4.emf[media/image4,width=530,height=530]
+
+//Here we see an example of an Application Sub-System that contains several clusters of processing elements. Many of them support only one hart per core and therefore contain only one CHR file. However, one cluster, possibly of power-efficient cores, supports two harts per core, and therefore there are two CHR files, like for any other architectural register file.
+
+//For performance reasons, each cluster contains its own local copy of the ISKT. At boot only one hart may retrieve the ISKT from the system, and then, once it has been write-locked, this table is broadcast to the other clusters, which receive it and write-lock their local copies.
+
+//It is also possible to have a unique ISKT for the entire subsystem, or that a ISKT is shared among a few clusters. These are all implementation decisions and are not architected.
