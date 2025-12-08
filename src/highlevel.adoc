@@ -1,39 +1,4 @@
-==== Debugging non-goal
 
-ACE does not provide ad-hoc debugging support. If HW debug is enabled, it must be accessible to both Key-Generating Software and Hardware components. This lets them provide alternate keys to debugged software environments if normal keys aren’t available. So, we do not think ACE needs debugging-specific features. However, sensitive SW components must be able to detect whether they are running under a debug configuration.
-
-
-[[Key-Management]]
-==== Key Management and Provisioning Applications
-
-Software environments that implement key management operations for other domains require their own CTK. A system may contain multiple such software environments.
-
-A Key Management Applet (KMA) will
-
-[arabic]
-. Generate or retrieve a key matching a request.
-. Configure a CHR with this key and its associated metadata.
-. Export this CHR to a SCC in memory.
-. Relinquish control to the MM.
-
-The MM, which controls the CTK, can the
-
-[arabic, start=5]
-. Set the CTK to the KMA’s CTK.
-. Re-import the SCC into a CHR
-. Change the CTK to match the requester domain's CTK.
-. Export the key for the Requester's use.
-. Relinquish control to the Requester.
-
-This is the most generic approach and allows each piece of software to use a CHR of choice to generate and import SCCs.
-Furthermore, it protects the key from other SW environments that may be crossed while transferring control between the Requester process, the MM, and the Key Management application.
-
-Various optimizations are possible, which can be interesting for embedded environments: Steps 3., 5., and 6. can be omitted if the CHR used for these operations is fixed and the overall SW/FW stack is simple enough.
-Similarly, Step 8. can be omitted.
-These are choices of the ABI architect of a specific SW/FW stack.
-
-[[Context-Binding]]
-==== Binding of Cryptographic Contexts to Lifecycles and Architectural Contexts, Derived CTKs
 
 [WARNING]
 ====
@@ -76,47 +41,6 @@ The system manages these lifecycles through:
 * Lifecycle and Architectural Contexts information stored in CHR metadata
 * Lifecycle Specific Context Transport Keys (LSCTKs) for key export/import
 
-LSCTKs are derived by combining the original CTK with a Lifecycle Type Secret (LTS) and a Domain Secret (DOS)
-that matches the desired Lifecycle/Domain encoded in the CHR metadata.
-
-When an LTS expires and therefore it is erased, or is changed, all associated LSCTK-exported SCCs become invalid because they can not be reimported. However, any value in a CHR remains usable and can be exported under a new key associated with the LTS. This is not a concern since LTSs are not expected to be dynamically invalidated or changed during SW execution, but only between boot sessions.
-
-This CTK dependency also enables lifecycles within migration: if a VM is migrated together with its CTK, keys only relying on the CTK will be able to be imported from memory on the target device. However, if they need to use a lifecycle restricted key, this will only be possible if the LTS is the same.
-
-This allows a VM to continue functioning on the target device with restricted functionality, instead of preventing its use completely. This enables use cases where DRM protocols detect invalid keys and request credentials according to the content owner’s policies.
-
-The same mechanism is used also to bind keys to SoC types, device types, manufacturers, etc.
-
-A few types of LTSs are defined (nomenclature is our own)
-
-* Boot Unique Secret: regenerated at each boot.
-* Device Unique Secret. Permanent device identifier, shareable across multiple SoCs for instance by being stored in separate secure chip on the motherboard, or by allowing one SoC as being the master providing the value to other chips. Such mechanism is not architected.
-* SiP Unique Secret: Identifies the manufacturer of the SoC.
-* Chip Model Unique Secret: Identifies specific chip model/family.
-* Device Type Unique Secret: Identifies device type/model. May be provisioned and accessed like the Device Unique Secret.
-* OEM Secret. Provisioned by OEM to differentiate their products from the competition.
-
-These keys are stored in the Lifecycle Secret Table (LST), a subset of the ISK Table, with policies that make them visible only to hardware and never to software. They are provisioned at boot as part of the ISK Table and can be addressed as LTST++[++index++]++.
-
-A Lifecycle Type is configured through metadata by having a field with the same index. This field determines how a key is exported and reimported.
-
-* If the lifecycle is not restricted, then the CTK in `c31` is used directly.
-* Otherwise, a LSCTK will be computed using a special function (TBD) +
-`Derived_CTK = Uniquify(CTK,LTST[index])`, +
-// `Derived_CTK = Uniquify(CTK,LTST[index] || ACUV_S })`, +
-// `Derived_CTK = Uniquify(CTK,LTST[index] || ACUV_S || ACUV_U })`, +
-// `Derived_CTK = Uniquify(CTK,LTST[index] || ACUV_S || ACUV_VS)`, or +
-// `Derived_CTK = Uniquify(CTK,LTST[index] || ACUV_S || ACUV_VS || ACUV_VU})` +
-and the `Derived_CTK` is value used to encrypt and authenticate the SCC.
-
-[WARNING]
-====
-This function must be as fast as possible. We cannot use a cryptographic hash or too many chained AES invocations.
-However, a CMAC-like construction can be used, where the derivation using the LTS, as well as the current value at each higher PL can be cached,
-so each change at one level only requires one extra encryption.
-The key (which is `c31`) can be slightly masked at each level to make extension attacks impossible, for instance
-by XORing its least significant byte with fixed values associated to the S, U, VS, VU PLs (use four different values).
-====
 
 [WARNING]
 ====
