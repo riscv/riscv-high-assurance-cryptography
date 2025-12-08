@@ -13,7 +13,7 @@ Key material and possibly other algorithm-specific data are contained in the sta
 The metadata field exists in two versions, short (64-bit) and long (128-bit). The short version is structured as follows:
 
 .Metadata: 64-bit version
-[width="100%",cols=">9%,17%,66%,^8%",options="header",]
+[width="100%",cols=">9%,17%,66%,^8%",options="header",frame=ends, grid=rows]
 |===
 |   Field | Name | Description| Type
 |     [0] |  Format | 0 for short metadata format (64-bit) | Public
@@ -94,8 +94,6 @@ We now give the abbreviated listing of the instructions defined by ACE.
 | ACE.CCBUSY    | Cd\|Xd                    |  Check whether the operation reading/writing to CC Cd or *Xd has completed — Can be a CSRs read.
 |===
 
-
-
 <<<
 ==== List of CSRs
 
@@ -146,11 +144,17 @@ Some of these LBSs are fixed, other values may be configurable only using an imp
 The LBST is a global table shared across all ACE units with some fields which can be overridden by values which are architected (i.e., per hart).
 Currently, the only two values that may be overridden by architectural values, in order to support multiple VMs/Supervisor Domains/Worlds are System_Secret and Boot_Session.
 
-
 If the lifecycle field of a context (CC/SCC) is -1 (all ones), then the CTK is used.
-Otherwise, this value is used as an index _i_ in the Lifecycle Secrets Table, and the value Derivation(CTK, LST[_i_]) is used for import/export in place of the CTK.
+Otherwise, this value is used as an index _i_ in the Lifecycle Secrets Table, and a derived key `derived_key` computed from CTK and LS:=LST[_i_] is used for import/export in place of the CTK.
+The key derivation function is the same as in AES-GCM-SIV:
 
-Since the derivation function can be seen as expensive, the ACE implementation is allowed to cache recently used Lifecycle Derived.
+[%autowidth,frame=none,grid=none,align=center]
+|===
+>| `derived_key` = | AES-256(CTK, LS)[63:0] \|\| AES-256(CTK, LS ⊕ (0^127^ \|\| 1))[63:0] \|\|
+>|               | {nbsp}{nbsp}{nbsp}{nbsp} \|\| AES-256(CTK, LS ⊕ (0^126^ \|\| 10))[63:0] \|\| AES-256(CTK, LS ⊕ (0^126^ \|\| 11))[63:0]
+|===
+
+Since the derivation function is expensive, the ACE implementation is allowed to cache recently used Lifecycle Derived.
 
 In <<lifecycle-binding-indices>>, we list the mandatory entries and their meaning.
 At least four bits are needed to encode them.
@@ -158,7 +162,7 @@ Column MM-Writeable determines whether MM can write the corresponding value.
 
 [[lifecycle-binding-indices]]
 .Mandatory Values for Lifecycle Binding
-[width="100%",cols="20%,52%,^9%,^9%",options="header",]
+[width="100%",cols="20%,52%,^9%,^9%",options="header",frame=ends, grid=rows]
 |===
 .>| Name .>| Description .>| MM-Writeable .>| Value
 | No lifecycle binding | | | -1
@@ -171,8 +175,6 @@ Column MM-Writeable determines whether MM can write the corresponding value.
 | Boot_Session | Regenerated at each (virtual) boot. | Y | 6
 | _Reserved for Revocation_ | Regenerated at boot or at each revocation event. | Y | 7
 |===
-
-
 
 *Remark:* _We need to discuss what to do in case there is a reboot of a VM. Then we need to "virtualize" the seventh string, or use a secondary CTK for that purpose, since some VMs may reboot while others may not.
 Also, do we want to allow a VM to have a different virtual hardware? Or does it always declare the same configuration as the underlying hardware?_
