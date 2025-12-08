@@ -3,16 +3,106 @@
 
 === Data Structures
 
+A CC contains two fields: the `metadata` and the `state`.
+
+Key material and possibly other algorithm-specific data are contained in the state.
+
 [[Metadata-Fields]]
 ==== Metadata Fields
 
-A CC contains two fields: the `metadata` and the `state`. Key material and possibly other algorithm-specific data are contained in the state.
+The metadata field exists in two versions, short (64-bit) and long (128-bit). The short version is structured as follows:
 
-bits(64) metadata
+.Metadata: 64-bit version
+[width="100%",cols="7%,13%,74%,6%",options="header",]
+|===
+|   Field | Name | Description| Type
+|     [0] |  Format | 0 for short metadata format (64-bit) | Public
+|   [4:1] |  Version | Metadata format version | Public
+|  [12:5] |  Algorithm | Which primitive or mode (msb = 0 for architected algorithms, msb = 1 for custom ones). | Public
+|    [13] |  Side Channel Protected | Does this implementation of the algorithm provide Side Channel Protection? We only require constant-time and a first order threshold implementation. | Public
+| [15:14] |  Direction_Policy | Use for encryption/decryption/both (only for enc/dec primitives or modes). | Public
+| [17:16] |  Key_Type | By explicit value / Immutable (index) / Internally generated. | Public
+| [22:18] |  Lifecycle | Field which is either -1 or an index into the table of Lifecycle Binding Secrets. | Public
+| [23:23] |  Sealed | Whether the CC is complete (00) or interrupted while being configured (01), imported (10) or exported (11). Necessary to proper restart or resume operations. | Public
+| [27:24] |  Error | Last error value | Public
+| [29:28] |  Cloning_Policy | 00 cannot be cloned. Can be cloned: 01 can be reinit, 10 must be reinit, 11 cannot be reinit. | Public
+| [31:30] |  Reserved | Zero | Public
+| [37:32] |  Stage/Direction | Which internal stage the algorithm is, as defined by ace_stage or implicitly. Must be ZERO on configuration. This is algorithm defined | Private
+| [41:38] |  AC_Policy_1 | Can a User/Supervisor/Hypervisor/Machine use it? (Import/export/overwrite always allowed.) | Private
+| [43:42] |  AC_Policy_2 | Restrict USE to specific User/Suopervisor? (Import/export/overwrite always allowed.) | Private
+| [59:44] |  AC_Policy_3 | IDs to filter User OR Supervisor (filtering both or even world, or higher resolution, is delegated to future versions, with metadata larger than 64 bits). | Private
+| [63:60] |  Reserved | Zero | Private
+|===
 
-bits(128* MAX_CHR_STATE_LENGTH) state
+The long version of the metadata is structured as follows:
 
-The state field stores the cryptographic key and optional additional data.
+.Metadata: 128-bit version
+[width="100%",cols="7%,13%,74%,6%",options="header",]
+|===
+|     Field | Name | Description| Type
+|       [0] |  Format | 1 for long metadata format (128-bit) | Public
+|     [4:1] |  Version | Metadata format version | Public
+|    [12:5] |  Algorithm | Which primitive or mode (msb = 0 for architected algorithms, msb = 1 for custom ones). | Public
+|      [13] |  Side Channel Protected | Does this implementation of the algorithm provide Side Channel Protection? We only require constant-time and a first order threshold implementation. | Public
+|   [15:14] |  Direction_Policy | Use for encryption/decryption/both (only for enc/dec primitives or modes). | Public
+|   [17:16] |  Key_Type | By explicit value / Immutable (index) / Internally generated. | Public
+|   [22:18] |  Lifecycle | Field which is either -1 or an index into the table of Lifecycle Binding Secrets. | Public
+|   [23:23] |  Sealed | Whether the CC is complete (00) or interrupted while being configured (01), imported (10) or exported (11). Necessary to proper restart or resume operations. | Public
+|   [27:24] |  Error | Last error value | Public
+|   [29:28] |  Cloning_Policy | 00 cannot be cloned. Can be cloned: 01 can be reinit, 10 must be reinit, 11 cannot be reinit. | Public
+|   [31:30] |  Reserved | Zero | Public
+|   [63:32] |  VendorID | JEDEC manufacturer ID of the provider of the core | Public
+|   [67:64] |  Revision ID | Revision ID of the manufacturer’s implementation of resuming | Public
+|   [83:68] |  Reserved for Partial | Information for resuming (similar to VSTART for RVV, but impdef)) | Public
+|   [89:84] |  Stage/Direction | Which internal stage the algorithm is, as defined by ace_stage or implicitly. Must be ZERO on configuration. This is algorithm defined | Private
+|   [93:90] |  AC_Policy_1 | Can a User/Supervisor/Hypervisor/Machine use it? (Import/export/overwrite always allowed.) | Private
+|   [95:94] |  AC_Policy_2 | Restrict USE to specific User/Supervisor? (Import/export/overwrite always allowed.) | Private
+|  [111:96] |  AC_Policy_3 | IDs to filter User OR Supervisor (filtering both or even world, or higher resolution, is delegated to future versions). | Private
+| [127:112] |  Reserved | Zero | Private
+|===
+
+We note that in the 128-bit version of the metadata, the first 64-bit word (i.e., at the lowest address) contains bits [63:0] and the second 64-bit word
+(i.e., at the byte address of the first word, plus 8) contains bits [127:64].
+
+
+.The ACE instructions
+[width="100%",cols="12%,18%,70%",options="header",]
+|===
+| Instruction   | Operands                  | Description
+| ACE.ENABLE    | flag=non-blocking         |  Enable the feature in the current process domain. It also sets a bit in a feature CSR for use by the parent domain — or implemented by a CSR write (so, WARL).
+| ACE.DISABLE   |                           |  Disable the feature in the current process domain.
+| ACE.CONFIG    | Cn\|Xn, [Xs]              |  Sets the algorithm and either the key or info on how to fetch and use system key (keystore).
+| ACE.CLEAR     | Cn\|Xn                    |  Clear a CC and mark it as no longer in use (both in the CC internal table and in the feature CSR).
+| ACE.SIZE      | Xd, Cn\|Xn                |  Returns the size in bytes of the package exported from a specified CC,
+| ACE.SIZE      | Xd, #immed                |  or from a specific algorithm given as #immed (including the side channel bits)
+| ACE.EXPORT    | [Xn], Cs\|Xs              |  Exports the content of a CC to an encrypted and authenticated package to memory. Remember that there is no "save" instruction to extract key and all metadata in the clear.
+| ACE.IMPORT    | Cd\|Xd, [Xn], flag=system |  Reads an encrypted and authenticated package from memory and imports it into a CC if ok. ace import can also provide import for system defined blobs or connect a context to an entry of an Immutable System Key table (which is usually inaccessible to SW environments) if the system flag == true.
+| ACE.EXEC      | Vd, Cn\|Xn, Vs            .4+| Performs a cryptographic operation such as an encryption or decryption, absorbing a value in a hash, and possibly returning a value. The instruction may also modify an internal state machine of the CC. It has four variants: has input and output, has I but not O, has no I but produces an O, has no I and O. (The fourth variant is used to encode the next instruction, which is then a pseudo-instruction).
+| ACE.EXEC      | Cn\|Xn, Vs
+| ACE.EXEC      | Vd, Cn\|Xn
+| ACE.EXEC      | Cn\|Xn
+| ACE.SET_STAGE | Cn\|Xn, #immed            .2+| Changes the stage of a multi-stage function (such as hash functions) or provide additional info.  For instance, for  block cipher/mode of operation keys it also sets encryption / decryption.
+| ACE.SET_DIR   | Cn\|Xn, #immed
+| ACE.AVAILABLE | #immed                    |  Informs whether a given primitive is supported by the µarch (IDs standardized) — Can be a CSRs read.
+| ACE.ERROR     | Xd, Cn\|Xn                |  Returns the error of an operation — Can be a CSRs read.
+| ACE.CLONE     | Cd\|Xd, Cs\|Xs, flag=init |  Clones a CC into a second CC.
+| ACE.BUSY      | Xd                        |  Check whether the operation writing to vector register Xd has completed — Can be a CSRs read.
+| ACE.CCBUSY    | Cd\|Xd                    |  Check whether the operation reading/writing to CC Cd or *Xd has completed — Can be a CSRs read.
+|===
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 The key length is determined by:
 
@@ -31,32 +121,6 @@ The state length is specified by a 6-bit value (the maximum value is 62) that de
 
 To circumvent the problem of potentially small states, two or more CHRs may be “pooled/grouped” (as in some vector extensions) to combine their storage. In this case only the first CHR of a group would be accessible through the instructions and export operations would fail if invoked on one of the chained CHRs. Import operations on any CHR in a group would invalidate all CHRs in the group that are not directly overwritten by the import operation. This may increase the number of registers from 8 to 16, all with 1024 bit states?
 
-The metadata field is structured as follows: (TODO: add also the fields to define multi-CHR contexts).
-
-[width="100%",cols="7%,13%,74%,6%",options="header",]
-|===
-| Field   | Name | Description| Type
-|     [0] |  Format | 0 for short metadata format (64-bit) | Public
-|   [4:1] |  Version | Metadata format version | Public
-|  [12:5] |  Algorithm | Which primitive or mode (msb = 0 for architected algorithms, msb = 1 for custom ones). | Public
-|    [13] |  Side Channel Protected | Does this implementation of the algorithm provide Side Channel Protection? We only require constant-time and a first order threshold implementation. | Public
-| [15:14] |  Direction_Policy | Use for encryption/decryption/both (only for enc/dec primitives or modes). | Public
-| [17:16] |  Key_Type | By explicit value / Immutable (index) / Internally generated. | Public
-| [22:18] |  Lifecycle | Field which is either -1 or an index into the table of Lifecycle Binding Secrets. | Public
-| [23:23] |  Sealed | Whether the CC is complete (00) or interrupted while being configured (01), imported (10) or exported (11). Necessary to proper restart or resume operations. | Public
-| [27:24] |  Error | Last error value | Public
-| [29:28] |  Cloning_Policy | 00 cannot be cloned. Can be cloned: 01 can be reinit, 10 must be reinit, 11 cannot be reinit. | Public
-| [31:30] |  Reserved | Zero | Public
-| [37:32] |  Stage/Direction | Which internal stage the algorithm is, as defined by ace_stage or implicitly. Must be ZERO on configuration. This is algorithm defined | Private
-| [41:38] |  AC_Policy_1 | Can a User/Supervisor/Hypervisor/Machine use it? (Import/export/overwrite always allowed.) | Private
-|    [42] |  AC_Policy_2 | Restrict USE to specific User? (Import/export/overwrite always allowed.) | Private
-| [58:43] |  AC_Policy_3 | IDs to filter User OR Supervisor (filtering both or even world, or higher resolution, is delegated to future versions, with metadata larger than 64 bits). | Private
-| [63:59] |  Reserved | Zero | Private
-|===
-
-
-
-
 
 *LIFECYCLE* a 4’b0000 means that the lifecycle is unrestricted. A value _i_ <> 0 mean that the _i_-th lifecycle key has to be used to restrict the lifecycle of the key.
 
@@ -68,27 +132,6 @@ else
 
 Immutable System Key Table Index
 
-
-==== Internal Structures
-
-The ACE architecture implements two functions related to key and state size:
-
-* AlgoKeyLength: Maps algorithm IDs to their required key lengths
-** Represented as AlgoKeyLength (n) where n is the algorithm ID
-** Uses 4 bits to specify key length in 128-bit blocks.
-** All lengths are rounded up to nearest 128-bit multiple.
-
-* AlgoStateLength: Maps algorithm IDs to their required export/import state lengths:
-** Includes the key length plus metadata length and additional state data.
-** Uses 6 bits to specify key length in 128-bit blocks.
-** All lengths are rounded up to nearest 128-bit multiple.
-** Needed for: Key expansion for threshold implementations; Key schedule storage (discouraged); Stateful algorithm requirements.
-
-The exportable/importable state consists of contiguous CHR (Cryptographic Hardware Register) content. The metadata is exported as a 128-bit field even if currently it is defined as a 64-bit registers.
-
-____
-*Remark:* _Even though in general the length of a field is expressed as the number of 128-bit blocks it requires, we do not do this for the key length since we do not envision other key lengths (192-bit keys are stored as a 256-bit value, with the topmost 64 bits simply ignored), and therefore we can save one bit._
-____
 
 ==== Format of a Sealed Cryptographic Context
 
