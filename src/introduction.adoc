@@ -66,7 +66,7 @@ ACE is necessary because current solutions are inadequate:
 * In modes such as AES-GCM-SIV, encryption and authentication derived keys should also not leak, hence supporting primitives only is not always sufficient.
 * No current standardized/architected solution offers fast execution, key management, and trust.
 
-=== Further Implied Features
+=== Further Features
 
 Some additional features are necessary in order to make ACE actually useable and address the issues of the current solutions.
 For instance, it is not desirable to have to switch to a different environment each time we need to use a certain key, and also context switches need to be supported by the software stack.  This means that while the value of a key cannot be extracted from a CC, there must be a mechanism to export the contents of a CC in a secure way, i.e., a way that does not compromise the confidentiality and the integrity of the key and its metadata.
@@ -77,8 +77,12 @@ For instance, it is not desirable to have to switch to a different environment e
 .. Any metadata that does not need to be encrypted and can be used to reduce overheads (for instance, to determine the total length of an input, or its expected structure) is kept in the clear.
 .. Since we have public and private metadata, and keys (obviously private), we need to use an AEAD mode of operation for the export/import operations (AES-GCM-SIV as per RFC 8452).
 .. Since an AEAD mode of operation is needed, ACE exposes (a variant of) it to user. For this reason, we support modes in general in ACE.
-. A "secret" Cryptographic Context Transport Key (CTK) must be used for import and export. ACE optionally allows Machine to configure the CTK.
+. A "secret" Cryptographic Context Transport Key (CTK) must be used for import and export.
+  ACE optionally allows Machine to configure the CTK.
+  In this case, the CTK is stored in 256 bits worth of CSRs, only Machine may configure the CTK.
   CTK reconfigurability is one of the mechanisms by which keys can be domain separated: if Machine configures two different CTKs for two different domains, the one domain cannot authenticate and decrypt an SCC created for the other domain.
+. If the CTK is not configurable, it may be either a fixed value or randomly generated at boot.
+. ACE provides a key derivation mechanism to compute "derived CTKs" from the (currently programmed) CTK and a secret salt associated to a specific lifecycle. When this _Lifecycle Specific Secret_ (LSS) is changed, the corresponding CTK is also changed and all the SCCs exported with the older value of the LSS become automatically invalid.
 
 We apply the term “*opaque keys*” to both keys in CHRs and exported SCCs. Opaque keys are cryptographic keys that can be used without revealing their value.
 “Opaque” means the actual key value can’t be extracted from a CHR or SCC in the clear.
@@ -91,6 +95,7 @@ Certain features are intentionally not supported by ACE:
 
 * ACE does not support the processing of entire variable-length inputs.
 * ACE does not provide complete secure key management and provisioning features, but offers building blocks that can be used to implement them, Key management can be delegated to applets in a TEE or secure VM, possibly from different owners. These applets can implement complex key management software. The feature allows entities to set up and deliver keys opaquely to less trusted SW domains. ACE does not support external schemes for directly provisioning keys into a key store.
+* ACE, in its current version, does not provide a built-in mechanism for key revocation.  Key revocation is a complex feature that requires additional infrastructure and coordination between entities, while at the same time being a rare event.  However, keys that may be revoked can be tied to a "current boot cycle only" or "refreshed whenever a revocation message is received" lifecycle -- there may be one or more of the latter type -- and can be revoked in a provisioning applet or IP block.  When the derived CTK for the key is invalidated, then any process using that key will need to re-obtain it from the provisioning entity, and if the key is revoked, then this process will fail.  However, keys that are still in CCs can still be exported -- a mechanism to revoke keys _currently_ stored in CCs is not yet provided. (A possible implementation would consist in assigning an optional 64- or 128-bit identifier to such a key and all the ACE units in the system would obtain a broadcast message to erase all CCs currently matching that field.)
 * ACE cannot fully prevent misuse by compromised processes. If a process is compromised, the attacker obtains access to the CCs and can perform cryptographic operations — even if they do not elicit the key. Therefore, ACE complements existing security measures such as SW vulnerability exploitation countermeasures and process isolation (including TEE-like inverse sandboxing).
 * Other risks remain. For instance: In counter-mode encryption, the same method enables both encryption and decryption. Similarly, MAC verification capability also enables MAC creation. Malicious processes can still misuse these operations. This also leads to the need to protect derived keys in modes of operation like AES-GCM-SIV which rely on counter-mode encryption using a derived key.
 

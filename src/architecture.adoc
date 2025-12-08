@@ -3,17 +3,10 @@
 
 === Data Structures
 
-[[CHR-Format]]
-==== Format of Context Holding Registers
+[[Metadata-Fields]]
+==== Metadata Fields
 
-The CHRs can be very large, but their implementation cost is mitigated by two factors:
-[arabic]
-. They are rarely written to, and we should avoid speculating on key values anyway. Therefore, having a large renamed physical CHR file is unnecessary for performance.
-. Only a few key values need to be available simultaneously.
-
-Based on these factors, we recommend to implement 8 CHRs (plus CHR 31 for CTK storage), with 4 CHRs as an absolute minimum. The number of CHRs (excluding CHR 31) should be discoverable.
-
-A CHR has two fields:
+A CC contains two fields: the `metadata` and the `state`. Key material and possibly other algorithm-specific data are contained in the state.
 
 bits(64) metadata
 
@@ -40,45 +33,34 @@ To circumvent the problem of potentially small states, two or more CHRs may be �
 
 The metadata field is structured as follows: (TODO: add also the fields to define multi-CHR contexts).
 
-[width="100%",cols="15%,15%,70%",options="header",]
+[width="100%",cols="7%,13%,74%,6%",options="header",]
 |===
-|Field |Name |Description
+| Field   | Name | Description| Type
+|     [0] |  Format | 0 for short metadata format (64-bit) | Public
+|   [4:1] |  Version | Metadata format version | Public
+|  [12:5] |  Algorithm | Which primitive or mode (msb = 0 for architected algorithms, msb = 1 for custom ones). | Public
+|    [13] |  Side Channel Protected | Does this implementation of the algorithm provide Side Channel Protection? We only require constant-time and a first order threshold implementation. | Public
+| [15:14] |  Direction_Policy | Use for encryption/decryption/both (only for enc/dec primitives or modes). | Public
+| [17:16] |  Key_Type | By explicit value / Immutable (index) / Internally generated. | Public
+| [22:18] |  Lifecycle | Field which is either -1 or an index into the table of Lifecycle Binding Secrets. | Public
+| [23:23] |  Sealed | Whether the CC is complete (00) or interrupted while being configured (01), imported (10) or exported (11). Necessary to proper restart or resume operations. | Public
+| [27:24] |  Error | Last error value | Public
+| [29:28] |  Cloning_Policy | 00 cannot be cloned. Can be cloned: 01 can be reinit, 10 must be reinit, 11 cannot be reinit. | Public
+| [31:30] |  Reserved | Zero | Public
+| [37:32] |  Stage/Direction | Which internal stage the algorithm is, as defined by ace_stage or implicitly. Must be ZERO on configuration. This is algorithm defined | Private
+| [41:38] |  AC_Policy_1 | Can a User/Supervisor/Hypervisor/Machine use it? (Import/export/overwrite always allowed.) | Private
+|    [42] |  AC_Policy_2 | Restrict USE to specific User? (Import/export/overwrite always allowed.) | Private
+| [58:43] |  AC_Policy_3 | IDs to filter User OR Supervisor (filtering both or even world, or higher resolution, is delegated to future versions, with metadata larger than 64 bits). | Private
+| [63:59] |  Reserved | Zero | Private
+|===
 
-|metadata[15:0] |*ALGORITHM* a| Initially defined values:
 
-16’h0000 → AES-128 (not a threshold implementation)
 
-16’h0001 → AES-192 (same)
 
-16’h0002 → AES-256 (same)
 
-16’h0080 → QARMAv2_128-128 (same)
+*LIFECYCLE* a 4’b0000 means that the lifecycle is unrestricted. A value _i_ <> 0 mean that the _i_-th lifecycle key has to be used to restrict the lifecycle of the key.
 
-16’h0081 → QARMAv2_128-192 (same)
-
-16’h0082 → QARMAv2_128-256 (same)
-
-Other values → Currently undefined.
-
-|metadata[16] |*FWD_ALLOW* |Forward direction allowed (e.g., encryption)
-
-|metadata[17] |*BCK_ALLOW* |Backward direction allowed (e.g., decryption)
-
-|metadata[23:18] |*—* |Reserved, currently WARZ
-
-|metadata[24] |*KEYTYPE* a| 1’b0 → SW_KEY = an explicitly given key (SW key) or a system generated key
-
-1’b1 → HW_KEY = a system immutable key
-
-|metadata[28:25]
-
-(with [32:29] reserved) |*LIFECYCLE* a|4’b0000 means that the lifecycle is unrestricted. A value _i_ <> 0 mean that the _i_-th lifecycle key has to be used to restrict the lifecycle of the key.
-
-This field can be set explicitly by SW or taken from the metadata associated with a system key, or by local key derivation hardware (such as the TME on Qualcomm devices).
-
-This field overlaps with the next: They are mutually exclusive, and the meaning of these bits is determined by the KEYTYPE bit0x
-
-|metadata[32:25] |*ISKT_INDEX* a| If KEYTYPE != HW_KEY, then
+metadata[32:25] |*ISKT_INDEX* a| If KEYTYPE != HW_KEY, then
 
 Reserved for future use, currently WARZ
 
@@ -86,23 +68,6 @@ else
 
 Immutable System Key Table Index
 
-(see Section ?0 for more details). +
-There is a maximum of 256 system keys.
-
-|metadata[X:33] |*ACPOLICY* a|
-One bit per PL and World, except for the MM. The notation is Metadata.ACPOLICY[ELn/SS]
-
-The default value should be “all ones”, and we strongly recommend to use this mask in most cases, since the same, unmodified user space process may run in user space or in a TEE, and the different security states are usually well isolated anyway. If the key is a system key or a system generated key, then this may be restricted to the target.
-
-This policy affects all uses except overwrite (including clearing the contents). Therefore, a PL/SS that cannot use the key cannot even export of import it. If a process prevents its parent from exporting the key, then they will effectively prevent proper save and restore of keys upon context. switching and this may lead to unpredictable behavior.
-
-Alternatively, this field may contain a short list of worlds allowed to work with this Context. There should be room for at least two world identifiers, if worlds are implemented, and only these two and MM may export, import, or use this context.
-
-|metadata[62:X+1] |*—* |Reserved for future use, currently WARZ.
-
-|metadata[63] |*VALID* |Set if the CHR is in use. This bit cannot be set directly by the user, and bit 63 of a metadata input should *always* be equal to one.
-
-|===
 
 ==== Internal Structures
 
