@@ -13,7 +13,7 @@ Key material and possibly other algorithm-specific data are contained in the sta
 The metadata field exists in two versions, short (64-bit) and long (128-bit). The short version is structured as follows:
 
 .Metadata: 64-bit version
-[width="100%",cols="9%,17%,66%,8%",options="header",]
+[width="100%",cols=">9%,17%,66%,^8%",options="header",]
 |===
 |   Field | Name | Description| Type
 |     [0] |  Format | 0 for short metadata format (64-bit) | Public
@@ -38,7 +38,7 @@ The metadata field exists in two versions, short (64-bit) and long (128-bit). Th
 The long version of the metadata is structured as follows:
 
 .Metadata: 128-bit version
-[width="100%",cols="9%,17%,66%,8%",options="header",]
+[width="100%",cols=">9%,17%,66%,^8%",options="header",]
 |===
 |     Field | Name | Description| Type
 |       [0] |  Format | 1 for long metadata format (128-bit) | Public
@@ -74,7 +74,7 @@ We now give the abbreviated listing of the instructions defined by ACE.
 [width="100%",cols="17%,21%,62%",options="header",]
 |===
 | Instruction   | Operands                  | Description
-| ACE.ENABLE    | flag=non-blocking         |  Enable the feature in the current process domain. It also sets a bit in a feature CSR for use by the parent domain — or implemented by a CSR write (so, WARL).
+| ACE.ENABLE    | flag=blocking             |  Enable the feature in the current process domain. It also sets a bit in a feature CSR for use by the parent domain — or implemented by a CSR write (so, WARL).
 | ACE.DISABLE   |                           |  Disable the feature in the current process domain.
 | ACE.CONFIG    | Cn\|Xn, [Xs]              |  Sets the algorithm and either the key or info on how to fetch and use system key (keystore).
 | ACE.CLEAR     | Cn\|Xn                    |  Clear a CC and mark it as no longer in use (both in the CC internal table and in the feature CSR).
@@ -82,11 +82,11 @@ We now give the abbreviated listing of the instructions defined by ACE.
 | ACE.SIZE      | Xd, #immed                |  or from a specific algorithm given as #immed (including the side channel bits)
 | ACE.EXPORT    | [Xn], Cs\|Xs              |  Exports the content of a CC to an encrypted and authenticated package to memory. Remember that there is no "save" instruction to extract key and all metadata in the clear.
 | ACE.IMPORT    | Cd\|Xd, [Xn], flag=system |  Reads an encrypted and authenticated package from memory and imports it into a CC if ok. ace import can also provide import for system defined blobs or connect a context to an entry of an Immutable System Key table (which is usually inaccessible to SW environments) if the system flag == true.
-| ACE.EXEC      | Vd, Cn\|Xn, Vs            .4+| Performs a cryptographic operation such as an encryption or decryption, absorbing a value in a hash, and possibly returning a value. The instruction may also modify an internal state machine of the CC. It has four variants: has input and output, has I but not O, has no I but produces an O, has no I and O. (The fourth variant is used to encode the next instruction, which is then a pseudo-instruction).
+| ACE.EXEC      | Vd, Cn\|Xn, Vs         .4+| Performs a cryptographic operation such as an encryption or decryption, absorbing a value in a hash, and possibly returning a value. The instruction may also modify an internal state machine of the CC. It has four variants: has input and output, has I but not O, has no I but produces an O, has no I and O. (The fourth variant is used to encode the next instruction, which is then a pseudo-instruction).
 | ACE.EXEC      | Cn\|Xn, Vs
 | ACE.EXEC      | Vd, Cn\|Xn
 | ACE.EXEC      | Cn\|Xn
-| ACE.SET_STAGE | Cn\|Xn, #immed            .2+| Changes the stage of a multi-stage function (such as hash functions or modes of operation) or provide additional info.  For instance, for  block cipher/mode of operation keys it also sets encryption / decryption. SET_DIR is an alias for SET_STAGE.
+| ACE.SET_STAGE | Cn\|Xn, #immed         .2+| Changes the stage of a multi-stage function (such as hash functions or modes of operation) or provide additional info.  For instance, for  block cipher/mode of operation keys it also sets encryption / decryption. SET_DIR is an alias for SET_STAGE.
 | ACE.SET_DIR   | Cn\|Xn, #immed
 | ACE.AVAILABLE | #immed                    |  Informs whether a given primitive is supported by the µarch (IDs standardized) — Can be a CSRs read.
 | ACE.ERROR     | Xd, Cn\|Xn                |  Returns the error of an operation — Can be a CSRs read.
@@ -100,38 +100,85 @@ We now give the abbreviated listing of the instructions defined by ACE.
 <<<
 ==== CSRs
 
-We need four bits in a CSR called `ACE_CC_ENABLED` to denote whether the feature is enabled or disabled for the current process domain.
+We need four bits in a CSR called `ACE_CC_ENABLED` to denote whether the feature is enabled or disabled for the current process domain:
 
-Bits 0..3 are for EL0..EL3 or User/(Virtual)Supervisor/HV/MM.
+* Bits 0..3 are for EL0..EL3 or User/(Virtual)Supervisor/HV/MM, respectively.
+* The bit corresponding to the current mode/EL is set/cleared when `ace.enable`/`ace.disable` is issued
+* If one of these bit is set, the bits corresponding to higher levels are also set.
+* If one of these bit is cleared, the bits corresponding to lower levels are also cleared.
+* This register cannot be set directly, and it can only be read directly.
 
-The bit corresponding to the current mode/EL is set/cleared when `ace.enable`/`ace.disable` is issued
+We need one `ACE_CC_BLOCKING` bit to establish whether the unit is working in a blocking way (1, default mode) or non-blocking (0).
+Here, blocking means that any instruction that accesses the content of an output register of a previous ACE instruction will automatically have to wait that the results are retired, otherwise the completion status of the instruction will have to be followed in a CSR.
 
-If one of these bit is set, the bits corresponding to higher levels are also set.
+A 32-bit CSR `ACE_CC_USED` with a bit per CC to denote whether the register is in use or not (cleared contextually to CC erasure to dispose of the key). Read-only.
 
-If one of these bit is cleared, the bits corresponding to lower levels are also cleared.
+A 32-bit CSR `ACE_CC_DIRTY` with a bit per CC to keep track whether the corresponding CC has been modified since the last time the same bit has been cleared. +
+Two types actions can modify a CC and thus must update also `ACE_CC_DIRTY`:
 
-This register cannot be set directly, and it can only be read directly.
-
-We need one `ACE_CC_BLOCKING` bit to establish whether the unit is working in a blocking way (1, default mode) or non-blocking (0) (here, blocking means that any instruction that accesses the content of an output register of a previous ACE instruction will automatically have to wait that the results are retired, otherwise the completion status of the instruction will have to be followed in a CSR).
-
-A 32-bit `CSR ACE_CC_USED` with a bit per CC to denote whether the register is in use or not (cleared contextually to CC erasure to dispose of the key). RO.
-
-A 32-bit `CSR ACE_CC_DIRTY` with a bit per CC to keep track whether the corresponding CC has been modified since the last time the same bit has been cleared.
-Two types actions can modify a CC and thus `ACE_CC_DIRTY`: An explicit configuration/import; or
-Certain cryptographic operations, such as absorbing information in a hash function, that modify the internal state.
+* An explicit configuration/import; and
+* Certain cryptographic operations, such as absorbing information in a hash function, that modify the internal state.
 
 It is also possible to directly write to `ACE_CC_DIRTY`, and in fact necessary to optimize context switching.
 
 A 32-bit CSR `ACE_CC_BUSY` with a bit per vector register to keep track whether any operation writing to a certain register is still operating.
 
-256-bit worth of CSR `ACE_CTK` to store the the CTK.  Writeable only by MM.  Read as zero in any case (no need to raise exceptions if any other mode/EL tries to write to it or read it).
+256-bit worth of CSR `ACE_CTK` to store the the CTK.
 
-Two CSRs at U, resp., S level, namely `UKSID` (User Key Space ID ) and/or `SKSID` (Supervisor Key Space ID), which are only writable at S, resp. H or higher for (we can reuse `UKSID` = `ASID` and `SKSID` = `VMID`).
+* `ACE_CTK` is writable exclusively by MM.
+* `ACE_CTK` reads as zero in all cases.
+//There is need to raise exceptions if any other mode/EL tries to write to it or read it.
 
-We do not envision key sharing across worlds, so we see a Hypervisor or World "Key Space ID" as redundant. It is the responsibility of the MM to change CTKs between Worlds/Supervisor Domains.
+Two CSRs at U, resp., S level, namely `UKSID` (User Key Space ID ) and/or `SKSID` (Supervisor Key Space ID), which are only writable at S, resp., a higher mode.
+We can reuse the CSRs for `ASID`, resp., `VMID` for`UKSID`, resp., `SKSID`.
 
-The software in each World/Supervisor Domain is responsible to generate their own keys, and if a process (applet) in one World/Supervisor Domain is responsible to provide keys to other Worlds/Supervisor Domains, it is the responsibility of the MM to properly import/switch the CTK/export. If `ASID`/`VMID` are reused for `UKSID`/`SKSID`, we still need to distinguish somehow the use for separating key spaces even if these fields are not used to build GVAs/GPAs (TBD).
+*Remark:* _We do not envision direct key sharing across Worlds/Supervisor Domains, so consider defining a Hypervisor or World "Key Space ID" as redundant.
+It is the responsibility of the MM to change CTKs between Worlds/Supervisor Domains._
 
+The software in each World/Supervisor Domain is normally responsible to generate their own keys, and if a process (applet) in one World/Supervisor Domain is responsible to provide keys to other Worlds/Supervisor Domains, it is the responsibility of the MM to properly import/switch the CTK/export. If `ASID`/`VMID` are reused for `UKSID`/`SKSID`, we still need to distinguish somehow the use for separating key spaces even if these fields are not used to build GVAs/GPAs (TBD).
+
+<<<
+
+==== Lifecycle Binding
+
+Internally, ACE has a table of Lifecycle Binding Secrets (LBST)
+
+These can be configured by the RoT and how to do it is impdef.
+
+These lifecycle specific secrets are 256 bits long, like the CTK.
+
+If the lifecycle field of a context (CC/SCC) is zero, then the CTK is used.
+
+If the value is non-zero, then this number minus one is used as an index _i_ in the Lifecycle Secrets Table.
+
+The value Derivation(CTK, LST[_i_]) is used for import/export in place of the CTK.
+
+Since the derivation function can be seen as expensive, the ACE implementation is allowed to cache recently used Lifecycle Derived.
+
+The RoT must configure a LBST, accessible to each ACE Unit (can be duplicated or not) at each reset cycle.
+
+The mandatory entries are these, at least four bits are needed.
+The index in the LBST is Value-1.
+
+.Mandatory Values for Lifecycle Binding
+[width="100%",cols="25%,67%,^8%",options="header",]
+|===
+| Name | Description |Value
+| No lifecycle binding | | 0
+| SiP Unique Secret | Identifies the manufacturer of the SoC. Permanent. | 1
+| Chip Model Unique Secret | Identifies specific chip model/family. Permanent. | 2
+| Device Unique Secret | Unique device identifier. Shareable across multiple SoCs. Sharing mechanism impdef, i.e., not architected.
+  Can be permanent in a device — re-generations can be optionally triggered. | 3
+| Device Type Unique Secret | Identifies device type/model. Not necessarily permanent. | 4
+| OEM Secret  | Provisioned by OEM to differentiate their products from the competition. Product dependent. | 5
+| System Secret | Identifies System (Stack). Not permanent, must be configured during boot. | 6
+| Boot Session Unique Secret | Regenerated at each boot. | 7
+| Reserved for Revocation | Regenerated at boot or if there is one revocation event | 8
+|===
+
+
+*Remark:* _We need to discuss what to do in case there is a reboot of a VM. Then we need to "virtualize" the seventh string, or use a secondary CTK for that purpose, since some VMs may reboot while others may not.
+Also, do we want to allow a VM to have a different virtual hardware? Or does it always declare the same configuration as the underlying hardware?_
 
 <<<
 The key length is determined by:
@@ -198,25 +245,9 @@ Since such operations can be expensive, the operation is allowed to return immed
 
 ____
 This can speed up the boot process significantly.
-
-This table shall contain the table of the Lifecycle Type Secrets (LTS), i.e. LTST, which are used to bind SCCs to a lifecycle, at a HW defined offset from the start of the ISK Table. These keys cannot be read or used by the ACE instructions directly. The first entries of the LTST are architected as such:
 ____
 
-[width="100%",cols=">14%,86%",options="header",]
-|===
-|*Index* |*Lifecycle Type Secret*
-|0 |Boot Unique Secret, which is randomly regenerated at each boot.
-|1 |Device Unique Secret, which is permanent and uniquely identifies a device.
-|2 |SiP Unique Secret: Identifies the manufacturer of the SoC.
-|3 |Chip Model Unique Secret: Identifies a specific Chip model/family.
-|4 |Device-Type Unique Secret, which is unique to the _device_ type or model within the portfolio of a SiP.
-|5 |OEM Unique Secret. Similarly provisioned by the OEM, in order to distinguish their complete products from the competition.
-|===
 
-____
-The index of a Lifecycle Type Key is stored in the metadata as the LIFECYCLE field. This number is sufficient to bind a Context to the Lifecycle of the key it indexes. The Derived CTK ensures this binding upon export. The details of the Lifecycles are not an architectural feature but the responsibility of system architects and users. However, some IDs must be defined for interoperability and portability, as in the Table above.
-
-The ACE architecture can’t enforce these policies.
 ____
 
 [arabic, start=2]
