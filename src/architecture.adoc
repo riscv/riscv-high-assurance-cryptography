@@ -36,6 +36,9 @@ The metadata field exists in two versions, short (64-bit) and long (128-bit). Th
 | [63:60] |  Reserved | Zero | Private
 |===
 
+The short MD format contains 32 bits of public MD and 32 bits of private MD.
+
+
 <<<
 The long version of the metadata is structured as follows:
 
@@ -66,15 +69,18 @@ The long version of the metadata is structured as follows:
 | [127:114] |  Reserved | Zero | Private
 |===
 
-We note that in the 128-bit version of the metadata, the first 64-bit word (i.e., at the lowest address) contains bits [63:0] and the second 64-bit word
-(i.e., at the byte address of the first word, plus 8) contains bits [127:64].
+We note that in the 128-bit version of the metadata, the first 64-bit word (i.e., at the lowest address) contains bits [63:0] and the second 64-bit word (i.e., at the byte address of the first word, plus 8) contains bits [127:64].
+
+The long MD format contains 72 bits of public MD and 56 bits of private MD.
+The first 64-bit word thus only contains public MD.
+The 8 least significant bits of the second 64-bit word contain public MD and the rest is private MD.
 
 Furthermore, we do not architect a field information to assist resuming in the metadata (similarly to VSTART for the V extension) because this is impdef information and therefore it will be included in the internal state of the CC. (This also means that the `ace.size` operation will have to take this into account.)
 
-Filtering according to Supervisor Domains/Worlds is not currently supported, since in this case we believe that re-configuring the CTK is a more solid approach.
+Filtering according to Supervisor Domains/Worlds is not currently supported, since in this case we believe that re-configuring the CTK is a more solid approach. This also allows us to avoid having to define an even longer MD format, at least for now.
 
 <<<
-==== Instructions
+==== Instructions Overview
 
 We now give the abbreviated listing of the instructions defined by ACE.
 
@@ -264,8 +270,8 @@ P ← key(s) { || additional_state }
 Pick random 96-bit nonce N, Derive Kenc and Kauth from K as per RFC 8452.
 SIV ← 0 ||  Poly1305(Kauth, N, metadata || P) [95:0]
 M[0] ← (metadata ∧ 0xFFFF FFFF)
-     ∨ ((metadata ⊕ AESE(Kenc, SIV || 032)) ∧ 0xFFFF FFFF 0000 0000)
-     ∨ (N[63:0] ≪ 64)
+       ∨ ((metadata ⊕ AESE(Kenc, SIV || 032)) ∧ 0xFFFF FFFF 0000 0000)
+       ∨ (N[63:0] ≪ 64)
 M[1] ← N[95:64] ∨ (SIV[95:0] ≪ 96)
 for i = 0 to num_blocks(P)-1
      M[i+2] ← (block # i of P) ⊕ AESE(Kenc, SIV[95:0] || (binary(i+1)[31:0]))
