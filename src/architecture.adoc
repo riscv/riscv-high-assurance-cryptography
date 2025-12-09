@@ -27,8 +27,9 @@ The metadata field exists in two versions, short (64-bit) and long (128-bit). Th
 | [22:18] |  Locale  | Field which is either -1 or an index into the Locale Secrets Table. | Public
 | [23:23] |  Sealed | Whether the CC is complete (00) or interrupted while being configured (01), imported (10) or exported (11). Necessary to restart/resume operations. | Public
 | [27:24] |  Error | Last error value | Public
-| [29:28] |  Cloning Policy | Value 00 means the CC cannot be cloned, else the CC can be cloned, and the values
-             01, resp., 10 and 11 mean that the clone _can_ be re-initialised, resp., _must_ be re-initialised upon cloning, and _cannot_ be re-initialised. | Public
+| [29:28] |  Reserved | Zero | Public
+//Cloning Policy | Value 00 means the CC cannot be cloned, else the CC can be cloned, and the values
+//             01, resp., 10 and 11 mean that the clone _can_ be re-initialised, resp., _must_ be re-initialised upon cloning, and _cannot_ be re-initialised. | Public
 | [37:32] |  Stage/Direction | Which internal stage the algorithm is, as defined by ace_stage or implicitly. Must be ZERO on configuration. This is algorithm defined | Private
 | [41:38] |  AC Policy 1 | Can a User/Supervisor/Hypervisor/Machine use it? (Import/export/overwrite always allowed.) | Private
 | [43:42] |  AC Policy 2 | Restrict USE to specific User/Suopervisor? (Import/export/overwrite always allowed.) | Private
@@ -55,9 +56,10 @@ The long version of the metadata is structured as follows:
 |   [22:18] |  Locale  | Field which is either -1 or an index into the Locale Secrets Table. | Public
 |   [23:23] |  Sealed | Whether the CC is complete (00) or interrupted while being configured (01), imported (10) or exported (11). Necessary to restart/resume operations. | Public
 |   [27:24] |  Error | Last error value | Public
-|   [29:28] |  Cloning Policy | Value 00 means the CC cannot be cloned, else the CC can be cloned, and the values
-               01, resp., 10 and 11 mean that the clone _can_ be re-initialised, resp., _must_ be re-initialised upon cloning, and _cannot_ be re-initialised. | Public
-|   [31:30] |  Reserved | Zero | Public
+|   [31:28] |  Reserved | Zero | Public
+// |   [29:28] |  Cloning Policy | Value 00 means the CC cannot be cloned, else the CC can be cloned, and the values
+//                01, resp., 10 and 11 mean that the clone _can_ be re-initialised, resp., _must_ be re-initialised upon cloning, and _cannot_ be re-initialised. | Public
+//|   [31:30] |  Reserved | Zero | Public
 |   [63:32] |  VendorID | JEDEC manufacturer ID of the provider of the core | Public
 |   [67:64] |  Revision ID | Revision ID of the manufacturer’s implementation of resuming | Public
 |   [71:68] |  Reserved | Zero | Public
@@ -104,9 +106,9 @@ We now give the abbreviated listing of the instructions defined by ACE.
 | `ace.dir`       | Cn\|Xn, #immed
 | `ace.available` | #immed                    |  Informs whether a given primitive is supported by the µarch (IDs standardized) — Can be a CSRs read.
 | `ace.error`     | Xd, Cn\|Xn                |  Returns the error of an operation — Can be a CSRs read.
-| `ace.clone`     | Cd\|Xd, Cs\|Xs, flag=init |  Clones a CC into a second CC.
-| `ace.busy`      | Xd                        |  Check whether the operation writing to vector register Xd has completed — Can be a CSRs read.
-| `ace.ccbusy`    | Cd\|Xd                    |  Check whether the operation reading/writing to CC Cd or *Xd has completed — Can be a CSRs read.
+| `ace.clone`     | Cd\|Xd, Cs\|Xs            |  Clones a CC into a second CC.
+| `ace.vr_busy`   | Xd                        |  Check whether the operation writing to vector register Xd has completed — Can be a CSRs read.
+| `ace.cc_busy`   | Cd\|Xd                    |  Check whether the operation reading/writing to CC Cd or *Xd has completed — Can be a CSRs read.
 |===
 
 <<<
@@ -220,20 +222,39 @@ If some of these keys are device specific, they will not work on a second device
 However, if the Locale of this CC is not restricted, the internal key index may be interpreted as the corresponding internal keys on a different device, with unpredictable consequences.
 Hence the implementation of the SSTK must also provide the proper Locale metadata to the ACE XU to configure a CC._
 
-
-
 === Instructions
 
 ==== ace.enable
 
-==== ace.disable
+`ace.enable flag`
+
+This instruction must be issued before using any ACE operation.
+It enables the CCs and the instructions and also sets a bit in a CSR signaling that the feature is used.
+When a process domain that has enabled ACE is preempted, the parent process inherits the state.
+otherwise it would not be able to export and re-import the CCs.
+The flags determines whether the ISE is used in blocking or non-blocking mode.
+
+The operation is implemented as a CSRW.
+
+====  ace.disable​
+
+`ace.disable`
+
+This instruction signals that the current process domain has stopped using the ACE and all CCs are therefore invalidated.
+
+Care is necessary in the design to allow a locking disablement without erasing the registers when a parent
+gives control back to a child process that does not use the feature.
+
+The operation is implemented as a CSRW.
+
+In non-blocking mode, if the instruction is issued before all ACE operations are retired, then all operations in the ACE unit issued by the current hart are aborted.
 
 ==== ace.config / ace.clear
 
 `ace.config Cn, [Xs]`		where Cn is an immed +
 `ace.config Xn, [Xs]`		where Xn is a GPR +
 `ace.clear Cn` 			    where Cn is an immed +
-`ace.clear Xn` 			    where Xn is a GPR +
+`ace.clear Xn` 			    where Xn is a GPR
 
 Configures a CC with metadata and key, or using an index in the Immutable System Key Table.
 
@@ -247,24 +268,124 @@ Executing `ace.config` will always clear the destination CC, even in case of err
 
 Check bit   n  of the CC_USED CSR, i.e. CC_USED[n] to verify whether the operation has had success.
 
-
-==== ace.size
-
 ==== ace.export
+
+`ace.export [Xn], Cs` +
+`ace.export [Xn], Xs`
+
+`Cs`{nbsp}{nbsp}{nbsp}is the source CC to be exported (as a 5-bit immed). +
+`Xs`{nbsp}{nbsp}{nbsp}alternatively, is a GPR containing a number from 0 to 31 to dynamically address the context to be exported. +
+`Xn`{nbsp}{nbsp}{nbsp}is an GPR containing the base address of the buffer where to store the SCC.
+
+Exports the contents of CC `Cs` to memory, starting at address `Xn`.
+Depending on the type and policies of the key — which are stored in the metadata of `Cs`, the CCWK can be either the CTK CSR or a Locale specific CTK derived from the CTK.
+
+The instruction (resp. ace.import) writes (reads) the entire internal state of a CC or information needed to reconstruct an equivalent state — the instruction shall be resumable in case of interrupts.
+This is similar to entire-vector-register store instructions, that appear to other harts as sequences of individual stores.
+If the context `Cs` is clear or does not exist in the µarch, the operation will report an error.
+
+(The SW should have the right information, so this should never happen).
 
 ==== ace.import
 
-==== ace.exec
+`ace.import Cd, [Xn], S` +
+`ace.import Xd, [Xn], S`
 
-==== ace.stage/ace.dir
+`Cd`{nbsp}{nbsp}{nbsp}   is the destination CHR to be imported, as an immed (5-bit).
+`Xd`{nbsp}{nbsp}{nbsp}   alternatively, is a GPR containing a number from 0 to 31 to dynamically address the context into which import the SCC.
+`n` {nbsp}{nbsp}{nbsp}    is the name of an integer register containing the base address of the buffer with the SCC.
 
-==== ace.available
+S = 0,1  true (1) if the key is in a system defined format and not the format defined by the architecture.
 
-==== ace.error
+This means that system HW dynamically generated keys can be imported but not exported in the same form — if exported they must be in the architectural format. If the value cannot be exported to other devices or to other Locale stages of the same device, the internal logic must bind them to a specific Locale derived CTK).
+
+The instruction imports them like SW keys, but only internally, and sets the right policies.
+
+==== ace.size
+
+`ace.size Xd, Cn` +
+`ace.size Xd, Xn`
+
+This instruction writes the size of the SCC corresponding to CC `Cn` (or the CC whose number is in `Xn`) into GPR `Xd`.
+
+The value can significantly differ from the internal resource usage ot the CC — it can be larger (for simple primitives, because of the nonce/SIV overhead) but also smaller (if for instance keys are split into shares for threshold implementations).
+
+The size of the SCC is important to properly implement features such as context switching, and in general before any export operation.
 
 ==== ace.clone
 
-==== ace.busy/ace.ccbusy
+`ace.clone Cd, Cs` +
+`ace.clone Xd, Cs` +
+`ace.clone Cd, Xs` +
+`ace.clone Xd, Xs`
+
+Clones source CC `Cs` (or the CC indexed by `Xs`) into destination CC `Cd` (or into the CC indexed by `Xd`).
+
+We note that certain attacks may be mounted on primitives if the same state can be re-used (for instance encryption with the same counter), but this cannot be prevented even if this instruction were not available, since a state can be exported and re-imported as-is several times. `ace.clone` is just an optimization for an `ace.export` instruction followed by an `ace.import` instruction.
+
+==== ace.exec
+
+`ace.exec      | Vd, Cn\|Xn, Vs` +
+`ace.exec      | Cn\|Xn, Vs` +
+`ace.exec      | Vd, Cn\|Xn` +
+`ace.exec      | Cn\|Xn`
+
+Performs a cryptographic operation such as an encryption or decryption, absorbing a value in a hash, and possibly returning a value. The instruction may also modify an internal state machine of the CC. It has four variants: has input and output, has I but not O, has no I but produces an O, has no I and O. (The fourth variant is used to encode the next instruction, which is then a pseudo-instruction).  In certain cases the `ace.exec` instruction may modify the internal state machine of the CC.
+
+==== ace.stage/ace.dir
+
+`ace.stage Cn, #immed +
+`ace.stage Xn, #immed +
+`ace.dir	  Cn, #immed +
+`ace.dir	  Xn, #immed
+
+Two pseudo-instructions that map to the same instruction.
+
+`Cn` is the CC in which to set the stage of the internal state machine
+
+`Xn` is a GPR containing a number from 0 to 31 to dynamically address the context where we want to change the stage of the internal state machine.
+
+The `#immed` is a constant from a set of admissible values that are defined for each algorithm, to manage an internal state machine of said algorithm in case more stages are needed.
+
+==== ace.available
+
+`ace.available Xd, Xs`
+
+Is the algorithm defined by GPR Xs (this is the value of the algorithm field of the metadata) supported by the µarch?
+`Xd` = true/false
+
+Implement it as CSR read?
+
+Trivially: We would need at least one bit worth of CSR per algorithm, and this is extended also by the side channel resistance information, so we would have 512 bits. Of course if the ARC so wants, it can be a read-from-CSR pseudo-instruction
+
+*To be discussed* alternative option: the CSR contains a pointer to a memory mapped bitmap or some other architected structure to determine what is implemented. OTOH this can probably be obtained in other ways (like a µarch version number). Or use the error mechanism.
+
+==== ace.error
+
+`ace.error Xd, Cs` +
+`ace.error Xd, Xs`
+
+A CC `Cs` (or indexed by `Xs`) may be in an error state due to the previous operation.
+The corresponding error value is written into GPR `Xd`.
+The error value list must be architected.
+
+==== ace.vr_busy
+
+`ace.vr_busy   Xd` +
+`ace.vr_busy   #immed`
+
+Can be CSR read operation.
+
+It will return 1 or 0 whether there is at least one running ACE operation expected to write on the vector register number `#immed` or indexed by th value of `Xd`.
+
+==== ace.cc_busy
+
+`ace.cc_busy   Xd` +
+`ace.cc_busy   #immed`
+
+Can be CSR read operation.
+
+It will return 1 or 0 whether there is at least one running ACE operation using the CC `#immed` or indexed by the value of `Xd`.
 
 === Formats of Configuration Inputs and Sealed Configuration Contexts
 
