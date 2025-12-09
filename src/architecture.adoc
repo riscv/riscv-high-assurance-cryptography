@@ -1,5 +1,7 @@
 [[Details]]
 == Architecture
+:sectnums:
+:section-refsig:
 
 === Data Structures
 
@@ -22,7 +24,7 @@ The metadata field exists in two versions, short (64-bit) and long (128-bit). Th
 |    [13] |  Side Channel Protected | Does this implementation of the algorithm provide Side Channel Protection? We only require constant-time and a first order threshold implementation. | Public
 | [15:14] |  Direction Policy | Use for encryption/decryption/both (only for enc/dec primitives or modes). | Public
 | [17:16] |  Key Type | By explicit value / Immutable (index) / Internally generated. | Public
-| [22:18] |  Environment  | Field which is either -1 or an index into the table of Environment Tokens. | Public
+| [22:18] |  Locale  | Field which is either -1 or an index into the Locale Secrets Table. | Public
 | [23:23] |  Sealed | Whether the CC is complete (00) or interrupted while being configured (01), imported (10) or exported (11). Necessary to restart/resume operations. | Public
 | [27:24] |  Error | Last error value | Public
 | [29:28] |  Cloning Policy | Value 00 means the CC cannot be cloned, else the CC can be cloned, and the values
@@ -47,7 +49,7 @@ The long version of the metadata is structured as follows:
 |      [13] |  Side Channel Protected | Does this implementation of the algorithm provide Side Channel Protection? We only require constant-time and a first order threshold implementation. | Public
 |   [15:14] |  Direction Policy | Use for encryption/decryption/both (only for enc/dec primitives or modes). | Public
 |   [17:16] |  Key Type | By explicit value / Immutable (index) / Internally generated. | Public
-|   [22:18] |  Environment  | Field which is either -1 or an index into the table of Environment Tokens. | Public
+|   [22:18] |  Locale  | Field which is either -1 or an index into the Locale Secrets Table. | Public
 |   [23:23] |  Sealed | Whether the CC is complete (00) or interrupted while being configured (01), imported (10) or exported (11). Necessary to restart/resume operations. | Public
 |   [27:24] |  Error | Last error value | Public
 |   [29:28] |  Cloning Policy | Value 00 means the CC cannot be cloned, else the CC can be cloned, and the values
@@ -55,16 +57,21 @@ The long version of the metadata is structured as follows:
 |   [31:30] |  Reserved | Zero | Public
 |   [63:32] |  VendorID | JEDEC manufacturer ID of the provider of the core | Public
 |   [67:64] |  Revision ID | Revision ID of the manufacturer’s implementation of resuming | Public
-|   [83:68] |  Reserved for Partial | Information for resuming (similar to VSTART for RVV, but impdef)) | Public
-|   [89:84] |  Stage/Direction | Which internal stage the algorithm is, as defined by ace_stage or implicitly. Must be ZERO on configuration. This is algorithm defined | Private
-|   [93:90] |  AC Policy 1 | Can a User/Supervisor/Hypervisor/Machine use it? (Import/export/overwrite always allowed.) | Private
-|   [95:94] |  AC Policy 2 | Restrict USE to specific User/Supervisor? (Import/export/overwrite always allowed.) | Private
-|  [111:96] |  AC Policy 3 | IDs to filter User OR Supervisor (filtering both or even world, or higher resolution, is delegated to future versions). | Private
-| [127:112] |  Reserved | Zero | Private
+|   [71:68] |  Reserved | Zero | Public
+|   [77:72] |  Stage/Direction | Which internal stage the algorithm is, as defined by ace_stage or implicitly. Must be ZERO on configuration. This is algorithm defined | Private
+|   [81:78] |  AC Policy 1 | Can a User/Supervisor/Hypervisor/Machine use it? (Import/export/overwrite always allowed.) | Private
+|   [83:82] |  AC Policy 2 | Restrict USE to specific User (bit 94)/Supervisor (bit 95)? | Private
+|   [99:84] |  AC Policy 3 | IDs to filter by `UKSID` (*to be double-checked: reuse `ASID`*) | Private
+| [113:100] |  AC Policy 4 | IDs to filter by `SKSID` (*to be double-checked: reuse `VMID`*) | Private
+| [127:114] |  Reserved | Zero | Private
 |===
 
 We note that in the 128-bit version of the metadata, the first 64-bit word (i.e., at the lowest address) contains bits [63:0] and the second 64-bit word
 (i.e., at the byte address of the first word, plus 8) contains bits [127:64].
+
+Furthermore, we do not architect a field information to assist resuming in the metadata (similarly to VSTART for the V extension) because this is impdef information and therefore it will be included in the internal state of the CC. (This also means that the `ace.size` operation will have to take this into account.)
+
+Filtering according to Supervisor Domains/Worlds is not currently supported, since in this case we believe that re-configuring the CTK is a more solid approach.
 
 <<<
 ==== Instructions
@@ -99,28 +106,13 @@ We now give the abbreviated listing of the instructions defined by ACE.
 <<<
 ==== List of CSRs
 
-We need four bits in a CSR called `ACE_CC_ENABLED` to denote whether the feature is enabled or disabled for the current process domain:
+`ACE_CC_STATUS`: four RO bits, to denote whether the feature is enabled or disabled for the various Modes:
 
-* Bits 0..3 are for EL0..EL3 or User/(Virtual)Supervisor/HV/MM, respectively.
-* The bit corresponding to the current mode/EL is set/cleared when `ace.enable`/`ace.disable` is issued
-* If one of these bit is set, the bits corresponding to higher levels are also set.
-* If one of these bit is cleared, the bits corresponding to lower levels are also cleared.
-* This register cannot be set directly, and it can only be read directly.
-
-We need one `ACE_CC_BLOCKING` bit to establish whether the unit is working in a blocking way (1, default mode) or non-blocking (0).
-Here, blocking means that any instruction that accesses the content of an output register of a previous ACE instruction will automatically have to wait that the results are retired, otherwise the completion status of the instruction will have to be followed in a CSR.
-
-A 32-bit CSR `ACE_CC_USED` with a bit per CC to denote whether the register is in use or not (cleared contextually to CC erasure to dispose of the key). Read-only.
-
-A 32-bit CSR `ACE_CC_DIRTY` with a bit per CC to keep track whether the corresponding CC has been modified since the last time the same bit has been cleared. +
-Two types actions can modify a CC and thus must update also `ACE_CC_DIRTY`:
-
-* An explicit configuration/import; and
-* Certain cryptographic operations, such as absorbing information in a hash function, that modify the internal state.
-
-It is also possible to directly write to `ACE_CC_DIRTY`, and in fact necessary to optimize context switching.
-
-A 32-bit CSR `ACE_CC_BUSY` with a bit per vector register to keep track whether any operation writing to a certain register is still operating.
+* Bits 0..3 are for User, (Virtual) Supervisor, Supervisor (Hypervisor), Machine Modes, respectively.
+* Bit 2 is ignored if the H extension is not enabled.
+* The bit for the current Mode is set, resp., cleared when `ace.enable`, resp., `ace.disable` is executed.
+* If one of these bit is set, the bits corresponding to the higher privileged Modes are also set.
+* If one of these bit is cleared, the bits corresponding to the lower privileged Modes are also cleared.
 
 256-bit worth of CSR `ACE_CTK` to store the the CTK.
 
@@ -128,26 +120,55 @@ A 32-bit CSR `ACE_CC_BUSY` with a bit per vector register to keep track whether 
 * `ACE_CTK` reads as zero in all cases.
 //There is need to raise exceptions if any other mode/EL tries to write to it or read it.
 
-Two CSRs at U, resp., S level, namely `UKSID` (User Key Space ID ) and/or `SKSID` (Supervisor Key Space ID), which are only writable at S, resp., a higher mode.
-We can reuse the CSRs for `ASID`, resp., `VMID` for`UKSID`, resp., `SKSID`.
+`ACE_CC_USED`: 32 bits, with a bit per CC to denote whether the register is in use or not (cleared contextually to CC erasure to dispose of the key). Read-only.
 
-*Remark:* _We do not envision direct key sharing across Worlds/Supervisor Domains, so consider defining a Hypervisor or World "Key Space ID" as redundant.
+`ACE_CC_DIRTY`: 32 bits, with a bit per CC to track whether the corresponding CC has been modified since the last time the same bit has been cleared. +
+Two types actions can modify a CC and thus must update also `ACE_CC_DIRTY`:
+
+* An explicit configuration/import; and
+* Certain cryptographic operations, such as absorbing information in a hash function, that modify the internal state.
+
+It is also possible to directly write to `ACE_CC_DIRTY`, and in fact necessary to optimize context switching.
+
+`ACE_CC_BLOCKING`: one bit to establish whether the unit is working in a blocking way (value 1, default mode) or non-blocking (value 0).
+Here, "blocking" means that _any instruction that accesses the content of an output register of a previous ACE instruction will automatically have to wait that the results are retired, otherwise the completion status of the instruction will have to be followed in a CSR._ +
+The mode is initially configured in by the `ace.enable` instruction (which may be implemented as a CSRW itself), but it can be changed at any time by writing to the `ACE_CC_BLOCKING` register.
+
+`ACE_VR_BUSY`: 32 bits, one bit per vector register to track whether any operation writing to a certain register is still running.
+In non-blocking mode, it is the responsibility of the user SW to avoid issuing a second instruction that reads from the output register of the first without waiting first for the completion of the previous operation. In blocking mode, the second instruction will be executed only after the first instruction has been retired and its result placed in to the destination register.
+This register does not distinguish whether one or more operations are still running that have the same output registers.
+RO.
+
+`ACE_CC_BUSY`. 32 bits, one bit per CC to track whether at least one operation tied to a CC is still running.
+This register does not distinguish whether one or more operations are still running with the given CC.
+RO.
+
+*Remark {counter:remark}*:: _Setting the `ACE_CC_BLOCKING` bit while operations are in progress may result in undefined behavior. Therefore, any modifications to it should only be done when no operations are in progress, by checking the `ACE_VR_BUSY` and `ACE_CC_BUSY` registers.  This is particularly important for any component of the system stack that may preempt lower privileged software, such as context switches or interrupt handlers._
+
+Two CSRs at U, resp., S level, namely `UKSID` (User Key Space ID ) and/or `SKSID` (Supervisor Key Space ID), which are only writable at S, resp., a higher mode.
+(*TBD*) We may reuse the CSRs for `ASID`, resp., `VMID` for `UKSID`, resp., `SKSID`.
+Therefore, the maximal bit length of `UKSID` is 9 for Sv32 addresses or 16 for Sv39, Sv48, and Sv57.
+Similarly, the maximal bit length of `SKSID` is 7 for Sv32x4 or 14 for Sv39x4, Sv48x4, and Sv57x4.
+In the metadata fields, `UKSID` and `SKSID` are always zero padded to the maximal lengths of 16 and 14 bits, respectively.
+
+*Remark {counter:remark}*:: _We do not envision direct key sharing across Worlds/Supervisor Domains, so consider defining a Hypervisor or World "Key Space ID" as redundant.
 It is the responsibility of the MM to change CTKs between Worlds/Supervisor Domains._
 
-The software in each World/Supervisor Domain is normally responsible to generate their own keys, and if a process (applet) in one World/Supervisor Domain is responsible to provide keys to other Worlds/Supervisor Domains, it is the responsibility of the MM to properly import/switch the CTK/export. If `ASID`/`VMID` are reused for `UKSID`/`SKSID`, we still need to distinguish somehow the use for separating key spaces even if these fields are not used to build GVAs/GPAs (TBD).
+*Remark {counter:remark}*:: _The software in each World/Supervisor Domain is normally responsible to generate their own keys, and if a process (applet) in one World/Supervisor Domain is responsible to provide keys to other Worlds/Supervisor Domains, it is the responsibility of the MM to properly import/switch the CTK/export._
+//If `ASID`/`VMID` are reused for `UKSID`/`SKSID`, we still need to distinguish somehow the use for separating key spaces even if these fields are not used to build GVAs/GPAs (TBD).
 
 <<<
 
-==== Environment
+==== Locales
 
-Internally, ACE has a table of 128-bit Environment Tokens (EBT), the Environment Tokens Table (EBTT).
+Internally, ACE has a table of 128-bit Locale Secrets (LS), the Locale Secrets Table (LST).
 
 Some of these EBTs are fixed, other values may be configurable only using an impdef authenticated HW procedure, and the remaining may be programmed by MM (*Note:* _we need to define the corresponding CSRs_).
-The EBTT is a global table shared across all ACE units with some fields which can be overridden by values which are architected (i.e., per hart).
+The LST is a global table shared across all ACE units with some fields which can be overridden by values which are architected (i.e., per hart).
 //Currently, the only two values that may be overridden by architectural values, in order to support multiple VMs/Supervisor Domains/Worlds are System_Secret and Boot_Session.
 
-If the Environment  Field of a context (CC/SCC) is -1 (all ones), then the CTK is used.
-Otherwise, this value is used as an index _i_ in the Environment Tokens Table, and a derived key `derived_key` computed from CTK and _b_:=EBTT[_i_] is used for import/export in place of the CTK.
+If the Locale Field of a context (CC/SCC) is -1 (all ones), then the CTK is used.
+Otherwise, this value is used as an index _i_ in the HST, and a derived key `derived_key` computed from CTK and _b_ := HST[_i_] is used for import/export in place of the CTK.
 The key derivation function is the same as in AES-GCM-SIV:
 
 [%autowidth,frame=none,grid=none,align=center]
@@ -159,37 +180,39 @@ The key derivation function is the same as in AES-GCM-SIV:
 Since this derivation function is quite expensive, the ACE implementation is allowed to cache recently used Derived Keys.
 In <<binding-indices>>, we list the mandatory entries and their meaning.
 //At least four bits are needed to encode them.
-In the column "MM-Writeable" we indicate whether MM can write the corresponding Environment Token.
+In the column "MM-Writeable" we indicate whether MM can write the corresponding Locale Token.
 
 [[binding-indices]]
-.Mandatory Environment Values
+.Mandatory Locale Values
 [width="100%",cols="20%,52%,^9%,^9%",options="header",frame=ends, grid=rows]
 |===
 .>| Name .>| Description .>| MM-Writeable .>| Value
 | No lifecycle binding      | | | -1
-| Chip_Manufacturer         | Identifies the manufacturer of the SoC. Permanent. | N | 0
-| Chip_Model                | Identifies specific chip model/family. Permanent. | N | 1
-| OEM_Secret                | Provisioned by OEM to differentiate their products from the competition.
+| Chip Manufacturer         | Identifies the manufacturer of the SoC. Permanent. | N | 0
+| Chip Model                | Identifies specific chip model/family. Permanent. | N | 1
+| OEM Secret                | Provisioned by OEM to differentiate their products from the competition.
                               Can be permanent in a device — re-generations can be optionally triggered using impdef HW authenticated mechanisms. | N | 2
 | Product                   | Identifies device/system type/model (product). Not necessarily permanent. Reconfigurable like OEM_Secret. | N | 3
-| Device_ID                 | Unique device (entire system) identifier.  Shared across all harts in a Soc and shareable across multiple SoCs in a single device. Sharing mechanism impdef, i.e., not architected. Reconfigurable like OEM_Secret. | N | 4
-| OS_Secret                 | Identifies Operating System (or System Stack). +
+| Device                    | Unique device (entire system) secret (not the device ID such as a serial number, but it can be derived from it, for instance by hashing).
+                               Shared across all harts in a Soc and shareable across multiple SoCs in a single device. Sharing mechanism impdef, i.e., not architected.
+                               Reconfigurable like OEM_Secret. | N | 4
+| OS Secret                 | Identifies Operating System (or System Stack). +
                               Not permanent, must be configured during (virtual) boot. | Y | 5
 | Boot_Session              | Regenerated at each (virtual) boot. | Y | 6
 | _Reserved for Revocation_ | Regenerated at boot or at each revocation event. | Y | 7
 |===
 
-*Remark:* _We need to discuss what to do in case there is a reboot of a VM. Then we need to "virtualize" the seventh string, or use a secondary CTK for that purpose, since some VMs may reboot while others may not.
+*Remark {counter:remark}*:: _We need to discuss what to do in case there is a reboot of a VM. Then we need to "virtualize" the seventh string, or use a secondary CTK for that purpose, since some VMs may reboot while others may not.
 Also, do we want to allow a VM to have a different virtual hardware? Or does it always declare the same configuration as the underlying hardware?_
 In principle, all this can be done by calling into MM. MM would need to keep track of the lifecycle binding values and ensure that they are updated correctly when necessary.
 
-Example: if a key has the value of “2” in the Environment field of ita metadata, then not the CTK, but a value derived from the CTK and the "OEM_Secret" will be used for import/export.
+*Example*:: If a key has the value of “2” in the Locale field of ita metadata, then not the CTK, but a value derived from the CTK and the "OEM Secret" will be used for import/export.
 This means that, while `ace.export` will always work on the same device (which is fundamental to allow context switching), attempts to use `ace.import` on the same blob on a device from a different OEM will result in an authentication failure.
 
-In a CC, a key may be referred to using an index into an internal, system defined key table, called the System Specific Key Table (SSTK).
+*Remark {counter:remark}*:: _In a CC, a key may be referred to using an index into an internal, system defined key table, called the System Specific Key Table (SSTK).
 If some of these keys are device specific, they will not work on a second device.
-However, if the Environment of this CC is not restricted, the internal key index may be interpreted as the corresponding internal keys on a different device, with unpredictable consequences.
-Hence the implementation of the SSTK must also provide the proper Environment metadata to the ACE XU to configure a CC.
+However, if the Locale of this CC is not restricted, the internal key index may be interpreted as the corresponding internal keys on a different device, with unpredictable consequences.
+Hence the implementation of the SSTK must also provide the proper Locale metadata to the ACE XU to configure a CC._
 
 
 
@@ -220,3 +243,46 @@ Hence the implementation of the SSTK must also provide the proper Environment me
 ==== ace.clone
 
 ==== ace.busy/ace.ccbusy
+
+=== Formats of Configuration Inputs and Sealed Configuration Contexts
+
+==== Configuration Input
+
+===== With Short Metadata
+
+===== With Long Metadata
+
+==== Sealed Configuration Context
+
+===== With Short Metadata
+
+
+.Simple Example: Encryption, no Authentication
+[%linenums,C]
+----
+P ← key(s) { || additional_state }
+Pick random 96-bit nonce N, Derive Kenc and Kauth from K as per RFC 8452.
+SIV ← 0 ||  Poly1305(Kauth, N, metadata || P) [95:0]
+M[0] ← (metadata ∧ 0xFFFF FFFF)
+     ∨ ((metadata ⊕ AESE(Kenc, SIV || 032)) ∧ 0xFFFF FFFF 0000 0000)
+     ∨ (N[63:0] ≪ 64)
+M[1] ← N[95:64] ∨ (SIV[95:0] ≪ 96)
+for i = 0 to num_blocks(P)-1
+     M[i+2] ← (block # i of P) ⊕ AESE(Kenc, SIV[95:0] || (binary(i+1)[31:0]))
+----
+
+Notation: ⊕, ∨, ∧, and ≪ denote XOR, OR, AND, and left shift, respectively.
+
+Line 4: Do not encrypt public MD bits.
+
+Line 5: Encrypt private MD bits.
+
+Line 6: Concatenate remaining 32 bits of the nonce and the SIV.
+
+Note: In this simplification of AES-GCM-SIV there is no need to add the lengths of metadata and keys+internal state to the hash because these lengths are implied already by the clear bits of the metadata itself — which are included in the computation of the authentication tag
+Some details are fixed in general. For instance, all “pure” ciphers have only one key, whether in normal or threshold implementation, the latter always reduced to one key, as well as for some modes. In other cases, there must be a specific formatting of the state.
+Keys and additional_state fields are always a multiple of 128 bits.
+
+
+
+===== With Long Metadata
