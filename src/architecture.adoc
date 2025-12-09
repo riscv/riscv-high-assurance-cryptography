@@ -348,7 +348,6 @@ The `#immed` is a constant from a set of admissible values that are defined for 
 Return whether the algorithm defined by GPR `Xs` (this is the value of the algorithm field of the metadata) is supported by the µarch.
 The result is written in `Xd` as true (1) or false (0).
 
-
 Implement it as CSR read?
 Trivially, we would need at least one bit worth of CSR per algorithm, and this is extended also by the side channel resistance information, so we would have 512 bits. Of course if the ARC so wants, it can be a read-from-CSR pseudo-instruction
 
@@ -393,7 +392,6 @@ It will return 1 or 0 whether there is at least one running ACE operation using 
 
 ===== With Short Metadata
 
-
 .Simple Example: Encryption, no Authentication
 [%linenums,C]
 ----
@@ -420,10 +418,26 @@ Note: In this simplification of AES-GCM-SIV there is no need to add the lengths 
 Some details are fixed in general. For instance, all “pure” ciphers have only one key, whether in normal or threshold implementation, the latter always reduced to one key, as well as for some modes. In other cases, there must be a specific formatting of the state.
 Keys and additional_state fields are always a multiple of 128 bits.
 
-
-
 ===== With Long Metadata
 
+=== Note on threshold implementations
+
+Some threshold implementations may need 2, 3 or even more shares.
+
+We are assuming that recovering the key or re-randomizing the key are easy operations.
+
+The ACE XU must have access to a source of randomness or PRNG.
+
+SCCs from CCs with threshold keys will contain the reconstructed key, not the shares, guaranteeing that the key can be ported across architectures.
+
+Example: AES-128 with a threshold implementation of a key. On implementations with two shares, the CC contains
+`[MD, first share, second share]`
+and on implementations with three shares, the CC contains
+`[MD, first share, second share, third share]`.
+The SCC will however always contain data in one of the following two formats +
+`[MD (64-bits, partially encrypted), Nonce (96 bits), SIV (96 bits), key (encrypted,128-bits)]` or +
+`[MD (128-bits, partially encrypted), Nonce (96 bits, 32-bit zero padding on top), SIV (96 bits, 32-bit zero padding at bottom), key (encrypted,128-bits)]`. +
+This allows a VM to be migrated from a machine that has 2-share implementation to a machine with a 3-share implementation.
 
 === Constants
 
@@ -445,10 +459,10 @@ We need at least:
 * `vsetvli` (accepting only the necessary subset of parameters, for instance "`vsetvli zero, 4, e32, m1, ta, ma`" is we are only dealing with 128-bit blocks).
 error in other cases).
 * Load and store operations, we only need the unit-strided versions.
-* Certain logic operations to help the implementation of additional modes of operation or padding (`and`, `or`, or `xor`).
+* Vector `xor`, `and`, and `or` to assist implementation of padding or of additional modes or protocols.
 * `vsplatx` can also be useful to quickly fill a register with a pattern.
 * We do not need floating point and fixed point operations, and probably also most arithmetic operations on vector elements (such as `add`, `sub`, `mul`, etc).
-* In case more sophisticated operations are needed, one can always use other operations on GPRs and `vins`/`vext`.
+* If more complex calculations are needed, one can perform them on GPRs and use `vins`/`vext`.
 
 We must re-use the same opcodes for the same operations —- code written for ACE with RVV-mini must be guaranteed to also run with full RVV.
 
