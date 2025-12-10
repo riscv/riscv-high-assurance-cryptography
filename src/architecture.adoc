@@ -27,13 +27,12 @@ The metadata field exists in two versions, short (64-bit) and long (128-bit). Th
 | [22:18] |  Locale  | Field which is either -1 or an index into the Locale Secrets Table. | Public
 | [23:23] |  Sealed | Whether the CC is complete (00) or interrupted while being configured (01), imported (10) or exported (11). Necessary to restart/resume operations. | Public
 | [27:24] |  Error | Last error value | Public
-| [29:28] |  Reserved | Zero | Public
-//Cloning Policy | Value 00 means the CC cannot be cloned, else the CC can be cloned, and the values
-//             01, resp., 10 and 11 mean that the clone _can_ be re-initialised, resp., _must_ be re-initialised upon cloning, and _cannot_ be re-initialised. | Public
+| [31:28] |  Reserved | Zero | Public
 | [37:32] |  Stage/Direction | Which internal stage the algorithm is, as defined by ace_stage or implicitly. Must be ZERO on configuration. This is algorithm defined | Private
-| [41:38] |  AC Policy 1 | Can a User/Supervisor/Hypervisor/Machine use it? (Import/export/overwrite always allowed.) | Private
-| [43:42] |  AC Policy 2 | Restrict USE to specific User/Suopervisor? (Import/export/overwrite always allowed.) | Private
-| [59:44] |  AC Policy 3 | IDs to filter User OR Supervisor (filtering both or even world, or higher resolution, is delegated to future versions, with metadata larger than 64 bits). | Private
+| [41:38] |  AC Policy 1 | Can a User/Supervisor/Hypervisor/Machine USE this key?) | Private
+| [43:42] |  AC Policy 2 | Restrict USE to specific User (if bit 42 set) or Supervisor (if bit 43 set)? Only one bit may be set. | Private
+| [59:44] |  AC Policy 3 | IDs to filter by `UKSID` or `SKSID` (*to be double-checked: reuse `ASID` and `VMID`*).
+(Filtering according to both needs the long format metadata.) | Private
 | [63:60] |  Reserved | Zero | Private
 |===
 
@@ -57,18 +56,16 @@ The long version of the metadata is structured as follows:
 |   [23:23] |  Sealed | Whether the CC is complete (00) or interrupted while being configured (01), imported (10) or exported (11). Necessary to restart/resume operations. | Public
 |   [27:24] |  Error | Last error value | Public
 |   [31:28] |  Reserved | Zero | Public
-// |   [29:28] |  Cloning Policy | Value 00 means the CC cannot be cloned, else the CC can be cloned, and the values
-//                01, resp., 10 and 11 mean that the clone _can_ be re-initialised, resp., _must_ be re-initialised upon cloning, and _cannot_ be re-initialised. | Public
-//|   [31:30] |  Reserved | Zero | Public
-|   [63:32] |  VendorID | JEDEC manufacturer ID of the provider of the core | Public
-|   [67:64] |  Revision ID | Revision ID of the manufacturer’s implementation of resuming | Public
-|   [71:68] |  Reserved | Zero | Public
-|   [77:72] |  Stage/Direction | Which internal stage the algorithm is, as defined by ace_stage or implicitly. Must be ZERO on configuration. This is algorithm defined | Private
-|   [81:78] |  AC Policy 1 | Can a User/Supervisor/Hypervisor/Machine use it? (Import/export/overwrite always allowed.) | Private
-|   [83:82] |  AC Policy 2 | Restrict USE to specific User (bit 94)/Supervisor (bit 95)? | Private
-|   [99:84] |  AC Policy 3 | IDs to filter by `UKSID` (*to be double-checked: reuse `ASID`*) | Private
-| [113:100] |  AC Policy 4 | IDs to filter by `SKSID` (*to be double-checked: reuse `VMID`*) | Private
-| [127:114] |  Reserved | Zero | Private
+
+|   [37:32] |  Stage/Direction | Which internal stage the algorithm is, as defined by ace_stage or implicitly. Must be ZERO on configuration. This is algorithm defined | Private
+|   [41:38] |  AC Policy 1 | Can a User/Supervisor/Hypervisor/Machine use this context? | Private
+|   [43:42] |  AC Policy 2 | Restrict USE to specific User (bit 42)/Supervisor (bit 43)? Both bits may be set in this version of the metadata. | Private
+|   [59:44] |  AC Policy 3 | IDs to filter by `UKSID` (*to be double-checked: reuse `ASID`*) | Private
+|   [73:60] |  AC Policy 4 | IDs to filter by `SKSID` (*to be double-checked: reuse `VMID`*) | Private
+|   [79:74] |  Reserved | Zero | Private
+|  [111:80] |  VendorID | JEDEC manufacturer ID of the provider of the core | Public
+|  [115:112] |  Revision ID | Revision ID of the manufacturer’s implementation of resuming | Public
+| [127:116] |  Reserved | Zero | Private
 |===
 
 We note that in the 128-bit version of the metadata, the first 64-bit word (i.e., at the lowest address) contains bits [63:0] and the second 64-bit word (i.e., at the byte address of the first word, plus 8) contains bits [127:64].
@@ -186,8 +183,8 @@ The key derivation function is the same as in AES-GCM-SIV:
 
 [%autowidth,frame=none,grid=none,align=center]
 |===
->| `derived_key` {nbsp} = | AES-256(CTK, _b_)[63:0] \|\| AES-256(CTK, _b_ ⊕ (0^127^ \|\| 1))[63:0] \|\|
->|                        | {nbsp}{nbsp}{nbsp}{nbsp} \|\| AES-256(CTK, _b_ ⊕ (0^126^ \|\| 10))[63:0] \|\| AES-256(CTK, _b_ ⊕ (0^126^ \|\| 11))[63:0]
+>| `derived_key` {nbsp} = | AES-256(CTK, _b_)[63:0] \|\| AES-256(CTK, _b_ {oplus} (0^127^ \|\| 1))[63:0] \|\|
+>|                        | {nbsp}{nbsp}{nbsp}{nbsp} \|\| AES-256(CTK, _b_ {oplus} (0^126^ \|\| 10))[63:0] \|\| AES-256(CTK, _b_ {oplus} (0^126^ \|\| 11))[63:0]
 |===
 
 Since this derivation function is quite expensive, the ACE implementation is allowed to cache recently used Derived Keys.
@@ -462,20 +459,20 @@ It will return 1 or 0 whether there is at least one running ACE operation using 
 ===== With Short Metadata
 
 .Simple Example: Encryption, no Authentication
-[%linenums,C]
+[%linenums,C,subs=normal]
 ----
 P ← key(s) { || additional_state }
 Pick random 96-bit nonce N, Derive Kenc and Kauth from K as per RFC 8452.
 SIV ← 0 ||  Poly1305(Kauth, N, metadata || P) [95:0]
-M[0] ← (metadata ∧ 0xFFFF FFFF)
-       ∨ ((metadata ⊕ AESE(Kenc, SIV || 032)) ∧ 0xFFFF FFFF 0000 0000)
-       ∨ (N[63:0] ≪ 64)
-M[1] ← N[95:64] ∨ (SIV[95:0] ≪ 96)
+M[0] ← (metadata {and} 0xFFFF FFFF)
+       {or} ((metadata {oplus} AESE(Kenc, SIV || 032)) {and} 0xFFFF FFFF 0000 0000)
+       {or} (N[63:0] {lshift} 64)
+M[1] ← N[95:64] ∨ (SIV[95:0] {lshift} 96)
 for i = 0 to num_blocks(P)-1
-     M[i+2] ← (block # i of P) ⊕ AESE(Kenc, SIV[95:0] || (binary(i+1)[31:0]))
+     M[i+2] ← (block # i of P) {oplus} AESE(Kenc, SIV[95:0] || (binary(i+1)[31:0]))
 ----
 
-Notation: ⊕, ∨, ∧, and ≪ denote XOR, OR, AND, and left shift, respectively.
+Notation: {oplus}, ∨, ∧, and ≪ denote XOR, OR, AND, and left shift, respectively.
 
 Line 4: Do not encrypt public MD bits.
 
