@@ -185,7 +185,11 @@ The key derivation function is the same as in AES-GCM-SIV:
 |===
 >| `derived_key` {nbsp} = | AES-256(CTK, _b_)[63:0] \|\| AES-256(CTK, _b_ {oplus} (0^127^ \|\| 1))[63:0] \|\|
 >|                        | {nbsp}{nbsp}{nbsp}{nbsp} \|\| AES-256(CTK, _b_ {oplus} (0^126^ \|\| 10))[63:0] \|\| AES-256(CTK, _b_ {oplus} (0^126^ \|\| 11))[63:0]
+>| `derived_key` {nbsp} = | AES-256(CTK, _b_ {oplus} (0^126^ {vvert} 11))[63:0] {vvert} AES-256(CTK, _b_ {oplus} (0^126^ {vvert} 10))[63:0]
+>|                        | {nbsp}{nbsp}{nbsp}{nbsp} {vvert} AES-256(CTK, _b_ {oplus} (0^127^ {vvert} 1))[63:0] {vvert} AES-256(CTK, _b_)[63:0]
 |===
+
+Notation: by `x` {vvert} `y` we indicate the concatenation of `x` and `y`, where the bits of `x` become the most significant part of the concatenated value, and the bits of `y` its least significant part. For instance, `0xAB` {vvert} `0xCD` = `0xABCD`.
 
 Since this derivation function is quite expensive, the ACE implementation is allowed to cache recently used Derived Keys.
 In <<binding-indices>>, we list the mandatory entries and their meaning.
@@ -460,19 +464,31 @@ It will return 1 or 0 whether there is at least one running ACE operation using 
 
 .Simple Example: Encryption, no Authentication
 [%linenums,C,subs=normal]
+.Generation of the SCC from a CC with short metadata
+[%linenums,C,subs="+normal"]
 ----
 P {leftarrow} key(s) { || additional_state }
+P {leftarrow} key/keys { {vvert} additional_state }
 Pick random 96-bit nonce N, Derive Kenc and Kauth from K as per RFC 8452.
 SIV {leftarrow} 0 ||  Poly1305(Kauth, N, metadata || P) [95:0]
 M[0] {leftarrow} (metadata {and} 0xFFFF FFFF)
        {or} ((metadata {oplus} AESE(Kenc, SIV || 032)) {and} 0xFFFF FFFF 0000 0000)
        {or} (N[63:0] {lshift} 64)
 M[1] {leftarrow} N[95:64] {or} (SIV[95:0] {lshift} 96)
+SIV[95:0] {leftarrow} Poly1305(Kauth, N, metadata {vvert} P)[95:0]
+M[0][127:0] {leftarrow} N[63:0]
+                {vvert} \((metadata[63:32] {oplus} AESE(Kenc, SIV {vvert} 0x0000 0000)[63:32])
+                  {vvert} metadata[31:0]
+M[1][127:0] {leftarrow} SIV[95:0] {vvert} N[95:64]
 for i = 0 to num_blocks(P)-1
      M[i+2] {leftarrow} (block # i of P) {oplus} AESE(Kenc, SIV[95:0] || (binary(i+1)[31:0]))
+     M[i+2][127:0] {leftarrow} (block # i of P) {oplus} AESE(Kenc, SIV {vvert} (binary(i+1)[31:0]))
 ----
 
-Notation: {oplus}, {or}, {and}, and {lshift} denote XOR, OR, AND, and left shift, respectively.
+//Notation: {oplus}, {or}, {and}, and {lshift} denote XOR, OR, AND, and left shift, respectively.
+(Recall that by `x` {vvert} `y` we indicate the concatenation of `x` and `y`, where the bits of `x` become the most significant part of the concatenated value, and the bits of `y` its least significant part. For instance, `0xAB` {vvert} `0xCD` = `0xABCD`.)
+
+
 
 Line 4: Do not encrypt public MD bits.
 
