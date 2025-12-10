@@ -84,29 +84,32 @@ Filtering according to Supervisor Domains/Worlds is not currently supported, sin
 <<<
 ==== Instructions Overview
 
-We now give the abbreviated listing of the instructions defined by ACE.
-
 .The ACE instructions
-[width="100%",cols="17%,21%,62%",options="header",frame=ends, grid=rows]
+[width="100%",cols="16%,16%,68%",options="header",frame=ends, grid=rows]
 |===
-| Instruction     | Operands                  | Description
+| Instruction     | Operands                  |  Description
 | `ace.enable`    | flag=blocking             |  Enable the feature in the current process domain. It also sets a bit in a feature CSR for use by the parent domain — or implemented by a CSR write (so, WARL).
 | `ace.disable`   |                           |  Disable the feature in the current process domain.
 | `ace.config`    | Cn\|Xn, [Xs]              |  Sets the algorithm and either the key or info on how to fetch and use system key (keystore).
 | `ace.clear`     | Cn\|Xn                    |  Clear a CC and mark it as no longer in use (both in the CC internal table and in the feature CSR).
-| `ace.size`      | Xd, Cn\|Xn                |  Returns the size in bytes of the package exported from a specified CC,
+| `ace.size`      | Xd, Cs\|Xs                |  Returns the size in bytes of the package exported from a specified CC,
 | `ace.size`      | Xd, #immed                |  or from a specific algorithm given as #immed (including the side channel bits)
 | `ace.export`    | [Xn], Cs\|Xs              |  Exports the content of a CC to an encrypted and authenticated package to memory. Remember that there is no "save" instruction to extract key and all metadata in the clear.
 | `ace.import`    | Cd\|Xd, [Xn], flag=system |  Reads an encrypted and authenticated package from memory and imports it into a CC if ok. ace import can also provide import for system defined blobs or connect a context to an entry of an Immutable System Key table (which is usually inaccessible to SW environments) if the system flag == true.
-| `ace.exec`      | Vd, Cn\|Xn, Vs         .4+| Performs a cryptographic operation such as an encryption or decryption, absorbing a value in a hash, and possibly returning a value. The instruction may also modify an internal state machine of the CC. It has four variants: has input and output, has I but not O, has no I but produces an O, has no I and O. (The fourth variant is used to encode the next instruction, which is then a pseudo-instruction).
+| `ace.exec`      | Vd, Cn\|Xn, Vs         .4+| Performs a cryptographic operation such as an encryption or decryption, absorbing a value in a hash, and possibly returning a value. The instruction may also modify an internal state machine of the CC. It has four variants: +
+(i) accepts an input and produces an output, (ii) accepts an input but produces no output,
+(iii) accepts no input but produces an output, (iv) accepts no input and produces no output.
 | `ace.exec`      | Cn\|Xn, Vs
 | `ace.exec`      | Vd, Cn\|Xn
 | `ace.exec`      | Cn\|Xn
-| `ace.stage`     | Cn\|Xn, #immed         .2+| Changes the stage of a multi-stage function (such as hash functions or modes of operation) or provide additional info.  For instance, for  block cipher/mode of operation keys it also sets encryption / decryption. ACE.DIR is an alias for ACE.STAGE.
+| `ace.input`     | Cd\|Xd, [Xs]              |  Optional. Provides an input to the algorithm configured in the CC `Cd` or `C[Xd]`, in place of providing it through the `ace.exec` instruction. Useful when the inputs are very long, such as the inputs to certain public key schemes. Mandatory only if required by some algorithms.
+| `ace.output`    | [Xd], Cs\|Xs              |  Optional. Writes the output of an algorithm configured in the CC `Cs` or `C[Xs]`, in place of providing it through the `ace.exec` instruction. Useful when the outputs are very long, such as the outputs of certain public key schemes. Mandatory only if required by some algorithms.
+| `ace.stage`     | Cn\|Xn, #immed         .2+| Changes the stage of a multi-stage function (such as hash functions or modes of operation) or provide additional info.  For instance, for  block cipher/mode of operation keys it also sets encryption / decryption. `ace.dir` is an alias for `ace.stage`.
 | `ace.dir`       | Cn\|Xn, #immed
 | `ace.available` | #immed                    |  Informs whether a given primitive is supported by the µarch (IDs standardized) — Can be a CSRs read.
 | `ace.error`     | Xd, Cn\|Xn                |  Returns the error of an operation — Can be a CSRs read.
 | `ace.clone`     | Cd\|Xd, Cs\|Xs            |  Clones a CC into a second CC.
+| `ace.spawn`     | Cd\|Xd, Cs\|Xs            |  Optional. Uses the source CC to configure second CC. Used if the source CC is, for instance, a KEM that configures the second CC with a symmetric key. Then, the first CC can be cleared to release resources.
 | `ace.vr_busy`   | Xd                        |  Check whether the operation writing to vector register Xd has completed — Can be a CSRs read.
 | `ace.cc_busy`   | Cd\|Xd                    |  Check whether the operation reading/writing to CC Cd or *Xd has completed — Can be a CSRs read.
 |===
@@ -310,10 +313,7 @@ The size of the SCC is important to properly implement features such as context 
 
 ==== ace.clone
 
-`ace.clone Cd, Cs` +
-`ace.clone Xd, Cs` +
-`ace.clone Cd, Xs` +
-`ace.clone Xd, Xs`
+`ace.clone Cd|Xd, Cs|Xs`
 
 Clones source CC `Cs` (or the CC indexed by `Xs`) into destination CC `Cd` (or into the CC indexed by `Xd`).
 
@@ -327,6 +327,20 @@ We note that certain attacks may be mounted on primitives if the same state can 
 `ace.exec  Cn|Xn`
 
 Performs a cryptographic operation such as an encryption or decryption, absorbing a value in a hash, and possibly returning a value. The instruction may also modify an internal state machine of the CC. It has four variants: has input and output, has I but not O, has no I but produces an O, has no I and O. (The fourth variant is used to encode the next instruction, which is then a pseudo-instruction).  In certain cases the `ace.exec` instruction may modify the internal state machine of the CC.
+
+==== ace.input (optional)
+
+`ace.input Xd, [Xn]` +
+`ace.input Cd, [Xn]`
+
+==== ace.output (optional)
+
+`ace.output [Xd], Cs` +
+`ace.output [Xd], Xs`
+
+==== ace.spawn (Optional)
+
+`ace.spawn Cd|Xd, Cs|Xs`
 
 ==== ace.stage/ace.dir
 
