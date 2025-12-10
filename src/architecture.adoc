@@ -36,10 +36,8 @@ The metadata field exists in two versions, short (64-bit) and long (128-bit). Th
 | [63:60] |  Reserved | Zero | Private
 |===
 
-The short MD format contains 32 bits of public MD and 32 bits of private MD.
+*Remark {counter:remark}*:: The short MD format contains 32 bits of public MD and 32 bits of private MD.
 
-
-<<<
 The long version of the metadata is structured as follows:
 
 .Metadata: 128-bit version
@@ -56,27 +54,25 @@ The long version of the metadata is structured as follows:
 |   [23:23] |  Sealed | Whether the CC is complete (00) or interrupted while being configured (01), imported (10) or exported (11). Necessary to restart/resume operations. | Public
 |   [27:24] |  Error | Last error value | Public
 |   [31:28] |  Reserved | Zero | Public
-
-|   [37:32] |  Stage/Direction | Which internal stage the algorithm is, as defined by ace_stage or implicitly. Must be ZERO on configuration. This is algorithm defined | Private
-|   [41:38] |  AC Policy 1 | Can a User/Supervisor/Hypervisor/Machine use this context? | Private
-|   [43:42] |  AC Policy 2 | Restrict USE to specific User (bit 42)/Supervisor (bit 43)? Both bits may be set in this version of the metadata. | Private
-|   [59:44] |  AC Policy 3 | IDs to filter by `UKSID` (*to be double-checked: reuse `ASID`*) | Private
-|   [73:60] |  AC Policy 4 | IDs to filter by `SKSID` (*to be double-checked: reuse `VMID`*) | Private
-|   [79:74] |  Reserved | Zero | Private
-|  [111:80] |  VendorID | JEDEC manufacturer ID of the provider of the core | Public
-|  [115:112] |  Revision ID | Revision ID of the manufacturer’s implementation of resuming | Public
-| [127:116] |  Reserved | Zero | Private
+|   [63:32] |  `partialsccis` | ID of the µarchitectural format for CCs with interrupted operations. | Public
+|   [69:64] |  Stage/Direction | Which internal stage the algorithm is, as defined by ace_stage or implicitly. Must be ZERO on configuration. This is algorithm defined | Private
+|   [73:70] |  AC Policy 1 | Can a User/Supervisor/Hypervisor/Machine use this context? | Private
+|   [75:74] |  AC Policy 2 | Restrict USE to specific User (bit 42)/Supervisor (bit 43)? Both bits may be set in this version of the metadata. | Private
+|   [91:76] |  AC Policy 3 | IDs to filter by `UKSID` (*to be double-checked: reuse `ASID`*) | Private
+|  [105:92] |  AC Policy 4 | IDs to filter by `SKSID` (*to be double-checked: reuse `VMID`*) | Private
+| [127:106] |  `marchpriv` | Implementation private metadata | Private
 |===
 
-We note that in the 128-bit version of the metadata, the first 64-bit word (i.e., at the lowest address) contains bits [63:0] and the second 64-bit word (i.e., at the byte address of the first word, plus 8) contains bits [127:64].
 
-The long MD format contains 72 bits of public MD and 56 bits of private MD.
-The first 64-bit word thus only contains public MD.
-The 8 least significant bits of the second 64-bit word contain public MD and the rest is private MD.
+*Remark {counter:remark}*:: We note that in the 128-bit version of the metadata, the first 64-bit word (i.e., at the lowest address) contains bits [63:0] and the second 64-bit word (i.e., at the byte address of the first word, plus 8) contains bits [127:64].+
+The long MD format contains 64 bits of public MD and 64 bits of private MD.
+The first 64-bit word contains the public metadata, and the second 64-bit word contains the private metadata.
+The initial fields of the private metadata have the same offsets as the corresponding fields in the 64-bit metadata format, they are simply offset by 32 bits.
 
-Furthermore, we do not architect a field information to assist resuming in the metadata (similarly to VSTART for the V extension) because this is impdef information and therefore it will be included in the internal state of the CC. (This also means that the `ace.size` operation will have to take this into account.)
+*Remark {counter:remark}*:: `partialsccis` is defined with a process similar to the `marchid` register. It can be used to determine whether the exported format from a suspended configure, import or export operation is compatible with the current µarchitecture, in which case the suspended operation can be resumed, otherwise the operation must be restarted anyway. All implementations must support restart, resuming is optional. +
+Note that we do not architect a field information to assist resuming in the metadata (similarly to VSTART for the V extension) because this is impdef information but the implementor can use the `marchpriv` field.
 
-Filtering according to Supervisor Domains/Worlds is not currently supported, since in this case we believe that re-configuring the CTK is a more solid approach. This also allows us to avoid having to define an even longer MD format, at least for now.
+*Remark {counter:remark}*:: Filtering according to Supervisor Domains/Worlds is not currently supported, since in this case we believe that re-configuring the CTK is a more solid approach. This also allows us to avoid having to define an even longer MD format, at least for now.
 
 <<<
 ==== Instructions Overview
@@ -104,11 +100,11 @@ Filtering according to Supervisor Domains/Worlds is not currently supported, sin
 | `ace.stage`     | Cn\|Xn, #immed         .2+| Changes the stage of a multi-stage function (such as hash functions or modes of operation) or provide additional info.  For instance, for  block cipher/mode of operation keys it also sets encryption / decryption. `ace.dir` is an alias for `ace.stage`.
 | `ace.dir`       | Cn\|Xn, #immed
 | `ace.available` | #immed                    |  Informs whether a given primitive is supported by the µarchitecture.
-| `ace.error`     | Xd, Cn\|Xn                |  Returns the error of an operation — Can be a CSRs read.
+| `ace.error`     | Xd, Cn\|Xn                |  Returns the error of an operation. Can be implemented as a CSRs read.
 | `ace.clone`     | Cd\|Xd, Cs\|Xs            |  Clones a CC into a second CC.
 | `ace.spawn`     | Cd\|Xd, Cs\|Xs            |  Optional. Uses the source CC to configure the destination CC. Used if the source CC is, for instance, a KEM that configures the destination CC with a symmetric key. Then, the SW can clear the source CC to release resources.
-| `ace.vr_busy`   | Xd                        |  Check whether the operation writing to vector register Xd has completed. Can be a CSRs read.
-| `ace.cc_busy`   | Cd\|Xd                    |  Check whether the operation reading/writing to CC Cd or *Xd has completed. Can be a CSRs read.
+| `ace.vr_busy`   | Xd                        |  Check whether the operation writing to vector register Xd has completed. Can be implemented as a CSRs read.
+| `ace.cc_busy`   | Cd\|Xd                    |  Check whether the operation reading/writing to CC Cd or *Xd has completed. Can be implemented as a CSRs read.
 |===
 
 <<<
@@ -412,7 +408,7 @@ Return whether the algorithm defined by GPR `Xs` (this is the value of the algor
 The result is written in `Xd` as true (1) or false (0).
 
 Implement it as CSR read?
-Trivially, we would need at least one bit worth of CSR per algorithm, and this is extended also by the side channel resistance information, so we would have 512 bits. Of course if the ARC so wants, it can be a read-from-CSR pseudo-instruction
+Trivially, we would need at least one bit worth of CSR per algorithm, and this is extended also by the side channel resistance information, so we would have 512 bits. Of course if the ARC so wants, it can be implemented a CSR read pseudo-instruction
 
 *To be discussed* alternative option: the CSR contains a pointer to a memory mapped bitmap or some other architected structure to determine what is implemented. OTOH this can probably be obtained in other ways (like a µarch version number). Or use the error mechanism.
 
@@ -461,10 +457,10 @@ It will return 1 or 0 whether there is at least one running ACE operation using 
 ===== With Short Metadata
 
 .Generation of the SCC from a CC with short metadata
-[%linenums,C,subs="+normal"]
+[source,sail,subs="+normal"]
 ----
 P {leftarrow} key/keys { {vvert} additional_state }
-Pick random 96-bit nonce N, Derive Kenc and Kauth from K as per RFC 8452.
+Pick random 96-bit nonce N, Derive Kenc and Kauth from effective CTK as per RFC 8452.
 SIV[95:0] {leftarrow} Poly1305(Kauth, N, metadata {vvert} P)[95:0]
 M[0][127:0] {leftarrow} N[63:0]
                 {vvert} \((metadata[63:32] {oplus} AESE(Kenc, SIV {vvert} 0x0000 0000)[63:32])
@@ -475,7 +471,7 @@ for i = 0 to num_blocks(P)-1
 ----
 
 //Notation: {oplus}, {or}, {and}, and {lshift} denote XOR, OR, AND, and left shift, respectively.
-(Recall that by `x` {vvert} `y` we indicate the concatenation of `x` and `y`, where the bits of `x` become the most significant part of the concatenated value, and the bits of `y` its least significant part. For instance, `0xAB` {vvert} `0xCD` = `0xABCD`.)
+(Recall that by `x` {vvert} `y` we indicate the concatenation of `x` and `y`, where the bits of `x` become the most significant part of the concatenated value, and the bits of `y` its least significant part.)
 
 
 
