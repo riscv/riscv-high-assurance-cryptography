@@ -59,7 +59,7 @@ The long version of the metadata is structured as follows:
 |   [23:23] |  Sealed | Whether the CC is complete (00) or interrupted while being configured (01), imported (10) or exported (11). Necessary to restart/resume operations. | Public
 |   [27:24] |  Error | Last error value | Public
 |   [31:28] |  Reserved | Zero | Public
-|   [63:32] |  `partialsccis` | ID of the µarchitectural format for CCs with interrupted operations. | Public
+|   [63:32] |  `partialsccif` | ID of the µarchitectural format for CCs with interrupted operations. | Public
 |   [69:64] |  Stage/Direction | Which internal stage the algorithm is, as defined by ace_stage or implicitly. Must be ZERO on configuration. This is algorithm defined | Private
 |   [73:70] |  AC Policy 1 | Can a User/Supervisor/Hypervisor/Machine use this context? | Private
 |   [75:74] |  AC Policy 2 | Restrict USE to specific User (bit 42)/Supervisor (bit 43)? Both bits may be set in this version of the metadata. | Private
@@ -72,7 +72,7 @@ The long version of the metadata is structured as follows:
 The first 64-bit word contains the public metadata, and the second 64-bit word contains the private metadata.
 The initial fields of the private metadata have the same offsets as the corresponding fields in the 64-bit metadata format, they are simply offset by 32 bits.
 
-*Remark {counter:remark}*:: `partialsccis` is defined with a process similar to the `marchid` register. It can be used to determine whether the exported format from a suspended configure, import or export operation is compatible with the current µarchitecture, in which case the suspended operation can be resumed, otherwise the operation must be restarted anyway. All implementations must support restart, resuming is optional. +
+*Remark {counter:remark}*:: `partialsccif` is defined with a process similar to the `marchid` register. It can be used to determine whether the exported format from a suspended configure, import or export operation is compatible with the current µarchitecture, in which case the suspended operation can be resumed, otherwise the operation must be restarted anyway. All implementations must support restart, resuming is optional. +
 Note that we do not architect a field information to assist resuming in the metadata (similarly to VSTART for the V extension) because this is impdef information but the implementor can use the `marchpriv` field.
 
 *Remark {counter:remark}*:: Filtering according to Supervisor Domains/Worlds is not currently supported, since in this case we believe that re-configuring the CTK is a more solid approach. This also allows us to avoid having to define an even longer MD format, at least for now.
@@ -182,11 +182,11 @@ The key derivation function is the same as in AES-GCM-SIV:
 
 [%autowidth,frame=none,grid=none,align=center]
 |===
->| `derived_key` {nbsp} = | AES-256(CTK, _b_ {oplus} (0^126^ {vvert} 11))[63:0] {vvert} AES-256(CTK, _b_ {oplus} (0^126^ {vvert} 10))[63:0]
->|                        | {nbsp}{nbsp}{nbsp}{nbsp} {vvert} AES-256(CTK, _b_ {oplus} (0^127^ {vvert} 1))[63:0] {vvert} AES-256(CTK, _b_)[63:0]
+>| `derived_key` {nbsp} = | `AES-256(CTK, _b_ ^ (0^126^ @ 11))[63:0] @ AES-256(CTK, _b_ ^ (0^126^ @ 10))[63:0]`
+>|                        | `{nbsp}{nbsp}{nbsp}{nbsp} @ AES-256(CTK, _b_ ^ (0^127^ @ 1))[63:0] @ AES-256(CTK, _b_)[63:0]`
 |===
 
-Notation: by `x` {vvert} `y` we indicate the concatenation of `x` and `y`, where the bits of `x` become the most significant part of the concatenated value, and the bits of `y` its least significant part. For instance, `0xAB` {vvert} `0xCD` = `0xABCD`.
+Notation: by `x` @ `y` we indicate the concatenation of `x` and `y`, where the bits of `x` become the most significant part of the concatenated value, and the bits of `y` its least significant part. For instance, `0xAB` @ `0xCD` = `0xABCD`.
 
 Since this derivation function is quite expensive, the ACE implementation is allowed to cache recently used Derived Keys.
 In <<binding-indices>>, we list the mandatory entries and their meaning.
@@ -230,7 +230,6 @@ Hence the implementation of the SSTK must also provide the proper Locale metadat
 === Instructions
 
 In what follows, the notation `Cn|Xn` refers to a CC directly (i.e., the integer `n` is a 5-bit field in the instruction encoding) or a GPR containing a number from 0 to 31 to indirectly refer to a CC.  In general, six bits are needed to address a CC, to take into account the possibility of indirect addressing.
-
 
 [#insns-add_uw,reftext=Add unsigned word]
 ==== Instruction Template (from add.uw)
@@ -460,21 +459,21 @@ It will return 1 or 0 whether there is at least one running ACE operation using 
 ===== With Short Metadata
 
 .Generation of the SCC from a CC with short metadata
-[source,sail,subs="+normal"]
+[source,sail]
 ----
-P {leftarrow} key/keys { {vvert} additional_state }
-Pick random 96-bit nonce N, Derive Kenc and Kauth from effective CTK as per RFC 8452.
-SIV[95:0] {leftarrow} Poly1305(Kauth, N, metadata {vvert} P)[95:0]
-M[0][127:0] {leftarrow} N[63:0]
-                {vvert} \((metadata[63:32] {oplus} AESE(Kenc, SIV {vvert} 0x0000 0000)[63:32])
-                  {vvert} metadata[31:0]
-M[1][127:0] {leftarrow} SIV[95:0] {vvert} N[95:64]
+let P : bits(256) P = keys @ internal
+let N : bits(96) N = random(96 bits)
+Derive Kenc and Kauth from effective CTK as per RFC 8452.
+let SIV : bits(96) = Poly1305(Kauth, N, metadata @ P)[95:0]
+M[0][127:0] = N[63:0] @ ((metadata[63:32] xor AESE(Kenc, SIV @ 0x0000 0000)[63:32])
+                      @ metadata[31:0]
+M[1][127:0] = SIV[95:0] @ N[95:64]
 for i = 0 to num_blocks(P)-1
-     M[i+2][127:0] {leftarrow} (block # i of P) {oplus} AESE(Kenc, SIV {vvert} (binary(i+1)[31:0]))
+     M[i+2][127:0] = (block i of P) xor AESE(Kenc, SIV @ (binary(i+1)[31:0]))
 ----
 
-//Notation: {oplus}, {or}, {and}, and {lshift} denote XOR, OR, AND, and left shift, respectively.
-(Recall that by `x` {vvert} `y` we indicate the concatenation of `x` and `y`, where the bits of `x` become the most significant part of the concatenated value, and the bits of `y` its least significant part.)
+//Notation: xor, {or}, {and}, and {lshift} denote XOR, OR, AND, and left shift, respectively.
+(Recall that by `x` @ `y` we indicate the concatenation of `x` and `y`, where the bits of `x` become the most significant part of the concatenated value, and the bits of `y` its least significant part.)
 
 
 
