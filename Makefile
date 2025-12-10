@@ -104,3 +104,6 @@ clean:
 	@echo "Cleaning up generated files..."
 	rm -rf $(BUILD_DIR)
 	@echo "Cleanup completed."
+
+update-docs-resources:
+	git submodule update --force --recursive --init --remote
