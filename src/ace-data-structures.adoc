@@ -1,0 +1,158 @@
+[[Cryptographic-Contexts]]
+=== Cryptographic Contexts
+
+A CC contains two fields: the `metadata` and the `state`.
+
+Key material and possibly other algorithm-specific data are contained in the state.
+
+[[Metadata]]
+=== Metadata Fields
+
+*To be discussed* We are open to agree on a single metadata format (the 128-bit version).
+
+The metadata field exists in two versions, short (64-bit) and long (128-bit). The short version is structured as follows:
+
+.Metadata: 64-bit version
+[width="100%",cols=">9%,17%,66%,^8%",options="header",frame=ends, grid=rows]
+|===
+|   Field | Name | Description| Type
+|     [0] |  Format | 0 for short metadata format (64-bit) | Public
+|   [4:1] |  Version | Metadata format version | Public
+|  [12:5] |  Algorithm | Which primitive or mode (msb = 0 for architected algorithms, msb = 1 for custom ones). | Public
+|    [13] |  Side Channel Protected | Set if we require the implementation of the algorithm to provide Side Channel Protection. | Public
+| [15:14] |  Direction Policy | Use for encryption/decryption/both (only for enc/dec primitives or modes). | Public
+| [17:16] |  Key Type | By explicit value / Immutable (index) / Internally generated. | Public
+| [22:18] |  Locale  | Field which is either -1 or an index into the Locale Secrets Table. | Public
+| [23:23] |  Sealed | Whether the CC is complete (00) or interrupted while being configured (01), imported (10) or exported (11). Necessary to restart/resume operations. | Public
+| [27:24] |  Error | Last error value | Public
+| [31:28] |  Reserved | Zero | Public
+| [37:32] |  Stage/Direction | Which internal stage the algorithm is, as defined by ace_stage or implicitly. Must be ZERO on configuration. This is algorithm defined | Private
+| [41:38] |  AC Policy 1 | Can a User/Supervisor/Hypervisor/Machine USE this key?) | Private
+| [43:42] |  AC Policy 2 | Restrict USE to specific User (if bit 42 set) or Supervisor (if bit 43 set)? Only one bit may be set. | Private
+| [59:44] |  AC Policy 3 | IDs to filter by `UKSID` or `SKSID` (*to be double-checked: reuse `ASID` and `VMID`*).
+(Filtering according to both needs the long format metadata.) | Private
+| [63:60] |  Reserved | Zero | Private
+|===
+
+*Remark {counter:remark}*:: The short MD format contains 32 bits of public MD and 32 bits of private MD.
+
+*Remark {counter:remark}*:: For side-channel protection, we currently only require a constant-time and first-order threshold implementation.
+However, we are open to discuss using more bits to specify higher orders of protection, and the first 32 bits of the MD still have 4 unused bits.
+
+The long version of the metadata is structured as follows:
+
+.Metadata: 128-bit version
+[width="100%",cols=">9%,17%,66%,^8%",options="header",frame=ends, grid=rows]
+|===
+|     Field | Name | Description| Type
+|       [0] |  Format | 1 for long metadata format (128-bit) | Public
+|     [4:1] |  Version | Metadata format version | Public
+|    [12:5] |  Algorithm | Which primitive or mode (msb = 0 for architected algorithms, msb = 1 for custom ones). | Public
+|      [13] |  Side Channel Protected | Set if we require the implementation of the algorithm to provide Side Channel Protection. | Public
+|   [15:14] |  Direction Policy | Use for encryption/decryption/both (only for enc/dec primitives or modes). | Public
+|   [17:16] |  Key Type | By explicit value / Immutable (index) / Internally generated. | Public
+|   [22:18] |  Locale  | Field which is either -1 or an index into the Locale Secrets Table. | Public
+|   [23:23] |  Sealed | Whether the CC is complete (00) or interrupted while being configured (01), imported (10) or exported (11). Necessary to restart/resume operations. | Public
+|   [27:24] |  Error | Last error value | Public
+|   [31:28] |  Reserved | Zero | Public
+|   [63:32] |  `partialsccif` | ID of the µarchitectural format for CCs with interrupted operations. | Public
+|   [69:64] |  Stage/Direction | Which internal stage the algorithm is, as defined by ace_stage or implicitly. Must be ZERO on configuration. This is algorithm defined | Private
+|   [73:70] |  AC Policy 1 | Can a User/Supervisor/Hypervisor/Machine use this context? | Private
+|   [75:74] |  AC Policy 2 | Restrict USE to specific User (bit 42)/Supervisor (bit 43)? Both bits may be set in this version of the metadata. | Private
+|   [91:76] |  AC Policy 3 | IDs to filter by `UKSID` (*to be double-checked: reuse `ASID`*) | Private
+|  [105:92] |  AC Policy 4 | IDs to filter by `SKSID` (*to be double-checked: reuse `VMID`*) | Private
+| [127:106] |  `marchpriv` | Implementation private metadata | Private
+|===
+
+*Remark {counter:remark}*:: In the 128-bit version of the metadata, the first 64-bit word (i.e., at the lowest address) contains bits [63:0] and the second 64-bit word (i.e., at the byte address of the first word, plus 8) contains bits [127:64].+
+The first 64-bit word contains the public metadata, and the second 64-bit word contains the private metadata.
+The initial fields of the private metadata have the same offsets as the corresponding fields in the 64-bit metadata format, they are simply offset by 32 bits.
+
+*Remark {counter:remark}*:: `partialsccif` is defined with a process similar to the `marchid` register. It can be used to determine whether the exported format from a suspended configure, import or export operation is compatible with the current µarchitecture, in which case the suspended operation can be resumed, otherwise the operation must be restarted anyway. All implementations must support restart, resuming is optional. +
+Note that we do not architect a field information to assist resuming in the metadata (similarly to VSTART for the V extension) because this is impdef information but the implementor can use the `marchpriv` field.
+
+*Remark {counter:remark}*:: Filtering according to Supervisor Domains/Worlds is not currently supported, since in this case we believe that re-configuring the CTK is a more solid approach. This also allows us to avoid having to define an even longer MD format, at least for now.
+
+=== Formats of Configuration Inputs and Sealed Configuration Contexts
+
+==== Configuration Input
+
+===== With Short Metadata
+
+*TBD*
+
+===== With Long Metadata
+
+*TBD*
+
+==== Sealed Configuration Context
+
+*TBD*
+
+===== With Short Metadata
+
+.Generation of the SCC from a CC with short metadata
+[source,sail]
+----
+let P : bits(256) P = keys @ internal
+let N : bits(96) N = random(96 bits)
+Derive Kenc and Kauth from effective CTK as per RFC 8452.
+let SIV : bits(96) = Poly1305(Kauth, N, metadata @ P)[95:0]
+M[0][127:0] = N[63:0] @ ((metadata[63:32] xor AESE(Kenc, SIV @ 0x0000 0000)[63:32])
+                      @ metadata[31:0]
+M[1][127:0] = SIV[95:0] @ N[95:64]
+for i = 0 to num_blocks(P)-1
+     M[i+2][127:0] = (block i of P) xor AESE(Kenc, SIV @ (binary(i+1)[31:0]))
+----
+
+//Notation: xor, {or}, {and}, and {lshift} denote XOR, OR, AND, and left shift, respectively.
+(Recall that by `x` @ `y` we indicate the concatenation of `x` and `y`, where the bits of `x` become the most significant part of the concatenated value, and the bits of `y` its least significant part.)
+
+
+
+Line 4: Do not encrypt public MD bits.
+
+Line 5: Encrypt private MD bits.
+
+Line 6: Concatenate remaining 32 bits of the nonce and the SIV.
+
+Note: In this simplification of AES-GCM-SIV there is no need to add the lengths of metadata and keys+internal state to the hash because these lengths are implied already by the clear bits of the metadata itself — which are included in the computation of the authentication tag
+Some details are fixed in general. For instance, all “pure” ciphers have only one key, whether in normal or threshold implementation, the latter always reduced to one key, as well as for some modes. In other cases, there must be a specific formatting of the state.
+Keys and additional_state fields are always a multiple of 128 bits.
+
+===== With Long Metadata
+
+*TBD*
+
+<<<
+
+=== Note on threshold implementations
+
+Some threshold implementations may need 2, 3 or even more shares.
+
+We are assuming that recovering the key or re-randomizing the key are easy operations.
+
+The ACE XU must have access to a source of randomness or PRNG.
+
+SCCs from CCs with threshold keys will contain the reconstructed key, not the shares, guaranteeing that the key can be ported across architectures.
+
+Example: AES-128 with a threshold implementation of a key. On implementations with two shares, the CC contains
+`[MD, first share, second share]`
+and on implementations with three shares, the CC contains
+`[MD, first share, second share, third share]`.
+The SCC will however always contain data in one of the following two formats +
+`[MD (64-bits, partially encrypted), Nonce (96 bits), SIV (96 bits), key (encrypted,128-bits)]` or +
+`[MD (128-bits, partially encrypted), Nonce (96 bits, 32-bit zero padding on top), SIV (96 bits, 32-bit zero padding at bottom), key (encrypted,128-bits)]`. +
+This allows a VM to be migrated from a machine that has 2-share implementation to a machine with a 3-share implementation.
+
+<<<
+
+=== Constants
+
+==== Error Codes
+
+*TBD*
+
+==== Other Constants
+
+*TBD*

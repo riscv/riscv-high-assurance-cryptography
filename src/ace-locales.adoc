@@ -1,0 +1,57 @@
+[[ACE-Locales]]
+==== Locales
+
+Internally, ACE has a table of 128-bit Locale Secrets (LS), the Locale Secrets Table (LST).
+
+Some of these EBTs are fixed, other values may be configurable only using an impdef authenticated HW procedure, and the remaining may be programmed by MM (*Note:* _we need to define the corresponding CSRs_).
+The LST is a global table shared across all ACE units with some fields which can be overridden by values which are architected (i.e., per hart).
+//Currently, the only two values that may be overridden by architectural values, in order to support multiple VMs/Supervisor Domains/Worlds are System_Secret and Boot_Session.
+
+If the Locale Field of a context (CC/SCC) is -1 (all ones), then the CTK is used.
+Otherwise, this value is used as an index _i_ in the HST, and a derived key `derived_key` computed from CTK and _b_ := HST[_i_] is used for import/export in place of the CTK.
+The key derivation function is the same as in AES-GCM-SIV:
+
+[%autowidth,frame=none,grid=none,align=center]
+|===
+>| `derived_key` {nbsp} = | `AES-256(CTK, _b_ ^ (0^126^ @ 11))[63:0] @ AES-256(CTK, _b_ ^ (0^126^ @ 10))[63:0]`
+>|                        | `{nbsp}{nbsp}{nbsp}{nbsp} @ AES-256(CTK, _b_ ^ (0^127^ @ 1))[63:0] @ AES-256(CTK, _b_)[63:0]`
+|===
+
+Notation: by `x` @ `y` we indicate the concatenation of `x` and `y`, where the bits of `x` become the most significant part of the concatenated value, and the bits of `y` its least significant part. For instance, `0xAB` @ `0xCD` = `0xABCD`.
+
+Since this derivation function is quite expensive, the ACE implementation is allowed to cache recently used Derived Keys.
+In <<binding-indices>>, we list the mandatory entries and their meaning.
+//At least four bits are needed to encode them.
+In the column "MM-Writeable" we indicate whether MM can write the corresponding Locale Token.
+
+[[binding-indices]]
+.Mandatory Locale Values
+[width="100%",cols="20%,52%,^9%,^9%",options="header",frame=ends, grid=rows]
+|===
+.>| Name .>| Description .>| MM-Writeable .>| Value
+| No lifecycle binding      | | | -1
+| Chip Manufacturer         | Identifies the manufacturer of the SoC. Permanent. | N | 0
+| Chip Model                | Identifies specific chip model/family. Permanent. | N | 1
+| OEM Secret                | Provisioned by OEM to differentiate their products from the competition.
+                              Can be permanent in a device — re-generations can be optionally triggered using impdef HW authenticated mechanisms. | N | 2
+| Product                   | Identifies device/system type/model (product). Not necessarily permanent. Reconfigurable like OEM_Secret. | N | 3
+| Device                    | Unique device (entire system) secret (not the device ID such as a serial number, but it can be derived from it, for instance by hashing).
+                               Shared across all harts in a Soc and shareable across multiple SoCs in a single device. Sharing mechanism impdef, i.e., not architected.
+                               Reconfigurable like OEM_Secret. | N | 4
+| OS Secret                 | Identifies Operating System (or System Stack). +
+                              Not permanent, must be configured during (virtual) boot. | Y | 5
+| Boot_Session              | Regenerated at each (virtual) boot. | Y | 6
+| _Reserved for Revocation_ | Regenerated at boot or at each revocation event. | Y | 7
+|===
+
+*Remark {counter:remark}*:: _We need to discuss what to do in case there is a reboot of a VM. Then we need to "virtualize" the seventh string, or use a secondary CTK for that purpose, since some VMs may reboot while others may not.
+Also, do we want to allow a VM to have a different virtual hardware? Or does it always declare the same configuration as the underlying hardware?_
+In principle, all this can be done by calling into MM. MM would need to keep track of the lifecycle binding values and ensure that they are updated correctly when necessary.
+
+*Example*:: If a key has the value of “2” in the Locale field of ita metadata, then not the CTK, but a value derived from the CTK and the "OEM Secret" will be used for import/export.
+This means that, while `ace.export` will always work on the same device (which is fundamental to allow context switching), attempts to use `ace.import` on the same blob on a device from a different OEM will result in an authentication failure.
+
+*Remark {counter:remark}*:: _In a CC, a key may be referred to using an index into an internal, system defined key table, called the System Specific Key Table (SSTK).
+If some of these keys are device specific, they will not work on a second device.
+However, if the Locale of this CC is not restricted, the internal key index may be interpreted as the corresponding internal keys on a different device, with unpredictable consequences.
+Hence the implementation of the SSTK must also provide the proper Locale metadata to the ACE XU to configure a CC._

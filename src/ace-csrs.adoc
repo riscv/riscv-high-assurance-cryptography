@@ -1,0 +1,55 @@
+[[ACE-CSRs]]
+=== List of CSRs
+
+The following CSRs are _architectural_, namely, their contents are per hart:
+
+`ACE_CC_STATUS`: four RO bits, to denote whether the feature is enabled or disabled for the various Modes:
+
+* Bits 0..3 are for User, (Virtual) Supervisor, Supervisor (if the Hypervisor extension is enabled), Machine Modes, respectively.
+* Bit 2 is ignored if the H extension is not enabled.
+* The bit for the current Mode is set, resp., cleared when `ace.enable`, resp., `ace.disable` is executed.
+* If one of these bit is set, the bits corresponding to the higher privileged Modes are also set.
+* If one of these bit is cleared, the bits corresponding to the lower privileged Modes are also cleared.
+
+256-bit worth of CSR `ACE_CTK` to store the the CTK.
+
+* `ACE_CTK` is writable exclusively by MM.
+* `ACE_CTK` reads as zero in all cases.
+//There is need to raise exceptions if any other mode/EL tries to write to it or read it.
+
+`ACE_CC_USED`: 32 bits, with a bit per CC to denote whether the register is in use or not (cleared contextually to CC erasure to dispose of the key). Read-only.
+
+`ACE_CC_DIRTY`: 32 bits, with a bit per CC to track whether the corresponding CC has been modified since the last time the same bit has been cleared. +
+Two types actions can modify a CC and thus must update also `ACE_CC_DIRTY`:
+
+* An explicit configuration/import; and
+* Certain cryptographic operations, such as absorbing information in a hash function, that modify the internal state.
+
+It is also possible to directly write to `ACE_CC_DIRTY`, and in fact necessary to optimize context switching.
+
+`ACE_CC_BLOCKING`: one bit to establish whether the unit is working in a blocking way (value 1, default mode) or non-blocking (value 0).
+Here, "blocking" means that _any instruction that accesses the content of an output register of a previous ACE instruction will automatically have to wait that the results are retired, otherwise the completion status of the instruction will have to be followed in a CSR._ +
+The mode is initially configured in by the `ace.enable` instruction (which may be implemented as a CSRW itself), but it can be changed at any time by writing to the `ACE_CC_BLOCKING` register.
+
+`ACE_VR_BUSY`: 32 bits, one bit per vector register to track whether any operation writing to a certain register is still running.
+In non-blocking mode, it is the responsibility of the user SW to avoid issuing a second instruction that reads from the output register of the first without waiting first for the completion of the previous operation. In blocking mode, the second instruction will be executed only after the first instruction has been retired and its result placed in to the destination register.
+This register does not distinguish whether one or more operations are still running that have the same output registers.
+RO.
+
+`ACE_CC_BUSY`. 32 bits, one bit per CC to track whether at least one operation tied to a CC is still running.
+This register does not distinguish whether one or more operations are still running with the given CC.
+RO.
+
+*Remark {counter:remark}*:: _Setting the `ACE_CC_BLOCKING` bit while operations are in progress may result in undefined behavior. Therefore, any modifications to it should only be done when no operations are in progress, by checking the `ACE_VR_BUSY` and `ACE_CC_BUSY` registers.  This is particularly important for any component of the system stack that may preempt lower privileged software, such as context switches or interrupt handlers._
+
+Two CSRs at U, resp., S level, namely `UKSID` (User Key Space ID ) and/or `SKSID` (Supervisor Key Space ID), which are only writable at S, resp., a higher mode.
+(*TBD*) We may reuse the CSRs for `ASID`, resp., `VMID` for `UKSID`, resp., `SKSID`.
+Therefore, the maximal bit length of `UKSID` is 9 for Sv32 addresses or 16 for Sv39, Sv48, and Sv57.
+Similarly, the maximal bit length of `SKSID` is 7 for Sv32x4 or 14 for Sv39x4, Sv48x4, and Sv57x4.
+In the metadata fields, `UKSID` and `SKSID` are always zero padded to the maximal lengths of 16 and 14 bits, respectively.
+
+*Remark {counter:remark}*:: _We do not envision direct key sharing across Worlds/Supervisor Domains, so consider defining a Hypervisor or World "Key Space ID" as redundant.
+It is the responsibility of the MM to change CTKs between Worlds/Supervisor Domains._
+
+*Remark {counter:remark}*:: _The software in each World/Supervisor Domain is normally responsible to generate their own keys, and if a process (applet) in one World/Supervisor Domain is responsible to provide keys to other Worlds/Supervisor Domains, it is the responsibility of the MM to properly import/switch the CTK/export._
+//If `ASID`/`VMID` are reused for `UKSID`/`SKSID`, we still need to distinguish somehow the use for separating key spaces even if these fields are not used to build GVAs/GPAs (TBD).
