@@ -13,28 +13,24 @@ Key material and possibly other algorithm-specific data are contained in the sta
 The metadata field exists in two versions, short (64-bit) and long (128-bit). The short version is structured as follows:
 
 .Metadata: 64-bit version
-[width="100%",cols=">9%,17%,66%,^8%",options="header",frame=ends, grid=rows]
+[width="100%",cols=">9%,^9%,17%,57%,^8%",options="header",frame=ends, grid=rows]
 |===
-|   Field | Name | Description| Type
-|     [0] |  Format | 0 for short metadata format (64-bit) | Public
-|   [4:1] |  Version | Metadata format version | Public
-|  [12:5] |  Algorithm | Which primitive or mode (msb = 0 for architected algorithms, msb = 1 for custom ones). | Public
-|    [13] |  Side Channel Protected | Set if we require the implementation of the algorithm to provide Side Channel Protection. | Public
-| [15:14] |  Direction Policy | Use for encryption/decryption/both (only for enc/dec primitives or modes). | Public
-| [17:16] |  Key Type | By explicit value / Immutable (index) / Internally generated. | Public
-| [22:18] |  Locale  | Field which is either -1 or an index into the Locale Secrets Table. | Public
-| [23:23] |  Complete | Whether the CC is complete (00) or interrupted while being configured (01), imported (10) or exported (11). Necessary to restart/resume operations. | Public
-| [27:24] |  Error | Last error value | Public
-| [31:28] |  Reserved | Zero | Public
-| [37:32] |  Stage/Direction | Which internal stage the algorithm is, as defined by ace_stage or implicitly. Must be ZERO on configuration. This is algorithm defined | Private
-| [41:38] |  AC Policy 1 | Can a User/Supervisor/Hypervisor/Machine USE this key?) | Private
-| [43:42] |  AC Policy 2 | Restrict USE to specific User (if bit 42 set) or Supervisor (if bit 43 set)? Only one bit may be set. | Private
-| [59:44] |  AC Policy 3 | IDs to filter by `UKSID` or `SKSID` (*to be double-checked: reuse `ASID` and `VMID`*).
-(Filtering according to both needs the long format metadata.) | Private
-| [63:60] |  Reserved | Zero | Private
+|   Field | Bits | Name                   | Description | Type
+|     [0] |   1  | Format                 | 0 for short metadata format (64-bit) | Public
+|   [8:1] |   8  | Algorithm              | Which primitive or mode (msb = 0 for architected algorithms, msb = 1 for custom ones). | Public
+|  [10:9] |   2  | Side Channel Protected | Set if we require the implementation of the algorithm to provide Side Channel Protection. | Public
+| [12:11] |   2  | Direction Policy       | Use for encryption/decryption/both (only for enc/dec primitives or modes). | Public
+| [14:13] |   2  | Key Type               | By explicit value / Immutable (index) / Internally generated. | Public
+| [19:15] |   5  | Locale                 | Field which is either -1 or an index into the Locale Secrets Table. | Public
+| [21:20] |   2  | Complete               | Whether the CC is complete (00) or interrupted while being configured (01), imported (10) or exported (11). Necessary to know whether to restart operations. | Public
+| [27:22] |   6  | Stage/Direction        | Which internal stage the algorithm is, as defined by ace_stage or implicitly. Must be ZERO on configuration. This is algorithm defined. | Private
+| [31:28] |   4  | AC Policy 1            | Can a User (if bit 28 set)/Supervisor or Virtual Supervisor (bit 29 set)/Hypervisor (bit 30 set)/Machine (bit 31 set) USE this key? | Private
+| [33:32] |   2  | AC Policy 2            | If bit 32, resp., 33, is set, restrict USE by `ASID`, resp., `VMID`. | Private
+| [49:34] |  16  | AC Policy 3            | Zero if bit 32 unset, else `ASID` to enforce.  | Private
+| [63:50] |  14  | AC Policy 4            | Zero if bit 33 unset, else `VMID` to enforce.  | Private
 |===
 
-*Remark {counter:remark}*:: The short MD format contains 32 bits of public MD and 32 bits of private MD.
+*Remark {counter:remark}*:: The short metadata format contains 22 bits of public metadata and 42 bits of private metadata.
 
 *Remark {counter:remark}*:: For side-channel protection, we currently only require a data-independent-timing and first-order threshold implementation.
 However, we are open to discuss using more bits to specify higher orders of protection, and the first 32 bits of the MD still have 4 unused bits.
@@ -42,34 +38,42 @@ However, we are open to discuss using more bits to specify higher orders of prot
 The long version of the metadata is structured as follows:
 
 .Metadata: 128-bit version
-[width="100%",cols=">9%,17%,66%,^8%",options="header",frame=ends, grid=rows]
+[width="100%",cols=">9%,^9%,17%,57%,8%",options="header",frame=ends, grid=rows]
 |===
-|     Field | Name | Description| Type
-|       [0] |  Format | 1 for long metadata format (128-bit) | Public
-|     [4:1] |  Version | Metadata format version | Public
-|    [12:5] |  Algorithm | Which primitive or mode (msb = 0 for architected algorithms, msb = 1 for custom ones). | Public
-|      [13] |  Side Channel Protected | Set if we require the implementation of the algorithm to provide Side Channel Protection. | Public
-|   [15:14] |  Direction Policy | Use for encryption/decryption/both (only for enc/dec primitives or modes). | Public
-|   [17:16] |  Key Type | By explicit value / Immutable (index) / Internally generated. | Public
-|   [22:18] |  Locale  | Field which is either -1 or an index into the Locale Secrets Table. | Public
-|   [23:23] |  Complete | Whether the CC is complete (00) or interrupted while being configured (01), imported (10) or exported (11).
-                        Necessary to restart/resume operations. | Public
-|   [27:24] |  Error | Last error value | Public
-|   [31:28] |  Reserved | Zero | Public
-|   [37:32] |  Stage/Direction | Which internal stage the algorithm is, as defined by ace_stage or implicitly.
-                                 Must be ZERO on configuration. This is algorithm defined | Private
-|   [41:38] |  AC Policy 1 | Can a User/Supervisor/Hypervisor/Machine use this context? | Private
-|   [43:42] |  AC Policy 2 | Restrict USE to specific User (bit 42)/Supervisor (bit 43)? Both bits may be set in this version of the metadata. | Private
-|   [59:44] |  AC Policy 3 | IDs to filter by `UKSID` (*to be double-checked: reuse `ASID`*) | Private
-|   [73:60] |  AC Policy 4 | IDs to filter by `SKSID` (*to be double-checked: reuse `VMID`*) | Private
-|  [105:74] |  `partialsccif` | (Partial SCC Implementation Format) ID of the µarchitectural format for CCs with interrupted operations. | Public
-| [127:106] |  `marchpriv` | Implementation private metadata | Private
+|     Field | Bits | Name                   | Description | Type
+|       [0] |   1  | Format                 | 1 for short metadata format (64-bit) | Public
+|     [8:1] |   8  | Algorithm              | Which primitive or mode (msb = 0 for architected algorithms, msb = 1 for custom ones). | Public
+|    [10:9] |   2  | Side Channel Protected | Set if we require the implementation of the algorithm to provide Side Channel Protection. | Public
+|   [12:11] |   2  | Direction Policy       | Use for encryption/decryption/both (only for enc/dec primitives or modes). | Public
+|   [14:13] |   2  | Key Type               | By explicit value / Immutable (index) / Internally generated. | Public
+|   [19:15] |   5  | Locale                 | Field which is either -1 or an index into the Locale Secrets Table. | Public
+|   [21:20] |   2  | Complete               | Whether the CC is complete (00) or interrupted while being configured (01), imported (10) or exported (11). Necessary to know whether to restart operations. | Public
+|   [27:22] |   6  | Stage/Direction        | Which internal stage the algorithm is, as defined by ace_stage or implicitly. Must be ZERO on configuration. This is algorithm defined. | Private
+|   [31:28] |   4  | AC Policy 1            | Can a User (if bit 28 set)/Supervisor or Virtual Supervisor (bit 29 set)/Hypervisor (bit 30 set)/Machine (bit 31 set) USE this key? | Private
+|   [33:32] |   2  | AC Policy 2            | If bit 32, resp., 33, is set, restrict USE by `ASID`, resp., `VMID`. | Private
+|   [49:34] |  16  | AC Policy 3            | Zero if bit 32 unset, else `ASID` to enforce.  | Private
+|   [63:50] |  14  | AC Policy 4            | Zero if bit 33 unset, else `VMID` to enforce.  | Private
+|   [67:63] |   4  | Version                | Metadata format version | Public
+|   [83:68] |  16  | `partialsccif`         | (Partial SCC Implementation Format) ID of the µarchitectural format for CCs with interrupted operations. | Public
+|  [115:84] |  28  | `marchpriv`            | Implementation private metadata | Private
+| [127:112] |  16  | Reserved               | Reserved for future versions | Private
 |===
 
-*Remark {counter:remark}*:: In the 128-bit version of the metadata, the first 64-bit word (i.e., at the lowest address) contains bits [63:0] and the second 64-bit word (i.e., at the byte address of the first word, plus 8) contains bits [127:64].+
+*Remark {counter:remark}*:: In the 128-bit version of the metadata, the first 64-bit word (i.e., at the lowest address) contains bits [63:0] and the second 64-bit word (i.e., at the byte address of the first word, plus 8) contains bits [127:64].
 
-*Remark {counter:remark}*:: `partialsccif` is defined with a process similar to the `marchid` register. It can be used to determine whether the exported format from a suspended configure, import or export operation is compatible with the current µarchitecture, in which case the suspended operation can be resumed, otherwise the operation must be restarted anyway. All implementations must support restart, resuming is optional. +
-Note that we do not architect a field information to assist resuming in the metadata (similarly to VSTART for the V extension) because this is impdef information but the implementor can use the `marchpriv` field.
+*Remark {counter:remark}*::
+[.red]#*We may have to redefine this!* `partialsccif` is defined with a process similar to the `marchid` register.
+While we do not mandate a specific format for the plaintext data underlying the SCC for an incomplete CC, we require the implementations to provide documentation for this format, whether they are open or closed source.
+These formats will be documented and published in an appendix by RVI. We do not envision many formats, and 16 bits are likely to be abundant.
+This field can be used to determine whether the exported format from a suspended configure, import or export operation is compatible with the current µarchitecture, in which case the suspended operation can be resumed, otherwise the operation must be restarted anyway. All implementations must support restart, resuming is optional.#
+
+// If is derived from the JEDEC Standard Manufacturer’s Identification Code as follows.
+// The most significant bit is set to 1 if the format is private and commercial JEDEC or to 0 if the format is documented.
+// If the most significant  bit is set to 1, then the remaining 23 bits are
+// the 10-bit bank (number of `0x7F` Continuation Codes, minus one), a 7-bit offset, and a 6-bit revision number
+// If the most significant bit is set to 0, then the remaining 23 bits are assigned and maintained by RVI to distinguish mutually non-compatible formats.
+// However, since we do not expect many different formats,
+
 
 *Remark {counter:remark}*:: Filtering according to Supervisor Domains/Worlds is not currently supported, since in this case we believe that re-configuring the CTK is a more solid approach. This also allows us to avoid having to define an even longer MD format, at least for now.
 
