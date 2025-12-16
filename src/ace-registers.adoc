@@ -1,31 +1,39 @@
 [[ACE-registers]]
 === Registers
 
+==== ACES field in `*status`
+
 Besides defining the Cryptographic Contexts, the atomic cryptography extension adds some unprivileged CSRs to a base scalar RISC-V ISA -- as well some privileged CSRs.
 
 An ACE context status field, ACES, is added to `mstatus`[26:25] and shadowed in `sstatus`[26:25],
 and possibly `vsstatus`[26:25] if the hypervisor extension is present.
 It can be used, like the FS and VS fields, to optimize context switching.
 Its status encoding differs from the FS, VS, and XS fields (which are defined in <<fsxsencoding>>).
-The three possible status values are: Disabled-Clean, Disabled-Dirty, and Enabled.
+The three possible status values are: Disabled-Clean, Disabled-Dirty, and Enabled, as described in <<ACE-fsxsencoding>>.
 
-We describe the difference between Disabled-Clean and Disabled-Dirty.
-Disabled-Clean and Disabled-Dirty are set by the parent mode to optimize context switching,
-Disabled-Dirty is used if the SW stack in the parent mode does not always save the contexts but simply disables the feature if transferring control to a process that had ACE disabled when last interrupted: if that process then enables ACE by writing to `acecsr`, then the hart will trap to the parent mode to allow "lazy" saving of the contexts, and then all CCs must be reset "manually".
-However, a SW stack implementation may choose to always save the contexts and never trap: then the SW will only configure Disabled-Clean, and enabling ACE will reset all CCs anyway.
-We expect Disabled-Dirty to be mostly used on small devices, where threads are rarely migrated to other harts.
-
-[[fsxsencoding-ACE]]
+[[ACE-fsxsencoding]]
 .Encoding of ACES[1:0] status field
 [float="center",align="center",width="100%",cols=">8%,<16%,<76%",options="header"]
 |===
 |Status |Name |Meaning
-|0 | Disabled-Clean | ACE ISE not enabled, SW assumes no context being configured for this hart.
-                      The ACE unit will ensure all contexts are reset when enabling ACE by writing to the `acecsr` CSR.
-|1 | Disabled-Dirty | ACE ISE not enabled, SW assumes there are configured contexts left for this hart from other environments, and
-                      The hart will trap if ACE ISE is enabled by writing to the `acecsr` CSR
-|2 | Enabled        | ACE ISE enabled
+|0 | Disabled-Clean     | ACE ISE not enabled, SW assumes no context being configured for this hart. The ACE unit will ensure all contexts are reset when enabling ACE by writing to the `acecsr` CSR.
+|1 | Disabled-Clobbered | ACE ISE not enabled, SW assumes there are configured contexts left for this hart from other environments, and the hart will trap if ACE ISE is enabled by writing to the `acecsr` CSR.
+|2 | Enabled            | ACE ISE enabled
+|3 | Invalid            | Reserved
 |===
+
+We describe the difference between Disabled-Clean and Disabled-Clobbered.
+Disabled-Clean and Disabled-Clobbered are set by the parent mode to optimize context switching,
+Disabled-Clobbered is used if the SW stack in the parent mode does not always save the contexts but simply disables the feature if transferring control to a process that had ACE disabled when last interrupted: if that process then enables ACE by writing to `acecsr`, then the hart will trap to the parent mode to allow "lazy" saving of the contexts, and then all CCs must be reset "manually".
+However, a SW stack implementation may choose to always save the contexts and never trap: then the SW will only configure Disabled-Clean, and enabling ACE will reset all CCs anyway.
+We expect Disabled-Clobbered to be mostly used on small devices, where threads are rarely migrated to other harts.
+
+Changing the setting of ACES has no effect on the contents of the CCs.
+In particular, setting ACES=Disabled-Clean or Disabled-Clobbered does not destroy the state, nor does setting ACES=Enabled clear the contents.
+
+==== Trap address for feature enablement
+
+*TBD* _We need a CSR to store the address of the trap handler for ACE enablement/an entry in the trap table._
 
 `acecsr` is a 32-bit CSR.
 `acecsr`[8] most significant bit contains the operating mode, i.e., whether the unit is active or not, and the error status in the eight least significant bits, `acecsr`[7:0]. All other bits are reserved for future use.
@@ -39,22 +47,7 @@ Disabling the (interface to the) ACE unit in user mode is done by setting the `a
 This will also clear the contents of all cryptographic contexts.
 *TBD* _Describe also the effect on `aceccactive` and `aceccdirty`_
 
-*TBD* _We need a CTR to store the address of the trap handler for ACE enablement/an entry in the trap table._
-
-// Changing the setting of FS has no effect on the contents of the floating-point register state. In particular, setting FS=Off does not destroy the state, nor does setting FS=Initial clear the contents
-
-Note::
-_Using any operation that changes `acecsr` and thus also the `*status` CSRs may be trapped in order to avoid for a process to gain access to the CCs of other processes._
-
-Note::
-_(This replaces the older `ACE_CC_STATUS`: four RO bits, to denote whether the feature is enabled or disabled for the various Modes.
-Bits 0..3 are for User, (Virtual) Supervisor, Supervisor (if the Hypervisor extension is enabled), Machine Modes, respectively.
-Bit 2 is ignored if the H extension is not enabled.
-The bit for the current Mode is set, resp., cleared when `ace.enable`, resp., `ace.disable` is executed.
-If one of these bit is set, the bits corresponding to the higher privileged Modes are also set.
-If one of these bit is cleared, the bits corresponding to the lower privileged Modes are also cleared.)_
-
-The following CSRs are _architectural_, namely, their contents are per hart:
+==== `acectk`
 
 256-bit worth of CSR `acectk` to store the the CTK.
 
@@ -63,9 +56,13 @@ The following CSRs are _architectural_, namely, their contents are per hart:
 
 There is need to raise exceptions if SW running in an any other mode tries to write to it or read it.
 
-*TBD*: _How to deal with the discoverability of the fact whether `acectk` is writable ot not even by MM._ Low priority, but must be addressed before final release.
+[.red]#*TBD*: _How to deal with the discoverability of the fact whether `acectk` is writable ot not even by MM._ Low priority, but must be addressed before final release.#
+
+==== `aceccactive`
 
 `aceccactive`: 32 bits, with a bit per CC to denote whether the register is in use or not (cleared contextually to CC erasure to dispose of the key). Read-only.
+
+==== `aceccdirty`
 
 `aceccdirty`: 32 bits, with a bit per CC to track whether the corresponding CC has been modified since the last time the same bit has been cleared. +
 Two types actions can modify a CC and thus must update also `aceccdirty`:
@@ -74,6 +71,8 @@ Two types actions can modify a CC and thus must update also `aceccdirty`:
 * Certain cryptographic operations, such as absorbing information in a hash function, that modify the internal state.
 
 It is also possible to directly write to `aceccdirty`, and in fact necessary to optimize context switching.
+
+==== Reuse ASID and VMID?
 
 Two CSRs at U, resp., S level, namely `UKSID` (User Key Space ID ) and/or `SKSID` (Supervisor Key Space ID), which are only writable at S, resp., a higher mode.
 (*TBD*) We may reuse the CSRs for `ASID`, resp., `VMID` for `UKSID`, resp., `SKSID`.
@@ -84,6 +83,6 @@ In the metadata fields, `UKSID` and `SKSID` are always zero padded to the maxima
 *Remark {counter:remark}*:: _We do not envision direct key sharing across Worlds/Supervisor Domains, so consider defining a Hypervisor or World "Key Space ID" as redundant.
 It is the responsibility of the MM to change CTKs between Worlds/Supervisor Domains._
 
-*Remark {counter:remark}*:: _The software in each World/Supervisor Domain is normally responsible to generate their own keys, and if a process (applet) in one World/Supervisor Domain is responsible to provide keys to other Worlds/Supervisor Domains, it is the responsibility of the MM to properly import/switch the CTK/export._
 
+*Remark {counter:remark}*:: _The software in each World/Supervisor Domain is normally responsible to generate or obtain their own keys, and if a process (applet) in one World/Supervisor Domain is responsible to provide keys to other Worlds/Supervisor Domains, it is the responsibility of the MM to properly import/switch the CTK/export._
 // If `ASID`/`VMID` are reused for `UKSID`/`SKSID`, we still need to distinguish somehow the use for separating key spaces even if these fields are not used to build GVAs/GPAs (TBD).
