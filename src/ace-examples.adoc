@@ -27,3 +27,79 @@ Furthermore, it protects the key from other SW environments that may be crossed 
 Various optimizations are possible, which can be interesting for embedded environments: Steps 3., 5., and 6. can be omitted if the CC used for these operations is fixed and the overall SW/FW stack is simple enough.
 Similarly, Step 8. can be omitted.
 These are choices of the ABI architect of a specific SW/FW stack.
+
+[comment]
+--
+.Simple Example: Encryption, no Authentication
+[%linenums,C]
+----
+Call OS API to get the necessary SCC. X5 points to the SCC.
+Allocate memory for ciphertext buffer.
+ace.import C0, [X5]                  // Import the SCC into CC C0
+if ace.error <> 0 then handle error
+Configure vector unit to use 128-bit vectors.
+ace.stage C0, #ace_const_encrypt
+if ace.error <> 0 then handle error         // If encryption is not allowed
+for i = 0 to ceil(len_in_bytes(plaintext)/16)-1 do
+    load V0 from *(plaintext+16*i)
+    ace.exec V0, C0, V               // Encrypt one block of the plaintext
+    store V0 at *(ciphertext+16*i)
+----
+--
+
+=== Decryption and Authentication, encrypt–then–MAC
+
+
+In the following example we assume that the hash function is a keyed hash function (MAC) and that the CC/SCC contains also the key.
+Assuming that the hash function is programmed in CC `C1`,
+`ace.stage C1, #ace_const_hash_start` is used to start the hash function, as well as to reset it in case we want to compute a second hash using the same key.
+`ace.stage C1, #ace_const_hash_finalize` finalizes the hash function, and the hash value can be extracted with one or more `ace.exec V0, C1, ignore` instructions.
+For the state machine of `C1`, message `#ace_const_hash_start` can always be sent, thus resetting the state machine, and `#ace_const_hash_finalize` can be sent only once after `#ace_const_hash_start` has been sent.
+
+After `#ace_const_hash_start` has been sent, only `ace.exec` instructions of type (ii) can be issued.
+After `#ace_const_hash_finalize` has been sent, only `ace.exec` instructions of type (iii) can be issued,
+and if more of the latter are issued than needed to extract the full hash, the output is zero and an error is raised.
+
+.Decryption and Authentication, encrypt–then–MAC
+
+[C]
+----
+Process obtains an AES-encrypted, hashed, payload (the ciphertext) from a service.
+Process calls an OS API to get CCs for the encryption and authentication keys.
+OS API returns two encrypted and authenticated blobs.
+
+// Process imports first blob (for decryption) into C0:
+ace.import C0, [X5]
+
+// Process imports second blob (for hashing) into C1:
+ace.import C1, [X6]
+
+Allocate memory for plaintext buffer.
+// Configure vector register file for 128-bit registers and AES.
+vsetvli zero, 4, e32, m1, t?, ma
+
+ace.set_direction C0, #ace_const_decrypt
+if acecsr.error != 0 then (handle error)
+
+ace.stage C1, #ace_const_hash_start   // To start hashing
+foreach (i from 0 to ceil(len_in_bytes(ciphertext)/16)-1) {
+  load a 16-byte block starting at ciphertext+16*i into V0
+  ace.exec ignore, C1, V0		      // Absorb one 128-bit block
+}
+
+ace.stage C1, #ace_const_hash_finalize
+ace.exec V1, C1, ignore
+// if the hash is longer, then extract the next 16 bytes using `ace.exec V2, C1, ignore`
+
+Compare tags. If they do not match, report error.
+
+foreach (i from 0 to ceil(len_in_bytes(ciphertext)/16)-1) {
+  load a 16-byte block starting at ciphertext+16*i into V0
+  ace.exec V0, C0, V0				  // Decryption
+  store the 16-byte block in V0 to memory starting at plaintext+16*i
+}
+
+ace.stage C1, #ace_const_hash_start   // Hygiene
+----
+
+Note that invoking `ace.set_stage C1, #ace_const_hash_initialize` would allow to reuse C1 to compute additional hashes/MACs.

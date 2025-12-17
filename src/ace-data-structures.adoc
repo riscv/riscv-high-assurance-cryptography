@@ -13,7 +13,7 @@ Key material and possibly other algorithm-specific data are contained in the sta
 The metadata field exists in two versions, short (64-bit) and long (128-bit). The short version is structured as follows:
 
 .Metadata: 64-bit version
-[width="100%",cols=">9%,^9%,17%,57%,^8%",options="header",frame=ends, grid=rows]
+[width="100%",cols=">9%,^9%,17%,57%,^8%",options="header"]
 |===
 |   Field | Bits | Name                   | Description | Type
 |     [0] |   1  | Format                 | 0 for short metadata format (64-bit) | Public
@@ -42,7 +42,7 @@ However, we are open to discuss using more bits to specify higher orders of prot
 The long version of the metadata is structured as follows:
 
 .Metadata: 128-bit version
-[width="100%",cols=">9%,^9%,17%,57%,8%",options="header",frame=ends, grid=rows]
+[width="100%",cols=">9%,^9%,17%,57%,8%",options="header"]
 |===
 |     Field | Bits | Name                   | Description | Type
 |       [0] |   1  | Format                 | 1 for long metadata format (128-bit) | Public
@@ -52,7 +52,7 @@ The long version of the metadata is structured as follows:
 |   [13:12] |   2  | Key Type               | By explicit value / Immutable (index) / Internally generated. | Public
 |   [17:14] |   4  | Locale                 | Field which is either -1 or an index into the Locale Secrets Table. | Public
 |   [19:18] |   2  | Complete               | Whether the CC is complete (00) or interrupted while being configured (01), imported (10) or exported (11). Necessary to know whether to restart operations. | Public
-|   [25:20] |   6  | Stage/Direction        | Which internal stage the algorithm is, as defined by ace_stage or implicitly. Must be ZERO on configuration. This is algorithm defined. | Private
+|   [25:20] |   6  | Stage/Direction        | Which internal stage the algorithm is. Must be ZERO on configuration. This is algorithm defined. | Private
 |   [29:26] |   4  | AC Policy 1            | Can a User (if bit 28 set)/Supervisor or Virtual Supervisor (bit 29 set)/Hypervisor (bit 30 set)/Machine (bit 31 set) USE this key? | Private
 |   [31:30] |   2  | AC Policy 2            | If bit 32, resp., 33, is set, restrict USE by `ASID`, resp., `VMID`. | Private
 |   [47:32] |  16  | AC Policy 3            | Zero if bit 32 unset, else `ASID` to enforce.  | Private
@@ -137,8 +137,53 @@ Keys and additional_state fields are always a multiple of 128 bits.
 
 ==== Error Codes
 
-*TBD*
+In <<ACE-error-values>> we define the mandatory ACE error codes.
+[.red]#The list may still be incomplete.#
+Additional ones may be defined in the range [128,255] that are algorithm specific, which are allowed to overlap between algorithms.
+
+[[ACE-error-values]]
+.Error values and their meanings
+[float="center",align="center",width="100%",cols="^6%,<24%,<70%",options="header"]
+|===
+|Value | Mnemonic                  | Examples
+|  0   | ace_err_ok                | All is fine. Life is beautiful. No error from ACE.
+|  1   | ace_err_authentication    | Authentication failure in `ace.import`, but can also follow `ace.exec` with certain algorithms.
+|  2   | ace_err_privilege         | `ace.exec`, `ace.stage`, `ace.derive`, `ace.spawn` failed because the access control policies in the metadata prevent USE in the current architectural state.
+|  3   | ace_err_invalid           | Invalid input or operation.
+Examples:
+the metadata field passed to `ace.init` is invalid;
+encryption, resp., decryption is requested from a CC only configured for decryption, resp., encryption;
+the requested change of state in `ace.stage` is not permitted;
+the current state of the CC does not expect the used form of `ace.exec`;
+the change in usage policies in `ace.restrict` is not permitted because it would either downgrade or overwrite the current restrictions in the CC;
+a request to clone a CC violates the re-initialisation policies of the source CC.
+|  4   | ace_err_unimplemented     | The requested algorithm is not implemented. May be triggered also on algorithm variants, for instance if `ace.harden` is issued on an algorithm for which a non-side channel protected version is not implemented.
+|  5   | ace_err_memory            | The free internal CF memory is not sufficient to perform the `ace.init`, `ace.exec`, `ace.clone`, or `ace.derive`.
+The implementation should make sure this cannot happen with any other operation.
+If algorithms that support `ace.derive` are implemented, the implementation must make sure that both the input and output CCs of this operation can be allocated.
+|  6   | ace_err_clearCC           | Software tried to use a cleared CC as a source in a `ace.exec`, `ace.stage`, `ace.input`, `ace.output`, `ace.clone`, `ace.derive`, `ace.harden`, `ace.restrict` operations. +
+This can be used in low CF memory situations to trigger a re-load of that CC.
+|===
 
 ==== Other Constants
 
-*TBD*
+[.red]#*To be completed.*#
+
+In addition to error codes, ACE defines several constants, such as
+those in <<ACE-set_stage_constants>> which are used in `ace.stage`/`ace.dir` to change the state of a CC.
+Note that the internal state machine of a CC may also be changed implicitly by `ace.exec` or `ace.derive` operations, and the state machine of a cloned CC may be changed implicitly according to the algorithm's policies as encoded in the source CC's metadata.
+
+[[ACE-set_stage_constants]]
+.Constants defining messages sent to a CC through `ace.stage`/`ace.dir` operations
+[float="center",align="center",width="100%",cols="^6%,<29%,<65%",options="header"]
+|===
+|Value | Mnemonic                    | Examples
+|  0   | ace_const_ok                | All is fine. Life is beautiful. No error from ACE.
+|  1   | ace_const_encrypt           | Encryption is requested.
+|  2   | ace_const_decrypt           | Decryption is requested.
+|  3   | ace_const_hash_start        | Start (and initialize) a hash function or the sub-function of an algorithm.
+|  4   | ace_const_hash_finalize     | Finalize the internal state of a hash function and prepare it for outputting the result.
+|  5   | ace_const_hash_update       | Update the internal state of a hash function with new data.
+|  6   | ace_const_set_public_value  | Set a public value (like a nonce or an IV) in an algorithm. Some algorithms require more than one public value (for instance, a re-useable hash of some associated data and a unique nonce), in which case the second public value can be set using the next message.
+|  7   | ace_const_set_public_value_2  | Set the second public value in an algorithm.
+|===

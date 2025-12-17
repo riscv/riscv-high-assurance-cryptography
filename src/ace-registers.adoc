@@ -1,7 +1,20 @@
 [[ACE-registers]]
 === Registers
 
-Besides defining the Cryptographic Contexts, the atomic cryptography extension adds some unprivileged CSRs to a base scalar RISC-V ISA -- as well some privileged CSRs.
+The atomic cryptography extension does not add a register file, but it adds 32 Cryptographic Contexts and
+some unprivileged CSRs to a base scalar RISC-V ISA -- as well some privileged CSRs.
+It also requires a subset of the V extension to be implemented.
+
+==== Cryptographic Contexts
+
+The atomic cryptography extension defines 32 Cryptographic Contexts (CCs) for storing cryptographic keys and metadata.
+Each CC is identified by a number from 0 to 31, which the ACE unit uses to access its contents.
+CCs are addressed via static 5-bit immediate addressing (as normal registers) as well as, unlike traditional registers, via a value from 0 to 31 in any general-purpose register.
+
+CCs reside in a dedicated internal _context file_ (CF) that is inaccessible to any entity outside the ACE security perimeter, including software, other hardware blocks, and invasive debug interfaces. CF memory capacity is implementation-defined, in theory up to 32 times the size of the largest possible CC, but in practice a smaller amount of memory can be used.
+
+CC sizes are dynamic, determined by the cryptographic algorithm defined in each CC.
+ACE returns an error when insufficient memory prevents `ace.init` or `ace.import` operations, requiring the software to free memory by exporting or clearing a different CC. Implementations must provide sufficient CF memory to prevent infinite `ace.export`/`ace.import` loops.
 
 ==== ACE field in `misa`
 
@@ -33,7 +46,7 @@ In particular, setting ACES=Disabled-Clean or Disabled-Clobbered does not destro
 
 ==== Trap address for feature enablement
 
-*TBD* _We need a CSR to store the address of the trap handler for ACE enablement/an entry in the trap table._
+[.red]#*TBD* _We need a CSR to store the address of the trap handler for ACE enablement/an entry in the trap table._#
 
 `acecsr` is a 32-bit CSR.
 `acecsr`[8] most significant bit contains the operating mode, i.e., whether the unit is active or not, and the error status in the eight least significant bits, `acecsr`[7:0]. All other bits are reserved for future use.
@@ -45,18 +58,26 @@ Enabling the (interface to the) ACE unit in user mode is done by setting `acecsr
 This will allow the unit to perform operations, access the general purpose and vector registers, as well as the cryptographic contexts.
 Disabling the (interface to the) ACE unit in user mode is done by setting the `acecsr`[8] to 0.
 This will also clear the contents of all cryptographic contexts.
-*TBD* _Describe also the effect on `aceccactive` and `aceccdirty`_
+*TBD* _Describe also the effect on `aceccactive` and `aceccdirty`._
 
 ==== `acectk`
 
-256-bit worth of CSR `acectk` to store the the CTK.
+To program the CTK in the ACE unit, we need 256-bit worth of CSRs, reserved to M mode.
 
-* `acectk`, if writable, is writable exclusively by MM.
-* `acectk` reads as zero in all cases.
+For this purpose, eight 32-bit CSRs are allocated, called `acectk[i]`, for i in [0,7].
+
+`acectk[i]` contains bits [stem:[31+32\,i:32\,i]] of the CTK.
+
+The `acectk` block, if writable, is writable exclusively by MM.
+Either all the `acectk` CSRs are writable, or none of them are.
+
+The `acectk` block reads as zero in all cases.
 
 There is need to raise exceptions if SW running in an any other mode tries to write to it or read it.
 
-[.red]#*TBD*: _How to deal with the discoverability of the fact whether `acectk` is writable ot not even by MM._ Low priority, but must be addressed before final release.#
+[.red]#*TBD*: _How to discover whether `acectk` is writable or not by MM?_
+Can we use a second `misa` bit?
+Low priority.#
 
 ==== `aceccactive`
 
