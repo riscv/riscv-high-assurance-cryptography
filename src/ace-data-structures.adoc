@@ -6,13 +6,22 @@ The metadata field is (mostly) algorithm independent and architected.
 The content field is algorithm-specific and contains key material and possibly other algorithm-specific data.
 
 [[Metadata]]
-=== Metadata Fields
+=== Metadata Field Format
 
 //*To be discussed* _We are open to agree on either using a single metadata format (the 128-bit version) or making the 64-bit format mandatory and the 128-bit format optional._
 
-The metadata field exists in two formats, _standard_ (64-bit) and _extended_ (128-bit).
+The metadata field exists in two formats: _standard_ (64-bit) and _extended_ (128-bit).
 The standard version is mandatory and is described in <<ACE-metadata-standard>>.
 The extended version is optional and is described in <<ACE-metadata-extended>>.
+
+These formats are used to describe the metadata field for CC initialization, export and import purposes.
+
+To initialize a CC, the first 64, resp., 128 bits, of the input buffer contain the metadata in the standard, resp., extended, format, entirely in cleartext.
+When exporting a CC, the first 64, resp., 128 bits, of the input buffer contain the metadata in the standard, resp., extended, format, are partially encrypted and partially in the clear: the fields marked as Public are not encrypted and the fields marked as Private are encrypted.
+The entire metadata field is included in the computation of the authentication tag.
+The details are described in <<ACE-SCC-formats>>.
+
+The internal representation of the metadata in the CF memory is implementation dependent.
 
 [[ACE-metadata-standard]]
 .Metadata: 64-bit version
@@ -104,34 +113,78 @@ This field can be used to determine whether the exported format from a suspended
 
 ==== Configuration Input
 
-===== With Short Metadata
+===== Using the Standard Metadata Format
+
+===== Using the Extended Metadata Format
 
 *TBD*
 
-===== With Long Metadata
-
-*TBD*
-
+[[ACE-SCC-formats]]
 ==== Sealed Configuration Context
 
 *TBD*
 
-===== With Short Metadata
+We first define the RFC8452 Key Derivation
 
-.Generation of the SCC from a CC with short metadata
-[source,sail]
+.RFC8452 Key Derivation
+[source,sail,subs="+quotes,verbatim"]
 ----
-let P : bits(256) P = keys @ internal
-let N : bits(96) N = random(96 bits)
-Derive Kenc and Kauth from effective CTK as per RFC 8452.
-let SIV : bits(96) = Poly1305(Kauth, N, metadata @ P)[95:0]
-M[0][127:0] = N[63:0] @ ((metadata[63:32] xor AESE(Kenc, SIV @ 0x0000 0000)[63:32])
-                      @ metadata[31:0]
-M[1][127:0] = SIV[95:0] @ N[95:64]
-foreach(i from 0 to num_blocks(P)-1) {
-     M[i+2][127:0] = (block i of P) xor AESE(Kenc, SIV @ (binary(i+1)[31:0]))
+typedef derived_keys = {
+  enc : bits(256),
+  auth : bits(128),
+}
+
+function RFC8452_KeyDeriv(K,L) = {
+  deriv : derived_keys = {
+    AESE256(K, L ^ (0[125:0] @ 0b101))[63:0] @ AESE256(K, L ^ (0[125:0] @ 0b100))[63:0] @
+    AESE256(K, L ^ (0[125:0] @ 0b011))[63:0] @ AESE256(K, L ^ (0[125:0] @ 0b010))[63:0],
+    AESE256(K, L ^ (0[125:0] @ 0b001))[63:0] @ AESE256(K, L ^ (0[125:0] @ 0b000))[63:0]
+  }
 }
 ----
+
+Then, we define the generation of the SCC from a CC with standard metadata format.
+
+.Generation of the SCC from a CC with standard metadata format
+[source,sail]
+----
+let P : bits(content_length) P = content;
+let N : bits(96) N = random(96 bits);
+let Kenc : bits(256)
+let Kauth : bits(128)
+{ Kenc, Kauth } = RFC8452_KeyDeriv(CTK,0)
+let SIV : bits(96) = Poly1305(Kauth, N, metadata @ P)[95:0];
+M[0][127:0] = N[63:0] @ ((metadata[63:21] xor AESE(Kenc, SIV @ 0x0000 0000)[63:21])
+                      @ metadata[20:0];
+M[1][127:0] = SIV[95:0] @ N[95:64];
+foreach(i from 0 to num_blocks(P)-1) {
+     M[i+2][127:0] = (block i of P) xor AESE(Kenc, SIV @ (binary(i+1)[31:0]));
+}
+----
+
+Finally, we define the generation of the SCC from a CC with extended metadata format.
+
+.Generation of the SCC from a CC with extended metadata format
+[source,sail]
+----
+let P : bits(content_length) P = content;
+let N : bits(96) N = random(96 bits);
+{ Kenc, Kauth } = RFC8452_KeyDeriv(CTK,0)
+let SIV : bits(96) = Poly1305(Kauth, N, metadata @ P)[95:0];
+let tmp : bits(128) = AESE256(Kenc, SIV @ 0x0000 0000);
+M[0][127:0] = (metadata[127:84] xor tmp[127:84]) @ metadata[83:64]
+              @ (metadata[63:21] xor tmp[63:21]) @ metadata[20:0];
+M[1][127:0] = 0x00000000 @ N;
+M[2][127:0] = SIV @ 0x00000000;
+foreach(i from 0 to num_blocks(P)-1) {
+     M[i+3][127:0] = (block i of P) xor AESE256(Kenc, SIV @ (binary(i+1)[31:0]));
+}
+----
+
+
+
+
+
 
 //Notation: xor, {or}, {and}, and {lshift} denote XOR, OR, AND, and left shift, respectively.
 (Recall that by `x` @ `y` we indicate the concatenation of `x` and `y`, where the bits of `x` become the most significant part of the concatenated value, and the bits of `y` its least significant part.)
