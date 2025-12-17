@@ -106,7 +106,6 @@ This field can be used to determine whether the exported format from a suspended
 // If the most significant bit is set to 0, then the remaining 23 bits are assigned and maintained by RVI to distinguish mutually non-compatible formats.
 // However, since we do not expect many different formats,
 
-
 *Remark {counter:remark}*:: Filtering according to Supervisor Domains/Worlds is not currently supported, since in this case we believe that re-configuring the CTK is a more solid approach. This also allows us to avoid having to define an even longer MD format, at least for now.
 
 === Formats of Configuration Inputs and Sealed Configuration Contexts
@@ -127,15 +126,10 @@ This field can be used to determine whether the exported format from a suspended
 We first define the RFC8452 Key Derivation
 
 .RFC8452 Key Derivation
-[source,sail,subs="+quotes,verbatim"]
+[source,sail]
 ----
-typedef derived_keys = {
-  enc : bits(256),
-  auth : bits(128),
-}
-
 function RFC8452_KeyDeriv(K,L) = {
-  deriv : derived_keys = {
+  struct {
     AESE256(K, L ^ (0[125:0] @ 0b101))[63:0] @ AESE256(K, L ^ (0[125:0] @ 0b100))[63:0] @
     AESE256(K, L ^ (0[125:0] @ 0b011))[63:0] @ AESE256(K, L ^ (0[125:0] @ 0b010))[63:0],
     AESE256(K, L ^ (0[125:0] @ 0b001))[63:0] @ AESE256(K, L ^ (0[125:0] @ 0b000))[63:0]
@@ -150,11 +144,11 @@ Then, we define the generation of the SCC from a CC with standard metadata forma
 ----
 let P : bits(content_length) P = content;
 let N : bits(96) N = random(96 bits);
-let Kenc : bits(256)
-let Kauth : bits(128)
-{ Kenc, Kauth } = RFC8452_KeyDeriv(CTK,0)
+Kenc : bits(256);
+Kauth : bits(128);
+{Kenc, Kauth} = RFC8452_KeyDeriv(CTK,0);
 let SIV : bits(96) = Poly1305(Kauth, N, metadata @ P)[95:0];
-M[0][127:0] = N[63:0] @ ((metadata[63:21] xor AESE(Kenc, SIV @ 0x0000 0000)[63:21])
+M[0][127:0] = N[63:0] @ ((metadata[63:21] xor AESE(Kenc, SIV @ 0x0000_0000)[63:21])
                       @ metadata[20:0];
 M[1][127:0] = SIV[95:0] @ N[95:64];
 foreach(i from 0 to num_blocks(P)-1) {
@@ -169,22 +163,21 @@ Finally, we define the generation of the SCC from a CC with extended metadata fo
 ----
 let P : bits(content_length) P = content;
 let N : bits(96) N = random(96 bits);
-{ Kenc, Kauth } = RFC8452_KeyDeriv(CTK,0)
+Kenc : bits(256);
+Kauth : bits(128);
+{Kenc, Kauth} = RFC8452_KeyDeriv(CTK,0);
 let SIV : bits(96) = Poly1305(Kauth, N, metadata @ P)[95:0];
-let tmp : bits(128) = AESE256(Kenc, SIV @ 0x0000 0000);
-M[0][127:0] = (metadata[127:84] xor tmp[127:84]) @ metadata[83:64]
-              @ (metadata[63:21] xor tmp[63:21]) @ metadata[20:0];
-M[1][127:0] = 0x00000000 @ N;
-M[2][127:0] = SIV @ 0x00000000;
+let tmp : bits(128) = AESE256(Kenc, SIV @ 0x0000_0000);
+M[0][127:0] = (metadata[127:84] xor tmp[127:84])
+            @ metadata[83:64]
+            @ (metadata[63:21] xor tmp[63:21])
+            @ metadata[20:0];
+M[1][127:0] = 0x0000_0000 @ N;
+M[2][127:0] = SIV @ 0x0000_0000;
 foreach(i from 0 to num_blocks(P)-1) {
      M[i+3][127:0] = (block i of P) xor AESE256(Kenc, SIV @ (binary(i+1)[31:0]));
 }
 ----
-
-
-
-
-
 
 //Notation: xor, {or}, {and}, and {lshift} denote XOR, OR, AND, and left shift, respectively.
 (Recall that by `x` @ `y` we indicate the concatenation of `x` and `y`, where the bits of `x` become the most significant part of the concatenated value, and the bits of `y` its least significant part.)
