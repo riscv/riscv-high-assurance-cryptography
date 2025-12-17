@@ -19,10 +19,10 @@ The details are described in <<ACE-SCC-formats>>.
 
 [[ACE-metadata-standard]]
 .Metadata: 64-bit version
-[width="100%",cols=">9%,^9%,17%,57%,^8%",options="header"]
+[width="100%",cols=">9%,^7%,17%,59%,^8%",options="header"]
 |===
-|   Field | Bits | Name                   | Description | Type
-|     [0] |   1  | Format                 | 0 for this version of the metadata format. | Public
+|   Field | Width | Name                   | Description | Type
+|     [0] |   1  | Format                 | 0 for this version of the metadata format. Future versions of the metadata format will have a 1 in this position and may also be longer than 64 bits. | Public
 |   [8:1] |   8  | Algorithm              | Algorithm (such as primitive or mode). | Public
 |  [10:9] |   2  | Side Channel Protected | Level of Side Channel Protection provided. +
 The field's encoding is described in <<ACE-SC-protection-levels>>. | Public
@@ -30,13 +30,13 @@ The field's encoding is described in <<ACE-SC-protection-levels>>. | Public
 | [14:13] |   2  | Key Type               | By explicit value / Immutable (index) / Internally generated. | Public
 | [18:15] |   4  | Locale                 | Field which is either -1 or an index into the Locale Secrets Table. | Public
 | [20:19] |   2  | Complete               | Whether the CC is complete (00) or interrupted while being configured (01), imported (10) or exported (11). Necessary to know whether to restart operations. | Public
-| [24:21] |   4  | Stage/Direction        | Which internal stage the algorithm is, as defined by ace_stage or implicitly. Must be ZERO on configuration. This is algorithm defined. | Private
-| [28:25] |   4  | AC Policy 1            | Is a User (if bit 28 set)/Supervisor or Virtual Supervisor (bit 29 set)/Hypervisor (bit 30 set)/Machine (bit 31 set) forbidden to USE this key? | Private
-| [30:29] |   2  | AC Policy 2            | If bit 32, resp., 33, is set, then restrict USE by `ASID`, resp., `VMID`. | Private
+| [24:21] |   4  | Stage/Direction        | Internal current state of the state machine of the algorithm. Must be zero on configuration. Algorithm defined. | Private
+| [28:25] |   4  | AC Policy 1            | Forbid USE of this CC in User, Supervisor or Virtual Supervisor, Hypervisor, resp., Machine Mode if bit 25, 26, 27, resp. 28, is set. | Private
+| [30:29] |   2  | AC Policy 2            | If bit 29, resp., 30, is set, then restrict USE by `ASID`, resp., `VMID`. +
+Restriction by `ASID` ignored if in S Mode or higher. | Private
 |    [31] |   1  | Reserved               | Undefined.  | Private
 | [47:32] |  16  | AC Policy 3            | Zero if bit 32 unset, else `ASID` to enforce.  | Private
-| [61:48] |  14  | AC Policy 4            | Zero if bit 33 unset, else `VMID` to enforce.  | Private
-| [63:62] |   3  | Reserved               | Undefined.  | Private
+| [63:48] |  16  | AC Policy 4            | Zero if bit 33 unset, else `VMID` to enforce. Only 14 bits used, two most significant bits currently zero. | Private
 |===
 
 [[ACE-SC-protection-levels]]
@@ -50,17 +50,16 @@ The field's encoding is described in <<ACE-SC-protection-levels>>. | Public
 |   3   | Invalid value.
 |===
 
-Higher levels of protection are defined as part of custom algorithms.
+Custom algorithms may offer stronger side channel protection guarantees than those specified in the above encoding.
 
-Bit 0 is currently hardwired to zero. We reserve setting it to 1 for future metadata formats that may also be longer (for instance, 128 bits).
+The Stage field accommodates modes of operation with a small number of states.
+For algorithms with more complex state machines, machine state information can be stored in a custom data section of the CC.
 
-The Stage/Direction field is offered as a convenience for the definition of modes of operation with a small number of states.
-If more complex state machines are required, additional information can be stored in a custom data section of the CC.
+The "AC Policy 4" field is 16-bits long for compatibility with architectures employing 16-bit `VMID` fields (for instance, in heterogeneous systems).
+While interoperability cannot be guaranteed when this policy is used, this ensures that the two top bits are not used for other purposes
 
-The two bits after AC Policy 4 can be used in case `VMID` is extended to 16 bits, and for compatibility
-of metadata formats with architectures that use a 16-bit `VMID` field, for instance in heterogeneous systems, even though interoperability is not assumed.
-
-Filtering according to Supervisor Domains/Worlds is not currently supported, since in this case we believe that re-configuring the CTK is a more solid approach. This also allows us to avoid having to define an even longer MD format, at least for now.
+Filtering use by Supervisor Domain or World ID is not supported.
+Reconfiguring the CTK is the recommended approach for such isolation requirements.
 
 === Formats of Configuration Inputs and Sealed Configuration Contexts
 
