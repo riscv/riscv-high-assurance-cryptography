@@ -5,6 +5,8 @@ The atomic cryptography extension does not add a register file, but it adds 32 C
 some unprivileged CSRs to a base scalar RISC-V ISA -- as well some privileged CSRs.
 It also requires a subset of the V extension to be implemented.
 
+[.red]#*NB:* _Everything in this specification is still valid is the number of CCs is reduced to, say, 8. Immediate values to refer to CCs are still 5 bits long because the same field can also be used to refer to a GPR, but the only valid values for the CC number are 0 to 7._#
+
 ==== Cryptographic Contexts
 
 The atomic cryptography extension defines 32 Cryptographic Contexts (CCs) for storing cryptographic keys and metadata.
@@ -47,7 +49,7 @@ The Disabled-Clean and Disabled-Clobbered states are set by the parent mode to o
 Changing the setting of ACES has no effect on the contents of the CCs.
 In particular, setting ACES=Disabled-Clean or Disabled-Clobbered does not destroy the state, nor does setting ACES=Enabled clear the contents.
 
-[.red]#*TBD* _We need an entry in the trap vector table for ACE enablement when ACES=Disabled-Clobbered._#
+[.red]#*TBD* _An exception code must be allocated for when ACE enablement occurs while ACES=Disabled-Clobbered._#
 
 ==== `aceenable`
 
@@ -123,17 +125,27 @@ Writing an arbitrary non-zero value may raise an illegal-instruction exception b
 
 Only some specific instructions can have a non-zero `ccstart`, and the other ACE instructions will ignore this value if set by software.
 
-==== Reuse ASID and VMID?
+==== Reuse ASID and VMID (to be verified).
 
-Two CSRs at U, resp., S level, namely `UKSID` (User Key Space ID ) and/or `SKSID` (Supervisor Key Space ID), which are only writable at S, resp., a higher mode.
-(*TBD*) We may reuse the CSRs for `ASID`, resp., `VMID` for `UKSID`, resp., `SKSID`.
-Therefore, the maximal bit length of `UKSID` is 9 for Sv32 addresses or 16 for Sv39, Sv48, and Sv57.
-Similarly, the maximal bit length of `SKSID` is 7 for Sv32x4 or 14 for Sv39x4, Sv48x4, and Sv57x4.
-In the metadata fields, `UKSID` and `SKSID` are always zero padded to the maximal lengths of 16 and 14 bits, respectively.
+We reuse the CSRs for `ASID`, resp., `VMID`
+(i.e., the CSR fields `satp`.ASID and `hgatp`.VMID).
+to give only certain User processes and Supervisor processes access to certain key spaces.
+The maximal bit length of `ASID` is 9 for Sv32 addresses or 16 for Sv39, Sv48, and Sv57.
+The maximal bit length of `VMID` is 7 for Sv32x4 or 14 for Sv39x4, Sv48x4, and Sv57x4.
+In the metadata blocks, `ASID` and `VMID` are always zero padded to the maximal lengths of 16 and 14 bits, respectively.
 
-*Remark {counter:remark}*:: _We do not envision direct key sharing across Worlds/Supervisor Domains, so consider defining a Hypervisor or World "Key Space ID" as redundant.
-It is the responsibility of the MM to change CTKs between Worlds/Supervisor Domains._
+[.red]#However, we need a mechanism to make sure that if the system is not configured not to insert `ASID`, resp., `VMID` into the GVAs/GPAs, we can still use them for the purpose of policing the use of CCs.#
 
+[[ace-providing-keys,Remark {counter:remark}]]
+*Remark {counter:remark}*: _The software in each World/Supervisor Domain is normally responsible to generate or obtain their own keys, and if a process (applet) in one World/Supervisor Domain is responsible to provide keys to other Worlds/Supervisor Domains, it is the responsibility of the MM to perform an appropriate sequence of import, switch the CTK, then export operations._
 
-*Remark {counter:remark}*:: _The software in each World/Supervisor Domain is normally responsible to generate or obtain their own keys, and if a process (applet) in one World/Supervisor Domain is responsible to provide keys to other Worlds/Supervisor Domains, it is the responsibility of the MM to properly import/switch the CTK/export._
-// If `ASID`/`VMID` are reused for `UKSID`/`SKSID`, we still need to distinguish somehow the use for separating key spaces even if these fields are not used to build GVAs/GPAs (TBD).
+==== Re-configurable Locales
+
+We need three further groups of 4 32-bit CSRs, programmable by the MM, to define three reconfigurable locales (cf. <<ACE-Locales>>).
+
+These three groups are:
+`ace_OS_Secret` (i.e. `OS_Secret0`, `OS_Secret1`, `OS_Secret2`, `OS_Secret3`),
+`ace_Boot_Session`, and
+`ace_Revocation_Reserved` (with the individual CSRs in each group defined similarly to `OS_Secret`).
+
+`Boot_Session` is reconfigurable because it may change in a VM if the latter's virtual hardware is re-booted, and this can happen independently from the underlying host and other VMs. For instance, a VM may be frozen, then the host may be rebooted, and then the VM may be resumed, in which case no boot session occurred in the VM, while it happened in the host hardware.

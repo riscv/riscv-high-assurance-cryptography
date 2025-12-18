@@ -7,15 +7,15 @@ A CC contains two types of information: the *metadata* and the *content*:
 * The content is algorithm-specific and contains key material and possibly other algorithm-specific data.
 
 [[Metadata]]
-=== Metadata Field Format
+=== Metadata Block Format
 
-The metadata field is 64 bits long and its format described in <<ACE-metadata-standard>>.
+The metadata block is 64 bits long and its format described in <<ACE-metadata-standard>>.
 This format is used to for CC initialization, export and import purposes.
 The internal representation of the metadata in CF memory is implementation dependent.
 
 To initialize a CC, the first 64 bits of the input buffer contain the metadata in entirely in cleartext.
 When exporting a CC, the first 64 bits of the input buffer contain the partially encrypted metadata: the fields marked as Public are not encrypted and the fields marked as Private are encrypted.
-The entire metadata field is included in the computation of the authentication tag.
+The entire metadata block is included in the computation of the authentication tag.
 The details are described in <<ACE-SCC-formats>>.
 
 [#ACE-metadata-standard]
@@ -23,22 +23,32 @@ The details are described in <<ACE-SCC-formats>>.
 [width="100%",cols=">9%,^7%,17%,59%,^8%",options="header"]
 |===
 |   Field | Width | Name                  | Description | Type
-|     [0] |   1  | Format                 | 0 for the current metadata format. Future format swill have a 1 in this position and may also be longer than 64 bits. | Public
+|     [0] |   1  | Format                 | 0 for the current metadata format. +
+Future format swill have a 1 in this position and may also be longer than 64 bits. | Public
 |   [8:1] |   8  | Algorithm              | Algorithm (such as primitive or mode). | Public
 |  [10:9] |   2  | SC_Protection          | Level of Side Channel Protection provided. +
 The field's encoding is described in <<ACE-SC-protection-levels>>. | Public
-| [12:11] |   2  | Direction_Policy       | Determines whether the CC may be used for encryption (bit 11 set), decryption (bit 12 set), or both (bits 11 and 12 set). Valid only for encryption/decryption primitives or modes, and ignored, for instance, for hash functions. | Public
+| [12:11] |   2  | Direction_Policy       | Determines whether the CC may be used for encryption (bit 11 set), decryption (bit 12 set), or both (bits 11 and 12 set). +
+Valid only for encryption/decryption primitives or modes, and ignored, for instance, for hash functions. | Public
 | [14:13] |   2  | Key_Type               | By explicit value / Immutable (index) / Internally generated. | Public
 | [18:15] |   4  | Locale                 | Field which is either -1 or an index into the Locale Secrets Table. | Public
-| [20:19] |   2  | Complete               | Defined in <<ACE-CC-complete>>. Used to determine whether operations must be restarted. | Public
-| [24:21] |   4  | Stage (also Directi    | Internal current state of the state machine of the algorithm. Must be zero on configuration. Algorithm defined. | Private
+| [20:19] |   2  | Completion             | Defined in <<ACE-CC-complete>>. +
+Used to determine whether operations must be restarted. | Public
+| [24:21] |   4  | Stage (also Direction) | Internal current state of the state machine of the algorithm. +
+See <<stage-field>> below. +
+Must be zero on configuration. +
+Algorithm defined. | Private
 | [28:25] |   4  | AC_Policy_1            | Forbid USE of this CC in User, Supervisor or Virtual Supervisor, Hypervisor, resp., Machine Mode if bit 25, 26, 27, resp. 28, is set. | Private
 | [30:29] |   2  | AC_Policy_2            | If bit 29, resp., 30, is set, then restrict USE by `ASID`, resp., `VMID`. +
-Restriction by `ASID` ignored if in S Mode or higher. | Private
+Restriction by `ASID` ignored if in S Mode or higher. +
+See also <<stage-no-H-no-VMID>> below. | Private
 |    [31] |   1  | Reserved               | Undefined.  | Private
-| [47:32] |  16  | AC_Policy_3            | Zero if bit 32 unset, else `ASID` to enforce.  | Private
-| [63:48] |  16  | AC_Policy_4            | Zero if bit 33 unset, else `VMID` to enforce. Only 14 bits used, two most significant bits currently zero. | Private
+| [47:32] |  16  | AC_Policy_3            | Zero if bit 29 unset, else `ASID` to enforce.  | Private
+| [63:48] |  16  | AC_Policy_4            | Zero if bit 30 unset, else `VMID` to enforce. +
+See also <<stage-no-H-no-VMID>> below.  | Private
 |===
+
+<<<
 
 [[ACE-SC-protection-levels]]
 .Encoding of side-channel protection levels
@@ -52,31 +62,31 @@ Restriction by `ASID` ignored if in S Mode or higher. | Private
 |===
 
 Custom algorithms may offer stronger side channel protection guarantees than those specified in the encoding values 0 to 2.
-In such a case, the value of the "SC_Protection" field must be set to 3.
+In such a case, the value of the SC_Protection field must be set to 3.
 
 [[ACE-CC-complete]]
-.Encoding of side-channel protection levels
+.Encoding of completion field
 [float="center",align="center",width="76%",cols="^8%,<68%",options="header"]
 |===
 | Value | Description
 |   0   | No protection.
-|   1   | CC configuration was interrupted.
-|   2   | SCC import was interrupted.
-|   3   | SCC export was interrupted.
+|   1   | `ace.init`, `ace.input`, or `ace.output` was interrupted.
+|   2   | `ace.import` was interrupted.
+|   3   | `ace.export` was interrupted.
 |===
 
-Whether the CC is complete (00) or interrupted while being configured (01), imported (10) or exported (11). Necessary to know whether to restart operations.
+// Whether the CC is complete (00) or interrupted while being configured (01), imported (10) or exported (11). Necessary to know whether to restart operations.
 
+[[stage-field,Remark {counter:remark}]]
+*Remark {counter:remark}*: _The Stage field accommodates modes of operation with a small number of states.
+For algorithms with more complex state machines, machine state information can be stored in a custom data section of the CC._
 
-
-The Stage field accommodates modes of operation with a small number of states.
-For algorithms with more complex state machines, machine state information can be stored in a custom data section of the CC.
-
+[[stage-no-H-no-VMID,Remark {counter:remark}]]
+*Remark {counter:remark}*: _If the H extension is not enabled, bits 30 and [63:48] must be set to 0, and bit 27 must be set to 1. +
 The "AC_Policy_4" field is 16-bits long for compatibility with architectures employing 16-bit `VMID` fields (for instance, in heterogeneous systems).
-While interoperability cannot be guaranteed when this policy is used, this ensures that the two top bits are not used for other purposes.
-
+While interoperability cannot be guaranteed when this policy is used, this ensures that the two top bits are not used for other purposes. +
 Filtering use by Supervisor Domain or World ID is not supported, and not only because of lack of space in a 64-bit metadata block:
-Reconfiguring the CTK is a better approach for such isolation requirements, whereas isolation by `ASID` and `VMID` is a weaker security feature.
+Reconfiguring the CTK is a better approach for such isolation requirements, whereas isolation by `ASID` and `VMID` is a weaker security feature._
 
 === Formats of Configuration Inputs and Sealed Configuration Contexts
 
@@ -84,11 +94,10 @@ Reconfiguring the CTK is a better approach for such isolation requirements, wher
 ==== Configuration Input
 
 The format of the input to `ace.init` is simple: the first 8 bytes must contain the 64-bit metadata block, followed by any key and additional information in a format specified by the algorithm. The total length of this input must be a multiple of 8 bytes.
-
 Formally, each algorithm must provide following functions:
 
 * `metadata_deserialize()`: Takes the clear or decrypted metadata block, and deserializes it for the internal representation.
-* `metadata_serialize()`: Serializes the metadata form the internal representation into a 64-bit block for export.
+* `metadata_serialize()`: Serializes the internal metadata into a 64-bit block for export.
 * `initial_content_deserialize()`: Reads the information provided to `ace.init` that follows the metadata, and deserializes it for the internal representation.
 * `content_serialize()`: Serialize the content of the CC into a sequence of blocks to be encrypted for `ace.export`.
 * `content_deserialize()`: Takes a sequence of decrypted SCC blocks that follow the metadata, nonce and authentication tag, and deserializes it for the internal representation of the CC's content.
@@ -106,9 +115,12 @@ We first define the RFC8452 Key Derivation and the Derived CTK Derivation functi
 ----
 function RFC8452_KeyDeriv(K) = {
   struct {
-    AESE256(K, (0[125:0] @ 0b101))[63:0] @ AESE256(K, (0[125:0] @ 0b100))[63:0] @
-    AESE256(K, (0[125:0] @ 0b011))[63:0] @ AESE256(K, (0[125:0] @ 0b010))[63:0],
-    AESE256(K, (0[125:0] @ 0b001))[63:0] @ AESE256(K, (0[125:0] @ 0b000))[63:0]
+    AESE256(K, (0[125:0] @ 0b101))[63:0] @
+    AESE256(K, (0[125:0] @ 0b100))[63:0] @
+    AESE256(K, (0[125:0] @ 0b011))[63:0] @
+    AESE256(K, (0[125:0] @ 0b010))[63:0],
+    AESE256(K, (0[125:0] @ 0b001))[63:0] @
+    AESE256(K, (0[125:0] @ 0b000))[63:0]
   }
 }
 ----
@@ -117,14 +129,14 @@ function RFC8452_KeyDeriv(K) = {
 [source,sail]
 ----
 function RFC8452_KeyDeriv(K,L) = {
-  AESE256(K, L ^ (0[125:0] @ 0b011))[63:0] @ AESE256(K, L ^ (0[125:0] @ 0b010))[63:0] @
-  AESE256(K, L ^ (0[125:0] @ 0b001))[63:0] @ AESE256(K, L ^ (0[125:0] @ 0b000))[63:0]
+  AESE256(K, L ^ (0[125:0] @ 0b011))[63:0] @
+  AESE256(K, L ^ (0[125:0] @ 0b010))[63:0] @
+  AESE256(K, L ^ (0[125:0] @ 0b001))[63:0] @
+  AESE256(K, L ^ (0[125:0] @ 0b000))[63:0]
 }
 ----
 
-Since this derivation function is quite expensive, the ACE implementation is allowed to cache recently used Derived Keys, both for the base CTK and for the derived keys.
-
-Then, we define the generation of the SCC from a CC.
+We can now define the generation of the SCC from a CC.
 
 .Generation of the SCC from a CC with standard metadata format
 [source,sail]
@@ -137,21 +149,24 @@ Kenc : bits(256);
 Kauth : bits(128);
 {Kenc, Kauth} = RFC8452_KeyDeriv(CTK);
 let SIV : bits(96) = Poly1305(Kauth, N, metadata @ P)[95:0];
-M[0][127:0] = N[63:0] @ ((metadata[63:21] xor AESE(Kenc, SIV @ 0x0000_0000)[63:21])
-                      @ metadata[20:0];
+
+M[0][127:0] = N[63:0]
+            @ ((metadata[63:21] xor AESE(Kenc, SIV @ 0x0000_0000)[63:21])
+            @ metadata[20:0];
 M[1][127:0] = SIV[95:0] @ N[95:64];
 foreach(i from 0 to num_blocks(P)-1) {
      M[i+2][127:0] = (block i of P) xor AESE(Kenc, SIV @ (binary(i+1)[31:0]));
 }
 ----
 
-//Notation: xor, {or}, {and}, and {lshift} denote XOR, OR, AND, and left shift, respectively.
-(Recall that by `x` @ `y` we indicate the concatenation of `x` and `y`, where the bits of `x` become the most significant part of the concatenated value, and the bits of `y` its least significant part.)
+Since the derivation functions are quite expensive, the ACE implementation is allowed to cache recently used Derived Keys, both for the base CTK and for the derived keys.
 
-Note that we do not encrypt public metadata bits but we encrypt the private metadata bits.
+// Notation: xor, {or}, {and}, and {lshift} denote XOR, OR, AND, and left shift, respectively.
+// (Recall that by `x` @ `y` we indicate the concatenation of `x` and `y`, where the bits of `x` become the most significant part of the concatenated value, and the bits of `y` its least significant part.)
+
+// Note that we do not encrypt public metadata bits but we encrypt the private metadata bits.
 
 Note: In this simplification of AES-GCM-SIV there is no need to add the lengths of metadata and keys+internal state to the hash because these lengths are implied already by the clear bits of the metadata itself — which are included in the computation of the authentication tag.
-Bit 0 of the first word of the metadata also works as a domain separator to distinguish between standard and extended metadata formats.
 
 Some details are fixed in general. For instance, all “pure” ciphers have only one key, whether in normal or threshold implementation, the latter always reduced to one key, as well as for some modes. In other cases, there must be a specific formatting of the state.
 The length of the entire output is always assumed to be a multiple of 128 bits. If metadata and content are not multiples of 128 bits, the final block is padded with zeros.
@@ -174,7 +189,7 @@ Additional ones may be defined in the range [128,255] that are algorithm specifi
 |  2   | ace_err_privilege         | `ace.exec`, `ace.stage`, `ace.derive`, `ace.spawn` failed because the access control policies in the metadata prevent USE in the current architectural state.
 |  3   | ace_err_invalid           | Invalid input or operation.
 Examples:
-the metadata field passed to `ace.init` is invalid;
+the metadata block passed to `ace.init` is invalid;
 encryption, resp., decryption is requested from a CC only configured for decryption, resp., encryption;
 the requested change of state in `ace.stage` is not permitted;
 the current state of the CC does not expect the used form of `ace.exec`;
