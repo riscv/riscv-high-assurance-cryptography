@@ -14,38 +14,39 @@ This format is used to for CC initialization, export and import purposes.
 The internal representation of the metadata in CF memory is implementation dependent.
 
 To initialize a CC, the first 64 bits of the input buffer contain the metadata in entirely in cleartext.
-When exporting a CC, the first 64 bits of the input buffer contain the partially encrypted metadata: the fields marked as Public are not encrypted and the fields marked as Private are encrypted.
+The metadata is in cleartext also in exported SCCs.
 The entire metadata block is included in the computation of the authentication tag.
 The details are described in <<ACE-SCC-formats>>.
 
 [#ACE-metadata-standard]
-.Metadata: 64-bit version
-[width="100%",cols=">9%,^7%,17%,59%,^8%",options="header"]
+.Format of the Metadata Block
+[width="100%",cols=">9%,^7%,17%,67%",options="header"]
 |===
-|   Field | Width | Name                  | Description | Type
+|   Field | Width | Name                  | Description
 |     [0] |   1  | Format                 | 0 for the current metadata format. +
-Future format swill have a 1 in this position and may also be longer than 64 bits. | Public
-|   [8:1] |   8  | Algorithm              | Algorithm (such as primitive or mode). | Public
+Future format will have a 1 in this position and may be longer than 64 bits.
+|   [8:1] |   8  | Algorithm              | Algorithm (such as primitive or mode).
 |  [10:9] |   2  | SC_Protection          | Level of Side Channel Protection provided. +
-The field's encoding is described in <<ACE-SC-protection-levels>>. | Public
+The field's encoding is described in <<ACE-SC-protection-levels>>.
 | [12:11] |   2  | Direction_Policy       | Determines whether the CC may be used for encryption (bit 11 set), decryption (bit 12 set), or both (bits 11 and 12 set). +
-Valid only for encryption/decryption primitives or modes, and ignored, for instance, for hash functions. | Public
-| [14:13] |   2  | Key_Type               | By explicit value / Immutable (index) / Internally generated. | Public
-| [18:15] |   4  | Locale                 | Field which is either -1 or an index into the Locale Secrets Table. | Public
+Valid only for encryption/decryption primitives or modes, and ignored, for instance, for hash functions.
+| [14:13] |   2  | Key_Type               | By explicit value / Immutable (index) / Internally generated.
+| [18:15] |   4  | Locale                 | Field which is either -1 or an index into the Locale Secrets Table. +
+See also <<ACE-what-are-locales>> below for more details.
 | [20:19] |   2  | Completion             | Defined in <<ACE-CC-complete>>. +
-Used to determine whether operations must be restarted. | Public
+Used to determine whether operations must be restarted.
 | [24:21] |   4  | Stage (also Direction) | Internal current state of the state machine of the algorithm. +
 See <<stage-field>> below. +
 Must be zero on configuration. +
-Algorithm defined. | Private
-| [28:25] |   4  | AC_Policy_1            | Forbid USE of this CC in User, Supervisor or Virtual Supervisor, Hypervisor, resp., Machine Mode if bit 25, 26, 27, resp. 28, is set. | Private
+Algorithm defined.
+| [28:25] |   4  | AC_Policy_1            | Forbid USE of this CC in User, Supervisor or Virtual Supervisor, Hypervisor, resp., Machine Mode if bit 25, 26, 27, resp. 28, is set.
 | [30:29] |   2  | AC_Policy_2            | If bit 29, resp., 30, is set, then restrict USE by `ASID`, resp., `VMID`. +
 Restriction by `ASID` ignored if in S Mode or higher. +
-See also <<stage-no-H-no-VMID>> below. | Private
-|    [31] |   1  | Reserved               | Undefined.  | Private
-| [47:32] |  16  | AC_Policy_3            | Zero if bit 29 unset, else `ASID` to enforce.  | Private
+See also <<stage-no-H-no-VMID>> below.
+|    [31] |   1  | Reserved               | Undefined.
+| [47:32] |  16  | AC_Policy_3            | Zero if bit 29 unset, else `ASID` to enforce.
 | [63:48] |  16  | AC_Policy_4            | Zero if bit 30 unset, else `VMID` to enforce. +
-See also <<stage-no-H-no-VMID>> below.  | Private
+See also <<stage-no-H-no-VMID>> below.
 |===
 
 <<<
@@ -64,9 +65,15 @@ See also <<stage-no-H-no-VMID>> below.  | Private
 Custom algorithms may offer stronger side channel protection guarantees than those specified in the encoding values 0 to 2.
 In such a case, the value of the SC_Protection field must be set to 3.
 
+[[ACE-what-are-locales,Remark {counter:remark}]]
+*Remark {counter:remark}.* _Locales are used to restrict CCs to specific classes of devices or to a boot-session.
+They are implemented as secret values that are combined with the CTK to compute the effective key to be used in export and import operations.
+Such values are stored in _Locale Secrets Table_ (cf <<ACE-Locales>>), which consists of fixed system-wide values and of MM-programmable ones.
+In the metadata, the Locale is expressed as an index into this table._
+
 [[ACE-CC-complete]]
 .Encoding of completion field
-[float="center",align="center",width="76%",cols="^8%,<68%",options="header"]
+[float="center",align="center",width="58%",cols="^8%,<50%",options="header"]
 |===
 | Value | Description
 |   0   | No protection.
@@ -150,12 +157,10 @@ Kauth : bits(128);
 {Kenc, Kauth} = RFC8452_KeyDeriv(CTK);
 let SIV : bits(96) = Poly1305(Kauth, N, metadata @ P)[95:0];
 
-M[0][127:0] = N[63:0]
-            @ ((metadata[63:21] xor AESE(Kenc, SIV @ 0x0000_0000)[63:21])
-            @ metadata[20:0];
+M[0][127:0] = N[63:0] @ metadata[63:0];
 M[1][127:0] = SIV[95:0] @ N[95:64];
 foreach(i from 0 to num_blocks(P)-1) {
-     M[i+2][127:0] = (block i of P) xor AESE(Kenc, SIV @ (binary(i+1)[31:0]));
+     M[i+2][127:0] = (block i of P) xor AESE(Kenc, SIV @ (binary(i)[31:0]));
 }
 ----
 
@@ -163,7 +168,6 @@ Since the derivation functions are quite expensive, the ACE implementation is al
 
 // Notation: xor, {or}, {and}, and {lshift} denote XOR, OR, AND, and left shift, respectively.
 // (Recall that by `x` @ `y` we indicate the concatenation of `x` and `y`, where the bits of `x` become the most significant part of the concatenated value, and the bits of `y` its least significant part.)
-
 // Note that we do not encrypt public metadata bits but we encrypt the private metadata bits.
 
 Note: In this simplification of AES-GCM-SIV there is no need to add the lengths of metadata and keys+internal state to the hash because these lengths are implied already by the clear bits of the metadata itself — which are included in the computation of the authentication tag.

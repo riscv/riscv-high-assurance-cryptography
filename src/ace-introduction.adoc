@@ -16,13 +16,12 @@ storage encryption,
 //any cryptographic operations for confidential VMs/Enclaves/Realms/TEE,
 Secure Boot and/or attestation in bootloaders, and in general any application where cryptographic operations are required and it is desirable to offer a high level of protection to keys and intermediate values.
 
-ACE is architected as an _attached_ unit, that is, it is viewed like a coprocessor with a dedicated, low-latency interface to the CPU core.
-In particular, interrupts for the purpose of context switching need not interrupt cryptographic operations being performed by the ACE implementations, and the CPU pipeline may be stalled only when the parent process is saving the ACE state.
-Page faults or other memory-subsystem related interrupts however may require restart or resumption of operations.
+ACE is architected to behave like an _attached_ unit, that is, like a coprocessor with a dedicated, low-latency interface to the CPU core.
+In particular, interrupts need not stop cryptographic operations being performed by the ACE implementations, and the implementation may decide that the CPU pipeline may be stalled only when the mode into which the hart is being trapped needs to save the ACE state.
+Page faults or other memory-subsystem related interrupts however may require restart or resumption of certain operations.
 
 This model is analogous to streaming accelerators in other architectures.
-An ACE implementation may be shared by multiple harts, each maintaining its own architectural state, and can operate concurrently with CPU cores, including in-order cores.
-Implementations are not required to be attached: they may also be integrated directly into a CPU core.
+An ACE implementation may be shared by multiple harts, each maintaining its own architectural state, and can operate concurrently with CPU cores, including in-order cores.  This does not prevent integrated implementations: we specify only the behavior of the extension, not its implementation details.
 
 [[ACE-introduction-features]]
 === Features
@@ -85,8 +84,8 @@ Certain features are intentionally not supported by ACE:
 * ACE does not provide debugging support; the internal representation of a Cryptographic Context remains concealed even when debug features are active.
 * ACE does not support the processing of variable-length ciphertext or plaintext inputs.
 * ACE does not provide a complete secure key management and provisioning system. Instead, it offers architectural building blocks that can be used to implement such systems efficiently. Key management can be delegated to applets within a TEE or secure VM, which may be owned by different parties. These applets can implement complex key management software. The architecture enables trusted entities to establish and deliver opaque keys to less-trusted software domains. ACE does not support external schemes for directly provisioning keys into a key store.
-* ACE, in its current version, does not provide a key revocation mechanism. This is a complex feature requiring additional infrastructure and coordination, for a relatively rare event. +
-The current architecture partially supports key revocation by binding keys to a _Locale_ that can be invalidated by a revocation message. If the derived CTK for a key is invalidated, any process using it must re‑acquire the key from the provisioning entity; if the key has been revoked within that entity, re‑acquisition will fail. Note that keys already loaded into CCs can still be exported, as ACE does not define a mechanism to revoke keys once they reside in a CC.  We envision that a future version of ACE may allow implementations to assign an optional 64‑ or 128‑bit identifier to each key and issue a system‑wide broadcast instructing all ACE units to erase CCs whose identifier matches a revoked key.
+* ACE, in its current version, does not provide a key revocation mechanism. This is a complex feature requiring additional infrastructure and coordination, for a relatively rare event.
+// The current architecture partially supports key revocation by binding keys to a _Locale_ that can be invalidated by a revocation message. If the derived CTK for a key is invalidated, any process using it must re‑acquire the key from the provisioning entity; if the key has been revoked within that entity, re‑acquisition will fail. Note that keys already loaded into CCs can still be exported, as ACE does not define a mechanism to revoke keys once they reside in a CC.  We envision that a future version of ACE may allow implementations to assign an optional 64‑ or 128‑bit identifier to each key and issue a system‑wide broadcast instructing all ACE units to erase CCs whose identifier matches a revoked key.
 * ACE cannot fully prevent misuse by compromised processes. If a process is compromised, the attacker obtains access to the CCs and can perform cryptographic operations — even if they do not elicit the key. Therefore, ACE complements existing security measures such as SW vulnerability exploitation countermeasures and process isolation (including TEE-like inverse sandboxing).
 * Other risks remain. For instance, in counter-mode encryption, the same method enables both encryption and decryption, hence a malicious process may be able to misuse these operations.
 
@@ -167,7 +166,8 @@ For migration, the use of a public key key-encapsulation mechanism is recommende
 
 ==== Remark On ACE Instructions that Access Memory
 
-The instructions `ace.init`, `ace.export`, and `ace.import` perform direct memory accesses. This does not violate the Risc-V load/store architecture principles, as ACE is architected as an _attached_ unit that works together with the CPU core rather than being an integral part of the latter.  Consequently, it _may_ maintain its own architectural state and have its own load-store unit.  Also, these instructions can be considered specialized load/store operations that internally enforce the confidentiality and integrity of key material.
+The instructions `ace.init`, `ace.export`, and `ace.import` perform direct memory accesses. This does not violate the Risc-V load/store architecture principles, as ACE is architected as an _attached_ unit that works together with the CPU core rather than being an integral part of the latter.  Consequently, it _may_ maintain its own architectural state and have its own load-store unit.
+// Also, these instructions can be considered specialized load/store operations that internally enforce the confidentiality and integrity of key material.
 
 Although it is feasible to decompose these instructions into multiple, finer-grained operations, even reducing all configuration, import, and export to block-wise steps, doing so is undesirable.  A split approach would still require the implementation to retain equivalent internal state to support all operations involved in `ace.init`, `ace.export`, and `ace.import`, while constraining implementation flexibility, and impose significant complexity on software using the extension.
 
