@@ -1,15 +1,12 @@
 [[Introduction]]
 == Introduction
 
-The ratification plan can be found https://riscv.atlassian.net/wiki/spaces/HACX/pages/484966423/High+Assurance+Crypto+Ratification+Plan[here].
-
-[[ACE-introduction-objectives]]
-=== Objectives
+(The ratification plan can be found https://riscv.atlassian.net/wiki/spaces/HACX/pages/484966423/High+Assurance+Crypto+Ratification+Plan[here].)
 
 ACE, the Atomic Cryptographic Extension, is an instruction set extension designed to provide high assurance cryptographic operations.
-The main features are the concealment of key values, restrictions on their usage, and support for hardened implementations, with a single, streamlined instruction set.
+The main features are the concealment of the values of keys and other secrets, restrictions on their usage, and support for multiple cryptographic algorithms as well as hardened implementations.
 
-The development of ACE is prompted by the needs of key use cases such as:
+The design of ACE is prompted by the needs of key use cases such as:
 content protection,
 local decryption of LLMs,
 key management,
@@ -20,7 +17,10 @@ storage encryption,
 Secure Boot and/or attestation in bootloaders,
 and in general any application where cryptographic operations are required and it is desirable to offer a high level of protection to keys and intermediate values.
 
-ACE is architected as an attached unit, that is, it is viewed like a coprocessor with a dedicated, low-latency interface to the CPU core.
+ACE is architected as an _attached_ unit, that is, it is viewed like a coprocessor with a dedicated, low-latency interface to the CPU core.
+In particular, interrupts for the purpose of context switching need not interrupt cryptographic operations being performed by the ACE implementations, and the CPU pipeline may be stalled only when the parent process is saving the ACE state.
+Page faults or other memory-subsystem related interrupts however may require restart or resumption of operations.
+
 This model is analogous to streaming accelerators in other architectures.
 An ACE implementation may be shared by multiple harts, each maintaining its own architectural state, and can operate concurrently with CPU cores, including in-order cores.
 Implementations are not required to be attached: they may also be integrated directly into a CPU core.
@@ -30,22 +30,18 @@ Implementations are not required to be attached: they may also be integrated dir
 
 . ACE is an ISE for full-round, block-wise cryptographic operations without exposing the key.
 . ACE supports multiple different cryptographic primitives and modes, including SCA resistant versions.
- Supported algorithms are discoverable. There is a mandatory list of algorithms, optional architected ones, and support for custom algorithms.
-. Keys are stored in architectural states called "Cryptographic Contexts" (CC) together with metadata that restricts the usage of the key.
-. ACE instructions use CCs instead of directly accessing the keys.
+  There is a mandatory list of algorithms, optional architected ones, and support for custom algorithms.
+. Keys are stored in architectural states called _Cryptographic Contexts_ (CC) together with metadata that restricts the usage of the key.
+ * There is no mechanism to extract the original value of a key from a CC: CCs are not read/write in the same sense as registers are.
+   We call a key written into a CC _opaque_.
+ * Besides software, additional sources for configuring CCs include a System Key Table, and external blocks for dynamic key generation.
+. ACE instructions use CCs instead of directly using the key values.
 . ACE supports multiple CCs active at the same time.
-. There is no mechanism to extract the original value of a key from a CC: CCs are not read/write in the same sense as registers are.
-. When software writes a key into a CC, the key becomes _opaque_: its cleartext value cannot be retrieved from the CC.
-  If all cleartext copies of the key are erased, then that key value is effectively lost.
-. Besides software, additional optional sources for keys are:
-.. A System Specific Key Table (SSK Table);
-.. External blocks for dynamic key generation.
-. ACE enables trusted software or hardware entities to provision opaque keys to less-trusted environments, enabling the latter to perform cryptographic operations without exposing the key value.  Once provisioned, the opaque key can be reused without further interaction with the trusted entity.
+. ACE enables trusted entities to provision opaque keys to less-trusted environments, enabling the latter to perform cryptographic operations without exposing the key value.  Once provisioned, the opaque key can be reused without further interaction with the trusted entity.
 . ACE can bind an opaque key to a _Locale_ ([.red]#*TBD:* better name?#), defined as a device, a class of devices, a specific hardware or software configuration, a single boot cycle or even, possibly, a specific time period.
 . ACE can restrict which process can use a given opaque key. In particular:
-.. ACE supports separation of keys belonging to different domains.
-.. ACE provides support for key preservation upon process or VM migration.
-   Note that by migration here we only understand the transfer of processes and VMs from a device to another, not a migration between harts in the same device.
+ * ACE supports separation of keys belonging to different domains.
+ * ACE supports key preservation upon process or VM migration from a device to another.
 . ACE scales from from embedded cores to large application/server cores, with same ISA and ABI: certain features may be omitted in smaller cores without requiring changes in User SW.
 
 // The latter is needed for cloud and edge deployment. ACE provides the minimum necessary support to enable secure key migration between machines.
@@ -64,9 +60,9 @@ ACE is necessary because current solutions are inadequate:
 * Round-based ISAs need to explicitly add the key between the rounds.
 * Current ISAs do not provide trustworthy mechanisms for cryptographic operations. Trust is provided only in external IP blocks or by relying on costly context switch to TEEs (TZ, etc) for each cryptographic operation.
 * External blocks with memory mapped or coprocessor interfaces incur heavy overheads and need substantial support in system stack.
-* Key Management (resp. KM building blocks) is not provided — except in external IP blocks.
+* Key Management (resp. KM building blocks) incur the same overheads.
 * In modes such as AES-GCM-SIV, encryption and authentication derived keys should also not leak, hence supporting primitives only is not always sufficient.
-* No current standardized or architected solution offers fast execution, key management, and trust.
+* No current standardized or architected solution offers fast execution, efficient key management, and trust.
 
 [[ACE-introduction-more-features]]
 === Further Features
@@ -74,18 +70,13 @@ ACE is necessary because current solutions are inadequate:
 To be practical and address the limitations of existing solutions, ACE must provide features that reduce the number of expensive environment switches and provide efficient support for software-managed context switching. Consequently, while the value of a key cannot be read from a Cryptographic Context (CC), a secure mechanism is required to export a CC's contents—preserving the confidentiality and integrity of both the key and its associated metadata.
 
 //[start=10]
-. ACE allows software to securely export the contents of a CC to memory by encrypting and authenticating it, as a "Sealed Cryptographic Context" (SCC).
-  A SCC can then be authenticated, decrypted, and re-imported into a CC.
-.. Any metadata that does not need to be encrypted is kept in the clear.
-.. Since we have public and private metadata, and keys (obviously private), we need to use an AEAD mode of operation for the export/import operations (AES-GCM-SIV as per RFC 8452).
-.. Since an AEAD mode of operation is needed, ACE exposes (a variant of) it to user. For this reason, we support modes in general in ACE.
-. A Cryptographic Context Transport Key (CTK) is required for import and export operations. Optionally, ACE permits Machine mode to configure the CTK. When configurable, the CTK is held in 256 bits of CSRs that are writable only by Machine. This configurability enables domain separation: if Machine assigns distinct CTKs to different domains, a domain cannot authenticate or decrypt a Sealed Cryptographic Context (SCC) created for another domain.
+. ACE employs authenticated encryption to export the contents of a CC to external, untrusted memory as a _Sealed Cryptographic Context_ (SCC).
+  A SCC can then be lated authenticated, decrypted, and re-imported into a CC. Any metadata that does not need to be encrypted is kept in the clear.
+. A Cryptographic Context Transport Key (CTK) is required for such import and export operations. Optionally, ACE permits Machine Mode to configure the CTK. When configurable, the CTK is held in 256 bits of CSRs that are writable only by Machine. This configurability enables domain separation: if Machine assigns distinct CTKs to different domains, a domain cannot authenticate or decrypt a Sealed Cryptographic Context (SCC) created for another domain.
 . If the CTK is not configurable, it may be either a fixed value or randomly generated at boot.
 . ACE provides a key-derivation mechanism that computes a Derived CTK from the current CTK and a secret salt tied to a specific _Locale_. Changing this _Locale-Specific Secret_ (LSS) also changes the corresponding Derived CTK, automatically invalidating any Sealed Cryptographic Contexts (SCCs) that were exported with the previous LSS value.
 
-We apply the term “*opaque keys*” to both keys in CCs and SCCs. Opaque keys are cryptographic keys that can be used without revealing their value.
-“Opaque” means the actual key value cannot be extracted from a CC or SCC.
-The environment that generated the key will of course know its value.
+The term _opaque_ applies also to a key in a SCC. Furthermore, when we talk of an _opaque key_ we always implicitly include its complete metadata, including both the metadata that is included in encrypted form in a SCC, i.e., the _public_ metadata, and the metadata that is encrypted i.e., the _private_ metadata.
 
 [[ACE-introduction-non-features]]
 === Non-Features
@@ -94,7 +85,7 @@ Certain features are intentionally not supported by ACE:
 
 * ACE does not provide debugging support; the internal representation of a Cryptographic Context remains concealed even when debug features are active.
 * ACE does not support the processing of variable-length ciphertext or plaintext inputs.
-* ACE does not provide a complete secure key management and provisioning system. Instead, it offers architectural building blocks that can be used to implement such systems. Key management can be delegated to applets within a TEE or secure VM, which may be owned by different parties. These applets can implement complex key management software. The architecture enables trusted entities to establish and deliver opaque keys to less-trusted software domains. ACE does not support external schemes for directly provisioning keys into a key store.
+* ACE does not provide a complete secure key management and provisioning system. Instead, it offers architectural building blocks that can be used to implement such systems efficiently. Key management can be delegated to applets within a TEE or secure VM, which may be owned by different parties. These applets can implement complex key management software. The architecture enables trusted entities to establish and deliver opaque keys to less-trusted software domains. ACE does not support external schemes for directly provisioning keys into a key store.
 * ACE, in its current version, does not provide a key revocation mechanism. This is a complex feature requiring additional infrastructure and coordination, for a relatively rare event. +
 The current architecture partially supports key revocation by binding keys to a _Locale_ that can be invalidated by a revocation message. If the derived CTK for a key is invalidated, any process using it must re‑acquire the key from the provisioning entity; if the key has been revoked within that entity, re‑acquisition will fail. Note that keys already loaded into CCs can still be exported, as ACE does not define a mechanism to revoke keys once they reside in a CC.  We envision that a future version of ACE may allow implementations to assign an optional 64‑ or 128‑bit identifier to each key and issue a system‑wide broadcast instructing all ACE units to erase CCs whose identifier matches a revoked key.
 * ACE cannot fully prevent misuse by compromised processes. If a process is compromised, the attacker obtains access to the CCs and can perform cryptographic operations — even if they do not elicit the key. Therefore, ACE complements existing security measures such as SW vulnerability exploitation countermeasures and process isolation (including TEE-like inverse sandboxing).
@@ -105,13 +96,14 @@ The current architecture partially supports key revocation by binding keys to a 
 
 The most important instructions provided by ACE are the following:
 
-. `ace.init`,  to load the clear value of a key (and some metadata) in a Cryptographic Context (CC);
-. `ace.clear`, to erase/invalidate the content of a CC;
-. `ace.export`, to encrypt and authenticate a CC and store it to memory as a SCC;
-. `ace.import`, to authenticate, decrypt a SCC from memory and import it into a CC;
-. `ace.exec`, to perform a cryptographic operation on a block (e.g., 128 bits) of the input;
-. `ace.stage/ace,dir`, to configure the CC for encryption/decryption or move from one stage of an algorithm to another; and
-//. `ace.error`, to report an error condition, which can be implemented as a read operation from a CSR.
+* `ace.init`,  to load the clear value of a key (and some metadata) in a Cryptographic Context (CC);
+* `ace.clear`, to erase/invalidate the content of a CC;
+* `ace.export`, to encrypt and authenticate a CC and store it to memory as a SCC;
+* `ace.import`, to authenticate, decrypt a SCC from memory and import it into a CC;
+* `ace.exec`, to perform a cryptographic operation on a block (e.g., 128 bits) of the input;
+* `ace.stage/ace,dir`, to configure the CC for encryption/decryption or move from one stage of an algorithm to another; and
+* a register for error reporting.
+//* `ace.error`, to report an error condition, which can be implemented as a read operation from a CSR.
 
 Other instructions are provided and these will be discussed in detail later.
 
@@ -124,19 +116,26 @@ The inputs and outputs of the ACE operations are:
 CCs are referred by a 5-bit immediate value or by the value of a GPR. +
 They are denoted by `Cn`, with `n` in [0..31].
 
-Regarding the access control policies in a CC's metadata, we must distinguish between initial (i) configuration, (ii) usage, and (iii) import/export of a CC.
+Regarding the access control policies in a CC's metadata, we must distinguish how they apply to (i) initial configuration, (ii) usage, and (iii) import/export of opaque keys.
 These three types of operations cannot always obey the same policies — otherwise there would be opportunities for malicious adversaries to perform Denial-of-Service attacks on the ACE resources.
 As a general rule, the access control policies only limit `ace.exec` and `ace.stage` operations.
 This also means that it is always possible to clear, export a CC, and configure a CC or import a SCC into a CC, even if the latter two operations
 directly overwrite an already configured CC, which implies that the previous state is discarded (TBD: we are discussing whether optional limitation to import and export can be added as well and how).
 
-[[ace-remark-vector-registers]]
+[#ace-remark-vector-registers]
 *Remark {counter:remark}*:: [.red]#_Alternatives can be discussed:
 We can envision a version of ACE that uses pairs of 64-bit GPRs or quartets of 32-bit GPRs in place of 128-bit vectors.
 These could be discovered and selected using configuration bits.
 We can also use `ace.input` and `ace.output` instructions that load an input from memory, resp., store output to memory -- which are currently optional and ideally reserved for future algorithms that use long inputs, such as certain post-quantum public-key algorithms.
 Since no other change would be needed in the entire architecture, we suspend further discussion on this until later.
 For 256-bit wide ciphers, we may need to group more GPRs, whereas the vector unit allows easier resizing or spilling into the next register._#
+
+See also <<ace-remark-2>>.
+
+[#ace-remark-2]
+Remark {counter:remark}:: _Other Remark._
+
+
 
 [[ACE-introduction-differences-CCs-registers]]
 ==== Differences between Cryptographic Contexts and Architectural Registers
@@ -162,14 +161,12 @@ The first and third formats are architected, whereas the second one is `impdef`,
 
 This also means that the maximal size of the data inside a CC is `impdef` as well, and this size in general differs from the size of the initial information  required to configure a CC as well as from the size of a SCC.
 
-// One may observe that, on a single implementation, as long as export and import use the same formats, there would be no need requirement for the SCC format to be standardized?
-There are two reasons for architecting the configuration and SCC formats.
-The first one is interoperability: even on SoC by a single manufacturer there may be IP blocks defined by various designers.
-We want to make sure that an IP block can use the same SCCs as a different IP block.
-// Defining this format will simplify implementation.
-The second reason is that moving VMs from a machine to another is a quite common process, not only in the cloud, even in the consumer space.
-Customers therefore will not only create a VM on a client machine and upload it to the cloud, or locally generate keys that are then provisioned to a cloud VM, but the often carry a VM from an old client device to a new one, for instance a laptop with an intel CPU to an AMD laptop.
-This implies not only that a single, architected format is desirable, but also that a mechanism for transferring a CTK from a device to another is necessary.
+Architecting the configuration and SCC formats serves two purposes: ensuring interoperability and enabling VM migration. First, even within a single manufacturer's SoC, IP blocks from different designers may share SCCs. Second, VM migration is common across both cloud and consumer environments—for example, moving a VM from an laptop with a CPU from one manufacturer to a laptop with a CPU from a different manufacturer.
+Consequently, a single architected format is necessary.
+Mechanisms for guaranteeing that a CTK can securely survive hardware reboot and
+transferring CTKs between devices are also needed, but are out of scope of the ACE architecture:
+For migration, the use of a public key key-encapsulation mechanism is recommended.
+
 
 ==== Remark On ACE Instructions that Access Memory
 
@@ -217,12 +214,8 @@ The list of other architected algorithms is TBD, but it should include at least
 * SHA-3, SHA-3-HMAC.
 * SM3 Secure Hash.
 
-The list can be extended by the architecture owner.
-
 Algorithms are encoded in a 8 bit field.
-
-Algorithm numbers 0-127 are architecture-defined.
-
+Algorithm numbers 0-127 are architecture-defined and the list of such encodings is maintained by RVI.
 Algorithm numbers 128-255 are reserved for custom algorithms.
 
 [[ACE-alternative-registers]]

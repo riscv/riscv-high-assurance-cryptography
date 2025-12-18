@@ -1,9 +1,10 @@
 [[Cryptographic-Contexts]]
 === Cryptographic Contexts
 
-A CC contains two fields: the *metadata* and the *content*.
-The metadata field is (mostly) algorithm independent and architected.
-The content field is algorithm-specific and contains key material and possibly other algorithm-specific data.
+A CC contains two types of information: the *metadata* and the *content*:
+
+* The metadata is (mostly) algorithm independent and architected.
+* The content is algorithm-specific and contains key material and possibly other algorithm-specific data.
 
 [[Metadata]]
 === Metadata Field Format
@@ -17,26 +18,26 @@ When exporting a CC, the first 64 bits of the input buffer contain the partially
 The entire metadata field is included in the computation of the authentication tag.
 The details are described in <<ACE-SCC-formats>>.
 
-[[ACE-metadata-standard]]
+[#ACE-metadata-standard]
 .Metadata: 64-bit version
 [width="100%",cols=">9%,^7%,17%,59%,^8%",options="header"]
 |===
-|   Field | Width | Name                   | Description | Type
-|     [0] |   1  | Format                 | 0 for this version of the metadata format. Future versions of the metadata format will have a 1 in this position and may also be longer than 64 bits. | Public
+|   Field | Width | Name                  | Description | Type
+|     [0] |   1  | Format                 | 0 for the current metadata format. Future format swill have a 1 in this position and may also be longer than 64 bits. | Public
 |   [8:1] |   8  | Algorithm              | Algorithm (such as primitive or mode). | Public
-|  [10:9] |   2  | Side Channel Protected | Level of Side Channel Protection provided. +
+|  [10:9] |   2  | SC_Protection          | Level of Side Channel Protection provided. +
 The field's encoding is described in <<ACE-SC-protection-levels>>. | Public
-| [12:11] |   2  | Direction Policy       | Use for encryption/decryption/both (only for enc/dec primitives or modes). | Public
-| [14:13] |   2  | Key Type               | By explicit value / Immutable (index) / Internally generated. | Public
+| [12:11] |   2  | Direction_Policy       | Determines whether the CC may be used for encryption (bit 11 set), decryption (bit 12 set), or both (bits 11 and 12 set). Valid only for encryption/decryption primitives or modes, and ignored, for instance, for hash functions. | Public
+| [14:13] |   2  | Key_Type               | By explicit value / Immutable (index) / Internally generated. | Public
 | [18:15] |   4  | Locale                 | Field which is either -1 or an index into the Locale Secrets Table. | Public
-| [20:19] |   2  | Complete               | Whether the CC is complete (00) or interrupted while being configured (01), imported (10) or exported (11). Necessary to know whether to restart operations. | Public
-| [24:21] |   4  | Stage/Direction        | Internal current state of the state machine of the algorithm. Must be zero on configuration. Algorithm defined. | Private
-| [28:25] |   4  | AC Policy 1            | Forbid USE of this CC in User, Supervisor or Virtual Supervisor, Hypervisor, resp., Machine Mode if bit 25, 26, 27, resp. 28, is set. | Private
-| [30:29] |   2  | AC Policy 2            | If bit 29, resp., 30, is set, then restrict USE by `ASID`, resp., `VMID`. +
+| [20:19] |   2  | Complete               | Defined in <<ACE-CC-complete>>. Used to determine whether operations must be restarted. | Public
+| [24:21] |   4  | Stage (also Directi    | Internal current state of the state machine of the algorithm. Must be zero on configuration. Algorithm defined. | Private
+| [28:25] |   4  | AC_Policy_1            | Forbid USE of this CC in User, Supervisor or Virtual Supervisor, Hypervisor, resp., Machine Mode if bit 25, 26, 27, resp. 28, is set. | Private
+| [30:29] |   2  | AC_Policy_2            | If bit 29, resp., 30, is set, then restrict USE by `ASID`, resp., `VMID`. +
 Restriction by `ASID` ignored if in S Mode or higher. | Private
 |    [31] |   1  | Reserved               | Undefined.  | Private
-| [47:32] |  16  | AC Policy 3            | Zero if bit 32 unset, else `ASID` to enforce.  | Private
-| [63:48] |  16  | AC Policy 4            | Zero if bit 33 unset, else `VMID` to enforce. Only 14 bits used, two most significant bits currently zero. | Private
+| [47:32] |  16  | AC_Policy_3            | Zero if bit 32 unset, else `ASID` to enforce.  | Private
+| [63:48] |  16  | AC_Policy_4            | Zero if bit 33 unset, else `VMID` to enforce. Only 14 bits used, two most significant bits currently zero. | Private
 |===
 
 [[ACE-SC-protection-levels]]
@@ -47,26 +48,53 @@ Restriction by `ASID` ignored if in S Mode or higher. | Private
 |   0   | No protection.
 |   1   | Data independent timing, first-order threshold implementation.
 |   2   | Data independent timing, first-order threshold, fault tolerant implementation.
-|   3   | Invalid value.
+|   3   | Custom, algorithm dependent.
 |===
 
-Custom algorithms may offer stronger side channel protection guarantees than those specified in the above encoding.
+Custom algorithms may offer stronger side channel protection guarantees than those specified in the encoding values 0 to 2.
+In such a case, the value of the "SC_Protection" field must be set to 3.
+
+[[ACE-CC-complete]]
+.Encoding of side-channel protection levels
+[float="center",align="center",width="76%",cols="^8%,<68%",options="header"]
+|===
+| Value | Description
+|   0   | No protection.
+|   1   | CC configuration was interrupted.
+|   2   | SCC import was interrupted.
+|   3   | SCC export was interrupted.
+|===
+
+Whether the CC is complete (00) or interrupted while being configured (01), imported (10) or exported (11). Necessary to know whether to restart operations.
+
+
 
 The Stage field accommodates modes of operation with a small number of states.
 For algorithms with more complex state machines, machine state information can be stored in a custom data section of the CC.
 
-The "AC Policy 4" field is 16-bits long for compatibility with architectures employing 16-bit `VMID` fields (for instance, in heterogeneous systems).
-While interoperability cannot be guaranteed when this policy is used, this ensures that the two top bits are not used for other purposes
+The "AC_Policy_4" field is 16-bits long for compatibility with architectures employing 16-bit `VMID` fields (for instance, in heterogeneous systems).
+While interoperability cannot be guaranteed when this policy is used, this ensures that the two top bits are not used for other purposes.
 
-Filtering use by Supervisor Domain or World ID is not supported.
-Reconfiguring the CTK is the recommended approach for such isolation requirements.
+Filtering use by Supervisor Domain or World ID is not supported, and not only because of lack of space in a 64-bit metadata block:
+Reconfiguring the CTK is a better approach for such isolation requirements, whereas isolation by `ASID` and `VMID` is a weaker security feature.
 
 === Formats of Configuration Inputs and Sealed Configuration Contexts
 
 [[ACE-Input-format]]
 ==== Configuration Input
 
-*TBD*
+The format of the input to `ace.init` is simple: the first 8 bytes must contain the 64-bit metadata block, followed by any key and additional information in a format specified by the algorithm. The total length of this input must be a multiple of 8 bytes.
+
+Formally, each algorithm must provide following functions:
+
+* `metadata_deserialize()`: Takes the clear or decrypted metadata block, and deserializes it for the internal representation.
+* `metadata_serialize()`: Serializes the metadata form the internal representation into a 64-bit block for export.
+* `initial_content_deserialize()`: Reads the information provided to `ace.init` that follows the metadata, and deserializes it for the internal representation.
+* `content_serialize()`: Serialize the content of the CC into a sequence of blocks to be encrypted for `ace.export`.
+* `content_deserialize()`: Takes a sequence of decrypted SCC blocks that follow the metadata, nonce and authentication tag, and deserializes it for the internal representation of the CC's content.
+
+See <<ACE-Algorithms>> for algorithm specific details.
+
 
 [[ACE-SCC-formats]]
 ==== Sealed Configuration Context
