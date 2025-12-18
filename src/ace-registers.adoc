@@ -18,7 +18,8 @@ ACE returns an error when insufficient memory prevents `ace.init` or `ace.import
 
 ==== ACE field in `misa`
 
-We define the `misa.ACE` field to reflect that the ACE has been implemented, as the `K` bit (bit number 10).
+We define the `misa.ACE` field to reflect that the ACE has been implemented, as the `L` bit (bit number 11).
+We suggest this bit because this extension goes _beyond_ the cryptographic extension, which will likely use the letter `K` (bit number 10).
 
 ==== ACES field in `*status`
 
@@ -46,9 +47,7 @@ The Disabled-Clean and Disabled-Clobbered states are set by the parent mode to o
 Changing the setting of ACES has no effect on the contents of the CCs.
 In particular, setting ACES=Disabled-Clean or Disabled-Clobbered does not destroy the state, nor does setting ACES=Enabled clear the contents.
 
-==== Trap address for feature enablement
-
-[.red]#*TBD* _We need a CSR to store the address of the trap handler for ACE enablement/an entry in the trap table._#
+[.red]#*TBD* _We need an entry in the trap vector table for ACE enablement when ACES=Disabled-Clobbered._#
 
 ==== `aceenable`
 
@@ -108,6 +107,21 @@ It is also possible to directly write to `aceccdirty` (this is useful to optimiz
 
 Implementations are required to track the dirtiness of any CC precisely and individually.
 This is different from the tracking of the dirtiness of the floating-point state, for instance.
+
+==== ccstart
+
+`ccstart` has a similar role in ACE than `vstart` in the V extension.
+
+Since `ace.init`, `ace.import`, `ace.export`, `ace.input`, and `ace.output` may take a long time, they can be interrupted mid-instruction by interrupts or memory exceptions.
+In this case implementations have the option to set `ccstart` to a non-zero value, which means when the vector instruction is started again it will not restart from the beginning, but it will be resumed.
+Since ACE makes no requirements about the width of the memory accesses performed, `ccstart` will not be an element index, but rather a long-word offset.
+In other words, the current instruction has been interrupted after reading or writing 4 times `ccstart` bytes or output or input.
+
+Like `vstart`, `ccstart` is a normal read/write CSR, but it is not intended to be written with arbitrary non-zero values by software; normally it is written by hardware on trap.
+Software can safely write 0 to it to completely restart operations, and it can also be saved/restored on context switches.
+Writing an arbitrary non-zero value may raise an illegal-instruction exception because hardware is not required to support all values.  If not, and a higher value of `ccstart` is written, authentication will fail upon import because some parts of the content are replaced by possibly arbitrary values. Or exports will generate a non-authenticable output.  Only `ace.init` may still likely create a valid context, but the values of the key were already in the clear in the same domain, so this does not augment the attack surface.
+
+Only some specific instructions can have a non-zero `ccstart`, and the other ACE instructions will ignore this value if set by software.
 
 ==== Reuse ASID and VMID?
 
