@@ -1,110 +1,139 @@
 === Instructions
 
-In what follows, the notation `Cn|Xn` refers to a CC directly (i.e., the integer `n` is a 5-bit field in the instruction encoding) or a GPR containing a number from 0 to 31 to indirectly refer to a CC.  In general, six bits are needed to address a CC, to take into account the possibility of indirect addressing.
-
-[comment]
---
-[#insns-add_uw,reftext=Add unsigned word]
-==== Instruction Template (from add.uw)
-
-Synopsis::
-Add unsigned word
-
-Mnemonic::
-add.uw _rd_, _rs1_, _rs2_
-
-Pseudoinstructions::
-zext.w _rd_, _rs1_ {rightarrow} add.uw _rd_, _rs1_, zero
-
-Encoding::
-[wavedrom, , svg]
-....
-{reg:[
-    { bits:  7, name: 0x3b, attr: ['OP-32'] },
-    { bits:  5, name: 'rd' },
-    { bits:  3, name: 0x0, attr: ['ADD.UW'] },
-    { bits:  5, name: 'rs1' },
-    { bits:  5, name: 'rs2' },
-    { bits:  7, name: 0x04, attr: ['ADD.UW'] },
-]}
-....
-
-Description::
-This instruction performs an XLEN-wide addition between _rs2_ and the zero-extended least-significant word of _rs1_.
-
-//Operation::
-//[source,sail]
-//--
-//let base = X(rs2);
-//let index = EXTZ(X(rs1)[31..0]);
-//
-//X(rd) = base + index;
-//--
-
-Included in::
-[%header,cols="4,2,2"]
-|===
-|Extension
-|Minimum version
-|Lifecycle state
-
-|Zba (<<zba>>)
-|0.93
-|Ratified
-|===
---
+In what follows, the notation `Cn|Xn` refers to a CC directly (i.e., the
+integer `n` is a 5-bit field in the instruction encoding) or a GPR containing a
+number from 0 to 31 to indirectly refer to a CC.  In general, six bits are
+needed to address a CC, to take into account the possibility of indirect
+addressing.
 
 ==== ace.enable/ace.disable
 
 `ace.enable` +
 `ace.disable`
 
+Description::
+Enable/Disable the feature in the current process domain and (*TBD*) determine
+how many contexts we need (can also be all/none) This is a pseudo-operation for
+a write to a WARL CSR.
 
-Enable/Disable the feature in the current process domain and (*TBD*) determine how many contexts we need (can also be all/none)
-This is a pseudo-operation for a write to a WARL CSR.
-
-This instruction must be issued before using any ACE operation.
-It enables the CCs and the instructions and also sets a bit in a CSR signaling that the feature is used.
-When a process domain that has enabled ACE is preempted, the parent process inherits the state.
-otherwise it would not be able to export and re-import the CCs.
-// The flag `flag` determines whether the ISE is used in blocking or non-blocking mode.
+This instruction must be issued before using any ACE operation. It enables the
+CCs and the instructions and also sets a bit in a CSR signaling that the
+feature is used. When a process domain that has enabled ACE is preempted, the
+parent process inherits the state. otherwise it would not be able to export and
+re-import the CCs.
+// The flag `flag` determines whether the ISE is used in blocking or
+// non-blocking mode.
 The operation is implemented as a CSRW.
 
 When disabling:
 
-* Care is necessary in the design to allow a locking disablement without erasing the registers when a parent gives control back to a child process that does not use the feature.
+* Care is necessary in the design to allow a locking disablement without
+  erasing the registers when a parent gives control back to a child process
+  that does not use the feature.
 // * In non-blocking mode, if the instruction is issued before all ACE operations are retired, then all operations in the ACE unit issued by the current hart are aborted.
 
-==== ace.init/ace.clear
+==== ace.init
 
-`ace.init Cd|Xd, [Xs]` +
-`ace.clear Cd|Xd`
+`ace.init Cd|Xd, [Xs]`
 
+Encoding::
+[wavedrom, , svg]
+....
+{reg:[
+    { bits:  7, name: 0x27, attr: ['custom-1'] },
+    { bits:  5, name: 'Cd' },
+    { bits:  3, name: 0x4, attr: ['ACE.Init'] },
+    { bits:  5, name: 'rs1' },
+    { bits: 12, name: 0x0 },
+]}
+....
+
+
+Description::
 `Cd` is the source CC to be configured (encoded as a 5-bit immed). +
 `Xd` alternatively, is a GPR containing a number from 0 to 31 to address the context to be configured. +
 `Xs` is GPR with the pointer to the region of memory containing the metadata and the key material.
 
-Configures a CC with metadata and key, or using an index in the Immutable System Key Table.
+Configures a CC with metadata and key, or using an index in the Immutable
+System Key Table.
 
 // NB: Since we assume CCs are NOT renamed, we CAN use a GPR and have “dynamic addressing”.
 // `Xs` is a
 // Executing `ace.init` will always clear the destination CC, even in case of error while reading the metadata and key material.
 // Check bit   n  of the CC_USED CSR, i.e. CC_USED[n] to verify whether the operation has had success.
 
+==== ace.clear
+
+`ace.clear Cd|Xd`
+
+Encoding::
+[wavedrom, , svg]
+....
+{reg:[
+    { bits:  7, name: 0x5b, attr: ['custom-2'] },
+    { bits:  5, name: 'Cd' },
+    { bits:  3, name: 0x7, attr: ['ACE.Clear'] },
+    { bits:  5, name: 0x0 },
+    { bits:  5, name: 0x0 },
+    { bits:  7, name: 0x0 },
+]}
+....
+
+Description::
+`Cd` is the source CC to be configured (encoded as a 5-bit immed). +
+`Xd` alternatively, is a GPR containing a number from 0 to 31 to address the context to be configured. +
+`Xs` is GPR with the pointer to the region of memory containing the metadata and the key material.
+
+Configures a CC with metadata and key, or using an index in the Immutable
+System Key Table.
+
 ==== ace.export
 
 `ace.export [Xd], Cs|Xs`
 
-`Cs` is the source CC to be exported (encoded as a 5-bit immed).
-Alternatively, the number of context from which to export the CC is stored in the GPR `Xs` as a number from 0 to 31.
-`Xd` is the GPR base address of the buffer where to store the SCC.
+Encoding Context::
+[wavedrom, , svg]
+....
+{reg:[
+    { bits:  7, name: 0x0b, attr: ['custom-0'] },
+    { bits:  5, name: 'imm' },
+    { bits:  3, name: 0x0, attr: ['ACE.Export'] },
+    { bits:  5, name: 'Xd' },
+    { bits:  5, name: 'Cs' },
+    { bits:  7, name: 'imm' },
+]}
+....
 
-Exports the contents of CC `Cs` to memory, starting at address `Xd`.
-Depending on the type and policies of the key — which are stored in the metadata of `Cs`, the CCWK can be either the CTK CSR or a Locale specific CTK derived from the CTK.
+Encoding Scalar::
+[wavedrom, , svg]
+....
+{reg:[
+    { bits:  7, name: 0x0b, attr: ['custom-0'] },
+    { bits:  5, name: 'imm' },
+    { bits:  3, name: 0x0, attr: ['ACE.Export'] },
+    { bits:  5, name: 'Xd' },
+    { bits:  5, name: 'Xs' },
+    { bits:  7, name: 'imm' },
+]}
+....
 
-The instruction (resp. `ace.import`) writes (reads) the entire internal state of a CC or information needed to reconstruct an equivalent state — the instruction shall be resumable in case of interrupts.
-This is similar to entire-vector-register store instructions, that appear to other harts as sequences of individual stores.
-If the context `Cs` is clear or does not exist in the µarch, the operation will report an error.
+Description::
+`Cs` is the source CC to be exported (encoded as a 5-bit immed). Alternatively,
+the number of context from which to export the CC is stored in the GPR `Xs` as
+a number from 0 to 31. `Xd` is the GPR base address of the buffer where to
+store the SCC.
+
+Exports the contents of CC `Cs` to memory, starting at address `Xd`. Depending
+on the type and policies of the key — which are stored in the metadata of `Cs`,
+the CCWK can be either the CTK CSR or a Locale specific CTK derived from the
+CTK.
+
+The instruction (resp. `ace.import`) writes (reads) the entire internal state
+of a CC or information needed to reconstruct an equivalent state — the
+instruction shall be resumable in case of interrupts. This is similar to
+entire-vector-register store instructions, that appear to other harts as
+sequences of individual stores. If the context `Cs` is clear or does not exist
+in the µarch, the operation will report an error.
 
 //(The SW should have the right information, so this should never happen).
 
@@ -112,35 +141,157 @@ If the context `Cs` is clear or does not exist in the µarch, the operation will
 
 `ace.import Cd|Xd, [Xn], S`
 
-`Cd` is the destination CC to be imported, as an immed (5-bit).
-Alternatively, the number of context into which import the SCC is stored in the GPR `Xd` as a number from 0 to 31.
-`Xn` is the GPR containing the base address of the buffer with the SCC.
+Encoding Context::
+[wavedrom, , svg]
+....
+{reg:[
+    { bits:  7, name: 0x27, attr: ['custom-1'] },
+    { bits:  5, name: 'Cd' },
+    { bits:  3, name: '{2\'b0, S}', attr: ['ACE.Import'] },
+    { bits:  5, name: 'Xn' },
+    { bits: 12, name: 'imm' },
+]}
+....
 
-S = 0,1  true (1) if the key is in a system defined format and not the format defined by the architecture.
 
-This means that system HW dynamically generated keys can be imported but not exported in the same form — if exported they must be in the architectural format.
-If the value cannot be exported to other devices or to other Locale stages of the same device, the internal logic must bind them to a specific Locale derived CTK).
-The instruction imports them like SW keys, but only internally, and sets the right policies.
+Encoding Scalar::
+[wavedrom, , svg]
+....
+{reg:[
+    { bits:  7, name: 0x27, attr: ['custom-1'] },
+    { bits:  5, name: 'Xd' },
+    { bits:  3, name: '{2\'b01, S}', attr: ['ACE.Import'] },
+    { bits:  5, name: 'Xn' },
+    { bits: 12, name: 'imm' },
+]}
+....
+
+Description::
+`Cd` is the destination CC to be imported, as an immed (5-bit). Alternatively,
+the number of context into which import the SCC is stored in the GPR `Xd` as a
+number from 0 to 31. `Xn` is the GPR containing the base address of the buffer
+with the SCC.
+
+S = 0,1  true (1) if the key is in a system defined format and not the format
+defined by the architecture.
+
+This means that system HW dynamically generated keys can be imported but not
+exported in the same form — if exported they must be in the architectural
+format. If the value cannot be exported to other devices or to other Locale
+stages of the same device, the internal logic must bind them to a specific
+Locale derived CTK). The instruction imports them like SW keys, but only
+internally, and sets the right policies.
 
 ==== ace.size
 
 `ace.size Xd, Cn|Xn`
 
-This instruction writes the size of the SCC corresponding to CC `Cn` (or the CC whose number is in `Xn`) into GPR `Xd`.
+Encoding Context::
+[wavedrom, , svg]
+....
+{reg:[
+    { bits:  7, name: 0x5b, attr: ['custom-2'] },
+    { bits:  5, name: 'Xd' },
+    { bits:  3, name: 0x2, attr: ['ACE.size'] },
+    { bits:  5, name: 'Cn' },
+    { bits:  5, name: 0x0 },
+    { bits:  7, name: 0x1 },
+]}
+....
 
-The value can significantly differ from the internal resource usage ot the CC — it can be larger (for simple primitives, because of the nonce/SIV overhead) but also smaller (if for instance keys are split into shares for threshold implementations).
+Encoding Scalar::
+[wavedrom, , svg]
+....
+{reg:[
+    { bits:  7, name: 0x5b, attr: ['custom-2'] },
+    { bits:  5, name: 'Xd' },
+    { bits:  3, name: 0x3, attr: ['ACE.size'] },
+    { bits:  5, name: 'Xn' },
+    { bits:  5, name: 0x0 },
+    { bits:  7, name: 0x1 },
+]}
+....
 
-The size of the SCC is important to properly implement features such as context switching, and in general before any export operation.
+Description::
+This instruction writes the size of the SCC corresponding to CC `Cn` (or the CC
+whose number is in `Xn`) into GPR `Xd`.
+
+The value can significantly differ from the internal resource usage ot the CC —
+it can be larger (for simple primitives, because of the nonce/SIV overhead) but
+also smaller (if for instance keys are split into shares for threshold
+implementations).
+
+The size of the SCC is important to properly implement features such as context
+switching, and in general before any export operation.
 
 ==== ace.clone
 
 `ace.clone Cd|Xd, Cs|Xs`
 
-Clones source CC `Cs` (or the CC indexed by `Xs`) into destination CC `Cd` (or into the CC indexed by `Xd`).
+Encoding Context Context::
+[wavedrom, , svg]
+....
+{reg:[
+    { bits:  7, name: 0x5b, attr: ['custom-2'] },
+    { bits:  5, name: 'Cd' },
+    { bits:  3, name: 0x0, attr: ['ACE.clone'] },
+    { bits:  5, name: 'Xs' },
+    { bits:  5, name: 0x0 },
+    { bits:  7, name: 0x1 },
+]}
+....
+
+Encoding Context Scalar::
+[wavedrom, , svg]
+....
+{reg:[
+    { bits:  7, name: 0x5b, attr: ['custom-2'] },
+    { bits:  5, name: 'Cd' },
+    { bits:  3, name: 0x0, attr: ['ACE.clone'] },
+    { bits:  5, name: 'Xn' },
+    { bits:  5, name: 0x0 },
+    { bits:  7, name: 0x3 },
+]}
+....
+
+Encoding Scalar Context::
+[wavedrom, , svg]
+....
+{reg:[
+    { bits:  7, name: 0x5b, attr: ['custom-2'] },
+    { bits:  5, name: 'Xd' },
+    { bits:  3, name: 0x4, attr: ['ACE.clone'] },
+    { bits:  5, name: 'Cn' },
+    { bits:  5, name: 0x0 },
+    { bits:  7, name: 0x1 },
+]}
+....
+
+Encoding Scalar Scalar::
+[wavedrom, , svg]
+....
+{reg:[
+    { bits:  7, name: 0x5b, attr: ['custom-2'] },
+    { bits:  5, name: 'Xd' },
+    { bits:  3, name: 0x4, attr: ['ACE.clone'] },
+    { bits:  5, name: 'Xn' },
+    { bits:  5, name: 0x0 },
+    { bits:  7, name: 0x3 },
+]}
+....
+
+Description::
+Clones source CC `Cs` (or the CC indexed by `Xs`) into destination CC `Cd` (or
+into the CC indexed by `Xd`).
 
 Ideally implemented as an alias to some other instruction, such as `ace.exec`.
 
-We note that certain attacks may be mounted on primitives if the same state can be re-used (for instance encryption with the same counter), but this cannot be prevented even if this instruction were not available, since a state can be exported and re-imported as-is several times. `ace.clone` is just an optimization for an `ace.export` instruction followed by an `ace.import` instruction.
+We note that certain attacks may be mounted on primitives if the same state can
+be re-used (for instance encryption with the same counter), but this cannot be
+prevented even if this instruction were not available, since a state can be
+exported and re-imported as-is several times. `ace.clone` is just an
+optimization for an `ace.export` instruction followed by an `ace.import`
+instruction.
 
 ==== ace.exec
 
@@ -149,7 +300,119 @@ We note that certain attacks may be mounted on primitives if the same state can 
 `ace.exec  Vd, Cn|Xn` +
 `ace.exec  Cn|Xn`
 
-Performs a cryptographic operation such as an encryption or decryption, absorbing a value in a hash, and possibly returning a value. The instruction may also modify an internal state machine of the CC. It has four variants: has input and output, has I but not O, has no I but produces an O, has no I and O. (The fourth variant is used to encode the next instruction, which is then a pseudo-instruction).  In certain cases the `ace.exec` instruction may modify the internal state machine of the CC.
+Encoding Vector-Context-Vector::
+[wavedrom, , svg]
+....
+{reg:[
+    { bits:  7, name: 0x5b, attr: ['custom-2'] },
+    { bits:  5, name: 'Vd' },
+    { bits:  3, name: 0x0, attr: ['ACE.exec'] },
+    { bits:  5, name: 'Cn' },
+    { bits:  5, name: 'Vs' },
+    { bits:  7, name: 0x0 },
+]}
+....
+
+Encoding Ignore-Context-Vector::
+[wavedrom, , svg]
+....
+{reg:[
+    { bits:  7, name: 0x5b, attr: ['custom-2'] },
+    { bits:  5, name: 0x0 },
+    { bits:  3, name: 0x1, attr: ['ACE.exec'] },
+    { bits:  5, name: 'Cn' },
+    { bits:  5, name: 'Vs' },
+    { bits:  7, name: 0x0 },
+]}
+....
+
+Encoding Vector-Context-Ignore::
+[wavedrom, , svg]
+....
+{reg:[
+    { bits:  7, name: 0x5b, attr: ['custom-2'] },
+    { bits:  5, name: 'Vd' },
+    { bits:  3, name: 0x2, attr: ['ACE.exec'] },
+    { bits:  5, name: 'Cn' },
+    { bits:  5, name: 0x0 },
+    { bits:  7, name: 0x0 },
+]}
+....
+
+Encoding Ignore-Context-Ignore::
+[wavedrom, , svg]
+....
+{reg:[
+    { bits:  7, name: 0x5b, attr: ['custom-2'] },
+    { bits:  5, name: 0x0 },
+    { bits:  3, name: 0x3, attr: ['ACE.exec'] },
+    { bits:  5, name: 'Cn' },
+    { bits:  5, name: 0x0 },
+    { bits:  7, name: 0x0 },
+]}
+....
+
+Encoding Vector-Scalar-Vector::
+[wavedrom, , svg]
+....
+{reg:[
+    { bits:  7, name: 0x5b, attr: ['custom-2'] },
+    { bits:  5, name: 'Vd' },
+    { bits:  3, name: 0x0, attr: ['ACE.exec'] },
+    { bits:  5, name: 'Xn' },
+    { bits:  5, name: 'Vs' },
+    { bits:  7, name: 0x4 },
+]}
+....
+
+Encoding Ignore-Scalar-Vector::
+[wavedrom, , svg]
+....
+{reg:[
+    { bits:  7, name: 0x5b, attr: ['custom-2'] },
+    { bits:  5, name: 0x0 },
+    { bits:  3, name: 0x1, attr: ['ACE.exec'] },
+    { bits:  5, name: 'Xn' },
+    { bits:  5, name: 'Vs' },
+    { bits:  7, name: 0x4 },
+]}
+....
+
+Encoding Vector-Scalar-Ignore::
+[wavedrom, , svg]
+....
+{reg:[
+    { bits:  7, name: 0x5b, attr: ['custom-2'] },
+    { bits:  5, name: 'Vd' },
+    { bits:  3, name: 0x2, attr: ['ACE.exec'] },
+    { bits:  5, name: 'Xn' },
+    { bits:  5, name: 0x0 },
+    { bits:  7, name: 0x4 },
+]}
+....
+
+Encoding Ignore-Scalar-Ignore::
+[wavedrom, , svg]
+....
+{reg:[
+    { bits:  7, name: 0x5b, attr: ['custom-2'] },
+    { bits:  5, name: 0x0 },
+    { bits:  3, name: 0x3, attr: ['ACE.exec'] },
+    { bits:  5, name: 'Xn' },
+    { bits:  5, name: 0x0 },
+    { bits:  7, name: 0x4 },
+]}
+....
+
+
+Description::
+Performs a cryptographic operation such as an encryption or decryption,
+absorbing a value in a hash, and possibly returning a value. The instruction
+may also modify an internal state machine of the CC. It has four variants: has
+input and output, has I but not O, has no I but produces an O, has no I and O.
+(The fourth variant is used to encode the next instruction, which is then a
+pseudo-instruction).  In certain cases the `ace.exec` instruction may modify
+the internal state machine of the CC.
 
 ==== ace.input (optional)
 
@@ -165,65 +428,105 @@ Performs a cryptographic operation such as an encryption or decryption, absorbin
 
 ==== ace.stage/ace.dir
 
-`ace.stage Cn|Xn, #immed` +
-`ace.dir Cn|Xn, #immed`
+`ace.stage Cd|Xd, #immed` +
+`ace.dir Cd|Xd, #immed`
 
+Encoding Context::
+[wavedrom, , svg]
+....
+{reg:[
+    { bits:  7, name: 0x27, attr: ['custom-1'] },
+    { bits:  5, name: 'Cd' },
+    { bits:  3, name: 0x6, attr: ['ACE.stage'] },
+    { bits:  5, name: 0x0 },
+    { bits: 12, name: 'imm' },
+]}
+....
+
+Encoding Scalar::
+[wavedrom, , svg]
+....
+{reg:[
+    { bits:  7, name: 0x27, attr: ['custom-1'] },
+    { bits:  5, name: 'Xd' },
+    { bits:  3, name: 0x6, attr: ['ACE.stage'] },
+    { bits:  5, name: 0x1 },
+    { bits: 12, name: 'imm' },
+]}
+....
+
+Description::
 Two pseudo-instructions that map to the same instruction.
 
 `Cn` is the CC in which to set the stage of the internal state machine
 
-`Xn` is a GPR containing a number from 0 to 31 to dynamically address the context where we want to change the stage of the internal state machine.
+`Xn` is a GPR containing a number from 0 to 31 to dynamically address the
+context where we want to change the stage of the internal state machine.
 
-The `#immed` is a constant from a set of admissible values that are defined for each algorithm, to manage an internal state machine of said algorithm in case more stages are needed.
+The `#immed` is a constant from a set of admissible values that are defined for
+each algorithm, to manage an internal state machine of said algorithm in case
+more stages are needed.
 
 ==== ace.harden
 
 `ace.harden Cd|Xd, flags=level`
 
-Turn on or increase the level of the side-channel protection of the algorithm in the CC, if the microarchitecture supports it.
-The levels are defined in <<ACE-SC-protection-levels>>.
-Downgrading side-channel protection is not possible.
+Description::
+Turn on or increase the level of the side-channel protection of the algorithm
+in the CC, if the microarchitecture supports it. The levels are defined in
+<<ACE-SC-protection-levels>>. Downgrading side-channel protection is not
+possible.
 
 ==== ace.restrict
 
 `ace.restrict   Cd|Xd, Xs`
 
+Description::
 Optional.
-Can be used to further restrict the use of a CC to specific modes, and the use of a CC to a specified `ASID` or `VMID` if not previously specified.
-Cannot modify a current policy if already set.
+Can be used to further restrict the use of a CC to specific modes, and the use
+of a CC to a specified `ASID` or `VMID` if not previously specified. Cannot
+modify a current policy if already set.
 
-Bits [37:0] of the input register `Xs` have the same format as bits [63:26] of the metadata. +
-A zero in any of the six least significant bits of `Xs` means that the corresponding policy is not changed. +
-A one in the any of the four least significant bits of `Xs` means that USE by the corresponding mode is forbidden. +
-Let `m` be the current metadata in the destination CC.
-If `Xs`[5] is set and `m`[30] is NOT set, then Access Policy 3 is set using `Xs`[21:6].
-If `Xs`[6] is set and `m`[31] is NOT set, then Access Policy 4 is set using `Xs`[35:22].
-If `Xs`[5] and `m`[30] are both set,
-or
-if `Xs`[6] and `m`[31] are both set,
-then the error field of `acecsr` is set to [.red]#*TBD*#.
+Bits [37:0] of the input register `Xs` have the same format as bits [63:26] of
+the metadata. + A zero in any of the six least significant bits of `Xs` means
+that the corresponding policy is not changed. + A one in the any of the four
+least significant bits of `Xs` means that USE by the corresponding mode is
+forbidden. + Let `m` be the current metadata in the destination CC. If `Xs`[5]
+is set and `m`[30] is NOT set, then Access Policy 3 is set using `Xs`[21:6]. If
+`Xs`[6] is set and `m`[31] is NOT set, then Access Policy 4 is set using
+`Xs`[35:22]. If `Xs`[5] and `m`[30] are both set, or if `Xs`[6] and `m`[31] are
+both set, then the error field of `acecsr` is set to [.red]#*TBD*#.
 
 
 ==== ace.available
 
 `ace.available Xd, Xs`
 
-Return whether the algorithm defined by GPR `Xs` (this is the value of the algorithm field of the metadata) is supported by the µarch.
-The result is written in `Xd` as true (1) or false (0).
+Description::
+Return whether the algorithm defined by GPR `Xs` (this is the value of the
+algorithm field of the metadata) is supported by the µarch. The result is
+written in `Xd` as true (1) or false (0).
 
-Implement it as CSR read?
-Trivially, we would need at least one bit worth of CSR per algorithm, and this is extended also by the side channel resistance information, so we would have 512 bits. Of course if the ARC so wants, it can be implemented a CSR read pseudo-instruction
+Implement it as CSR read? Trivially, we would need at least one bit worth of
+CSR per algorithm, and this is extended also by the side channel resistance
+information, so we would have 512 bits. Of course if the ARC so wants, it can
+be implemented a CSR read pseudo-instruction
 
-*To be discussed* alternative option: the CSR contains a pointer to a memory mapped bitmap or some other architected structure to determine what is implemented. OTOH this can probably be obtained in other ways (like a microarchitecture version number). Or use the error mechanism.
+*To be discussed* alternative option: the CSR contains a pointer to a memory
+mapped bitmap or some other architected structure to determine what is
+implemented. OTOH this can probably be obtained in other ways (like a
+microarchitecture version number). Or use the error mechanism.
 
 ==== ace.error
 
 `ace.error Xd, Cs|Xs`
 
-A CC `Cs` (or indexed by `Xs`) may be in an error state due to the previous operation.
-The corresponding error value is written into GPR `Xd`.
+Description::
+A CC `Cs` (or indexed by `Xs`) may be in an error state due to the previous
+operation. The corresponding error value is written into GPR `Xd`.
 
-This is implemented as a CSR read operation, reading the error field of `acecsr` and masking it.
+This is implemented as a CSR read operation, reading the error field of
+`acecsr` and masking it.
 
 The error value list must be architected.
 
