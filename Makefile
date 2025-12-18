@@ -45,6 +45,7 @@ DOCS_HTML := $(DOCS:%.adoc=%.html)
 XTRA_ADOC_OPTS :=
 ASCIIDOCTOR_PDF := asciidoctor-pdf
 ASCIIDOCTOR_HTML := asciidoctor
+
 OPTIONS := --trace \
            -a compress \
            -a mathematical-format=svg \
