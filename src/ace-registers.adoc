@@ -112,35 +112,36 @@ This is different from the tracking of the dirtiness of the floating-point state
 
 ==== ccstart
 
-`ccstart` is a XLEN bits wide CSR which plays a similar role in ACE than `vstart` in the V extension.
+`ccstart` is an XLEN-bit CSR that serves a similar role in ACE as `vstart` does in the V extension.
 
-Since `ace.init`, `ace.import`, `ace.export`, `ace.input`, and `ace.output` may take a long time, they can be interrupted mid-instruction by interrupts or memory exceptions.
-In this case implementations have the option to set `ccstart` to a non-zero value, which means when the vector instruction is started again it will not restart from the beginning, but it will be resumed.
-Since ACE makes no requirements about the width of the memory accesses performed, `ccstart` will not be an element index, but rather a long-word offset.
-In other words, the current instruction has been interrupted after reading or writing 4 times `ccstart` bytes or output or input.
+The instructions `ace.init`, `ace.import`, `ace.export`, `ace.input`, and `ace.output` may require significant execution time and can be interrupted mid-instruction by interrupts or memory exceptions.
+In such cases, implementations may set `ccstart` to a non-zero value, enabling the instruction to resume from the interruption point rather than restart from the beginning.
+Since ACE does not specify memory access widths, `ccstart` represents a long-word offset rather than an element index.
+Specifically, the instruction was interrupted after transferring `4 × ccstart` bytes of input or output.
 
-Like `vstart`, `ccstart` is a normal read/write CSR, but it is not intended to be written with arbitrary non-zero values by software; normally it is written by hardware on trap.
-Software can safely write 0 to it to completely restart operations, and it can also be saved/restored on context switches.
-Writing an arbitrary non-zero value may raise an illegal-instruction exception because hardware is not required to support all values.  If not, and a higher value of `ccstart` is written, authentication will fail upon import because some parts of the content are replaced by possibly arbitrary values. Or exports will generate a non-authenticable output.  Only `ace.init` may still likely create a valid context, but the values of the key were already in the clear in the same domain, so this does not augment the attack surface.
+Like `vstart`, `ccstart` is a standard read/write CSR; however, software should not write arbitrary non-zero values to it.
+Normally, hardware sets this register on trap.
+Software may safely write 0 to restart operations completely, and the register can be saved and restored during context switches.
+Writing an arbitrary non-zero value may raise an illegal-instruction exception, as hardware is not required to support all values.
+If no exception is raised and an invalid value is written, authentication will fail upon import because portions the content are replaced with arbitrary values, or exports will produce unauthenticatable output.  Only `ace.init` may still create a valid context, but since the key values were already in plaintext within the same domain, this does not expand the attack surface.
 
-Only some specific instructions can have a non-zero `ccstart`, and the other ACE instructions will ignore this value if set by software.
+Only the instructions explicitly mentioned above support non-zero `ccstart` values; other ACE instructions ignore this register if set by software, and will be restarted.
 
 [[ace-why-restarting,Remark {counter:remark}]]
 *Remark {counter:remark}*:
-_A single `ccstart` value is possible because of the used authentication encryption algorithm.
-Let us look at the various operations:_
+_A single `ccstart` value suffices due to the authenticated encryption algorithm used. The operations behave as follows:_
 
-* `_ace.init_` _(formerly `ace.config`) is a single pass operation: The metadata block is read first, which also determines the length of the payload. If it fits in the available memory, then the blocks are read one by one and passed to a deserialisation circuit to fill the CC._
-* `_ace.import_` _works very similarly to `ace.init`: the metadata block is read first to determines the length of the payload. If it fits in the available memory, then the remaining blocks are read one by one, decrypted, and then passed to a deserialisation circuit to fill the CC._
-* `_ace.export_` _has two passes, but one is entirely internal, so it can easily be restarted (if we want), and, most importantly, it will NOT cause a page fault: namely the computation of the SIV using poly1305 on the serialisation of the CC's contents. Then, we write out the MD (serialised), nonce, SIV, and the serialisation of the CC contents is encrypted and written out block-wise._
+* `_ace.init_` _(formerly `ace.config`) is a single-pass operation: the metadata block is read first, determining the payload length. If sufficient memory is available, subsequent blocks are read sequentially and passed to a deserialization circuit to populate the CC._
+* `_ace.import_` _operates similarly to `ace.init`: the metadata block is read first to determine the payload length. If sufficient memory is available, the remaining blocks are read, decrypted, and passed to a deserialization circuit to populate the CC._
+* `_ace.export_` _involves two passes, but the first pass is entirely internal to the ACE unit. Hence, the first pass cannot cause a page fault, and is easily restarted: specifically, it compute the SIV by applying poly1305 to the serialized CC content.  Subsequently, the serialized metadata, nonce, and SIV are written out, followed by the CC contents, which are serialised, encrypted and written out block by block. This part may cause page faults, but it can be easily restarted._
 
-_Note that even if such operations are per se complex, the ACE unit is de facto a separate machine that executes simpler instructions one by one, and these are generated by state machines (one per CPU hart connected to the ACE unit — it may be a 1-1 connection) that get the commands from the CPU and translate them. So, the ACE unit may even be able to reorder, pipeline, juggle these operations, even from different threads, as long as the operations talk to the correct hart-specific architectural states._
+_Although these operations are inherently complex, the ACE unit is architected to function like a separate machine executing simpler instructions sequentially. State machines (one per CPU hart connected to the ACE unit, potentially in a 1-to-1 configuration) receive commands from the CPU and break them into smaller steps._
 
-_So, we see no need to separate data transfer and crypto operations from import/export. Otherwise, we would *have* to assume that the loaded payload is stored somewhere inside the ACE unit, instead of being processed with minimal overhead._
+_Therefore, separating data transfer from cryptographic operations in import/export is unnecessary. Otherwise, the loaded payload would need to be stored within the ACE unit rather than processed with minimal overhead._
 
-_Finally, we observe that resuming would require *at least as many* cryptographic operations as restarting, if the domain in which the control flow is trapped also saves and resumes the partial SCCs.  The number of memory accesses may be reduced, since it cannot be guaranteed that the data that has been read from memory the first time (for `ace.init` or `ace.export`) is still in the caches, so performance may be still better with restarting on some systems. Also, restarting avoids potential circular page-fault problems._
+_Finally, resuming requires at least as many cryptographic operations as restarting if the trapped domain also saves and resumes partial SCCs. Memory accesses may be reduced, but since data read from memory initially (for `ace.init` or `ace.export`) may no longer reside in the caches, resuming may offer better performance on some systems. Additionally, resuming avoids potential circular page-fault issues, as opposed to restarting._
 
-[.red]#*TBD* specify the exact meaning of `ccstart`, and define the points where the various operations can be interrupted.
+[.red]#*TBD* Specify the exact semantics of `ccstart` and define the points at which various operations can be interrupted.
 Also include negative values for internal poly1305 processing in `ace.export`.#
 
 ==== Reuse ASID and VMID (to be verified).
