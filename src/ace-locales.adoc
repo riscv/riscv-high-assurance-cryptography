@@ -2,8 +2,7 @@
 === Locales
 
 Internally, ACE has a table of 128-bit Locale Secrets (LS), the Locale Secrets Table (LST).
-
-Some of these EBTs are fixed, other values may be configurable only using an impdef authenticated HW procedure, and the remaining may be programmed by MM (*Note:* _we need to define the corresponding CSRs_).
+Some of these entries are fixed, other values may be configurable only using an implementation-specific authenticated hardware procedure, and the remaining may be programmed by MM (*Note:* _we need to define the corresponding CSRs_).
 The LST is a global table shared across all ACE units with some fields which can be overridden by values which are architected (i.e., per hart).
 //Currently, the only two values that may be overridden by architectural values, in order to support multiple VMs/Supervisor Domains/Worlds are System_Secret and Boot_Session.
 
@@ -11,15 +10,7 @@ If the Locale Field of a context (CC/SCC) is -1 (all ones), then the CTK is used
 Otherwise, this value is used as an index _i_ in the HST, and a derived key `derived_key` computed from CTK and _b_ := HST[_i_] is used for import/export in place of the CTK.
 In order to derive the derived encryption and authentication keys, we modify the AES-GCM-SIV key derivation function by adding a constant value to the input blocks, as described in <<ACE-SCC-formats>>.
 
-// [%autowidth,frame=none,grid=none,align=center]
-// |===
-// >| `derived_key` {nbsp} = | `AES-256(CTK, _b_ ^ (0^126^ @ 11))[63:0] @ AES-256(CTK, _b_ ^ (0^126^ @ 10))[63:0]`
-// >|                        | `{nbsp}{nbsp}{nbsp}{nbsp} @ AES-256(CTK, _b_ ^ (0^127^ @ 1))[63:0] @ AES-256(CTK, _b_)[63:0]`
-// |===
-// Notation: by `x` @ `y` we indicate the concatenation of `x` and `y`, where the bits of `x` become the most significant part of the concatenated value, and the bits of `y` its least significant part. For instance, `0xAB` @ `0xCD` = `0xABCD`.
-
 In <<binding-indices>>, we list the mandatory entries and their meaning.
-//At least four bits are needed to encode them.
 In the column "MM-Writeable" we indicate whether MM can write the corresponding Locale Token.
 
 [[binding-indices]]
@@ -43,14 +34,15 @@ In the column "MM-Writeable" we indicate whether MM can write the corresponding 
 | Reserved                  | Reserved for future use. | N/A | 8-14
 |===
 
-*Remark {counter:remark}*:: _We need to discuss what to do in case there is a reboot of a VM. Then we need to "virtualize" the seventh string, or use a secondary CTK for that purpose, since some VMs may reboot while others may not.
+[[ace-virtual-reboot,Remark {counter:remark}]]
+*Remark {counter:remark}*: _We need to discuss what to do in case there is a reboot of a VM. Then we need to "virtualize" the seventh string, or use a secondary CTK for that purpose, since some VMs may reboot while others may not.
 Also, do we want to allow a VM to have a different virtual hardware? Or does it always declare the same configuration as the underlying hardware?_
 In principle, all this can be done by calling into MM. MM would need to keep track of the locale binding values and ensure that they are updated correctly when necessary.
 
-*Example*:: If a key has the value of “2” in the Locale field of ita metadata, then not the CTK, but a value derived from the CTK and the "OEM Secret" will be used for import/export.
-This means that, while `ace.export` will always work on the same device (which is fundamental to allow context switching), attempts to use `ace.import` on the same blob on a device from a different OEM will result in an authentication failure.
+*Example*: _If a key has the value of “2” in the Locale field of ita metadata, then not the CTK, but a value derived from the CTK and the "OEM Secret" will be used for import/export.
+This means that, while `ace.export` will always work on the same device (which is fundamental to allow context switching), attempts to use `ace.import` on the same blob on a device from a different OEM will result in an authentication failure._
 
-*Remark {counter:remark}*:: _In a CC, a key may be referred to using an index into an internal, system defined key table, called the System Specific Key Table (SSTK).
-If some of these keys are device specific, they will not work on a second device.
+[[ace-careful-with-internal-keys,Remark {counter:remark}]]
+*Remark {counter:remark}*: _In a CC, a key may be referred to using an index into an internal, system defined key table, called the System Key Table (STK). If some of these keys are device specific, they will not work on a second device.
 However, if the Locale of this CC is not restricted, the internal key index may be interpreted as the corresponding internal keys on a different device, with unpredictable consequences.
-Hence the implementation of the SSTK must also provide the proper Locale metadata to the ACE XU to configure a CC._
+Hence the implementation of the STK must also provide the proper Locale metadata to the ACE XU to configure a CC._
