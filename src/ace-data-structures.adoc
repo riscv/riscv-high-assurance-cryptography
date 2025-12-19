@@ -110,7 +110,7 @@ See <<ACE-Algorithms>> for algorithm specific details.
 [[ACE-SCC-formats]]
 ==== Sealed Configuration Context
 
-We first define the RFC8452 Key Derivation and the Derived CTK Derivation functions.
+We first define the RFC8452 Key Derivation and the Locale CTK Derivation functions.
 
 .RFC8452 Key Derivation
 [source,sail]
@@ -144,27 +144,33 @@ We can now define the generation of the SCC from a CC.
 [source,sail]
 ----
 metadata : bits(64);
-let P : array of bits(256) = content;
-M : array of bits(256);
+last_block_fractional : bits(1);
+content : array of bits(128);
+M : array of bits(128);
 let N : bits(96) = random(96 bits);
 Kenc : bits(256);
 Kauth : bits(128);
 {Kenc, Kauth} = RFC8452_KeyDeriv(CTK);
-let SIV : bits(96) = Poly1305(Kauth, N, metadata @ P)[95:0];
+let SIV : bits(96) = Poly1305(Kauth, N, metadata @ content)[95:0];
 
 M[0][127:0] = N[63:0] @ metadata[63:0];
 M[1][127:0] = SIV[95:0] @ N[95:64];
-foreach(i from 0 to num_blocks(P)-1) {
-     M[i+2][127:0] = (block i of P) xor AESE(Kenc, SIV @ (binary(i)[31:0]));
+if (last_block_fractional) then last = num_blocks(content)-1 else last = num_blocks(content)-1
+foreach(i from 0 to last) {
+    M[i+2][127:0] = content[i] xor AESE(Kenc, SIV @ (binary(i)[31:0]));
+}
+if (last_block_fractional) then {
+    M[last+2][63:0] = content[last] xor AESE(Kenc, SIV @ (binary(last+1)[31:0]))[63:0];
 }
 ----
 
-Since the derivation functions are quite expensive, the ACE implementation is allowed to cache recently used Derived Keys, both for the base CTK and for the derived keys.
+Due to the computational cost of the derivation functions, implementations may cache recently used derived keys for both the base CTK and locale-derived keys.
 
-Note: In this simplification of AES-GCM-SIV there is no need to add the lengths of metadata and keys+internal state to the hash because these lengths are implied already by the clear bits of the metadata itself — which are included in the computation of the authentication tag.
+NOTE: This simplification of AES-GCM-SIV does not require appending the lengths of metadata and content to the hash, as these lengths are already implied by the cleartext bits of the metadata, which are included in the authentication tag computation.
 
-Some details are fixed in general. For instance, all “pure” ciphers have only one key, whether in normal or threshold implementation, the latter always reduced to one key, as well as for some modes. In other cases, there must be a specific formatting of the state.
-The length of the entire output is always assumed to be a multiple of 128 bits. If metadata and content are not multiples of 128 bits, the final block is padded with zeros.
+Certain format details are fixed across algorithms. All pure ciphers use a single key, regardless of whether they employ a normal or threshold implementation; threshold implementations are always reduced to a single key. Some modes follow the same convention, while others require algorithm-specific state formatting.
+
+The total output length must be a multiple of 64 bits. If the combined metadata and content do not meet this requirement, the final block is zero-padded.
 
 === Constants
 

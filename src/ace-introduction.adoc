@@ -3,7 +3,7 @@
 
 (The ratification plan can be found https://riscv.atlassian.net/wiki/spaces/HACX/pages/484966423/High+Assurance+Crypto+Ratification+Plan[here].)
 
-ACE, the Atomic Cryptographic Extension, is an instruction set extension designed to provide high assurance cryptographic operations.
+The _Atomic Cryptographic Extension_ (ACE) provides support for high assurance cryptographic operations.
 The main features are the concealment of the values of keys and other secrets, restrictions on their usage, and support for multiple cryptographic algorithms as well as hardened implementations.
 
 The design of ACE is prompted by the needs of key use cases such as:
@@ -64,14 +64,15 @@ ACE is necessary because current solutions are inadequate:
 [[ACE-introduction-more-features]]
 === Further Features
 
-To be practical and address the limitations of existing solutions, ACE must provide features that reduce the number of expensive environment switches and provide efficient support for software-managed context switching. Consequently, while the value of a key cannot be read from a Cryptographic Context (CC), a secure mechanism is required to export a CC's contents—preserving the confidentiality and integrity of both the key and its associated metadata.
+To address the limitations of existing solutions in a practical manner, ACE must provide features that reduce the number of environment switches and provide efficient support for software-managed context switching.  Consequently, while the value of a key cannot be read from a Cryptographic Context (CC), a secure mechanism is required to export a CC's content—preserving the confidentiality and integrity of both the key and its associated metadata.
 
 //[start=10]
 . ACE employs authenticated encryption to export the contents of a CC to external, untrusted memory as a _Sealed Cryptographic Context_ (SCC).
-  A SCC can then be lated authenticated, decrypted, and re-imported into a CC. Any metadata that does not need to be encrypted is kept in the clear.
-. A Cryptographic Context Transport Key (CTK) is required for such import and export operations. Optionally, ACE permits Machine Mode to configure the CTK. When configurable, the CTK is held in 256 bits of CSRs that are writable only by Machine. This configurability enables domain separation: if Machine assigns distinct CTKs to different domains, a domain cannot authenticate or decrypt a Sealed Cryptographic Context (SCC) created for another domain.
+  A SCC can then be later authenticated, decrypted, and re-imported into a CC. Any metadata that does not need to be encrypted is kept in the clear.
+. A Context Transport Key (CTK) is required for such import and export operations.  Optionally, ACE permits Machine Mode to configure the CTK.  When configurable, the CTK is held in 256 bits worth of CSRs that are writable only in Machine Mode.  This configurability enables domain separation: if Machine assigns distinct CTKs to different domains, a domain cannot authenticate or decrypt a Sealed Cryptographic Context (SCC) created for another domain.
 . If the CTK is not configurable, it may be either a fixed value or randomly generated at boot.
-. ACE provides a key-derivation mechanism that computes a Derived CTK from the current CTK and a secret salt tied to a specific _Locale_. Changing this _Locale-Specific Secret_ (LSS) also changes the corresponding Derived CTK, automatically invalidating any Sealed Cryptographic Contexts (SCCs) that were exported with the previous LSS value.
+. ACE provides a key-derivation mechanism that computes a _Locale CTK_ from the current CTK and a secret salt tied to a specific _Locale_ (as defined above).
+Changing this _Locale Specific Secret_ (LSS) also changes the corresponding Locale CTK, automatically invalidating any Sealed Cryptographic Contexts (SCCs) that were exported with the previous LSS value.
 
 The term _opaque_ applies also to a key in a SCC.
 
@@ -80,12 +81,14 @@ The term _opaque_ applies also to a key in a SCC.
 
 Certain features are intentionally not supported by ACE:
 
-* ACE does not provide debugging support; the internal representation of a Cryptographic Context remains concealed even when debug features are active.
+* ACE does not provide debugging support. The internal representation of a Cryptographic Context remains concealed even when debug features are active.
 * ACE does not support the processing of variable-length ciphertext or plaintext inputs.
 * ACE does not provide a complete secure key management and provisioning system. Instead, it offers architectural building blocks that can be used to implement such systems efficiently. Key management can be delegated to applets within a TEE or secure VM, which may be owned by different parties. These applets can implement complex key management software. The architecture enables trusted entities to establish and deliver opaque keys to less-trusted software domains. ACE does not support external schemes for directly provisioning keys into a key store.
-* ACE, in its current version, does not provide a key revocation mechanism. This is a complex feature requiring additional infrastructure and coordination, for a relatively rare event.
-// The current architecture partially supports key revocation by binding keys to a _Locale_ that can be invalidated by a revocation message. If the derived CTK for a key is invalidated, any process using it must re‑acquire the key from the provisioning entity; if the key has been revoked within that entity, re‑acquisition will fail. Note that keys already loaded into CCs can still be exported, as ACE does not define a mechanism to revoke keys once they reside in a CC.  We envision that a future version of ACE may allow implementations to assign an optional 64‑ or 128‑bit identifier to each key and issue a system‑wide broadcast instructing all ACE units to erase CCs whose identifier matches a revoked key.
-* ACE cannot fully prevent misuse by compromised processes. If a process is compromised, the attacker obtains access to the CCs and can perform cryptographic operations — even if they do not elicit the key. Therefore, ACE complements existing security measures such as SW vulnerability exploitation countermeasures and process isolation (including TEE-like inverse sandboxing).
+* ACE, in its current version, does not provide a key revocation mechanism.
+This is a complex feature requiring additional infrastructure, which is used rarely.
+// The current architecture partially supports key revocation by binding keys to a _Locale_ that can be invalidated by a revocation message. If the Locale CTK for a key is invalidated, any process using it must re‑acquire the key from the provisioning entity; if the key has been revoked within that entity, re‑acquisition will fail. Note that keys already loaded into CCs can still be exported, as ACE does not define a mechanism to revoke keys once they reside in a CC.
+We envision that a future version of ACE may allow implementations to assign an optional 64‑ or 128‑bit identifier to each key and issue a system‑wide broadcast instructing all ACE units to erase CCs whose identifier matches a revoked key as well as specific revoked LSSs.
+* ACE cannot fully prevent misuse by compromised processes. If a process is compromised, the attacker obtains access to the CCs and can perform cryptographic operations, even if they do not elicit the key. Therefore, ACE complements existing security measures such as SW vulnerability exploitation countermeasures and process isolation (including TEE-like inverse sandboxing).
 * Other risks remain. For instance, in counter-mode encryption, the same method enables both encryption and decryption, hence a malicious process may be able to misuse these operations.
 
 
@@ -146,21 +149,22 @@ The fact that CCs can be addressed indirectly has two implications:
 
 ==== Remark on the Formats for the Cryptographic Contexts
 
-Before we proceed, we need to point out that there are different representations of the same object:
+ACE defines three distinct representations for cryptographic data:
 
-* The input format of key + metadata in the clear in memory for the initial configuration of a CC.
-* What we call the CC proper, i.e. the internal representation of a key + metadata + additional state.
-* The format of a SCC, defined by the format of the plaintext and its encryption and authentication method.
+* *Initial Configuration Format:* The plaintext key and metadata in memory used to initialize a CC.
+* *Cryptographic Context (CC):* The internal representation of the key, metadata, and operational state.
+* *Sealed Cryptographic Context (SCC):* The format for encrypted and authenticated CC export.
 
-The first and third formats are architected, whereas the second one is implementation defined, i.e., the internal representation of the CC is left to the implementation.  However, we still define the minimum of information that must be stored in a CC, to the very least the same information that is stored in a SCC, and in some cases additional information that is specific to the algorithm or to the implementation.
+The initial configuration and SCC formats are architected to ensure interoperability.
+The internal CC representation is implementation-defined.
+The sizes of these formats cannot be assumed to be the same.
 
-This also means that the maximal size of the data inside a CC is implementation defined as well, and this size in general differs from the size of the initial information  required to configure a CC as well as from the size of a SCC.
+Standardizing the configuration and SCC formats is essential for two reasons:
 
-Architecting the configuration and SCC formats serves two purposes: ensuring interoperability and enabling VM migration. First, even within a single manufacturer's SoC, IP blocks from different designers may share SCCs. Second, VM migration is common across both cloud and consumer environments—for example, moving a VM from an laptop with a CPU from one manufacturer to a laptop with a CPU from a different manufacturer.
-Consequently, a single architected format is necessary.
-Mechanisms for guaranteeing that a CTK can securely survive hardware reboot and
-transferring CTKs between devices are also needed, but are out of scope of the ACE architecture:
-For migration, the use of a public key key-encapsulation mechanism is recommended.
+1. *IP Interoperability:* It allows hardware blocks from different vendors within a single SoC to share SCCs.
+2. *VM Migration:* It enables the migration of virtual machines across heterogeneous hardware—for instance, between CPUs from different manufacturers in cloud or consumer environments.
+
+While a unified architected format is necessary, mechanisms for persisting Context Transport Keys (CTKs) across reboots or transferring them between devices are outside the scope of the ACE architecture. For cross-device migration, the use of a public-key key-encapsulation mechanism (KEM) is recommended.
 
 
 ==== Remark On ACE Instructions that Access Memory
@@ -168,7 +172,24 @@ For migration, the use of a public key key-encapsulation mechanism is recommende
 The instructions `ace.init`, `ace.export`, and `ace.import` perform direct memory accesses. This does not violate the Risc-V load/store architecture principles, as ACE is architected as an _attached_ unit that works together with the CPU core rather than being an integral part of the latter.  Consequently, it _may_ maintain its own architectural state and have its own load-store unit.
 // Also, these instructions can be considered specialized load/store operations that internally enforce the confidentiality and integrity of key material.
 
-Although it is feasible to decompose these instructions into multiple, finer-grained operations, even reducing all configuration, import, and export to block-wise steps, doing so is undesirable.  A split approach would still require the implementation to retain equivalent internal state to support all operations involved in `ace.init`, `ace.export`, and `ace.import`, while constraining implementation flexibility, and impose significant complexity on software using the extension.
+//Although it is feasible to decompose these instructions into multiple, finer-grained operations, even reducing all configuration, import, and export to block-wise steps, architecting and mandating such an approach is undesirable.  A split approach would still require the implementation to retain equivalent internal state to support all operations involved in `ace.init`, `ace.export`, and `ace.import`, while constraining implementation flexibility, and impose significant complexity on software using the extension.
+
+[[ACE-need-for-trappable-operations]]
+=== Need for Trappable Operations
+
+Certain operations in `ACE` need to deal with arbitrarily long inputs and outputs.
+It may be the desire of an implementor to avoid complexity in the hardware,
+which are trappable, meaning that they can be intercepted by the operating system or other software components.
+For this purpose we need four operations:
+
+* An instruction to "open" a CC either for initializing, importing, or exporting;
+* A load instruction, that loads a certain number of bytes into the ACE unit;
+* A corresponding store instruction; and
+* A "close" instruction to finalize the procedure.
+
+[.red]#*TBD:*#
+While, in theory, these instructions need only respect the value of `ccstart` (cf. <<ACE-ccstart-definition>>) and update it in accordance with architected behavior, we [.red]#*shall*# provide a non-normative definition for such a set of instructions in a later draft of the `ACE` specification.
+
 
 === An Example
 
@@ -221,22 +242,6 @@ Algorithm numbers 128-255 are reserved for custom algorithms.
 Throughout this document, the cryptographic inputs and outputs for all `ACE` operations are vector registers.
 A priori, we do not exclude versions of the specification that use only GPRs, however this is currently out of scope, and if the need arises, this should be architected as well.
 We will also define a subset of the `V` extension that specifies only the vector registers, unit-strided load and stores, and a subset of vector operations including insert, extract, and logical operations, and possibly some additional ones. The goal is that code written against `ACE` and this subset of `V` shall run on any Risc-V core implementing `ACE`.
-
-[[ACE-need-for-trappable-operations]]
-=== Need for Trappable Operations
-
-Certain operations in `ACE` need to deal with arbitrarily long inputs and outputs.
-It may be the desire of an implementor to avoid complexity in the hardware,
-which are trappable, meaning that they can be intercepted by the operating system or other software components.
-For this purpose we need four operations:
-
-* An instruction to "open" a CC either for initializing, importing, or exporting;
-* A load instruction, that loads a certain number of bytes into the ACE unit;
-* A corresponding store instruction; and
-* A "close" instruction to finalize the procedure.
-
-[.red]#*TBD:*#
-While, in theory, these instructions need only respect the value of `ccstart` (cf. <<ACE-ccstart-definition>>) and update it in accordance with architected behavior, we [.red]#*shall*# provide a non-normative definition for such a set of instructions in a later draft of the `ACE` specification.
 
 
 [[ACE-outline]]
