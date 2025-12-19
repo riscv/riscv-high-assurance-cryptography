@@ -8,60 +8,6 @@ The content blocks is algorithm-specific and contains key material and possibly 
 [[Metadata]]
 === Metadata Block Format
 
-The metadata block exists in two formats: _standard_ (64-bit) and _extended_ (128-bit).
-The standard version is mandatory and is described in <<ACE-metadata-standard>>.
-The extended version is optional and is described in <<ACE-metadata-extended>>.
-
-These formats are used to describe the metadata block for CC initialization, export and import purposes.
-
-To initialize a CC, the first 64, resp., 128 bits, of the input buffer contain the metadata in the standard, resp., extended, format, entirely in cleartext.
-When exporting a CC, the first 64, resp., 128 bits, of the input buffer contain the metadata in the standard, resp., extended, format, are partially encrypted and partially in the clear: the fields marked as Public are not encrypted and the fields marked as Private are encrypted.
-The entire metadata block is included in the computation of the authentication tag.
-The details are described in <<ACE-SCC-formats>>.
-
-The internal representation of the metadata in the CF memory is implementation dependent.
-
-[[ACE-metadata-standard]]
-.Metadata: 64-bit version
-[width="100%",cols=">9%,^9%,17%,57%,^8%",options="header"]
-|===
-|   Field | Bits | Name                   | Description | Type
-|     [0] |   1  | Format                 | 0 for standard metadata format. | Public
-|   [8:1] |   8  | Algorithm              | Algorithm (such as primitive or mode). | Public
-|  [10:9] |   2  | Side Channel Protected | Level of Side Channel Protection provided. +
-The field's encoding is described in <<ACE-SC-protection-levels>>. | Public
-| [12:11] |   2  | Direction Policy       | Use for encryption/decryption/both (only for enc/dec primitives or modes). | Public
-| [14:13] |   2  | Key Type               | By explicit value / Immutable (index) / Internally generated. | Public
-| [18:15] |   4  | Locale                 | Field which is either -1 or an index into the Locale Secrets Table. | Public
-| [20:19] |   2  | Complete               | Whether the CC is complete (00) or interrupted while being configured (01), imported (10) or exported (11). Necessary to know whether to restart operations. | Public
-| [24:21] |   4  | Stage/Direction        | Which internal stage the algorithm is, as defined by ace_stage or implicitly. Must be ZERO on configuration. This is algorithm defined. | Private
-| [28:25] |   4  | AC Policy 1            | Is a User (if bit 28 set)/Supervisor or Virtual Supervisor (bit 29 set)/Hypervisor (bit 30 set)/Machine (bit 31 set) forbidden to USE this key? | Private
-| [30:29] |   2  | AC Policy 2            | If bit 32, resp., 33, is set, then restrict USE by `ASID`, resp., `VMID`. | Private
-|    [31] |   1  | Reserved               | Undefined.  | Private
-| [47:32] |  16  | AC Policy 3            | Zero if bit 32 unset, else `ASID` to enforce.  | Private
-| [61:48] |  14  | AC Policy 4            | Zero if bit 33 unset, else `VMID` to enforce.  | Private
-| [63:62] |   3  | Reserved               | Undefined.  | Private
-|===
-
-[[ACE-SC-protection-levels]]
-.Encoding of side-channel protection levels
-[float="center",align="center",width="76%",cols="^8%,<68%",options="header"]
-|===
-| Value | Description
-|   0   | No protection.
-|   1   | Data independent timing, first-order threshold implementation.
-|   2   | Data independent timing, first-order threshold, fault tolerant implementation.
-|   3   | Invalid value.
-|===
-
-Higher levels of protection are defined as part of custom algorithms.
-
-The Stage/Direction field is offered as a convenience for the definition of modes of operation with a small number of states.
-If more complex state machines are required, additional information can be stored in a custom data section of the CC.
-
-The two bits after AC Policy 4 can be used in case `VMID` is extended to 16 bits, and for compatibility
-of metadata formats with architectures that use a 16-bit `VMID` field, for instance in heterogeneous systems, even though interoperability is not assumed.
-
 We now describe the extended version of the metadata.
 
 [[ACE-metadata-extended]]
@@ -109,63 +55,13 @@ This field is used to determine whether the exported format from a suspended con
 
 === Formats of Configuration Inputs and Sealed Configuration Contexts
 
-[[ACE-Input-format]]
 ==== Configuration Input
 
 *TBD*
 
-[[ACE-SCC-formats]]
 ==== Sealed Configuration Context
 
-*TBD*
 
-We first define the RFC8452 Key Derivation and the Derived CTK Derivation functions.
-
-.RFC8452 Key Derivation
-[source,sail]
-----
-function RFC8452_KeyDeriv(K) = {
-  struct {
-    AESE256(K, (0[125:0] @ 0b101))[63:0] @ AESE256(K, (0[125:0] @ 0b100))[63:0] @
-    AESE256(K, (0[125:0] @ 0b011))[63:0] @ AESE256(K, (0[125:0] @ 0b010))[63:0],
-    AESE256(K, (0[125:0] @ 0b001))[63:0] @ AESE256(K, (0[125:0] @ 0b000))[63:0]
-  }
-}
-----
-
-.Derived Key Derivation
-[source,sail]
-----
-function RFC8452_KeyDeriv(K,L) = {
-  AESE256(K, L ^ (0[125:0] @ 0b011))[63:0] @ AESE256(K, L ^ (0[125:0] @ 0b010))[63:0] @
-  AESE256(K, L ^ (0[125:0] @ 0b001))[63:0] @ AESE256(K, L ^ (0[125:0] @ 0b000))[63:0]
-}
-----
-
-Since this derivation function is quite expensive, the ACE implementation is allowed to cache recently used Derived Keys, both for the base CTK and for the derived keys.
-
-Then, we define the generation of the SCC from a CC with standard metadata format.
-
-.Generation of the SCC from a CC with standard metadata format
-[source,sail]
-----
-metadata : bits(64);
-let P : array of bits(256) = content;
-M : array of bits(256);
-let N : bits(96) = random(96 bits);
-Kenc : bits(256);
-Kauth : bits(128);
-{Kenc, Kauth} = RFC8452_KeyDeriv(CTK);
-let SIV : bits(96) = Poly1305(Kauth, N, metadata @ P)[95:0];
-M[0][127:0] = N[63:0] @ ((metadata[63:21] xor AESE(Kenc, SIV @ 0x0000_0000)[63:21])
-                      @ metadata[20:0];
-M[1][127:0] = SIV[95:0] @ N[95:64];
-foreach(i from 0 to num_blocks(P)-1) {
-     M[i+2][127:0] = (block i of P) xor AESE(Kenc, SIV @ (binary(i+1)[31:0]));
-}
-----
-
-Finally, we define the generation of the SCC from a CC with extended metadata format.
 
 .Generation of the SCC from a CC with extended metadata format
 [source,sail]
@@ -180,82 +76,10 @@ Kauth : bits(128);
 let SIV : bits(96) = Poly1305(Kauth, N, metadata @ P)[95:0];
 let tmp : bits(128) = AESE256(Kenc, SIV @ 0x0000_0000);
 M[0][127:0] = (metadata[127:84] xor tmp[127:84])
-            @ metadata[83:64]
-            @ (metadata[63:21] xor tmp[63:21])
-            @ metadata[20:0];
+            @ metadata[83:0]
 M[1][127:0] = 0x0000_0000 @ N;
 M[2][127:0] = SIV @ 0x0000_0000;
 foreach(i from 0 to num_blocks(P)-1) {
      M[i+3][127:0] = (block i of P) xor AESE256(Kenc, SIV @ (binary(i+1)[31:0]));
 }
 ----
-
-//Notation: xor, {or}, {and}, and {lshift} denote XOR, OR, AND, and left shift, respectively.
-(Recall that by `x` @ `y` we indicate the concatenation of `x` and `y`, where the bits of `x` become the most significant part of the concatenated value, and the bits of `y` its least significant part.)
-
-Note that we do not encrypt public metadata bits but we encrypt the private metadata bits.
-
-Note: In this simplification of AES-GCM-SIV there is no need to add the lengths of metadata and keys+internal state to the hash because these lengths are implied already by the clear bits of the metadata itself — which are included in the computation of the authentication tag.
-Bit 0 of the first word of the metadata also works as a domain separator to distinguish between standard and extended metadata formats.
-
-Some details are fixed in general. For instance, all “pure” ciphers have only one key, whether in normal or threshold implementation, the latter always reduced to one key, as well as for some modes. In other cases, there must be a specific formatting of the state.
-The length of the entire output is always assumed to be a multiple of 128 bits. If metadata and content are not multiples of 128 bits, the final block is padded with zeros.
-
-===== With Long Metadata
-
-*TBD*
-
-=== Constants
-
-==== Error Codes
-
-In <<ACE-error-values>> we define the mandatory ACE error codes.
-[.red]#The list may still be incomplete.#
-Additional ones may be defined in the range [128,255] that are algorithm specific, which are allowed to overlap between algorithms.
-
-[[ACE-error-values]]
-.Error values and their meanings
-[float="center",align="center",width="100%",cols="^6%,<24%,<70%",options="header"]
-|===
-|Value | Mnemonic                  | Examples
-|  0   | ace_err_ok                | All is fine. Life is beautiful. No error from ACE.
-|  1   | ace_err_authentication    | Authentication failure in `ace.import`, but can also follow `ace.exec` with certain algorithms.
-|  2   | ace_err_privilege         | `ace.exec`, `ace.stage`, `ace.derive`, `ace.spawn` failed because the access control policies in the metadata prevent USE in the current architectural state.
-|  3   | ace_err_invalid           | Invalid input or operation.
-Examples:
-the metadata block passed to `ace.init` is invalid;
-encryption, resp., decryption is requested from a CC only configured for decryption, resp., encryption;
-the requested change of state in `ace.stage` is not permitted;
-the current state of the CC does not expect the used form of `ace.exec`;
-the change in usage policies in `ace.restrict` is not permitted because it would either downgrade or overwrite the current restrictions in the CC;
-a request to clone a CC violates the re-initialisation policies of the source CC.
-|  4   | ace_err_unimplemented     | The requested algorithm is not implemented. May be triggered also on algorithm variants, for instance if `ace.harden` is issued on an algorithm for which a non-side channel protected version is not implemented.
-|  5   | ace_err_memory            | The free internal CF memory is not sufficient to perform the `ace.init`, `ace.exec`, `ace.clone`, or `ace.derive`.
-The implementation should make sure this cannot happen with any other operation.
-If algorithms that support `ace.derive` are implemented, the implementation must make sure that both the input and output CCs of this operation can be allocated.
-|  6   | ace_err_unallocated_CC    | Software tried to use an unallocated CC as a source in a `ace.exec`, `ace.stage`, `ace.input`, `ace.output`, `ace.clone`, `ace.derive`, `ace.harden`, `ace.restrict` operations. +
-This can be used in low CF memory situations to trigger a re-load of that CC.
-|===
-
-==== Other Constants
-
-[.red]#*To be completed.*#
-
-In addition to error codes, ACE defines several constants, such as
-those in <<ACE-set_stage_constants>> which are used in `ace.stage`/`ace.dir` to change the state of a CC.
-Note that the internal state machine of a CC may also be changed implicitly by `ace.exec` or `ace.derive` operations, and the state machine of a cloned CC may be changed implicitly according to the algorithm's policies as encoded in the source CC's metadata.
-
-[[ACE-set_stage_constants]]
-.Constants defining messages sent to a CC through `ace.stage`/`ace.dir` operations
-[float="center",align="center",width="100%",cols="^6%,<29%,<65%",options="header"]
-|===
-|Value | Mnemonic                    | Examples
-|  0   | ace_const_ok                | All is fine. Life is beautiful. No error from ACE.
-|  1   | ace_const_encrypt           | Encryption is requested.
-|  2   | ace_const_decrypt           | Decryption is requested.
-|  3   | ace_const_hash_start        | Start (and initialize) a hash function or the sub-function of an algorithm.
-|  4   | ace_const_hash_finalize     | Finalize the internal state of a hash function and prepare it for outputting the result.
-|  5   | ace_const_hash_update       | Update the internal state of a hash function with new data.
-|  6   | ace_const_set_public_value  | Set a public value (like a nonce or an IV) in an algorithm. Some algorithms require more than one public value (for instance, a re-useable hash of some associated data and a unique nonce), in which case the second public value can be set using the next message.
-|  7   | ace_const_set_public_value_2  | Set the second public value in an algorithm.
-|===
