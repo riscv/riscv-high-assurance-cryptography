@@ -2,7 +2,7 @@
 === Locales
 
 Internally, ACE has a table of 128-bit Locale Secrets (LS), the Locale Secrets Table (LST).
-Some of these entries are fixed, other values may be configurable only using an implementation-specific authenticated hardware procedure, and the remaining may be programmed by MM (*Note:* _we need to define the corresponding CSRs_).
+Some of these entries are fixed, other values may be configurable only using an implementation-specific authenticated hardware procedure, and the remaining may be programmed by Machine Mode (*Note:* _we need to define the corresponding CSRs_).
 The LST is a global table shared across all ACE units with some fields which can be overridden by values which are architected (i.e., per hart).
 //Currently, the only two values that may be overridden by architectural values, in order to support multiple VMs/Supervisor Domains/Worlds are System_Secret and Boot_Session.
 
@@ -10,15 +10,15 @@ If the Locale Field of a context (CC/SCC) is -1 (all ones), then the CTK is used
 Otherwise, this value is used as an index _i_ in the HST, and a derived key computed from CTK and LST[_i_] is used for import/export in place of the CTK.
 The encryption and authentication keys are then derived from the Locale CTK.
 
-In <<binding-indices>>, we list the mandatory entries and their meaning.
+In <<ACE-binding-indices>>, we list the mandatory entries and their meaning.
 In the column "MM-Writeable" we indicate whether MM can write the corresponding Locale Token.
 
-[[binding-indices]]
+[[ACE-binding-indices]]
 .Mandatory Locale Values
 [width="100%",cols="19%,55%,^9%,^7%",options="header"]
 |===
 .>| Name .>| Description .>| MM-Writeable .>| Value
-| No locale binding         | | | -1
+| No locale binding         | | | -1 (15)
 | Chip Manufacturer         | Identifies the manufacturer of the SoC. Permanent. | N | 0
 | Chip Model                | Identifies specific chip model/family. Permanent. | N | 1
 | OEM Secret                | Provisioned by OEM to differentiate their products from the competition.
@@ -29,13 +29,14 @@ In the column "MM-Writeable" we indicate whether MM can write the corresponding 
                                Reconfigurable like OEM_Secret. | N | 4
 | OS Secret                 | Identifies Operating System (or System Stack). +
                               Not permanent, must be configured during (virtual) boot. | Y | 5
-| Boot_Session              | Regenerated at each (virtual) boot. | Y | 6
+| Boot Session              | Regenerated at each (virtual) boot. | Y | 6
 | Reserved                  | Reserved for future use. | N/A | 7-14
 |===
 
-[[ace-virtual-reboot,Remark {counter:remark}]]
+[[ACE-virtual-reboot,Remark {counter:remark}]]
 *Remark {counter:remark}.* _We need to mention what to do in case there is a reboot of a VM.
-The MM has the responsibility to "virtualize" the seventh locale secret.
+Machine Mode has the responsibility to "virtualize" the boot session locale secret, i.e., the sixth entry in the LST._
+
 // , since some VMs may reboot while others may not.
 // Also, do we want to allow a VM to have a different virtual hardware? Or does it always declare the same configuration as the underlying hardware?_
 // In principle, all this can be done by calling into MM. MM would need to keep track of the locale binding values and ensure that they are updated correctly when necessary.
@@ -43,7 +44,7 @@ The MM has the responsibility to "virtualize" the seventh locale secret.
 *Example*: _If a key's metadata specifies a Locale field value of "2", the key for import/export operations is derived from the CTK and the "OEM Secret".
 Consequently, while `ace.export` remains functional on the same device to support context switching, an `ace.import` of the resulting blob on a device from a different OEM will trigger an authentication failure (provided that the OEM Secrets are, in fact, different)._
 
-[[ace-careful-with-internal-keys,Remark {counter:remark}]]
+[[ACE-careful-with-internal-keys,Remark {counter:remark}]]
 *Remark {counter:remark}.* _In a CC, a key may be referred to using an index into an internal, system defined key table, called the System Key Table (STK). If some of these keys are device specific, they will not work on a second device.
 However, if the Locale of this CC is not restricted, the internal key index may be interpreted as the corresponding internal keys on a different device, with unpredictable consequences.
 Hence the implementation of the STK must also provide the proper Locale metadata to the ACE XU to configure a CC._
