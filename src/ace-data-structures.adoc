@@ -1,19 +1,19 @@
 === Data Structures
 
 [[ACE-metadata]]
-==== Metadata Block Format
+==== Metadata Section Format
 
-The metadata block is 64 bits long and its format described in <<ACE-metadata-standard>>.
+The metadata section is 64 bits long and its format described in <<ACE-metadata-standard>>.
 This format is used to for CC initialization, export and import purposes.
 The internal representation of the metadata in CF memory is implementation dependent.
 
 To initialize a CC, the first 64 bits of the input buffer contain the metadata in entirely in cleartext.
 The metadata is in cleartext also in exported SCCs.
-The entire metadata block is included in the computation of the authentication tag.
+The entire metadata section is included in the computation of the authentication tag.
 The details are described in <<ACE-formats>>.
 
 [#ACE-metadata-standard]
-.Format of the Metadata Block
+.Format of the Metadata Section
 [width="100%",cols=">9%,^7%,17%,67%",options="header"]
 |===
 |   Field | Width | Name                  | Description
@@ -25,20 +25,16 @@ Encoding described in <<ACE-SC-protection-levels>>.
 | [12:11] |   2  | Direction_Policy       | Determines whether the CC may be used for encryption (bit 11 set), decryption (bit 12 set), or both (bits 11 and 12 set).
 Valid only for encryption/decryption primitives or modes, and ignored, for instance, for hash functions.
 | [14:13] |   2  | Key_Type               | By explicit value / Immutable (index) / Internally generated.
-| [18:15] |   4  | Locale                 | Field which is either -1 or an index into the Locale Secrets Table. +
-See also <<ACE-what-are-locales>> below for more details.
+| [18:15] |   4  | Locale                 | Field which is either -1 or an index into the Locale Secrets Table.
 | [20:19] |   2  | Completion             | Defined in <<ACE-CC-complete>>.
 Used to determine whether an operation must be restarted.
 | [24:21] |   4  | Stage (also Direction) | Internal current state of the state machine of the algorithm. Must be zero upon configuration, otherwise algorithm specific.
 See <<stage-field>> below.
-| [28:25] |   4  | AC_Policy_1            | Forbid USE of this CC in User, Supervisor or Virtual Supervisor, Hypervisor, resp., Machine Mode if bit 25, 26, 27, resp. 28, is set.
-| [30:29] |   2  | AC_Policy_2            | If bit 29, resp., 30, is set, then restrict USE by `ASID`, resp., `VMID`.
-Restriction by `ASID` ignored if in S Mode or higher.
-See also <<stage-no-H-no-VMID>> below.
+| [28:25] |   4  | Use_Policy_1           | Forbid the _use_ of this CC in User, Supervisor or Virtual Supervisor, Hypervisor, resp., Machine Mode if bit 25, 26, 27, resp. 28, is set. Cf. <<stage-no-H-no-VMID>>.
+| [30:29] |   2  | Use_Policy_2           | If bit 29, resp., 30, is set, then restrict USE by `ASID`, resp., `VMID`. Restriction by `ASID` ignored if in S Mode or higher. Cf. <<stage-no-H-no-VMID>>.
 |    [31] |   1  | Reserved               | Undefined.
-| [47:32] |  16  | AC_Policy_3            | Zero if bit 29 unset, else `ASID` to enforce.
-| [63:48] |  16  | AC_Policy_4            | Zero if bit 30 unset, else `VMID` to enforce.
-See also <<stage-no-H-no-VMID>> below.
+| [47:32] |  16  | Use_Policy_3           | Zero if bit 29 unset, else `ASID` to enforce.
+| [63:48] |  16  | Use_Policy_4           | Zero if bit 30 unset, else `VMID` to enforce. See also <<stage-no-H-no-VMID>> below.
 |===
 
 [[ACE-SC-protection-levels]]
@@ -54,12 +50,6 @@ See also <<stage-no-H-no-VMID>> below.
 
 Custom algorithms may offer stronger side channel protection guarantees than those specified in the encoding values 0 to 2.
 In such a case, the value of the SC_Protection field must be set to 3.
-
-[[ACE-what-are-locales,Remark {counter:remark}]]
-*Remark {counter:remark}.* _Locales are used to restrict CCs to specific classes of devices or to a boot-session.
-They are implemented as secret values that are combined with the CTK to compute the effective key to be used in export and import operations.
-Such values are stored in _Locale Secrets Table_ (cf <<ACE-Locales>>), which consists of fixed system-wide values and of MM-programmable ones.
-In the metadata, the Locale is expressed as an index into this table._
 
 [[ACE-CC-complete]]
 .Encoding of completion field
@@ -79,19 +69,19 @@ In the metadata, the Locale is expressed as an index into this table._
 For algorithms with more complex state machines, machine state information can be stored in a custom data section of the CC._
 
 [[stage-no-H-no-VMID,Remark {counter:remark}]]
-*Remark {counter:remark}.* _If the H extension is not enabled, bits 30 and [63:48] must be set to 0, and bit 27 must be set to 1. +
-The "AC_Policy_4" field is 16-bits long for compatibility with architectures employing 16-bit `VMID` fields (for instance, in heterogeneous systems).
+*Remark {counter:remark}.* _If the H extension is not enabled, bit 27 must be set to 1, and bits 30 and [63:48] must be set to 0.
+The "Use_Policy_4" field is 16-bits long for compatibility with architectures employing 16-bit `VMID` fields (for instance, in heterogeneous systems).
 While interoperability cannot be guaranteed when this policy is used, this ensures that the two top bits are not used for other purposes. +
-Filtering use by Supervisor Domain or World ID is not supported, and not only because of lack of space in a 64-bit metadata block:
+Filtering use by Supervisor Domain or World ID is not supported, and not only because of lack of space in a 64-bit metadata section:
 Reconfiguring the CTK is a better approach for such isolation requirements, whereas isolation by `ASID` and `VMID` is a weaker security feature._
 
 [[ACE-formats]]
 ==== Formats of Configuration Inputs and Sealed Configuration Contexts
 
-The format of the input to `ace.init` is simple: the first 8 bytes must contain the 64-bit metadata block, followed by any key and additional information in a format specified by the algorithm. The total length of this input must be a multiple of 8 bytes.
+The format of the input to `ace.init` is simple: the first 8 bytes must contain the 64-bit metadata section, followed by any key and additional information in a format specified by the algorithm. The total length of this input must be a multiple of 8 bytes.
 Formally, each algorithm must provide following functions:
 
-* `metadata_deserialize`: Takes the clear or decrypted metadata block, and deserializes it for the internal representation.
+* `metadata_deserialize`: Takes the clear or decrypted metadata section, and deserializes it for the internal representation.
 * `metadata_serialize`: Serializes the internal metadata into a 64-bit block for export.
 * `initial_content_deserialize`: Reads the information provided to `ace.init` that follows the metadata, and deserializes it for the internal representation.
 * `content_serialize`: Serialize a CC's content to a sequence of 128-bit blocks to be encrypted for export.
@@ -183,7 +173,7 @@ Error codes specific to custom algorithms may be freely defined in the range [12
 |  2   | ace_err_privilege         | `ace.exec`, `ace.stage`, `ace.derive`, `ace.spawn` failed because the access control policies in the metadata prevent USE in the current architectural state.
 |  3   | ace_err_invalid           | Invalid input or operation.
 Examples:
-the metadata block passed to `ace.init` is invalid;
+the metadata section passed to `ace.init` is invalid;
 encryption, resp., decryption is requested from a CC only configured for decryption, resp., encryption;
 the requested change of state in `ace.stage` is not permitted;
 the current state of the CC does not expect the used form of `ace.exec`;
