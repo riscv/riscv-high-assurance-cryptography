@@ -13,9 +13,9 @@ The atomic cryptography extension defines 32 Cryptographic Contexts (CCs) for st
 Each CC is identified by a number from 0 to 31, which the ACE unit uses to access its contents.
 CCs are addressed via static 5-bit immediate addressing (as normal registers) as well as, unlike traditional registers, via a value from 0 to 31 in any general-purpose register.
 
-CCs reside in a dedicated internal _context file_ (CF) that is inaccessible to any entity outside the ACE security perimeter, including software, other hardware blocks, and invasive debug interfaces. CF memory capacity is implementation-defined, in theory up to 32 times the size of the largest possible CC, but in practice a smaller amount of memory can be used.  To the very minimum, the CF must be able to hold a single instance of the largest possible CC, or the largest CC pair where the first one derives the second (using `ace.derive`).
+Cryptographic Contexts (CCs) reside in a dedicated internal _context file_ (CF) that is inaccessible to any entity outside the ACE security perimeter, including software, other hardware blocks, and invasive debug interfaces. The CF's memory capacity is implementation-defined and may be as large as 32 times the size of the largest possible CC; however, a smaller amount of memory may be used in practice. At a minimum, the CF must be capable of holding either a single instance of the largest possible CC or the largest CC pair in which the first CC derives the second (via `ace.derive`).
 
-The size of each CC is dynamic, determined by the cryptographic algorithm with which is if configured.
+The size of each CC is dynamic, determined by the cryptographic algorithm with which it is configured.
 ACE returns an error when insufficient memory prevents `ace.init` and `ace.import` operations, requiring the software to free memory by exporting or clearing a different CC. Implementations must provide sufficient CF memory to prevent infinite `ace.export`/`ace.import` loops.
 The same error may occur also if `ace.input` fails for the same reason.
 
@@ -52,7 +52,7 @@ The hart will trap if ACE ISE is enabled by writing to the `acecsr` CSR. To be u
 The Disabled-Clean and Disabled-Clobbered states are set by the parent mode to optimize context switching. Disabled-Clobbered is used when the parent-mode software stack does not save cryptographic contexts before transferring control to a process that does not (yet) have enabled ACE. If that process later enables ACE by writing to `acecsr`, the hart traps to the parent mode, allowing lazy context save; the parent must then manually reset all cryptographic contexts. In contrast, a software stack that always saves the contexts of a switched-out process should configure only the Disabled-Clean state, as enabling ACE in this case will automatically reset all contexts. The Disabled-Clobbered state is primarily intended for small devices where thread migration between harts is infrequent.
 
 Changing the setting of ACES has no effect on the contents of the CCs.
-In particular, setting ACES=Disabled-Clean or Disabled-Clobbered does not destroy the state, nor does setting ACES=Enabled clear the contents.
+Setting ACES=Disabled-Clean or Disabled-Clobbered does not destroy the state, nor does setting ACES=Enabled clear the contents.
 
 [.red]#*TBD* _An exception code must be allocated for when ACE enablement occurs while ACES=Disabled-Clobbered._#
 
@@ -140,7 +140,7 @@ _A single `ccstart` value suffices due to the authenticated encryption algorithm
 
 * `_ace.init_` _(formerly `ace.config`) is a single-pass operation: the metadata block is read first, determining the payload length. If sufficient memory is available, subsequent blocks are read sequentially and passed to a deserialization circuit to populate the CC._
 * `_ace.import_` _operates similarly to `ace.init`: the metadata block is read first to determine the payload length. If sufficient memory is available, the remaining blocks are read, decrypted, and passed to a deserialization circuit to populate the CC._
-* `_ace.export_` _involves two passes, but the first pass is entirely internal to the ACE unit. Hence, the first pass cannot cause a page fault, and is easily restarted: specifically, it compute the SIV by applying poly1305 to the serialized CC content.  Subsequently, the serialized metadata, nonce, and SIV are written out, followed by the CC content, which it serialized, encrypted and written out block by block. This part may cause page faults, but it can be easily restarted._
+* `_ace.export_` _involves two passes, but the first pass is entirely internal to the ACE unit. Hence, the first pass cannot cause a page fault, and is easily restarted: specifically, it compute the SIV by applying POLYVAL to the serialized CC content.  Subsequently, the serialized metadata, nonce, and SIV are written out, followed by the CC content, which it serialized, encrypted and written out block by block. This part may cause page faults, but it can be easily restarted._
 
 _Although these operations are inherently complex, the ACE unit is architected to function like a separate machine executing simpler instructions sequentially. State machines (one per CPU hart connected to the ACE unit, potentially in a 1-to-1 configuration) receive commands from the CPU and break them into smaller steps._
 
@@ -148,8 +148,7 @@ _Therefore, separating data transfer from cryptographic operations in import/exp
 
 _Finally, resuming requires at least as many cryptographic operations as restarting if the trapped domain also saves and resumes partial SCCs. Memory accesses may be reduced, but since data read from memory initially (for `ace.init` or `ace.export`) may no longer reside in the caches, resuming may offer better performance on some systems. Additionally, resuming avoids potential circular page-fault issues, as opposed to restarting._
 
-[.red]#*TBD* Specify the exact semantics of `ccstart` and define the points at which various operations can be interrupted.
-Also include negative values for internal poly1305 processing in `ace.export`.#
+[.red]#*TBD* Specify the exact semantics of `ccstart` and define the points at which various operations can be interrupted.#
 
 ==== Reuse of ASID and VMID (to be verified).
 
