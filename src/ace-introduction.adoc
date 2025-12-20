@@ -103,8 +103,7 @@ The most important instructions provided by ACE are the following:
 * `ace.import`, to authenticate, decrypt a SCC from memory and import it into a CC;
 * `ace.exec`, to perform a cryptographic operation on a block (e.g., 128 bits) of the input;
 * `ace.stage/ace.dir`, to configure the CC for encryption/decryption or move from one stage of an algorithm to another; and
-* a register for error reporting.
-//* `ace.error`, to report an error condition, which can be implemented as a read operation from a CSR.
+* `ace.error`, to report an error condition, which can be implemented as a read operation from a CSR.
 
 Other instructions are provided and these will be discussed in detail later.
 
@@ -119,8 +118,8 @@ They are denoted by `Cn`, with `n` in [0..31].
 
 [[remark-alternatives,Remark {remark_count}]]
 *Remark {counter:remark}.* _Alternatives can be discussed:
-We can envision a version of ACE that uses pairs of 64-bit GPRs or quartets of 32-bit GPRs in place of 128-bit vectors.
-These could be discovered and selected using configuration bits.
+It is possible to envision a version of ACE that uses pairs of 64-bit GPRs or quartets of 32-bit GPRs in place of 128-bit vectors.
+Such a variant could be discovered and selected using configuration bits.
 We can also use `ace.input` and `ace.output` instructions that load an input from memory, resp., store output to memory -- which are currently optional and ideally reserved for future algorithms that use long inputs, such as certain post-quantum public-key algorithms.
 Since no other change would be needed in the entire architecture, we suspend further discussion on this until later.
 For 256-bit wide ciphers, we may need to group even more GPRs, whereas the vector unit allows easier resizing or spilling into the next register._
@@ -192,16 +191,18 @@ In the following example, a process wants to AES-encrypt some data using a key t
 - Allocate memory for ciphertext buffer.
 
 ace.import C0, [X5]                       // Import the SCC into CC C0
-if (aceerror != 0) then { handle error }  // ACE may fail to validate SCC, algorithm
-                                          // not supported, or CF memory full.
-vsetvli zero, 4, e32, m1, ta, ma          // Use 128-bit vectors.
-ace.stage C0, #ace_const_encrypt
-if (aceerror != 0) then { handle error }  // Error if encryption is not allowed by CC
+ace.error X1,C0                           // Read error from a CSR
+if (X1 != 0) then { handle error }        // ACE may fail to validate SCC, algorithm
+                                          // not supported, or CF memory full
+vsetvli zero, 4, e32, m1, ta, ma          // Use 128-bit vectors
+ace.stage C0, #ace_const_encrypt          // Configure CC for encryption
+ace.error X1,C0
+if (X1 != 0) then { handle error }        // Error if encryption is not allowed by CC
 
 foreach (i from 0 to ceil(len_in_bytes(plaintext)/16)-1) {
-    - load V0 from *(plaintext+16*i)
+    - load V0 from address plaintext+16*i
     ace.exec V0, C0, V                    // Encrypt one block of the plaintext
-    - store V0 at *(ciphertext+16*i)
+    - store V0 at address ciphertext+16*i
 }
 ----
 
