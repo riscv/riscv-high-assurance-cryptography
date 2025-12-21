@@ -31,10 +31,12 @@ This will allow the unit to perform operations, access the general purpose and v
 Disabling ACE in User Mode is done by writing a zero to `aceenable`.
 This will also clear the contents of all cryptographic contexts.
 
-While the standard floating-point and vector extensions do not support User Mode disable/enable instructions, the ACE unit can be enabled and disabled in User Mode. Instead of using an OS call or trapping, enablement and disablement will be mostly performed inside the ACE unit. However, if, as described above, the ACE unit contains state from a different process, and its interface is disabled for the current one, enabling it will trap to the parent mode to allow the parent to first save the state in case it was not saved before and then clear it (lazy context switch), or only clear it if it was saved earlier.
+While the standard floating-point and vector extensions do not support User Mode disable/enable instructions, the ACE unit can be enabled and disabled in User Mode. Instead of using an OS call or trapping, enablement and disablement will be mostly performed inside the ACE unit. However, if, as described above, the ACE unit contains state from a different process, and its interface is disabled for the current one, enabling it will trap to the Supervisor (as described in <<ACE-ACES-field>>) to allow the latter to first save the state in case it was not saved before and then clear it (lazy context switch), or only clear it if it was saved earlier.
 
 Writes to `aceenable` only affect the CCs upon disablement, as described in <<ACE-tracking-cc-dirtiness>>.
 
+Enablement in other modes uses a special field in the `*status` CSRs. (cf.{nbsp}<<ACE-ACES-field>>).
+Writing to `aceenable`, is allowed in more privileged modes, only affects the enablement of the feature in User mode.
 
 ==== acectk
 
@@ -51,6 +53,7 @@ There is need to raise exceptions if SW running in any other mode tries to write
 NOTE: Discoverability of this feature is not critical, since this should be information known by the Machine Mode firmware.
 [.red]#We can use the data structure pointed by `mconfigptr` in order to track optional features of ACE including whether the `acectk` CSR block is implemented, and if not whether whether the value is ephemeral or fixed.#
 
+[[ACE-ACES-field]]
 ==== ACES field in *status
 
 An ACE context status field, ACES, is added to `mstatus`[26:25], and it is shadowed in `sstatus`[26:25] and in `vsstatus`[26:25] if the hypervisor extension is present.
@@ -120,10 +123,9 @@ This will tell the context-switching code that there is no need to save the CC n
 
 Upon a write to `aceenable` that changes its value, the following happens to `aceccvalid` and `aceccdirty`:
 
-* If software changes the value of `aceenable` to 0, then all CCs are cleared, both `aceccvalid` and `aceccdirty` are set to 0, and `*status.ACES` is set to Disabled-Clean.
-* If software changes the value of `aceenable` to 1, and
- ** if the parent's domain `*status.ACES`=Disabled-Clean, then we simply assume that the parent process has cleared the CC and set both `aceccvalid` and `aceccdirty` to 0 before transferring the control flow to the current process;
- ** if the parent's domain `*status.ACES`=Disabled-Clobbered, then the hart traps to allow the parent domain responsible for handling context-switched to finish saving the state and ensure that both `aceccvalid` and `aceccdirty` are set to 0, and finally set `*status.ACES`=Disabled-Clean.
+* If `aceenable`'s value is changed to 0, then all CCs are cleared, both `aceccvalid` and `aceccdirty` are set to 0, and `*status.ACES` is set to Disabled-Clean.
+* If `aceenable`'s value is changed to 1, and if the parent domain's `*status.ACES`=Disabled-Clean, then we simply assume that the parent process has cleared the CC and set both `aceccvalid` and `aceccdirty` to 0 before transferring the control flow to the current process.
+* If `aceenable`'s value is changed to 1, and if the parent's `*status.ACES`=Disabled-Clobbered, then the hart traps to allow the parent domain responsible for handling context-switched to finish saving the state and ensure that both `aceccvalid` and `aceccdirty` are set to 0, and finally set `*status.ACES`=Disabled-Clean. [.red]#This behavior should be restricted only to User mode.#
 
 
 
