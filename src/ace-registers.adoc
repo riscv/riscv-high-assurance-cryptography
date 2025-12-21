@@ -17,7 +17,7 @@ The size of each CC is dynamic, determined by the cryptographic algorithm with w
 ACE returns an error when insufficient memory prevents `ace.init` and `ace.import` operations, requiring the software to free memory by exporting or clearing a different CC. Implementations must provide sufficient CF memory to prevent infinite `ace.export`/`ace.import` loops.
 The same error may occur also if `ace.input` fails for the same reason.
 
-==== ACE field in misa
+==== PRIVILEGED: ACE field in misa
 
 The `misa.ACE` field uses bit `L` (11) to indicate that the ACE extension is implemented.
 //This bit is chosen because the extension goes _beyond_ the cryptographic extension, which will likely use bit `K` (10).
@@ -38,7 +38,7 @@ Writes to `aceenable` only affect the CCs upon disablement, as described in <<AC
 Enablement in other modes uses a special field in the `*status` CSRs. (cf.{nbsp}<<ACE-ACES-field>>).
 Writing to `aceenable`, is allowed in more privileged modes, only affects the enablement of the feature in User mode.
 
-==== acectk
+==== PRIVILEGED: acectk
 
 If CTK can be programmed by Machine Mode, then eight 32-bit CSRs are available, called `acectk0`, `acectk1` .. `acectk7`, to allow Machine Mode to program the CTK.
 `acectk{i}` contains bits [stem:[31+32\,i:32\,i]] of the CTK.
@@ -50,6 +50,8 @@ There is need to raise exceptions if SW running in any other mode tries to write
 
 NOTE: Discoverability of this feature is not critical, since this should be information known by the Machine Mode firmware.
 [.red]#We can use the data structure pointed by `mconfigptr` in order to track optional features of ACE including whether the `acectk` CSR block is implemented, and if not whether whether the value is ephemeral or fixed.#
+
+NOTE: User mode, and even operating systems and hypervisors, need not be aware of the `acectk` block. Other mechanisms could be used to program the CTK, such as a MM-exclusive dedicated hardware interface or memory-mapped interface.
 
 [[ACE-ACES-field]]
 ==== ACES field in *status
@@ -78,7 +80,6 @@ The Disabled-Clobbered state is primarily intended for small devices where threa
 
 NOTE: It is responsibility of the exception handler to properly handle the contents of the CCs when the feature is enabled while ACES=Disabled-Clobbered, as
 decribed in <<ACE-tracking-cc-dirtiness>>.
-
 
 Writes to ACES do not affect the contents of the CCs.
 Setting ACES=Disabled-Clean or Disabled-Clobbered does not destroy the state, nor does setting ACES=Enabled clear the contents.
@@ -124,8 +125,6 @@ Upon a write to `aceenable` that changes its value, the following happens to `ac
 * If `aceenable`'s value is changed to 0, then all CCs are cleared, both `aceccvalid` and `aceccdirty` are set to 0, and `*status.ACES` is set to Disabled-Clean.
 * If `aceenable`'s value is changed to 1, and if the parent domain's `*status.ACES`=Disabled-Clean, then we simply assume that the parent process has cleared the CC and set both `aceccvalid` and `aceccdirty` to 0 before transferring the control flow to the current process.
 * If `aceenable`'s value is changed to 1, and if the parent's `*status.ACES`=Disabled-Clobbered, then the hart traps to allow the parent domain responsible for handling context-switched to finish saving the state and ensure that both `aceccvalid` and `aceccdirty` are set to 0, and finally set `*status.ACES`=Disabled-Clean. [.red]#This behavior should be restricted only to User mode.#
-
-
 
 [[ACE-ccstart-definition]]
 ==== ccstart
@@ -177,7 +176,7 @@ In the metadata section, `ASID` and `VMID` are always zero padded to the maximal
 [[ACE-providing-keys,Remark {counter:remark}]]
 *Remark {counter:remark}.* _The software in each World/Supervisor Domain is normally responsible to generate or obtain their own keys, and if a process (applet) in one World/Supervisor Domain is responsible to provide keys to other Worlds/Supervisor Domains, it is the responsibility of the MM to perform an appropriate sequence of import, switch the CTK, then export operations._
 
-==== Re-configurable Locales
+==== PRIVILEGED: Re-configurable Locales
 
 We need two further groups of four consecutive 32-bit CSRs, programmable by the Machine Mode, to define two reconfigurable locales
 (cf.{nbsp}<<ACE-concepts>>).
@@ -186,3 +185,5 @@ These groups are:
 and `ace_Boot_Session{i}`, for `i` in [0..3], to configure the "Boot Session" entry (cf.{nbsp}<<ACE-Locales>>).
 
 The reason `ace_Boot_Session*` must be reconfigurable is that it must change in a VM if the latter's virtual hardware is re-booted, and this can happen independently from the underlying host and other VMs. For instance, a VM may be frozen, then the host may be rebooted, and then the VM may be resumed, in which case no boot session occurred in the VM, while it happened in the host hardware.
+
+NOTE: User mode, and even operating systems and hypervisors, need not be aware of the `ace_OS_Secret{i}` and `ace_Boot_Session{i}` blocks. Other mechanisms could be used to program the "OS Secret" and  "Boot Session" entries, such as a MM-exclusive dedicated hardware interface or memory-mapped interface.
