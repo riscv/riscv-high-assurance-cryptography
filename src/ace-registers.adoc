@@ -19,40 +19,8 @@ The same error may occur also if `ace.input` fails for the same reason.
 
 ==== ACE field in misa
 
-We define the `misa.ACE` field to reflect that the ACE has been implemented, as the `L` bit (bit number 11).
-We suggest this bit because this extension goes _beyond_ the cryptographic extension, which will likely use the letter `K` (bit number 10).
-
-==== ACECTKMODE field in mconfigptr
-
-[.red]#We will use the data structure pointer by `mconfigptr` in order to track optional features of ACE including whether the `acectk` CSR block is implemented, and if not whether whether the value is ephemeral or fixed.#
-
-==== ACES field in *status
-
-An ACE context status field, ACES, is added to `mstatus`[26:25] and shadowed in `sstatus`[26:25],
-and possibly `vsstatus`[26:25] if the hypervisor extension is present.
-It can be used, like the FS and VS fields, to optimize context switching.
-Its status encoding differs from the FS, VS, and XS fields (which are defined in <<fsxsencoding>>).
-The three possible status values are: Disabled-Clean, Disabled-Clobbered, and Enabled, as described in <<ACE-fsxsencoding>>.
-
-[[ACE-fsxsencoding]]
-.Encoding of ACES[1:0] status field
-[float="center",align="center",width="100%",cols="^7%,<18%,<75%",options="header"]
-|===
-|Status |Name |Meaning
-|   0   | Disabled-Clean     | ACE ISE not enabled, software assumes no context being configured for this hart. +
-The ACE unit will erase all contexts if ACE is enabled by writing to the `acecsr` CSR.
-|   1   | Disabled-Clobbered | ACE ISE not enabled, software assumes there are configured contexts left for this hart from other environments.
-The hart will trap if ACE ISE is enabled by writing to the `acecsr` CSR. To be used only if explicitly supported in system SW stack, otherwise Disabled-Clean should be used.
-|   2   | Enabled            | ACE ISE enabled.
-|   3   | Invalid            | Reserved.
-|===
-
-The Disabled-Clean and Disabled-Clobbered states are set by the parent mode to optimize context switching. Disabled-Clobbered is used when the parent-mode software stack does not save cryptographic contexts before transferring control to a process that does not (yet) have enabled ACE. If that process later enables ACE by writing to `acecsr`, the hart traps to the parent mode, allowing lazy context save; the parent must then manually reset all cryptographic contexts. In contrast, a software stack that always saves the contexts of a switched-out process should configure only the Disabled-Clean state, as enabling ACE in this case will automatically reset all contexts. The Disabled-Clobbered state is primarily intended for small devices where thread migration between harts is infrequent.
-
-Changing the setting of ACES has no effect on the contents of the CCs.
-Setting ACES=Disabled-Clean or Disabled-Clobbered does not destroy the state, nor does setting ACES=Enabled clear the contents.
-
-[.red]#*TBD* _An exception code must be allocated for when ACE enablement occurs while ACES=Disabled-Clobbered._#
+The `misa.ACE` field uses bit `L` (11) to indicate that the ACE extension is implemented.
+//This bit is chosen because the extension goes _beyond_ the cryptographic extension, which will likely use bit `K` (10).
 
 ==== aceenable
 
@@ -65,7 +33,56 @@ This will also clear the contents of all cryptographic contexts.
 
 While the standard floating-point and vector extensions do not support User Mode disable/enable instructions, the ACE unit can be enabled and disabled in User Mode. Instead of using an OS call or trapping, enablement and disablement will be mostly performed inside the ACE unit. However, if, as described above, the ACE unit contains state from a different process, and its interface is disabled for the current one, enabling it will trap to the parent mode to allow the parent to first save the state in case it was not saved before and then clear it (lazy context switch), or only clear it if it was saved earlier.
 
-The fine-grained tracking of activeness and dirtiness of individual CCs is done using the `aceccactive` and `aceccdirty` CSRs, cf. <<ACE-tracking-cc-dirtiness>>,
+Writes to `aceenable` only affect the CCs upon disablement, as described in <<ACE-tracking-cc-dirtiness>>.
+
+
+==== acectk
+
+If CTK can be programmed by Machine Mode, then eight 32-bit CSRs are available, called `acectk0`, `acectk1` .. `acectk7`, to allow Machine Mode to program the CTK.
+
+`acectk{i}` contains bits [stem:[31+32\,i:32\,i]] of the CTK.
+
+The `acectk` block, if writable, is writable exclusively by MM.
+Either all the `acectk` CSRs are writable, or none of them are.
+
+The `acectk` block reads as zero in all cases and in all modes.
+There is need to raise exceptions if SW running in any other mode tries to write to it.
+
+NOTE: Discoverability of this feature is not critical, since this should be information known by the Machine Mode firmware.
+[.red]#We can use the data structure pointed by `mconfigptr` in order to track optional features of ACE including whether the `acectk` CSR block is implemented, and if not whether whether the value is ephemeral or fixed.#
+
+==== ACES field in *status
+
+An ACE context status field, ACES, is added to `mstatus`[26:25], and it is shadowed in `sstatus`[26:25] and in `vsstatus`[26:25] if the hypervisor extension is present.
+Like the FS and VS fields, it can be used to optimize context switching.
+//Its status encoding differs from the FS, VS, and XS fields (which are defined in <<fsxsencoding>>).
+Its possible values are described in <<ACE-fsxsencoding>>.
+
+[[ACE-fsxsencoding]]
+.Encoding of ACES[1:0] status field
+[float="center",align="center",width="100%",cols="^7%,<18%,<75%",options="header"]
+|===
+|Status |Name |Meaning
+|   0   | Disabled-Clean     | ACE ISE not enabled, software assumes no context being configured for this hart. +
+The ACE unit will erase all contexts if ACE is enabled by writing to the `aceenable` CSR.
+|   1   | Disabled-Clobbered | ACE ISE not enabled, software assumes there are configured contexts left for this hart from other environments.
+The hart will trap if ACE ISE is enabled by writing to the `aceenable` CSR. To be used only if explicitly supported in system SW stack, otherwise Disabled-Clean should be used.
+|   2   | Enabled            | ACE ISE enabled.
+|   3   | Invalid            | Reserved.
+|===
+
+The Disabled-Clean and Disabled-Clobbered states are set by the parent mode.
+Disabled-Clobbered is used when the parent-mode software stack does not save cryptographic contexts before transferring control to a process that does not (yet) have enabled ACE. If that process later enables ACE by writing to `aceenable`, the hart traps to the parent mode, allowing lazy context save; the parent must then manually reset all cryptographic contexts. In contrast, a software stack that always saves the contexts of a switched-out process should configure only the Disabled-Clean state.
+The Disabled-Clobbered state is primarily intended for small devices where thread migration between harts is infrequent, and possibly only one process may be dealing with cryptographic operations.
+
+NOTE: It is responsibility of the exception handler to properly handle the contents of the CCs when the feature is enabled while ACES=Disabled-Clobbered, as
+decribed in <<ACE-tracking-cc-dirtiness>>.
+
+
+Writes to ACES do not affect the contents of the CCs.
+Setting ACES=Disabled-Clean or Disabled-Clobbered does not destroy the state, nor does setting ACES=Enabled clear the contents.
+
+The fine-grained tracking of activeness and dirtiness of individual CCs is done using the `aceccactive` and `aceccdirty` CSRs, cf.{nbsp}<<ACE-tracking-cc-dirtiness>>,
 where also the effect of configuring and `aceenable` on `aceccactive` and `aceccdirty` is described.
 
 ==== aceerror
@@ -75,25 +92,6 @@ The `aceerror` CSR contains only as many bits as needed to encode the error stat
 // All other bits are reserved for future use.
 // It is not a complete analogue of `fcsr` or `vcsr` since, for instance, it does not have to encode information such as rounding modes.
 // Also, the error status is a field and not a set of distinct condition codes.
-
-==== acectk
-
-To program the CTK in the ACE unit, we need 256-bit worth of CSRs, reserved to M mode.
-
-For this purpose, eight 32-bit CSRs are allocated, called `acectk0`, `acectk1` .. `acectk7`.
-
-`acectk{i}` contains bits [stem:[31+32\,i:32\,i]] of the CTK.
-
-The `acectk` block, if writable, is writable exclusively by MM.
-Either all the `acectk` CSRs are writable, or none of them are.
-
-The `acectk` block reads as zero in all cases.
-
-There is need to raise exceptions if SW running in an any other mode tries to write to it or read it.
-
-[.red]#*TBD*: _How to discover whether `acectk` is writable or not by MM?_
-Can we use a second `misa` bit?
-Low priority.#
 
 [[ACE-tracking-cc-dirtiness]]
 ==== Tracking CC dirtiness
@@ -120,12 +118,13 @@ Context-switching code must save CC number _i_ if the _i_-th bit of `aceccdirty`
 However, it can clear `aceccdirty` when returning control to the same process after restoring its ACE state.
 This will tell the context-switching code that there is no need to save the CC number _i_ again at the next context switch out of that process in case it has not been modified again, i.e, it the _i_-th bit of `aceccdirty` is stil; set.
 
-If there is a write to `aceenable`, the following happens to `aceccvalid` and `aceccdirty`:
+Upon a write to `aceenable` that changes its value, the following happens to `aceccvalid` and `aceccdirty`:
 
-* If 0 is written to `aceenable` and the parent's domain `*status.ACES`=Enabled, then all CCs are cleared; both `aceccvalid` and `aceccdirty` are set to 0, and `*status.ACES` is set to Disabled-Clean.
-* If 1 is written to `aceenable` and
- ** if the parent's domain `*status.ACES`=Disabled-Clean, then all CCs are cleared and both `aceccvalid` and `aceccdirty` are set to 0.
- ** if the parent's domain `*status.ACES`=Disabled-Clobbered, then the hart traps into the parent process to allow the latter to finish saving the state and enseure that both `aceccvalid` and `aceccdirty` are set to 0, and finally set `*status.ACES`=Disabled-Clean.
+* If software changes the value of `aceenable` to 0, then all CCs are cleared, both `aceccvalid` and `aceccdirty` are set to 0, and `*status.ACES` is set to Disabled-Clean.
+* If software changes the value of `aceenable` to 1, and
+ ** if the parent's domain `*status.ACES`=Disabled-Clean, then we simply assume that the parent process has cleared the CC and set both `aceccvalid` and `aceccdirty` to 0 before transferring the control flow to the current process;
+ ** if the parent's domain `*status.ACES`=Disabled-Clobbered, then the hart traps to allow the parent domain responsible for handling context-switched to finish saving the state and ensure that both `aceccvalid` and `aceccdirty` are set to 0, and finally set `*status.ACES`=Disabled-Clean.
+
 
 
 [[ACE-ccstart-definition]]
@@ -180,8 +179,10 @@ In the metadata section, `ASID` and `VMID` are always zero padded to the maximal
 
 ==== Re-configurable Locales
 
-We need two further groups of 4 consecutive 32-bit CSRs, programmable by the MM, to define three reconfigurable locales (cf. <<ACE-Locales>>).
-These groups are: `ace_OS_Secret{i}`, for `i` in [0..3], and
-`ace_Boot_Session{i}`, for `i` in [0..3],
+We need two further groups of four consecutive 32-bit CSRs, programmable by the Machine Mode, to define two reconfigurable locales
+(cf.{nbsp}<<ACE-concepts>>).
+These groups are:
+`ace_OS_Secret{i}`, for `i` in [0..3], to configure the "OS Secret" entry,
+and `ace_Boot_Session{i}`, for `i` in [0..3], to configure the "Boot Session" entry (cf.{nbsp}<<ACE-Locales>>).
 
-`ace_Boot_Session*` is reconfigurable because it must change in a VM if the latter's virtual hardware is re-booted, and this can happen independently from the underlying host and other VMs. For instance, a VM may be frozen, then the host may be rebooted, and then the VM may be resumed, in which case no boot session occurred in the VM, while it happened in the host hardware.
+The reason `ace_Boot_Session*` must be reconfigurable is that it must change in a VM if the latter's virtual hardware is re-booted, and this can happen independently from the underlying host and other VMs. For instance, a VM may be frozen, then the host may be rebooted, and then the VM may be resumed, in which case no boot session occurred in the VM, while it happened in the host hardware.
