@@ -572,11 +572,9 @@ This instruction is trappable and may also be resumed or restarted.
 Description::
 A CC `Cs` (or indexed by `Xs`) may be in an error state due to the previous
 operation. The corresponding error value is written into GPR `Xd`.
-
 This is implemented as a CSR read operation, reading the error field of
 `acecsr` and masking it.
-
-The error value list must be architected.
+The error value list is architected and given in <<ACE-error-codes>>.
 
 // ==== ace.vr_busy
 //
@@ -591,3 +589,29 @@ The error value list must be architected.
 //
 // Can be CSR read operation.
 // It will return 1 or 0 whether there is at least one running ACE operation using the given CC.
+
+[[ACE-trappable-insns-support]]
+==== Appendix: Operations to implement trappable versions of the instructions
+
+Certain ACE operations must handle arbitrarily long inputs and outputs.
+To reduce hardware complexity, these operations can be made trappable and implemented in software as *Invisible Traps*.
+
+Instructions `ace.init`, `ace.clear`, `ace.export`, `ace.import`, `ace.input`, and `ace.output` fall into this category.
+When a trap occurs, the handler identifies the trapped instruction and can use `ace.size` to determine the size of the data to transfer, and the hardware will also be able to use `ccstart` to follow the resumption point for resumed instructions.
+Three types of supporting operations are required:
+
+* A `mv` instruction that loads a specified number of bytes from a GPR or vector register into a CC within the ACE unit.
+  Initially, `ace.size` returns the total payload length to transfer.
+  After each move, this value is updated to reflect the remaining bytes.
+  The instruction also updates the `ccstart` CSR to follow the internal progress.
+* A corresponding `mv` instruction that exports a specified number of bytes from a CC to a GPR or vector register.
+  The behavior of `ace.size` will be similar to that of the move instruction, but it will count the number of bytes to be exported.
+* A “`close`” instruction to suspend or finalize the procedure.
+  If executed before all bytes are transferred, the CC state matches that of an interrupted monolithic instruction, including the Completion metadata field and the `ccstart` value. If executed after all bytes are transferred, it also performs any final cryptographic operations, such as authenticating the CC, if needed.
+
+These instructions must be non-interruptible.
+
+The initial cryptographic step of `ace.export` and the authentication step of `ace.import` are assumed to be non-interruptible.
+Even if these parts are executed concurrently with other operations, the handler may need to wait for these steps to complete before proceeding with memory operations.
+These instructions are not explicitly defined in the architecture. They just need to be supported by to implementation-specific firmware.
+Interrupting the execution of this firmware between instructions must leave the architectural state indistinguishable from interrupting a monolithic instruction, as specified in this document.
