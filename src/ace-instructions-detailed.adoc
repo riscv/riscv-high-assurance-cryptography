@@ -11,6 +11,10 @@ encodings. They serve as a starting point for discussion and refinement as
 well as a proof that, at the time of this writing, the ACE instruction set
 can be encoded.
 
+NOTE: ACE seems to be an ideal candidate for the Composable Custom Extensions
+framework.
+
+
 ==== ace.enable/ace.disable
 
 `ace.enable` +
@@ -64,12 +68,14 @@ Encodings::
 
 Description::
 `Cd` is the source CC to be configured (encoded as a 5-bit immed). +
-`Xd`, alternatively, is a GPR containing a number from 0 to 31 to select the context to be configured. +
+`Xd`, alternatively, is a GPR containing a number from 0 to 31 to select the context
+to be configured. +
 GPR `Xs` points to the region of memory containing the metadata and the key material.
 
 Configures a CC with metadata and key, or using an index in the System Key Table.
 
-[.red]#(TBdetermined whether it is secure)# This instruction is trappable and may also be resumed or restarted.
+[.red]#(TBdetermined whether it is secure)#
+This instruction is trappable and may also be resumed or restarted.
 
 ==== ace.clear
 
@@ -152,7 +158,8 @@ entire-vector-register store instructions, that appear to other harts as
 sequences of individual stores. If the context `Cs` is clear or does not exist
 in the microarchitecture, the operation will report an error.
 
-[.red]#(TBdetermined whether it is secure)# This instruction is trappable and may also be resumed or restarted.
+[.red]#(TBdetermined whether it is secure)#
+This instruction is trappable and may also be resumed or restarted.
 
 //(The SW should have the right information, so this should never happen).
 
@@ -207,17 +214,18 @@ stages of the same device, the internal logic must bind them to a specific
 Locale CTK). The instruction imports them like SW keys, but only
 internally, and sets the right policies.
 
-[.red]#(TBdetermined whether it is secure)# This instruction is trappable and may also be resumed or restarted.
+[.red]#(TBdetermined whether it is secure)#
+This instruction is trappable and may also be resumed or restarted.
 
 ==== ace.exec
 
 The instruction admits four Types, namely
 
 [upperalpha]
-. `ace.exec  Vd, Cn|Xn, Vs`,{nbsp}{nbsp}which takes an input and produces an output.
-. `ace.exec  {nbsp}{nbsp}{nbsp}{nbsp}Cn|Xn, Vs`,{nbsp}{nbsp}which takes an input and does not produce an output.
-. `ace.exec  Vd, Cn|Xn{nbsp}{nbsp}{nbsp}{nbsp}`,{nbsp}{nbsp}which takes no inputs and produces an output.
-. `ace.exec  {nbsp}{nbsp}{nbsp}{nbsp}Cn|Xn{nbsp}{nbsp}{nbsp}{nbsp}`,{nbsp}{nbsp}which takes no inputs and does not produce an output.
+. `ace.exec  Vd, Cn|Xn, Vs` -- which takes an input vector and writes to an output vector.
+. `ace.exec  {nbsp}{nbsp}{nbsp}{nbsp}Cn|Xn, Vs` -- which takes an input vector but does not write to an output vector.
+. `ace.exec  Vd, Cn|Xn{nbsp}{nbsp}{nbsp}{nbsp}` -- which does not take an input but writes to an output vector.
+. `ace.exec  {nbsp}{nbsp}{nbsp}{nbsp}Cn|Xn{nbsp}{nbsp}{nbsp}{nbsp}` -- which does not take an input vector and does not write to an output vector.
 
 Type D instructions just perform internal processing in the CC.
 
@@ -229,7 +237,7 @@ Encoding::
     { bits:  7, name: 0x5b, attr: ['custom-2'] },
     { bits:  5, name: 'Vd' },
     { bits:  3, name: 'ACE.exec' },
-    { bits:  5, name: 'Cn/Xn' },
+    { bits:  5, name: 'Cn|Xn' },
     { bits:  5, name: 'Vs' },
     { bits:  2, name: 0x0 },
     { bits:  1, name: 'r' },
@@ -255,9 +263,8 @@ Furthermore, we admit a variant of Type D to encode additional instructions:
 
 Description::
 Performs a cryptographic operation such as an encryption or decryption,
-absorbing a value in a hash, and possibly returning a value. The instruction
-may also modify an internal state machine of the CC.
-The `ace.exec` instruction may modify the internal state machine of the CC.
+absorbing a value in a hash, and possibly returning a value.
+All `ace.exec` instruction may modify the internal state of the CC.
 
 ==== ace.size
 
@@ -273,7 +280,7 @@ Encoding::
     { bits:  7, name: 0x5b, attr: ['custom-2'] },
     { bits:  5, name: 'Xd' },
     { bits:  3, name: 0x3, attr: ['ACE.exec', '(Type E)'] },
-    { bits:  5, name: 'Cn/Xn' },
+    { bits:  5, name: 'Cn|Xn' },
     { bits:  5, name: 0x1, attr: ['ACE.size'] },
     { bits:  2, name: 0x0 },
     { bits:  1, name: 'r' },
@@ -298,6 +305,7 @@ also smaller (for keys split into shares for threshold implementations, but save
 externally in reconstructed form).
 
 
+[[ACE-instruction-clone]]
 ==== ace.clone
 
 `ace.clone Cd|Xd, Cs|Xs`
@@ -328,6 +336,8 @@ referred:
 . `0b10` if the source context is encoded as immediate and the output context is selected using a GPR.
 . `0b11` if the source and the output contexts are both selected using the values of GPRs.
 
+// Comment to ensure the proper indentation in th next Description
+
 Description::
 Clones source CC `Cs` (or the CC indexed by `Xs`) into destination CC `Cd` (or
 into the CC indexed by `Xd`).
@@ -340,21 +350,41 @@ exported and re-imported as-is several times. `ace.clone` is just an
 optimization for an `ace.export` instruction followed by an `ace.import`
 instruction.
 
-==== ace.input (optional)
-
-`ace.input Cd|Xd, [Xn]`
-
-[.red]#(TBdetermined whether it is secure)# This instruction is trappable and may also be resumed or restarted.
-
-==== ace.output (optional)
-
-`ace.output [Xd], Cs|Xs`
-
-[.red]#(TBdetermined whether it is secure)# This instruction is trappable and may also be resumed or restarted.
-
 ==== ace.derive (optional)
 
 `ace.derive Cd|Xd, Cs|Xs`
+
+The instruction is encoded using the Type E `ace.exec` encoding:
+
+Encoding::
+[wavedrom, , svg]
+....
+{reg:[
+    { bits:  7, name: 0x5b, attr: ['custom-2'] },
+    { bits:  5, name: 'Cd|Xd' },
+    { bits:  3, name: 0x3, attr: ['ACE.exec','(Type E)'] },
+    { bits:  5, name: 'Cs|Xs' },
+    { bits:  5, name: 0x3, attr: ['ACE.derive'] },
+    { bits:  1, name: 0x0 },
+    { bits:  2, name: 'R' },
+    { bits:  4, name: 0x0 },
+]}
+....
+
+Bits [27:26], i.e., field `R`, is encoded exactly as for `ace.clone` (cf.{nbsp}<<ACE-instruction-clone>>).
+
+The instruction is used to derive a new context from an existing one.
+It is similar to `ace.clone`, but the derived context is not a copy of the source context,
+rather, it is a new context that is derived from it.
+This can be useful for creating new contexts that contain, for instance, derived keys, while
+ensuring that they are also opaque.
+If more than one derived keys are needed, the instruction can be used multiple times, and
+the state of the source CC will need to keep track of the step, such as an index.
+
+Alternatively, if the derived keys need additional inputs, these can be provided by using
+`ace.stage`, then the output-less versions of `ace.exec` with an appropriate message, and
+finally `ace.derive` according to rules defined in the specification of the algorithm
+encoded in the source context.
 
 ==== ace.stage/ace.dir
 
@@ -388,6 +418,21 @@ context where we want to change the stage of the internal state machine.
 The `#immed` is a constant from a set of admissible values that are defined for
 each algorithm, to manage an internal state machine of said algorithm in case
 more stages are needed.
+
+==== ace.input (optional)
+
+`ace.input Cd|Xd, [Xn]`
+
+[.red]#(TBdetermined whether it is secure)#
+This instruction is trappable and may also be resumed or restarted.
+
+==== ace.output (optional)
+
+`ace.output [Xd], Cs|Xs`
+
+[.red]#(TBdetermined whether it is secure)#
+This instruction is trappable and may also be resumed or restarted.
+
 
 ==== ace.harden
 
@@ -431,9 +476,10 @@ written in `Xd` as true (1) or false (0).
 
 Implement it as CSR read?
 *To be discussed* alternative option: the CSR contains a pointer to a memory
-mapped bitmap or some other architected structure to determine what is
+mapped bitmap (256 bits, or 1024 bits if we include the side channel resistance
+information) or some other architected structure to determine what is
 implemented. OTOH this can probably be obtained in other ways (like a
-microarchitecture version number). Or use the error mechanism.
+microarchitecture version number).
 
 ==== ace.error
 
