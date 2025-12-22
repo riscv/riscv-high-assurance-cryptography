@@ -17,11 +17,6 @@ The size of each CC is dynamic, determined by the cryptographic algorithm with w
 ACE returns an error when insufficient memory prevents `ace.init` and `ace.import` operations, requiring the software to free memory by exporting or clearing a different CC. Implementations must provide sufficient CF memory to prevent infinite `ace.export`/`ace.import` loops.
 The same error may occur also if `ace.input` fails for the same reason.
 
-==== PRIVILEGED: ACE field in misa
-
-The `misa.ACE` field uses bit `L` (11) to indicate that the ACE extension is implemented.
-//This bit is chosen because the extension goes _beyond_ the cryptographic extension, which will likely use bit `K` (10).
-
 ==== aceenable
 
 `aceenable` is a single-bit CSR.
@@ -37,18 +32,6 @@ Writes to `aceenable` only affect the CCs upon disablement, as described in <<AC
 
 Enablement in other modes uses a special field in the `*status` CSRs. (cf.{nbsp}<<ACE-ACES-field>>).
 Writing to `aceenable`, is allowed in more privileged modes, only affects the enablement of the feature in User mode.
-
-==== PRIVILEGED: acectk
-
-If the CTK can be programmed, it can only be programmed by Machine Mode.
-For this purpose, we need eight 32-bit CSRs are available, called `acectk0`, `acectk1` .. `acectk7`, where register `acectk{i}` contains bits [stem:[31+32\,i:32\,i]] of the CTK.
-No exception is raised if software running in any other mode tries to write to the `acectk` block, such writes are simply ignored.
-The `acectk` block always reads as zero.
-
-NOTE: Discoverability of whether the CTK can be configured or not is not critical, since this should be information known by the Machine Mode firmware.
-[.red]#We can use the data structure pointed by `mconfigptr` in order to track optional features of ACE including whether the `acectk` CSR block is implemented, and if not whether whether the value is ephemeral or fixed.#
-
-NOTE: User mode, and even operating systems and hypervisors, need not be aware of the `acectk` block. Other mechanisms could be used to program the CTK, such as a MM-exclusive dedicated hardware interface or memory-mapped interface.
 
 [[ACE-ACES-field]]
 ==== ACES field in *status
@@ -81,8 +64,7 @@ decribed in <<ACE-tracking-cc-dirtiness>>.
 Writes to ACES do not affect the contents of the CCs.
 Setting ACES=Disabled-Clean or Disabled-Clobbered does not destroy the state, nor does setting ACES=Enabled clear the contents.
 
-The fine-grained tracking of activeness and dirtiness of individual CCs is done using the `aceccactive` and `aceccdirty` CSRs, cf.{nbsp}<<ACE-tracking-cc-dirtiness>>,
-where also the effect of configuring and `aceenable` on `aceccactive` and `aceccdirty` is described.
+Fine-grained tracking activeness and dirtiness of individual CCs uses the `aceccactive` and `aceccdirty` CSRs, cf.{nbsp}<<ACE-tracking-cc-dirtiness>>.
 
 ==== aceerror
 
@@ -173,7 +155,27 @@ In the metadata section, `ASID` and `VMID` are always zero padded to the maximal
 [[ACE-providing-keys,Remark {counter:remark}]]
 *Remark {counter:remark}.* _The software in each World/Supervisor Domain is normally responsible to generate or obtain their own keys, and if a process (applet) in one World/Supervisor Domain is responsible to provide keys to other Worlds/Supervisor Domains, it is the responsibility of the MM to perform an appropriate sequence of import, switch the CTK, then export operations._
 
-==== PRIVILEGED: Re-configurable Locales
+
+==== Privileged Registers
+
+===== ACE field in misa
+
+The `misa.ACE` field uses bit `L` (11) to indicate that the ACE extension is implemented.
+//This bit is chosen because the extension goes _beyond_ the cryptographic extension, which will likely use bit `K` (10).
+
+===== acectk
+
+If the CTK can be programmed, it can only be programmed by Machine Mode.
+For this purpose, we need eight 32-bit CSRs are available, called `acectk0`, `acectk1` .. `acectk7`, where register `acectk{i}` contains bits [stem:[31+32\,i:32\,i]] of the CTK.
+No exception is raised if software running in any other mode tries to write to the `acectk` block, such writes are simply ignored.
+The `acectk` block always reads as zero.
+
+NOTE: Discoverability of whether the CTK can be configured or not is not critical, since this should be information known by the Machine Mode firmware.
+[.red]#We can use the data structure pointed by `mconfigptr` in order to track optional features of ACE including whether the `acectk` CSR block is implemented, and if not whether whether the value is ephemeral or fixed.#
+
+NOTE: User mode, and even operating systems and hypervisors, need not be aware of the `acectk` block. Other mechanisms could have been chosen to program the CTK, such as a MM-exclusive dedicated hardware interface or memory-mapped interface.
+
+===== Re-configurable Locales
 
 We need two further groups of four consecutive 32-bit CSRs, programmable by the Machine Mode, to define two reconfigurable locales
 (cf.{nbsp}<<ACE-concepts>>).
@@ -183,4 +185,4 @@ and `ace_Boot_Session{i}`, for `i` in [0..3], to configure the "Boot Session" en
 
 The reason `ace_Boot_Session*` must be reconfigurable is that it must change in a VM if the latter's virtual hardware is re-booted, and this can happen independently from the underlying host and other VMs. For instance, a VM may be frozen, then the host may be rebooted, and then the VM may be resumed, in which case no boot session occurred in the VM, while it happened in the host hardware.
 
-NOTE: User mode, and even operating systems and hypervisors, need not be aware of the `ace_OS_Secret{i}` and `ace_Boot_Session{i}` blocks. Other mechanisms could be used to program the "OS Secret" and  "Boot Session" entries, such as a MM-exclusive dedicated hardware interface or memory-mapped interface.
+NOTE: User mode, and even operating systems and hypervisors, need not be aware of the `ace_OS_Secret{i}` and `ace_Boot_Session{i}` blocks. Other mechanisms could have been chosen to program the "OS Secret" and  "Boot Session" entries, such as a MM-exclusive dedicated hardware interface or memory-mapped interface.
