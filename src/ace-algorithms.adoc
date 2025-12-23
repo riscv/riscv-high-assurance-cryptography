@@ -52,32 +52,75 @@ This allows, for instance, a key to be migrated from a machine that has a 2-shar
 ===== Electronic Codebook Modes (Direct Encryption/Decryption)
 
 * Internal state: {metadata, key}.
+ ** metadata: 64 bits
+ ** key: k bits (8|k, in fact it is almost always 128|k)
+* Block Size
+ ** b = block size in bytes, (8|b)
+ ** The configured vector size should be equal to the block length
 * Generic Functions
  ** `metadata_deserialize` as above.
  ** `metadata_serialize` as above.
- ** `initial_content_deserialize`. input[n-1:0] = key, where n = key length in bytes.
- ** `content_serialize`. output[n-1:32] = key, where n = key length in bytes.
+ ** `initial_content_deserialize`. input[k/9-1:0] = key, where k/8 = key length in bits.
+ ** `content_serialize`. output[k/8-1:0] = key, where k/8 = key  length in bits.
  ** `content_deserialize` converts the output of `content_serialize` back to the original input format.
 * Algorithm-Specific Functions
  ** `encrypt_block(p) -> c` encrypts plaintext block `p` using the key, and returns the ciphertext result `c`.
  ** `decrypt_block(c) -> p` decrypts ciphertext block `c` using the key, and returns the plaintext result `p`.
- * State Machine
- ** States: initial, encrypt, and decrypt
-  *** In the initial state, `f` is undefined and any execution of `ace.exec` will result in `ace.error` returning ace_error_invalid.
+* State Machine
+ ** States: _initial_ (0), _encrypt_ (1), and _decrypt_ (2)
+ ** Behavior
+  *** In the initial state, any `ace.exec` will cause an ace_error_invalid error.
+  *** In the encrypt state `f` = `encrypt_block`.
+  *** In the decrypt state `f` = `decrypt_block`.
  ** Transitions: only allowed:
-  *** from any state to encrypt, if metadata allows encryption. +
-  In the encrypt state `f` = `encrypt_block`.
-  *** from any state to decrypt, if metadata allows decryption. +
-  In the decrypt state `f` = `decrypt_block`.
+  *** from any state to encrypt, if metadata allows encryption.
+  *** from any state to decrypt, if metadata allows decryption.
 * Instructions
+ ** The configured vector size should be equal to the block length.
  ** If `ace.exec  Vd, Cn|C[Xn], Vs` is issued, then `Vd = f(Vs)`.
  ** If any other form of `ace.exec` is issued, then `ace.error` will return ace_error_invalid.
 
 <<<
 
-===== Counter/LFSR Modes
+===== CTR/LFSR/XCTR/XLFSR Modes to Produce a Keystream
 
-[.red]#TBD#
+The "X" modes have both IV and counter/LSFR of the same size as the block size of the underlying keyed PRP or PRF:
+IV and counter/LFSR are `xor`ed together to form the input to the keyed PRP or PRF.
+
+In the "non-X" modes the lengths of IV and counter/LSFR add up to the block size of the underlying keyed PRP or PRF:
+IV and counter/LFSR are concatenated to form the input to the keyed PRP or PRF.
+
+* Internal state: {metadata, key, IV, {counter}}.
+ ** metadata: 64 bits
+ ** key: k bits (8|k)
+ ** IV: n bits (8|n)
+ ** counter: j bits (8|j)
+* Block Size
+ ** b = block size in bytes, (8|b), b = n+j if not an "X" version, OR b=n=j if an "X" version
+ ** The configured vector size should be equal to the block length.
+* Generic Functions
+ ** `metadata_deserialize` as above.
+ ** `metadata_serialize` as above.
+ ** `initial_content_deserialize`. input[k/8-1:0] = key.
+ ** `content_serialize`. output[k/8-1:0] = key, where k = key length in bits, output[(k+n)/8-1,k] = IV.
+ ** `content_deserialize` converts the output of `content_serialize` back to the original input format.
+* Algorithm-Specific Functions
+ ** `keystream_block(p) -> c` -- usually an encryption function
+ ** `tick_counter()` -- updates the counter (either by a modular increment or a LFSR)
+* State Machine
+ ** States: _initial_ (0), _set_public_value_ (1), and _operate_ (2).
+ ** Allowed State Transitions:
+  *** initial -> set_public_value
+  *** set_public_value -> any state.
+ ** Behavior
+  *** In the initial state, any `ace.exec` will result in `ace.error` returning ace_error_invalid
+  *** Upon entering set_public_value, the counter field is set to 0 (or to 1 if LFSR).
+  *** In "set_public_value" state, we can only issue `ace.exec Cn|C[Xn], Vs`, which overwrites the IV value (no harm if called more than once)
+   **** Other forms of `ace.exe` not allowed, will cause an ace_error_invalid error.
+  *** In "operate" state, we can only issue `ace.exec  Vd, Cn|C[Xn], which
+   **** If in a "not-X" mode, `tmp = keystream_block(IV @ counter)`, `tick_counter`, `Vd = tmp`
+   **** If in an "X" mode, `tmp = keystream_block(IV xor counter)`, `tick_counter`, `Vd = tmp`
+   **** Other forms of `ace.exe` not allowed, will cause an ace_error_invalid error.
 
 ==== Specific Rules
 
