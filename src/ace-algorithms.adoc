@@ -9,20 +9,13 @@ Some of these are generic, others are specific to certain algorithms.
 For each algorithm, the following must be specified:
 
 * State Machine, state numbers, admissible transitions.
-* Length of the initialization content (input to `ace.init`), excluding metadata.
+* Length of the initialization payload (input to `ace.init`), excluding metadata.
 * Serialization and deserialization of the content, length of the serialized content.
 * Any other algorithm-specific rules.
 
 For modes of operations that can be instantiated with different primitives, we can specify more general rules, where the differences between instantiations in some cases are limited to the widths of their inputs and outputs of the primitive.
 
-We represent a CC as a structure:
-[C]
-----
-struct CC {
-    metadata : bits(64);
-    content : bits(...);
-};
-----
+Recall that the architecture views CC as a structure with two fields: the metadata (currently 64 bits), which has a unique specification, and the content (variable length), which is algorithm-specific.
 
 The `metadata_deserialize(CC) -> metadata` function takes a CC's metadata section and returns its metadata block formatted as described in <<ACE-metadata>>.
 
@@ -30,24 +23,31 @@ The `metadata_serialize(CC,metadata)` function takes a metadata block formatted 
 
 In the descriptions of the algorithms below, we do not need to redefine these two functions if they are not changed, i.e., if there are no changes to the metadata format.
 
+If the number of states of the algorithm is at most 16, we assume that the `stage` of the metadata is used to store this value.
+Otherwise, the specification of the algorithm must include a suitable field in the content section of the CC/SCC.
+
 ===== Note on threshold implementations
 
-Any CC with its algorithms implemented as threshold implementation will always export _all_ its keys and secrets in a single, reconstructed share.
+Any CC with its algorithms implemented as threshold implementation will always initialize, import and export _all_ its keys and secrets as single, reconstructed shares.
 The Configuration and SCC Formats will be the same as for the non-threshold implementations variants of the same algorithm, with the only difference being, in principle, the Side Channel Protection MD bits.
-This implies that reconstructing a key or re-randomizing it are fast operations, such as `xor`s with random values.
+For the purpose of architecture specification, all values are also always represented as a single share in this document.
+Threshold implementations are simply implementation variants of the exact same algorithm.
+
+NOTE: This assumes that reconstructing a key or re-randomizing it are fast operations, such as ``xor``s with random values.
 This in turn implies that ACE execution unit must have access to a source of randomness, or at least a PRNG that is seeded at hardware boot.
 
-This guarantees not only the compactness of the SCC format, but also that the key can be ported across architectures.
-In fact, some threshold implementations may need 2, 3 or even more shares.
+This ensures not only the compactness of a SCC, but also that the key can be ported across architectures.
+In fact, some threshold implementations may have a different number of shares even if they claim the same order of side-channel protection.
 
-*Example*:
-_AES-128 with a threshold implementation of a key. On implementations with two shares, the CC contains
-`[metadata, first share, second share]`
-and on implementations with three shares, the CC contains
-`[metadata, first share, second share, third share]`. +
-The SCC will however always contain the data in the following format: +
-{nbsp}{nbsp}{nbsp} `[metadata (64 bits), Nonce (96 bits), SIV (96 bits), key (encrypted)]` +
-This allows, for instance, a key to be migrated from a machine that has a 2-share implementation to a machine with a 3-share implementation._
+// *Example*:
+// _AES-128 with a threshold implementation of a key.
+// On implementations with two shares, the CC contains
+// `[metadata, first share, second share]`
+// and on implementations with three shares, the CC contains
+// `[metadata, first share, second share, third share]`. +
+// The SCC will however always contain the data in the following format: +
+// {nbsp}{nbsp}{nbsp} `[metadata (64 bits), Nonce (96 bits), SIV (96 bits), key (encrypted)]` +
+// This allows, for instance, a key to be migrated from a machine that has a 2-share implementation to a machine with a 3-share implementation._
 
 <<<
 
@@ -57,7 +57,7 @@ This allows, for instance, a key to be migrated from a machine that has a 2-shar
 While listing the rules for the ECB mode is in principle easy, it does display all the rules that are required to describe an arbitrarily complex mode:
 
 . The fields of the internal state, with their sizes in bits, in the order they would be serialized `content_serialize` and deserialized by `content_deserialize`.
-. The width of unit processed by the algorithm, which also corresponds to the configured vector size.
+. The width of unit processed by the algorithm, which also corresponds to the configured vector size, called _block size_.
 . The descriptions of the generic functions of the algorithm, in case they differ from the default ones.
 . Any algorithm-specific function.
 . A description of the state machine, including a list of the possible states, their transitions, and the operations that are allowed at each state.
@@ -68,17 +68,15 @@ Internal state:::
 
 * *Metadata*: 64 bits
 * *Content Fields*:
- ** key: k bits (8|k, in fact it is almost always 128|k)
+** key: k bits (8|k, in fact it is almost always 128|k)
 
-Processing unit (Block Size):::
+Block Size:::
 
 * b = block size in bits, (8|b)
 
 Generic Functions:::
 
 * `initial_content_deserialize`. Length = k/8 bytes. input[k/8-1:0] = key.
-// * `content_serialize`. output[k/8-1:0] = key, where k/8 = key  length in bits.
-// * `content_deserialize` converts the output of `content_serialize` back to the original input format.
 
 Algorithm-Specific Functions:::
 
@@ -87,21 +85,18 @@ Algorithm-Specific Functions:::
 
 State Machine:::
 
-* States: _initial_ (0), _encrypt_ (1), and _decrypt_ (2)
-* Allowed State Transitions
- ** from any state to encrypt, if metadata allows encryption, +
-    else `ace.error` returns ace_error_invalid.
- ** from any state to decrypt, if metadata allows decryption, +
-    else `ace.error` returns ace_error_invalid.
-* Behavior
+* *States:* _initial_ (0), _encrypt_ (1), and _decrypt_ (2)
+* *Allowed State Transitions:*
+ ** from any state to encrypt, if metadata allows encryption, else `error(ace_error_invalid)`.
+ ** from any state to decrypt, if metadata allows decryption, else `error(ace_error_invalid)`.
+* *Behavior:*
  ** In the "initial" state, any `ace.exec` will cause an ace_error_invalid error.
  ** In the "encrypt" state,
   *** if{nbsp} `ace.exec Vd, Cn|C[Xn], Vs` {nbsp}is issued, then {nbsp} `Vd = encrypt_block(Vs)`.
-  *** If any other form of `ace.exec` is issued, then `ace.error` returns ace_error_invalid.
+  *** If any other form of `ace.exec` is issued, then `error(ace_error_invalid)`.
  ** In the "decrypt" state,
   *** if{nbsp} `ace.exec Vd, Cn|C[Xn], Vs` {nbsp}is issued, then {nbsp} `Vd = decrypt_block(Vs)`.
-  *** If any other form of `ace.exec` is issued, then `ace.error` returns ace_error_invalid.
-
+  *** If any other form of `ace.exec` is issued, then `error(ace_error_invalid)`.
 
 <<<
 
@@ -114,15 +109,17 @@ IV and counter/LFSR are `xor`ed together to form the input to the keyed PRP or P
 In the "non-X" modes the sums of the lengths of IV and counter/LSFR equal the block size of the underlying keyed PRP or PRF:
 IV and counter/LFSR are concatenated to form the input to the keyed PRP or PRF.
 
+//
+
 Internal state:::
 
 * *Metadata*: 64 bits
 * *Content Fields*:
-** key: k bits (8|k)
-** IV: n bits (8|n)
-** counter: j bits (8|j)
+ ** key: k bits (8|k)
+ ** IV: n bits (8|n)
+ ** counter: j bits (8|j)
 
-Processing unit (Block Size):::
+Block Size:::
 
 * b = block size in bits, (8|b)
  ** If not an "X" mode, then b = n+j
@@ -131,11 +128,6 @@ Processing unit (Block Size):::
 Generic Functions:::
 
 * `initial_content_deserialize`. Length = k/8 bytes. input[k/8-1:0] = key.
-// * `content_serialize`
-//   ** output[k/8-1:0] = key
-//   ** output[(k+n)/8-1,k/8] = IV
-//   ** output[(k+n+j)/8-1,(k+n)/8] = counter
-// * `content_deserialize` converts the output of `content_serialize` back to the original input format.
 
 Algorithm-Specific Functions:::
 
@@ -144,21 +136,84 @@ Algorithm-Specific Functions:::
 
 State Machine:::
 
-* States: _initial_ (0), _set_public_value_ (1), and _operate_ (2).
-* Allowed State Transitions
- ** initial -> set_public_value
- ** set_public_value -> any state.
-* Behavior
- ** In the initial state, any `ace.exec` will result in `ace.error` returning ace_error_invalid
- ** Upon entering set_public_value, the counter field is set to 0 (or to 1 if LFSR).
- ** In "set_public_value" state, we can only issue `ace.exec Cn|C[Xn], Vs`, which overwrites the IV value (no harm if called more than once)
-  *** Other forms of `ace.exe` not allowed, will cause an ace_error_invalid error.
- ** In "operate" state, we can only issue `ace.exec  Vd, Cn|C[Xn], which
+* *States:* _initial_ (0), _set_public_value_ (1), _operate_ (2)
+* *Allowed State Transitions:*
+ ** _initial_ -> _set_public_value_
+ ** _set_public_value_ -> _initial_, _set_public_value_.
+* *Behavior:*
+ ** In the _initial_ state, any `ace.exec` will result in `error(ace_error_invalid)`.
+ ** Upon entering _set_public_value_, the counter field is set to 0 (or to 1 if LFSR).
+ ** In _set_public_value_ state, we can only issue an `ace.exec` of the form{nbsp}{nbsp} `ace.exec Cn|C[Xn], Vs`,{nbsp}{nbsp} which sets the IV value to `Vs`
+    (there is no harm if this instruction is issued more than once).
+  *** Other forms of `ace.exe` not allowed, will cause `error(ace_error_invalid)`.
+ ** In _operate_ state, we can only issue an `ace.exec` of the form `ace.exec Vd, Cn|C[Xn]`, which
   *** If in a "not-X" mode, `tmp = keystream_block(IV @ counter)`, `tick_counter`, `Vd = tmp`
   *** If in an "X" mode, `tmp = keystream_block(IV xor counter)`, `tick_counter`, `Vd = tmp`
-  *** Other forms of `ace.exe` not allowed, will cause an ace_error_invalid error.
+  *** Other forms of `ace.exe` not allowed, will cause `error(ace_error_invalid)`.
 
-<<<
+
+
+[[ACE-XEX-XTS-modes]]
+===== XEX/XTS modes (one or two keys)
+
+Note that the use of a single key or two independently sampled keys is determined by the algorithm field, and is not a configuration parameter for the same algorithm.
+
+Internal state:::
+
+* *Metadata*: 64 bits
+* *Content Fields*:
+ ** key1: k bits (8|k)
+ ** key2: k bits (8|k) (omitted if only one key is used)
+ ** mask: b bits (8|n)
+
+Block Size:::
+
+* b = block size in bits, (8|b)
+
+Generic Functions:::
+
+* `initial_content_deserialize`:
+ ** Length = k/8 bytes.
+ ** input[k/8-1:0] = key1.
+ ** input[2k/8-1:k/8] = key2.
+* `content_serialize`
+ ** Length = (2k+b)/8 bytes, or (k+b)/8 bytes if only one key is used.
+ ** output[k/8-1:0] = key1
+ ** output[2k/8-1:k/8] = key2 -- omitted if only one key is used
+ ** If two keys are used: output[(2k+b)/8-1:2k/8] = mask
+ ** If only one key is used, then output[(k+b)/8-1:k/8] = mask
+* `content_deserialize` converts the output of `content_serialize` back to the original input format.
+
+Algorithm-Specific Functions:::
+
+* `encrypt_block(key,p) -> c` encrypts block `p` using the key, and returns the result `c`.
+* `decrypt_block(key,c) -> p` decrypts block `c` using the key, and returns the result `p`.
+* `update_mask(mask) -> mask` -- updates the mask by a Galois Field multiplication in GF(2^b^)
+
+State Machine:::
+
+* *States:* _initial_ (0), _set_public_value_ (1), _encrypt_ (2), and _decrypt_ (3).
+* *Allowed State Transitions:*
+ ** _initial_ -> _set_public_value_
+ ** _set_public_value_ -> any state.
+ ** _set_public_value_ -> _encrypt_, if metadata allows encryption, else `error(ace_error_invalid)`.
+ ** _encrypt_, _decrypt_ -> _initial_
+* *Behavior:*
+ ** In the _initial_ state, any `ace.exec` will result in `ace.error` returning ace_error_invalid
+ ** In "_set_public_value_" state, we can only issue an `ace.exec` of the form{nbsp}{nbsp} `ace.exec Cn|C[Xn], Vs`,{nbsp}{nbsp} which sets the mask value to `Vs`
+    (there is no harm if this instruction is issued more than once).
+  *** First, `mask <- encrypt_block(key2,Vs)`
+  *** If only one key is used then update mask: `mask <-update_mask(mask)`
+  *** Other forms of `ace.exe` not allowed, will cause `error(ace_error_invalid)`.
+ ** In _encrypt_ and _decrypt_ states, we can only issue `ace.exec Vd, Cn|C[Xn], Cs` which:
+  *** If the state is _encrypt_, computes `Vd = mask xor encrypt_block(Vs xor mask)` ...
+  *** If the state is _decrypt_, computes `Vd = mask xor decrypt_block(Vs xor mask)` ...
+  *** ... and updates mask: `mask <- update_mask(mask)`
+
+To turn this into XTS, the user software needs to perform ciphertext stealing itself, which can be done with the above operations.
+
+
+
 
 ==== Specific Rules
 
