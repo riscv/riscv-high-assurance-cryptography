@@ -39,7 +39,7 @@ ace.import C0, [X5]                  // Import the SCC into CC C0
 ace.error X1,C0
 if (X1 != 0) then { handle error }
 Configure vector unit to use 128-bit vectors.
-ace.stage C0, #ace_const_encrypt
+ace.state C0, #ace_const_encrypt
 ace.error X1,C0
 if (X1 != 0) then { handle error }
    // If encryption is not allowed
@@ -54,8 +54,8 @@ for i = 0 to ceil(len_in_bytes(plaintext)/16)-1 do
 
 In the following example we assume that the hash function is a keyed hash function (MAC) and that the CC/SCC contains also the key.
 Assuming that the hash function is programmed in CC `C1`,
-`ace.stage C1, #ace_const_hash_start` is used to start the hash function, as well as to reset it in case we want to compute a second hash using the same key.
-`ace.stage C1, #ace_const_hash_finalize` finalizes the hash function, and the hash value can be extracted with one or more `ace.exec V0, C1, ignore` instructions.
+`ace.state C1, #ace_const_hash_start` is used to start the hash function, as well as to reset it in case we want to compute a second hash using the same key.
+`ace.state C1, #ace_const_hash_finalize` finalizes the hash function, and the hash value can be extracted with one or more `ace.exec V0, C1, ignore` instructions.
 For the state machine of `C1`, message `#ace_const_hash_start` can always be sent, thus resetting the state machine, and `#ace_const_hash_finalize` can be sent only once after `#ace_const_hash_start` has been sent.
 
 After `#ace_const_hash_start` has been sent, only `ace.exec` instructions of type (ii) can be issued.
@@ -68,29 +68,29 @@ and if more of the latter are issued than needed to extract the full hash, the o
 ----
 - Process obtains an AES-encrypted, hashed, payload (the ciphertext) from a service.
 - Process calls an OS API to get CCs for the encryption and authentication keys.
-- OS API returns two encrypted and authenticated blobs.
+- OS API returns two encrypted and authenticated payloads.
 
-// Process imports first blob (for decryption) into C0:
+// Process imports first SCC (for decryption) into C0:
 ace.import C0, [X5]
 
-// Process imports second blob (for hashing) into C1:
+// Process imports second SCC (for hashing) into C1:
 ace.import C1, [X6]
 
 - Allocate memory for plaintext buffer.
 // Configure vector register file for 128-bit registers and AES.
 vsetvli zero, 4, e32, m1, t?, ma
 
-ace.stage C0, #ace_const_decrypt
+ace.state C0, #ace_const_decrypt
 ace.error X1,C0
 if (X1 != 0) then { handle error }
 
-ace.stage C1, #ace_const_hash_start   // To start hashing
+ace.state C1, #ace_const_hash_start   // To start hashing
 foreach (i from 0 to ceil(len_in_bytes(ciphertext)/16)-1) {
   - load V0 from address ciphertext+16*i
   ace.exec ignore, C1, V0		      // Absorb one 128-bit block
 }
 
-ace.stage C1, #ace_const_hash_finalize
+ace.state C1, #ace_const_hash_finalize
 ace.exec V1, C1, ignore
 // if the hash is longer, then extract the next 16 bytes using `ace.exec V2, C1, ignore`
 
@@ -102,7 +102,7 @@ foreach (i from 0 to ceil(len_in_bytes(ciphertext)/16)-1) {
   - store V0 at address plaintext+16*i
 }
 
-ace.stage C1, #ace_const_hash_start   // Hygiene
+ace.state C1, #ace_const_hash_start   // Hygiene
 ----
 
-Note that invoking `ace.stage C1, #ace_const_hash_initialize` would allow to reuse C1 to compute additional hashes/MACs.
+Note that invoking `ace.state C1, #ace_const_hash_initialize` would allow to reuse C1 to compute additional hashes/MACs.

@@ -17,21 +17,28 @@ The size of each CC is dynamic, determined by the cryptographic algorithm with w
 ACE returns an error when insufficient memory prevents `ace.init` and `ace.import` operations, requiring the software to free memory by exporting or clearing a different CC. Implementations must provide sufficient CF memory to prevent infinite `ace.export`/`ace.import` loops.
 The same error may occur also if `ace.input` fails for the same reason.
 
+[[ACE-CSR-enable]]
 ==== aceenable
 
 `aceenable` is a single-bit CSR.
 
-Enabling ACE in User Mode is done by writing a 1 to `aceenable`.
+Enabling ACE in any mode is done by writing a 1 to `aceenable`.
 This will allow the unit to perform operations, access the general purpose and vector registers, as well as the cryptographic contexts.
-Disabling ACE in User Mode is done by writing a zero to `aceenable`.
+Disabling ACE is done by writing a zero to `aceenable`.
 This will also clear the contents of all cryptographic contexts.
+
 
 While the standard floating-point and vector extensions do not support User Mode disable/enable instructions, the ACE unit can be enabled and disabled in User Mode. Instead of using an OS call or trapping, enablement and disablement will be mostly performed inside the ACE unit. However, if, as described above, the ACE unit contains state from a different process, and its interface is disabled for the current one, enabling it will trap to the Supervisor (as described in <<ACE-ACES-field>>) to allow the latter to first save the state in case it was not saved before and then clear it (lazy context switch), or only clear it if it was saved earlier.
 
 Writes to `aceenable` only affect the CCs upon disablement, as described in <<ACE-tracking-cc-dirtiness>>.
 
-Enablement in other modes uses a special field in the `*status` CSRs. (cf.{nbsp}<<ACE-ACES-field>>).
-Writing to `aceenable`, is allowed in more privileged modes, only affects the enablement of the feature in User mode.
+// Enablement in other modes uses a special field in the `*status` CSRs. (cf.{nbsp}<<ACE-ACES-field>>).
+// Writing to `aceenable`, is allowed in more privileged modes, only affects the enablement of the feature in User mode.
+
+Note that when a process that has ACE enabled is preempted, the parent modes inherit the state to be able to export and
+re-import the CCs. Hence, `aceenable` is not cleared, and the `*status.ACES` fields (see <<ACE-ACES-field>>) of the parent domains will take the value Enabled.
+Tracking the CCs which are active, resp., dirty is done on an individual basis and is described in <<ACE-tracking-cc-dirtiness>>.
+
 
 [[ACE-ACES-field]]
 ==== ACES field in *status
@@ -173,9 +180,9 @@ No exception is raised if software running in any other mode tries to write to t
 The `acectk` block always reads as zero.
 
 NOTE: Discoverability of whether the CTK can be configured or not is not critical, since this should be information known by the Machine Mode firmware.
-[.red]#We can use the data structure pointed by `mconfigptr` in order to track optional features of ACE including whether the `acectk` CSR block is implemented, and if not whether whether the value is ephemeral or fixed.#
-
-NOTE: User mode, and even operating systems and hypervisors, need not be aware of the `acectk` block. Other mechanisms could have been chosen to program the CTK, such as a MM-exclusive dedicated hardware interface or memory-mapped interface.
+[.red]#We can use the data structure pointed by `mconfigptr` in order to track optional features of ACE including whether the `acectk` CSR block is implemented, and if not whether whether the value is ephemeral or fixed.# +
+ +
+User mode, and even operating systems and hypervisors, need not be aware of the `acectk` block. Other mechanisms could have been chosen to program the CTK, such as a MM-exclusive dedicated hardware interface or memory-mapped interface.
 
 ===== Re-configurable Locales
 
