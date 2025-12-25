@@ -1,8 +1,10 @@
 [[ACE-architecture]]
 == Architecture
 
+=== Overview
+
 [[ACE-concepts]]
-=== Fundamental Concepts
+==== Fundamental Concepts
 
 Opaque Key:::
 The fundamental concept of ACE is the _opaque key_, i.e., a cryptographic key whose value remains hidden to software even while being used in cryptographic operations.
@@ -40,11 +42,270 @@ The metadata stores the Locale as an index into this table. See <<ACE-locales>> 
 
 // ///////////////////////////////////////////////////////////////////////////////////////////
 
-// include::ace-instructions-summary.adoc[]
+[[ACE-instructions-overview]]
+==== Instructions
+
+ACE provides a number of unprivileged instructions.
+Some are implemented as CSR reads or writes.
+The non-standard notation `C[Xd]`, for a GPR Xd refers to the CC whose number is contained in `Xd`,
+and `Cn|C[Xn]` means that there are two different encodings for when the operand is `Cn` or `C[Xn]`.
+
+.The ACE instructions
+[width="100%",cols="16%,24%,60%",options="header",subs="+macros"]
+|===
+| Instruction     | Operands                        |  Description
+| `ace.enable` +
+`ace.disable`     |                                 |  Enables/Disables the feature in the current process domain and determine how many contexts we need.  CSRW pseudo-operation.
+| `ace.init`      | `Cd\|C[Xd], %offset(Xs)`         |  Sets the metadata and key(s) for the CC.
+| `ace.clear`     | `Cd\|C[Xd]`                      |  Clears a CC and marks it as no longer in use and clean.
+| `ace.export`    | `%offset(Xn), Cs\|C[Xs]`         |  Securely exports the content of a CC to memory.
+| `ace.import` +
+`ace.import.S`
+| `Cd\|C[Xd], %offset(Xn)`      |  Authenticates and imports a SCC from memory into a CC. +
+ `ace.import.S` provides optional support for system defined formats.
+| `ace.exec`
+| A. {nbsp}{nbsp} `Vd, Cn\|C[Xn], Vs` +
+  B. {nbsp}{nbsp} `Cn\|C[Xn], Vs` +
+  C. {nbsp}{nbsp} `Vd, Cn\|C[Xn]` +
+  D. {nbsp}{nbsp} `Cn\|C[Xn]`
+| Performs a cryptographic operation. The instruction may also modify the internal state of the CC. This instruction admits four _forms_, depending on whether it accepts an input or not, and whether it produces an output or not.
+| `ace.size`
+| `Xd, Cs\|C[Xs]` +
+ `Xd, Xs`          |  Returns the size in bytes of the package exported from a specified CC, or from a metadata block.
+| `ace.available` | `#immed`                        |  Informs whether a given algorithm is supported by the microarchitecture.
+| `ace.clone`     | `Cd\|C[Xd], Cs\|C[Xs]`            |  Clones a CC into a second CC.
+| `ace.derive`    | `Cd\|C[Xd], Cs\|C[Xs]`            |  Optional. Uses the source CC to configure the destination CC. Used if the source CC is, for instance, a KEM that configures the destination CC with a symmetric key. Then, the SW can clear the source CC to release resources.
+| `ace.state` +
+`ace.dir`
+| `Cd\|C[Xd], #immed`              |  Triggers transitions in the state of the algorithm (such as the different stages of hash functions or modes of operation) or provide additional information.  `ace.dir` is an alias for `ace.state`.
+| `ace.restrict` +
+  `ace.harden`    | `Cd\|C[Xd], Xs`                  |  This instruction is used to narrow the Use policies of a CC and to turn on or increases the level of the side-channel protection of the algorithm in the CC, if the microarchitecture supports it.
+  Removing or weakening existing Use Policies and reducing the level of side-channel protection are not permitted.
+   `ace.harden` is an alias for `ace.restrict`.
+| `ace.input`     | `Cd\|C[Xd], %offset(Xs)`         |  Optional. Provides an input to the algorithm configured in the CC `Cd` or `CC[Xd]`, in place of providing it through the `ace.exec` instruction. Useful when the inputs are very long, such as the inputs to certain public key schemes. Mandatory only if required by some algorithms.
+| `ace.output`    | `%offset(Xd), Cs\|C[Xs]`         |  Optional. Writes the output of an algorithm configured in the CC `Cs` or `CC[Xs]`, in place of providing it through the `ace.exec` instruction. Useful when the outputs are very long, such as the outputs of certain public key schemes. Mandatory only if required by some algorithms.
+| `ace.error`     | `Xd, Cs\|C[Xs]`                  |  A CC Cs (or indexed by Xs) may be in an error state due to the previous operation. The error value is written into GPR Xd.
+|===
+
+NOTE: Instructions `ace.init`, `ace.import`, `ace.export`, `ace.input`, and `ace.output` perform direct memory accesses.
+This does not violate the RISC-V load/store architecture principles, as ACE is architected as an _attached_ unit, which may have its own interfaces.
+
+Consequently, it _may_ maintain its own architectural state and have its own load-store unit.
 
 // ///////////////////////////////////////////////////////////////////////////////////////////
 
-=== Data Structures
+=== ACE Programmer's Model
+
+ACE does not add a register file, but it adds 32 Cryptographic Contexts and
+some unprivileged CSRs to a base scalar RISC-V ISA -- as well some privileged CSRs.
+It also requires a subset of the V extension to be implemented.
+
+==== Cryptographic Contexts
+
+The atomic cryptography extension defines 32 Cryptographic Contexts (CCs) for storing cryptographic keys and metadata.
+Each CC is identified by a number from 0 to 31, which the ACE unit uses to access its contents.
+CCs are addressed via static 5-bit immediate addressing (as normal registers) as well as, unlike traditional registers, via a value from 0 to 31 in any general-purpose register.
+
+Cryptographic Contexts (CCs) reside in a dedicated internal _context file_ (CF) that is inaccessible to any entity outside the ACE security perimeter, including software, other hardware blocks, and invasive debug interfaces. The CF's memory capacity is implementation-defined and may be as large as 32 times the size of the largest possible CC; however, a smaller amount of memory may be used in practice. At a minimum, the CF must be capable of holding either a single instance of the largest possible CC or the largest CC pair in which the first CC derives the second (via `ace.derive`).
+
+The size of each CC is dynamic, determined by the cryptographic algorithm with which it is configured.
+This is an important difference with respect to GPRs and vector registers, which always have the same size.
+ACE returns an error ace_err_memory when insufficient memory prevents `ace.init` and `ace.import` operations, requiring the software to free memory by exporting or clearing a different CC. Implementations must provide sufficient CF memory to prevent infinite `ace.export`/`ace.import` loops.
+
+A further difference between CCs and registers is that CCs can also be addressed indirectly, i.e., through the value of a GPR.
+This has two major implications:
+
+. Adding renaming to CCs would add significant complexity to the microarchitecture.
+  However CCs are much less often redefined than, say, integer or floating point registers, except for internal implied changes, and therefore we can assume that CCs are not renamed without performance issues.
+. We use one additional bit in the instruction encoding to determine whether a CC is given by an immed or by a GPR.
+
+// * *Initial Configuration Format:* The plaintext key(s) and metadata in memory used to initialize a CC.
+// * *Cryptographic Context (CC):* The internal representation of the key(s), metadata, and operational state.
+// * *Sealed Cryptographic Context (SCC):* The format for encrypted and authenticated CC export.
+
+
+[[ACE-registers]]
+==== Registers
+
+[[ACE-CSR-enable]]
+===== aceenable
+
+`aceenable` is a single-bit CSR.
+
+Enabling ACE in any mode is done by writing a 1 to `aceenable`.
+// allow the unit to perform operations, access the general purpose and vector registers, as well as the Cryptographic Contexts.
+Disabling ACE is done by writing a zero to `aceenable`, which also clears the CCs, as described in <<ACE-tracking-cc-dirtiness>>.
+
+
+While the standard floating-point and vector extensions do not support User Mode disable/enable instructions, the ACE unit can be enabled and disabled in User Mode, instead of using an OS call or trapping.
+However, if the ACE unit contains state from a different process, and its interface is disabled for the current one, enabling it will trap to the Supervisor (as described in <<ACE-ACES-field>>) to allow the latter to first save the state in case it was not saved before and then clear it (lazy context switch).
+
+// Enablement in other modes uses a special field in the `*status` CSRs. (cf.{nbsp}<<ACE-ACES-field>>).
+// Writing to `aceenable`, is allowed in more privileged modes, only affects the enablement of the feature in User mode.
+
+When a process that has ACE enabled is preempted, the parent modes inherit the state to be able to export and
+re-import the CCs. Hence, `aceenable` is not cleared, and the `*status.ACES` fields (see <<ACE-ACES-field>>) of the parent domains will take the value Enabled.
+Tracking the CCs which are active, resp., dirty is done on an individual basis and is described in <<ACE-tracking-cc-dirtiness>>.
+
+
+[[ACE-ACES-field]]
+===== ACES field in *status
+
+An ACE context status field, ACES, is added to `mstatus`[26:25], and it is shadowed in `sstatus`[26:25] and in `vsstatus`[26:25] if the hypervisor extension is present.
+Like the FS and VS fields, it can be used to optimize context switching.
+//Its status encoding differs from the FS, VS, and XS fields (which are defined in <<fsxsencoding>>).
+Its possible values are described in <<ACE-fsxsencoding>>.
+
+[[ACE-fsxsencoding]]
+.Encoding of ACES[1:0] status field
+[float="center",align="center",width="100%",cols="^7%,<18%,<75%",options="header"]
+|===
+|Status |Name |Meaning
+|   0   | Disabled-Clean     | ACE ISE not enabled, software assumes no context being configured for this hart. +
+The ACE unit will erase all contexts if ACE is enabled by writing to the `aceenable` CSR.
+|   1   | Disabled-Clobbered | ACE ISE not enabled, software assumes there are configured contexts left for this hart from other environments.
+The hart will trap if ACE ISE is enabled by writing to the `aceenable` CSR. To be used only if explicitly supported in system SW stack, otherwise Disabled-Clean must be used.
+|   2   | Enabled            | ACE ISE enabled.
+|   3   | Invalid            | Reserved.
+|===
+
+The Disabled-Clean and Disabled-Clobbered states are set by the parent mode.
+Disabled-Clobbered is used when the parent-mode software stack does not save Cryptographic Contexts before transferring control to a process that does not (yet) have enabled ACE. If that process later enables ACE by writing to `aceenable`, the hart traps to the parent mode, allowing lazy context save; the parent must then manually reset all Cryptographic Contexts. In contrast, a software stack that always saves the contexts of a switched-out process must configure only the Disabled-Clean state.
+The Disabled-Clobbered state is primarily intended for small devices where thread migration between harts is infrequent, and possibly only one process may be dealing with cryptographic operations.
+
+NOTE: It is responsibility of the exception handler to properly handle the contents of the CCs when the feature is enabled while ACES=Disabled-Clobbered, as
+described in <<ACE-tracking-cc-dirtiness>>.
+
+Writes to ACES do not affect the contents of the CCs.
+Setting ACES=Disabled-Clean or Disabled-Clobbered does not destroy the state, nor does setting ACES=Enabled clear the contents.
+
+Fine-grained tracking activeness and dirtiness of individual CCs uses the `aceccactive` and `aceccdirty` CSRs, cf.{nbsp}<<ACE-tracking-cc-dirtiness>>.
+
+===== aceerror
+
+The `aceerror` CSR contains only as many bits as needed to encode the error status.
+
+// All other bits are reserved for future use.
+// It is not a complete analogue of `fcsr` or `vcsr` since, for instance, it does not have to encode information such as rounding modes.
+// Also, the error status is a field and not a set of distinct condition codes.
+
+[[ACE-tracking-cc-dirtiness]]
+===== Tracking CC dirtiness
+
+This is done by using two CSRs, which track the use and dirtiness of the CCs individually:
+
+[arabic]
+. `aceccactive`: 32 bits, with a bit per CC to denote whether the register is in use or not (cleared contextually to CC erasure to dispose of the key). Read-only.
+. `aceccdirty`: 32 bits, with a bit per CC to track whether the corresponding CC has been modified since the last time the same bit has been cleared. +
+
+If the _i_-th bit of `aceccdirty` is set, then the _i_-th bit of `aceccactive` must also be set.
+
+Two types of actions can modify a CC and thus must update also `aceccdirty`:
+
+* An explicit initialization/configuration/import; and
+* Certain cryptographic operations, such as absorbing information in a hash function, that modify the internal state.
+
+It is also possible to directly write to `aceccdirty` to optimize context switching.
+
+Implementations are required to track the dirtiness of any CC precisely and individually.
+This is different from the tracking of the dirtiness of the floating-point state, for instance.
+
+Context-switching code must save CC number _i_ if the _i_-th bit of `aceccdirty` is set.
+However, it can clear `aceccdirty` when returning control to the same process after restoring its ACE state.
+This indicates to the context-switching code that there is no need to save the CC number _i_ again at the next context switch out of that process unless it has been modified again thus setting the _i_-th bit of `aceccdirty` anew.
+
+Upon a write to `aceenable` that changes its value, the following happens to `aceccvalid` and `aceccdirty`:
+
+* If `aceenable`'s value is changed to 0, then all CCs are cleared, both `aceccvalid` and `aceccdirty` are set to 0, and `*status.ACES` is set to Disabled-Clean.
+* If `aceenable`'s value is changed to 1, and if the parent domain's `*status.ACES`=Disabled-Clean, then we simply assume that the parent process has cleared the CC and set both `aceccvalid` and `aceccdirty` to 0 before transferring the control flow to the current process.
+* If `aceenable`'s value is changed to 1, and if the parent's `*status.ACES`=Disabled-Clobbered, then the hart traps to allow the parent domain responsible for handling context-switched to finish saving the state and ensure that both `aceccvalid` and `aceccdirty` are set to 0, and finally set `*status.ACES`=Disabled-Clean.
+// [.red]#This behavior should be restricted only to User mode.#
+
+[[ACE-ccstart-definition]]
+===== ccstart
+
+`ccstart` is an XLEN-bit CSR that serves a similar role in ACE as `vstart` does in the V extension.
+
+The instructions `ace.init`, `ace.import`, `ace.export`, `ace.input`, and `ace.output` may require significant execution time and can be interrupted mid-instruction by interrupts or memory exceptions.
+In such cases, implementations may set `ccstart` to a non-zero value, enabling the instruction to resume from the interruption point rather than restart from the beginning.
+Since ACE does not have the concept of the length of an element,
+`ccstart` represents a byte offset rather than an element index as in `vstart`.
+Specifically, a load-type instruction was interrupted after reading _and_ processing `ccstart` bytes of input in the state,
+and a store-type instruction was interrupted after computing and writing `ccstart` bytes of output.
+
+NOTE: The `ccstart` value is given in bytes, even though payload sizes are always multiples of 8 bytes. This design accommodates piecewise execution via traps for the `ace.init`, `ace.clear`, `ace.export`, `ace.import`, `ace.input`, and `ace.output` operations, which involve `mv` operations at long-word, quad-word, or vector-register granularity.  This is also compatible with the fact that `ace.size` returns a size in bytes.
+
+Like `vstart`, `ccstart` is a standard read/write CSR; however, software must not write arbitrary non-zero values to it.
+Normally, hardware sets this register on trap.
+Software may safely write 0 to restart operations completely, and the register can be saved and restored during context switches.
+Writing an arbitrary non-zero value may raise an illegal-instruction exception, as hardware is not required to support all values.
+If no exception is raised and an invalid value is written, authentication will fail upon import because portions the content are replaced with arbitrary values, or exports will produce unauthenticatable output.  Only `ace.init` may still create a valid context, but since the key values were already in plaintext within the same domain, this does not expand the attack surface.
+
+Only the instructions explicitly mentioned above support non-zero `ccstart` values; other ACE instructions ignore this register if set by software, and will be restarted.
+
+[[ACE-why-restarting,Remark {counter:remark}]]
+*Remark {counter:remark}.*
+_A single `ccstart` value suffices due to the authenticated encryption algorithm used. The operations behave as follows:_
+
+* `_ace.init_` _(formerly `ace.config`) is a single-pass operation: the metadata section is read first, determining the payload length. If sufficient memory is available, subsequent blocks are read sequentially and passed to a deserialization circuit to populate the CC._
+* `_ace.import_` _operates similarly to `ace.init`: the metadata section is read first to determine the payload length. If sufficient memory is available, the remaining blocks are read, decrypted, and passed to a deserialization circuit to populate the CC._
+* `_ace.export_` _involves two passes, but the first pass is entirely internal to the ACE unit. Hence, the first pass cannot cause a page fault, and is easily restarted. Specifically, it computes the SIV by applying POLYVAL to the serialized CC content. Subsequently, the serialized metadata, the nonce, and the SIV are written out, followed by the CC content serialized, encrypted and written out block by block. It is this last part that may cause page faults, and that may require resumption._
+
+_Although these operations are inherently complex, the ACE unit is architected to function like a separate machine executing simpler instructions sequentially. State machines (one per CPU hart connected to the ACE unit, potentially in a 1-to-1 configuration) receive commands from the CPU and break them into smaller steps._
+
+_Therefore, separating data transfer from cryptographic operations in import/export is unnecessary. Otherwise, the loaded payload would need to be stored within the ACE unit rather than processed inline with minimal overhead, and this may lead to higher internal resource requirements_
+
+_Finally, resuming requires at least as many cryptographic operations as restarting if the trapped domain also saves and resumes partial SCCs. Memory accesses may be reduced, but since data read from memory initially (for `ace.init` or `ace.export`) may no longer reside in the caches, resuming may offer better performance on some systems. Additionally, resuming avoids potential circular page-fault issues, as opposed to restarting._
+
+[.red]#*TBD* Specify the exact semantics of `ccstart` and define the points at which various operations can be interrupted.#
+
+===== Reuse of ASID and VMID (to be verified).
+
+We reuse the CSRs for `ASID`, resp., `VMID`
+(i.e., the CSR fields `satp`.ASID and `hgatp`.VMID).
+to give only certain User processes and Supervisor processes access to certain key spaces.
+The maximal bit length of `ASID` is 9 for Sv32 addresses or 16 for Sv39, Sv48, and Sv57 addresses.
+The maximal bit length of `VMID` is 7 for Sv32x4 or 14 for Sv39x4, Sv48x4, and Sv57x4 addresses.
+In the metadata section, `ASID` and `VMID` are always zero padded to the maximal lengths of 16 and 14 bits, respectively.
+
+[.red]#However, we need a mechanism to make sure that if the system is not configured to insert `ASID`, resp., `VMID` into the GVAs/GPAs, we can still use them for the purpose of policing the use of CCs.#
+
+[[ACE-providing-keys,Remark {counter:remark}]]
+*Remark {counter:remark}.* _The software in each World/Supervisor Domain is normally responsible to generate or obtain their own keys, and if a process (applet) in one World/Supervisor Domain is responsible to provide keys to other Worlds/Supervisor Domains, it is the responsibility of the MM to perform an appropriate sequence of import, switch the CTK, then export operations._
+
+
+===== Privileged Registers
+
+====== ACE field in misa
+
+The `misa.ACE` field uses bit `L` (11) to indicate that the ACE extension is implemented.
+//This bit is chosen because the extension goes _beyond_ the cryptographic extension, which will likely use bit `K` (10).
+
+====== acerctk
+
+If the RCTK can be programmed, it can only be programmed by MM.
+For this purpose, we need eight 32-bit CSRs are available, called `acerctk0`, `acerctk1` .. `acerctk7`, where register `acerctk{i}` contains bits [stem:[31+32\,i:32\,i]] of the RCTK.
+No exception is raised if software running in any other mode tries to write to the `acerctk` block, such writes are simply ignored.
+The `acerctk` block always reads as zero.
+
+NOTE: Discoverability of whether the RCTK can be configured or not is not critical, since this is information known by the MM firmware.
+[.red]#We can use the data structure pointed by `mconfigptr` in order to track optional features of ACE including whether the `acerctk` CSR block is implemented, and if not whether whether the value is ephemeral or fixed.# +
+ +
+User mode, and even operating systems and hypervisors, need not be aware of the `acerctk` block. Other mechanisms could have been chosen to program the CTK, such as an MM-exclusive dedicated hardware interface or memory-mapped interface.
+
+====== Re-configurable Locales
+
+Two groups of four consecutive 32-bit CSRs, programmable by MM, are used to define two reconfigurable locales
+(cf.{nbsp}<<ACE-concepts>>).
+These groups are:
+`ace_OS_Secret{i}`, for `i` in [0..3], to configure the "OS Secret" entry,
+and `ace_Boot_Session{i}`, for `i` in [0..3], to configure the "Boot Session" entry (cf.{nbsp}<<ACE-locales>>).
+
+The reason `ace_Boot_Session*` must be reconfigurable is that it must change in a VM if the latter's virtual hardware is re-booted, and this can happen independently from the underlying host and other VMs. For instance, a VM may be frozen, then the host may be rebooted, and then the VM may be resumed, in which case no boot session occurred in the VM, while it happened in the host hardware.
+
+NOTE: User mode, and even operating systems and hypervisors, need not be aware of the `ace_OS_Secret{i}` and `ace_Boot_Session{i}` blocks. Other mechanisms could have been chosen to program the "OS Secret" and  "Boot Session" entries, such as an MM-exclusive dedicated hardware interface or memory-mapped interface.
+
+==== Data Structures
 
 ACE defines two distinct representations of cryptographic information: the CC configuration format, and the encrypted, authenticated SCC format. These two  formats are architected for software portability and interoperability.
 //, enabling virtual-machine migration across heterogeneous hardware—for example, between cloud or consumer devices with CPUs from different vendors.
@@ -55,7 +316,7 @@ All data formats are little-endian.
 NOTE: Mechanisms for persisting Context Transport Keys (CTKs) across reboots or transferring them between devices are outside the scope of the present ACE architecture. These are system-specific and belong to MM firmware. For cross-device migration, the use of a public-key key-encapsulation mechanism (KEM) is recommended.
 
 [[ACE-metadata]]
-==== Metadata Section Format
+===== Metadata Section Format
 
 The metadata section is 64 bits long and its format described in <<ACE-metadata-standard>>.
 This format is used for CC initialization, export and import purposes.
@@ -149,7 +410,7 @@ Filtering use by Supervisor Domain or World ID is not supported, and not only be
 Reconfiguring the RCTK is a better approach for such isolation requirements, whereas isolation by `ASID` and `VMID` is a weaker security feature._
 
 [[ACE-locales]]
-==== Locales
+===== Locales
 
 Internally, ACE keeps a table of 128-bit Locale Secrets (LS), the Locale Secrets Table (LST).
 Some of these entries are fixed, other values may be configurable only using an implementation-specific authenticated hardware procedure, and the remaining may be programmed by MM (*Note:* _we need to define the corresponding CSRs_).
@@ -210,7 +471,7 @@ If the Locale of this CC is not restricted, the internal key index may be interp
 Hence the implementation of the STK must also provide the proper Locale metadata to the ACE implementation to configure a CC._
 
 [[ACE-formats]]
-==== Formats of Configuration Inputs and Sealed Configuration Contexts
+===== Formats of Configuration Inputs and Sealed Configuration Contexts
 
 The format of the input to `ace.init` is simple: the first 8 bytes must contain the 64-bit metadata section, followed by any key and additional information in a format specified by the algorithm. The total length of this input must be a multiple of 8 bytes.
 The lengths of the configuration payload, of the content section, and of SCCs is given in bytes.
@@ -314,10 +575,10 @@ NOTE: Certain format details are fixed across algorithms. All pure ciphers use a
 // ///////////////////////////////////////////////////////////////////////////////////////////
 
 [[ACE-constants]]
-=== Constants
+==== Constants
 
 [[ACE-error-codes]]
-==== Error Codes
+===== Error Codes
 
 ACE error codes are 8-bit values.
 The range [0..127] is reserved for RVI.
@@ -351,14 +612,15 @@ If algorithms that support `ace.derive` are implemented, the implementation must
 This can be used in low CF memory situations to trigger a lazy re-load of that CC.
 |===
 
-==== Supported Algorithms
+===== Supported Algorithms
 
 [.red]#Add algorithm numbers!#
 
 We architect support for several algorithms, and also define a minimal subset (current suggestion):
 
 * AES-128 and AES-256 encryption and decryption.
-* AES-CTR, AES-GCM, AES-GCM-SIV, AES-XTS, AES-CMAC using AES-128/256.
+* AES-CTR, AES-GCM, AES-GCM-SIV, AES-XTS using AES-128/256.
+* AES-CMAC using AES-128/256.
 * SHA-2, SHA-2-HMAC.
 
 The list of other architected algorithms is TBD, but it must include at least
@@ -369,12 +631,14 @@ The list of other architected algorithms is TBD, but it must include at least
 * SHA-3, SHA-3-HMAC.
 * SM3 Secure Hash.
 
-==== Other Constants
+===== Other Constants
 
 [.red]#(May still be incomplete.)#
 In addition to error codes and algorithms encodings, ACE defines a few more constants, such as
 those in <<ACE-stage_constants>> which are used in `ace.state`/`ace.dir` to change the state of a CC.
 //Note that the internal state machine of a CC may also be changed implicitly by `ace.exec` or `ace.derive` operations, and the state machine of a cloned CC may be changed implicitly according to the algorithm's policies as encoded in the source CC's metadata.
+
+<<<
 
 [[ACE-stage_constants]]
 .Constants defining messages sent to a CC through `ace.state`/`ace.dir` operations
@@ -395,224 +659,17 @@ Algorithm is ready to process.
 |===
 
 // ///////////////////////////////////////////////////////////////////////////////////////////
-
-[[ACE-registers]]
-=== Registers
-
-The atomic cryptography extension does not add a register file, but it adds 32 Cryptographic Contexts and
-some unprivileged CSRs to a base scalar RISC-V ISA -- as well some privileged CSRs.
-It also requires a subset of the V extension to be implemented.
-
-==== Cryptographic Contexts
-
-The atomic cryptography extension defines 32 Cryptographic Contexts (CCs) for storing cryptographic keys and metadata.
-Each CC is identified by a number from 0 to 31, which the ACE unit uses to access its contents.
-CCs are addressed via static 5-bit immediate addressing (as normal registers) as well as, unlike traditional registers, via a value from 0 to 31 in any general-purpose register.
-
-Cryptographic Contexts (CCs) reside in a dedicated internal _context file_ (CF) that is inaccessible to any entity outside the ACE security perimeter, including software, other hardware blocks, and invasive debug interfaces. The CF's memory capacity is implementation-defined and may be as large as 32 times the size of the largest possible CC; however, a smaller amount of memory may be used in practice. At a minimum, the CF must be capable of holding either a single instance of the largest possible CC or the largest CC pair in which the first CC derives the second (via `ace.derive`).
-
-The size of each CC is dynamic, determined by the cryptographic algorithm with which it is configured.
-This is an important difference with respect to GPRs and vector registers, which always have the same size.
-ACE returns an error ace_err_memory when insufficient memory prevents `ace.init` and `ace.import` operations, requiring the software to free memory by exporting or clearing a different CC. Implementations must provide sufficient CF memory to prevent infinite `ace.export`/`ace.import` loops.
-
-A further difference between CCs and registers is that CCs can also be addressed indirectly, i.e., through the value of a GPR.
-This has two major implications:
-
-. Adding renaming to CCs would add significant complexity to the microarchitecture.
-  However CCs are much less often redefined than, say, integer or floating point registers, except for internal implied changes, and therefore we can assume that CCs are not renamed without performance issues.
-. We need to use one additional bit in the instruction encoding to determine whether a CC is given by an immed or by a GPR.
-
-// * *Initial Configuration Format:* The plaintext key(s) and metadata in memory used to initialize a CC.
-// * *Cryptographic Context (CC):* The internal representation of the key(s), metadata, and operational state.
-// * *Sealed Cryptographic Context (SCC):* The format for encrypted and authenticated CC export.
-
-[[ACE-CSR-enable]]
-==== aceenable
-
-`aceenable` is a single-bit CSR.
-
-Enabling ACE in any mode is done by writing a 1 to `aceenable`.
-// allow the unit to perform operations, access the general purpose and vector registers, as well as the Cryptographic Contexts.
-Disabling ACE is done by writing a zero to `aceenable`, which also clears the CCs, as described in <<ACE-tracking-cc-dirtiness>>.
-
-
-While the standard floating-point and vector extensions do not support User Mode disable/enable instructions, the ACE unit can be enabled and disabled in User Mode, instead of using an OS call or trapping.
-However, if the ACE unit contains state from a different process, and its interface is disabled for the current one, enabling it will trap to the Supervisor (as described in <<ACE-ACES-field>>) to allow the latter to first save the state in case it was not saved before and then clear it (lazy context switch).
-
-// Enablement in other modes uses a special field in the `*status` CSRs. (cf.{nbsp}<<ACE-ACES-field>>).
-// Writing to `aceenable`, is allowed in more privileged modes, only affects the enablement of the feature in User mode.
-
-When a process that has ACE enabled is preempted, the parent modes inherit the state to be able to export and
-re-import the CCs. Hence, `aceenable` is not cleared, and the `*status.ACES` fields (see <<ACE-ACES-field>>) of the parent domains will take the value Enabled.
-Tracking the CCs which are active, resp., dirty is done on an individual basis and is described in <<ACE-tracking-cc-dirtiness>>.
-
-
-[[ACE-ACES-field]]
-==== ACES field in *status
-
-An ACE context status field, ACES, is added to `mstatus`[26:25], and it is shadowed in `sstatus`[26:25] and in `vsstatus`[26:25] if the hypervisor extension is present.
-Like the FS and VS fields, it can be used to optimize context switching.
-//Its status encoding differs from the FS, VS, and XS fields (which are defined in <<fsxsencoding>>).
-Its possible values are described in <<ACE-fsxsencoding>>.
-
-[[ACE-fsxsencoding]]
-.Encoding of ACES[1:0] status field
-[float="center",align="center",width="100%",cols="^7%,<18%,<75%",options="header"]
-|===
-|Status |Name |Meaning
-|   0   | Disabled-Clean     | ACE ISE not enabled, software assumes no context being configured for this hart. +
-The ACE unit will erase all contexts if ACE is enabled by writing to the `aceenable` CSR.
-|   1   | Disabled-Clobbered | ACE ISE not enabled, software assumes there are configured contexts left for this hart from other environments.
-The hart will trap if ACE ISE is enabled by writing to the `aceenable` CSR. To be used only if explicitly supported in system SW stack, otherwise Disabled-Clean must be used.
-|   2   | Enabled            | ACE ISE enabled.
-|   3   | Invalid            | Reserved.
-|===
-
-The Disabled-Clean and Disabled-Clobbered states are set by the parent mode.
-Disabled-Clobbered is used when the parent-mode software stack does not save Cryptographic Contexts before transferring control to a process that does not (yet) have enabled ACE. If that process later enables ACE by writing to `aceenable`, the hart traps to the parent mode, allowing lazy context save; the parent must then manually reset all Cryptographic Contexts. In contrast, a software stack that always saves the contexts of a switched-out process must configure only the Disabled-Clean state.
-The Disabled-Clobbered state is primarily intended for small devices where thread migration between harts is infrequent, and possibly only one process may be dealing with cryptographic operations.
-
-NOTE: It is responsibility of the exception handler to properly handle the contents of the CCs when the feature is enabled while ACES=Disabled-Clobbered, as
-described in <<ACE-tracking-cc-dirtiness>>.
-
-Writes to ACES do not affect the contents of the CCs.
-Setting ACES=Disabled-Clean or Disabled-Clobbered does not destroy the state, nor does setting ACES=Enabled clear the contents.
-
-Fine-grained tracking activeness and dirtiness of individual CCs uses the `aceccactive` and `aceccdirty` CSRs, cf.{nbsp}<<ACE-tracking-cc-dirtiness>>.
-
-==== aceerror
-
-The `aceerror` CSR contains only as many bits as needed to encode the error status.
-
-// All other bits are reserved for future use.
-// It is not a complete analogue of `fcsr` or `vcsr` since, for instance, it does not have to encode information such as rounding modes.
-// Also, the error status is a field and not a set of distinct condition codes.
-
-[[ACE-tracking-cc-dirtiness]]
-==== Tracking CC dirtiness
-
-This is done by using two CSRs, which track the use and dirtiness of the CCs individually:
-
-[arabic]
-. `aceccactive`: 32 bits, with a bit per CC to denote whether the register is in use or not (cleared contextually to CC erasure to dispose of the key). Read-only.
-. `aceccdirty`: 32 bits, with a bit per CC to track whether the corresponding CC has been modified since the last time the same bit has been cleared. +
-
-If the _i_-th bit of `aceccdirty` is set, then the _i_-th bit of `aceccactive` must also be set.
-
-Two types of actions can modify a CC and thus must update also `aceccdirty`:
-
-* An explicit initialization/configuration/import; and
-* Certain cryptographic operations, such as absorbing information in a hash function, that modify the internal state.
-
-It is also possible to directly write to `aceccdirty` to optimize context switching.
-
-Implementations are required to track the dirtiness of any CC precisely and individually.
-This is different from the tracking of the dirtiness of the floating-point state, for instance.
-
-Context-switching code must save CC number _i_ if the _i_-th bit of `aceccdirty` is set.
-However, it can clear `aceccdirty` when returning control to the same process after restoring its ACE state.
-This indicates to the context-switching code that there is no need to save the CC number _i_ again at the next context switch out of that process unless it has been modified again thus setting the _i_-th bit of `aceccdirty` anew.
-
-Upon a write to `aceenable` that changes its value, the following happens to `aceccvalid` and `aceccdirty`:
-
-* If `aceenable`'s value is changed to 0, then all CCs are cleared, both `aceccvalid` and `aceccdirty` are set to 0, and `*status.ACES` is set to Disabled-Clean.
-* If `aceenable`'s value is changed to 1, and if the parent domain's `*status.ACES`=Disabled-Clean, then we simply assume that the parent process has cleared the CC and set both `aceccvalid` and `aceccdirty` to 0 before transferring the control flow to the current process.
-* If `aceenable`'s value is changed to 1, and if the parent's `*status.ACES`=Disabled-Clobbered, then the hart traps to allow the parent domain responsible for handling context-switched to finish saving the state and ensure that both `aceccvalid` and `aceccdirty` are set to 0, and finally set `*status.ACES`=Disabled-Clean.
-// [.red]#This behavior should be restricted only to User mode.#
-
-[[ACE-ccstart-definition]]
-==== ccstart
-
-`ccstart` is an XLEN-bit CSR that serves a similar role in ACE as `vstart` does in the V extension.
-
-The instructions `ace.init`, `ace.import`, `ace.export`, `ace.input`, and `ace.output` may require significant execution time and can be interrupted mid-instruction by interrupts or memory exceptions.
-In such cases, implementations may set `ccstart` to a non-zero value, enabling the instruction to resume from the interruption point rather than restart from the beginning.
-Since ACE does not have the concept of the length of an element,
-`ccstart` represents a byte offset rather than an element index as in `vstart`.
-Specifically, a load-type instruction was interrupted after reading _and_ processing `ccstart` bytes of input in the state,
-and a store-type instruction was interrupted after computing and writing `ccstart` bytes of output.
-
-NOTE: The `ccstart` value is given in bytes, even though payload sizes are always multiples of 8 bytes. This design accommodates piecewise execution via traps for the `ace.init`, `ace.clear`, `ace.export`, `ace.import`, `ace.input`, and `ace.output` operations, which involve `mv` operations at long-word, quad-word, or vector-register granularity.  This is also compatible with the fact that `ace.size` returns a size in bytes.
-
-Like `vstart`, `ccstart` is a standard read/write CSR; however, software must not write arbitrary non-zero values to it.
-Normally, hardware sets this register on trap.
-Software may safely write 0 to restart operations completely, and the register can be saved and restored during context switches.
-Writing an arbitrary non-zero value may raise an illegal-instruction exception, as hardware is not required to support all values.
-If no exception is raised and an invalid value is written, authentication will fail upon import because portions the content are replaced with arbitrary values, or exports will produce unauthenticatable output.  Only `ace.init` may still create a valid context, but since the key values were already in plaintext within the same domain, this does not expand the attack surface.
-
-Only the instructions explicitly mentioned above support non-zero `ccstart` values; other ACE instructions ignore this register if set by software, and will be restarted.
-
-[[ACE-why-restarting,Remark {counter:remark}]]
-*Remark {counter:remark}.*
-_A single `ccstart` value suffices due to the authenticated encryption algorithm used. The operations behave as follows:_
-
-* `_ace.init_` _(formerly `ace.config`) is a single-pass operation: the metadata section is read first, determining the payload length. If sufficient memory is available, subsequent blocks are read sequentially and passed to a deserialization circuit to populate the CC._
-* `_ace.import_` _operates similarly to `ace.init`: the metadata section is read first to determine the payload length. If sufficient memory is available, the remaining blocks are read, decrypted, and passed to a deserialization circuit to populate the CC._
-* `_ace.export_` _involves two passes, but the first pass is entirely internal to the ACE unit. Hence, the first pass cannot cause a page fault, and is easily restarted. Specifically, it computes the SIV by applying POLYVAL to the serialized CC content. Subsequently, the serialized metadata, the nonce, and the SIV are written out, followed by the CC content serialized, encrypted and written out block by block. It is this last part that may cause page faults, and that may require resumption._
-
-_Although these operations are inherently complex, the ACE unit is architected to function like a separate machine executing simpler instructions sequentially. State machines (one per CPU hart connected to the ACE unit, potentially in a 1-to-1 configuration) receive commands from the CPU and break them into smaller steps._
-
-_Therefore, separating data transfer from cryptographic operations in import/export is unnecessary. Otherwise, the loaded payload would need to be stored within the ACE unit rather than processed inline with minimal overhead, and this may lead to higher internal resource requirements_
-
-_Finally, resuming requires at least as many cryptographic operations as restarting if the trapped domain also saves and resumes partial SCCs. Memory accesses may be reduced, but since data read from memory initially (for `ace.init` or `ace.export`) may no longer reside in the caches, resuming may offer better performance on some systems. Additionally, resuming avoids potential circular page-fault issues, as opposed to restarting._
-
-[.red]#*TBD* Specify the exact semantics of `ccstart` and define the points at which various operations can be interrupted.#
-
-==== Reuse of ASID and VMID (to be verified).
-
-We reuse the CSRs for `ASID`, resp., `VMID`
-(i.e., the CSR fields `satp`.ASID and `hgatp`.VMID).
-to give only certain User processes and Supervisor processes access to certain key spaces.
-The maximal bit length of `ASID` is 9 for Sv32 addresses or 16 for Sv39, Sv48, and Sv57 addresses.
-The maximal bit length of `VMID` is 7 for Sv32x4 or 14 for Sv39x4, Sv48x4, and Sv57x4 addresses.
-In the metadata section, `ASID` and `VMID` are always zero padded to the maximal lengths of 16 and 14 bits, respectively.
-
-[.red]#However, we need a mechanism to make sure that if the system is not configured to insert `ASID`, resp., `VMID` into the GVAs/GPAs, we can still use them for the purpose of policing the use of CCs.#
-
-[[ACE-providing-keys,Remark {counter:remark}]]
-*Remark {counter:remark}.* _The software in each World/Supervisor Domain is normally responsible to generate or obtain their own keys, and if a process (applet) in one World/Supervisor Domain is responsible to provide keys to other Worlds/Supervisor Domains, it is the responsibility of the MM to perform an appropriate sequence of import, switch the CTK, then export operations._
-
-
-==== Privileged Registers
-
-===== ACE field in misa
-
-The `misa.ACE` field uses bit `L` (11) to indicate that the ACE extension is implemented.
-//This bit is chosen because the extension goes _beyond_ the cryptographic extension, which will likely use bit `K` (10).
-
-===== acerctk
-
-If the RCTK can be programmed, it can only be programmed by MM.
-For this purpose, we need eight 32-bit CSRs are available, called `acerctk0`, `acerctk1` .. `acerctk7`, where register `acerctk{i}` contains bits [stem:[31+32\,i:32\,i]] of the RCTK.
-No exception is raised if software running in any other mode tries to write to the `acerctk` block, such writes are simply ignored.
-The `acerctk` block always reads as zero.
-
-NOTE: Discoverability of whether the RCTK can be configured or not is not critical, since this is information known by the MM firmware.
-[.red]#We can use the data structure pointed by `mconfigptr` in order to track optional features of ACE including whether the `acerctk` CSR block is implemented, and if not whether whether the value is ephemeral or fixed.# +
- +
-User mode, and even operating systems and hypervisors, need not be aware of the `acerctk` block. Other mechanisms could have been chosen to program the CTK, such as an MM-exclusive dedicated hardware interface or memory-mapped interface.
-
-===== Re-configurable Locales
-
-Two groups of four consecutive 32-bit CSRs, programmable by MM, are used to define two reconfigurable locales
-(cf.{nbsp}<<ACE-concepts>>).
-These groups are:
-`ace_OS_Secret{i}`, for `i` in [0..3], to configure the "OS Secret" entry,
-and `ace_Boot_Session{i}`, for `i` in [0..3], to configure the "Boot Session" entry (cf.{nbsp}<<ACE-locales>>).
-
-The reason `ace_Boot_Session*` must be reconfigurable is that it must change in a VM if the latter's virtual hardware is re-booted, and this can happen independently from the underlying host and other VMs. For instance, a VM may be frozen, then the host may be rebooted, and then the VM may be resumed, in which case no boot session occurred in the VM, while it happened in the host hardware.
-
-NOTE: User mode, and even operating systems and hypervisors, need not be aware of the `ace_OS_Secret{i}` and `ace_Boot_Session{i}` blocks. Other mechanisms could have been chosen to program the "OS Secret" and  "Boot Session" entries, such as an MM-exclusive dedicated hardware interface or memory-mapped interface.
-
 // ///////////////////////////////////////////////////////////////////////////////////////////
 
 === Instructions
 
-In what follows, the notation `Cn|C[Xn]` refers to a CC directly (i.e., the
-integer `n` is a 5-bit field in the instruction encoding) or a GPR containing a
-number from 0 to 31 to indirectly refer to a CC.  In general, six bits are
-needed to select a CC, to take into account the possibility of indirect
-addressing.
+We now give detailed descriptions of the instructions, including their semantics and encoding.
+
+// In what follows, the notation `Cn|C[Xn]` refers to a CC directly (i.e., the
+// integer `n` is a 5-bit field in the instruction encoding) or a GPR containing a
+// number from 0 to 31 to indirectly refer to a CC.  In general, six bits are
+// needed to select a CC, to take into account the possibility of indirect
+// addressing.
 
 NOTE: These encodings are just example encodings, and may not be the final
 encodings. They serve as a starting point for discussion and refinement as
@@ -746,19 +803,30 @@ Description::
 `Cs` is the source CC to be exported (encoded as a 5-bit immed). Alternatively,
 the number of context from which to export the CC is stored in the GPR `Xs` as
 a number from 0 to 31. `Xd` is the GPR base address of the buffer where to
-store the SCC.
+store the SCC. +
+ +
+Exports the contents of CC `Cs` to memory, starting at address `Xd`, using
+the procedure described in <<ACE-formats>>. +
+// Depending
+// on the type and policies of the key — which are stored in the metadata of `Cs`,
+// the CTK can be either the RCTK CSR or a Locale specific RCTK derived from the
+// CTK. +
+ +
+// The instruction (resp. `ace.import`) writes (reads) the entire internal state
+// of a CC or information needed to reconstruct an equivalent state — the
+// instruction must be resumable in case of interrupts. This is similar to
+// entire-vector-register store instructions, that appear to other harts as
+// sequences of individual stores.
+If the context `Cs` is clear,
+//or does not exist in the microarchitecture
+the operation will report an error.
 
-Exports the contents of CC `Cs` to memory, starting at address `Xd`. Depending
-on the type and policies of the key — which are stored in the metadata of `Cs`,
-the CCWK can be either the RCTK CSR or a Locale specific RCTK derived from the
-CTK.
+The instruction must be resumable in case of interrupts.
+Similarly to entire-vector-register store instructions, `ace.export` appears to other harts as
+sequences of individual stores.
 
-The instruction (resp. `ace.import`) writes (reads) the entire internal state
-of a CC or information needed to reconstruct an equivalent state — the
-instruction must be resumable in case of interrupts. This is similar to
-entire-vector-register store instructions, that appear to other harts as
-sequences of individual stores. If the context `Cs` is clear or does not exist
-in the microarchitecture, the operation will report an error.
+
+
 
 // [.red]#(TBdetermined whether it is secure)# This instruction is trappable and may also be resumed or restarted.
 
@@ -794,27 +862,33 @@ Description::
 `Cd` is the destination CC to be imported, as an immed (5-bit). Alternatively,
 the number of context into which import the SCC is stored in the GPR `Xd` as a
 number from 0 to 31. `Xn` is the GPR containing the base address of the buffer
-with the SCC.
-
+with the SCC. +
+ +
+The instruction must be resumable in case of interrupts.
+Similarly to entire-vector-register load instructions, `ace.import` appears to other harts as
+sequences of individual loads. +
+ +
 The bit S takes the values 0 (false) or 1 (true).
 It is set to true if the key is in a system defined format
 (`ace.import.S`)
 and not the format defined by the present architecture
-(`ace.import`).
+(`ace.import`). +
 
 NOTE: There is no further specification as to
 what the system defined format is in the encoding of the instruction, and in
 case more than one system defined format is defined, the data format itself
 must distinguish between them.  In other words, it is the responsibility of
 the system to augment all the system defined formats with a unique identifier
-that can be used to distinguish between them.
+that can be used to distinguish between them. +
 
+NOTE: The `ace.export` instruction does not have a `ace.export.S` analogue of `ace.import.S`.
 This means that system HW dynamically generated keys can be imported but not
 exported in the same form: they must be exported in the format architected in
-this specification. If the value cannot be transported to other devices or to
-other Locale states of the same device, the internal logic must bind them to a
-specific DCTK). The instruction imports them like software keys and sets
-the appropriate policies.
+this specification.
+// If the value cannot be transported to other devices or to
+// other Locale states of the same device, the internal logic must bind them to a
+// specific DCTK). The instruction imports them like software keys and sets
+// the appropriate policies.
 
 // [.red]#(TBdetermined whether it is secure)# This instruction is trappable and may also be resumed or restarted.
 
@@ -1000,7 +1074,7 @@ Description::
 Clones source CC `Cs` (or the CC indexed by `Xs`) into destination CC `Cd` (or
 into the CC indexed by `Xd`).
 
-NOTE: The `ace.clone` instruction is an optimization for the sequence `ace.export` followed by `ace.import`. While reusing cryptographic state (e.g., encrypting with the same counter) can enable certain attacks, this risk cannot be eliminated by omitting `ace.clone`, as a state can be exported and re‑imported multiple times.
+// NOTE: The `ace.clone` instruction is an optimization for the sequence `ace.export` followed by `ace.import`. While reusing cryptographic state (e.g., encrypting with the same counter) can enable certain attacks, this risk cannot be eliminated by omitting `ace.clone`, as a state can be exported and re‑imported multiple times.
 
 ==== ace.derive (optional)
 
