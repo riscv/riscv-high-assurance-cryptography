@@ -50,6 +50,8 @@ ACE defines two distinct representations of cryptographic information: the CC co
 //, enabling virtual-machine migration across heterogeneous hardware—for example, between cloud or consumer devices with CPUs from different vendors.
 The internal CC representation, on the other hand, is implementation-specific.
 
+All data formats are little-endian.
+
 NOTE: Mechanisms for persisting Context Transport Keys (CTKs) across reboots or transferring them between devices are outside the scope of the present ACE architecture. These are system-specific and belong to MM firmware. For cross-device migration, the use of a public-key key-encapsulation mechanism (KEM) is recommended.
 
 [[ACE-metadata]]
@@ -138,7 +140,7 @@ Reconfiguring the RCTK is a better approach for such isolation requirements, whe
 [[ACE-locales]]
 ==== Locales
 
-Internally, ACE has a table of 128-bit Locale Secrets (LS), the Locale Secrets Table (LST).
+Internally, ACE keeps a table of 128-bit Locale Secrets (LS), the Locale Secrets Table (LST).
 Some of these entries are fixed, other values may be configurable only using an implementation-specific authenticated hardware procedure, and the remaining may be programmed by MM (*Note:* _we need to define the corresponding CSRs_).
 The LST is a global table shared across all ACE units with some fields which can be MM-programmed and are architectural (i.e., per hart).
 //Currently, the only two values that may be overridden by architectural values, in order to support multiple VMs/Supervisor Domains/Worlds are System_Secret and Boot_Session.
@@ -148,26 +150,30 @@ Otherwise, this value is used as an index _i_ in the HST, and a derived key comp
 The encryption and authentication keys are then derived from the DCTK.
 
 In <<ACE-binding-indices>>, we list the mandatory entries and their meaning.
-In the column "MM-Configurable" we indicate whether the architecture may allow MM to configure the corresponding Locale Secret.
+In the column "MM-Config." we indicate whether the architecture may allow MM to configure the corresponding Locale Secret.
+We also specify the domain of each Locale Secret.
+The first two Locale Secrets are chip-wide, and should be the same across all chiplets in the same SoC -- a separate chip in the same system may have different values.
+Three further Locale Secrets must be the same across the entire device, and the Locale Secrets at indexes 5 and 6 can be reprogrammed by MM.
 
 [[ACE-binding-indices]]
 .Mandatory Locale Values
-[width="100%",cols="19%,52%,^12%,^7%",options="header"]
+[width="100%",cols="17%,49%,^8,^8%,^8%",options="header"]
 |===
-.>| Name .>| Description .>| MM-Configurable .>| Value
-| No locale binding         | | | -1 (15)
-| Chip_Manufacturer         | Identifies the manufacturer of the SoC. Permanent. | N | 0
-| Chip_Model                | Identifies specific chip model/family. Permanent. | N | 1
+.>| Name .>| Description .>| Domain | MM-Config. .>| Value +
+(Index)
+| No locale binding         | No CTK derivation. CC bound to BCTK only. | -- | -- | -1 (15)
+| Chip_Manufacturer         | Identifies the manufacturer of the SoC. Permanent. | SoC | N | 0
+| Chip_Model                | Identifies specific chip model/family. Permanent. | SoC | N | 1
 | OEM_Secret                | Provisioned by OEM to differentiate their products from the competition.
-                              Can be permanent in a device — re-generations can be optionally triggered using impdef HW authenticated mechanisms. | N | 2
-| Product                   | Identifies device/system type/model (product). Not necessarily permanent. Reconfigurable like OEM_Secret. | N | 3
+                              Can be permanent in a device — optional reconfiguration using impdef HW authenticated mechanisms. | Device | N | 2
+| Product                   | Identifies device/system type/model (product). Not necessarily permanent. Reconfigurable like OEM_Secret. | Device | N | 3
 | Device                    | Unique device (entire system) secret (not the device ID such as a serial number, but it can be derived from it, for instance by hashing).
                                Shared across all harts in a Soc and shareable across multiple SoCs in a single device. Sharing mechanism impdef, i.e., not architected.
-                               Reconfigurable like OEM_Secret. | N | 4
+                               Reconfigurable like OEM_Secret. | Device | N | 4
 | OS_Secret                 | Identifies Operating System (or System Stack). +
-                              Not permanent, must be configured during (virtual) boot. | Allowed | 5
-| Boot_Session              | Regenerated at each (virtual) boot. | Allowed | 6
-| Reserved                  | Reserved for future use (RZ if not defined). | Impdef | 7-14
+                              Not permanent, must be configured during (virtual) boot. | OS | Allowed | 5
+| Boot_Session              | Regenerated at each (virtual) boot. | OS | Allowed | 6
+| Reserved                  | Reserved for future use (RZ if not defined). | Impdef | Impdef | 7-14
 |===
 
 The constant LOCALES_MAX is the maximum number of locales supported by the system.
@@ -215,10 +221,10 @@ The first 8 bytes must contain the 64-bit metadata section as specified in <<ACE
 followed by the key(s) and possibly other information as specified by the algorithm.
 
 Plaintext Format of SCC:::
-bytes[7:0]{nbsp}{nbsp} contain the 64-bit metadata section +
+bytes[7:0]{nbsp}{nbsp} contain the 64-bit metadata section, +
 bytes[19:8]{nbsp}{nbsp} contain the nonce (96 bits) +
-bytes[31:20] {nbsp}{nbsp}contain the SIV (96 bits) +
-bytes[u+31,32]{nbsp}{nbsp} contain `content_serialize(CC.content)` (u is clearly the byte length of the latter).
+bytes[31:20] {nbsp}{nbsp} contain the SIV (96 bits) +
+bytes[u+31,32]{nbsp}{nbsp} contain `content_serialize(CC.content)`, which has a byte length of u.
 
 Only the serialization of the content is encrypted, while both metadata and content are included in the computation of the authentication tag, as described next.
 
