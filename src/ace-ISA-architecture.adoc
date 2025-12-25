@@ -21,8 +21,8 @@ Only the ACE implementation can access CC content.
 For protection outside the architectural state, a CC can be exported as a _Sealed Cryptographic Context_ (SCC), i.e., an encrypted and authenticated package containing metadata, a nonce, and authentication tag, and encrypted content.
 SCCs can be reimported into CCs when needed.
 These operations use a _Context Transport Key_ (CTK).
-The most commonly used CTK is the _Base Context Transport Key_ (BCTK), which is stored in an MM-only CSR.
-MM manages the BCTK unless it is hardwired or hardware-generated.
+The most commonly used CTK is the _Root Context Transport Key_ (RCTK), which is stored in an MM-only CSR.
+MM manages the RCTK unless it is hardwired or hardware-generated.
 Besides the keys in a CC, also the keys in an SCC are called _opaque keys_.
 
 Use Control Policy:::
@@ -33,7 +33,7 @@ Therefore, the _use control policies_ in the metadata section may optionally res
 Locale:::
 In addition to use control policies,
 ACE can bind opaque keys to a _Locale_, restricting their use to a specific device, device class, software or hardware configuration, or boot cycle.
-This binding uses both metadata and a _Derived CTK_ (DCTK) derived from the BCTK and a locale-specific secret via a key derivation function for the purpose of importing and exporting opaque keys.
+This binding uses both metadata and a _Derived CTK_ (DCTK) derived from the RCTK and a locale-specific secret via a key derivation function for the purpose of importing and exporting opaque keys.
 The system maintains a _Locale Secrets Table_ (LST) containing both system-wide values which are fixed, values that can be configured in an externally defined way,
 and fields that can be programmed by MM.
 The metadata stores the Locale as an index into this table. See <<ACE-locales>> for more details.
@@ -133,7 +133,7 @@ For algorithms with more complex state machines, machine state information can b
 The "UC_Policy_4" field is 16 bits long for compatibility with architectures employing 16-bit `VMID` fields (for instance, in heterogeneous systems).
 While interoperability cannot be guaranteed when this policy is used, this ensures that the two top bits are not used for other purposes. +
 Filtering use by Supervisor Domain or World ID is not supported, and not only because of lack of space in a 64-bit metadata section:
-Reconfiguring the BCTK is a better approach for such isolation requirements, whereas isolation by `ASID` and `VMID` is a weaker security feature._
+Reconfiguring the RCTK is a better approach for such isolation requirements, whereas isolation by `ASID` and `VMID` is a weaker security feature._
 
 [[ACE-locales]]
 ==== Locales
@@ -143,8 +143,8 @@ Some of these entries are fixed, other values may be configurable only using an 
 The LST is a global table shared across all ACE units with some fields which can be MM-programmed and are architectural (i.e., per hart).
 //Currently, the only two values that may be overridden by architectural values, in order to support multiple VMs/Supervisor Domains/Worlds are System_Secret and Boot_Session.
 
-If the Locale Field of a context (CC/SCC) is -1 (all ones), then the BCTK is used.
-Otherwise, this value is used as an index _i_ in the HST, and a derived key computed from BCTK and LST[_i_] is used for import/export in place of the BCTK.
+If the Locale Field of a context (CC/SCC) is -1 (all ones), then the RCTK is used.
+Otherwise, this value is used as an index _i_ in the HST, and a derived key computed from RCTK and LST[_i_] is used for import/export in place of the RCTK.
 The encryption and authentication keys are then derived from the DCTK.
 
 In <<ACE-binding-indices>>, we list the mandatory entries and their meaning.
@@ -180,7 +180,7 @@ NOTE: MM has the responsibility to "virtualize" the Boot_Session Locale Secret.
 // Also, do we want to allow a VM to have a different virtual hardware? Or does it always declare the same configuration as the underlying hardware?_
 // In principle, all this can be done by calling into MM. MM would need to keep track of the locale binding values and ensure that they are updated correctly when necessary.
 
-*Example*: _If a key's metadata specifies a Locale field value of "2", the key for import/export operations is derived from the BCTK and the "OEM Secret".
+*Example*: _If a key's metadata specifies a Locale field value of "2", the key for import/export operations is derived from the RCTK and the "OEM Secret".
 Consequently, while `ace.export` remains functional on the same device to support context switching, an `ace.import` of the resulting SCC on a device from a different OEM will trigger an authentication failure (provided that the OEM Secrets are, in fact, different)._
 
 
@@ -262,7 +262,7 @@ Kenc : bits(256);
 Kauth : bits(128);
 
 if (metadata.Locale == 15) then {
-    CTK = BCTK;
+    CTK = RCTK;
 } else {
     CTK = DCTK(K,LST[metadata.Locale]);
 }
@@ -282,7 +282,7 @@ if (last_block_fractional) then {
 }
 ----
 
-NOTE: Due to the computational cost of the derivation functions, implementations may cache recently used derived keys for both the base BCTK and locale-derived keys.
+NOTE: Due to the computational cost of the derivation functions, implementations may cache recently used derived keys for both the Root RCTK and locale-derived keys.
 
 //NOTE: This simplification of AES-GCM-SIV does not require appending the lengths of metadata and content to the hash, as these lengths are already implied by the cleartext bits of the metadata, which are included in the authentication tag computation.
 
@@ -558,21 +558,21 @@ In the metadata section, `ASID` and `VMID` are always zero padded to the maximal
 The `misa.ACE` field uses bit `L` (11) to indicate that the ACE extension is implemented.
 //This bit is chosen because the extension goes _beyond_ the cryptographic extension, which will likely use bit `K` (10).
 
-===== acebctk
+===== acerctk
 
-If the BCTK can be programmed, it can only be programmed by MM.
-For this purpose, we need eight 32-bit CSRs are available, called `acebctk0`, `acebctk1` .. `acebctk7`, where register `acebctk{i}` contains bits [stem:[31+32\,i:32\,i]] of the BCTK.
-No exception is raised if software running in any other mode tries to write to the `acebctk` block, such writes are simply ignored.
-The `acebctk` block always reads as zero.
+If the RCTK can be programmed, it can only be programmed by MM.
+For this purpose, we need eight 32-bit CSRs are available, called `acerctk0`, `acerctk1` .. `acerctk7`, where register `acerctk{i}` contains bits [stem:[31+32\,i:32\,i]] of the RCTK.
+No exception is raised if software running in any other mode tries to write to the `acerctk` block, such writes are simply ignored.
+The `acerctk` block always reads as zero.
 
-NOTE: Discoverability of whether the BCTK can be configured or not is not critical, since this is information known by the MM firmware.
-[.red]#We can use the data structure pointed by `mconfigptr` in order to track optional features of ACE including whether the `acebctk` CSR block is implemented, and if not whether whether the value is ephemeral or fixed.# +
+NOTE: Discoverability of whether the RCTK can be configured or not is not critical, since this is information known by the MM firmware.
+[.red]#We can use the data structure pointed by `mconfigptr` in order to track optional features of ACE including whether the `acerctk` CSR block is implemented, and if not whether whether the value is ephemeral or fixed.# +
  +
-User mode, and even operating systems and hypervisors, need not be aware of the `acebctk` block. Other mechanisms could have been chosen to program the CTK, such as an MM-exclusive dedicated hardware interface or memory-mapped interface.
+User mode, and even operating systems and hypervisors, need not be aware of the `acerctk` block. Other mechanisms could have been chosen to program the CTK, such as an MM-exclusive dedicated hardware interface or memory-mapped interface.
 
 ===== Re-configurable Locales
 
-We need two further groups of four consecutive 32-bit CSRs, programmable by MM, to define two reconfigurable locales
+Two groups of four consecutive 32-bit CSRs, programmable by MM, are used to define two reconfigurable locales
 (cf.{nbsp}<<ACE-concepts>>).
 These groups are:
 `ace_OS_Secret{i}`, for `i` in [0..3], to configure the "OS Secret" entry,
@@ -728,7 +728,7 @@ store the SCC.
 
 Exports the contents of CC `Cs` to memory, starting at address `Xd`. Depending
 on the type and policies of the key — which are stored in the metadata of `Cs`,
-the CCWK can be either the BCTK CSR or a Locale specific BCTK derived from the
+the CCWK can be either the RCTK CSR or a Locale specific RCTK derived from the
 CTK.
 
 The instruction (resp. `ace.import`) writes (reads) the entire internal state
@@ -1459,7 +1459,7 @@ In fact, some threshold implementations may have a different number of shares ev
 
 ==== Key Management and Provisioning Applications
 
-Software environments that implement key management operations for other domains require their own BCTK. A system may contain multiple such software environments.
+Software environments that implement key management operations for other domains require their own RCTK. A system may contain multiple such software environments.
 
 A Key Management Applet (KMA) will
 
@@ -1472,9 +1472,9 @@ A Key Management Applet (KMA) will
 The MM, which controls the CTK, can the
 
 [arabic, start=5]
-. Set the BCTK to the KMA’s BCTK.
+. Set the RCTK to the KMA’s RCTK.
 . Re-import the SCC into a CC
-. Change the BCTK to match the requester domain's BCTK.
+. Change the RCTK to match the requester domain's RCTK.
 . Export the key for the Requester's use.
 . Relinquish control to the Requester.
 
