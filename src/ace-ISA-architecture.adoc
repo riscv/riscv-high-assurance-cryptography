@@ -55,7 +55,7 @@ and `Cn|C[Xn]` means that there are two different encodings for when the operand
 |===
 | Instruction     | Operands                        |  Description
 | `ace.enable` +
-`ace.disable`     |                                 |  Enables/Disables the feature in the current process domain and determine how many contexts we need.  CSRW pseudo-operation.
+`ace.disable`     |                                 |  Enables/Disables the feature in the current mode.  CSRW pseudo-operation.
 | `ace.init`      | `Cd\|C[Xd], %offset(Xs)`         |  Sets the metadata and key(s) for the CC.
 | `ace.clear`     | `Cd\|C[Xd]`                      |  Clears a CC and marks it as no longer in use and clean.
 | `ace.export`    | `%offset(Xn), Cs\|C[Xs]`         |  Securely exports the content of a CC to memory.
@@ -90,8 +90,6 @@ and `Cn|C[Xn]` means that there are two different encodings for when the operand
 NOTE: Instructions `ace.init`, `ace.import`, `ace.export`, `ace.input`, and `ace.output` perform direct memory accesses.
 This does not violate the RISC-V load/store architecture principles, as ACE is architected as an _attached_ unit, which may have its own interfaces.
 
-Consequently, it _may_ maintain its own architectural state and have its own load-store unit.
-
 // ///////////////////////////////////////////////////////////////////////////////////////////
 
 === ACE Programmer's Model
@@ -119,11 +117,6 @@ This has two major implications:
   However CCs are much less often redefined than, say, integer or floating point registers, except for internal implied changes, and therefore we can assume that CCs are not renamed without performance issues.
 . We use one additional bit in the instruction encoding to determine whether a CC is given by an immed or by a GPR.
 
-// * *Initial Configuration Format:* The plaintext key(s) and metadata in memory used to initialize a CC.
-// * *Cryptographic Context (CC):* The internal representation of the key(s), metadata, and operational state.
-// * *Sealed Cryptographic Context (SCC):* The format for encrypted and authenticated CC export.
-
-
 [[ACE-registers]]
 ==== Registers
 
@@ -133,15 +126,10 @@ This has two major implications:
 `aceenable` is a single-bit CSR.
 
 Enabling ACE in any mode is done by writing a 1 to `aceenable`.
-// allow the unit to perform operations, access the general purpose and vector registers, as well as the Cryptographic Contexts.
 Disabling ACE is done by writing a zero to `aceenable`, which also clears the CCs, as described in <<ACE-tracking-cc-dirtiness>>.
-
 
 While the standard floating-point and vector extensions do not support User Mode disable/enable instructions, the ACE unit can be enabled and disabled in User Mode, instead of using an OS call or trapping.
 However, if the ACE unit contains state from a different process, and its interface is disabled for the current one, enabling it will trap to the Supervisor (as described in <<ACE-ACES-field>>) to allow the latter to first save the state in case it was not saved before and then clear it (lazy context switch).
-
-// Enablement in other modes uses a special field in the `*status` CSRs. (cf.{nbsp}<<ACE-ACES-field>>).
-// Writing to `aceenable`, is allowed in more privileged modes, only affects the enablement of the feature in User mode.
 
 When a process that has ACE enabled is preempted, the parent modes inherit the state to be able to export and
 re-import the CCs. Hence, `aceenable` is not cleared, and the `*status.ACES` fields (see <<ACE-ACES-field>>) of the parent domains will take the value Enabled.
@@ -696,23 +684,23 @@ Encodings::
 ....
 {reg:[
     { bits:  7, name: 0x27, attr: ['custom-1'] },
-    { bits:  5, name: 'Cd' },
-    { bits:  3, name: 0x4, attr: ['ace.init'] },
+    { bits:  5, name: 'context', attr: ['Cs','C[Xd]'] },
+    { bits:  3, name: 'ace.init', attr: [0x4,0x5] },
     { bits:  5, name: 'Xs' },
     { bits: 12, name: 'imm', attr: ['offset'] },
 ]}
 ....
 //
-[wavedrom, , svg]
-....
-{reg:[
-    { bits:  7, name: 0x27, attr: ['custom-1'] },
-    { bits:  5, name: 'Xd' },
-    { bits:  3, name: 0x5, attr: ['ace.init'] },
-    { bits:  5, name: 'Xs' },
-    { bits: 12, name: 'imm', attr: ['offset'] },
-]}
-....
+// [wavedrom, , svg]
+// ....
+// {reg:[
+//     { bits:  7, name: 0x27, attr: ['custom-1'] },
+//     { bits:  5, name: 'Xd' },
+//     { bits:  3, name: 0x5, attr: ['ace.init'] },
+//     { bits:  5, name: 'Xs' },
+//     { bits: 12, name: 'imm', attr: ['offset'] },
+// ]}
+// ....
 
 
 Description::
@@ -721,7 +709,7 @@ Description::
 to be configured. +
 GPR `Xs` points to the region of memory containing the metadata and the key material.
 
-Configures a CC with metadata and key, or using an index in the System Key Table.
+Configures a CC with metadata and content.
 
 // [.red]#(TBdetermined whether it is secure)# This instruction is trappable and may also be resumed or restarted.
 
@@ -734,30 +722,27 @@ Encodings::
 ....
 {reg:[
     { bits:  7, name: 0x27, attr: ['custom-1'] },
-    { bits:  5, name: 'Cd' },
-    { bits:  3, name: 0x6, attr: ['ace.clear'] },
+    { bits:  5, name: 'context', attr: ['Cs','C[Xd]'] },
+    { bits:  3, name: 'ace.clear', attr: [0x6,0x7] },
     { bits:  5, name: 0x0 },
     { bits: 12, name: 0x0 },
 ]}
 ....
-//
-[wavedrom, , svg]
-....
-{reg:[
-    { bits:  7, name: 0x27, attr: ['custom-1'] },
-    { bits:  5, name: 'Xd' },
-    { bits:  3, name: 0x7, attr: ['ace.clear'] },
-    { bits:  5, name: 0x0 },
-    { bits: 12, name: 0x0 },
-]}
-....
+// //
+// [wavedrom, , svg]
+// ....
+// {reg:[
+//     { bits:  7, name: 0x27, attr: ['custom-1'] },
+//     { bits:  5, name: 'Xd' },
+//     { bits:  3, name: 0x7, attr: ['ace.clear'] },
+//     { bits:  5, name: 0x0 },
+//     { bits: 12, name: 0x0 },
+// ]}
+// ....
 
 Description::
-`Cd` is the source CC to be configured (encoded as a 5-bit immed). +
-`Xd` alternatively, is a GPR containing a number from 0 to 31 to select the context to be configured. +
-`Xs` is GPR with the pointer to the region of memory containing the metadata and the key material.
-
-Configures a CC with metadata and either key material or index in the Immutable System Key Table.
+`Cd` is the source CC to be cleared (encoded as a 5-bit immed). +
+`Xd` alternatively, is a GPR containing a number from 0 to 31 to select the context to be cleared. +
 
 ==== ace.export
 
@@ -769,46 +754,52 @@ Encodings::
 {reg:[
     { bits:  7, name: 0x0b, attr: ['custom-0'] },
     { bits:  5, name: 'imm[4:0]' },
-    { bits:  3, name: 0x0, attr: ['ace.export'] },
+    { bits:  3, name: 'ace.export', attr: [0x0,0x1] },
     { bits:  5, name: 'Xd' },
-    { bits:  5, name: 'Cs' },
+    { bits:  5, name: 'context', attr: ['Cs','C[Xs]'] },
     { bits:  7, name: 'imm[11:5]' },
 ]}
 ....
 //
-[wavedrom, , svg]
-....
-{reg:[
-    { bits:  7, name: 0x0b, attr: ['custom-0'] },
-    { bits:  5, name: 'imm[4:0]' },
-    { bits:  3, name: 0x1, attr: ['ace.export'] },
-    { bits:  5, name: 'Xd' },
-    { bits:  5, name: 'Xs' },
-    { bits:  7, name: 'imm[11:5]' },
-]}
-....
+// [wavedrom, , svg]
+// ....
+// {reg:[
+//     { bits:  7, name: 0x0b, attr: ['custom-0'] },
+//     { bits:  5, name: 'imm[4:0]' },
+//     { bits:  3, name: 0x0, attr: ['ace.export'] },
+//     { bits:  5, name: 'Xd' },
+//     { bits:  5, name: 'Cs' },
+//     { bits:  7, name: 'imm[11:5]' },
+// ]}
+// ....
+// //
+// [wavedrom, , svg]
+// ....
+// {reg:[
+//     { bits:  7, name: 0x0b, attr: ['custom-0'] },
+//     { bits:  5, name: 'imm[4:0]' },
+//     { bits:  3, name: 0x1, attr: ['ace.export'] },
+//     { bits:  5, name: 'Xd' },
+//     { bits:  5, name: 'Xs' },
+//     { bits:  7, name: 'imm[11:5]' },
+// ]}
+// ....
 
 Description::
-`Cs` is the source CC to be exported (encoded as a 5-bit immed). Alternatively,
-the number of context from which to export the CC is stored in the GPR `Xs` as
-a number from 0 to 31. `Xd` is the GPR base address of the buffer where to
-store the SCC. +
- +
-Exports the contents of CC `Cs` to memory, starting at address `Xd`, using
-the procedure described in <<ACE-formats>>. +
+Exports the contents of CC `Cs` or `C[Xs]` to memory, starting at address `Xd`, using
+the procedure described in <<ACE-formats>>.
+If the context `Cs` is clear, or `Xs` is out of range,
+the operation will report error ace_err_invalid.
 // Depending
 // on the type and policies of the key — which are stored in the metadata of `Cs`,
 // the CTK can be either the RCTK CSR or a Locale specific RCTK derived from the
 // CTK. +
- +
+// +
 // The instruction (resp. `ace.import`) writes (reads) the entire internal state
 // of a CC or information needed to reconstruct an equivalent state — the
 // instruction must be resumable in case of interrupts. This is similar to
 // entire-vector-register store instructions, that appear to other harts as
 // sequences of individual stores.
-If the context `Cs` is clear,
-//or does not exist in the microarchitecture
-the operation will report an error.
 
 The instruction must be resumable in case of interrupts.
 Similarly to entire-vector-register store instructions, `ace.export` appears to other harts as
@@ -829,23 +820,23 @@ Encodings::
 ....
 {reg:[
     { bits:  7, name: 0x27, attr: ['custom-1'] },
-    { bits:  5, name: 'Cd' },
-    { bits:  3, name: '00S', attr: ['ace.import'] },
+    { bits:  5, name: 'context', attr: ['Cd','C[Xd]'] },
+    { bits:  3, name: 'ace.import', attr: ['0    0    S','0    1    S'] },
     { bits:  5, name: 'Xn' },
     { bits: 12, name: 'imm' },
 ]}
 ....
-//
-[wavedrom, , svg]
-....
-{reg:[
-    { bits:  7, name: 0x27, attr: ['custom-1'] },
-    { bits:  5, name: 'Xd' },
-    { bits:  3, name: '01S', attr: ['ace.import'] },
-    { bits:  5, name: 'Xn' },
-    { bits: 12, name: 'imm' },
-]}
-....
+// //
+// [wavedrom, , svg]
+// ....
+// {reg:[
+//     { bits:  7, name: 0x27, attr: ['custom-1'] },
+//     { bits:  5, name: 'Xd' },
+//     { bits:  3, name: '01S', attr: ['ace.import'] },
+//     { bits:  5, name: 'Xn' },
+//     { bits: 12, name: 'imm' },
+// ]}
+// ....
 
 Description::
 `Cd` is the destination CC to be imported, as an immed (5-bit). Alternatively,
@@ -1180,23 +1171,23 @@ Encodings::
 ....
 {reg:[
     { bits:  7, name: 0x27, attr: ['custom-1'] },
-    { bits:  5, name: 'Cd' },
-    { bits:  3, name: 0x4, attr: ['ace.input'] },
+    { bits:  5, name: 'context', attr: ['Cd','C[Xd]'] },
+    { bits:  3, name: 'ace.input', attr: [0x4,0x5] },
     { bits:  5, name: 'Xs' },
     { bits: 12, name: 'imm' },
 ]}
 ....
-//
-[wavedrom, , svg]
-....
-{reg:[
-    { bits:  7, name: 0x27, attr: ['custom-1'] },
-    { bits:  5, name: 'Xd' },
-    { bits:  3, name: 0x5, attr: ['ace.input'] },
-    { bits:  5, name: 'Xs' },
-    { bits: 12, name: 'imm' },
-]}
-....
+// //
+// [wavedrom, , svg]
+// ....
+// {reg:[
+//     { bits:  7, name: 0x27, attr: ['custom-1'] },
+//     { bits:  5, name: 'Xd' },
+//     { bits:  3, name: 0x5, attr: ['ace.input'] },
+//     { bits:  5, name: 'Xs' },
+//     { bits: 12, name: 'imm' },
+// ]}
+// ....
 
 // [.red]#(TBdetermined whether it is secure)# This instruction is trappable and may also be resumed or restarted.
 
@@ -1210,24 +1201,24 @@ Encodings::
 {reg:[
     { bits:  7, name: 0x0b, attr: ['custom-0'] },
     { bits:  5, name: 'imm[4:0]' },
-    { bits:  3, name: 0x4, attr: ['ace.output'] },
+    { bits:  3, name: 'ace.output', attr: [0x4,0x5] },
     { bits:  5, name: 'Xd' },
-    { bits:  5, name: 'Cs' },
+    { bits:  5, name: 'context', attr: ['Cs','C[Xs]'] },
     { bits:  7, name: 'imm[11:5]' },
 ]}
 ....
-//
-[wavedrom, , svg]
-....
-{reg:[
-    { bits:  7, name: 0x0b, attr: ['custom-0'] },
-    { bits:  5, name: 'imm[4:0]' },
-    { bits:  3, name: 0x5, attr: ['ace.output'] },
-    { bits:  5, name: 'Xd' },
-    { bits:  5, name: 'Xs' },
-    { bits:  7, name: 'imm[11:5]' },
-]}
-....
+// //
+// [wavedrom, , svg]
+// ....
+// {reg:[
+//     { bits:  7, name: 0x0b, attr: ['custom-0'] },
+//     { bits:  5, name: 'imm[4:0]' },
+//     { bits:  3, name: 0x5, attr: ['ace.output'] },
+//     { bits:  5, name: 'Xd' },
+//     { bits:  5, name: 'Xs' },
+//     { bits:  7, name: 'imm[11:5]' },
+// ]}
+// ....
 
 // [.red]#(TBdetermined whether it is secure)# This instruction is trappable and may also be resumed or restarted.
 
@@ -1521,16 +1512,6 @@ This in turn implies that ACE execution unit must have access to a source of ran
 
 This ensures not only the compactness of a SCC, but also that the key can be ported across architectures.
 In fact, some threshold implementations may have a different number of shares even if they claim the same order of side-channel protection.
-
-// *Example*:
-// _AES-128 with a threshold implementation of a key.
-// On implementations with two shares, the CC contains
-// `[metadata, first share, second share]`
-// and on implementations with three shares, the CC contains
-// `[metadata, first share, second share, third share]`. +
-// The SCC will however always contain the data in the following format: +
-// {nbsp}{nbsp}{nbsp} `[metadata (64 bits), Nonce (96 bits), SIV (96 bits), key (encrypted)]` +
-// This allows, for instance, a key to be migrated from a machine that has a 2-share implementation to a machine with a 3-share implementation._
 
 ==== Specific Rules
 
