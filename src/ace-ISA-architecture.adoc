@@ -1,10 +1,8 @@
 [[ACE-architecture]]
 == Architecture
 
-=== Overview
-
 [[ACE-concepts]]
-==== Fundamental Concepts
+=== Fundamental Concepts
 
 Opaque Key:::
 The fundamental concept of ACE is the _opaque key_, i.e., a cryptographic key whose value remains hidden to software even while being used in cryptographic operations.
@@ -42,8 +40,10 @@ The metadata stores the Locale as an index into this table. See <<ACE-locales>> 
 
 // ///////////////////////////////////////////////////////////////////////////////////////////
 
+=== ACE Programmer's Model
+
 [[ACE-instructions-overview]]
-==== Instructions
+==== Instructions Overview
 
 ACE provides a number of unprivileged instructions.
 Some are implemented as CSR reads or writes.
@@ -92,15 +92,10 @@ This does not violate the RISC-V load/store architecture principles, as ACE is a
 
 // ///////////////////////////////////////////////////////////////////////////////////////////
 
-=== ACE Programmer's Model
-
-ACE does not add a register file, but it adds 32 Cryptographic Contexts and
-some unprivileged CSRs to a base scalar RISC-V ISA -- as well some privileged CSRs.
-It also requires a subset of the V extension to be implemented.
-
 ==== Cryptographic Contexts
 
-The atomic cryptography extension defines 32 Cryptographic Contexts (CCs) for storing cryptographic keys and metadata.
+The atomic cryptography extension does not add a traditional register file.
+Rather, it defines 32 Cryptographic Contexts (CCs) for storing cryptographic keys and metadata.
 Each CC is identified by a number from 0 to 31, which the ACE unit uses to access its contents.
 
 Cryptographic Contexts (CCs) reside in a dedicated internal _context file_ (CF) that is inaccessible to any entity outside the ACE implementation, including software, other hardware blocks, and invasive debug interfaces. The CF's memory capacity is implementation-defined and may be as large as 32 times the size of the largest possible CC; however, a smaller amount of memory may be used in practice. At a minimum, the CF must be capable of holding either a single instance of the largest possible CC or the largest CC pair in which the first CC derives the second (via `ace.derive`).
@@ -115,10 +110,13 @@ This has two major implications:
 
 . Adding renaming to CCs would add significant complexity to the microarchitecture.
   However CCs are much less often redefined than, say, integer or floating point registers, except for internal implied changes, and therefore we can assume that CCs are not renamed without performance issues.
-. We use one additional bit in the instruction encoding to determine whether a CC is given by an immed or by a GPR.
+. An additional bit in the instruction encoding determines whether a CC number is given by a 5-bit immediate or by the value in a GPR.
 
 [[ACE-registers]]
 ==== Registers
+
+The atomic cryptography extension adds some unprivileged CSRs to a base scalar RISC-V ISA -- as well some privileged CSRs.
+It also requires a subset of the V extension to be implemented, including the vector register file.
 
 [[ACE-CSR-enable]]
 ===== aceenable
@@ -653,7 +651,8 @@ They serve as a starting point for discussion and refinement as
 well as a proof that, at the time of this writing, the ACE instruction set
 can be encoded.
 
-NOTE: ACE is an ideal candidate for the Composable Custom Extensions framework.
+NOTE: ACE is an ideal candidate for the Composable Custom Extensions framework,
+even though our aim is to make it into a ratified extension.
 
 
 ==== ace.enable/ace.disable
@@ -690,18 +689,6 @@ Encodings::
     { bits: 12, name: 'imm', attr: ['offset'] },
 ]}
 ....
-//
-// [wavedrom, , svg]
-// ....
-// {reg:[
-//     { bits:  7, name: 0x27, attr: ['custom-1'] },
-//     { bits:  5, name: 'Xd' },
-//     { bits:  3, name: 0x5, attr: ['ace.init'] },
-//     { bits:  5, name: 'Xs' },
-//     { bits: 12, name: 'imm', attr: ['offset'] },
-// ]}
-// ....
-
 
 Description::
 `Cd` is the source CC to be configured (encoded as a 5-bit immed). +
@@ -728,17 +715,6 @@ Encodings::
     { bits: 12, name: 0x0 },
 ]}
 ....
-// //
-// [wavedrom, , svg]
-// ....
-// {reg:[
-//     { bits:  7, name: 0x27, attr: ['custom-1'] },
-//     { bits:  5, name: 'Xd' },
-//     { bits:  3, name: 0x7, attr: ['ace.clear'] },
-//     { bits:  5, name: 0x0 },
-//     { bits: 12, name: 0x0 },
-// ]}
-// ....
 
 Description::
 `Cd` is the source CC to be cleared (encoded as a 5-bit immed). +
@@ -760,46 +736,12 @@ Encodings::
     { bits:  7, name: 'imm[11:5]' },
 ]}
 ....
-//
-// [wavedrom, , svg]
-// ....
-// {reg:[
-//     { bits:  7, name: 0x0b, attr: ['custom-0'] },
-//     { bits:  5, name: 'imm[4:0]' },
-//     { bits:  3, name: 0x0, attr: ['ace.export'] },
-//     { bits:  5, name: 'Xd' },
-//     { bits:  5, name: 'Cs' },
-//     { bits:  7, name: 'imm[11:5]' },
-// ]}
-// ....
-// //
-// [wavedrom, , svg]
-// ....
-// {reg:[
-//     { bits:  7, name: 0x0b, attr: ['custom-0'] },
-//     { bits:  5, name: 'imm[4:0]' },
-//     { bits:  3, name: 0x1, attr: ['ace.export'] },
-//     { bits:  5, name: 'Xd' },
-//     { bits:  5, name: 'Xs' },
-//     { bits:  7, name: 'imm[11:5]' },
-// ]}
-// ....
 
 Description::
 Exports the contents of CC `Cs` or `C[Xs]` to memory, starting at address `Xd`, using
 the procedure described in <<ACE-formats>>.
 If the context `Cs` is clear, or `Xs` is out of range,
 the operation will report error ace_err_invalid.
-// Depending
-// on the type and policies of the key — which are stored in the metadata of `Cs`,
-// the CTK can be either the RCTK CSR or a Locale specific RCTK derived from the
-// CTK. +
-// +
-// The instruction (resp. `ace.import`) writes (reads) the entire internal state
-// of a CC or information needed to reconstruct an equivalent state — the
-// instruction must be resumable in case of interrupts. This is similar to
-// entire-vector-register store instructions, that appear to other harts as
-// sequences of individual stores.
 
 The instruction must be resumable in case of interrupts.
 Similarly to entire-vector-register store instructions, `ace.export` appears to other harts as
@@ -826,17 +768,6 @@ Encodings::
     { bits: 12, name: 'imm' },
 ]}
 ....
-// //
-// [wavedrom, , svg]
-// ....
-// {reg:[
-//     { bits:  7, name: 0x27, attr: ['custom-1'] },
-//     { bits:  5, name: 'Xd' },
-//     { bits:  3, name: '01S', attr: ['ace.import'] },
-//     { bits:  5, name: 'Xn' },
-//     { bits: 12, name: 'imm' },
-// ]}
-// ....
 
 Description::
 `Cd` is the destination CC to be imported, as an immed (5-bit). Alternatively,
@@ -967,7 +898,6 @@ The instruction is encoded using the Form E `ace.exec` encoding:
 
 Encoding::
 [wavedrom, , svg]
-
 ....
 {reg:[
     { bits:  7, name: 0x5b, attr: ['custom-2'] },
@@ -984,32 +914,6 @@ Encoding::
 Description::
 This instruction writes the size of a SCC having the metadata section given in `Xn` into GPR `Xd`, and zero if the algorithm is not supported.
 Only the Algorithm and SC_Protection fields of the metadata section of a CC are considered.
-
-// ===== Immed Variant
-//
-// `ace.size Xd, #immmed`
-//
-// The instruction is encoded using the Form E `ace.exec` encoding:
-//
-// Encoding::
-// [wavedrom, , svg]
-//
-// ....
-// {reg:[
-//     { bits:  7, name: 0x5b, attr: ['custom-2'] },
-//     { bits:  5, name: 'Xd' },
-//     { bits:  3, name: 0x3, attr: ['ace.exec', '(Form E)'] },
-//     { bits:  5, name: 0x0 },
-//     { bits:  1, name: 0x1 },
-//     { bits:  10, name: 'immed' },
-//     { bits:  1, name: 0x1 },
-// ]}
-// ....
-//
-// The 10-bit immed has the following format: the least significant 8 bits are the algorithm and the most significant 2 bits the side-channel protection level as defined in the Algorithm and SC_Protection fields of the metadata section of a CC.
-//
-// Description::
-// This instruction writes the size of the SCC corresponding to the given algorithm and protection side-channel protection level.
 
 ==== ace.available
 
@@ -1129,8 +1033,10 @@ more stages are needed.
 
 // Without this comment, the next part is not properly formatted...
 Encoding::
-The encoding uses the same _opcode_ and _function_ fields of `ace.exec` Form B, however, bit 28 is set.
-The source register field then refers to a GPR and not to a vector register.
+The encoding uses the same _opcode_ and _function_ fields of `ace.exec` Form B, however, bit 28 is set. +
+The source register field encodes a GPR and not a vector register. +
+If bit `r` (i.e., bit 27) is 0, the 5-bit destination field [11:7] contains the destination context number,
+else it determines the GPR that contains the context number.
  +
 [wavedrom, , svg]
 ....
@@ -1147,10 +1053,11 @@ The source register field then refers to a GPR and not to a vector register.
 ]}
 ....
 
-Bit `r` (i.e., bit 27) is 0 if the context is encoded as an immediate, and 1 if a GPR is used to reference it.
+// comment
 
 Description::
 This instruction restricts the use of a CC to specific modes or to a specified `ASID` or `VMID`. +
+It can also increase the side-channel protection level of the CC. +
 Let `m` be the metadata field in the destination CC. The instruction works as follows:
 
 * Bits [10:9] and [63:25] of the input register `Xs` have the same format as the corresponding bits of the metadata.
@@ -1177,17 +1084,6 @@ Encodings::
     { bits: 12, name: 'imm' },
 ]}
 ....
-// //
-// [wavedrom, , svg]
-// ....
-// {reg:[
-//     { bits:  7, name: 0x27, attr: ['custom-1'] },
-//     { bits:  5, name: 'Xd' },
-//     { bits:  3, name: 0x5, attr: ['ace.input'] },
-//     { bits:  5, name: 'Xs' },
-//     { bits: 12, name: 'imm' },
-// ]}
-// ....
 
 // [.red]#(TBdetermined whether it is secure)# This instruction is trappable and may also be resumed or restarted.
 
@@ -1207,18 +1103,6 @@ Encodings::
     { bits:  7, name: 'imm[11:5]' },
 ]}
 ....
-// //
-// [wavedrom, , svg]
-// ....
-// {reg:[
-//     { bits:  7, name: 0x0b, attr: ['custom-0'] },
-//     { bits:  5, name: 'imm[4:0]' },
-//     { bits:  3, name: 0x5, attr: ['ace.output'] },
-//     { bits:  5, name: 'Xd' },
-//     { bits:  5, name: 'Xs' },
-//     { bits:  7, name: 'imm[11:5]' },
-// ]}
-// ....
 
 // [.red]#(TBdetermined whether it is secure)# This instruction is trappable and may also be resumed or restarted.
 
@@ -1427,7 +1311,6 @@ State Machine:::
   *** If in a "not-X" mode, `tmp = keystream_block(IV @ counter)`, `tick_counter`, `Vd = tmp`
   *** If in an "X" mode, `tmp = keystream_block(IV xor counter)`, `tick_counter`, `Vd = tmp`
   *** Other forms of `ace.exe` not allowed, will cause `error(ace_error_invalid)`.
-
 
 
 [[ACE-XEX-XTS-modes]]
