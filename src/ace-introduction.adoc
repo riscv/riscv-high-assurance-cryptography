@@ -3,43 +3,46 @@
 
 #(The ratification plan can be found https://riscv.atlassian.net/wiki/spaces/HACX/pages/484966423/High+Assurance+Crypto+Ratification+Plan[here].)#
 
-The _Atomic Cryptographic Extension_ (ACE) provides support for high assurance cryptographic operations.
-The main features are the concealment of the values of keys and other secrets, restrictions on their usage, and support for multiple cryptographic algorithms as well as hardened implementations.
+The _Atomic Cryptographic Extension_ (ACE) provides an interface to high-assurance cryptographic operations.
+Its primary features are the concealment of key values and secrets, usage restrictions, and support for various cryptographic algorithms and hardened implementations.
 
-The design of ACE is prompted by the needs of key use cases such as:
+ACE addresses use cases such as
 content protection,
-local decryption of LLMs,
-key management,
-identity management,
-link encryption,
-storage encryption,
-Secure Boot and/or attestation in bootloaders, and in general any application where cryptographic operations are required and it is desirable to offer a high level of protection to keys and intermediate values.
+local LLM decryption,
+key and identity management,
+link and storage encryption,
+and
+bootloader attestation.
+It targets applications requiring cryptographic operations with high protection for keys and intermediate values.
 
 ACE is architected as an _attached_ unit, similar to a coprocessor with a dedicated, low-latency interface to the CPU core.
-In particular, interrupts need not stop cryptographic operations being performed by the ACE implementations, and the implementation may decide that the CPU pipeline may be stalled only when the mode into which the hart is being trapped needs to save the ACE state.
-Page faults or other memory-subsystem related interrupts however may require restart or resumption of certain operations.
+In particular, standard interrupts need not stop cryptographic operations being performed by the ACE implementations,
+except when they are accessing memory,
+and the implementation may decide to stall the CPU pipeline only if a trap requires saving ACE state.
 
-This model is analogous to streaming accelerators in other architectures.
-An ACE implementation may be shared by multiple harts, each maintaining its own architectural state, and can operate concurrently with CPU cores, including in-order cores.  This does not prevent integrated implementations: we specify only the behavior of the extension, not how it is implemented.
+This model resembles streaming accelerators.
+An ACE implementation can be shared by multiple harts, each maintaining independent architectural state, and operates concurrently with CPU cores (including in-order cores).
+This specification defines the extension's behavior, not its implementation, allowing for integrated designs.
 
 [[ACE-introduction-features]]
 === Features
 
-. ACE is an ISE for full-round, block-wise cryptographic operations without exposing the key.
-. ACE supports multiple different cryptographic primitives and modes, including SCA resistant versions.
-  There is a mandatory list of algorithms, optional architected ones, and support for custom algorithms.
-. A key is stored in an architectural state called a _Cryptographic Context_ (CC) together with metadata that ties the key to a specific algorithm and can restrict the use of the keys (see points 7 and 8 below).
- * There is no mechanism to extract the original value of a key from a CC: CCs are not read/write in the same sense as registers are.
-   We call a key written into a CC _opaque_.
- * Besides software, additional sources for configuring CCs include a System Key Table, and dynamic key generation blocks.
-. ACE instructions use CCs instead of directly using the key values.
-. ACE supports multiple CCs active at the same time.
-. ACE enables trusted entities to provision opaque keys to less-trusted environments, enabling the latter to perform cryptographic operations without exposing the key value.  Once provisioned, the opaque key can be reused without further interaction with the trusted entity.
-. ACE provides a mechanism to prevent replay of SCCs across different machines, product lines, or execution contexts by cryptographically binding CCs to _Locales_ (cf. <<ACE-concepts>> and <<ACE-locales>>).
-. ACE can restrict which process can use a given opaque key. In particular:
- * ACE supports separation of keys belonging to different domains.
- * ACE supports key preservation upon process or VM migration from a device to another.
-. ACE scales from embedded cores to large application/server cores, with same ISA and ABI: certain features may be omitted in smaller cores without requiring changes in User SW.
+. ACE is an ISE for full-round, block-wise cryptographic operations that keeps keys concealed.
+. It supports various cryptographic primitives and modes, including Side-Channel Attack (SCA) resistant versions.
+  The specification includes mandatory, optional, and custom algorithms.
+. Keys are stored in an architectural state called a _Cryptographic Context_ (CC), along with metadata binding the key to a specific algorithm and usage restrictions.
+ * Keys in a CC are _opaque_ and cannot be extracted by software. CCs are not general-purpose read/write registers.
+ * CCs are configured via software, System Key Tables, or dynamic key generation blocks.
+. ACE instructions reference CCs rather than raw key values.
+. ACE supports multiple concurrent active CCs.
+. Trusted entities can use ACE to provision opaque keys to less-trusted environments, enabling cryptographic operations without exposing key material.
+  Once provisioned, keys are reusable without further interaction.
+. ACE binds CCs to _Locales_ to prevent replay across different machines, product lines, or execution contexts (see <<ACE-concepts>> and <<ACE-locales>>).
+. ACE enforces process-level access control for opaque keys, supporting:
+ * Domain separation for keys.
+ * Key preservation during process or VM migration.
+. ACE scales from embedded to server cores using a unified ISA and ABI.
+  Smaller cores may omit features transparently to user software.
 
 // The latter is needed for cloud and edge deployment. ACE provides the minimum necessary support to enable secure key migration between machines.
 
@@ -52,22 +55,21 @@ An ACE implementation may be shared by multiple harts, each maintaining its own 
 [[ACE-introduction-rationale]]
 === Rationale
 
-ACE is necessary because current solutions are inadequate:
+ACE addresses the inadequacies of current solutions:
 
-* Round-based ISAs need to explicitly add the key between the rounds.
-* Current ISAs do not provide trustworthy mechanisms for cryptographic operations. Trust is provided only in external IP blocks or by relying on costly context switch to TEEs (TZ, etc) for each cryptographic operation.
-* External blocks with memory mapped or coprocessor interfaces incur heavy overheads and need substantial support in system stack.
-* Key Management (resp. KM building blocks) incur the same overheads.
-* In modes such as AES-GCM-SIV, encryption and authentication derived keys should also not leak, hence supporting primitives only is not always sufficient.
-* No current ratified solution offers fast execution, efficient key management, and trust.
+* Round-based ISAs require explicit key injection between block cipher rounds or at various points in keyed hash algorithm.
+* Existing ISAs lack intrinsic trust mechanisms, relying on external IP or costly context switches to TEEs (e.g., TrustZone).
+* External blocks and key management units impose significant latency and system stack overhead.
+* Primitive-only support is insufficient for modes like AES-GCM-SIV, where derived keys must also remain protected, or the mask values in OCB modes.
+* No currently ratified solution combines high performance, efficient key management, and high assurance.
+
 
 [[ACE-introduction-more-features]]
 === Implied Features
 
-To address the limitations of existing solutions in a practical manner, ACE must provide features that reduce the number of environment switches and provide efficient support for software-managed context switching.
-To this purpose, ACE supports secure export and import of Cryptographic Contexts using authenticated encryption.
-//The keys used for authenticated encryption algorithm can be made specific to Locales (as defined above).
+To avoid the limitations of existing solutions, ACE minimizes environment switches and supports efficient software-managed context switching, by providing the secure export and import of Cryptographic Contexts using authenticated encryption.
 The complete model is specified in <<ACE-architecture>>.
+
 
 === Algorithms
 
@@ -79,16 +81,17 @@ Hash functions include at least SHA-2, SHA-2-HMAC.
 [[ACE-introduction-non-features]]
 === Non-Features
 
-Certain features are intentionally not supported by ACE:
+ACE intentionally excludes the following:
 
-* ACE does not provide debugging support. The internal representation of a Cryptographic Context remains concealed even when debug features are active.
-* ACE does not support the processing of variable-length ciphertext or plaintext inputs.
-* ACE does not provide a complete secure key management and provisioning system. Instead, it offers architectural building blocks that can be used to implement such systems efficiently. Key management can be delegated to applets within a TEE or secure VM, which may be owned by different parties. These applets can implement complex key management software. The architecture enables trusted entities to establish and deliver opaque keys to less-trusted software domains. ACE does not support external schemes for directly provisioning keys into a key store.
-* ACE, in its current version, does not provide a key revocation mechanism.
-This is a complex feature requiring additional infrastructure, which is used rarely.
-We envision that a future version of ACE may allow implementations to assign an optional 64‑ or 128‑bit identifier to each key and issue a system‑wide broadcast instructing all ACE units to erase CCs whose identifier matches a revoked key as well as specific revoked LSSs.
-* ACE cannot fully prevent misuse by compromised processes. If a process is compromised, the attacker obtains access to the CCs and can perform cryptographic operations, even if they do not elicit the key. Therefore, ACE complements existing security measures such as SW vulnerability exploitation countermeasures and process isolation (including TEE-like inverse sandboxing).
-* Other risks remain. For instance, in counter-mode encryption, the same method enables both encryption and decryption, hence a malicious process may be able to misuse these operations.
+* **Debugging support:** The internal representation of a CC remains concealed even during debug.
+* **Variable-length ciphertext and plaintext inputs.**
+* **Complete key management:** ACE provides only architectural building blocks that can be used for key management, where the key management logic resides in trusted software (e.g., TEE applets).
+  ACE does not support external schemes for directly provisioning keys into a key store.
+* **Key revocation:** Current specifications do not include a revocation mechanism.
+  Future versions may support revocation via key identifiers and system-wide revocation broadcasts.
+* **Misuse prevention:**  ACE cannot fully prevent misuse by compromised processes, as these processes may still get access to CCs.
+ACE complements existing SW vulnerability exploitation countermeasures and process isolation, but cannot replace them.
+* **Operational misuse:** For instance, in counter-mode encryption, the same method enables both encryption and decryption, potentially enabling misuse by malicious processes.
 
 
 // === High Level View of the Extension
@@ -154,7 +157,3 @@ We envision that a future version of ACE may allow implementations to assign an 
 The remainder of this document describes the extension in full detail.
 
 //In <<Details>> the technical details of the architecture are presented, including a listing of the instructions and their semantics.
-
-[.red]#*Discussion point:* _Can optional limitations even to import and export make sense and be useful?#_
-
-[.red]#*Discussion point:* _Everything in this specification is still valid if the number of CCs is reduced to, say, 8. Immediate values to refer to CCs are still 5 bits long because the same field can also be used to refer to a GPR, but the only valid values for the CC number are 0 to 7._#
