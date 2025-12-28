@@ -864,8 +864,6 @@ to encode additional instructions.
 Description::
 Performs a cryptographic operation such as an encryption or decryption,
 absorbing a value in a hash, and possibly returning a value.
-An `ace.exec` instruction may modify the internal state of the CC, including automatically changing the stage field of the metadata section
-making some `ace.stage` operations redundant.
 
 ==== ace.size
 
@@ -1247,7 +1245,6 @@ State Machine:::
  ** From any state to decrypt, if metadata allows decryption, else `error(ace_error_invalid)`.
 * *Behavior:*
  ** `ace.stage` is in general used to move to the _encrypt_ or _decrypt_ state.
- ** If the metadata allows only one of encryption or decryption, the state changes automatically to _encrypt_ or _decrypt_ state, making a call to `ace.stage` redundant.
  ** In the _initial_ state, any `ace.exec` will cause an ace_error_invalid error.
  ** In the _encrypt_ state,
   *** If{nbsp} `ace.exec Vd, Cn|C[Xn], Vs` {nbsp}is issued, then {nbsp} `Vd = encrypt_block(Vs)`.
@@ -1259,14 +1256,14 @@ State Machine:::
 [[ACE-chaining]]
 ===== Chaining/Feedback Modes
 
-There is no need to architect the behavior of chaining modes,
+There is no need to explicitly architect the behavior of chaining modes,
 such as
 Cipher Block Chaining (CBC),
 Propagating Cipher Block Chaining (PCBC),
 Cipher Feedback (CFB) and
 Output Feedback (OFB)
-as they can be easily implemented on top of the ECB functionality in software.
-
+as they can be easily implemented on top of the ECB functionality in software,
+and no intermediate value in these algorithms needs to be kept secret.
 
 [[ACE-keystream-modes]]
 ===== CTR/LFSR/XCTR/XLFSR Modes to Produce a Keystream
@@ -1310,18 +1307,19 @@ State Machine:::
 
 * *States:* _initial_ (0), _set_public_value_ (6), _operate_ (1).
 * *Allowed State Transitions:*
- ** _set_public_value_ -> any state.
+ ** _initial_ -> _set_public_value_.
+ ** _set_public_value_ -> _operate_.
+ ** _operate_ -> _initial_.
 * *Behavior:*
- ** From the initial state the context automatically moves to _set_public_value_.
- ** Upon entering _set_public_value_, the counter field is set to 0 (or to 1 if LFSR).
+ ** In the _initial_ state, the counter field is set to 0 (or to 1 if LFSR).
  ** In _set_public_value_ state, we can only issue an `ace.exec` of the form{nbsp}{nbsp} `ace.exec Cn|C[Xn], Vs`,{nbsp}{nbsp} which sets the IV value to `Vs`.
-    The state then changes to _operate_ (that is, there is no need to issue `ace.stage Cn|C[Xn], ace_const_operate`).
+  *** If{nbsp}{nbsp} `ace.exec Cn|C[Xn], Vs`,{nbsp}{nbsp} is repeated, it will just update the IV value again, with no adverse effect.
   *** Other forms of `ace.exe` not allowed, will cause `error(ace_error_invalid)`.
  ** In _operate_ state, we can only issue an `ace.exec` of the form `ace.exec Vd, Cn|C[Xn]`, which
   *** If in a "not-X" mode, `tmp = keystream_block(IV @ counter)`, `tick_counter`, `Vd = tmp`.
   *** If in an "X" mode, `tmp = keystream_block(IV xor counter)`, `tick_counter`, `Vd = tmp`.
   *** Other forms of `ace.exe` not allowed, will cause `error(ace_error_invalid)`.
-  *** If 'ace.stage' is issued to return to _set_public_value_ (passing zero, i.e., _initial_, will also set to this state automatically), we can reuse the method with a new counter.
+  *** If 'ace.stage' is issued to return to _set_public_value_ (or even _initial_), we can reuse the method with a new counter.
 
 
 [[ACE-XEX-XTS-modes]]
@@ -1366,22 +1364,26 @@ State Machine:::
 
 * *States:* _initial_ (0), _set_public_value_ (6), _encrypt_ (1), and _decrypt_ (2).
 * *Allowed State Transitions:*
- ** _set_public_value_ -> any state.
+ ** _initial_ -> _set_public_value_.
+ ** _set_public_value_ -> _initial_.
  ** _set_public_value_ -> _encrypt_, if metadata allows encryption, else `error(ace_error_invalid)`.
- ** _encrypt_, _decrypt_ -> _set_public_value_.
+ ** _set_public_value_ -> _decrypt_, if metadata allows Decryption, else `error(ace_error_invalid)`.
+ ** _encrypt_, _decrypt_ -> _initial_.
 * *Behavior:*
- ** From the initial state the context automatically moves to _set_public_value_.
+ ** In the _initial_ state, the IV is set to zero.
+ ** If any `ace.exec` operations are issued while in the _initial_ state, these will produce null outputs and ace.error will return ace_err_invalid.
  ** In the _set_public_value_ state, we can only issue the `ace.exec` form{nbsp}{nbsp} `ace.exec Cn|C[Xn], Vs`{nbsp}{nbsp} to set the `IV <- Vs`.
-    If no such instruction is issued, IV is assumed to be zero.
-  *** First, `mask <- encrypt_block(key2,IV)`.
-  *** If only one key is used then update mask: `mask <-update_mask(mask)`.
+    *** If no such instruction is issued, the value of the IV will remain zero.
+    *** If{nbsp}{nbsp} `ace.exec Cn|C[Xn], Vs`,{nbsp}{nbsp} is repeated, it will just update the IV value again, with no adverse effect.
   *** Other forms of `ace.exe` not allowed, will cause `error(ace_error_invalid)`.
-  *** If the metadata allows only one of encryption or decryption, the state changes automatically to _encrypt_ or _decrypt_ state, making a call to `ace.stage` redundant.
+ ** When transitioning from _set_public_value_ to either _encrypt_ or _decrypt_, the following operations are performed:
+  . First, `mask <- encrypt_block(key2,IV)`.
+  . If only one key is used then update mask: `mask <-update_mask(mask)`.
  ** In _encrypt_ and _decrypt_ states, we can only issue `ace.exec Vd, Cn|C[Xn], Cs` which:
   *** If the state is _encrypt_, computes `Vd = mask xor encrypt_block(Vs xor mask)` ...
   *** If the state is _decrypt_, computes `Vd = mask xor decrypt_block(Vs xor mask)` ...
   *** ... and updates the mask: `mask <- update_mask(mask)`.
-  *** If 'ace.stage' is issued to return to _set_public_value_ (passing zero, i.e., _initial_, will also set to this state automatically), we can reuse the method with a new IV.
+  *** If 'ace.stage' is issued to return to _initial_ state, we can reuse the CC with a new IV.
 
 To implement the XTS mode, the ciphertext stealing part is easy to realize using the XEX algorithm together with vector masking and shifting operations.
 
@@ -1420,7 +1422,6 @@ Algorithm-Specific Functions:::
 
 * `encrypt_block(key,p) -> c` encrypts block `p` using the key, and returns the result `c`.
 * `decrypt_block(key,c) -> p` decrypts block `c` using the key, and returns the result `p`.
-* `increment_counter()`: increments the value counter by one.
 
 State Machine:::
 
@@ -1431,25 +1432,29 @@ State Machine:::
  ** _set_public_value_ -> _encrypt_, if metadata allows encryption, else `error(ace_error_invalid)`.
  ** _set_public_value_ -> _decrypt_, if metadata allows decryption, else `error(ace_error_invalid)`.
  ** _set_public_value_ -> _initial_, _set_public_value_.
- ** _encrypt_, _decrypt_ -> _ace_const_hash_absorb_, _initial_, _set_public_value_.
- ** _hash_absorb_ -> _ace_const_hash_finalize_, _initial_, _set_public_value_.
- ** _hash_finalize_ -> _initial_, _set_public_value_.
+ ** _encrypt_, _decrypt_ -> _ace_const_hash_absorb_, _initial_.
+ ** _hash_absorb_ -> _ace_const_hash_finalize_, _initial_.
+ ** _hash_finalize_ -> _initial_.
  * *Behavior:*
- ** From the _initial_ state, the context immediately transitions to state _set_public_value_.
- ** Once entered the _set_public_value_ state, the ACE unit performs:
+ ** In the _initial_ state:
+  *** If any `ace.exec` operations are issued, these will produce null outputs and ace.error will return ace_err_invalid.
+  *** The following initialization operations are performed:
     . `hash_key <- encrypt_block(key,0)`, and
     . `auth_tag <- 0`.
-  ** In the _set_public_value_ state:
-   *** We can only issue the `ace.exec` form{nbsp}{nbsp} `ace.exec Cn|C[Xn], Vs`{nbsp}{nbsp} to set
-       . `counter <- Vs << b/4`
-    (there is no harm if this instruction is issued more than once).
-   *** If no such {nbsp}{nbsp} `ace.exec Cn|C[Xn], Vs`{nbsp}{nbsp} to set is issued, counter is assumed to be zero.
-   *** Other forms of `ace.exe` not allowed, will cause `error(ace_error_invalid)`.
- ** Upon completion of `ace.import`, the ACE unit recomputes the hash_key:
-  . `hash_key <- encrypt_block(key,0)`.
-// ** In _encrypt_ and _decrypt_ states, we can only issue `ace.exec Vd, Cn|C[Xn], Cs` which:
-  ** If the _encrypt_ state, we can only issue the `ace.exec` form{nbsp}{nbsp} `ace.exec Vd, Cn|C[Xn], Vs`{nbsp}{nbsp} to
-   *** Encrypt `Vs` into `Vd`, and accumulate ciphertext `Vd` into the auth_tag, namely
+    . `counter <- 0`
+  ** Upon completion of `ace.import`, the ACE unit recomputes the hash_key:
+     . `hash_key <- encrypt_block(key,0)`.
+ ** In the _set_public_value_ state:
+  *** We can only issue the `ace.exec` form{nbsp}{nbsp} `ace.exec Cn|C[Xn], Vs`{nbsp}{nbsp} to set
+       . `counter <- Vs << b/4`  (i.e., the original b/4 most significant bits of Vs` are ignored, and the b/4 least significant bits of `counter` are set to zero.)
+  *** If{nbsp}{nbsp} `ace.exec Cn|C[Xn], Vs`,{nbsp}{nbsp} is repeated, it will just update the IV value again.
+  *** If no such {nbsp}{nbsp} `ace.exec Cn|C[Xn], Vs`{nbsp}{nbsp} to set is issued, counter remains zero.
+  *** Other forms of `ace.exe` not allowed, will cause `error(ace_error_invalid)`.
+ ** In the _hash_absorb_ state, we can only issue the `ace.exec` form{nbsp}{nbsp} `ace.exec Cn|C[Xn], Vs`{nbsp}{nbsp} to accumulate a value in the auth_tag, namely:
+   . `auth_tag <- auth_tag xor Vs` and
+   . `auth_tag <- auth_tag * hash_key`.
+ ** If the _encrypt_ state, we can only issue the `ace.exec` form{nbsp}{nbsp} `ace.exec Vd, Cn|C[Xn], Vs`{nbsp}{nbsp} to
+   encrypt `Vs` into `Vd`, and absorb the ciphertext `Vd` into the auth_tag, namely
     . `Vd  <- Vd xor encrypt_block(key,counter)`,
     . `counter[b/4-1:0] <- counter[b/4-1:0] + 1`.
         If `counter[b/4-1:0]` rolls back to zero:
@@ -1457,8 +1462,8 @@ State Machine:::
         .. ace.error will return ace_err_invalid.
     . `auth_tag <- auth_tag xor Vd`, and
     . `auth_tag <- auth_tag * hash_key`.
-  ** In the _decrypt_  state, we can only issue the `ace.exec` form{nbsp}{nbsp} `ace.exec Vd, Cn|C[Xn], Vs`{nbsp}{nbsp} to
-   *** Accumulate ciphertext `Vs` into the auth_tag, then decrypt `Vs` into `Vd`, namely
+ ** In the _decrypt_  state, we can only issue the `ace.exec` form{nbsp}{nbsp} `ace.exec Vd, Cn|C[Xn], Vs`{nbsp}{nbsp} to
+   absorb the ciphertext `Vs` into the auth_tag, then decrypt `Vs` into `Vd`, namely
    . `auth_tag <- auth_tag xor Vs`, and
    . `auth_tag <- auth_tag * hash_key`.
    . `Vd  <- Vd xor encrypt_block(key,counter)`,
@@ -1466,9 +1471,6 @@ State Machine:::
        If `counter[b/4-1:0]` rolls back to zero:
        .. the internal state will be invalidated (same as above) and
        .. ace.error will return ace_err_invalid.
- ** In the _hash_absorb_ state, we can only issue the `ace.exec` form{nbsp}{nbsp} `ace.exec Cn|C[Xn], Vs`{nbsp}{nbsp} to accumulate a value in the auth_tag, namely:
-    . `auth_tag <- auth_tag xor Vs` and
-    . `auth_tag <- auth_tag * hash_key`.
  ** In the _hash_finalize_ state, we can only issue `ace.exec` form{nbsp}{nbsp} `ace.exec Vd, Cn|C[Xn], Vs`{nbsp}{nbsp} where `Vs = len_A @ len_C` (two fields of `b/2` bits, to compute the authentication tag and complete the algorithm as follows:
     . `auth_tag <- auth_tag xor Vs`,
     . `auth_tag <- auth_tag * hash_key`, and
@@ -1476,7 +1478,7 @@ State Machine:::
     . Finally, the auth_tag is returned in `Vd`, and the state is changed to _ace_completed_.
  ** In the _ace_completed_ state, no operation can be performed except `ace.init`, `ace.export`, `ace.import`, `ace.clear`, or `ace.error`.
        Any other operation, if it has an output, it returns zero, and will cause `ace.error` to return ace_err_invalid.
- ** [.red]#To be completed.#
+
 
 [[ACE-GCM-SIV]]
 ===== GCM-SIV mode
