@@ -334,9 +334,8 @@ Valid only for encryption/decryption primitives or modes, and ignored, for insta
 Used to determine whether an operation must be restarted.
 | [24:21] |   4  | Stage (also Direction) | Encoding the current state of the state machine of the algorithm as a number (also called the "stage" of the algorithm).
 It must be zero upon configuration, otherwise algorithm specific.
-If, for the algorithm encoded in the CC, the number of states is less than 16, then this number is stored in this field, cf. <<stage-field>>,
-otherwise an algorithm-specific representation is used in the content, and this field only admits the values 0 (initial) and 1 (anything else).
-The values must conform to <<ACE-stage_constants>>.
+If the algorithm encoded in the CC has fewer states is less than 16, then this number is stored in this field, cf. <<stage-field>>,
+otherwise an algorithm-specific representation is used in the content, and this field only admits the values 0 (initial), 15 (completed) or 1 (anything other operational state). The values must conform to <<ACE-stage_constants>>.
 | [28:25] |   4  | UC_Policy_1            | "UC Policy" means "Usage Control Policy". +
 Disallow the _usage_ of this CC in User, (Virtual) Supervisor, Hypervisor, resp., MM if bit 25, 26, 27, resp. 28, is set. Cf. <<stage-no-H-no-VMID>>.
 | [30:29] |   2  | UC_Policy_2            | If bit 29, resp., 30, is set, then restrict the usage by `ASID`, resp., `VMID`. Restriction by `ASID` ignored if in S Mode or higher. Cf. <<stage-no-H-no-VMID>>.
@@ -641,10 +640,11 @@ ace_const_operate
 Algorithm is ready to process.
 |  2   | ace_const_decrypt             | Decryption is requested.
 |  3   | ace_const_hash_start          | Start (and initialize) a hash function or the sub-function of an algorithm.
-|  4   | ace_const_hash_finalize       | Finalize the internal state of a hash function and prepare it for outputting the result.
-|  5   | ace_const_hash_update         | Update the internal state of a hash function with new data.
+|  4   | ace_const_hash_absorb         | Update the internal state of a hash function with new data.
+|  5   | ace_const_hash_finalize       | Finalize the internal state of a hash function and prepare it for outputting the result.
 |  6   | ace_const_set_public_value    | Set a public value (like a nonce or an IV) in an algorithm. Some algorithms require more than one public value (for instance, they may admit a re-useable hash of some associated data and a unique nonce), in which case the second public value can be set using the next message.
 |  7   | ace_const_set_public_value_2  | Set the second public value in an algorithm.
+| 15   | ace_completed                 | The algorithm has either completed or has abnormally terminated. The latter condition is determined by ace.error.
 |===
 
 // ///////////////////////////////////////////////////////////////////////////////////////////
@@ -1180,11 +1180,11 @@ Some of these descriptions are generic, others pertain to certain algorithms.
 
 Each algorithm is fully defined by the following information:
 
-Internal State:::
-Information that must be in the internal state of a CC, in the order it is serialized to create the SCC.
-
 Block Size:::
 Size of the basic unit of information processed by the algorithm, usually the block size of the main underlying primitive.
+
+Internal State:::
+Information that must be in the internal state of a CC, in the order it is serialized to create the SCC.
 
 Generic Functions:::
 If necessary, overload generic functions that apply to all contexts, such as :
@@ -1219,15 +1219,15 @@ While listing the rules for the ECB mode is in principle easy, it does display a
 
 // comment to reset formatting
 
+Block Size:::
+
+* b = block size in bits, (8|b)
+
 Internal state:::
 
 * *Metadata*: 64 bits.
 * *Content Fields*:
 ** key: k bits (8|k, in fact it is almost always 128|k).
-
-Block Size:::
-
-* b = block size in bits, (8|b)
 
 Generic Functions:::
 
@@ -1275,6 +1275,10 @@ IV and counter/LFSR are concatenated to form the input to the keyed PRP or PRF.
 
 //
 
+Block Size:::
+
+* b = block size in bits, (8|b):
+
 Internal state:::
 
 * *Metadata*: 64 bits.
@@ -1282,16 +1286,16 @@ Internal state:::
  ** key: k bits (8|k).
  ** IV: n bits (8|n).
  ** counter: j bits (8|j).
-
-Block Size:::
-
-* b = block size in bits, (8|b):
  ** If not an "X" mode, then b = n+j.
- ** If an "X" mode, then b=n=j.
+ ** If an "X" mode, then b = n = j.
 
 Generic Functions:::
 
-* `initial_content_deserialize`. Length = k/8 bytes. input[k/8-1:0] = key.
+* `initial_content_deserialize`.
+ ** Length = k/8 bytes.
+ ** input[k/8-1:0] = key.
+ ** input[(k+n)/8-1:k/8] = IV.
+ ** input[(k+n+j)/8-1:(k+n)/8] = counter.
 
 Algorithm-Specific Functions:::
 
@@ -1322,6 +1326,10 @@ State Machine:::
 Note that the use of a single key or two independently sampled keys is determined by the algorithm field, and it is not determined by a configuration parameter for the same algorithm.
 We first define XEX mode functionality.
 
+Block Size:::
+
+* b = block size in bits, (8|b).
+
 Internal state:::
 
 * *Metadata*: 64 bits.
@@ -1329,10 +1337,6 @@ Internal state:::
  ** key1: k bits (8|k).
  ** key2: k bits (8|k) (omitted if only one key is used).
  ** mask: b bits (8|n).
-
-Block Size:::
-
-* b = block size in bits, (8|b).
 
 Generic Functions:::
 
@@ -1363,10 +1367,11 @@ State Machine:::
  ** _set_public_value_ -> _encrypt_, if metadata allows encryption, else `error(ace_error_invalid)`.
  ** _encrypt_, _decrypt_ -> _initial_.
 * *Behavior:*
- ** In the "_initial_" state, any `ace.exec` will result in `ace.error` returning ace_error_invalid.
- ** In the "_set_public_value_" state, we can only issue the `ace.exec` form{nbsp}{nbsp} `ace.exec Cn|C[Xn], Vs`{nbsp}{nbsp} to set the mask value to `Vs`
+ ** In the _initial_ state, any `ace.exec` will result in `ace.error` returning ace_error_invalid.
+ ** In the _set_public_value_ state, we can only issue the `ace.exec` form{nbsp}{nbsp} `ace.exec Cn|C[Xn], Vs`{nbsp}{nbsp} to set the `IV <- Vs`
     (there is no harm if this instruction is issued more than once).
-  *** First, `mask <- encrypt_block(key2,Vs)`.
+    If no such instruction is issued, IV is assumed to be zero.
+  *** First, `mask <- encrypt_block(key2,IV)`.
   *** If only one key is used then update mask: `mask <-update_mask(mask)`.
   *** Other forms of `ace.exe` not allowed, will cause `error(ace_error_invalid)`.
  ** In _encrypt_ and _decrypt_ states, we can only issue `ace.exec Vd, Cn|C[Xn], Cs` which:
@@ -1379,7 +1384,79 @@ To implement the XTS mode, the ciphertext stealing part is easy to realize using
 [[ACE-GCM-mode]]
 ===== GCM mode
 
-[.red]#TBD#
+Note that the use of a single key or two independently sampled keys is determined by the algorithm field, and it is not determined by a configuration parameter for the same algorithm.
+We first define XEX mode functionality.
+
+Block Size:::
+
+* b = block size in bits, (8|b).
+
+Internal state:::
+
+* *Metadata*: 64 bits.
+* *Content Fields*:
+ ** key: k bits (8|k).
+ ** counter: b bits.
+ ** hash_key: b bits.
+ ** auth_tag: b bits.
+
+NOTE: The lengths of the AD and of the plaintext must be maintained by the calling SW.
+
+Generic Functions:::
+
+* `initial_content_deserialize`
+ ** Length = k/8 bytes.
+ ** input[k/8-1:0] = key.
+* `content_serialize`:
+ ** Length = k/8 bytes.
+ ** input[k/8-1:0] = key.
+ ** input[(k+b)/8-1:k/8] = counter.
+ ** input[(k+2b)/8-1:(k+b)/8] = auth_tag.
+ ** Note that the hash_key is not serialized.
+* `content_deserialize` converts the output of `content_serialize` back to the original input format.
+
+Algorithm-Specific Functions:::
+
+* `encrypt_block(key,p) -> c` encrypts block `p` using the key, and returns the result `c`.
+* `decrypt_block(key,c) -> p` decrypts block `c` using the key, and returns the result `p`.
+* `increment_counter()`: increments the value counter by one.
+
+State Machine:::
+
+* *States:* _initial_ (0), _set_public_value_ (6), _ace_const_hash_absorb_ (4), _ace_const_hash_finalize_ (5), _encrypt_ (1), and _decrypt_ (2).
+* *Allowed State Transitions:*
+ ** _initial_ -> _set_public_value_.
+ ** _set_public_value_ -> _ace_const_hash_absorb_.
+ ** _set_public_value_ -> _encrypt_, if metadata allows encryption, else `error(ace_error_invalid)`.
+ ** _set_public_value_ -> _decrypt_, if metadata allows decryption, else `error(ace_error_invalid)`.
+ ** _set_public_value_ -> _initial_, _set_public_value_.
+ ** _encrypt_, _decrypt_ -> _initial_, _ace_const_hash_absorb_.
+ ** _hash_absorb_ -> _initial_, _ace_const_hash_finalize_.
+ ** _hash_finalize_ -> _initial_.
+ * *Behavior:*
+ ** While in the _initial_ state, immediately after configuration, the ACE unit performs:
+  *** `hash_key <- encrypt_block(key,0)`, and
+  *** `auth_tag <- 0`.
+ ** Upon completion of `ace.import`, the ACE unit recomputes the hash_key:
+  *** `hash_key <- encrypt_block(key,0)`.
+ ** In the _initial_ state, any `ace.exec` will result in `ace.error` returning ace_error_invalid.
+ ** In the _set_public_value_ state, we can only issue the `ace.exec` form{nbsp}{nbsp} `ace.exec Cn|C[Xn], Vs`{nbsp}{nbsp} to set `counter <- Vs << b/4`
+    (there is no harm if this instruction is issued more than once).
+    If no such instruction is issued, counter is assumed to be zero.
+  *** Other forms of `ace.exe` not allowed, will cause `error(ace_error_invalid)`.
+ ** In _encrypt_ and _decrypt_ states, we can only issue `ace.exec Vd, Cn|C[Xn], Cs` which:
+  *** If the state is _encrypt_, we can only issue the `ace.exec` form{nbsp}{nbsp} `ace.exec Vd, Cn|C[Xn], Vs`{nbsp}{nbsp} to
+   **** Encrypt `Vs` into `Vd`.
+   **** Accumulate `Vd` into the auth_tag, namely `auth_tag <- auth_tag xor Vd` and then `auth_tag <- auth_tag * hash_key`.
+  *** If the state is _decrypt_,  [.red]#To be completed.#
+  *** ... and updates the counter: `counter[b/4-1:0] <- counter[b/4-1:0] + 1`. If the lower b/4 bits of the counter roll back to zero,
+      the internal state will be invalidated (state set to _ace_completed_, all fields zeroed except the key) and ace.error will return ace_err_invalid.
+ ** In the _hash_absorb_ state, we can only issue the `ace.exec` form{nbsp}{nbsp} `ace.exec Cn|C[Xn], Vs`{nbsp}{nbsp} to accumulate a value in the auth_tag, namely `auth_tag <- auth_tag xor Vs` and then `auth_tag <- auth_tag * hash_key`.
+ ** In the _hash_finalize_ state, we can only issue `ace.exec` form{nbsp}{nbsp} `ace.exec Vd, Cn|C[Xn], Vs`{nbsp}{nbsp} where `Vs = len_A @ len_C` (two fields of `b/2` bits, to compute the authentication tag as follows: `auth_tag <- auth_tag xor Vs` and then `auth_tag <- auth_tag * hash_key`,
+    `auth_tag <- auth_tag xor encrypt_block(key,counter[b-1,b/4] @ 0[b/4-1,0])`. The auth_tag is returned in `Vd`, and the state is changed to _ace_completed_
+ ** In the _ace_completed_ state, no operation can be performed except `ace.init`, `ace.export`, `ace.import`, `ace.clear`, or `ace.error`.
+       Any other operation, if it has an output, it returns zero, and will cause `ace.error` to return ace_err_invalid.
+ ** [.red]#To be completed.#
 
 [[ACE-GCM-SIV]]
 ===== GCM-SIV mode
