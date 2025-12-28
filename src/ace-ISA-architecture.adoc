@@ -1431,36 +1431,49 @@ State Machine:::
  ** _set_public_value_ -> _encrypt_, if metadata allows encryption, else `error(ace_error_invalid)`.
  ** _set_public_value_ -> _decrypt_, if metadata allows decryption, else `error(ace_error_invalid)`.
  ** _set_public_value_ -> _initial_, _set_public_value_.
- ** _encrypt_, _decrypt_ -> _initial_, _ace_const_hash_absorb_.
- ** _hash_absorb_ -> _initial_, _ace_const_hash_finalize_.
- ** _hash_finalize_ -> _initial_.
+ ** _encrypt_, _decrypt_ -> _ace_const_hash_absorb_, _initial_, _set_public_value_.
+ ** _hash_absorb_ -> _ace_const_hash_finalize_, _initial_, _set_public_value_.
+ ** _hash_finalize_ -> _initial_, _set_public_value_.
  * *Behavior:*
  ** From the _initial_ state, the context immediately transitions to state _set_public_value_.
  ** Once entered the _set_public_value_ state, the ACE unit performs:
     . `hash_key <- encrypt_block(key,0)`, and
     . `auth_tag <- 0`.
   ** In the _set_public_value_ state:
-   *** We can only issue the `ace.exec` form{nbsp}{nbsp} `ace.exec Cn|C[Xn], Vs`{nbsp}{nbsp} to set `counter <- Vs << b/4`
+   *** We can only issue the `ace.exec` form{nbsp}{nbsp} `ace.exec Cn|C[Xn], Vs`{nbsp}{nbsp} to set
+       . `counter <- Vs << b/4`
     (there is no harm if this instruction is issued more than once).
-    If no such instruction is issued, counter is assumed to be zero.
-  *** Other forms of `ace.exe` not allowed, will cause `error(ace_error_invalid)`.
+   *** If no such {nbsp}{nbsp} `ace.exec Cn|C[Xn], Vs`{nbsp}{nbsp} to set is issued, counter is assumed to be zero.
+   *** Other forms of `ace.exe` not allowed, will cause `error(ace_error_invalid)`.
  ** Upon completion of `ace.import`, the ACE unit recomputes the hash_key:
   . `hash_key <- encrypt_block(key,0)`.
 // ** In _encrypt_ and _decrypt_ states, we can only issue `ace.exec Vd, Cn|C[Xn], Cs` which:
   ** If the _encrypt_ state, we can only issue the `ace.exec` form{nbsp}{nbsp} `ace.exec Vd, Cn|C[Xn], Vs`{nbsp}{nbsp} to
-   *** Encrypt `Vs` into `Vd`, and accumulate `Vd` into the auth_tag, namely
+   *** Encrypt `Vs` into `Vd`, and accumulate ciphertext `Vd` into the auth_tag, namely
     . `Vd  <- Vd xor encrypt_block(key,counter)`,
     . `counter[b/4-1:0] <- counter[b/4-1:0] + 1`.
-        If `counter[b/4-1:0]` rolls back to zero,
+        If `counter[b/4-1:0]` rolls back to zero:
         .. the internal state will be invalidated (state set to _ace_completed_, all fields zeroed except the key) and
         .. ace.error will return ace_err_invalid.
     . `auth_tag <- auth_tag xor Vd`, and
     . `auth_tag <- auth_tag * hash_key`.
   ** In the _decrypt_  state, we can only issue the `ace.exec` form{nbsp}{nbsp} `ace.exec Vd, Cn|C[Xn], Vs`{nbsp}{nbsp} to
-   *** [.red]#To be completed.#
- ** In the _hash_absorb_ state, we can only issue the `ace.exec` form{nbsp}{nbsp} `ace.exec Cn|C[Xn], Vs`{nbsp}{nbsp} to accumulate a value in the auth_tag, namely `auth_tag <- auth_tag xor Vs` and then `auth_tag <- auth_tag * hash_key`.
- ** In the _hash_finalize_ state, we can only issue `ace.exec` form{nbsp}{nbsp} `ace.exec Vd, Cn|C[Xn], Vs`{nbsp}{nbsp} where `Vs = len_A @ len_C` (two fields of `b/2` bits, to compute the authentication tag as follows: `auth_tag <- auth_tag xor Vs` and then `auth_tag <- auth_tag * hash_key`,
-    `auth_tag <- auth_tag xor encrypt_block(key,counter[b-1,b/4] @ 0[b/4-1,0])`. The auth_tag is returned in `Vd`, and the state is changed to _ace_completed_
+   *** Accumulate ciphertext `Vs` into the auth_tag, then decrypt `Vs` into `Vd`, namely
+   . `auth_tag <- auth_tag xor Vs`, and
+   . `auth_tag <- auth_tag * hash_key`.
+   . `Vd  <- Vd xor encrypt_block(key,counter)`,
+   . `counter[b/4-1:0] <- counter[b/4-1:0] + 1`.
+       If `counter[b/4-1:0]` rolls back to zero:
+       .. the internal state will be invalidated (same as above) and
+       .. ace.error will return ace_err_invalid.
+ ** In the _hash_absorb_ state, we can only issue the `ace.exec` form{nbsp}{nbsp} `ace.exec Cn|C[Xn], Vs`{nbsp}{nbsp} to accumulate a value in the auth_tag, namely:
+    . `auth_tag <- auth_tag xor Vs` and
+    . `auth_tag <- auth_tag * hash_key`.
+ ** In the _hash_finalize_ state, we can only issue `ace.exec` form{nbsp}{nbsp} `ace.exec Vd, Cn|C[Xn], Vs`{nbsp}{nbsp} where `Vs = len_A @ len_C` (two fields of `b/2` bits, to compute the authentication tag and complete the algorithm as follows:
+    . `auth_tag <- auth_tag xor Vs`,
+    . `auth_tag <- auth_tag * hash_key`, and
+    . `auth_tag <- auth_tag xor encrypt_block(key,counter[b-1,b/4] @ 0[b/4-1,0])`.
+    . Finally, the auth_tag is returned in `Vd`, and the state is changed to _ace_completed_.
  ** In the _ace_completed_ state, no operation can be performed except `ace.init`, `ace.export`, `ace.import`, `ace.clear`, or `ace.error`.
        Any other operation, if it has an output, it returns zero, and will cause `ace.error` to return ace_err_invalid.
  ** [.red]#To be completed.#
