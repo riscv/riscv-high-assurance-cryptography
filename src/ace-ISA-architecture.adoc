@@ -80,8 +80,9 @@ and `Cn|C[Xn]` means that there are two different encodings for when the operand
 | `ace.clone`     | `Cd\|C[Xd], Cs\|C[Xs]`            |  Clones a CC into a second CC.
 | `ace.derive`    | `Cd\|C[Xd], Cs\|C[Xs]`            |  Optional. Uses the source CC to configure the destination CC. Used if the source CC is, for instance, a KEM that configures the destination CC with a symmetric key. Then, the SW can clear the source CC to release resources.
 | `ace.state` +
-`ace.dir`
-| `Cd\|C[Xd], #immed`              |  Triggers transitions in the state of the algorithm (such as the different stages of hash functions or modes of operation) or provide additional information.  `ace.dir` is an alias for `ace.state`.
+`(ace.dir)`
+| `Cd\|C[Xd], #immed` +
+`Cd\|C[Xd], #immed, Xs`  |  Triggers transitions in the state of the algorithm (such as the different stages of hash functions or modes of operation) or provide additional information.  `ace.dir` is an alias for `ace.state`.
 | `ace.restrict` +
   `ace.harden`    | `Cd\|C[Xd], Xs`                  |  This instruction is used to narrow the Usage Policies of a CC and to turn on or increases the level of the side-channel protection of the algorithm in the CC, if the microarchitecture supports it.
   Removing or weakening existing Usage Policies and reducing the level of side-channel protection are not permitted.
@@ -582,7 +583,7 @@ In <<ACE-error-values>>, we define the mandatory error codes.
 |Value | Mnemonic                  | Examples
 |  0   | ace_err_ok                | No error.
 |  1   | ace_err_authentication    | Authentication failure in `ace.import`, but can also follow `ace.exec` with certain algorithms.
-|  2   | ace_err_privilege         | `ace.exec`, `ace.state`, `ace.derive`, `ace.spawn` failed because the access control policies in the metadata prevent usage in the current architectural state.
+|  2   | ace_err_privilege         | `ace.exec`, `ace.state`, `ace.clone`, `ace.derive` failed because the access control policies in the metadata prevent usage in the current architectural state.
 |  3   | ace_err_invalid           | Invalid input or operation. +
 Examples:
 the metadata section passed to `ace.init` is invalid;
@@ -596,7 +597,7 @@ software tried to use an incomplete CC as a source in a `ace.exec`, `ace.state`,
 |  5   | ace_err_memory            | The free internal CF memory is not sufficient to perform the `ace.init`, `ace.exec`, `ace.clone`, or `ace.derive`.
 The implementation must make sure this cannot happen with any other operation.
 If algorithms that support `ace.derive` are implemented, the implementation must make sure that both the input and output CCs of this operation can be allocated.
-|  6   | ace_err_unallocated_CC    | Software tried to use an unallocated CC as a source in a `ace.exec`, `ace.state`, `ace.input`, `ace.output`, `ace.clone`, `ace.derive`, `ace.harden`, `ace.restrict` operations. +
+|  6   | ace_err_unallocated_CC    | Software tried to use an unallocated CC as a source in one of the following instructions: `ace.exec`, `ace.state`, `ace.input`, `ace.output`, `ace.clone`, `ace.derive`, or `ace.harden`/`ace.restrict`.. +
 This can be used in low CF memory situations to trigger a lazy re-load of that CC.
 |===
 
@@ -629,21 +630,21 @@ those in <<ACE-stage-constants>> which are used in `ace.state`/`ace.dir` to chan
 .Constants defining CC states
 [float="center",align="center",width="100%",cols="^6%,<29%,<65%",options="header"]
 |===
-|Value | Mnemonic                      | Examples
-|  0   | ace_state_initial             | The context is initialized and ready for operation.
-|  1   | ace_state_encrypt +
+| Value | Mnemonic                      | Examples
+|   0   | ace_state_initial             | The context is initialized and ready for operation.
+|   1   | ace_state_encrypt +
 ace_const_operate
-| Encryption is requested. +
+|  Encryption is requested. +
 Algorithm is ready to process.
-|  2   | ace_state_decrypt             | Decryption is requested.
-|  3   | ace_state_hash_start          | Start (and initialize) a hash function or the sub-function of an algorithm.
-|  4   | ace_state_hash_absorb         | Update the internal state of a hash function with new data.
-|  5   | ace_state_hash_finalize       | Finalize the internal state of a hash function and prepare it for outputting the result.
-|  6   | ace_state_set_public_value    | Set a public value (like a nonce or an IV) in an algorithm. Some algorithms require more than one public value (for instance, they may admit a re-useable hash of some associated data and a unique nonce), in which case the second public value can be set using the next message.
-|  7   | ace_state_set_public_value_2  | Set the second public value in an algorithm.
-|  8   | ace_state_input_for_derive    | Tells the CC to expect additional information for feeding the `ace.derive` instruction.
-| 14   | ace_state_invalidated         | The algorithm has abnormally terminated. `ace.error` will always return error code _ace_err_invalid_.
-| 15   | ace_state_completed           | The algorithm has correctly completed.
+|   2   | ace_state_decrypt             | Decryption is requested.
+|   3   | ace_state_hash_absorb         | Start (and initialize) a hash function or the sub-function of an algorithm, preparing it to absorb blocks of data.
+|   4   | ace_state_hash_finalize       | Finalize the internal state of a hash function and prepare it for outputting the result.
+|   5   | ace_state_last_block_length   | For a hash or MAC function, the next `ace.exec` this is the length of the last block of data.
+|   6   | ace_state_set_public_value    | Set a public value (like a nonce or an IV) in an algorithm. Some algorithms require more than one public value (for instance, they may admit a re-useable hash of some associated data and a unique nonce), in which case the second public value can be set using the next message.
+|   7   | ace_state_set_public_value_2  | Set the second public value in an algorithm.
+|   8   | ace_state_input_for_derive    | Tells the CC to expect additional information for feeding the `ace.derive` instruction.
+|  14   | ace_state_invalidated         | The algorithm has abnormally terminated. `ace.error` will always return error code _ace_err_invalid_.
+|  15   | ace_state_completed           | The algorithm has correctly completed.
 |===
 
 // ///////////////////////////////////////////////////////////////////////////////////////////
@@ -1011,11 +1012,13 @@ This instruction can be used multiple times, to generate multiple derived contex
 [[ACE-instruction-state]]
 ==== ace.state/ace.dir
 
-`ace.state Cd|C[Xd], #immed` +
-`ace.dir Cd|C[Xd], #immed`
+`ace.state`/`ace.dir Cd|C[Xd], #immed7` +
+`ace.state`/`ace.dir Cd|C[Xd], #immed7, Xs`
 
 Encoding::
-`ace.state`/`ace.dir` is an I-type instruction.
+`ace.state`/`ace.dir` is an R-type instruction.
+[wavedrom, , svg]
+//
 [wavedrom, , svg]
 ....
 {reg:[
@@ -1024,7 +1027,8 @@ Encoding::
     { bits:  3, name: 0x4, attr: ['ace.state'] },
     { bits:  1, name: 'r' },
     { bits:  4, name: 0x0 },
-    { bits: 12, name: 'imm' },
+    { bits:  5, name: 'Xs' },
+    { bits:  7, name: 'immed7' },
 ]}
 ....
 
@@ -1037,7 +1041,8 @@ Two pseudo-instructions that map to the same instruction. +
 context in which to change the stage of the internal state. +
 The `#immed` is a constant from a set of admissible values that are defined for
 each algorithm, to manage an internal state machine of said algorithm in case
-more stages are needed.
+more stages are needed. +
+`Xs` is a GPR being either `X0` or containing an optional additional parameter for the state machine.
 
 [[ACE-instruction-restrict]]
 ==== ace.restrict/ace.harden
@@ -1243,7 +1248,6 @@ The function that puts the CC in this state is called `invalidate()`.
 In state _completed_, no operation can be performed except `ace.init`, `ace.export`, `ace.import`, `ace.clear`, or `ace.error`.
 Any other operation, if it has an output, it returns zero, and will cause the CC to be *invalidated*.
 
-
 In what follows, when we write of "state _name_" we refer to the state which has number _ace_state_name_ as described in <<ACE-stage-constants>>.
 
 [[ACE-ECB-mode]]
@@ -1281,7 +1285,6 @@ State Machine:::
  ** From any state to state _encrypt_, if metadata allows encryption, else the CC is *invalidated*.
  ** From any state to state _decrypt_, if metadata allows decryption, else the CC is *invalidated*.
 * *Behavior:*
- ** `ace.stage` is in general used to move to the _encrypt_ or _decrypt_ state.
  ** In state _initial_ , any `ace.exec` will result in the CC being *invalidated*.
  ** In state _encrypt_,
   *** If{nbsp} `ace.exec Vd, Cn|C[Xn], Vs` {nbsp}is issued, then {nbsp} `Vd = encrypt_block(Vs)`.
@@ -1349,15 +1352,15 @@ State Machine:::
  ** _operate_ -> _initial_.
 * *Behavior:*
  ** In state _initial_ , the counter field is set to 0 (or to 1 if LFSR).
- ** In state _set_public_value_, we can only issue an{nbsp} `ace.exec`{nbsp}of the form{nbsp} `ace.exec Cn|C[Xn], Vs`,{nbsp} which sets the IV value to `Vs`.
+ ** In state _set_public_value_, we can only issue an {nbsp}``ace.exec``{nbsp}of the form{nbsp} `ace.exec Cn|C[Xn], Vs`,{nbsp} which sets the IV value to `Vs`.
   *** If{nbsp} `ace.exec Cn|C[Xn], Vs`,{nbsp} is issued more times, it will just update the IV value again.
-  *** Any other form of{nbsp} `ace.exec`{nbsp} will produce a null output and *invalidate* the CC.
- ** In state _operate_, we can only issue an{nbsp} `ace.exec`{nbsp} of the form `ace.exec Vd, Cn|C[Xn]`, which performs
+  *** Any other form of {nbsp}``ace.exec``{nbsp} will produce a null output and *invalidate* the CC.
+ ** In state _operate_, we can only issue an {nbsp}``ace.exec``{nbsp} of the form `ace.exec Vd, Cn|C[Xn]`, which performs
   . If in a "not-X" mode, `tmp <- keystream_block(IV @ counter)`, +
     else `tmp <- keystream_block(IV xor counter)`,
   . `tick_counter()`, and
   . `Vd <- tmp`.
- ** In state _operate_, any other form of{nbsp} `ace.exec`{nbsp} will produce a null output and *invalidate* the CC.
+ ** In state _operate_, any other form of {nbsp}``ace.exec``{nbsp} will produce a null output and *invalidate* the CC.
  ** If `ace.stage` is issued to return to state _initial_ , the CC can be reused with a new counter.
 
 
@@ -1411,8 +1414,8 @@ State Machine:::
 * *Behavior:*
  ** In state _initial_:
   *** The IV is set to zero.
-  *** Any{nbsp} `ace.exec`{nbsp} operation will produce null outputs and the CC is *invalidated*.
- ** In state _set_public_value_, we can only issue an{nbsp} `ace.exec`{nbsp} of the form{nbsp} `ace.exec Cn|C[Xn], Vs`{nbsp} to set the `IV <- Vs`.
+  *** Any {nbsp}``ace.exec``{nbsp} operation will produce null outputs and the CC is *invalidated*.
+ ** In state _set_public_value_, we can only issue an {nbsp}``ace.exec``{nbsp} of the form{nbsp} `ace.exec Cn|C[Xn], Vs`{nbsp} to set the `IV <- Vs`.
     *** If no such instruction is issued, the value of the IV will remain zero.
     *** If{nbsp} `ace.exec Cn|C[Xn], Vs`,{nbsp} is repeated, it will just re-write the IV.
   *** Other forms of `ace.exe` not allowed, will produce null outputs and the CC is *invalidated*.
@@ -1466,7 +1469,7 @@ Algorithm-Specific Functions:::
 
 State Machine:::
 
-* *States:* _initial_ (0), _set_public_value_ (6), _ace_const_hash_absorb_ (4), _ace_const_hash_finalize_ (5), _encrypt_ (1), and _decrypt_ (2).
+* *States:* _initial_ (0), _set_public_value_ (6), _ace_const_hash_absorb_ (3), _ace_const_hash_finalize_ (4), _encrypt_ (1), and _decrypt_ (2).
 * *Allowed State Transitions:*
  ** _initial_ -> _set_public_value_.
  ** _set_public_value_ -> _ace_const_hash_absorb_.
@@ -1478,7 +1481,7 @@ State Machine:::
  ** _hash_finalize_ -> _initial_.
  * *Behavior:*
  ** In state _initial_ :
-  *** If any{nbsp} `ace.exec`{nbsp} operations are issued, these will produce null outputs and the CC is *invalidated*.
+  *** If any {nbsp}``ace.exec``{nbsp} operation is issued, it will produce a null output and the CC will be *invalidated*.
   *** The following initialization operations are performed:
     . `hash_key <- encrypt_block(key,0)`,
     . `auth_tag <- 0`, and
@@ -1486,29 +1489,29 @@ State Machine:::
   ** Upon completion of `ace.import`, the ACE unit recomputes the hash_key:
      . `hash_key <- encrypt_block(key,0)`.
  ** In state _set_public_value_:
-  *** We can only issue an{nbsp} `ace.exec`{nbsp} of the form{nbsp} `ace.exec Cn|C[Xn], Vs`{nbsp} to set
+  *** We can only issue an {nbsp}``ace.exec``{nbsp} of the form{nbsp} `ace.exec Cn|C[Xn], Vs`{nbsp} to set
        . `counter <- Vs << b/4`  (i.e., the `b/4` most significant bits of `Vs` are ignored, and the `b/4` least significant bits of `counter` are set to zero.)
   *** If{nbsp} `ace.exec Cn|C[Xn], Vs`,{nbsp} is repeated, it will just re-write the IV.
   *** If no such {nbsp} `ace.exec Cn|C[Xn], Vs`{nbsp} to set is issued, counter remains zero.
   *** Other forms of `ace.exe` are not allowed, they will produce null outputs and the CC is *invalidated*.
- ** In state _hash_absorb_, we can only issue an{nbsp} `ace.exec`{nbsp} of the form{nbsp} `ace.exec Cn|C[Xn], Vs`{nbsp} to accumulate a value in the auth_tag, namely:
+ ** In state _hash_absorb_, we can only issue an {nbsp}``ace.exec``{nbsp} of the form{nbsp} `ace.exec Cn|C[Xn], Vs`{nbsp} to accumulate a value in the auth_tag, namely:
    . `auth_tag <- auth_tag xor Vs`.
    . `auth_tag <- auth_tag * hash_key`.
- ** If the _encrypt_ state, we can only issue an{nbsp} `ace.exec`{nbsp} of the form{nbsp} `ace.exec Vd, Cn|C[Xn], Vs`{nbsp} to
+ ** If the _encrypt_ state, we can only issue an {nbsp}``ace.exec``{nbsp} of the form{nbsp} `ace.exec Vd, Cn|C[Xn], Vs`{nbsp} to
    encrypt `Vs` into `Vd`, and absorb the ciphertext `Vd` into the auth_tag, namely
     . `Vd  <- Vd xor encrypt_block(key,counter)`.
     . `counter[b/4-1:0] <- counter[b/4-1:0] + 1`. +
         If `counter[b/4-1:0]` rolls back to zero, the CC is *invalidated*.
     . `auth_tag <- auth_tag xor Vd`.
     . `auth_tag <- auth_tag * hash_key`.
- ** In state _decrypt_, we can only issue an{nbsp} `ace.exec`{nbsp} of the form{nbsp} `ace.exec Vd, Cn|C[Xn], Vs`{nbsp} to
+ ** In state _decrypt_, we can only issue an {nbsp}``ace.exec``{nbsp} of the form{nbsp} `ace.exec Vd, Cn|C[Xn], Vs`{nbsp} to
    absorb the ciphertext `Vs` into the auth_tag, then decrypt `Vs` into `Vd`, namely
    . `auth_tag <- auth_tag xor Vs`.
    . `auth_tag <- auth_tag * hash_key`.
    . `Vd  <- Vd xor encrypt_block(key,counter)`.
    . `counter[b/4-1:0] <- counter[b/4-1:0] + 1`. +
        If `counter[b/4-1:0]` rolls back to zero, the CC is *invalidated*.
- ** In state _hash_finalize_, we can only issue an{nbsp} `ace.exec`{nbsp} of the form{nbsp} `ace.exec Vd, Cn|C[Xn], Vs`{nbsp} where
+ ** In state _hash_finalize_, we can only issue an {nbsp}``ace.exec``{nbsp} of the form{nbsp} `ace.exec Vd, Cn|C[Xn], Vs`{nbsp} where
      `Vs = len_A @ len_C` (two fields of `b/2` bits), to compute the authentication tag and complete the algorithm as follows:
     . `auth_tag <- auth_tag xor Vs`.
     . `auth_tag <- auth_tag * hash_key`.
@@ -1521,7 +1524,45 @@ State Machine:::
 [.red]#TBD#
 
 [[ACE-CMAC]]
-===== CMAC
+===== MAC functions
+
+// comment to reset formatting
+
+Block Size:::
+
+* `b` = block size in bits, (8|`b`)
+
+Internal state:::
+
+* *Metadata*: 64 bits.
+* *Content Fields*:
+** `key`: `k` bits (8|`k`, in fact it is almost always 128|`k`).
+** `hash`: `b` bits.
+
+Generic Functions:::
+
+* `initial_content_deserialize`.
+ ** Length = `k/8` bytes.
+ ** `input[k/8-1:0] = key`.
+
+Algorithm-Specific Functions:::
+
+* `encrypt_block(p) -> c` encrypts plaintext block `p` using the key, and returns the ciphertext result `c`.
+
+State Machine:::
+
+* *States:* _initial_ (0), _hash_absorb_ (3), _hash_finalize_ (4), _last_block_length_ (5)
+* *Allowed State Transitions:*
+ ** _initial_ -> _hash_absorb_.
+ ** _hash_absorb_ -> _last_block_length_, _hash_finalize_.
+ ** _last_block_length_ -> _hash_finalize_.
+ ** From any state to state _initial_.
+* *Behavior:*
+ ** In state _initial_, any `ace.exec` will result in the CC being *invalidated*.
+ ** In state _hash_absorb_, we can only issue instructions {nbsp}``ace.exec``{nbsp} of the form{nbsp} `ace.exec Cn|C[Xn], Vs`{nbsp} to absorb the data block `Vs` into the hash.
+ ** Upon issuing `ace.stage Cn|C[Xn], _ace_state_hash_finalize_, Xs` where `Xs` contains the length of the last block, the CC will transition to state _hash_finalize_, where any further {nbsp} `ace.exec Cn|C[Xn], Vs` will simply set (and possibly overwrite) the last partial block.
+ ** In state _hash_finalize_, the computation of the hash is completed, and it can be exported using{nbsp} `ace.exec Vd, Cn|C[Xn]`.
+ ** In any state, issuing a different form of {nbsp}``ace.exec``{nbsp} then the allowed one will produce a null output and the CC will be *invalidated*.
 
 [.red]#TBD#
 
