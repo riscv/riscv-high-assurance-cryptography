@@ -30,13 +30,13 @@ An important distinction in ACE is between the _import_ and _export_ operations 
 It must be always possible to import and export SCCs, and also to clear and overwrite CCs for the purpose of managing cryptographic operations, otherwise a process may be prevented from performing cryptographic operations by clobbering all the CCs.
 Therefore, the _Usage Control policies_ in the metadata section may optionally restrict only the operations that perform algorithms that are configured by a CC's metadata, including modifying its state, to specified Modes, ASIDs and VMIDs.
 
-Locale:::
+Locality:::
 In addition to Usage Control policies,
-ACE can bind opaque keys to a _Locale_, restricting their usage to a specific device, device class, software or hardware configuration, or boot cycle.
-This binding uses both metadata and a _Derived CTK_ (DCTK) derived from the RCTK and a locale-specific secret via a key derivation function for the purpose of importing and exporting opaque keys.
-The system maintains a _Locale Secrets Table_ (LST) containing both system-wide values which are fixed, values that can be configured in an externally defined way,
+ACE can bind opaque keys to a _Locality_, restricting their usage to a specific device, device class, software or hardware configuration, or boot cycle.
+This binding uses both metadata and a _Derived CTK_ (DCTK) derived from the RCTK and a Locality-specific secret via a key derivation function for the purpose of importing and exporting opaque keys.
+The system maintains a _Locality Secrets Table_ (LST) containing both system-wide values which are fixed, values that can be configured in an externally defined way,
 and fields that can be programmed by MM.
-The metadata stores the Locale as an index into this table. See <<ACE-locales>> for more details.
+The metadata stores the Locality as an index into this table. See <<ACE-Localities>> for more details.
 
 [.red]#*Discussion point:* _Can optional limitations even to import and export make sense and be useful?#_
 
@@ -238,7 +238,7 @@ Only the instructions explicitly mentioned above support non-zero `ccstart` valu
 *Remark {counter:remark}.*
 _A single `ccstart` value suffices due to the authenticated encryption algorithm used. The operations behave as follows:_
 
-* `_ace.init_` _(formerly `ace.config`) is a single-pass operation: the metadata section is read first, determining the payload length. If sufficient memory is available, subsequent blocks are read sequentially and passed to a deserialization circuit to populate the CC._
+* `_ace.init_` _is a single-pass operation: the metadata section is read first, determining the payload length. If sufficient memory is available, subsequent blocks are read sequentially and passed to a deserialization circuit to populate the CC._
 * `_ace.import_` _operates similarly to `ace.init`: the metadata section is read first to determine the payload length. If sufficient memory is available, the remaining blocks are read, decrypted, and passed to a deserialization circuit to populate the CC._
 * `_ace.export_` _involves two passes, but the first pass is entirely internal to the ACE unit. Hence, the first pass cannot cause a page fault, and is easily restarted. Specifically, it computes the SIV by applying POLYVAL to the serialized CC content. Subsequently, the serialized metadata, the nonce, and the SIV are written out, followed by the CC content serialized, encrypted and written out block by block. It is this last part that may cause page faults, and that may require resumption._
 
@@ -284,13 +284,13 @@ NOTE: Discoverability of whether the RCTK can be configured or not is not critic
  +
 User mode, and even operating systems and hypervisors, need not be aware of the `acerctk` block. Other mechanisms could have been chosen to program the CTK, such as an MM-exclusive dedicated hardware interface or memory-mapped interface.
 
-====== Re-configurable Locales
+====== Re-configurable Localities
 
-Two groups of four consecutive 32-bit CSRs, programmable by MM, are used to define two reconfigurable locales
+Two groups of four consecutive 32-bit CSRs, programmable by MM, are used to define two reconfigurable Localities
 (cf.{nbsp}<<ACE-concepts>>).
 These groups are:
 `ace_OS_Secret{i}`, for `i` in [0..3], to configure the "OS Secret" entry,
-and `ace_Boot_Session{i}`, for `i` in [0..3], to configure the "Boot Session" entry (cf.{nbsp}<<ACE-locales>>).
+and `ace_Boot_Session{i}`, for `i` in [0..3], to configure the "Boot Session" entry (cf.{nbsp}<<ACE-Localities>>).
 
 The reason `ace_Boot_Session*` must be reconfigurable is that it must change in a VM if the latter's virtual hardware is re-booted, and this can happen independently from the underlying host and other VMs. For instance, a VM may be frozen, then the host may be rebooted, and then the VM may be resumed, in which case no boot session occurred in the VM, while it happened in the host hardware.
 
@@ -329,17 +329,17 @@ Future format will have a 1 in this position and may be longer than 64 bits.
 | [12:11] |   2  | Direction_Policy       | Determines whether the CC may be used for encryption (bit 11 set), decryption (bit 12 set), or both (bits 11 and 12 set).
 Valid only for encryption/decryption primitives or modes, and ignored, for instance, for hash functions.
 | [14:13] |   2  | Key_Type               | By explicit value / Immutable (index) / Internally generated.
-| [18:15] |   4  | Locale                 | Field which is either -1 or an index into the Locale Secrets Table.
-| [20:19] |   2  | Completion             | Defined in <<ACE-CC-complete>>.
+| [16:15] |   2  | Completion             | Defined in <<ACE-CC-complete>>.
 Used to determine whether an operation must be restarted.
-| [24:21] |   4  | Stage (also Direction) | Encoding the current state of the state machine of the algorithm as a number (also called the "stage" of the algorithm).
+| [20:17] |   4  | Stage (also Direction) | Encoding the current state of the state machine of the algorithm as a number (also called the "stage" of the algorithm).
 The value must be zero in the initialization data, but, internally, it can be changed immediately by the algorithm.
 If the algorithm encoded in the CC has at most 14 states (and possibly state _completed_, cf. <<ACE-stage-constants>>), then this number is stored in this field, cf. <<stage-field>>,
 otherwise an algorithm-specific representation is used in the content, and this field only admits the values 0 (initial), 14 (invalidated), 15 (completed) or 1 (anything other operational state). The values must conform to <<ACE-stage-constants>>.
-| [28:25] |   4  | UC_Policy_1            | "UC Policy" means "Usage Control Policy". +
+|    [21] |   1  | Reserved               | Undefined.
+| [25:22] |   4  | Locality               | Field which is either -1 or an index into the Locality Secrets Table.
+| [29:26] |   4  | UC_Policy_1            | "UC Policy" means "Usage Control Policy". +
 Disallow the _usage_ of this CC in User, (Virtual) Supervisor, Hypervisor, resp., MM if bit 25, 26, 27, resp. 28, is set. Cf. <<stage-no-H-no-VMID>>.
-| [30:29] |   2  | UC_Policy_2            | If bit 29, resp., 30, is set, then restrict the usage by `ASID`, resp., `VMID`. Restriction by `ASID` ignored if in S Mode or higher. Cf. <<stage-no-H-no-VMID>>.
-|    [31] |   1  | Reserved               | Undefined.
+| [31:30] |   2  | UC_Policy_2            | If bit 29, resp., 30, is set, then restrict the usage by `ASID`, resp., `VMID`. Restriction by `ASID` ignored if in S Mode or higher. Cf. <<stage-no-H-no-VMID>>.
 | [47:32] |  16  | UC_Policy_3            | Zero if bit 29 unset, else `ASID` to enforce.
 | [63:48] |  16  | UC_Policy_4            | Zero if bit 30 unset, else `VMID` to enforce. Cf. <<stage-no-H-no-VMID>>.
 |===
@@ -401,33 +401,33 @@ While interoperability cannot be guaranteed when this policy is used, this ensur
 Filtering usage by Supervisor Domain or World ID is not supported, and not only because of lack of space in a 64-bit metadata section:
 Reconfiguring the RCTK is a better approach for such isolation requirements, whereas isolation by `ASID` and `VMID` is a weaker security feature._
 
-[[ACE-locales]]
-===== Locales
+[[ACE-Localities]]
+===== Localities
 
-Internally, ACE keeps a table of 128-bit Locale Secrets (LS), the Locale Secrets Table (LST).
+Internally, ACE keeps a table of 128-bit Locality Secrets (LS), the Locality Secrets Table (LST).
 Some of these entries are fixed, other values may be configurable only using an implementation-specific authenticated hardware procedure, and the remaining may be programmed by MM (*Note:* _we need to define the corresponding CSRs_).
 The LST is a global table shared across all ACE units with some fields which can be MM-programmed and are architectural (i.e., per hart).
 //Currently, the only two values that may be overridden by architectural values, in order to support multiple VMs/Supervisor Domains/Worlds are System_Secret and Boot_Session.
 
-If the Locale Field of a context (CC/SCC) is -1 (all ones), then the RCTK is used.
+If the Locality Field of a context (CC/SCC) is -1 (all ones), then the RCTK is used.
 Otherwise, this value is used as an index _i_ in the HST, and a derived key computed from RCTK and LST[_i_] is used for import/export in place of the RCTK.
 The encryption and authentication keys are then derived from the DCTK.
 
 In <<ACE-binding-indices>>, we list the mandatory entries.
 Column "MM-Config." indicates whether MM may be allowed to configure the entry.
-We also specify the domain of each Locale Secret, i.e., whether the value is
+We also specify the domain of each Locality Secret, i.e., whether the value is
 chip-wide (should be the same across all chiplets in the same SoC, two distinct SoCs the same decide may have different values),
 device-wide, or (usually) OS-wide.
-//The first two Locale Secrets are chip-wide, and should be the same across all chiplets in the same SoC -- a separate chip in the same system may have different values.
-//Three further Locale Secrets must be the same across the entire device, and the Locale Secrets at indexes 5 and 6 can be reprogrammed by MM.
+//The first two Locality Secrets are chip-wide, and should be the same across all chiplets in the same SoC -- a separate chip in the same system may have different values.
+//Three further Locality Secrets must be the same across the entire device, and the Locality Secrets at indexes 5 and 6 can be reprogrammed by MM.
 
 [[ACE-binding-indices]]
-.Mandatory Locale Values
+.Mandatory Locality Values
 [width="100%",cols="17%,49%,^8,^8%,^8%",options="header"]
 |===
 .>| Name .>| Description .>| Domain | MM-Config. .>| Value +
 (Index)
-| No locale binding         | No CTK derivation. CC bound to BCTK only. | -- | -- | -1 (15)
+| No Locality binding       | No CTK derivation. CC bound to Root CTK only. | -- | -- | -1 (15)
 | Chip_Manufacturer         | Identifies the manufacturer of the SoC. Permanent. | SoC | N | 0
 | Chip_Model                | Identifies specific chip model/family. Permanent. | SoC | N | 1
 | OEM_Secret                | Provisioned by OEM to differentiate their products from the competition.
@@ -442,22 +442,22 @@ device-wide, or (usually) OS-wide.
 | Reserved                  | Reserved for future use (RZ if not defined). | Impdef | Impdef | 7-14
 |===
 
-The constant LOCALES_MAX is the maximum number of locales supported by the system.
+The constant Localities_MAX is the maximum number of Localities supported by the system.
 
 // [[ACE-virtual-reboot,Remark {counter:remark}]]
 // *Remark {counter:remark}.* _We need to mention what to do in case there is a reboot of a VM.
-NOTE: MM has the responsibility to virtualize the OS_Secret and Boot_Session Locale Secrets.
+NOTE: MM has the responsibility to virtualize the OS_Secret and Boot_Session Locality Secrets.
 
 // , since some VMs may reboot while others may not.
 // Also, do we want to allow a VM to have a different virtual hardware? Or does it always declare the same configuration as the underlying hardware?_
-// In principle, all this can be done by calling into MM. MM would need to keep track of the locale binding values and ensure that they are updated correctly when necessary.
+// In principle, all this can be done by calling into MM. MM would need to keep track of the Locality binding values and ensure that they are updated correctly when necessary.
 
-*Example*: _If a key's metadata specifies a Locale field value of "2", the key for import/export operations is derived from the RCTK and the "OEM Secret".
+*Example*: _If a key's metadata specifies a Locality field value of "2", the key for import/export operations is derived from the RCTK and the "OEM Secret".
 Consequently, while `ace.export` remains functional on the same device to support context switching, an `ace.import` of the resulting SCC on a device from a different OEM will trigger an authentication failure (provided that the OEM Secrets are, in fact, different)._
 
 NOTE: _In a CC, a key may be referred to using an index into an internal, system defined key table, the System Key Table (STK). If some of these keys are device specific, they will not work as intended on a second device.
-If the Locale of this CC is not restricted, the internal key index may be interpreted as an internal key on a different device, with unspecified behavior.
-Hence the implementation of the STK must also provide the proper Locale metadata to the ACE implementation to configure a CC._
+If the Locality of this CC is not restricted, the internal key index may be interpreted as an internal key on a different device, with unspecified behavior.
+Hence the implementation of the STK must also provide the proper Locality metadata to the ACE implementation to configure a CC._
 
 [[ACE-formats]]
 ===== Formats of Configuration Inputs and Sealed Configuration Contexts
@@ -486,10 +486,10 @@ The first 8 bytes must contain the 64-bit metadata section as specified in <<ACE
 followed by the key(s) and possibly other information as specified by the algorithm.
 
 Plaintext Format of SCC:::
-bytes[7:0]{nbsp}{nbsp} contain the 64-bit metadata section, +
-bytes[19:8]{nbsp}{nbsp} contain the nonce (96 bits) +
-bytes[31:20] {nbsp}{nbsp} contain the SIV (96 bits) +
-bytes[u+31,32]{nbsp}{nbsp} contain `content_serialize(CC.content)`, which has a byte length of u.
+`bytes[7:0] {nbsp}{nbsp}{nbsp}{nbsp}{nbsp}{nbsp}` contain the 64-bit metadata section, +
+`bytes[19:8] {nbsp}{nbsp}{nbsp}{nbsp}{nbsp}` contain the nonce (96 bits) +
+`bytes[31:20] {nbsp}{nbsp}{nbsp}{nbsp}` contain the SIV (96 bits) +
+`bytes[u+31,32] {nbsp}{nbsp}` contain `content_serialize(CC.content)`, which has a byte length of `u`.
 
 Only the serialization of the content is encrypted, while both metadata and content are included in the computation of the authentication tag, as described next.
 
@@ -532,10 +532,10 @@ let N : bits(96) = random(96 bits);
 Kenc : bits(256);
 Kauth : bits(128);
 
-if (metadata.Locale == 15) then {
+if (metadata.Locality == 15) then {
     CTK = RCTK;
 } else {
-    CTK = DCTK_KeyDeriv(RCTK, LST[metadata.Locale]);
+    CTK = DCTK_KeyDeriv(RCTK, LST[metadata.Locality]);
 }
 
 {Kenc, Kauth} = RFC8452_KeyDeriv(CTK);
@@ -553,7 +553,7 @@ if (last_block_fractional) then {
 }
 ----
 
-NOTE: Due to the computational cost of the derivation functions, implementations may cache recently used derived keys for both the Root RCTK and locale-derived keys.
+NOTE: Due to the computational cost of the derivation functions, implementations may cache recently used derived keys for both the Root RCTK and Locality-derived keys.
 
 //NOTE: This simplification of AES-GCM-SIV does not require appending the lengths of metadata and content to the hash, as these lengths are already implied by the cleartext bits of the metadata, which are included in the authentication tag computation.
 
@@ -809,7 +809,7 @@ This means that system HW dynamically generated keys can be imported but not
 exported in the same form: they must be exported in the format architected in
 this specification.
 // If the value cannot be transported to other devices or to
-// other Locale states of the same device, the internal logic must bind them to a
+// other Locality states of the same device, the internal logic must bind them to a
 // specific DCTK). The instruction imports them like software keys and sets
 // the appropriate policies.
 
@@ -1493,26 +1493,26 @@ State Machine:::
   *** If no such {nbsp} `ace.exec Cn|C[Xn], Vs`{nbsp} to set is issued, counter remains zero.
   *** Other forms of `ace.exe` are not allowed, they will produce null outputs and the CC is *invalidated*.
  ** In state _hash_absorb_, we can only issue an{nbsp} `ace.exec`{nbsp} of the form{nbsp} `ace.exec Cn|C[Xn], Vs`{nbsp} to accumulate a value in the auth_tag, namely:
-   . `auth_tag <- auth_tag xor Vs` and
+   . `auth_tag <- auth_tag xor Vs`.
    . `auth_tag <- auth_tag * hash_key`.
  ** If the _encrypt_ state, we can only issue an{nbsp} `ace.exec`{nbsp} of the form{nbsp} `ace.exec Vd, Cn|C[Xn], Vs`{nbsp} to
    encrypt `Vs` into `Vd`, and absorb the ciphertext `Vd` into the auth_tag, namely
-    . `Vd  <- Vd xor encrypt_block(key,counter)`,
-    . `counter[b/4-1:0] <- counter[b/4-1:0] + 1`.
+    . `Vd  <- Vd xor encrypt_block(key,counter)`.
+    . `counter[b/4-1:0] <- counter[b/4-1:0] + 1`. +
         If `counter[b/4-1:0]` rolls back to zero, the CC is *invalidated*.
-    . `auth_tag <- auth_tag xor Vd`, and
+    . `auth_tag <- auth_tag xor Vd`.
     . `auth_tag <- auth_tag * hash_key`.
  ** In state _decrypt_, we can only issue an{nbsp} `ace.exec`{nbsp} of the form{nbsp} `ace.exec Vd, Cn|C[Xn], Vs`{nbsp} to
    absorb the ciphertext `Vs` into the auth_tag, then decrypt `Vs` into `Vd`, namely
-   . `auth_tag <- auth_tag xor Vs`, and
+   . `auth_tag <- auth_tag xor Vs`.
    . `auth_tag <- auth_tag * hash_key`.
-   . `Vd  <- Vd xor encrypt_block(key,counter)`,
-   . `counter[b/4-1:0] <- counter[b/4-1:0] + 1`.
+   . `Vd  <- Vd xor encrypt_block(key,counter)`.
+   . `counter[b/4-1:0] <- counter[b/4-1:0] + 1`. +
        If `counter[b/4-1:0]` rolls back to zero, the CC is *invalidated*.
  ** In state _hash_finalize_, we can only issue an{nbsp} `ace.exec`{nbsp} of the form{nbsp} `ace.exec Vd, Cn|C[Xn], Vs`{nbsp} where
      `Vs = len_A @ len_C` (two fields of `b/2` bits), to compute the authentication tag and complete the algorithm as follows:
-    . `auth_tag <- auth_tag xor Vs`,
-    . `auth_tag <- auth_tag * hash_key`, and
+    . `auth_tag <- auth_tag xor Vs`.
+    . `auth_tag <- auth_tag * hash_key`.
     . `auth_tag <- auth_tag xor encrypt_block(key,counter[b-1,b/4] @ 0[b/4-1,0])`.
     . Finally, `auth_tag` is returned in `Vd`, and the state is changed to _completed_.
 
