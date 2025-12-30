@@ -638,11 +638,14 @@ ace_const_operate
 Algorithm is ready to process.
 |   2   | ace_state_decrypt             | Decryption is requested.
 |   3   | ace_state_hash_absorb         | Start (and initialize) a hash function or the sub-function of an algorithm, preparing it to absorb blocks of data.
-|   4   | ace_state_hash_finalize       | Finalize the internal state of a hash function and prepare it for outputting the result.
-|   5   | ace_state_last_block_length   | For a hash or MAC function, the next `ace.exec` this is the length of the last block of data.
-|   6   | ace_state_set_public_value    | Set a public value (like a nonce or an IV) in an algorithm. Some algorithms require more than one public value (for instance, they may admit a re-useable hash of some associated data and a unique nonce), in which case the second public value can be set using the next message.
-|   7   | ace_state_set_public_value_2  | Set the second public value in an algorithm.
-|   8   | ace_state_input_for_derive    | Tells the CC to expect additional information for feeding the `ace.derive` instruction.
+|   4   | ace_state_hash_finalize +
+ace_state_hash_finalize_enc             | Finalize the internal state of a hash function (including for the encryption algorithm of an for an authenticated encryption mode of operation) and prepare it for outputting the result. In this state additional data may be absorbed, such as lengths.
+|   5   | ace_state_hash_finalize_dec   | Finalize the internal state of a hash function for the decryption algorithm an authenticated decryption mode of operation. In this state additional data may be absorbed, such as lengths.
+|   6   | ace_state_hash_verify         | Finalize the internal state of a hash function and compare it to the provided value.
+|   7   | ace_state_last_block_length   | For a hash or MAC function, the next `ace.exec` this is the length of the last block of data.
+|   8   | ace_state_set_public_value    | Set a public value (like a nonce or an IV) in an algorithm. Some algorithms require more than one public value (for instance, they may admit a re-useable hash of some associated data and a unique nonce), in which case the second public value can be set using the next message.
+|   9   | ace_state_set_public_value_2  | Set the second public value in an algorithm.
+|  10   | ace_state_input_for_derive    | Tells the CC to expect additional information for feeding the `ace.derive` instruction.
 |  14   | ace_state_invalidated         | The algorithm has abnormally terminated. `ace.error` will always return error code _ace_err_invalid_.
 |  15   | ace_state_completed           | The algorithm has correctly completed.
 |===
@@ -1345,7 +1348,7 @@ Algorithm-Specific Functions:::
 
 State Machine:::
 
-* *States:* _initial_ (0), _set_public_value_ (6), _operate_ (1).
+* *States:* _initial_ (0), _set_public_value_ (7), _operate_ (1).
 * *Allowed State Transitions:*
  ** _initial_ -> _set_public_value_.
  ** _set_public_value_ -> _operate_.
@@ -1404,7 +1407,7 @@ Algorithm-Specific Functions:::
 
 State Machine:::
 
-* *States:* _initial_ (0), _set_public_value_ (6), _encrypt_ (1), and _decrypt_ (2).
+* *States:* _initial_ (0), _set_public_value_ (8), _encrypt_ (1), and _decrypt_ (2).
 * *Allowed State Transitions:*
  ** _initial_ -> _set_public_value_.
  ** _set_public_value_ -> _initial_.
@@ -1459,26 +1462,27 @@ Generic Functions:::
  ** `input[k/8-1:0] = key`.
  ** `input[(k+b)/8-1:k/8] = counter`.
  ** `input[(k+2b)/8-1:(k+b)/8] = auth_tag`.
- ** Note that the hash_key is not serialized.
+ ** Note that `hash_key` is not serialized.
 * `content_deserialize` converts the output of `content_serialize` back to the original input format.
 
 Algorithm-Specific Functions:::
 
 * `encrypt_block(key,p) -> c` encrypts block `p` using the key, and returns the result `c`.
-* `decrypt_block(key,c) -> p` decrypts block `c` using the key, and returns the result `p`.
 
 State Machine:::
 
-* *States:* _initial_ (0), _set_public_value_ (6), _ace_const_hash_absorb_ (3), _ace_const_hash_finalize_ (4), _encrypt_ (1), and _decrypt_ (2).
+* *States:* _initial_ (0), _set_public_value_ (7), _hash_absorb_ (3), _hash_finalize_ (4), _hash_finalize_dec_ (5), _hash_verify_ (6), _encrypt_ (1), and _decrypt_ (2).
 * *Allowed State Transitions:*
  ** _initial_ -> _set_public_value_.
- ** _set_public_value_ -> _ace_const_hash_absorb_.
+ ** _set_public_value_ -> _hash_absorb_.
  ** _set_public_value_ -> _encrypt_, if metadata allows encryption, else the CC is *invalidated*.
  ** _set_public_value_ -> _decrypt_, if metadata allows decryption, else the CC is *invalidated*.
  ** _set_public_value_ -> _initial_, _set_public_value_.
- ** _encrypt_, _decrypt_ -> _ace_const_hash_absorb_, _initial_.
- ** _hash_absorb_ -> _ace_const_hash_finalize_, _initial_.
- ** _hash_finalize_ -> _initial_.
+ ** _encrypt_ -> _hash_finalize_enc_, _initial_.
+ ** _decrypt_ -> _hash_finalize_dec_, _initial_.
+ ** _hash_absorb_ -> _initial_.
+ ** _hash_finalize_enc_ -> _initial_.
+ ** _hash_finalize_dec_ -> _hash_verify_, _initial_.
  * *Behavior:*
  ** In state _initial_ :
   *** If any {nbsp}``ace.exec``{nbsp} operation is issued, it will produce a null output and the CC will be *invalidated*.
@@ -1504,6 +1508,12 @@ State Machine:::
         If `counter[b/4-1:0]` rolls back to zero, the CC is *invalidated*.
     . `auth_tag <- auth_tag xor Vd`.
     . `auth_tag <- auth_tag * hash_key`.
+ ** In state _hash_finalize_enc_, we can only issue an {nbsp}``ace.exec``{nbsp} of the form{nbsp} `ace.exec Vd, Cn|C[Xn], Vs`{nbsp} where
+ `Vs = len_A @ len_C` (two fields of `b/2` bits), to compute the authentication tag and complete the algorithm as follows:
+    . `auth_tag <- auth_tag xor Vs`.
+    . `auth_tag <- auth_tag * hash_key`.
+    . `auth_tag <- auth_tag xor encrypt_block(key,counter[b-1,b/4] @ 0[b/4-1,0])`.
+    . Finally, `auth_tag` is returned in `Vd`, and the state is changed to _completed_.
  ** In state _decrypt_, we can only issue an {nbsp}``ace.exec``{nbsp} of the form{nbsp} `ace.exec Vd, Cn|C[Xn], Vs`{nbsp} to
    absorb the ciphertext `Vs` into the auth_tag, then decrypt `Vs` into `Vd`, namely
    . `auth_tag <- auth_tag xor Vs`.
@@ -1511,17 +1521,50 @@ State Machine:::
    . `Vd  <- Vd xor encrypt_block(key,counter)`.
    . `counter[b/4-1:0] <- counter[b/4-1:0] + 1`. +
        If `counter[b/4-1:0]` rolls back to zero, the CC is *invalidated*.
- ** In state _hash_finalize_, we can only issue an {nbsp}``ace.exec``{nbsp} of the form{nbsp} `ace.exec Vd, Cn|C[Xn], Vs`{nbsp} where
-     `Vs = len_A @ len_C` (two fields of `b/2` bits), to compute the authentication tag and complete the algorithm as follows:
-    . `auth_tag <- auth_tag xor Vs`.
-    . `auth_tag <- auth_tag * hash_key`.
-    . `auth_tag <- auth_tag xor encrypt_block(key,counter[b-1,b/4] @ 0[b/4-1,0])`.
-    . Finally, `auth_tag` is returned in `Vd`, and the state is changed to _completed_.
+ ** In state _hash_finalize_dec_, we can only issue an {nbsp}``ace.exec``{nbsp} of the form{nbsp} `ace.exec Cn|C[Xn], Vs`{nbsp} where
+    `Vs = len_A @ len_C` (two fields of `b/2` bits), to compute the authentication tag and complete the algorithm as in
+   . `auth_tag <- auth_tag xor Vs`.
+   . `auth_tag <- auth_tag * hash_key`.
+   . `auth_tag <- auth_tag xor encrypt_block(key,counter[b-1,b/4] @ 0[b/4-1,0])`.
+ ** In state _hash_verify_, we can only issue an {nbsp}``ace.exec``{nbsp} of the form{nbsp} `ace.exec Cn|C[Xn], Vs`{nbsp}.
+    `Vs` is compared to `auth_tag`:
+  *** If the values match, the state is changed to _completed_, and `ace.error` returns no error.
+  *** If the values do not match, the state is changed to _completed_, and `ace.error` returns error `ace_err_authentication`.
+
 
 [[ACE-GCM-SIV]]
 ===== GCM-SIV mode
 
-[.red]#TBD#
+Block Size:::
+
+* `b` = block size in bits, (8|b).
+
+Internal state:::
+
+* *Metadata*: 64 bits.
+* *Content Fields*:
+ ** `key`: `k` bits (8|`k`).
+ ** `counter`: `b` bits.
+ ** `hash_key`: `b` bits.
+ ** `auth_key`: `b` bits.
+ ** `auth_tag`: `b` bits.
++
+Note that there are no fields for the lengths of the AD and of the plaintext.
+These values must be maintained by the calling software.
+
+Generic Functions:::
+
+* `initial_content_deserialize`
+ ** Length = `k/8` bytes.
+ ** `input[k/8-1:0] = key`.
+* `content_serialize`:
+ ** Length = `(k+2b)/8` bytes.
+ ** `input[k/8-1:0] = key`.
+ ** `input[(k+b)/8-1:k/8] = counter`.
+ ** `input[(k+2b)/8-1:(k+b)/8] = auth_tag`.
+ ** Note that `hash_key` and `auth_key` are not serialized.
+* `content_deserialize` converts the output of `content_serialize` back to the original input format.
+
 
 [[ACE-CMAC]]
 ===== MAC functions
@@ -1551,7 +1594,7 @@ Algorithm-Specific Functions:::
 
 State Machine:::
 
-* *States:* _initial_ (0), _hash_absorb_ (3), _hash_finalize_ (4), _last_block_length_ (5)
+* *States:* _initial_ (0), _hash_absorb_ (3), _hash_finalize_ (4), _last_block_length_ (7)
 * *Allowed State Transitions:*
  ** _initial_ -> _hash_absorb_.
  ** _hash_absorb_ -> _last_block_length_, _hash_finalize_.
@@ -1718,7 +1761,7 @@ Note that invoking `ace.state C1, #ace_const_hash_start` would allow to reuse C1
 While ACE can be implemented with the V extension as a requirement, we note that ACE actually depends on a minimal subset of the RISC-V Vector Extension (RVV), which we call RVV-mini, for correct operation.
 Required features include:
 
-* Vector registers of 128 bits or wider;
+* Support for vector registers sufficiently wide to host the block-wise operations required by the algorithms supported by ACE;
 * The `vsetvli` instruction with restricted parameters (e.g., "`vsetvli zero, 4, e32, m1, ta, ma`" for 128-bit-side operations); unsupported configurations must generate defined errors;
 * Unit-strided vector loads and stores exclusively; and
 * Vector bitwise logical operations such as `vxor`, `vand`, and `vor`.
