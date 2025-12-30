@@ -446,7 +446,7 @@ The constant Localities_MAX is the maximum number of Localities supported by the
 
 // [[ACE-virtual-reboot,Remark {counter:remark}]]
 // *Remark {counter:remark}.* _We need to mention what to do in case there is a reboot of a VM.
-NOTE: MM has the responsibility to virtualize the OS_Secret and Boot_Session Locality Secrets.
+NOTE: MM is responsible for virtualizing the OS_Secret and Boot_Session Locality Secrets.
 
 // , since some VMs may reboot while others may not.
 // Also, do we want to allow a VM to have a different virtual hardware? Or does it always declare the same configuration as the underlying hardware?_
@@ -525,8 +525,9 @@ We can now define the generation of the SCC from a CC.
 [source,sail]
 ----
 metadata : bits(64);
-last_block_fractional : bits(1);
-content : array[num_blocks] of bits(128);
+last_block_fractional : boolean;
+content : array[num_blocks] of bits(128); // last block is zero-padded
+                                          // if last_block_fractional = true
 M : array[num_blocks+2] of bits(128);
 let N : bits(96) = random(96 bits);
 Kenc : bits(256);
@@ -539,27 +540,37 @@ if (metadata.Locality == 15) then {
 }
 
 {Kenc, Kauth} = RFC8452_KeyDeriv(CTK);
-let SIV : bits(96) = POLYVAL(Kauth, N, metadata @ content)[95:0];
+let T : bits(96) = POLYVAL(Kauth, metadata @ content
+                                           @ IntTo64Bits(64)
+                                           @ IntTo64Bits(len_in_bits(content)))[95:0];
+let SIV : bits(96) = AESE(Kenc, 0 @ (T xor N) [126:0])[127:32];
 
 M[0][127:0] = N[63:0] @ metadata[63:0];
 M[1][127:0] = SIV[95:0] @ N[95:64];
-if (last_block_fractional) then last = num_blocks - 1 else last = num_blocks - 2
+if (last_block_fractional) then last = num_blocks - 1 else last = num_blocks - 2;
 foreach(i from 0 to last) {
-    M[i + 2][127:0] = content[i] xor AESE(Kenc, SIV @ (binary(i)[31:0]));
+    M[i + 2][127:0] = content[i] xor AESE(Kenc, 1 @ SIV[94:0] @ (binary(i)[31:0]));
 }
 if (last_block_fractional) then {
     M[last + 1][63:0] = content[last + 1]
-                        xor AESE(Kenc, SIV @ (binary(last + 1)[31:0]))[63:0];
+                        xor AESE(Kenc, 1 @ SIV[94:0] @ (binary(last + 1)[31:0]))[63:0];
 }
 ----
 
-NOTE: Due to the computational cost of the derivation functions, implementations may cache recently used derived keys for both the Root RCTK and Locality-derived keys.
+NOTE: Due to the computational cost of the derivation functions, implementations may
+cache recently used derived keys for both the Root RCTK and Locality-derived keys.
 
-//NOTE: This simplification of AES-GCM-SIV does not require appending the lengths of metadata and content to the hash, as these lengths are already implied by the cleartext bits of the metadata, which are included in the authentication tag computation.
+//NOTE: This simplification of AES-GCM-SIV does not require appending the lengths
+// of metadata and content to the hash, as these lengths are already implied by the
+// cleartext bits of the metadata, which are included in the authentication tag computation.
 
-NOTE: Certain format details are fixed across algorithms. All pure ciphers use a single key, regardless of whether they employ a normal or threshold implementation; threshold implementations are always reduced to a single key. Some modes follow the same convention, while others require algorithm-specific state formatting.
+NOTE: Certain format details are fixed across algorithms. All pure ciphers use a single
+key, regardless of whether they employ a normal or threshold implementation; threshold
+implementations are always reduced to a single key. Some modes follow the same convention,
+while others require algorithm-specific state formatting.
 
-// The total output length must be a multiple of 64 bits. If the combined metadata and content do not meet this requirement, the final block is zero-padded.
+// The total output length must be a multiple of 64 bits. If the combined metadata and
+// content do not meet this requirement, the final block is zero-padded.
 
 // ///////////////////////////////////////////////////////////////////////////////////////////
 
@@ -573,7 +584,6 @@ ACE error codes are 8-bit values.
 The range [0..127] is reserved for RVI.
 Error codes specific to custom algorithms may be freely defined in the range [128..255], and are allowed to overlap between algorithms.
 
-[.red]#(May still be incomplete.)#
 In <<ACE-error-values>>, we define the mandatory error codes.
 
 [[ACE-error-values]]
@@ -622,7 +632,6 @@ The list of other architected algorithms is TBD, but it must include at least
 
 ===== Other Constants
 
-[.red]#(May still be incomplete.)#
 In addition to error codes and algorithms encodings, ACE defines a few more constants, such as
 those in <<ACE-stage-constants>> which are used in `ace.state`/`ace.dir` to change the state of a CC.
 
@@ -873,7 +882,8 @@ just performed. For instance, in AEAD algorithms, after setting an IV or a nonce
 one could argue that there is no need to explicitly move to the stage of absorbing
 the associated data into the hash. However, to avoid inconsistency, we have chosen
 not to make such stage transitions implicit, even if this could save a handful
-of instructions.
+of instructions, except for transitions to states such as _completed_ or _invalidated_
+(see <<ACE-stage-constants>> and <<ACE-Algorithms>>).
 
 [[ACE-instruction-size]]
 ==== ace.size
@@ -1417,10 +1427,10 @@ State Machine:::
 * *Behavior:*
  ** In state _initial_:
   *** The IV is set to zero.
-  *** Any {nbsp}``ace.exec``{nbsp} operation will produce null outputs and the CC is *invalidated*.
+  *** Any {nbsp}``ace.exec``{nbsp} operation will produce null outputs and causes the CC to be *invalidated*.
  ** In state _set_public_value_, we can only issue an {nbsp}``ace.exec``{nbsp} of the form{nbsp} `ace.exec Cn|C[Xn], Vs`{nbsp} to set the `IV <- Vs`.
-    *** If no such instruction is issued, the value of the IV will remain zero.
-    *** If{nbsp} `ace.exec Cn|C[Xn], Vs`,{nbsp} is repeated, it will just re-write the IV.
+  *** If no such instruction is issued, the value of the IV will remain zero.
+  *** If{nbsp} `ace.exec Cn|C[Xn], Vs`,{nbsp} is repeated, it will just re-write the IV.
   *** Other forms of `ace.exe` not allowed, will produce null outputs and the CC is *invalidated*.
  ** When transitioning from _set_public_value_ to either _encrypt_ or _decrypt_, the following operations are performed:
   . First, `mask <- encrypt_block(key2,IV)`.
@@ -1448,8 +1458,8 @@ Internal state:::
  ** `counter`: `b` bits.
  ** `hash_key`: `b` bits.
  ** `auth_tag`: `b` bits.
-+
-Note that there are no fields for the lengths of the AD and of the plaintext.
+
+NOTE: Note that there are no fields for the lengths of the AD and of the plaintext.
 These values must be maintained by the calling software.
 
 Generic Functions:::
@@ -1457,79 +1467,81 @@ Generic Functions:::
 * `initial_content_deserialize`
  ** Length = `k/8` bytes.
  ** `input[k/8-1:0] = key`.
+
 * `content_serialize`:
  ** Length = `(k+2b)/8` bytes.
  ** `input[k/8-1:0] = key`.
  ** `input[(k+b)/8-1:k/8] = counter`.
  ** `input[(k+2b)/8-1:(k+b)/8] = auth_tag`.
  ** Note that `hash_key` is not serialized.
+
 * `content_deserialize` converts the output of `content_serialize` back to the original input format.
 
 Algorithm-Specific Functions:::
 
 * `encrypt_block(key,p) -> c` encrypts block `p` using the key, and returns the result `c`.
 
+* `absorb_into_hash(data)` absorbs data into the hash function by performing:
+  . `auth_tag <- auth_tag xor Vs`.
+  . `auth_tag <- auth_tag * hash_key`.
+
 State Machine:::
 
-* *States:* _initial_ (0), _set_public_value_ (7), _hash_absorb_ (3), _hash_finalize_ (4), _hash_finalize_dec_ (5), _hash_verify_ (6), _encrypt_ (1), and _decrypt_ (2).
+* *States:* _initial_ (0), _set_public_value_ (7), _hash_absorb_ (3), _encrypt_ (1), _hash_finalize_ (4), _decrypt_ (2), _hash_finalize_dec_ (5), and _hash_verify_ (6).
+
 * *Allowed State Transitions:*
+ ** From all states to _initial_.
  ** _initial_ -> _set_public_value_.
  ** _set_public_value_ -> _hash_absorb_.
- ** _set_public_value_ -> _encrypt_, if metadata allows encryption, else the CC is *invalidated*.
- ** _set_public_value_ -> _decrypt_, if metadata allows decryption, else the CC is *invalidated*.
- ** _set_public_value_ -> _initial_, _set_public_value_.
- ** _encrypt_ -> _hash_finalize_enc_, _initial_.
- ** _decrypt_ -> _hash_finalize_dec_, _initial_.
- ** _hash_absorb_ -> _initial_.
- ** _hash_finalize_enc_ -> _initial_.
- ** _hash_finalize_dec_ -> _hash_verify_, _initial_.
- * *Behavior:*
+ ** _hash_absorb_ -> _encrypt_, if metadata allows encryption, else the CC is *invalidated*.
+ ** _hash_absorb_ -> _decrypt_, if metadata allows decryption, else the CC is *invalidated*.
+ ** _encrypt_ -> _hash_finalize_enc_.
+ ** _decrypt_ -> _hash_finalize_dec_.
+ ** _hash_finalize_dec_ -> _hash_verify_.
+
+* *Behavior:*
  ** In state _initial_ :
-  *** If any {nbsp}``ace.exec``{nbsp} operation is issued, it will produce a null output and the CC will be *invalidated*.
+  *** Any {nbsp}``ace.exec``{nbsp} operation will produce null outputs and causes the CC to be *invalidated*.
   *** The following initialization operations are performed:
     . `hash_key <- encrypt_block(key,0)`,
     . `auth_tag <- 0`, and
     . `counter <- 0`.
-  ** Upon completion of `ace.import`, the ACE unit recomputes the hash_key:
-     . `hash_key <- encrypt_block(key,0)`.
  ** In state _set_public_value_:
   *** We can only issue an {nbsp}``ace.exec``{nbsp} of the form{nbsp} `ace.exec Cn|C[Xn], Vs`{nbsp} to set
        . `counter <- Vs << b/4`  (i.e., the `b/4` most significant bits of `Vs` are ignored, and the `b/4` least significant bits of `counter` are set to zero.)
   *** If{nbsp} `ace.exec Cn|C[Xn], Vs`,{nbsp} is repeated, it will just re-write the IV.
   *** If no such {nbsp} `ace.exec Cn|C[Xn], Vs`{nbsp} to set is issued, counter remains zero.
-  *** Other forms of `ace.exe` are not allowed, they will produce null outputs and the CC is *invalidated*.
- ** In state _hash_absorb_, we can only issue an {nbsp}``ace.exec``{nbsp} of the form{nbsp} `ace.exec Cn|C[Xn], Vs`{nbsp} to accumulate a value in the auth_tag, namely:
-   . `auth_tag <- auth_tag xor Vs`.
-   . `auth_tag <- auth_tag * hash_key`.
+  *** Any other form of {nbsp}``ace.exec``{nbsp} will produce null outputs and causes the CC to be *invalidated*.
+
+ ** In state _hash_absorb_, we can only issue an {nbsp}``ace.exec``{nbsp} of the form{nbsp} `ace.exec Cn|C[Xn], Vs`{nbsp} to accumulate a value in the auth_tag, by performing:
+   . `absorb_into_hash(Vs)`.
  ** If the _encrypt_ state, we can only issue an {nbsp}``ace.exec``{nbsp} of the form{nbsp} `ace.exec Vd, Cn|C[Xn], Vs`{nbsp} to
-   encrypt `Vs` into `Vd`, and absorb the ciphertext `Vd` into the auth_tag, namely
-    . `Vd  <- Vd xor encrypt_block(key,counter)`.
-    . `counter[b/4-1:0] <- counter[b/4-1:0] + 1`. +
-        If `counter[b/4-1:0]` rolls back to zero, the CC is *invalidated*.
-    . `auth_tag <- auth_tag xor Vd`.
-    . `auth_tag <- auth_tag * hash_key`.
- ** In state _hash_finalize_enc_, we can only issue an {nbsp}``ace.exec``{nbsp} of the form{nbsp} `ace.exec Vd, Cn|C[Xn], Vs`{nbsp} where
- `Vs = len_A @ len_C` (two fields of `b/2` bits), to compute the authentication tag and complete the algorithm as follows:
-    . `auth_tag <- auth_tag xor Vs`.
-    . `auth_tag <- auth_tag * hash_key`.
+   encrypt `Vs` into `Vd`, and absorb the ciphertext `Vd` into the `auth_tag`, namely
+    . If `counter[b/4-1:0] = 0`, the CC is *invalidated*.
+    . `tmp <- Vs xor encrypt_block(key,counter)`.
+    . `absorb_into_hash(tmp)`.
+    . `Vd <- tmp`.
+    . `counter[b/4-1:0] <- counter[b/4-1:0] + 1`.
+ ** In state _hash_finalize_enc_, we can only issue an {nbsp}``ace.exec``{nbsp} of the form{nbsp} `ace.exec Vd, Cn|C[Xn], Vs`{nbsp} where `Vs = len_A @ len_C` (two fields of `b/2` bits), to compute the authentication tag and complete the algorithm as follows:
+    . `absorb_into_hash(Vd)`.
     . `auth_tag <- auth_tag xor encrypt_block(key,counter[b-1,b/4] @ 0[b/4-1,0])`.
     . Finally, `auth_tag` is returned in `Vd`, and the state is changed to _completed_.
  ** In state _decrypt_, we can only issue an {nbsp}``ace.exec``{nbsp} of the form{nbsp} `ace.exec Vd, Cn|C[Xn], Vs`{nbsp} to
-   absorb the ciphertext `Vs` into the auth_tag, then decrypt `Vs` into `Vd`, namely
-   . `auth_tag <- auth_tag xor Vs`.
-   . `auth_tag <- auth_tag * hash_key`.
-   . `Vd  <- Vd xor encrypt_block(key,counter)`.
-   . `counter[b/4-1:0] <- counter[b/4-1:0] + 1`. +
-       If `counter[b/4-1:0]` rolls back to zero, the CC is *invalidated*.
+   absorb the ciphertext `Vs` into the `auth_tag`, then decrypt `Vs` into `Vd`, namely
+   . If `counter[b/4-1:0] = 0`, the CC is *invalidated*.
+   . `absorb_into_hash(Vs)`.
+   . `Vd  <- Vs xor encrypt_block(key,counter)`.
+   . `counter[b/4-1:0] <- counter[b/4-1:0] + 1`.
  ** In state _hash_finalize_dec_, we can only issue an {nbsp}``ace.exec``{nbsp} of the form{nbsp} `ace.exec Cn|C[Xn], Vs`{nbsp} where
-    `Vs = len_A @ len_C` (two fields of `b/2` bits), to compute the authentication tag and complete the algorithm as in
-   . `auth_tag <- auth_tag xor Vs`.
-   . `auth_tag <- auth_tag * hash_key`.
+    `Vs = len_A @ len_C` (two fields of `b/2` bits), to compute the authentication tag as follows:
+   . `absorb_into_hash(Vs)`.
    . `auth_tag <- auth_tag xor encrypt_block(key,counter[b-1,b/4] @ 0[b/4-1,0])`.
  ** In state _hash_verify_, we can only issue an {nbsp}``ace.exec``{nbsp} of the form{nbsp} `ace.exec Cn|C[Xn], Vs`{nbsp}.
     `Vs` is compared to `auth_tag`:
   *** If the values match, the state is changed to _completed_, and `ace.error` returns no error.
   *** If the values do not match, the state is changed to _completed_, and `ace.error` returns error `ace_err_authentication`.
+ ** Upon completion of `ace.import`, the ACE unit recomputes `hash_key`:
+      . `hash_key <- encrypt_block(key,0)`.
 
 
 [[ACE-GCM-SIV]]
@@ -1543,27 +1555,66 @@ Internal state:::
 
 * *Metadata*: 64 bits.
 * *Content Fields*:
- ** `key`: `k` bits (8|`k`).
- ** `counter`: `b` bits.
- ** `hash_key`: `b` bits.
- ** `auth_key`: `b` bits.
+ ** `key`: `k` bits (8|`k`). `k = b` or `k = 2b`.
+ ** `nonce`: `3b/4` bits.
+ ** `counter`: `b/4` bits.
+ ** `SIV`: `b` bits.
  ** `auth_tag`: `b` bits.
-+
-Note that there are no fields for the lengths of the AD and of the plaintext.
-These values must be maintained by the calling software.
+ ** `enc_key`: `k` bits.
+ ** `auth_key`: `b` bits.
 
 Generic Functions:::
 
 * `initial_content_deserialize`
  ** Length = `k/8` bytes.
  ** `input[k/8-1:0] = key`.
+
 * `content_serialize`:
  ** Length = `(k+2b)/8` bytes.
  ** `input[k/8-1:0] = key`.
- ** `input[(k+b)/8-1:k/8] = counter`.
+ ** `input[(k+b)/8-1:k/8] = nonce @ counter`.
  ** `input[(k+2b)/8-1:(k+b)/8] = auth_tag`.
  ** Note that `hash_key` and `auth_key` are not serialized.
+
 * `content_deserialize` converts the output of `content_serialize` back to the original input format.
+
+State Machine:::
+* *States:* _initial_ (0), _set_public_value_ (7), _hash_absorb_ (3), _hash_finalize_enc_ (4), _hash_finalize_dec_ (5), _hash_verify_ (6), _encrypt_ (1), and _decrypt_ (2).
+
+* *Allowed State Transitions:*
+ ** From all states to _initial_.
+ ** _initial_ -> _set_public_value_ -> _hash_absorb_ -> _hash_finalize_enc_ -> _encrypt_.
+ ** _initial_ -> _set_public_value_ -> _hash_absorb_ -> _decrypt_ -> _hash_finalize_dec_ -> _hash_verify_.
+ ** Transition to _encrypt_ possible only if metadata allows encryption, else the CC is *invalidated*.
+ ** Transition to _decrypt_ possible only if metadata allows decryption, else the CC is *invalidated*.
+
+* *Behavior:*
+ ** In state _initial_ :
+  *** Any {nbsp}``ace.exec``{nbsp} operation will produce a null output and the CC will be *invalidated*.
+  *** The following initialization operations are performed:
+    . `enc_key`, `auth_key <- RFC8452_KeyDeriv(key)`,
+    . `auth_tag`, `nonce`, `auth_tag`, `counter <- 0`.
+
+  ** In state _set_public_value_:
+    *** We can only issue an {nbsp}``ace.exec``{nbsp} of the form{nbsp} `ace.exec Cn|C[Xn], Vs`{nbsp} to set the `nonce`.
+    *** If{nbsp} `ace.exec Cn|C[Xn], Vs`,{nbsp} is repeated, it will just re-write the `nonce`.
+    *** If no such {nbsp} `ace.exec Cn|C[Xn], Vs`{nbsp} to set is issued, `nonce` remains zero.
+    *** Other forms of `ace.exe` are not allowed, they will produce null outputs and the CC is *invalidated*.
+
+  ** In state _hash_absorb_, we can only issue an {nbsp}``ace.exec``{nbsp} of the form{nbsp} `ace.exec Cn|C[Xn], Vs`{nbsp} to accumulate a value in the `auth_tag`.  [.red]#Steps to be added.#
+
+  ** In state _hash_finalize_enc_, we can only issue an {nbsp}``ace.exec``{nbsp} of the form{nbsp} `ace.exec Vd, Cn|C[Xn], Vs`{nbsp} where `Vs = len_A @ len_C` (two fields of `b/2` bits), to finalize the computation of the SIV/tag and output it.
+  ** If the _encrypt_ state, we can only issue an {nbsp}``ace.exec``{nbsp} of the form{nbsp} `ace.exec Vd, Cn|C[Xn], Vs`{nbsp} to encrypt `Vs` into `Vd`. [.red]#Steps to be added.# (This is a counter mode operation.)
+
+  ** In state _decrypt_ ... [.red]#To be completed.#
+  ** In state _hash_finalize_dec_ ... [.red]#To be completed.#
+ ** In state _hash_verify_, we can only issue an {nbsp}``ace.exec``{nbsp} of the form{nbsp} `ace.exec Cn|C[Xn], Vs`{nbsp}.
+    `Vs` is compared to `auth_tag`:
+  *** If the values match, the state is changed to _completed_, and `ace.error` returns no error.
+  *** If the values do not match, the state is changed to _completed_, and `ace.error` returns error `ace_err_authentication`.
+
+  ** Upon completion of `ace.import`, the ACE unit recomputes `hash_key` and `auth_key`
+    . `enc_key`, `auth_key <- RFC8452_KeyDeriv(key)`.
 
 
 [[ACE-CMAC]]
@@ -1590,7 +1641,10 @@ Generic Functions:::
 
 Algorithm-Specific Functions:::
 
-* `encrypt_block(p) -> c` encrypts plaintext block `p` using the key, and returns the ciphertext result `c`.
+* `encrypt_block(key,p) -> c` encrypts block `p` using the key, and returns the result `c`.
+* `polyval(data)` absorbs data into the hash function by performing a step of polyval.
+  . `auth_tag <- auth_tag xor Vs`.
+  . `auth_tag <- auth_tag *' hash_key`, where the `*'` is the multiplication in the Montgomery domain of Polyval.
 
 State Machine:::
 
