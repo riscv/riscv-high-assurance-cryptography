@@ -881,9 +881,10 @@ NOTE: In many algorithms, the successive stage is often implied by the operation
 just performed. For instance, in AEAD algorithms, after setting an IV or a nonce,
 one could argue that there is no need to explicitly move to the stage of absorbing
 the associated data into the hash. However, to avoid inconsistency, we have chosen
-not to make such stage transitions implicit, even if this could save a handful
-of instructions, except for transitions to states such as _completed_ or _invalidated_
-(see <<ACE-stage-constants>> and <<ACE-Algorithms>>).
+to avoid implicit stage transitions, even if this could save a handful of instructions,
+unless if strictly necessary. This can occur for security reasons, such as going to
+hash finalization to hash verification states, or transitions to states such as
+_completed_ or _invalidated_ (see <<ACE-stage-constants>> and <<ACE-Algorithms>>).
 
 [[ACE-instruction-size]]
 ==== ace.size
@@ -1154,20 +1155,6 @@ This is implemented as a CSR read operation, reading the error field of
 `acecsr` and masking it.
 The error value list is architected and given in <<ACE-error-codes>>.
 
-// ==== ace.vr_busy
-//
-// `ace.vr_busy   Vd`
-//
-// Can be CSR read operation.
-// It will return 1 or 0 whether there is at least one running ACE operation expected to write on the vector register `Vd`.
-//
-// ==== ace.cc_busy
-//
-// `ace.cc_busy   Cd|C[Xd]`
-//
-// Can be CSR read operation.
-// It will return 1 or 0 whether there is at least one running ACE operation using the given CC.
-
 // ///////////////////////////////////////////////////////////////////////////////////////////
 
 [[ACE-trappable-insns-support]]
@@ -1182,14 +1169,14 @@ Upon a trap, the handler identifies the trapped instruction and uses the Algorit
 In order to support interrupts of the emulation libraries, such instructions need to respect the value of `ccstart` and update it in accordance with the expected architected behavior the trapped instructions.  We provide here non-normative definition for such a set of instructions in <<ACE-trappable-insns-support>>.
 Three types of supporting operations are required:
 
-* A `mv` instruction that loads a specified number of bytes from a GPR or vector register into a CC within the ACE unit.
-  Initially, `ace.size` returns the total payload length to transfer.
-  After each move, this value is updated to reflect the remaining bytes.
-  The instruction also updates the `ccstart` CSR to follow the internal progress.
-* A corresponding `mv` instruction that exports a specified number of bytes from a CC to a GPR or vector register.
-  The behavior of `ace.size` will be similar to that of the move instruction, but it will count the number of bytes to be exported.
-* A “`close`” instruction to suspend or finalize the procedure.
-  If executed before all bytes are transferred, the CC state matches that of an interrupted monolithic instruction, including the Completion metadata field and the `ccstart` value. If executed after all bytes are transferred, it also performs any final cryptographic operations, such as authenticating the CC, if needed.
+ * A `mv` instruction that loads a specified number of bytes from a GPR or vector register into a CC within the ACE unit.
+   Initially, `ace.size` returns the total payload length to transfer.
+   After each move, this value is updated to reflect the remaining bytes.
+   The instruction also updates the `ccstart` CSR to follow the internal progress.
+ * A corresponding `mv` instruction that exports a specified number of bytes from a CC to a GPR or vector register.
+   The behavior of `ace.size` will be similar to that of the move instruction, but it will count the number of bytes to be exported.
+ * A “`close`” instruction to suspend or finalize the procedure.
+   If executed before all bytes are transferred, the CC state matches that of an interrupted monolithic instruction, including the Completion metadata field and the `ccstart` value. If executed after all bytes are transferred, it also performs any final cryptographic operations, such as authenticating the CC, if needed.
 
 These supporting instructions must be uninterruptible.
 
@@ -1230,10 +1217,10 @@ This includes:
 . A complete list of the *Allowed State Transitions*, including the conditions under which each transition is allowed.
 . The *Behavior* of all ACE instructions at each state.
 
-
+[[ACE-generic-rules]]
 ==== Generic Rules
 
-For modes of operations that can be instantiated with different primitives, we can specify more general rules, where the differences between instantiations in some cases are limited to the widths of their inputs and outputs of the primitive.
+For modes of operations that can be instantiated with different primitives, we specify more general rules, where the differences between instantiations in some cases are limited to the widths of the inputs and outputs of the primitive. If the primitive is a block cipher, then `b` is its block width in bits.
 
 Recall that the architecture views CC as a structure with two fields: the metadata (currently 64 bits), which has a unique specification, and the content (variable length), which is algorithm-specific.
 
@@ -1546,7 +1533,7 @@ State Machine:::
   *** If the values match, the state is changed to _completed_, and `ace.error` returns no error.
   *** If the values do not match, the state is changed to _completed_, and `ace.error` returns error `ace_err_authentication`.
  ** Upon completion of `ace.import`, the ACE unit recomputes `hash_key`:
-      . `hash_key <- encrypt_block(key,0)`.
+  . `hash_key <- encrypt_block(key,0)`.
 
 
 [[ACE-GCM-SIV]]
@@ -1557,7 +1544,12 @@ The GCM-SIV mode's main differences with GCM are that
 . It is a MAC-then-Encrypt mode, whereas GCM is a Encrypt-then-MAC mode, therefore GCM-SIV is more amenable to Release of Unencrypted Plaintext (RUP) attacks;
 . Encryption requires two passes over the plaintext, since the tag computed on the AD and plaintext is used also as the initialization vector for the CTR encryption.
 
-The third difference affects the state machine. While GCM-SIV's decryption state machine is similar to the GCM's, the encryption state machine is different.
+The third difference affects the state machine. While GCM-SIV's decryption state machine is similar to the GCM's, the encryption state machine is different:
+
+* During encryption, in state _hash_absorb_ we absorb the entire associated data, then the plaintext, and finally we move to state _hash_finalize_enc_ where we also absorb the lengths and produce the SIV/tag.
+* During decryption, on the other hand, in state _hash_absorb_ we absorb only the associated data, and in state _decrypt_ the ciphertext is decrypted and the plaintext is absorbed into the hash contextually -- only then we move to state _hash_finalize_dec_ to absorb the lengths, produce the SIV/tag, and later it is internally compared to the actual SIV/tag.
+
+// Comment to reset indentation of blocks
 
 Block Size:::
 
@@ -1621,18 +1613,18 @@ State Machine:::
     . `auth_tag`, `nonce`, `auth_tag`, `counter <- 0`.
 
   ** In state _set_public_value_:
-    *** We can only issue  ``ace.exec`` instructions of the form{nbsp} `ace.exec Cn|C[Xn], Vs`{nbsp} to set the `nonce`.
-    *** If{nbsp} `ace.exec Cn|C[Xn], Vs`,{nbsp} is repeated, it will just re-write the `nonce`.
+    *** We can only issue  ``ace.exec`` instructions of Form B, i.e. "```ace.exec Cn|C[Xn], Vs```," to set the value of `nonce`.
+    *** If{nbsp} `ace.exec Cn|C[Xn], Vs`,{nbsp} is repeated, it will just re-write the value of `nonce`.
     *** If no such {nbsp} `ace.exec Cn|C[Xn], Vs`{nbsp} to set is issued, `nonce` remains zero.
     *** Other forms of `ace.exe` are not allowed, they will produce null outputs and the CC is *invalidated*.
 
   ** In state _hash_absorb_:
    *** We only issue  ``ace.exec`` instructions of the form{nbsp} `ace.exec Cn|C[Xn], Vs`{nbsp} to accumulate a value in the `auth_tag`:
-   i.e., performing `absorb_into_hash(Vs)`
+   i.e., perform `absorb_into_hash(Vs)`.
    *** Other forms of `ace.exe` are not allowed, they will produce null outputs and the CC is *invalidated*.
 
   ** In state _hash_finalize_enc_,
-  we can only issue an {nbsp}``ace.exec``{nbsp} of Form A{nbsp} `ace.exec Vd, Cn|C[Xn], Vs`{nbsp} where it is the responsibility of the user to set +
+  we can only issue an {nbsp}``ace.exec``{nbsp} of Form A, i.e., "```ace.exec Vd, Cn|C[Xn], Vs```," where it is the responsibility of the user to set +
   `Vs = IntTo{b/2}Bits(bit_length(AD)) @ IntTo{b/2}Bits(bit_length(plaintext))`, +
   to finalize the computation of the SIV/tag, by performing:
     . `absorb_into_hash(Vs)` (which modifies `auth_tag`).
@@ -1644,31 +1636,31 @@ State Machine:::
      *** `auth_tag <- tmp[b-1:0] @ (b/4)b0`.
      *** `Vd <- (tmp >> b/4)`.
 
-  ** In state _encrypt_, we can only issue  ``ace.exec`` instructions of the form{nbsp} `ace.exec Vd, Cn|C[Xn], Vs`{nbsp} to encrypt `Vs` into `Vd`.
+  ** In state _encrypt_, we can only issue  ``ace.exec`` instructions of the Form A, namely "```ace.exec Vd, Cn|C[Xn], Vs```," to encrypt `Vs` into `Vd` as follows:
    . If `counter = 0`, the CC is *invalidated*.
-   . ``Vd <- Vs xor encrypt_block(key, 1b1 @ `` +
-    {nbsp}{nbsp}{nbsp}{nbsp}{nbsp}{nbsp}{nbsp}{nbsp}{nbsp}{nbsp}{nbsp}{nbsp}{nbsp}{nbsp}{nbsp}{nbsp}{nbsp}
-    ``@ auth_tag[b-2:b/4] @ (auth_tag[b/4-1:0] + counter % 2^b/4^) )``.
+   . ``Vd <- Vs xor encrypt_block(key,`` +
+     ``{nbsp}{nbsp}{nbsp}{nbsp}{nbsp}{nbsp}{nbsp}{nbsp}{nbsp}{nbsp}{nbsp}{nbsp}{nbsp}{nbsp}``
+     ``1b1 @ auth_tag[b-2:b/4] @ (auth_tag[b/4-1:0] + counter % 2^b/4^))``.
+   . `counter <- counter + 1`.
 
- ** In state _decrypt_,  [.red]#To be completed.# we can only issue  ``ace.exec`` instructions of the form{nbsp} `ace.exec Vd, Cn|C[Xn], Vs`{nbsp} to
-   decrypt `Vs` into `Vd`, namely and then absorb the plaintext `Vs` into the `auth_tag`, namely
+ ** In state _decrypt_,  we can only issue  ``ace.exec`` instructions of the Form A, i.e., "```ace.exec Vd, Cn|C[Xn], Vs```," to
+   decrypt `Vs` into `Vd` and then absorb the plaintext `Vs` into the `auth_tag`, namely
      . If `counter = 0`, the CC is *invalidated*.
+     . ``Vs <- Vd xor encrypt_block(key,`` +
+       ``{nbsp}{nbsp}{nbsp}{nbsp}{nbsp}{nbsp}{nbsp}{nbsp}{nbsp}{nbsp}{nbsp}{nbsp}{nbsp}{nbsp}``
+       ``1b1 @ auth_tag[b-2:b/4] @ (auth_tag[b/4-1:0] + counter % 2^b/4^))``.
      . `absorb_into_hash(Vs)`.
-     . if (`SIV` is `b` bits long) then +
-       {nbsp}{nbsp}``Vd  <- Vs xor encrypt_block(key, 1b1 @`` +
-       {nbsp}{nbsp}{nbsp}{nbsp}{nbsp}{nbsp}{nbsp}{nbsp}{nbsp}{nbsp}{nbsp}{nbsp}{nbsp}
-       ``@ auth_tag[b-2:b/4] @ (auth_tag[b/4-1:0] + counter % 2^b/4^))`` +
-       else (i.e., `SIV` is `3b/4` bits long) +
-       {nbsp}{nbsp}``Vd  <- Vs xor encrypt_block(key,SIV @ counter)``
      . `counter <- counter + 1`.
 
- ** In state _hash_finalize_dec_, we can only issue  ``ace.exec`` instructions of the form{nbsp} `ace.exec Cn|C[Xn], Vs`{nbsp} where
-   `Vs = len_A @ len_C` (two fields of `b/2` bits), to compute the authentication tag as follows:
-     . `absorb_into_hash(Vs)`.
-     . [.red]#To be completed.#
+ ** In state _hash_finalize_dec_,
+    we can only issue an ``ace.exec`` of Form B, namely "```ace.exec Cn|C[Xn], Vs```," where it is the responsibility of the user to set +
+    `Vs = IntTo{b/2}Bits(bit_length(AD)) @ IntTo{b/2}Bits(bit_length(plaintext))`. +
+    The semantics are almost identical to issuing a Form A ``ace.exec`` in state _hash_finalize_dec_ except that the SIV/tag value is _not_ output, but is only kept in `auth_tag`. +
+ +
+    [.red]#Not sure this is necessary.# Finally, the state is automatically changed to _hash_verify_ (this is a very rare case of automatic transition that does not lead to state _completed_ or _invalid_) to prevent attacks where the adversary can extend the absorbtion/encryption process to try several values.
 
-  ** In state _hash_verify_, we can only issue  ``ace.exec`` instructions of the form{nbsp} `ace.exec Cn|C[Xn], Vs`{nbsp}.
-    `Vs` is compared to `auth_tag`:
+  ** In state _hash_verify_, we can only issue a Form B ``ace.exec`` instructions, i.e., "```ace.exec Cn|C[Xn], Vs`{nbsp}```", which
+    compares `Vs` to `auth_tag`:
   *** If the values match, the state is changed to _completed_, and `ace.error` returns no error.
   *** If the values do not match, the state is changed to _completed_, and `ace.error` returns error `ace_err_authentication`.
 
@@ -1716,8 +1708,6 @@ State Machine:::
  ** Upon issuing `ace.stage Cn|C[Xn], _ace_state_hash_finalize_, Xs` where `Xs` contains the length of the last block, the CC will transition to state _hash_finalize_, where any further {nbsp} `ace.exec Cn|C[Xn], Vs` will simply set (and possibly overwrite) the last partial block.
  ** In state _hash_finalize_, the computation of the hash is completed, and it can be exported using{nbsp} `ace.exec Vd, Cn|C[Xn]`.
  ** In any state, issuing a different form of {nbsp}``ace.exec``{nbsp} then the allowed one will produce a null output and the CC will be *invalidated*.
-
-[.red]#TBD#
 
 ==== Rules for Threshold implementations
 
