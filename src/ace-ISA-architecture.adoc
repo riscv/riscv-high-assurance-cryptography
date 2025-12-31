@@ -1491,13 +1491,12 @@ State Machine:::
 
 * *Allowed State Transitions:*
  ** From all states to _initial_.
- ** _initial_ -> _set_public_value_.
- ** _set_public_value_ -> _hash_absorb_.
- ** _hash_absorb_ -> _encrypt_, if metadata allows encryption, else the CC is *invalidated*.
- ** _hash_absorb_ -> _decrypt_, if metadata allows decryption, else the CC is *invalidated*.
- ** _encrypt_ -> _hash_finalize_enc_.
+ ** _initial_ -> _set_public_value_ -> _hash_absorb_.
+ ** _hash_absorb_ -> _encrypt_ -- if metadata allows encryption, else the CC is *invalidated*.
+ ** _hash_absorb_ -> _decrypt_ -- if metadata allows decryption, else the CC is *invalidated*.
+ ** _encrypt_ -> _hash_finalize_enc_, later automatically transitioning to _completed_.
  ** _decrypt_ -> _hash_finalize_dec_.
- ** _hash_finalize_dec_ -> _hash_verify_.
+ ** _hash_finalize_dec_ -> _hash_verify_, later automatically transitioning to _completed_.
 
 * *Behavior:*
  ** In state _initial_ :
@@ -1522,6 +1521,7 @@ State Machine:::
     . `absorb_into_hash(tmp)`.
     . `Vd <- tmp`.
     . `counter[b/4-1:0] <- counter[b/4-1:0] + 1`.
+
  ** In state _hash_finalize_enc_, we can only issue an {nbsp}``ace.exec``{nbsp} of the form{nbsp} `ace.exec Vd, Cn|C[Xn], Vs`{nbsp} where `Vs = len_A @ len_C` (two fields of `b/2` bits), to compute the authentication tag and complete the algorithm as follows:
     . `absorb_into_hash(Vd)`.
     . `auth_tag <- auth_tag xor encrypt_block(key,counter[b-1,b/4] @ 0[b/4-1,0])`.
@@ -1546,6 +1546,13 @@ State Machine:::
 
 [[ACE-GCM-SIV]]
 ===== GCM-SIV mode
+
+The GCM-SIV mode's main differences with GCM are that
+. Both encryption and authentication keys are derived from the main key, whereas in GCM the main key is used also for encryption;
+. It is a MAC-then-Encrypt mode, whereas GCM is a Encrypt-then-MAC mode, therefore GCM-SIV is more amenable to Release of Unencrypted Plaintext (RUP) attacks;
+. Encryption requires two passes over the plaintext, since the tag computed on the AD and plaintext is used also as the initialization vector for the CTR encryption.
+
+The third difference affects the state machine. While GCM-SIV's decryption state machine is similar to the GCM's, the encryption state machine is different.
 
 Block Size:::
 
@@ -1580,7 +1587,8 @@ Generic Functions:::
 Algorithm-Specific Functions:::
 
 * `encrypt_block(key,p) -> c` encrypts block `p` using the key, and returns the result `c`.
-* `polyval(data)` absorbs data into the hash function by performing a step of (a variant of) GHASH or POLYVAL.
+* `polyval(data)` absorbs data into the hash function by performing a step of (a variant of) GHASH or POLYVAL as specified by the algorithm
+   (for instance, AES-GCM-SIV uses POLYVAL):
   . `auth_tag <- auth_tag xor Vs`.
   . `auth_tag <- auth_tag * hash_key` in an algorithm-specific Galois Field, or +
   `auth_tag <- auth_tag $ hash_key`, where the `$` denotes the multiplication in the Montgomery domain of POLYVAL.
@@ -1613,8 +1621,24 @@ State Machine:::
   ** In state _hash_finalize_enc_, we can only issue an {nbsp}``ace.exec``{nbsp} of the form{nbsp} `ace.exec Vd, Cn|C[Xn], Vs`{nbsp} where `Vs = len_A @ len_C` (two fields of `b/2` bits), to finalize the computation of the SIV/tag and output it.
   ** If the _encrypt_ state, we can only issue an {nbsp}``ace.exec``{nbsp} of the form{nbsp} `ace.exec Vd, Cn|C[Xn], Vs`{nbsp} to encrypt `Vs` into `Vd`. [.red]#Steps to be added.# (This is a counter mode operation.)
 
-  ** In state _decrypt_ ... [.red]#To be completed.#
-  ** In state _hash_finalize_dec_ ... [.red]#To be completed.#
+
+  ** In state _hash_verify_, we can only issue an {nbsp}``ace.exec``{nbsp} of the form{nbsp} `ace.exec Cn|C[Xn], Vs`{nbsp}.
+     `Vs` is compared to `auth_tag`:
+   *** If the values match, the state is changed to _completed_, and `ace.error` returns no error.
+   *** If the values do not match, the state is changed to _completed_, and `ace.error` returns error `ace_err_authentication`.
+
+ ** In state _decrypt_,  [.red]#To be completed.# we can only issue an {nbsp}``ace.exec``{nbsp} of the form{nbsp} `ace.exec Vd, Cn|C[Xn], Vs`{nbsp} to
+   decrypt `Vs` into `Vd`, namely and then absorb the plaintext `Vs` into the `auth_tag`, namely
+     . If `counter[b/4-1:0] = 0`, the CC is *invalidated*.
+     . `absorb_into_hash(Vs)`.
+     . `Vd  <- Vs xor encrypt_block(key,counter)`.
+     . `counter[b/4-1:0] <- counter[b/4-1:0] + 1`.
+
+ ** In state _hash_finalize_dec_, we can only issue an {nbsp}``ace.exec``{nbsp} of the form{nbsp} `ace.exec Cn|C[Xn], Vs`{nbsp} where
+   `Vs = len_A @ len_C` (two fields of `b/2` bits), to compute the authentication tag as follows:
+     . `absorb_into_hash(Vs)`.
+     . [.red]#To be completed.#
+
  ** In state _hash_verify_, we can only issue an {nbsp}``ace.exec``{nbsp} of the form{nbsp} `ace.exec Cn|C[Xn], Vs`{nbsp}.
     `Vs` is compared to `auth_tag`:
   *** If the values match, the state is changed to _completed_, and `ace.error` returns no error.
