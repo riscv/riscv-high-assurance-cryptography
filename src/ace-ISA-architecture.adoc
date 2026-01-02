@@ -1473,7 +1473,36 @@ State Machine:::
   *** ... and updates the mask: `mask <- update_mask(mask)`.
   *** If `ace.stage` is issued to return to state _initial_, we can reuse the CC with a new `IV`.
 
+
+Using such an XEX mode is very easy. We include pseudocode for encryption only, decryption is entirely similar.
+
+.Pseudocode for encryption in any IV-based non-authenticated modes without associated data
+[C]
+----
+// Acquire payload
+- Info: plaintext = *PT
+- Call an API to get the corresponding key from a key management applet or HW block.
+- The API returns the SCC. Assume X5 is the pointer to it.
+- Allocate memory for ciphertext buffer CT (if not same as PT).
+
+ace.import C0, (X5)
+
+vsetvli zero, 4, e32, m1, ta, ma       // Use 128-bit vectors
+
+ace.stage C0, #const_set_public_value  // the “public” value is often an IV or a nonce.
+V3 ← IV
+ace.exec C0, V3
+
+ace.state C0, #ace_state_encrypt       // Configure CC for encryption
+for i = 0 to ceil(len_in_bytes(plaintext)/16)-1  do
+    - load V0 from address plaintext+16*i
+    ace.exec V0, C0, V0                // Encrypt one block of the plaintext
+    - store V0 at address ciphertext+16*i
+----
+
 To implement the XTS mode, the ciphertext stealing part is easy to realize using the XEX algorithm together with vector masking and shifting operations.
+
+// N.B. another ace.stage C0, #const_set_public_value would reset the internal state and allow to begin another decryption with a new IV.
 
 <<<
 
