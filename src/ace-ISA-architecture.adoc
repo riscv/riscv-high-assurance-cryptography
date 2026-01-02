@@ -1554,7 +1554,7 @@ Algorithm-Specific Functions:::
 
 State Machine:::
 
-* *States:* _initial_ (0), _set_public_value_ (8), _hash_absorb_ (3), _encrypt_ (1), _hash_finalize_ (4), _decrypt_ (2), _hash_finalize_dec_ (5), and _hash_verify_ (6).
+* *States:* _initial_ (0), _set_public_value_ (8), _hash_absorb_ (3), _encrypt_ (1), _hash_finalize_enc_ (4), _decrypt_ (2), _hash_finalize_dec_ (5), and _hash_verify_ (6).
 
 * *Allowed State Transitions:*
  ** From all states to _initial_.
@@ -1613,6 +1613,68 @@ State Machine:::
  ** Upon completion of `ace.import`, the ACE unit recomputes `hash_key`:
   . `hash_key <- encrypt_block(key,0)`.
 
+//
+
+In <<ACE-pseudocode-GCM-encryption>> we show pseudocode for GCM encryption.
+
+[[ACE-pseudocode-GCM-encryption]]
+.GCM Encryption
+[C]
+----
+// Acquire payload, initialize
+- Info: authenticated data = *AD
+- Info: plaintext = *PT
+- Process gets a GCM encryption CC from an API. Assume X5 is the pointer to the CC.
+- Allocate memory for ciphertext buffer CT (if not same as PT).
+
+vsetvli zero, 4, e32, m1, ta, ma       // Use 128-bit vectors
+ace.import C0, (X5)
+
+// The next operations set the nonce (and the derived Authentication Key).
+ace.stage C0, #ace_const_set_public_value
+V3 ← nonce
+ace.exec C0, V3
+
+// Compute AD contribution to Auth Data
+ace.stage C0, #ace_const_hash_absorb
+for i = 0 to len_in_bytes(AD)/16-1  do
+    - load V0 from address AD+16*i
+    ace.exec C0, V0                    // Absorb it into hash
+
+// Encrypt plaintext and continue computation of auth_tag
+for i = 0 to len_in_bytes(PT)/16-1 do
+    - load V0 from address PT+16*i
+    ace.exec V1, C0, V0
+    - store V1 at address CT+16*i
+
+// Finally, we absorb the lengths into auth_tag, finalize it, and output it
+ace.stage C0, #ace_const_hash_finalize_enc
+V1 ← IntTo64Bits(len(AD)) @ IntTo64Bits(len(PT))
+ace.exec V2, C0, V1                    // V2 contains the finalized hash
+----
+
+<<<
+
+GCM decryption is nearly identical, with the following differences:
+the roles of `PT` and `CT` are reversed,
+states _encrypt_ and _hash_finalize_enc_ are replaced by states _decrypt_ and _hash_finalize_dec_,
+and the last lines are as follows:
+
+[[ACE-pseudocode-GCM-decryption-difference]]
+.GCM Decryption
+[C]
+----
+// Finally, we absorb the lengths into auth_tag, finalize it, and verify it it
+ace.stage C0, #ace_const_hash_finalize_dec
+V1 ← IntTo64Bits(len(AD)) @ IntTo64Bits(len(CT))
+ace.exec V2, C0, V1                    // V2 contains the finalized hash
+
+ace.stage C0, #ace_const_hash_verify
+V1 ← tag_from_payload
+ace.exec C0, V1                        // V1 contains the tag from the input ciphertext
+ace.error X1
+if (X1 != 0) then { handle error }     // do not use the plaintext if error occurred
+----
 
 <<<
 
