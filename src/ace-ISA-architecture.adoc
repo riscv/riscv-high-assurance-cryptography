@@ -1612,8 +1612,8 @@ State Machine:::
    . `auth_tag <- auth_tag xor enc_block(key,counter[b-1,b/4] @ 0[b/4-1,0])`.
  ** In state _hash_verify_, we can only issue  ``ace.exec`` instructions of the form{nbsp} `ace.exec Cn|C[Xn], Vs`{nbsp}.
     `Vs` is compared to `auth_tag`:
-  *** If the values match, the state is changed to _completed_, and `ace.error` returns no error.
-  *** If the values do not match, the state is changed to _completed_, and `ace.error` returns error `ace_err_authentication`.
+    *** If the values match, then the state is changed to _completed_, and `ace.error` returns no error,
+        else the state is changed to _completed_, and `ace.error` returns `ace_err_authentication`.
  ** Upon completion of `ace.import`, the ACE unit recomputes `hash_key`:
   . `hash_key <- enc_block(key,0)`.
 
@@ -1688,7 +1688,9 @@ Consequently, an implementation based on a simpler ECB mode CC is possible,
 as shown below (for encryption only -- decryption is similar).
 However, this significantly increases code size and requires implementing `galois_mult(V4,V3)`.
 Adding a dedicated mode to the ACE unit is a minor effort, and it allows internal logic to optimize execution
-beyond the capabilities of, for instance, a compiler on an in-order CPU.
+beyond the capabilities of, for instance, a compiler on an in-order CPU. It also means that the CPU
+does not have to implement the carryless multiplication (cf. <<ACE-Dependencies>>),
+which saves hardware costs when several small cores share a single ACE unit.
 
 [[ACE-pseudocode-GCM-encryption-alternate]]
 .Implementing GCM encryption using an ECB CC
@@ -1706,8 +1708,8 @@ V5[127:32] ← IV
 V3 ← 0                                 // “Auth Data 1”
 ace.exec V4, C0, V3                    // compute H
 for i = 0 to len_in_bytes(AD)/16-1  do
-    load 16 bytes from AD+16*i into V1
-    V3 ← V3 ⊕ V1                       // Horner scheme add
+    - load 16 bytes from AD+16*i into V1
+    V3 ← V3 xor V1                     // Horner scheme add
     V3 ← galois_mult(V4,V3)            // Horner scheme mult
 
 counter ← 1                            // a 32-bit integer value
@@ -1715,17 +1717,17 @@ for i = 0 to len_in_bytes(PT)/16-1  do
     V5[32:0] ← counter
     - load 16 bytes from PT+16*i into V1
     ace.exec V2, C0, V5                // create mask by encrypting the counter
-    V1 ← V1 ⊕ V2                       // CTR encrypt
-    V3 ← V3 ⊕ V1                       // Horner scheme add
+    V1 ← V1 xor V2                     // CTR encrypt
+    V3 ← V3 xor V1                     // Horner scheme add
     V3 ← galois_mult(V4,V3)            // Horner scheme mult
     - store V1 at *(ciphertext+16*i))
     counter ← counter+1
 
-V3 ← V3 ⊕ (len(AD) || len(CT))         // Horner scheme add
+V3 ← V3 xor (len(AD) || len(CT))       // Horner scheme add
 V3 ← galois_mult(V4,V3)                // Horner scheme mult
 V5[32:0] ← 0                           // Prepare IV || 0 for tag encryption
 ace.exec V2, C0, V5
-tag ← V3 ⊕ V2                          // Last Horner scheme add
+tag ← V3 xor V2                        // Last Horner scheme add
 ----
 
 <<<
@@ -1866,8 +1868,8 @@ Accepting this redundant behavior simplifies the implementation of the state mac
     . else (tag length is `3b/4` bits)
      *** `auth_tag <- tmp[b-1:0] @ (b/4)b0`.
    . Finally, `auth_tag` and `SIV` are compared:
-     *** If the values match, the state is changed to _completed_, and `ace.error` returns no error.
-     *** If the values do not match, the state is changed to _completed_, and `ace.error` returns error `ace_err_authentication`.
+   *** If the values match, then the state is changed to _completed_, and `ace.error` returns no error,
+       else the state is changed to _completed_, and `ace.error` returns `ace_err_authentication`.
 
   ** Upon completion of `ace.import`, the ACE unit recomputes `hash_key` and `auth_key`
     . `enc_key`, `auth_key <- RFC8452_KeyDeriv(key)`.
