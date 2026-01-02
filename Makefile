@@ -20,6 +20,7 @@ VERSION ?= v0.0.0
 REVMARK ?= Draft
 DOCKER_IMG := docker.io/riscvintl/riscv-docs-base-container-image:latest
 DOCKER_BIN ?= docker
+
 ifneq ($(SKIP_DOCKER),true)
 	DOCKER_IS_PODMAN = \
 		$(shell ! ${DOCKER_BIN} -v 2>&1 | grep podman >/dev/null ; echo $$?)
