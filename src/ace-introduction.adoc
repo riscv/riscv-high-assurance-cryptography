@@ -100,22 +100,31 @@ Isolated software components (e.g., enclaves, realms, TrustZone applets) are bet
 . Revocation typically targets root keys. Since user software generally operates on derived keys, for instance session keys, it is only necessary that revocation be handled by the trusted firmware or hardware managing the root keys.
 . Applications that require direct software use of master keys (for instance for link and storage encryption) is usually limited to high-privilege environments. ACE is of course available to such environments as well.
 
-
-[comment]
---
-The present specification does not include a key revocation mechanism.
-Although future versions could support revocation via key identifiers and system-wide broadcasts, such functionality is intentionally excluded from ACE because it would introduce unnecessary architectural and implementation complexity.
-The rationale is as follows:
-. ACE is designed to prioritize performance and flexibility (for example, algorithmic abstraction). Comprehensive revocation mechanisms, such as usage counters or revocation lists, would significantly increase complexity and could adversely affect performance.
-. Multiple key revocation protocols exist, and each trusted TEE or hardware IP component is best suited to implement the protocol required by its own key provider. ACE permits the coexistence of multiple trusted key-providing components; enforcing a single, universal revocation mechanism would therefore be impractical. Moreover, the associated data structures could be large and complex, raising challenges for secure handling within the ACE unit, especially if external memory is required for those structures. For instance, the ACE unit would have to be agnostic to the external software stack's memory management while supporting a mechanism for securely obtaining protected memory from it.
-In contrast, separate software components protected by reverse sandboxing (enclaves, realms, trustzone applets, etc.) do not usually face such constraints and can be more easily updated and extended.
-. In most systems, revoked keys are master keys at the root of hierarchical key structures. TEE applets and hardware IP key management blocks typically provide derived keys (for example, session keys) to user software. In these cases, only trusted software or firmware continues to use master keys directly and should manage their revocation internally.
-. Scenarios in which master keys are used directly by software, rather than solely for key derivation, are generally confined to higher-privileged components.
---
-
 * **Prevention of misuse by compromised processes:**  ACE cannot fully prevent misuse by compromised processes, as these processes may still get access to CCs.
 ACE complements existing SW vulnerability exploitation countermeasures and process isolation, but cannot replace them.
 Furthermore, in certain modes, such as in counter-mode encryption, the same method enables both encryption and decryption, potentially enabling misuse by malicious processes. This type of risk cannot be mitigated by ACE.
+
+
+[[ACE-threat-model]]
+=== Threat Model
+
+The ACE threat model is straightforward.
+
+**Assets** consist of _keys_ and any other information that could aid an adversary in recovering plaintext or forging ciphertext. This includes items such as masks in tweakable XEX modes and derived keys in AES-GCM-SIV. The critical properties of these assets are their _confidentiality_ and _integrity_.
+
+**Adversaries** are assumed capable of compromising processes or gaining unauthorized access to memory contents, either through software exploitation or by abusing hardware interfaces (including SoC/memory interposition). The model does not assume an adversary capable of sophisticated hardware attacks to extract information from internal registers.
+
+Threats can be addressed in four ways:
+
+[horizontal]
+**C**:: _Control_ the threat by implementing full or partial mitigations.
+**A**:: _Accept_ the threat and its associated risks.
+**T**:: _Transfer_ the threat to another party better suited to address it.
+**S**:: _Suppress_ the features that give rise to the threat.
+
+ACE is designed to avoid the "***A***" and "***S***" options. It _controls_ threats through its own mechanisms and _transfers_ residual risk—specifically, the risk of key extraction from the privileged or trusted software and hardware environments that manage keys—to those same environments. For example, trusted software environments may employ control-flow integrity, memory encryption with integrity protection, and anti-replay mechanisms, while hardware key-management blocks can be hardened to protect entrusted keys.
+
+Direct plaintext leakage, memory corruption attacks against the ACE-using process, and Release of Unverified Plaintext (RUP) attacks on the cryptographic algorithms are considered out of scope. These threats cannot be mitigated by ACE because the processed information resides within the user process domain. Consequently, these threats are _accepted_.
 
 //
 // === High Level View of the Extension
