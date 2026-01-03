@@ -1441,19 +1441,19 @@ Data Structures:::
 * *Content, Internal*:
  ** `key`: `k/8` bytes.
  ** `IV`: `n/8` bytes (also 8|`n`).
- ** `counter`: `j/8` bytes (8|`j`).
+ ** `ctr`: `j/8` bytes (8|`j`). // The counter
 
 * *Content, Exported*:
 [start=0]
  . `key`: `k/8` bytes, or 8 bytes if a System Key index.
  . `IV`: `n/8` bytes.
- . `counter`: `j/8` bytes (8|`j`).
+ . `ctr`: `j/8` bytes (8|`j`).
 
 
 Algorithm-Specific Functions:::
 
 * `keystream_block(p) -> c` -- usually an encryption function.
-* `tick_counter()` -- updates the counter (either by a modular increment or a LFSR).
+* `tick_ctr()` -- updates the ctr (either by a modular increment or a LFSR).
 
 State Machine:::
 
@@ -1462,15 +1462,15 @@ State Machine:::
  ** _initial_ -> _set_public_value_ -> _operate_.
  ** All states to _initial_.
 * *Behavior:*
- ** In state _initial_, the `counter` and `IV` fields are set to 0 (`counter` is set to 1 if the algorithm is LFSR-based).
+ ** In state _initial_, the `ctr` and `IV` fields are set to 0 (`ctr` is set to 1 if the algorithm is LFSR-based).
  ** In state _set_public_value_, we can only issue ``ace.exec`` instructions of Form B, namely, "```ace.exec Cn|C[Xn], Vs```", which set the IV value to `Vs`.
  *** If no such instruction is issued, the value of the IV will remain zero.
   *** If such operations are issued more times, they will just update the IV value again. Since this can be done only before any encryption or decryption operation, this does not represent a security issue.
   *** Any other form of {nbsp}``ace.exec``{nbsp} will produce a null output and *invalidate* the CC.
  ** In state _operate_, we can only issue ``ace.exec`` instructions of Form C, "```ace.exec Vd, Cn|C[Xn]```", which perform:
-  . If in a CTR or LFSR mode then `tmp ← keystream_block(IV @ counter)`, +
-    else (i.e., if in a XCTR or XLFSR mode) `tmp ← keystream_block(IV xor counter)`,
-  . `tick_counter()`, and
+  . If in a CTR or LFSR mode then `tmp ← keystream_block(IV @ ctr)`, +
+    else (i.e., if in a XCTR or XLFSR mode) `tmp ← keystream_block(IV xor ctr)`,
+  . `tick_ctr()`, and
   . `Vd ← tmp`.
  ** In state _operate_, any other form of {nbsp}``ace.exec``{nbsp} will produce a null output and *invalidate* the CC.
 
@@ -1594,14 +1594,14 @@ Data Structures:::
  . `key`: `k/8` bytes, or 8 bytes if a System Key index.
 
 * *Content, Internal*:
- ** `counter`: `b/8` bytes.
+ ** `ctr`: `b/8` bytes. // the counter
  ** `hash_key`: `b/8` bytes.
  ** `auth_tag`: `b/8` bytes.
 
 * *Content, Exported*:
 [start=0]
  . `key`: `k/8` bytes, or 8 bytes if a System Key index.
- . `counter`: `b/8` bytes.
+ . `ctr`: `b/8` bytes.
  . `auth_tag`: `b/8` bytes.
 
 NOTE: There are no fields for the lengths of the AD and of the plaintext, as they are maintained by the calling software.
@@ -1634,42 +1634,42 @@ State Machine:::
   *** The following initialization operations are performed:
     . `hash_key <- enc_block(key,0)`,
     . `auth_tag <- 0`, and
-    . `counter <- 0`.
+    . `ctr <- 0`.
  ** In state _set_public_value_:
   *** We can only issue  ``ace.exec`` instructions of Form B, i.e., "```ace.exec Cn|C[Xn], Vs```," to set
-       . `counter <- Vs << b/4`  (i.e., the `b/4` most significant bits of `Vs` are ignored, and the `b/4` least significant bits of `counter` are set to zero.)
+       . `ctr <- Vs << b/4`  (i.e., the `b/4` most significant bits of `Vs` are ignored, and the `b/4` least significant bits of `ctr` are set to zero.)
   *** If{nbsp} `ace.exec Cn|C[Xn], Vs`,{nbsp} is repeated, it will just re-write the IV.
-  *** If no such {nbsp} `ace.exec Cn|C[Xn], Vs`{nbsp} to set is issued, counter remains zero.
+  *** If no such {nbsp} `ace.exec Cn|C[Xn], Vs`{nbsp} to set is issued, `ctr` remains zero.
   *** Any other form of {nbsp}``ace.exec``{nbsp} will produce null outputs and causes the CC to be *invalidated*.
 
  ** In state _hash_absorb_, we can only issue  ``ace.exec`` instructions of Form B, i.e., "```ace.exec Cn|C[Xn], Vs```" to absorb a data block in `auth_tag`, i.e.:
    . `absorb_into_hash(Vs)`.
  ** If the _encrypt_ state, we can only issue  ``ace.exec`` instructions of Form A, namely "```ace.exec Vd, Cn|C[Xn], Vs```" to
    encrypt `Vs` into `Vd`, and absorb the ciphertext `Vd` into the `auth_tag`, namely
-    . If `counter[b/4-1:0] = 0`, the CC is *invalidated*.
-    . `tmp <- Vs xor enc_block(key,counter)`.
+    . If `ctr[b/4-1:0] = 0`, the CC is *invalidated*.
+    . `tmp <- Vs xor enc_block(key,ctr)`.
     . `absorb_into_hash(tmp)`.
-    . `counter[b/4-1:0] <- counter[b/4-1:0] + 1 % 2^b/4^`.
+    . `ctr[b/4-1:0] <- ctr[b/4-1:0] + 1 % 2^b/4^`.
     . `Vd <- tmp`.
 
  ** In state _hash_finalize_enc_, we can only issue a Form A "```ace.exec Vd, Cn|C[Xn], Vs```," where +
  `Vs = IntTo{b/2}Bits(bit_length(AD)) @ IntTo{b/2}Bits(bit_length(plaintext))` +
  is set by the user, to compute the authentication tag and complete the algorithm as follows:
     . `absorb_into_hash(Vd)`.
-    . `auth_tag <- auth_tag xor enc_block(key,counter[b-1,b/4] @ 0[b/4-1,0])`.
+    . `auth_tag <- auth_tag xor enc_block(key,ctr[b-1,b/4] @ 0[b/4-1,0])`.
     . Finally, `auth_tag` is returned in `Vd`, and the state is changed to _completed_.
  ** In state _decrypt_, we can only issue  ``ace.exec`` instructions of the form{nbsp} `ace.exec Vd, Cn|C[Xn], Vs`{nbsp} to
    absorb the ciphertext `Vs` into the `auth_tag`, then decrypt `Vs` into `Vd`, namely
-   . If `counter[b/4-1:0] = 0`, the CC is *invalidated*.
+   . If `ctr[b/4-1:0] = 0`, the CC is *invalidated*.
    . `absorb_into_hash(Vs)`.
-   . `Vd  <- Vs xor enc_block(key,counter)`.
-   . `counter[b/4-1:0] <- counter[b/4-1:0] + 1`.
+   . `Vd  <- Vs xor enc_block(key,ctr)`.
+   . `ctr[b/4-1:0] <- ctr[b/4-1:0] + 1`.
 
 ** In state _hash_finalize_dec_, we can only issue a Form A "```ace.exec Vd, Cn|C[Xn], Vs```" where +
  `Vs = IntTo{b/2}Bits(bit_length(AD)) @ IntTo{b/2}Bits(bit_length(plaintext))`, +
  is formed by the user  to compute the authentication tag as follows:
     . `absorb_into_hash(Vs)`.
-   . `auth_tag <- auth_tag xor enc_block(key,counter[b-1,b/4] @ 0[b/4-1,0])`.
+   . `auth_tag <- auth_tag xor enc_block(key,ctr[b-1,b/4] @ 0[b/4-1,0])`.
  ** In state _hash_verify_, we can only issue  ``ace.exec`` instructions of the form{nbsp} `ace.exec Cn|C[Xn], Vs`{nbsp}.
     `Vs` is compared to `auth_tag`:
     *** If the values match, then the state is changed to _completed_, and `ace.error` returns no error,
@@ -1795,7 +1795,7 @@ tag ← V3 xor V2                        // Last Horner scheme add
 [[ACE-GCM-SIV]]
 ==== GCM-SIV mode
 
-The GCM-SIV mode's main differences with GCM are that
+The GCM-SIV mode's main differences with GCM are that:
 
 . Both encryption and authentication keys are derived from the main key, whereas in GCM the main key is used also for encryption;
 . It is a MAC-then-Encrypt mode, whereas GCM is a Encrypt-then-MAC mode, therefore GCM-SIV is more amenable to Release of Unencrypted Plaintext (RUP) attacks;
@@ -1826,7 +1826,7 @@ Data Structures:::
  ** `enc_key`: `k/8` bytes.
  ** `auth_key`: `b/8` bytes.
  ** `nonce`: `3b/32` bytes (`3b/4` bits).
- ** `counter`: `b/32` bytes (`b/4` bits).
+ ** `ctr`: `b/32` bytes (`b/4` bits).
  ** `auth_tag`: `b/8` bytes.
  ** `SIV`: `b/8` or `3b/32` bytes (`b` or `3b/4` bits).
 +
@@ -1838,7 +1838,7 @@ The public `SIV` value is computed by clearing the most significant bit of `auth
 [start=0]
  . `key`: `k/8` bytes.
  . `nonce`, `3b/32` bytes.
- . `counter`, `b/32` bytes.
+ . `ctr`, `b/32` bytes. // the counter
  . `auth_tag`, `b/8` bytes.
  . `SIV`, `b/8` bytes.
 
@@ -1874,7 +1874,7 @@ State Machine:::
   *** Any {nbsp}``ace.exec``{nbsp} operation will produce a null output and the CC will be *invalidated*.
   *** The following initialization operations are performed:
     . `enc_key`, `auth_key <- RFC8452_KeyDeriv(key)`,
-    . `nonce`, `counter`, `auth_tag`, `SIV` <- 0`.
+    . `nonce`, `ctr`, `auth_tag`, `SIV` <- 0`.
 
   ** In states _set_public_value_, resp. _set_public_value_2_:
     *** We can only issue  ``ace.exec`` instructions of Form B, i.e. "```ace.exec Cn|C[Xn], Vs```," to set the value of `nonce`, resp. `SIV`.
@@ -1887,15 +1887,15 @@ setting the SIV while encrypting, since that field is not used in the encryption
 Accepting this redundant behavior simplifies the implementation of the state machine.
 +
 ** In state _hash_absorb_:
-   *** We only issue  ``ace.exec`` instructions of the form{nbsp} `ace.exec Cn|C[Xn], Vs`{nbsp} to accumulate a value in the `auth_tag`:
+   *** Only ``ace.exec`` instructions of the form "```ace.exec Cn|C[Xn], Vs```" can be issued. Such an instruction accumulates a value in the `auth_tag`:
    i.e., perform `absorb_into_hash(Vs)`.
-   *** Other forms of `ace.exec` are not allowed, they will produce null outputs and the CC is *invalidated*.
+   *** Other forms of `ace.exec` will produce null outputs and *invalidate* the CC.
 
   ** In state _hash_finalize_enc_,
   we can only issue an {nbsp}``ace.exec``{nbsp} of Form A, i.e., "```ace.exec Vd, Cn|C[Xn], Vs```," where it is the responsibility of the user to set +
   `Vs = IntTo{b/2}Bits(bit_length(AD)) @ IntTo{b/2}Bits(bit_length(plaintext))`, +
   to finalize the computation of the SIV/tag, by performing:
-    . `absorb_into_hash(Vs)` (which modifies `auth_tag`).
+    . `absorb_into_hash(Vs)`.
     . `tmp <- enc_block(enc_key, 1b0 @ ((auth_tag xor N)[b-2:0]))`
     . If tag length is `b` bits, then
      *** `SIV <- tmp`.
@@ -1905,22 +1905,22 @@ Accepting this redundant behavior simplifies the implementation of the state mac
      *** `Vd <- (tmp >> b/4)`.
 
   ** In state _encrypt_, we can only issue  ``ace.exec`` instructions of the Form A, namely "```ace.exec Vd, Cn|C[Xn], Vs```," to encrypt `Vs` into `Vd` as follows:
-   . If `counter = 0`, then the CC is *invalidated*.
+   . If `ctr = 0`, then the CC is *invalidated*.
    . If the `SIV` is `b`-bits long, then +
-     *** ``Vd <- Vs xor enc_block(key, 1b1 @ SIV[b-2:b/4] @ (SIV[b/4-1:0] + counter % 2^b/4^)),``
+     *** ``Vd <- Vs xor enc_block(key, 1b1 @ SIV[b-2:b/4] @ (SIV[b/4-1:0] + ctr % 2^b/4^)),``
    . else (the `SIV` is `3b/4`-bits long) +
-      *** ``Vd <- Vs xor enc_block(key, 1b1 @ SIV[3b/4-2] @ counter``.
-   . `counter <- counter + 1`.
+      *** ``Vd <- Vs xor enc_block(key, 1b1 @ SIV[3b/4-2:0] @ ctr``.
+   . `ctr <- ctr + 1`.
 
  ** In state _decrypt_,  we can only issue  ``ace.exec`` instructions of the Form A, i.e., "```ace.exec Vd, Cn|C[Xn], Vs```," to
    decrypt `Vs` into `Vd` and then absorb the plaintext `Vs` into the `auth_tag`, namely
-     . If `counter = 0`, then the CC is *invalidated*.
+     . If `ctr = 0`, then the CC is *invalidated*.
      . If the `SIV` is `b`-bits long, then +
-       *** ``Vd <- Vs xor enc_block(key, 1b1 @ SIV[b-2:b/4] @ (SIV[b/4-1:0] + counter % 2^b/4^)),``
+       *** ``Vd <- Vs xor enc_block(key, 1b1 @ SIV[b-2:b/4] @ (SIV[b/4-1:0] + ctr % 2^b/4^)),``
      . else (it is `3b/4`-bits long) +
-       *** ``Vd <- Vs xor enc_block(key, 1b1 @ SIV[3b/4-2] @ counter``.
+       *** ``Vd <- Vs xor enc_block(key, 1b1 @ SIV[3b/4-2:0] @ ctr``.
      . `absorb_into_hash(Vs)`.
-     . `counter <- counter + 1`.
+     . `ctr <- ctr + 1`.
 
  ** In state _hash_finalize_dec_,
     we can only issue an ``ace.exec`` of Form B, namely "```ace.exec Cn|C[Xn], Vs```," where it is the responsibility of the user to set +
