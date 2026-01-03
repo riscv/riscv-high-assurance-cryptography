@@ -651,7 +651,7 @@ Algorithm is ready to process.
 ace_state_hash_finalize_enc             | Finalize the internal state of a hash function (including for the encryption algorithm of an for an authenticated encryption mode of operation) and prepare it for outputting the result. In this state additional data may be absorbed, such as lengths.
 |   5   | ace_state_hash_finalize_dec   | Finalize the internal state of a hash function for the decryption algorithm an authenticated decryption mode of operation. In this state additional data may be absorbed, such as lengths.
 |   6   | ace_state_hash_verify         | Finalize the internal state of a hash function and compare it to the provided value.
-|   7   | ace_state_last_block_length   | For a hash or MAC function, the next `ace.exec` this is the length of the last block of data.
+|   7   | ace_state_last_block_len   | For a hash or MAC function, the next `ace.exec` this is the length of the last block of data.
 |   8   | ace_state_set_public_value    | Set a public value (like a nonce or an IV) in an algorithm. Some algorithms require more than one public value (for instance, they may admit a re-useable hash of some associated data and a unique nonce), in which case the second public value can be set using the next message.
 |   9   | ace_state_set_public_value_2  | Set the second public value in an algorithm.
 |  10   | ace_state_input_for_derive    | Tells the CC to expect additional information for feeding the `ace.derive` instruction.
@@ -1201,14 +1201,29 @@ Some of these descriptions are generic, others pertain to certain algorithms.
 
 Each algorithm is fully defined by the following information:
 
-Block Size:::
-Size of the basic unit of information processed by the algorithm, usually the block size of the main underlying primitive.
+Parameters:::
+These include:
+* The block size, which is the size of the basic unit of information processed by the algorithm, usually the block size of the main underlying primitive;
+* The key size, for keyed algorithms; and
+* Any other parameter (for instance, counter size) that is necessary to instantiate the algorithm with specific primitives.
 
-Internal State:::
-Information that must be in the internal state of a CC, in the order it is serialized to create the SCC.
+Data Structures:::
+These include:
+
+. *Configuration Input*:
+The data that follows the metadata block, such as key(s) and other secrets which are required to initialize a CC, in the initialization input passed to `ace.init`.
+All the fields are presented in the order they must be included in the configuration input with zero-based indexes, and with their lengths expressed in bytes.
+
+. *Content, Internal*:
+Information that must be in the internal state of a CC.
+The fields are not ordered and the given lengths in bytes can be different than the indicated ones, for instance for threshold or fault-tolerant implementations, where redundancy is required. In particular, we also list the full, single-share, key size also if a System Key is used, because this is the size of the key information used in the algorithms.
+
+. *Content, Exported*:
+The data that must follow the metadata block in the plaintext form of the SCC, as serialized by the ACE unit.
+All the fields are presented in the order they must be included in the SCC with zero-based indexes, and with their lengths expressed in bytes.
 
 Generic Functions:::
-If necessary, overload generic functions that apply to all contexts, such as :
+If necessary, redefine generic functions that apply to all contexts.
 Each algorithm must provide the functions described in <<ACE-formats>>.
 
 Algorithmic-Specific Functions:::
@@ -1296,21 +1311,23 @@ While listing the rules for the ECB mode is in principle easy, it does display a
 
 // comment to reset formatting
 
-Block Size:::
+Parameters:::
 
 * `b` = block size in bits, (8|`b`)
+* `k` = key size in bits (8|`k`).
 
-Internal state:::
+Data Structures:::
 
-* *Metadata*: 64 bits.
-* *Content Fields*:
-** `key`: `k` bits (8|`k`, in fact it is almost always 128|`k`).
+* *Configuration Input*:
+[start=0]
+ . `key`: `k/8` bytes, or 8 bytes if a System Key index.
 
-Generic Functions:::
+* *Content, Internal*:
+ ** `key`: `k/8` bytes, or 8 bytes if a System Key index.
 
-* `initial_content_deserialize`.
- ** Length = `k/8` bytes.
- ** `input[k/8-1:0] = key`.
+* *Content, Exported*:
+[start=0]
+ . `key`: `k/8` bytes, or 8 bytes if a System Key index.
 
 Algorithm-Specific Functions:::
 
@@ -1396,26 +1413,31 @@ IV and counter/LFSR are ``xor``ed together to form the input to the keyed PRP or
 
 //
 
-Block Size:::
+Parameters:::
 
-* `b` = block size in bits, (8|`b`):
+* `b` = block size in bits, (8|`b`).
+* `k` = key size in bits (8|`k`).
+* `j` = counter size in bits (8|`j`).
+* If the mode is CTR or LFSR, it is `b = n + j`.
+* If the mode is an "X" mode, it is `b = n = j`.
 
-Internal state:::
+Data Structures:::
 
-* *Metadata*: 64 bits.
-* *Content Fields*:
- ** `key`: `k` bits (8|`k`).
- ** `IV`: `n` bits (8|`n`).
- ** `counter`: `j` bits (8|`j`).
- ** If the mode is CTR or LFSR. then `b = n + j`, else (i.e., it is an "X" mode) `b = n = j`.
+* *Configuration Input*:
+[start=0]
+ . `key`: `k/8` bytes, or 8 bytes if a System Key index.
 
-Generic Functions:::
+* *Content, Internal*:
+ ** `key`: `k/8` bytes.
+ ** `IV`: `n/8` bytes (also 8|`n`).
+ ** `counter`: `j/8` bytes (8|`j`).
 
-* `initial_content_deserialize`.
- ** Length = `k/8` bytes.
- ** `input[k/8-1:0] = key`.
- ** `input[(k+n)/8-1:k/8] = IV`.
- ** `input[(k+n+j)/8-1:(k+n)/8] = counter`.
+* *Content, Exported*:
+[start=0]
+ . `key`: `k/8` bytes, or 8 bytes if a System Key index.
+ . `IV`: `n/8` bytes.
+ . `counter`: `j/8` bytes (8|`j`).
+
 
 Algorithm-Specific Functions:::
 
@@ -1429,7 +1451,7 @@ State Machine:::
  ** _initial_ -> _set_public_value_ -> _operate_.
  ** All states to _initial_.
 * *Behavior:*
- ** In state _initial_ , the `counter` and `IV` fields are set to 0 (`counter` is set to 1 if the algorithm is LFSR-based).
+ ** In state _initial_, the `counter` and `IV` fields are set to 0 (`counter` is set to 1 if the algorithm is LFSR-based).
  ** In state _set_public_value_, we can only issue ``ace.exec`` instructions of Form B, namely, "```ace.exec Cn|C[Xn], Vs```", which set the IV value to `Vs`.
  *** If no such instruction is issued, the value of the IV will remain zero.
   *** If such operations are issued more times, they will just update the IV value again. Since this can be done only before any encryption or decryption operation, this does not represent a security issue.
@@ -1440,7 +1462,8 @@ State Machine:::
   . `tick_counter()`, and
   . `Vd ← tmp`.
  ** In state _operate_, any other form of {nbsp}``ace.exec``{nbsp} will produce a null output and *invalidate* the CC.
- ** If `ace.stage` is issued to return to state _initial_, the CC can be reused with a new counter.
+
+Note that if `ace.stage` is issued to return to state _initial_, the CC can be reused with a new `IV`.
 
 <<<
 
@@ -1450,31 +1473,28 @@ State Machine:::
 Note that the use of a single key or two independently sampled keys is determined by the algorithm field, and it is not determined by a configuration parameter for the same algorithm.
 We first define XEX mode functionality.
 
-Block Size:::
+Parameters:::
 
 * `b` = block size in bits, (8|`b`).
+* `k` = key size in bits (8|`k`).
 
-Internal state:::
+Data Structures:::
 
-* *Metadata*: 64 bits.
-* *Content Fields*:
- ** `key1`: `k` bits (8|`k`).
- ** `key2`: `k` bits (8|`k`) (omitted if only one key is used).
- ** `mask`: `b` bits (8|`n`). Initially, this field will be set to zero, then contain the _tweak_, which is then encrypted to get the first mask.
+* *Configuration Input*:
+[start=0]
+ . `key1`: `k/8` bytes, or 8 bytes if a System Key index.
+ . `key2`: `k/8` bytes  -- omitted if only one key is used or if both keys come from an entry in the SKT.
 
-Generic Functions:::
+* *Content, Internal*:
+ ** `key1`: `k/8` bytes.
+ ** `key2`: `k/8` bytes.
+ ** `mask`: `b/8` bytes.
 
-* `initial_content_deserialize`:
- ** Length = `k/8` bytes.
- ** `input[k/8-1:0] = key1`.
- ** `input[2k/8-1:k/8] = key2`.
-* `content_serialize`:
- ** Length = `(2k+b)/8` bytes if two keys are used, or `(k+b)/8` bytes if only one key is used.
- ** `output[k/8-1:0] = key1`.
- ** `output[2k/8-1:k/8] = key2` -- omitted if only one key is used.
- ** If two keys are used, then `output[(2k+b)/8-1:2k/8] = mask`, +
-    else (if only one key is used), then `output[(k+b)/8-1:k/8] = mask`.
-* `content_deserialize` converts the output of `content_serialize` back to the original input format.
+* *Content, Exported*:
+[start=0]
+ . `key1`: `k/8` bytes, or 8 bytes if a System Key index.
+ . `key2`: `k/8` bytes -- omitted if only one key is used or if both keys come from an entry in the SKT.
+ . `mask`: `b/8` bytes.
 
 Algorithm-Specific Functions:::
 
@@ -1501,18 +1521,21 @@ State Machine:::
   *** If "```ace.exec Cn|C[Xn], Vs```" is repeated, it will just re-write the tweak.
   *** Other forms of `ace.exe` not allowed, will produce null outputs and the CC is *invalidated*.
  ** When transitioning from _set_public_value_ to either _encrypt_ or _decrypt_, the following operations are performed:
-  . First, `mask <- enc_block(key2,mask)`.
+  . `mask <- enc_block(key2,mask)` or `mask <- enc_block(key1,mask)` if only one key is used.
   . If only one key is used then update mask: `mask <- update_mask(mask)`.
  ** In _encrypt_ and _decrypt_ states, we can only issue ``ace.exec`` instructions of Form A, i.e., "```ace.exec Vd, Cn|C[Xn], Vs```", which:
-  *** in state _encrypt_, computes `Vd = mask xor enc_block(Vs xor mask)` ...
-  *** in state _decrypt_, computes `Vd = mask xor dec_block(Vs xor mask)` ...
+  *** in state _encrypt_, computes `Vd = mask xor enc_block(key1,Vs xor mask)` ...
+  *** in state _decrypt_, computes `Vd = mask xor dec_block(key1,Vs xor mask)` ...
   *** ... and updates the mask: `mask <- update_mask(mask)`.
-  *** If `ace.stage` is issued to return to state _initial_, we can reuse the CC with a new `IV`.
+
+//
+
+Note that if `ace.stage` is issued to return to state _initial_, the CC can be reused with a new `IV`.
 
 [discrete]
 ==== Usage Examples
 
-Using such an XEX mode is very easy. We include pseudocode for encryption only, decryption is entirely similar.
+Using XEX mode is very easy. We include pseudocode for encryption only, decryption is entirely similar.
 
 [[ACE-pseudocode-basic-IV-mode]]
 .Pseudocode for encryption in any IV-based non-authenticated modes without associated data
@@ -1548,36 +1571,30 @@ To implement the XTS mode, the ciphertext stealing part is easy to realize using
 [[ACE-GCM-mode]]
 ==== GCM mode
 
-Block Size:::
+Parameters:::
 
-* `b` = block size in bits, (8|b).
+* `b` = block size in bits, (8|`b`).
+* `k` = key size in bits (8|`k`).
 
-Internal state:::
+Data Structures:::
 
-* *Metadata*: 64 bits.
-* *Content Fields*:
- ** `key`: `k` bits (8|`k`).
- ** `counter`: `b` bits.
- ** `hash_key`: `b` bits.
- ** `auth_tag`: `b` bits.
+* *Configuration Input*:
+[start=0]
+ . `key`: `k/8` bytes, or 8 bytes if a System Key index.
 
-NOTE: Note that there are no fields for the lengths of the AD and of the plaintext.
-These values must be maintained by the calling software.
+* *Content, Internal*:
+ ** `counter`: `b/8` bytes.
+ ** `hash_key`: `b/8` bytes.
+ ** `auth_tag`: `b/8` bytes.
 
-Generic Functions:::
+* *Content, Exported*:
+[start=0]
+ . `key`: `k/8` bytes, or 8 bytes if a System Key index.
+ . `counter`: `b/8` bytes.
+ . `auth_tag`: `b/8` bytes.
 
-* `initial_content_deserialize`
- ** Length = `k/8` bytes.
- ** `input[k/8-1:0] = key`.
-
-* `content_serialize`:
- ** Length = `(k+2b)/8` bytes.
- ** `input[k/8-1:0] = key`.
- ** `input[(k+b)/8-1:k/8] = counter`.
- ** `input[(k+2b)/8-1:(k+b)/8] = auth_tag`.
- ** Note that `hash_key` is not serialized.
-
-* `content_deserialize` converts the output of `content_serialize` back to the original input format.
+NOTE: There are no fields for the lengths of the AD and of the plaintext, as they are maintained by the calling software.
+Also, `hash_key` is not serialized, and thus it is recomputed upon `ace.import`.
 
 Algorithm-Specific Functions:::
 
@@ -1624,9 +1641,9 @@ State Machine:::
     . `counter[b/4-1:0] <- counter[b/4-1:0] + 1 % 2^b/4^`.
     . `Vd <- tmp`.
 
- ** In state _hash_finalize_enc_, we can only issue a single ``ace.exec`` instruction of Form A, namely, "```ace.exec Vd, Cn|C[Xn], Vs```," where it is the responsibility of the user to set +
- `Vs = IntTo{b/2}Bits(bit_length(AD)) @ IntTo{b/2}Bits(bit_length(plaintext))`, +
- to compute the authentication tag and complete the algorithm as follows:
+ ** In state _hash_finalize_enc_, we can only issue a Form A "```ace.exec Vd, Cn|C[Xn], Vs```," where +
+ `Vs = IntTo{b/2}Bits(bit_length(AD)) @ IntTo{b/2}Bits(bit_length(plaintext))` +
+ is set by the user, to compute the authentication tag and complete the algorithm as follows:
     . `absorb_into_hash(Vd)`.
     . `auth_tag <- auth_tag xor enc_block(key,counter[b-1,b/4] @ 0[b/4-1,0])`.
     . Finally, `auth_tag` is returned in `Vd`, and the state is changed to _completed_.
@@ -1636,9 +1653,10 @@ State Machine:::
    . `absorb_into_hash(Vs)`.
    . `Vd  <- Vs xor enc_block(key,counter)`.
    . `counter[b/4-1:0] <- counter[b/4-1:0] + 1`.
- ** In state _hash_finalize_dec_, we can only issue an {nbsp}``ace.exec``{nbsp} of Form A{nbsp} `ace.exec Vd, Cn|C[Xn], Vs`{nbsp} where it is the responsibility of the user to set +
+
+** In state _hash_finalize_dec_, we can only issue a Form A "```ace.exec Vd, Cn|C[Xn], Vs```" where +
  `Vs = IntTo{b/2}Bits(bit_length(AD)) @ IntTo{b/2}Bits(bit_length(plaintext))`, +
- to compute the authentication tag as follows:
+ is formed by the user  to compute the authentication tag as follows:
     . `absorb_into_hash(Vs)`.
    . `auth_tag <- auth_tag xor enc_block(key,counter[b-1,b/4] @ 0[b/4-1,0])`.
  ** In state _hash_verify_, we can only issue  ``ace.exec`` instructions of the form{nbsp} `ace.exec Cn|C[Xn], Vs`{nbsp}.
@@ -1774,47 +1792,52 @@ The GCM-SIV mode's main differences with GCM are that
 
 The third difference affects the state machine. While GCM-SIV's decryption state machine is similar to the GCM's, the encryption state machine is different:
 
-* During encryption, in state _hash_absorb_ we absorb the entire associated data, then the plaintext, and finally we move to state _hash_finalize_enc_ where we also absorb the lengths and produce the SIV/tag. After that, we move to state _encrypt_ where we perform a second pass on the the plaintext to encrypt it using the SIV/tag as the initialization vector.
-* During decryption, on the other hand, in state _hash_absorb_ we absorb only the associated data, and in state _decrypt_ the ciphertext is decrypted and the plaintext is absorbed into the hash contextually -- only then we move to state _hash_finalize_dec_ to absorb the lengths, produce the SIV/tag, and later it is internally compared to the actual SIV/tag.
+* During encryption, the _hash_absorb_ state absorbs the entire associated data and plaintext. The _hash_finalize_enc_ state then absorbs the lengths and produces the SIV/tag. Finally, the _encrypt_ state performs a second pass to encrypt the plaintext using the SIV/tag as the initialization vector.
+* During decryption, the _hash_absorb_ state absorbs only the associated data. The _decrypt_ state decrypts the ciphertext and simultaneously absorbs the plaintext into the hash. Finally, the _hash_finalize_dec_ state absorbs the lengths, produces the SIV/tag, and internally compares it to the provided SIV/tag.
 
 // Comment to reset indentation of blocks
 
-Block Size:::
+Parameters:::
 
 * `b` = block size in bits, (`8|b`).
+* `k` = key size in bits (8|`k`).
+* It must be `k = b` or `k = 2b`.
+* It must be established by the algorithm whether the authentication tag is `b` or `3b/4` bits long.
 
-Internal state:::
+Data Structures:::
 
-* *Metadata*: 64 bits.
-* *Content Fields*:
- ** `key`: `k` bits (8|`k`). `k = b` or `k = 2b`.
- ** `nonce`: `3b/4` bits.
- ** `counter`: `b/4` bits.
- ** `auth_tag`: `b` bits.
- ** `SIV`: `b` or `3b/4` bits.
-  *** A `b`-bit `SIV` is computed by clearing the most significant bit of `auth_tag` and encrypting it.
-  *** For a `3b/4`-bit `SIV`, a full `b`-bit `auth_tag` value is kept while absorbing data.
- The public `SIV` value is computed by clearing the most significant bit of `auth_tag`, encrypting it, and then removing the `b/4` least significant bits. +
- ** `enc_key`: `k` bits.
- ** `auth_key`: `b` bits.
+* *Configuration Input*:
+[start=0]
+ . `key`: `k/8` bytes, or 8 bytes if a System Key index.
 
-NOTE: The `SIV` field is actually only needed for decryption, since it must be maintained separately from the `auth_tag` field, which changes with each processed block as it is computed, whereas for encryption it is first computed completely and then used in the encryption process.
+* *Content, Internal*:
+ ** `key`: `k/8` bytes.
+ ** `enc_key`: `k/8` bytes.
+ ** `auth_key`: `b/8` bytes.
+ ** `nonce`: `3b/32` bytes (`3b/4` bits).
+ ** `counter`: `b/32` bytes (`b/4` bits).
+ ** `auth_tag`: `b/8` bytes.
+ ** `SIV`: `b/8` or `3b/32` bytes (`b` or `3b/4` bits).
++
+A `b`-bit `SIV` is computed by clearing the most significant bit of `auth_tag` and encrypting it. +
+For a `3b/4`-bit `SIV`, a full `b`-bit `auth_tag` value is kept while absorbing data.
+The public `SIV` value is computed by clearing the most significant bit of `auth_tag`, encrypting it, and then removing the `b/4` least significant bits.
 
-Generic Functions:::
+* *Content, Exported*:
+[start=0]
+ . `key`: `k/8` bytes.
+ . `nonce`, `3b/32` bytes.
+ . `counter`, `b/32` bytes.
+ . `auth_tag`, `b/8` bytes.
+ . `SIV`, `b/8` bytes.
 
-* `initial_content_deserialize`
- ** Length = `k/8` bytes.
- ** `input[k/8-1:0] = key`.
+NOTE: `hash_key` and `auth_key` are not serialized,
+and must be recomputed upon each `ace.import`.
 
-* `content_serialize`:
- ** Length = `(k+3b)/8` bytes.
- ** `input[k/8-1:0] = key`.
- ** `input[(k+b)/8-1:k/8] = nonce @ counter`.
- ** `input[(k+2b)/8-1:(k+b)/8] = auth_tag`.
- ** `input[(k+3b)/8-1:(k+2b)/8] = SIV`.
- ** Note that `hash_key` and `auth_key` are not serialized.
+NOTE: The `SIV` field is actually only needed for decryption, since it must be maintained separately from the `auth_tag` field, which changes with each processed block as it is computed, whereas for encryption it is first computed completely and then used in the encryption process. However, since the same CC could be configured to support both encryption and decryption, the `SIV` field always present in the internal state (even if not used) and in the exported state.
 
-* `content_deserialize` converts the output of `content_serialize` back to the original input format.
+
+//
 
 Algorithm-Specific Functions:::
 
@@ -1828,7 +1851,7 @@ State Machine:::
 
 * *Allowed State Transitions:*
  ** From all states to _initial_.
- ** For encryption: +
+ ** For encryption:
     _initial_ -> _set_public_value_ -> _hash_absorb_ -> _hash_finalize_enc_ -> _encrypt_.
  ** For decryption: +
     _initial_ -> _set_public_value_ -> _set_public_value_2_ -> _hash_absorb_ -> _decrypt_ -> _hash_finalize_dec_.
@@ -1844,14 +1867,15 @@ State Machine:::
 
   ** In states _set_public_value_, resp. _set_public_value_2_:
     *** We can only issue  ``ace.exec`` instructions of Form B, i.e. "```ace.exec Cn|C[Xn], Vs```," to set the value of `nonce`, resp. `SIV`.
-    *** If{nbsp} `ace.exec Cn|C[Xn], Vs`,{nbsp} is repeated, it will just re-write the value of `nonce`, resp. `SIV`.
-    *** If no such {nbsp} `ace.exec Cn|C[Xn], Vs`{nbsp} to set is issued, `nonce`, resp. `SIV`, remains zero.
-    *** Other forms of `ace.exe` are not allowed, they will produce null outputs and the CC is *invalidated*.
-
-NOTE: There is no harm in setting the SIV while encrypting, since that field is not used in the encryption path until it is set by the state machine itself.
+    *** If "```ace.exec Cn|C[Xn], Vs```" is repeated, it will just re-write the value of `nonce`, resp. `SIV`.
+    *** If no such "```ace.exec Cn|C[Xn], Vs```" is issued, `nonce`, resp. `SIV`, remains zero.
+    *** Other forms of `ace.exe` will produce null outputs and *invalidate* the CC.
++
+NOTE: There is no harm in moving to state _set_public_value_2_ and
+setting the SIV while encrypting, since that field is not used in the encryption path until it is set (thus overwriting any previous content) by the state machine itself.
 Accepting this redundant behavior simplifies the implementation of the state machine.
-
-  ** In state _hash_absorb_:
++
+** In state _hash_absorb_:
    *** We only issue  ``ace.exec`` instructions of the form{nbsp} `ace.exec Cn|C[Xn], Vs`{nbsp} to accumulate a value in the `auth_tag`:
    i.e., perform `absorb_into_hash(Vs)`.
    *** Other forms of `ace.exec` are not allowed, they will produce null outputs and the CC is *invalidated*.
@@ -2006,22 +2030,27 @@ if (X1 != 0) then { handle error }     // do not use the plaintext if error occu
 
 // comment to reset formatting
 
-Block Size:::
+Parameters:::
 
 * `b` = block size in bits, (8|`b`)
+* `k` = key size in bits (8|`k`).
 
-Internal state:::
+Data Structures:::
 
-* *Metadata*: 64 bits.
-* *Content Fields*:
-** `key`: `k` bits (8|`k`, in fact it is almost always 128|`k`).
-** `hash`: `b` bits.
+* *Configuration Input*:
+[start=0]
+ . `key`: `k/8` bytes.
 
-Generic Functions:::
+* *Content, Internal*:
+ ** `key`: `k/8` bytes.
+ ** `hash`: `b/8` bytes.
+ ** `last_block_len`: `8` bytes.
 
-* `initial_content_deserialize`.
- ** Length = `k/8` bytes.
- ** `input[k/8-1:0] = key`.
+* *Content, Exported*:
+[start=0]
+ . `key`: `k/8` bytes.
+ . `hash`: `b/8` bytes.
+ . `last_block_len`: `8` bytes.
 
 Algorithm-Specific Functions:::
 
@@ -2029,18 +2058,21 @@ Algorithm-Specific Functions:::
 
 State Machine:::
 
-* *States:* _initial_ (0), _hash_absorb_ (3), _hash_finalize_ (4), _last_block_length_ (7)
+* *States:* _initial_ (0), _hash_absorb_ (3), _hash_finalize_ (4),
 * *Allowed State Transitions:*
  ** _initial_ -> _hash_absorb_.
- ** _hash_absorb_ -> _last_block_length_, _hash_finalize_.
- ** _last_block_length_ -> _hash_finalize_.
+ ** _hash_absorb_ -> _hash_finalize_.
  ** From any state to state _initial_.
 * *Behavior:*
- ** In state _initial_, any `ace.exec` will result in the CC being *invalidated*.
+ ** In state _initial_:
+  *** `last_block_len` is set to the full block length `b`.
+  *** Any `ace.exec` will result in the CC being *invalidated*.
  ** In state _hash_absorb_, we can only issue instructions ``ace.exec`` of form B, i.e., "```ace.exec Cn|C[Xn], Vs```", to absorb the data block `Vs` into the hash.
- ** Upon issuing `ace.stage Cn|C[Xn], #ace_state_hash_finalize, Xs` where `Xs` contains the length of the last block, the CC will transition to state _hash_finalize_, where any further {nbsp} `ace.exec Cn|C[Xn], Vs` will simply set (and possibly overwrite) the last partial block.
+ ** Upon issuing `ace.stage Cn|C[Xn], #ace_state_hash_finalize, Xs` where `Xs` contains the length of the last block in bits, the CC will transition to state _hash_finalize_, where any further {nbsp} `ace.exec Cn|C[Xn], Vs` will simply set (and possibly overwrite) the last partial block.
  ** In state _hash_finalize_, the computation of the hash is completed, and it can be exported using "```ace.exec Vd, Cn|C[Xn]```."
  ** In any state, issuing a different form of ``ace.exec`` then the allowed one will produce a null output and the CC will be *invalidated*.
+
+[.red]#Fill missing details and example#
 
 <<<
 
