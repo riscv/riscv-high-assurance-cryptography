@@ -87,7 +87,8 @@ and `Cn|C[Xn]` means that there are two different encodings for when the operand
    `ace.harden` is an alias for `ace.restrict`.
 | `ace.input`     | `Cd\|C[Xd], %offset(Xs)`         |  Optional. Provides an input to the algorithm configured in the CC `Cd` or `CC[Xd]`, in place of providing it through the `ace.exec` instruction. Useful when the inputs are very long, such as the inputs to certain public key schemes. Mandatory only if required by some algorithms.
 | `ace.output`    | `%offset(Xd), Cs\|C[Xs]`         |  Optional. Writes the output of an algorithm configured in the CC `Cs` or `CC[Xs]`, in place of providing it through the `ace.exec` instruction. Useful when the outputs are very long, such as the outputs of certain public key schemes. Mandatory only if required by some algorithms.
-| `ace.error`     | `Xd, Cs\|C[Xs]`                  |  A CC Cs (or indexed by Xs) may be in an error state due to the previous operation. The error value is written into GPR Xd.
+| `ace.wait`      |                                  |  Waits that all current operations in the ACE unit which are issued by the current hart completes. This is necessary if we need to read the correct error status.
+| `ace.error`     |                                  |  The ACE unit may be in an error state due to a previous operation. The error value is written into GPR Xd.
 |===
 
 NOTE: Instructions `ace.init`, `ace.import`, `ace.export`, `ace.input`, and `ace.output` perform direct memory accesses.
@@ -172,6 +173,8 @@ Fine-grained tracking activeness and dirtiness of individual CCs uses the `acecc
 ===== aceerror
 
 The `aceerror` CSR contains only as many bits as needed to encode the error status.
+
+It can be freely read and written, in particular by context switching software to make sure that the error status is properly handled when a process resumes execution.
 
 // All other bits are reserved for future use.
 // It is not a complete analogue of `fcsr` or `vcsr` since, for instance, it does not have to encode information such as rounding modes.
@@ -415,8 +418,10 @@ Column "MM-Config." indicates whether MM may be allowed to configure the entry.
 We also specify the domain of each Locality Secret, i.e., whether the value is
 chip-wide (should be the same across all chiplets in the same SoC, two distinct SoCs the same decide may have different values),
 device-wide, or (usually) OS-wide.
-//The first two Locality Secrets are chip-wide, and should be the same across all chiplets in the same SoC -- a separate chip in the same system may have different values.
-//Three further Locality Secrets must be the same across the entire device, and the Locality Secrets at indexes 5 and 6 can be reprogrammed by MM.
+// The first two Locality Secrets are chip-wide, and should be the same across all
+// chiplets in the same SoC -- a separate chip in the same system may have different values.
+// Three further Locality Secrets must be the same across the entire device, and the
+// Locality Secrets at indexes 5 and 6 can be reprogrammed by MM.
 
 [[ACE-binding-indices]]
 .Mandatory Locality Values
@@ -676,7 +681,6 @@ can be encoded.
 NOTE: ACE is an ideal candidate for the Composable Custom Extensions framework,
 even though our aim is to make it into a ratified extension.
 
-
 [[ACE-instruction-enable-enable]]
 ==== ace.enable/ace.enable
 
@@ -704,6 +708,7 @@ See <<ACE-CSR-enable>> and <<ACE-ACES-field>> for more details.
 
 Encoding::
 `ace.init` is an I-type instruction.
++
 [wavedrom, , svg]
 ....
 {reg:[
@@ -737,6 +742,7 @@ Then, in the second phase, the configuration material is read and processed.
 
 Encoding::
 `ace.clear` is an I-type instruction.
++
 [wavedrom, , svg]
 ....
 {reg:[
@@ -759,6 +765,7 @@ Description::
 
 Encoding::
 `ace.export` is an S-type instruction.
++
 [wavedrom, , svg]
 ....
 {reg:[
@@ -789,6 +796,7 @@ sequences of individual stores.
 
 Encoding::
 `ace.import` is an I-type instruction.
++
 [wavedrom, , svg]
 ....
 {reg:[
@@ -856,6 +864,7 @@ Form D instructions perform internal processing only in the CC.
 // Without this comment, the next part is not properly formatted...
 Encoding::
 `ace.exec` is an R-type instruction.
++
 [wavedrom, , svg]
 ....
 {reg:[
@@ -908,6 +917,7 @@ _completed_ or _invalidated_ (see <<ACE-stage-constants>> and <<ACE-Algorithms>>
 
 Encoding::
 The instruction is encoded using the Form D' `ace.exec` encoding, and is thus is an R-type instruction.
++
 [wavedrom, , svg]
 ....
 {reg:[
@@ -942,6 +952,7 @@ externally in reconstructed form).
 
 Encoding::
 The instruction is encoded using the Form D' `ace.exec` encoding, and is thus is an R-type instruction.
++
 [wavedrom, , svg]
 ....
 {reg:[
@@ -972,6 +983,7 @@ The instruction is an alias to the Metadata Variant of `ace.size`, as the latter
 
 Encoding::
 The instruction is encoded using the Form D' `ace.exec` encoding, and is thus is an R-type instruction.
++
 [wavedrom, , svg]
 ....
 {reg:[
@@ -1011,6 +1023,7 @@ into the CC indexed by `Xd`).
 
 Encoding::
 The instruction is encoded using a variant of Form A `ace.exec` encoding, and is thus is an R-type instruction.
++
 [wavedrom, , svg]
 ....
 {reg:[
@@ -1044,8 +1057,7 @@ This instruction can be used multiple times, to generate multiple derived contex
 
 Encoding::
 `ace.state`/`ace.dir` is an R-type instruction.
-[wavedrom, , svg]
-//
++
 [wavedrom, , svg]
 ....
 {reg:[
@@ -1084,7 +1096,7 @@ It is thus a variant of an R-type instruction. +
 The source register field encodes a GPR and not a vector register. +
 If bit `r` (i.e., bit 27) is 0, the 5-bit destination field [11:7] contains the destination context number,
 else it determines the GPR that contains the context number.
- +
++
 [wavedrom, , svg]
 ....
 {reg:[
@@ -1113,7 +1125,7 @@ Let `m` be the metadata field in the destination CC. The instruction works as fo
 * A one in the any of the four bits `Xs`[28:25] means that usage by the corresponding mode is forbidden, and the corresponding bit in the metadata of the destination CC is set to 1.
 * If `Xs`[29] is set and `m`[29] is NOT set, then Usage_Policy_3, i.e., `m`[47:32], is set to `Xs`[47:32].
 * If `Xs`[30] is set and `m`[30] is NOT set, then Usage_Policy_4, i.e., `m`[63:48], is set to `Xs`[63:48].
-* If `Xs`[29] and `m`[29] are both set and `Xs`[47:32] <> `m`[47:32], or if `Xs`[30] and `m`[30] are both set and `Xs`[63:48] <> `m`[63:48], then the error field of `acecsr` is set to ace_error_invalid.
+* If `Xs`[29] and `m`[29] are both set and `Xs`[47:32] <> `m`[47:32], or if `Xs`[30] and `m`[30] are both set and `Xs`[63:48] <> `m`[63:48], then `aceerror` is set to ace_error_invalid.
 
 [[ACE-instruction-input]]
 ==== ace.input (optional)
@@ -1122,6 +1134,7 @@ Let `m` be the metadata field in the destination CC. The instruction works as fo
 
 Encoding::
 `ace.input` is an I-type instruction.
++
 [wavedrom, , svg]
 ....
 {reg:[
@@ -1142,6 +1155,7 @@ Encoding::
 
 Encoding::
 `ace.output` is an S-type instruction.
++
 [wavedrom, , svg]
 ....
 {reg:[
@@ -1156,16 +1170,42 @@ Encoding::
 
 // [.red]#(TBdetermined whether it is secure)# This instruction is trappable and may also be resumed or restarted.
 
+[[ACE-instruction-wait]]
+==== ace.wait
+
+`ace.wait`
+
+// Without this comment, the next part is not properly formatted...
+Encoding::
+The encoding uses `ace.exec` Form B', with bit 8 (which is in the `rd` field) set.
++
+[wavedrom, , svg]
+....
+{reg:[
+    { bits:  7, name: 0x5b, attr: ['custom-2'] },
+    { bits:  5, name: 0x2 },
+    { bits:  3, name: 0x1, attr: ['ace.exec', '(Form B\')'] },
+    { bits:  5, name: 0x0 },
+    { bits:  5, name: 0x0 },
+    { bits:  7, name: 0x0 },
+]}
+....
+
+// comment
+
+Description::
+Waits that all current operations in the ACE unit which are issued by the current hart completes. This is necessary if we need to read the correct error status.
+
 [[ACE-instruction-error]]
 ==== ace.error
 
-`ace.error Xd, Cs|C[Xs]`
+`ace.error Xd`
 
 Description::
-A CC `Cs` (or indexed by `Xs`) may be in an error state due to the previous
-operation. The corresponding error value is written into GPR `Xd`.
-This is implemented as a CSR read operation, reading the error field of
-`acecsr` and masking it.
+The ACE Unit may be in an error state due to the previous operation.
+The corresponding error value is written into GPR `Xd`.
+This is implemented as an `ace.wait` instruction
+(cf. <<ACE-instruction-wait>>) followed by a read from CSR `aceerror`.
 The error value list is architected and given in <<ACE-error-codes>>.
 
 // ///////////////////////////////////////////////////////////////////////////////////////////
@@ -1223,15 +1263,16 @@ These include:
 
 . *Configuration Input*:
 The data that follows the metadata block, such as key(s) and other secrets which are required to initialize a CC, in the initialization input passed to `ace.init`.
-All the fields are presented in the order they must be included in the configuration input with zero-based indexes, and with their lengths expressed in bytes.
+All the fields are listed in the order they must be included in the configuration input, and with their lengths expressed in bytes.
 
 . *Content, Internal*:
 Information that must be in the internal state of a CC.
 The fields are not ordered and the given lengths in bytes can be different than the indicated ones, for instance for threshold or fault-tolerant implementations, where redundancy is required. In particular, we also list the full, single-share, key size also if a System Key is used, because this is the size of the key information used in the algorithms.
 
 . *Content, Exported*:
-The data that must follow the metadata block in the plaintext form of the SCC, as serialized by the ACE unit.
-All the fields are presented in the order they must be included in the SCC with zero-based indexes, and with their lengths expressed in bytes.
+The data that must follow the metadata block in the plaintext form of the SCC, as serialized by
+`content_serialize` and generated by `content_serialize` for the algorithm.
+All the fields are listed in the order they must be included in the SCC, and with their lengths expressed in bytes.
 
 Generic Functions:::
 If necessary, redefine generic functions that apply to all contexts.
@@ -1324,20 +1365,20 @@ While listing the rules for the ECB mode is in principle easy, it does display a
 
 Parameters:::
 
-* `b` = block size in bits, (8|`b`)
+* `b` = block size in bits (8|`b`)
 * `k` = key size in bits (8|`k`).
 
 Data Structures:::
 
 * *Configuration Input*:
-[start=0]
+[lowerroman]
  . `key`: `k/8` bytes, or 8 bytes if a System Key index.
 
 * *Content, Internal*:
- ** `key`: `k/8` bytes, or 8 bytes if a System Key index.
+ ** `key`: `k/8` bytes.
 
 * *Content, Exported*:
-[start=0]
+[lowerroman]
  . `key`: `k/8` bytes, or 8 bytes if a System Key index.
 
 Algorithm-Specific Functions:::
@@ -1426,28 +1467,29 @@ IV and counter/LFSR are ``xor``ed together to form the input to the keyed PRP or
 
 Parameters:::
 
-* `b` = block size in bits, (8|`b`).
+* `b` = block size in bits (8|`b`).
 * `k` = key size in bits (8|`k`).
 * `j` = counter size in bits (8|`j`).
+* `n` = IV size in bits (8|`n`).
 * If the mode is CTR or LFSR, it is `b = n + j`.
 * If the mode is an "X" mode, it is `b = n = j`.
 
 Data Structures:::
 
 * *Configuration Input*:
-[start=0]
+[lowerroman]
  . `key`: `k/8` bytes, or 8 bytes if a System Key index.
 
 * *Content, Internal*:
  ** `key`: `k/8` bytes.
- ** `IV`: `n/8` bytes (also 8|`n`).
- ** `ctr`: `j/8` bytes (8|`j`). // The counter
+ ** `IV`: `n/8` bytes.
+ ** `ctr`: `j/8` bytes.
 
 * *Content, Exported*:
-[start=0]
+[lowerroman]
  . `key`: `k/8` bytes, or 8 bytes if a System Key index.
  . `IV`: `n/8` bytes.
- . `ctr`: `j/8` bytes (8|`j`).
+ . `ctr`: `j/8` bytes.
 
 
 Algorithm-Specific Functions:::
@@ -1486,13 +1528,13 @@ We first define XEX mode functionality.
 
 Parameters:::
 
-* `b` = block size in bits, (8|`b`).
+* `b` = block size in bits (8|`b`).
 * `k` = key size in bits (8|`k`).
 
 Data Structures:::
 
 * *Configuration Input*:
-[start=0]
+[lowerroman]
  . `key1`: `k/8` bytes, or 8 bytes if a System Key index.
  . `key2`: `k/8` bytes  -- omitted if only one key is used or if both keys come from an entry in the SKT.
 
@@ -1502,7 +1544,7 @@ Data Structures:::
  ** `mask`: `b/8` bytes.
 
 * *Content, Exported*:
-[start=0]
+[lowerroman]
  . `key1`: `k/8` bytes, or 8 bytes if a System Key index.
  . `key2`: `k/8` bytes -- omitted if only one key is used or if both keys come from an entry in the SKT.
  . `mask`: `b/8` bytes.
@@ -1584,22 +1626,23 @@ To implement the XTS mode, the ciphertext stealing part is easy to realize using
 
 Parameters:::
 
-* `b` = block size in bits, (8|`b`).
+* `b` = block size in bits (8|`b`).
 * `k` = key size in bits (8|`k`).
 
 Data Structures:::
 
 * *Configuration Input*:
-[start=0]
+[lowerroman]
  . `key`: `k/8` bytes, or 8 bytes if a System Key index.
 
 * *Content, Internal*:
- ** `ctr`: `b/8` bytes. // the counter
+ ** `key`: `k/8` bytes.
+ ** `ctr`: `b/8` bytes.
  ** `hash_key`: `b/8` bytes.
  ** `auth_tag`: `b/8` bytes.
 
 * *Content, Exported*:
-[start=0]
+[lowerroman]
  . `key`: `k/8` bytes, or 8 bytes if a System Key index.
  . `ctr`: `b/8` bytes.
  . `auth_tag`: `b/8` bytes.
@@ -1818,7 +1861,7 @@ Parameters:::
 Data Structures:::
 
 * *Configuration Input*:
-[start=0]
+[lowerroman]
  . `key`: `k/8` bytes, or 8 bytes if a System Key index.
 
 * *Content, Internal*:
@@ -1835,10 +1878,10 @@ For a `3b/4`-bit `SIV`, a full `b`-bit `auth_tag` value is kept while absorbing 
 The public `SIV` value is computed by clearing the most significant bit of `auth_tag`, encrypting it, and then removing the `b/4` least significant bits.
 
 * *Content, Exported*:
-[start=0]
+[lowerroman]
  . `key`: `k/8` bytes.
  . `nonce`, `3b/32` bytes.
- . `ctr`, `b/32` bytes. // the counter
+ . `ctr`, `b/32` bytes.
  . `auth_tag`, `b/8` bytes.
  . `SIV`, `b/8` bytes.
 
@@ -1874,7 +1917,7 @@ State Machine:::
   *** Any {nbsp}``ace.exec``{nbsp} operation will produce a null output and the CC will be *invalidated*.
   *** The following initialization operations are performed:
     . `enc_key`, `auth_key <- RFC8452_KeyDeriv(key)`,
-    . `nonce`, `ctr`, `auth_tag`, `SIV` <- 0`.
+    . `nonce`, `ctr`, `auth_tag`, `SIV <- 0`.
 
   ** In states _set_public_value_, resp. _set_public_value_2_:
     *** We can only issue  ``ace.exec`` instructions of Form B, i.e. "```ace.exec Cn|C[Xn], Vs```," to set the value of `nonce`, resp. `SIV`.
@@ -2043,13 +2086,13 @@ if (X1 != 0) then { handle error }     // do not use the plaintext if error occu
 
 Parameters:::
 
-* `b` = block size in bits, (8|`b`)
+* `b` = block size in bits (8|`b`)
 * `k` = key size in bits (8|`k`).
 
 Data Structures:::
 
 * *Configuration Input*:
-[start=0]
+[lowerroman]
  . `key`: `k/8` bytes.
 
 * *Content, Internal*:
@@ -2058,7 +2101,7 @@ Data Structures:::
  ** `last_block_len`: `8` bytes.
 
 * *Content, Exported*:
-[start=0]
+[lowerroman]
  . `key`: `k/8` bytes.
  . `hash`: `b/8` bytes.
  . `last_block_len`: `8` bytes.
