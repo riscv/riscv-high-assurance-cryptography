@@ -1351,8 +1351,9 @@ System keys that are referred to by an index will cause following changes in all
 . In the configuration input and in the SCC, the key/main key field will contain the index of the key in the SKT in place of a key value.
 . This field is always a 64-bit value, even if the key itself is larger. This saves space in the SCC and allows for faster export and import operations.
 . For algorithms that require more than one key, such as XEX/XTS, ALL the keys are referred to by a single index, i.e., a single 64-bit value in the configuration input and the SCC.
-. Accordingly, the `content_serialize` and `content_deserialize` functions will support System Keys by producing and reading the shorter fields with the indexes in place of the longer fields with the key values
-. Internally, the ACE unit can either directly use the value from the SKT, or copy it to the CC.  The latter is useful for threshold implementations.
+. Accordingly, the `content_serialize` and `content_deserialize` functions will support System Keys by producing and reading the shorter fields with the indexes in place of the longer fields that would be required when the key values are explicitly provided.
+
+NOTE: Internally, the ACE unit can either directly use the value from the SKT, or copy it to the CC. The architecture does not restrict the choice of the implementation.
 
 // On the other hand, keys generated from a system block, using a custom "recipe", are always represented by their values and once generated have the exact same behavior as any other key that does not come from the SKT.
 
@@ -1417,18 +1418,18 @@ with a width of 128 bits.
 - Call OS API to get the necessary SCC. Assume X5 points to the SCC.
 - Allocate memory for ciphertext buffer.
 
-vsetvli zero, 4, e32, m1, ta, ma                    // Use 128-bit vectors
-ace.import C0, (X5)                                 // Import the SCC into CC C0
-ace.error X1                                        // Read error from a CSR
-if (X1 != 0) then { handle error }                  // ACE may fail to validate SCC, algorithm
-                                                    // not supported, or CF memory full
-ace.state C0, #ace_state_encrypt                    // Configure CC for encryption
-ace.error X1                                        // Read error from a CSR
-if (X1 != 0) then { handle error }                  // Error if encryption is not allowed by CC
+vsetvli zero, 4, e32, m1, ta, ma          // Use 128-bit vectors
+ace.import C0, (X5)                       // Import the SCC into CC C0
+ace.error X1                              // Read error from a CSR
+if (X1 != 0) then { handle error }        // ACE may fail to validate SCC, algorithm may
+                                          // be not supported, or CF memory may be full
+ace.state C0, #ace_state_encrypt          // Configure CC for encryption
+ace.error X1                              // Read error from a CSR
+if (X1 != 0) then { handle error }        // Error if encryption not allowed
 
 foreach (i from 0 to len_in_bytes(plaintext)/16-1) { // assume plaintext in whole blocks
     - load V0 from address plaintext+16*i
-    ace.exec V0, C0, V                              // Encrypt one block of the plaintext
+    ace.exec V0, C0, V                    // Encrypt one block of the plaintext
     - store V0 at address ciphertext+16*i
 }
 ----
@@ -1997,15 +1998,15 @@ Accepting this redundant, but harmless, behavior simplifies the state machine.
  ** In state _hash_finalize_dec_,
     we can only issue an ``ace.exec`` of Form B, namely "```ace.exec Cn|C[Xn], Vs```," where it is the responsibility of the user to set +
     `Vs = IntTo{b/2}Bits(bit_length(AD)) @ IntTo{b/2}Bits(bit_length(plaintext))`. +
-    The semantics are almost identical to issuing a Form A ``ace.exec`` in state _hash_finalize_dec_ except that the SIV/tag value is _not_ output, but is only kept in `auth_tag`. +
-    Then the computation of the authentication tag is finalized as follows:
-    . `absorb_into_hash(Vs)` (which modifies `auth_tag`).
-    . `tmp <- enc_block(enc_key, 1b0 @ ((auth_tag xor N)[b-2:0]))`
-    . If tag length is `b` bits, then
-     *** `auth_tag <- tmp`,
-    . else (tag length is `3b/4` bits)
-     *** `auth_tag <- tmp[b-1:0] @ (b/4)b0`.
-   . Finally, `auth_tag` and `SIV` are compared:
+//    The semantics are almost identical to issuing a Form A ``ace.exec`` in state _hash_finalize_enc_ except that the SIV/tag value is _not_ output, but is only kept in `auth_tag`.
+    ``ace.exec`` thus performs the following operations:
+     . `absorb_into_hash(Vs)` (which modifies `auth_tag`).
+     . `tmp <- enc_block(enc_key, 1b0 @ ((auth_tag xor N)[b-2:0]))`.
+     . If tag length is `b` bits, then
+      *** `auth_tag <- tmp`,
+     . else (tag length is `3b/4` bits)
+      *** `auth_tag <- tmp[b-1:0] @ (b/4)b0`.
+     . Finally, `auth_tag` and `SIV` are compared:
    *** If the values match, the state transitions to _completed_ and `ace.error` returns no error,
        else the state transitions to _completed_ and `ace.error` returns `ace_err_authentication`.
 
