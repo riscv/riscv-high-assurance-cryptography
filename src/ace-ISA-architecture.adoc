@@ -1512,7 +1512,7 @@ State Machine:::
  ** In state _initial_, the `ctr` and `IV` fields are set to 0 (`ctr` is set to 1 if the algorithm is LFSR-based).
  ** In state _set_public_value_, we can only issue ``ace.exec`` instructions of Form B, namely, "```ace.exec Cn|C[Xn], Vs```", which set the IV value to `Vs`.
   *** If no such instruction is issued, the value of the IV will remain zero.
-  *** [.red]#If `VLEN` is larger than `n`, the most significant bits (i.e., the "tail" of the vector) are ignored.#
+  *** [.red]#If `VLEN` is larger than `b`, the most significant bits of `Vs` (i.e., the "tail" of the vector) are ignored.#
   *** If such operations are issued more times, they will just update the IV value again. Since this can be done only before any encryption or decryption operation, this does not represent a security issue.
   *** Any other form of {nbsp}``ace.exec``{nbsp} will produce a null output and *invalidate* the CC.
  ** In state _operate_, we can only issue ``ace.exec`` instructions of Form C, "```ace.exec Vd, Cn|C[Xn]```", which perform:
@@ -1613,7 +1613,7 @@ State Machine:::
  ** In state _set_public_value_, we can only issue ``ace.exec`` instructions of Form B, namely, "```ace.exec Cn|C[Xn], Vs```", to set the
  _tweak_. The `mask` field is used to initially store the tweak: `mask <- Vs`.
   *** If no such instruction is issued, the value of the tweak will remain zero.
-  *** [.red]#If `VLEN` is larger than `n`, the most significant bits (i.e., the "tail" of the vector) are ignored.#
+  *** [.red]#If `VLEN` is larger than `b`, the most significant bits of `Vs` (i.e., the "tail" of the vector) are ignored.#
   *** If "```ace.exec Cn|C[Xn], Vs```" is repeated, it will just re-write the mask.
   *** Other forms of `ace.exe` not allowed, will produce null outputs and the CC is *invalidated*.
  ** When transitioning from _set_public_value_ to either _encrypt_ or _decrypt_, the following operations are performed:
@@ -1627,7 +1627,7 @@ State Machine:::
   *** ... and updates the mask: `mask <- update_mask(mask)`.
 --
 +
-[.red]#If `VLEN` is a multiple of `b`, the above two commands are executed `VLEN/b` times, encrypting/decr   each `b`-bit block of `Vs` into a `b`-bit block of `Vd`. This operation is clearly parallelizable. If the number `x` of blocks to encrypt/decrypt is not a multiple of `VLEN`/`b`, `VL` can be set to the remainder of the division of `x` by `VLEN`/`b` for the last instruction.#
+[.red]#If `VLEN` is a multiple of `b`, the above two commands are executed `VLEN/b` times, encrypting/decrypting each `b`-bit block of `Vs` into a `b`-bit block of `Vd`. This operation is clearly parallelizable. If the number `x` of blocks to encrypt/decrypt is not a multiple of `VLEN`/`b`, `VL` can be set to the remainder of the division of `x` by `VLEN`/`b` for the last instruction.#
 
 //
 
@@ -1730,44 +1730,75 @@ State Machine:::
        . `ctr <- Vs << b/4`  (i.e., the `b/4` most significant bits of `Vs` are ignored, and the `b/4` least significant bits of `ctr` are set to zero.)
   *** If{nbsp} `ace.exec Cn|C[Xn], Vs`,{nbsp} is repeated, it will just re-write the IV.
   *** If no such {nbsp} `ace.exec Cn|C[Xn], Vs`{nbsp} to set is issued, `ctr` remains zero.
+  *** [.red]#If `VLEN` is larger than `b`, the most significant bits of `Vs` (i.e., the "tail" of the vector) are ignored.#
   *** Any other form of {nbsp}``ace.exec``{nbsp} will produce null outputs and causes the CC to be *invalidated*.
 
  ** In state _hash_absorb_, we can only issue  ``ace.exec`` instructions of Form B, i.e., "```ace.exec Cn|C[Xn], Vs```" to absorb a data block in `auth_tag`, i.e.:
    . `absorb_into_hash(Vs)`.
- ** If the _encrypt_ state, we can only issue  ``ace.exec`` instructions of Form A, namely "```ace.exec Vd, Cn|C[Xn], Vs```" to
+** If the _encrypt_ state, we can only issue  ``ace.exec`` instructions of Form A, namely "```ace.exec Vd, Cn|C[Xn], Vs```" to
    encrypt `Vs` into `Vd`, and absorb the ciphertext `Vd` into the `auth_tag`, namely
++
+--
     . If `ctr[b/4-1:0] = 0`, the CC is *invalidated*.
     . `tmp <- Vs xor enc_block(key,ctr)`.
     . `absorb_into_hash(tmp)`.
     . `ctr[b/4-1:0] <- ctr[b/4-1:0] + 1 % 2^b/4^`.
     . `Vd <- tmp`.
+--
++
+[.red]#If `VLEN` is a multiple of `b`, the above are executed `VLEN/b` times, encrypting each `b`-bit block of `Vs` into a `b`-bit block of `Vd`. There is significant potential for parallelization, including in the `absorb_into_hash` function. If the number `x` of blocks to encrypt is not a multiple of `VLEN`/`b`, `VL` can be set to the remainder of the division of `x` by `VLEN`/`b` for the last instruction.#
 
- ** In state _hash_finalize_enc_, we can only issue a Form A "```ace.exec Vd, Cn|C[Xn], Vs```," where +
+** In state _hash_finalize_enc_, we can only issue a Form A "```ace.exec Vd, Cn|C[Xn], Vs```," where +
  `Vs = IntTo{b/2}Bits(bit_length(AD)) @ IntTo{b/2}Bits(bit_length(plaintext))` +
  is set by the user, to compute the authentication tag and complete the algorithm as follows:
-    . `absorb_into_hash(Vd)`.
-    . `auth_tag <- auth_tag xor enc_block(key,ctr[b-1,b/4] @ 0[b/4-1,0])`.
-    . Finally, `auth_tag` is returned in `Vd`, and the state is changed to _completed_.
++
+--
+. `absorb_into_hash(Vd)`.
+. `auth_tag <- auth_tag xor enc_block(key,ctr[b-1,b/4] @ 0[b/4-1,0])`.
+. Finally, `auth_tag` is returned in `Vd`, and the state is changed to _completed_.
+--
++
+[.red]#If `VLEN` is larger than `b`, the most significant bits of `Vs` (i.e., the "tail" of the vector) are ignored.#
+
  ** In state _decrypt_, we can only issue  ``ace.exec`` instructions of the form{nbsp} `ace.exec Vd, Cn|C[Xn], Vs`{nbsp} to
    absorb the ciphertext `Vs` into the `auth_tag`, then decrypt `Vs` into `Vd`, namely
++
+--
    . If `ctr[b/4-1:0] = 0`, the CC is *invalidated*.
    . `absorb_into_hash(Vs)`.
    . `Vd  <- Vs xor enc_block(key,ctr)`.
    . `ctr[b/4-1:0] <- ctr[b/4-1:0] + 1`.
+--
++
+[.red]#If `VLEN` is a multiple of `b`, the same behavior applies as in state _encrypt_.#
 
 ** In state _hash_finalize_dec_, we can only issue a Form A "```ace.exec Vd, Cn|C[Xn], Vs```" where +
  `Vs = IntTo{b/2}Bits(bit_length(AD)) @ IntTo{b/2}Bits(bit_length(plaintext))`, +
  is formed by the user  to compute the authentication tag as follows:
-    . `absorb_into_hash(Vs)`.
-   . `auth_tag <- auth_tag xor enc_block(key,ctr[b-1,b/4] @ 0[b/4-1,0])`.
- ** In state _hash_verify_, we can only issue  ``ace.exec`` instructions of the form{nbsp} `ace.exec Cn|C[Xn], Vs`{nbsp}.
++
+--
+ . `absorb_into_hash(Vs)`.
+ . `auth_tag <- auth_tag xor enc_block(key,ctr[b-1,b/4] @ 0[b/4-1,0])`.
+--
++
+[.red]#If `VLEN` is larger than `b`, the most significant bits of `Vs` (i.e., the "tail" of the vector) are ignored.#
+
+** In state _hash_verify_, we can only issue  ``ace.exec`` instructions of the form{nbsp} `ace.exec Cn|C[Xn], Vs`{nbsp}.
     `Vs` is compared to `auth_tag`:
++
+--
     *** If the values match, then the state is changed to _completed_, and `ace.error` returns no error,
         else the state is changed to _completed_, and `ace.error` returns `ace_err_authentication`.
- ** Upon completion of `ace.import`, the ACE unit recomputes `hash_key`:
+--
++
+[.red]#If `VLEN` is larger than `b`, only the `b` least significant bits `Vs` are compared to `auth_tag`.#
+
+** Upon completion of `ace.import`, the ACE unit recomputes `hash_key`:
   . `hash_key <- enc_block(key,0)`.
 
 //
+
+<<<
 [discrete]
 ==== Usage
 
@@ -1830,6 +1861,7 @@ if (X1 != 0) then { handle error }       // do not use the plaintext if error oc
 ----
 
 //
+<<<
 [discrete]
 ==== Alternative Examples
 
