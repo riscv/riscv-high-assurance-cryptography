@@ -375,7 +375,7 @@ In such a case, the value of the SC_Protection field must be set to 3.
 | Value | Description
 |   0   | Explicit value.
 |   1   | Internal table. System specific. For each algorithm as specified in <<ACE-Algorithms>>, the part of the content that normally contains the key(s) is replaced by a 64-bit value which is an index into the internal System Keys Table (SKT) --- for both Configuration Input and the SCCs. The actual value of the key is never included in exported content. For threshold algorithms, ACE may copy the key material from the SKT into the CC and expand it into multiple shares.
-|   2   | Internally generated key. System specific.  In the Configuration Input, the part of the content that normally contains the key(s) is replaced by a "recipe" in a system-specific format. The format is not specified by the ISA and may not be portable to other systems. Once the key material has been internally generated, the value is included in the SCC as part of the content - not the "recipe" - as for any other key(s) for the same specified algorithm.  Even in the SCC, however, the Key_Type field of the metadata, both internally and in the SCC, will keep the value 2.
+|   2   | Internally generated key. System specific.  In the Configuration Input, the part of the content that normally contains the key(s) is replaced by a "recipe" in a system-specific format. The format is not specified by the ISA and may not be portable to other systems. Once the key material has been internally generated, the value is included in the SCC as part of the content - not the "recipe" - as for any other key(s) for the same specified algorithm.  Even in the SCC, however, the Key_Type field of the metadata, both in the CC and in an SCC, will keep the value 2.
 |   3   | Invalid.
 |===
 
@@ -1406,7 +1406,7 @@ State Machine:::
 
 <<<
 [discrete]
-==== Usage Examples
+==== Usage
 
 We give pseudocode to illustrate how to use an ECB CC to encrypt a block of data using a block cipher
 with a width of 128 bits.
@@ -1522,7 +1522,7 @@ State Machine:::
 Note that if `ace.stage` is issued to return to state _initial_, the CC can be reused with a new `IV`.
 
 [discrete]
-==== Usage Examples
+==== Usage
 
 Example pseudocode is given in <<ACE-pseudocode-keystream-modes>>.
 
@@ -1619,7 +1619,7 @@ State Machine:::
 Note that if `ace.stage` is issued to return to state _initial_, the CC can be reused with a new `IV`.
 
 [discrete]
-==== Usage Examples
+==== Usage
 
 Using XEX mode is very easy. We include pseudocode for encryption only, decryption is entirely similar.
 
@@ -1692,7 +1692,7 @@ Algorithm-Specific Functions:::
 
 State Machine:::
 
-* *States:* _initial_ (0), _set_public_value_ (8), _hash_absorb_ (3), _encrypt_ (1), _hash_finalize_enc_ (4), _decrypt_ (2), _hash_finalize_dec_ (5), and _hash_verify_ (6).
+* *States:* _initial_ (0), _set_public_value_ (8), _hash_absorb_ (3), _encrypt_ (1), _hash_finalize_enc_ (4), _decrypt_ (2), _hash_finalize_dec_ (5), and _hash_verify_ (6), _completed_ (15).
 
 * *Allowed State Transitions:*
  ** From all states to _initial_.
@@ -1754,7 +1754,7 @@ State Machine:::
 
 //
 [discrete]
-==== Usage Examples
+==== Usage
 
 In <<ACE-pseudocode-GCM-encryption>> we show pseudocode for GCM encryption.
 
@@ -1933,7 +1933,7 @@ Algorithm-Specific Functions:::
   . `auth_tag <- auth_tag xor Vs`.
   . `auth_tag <- auth_tag * hash_key`, where `*` denotes either Galois field multiplication (for GHASH) or Montgomery multiplication (for POLYVAL/MHASH), as specified by the algorithm.
 State Machine:::
-* *States:* _initial_ (0), _set_public_value_ (8), _set_public_value_2_ (9), _hash_absorb_ (3), _hash_finalize_enc_ (4), _hash_finalize_dec_ (5), _encrypt_ (1), and _decrypt_ (2).
+* *States:* _initial_ (0), _set_public_value_ (8), _set_public_value_2_ (9), _hash_absorb_ (3), _hash_finalize_enc_ (4), _hash_finalize_dec_ (5), _encrypt_ (1), _decrypt_ (2), and _completed_ (15).
 
 * *Allowed State Transitions:*
  ** From all states to _initial_.
@@ -2016,7 +2016,7 @@ Accepting this redundant, but harmless, behavior simplifies the state machine.
 //
 
 [discrete]
-==== Usage Examples
+==== Usage
 
 We show in <<ACE-pseudocode-GCM-SIV-encryption>> how to perform AEAD encryption with a GCM-SIV CC.
 <<ACE-pseudocode-GCM-SIV-decryption>> is the corresponding pseudocode for decryption.
@@ -2138,24 +2138,54 @@ Data Structures:::
 Algorithm-Specific Functions:::
 
 * `enc_block(key,p) -> c` encrypts block `p` using the key, and returns the result `c`.
+* `gen_subkeys(K) -> K1,K2` generates subkeys `K1` and `K2` from the master key `K` as follows: +
+Let `C` be the non-leading coefficients of the lexicographically first irreducible binary polynomial of degree `b` with the minimal number of ones: `0x1B` for `b` = 64, `0x87` for `b` = 128, and `0x425` for `b` = 256. Then:
+//First, `C` is a `b` bit value that, if interpreted as a polynomial in the letter `x` over GF(2), makes `x^b^ + const_Rb` irreducible.
+ . `L <- AES-enc_block(K, 0)`
+ . if `most_significant_bit(L){nbsp}{nbsp}= 0` then
+   {`K1 <- L{nbsp}{nbsp}<< 1`}
+   else
+   {`K1 <- (L{nbsp}{nbsp}<< 1) xor C`}.
+ . if `most_significant_bit(K1){nbsp}= 0` then
+   {`K2 <- K1{nbsp}<< 1`}
+   else
+   {`K2 <- (K1{nbsp}<< 1) xor C`}.
+ . return ```(K1,K2)```.
 
 State Machine:::
 
-* *States:* _initial_ (0), _hash_absorb_ (3), _hash_finalize_ (4),
+* *States:* _initial_ (0), _hash_absorb_ (3), _hash_finalize_ (4), and _completed_ (15).
 * *Allowed State Transitions:*
  ** _initial_ -> _hash_absorb_.
- ** _hash_absorb_ -> _hash_finalize_.
+ ** _hash_absorb_ -> _hash_finalize_ -> _completed_.
  ** From any state to state _initial_.
 * *Behavior:*
  ** In state _initial_:
   *** `last_block_len` is set to the full block length `b`.
+  *** `hash` is set to zero.
   *** Any `ace.exec` will result in the CC being *invalidated*.
- ** In state _hash_absorb_, we can only issue instructions ``ace.exec`` of form B, i.e., "```ace.exec Cn|C[Xn], Vs```", to absorb the data block `Vs` into the hash.
- ** Upon issuing `ace.stage Cn|C[Xn], #ace_state_hash_finalize, Xs` where `Xs` contains the length of the last block in bits, the CC will transition to state _hash_finalize_, where any further {nbsp} `ace.exec Cn|C[Xn], Vs` will simply set (and possibly overwrite) the last partial block.
- ** In state _hash_finalize_, the computation of the hash is completed, and it can be exported using "```ace.exec Vd, Cn|C[Xn]```."
- ** In any state, issuing a different form of ``ace.exec`` then the allowed one will produce a null output and the CC will be *invalidated*.
 
-[.red]#Fill missing details and example#
+  ** In state _hash_absorb_, we can only issue instructions ``ace.exec`` of form B, i.e., "```ace.exec Cn|C[Xn], Vs```", to absorb the data block `Vs` into the hash. This is performed as follows:
+   . `tmp <- hash xor Vs`.
+   . `hash <- enc_block(key,tmp)`.
+
+  ** Upon issuing `ace.stage Cn|C[Xn], #ace_state_hash_finalize, Xs` where `Xs` contains the length of the last block in bits, following happens:
+   . The CC transitions to state _hash_finalize_.
+   . `last_block_len <- Xs`.
+
+ ** In state _hash_finalize_, we can only issue a single instruction ``ace.exec`` of form A, i.e., "```ace.exec Cn|C[Xn], Vs```", to absorb the data block `Vs` and write the final hash value in `Vd`. After this, the state transitions to _completed_:
+  . `K1,K2 <- gen_subkeys(key)`.
+  . if `last_block_len` = `b`, then
+   *** `tmp <- hash xor Vs xor K1`,
+  . else
+   *** `tmp <- hash xor Vs xor K2`.
+  . `hash <- enc_block(key,tmp)`.
+  . The CC transitions to state _completed_.
+
+ ** In any state, issuing any form of ``ace.exec`` that is not the allowed one will produce a null output and the CC will be *invalidated*.
+
+
+[.red]#Fill missing example#
 
 <<<
 
