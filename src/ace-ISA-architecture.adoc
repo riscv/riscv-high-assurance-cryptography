@@ -473,7 +473,8 @@ Hence the implementation of the STK must also provide the proper Locality metada
 [[ACE-formats]]
 ===== Formats of Configuration Inputs and Sealed Configuration Contexts
 
-The format of the input to `ace.init` is simple: the first 8 bytes must contain the 64-bit metadata section, followed by any key and additional information in a format specified by the algorithm. The total length of this input must be a multiple of 8 bytes.
+The format of the input to `ace.init` is simple: the first 8 bytes must contain the 64-bit metadata section, followed by any key and additional information in a format specified by the algorithm.
+The total length of this input must be an integer multiple of 8 bytes.
 The lengths of the configuration payload, of the content section, and of SCCs is given in bytes.
 
 Each algorithm must provide following functions:
@@ -1404,14 +1405,31 @@ State Machine:::
  ** In state _initial_, any `ace.exec` will result in the CC being *invalidated*.
  ** In state _encrypt_:
   *** If{nbsp} `ace.exec Vd, Cn|C[Xn], Vs` {nbsp}is issued, then {nbsp} `Vd = enc_block(Vs)`.
-  *** [.red]#If `VLEN` is a multiple of `b`, then `ace.exec Vd, Cn|C[Xn], Vs` encrypts block-by-block#
+  *** [.red]#If `VLEN` is a multiple of `b`, then `ace.exec Vd, Cn|C[Xn], Vs` encrypts block-by-block.#
   *** If any other form of `ace.exec` is issued, then the CC is *invalidated*.
  ** In state _decrypt_:
   *** If{nbsp} `ace.exec Vd, Cn|C[Xn], Vs` {nbsp}is issued, then {nbsp} `Vd = dec_block(Vs)`.
-  *** [.red]#If `VLEN` is a multiple of `b`, then `ace.exec Vd, Cn|C[Xn], Vs` decrypts block-by-block#
+  *** [.red]#If `VLEN` is a multiple of `b`, then `ace.exec Vd, Cn|C[Xn], Vs` decrypts block-by-block.#
   *** If any other form of `ace.exec` is issued, then the CC is *invalidated*.
 
 <<<
+
+[NOTE]
+====
+[.red]#Albeit simple, this algorithm already shows the difficulty of designing an architecture of when the vector length is smaller than the cipher's block size.
+Of course, it is entirely plausible to use instruction sequences like the following#
+[C]
+----
+ace.exec     C0, V0          // load lower half of plaintext
+ace.exec     C0, V1          // load upper half of plaintext
+ace.exec V0, C0              // store lower half of ciphertext
+ace.exec V1, C0              // store upper half of ciphertext
+----
+[.red]#in place of a single "```ace.exec Vd, Cn|C[Xn], Vs```", but architecting all these variants would be cumbersome.
+Therefore, we are going to assume that the architectures can work with either variable length vectors or with vector groups, and that
+it is always possible to configure them so that the effective vector length at least the cipher's block size.#
+====
+
 [discrete]
 ==== Usage
 
@@ -1524,7 +1542,8 @@ State Machine:::
   . `Vd ← tmp`.
 --
 +
-[.red]#If `VLEN` is a multiple of `b`, the above three commands are executed `VLEN/b` times, putting each time `b` bits of data into each `b`-bit block of `Vd`. This operation is clearly parallelizable.  If the number `x` of needed keystream blocks is not a multiple of `VLEN`/`b`, `VL` can be set to the remainder of the division of `x` by `VLEN`/`b` for the last instruction.#
+[.red]#If `VLEN` is a multiple of `b`, the above three commands are applied to each of the `VLEN/b` `b`-bit blocks of `Vs`, producing each time the corresponding `b`-bit block of `Vd`.
+If the number `x` of blocks to be processed in an entire run of the algorithm is not a multiple of `VLEN`/`b`, `VL` can be set to the remainder of the division of `x` by `VLEN`/`b` for the last instruction.#
 
  ** In state _operate_, any other form of {nbsp}``ace.exec``{nbsp} will produce a null output and *invalidate* the CC.
 
@@ -1753,7 +1772,7 @@ This operation is also parallelizable by having the implementation precompute th
     . `Vd <- tmp`.
 --
 +
-[.red]#If `VLEN` is a multiple of `b`, the above are executed `VLEN/b` times, encrypting each `b`-bit block of `Vs` into a `b`-bit block of `Vd`. There is significant potential for parallelization, including in the `absorb_into_hash` function. If the number `x` of blocks to encrypt is not a multiple of `VLEN`/`b`, `VL` can be set to the remainder of the division of `x` by `VLEN`/`b` for the last instruction.#
+[.red]#If `VLEN` is a multiple of `b`, the above are executed `VLEN/b` times, encrypting each `b`-bit block of `Vs` into the corresponding `b`-bit block of `Vd`. There is significant potential for parallelization, including in the `absorb_into_hash` function. If the number `x` of blocks to encrypt is not a multiple of `VLEN`/`b`, `VL` can be set to the remainder of the division of `x` by `VLEN`/`b` for the last instruction.#
 
 ** In state _hash_finalize_enc_, we can only issue a Form A "```ace.exec Vd, Cn|C[Xn], Vs```," where +
  `Vs = IntTo{b/2}Bits(bit_length(AD)) @ IntTo{b/2}Bits(bit_length(plaintext))` +
@@ -1973,9 +1992,9 @@ The public `SIV` value is computed by clearing the most significant bit of `auth
  . `SIV`, `b/8` bytes.
 
 NOTE: `hash_key` and `auth_key` are not serialized,
-and must be recomputed upon each `ace.import`.
-
-NOTE: The `SIV` field is actually only needed for decryption, since it must be maintained separately from the `auth_tag` field, which changes with each processed block as it is computed, whereas for encryption it is first computed completely and then used in the encryption process. However, since the same CC could be configured to support both encryption and decryption, the `SIV` field always present in the internal state (even if not used) and in the exported state.
+and must be recomputed upon each `ace.import`. +
+ +
+The `SIV` field is actually only needed for decryption, since it must be maintained separately from the `auth_tag` field, which changes with each processed block as it is computed, whereas for encryption it is first computed completely and then used in the encryption process. However, since the same CC could be configured to support both encryption and decryption, the `SIV` field always present in the internal state (even if not used) and in the exported state.
 
 //
 
@@ -2009,38 +2028,60 @@ State Machine:::
     *** We can only issue  ``ace.exec`` instructions of Form B, i.e. "```ace.exec Cn|C[Xn], Vs```," to set the value of `nonce`, resp. `SIV`.
     *** If "```ace.exec Cn|C[Xn], Vs```" is repeated, it will just re-write the value of `nonce`, resp. `SIV`.
     *** If no such "```ace.exec Cn|C[Xn], Vs```" is issued, `nonce`, resp. `SIV`, remain equal to zero.
+    *** [.red]#If `VLEN` is larger than `b`, the most significant bits of `Vs` (i.e., the "tail" of the vector) are ignored.#
     *** Other forms of `ace.exe` will produce null outputs and *invalidate* the CC.
 +
-NOTE: There is no harm in moving to state _set_public_value_2_ and
-setting the SIV while encrypting, since that field is not used in the encryption path until it is set (thus overwriting any previous content) by the state machine itself.
-Accepting this redundant, but harmless, behavior simplifies the state machine.
+NOTE: There is no harm in moving to state _set_public_value_2_ and setting the
+SIV while encrypting, since that field is not used in the encryption path until
+it is set (thus overwriting any previous content) by the state machine itself.
+Accepting this redundant but harmless behavior simplifies the state machine.
 +
 ** In state _hash_absorb_:
++
+--
    *** Only ``ace.exec`` instructions of the form "```ace.exec Cn|C[Xn], Vs```" can be issued. Such an instruction accumulates a value in the `auth_tag`:
    i.e., perform `absorb_into_hash(Vs)`.
-   *** Other forms of `ace.exec` will produce null outputs and *invalidate* the CC.
+--
++
+[.red]#If `VLEN` is a multiple of `b`, `absorb_into_hash` is executed on each of the `VLEN/b` blocks in `Vs`.#
 
-  ** In state _hash_finalize_enc_,
-  we can only issue an {nbsp}``ace.exec``{nbsp} of Form A, i.e., "```ace.exec Vd, Cn|C[Xn], Vs```," where it is the responsibility of the user to set +
-  `Vs = IntTo{b/2}Bits(bit_length(AD)) @ IntTo{b/2}Bits(bit_length(plaintext))`, +
-  to finalize the computation of the SIV/tag, by performing:
+*** Other forms of `ace.exec` will produce null outputs and *invalidate* the CC.
+
+** In state _hash_finalize_enc_, we can only issue an {nbsp}``ace.exec``{nbsp} of Form A, i.e., "```ace.exec Vd, Cn|C[Xn], Vs```," where it is the responsibility of the user to set +
+`Vs = IntTo{b/2}Bits(bit_length(AD)) @ IntTo{b/2}Bits(bit_length(plaintext))`, +
+to finalize the computation of the SIV/tag, by performing:
++
+--
     . `absorb_into_hash(Vs)`.
     . `tmp <- enc_block(enc_key, 1b0 @ ((auth_tag xor N)[b-2:0]))`
     . If tag length is `b` bits, then
      *** `SIV <- tmp` and `Vd <- tmp`,
     . else (tag length is `3b/4` bits)
      *** `SIV <- tmp[b-1:b/4]` and `Vd <- (tmp >> b/4)`.
+--
++
+[.red]#If `VLEN` is larger than `b`, the most significant bits of `Vs` (i.e., the "tail" of the vector) are ignored.#
 
-  ** In state _encrypt_, we can only issue  ``ace.exec`` instructions of the Form A, namely "```ace.exec Vd, Cn|C[Xn], Vs```," to encrypt `Vs` into `Vd` as follows:
-   . If `ctr = 0`, then the CC is *invalidated*.
+*** Other forms of `ace.exec` will produce null outputs and *invalidate* the CC.
+
+** In state _encrypt_, we can only issue  ``ace.exec`` instructions of the Form A, namely "```ace.exec Vd, Cn|C[Xn], Vs```," to encrypt `Vs` into `Vd` as follows:
++
+--
+. If `ctr = 0`, then the CC is *invalidated*.
    . If the `SIV` is `b`-bits long, then +
      *** ``Vd <- Vs xor enc_block(key, 1b1 @ SIV[b-2:b/4] @ (SIV[b/4-1:0] + ctr % 2^b/4^)),``
    . else (the `SIV` is `3b/4`-bits long) +
       *** ``Vd <- Vs xor enc_block(key, 1b1 @ SIV[3b/4-2:0] @ ctr``.
    . `ctr <- ctr + 1`.
+--
++
+[.red]#If `VLEN` is a multiple of `b`, the above operations are applied to each of the `VLEN/b` blocks in `Vs`.#
 
- ** In state _decrypt_,  we can only issue  ``ace.exec`` instructions of the Form A, i.e., "```ace.exec Vd, Cn|C[Xn], Vs```," to
-   decrypt `Vs` into `Vd` and then absorb the plaintext `Vs` into the `auth_tag`, namely
+*** Other forms of `ace.exec` will produce null outputs and *invalidate* the CC.
+
+** In state _decrypt_,  we can only issue  ``ace.exec`` instructions of the Form A, i.e., "```ace.exec Vd, Cn|C[Xn], Vs```," to decrypt `Vs` into `Vd` and then absorb the plaintext `Vs` into the `auth_tag`, namely
++
+--
      . If `ctr = 0`, then the CC is *invalidated*.
      . If the `SIV` is `b`-bits long, then +
        *** ``Vd <- Vs xor enc_block(key, 1b1 @ SIV[b-2:b/4] @ (SIV[b/4-1:0] + ctr % 2^b/4^)),``
@@ -2048,11 +2089,15 @@ Accepting this redundant, but harmless, behavior simplifies the state machine.
        *** ``Vd <- Vs xor enc_block(key, 1b1 @ SIV[3b/4-2:0] @ ctr``.
      . `absorb_into_hash(Vs)`.
      . `ctr <- ctr + 1`.
+--
++
+[.red]#If `VLEN` is a multiple of `b`, the above operations are applied to each of the `VLEN/b` blocks in `Vs`.#
+
+*** Other forms of `ace.exec` will produce null outputs and *invalidate* the CC.
 
  ** In state _hash_finalize_dec_,
     we can only issue an ``ace.exec`` of Form B, namely "```ace.exec Cn|C[Xn], Vs```," where it is the responsibility of the user to set +
     `Vs = IntTo{b/2}Bits(bit_length(AD)) @ IntTo{b/2}Bits(bit_length(plaintext))`. +
-//    The semantics are almost identical to issuing a Form A ``ace.exec`` in state _hash_finalize_enc_ except that the SIV/tag value is _not_ output, but is only kept in `auth_tag`.
     ``ace.exec`` thus performs the following operations:
      . `absorb_into_hash(Vs)` (which modifies `auth_tag`).
      . `tmp <- enc_block(enc_key, 1b0 @ ((auth_tag xor N)[b-2:0]))`.
@@ -2130,11 +2175,10 @@ for i = 0 to len_in_bytes(PT)/16-1  do
 vsetvli zero, 4, e32, m1, ta, ma                 // Use 128-bit vectors
 ace.import C0, (X5)
 
-// The next operations set the nonce (and the derived Authentication Key).
+// The next operations set the nonce and SIV.
 ace.stage C0, #ace_const_set_public_value
 V0 ← nonce
 ace.exec C0, V0
-
 ace.stage C0, #ace_const_set_public_value_2
 V0 ← SIV
 ace.exec C0, V0
@@ -2155,7 +2199,6 @@ for i = 0 to len_in_bytes(CT)/16-1 do
 ace.stage C0, #ace_const_hash_finalize_enc
 V0 ← IntTo64Bits(len(AD)) @ IntTo64Bits(len(PT))
 ace.exec C0, V0
-
 ace.error X1
 if (X1 != 0) then { handle error }               // do not use the plaintext if error occurred
 ----
