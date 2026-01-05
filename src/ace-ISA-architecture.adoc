@@ -342,7 +342,8 @@ Valid only for encryption/decryption primitives or modes, and ignored, for insta
 Used to determine whether an operation must be restarted.
 | [20:17] |   4  | Stage (also Direction) | Encoding the current state of the state machine of the algorithm as a number (also called the "stage" of the algorithm).
 The value must be zero in the initialization data, but, internally, it can be changed immediately by the algorithm.
-If the algorithm encoded in the CC has at most 14 states (and possibly state _completed_, cf. <<ACE-stage-constants>>), then this number is stored in this field, cf. <<stage-field>>,
+If the algorithm encoded in the CC has at most 16 states
+(including _initial_, _completed_, and _invalidated_, cf. <<ACE-stage-constants>>), then this number is stored in this field, cf. <<stage-field>>,
 otherwise an algorithm-specific representation is used in the content, and this field only admits the values 0 (initial), 14 (invalidated), 15 (completed) or 1 (anything other operational state). The values must conform to <<ACE-stage-constants>>.
 |    [21] |   1  | Reserved               | Undefined.
 | [25:22] |   4  | Locality               | Field which is either -1 or an index into the Locality Secrets Table.
@@ -1205,6 +1206,7 @@ The encoding uses `ace.exec` Form B', with bit 8 (which is in the `rd` field) se
 Description::
 Wait until all current operations in the ACE unit which are issued by the current hart complete.
 This is necessary if we need to read the correct error status.
+[.red]#or we need to save and restore the state of a process in a consistent state in case we want to make cryptographic operations interruptible.#
 There should be no other use cases for this instruction, as reading from (or writing to) a CC that is the target of another ACE instruction will cause the CPU to wait that the result is ready, exactly as with register reads.
 
 [[ACE-instruction-error]]
@@ -1261,6 +1263,11 @@ must leave the architectural state indistinguishable from the state expected fro
 In this chapter we describe the behavior of Cryptographic Contexts for various cryptographic algorithms.
 Some of these descriptions are generic, others pertain to certain algorithms.
 
+NOTE: This chapter is normative because it defines the behavior of the instructions and the data formats they use.
+For instance, since AES-GCM-SIV is one of the mandatory algorithms, its behavior is completely determined by the specification of <<ACE-GCM-SIV>>
+where the block size is `b` = 128 and the key size `k` can be 128, or 256 bits.
+The specification of GCM-SIV here also guarantees that all implementations of, say, SM4-GCM-SIV (with the binary field in Montgomery representation using the same polynomial as AES-GCM-SIV) would be able to interoperate.
+
 Each algorithm is fully defined by the following information:
 
 Parameters:::
@@ -1308,7 +1315,7 @@ Recall that the architecture views a CC as a structure with two fields: the meta
 
 In the descriptions of the algorithms below, we do not need to redefine these two functions if they are not changed, i.e., if there are no changes to the metadata format.
 
-If the number of states of the algorithm is at most 16, we assume that the `stage` of the metadata is used to store this value.
+If the number of states of the algorithm is at most 16 (including _initial_, _completed_, and _invalidated_),= the `stage` of the metadata is used to store this value.
 Otherwise, the specification of the algorithm must include a suitable field in the content section of the CC/SCC.
 
 An important rule is the following.
@@ -1329,6 +1336,12 @@ The function that puts the CC in this state is called `invalidate()`.
 
 In state _completed_, no operation can be performed except `ace.init`, `ace.export`, `ace.import`, `ace.clear`, or `ace.error`.
 Any other operation, if it has an output, it returns zero, and will cause the CC to be *invalidated*.
+
+All the operations performed by `ace.exec` or `ace.state` in the rules given for each algorithm are assumed to be *uninterruptible*.
+This includes the case where very long vector inputs are processed but all operations are completely internal to ACE and require no external resource access, such as encryptions, decryptions, hashing, point multiplications, and other cryptographic operations.
+Since such operations can operate independently of the CPU core, they may continue to execute also when the process that issued them is interrupted, so the hart implementation may cause the context switching software to wait when accessing a CC that is going to be written to.
+We do not specify whether these instructions write their results to the CC atomically or piecewise.
+[.red]#(Only in case we still want to make long cryptographic operations interruptible) Therefore, any piece of software that needs to interrupt a process in a consistent state must issue the `ace.wait` instruction before accessing any CC.#
 
 In what follows, when we write of "state _name_" we refer to the state which has number _ace_state_name_ as described in <<ACE-stage-constants>>.
 
