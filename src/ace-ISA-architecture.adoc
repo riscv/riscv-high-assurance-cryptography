@@ -54,7 +54,6 @@ ACE requires a subset of the V extension to be implemented, including the
 vector register file (see <<ACE-Dependencies>>). Discussions are still ongoing on what subset will be
 required, and if a scalar dependency can be provided in addition.
 
-
 [[ACE-instructions-overview]]
 ==== Instructions Overview
 
@@ -224,7 +223,7 @@ This can be used in low CF memory situations to trigger a lazy re-load of that C
 
 
 [[ACE-tracking-cc-dirtiness]]
-===== Tracking CC dirtiness
+===== Tracking CC dirtiness: aceccactive and aceccdirty
 
 This is done by using two CSRs, which track the use and dirtiness of the CCs individually:
 
@@ -317,10 +316,13 @@ The `misa.ACE` field uses bit `L` (11) to indicate that the ACE extension is imp
 
 ====== acerctk
 
-If the RCTK can be programmed, it can only be programmed by MM.
-For this purpose, we need eight 32-bit CSRs are available, called `acerctk0`, `acerctk1` .. `acerctk7`, where register `acerctk{i}` contains bits [stem:[31+32\,i:32\,i]] of the RCTK.
-While the MM can write to the `acerctk` block, the CSRs in it will read as zero.
-The `acerctk` block is not accessible in any other mode. Accessing it will cause an illegal instruction exception.
+If the RCTK can be programmed, it can only be programmed by M-mode.
+For this purpose, we use eight 32-bit WARL CSRs in RV32 and four 64-bit WARL CSRs in RV64.
+The CSRs are: `macerctk0`, `macerctk1`, `macerctk2`, and `macerctk3` in RV64, to which we add
+`macerctk4`, `macerctk5`, `macerctk6`, and `macerctk7` in RV32.
+Bits [(_i_+1) XLEN - 1 : _i_ XLEN] of the RCTK are written to `macerctk{i}`.
+
+Attempting to access the `acerctk` block outside of MM will cause an illegal instruction exception.
 
 NOTE: Discoverability of whether the RCTK can be configured or not is not critical, since this is information known by the MM firmware.
 [.red]#We can use the data structure pointed by `mconfigptr` in order to track optional features of ACE including whether the `acerctk` CSR block is implemented, and if not whether whether the value is ephemeral or fixed.# +
@@ -329,15 +331,17 @@ User mode, and even operating systems and hypervisors, need not be aware of the 
 
 ====== Re-configurable Localities
 
-Two groups of four consecutive 32-bit CSRs, programmable by MM, are used to define two reconfigurable Localities
-(cf.{nbsp}<<ACE-concepts>>).
-These groups are:
-`ace_OS_Secret{i}`, for `i` in [0..3], to configure the "OS Secret" entry,
-and `ace_Boot_Session{i}`, for `i` in [0..3], to configure the "Boot Session" entry (cf.{nbsp}<<ACE-Localities>>).
+Two groups of CSRs, only accessible and programmable by MM, are used for two reconfigurable Localities (cf.{nbsp}<<ACE-concepts>>).
+These are:
+
+* CSRs `ace_OS_Secret0` and `ace_OS_Secret1`, to configure the "OS_Secret" entry in RV64, to which RV32 adds `ace_OS_Secret2` and `ace_OS_Secret3`.
+* CSRs `ace_Boot_Session0` and `ace_Boot_Session1`, to configure the "Boot_Session_Secret" entry in RV64, to which RV32 adds `ace_Boot_Session2` and `ace_Boot_Session3` (cf.{nbsp}<<ACE-Localities>>).
+
+Bits [(_i_+1) XLEN - 1 : _i_ XLEN] of the "OS_Secret", resp., "Boot_Session_Secret", are configured by writing to `ace_OS_Secret{i}`, resp. `ace_Boot_Session{i}`.
 
 The reason `ace_Boot_Session*` must be reconfigurable is that it must change in a VM if the latter's virtual hardware is re-booted, and this can happen independently from the underlying host and other VMs. For instance, a VM may be frozen, then the host may be rebooted, and then the VM may be resumed, in which case no boot session occurred in the VM, while it happened in the host hardware.
 
-NOTE: User mode, and even operating systems and hypervisors, need not be aware of the `ace_OS_Secret{i}` and `ace_Boot_Session{i}` blocks. Other mechanisms could have been chosen to program the "OS Secret" and  "Boot Session" entries, such as an MM-exclusive dedicated hardware interface or memory-mapped interface.
+NOTE: User mode, and even operating systems and hypervisors, need not be aware of the `ace_OS_Secret*` and `ace_Boot_Session*` blocks. Other mechanisms could have been chosen to program the "OS Secret" and  "Boot Session" entries, such as an MM-exclusive dedicated hardware interface or memory-mapped interface.
 
 ==== Data Structures
 
@@ -355,10 +359,6 @@ NOTE: Mechanisms for persisting Context Transport Keys (CTKs) across reboots or 
 The metadata section is 64 bits long and its format described in <<ACE-metadata-standard>>.
 This format is used for CC initialization, export and import purposes.
 The internal representation is implementation specific.
-// To initialize a CC, the first 64 bits of the input buffer contain the metadata in entirely in cleartext.
-// The metadata is in cleartext also in exported SCCs.
-// The entire metadata section is included in the computation of the authentication tag.
-// The details are described in <<ACE-formats>>.
 
 [#ACE-metadata-standard]
 .Format of the Metadata Section
@@ -432,8 +432,6 @@ In such a case, the value of the SC_Protection field must be set to 3.
 
 NOTE: The information in the Completion field is in principle known to the system software/firmware stack, we duplicate it into the metadata to ensure that it remains accessible after nested interrupts, i.e., after switching partially configured/imported or exported CCs in or out. While authentication also guarantees the integrity of the SCCs and of their import, this is both a robustness measure and serves to simplify system stacks.
 
-// Whether the CC is complete (00) or interrupted while being configured (01), imported (10) or exported (11). Necessary to know whether to restart operations.
-
 [[stage-field,Remark {counter:remark}]]
 *Remark {counter:remark}.* _The "state" field accommodates modes of operation with a small number of states.
 For algorithms with more complex state machines, machine state information can be stored in a custom data section of the CC._
@@ -451,7 +449,6 @@ Reconfiguring the RCTK is a better approach for such isolation requirements, whe
 Internally, ACE keeps a table of 128-bit Locality Secrets (LS), the Locality Secrets Table (LST).
 Some of these entries are fixed, other values may be configurable only using an implementation-specific authenticated hardware procedure, and the remaining may be programmed by MM (*Note:* _we need to define the corresponding CSRs_).
 The LST is a global table shared across all ACE units with some fields which can be MM-programmed and are architectural (i.e., per hart).
-//Currently, the only two values that may be overridden by architectural values, in order to support multiple VMs/Supervisor Domains/Worlds are System_Secret and Boot_Session.
 
 If the Locality Field of a context (CC/SCC) is -1 (all ones), then the RCTK is used.
 Otherwise, this value is used as an index _i_ in the HST, and a derived key computed from RCTK and LST[_i_] is used for import/export in place of the RCTK.
@@ -462,10 +459,6 @@ Column "MM-Config." indicates whether MM may be allowed to configure the entry.
 We also specify the domain of each Locality Secret, i.e., whether the value is
 chip-wide (should be the same across all chiplets in the same SoC, two distinct SoCs the same decide may have different values),
 device-wide, or (usually) OS-wide.
-// The first two Locality Secrets are chip-wide, and should be the same across all
-// chiplets in the same SoC -- a separate chip in the same system may have different values.
-// Three further Locality Secrets must be the same across the entire device, and the
-// Locality Secrets at indexes 5 and 6 can be reprogrammed by MM.
 
 [[ACE-locality-indexes]]
 .Mandatory Locality Values
@@ -484,13 +477,13 @@ device-wide, or (usually) OS-wide.
                                Reconfigurable like OEM_Secret. | Device | N | 4
 | OS_Secret                 | Identifies Operating System (or System Stack). +
                               Not permanent, must be configured during (virtual) boot. | OS | Allowed | 5
-| Boot_Session              | Regenerated at each (virtual) boot. | OS | Allowed | 6
+| Boot_Session_Secret       | Regenerated at each (virtual) boot. | OS | Allowed | 6
 | Reserved                  | Reserved for future use (RZ if not defined). | Impdef | Impdef | 7-14
 |===
 
 The constant Localities_MAX is the maximum number of Localities supported by the system.
 
-NOTE: MM is responsible for virtualizing the OS_Secret and Boot_Session Locality Secrets.
+NOTE: MM is responsible for virtualizing the OS_Secret and Boot_Session_Secret Locality Secrets.
 
 *Example*: _If a key's metadata specifies a Locality field value of "2", the key for import/export operations is derived from the RCTK and the "OEM Secret".
 Consequently, while `ace.export` remains functional on the same device to support context switching, an `ace.import` of the resulting SCC on a device from a different OEM will trigger an authentication failure (provided that the OEM Secrets are, in fact, different)._
