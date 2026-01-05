@@ -2100,6 +2100,8 @@ to finalize the computation of the SIV/tag, by performing:
     we can only issue an ``ace.exec`` of Form B, namely "```ace.exec Cn|C[Xn], Vs```," where it is the responsibility of the user to set +
     `Vs = IntTo{b/2}Bits(bit_length(AD)) @ IntTo{b/2}Bits(bit_length(plaintext))`. +
     ``ace.exec`` thus performs the following operations:
++
+--
      . `absorb_into_hash(Vs)` (which modifies `auth_tag`).
      . `tmp <- enc_block(enc_key, 1b0 @ ((auth_tag xor N)[b-2:0]))`.
      . If tag length is `b` bits, then
@@ -2109,11 +2111,15 @@ to finalize the computation of the SIV/tag, by performing:
      . Finally, `auth_tag` and `SIV` are compared:
    *** If the values match, the state transitions to _completed_ and `ace.error` returns no error,
        else the state transitions to _completed_ and `ace.error` returns `ace_err_authentication`.
+--
++
+[.red]#If `VLEN` is larger than `b`, the most significant bits of `Vs` beyojnd the `b`-th (i.e., the "tail" of the vector) are ignored.#
 
   ** Upon completion of `ace.import`, the ACE unit recomputes `hash_key` and `auth_key`
     . `enc_key`, `auth_key <- RFC8452_KeyDeriv(key)`.
 
 //
+<<<
 
 [discrete]
 ==== Usage
@@ -2161,6 +2167,8 @@ for i = 0 to len_in_bytes(PT)/16-1  do
     ace.exec V1, C0, V0                          // Encrypt the block
     - store V1 at address CT+16*i                // Store a block of ciphertext
 ----
+
+<<<
 
 [[ACE-pseudocode-GCM-SIV-decryption]]
 .GCM-SIV Decryption
@@ -2264,15 +2272,22 @@ State Machine:::
   *** Any `ace.exec` will result in the CC being *invalidated*.
 
   ** In state _hash_absorb_, we can only issue instructions ``ace.exec`` of form B, i.e., "```ace.exec Cn|C[Xn], Vs```", to absorb the data block `Vs` into the hash. This is performed as follows:
-   . `tmp <- hash xor Vs`.
++
+--
+  . `tmp <- hash xor Vs`.
    . `hash <- enc_block(key,tmp)`.
+--
++
+[.red]#If `VLEN` is a multiple of `b`, then the above operations are applied to each `b`-bit block of `Vs`.#
 
-  ** Upon issuing `ace.stage Cn|C[Xn], #ace_state_hash_finalize, Xs` where `Xs` contains the length of the last block in bits, following happens:
+** Upon issuing `ace.stage Cn|C[Xn], #ace_state_hash_finalize, Xs` where `Xs` contains the length of the last block in bits, following happens:
    . The CC transitions to state _hash_finalize_.
    . `last_block_len <- Xs`.
 
  ** In state _hash_finalize_, we can only issue a single instruction ``ace.exec`` of form A, i.e., "```ace.exec Cn|C[Xn], Vs```", to absorb the data block `Vs` and write the final hash value in `Vd`. After this, the state transitions to _completed_:
-  . `K1,K2 <- gen_subkeys(key)`.
++
+--
+ . `K1,K2 <- gen_subkeys(key)`.
   . if `last_block_len` = `b`, then
    *** `tmp <- hash xor Vs xor K1`,
   . else
@@ -2281,6 +2296,10 @@ State Machine:::
    *** `tmp <- hash xor tmp xor K2`.
   . `hash <- enc_block(key,tmp)`.
   . The CC transitions to state _completed_.
+--
++
+[.red]#If `VLEN` is larger than `b`, the most significant bits of `Vs` beyojnd the `b`-th (i.e., the "tail" of the vector) are ignored.#
+
 
  ** In any state, issuing any form of ``ace.exec`` that is not the allowed one will produce a null output and the CC will be *invalidated*.
 
