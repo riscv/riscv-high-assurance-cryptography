@@ -96,7 +96,6 @@ For instance, the source CC could be a KEM that configures the destination CC wi
    `ace.harden` is an alias for `ace.restrict`.
 | `ace.input`     | `Cd\|C[Xd], %offset(Xs)`         |  Optional. Provides an input to the algorithm configured in the CC `Cd` or `CC[Xd]`, in place of providing it through the `ace.exec` instruction. Neede only when the inputs are very long, such as the inputs to certain public key schemes.
 | `ace.output`    | `%offset(Xd), Cs\|C[Xs]`         |  Optional. Writes the output of an algorithm configured in the CC `Cs` or `CC[Xs]`, in place of providing it through the `ace.exec` instruction. Useful when the outputs are very long, such as the outputs of certain public key schemes.
-//| `ace.wait`      |                                  |  Waits until all operations in the ACE unit which have been issued by the current hart have completed.
 | `ace.error`     | `Xd`                             |  Write the error value of the ACE unit into GPR `Xd`.
 |===
 
@@ -1182,40 +1181,6 @@ Encoding::
 ]}
 ....
 
-// [.red]#(TBdetermined whether it is secure)# This instruction is trappable and may also be resumed or restarted.
-
-[comment]
---
-[[ACE-instruction-wait]]
-==== ace.wait
-
-`ace.wait`
-
-// Without this comment, the next part is not properly formatted...
-Encoding::
-The encoding uses `ace.exec` Form B', with bit 8 (which is in the `rd` field) set.
-+
-[wavedrom, , svg]
-....
-{reg:[
-    { bits:  7, name: 0x5b, attr: ['custom-2'] },
-    { bits:  5, name: 0x2 },
-    { bits:  3, name: 0x1, attr: ['ace.exec', '(Form B\')'] },
-    { bits:  5, name: 0x0 },
-    { bits:  5, name: 0x0 },
-    { bits:  7, name: 0x0 },
-]}
-....
-
-// comment
-
-Description::
-Wait until all current operations in the ACE unit which are issued by the current hart complete.
-This is necessary if we need to read the correct error status.
-[.red]#or we need to save and restore the state of a process in a consistent state in case we want to make cryptographic operations interruptible.#
-There should be no other use cases for this instruction, as reading from (or writing to) a CC that is the target of another ACE instruction will cause the CPU to wait that the result is ready, exactly as with register reads.
---
-
 [[ACE-instruction-error]]
 ==== ace.error
 
@@ -1455,8 +1420,7 @@ it is always possible to configure them so that the effective vector length at l
 [discrete]
 ==== Usage
 
-We give pseudocode to illustrate how to use an ECB CC to encrypt a block of data using a block cipher
-with a width of 128 bits.
+The following pseudocode illustrates how to use an ECB CC to encrypt a block of data using a block cipher with a width of 128 bits (`VLEN` is also 128).
 
 [[ACE-pseudocode-ECB-encryption]]
 .Simple Pseudocode Example: Encryption with no Authentication
@@ -1574,7 +1538,7 @@ Note that if `ace.stage` is issued to return to state _initial_, the CC can be r
 [discrete]
 ==== Usage
 
-Example pseudocode is given in <<ACE-pseudocode-keystream-modes>>.
+Example pseudocode is given in <<ACE-pseudocode-keystream-modes>> (for the case `b` = `VLEN` = 128).
 
 [[ACE-pseudocode-keystream-modes]]
 .Encrypt with Keystream Generation
@@ -1606,7 +1570,9 @@ for i = 0 to len_in_bytes(PT)/16-1 do
 [[ACE-XEX-XTS-modes]]
 ==== XEX/XTS modes (one or two keys)
 
-Note that the use of a single key or two independently sampled keys is determined by the algorithm field, and it is not determined by a configuration parameter for the same algorithm.
+Note that the use of a single key or two independently sampled keys is
+determined by the algorithm field, and it is not determined by a configuration
+parameter for the same algorithm.
 We first define XEX mode functionality.
 
 Parameters:::
@@ -1641,12 +1607,14 @@ Algorithm-Specific Functions:::
 State Machine:::
 
 * *States:* _initial_ (0), _set_public_value_ (8), _encrypt_ (1), and _decrypt_ (2).
+
 * *Allowed State Transitions:*
  ** _initial_ -> _set_public_value_.
  ** _set_public_value_ -> _initial_.
  ** _set_public_value_ -> _encrypt_, if metadata allows encryption, else the CC is *invalidated*.
  ** _set_public_value_ -> _decrypt_, if metadata allows decryption, else the CC is *invalidated*.
  ** _encrypt_, _decrypt_ -> _initial_.
+
 * *Behavior:*
  ** In state _initial_:
   *** The `mask` field is set to zero.
@@ -1677,7 +1645,8 @@ Note that if `ace.stage` is issued to return to state _initial_, the CC can be r
 [discrete]
 ==== Usage
 
-Using XEX mode is very easy. We include pseudocode for encryption only, decryption is entirely similar.
+Using XEX mode is very easy. We include pseudocode for encryption only, decryption is entirely similar
+(this example is also assuming `b` = `VLEN` = 128).
 
 [[ACE-pseudocode-basic-IV-mode]]
 .Pseudocode for encryption in any IV-based non-authenticated modes without associated data
@@ -1850,7 +1819,7 @@ This operation is also parallelizable by having the implementation precompute th
 [discrete]
 ==== Usage
 
-In <<ACE-pseudocode-GCM-encryption>> we show pseudocode for GCM encryption.
+In <<ACE-pseudocode-GCM-encryption>> we show pseudocode for GCM encryption (again with `b` = `VLEN` = 128).
 
 [[ACE-pseudocode-GCM-encryption]]
 .GCM Encryption
@@ -2145,7 +2114,7 @@ to finalize the computation of the SIV/tag, by performing:
 [discrete]
 ==== Usage
 
-We show in <<ACE-pseudocode-GCM-SIV-encryption>> how to perform AEAD encryption with a GCM-SIV CC.
+We show in <<ACE-pseudocode-GCM-SIV-encryption>> how to perform AEAD encryption with a GCM-SIV CC (with `b` = `VLEN` = 128).
 <<ACE-pseudocode-GCM-SIV-decryption>> is the corresponding pseudocode for decryption.
 
 [[ACE-pseudocode-GCM-SIV-encryption]]
@@ -2302,20 +2271,20 @@ State Machine:::
 +
 [.red]#If `VLEN` is a multiple of `b`, then the above operations are applied to each `b`-bit block of `Vs`.#
 
-** Upon issuing `ace.stage Cn|C[Xn], #ace_state_hash_finalize, Xs` where `Xs` contains the length of the last block in bits, following happens:
+ ** Upon issuing `ace.stage Cn|C[Xn], #ace_state_hash_finalize, Xs` where `Xs` contains the length of the last block in bits, following happens:
    . The CC transitions to state _hash_finalize_.
    . `last_block_len <- Xs`.
 
  ** In state _hash_finalize_, we can only issue a single instruction ``ace.exec`` of form A, i.e., "```ace.exec Cn|C[Xn], Vs```", to absorb the data block `Vs` and write the final hash value in `Vd`. After this, the state transitions to _completed_:
 +
 --
- . `K1,K2 <- gen_subkeys(key)`.
+  . `K1,K2 <- gen_subkeys(key)`.
   . if `last_block_len` = `b`, then
-   *** `tmp <- hash xor Vs xor K1`,
+    *** `tmp <- hash xor Vs xor K1`,
   . else
-   *** `tmp <- Vs`
-   *** Remove the `b` - `last_block_len` most significant bits of `tmp` and pad the resulting value with a `1` and sufficiently many `0` bits to make it `b` bits long.
-   *** `tmp <- hash xor tmp xor K2`.
+    *** `tmp <- Vs`
+    *** Remove the `b` - `last_block_len` most significant bits of `tmp` and pad the resulting value with a `1` and sufficiently many `0` bits to make it `b` bits long.
+    *** `tmp <- hash xor tmp xor K2`.
   . `hash <- enc_block(key,tmp)`.
   . The CC transitions to state _completed_.
 --
