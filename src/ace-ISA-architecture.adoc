@@ -96,7 +96,7 @@ For instance, the source CC could be a KEM that configures the destination CC wi
    `ace.harden` is an alias for `ace.restrict`.
 | `ace.input`     | `Cd\|C[Xd], %offset(Xs)`         |  Optional. Provides an input to the algorithm configured in the CC `Cd` or `CC[Xd]`, in place of providing it through the `ace.exec` instruction. Neede only when the inputs are very long, such as the inputs to certain public key schemes.
 | `ace.output`    | `%offset(Xd), Cs\|C[Xs]`         |  Optional. Writes the output of an algorithm configured in the CC `Cs` or `CC[Xs]`, in place of providing it through the `ace.exec` instruction. Useful when the outputs are very long, such as the outputs of certain public key schemes.
-| `ace.wait`      |                                  |  Waits until all operations in the ACE unit which have been issued by the current hart have completed.
+//| `ace.wait`      |                                  |  Waits until all operations in the ACE unit which have been issued by the current hart have completed.
 | `ace.error`     | `Xd`                             |  Write the error value of the ACE unit into GPR `Xd`.
 |===
 
@@ -179,11 +179,15 @@ Setting ACES=Disabled-Clean or Disabled-Clobbered does not destroy the state, no
 
 Fine-grained tracking activeness and dirtiness of individual CCs uses the `aceccactive` and `aceccdirty` CSRs, cf.{nbsp}<<ACE-tracking-cc-dirtiness>>.
 
+[[ACE-CSR-ace-error]]
 ===== aceerror
 
 The `aceerror` CSR contains only as many bits as needed to encode the error status.
 
 It can be freely read and written, in particular by context switching software to make sure that the error status is properly handled when a process resumes execution.
+
+It indicates the error condition on the last ACE instruction.
+This implies that any read from the `aceerror` CSR may have to wait until the last operation in the ACE unit which has been issued by the current hart completes.
 
 // All other bits are reserved for future use.
 // It is not a complete analogue of `fcsr` or `vcsr` since, for instance, it does not have to encode information such as rounding modes.
@@ -1180,6 +1184,8 @@ Encoding::
 
 // [.red]#(TBdetermined whether it is secure)# This instruction is trappable and may also be resumed or restarted.
 
+[comment]
+--
 [[ACE-instruction-wait]]
 ==== ace.wait
 
@@ -1208,6 +1214,7 @@ Wait until all current operations in the ACE unit which are issued by the curren
 This is necessary if we need to read the correct error status.
 [.red]#or we need to save and restore the state of a process in a consistent state in case we want to make cryptographic operations interruptible.#
 There should be no other use cases for this instruction, as reading from (or writing to) a CC that is the target of another ACE instruction will cause the CPU to wait that the result is ready, exactly as with register reads.
+--
 
 [[ACE-instruction-error]]
 ==== ace.error
@@ -1217,10 +1224,10 @@ There should be no other use cases for this instruction, as reading from (or wri
 Description::
 The ACE Unit may be in an error state due to the previous operation.
 The corresponding error value is written into GPR `Xd`.
-This is implemented as an `ace.wait` instruction
-(cf. <<ACE-instruction-wait>>) followed by a read from CSR `aceerror`.
+This is implemented as a read from CSR `aceerror`, which may cause the hart to wait if the error value is not yet available
+(cf.{nbsp}<<ACE-CSR-ace-error>>).
 The error value list is architected and given in <<ACE-error-codes>>.
-
+zzz
 // ///////////////////////////////////////////////////////////////////////////////////////////
 
 [[ACE-trappable-insns-support]]
