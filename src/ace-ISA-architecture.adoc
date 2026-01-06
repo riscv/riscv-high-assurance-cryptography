@@ -50,7 +50,7 @@ In TPMs, localities are 8-bit values used to restrict object usage by binding it
 === ACE Programmer's Model
 
 
-ACE requires a subset of the V extension to be implemented, including the
+The Atomic Cryptography Extension requires a subset of the V extension to be implemented, including the
 vector register file (see <<ACE-Dependencies>>).
 [.red]#Discussions are still ongoing on what subset will be required, and
 if a dependency on just the GPRs can be provided in addition.#
@@ -109,11 +109,11 @@ For instance, the source CC could be a KEM that configures the destination CC wi
 
 ==== Cryptographic Contexts
 
-The atomic cryptography extension does not add a traditional register file.
+ACE does not add a traditional register file.
 Rather, it defines 32 Cryptographic Contexts (CCs) for storing cryptographic keys and metadata.
 Each CC is identified by a number from 0 to 31, which the ACE unit uses to access its contents.
 
-Cryptographic Contexts (CCs) reside in a dedicated internal _context file_ (CF) that is inaccessible to any entity outside the ACE implementation, including software, other hardware blocks, and invasive debug interfaces. The CF's memory capacity is implementation-defined and may be as large as 32 times the size of the largest possible CC; however, a smaller amount of memory may be used in practice. At a minimum, the CF must be capable of holding either a single instance of the largest possible CC or the largest CC pair in which the first CC derives the second (via `ace.derive`).
+Cryptographic Contexts (CCs) reside in a dedicated internal _context file_ (CF) that is inaccessible to any entity outside the ACE implementation, including software, other hardware blocks, and invasive debug interfaces. The CF's memory capacity is implementation-defined and may be as large as 32 times the size of the largest possible CC; however, a smaller amount of memory may be used in practice. At a minimum, the CF must be capable of holding either (i) a single instance of the largest possible CC, or the largest CC pair in which the first CC derives the second (via `ace.derive`), as well as (ii) a metadata block for each other possible context.
 The size of each CC is dynamic, determined by the cryptographic algorithm with which it is configured.
 This is an important difference with respect to GPRs and vector registers, which always have the same size.
 ACE returns an error ace_err_memory when insufficient memory prevents `ace.init` and `ace.import` operations, requiring the software to free memory by exporting or clearing a different CC. Implementations must provide sufficient CF memory to prevent infinite `ace.export`/`ace.import` loops.
@@ -145,7 +145,6 @@ However, if the ACE unit contains state from a different process, and its interf
 When a process that has ACE enabled is preempted, the parent modes inherit the state to be able to export and
 re-import the CCs. Hence, `aceenable` is not cleared, and the `*status.ACES` fields (see <<ACE-ACES-field>>) of the parent domains will take the value Enabled.
 Tracking the CCs which are active, resp., dirty is done on an individual basis and is described in <<ACE-tracking-cc-dirtiness>>.
-
 
 [[ACE-ACES-field]]
 ===== ACES field in *status
@@ -360,32 +359,33 @@ The internal representation is implementation specific.
 
 <<<
 
-[#ACE-metadata-standard]
+[[ACE-metadata-standard]]
 .Format of the Metadata Section
 [width="100%",cols=">9%,^7%,17%,67%",options="header"]
 |===
 |   Field | Width | Name                  | Description
-|     [0] |   1  | Format                 | 0 for the current metadata format. +
+|   [0:0] |   1  | Format                 | 0 for the current metadata format. +
 Future format will have a 1 in this position and may be longer than 64 bits.
-|   [8:1] |   8  | Algorithm              | Algorithm (such as primitive or mode). 0 means the CC is invalid.
-|  [10:9] |   2  | SC_Protection          | Level of Side Channel Protection, encoded as per <<ACE-SC-protection-levels>>.
-| [12:11] |   2  | Direction_Policy       | Determines whether the CC may be used for encryption (bit 11 set), decryption (bit 12 set), or both (bits 11 and 12 set).
+|   [1:1] |   1  | Lazy_Load              | 1 if need to lazy load because of exhaustion of CF memory. +
+[.red]#Semantics TBD: In this case bits [63:2] are used as an identifier/address for the parent environment to solve the issue, content is empty, and SW will trap when trying to use this CC in any operation.#
+|   [9:2] |   8  | Algorithm              | Algorithm (such as primitive or mode). 0 means the CC is invalid.
+| [11:10] |   2  | SC_Protection          | Level of Side Channel Protection, encoded as per <<ACE-SC-protection-levels>>.
+| [13:12] |   2  | Direction_Policy       | Determines whether the CC may be used for encryption (bit 11 set), decryption (bit 12 set), or both (bits 11 and 12 set).
 Valid only for encryption/decryption primitives or modes, and ignored, for instance, for hash functions.
-| [14:13] |   2  | Key_Type               | By explicit value / Immutable (index) / Internally generated.
-| [16:15] |   2  | Completion             | Defined in <<ACE-CC-complete>>.
+| [15:14] |   2  | Key_Type               | By explicit value / Immutable (index) / Internally generated.
+| [17:16] |   2  | Completion             | Defined in <<ACE-CC-complete>>.
 Used to determine whether an operation must be restarted.
-| [20:17] |   4  | Stage (also Direction) | Encoding the current state of the state machine of the algorithm as a number (also called the "stage" of the algorithm).
+| [21:18] |   4  | Stage (also Direction) | Encoding the current state of the state machine of the algorithm as a number (also called the "stage" of the algorithm).
 The value must be zero in the initialization data, but, internally, it can be changed immediately by the algorithm.
 If the algorithm encoded in the CC has at most 16 states
 (including _initial_, _completed_, and _invalidated_, cf. <<ACE-stage-constants>>), then this number is stored in this field, cf. <<stage-field>>,
 otherwise an algorithm-specific representation is used in the content, and this field only admits the values 0 (initial), 14 (invalidated), 15 (completed) or 1 (anything other operational state). The values must conform to <<ACE-stage-constants>>.
-|    [21] |   1  | Reserved               | 0 for now.
 | [25:22] |   4  | Locality               | Field which is either -1 or an index into the Locality Secrets Table.
 | [29:26] |   4  | UC_Policy_1            | "UC Policy" means "Usage Control Policy". +
-Disallow the _usage_ of this CC in User, (Virtual) Supervisor, Hypervisor, resp., MM if bit 25, 26, 27, resp. 28, is set. Cf. <<stage-no-H-no-VMID>>.
-| [31:30] |   2  | UC_Policy_2            | If bit 29, resp., 30, is set, then restrict the usage by `ASID`, resp., `VMID`. Restriction by `ASID` ignored if in S Mode or higher. Cf. <<stage-no-H-no-VMID>>.
-| [47:32] |  16  | UC_Policy_3            | Zero if bit 29 unset, else `ASID` to enforce.
-| [63:48] |  16  | UC_Policy_4            | Zero if bit 30 unset, else `VMID` to enforce. Cf. <<stage-no-H-no-VMID>>.
+Disallow the _usage_ of this CC in User, (Virtual) Supervisor, Hypervisor, resp., MM if bit 26, 27, 28, resp. 29, is set. Cf. <<stage-no-H-no-VMID>>.
+| [31:30] |   2  | UC_Policy_2            | If bit 30, resp., 31, is set, then restrict the usage by `ASID`, resp., `VMID`. Restriction by `ASID` ignored if in S Mode or higher. Cf. <<stage-no-H-no-VMID>>.
+| [47:32] |  16  | UC_Policy_3            | Zero if bit 30 unset, else `ASID` to enforce.
+| [63:48] |  16  | UC_Policy_4            | Zero if bit 31 unset, else `VMID` to enforce. Cf. <<stage-no-H-no-VMID>>.
 |===
 
 Algorithms are encoded in a 8 bit field.
@@ -440,7 +440,7 @@ NOTE: The information in the Completion field is in principle known to the syste
 For algorithms with more complex state machines, machine state information can be stored in a custom data section of the CC._
 
 [[stage-no-H-no-VMID,Remark {counter:remark}]]
-*Remark {counter:remark}.* _If the H extension is not enabled, bit 27 must be set to 1, and bits 30 and [63:48] must be set to 0.
+*Remark {counter:remark}.* _If the H extension is not enabled, bit 28 must be set to 1, and bits 31 and [63:48] must be set to 0.
 The "UC_Policy_4" field is 16 bits long for compatibility with architectures employing 16-bit `VMID` fields (for instance, in heterogeneous systems).
 While interoperability cannot be guaranteed when this policy is used, this ensures that the two top bits are not used for other purposes. +
 Filtering usage by Supervisor Domain or World ID is not supported, and not only because of lack of space in a 64-bit metadata section:
@@ -475,9 +475,7 @@ device-wide, or (usually) OS-wide.
 | OEM_Secret                | Provisioned by OEM to differentiate their products from the competition.
                               Can be permanent in a device — optional reconfiguration using impdef HW authenticated mechanisms. | Device | N | 2
 | Product_Secret            | Identifies device/system type/model (product). Not necessarily permanent. Reconfigurable like OEM_Secret. | Device | N | 3
-| Device_Secret             | Unique device (entire system) secret (not the device ID such as a serial number, but it can be derived from it, for instance by hashing).
-                               Shared across all harts in a Soc and shareable across multiple SoCs in a single device. Sharing mechanism impdef, i.e., not architected.
-                               Reconfigurable like OEM_Secret. | Device | N | 4
+| Device_Secret             | Unique device (entire system) secret (not the device ID such as a serial number, but it can be derived from it, for instance by hashing). Shared across all harts in a Soc and shareable across multiple SoCs in a single device. Sharing mechanism impdef, i.e., not architected. Reconfigurable like OEM_Secret. | Device | N | 4
 | OS_Secret                 | Identifies Operating System (or System Stack).
                               Not permanent, must be configured during (virtual) boot. | OS | Allowed | 5
 | Boot_Session_Secret       | Regenerated at each (virtual) boot. | OS | Allowed | 6
@@ -2308,6 +2306,18 @@ State Machine:::
 [[ACE-examples]]
 
 === Examples
+
+==== Context Switching
+
+[.red]#TBD.#
+
+==== VM migration
+
+Just as the same VM can be made to run in an Intel or an AMD processor, for instance many users of client devices may switch to a device with a CPU from a different SiP and carry their VMs.
+However, it may occur that the ACE implementation on the new device has a CF with reduced capacity. In this case, the system software may not be able to restore all the contexts. Therefore, we added a single-block context format to <<ACE-metadata-standard>> that can be used by system software in such a situation, which can be used to store a (truncated) pointer or other information to be used, upon trapping, to identify which context to load.
+This of course requires to free one or more CCs beforehand and, it will be up to the same SW to decide which context to free.
+
+This mechanism, can also be used to implement lazy loading of contexts upon context switching.
 
 ==== Key Management and Provisioning Applications
 
