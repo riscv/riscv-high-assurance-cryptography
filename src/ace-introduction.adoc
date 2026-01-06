@@ -5,10 +5,11 @@
 
 The _Atomic Cryptographic Extension_ (ACE) provides an interface to high-assurance cryptographic operations.
 Its primary features are:
-the concealment of key values and other secrets;
-support for various cryptographic algorithms including implementations hardened against Side-Channel Attacks;
+
+* The concealment of key values and other secrets;
+* Support for various cryptographic algorithms including implementations hardened against Side-Channel Attacks;
 and
-binding key usage to process domains, device and device types, software and hardware configurations.
+* Binding key usage to process domains, device and device types, software and hardware configurations.
 
 ACE addresses use cases such as
 key and identity management,
@@ -16,7 +17,7 @@ content protection (including local LLM decryption),
 link and storage encryption,
 and
 attestation.
-It targets applications requiring cryptographic operations with high protection for keys and intermediate values.
+// It targets applications requiring cryptographic operations with high protection for keys and intermediate values.
 
 ACE is architected as an _attached_ unit, similar to a coprocessor with a dedicated, low-latency interface to the CPU core.
 In particular, standard interrupts need not stop cryptographic operations being performed by the ACE implementations,
@@ -80,10 +81,11 @@ The complete model is specified in <<ACE-architecture>>.
 An incomplete list of supported algorithms includes AES-128 and AES-256 encryption and decryption (ECB modes),
 CTR, GCM, GCM-SIV, XTS, and CMAC algorithms using AES-128/256, but possibly also other block ciphers such as, for instance, SM4.
 Hash functions include at least SHA-2, SHA-2-HMAC.
+The interface offered by ACE can also be used to provide support for public key algorithms, including post-quantum ones.
 
 
 [[ACE-introduction-non-features]]
-=== Non-Features
+=== Non-Goals
 
 ACE intentionally excludes the following:
 
@@ -91,73 +93,52 @@ ACE intentionally excludes the following:
 * **Variable-length ciphertext and plaintext inputs:** Plaintext and ciphertexts, as well as messages of which digests are computed, are processed in fixed-size blocks.
 * **Complete key management:** ACE provides only architectural building blocks that can be used for key management, where the key management logic resides in trusted software (e.g., TEE applets).
   ACE does not support external schemes for directly provisioning keys into a key store.
-* **Key revocation:** Current specifications do not include a revocation mechanism.
-  Future versions may support revocation via key identifiers and system-wide revocation broadcasts.
+* **Key revocation:**
+The present specification does not include a key revocation mechanism.
+While future versions may be architected to support revocation, such functionality is excluded here to avoid architectural and implementation complexity. The rationale is as follows:
+. ACE is designed to prioritize performance and flexibility (for example, algorithmic abstraction). Comprehensive revocation mechanisms, such as usage counters or revocation lists, would potentially degrade performance and significantly increase the complexity of an implementation.
+. Enforcing a universal revocation mechanism is impractical due to the diversity of protocols used by different key providers. Additionally, managing potentially large revocation data structures within the ACE unit is complicated by the need for secure memory access: The ACE unit would both have to be agnostic to the external software stack's memory management and support a mechanism for securely obtaining protected memory from it.
+Isolated software components (e.g., enclaves, realms, TrustZone applets) are better suited to handle these protocols, their data structures, and their updates, as they are designed to integrate with the local stacks' memory management.
+. Revocation typically targets root keys. Since user software generally uses derived keys, such as session keys, it suffices that revocation be handled by the trusted entity managing the root keys.
+. Applications that require direct software use of master keys (for instance for link and storage encryption) is usually limited to high-privilege environments. ACE is of course available to such environments as well.
+
 * **Prevention of misuse by compromised processes:**  ACE cannot fully prevent misuse by compromised processes, as these processes may still get access to CCs.
 ACE complements existing SW vulnerability exploitation countermeasures and process isolation, but cannot replace them.
 Furthermore, in certain modes, such as in counter-mode encryption, the same method enables both encryption and decryption, potentially enabling misuse by malicious processes. This type of risk cannot be mitigated by ACE.
 
 
-// === High Level View of the Extension
-//
-// The most important instructions provided by ACE are the following:
-//
-// * `ace.init`,  to load the clear value of a key (and some metadata) in a Cryptographic Context (CC);
-// * `ace.clear`, to erase/invalidate the content of a CC;
-// * `ace.export`, to encrypt and authenticate a CC and store it to memory as a SCC;
-// * `ace.import`, to authenticate, decrypt a SCC from memory and import it into a CC;
-// * `ace.exec`, to perform a cryptographic operation on a block (e.g., 128 bits) of the input;
-// * `ace.state/ace.dir`, to configure the CC for encryption/decryption or move from one "stage" of an algorithm to another; and
-// * `ace.error`, to report an error condition, which can be implemented as a read operation from a CSR.
-//
-// Other instructions are provided and these will be discussed in detail later.
-//
-// The inputs and outputs of the ACE operations are:
-//
-// . Cryptographic Contexts,
-// . Vector registers, and
-// . External memory.
-//
-// NOTE: Throughout this document, the cryptographic inputs and outputs for all `ACE` operations are vector registers.
-// A priori, we do not exclude versions of the specification that use only GPRs, however this is currently out of scope, and if the need arises, this should be architected as well.
-//
-// === An Example
-//
-// In the following example, a process wants to AES-encrypt some data using a key they are not allowed to know, which belongs to a recipient.
-//
-// .Simple Pseudocode Example: Encryption with no Authentication
-// [C]
-// ----
-// - Call OS API to get the necessary SCC. Assume X5 points to the SCC.
-// - Allocate memory for ciphertext buffer.
-//
-// ace.import C0, (X5)                       // Import the SCC into CC C0
-// ace.error X1,C0                           // Read error from a CSR
-// if (X1 != 0) then { handle error }        // ACE may fail to validate SCC, algorithm
-//                                           // not supported, or CF memory full
-// vsetvli zero, 4, e32, m1, ta, ma          // Use 128-bit vectors
-// ace.state C0, #ace_const_encrypt          // Configure CC for encryption
-// ace.error X1, C0                          // Read error from a CSR
-// if (X1 != 0) then { handle error }        // Error if encryption is not allowed by CC
-//
-// foreach (i from 0 to len_in_bytes(plaintext)/16-1) { // assume plaintext in whole blocks
-//     - load V0 from address plaintext+16*i
-//     ace.exec V0, C0, V                    // Encrypt one block of the plaintext
-//     - store V0 at address ciphertext+16*i
-// }
-// ----
+[[ACE-threat-model]]
+=== Threat Model
 
-// vle32.v  V0, (plaintext)              // load V0 from address plaintext+16*i
-//                                       // assume plaintext is in a register
-// ace.exec V0, C0, V                    // Encrypt one block of the plaintext
-// vse32.v  V0, (ciphertext)             // store V0 at address ciphertext+16*i
-// add plaintext, plaintext, 16          // advance plaintext pointer
-// add ciphertext, ciphertext, 16        // advance ciphertext pointer
+The ACE threat model is straightforward.
+
+**Assets** consist of _keys_ and any other information that could aid an adversary in recovering plaintext or forging ciphertext. This includes items such as masks in tweakable XEX modes and derived keys in AES-GCM-SIV. The critical properties of these assets are their _confidentiality_ and _integrity_.
+
+**Adversaries** are assumed capable of compromising processes by exploiting software vulnerabilities.
+They are also able to gain access to memory contents, for instance, by abusing hardware interfaces or by SoC/memory interposition.
+The model does not include adversaries capable of sophisticated hardware attacks, such as using
+a Focused Ion Beam/Scanning Electron Microscope (FIB/SEM) to tamper with the hardware's functionality.
+
+Side channel attacks are addressed optionally. ACE offers interfaces to both SCA unprotected and protected implementations of cryptographic algorithms, if these options are provided by the designer.
+
+Threats can be addressed in four ways:
+
+[horizontal]
+**C:**:: _Control_ the threat by implementing full or partial mitigations.
+**A:**:: _Accept_ the threat and its associated risks.
+**T:**:: _Transfer_ the threat to another party better suited to address it.
+**S:**:: _Suppress_ the features that give rise to the threat.
+
+ACE is designed to avoid the "***A***" and "***S***" options (as much as possible). It _controls_ threats through its own mechanisms and _transfers_ residual risk—specifically, the risk of key extraction from the privileged or trusted software and hardware environments that manage keys—to those same environments. For example, trusted software environments may employ control-flow integrity, memory encryption with integrity protection, and anti-replay mechanisms, while hardware key-management blocks can be hardened to protect entrusted keys.
+
+Direct plaintext leakage, memory corruption attacks against the ACE-using process, and Release of Unverified Plaintext (RUP) attacks on the cryptographic algorithms are considered out of scope. These threats cannot be mitigated by ACE because the processed information resides within the user process domain. Consequently, these threats are _accepted_.
+
+[[ACE-outline]]
+=== Outline
+
+The remainder of this document describes the extension in full detail.
 
 
-// // [[ACE-outline]]
-// // === Outline
-// //
-// // The remainder of this document describes the extension in full detail.
-// //
-// // //In <<Details>> the technical details of the architecture are presented, including a listing of the instructions and their semantics.
+[.red]#*Discussion point:* _Can optional limitations even to import and export make sense and be useful?#_
+
+[.red]#*Discussion point:* _Everything in this specification is still valid if the number of CCs is reduced to, say, 8. Immediate values to refer to CCs are still 5 bits long because the same field can also be used to refer to a GPR, but the only valid values for the CC number are 0 to 7._#
