@@ -3,13 +3,13 @@
 
 #(The ratification plan can be found https://riscv.atlassian.net/wiki/spaces/HACX/pages/484966423/High+Assurance+Crypto+Ratification+Plan[here].)#
 
-The _Atomic Cryptographic Extension_ (ACE) provides an interface to high-assurance cryptographic operations.
+The _Atomic Cryptography Extension_ (ACE) provides an interface to high-assurance cryptographic operations.
 Its primary features are:
 
 * The concealment of key values and other secrets;
 * Support for various cryptographic algorithms including implementations hardened against Side-Channel Attacks;
 and
-* Binding key usage to process domains, device and device types, software and hardware configurations.
+* Binding key usage to processes, device and device types, software and hardware configurations.
 
 ACE addresses use cases such as
 key and identity management,
@@ -20,8 +20,8 @@ attestation.
 // It targets applications requiring cryptographic operations with high protection for keys and intermediate values.
 
 ACE is architected as an _attached_ unit, similar to a coprocessor with a dedicated, low-latency interface to the CPU core.
-In particular, standard interrupts need not stop cryptographic operations being performed by the ACE implementations,
-except when they are accessing memory,
+In particular, standard interrupts need not stop operations being performed by an ACE implementation,
+except when the latter is accessing memory,
 and the implementation may decide to stall the CPU pipeline only if a trap requires saving ACE state.
 
 This model is the same one used in streaming accelerators:
@@ -35,16 +35,17 @@ In particular, implementations that are integrated into the CPU core are allowed
 . ACE is an ISE for full-round, block-wise cryptographic operations that keeps keys concealed.
 . It supports various cryptographic primitives and modes, including Side-Channel Attack (SCA) resistant versions.
   The specification includes mandatory, optional, and custom algorithms.
-. Keys are stored in an architectural state called a _Cryptographic Context_ (CC), along with metadata binding the key to a specific algorithm and usage restrictions.
- * Keys in a CC are _opaque_ and cannot be extracted by software. CCs are not general-purpose read/write registers.
+. Keys are stored in an architectural state called a _Cryptographic Context_ (CC), along with metadata binding the key to a specific algorithm and usage restrictions. In fact, CCs can store any type of data, not only keys, so we speak of the _contents_ of a CC.
+ * The contents of a CC are _opaque_ and cannot be extracted by software. CCs are not GPRs.
+ * The metadata is the _non-opaque_ part of a CC, it can be read, but not freely modified by software.
  * CCs are configured via software, System Key Tables, or dynamic key generation blocks.
-. ACE instructions reference CCs rather than raw key values.
+. ACE instructions reference CCs rather than the raw values of their contents, such as keys.
 . ACE supports multiple concurrent active CCs.
 . Trusted entities can use ACE to provision opaque keys to less-trusted environments, enabling cryptographic operations without exposing key material.
-  Once provisioned, keys are reusable without further interaction.
+  Once provisioned, keys are reusable without further interaction with the more trusted environments.
 . ACE binds CCs to _Localities_ to prevent replay across different machines, product lines, or execution contexts (see <<ACE-concepts>> and <<ACE-Localities>>).
-. ACE enforces process-level access control for opaque keys, supporting:
- * Domain separation for keys.
+. ACE enforces process-level access control for their opaque contents, supporting:
+ * Separation for keys according to processes, supervisors, security states (i.e., _process domains_).
  * Key preservation during process or VM migration.
 . ACE scales from embedded to server cores using a unified ISA and ABI.
   Smaller cores may omit features transparently to user software.
@@ -53,9 +54,6 @@ In particular, implementations that are integrated into the CPU core are allowed
 
 // Currently, this often involves both changing context and potentially blocking operations to program keys or to perform cryptographic operations in cryptographic accelerators. This can result in large delays. ACE enables SW to set and use these keys with reduced overheads.
 
-// ACE can be used to provide hardened primitives for TEEs and TPMs to minimize explicit key handling and reduce the attack surface.
-// The cryptographic operations are per-block atomic (“one-shot instructions”), as opposed to common round-based ISAs. Besides the already stated goal of preventing direct key leakage or exposure (which is unavoidable by design in round-based extensions like AES-NI), but also to enable masked implementation for protection against side-channel attacks. The fact that these operations are performed atomically gives the extension its name.
-// ACE further reduces the attack surface of key misuse attacks by binding key usage policies to specific algorithms and authorized SW environments.
 
 [[ACE-introduction-rationale]]
 === Rationale
@@ -63,6 +61,7 @@ In particular, implementations that are integrated into the CPU core are allowed
 ACE addresses the inadequacies of current solutions:
 
 * Round-based ISAs require explicit key injection between block cipher rounds or at various points in keyed hash algorithm.
+  In the absence of contract-based access control to register values, or full homomorphic encryption to operate on the data, this means that the value of the key must be exposed to the environment.
 * Existing ISAs lack intrinsic trust mechanisms, relying on external IP or costly context switches to TEEs (e.g., TrustZone).
 * External blocks and key management units impose significant latency and system stack overhead.
 * Primitive-only support is insufficient for modes like AES-GCM-SIV, where derived keys must also remain protected, or the mask values in OCB modes.
