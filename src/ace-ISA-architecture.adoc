@@ -47,7 +47,7 @@ and fields that can be programmed by MM.
 The metadata stores the Locality as an index into this table. See <<ACE-Localities>> for more details.
 
 NOTE: The term "Locality" is borrowed from TPMs.
-In TPMs, localities are 8-bit values used to restrict object usage by binding it to the source of a command (e.g., application, operating system, or driver layer).  In TPMs, if an object is bound to the "Trusted OS" locality (usually with a value of 4), it can be used by any Trusted OS running on the system. This contrasts with the ACE mechanism, which allows for more fine-grained control over key usage: The MM firmware can reprogram the corresponding Locality Secret to a unique value for each Trusted OS, for instance by reprogramming the "OS_Secret" field in <<ACE-locality-indexes>>.
+In TPMs, localities are 8-bit values used to restrict object usage by binding it to the source of a command (e.g., application, operating system, or driver layer).  In TPMs, if an object is bound to the "Trusted OS" locality (usually with a value of 4), it can be used by any Trusted OS running on the system. This contrasts with the ACE mechanism, which allows for more fine-grained control over key usage: The MM firmware can reprogram the corresponding Locality Secret to a unique value for each Trusted OS, for instance by reprogramming the "OSSecret" field in <<ACE-locality-indexes>>.
 
 // ///////////////////////////////////////////////////////////////////////////////////////////
 
@@ -138,14 +138,14 @@ It also requires a subset of the V extension to be implemented, including the ve
 [cols="2,2,2,10"]
 [%autowidth,float="center",align="center",options="header"]
 |===
-| 0xXXX   | URW       | aceerror                 | Error code of the last ACE instruction
-| Address | Privilege | Name                     | Description
-| 0xXXX   | URO       | aceccactive              | Number and ID of active Contexts
-| 0xXXX   | URO       | aceccdirty               | Number and ID of dirty Contexts
-| 0xXXX   | URW       | ccstart                  | ACE start byte index
-| 0xXXX   | MRW (RZ)  | macerctk{0..7}           | ACE Root Context Transport Key
-| 0xXXX   | MRW (RZ)  | mace_OS_Secret{0..4}     | ACE OS Secret
-| 0xXXX   | MRW (RZ)  | mace_Boot_Session0{0..4} | ACE Boot Session
+| 0xXXX   | URW       | aceerror               | Error code of the last ACE instruction
+| Address | Privilege | Name                   | Description
+| 0xXXX   | URO       | aceccactive            | Number and ID of active Contexts
+| 0xXXX   | URO       | aceccdirty             | Number and ID of dirty Contexts
+| 0xXXX   | URW       | ccstart                | ACE start byte index
+| 0xXXX   | MRW (RZ)  | macerctk{0..7}         | ACE Root Context Transport Key
+| 0xXXX   | MRW (RZ)  | maceOSSecret{0..4}     | ACE OS Secret
+| 0xXXX   | MRW (RZ)  | maceBootSecret0{0..4}  | ACE Boot Session
 |===
 
 [[ACE-CSR-enable]]
@@ -385,16 +385,16 @@ NOTE: Mechanisms for persisting Root Context Transport Keys (RCTKs) across reboo
 Two groups of CSRs, only accessible and programmable by MM, are used for two reconfigurable Localities (cf.{nbsp}<<ACE-concepts>>).
 These are:
 
-* CSRs `mace_OS_Secret0` and `mace_OS_Secret1`, to configure the "OS_Secret" entry in RV64, to which RV32 adds `ace_OS_Secret2` and `ace_OS_Secret3`.
-* CSRs `mace_Boot_Session0` and `mace_Boot_Session1`, to configure the "Boot_Session_Secret" entry in RV64, to which RV32 adds `ace_Boot_Session2` and `ace_Boot_Session3` (cf.{nbsp}<<ACE-Localities>>).
+* CSRs `maceOSSecret0` and `maceOSSecret1`, to configure the "OSSecret" entry in RV64, to which RV32 adds `maceOSSecret2` mand `maceOSSecret3`.
+* CSRs `maceBootSecret0` and `maceBootSecret1`, to configure the "BootSecret" entry in RV64, to which RV32 adds `maceBootSecret2` and `maceBootSecret3` (cf.{nbsp}<<ACE-Localities>>).
 
-Bits [(_i_+1) XLEN - 1 : _i_ XLEN] of the "OS_Secret", resp., "Boot_Session_Secret", are configured by writing to `ace_OS_Secret{i}`, resp. `ace_Boot_Session{i}`.
+Bits [(_i_+1) XLEN - 1 : _i_ XLEN] of the "OSSecret", resp., "BootSecret", are configured by writing to `maceOSSecret{i}`, resp. `maceBootSecret{i}`.
 
 [NOTE]
 ====
-The reason `ace_Boot_Session*` must be reconfigurable is that it must change in a VM if the latter's virtual hardware is re-booted, and this can happen independently from the underlying host and other VMs. For instance, a VM may be frozen, then the host may be rebooted, and then the VM may be resumed, in which case no boot session occurred in the VM, while it happened in the host hardware.
+The reason `maceBootSecret*` must be reconfigurable is that it must change in a VM if the latter's virtual hardware is re-booted, and this can happen independently from the underlying host and other VMs. For instance, a VM may be frozen, then the host may be rebooted, and then the VM may be resumed, in which case no boot session occurred in the VM, while it happened in the host hardware.
 
-User mode, and even operating systems and hypervisors, need not be aware of the `mace_OS_Secret{i}` and `mace_Boot_Session{i}` blocks. Other mechanisms could have been chosen to program the "OS Secret" and  "Boot Session" entries, such as an MM-exclusive dedicated hardware interface or memory-mapped interface.
+User mode, and even operating systems and hypervisors, need not be aware of the `maceOSSecret{i}` and `maceBootSecret{i}` blocks. Other mechanisms could have been chosen to program the "OS Secret" and  "Boot Session" entries, such as an MM-exclusive dedicated hardware interface or memory-mapped interface.
 ====
 
 [[ACE-data-structures]]
@@ -522,27 +522,27 @@ device-wide, or (usually) OS-wide.
 
 [[ACE-locality-indexes]]
 .Mandatory Locality Values
-[width="100%",cols="25%,48%,^9%,^9%,^9%",options="header"]
+[width="100%",cols="23%,50%,^9%,^9%,^9%",options="header"]
 |===
 .>| Name .>| Description .>| Domain | MM-Config. .>| Value +
 (Index)
-| No Locality binding       | No CTK derivation. CC bound to Root CTK only. | -- | -- | -1 (15)
-| Chip_Manufacturer_Secret  | Identifies the manufacturer of the SoC. Permanent. | SoC | N | 0
-| Chip_Model_Secret         | Identifies specific chip model/family. Permanent. | SoC | N | 1
-| Chip_Unique_Secret        | Unique for each SoC. Permanent. | SoC | N | 2
-| OEM_Secret                | Provisioned by OEM to differentiate their products from the competition.
+| (No Locality binding)     | No CTK derivation. CC bound to Root CTK only. | -- | -- | -1 (15)
+| ChipManufacturerSecret    | Identifies the manufacturer of the SoC. Permanent. | SoC | N | 0
+| ChipModelSecret           | Identifies specific chip model/family. Permanent. | SoC | N | 1
+| ChipUniqueSecret          | Unique for each SoC. Permanent. | SoC | N | 2
+| OEMSecret                 | Provisioned by OEM to differentiate their products from the competition.
                               Can be permanent in a device — optional reconfiguration using impdef HW authenticated mechanisms. | Device | N | 3
-| Product_Secret            | Identifies device/system type/model (product). Not necessarily permanent. Reconfigurable like OEM_Secret. | Device | N | 4
-| Device_Secret             | Unique device (entire system) secret (not the device ID such as a serial number, but it can be derived from it, for instance by hashing). Shared across all harts in a Soc and shareable across multiple SoCs in a single device. Sharing mechanism impdef, i.e., not architected. Reconfigurable like OEM_Secret. | Device | N | 5
-| OS_Secret                 | Identifies Operating System (or System Stack).
+| ProductSecret             | Identifies device/system type/model (product). Not necessarily permanent. Reconfigurable like OEM_Secret. | Device | N | 4
+| DeviceSecret              | Unique device (entire system) secret (not the device ID such as a serial number, but it can be derived from it, for instance by hashing). Shared across all harts in a SoC and shareable across multiple SoCs in a single device. Sharing mechanism impdef, i.e., not architected. Reconfigurable like OEM_Secret. | Device | N | 5
+| OSSecret                  | Identifies Operating System (or System Stack).
                               Not permanent, must be configured during (virtual) boot. | OS | Allowed | 6
-| Boot_Session_Secret       | Regenerated at each (virtual) boot. | OS | Allowed | 7
+| BootSecret                | Regenerated at each (virtual) boot. | OS | Allowed | 7
 | Reserved                  | Reserved for future use (RZ if not defined). | Impdef | Impdef | 8-14
 |===
 
 The constant Localities_MAX is the maximum number of Localities supported by the system.
 
-NOTE: MM is responsible for virtualizing the OS_Secret and Boot_Session_Secret Locality Secrets.
+NOTE: MM is responsible for virtualizing the OSSecret and BootSession_Secret Locality Secrets.
 
 *Example*: _If a key's metadata specifies a Locality field value of "2", the key for import/export operations is derived from the RCTK and the "OEM Secret".
 Consequently, while `ace.export` remains functional on the same device to support context switching, an `ace.import` of the resulting SCC on a device from a different OEM will trigger an authentication failure (provided that the OEM Secrets are, in fact, different)._
