@@ -8,10 +8,10 @@ Opaque Key:::
 The fundamental concept of ACE is the _opaque key_, i.e., a cryptographic key whose value remains hidden to software even while being used in cryptographic operations.
 
 Cryptographic Context:::
-ACE implements the concept of opaque key through _Cryptographic Contexts_ (CCs), architectural containers that protect sensitive information.
-Each CC consists of an opaque *metadata section*, which does not require confidentiality, and of a *content section*, which requires confidentiality.
-The metadata section defines the cryptographic algorithm and optional usage policies, while the content section comprises sensitive material—including keys, other secrets, and internal algorithm state.
-The confidentiality and integrity of CC content section is enforced by restricting modifications and access to architectural mechanisms that enforce rules defined by the configured algorithm. The concept of _opaqueness_ extends to the entirety of the data in the content section.
+ACE implements the concept of _opaque keys_ via _Cryptographic Contexts_ (CCs), architectural containers that protect sensitive information.
+Each CC contains an opaque *metadata section*, which does not require confidentiality, and a *content section*, which does.
+The metadata defines the cryptographic algorithm and optional usage policies; the content holds sensitive material such as keys, other secrets, and internal algorithm state.
+Confidentiality and integrity of the content section are enforced by restricting access and modifications to architectural mechanisms that implement the rules of the configured algorithm. The concept of _opaqueness_ extends to all data within the content section.
 
 Object-Oriented Architecture:::
 CCs are _objects_ that may expose a uniform interface despite implementing different algorithms.  A CC (or SCC) encapsulates its own behavior, allowing, for instance, AES-128, AES-256, Калина-128, Калина-256, and SM4 instances in ECB mode to be used interchangeably without code changes.  Similarly, modes such as GCM-SIV or XEX/XTS, that can be instantiated with any of these algorithms would also offer the same binary interface, as long as the code supports variable SCC sizes, which can be dynamically discovered. Side-channel-resistant variants would also be supported transparently.
@@ -47,7 +47,9 @@ and fields that can be programmed by MM.
 The metadata stores the Locality as an index into this table. See <<ACE-Localities>> for more details.
 
 NOTE: The term "Locality" is borrowed from TPMs.
-In TPMs, localities are 8-bit values used to restrict object usage by binding it to the source of a command (e.g., application, operating system, or driver layer).  In TPMs, if an object is bound to the "Trusted OS" locality (usually with a value of 4), it can be used by any Trusted OS running on the system. This contrasts with the ACE mechanism, which allows for more fine-grained control over key usage: The MM firmware can reprogram the corresponding Locality Secret to a unique value for each Trusted OS, for instance by reprogramming the "OSSecret" field in <<ACE-locality-indexes>>.
+In TPMs, localities are 8-bit values used to restrict object usage by binding it to the source of a command (e.g., application, operating system, or driver layer).
+However, these values are provided by the sources themselves or by the driver, and a single locality can be shared by all "Trusted OSes" (usually with a locality value of 4).
+The ACE mechanism allows for more fine-grained control over key usage: The MM firmware can reprogram the corresponding Locality Secret to a unique value for each Trusted OS, for instance by reprogramming the "OSSecret" field in <<ACE-locality-indexes>>.
 
 // ///////////////////////////////////////////////////////////////////////////////////////////
 
@@ -308,9 +310,11 @@ Upon a write to `aceenable` that changes its value, the following happens to `ac
 * If ``aceenable``'s value is changed to 1, and if the parent's ``*status.ACES``=Disabled-Clobbered, then the hart traps to allow the parent domain responsible for handling context-switched to finish saving the state and ensure that both `aceccvalid` and `aceccdirty` are set to 0, and finally set ``*status.ACES`` to Disabled-Clean.
 // [.darkred]#This behavior should be restricted only to User mode.#
 
-Regarding the `acecclazy` bits, most operations attempted on a CC with this bit set will trap (cf. <<ACE-rules-lazy-loader>> for the exact listing of which operations trap), to allow the parent software to load the context, possibly freeing other contexts in order to make room for it.
-For this reason we call CCs marked in `acecclazy` "placeholder contexts".
-While this feature is not strictly necessary in normal use, it is needed to support VM migration for the case where the ACE unit of the target device has a smaller CF. In turn, this allows system software to implement lazy loading for all context, if desired.
+When the `acecclazy` bit for a given CC is set, most operations targeting that CC will trap (see <<ACE-rules-lazy-loader>> for the specific list).
+This trap enables parent software to load the context, potentially by first freeing other contexts to create space.
+Consequently, we call CCs with the `acecclazy` bit set _placeholder contexts_.
+Although not required for typical operation, this mechanism is essential for supporting virtual machine migration when the target device's ACE unit has a smaller context file (CF), in which case, the OS in the VM may not be able to reload all contexts for a given process.
+It also permits system software to implement lazy loading for all contexts.
 
 [[ACE-acestart-definition]]
 ===== `acestart`
@@ -319,18 +323,13 @@ While this feature is not strictly necessary in normal use, it is needed to supp
 
 The instructions `ace.init`, `ace.import`, `ace.export`, `ace.input`, and `ace.output` may require significant execution time and can be interrupted by exceptions or interrupts. To allow resumption rather than restarting, an implementation may set the `acestart` CSR to a non‑zero value. Unlike the vector extension’s `vstart`, which tracks element indices, ACE has no notion of an element; `acestart` therefore records a byte offset. For a load‑type instruction (e.g., `ace.init`, `ace.import`, `ace.input`), this offset indicates how many bytes of input have already been read and processed. For a store‑type instruction (e.g., `ace.export`, `ace.output`), it indicates how many bytes of output have already been computed and written.
 
-[NOTE]
-====
 The `acestart` value is given in bytes, even though payload sizes are always multiples of 8 bytes. This design accommodates piecewise execution via traps for the `ace.init`, `ace.clear`, `ace.export`, `ace.import`, `ace.input`, and `ace.output` operations, which involve `mv` operations at long-word, quad-word, or vector-register granularity, cf.{nbsp}<<ACE-trappable-insns-support>> for more details.
 This is also compatible with the fact that `ace.size` returns a size in bytes.
-====
 
-Like `vstart`, `acestart` is a standard read/write CSR; however, software must not write arbitrary non-zero values to it.
-Normally, hardware sets this register on trap.
-Software may safely write 0 to restart operations completely, and the register can be saved and restored during context switches.
-Writing an arbitrary non-zero value may raise an illegal-instruction exception, as hardware is not required to support all values.
-If no exception is raised and an invalid value is written, authentication will fail upon import because portions the content are replaced with arbitrary values, or exports will produce unauthenticatable output.  Only `ace.init` may still create a valid context, but since the key values were already in plaintext within the same domain, this does not expand the attack surface.
-
+Like `vstart`, `acestart` is a standard RW CSR.
+Typically, hardware sets this register during a trap.
+Software may safely write 0 to fully restart an operation, and the register can be saved and restored during context switches.
+However, software must not write arbitrary nonzero values to it, as this may raise an illegal-instruction exception, as the hardware or a trapped implementation are not required to support all possible values.
 Only the instructions explicitly mentioned above support non-zero `acestart` values; other ACE instructions ignore this register, and will be restarted.
 
 [NOTE]
