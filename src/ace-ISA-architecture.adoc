@@ -1090,20 +1090,23 @@ The state numbers defined in this specification are given in the table that foll
 |===
 | Value | Mnemonic                      | Examples
 |   0   | ace_state_initial             | The context is initialized and ready for operation.
-|   1   | ace_state_encrypt +
+|   1   | ace_state_hash_absorb         | Start (and initialize) a hash function or the sub-function of an algorithm, preparing it to absorb blocks of data.
+|   2   | ace_state_hash_finalize +
+ace_state_hash_finalize_enc             | Finalize the internal state of a hash function (including for the encryption algorithm of an for an authenticated encryption mode of operation) and prepare it for outputting the result. In this state additional data may be absorbed, such as lengths.
+|   3   | ace_state_hash_finalize_dec   | Finalize the internal state of a hash function for the decryption algorithm an authenticated decryption mode of operation. In this state additional data may be absorbed, such as lengths.
+|   4   | ace_state_hash_verify         | Finalize the internal state of a hash function and compare it to the provided value.
+|   5   | ace_state_hash_last_block +
+ace_state_last_block_enc +
+| For a hash or MAC function, we provide the length of the last block of data. May be used also in the encryption path of authenticated encryption modes of operation.
+|   6   | ace_state_last_block_dec      | For the decryption path of authenticated encryption modes of operation if the length of the last block must be given.
+|   7   | ace_state_encrypt +
 ace_const_operate
 |  Encryption is requested. +
 Algorithm is ready to process.
-|   2   | ace_state_decrypt             | Decryption is requested.
-|   3   | ace_state_hash_absorb         | Start (and initialize) a hash function or the sub-function of an algorithm, preparing it to absorb blocks of data.
-|   4   | ace_state_hash_finalize +
-ace_state_hash_finalize_enc             | Finalize the internal state of a hash function (including for the encryption algorithm of an for an authenticated encryption mode of operation) and prepare it for outputting the result. In this state additional data may be absorbed, such as lengths.
-|   5   | ace_state_hash_finalize_dec   | Finalize the internal state of a hash function for the decryption algorithm an authenticated decryption mode of operation. In this state additional data may be absorbed, such as lengths.
-|   6   | ace_state_hash_verify         | Finalize the internal state of a hash function and compare it to the provided value.
-|   7   | ace_state_last_block_len   | For a hash or MAC function, the next `ace.exec` this is the length of the last block of data.
-|   8   | ace_state_set_public_value    | Set a public value (like a nonce or an IV) in an algorithm. Some algorithms require more than one public value (for instance, they may admit a re-useable hash of some associated data and a unique nonce), in which case the second public value can be set using the next message.
-|   9   | ace_state_set_public_value_2  | Set the second public value in an algorithm.
-|  10   | ace_state_input_for_derive    | Tells the CC to expect additional information for feeding the `ace.derive` instruction.
+|   8   | ace_state_decrypt             | Decryption is requested.
+|   9   | ace_state_set_public_value    | Set a public value (like a nonce or an IV) in an algorithm. Some algorithms require more than one public value (for instance, they may admit a re-useable hash of some associated data and a unique nonce), in which case the second public value can be set using the next message.
+|  10   | ace_state_set_public_value_2  | Set the second public value in an algorithm.
+|  11   | ace_state_input_for_derive    | Tells the CC to expect additional information for feeding the `ace.derive` instruction.
 |  14   | ace_state_invalidated         | The algorithm has abnormally terminated. `ace.error` will always return error code _ace_err_invalid_.
 |  15   | ace_state_completed           | The algorithm has correctly completed.
 |===
@@ -1320,6 +1323,7 @@ the `Cn` is *invalidated*, namely, the following happens:
  ** `ace.state` perform no operation, unless is is used to return to state _initial_;
  ** `ace.error` always returns error _ace_err_invalid_ after any operation involving the CC except for
     `ace.import` and `ace.export`, `ace.clean`, `ace.init`, and `ace.size`, which all work normally, and using `ace.stage` to return to state _initial_.
+* The current instruction is terminated.
 
 The function that puts the CC in this state is called `invalidate()`.
 
@@ -1398,7 +1402,7 @@ Algorithm-Specific Functions:::
 
 State Machine:::
 
-* *States:* _initial_ (0), _encrypt_ (1), and _decrypt_ (2)
+* *States:* _initial_, _encrypt_, and _decrypt_
 * *Allowed State Transitions:*
  ** From any state to state _encrypt_, if metadata allows encryption, else the CC is *invalidated*.
  ** From any state to state _decrypt_, if metadata allows decryption, else the CC is *invalidated*.
@@ -1518,7 +1522,7 @@ Algorithm-Specific Functions:::
 * `tick_ctr()` -- updates the ctr (either by a modular increment or a LFSR).
 
 State Machine:::
-* *States:* _initial_ (0), _set_public_value_ (8), _operate_ (1).
+* *States:* _initial_, _set_public_value_, _operate_.
 * *Allowed State Transitions:*
  ** _initial_ -> _set_public_value_ -> _operate_.
  ** All states to _initial_.
@@ -1616,7 +1620,7 @@ Algorithm-Specific Functions:::
 
 State Machine:::
 
-* *States:* _initial_ (0), _set_public_value_ (8), _encrypt_ (1), and _decrypt_ (2).
+* *States:* _initial_, _set_public_value_, _encrypt_, and _decrypt_.
 
 * *Allowed State Transitions:*
  ** _initial_ -> _set_public_value_.
@@ -1728,7 +1732,7 @@ Algorithm-Specific Functions:::
 
 State Machine:::
 
-* *States:* _initial_ (0), _set_public_value_ (8), _hash_absorb_ (3), _encrypt_ (1), _hash_finalize_enc_ (4), _decrypt_ (2), _hash_finalize_dec_ (5), and _hash_verify_ (6), _completed_ (15).
+* *States:* _initial_, _set_public_value_, _hash_absorb_, _encrypt_, _hash_finalize_enc_, _decrypt_, _hash_finalize_dec_, and _hash_verify_, _completed_.
 
 * *Allowed State Transitions:*
  ** From all states to _initial_.
@@ -1780,7 +1784,7 @@ This operation is also parallelizable by having the implementation precompute th
 
 ** In state _hash_finalize_enc_, only ``ace.exec`` instructions of Form A are allowed. The value +
  `{nbsp}{nbsp}{nbsp}Vs = IntTo{b/2}Bits(bit_length(AD)) @ IntTo{b/2}Bits(bit_length(plaintext))` +
- must be set by the software. Then,
+ must be set by the software, then,
   "```ace.exec Vd,Cn|C[Xn],Vs```"
   computes the authentication tag and completes the algorithm as follows:
 +
@@ -1807,7 +1811,7 @@ This operation is also parallelizable by having the implementation precompute th
 
 ** In state _hash_finalize_dec_, only a Form A ``ace.exec`` instruction are allowed. The value
  `{nbsp}{nbsp}{nbsp}Vs = IntTo{b/2}Bits(bit_length(AD)) @ IntTo{b/2}Bits(bit_length(plaintext))` +
- must be set by the software. Then
+ must be set by the software, then
 "```ace.exec Vd,Cn|C[Xn],Vs```"
  computes the authentication tag as follows:
 +
@@ -2015,7 +2019,7 @@ Algorithm-Specific Functions:::
   . `auth_tag <- auth_tag xor Vs`.
   . `auth_tag <- auth_tag * hash_key`, where `*` denotes either Galois field multiplication (for GHASH) or Montgomery multiplication (for POLYVAL/MHASH), as specified by the algorithm.
 State Machine:::
-* *States:* _initial_ (0), _set_public_value_ (8), _set_public_value_2_ (9), _hash_absorb_ (3), _hash_finalize_enc_ (4), _hash_finalize_dec_ (5), _encrypt_ (1), _decrypt_ (2), and _completed_ (15).
+* *States:* _initial_, _set_public_value_, _set_public_value_2_, _hash_absorb_, _hash_finalize_enc_, _hash_finalize_dec_, _encrypt_, _decrypt_, and _completed_.
 
 * *Allowed State Transitions:*
  ** From all states to _initial_.
@@ -2255,7 +2259,7 @@ Data Structures:::
 Algorithm-Specific Functions:::
 
 * `enc_block(key,p) -> c` encrypts block `p` using the key, and returns the result `c`.
-* `gen_subkeys(K) -> K1,K2` generates subkeys `K1` and `K2` from the master key `K` as follows: First, let `C` be the non-leading coefficients of the lexicographically first irreducible binary polynomial of degree `b` with the minimal number of ones: `0x1B` for `b` = 64, `0x87` for `b` = 128, and `0x425` for `b` = 256. Then
+* `gen_subkeys(K) -> K1,K2` generates subkeys `K1` and `K2` from the master key `K` as follows: First, let `C` be the non-leading coefficients of the lexicographically first irreducible binary polynomial of degree `b` with the minimal number of ones: `0x1B` for `b` = 64, `0x87` for `b` = 128, and `0x425` for `b` = 256, then
 //First, `C` is a `b` bit value that, if interpreted as a polynomial in the letter `x` over GF(2), makes `x^b^ + const_Rb` irreducible.
  . `L <- AES-enc_block(K, 0)`
  . if (`most_significant_bit(L){nbsp}{nbsp}= 0`) then
@@ -2270,14 +2274,14 @@ Algorithm-Specific Functions:::
 
 State Machine:::
 
-* *States:* _initial_ (0), _hash_absorb_ (3), _hash_finalize_ (4), and _completed_ (15).
+* *States:* _initial_ (0), _hash_absorb_, _hash_last_block_, _hash_finalize_, and _completed_.
 * *Allowed State Transitions:*
  ** _initial_ -> _hash_absorb_.
  ** _hash_absorb_ -> _hash_finalize_ -> _completed_.
  ** From any state to state _initial_.
 * *Behavior:*
  ** In state _initial_:
-  *** `last_block_len` is set to the full block length `b`.
+  *** `last_block_len` is set to zero.
   *** `hash` is set to zero.
   *** Any `ace.exec` will result in the CC being *invalidated*.
 
@@ -2290,11 +2294,12 @@ State Machine:::
 +
 [.darkred]#If `VLEN` is a multiple of `b`, then the above operations are applied to each `b`-bit block of `Vs`.#
 
- ** Upon issuing `ace.stage Cn|C[Xn],#ace_state_hash_finalize, Xs` where `Xs` contains the length of the last block in bits, following happens:
-   . The CC transitions to state _hash_finalize_.
+ ** Upon issuing `ace.stage Cn|C[Xn],#ace_state_last_block, Xs` where `Xs` contains the length of the last block in bits, following happens:
+   . if `partial_len` <> 0, then the CC is *invalidated*. (This means we have not completed the previous block.)
+   . if `Xs > b` then the CC is *invalidated*.
    . `last_block_len <- Xs`.
 
- ** In state _hash_finalize_, we can only issue a single instruction ``ace.exec`` of Form A, i.e., "```ace.exec Cn|C[Xn],Vs```", to absorb the data block `Vs` and write the final hash value in `Vd`. After this, the state transitions to _completed_:
+ ** In state _hash_last_block_,  we can only issue a single instruction ``ace.exec`` of Form B, i.e., "```ace.exec Cn|C[Xn],Vs```", to absorb the data block `Vs` and write the final hash value in `Vd`. After this, the state transitions to _completed_:
 +
 --
   . `K1,K2 <- gen_subkeys(key)`.
@@ -2305,7 +2310,11 @@ State Machine:::
     *** Remove the `b` - `last_block_len` most significant bits of `tmp` and pad the resulting value with a `1` and sufficiently many `0` bits to make it `b` bits long.
     *** `tmp <- hash xor tmp xor K2`.
   . `hash <- enc_block(key,tmp)`.
-  . The CC transitions to state _completed_.
+  . The state is changed to _hash_finalize_.
+
+  ** In state _hash_finalize_,
+    then we can issue one instructions ``ace.exec``of Form C, i.e., "```ace.exec Vd,Cn|C[Xn]```", to output the hash.
+    Upon issuing that instruction, the CC transitions to state _completed_ with no error.
 --
 +
 [.darkred]#If `VLEN` is larger than `b`, the most significant bits of `Vs` beyojnd the `b`-th (i.e., the "tail" of the vector) are ignored.#
@@ -2324,7 +2333,7 @@ State Machine:::
 Parameters:::
 
 * `b` = block size in bits (8|`b`) -- this is the size of an absorbed block and may be different from the size of the internal state that is kept by the function.
-* `n` = size of the internal state that is kept by the function.
+* `n` = size of the internal state that is kept by the function (8|`n`).
 Either the block size is an integer multiple of the vector length or the vector length is an integer multiple of the block size.
 * `k` = key size in bits (8|`k`) -- only if keyed, i.e., a MAC.
 
@@ -2337,17 +2346,19 @@ Data Structures:::
 * *Content, Internal*:
  ** `key`: `k/8` bytes -- Only if keyed, i.e., a MAC.
  ** `hash_state`: algorithm specific length.
- ** `partial_block`: `b/8` bytes (a priori we cannot know whether `b > VLEN` or not, and changing the internal memory requirements of a CC depending on the current `VLEN` can lead to memory exhaustion).
- ** `used_VLEN`: `4` bytes -- Current vector length in bits.
- ** `partial_len`: `2` bytes -- Length of absorbed data so far for the current block.
- ** `last_block_len`: `2` bytes -- Only if this Hash/MAC has special internal treatment for a fractional last block that goes beyond padding and appending the length, which are handled by user software.
+ ** `last_block_len` -- Only if this Hash/MAC has special internal treatment for a fractional last block that goes beyond padding and appending the length, which are handled by user software  (field size at most two bytes).
+ ** `used_VLEN` -- Current vector length in bits (up to MAXVLEN).
+ ** `partial_len` -- Length of absorbed data so far for the current block (field size at most two bytes).
+ ** `partial_block`: `b/8` bytes (a priori we cannot know whether `b > VLEN` or not, and changing the internal memory requirements of a CC depending on the  `VLEN` can lead to memory exhaustion).
 
 * *Content, Exported*:
 [lowerroman]
  . `key`: `k/8` bytes -- Only if keyed, i.e., a MAC.
- . `hash_state`: algorithm specific length.
- . `last_block_len`: `4` bytes -- Only if this Hash/MAC has special internal treatment for a fractional last block that goes beyond padding and appending the length, which are handled by user software. Otherwise, this is zero.
- . `partial_len`: `4` bytes -- Length of absorbed data so far for the current block.
+ . `hash_state`: : `n/8` bytes.
+ . padding: 2 bytes.
+ . `used_VLEN`:  `2` bytes -- Current vector length in bits (up to MAXVLEN).
+ . `last_block_len`: `2` bytes -- Only if this Hash/MAC has special internal treatment for a fractional last block that goes beyond padding and appending the length, which are handled by user software. Otherwise, this is zero.
+ . `partial_len`: `2` bytes -- Length of absorbed data so far for the current block.
  . `partial_block`: `b/8` bytes -- We include it only if there is a partial block, and exclude it when not.
  We reuse the most significant bit of the `state` field to store this information.
  (In theory, we could include only the part filled so far, but this would complicate the parsing of a SCC.)
@@ -2358,18 +2369,18 @@ Algorithm-Specific Functions:::
 
 State Machine:::
 
-* *States:* _initial_ (0), _hash_absorb_ (3 or 11), _hash_finalize_ (4 or 12), and _completed_ (15).
-The values 11 and 12 are used when there is a partial block.
+* *States:* _initial_ (0), _hash_absorb_ (1 or 9), _hash_last_block_ (5 or 13), _hash_finalize_, and _completed_ (15).
+The values 9 and 13 are used when there is a partial block.
 * *Allowed State Transitions:*
  ** _initial_ -> _hash_absorb_.
- ** _hash_absorb_ -> _hash_finalize_ -> _completed_.
+ **  If the algorithm has a special treatment for the last block, either if it is partial or always, then
+  *** _hash_absorb_ ->  _hash_last_block ->  _hash_finalize_ -> _completed_.
+  *** else _hash_absorb_ ->  _hash_finalize_ -> _completed_.
  ** From any state to state _initial_.
 * *Behavior:*
  ** In state _initial_:
-  *** `last_block_len` is set to the full block length `b`.
-  *** `partial_len` is set to zero.
-  *** `partial_block` is set to zero.
-  *** `hash` is set to an initial value as required by the algorithm, which can be fixed or depend on the `key`.
+  *** `last_block_len`, `partial_len` and `partial_block`` are set to zero.
+  *** `hash`: the initial value is set as specified by the algorithm.
   *** `used_VLEN` is set to the current vector length.
   *** Any `ace.exec` will result in the CC being *invalidated*.
 
@@ -2381,43 +2392,44 @@ The values 11 and 12 are used when there is a partial block.
   *** If `b` is a multiple of `VLEN` and `b` > `VLEN`, then
    . `Vs` is written to `partial_block` starting at byte offset `partial_len`.
    . `partial_len <- partial_len + VLEN`.
-   . if `partial_len = b`. then
-   .. `process_block` is applied to `partial_block`
-   .. `partial_len <- 0` and `partial_block` is cleared`
+   . if `partial_len = b`, then
+   .. `process_block` is applied to `partial_block`,
+   .. `partial_len <- 0` and `partial_block` is cleared.
 
- ** Upon issuing `ace.stage Cn|C[Xn],#ace_state_hash_finalize, Xs` where `Xs` contains the length of the last block in bits, following happens:
-   . The CC transitions to state _hash_finalize_.
-   . `last_block_len <- Xs`.
+ ** Upon issuing `ace.stage Cn|C[Xn],#ace_last_block, Xs` where `Xs` contains the length of the last block in bits, following happens:
++
+--
+ . if `partial_len` <> 0, then the CC is *invalidated*. (This means we have not completed the previous block.)
+ . if `last_block_len` <> 0, then the CC is *invalidated*. (This means we issued the instruction already.)
+ . if `Xs > b`, then the CC is *invalidated*.
+ . if `Xs = 0`, then the CC is *invalidated*.
+ . `last_block_len <- Xs`.
+--
++
 
- ** In state _hash_finalize_:
+ ** In state _hash_last_block_:
+  *** If `VLEN` is a multiple of `b` (including the case where `VLEN` = `b`), then
+      we only issue a single ``ace.exec`` of Form B, i.e., "```ace.exec Cn|C[Xn],Vs```", to absorb the least significant `b` bits of data block `Vs`.
+  *** If `b` is a multiple of `VLEN` and `b` > `VLEN`, then we can one or more instructions ``ace.exec`` of Form B, i.e., "```ace.exec Cn|C[Xn],Vs```", to absorb the data block `Vs` into the hash, i.e. "```ace.exec Cn|C[Xn],Vs```":
+   . if `partial_len < b`, then
+   .. The instruction must be of Form B, else the CC is *invalidated*.
+   .. `Vs` is written to `partial_block` starting at byte offset `partial_len`.
+   .. `partial_len <- partial_len + VLEN`.
+   . else if `partial_len+VLEN = b`, then the CC is *invalidated*.
 
- *** If `VLEN` is a multiple of `b` (including the case where `VLEN` = `b`), then
-    we can only issue a single instruction ``ace.exec`` of Form B, i.e., "```ace.exec Cn|C[Xn],Vs```", to absorb the least significant `b` bits of data block `Vs` and write the final hash value in `Vd`.
+  ** In state _hash_finalize_:
+   *** If `VLEN` is a multiple of `b` (including the case where `VLEN` = `b`), then
+      we only issue a single ``ace.exec`` of Form C, i.e., "```ace.exec Vd,Cn|C[Xn]```", to output the hash.
+      The value is, if necessary, finalized, before being output.
+      The state is then changed to _completed_ with no errors.
+   *** If `b` is a multiple of `VLEN` and `b` > `VLEN`, then we can issue one or more instructions ``ace.exec``of Form C, i.e., "```ace.exec Vd,Cn|C[Xn]```", to output the hash:
+    . Upon entering state _hash_finalize_, `last_block_len` is reused to store the length of the output hash.
+    . After each "```ace.exec Vd,Cn|C[Xn]```":
+     .. We write a new block of the final value of the hash function to `Vd`, with the caveat that if `last_block_len` is non zero bust smaller than `VLEN`, the value in `Vd` is truncated and zero-padded.
+     .. `last_block_len <- max(last_block_len - VLEN, 0)`
+     .. if `last_block_len` = 0 then the state is changed to _completed_ with no errors.
 
- *** If `b` is a multiple of `VLEN` and `b` > `VLEN`, then we can issue one or more instructions ``ace.exec`` of Form B, i.e., "```ace.exec Cn|C[Xn],Vs```", to absorb the data block `Vs` into the hash, followed by a single instruction ``ace.exec`` of Form A or D,
- i.e. "```ace.exec Vd,Cn|C[Xn],Vs```" or "```ace.exec Vd,Cn|C[Xn]```"
- to absorb the last `VLEN`-bit block and to write the final hash value in `Vd`.
-  . if `partial_len+VLEN < b`, then
-  .. The instruction must have been of Form B, else the CC is *invalidated*.
-  .. `Vs` is written to `partial_block` starting at byte offset `partial_len`.
-  .. `partial_len <- partial_len + VLEN`.
-  . else if `partial_len+VLEN = b`, then
-  .. if the instruction is of Form A
-  ... `Vs` is written to `partial_block` starting at byte offset `partial_len`.
-  ... (`partial_len <- partial_len + VLEN`.)
-  ... `process_block(partial_block)`
-  ... finalize the hash, transition the state to _completed_, and return the value.
-  .. else if the instruction is of Form B
-  ... `Vs` is written to `partial_block` starting at byte offset `partial_len`.
-  ... `partial_len <- partial_len + VLEN`.
-  ... `process_block(partial_block)`
-  .. else, the CC is *invalidated*.
-  . else if `partial_len = b`, then
-  .. If the instruction is of Form D
-  ... finalize the hash, transition the state to _completed_, and return the value.
-  .. else, the CC is *invalidated*.
-
-** In any state, issuing any Form of ``ace.exec`` that is not the allowed one will produce a null output and the CC will be *invalidated*.
+ ** In any state, issuing any Form of ``ace.exec`` that is not the allowed one will produce a null output and the CC will be *invalidated*.
 
 NOTE: The description of states _hash_absorb_ and _hash_finalize_ should make it clear that allowing `b` and `VLEN` to be in relations other than one being an integer multiple of the other, as well as allowing a change of `VLEN`, would significantly complicate the state machine.
 
