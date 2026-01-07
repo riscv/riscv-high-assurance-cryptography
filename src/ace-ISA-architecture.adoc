@@ -9,9 +9,9 @@ The fundamental concept of ACE is the _opaque key_, i.e., a cryptographic key wh
 
 Cryptographic Context:::
 ACE implements the concept of opaque key through _Cryptographic Contexts_ (CCs), architectural containers that protect sensitive information.
-Each CC consists of a non-opaque *metadata section* and of an opaque *content section*.
+Each CC consists of an opaque *metadata section*, which does not require confidentiality, and of a *content section*, which requires confidentiality.
 The metadata section defines the cryptographic algorithm and optional usage policies, while the content section comprises sensitive material—including keys, other secrets, and internal algorithm state.
-The confidentiality and integrity of CC content section is enforced by restricting modifications and access to architectural mechanisms that enforce rules defined by the configured algorithm. The content section may contain any type of data required by the algorithm selected by the metadata, not only keys. The concept of _opaqueness_ extends to the entirety of the data in the content section.
+The confidentiality and integrity of CC content section is enforced by restricting modifications and access to architectural mechanisms that enforce rules defined by the configured algorithm. The concept of _opaqueness_ extends to the entirety of the data in the content section.
 
 Object-Oriented Architecture:::
 CCs are _objects_ that may expose a uniform interface despite implementing different algorithms.  A CC (or SCC) encapsulates its own behavior, allowing, for instance, AES-128, AES-256, Калина-128, Калина-256, and SM4 instances in ECB mode to be used interchangeably without code changes.  Similarly, modes such as GCM-SIV or XEX/XTS, that can be instantiated with any of these algorithms would also offer the same binary interface, as long as the code supports variable SCC sizes, which can be dynamically discovered. Side-channel-resistant variants would also be supported transparently.
@@ -317,11 +317,7 @@ While this feature is not strictly necessary in normal use, it is needed to supp
 
 `acestart` is an XLEN-bit CSR that serves a similar role in ACE as `vstart` does in the V extension.
 
-The instructions `ace.init`, `ace.import`, `ace.export`, `ace.input`, and `ace.output` may require significant execution time and can be interrupted mid-instruction by interrupts or memory exceptions.
-In such cases, implementations may set `acestart` to a non-zero value, enabling the instruction to resume from the interruption point rather than restart from the beginning.
-Since ACE does not have the concept of the length of an element,
-`acestart` represents a byte offset rather than an element index as in `vstart`.
-Specifically, a load-type instruction was interrupted after reading _and_ processing `acestart` bytes of input in the state, and a store-type instruction was interrupted after computing and writing `acestart` bytes of output.
+The instructions `ace.init`, `ace.import`, `ace.export`, `ace.input`, and `ace.output` may require significant execution time and can be interrupted by exceptions or interrupts. To allow resumption rather than restarting, an implementation may set the `acestart` CSR to a non‑zero value. Unlike the vector extension’s `vstart`, which tracks element indices, ACE has no notion of an element; `acestart` therefore records a byte offset. For a load‑type instruction (e.g., `ace.init`, `ace.import`, `ace.input`), this offset indicates how many bytes of input have already been read and processed. For a store‑type instruction (e.g., `ace.export`, `ace.output`), it indicates how many bytes of output have already been computed and written.
 
 [NOTE]
 ====
@@ -345,13 +341,11 @@ _A single `acestart` value suffices due to the authenticated encryption algorith
 * `_ace.import_` _operates similarly to `ace.init`: the metadata section is read first to determine the payload length. If sufficient memory is available, the remaining blocks are read, decrypted, and passed to a deserialization circuit to populate the CC._
 * `_ace.export_` _involves two passes, but the first pass is entirely internal to the ACE unit. Hence, the first pass cannot cause a page fault, and is easily restarted. Specifically, it computes the SIV by applying POLYVAL to the serialized CC content. Subsequently, the serialized metadata, the nonce, and the SIV are written out, followed by the CC content serialized, encrypted and written out block by block. It is this last part that may cause page faults, and that may require resumption._
 
-_Although these operations are inherently complex, the ACE unit is architected to function like a separate machine executing simpler instructions sequentially. State machines (one per CPU hart connected to the ACE unit, potentially in a 1-to-1 configuration) receive commands from the CPU and break them into smaller steps._
+NOTE: Although these operations are inherently complex, the ACE unit is architected to function like a separate machine executing simpler instructions sequentially. State machines receive commands from the CPU and break them into smaller steps.
+Therefore, separating data transfer from cryptographic operations in import/export is unnecessary. Otherwise, the loaded payload would need to be stored within the ACE unit rather than processed inline with minimal overhead, and this may lead to higher internal resource requirements.
+While resuming interrupted `ace.import` and `ace.export` operations is not necessarily significantly faster than restarting, because of the many cryptographic operations that are needed on the inputs and outputs, resuming avoids potential circular page-fault issues, and for this reason we support it.
 
-_Therefore, separating data transfer from cryptographic operations in import/export is unnecessary. Otherwise, the loaded payload would need to be stored within the ACE unit rather than processed inline with minimal overhead, and this may lead to higher internal resource requirements_
-
-_Finally, resuming requires at least as many cryptographic operations as restarting if the trapped domain also saves and resumes partial SCCs. Memory accesses may be reduced, but since data read from memory initially (for `ace.init` or `ace.export`) may no longer reside in the caches, resuming may offer better performance on some systems. Additionally, resuming avoids potential circular page-fault issues, as opposed to restarting._
-
-[.darkred]#*TBD* Specify the exact semantics of `acestart` ato bend define the points at which various operations can be interrupted.#
+[.darkred]#*TBD* Specify the exact semantics of `acestart`, define the points at which operations can be interrupted.#
 
 ===== Reuse of ASID and VMID (to be verified)
 
@@ -455,7 +449,7 @@ Disallow the _usage_ of this CC in User, (Virtual) Supervisor, Hypervisor, resp.
 Algorithms are encoded in a 8 bit field.
 A zero in the algorithm field means the CC is invalid.
 Algorithm numbers 1-191 are architecture-defined and the list of such encodings is maintained by RVI.
-See <<ACE-Algorithms>> for the currently encoded algorithms.
+See <<ACE-algorithms>> for the currently encoded algorithms.
 Algorithm numbers 192-255 are reserved for custom algorithms.
 
 [[ACE-SC-protection-levels]]
@@ -478,7 +472,7 @@ In such a case, the value of the SC_Protection field must be set to 3.
 |===
 | Value | Description
 |   0   | Explicit value.
-|   1   | Internal table. System specific. For each algorithm as specified in <<ACE-Algorithms>>, the part of the content that normally contains the key(s) is replaced by a 64-bit value which is an index into the internal System Keys Table (SKT) --- for both Configuration Input and the SCCs. The actual value of the key is never included in exported content. For threshold algorithms, ACE may copy the key material from the SKT into the CC and expand it into multiple shares.
+|   1   | Internal table. System specific. For each algorithm as specified in <<ACE-algorithms>>, the part of the content that normally contains the key(s) is replaced by a 64-bit value which is an index into the internal System Keys Table (SKT) --- for both Configuration Input and the SCCs. The actual value of the key is never included in exported content. For threshold algorithms, ACE may copy the key material from the SKT into the CC and expand it into multiple shares.
 |   2   | Internally generated key. System specific.  In the Configuration Input, the part of the content that normally contains the key(s) is replaced by a "recipe" in a system-specific format. The format is not specified by the ISA and may not be portable to other systems. Once the key material has been internally generated, the value is included in the SCC as part of the content - not the "recipe" - as for any other key(s) for the same specified algorithm.  Even in the SCC, however, the Key_Type field of the metadata, both in the CC and in an SCC, will keep the value 2.
 |   3   | Invalid.
 |===
@@ -573,7 +567,7 @@ Takes the decrypted byte array, that comes after the metadata, nonce and authent
 The format depends on the algorithm which is specified in metadata information.
 
 The size of a SCC, and of all byte arrays read or written by the above five functions, must be a multiple of 8 bytes.
-See <<ACE-Algorithms>> for algorithm-specific details on the inputs and outputs of these functions.
+See <<ACE-algorithms>> for algorithm-specific details on the inputs and outputs of these functions.
 
 Format of Configuration Input:::
 The format of the input to `ace.init` is simple.
@@ -954,7 +948,7 @@ the associated data into the hash. However, to avoid inconsistency, we have chos
 to avoid implicit state transitions, even if this could save a handful of instructions,
 unless if strictly necessary. This can occur for security reasons, such as going to
 hash finalization to hash verification states, or transitions to states such as
-_completed_ or _invalidated_ (see <<ACE-state-constants>> and <<ACE-Algorithms>>).
+_completed_ or _invalidated_ (see <<ACE-state-constants>> and <<ACE-algorithms>>).
 
 [[ACE-instruction-size]]
 ==== ace.size
@@ -1296,7 +1290,7 @@ must leave the architectural state indistinguishable from the state expected fro
 
 // ///////////////////////////////////////////////////////////////////////////////////////////
 
-[[ACE-Algorithms]]
+[#ACE-algorithms]
 === Data Formats and Instruction Semantics for Various Algorithms
 
 In this chapter we specify the behavior of Cryptographic Contexts for various cryptographic algorithms.
@@ -1487,7 +1481,6 @@ State Machine:::
 ====
 [.darkred]#Supporting vector lengths smaller than a cipher's block size would complicate the architecture.
 For example, even in a simple ECB mode, we would require instruction sequences like#
-[C]
 ----
 ace.exec    C0,V0          // load lower half of plaintext
 ace.exec    C0,V1          // load upper half of plaintext
@@ -1506,7 +1499,6 @@ The following pseudocode illustrates how to use an ECB CC to encrypt a block of 
 
 [[ACE-pseudocode-ECB-encryption]]
 .Simple Pseudocode Example: Encryption with no Authentication
-[C]
 ----
 - Call OS API to get the necessary SCC. Assume X5 points to the SCC.
 - Allocate memory for ciphertext buffer.
@@ -1624,7 +1616,6 @@ Example pseudocode is given in <<ACE-pseudocode-keystream-modes>> (for the case 
 
 [[ACE-pseudocode-keystream-modes]]
 .Encrypt with Keystream Generation
-[C]
 ----
 // Acquire payload, initialize
 - Info: plaintext = *PT
@@ -1731,7 +1722,6 @@ Using XEX mode is very easy. We include pseudocode for encryption only, decrypti
 
 [[ACE-pseudocode-basic-IV-mode]]
 .Pseudocode for encryption in any IV-based non-authenticated mode without associated data
-[C]
 ----
 // Acquire payload
 - Info: plaintext = *PT
@@ -1909,7 +1899,6 @@ The code assumes that both AD and plaintext (or the ciphertext for the decryptio
 
 [[ACE-pseudocode-GCM-encryption]]
 .GCM Encryption
-[C]
 ----
 // Acquire payload, initialize
 - Info: authenticated data = *AD, plaintext = *PT
@@ -1949,7 +1938,6 @@ and the last lines are as follows:
 
 [[ACE-pseudocode-GCM-decryption-difference]]
 .GCM Decryption
-[C]
 ----
 // Finally, we absorb the lengths into auth_tag, finalize it, and verify it it
 ace.state C0,#ace_const_hash_finalize_dec
@@ -1980,7 +1968,6 @@ which saves hardware costs when several small cores share a single ACE unit.
 
 [[ACE-pseudocode-GCM-encryption-alternate]]
 .Implementing GCM encryption using an ECB CC
-[C]
 ----
 // Acquire payload, initialize
 - Info: authenticated data = *AD, plaintext = *PT
@@ -2207,7 +2194,6 @@ We show in <<ACE-pseudocode-GCM-SIV-encryption>> how to perform AEAD encryption 
 
 [[ACE-pseudocode-GCM-SIV-encryption]]
 .GCM-SIV Encryption
-[C]
 ----
 // Acquire payload, initialize
 - Info: authenticated data = *AD
@@ -2251,7 +2237,6 @@ for i = 0 to len_in_bytes(PT)/16-1  do
 
 [[ACE-pseudocode-GCM-SIV-decryption]]
 .GCM-SIV Decryption
-[C]
 ----
 // Acquire payload, initialize
 - Info: authenticated data = *AD

@@ -48,6 +48,7 @@ ASCIIDOCTOR_PDF := asciidoctor-pdf
 ASCIIDOCTOR_HTML := asciidoctor
 
 OPTIONS := --trace \
+           -v \
            -a compress \
            -a mathematical-format=svg \
            -a revnumber=${VERSION} \
@@ -58,6 +59,7 @@ OPTIONS := --trace \
            $(XTRA_ADOC_OPTS) \
 		   -D build \
            --failure-level=ERROR
+
 REQUIRES := --require=asciidoctor-bibtex \
             --require=asciidoctor-diagram \
 			--require=asciidoctor-lists \
