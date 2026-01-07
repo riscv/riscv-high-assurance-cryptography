@@ -160,6 +160,34 @@ re-import the CCs. Hence, `aceenable` is not cleared, and the `*status.ACES` fie
 Tracking the CCs which are active, resp., dirty is done on an individual basis and is described in <<ACE-tracking-cc-dirtiness>>.
 ====
 
+
+----
+Higher privilege software should be able to look at just sstatus.ACES to know whether to proceed and look at acedirty and possibly save some context.
+The following shows how aceenable accesses can be translated to sstatus.ACES accesses, avoiding the need to context switch aceenable CSR, because it can be interpreted as a virtual interface for sstatus.ACES:#
+
+csrrw one, aceenable, a0 does, depending on on state of sstatus.ACES
+
+ACES=disabled-clean -> ACES=enabled, a0=0 +
+ACES=disabled-dirty -> trap +
+ACES=enabled -> a0=1 +
+csrrw zero, aceenable, a0 does =
+
+ACES=disabled-clean -> a0=0 +
+ACES=disabled-dirty -> trap +
+ACES=enabled -> clear all CCs, ACES=disabled-clean, a0=1 +
+The current specification doesn't say anything about transition to ACES=enabled, which would allow dirty state with ACES=disabled-clean.
+
+The rules get a more complex in virtual (V=1) mode, where a single write to aceenable can modify both mstatus and vsstatus:
+
+mstatus.ACES=disabled-dirty -> CSR accesses trigger virtual-instruction trap +
+vsstatus.ACES=disabled-dirty -> CSR accesses trigger illegal-instruction trap +
+otherwise -> result based on previous value of vsstatus
+
+write 1: mstatus.ACES and vsstatus.ACES = enabled +
+write 0: mstatus.ACES and vsstatus.ACES = disabled-clean, clear all CCs if any were enabled +
+(Maybe turn the interface to instructions? We do not need return values.)
+----
+
 [[ACE-ACES-field]]
 ===== ACES field in `*status`
 
