@@ -579,10 +579,62 @@ followed by the content, i.e., the key(s) and possibly other information, to be 
 Plaintext Format of SCC:::
 `bytes 0..7  {nbsp}{nbsp}{nbsp}{nbsp}{nbsp}{nbsp}` contain the 64-bit metadata section, +
 `bytes 8..19  {nbsp}{nbsp}{nbsp}{nbsp}{nbsp}` contain the nonce (96 bits), +
-`bytes 20..31  {nbsp}{nbsp}{nbsp}{nbsp}` contain the SIV (96 bits), and +
+`bytes 20..31  {nbsp}{nbsp}{nbsp}{nbsp}` contain the tag (96 bits), and +
 `bytes 32..u+31  {nbsp}{nbsp}` contain `content_serialize(CC.content)`, which has a byte length of `u`.
 +
 Only the serialization of the content is encrypted, while both metadata and content are included in the computation of the authentication tag, as described next.
+
+//
+
+[comment]
+--
+===== Authenticated Encryption with AES-GCM
+
+.Generation of the SCC from a CC Using AES-GCM
+[source,sail]
+----
+metadata : bits(64);
+last_block_fractional : boolean;
+content : array[num_blocks] of bits(128); // last block is zero-padded
+                                          // if last_block_fractional = true
+M : array[num_blocks+2] of bits(128);
+let IV : bits(96) = random(96 bits);
+H : bits(128);
+let tag : bits(128) = 128'b0;
+tmp : bits(128);
+
+if (metadata.Locality == 15) then {
+    CTK = RCTK;
+} else {
+    CTK = DCTK_KeyDeriv(RCTK, LST[metadata.Locality]);
+}
+
+let : bits(128) = Kauth AESE(Kenc, 0)
+let ctr : bits(128) = IV @ 31'b0 @ 1'b1;
+
+M[0][127:0] = N[63:0] @ metadata[63:0];
+M[1][127:0] = SIV[95:0] @ N[95:64];
+
+if (last_block_fractional) then last = num_blocks - 1 else last = num_blocks - 2;
+
+foreach(i from 0 to last) {
+    tmp = content[i] xor AESE(Kenc, 1 @ SIV[94:0] @ (binary(i+2)[31:0]));
+    M[i + 2][127:0] = tmp;
+    tag = tag xor tmp;
+    tag = galois_mult(tag, H)
+}
+
+if (last_block_fractional) then {
+    M[last + 1][63:0] = content[last + 1]
+                        xor AESE(Kenc, 1 @ SIV[94:0] @ (binary(last + 2)[31:0]))[63:0];
+}
+V3 ← V3 xor (len_in_bits(AD) @ len_in_bits(PT))  // Horner scheme add
+V3 ← galois_mult(V4,V3)                          // Horner scheme mult
+V5[32:0] ← 1                                     // Prepare IV || 1 for tag encryption
+ace.exec V2,C0,V5
+tag ← V3 xor V2                                  // Last Horner scheme add
+----
+--
 
 //
 
@@ -600,18 +652,30 @@ function RFC8452_KeyDeriv(K) = {
 }
 ----
 
+// .RFC8452 Key Derivation, Simplified
+// [source,sail]
+// ----
+// function RFC8452_KeyDeriv(K) = {
+//   struct {
+//     AESE256(K, (0[125:0] @ 0b101))[127:0] @
+//     AESE256(K, (0[125:0] @ 0b011))[127:0],
+//     AESE256(K, (0[125:0] @ 0b000))[127:0]
+//   }
+// }
+// ----
+
 .Derived Key Derivation
 [source,sail]
 ----
 function DCTK_KeyDeriv(K,L) = {
-  AESE256(K, L ^ (0[125:0] @ 0b011))[63:0] @ AESE256(K, L ^ (0[125:0] @ 0b010))[63:0] @
-  AESE256(K, L ^ (0[125:0] @ 0b001))[63:0] @ AESE256(K, L ^ (0[125:0] @ 0b000))[63:0]
+  AESE256(K, L ^ (0[125:0] @ 0b010))[127:0] @
+  AESE256(K, L ^ (0[125:0] @ 0b000))[127:0]
 }
 ----
 
 We can now define the generation of the SCC from a CC.
 
-.Generation of the SCC from a CC
+.Generation of the SCC from a CC Using AES-GCM-SIV (RFC8452)
 [source,sail]
 ----
 metadata : bits(64);
@@ -650,10 +714,10 @@ if (last_block_fractional) then {
 NOTE: Due to the computational cost of the derivation functions, implementations may
 cache recently used derived keys for both the Root RCTK and Locality-derived keys.
 
-NOTE: Certain format details are fixed across algorithms. All pure ciphers use a single
-key, regardless of whether they employ a normal or threshold implementation; threshold
-implementations are always reduced to a single key. Some modes follow the same convention,
-while others require algorithm-specific state formatting.
+// NOTE: Certain format details are fixed across algorithms. All pure ciphers use a single
+// key, regardless of whether they employ a normal or threshold implementation; threshold
+// implementations are always reduced to a single key. Some modes follow the same convention,
+// while others require algorithm-specific state formatting.
 
 // ///////////////////////////////////////////////////////////////////////////////////////////
 
@@ -1691,7 +1755,6 @@ To implement the XTS mode, the ciphertext stealing part is easy to realize using
 
 // N.B. another ace.stage C0, #const_set_public_value would reset the internal state and allow to begin another decryption with a new IV.
 
-<<<
 
 [[ACE-GCM-mode]]
 ==== GCM Mode
@@ -1753,7 +1816,7 @@ State Machine:::
  ** In state _set_public_value_:
   *** Only  ``ace.exec`` instructions of Form B are allowed.
   "```ace.exec Cn|C[Xn],Vs```" sets
-   . `ctr <- Vs << b/4`  (i.e., the `b/4` most significant bits of `Vs` are ignored, and the `b/4` least significant bits of `ctr` are set to zero.)
+   . `ctr <- Vs @ (b/4-1)'b0 @ 1'b1`, i.e., the `b/4` most significant bits of `Vs` are ignored, and the `b/4` least significant bits of `ctr` represent the integer 1.
   *** If "```ace.exec Cn|C[Xn],Vs```," is repeated, it will just re-write the IV.
   *** If no such "```ace.exec Cn|C[Xn],Vs```" to set is issued, `ctr` remains zero.
   *** If `VLEN` is larger than `b`, the most significant bits of `Vs` (i.e., the "tail" of the vector) are ignored.
@@ -1809,11 +1872,10 @@ If `VLEN` is larger than `b`, the most significant bits of `Vs` (i.e., the "tail
 +
 If `VLEN` is a multiple of `b`, the same behavior applies as in state _encrypt_.
 
-** In state _hash_finalize_dec_, only a Form A ``ace.exec`` instruction are allowed. The value
+** In state _hash_finalize_dec_, only a Form A ``ace.exec`` instruction are allowed.
+The value
  `{nbsp}{nbsp}{nbsp}Vs = IntTo{b/2}Bits(bit_length(AD)) @ IntTo{b/2}Bits(bit_length(plaintext))` +
- must be set by the software, then
-"```ace.exec Vd,Cn|C[Xn],Vs```"
- computes the authentication tag as follows:
+ must be set by the software, then "```ace.exec Vd,Cn|C[Xn],Vs```" computes the authentication tag as follows:
 +
 --
   . `absorb_into_hash(Vs)`.
@@ -1837,7 +1899,7 @@ If `VLEN` is larger than `b`, only the `b` least significant bits `Vs` are compa
 
 //
 
-<<<
+
 [discrete]
 ===== Usage
 
@@ -1900,7 +1962,7 @@ if (X1 != 0) then { handle error }       // do not use the plaintext if error oc
 ----
 
 //
-<<<
+
 [discrete]
 ===== Alternative Examples
 
@@ -1926,6 +1988,7 @@ which saves hardware costs when several small cores share a single ACE unit.
 vsetvli zero,4,e32,m1,ta,ma                      // Use 128-bit vectors
 ace.import C0,(X5)                               // Imports SCC into CC C0
 V5[127:32] ← IV
+V5[31:0] ← 1
 
 V3 ← 0                                           // “Auth Data 1”
 ace.exec V4,C0,V3                                // compute H
@@ -1947,12 +2010,12 @@ for i = 0 to ceil(len_in_bytes(PT)/16)-1  do
 
 V3 ← V3 xor (len_in_bits(AD) @ len_in_bits(PT))  // Horner scheme add
 V3 ← galois_mult(V4,V3)                          // Horner scheme mult
-V5[32:0] ← 0                                     // Prepare IV || 0 for tag encryption
+V5[32:0] ← 1                                     // Prepare IV || 1 for tag encryption
 ace.exec V2,C0,V5
 tag ← V3 xor V2                                  // Last Horner scheme add
 ----
 
-<<<
+
 
 [[ACE-GCM-SIV]]
 ==== GCM-SIV mode
@@ -2133,7 +2196,7 @@ If `VLEN` is larger than `b`, the most significant bits of `Vs` beyojnd the `b`-
     . `enc_key`, `auth_key <- RFC8452_KeyDeriv(key)`.
 
 //
-<<<
+
 
 [discrete]
 ===== Usage
@@ -2183,7 +2246,7 @@ for i = 0 to len_in_bytes(PT)/16-1  do
     - store V1 at address CT+16*i                // Store a block of ciphertext
 ----
 
-<<<
+
 
 [[ACE-pseudocode-GCM-SIV-decryption]]
 .GCM-SIV Decryption
@@ -2227,7 +2290,7 @@ ace.error X1
 if (X1 != 0) then { handle error }               // do not use the plaintext if error occurred
 ----
 
-<<<
+
 
 [[ACE-CMAC]]
 ==== CMAC Functions
@@ -2325,7 +2388,7 @@ If `VLEN` is larger than `b`, the most significant bits of `Vs` beyojnd the `b`-
 
 [.darkred]#Fill missing example#
 
-<<<
+
 
 [[ACE-hash-functions]]
 ==== Hash and MAC Functions (Including XOF Variants Thereof)
@@ -2437,7 +2500,7 @@ The values 9 and 13 are used when there is a partial block.
 
 NOTE: The description of states _hash_absorb_ and _hash_finalize_ should make it clear that allowing `b` and `VLEN` to be in relations other than one being an integer multiple of the other, as well as allowing a change of `VLEN`, would significantly complicate the state machine.
 
-<<<
+
 
 [[ACE-Ascon]]
 ==== Ascon Specific Rules
@@ -2504,7 +2567,7 @@ Furthermore, it protects the key from other SW environments that may be crossed 
 
 // ///////////////////////////////////////////////////////////////////////////////////////////
 
-<<<
+
 
 [[ACE-Dependencies]]
 === Impact and Dependency on Other Extensions
