@@ -72,10 +72,10 @@ and `Cn|C[Xn]` means that there are two different encodings for when the operand
 | Instruction     | Operands                        |  Description
 | `ace.enable` +
 `ace.disable`     |                                 |  Enables/Disables the feature in the current mode.  CSRW pseudo-operation.  May trap to handle enablement.
-| `ace.init`      | `Cd\|C[Xd],%offset(Xs)`        |  Sets the metadata and key(s) for the CC.
+| `ace.init`      | `Cd\|C[Xd],%offset(Xs)`         |  Sets the metadata and key(s) for the CC.
 | `ace.clear`     | `Cd\|C[Xd]`                     |  Clears a CC and marks it as no longer in use and clean.
-| `ace.export`    | `%offset(Xn),Cs\|C[Xs]`        |  Securely exports the content of a CC to memory.
-| `ace.import{.S}` | `Cd\|C[Xd],%offset(Xn)`      |  Authenticates and imports a SCC from memory into a CC. +
+| `ace.export`    | `%offset(Xn),Cs\|C[Xs]`         |  Securely exports the content of a CC to memory.
+| `ace.import{.S}` | `Cd\|C[Xd],%offset(Xn)`        |  Authenticates and imports a SCC from memory into a CC. +
  `ace.import.S` optionally supports system defined formats.
 | `ace.exec`
 | A. {nbsp}{nbsp} `Vd,Cn\|C[Xn],Vs` +
@@ -140,8 +140,9 @@ It also requires a subset of the V extension to be implemented, including the ve
 |===
 | 0xXXX   | URW       | aceerror               | Error code of the last ACE instruction
 | Address | Privilege | Name                   | Description
-| 0xXXX   | URO       | aceccactive            | Number and ID of active Contexts
-| 0xXXX   | URO       | aceccdirty             | Number and ID of dirty Contexts
+| 0xXXX   | URO       | aceccactive            | Bitmap of active Contexts
+| 0xXXX   | URO       | aceccdirty             | Bitmap of dirty Contexts
+| 0xXXX   | URO       | acecclazy              | Bitmap of lazy Contexts
 | 0xXXX   | URW       | ccstart                | ACE start byte index
 | 0xXXX   | MRW (RZ)  | macerctk{0..7}         | ACE Root Context Transport Key
 | 0xXXX   | MRW (RZ)  | maceOSSecret{0..4}     | ACE OS Secret
@@ -271,15 +272,18 @@ This can be used in low CF memory situations to trigger a lazy re-load of that C
 |===
 
 [[ACE-tracking-cc-dirtiness]]
-===== Fine Grained CC Management: `aceccactive` and `aceccdirty`
+===== Fine Grained CC Management: `aceccactive`, `aceccdirty`, `acecclazy`
 
-This is done by using two CSRs, which track the use and dirtiness of the CCs individually:
+This is done by using three CSRs, which track the use and dirtiness of the CCs individually, as well as their lazy loading status.
 
 [arabic]
-. `aceccactive`: XLEN bits, with a bit per CC to denote whether the register is in use or not (cleared contextually to CC erasure to dispose of the key). Read-only.
-. `aceccdirty`: XLEN bits, with a bit per CC to track whether the corresponding CC has been modified since the last time the same bit has been cleared. +
+. `aceccactive`: XLEN bits, with a bit per CC to denote whether the register is in use or not (cleared contextually to CC erasure to dispose of the key).
+. `aceccdirty`: XLEN bits, with a bit per CC to track whether the corresponding CC has been modified since the last time the same bit has been cleared.
+. `acecclazy`: XLEN bits, with a bit per CC to track whether the corresponding CC is to be lazily loaded or is actually present.
 
 If the _i_-th bit of `aceccdirty` is set, then the _i_-th bit of `aceccactive` must also be set.
+
+If the _i_-th bit of `acecclazy` is set, then the _i_-th bit of `aceccactive` is automatically cleared, and the CC does not consume any memory in the CF.
 
 Two types of actions can modify a CC and thus must update also `aceccdirty`:
 
@@ -301,6 +305,10 @@ Upon a write to `aceenable` that changes its value, the following happens to `ac
 * If ``aceenable``'s value is changed to 1, and if the parent domain's ``*status.ACES``=Disabled-Clean, then we simply assume that the parent process has cleared the CC and set both `aceccvalid` and `aceccdirty` to 0 before transferring the control flow to the current process.
 * If ``aceenable``'s value is changed to 1, and if the parent's ``*status.ACES``=Disabled-Clobbered, then the hart traps to allow the parent domain responsible for handling context-switched to finish saving the state and ensure that both `aceccvalid` and `aceccdirty` are set to 0, and finally set ``*status.ACES`` to Disabled-Clean.
 // [.darkred]#This behavior should be restricted only to User mode.#
+
+Regarding the `acecclazy` bits, if _any_ operation is attempted on a CC with this bit set, the operation is trapped to allow
+the parent software to load the context, possibly freeing other contexts in order to make room for it.
+While this feature is not strictly necessary in normal use, it is needed to support VM migration for the case where the ACE unit of the target device has a smaller CF. In turn, this allows system software to implement lazy loading for all context, if desired.
 
 [[ACE-ccstart-definition]]
 ===== `ccstart`
@@ -421,7 +429,7 @@ The internal representation is implementation specific.
 |   Field | Width | Name                  | Description
 |   [0:0] |   1  | Format                 | 0 for the current metadata format. +
 Future format will have a 1 in this position and may be longer than 64 bits.
-|   [1:1] |   1  | Is_Placeholder         | 0 for a normal configuration input and SCC.
+|   [1:1] |   1  | Reserved               | 0 for the current metadata format.
 |   [9:2] |   8  | Algorithm              | Algorithm (such as primitive or mode). 0 means the CC is invalid.
 | [11:10] |   2  | SC_Protection          | Level of Side Channel Protection, encoded as per <<ACE-SC-protection-levels>>.
 | [13:12] |   2  | Direction_Policy       | Determines whether the CC may be used for encryption (bit 12 set), decryption (bit 13 set), or both (bits 12 and 13 set).
@@ -441,25 +449,6 @@ Disallow the _usage_ of this CC in User, (Virtual) Supervisor, Hypervisor, resp.
 | [47:32] |  16  | UC_Policy_3            | Zero if bit 30 unset, else `ASID` to enforce.
 | [63:48] |  16  | UC_Policy_4            | Zero if bit 31 unset, else `VMID` to enforce. Cf. <<state-no-H-no-VMID>>.
 |===
-
-
-[[ACE-metadata-placeholder]]
-.Format of the Metadata Section
-[width="100%",cols=">9%,^7%,17%,67%",options="header"]
-|===
-|   Field | Width | Name                  | Description
-|   [0:0] |   1  | Format                 | 0 for the current metadata format.
-|   [1:1] |   1  | Is_Placeholder         | 1 if this is a placeholder for a CC.
-|   [3:2] |   2  | Mode_Usage             | Minimal mode that can use an `ace.exec` on this CC. 00 for U, 01 for S, 10 for HS, 11 for M.
-|  [63:4] |  60  | Reference              | This is a reference to the actual SCC, in a format that is specific to the parent environment.
-                                            It can be a pointer to the actual SCC, with the four least significant bits removed.
-                                            This field will be encrypted.
-|===
-
-NOTE: Bit "Is_Placeholder" is used to implement lazy loading of contexts.
-If any operation (except `ace.export` and then `ace.import`) is attempted on a CC with this bit set, the operation is trapped to allow
-the parent software to load the context, possibly freeing other contexts in order to make room for it.
-While this feature is not strictly necessary in normal use, it is needed to support VM migration for the case where the ACE unit of the target device has a smaller CF. In turn, this allows system software to implement lazy loading for all context, if desired.
 
 Algorithms are encoded in a 8 bit field.
 A zero in the algorithm field means the CC is invalid.
@@ -596,7 +585,6 @@ Plaintext Format of SCC:::
 `bytes 32..u+31  {nbsp}{nbsp}` contain `content_serialize(CC.content)`, which has a byte length of `u`.
 +
 Only the serialization of the content is encrypted, while both metadata and content are included in the computation of the authentication tag, as described next.
-In a placeholder SCCm the content is empty.
 
 //
 
@@ -689,7 +677,7 @@ function DCTK_KeyDeriv(K,L) = {
 
 We can now define the generation of the SCC from a CC.
 
-.Generation of the SCC from a non-Placeholder CC Using AES-GCM-SIV (RFC8452)
+.Generation of the SCC from a CC Using AES-GCM-SIV (RFC8452)
 [source,sail]
 ----
 metadata : bits(64);
@@ -725,43 +713,10 @@ if (last_block_fractional) then {
 }
 ----
 
-The generation of the SCC from a Placeholder CC uses the same algorithm,
-but obviously only M[0] and M[1] are generated, and the Reference field is encrypted.
-Furthermore, Localities do not apply to Placeholder CCs, and therefore the used CTK is always the current RCTK.
-
-.Generation of the SCC from a Placeholder CC Using AES-GCM-SIV (RFC8452)
-[source,sail]
-----
-metadata : bits(64);
-last_block_fractional : boolean;
-content : array[num_blocks] of bits(128); // last block is zero-padded
-                                          // if last_block_fractional = true
-M : array[num_blocks+2] of bits(128);
-let N : bits(96) = random(96 bits);
-Kenc : bits(256);
-Kauth : bits(128);
-
-{Kenc, Kauth} = RFC8452_KeyDeriv(RCTK);
-let T : bits(96) = POLYVAL(Kauth, metadata @ IntTo64Bits(64)
-                                           @ IntTo64Bits(len_in_bits(content)))[95:0];
-let SIV : bits(96) = AESE(Kenc, 0 1b0 @ ((T xor N)[126:0]))[127:32];
-
-M[0][127:0] = N[63:0]
-              @ ( metadata[63:4] xor AESE(Kenc, 1'b1 @ SIV[94:0] @ 31'b1 @ 1'b0 )
-              @ metadata[3:0];
-M[1][127:0] = SIV[95:0] @ N[95:64];
-----
-
 NOTE: Due to the computational cost of the derivation functions, implementations may
 cache recently used derived keys for both the Root RCTK and Locality-derived keys.
 
-// NOTE: Certain format details are fixed across algorithms. All pure ciphers use a single
-// key, regardless of whether they employ a normal or threshold implementation; threshold
-// implementations are always reduced to a single key. Some modes follow the same convention,
-// while others require algorithm-specific state formatting.
-
 // ///////////////////////////////////////////////////////////////////////////////////////////
-
 
 === Supported Algorithms
 
@@ -784,7 +739,7 @@ The list of other architected algorithms is TBD, but it must include at least
 
 // ///////////////////////////////////////////////////////////////////////////////////////////
 
-
+[[ACE-instructions-detailed]]
 === Instructions
 
 We now give detailed descriptions of the instructions, including their semantics and encoding.
@@ -1219,8 +1174,6 @@ Algorithm is ready to process.
 Algorithms that significantly differ from those we describe in <<ACE-algorithms>> and therefore cannot share the same software for their usage,
 may reuse the same values in [1..13] with new constant mnemonics to define their own states.
 
-
-
 [[ACE-instruction-restrict]]
 ==== ace.restrict/ace.harden
 
@@ -1464,13 +1417,15 @@ In fact, some threshold implementations may have a different number of shares ev
 [[ACE-rules-placeholder]]
 ==== Rules for Placeholder CCs
 
-A placeholder CC is created like any other CC, by providing a Configuration Input.
-The latter consists only of the metadata block, which is partly encrypted.
+If a CC is marked as a placeholder in `acecclazy`.
 
-An `ace.exec` instruction of Form C, i.e., "```ace.exec Vd,Cn|C[Xn]```," where `Cn` or `C[Xn]` contains a placeholder CC, will copy the Reference field in `Vd`
-(the four least significant bits of `Vd` will be zero), but only if the Mode_Usage field (see <<ACE-metadata-placeholder>>) allows it, i.e., if the value of this field is 0, 1, 2, resp. 3, the mode must be at least User, Supervisor, Hypervisor, resp., Machine.
-If, on the other hand, the mode is less privileged than the value of the Mode_Usage field, the instruction will trap instead.
-This allows context switching software to create Placeholder CCs, which will trap when the software attempts to execute them to allow the parent mode to load the actual ones.
+// A placeholder CC is created like any other CC, by providing a Configuration Input.
+// The latter consists only of the metadata block, which is partly encrypted.
+//
+// An `ace.exec` instruction of Form C, i.e., "```ace.exec Vd,Cn|C[Xn]```," where `Cn` or `C[Xn]` contains a placeholder CC, will copy the Reference field in `Vd`
+// (the four least significant bits of `Vd` will be zero), but only if the Mode_Usage field (see <<ACE-metadata-placeholder>>) allows it, i.e., if the value of this field is 0, 1, 2, resp. 3, the mode must be at least User, Supervisor, Hypervisor, resp., Machine.
+// If, on the other hand, the mode is less privileged than the value of the Mode_Usage field, the instruction will trap instead.
+// This allows context switching software to create Placeholder CCs, which will trap when the software attempts to execute them to allow the parent mode to load the actual ones.
 
 //An `ace.exec` instruction of Form B, i.e., "```ace.exec Cn|C[Xn],Vs```," where `Cn` or `C[Xn]` contains a placeholder CC, will overwrite the Reference field of the CC with `Vs` (the four least significant bits of `Vs` will be ignored).
 
