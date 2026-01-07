@@ -45,10 +45,7 @@ In TPMs, localities are 8-bit values used to restrict object usage by binding it
 
 // ///////////////////////////////////////////////////////////////////////////////////////////
 
-<<<
-
 === ACE Programmer's Model
-
 
 The Atomic Cryptography Extension requires a subset of the V extension to be implemented, including the
 vector register file (see <<ACE-Dependencies>>).
@@ -125,32 +122,48 @@ This has two major implications:
   However CCs are much less often redefined than, say, integer or floating point registers, except for internal implied changes, and therefore we can assume that CCs are not renamed without performance issues.
 . An additional bit in the instruction encoding determines whether a CC number is given by a 5-bit immediate or by the value in a GPR.
 
-[[ACE-registers]]
-==== Registers
+[[ACE-CSR]]
+==== CSRs
 
-ACE extends the `*status` CSRs and adds new CSRs to manage its execution environment.
+ACE extends the `*status` CSRs and adds five new CSRs to manage its execution environment.
 It also requires a subset of the V extension to be implemented, including the vector register file.
 
+.New ACE CSRs
+[cols="2,2,2,10"]
+[%autowidth,float="center",align="center",options="header"]
+|===
+| Address | Privilege | Name          | Description
+
+| 0xXXX   | URW       | aceerror      | Error code of the last ACE instruction
+| 0xXXX   | URO       | aceccactive   | Number and ID of active Contexts
+| 0xXXX   | URO       | aceccdirty    | Number and ID of dirty Contexts
+| 0xXXX   | URW       | ccstart       | ACE start byte index
+| 0xXXX   | MRW       | macerctk[0,7] | ACE Root Context Transport Key
+|===
+
 [[ACE-CSR-enable]]
-===== aceenable
+===== `aceenable`
 
 `aceenable` is a single-bit CSR.
 
 Enabling ACE in any mode is done by writing a 1 to `aceenable`.
 Disabling ACE is done by writing a zero to `aceenable`, which also clears the CCs, as described in <<ACE-tracking-cc-dirtiness>>. When ACE is disabled, any ACE operation will cause an invalid instruction exception, except feature enablement.
 
+[NOTE]
+====
 While the standard floating-point and vector extensions do not support User Mode disable/enable instructions, the ACE unit can in general be enabled and disabled in zUser Mode, instead of using an OS call or trapping.
 However, if the ACE unit contains state from a different process, and its interface is disabled for the current one, enabling it will trap to the Supervisor (as described in <<ACE-ACES-field>>) to allow the latter to first save the state in case it was not saved before and then clear it (lazy context switch).
 
 When a process that has ACE enabled is preempted, the parent modes inherit the state to be able to export and
 re-import the CCs. Hence, `aceenable` is not cleared, and the `*status.ACES` fields (see <<ACE-ACES-field>>) of the parent domains will take the value Enabled.
 Tracking the CCs which are active, resp., dirty is done on an individual basis and is described in <<ACE-tracking-cc-dirtiness>>.
+====
 
 [[ACE-ACES-field]]
-===== ACES field in *status
+===== ACES field in `*status`
 
-An ACE context status field, ACES, is added to `mstatus`[26:25], and it is shadowed in `sstatus`[26:25] and in `vsstatus`[26:25] if the hypervisor extension is present.
-Like the FS and VS fields, it can be used to optimize context switching.
+An ACE context status field, ACES, is added to `mstatus`[26:25], and is shadowed in `sstatus`[26:25] and in `vsstatus`[26:25] if the hypervisor extension is present.
+Similar to the FS and VS fields, it can be used to optimize context switching.
 //Its status encoding differs from the FS, VS, and XS fields (which are defined in <<fsxsencoding>>).
 Its possible values are described in <<ACE-fsxsencoding>>.
 
@@ -179,7 +192,7 @@ Setting ACES=Disabled-Clean or Disabled-Clobbered does not destroy the state, no
 Fine-grained tracking activeness and dirtiness of individual CCs uses the `aceccactive` and `aceccdirty` CSRs, cf.{nbsp}<<ACE-tracking-cc-dirtiness>>.
 
 [[ACE-CSR-ace-error]]
-===== aceerror
+===== `aceerror`
 
 The `aceerror` CSR is an 8-bit CSR that indicates the error condition on the last ACE instruction.
 This implies that any read from the `aceerror` CSR may cause a hart to wait until the last operation in the ACE unit which has been issued by the same hart completes.
@@ -215,16 +228,14 @@ If algorithms that support `ace.derive` are implemented, the implementation must
 This can be used in low CF memory situations to trigger a lazy re-load of that CC.
 |===
 
-
-
 [[ACE-tracking-cc-dirtiness]]
-===== Tracking CC dirtiness: aceccactive and aceccdirty
+===== Fine Grained CC Management: `aceccactive` and `aceccdirty`
 
 This is done by using two CSRs, which track the use and dirtiness of the CCs individually:
 
 [arabic]
-. `aceccactive`: 32 bits, with a bit per CC to denote whether the register is in use or not (cleared contextually to CC erasure to dispose of the key). Read-only.
-. `aceccdirty`: 32 bits, with a bit per CC to track whether the corresponding CC has been modified since the last time the same bit has been cleared. +
+. `aceccactive`: XLEN bits, with a bit per CC to denote whether the register is in use or not (cleared contextually to CC erasure to dispose of the key). Read-only.
+. `aceccdirty`: XLEN bits, with a bit per CC to track whether the corresponding CC has been modified since the last time the same bit has been cleared. +
 
 If the _i_-th bit of `aceccdirty` is set, then the _i_-th bit of `aceccactive` must also be set.
 
@@ -250,7 +261,7 @@ Upon a write to `aceenable` that changes its value, the following happens to `ac
 // [.red]#This behavior should be restricted only to User mode.#
 
 [[ACE-ccstart-definition]]
-===== ccstart
+===== `ccstart`
 
 `ccstart` is an XLEN-bit CSR that serves a similar role in ACE as `vstart` does in the V extension.
 
@@ -260,8 +271,11 @@ Since ACE does not have the concept of the length of an element,
 `ccstart` represents a byte offset rather than an element index as in `vstart`.
 Specifically, a load-type instruction was interrupted after reading _and_ processing `ccstart` bytes of input in the state, and a store-type instruction was interrupted after computing and writing `ccstart` bytes of output.
 
-NOTE: The `ccstart` value is given in bytes, even though payload sizes are always multiples of 8 bytes. This design accommodates piecewise execution via traps for the `ace.init`, `ace.clear`, `ace.export`, `ace.import`, `ace.input`, and `ace.output` operations, which involve `mv` operations at long-word, quad-word, or vector-register granularity, cf.{nbsp}<<ACE-trappable-insns-support>> for more details.
+[NOTE]
+====
+The `ccstart` value is given in bytes, even though payload sizes are always multiples of 8 bytes. This design accommodates piecewise execution via traps for the `ace.init`, `ace.clear`, `ace.export`, `ace.import`, `ace.input`, and `ace.output` operations, which involve `mv` operations at long-word, quad-word, or vector-register granularity, cf.{nbsp}<<ACE-trappable-insns-support>> for more details.
 This is also compatible with the fact that `ace.size` returns a size in bytes.
+====
 
 Like `vstart`, `ccstart` is a standard read/write CSR; however, software must not write arbitrary non-zero values to it.
 Normally, hardware sets this register on trap.
@@ -301,15 +315,12 @@ In the metadata section, `ASID` and `VMID` are always zero padded to the maximal
 [[ACE-providing-keys,Remark {counter:remark}]]
 *Remark {counter:remark}.* _The software in each World/Supervisor Domain is normally responsible to generate or obtain their own keys, and if a process (applet) in one World/Supervisor Domain is responsible to provide keys to other Worlds/Supervisor Domains, it is the responsibility of the MM to perform an appropriate sequence of import, switch the CTK, then export operations._
 
-
-===== Privileged Registers
-
-====== ACE field in misa
+====== ACE field in `misa`
 
 The `misa.ACE` field uses bit `L` (11) to indicate that the ACE extension is implemented.
 //This bit is chosen because the extension goes _beyond_ the cryptographic extension, which will likely use bit `K` (10).
 
-====== acerctk
+====== `macerctk`
 
 If the RCTK can be programmed, it can only be programmed by M-mode.
 For this purpose, we use eight 32-bit WARL CSRs in RV32 and four 64-bit WARL CSRs in RV64.
@@ -332,14 +343,17 @@ NOTE: Mechanisms for persisting Root Context Transport Keys (RCTKs) across reboo
 Two groups of CSRs, only accessible and programmable by MM, are used for two reconfigurable Localities (cf.{nbsp}<<ACE-concepts>>).
 These are:
 
-* CSRs `ace_OS_Secret0` and `ace_OS_Secret1`, to configure the "OS_Secret" entry in RV64, to which RV32 adds `ace_OS_Secret2` and `ace_OS_Secret3`.
-* CSRs `ace_Boot_Session0` and `ace_Boot_Session1`, to configure the "Boot_Session_Secret" entry in RV64, to which RV32 adds `ace_Boot_Session2` and `ace_Boot_Session3` (cf.{nbsp}<<ACE-Localities>>).
+* CSRs `mace_OS_Secret0` and `mace_OS_Secret1`, to configure the "OS_Secret" entry in RV64, to which RV32 adds `ace_OS_Secret2` and `ace_OS_Secret3`.
+* CSRs `mace_Boot_Session0` and `mace_Boot_Session1`, to configure the "Boot_Session_Secret" entry in RV64, to which RV32 adds `ace_Boot_Session2` and `ace_Boot_Session3` (cf.{nbsp}<<ACE-Localities>>).
 
 Bits [(_i_+1) XLEN - 1 : _i_ XLEN] of the "OS_Secret", resp., "Boot_Session_Secret", are configured by writing to `ace_OS_Secret{i}`, resp. `ace_Boot_Session{i}`.
 
+[NOTE]
+====
 The reason `ace_Boot_Session*` must be reconfigurable is that it must change in a VM if the latter's virtual hardware is re-booted, and this can happen independently from the underlying host and other VMs. For instance, a VM may be frozen, then the host may be rebooted, and then the VM may be resumed, in which case no boot session occurred in the VM, while it happened in the host hardware.
 
-NOTE: User mode, and even operating systems and hypervisors, need not be aware of the `ace_OS_Secret*` and `ace_Boot_Session*` blocks. Other mechanisms could have been chosen to program the "OS Secret" and  "Boot Session Secret" entries, such as an MM-exclusive dedicated hardware interface or memory-mapped interface.
+User mode, and even operating systems and hypervisors, need not be aware of the `mace_OS_Secret{i}` and `mace_Boot_Session{i}` blocks. Other mechanisms could have been chosen to program the "OS Secret" and  "Boot Session" entries, such as an MM-exclusive dedicated hardware interface or memory-mapped interface.
+====
 
 [[ACE-data-structures]]
 ==== Data Structures
@@ -356,6 +370,7 @@ All data formats are little-endian.
 The metadata section is 64 bits long and its format described in <<ACE-metadata-standard>>.
 This format is used for CC initialization, export and import purposes.
 The internal representation is implementation specific.
+
 
 [[ACE-metadata-standard]]
 .Format of the Metadata Section
@@ -600,7 +615,6 @@ while others require algorithm-specific state formatting.
 
 // ///////////////////////////////////////////////////////////////////////////////////////////
 
-<<<
 
 === Supported Algorithms
 
@@ -623,7 +637,6 @@ The list of other architected algorithms is TBD, but it must include at least
 
 // ///////////////////////////////////////////////////////////////////////////////////////////
 
-<<<
 
 === Instructions
 
@@ -846,8 +859,7 @@ with non-zero values in `rd`, resp., `rs2`, to encode additional instructions.
 // To make indent in next line correct
 
 Description::
-Performs a cryptographic operation such as an encryption or decryption,
-absorbing a value in a hash, and possibly returning a value.
+Performs a cryptographic operation such as an encryption or decryption, absorbing a value in a hash, and possibly returning a value.
 
 NOTE: In many algorithms, the successive stage is often implied by the operation
 just performed. For instance, in AEAD algorithms, after setting an IV or a nonce,
@@ -1197,8 +1209,6 @@ must leave the architectural state indistinguishable from the state expected fro
 
 // ///////////////////////////////////////////////////////////////////////////////////////////
 
-<<<
-
 [[ACE-Algorithms]]
 === Data Formats and Instruction Semantics for Various Algorithms
 
@@ -1320,8 +1330,6 @@ NOTE: Internally, the ACE unit can either directly use the value from the SKT, o
 
 // On the other hand, keys generated from a system block, using a custom "recipe", are always represented by their values and once generated have the exact same behavior as any other key that does not come from the SKT.
 
-<<<
-
 [[ACE-ECB-mode]]
 ==== Electronic Codebook Modes (Direct Encryption/Decryption)
 
@@ -1435,8 +1443,6 @@ Output Feedback (OFB)
 as they can be easily implemented on top of the ECB functionality in software,
 and no intermediate value in these algorithms needs to be kept secret.
 
-<<<
-
 [[ACE-keystream-modes]]
 ==== CTR/LFSR/XCTR/XLFSR Modes to Produce a Keystream
 
@@ -1534,8 +1540,6 @@ for i = 0 to len_in_bytes(PT)/16-1 do
     V1 ← V1 xor V0
     - store V1 at address CT+16*i
 ----
-
-<<<
 
 [[ACE-XEX-XTS-modes]]
 ==== XEX/XTS modes (one or two keys)
@@ -2283,7 +2287,6 @@ State Machine:::
 
 [.red]#TBD#
 
-<<<
 
 [[ACE-Ascon]]
 ==== Ascon Specific Rules
@@ -2305,8 +2308,6 @@ State Machine:::
 [.red]#TBD#
 
 // //////////////////////////////////////////////////////////////////////////////////////////
-
-<<<
 
 [[ACE-examples]]
 
