@@ -333,17 +333,20 @@ If no exception is raised and an invalid value is written, authentication will f
 
 Only the instructions explicitly mentioned above support non-zero `acestart` values; other ACE instructions ignore this register, and will be restarted.
 
-[[ACE-why-restarting,Remark {counter:remark}]]
-*Remark {counter:remark}.*
-_A single `acestart` value suffices due to the authenticated encryption algorithm used. The operations behave as follows:_
+[NOTE]
+====
+_A single `acestart` value suffices due to the authenticated encryption algorithm used in the `ace.import` and `ace.export` instructions.
+Their operations behave as follows:_
 
 * `_ace.init_` _is a single-pass operation: the metadata section is read first, determining the payload length. If sufficient memory is available, subsequent blocks are read sequentially and passed to a deserialization circuit to populate the CC._
 * `_ace.import_` _operates similarly to `ace.init`: the metadata section is read first to determine the payload length. If sufficient memory is available, the remaining blocks are read, decrypted, and passed to a deserialization circuit to populate the CC._
 * `_ace.export_` _involves two passes, but the first pass is entirely internal to the ACE unit. Hence, the first pass cannot cause a page fault, and is easily restarted. Specifically, it computes the SIV by applying POLYVAL to the serialized CC content. Subsequently, the serialized metadata, the nonce, and the SIV are written out, followed by the CC content serialized, encrypted and written out block by block. It is this last part that may cause page faults, and that may require resumption._
 
-NOTE: Although these operations are inherently complex, the ACE unit is architected to function like a separate machine executing simpler instructions sequentially. State machines receive commands from the CPU and break them into smaller steps.
-Therefore, separating data transfer from cryptographic operations in import/export is unnecessary. Otherwise, the loaded payload would need to be stored within the ACE unit rather than processed inline with minimal overhead, and this may lead to higher internal resource requirements.
-While resuming interrupted `ace.import` and `ace.export` operations is not necessarily significantly faster than restarting, because of the many cryptographic operations that are needed on the inputs and outputs, resuming avoids potential circular page-fault issues, and for this reason we support it.
+Although these operations are inherently complex, the ACE unit is architected to function like a separate machine executing simpler instructions sequentially. State machines receive commands from the CPU and break them into smaller steps.
+Therefore, separating data transfer from cryptographic operations in import/export is unnecessary. Otherwise, the input would need to be stored within the ACE unit and then processed rather than processed inline while loading it with minimal overhead-and this may lead to higher internal resource requirements.
+
+While resuming interrupted `ace.import` and `ace.export` operations is not necessarily significantly faster than restarting, because of the many cryptographic operations that are needed on the inputs and outputs, resuming avoids potential circular page-fault issues, and for this reason we proved support for it.
+====
 
 [.darkred]#*TBD* Specify the exact semantics of `acestart`, define the points at which operations can be interrupted.#
 
