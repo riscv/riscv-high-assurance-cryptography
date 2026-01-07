@@ -144,7 +144,7 @@ It also requires a subset of the V extension to be implemented, including the ve
 | 0xXXX   | URW       | `aceerror`               | Error code of the last ACE instruction
 | 0xXXX   | URO       | `aceccactive`            | Bitmap of active Contexts
 | 0xXXX   | URO       | `aceccdirty`             | Bitmap of dirty Contexts
-| 0xXXX   | URO       | `acecclazy`              | Bitmap of lazy Contexts
+| 0xXXX   | URO       | `acecclazy`              | Bitmap of lazy-loaded Contexts ("placeholder Contexts")
 | 0xXXX   | URW       | `acestart`               | ACE start byte index
 | 0xXXX   | MRW (RZ)  | `macerctk{0..7}`         | ACE Root Context Transport Key
 | 0xXXX   | MRW (RZ)  | `maceOSSecret{0..4}`     | ACE OS Secret
@@ -308,8 +308,8 @@ Upon a write to `aceenable` that changes its value, the following happens to `ac
 * If ``aceenable``'s value is changed to 1, and if the parent's ``*status.ACES``=Disabled-Clobbered, then the hart traps to allow the parent domain responsible for handling context-switched to finish saving the state and ensure that both `aceccvalid` and `aceccdirty` are set to 0, and finally set ``*status.ACES`` to Disabled-Clean.
 // [.darkred]#This behavior should be restricted only to User mode.#
 
-Regarding the `acecclazy` bits, if _any_ operation is attempted on a CC with this bit set, the operation is trapped to allow
-the parent software to load the context, possibly freeing other contexts in order to make room for it.
+Regarding the `acecclazy` bits, most operations attempted on a CC with this bit set will trap (cf. <<ACE-rules-placeholder>> for the exact listing of which operations trap), to allow the parent software to load the context, possibly freeing other contexts in order to make room for it.
+For this reason we call CCs marked in `acecclazy` "placeholder contexts".
 While this feature is not strictly necessary in normal use, it is needed to support VM migration for the case where the ACE unit of the target device has a smaller CF. In turn, this allows system software to implement lazy loading for all context, if desired.
 
 [[ACE-acestart-definition]]
@@ -1419,7 +1419,10 @@ In fact, some threshold implementations may have a different number of shares ev
 [[ACE-rules-placeholder]]
 ==== Rules for Placeholder CCs
 
-If a CC is marked as a placeholder in `acecclazy`.
+If a CC is marked in `acecclazy`, it is called a "placeholder" CC.
+Any operation involving that CC will trap, unless the operation overwrites the CC, that is,
+for `ace.init`, `ace.import`, as well as `ace.clone` and `ace.derive` if this CC is the destination.
+In these cases, the corresponding bit in `acecclazy` will be cleared.
 
 // A placeholder CC is created like any other CC, by providing a Configuration Input.
 // The latter consists only of the metadata block, which is partly encrypted.
@@ -2576,8 +2579,6 @@ Furthermore, it protects the key from other SW environments that may be crossed 
 // Various optimizations are possible, which can be interesting for embedded environments: Steps 3., 5., and 6. can be omitted if the CC used for these operations is fixed and no intermediate SW environments modify that CC.
 
 // ///////////////////////////////////////////////////////////////////////////////////////////
-
-
 
 [[ACE-Dependencies]]
 === Impact and Dependency on Other Extensions
