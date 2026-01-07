@@ -97,7 +97,7 @@ For instance, the source CC could be a KEM that configures the destination CC wi
 | `ace.state` +
 `(ace.dir)`
 | `Cd\|C[Xd],#immed` +
-`Cd\|C[Xd],#immed,Xs`  |  Triggers transitions in the algorithm's state (such as the different stages of hash functions or modes of operation) or provide additional information.
+`Cd\|C[Xd],#immed,Xs`  |  Triggers transitions in the algorithm's state (such as the different phases of hash functions or modes of operation) or provide additional information.
 `ace.dir` is an alias for `ace.state`.
 | `ace.restrict` +
   `(ace.harden)`  | `Cd\|C[Xd],Xs`                  |  Narrows the Usage Policies of a CC and turns on or increases the side-channel protection of the algorithm in it, if the microarchitecture supports it.
@@ -421,8 +421,7 @@ The internal representation is implementation specific.
 |   Field | Width | Name                  | Description
 |   [0:0] |   1  | Format                 | 0 for the current metadata format. +
 Future format will have a 1 in this position and may be longer than 64 bits.
-|   [1:1] |   1  | Is_Placeholder         | 1 if this is a placeholder for a CC. +
-[.darkred]#Semantics TBD: In this case bits [63:2] are used as an identifier/address for the parent environment to solve the issue, content is empty, and SW will trap when trying to use this CC in any operation.#
+|   [1:1] |   1  | Is_Placeholder         | 0 for a normal configuration input and SCC.
 |   [9:2] |   8  | Algorithm              | Algorithm (such as primitive or mode). 0 means the CC is invalid.
 | [11:10] |   2  | SC_Protection          | Level of Side Channel Protection, encoded as per <<ACE-SC-protection-levels>>.
 | [13:12] |   2  | Direction_Policy       | Determines whether the CC may be used for encryption (bit 12 set), decryption (bit 13 set), or both (bits 12 and 13 set).
@@ -430,17 +429,31 @@ Valid only for encryption/decryption primitives or modes, and ignored, for insta
 | [15:14] |   2  | Key_Type               | By explicit value / Immutable (index) / Internally generated.
 | [17:16] |   2  | Completion             | Defined in <<ACE-CC-complete>>.
 Used to determine whether an operation must be restarted.
-| [21:18] |   4  | Stage (also Direction) | Encoding the current state of the state machine of the algorithm as a number (also called the "stage" of the algorithm).
-The value must be zero in the initialization data, but, internally, it can be changed immediately by the algorithm.
+| [21:18] |   4  | State (also Direction) | Encoding the current state of the state machine of the algorithm as a number.
+The value must be zero in the initialization data.
 If the algorithm encoded in the CC has at most 16 states
-(including _initial_, _completed_, and _invalidated_, cf. <<ACE-stage-constants>>), then this number is stored in this field, cf. <<stage-field>>,
-otherwise an algorithm-specific representation is used in the content, and this field only admits the values 0 (initial), 14 (invalidated), 15 (completed) or 1 (anything other operational state). The values must conform to <<ACE-stage-constants>>.
+(including _initial_, _completed_, and _invalidated_, cf. <<ACE-state-constants>>), then this number is stored in this field, cf. <<state-field>>,
+otherwise an algorithm-specific representation is used in the content, and this field only admits the values 0 (initial), 14 (invalidated), 15 (completed) or 1 (anything other operational state). The values must conform to <<ACE-state-constants>>.
 | [25:22] |   4  | Locality               | Field which is either -1 or an index into the Locality Secrets Table.
 | [29:26] |   4  | UC_Policy_1            | "UC Policy" means "Usage Control Policy". +
-Disallow the _usage_ of this CC in User, (Virtual) Supervisor, Hypervisor, resp., MM if bit 26, 27, 28, resp. 29, is set. Cf. <<stage-no-H-no-VMID>>.
-| [31:30] |   2  | UC_Policy_2            | If bit 30, resp., 31, is set, then restrict the usage by `ASID`, resp., `VMID`. Restriction by `ASID` ignored if in S Mode or higher. Cf. <<stage-no-H-no-VMID>>.
+Disallow the _usage_ of this CC in User, (Virtual) Supervisor, Hypervisor, resp., MM if bit 26, 27, 28, resp. 29, is set. Cf. <<state-no-H-no-VMID>>.
+| [31:30] |   2  | UC_Policy_2            | If bit 30, resp., 31, is set, then restrict the usage by `ASID`, resp., `VMID`. Restriction by `ASID` ignored if in S Mode or higher. Cf. <<state-no-H-no-VMID>>.
 | [47:32] |  16  | UC_Policy_3            | Zero if bit 30 unset, else `ASID` to enforce.
-| [63:48] |  16  | UC_Policy_4            | Zero if bit 31 unset, else `VMID` to enforce. Cf. <<stage-no-H-no-VMID>>.
+| [63:48] |  16  | UC_Policy_4            | Zero if bit 31 unset, else `VMID` to enforce. Cf. <<state-no-H-no-VMID>>.
+|===
+
+
+[[ACE-metadata-placeholder]]
+.Format of the Metadata Section
+[width="100%",cols=">9%,^7%,17%,67%",options="header"]
+|===
+|   Field | Width | Name                  | Description
+|   [0:0] |   1  | Format                 | 0 for the current metadata format.
+|   [1:1] |   1  | Is_Placeholder         | 1 if this is a placeholder for a CC.
+|   [3:2] |   2  | Mode_Usage             | Minimal mode that can use an `ace.exec` on this CC. 00 for U, 01 for S, 10 for HS, 11 for M.
+|  [63:4] |  60  | Reference              | This is a reference to the actual SCC, in a format that is specific to the parent environment.
+                                            It can be a pointer to the actual SCC, with the four least significant bits removed.
+                                            This field will be encrypted.
 |===
 
 NOTE: Bit "Is_Placeholder" is used to implement lazy loading of contexts.
@@ -492,11 +505,11 @@ In such a case, the value of the SC_Protection field must be set to 3.
 
 NOTE: The information in the Completion field is in principle known to the system software/firmware stack, we duplicate it into the metadata to ensure that it remains accessible after nested interrupts, i.e., after switching partially configured/imported or exported CCs in or out. While authentication also guarantees the integrity of the SCCs and of their import, this is both a robustness measure and serves to simplify system stacks.
 
-[[stage-field,Remark {counter:remark}]]
+[[state-field,Remark {counter:remark}]]
 *Remark {counter:remark}.* _The "state" field accommodates modes of operation with a small number of states.
 For algorithms with more complex state machines, machine state information can be stored in a custom data section of the CC._
 
-[[stage-no-H-no-VMID,Remark {counter:remark}]]
+[[state-no-H-no-VMID,Remark {counter:remark}]]
 *Remark {counter:remark}.* _If the H extension is not enabled, bit 28 must be set to 1, and bits 31 and [63:48] must be set to 0.
 The "UC_Policy_4" field is 16 bits long for compatibility with architectures employing 16-bit `VMID` fields (for instance, in heterogeneous systems).
 While interoperability cannot be guaranteed when this policy is used, this ensures that the two top bits are not used for other purposes. +
@@ -583,6 +596,7 @@ Plaintext Format of SCC:::
 `bytes 32..u+31  {nbsp}{nbsp}` contain `content_serialize(CC.content)`, which has a byte length of `u`.
 +
 Only the serialization of the content is encrypted, while both metadata and content are included in the computation of the authentication tag, as described next.
+In a placeholder SCCm the content is empty.
 
 //
 
@@ -675,7 +689,7 @@ function DCTK_KeyDeriv(K,L) = {
 
 We can now define the generation of the SCC from a CC.
 
-.Generation of the SCC from a CC Using AES-GCM-SIV (RFC8452)
+.Generation of the SCC from a non-Placeholder CC Using AES-GCM-SIV (RFC8452)
 [source,sail]
 ----
 metadata : bits(64);
@@ -709,6 +723,33 @@ if (last_block_fractional) then {
     M[last + 1][63:0] = content[last + 1]
                         xor AESE(Kenc, 1 @ SIV[94:0] @ (binary(last + 1)[31:0]))[63:0];
 }
+----
+
+The generation of the SCC from a Placeholder CC uses the same algorithm,
+but obviously only M[0] and M[1] are generated, and the Reference field is encrypted.
+Furthermore, Localities do not apply to Placeholder CCs, and therefore the used CTK is always the current RCTK.
+
+.Generation of the SCC from a Placeholder CC Using AES-GCM-SIV (RFC8452)
+[source,sail]
+----
+metadata : bits(64);
+last_block_fractional : boolean;
+content : array[num_blocks] of bits(128); // last block is zero-padded
+                                          // if last_block_fractional = true
+M : array[num_blocks+2] of bits(128);
+let N : bits(96) = random(96 bits);
+Kenc : bits(256);
+Kauth : bits(128);
+
+{Kenc, Kauth} = RFC8452_KeyDeriv(RCTK);
+let T : bits(96) = POLYVAL(Kauth, metadata @ IntTo64Bits(64)
+                                           @ IntTo64Bits(len_in_bits(content)))[95:0];
+let SIV : bits(96) = AESE(Kenc, 0 1b0 @ ((T xor N)[126:0]))[127:32];
+
+M[0][127:0] = N[63:0]
+              @ ( metadata[63:4] xor AESE(Kenc, 1'b1 @ SIV[94:0] @ 31'b1 @ 1'b0 )
+              @ metadata[3:0];
+M[1][127:0] = SIV[95:0] @ N[95:64];
 ----
 
 NOTE: Due to the computational cost of the derivation functions, implementations may
@@ -961,14 +1002,14 @@ with non-zero values in `rd`, resp., `rs2`, to encode additional instructions.
 Description::
 Performs a cryptographic operation such as an encryption or decryption, absorbing a value in a hash, and possibly returning a value.
 
-NOTE: In many algorithms, the successive stage is often implied by the operation
+NOTE: In many algorithms, the successive state is often implied by the operation
 just performed. For instance, in AEAD algorithms, after setting an IV or a nonce,
-one could argue that there is no need to explicitly move to the stage of absorbing
+one could argue that there is no need to explicitly move to the state of absorbing
 the associated data into the hash. However, to avoid inconsistency, we have chosen
-to avoid implicit stage transitions, even if this could save a handful of instructions,
+to avoid implicit state transitions, even if this could save a handful of instructions,
 unless if strictly necessary. This can occur for security reasons, such as going to
 hash finalization to hash verification states, or transitions to states such as
-_completed_ or _invalidated_ (see <<ACE-stage-constants>> and <<ACE-Algorithms>>).
+_completed_ or _invalidated_ (see <<ACE-state-constants>> and <<ACE-Algorithms>>).
 
 [[ACE-instruction-size]]
 ==== ace.size
@@ -1138,17 +1179,17 @@ Bit `r` (i.e., bit 15) is 0 if the context is encoded as an immediate, and 1 if 
 
 Description::
 Two pseudo-instructions that map to the same instruction. +
-`Cn` is the CC in which to set the stage (i.e., state number) of the internal state. +
+`Cn` is the CC of which to set the state state number. +
 `Xn` is a GPR containing a number from 0 to 31 to dynamically address the
-context in which to change the stage of the internal state. +
+context in which to change the internal state. +
 The `#immed` is a constant from a set of admissible values that are defined for
 each algorithm, to manage an internal state machine of said algorithm in case
-more stages are needed. +
+more states are needed. +
 `Xs` is a GPR being either `X0` or containing an optional additional parameter for the state machine.
 
 The state numbers defined in this specification are given in the table that follows.
 
-[[ACE-stage-constants]]
+[[ACE-state-constants]]
 .Constants defining CC states
 [float="center",align="center",width="100%",cols="^6%,<29%,<65%",options="header"]
 |===
@@ -1356,7 +1397,7 @@ Any other function that is specific to the algorithm.
 State Machine:::
 This includes:
 
-. A list of *States* in which the internal state machine of the logic is executed, together with their representation, either as a number in the range [0..15] or by more complex structures. The values must conform to <<ACE-stage-constants>>.
+. A list of *States* in which the internal state machine of the logic is executed, together with their representation, either as a number in the range [0..15] or by more complex structures. The values must conform to <<ACE-state-constants>>.
 . A complete list of the *Allowed State Transitions*, including the conditions under which each transition is allowed.
 . The *Behavior* of all ACE instructions at each state.
 
@@ -1371,7 +1412,7 @@ Recall that the architecture views a CC as a structure with two fields: the meta
 
 In the descriptions of the algorithms below, we do not need to redefine these two functions if they are not changed, i.e., if there are no changes to the metadata format.
 
-If the number of states of the algorithm is at most 16 (including _initial_, _completed_, and _invalidated_),= the `stage` of the metadata is used to store this value.
+If the number of states of the algorithm is at most 16 (including _initial_, _completed_, and _invalidated_),= the `state` of the metadata is used to store this value.
 Otherwise, the specification of the algorithm must include a suitable field in the content section of the CC/SCC.
 
 An important rule is the following.
@@ -1386,7 +1427,7 @@ the `Cn` is *invalidated*, namely, the following happens:
  ** `ace.input` and `ace.output` perform no operation;
  ** `ace.state` perform no operation, unless is is used to return to state _initial_;
  ** `ace.error` always returns error _ace_err_invalid_ after any operation involving the CC except for
-    `ace.import` and `ace.export`, `ace.clean`, `ace.init`, and `ace.size`, which all work normally, and using `ace.stage` to return to state _initial_.
+    `ace.import` and `ace.export`, `ace.clean`, `ace.init`, and `ace.size`, which all work normally, and using `ace.state` to return to state _initial_.
 * The current instruction is terminated.
 
 The function that puts the CC in this state is called `invalidate()`.
@@ -1400,7 +1441,7 @@ Since such operations can operate independently of the CPU core, they may contin
 We do not specify whether these instructions write their results to the CC atomically or piecewise.
 [.darkred]#(Only in case we still want to make long cryptographic operations interruptible.)#
 
-In what follows, when we write of "state _name_" we refer to the state which has number _ace_state_name_ as described in <<ACE-stage-constants>>.
+In what follows, when we write of "state _name_" we refer to the state which has number _ace_state_name_ as described in <<ACE-state-constants>>.
 
 The rules from <<ACE-ECB-mode>> to <<ACE-CMAC>> can be instantiated, like the modes that they describe, with a variety of block ciphers and polynomials for GHASH- or POLYVAL-like hashes, where only the block and key sizes are needed to get a full specification.
 
@@ -1419,6 +1460,19 @@ This in turn implies that ACE execution unit must have access to a source of ran
 
 This ensures not only the compactness of a SCC, but also that the key can be ported across architectures.
 In fact, some threshold implementations may have a different number of shares even if they claim the same order of side-channel protection.
+
+[[ACE-rules-placeholder]]
+==== Rules for Placeholder CCs
+
+A placeholder CC is created like any other CC, by providing a Configuration Input.
+The latter consists only of the metadata block, which is partly encrypted.
+
+An `ace.exec` instruction of Form C, i.e., "```ace.exec Vd,Cn|C[Xn]```," where `Cn` or `C[Xn]` contains a placeholder CC, will copy the Reference field in `Vd`
+(the four least significant bits of `Vd` will be zero), but only if the Mode_Usage field (see <<ACE-metadata-placeholder>>) allows it, i.e., if the value of this field is 0, 1, 2, resp. 3, the mode must be at least User, Supervisor, Hypervisor, resp., Machine.
+If, on the other hand, the mode is less privileged than the value of the Mode_Usage field, the instruction will trap instead.
+This allows context switching software to create Placeholder CCs, which will trap when the software attempts to execute them to allow the parent mode to load the actual ones.
+
+//An `ace.exec` instruction of Form B, i.e., "```ace.exec Cn|C[Xn],Vs```," where `Cn` or `C[Xn]` contains a placeholder CC, will overwrite the Reference field of the CC with `Vs` (the four least significant bits of `Vs` will be ignored).
 
 [[ACE-rules-system-keys]]
 ==== Rules for System Keys
@@ -1498,7 +1552,7 @@ Therefore, the present specification assumes that vector lengths (or vector grou
 ====
 
 [discrete]
-===== Usage
+==== Usage
 
 The following pseudocode illustrates how to use an ECB CC to encrypt a block of data using a block cipher with a width of 128 bits (`VLEN` is also 128).
 
@@ -1613,10 +1667,10 @@ If the number `x` of blocks to be processed in an entire run of the algorithm is
 
  ** In state _operate_, any other Form of ``ace.exec`` will produce a null output and *invalidate* the CC.
 
-Note that if `ace.stage` is issued to return to state _initial_, the CC can be reused with a new `IV`.
+Note that if `ace.state` is issued to return to state _initial_, the CC can be reused with a new `IV`.
 
 [discrete]
-===== Usage
+==== Usage
 
 Example pseudocode is given in <<ACE-pseudocode-keystream-modes>> (for the case `b` = `VLEN` = 128).
 
@@ -1633,7 +1687,7 @@ vsetvli zero,4,e32,m1,ta,ma                      // Use 128-bit vectors
 ace.import C0,(X5)
 
 // The next operations set the nonce (and the derived Authentication Key).
-ace.stage C0,#ace_state_set_public_value
+ace.state C0,#ace_state_set_public_value
 V0 ← nonce
 ace.exec C0,V0
 
@@ -1719,10 +1773,10 @@ If `VLEN` is a multiple of `b`, the above commands are executed `VLEN/b` times, 
 
 //
 
-Note that if `ace.stage` is issued to return to state _initial_, the CC can be reused with a new `IV`.
+Note that if `ace.state` is issued to return to state _initial_, the CC can be reused with a new `IV`.
 
 [discrete]
-===== Usage
+==== Usage
 
 Using XEX mode is very easy. We include pseudocode for encryption only, decryption is entirely similar
 (this example is also assuming `b` = `VLEN` = 128).
@@ -1740,7 +1794,7 @@ Using XEX mode is very easy. We include pseudocode for encryption only, decrypti
 vsetvli zero,4,e32,m1,ta,ma                      // Use 128-bit vectors
 ace.import C0,(X5)
 
-ace.stage C0, #const_set_public_value            // this can be an IV or a nonce.
+ace.state C0, #const_set_public_value            // this can be an IV or a nonce.
 V0 ← IV
 ace.exec C0,V0
 
@@ -1753,7 +1807,7 @@ for i = 0 to ceil(len_in_bytes(plaintext)/16)-1 do
 
 To implement the XTS mode, the ciphertext stealing part is easy to realize using the XEX algorithm together with vector masking and shifting operations.
 
-// N.B. another ace.stage C0, #const_set_public_value would reset the internal state and allow to begin another decryption with a new IV.
+// N.B. another ace.state C0, #const_set_public_value would reset the internal state and allow to begin another decryption with a new IV.
 
 
 [[ACE-GCM-mode]]
@@ -1899,11 +1953,11 @@ If `VLEN` is larger than `b`, only the `b` least significant bits `Vs` are compa
 
 //
 
-
 [discrete]
-===== Usage
+==== Usage
 
 In <<ACE-pseudocode-GCM-encryption>> we show pseudocode for GCM encryption (again with `b` = `VLEN` = 128).
+The code assumes that both AD and plaintext (or the ciphertext for the decryption) are zero-padded to a multiple of `b` bits, in this case 128 bits.
 
 [[ACE-pseudocode-GCM-encryption]]
 .GCM Encryption
@@ -1918,12 +1972,12 @@ vsetvli zero,4,e32,m1,ta,ma                      // Use 128-bit vectors
 ace.import C0,(X5)
 
 // The next operations set the nonce (and the derived Authentication Key).
-ace.stage C0,#ace_const_set_public_value
+ace.state C0,#ace_const_set_public_value
 V0 ← nonce
 ace.exec C0,V0
 
 // Compute AD contribution to Auth Data
-ace.stage C0,#ace_const_hash_absorb
+ace.state C0,#ace_const_hash_absorb
 for i = 0 to len_in_bytes(AD)/16-1  do
     - load V0 from address AD+16*i
     ace.exec C0,V0                               // Absorb it into hash
@@ -1935,7 +1989,7 @@ for i = 0 to len_in_bytes(PT)/16-1 do
     - store V1 at address CT+16*i
 
 // Finally, we absorb the lengths into auth_tag, finalize it, and output it
-ace.stage C0,#ace_const_hash_finalize_enc
+ace.state C0,#ace_const_hash_finalize_enc
 V1 ← IntTo64Bits(len(AD)) @ IntTo64Bits(len(PT))
 ace.exec V2,C0, V1                               // V2 contains the finalized hash
 ----
@@ -1950,11 +2004,11 @@ and the last lines are as follows:
 [C]
 ----
 // Finally, we absorb the lengths into auth_tag, finalize it, and verify it it
-ace.stage C0,#ace_const_hash_finalize_dec
+ace.state C0,#ace_const_hash_finalize_dec
 V1 ← IntTo64Bits(len(AD)) @ IntTo64Bits(len(CT))
 ace.exec V2,C0,V1                                // V2 contains the finalized hash
 
-ace.stage C0,#ace_const_hash_verify
+ace.state C0,#ace_const_hash_verify
 V1 ← tag_from_payload
 ace.exec C0,V1                                   // V1 contains the tag from the input
 ace.error X1
@@ -1964,7 +2018,7 @@ if (X1 != 0) then { handle error }       // do not use the plaintext if error oc
 //
 
 [discrete]
-===== Alternative Examples
+==== Alternative Examples
 
 GCM security is not compromised if `H` is revealed.
 Consequently, an implementation based on a simpler ECB mode CC is possible,
@@ -2197,9 +2251,8 @@ If `VLEN` is larger than `b`, the most significant bits of `Vs` beyojnd the `b`-
 
 //
 
-
 [discrete]
-===== Usage
+==== Usage
 
 We show in <<ACE-pseudocode-GCM-SIV-encryption>> how to perform AEAD encryption with a GCM-SIV CC (with `b` = `VLEN` = 128).
 <<ACE-pseudocode-GCM-SIV-decryption>> is the corresponding pseudocode for decryption.
@@ -2219,7 +2272,7 @@ vsetvli zero,4,e32,m1,ta,ma                      // Use 128-bit vectors
 ace.import C0,(X5)
 
 // Set the nonce (and the derived Authentication Key).
-ace.stage C0,#ace_const_set_public_value
+ace.state C0,#ace_const_set_public_value
 V0 ← nonce
 ace.exec C0,V0
 
@@ -2234,12 +2287,12 @@ V0 ← IntTo64Bits(len(AD)) @ IntTo64Bits(len(PT))
 ace.exec C0,V0		          	                 // Absorb lengths into hash
 
 // Finalize the SIV computation, set and return it
-ace.stage C0,#ace_const_hash_finalize_enc
+ace.state C0,#ace_const_hash_finalize_enc
 ace.exec V2,C0
 - store V2 into tag
 
 // Encrypt the plaintext
-ace.stage C0,#ace_const_encrypt
+ace.state C0,#ace_const_encrypt
 for i = 0 to len_in_bytes(PT)/16-1  do
     - load V0 from address PT+16*i               // Load a block of plaintext
     ace.exec V1,C0,V0                            // Encrypt the block
@@ -2263,15 +2316,15 @@ vsetvli zero,4,e32,m1,ta,ma                      // Use 128-bit vectors
 ace.import C0,(X5)
 
 // The next operations set the nonce and SIV.
-ace.stage C0,#ace_const_set_public_value
+ace.state C0,#ace_const_set_public_value
 V0 ← nonce
 ace.exec C0,V0
-ace.stage C0,#ace_const_set_public_value_2
+ace.state C0,#ace_const_set_public_value_2
 V0 ← SIV
 ace.exec C0,V0
 
 // Compute AD contribution to Auth Data
-ace.stage C0,#ace_const_hash_absorb
+ace.state C0,#ace_const_hash_absorb
 for i = 0 to len_in_bytes(AD)/16-1  do
     - load V0 from address AD+16*i
     ace.exec C0,V0                              // Absorb it into hash
@@ -2283,7 +2336,7 @@ for i = 0 to len_in_bytes(CT)/16-1 do
     - store V1 at address PT+16*i
 
 // Finally, we absorb the lengths of AD and plaintext into auth_tag AND verify
-ace.stage C0,#ace_const_hash_finalize_enc
+ace.state C0,#ace_const_hash_finalize_enc
 V0 ← IntTo64Bits(len(AD)) @ IntTo64Bits(len(PT))
 ace.exec C0,V0
 ace.error X1
@@ -2357,7 +2410,7 @@ State Machine:::
 +
 If `VLEN` is a multiple of `b`, then the above operations are applied to each `b`-bit block of `Vs`.
 
- ** Upon issuing `ace.stage Cn|C[Xn],#ace_state_last_block, Xs` where `Xs` contains the length of the last block in bits, following happens:
+ ** Upon issuing `ace.state Cn|C[Xn],#ace_state_last_block, Xs` where `Xs` contains the length of the last block in bits, following happens:
    . if `partial_len` <> 0, then the CC is *invalidated*. (This means we have not completed the previous block.)
    . if `Xs > b` then the CC is *invalidated*.
    . `last_block_len <- Xs`.
@@ -2460,7 +2513,7 @@ The values 9 and 13 are used when there is a partial block.
    .. `process_block` is applied to `partial_block`,
    .. `partial_len <- 0` and `partial_block` is cleared.
 
- ** Upon issuing `ace.stage Cn|C[Xn],#ace_last_block, Xs` where `Xs` contains the length of the last block in bits, following happens:
+ ** Upon issuing `ace.state Cn|C[Xn],#ace_last_block, Xs` where `Xs` contains the length of the last block in bits, following happens:
 +
 --
  . if `partial_len` <> 0, then the CC is *invalidated*. (This means we have not completed the previous block.)
