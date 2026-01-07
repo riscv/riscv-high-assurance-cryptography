@@ -117,9 +117,11 @@ Rather, it defines 32 Cryptographic Contexts (CCs) for storing cryptographic key
 Each CC is identified by a number from 0 to 31, which the ACE unit uses to access its contents.
 
 Cryptographic Contexts (CCs) reside in a dedicated internal _context file_ (CF) that is inaccessible to any entity outside the ACE implementation, including software, other hardware blocks, and invasive debug interfaces. The CF's memory capacity is implementation-defined and may be as large as 32 times the size of the largest possible CC; however, a smaller amount of memory may be used in practice. At a minimum, the CF must be capable of holding either (i) a single instance of the largest possible CC, or the largest CC pair in which the first CC derives the second (via `ace.derive`), as well as (ii) a metadata block for each other possible context.
+
 The size of each CC is dynamic, determined by the cryptographic algorithm with which it is configured.
 This is an important difference with respect to GPRs and vector registers, which always have the same size.
 ACE returns an error ace_err_memory when insufficient memory prevents `ace.init` and `ace.import` operations, requiring the software to free memory by exporting or clearing a different CC. Implementations must provide sufficient CF memory to prevent infinite `ace.export`/ `ace.import` loops.
+
 A further difference between CCs and registers is that CCs
 are not only addressable via static 5-bit immediate addressing (as normal registers), but also indirectly, i.e., via a value from 0 to 31 in any general-purpose register.
 This has two major implications:
@@ -138,15 +140,15 @@ It also requires a subset of the V extension to be implemented, including the ve
 [cols="2,2,2,10"]
 [%autowidth,float="center",align="center",options="header"]
 |===
-| 0xXXX   | URW       | aceerror               | Error code of the last ACE instruction
-| Address | Privilege | Name                   | Description
-| 0xXXX   | URO       | aceccactive            | Bitmap of active Contexts
-| 0xXXX   | URO       | aceccdirty             | Bitmap of dirty Contexts
-| 0xXXX   | URO       | acecclazy              | Bitmap of lazy Contexts
-| 0xXXX   | URW       | ccstart                | ACE start byte index
-| 0xXXX   | MRW (RZ)  | macerctk{0..7}         | ACE Root Context Transport Key
-| 0xXXX   | MRW (RZ)  | maceOSSecret{0..4}     | ACE OS Secret
-| 0xXXX   | MRW (RZ)  | maceBootSecret0{0..4}  | ACE Boot Session
+| Address | Privilege | Name                     | Description
+| 0xXXX   | URW       | `aceerror`               | Error code of the last ACE instruction
+| 0xXXX   | URO       | `aceccactive`            | Bitmap of active Contexts
+| 0xXXX   | URO       | `aceccdirty`             | Bitmap of dirty Contexts
+| 0xXXX   | URO       | `acecclazy`              | Bitmap of lazy Contexts
+| 0xXXX   | URW       | `acestart`               | ACE start byte index
+| 0xXXX   | MRW (RZ)  | `macerctk{0..7}`         | ACE Root Context Transport Key
+| 0xXXX   | MRW (RZ)  | `maceOSSecret{0..4}`     | ACE OS Secret
+| 0xXXX   | MRW (RZ)  | `maceBootSecret0{0..4}`  | ACE Boot Secret
 |===
 
 [[ACE-CSR-enable]]
@@ -310,34 +312,34 @@ Regarding the `acecclazy` bits, if _any_ operation is attempted on a CC with thi
 the parent software to load the context, possibly freeing other contexts in order to make room for it.
 While this feature is not strictly necessary in normal use, it is needed to support VM migration for the case where the ACE unit of the target device has a smaller CF. In turn, this allows system software to implement lazy loading for all context, if desired.
 
-[[ACE-ccstart-definition]]
-===== `ccstart`
+[[ACE-acestart-definition]]
+===== `acestart`
 
-`ccstart` is an XLEN-bit CSR that serves a similar role in ACE as `vstart` does in the V extension.
+`acestart` is an XLEN-bit CSR that serves a similar role in ACE as `vstart` does in the V extension.
 
 The instructions `ace.init`, `ace.import`, `ace.export`, `ace.input`, and `ace.output` may require significant execution time and can be interrupted mid-instruction by interrupts or memory exceptions.
-In such cases, implementations may set `ccstart` to a non-zero value, enabling the instruction to resume from the interruption point rather than restart from the beginning.
+In such cases, implementations may set `acestart` to a non-zero value, enabling the instruction to resume from the interruption point rather than restart from the beginning.
 Since ACE does not have the concept of the length of an element,
-`ccstart` represents a byte offset rather than an element index as in `vstart`.
-Specifically, a load-type instruction was interrupted after reading _and_ processing `ccstart` bytes of input in the state, and a store-type instruction was interrupted after computing and writing `ccstart` bytes of output.
+`acestart` represents a byte offset rather than an element index as in `vstart`.
+Specifically, a load-type instruction was interrupted after reading _and_ processing `acestart` bytes of input in the state, and a store-type instruction was interrupted after computing and writing `acestart` bytes of output.
 
 [NOTE]
 ====
-The `ccstart` value is given in bytes, even though payload sizes are always multiples of 8 bytes. This design accommodates piecewise execution via traps for the `ace.init`, `ace.clear`, `ace.export`, `ace.import`, `ace.input`, and `ace.output` operations, which involve `mv` operations at long-word, quad-word, or vector-register granularity, cf.{nbsp}<<ACE-trappable-insns-support>> for more details.
+The `acestart` value is given in bytes, even though payload sizes are always multiples of 8 bytes. This design accommodates piecewise execution via traps for the `ace.init`, `ace.clear`, `ace.export`, `ace.import`, `ace.input`, and `ace.output` operations, which involve `mv` operations at long-word, quad-word, or vector-register granularity, cf.{nbsp}<<ACE-trappable-insns-support>> for more details.
 This is also compatible with the fact that `ace.size` returns a size in bytes.
 ====
 
-Like `vstart`, `ccstart` is a standard read/write CSR; however, software must not write arbitrary non-zero values to it.
+Like `vstart`, `acestart` is a standard read/write CSR; however, software must not write arbitrary non-zero values to it.
 Normally, hardware sets this register on trap.
 Software may safely write 0 to restart operations completely, and the register can be saved and restored during context switches.
 Writing an arbitrary non-zero value may raise an illegal-instruction exception, as hardware is not required to support all values.
 If no exception is raised and an invalid value is written, authentication will fail upon import because portions the content are replaced with arbitrary values, or exports will produce unauthenticatable output.  Only `ace.init` may still create a valid context, but since the key values were already in plaintext within the same domain, this does not expand the attack surface.
 
-Only the instructions explicitly mentioned above support non-zero `ccstart` values; other ACE instructions ignore this register, and will be restarted.
+Only the instructions explicitly mentioned above support non-zero `acestart` values; other ACE instructions ignore this register, and will be restarted.
 
 [[ACE-why-restarting,Remark {counter:remark}]]
 *Remark {counter:remark}.*
-_A single `ccstart` value suffices due to the authenticated encryption algorithm used. The operations behave as follows:_
+_A single `acestart` value suffices due to the authenticated encryption algorithm used. The operations behave as follows:_
 
 * `_ace.init_` _is a single-pass operation: the metadata section is read first, determining the payload length. If sufficient memory is available, subsequent blocks are read sequentially and passed to a deserialization circuit to populate the CC._
 * `_ace.import_` _operates similarly to `ace.init`: the metadata section is read first to determine the payload length. If sufficient memory is available, the remaining blocks are read, decrypted, and passed to a deserialization circuit to populate the CC._
@@ -349,7 +351,7 @@ _Therefore, separating data transfer from cryptographic operations in import/exp
 
 _Finally, resuming requires at least as many cryptographic operations as restarting if the trapped domain also saves and resumes partial SCCs. Memory accesses may be reduced, but since data read from memory initially (for `ace.init` or `ace.export`) may no longer reside in the caches, resuming may offer better performance on some systems. Additionally, resuming avoids potential circular page-fault issues, as opposed to restarting._
 
-[.darkred]#*TBD* Specify the exact semantics of `ccstart` ato bend define the points at which various operations can be interrupted.#
+[.darkred]#*TBD* Specify the exact semantics of `acestart` ato bend define the points at which various operations can be interrupted.#
 
 ===== Reuse of ASID and VMID (to be verified)
 
@@ -1283,17 +1285,17 @@ To reduce hardware complexity, these operations can be trapped and emulated in s
 Upon a trap, the handler identifies the trapped instruction and uses the Algorithm field of the metadata block
 `ace.size` to determine the size of the data to be transferred.
 
-In order to support interrupts of the emulation libraries, such instructions need to respect the value of `ccstart` and update it in accordance with the expected architected behavior the trapped instructions.  We provide here non-normative definition for such a set of instructions in <<ACE-trappable-insns-support>>.
+In order to support interrupts of the emulation libraries, such instructions need to respect the value of `acestart` and update it in accordance with the expected architected behavior the trapped instructions.  We provide here non-normative definition for such a set of instructions in <<ACE-trappable-insns-support>>.
 Three types of supporting operations are required:
 
  * A `mv` instruction that loads a specified number of bytes from a GPR or vector register into a CC within the ACE unit.
    Initially, `ace.size` returns the total payload length to transfer.
    After each move, this value is updated to reflect the remaining bytes.
-   The instruction also updates the `ccstart` CSR to follow the internal progress.
+   The instruction also updates the `acestart` CSR to follow the internal progress.
  * A corresponding `mv` instruction that exports a specified number of bytes from a CC to a GPR or vector register.
    The behavior of `ace.size` will be similar to that of the move instruction, but it will count the number of bytes to be exported.
  * A “`close`” instruction to suspend or finalize the procedure.
-   If executed before all bytes are transferred, the CC state matches that of an interrupted monolithic instruction, including the Completion metadata field and the `ccstart` value. If executed after all bytes are transferred, it also performs any final cryptographic operations, such as authenticating the CC, if needed.
+   If executed before all bytes are transferred, the CC state matches that of an interrupted monolithic instruction, including the Completion metadata field and the `acestart` value. If executed after all bytes are transferred, it also performs any final cryptographic operations, such as authenticating the CC, if needed.
 
 These supporting instructions must be uninterruptible.
 
@@ -2366,7 +2368,7 @@ State Machine:::
 If `VLEN` is a multiple of `b`, then the above operations are applied to each `b`-bit block of `Vs`.
 
  ** Upon issuing `ace.state Cn|C[Xn],#ace_state_last_block, Xs` where `Xs` contains the length of the last block in bits, following happens:
-   . if `partial_len` <> 0, then the CC is *invalidated*. (This means we have not completed the previous block.)
+   . if `partial_len` <> 0, then the CC is *invalidated*. (The previous block is not complete.)
    . if `Xs > b` then the CC is *invalidated*.
    . `last_block_len <- Xs`.
 
@@ -2471,8 +2473,7 @@ The values 9 and 13 are used when there is a partial block.
  ** Upon issuing `ace.state Cn|C[Xn],#ace_last_block, Xs` where `Xs` contains the length of the last block in bits, following happens:
 +
 --
- . if `partial_len` <> 0, then the CC is *invalidated*. (This means we have not completed the previous block.)
- . if `last_block_len` <> 0, then the CC is *invalidated*. (This means we issued the instruction already.)
+ . if `partial_len` <> 0, then the CC is *invalidated*. (The previous block is not complete.)
  . if `Xs > b`, then the CC is *invalidated*.
  . if `Xs = 0`, then the CC is *invalidated*.
  . `last_block_len <- Xs`.
@@ -2480,6 +2481,7 @@ The values 9 and 13 are used when there is a partial block.
 +
 
  ** In state _hash_last_block_:
+  *** if `last_block_len` = 0, then the CC is *invalidated*.
   *** If `VLEN` is a multiple of `b` (including the case where `VLEN` = `b`), then
       we only issue a single ``ace.exec`` of Form B, i.e., "```ace.exec Cn|C[Xn],Vs```", to absorb the least significant `b` bits of data block `Vs`.
   *** If `b` is a multiple of `VLEN` and `b` > `VLEN`, then we can one or more instructions ``ace.exec`` of Form B, i.e., "```ace.exec Cn|C[Xn],Vs```", to absorb the data block `Vs` into the hash, i.e. "```ace.exec Cn|C[Xn],Vs```":
@@ -2541,11 +2543,11 @@ NOTE: The description of states _hash_absorb_ and _hash_finalize_ should make it
 
 ==== VM Migration
 
-Just as the same VM can be made to run in an Intel or an AMD processor, for instance many users of client devices may switch to a device with a CPU from a different SiP and carry their VMs.
-However, it may occur that the ACE implementation on the new device has a CF with reduced capacity. In this case, the system software may not be able to restore all the contexts. Therefore, we added a single-block context format to <<ACE-metadata-standard>> that can be used by system software in such a situation, which can be used to store a (truncated) pointer or other information to be used, upon trapping, to identify which context to load.
-This of course requires to free one or more CCs beforehand and, it will be up to the same SW to decide which context to free.
+Users may migrate their virtual machines (VMs) between client devices with CPUs from different silicon providers—a practice already common when moving interrupted VMs between Intel and AMD systems. In such a scenario, the ACE implementation on the destination device might have a smaller Context File (CF) capacity. System software could then be unable to restore all cryptographic contexts.
 
-This mechanism, can also be used to implement lazy loading of contexts upon context switching.
+To address this, the `acecclazy` CSR to enables lazy context reloading by causing the hart to trap to the parent mode if a CC being accessed is marked as "lazy", i.e., the corresponding bit in `acecclazy` is set.  When this requires freeing one or more CCs first, system software decides which contexts to evict.
+
+The same mechanism can also support lazy loading of contexts during ordinary context switches.
 
 ==== Key Management and Provisioning Applications
 
