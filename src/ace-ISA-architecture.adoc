@@ -144,7 +144,7 @@ This has two major implications:
 [[ACE-CSR]]
 ==== CSRs
 
-ACE extends the `*status` CSRs and adds five new CSRs to manage its execution environment.
+ACE extends the `*status` and `misa` CSRs and adds 22 new CSRs to manage its execution environment.
 It also requires a subset of the V extension to be implemented, including the vector register file.
 
 .New ACE CSRs
@@ -162,18 +162,23 @@ It also requires a subset of the V extension to be implemented, including the ve
 | 0xXXX--0xXXX   | MRW (RZ)  | `maceOSSecret{0..4}`     | ACE OS Secret
 | 0xXXX--0xXXX   | MRW (RZ)  | `maceBootSecret0{0..4}`  | ACE Boot Secret
 |===
-(((CSR,aceenable)))
-(((CSR,aceerror)))
-(((CSR,aceccactive)))
-(((CSR,aceccdirty)))
-(((CSR,acecclazy)))
-(((CSR,acestart)))
-(((CSR,macerctk)))
-(((CSR,maceOSSecret)))
-(((CSR,maceBootSecret0)))
+// (((CSR,aceenable)))
+// (((CSR,aceerror)))
+// (((CSR,aceccactive)))
+// (((CSR,aceccdirty)))
+// (((CSR,acecclazy)))
+// (((CSR,acestart)))
+// (((CSR,macerctk)))
+// (((CSR,maceOSSecret)))
+// (((CSR,maceBootSecret0)))
 
 
+[[ACE-ACE-field-in-misa]]
+===== ACE field in `misa`
 
+The `misa.ACE` field uses bit `L` (11) to indicate that the ACE extension is implemented.
+//This bit is chosen because the extension goes _beyond_ the cryptographic extension, which will likely use bit `K` (10).
+(((CSR, CE field in `misa`)))
 
 [[ACE-CSR-enable]]
 ===== `aceenable`
@@ -187,10 +192,10 @@ Disabling ACE is done by writing a zero to `aceenable`, which also clears the CC
 [NOTE]
 ====
 While the standard floating-point and vector extensions do not support User Mode disable/enable instructions, the ACE unit can in general be enabled and disabled in zUser Mode, instead of using an OS call or trapping.
-However, if the ACE unit contains state from a different process, and its interface is disabled for the current one, enabling it will trap to the Supervisor (as described in <<ACE-ACES-field>>) to allow the latter to first save the state in case it was not saved before and then clear it (lazy context switch).
+However, if the ACE unit contains state from a different process, and its interface is disabled for the current one, enabling it will trap to the Supervisor (as described in <<ACE-ACES-field-in-status>>) to allow the latter to first save the state in case it was not saved before and then clear it (lazy context switch).
 
 When a process that has ACE enabled is preempted, the parent modes inherit the state to be able to export and
-re-import the CCs. Hence, `aceenable` is not cleared, and the `*status.ACES` fields (see <<ACE-ACES-field>>) of the parent domains will take the value Enabled.
+re-import the CCs. Hence, `aceenable` is not cleared, and the `*status.ACES` fields (see <<ACE-ACES-field-in-status>>) of the parent domains will take the value Enabled.
 Tracking the CCs which are active, resp., dirty is done on an individual basis and is described in <<ACE-tracking-cc-dirtiness>>.
 ====
 
@@ -226,7 +231,7 @@ where a single write to aceenable can modify both mstatus and vsstatus:
 (Maybe turn the interface to instructions? We do not need return values.)
 ____
 
-[[ACE-ACES-field]]
+[[ACE-ACES-field-in-status]]
 ===== ACES field in `*status`
 
 An ACE context status field, ACES,
@@ -349,7 +354,7 @@ It also permits system software to implement lazy loading for all contexts.
 ===== `acestart`
 
 `acestart` is an XLEN-bit CSR that serves a similar role in ACE as `vstart` does in the V extension.
-(((CSR, `acestart`)))
+(((CSR, acestart)))
 
 The instructions `ace.init`, `ace.import`, `ace.export`, `ace.input`, and `ace.output` may require significant execution time and can be interrupted by exceptions or interrupts. To allow resumption rather than restarting, an implementation may set the `acestart` CSR to a non‑zero value. Unlike the vector extension’s `vstart`, which tracks element indices, ACE has no notion of an element; `acestart` therefore records a byte offset. For a load‑type instruction (e.g., `ace.init`, `ace.import`, `ace.input`), this offset indicates how many bytes of input have already been read and processed. For a store‑type instruction (e.g., `ace.export`, `ace.output`), it indicates how many bytes of output have already been computed and written.
 
@@ -393,13 +398,8 @@ In the metadata section, `ASID` and `VMID` are always zero padded to the maximal
 [[ACE-providing-keys,Remark {counter:remark}]]
 *Remark {counter:remark}.* _The software in each World/Supervisor Domain is normally responsible to generate or obtain their own keys, and if a process (applet) in one World/Supervisor Domain is responsible to provide keys to other Worlds/Supervisor Domains, it is the responsibility of the MM to perform an appropriate sequence of import, switch the CTK, then export operations._
 
-====== ACE field in `misa`
 
-The `misa.ACE` field uses bit `L` (11) to indicate that the ACE extension is implemented.
-//This bit is chosen because the extension goes _beyond_ the cryptographic extension, which will likely use bit `K` (10).
-(((CSR, CE field in `misa`)))
-
-====== `macerctk`
+===== `macerctk`
 
 If the RCTK can be programmed, it can only be programmed by M-mode.
 For this purpose, we use eight 32-bit WARL CSRs in RV32 and four 64-bit WARL CSRs in RV64.
@@ -418,7 +418,7 @@ NOTE: Discoverability of whether the RCTK can be configured or not is not critic
 NOTE: Mechanisms for persisting Root Context Transport Keys (RCTKs) across reboots or transferring them between devices are outside the scope of the ACE architecture. Such mechanisms are system-specific and fall under the purview of MM firmware.
 For cross-device migration, the use of a public-key key-encapsulation mechanism (KEM) is recommended.
 
-====== Re-configurable Localities
+===== Re-configurable Localities
 
 Two groups of CSRs, only accessible and programmable by MM, are used for two reconfigurable Localities (cf.{nbsp}<<ACE-concepts>>).
 These are:
@@ -789,7 +789,7 @@ Enable/Disable the feature in the current process domain and (*TBD* determine
 how many contexts we need).
 `ace.enable` must be issued before using any ACE operation.
 This is a pseudo-operation implemented as a write to a WARL CSR.
-See <<ACE-CSR-enable>> and <<ACE-ACES-field>> for more details.
+See <<ACE-CSR-enable>> and <<ACE-ACES-field-in-status>> for more details.
 
 [[ACE-instruction-init]]
 ==== ace.init
