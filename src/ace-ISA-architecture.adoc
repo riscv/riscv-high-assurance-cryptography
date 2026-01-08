@@ -5,18 +5,22 @@
 === Fundamental Concepts
 
 Opaque Key:::
+(((Opaque key)))
 The fundamental concept of ACE is the _opaque key_, i.e., a cryptographic key whose value remains hidden to software even while being used in cryptographic operations.
 
 Cryptographic Context:::
-ACE implements the concept of _opaque keys_ via _Cryptographic Contexts_ (CCs), architectural containers that protect sensitive information.
-Each CC contains an opaque *metadata section*, which does not require confidentiality, and a *content section*, which does.
-The metadata defines the cryptographic algorithm and optional usage policies; the content holds sensitive material such as keys, other secrets, and internal algorithm state.
-Confidentiality and integrity of the content section are enforced by restricting access and modifications to architectural mechanisms that implement the rules of the configured algorithm. The concept of _opaqueness_ extends to all data within the content section.
+(((Cryptographic context)))
 (((Cryptographic context, content)))
 (((Cryptographic context, metadata)))
+ACE implements _opaque keys_ through the _Cryptographic Context_ (CC), an architectural container that safeguards sensitive information.
+Each CC consists of a *metadata section*—which does not require confidentiality—and a confidential *content section*.
+The metadata defines the cryptographic algorithm and optional usage policies; the content holds sensitive material such as keys, other secrets, and internal algorithm state.
+Integrity of the metadata section and confidentiality and integrity of the content section are enforced by
+allowing access and modification of a CC only according to the rules of ACE and of the configured algorithm.
+The principle of _opaqueness_ applies to _all_ data within the content section.
 
-Object-Oriented Architecture:::
-CCs are _objects_ that may expose a uniform interface despite implementing different algorithms.  A CC (or SCC) encapsulates its own behavior, allowing, for instance, AES-128, AES-256, Калина-128, Калина-256, and SM4 instances in ECB mode to be used interchangeably without code changes.  Similarly, modes such as GCM-SIV or XEX/XTS, that can be instantiated with any of these algorithms would also offer the same binary interface, as long as the code supports variable SCC sizes, which can be dynamically discovered. Side-channel-resistant variants would also be supported transparently.
+Object-Orientation:::
+CCs are _objects_ that may expose a uniform interface despite implementing different algorithms.  A CC encapsulates its own behavior, allowing, for instance, AES-128, AES-256, Калина-128, Калина-256, and SM4 instances in ECB mode to be used interchangeably without code changes.  Similarly, modes such as GCM-SIV or XEX/XTS, that can be instantiated with any of these algorithms would also offer the same binary interface, as long as the code supports variable SCC sizes, which can be dynamically discovered. Side-channel-resistant variants would also be supported transparently.
 
 NOTE: An example of the flexibility of our approach is the ability to use the same binary interface for different algorithms and modes.
 Consider a content distribution network that intends to use different ciphers for different markets.
@@ -25,31 +29,32 @@ However, in the US and Europe the underlying block cipher would be the AES, in C
 The CC would encapsulate the cipher and the user code would need no changes to support multiple algorithms, neither at the source code level nor at the binary level, cf.{nbsp}<<ACE-GCM-mode>>.
 
 Sealed Cryptographic Context:::
+(((Cryptographic context, sealed)))
 Only the ACE implementation can access CC content.
-For protection outside the architectural state, a CC can be exported as a _Sealed Cryptographic Context_ (SCC), i.e., an encrypted and authenticated package containing metadata, a nonce, and authentication tag, and encrypted content.
-SCCs can be reimported into CCs when needed.
+In order to allow efficient reconfiguration of CCs,
+a CC can be exported as a _Sealed Cryptographic Context_ (SCC), i.e., an encrypted and authenticated package.
+A SCC can be reimported into a CC when needed.
+This mechanism protects a CC also outside the architectural state.
 These operations use a _Context Transport Key_ (CTK).
 The most commonly used CTK is the _Root Context Transport Key_ (RCTK), which is stored in an MM-only CSR.
 MM manages the RCTK unless it is hardwired or hardware-generated.
-Besides the content section in a CC, also the content section as encrypted in an SCC is called _opaque_.
-(((Cryptographic context, sealed)))
+Because of its encryption, also the content section in an SCC is called _opaque_.
 
 Usage Control Policy:::
+(((Cryptographic context, Usage Control)))
 An important distinction in ACE is between the _import_ and _export_ operations on CCs on one hand, and the _use_ of CCs in cryptographic operations on the other hand.
 It must be always possible to import and export SCCs, as well as clear and reinitialize CCs with new data: If this were not possible, then a process may be able to deny all other processes access to ACE by simply configuring all the CCs.
 Therefore, the optional _Usage Control policies_ in the metadata section may only be able to restrict the cryptographic operations that are allowed by the algorithms configured by a CC, including modifying its state, but not the operations that manage CCs and SCCs. [.darkred]#TBD: Add to each instruction whether it may be usage-controlled or not.#
-(((Cryptographic context, Usage Control Policy)))
 
-NOTE: The distinction between CC/SCC management instructions and "use-of-CC-for-cryptography" operations is the reason we introduce the concept of _Usage Control_ and do nto re-use the more common term _Access Control_.
+NOTE: The distinction between CC/SCC management instructions and "use-of-CC-for-cryptography" operations is the reason we introduce the concept of _Usage Control_ and do not re-use the more common term _Access Control_.
 
 Locality:::
+(((Cryptographic context, Locality)))
 In addition to Usage Control policies,
 ACE can bind opaque keys to a _Locality_, restricting their usage to a specific device, device class, software or hardware configuration, or boot cycle.
 This binding uses both metadata and a _Derived CTK_ (DCTK) derived from the RCTK and a Locality-specific secret via a key derivation function for the purpose of importing and exporting opaque keys.
-The system maintains a _Locality Secrets Table_ (LST) containing both system-wide values which are fixed, values that can be configured in an externally defined way,
-and fields that can be programmed by MM.
+The system maintains a _Locality Secrets Table_ (LST) containing both system-wide values which are fixed, values that can be configured in an externally defined way, and fields that can be programmed by MM.
 The metadata stores the Locality as an index into this table. See <<ACE-Localities>> for more details.
-(((Cryptographic context, Locality)))
 
 NOTE: The term "Locality" is borrowed from TPMs.
 In TPMs, localities are 8-bit values used to restrict object usage by binding it to the source of a command (e.g., application, operating system, or driver layer).
@@ -386,7 +391,7 @@ The maximal bit length of `ASID` is 9 for Sv32 addresses or 16 for Sv39, Sv48, a
 The maximal bit length of `VMID` is 7 for Sv32x4 or 14 for Sv39x4, Sv48x4, and Sv57x4 addresses.
 In the metadata section, `ASID` and `VMID` are always zero padded to the maximal lengths of 16 and 14 bits, respectively.
 
-[.darkred]#However, we need a mechanism to make sure that if the system is not configured to insert `ASID`, resp., `VMID` into the GVAs/GPAs, we can still usage them for the purpose of policing the usage of CCs.#
+[.darkred]#However, we need a mechanism to make sure that if the system is not configured to insert `ASID`, resp., `VMID` into the GVAs/GPAs, we can still use them for the purpose of policing the usage of CCs.#
 
 [[ACE-providing-keys,Remark {counter:remark}]]
 *Remark {counter:remark}.* _The software in each World/Supervisor Domain is normally responsible to generate or obtain their own keys, and if a process (applet) in one World/Supervisor Domain is responsible to provide keys to other Worlds/Supervisor Domains, it is the responsibility of the MM to perform an appropriate sequence of import, switch the CTK, then export operations._
@@ -1025,7 +1030,7 @@ whose number is in `Xs`) into GPR `Xd`, and zero if the algorithm is not support
 
 Knowledge of the size of the SCC is needed by any feature that relies on `ace.export`, e.g., context switching.
 
-NOTE: The value can significantly differ from the internal resource usage ot the CC —
+NOTE: The value can significantly differ from the internal resource usage of the CC —
 it can be larger (for simple primitives, because of the nonce/SIV overhead) but
 also smaller (for keys split into shares for threshold implementations, but saved
 externally in reconstructed form).
@@ -1875,8 +1880,8 @@ State Machine:::
  . `absorb_into_hash(Vs)`.
 --
 +
-If `VLEN` is a multiple of `b`, the above operation is executed `VLEN/b` times, absorbing each `b`-bit block of `Vs` into the hash.
-This operation is also parallelizable by having the implementation precompute the first four powers of `hash_key`, keeping it internally in the CC (and reconstructing them after `ace.import`). If the number `x` of blocks to process is not a multiple of `VLEN`/`b`, `VL` can be set to the remainder of the division of `x` by `VLEN`/`b` for the last instruction.
+If `VLEN > b`, the above operation is executed `VLEN/b` times, absorbing each time a `b`-bit block of `Vs` into the hash.
+This operation is parallelizable by having the implementation precompute the first four powers of `hash_key`, keeping it internally in the CC (and reconstructing these powers after `ace.import`). If the number `x` of blocks to process is not a multiple of `VLEN`/`b`, `VL` can be set to the remainder of the division of `x` by `VLEN`/`b` for the last instruction.
 
 ** If state _encrypt_, only ``ace.exec`` instructions of Form A are allowed. +
    "```ace.exec Vd,Cn|C[Xn],Vs```" encrypts `Vs` into `Vd`, and absorbs the ciphertext `Vd` into the `auth_tag`, namely:
