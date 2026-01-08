@@ -12,11 +12,13 @@ ACE implements the concept of _opaque keys_ via _Cryptographic Contexts_ (CCs), 
 Each CC contains an opaque *metadata section*, which does not require confidentiality, and a *content section*, which does.
 The metadata defines the cryptographic algorithm and optional usage policies; the content holds sensitive material such as keys, other secrets, and internal algorithm state.
 Confidentiality and integrity of the content section are enforced by restricting access and modifications to architectural mechanisms that implement the rules of the configured algorithm. The concept of _opaqueness_ extends to all data within the content section.
+(((Cryptographic Context, content)))
+(((Cryptographic Context, metadata)))
 
 Object-Oriented Architecture:::
 CCs are _objects_ that may expose a uniform interface despite implementing different algorithms.  A CC (or SCC) encapsulates its own behavior, allowing, for instance, AES-128, AES-256, Калина-128, Калина-256, and SM4 instances in ECB mode to be used interchangeably without code changes.  Similarly, modes such as GCM-SIV or XEX/XTS, that can be instantiated with any of these algorithms would also offer the same binary interface, as long as the code supports variable SCC sizes, which can be dynamically discovered. Side-channel-resistant variants would also be supported transparently.
 
-NOTE: An example of the usefulness of our approach is the ability to use the same binary interface for different algorithms and modes.
+NOTE: An example of the flexibility of our approach is the ability to use the same binary interface for different algorithms and modes.
 Consider a content distribution network that intends to use different ciphers for different markets.
 The payloads would always be encrypted using GCM.
 However, in the US and Europe the underlying block cipher would be the AES, in China SM4, in Russia Кузнечик and in Ukraine Калина.
@@ -30,11 +32,13 @@ These operations use a _Context Transport Key_ (CTK).
 The most commonly used CTK is the _Root Context Transport Key_ (RCTK), which is stored in an MM-only CSR.
 MM manages the RCTK unless it is hardwired or hardware-generated.
 Besides the content section in a CC, also the content section as encrypted in an SCC is called _opaque_.
+(((Cryptographic Context, Sealed)))
 
 Usage Control Policy:::
 An important distinction in ACE is between the _import_ and _export_ operations on CCs on one hand, and the _use_ of CCs in cryptographic operations on the other hand.
 It must be always possible to import and export SCCs, as well as clear and reinitialize CCs with new data: If this were not possible, then a process may be able to deny all other processes access to ACE by simply configuring all the CCs.
 Therefore, the optional _Usage Control policies_ in the metadata section may only be able to restrict the cryptographic operations that are allowed by the algorithms configured by a CC, including modifying its state, but not the operations that manage CCs and SCCs. [.darkred]#TBD: Add to each instruction whether it may be usage-controlled or not.#
+(((Cryptographic Context, Usage Control Policy)))
 
 NOTE: The distinction between CC/SCC management instructions and "use-of-CC-for-cryptography" operations is the reason we introduce the concept of _Usage Control_ and do nto re-use the more common term _Access Control_.
 
@@ -45,6 +49,7 @@ This binding uses both metadata and a _Derived CTK_ (DCTK) derived from the RCTK
 The system maintains a _Locality Secrets Table_ (LST) containing both system-wide values which are fixed, values that can be configured in an externally defined way,
 and fields that can be programmed by MM.
 The metadata stores the Locality as an index into this table. See <<ACE-Localities>> for more details.
+(((Cryptographic Context, Locality)))
 
 NOTE: The term "Locality" is borrowed from TPMs.
 In TPMs, localities are 8-bit values used to restrict object usage by binding it to the source of a command (e.g., application, operating system, or driver layer).
@@ -117,8 +122,10 @@ For instance, the source CC could be a KEM that configures the destination CC wi
 ACE does not add a traditional register file.
 Rather, it defines 32 Cryptographic Contexts (CCs) for storing cryptographic keys and metadata.
 Each CC is identified by a number from 0 to 31, which the ACE unit uses to access its contents.
+(((Cryptographic Context)))
 
 Cryptographic Contexts (CCs) reside in a dedicated internal _context file_ (CF) that is inaccessible to any entity outside the ACE implementation, including software, other hardware blocks, and invasive debug interfaces. The CF's memory capacity is implementation-defined and may be as large as 32 times the size of the largest possible CC; however, a smaller amount of memory may be used in practice. At a minimum, the CF must be capable of holding either (i) a single instance of the largest possible CC, or the largest CC pair in which the first CC derives the second (via `ace.derive`), as well as (ii) a metadata block for each other possible context.
+(((Cryptographic Context, cotext file)))
 
 The size of each CC is dynamic, determined by the cryptographic algorithm with which it is configured.
 This is an important difference with respect to GPRs and vector registers, which always have the same size.
@@ -143,6 +150,7 @@ It also requires a subset of the V extension to be implemented, including the ve
 [%autowidth,float="center",align="center",options="header"]
 |===
 | Address | Privilege | Name                     | Description
+| 0xXXX   | URW       | `aceenable`              | Enablement of ACE instructions
 | 0xXXX   | URW       | `aceerror`               | Error code of the last ACE instruction
 | 0xXXX   | URO       | `aceccactive`            | Bitmap of active Contexts
 | 0xXXX   | URO       | `aceccdirty`             | Bitmap of dirty Contexts
@@ -152,11 +160,24 @@ It also requires a subset of the V extension to be implemented, including the ve
 | 0xXXX   | MRW (RZ)  | `maceOSSecret{0..4}`     | ACE OS Secret
 | 0xXXX   | MRW (RZ)  | `maceBootSecret0{0..4}`  | ACE Boot Secret
 |===
+(((CSR,aceenable)))
+(((CSR,aceerror)))
+(((CSR,aceccactive)))
+(((CSR,aceccdirty)))
+(((CSR,acecclazy)))
+(((CSR,acestart)))
+(((CSR,macerctk)))
+(((CSR,maceOSSecret)))
+(((CSR,maceBootSecret0)))
+
+
+
 
 [[ACE-CSR-enable]]
 ===== `aceenable`
 
 `aceenable` is a single-bit CSR.
+(((CSR,aceenable)))
 
 Enabling ACE in any mode is done by writing a 1 to `aceenable`.
 Disabling ACE is done by writing a zero to `aceenable`, which also clears the CCs, as described in <<ACE-tracking-cc-dirtiness>>. When ACE is disabled, any ACE operation will cause an invalid instruction exception, except feature enablement.
@@ -205,6 +226,7 @@ ____
 
 [[ACE-ACES-field]]
 ===== ACES field in `*status`
+(((CSR,ACES field in *status)))
 
 An ACE context status field, ACES, is added to `mstatus`[26:25], and is shadowed in `sstatus`[26:25] and in `vsstatus`[26:25] if the hypervisor extension is present.
 Similar to the FS and VS fields, it can be used to optimize context switching.
@@ -243,6 +265,7 @@ Fine-grained tracking activeness and dirtiness of individual CCs uses the `acecc
 
 The `aceerror` CSR is an 8-bit CSR that indicates the error condition on the last ACE instruction.
 This implies that any read from the `aceerror` CSR may cause a hart to wait until the last operation in the ACE unit which has been issued by the same hart completes.
+(((CSR,aceerror)))
 
 It can be freely read and written, in particular by context switching software to make sure that the error status is properly handled when a process resumes execution.
 
@@ -282,8 +305,11 @@ This is done by using three CSRs, which track the use and dirtiness of the CCs i
 
 [arabic]
 . `aceccactive`: XLEN bits, with a bit per CC to denote whether the register is in use or not (cleared contextually to CC erasure to dispose of the key).
+(((CSR,aceccactive)))
 . `aceccdirty`: XLEN bits, with a bit per CC to track whether the corresponding CC has been modified since the last time the same bit has been cleared.
+(((CSR,aceccdirty)))
 . `acecclazy`: XLEN bits, with a bit per CC to track whether the corresponding CC is to be lazily loaded or is actually present.
+(((CSR,acecclazy)))
 
 If the _i_-th bit of `aceccdirty` is set, then the _i_-th bit of `aceccactive` must also be set.
 
@@ -320,6 +346,7 @@ It also permits system software to implement lazy loading for all contexts.
 ===== `acestart`
 
 `acestart` is an XLEN-bit CSR that serves a similar role in ACE as `vstart` does in the V extension.
+(((CSR, `acestart`)))
 
 The instructions `ace.init`, `ace.import`, `ace.export`, `ace.input`, and `ace.output` may require significant execution time and can be interrupted by exceptions or interrupts. To allow resumption rather than restarting, an implementation may set the `acestart` CSR to a non‑zero value. Unlike the vector extension’s `vstart`, which tracks element indices, ACE has no notion of an element; `acestart` therefore records a byte offset. For a load‑type instruction (e.g., `ace.init`, `ace.import`, `ace.input`), this offset indicates how many bytes of input have already been read and processed. For a store‑type instruction (e.g., `ace.export`, `ace.output`), it indicates how many bytes of output have already been computed and written.
 
@@ -369,6 +396,7 @@ The `misa.ACE` field uses bit `L` (11) to indicate that the ACE extension is imp
 //This bit is chosen because the extension goes _beyond_ the cryptographic extension, which will likely use bit `K` (10).
 
 ====== `macerctk`
+(((CSR, `macerctk`)))
 
 If the RCTK can be programmed, it can only be programmed by M-mode.
 For this purpose, we use eight 32-bit WARL CSRs in RV32 and four 64-bit WARL CSRs in RV64.
@@ -392,7 +420,10 @@ Two groups of CSRs, only accessible and programmable by MM, are used for two rec
 These are:
 
 * CSRs `maceOSSecret0` and `maceOSSecret1`, to configure the "OSSecret" entry in RV64, to which RV32 adds `maceOSSecret2` mand `maceOSSecret3`.
+(((CSR, `maceOSSecret*`)))
 * CSRs `maceBootSecret0` and `maceBootSecret1`, to configure the "BootSecret" entry in RV64, to which RV32 adds `maceBootSecret2` and `maceBootSecret3` (cf.{nbsp}<<ACE-Localities>>).
+(((CSR, `maceBootSecret*`)))
+
 
 Bits [(_i_+1) XLEN - 1 : _i_ XLEN] of the "OSSecret", resp., "BootSecret", are configured by writing to `maceOSSecret{i}`, resp. `maceBootSecret{i}`.
 
@@ -418,7 +449,7 @@ All data formats are little-endian.
 The metadata section is 64 bits long and its format described in <<ACE-metadata-standard>>.
 This format is used for CC initialization, export and import purposes.
 The internal representation is implementation specific.
-
+(((Cryptographic Context,metadata,format)))
 
 [[ACE-metadata-standard]]
 .Format of the Metadata Section
@@ -438,14 +469,14 @@ Used to determine whether an operation must be restarted.
 | [21:18] |   4  | State (also Direction) | Encoding the current state of the state machine of the algorithm as a number.
 The value must be zero in the initialization data.
 If the algorithm encoded in the CC has at most 16 states
-(including _initial_, _completed_, and _invalidated_, cf. <<ACE-state-constants>>), then this number is stored in this field, cf. <<state-field>>,
+(including _initial_, _completed_, and _invalidated_, cf. <<ACE-state-constants>>), then this number is stored in this field,
 otherwise an algorithm-specific representation is used in the content, and this field only admits the values 0 (initial), 14 (invalidated), 15 (completed) or 1 (anything other operational state). The values must conform to <<ACE-state-constants>>.
 | [25:22] |   4  | Locality               | Field which is either -1 or an index into the Locality Secrets Table.
 | [29:26] |   4  | UC_Policy_1            | "UC Policy" means "Usage Control Policy". +
-Disallow the _usage_ of this CC in User, (Virtual) Supervisor, Hypervisor, resp., MM if bit 26, 27, 28, resp. 29, is set. Cf. <<state-no-H-no-VMID>>.
-| [31:30] |   2  | UC_Policy_2            | If bit 30, resp., 31, is set, then restrict the usage by `ASID`, resp., `VMID`. Restriction by `ASID` ignored if in S Mode or higher. Cf. <<state-no-H-no-VMID>>.
+Disallow the _usage_ of this CC in User, (Virtual) Supervisor, Hypervisor, resp., MM if bit 26, 27, 28, resp. 29, is set..
+| [31:30] |   2  | UC_Policy_2            | If bit 30, resp., 31, is set, then restrict the usage by `ASID`, resp., `VMID`. Restriction by `ASID` ignored if in S Mode or higher.
 | [47:32] |  16  | UC_Policy_3            | Zero if bit 30 unset, else `ASID` to enforce.
-| [63:48] |  16  | UC_Policy_4            | Zero if bit 31 unset, else `VMID` to enforce. Cf. <<state-no-H-no-VMID>>.
+| [63:48] |  16  | UC_Policy_4            | Zero if bit 31 unset, else `VMID` to enforce.
 |===
 
 Algorithms are encoded in a 8 bit field.
@@ -490,18 +521,16 @@ In such a case, the value of the SC_Protection field must be set to 3.
 |   3   | `ace.export` was interrupted.
 |===
 
-NOTE: The information in the Completion field is in principle known to the system software/firmware stack, we duplicate it into the metadata to ensure that it remains accessible after nested interrupts, i.e., after switching partially configured/imported or exported CCs in or out. While authentication also guarantees the integrity of the SCCs and of their import, this is both a robustness measure and serves to simplify system stacks.
+NOTE: The information in the Completion field is in principle known to the system software/firmware stack, we duplicate it into the metadata to ensure that it remains accessible after nested interrupts, i.e., after switching partially configured/imported or exported CCs in or out. While authentication also guarantees the integrity of the SCCs and of their import, this is both a robustness measure and serves to simplify system stacks.[.darkred]#Do we really need it?#
 
-[[state-field,Remark {counter:remark}]]
-*Remark {counter:remark}.* _The "state" field accommodates modes of operation with a small number of states.
-For algorithms with more complex state machines, machine state information can be stored in a custom data section of the CC._
+NOTE: The "state" field accommodates modes of operation with a small number of states.
+For algorithms with more complex state machines, machine state information can be stored in a custom data section of the CC.
 
-[[state-no-H-no-VMID,Remark {counter:remark}]]
-*Remark {counter:remark}.* _If the H extension is not enabled, bit 28 must be set to 1, and bits 31 and [63:48] must be set to 0.
+If the H extension is not enabled, bit 28 must be set to 1, and bits 31 and [63:48] must be set to 0.
 The "UC_Policy_4" field is 16 bits long for compatibility with architectures employing 16-bit `VMID` fields (for instance, in heterogeneous systems).
 While interoperability cannot be guaranteed when this policy is used, this ensures that the two top bits are not used for other purposes. +
 Filtering usage by Supervisor Domain or World ID is not supported, and not only because of lack of space in a 64-bit metadata section:
-Reconfiguring the RCTK is a better approach for such isolation requirements, whereas isolation by `ASID` and `VMID` is a weaker security feature._
+Reconfiguring the RCTK is a better approach for such isolation requirements, whereas isolation by `ASID` and `VMID` is a weaker security feature.
 
 [[ACE-Localities]]
 ===== Localities
@@ -753,6 +782,8 @@ how many contexts we need).
 `ace.enable` must be issued before using any ACE operation.
 This is a pseudo-operation implemented as a write to a WARL CSR.
 See <<ACE-CSR-enable>> and <<ACE-ACES-field>> for more details.
+(((ACE instruction, ace.enable)))
+(((ACE instruction, ace.disable)))
 
 [[ACE-instruction-init]]
 ==== ace.init
@@ -779,6 +810,7 @@ Description::
 `Xd`, alternatively, is a GPR containing a number from 0 to 31 to select the context
 to be configured.
 `Xs` points to the region of memory containing the metadata and the key material.
+(((ACE instruction, ace.init)))
 
 
 NOTE: The operation can be conceptually split into two phases.
@@ -810,6 +842,7 @@ Encoding::
 Description::
 `Cd` is the source CC to be cleared (encoded as a 5-bit immed). +
 `Xd` alternatively, is a GPR containing a number from 0 to 31 to select the context to be cleared. +
+(((ACE instruction, ace.clear)))
 
 [[ACE-instruction-export]]
 ==== ace.export
@@ -836,6 +869,7 @@ Exports the CC `Cs` or `C[Xs]` to memory, starting at address `Xd`, using
 the procedure described in <<ACE-formats>>.
 If the context `Cs` is clear, or `Xs` is out of range,
 the operation will report error ace_err_invalid.
+(((ACE instruction, ace.export)))
 
 The instruction must be resumable in case of interrupts.
 Similarly to entire-vector-register store instructions, `ace.export` appears to other harts as
@@ -871,6 +905,8 @@ It is set to true if the key is in a system defined format
 (`ace.import.S`)
 and not the format defined by the present architecture
 (`ace.import`).
+(((ACE instruction, ace.import)))
+(((ACE instruction, ace.import.S)))
 
 The instruction must be resumable in case of interrupts.
 Similarly to entire-vector-register load instructions, `ace.import` appears to other harts as
@@ -942,6 +978,7 @@ with non-zero values in `rd`, resp., `rs2`, to encode additional instructions.
 
 Description::
 Performs a cryptographic operation such as an encryption or decryption, absorbing a value in a hash, and possibly returning a value.
+(((ACE instruction, ace.exec)))
 
 NOTE: In many algorithms, the next state is often implied by the preceding operation.
 For example, in AEAD algorithms, setting an IV or nonce could implicitly transition to the state for absorbing associated data.
@@ -978,6 +1015,7 @@ Bit `r` (i.e., bit 27) is 0 if the CC is encoded as an immediate, and 1 if a GPR
 Description::
 This instruction writes the size of the SCC corresponding to CC `Cs`, or the CC
 whose number is in `Xs`) into GPR `Xd`, and zero if the algorithm is not supported.
+(((ACE instruction, ace.size)))
 
 Knowledge of the size of the SCC is needed by any feature that relies on `ace.export`, e.g., context switching.
 
@@ -1015,6 +1053,7 @@ Only the Algorithm and SC_Protection fields of the metadata section of a CC are 
 `ace.available Xd,Xs`
 
 Alias to the Metadata Variant of `ace.size`, as it returns zero if the algorithm is not supported.
+(((ACE instruction, ace.available)))
 
 [[ACE-instruction-clone]]
 ==== ace.clone
@@ -1052,6 +1091,7 @@ referred:
 Description::
 Clones source CC `Cs` (or the CC indexed by `Xs`) into destination CC `Cd` (or
 into the CC indexed by `Xd`).
+(((ACE instruction, ace.clone)))
 
 // NOTE: The `ace.clone` instruction is an optimization for the sequence `ace.export` followed by `ace.import`. While reusing cryptographic state (e.g., encrypting with the same counter) can enable certain attacks, this risk cannot be eliminated by omitting `ace.clone`, as a state can be exported and re‑imported multiple times.
 
@@ -1088,6 +1128,7 @@ The instruction is used to derive a new context from an existing one, with its o
 It is similar to `ace.clone`, but the derived context is not a copy of the source context,
 rather, it is a new context that is derived from it, for instance, through a key derivation mechanism.
 This instruction can be used multiple times, to generate multiple derived contexts.
+(((ACE instruction, ace.derive)))
 
 
 [[ACE-instruction-state]]
@@ -1117,6 +1158,8 @@ Bit `r` (i.e., bit 15) is 0 if the context is encoded as an immediate, and 1 if 
 Description::
 `ace.state` and `ace.dir` are two names for the same instruction. +
 `Cn` specifies the CC whose state is to be set. Alternatively, `Xn` is a GPR containing a value from 0 to 31 to dynamically select the target context. The `#immed` operand is a constant from the set of admissible values defined for each algorithm, used to manage the algorithm's internal state machine when additional states are required. `Xs` is a GPR that is either `X0` or contains an optional additional parameter for the state machine.
+(((ACE instruction, ace.state)))
+(((ACE instruction, ace.dir)))
 
 The state numbers used in this specification are defined in the following table.
 
@@ -1185,6 +1228,8 @@ Description::
 This instruction restricts the usage of a CC to specific modes or to a specified `ASID` or `VMID`. +
 It can also increase the side-channel protection level of the CC. +
 Let `m` be the metadata field in the destination CC. The instruction works as follows:
+(((ACE instruction, ace.restrict)))
+(((ACE instruction, ace.harden)))
 
 * Bits [10:9] and [63:25] of the input register `Xs` have the same format as the corresponding bits of the metadata.
 * Bits [8:0], [24:11] and 31 of the input register `Xs` are ignored.
@@ -1213,6 +1258,7 @@ Encoding::
     { bits: 12, name: 'imm' },
 ]}
 ....
+(((ACE instruction, ace.input)))
 
 // [.darkred]#(TBdetermined whether it is secure)# This instruction is trappable and may also be resumed or restarted.
 
@@ -1235,6 +1281,8 @@ Encoding::
     { bits:  7, name: 'imm[11:5]' },
 ]}
 ....
+(((ACE instruction, ace.output)))
+
 
 [[ACE-instruction-error]]
 ==== ace.error
@@ -1247,6 +1295,7 @@ The corresponding error value is written into GPR `Xd`.
 This is implemented as a read from CSR `aceerror`, which may cause the hart to wait if the error value is not yet available
 (cf.{nbsp}<<ACE-CSR-ace-error>>).
 The error value list is architected and given in <<ACE-error-values>>.
+(((ACE instruction, ace.error)))
 
 // ///////////////////////////////////////////////////////////////////////////////////////////
 
@@ -1341,12 +1390,14 @@ Recall that the architecture views a CC as a structure with two fields: the meta
 
 In the descriptions of the algorithms below, we do not need to redefine these two functions if they are not changed, i.e., if there are no changes to the metadata format.
 
-If the number of states of the algorithm is at most 16 (including _initial_, _completed_, and _invalidated_),= the `state` of the metadata is used to store this value.
+If the number of states of the algorithm is at most 16 (including _initial_, _completed_, and _invalidated_), the `state` of the metadata is used to store this value.
 Otherwise, the specification of the algorithm must include a suitable field in the content section of the CC/SCC.
 
 An important rule is the following.
 If an invalid input is provided to any ACE instruction, or a non-admitted instruction is executed, while processing the algorithm in CC, say, Cn,
 the `Cn` is *invalidated*, namely, the following happens:
+(((ACE algorithm, invalid state)))
+(((Cryptographic Context, invalidated)))
 
 * `Cn` is put into state _invalidated_;
 * For instructions that refers to `Cn`:
@@ -1383,6 +1434,7 @@ Any CC with its algorithms implemented as threshold implementation will always i
 The Configuration and SCC Formats will be the same as for the non-threshold implementations variants of the same algorithm, with the only difference being the value of the Side Channel Protection bits in the metadata.
 For the purpose of architecture specification, all values are also always represented as a single share in this document.
 Threshold implementations are simply implementation variants of the exact same algorithm.
+(((ACE algorithm, threshold variants)))
 
 NOTE: This assumes that reconstructing a key or re-randomizing it are fast operations, such as ``xor``s with random values.
 This in turn implies that ACE execution unit must have access to a source of randomness, or at least a PRNG that is seeded at hardware boot.
@@ -1426,6 +1478,7 @@ NOTE: Internally, the ACE unit can either directly use the value from the SKT, o
 ==== Electronic Codebook Modes (Direct Encryption/Decryption)
 
 While listing the rules for the ECB mode is in principle easy, it does display all the rules that are required to describe an arbitrarily complex mode.
+(((ACE algorithm, ECB)))
 
 // comment to reset formatting
 
@@ -1534,9 +1587,10 @@ as they can be easily implemented on top of the ECB functionality in software,
 and no intermediate value in these algorithms needs to be kept secret.
 
 [[ACE-keystream-modes]]
-==== CTR/LFSR/XCTR/XLFSR Modes to Produce a Keystream
+==== CTR/LFSR/XCTR/XLFSR Keystream Generation
 
 In the "non-X" modes, i.e., in the CTR mode and its analague that replaces the arithmetic counter by a LFSR, the sum of the lengths of IV and counter/LSFR equals the block size of the underlying keyed PRP or PRF. IV and counter/LFSR are concatenated to form the input to the keyed PRP or PRF.
+(((ACE algorithm, keystream generation)))
 
 The "X" modes have both IV and counter/LSFR of the same size as the block size of the underlying keyed PRP or PRF:
 IV and counter/LFSR are ``xor``ed together to form the input to the keyed PRP or PRF -- which explains the "X" in the mode names.
@@ -1635,6 +1689,7 @@ for i = 0 to len_in_bytes(PT)/16-1 do
 
 The use of a single key or two independently sampled keys is determined by the algorithm, and it is not a configuration parameter for the algorithm.
 We first define XEX mode functionality.
+(((ACE algorithm, XEX)))
 
 Parameters:::
 
@@ -1734,12 +1789,14 @@ for i = 0 to ceil(len_in_bytes(plaintext)/16)-1 do
 ----
 
 To implement the XTS mode, the ciphertext stealing part is easy to realize using the XEX algorithm together with vector masking and shifting operations.
+(((ACE algorithm, XTS)))
 
 // N.B. another ace.state C0, #const_set_public_value would reset the internal state and allow to begin another decryption with a new IV.
 
 
 [[ACE-GCM-mode]]
 ==== GCM Mode
+(((ACE algorithm, GCM)))
 
 Parameters:::
 
@@ -2004,6 +2061,7 @@ The GCM-SIV mode's main differences with GCM are that:
 . Both encryption and authentication keys are derived from the main key, whereas in GCM the main key is used also for encryption;
 . It is a MAC-then-Encrypt mode, whereas GCM is a Encrypt-then-MAC mode, therefore GCM-SIV is more amenable to Release of Unencrypted Plaintext (RUP) attacks;
 . Encryption requires two passes over the plaintext, since the tag computed on the AD and plaintext is used also as the initialization vector for the CTR encryption.
+(((ACE algorithm, GCM-SIV)))
 
 The third difference affects the state machine. While GCM-SIV's decryption state machine is similar to the GCM's, the encryption state machine is different:
 
@@ -2109,7 +2167,7 @@ finalizes the computation of the SIV/tag, by performing:
 +
 --
     . `absorb_into_hash(Vs)`.
-    . `tmp <- enc_block(enc_key, 1b0 @ ((auth_tag xor N)[b-2:0]))`
+    . `tmp <- enc_block(enc_key, 1b0 @ (auth_tag xor N)[b-2:0])`
     . If tag length is `b` bits, then
      *** `SIV <- tmp` and `Vd <- tmp`,
     . else (tag length is `3b/4` bits)
@@ -2159,7 +2217,7 @@ If `VLEN` is a multiple of `b`, the above operations are applied to each of the 
 +
 --
   . `absorb_into_hash(Vs)` (which modifies `auth_tag`).
-  . `tmp <- enc_block(enc_key, 1b0 @ ((auth_tag xor N)[b-2:0]))`.
+  . `tmp <- enc_block(enc_key, 1b0 @ (auth_tag xor N)[b-2:0])`.
   . If tag length is `b` bits, then
      *** `auth_tag <- tmp`,
   . else (tag length is `3b/4` bits)
@@ -2271,6 +2329,7 @@ if (X1 != 0) then { handle error }               // do not use the plaintext if 
 [[ACE-CMAC]]
 ==== CMAC Functions
 
+(((ACE algorithm, CMAC)))
 // comment to reset formatting
 
 Parameters:::
@@ -2368,6 +2427,10 @@ If `VLEN` is larger than `b`, the most significant bits of `Vs` beyojnd the `b`-
 
 [[ACE-hash-functions]]
 ==== Hash and MAC Functions (Including XOF Variants Thereof)
+
+(((ACE algorithm, general hashing)))
+(((ACE algorithm, MAC functions)))
+(((ACE algorithm, XOF)))
 
 Parameters:::
 
@@ -2480,6 +2543,9 @@ NOTE: The description of states _hash_absorb_ and _hash_finalize_ should make it
 
 [[ACE-Ascon]]
 ==== Ascon Specific Rules
+
+We now describe the state machines of the various Ascon-based algorithms standardized in [.darkred]#TBD#.
+(((ACE algorithm, Ascon)))
 
 ===== Ascon-128 and Ascon-128a authenticated ciphers
 
