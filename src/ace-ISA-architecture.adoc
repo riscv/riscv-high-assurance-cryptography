@@ -112,7 +112,7 @@ For instance, the source CC could be a KEM that configures the destination CC wi
    `ace.harden` is an alias.
 | `ace.input`     | `Cd\|C[Xd],%offset(Xs)`         |  Optional. Provides an input to the algorithm configured in the CC `Cd` or `CC[Xd]`, in place of providing it through the `ace.exec` instruction. Needed only when the inputs are very long, such as the inputs to certain public key schemes.
 | `ace.output`    | `%offset(Xd),Cs\|C[Xs]`         |  Optional. Writes the output of an algorithm configured in the CC `Cs` or `CC[Xs]`, in place of providing it through the `ace.exec` instruction. Needed when the outputs are very long, such as the outputs of certain public key schemes.
-| `ace.error`     | `Xd`                             |  Write the error value of the ACE unit into GPR `Xd`.
+| `ace.error`     | `Xd`                             |  Write the error code of the ACE unit into GPR `Xd`.
 |===
 
 // ///////////////////////////////////////////////////////////////////////////////////////////
@@ -269,12 +269,12 @@ This implies that any read from the `aceerror` CSR may cause a hart to wait unti
 
 It can be freely read and written, in particular by context switching software to make sure that the error status is properly handled when a process resumes execution.
 
-In <<ACE-error-values>> below, we define the mandatory error codes.
+In <<ACE-error-codes>> below, we define the mandatory error codes.
 The range [0..127] of the error codes is reserved for RVI.
 Error codes specific to custom algorithms may be freely defined in the range [128..255], and are allowed to overlap between algorithms.
 
-[[ACE-error-values]]
-.Error values and their meanings
+[[ACE-error-codes]]
+.Error codes and their meanings
 [float="center",align="center",width="100%",cols="^6%,<24%,<70%",options="header"]
 |===
 |Value | Mnemonic                  | Examples
@@ -297,6 +297,7 @@ If algorithms that support `ace.derive` are implemented, the implementation must
 |  6   | ace_err_unallocated_CC    | Software tried to use an unallocated CC as a source in one of the following instructions: `ace.exec`, `ace.state`, `ace.input`, `ace.output`, `ace.clone`, `ace.derive`, or `ace.harden`/`ace.restrict`.. +
 This can be used in low CF memory situations to trigger a lazy re-load of that CC.
 |===
+(((ACE, error codes)))
 
 [[ACE-tracking-cc-dirtiness]]
 ===== Fine Grained CC Management: `aceccactive`, `aceccdirty`, `acecclazy`
@@ -394,15 +395,16 @@ In the metadata section, `ASID` and `VMID` are always zero padded to the maximal
 
 The `misa.ACE` field uses bit `L` (11) to indicate that the ACE extension is implemented.
 //This bit is chosen because the extension goes _beyond_ the cryptographic extension, which will likely use bit `K` (10).
+(((CSR, CE field in `misa`)))
 
 ====== `macerctk`
-(((CSR, `macerctk`)))
 
 If the RCTK can be programmed, it can only be programmed by M-mode.
 For this purpose, we use eight 32-bit WARL CSRs in RV32 and four 64-bit WARL CSRs in RV64.
 The CSRs are: `macerctk0`, `macerctk1`, `macerctk2`, and `macerctk3` in RV64, to which we add
 `macerctk4`, `macerctk5`, `macerctk6`, and `macerctk7` in RV32.
 Bits [(_i_+1) XLEN - 1 : _i_ XLEN] of the RCTK are written to `macerctk{i}`.
+(((CSR, `macerctk`)))
 
 Attempting to access the `macerctk` block outside of MM will cause an illegal instruction exception.
 
@@ -775,6 +777,8 @@ even though our aim is to make it into a ratified extension.
 
 `ace.enable` +
 `ace.disable`
+(((ACE, instruction, ace.enable)))
+(((ACE, instruction, ace.disable)))
 
 Description::
 Enable/Disable the feature in the current process domain and (*TBD* determine
@@ -782,13 +786,12 @@ how many contexts we need).
 `ace.enable` must be issued before using any ACE operation.
 This is a pseudo-operation implemented as a write to a WARL CSR.
 See <<ACE-CSR-enable>> and <<ACE-ACES-field>> for more details.
-(((ACE instruction, ace.enable)))
-(((ACE instruction, ace.disable)))
 
 [[ACE-instruction-init]]
 ==== ace.init
 
 `ace.init Cd|C[Xd],%offset(Xs)`
+(((ACE, instruction, ace.init)))
 
 Encoding::
 `ace.init` is an I-type instruction.
@@ -810,7 +813,6 @@ Description::
 `Xd`, alternatively, is a GPR containing a number from 0 to 31 to select the context
 to be configured.
 `Xs` points to the region of memory containing the metadata and the key material.
-(((ACE instruction, ace.init)))
 
 
 NOTE: The operation can be conceptually split into two phases.
@@ -824,6 +826,7 @@ Then, in the second phase, the configuration material is read and processed.
 ==== ace.clear
 
 `ace.clear Cd|C[Xd]`
+(((ACE, instruction, ace.clear)))
 
 Encoding::
 `ace.clear` is an I-type instruction.
@@ -842,12 +845,12 @@ Encoding::
 Description::
 `Cd` is the source CC to be cleared (encoded as a 5-bit immed). +
 `Xd` alternatively, is a GPR containing a number from 0 to 31 to select the context to be cleared. +
-(((ACE instruction, ace.clear)))
 
 [[ACE-instruction-export]]
 ==== ace.export
 
 `ace.export %offset(Xd),Cs|C[Xs]`
+(((ACE, instruction, ace.export)))
 
 Encoding::
 `ace.export` is an S-type instruction.
@@ -869,7 +872,6 @@ Exports the CC `Cs` or `C[Xs]` to memory, starting at address `Xd`, using
 the procedure described in <<ACE-formats>>.
 If the context `Cs` is clear, or `Xs` is out of range,
 the operation will report error ace_err_invalid.
-(((ACE instruction, ace.export)))
 
 The instruction must be resumable in case of interrupts.
 Similarly to entire-vector-register store instructions, `ace.export` appears to other harts as
@@ -880,6 +882,8 @@ sequences of individual stores.
 
 `ace.import Cd|C[Xd],%offset(Xn)` +
 `ace.import.S Cd|C[Xd],%offset(Xn)`
+(((ACE, instruction, ace.import)))
+(((ACE, instruction, ace.import.S)))
 
 Encoding::
 `ace.import` is an I-type instruction.
@@ -905,8 +909,6 @@ It is set to true if the key is in a system defined format
 (`ace.import.S`)
 and not the format defined by the present architecture
 (`ace.import`).
-(((ACE instruction, ace.import)))
-(((ACE instruction, ace.import.S)))
 
 The instruction must be resumable in case of interrupts.
 Similarly to entire-vector-register load instructions, `ace.import` appears to other harts as
@@ -933,7 +935,8 @@ This means that system HW dynamically generated keys can be imported but not exp
 [[ACE-instruction-exec]]
 ==== ace.exec
 
-The instruction admits four Forms, namely
+The `ace.exec` instruction admits four Forms, namely
+(((ACE, instruction, ace.exec)))
 
 [upperalpha]
 . `ace.exec  Vd,Cn|C[Xn],Vs` {nbsp}{nbsp} takes an input vector and writes to an output vector.
@@ -978,7 +981,6 @@ with non-zero values in `rd`, resp., `rs2`, to encode additional instructions.
 
 Description::
 Performs a cryptographic operation such as an encryption or decryption, absorbing a value in a hash, and possibly returning a value.
-(((ACE instruction, ace.exec)))
 
 NOTE: In many algorithms, the next state is often implied by the preceding operation.
 For example, in AEAD algorithms, setting an IV or nonce could implicitly transition to the state for absorbing associated data.
@@ -988,6 +990,9 @@ or to the _completed_ or _invalidated_ states (see <<ACE-state-constants>> and <
 
 [[ACE-instruction-size]]
 ==== ace.size
+
+The `ace.size` instruction is used to determine the size of a SCC in order to reserve the necessary space for it in memory.
+(((ACE, instruction, ace.size)))
 
 ===== Context Variant
 
@@ -1015,7 +1020,6 @@ Bit `r` (i.e., bit 27) is 0 if the CC is encoded as an immediate, and 1 if a GPR
 Description::
 This instruction writes the size of the SCC corresponding to CC `Cs`, or the CC
 whose number is in `Xs`) into GPR `Xd`, and zero if the algorithm is not supported.
-(((ACE instruction, ace.size)))
 
 Knowledge of the size of the SCC is needed by any feature that relies on `ace.export`, e.g., context switching.
 
@@ -1051,14 +1055,15 @@ Only the Algorithm and SC_Protection fields of the metadata section of a CC are 
 ==== ace.available
 
 `ace.available Xd,Xs`
+(((ACE, instruction, ace.available)))
 
 Alias to the Metadata Variant of `ace.size`, as it returns zero if the algorithm is not supported.
-(((ACE instruction, ace.available)))
 
 [[ACE-instruction-clone]]
 ==== ace.clone
 
 `ace.clone Cd|C[Xd],Cs|C[Xs]`
+(((ACE, instruction, ace.clone)))
 
 Encoding::
 The instruction is encoded using the Form D' `ace.exec` encoding, and is thus is an R-type instruction.
@@ -1091,7 +1096,6 @@ referred:
 Description::
 Clones source CC `Cs` (or the CC indexed by `Xs`) into destination CC `Cd` (or
 into the CC indexed by `Xd`).
-(((ACE instruction, ace.clone)))
 
 // NOTE: The `ace.clone` instruction is an optimization for the sequence `ace.export` followed by `ace.import`. While reusing cryptographic state (e.g., encrypting with the same counter) can enable certain attacks, this risk cannot be eliminated by omitting `ace.clone`, as a state can be exported and re‑imported multiple times.
 
@@ -1100,6 +1104,7 @@ into the CC indexed by `Xd`).
 
 `ace.derive Cd|C[Xd],Cs1|C[Xs1]` +
 `ace.derive Cd|C[Xd],Cs1|C[Xs1],Vs2`
+(((ACE, instruction, ace.derive)))
 
 Encoding::
 The encoding is a variant of Form A `ace.exec` encoding, and is thus is an R-type instruction.
@@ -1128,7 +1133,6 @@ The instruction is used to derive a new context from an existing one, with its o
 It is similar to `ace.clone`, but the derived context is not a copy of the source context,
 rather, it is a new context that is derived from it, for instance, through a key derivation mechanism.
 This instruction can be used multiple times, to generate multiple derived contexts.
-(((ACE instruction, ace.derive)))
 
 
 [[ACE-instruction-state]]
@@ -1136,6 +1140,8 @@ This instruction can be used multiple times, to generate multiple derived contex
 
 `ace.state`/`ace.dir Cd|C[Xd],#immed7` +
 `ace.state`/`ace.dir Cd|C[Xd],#immed7,Xs`
+(((ACE, instruction, ace.state)))
+(((ACE, instruction, ace.dir)))
 
 Encoding::
 `ace.state`/`ace.dir` is an R-type instruction.
@@ -1158,8 +1164,6 @@ Bit `r` (i.e., bit 15) is 0 if the context is encoded as an immediate, and 1 if 
 Description::
 `ace.state` and `ace.dir` are two names for the same instruction. +
 `Cn` specifies the CC whose state is to be set. Alternatively, `Xn` is a GPR containing a value from 0 to 31 to dynamically select the target context. The `#immed` operand is a constant from the set of admissible values defined for each algorithm, used to manage the algorithm's internal state machine when additional states are required. `Xs` is a GPR that is either `X0` or contains an optional additional parameter for the state machine.
-(((ACE instruction, ace.state)))
-(((ACE instruction, ace.dir)))
 
 The state numbers used in this specification are defined in the following table.
 
@@ -1198,6 +1202,8 @@ may reuse the same values in [1..13] with new constant mnemonics to define their
 
 `ace.restrict   Cd|C[Xd],Xs` +
 `ace.harden     Cd|C[Xd],Xs`
+(((ACE, instruction, ace.restrict)))
+(((ACE, instruction, ace.harden)))
 
 // Without this comment, the next part is not properly formatted...
 Encoding::
@@ -1228,12 +1234,10 @@ Description::
 This instruction restricts the usage of a CC to specific modes or to a specified `ASID` or `VMID`. +
 It can also increase the side-channel protection level of the CC. +
 Let `m` be the metadata field in the destination CC. The instruction works as follows:
-(((ACE instruction, ace.restrict)))
-(((ACE instruction, ace.harden)))
 
 * Bits [10:9] and [63:25] of the input register `Xs` have the same format as the corresponding bits of the metadata.
 * Bits [8:0], [24:11] and 31 of the input register `Xs` are ignored.
-* Bits [10:9] can be used to turn on or increase the level of the side-channel protection of the algorithm in the CC, if the microarchitecture supports the corresponding implementation. The levels are defined in <<ACE-SC-protection-levels>>. Downgrading side-channel protection is not permitted, and attempting to do so will result in error ace_err_invalid (cf.{nbsp}<<ACE-error-values>>).
+* Bits [10:9] can be used to turn on or increase the level of the side-channel protection of the algorithm in the CC, if the microarchitecture supports the corresponding implementation. The levels are defined in <<ACE-SC-protection-levels>>. Downgrading side-channel protection is not permitted, and attempting to do so will result in error ace_err_invalid (cf.{nbsp}<<ACE-error-codes>>).
 * A zero in any of the six bits `Xs`[30:25] means that the corresponding policy is not changed.
 * A one in the any of the four bits `Xs`[28:25] means that usage by the corresponding mode is forbidden, and the corresponding bit in the metadata of the destination CC is set to 1.
 * If `Xs`[29] is set and `m`[29] is NOT set, then Usage_Policy_3, i.e., `m`[47:32], is set to `Xs`[47:32].
@@ -1244,6 +1248,7 @@ Let `m` be the metadata field in the destination CC. The instruction works as fo
 ==== ace.input (optional)
 
 `ace.input Cd|C[Xd],%offset(Xs)`
+(((ACE, instruction, ace.input)))
 
 Encoding::
 `ace.input` is an I-type instruction.
@@ -1258,7 +1263,6 @@ Encoding::
     { bits: 12, name: 'imm' },
 ]}
 ....
-(((ACE instruction, ace.input)))
 
 // [.darkred]#(TBdetermined whether it is secure)# This instruction is trappable and may also be resumed or restarted.
 
@@ -1266,6 +1270,7 @@ Encoding::
 ==== ace.output (optional)
 
 `ace.output  %offset(Xd),Cs|C[Xs]`
+(((ACE, instruction, ace.output)))
 
 Encoding::
 `ace.output` is an S-type instruction.
@@ -1281,21 +1286,20 @@ Encoding::
     { bits:  7, name: 'imm[11:5]' },
 ]}
 ....
-(((ACE instruction, ace.output)))
 
 
 [[ACE-instruction-error]]
 ==== ace.error
 
 `ace.error Xd`
+(((ACE, instruction, ace.error)))
 
 Description::
 The ACE Unit may be in an error state due to the previous operation.
-The corresponding error value is written into GPR `Xd`.
-This is implemented as a read from CSR `aceerror`, which may cause the hart to wait if the error value is not yet available
+The corresponding error code is written into GPR `Xd`.
+This is implemented as a read from CSR `aceerror`, which may cause the hart to wait if the error code is not yet available
 (cf.{nbsp}<<ACE-CSR-ace-error>>).
-The error value list is architected and given in <<ACE-error-values>>.
-(((ACE instruction, ace.error)))
+The error code list is architected and given in <<ACE-error-codes>>.
 
 // ///////////////////////////////////////////////////////////////////////////////////////////
 
@@ -1304,6 +1308,7 @@ The error value list is architected and given in <<ACE-error-values>>.
 
 Instructions `ace.init`, `ace.export`, `ace.import`, `ace.input`, and `ace.output` support arbitrarily long inputs and outputs.
 To reduce hardware complexity, these operations can be trapped and emulated in software using custom instructions.
+(((ACE, trappable instructions)))
 
 Upon a trap, the handler identifies the trapped instruction and uses the Algorithm field of the metadata block
 `ace.size` to determine the size of the data to be transferred.
@@ -1396,7 +1401,7 @@ Otherwise, the specification of the algorithm must include a suitable field in t
 An important rule is the following.
 If an invalid input is provided to any ACE instruction, or a non-admitted instruction is executed, while processing the algorithm in CC, say, Cn,
 the `Cn` is *invalidated*, namely, the following happens:
-(((ACE algorithm, invalid state)))
+(((ACE, algorithm, invalid state)))
 (((Cryptographic Context, invalidated)))
 
 * `Cn` is put into state _invalidated_;
@@ -1434,7 +1439,7 @@ Any CC with its algorithms implemented as threshold implementation will always i
 The Configuration and SCC Formats will be the same as for the non-threshold implementations variants of the same algorithm, with the only difference being the value of the Side Channel Protection bits in the metadata.
 For the purpose of architecture specification, all values are also always represented as a single share in this document.
 Threshold implementations are simply implementation variants of the exact same algorithm.
-(((ACE algorithm, threshold variants)))
+(((ACE, algorithm, threshold variants)))
 
 NOTE: This assumes that reconstructing a key or re-randomizing it are fast operations, such as ``xor``s with random values.
 This in turn implies that ACE execution unit must have access to a source of randomness, or at least a PRNG that is seeded at hardware boot.
@@ -1478,7 +1483,7 @@ NOTE: Internally, the ACE unit can either directly use the value from the SKT, o
 ==== Electronic Codebook Modes (Direct Encryption/Decryption)
 
 While listing the rules for the ECB mode is in principle easy, it does display all the rules that are required to describe an arbitrarily complex mode.
-(((ACE algorithm, ECB)))
+(((ACE, algorithm, ECB)))
 
 // comment to reset formatting
 
@@ -1590,7 +1595,7 @@ and no intermediate value in these algorithms needs to be kept secret.
 ==== CTR/LFSR/XCTR/XLFSR Keystream Generation
 
 In the "non-X" modes, i.e., in the CTR mode and its analague that replaces the arithmetic counter by a LFSR, the sum of the lengths of IV and counter/LSFR equals the block size of the underlying keyed PRP or PRF. IV and counter/LFSR are concatenated to form the input to the keyed PRP or PRF.
-(((ACE algorithm, keystream generation)))
+(((ACE, algorithm, keystream generation)))
 
 The "X" modes have both IV and counter/LSFR of the same size as the block size of the underlying keyed PRP or PRF:
 IV and counter/LFSR are ``xor``ed together to form the input to the keyed PRP or PRF -- which explains the "X" in the mode names.
@@ -1689,7 +1694,7 @@ for i = 0 to len_in_bytes(PT)/16-1 do
 
 The use of a single key or two independently sampled keys is determined by the algorithm, and it is not a configuration parameter for the algorithm.
 We first define XEX mode functionality.
-(((ACE algorithm, XEX)))
+(((ACE, algorithm, XEX)))
 
 Parameters:::
 
@@ -1789,14 +1794,14 @@ for i = 0 to ceil(len_in_bytes(plaintext)/16)-1 do
 ----
 
 To implement the XTS mode, the ciphertext stealing part is easy to realize using the XEX algorithm together with vector masking and shifting operations.
-(((ACE algorithm, XTS)))
+(((ACE, algorithm, XTS)))
 
 // N.B. another ace.state C0, #const_set_public_value would reset the internal state and allow to begin another decryption with a new IV.
 
 
 [[ACE-GCM-mode]]
 ==== GCM Mode
-(((ACE algorithm, GCM)))
+(((ACE, algorithm, GCM)))
 
 Parameters:::
 
@@ -2061,7 +2066,7 @@ The GCM-SIV mode's main differences with GCM are that:
 . Both encryption and authentication keys are derived from the main key, whereas in GCM the main key is used also for encryption;
 . It is a MAC-then-Encrypt mode, whereas GCM is a Encrypt-then-MAC mode, therefore GCM-SIV is more amenable to Release of Unencrypted Plaintext (RUP) attacks;
 . Encryption requires two passes over the plaintext, since the tag computed on the AD and plaintext is used also as the initialization vector for the CTR encryption.
-(((ACE algorithm, GCM-SIV)))
+(((ACE, algorithm, GCM-SIV)))
 
 The third difference affects the state machine. While GCM-SIV's decryption state machine is similar to the GCM's, the encryption state machine is different:
 
@@ -2329,7 +2334,7 @@ if (X1 != 0) then { handle error }               // do not use the plaintext if 
 [[ACE-CMAC]]
 ==== CMAC Functions
 
-(((ACE algorithm, CMAC)))
+(((ACE, algorithm, CMAC)))
 // comment to reset formatting
 
 Parameters:::
@@ -2428,9 +2433,9 @@ If `VLEN` is larger than `b`, the most significant bits of `Vs` beyojnd the `b`-
 [[ACE-hash-functions]]
 ==== Hash and MAC Functions (Including XOF Variants Thereof)
 
-(((ACE algorithm, general hashing)))
-(((ACE algorithm, MAC functions)))
-(((ACE algorithm, XOF)))
+(((ACE, algorithm, general hashing)))
+(((ACE, algorithm, MAC functions)))
+(((ACE, algorithm, XOF)))
 
 Parameters:::
 
@@ -2539,13 +2544,11 @@ The values 9 and 13 are used when there is a partial block.
 
 NOTE: The description of states _hash_absorb_ and _hash_finalize_ should make it clear that allowing `b` and `VLEN` to be in relations other than one being an integer multiple of the other, as well as allowing a change of `VLEN`, would significantly complicate the state machine.
 
-
-
 [[ACE-Ascon]]
 ==== Ascon Specific Rules
 
 We now describe the state machines of the various Ascon-based algorithms standardized in [.darkred]#TBD#.
-(((ACE algorithm, Ascon)))
+(((ACE, algorithm, Ascon)))
 
 ===== Ascon-128 and Ascon-128a authenticated ciphers
 
