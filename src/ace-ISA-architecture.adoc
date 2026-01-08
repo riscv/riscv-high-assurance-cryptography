@@ -81,6 +81,7 @@ and `Cn|C[Xn]` means that there are two different encodings for when the operand
 `ace.disable`     |                                 |  Enables/Disables the feature in the current mode.  CSRW pseudo-operation.  May trap to handle enablement.
 | `ace.init`      | `Cd\|C[Xd],%offset(Xs)`         |  Sets the metadata and key(s) for the CC.
 | `ace.clear`     | `Cd\|C[Xd]`                     |  Clears a CC and marks it as no longer in use and clean.
+| `ace.reset`     |                                 |  Clears all CCs and sets active *status.ACES fields to Initial.
 | `ace.export`    | `%offset(Xn),Cs\|C[Xs]`         |  Securely exports the content of a CC to memory.
 | `ace.import{.S}` | `Cd\|C[Xd],%offset(Xn)`        |  Authenticates and imports a SCC from memory into a CC. +
  `ace.import.S` optionally supports system defined formats.
@@ -150,7 +151,6 @@ It also requires a subset of the V extension to be implemented, including the ve
 [%autowidth,float="center",align="center",options="header"]
 |===
 | Address | Privilege | Name                     | Description
-| 0xXXX   | URW       | `aceenable`              | Enablement of ACE instructions
 | 0xXXX   | URW       | `aceerror`               | Error code of the last ACE instruction
 | 0xXXX   | URO       | `aceccactive`            | Bitmap of active Contexts
 | 0xXXX   | URO       | `aceccdirty`             | Bitmap of dirty Contexts
@@ -160,7 +160,6 @@ It also requires a subset of the V extension to be implemented, including the ve
 | 0xXXX   | MRW (RZ)  | `maceOSSecret{0..4}`     | ACE OS Secret
 | 0xXXX   | MRW (RZ)  | `maceBootSecret0{0..4}`  | ACE Boot Secret
 |===
-(((CSR,aceenable)))
 (((CSR,aceerror)))
 (((CSR,aceccactive)))
 (((CSR,aceccdirty)))
@@ -173,90 +172,57 @@ It also requires a subset of the V extension to be implemented, including the ve
 
 
 
-[[ACE-CSR-enable]]
-===== `aceenable`
-
-`aceenable` is a single-bit CSR.
-(((CSR,aceenable)))
-
-Enabling ACE in any mode is done by writing a 1 to `aceenable`.
-Disabling ACE is done by writing a zero to `aceenable`, which also clears the CCs, as described in <<ACE-tracking-cc-dirtiness>>. When ACE is disabled, any ACE operation will cause an invalid instruction exception, except feature enablement.
-
-[NOTE]
-====
-While the standard floating-point and vector extensions do not support User Mode disable/enable instructions, the ACE unit can in general be enabled and disabled in zUser Mode, instead of using an OS call or trapping.
-However, if the ACE unit contains state from a different process, and its interface is disabled for the current one, enabling it will trap to the Supervisor (as described in <<ACE-ACES-field>>) to allow the latter to first save the state in case it was not saved before and then clear it (lazy context switch).
-
-When a process that has ACE enabled is preempted, the parent modes inherit the state to be able to export and
-re-import the CCs. Hence, `aceenable` is not cleared, and the `*status.ACES` fields (see <<ACE-ACES-field>>) of the parent domains will take the value Enabled.
-Tracking the CCs which are active, resp., dirty is done on an individual basis and is described in <<ACE-tracking-cc-dirtiness>>.
-====
-
-[quote]
-____
-In the "standard" RISC-V way, higher privilege software should be able to look at just sstatus.ACES to know whether to proceed and look at acedirty and possibly save some context.
-The following shows how aceenable accesses can be translated to sstatus.ACES accesses, avoiding the need to context switch aceenable CSR, because it can be interpreted as a virtual interface for sstatus.ACES.
-
-csrrw one, aceenable, a0 does, depending on on state of sstatus.ACES
-
-* ACES=disabled-clean -> ACES=enabled, a0=0
-* ACES=disabled-dirty -> trap
-* ACES=enabled -> a0=1
-
-csrrw zero, aceenable, a0 does
-
-* ACES=disabled-clean -> a0=0
-* ACES=disabled-dirty -> trap
-* ACES=enabled -> clear all CCs, ACES=disabled-clean, a0=1
-
-(The current specification doesn't say anything about transition to ACES=enabled,
-which would allow dirty state with ACES=disabled-clean.)
-
-The rules get a more complex in virtual (V=1) mode,
-where a single write to aceenable can modify both mstatus and vsstatus:
-
-* mstatus.ACES=disabled-dirty -> CSR accesses trigger virtual-instruction trap
-* vsstatus.ACES=disabled-dirty -> CSR accesses trigger illegal-instruction trap
-* otherwise -> result based on previous value of vsstatus
-** write 1: mstatus.ACES and vsstatus.ACES = enabled
-** write 0: mstatus.ACES and vsstatus.ACES = disabled-clean, clear all CCs if any were enabled
-
-(Maybe turn the interface to instructions? We do not need return values.)
-____
-
 [[ACE-ACES-field]]
 ===== ACES field in `*status`
 (((CSR,ACES field in *status)))
 
-An ACE context status field, ACES, is added to `mstatus`[26:25], and is shadowed in `sstatus`[26:25] and in `vsstatus`[26:25] if the hypervisor extension is present.
-Similar to the FS and VS fields, it can be used to optimize context switching.
-//Its status encoding differs from the FS, VS, and XS fields (which are defined in <<fsxsencoding>>).
+An ACE context status field, ACES, is added to `mstatus`[26:25], and is shadowed in `sstatus`[26:25].
+`vsstatus`[26:25] contains the ACE context status for V=1 modes if the H extension is enabled.
+
 Its possible values are described in <<ACE-fsxsencoding>>.
+// TODO: When integrating, link to the FS/VS table in privileged manual instead, and say that we're exactly the same
 
 [[ACE-fsxsencoding]]
 .Encoding of ACES status field
-[float="center",align="center",width="100%",cols="^7%,<18%,<75%",options="header"]
+[%autowidth,float="center",align="center",cols=">,<",options="header"]
 |===
-|Status |Name |Meaning
-|   0   | Off / Disabled-Clobbered | ACE ISE not enabled in the current hart, software must not assume that the contexts are cleared and the may be configured from other environments. They are however, not accessible.
-The hart will trap if ACE ISE is enabled by writing to the `aceenable` CSR. +
-To be used when: +
-∙{nbsp}{nbsp} M mode (or HS mode) boots the S mode stack since a priori it does not know whether S supports the feature, and therefore it must force trapping, or, +
-∙{nbsp}{nbsp}When the S SW stack supports lazy context swtching.
-|   1   | Init / Disabled-Clean     | ACE ISE not enabled, software assumes no context being configured for this hart. +
-The ACE unit will erase all contexts if ACE is enabled by writing to the `aceenable` CSR.
-|   2   | Enabled            | ACE ISE enabled.
-|   3   | Invalid            | Reserved.
+|Status | Name
+|   0   | Off
+|   1   | Initial
+|   2   | Clean
+|   3   | Dirty
 |===
 
-The Disabled-Clean and Disabled-Clobbered states are set by the parent mode.
-Disabled-Clobbered is used when the parent-mode software stack does not save Cryptographic Contexts before transferring control to a process that does not (yet) have enabled ACE. If that process later enables ACE by writing to `aceenable`, the hart traps to the parent mode, allowing lazy context save; the parent must then manually reset all Cryptographic Contexts. In contrast, a software stack that always saves the contexts of a switched-out process must configure only the Disabled-Clean state.
-// The Disabled-Clobbered state is primarily intended for small devices where thread migration between harts is infrequent, and possibly only one process may be dealing with cryptographic operations.
+Attempts to execute any ACE instruction, or to access the ACE CSRs, raise an
+illegal-instruction exception when mstatus.ACES is set to Off.
 
-NOTE: It is responsibility of the exception handler to properly handle the contents of the CCs when the feature is enabled while ACES=Disabled-Clobbered, as described in <<ACE-tracking-cc-dirtiness>>.
+// TODO: this is potentially suboptimal behavior for H, which might have
+// preferred a virtual-instruction to facilitate lazy context switching when
+// mstatus=off, vsstatus!=off, but it is consistent with FS/VS like this:
+When V=1, both vsstatus.ACES and mstatus.ACES are in effect: attempts to
+execute any ACE instruction, or to access the ACE CSRs, raise an
+illegal-instruction exception when either field is set to Off.
 
-Writes to ACES do not affect the contents of the CCs.
-Setting ACES=Disabled-Clean or Disabled-Clobbered does not destroy the state, nor does setting ACES=Enabled clear the contents.
+When mstatus.ACES is set to Initial or Clean, executing any instruction, except
+`ace.reset`, that changes ACE state, including the ACE CSRs, will change
+mstatus.ACES to Dirty.
+// TODO: formulate the ace.reset exception in a nicer way
+
+When V=1 and neither vsstatus.ACES nor mstatus.ACES is set to Off, executing
+any instruction, except `ace.reset`, that changes ACE state, including the
+ACE CSRs, will change both mstatus.ACES and vsstatus.ACES to Dirty.
+
+// TODO: FS and VS also have the following, but since aceccdirty requires
+// precise tracking, I think we don't have to give the micro-architecture this
+// option.
+//Implementations may also change mstatus.ACES or vsstatus.ACES from Initial or
+//Clean to Dirty at any time, even when there is no change in ACE state.
+
+`mstatus.ACES=Dirty` implies `mstatus.SD=1`.
+
+`vsstatus.ACES=Dirty` implies `vsstatus.SD=1`.
+
+NOTE: Writes to ACES do not affect the contents of the CCs.
 
 Fine-grained tracking activeness and dirtiness of individual CCs uses the `aceccactive` and `aceccdirty` CSRs, cf.{nbsp}<<ACE-tracking-cc-dirtiness>>.
 
@@ -321,21 +287,13 @@ Two types of actions can modify a CC and thus must update also `aceccdirty`:
 * An explicit initialization/configuration/import; and
 * Certain cryptographic operations, such as absorbing information in a hash function, that modify the internal state.
 
-It is also possible to directly write to `aceccdirty` to optimize context switching.
+TODO: `aceccdirty` should be writable to be actually useful for context switching.
 
 Implementations are required to track the dirtiness of any CC precisely and individually.
-This is different from the tracking of the dirtiness of the floating-point state, for instance.
-
-Context-switching code must save CC number _i_ if the _i_-th bit of `aceccdirty` is set.
+NOTE: This is different from the tracking of the dirtiness of the floating-point state, for instance.
+NOTE: Context-switching code must save CC number _i_ if the _i_-th bit of `aceccdirty` is set.
 However, it can clear `aceccdirty` when returning control to the same process after restoring its ACE state.
 This indicates to the context-switching code that there is no need to save the CC number _i_ again at the next context switch out of that process unless it has been modified again thus setting the _i_-th bit of `aceccdirty` anew.
-
-Upon a write to `aceenable` that changes its value, the following happens to `aceccvalid` and `aceccdirty`:
-
-* If ``aceenable``'s value is changed to 0, then all CCs are cleared, both `aceccvalid` and `aceccdirty` are set to 0, and ``*status.ACES`` is set to Disabled-Clean.
-* If ``aceenable``'s value is changed to 1, and if the parent domain's ``*status.ACES``=Disabled-Clean, then we simply assume that the parent process has cleared the CC and set both `aceccvalid` and `aceccdirty` to 0 before transferring the control flow to the current process.
-* If ``aceenable``'s value is changed to 1, and if the parent's ``*status.ACES``=Disabled-Clobbered, then the hart traps to allow the parent domain responsible for handling context-switched to finish saving the state and ensure that both `aceccvalid` and `aceccdirty` are set to 0, and finally set ``*status.ACES`` to Disabled-Clean.
-// [.darkred]#This behavior should be restricted only to User mode.#
 
 When the `acecclazy` bit for a given CC is set, most operations targeting that CC will trap (see <<ACE-rules-lazy-loader>> for the specific list).
 This trap enables parent software to load the context, potentially by first freeing other contexts to create space.
@@ -774,21 +732,6 @@ can be encoded.
 NOTE: ACE is an ideal candidate for the Composable Custom Extensions framework,
 even though our aim is to make it into a ratified extension.
 
-[[ACE-instruction-enable-enable]]
-==== ace.enable/ace.enable
-
-`ace.enable` +
-`ace.disable`
-(((ACE, instruction, ace.enable)))
-(((ACE, instruction, ace.disable)))
-
-Description::
-Enable/Disable the feature in the current process domain and (*TBD* determine
-how many contexts we need).
-`ace.enable` must be issued before using any ACE operation.
-This is a pseudo-operation implemented as a write to a WARL CSR.
-See <<ACE-CSR-enable>> and <<ACE-ACES-field>> for more details.
-
 [[ACE-instruction-init]]
 ==== ace.init
 
@@ -846,7 +789,43 @@ Encoding::
 
 Description::
 `Cd` is the source CC to be cleared (encoded as a 5-bit immed). +
-`Xd` alternatively, is a GPR containing a number from 0 to 31 to select the context to be cleared. +
+`Xd`, where `d > 0`, alternatively, is a GPR containing a number from 0 to 31 to select the context to be cleared. +
+
+NOTE: `ace.clear x0` encodes a different behavior: `ace.reset`.
+
+[[ACE-instruction-reset]]
+==== ace.reset
+
+`ace.reset`
+
+Encoding::
+[wavedrom, , svg]
+....
+{reg:[
+    { bits:  7, name: 0x27, attr: ['custom-1'] },
+    { bits:  5, name: 0x0 },
+    { bits:  3, name: 0x7, attr: ['ace.clear'] },
+    { bits:  5, name: 0x0 },
+    { bits: 12, name: 0x0 },
+]}
+....
+
+Description::
+Upon execution of `ace.reset`:
+* `mstatus.ACES=Initial`
+* `vsstatus.ACES=Initial` if executed in VS or VU mode
+* `aceccdirty=0`
+* `aceccactive=0`
+* `acecclazy=0`
+
+TODO: rework aceccdirty, aceccactive, acecclazy
+
+NOTE: `ace.reset` allows optimization of context switches, since higher
+privileges do not have to save the Initial state, nor rely on the Off state to
+perform lazy context switches upon a trap.
+The main benefit would be for programs that have long periods when the ACE unit
+is not reused again.
+// TODO: is this significant enough to warrant hardware acceleration?
 
 [[ACE-instruction-export]]
 ==== ace.export
