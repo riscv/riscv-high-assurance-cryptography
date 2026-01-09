@@ -470,6 +470,13 @@ and{nbsp}{nbsp} `aceccdirty[i] = 1`.
 //`acecclazy[i] = 1` and `aceactive[i] = 1` means that the CC does contain a value, which belongs to a different process, and will be first saved in the right process' context and then, lazily loaded from the saved state of the current one when needed.
 //The value of `aceccdirty[i]` in this case must be set to `0`.#
 
+NOTE: `acecc*` can track the CC states for all higher-privileged modes.
+S/VS can trust the values coming from U, since U cannot write to these registers.
+However, M and HS cannot trust the values from S and VS, since the latter can write to these registers.
+This implies that M, resp., HS mode must always context-switch all CCs when context-switching S, resp., VS domains, since it doesn't know which CCs have changed.
+We *could* add additional registers to track changes at each level.  This should be done for F and V too, ideally, in order to make the architecture consistent.
+
+[.red]#Remember to add the handling of the fine-grained CC management CSRs.#
 
 <<<
 
@@ -1413,7 +1420,9 @@ The state numbers used in this specification are defined in the following table.
 [float="center",align="center",width="100%",cols="^6%,<29%,<65%",options="header"]
 |===
 | Value | Mnemonic                      | Examples
-|   0   | ace_state_initial             | The context is initialized and ready for operation.
+|   0   | ace_state_initial +
+ace_state_hash_initialize
+| The context is initialized and ready for operation.
 |   1   | ace_state_hash_absorb         | Start (and initialize) a hash function or the sub-function of an algorithm, preparing it to absorb blocks of data.
 |   2   | ace_state_hash_finalize +
 ace_state_hash_finalize_enc             | Finalize the internal state of a hash function (including for the encryption algorithm of an for an authenticated encryption mode of operation) and prepare it for outputting the result. In this state additional data may be absorbed, such as lengths.
@@ -1688,13 +1697,13 @@ This in turn implies that ACE execution unit must have access to a source of ran
 This ensures not only the compactness of a SCC, but also that the key can be ported across architectures.
 In fact, some threshold implementations may have a different number of shares even if they claim the same order of side-channel protection.
 
-[[ACE-rules-lazy-loader]]
-==== Rules for Lazy-Loaded CCs
-
-If a CC is marked in `acecclazy`, it is called a "placeholder" CC.
-Any operation involving that CC will trap, unless the operation overwrites the CC, that is,
-for `ace.init`, `ace.import`, as well as `ace.clone` and `ace.derive` if this CC is the destination.
-In these cases, the corresponding bit in `acecclazy` will be cleared.
+// [[ACE-rules-lazy-loader]]
+// ==== Rules for Lazy-Loaded CCs
+//
+// If a CC is marked in `acecclazy`, it is called a "placeholder" CC.
+// Any operation involving that CC will trap, unless the operation overwrites the CC, that is,
+// for `ace.init`, `ace.import`, as well as `ace.clone` and `ace.derive` if this CC is the destination.
+// In these cases, the corresponding bit in `acecclazy` will be cleared.
 
 // A placeholder CC is created like any other CC, by providing a Configuration Input.
 // The latter consists only of the metadata block, which is partly encrypted.
@@ -2158,7 +2167,7 @@ If `VLEN` is larger than `b`, the most significant bits of `Vs` (i.e., the "tail
 If `VLEN` is a multiple of `b`, the same behavior applies as in state _encrypt_.
 
 ** In state _hash_finalize_dec_, only a Form A ``ace.exec`` instruction are allowed.
-The value
+The value +
  `{nbsp}{nbsp}{nbsp}Vs = IntTo{b/2}Bits(bit_length(AD)) @ IntTo{b/2}Bits(bit_length(plaintext))` +
  must be set by the software, then "```ace.exec Vd,Cn|C[Xn],Vs```" computes the authentication tag as follows:
 +
@@ -2213,6 +2222,7 @@ for i = 0 to len_in_bytes(AD)/16-1  do
     ace.exec C0,V0                               // Absorb it into hash
 
 // Encrypt plaintext and continue computation of auth_tag
+ace.state C0,#ace_const_encrypt
 for i = 0 to len_in_bytes(PT)/16-1 do
     - load V0 from address PT+16*i
     ace.exec V1,C0,V0
