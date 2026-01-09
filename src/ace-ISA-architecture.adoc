@@ -394,66 +394,51 @@ Concepts
 * Owning process, i.e., the process that owns the current configuration of the CC.
 
 <<<
+
+[[ACE-tracking-cc-dirtiness]]
+===== Fine Grained CC Management: `aceccactive`, `aceccdirty`, and `acecclazy`
+
 States we need:
 
-[start=0]
-. _CC is unconfigured, and there is a no saved value for the current process._ +
-`aceccconfigured[i] = 0`,{nbsp}{nbsp}
-`acecccurrent[i] = 0`,{nbsp}{nbsp}
-`acecclazy[i] = 0`. +
+*VOID* (`0b000`)::
+[.darkred]#_CC is unconfigured, and there is no saved value for the current process._# +
+`[darkred]#aceccconfigured[i] = 0, acecccurrent[i] = 0, acecclazy[i] = 0.#`
 * In this case it must be `aceccdirty[i] = 0`. +
 Using the CC gives an error, no trap. +
 * Configuring the CC works as expected, sets: +
-`aceccconfigured[i] = 1`,{nbsp}{nbsp}
-`acecccurrent[i] = 1`,{nbsp}{nbsp}
-`acecclazy[i] = 0`,{nbsp}{nbsp}
-and{nbsp}{nbsp} `aceccdirty[i] = 1`.
+`aceccconfigured[i] = 1, acecccurrent[i] = 1, acecclazy[i] = 0,` and `aceccdirty[i] = 1`.
 
-. _CC is unconfigured, and there is a saved value to be lazy loaded for the current process._ +
-`aceccconfigured[i] = 0`,{nbsp}{nbsp}
-`acecccurrent[i] = 0`,{nbsp}{nbsp}
-`acecclazy[i] = 1`. +
-In this case it must be `aceccdirty[i] = 0`. +
+*LAZY* (`0b001`)::
+[.darkred]#_CC is unconfigured, and parent has saved a value to be lazy-loaded for the current process._# +
+`[darkred]#aceccconfigured[i] = 0, acecccurrent[i] = 0, acecclazy[i] = 1.#`
+* In this case it must be `aceccdirty[i] = 0`. +
 * Accessing the CC traps to allow the OS to lazy load it for the current process. +
 * Can be used freely. If potentially modified, `aceccdirty[i]` becomes `1`. +
 * Configuring the CC works as expected, and sets: +
-`aceccconfigured[i] = 1`,{nbsp}{nbsp}
-`acecccurrent[i] = 1`,{nbsp}{nbsp}
-`acecclazy[i] = 0`,{nbsp}{nbsp}
-and{nbsp}{nbsp} `aceccdirty[i] = 1`.
+`aceccconfigured[i] = 1, acecccurrent[i] = 1, acecclazy[i] = 0`, and `aceccdirty[i] = 1`.
 
-. _CC is configured for the current process and loaded. Unchanged since last switch._ +
-`aceccconfigured[i] = 1`,{nbsp}{nbsp}
-`acecccurrent[i] = 1`,{nbsp}{nbsp}
-`acecclazy[i] = 0`,{nbsp}{nbsp}
-`aceccdirty[i] = 0`. +
+*CLEAN* (`0b010`)::
+[.darkred]#_CC is configured for the current process and loaded. Unchanged since last switch._# +
+`[darkred]#aceccconfigured[i] = 1, acecccurrent[i] = 1, acecclazy[i] = 0, aceccdirty[i] = 0.#` +
 * If the process is interrupted now, the OS does not need to save it again. +
 * Can be used freely. If potentially modified, `aceccdirty[i]` becomes `1`. +
 * Configuring the CC works as expected, and sets: +
-`aceccconfigured[i] = 1`,{nbsp}{nbsp}
-`acecccurrent[i] = 1`,{nbsp}{nbsp}
-`acecclazy[i] = 0`,{nbsp}{nbsp}
-and{nbsp}{nbsp} `aceccdirty[i] = 1`.
+`aceccconfigured[i] = 1, acecccurrent[i] = 1, acecclazy[i] = 0`, and `aceccdirty[i] = 1`.
 
-
-. _CC is configured for the current process and loaded. Potentially changed since last switch._ +
-`aceccconfigured[i] = 1`,{nbsp}{nbsp}
-`acecccurrent[i] = 1`,{nbsp}{nbsp}
-`acecclazy[i] = 0`,{nbsp}{nbsp}
-`aceccdirty[i] = 1`. +
+*DIRTY* (`0b011`)::
+[.darkred]#_CC is configured for the current process and loaded. Potentially changed since last switch._# +
+`[darkred]#aceccconfigured[i] = 1, acecccurrent[i] = 1, acecclazy[i] = 0, aceccdirty[i] = 1.#` +
 * If the process is interrupted now, the OS must save it and overwrite the previous value. +
 * Rest is as in the previous case.
 
-. _CC is configured but not for this process, hence blocked for this process, no value to be lazy loaded._ +
-`aceccconfigured[i] = 1`,{nbsp}{nbsp}
-`acecccurrent[i] = 0`,{nbsp}{nbsp}
-`acecclazy[i] = 0`. +
+*FOREIGN* (`0b100`)::
+[.darkred]#_CC is configured for a different process, blocked for the current one, no value to be lazy-loaded._# +
+`[darkred]#aceccconfigured[i] = 1, acecccurrent[i] = 0, acecclazy[i] = 0.#` +
 * In this case _using_ it will given an error, whereas _configuring_ it will first trap to the operating system, to allow the latter to save the CC to the state of the owning process, clear it, update the flags to allow the current process to configure it, and return to the process to restart the operation allowing the configuration.
 
-. _CC is configured but not for this process, hence blocked for this process, and there is a value to be lazy loaded for the current process._ +
-`aceccconfigured[i] = 1`,{nbsp}{nbsp}
-`acecccurrent[i] = 0`,{nbsp}{nbsp}
-`acecclazy[i] = 1`. +
+*FOREIGN_LAZY* (`0b101`)::
+[.darkred]#_CC is configured for a different process, blocked for the current one, and there is a value to be lazy loaded for the current process._# +
+`[darkred]#aceccconfigured[i] = 1, acecccurrent[i] = 0, acecclazy[i] = 1.#` +
 * In this case accessing it will trap to the operating system.
 * The operating system must save the current value to the state of its owner, load the value from the current state.
 
@@ -476,11 +461,9 @@ However, M and HS cannot trust the values from S and VS, since the latter can wr
 This implies that M, resp., HS mode must always context-switch all CCs when context-switching S, resp., VS domains, since it doesn't know which CCs have changed.
 We *could* add additional registers to track changes at each level.  This should be done for F and V too, ideally, in order to make the architecture consistent.
 
-[.red]#Remember to add the handling of the fine-grained CC management CSRs.#
+// [.red]#Remember to add the handling of the fine-grained CC management CSRs.#
 
 
-[[ACE-tracking-cc-dirtiness]]
-===== Fine Grained CC Management: `aceccactive`, `aceccdirty`, and `acecclazy`
 
 [quote]
 ____
@@ -617,15 +600,15 @@ In the metadata section, `ASID` and `VMID` are always zero padded to the maximal
 [[ACE-providing-keys,Remark {counter:remark}]]
 *Remark {counter:remark}.* _The software in each World/Supervisor Domain is normally responsible to generate or obtain their own keys, and if a process (applet) in one World/Supervisor Domain is responsible to provide keys to other Worlds/Supervisor Domains, it is the responsibility of the MM to perform an appropriate sequence of import, switch the CWK, then export operations._
 
-
+[[ACE-CSR-macercwk]]
 ===== `macercwk`
 
 If the RCWK can be programmed, it can only be programmed by M-mode.
+(((CSR, `macercwk`)))
 For this purpose, we use eight 32-bit WARL CSRs in RV32 and four 64-bit WARL CSRs in RV64.
 The CSRs are: `macercwk0`, `macercwk1`, `macercwk2`, and `macercwk3` in RV64, to which we add
 `macercwk4`, `macercwk5`, `macercwk6`, and `macercwk7` in RV32.
 Bits [(_i_+1) XLEN - 1 : _i_ XLEN] of the RCWK are written to `macercwk{i}`.
-(((CSR, `macercwk`)))
 
 Attempting to access the `macercwk` block outside of MM will cause an illegal instruction exception.
 
@@ -676,7 +659,7 @@ The internal representation is implementation specific.
 
 [[ACE-metadata-standard]]
 .Format of the Metadata Section
-[width="100%",cols=">9%,^7%,17%,67%",options="header"]
+[width="100%",cols="^9%,^7%,17%,67%",options="header"]
 |===
 |   Field | Width | Name                  | Description
 |   [0:0] |   1  | Format                 | 0 for the current metadata format. +
@@ -905,7 +888,6 @@ NOTE: Due to the computational cost of the derivation functions, implementations
 cache recently used derived keys for both the Root RCWK and Locality-derived keys.
 
 [[ACE-RCWK-vs-ID]]
-
 === Programmable RCWKs vs. ID-based Usage Control
 
 (This section is informative and non-normative.)
