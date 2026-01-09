@@ -34,7 +34,7 @@ In order to allow efficient reconfiguration of CCs
 and protect their information also outside the architectural state,
 a CC can be exported as a _Sealed Cryptographic Context_ (SCC), i.e., an encrypted and authenticated package.
 A SCC can be reimported into a CC when needed, and a CC's content is opaque also when exported as an SCC.
-These operations use _Context Transport Keys_ (CTKs), which may be programmed by MM and depend on _Localities_ (see below).
+These operations use _Context Wrapping Keys_ (CWKs), which may be programmed by MM and depend on _Localities_ (see below).
 //Because of its encryption, also the content section in an SCC is called _opaque_.
 
 Usage Control Policy:::
@@ -49,7 +49,7 @@ Locality:::
 (((Cryptographic context, Locality)))
 In addition to Usage Control policies,
 ACE can bind opaque keys to a _Locality_, restricting their usage to a specific device, device class, software or hardware configuration, or boot cycle.
-This binding uses both metadata and a _Derived CTK_ (DCTK) derived from the RCTK and a Locality-specific secret via a key derivation function for the purpose of importing and exporting opaque keys.
+This binding uses both metadata and a _Derived CWK_ (DCWK) derived from the RCWK and a Locality-specific secret via a key derivation function for the purpose of importing and exporting opaque keys.
 The system maintains a _Locality Secrets Table_ (LST) containing both system-wide values which are fixed, values that can be configured in an externally defined way, and fields that can be programmed by MM.
 The metadata stores the Locality as an index into this table. See <<ACE-Localities>> for more details.
 
@@ -159,7 +159,7 @@ It also requires a subset of the V extension to be implemented, including some C
 | 0xXXX          | URO       | `aceccdirty`             | Bitmap of dirty contexts
 | 0xXXX          | URO       | `acecclazy`              | Bitmap of lazy-loaded ("placeholder") contexts
 | 0xXXX          | URW       | `acestart`               | ACE start byte index
-| 0xXXX--0xXXX   | MRW (RZ)  | `macerctk{0..7}`         | ACE Root Context Transport Key
+| 0xXXX--0xXXX   | MRW (RZ)  | `macercwk{0..7}`         | ACE Root Context Wrapping Key
 | 0xXXX--0xXXX   | MRW (RZ)  | `maceOSSecret{0..3}`     | ACE OS Secret
 | 0xXXX--0xXXX   | MRW (RZ)  | `maceBootSecret0{0..3}`  | ACE Boot Secret
 |===
@@ -615,26 +615,26 @@ In the metadata section, `ASID` and `VMID` are always zero padded to the maximal
 [.darkred]#However, we need a mechanism to make sure that if the system is not configured to insert `ASID`, resp., `VMID` into the GVAs/GPAs, we can still use them for the purpose of policing the usage of CCs.#
 
 [[ACE-providing-keys,Remark {counter:remark}]]
-*Remark {counter:remark}.* _The software in each World/Supervisor Domain is normally responsible to generate or obtain their own keys, and if a process (applet) in one World/Supervisor Domain is responsible to provide keys to other Worlds/Supervisor Domains, it is the responsibility of the MM to perform an appropriate sequence of import, switch the CTK, then export operations._
+*Remark {counter:remark}.* _The software in each World/Supervisor Domain is normally responsible to generate or obtain their own keys, and if a process (applet) in one World/Supervisor Domain is responsible to provide keys to other Worlds/Supervisor Domains, it is the responsibility of the MM to perform an appropriate sequence of import, switch the CWK, then export operations._
 
 
-===== `macerctk`
+===== `macercwk`
 
-If the RCTK can be programmed, it can only be programmed by M-mode.
+If the RCWK can be programmed, it can only be programmed by M-mode.
 For this purpose, we use eight 32-bit WARL CSRs in RV32 and four 64-bit WARL CSRs in RV64.
-The CSRs are: `macerctk0`, `macerctk1`, `macerctk2`, and `macerctk3` in RV64, to which we add
-`macerctk4`, `macerctk5`, `macerctk6`, and `macerctk7` in RV32.
-Bits [(_i_+1) XLEN - 1 : _i_ XLEN] of the RCTK are written to `macerctk{i}`.
-(((CSR, `macerctk`)))
+The CSRs are: `macercwk0`, `macercwk1`, `macercwk2`, and `macercwk3` in RV64, to which we add
+`macercwk4`, `macercwk5`, `macercwk6`, and `macercwk7` in RV32.
+Bits [(_i_+1) XLEN - 1 : _i_ XLEN] of the RCWK are written to `macercwk{i}`.
+(((CSR, `macercwk`)))
 
-Attempting to access the `macerctk` block outside of MM will cause an illegal instruction exception.
+Attempting to access the `macercwk` block outside of MM will cause an illegal instruction exception.
 
-NOTE: Discoverability of whether the RCTK can be configured or not is not critical, since this is information known by the MM firmware.
-[.darkred]#We can use the data structure pointed by `mconfigptr` in order to track optional features of ACE including whether the `macerctk` CSR block is implemented, and if not whether whether the value is ephemeral or fixed.#
+NOTE: Discoverability of whether the RCWK can be configured or not is not critical, since this is information known by the MM firmware.
+[.darkred]#We can use the data structure pointed by `mconfigptr` in order to track optional features of ACE including whether the `macercwk` CSR block is implemented, and if not whether whether the value is ephemeral or fixed.#
 
-//User mode, and even operating systems and hypervisors, need not be aware of the `macerctk` block. Other mechanisms could have been chosen to program the CTK, such as an MM-exclusive dedicated hardware interface or memory-mapped interface.
+//User mode, and even operating systems and hypervisors, need not be aware of the `macercwk` block. Other mechanisms could have been chosen to program the CWK, such as an MM-exclusive dedicated hardware interface or memory-mapped interface.
 
-NOTE: Mechanisms for persisting Root Context Transport Keys (RCTKs) across reboots or transferring them between devices are outside the scope of the ACE architecture. Such mechanisms are system-specific and fall under the purview of MM firmware.
+NOTE: Mechanisms for persisting Root Context Wrapping Keys (RCWKs) across reboots or transferring them between devices are outside the scope of the ACE architecture. Such mechanisms are system-specific and fall under the purview of MM firmware.
 For cross-device migration, the use of a public-key key-encapsulation mechanism (KEM) is recommended.
 
 ===== Re-configurable Localities
@@ -753,7 +753,7 @@ If the H extension is not enabled, bit 28 must be set to 1, and bits 31 and [63:
 The "UC_Policy_4" field is 16 bits long for compatibility with architectures employing 16-bit `VMID` fields (for instance, in heterogeneous systems).
 While interoperability cannot be guaranteed when this policy is used, this ensures that the two top bits are not used for other purposes. +
 Filtering usage by Supervisor Domain or World ID is not supported, and not only because of lack of space in a 64-bit metadata section:
-Reconfiguring the RCTK is a better approach for such isolation requirements, whereas isolation by `ASID` and `VMID` is a weaker security feature.
+Reconfiguring the RCWK is a better approach for such isolation requirements, whereas isolation by `ASID` and `VMID` is a weaker security feature.
 
 [[ACE-Localities]]
 ===== Localities
@@ -762,9 +762,9 @@ Internally, ACE keeps a table of 128-bit Locality Secrets (LS), the Locality Sec
 Some of these entries are fixed, other values may be configurable only using an implementation-specific authenticated hardware procedure, and the remaining may be programmed by MM (*Note:* _we need to define the corresponding CSRs_).
 The LST is a global table shared across all ACE units with some fields which can be MM-programmed and are architectural (i.e., per hart).
 
-If the Locality Field of a context (CC/SCC) is -1 (all ones), then the RCTK is used.
-Otherwise, this value is used as an index _i_ in the HST, and a derived key computed from RCTK and LST[_i_] is used for import/export in place of the RCTK.
-The encryption and authentication keys are then derived from the DCTK.
+If the Locality Field of a context (CC/SCC) is -1 (all ones), then the RCWK is used.
+Otherwise, this value is used as an index _i_ in the HST, and a derived key computed from RCWK and LST[_i_] is used for import/export in place of the RCWK.
+The encryption and authentication keys are then derived from the DCWK.
 
 In <<ACE-locality-indexes>>, we list the mandatory entries.
 Column "MM-Config." indicates whether MM may be allowed to configure the entry.
@@ -778,7 +778,7 @@ device-wide, or (usually) OS-wide.
 |===
 .>| Name .>| Description .>| Domain | MM-Config. .>| Value +
 (Index)
-| (No Locality binding)     | No CTK derivation. CC bound to Root CTK only. | -- | -- | -1 (15)
+| (No Locality binding)     | No CWK derivation. CC bound to Root CWK only. | -- | -- | -1 (15)
 | ChipManufacturerSecret    | Identifies the manufacturer of the SoC. Permanent. | SoC | N | 0
 | ChipModelSecret           | Identifies specific chip model/family. Permanent. | SoC | N | 1
 | ChipUniqueSecret          | Unique for each SoC. Permanent. | SoC | N | 2
@@ -796,7 +796,7 @@ The constant Localities_MAX is the maximum number of Localities supported by the
 
 NOTE: MM is responsible for virtualizing the OSSecret and BootSession_Secret Locality Secrets.
 
-*Example*: _If a key's metadata specifies a Locality field value of "2", the key for import/export operations is derived from the RCTK and the "OEM Secret".
+*Example*: _If a key's metadata specifies a Locality field value of "2", the key for import/export operations is derived from the RCWK and the "OEM Secret".
 Consequently, while `ace.export` remains functional on the same device to support context switching, an `ace.import` of the resulting SCC on a device from a different OEM will trigger an authentication failure (provided that the OEM Secrets are, in fact, different)._
 
 NOTE: _A CC may reference a key via an index into the system-defined System Key Table (SKT).
@@ -840,7 +840,7 @@ Only the serialization of the content is encrypted, while both metadata and cont
 
 //
 
-To describe the authenticated encryption of a SCC, we first define the RFC8452 Key Derivation and the DCTK Derivation functions.
+To describe the authenticated encryption of a SCC, we first define the RFC8452 Key Derivation and the DCWK Derivation functions.
 
 .RFC8452 Key Derivation
 [source,sail]
@@ -857,7 +857,7 @@ function RFC8452_KeyDeriv(K) = {
 .Derived Key Derivation
 [source,sail]
 ----
-function DCTK_KeyDeriv(K,L) = {
+function DCWK_KeyDeriv(K,L) = {
   AESE256(K, L ^ (0[125:0] @ 0b010))[127:0] @
   AESE256(K, L ^ (0[125:0] @ 0b000))[127:0]
 }
@@ -878,12 +878,12 @@ Kenc : bits(256);
 Kauth : bits(128);
 
 if (metadata.Locality == 15) then {
-    CTK = RCTK;
+    CWK = RCWK;
 } else {
-    CTK = DCTK_KeyDeriv(RCTK, LST[metadata.Locality]);
+    CWK = DCWK_KeyDeriv(RCWK, LST[metadata.Locality]);
 }
 
-{Kenc, Kauth} = RFC8452_KeyDeriv(CTK);
+{Kenc, Kauth} = RFC8452_KeyDeriv(CWK);
 let T : bits(96) = POLYVAL(Kauth, metadata @ content
                                            @ IntTo64Bits(64)
                                            @ IntTo64Bits(len_in_bits(content)))[95:0];
@@ -902,11 +902,11 @@ if (last_block_fractional) then {
 ----
 
 NOTE: Due to the computational cost of the derivation functions, implementations may
-cache recently used derived keys for both the Root RCTK and Locality-derived keys.
+cache recently used derived keys for both the Root RCWK and Locality-derived keys.
 
-[[ACE-RCTK-vs-ID]]
+[[ACE-RCWK-vs-ID]]
 
-=== Programmable RCTKs vs. ID-based Usage Control
+=== Programmable RCWKs vs. ID-based Usage Control
 
 (This section is informative and non-normative.)
 
@@ -914,29 +914,29 @@ ACE provides two architected layers of usage control.
 
 At the User and Supervisor levels, CC usage can be optionally constrained by ASID and VMID.
 This is a lightweight mechanism.
-Because filtering by ASID is inactive when the hart is in S mode or higher, context switching can be performed without modifying the RCTK.
+Because filtering by ASID is inactive when the hart is in S mode or higher, context switching can be performed without modifying the RCWK.
 
-At higher privilege levels, not only the usage, but even the import of CCs can be restricted by a programmable RCTK.
+At higher privilege levels, not only the usage, but even the import of CCs can be restricted by a programmable RCWK.
 This offers stronger security by also preventing unauthorized `ace.import` operations, but incurs higher overhead as it typically requires an `ecall`.
 
-The envisioned usage model employs ASID/VMID filtering at the U level, and potentially at the S level in high-performance systems where migration is not required (e.g., automotive applications). Cryptographic domain separation via the RCTK is intended for Virtual Machines, Supervisor Domains, Worlds, and TEEs within those contexts, as these demand stronger security guarantees.
+The envisioned usage model employs ASID/VMID filtering at the U level, and potentially at the S level in high-performance systems where migration is not required (e.g., automotive applications). Cryptographic domain separation via the RCWK is intended for Virtual Machines, Supervisor Domains, Worlds, and TEEs within those contexts, as these demand stronger security guarantees.
 
-Although the architecture does not preclude assigning unique RCTKs to individual U processes, doing so would impose a significant burden on the system software stack. Hardware support could mitigate this—for example, by automatically switching RCTKs based on ASID/VMID without per-context-switch `ecall` overhead. Such a solution is not currently being explored due to its architectural complexity and inflexibility, and HW cost-for instance, it would require secure management of very large RCTK tables, including the potential need to save, restore, or migrate of entire blocks of RCTKs.
+Although the architecture does not preclude assigning unique RCWKs to individual U processes, doing so would impose a significant burden on the system software stack. Hardware support could mitigate this—for example, by automatically switching RCWKs based on ASID/VMID without per-context-switch `ecall` overhead. Such a solution is not currently being explored due to its architectural complexity and inflexibility, and HW cost-for instance, it would require secure management of very large RCWK tables, including the potential need to save, restore, or migrate of entire blocks of RCWKs.
 
 [comment]
 --
 ACE has two architected layers of  Usage Control .
 
 At the U and S levels, CCs usage can be constrained by ASID and VMID. This is a lightweight solution.
-Since ASID filtering is not active while the hart is in S mode or higher, context switching can be performed without changing the RCTK.
+Since ASID filtering is not active while the hart is in S mode or higher, context switching can be performed without changing the RCWK.
 
-At higher levels, even import of CCs can be constrained by a programmable RCTK.
+At higher levels, even import of CCs can be constrained by a programmable RCWK.
 This is a more secure solution, and prevents also `ace.import`, but it is also heavier, since it requires an `ecall`.
 
-Indeed, we have envisioned a system where ASID/VMID filtering is used at the U level, and possibly at S as well in systems where migration is not supported but high performance is (such as automotive applications). The cryptographic domain separation by RCTK is for VMs, Supervisor Domains, Worlds, and also for TEEs in the previous contexts as well, since these require higher security guarantees.
+Indeed, we have envisioned a system where ASID/VMID filtering is used at the U level, and possibly at S as well in systems where migration is not supported but high performance is (such as automotive applications). The cryptographic domain separation by RCWK is for VMs, Supervisor Domains, Worlds, and also for TEEs in the previous contexts as well, since these require higher security guarantees.
 
-While the architecture does not prevent individual RCTKs per U-mode process, this would add burden to the system stack.
-This could be accelerated by hardware support, for instance, by providing a mechanism to change automatically RCTKs depending on the ASID/VMID without requiring an `ecall` per context switch. We are not exploring such a solution for now because it would be very difficult to architect and unflexible.
+While the architecture does not prevent individual RCWKs per U-mode process, this would add burden to the system stack.
+This could be accelerated by hardware support, for instance, by providing a mechanism to change automatically RCWKs depending on the ASID/VMID without requiring an `ecall` per context switch. We are not exploring such a solution for now because it would be very difficult to architect and unflexible.
 --
 
 // We should not forget that ACE has been designed to provide a standardised accelerator interface to software, where the software could also set their own keys. I have worked on DRM schemes, like implementations of Widevine, that use an obfuscation mechanism for the keys, which are then briefly unwrapped to be used, and then erased — all in user space. This would optimise such mechanisms and increase security by reducing the time keys in clear are exposed in RAM.
@@ -1177,7 +1177,7 @@ This means that system HW dynamically generated keys can be imported but not exp
 
 // If the value cannot be transported to other devices or to
 // other Locality states of the same device, the internal logic must bind them to a
-// specific DCTK). The instruction imports them like software keys and sets
+// specific DCWK). The instruction imports them like software keys and sets
 // the appropriate policies.
 
 // [.darkred]#(TBdetermined whether it is secure)# This instruction is trappable and may also be resumed or restarted.
@@ -2839,7 +2839,7 @@ The same mechanism can also support lazy loading of contexts during ordinary con
 
 ==== Key Management and Provisioning Applications
 
-Software environments that implement key management operations for other domains require their own RCTK. A system may contain multiple such software environments.
+Software environments that implement key management operations for other domains require their own RCWK. A system may contain multiple such software environments.
 
 A Key Management Applet (KMA) will
 
@@ -2849,12 +2849,12 @@ A Key Management Applet (KMA) will
 . Export this CC to a SCC in memory.
 . Relinquish control to the MM.
 
-The MM, which controls the CTK, can the
+The MM, which controls the CWK, can the
 
 [arabic, start=5]
-. Set the RCTK to the KMA’s RCTK.
+. Set the RCWK to the KMA’s RCWK.
 . Re-import the SCC into a CC
-. Change the RCTK to match the requester domain's RCTK.
+. Change the RCWK to match the requester domain's RCWK.
 . Export the key for the Requester's use.
 . Relinquish control to the Requester.
 
