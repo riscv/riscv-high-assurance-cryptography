@@ -80,8 +80,9 @@ and `Cn|C[Xn]` means that there are two different encodings for when the operand
 |===
 | Instruction     | Operands                         |  Description
 | `ace.enable` +
-`ace.disable`     |                                  |  Enables/Disables the feature in the current mode.  CSRW pseudo-operation.  May trap to handle enablement.
-| `ace.init`      | `Cd\|C[Xd],%offset(Xs)`          |  Sets the metadata and key(s) for the CC.
+`ace.disable`     |                                  |  Enables/Disables the feature in the current mode.
+| `ace.reset`     |                                  |  Resets the feature in the current mode.
+| `ace.init`      | `Cd\|C[Xd],%offset(Xs)`          |  Sets a CC's metadata and content.
 | `ace.clear`     | `Cd\|C[Xd]`                      |  Clears a CC and marks it as no longer in use and clean.
 | `ace.export`    | `%offset(Xn),Cs\|C[Xs]`          |  Securely exports the content of a CC to memory.
 | `ace.import{.S}` | `Cd\|C[Xd],%offset(Xn)`         |  Authenticates and imports a SCC from memory into a CC. +
@@ -111,7 +112,7 @@ For instance, the source CC could be a KEM that configures the destination CC wi
 | `ace.restrict` +
   `(ace.harden)`  | `Cd\|C[Xd],Xs`                   |  Narrows the Usage Policies of a CC and turns on or increases the side-channel protection of the algorithm in it, if the microarchitecture supports it.
   Removing or reducing these protections is not permitted.
-   `ace.harden` is an alias.
+   `ace.harden` is an alias for `ace.restrict`.
 | `ace.input`     | `Cd\|C[Xd],%offset(Xs)`          |  Optional. Provides an input to the algorithm configured in the CC `Cd` or `CC[Xd]`, in place of providing it through the `ace.exec` instruction. Needed only when the inputs are very long, such as the inputs to certain public key schemes.
 | `ace.output`    | `%offset(Xd),Cs\|C[Xs]`          |  Optional. Writes the output of an algorithm configured in the CC `Cs` or `CC[Xs]`, in place of providing it through the `ace.exec` instruction. Needed when the outputs are very long, such as the outputs of certain public key schemes.
 | `ace.error`     | `Xd`                             |  Write the error code of the ACE unit into GPR `Xd`.
@@ -239,13 +240,13 @@ Its possible values are described in <<ACE-aces-encoding>>.
 // To be used when: +
 // ∙{nbsp}{nbsp} M mode (or HS mode) boots the S mode stack since a priori it does not know whether S supports the feature, and therefore it must force trapping, or, +
 // ∙{nbsp}{nbsp}When the S SW stack supports lazy context swtching.
-|   1   | Init               | ACE is enabled. The state shall be that no CC is configured. +
+|   1   | Initial            | ACE is enabled. The state shall be that no CC is configured. +
 The ACE unit will erase all contexts if ACE is enabled by writing to the `aceenable` CSR.
 |   2   | Clean              | ACE is enabled. The state matches the last value stored on a context swap (i.e., since the last time the value "Clean" was written to the ACES field).
 |   3   | Dirty              | ACE is enabled. there may have been changes to some CC since the last time the value "Clean" was written.
 |===
 
-Writes to ACES do not affect the contents of the CCs:  Setting ACES=Off does not destroy the state, nor does setting ACES=Init or Clean clear the contents.
+Writes to ACES do not affect the contents of the CCs:  Setting ACES=Off does not destroy the state, nor does setting ACES=Initial or Clean clear the contents.
 
 If the ACE unit contains state from a different process, and the ISE is disabled for the current one,
 then supervisor mode is supposed to have set the state to Off.
@@ -303,7 +304,7 @@ N/A
 
 [width=75,align=center,float=center,cols="<,<,<,<,<"]
 |===
-5+^|Execute instruction to read state
+5+^|Execute instruction to read state (N/A)
 
 |Action? +
 Next state
@@ -335,7 +336,7 @@ Dirty
 
 [width=75,align=center,float=center,cols="<,<,<,<,<"]
 |===
-5+^|Execute instruction to unconfigure unit
+5+^|Execute instruction to unconfigure unit (`ace.reset`)
 
 |Action? +
 Next state
@@ -351,7 +352,7 @@ Initial
 
 [width=75,align=center,float=center,cols="<,<,<,<,<"]
 |===
-5+^|Execute instruction to disable unit
+5+^|Execute instruction to disable unit (`ace.disable`)
 
 |Action? +
 Next state
@@ -367,7 +368,7 @@ Off
 
 [width=75,align=center,float=center,cols="<,<,<,<,<"]
 |===
-5+^|Execute instruction to enable unit
+5+^|Execute instruction to enable unit (`ace.enable`)
 
 |Action? +
 Next state
@@ -381,6 +382,93 @@ Initial
 Initial
 |===
 
+[.darkred]#Here we describe how a given bit in the CSRs
+`aceccconfigured`, `aceccurrent`, `aceccdirty`, and `acecclazy` would be updated.#
+
+First, the operating system must keep not only state for each process, but also keep track for each CC to which process it belongs.
+If the CC belongs to a different process than the one that is currently executing, the bit in `acecclazy` must be set to `true`.
+
+Concepts
+
+* Current process, i.e., the one issuing the instruction triggering the behavior we describe), current CC (the one being enabled), and current state (the state of the current CC).
+* Owning process, i.e., the process that owns the current configuration of the CC.
+
+<<<
+States we need:
+
+[start=0]
+. _CC is unconfigured, and there is a no saved value for the current process._ +
+`aceccconfigured[i] = 0`,{nbsp}{nbsp}
+`acecccurrent[i] = 0`,{nbsp}{nbsp}
+`acecclazy[i] = 0`. +
+* In this case it must be `aceccdirty[i] = 0`. +
+Using the CC gives an error, no trap. +
+* Configuring the CC works as expected, sets: +
+`aceccconfigured[i] = 1`,{nbsp}{nbsp}
+`acecccurrent[i] = 1`,{nbsp}{nbsp}
+`acecclazy[i] = 0`,{nbsp}{nbsp}
+and{nbsp}{nbsp} `aceccdirty[i] = 1`.
+
+. _CC is unconfigured, and there is a saved value to be lazy loaded for the current process._ +
+`aceccconfigured[i] = 0`,{nbsp}{nbsp}
+`acecccurrent[i] = 0`,{nbsp}{nbsp}
+`acecclazy[i] = 1`. +
+In this case it must be `aceccdirty[i] = 0`. +
+* Accessing the CC traps to allow the OS to lazy load it for the current process. +
+* Can be used freely. If potentially modified, `aceccdirty[i]` becomes `1`. +
+* Configuring the CC works as expected, and sets: +
+`aceccconfigured[i] = 1`,{nbsp}{nbsp}
+`acecccurrent[i] = 1`,{nbsp}{nbsp}
+`acecclazy[i] = 0`,{nbsp}{nbsp}
+and{nbsp}{nbsp} `aceccdirty[i] = 1`.
+
+. _CC is configured for the current process and loaded. Unchanged since last switch._ +
+`aceccconfigured[i] = 1`,{nbsp}{nbsp}
+`acecccurrent[i] = 1`,{nbsp}{nbsp}
+`acecclazy[i] = 0`,{nbsp}{nbsp}
+`aceccdirty[i] = 0`. +
+* If the process is interrupted now, the OS does not need to save it again. +
+* Can be used freely. If potentially modified, `aceccdirty[i]` becomes `1`. +
+* Configuring the CC works as expected, and sets: +
+`aceccconfigured[i] = 1`,{nbsp}{nbsp}
+`acecccurrent[i] = 1`,{nbsp}{nbsp}
+`acecclazy[i] = 0`,{nbsp}{nbsp}
+and{nbsp}{nbsp} `aceccdirty[i] = 1`.
+
+
+. _CC is configured for the current process and loaded. Potentially changed since last switch._ +
+`aceccconfigured[i] = 1`,{nbsp}{nbsp}
+`acecccurrent[i] = 1`,{nbsp}{nbsp}
+`acecclazy[i] = 0`,{nbsp}{nbsp}
+`aceccdirty[i] = 1`. +
+* If the process is interrupted now, the OS must save it and overwrite the previous value. +
+* Rest is as in the previous case.
+
+. _CC is configured but not for this process, hence blocked for this process, no value to be lazy loaded._ +
+`aceccconfigured[i] = 1`,{nbsp}{nbsp}
+`acecccurrent[i] = 0`,{nbsp}{nbsp}
+`acecclazy[i] = 0`. +
+* In this case _using_ it will given an error, whereas _configuring_ it will first trap to the operating system, to allow the latter to save the CC to the state of the owning process, clear it, update the flags to allow the current process to configure it, and return to the process to restart the operation allowing the configuration.
+
+. _CC is configured but not for this process, hence blocked for this process, and there is a value to be lazy loaded for the current process._ +
+`aceccconfigured[i] = 1`,{nbsp}{nbsp}
+`acecccurrent[i] = 0`,{nbsp}{nbsp}
+`acecclazy[i] = 1`. +
+* In this case accessing it will trap to the operating system.
+* The operating system must save the current value to the state of its owner, load the value from the current state.
+
+//+
+//For single bits in `aceccactive`, `aceccdirty`, and `acecclazy`, the transitions should be similar, with some specific meanings
+//+
+//`aceactive[i] = 0` means that the CC does not contain a value for the current process, even though it might
+//and will be lazily loaded when needed.
+//The value of `aceccdirty[i]` in this case must be set to `0`.
+//+
+//`acecclazy[i] = 1` and `aceactive[i] = 1` means that the CC does contain a value, which belongs to a different process, and will be first saved in the right process' context and then, lazily loaded from the saved state of the current one when needed.
+//The value of `aceccdirty[i]` in this case must be set to `0`.
+//+
+//`acecclazy[i] = 1` and `aceactive[i] = 1` means that the CC does contain a value, which belongs to a different process, and will be first saved in the right process' context and then, lazily loaded from the saved state of the current one when needed.
+//The value of `aceccdirty[i]` in this case must be set to `0`.#
 
 
 <<<
@@ -807,6 +895,46 @@ if (last_block_fractional) then {
 NOTE: Due to the computational cost of the derivation functions, implementations may
 cache recently used derived keys for both the Root RCTK and Locality-derived keys.
 
+[[ACE-RCTK-vs-ID]]
+
+=== Programmable RCTKs vs. ID-based Usage Control
+
+(This section is informative and non-normative.)
+
+ACE provides two architected layers of usage control.
+
+At the User and Supervisor levels, CC usage can be optionally constrained by ASID and VMID.
+This is a lightweight mechanism.
+Because filtering by ASID is inactive when the hart is in S mode or higher, context switching can be performed without modifying the RCTK.
+
+At higher privilege levels, not only the usage, but even the import of CCs can be restricted by a programmable RCTK.
+This offers stronger security by also preventing unauthorized `ace.import` operations, but incurs higher overhead as it typically requires an `ecall`.
+
+The envisioned usage model employs ASID/VMID filtering at the U level, and potentially at the S level in high-performance systems where migration is not required (e.g., automotive applications). Cryptographic domain separation via the RCTK is intended for Virtual Machines, Supervisor Domains, Worlds, and TEEs within those contexts, as these demand stronger security guarantees.
+
+Although the architecture does not preclude assigning unique RCTKs to individual U processes, doing so would impose a significant burden on the system software stack. Hardware support could mitigate this—for example, by automatically switching RCTKs based on ASID/VMID without per-context-switch `ecall` overhead. Such a solution is not currently being explored due to its architectural complexity and inflexibility, and HW cost-for instance, it would require secure management of very large RCTK tables, including the potential need to save, restore, or migrate of entire blocks of RCTKs.
+
+[comment]
+--
+ACE has two architected layers of  Usage Control .
+
+At the U and S levels, CCs usage can be constrained by ASID and VMID. This is a lightweight solution.
+Since ASID filtering is not active while the hart is in S mode or higher, context switching can be performed without changing the RCTK.
+
+At higher levels, even import of CCs can be constrained by a programmable RCTK.
+This is a more secure solution, and prevents also `ace.import`, but it is also heavier, since it requires an `ecall`.
+
+Indeed, we have envisioned a system where ASID/VMID filtering is used at the U level, and possibly at S as well in systems where migration is not supported but high performance is (such as automotive applications). The cryptographic domain separation by RCTK is for VMs, Supervisor Domains, Worlds, and also for TEEs in the previous contexts as well, since these require higher security guarantees.
+
+While the architecture does not prevent individual RCTKs per U-mode process, this would add burden to the system stack.
+This could be accelerated by hardware support, for instance, by providing a mechanism to change automatically RCTKs depending on the ASID/VMID without requiring an `ecall` per context switch. We are not exploring such a solution for now because it would be very difficult to architect and unflexible.
+--
+
+// We should not forget that ACE has been designed to provide a standardised accelerator interface to software, where the software could also set their own keys. I have worked on DRM schemes, like implementations of Widevine, that use an obfuscation mechanism for the keys, which are then briefly unwrapped to be used, and then erased — all in user space. This would optimise such mechanisms and increase security by reducing the time keys in clear are exposed in RAM.
+// While "reprovisioning" the keys could in theory work in a scheme where the keys only come from registered trusted applets (but it would require a very complex SW infrastructure, where agents register themselves to some MM component), in an user space environment, adding reprovisioning would be a burden to SW, as it could happen anywhere in the code, so we would have to check for errors after each operation, or at least have in-process trapping, because the CC may disappear from under your feet at any time.
+// Since all sorts of user space applications are a fundamental motivation for the feature. Restricting this to only keys provisioned by other environments would vastly reduce the likelihood of being accepted.
+
+
 // ///////////////////////////////////////////////////////////////////////////////////////////
 
 === Supported Algorithms
@@ -849,14 +977,14 @@ even though our aim is to make it into a ratified extension.
 In all cases where a GPR is used to index a CC, we exclude the use of the zero-hardwired GPR `X0` as the index register-that is, the encoding of the register cannot be zero. This is reserved to encode some special operation, and otherwise raises an invalid-instruction exception.
 
 [[ACE-instruction-enable-enable]]
-==== ace.enable/ace.disable/ace.clearall/ace.clear
+==== ace.enable/ace.disable/ace.reset
 
 `ace.enable` +
 `ace.disable` +
-`ace.clearall`
+`ace.reset`
 (((ACE, instruction, ace.enable)))
 (((ACE, instruction, ace.disable)))
-(((ACE, instruction, ace.clearall)))
+(((ACE, instruction, ace.reset)))
 
 Encoding::
 This is an I-type instruction.
@@ -879,13 +1007,13 @@ Enable, disable, or reset the feature in the current process domain:
 
 * If the `immed12` = 1, then the feature is enabled. The alias for this instruction is `ace.enable`.
 * If the `immed12` = 0, then the feature is disabled. The alias for this instruction is `ace.disable`.
-* If the `immed12` = `0xa11`, then all CCs are cleared and the new state of the ACE unit is Clear. The alias for this instruction is `ace.clearall`.
+* If the `immed12` = `0xa11`, then all CCs are cleared and the new state of the ACE unit is Clear. The alias for this instruction is `ace.reset`.
 
 `ace.enable` must be issued before using any ACE operation, i.e. `ace.config` passing the immediate 1.
 --
 +
 
-NOTE: The advantage of `ace.clearall` with respect to a loop that clears all CCs is that the entire CF memory is cleared without the need for compaction/management between the separate `ace.clear` operations and this opertation cannot be interrupted, reducing potential wasteful context saves.
+NOTE: The advantage of `ace.reset` with respect to a loop that clears all CCs is that the entire CF memory is cleared without the need for compaction/management between the separate `ace.clear` operations and this opertation cannot be interrupted, reducing potential wasteful context saves.
 
 The instruction will trap in the follwong cases: [.red]#TBD#.
 
