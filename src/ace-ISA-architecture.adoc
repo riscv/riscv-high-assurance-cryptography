@@ -382,16 +382,19 @@ Initial
 Initial
 |===
 
-[.darkred]#Here we describe how a given bit in the CSRs
-`aceccconfigured`, `aceccurrent`, `aceccdirty`, and `acecclazy` would be updated.#
+Let us define four properties for Cryptographic Contexts (CCs):
 
-First, the operating system must keep not only state for each process, but also keep track for each CC to which process it belongs.
-If the CC belongs to a different process than the one that is currently executing, the bit in `acecclazy` must be set to `true`.
+[horizontal]
+`configured`:: Indicates whether the Cryptographic Context (CC) is currently configured.
+`current`:: If the CC is configured, indicates whether the current process is its owner.
+`dirty`:: If the CC is configured and owned by the current process, indicates whether its state has been modified.
+`lazy`:: Indicates whether the CC's configuration is stored only in the parent's switching context, regardless of whether the CC is unconfigured or occupied by a context belonging to a different process.
 
-Concepts
+We need to distinguish between the current process and the owning process of the configuration of a CC.
 
-* Current process, i.e., the one issuing the instruction triggering the behavior we describe), current CC (the one being enabled), and current state (the state of the current CC).
-* Owning process, i.e., the process that owns the current configuration of the CC.
+The operating system must keep not only state for each process, but also keep track for each CC to which process it belongs.
+
+
 
 <<<
 
@@ -402,60 +405,47 @@ States we need:
 
 *VOID* (`0b000`)::
 [.darkred]#_CC is unconfigured, and there is no saved value for the current process._# +
-`[darkred]#aceccconfigured[i] = 0, acecccurrent[i] = 0, acecclazy[i] = 0.#`
-* In this case it must be `aceccdirty[i] = 0`. +
+`[darkred]#configured = 0, current = 0, lazy = 0.#`
+* In this case it must be `dirty = 0`. +
 Using the CC gives an error, no trap. +
 * Configuring the CC works as expected, sets: +
-`aceccconfigured[i] = 1, acecccurrent[i] = 1, acecclazy[i] = 0,` and `aceccdirty[i] = 1`.
+`configured = 1, current = 1, lazy = 0,` and `dirty = 1` {implies} *DIRTY*.
 
 *LAZY* (`0b001`)::
 [.darkred]#_CC is unconfigured, and parent has saved a value to be lazy-loaded for the current process._# +
-`[darkred]#aceccconfigured[i] = 0, acecccurrent[i] = 0, acecclazy[i] = 1.#`
-* In this case it must be `aceccdirty[i] = 0`. +
+`[darkred]#configured = 0, current = 0, lazy = 1.#`
+* In this case it must be `dirty = 0`. +
 * Accessing the CC traps to allow the OS to lazy load it for the current process. +
-* Can be used freely. If potentially modified, `aceccdirty[i]` becomes `1`. +
+* Can be used freely. If potentially modified, `dirty` becomes `1`. +
 * Configuring the CC works as expected, and sets: +
-`aceccconfigured[i] = 1, acecccurrent[i] = 1, acecclazy[i] = 0`, and `aceccdirty[i] = 1`.
+`configured = 1, current = 1, lazy = 0`, and `dirty = 1` {implies} *DIRTY*.
 
 *CLEAN* (`0b010`)::
 [.darkred]#_CC is configured for the current process and loaded. Unchanged since last switch._# +
-`[darkred]#aceccconfigured[i] = 1, acecccurrent[i] = 1, acecclazy[i] = 0, aceccdirty[i] = 0.#` +
+`[darkred]#configured = 1, current = 1, lazy = 0, dirty = 0.#` +
 * If the process is interrupted now, the OS does not need to save it again. +
-* Can be used freely. If potentially modified, `aceccdirty[i]` becomes `1`. +
+* Can be used freely. If potentially modified, `dirty` becomes `1`. +
 * Configuring the CC works as expected, and sets: +
-`aceccconfigured[i] = 1, acecccurrent[i] = 1, acecclazy[i] = 0`, and `aceccdirty[i] = 1`.
+`configured = 1, current = 1, lazy = 0`, and `dirty = 1` {implies} *DIRTY*.
 
 *DIRTY* (`0b011`)::
 [.darkred]#_CC is configured for the current process and loaded. Potentially changed since last switch._# +
-`[darkred]#aceccconfigured[i] = 1, acecccurrent[i] = 1, acecclazy[i] = 0, aceccdirty[i] = 1.#` +
+`[darkred]#configured = 1, current = 1, lazy = 0, dirty = 1.#` +
 * If the process is interrupted now, the OS must save it and overwrite the previous value. +
 * Rest is as in the previous case.
 
 *FOREIGN* (`0b100`)::
 [.darkred]#_CC is configured for a different process, blocked for the current one, no value to be lazy-loaded._# +
-`[darkred]#aceccconfigured[i] = 1, acecccurrent[i] = 0, acecclazy[i] = 0.#` +
+`[darkred]#configured = 1, current = 0, lazy = 0.#` +
 * In this case _using_ it will given an error, whereas _configuring_ it will first trap to the operating system, to allow the latter to save the CC to the state of the owning process, clear it, update the flags to allow the current process to configure it, and return to the process to restart the operation allowing the configuration.
 
 *FOREIGN_LAZY* (`0b101`)::
 [.darkred]#_CC is configured for a different process, blocked for the current one, and there is a value to be lazy loaded for the current process._# +
-`[darkred]#aceccconfigured[i] = 1, acecccurrent[i] = 0, acecclazy[i] = 1.#` +
+`[darkred]#configured = 1, current = 0, lazy = 1.#` +
 * In this case accessing it will trap to the operating system.
 * The operating system must save the current value to the state of its owner, load the value from the current state.
 
-//+
-//For single bits in `aceccactive`, `aceccdirty`, and `acecclazy`, the transitions should be similar, with some specific meanings
-//+
-//`aceactive[i] = 0` means that the CC does not contain a value for the current process, even though it might
-//and will be lazily loaded when needed.
-//The value of `aceccdirty[i]` in this case must be set to `0`.
-//+
-//`acecclazy[i] = 1` and `aceactive[i] = 1` means that the CC does contain a value, which belongs to a different process, and will be first saved in the right process' context and then, lazily loaded from the saved state of the current one when needed.
-//The value of `aceccdirty[i]` in this case must be set to `0`.
-//+
-//`acecclazy[i] = 1` and `aceactive[i] = 1` means that the CC does contain a value, which belongs to a different process, and will be first saved in the right process' context and then, lazily loaded from the saved state of the current one when needed.
-//The value of `aceccdirty[i]` in this case must be set to `0`.#
-
-NOTE: `acecc*` can track the CC states for all higher-privileged modes.
+NOTE: This 6-state property can track the CC states for all higher-privileged modes.
 S/VS can trust the values coming from U, since U cannot write to these registers.
 However, M and HS cannot trust the values from S and VS, since the latter can write to these registers.
 This implies that M, resp., HS mode must always context-switch all CCs when context-switching S, resp., VS domains, since it doesn't know which CCs have changed.
