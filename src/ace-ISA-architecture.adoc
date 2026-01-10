@@ -386,7 +386,7 @@ Let us define four properties for Cryptographic Contexts (CCs):
 
 [horizontal]
 `configured`:: Indicates whether the Cryptographic Context (CC) is currently configured.
-`current`:: If the CC is configured, indicates whether the current process is its owner.
+`native`:: If the CC is configured, indicates whether the current process is its owner.
 `dirty`:: If the CC is configured and owned by the current process, indicates whether its state has been modified.
 `lazy`:: Indicates whether the CC's configuration is stored only in the parent's switching context, regardless of whether the CC is unconfigured or occupied by a context belonging to a different process.
 
@@ -405,56 +405,64 @@ States we need:
 
 *VOID* (`0b000`)::
 [.darkred]#_CC is unconfigured, and there is no saved value for the current process._# +
-`[.darkred]#configured = 0, current = 0, lazy = 0.#`
+`[.darkred]#configured = 0, native = 0, lazy = 0.#`
 ** In this case it must be `dirty = 0`. +
 Using the CC gives an error, no trap.
 ** Configuring the CC works as expected, sets: +
-`configured = 1, current = 1, lazy = 0,` and `dirty = 1` {implies} *DIRTY*.
+`configured = 1, native = 1, lazy = 0,` and `dirty = 1` {implies} *DIRTY*.
 
 //
 
-*LAZY* (`0b001`)::
+*LAZY* (`0b100`)::
 [.darkred]#_CC is unconfigured, and parent has saved a value to be lazy-loaded for the current process._# +
-`[.darkred]#configured = 0, current = 0, lazy = 1.#`
+`[.darkred]#configured = 0, native = 0, lazy = 1.#`
 ** In this case it must be `dirty = 0`.
 ** Accessing the CC traps to allow the OS to lazy load it for the current process.
 ** Can be used freely. If potentially modified, `dirty` becomes `1`.
 ** Configuring the CC works as expected, and sets: +
-`configured = 1, current = 1, lazy = 0`, and `dirty = 1` {implies} *DIRTY*.
+`configured = 1, native = 1, lazy = 0`, and `dirty = 1` {implies} *DIRTY*.
 
 //
 
-*CLEAN* (`0b010`)::
+*CLEAN* (`0b011`)::
 [.darkred]#_CC is configured for the current process and loaded. Unchanged since last switch._# +
-`[darkred]#configured = 1, current = 1, lazy = 0, dirty = 0.#`
+`[darkred]#configured = 1, native = 1, lazy = 0, dirty = 0.#`
 ** If the process is interrupted now, the OS does not need to save it again.
 ** Can be used freely. If potentially modified, `dirty` becomes `1`.
 ** Configuring the CC works as expected, and sets: +
-`configured = 1, current = 1, lazy = 0`, and `dirty = 1` {implies} *DIRTY*.
+`configured = 1, native = 1, lazy = 0`, and `dirty = 1` {implies} *DIRTY*.
 
 //
 
-*DIRTY* (`0b011`)::
+*DIRTY* (`0b111`)::
 [.darkred]#_CC is configured for the current process and loaded. Potentially changed since last switch._# +
-`[darkred]#configured = 1, current = 1, lazy = 0, dirty = 1.#`
+`[darkred]#configured = 1, native = 1, lazy = 0, dirty = 1.#`
 ** If the process is interrupted now, the OS must save the CC.
 ** Rest is as in the previous case.
 
 //
 
-*FOREIGN* (`0b100`)::
+*ALIEN* (`0b001`)::
 [.darkred]#_CC is configured for a different process, blocked for the current one, no value to be lazy-loaded._# +
-`[darkred]#configured = 1, current = 0, lazy = 0.#`
-** In this case _using_ it will given an error, whereas _configuring_ it will first trap to the operating system, to allow the latter to save the CC to the state of the owning process, clear it, update the flags to allow the current process to configure it, and return to the process to restart the operation allowing the configuration.
+`[darkred]#configured = 1, native = 0, lazy = 0.#`
+** _using_ the CC will result in an error.
+** _configuring_ the CC will first trap to the operating system, to allow the latter to save the CC to the state of the owning process, clear it, update the flags to *VOID* to allow the current process to configure it, and return to the process to restart the operation allowing the configuration.
 
 //
 
-*FOREIGN_LAZY* (`0b101`)::
+*ALIEN_LAZY* (`0b101`)::
 [.darkred]#_CC is configured for a different process, blocked for the current one, and there is a value to be lazy loaded for the current process._# +
-`[darkred]#configured = 1, current = 0, lazy = 1.#`
+`[darkred]#configured = 1, native = 0, lazy = 1.#`
 ** In this case accessing it will trap to the operating system.
 ** The operating system must save the current value to the state of its owner, load the value from the current state. +
 
+//
+
+The encoding can be interpreted as follows:
+
+* Bit 0 distinguishes between unconfigured (0) or configured (1);
+* Bit 1 distinguishes between native (1) or alien (0), where unconfigured is considered alien in order to have a value equal to zero for the *VOID* state; and
+* Bit 2 has a compressed semantic, since it distinguishes between present/clean (0) or lazy-loaded/dirty (1) -- essentially 0 means "parent mode has nothing extra to do" and 1 means "parent mode has something extra to do".
 
 NOTE: This 6-state property can track the CC states for all higher-privileged modes.
 S/VS can trust the values coming from U, since U cannot write to these registers.
