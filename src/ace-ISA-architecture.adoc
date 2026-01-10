@@ -4,19 +4,28 @@
 [[ACE-concepts]]
 === Fundamental Concepts
 
-Opaque Key:::
-(((Opaque key)))
-The fundamental concept of ACE is the _opaque key_, i.e., a cryptographic key whose value remains hidden to software even while being used in cryptographic operations.
-
 Cryptographic Context:::
-(((Cryptographic context)))
+(((Cryptographic Context)))
 (((Cryptographic context, content)))
 (((Cryptographic context, metadata)))
-ACE implements _opaque keys_ through the _Cryptographic Context_ (CC), an architectural container that safeguards sensitive information.
-Each CC consists of a *metadata section*, which does not require confidentiality, and a confidential *content section*.
-The metadata defines the cryptographic algorithm and optional usage policies; the content holds sensitive material such as keys, other secrets, and internal algorithm state.
-Integrity of the entire CC section and confidentiality of its content section are enforced by allowing access and modification of a CC only according to the rules of ACE and of the configured algorithm.
-The principle of _opaqueness_ applies to _all_ data within the content section.
+The fundamental concept of ACE is the _Cryptographic Context_ (CC).
+This a data structure consisting of a *metadata section*, and a *content section*, which are indissolubly bound to each other.
+The metadata defines the cryptographic algorithm and optional usage policies;
+the content holds sensitive material such as keys, other secrets, and internal algorithm state.
+The metadata section does not require confidentiality,
+the content section requires confidentiality, and both require integrity.
+Integrity of the entire CC and confidentiality of its content section are enforced by allowing access and modification of a CC only according to the rules of the ACE architecture and of the configured algorithm.
+
+Cryptographic Locker:::
+(((Locker)))
+The first mechanism by which ACE implements CCs is the _Cryptographic Locker_, or locker for short.
+A locker is an architectural container that safeguards sensitive information.
+It can be seen as a one-way register: It is possible to _configure_ a locker with metadata and clear content (such as the actual values of keys);
+however, the content cannot extracted in a way that would compromise its confidentiality.
+Since CCs can only be used in cryptographic operations when stored in a locker,
+this write operation effectively creates a CC, by making the two sections of the CC inseparable.
+Of course, the ACE unit has access to the content section in order to perform the cryptographic operations allowed by the algorithm that is encoded in the metadata.
+// We thus say that the content section of a CC in a locker is _opaque_, and in particular we can speak of an _opaque key_.
 
 Object-Orientation:::
 CCs are _objects_ that may expose a uniform interface despite being instances of different algorithms.  A CC encapsulates its own behavior, allowing, for instance, AES-128, AES-256, Калина-128, Калина-256, and SM4 instances in ECB mode to be used interchangeably without code changes.  Similarly, modes such as GCM-SIV or XEX/XTS, that can be instantiated with any of these algorithms would also offer the same binary interface, as long as the code supports variable SCC sizes, which can be dynamically discovered. Side-channel-resistant variants would also be supported transparently.
@@ -29,27 +38,25 @@ The CC would encapsulate the cipher and the same compiled binary would support a
 
 Sealed Cryptographic Context:::
 (((Cryptographic context, sealed)))
-Only the ACE implementation can access CC content.
-In order to allow efficient reconfiguration of CCs
-and protect their information also outside the architectural state,
-a CC can be exported as a _Sealed Cryptographic Context_ (SCC), i.e., an encrypted and authenticated package.
-A SCC can be reimported into a CC when needed, and a CC's content is opaque also when exported as an SCC.
-These operations use _Context Wrapping Keys_ (CWKs), which may be programmed by MM and depend on _Localities_ (see below).
-//Because of its encryption, also the content section in an SCC is called _opaque_.
+In order to allow efficient reconfiguration of lockers, and protect CCs also outside the architectural state,
+a CC can be exported from a locker as a _Sealed Cryptographic Context_ (SCC), i.e., an encrypted and authenticated package.
+A SCC can be reimported into a locker when needed.
+These operations use _Context Sealing Keys_ (CSKs), which may be programmed by MM and depend on _Localities_ (see below).
 
 Usage Control Policy:::
 (((Cryptographic context, Usage Control)))
-An important distinction in ACE is between the _import_ and _export_ operations on CCs on one hand, and the _use_ of CCs in cryptographic operations on the other hand.
-It must be always possible to import and export SCCs, as well as clear and reinitialize CCs with new data: If this were not possible, then a process may be able to deny all other processes access to ACE by simply configuring all the CCs.
-Therefore, the optional _Usage Control policies_ in the metadata section may only be able to restrict the cryptographic operations that are allowed by the algorithms configured by a CC, including modifying its state, but not the operations that manage CCs and SCCs. [.darkred]#TBD: Add to each instruction whether it may be usage-controlled or not.#
+An important distinction in ACE is between the _import_ and _export_ operations on lockers on one hand, and the _use_ of CCs therein in cryptographic operations on the other hand.
+It must be always possible to export SCCs and reimport them into lockers, as well as clear and reinitialize lockers with new data:
+If this were not possible, then a process may be able to deny all other processes access to ACE by simply configuring all the lockers.
+Therefore, the optional _Usage Control policies_ in the metadata section may only be able to restrict the cryptographic operations that are allowed by the algorithms configured by a CC, including modifying its state, but not the operations that manage lockers and SCCs. [.darkred]#TBD: Add to each instruction whether it may be usage-controlled or not.#
 
-NOTE: The distinction between CC/SCC management instructions and "use-of-CC-for-cryptography" operations is the reason we speak of _Usage Control_ in place of the term _Access Control_.
+NOTE: The distinction between locker/SCC management instructions and "use-of-CC-for-cryptography" operations is the reason we speak of _Usage Control_ in place of the term _Access Control_.
 
 Locality:::
 (((Cryptographic context, Locality)))
 In addition to Usage Control policies,
-ACE can bind opaque keys to a _Locality_, restricting their usage to a specific device, device class, software or hardware configuration, or boot cycle.
-This binding uses both metadata and a _Derived CWK_ (DCWK) derived from the RCWK and a Locality-specific secret via a key derivation function for the purpose of importing and exporting opaque keys.
+ACE can bind CCs to a _Locality_, restricting their usage to a specific device, device class, software or hardware configuration, or boot cycle.
+This binding uses both metadata and a _Derived CSK_ (DCSK) derived from the RCSK and a Locality-specific secret via a key derivation function for the purpose of importing and exporting opaque keys.
 The system maintains a _Locality Secrets Table_ (LST) containing both system-wide values which are fixed, values that can be configured in an externally defined way, and fields that can be programmed by MM.
 The metadata stores the Locality as an index into this table. See <<ACE-Localities>> for more details.
 
@@ -82,28 +89,28 @@ and `Cn|C[Xn]` means that there are two different encodings for when the operand
 | `ace.enable` +
 `ace.disable`     |                                  |  Enables/Disables the feature in the current mode.
 | `ace.reset`     |                                  |  Resets the feature in the current mode.
-| `ace.init`      | `Cd\|C[Xd],%offset(Xs)`          |  Sets a CC's metadata and content.
-| `ace.clear`     | `Cd\|C[Xd]`                      |  Clears a CC and marks it as no longer in use and clean.
-| `ace.export`    | `%offset(Xn),Cs\|C[Xs]`          |  Securely exports the content of a CC to memory.
-| `ace.import{.S}` | `Cd\|C[Xd],%offset(Xn)`         |  Authenticates and imports a SCC from memory into a CC. +
+| `ace.init`      | `Cd\|C[Xd],%offset(Xs)`          |  Sets a lockers's metadata and content.
+| `ace.clear`     | `Cd\|C[Xd]`                      |  Clears a locker and marks it as no longer in use and clean.
+| `ace.export`    | `%offset(Xn),Cs\|C[Xs]`          |  Securely exports the content of a locker to memory.
+| `ace.import{.S}` | `Cd\|C[Xd],%offset(Xn)`         |  Authenticates and imports a SCC from memory into a locker. +
  `ace.import.S` optionally supports system defined formats.
 | `ace.exec`
 | A. {nbsp}{nbsp} `Vd,Cn\|C[Xn],Vs` +
   B. {nbsp}{nbsp} `Cn\|C[Xn],Vs` +
   C. {nbsp}{nbsp} `Vd,Cn\|C[Xn]` +
   D. {nbsp}{nbsp} `Cn\|C[Xn]`
-| Performs a cryptographic operation. The instruction may also modify the internal state of the CC. This instruction admits four _forms_, depending on whether it accepts an input or not, and whether it produces an output or not.
+| Performs a cryptographic operation. The instruction may also modify the internal state of the CC in the locker. This instruction admits four _forms_, depending on whether it accepts an input or not, and whether it produces an output or not.
 | `ace.size`
 | `Xd,Cs\|C[Xs]` +
-`Xd,Xs` .2+|  `ace.size` returns the size in bytes of the SCC exported from CC `Cs` or `C[Xs]`, or from a CC that had the metadata block `Xs`. +
+`Xd,Xs` .2+|  `ace.size` returns the size in bytes of the SCC exported from locker `Cs` or `C[Xs]`, or from a locker that had the metadata block `Xs`. +
 Returns zero if the algorithm specified in `Xs` is not supported. +
 `ace.available` is an alias for `ace.size`.
 | `ace.available` | `Xd,Xs`
-| `ace.clone`     | `Cd\|C[Xd],Cs\|C[Xs]`            |  Clones a source CC into a destination CC.
+| `ace.clone`     | `Cd\|C[Xd],Cs\|C[Xs]`            |  Clones a source locker into a destination locker.
 | `ace.derive`    | `Cd\|C[Xd],Cs\|C[Xs]` +
 `Cd\|C[Xd],Cs\|C[Xs],Vs2` +
-|  Optional. Uses the source CC to configure the destination CC. +
-For instance, the source CC could be a KEM that configures the destination CC with a symmetric key.
+|  Optional. Uses the CC in the source locker to configure the destination locker. +
+For instance, the source locker could contain a KEM that configures the destination locker with a symmetric key.
 | `ace.state` +
 `(ace.dir)`
 | `Cd\|C[Xd],#immed` +
@@ -113,8 +120,8 @@ For instance, the source CC could be a KEM that configures the destination CC wi
   `(ace.harden)`  | `Cd\|C[Xd],Xs`                   |  Narrows the Usage Policies of a CC and turns on or increases the side-channel protection of the algorithm in it, if the microarchitecture supports it.
   Removing or reducing these protections is not permitted.
    `ace.harden` is an alias for `ace.restrict`.
-| `ace.input`     | `Cd\|C[Xd],%offset(Xs)`          |  Optional. Provides an input to the algorithm configured in the CC `Cd` or `CC[Xd]`, in place of providing it through the `ace.exec` instruction. Needed only when the inputs are very long, such as the inputs to certain public key schemes.
-| `ace.output`    | `%offset(Xd),Cs\|C[Xs]`          |  Optional. Writes the output of an algorithm configured in the CC `Cs` or `CC[Xs]`, in place of providing it through the `ace.exec` instruction. Needed when the outputs are very long, such as the outputs of certain public key schemes.
+| `ace.input`     | `Cd\|C[Xd],%offset(Xs)`          |  Optional. Provides an input to the algorithm configured in locker `Cd` or `CC[Xd]`, in place of providing it through the `ace.exec` instruction. Needed only when the inputs are very long, such as the inputs to certain public key schemes.
+| `ace.output`    | `%offset(Xd),Cs\|C[Xs]`          |  Optional. Writes the output of an algorithm configured in locker `Cs` or `CC[Xs]`, in place of providing it through the `ace.exec` instruction. Needed when the outputs are very long, such as the outputs of certain public key schemes.
 | `ace.error`     | `Xd`                             |  Write the error code of the ACE unit into GPR `Xd`.
 |===
 
@@ -123,24 +130,23 @@ For instance, the source CC could be a KEM that configures the destination CC wi
 ==== Cryptographic Contexts
 
 ACE does not add a traditional register file.
-Rather, it defines 32 Cryptographic Contexts (CCs) for storing cryptographic keys and metadata.
-Each CC is identified by a number from 0 to 31, which the ACE unit uses to access its contents.
+Rather, it defines 32 Cryptographic Lockers for storing cryptographic keys and metadata.
+Each lockers is identified by a number from 0 to 31, which the ACE unit uses to access its contents.
 (((Cryptographic Context)))
 
-Cryptographic Contexts (CCs) reside in a dedicated internal _context file_ (CF) that is inaccessible to any entity outside the ACE implementation, including software, other hardware blocks, and invasive debug interfaces. The CF's memory capacity is implementation-defined and may be as large as 32 times the size of the largest possible CC; however, a smaller amount of memory may be used in practice. At a minimum, the CF must be capable of holding either (i) a single instance of the largest possible CC, or the largest CC pair in which the first CC derives the second (via `ace.derive`), as well as (ii) a metadata block for each other possible context.
-(((Cryptographic context, context file)))
+Lockers reside in a dedicated internal _context file_ (CF) that is inaccessible to any entity outside the ACE implementation, including software, other hardware blocks, and invasive debug interfaces. The CF's memory capacity is implementation-defined and may be as large as 32 times the size of the largest possible CC; however, a smaller amount of memory may be used in practice. At a minimum, the CF must be capable of holding either (i) a single instance of the largest possible CC, or the largest CC pair in which the first CC derives the second (via `ace.derive`), as well as (ii) a metadata block for each other possible context.
+(((Context file)))
 
-The size of each CC is dynamic, determined by the cryptographic algorithm with which it is configured.
+The size of each locker is dynamic, determined by the cryptographic algorithm with which it is configured.
 This is an important difference with respect to GPRs and vector registers, which always have the same size.
-ACE returns an error ace_err_memory when insufficient memory prevents `ace.init` and `ace.import` operations, requiring the software to free memory by exporting or clearing a different CC. Implementations must provide sufficient CF memory to prevent infinite `ace.export`/ `ace.import` loops.
+ACE returns an error _ace_err_memory_ when insufficient memory prevents `ace.init` and `ace.import` operations, requiring the software to free memory by exporting or clearing a different locker. Implementations must provide sufficient CF memory to prevent infinite `ace.export`/ `ace.import` loops.
 
-A further difference between CCs and registers is that CCs
-are not only addressable via static 5-bit immediate addressing (as normal registers), but also indirectly, i.e., via a value from 0 to 31 in any general-purpose register.
+A further difference between lockers and registers is that lockers are not only addressable via static 5-bit immediate addressing (as normal registers), but also indirectly, i.e., via a value from 0 to 31 in any general-purpose register.
 This has two major implications:
 
-. Adding renaming to CCs would add significant complexity to the microarchitecture.
-  However CCs are much less often redefined than, say, integer or floating point registers, except for internal implied changes, and therefore we can assume that CCs are not renamed without performance issues.
-. An additional bit in the instruction encoding determines whether a CC number is given by a 5-bit immediate or by the value in a GPR.
+. Adding renaming to lockers would add significant complexity to the microarchitecture.
+  However lockers are much less often redefined than, say, integer or floating point registers, except for internal implied changes, and therefore we can assume that lockers are not renamed without performance issues.
+. An additional bit in the instruction encoding determines whether a locker number is given by a 5-bit immediate or by the value in a GPR.
 
 [[ACE-CSR]]
 ==== CSRs
@@ -149,17 +155,17 @@ ACE extends the `*status` and `misa` CSRs and adds 21 new CSRs to manage its exe
 It also requires a subset of the V extension to be implemented, including some CSRs (see <<ACE-V-dependency>> for details).
 
 .New ACE CSRs
-[cols="<15%,^10%,<25%,<50%"]
-[%autowidth,float="center",align="center",options="header"]
+[cols="<16%,^11%,<24%,<49%"]
+[float="center",align="center",options="header"]
 |===
 | Address        | Privilege | Name                     | Description
 //| 0xXXX        | URW       | `aceenable`              | Enablement of ACE instructions
 | 0xXXX          | URW       | `aceerror`               | Error code of the last ACE instruction
-| 0xXXX          | URO       | `aceccactive`            | Bitmap of active contexts
-| 0xXXX          | URO       | `aceccdirty`             | Bitmap of dirty contexts
-| 0xXXX          | URO       | `acecclazy`              | Bitmap of lazy-loaded ("placeholder") contexts
+| 0xXXX          | URO       | `aceconfigured`          | Bitmap of configured lockers
+| 0xXXX          | URO       | `aceccnative`            | Bitmap of which lockers contain a CC belonging to the current process
+| 0xXXX          | URO       | `aceccstale`             | Bitmap of lazy-loaded or dirty lockers
 | 0xXXX          | URW       | `acestart`               | ACE start byte index
-| 0xXXX--0xXXX   | MRW (RZ)  | `macercwk{0..7}`         | ACE Root Context Wrapping Key
+| 0xXXX--0xXXX   | MRW (RZ)  | `macercsk{0..7}`         | ACE Root Context Sealing Key
 | 0xXXX--0xXXX   | MRW (RZ)  | `maceOSSecret{0..3}`     | ACE OS Secret
 | 0xXXX--0xXXX   | MRW (RZ)  | `maceBootSecret0{0..3}`  | ACE Boot Secret
 |===
@@ -170,24 +176,6 @@ It also requires a subset of the V extension to be implemented, including some C
 The `misa.ACE` field uses bit `L` (11) to indicate that the ACE extension is implemented.
 (((CSR, CE field in `misa`)))
 
-// [[ACE-CSR-enable]]
-// ===== `aceenable` (deprecated)
-
-// `aceenable` is a single-bit CSR. (deprecated)
-//(((CSR,aceenable)))
-
-// Enabling ACE in any mode is done by writing a 1 to `aceenable`.
-// Disabling ACE is done by writing a zero to `aceenable`, which also clears the CCs, as described in <<ACE-tracking-cc-dirtiness>>.
-// When ACE is disabled, any ACE operation will cause an invalid instruction exception, except feature enablement.
-
-// [NOTE]
-// ====
-// //While the standard floating-point and vector extensions do not support User Mode disable/enable instructions, the ACE unit can be enabled and disabled in User Mode, instead of using an OS call or trapping.
-//
-// When a process that has ACE enabled is preempted, the parent modes inherit the state to be able to export and
-// re-import the CCs. Hence, `aceenable` is not cleared, and the `*status.ACES` fields (see <<ACE-ACES-field-in-status>>) of the parent domains will take the value Enabled.
-// Tracking the CCs which are active, resp., dirty is done on an individual basis and is described in <<ACE-tracking-cc-dirtiness>>.
-// ====
 
 [comment]
 --
@@ -237,31 +225,22 @@ Its possible values are described in <<ACE-aces-encoding>>.
 |===
 |Status |Name |Meaning
 |   0   | Off                | ACE is not enabled.  Software must not assume that the contexts are cleared and the may be configured from other environments. They are however, not accessible.  The hart will trap if User asks to enable the feature.
-// To be used when: +
-// ∙{nbsp}{nbsp} M mode (or HS mode) boots the S mode stack since a priori it does not know whether S supports the feature, and therefore it must force trapping, or, +
-// ∙{nbsp}{nbsp}When the S SW stack supports lazy context swtching.
-|   1   | Initial            | ACE is enabled. The state shall be that no CC is configured. +
+|   1   | Initial            | ACE is enabled. The state shall be that no locker is configured. +
 The ACE unit will erase all contexts if ACE is enabled by writing to the `aceenable` CSR.
 |   2   | Clean              | ACE is enabled. The state matches the last value stored on a context swap (i.e., since the last time the value "Clean" was written to the ACES field).
-|   3   | Dirty              | ACE is enabled. there may have been changes to some CC since the last time the value "Clean" was written.
+|   3   | Dirty              | ACE is enabled. there may have been changes to some locker since the last time the value "Clean" was written.
 |===
 
-Writes to ACES do not affect the contents of the CCs:  Setting ACES=Off does not destroy the state, nor does setting ACES=Initial or Clean clear the contents.
+Writes to ACES do not affect the contents of the lockers:  Setting ACES <- Off does not destroy the state, nor does setting ACES <- Initial or Clean clear the lockers.
 
 If the ACE unit contains state from a different process, and the ISE is disabled for the current one,
 then supervisor mode is supposed to have set the state to Off.
 Enabling ACE will trap to the Supervisor to allow the latter to first save the state in case it was not saved before and then clear it (lazy context switch).
 
-// The Disabled-Clean and Disabled-Clobbered states are set by the parent mode.
-// Disabled-Clobbered is used when the parent-mode software stack does not save Cryptographic Contexts before transferring control to a process that does not (yet) have enabled ACE. If that process later enables ACE by writing to `aceenable`, the hart traps to the parent mode, allowing lazy context save; the parent must then manually reset all Cryptographic Contexts. In contrast, a software stack that always saves the contexts of a switched-out process must configure only the Disabled-Clean state.
-// The Disabled-Clobbered state is primarily intended for small devices where thread migration between harts is infrequent, and possibly only one process may be dealing with cryptographic operations.
+Fine-grained tracking activeness and dirtiness of individual lockers uses the `aceactive` and `acedirty` CSRs, cf.{nbsp}<<ACE-tracking-locker-dirtiness>>.
 
-//NOTE: It is responsibility of the exception handler to properly handle the contents of the CCs when the feature is enabled while ACES=Disabled-Clobbered, as described in <<ACE-tracking-cc-dirtiness>>.
-
-Fine-grained tracking activeness and dirtiness of individual CCs uses the `aceccactive` and `aceccdirty` CSRs, cf.{nbsp}<<ACE-tracking-cc-dirtiness>>.
-
-<<<
-
+//
+//
 [[fsxsstates-copy]]
 .ACES state transitions (FS, VS, and XS state transitions -- to be cannibalised)
 [width=75,align=center,float=center,cols="<,<,<,<,<"]
@@ -304,22 +283,6 @@ N/A
 
 [width=75,align=center,float=center,cols="<,<,<,<,<"]
 |===
-5+^|Execute instruction to read state (N/A)
-
-|Action? +
-Next state
-|Exception +
-Off
-|Execute +
-Initial
-|Execute +
-Clean
-|Execute +
-Dirty
-|===
-
-[width=75,align=center,float=center,cols="<,<,<,<,<"]
-|===
 5+^|Execute instruction that possibly modifies state, including configuration
 
 |Action? +
@@ -330,6 +293,22 @@ Off
 Dirty
 |Execute +
 Dirty
+|Execute +
+Dirty
+|===
+
+[width=75,align=center,float=center,cols="<,<,<,<,<"]
+|===
+5+^|Execute instruction to `export` state
+
+|Action? +
+Next state
+|Exception +
+Off
+|Execute +
+Initial
+|Execute +
+Clean
 |Execute +
 Dirty
 |===
@@ -382,76 +361,87 @@ Initial
 Initial
 |===
 
-Let us define four properties for Cryptographic Contexts (CCs):
+
+[[ACE-tracking-locker-dirtiness]]
+===== Fine Grained Locker Management: `aceconfigured`, `acenative`, and `acestale`
+
+Let us define four properties for lockers:
 
 [horizontal]
-`configured`:: Indicates whether the Cryptographic Context (CC) is currently configured.
-`native`:: If the CC is configured, indicates whether the current process is its owner.
-`dirty`:: If the CC is configured and owned by the current process, indicates whether its state has been modified.
-`lazy`:: Indicates whether the CC's configuration is stored only in the parent's switching context, regardless of whether the CC is unconfigured or occupied by a context belonging to a different process.
+`configured`:: Indicates whether the locker is currently configured.
+`native`:: If the locker is configured, indicates whether the current process is its owner or an alien process is
+`dirty`:: If the locker is configured and owned by the current process, indicates whether its state has been modified.
+`lazy`:: Indicates whether a configuration for this locker is stored only in the parent's switching context,
+regardless of whether the locker is unconfigured or occupied by a CC belonging to a different process.
 
-We need to distinguish between the current process and the owning process of the configuration of a CC.
+Definition of *authoritative*: [.red]#TBD#.
 
-The operating system must keep not only state for each process, but also keep track for each CC to which process it belongs.
+It is the duty of the operating system must keep track:
+* for each process, and
+** for each locker, whether it is:
+ . unconfigured and
+  .. there is no saved authoritative value for the current process; or
+  .. there is a saved authoritative value for the current proceszs
+ . configured and
+  .. it contains an authoritative CC for the process; or
+  .. it contains an authoritative CC for an alien process, together with the ID of latter.
 
-
-
-<<<
-
-[[ACE-tracking-cc-dirtiness]]
-===== Fine Grained CC Management: `aceccconfigured`, `aceccnative`, and `aceccdirtylazy`
-
-States we need:
+We list now the possible states a CC may have:
 
 *VOID* (`0b000`)::
-[.darkred]#_CC is unconfigured, and there is no saved value for the current process._# +
-`[.darkred]#configured = 0, native = 0, lazy = 0.#`
-** In this case it must be `dirty = 0`. +
-Using the CC gives an error, no trap.
-** Configuring the CC works as expected, sets: +
-`configured = 1, native = 1, lazy = 0,` and `dirty = 1` {implies} *DIRTY*.
+[.darkred]#_Locker is unconfigured; there is no saved value for the current process._# +
+`[.darkred]#configured = 0, lazy = 0.#`
+** We assume `dirty = 0` and `native = 0`.
+** *Usage* gives error _ace_err_unconfigured_, does not trap.
+** *Configuration* does not trap, works as expected-including errors with *export* or *clone* - and sets: +
+`configured <- 1, native <- 1, lazy <- 0,` and `dirty <- 1` {implies} *DIRTY*.
 
 //
 
 *LAZY* (`0b100`)::
-[.darkred]#_CC is unconfigured, and parent has saved a value to be lazy-loaded for the current process._# +
-`[.darkred]#configured = 0, native = 0, lazy = 1.#`
-** In this case it must be `dirty = 0`.
-** Accessing the CC traps to allow the OS to lazy load it for the current process.
-** Can be used freely. If potentially modified, `dirty` becomes `1`.
-** Configuring the CC works as expected, and sets: +
-`configured = 1, native = 1, lazy = 0`, and `dirty = 1` {implies} *DIRTY*.
+[.darkred]#_Locker is unconfigured; parent has saved a value to be lazy-loaded for the current process._# +
+`[.darkred]#configured = 0, lazy = 1.#`
+** We assume `dirty = 0` and `native = 0`.
+** *Usage* or *export* cause a trap to allow the OS to lazy load a CC's value in the locker for the current process first, then set `dirty <- 0`, `lazy <- 0` and the instruction is restarted unrestricted and operates from the state *CLEAN*.
+   If the CC in the locker has been potentially modified, then `dirty <- 1` {implies} *DIRTY*.
+** *Configuration* of the locker works as expected, and sets: +
+   `configured <- 1, native <- 1, lazy <- 0`, and `dirty <- 1` {implies} *DIRTY*.
 
 //
 
 *CLEAN* (`0b011`)::
-[.darkred]#_CC is configured for the current process and loaded. Unchanged since last switch._# +
+[.darkred]#_Locker is configured for the current process and loaded. Unchanged since last switch._# +
 `[darkred]#configured = 1, native = 1, lazy = 0, dirty = 0.#`
 ** If the process is interrupted now, the OS does not need to save it again.
-** Can be used freely. If potentially modified, `dirty` becomes `1`.
-** Configuring the CC works as expected, and sets: +
-`configured = 1, native = 1, lazy = 0`, and `dirty = 1` {implies} *DIRTY*.
+** *Usage* is unrestricted; if the CC in the locker is potentially modified, `dirty <- 1` {implies} *DIRTY*.
+** *Configuration* works as expected, and sets: +
+`configured <- 1, native <- 1, lazy <- 0`, and `dirty <- 1` {implies} *DIRTY*.
 
 //
 
 *DIRTY* (`0b111`)::
-[.darkred]#_CC is configured for the current process and loaded. Potentially changed since last switch._# +
+[.darkred]#_Locker is configured for the current process and loaded. Potentially changed since last switch._# +
 `[darkred]#configured = 1, native = 1, lazy = 0, dirty = 1.#`
-** If the process is interrupted now, the OS must save the CC.
-** Rest is as in the previous case.
+** If the process is interrupted now, the OS must save the CC in the locker.
+** *Usage* is unrestricted.
+** *Configuration*: Works as expected, and leave the properties unchanged: +
+`configured <- 1, native <- 1, lazy <- 0`, and `dirty <- 1` {implies} *DIRTY*.
 
 //
 
 *ALIEN* (`0b001`)::
-[.darkred]#_CC is configured for a different process, blocked for the current one, no value to be lazy-loaded._# +
+[.darkred]#_Locker is configured for a different process; blocked for the current one; no value to be lazy-loaded._# +
 `[darkred]#configured = 1, native = 0, lazy = 0.#`
-** _using_ the CC will result in an error.
-** _configuring_ the CC will first trap to the operating system, to allow the latter to save the CC to the state of the owning process, clear it, update the flags to *VOID* to allow the current process to configure it, and return to the process to restart the operation allowing the configuration.
+** *Usage* results in error _ace_err_unconfigured_
+** *Configuration* of the locker will first trap to the operating system, to allow the latter to:
+export the CC in the locker to the state of the owning process;
+clear the locker;
+update the flags to *VOID* to allow the current process to configure it, and return to the process to restart the operation allowing the configuration.
 
 //
 
 *ALIEN_LAZY* (`0b101`)::
-[.darkred]#_CC is configured for a different process, blocked for the current one, and there is a value to be lazy loaded for the current process._# +
+[.darkred]#_Locker is configured for a different process; blocked for the current one; there is a value to be lazy loaded for the current process._# +
 `[darkred]#configured = 1, native = 0, lazy = 1.#`
 ** In this case accessing it will trap to the operating system.
 ** The operating system must save the current value to the state of its owner, load the value from the current state. +
@@ -460,70 +450,20 @@ Using the CC gives an error, no trap.
 
 The encoding can be interpreted as follows:
 
-* Bit 0 distinguishes between unconfigured (0) or configured (1);
+* Bit 0 distinguishes between unconfigured (value is 0) or configured (1);
 * Bit 1 distinguishes between native (1) or alien (0), where unconfigured is considered alien in order to have a value equal to zero for the *VOID* state; and
 * Bit 2 has a compressed semantic, since it distinguishes between present/clean (0) or lazy-loaded/dirty (1) -- essentially 0 means "parent mode has nothing extra to do" and 1 means "parent mode has something extra to do".
 
-This also means that we can collect the bits into three CSRs:
-Bit 0 in `aceccconfigured`, Bit 1 in `aceccnative`, and Bit 2 in `aceccstale`.
-The reason for the use of "stale" here is that, in computer architecture, a state is said to be stale if it cannot be used as-is because it is displaced, like a CC that needs to be lazy-loaded first, or its value no longer reflects the correct state, like the value of the CC saved by the context switching code in the parent mode. So, there is a bit of an abuse of language, since in the contexts of laziness and dirtiness it is not the same object that it stale.
+Therefore, we can collect the bits into three CSRs:
+Bit 0 in `aceconfigured`, Bit 1 in `acenative`, and Bit 2 in `acestale`.
+The reason for the use of "stale" here is that, in computer architecture, a state is said to be stale if it cannot be used as-is because it is displaced, like a CC that needs to be lazy-loaded first, or its value no longer reflects the correct state, like the CC in the locker saved by the context switching code in the parent mode. So, there is a bit of an abuse of language, since in the contexts of laziness and dirtiness it is not the same object that it stale.
 
-NOTE: This 6-state property can track the CC states for all higher-privileged modes.
+NOTE: This 6-state property can track the locker states for all higher-privileged modes.
 S/VS can trust the values coming from U, since U cannot write to these registers.
 However, M and HS cannot trust the values from S and VS, since the latter can write to these registers.
-This implies that M, resp., HS mode must always context-switch all CCs when context-switching S, resp., VS domains, since it doesn't know which CCs have changed.
-We *could* add additional registers to track changes at each level.  This should be done for F and V too, ideally, in order to make the architecture consistent.
+This implies that M, resp., HS mode must always context-switch all lockers when context-switching S, resp., VS domains, since it doesn't know which lockers have changed. We *could* add additional registers to track changes at each level.  This should be done for F and V too, ideally, in order to make the architecture consistent.
 
 // [.red]#Remember to add the handling of the fine-grained CC management CSRs.#
-
-
-
-[quote]
-____
-*TBD: rewrite.*
-
-This is done by using three CSRs, which track the use and dirtiness of the CCs individually, as well as their lazy loading status.
-
-[arabic]
-. `aceccactive`: XLEN bits, with a bit per CC to denote whether the register is in use or not (cleared contextually to CC erasure to dispose of the key).
-(((CSR,aceccactive)))
-. `aceccdirty`: XLEN bits, with a bit per CC to track whether the corresponding CC has been modified since the last time the same bit has been cleared.
-(((CSR,aceccdirty)))
-. `acecclazy`: XLEN bits, with a bit per CC to track whether the corresponding CC is to be lazily loaded or is actually present.
-(((CSR,acecclazy)))
-
-If the _i_-th bit of `aceccdirty` is set, then the _i_-th bit of `aceccactive` must also be set.
-
-If the _i_-th bit of `acecclazy` is set, then the _i_-th bit of `aceccactive` is automatically cleared, and the CC does not consume any memory in the CF.
-
-Two types of actions can modify a CC and thus must update also `aceccdirty`:
-
-* An explicit initialization/configuration/import; and
-* Certain cryptographic operations, such as absorbing information in a hash function, that modify the internal state.
-
-It is also possible to directly write to `aceccdirty` to optimize context switching.
-
-Implementations are required to track the dirtiness of any CC precisely and individually.
-This is different from the tracking of the dirtiness of the floating-point state, for instance.
-
-Context-switching code must save CC number _i_ if the _i_-th bit of `aceccdirty` is set.
-However, it can clear `aceccdirty` when returning control to the same process after restoring its ACE state.
-This indicates to the context-switching code that there is no need to save the CC number _i_ again at the next context switch out of that process unless it has been modified again thus setting the _i_-th bit of `aceccdirty` anew.
-
-Upon a write to `aceenable` that changes its value, the following happens to `aceccvalid` and `aceccdirty`:
-
-* If ``aceenable``'s value is changed to 0, then all CCs are cleared, both `aceccvalid` and `aceccdirty` are set to 0, and ``*status.ACES`` is set to Disabled-Clean.
-* If ``aceenable``'s value is changed to 1, and if the parent domain's ``*status.ACES``=[.red]#INIT?#Disabled-Clean, then we simply assume that the parent process has cleared the CC and set both `aceccvalid` and `aceccdirty` to 0 before transferring the control flow to the current process.
-* If ``aceenable``'s value is changed to 1, and if the parent's ``*status.ACES``=[.red]#OFF?#/Disabled-Clobbered, then the hart traps to allow the parent domain responsible for handling context-switched to finish saving the state and ensure that both `aceccvalid` and `aceccdirty` are set to 0, and finally set ``*status.ACES`` to Disabled-Clean.
-// [.darkred]#This behavior should be restricted only to User mode.#
-
-When the `acecclazy` bit for a given CC is set, most operations targeting that CC will trap.
-//(see <<ACE-rules-lazy-loader>> for the specific list).
-This trap enables parent software to load the context, potentially by first freeing other contexts to create space.
-Consequently, we call CCs with the `acecclazy` bit set _placeholder contexts_.
-Although not required for typical operation, this mechanism is essential for supporting virtual machine migration when the target device's ACE unit has a smaller context file (CF), in which case, the OS in the VM may not be able to reload all contexts for a given process.
-It also permits system software to implement lazy loading for all contexts.
-____
 
 [[ACE-CSR-ace-error]]
 ===== `aceerror`
@@ -542,25 +482,24 @@ Error codes specific to custom algorithms may be freely defined in the range [12
 .Error codes and their meanings
 [float="center",align="center",width="100%",cols="^6%,<24%,<70%",options="header"]
 |===
-|Value | Mnemonic                  | Examples
-|  0   | ace_err_ok                | No error.
-|  1   | ace_err_authentication    | Authentication failure in `ace.import`, but can also follow `ace.exec` with certain algorithms.
-|  2   | ace_err_privilege         | `ace.exec`, `ace.state`, `ace.clone`, `ace.derive` failed because the access control policies in the metadata prevent usage in the current architectural state.
-|  3   | ace_err_invalid           | Invalid input or operation. +
+|Value | Mnemonic                | Examples
+|  0   | ace_err_ok              | No error.
+|  1   | ace_err_authentication  | Authentication failure in `ace.import`, but can also follow `ace.exec` with certain algorithms.
+|  2   | ace_err_privilege       | `ace.exec`, `ace.state`, `ace.clone`, `ace.derive` failed because the access control policies in the metadata of the CC prevent usage in the current architectural state.
+|  3   | ace_err_invalid         | Invalid input or operation. +
 Examples:
 the metadata section passed to `ace.init` is invalid;
 encryption, resp., decryption is requested from a CC only configured for decryption, resp., encryption, and more generally
 the current state of the CC does not expect the used Form of `ace.exec`;
 the requested change of state in `ace.state` is not permitted;
-the change in usage policies in `ace.restrict` is not permitted because it would either downgrade or overwrite the current restrictions in the CC;
-a request to clone a CC violates the re-initialisation policies of the source CC;
-software tried to use an incomplete CC as a source in a `ace.exec`, `ace.state`, `ace.input`, `ace.output`, `ace.clone`, `ace.derive`, `ace.harden`, `ace.restrict` operations.
-|  4   | ace_err_unimplemented     | The requested algorithm is not implemented. May be triggered also on algorithm variants, for instance if `ace.harden` is issued on an algorithm for which a non-side channel protected version is not implemented.
-|  5   | ace_err_memory            | The free internal CF memory is not sufficient to perform the `ace.init`, `ace.exec`, `ace.clone`, or `ace.derive`.
+the change in usage policies in `ace.restrict` is not permitted because it would either downgrade or overwrite the current restrictions in the CC in the locker;
+software tried to use an incomplete CC in a locker as a source in a `ace.exec`, `ace.state`, `ace.input`, `ace.output`, `ace.clone`, `ace.derive`, `ace.harden`, `ace.restrict` operations.
+|  4   | ace_err_unimplemented   | The requested algorithm is not implemented. May be triggered also on algorithm variants, for instance if `ace.harden` is issued on an algorithm for which a non-side channel protected version is not implemented.
+|  5   | ace_err_memory          | The free internal CF memory is not sufficient to perform the `ace.init`, `ace.exec`, `ace.clone`, or `ace.derive`.
 The implementation must make sure this cannot happen with any other operation.
-If algorithms that support `ace.derive` are implemented, the implementation must make sure that both the input and output CCs of this operation can be allocated.
-|  6   | ace_err_unallocated_CC    | Software tried to use an unallocated CC as a source in one of the following instructions: `ace.exec`, `ace.state`, `ace.input`, `ace.output`, `ace.clone`, `ace.derive`, or `ace.harden`/`ace.restrict`.. +
-This can be used in low CF memory situations to trigger a lazy re-load of that CC.
+If algorithms that support `ace.derive` are implemented, the implementation must make sure that both the input and output CCs of this operation can be allocated in the CF.
+|  6   | ace_err_unconfigured    | Software tried to use an unconfigured locker as a source in one of the following instructions: `ace.exec`, `ace.state`, `ace.input`, `ace.output`, `ace.clone`, `ace.derive`, or `ace.harden`/`ace.restrict`.. +
+This can be used in low CF memory situations to trigger a lazy re-load.
 |===
 (((ACE, error codes)))
 
@@ -587,9 +526,10 @@ Only the instructions explicitly mentioned above support non-zero `acestart` val
 _A single `acestart` value suffices due to the authenticated encryption algorithm used in the `ace.import` and `ace.export` instructions.
 Their operations behave as follows:_
 
-* `_ace.init_` _is a single-pass operation: the metadata section is read first, determining the payload length. If sufficient memory is available, subsequent blocks are read sequentially and passed to a deserialization circuit to populate the CC._
-* `_ace.import_` _operates similarly to `ace.init`: the metadata section is read first to determine the payload length. If sufficient memory is available, the remaining blocks are read, decrypted, and passed to a deserialization circuit to populate the CC._
-* `_ace.export_` _involves two passes, but the first pass is entirely internal to the ACE unit. Hence, the first pass cannot cause a page fault, and is easily restarted. Specifically, it computes the SIV by applying POLYVAL to the serialized CC content. Subsequently, the serialized metadata, the nonce, and the SIV are written out, followed by the CC content serialized, encrypted and written out block by block. It is this last part that may cause page faults, and that may require resumption._
+* `_ace.init_` _is a single-pass operation: the metadata section is read first, determining the payload length.
+If sufficient memory is available, subsequent blocks are read sequentially and passed to a deserialization circuit to populate the locker with the CC._
+* `_ace.import_` _operates similarly to `ace.init`: the metadata section is read first to determine the payload length. If sufficient memory is available, the remaining blocks are read, decrypted, and passed to a deserialization circuit to populate the locker._
+* `_ace.export_` _involves two passes, but the first pass is entirely internal to the ACE unit. Hence, the first pass cannot cause a page fault, and is easily restarted. Specifically, it computes the SIV by applying POLYVAL to the serialized content of the CC in the locker. Subsequently, the serialized metadata, the nonce, and the SIV are written out, followed by the content serialized, encrypted and written out block by block. It is this last part that may cause page faults, and that may require resumption._
 
 Although these operations are inherently complex, the ACE unit is architected to function like a separate machine executing simpler instructions sequentially. State machines receive commands from the CPU and break them into smaller steps.
 Therefore, separating data transfer from cryptographic operations in import/export is unnecessary. Otherwise, the input would need to be stored within the ACE unit and then processed rather than processed inline while loading it with minimal overhead-and this may lead to higher internal resource requirements.
@@ -611,26 +551,26 @@ In the metadata section, `ASID` and `VMID` are always zero padded to the maximal
 [.darkred]#However, we need a mechanism to make sure that if the system is not configured to insert `ASID`, resp., `VMID` into the GVAs/GPAs, we can still use them for the purpose of policing the usage of CCs.#
 
 [[ACE-providing-keys,Remark {counter:remark}]]
-*Remark {counter:remark}.* _The software in each World/Supervisor Domain is normally responsible to generate or obtain their own keys, and if a process (applet) in one World/Supervisor Domain is responsible to provide keys to other Worlds/Supervisor Domains, it is the responsibility of the MM to perform an appropriate sequence of import, switch the CWK, then export operations._
+*Remark {counter:remark}.* _The software in each World/Supervisor Domain is normally responsible to generate or obtain their own keys, and if a process (applet) in one World/Supervisor Domain is responsible to provide keys to other Worlds/Supervisor Domains, it is the responsibility of the MM to perform an appropriate sequence of import, switch the CSK, then export operations._
 
-[[ACE-CSR-macercwk]]
-===== `macercwk`
+[[ACE-CSR-macercsk]]
+===== `macercsk`
 
-If the RCWK can be programmed, it can only be programmed by M-mode.
-(((CSR, `macercwk`)))
+If the RCSK can be programmed, it can only be programmed by M-mode.
+(((CSR, `macercsk`)))
 For this purpose, we use eight 32-bit WARL CSRs in RV32 and four 64-bit WARL CSRs in RV64.
-The CSRs are: `macercwk0`, `macercwk1`, `macercwk2`, and `macercwk3` in RV64, to which we add
-`macercwk4`, `macercwk5`, `macercwk6`, and `macercwk7` in RV32.
-Bits [(_i_+1) XLEN - 1 : _i_ XLEN] of the RCWK are written to `macercwk{i}`.
+The CSRs are: `macercsk0`, `macercsk1`, `macercsk2`, and `macercsk3` in RV64, to which we add
+`macercsk4`, `macercsk5`, `macercsk6`, and `macercsk7` in RV32.
+Bits [(_i_+1) XLEN - 1 : _i_ XLEN] of the RCSK are written to `macercsk{i}`.
 
-Attempting to access the `macercwk` block outside of MM will cause an illegal instruction exception.
+Attempting to access the `macercsk` block outside of MM will cause an illegal instruction exception.
 
 NOTE: Discoverability of whether the RCWK can be configured or not is not critical, since this is information known by the MM firmware.
-[.darkred]#We can use the data structure pointed by `mconfigptr` in order to track optional features of ACE including whether the `macercwk` CSR block is implemented, and if not whether whether the value is ephemeral or fixed.#
+[.darkred]#We can use the data structure pointed by `mconfigptr` in order to track optional features of ACE including whether the `macercsk` CSR block is implemented, and if not whether whether the value is ephemeral or fixed.#
 
-//User mode, and even operating systems and hypervisors, need not be aware of the `macercwk` block. Other mechanisms could have been chosen to program the CWK, such as an MM-exclusive dedicated hardware interface or memory-mapped interface.
+//User mode, and even operating systems and hypervisors, need not be aware of the `macercsk` block. Other mechanisms could have been chosen to program the CSK, such as an MM-exclusive dedicated hardware interface or memory-mapped interface.
 
-NOTE: Mechanisms for persisting Root Context Wrapping Keys (RCWKs) across reboots or transferring them between devices are outside the scope of the ACE architecture. Such mechanisms are system-specific and fall under the purview of MM firmware.
+NOTE: Mechanisms for persisting Root Context Sealing Keys (RCSKs) across reboots or transferring them between devices are outside the scope of the ACE architecture. Such mechanisms are system-specific and fall under the purview of MM firmware.
 For cross-device migration, the use of a public-key key-encapsulation mechanism (KEM) is recommended.
 
 ===== Re-configurable Localities
@@ -656,9 +596,8 @@ The reason `maceBootSecret*` must be reconfigurable is that it must change in a 
 [[ACE-data-structures]]
 ==== Data Structures
 
-ACE defines two distinct representations of cryptographic information: the CC configuration format, and the encrypted, authenticated SCC format. These two  formats are architected for software portability and interoperability.
-//, enabling virtual-machine migration across heterogeneous hardware—for example, between cloud or consumer devices with CPUs from different vendors.
-The internal CC representation, on the other hand, is implementation-specific.
+ACE defines two distinct representations of cryptographic information: the configuration format, which is loaded into a locker to create a CC, and the encrypted, authenticated SCC format. These two  formats are architected for software portability and interoperability.
+The internal CC representation in a locker, on the other hand, is implementation-specific.
 
 All data formats are little-endian.
 
@@ -666,7 +605,7 @@ All data formats are little-endian.
 ===== Metadata Section Format
 
 The metadata section is 64 bits long and its format described in <<ACE-metadata-standard>>.
-This format is used for CC initialization, export and import purposes.
+This format is used for locker initialization, and CC export and import purposes.
 The internal representation is implementation specific.
 (((Cryptographic Context,metadata,format)))
 
@@ -683,7 +622,7 @@ Future format will have a 1 in this position and may be longer than 64 bits.
 | [13:12] |   2  | Direction_Policy       | Determines whether the CC may be used for encryption (bit 12 set), decryption (bit 13 set), or both (bits 12 and 13 set).
 Valid only for encryption/decryption primitives or modes, and ignored, for instance, for hash functions.
 | [15:14] |   2  | Key_Type               | By explicit value / Immutable (index) / Internally generated.
-| [17:16] |   2  | Completion             | Defined in <<ACE-CC-complete>>.
+| [17:16] |   2  | Completion             | Defined in <<ACE-locker-complete>>.
 Used to determine whether an operation must be restarted.
 | [21:18] |   4  | State (also Direction) | Encoding the current state of the state machine of the algorithm as a number.
 The value must be zero in the initialization data.
@@ -699,8 +638,7 @@ Disallow the _usage_ of this CC in User, (Virtual) Supervisor, Hypervisor, resp.
 |===
 
 Algorithms are encoded in a 8 bit field.
-A zero in the algorithm field means the CC is invalid.
-Algorithm numbers 1-191 are architecture-defined and the list of such encodings is maintained by RVI.
+Algorithm numbers 0-191 are architecture-defined and the list of such encodings is maintained by RVI.
 See <<ACE-algorithms>> for the currently encoded algorithms.
 Algorithm numbers 192-255 are reserved for custom algorithms.
 
@@ -724,12 +662,12 @@ In such a case, the value of the SC_Protection field must be set to 3.
 |===
 | Value | Description
 |   0   | Explicit value.
-|   1   | Internal table. System specific. For each algorithm as specified in <<ACE-algorithms>>, the part of the content that normally contains the key(s) is replaced by a 64-bit value which is an index into the internal System Keys Table (SKT) --- for both Configuration Input and the SCCs. The actual value of the key is never included in exported content. For threshold algorithms, ACE may copy the key material from the SKT into the CC and expand it into multiple shares.
-|   2   | Internally generated key. System specific.  In the Configuration Input, the part of the content that normally contains the key(s) is replaced by a "recipe" in a system-specific format. The format is not specified by the ISA and may not be portable to other systems. Once the key material has been internally generated, the value is included in the SCC as part of the content - not the "recipe" - as for any other key(s) for the same specified algorithm.  Even in the SCC, however, the Key_Type field of the metadata, both in the CC and in an SCC, will keep the value 2.
+|   1   | Internal table. System specific. For each algorithm as specified in <<ACE-algorithms>>, the part of the content that normally contains the key(s) is replaced by a 64-bit value which is an index into the internal System Keys Table (SKT) --- for both Configuration Input and the SCCs. The actual value of the key is never included in exported content. For threshold algorithms, ACE may copy the key material from the SKT into the locker and expand it into multiple shares.
+|   2   | Internally generated key. System specific.  In the Configuration Input, the part of the content that normally contains the key(s) is replaced by a "recipe" in a system-specific format. The format is not specified by the ISA and may not be portable to other systems. Once the key material has been internally generated, the value is included in the SCC as part of the content - not the "recipe" - as for any other key(s) for the same specified algorithm.  The Key_Type field of the metadata in all representations of the CC, will keep the value 2.
 |   3   | Invalid.
 |===
 
-[[ACE-CC-complete]]
+[[ACE-locker-complete]]
 .Encoding of Completion field
 [float="center",align="center",width="58%",cols="^8%,<50%",options="header"]
 |===
@@ -749,7 +687,7 @@ If the H extension is not enabled, bit 28 must be set to 1, and bits 31 and [63:
 The "UC_Policy_4" field is 16 bits long for compatibility with architectures employing 16-bit `VMID` fields (for instance, in heterogeneous systems).
 While interoperability cannot be guaranteed when this policy is used, this ensures that the two top bits are not used for other purposes. +
 Filtering usage by Supervisor Domain or World ID is not supported, and not only because of lack of space in a 64-bit metadata section:
-Reconfiguring the RCWK is a better approach for such isolation requirements, whereas isolation by `ASID` and `VMID` is a weaker security feature.
+Reconfiguring the RCSK is a better approach for such isolation requirements, whereas isolation by `ASID` and `VMID` is a weaker security feature.
 
 [[ACE-Localities]]
 ===== Localities
@@ -758,9 +696,9 @@ Internally, ACE keeps a table of 128-bit Locality Secrets (LS), the Locality Sec
 Some of these entries are fixed, other values may be configurable only using an implementation-specific authenticated hardware procedure, and the remaining may be programmed by MM (*Note:* _we need to define the corresponding CSRs_).
 The LST is a global table shared across all ACE units with some fields which can be MM-programmed and are architectural (i.e., per hart).
 
-If the Locality Field of a context (CC/SCC) is -1 (all ones), then the RCWK is used.
-Otherwise, this value is used as an index _i_ in the HST, and a derived key computed from RCWK and LST[_i_] is used for import/export in place of the RCWK.
-The encryption and authentication keys are then derived from the DCWK.
+If the Locality Field of a CC is -1 (all ones), then the RCSK is used.
+Otherwise, this value is used as an index _i_ in the HST, and a derived key computed from RCSK and LST[_i_] is used for import/export in place of the RCSK.
+The encryption and authentication keys are then derived from the DCSK.
 
 In <<ACE-locality-indexes>>, we list the mandatory entries.
 Column "MM-Config." indicates whether MM may be allowed to configure the entry.
@@ -774,7 +712,7 @@ device-wide, or (usually) OS-wide.
 |===
 .>| Name .>| Description .>| Domain | MM-Config. .>| Value +
 (Index)
-| (No Locality binding)     | No CWK derivation. CC bound to Root CWK only. | -- | -- | -1 (15)
+| (No Locality binding)     | No CSK derivation. CC bound to Root CSK only. | -- | -- | -1 (15)
 | ChipManufacturerSecret    | Identifies the manufacturer of the SoC. Permanent. | SoC | N | 0
 | ChipModelSecret           | Identifies specific chip model/family. Permanent. | SoC | N | 1
 | ChipUniqueSecret          | Unique for each SoC. Permanent. | SoC | N | 2
@@ -792,10 +730,10 @@ The constant Localities_MAX is the maximum number of Localities supported by the
 
 NOTE: MM is responsible for virtualizing the OSSecret and BootSession_Secret Locality Secrets.
 
-*Example*: _If a key's metadata specifies a Locality field value of "2", the key for import/export operations is derived from the RCWK and the "OEM Secret".
+*Example*: _If a key's metadata specifies a Locality field value of "2", the key for import/export operations is derived from the RCSK and the "OEM Secret".
 Consequently, while `ace.export` remains functional on the same device to support context switching, an `ace.import` of the resulting SCC on a device from a different OEM will trigger an authentication failure (provided that the OEM Secrets are, in fact, different)._
 
-NOTE: _A CC may reference a key via an index into the system-defined System Key Table (SKT).
+NOTE: _A CC may reference a key via an index into the system-defined System Key Table (SKT).loc
 A device-specific SKT entry may correspond to a different key on another device, leading to unspecified behavior.
 Consequently, implementations of the STK must provide appropriate Locality metadata to the ACE unit during CC configuration, verify compatibility between the key's policies and the user's request, and enforce stricter policies if necessary._
 
@@ -806,14 +744,14 @@ The formats of the configuration payload, of the content section, and of SCCs
 depends on the algorithm being used.
 Each algorithm must provide following functions:
 
-* `metadata_serialize(CC) -> byte array`: Serializes the internal metadata into a 64-bit block for export.
-* `metadata_deserialize(CC,byte array) -> CC.metadata`: Takes a metadata block formatted as described in <<ACE-metadata>> and deserializes it to the internal representation of the metadata section.
-* `initial_content_deserialize(CC,byte array) -> CC.content`:
+* `metadata_serialize(locker) -> byte array`: Serializes the internal metadata into a 64-bit block for export.
+* `metadata_deserialize(CC,byte array) -> locker.metadata`: Takes a metadata block formatted as described in <<ACE-metadata>> and deserializes it to the internal representation of the metadata section.
+* `initial_content_deserialize(CC,byte array) -> locker.content`:
 Reads the information provided to `ace.init` as the byte array that follows the metadata, and deserializes it for the internal representation.
 It must be the same as the format used for the SCC except for some omitted fields.
-* `content_serialize(CC) -> byte array`: Serializes a CC's content to a byte array to be encrypted for export.
-* `content_deserialize(CC,byte array) -> CC.content`:
-Takes the decrypted byte array, that comes after the metadata, nonce and authentication tag, and deserializes it into a CC's content.
+* `content_serialize(locker) -> byte array`: Serializes a CC's content to a byte array to be encrypted for export.
+* `content_deserialize(locker,byte array) -> CC.content`:
+Takes the decrypted byte array, that comes after the metadata, nonce and authentication tag, and deserializes it into a locker's content.
 The format depends on the algorithm which is specified in metadata information.
 
 The size of a SCC, and of all byte arrays read or written by the above five functions, must be a multiple of 8 bytes.
@@ -830,13 +768,13 @@ Plaintext Format of SCC:::
 `bytes 0..7  {nbsp}{nbsp}{nbsp}{nbsp}{nbsp}{nbsp}` contain the 64-bit metadata section, +
 `bytes 8..19  {nbsp}{nbsp}{nbsp}{nbsp}{nbsp}` contain the nonce (96 bits), +
 `bytes 20..31  {nbsp}{nbsp}{nbsp}{nbsp}` contain the tag (96 bits), and +
-`bytes 32..u+31  {nbsp}{nbsp}` contain `content_serialize(CC.content)`, which has a byte length of `u`.
+`bytes 32..u+31  {nbsp}{nbsp}` contain `content_serialize(locker.content)`, which has a byte length of `u`.
 +
 Only the serialization of the content is encrypted, while both metadata and content are included in the computation of the authentication tag, as described next.
 
 //
 
-To describe the authenticated encryption of a SCC, we first define the RFC8452 Key Derivation and the DCWK Derivation functions.
+To describe the authenticated encryption of a SCC, we first define the RFC8452 Key Derivation and the DCSK Derivation functions.
 
 .RFC8452 Key Derivation
 [source,sail]
@@ -853,13 +791,13 @@ function RFC8452_KeyDeriv(K) = {
 .Derived Key Derivation
 [source,sail]
 ----
-function DCWK_KeyDeriv(K,L) = {
+function DCSK_KeyDeriv(K,L) = {
   AESE256(K, L ^ (0[125:0] @ 0b010))[127:0] @
   AESE256(K, L ^ (0[125:0] @ 0b000))[127:0]
 }
 ----
 
-We can now define the generation of the SCC from a CC.
+We can now define the generation of the SCC from the CC in a locker.
 
 .Generation of the SCC from a CC Using AES-GCM-SIV (RFC8452)
 [source,sail]
@@ -874,12 +812,12 @@ Kenc : bits(256);
 Kauth : bits(128);
 
 if (metadata.Locality == 15) then {
-    CWK = RCWK;
+    CSK = RCSK;
 } else {
-    CWK = DCWK_KeyDeriv(RCWK, LST[metadata.Locality]);
+    CSK = DCSK_KeyDeriv(RCSK, LST[metadata.Locality]);
 }
 
-{Kenc, Kauth} = RFC8452_KeyDeriv(CWK);
+{Kenc, Kauth} = RFC8452_KeyDeriv(CSK);
 let T : bits(96) = POLYVAL(Kauth, metadata @ content
                                            @ IntTo64Bits(64)
                                            @ IntTo64Bits(len_in_bits(content)))[95:0];
@@ -898,10 +836,10 @@ if (last_block_fractional) then {
 ----
 
 NOTE: Due to the computational cost of the derivation functions, implementations may
-cache recently used derived keys for both the Root RCWK and Locality-derived keys.
+cache recently used derived keys for both the Root RCSK and Locality-derived keys.
 
-[[ACE-RCWK-vs-ID]]
-=== Programmable RCWKs vs. ID-based Usage Control
+[[ACE-RCSK-vs-ID]]
+=== Programmable RCSKs vs. ID-based Usage Control
 
 (This section is informative and non-normative.)
 
@@ -909,29 +847,29 @@ ACE provides two architected layers of usage control.
 
 At the User and Supervisor levels, CC usage can be optionally constrained by ASID and VMID.
 This is a lightweight mechanism.
-Because filtering by ASID is inactive when the hart is in S mode or higher, context switching can be performed without modifying the RCWK.
+Because filtering by ASID is inactive when the hart is in S mode or higher, context switching can be performed without modifying the RCSK.
 
-At higher privilege levels, not only the usage, but even the import of CCs can be restricted by a programmable RCWK.
+At higher privilege levels, not only the usage, but even the import of CCs can be restricted by a programmable RCSK.
 This offers stronger security by also preventing unauthorized `ace.import` operations, but incurs higher overhead as it typically requires an `ecall`.
 
-The envisioned usage model employs ASID/VMID filtering at the U level, and potentially at the S level in high-performance systems where migration is not required (e.g., automotive applications). Cryptographic domain separation via the RCWK is intended for Virtual Machines, Supervisor Domains, Worlds, and TEEs within those contexts, as these demand stronger security guarantees.
+The envisioned usage model employs ASID/VMID filtering at the U level, and potentially at the S level in high-performance systems where migration is not required (e.g., automotive applications). Cryptographic domain separation via the RCSK is intended for Virtual Machines, Supervisor Domains, Worlds, and TEEs within those contexts, as these demand stronger security guarantees.
 
-Although the architecture does not preclude assigning unique RCWKs to individual U processes, doing so would impose a significant burden on the system software stack. Hardware support could mitigate this—for example, by automatically switching RCWKs based on ASID/VMID without per-context-switch `ecall` overhead. Such a solution is not currently being explored due to its architectural complexity and inflexibility, and HW cost-for instance, it would require secure management of very large RCWK tables, including the potential need to save, restore, or migrate of entire blocks of RCWKs.
+Although the architecture does not preclude assigning unique RCSKs to individual U processes, doing so would impose a significant burden on the system software stack. Hardware support could mitigate this—for example, by automatically switching RCSKs based on ASID/VMID without per-context-switch `ecall` overhead. Such a solution is not currently being explored due to its architectural complexity and inflexibility, and HW cost-for instance, it would require secure management of very large RCSK tables, including the potential need to save, restore, or migrate of entire blocks of RCSKs.
 
 [comment]
 --
 ACE has two architected layers of  Usage Control .
 
 At the U and S levels, CCs usage can be constrained by ASID and VMID. This is a lightweight solution.
-Since ASID filtering is not active while the hart is in S mode or higher, context switching can be performed without changing the RCWK.
+Since ASID filtering is not active while the hart is in S mode or higher, context switching can be performed without changing the RCSK.
 
-At higher levels, even import of CCs can be constrained by a programmable RCWK.
+At higher levels, even import of CCs can be constrained by a programmable RCSK.
 This is a more secure solution, and prevents also `ace.import`, but it is also heavier, since it requires an `ecall`.
 
-Indeed, we have envisioned a system where ASID/VMID filtering is used at the U level, and possibly at S as well in systems where migration is not supported but high performance is (such as automotive applications). The cryptographic domain separation by RCWK is for VMs, Supervisor Domains, Worlds, and also for TEEs in the previous contexts as well, since these require higher security guarantees.
+Indeed, we have envisioned a system where ASID/VMID filtering is used at the U level, and possibly at S as well in systems where migration is not supported but high performance is (such as automotive applications). The cryptographic domain separation by RCSK is for VMs, Supervisor Domains, Worlds, and also for TEEs in the previous contexts as well, since these require higher security guarantees.
 
-While the architecture does not prevent individual RCWKs per U-mode process, this would add burden to the system stack.
-This could be accelerated by hardware support, for instance, by providing a mechanism to change automatically RCWKs depending on the ASID/VMID without requiring an `ecall` per context switch. We are not exploring such a solution for now because it would be very difficult to architect and unflexible.
+While the architecture does not prevent individual RCSKs per U-mode process, this would add burden to the system stack.
+This could be accelerated by hardware support, for instance, by providing a mechanism to change automatically RCSKs depending on the ASID/VMID without requiring an `ecall` per context switch. We are not exploring such a solution for now because it would be very difficult to architect and unflexible.
 --
 
 // We should not forget that ACE has been designed to provide a standardised accelerator interface to software, where the software could also set their own keys. I have worked on DRM schemes, like implementations of Widevine, that use an obfuscation mechanism for the keys, which are then briefly unwrapped to be used, and then erased — all in user space. This would optimise such mechanisms and increase security by reducing the time keys in clear are exposed in RAM.
@@ -978,7 +916,7 @@ can be encoded.
 NOTE: ACE is an ideal candidate for the Composable Custom Extensions framework,
 even though our aim is to make it into a ratified extension.
 
-In all cases where a GPR is used to index a CC, we exclude the use of the zero-hardwired GPR `X0` as the index register-that is, the encoding of the register cannot be zero. This is reserved to encode some special operation, and otherwise raises an invalid-instruction exception.
+In all cases where a GPR is used to index a locker, we exclude the use of the zero-hardwired GPR `X0` as the index register-that is, the encoding of the register cannot be zero. This is reserved to encode some special operation, and otherwise raises an invalid-instruction exception.
 
 [[ACE-instruction-enable-enable]]
 ==== ace.enable/ace.disable/ace.reset
@@ -1011,20 +949,20 @@ Enable, disable, or reset the feature in the current process domain:
 
 * If the `immed12` = 1, then the feature is enabled. The alias for this instruction is `ace.enable`.
 * If the `immed12` = 0, then the feature is disabled. The alias for this instruction is `ace.disable`.
-* If the `immed12` = `0xa11`, then all CCs are cleared and the new state of the ACE unit is Clear. The alias for this instruction is `ace.reset`.
+* If the `immed12` = `0xa11`, then all lockers are cleared and the new state of the ACE unit is Clear. The alias for this instruction is `ace.reset`.
 
 `ace.enable` must be issued before using any ACE operation, i.e. `ace.config` passing the immediate 1.
 --
 +
 
-NOTE: The advantage of `ace.reset` with respect to a loop that clears all CCs is that the entire CF memory is cleared without the need for compaction/management between the separate `ace.clear` operations and this opertation cannot be interrupted, reducing potential wasteful context saves.
+NOTE: The advantage of `ace.reset` with respect to a loop that clears all lockers is that the entire CF memory is cleared without the need for compaction/management between the separate `ace.clear` operations and this opertation cannot be interrupted, reducing potential wasteful context saves.
 
 The instruction will trap in the follwong cases: [.red]#TBD#.
 
-NOTE: This instruction shares its encoding with `ace.clear` with `3'b111` as instruction code (use a GPR to select the CC). However, the zero in the source field [11:7] for indirect CC indexing is defined as invalid/special, and this allows to define this instruction.#
+NOTE: This instruction shares its encoding with `ace.clear` with `3'b111` as instruction code (use a GPR to select the locker). However, the zero in the source field [11:7] for indirect locker indexing is defined as invalid/special, and this allows to define this instruction.#
 
 
-// [.darkred]#Proposal: With the immediate `0xa11` (all), all CCs will be cleared, as if `ace.clear` had been called on each of them, but the feature is not disabled.
+// [.darkred]#Proposal: With the immediate `0xa11` (all), all lockers will be cleared, as if `ace.clear` had been called on each of them, but the feature is not disabled.
 
 
 
@@ -1053,8 +991,8 @@ Encoding::
 ....
 
 Description::
-`ace.init` configures a CC with metadata and content.
-`Cd` is the source CC to be configured (encoded as a 5-bit immed).
+`ace.init` configures a locker with metadata and content.
+`Cd` is the source locker to be configured (encoded as a 5-bit immed).
 `Xd`, alternatively, is a GPR containing a number from 0 to 31 to select the context
 to be configured.
 `Xs` points to the region of memory containing the metadata and the key material.
@@ -1088,7 +1026,7 @@ Encoding::
 ....
 
 Description::
-`Cd` is the source CC to be cleared (encoded as a 5-bit immed). +
+`Cd` is the source locker to be cleared (encoded as a 5-bit immed). +
 `Xd` alternatively, is a GPR containing a number from 0 to 31 to select the context to be cleared. +
 
 [[ACE-instruction-export]]
@@ -1113,7 +1051,7 @@ Encoding::
 ....
 
 Description::
-Exports the CC `Cs` or `C[Xs]` to memory, starting at address `Xd`, using
+Exports the locker `Cs` or `C[Xs]` to memory, starting at address `Xd`, using
 the procedure described in <<ACE-formats>>.
 If the context `Cs` is clear, or `Xs` is out of range,
 the operation will report error ace_err_invalid.
@@ -1145,10 +1083,10 @@ Encoding::
 ....
 
 Description::
-`Cd` is the destination CC to be imported, as an immed (5-bit). Alternatively,
-the number of context into which import the SCC is stored in the GPR `Xd` as a
-number from 0 to 31. `Xn` is the GPR containing the base address of the buffer
-with the SCC. +
+`Cd` is the destination locker into which the SCC is imported, as an immed (5-bit).
+Alternatively, the number of the locker into which import the SCC is stored in
+the GPR `Xd` as a number from 0 to 31. `Xn` is the GPR containing the base address
+of the buffer with the source SCC. +
 The bit S takes the values 0 (false) or 1 (true).
 It is set to true if the key is in a system defined format
 (`ace.import.S`)
@@ -1172,7 +1110,7 @@ This means that system HW dynamically generated keys can be imported but not exp
 
 // If the value cannot be transported to other devices or to
 // other Locality states of the same device, the internal logic must bind them to a
-// specific DCWK). The instruction imports them like software keys and sets
+// specific DCSK). The instruction imports them like software keys and sets
 // the appropriate policies.
 
 // [.darkred]#(TBdetermined whether it is secure)# This instruction is trappable and may also be resumed or restarted.
@@ -1189,7 +1127,7 @@ The `ace.exec` instruction admits four Forms, namely
 . `ace.exec  Vd,Cn|C[Xn]{nbsp}{nbsp}{nbsp}` {nbsp}{nbsp} does not take an input but writes to an output vector.
 . `ace.exec  {nbsp}{nbsp}{nbsp}Cn|C[Xn]{nbsp}{nbsp}{nbsp}` {nbsp}{nbsp} does not take an input vector and does not write to an output vector.
 
-Form D instructions perform internal processing only in the CC.
+Form D instructions perform internal processing only in the CC in the given locker.
 
 // Without this comment, the next part is not properly formatted...
 Encoding::
@@ -1260,15 +1198,15 @@ The instruction is encoded using the Form D' `ace.exec` encoding, and is thus is
 ]}
 ....
 +
-Bit `r` (i.e., bit 27) is 0 if the CC is encoded as an immediate, and 1 if a GPR is used to reference it.
+Bit `r` (i.e., bit 27) is 0 if the locker is encoded as an immediate, and 1 if the locker's number is given in a GPR.
 
 Description::
-This instruction writes the size of the SCC corresponding to CC `Cs`, or the CC
-whose number is in `Xs`) into GPR `Xd`, and zero if the algorithm is not supported.
+This instruction writes the size of the SCC corresponding to the source locker,
+and zero if the algorithm is not supported.
 
 Knowledge of the size of the SCC is needed by any feature that relies on `ace.export`, e.g., context switching.
 
-NOTE: The value can significantly differ from the internal resource usage of the CC —
+NOTE: The value can significantly differ from the internal resource usage to store the CC's data in a locker —
 it can be larger (for simple primitives, because of the nonce/SIV overhead) but
 also smaller (for keys split into shares for threshold implementations, but saved
 externally in reconstructed form).
@@ -1327,20 +1265,19 @@ The instruction is encoded using the Form D' `ace.exec` encoding, and is thus is
 ]}
 ....
 +
-Bits [27:26], i.e., field `R`, take following values depending on how the CCs are
-referred:
+Bits [27:26], i.e., field `R`, take following values depending on how the lockers are given:
 +
 [upperalpha]
-. `0b00` if the source and the output CCs are both encoded as immediates.
-. `0b01` if the source CC is selected using a GPR and the output CC is encoded as an immediate.
-. `0b10` if the source CC is encoded as immediate and the output CC is selected using a GPR.
-. `0b11` if the source and the output CCs are both selected using the values of GPRs.
+. `0b00` if the source and the output lockers are both encoded as immediates.
+. `0b01` if the source locker is selected using a GPR and the output locker is encoded as an immediate.
+. `0b10` if the source locker is encoded as immediate and the output locker is selected using a GPR.
+. `0b11` if the source and the output lockers are both selected using the values of GPRs.
 
 // Comment to ensure the proper indentation in th next Description
 
 Description::
-Clones source CC `Cs` (or the CC indexed by `Xs`) into destination CC `Cd` (or
-into the CC indexed by `Xd`).
+Clones source locker `Cs` (or the locker indexed by `Xs`) into destination locker `Cd` (or
+into the locker indexed by `Xd`).
 
 // NOTE: The `ace.clone` instruction is an optimization for the sequence `ace.export` followed by `ace.import`. While reusing cryptographic state (e.g., encrypting with the same counter) can enable certain attacks, this risk cannot be eliminated by omitting `ace.clone`, as a state can be exported and re‑imported multiple times.
 
@@ -1408,7 +1345,7 @@ Bit `r` (i.e., bit 15) is 0 if the context is encoded as an immediate, and 1 if 
 
 Description::
 `ace.state` and `ace.dir` are two names for the same instruction. +
-`Cn` specifies the CC whose state is to be set. Alternatively, `Xn` is a GPR containing a value from 0 to 31 to dynamically select the target context. The `#immed` operand is a constant from the set of admissible values defined for each algorithm, used to manage the algorithm's internal state machine when additional states are required. `Xs` is a GPR that is either `X0` or contains an optional additional parameter for the state machine.
+`Cn` specifies the locker whose state is to be set. Alternatively, `Xn` is a GPR containing a value from 0 to 31 to dynamically select the target context. The `#immed` operand is a constant from the set of admissible values defined for each algorithm, used to manage the algorithm's internal state machine when additional states are required. `Xs` is a GPR that is either `X0` or contains an optional additional parameter for the state machine.
 
 The state numbers used in this specification are defined in the following table.
 
@@ -1478,7 +1415,7 @@ else it determines the GPR that contains the context number.
 // comment
 
 Description::
-This instruction restricts the usage of a CC to specific modes or to a specified `ASID` or `VMID`. +
+This instruction restricts the usage of a CC (as stored in a locker) to specific modes or to a specified `ASID` or `VMID`. +
 It can also increase the side-channel protection level of the CC. +
 Let `m` be the metadata field in the destination CC. The instruction works as follows:
 
@@ -1563,14 +1500,14 @@ Upon a trap, the handler identifies the trapped instruction and uses the Algorit
 In order to support interrupts of the emulation libraries, such instructions need to respect the value of `acestart` and update it in accordance with the expected architected behavior the trapped instructions.  We provide here non-normative definition for such a set of instructions in <<ACE-trappable-insns-support>>.
 Three types of supporting operations are required:
 
- * A `mv` instruction that loads a specified number of bytes from a GPR or vector register into a CC within the ACE unit.
+ * A `mv` instruction that loads a specified number of bytes from a GPR or vector register into a the state of a locker within the ACE unit.
    Initially, `ace.size` returns the total payload length to transfer.
    After each move, this value is updated to reflect the remaining bytes.
    The instruction also updates the `acestart` CSR to follow the internal progress.
- * A corresponding `mv` instruction that exports a specified number of bytes from a CC to a GPR or vector register.
+ * A corresponding `mv` instruction that exports a specified number of bytes from a locker to a GPR or vector register.
    The behavior of `ace.size` will be similar to that of the move instruction, but it will count the number of bytes to be exported.
  * A “`close`” instruction to suspend or finalize the procedure.
-   If executed before all bytes are transferred, the CC state matches that of an interrupted monolithic instruction, including the Completion metadata field and the `acestart` value. If executed after all bytes are transferred, it also performs any final cryptographic operations, such as authenticating the CC, if needed.
+   If executed before all bytes are transferred, the locker state matches that of an interrupted monolithic instruction, including the Completion metadata field and the `acestart` value. If executed after all bytes are transferred, it also performs any final cryptographic operations, such as authenticating the locker, if needed.
 
 These supporting instructions must be uninterruptible.
 
@@ -1646,10 +1583,10 @@ If the number of states of the algorithm is at most 16 (including _initial_, _co
 Otherwise, the specification of the algorithm must include a suitable field in the content section of the CC/SCC.
 
 An important rule is the following.
-If an invalid input is provided to any ACE instruction, or a non-admitted instruction is executed, while processing the algorithm in CC, say, Cn,
+If an invalid input is provided to any ACE instruction, or a non-admitted instruction is executed, while processing the algorithm in locker, say, `Cn`,
 the `Cn` is *invalidated*, namely, the following happens:
 (((ACE, algorithm, invalid state)))
-(((Cryptographic context, invalidated)))
+(((Locker, invalidated)))
 
 * `Cn` is put into state _invalidated_;
 * For instructions that refers to `Cn`:
@@ -1658,19 +1595,19 @@ the `Cn` is *invalidated*, namely, the following happens:
  ** `ace.restrict` and `ace.harden` perform no operation;
  ** `ace.input` and `ace.output` perform no operation;
  ** `ace.state` perform no operation, unless is is used to return to state _initial_;
- ** `ace.error` always returns error _ace_err_invalid_ after any operation involving the CC except for
+ ** `ace.error` always returns error _ace_err_invalid_ after any operation involving the locke except for
     `ace.import` and `ace.export`, `ace.clean`, `ace.init`, and `ace.size`, which all work normally, and using `ace.state` to return to state _initial_.
 * The current instruction is terminated.
 
-The function that puts the CC in this state is called `invalidate()`.
+The function that puts the locker in this state is called `invalidate()`.
 
 In state _completed_, no operation can be performed except `ace.init`, `ace.export`, `ace.import`, `ace.clear`, or `ace.error`.
-Any other operation, if it has an output, it returns zero, and will cause the CC to be *invalidated*.
+Any other operation, if it has an output, it returns zero, and will cause the locker to be *invalidated*.
 
 All the operations performed by `ace.exec` or `ace.state` in the rules given for each algorithm are assumed to be *uninterruptible*.
 This includes the case where very long vector inputs are processed but all operations are completely internal to ACE and require no external resource access, such as encryptions, decryptions, hashing, point multiplications, and other cryptographic operations.
-Since such operations can operate independently of the CPU core, they may continue to execute also when the process that issued them is interrupted, so the hart implementation may cause the context switching software to wait when accessing a CC that is going to be written to.
-We do not specify whether these instructions write their results to the CC atomically or piecewise.
+Since such operations can operate independently of the CPU core, they may continue to execute also when the process that issued them is interrupted, so the hart implementation may cause the context switching software to wait when accessing a locker that is going to be written to.
+We do not specify whether these instructions write their results to the locker atomically or piecewise.
 [.darkred]#(Only in case we still want to make long cryptographic operations interruptible.)#
 
 In what follows, when we write of "state _name_" we refer to the state which has number _ace_state_name_ as described in <<ACE-state-constants>>.
@@ -1694,24 +1631,6 @@ This in turn implies that ACE execution unit must have access to a source of ran
 This ensures not only the compactness of a SCC, but also that the key can be ported across architectures.
 In fact, some threshold implementations may have a different number of shares even if they claim the same order of side-channel protection.
 
-// [[ACE-rules-lazy-loader]]
-// ==== Rules for Lazy-Loaded CCs
-//
-// If a CC is marked in `acecclazy`, it is called a "placeholder" CC.
-// Any operation involving that CC will trap, unless the operation overwrites the CC, that is,
-// for `ace.init`, `ace.import`, as well as `ace.clone` and `ace.derive` if this CC is the destination.
-// In these cases, the corresponding bit in `acecclazy` will be cleared.
-
-// A placeholder CC is created like any other CC, by providing a Configuration Input.
-// The latter consists only of the metadata block, which is partly encrypted.
-//
-// An `ace.exec` instruction of Form C, i.e., "```ace.exec Vd,Cn|C[Xn]```," where `Cn` or `C[Xn]` contains a placeholder CC, will copy the Reference field in `Vd`
-// (the four least significant bits of `Vd` will be zero), but only if the Mode_Usage field (see <<ACE-metadata-placeholder>>) allows it, i.e., if the value of this field is 0, 1, 2, resp. 3, the mode must be at least User, Supervisor, Hypervisor, resp., Machine.
-// If, on the other hand, the mode is less privileged than the value of the Mode_Usage field, the instruction will trap instead.
-// This allows context switching software to create Placeholder CCs, which will trap when the software attempts to execute them to allow the parent mode to load the actual ones.
-
-//An `ace.exec` instruction of Form B, i.e., "```ace.exec Cn|C[Xn],Vs```," where `Cn` or `C[Xn]` contains a placeholder CC, will overwrite the Reference field of the CC with `Vs` (the four least significant bits of `Vs` will be ignored).
-
 [[ACE-rules-system-keys]]
 ==== Rules for System Keys
 
@@ -1722,7 +1641,8 @@ System keys that are referred to by an index will cause following changes in all
 . For algorithms that require more than one key, such as XEX/XTS, ALL the keys are referred to by a single index, i.e., a single 64-bit value in the configuration input and the SCC.
 . Accordingly, the `content_serialize` and `content_deserialize` functions will support System Keys by producing and reading the shorter fields with the indexes in place of the longer fields that would be required when the key values are explicitly provided.
 
-NOTE: Internally, the ACE unit can either directly use the value from the SKT, or copy it to the CC. The architecture does not restrict the choice of the implementation.
+NOTE: Internally, the ACE unit can either directly use the value from the SKT, or copy it to the internal state of the locker.
+The architecture does not restrict the choice of the implementation.
 
 // On the other hand, keys generated from a system block, using a custom "recipe", are always represented by their values and once generated have the exact same behavior as any other key that does not come from the SKT.
 
@@ -1761,18 +1681,18 @@ State Machine:::
 
 * *States:* _initial_, _encrypt_, and _decrypt_
 * *Allowed State Transitions:*
- ** From any state to state _encrypt_, if metadata allows encryption, else the CC is *invalidated*.
- ** From any state to state _decrypt_, if metadata allows decryption, else the CC is *invalidated*.
+ ** From any state to state _encrypt_, if metadata allows encryption, else the locker is *invalidated*.
+ ** From any state to state _decrypt_, if metadata allows decryption, else the locker is *invalidated*.
 * *Behavior:*
- ** In state _initial_, any `ace.exec` will result in the CC being *invalidated*.
+ ** In state _initial_, any `ace.exec` will result in the locker being *invalidated*.
  ** In state _encrypt_:
   *** If{nbsp} `ace.exec Vd,Cn|C[Xn],Vs` {nbsp}is issued, then {nbsp} `Vd = enc_block(Vs)`.
   *** If `VLEN` is a multiple of `b`, then `ace.exec Vd,Cn|C[Xn],Vs` encrypts block-by-block.
-  *** If any other Form of `ace.exec` is issued, then the CC is *invalidated*.
+  *** If any other Form of `ace.exec` is issued, then the locker is *invalidated*.
  ** In state _decrypt_:
   *** If{nbsp} `ace.exec Vd,Cn|C[Xn],Vs` {nbsp}is issued, then {nbsp} `Vd = dec_block(Vs)`.
   *** If `VLEN` is a multiple of `b`, then `ace.exec Vd,Cn|C[Xn],Vs` decrypts block-by-block.
-  *** If any other Form of `ace.exec` is issued, then the CC is *invalidated*.
+  *** If any other Form of `ace.exec` is issued, then the locker is *invalidated*.
 
 [NOTE]
 ====
@@ -1801,11 +1721,11 @@ The following pseudocode illustrates how to use an ECB CC to encrypt a block of 
 - Allocate memory for ciphertext buffer.
 
 vsetvli zero,4,e32,m1,ta,ma               // Use 128-bit vectors
-ace.import C0,(X5)                        // Import the SCC into CC C0
+ace.import C0,(X5)                        // Import the SCC into locker C0
 ace.error X1                              // Read error from a CSR
 if (X1 != 0) then { handle error }        // ACE may fail to validate SCC, algorithm may
                                           // be not supported, or CF memory may be full
-ace.state C0,#ace_state_encrypt           // Configure CC for encryption
+ace.state C0,#ace_state_encrypt           // Configure locker for encryption
 ace.error X1                              // Read error from a CSR
 if (X1 != 0) then { handle error }        // Error if encryption not allowed
 
@@ -1889,7 +1809,7 @@ State Machine:::
   *** If no such instruction is issued, the value of the IV will remain zero.
   *** If `VLEN` is larger than `b`, the most significant bits of `Vs` (i.e., the "tail" of the vector) are ignored.
   *** If such operations are issued more times, they will just update the IV value again. Since this can be done only before any encryption or decryption operation, this does not represent a security issue.
-  *** Any other Form of ``ace.exec`` will produce a null output and *invalidate* the CC.
+  *** Any other Form of ``ace.exec`` will produce a null output and *invalidate* the locker.
  ** In state _operate_, only ``ace.exec`` instructions of Form C are allowed. +
      "```ace.exec Vd,Cn|C[Xn]```" performs:
 +
@@ -1903,7 +1823,7 @@ State Machine:::
 If `VLEN` is a multiple of `b`, the above three commands are applied to each of the `VLEN/b` `b`-bit blocks of `Vs`, producing each time the corresponding `b`-bit block of `Vd`.
 If the number `x` of blocks to be processed in an entire run of the algorithm is not a multiple of `VLEN`/`b`, `VL` can be set to the remainder of the division of `x` by `VLEN`/`b` for the last instruction.
 
- ** In state _operate_, any other Form of ``ace.exec`` will produce a null output and *invalidate* the CC.
+ ** In state _operate_, any other Form of ``ace.exec`` will produce a null output and *invalidate* the locker.
 
 Note that if `ace.state` is issued to return to state _initial_, the CC can be reused with a new `IV`.
 
@@ -1979,20 +1899,20 @@ State Machine:::
 * *Allowed State Transitions:*
  ** _initial_ -> _set_public_value_.
  ** _set_public_value_ -> _initial_.
- ** _set_public_value_ -> _encrypt_, if metadata allows encryption, else the CC is *invalidated*.
- ** _set_public_value_ -> _decrypt_, if metadata allows decryption, else the CC is *invalidated*.
+ ** _set_public_value_ -> _encrypt_, if metadata allows encryption, else the locker is *invalidated*.
+ ** _set_public_value_ -> _decrypt_, if metadata allows decryption, else the locker is *invalidated*.
  ** _encrypt_, _decrypt_ -> _initial_.
 
 * *Behavior:*
  ** In state _initial_:
   *** The `mask` field is set to zero.
-  *** Any {nbsp}``ace.exec``{nbsp} operation will produce null outputs and causes the CC to be *invalidated*.
+  *** Any {nbsp}``ace.exec``{nbsp} operation will produce null outputs and causes the locker to be *invalidated*.
  ** In state _set_public_value_, only ``ace.exec`` instructions of Form B are allowed. +
  "```ace.exec Cn|C[Xn],Vs```" sets the _tweak_. The `mask` field is used to store the tweak: `mask <- Vs`.
   *** If no such instruction is issued, the value of the tweak will remain zero.
   *** If `VLEN` is larger than `b`, the most significant bits of `Vs` (i.e., the "tail" of the vector) are ignored.
   *** If "```ace.exec Cn|C[Xn],Vs```" is repeated, it will just re-write the mask.
-  *** Other forms of `ace.exe` not allowed, will produce null outputs and the CC is *invalidated*.
+  *** Other forms of `ace.exe` not allowed, will produce null outputs and the locker is *invalidated*.
  ** When transitioning from _set_public_value_ to either _encrypt_ or _decrypt_, the following operations are performed:
   . `mask <- enc_block(key2,mask)` or `mask <- enc_block(key1,mask)` if only one key is used.
   . If only one key is used then update mask: `mask <- update_mask(mask)`.
@@ -2033,7 +1953,7 @@ ace.state C0, #const_set_public_value            // this can be an IV or a nonce
 V0 ← IV
 ace.exec C0,V0
 
-ace.state C0,#ace_state_encrypt                  // Configure CC for encryption
+ace.state C0,#ace_state_encrypt                  // Configure locker for encryption
 for i = 0 to ceil(len_in_bytes(plaintext)/16)-1 do
     - load V0 from address plaintext+16*i
     ace.exec V0,C0,V0                            // Encrypt one block of the plaintext
@@ -2091,15 +2011,15 @@ State Machine:::
 * *Allowed State Transitions:*
  ** From all states to _initial_.
  ** _initial_ -> _set_public_value_ -> _hash_absorb_.
- ** _hash_absorb_ -> _encrypt_ -- if metadata allows encryption, else the CC is *invalidated*.
- ** _hash_absorb_ -> _decrypt_ -- if metadata allows decryption, else the CC is *invalidated*.
+ ** _hash_absorb_ -> _encrypt_ -- if metadata allows encryption, else the locker is *invalidated*.
+ ** _hash_absorb_ -> _decrypt_ -- if metadata allows decryption, else the locker is *invalidated*.
  ** _encrypt_ -> _hash_finalize_enc_, later automatically transitioning to _completed_.
  ** _decrypt_ -> _hash_finalize_dec_.
  ** _hash_finalize_dec_ -> _hash_verify_, later automatically transitioning to _completed_.
 
 * *Behavior:*
  ** In state _initial_ :
-  *** Any {nbsp}``ace.exec``{nbsp} operation will produce null outputs and causes the CC to be *invalidated*.
+  *** Any {nbsp}``ace.exec``{nbsp} operation will produce null outputs and causes the locker to be *invalidated*.
   *** The following initialization operations are performed:
    . `hash_key <- enc_block(key,0)`,
    . `auth_tag <- 0`, and
@@ -2111,7 +2031,7 @@ State Machine:::
   *** If "```ace.exec Cn|C[Xn],Vs```," is repeated, it will just re-write the IV.
   *** If no such "```ace.exec Cn|C[Xn],Vs```" to set is issued, `ctr` remains zero.
   *** If `VLEN` is larger than `b`, the most significant bits of `Vs` (i.e., the "tail" of the vector) are ignored.
-  *** Any other Form of ``ace.exec`` will produce null outputs and causes the CC to be *invalidated*.
+  *** Any other Form of ``ace.exec`` will produce null outputs and causes the locker to be *invalidated*.
 
  ** In state _hash_absorb_, only  ``ace.exec`` instructions of Form B are allowed. +
  "```ace.exec Cn|C[Xn],Vs```" absorbs a data block in `auth_tag`, i.e.:
@@ -2121,13 +2041,13 @@ State Machine:::
 --
 +
 If `VLEN > b`, the above operation is executed `VLEN/b` times, absorbing each time a `b`-bit block of `Vs` into the hash.
-This operation is parallelizable by having the implementation precompute the first four powers of `hash_key`, keeping it internally in the CC (and reconstructing these powers after `ace.import`). If the number `x` of blocks to process is not a multiple of `VLEN`/`b`, `VL` can be set to the remainder of the division of `x` by `VLEN`/`b` for the last instruction.
+This operation is parallelizable by having the implementation precompute the first four powers of `hash_key`, keeping it internally in the locker (and reconstructing these powers after `ace.import`). If the number `x` of blocks to process is not a multiple of `VLEN`/`b`, `VL` can be set to the remainder of the division of `x` by `VLEN`/`b` for the last instruction.
 
 ** If state _encrypt_, only ``ace.exec`` instructions of Form A are allowed. +
    "```ace.exec Vd,Cn|C[Xn],Vs```" encrypts `Vs` into `Vd`, and absorbs the ciphertext `Vd` into the `auth_tag`, namely:
 +
 --
-  . If `ctr[b/4-1:0] = 0`, the CC is *invalidated*.
+  . If `ctr[b/4-1:0] = 0`, the locker is *invalidated*.
   . `tmp <- Vs xor enc_block(key,ctr)`.
   . `absorb_into_hash(tmp)`.
   . `ctr[b/4-1:0] <- ctr[b/4-1:0] + 1 % 2^b/4^`.
@@ -2155,7 +2075,7 @@ If `VLEN` is larger than `b`, the most significant bits of `Vs` (i.e., the "tail
    absorbs the ciphertext `Vs` into the `auth_tag`, then decrypts `Vs` into `Vd`, namely
 +
 --
-  . If `ctr[b/4-1:0] = 0`, the CC is *invalidated*.
+  . If `ctr[b/4-1:0] = 0`, the locker is *invalidated*.
   . `absorb_into_hash(Vs)`.
   . `Vd  <- Vs xor enc_block(key,ctr)`.
   . `ctr[b/4-1:0] <- ctr[b/4-1:0] + 1`.
@@ -2275,7 +2195,7 @@ which saves hardware costs when several small cores share a single ACE unit.
 - Allocate memory for ciphertext buffer CT (if not same as PT).
 
 vsetvli zero,4,e32,m1,ta,ma                      // Use 128-bit vectors
-ace.import C0,(X5)                               // Imports SCC into CC C0
+ace.import C0,(X5)                               // Imports SCC into locker C0
 V5[127:32] ← IV
 V5[31:0] ← 1
 
@@ -2380,12 +2300,12 @@ State Machine:::
     _initial_ -> _set_public_value_ -> _hash_absorb_ -> _hash_finalize_enc_ -> _encrypt_.
  ** For decryption: +
     _initial_ -> _set_public_value_ -> _set_public_value_2_ -> _hash_absorb_ -> _decrypt_ -> _hash_finalize_dec_.
- ** Transition to _encrypt_ possible only if metadata allows encryption, else the CC is *invalidated*.
- ** Transition to _decrypt_ possible only if metadata allows decryption, else the CC is *invalidated*.
+ ** Transition to _encrypt_ possible only if metadata allows encryption, else the locker is *invalidated*.
+ ** Transition to _decrypt_ possible only if metadata allows decryption, else the locker is *invalidated*.
 
 * *Behavior:*
  ** In state _initial_ :
-  *** Any {nbsp}``ace.exec``{nbsp} operation will produce a null output and the CC will be *invalidated*.
+  *** Any {nbsp}``ace.exec``{nbsp} operation will produce a null output and the locker will be *invalidated*.
   *** The following initialization operations are performed:
     . `enc_key`, `auth_key <- RFC8452_KeyDeriv(key)`,
     . `nonce`, `ctr`, `auth_tag`, `SIV <- 0`.
@@ -2395,7 +2315,7 @@ State Machine:::
     *** If "```ace.exec Cn|C[Xn],Vs```" is repeated, it will just re-write the value of `nonce`, resp. `SIV`.
     *** If no such "```ace.exec Cn|C[Xn],Vs```" is issued, `nonce`, resp. `SIV`, remain equal to zero.
     *** If `VLEN` is larger than `b`, the most significant bits of `Vs` (i.e., the "tail" of the vector) are ignored.
-    *** Other forms of `ace.exe` will produce null outputs and *invalidate* the CC.
+    *** Other forms of `ace.exe` will produce null outputs and *invalidate* the locker.
 +
 NOTE: There is no harm in moving to state _set_public_value_2_ and setting the
 SIV while encrypting, since that field is not used in the encryption path until
@@ -2411,7 +2331,7 @@ Accepting this redundant but harmless behavior simplifies the state machine.
 +
 If `VLEN` is a multiple of `b`, `absorb_into_hash` is executed on each of the `VLEN/b` blocks in `Vs`.
 
-*** Other forms of `ace.exec` will produce null outputs and *invalidate* the CC.
+*** Other forms of `ace.exec` will produce null outputs and *invalidate* the locker.
 
 ** In state _hash_finalize_enc_, only an {nbsp}``ace.exec``{nbsp} of Form A is allowed. +
   "```ace.exec Vd,Cn|C[Xn],Vs```," where it is the responsibility of the user to set +
@@ -2429,12 +2349,12 @@ finalizes the computation of the SIV/tag, by performing:
 +
 If `VLEN` is larger than `b`, the most significant bits of `Vs` (i.e., the "tail" of the vector) are ignored.
 
-*** Other forms of `ace.exec` will produce null outputs and *invalidate* the CC.
+*** Other forms of `ace.exec` will produce null outputs and *invalidate* the locker.
 
 ** In state _encrypt_, only  ``ace.exec`` instructions of the Form A are allowed, namely "```ace.exec Vd,Cn|C[Xn],Vs```," to encrypt `Vs` into `Vd` as follows:
 +
 --
-. If `ctr = 0`, then the CC is *invalidated*.
+. If `ctr = 0`, then the locker is *invalidated*.
    . If the `SIV` is `b`-bits long, then +
      *** ``Vd <- Vs xor enc_block(key, 1b1 @ SIV[b-2:b/4] @ (SIV[b/4-1:0] + ctr % 2^b/4^)),``
    . else (the `SIV` is `3b/4`-bits long) +
@@ -2444,12 +2364,12 @@ If `VLEN` is larger than `b`, the most significant bits of `Vs` (i.e., the "tail
 +
 If `VLEN` is a multiple of `b`, the above operations are applied to each of the `VLEN/b` blocks in `Vs`.
 
-*** Other forms of `ace.exec` will produce null outputs and *invalidate* the CC.
+*** Other forms of `ace.exec` will produce null outputs and *invalidate* the locker.
 
 ** In state _decrypt_,  only  ``ace.exec`` instructions of the Form A are allowed, namely "```ace.exec Vd,Cn|C[Xn],Vs```," to decrypt `Vs` into `Vd` and then absorb the plaintext `Vs` into the `auth_tag`:
 +
 --
-     . If `ctr = 0`, then the CC is *invalidated*.
+     . If `ctr = 0`, then the locker is *invalidated*.
      . If the `SIV` is `b`-bits long, then +
        *** ``Vd <- Vs xor enc_block(key, 1b1 @ SIV[b-2:b/4] @ (SIV[b/4-1:0] + ctr % 2^b/4^)),``
      . else (it is `3b/4`-bits long) +
@@ -2460,7 +2380,7 @@ If `VLEN` is a multiple of `b`, the above operations are applied to each of the 
 +
 If `VLEN` is a multiple of `b`, the above operations are applied to each of the `VLEN/b` blocks in `Vs`.
 
-*** Other forms of `ace.exec` will produce null outputs and *invalidate* the CC.
+*** Other forms of `ace.exec` will produce null outputs and *invalidate* the locker.
 
  ** In state _hash_finalize_dec_,
     only an ``ace.exec`` instruction of Form B is allowed,
@@ -2634,7 +2554,7 @@ State Machine:::
  ** In state _initial_:
   *** `last_block_len` is set to zero.
   *** `hash` is set to zero.
-  *** Any `ace.exec` will result in the CC being *invalidated*.
+  *** Any `ace.exec` will result in the locker being *invalidated*.
 
  ** In state _hash_absorb_, we can only issue instructions ``ace.exec`` of Form B, i.e., "```ace.exec Cn|C[Xn],Vs```", to absorb the data block `Vs` into the hash. This is performed as follows:
 +
@@ -2646,8 +2566,8 @@ State Machine:::
 If `VLEN` is a multiple of `b`, then the above operations are applied to each `b`-bit block of `Vs`.
 
  ** Upon issuing `ace.state Cn|C[Xn],#ace_state_last_block, Xs` where `Xs` contains the length of the last block in bits, following happens:
-   . if `partial_len` <> 0, then the CC is *invalidated*. (The previous block is not complete.)
-   . if `Xs > b` then the CC is *invalidated*.
+   . if `partial_len` <> 0, then the locker is *invalidated*. (The previous block is not complete.)
+   . if `Xs > b` then the locker is *invalidated*.
    . `last_block_len <- Xs`.
 
  ** In state _hash_last_block_,  we can only issue a single instruction ``ace.exec`` of Form B, i.e., "```ace.exec Cn|C[Xn],Vs```", to absorb the data block `Vs` and write the final hash value in `Vd`. After this, the state transitions to _completed_:
@@ -2671,7 +2591,7 @@ If `VLEN` is a multiple of `b`, then the above operations are applied to each `b
 If `VLEN` is larger than `b`, the most significant bits of `Vs` beyojnd the `b`-th (i.e., the "tail" of the vector) are ignored.
 
 
- ** In any state, issuing any Form of ``ace.exec`` that is not the allowed one will produce a null output and the CC will be *invalidated*.
+ ** In any state, issuing any Form of ``ace.exec`` that is not the allowed one will produce a null output and the locker will be *invalidated*.
 
 
 [.darkred]#Fill missing example#
@@ -2704,7 +2624,7 @@ Data Structures:::
  ** `last_block_len` -- Only if this Hash/MAC has special internal treatment for a fractional last block that goes beyond padding and appending the length, which are handled by user software  (field size at most two bytes).
  ** `used_VLEN` -- Current vector length in bits (up to MAXVLEN).
  ** `partial_len` -- Length of absorbed data so far for the current block (field size at most two bytes).
- ** `partial_block`: `b/8` bytes (a priori we cannot know whether `b > VLEN` or not, and changing the internal memory requirements of a CC depending on the  `VLEN` can lead to memory exhaustion).
+ ** `partial_block`: `b/8` bytes (a priori we cannot know whether `b > VLEN` or not, and changing the internal memory requirements of a CC depending on the `VLEN` can lead to memory exhaustion).
 
 * *Content, Exported*:
 [lowerroman]
@@ -2738,10 +2658,10 @@ The values 9 and 13 are used when there is a partial block.
   *** `last_block_len`, `partial_len` and `partial_block`` are set to zero.
   *** `hash`: the initial value is set as specified by the algorithm.
   *** `used_VLEN` is set to the current vector length.
-  *** Any `ace.exec` will result in the CC being *invalidated*.
+  *** Any `ace.exec` will result in the locker being *invalidated*.
 
   ** In each state except _initial_, before performing any operation except `ace.import`, `ace.export`, and `ace.clone`, `used_VLEN` is compared to `VLEN`.
-  If there is a mismatch, the CC will be *invalidated* and any operation will result in an invalid instruction exception.
+  If there is a mismatch, the locker will be *invalidated* and any operation will result in an invalid instruction exception.
 
   ** In state _hash_absorb_, we can only issue instructions ``ace.exec`` of Form B, i.e., "```ace.exec Cn|C[Xn],Vs```", to absorb the data block `Vs` into the hash:
   *** If `VLEN` is a multiple of `b` (including the case where `VLEN` = `b`), then `process_block` is applied to each `b`-bit segment of `Vs`.
@@ -2755,23 +2675,23 @@ The values 9 and 13 are used when there is a partial block.
  ** Upon issuing `ace.state Cn|C[Xn],#ace_last_block, Xs` where `Xs` contains the length of the last block in bits, following happens:
 +
 --
- . if `partial_len` <> 0, then the CC is *invalidated*. (The previous block is not complete.)
- . if `Xs > b`, then the CC is *invalidated*.
- . if `Xs = 0`, then the CC is *invalidated*.
+ . if `partial_len` <> 0, then the locker is *invalidated*. (The previous block is not complete.)
+ . if `Xs > b`, then the locker is *invalidated*.
+ . if `Xs = 0`, then the locker is *invalidated*.
  . `last_block_len <- Xs`.
 --
 +
 
  ** In state _hash_last_block_:
-  *** if `last_block_len` = 0, then the CC is *invalidated*.
+  *** if `last_block_len` = 0, then the locker is *invalidated*.
   *** If `VLEN` is a multiple of `b` (including the case where `VLEN` = `b`), then
       we only issue a single ``ace.exec`` of Form B, i.e., "```ace.exec Cn|C[Xn],Vs```", to absorb the least significant `b` bits of data block `Vs`.
   *** If `b` is a multiple of `VLEN` and `b` > `VLEN`, then we can one or more instructions ``ace.exec`` of Form B, i.e., "```ace.exec Cn|C[Xn],Vs```", to absorb the data block `Vs` into the hash, i.e. "```ace.exec Cn|C[Xn],Vs```":
    . if `partial_len < b`, then
-   .. The instruction must be of Form B, else the CC is *invalidated*.
+   .. The instruction must be of Form B, else the locker is *invalidated*.
    .. `Vs` is written to `partial_block` starting at byte offset `partial_len`.
    .. `partial_len <- partial_len + VLEN`.
-   . else if `partial_len+VLEN = b`, then the CC is *invalidated*.
+   . else if `partial_len+VLEN = b`, then the locker is *invalidated*.
 
   ** In state _hash_finalize_:
    *** If the function is a XOF, then
@@ -2788,7 +2708,7 @@ The values 9 and 13 are used when there is a partial block.
      .. `last_block_len <- max(last_block_len - VLEN, 0)`
      .. if `last_block_len` = 0 then the state is changed to _completed_ with no errors, unless the algorithm is a XOF, in which case the internal state is updated again, `last_block_len <- b`, and more "```ace.exec Vd,Cn|C[Xn]```" instructions can be issued.
 
- ** In any state, issuing any Form of ``ace.exec`` that is not the allowed one will produce a null output and the CC will be *invalidated*.
+ ** In any state, issuing any Form of ``ace.exec`` that is not the allowed one will produce a null output and the locker will be *invalidated*.
 
 NOTE: The description of states _hash_absorb_ and _hash_finalize_ should make it clear that allowing `b` and `VLEN` to be in relations other than one being an integer multiple of the other, as well as allowing a change of `VLEN`, would significantly complicate the state machine.
 
@@ -2828,35 +2748,35 @@ We now describe the state machines of the various Ascon-based algorithms standar
 
 Users may migrate their virtual machines (VMs) between client devices with CPUs from different silicon providers—a practice already common when moving interrupted VMs between Intel and AMD systems. In such a scenario, the ACE implementation on the destination device might have a smaller Context File (CF) capacity. System software could then be unable to restore all cryptographic contexts.
 
-To address this, the `acecclazy` CSR to enables lazy context reloading by causing the hart to trap to the parent mode if a CC being accessed is marked as "lazy", i.e., the corresponding bit in `acecclazy` is set.  When this requires freeing one or more CCs first, system software decides which contexts to evict.
+To address this, the `acelazy` CSR to enables lazy context reloading by causing the hart to trap to the parent mode if a locker being accessed is marked as "lazy", i.e., the corresponding bit in `acelazy` is set.  When this requires freeing one or more lockers first, system software decides which contexts to evict.
 
 The same mechanism can also support lazy loading of contexts during ordinary context switches.
 
 ==== Key Management and Provisioning Applications
 
-Software environments that implement key management operations for other domains require their own RCWK. A system may contain multiple such software environments.
+Software environments that implement key management operations for other domains require their own RCSK. A system may contain multiple such software environments.
 
 A Key Management Applet (KMA) will
 
 [arabic]
 . Generate or retrieve a key matching a request.
-. Configure a CC with this key and its associated metadata.
-. Export this CC to a SCC in memory.
+. Configure a locker with this key and its associated metadata.
+. Export this locker to a SCC in memory.
 . Relinquish control to the MM.
 
-The MM, which controls the CWK, can the
+The MM, which controls the CSK, can the
 
 [arabic, start=5]
-. Set the RCWK to the KMA’s RCWK.
-. Re-import the SCC into a CC
-. Change the RCWK to match the requester domain's RCWK.
+. Set the RCSK to the KMA’s RCSK.
+. Re-import the SCC into a locker
+. Change the RCSK to match the requester domain's RCSK.
 . Export the key for the Requester's use.
 . Relinquish control to the Requester.
 
-This is the most generic approach and allows each piece of software to use a CC of choice to generate and import SCCs.
+This is the most generic approach and allows each piece of software to use a locker of choice to generate CCs and import SCCs.
 Furthermore, it protects the key from other SW environments that may be crossed while transferring control between the Requester process, the MM, and the Key Management application.
 
-// Various optimizations are possible, which can be interesting for embedded environments: Steps 3., 5., and 6. can be omitted if the CC used for these operations is fixed and no intermediate SW environments modify that CC.
+// Various optimizations are possible, which can be interesting for embedded environments: Steps 3., 5., and 6. can be omitted if the locker used for these operations is fixed and no intermediate SW environments modify that locker.
 
 // ///////////////////////////////////////////////////////////////////////////////////////////
 

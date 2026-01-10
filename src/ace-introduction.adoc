@@ -37,30 +37,26 @@ In particular, implementations integrated into the CPU core are allowed.
 . ACE is an ISE for full-round, block-wise cryptographic operations that keeps keys concealed.
 . It supports various cryptographic primitives and modes, including Side-Channel Attack (SCA) resistant versions.
   The specification includes mandatory, optional, and custom algorithms.
-. Keys are stored in an architectural state called a _Cryptographic Context_ (CC), along with metadata binding the key to a specific algorithm and usage restrictions. In fact, CCs can store any type of data, not only keys, so we speak of the _contents_ of a CC.
+  . Thus, key material, metadata binding the latter to a specific cryptographic algorithm and usage policies, and possibly other information needed by the algorithm become an undivisible _Cryptographic Context_ (CC) once they are stored in an architectural state called a _Locker_ (CL).
+  All non-metadata information in a CC is called the _content_ of the CC.
 (((Cryptographic context)))
-* The contents of a CC are _opaque_ and cannot be extracted by software. CCs are not GPRs.
-(((Cryptographic context, content)))
-(((Opaque key)))
- * The metadata is the _non-opaque_ part of a CC, it can be read, but not freely modified by software.
-(((Cryptographic context, metadata)))
- * CCs are configured via software, System Key Tables, or dynamic key generation blocks.
-. ACE instructions reference CCs rather than the raw values of their contents, such as keys.
-. ACE supports multiple concurrent active CCs.
-. Trusted entities can use ACE to provision opaque keys to less-trusted environments, enabling cryptographic operations without exposing key material.
-  Once provisioned, keys are reusable without further interaction with the more trusted environments.
-. ACE binds CCs to _Localities_ to prevent replay across different machines, product lines, or execution contexts (see <<ACE-concepts>> and <<ACE-Localities>>).
-. ACE enforces process-level access control for their opaque contents, supporting:
- * Separation for keys according to processes, supervisors, security states (i.e., _process domains_).
+* Lockers differ from GPRs in that their contents cannot be extracted by software.
+(((Cryptographic locker, content)))
+// * The metadata is the _non-opaque_ part of a CC, it can be read, but not freely modified by software.
+//(((Cryptographic context, metadata)))
+* Lockers are configured via software, System Key Tables, or dynamic key generation blocks.
+. ACE instructions reference these lockers rather than keys.
+. ACE supports multiple concurrent active CCs, each in its own locker.
+. Trusted entities can use ACE to provision CCs to less-trusted environments, enabling cryptographic operations without exposing key material.
+  Once provisioned, CCs are reusable without further interaction with the more trusted environments.
+. ACE can bind CCs to _Localities_ to prevent replay across different machines, product lines, or execution contexts (see <<ACE-concepts>> and <<ACE-Localities>>).
+. ACE enforces process-level access control for CCs, supporting:
+ * Separation of CCs according to processes, supervisors, security states (i.e., _process domains_).
  * Key preservation during process or VM migration.
 . ACE scales from embedded to server cores using a unified ISA and ABI.
   Smaller cores may omit features transparently to user software.
 (((design, scalable)))
 (((VM migration)))
-
-// The latter is needed for cloud and edge deployment. ACE provides the minimum necessary support to enable secure key migration between machines.
-
-// Currently, this often involves both changing context and potentially blocking operations to program keys or to perform cryptographic operations in cryptographic accelerators. This can result in large delays. ACE enables SW to set and use these keys with reduced overheads.
 
 
 [[ACE-introduction-rationale]]
@@ -86,7 +82,8 @@ _We need a mechanism to support modes of operation and derivation of an opaque k
 [[ACE-introduction-more-features]]
 === Implied Features
 
-To avoid the limitations of existing solutions, ACE minimizes environment switches and supports efficient software-managed context switching, by providing the secure export and import of Cryptographic Contexts using authenticated encryption.
+By providing a mechanism to securely export and import Cryptographic Contexts from lockers to encrypted and authenticated _Sealed (Cryptographic) Contexts_,
+ACE minimizes environment switches and supports efficient software-managed context switching.
 The complete model is specified in <<ACE-architecture>>.
 
 
@@ -103,10 +100,11 @@ The interface offered by ACE can also be used to provide support for public key 
 
 ACE intentionally excludes the following:
 
-* **Debugging support:** The internal representation of a CC remains concealed even during debug.
+* **Debugging support:** The internal representation of a locker remains concealed even during debug.
 * **Variable-length ciphertext and plaintext inputs:** Plaintext and ciphertexts, as well as messages of which digests are computed, are processed in fixed-size blocks.
 * **Complete key management:** ACE provides only architectural building blocks that can be used for key management, where the key management logic resides in trusted software (e.g., TEE applets).
   ACE does not support external schemes for directly provisioning keys into a key store.
+  Instead, it will be a local trusted SW or HW component that manages external schemes and, with the thusly obtained keys and polcies, then configures CCs for the ACE unit.
 * **Key revocation:**
 The present specification does not include a key revocation mechanism.
 While future versions may be architected to support revocation, such functionality is excluded here to avoid architectural and implementation complexity. The rationale is as follows:
