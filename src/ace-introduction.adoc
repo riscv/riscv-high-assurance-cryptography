@@ -3,15 +3,8 @@
 
 #(The ratification plan can be found https://riscv.atlassian.net/wiki/spaces/HACX/pages/484966423/High+Assurance+Crypto+Ratification+Plan[here].)#
 
-The _Atomic Cryptography Extension_ (ACE) provides an interface to high-performance, high-assurance cryptographic operations.
+The _Atomic Cryptography Extension_ (ACE) is a ISE that provides an interface to high-performance, high-assurance cryptographic operations.
 (((design, high performance)))
-
-// Its primary features are:
-//
-// * The concealment of key values and other secrets;
-// * Support for various cryptographic algorithms including implementations hardened against Side-Channel Attacks;
-// and
-// * Binding key usage to processes, device and device types, software and hardware configurations.
 
 ACE addresses use cases such as
 key and identity management,
@@ -19,72 +12,72 @@ content protection (including local LLM decryption),
 link and storage encryption,
 and
 attestation.
-// It targets applications requiring cryptographic operations with high protection for keys and intermediate values.
 
 ACE is architected as an _attached_ unit, similar to a coprocessor with a dedicated, low-latency interface to the CPU core.
-In particular, standard interrupts need not stop operations being performed by an ACE implementation,
-except when the latter is accessing memory,
-and the implementation may decide to stall the CPU pipeline only if a trap requires saving ACE state.
-
+// In particular, standard interrupts need not stop operations being performed by an ACE implementation, except when the latter is accessing memory, and the implementation may decide to stall the CPU pipeline only if a trap requires saving ACE state.
 This model is the same one as in streaming accelerators:
 An ACE unit can be shared by multiple harts, each maintaining independent architectural state, and operates concurrently with CPU cores.
-This specification only defines the extension's.
+This specification only defines the extension's behavior.
 In particular, implementations integrated into the CPU core are allowed.
 
 [[ACE-introduction-features]]
-=== Features
+=== Goals of ACE
 
-. ACE is an ISE for full-round, block-wise cryptographic operations that keeps keys concealed.
-. It supports various cryptographic primitives and modes, including Side-Channel Attack (SCA) resistant versions.
-  The specification includes mandatory, optional, and custom algorithms.
-  . Thus, key material, metadata binding the latter to a specific cryptographic algorithm and usage policies, and possibly other information needed by the algorithm become an undivisible _Cryptographic Context_ (CC) once they are stored in an architectural state called a _Locker_ (CL).
-  All non-metadata information in a CC is called the _content_ of the CC.
-(((Cryptographic context)))
-* Lockers differ from GPRs in that their contents cannot be extracted by software.
-(((Cryptographic locker, content)))
-// * The metadata is the _non-opaque_ part of a CC, it can be read, but not freely modified by software.
-//(((Cryptographic context, metadata)))
-* Lockers are configured via software, System Key Tables, or dynamic key generation blocks.
-. ACE instructions reference these lockers rather than keys.
-. ACE supports multiple concurrent active CCs, each in its own locker.
-. Trusted entities can use ACE to provision CCs to less-trusted environments, enabling cryptographic operations without exposing key material.
-  Once provisioned, CCs are reusable without further interaction with the more trusted environments.
-. ACE can bind CCs to _Localities_ to prevent replay across different machines, product lines, or execution contexts (see <<ACE-concepts>> and <<ACE-Localities>>).
-. ACE enforces process-level access control for CCs, supporting:
- * Separation of CCs according to processes, supervisors, security states (i.e., _process domains_).
- * Key preservation during process or VM migration.
+. ACE allows software to perform cryptographic operations without getting visibility into the keys.
+. ACE supports various cryptographic primitives and modes, including Side-Channel Attack (SCA) resistant versions.
+. The keys can be provisioned to the software using them by other trusted SW or HW entities.
+//. Once provisioned, the keys are reusable without further interaction with these trusted environments.
+. ACE can restrict the usage of keys according to processes, supervisors, security states, etc.
+. ACE can restrict the use of keys to _Localities_ to prevent replay across different machines, product lines, or execution contexts (see <<ACE-concepts>> and <<ACE-Localities>>).
 . ACE scales from embedded to server cores using a unified ISA and ABI.
-  Smaller cores may omit features transparently to user software.
+. ACE is compatible with VM migration.
 (((design, scalable)))
 (((VM migration)))
 
+=== Features and Rationale
 
-[[ACE-introduction-rationale]]
-=== Rationale
+* Round-based ISAs require explicit key injection between block cipher rounds or at various points in MAC algorithms.
+In the absence of contract-based access control to register values, or full homomorphic encryption to operate on the data, this means that the value of the key is exposed to the environment.
+To avoid this exposure, ACE performs cryptographic operations such as the full-round encryption or decryption of a block of data or the absorbption of the data into a MAC function atomically, i.e., without breaking them up into smaller operations, such as individual rounds.
 
-ACE addresses the inadequacies of current solutions:
+* To prevent using keys for unintended purposes, ACE introduces mechanisms to restrict the usage of keys
+to specific algorithms, and according to processes, supervisors, security states, and other policies.
 
-* Round-based ISAs require explicit key injection between block cipher rounds or at various points in keyed hash algorithm. In the absence of contract-based access control to register values, or full homomorphic encryption to operate on the data, this means that the value of the key is exposed to the environment.
-+
-_Therefore, we either need instruction which perform cryptographic operations without exposing the key, relinquish control to the trusted environments, or use an external HW coprocessor._
-* User-mode ISAs lack intrinsic trust mechanisms, relying on external IP or costly context switches to TEEs (e.g., TrustZone).
-+
-_We need a mechanism to support secure delivery of opaque cryptographic keys from trusted SW/HW environments and control on their usage to these atomic instructions._
-* External blocks and key management units impose significant latency and system stack overhead.
-+
-_This means that we should not have to rely on said trusted SW/HW environments each time we want to re-use a key-for instance upon process resumption after a context switch. User software needs a secure and efficient way to manage these opaque cryptographic keys._
-* Primitive-only support is insufficient for modes like AES-GCM-SIV, XTS, OCB, where derived keys or values must also remain protected.
-+
-_We need a mechanism to support modes of operation and derivation of an opaque key from an opaque key._
-* No currently ratified solution combines high performance, agile key management, and guarantees of confidentiality of keys and other security-critical derived values.
+* The most important such mechanism is the _Cryptographic Context_ (CC), a data structure that contains
+the _metadata_ setting the above policies and _content_ consisting of keys and other sensible information.
+Metadata and content are bound together and always treated as a single entity by ACE.
+
+* In order to be used, a Cryptographic Context must be stored in a special kind of one-way architectural state called a _Locker_.
+Lockers are architectural and each hart has 32 lockers. ACE instructions use Lockers in place of the keys.
+
+* We also note that primitive-only support is insufficient for modes like AES-GCM-SIV, XTS, OCB.
+The leakage of derived keys or values can also reduce the security of these algorithms.
+Therefore, we need to protect these values as well.
+To this purpose, ACE provides support for modes of operation and secure derivation of CCs from other CCs.
+
+* ACE provides an instruction to free lockers, otherwise a process could block them all and prevent other processes from using ACE.
+
+* By providing a mechanism to securely export and import Cryptographic Contexts from lockers to encrypted and authenticated _Sealed (Cryptographic) Contexts_,
+ACE minimizes environment switches, supports efficient software-managed context switching, and allows software to reuse CCs without having to create them again or, even to have to request anew their delivery from trusted environments with potentially significant delays.
+
+// The complete model is specified in <<ACE-architecture>>.
+// [[ACE-introduction-rationale]]
+// === Rationale
+// ACE addresses the inadequacies of current solutions:
+//
+// _Therefore, we either need instruction which perform cryptographic operations without exposing the key, relinquish control to the trusted environments, or use an external HW coprocessor._
+// * User-mode ISAs lack intrinsic trust mechanisms, relying on external IP or costly context switches to TEEs (e.g., TrustZone).
+// +
+// _We need a mechanism to support secure delivery of opaque cryptographic keys from trusted SW/HW environments and control on their usage to these atomic instructions._
+// * External blocks and key management units impose significant latency and system stack overhead.
+// +
+//  _This means that we should not have to rely on said trusted SW/HW environments each time we want to re-use a key-for instance upon process resumption after a context switch. User software needs a secure and efficient way to manage these opaque cryptographic keys._
 
 
-[[ACE-introduction-more-features]]
-=== Implied Features
 
-By providing a mechanism to securely export and import Cryptographic Contexts from lockers to encrypted and authenticated _Sealed (Cryptographic) Contexts_,
-ACE minimizes environment switches and supports efficient software-managed context switching.
-The complete model is specified in <<ACE-architecture>>.
+// [[ACE-introduction-more-features]]
+// === Implied Features
+
 
 
 === Algorithms
@@ -119,31 +112,6 @@ ACE complements existing SW vulnerability exploitation countermeasures and proce
 Furthermore, in certain modes, such as in counter-mode encryption, the same method enables both encryption and decryption, potentially enabling misuse by malicious processes. This type of risk cannot be mitigated by ACE.
 
 
-[[ACE-threat-model]]
-=== Threat Model
-
-The ACE threat model is straightforward.
-
-**Assets** consist of _keys_ and any other information that could aid an adversary in recovering plaintext or forging ciphertext. This includes items such as masks in tweakable XEX modes and derived keys in AES-GCM-SIV. The critical properties of these assets are their _confidentiality_ and _integrity_.
-
-**Adversaries** are assumed capable of compromising processes by exploiting software vulnerabilities.
-They are also able to gain access to memory contents, for instance, by abusing hardware interfaces or by SoC/memory interposition.
-The model does not include adversaries capable of sophisticated hardware attacks, such as using
-a Focused Ion Beam/Scanning Electron Microscope (FIB/SEM) to tamper with the hardware's functionality.
-
-Side channel attacks are addressed optionally. ACE offers interfaces to both SCA unprotected and protected implementations of cryptographic algorithms, if these options are provided by the designer.
-
-Threats can be addressed in four ways:
-
-[horizontal]
-**C:**:: _Control_ the threat by implementing full or partial mitigations.
-**A:**:: _Accept_ the threat and its associated risks.
-**T:**:: _Transfer_ the threat to another party better suited to address it.
-**S:**:: _Suppress_ the features that give rise to the threat.
-
-ACE is designed to avoid the "***A***" and "***S***" options (as much as possible). It _controls_ threats through its own mechanisms and _transfers_ residual risk—specifically, the risk of key extraction from the privileged or trusted software and hardware environments that manage keys—to those same environments. For example, trusted software environments may employ control-flow integrity, memory encryption with integrity protection, and anti-replay mechanisms, while hardware key-management blocks can be hardened to protect entrusted keys.
-
-Direct plaintext leakage, memory corruption attacks against the ACE-using process, and Release of Unverified Plaintext (RUP) attacks on the cryptographic algorithms are considered out of scope. These threats cannot be mitigated by ACE because the processed information resides within the user process domain. Consequently, these threats are _accepted_.
 
 [[ACE-outline]]
 === Outline
