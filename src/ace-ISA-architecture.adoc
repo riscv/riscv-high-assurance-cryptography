@@ -133,12 +133,13 @@ Rather, it defines 32 Cryptographic Lockers for storing cryptographic keys and m
 Each locker is identified by a number from 0 to 31, which the ACE unit uses to access its contents.
 (((Cryptographic Context)))
 
-Lockers reside in a dedicated internal _context file_ (CF) that is inaccessible to any entity outside the ACE implementation, including software, other hardware blocks, and invasive debug interfaces. The CF's memory capacity is implementation-defined and may be as large as 32 times the size of the largest possible CC; however, a smaller amount of memory may be used in practice. At a minimum, the CF must be capable of holding either (i) a single instance of the largest possible CC, or the largest CC pair in which the first CC derives the second (via `ace.derive`), as well as (ii) a metadata block for each other possible context.
-(((Context file)))
+Lockers reside in a dedicated internal _locker file_ (LF) that is inaccessible to any entity outside the ACE implementation, including software, other hardware blocks, and invasive debug interfaces. The LF's memory capacity is implementation-defined and may be as large as 32 times the size of the largest possible CC; however, a smaller amount of memory may be used in practice. At a minimum, the LF must be capable of holding either (i) a single instance of the largest possible CC, or the largest CC pair in which the first CC derives the second (via `ace.derive`), as well as (ii) a metadata block for each other possible context.
+(((Locker file)))
+(((Locker, file)))
 
 The size of each locker is dynamic, determined by the cryptographic algorithm with which it is configured.
 This is an important difference with respect to GPRs and vector registers, which always have the same size.
-ACE returns an error _ace_err_memory_ when insufficient memory prevents `ace.init` and `ace.import` operations, requiring the software to free memory by exporting or clearing a different locker. Implementations must provide sufficient CF memory to prevent infinite `ace.export`/ `ace.import` loops.
+ACE returns an error _ace_err_memory_ when insufficient memory prevents `ace.init` and `ace.import` operations, requiring the software to free memory by exporting or clearing a different locker. Implementations must provide sufficient LF memory to prevent infinite `ace.export`/ `ace.import` loops.
 
 A further difference between lockers and registers is that lockers are not only addressable via static 5-bit immediate addressing (as normal registers), but also indirectly, i.e., via a value from 0 to 31 in any general-purpose register.
 This has two major implications:
@@ -237,12 +238,10 @@ If the ACE unit contains state from a different process, and the ISE is disabled
 then supervisor mode is supposed to have set the state to Off.
 Enabling ACE will trap to the Supervisor to allow the latter to first save the state in case it was not saved before and then clear it (lazy context switch).
 
-Fine-grained tracking activeness and dirtiness of individual lockers uses the `aceactive` and `acedirty` CSRs, cf.{nbsp}<<ACE-tracking-locker-dirtiness>>.
-
 //
 //
 [[fsxsstates-copy]]
-.ACES state transitions (FS, VS, and XS state transitions -- to be cannibalised)
+.ACES state transitions in the no-lazy-loading mode
 [width=75,align=center,float=center,cols="<,<,<,<,<"]
 |===
 |Current State +
@@ -361,112 +360,142 @@ Initial
 Initial
 |===
 
+In order to know whether a locker is configured, we need an `aceconfigured` CSR, that has a bit per locker to denote whether it is configured or not.
+In the simplest way, context switching privileged code can simply save and restore all configured lockers at each context switch,
+where the contexts are saved if `*status.ACES` register is not Clean.
 
-[[ACE-tracking-locker-dirtiness]]
-===== Fine Grained Locker Management: `aceconfigured`, `acenative`, and `acestale`
+In general this is not very efficient.
+Using an `acedirty` CSR, also with a bit per locker to denote whether the CC in the locker is guaranteed to be the same as the last saved state, or possibly changed, can help optimize context switching by saving only the dirty lockers.
+//Fine-grained tracking activeness and dirtiness of individual lockers uses the `aceconfigured` and `acedirty` CSRs, cf.{nbsp}<<ACE-tracking-alien-lockers>>.
+
+Since we need a mechanism to potentially implement and track lazy-loading after a migration to a device with a smaller LF, we see in the next section how to use it to have general lazy-loading.
+
+[[ACE-tracking-alien-lockers]]
+===== Fine Grained Locker Management with Lazy-Loading: `aceconfigured`, `acealien`, and `acedirty`
+
+However, a more fine grained context switching and locker tracking mechanism will allow significant optimizations. We describe this now.
 
 Let us define four properties for lockers:
 
 [horizontal]
 `configured`:: Indicates whether the locker is currently configured.
-`native`:: If the locker is configured, indicates whether the current process is its owner or an alien process is
-`dirty`:: If the locker is configured and owned by the current process, indicates whether its state has been modified.
+`alien`:: For a configured locker, indicates whether it is owned by the current process (value = 0) or by an alien one (value = 1).
+`dirty`:: For a configured locker owned by the current process, indicates whether its state has been modified since the last state save.
 `lazy`:: Indicates whether a configuration for this locker is stored only in the parent's switching context,
 regardless of whether the locker is unconfigured or occupied by a CC belonging to a different process.
-
-Definition of *authoritative*: [.red]#TBD#.
 
 It is the duty of the operating system to keep track:
 
 * for each process, and
 ** for each locker, whether it is:
  . unconfigured and
-  .. there is no saved authoritative value for the current process; or
-  .. there is a saved authoritative value for the current process -- or
+  .. there is no saved value for the current process; or
+  .. there is a saved value for the current process -- or
  . configured and
-  .. it contains an authoritative CC for the process; or
-  .. it contains an authoritative CC for an alien process, together with the ID of latter.
+  .. it contains a CC for the process (clean/dirty); or
+  .. it contains a CC for an alien process (clean/dirty), together with the ID of latter.
 
-We list now the possible states a CC may have:
+* This is optimised by having a table of the IDs of the processes that own the CCs in each locker, or 0 if it is unallocated.
+(This would be the PID of the scheduler in most operating systems and it is not used by normal processes.
+A different magic value can be used.)
+
+We list now the possible states a locker may have in case we _always_ implement lazy loading:
+
+// ***
 
 *VOID* (`0b000`)::
-[.darkred]#_Locker is unconfigured; there is no saved value for the current process._# +
-`[.darkred]#configured = 0, lazy = 0.#`
-** We assume `dirty = 0` and `native = 0`.
+`[.darkred]#*Description:*#{nbsp}`[.darkred]#_Locker is unconfigured; there is no saved value for the current process._# +
+`[.darkred]#*Properties:*{nbsp}{nbsp}configured = 0, lazy = 0.#` (Assumed: `dirty = 0` and `alien = 0`.)
+** Preempted from this state to context save in privileged code: Nothing to save.
 ** *Usage* gives error _ace_err_unconfigured_, does not trap.
 ** *Configuration* does not trap, works as expected-including errors with *export* or *clone* - and sets: +
-`configured <- 1, native <- 1, lazy <- 0,` and `dirty <- 1` {implies} *DIRTY*.
-
-//
+`configured <- 1, alien <- 0, lazy <- 0,` and `dirty <- 1` `{implies}` *DIRTY*.
 
 *LAZY* (`0b100`)::
-[.darkred]#_Locker is unconfigured; parent has saved a value to be lazy-loaded for the current process._# +
-`[.darkred]#configured = 0, lazy = 1.#`
-** We assume `dirty = 0` and `native = 0`.
+`[.darkred]#*Description:*#{nbsp}`[.darkred]#_Locker is unconfigured; parent has saved a value to be lazy-loaded for the current process._# +
+`[.darkred]#*Properties:*{nbsp}{nbsp}configured = 0, lazy = 1.#` (Assumed: `dirty = 0` and `alien = 0`.)
+** Preempted from this state to context save in privileged code: Nothing to save.
 ** *Usage* or *export* cause a trap to allow the OS to lazy load a CC's value in the locker for the current process first, then set `dirty <- 0`, `lazy <- 0` and the instruction is restarted unrestricted and operates from the state *CLEAN*.
-   If the CC in the locker has been potentially modified, then `dirty <- 1` {implies} *DIRTY*.
+   If the CC in the locker has been potentially modified, then `dirty <- 1` `{implies}` *DIRTY*.
 ** *Configuration* of the locker works as expected, and sets: +
-   `configured <- 1, native <- 1, lazy <- 0`, and `dirty <- 1` {implies} *DIRTY*.
+   `configured <- 1, alien <- 0, lazy <- 0`, and `dirty <- 1` `{implies}` *DIRTY*.
 
-//
-
-*CLEAN* (`0b011`)::
-[.darkred]#_Locker is configured for the current process and loaded. Unchanged since last switch._# +
-`[darkred]#configured = 1, native = 1, lazy = 0, dirty = 0.#`
-** If the process is interrupted now, the OS does not need to save it again.
-** *Usage* is unrestricted; if the CC in the locker is potentially modified, `dirty <- 1` {implies} *DIRTY*.
+*CLEAN* (`0b001`)::
+`[.darkred]#*Description:*#{nbsp}`[.darkred]#_Locker is configured for the current process and loaded. Unchanged since last switch._# +
+`[.darkred]#*Properties:*{nbsp}{nbsp}configured = 1, alien = 0, lazy = 0, dirty = 0.#`
+** Preempted from this state to context save in privileged code: Nothing to save, since the locker is already clean and the saved state also marks it as clean.
+** *Usage* is unrestricted; if the CC in the locker is potentially modified, `dirty <- 1` `{implies}` *DIRTY*.
 ** *Configuration* works as expected, and sets: +
-`configured <- 1, native <- 1, lazy <- 0`, and `dirty <- 1` {implies} *DIRTY*.
+`configured <- 1, alien <- 0, lazy <- 0`, and `dirty <- 1` `{implies}` *DIRTY*.
 
-//
-
-*DIRTY* (`0b111`)::
-[.darkred]#_Locker is configured for the current process and loaded. Potentially changed since last switch._# +
-`[darkred]#configured = 1, native = 1, lazy = 0, dirty = 1.#`
-** If the process is interrupted now, the OS must save the CC in the locker.
+*DIRTY* (`0b101`)::
+`[.darkred]#*Description:*#{nbsp}`[.darkred]#_Locker is configured for the current process and loaded. Potentially changed since last switch._# +
+`[.darkred]#*Properties:*{nbsp}{nbsp}configured = 1, alien = 0, lazy = 0, dirty = 1.#`
+** Preempted from this state to context save in privileged code: Nothing to save, the locker's state in the saved state must be marked as dirty.
 ** *Usage* is unrestricted.
 ** *Configuration*: Works as expected, and leave the properties unchanged: +
-`configured <- 1, native <- 1, lazy <- 0`, and `dirty <- 1` {implies} *DIRTY*.
+`configured <- 1, alien <- 0, lazy <- 0`, and `dirty <- 1` `{implies}` *DIRTY*.
 
-//
-
-*ALIEN* (`0b001`)::
-[.darkred]#_Locker is configured for a different process; blocked for the current one; no value to be lazy-loaded._# +
-`[darkred]#configured = 1, native = 0, lazy = 0.#`
+*ALIEN* (`0b011`)::
+`[.darkred]#*Description:*#{nbsp}`[.darkred]#_Locker is configured for alien process; blocked for current one; no value to be lazy-loaded._# +
+`[.darkred]#*Properties:*{nbsp}{nbsp}configured = 1, alien = 1, lazy = 0.#`  (Assumed: `dirty = 0`.)
+** Preempted from this state to context save in privileged code: nothing to do.
+//  *** If next process has no CC to put in this locker  `{implies}` *ALIEN*.
+//  *** If next process has a CC to put in this locker  `{implies}` *ALIEN_LAZY*.
 ** *Usage* results in error _ace_err_unconfigured_.
 ** *Configuration* of the locker will first trap to the operating system, to allow the latter to:
 export the CC in the locker to the state of the owning process;
 clear the locker;
 update the flags to *VOID* to allow the current process to configure it, and return to the process to restart the operation allowing the configuration.
 
-//
+*ALIEN_LAZY* (`0b111`)::
+`[.darkred]#*Description:*#{nbsp}`[.darkred]#_Locker is configured for alien process; blocked for current one; there is a value to be lazy loaded for the current process._# +
+`[.darkred]#*Properties:*{nbsp}{nbsp}configured = 1, alien = 1, lazy = 1.#`  (Assumed: `dirty = 0`.)
+ ** Preempted from this state to context save in privileged code: nothing to do.
+//  *** If next process has no CC to put in this locker  `{implies}` *ALIEN*.
+//  *** If next process has a CC to put in this locker  `{implies}` *ALIEN_LAZY*.
+ ** In this case accessing it (for usage, configuration, or export) will trap to the operating system.
+ *** The operating system must save the current value to the state of its owner (if it is dirty, which is tracked by the supervisor in this case according to the dirtiness state of the locker when the owner relinquished control), and then load the value from the current state. +
 
-*ALIEN_LAZY* (`0b101`)::
-[.darkred]#_Locker is configured for a different process; blocked for the current one; there is a value to be lazy loaded for the current process._# +
-`[darkred]#configured = 1, native = 0, lazy = 1.#`
-** In this case accessing it will trap to the operating system.
-** The operating system must save the current value to the state of its owner, load the value from the current state. +
+While restoring the state for a process, for a given locker, the privileged code can observe following situations:
 
-//
+. The locker is unconfigured, and
+ .. no CC for that locker is in the saved state of the process.
+   * Nothing to do. Set state to *VOID*.
+ .. a CC for that locker is in the saved state of the process.
+   * Nothing to do. Set state to *LAZY*.
+. The locker is already configured
+ .. with a CC for the process.
+   * Nothing to do. Set state to *CLEAN* or *DIRTY* depending on the saved dirtiness state.
+ .. with a CC for a different process, and:
+  ... no CC for that locker is in the saved state of the process.
+    * Nothing to do. Set state to *ALIEN*.
+  ... a CC for that locker is in the saved state of the process.
+    * Nothing to do. Set state to *ALIEN_LAZY*.
 
-The encoding can be interpreted as follows:
+The three-bit encoding in the listing of the states has been chosen to be represented by the bits in three CSRs `aceconfigured`, `acealien`, and `acedirty`, as follows:
 
-* Bit 0 distinguishes between unconfigured (value is 0) or configured (1);
-* Bit 1 distinguishes between native (1) or alien (0), where unconfigured is considered alien in order to have a value equal to zero for the *VOID* state; and
-* Bit 2 has a compressed semantic, since it distinguishes between clean (0) and dirty (1) if the Locker is configured for the current process;
+* Bit 0 in `aceconfigured` distinguishes between unconfigured (value is 0) or configured (1);
+* Bit 1 in `acealien` distinguishes between native (0) or alien (1), where an unconfigured locker is considered native in order to have a value equal to zero for the *VOID* state; and
+* Bit 2 in `acedirty`, which has compressed semantics: it distinguishes between clean (0) and dirty (1) if the Locker is configured for the current process;
 and between the absence of a value to lazy-load (0) or its presence (1) if the Locker is configured for an alien process.
-Essentially 0 means "parent mode has nothing extra to do" and 1 means "parent mode has something extra to do".
+Essentially 0 means "parent mode has nothing extra to do" and 1 means "parent mode has something dirty to do".
 
-Therefore, we can collect the bits into three CSRs:
-Bit 0 in `aceconfigured`, Bit 1 in `acenative`, and Bit 2 in `acestale`.
-The reason for the use of "stale" here is that, in computer architecture, a state is said to be stale if it cannot be used as-is because it is displaced, like a CC that needs to be lazy-loaded first, or its value no longer reflects the correct state, like the CC in the locker saved by the context switching code in the parent mode. So, there is a bit of an abuse of language, since in the contexts of laziness and dirtiness it is not the same object that it stale.
+NOTE: If the `acealien` bit is always 0, then the bits in `aceconfigured` and `acedirty` have the same meaning as in the simpler model without lazy-loading.
 
-NOTE: This 6-state property can track the locker states for all higher-privileged modes.
+NOTE: This 6-state property can in theory track the locker states for all higher-privileged modes.
 S/VS can trust the values coming from U, since U cannot write to these registers.
 However, M and HS cannot trust the values from S and VS, since the latter can write to these registers.
-This implies that M, resp., HS mode must always context-switch all lockers when context-switching S, resp., VS domains, since it doesn't know which lockers have changed. We *could* add additional registers to track changes at each level.  This should be done for F and V too, ideally, in order to make the architecture consistent.
+This implies that M, resp., HS mode must always context-switch all lockers when context-switching S, resp., VS domains, since it doesn't know which lockers have changed, and therefore they can only use the `*status.ACES` fields.
+While it would be possible to add additional registers to track changes at each level, ideally this should be done for F and V too (and in fact for all extensions that add state), in order to make the architecture consistent.
 
-// [.red]#Remember to add the handling of the fine-grained CC management CSRs.#
+[[ACE-tracking-alien-hybrid]]
+===== Support for Hybrid Laziness Tracking
+
+In practice, the privileged code can also mix the two approaches, for instance considering lazy-loading only if in a VM that has been migrated to a machine with a reduced LF, choosing to behave like in the simpler model whenever possible, until the processes will adjust by themselves to the new hardware configuration by doing their own offload and reload of contexts (as they should do anyway).
+
+It is ultimately a choice of the designer of the operating system to choose which approach they consider more appropriate for their specific use case.
+The information provided by the hardware should be sufficient to allow adaptive behaviors for the purpose of optimizing performance.
 
 [[ACE-CSR-ace-error]]
 ===== `aceerror`
@@ -498,11 +527,11 @@ the requested change of state in `ace.state` is not permitted;
 the change in usage policies in `ace.restrict` is not permitted because it would either downgrade or overwrite the current restrictions in the CC in the locker;
 software tried to use an incomplete CC in a locker as a source in a `ace.exec`, `ace.state`, `ace.input`, `ace.output`, `ace.clone`, `ace.derive`, `ace.harden`, `ace.restrict` operations.
 |  4   | ace_err_unimplemented   | The requested algorithm is not implemented. May be triggered also on algorithm variants, for instance if `ace.harden` is issued on an algorithm for which a non-side channel protected version is not implemented.
-|  5   | ace_err_memory          | The free internal CF memory is not sufficient to perform the `ace.init`, `ace.exec`, `ace.clone`, or `ace.derive`.
+|  5   | ace_err_memory          | The free internal LF memory is not sufficient to perform the `ace.init`, `ace.exec`, `ace.clone`, or `ace.derive`.
 The implementation must make sure this cannot happen with any other operation.
-If algorithms that support `ace.derive` are implemented, the implementation must make sure that both the input and output CCs of this operation can be allocated in the CF.
+If algorithms that support `ace.derive` are implemented, the implementation must make sure that both the input and output CCs of this operation can be allocated in the LF.
 |  6   | ace_err_unconfigured    | Software tried to use an unconfigured locker as a source in one of the following instructions: `ace.exec`, `ace.state`, `ace.input`, `ace.output`, `ace.clone`, `ace.derive`, or `ace.harden`/`ace.restrict`.. +
-This can be used in low CF memory situations to trigger a lazy re-load.
+This can be used in low LF memory situations to trigger a lazy re-load.
 |===
 (((ACE, error codes)))
 
@@ -964,7 +993,7 @@ The alias for this instruction is `ace.reset`.
 
 `ace.enable` must be issued before using any ACE operation, i.e. `ace.config` passing the immediate 1.
 
-NOTE: The advantage of `ace.reset` with respect to a loop that clears all lockers is that the entire CF memory is cleared without the need for compaction/management between the separate `ace.clear` operations and this opertation cannot be interrupted, reducing potential wasteful context saves.
+NOTE: The advantage of `ace.reset` with respect to a loop that clears all lockers is that the entire LF memory is cleared without the need for compaction/management between the separate `ace.clear` operations and this opertation cannot be interrupted, reducing potential wasteful context saves.
 
 The instruction will trap in the following cases: [.red]#TBD#.
 --
@@ -1742,7 +1771,7 @@ vsetvli zero,4,e32,m1,ta,ma               // Use 128-bit vectors
 ace.import L0,(X5)                        // Import the SCC into Locker L0
 ace.error X1                              // Read error from a CSR
 if (X1 != 0) then { handle error }        // ACE may fail to validate SCC, algorithm may
-                                          // be not supported, or CF memory may be full
+                                          // be not supported, or LF memory may be full
 ace.state L0,#ace_state_encrypt           // Configure locker for encryption
 ace.error X1                              // Read error from a CSR
 if (X1 != 0) then { handle error }        // Error if encryption not allowed
@@ -2764,7 +2793,7 @@ We now describe the state machines of the various Ascon-based algorithms standar
 
 ==== VM Migration
 
-Users may migrate their virtual machines (VMs) between client devices with CPUs from different silicon providers—a practice already common when moving interrupted VMs between Intel and AMD systems. In such a scenario, the ACE implementation on the destination device might have a smaller Context File (CF) capacity. System software could then be unable to restore all cryptographic contexts.
+Users may migrate their virtual machines (VMs) between client devices with CPUs from different silicon providers—a practice already common when moving interrupted VMs between Intel and AMD systems. In such a scenario, the ACE implementation on the destination device might have a smaller Locker File (LF) capacity. System software could then be unable to restore all cryptographic contexts.
 
 To address this, the `acelazy` CSR to enables lazy context reloading by causing the hart to trap to the parent mode if a locker being accessed is marked as "lazy", i.e., the corresponding bit in `acelazy` is set.  When this requires freeing one or more lockers first, system software decides which contexts to evict.
 
