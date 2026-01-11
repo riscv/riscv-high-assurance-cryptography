@@ -433,7 +433,7 @@ We list now the possible states a CC may have:
 *ALIEN* (`0b001`)::
 [.darkred]#_Locker is configured for a different process; blocked for the current one; no value to be lazy-loaded._# +
 `[darkred]#configured = 1, native = 0, lazy = 0.#`
-** *Usage* results in error _ace_err_unconfigured_
+** *Usage* results in error _ace_err_unconfigured_.
 ** *Configuration* of the locker will first trap to the operating system, to allow the latter to:
 export the CC in the locker to the state of the owning process;
 clear the locker;
@@ -930,8 +930,10 @@ In all cases where a GPR is used to index a locker, we exclude the use of the ze
 (((ACE, instruction, ace.reset)))
 
 Encoding::
-This is an I-type instruction.
 +
+--
+This is an I-type instruction.
+
 [wavedrom, , svg]
 ....
 {reg:[
@@ -942,6 +944,11 @@ This is an I-type instruction.
     { bits: 12, name: 'immed12' },
 ]}
 ....
+
+NOTE: This instruction shares its encoding with `ace.clear` with `3'b111` as instruction code (use a GPR to select the locker).
+However, the zero in the source field [11:7] for indirect locker indexing is defined as invalid/special, and this allows to define this instruction.#
+--
++
 
 Description::
 +
@@ -954,14 +961,13 @@ Enable, disable, or reset the feature in the current process domain:
 The alias for this instruction is `ace.reset`.
 
 `ace.enable` must be issued before using any ACE operation, i.e. `ace.config` passing the immediate 1.
---
-+
 
 NOTE: The advantage of `ace.reset` with respect to a loop that clears all lockers is that the entire CF memory is cleared without the need for compaction/management between the separate `ace.clear` operations and this opertation cannot be interrupted, reducing potential wasteful context saves.
 
 The instruction will trap in the following cases: [.red]#TBD#.
+--
++
 
-NOTE: This instruction shares its encoding with `ace.clear` with `3'b111` as instruction code (use a GPR to select the locker). However, the zero in the source field [11:7] for indirect locker indexing is defined as invalid/special, and this allows to define this instruction.#
 
 
 // [.darkred]#Proposal: With the immediate `0xa11` (all), all lockers will be cleared, as if `ace.clear` had been called on each of them, but the feature is not disabled.
@@ -1417,18 +1423,26 @@ else it determines the GPR that contains the context number.
 // comment
 
 Description::
-This instruction restricts the usage of a CC (as stored in a locker) to specific modes or to a specified `ASID` or `VMID`. +
-It can also increase the side-channel protection level of the CC. +
-Let `m` be the metadata field in the destination CC. The instruction works as follows:
++
+--
+This instruction can be used to:
+
+* Restrict the usage of a CC (as stored in a locker) to specific modes or to a specified `ASID` or `VMID`; and
+* Activate the side-channel protection of the CC or increase it.
+
+Let `m` be the metadata field of the CC in the destination locker.
+The instruction works as follows:
 
 * Bits [11:10] and [63:26] of the input register `Xs` have the same format as the corresponding bits of the metadata.
 * Bits [9:0] and [25:12] of the input register `Xs` are ignored.
-* Bits [11:10] can be used to turn on or increase the level of the side-channel protection of the algorithm in the CC, if the microarchitecture supports the corresponding implementation. The levels are defined in <<ACE-SC-protection-levels>>. Downgrading side-channel protection is not permitted, and attempting to do so will result in error ace_err_invalid (cf.{nbsp}<<ACE-error-codes>>).
+* Bits [11:10] can be used to turn on or increase the level of the side-channel protection of the algorithm in the CC, if the microarchitecture supports the corresponding implementation. The levels are defined in <<ACE-SC-protection-levels>>. Downgrading side-channel protection is not permitted, and attempting to do so will result in error _ace_err_invalid_ (cf.{nbsp}<<ACE-error-codes>>).
 * A zero in any of the six bits `Xs`[30:25] means that the corresponding policy is not changed.
 * A one in the any of the four bits `Xs`[28:25] means that usage by the corresponding mode is forbidden, and the corresponding bit in the metadata of the destination CC is set to 1.
 * If `Xs`[30] is set and `m`[30] is NOT set, then Usage_Policy_3, i.e., `m`[47:32], is set to `Xs`[47:32].
 * If `Xs`[31] is set and `m`[31] is NOT set, then Usage_Policy_4, i.e., `m`[63:48], is set to `Xs`[63:48].
 * If `Xs`[30] and `m`[30] are both set and `Xs`[47:32] <> `m`[47:32], or if `Xs`[31] and `m`[31] are both set and `Xs`[63:48] <> `m`[63:48], then `aceerror` is set to ace_error_invalid.
+--
++
 
 [[ACE-instruction-input]]
 ==== ace.input (optional)
@@ -1513,7 +1527,7 @@ Three types of supporting operations are required:
 
 These supporting instructions must be uninterruptible.
 
-Furthermore, the initial cryptographic phase of `ace.export` and the authentication phase of `ace.import` must be uninterruptible as well.
+The initial cryptographic phase of `ace.export` and the authentication phase of `ace.import` must be uninterruptible as well.
 Even if these parts are executed concurrently with other operations, the trap handler may need to wait for these steps to complete before proceeding with memory/move operations.
 
 The support instructions are implementation-specific and not explicitly defined in the architecture.
