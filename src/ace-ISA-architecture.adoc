@@ -210,7 +210,7 @@ where a single write to aceenable can modify both mstatus and vsstatus:
 --
 
 [[ACE-ACES-field-in-status]]
-===== ACES field in `*status`
+===== ACES field in `*status`, `aceconfigured`, and `acedirty`
 
 An ACE context status field, ACES,
 (((CSR,ACES field in *status)))
@@ -360,15 +360,18 @@ Initial
 Initial
 |===
 
-In order to know whether a locker is configured, we need an `aceconfigured` CSR, that has a bit per locker to denote whether it is configured or not.
-In the simplest way, context switching privileged code can simply save and restore all configured lockers at each context switch,
-where the contexts are saved if `*status.ACES` register is not Clean.
+Two further CSRs: `aceconfigured` and `acedirty` are used to track the configuration and dirtiness of lockers in a more fine-grained manner:
 
-In general this is not very efficient.
-Using an `acedirty` CSR, also with a bit per locker to denote whether the CC in the locker is guaranteed to be the same as the last saved state, or possibly changed, can help optimize context switching by saving only the dirty lockers.
-//Fine-grained tracking activeness and dirtiness of individual lockers uses the `aceconfigured` and `acedirty` CSRs, cf.{nbsp}<<ACE-tracking-alien-lockers>>.
+. `aceconfigured` has a size of XLEN bits, of which only the 32 least significant bits are currently used.
+``aceconfigured[``__i__``]`` is 1 if Locker #_i_ is configured, otherwise it is 0.
 
-Since we need a mechanism to potentially implement and track lazy-loading after a migration to a device with a smaller LF, we see in the next section how to use it to have general lazy-loading.
+. The `acedirty` has a size of XLEN bits, of which only the 32 least significant bits are currently used.
+``acedirty[``__i__``]``  is 1 if Locker #_i_ is (potentially) dirty, otherwise it is 0.
+If Locker #_i_ is unconfigured, then ``acedirty[``__i__``]`` must read 0.
+
+Using these two CSRs, privileged context switching code needs to save only the dirty lockers and restore only the configured ones.
+
+Since we need a mechanism to potentially implement and track lazy-loading after a migration to a device with a smaller LF, we see in the next section how to use it and also implement general lazy-loading.
 
 [[ACE-tracking-alien-lockers]]
 ===== Fine Grained Locker Management with Lazy-Loading: `aceconfigured`, `acealien`, and `acedirty`
@@ -399,9 +402,8 @@ It is the duty of the operating system to keep track:
 (This would be the PID of the scheduler in most operating systems and it is not used by normal processes.
 A different magic value can be used.)
 
-We list now the possible states a locker may have in case we _always_ implement lazy loading:
-
-// ***
+We now proceed to list the possible states a locker may have in the case we where we implement lazy loading.
+Each state is represented by a 3-bit value, also given (and explained later).
 
 *VOID* (`0b000`)::
 `[.darkred]#*Description:*#{nbsp}`[.darkred]#_Locker is unconfigured; there is no saved value for the current process._# +
@@ -415,8 +417,9 @@ We list now the possible states a locker may have in case we _always_ implement 
 `[.darkred]#*Description:*#{nbsp}`[.darkred]#_Locker is unconfigured; parent has saved a value to be lazy-loaded for the current process._# +
 `[.darkred]#*Properties:*{nbsp}{nbsp}configured = 0, lazy = 1.#` (Assumed: `dirty = 0` and `alien = 0`.)
 ** Preempted from this state to context save in privileged code: Nothing to save.
-** *Usage* or *export* cause a trap to allow the OS to lazy load a CC's value in the locker for the current process first, then set `dirty <- 0`, `lazy <- 0` and the instruction is restarted unrestricted and operates from the state *CLEAN*.
-   If the CC in the locker has been potentially modified, then `dirty <- 1` `{implies}` *DIRTY*.
+** *Usage* or *export* cause a trap to allow the OS to lazy load a CC's value in the locker for the current process first, then set `dirty <- 0`, `lazy <- 0`.
+    The instruction is restarted unrestricted and operates from the state *CLEAN*.
+    The instruction may cause the locker to become *DIRTY*.
 ** *Configuration* of the locker works as expected, and sets: +
    `configured <- 1, alien <- 0, lazy <- 0`, and `dirty <- 1` `{implies}` *DIRTY*.
 
@@ -432,16 +435,15 @@ We list now the possible states a locker may have in case we _always_ implement 
 `[.darkred]#*Description:*#{nbsp}`[.darkred]#_Locker is configured for the current process and loaded. Potentially changed since last switch._# +
 `[.darkred]#*Properties:*{nbsp}{nbsp}configured = 1, alien = 0, lazy = 0, dirty = 1.#`
 ** Preempted from this state to context save in privileged code: Nothing to save, the locker's state in the saved state must be marked as dirty.
+*** The privileged code may also save the locked in the state, and mark this entry as clean.
 ** *Usage* is unrestricted.
 ** *Configuration*: Works as expected, and leave the properties unchanged: +
 `configured <- 1, alien <- 0, lazy <- 0`, and `dirty <- 1` `{implies}` *DIRTY*.
 
 *ALIEN* (`0b011`)::
-`[.darkred]#*Description:*#{nbsp}`[.darkred]#_Locker is configured for alien process; blocked for current one; no value to be lazy-loaded._# +
+`[.darkred]#*Description:*#{nbsp}`[.darkred]#_Locker is configured for an alien process; no value to be lazy-loaded for current process._# +
 `[.darkred]#*Properties:*{nbsp}{nbsp}configured = 1, alien = 1, lazy = 0.#`  (Assumed: `dirty = 0`.)
 ** Preempted from this state to context save in privileged code: nothing to do.
-//  *** If next process has no CC to put in this locker  `{implies}` *ALIEN*.
-//  *** If next process has a CC to put in this locker  `{implies}` *ALIEN_LAZY*.
 ** *Usage* results in error _ace_err_unconfigured_.
 ** *Configuration* of the locker will first trap to the operating system, to allow the latter to:
 export the CC in the locker to the state of the owning process;
@@ -449,15 +451,13 @@ clear the locker;
 update the flags to *VOID* to allow the current process to configure it, and return to the process to restart the operation allowing the configuration.
 
 *ALIEN_LAZY* (`0b111`)::
-`[.darkred]#*Description:*#{nbsp}`[.darkred]#_Locker is configured for alien process; blocked for current one; there is a value to be lazy loaded for the current process._# +
+`[.darkred]#*Description:*#{nbsp}`[.darkred]#_Locker is alien-configured; there is a value to be lazy loaded for the current process._# +
 `[.darkred]#*Properties:*{nbsp}{nbsp}configured = 1, alien = 1, lazy = 1.#`  (Assumed: `dirty = 0`.)
  ** Preempted from this state to context save in privileged code: nothing to do.
-//  *** If next process has no CC to put in this locker  `{implies}` *ALIEN*.
-//  *** If next process has a CC to put in this locker  `{implies}` *ALIEN_LAZY*.
  ** In this case accessing it (for usage, configuration, or export) will trap to the operating system.
  *** The operating system must save the current value to the state of its owner (if it is dirty, which is tracked by the supervisor in this case according to the dirtiness state of the locker when the owner relinquished control), and then load the value from the current state. +
 
-While restoring the state for a process, for a given locker, the privileged code can observe following situations:
+While restoring the state for a process, for a given locker, the privileged code can observe following situations, where we also record what it has to do in case every locker access is implemented as lazily as possible:
 
 . The locker is unconfigured, and
  .. no CC for that locker is in the saved state of the process.
@@ -483,19 +483,20 @@ Essentially 0 means "parent mode has nothing extra to do" and 1 means "parent mo
 
 NOTE: If the `acealien` bit is always 0, then the bits in `aceconfigured` and `acedirty` have the same meaning as in the simpler model without lazy-loading.
 
+// [[ACE-tracking-alien-hybrid]]
+// ===== Support for Hybrid Laziness Tracking
+
+[NOTE]
+====
+In practice, the privileged code can also mix the two approaches, for instance considering lazy-loading only if in a VM that has been migrated to a machine with a reduced LF, choosing to behave like in the simpler model whenever possible, until the processes will adjust by themselves to the new hardware configuration by doing their own offload and reload of contexts (as they should do anyway). It is ultimately a choice of the designer of the operating system to choose which approach they consider more appropriate for their specific use case.
+The information provided by the hardware should be sufficient to allow adaptive behaviors for the purpose of optimizing performance.
+====
+
 NOTE: This 6-state property can in theory track the locker states for all higher-privileged modes.
 S/VS can trust the values coming from U, since U cannot write to these registers.
 However, M and HS cannot trust the values from S and VS, since the latter can write to these registers.
 This implies that M, resp., HS mode must always context-switch all lockers when context-switching S, resp., VS domains, since it doesn't know which lockers have changed, and therefore they can only use the `*status.ACES` fields.
 While it would be possible to add additional registers to track changes at each level, ideally this should be done for F and V too (and in fact for all extensions that add state), in order to make the architecture consistent.
-
-[[ACE-tracking-alien-hybrid]]
-===== Support for Hybrid Laziness Tracking
-
-In practice, the privileged code can also mix the two approaches, for instance considering lazy-loading only if in a VM that has been migrated to a machine with a reduced LF, choosing to behave like in the simpler model whenever possible, until the processes will adjust by themselves to the new hardware configuration by doing their own offload and reload of contexts (as they should do anyway).
-
-It is ultimately a choice of the designer of the operating system to choose which approach they consider more appropriate for their specific use case.
-The information provided by the hardware should be sufficient to allow adaptive behaviors for the purpose of optimizing performance.
 
 [[ACE-CSR-ace-error]]
 ===== `aceerror`
@@ -514,7 +515,7 @@ Error codes specific to custom algorithms may be freely defined in the range [12
 .Error codes and their meanings
 [float="center",align="center",width="100%",cols="^6%,<24%,<70%",options="header"]
 |===
-|Value | Mnemonic                | Examples
+|Value | Mnemonic                | Examples (((ACE, error codes)))
 |  0   | ace_err_ok              | No error.
 |  1   | ace_err_authentication  | Authentication failure in `ace.import`, but can also follow `ace.exec` with certain algorithms.
 |  2   | ace_err_privilege       | `ace.exec`, `ace.state`, `ace.clone`, `ace.derive` failed because the access control policies in the metadata of the CC prevent usage in the current architectural state.
@@ -533,7 +534,6 @@ If algorithms that support `ace.derive` are implemented, the implementation must
 |  6   | ace_err_unconfigured    | Software tried to use an unconfigured locker as a source in one of the following instructions: `ace.exec`, `ace.state`, `ace.input`, `ace.output`, `ace.clone`, `ace.derive`, or `ace.harden`/`ace.restrict`.. +
 This can be used in low LF memory situations to trigger a lazy re-load.
 |===
-(((ACE, error codes)))
 
 
 [[ACE-acestart-definition]]
@@ -725,12 +725,13 @@ Reconfiguring the RCSK is a better approach for such isolation requirements, whe
 ===== Localities
 
 Internally, ACE keeps a table of 128-bit Locality Secrets (LS), the Locality Secrets Table (LST).
-Some of these entries are fixed, other values may be configurable only using an implementation-specific authenticated hardware procedure, and the remaining may be programmed by MM (*Note:* _we need to define the corresponding CSRs_).
-The LST is a global table shared across all ACE units with some fields which can be MM-programmed and are architectural (i.e., per hart).
+Some entries of the LST are fixed or configurable only using an implementation-specific authenticated hardware procedure, and these are
+global and shared across all ACE units.
+A few entries may be programmed by MM and are architectural, i.e., per hart.
 
 If the Locality Field of a CC is -1 (all ones), then the RCSK is used.
-Otherwise, this value is used as an index _i_ in the HST, and a derived key computed from RCSK and LST[_i_] is used for import/export in place of the RCSK.
-The encryption and authentication keys are then derived from the DCSK.
+Otherwise, this value is used as an index _i_ in the LST, and the actual CSK is derived from the RCSK and LST[_i_].
+//The encryption and authentication keys are then derived from the DCSK.
 
 In <<ACE-locality-indexes>>, we list the mandatory entries.
 Column "MM-Config." indicates whether MM may be allowed to configure the entry.
@@ -762,12 +763,12 @@ The constant Localities_MAX is the maximum number of Localities supported by the
 
 NOTE: MM is responsible for virtualizing the OSSecret and BootSession_Secret Locality Secrets.
 
-*Example*: _If a key's metadata specifies a Locality field value of "2", the key for import/export operations is derived from the RCSK and the "OEM Secret".
-Consequently, while `ace.export` remains functional on the same device to support context switching, an `ace.import` of the resulting SCC on a device from a different OEM will trigger an authentication failure (provided that the OEM Secrets are, in fact, different)._
+*Example*: _If a key's metadata specifies a Locality field value of 2, the key for import/export operations is derived from the RCSK and the OEM Secret. If we generate an SCC with `ace.export` on a first device, an `ace.import` of the resulting SCC on a second device will trigger an authentication failure if the OEM Secrets differ._
 
-NOTE: _A CC may reference a key via an index into the system-defined System Key Table (SKT).loc
+NOTE: _A CC may reference a key via an index into the system-defined System Key Table (SKT).
 A device-specific SKT entry may correspond to a different key on another device, leading to unspecified behavior.
-Consequently, implementations of the STK must provide appropriate Locality metadata to the ACE unit during CC configuration, verify compatibility between the key's policies and the user's request, and enforce stricter policies if necessary._
+Implementations of the STK must provide a suitable Locality to the ACE unit during CC configuration,
+and set usage policies that are at least as strict as the key's own._
 
 [[ACE-formats]]
 ===== Formats of Configuration Inputs and Sealed Configuration Contexts
@@ -812,11 +813,9 @@ We now define the RFC8452 Key Derivation and the DCSK Derivation functions.
 [source,sail]
 ----
 function RFC8452_KeyDeriv(K) = {
-  struct {
-    AESE256(K, (0[125:0] @ 0b101))[63:0] @ AESE256(K, (0[125:0] @ 0b100))[63:0] @
-    AESE256(K, (0[125:0] @ 0b011))[63:0] @ AESE256(K, (0[125:0] @ 0b010))[63:0],
-    AESE256(K, (0[125:0] @ 0b001))[63:0] @ AESE256(K, (0[125:0] @ 0b000))[63:0]
-  }
+  struct { AESE256(K, (0[125:0] @ 0b101))[63:0] @ AESE256(K, (0[125:0] @ 0b100))[63:0] @
+           AESE256(K, (0[125:0] @ 0b011))[63:0] @ AESE256(K, (0[125:0] @ 0b010))[63:0],
+           AESE256(K, (0[125:0] @ 0b001))[63:0] @ AESE256(K, (0[125:0] @ 0b000))[63:0] }
 }
 ----
 
@@ -875,13 +874,12 @@ cache recently used derived keys for both the Root RCSK and Locality-derived key
 
 (This section is informative and non-normative.)
 
-ACE provides two architected layers of usage control.
+ACE provides two architected layers of usage control:
 
-At the User and Supervisor levels, CC usage can be optionally constrained by ASID and VMID.
+. At the User and Supervisor levels, CC usage can be optionally constrained by ASID and VMID.
 This is a lightweight mechanism.
 Because filtering by ASID is inactive when the hart is in S mode or higher, context switching can be performed without modifying the RCSK.
-
-At higher privilege levels, not only the usage, but even the import of CCs can be restricted by a programmable RCSK.
+. At higher privilege levels, not only the usage, but even the import of CCs can be restricted by a programmable RCSK.
 This offers stronger security by also preventing unauthorized `ace.import` operations, but incurs higher overhead as it typically requires an `ecall`.
 
 The envisioned usage model employs ASID/VMID filtering at the U level, and potentially at the S level in high-performance systems where migration is not required (e.g., automotive applications). Cryptographic domain separation via the RCSK is intended for Virtual Machines, Supervisor Domains, Worlds, and TEEs within those contexts, as these demand stronger security guarantees.
