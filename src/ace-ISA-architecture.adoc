@@ -324,43 +324,42 @@ Initial
 Initial
 |===
 
-A further CSRs: `aceccstatus` is used to track the configuration and dirtiness of CRs in a more fine-grained manner:
-
+A further CSRs: `aceccstatus` is used to track the configuration and dirtiness of CRs in a more fine-grained manner,
+so that privileged context switching code needs to save only the dirty CRs and restore only the configured ones:
 
 . For RV64, `aceccstatus` has a size of 64 bits,
-``aceconfigured[``2__i__+1,2__i__``]`` takes the same values as Off, Init, Clean, Dirty as defined for `*status.ACES` for CR #__i__.
+``aceconfigured[``2__i__+1,2__i__``]`` can take the values Off, Init, Clean, Dirty as defined for `*status.ACES` for CR #__i__.
 . For RV32, there are two 32-bit registers `aceccstatush` and `aceccstatusl` (collectively referred to as `aceccstatus`)
 where
-``aceconfiguredl[``2__i__+1,2__i__``]`` takes the same values as Off, Init, Clean, Dirty as defined for `*status.ACES` for CR #__i__
+``aceconfiguredl[``2__i__+1,2__i__``]`` can take the values Off, Init, Clean, Dirty as defined for `*status.ACES` for CR #__i__
 and
 ``aceconfiguredh[``2__i__+1,2__i__``]`` for CR #__i__+16.
 
-Using this CSR, privileged context switching code needs to save only the dirty CRs and restore only the configured ones.
+We described now the semantics of the `aceccstatus` bitfields:
 
-We assume that the privileged code keeps track:
-
-* for each process, and
-** for each CR, whether it is:
- . unconfigured and
-  .. there is no saved value for the current process; or
-  .. there is a saved value for the current process -- or
- . configured and it contains a CC for the process, where
-  .. the content is clean, or
-  .. the content is dirty.
+// We assume that the privileged code keeps track:
+//
+// * for each process, and
+// ** for each CR, whether it is:
+//  . unconfigured and
+//   .. there is no saved value for the current process; or
+//   .. there is a saved value for the current process -- or
+//  . configured and it contains a CC for the process, where
+//   .. the content is clean, or
+//   .. the content is dirty.
 
 //
-We now proceed to list the possible states a CR may have in the case we where we implement lazy loading.
 
 *INITIAL* (`0b01`)::
 *Description:* _The CR is unconfigured; there is no saved value for the current process._ +
-** At context save in privileged code: Nothing to save.
+//** At context save in privileged code: Nothing to save.
 ** *Usage* gives error _ace_err_unconfigured_, does not trap.
 ** *Configuration* does not trap, works as expected-including errors with *export* or *clone* - and sets the status to *DIRTY*.
 
 *OFF*  (`0b00`, also called *LAZY*)::
 *Description:* _This is different from the global *OFF* state for the entire unit. It is used to denote that
 the CR is unconfigured, but the privileged switching code has saved a value to be lazy-loaded for the current process._ +
-** At context save in privileged code: Nothing to save.
+//** At context save in privileged code: Nothing to save.
 ** *Usage* or *export* cause a trap to allow the OS to lazy load a CC's value in the CR for the current process first.
     The instruction is restarted unrestricted and operates from the status *CLEAN*.
     The instruction may cause the CR to become *DIRTY*.
@@ -368,14 +367,13 @@ the CR is unconfigured, but the privileged switching code has saved a value to b
 
 *CLEAN* (`0b10`)::
 *Description:* _The CR is configured for the current process and loaded. Unchanged since last switch._ +
-** At context save in privileged code: Nothing to save, since the CR is already clean and the saved state also marks it as clean.
+//** At context save in privileged code: Nothing to save, since the CR is already clean and the saved state also marks it as clean.
 ** *Usage* is unrestricted; if the CC in the CR is potentially modified, `dirty <- 1` `{implies}` *DIRTY*.
 ** *Configuration* works as expected, and sets the CR's status to *DIRTY*.
 
 *DIRTY* (`0b11`)::
 *Description:* _The CR is configured for the current process and loaded. Potentially changed since last switch._ +
-** At context save in privileged code: Nothing to save, the CR's state in the saved state must be marked as dirty.
-*** The privileged code may also save the locked in the state, and mark this entry as clean.
+//** At context save in privileged code: the CR's state is saved.
 ** *Usage* is unrestricted.
 ** *Configuration*: Works as expected, and leaves the status unchanged.
 
@@ -400,12 +398,12 @@ the CR is unconfigured, but the privileged switching code has saved a value to b
 // [[ACE-tracking-alien-hybrid]]
 // ===== Support for Hybrid Laziness Tracking
 
-[NOTE]
-====
-In practice, privileged code may combine both approaches. For example, lazy-loading could be employed only after migrating a virtual machine to a system with a smaller CR file, while otherwise following the simpler model. Over time, processes will adapt to the new hardware by offloading and reloading contexts as needed by following the recommendation to always check whether any configuration or import operation succeeds and manually managing the offloading.
-The operating system designer ultimately selects the strategy best suited to their use cases.
-The hardware provides sufficient information to enable adaptive, performance-optimized behavior.
-====
+// [NOTE]
+// ====
+// In practice, privileged code may combine both approaches. For example, lazy-loading could be employed only after migrating a virtual machine to a system with a smaller CR file, while otherwise following the simpler model. Over time, processes will adapt to the new hardware by offloading and reloading contexts as needed by following the recommendation to always check whether any configuration or import operation succeeds and manually managing the offloading.
+// The operating system designer ultimately selects the strategy best suited to their use cases.
+// The hardware provides sufficient information to enable adaptive, performance-optimized behavior.
+// ====
 
 // NOTE: The fine-grained tracking could be extended to all higher-privilege modes.
 // The S/VS modes can trust the state reported by U-mode, as U cannot write to the relevant CSRs.
