@@ -25,7 +25,7 @@ Only the ACE unit may access or modify a CC within a CR, according to the rules 
 Crucially, the content cannot be extracted in a manner that would compromise its confidentiality.
 
 Sealed Cryptographic Context:::
-(((Cryptographic context, sealed)))
+(((Cryptographic Context, sealed)))
 Since a piece of software that uses a CR may be preempted, CRs need to be reconfigured at context switch.
 In order to allow efficient reconfiguration of CRs, and protect CCs also outside the architectural state,
 a CC can be exported from a CR as a _Sealed Cryptographic Context_ (SCC), i.e., an encrypted and authenticated package.
@@ -96,9 +96,9 @@ and `Cn|C[Xn]` means that there are two different encodings for when the operand
  `ace.import.S` optionally supports system defined formats.
 | `ace.exec`
 | A. {nbsp}{nbsp} `Vd,Cn\|C[Xn],Vs` +
-  B. {nbsp}{nbsp} `Cn\|C[Xn],Vs` +
+  B. {nbsp}{nbsp} `{nbsp}{nbsp}{nbsp}Cn\|C[Xn],Vs` +
   C. {nbsp}{nbsp} `Vd,Cn\|C[Xn]` +
-  D. {nbsp}{nbsp} `Cn\|C[Xn]`
+  D. {nbsp}{nbsp} `{nbsp}{nbsp}{nbsp}Cn\|C[Xn]`
 | Performs a cryptographic operation. The instruction may also modify the internal state of the CC in the CR. This instruction admits four _forms_, depending on whether it accepts an input or not, and whether it produces an output or not.
 | `ace.size`
 | `Xd,Cs\|C[Xs]` +
@@ -120,7 +120,7 @@ For instance, the source CR could contain a KEM that configures the destination 
   `(ace.harden)`  | `Cd\|C[Xd],Xs`                   |  Narrows the Usage Policies of a CC and turns on or increases the side-channel protection of the algorithm in it, if the microarchitecture supports it.
   Removing or reducing these protections is not permitted.
    `ace.harden` is an alias for `ace.restrict`.
-| `ace.input`     | `Cd\|C[Xd],%offset(Xs)`          |  Optional. Provides an input to the algorithm configured in CR `Cd` or `L[Xd]`, in place of providing it through the `ace.exec` instruction. Needed only when the inputs are very long, such as the inputs to certain public key schemes.
+| `ace.input`     | `Cd\|C[Xd],%offset(Xs)`          |  Optional. Provides an input to the algorithm configured in CR `Cd` or `C[Xd]`, in place of providing it through the `ace.exec` instruction. Needed only when the inputs are very long, such as the inputs to certain public key schemes.
 | `ace.output`    | `%offset(Xd),Cs\|C[Xs]`          |  Optional. Writes the output of an algorithm configured in CR `Cs` or `C[Xs]`, in place of providing it through the `ace.exec` instruction. Needed when the outputs are very long, such as the outputs of certain public key schemes.
 | `ace.error`     | `Xd`                             |  Write the error code of the ACE unit into GPR `Xd`.
 |===
@@ -752,8 +752,8 @@ if (metadata.Locality == 15) then {
 {Kenc, Kauth} = RFC8452_KeyDeriv(CSK);
 let T : bits(96) = POLYVAL(Kauth, 128b'(metadata) @ content)[95:0];
 
-// note: 128bits(metadata) = 64b'0 * metadata
-let SIV : bits(96) = AESE(Kenc, 0 1b'0 @ ((T xor N)[126:0]))[127:32];
+// note: 128bits(metadata) = 0[63:0] * metadata
+let SIV : bits(96) = AESE(Kenc, 0 1'b0 @ ((T xor N)[126:0]))[127:32];
 
 M[0][127:0] = N[63:0] @ metadata[63:0];
 M[1][127:0] = SIV[95:0] @ N[95:64];
@@ -783,7 +783,7 @@ cache recently used derived keys for both the Root RCSK and Locality-derived key
    For instance, if 28 bytes have been read in, the incomplete state has processed the metadata and the first content block, and knows 4 further bytes.
   *** If the operation is preempted, `acestart` will be the number of bytes read.
   *** The corresponding exported SCC will include an 8-byte block in clear after the metadata with the `acestart` value, followed by the nonce and the tag, and the content will only contain the payload imported and read so far, zero padded up to a multiple of 8 bytes. This content is of course encrypted.
-  The AEAD algorith will use `64b'(length of payload) @ metadata` in place of `128b'(metadata)`.
+  The AEAD algorith will use `(length_of_payload)[64] @ metadata` in place of `0[64] @ metadata`.
   *** in the worst case, a SCC will be 8 bytes longer than the standard size for a complete exported CR for the same algorithm.
 
  ** `ace.export` [.red]#TBD#
@@ -1992,7 +1992,7 @@ State Machine:::
  ** In state _set_public_value_:
   *** Only  ``ace.exec`` instructions of Form B are allowed.
   "```ace.exec Cn|C[Xn],Vs```" sets
-   . `ctr <- Vs @ (b/4-1)b'0 @ 1b'1`, i.e., the `b/4` most significant bits of `Vs` are ignored, and the `b/4` least significant bits of `ctr` represent the integer 1.
+   . `ctr <- Vs @ (b/4-1)b'0 @ 1'b1`, i.e., the `b/4` most significant bits of `Vs` are ignored, and the `b/4` least significant bits of `ctr` represent the integer 1.
   *** If "```ace.exec Cn|C[Xn],Vs```," is repeated, it will just re-write the IV.
   *** If no such "```ace.exec Cn|C[Xn],Vs```" to set is issued, `ctr` remains zero.
   *** If `VLEN` is larger than `b`, the most significant bits of `Vs` (i.e., the "tail" of the vector) are ignored.
@@ -2304,7 +2304,7 @@ finalizes the computation of the SIV/tag, by performing:
 +
 --
     . `absorb_into_hash(Vs)`.
-    . `tmp <- enc_block(enc_key, 1b'0 @ (auth_tag xor N)[b-2:0])`
+    . `tmp <- enc_block(enc_key, 1'b0 @ (auth_tag xor N)[b-2:0])`
     . If tag length is `b` bits, then
      *** `SIV <- tmp` and `Vd <- tmp`,
     . else (tag length is `3b/4` bits)
@@ -2320,9 +2320,9 @@ If `VLEN` is larger than `b`, the most significant bits of `Vs` (i.e., the "tail
 --
 . If `ctr = 0`, then the CR is *invalidated*.
    . If the `SIV` is `b`-bits long, then +
-     *** ``Vd <- Vs xor enc_block(key, 1b1 @ SIV[b-2:b/4] @ (SIV[b/4-1:0] + ctr % 2^b/4^)),``
+     *** ``Vd <- Vs xor enc_block(key, 1'b1 @ SIV[b-2:b/4] @ (SIV[b/4-1:0] + ctr % 2^b/4^)),``
    . else (the `SIV` is `3b/4`-bits long) +
-      *** ``Vd <- Vs xor enc_block(key, 1b1 @ SIV[3b/4-2:0] @ ctr``.
+      *** ``Vd <- Vs xor enc_block(key, 1'b1 @ SIV[3b/4-2:0] @ ctr``.
    . `ctr <- ctr + 1`.
 --
 +
@@ -2335,9 +2335,9 @@ If `VLEN` is a multiple of `b`, the above operations are applied to each of the 
 --
      . If `ctr = 0`, then the CR is *invalidated*.
      . If the `SIV` is `b`-bits long, then +
-       *** ``Vd <- Vs xor enc_block(key, 1b1 @ SIV[b-2:b/4] @ (SIV[b/4-1:0] + ctr % 2^b/4^)),``
+       *** ``Vd <- Vs xor enc_block(key, 1'b1 @ SIV[b-2:b/4] @ (SIV[b/4-1:0] + ctr % 2^b/4^)),``
      . else (it is `3b/4`-bits long) +
-       *** ``Vd <- Vs xor enc_block(key, 1b1 @ SIV[3b/4-2:0] @ ctr``.
+       *** ``Vd <- Vs xor enc_block(key, 1'b1 @ SIV[3b/4-2:0] @ ctr``.
      . `absorb_into_hash(Vs)`.
      . `ctr <- ctr + 1`.
 --
@@ -2354,7 +2354,7 @@ If `VLEN` is a multiple of `b`, the above operations are applied to each of the 
 +
 --
   . `absorb_into_hash(Vs)` (which modifies `auth_tag`).
-  . `tmp <- enc_block(enc_key, 1b'0 @ (auth_tag xor N)[b-2:0])`.
+  . `tmp <- enc_block(enc_key, 1'b0 @ (auth_tag xor N)[b-2:0])`.
   . If tag length is `b` bits, then
      *** `auth_tag <- tmp`,
   . else (tag length is `3b/4` bits)
