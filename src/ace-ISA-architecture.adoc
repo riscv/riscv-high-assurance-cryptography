@@ -852,9 +852,9 @@ if (metadata.Locality == 15) then {
 }
 
 {Kenc, Kauth} = RFC8452_KeyDeriv(CSK);
-let T : bits(96) = POLYVAL(Kauth, metadata @ content
-                                           @ IntTo64Bits(64)
-                                           @ IntTo64Bits(len_in_bits(content)))[95:0];
+let T : bits(96) = POLYVAL(Kauth, 128b'(metadata) @ content)[95:0];
+
+// note: 128bits(metadata) = 64b'0 * metadata
 let SIV : bits(96) = AESE(Kenc, 0 1b0 @ ((T xor N)[126:0]))[127:32];
 
 M[0][127:0] = N[63:0] @ metadata[63:0];
@@ -879,8 +879,14 @@ cache recently used derived keys for both the Root RCSK and Locality-derived key
 * Any number of bytes can be initialized or imported in a locker, and exported from it, before the operation is preempted, depending on the alignment of the data.
 * `acestart` counts all the bytes of the payload, including the metadata for all inputs and outputs, and the nonce and the tag as well for SCCs.
 * The internal state shall always assumes that all internal operations that would be performed in the algorithms above are performed as follows
- ** `ace.init` if the first 8 bytes are read, the metadata is also completely processed, then for each 16 byte block. For instance, if 28 bytes have been read in,
-    the incomplete state has processed the metadata and the first content block, and knows 4 further bytes.
+ ** `ace.init`:
+  *** Once the first 8 bytes are read, the metadata must be completely processed and imported in the locker.
+  *** Whenever 8+16__i__ bytes have been read, also _i_ blocks of content must be processed and imported in the locker.
+   For instance, if 28 bytes have been read in, the incomplete state has processed the metadata and the first content block, and knows 4 further bytes.
+  *** If the operation is preempted, `acestart` will be the number of bytes read.
+  *** The corresponding exported SCC will include an 8-byte block in clear after the metadata with the `acestart` value, followed by the nonce and the tag, and the content will only contain the payload imported and read so far, zero padded up to a multiple of 8 bytes. This content is of course encrypted.
+  The AEAD algorith will use `64b'(length of payload) @ metadata` in place of `128b'(metadata)`.
+
  ** `ace.export` [.red]#TBD#
  ** `ace.import` [.red]#TBD#
 
@@ -918,11 +924,6 @@ Indeed, we have envisioned a system where ASID/VMID filtering is used at the U l
 While the architecture does not prevent individual RCSKs per U-mode process, this would add burden to the system stack.
 This could be accelerated by hardware support, for instance, by providing a mechanism to change automatically RCSKs depending on the ASID/VMID without requiring an `ecall` per context switch. We are not exploring such a solution for now because it would be very difficult to architect and unflexible.
 --
-
-// We should not forget that ACE has been designed to provide a standardised accelerator interface to software, where the software could also set their own keys. I have worked on DRM schemes, like implementations of Widevine, that use an obfuscation mechanism for the keys, which are then briefly unwrapped to be used, and then erased — all in user space. This would optimise such mechanisms and increase security by reducing the time keys in clear are exposed in RAM.
-// While "reprovisioning" the keys could in theory work in a scheme where the keys only come from registered trusted applets (but it would require a very complex SW infrastructure, where agents register themselves to some MM component), in an user space environment, adding reprovisioning would be a burden to SW, as it could happen anywhere in the code, so we would have to check for errors after each operation, or at least have in-process trapping, because the CC may disappear from under your feet at any time.
-// Since all sorts of user space applications are a fundamental motivation for the feature. Restricting this to only keys provisioned by other environments would vastly reduce the likelihood of being accepted.
-
 
 // ///////////////////////////////////////////////////////////////////////////////////////////
 
@@ -991,7 +992,7 @@ This is an I-type instruction.
 ]}
 ....
 
-NOTE: This instruction shares its encoding with `ace.clear` with `3'b111` as instruction code (use a GPR to select the locker).
+NOTE: This instruction shares its encoding with `ace.clear` with `3b'111` as instruction code (use a GPR to select the locker).
 However, the zero in the source field [11:7] for indirect locker indexing is defined as invalid/special, and this allows to define this instruction.#
 --
 +
@@ -2090,7 +2091,7 @@ State Machine:::
  ** In state _set_public_value_:
   *** Only  ``ace.exec`` instructions of Form B are allowed.
   "```ace.exec Ln|L[Xn],Vs```" sets
-   . `ctr <- Vs @ (b/4-1)'b0 @ 1'b1`, i.e., the `b/4` most significant bits of `Vs` are ignored, and the `b/4` least significant bits of `ctr` represent the integer 1.
+   . `ctr <- Vs @ (b/4-1)b'0 @ 1b'1`, i.e., the `b/4` most significant bits of `Vs` are ignored, and the `b/4` least significant bits of `ctr` represent the integer 1.
   *** If "```ace.exec Ln|L[Xn],Vs```," is repeated, it will just re-write the IV.
   *** If no such "```ace.exec Ln|L[Xn],Vs```" to set is issued, `ctr` remains zero.
   *** If `VLEN` is larger than `b`, the most significant bits of `Vs` (i.e., the "tail" of the vector) are ignored.
