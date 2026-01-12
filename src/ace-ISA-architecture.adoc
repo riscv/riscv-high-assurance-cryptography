@@ -8,8 +8,9 @@ Cryptographic Context:::
 (((Cryptographic Context)))
 (((Cryptographic context, content)))
 (((Cryptographic context, metadata)))
-The fundamental concept of ACE is the _Cryptographic Context_ (CC), a data structure comprising a *metadata section* and a *content section* that are bound together.
+The fundamental concept of ACE is the _Cryptographic Context_ (CC), a data structure comprising a *metadata section* and a *content section* that form an undivisible unit.
 The metadata defines the cryptographic algorithm and optional usage policies; the content holds sensitive material such as keys, secrets, and internal algorithm state.
+The metadata has a fixed format, and the format of the content depends on the algorithm defined in the metadata.
 While the metadata does not require confidentiality, the content must remain confidential. Both sections require integrity.
 These requirements are enforced by enforcing that all access and modification of a CC follow the rules defined by the ACE architecture and the algorithm configured in the CC's metadata.
 
@@ -18,7 +19,7 @@ Cryptographic Register:::
 The primary mechanism for realizing cryptographic contexts is the _Cryptographic Register_ (CR).
 CRs are architectural-i.e., per-hart-containers that safeguard sensitive information.
 A CR is _configured_ by writing the metadata and clear content (e.g., key material) into it.
-This operation also binds the content to the metadata, creating a cryptographic context.
+This operation also binds the content to the metadata, effectively creating a Cryptographic Context.
 A CC can only be used in cryptographic operations while resident in a CR.
 Only the ACE unit may access or modify a CC within a CR, according to the rules imposed by the ACE architecture and the configured algorithm.
 Crucially, the content cannot be extracted in a manner that would compromise its confidentiality.
@@ -47,7 +48,7 @@ Usage Control Policy:::
 An important distinction in ACE is between the _import_ and _export_ operations on CRs on one hand, and the _use_ of CCs therein in cryptographic operations on the other hand.
 It must be always possible to export SCCs and reimport them into CRs, as well as clear and reinitialize CRs with new data:
 If this were not possible, then a process may be able to deny all other processes access to ACE by simply configuring all the CRs.
-Therefore, the optional _Usage Control policies_ in the metadata section may only be able to restrict the cryptographic operations that are allowed by the algorithms configured by a CC, including modifying its state, but not the operations that manage CRs and SCCs. [.darkred]#TBD: Add to each instruction whether it may be usage-controlled or not.#
+Therefore, the optional _Usage Control policies_ in the metadata section may only be able to restrict the cryptographic operations that are allowed by the algorithms configured by a CC, including modifying its state, but not the operations that manage CRs and SCCs.
 
 NOTE: The distinction between CR/SCC management instructions and "use-of-CC-for-cryptography" operations is the reason we speak of _Usage Control_ in place of the term _Access Control_.
 
@@ -78,8 +79,8 @@ if a dependency on just the GPRs can be provided in addition.#
 
 ACE provides a number of unprivileged instructions.
 Some are implemented as CSR reads or writes.
-The non-standard notation `L[Xd]`, for a GPR Xd refers to the CR whose number is contained in `Xd`,
-and `Ln|L[Xn]` means that there are two different encodings for when the operand is `Ln` or `L[Xn]`.
+The non-standard notation `C[Xd]`, for a GPR Xd refers to the CR whose number is contained in `Xd`,
+and `Cn|C[Xn]` means that there are two different encodings for when the operand is `Cn` or `C[Xn]`.
 
 .The ACE instructions
 [width="100%",cols="17%,25%,58%",options="header",subs="+macros"]
@@ -88,58 +89,57 @@ and `Ln|L[Xn]` means that there are two different encodings for when the operand
 | `ace.enable` +
 `ace.disable`     |                                  |  Enables/Disables the feature in the current mode.
 | `ace.reset`     |                                  |  Resets the feature in the current mode.
-| `ace.init`      | `Ld\|L[Xd],%offset(Xs)`          |  Sets a CRs's metadata and content.
-| `ace.clear`     | `Ld\|L[Xd]`                      |  Clears a CR and marks it as no longer in use and clean.
-| `ace.export`    | `%offset(Xn),Ls\|L[Xs]`          |  Securely exports the content of a CR to memory.
-| `ace.import{.S}` | `Ld\|L[Xd],%offset(Xn)`         |  Authenticates and imports a SCC from memory into a CR. +
+| `ace.init`      | `Cd\|C[Xd],%offset(Xs)`          |  Sets a CRs's metadata and content.
+| `ace.clear`     | `Cd\|C[Xd]`                      |  Clears a CR and marks it as no longer in use and clean.
+| `ace.export`    | `%offset(Xn),Cs\|C[Xs]`          |  Securely exports the content of a CR to memory.
+| `ace.import{.S}` | `Cd\|C[Xd],%offset(Xn)`         |  Authenticates and imports a SCC from memory into a CR. +
  `ace.import.S` optionally supports system defined formats.
 | `ace.exec`
-| A. {nbsp}{nbsp} `Vd,Ln\|L[Xn],Vs` +
-  B. {nbsp}{nbsp} `Ln\|L[Xn],Vs` +
-  C. {nbsp}{nbsp} `Vd,Ln\|L[Xn]` +
-  D. {nbsp}{nbsp} `Ln\|L[Xn]`
+| A. {nbsp}{nbsp} `Vd,Cn\|C[Xn],Vs` +
+  B. {nbsp}{nbsp} `Cn\|C[Xn],Vs` +
+  C. {nbsp}{nbsp} `Vd,Cn\|C[Xn]` +
+  D. {nbsp}{nbsp} `Cn\|C[Xn]`
 | Performs a cryptographic operation. The instruction may also modify the internal state of the CC in the CR. This instruction admits four _forms_, depending on whether it accepts an input or not, and whether it produces an output or not.
 | `ace.size`
-| `Xd,Ls\|L[Xs]` +
-`Xd,Xs` .2+|  `ace.size` returns the size in bytes of a SCC that would be exported from Register `Ls` or `L[Xs]`, or from a CR that had `Xs` as its metadata block. +
-Returns zero if the algorithm specified in `Xs` is not supported. +
+| `Xd,Cs\|C[Xs]` +
+`Xd,Xs` .2+|  `ace.size` returns the size in bytes of a SCC that would be exported from CR `Cs` or `C[Xs]`, or from a CR that had `Xs` as its metadata block.
+Returns zero if the algorithm specified in `Xs` is not supported.
 `ace.available` is an alias for `ace.size`.
 | `ace.available` | `Xd,Xs`
-| `ace.clone`     | `Ld\|L[Xd],Ls\|L[Xs]`            |  Clones a source Register into a destination Register.
-| `ace.derive`    | `Ld\|L[Xd],Ls\|L[Xs]` +
-`Ld\|L[Xd],Ls\|L[Xs],Vs2` +
-|  Optional. Uses the CC in the source Register to configure the destination Register. +
-For instance, the source Register could contain a KEM that configures the destination Register with a symmetric key.
+| `ace.clone`     | `Cd\|C[Xd],Cs\|C[Xs]`            |  Clones a source CR into a destination CR.
+| `ace.derive`    | `Cd\|C[Xd],Cs\|C[Xs]` +
+`Cd\|C[Xd],Cs\|C[Xs],Vs2` +
+|  Optional. Uses the CC in the source CR to configure the destination CR.
+For instance, the source CR could contain a KEM that configures the destination CR with a symmetric key.
 | `ace.state` +
 `(ace.dir)`
-| `Ld\|L[Xd],#immed` +
-`Ld\|L[Xd],#immed,Xs`  |  Modifies the algorithm's state, such as triggering transitions between the different phases of hash functions or modes of operation, or provide additional information.
+| `Cd\|C[Xd],#immed` +
+`Cd\|C[Xd],#immed,Xs`  |  Modifies the algorithm's state, such as triggering transitions between the different phases of hash functions or modes of operation, or provide additional information.
 `ace.dir` is an alias for `ace.state`.
 | `ace.restrict` +
-  `(ace.harden)`  | `Ld\|L[Xd],Xs`                   |  Narrows the Usage Policies of a CC and turns on or increases the side-channel protection of the algorithm in it, if the microarchitecture supports it.
+  `(ace.harden)`  | `Cd\|C[Xd],Xs`                   |  Narrows the Usage Policies of a CC and turns on or increases the side-channel protection of the algorithm in it, if the microarchitecture supports it.
   Removing or reducing these protections is not permitted.
    `ace.harden` is an alias for `ace.restrict`.
-| `ace.input`     | `Ld\|L[Xd],%offset(Xs)`          |  Optional. Provides an input to the algorithm configured in Register `Ld` or `L[Xd]`, in place of providing it through the `ace.exec` instruction. Needed only when the inputs are very long, such as the inputs to certain public key schemes.
-| `ace.output`    | `%offset(Xd),Ls\|L[Xs]`          |  Optional. Writes the output of an algorithm configured in Register `Ls` or `L[Xs]`, in place of providing it through the `ace.exec` instruction. Needed when the outputs are very long, such as the outputs of certain public key schemes.
+| `ace.input`     | `Cd\|C[Xd],%offset(Xs)`          |  Optional. Provides an input to the algorithm configured in CR `Cd` or `L[Xd]`, in place of providing it through the `ace.exec` instruction. Needed only when the inputs are very long, such as the inputs to certain public key schemes.
+| `ace.output`    | `%offset(Xd),Cs\|C[Xs]`          |  Optional. Writes the output of an algorithm configured in CR `Cs` or `C[Xs]`, in place of providing it through the `ace.exec` instruction. Needed when the outputs are very long, such as the outputs of certain public key schemes.
 | `ace.error`     | `Xd`                             |  Write the error code of the ACE unit into GPR `Xd`.
 |===
 
 // ///////////////////////////////////////////////////////////////////////////////////////////
 
-==== Cryptographic Contexts
+==== Cryptographic Registers
 
 ACE does not add a traditional register file.
 Rather, it defines 32 Cryptographic Registers for storing cryptographic keys and metadata.
 Each CR is identified by a number from 0 to 31, which the ACE unit uses to access its contents.
 (((Cryptographic Context)))
 
-Registers reside in a dedicated internal _CR file_ (LF) that is inaccessible to any entity outside the ACE implementation, including software, other hardware blocks, and invasive debug interfaces. The LF's memory capacity is implementation-defined and may be as large as 32 times the size of the largest possible CC; however, a smaller amount of memory may be used in practice. At a minimum, the LF must be capable of holding either (i) a single instance of the largest possible CC, or the largest CC pair in which the first CC derives the second (via `ace.derive`), as well as (ii) a metadata block for each other possible context.
-(((Register file)))
-(((Register, file)))
+CRs reside in a dedicated internal _CR file_ (CRF) that is inaccessible to any entity outside the ACE implementation, including software, other hardware blocks, and invasive debug interfaces. The CRF's memory capacity is implementation-defined and may be as large as 32 times the size of the largest possible CC; however, a smaller amount of memory may be used in practice. At a minimum, the CRF must be capable of holding either (i) a single instance of the largest possible CC, or the largest CC pair in which the first CC derives the second (via `ace.derive`), as well as (ii) a metadata block for each other possible context.
+(((Cryptographic Register File)))
 
 The size of each CR is dynamic, determined by the cryptographic algorithm with which it is configured.
 This is an important difference with respect to GPRs and vector registers, which always have the same size.
-ACE returns an error _ace_err_memory_ when insufficient memory prevents `ace.init` and `ace.import` operations, requiring the software to free memory by exporting or clearing a different CR. Implementations must provide sufficient LF memory to prevent infinite `ace.export`/ `ace.import` loops.
+ACE returns an error _ace_err_memory_ when insufficient memory prevents `ace.init` and `ace.import` operations, requiring the software to free memory by exporting or clearing a different CR. Implementations must provide sufficient CRF memory to prevent infinite `ace.export`/ `ace.import` loops.
 
 A further difference between CRs and registers is that CRs are not only addressable via static 5-bit immediate addressing (as normal registers), but also indirectly, i.e., via a value from 0 to 31 in any general-purpose register.
 This has two major implications:
@@ -324,16 +324,16 @@ Initial
 Initial
 |===
 
-A further CSRs: `aceccstatus` is used to track the configuration and dirtiness of CRs in a more fine-grained manner,
+A further CSR, `aceccstatus`, is used to track the configuration and dirtiness of CRs in a more fine-grained manner,
 so that privileged context switching code needs to save only the dirty CRs and restore only the configured ones:
 
 . For RV64, `aceccstatus` has a size of 64 bits,
-``aceconfigured[``2__i__+1,2__i__``]`` can take the values Off, Init, Clean, Dirty as defined for `*status.ACES` for CR #__i__.
+``aceccstatus[``2__i__+1,2__i__``]`` can take the values Off, Init, Clean, Dirty as defined for `*status.ACES` for CR #__i__.
 . For RV32, there are two 32-bit registers `aceccstatush` and `aceccstatusl` (collectively referred to as `aceccstatus`)
 where
-``aceconfiguredl[``2__i__+1,2__i__``]`` can take the values Off, Init, Clean, Dirty as defined for `*status.ACES` for CR #__i__
+``aceccstatus[``2__i__+1,2__i__``]`` can take the values Off, Init, Clean, Dirty as defined for `*status.ACES` for CR #__i__
 and
-``aceconfiguredh[``2__i__+1,2__i__``]`` for CR #__i__+16.
+``aceccstatus[``2__i__+1,2__i__``]`` for CR #__i__+16.
 
 We described now the semantics of the `aceccstatus` bitfields:
 
@@ -441,11 +441,11 @@ the requested change of state in `ace.state` is not permitted;
 the change in usage policies in `ace.restrict` is not permitted because it would either downgrade or overwrite the current restrictions in the CC in the CR;
 software tried to use an incomplete CC in a CR as a source in a `ace.exec`, `ace.state`, `ace.input`, `ace.output`, `ace.clone`, `ace.derive`, `ace.harden`, `ace.restrict` operations.
 |  4   | ace_err_unimplemented   | The requested algorithm is not implemented. May be triggered also on algorithm variants, for instance if `ace.harden` is issued on an algorithm for which a non-side channel protected version is not implemented.
-|  5   | ace_err_memory          | The free internal LF memory is not sufficient to perform the `ace.init`, `ace.exec`, `ace.clone`, or `ace.derive`.
+|  5   | ace_err_memory          | The free internal CRF memory is not sufficient to perform the `ace.init`, `ace.exec`, `ace.clone`, or `ace.derive`.
 The implementation must make sure this cannot happen with any other operation.
-If algorithms that support `ace.derive` are implemented, the implementation must make sure that both the input and output CCs of this operation can be allocated in the LF.
+If algorithms that support `ace.derive` are implemented, the implementation must make sure that both the input and output CCs of this operation can be allocated in the CRF.
 |  6   | ace_err_unconfigured    | Software tried to use an unconfigured CR as a source in one of the following instructions: `ace.exec`, `ace.state`, `ace.input`, `ace.output`, `ace.clone`, `ace.derive`, or `ace.harden`/`ace.restrict`.. +
-This can be used in low LF memory situations to trigger a lazy re-load.
+This can be used in low CRF memory situations to trigger a lazy re-load.
 |===
 
 
@@ -725,7 +725,7 @@ Only the serialization of the content is encrypted, while both metadata and cont
 We now define the RFC8452 Key Derivation and the DCSK Derivation functions.
 
 .RFC8452 Key Derivation
-[sail]
+[]
 ----
 function RFC8452_KeyDeriv(K) = {
   struct { AESE256(K, (0[125:0] @ 0b101))[63:0] @ AESE256(K, (0[125:0] @ 0b100))[63:0] @
@@ -735,7 +735,7 @@ function RFC8452_KeyDeriv(K) = {
 ----
 
 .Derived Key Derivation
-[sail]
+[]
 ----
 function DCSK_KeyDeriv(K,L) = {
   AESE256(K, L ^ (0[125:0] @ 0b010))[127:0] @
@@ -746,7 +746,7 @@ function DCSK_KeyDeriv(K,L) = {
 We can now define the generation of the SCC from the CC in a CR.
 
 .Generation of the SCC from a CC Using AES-GCM-SIV (RFC8452)
-[sail]
+[]
 ----
 metadata : bits(64);
 last_block_fractional : boolean;
@@ -879,6 +879,8 @@ even though our aim is to make it into a ratified extension.
 
 In all cases where a GPR is used to index a CR, we exclude the use of the zero-hardwired GPR `X0` as the index register-that is, the encoding of the register cannot be zero. This is reserved to encode some special operation, and otherwise raises an invalid-instruction exception.
 
+[.darkred]#TBD: Add to each instruction whether it may be usage-controlled or not.#
+
 [[ACE-instruction-enable-enable]]
 ==== ace.enable/ace.disable/ace.reset
 
@@ -922,7 +924,7 @@ The alias for this instruction is `ace.reset`.
 
 `ace.enable` must be issued before using any ACE operation, i.e. `ace.config` passing the immediate 1.
 
-NOTE: The advantage of `ace.reset` with respect to a loop that clears all CRs is that the entire LF memory is cleared without the need for compaction/management between the separate `ace.clear` operations and this opertation cannot be interrupted, reducing potential wasteful context saves.
+NOTE: The advantage of `ace.reset` with respect to a loop that clears all CRs is that the entire CRF memory is cleared without the need for compaction/management between the separate `ace.clear` operations and this opertation cannot be interrupted, reducing potential wasteful context saves.
 
 The instruction will trap in the following cases: [.red]#TBD#.
 --
@@ -941,7 +943,7 @@ See
 [[ACE-instruction-init]]
 ==== ace.init
 
-`ace.init Ld|L[Xd],%offset(Xs)`
+`ace.init Cd|C[Xd],%offset(Xs)`
 (((ACE, instruction, ace.init)))
 
 Encoding::
@@ -951,7 +953,7 @@ Encoding::
 ....
 {reg:[
     { bits:  7, name: 0x27, attr: ['custom-1'] },
-    { bits:  5, name: 'context', attr: ['Ls','L[Xd]'] },
+    { bits:  5, name: 'context', attr: ['Cs','C[Xd]'] },
     { bits:  3, name: 'ace.init', attr: [0x4,0x5] },
     { bits:  5, name: 'Xs' },
     { bits: 12, name: 'imm', attr: ['offset'] },
@@ -960,7 +962,7 @@ Encoding::
 
 Description::
 `ace.init` configures a CR with metadata and content.
-`Ld` is the source CR to be configured (encoded as a 5-bit immed).
+`Cd` is the source CR to be configured (encoded as a 5-bit immed).
 `Xd`, alternatively, is a GPR containing a number from 0 to 31 to select the context
 to be configured.
 `Xs` points to the region of memory containing the metadata and the key material.
@@ -976,7 +978,7 @@ Then, in the second phase, the configuration material is read and processed.
 [[ACE-instruction-clear]]
 ==== ace.clear
 
-`ace.clear Ld|L[Xd]`
+`ace.clear Cd|C[Xd]`
 (((ACE, instruction, ace.clear)))
 
 Encoding::
@@ -986,7 +988,7 @@ Encoding::
 ....
 {reg:[
     { bits:  7, name: 0x27, attr: ['custom-1'] },
-    { bits:  5, name: 'context', attr: ['Ls','L[Xd]'] },
+    { bits:  5, name: 'context', attr: ['Cs','C[Xd]'] },
     { bits:  3, name: 'ace.clear', attr: [0x6,0x7] },
     { bits:  5, name: 0x0 },
     { bits: 12, name: 0x0 },
@@ -994,13 +996,13 @@ Encoding::
 ....
 
 Description::
-`Ld` is the source CR to be cleared (encoded as a 5-bit immed). +
+`Cd` is the source CR to be cleared (encoded as a 5-bit immed). +
 `Xd` alternatively, is a GPR containing a number from 0 to 31 to select the context to be cleared. +
 
 [[ACE-instruction-export]]
 ==== ace.export
 
-`ace.export %offset(Xd),Cs|L[Xs]`
+`ace.export %offset(Xd),Cs|C[Xs]`
 (((ACE, instruction, ace.export)))
 
 Encoding::
@@ -1013,15 +1015,15 @@ Encoding::
     { bits:  5, name: 'imm[4:0]' },
     { bits:  3, name: 'ace.export', attr: [0x0,0x1] },
     { bits:  5, name: 'Xd' },
-    { bits:  5, name: 'context', attr: ['Ls','L[Xs]'] },
+    { bits:  5, name: 'context', attr: ['Cs','C[Xs]'] },
     { bits:  7, name: 'imm[11:5]' },
 ]}
 ....
 
 Description::
-Exports the Register `Ls` or `L[Xs]` to memory, starting at address `Xd`, using
+Exports the CRs `Cs` or `C[Xs]` to memory, starting at address `Xd`, using
 the procedure described in <<ACE-formats>>.
-If the context `Ls` is clear, or `Xs` is out of range,
+If the context `Cs` is clear, or `Xs` is out of range,
 the operation will report error ace_err_invalid.
 
 The instruction must be resumable in case of interrupts.
@@ -1031,8 +1033,8 @@ sequences of individual stores.
 [[ACE-instruction-import]]
 ==== ace.import
 
-`ace.import Ld|L[Xd],%offset(Xn)` +
-`ace.import.S Ld|L[Xd],%offset(Xn)`
+`ace.import Cd|C[Xd],%offset(Xn)` +
+`ace.import.S Cd|C[Xd],%offset(Xn)`
 (((ACE, instruction, ace.import)))
 (((ACE, instruction, ace.import.S)))
 
@@ -1043,7 +1045,7 @@ Encoding::
 ....
 {reg:[
     { bits:  7, name: 0x27, attr: ['custom-1'] },
-    { bits:  5, name: 'context', attr: ['Ld','L[Xd]'] },
+    { bits:  5, name: 'context', attr: ['Cd','C[Xd]'] },
     { bits:  3, name: 'ace.import', attr: ['0    0    S','0    1    S'] },
     { bits:  5, name: 'Xn' },
     { bits: 12, name: 'imm' },
@@ -1051,7 +1053,7 @@ Encoding::
 ....
 
 Description::
-`Ld` is the destination CR into which the SCC is imported, as an immed (5-bit).
+`Cd` is the destination CR into which the SCC is imported, as an immed (5-bit).
 Alternatively, the number of the CR into which import the SCC is stored in
 the GPR `Xd` as a number from 0 to 31. `Xn` is the GPR containing the base address
 of the buffer with the source SCC. +
@@ -1090,10 +1092,10 @@ The `ace.exec` instruction admits four Forms, namely
 (((ACE, instruction, ace.exec)))
 
 [upperalpha]
-. `ace.exec  Vd,Ln|L[Xn],Vs` {nbsp}{nbsp} takes an input vector and writes to an output vector.
-. `ace.exec  {nbsp}{nbsp}{nbsp}Ln|L[Xn],Vs` {nbsp}{nbsp} takes an input vector but does not write to an output vector.
-. `ace.exec  Vd,Ln|L[Xn]{nbsp}{nbsp}{nbsp}` {nbsp}{nbsp} does not take an input but writes to an output vector.
-. `ace.exec  {nbsp}{nbsp}{nbsp}Ln|L[Xn]{nbsp}{nbsp}{nbsp}` {nbsp}{nbsp} does not take an input vector and does not write to an output vector.
+. `ace.exec  Vd,Cn|C[Xn],Vs` {nbsp}{nbsp} takes an input vector and writes to an output vector.
+. `ace.exec  {nbsp}{nbsp}{nbsp}Cn|C[Xn],Vs` {nbsp}{nbsp} takes an input vector but does not write to an output vector.
+. `ace.exec  Vd,Cn|C[Xn]{nbsp}{nbsp}{nbsp}` {nbsp}{nbsp} does not take an input but writes to an output vector.
+. `ace.exec  {nbsp}{nbsp}{nbsp}Cn|C[Xn]{nbsp}{nbsp}{nbsp}` {nbsp}{nbsp} does not take an input vector and does not write to an output vector.
 
 Form D instructions perform internal processing only in the CC in the given CR.
 
@@ -1107,7 +1109,7 @@ Encoding::
     { bits:  7, name: 0x5b, attr: ['custom-2'] },
     { bits:  5, name: 'Vd', attr: ['rd'] },
     { bits:  3, name: 'ace.exec' },
-    { bits:  5, name: 'Ln|L[Xn]', attr: ['rs1'] },
+    { bits:  5, name: 'Cn|C[Xn]', attr: ['rs1'] },
     { bits:  5, name: 'Vs', attr: ['rs2'] },
     { bits:  2, name: 0x0 },
     { bits:  1, name: 'r' },
@@ -1147,7 +1149,7 @@ The `ace.size` instruction is used to determine the size of a SCC in order to re
 
 ===== Context Variant
 
-`ace.size Xd,Cs|L[Xs]`
+`ace.size Xd,Cs|C[Xs]`
 
 Encoding::
 The instruction is encoded using the Form D' `ace.exec` encoding, and is thus is an R-type instruction.
@@ -1158,7 +1160,7 @@ The instruction is encoded using the Form D' `ace.exec` encoding, and is thus is
     { bits:  7, name: 0x5b, attr: ['custom-2'] },
     { bits:  5, name: 'Xd' },
     { bits:  3, name: 0x3, attr: ['ace.exec', '(Form D\')'] },
-    { bits:  5, name: 'Ls|L[Xs]' },
+    { bits:  5, name: 'Cs|C[Xs]' },
     { bits:  5, name: 0x1, attr: ['ace.size'] },
     { bits:  2, name: 0x0 },
     { bits:  1, name: 'r' },
@@ -1213,7 +1215,7 @@ Alias to the Metadata Variant of `ace.size`, as it returns zero if the algorithm
 [[ACE-instruction-clone]]
 ==== ace.clone
 
-`ace.clone Ld|L[Xd],Cs|L[Xs]`
+`ace.clone Cd|C[Xd],Cs|C[Xs]`
 (((ACE, instruction, ace.clone)))
 
 Encoding::
@@ -1223,9 +1225,9 @@ The instruction is encoded using the Form D' `ace.exec` encoding, and is thus is
 ....
 {reg:[
     { bits:  7, name: 0x5b, attr: ['custom-2'] },
-    { bits:  5, name: 'Ld|L[Xd]' },
+    { bits:  5, name: 'Cd|C[Xd]' },
     { bits:  3, name: 0x3, attr: ['ace.exec','(Form D\')'] },
-    { bits:  5, name: 'Ls|L[Xs]' },
+    { bits:  5, name: 'Cs|C[Xs]' },
     { bits:  5, name: 0x3, attr: ['ace.clone'] },
     { bits:  1, name: 0x0 },
     { bits:  2, name: 'R' },
@@ -1244,7 +1246,7 @@ Bits [27:26], i.e., field `R`, take following values depending on how the CRs ar
 // Comment to ensure the proper indentation in th next Description
 
 Description::
-Clones source Register `Ls` (or the CR indexed by `Xs`) into destination Register `Ld` (or
+Clones source CRs `Cs` (or the CR indexed by `Xs`) into destination CRs `Cd` (or
 into the CR indexed by `Xd`).
 
 // NOTE: The `ace.clone` instruction is an optimization for the sequence `ace.export` followed by `ace.import`. While reusing cryptographic state (e.g., encrypting with the same counter) can enable certain attacks, this risk cannot be eliminated by omitting `ace.clone`, as a state can be exported and re‑imported multiple times.
@@ -1252,8 +1254,8 @@ into the CR indexed by `Xd`).
 [[ACE-instruction-derive]]
 ==== ace.derive (optional)
 
-`ace.derive Ld|L[Xd],Cs1|L[Xs1]` +
-`ace.derive Ld|L[Xd],Cs1|L[Xs1],Vs2`
+`ace.derive Cd|C[Xd],Cs1|C[Xs1]` +
+`ace.derive Cd|C[Xd],Cs1|C[Xs1],Vs2`
 (((ACE, instruction, ace.derive)))
 
 Encoding::
@@ -1263,9 +1265,9 @@ The encoding is a variant of Form A `ace.exec` encoding, and is thus is an R-typ
 ....
 {reg:[
     { bits:  7, name: 0x5b, attr: ['custom-2'] },
-    { bits:  5, name: 'Ld|L[Xd]' },
+    { bits:  5, name: 'Cd|C[Xd]' },
     { bits:  3, name: 0x0, attr: ['ace.exec (Form A)'] },
-    { bits:  5, name: 'Ls1|L[Xs1]' },
+    { bits:  5, name: 'Cs1|C[Xs1]' },
     { bits:  5, name: 'Vs2', attr: ['use for additional input','no additional input (zero field)'] },
     { bits:  1, name: 0x1 },
     { bits:  2, name: 'R' },
@@ -1288,8 +1290,8 @@ This instruction can be used multiple times, to generate multiple derived contex
 [[ACE-instruction-state]]
 ==== ace.state/ace.dir
 
-`ace.state`/`ace.dir Ld|L[Xd],#immed7` +
-`ace.state`/`ace.dir Ld|L[Xd],#immed7,Xs`
+`ace.state`/`ace.dir Cd|C[Xd],#immed7` +
+`ace.state`/`ace.dir Cd|C[Xd],#immed7,Xs`
 (((ACE, instruction, ace.state)))
 (((ACE, instruction, ace.dir)))
 
@@ -1300,7 +1302,7 @@ Encoding::
 ....
 {reg:[
     { bits:  7, name: 0x5b, attr: ['custom-2'] },
-    { bits:  5, name: 'Ld|L[Xd]' },
+    { bits:  5, name: 'Cd|C[Xd]' },
     { bits:  3, name: 0x4, attr: ['ace.state'] },
     { bits:  1, name: 'r' },
     { bits:  4, name: 0x0 },
@@ -1313,7 +1315,7 @@ Bit `r` (i.e., bit 15) is 0 if the context is encoded as an immediate, and 1 if 
 
 Description::
 `ace.state` and `ace.dir` are two names for the same instruction. +
-`Ln` specifies the CR whose state is to be set. Alternatively, `Xn` is a GPR containing a value from 0 to 31 to dynamically select the target context. The `#immed` operand is a constant from the set of admissible values defined for each algorithm, used to manage the algorithm's internal state machine when additional states are required. `Xs` is a GPR that is either `X0` or contains an optional additional parameter for the state machine.
+`Cn` specifies the CR whose state is to be set. Alternatively, `Xn` is a GPR containing a value from 0 to 31 to dynamically select the target context. The `#immed` operand is a constant from the set of admissible values defined for each algorithm, used to manage the algorithm's internal state machine when additional states are required. `Xs` is a GPR that is either `X0` or contains an optional additional parameter for the state machine.
 
 The state numbers used in this specification are defined in the following table.
 
@@ -1352,8 +1354,8 @@ may reuse the same values in [1..13] with new constant mnemonics to define their
 [[ACE-instruction-restrict]]
 ==== ace.restrict/ace.harden
 
-`ace.restrict   Ld|L[Xd],Xs` +
-`ace.harden     Ld|L[Xd],Xs`
+`ace.restrict   Cd|C[Xd],Xs` +
+`ace.harden     Cd|C[Xd],Xs`
 (((ACE, instruction, ace.restrict)))
 (((ACE, instruction, ace.harden)))
 
@@ -1369,7 +1371,7 @@ The source register field encodes a GPR and not a vector register.
     { bits:  7, name: 0x5b, attr: ['custom-2'] },
     { bits:  5, name: 0x1 },
     { bits:  3, name: 0x1, attr: ['ace.exec', '(Form B\')'] },
-    { bits:  5, name: 'Ld|L[Xd]' },
+    { bits:  5, name: 'Cd|C[Xd]' },
     { bits:  5, name: 'Xs' },
     { bits:  2, name: 0x0 },
     { bits:  1, name: 'r' },
@@ -1407,7 +1409,7 @@ The instruction works as follows:
 [[ACE-instruction-input]]
 ==== ace.input (optional)
 
-`ace.input Ld|L[Xd],%offset(Xs)`
+`ace.input Cd|C[Xd],%offset(Xs)`
 (((ACE, instruction, ace.input)))
 
 Encoding::
@@ -1417,7 +1419,7 @@ Encoding::
 ....
 {reg:[
     { bits:  7, name: 0x27, attr: ['custom-1'] },
-    { bits:  5, name: 'context', attr: ['Ld','L[Xd]'] },
+    { bits:  5, name: 'context', attr: ['Cd','C[Xd]'] },
     { bits:  3, name: 'ace.input', attr: [0x4,0x5] },
     { bits:  5, name: 'Xs' },
     { bits: 12, name: 'imm' },
@@ -1429,7 +1431,7 @@ Encoding::
 [[ACE-instruction-output]]
 ==== ace.output (optional)
 
-`ace.output  %offset(Xd),Cs|L[Xs]`
+`ace.output  %offset(Xd),Cs|C[Xs]`
 (((ACE, instruction, ace.output)))
 
 Encoding::
@@ -1442,7 +1444,7 @@ Encoding::
     { bits:  5, name: 'imm[4:0]' },
     { bits:  3, name: 'ace.output', attr: [0x4,0x5] },
     { bits:  5, name: 'Xd' },
-    { bits:  5, name: 'context', attr: ['Ls','L[Xs]'] },
+    { bits:  5, name: 'context', attr: ['Cs','C[Xs]'] },
     { bits:  7, name: 'imm[11:5]' },
 ]}
 ....
@@ -1559,13 +1561,13 @@ If the number of states of the algorithm is at most 16 (including _initial_, _co
 Otherwise, the specification of the algorithm must include a suitable field in the content section of the CC/SCC.
 
 An important rule is the following.
-If an invalid input is provided to any ACE instruction, or a non-admitted instruction is executed, while processing the algorithm in CR, say, `Ln`,
-the `Ln` is *invalidated*, namely, the following happens:
+If an invalid input is provided to any ACE instruction, or a non-admitted instruction is executed, while processing the algorithm in CR, say, `Cn`,
+the `Cn` is *invalidated*, namely, the following happens:
 (((ACE, algorithm, invalid state)))
-(((Register, invalidated)))
+(((Cryptographic Register, invalidated)))
 
-* `Ln` is put into state _invalidated_;
-* For instructions that refer to `Ln`:
+* `Cn` is put into state _invalidated_;
+* For instructions that refer to `Cn`:
  ** any Form of `ace.exec` performs no operation and, if it provides an output, the latter is always zero;
  ** `ace.clone` and `ace.derive` clean the destination contexts;
  ** `ace.restrict` and `ace.harden` perform no operation;
@@ -1616,7 +1618,7 @@ System keys that are referred to by an index will cause following changes in all
 . For algorithms that require more than one key, such as XEX/XTS, ALL the keys are referred to by a single index, i.e., a single 64-bit value in the configuration input and the SCC.
 . Accordingly, the `content_serialize` and `content_deserialize` functions will support System Keys by producing and reading the shorter fields with the indexes in place of the longer fields that would be required when the key values are explicitly provided.
 
-NOTE: Internally, the ACE unit can either directly use the value from the SKT, or copy it to the internal state of the Register.
+NOTE: Internally, the ACE unit can either directly use the value from the SKT, or copy it to the internal state of the CR.
 The architecture does not restrict the choice of the implementation.
 
 // On the other hand, keys generated from a system block, using a custom "recipe", are always represented by their values and once generated have the exact same behavior as any other key that does not come from the SKT.
@@ -1661,12 +1663,12 @@ State Machine:::
 * *Behavior:*
  ** In state _initial_, any `ace.exec` will result in the CR being *invalidated*.
  ** In state _encrypt_:
-  *** If{nbsp} `ace.exec Vd,Ln|L[Xn],Vs` {nbsp}is issued, then {nbsp} `Vd = enc_block(Vs)`.
-  *** If `VLEN` is a multiple of `b`, then `ace.exec Vd,Ln|L[Xn],Vs` encrypts block-by-block.
+  *** If{nbsp} `ace.exec Vd,Cn|C[Xn],Vs` {nbsp}is issued, then {nbsp} `Vd = enc_block(Vs)`.
+  *** If `VLEN` is a multiple of `b`, then `ace.exec Vd,Cn|C[Xn],Vs` encrypts block-by-block.
   *** If any other Form of `ace.exec` is issued, then the CR is *invalidated*.
  ** In state _decrypt_:
-  *** If{nbsp} `ace.exec Vd,Ln|L[Xn],Vs` {nbsp}is issued, then {nbsp} `Vd = dec_block(Vs)`.
-  *** If `VLEN` is a multiple of `b`, then `ace.exec Vd,Ln|L[Xn],Vs` decrypts block-by-block.
+  *** If{nbsp} `ace.exec Vd,Cn|C[Xn],Vs` {nbsp}is issued, then {nbsp} `Vd = dec_block(Vs)`.
+  *** If `VLEN` is a multiple of `b`, then `ace.exec Vd,Cn|C[Xn],Vs` decrypts block-by-block.
   *** If any other Form of `ace.exec` is issued, then the CR is *invalidated*.
 
 [NOTE]
@@ -1679,7 +1681,7 @@ ace.exec    L0,V1          // load upper half of plaintext
 ace.exec V0,L0             // store lower half of ciphertext
 ace.exec V1,L0             // store upper half of ciphertext
 ----
-[.darkred]#in place of a single `ace.exec Vd,Ln|L[Xn],Vs`.
+[.darkred]#in place of a single `ace.exec Vd,Cn|C[Xn],Vs`.
 Supporting this behaviour would not only complicate both the architecture and its implementation, but it would also burden the software using the feature.
 Therefore, the present specification assumes that vector lengths (or vector groups) can be configured to at least the block size of the cipher.#
 ====
@@ -1695,10 +1697,10 @@ The following pseudocode illustrates how to use an ECB CC to encrypt a block of 
 - Allocate memory for ciphertext buffer.
 
 vsetvli zero,4,e32,m1,ta,ma               // Use 128-bit vectors
-ace.import L0,(X5)                        // Import the SCC into Register L0
+ace.import L0,(X5)                        // Import the SCC into CR L0
 ace.error X1                              // Read error from a CSR
 if (X1 != 0) then { handle error }        // ACE may fail to validate SCC, algorithm may
-                                          // be not supported, or LF memory may be full
+                                          // be not supported, or CRF memory may be full
 ace.state L0,#ace_state_encrypt           // Configure CR for encryption
 ace.error X1                              // Read error from a CSR
 if (X1 != 0) then { handle error }        // Error if encryption not allowed
@@ -1734,13 +1736,13 @@ and no intermediate value in these algorithms needs to be kept secret.
 
 
 [[ACE-keystream-modes]]
-==== CTR/LFSR/XCTR/XLFSR Keystream Generation
+==== CTR/CRFSR/XCTR/XCRFSR Keystream Generation
 
-In the "non-X" modes, i.e., in the CTR mode and its analague that replaces the arithmetic counter by a LFSR, the sum of the lengths of IV and counter/LSFR equals the block size of the underlying keyed PRP or PRF. IV and counter/LFSR are concatenated to form the input to the keyed PRP or PRF.
+In the "non-X" modes, i.e., in the CTR mode and its analague that replaces the arithmetic counter by a CRFSR, the sum of the lengths of IV and counter/LSFR equals the block size of the underlying keyed PRP or PRF. IV and counter/CRFSR are concatenated to form the input to the keyed PRP or PRF.
 (((ACE, algorithm, keystream generation)))
 
 The "X" modes have both IV and counter/LSFR of the same size as the block size of the underlying keyed PRP or PRF:
-IV and counter/LFSR are ``xor``ed together to form the input to the keyed PRP or PRF -- which explains the "X" in the mode names.
+IV and counter/CRFSR are ``xor``ed together to form the input to the keyed PRP or PRF -- which explains the "X" in the mode names.
 
 ===== Specification
 
@@ -1749,7 +1751,7 @@ Parameters:::
 * `k` = key size in bits (8|`k`).
 * `j` = counter size in bits (8|`j`).
 * `n` = IV size in bits (8|`n`).
-* If the mode is CTR or LFSR, it is `b = n + j`.
+* If the mode is CTR or CRFSR, it is `b = n + j`.
 * If the mode is an "X" mode, it is `b = n = j`.
 
 Data Structures:::
@@ -1770,7 +1772,7 @@ Data Structures:::
 
 Algorithm-Specific Functions:::
 * `keystream_block(p) -> c` -- usually an encryption function.
-* `tick_ctr()` -- updates the ctr (either by a modular increment or a LFSR).
+* `tick_ctr()` -- updates the ctr (either by a modular increment or a CRFSR).
 
 State Machine:::
 * *States:* _initial_, _set_public_value_, _operate_.
@@ -1778,19 +1780,19 @@ State Machine:::
  ** _initial_ -> _set_public_value_ -> _operate_.
  ** All states to _initial_.
 * *Behavior:*
- ** In state _initial_, the `ctr` and `IV` fields are set to 0 (`ctr` is set to 1 if the algorithm is LFSR-based).
+ ** In state _initial_, the `ctr` and `IV` fields are set to 0 (`ctr` is set to 1 if the algorithm is CRFSR-based).
  ** In state _set_public_value_, only ``ace.exec`` instructions of Form B are allowed. +
-     "```ace.exec Ln|L[Xn],Vs```" sets the IV value to `Vs`.
+     "```ace.exec Cn|C[Xn],Vs```" sets the IV value to `Vs`.
   *** If no such instruction is issued, the value of the IV will remain zero.
   *** If `VLEN` is larger than `b`, the most significant bits of `Vs` (i.e., the "tail" of the vector) are ignored.
   *** If such operations are issued more times, they will just update the IV value again. Since this can be done only before any encryption or decryption operation, this does not represent a security issue.
   *** Any other Form of ``ace.exec`` will produce a null output and *invalidate* the CR.
  ** In state _operate_, only ``ace.exec`` instructions of Form C are allowed. +
-     "```ace.exec Vd,Ln|L[Xn]```" performs:
+     "```ace.exec Vd,Cn|C[Xn]```" performs:
 +
 --
-  . If in a CTR or LFSR mode then `tmp ← keystream_block(IV @ ctr)`, +
-    else (i.e., if in a XCTR or XLFSR mode) `tmp ← keystream_block(IV xor ctr)`,
+  . If in a CTR or CRFSR mode then `tmp ← keystream_block(IV @ ctr)`, +
+    else (i.e., if in a XCTR or XCRFSR mode) `tmp ← keystream_block(IV xor ctr)`,
   . `tick_ctr()`, and
   . `Vd ← tmp`.
 --
@@ -1884,16 +1886,16 @@ State Machine:::
   *** The `mask` field is set to zero.
   *** Any {nbsp}``ace.exec``{nbsp} operation will produce null outputs and causes the CR to be *invalidated*.
  ** In state _set_public_value_, only ``ace.exec`` instructions of Form B are allowed. +
- "```ace.exec Ln|L[Xn],Vs```" sets the _tweak_. The `mask` field is used to store the tweak: `mask <- Vs`.
+ "```ace.exec Cn|C[Xn],Vs```" sets the _tweak_. The `mask` field is used to store the tweak: `mask <- Vs`.
   *** If no such instruction is issued, the value of the tweak will remain zero.
   *** If `VLEN` is larger than `b`, the most significant bits of `Vs` (i.e., the "tail" of the vector) are ignored.
-  *** If "```ace.exec Ln|L[Xn],Vs```" is repeated, it will just re-write the mask.
+  *** If "```ace.exec Cn|C[Xn],Vs```" is repeated, it will just re-write the mask.
   *** Other forms of `ace.exe` not allowed, will produce null outputs and the CR is *invalidated*.
  ** When transitioning from _set_public_value_ to either _encrypt_ or _decrypt_, the following operations are performed:
   . `mask <- enc_block(key2,mask)` or `mask <- enc_block(key1,mask)` if only one key is used.
   . If only one key is used then update mask: `mask <- update_mask(mask)`.
  ** In states _encrypt_ and _decrypt_, only ``ace.exec`` instructions of Form A are allowed. +
-    "```ace.exec Vd,Ln|L[Xn],Vs```" performs the following operations:
+    "```ace.exec Vd,Cn|C[Xn],Vs```" performs the following operations:
 +
 --
   *** in state _encrypt_, computes `Vd = mask xor enc_block(key1,Vs xor mask)` ... +
@@ -2003,15 +2005,15 @@ State Machine:::
    . `ctr <- 0`.
  ** In state _set_public_value_:
   *** Only  ``ace.exec`` instructions of Form B are allowed.
-  "```ace.exec Ln|L[Xn],Vs```" sets
+  "```ace.exec Cn|C[Xn],Vs```" sets
    . `ctr <- Vs @ (b/4-1)b'0 @ 1b'1`, i.e., the `b/4` most significant bits of `Vs` are ignored, and the `b/4` least significant bits of `ctr` represent the integer 1.
-  *** If "```ace.exec Ln|L[Xn],Vs```," is repeated, it will just re-write the IV.
-  *** If no such "```ace.exec Ln|L[Xn],Vs```" to set is issued, `ctr` remains zero.
+  *** If "```ace.exec Cn|C[Xn],Vs```," is repeated, it will just re-write the IV.
+  *** If no such "```ace.exec Cn|C[Xn],Vs```" to set is issued, `ctr` remains zero.
   *** If `VLEN` is larger than `b`, the most significant bits of `Vs` (i.e., the "tail" of the vector) are ignored.
   *** Any other Form of ``ace.exec`` will produce null outputs and causes the CR to be *invalidated*.
 
  ** In state _hash_absorb_, only  ``ace.exec`` instructions of Form B are allowed. +
- "```ace.exec Ln|L[Xn],Vs```" absorbs a data block in `auth_tag`, i.e.:
+ "```ace.exec Cn|C[Xn],Vs```" absorbs a data block in `auth_tag`, i.e.:
 +
 --
  . `absorb_into_hash(Vs)`.
@@ -2021,7 +2023,7 @@ If `VLEN > b`, the above operation is executed `VLEN/b` times, absorbing each ti
 This operation is parallelizable by having the implementation precompute the first four powers of `hash_key`, keeping it internally in the CR (and reconstructing these powers after `ace.import`). If the number `x` of blocks to process is not a multiple of `VLEN`/`b`, `VL` can be set to the remainder of the division of `x` by `VLEN`/`b` for the last instruction.
 
 ** If state _encrypt_, only ``ace.exec`` instructions of Form A are allowed. +
-   "```ace.exec Vd,Ln|L[Xn],Vs```" encrypts `Vs` into `Vd`, and absorbs the ciphertext `Vd` into the `auth_tag`, namely:
+   "```ace.exec Vd,Cn|C[Xn],Vs```" encrypts `Vs` into `Vd`, and absorbs the ciphertext `Vd` into the `auth_tag`, namely:
 +
 --
   . If `ctr[b/4-1:0] = 0`, the CR is *invalidated*.
@@ -2036,7 +2038,7 @@ If `VLEN` is a multiple of `b`, the above are executed `VLEN/b` times, encryptin
 ** In state _hash_finalize_enc_, only ``ace.exec`` instructions of Form A are allowed. The value +
  `{nbsp}{nbsp}{nbsp}Vs = IntTo{b/2}Bits(bit_length(AD)) @ IntTo{b/2}Bits(bit_length(plaintext))` +
  must be set by the software, then,
-  "```ace.exec Vd,Ln|L[Xn],Vs```"
+  "```ace.exec Vd,Cn|C[Xn],Vs```"
   computes the authentication tag and completes the algorithm as follows:
 +
 --
@@ -2048,7 +2050,7 @@ If `VLEN` is a multiple of `b`, the above are executed `VLEN/b` times, encryptin
 If `VLEN` is larger than `b`, the most significant bits of `Vs` (i.e., the "tail" of the vector) are ignored.
 
  ** In state _decrypt_, only  ``ace.exec`` instructions of Form A are allowed. +
- `ace.exec Vd,Ln|L[Xn],Vs`
+ `ace.exec Vd,Cn|C[Xn],Vs`
    absorbs the ciphertext `Vs` into the `auth_tag`, then decrypts `Vs` into `Vd`, namely
 +
 --
@@ -2063,7 +2065,7 @@ If `VLEN` is a multiple of `b`, the same behavior applies as in state _encrypt_.
 ** In state _hash_finalize_dec_, only a Form A ``ace.exec`` instruction are allowed.
 The value +
  `{nbsp}{nbsp}{nbsp}Vs = IntTo{b/2}Bits(bit_length(AD)) @ IntTo{b/2}Bits(bit_length(plaintext))` +
- must be set by the software, then "```ace.exec Vd,Ln|L[Xn],Vs```" computes the authentication tag as follows:
+ must be set by the software, then "```ace.exec Vd,Cn|C[Xn],Vs```" computes the authentication tag as follows:
 +
 --
   . `absorb_into_hash(Vs)`.
@@ -2072,7 +2074,7 @@ The value +
 +
 If `VLEN` is larger than `b`, the most significant bits of `Vs` (i.e., the "tail" of the vector) are ignored.
 
-** In state _hash_verify_, only an ``ace.exec`` instructions of Form B, i.e., "```ace.exec Ln|L[Xn],Vs```" are allowed.
+** In state _hash_verify_, only an ``ace.exec`` instructions of Form B, i.e., "```ace.exec Cn|C[Xn],Vs```" are allowed.
     It compares `Vs` with `auth_tag`:
 +
 --
@@ -2171,7 +2173,7 @@ which saves hardware costs when several small cores share a single ACE unit.
 - Allocate memory for ciphertext buffer CT (if not same as PT).
 
 vsetvli zero,4,e32,m1,ta,ma                      // Use 128-bit vectors
-ace.import L0,(X5)                               // Imports SCC into Register L0
+ace.import L0,(X5)                               // Imports SCC into CR L0
 V5[127:32] ← IV
 V5[31:0] ← 1
 
@@ -2287,9 +2289,9 @@ State Machine:::
     . `nonce`, `ctr`, `auth_tag`, `SIV <- 0`.
 
   ** In states _set_public_value_, resp. _set_public_value_2_:
-    *** We can only issue  ``ace.exec`` instructions of Form B, i.e. "```ace.exec Ln|L[Xn],Vs```," to set the value of `nonce`, resp. `SIV`.
-    *** If "```ace.exec Ln|L[Xn],Vs```" is repeated, it will just re-write the value of `nonce`, resp. `SIV`.
-    *** If no such "```ace.exec Ln|L[Xn],Vs```" is issued, `nonce`, resp. `SIV`, remain equal to zero.
+    *** We can only issue  ``ace.exec`` instructions of Form B, i.e. "```ace.exec Cn|C[Xn],Vs```," to set the value of `nonce`, resp. `SIV`.
+    *** If "```ace.exec Cn|C[Xn],Vs```" is repeated, it will just re-write the value of `nonce`, resp. `SIV`.
+    *** If no such "```ace.exec Cn|C[Xn],Vs```" is issued, `nonce`, resp. `SIV`, remain equal to zero.
     *** If `VLEN` is larger than `b`, the most significant bits of `Vs` (i.e., the "tail" of the vector) are ignored.
     *** Other forms of `ace.exe` will produce null outputs and *invalidate* the CR.
 +
@@ -2301,7 +2303,7 @@ Accepting this redundant but harmless behavior simplifies the state machine.
 ** In state _hash_absorb_:
 +
 --
-   *** Only ``ace.exec`` instructions of the Form "```ace.exec Ln|L[Xn],Vs```" are allowed. Such an instruction accumulates a value in the `auth_tag`:
+   *** Only ``ace.exec`` instructions of the Form "```ace.exec Cn|C[Xn],Vs```" are allowed. Such an instruction accumulates a value in the `auth_tag`:
    i.e., perform `absorb_into_hash(Vs)`.
 --
 +
@@ -2310,7 +2312,7 @@ If `VLEN` is a multiple of `b`, `absorb_into_hash` is executed on each of the `V
 *** Other forms of `ace.exec` will produce null outputs and *invalidate* the CR.
 
 ** In state _hash_finalize_enc_, only an {nbsp}``ace.exec``{nbsp} of Form A is allowed. +
-  "```ace.exec Vd,Ln|L[Xn],Vs```," where it is the responsibility of the user to set +
+  "```ace.exec Vd,Cn|C[Xn],Vs```," where it is the responsibility of the user to set +
 `{nbsp}{nbsp}{nbsp}Vs = IntTo{b/2}Bits(bit_length(AD)) @ IntTo{b/2}Bits(bit_length(plaintext))`, +
 finalizes the computation of the SIV/tag, by performing:
 +
@@ -2327,7 +2329,7 @@ If `VLEN` is larger than `b`, the most significant bits of `Vs` (i.e., the "tail
 
 *** Other forms of `ace.exec` will produce null outputs and *invalidate* the CR.
 
-** In state _encrypt_, only  ``ace.exec`` instructions of the Form A are allowed, namely "```ace.exec Vd,Ln|L[Xn],Vs```," to encrypt `Vs` into `Vd` as follows:
+** In state _encrypt_, only  ``ace.exec`` instructions of the Form A are allowed, namely "```ace.exec Vd,Cn|C[Xn],Vs```," to encrypt `Vs` into `Vd` as follows:
 +
 --
 . If `ctr = 0`, then the CR is *invalidated*.
@@ -2342,7 +2344,7 @@ If `VLEN` is a multiple of `b`, the above operations are applied to each of the 
 
 *** Other forms of `ace.exec` will produce null outputs and *invalidate* the CR.
 
-** In state _decrypt_,  only  ``ace.exec`` instructions of the Form A are allowed, namely "```ace.exec Vd,Ln|L[Xn],Vs```," to decrypt `Vs` into `Vd` and then absorb the plaintext `Vs` into the `auth_tag`:
+** In state _decrypt_,  only  ``ace.exec`` instructions of the Form A are allowed, namely "```ace.exec Vd,Cn|C[Xn],Vs```," to decrypt `Vs` into `Vd` and then absorb the plaintext `Vs` into the `auth_tag`:
 +
 --
      . If `ctr = 0`, then the CR is *invalidated*.
@@ -2360,7 +2362,7 @@ If `VLEN` is a multiple of `b`, the above operations are applied to each of the 
 
  ** In state _hash_finalize_dec_,
     only an ``ace.exec`` instruction of Form B is allowed,
-    namely "```ace.exec Ln|L[Xn],Vs```," where it is the responsibility of the user to set +
+    namely "```ace.exec Cn|C[Xn],Vs```," where it is the responsibility of the user to set +
     `{nbsp}{nbsp}{nbsp}Vs = IntTo{b/2}Bits(bit_length(AD)) @ IntTo{b/2}Bits(bit_length(plaintext))`. +
     ``ace.exec`` thus performs the following operations:
 +
@@ -2534,7 +2536,7 @@ State Machine:::
   *** `hash` is set to zero.
   *** Any `ace.exec` will result in the CR being *invalidated*.
 
- ** In state _hash_absorb_, we can only issue instructions ``ace.exec`` of Form B, i.e., "```ace.exec Ln|L[Xn],Vs```", to absorb the data block `Vs` into the hash. This is performed as follows:
+ ** In state _hash_absorb_, we can only issue instructions ``ace.exec`` of Form B, i.e., "```ace.exec Cn|C[Xn],Vs```", to absorb the data block `Vs` into the hash. This is performed as follows:
 +
 --
   . `tmp <- hash xor Vs`.
@@ -2543,12 +2545,12 @@ State Machine:::
 +
 If `VLEN` is a multiple of `b`, then the above operations are applied to each `b`-bit block of `Vs`.
 
- ** Upon issuing `ace.state Ln|L[Xn],#ace_state_last_block, Xs` where `Xs` contains the length of the last block in bits, following happens:
+ ** Upon issuing `ace.state Cn|C[Xn],#ace_state_last_block, Xs` where `Xs` contains the length of the last block in bits, following happens:
    . if `partial_len` <> 0, then the CR is *invalidated*. (The previous block is not complete.)
    . if `Xs > b` then the CR is *invalidated*.
    . `last_block_len <- Xs`.
 
- ** In state _hash_last_block_,  we can only issue a single instruction ``ace.exec`` of Form B, i.e., "```ace.exec Ln|L[Xn],Vs```", to absorb the data block `Vs` and write the final hash value in `Vd`. After this, the state transitions to _completed_:
+ ** In state _hash_last_block_,  we can only issue a single instruction ``ace.exec`` of Form B, i.e., "```ace.exec Cn|C[Xn],Vs```", to absorb the data block `Vs` and write the final hash value in `Vd`. After this, the state transitions to _completed_:
 +
 --
   . `K1,K2 <- gen_subkeys(key)`.
@@ -2562,7 +2564,7 @@ If `VLEN` is a multiple of `b`, then the above operations are applied to each `b
   . The state is changed to _hash_finalize_.
 
   ** In state _hash_finalize_,
-    then we can issue one instructions ``ace.exec``of Form C, i.e., "```ace.exec Vd,Ln|L[Xn]```", to output the hash.
+    then we can issue one instructions ``ace.exec``of Form C, i.e., "```ace.exec Vd,Cn|C[Xn]```", to output the hash.
     Upon issuing that instruction, the CC transitions to state _completed_ with no error.
 --
 +
@@ -2647,7 +2649,7 @@ The values 9 and 13 are used when there is a partial block.
   ** In each state except _initial_, before performing any operation except `ace.import`, `ace.export`, and `ace.clone`, `used_VLEN` is compared to `VLEN`.
   If there is a mismatch, the CR will be *invalidated* and any operation will result in an invalid instruction exception.
 
-  ** In state _hash_absorb_, we can only issue instructions ``ace.exec`` of Form B, i.e., "```ace.exec Ln|L[Xn],Vs```", to absorb the data block `Vs` into the hash:
+  ** In state _hash_absorb_, we can only issue instructions ``ace.exec`` of Form B, i.e., "```ace.exec Cn|C[Xn],Vs```", to absorb the data block `Vs` into the hash:
   *** If `VLEN` is a multiple of `b` (including the case where `VLEN` = `b`), then `process_block` is applied to each `b`-bit segment of `Vs`.
   *** If `b` is a multiple of `VLEN` and `b` > `VLEN`, then
    . `Vs` is written to `partial_block` starting at byte offset `partial_len`.
@@ -2656,7 +2658,7 @@ The values 9 and 13 are used when there is a partial block.
    .. `process_block` is applied to `partial_block`,
    .. `partial_len <- 0` and `partial_block` is cleared.
 
- ** Upon issuing `ace.state Ln|L[Xn],#ace_last_block, Xs` where `Xs` contains the length of the last block in bits, following happens:
+ ** Upon issuing `ace.state Cn|C[Xn],#ace_last_block, Xs` where `Xs` contains the length of the last block in bits, following happens:
 +
 --
  . if `partial_len` <> 0, then the CR is *invalidated*. (The previous block is not complete.)
@@ -2669,8 +2671,8 @@ The values 9 and 13 are used when there is a partial block.
  ** In state _hash_last_block_:
   *** if `last_block_len` = 0, then the CR is *invalidated*.
   *** If `VLEN` is a multiple of `b` (including the case where `VLEN` = `b`), then
-      we only issue a single ``ace.exec`` of Form B, i.e., "```ace.exec Ln|L[Xn],Vs```", to absorb the least significant `b` bits of data block `Vs`.
-  *** If `b` is a multiple of `VLEN` and `b` > `VLEN`, then we can one or more instructions ``ace.exec`` of Form B, i.e., "```ace.exec Ln|L[Xn],Vs```", to absorb the data block `Vs` into the hash, i.e. "```ace.exec Ln|L[Xn],Vs```":
+      we only issue a single ``ace.exec`` of Form B, i.e., "```ace.exec Cn|C[Xn],Vs```", to absorb the least significant `b` bits of data block `Vs`.
+  *** If `b` is a multiple of `VLEN` and `b` > `VLEN`, then we can one or more instructions ``ace.exec`` of Form B, i.e., "```ace.exec Cn|C[Xn],Vs```", to absorb the data block `Vs` into the hash, i.e. "```ace.exec Cn|C[Xn],Vs```":
    . if `partial_len < b`, then
    .. The instruction must be of Form B, else the CR is *invalidated*.
    .. `Vs` is written to `partial_block` starting at byte offset `partial_len`.
@@ -2679,18 +2681,18 @@ The values 9 and 13 are used when there is a partial block.
 
   ** In state _hash_finalize_:
    *** If the function is a XOF, then
-       we can issue an arbitrarily large number of ``ace.exec`` of Form C instructions, i.e., "```ace.exec Vd,Ln|L[Xn]```", to output the hash.
+       we can issue an arbitrarily large number of ``ace.exec`` of Form C instructions, i.e., "```ace.exec Vd,Cn|C[Xn]```", to output the hash.
        This can be done with any of the two mechanisms below, except that the state never transitions to _completed_.
    *** If `VLEN` is a multiple of `b` (including the case where `VLEN` = `b`), then
-      we only issue a single ``ace.exec`` of Form C, i.e., "```ace.exec Vd,Ln|L[Xn]```", to output the hash.
+      we only issue a single ``ace.exec`` of Form C, i.e., "```ace.exec Vd,Cn|C[Xn]```", to output the hash.
       The value is, if necessary, finalized, before being output.
       The state is then changed to _completed_ with no errors (unless the algorithm is a XOF).
-   *** If `b` is a multiple of `VLEN` and `b` > `VLEN`, then we can issue one or more instructions ``ace.exec``of Form C, i.e., "```ace.exec Vd,Ln|L[Xn]```", to output the hash:
+   *** If `b` is a multiple of `VLEN` and `b` > `VLEN`, then we can issue one or more instructions ``ace.exec``of Form C, i.e., "```ace.exec Vd,Cn|C[Xn]```", to output the hash:
     . Upon entering state _hash_finalize_, `last_block_len` is reused to store the length of the output hash (in any case `b` if the algorithm is a XOF).
-    . After each "```ace.exec Vd,Ln|L[Xn]```":
+    . After each "```ace.exec Vd,Cn|C[Xn]```":
      .. We write a new block of the final value of the hash function to `Vd`, with the caveat that if `last_block_len` is non zero, but strictly smaller than `VLEN`, the value in `Vd` is accordingly truncated and zero-padded.
      .. `last_block_len <- max(last_block_len - VLEN, 0)`
-     .. if `last_block_len` = 0 then the state is changed to _completed_ with no errors, unless the algorithm is a XOF, in which case the internal state is updated again, `last_block_len <- b`, and more "```ace.exec Vd,Ln|L[Xn]```" instructions can be issued.
+     .. if `last_block_len` = 0 then the state is changed to _completed_ with no errors, unless the algorithm is a XOF, in which case the internal state is updated again, `last_block_len <- b`, and more "```ace.exec Vd,Cn|C[Xn]```" instructions can be issued.
 
  ** In any state, issuing any Form of ``ace.exec`` that is not the allowed one will produce a null output and the CR will be *invalidated*.
 
@@ -2730,7 +2732,9 @@ We now describe the state machines of the various Ascon-based algorithms standar
 
 ==== VM Migration
 
-Users may migrate their virtual machines (VMs) between client devices with CPUs from different silicon providers—a practice already common when moving interrupted VMs between Intel and AMD systems. In such a scenario, the ACE implementation on the destination device might have a Register File (LF) with a smaller capacity (not necessarily a smaller internal memory, as the internal representation may be more redundant). System software could then be unable to restore all cryptographic contexts.
+Users may migrate their virtual machines (VMs) between client devices with CPUs from different silicon providers—a practice already common when moving interrupted VMs between Intel and AMD systems.
+In such a scenario, the ACE implementation on the destination device might have a Crypto Register File (CRF) with a smaller capacity (not necessarily a smaller internal memory, as the internal representation may be more redundant).
+System software could then be unable to restore all cryptographic contexts.
 
 To address this, the `acelazy` CSR to enables lazy context reloading by causing the hart to trap to the parent mode if a CR being accessed is marked as "lazy", i.e., the corresponding bit in `acelazy` is set.  When this requires freeing one or more CRs first, system software decides which contexts to evict.
 
