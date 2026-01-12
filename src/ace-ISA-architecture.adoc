@@ -134,7 +134,7 @@ Rather, it defines 32 Cryptographic Registers for storing cryptographic keys and
 Each CR is identified by a number from 0 to 31, which the ACE unit uses to access its contents.
 (((Cryptographic Context)))
 
-CRs reside in a dedicated internal _CR file_ (CRF) that is inaccessible to any entity outside the ACE implementation, including software, other hardware blocks, and invasive debug interfaces. The CRF's memory capacity is implementation-defined and may be as large as 32 times the size of the largest possible CC; however, a smaller amount of memory may be used in practice. At a minimum, the CRF must be capable of holding either (i) a single instance of the largest possible CC, or the largest CC pair in which the first CC derives the second (via `ace.derive`), as well as (ii) a metadata block for each other possible context.
+CRs reside in a dedicated internal _CR file_ (CRF) that is inaccessible to any entity outside the ACE implementation, including software, other hardware blocks, and invasive debug interfaces. The CRF's memory capacity is implementation-defined and may be as large as 32 times the size of the largest possible CR; however, a smaller amount of memory may be used in practice. At a minimum, the CRF must be capable of holding either a single instance of the largest possible CR, or the largest CR pair in which the CC in the first CR derives the second (via `ace.derive`).
 (((Cryptographic Register File)))
 
 The size of each CR is dynamic, determined by the cryptographic algorithm with which it is configured.
@@ -633,19 +633,18 @@ and set usage policies that are at least as strict as the key's own._
 [[ACE-formats]]
 ===== Formats of Configuration Inputs and Sealed Configuration Contexts
 
-The formats of the configuration payload, of the content section, and of SCCs
-depend on the algorithm being used.
-Each algorithm must provide the following functions:
+The formats of the configuration payload, of the content section, and of SCCs depend on the algorithm being used.
 
-* `metadata_serialize(CR) -> byte array`: Serializes the metadata in a CR into a 64-bit block.
-* `metadata_deserialize(CC,byte array) -> CR.metadata`: Takes a metadata block formatted as described in <<ACE-metadata>> and deserializes it to the internal representation of the metadata section.
-* `initial_content_deserialize(CC,byte array) -> CR.content`:
-Reads the information provided to `ace.init` as the byte array that follows the metadata, and deserializes it for the internal representation.
-It must be the same as the format used for the SCC except for some omitted fields.
-* `content_serialize(CR) -> byte array`: Serializes the content of the CC in a CR to a byte array.
-* `content_deserialize(CR,byte array) -> CC.content`:
-Takes the decrypted byte array, that comes after the metadata, nonce and authentication tag, and deserializes it into a CR's content.
-The format depends on the algorithm which is specified in metadata information.
+// Each algorithm must provide the following functions:
+// * `metadata_serialize(CR) -> byte array`: Serializes the metadata in a CR into a 64-bit block.
+// * `metadata_deserialize(CC,byte array) -> CR.metadata`: Takes a metadata block formatted as described in <<ACE-metadata>> and deserializes it to the internal representation of the metadata section.
+// * `initial_content_deserialize(CC,byte array) -> CR.content`:
+// Reads the information provided to `ace.init` as the byte array that follows the metadata, and deserializes it for the internal representation.
+// It must be the same as the format used for the SCC except for some omitted fields.
+// * `content_serialize(CR) -> byte array`: Serializes the content of the CC in a CR to a byte array.
+// * `content_deserialize(CR,byte array) -> CC.content`:
+// Takes the decrypted byte array, that comes after the metadata, nonce and authentication tag, and deserializes it into a CR's content.
+// The format depends on the algorithm which is specified in metadata information.
 
 The size of a SCC, and of all byte arrays read or written by the above five functions, must be a multiple of 8 bytes.
 See <<ACE-algorithms>> for algorithm-specific details on the inputs and outputs of these functions.
@@ -654,14 +653,14 @@ Format of Configuration Input:::
 (((Cryptographic context, configuration input)))
 The format of the input to `ace.init` is simple.
 The first 8 bytes must contain the 64-bit metadata section as specified in <<ACE-metadata>>,
-followed by the content, i.e., the key(s) and possibly other information, to be passed to `initial_content_deserialize`.
+followed by the content, i.e., the key(s) and possibly other information, which then is deserialized.
 
 Plaintext Format of SCC:::
 (((Cryptographic context, SCC plaintext)))
-`bytes 0..7  {nbsp}{nbsp}{nbsp}{nbsp}{nbsp}{nbsp}` contain the 64-bit metadata section, +
-`bytes 8..19  {nbsp}{nbsp}{nbsp}{nbsp}{nbsp}` contain the nonce (96 bits), +
-`bytes 20..31  {nbsp}{nbsp}{nbsp}{nbsp}` contain the tag (96 bits), and +
-`bytes 32..u+31  {nbsp}{nbsp}` contain `content_serialize(CR.content)`, which has a byte length of `u`.
+`bytes 0 .. 7  {nbsp}{nbsp}{nbsp}{nbsp}{nbsp}{nbsp}` contain the 64-bit metadata section, +
+`bytes 8 .. 19  {nbsp}{nbsp}{nbsp}{nbsp}{nbsp}` contain the nonce (96 bits), +
+`bytes 20 .. 31  {nbsp}{nbsp}{nbsp}{nbsp}{nbsp}` contain the tag (96 bits), and +
+`bytes 32 .. u+31  {nbsp}{nbsp}` contains the serialization of the content of the `content`, which has a byte length of `u`.
 +
 Only the serialization of the content is encrypted, while both metadata and content are included in the computation of the authentication tag, as described next.
 
@@ -712,24 +711,24 @@ if (metadata.Locality == 15) then {
 {Kenc : bits(256), Kauth : bits(128)} = RFC8452_KeyDeriv(CSK);
 let T : bits(96) = POLYVAL(Kauth, 64'b0 @ metadata @ content)[95:0];
 
-let SIV : bits(96) = AESE(Kenc, 0 1'b0 @ ((T xor N)[126:0]))[127:32];
+let SIV : bits(96) = AESE(Kenc, 0 1'b0 @ ((T xor N)[126:0])) >> 32;
 // not preemptible until this point
 
 // preemptible here (for instance because of page fault), with `acestart` from 0 to 15
-M[15..0] = N[63:0] @ metadata[63:0];
+M[0 .. 15] = N[63:0] @ metadata[63:0];
 
 // preemptible here, with `acestart` from 16 to 31
-M[31..16] = SIV[95:0] @ N[95:64];
+M[16 .. 31] = SIV[95:0] @ N[95:64];
 
 foreach(i from 0 to num_blocks - 1) {
     if ((i == num_blocks - 1) and last_block_fractional) {
         // next instruction preemptible, with `acestart` from 32+i*16 to 39+i*16
-        M[39+i*16..32+i*16] = content[7+i*16..i*16] xor
-                              AESE(Kenc, 1'b1 @ SIV[94:0] @ (binary(i)[31:0]))[63:0];
+        M[32+i*16 .. 39+i*16] = content[i*16 .. 7+i*16] xor
+                                AESE(Kenc, 1'b1 @ SIV[94:0] @ (binary(i)[31:0]))[63:0];
     } else {
         // next instruction preemptible, with `acestart` from 32+i*16 to 47+i*16
-        M[47+i*16..32+i*16] = content[15+i*16..i*16] xor
-                              AESE(Kenc, 1'b1 @ SIV[94:0] @ (binary(i)[31:0]));
+        M[32+i*16 .. 47+i*16] = content[i*16 .. 15+i*16] xor
+                                AESE(Kenc, 1'b1 @ SIV[94:0] @ (binary(i)[31:0]));
     }
 }
 ----
@@ -743,7 +742,7 @@ cache recently used derived keys for both the Root RCSK and Locality-derived key
 M : array of bytes, in memory
 
 // next instruction preemptible, with `acestart` from 0 to 7
-metadata : bits(64) = M[7..0]
+metadata : bits(64) = M[0 .. 7]
 
 - check if sufficient memory is available for algorithm encoded by metadata
 z = size(content according to metadata);
@@ -758,24 +757,24 @@ if (metadata.Locality == 15) then {
 {Kenc : bits(256), Kauth : bits(128)} = RFC8452_KeyDeriv(CSK);
 
 // next instruction preemptible, with `acestart` from 8 to 19
-N : bits(96) = M[19..8]
+N : bits(96) = M[8 .. 19]
 
 // next instruction preemptible, with `acestart` from 20 to 31
-let SIV: bits(96) = M[31..20]
+let SIV: bits(96) = M[20 .. 31]
 
 T : bits(128) = 64'b0 @ metadata;
 T = T * Kauth;  // * = Montgomery multiplication
 foreach(i from 0 to num_blocks - 1) {
     if ((i == num_blocks - 1) and last_block_fractional) {
         // next instruction preemptible, with `acestart` from 32+i*16 to 39+i*16
-        content[7+i*16..i*16] = M[39+i*16..32+i*16] xor
-                                AESE(Kenc, 1'b1 @ SIV[94:0] @ (binary(i)[31:0]))[63:0];
-        T = T xor content[7+i*16..i*16];
+        content[i*16 .. 7+i*16] = M[32+i*16 .. 39+i*16] xor
+                                  AESE(Kenc, 1'b1 @ SIV[94:0] @ (binary(i)[31:0]))[63:0];
+        T = T xor content[i*16 .. 7+i*16];
     } else {
         // next instruction preemptible, with `acestart` from 32+i*16 to 47+i*16
-        content[15+i*16..i*16] = M[47+i*16..32+i*16] xor
-                                 AESE(Kenc, 1'b1 @ SIV[94:0] @ (binary(i)[31:0]));
-        T = T xor content[15+i*16..i*16];
+        content[i*16 .. 15+i*16] = M[32+i*16 .. 47+i*16] xor
+                                   AESE(Kenc, 1'b1 @ SIV[94:0] @ (binary(i)[31:0]));
+        T = T xor content[i*16 .. 15+i*16];
     }
     T = T * Kauth;  // * = Montgomery multiplication
 }
@@ -825,22 +824,6 @@ This offers stronger security by also preventing unauthorized `ace.import` opera
 The envisioned usage model employs ASID/VMID filtering at the U level, and potentially at the S level in high-performance systems where migration is not required (e.g., automotive applications). Cryptographic domain separation via the RCSK is intended for Virtual Machines, Supervisor Domains, Worlds, and TEEs within those contexts, as these demand stronger security guarantees.
 
 Although the architecture does not preclude assigning unique RCSKs to individual U processes, doing so would impose a significant burden on the system software stack. Hardware support could mitigate this—for example, by automatically switching RCSKs based on ASID/VMID without per-context-switch `ecall` overhead. Such a solution is not currently being explored due to its architectural complexity and inflexibility, and HW cost-for instance, it would require secure management of very large RCSK tables, including the potential need to save, restore, or migrate of entire blocks of RCSKs.
-
-[comment]
---
-ACE has two architected layers of  Usage Control .
-
-At the U and S levels, CCs usage can be constrained by ASID and VMID. This is a lightweight solution.
-Since ASID filtering is not active while the hart is in S mode or higher, context switching can be performed without changing the RCSK.
-
-At higher levels, even import of CCs can be constrained by a programmable RCSK.
-This is a more secure solution, and prevents also `ace.import`, but it is also heavier, since it requires an `ecall`.
-
-Indeed, we have envisioned a system where ASID/VMID filtering is used at the U level, and possibly at S as well in systems where migration is not supported but high performance is (such as automotive applications). The cryptographic domain separation by RCSK is for VMs, Supervisor Domains, Worlds, and also for TEEs in the previous contexts as well, since these require higher security guarantees.
-
-While the architecture does not prevent individual RCSKs per U-mode process, this would add burden to the system stack.
-This could be accelerated by hardware support, for instance, by providing a mechanism to change automatically RCSKs depending on the ASID/VMID without requiring an `ecall` per context switch. We are not exploring such a solution for now because it would be very difficult to architect and inflexible.
---
 
 // ///////////////////////////////////////////////////////////////////////////////////////////
 
@@ -1536,7 +1519,8 @@ Information that must be maintained in the internal state of a CC.
 The fields are unordered, and their lengths in bytes may differ from those listed—for example, in threshold or fault-tolerant implementations where redundancy is added. Notably, the full single-share key size is listed even when a System Key is used, as this reflects the size of the key material the algorithm operates on.
 
 . *Serialized Content*:
-The data that follows the metadata block in the plaintext portion of the SCC, as serialized by the algorithm's `content_serialize` function. The fields are listed in the order they appear in the SCC, each with its length in bytes.
+The data that follows the metadata block in the plaintext portion of the SCC.
+The fields are listed in the order they appear in the SCC, each with its length in bytes.
 
 Generic Functions:::
 If necessary, redefine generic functions that apply to all contexts.
@@ -1622,7 +1606,7 @@ System keys that are referred to by an index will cause the following changes in
 . In the configuration input and in the SCC, the key/main key field will contain the index of the key in the SKT in place of a key value.
 . This field is always a 64-bit value, even if the key itself is larger. This saves space in the SCC and allows for faster export and import operations.
 . For algorithms that require more than one key, such as XEX/XTS, ALL the keys are referred to by a single index, i.e., a single 64-bit value in the configuration input and the SCC.
-. Accordingly, the `content_serialize` and `content_deserialize` functions will support System Keys by producing and reading the shorter fields with the indexes in place of the longer fields that would be required when the key values are explicitly provided.
+. Accordingly, the SCC generation functions will support System Keys by producing and reading the shorter fields with the indexes in place of the longer fields that would be required when the key values are explicitly provided.
 
 NOTE: Internally, the ACE unit can either directly use the value from the SKT, or copy it to the internal state of the CR.
 The architecture does not restrict the choice of the implementation.
