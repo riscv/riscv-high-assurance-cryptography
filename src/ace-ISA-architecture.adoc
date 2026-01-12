@@ -695,9 +695,12 @@ We can now define the generation of the SCC from the CC in a CR.
 ----
 metadata : bits(64);
 last_block_fractional : boolean;
-content : array[num_blocks] of bits(128); // last block is zero-padded
-                                          // if last_block_fractional = true
-M : array[num_blocks+2] of bits(128);
+z = size(content);   // content is serialized
+num_blocks = ceil(z / 16);
+last_block_fractional = z % 16 != 0;
+content : array[num_blocks] of bits(128);
+
+M : array[32 + z] of bytes
 let N : bits(96) = random(96 bits);
 Kenc : bits(256);
 Kauth : bits(128);
@@ -709,30 +712,32 @@ if (metadata.Locality == 15) then {
 }
 
 {Kenc, Kauth} = RFC8452_KeyDeriv(CSK);
-let T : bits(96) = POLYVAL(Kauth, 128b'(metadata) @ content)[95:0];
+let T : bits(96) = POLYVAL(Kauth, metadata @ content)[95:0];
 
-// note: 128 bits (metadata) = 0[63:0] * metadata
 let SIV : bits(96) = AESE(Kenc, 0 1'b0 @ ((T xor N)[126:0]))[127:32];
 // not preemptible until this point
 
 // preemptible here (for instance because of page fault), `acestart` = 0
-M[0][127:0] = N[63:0] @ metadata[63:0];
+M[15..0] = N[63:0] @ metadata[63:0];
 
 // preemptible here, `acestart` = 16
-M[1][127:0] = SIV[95:0] @ N[95:64];
+M[31..16] = SIV[95:0] @ N[95:64];
 
 foreach(i from 0 to num_blocks - 1) {
-    // preemptible here, `acestart` = 32 + i*16
-    if ((i == num_blocks - 1) and last_block_fractional)
-        M[num_blocks][63:0] = content[num_blocks]
-            xor AESE(Kenc, 1 @ SIV[94:0] @ (binary(num_blocks)[31:0]))[63:0];
-    else
-        M[i + 2][127:0] = content[i] xor AESE(Kenc, 1 @ SIV[94:0] @ (binary(i)[31:0]));
+    // preemptible here, `acestart` = 32+i*16
+    if ((i == num_blocks - 1) and last_block_fractional) {
+        M[39+i*16..32+i*16] = content[7+i*16..i*16]
+                              xor AESE(Kenc, 1'b1 @ SIV[94:0] @ (binary(i)[31:0]))[63:0];
+    } else {
+        M[47+i*16..32+i*16] = content[15+i*16..i*16]
+                              xor AESE(Kenc, 1'b1 @ SIV[94:0] @ (binary(i)[31:0]));
+    }
 }
 ----
 
 NOTE: Due to the computational cost of the derivation functions, implementations may
 cache recently used derived keys for both the Root RCSK and Locality-derived keys.
+
 
 ===== Use of `acestart`
 
