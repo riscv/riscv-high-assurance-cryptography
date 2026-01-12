@@ -101,7 +101,7 @@ and `Ln|L[Xn]` means that there are two different encodings for when the operand
 | Performs a cryptographic operation. The instruction may also modify the internal state of the CC in the locker. This instruction admits four _forms_, depending on whether it accepts an input or not, and whether it produces an output or not.
 | `ace.size`
 | `Xd,Ls\|L[Xs]` +
-`Xd,Xs` .2+|  `ace.size` returns the size in bytes of the SCC exported from Locker `Ls` or `L[Xs]`, or from a locker that had the metadata block `Xs`. +
+`Xd,Xs` .2+|  `ace.size` returns the size in bytes of a SCC that would be exported from Locker `Ls` or `L[Xs]`, or from a locker that had `Xs` as its metadata block. +
 Returns zero if the algorithm specified in `Xs` is not supported. +
 `ace.available` is an alias for `ace.size`.
 | `ace.available` | `Xd,Xs`
@@ -113,7 +113,7 @@ For instance, the source Locker could contain a KEM that configures the destinat
 | `ace.state` +
 `(ace.dir)`
 | `Ld\|L[Xd],#immed` +
-`Ld\|L[Xd],#immed,Xs`  |  Triggers transitions in the algorithm's state (such as the different phases of hash functions or modes of operation) or provide additional information.
+`Ld\|L[Xd],#immed,Xs`  |  Modifies the algorithm's state, such as triggering transitions between the different phases of hash functions or modes of operation, or provide additional information.
 `ace.dir` is an alias for `ace.state`.
 | `ace.restrict` +
   `(ace.harden)`  | `Ld\|L[Xd],Xs`                   |  Narrows the Usage Policies of a CC and turns on or increases the side-channel protection of the algorithm in it, if the microarchitecture supports it.
@@ -458,7 +458,9 @@ update the flags to *VOID* to allow the current process to configure it, and ret
  ** In this case accessing it (for usage, configuration, or export) will trap to the operating system.
  *** The operating system must save the current value to the state of its owner (if it is dirty, which is tracked by the supervisor in this case according to the dirtiness state of the locker when the owner relinquished control), and then load the value from the current state. +
 
-While restoring the state for a process, for a given locker, the privileged code can observe following situations, where we also record what it has to do in case every locker access is implemented as lazily as possible:
+Now let us have a look at what can happen when privileged code restores a process's state.
+For a given locker, the privileged code may encounter seven distinct scenarios.
+The following list details each scenario and specifies the minimal action required by privileged code to implement fully lazy management.
 
 . The locker is unconfigured, and
  .. no CC for that locker is in the saved state of the process.
@@ -489,15 +491,13 @@ NOTE: If the `acealien` bit is always 0, then the bits in `aceconfigured` and `a
 
 [NOTE]
 ====
-In practice, the privileged code can also mix the two approaches, for instance considering lazy-loading only if in a VM that has been migrated to a machine with a reduced LF, choosing to behave like in the simpler model whenever possible, until the processes will adjust by themselves to the new hardware configuration by doing their own offload and reload of contexts (as they should do anyway). It is ultimately a choice of the designer of the operating system to choose which approach they consider more appropriate for their specific use case.
-The information provided by the hardware should be sufficient to allow adaptive behaviors for the purpose of optimizing performance.
+In practice, privileged code may combine both approaches. For example, lazy-loading could be employed only after migrating a virtual machine to a system with a smaller locker file, while otherwise following the simpler model. Over time, processes will adapt to the new hardware by offloading and reloading contexts as needed by following the recommendation to always check whether any configuration or import operation succeeds and manually managing the offloading.
+The operating system designer ultimately selects the strategy best suited to their use cases.
+The hardware provides sufficient information to enable adaptive, performance-optimized behavior.
 ====
 
-NOTE: This 6-state property can in theory track the locker states for all higher-privileged modes.
-S/VS can trust the values coming from U, since U cannot write to these registers.
-However, M and HS cannot trust the values from S and VS, since the latter can write to these registers.
-This implies that M, resp., HS mode must always context-switch all lockers when context-switching S, resp., VS domains, since it doesn't know which lockers have changed, and therefore they can only use the `*status.ACES` fields.
-While it would be possible to add additional registers to track changes at each level, ideally this should be done for F and V too (and in fact for all extensions that add state), in order to make the architecture consistent.
+NOTE: The fine-grained tracking could be extended to all higher-privilege modes. The S/VS modes can trust the state reported by U-mode, as U cannot write to the relevant CSRs. However, M-mode and HS-mode cannot rely on the values reported by S/VS, because those modes can write to these privileged registers. Consequently, when M-mode (or HS-mode) context-switches an S-mode (or VS-mode) domain, it cannot perform a fine-grained determination of which lockers have been modified, it must rely only on the `*status.ACES` registers and must therefore save and restore all lockers.
+Adding further registers, such as S and VS versions of `aceconfigured`, `acealien`, and `acedirty` to track per-level modifications is possible and it would be beneficial for performance optimization.
 
 [[ACE-CSR-ace-error]]
 ===== `aceerror`
@@ -1655,8 +1655,7 @@ Any other operation, if it has an output, it returns zero, and will cause the lo
 All the operations performed by `ace.exec` or `ace.state` in the rules given for each algorithm are assumed to be *uninterruptible*.
 This includes the case where very long vector inputs are processed but all operations are completely internal to ACE and require no external resource access, such as encryptions, decryptions, hashing, point multiplications, and other cryptographic operations.
 Since such operations can operate independently of the CPU core, they may continue to execute also when the process that issued them is interrupted, so the hart implementation may cause the context switching software to wait when accessing a locker that is going to be written to.
-We do not specify whether these instructions write their results to the locker atomically or piecewise.
-[.darkred]#(Only in case we still want to make long cryptographic operations interruptible.)#
+We assume that these instructions perform atomically and uninterruptibly.
 
 In what follows, when we write of "state _name_" we refer to the state which has number _ace_state_name_ as described in <<ACE-state-constants>>.
 
@@ -1700,7 +1699,7 @@ The architecture does not restrict the choice of the implementation.
 While listing the rules for the ECB mode is in principle easy, it does display all the rules that are required to describe an arbitrarily complex mode.
 (((ACE, algorithm, ECB)))
 
-// comment to reset formatting
+===== Specification
 
 Parameters:::
 
@@ -1757,8 +1756,7 @@ Supporting this behaviour would not only complicate both the architecture and it
 Therefore, the present specification assumes that vector lengths (or vector groups) can be configured to at least the block size of the cipher.#
 ====
 
-[discrete]
-==== Usage
+===== Usage
 
 The following pseudocode illustrates how to use an ECB CC to encrypt a block of data using a block cipher with a width of 128 bits (`VLEN` is also 128).
 
@@ -1806,6 +1804,7 @@ Output Feedback (OFB)
 as they can be easily implemented on top of the ECB functionality in software,
 and no intermediate value in these algorithms needs to be kept secret.
 
+
 [[ACE-keystream-modes]]
 ==== CTR/LFSR/XCTR/XLFSR Keystream Generation
 
@@ -1815,7 +1814,7 @@ In the "non-X" modes, i.e., in the CTR mode and its analague that replaces the a
 The "X" modes have both IV and counter/LSFR of the same size as the block size of the underlying keyed PRP or PRF:
 IV and counter/LFSR are ``xor``ed together to form the input to the keyed PRP or PRF -- which explains the "X" in the mode names.
 
-//
+===== Specification
 
 Parameters:::
 * `b` = block size in bits (8|`b`). For this algorithm `VLEN` must be a multiple of `b`.
@@ -1875,8 +1874,7 @@ If the number `x` of blocks to be processed in an entire run of the algorithm is
 
 Note that if `ace.state` is issued to return to state _initial_, the CC can be reused with a new `IV`.
 
-[discrete]
-==== Usage
+===== Usage
 
 Example pseudocode is given in <<ACE-pseudocode-keystream-modes>> (for the case `b` = `VLEN` = 128).
 
@@ -1910,6 +1908,8 @@ for i = 0 to len_in_bytes(PT)/16-1 do
 The use of a single key or two independently sampled keys is determined by the algorithm, and it is not a configuration parameter for the algorithm.
 We first define XEX mode functionality.
 (((ACE, algorithm, XEX)))
+
+===== Specification
 
 Parameters:::
 
@@ -1979,8 +1979,7 @@ If `VLEN` is a multiple of `b`, the above commands are executed `VLEN/b` times, 
 
 Note that if `ace.state` is issued to return to state _initial_, the CC can be reused with a new `IV`.
 
-[discrete]
-==== Usage
+===== Usage
 
 Using XEX mode is very easy. We include pseudocode for encryption only, decryption is entirely similar
 (this example is also assuming `b` = `VLEN` = 128).
@@ -2017,6 +2016,8 @@ To implement the XTS mode, the ciphertext stealing part is easy to realize using
 [[ACE-GCM-mode]]
 ==== GCM Mode
 (((ACE, algorithm, GCM)))
+
+===== Specification
 
 Parameters:::
 
@@ -2158,8 +2159,7 @@ If `VLEN` is larger than `b`, only the `b` least significant bits `Vs` are compa
 
 //
 
-[discrete]
-==== Usage
+===== Usage
 
 In <<ACE-pseudocode-GCM-encryption>> we show pseudocode for GCM encryption (again with `b` = `VLEN` = 128).
 The code assumes that both AD and plaintext (or the ciphertext for the decryption) are zero-padded to a multiple of `b` bits, in this case 128 bits.
@@ -2222,7 +2222,7 @@ if (X1 != 0) then { handle error }       // do not use the plaintext if error oc
 //
 
 [discrete]
-==== Alternative Examples
+===== Alternative Examples
 
 GCM security is not compromised if `H` is revealed.
 Consequently, an implementation based on a simpler ECB mode CC is possible,
@@ -2289,7 +2289,7 @@ The third difference affects the state machine. While GCM-SIV's decryption state
 * During encryption, the _hash_absorb_ state absorbs the entire associated data and plaintext. The _hash_finalize_enc_ state then absorbs the lengths and produces the SIV/tag. Finally, the _encrypt_ state performs a second pass to encrypt the plaintext using the SIV/tag as the initialization vector.
 * During decryption, the _hash_absorb_ state absorbs only the associated data. The _decrypt_ state decrypts the ciphertext and simultaneously absorbs the plaintext into the hash. Finally, the _hash_finalize_dec_ state absorbs the lengths, produces the SIV/tag, and internally compares it to the provided SIV/tag.
 
-// Comment to reset indentation of blocks
+===== Specification
 
 Parameters:::
 
@@ -2455,8 +2455,7 @@ If `VLEN` is larger than `b`, the most significant bits of `Vs` beyojnd the `b`-
 
 //
 
-[discrete]
-==== Usage
+===== Usage
 
 We show in <<ACE-pseudocode-GCM-SIV-encryption>> how to perform AEAD encryption with a GCM-SIV CC (with `b` = `VLEN` = 128).
 <<ACE-pseudocode-GCM-SIV-decryption>> is the corresponding pseudocode for decryption.
@@ -2550,8 +2549,11 @@ if (X1 != 0) then { handle error }               // do not use the plaintext if 
 [[ACE-CMAC]]
 ==== CMAC Functions
 
+CMAC is an algorithm for message authentication codes constructed from a block cipher.
+it was designed by Tetsu Iwata and Kaoru Kurosawa and became a NIST recommendation in May 2005.
 (((ACE, algorithm, CMAC)))
-// comment to reset formatting
+
+===== Specification
 
 Parameters:::
 
@@ -2652,6 +2654,10 @@ If `VLEN` is larger than `b`, the most significant bits of `Vs` beyojnd the `b`-
 (((ACE, algorithm, general hashing)))
 (((ACE, algorithm, MAC functions)))
 (((ACE, algorithm, XOF)))
+
+
+
+===== Specification
 
 Parameters:::
 
