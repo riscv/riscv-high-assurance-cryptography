@@ -242,13 +242,13 @@ Enabling ACE will trap to the Supervisor to allow the latter to first save the s
 //
 [[fsxsstates-copy]]
 .ACES state transitions in the no-lazy-loading mode
-[width=75,align=center,float=center,cols="<,<,<,<,<"]
+[width=83,align=center,float=center,cols="<,<,<,<,<"]
 |===
 |Current State +
 Action |Off |Initial |Clean |Dirty
 |===
 
-[width=75,align=center,float=center,cols="<,<,<,<,<"]
+[width=83,align=center,float=center,cols="<,<,<,<,<"]
 |===
 5+^|At context save in privileged code
 
@@ -264,7 +264,7 @@ Clean
 Clean
 |===
 
-[width=75,align=center,float=center,cols="<,<,<,<,<"]
+[width=83,align=center,float=center,cols="<,<,<,<,<"]
 |===
 5+^|At context restore in privileged code
 
@@ -280,7 +280,7 @@ Clean
 N/A
 |===
 
-[width=75,align=center,float=center,cols="<,<,<,<,<"]
+[width=83,align=center,float=center,cols="<,<,<,<,<"]
 |===
 5+^|Execute instruction that possibly modifies state, including configuration
 
@@ -296,7 +296,7 @@ Dirty
 Dirty
 |===
 
-[width=75,align=center,float=center,cols="<,<,<,<,<"]
+[width=83,align=center,float=center,cols="<,<,<,<,<"]
 |===
 5+^|Execute instruction to `export` state
 
@@ -312,7 +312,7 @@ Clean
 Dirty
 |===
 
-[width=75,align=center,float=center,cols="<,<,<,<,<"]
+[width=83,align=center,float=center,cols="<,<,<,<,<"]
 |===
 5+^|Execute instruction to unconfigure unit (`ace.reset`)
 
@@ -328,7 +328,7 @@ Initial
 Initial
 |===
 
-[width=75,align=center,float=center,cols="<,<,<,<,<"]
+[width=83,align=center,float=center,cols="<,<,<,<,<"]
 |===
 5+^|Execute instruction to disable unit (`ace.disable`)
 
@@ -344,7 +344,7 @@ Off
 Off
 |===
 
-[width=75,align=center,float=center,cols="<,<,<,<,<"]
+[width=83,align=center,float=center,cols="<,<,<,<,<"]
 |===
 5+^|Execute instruction to enable unit (`ace.enable`)
 
@@ -376,18 +376,17 @@ Since we need a mechanism to potentially implement and track lazy-loading after 
 [[ACE-tracking-alien-lockers]]
 ===== Fine Grained Locker Management with Lazy-Loading: `aceconfigured`, `acealien`, and `acedirty`
 
-However, a more fine grained context switching and locker tracking mechanism will allow significant optimizations. We describe this now.
-
-Let us define four properties for lockers:
+We describe a more fine grained context switching and locker tracking mechanism, based on lazy loading, that will allow significant optimizations.
+Let us define first four properties for lockers:
 
 [horizontal]
-`configured`:: Indicates whether the locker is currently configured.
-`alien`:: For a configured locker, indicates whether it is owned by the current process (value = 0) or by an alien one (value = 1).
+`configured`:: Indicates whether the locker is currently configured (value = 1).
+`alien`:: For a configured locker, indicates whether the CC in the locker is owned by the current process (value = 0) or by a different one (value = 1), in which case we call that CC _alien_.
 `dirty`:: For a configured locker owned by the current process, indicates whether its state has been modified since the last state save.
-`lazy`:: Indicates whether a configuration for this locker is stored only in the parent's switching context,
-regardless of whether the locker is unconfigured or occupied by a CC belonging to a different process.
+`lazy`:: Indicates whether a configuration for this locker for the current process is stored only in the switching context,
+regardless of whether the locker itself is unconfigured or occupied by an alien CC.
 
-It is the duty of the operating system to keep track:
+It is the duty of the privileged code to keep track:
 
 * for each process, and
 ** for each locker, whether it is:
@@ -398,7 +397,9 @@ It is the duty of the operating system to keep track:
   .. it contains a CC for the process (clean/dirty); or
   .. it contains a CC for an alien process (clean/dirty), together with the ID of latter.
 
-* This is optimised by having a table of the IDs of the processes that own the CCs in each locker, or 0 if it is unallocated.
+//
+
+NOTE: This is optimised by having a table of the IDs of the processes that own the CCs in each locker, or 0 if it is unallocated.
 (This would be the PID of the scheduler in most operating systems and it is not used by normal processes.
 A different magic value can be used.)
 
@@ -408,7 +409,7 @@ Each state is represented by a 3-bit value, also given (and explained later).
 *VOID* (`0b000`)::
 `[.darkred]#*Description:*#{nbsp}`[.darkred]#_Locker is unconfigured; there is no saved value for the current process._# +
 `[.darkred]#*Properties:*{nbsp}{nbsp}configured = 0, lazy = 0.#` (Assumed: `dirty = 0` and `alien = 0`.)
-** Preempted from this state to context save in privileged code: Nothing to save.
+** At context save in privileged code: Nothing to save.
 ** *Usage* gives error _ace_err_unconfigured_, does not trap.
 ** *Configuration* does not trap, works as expected-including errors with *export* or *clone* - and sets: +
 `configured <- 1, alien <- 0, lazy <- 0,` and `dirty <- 1` `{implies}` *DIRTY*.
@@ -416,7 +417,7 @@ Each state is represented by a 3-bit value, also given (and explained later).
 *LAZY* (`0b100`)::
 `[.darkred]#*Description:*#{nbsp}`[.darkred]#_Locker is unconfigured; parent has saved a value to be lazy-loaded for the current process._# +
 `[.darkred]#*Properties:*{nbsp}{nbsp}configured = 0, lazy = 1.#` (Assumed: `dirty = 0` and `alien = 0`.)
-** Preempted from this state to context save in privileged code: Nothing to save.
+** At context save in privileged code: Nothing to save.
 ** *Usage* or *export* cause a trap to allow the OS to lazy load a CC's value in the locker for the current process first, then set `dirty <- 0`, `lazy <- 0`.
     The instruction is restarted unrestricted and operates from the state *CLEAN*.
     The instruction may cause the locker to become *DIRTY*.
@@ -426,7 +427,7 @@ Each state is represented by a 3-bit value, also given (and explained later).
 *CLEAN* (`0b001`)::
 `[.darkred]#*Description:*#{nbsp}`[.darkred]#_Locker is configured for the current process and loaded. Unchanged since last switch._# +
 `[.darkred]#*Properties:*{nbsp}{nbsp}configured = 1, alien = 0, lazy = 0, dirty = 0.#`
-** Preempted from this state to context save in privileged code: Nothing to save, since the locker is already clean and the saved state also marks it as clean.
+** At context save in privileged code: Nothing to save, since the locker is already clean and the saved state also marks it as clean.
 ** *Usage* is unrestricted; if the CC in the locker is potentially modified, `dirty <- 1` `{implies}` *DIRTY*.
 ** *Configuration* works as expected, and sets: +
 `configured <- 1, alien <- 0, lazy <- 0`, and `dirty <- 1` `{implies}` *DIRTY*.
@@ -434,7 +435,7 @@ Each state is represented by a 3-bit value, also given (and explained later).
 *DIRTY* (`0b101`)::
 `[.darkred]#*Description:*#{nbsp}`[.darkred]#_Locker is configured for the current process and loaded. Potentially changed since last switch._# +
 `[.darkred]#*Properties:*{nbsp}{nbsp}configured = 1, alien = 0, lazy = 0, dirty = 1.#`
-** Preempted from this state to context save in privileged code: Nothing to save, the locker's state in the saved state must be marked as dirty.
+** At context save in privileged code: Nothing to save, the locker's state in the saved state must be marked as dirty.
 *** The privileged code may also save the locked in the state, and mark this entry as clean.
 ** *Usage* is unrestricted.
 ** *Configuration*: Works as expected, and leave the properties unchanged: +
@@ -443,7 +444,7 @@ Each state is represented by a 3-bit value, also given (and explained later).
 *ALIEN* (`0b011`)::
 `[.darkred]#*Description:*#{nbsp}`[.darkred]#_Locker is configured for an alien process; no value to be lazy-loaded for current process._# +
 `[.darkred]#*Properties:*{nbsp}{nbsp}configured = 1, alien = 1, lazy = 0.#`  (Assumed: `dirty = 0`.)
-** Preempted from this state to context save in privileged code: nothing to do.
+** At context save in privileged code: nothing to do.
 ** *Usage* results in error _ace_err_unconfigured_.
 ** *Configuration* of the locker will first trap to the operating system, to allow the latter to:
 export the CC in the locker to the state of the owning process;
@@ -453,7 +454,7 @@ update the flags to *VOID* to allow the current process to configure it, and ret
 *ALIEN_LAZY* (`0b111`)::
 `[.darkred]#*Description:*#{nbsp}`[.darkred]#_Locker is alien-configured; there is a value to be lazy loaded for the current process._# +
 `[.darkred]#*Properties:*{nbsp}{nbsp}configured = 1, alien = 1, lazy = 1.#`  (Assumed: `dirty = 0`.)
- ** Preempted from this state to context save in privileged code: nothing to do.
+ ** At context save in privileged code: nothing to do.
  ** In this case accessing it (for usage, configuration, or export) will trap to the operating system.
  *** The operating system must save the current value to the state of its owner (if it is dirty, which is tracked by the supervisor in this case according to the dirtiness state of the locker when the owner relinquished control), and then load the value from the current state. +
 
