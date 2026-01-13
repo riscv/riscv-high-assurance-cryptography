@@ -36,7 +36,7 @@ This enables flexible key separation by spatial and temporal domains.
 
 Object-Orientation:::
 CCs act as _objects_, exposing a uniform interface to different algorithms.
-A CC encapsulates its behavior, allowing interchangeable use of ciphers like AES-128, AES-256, Калина-128, Калина-256, and SM4, and so on, in various modes (ECB, GCM-SIV, XEX/XTS) without changes to the compiled code. Side-channel-resistant variants are also supported transparently.
+A CC encapsulates its behavior, allowing interchangeable use of ciphers like AES-128, AES-256, Калина-128, Калина-256, and SM4, and so on, in the same modes (ECB, GCM-SIV, XEX/XTS) without requiring any change to the compiled code. Side-channel-resistant variants are also supported transparently.
 
 // NOTE: This flexibility allows, for example, a content distribution network to use different ciphers (AES in US/EU, SM4 in China, etc.) for GCM payloads using the same binary interface. The CC encapsulates the cipher, and the binary supports all GCM variants (see <<ACE-GCM-mode>>).
 
@@ -375,7 +375,7 @@ software tried to use an incomplete CC in a CR as a source in an `ace.exec`, `ac
 (((CSR, acestart)))
 
 Unlike the vector extension’s `vstart`, which tracks element indices, ACE has no notion of an element; `acestart` therefore records a byte offset.
-For a load‑type instruction (e.g., `ace.init`, `ace.import`, `ace.input`), this offset indicates how many bytes of input have already been read and processed. For a store‑type instruction (e.g., `ace.export`, `ace.output`), it indicates how many bytes of output have already been computed and written.
+For a load-type instruction (e.g., `ace.init`, `ace.import`, `ace.input`), this offset indicates how many bytes of input have already been read and processed. For a store-type instruction (e.g., `ace.export`, `ace.output`), it indicates how many bytes of output have already been computed and written.
 The value includes all payload bytes (metadata, content, nonce, tag) and accommodates piecewise execution via traps (see <<ACE-trappable-insns-support>>).
 
 Typically, hardware sets this register.
@@ -398,13 +398,12 @@ The exact semantics of `acestart` are defined in <<ACE-formats>>
 ===== Reuse of ASID and VMID (to be verified)
 
 ACE reuses `satp`.ASID and `hgatp`.VMID to optionally restrict the usage of CCs to a specific process or virtual machine.
-The maximal bit length of `ASID` is 9 for Sv32 addresses or 16 for Sv39, Sv48, and Sv57 addresses.
-The maximal bit length of `VMID` is 7 for Sv32x4 or 14 for Sv39x4, Sv48x4, and Sv57x4 addresses.
+// The maximal bit length of `ASID` is 9 for Sv32 addresses or 16 for Sv39, Sv48, and Sv57 addresses.
+// The maximal bit length of `VMID` is 7 for Sv32x4 or 14 for Sv39x4, Sv48x4, and Sv57x4 addresses.
 In the metadata section, `ASID` and `VMID` are always zero padded to the maximal lengths of 16 and 14 bits, respectively.
-[.darkred]#Verification needed: Ensure we can use ASID/VMID usage for restriction works if not used in address translation.#
+[.darkred]#Verification needed: Ensure we can use ASID/VMID to restrict usage even if not used in address translation.#
 
-[[ACE-providing-keys,Remark {counter:remark}]]
-*Remark {counter:remark}.* _The software in each World/Supervisor Domain is normally responsible to generate or obtain their own keys, and if a process (applet) in one World/Supervisor Domain is responsible to provide keys to other Worlds/Supervisor Domains, it is the responsibility of the M-mode formware to perform an appropriate `ace.import`/RCSK switch/`ace.export` sequence._
+NOTE: The software in each World/Supervisor Domain is normally responsible to generate or obtain their own keys, and if a process (applet) in one World/Supervisor Domain is responsible to provide keys to other Worlds/Supervisor Domains, it is the responsibility of the M-mode formware to perform an appropriate `ace.import`/RCSK switch/`ace.export` sequence.
 
 [[ACE-CSR-macercsk]]
 ===== `macercsk`
@@ -434,7 +433,7 @@ These are:
 
 [NOTE]
 ====
-`maceBootSecret*` must be reconfigurable to support VM reboots independent of the physical host.
+`maceBootSecret*` must be reconfigurable in order to support VM reboots which are independent of the boot cycles if the physical host.
 ====
 
 [[ACE-data-structures]]
@@ -507,7 +506,7 @@ In such a case, the value of the SC_Protection field must be set to 3.
 |===
 | Value | Description
 |   0   | Explicit value.
-|   1   | Internal table. System specific. For each algorithm as specified in <<ACE-algorithms>>, the part of the content that normally contains the key(s) is replaced by a 64-bit value which is an index into the internal System Keys Table (SKT) --- for both Configuration Input and the SCCs. The actual value of the key is never included in exported content. For threshold algorithms, ACE may copy the key material from the SKT into the CR and expand it into multiple shares.
+|   1   | Internal table. System specific. For each algorithm as specified in <<ACE-algorithms>>, the part of the content that normally contains the key(s) is replaced by a 64-bit value which is an index into the internal System Keys Table (SKT)-for both Configuration Input and the SCCs. The actual value of the key is never included in exported content. For threshold algorithms, ACE may copy the key material from the SKT into the CR and expand it into multiple shares.
 |   2   | Internally generated key. System specific.  In the Configuration Input, the part of the content that normally contains the key(s) is replaced by a "recipe" in a system-specific format. The format is not specified by the ISA and may not be portable to other systems. Once the key material has been internally generated, the value is included in the SCC as part of the content - not the "recipe" - as for any other key(s) for the same specified algorithm.  The Key_Type field of the metadata in all representations of the CC, will keep the value 2.
 |   3   | Invalid.
 |===
@@ -541,12 +540,11 @@ Reconfiguring the RCSK is a better approach for such isolation requirements, whe
 
 Internally, ACE keeps a table of 128-bit Locality Secrets (LS), the Locality Secrets Table (LST).
 Some entries of the LST are fixed or configurable only using an implementation-specific authenticated hardware procedure, and these are
-global and shared across all ACE units.
+global and shared across all ACE units in the same system or in the same SoC.
 A few entries may be programmed by M-mode and are architectural, i.e., per hart.
 
 If the Locality Field of a CC is -1 (all ones), then the RCSK is used.
 Otherwise, this value is used as an index _i_ in the LST, and the actual CSK is derived from the RCSK and LST[_i_].
-//The encryption and authentication keys are then derived from the DCSK.
 
 In <<ACE-locality-indexes>>, we list the mandatory entries.
 Column "MM-Config." indicates whether MM may be allowed to configure the entry.
@@ -567,7 +565,7 @@ device-wide, or (usually) OS-wide.
 | OEMSecret                 | Provisioned by OEM to differentiate their products from the competition.
                               Can be permanent, or optionally reconfigurable by impdef HW authenticated mechanisms. | Device | N | 3
 | ProductSecret             | Identifies device/system type/model (product). Not necessarily permanent. Reconfigurable like OEMSecret. | Device | N | 4
-| DeviceSecret              | Unique device (entire system) secret (not the device ID such as a serial number, but it can be derived from it, for instance by hashing). Shared across all harts in a SoC and shareable across multiple SoCs in a single device. Sharing mechanism impdef, i.e., not architected. Reconfigurable like OEMSecret. | Device | N | 5
+| DeviceSecret              | Unique device (entire system) secret (_not_ the device ID such as a serial number). Shared across all harts in a SoC and shareable across multiple SoCs in a single device. Sharing mechanism impdef, i.e., not architected. Reconfigurable like OEMSecret. | Device | N | 5
 | OSSecret                  | Identifies Operating System (or System Stack).
                               Not permanent, must be configured during (virtual) boot. | OS | Allowed | 6
 | BootSecret                | Regenerated at each (virtual) boot. | OS | Allowed | 7
@@ -649,6 +647,7 @@ if (metadata.Locality == 15) then {
 }
 
 {Kenc : bits(256), Kauth : bits(128)} = RFC8452_KeyDeriv(CSK);
+
 let T : bits(96) = POLYVAL(Kauth, 64'b0 @ metadata @ content)[95:0];
 
 let SIV : bits(96) = AESE(Kenc, 0 1'b0 @ ((T xor N)[126:0])) >> 32;
@@ -755,7 +754,7 @@ if (tag != SIV) then { error; }
 [[ACE-RCSK-vs-ID]]
 === Programmable RCSKs vs. ID-based Usage Control
 
-(This section is informative and non-normative.)
+This section is informative and non-normative.
 
 ACE provides two architected layers of usage control:
 
@@ -765,15 +764,18 @@ Because filtering by ASID is inactive when the hart is in S mode or higher, cont
 . At higher privilege levels, not only the usage, but even the import of CCs can be restricted by a programmable RCSK.
 This offers stronger security by also preventing unauthorized `ace.import` operations, but incurs higher overhead as it typically requires an `ecall`.
 
-The envisioned usage model employs ASID/VMID filtering at the U level, and potentially at the S level in high-performance systems where migration is not required (e.g., automotive applications). Cryptographic domain separation via the RCSK is intended for Virtual Machines, Supervisor Domains, Worlds, and TEEs within those contexts, as these demand stronger security guarantees.
+The envisioned usage model employs ASID/VMID filtering at the User level, and potentially at the Supervisor level in high-performance systems where migration is not required (e.g., automotive applications). Cryptographic domain separation via the RCSK is intended for Virtual Machines, Supervisor Domains, Worlds, and TEEs within those contexts, as these demand stronger security guarantees.
 
-Although the architecture does not preclude assigning unique RCSKs to individual U processes, doing so would impose a significant burden on the system software stack. Hardware support could mitigate this—for example, by automatically switching RCSKs based on ASID/VMID without per-context-switch `ecall` overhead. Such a solution is not currently being explored due to its architectural complexity and inflexibility, and HW cost-for instance, it would require secure management of very large RCSK tables, including the potential need to save, restore, or migrate of entire blocks of RCSKs.
+NOTE: Although the architecture does not prevent assigning unique RCSKs to U-mode processes, this would place a substantial burden on the system software just in term of the per-context-switch `ecall` overhead.
+Hardware support—such as automatic RCSK switching based on ASID/VMID, could alleviate this burden.
+However, such a mechanism is not currently under consideration due to its architectural complexity, inflexibility, and hardware cost.
+For example, it would necessitate secure management of large RCSK tables, including saving, restoring, and potentially migrating entire RCSK blocks.
 
 // ///////////////////////////////////////////////////////////////////////////////////////////
 
 === Supported Algorithms
 
-[.darkred]#Add algorithm numbers!#
+[.darkred]#At the end we must add algorithm numbers!#
 
 We architect support for several algorithms, and also define a minimal subset (current suggestion):
 
@@ -796,9 +798,6 @@ The list of other architected algorithms is TBD, but it must include at least
 === Instructions
 
 We now give detailed descriptions of the instructions, including their semantics and encoding.
-
-NOTE: Instructions `ace.init`, `ace.import`, `ace.export`, `ace.input`, and `ace.output` perform direct memory accesses.
-This does not violate the RISC-V load/store architecture principles, as ACE is architected to behave like an _attached_ unit, which may have its own interfaces.
 
 NOTE: The encodings presented here are just examples, and may not be final.
 They serve as a starting point for discussion and refinement as
@@ -898,6 +897,11 @@ Description::
 to be configured.
 `Xs` points to the region of memory containing the metadata and the key material.
 
+NOTE: `ace.init`, as well as `ace.import`, `ace.export`, `ace.input`, and `ace.output` as described later, perform direct memory accesses.
+This does not violate the RISC-V load/store architecture principles,
+since `ace.init`, `ace.import` and `ace.input` can be seen as special kinds of load instructions and
+`ace.export` and `ace.output` as special store instructions.
+// as ACE is architected to behave like an _attached_ unit, which may have its own interfaces.
 
 NOTE: The operation can be conceptually split into two phases.
 In the first phase, the metadata
@@ -1069,8 +1073,9 @@ or to the _completed_ or _invalidated_ states (see <<ACE-state-constants>> and <
 [[ACE-instruction-size]]
 ==== ace.size
 
-The `ace.size` instruction is used to determine the size of a SCC in order to reserve the necessary space for it in memory.
+`ace.size` returns the size of the memory buffer that would be necessary to store the exported SCC.
 (((ACE, instruction, ace.size)))
+Knowing this size is necessary for any feature that relies on `ace.export`, including context switching.
 
 ===== Context Variant
 
@@ -1096,10 +1101,8 @@ The instruction is encoded using the Form D' `ace.exec` encoding, and is thus an
 Bit `r` (i.e., bit 27) is 0 if the CR is encoded as an immediate, and 1 if the CR's number is given in a GPR.
 
 Description::
-This instruction writes the size of the SCC corresponding to the source CR,
+Returns the size of the SCC corresponding to the source CR,
 and zero if the algorithm is not supported.
-
-Knowledge of the size of the SCC is needed by any feature that relies on `ace.export`, e.g., context switching.
 
 NOTE: The value can significantly differ from the internal resource usage to store the CC's data in a CR —
 it can be larger (for simple primitives, because of the nonce/SIV overhead) but
@@ -1174,7 +1177,7 @@ Description::
 Clones source CR `Cs` (or the CR indexed by `Xs`) into destination CR `Cd` (or
 into the CR indexed by `Xd`).
 
-// NOTE: The `ace.clone` instruction is an optimization for the sequence `ace.export` followed by `ace.import`. While reusing cryptographic state (e.g., encrypting with the same counter) can enable certain attacks, this risk cannot be eliminated by omitting `ace.clone`, as a state can be exported and re‑imported multiple times.
+// NOTE: The `ace.clone` instruction is an optimization for the sequence `ace.export` followed by `ace.import`. While reusing cryptographic state (e.g., encrypting with the same counter) can enable certain attacks, this risk cannot be eliminated by omitting `ace.clone`, as a state can be exported and re-imported multiple times.
 
 [[ACE-instruction-derive]]
 ==== ace.derive (optional)
@@ -1399,10 +1402,9 @@ Instructions `ace.init`, `ace.export`, `ace.import`, `ace.input`, and `ace.outpu
 To reduce hardware complexity, these operations can be trapped and emulated in software using custom instructions.
 (((ACE, trappable instruction)))
 
-Upon a trap, the handler identifies the trapped instruction and uses the Algorithm field of the metadata block
-`ace.size` to determine the size of the data to be transferred.
+Upon a trap, the handler identifies the trapped instruction and uses `ace.size` on the metadata to determine the size of the data to be transferred.
 
-In order to support interrupts of the emulation libraries, such instructions need to respect the value of `acestart` and update it in accordance with the expected architected behavior the trapped instructions.  We provide here non-normative definition for such a set of instructions in <<ACE-trappable-insns-support>>.
+In order to support interrupts of the emulation libraries, such instructions need to respect the value of `acestart` and update it in accordance with the expected architected behavior of the trapped instructions.  We provide here non-normative definition for such a set of instructions in <<ACE-trappable-insns-support>>.
 Three types of supporting operations are required:
 
  * A `mv` instruction that loads a specified number of bytes from a GPR or vector register into the state of a CR within the ACE unit.
@@ -1414,10 +1416,10 @@ Three types of supporting operations are required:
  * A “`close`” instruction to suspend or finalize the procedure.
    If executed before all bytes are transferred, the CR state matches that of an interrupted monolithic instruction, including the Completion metadata field and the `acestart` value. If executed after all bytes are transferred, it also performs any final cryptographic operations, such as authenticating the CR, if needed.
 
-These supporting instructions must be uninterruptible.
+Such supporting instructions must be uninterruptible.
 
 The initial cryptographic phase of `ace.export` and the authentication phase of `ace.import` must be uninterruptible as well.
-Even if these parts are executed concurrently with other operations, the trap handler may need to wait for these steps to complete before proceeding with memory/move operations.
+Even if these parts are executed concurrently with other operations, the trap handler may need to wait for these steps to complete before proceeding with any memory accesses.
 
 The support instructions are implementation-specific and not explicitly defined in the architecture.
 However, interrupting the firmware implementation of `ace.init`, `ace.export`, `ace.import`, `ace.input`, or `ace.output` must leave the architectural state indistinguishable from the state expected from interrupting a monolithic implementation of the instructions.
@@ -1431,10 +1433,8 @@ In this chapter we specify the behavior of Cryptographic Contexts for various cr
 Some specifications are generic in the sense that they apply to all algorithms of a certain type and can be instantiated with different primitives with varying parameters such as block and key sizes.
 Further specifications pertain to cryptographic algorithms that require specific primitives.
 
-NOTE: This chapter is normative because it defines the behavior of the instructions and the data formats they use.
-For instance, since AES-GCM-SIV is one of the mandatory algorithms, its behavior is completely determined by the specification of <<ACE-GCM-SIV>>
-where the block size is `b` = 128 and the key size `k` can be 128, or 256 bits.
-The specification of GCM-SIV here also guarantees that all implementations of, say, SM4-GCM-SIV (with the binary field in Montgomery representation using the same polynomial as AES-GCM-SIV) would be able to interoperate.
+NOTE: This chapter is normative, defining the behavior of instructions and the data formats they use for certain classes of cryptographic algorithms including some mandatory ones. For example, AES-GCM-SIV is fully specified in <<ACE-GCM-SIV>>, where the block size `b` = 128 and the key size `k` is 128 or 256 bits and the hashing function is POLYVAL as defined in <<GCM-SIV>>. +
+This specification ensures that an instantiation of the same mode of operation with a different primitive, such as SM4-GCM-SIV using the same hash, is also well defined.
 
 Each algorithm is fully defined by the following information:
 
@@ -1475,7 +1475,7 @@ This includes:
 
 We also add pseudocode to clarify how the algorithms supported by an ACE unit are implemented in software using the ACE ISA.
 
-NOTE: While we do not specify the exact internal format of a CC in a CR, we observe that it must contain all the data in a Configuration Input or in a SCC (in plaintext), not necessarily in the same order or at the same offsets in the CRF. Therefore, we assume that this information can be first copied into the CR as is, and then any aditional information will be reconstructed at the end of the configuration or import operation. This applies also to threshold implementations, where for any information in multiple shares the input can initially be input into the first share.  In the worst case, only 32 bits of additional information may be needed to be able to process incomplete CRs and SCCs.
+NOTE: While we do not specify the exact internal format of a CC in a CR, we observe that it must contain all the data in a Configuration Input or in a SCC (in plaintext), in some order within the CRF. Therefore, we assume that this information can be first copied into the CR as is, and then any aditional information will be reconstructed at the end of the configuration or import operation. This applies also to threshold implementations, where for any information in multiple shares the input can initially be input into the first share.  In the worst case, only 32 bits of additional information may be needed to be able to process incomplete CRs and SCCs.
 
 [[ACE-generic-rules]]
 ==== Generic Rules
@@ -1510,7 +1510,7 @@ The function that puts the CR in this state is called `invalidate()`.
 
 In state _completed_, only `ace.init`, `ace.export`, `ace.import`, `ace.clear`, and `ace.error` are permitted. Any other instruction that produces an output returns zero and *invalidates* the CR.
 
-Operations performed by `ace.exec` or `ace.state`—as defined by the algorithm-specific rules—are uninterruptible. This includes processing of arbitrarily long vector inputs when all work is purely internal to ACE and in particular without access to external memory (e.g., encryption, decryption, hashing, or point multiplication). Because these operations may proceed independently of the CPU core, a hart implementation may require context‑switching software to wait when accessing a CR that is being written. These instructions are therefore atomic and non‑preemptible.
+Operations performed by `ace.exec` or `ace.state`—as defined by the algorithm-specific rules—are uninterruptible. This includes processing of arbitrarily long vector inputs when all work is purely internal to ACE and in particular without access to external memory (e.g., encryption, decryption, hashing, or point multiplication). Because these operations may proceed independently of the CPU core, a hart implementation may require context-switching software to wait when accessing a CR that is being written. These instructions are therefore atomic and non-preemptible.
 
 In what follows, when we write of "state _name_" we refer to the state which has number _ace_state_name_ as described in <<ACE-state-constants>>.
 
@@ -1598,8 +1598,8 @@ State Machine:::
 
 [NOTE]
 ====
-[.darkred]#Supporting vector lengths smaller than a cipher's block size would complicate the architecture.
-For example, even in a simple ECB mode, we would require instruction sequences like#
+Supporting vector lengths smaller than a cipher's block size would complicate the architecture.
+For example, even in a simple ECB mode, we would require instruction sequences like
 ----
 ace.exec    C0,V0          // load lower half of plaintext
 ace.exec    C0,V1          // load upper half of plaintext
@@ -1607,9 +1607,9 @@ ace.exec    C0             // encrypt plaintext
 ace.exec V0,C0             // store lower half of ciphertext
 ace.exec V1,C0             // store upper half of ciphertext
 ----
-[.darkred]#in place of a single `ace.exec Vd,Cn|C[Xn],Vs`.
+in place of a single `ace.exec Vd,Cn|C[Xn],Vs`.
 Supporting this behaviour would not only complicate both the architecture and its implementation, but it would also burden the software using the feature.
-Therefore, the present specification assumes that vector lengths (or vector groups) can be configured to at least the block size of the cipher.#
+Therefore, the present specification assumes that vector lengths (or vector groups) can be configured to at least the block size of the cipher.
 ====
 
 ===== Usage
