@@ -10,11 +10,12 @@ Cryptographic Context:::
 (((Cryptographic context, metadata)))
 The _Cryptographic Context_ (CC) is the fundamental concept in ACE:
 any cryptographic operation performed by ACE is executed within the constraints set by a CC.
-A CC is data structure comprising a *metadata section* and a *content section* that form an indivisible unit.
-The metadata defines the cryptographic algorithm and optional usage policies; the content holds sensitive material such as keys, secrets, and internal algorithm state.
+A CC is an indivisible data structure comprising a *metadata section* and a *content section*.
+The metadata defines the cryptographic algorithm that can be used in conjunction with the CC, and also includes optional usage policies.
+The content holds sensitive material such as keys, secrets, and internal algorithm state.
 The metadata has a fixed format, while the content format depends on the algorithm defined in the metadata.
 Metadata does not require confidentiality, but the content must remain confidential. Both sections require integrity.
-These requirements are guaranteed by enforcing that all access and modification of a CC follow the rules defined by the ACE architecture and the algorithm.
+These security requirements are guaranteed by enforcing that all interactions with a CC follow the rules defined by the ACE architecture and the algorithm programmed in the CC itself.
 
 Cryptographic Register:::
 (((Cryptographic Register)))
@@ -35,9 +36,9 @@ This enables flexible key separation by spatial and temporal domains.
 
 Object-Orientation:::
 CCs act as _objects_, exposing a uniform interface to different algorithms.
-A CC encapsulates its behavior, allowing interchangeable use of ciphers like AES-128, AES-256, Калина-128, Калина-256, and SM4, and so on, in various modes (ECB, GCM-SIV, XEX/XTS) without code changes, provided the code supports variable SCC sizes. Side-channel-resistant variants are also supported transparently.
+A CC encapsulates its behavior, allowing interchangeable use of ciphers like AES-128, AES-256, Калина-128, Калина-256, and SM4, and so on, in various modes (ECB, GCM-SIV, XEX/XTS) without changes to the compiled code. Side-channel-resistant variants are also supported transparently.
 
-NOTE: This flexibility allows, for example, a content distribution network to use different ciphers (AES in US/EU, SM4 in China, etc.) for GCM payloads using the same binary interface. The CC encapsulates the cipher, and the binary supports all GCM variants (see <<ACE-GCM-mode>>).
+// NOTE: This flexibility allows, for example, a content distribution network to use different ciphers (AES in US/EU, SM4 in China, etc.) for GCM payloads using the same binary interface. The CC encapsulates the cipher, and the binary supports all GCM variants (see <<ACE-GCM-mode>>).
 
 Usage Control Policy:::
 (((Cryptographic context, Usage Control)))
@@ -53,14 +54,14 @@ This binding uses metadata and a _Derived Context Sealing Key_ (DCSK) derived fr
 The system maintains a _Locality Secrets Table_ (LST) with fixed, hardware-configured, and MM-programmable values.
 Metadata stores the Locality as an index into this table (see <<ACE-Localities>>).
 
-NOTE: "Locality" is borrowed from TPMs terminology, but adapted. Unlike TPM localities (provided by sources such as an application, operating system, or driver layer), ACE allows MM firmware to reprogram Locality Secrets (e.g., "OSSecret") for fine-grained control, such as unique values per Trusted OS, instead of having a single locality for all Trusted OSes in system.
+// NOTE: The term "Locality" is borrowed from TPM terminology. Unlike TPM localities (provided by sources such as an application, operating system, or driver layer), ACE allows MM firmware to reprogram Locality Secrets (e.g., "OSSecret") for fine-grained control, such as unique values per Trusted OS, instead of having a single locality for all Trusted OSes in system.
 
 // ///////////////////////////////////////////////////////////////////////////////////////////
 
 === ACE Programmer's Model
 
 ACE requires a subset of the V extension, including the vector register file (see <<ACE-V-dependency>>).
-[.darkred]#Discussions are still ongoing on what subset will be required, and if a dependency on just the GPRs can be provided in addition.#
+[.darkred]#Discussions are still ongoing on what subset will be required, and if a dependency on just the GPRs can be designed as well.#
 
 [[ACE-instructions-overview]]
 ==== Instructions Overview
@@ -100,11 +101,12 @@ Returns zero if the algorithm is unsupported.
 | `ace.state` +
 `(ace.dir)`
 | `Cd\|C[Xd],#immed` +
-`Cd\|C[Xd],#immed,Xs`  |  Modifies algorithm state (e.g., phase transitions). `ace.dir` is an alias.
+`Cd\|C[Xd],#immed,Xs`  |  Modifies algorithm state (e.g., phase transitions). `ace.dir` is an alias for `ace.state`.
 | `ace.restrict` +
-  `(ace.harden)`  | `Cd\|C[Xd],Xs`                   |  Narrows Usage Policies and enables/increases side-channel protection. Reversing these changes is not permitted. `ace.harden` is an alias.
+  `(ace.harden)`  | `Cd\|C[Xd],Xs`                   |  Narrows Usage Policies and enables/increases side-channel protection.
+   Weakening Usage Policies and SCA protection is not permitted. `ace.harden` is an alias for `ace.restrict`.
 | `ace.input`     | `Cd\|C[Xd],%offset(Xs)`          |  Optional. Provides input to the algorithm (for long inputs).
-| `ace.output`    | `%offset(Xd),Cs\|C[Xs]`          |  Optional. Writes algorithm output (for long outputs).
+| `ace.output`    | `%offset(Xd),Cs\|C[Xs]`          |  Optional. Writes output from the algorithm (for long outputs).
 | `ace.error`     | `Xd`                             |  Writes the ACE unit error code to GPR `Xd`.
 |===
 
@@ -117,11 +119,12 @@ Each CR is identified by a number from 0 to 31.
 (((Cryptographic Context)))
 
 CRs reside in a dedicated _CR file_ (CRF), accessible only by the ACE implementation.
-CRF capacity is implementation-defined but must hold at least the largest possible CR or the largest CR pair for `ace.derive`.
+Each CR uses a variable amount of the capacity of the CRF, depending on the configured algorithm.
+ACE returns _ace_err_memory_ if insufficient memory prevents successful execution of `ace.init`, `ace.import`, `ace.clone`, or `ace.derive`.
+If this happens, software needs to free memory by choosing another CR and clearing it.
+CRF capacity is implementation-defined, but implementations must provide sufficient CRF memory to prevent infinite `ace.export`/ `ace.import` loops,
+and the CRF must hold at least an instance of the largest possible CC or the largest CC pair for `ace.derive`.
 (((Cryptographic Register File)))
-
-The size of each CR, determined by the configured algorithm.
-ACE returns _ace_err_memory_ if insufficient memory prevents `ace.init`, `ace.import`, `ace.clone`, or `ace.derive`, requiring software to free memory by choosing another CR and clearing it. Implementations must provide sufficient CRF memory to prevent infinite `ace.export`/ `ace.import` loops.
 
 The fact that CRs can be addressed indirectly two major implications:
 
@@ -152,7 +155,7 @@ It also requires a subset of the V extension CSRs (see <<ACE-V-dependency>>).
 [[ACE-ACE-field-in-misa]]
 ===== ACE field in `misa`
 
-Bit `L` (11) in `misa` indicates ACE extension presence.
+Bit `L` (11) in `misa` indicates that ACE is present.
 (((CSR, ACE field in `misa`)))
 
 [[ACE-ACES-field-in-status]]
@@ -749,7 +752,7 @@ if (tag != SIV) then { error; }
 * `acestart` counts all the bytes of the payload, including the metadata for all inputs and outputs, and the nonce and the tag as well for SCCs.
 * The internal state shall always assumes that all internal operations that would be performed in the algorithms above are performed as follows
  ** `ace.init`:
-  *** Once the first 8 bytes are read, the metadata must be completely processed and imported in the CR.
+  *** Once the metadata (8 bytes) has been read, is must be completely processed and imported in the CR.
   *** Whenever 8+16__i__ bytes have been read, also _i_ blocks of content must be processed and imported in the CR.
    For instance, if 28 bytes have been read in, the incomplete state has processed the metadata and the first content block, and knows 4 further bytes.
   *** If the operation is preempted, `acestart` will be the number of bytes read.
@@ -1019,12 +1022,6 @@ In other words, it is the responsibility of the system to augment all the system
 NOTE: The `ace.export` instruction does not have an `ace.export.S` analogue of `ace.import.S`.
 This means that system HW dynamically generated keys can be imported but not exported in the same form: they must be exported in the format architected in this specification.
 
-// If the value cannot be transported to other devices or to
-// other Locality states of the same device, the internal logic must bind them to a
-// specific DCSK). The instruction imports them like software keys and sets
-// the appropriate policies.
-
-// [.darkred]#(TBdetermined whether it is secure)# This instruction is trappable and may also be resumed or restarted.
 
 [[ACE-instruction-exec]]
 ==== ace.exec
@@ -1077,7 +1074,7 @@ Description::
 Performs a cryptographic operation such as an encryption or decryption, absorbing a value in a hash, and possibly returning a value.
 
 NOTE: In many algorithms, the next state is often implied by the preceding operation.
-For example, in AEAD algorithms, setting an IV or nonce could implicitly transition to the state for absorbing associated data.
+//For example, in AEAD algorithms, setting an IV or nonce could implicitly transition to the state for absorbing associated data.
 However, to ensure consistency, ACE requires explicit state transitions even when this incurs additional instructions.
 Exceptions are made only when strictly necessary for security, such as automatic transitions from hash finalization to verification,
 or to the _completed_ or _invalidated_ states (see <<ACE-state-constants>> and <<ACE-algorithms>>).
@@ -1436,8 +1433,7 @@ The initial cryptographic phase of `ace.export` and the authentication phase of 
 Even if these parts are executed concurrently with other operations, the trap handler may need to wait for these steps to complete before proceeding with memory/move operations.
 
 The support instructions are implementation-specific and not explicitly defined in the architecture.
-However, interrupting the firmware implementation of `ace.init`, `ace.export`, `ace.import`, `ace.input`, or `ace.output`
-must leave the architectural state indistinguishable from the state expected from interrupting a monolithic implementation of the instructions.
+However, interrupting the firmware implementation of `ace.init`, `ace.export`, `ace.import`, `ace.input`, or `ace.output` must leave the architectural state indistinguishable from the state expected from interrupting a monolithic implementation of the instructions.
 
 // ///////////////////////////////////////////////////////////////////////////////////////////
 
@@ -1446,7 +1442,7 @@ must leave the architectural state indistinguishable from the state expected fro
 
 In this chapter we specify the behavior of Cryptographic Contexts for various cryptographic algorithms.
 Some specifications are generic in the sense that they apply to all algorithms of a certain type and can be instantiated with different primitives with varying parameters such as block and key sizes.
-Other specifications pertain to algorithms that are specific to certain cryptographic primitives.
+Further specifications pertain to cryptographic algorithms that require specific primitives.
 
 NOTE: This chapter is normative because it defines the behavior of the instructions and the data formats they use.
 For instance, since AES-GCM-SIV is one of the mandatory algorithms, its behavior is completely determined by the specification of <<ACE-GCM-SIV>>
@@ -1492,6 +1488,8 @@ This includes:
 
 We also add pseudocode to clarify how the algorithms supported by an ACE unit are implemented in software using the ACE ISA.
 
+NOTE: While we do not specify the exact internal format of a CC in a CR, we observe that it must contain all the data in a Configuration Input or in a SCC (in plaintext), not necessarily in the same order or at the same offsets in the CRF. Therefore, we assume that this information can be first copied into the CR as is, and then any aditional information will be reconstructed at the end of the configuration or import operation. This applies also to threshold implementations, where for any information in multiple shares the input can initially be input into the first share.  In the worst case, only 32 bits of additional information may be needed to be able to process incomplete CRs and SCCs.
+
 [[ACE-generic-rules]]
 ==== Generic Rules
 
@@ -1523,19 +1521,15 @@ the `Cn` is *invalidated*, namely, the following happens:
 
 The function that puts the CR in this state is called `invalidate()`.
 
-In state _completed_, no operation can be performed except `ace.init`, `ace.export`, `ace.import`, `ace.clear`, or `ace.error`.
-Any other operation that has an output returns zero and will cause the CR to be *invalidated*.
+In state _completed_, only `ace.init`, `ace.export`, `ace.import`, `ace.clear`, and `ace.error` are permitted. Any other instruction that produces an output returns zero and *invalidates* the CR.
 
-All the operations performed by `ace.exec` or `ace.state` in the rules given for each algorithm are assumed to be *uninterruptible*.
-This includes the case where very long vector inputs are processed but all operations are completely internal to ACE and require no external resource access, such as encryptions, decryptions, hashing, point multiplications, and other cryptographic operations.
-Since such operations can operate independently of the CPU core, they may continue to execute even when the process that issued them is interrupted, so the hart implementation may cause the context switching software to wait when accessing a CR that is going to be written to.
-We assume that these instructions perform atomically and uninterruptibly.
+Operations performed by `ace.exec` or `ace.state`—as defined by the algorithm-specific rules—are uninterruptible. This includes processing of arbitrarily long vector inputs when all work is purely internal to ACE and in particular without access to external memory (e.g., encryption, decryption, hashing, or point multiplication). Because these operations may proceed independently of the CPU core, a hart implementation may require context‑switching software to wait when accessing a CR that is being written. These instructions are therefore atomic and non‑preemptible.
 
 In what follows, when we write of "state _name_" we refer to the state which has number _ace_state_name_ as described in <<ACE-state-constants>>.
 
-The rules from <<ACE-ECB-mode>> to <<ACE-CMAC>> can be instantiated, like the modes that they describe, with a variety of block ciphers and polynomials for GHASH- or POLYVAL-like hashes, where only the block and key sizes are needed to get a full specification.
+The rules from <<ACE-ECB-mode>> to  <<ACE-hash-functions>> can be instantiated, like the modes that they describe, with a variety of block ciphers and polynomials for GHASH- or POLYVAL-like hashes, where only the block and key sizes are needed to get a full specification.
 
-On the other hand, the specifications from <<ACE-hash-functions>> to <<ACE-Ascon>> are in general heavily primitive dependent.
+// On the other hand, the specifications from <<ACE-hash-functions>> to <<ACE-Ascon>> are in general heavily primitive dependent.
 
 [[ACE-rules-threshold-implementations]]
 ==== Rules for Threshold implementations
