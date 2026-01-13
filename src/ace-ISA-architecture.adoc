@@ -54,8 +54,6 @@ This binding uses metadata and a _Derived Context Sealing Key_ (DCSK) derived fr
 The system maintains a _Locality Secrets Table_ (LST) with fixed, hardware-configured, and MM-programmable values.
 Metadata stores the Locality as an index into this table (see <<ACE-Localities>>).
 
-// NOTE: The term "Locality" is borrowed from TPM terminology. Unlike TPM localities (provided by sources such as an application, operating system, or driver layer), ACE allows MM firmware to reprogram Locality Secrets (e.g., "OSSecret") for fine-grained control, such as unique values per Trusted OS, instead of having a single locality for all Trusted OSes in system.
-
 // ///////////////////////////////////////////////////////////////////////////////////////////
 
 === ACE Programmer's Model
@@ -582,35 +580,23 @@ NOTE: M-mode is responsible for virtualizing the OSSecret and BootSecret Localit
 
 *Example*: _If a key's metadata specifies a Locality field value of 2, the key for import/export operations is derived from the RCSK and the OEM Secret. If we generate an SCC with `ace.export` on a first device, an `ace.import` of the resulting SCC on a second device will trigger an authentication failure if the OEM Secrets differ._
 
-NOTE: _A CC may reference a key via an index into the system-defined System Key Table (SKT).
+A CC may reference a key via an index into the system-defined System Key Table (SKT).
 A device-specific SKT entry may correspond to a different key on another device, leading to unspecified behavior.
-Implementations of the SKT must provide a suitable Locality to the ACE unit during CC configuration,
-and set usage policies that are at least as strict as the key's own._
+Implementations of the SKT *must* provide a suitable Locality to the ACE unit during CR configuration,
+and set usage policies that are at least as strict as the key's own.
 
 [[ACE-formats]]
 ===== Formats of Configuration Inputs and Sealed Configuration Contexts
 
-
-// Each algorithm must provide the following functions:
-// * `metadata_serialize(CR) -> byte array`: Serializes the metadata in a CR into a 64-bit block.
-// * `metadata_deserialize(CC,byte array) -> CR.metadata`: Takes a metadata block formatted as described in <<ACE-metadata>> and deserializes it to the internal representation of the metadata section.
-// * `initial_content_deserialize(CC,byte array) -> CR.content`:
-// Reads the information provided to `ace.init` as the byte array that follows the metadata, and deserializes it for the internal representation.
-// It must be the same as the format used for the SCC except for some omitted fields.
-// * `content_serialize(CR) -> byte array`: Serializes the content of the CC in a CR to a byte array.
-// * `content_deserialize(CR,byte array) -> CC.content`:
-// Takes the decrypted byte array, that comes after the metadata, nonce and authentication tag, and deserializes it into a CR's content.
-// The format depends on the algorithm which is specified in metadata information.
-
-The formats of the configuration payload, of the content section, and of SCCs depend on the algorithm being used.
-The size of a SCC, and of all byte arrays read or written by `ace.init`, `ace.import` and `ace.export`, must be a multiple of 8 bytes.
+The formats of the configuration input, of the content section, and of the SCCs are dependent on the algorithm being used.
+The sizes of the configuration input and of the SCC must be multiples of 8 bytes.
 See <<ACE-algorithms>> for algorithm-specific details on the inputs and outputs of these functions.
 
 Format of Configuration Input:::
 (((Cryptographic context, configuration input)))
 The format of the input to `ace.init` is simple.
-The first 8 bytes must contain the 64-bit metadata section as specified in <<ACE-metadata>>,
-followed by the content, i.e., the key(s) and possibly other information, which then is deserialized.
+The first 8 bytes contain the 64-bit metadata section as specified in <<ACE-metadata>>,
+followed by the content, i.e., the key(s) and possibly algorithm-specific information.
 
 Plaintext Format of SCC:::
 (((Cryptographic context, SCC plaintext)))
@@ -631,16 +617,14 @@ We now define the RFC8452 Key Derivation and the DCSK Derivation functions.
 function RFC8452_KeyDeriv(K) = {
   struct { AESE256(K, (0[125:0] @ 0b101))[63:0] @ AESE256(K, (0[125:0] @ 0b100))[63:0] @
            AESE256(K, (0[125:0] @ 0b011))[63:0] @ AESE256(K, (0[125:0] @ 0b010))[63:0],
-           AESE256(K, (0[125:0] @ 0b001))[63:0] @ AESE256(K, (0[125:0] @ 0b000))[63:0] }
-}
+           AESE256(K, (0[125:0] @ 0b001))[63:0] @ AESE256(K, (0[125:0] @ 0b000))[63:0] } }
 ----
 
 .Derived Key Derivation
 []
 ----
 function DCSK_KeyDeriv(K,L) = {
-  AESE256(K, L ^ (0[125:0] @ 0b010))[127:0] @
-  AESE256(K, L ^ (0[125:0] @ 0b000))[127:0]
+  AESE256(K, L ^ (0[125:0] @ 0b010))[127:0] @ AESE256(K, L ^ (0[125:0] @ 0b000))[127:0]
 }
 ----
 
@@ -654,9 +638,8 @@ last_block_fractional : boolean;
 z = size(content);   // content is serialized
 num_blocks = ceil(z / 16);
 last_block_fractional = z % 16 != 0;
-content : array[num_blocks] of bits(128);
-
-M : array[32 + z] of bytes
+content : array[z] of bytes;
+M : array[32 + z] of bytes;
 let N : bits(96) = random(96 bits);
 
 if (metadata.Locality == 15) then {
@@ -704,13 +687,14 @@ metadata : bits(64) = M[0 .. 7]
 - check if sufficient memory is available for algorithm encoded by metadata
 z = size(content according to metadata);
 num_blocks = ceil(z / 16);
-last_block_fractional : boolean = z % 16 != 0;
+last_block_fractional : boolean = (z % 16 != 0);
 
 if (metadata.Locality == 15) then {
     CSK = RCSK;
 } else {
     CSK = DCSK_KeyDeriv(RCSK, LST[metadata.Locality]);
 }
+
 {Kenc : bits(256), Kauth : bits(128)} = RFC8452_KeyDeriv(CSK);
 
 // next instruction preemptible, with `acestart` from 8 to 19
@@ -746,8 +730,10 @@ if (tag != SIV) then { error; }
 
 ===== Use of `acestart`
 
-[.darkred]#*TBD* Specify the exact semantics of `acestart`, define the points at which operations can be interrupted:#
+[.red]#*TBD* Specify the exact semantics of# ```[.darkred]#acestart#```[.darkred]#, define the points at which operations can be interrupted:#
 
+[comment]
+--
 * Any number of bytes can be initialized or imported in a CR, and exported from it, before the operation is preempted, depending on the alignment of the data.
 * `acestart` counts all the bytes of the payload, including the metadata for all inputs and outputs, and the nonce and the tag as well for SCCs.
 * The internal state shall always assumes that all internal operations that would be performed in the algorithms above are performed as follows
@@ -758,10 +744,11 @@ if (tag != SIV) then { error; }
   *** If the operation is preempted, `acestart` will be the number of bytes read.
   *** The corresponding exported SCC will include an 8-byte block in clear after the metadata with the `acestart` value, followed by the nonce and the tag, and the content will only contain the payload imported and read so far, zero padded up to a multiple of 8 bytes. This content is of course encrypted.
   The AEAD algorithm will use `(length_of_payload)[64] @ metadata` in place of `0[64] @ metadata`.
-  *** in the worst case, a SCC will be 8 bytes longer than the standard size for a complete exported CR for the same algorithm.
+  *** in the worst case, a SCC will be 8 bytes longer than the standard size for a complete exported CR for the same algorithm.#
 
  ** `ace.export` [.red]#TBD#
  ** `ace.import` [.red]#TBD#
+--
 
 [.red]#TBD: define the SCC formats for incomplete CCs.#
 
