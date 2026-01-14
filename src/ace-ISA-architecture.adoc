@@ -608,10 +608,10 @@ NOTE: M-mode is responsible for virtualizing the OSSecret and BootSecret Localit
 
 *Example*: _If a key's metadata specifies a Locality field value of 2, the key for import/export operations is derived from the RCSK and the OEM Secret. If we generate an SCC with `ace.export` on a first device, an `ace.import` of the resulting SCC on a second device will trigger an authentication failure if the OEM Secrets differ._
 
-A CC may reference a key via an index into the system-defined System Key Table (SKT).
-A device-specific SKT entry may correspond to a different key on another device, leading to unspecified behavior.
-Implementations of the SKT *must* provide a suitable Locality to the ACE unit during CR configuration,
-and set usage policies that are at least as strict as the key's own.
+NOTE: A CC may reference a key via an index into the System Key Table (SKT).
+A device-specific SKT entry may correspond to a different key on another device.
+Using the latter may lead to unspecified behavior.
+Implementations of the SKT *must* provide a suitable Locality to the ACE unit during CR configuration, and set usage policies that are at least as strict as the key's own.
 
 [[ACE-formats]]
 ===== Formats of Configuration Inputs and Sealed Configuration Contexts
@@ -661,47 +661,55 @@ function DCSK_KeyDeriv(key,L) = {
 
 We can now define the generation of the SCC from the CC in a CR.
 
-.Generation of the SCC from a CC Using AES-GCM-SIV (RFC8452)
+.Generation of the SCC from a CR Using AES-GCM-SIV (RFC8452)
 []
 ----
-metadata : bits(64);
-last_block_fractional : boolean;
-z = size(content);   // content is serialized
-num_blocks = ceil(z / 16);
-last_block_fractional = z % 16 != 0;
-content : array[z] of bytes;
-M : array[32 + z] of bytes;
-let N : bits(96) = random(96 bits);
+metadata : bits(64); // from the CR
+N, SIV : bits(96);
+tmp : bits(128);
+Kenc : bits(256);
+Kauth : bits(128);
+content : array[z] of bytes,      // from the CR's metadata
+where z : int = size(content);    // content is serialized, size derived from metadata
+ASSERT(8 divides z);
+M : array[32 + z] of bytes;       // information
+let last_block_fractional : boolean = z % 16 != 0;
+let num_blocks : int = ceil(z / 16);
 
-if (metadata.Locality == 15) then {
-    CSK = RCSK;
-} else {
-    CSK = DCSK_KeyDeriv(RCSK, LST[metadata.Locality]);
-}
+UNINTERRUPTIBLE_BLOCK_START
+    N = random(96 bits);
 
-{Kenc : bits(256), Kauth : bits(128)} = RFC8452_KeyDeriv(CSK);
+    if (metadata.Locality == 15) then
+        CSK = RCSK;
+    else
+        CSK = DCSK_KeyDeriv(RCSK, LST[metadata.Locality]);
 
-let T : bits(96) = POLYVAL(Kauth, 64'b0 @ metadata @ content)[95:0];
+    {Kenc, Kauth} = RFC8452_KeyDeriv(CSK);
 
-let SIV : bits(96) = AESE(Kenc, 0 1'b0 @ ((T xor N)[126:0])) >> 32;
-// not preemptible until this point
+    tmp = POLYVAL(Kauth, 64'b0 @ metadata @ content);
+    SIV = AESE(Kenc, 1'b0 @ (tmp[126:0] xor (31'b0 @ N)))) >> 32;
+UNINTERRUPTIBLE_BLOCK_END
 
-// preemptible here (for instance because of page fault), with `acestart` from 0 to 15
-M[0 .. 15] = N[63:0] @ metadata[63:0];
+// preemptible here, with `acestart` from 0 to 15
+UNINTERRUPTIBLE_BLOCK_START
+    M[0 .. 15] = N[63:0] @ metadata[63:0];
+UNINTERRUPTIBLE_BLOCK_END
 
 // preemptible here, with `acestart` from 16 to 31
-M[16 .. 31] = SIV[95:0] @ N[95:64];
+UNINTERRUPTIBLE_BLOCK_START
+    M[16 .. 31] = SIV[95:0] @ N[95:64];
+UNINTERRUPTIBLE_BLOCK_END
 
 foreach(i from 0 to num_blocks - 1) {
-    if ((i == num_blocks - 1) and last_block_fractional) {
-        // next instruction preemptible, with `acestart` from 32+i*16 to 39+i*16
-        M[32+i*16 .. 39+i*16] = content[i*16 .. 7+i*16] xor
-                                AESE(Kenc, 1'b1 @ SIV[94:0] @ (binary(i)[31:0]))[63:0];
-    } else {
-        // next instruction preemptible, with `acestart` from 32+i*16 to 47+i*16
-        M[32+i*16 .. 47+i*16] = content[i*16 .. 15+i*16] xor
-                                AESE(Kenc, 1'b1 @ SIV[94:0] @ (binary(i)[31:0]));
-    }
+    // next instruction preemptible, with `acestart` from 32+i*16 to 39+i*16 or 47+i*16
+    UNINTERRUPTIBLE_BLOCK_START
+        if ((i == num_blocks - 1) and last_block_fractional)
+            M[32+i*16 .. 39+i*16] = content[i*16 .. 7+i*16] xor
+                            AESE(Kenc, 1'b1 @ SIV[94:0] @ (binary(i)[31:0]))[63:0];
+        else
+            M[32+i*16 .. 47+i*16] = content[i*16 .. 15+i*16] xor
+                            AESE(Kenc, 1'b1 @ SIV[94:0] @ (binary(i)[31:0]));
+    UNINTERRUPTIBLE_BLOCK_END
 }
 ----
 
@@ -711,51 +719,67 @@ cache recently used derived keys for both the Root RCSK and Locality-derived key
 .Importing a SCC into a CR Using AES-GCM-SIV (RFC8452)
 []
 ----
-M : array of bytes, in memory
+M : array of bytes // from memory
+Kenc : bits(256);
+Kauth : bits(128);
+N, SIV : bits(96);
+tmp : bits(128);
+tag : bits(96);
 
 // next instruction preemptible, with `acestart` from 0 to 7
-metadata : bits(64) = M[0 .. 7]
+UNINTERRUPTIBLE_BLOCK_START
+    metadata : bits(64) = M[0 .. 7]
+UNINTERRUPTIBLE_BLOCK_END
 
-- check if sufficient memory is available for algorithm encoded by metadata
-z = size(content according to metadata);
-num_blocks = ceil(z / 16);
-last_block_fractional : boolean = (z % 16 != 0);
+UNINTERRUPTIBLE_BLOCK_START
+    - check if sufficient memory is available for algorithm encoded by metadata
+    z = size(content according to metadata);
+    num_blocks = ceil(z / 16);
+    last_block_fractional : boolean = (z % 16 != 0);
 
-if (metadata.Locality == 15) then {
-    CSK = RCSK;
-} else {
-    CSK = DCSK_KeyDeriv(RCSK, LST[metadata.Locality]);
-}
+    if (metadata.Locality == 15) then
+        CSK = RCSK;
+    else
+        CSK = DCSK_KeyDeriv(RCSK, LST[metadata.Locality]);
 
-{Kenc : bits(256), Kauth : bits(128)} = RFC8452_KeyDeriv(CSK);
+    {Kenc, Kauth} = RFC8452_KeyDeriv(CSK);
 
-// next instruction preemptible, with `acestart` from 8 to 19
-N : bits(96) = M[8 .. 19]
+    // next instruction preemptible, with `acestart` from 8 to 19
+    N : bits(96) = M[8 .. 19]
+UNINTERRUPTIBLE_BLOCK_END
 
 // next instruction preemptible, with `acestart` from 20 to 31
-let SIV: bits(96) = M[20 .. 31]
+UNINTERRUPTIBLE_BLOCK_START
+    SIV = M[20 .. 31]
+UNINTERRUPTIBLE_BLOCK_END
 
-T : bits(128) = 64'b0 @ metadata;
-T = T * Kauth;  // * = Montgomery multiplication
+UNINTERRUPTIBLE_BLOCK_START
+    tmp = 64'b0 @ metadata;
+    tmp = tmp * Kauth;  // * = Montgomery multiplication
+UNINTERRUPTIBLE_BLOCK_END
+
 foreach(i from 0 to num_blocks - 1) {
-    if ((i == num_blocks - 1) and last_block_fractional) {
-        // next instruction preemptible, with `acestart` from 32+i*16 to 39+i*16
-        content[i*16 .. 7+i*16] = M[32+i*16 .. 39+i*16] xor
-                                  AESE(Kenc, 1'b1 @ SIV[94:0] @ (binary(i)[31:0]))[63:0];
-        T = T xor content[i*16 .. 7+i*16];
-    } else {
-        // next instruction preemptible, with `acestart` from 32+i*16 to 47+i*16
-        content[i*16 .. 15+i*16] = M[32+i*16 .. 47+i*16] xor
-                                   AESE(Kenc, 1'b1 @ SIV[94:0] @ (binary(i)[31:0]));
-        T = T xor content[i*16 .. 15+i*16];
+    // next instruction preemptible, with `acestart` from 32+i*16 to 39+i*16 or 47+i*16
+    UNINTERRUPTIBLE_BLOCK_START
+        if ((i == num_blocks - 1) and last_block_fractional) {
+            content[i*16 .. 7+i*16] = M[32+i*16 .. 39+i*16] xor
+                          AESE(Kenc, 1'b1 @ SIV[94:0] @ (binary(i)[31:0]))[63:0];
+            tmp[63:0] = tmp[63:0] xor content[i*16 .. 7+i*16];
+        } else {
+            content[i*16 .. 15+i*16] = M[32+i*16 .. 47+i*16] xor
+                          AESE(Kenc, 1'b1 @ SIV[94:0] @ (binary(i)[31:0]));
+        tmp = tmp xor content[i*16 .. 15+i*16];
     }
-    T = T * Kauth;  // * = Montgomery multiplication
+    tmp = tmp * Kauth;  // * = Montgomery multiplication
+    UNINTERRUPTIBLE_BLOCK_END
 }
 
-// now T POLYVAL(Kauth, 64'b0 @ metadata @ content)
-let tag : bits(96) = AESE(Kenc, 0 1'b0 @ ((T xor N)[126:0]))[127:32] >> 32;
-if (tag != SIV) then { error; }
-- (now the content can be deserialized)
+// now tmp = POLYVAL(Kauth, 64'b0 @ metadata @ content)
+UNINTERRUPTIBLE_BLOCK_START
+    tag = AESE(Kenc, 1'b0 @ (tmp[126:0] xor (31'b0 @ N)))) >> 32;
+    if (tag != SIV) then { error; }
+    - (now the content can be deserialized)
+UNINTERRUPTIBLE_BLOCK_END
 ----
 
 //
