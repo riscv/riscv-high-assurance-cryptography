@@ -667,6 +667,7 @@ In the pseudocode listings, we mark code blocks with
 `UNINTERRUPTIBLE_BLOCK_START` and `UNINTERRUPTIBLE_BLOCK_END`.
 Execution may only be interrupted before a `UNINTERRUPTIBLE_BLOCK_START` or after a `UNINTERRUPTIBLE_BLOCK_END`, and when an interrupted export or import operation is resumed, it will resume at the point of interruption.  The part before the first `UNINTERRUPTIBLE_BLOCK_START` consists only of type declarations or of information that is trivial to reconstruct (for instance, once the metadata is known, the size of the content and some values derived from it).
 
+[[ACE-export]]
 .Generation of the SCC from a CR Using AES-GCM-SIV (RFC8452)
 []
 ----
@@ -697,6 +698,7 @@ UNINTERRUPTIBLE_BLOCK_START
     - must be computed at this point. Starting with the following POLYVAL operation
     - content will refer to the resulting data as architected for non-threshold
     - implementations.
+    content = SERIALIZE()
 
     tmp = POLYVAL(Kauth, 64'b0 @ metadata @ content);
     SIV = AESE(Kenc, 1'b0 @ (tmp[126:0] xor (31'b0 @ N)))) >> 32;
@@ -728,6 +730,7 @@ foreach(i from 0 to num_blocks - 1) {
 NOTE: It can happen that we export an incomplete CR, for instance, M-mode or HS-mode code is saving a CR that was only partially configured in U-mode when the U-mode process was interrupted. In this case, the Completion field shall reflect this, and the CR is exported as usual, with all the empty fields or not-yet complete parts of these fields filled with arbitrary data (implementations may choose to fill them with zeros). If the incomplete SCC is later imported, upon resuming these fields or parts thereof will be overwritten.  Whenever the export of a CR, configuration of a CR, or the import of a SCC into a CR, is interrupted, it is the responsibility of the interrupt handler to save the value of `acestart` and then restore it for that CR. This allows for multiple interruptions.
 [.red]#TBD: we need to make sure that doubly interrupted operations will be handled correctly, for instance, by not not configuring as complete a CR that is actually incomplete. This can probably be done by taking into account the values of `acestart` if set up correctly. We need to make sure also that we cannot create a random or zero key, at least not more easily than what more privileged levels can do already.#
 
+[[ACE-import]]
 .Importing a SCC into a CR Using AES-GCM-SIV (RFC8452)
 []
 ----
@@ -747,6 +750,7 @@ UNINTERRUPTIBLE_BLOCK_END
 
 UNINTERRUPTIBLE_BLOCK_START
     z = size(content according to metadata);
+    content = internal buffer for z bytes;
     num_blocks = ceil(z / 16);
     last_block_fractional : boolean = (z % 16 != 0);
 
@@ -793,6 +797,7 @@ UNINTERRUPTIBLE_BLOCK_START
     - Now the content can be deserialized.
     - This includes computing and derived values not saved as part of the SCC,
     - as well as creating shares for threshold implementations.
+    DESERIALIZE(content)
 UNINTERRUPTIBLE_BLOCK_END
 ----
 
@@ -1547,6 +1552,11 @@ This includes:
 We also add pseudocode to clarify how the algorithms supported by an ACE unit are implemented in software using the ACE ISA.
 
 NOTE: While we do not specify the exact internal format of a CC in a CR, we observe that it must contain all the data in a Configuration Input or in a SCC (in plaintext), in some order within the CRF. Therefore, we assume that this information can be first copied into the CR as is, and then any aditional information will be reconstructed at the end of the configuration or import operation. This applies also to threshold implementations, where for any information in multiple shares the input can initially be input into the first share.  In the worst case, only 32 bits of additional information may be needed to be able to process incomplete CRs and SCCs.
+
+The definitions of the algorithms also implicitly define the functions `SERIALIZE()` and `DESERIALIZE()` used in <<ACE-export>> and <<ACE-import>>.
+These functions do not need to be explicitly implemented as functions that convert the internal memory in the CRF into a structured byte array, called
+`content[]` in the aforementioned pseudocodes, that satisfies the architected definition of the _Serialized Content_ for each algorithm, and viceversa.
+Instead, the output of `SERIALIZE()` and the input of `DESERIALIZE()` can just be an _interpretation_ of the internal memory in the CRF as if it were the SCC plaintext, such that any change in one (except for the absent fields) is reflected in the other, but does not have to be written explicitly in the inernal memory of the CRF.
 
 [[ACE-generic-rules]]
 ==== Generic Rules
