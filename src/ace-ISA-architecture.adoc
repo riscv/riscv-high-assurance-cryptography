@@ -318,22 +318,22 @@ and
 
 We describe now the semantics of the `aceccstatus` bitfields:
 
-*INITIAL* (1)::
+*INITIAL* (value: 1)::
 *Description:* CR unconfigured; no saved value in the context switching state.
 * *Usage:* Error _ace_err_unconfigured_ (no trap).
 * *Configuration:* does not trap, works as expected-including errors with *export* or *clone*-sets the status to *DIRTY*.
 
-*OFF* (0; also called *LAZY*)::
-*Description:* CR unconfigured, but value saved for lazy loading.
+*LAZY* (value: 0)::
+*Description:* CR unconfigured, but value saved for lazy loading. NB: It uses the FS/VS/ACES encoding for "OFF", but it does _not_ mean that the ISE is not active.
 * *Usage/Export:* Traps to OS for lazy load. Restarted instruction operates starting from state *CLEAN*.
 * *Configuration:* Works as expected; sets status to *DIRTY*.
 
-*CLEAN* (2)::
+*CLEAN* (value: 2)::
 *Description:* CR configured and loaded; unchanged since switch.
 * *Usage:* Unrestricted; modification sets status to *DIRTY*.
 * *Configuration:* Works as expected; sets status to *DIRTY*.
 
-*DIRTY* (3)::
+*DIRTY* (value: 3)::
 *Description:* CR configured and loaded; potentially changed since switch.
 * *Usage:* Unrestricted.
 * *Configuration:* Works as expected; status unchanged.
@@ -659,7 +659,13 @@ function DCSK_KeyDeriv(key,L) = {
 }
 ----
 
-We can now define the generation of the SCC from the CC in a CR.
+NOTE: Due to the computational cost of the derivation functions, implementations may
+cache recently used derived keys for both the Root RCSK and Locality-derived keys.
+
+We can now proceed to define the generation of the SCC from the CC in a CR.
+In the pseudocode listings, we mark code blocks with
+`UNINTERRUPTIBLE_BLOCK_START` and `UNINTERRUPTIBLE_BLOCK_END`.
+Execution may only be interrupted before a `UNINTERRUPTIBLE_BLOCK_START` or after a `UNINTERRUPTIBLE_BLOCK_END`, and when an interrupted export or import operation is resumed, it will resume at the point of interruption.  The part before the first `UNINTERRUPTIBLE_BLOCK_START` consists only of type declarations or of information that is trivial to reconstruct (for instance, once the metadata is known, the size of the content and some values derived from it).
 
 .Generation of the SCC from a CR Using AES-GCM-SIV (RFC8452)
 []
@@ -713,8 +719,8 @@ foreach(i from 0 to num_blocks - 1) {
 }
 ----
 
-NOTE: Due to the computational cost of the derivation functions, implementations may
-cache recently used derived keys for both the Root RCSK and Locality-derived keys.
+NOTE: It can happen that we export an incomplete CR, for instance, M-mode or HS-mode code is saving a CR that was only partially configured in U-mode when the U-mode process was interrupted. In this case, the Completion field shall reflect this, and the CR is exported as usual, with all the empty fields or not-yet complete parts of these fields filled with arbitrary data (implementations may choose to fill them with zeros). If the incomplete SCC is later imported, upon resuming these fields or parts thereof will be overwritten.  Whenever the export of a CR, configuration of a CR, or the import of a SCC into a CR, is interrupted, it is the responsibility of the interrupt handler to save the value of `acestart` and then restore it for that CR. This allows for multiple interruptions.
+[.red]#TBD: we need to make sure that doubly interrupted operations will be handled correctly, for instance, by not not configuring as complete a CR that is actually incomplete. This can probably be done by taking into account the values of `acestart` if set up correctly. We need to make sure also that we cannot create a random or zero key, at least not more easily than what more privileged levels can do already.#
 
 .Importing a SCC into a CR Using AES-GCM-SIV (RFC8452)
 []
@@ -729,10 +735,11 @@ tag : bits(96);
 // next instruction preemptible, with `acestart` from 0 to 7
 UNINTERRUPTIBLE_BLOCK_START
     metadata : bits(64) = M[0 .. 7]
+    if (there is not enough memory for the algorithm encoded in the metadata)
+        error ace_err_insufficient_memory
 UNINTERRUPTIBLE_BLOCK_END
 
 UNINTERRUPTIBLE_BLOCK_START
-    - check if sufficient memory is available for algorithm encoded by metadata
     z = size(content according to metadata);
     num_blocks = ceil(z / 16);
     last_block_fractional : boolean = (z % 16 != 0);
@@ -749,13 +756,16 @@ UNINTERRUPTIBLE_BLOCK_START
 UNINTERRUPTIBLE_BLOCK_END
 
 // next instruction preemptible, with `acestart` from 20 to 31
+// the rest of the block is to be executed uninterruptibly once the memory read is done
 UNINTERRUPTIBLE_BLOCK_START
     SIV = M[20 .. 31]
-UNINTERRUPTIBLE_BLOCK_END
 
-UNINTERRUPTIBLE_BLOCK_START
     tmp = 64'b0 @ metadata;
     tmp = tmp * Kauth;  // * = Montgomery multiplication
+
+    - if there is need for some internal operations to make the content available, such as
+    - reconstructing threshold keys/values into a single share, these must be computed now
+    - and read as part of the content as architected for non-threshold implementations
 UNINTERRUPTIBLE_BLOCK_END
 
 foreach(i from 0 to num_blocks - 1) {
@@ -773,16 +783,17 @@ foreach(i from 0 to num_blocks - 1) {
     tmp = tmp * Kauth;  // * = Montgomery multiplication
     UNINTERRUPTIBLE_BLOCK_END
 }
-// now tmp = POLYVAL(Kauth, 64'b0 @ metadata @ content)
 
 // if preempted here, `acestart` will be z + 32
 
 UNINTERRUPTIBLE_BLOCK_START
     tag = AESE(Kenc, 1'b0 @ (tmp[126:0] xor (31'b0 @ N)))) >> 32;
-    if (tag != SIV) then { error; }
-    - (now the content can be deserialized)
+    if (tag != SIV) then { error ace_err_authentication; }
+    - Now the content can be deserialized.
+    - This includes computing shares for threshold implementations
 UNINTERRUPTIBLE_BLOCK_END
 ----
+
 
 //
 
