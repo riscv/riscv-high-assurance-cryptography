@@ -59,7 +59,7 @@ Metadata stores the Locality as an index into this table (see <<ACE-Localities>>
 
 <<<
 
-=== ACE Programmer's Model
+=== Programmer-Visible Architectural State
 
 ACE requires a subset of the V extension, including the vector register file (see <<ACE-V-dependency>>).
 [.darkred]#Discussions are still ongoing on what subset will be required, and if a dependency on just the GPRs can be designed as well.#
@@ -121,17 +121,210 @@ Each CR is identified by a number from 0 to 31, and written in assembly as `K0`,
 
 CRs reside in a dedicated _CR file_ (CRF), accessible only by the ACE implementation.
 Each CR uses a variable amount of the capacity of the CRF, depending on the configured algorithm.
-ACE returns _ace_err_memory_ if insufficient memory prevents successful execution of `ace.init`, `ace.import`, `ace.clone`, or `ace.derive`.
-If this happens, software needs to free memory by choosing another CR and clearing it.
-CRF capacity is implementation-defined, but implementations must provide sufficient CRF memory to prevent infinite `ace.export`/ `ace.import` loops,
-and the CRF must hold at least an instance of the largest possible CC or the largest CC pair for `ace.derive`.
 (((Cryptographic Register File)))
+
+ACE returns _ace_err_memory_ if insufficient memory prevents successful execution of any instruction that can configure a CR.
+// (`ace.init`, `ace.import`, `ace.clone`, or `ace.derive`-the names should be self-explicative,
+// and the authoritative definitions are given in <<ACE-instructions-detailed>>).
+If this happens, software needs to free memory by choosing another CR and clearing it.
+
+[.red]#Move this somewhere else?#
+CRF capacity is implementation-defined, but implementations must provide sufficient CRF memory to prevent infinite
+exporting/importing
+//`ace.export`/ `ace.import`
+loops,
+and the CRF must hold at least an instance of the largest possible CC or the largest CC pair for CR cloning or derivation (i.e., the derivation of a new CC from an existing one, e.g., a key derivation function).
 
 The fact that CRs can be addressed indirectly two major implications:
 
 . Adding renaming to CRs would add significant complexity to the microarchitecture.
   However CRs are much less often redefined than, say, integer or floating-point registers, except for internal implied changes, and therefore we can assume that CRs are not renamed without performance issues.
 . An additional bit in the instruction encoding determines whether a CR number is given by a 5-bit immediate or by the value in a GPR.
+
+[[ACE-cryptographic-contexts]]
+==== Cryptographic Contexts
+
+For software portability and interoperability, ACE defines two external formats for cryptographic contexts:
+a _Configuration Input_ format, which is loaded by into a CR to create a CC,
+and an encrypted, authenticated format used when exporting a CR to memory for later re-import:
+the Sealed Cryptographic Context (SCC).
+
+//All formats are little-endian.
+
+[[ACE-metadata]]
+===== Metadata Section Format
+
+The metadata section is 64 bits long and its format is described in <<ACE-metadata-standard>>.
+The metadata section is used as the header of the data formats used in CR initialization, and CC export and import functions.
+The internal representation of the metadata in a CR is implementation specific.
+(((Cryptographic Context,metadata,format)))
+
+[[ACE-metadata-standard]]
+.Format of the Metadata Section
+[width="100%",cols="^9%,^7%,17%,67%",options="header"]
+|===
+.>|   Field .>| Width +
+(bits) .>| Name                  .>| Description
+|   [0:0] |   1  | Format                 | 0 for the current metadata format. +
+Future format will have a 1 in this position and may be longer than 64 bits.
+|   [1:1] |   1  | Reserved               | 0 for the current metadata format.
+|   [9:2] |   8  | Algorithm              | Algorithm (such as primitive or mode). 0 means the CC is invalid.
+| [11:10] |   2  | SC_Protection          | Level of Side Channel Protection, encoded as per <<ACE-SC-protection-levels>>.
+| [13:12] |   2  | Direction_Policy       | Determines whether the CC may be used for encryption (bit 12 set), decryption (bit 13 set), or both (bits 12 and 13 set).
+Valid only for encryption/decryption primitives or modes, and ignored, for instance, for hash functions.
+| [15:14] |   2  | Key_Type               | By explicit value / Immutable (index) / Internally generated.
+| [16:16] |   1  | Completion             | 1 if any operation involving the CC has been interrupted and may have to be resumed.
+Used to determine whether an operation must be restarted.
+| [17:17] |   1  | Reserved               | Reserved for future use.
+| [21:18] |   4  | State (also Direction) | Encoding the current state of the state machine of the algorithm as a number.
+The value must be zero in the initialization data.
+If the algorithm encoded in the CC has at most 16 states
+(including _initial_, _completed_, and _invalidated_, cf. <<ACE-state-constants>>), then this number is stored in this field,
+otherwise an algorithm-specific representation is used in the content, and this field only admits the values 0 (initial), 14 (invalidated), 15 (completed) or 1 (any other operational state). The values must conform to <<ACE-state-constants>>.
+| [25:22] |   4  | Locality               | A field which is either -1 or an index into the Locality Secrets Table.
+| [29:26] |   4  | UC_Policy_1            | "UC Policy" means "Usage Control Policy". +
+Disallow the _usage_ of this CC in User, (Virtual) Supervisor, Hypervisor, or M-mode if bit 26, 27, 28, or 29 is set.
+| [31:30] |   2  | UC_Policy_2            | If bit 30, respectively, 31, is set, then restrict the usage by `ASID`, respectively, `VMID`. Restriction by `ASID` ignored if in S Mode or higher.
+| [47:32] |  16  | UC_Policy_3            | Zero if bit 30 unset, else `ASID` to enforce.
+| [63:48] |  16  | UC_Policy_4            | Zero if bit 31 unset, else `VMID` to enforce.
+|===
+
+Algorithms are encoded in an 8-bit field.
+Algorithm numbers 0-191 are architecture-defined and the list of such encodings is maintained by RVI.
+See <<ACE-algorithms>> for the currently encoded algorithms.
+Algorithm numbers 192-255 are reserved for custom algorithms.
+
+[[ACE-SC-protection-levels]]
+.Encoding of Side-Channel Protection levels
+[float="center",align="center",width="76%",cols="^8%,<68%",options="header"]
+|===
+| Value | Description
+|   0   | No protection.
+|   1   | Data-independent timing, first-order threshold implementation.
+|   2   | Data-independent timing, first-order threshold, fault-tolerant implementation.
+|   3   | Custom, algorithm dependent.
+|===
+
+Custom algorithms may offer stronger side channel protection guarantees than those specified in the encoding values 0 to 2.
+In such a case, the value of the SC_Protection field must be set to 3.
+
+[[ACE-key-type]]
+.Encoding of Key Type
+[float="center",align="center",width="76%",cols="^8%,<68%",options="header"]
+|===
+| Value | Description
+|   0   | Explicit value.
+|   1   | Internal table. System specific. For each algorithm as specified in <<ACE-algorithms>>, the part of the content that normally contains the key(s) is replaced by a 64-bit value which is an index into an internal System Keys Table (SKT)-for both Configuration Input and the SCCs. The actual value of the key is never included in exported content. For threshold implementations, ACE may copy the key material from the SKT into the CR and expand it into multiple shares.
+|   2   | Internally generated key. System specific.  In the Configuration Input, the part of the content that normally contains the key(s) is replaced by a "recipe" in a system-specific format. The format is not specified by the ISA and may not be portable to other systems. Once the key material has been internally generated, the value is included in the SCC as part of the content - not the "recipe" - as for any other key(s) for the same specified algorithm.  The Key_Type field of the metadata in all representations of the CC, will keep the value 2.
+|   3   | Invalid.
+|===
+
+// [[ACE-CR-complete]]
+// .Encoding of Completion field
+// [float="center",align="center",width="58%",cols="^8%,<50%",options="header"]
+// |===
+// | Value | Description
+// |   0   | No `ace.init`, `ace.input`, `ace.output`, `ace.import` or `ace.export` operation currently incomplete.
+// |   1   | `ace.init`, `ace.input`, or `ace.output` was interrupted.
+// |   2   | `ace.import` was interrupted.
+// |   3   | `ace.export` was interrupted.
+// | Value | Description
+// |   0   | No instruction operating on this CR was interrupted.
+// |   1   | An  instruction operating on this CR was interrupted.
+// |   2   | `ace.import` was interrupted.
+// |   3   | `ace.export` was interrupted.
+// |===
+
+NOTE: The information in the Completion field is necessary to make sure that any cryptographic operation attempted on a CR containing an incomplete CC results in an error or is trapped.
+
+// is in principle known to the system software/firmware stack, we duplicate it into the metadata to ensure that it remains accessible after nested interrupts, i.e., after switching partially configured/imported or exported CCs in or out. While authentication also guarantees the integrity of the SCCs and of their import, this is both a robustness measure and serves to simplify system stacks.[.darkred]#Do we really need it?#
+
+NOTE: The "state" field accommodates modes of operation with a small number of states.
+For algorithms with more complex state machines, machine state information can be stored in a custom data section of the CC.
+
+If the H extension is not enabled, bit 28 must be set to 1, and bits 31 and [63:48] must be set to 0.
+The "UC_Policy_4" field is 16 bits long for compatibility with architectures employing 16-bit `VMID` fields (for instance, in heterogeneous systems).
+While interoperability cannot be guaranteed when this policy is used, this ensures that the two top bits are not used for other purposes.
+
+NOTE: Restricting usage by Supervisor Domain or World ID is not supported, and not only because of a lack of space in a 64-bit metadata section:
+Reconfiguring the RCSK is a better approach for such isolation requirements, whereas isolation by `ASID` and `VMID` is a weaker security feature.
+
+[[ACE-Localities]]
+====== Localities
+
+Internally, ACE keeps a table of 128-bit Locality Secrets (LS), the Locality Secrets Table (LST).
+Some entries of the LST are fixed or configurable only using an implementation-specific authenticated hardware procedure, and these are
+global and shared across all ACE units in the same system or in the same SoC.
+A few entries may be programmed by M-mode and are architectural, i.e., per hart.
+
+If the Locality Field of a CC is -1 (all ones), then the RCSK is used.
+Otherwise, this value is used as an index _i_ in the LST, and the actual CSK is derived from the RCSK and LST[_i_].
+
+In <<ACE-locality-indexes>>, we list the architected Localities and whether M-mode can configure them.
+We specify the domain of each Locality Secret, i.e., whether the value is chip-wide
+(i.e., the same across all chiplets in the same SoC, note that two distinct SoCs on the same device may have different values),
+device-wide, or (usually) OS-wide.
+
+[[ACE-locality-indexes]]
+.Architected Locality Values
+[width="100%",cols="23%,45%,^9%,^14%,^9%",options="header"]
+|===
+.>| Name .>| Description .>| Domain | M-mode +
+Configurable .>| Value +
+(Index)
+| (No Locality binding)     | No CSK derivation. CC bound to Root CSK only. | -- | -- | -1 (15)
+| ChipManufacturerSecret    | Identifies the manufacturer of the SoC. Permanent. | SoC | N | 0
+| ChipModelSecret           | Identifies specific chip model/family. Permanent. | SoC | N | 1
+| ChipUniqueSecret          | Unique for each SoC. Permanent. | SoC | N | 2
+| OEMSecret                 | Provisioned by OEM to differentiate their products from the competition.
+                              Can be permanent, or optionally reconfigurable by impdef HW authenticated mechanisms. | Device | N | 3
+| ProductSecret             | Identifies device/system type/model (product). Not necessarily permanent. Reconfigurable like OEMSecret. | Device | N | 4
+| DeviceSecret              | Unique device (entire system) secret (_not_ the device ID such as a serial number). Shared across all harts in a SoC and shareable across multiple SoKs in a single device. Sharing mechanism impdef, i.e., not architected. Reconfigurable like OEMSecret. | Device | N | 5
+| OSSecret                  | Identifies Operating System (or System Stack).
+                              Not permanent, must be configured at (virtual) boot. | OS | Allowed | 6
+| BootSecret                | Regenerated at each (virtual) boot. | OS | Allowed | 7
+| Reserved                  | Reserved for future use (RZ if not defined). | Impdef | Impdef | 8-14
+|===
+
+The constant Localities_MAX is the maximum number of Localities supported by the system.
+
+NOTE: M-mode is responsible for virtualizing the OSSecret and BootSecret Locality Secrets.
+
+*Example*: _If a key's metadata specifies a Locality field value of 2, the key for import/export operations is derived from the RCSK and the OEM Secret. If we generate an SCC on a first device, importing it on a second device will trigger an authentication failure if the OEM Secrets differ._
+
+NOTE: A CC may reference a key via an index into the System Key Table (SKT).
+A device-specific SKT entry may correspond to a different key on another device.
+Using the latter may lead to unspecified behavior.
+Implementations of the SKT *must* provide a suitable Locality to the ACE unit during CR configuration, and set usage policies that are at least as strict as the key's own.
+
+[[ACE-format-configuration]]
+===== Configuration Inputs
+
+The Configuration Input is used to configure a CR and thus create a Cryptographic Context (CC).
+Its size must be a multiple of 8 bytes.
+
+The first 8 bytes of the Configuration Input contain the metadata section as specified in <<ACE-metadata>>.
+
+This is followed by the _content_, i.e., the key(s) and possibly other algorithm-specific information, in a format that is algorithm-specific.
+See <<ACE-algorithms>> for algorithm-specific details of the content part of the configuration input.
+
+===== Sealed Cryptographic Contexts
+[[ACE-format-SCC]]
+
+The format of the SCCs is used when exporting a CC from a CR and is used also to reimport the CC into a CR.
+It is dependent on the algorithm being used.
+Its size must be a multiple of 8 bytes.
+
+Format of SCC:::
+(((Cryptographic context, SCC plaintext)))
+`bytes 0 .. 7  {nbsp}{nbsp}{nbsp}{nbsp}{nbsp}` metadata section, +
+`bytes 8 .. 19  {nbsp}{nbsp}{nbsp}{nbsp}` nonce used in the encryption (96 bits), +
+`bytes 20 .. 31  {nbsp}{nbsp}{nbsp}` tag produced by the encryption method (96 bits), and +
+`bytes 32 .. u+31  {nbsp}` encryption of the serialization of the content of the CR, with a byte length of `u`.
++
+Only the serialization of the content is encrypted, while both metadata and content are included in the computation of the authentication tag, as described next.
+
+See <<ACE-algorithms>> for algorithm-specific details on the format of the plaintext of the content of the SCC.
 
 
 [[ACE-CSR]]
@@ -176,7 +369,7 @@ Its possible values are given in <<ACE-aces-encoding>>.
 |===
 |Status |Name |Meaning
 |   0   | Off                | ACE disabled. CRs are inaccessible. The hart will trap if the user requests to enable the feature.
-|   1   | Initial            | ACE enabled. No CR is configured. Enabling via `ace.enable` clears contexts.
+|   1   | Initial            | ACE enabled. No CR is configured.
 |   2   | Clean              | ACE enabled. The state matches the last context swap (Clean).
 |   3   | Dirty              | ACE enabled. Some CRs may have been modified since last Clean.
 |===
@@ -229,8 +422,8 @@ N/A
 
 [width=83,align=center,float=center,cols="<,<,<,<,<"]
 |===
-5+^|Execute instruction that possibly modifies state +
-(including configuration, e.g., `ace.init`, `ace.import`, `ace.clone`, or `ace.derive`)
+5+^|Execute instruction that possibly modifies state, +
+including configuration, import, cloning, and derivation
 
 |Action? +
 Next state
@@ -246,7 +439,7 @@ Dirty
 
 [width=83,align=center,float=center,cols="<,<,<,<,<"]
 |===
-5+^|`ace.export`
+5+^| Export
 
 |Action? +
 Next state
@@ -262,7 +455,7 @@ Dirty
 
 [width=83,align=center,float=center,cols="<,<,<,<,<"]
 |===
-5+^|Execute instruction to unconfigure unit (`ace.reset`)
+5+^|Execute instruction to unconfigure unit
 
 |Action? +
 Next state
@@ -278,7 +471,7 @@ Initial
 
 [width=83,align=center,float=center,cols="<,<,<,<,<"]
 |===
-5+^|Execute instruction to disable unit (`ace.disable`)
+5+^|Execute instruction to disable unit
 
 |Action? +
 Next state
@@ -294,7 +487,7 @@ Off
 
 [width=83,align=center,float=center,cols="<,<,<,<,<"]
 |===
-5+^|Execute instruction to enable unit (`ace.enable`)
+5+^|Execute instruction to enable unit
 
 |Action? +
 Next state
@@ -459,7 +652,7 @@ _A single `acestart` value suffices due to the way the init/import/export instru
 This design obviates the need to separate data transfer from cryptographic processing during import and export operations. A separate transfer phase would require buffering the entire input within the ACE unit before processing, increasing internal resource requirements, whereas the current architecture can process data inline and is loaded with minimal overhead.
 ====
 
-The exact semantics of `acestart` are defined in <<ACE-formats>>
+The exact semantics of `acestart` are defined in <<ACE-SC-AEAD>> and [.red]#TBD#.
 
 [[ACE-CSR-macercsk]]
 ====== `macercsk`
@@ -494,190 +687,23 @@ These are:
 `maceBootSecret*` must be reconfigurable in order to support VM reboots which are independent of the boot cycles if the physical host.
 ====
 
-===== Reuse of ASID and VMID (to be verified)
+===== Reuse of `(v)satp`.ASID and `hgatp`.VMID
 
-ACE reuses `satp`.ASID and `hgatp`.VMID to optionally restrict the usage of CCs to a specific process or virtual machine.
+ACE reuses `(v)satp`.ASID and `hgatp`.VMID to optionally restrict the usage of CCs to a specific process or virtual machine.
 // The maximal bit length of `ASID` is 9 for Sv32 addresses or 16 for Sv39, Sv48, and Sv57 addresses.
 // The maximal bit length of `VMID` is 7 for Sv32x4 or 14 for Sv39x4, Sv48x4, and Sv57x4 addresses.
 In the metadata section, `ASID` and `VMID` are always zero padded to the maximal lengths of 16 and 14 bits, respectively.
-[.darkred]#Verification needed: Ensure we can use ASID/VMID to restrict usage even if not used in address translation.#
+//[.darkred]#Verification needed: Ensure we can use ASID/VMID to restrict usage even if not used in address translation.#
 
 NOTE: The software in each World/Supervisor Domain is normally responsible to generate or obtain their own keys, and if a process (applet) in one World/Supervisor Domain is responsible to provide keys to other Worlds/Supervisor Domains, it is the responsibility of the M-mode formware to perform an appropriate `ace.import`/RCSK switch/`ace.export` sequence.
 
 
-[[ACE-data-structures]]
-==== Data Structures
+[[ACE-SC-AEAD]]
+=== Semantics of Initialization, Export and Import of Cryptographic Contexts
 
-For software portability and interoperability, ACE defines two external formats for cryptographic contexts:
-a configuration input format, loaded by `ace.init` into a CR to create a CC,
-and an encrypted, authenticated SCC format produced by `ace.export` and that can be read by `ace.import`.
-Internal representation is implementation-specific.
+==== Initialization
 
-All formats are little-endian.
-
-[[ACE-metadata]]
-===== Metadata Section Format
-
-The metadata section is 64 bits long and its format is described in <<ACE-metadata-standard>>.
-This format is used for CR initialization, and CC export and import purposes.
-The internal representation is implementation specific.
-(((Cryptographic Context,metadata,format)))
-
-[[ACE-metadata-standard]]
-.Format of the Metadata Section
-[width="100%",cols="^9%,^7%,17%,67%",options="header"]
-|===
-.>|   Field .>| Width +
-(bits) .>| Name                  .>| Description
-|   [0:0] |   1  | Format                 | 0 for the current metadata format. +
-Future format will have a 1 in this position and may be longer than 64 bits.
-|   [1:1] |   1  | Reserved               | 0 for the current metadata format.
-|   [9:2] |   8  | Algorithm              | Algorithm (such as primitive or mode). 0 means the CC is invalid.
-| [11:10] |   2  | SC_Protection          | Level of Side Channel Protection, encoded as per <<ACE-SC-protection-levels>>.
-| [13:12] |   2  | Direction_Policy       | Determines whether the CC may be used for encryption (bit 12 set), decryption (bit 13 set), or both (bits 12 and 13 set).
-Valid only for encryption/decryption primitives or modes, and ignored, for instance, for hash functions.
-| [15:14] |   2  | Key_Type               | By explicit value / Immutable (index) / Internally generated.
-| [17:16] |   2  | Completion             | Defined in <<ACE-CR-complete>>.
-Used to determine whether an operation must be restarted.
-| [21:18] |   4  | State (also Direction) | Encoding the current state of the state machine of the algorithm as a number.
-The value must be zero in the initialization data.
-If the algorithm encoded in the CC has at most 16 states
-(including _initial_, _completed_, and _invalidated_, cf. <<ACE-state-constants>>), then this number is stored in this field,
-otherwise an algorithm-specific representation is used in the content, and this field only admits the values 0 (initial), 14 (invalidated), 15 (completed) or 1 (any other operational state). The values must conform to <<ACE-state-constants>>.
-| [25:22] |   4  | Locality               | A field which is either -1 or an index into the Locality Secrets Table.
-| [29:26] |   4  | UC_Policy_1            | "UC Policy" means "Usage Control Policy". +
-Disallow the _usage_ of this CC in User, (Virtual) Supervisor, Hypervisor, or M-mode if bit 26, 27, 28, or 29 is set.
-| [31:30] |   2  | UC_Policy_2            | If bit 30, respectively, 31, is set, then restrict the usage by `ASID`, respectively, `VMID`. Restriction by `ASID` ignored if in S Mode or higher.
-| [47:32] |  16  | UC_Policy_3            | Zero if bit 30 unset, else `ASID` to enforce.
-| [63:48] |  16  | UC_Policy_4            | Zero if bit 31 unset, else `VMID` to enforce.
-|===
-
-Algorithms are encoded in an 8-bit field.
-Algorithm numbers 0-191 are architecture-defined and the list of such encodings is maintained by RVI.
-See <<ACE-algorithms>> for the currently encoded algorithms.
-Algorithm numbers 192-255 are reserved for custom algorithms.
-
-[[ACE-SC-protection-levels]]
-.Encoding of Side-Channel Protection levels
-[float="center",align="center",width="76%",cols="^8%,<68%",options="header"]
-|===
-| Value | Description
-|   0   | No protection.
-|   1   | Data-independent timing, first-order threshold implementation.
-|   2   | Data-independent timing, first-order threshold, fault-tolerant implementation.
-|   3   | Custom, algorithm dependent.
-|===
-
-Custom algorithms may offer stronger side channel protection guarantees than those specified in the encoding values 0 to 2.
-In such a case, the value of the SC_Protection field must be set to 3.
-
-[[ACE-key-type]]
-.Encoding of Key Type
-[float="center",align="center",width="76%",cols="^8%,<68%",options="header"]
-|===
-| Value | Description
-|   0   | Explicit value.
-|   1   | Internal table. System specific. For each algorithm as specified in <<ACE-algorithms>>, the part of the content that normally contains the key(s) is replaced by a 64-bit value which is an index into the internal System Keys Table (SKT)-for both Configuration Input and the SCCs. The actual value of the key is never included in exported content. For threshold algorithms, ACE may copy the key material from the SKT into the CR and expand it into multiple shares.
-|   2   | Internally generated key. System specific.  In the Configuration Input, the part of the content that normally contains the key(s) is replaced by a "recipe" in a system-specific format. The format is not specified by the ISA and may not be portable to other systems. Once the key material has been internally generated, the value is included in the SCC as part of the content - not the "recipe" - as for any other key(s) for the same specified algorithm.  The Key_Type field of the metadata in all representations of the CC, will keep the value 2.
-|   3   | Invalid.
-|===
-
-[[ACE-CR-complete]]
-.Encoding of Completion field
-[float="center",align="center",width="58%",cols="^8%,<50%",options="header"]
-|===
-| Value | Description
-|   0   | No `ace.init`, `ace.input`, `ace.output`, `ace.import` or `ace.export` operation currently incomplete.
-|   1   | `ace.init`, `ace.input`, or `ace.output` was interrupted.
-|   2   | `ace.import` was interrupted.
-|   3   | `ace.export` was interrupted.
-|===
-
-NOTE: The information in the Completion field is necessary to make sure that any cryptographic operation attempted on a CR containing an incomplete CC results in an error or is trapped.
-
-// is in principle known to the system software/firmware stack, we duplicate it into the metadata to ensure that it remains accessible after nested interrupts, i.e., after switching partially configured/imported or exported CCs in or out. While authentication also guarantees the integrity of the SCCs and of their import, this is both a robustness measure and serves to simplify system stacks.[.darkred]#Do we really need it?#
-
-NOTE: The "state" field accommodates modes of operation with a small number of states.
-For algorithms with more complex state machines, machine state information can be stored in a custom data section of the CC.
-
-If the H extension is not enabled, bit 28 must be set to 1, and bits 31 and [63:48] must be set to 0.
-The "UC_Policy_4" field is 16 bits long for compatibility with architectures employing 16-bit `VMID` fields (for instance, in heterogeneous systems).
-While interoperability cannot be guaranteed when this policy is used, this ensures that the two top bits are not used for other purposes.
-
-NOTE: Restricting usage by Supervisor Domain or World ID is not supported, and not only because of a lack of space in a 64-bit metadata section:
-Reconfiguring the RCSK is a better approach for such isolation requirements, whereas isolation by `ASID` and `VMID` is a weaker security feature.
-
-[[ACE-Localities]]
-===== Localities
-
-Internally, ACE keeps a table of 128-bit Locality Secrets (LS), the Locality Secrets Table (LST).
-Some entries of the LST are fixed or configurable only using an implementation-specific authenticated hardware procedure, and these are
-global and shared across all ACE units in the same system or in the same SoC.
-A few entries may be programmed by M-mode and are architectural, i.e., per hart.
-
-If the Locality Field of a CC is -1 (all ones), then the RCSK is used.
-Otherwise, this value is used as an index _i_ in the LST, and the actual CSK is derived from the RCSK and LST[_i_].
-
-In <<ACE-locality-indexes>>, we list the architected Localities and whether M-mode can configure them.
-We specify the domain of each Locality Secret, i.e., whether the value is chip-wide
-(i.e., the same across all chiplets in the same SoC, note that two distinct SoCs on the same device may have different values),
-device-wide, or (usually) OS-wide.
-
-[[ACE-locality-indexes]]
-.Architected Locality Values
-[width="100%",cols="23%,45%,^9%,^14%,^9%",options="header"]
-|===
-.>| Name .>| Description .>| Domain | M-mode +
-Configurable .>| Value +
-(Index)
-| (No Locality binding)     | No CSK derivation. CC bound to Root CSK only. | -- | -- | -1 (15)
-| ChipManufacturerSecret    | Identifies the manufacturer of the SoC. Permanent. | SoC | N | 0
-| ChipModelSecret           | Identifies specific chip model/family. Permanent. | SoC | N | 1
-| ChipUniqueSecret          | Unique for each SoC. Permanent. | SoC | N | 2
-| OEMSecret                 | Provisioned by OEM to differentiate their products from the competition.
-                              Can be permanent, or optionally reconfigurable by impdef HW authenticated mechanisms. | Device | N | 3
-| ProductSecret             | Identifies device/system type/model (product). Not necessarily permanent. Reconfigurable like OEMSecret. | Device | N | 4
-| DeviceSecret              | Unique device (entire system) secret (_not_ the device ID such as a serial number). Shared across all harts in a SoC and shareable across multiple SoKs in a single device. Sharing mechanism impdef, i.e., not architected. Reconfigurable like OEMSecret. | Device | N | 5
-| OSSecret                  | Identifies Operating System (or System Stack).
-                              Not permanent, must be configured at (virtual) boot. | OS | Allowed | 6
-| BootSecret                | Regenerated at each (virtual) boot. | OS | Allowed | 7
-| Reserved                  | Reserved for future use (RZ if not defined). | Impdef | Impdef | 8-14
-|===
-
-The constant Localities_MAX is the maximum number of Localities supported by the system.
-
-NOTE: M-mode is responsible for virtualizing the OSSecret and BootSecret Locality Secrets.
-
-*Example*: _If a key's metadata specifies a Locality field value of 2, the key for import/export operations is derived from the RCSK and the OEM Secret. If we generate an SCC with `ace.export` on a first device, an `ace.import` of the resulting SCC on a second device will trigger an authentication failure if the OEM Secrets differ._
-
-NOTE: A CC may reference a key via an index into the System Key Table (SKT).
-A device-specific SKT entry may correspond to a different key on another device.
-Using the latter may lead to unspecified behavior.
-Implementations of the SKT *must* provide a suitable Locality to the ACE unit during CR configuration, and set usage policies that are at least as strict as the key's own.
-
-[[ACE-formats]]
-===== Formats of Configuration Inputs and Sealed Configuration Contexts
-
-The formats of the configuration input, of the content section, and of the SCCs are dependent on the algorithm being used.
-The sizes of the configuration input and of the SCC must be multiples of 8 bytes.
-See <<ACE-algorithms>> for algorithm-specific details on the inputs and outputs of these functions.
-
-Format of Configuration Input:::
-(((Cryptographic context, configuration input)))
-This is the format of the input to `ace.init`.
-The first 8 bytes contain the 64-bit metadata section (cf.{nbsp}<<ACE-metadata>>),
-followed by the content, i.e., the key(s) and possibly algorithm-specific information.
-
-Plaintext Format of SCC:::
-(((Cryptographic context, SCC plaintext)))
-`bytes 0 .. 7  {nbsp}{nbsp}{nbsp}{nbsp}{nbsp}` contain the 64-bit metadata section, +
-`bytes 8 .. 19  {nbsp}{nbsp}{nbsp}{nbsp}` contain the nonce used in the encryption (96 bits), +
-`bytes 20 .. 31  {nbsp}{nbsp}{nbsp}` contain the tag produced by the encryption method (96 bits), and +
-`bytes 32 .. u+31  {nbsp}` contain the serialization of the content of the CR, with a byte length of `u`.
-+
-Only the serialization of the content is encrypted, while both metadata and content are included in the computation of the authentication tag, as described next.
-
-//
+==== Authenticated Encryption of Sealed Cryptographic Contexts
 
 We first define the RFC8452 Key Derivation and the DCSK Derivation functions.
 
@@ -846,9 +872,9 @@ UNINTERRUPTIBLE_BLOCK_END
 
 //
 
-===== Use of `acestart`
+==== Incomplete CCs
 
-// [.red]#*TBD* Specify the exact semantics of# ```[.red]#acestart#```[.kred]#, define the points at which operations can be interrupted:#
+[.red]#*TBD*#
 
 [comment]
 --
@@ -869,26 +895,6 @@ UNINTERRUPTIBLE_BLOCK_END
 --
 
 [.red]#TBD: define the SCC formats for incomplete CCs.#
-
-[[ACE-RCSK-vs-ID]]
-=== Programmable RCSKs vs. ID-based Usage Control
-
-This section is informative and non-normative.
-
-ACE provides two architected layers of usage control:
-
-. At the User and Supervisor levels, CC usage can be optionally constrained by ASID and VMID.
-This is a lightweight mechanism.
-Because filtering by ASID is inactive when the hart is in S mode or higher, context switching can be performed without modifying the RCSK.
-. At higher privilege levels, not only the usage, but even the import of CCs can be restricted by a programmable RCSK.
-This offers stronger security by also preventing unauthorized `ace.import` operations, but incurs higher overhead as it typically requires an `ecall`.
-
-The envisioned usage model employs ASID/VMID filtering at the User level, and also at the Supervisor level in high-performance systems where migration is not required (e.g., automotive applications). Cryptographic domain separation via the RCSK is intended for Virtual Machines, Supervisor Domains, Worlds, and TEEs within those contexts, as these demand stronger security guarantees.
-
-NOTE: Although the architecture does not prevent assigning unique RCSKs to U-mode processes, doing so would impose a substantial burden on system software due to per-context-switch `ecall` overhead.
-Hardware support—such as automatic RCSK switching based on ASID/VMID, could alleviate this burden.
-However, such a mechanism is not currently under consideration due to its architectural complexity, inflexibility, and hardware cost.
-For example, it would necessitate secure management of large RCSK tables, including saving, restoring, and potentially migrating entire RCSK blocks.
 
 // ///////////////////////////////////////////////////////////////////////////////////////////
 
@@ -1022,7 +1028,7 @@ since `ace.init`, `ace.import` and `ace.input` can be seen as special kinds of l
 `ace.export` and `ace.output` as special store instructions.
 // as ACE is architected to behave like an _attached_ unit, which may have its own interfaces.
 
-NOTE: The operation follows the two-phases processing model defined in <<ACE-formats>>.
+NOTE: The operation follows the two-phases processing model defined in <<ACE-format-configuration>>.
 In the first phase, the metadata block is read, which determines the length of the remaining information.
 Then, in the second phase, the configuration material is read and processed.
 
@@ -1074,7 +1080,7 @@ Encoding::
 ....
 
 Description::
-Exports the CRs `Ks` or `K[Xs]` to memory at address `Xd`, using the procedure described in <<ACE-formats>>.
+Exports the CRs `Ks` or `K[Xs]` to memory at address `Xd`, using the procedure described in <<ACE-format-SCC>>.
 If the context `Ks` is clear, or `Xs` is out of range,
 the operation will report error ace_err_invalid.
 
@@ -1542,7 +1548,7 @@ The supporting instructions themselves must be uninterruptible.
 // ///////////////////////////////////////////////////////////////////////////////////////////
 
 [#ACE-algorithms]
-=== Data Formats and Instruction Semantics for Various Cryptographic Algorithms
+=== Algorithm-Specific Data Formats and Instruction Semantics
 
 In this chapter we specify the behavior of Cryptographic Contexts for various cryptographic algorithms.
 Some specifications are generic in the sense that they apply to all algorithms of a certain type and can be instantiated with different primitives with varying parameters such as block and key sizes.
@@ -1574,9 +1580,8 @@ The fields are unordered, and their lengths in bytes may differ from those liste
 The data that follows the metadata block in the plaintext portion of the SCC.
 The fields are listed in the order they appear in the SCC, each with its length in bytes.
 
-Generic Functions:::
-If necessary, redefine generic functions that apply to all contexts.
-Each algorithm must provide the functions described in <<ACE-formats>>.
+// Generic Functions:::
+// If necessary, redefine generic functions that apply to all contexts.
 
 Algorithm-Specific Functions:::
 Any other function that is specific to the algorithm.
@@ -2824,6 +2829,28 @@ Moreover,
 * more complex operations for some corner-case cryptographic algorithms may be performed in GPRs, with results then inserted in vector registers via `vins`/`vext`.
 
 RVV-mini must maintain full opcode compatibility with RVV to guarantee that ACE code runs unmodified on full RVV implementations.
+
+// ///////////////////////////////////////////////////////////////////////////////////////////
+
+[[ACE-RCSK-vs-ID]]
+=== Programmable RCSKs vs. ID-based Usage Control
+
+This section is informative and non-normative.
+
+ACE provides two architected layers of usage control:
+
+. At the User and Supervisor levels, CC usage can be optionally constrained by ASID and VMID.
+This is a lightweight mechanism.
+Because filtering by ASID is inactive when the hart is in S mode or higher, context switching can be performed without modifying the RCSK.
+. At higher privilege levels, not only the usage, but even the import of CCs can be restricted by a programmable RCSK.
+This offers stronger security by also preventing unauthorized `ace.import` operations, but incurs higher overhead as it typically requires an `ecall`.
+
+The envisioned usage model employs ASID/VMID filtering at the User level, and also at the Supervisor level in high-performance systems where migration is not required (e.g., automotive applications). Cryptographic domain separation via the RCSK is intended for Virtual Machines, Supervisor Domains, Worlds, and TEEs within those contexts, as these demand stronger security guarantees.
+
+NOTE: Although the architecture does not prevent assigning unique RCSKs to U-mode processes, doing so would impose a substantial burden on system software due to per-context-switch `ecall` overhead.
+Hardware support—such as automatic RCSK switching based on ASID/VMID, could alleviate this burden.
+However, such a mechanism is not currently under consideration due to its architectural complexity, inflexibility, and hardware cost.
+For example, it would necessitate secure management of large RCSK tables, including saving, restoring, and potentially migrating entire RCSK blocks.
 
 // ///////////////////////////////////////////////////////////////////////////////////////////
 
