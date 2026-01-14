@@ -722,45 +722,45 @@ let last_block_fractional : boolean = z % 16 != 0;
 let num_blocks : int = ceil(z / 16);
 
 UNINTERRUPTIBLE_BLOCK_START
-    N = random(96 bits);
-
-    if (metadata.Locality == 15) then
-        CSK = RCSK;
-    else
-        CSK = DCSK_KeyDeriv(RCSK, LST[metadata.Locality]);
-
-    {Kenc, Kauth} = RFC8452_KeyDeriv(CSK);
-
-    - If some internal operations are needed to make the content available,
-    - such as reconstructing threshold keys/values into a single share, these
-    - must be computed at this point. Starting with the following POLYVAL operation
-    - content will refer to the resulting data as architected for non-threshold
-    - implementations.
-    content = SERIALIZE()
-
-    tmp = POLYVAL(Kauth, 64'b0 @ metadata @ content);
-    SIV = AESE(Kenc, 1'b0 @ (tmp[126:0] xor (31'b0 @ N)))) >> 32;
+|   N = random(96 bits);
+|
+|   if (metadata.Locality == 15) then
+|       CSK = RCSK;
+|   else
+|       CSK = DCSK_KeyDeriv(RCSK, LST[metadata.Locality]);
+|
+|   {Kenc, Kauth} = RFC8452_KeyDeriv(CSK);
+|
+|   - If some internal operations are needed to make the content available,
+|   - such as reconstructing threshold keys/values into a single share, these
+|   - must be computed at this point. Starting with the following POLYVAL operation
+|   - content will refer to the resulting data as architected for non-threshold
+|   - implementations.
+|   content = SERIALIZE()
+|
+|   tmp = POLYVAL(Kauth, 64'b0 @ metadata @ content);
+|   SIV = AESE(Kenc, 1'b0 @ (tmp[126:0] xor (31'b0 @ N)))) >> 32;
 UNINTERRUPTIBLE_BLOCK_END
 
 // preemptible here, with `acestart` from 0 to 15
 UNINTERRUPTIBLE_BLOCK_START
-    M[0 .. 15] = N[63:0] @ metadata[63:0];
+|   M[0 .. 15] = N[63:0] @ metadata[63:0];
 UNINTERRUPTIBLE_BLOCK_END
 
 // preemptible here, with `acestart` from 16 to 31
 UNINTERRUPTIBLE_BLOCK_START
-    M[16 .. 31] = SIV[95:0] @ N[95:64];
+|   M[16 .. 31] = SIV[95:0] @ N[95:64];
 UNINTERRUPTIBLE_BLOCK_END
 
 foreach(i from 0 to num_blocks - 1) {
     // next instruction preemptible, with `acestart` from 32+i*16 to 39+i*16 or 47+i*16
     UNINTERRUPTIBLE_BLOCK_START
-        if ((i == num_blocks - 1) and last_block_fractional)
-            M[32+i*16 .. 39+i*16] = content[i*16 .. 7+i*16] xor
-                            AESE(Kenc, 1'b1 @ SIV[94:0] @ (binary(i)[31:0]))[63:0];
-        else
-            M[32+i*16 .. 47+i*16] = content[i*16 .. 15+i*16] xor
-                            AESE(Kenc, 1'b1 @ SIV[94:0] @ (binary(i)[31:0]));
+    |   if ((i == num_blocks - 1) and last_block_fractional)
+    |       M[32+i*16 .. 39+i*16] = content[i*16 .. 7+i*16] xor
+    |                       AESE(Kenc, 1'b1 @ SIV[94:0] @ (binary(i)[31:0]))[63:0];
+    |   else
+    |       M[32+i*16 .. 47+i*16] = content[i*16 .. 15+i*16] xor
+    |                       AESE(Kenc, 1'b1 @ SIV[94:0] @ (binary(i)[31:0]));
     UNINTERRUPTIBLE_BLOCK_END
 }
 ----
@@ -781,61 +781,60 @@ tag : bits(96);
 
 // next instruction preemptible, with `acestart` from 0 to 7
 UNINTERRUPTIBLE_BLOCK_START
-    metadata : bits(64) = M[0 .. 7]
-    if (there is not enough memory for the algorithm encoded in the metadata)
-        error ace_err_insufficient_memory
+|   metadata : bits(64) = M[0 .. 7]
+|   if (there is not enough memory for the algorithm encoded in the metadata)
+|       error ace_err_insufficient_memory
 UNINTERRUPTIBLE_BLOCK_END
 
 UNINTERRUPTIBLE_BLOCK_START
-    z = size(content according to metadata);
-    content = internal buffer for z bytes;
-    num_blocks = ceil(z / 16);
-    last_block_fractional : boolean = (z % 16 != 0);
-
-    if (metadata.Locality == 15) then
-        CSK = RCSK;
-    else
-        CSK = DCSK_KeyDeriv(RCSK, LST[metadata.Locality]);
-
-    {Kenc, Kauth} = RFC8452_KeyDeriv(CSK);
-
-    // next instruction preemptible, with `acestart` from 8 to 19
-    N = M[8 .. 19]
+|   z = size(content according to metadata);
+|   content = internal buffer for z bytes;
+|   num_blocks = ceil(z / 16);
+|   last_block_fractional : boolean = (z % 16 != 0);
+|
+|   if (metadata.Locality == 15) then
+|       CSK = RCSK;
+|   else
+|       CSK = DCSK_KeyDeriv(RCSK, LST[metadata.Locality]);
+|
+|   {Kenc, Kauth} = RFC8452_KeyDeriv(CSK);
+|
+|   // next instruction preemptible, with `acestart` from 8 to 19
+|   N = M[8 .. 19]
 UNINTERRUPTIBLE_BLOCK_END
 
 // next instruction preemptible, with `acestart` from 20 to 31
 UNINTERRUPTIBLE_BLOCK_START
-    SIV = M[20 .. 31]
-
-    tmp = 64'b0 @ metadata;
-    tmp = tmp * Kauth;  // * = Montgomery multiplication
+|   SIV = M[20 .. 31]
+|   tmp = 64'b0 @ metadata;
+|   tmp = tmp * Kauth;  // * = Montgomery multiplication
 UNINTERRUPTIBLE_BLOCK_END
 
 foreach(i from 0 to num_blocks - 1) {
     // next instruction preemptible, with `acestart` from 32+i*16 to 39+i*16 or 47+i*16
     UNINTERRUPTIBLE_BLOCK_START
-        if ((i == num_blocks - 1) and last_block_fractional) {
-            content[i*16 .. 7+i*16] = M[32+i*16 .. 39+i*16] xor
-                          AESE(Kenc, 1'b1 @ SIV[94:0] @ (binary(i)[31:0]))[63:0];
-            tmp[63:0] = tmp[63:0] xor content[i*16 .. 7+i*16];
-        } else {
-            content[i*16 .. 15+i*16] = M[32+i*16 .. 47+i*16] xor
-                          AESE(Kenc, 1'b1 @ SIV[94:0] @ (binary(i)[31:0]));
-        tmp = tmp xor content[i*16 .. 15+i*16];
-    }
-    tmp = tmp * Kauth;  // * = Montgomery multiplication
+    |   if ((i == num_blocks - 1) and last_block_fractional) {
+    |       content[i*16 .. 7+i*16] = M[32+i*16 .. 39+i*16] xor
+    |                     AESE(Kenc, 1'b1 @ SIV[94:0] @ (binary(i)[31:0]))[63:0];
+    |       tmp[63:0] = tmp[63:0] xor content[i*16 .. 7+i*16];
+    |   } else {
+    |       content[i*16 .. 15+i*16] = M[32+i*16 .. 47+i*16] xor
+    |                     AESE(Kenc, 1'b1 @ SIV[94:0] @ (binary(i)[31:0]));
+    |       tmp = tmp xor content[i*16 .. 15+i*16];
+    |   }
+    |   tmp = tmp * Kauth;  // * = Montgomery multiplication
     UNINTERRUPTIBLE_BLOCK_END
 }
 
 // if preempted here, `acestart` will be z + 32
 
 UNINTERRUPTIBLE_BLOCK_START
-    tag = AESE(Kenc, 1'b0 @ (tmp[126:0] xor (31'b0 @ N)))) >> 32;
-    if (tag != SIV) then { error ace_err_authentication; }
-    - Now the content can be deserialized.
-    - This includes computing and derived values not saved as part of the SCC,
-    - as well as creating shares for threshold implementations.
-    DESERIALIZE(content)
+|   tag = AESE(Kenc, 1'b0 @ (tmp[126:0] xor (31'b0 @ N)))) >> 32;
+|   if (tag != SIV) then { error ace_err_authentication; }
+|   - Now the content can be deserialized.
+|   - This includes computing and derived values not saved as part of the SCC,
+|   - as well as creating shares for threshold implementations.
+|   DESERIALIZE(content)
 UNINTERRUPTIBLE_BLOCK_END
 ----
 
@@ -892,7 +891,7 @@ For example, it would necessitate secure management of large RCSK tables, includ
 
 [.darkred]#At the end we must add algorithm numbers!#
 
-ACE architects support for several algorithms, and also define a minimal required subset [.red]#(current suggestion)#:
+ACE architects support for several algorithms, and also defines a minimal required subset [.red]#(current suggestion)#:
 
 * AES-128 and AES-256 encryption and decryption.
 * AES-CTR, AES-GCM, AES-GCM-SIV, AES-XTS using AES-128/256.
