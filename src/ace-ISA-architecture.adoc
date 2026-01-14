@@ -137,8 +137,8 @@ The fact that CRs can be addressed indirectly two major implications:
 [[ACE-CSR]]
 ==== CSRs
 
-ACE extends `*status` and `misa` and adds 20 new CSRs (of which 16 are optional and M-mode exclusive) to manage its execution environment.
-It also requires a subset of the V extension CSRs (see <<ACE-V-dependency>>).
+ACE extends `*status` and `misa`. and adds 20 new CSRs (of which 16 are optional and M-mode exclusive) to manage its execution environment.
+// It also requires a subset of the V extension CSRs (see <<ACE-V-dependency>>).
 
 .New ACE CSRs
 [cols="<16%,^11%,<24%,<49%"]
@@ -153,14 +153,16 @@ It also requires a subset of the V extension CSRs (see <<ACE-V-dependency>>).
 | 0xXXX--0xXXX   | MRW (RZ)  | `maceBootSecret0{0..3}`  | ACE Boot Secret
 |===
 
+===== Extension to existing CSRs
+
 [[ACE-ACE-field-in-misa]]
-===== ACE field in `misa`
+====== ACE field in `misa`
 
 Bit `L` (11) in `misa` indicates that ACE is present.
 (((CSR, ACE field in `misa`)))
 
 [[ACE-ACES-field-in-status]]
-===== ACES field in `*status` and `aceccstatus` CSR
+====== ACES field in `*status`
 
 The ACES field (bits 26:25) is added to `mstatus` and shadowed in `sstatus` and `vsstatus` (if the hypervisor extension is present).
 (((CSR,ACES field in *status)))
@@ -306,6 +308,10 @@ Initial
 Initial
 |===
 
+===== New CSRs
+
+====== `aceccstatus`
+
 The CSR `aceccstatus` tracks the configuration and dirtiness of CRs on a per-CR basis, so that privileged context switching code needs to save only the dirty CRs, and restore only the configured ones, unless the latter are lazy-loaded:
 
 . For RV64, `aceccstatus` has a size of 64 bits,
@@ -315,8 +321,6 @@ where
 ``aceccstatus[``2__i__+1,2__i__``]`` can take the values Off, Init, Clean, Dirty as defined for `*status.ACES` for CR #__i__
 and
 ``aceccstatus[``2__i__+1,2__i__``]`` for CR #__i__+16.
-
-<<<
 
 We describe now the semantics of the `aceccstatus` bitfields:
 
@@ -373,7 +377,7 @@ If all CRs were either unconfigured or to be lazy-loaded, the ACES field would b
 //
 
 [[ACE-CSR-ace-error]]
-===== `aceerror`
+====== `aceerror`
 
 The 8-bit `aceerror` CSR records the error code from most recent ACE instruction.
 Reading it may stall the hart until the operation completes.
@@ -430,7 +434,7 @@ trap, as specified in the privileged architecture, `aceerror` remains unchanged.
 
 
 [[ACE-acestart-definition]]
-===== `acestart`
+====== `acestart`
 
 `acestart` is an XLEN-bit RW CSR, similar to `vstart`, tracking progress of long-running interruptible instructions `ace.init`, `ace.import`, `ace.export`, `ace.input`, and `ace.output`.
 (((CSR, acestart)))
@@ -457,18 +461,8 @@ This design obviates the need to separate data transfer from cryptographic proce
 
 The exact semantics of `acestart` are defined in <<ACE-formats>>
 
-===== Reuse of ASID and VMID (to be verified)
-
-ACE reuses `satp`.ASID and `hgatp`.VMID to optionally restrict the usage of CCs to a specific process or virtual machine.
-// The maximal bit length of `ASID` is 9 for Sv32 addresses or 16 for Sv39, Sv48, and Sv57 addresses.
-// The maximal bit length of `VMID` is 7 for Sv32x4 or 14 for Sv39x4, Sv48x4, and Sv57x4 addresses.
-In the metadata section, `ASID` and `VMID` are always zero padded to the maximal lengths of 16 and 14 bits, respectively.
-[.darkred]#Verification needed: Ensure we can use ASID/VMID to restrict usage even if not used in address translation.#
-
-NOTE: The software in each World/Supervisor Domain is normally responsible to generate or obtain their own keys, and if a process (applet) in one World/Supervisor Domain is responsible to provide keys to other Worlds/Supervisor Domains, it is the responsibility of the M-mode formware to perform an appropriate `ace.import`/RCSK switch/`ace.export` sequence.
-
 [[ACE-CSR-macercsk]]
-===== `macercsk`
+====== `macercsk`
 
 Eight 32-bit WARL CSRs may be defined in RV32 and four 64-bit WARL CSRs in RV64 to configure `macercsk`.
 (((CSR, `macercsk`)))
@@ -485,7 +479,7 @@ Cross-device RCSK migration must use a public-key key wrapping mechanism.
 Since M-mode FW cannot just trust any external entity claiming to be a trusted device:
 all receiving end points, whether they are the M-mode FW of another trusted device, a TPM for temporary storage of a VM's CSK during device hibernation, or an HSM for intermediate CSK storage, must authenticate themselves.
 
-===== Re-configurable Localities
+====== Re-configurable Localities
 
 Two groups of M-mode WARL CSRs are used for two reconfigurable Localities (cf.{nbsp}<<ACE-concepts>>).
 These are:
@@ -499,6 +493,17 @@ These are:
 ====
 `maceBootSecret*` must be reconfigurable in order to support VM reboots which are independent of the boot cycles if the physical host.
 ====
+
+===== Reuse of ASID and VMID (to be verified)
+
+ACE reuses `satp`.ASID and `hgatp`.VMID to optionally restrict the usage of CCs to a specific process or virtual machine.
+// The maximal bit length of `ASID` is 9 for Sv32 addresses or 16 for Sv39, Sv48, and Sv57 addresses.
+// The maximal bit length of `VMID` is 7 for Sv32x4 or 14 for Sv39x4, Sv48x4, and Sv57x4 addresses.
+In the metadata section, `ASID` and `VMID` are always zero padded to the maximal lengths of 16 and 14 bits, respectively.
+[.darkred]#Verification needed: Ensure we can use ASID/VMID to restrict usage even if not used in address translation.#
+
+NOTE: The software in each World/Supervisor Domain is normally responsible to generate or obtain their own keys, and if a process (applet) in one World/Supervisor Domain is responsible to provide keys to other Worlds/Supervisor Domains, it is the responsibility of the M-mode formware to perform an appropriate `ace.import`/RCSK switch/`ace.export` sequence.
+
 
 [[ACE-data-structures]]
 ==== Data Structures
