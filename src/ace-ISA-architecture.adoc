@@ -957,60 +957,6 @@ can be encoded.
 
 [.darkred]#TBD: Add to each instruction whether it may be usage-controlled or not.#
 
-[[ACE-instruction-enable-enable]]
-==== ace.enable/ace.disable/ace.reset
-
-`ace.enable` +
-`ace.disable` +
-`ace.reset`
-(((ACE, instruction, ace.enable)))
-(((ACE, instruction, ace.disable)))
-(((ACE, instruction, ace.reset)))
-
-Encoding::
-+
---
-This is an I-type instruction.
-
-[wavedrom, , svg]
-....
-{reg:[
-    { bits:  7, name: 0x27, attr: ['custom-1'] },
-    { bits:  5, name: 0x0, attr: ['invalid GPR'] },
-    { bits:  3, name: 'ace.clear', attr: [0x7] },
-    { bits:  5, name: 0x0 },
-    { bits: 12, name: 'immed12' },
-]}
-....
-
-NOTE: This instruction shares its encoding with `ace.clear` with `3b'111` as instruction code (use a GPR to select the CR).
-However, the zero in the source field [11:7] for indirect CR indexing is defined as invalid/special, and this allows to define this instruction.#
---
-+
-
-Description::
-+
---
-Enable, disable, or reset ACE in the current execution context:
-
-* If the `immed12` = 1, then the feature is enabled. The alias for this instruction is `ace.enable`.
-* If the `immed12` = 0, then the feature is disabled. The alias for this instruction is `ace.disable`.
-* If the `immed12` = `0xa11`, then all CRs are cleared and the new state of the ACE unit is Clear.
-The alias for this instruction is `ace.reset`.
-
-`ace.enable` must be execute before any other ACE instruction, i.e. `ace.config` passing the immediate 1.
-
-NOTE: The advantage of `ace.reset` with respect to a loop that clears all CRs is that the entire CRF memory is cleared without the need for compaction/management between the separate `ace.clear` operations and this operation cannot be interrupted, reducing potential wasteful context saves.
-
-The instruction will trap in the following cases: [.red]#TBD#.
---
-+
-
-// [.darkred]#Proposal: With the immediate `0xa11` (all), all CRs will be cleared, as if `ace.clear` had been called on each of them, but the feature is not disabled.
-
-See
-//<<ACE-CSR-enable>> and
-<<ACE-ACES-field-in-status>> for more details.
 
 [[ACE-instruction-init]]
 ==== ace.init
@@ -1050,13 +996,15 @@ Then, in the second phase, the configuration material is read and processed.
 // [.darkred]#(TBdetermined whether it is secure)# This instruction is trappable and may also be resumed or restarted.
 
 [[ACE-instruction-clear]]
-==== ace.clear
+==== ace.clear/ace.reset
 
-`ace.clear Kd|K[Xd]`
+`ace.clear Kd|K[Xd]` +
 (((ACE, instruction, ace.clear)))
+`ace.reset`
+(((ACE, instruction, ace.reset)))
 
 Encoding::
-`ace.clear` is an I-type instruction.
+`ace.clear/ace.reset` is an I-type instruction.
 +
 [wavedrom, , svg]
 ....
@@ -1070,7 +1018,8 @@ Encoding::
 ....
 
 Description::
-`Kd` or `K[Xd]` denotes the CR to be cleared.
+For `ace.clear`, `Kd` or `K[Xd]` denotes the CR to be cleared. +
+`ace.reset` uses the encoding for `ace.clear` with indirect CR addressing (the `ace.clear` field is `3'b111`) and `Xd` = `X0` (the `context` field is `0`).
 
 [[ACE-instruction-export]]
 ==== ace.export
@@ -1102,6 +1051,7 @@ Similarly to entire-vector-register store instructions, `ace.export` appears to 
 
 The initial cryptographic phase of `ace.export`, as well as the authentication phase of `ace.import`, must be uninterruptible.
 Even if these parts are executed concurrently with other operations, an interrupt handler may need to wait for these steps to complete before proceeding with any memory accesses.
+
 
 [[ACE-instruction-import]]
 ==== ace.import
