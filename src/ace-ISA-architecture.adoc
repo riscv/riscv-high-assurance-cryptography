@@ -49,7 +49,7 @@ Side-channel-resistant variants are supported transparently.
 Usage Control Policy:::
 (((Cryptographic Context, Usage Control)))
 ACE distinguishes between CR management (e.g., import/export) and CC usage (cryptographic operations).
-To prevent denial-of-service scenarios, CR management operations must always be permitted.
+To prevent denial of service scenarios, CR management operations must always be permitted.
 Accordingly, the optional _Usage Control_ policies restrict only cryptographic operations and state modifications, not CR or SCC management.
 For this reason, the term Usage Control is used instead of Access Control.
 
@@ -113,7 +113,7 @@ For instance, the CRF must hold at least an instance of the largest possible CR 
 The fact that CRs can be addressed indirectly two major implications:
 
 . Adding renaming to CRs would add significant complexity to the microarchitecture.
-  However CRs are much less often redefined than, say, integer or floating-point registers, except for internal implied changes, and therefore we can assume that CRs are not renamed without performance issues.
+  However, CRs are much less often redefined than integer or floating-point registers, except for internal implied changes, hence CRs can be renamed without performance issues.
 . An additional bit in the instruction encoding determines whether a CR number is given by a 5-bit immediate or by the value in a GPR.
 ====
 
@@ -196,9 +196,7 @@ In such a case, the value of the SC_Protection field must be set to 3.
 |   3   | Invalid.
 |===
 
-// is in principle known to the system software/firmware stack, we duplicate it into the metadata to ensure that it remains accessible after nested interrupts, i.e., after switching partially configured/imported or exported CCs in or out. While authentication also guarantees the integrity of the SCCs and of their import, this is both a robustness measure and serves to simplify system stacks.[.darkred]#Do we really need it?#
-
-NOTE: The "state" field accommodates modes of operation with a small number of states.
+NOTE: The "State_Number" field accommodates modes of operation with a small number of states.
 For algorithms with more complex state machines, machine state information can be stored in a custom data section of the CC.
 
 If the H extension is not enabled, bit 28 must be set to 1, and bits 31 and [63:48] must be set to 0.
@@ -219,8 +217,8 @@ A few entries may be programmed by M-mode and are architectural, i.e., per hart.
 If the Locality Field of a CC is -1 (all ones), then the RCSK is used.
 Otherwise, this value is used as an index _i_ in the LST, and the actual CSK is derived from the RCSK and LST[_i_].
 
-In <<ACE-locality-indexes>>, we list the architected Localities and whether M-mode can configure them.
-We specify the domain of each Locality Secret, i.e., whether the value is chip-wide
+<<ACE-locality-indexes>> lists the architected Localities and whether M-mode can configure them.
+The domain of each Locality Secret is specified, i.e., whether the value is chip-wide
 (i.e., the same across all chiplets in the same SoC, note that two distinct SoCs on the same device may have different values),
 device-wide, or (usually) OS-wide.
 
@@ -249,7 +247,7 @@ The constant Localities_MAX is the maximum number of Localities supported by the
 
 NOTE: M-mode is responsible for virtualizing the OSSecret and BootSecret Locality Secrets.
 
-*Example*: _If a key's metadata specifies a Locality field value of 2, the key for import/export operations is derived from the RCSK and the OEM Secret. If we generate an SCC on a first device, importing it on a second device will trigger an authentication failure if the OEM Secrets differ._
+*Example*: _If a key's metadata specifies a Locality field value of 2, the import/export key is derived from the RCSK and the OEM Secret. An SCC created on one device will fail authentication when imported on another device if their OEM Secrets differ._
 
 NOTE: A CC may reference a key via an index into the System Key Table (SKT).
 A device-specific SKT entry may correspond to a different key on another device.
@@ -496,7 +494,7 @@ We describe now the semantics of the `aceccstatus` bitfields:
 +
 --
 ** *Usage:* Error _ace_err_unconfigured_ (no trap).
-** *Configuration:* does not trap, works as expected-including errors with *export* or *clone*-sets the status to *DIRTY*.
+** *Configuration:* does not trap, works as expected. Sets the status to *DIRTY*.
 --
 +
 
@@ -963,7 +961,7 @@ ACE provides a number of unprivileged instructions, some implemented as CSR read
 This section specifies the semantics and encodings of these instructions.
 
 The notation `K[Xd]`, for a GPR `Xd`, refers to the CR whose number is contained in `Xd`,
-and `Kn|K[Xn]` means that there are two different encodings for when the CR number is passed as an immediate (`Kn`) or in `Xn`.
+and `Kn|K[Xn]` means that there are two different encodings for when the CR number is passed as a 5-bit immediate (`Kn`) or via the value of `Xn`.
 When a GPR is used to index a CR, use of the zero register `X0` is reserved and results in an illegal instruction exception.
 
 NOTE: The encodings presented here are just examples, and may not be final.
@@ -1050,9 +1048,7 @@ Encoding::
 
 Description::
 `ace.init` initializes a CR with metadata and content to create a CC.
-`Kd` is the source CR to be initialized, encoded as a 5-bit immediate.
-`Xd`, alternatively, is a GPR containing a number from 0 to 31 to select the context
-to be initialized.
+`Kd` or `K[Xd]` denotes the CR to be initialized.
 `Xs` points to the region of memory containing the metadata and the key material.
 
 NOTE: `ace.init`, as well as `ace.import`, `ace.export`, `ace.input`, and `ace.output` as described later, perform direct memory accesses.
@@ -1088,8 +1084,7 @@ Encoding::
 ....
 
 Description::
-`Kd` identifies the CR to be cleared, encoded as a 5-bit immediate. +
-`Xd` alternatively, is a GPR containing a number from 0 to 31 to select the context to be cleared. +
+`Kd` or `K[Xd]` denotes the CR to be cleared.
 
 [[ACE-instruction-export]]
 ==== ace.export
@@ -1113,9 +1108,8 @@ Encoding::
 ....
 
 Description::
-Exports the CRs `Ks` or `K[Xs]` to memory at address `Xd`, using the procedure described in <<ACE-format-SCC>>.
-If the context `Ks` is clear, or `Xs` is out of range,
-the operation will report error ace_err_invalid.
+Exports the CR `Ks` or `K[Xs]` to memory at address `Xd`, using the procedure described in <<ACE-format-SCC>>.
+//If the context `Ks` is clear, or `Xs` is out of range, the operation will report error ace_err_invalid.
 
 The instruction must follow the interruptibility rules defined in <<ACE-CSR-acestart>>.
 Similarly to entire-vector-register store instructions, `ace.export` appears to other harts as sequences of individual stores.
@@ -1146,10 +1140,8 @@ Encoding::
 ....
 
 Description::
-`Kd` is the destination CR into which the SCC is imported, as an immediate (5-bit).
-Alternatively, the number of the CR into which to import the SCC is stored in
-the GPR `Xd` as a number from 0 to 31. `Xn` is the GPR containing the base address
-of the buffer with the source SCC. +
+`Kd` or `K[Xd]` denotes the CR into which the SCC is to be imported. +
+`Xn` is the GPR containing the base address of the buffer with the source SCC. +
 The bit S takes the values 0 (false) or 1 (true).
 It is set to true if the key is in a system defined format
 (`ace.import.S`)
@@ -1257,8 +1249,7 @@ The instruction is encoded using the Form D' `ace.exec` encoding, and is thus an
 Bit `r` (i.e., bit 27) is 0 if the CR is encoded as an immediate, and 1 if the CR's number is given in a GPR.
 
 Description::
-Returns the size of the SCC corresponding to the source CR,
-and zero if the algorithm is not supported.
+Returns the size of the SCC corresponding to the source CR `Ks` or `K[Xs]`.
 
 NOTE: The value can significantly differ from the internal resource usage to store the CC's data in a CR —
 it can be larger (for simple primitives, because of the nonce/SIV overhead) but
@@ -1330,8 +1321,7 @@ Bits [27:26], i.e., field `R`, take the following values depending on how the CR
 // Comment to ensure the proper indentation in the next Description
 
 Description::
-Clones source CR `Ks` (or the CR indexed by `Xs`) into destination CR `Kd` (or
-into the CR indexed by `Xd`).
+Clones source CR `Ks` (or the CR indexed by `Xs`) into destination CR `Kd` (or into the CR indexed by `Xd`).
 
 // NOTE: The `ace.clone` instruction is an optimization for the sequence `ace.export` followed by `ace.import`. While reusing cryptographic state (e.g., encrypting with the same counter) can enable certain attacks, this risk cannot be eliminated by omitting `ace.clone`, as a state can be exported and re-imported multiple times.
 
@@ -1398,7 +1388,10 @@ Bit `r` (i.e., bit 15) is 0 if the context is encoded as an immediate, and 1 if 
 
 Description::
 `ace.state` and `ace.dir` are two names for the same instruction. +
-`Kn` specifies the CR whose state is to be set. Alternatively, `Xn` is a GPR containing a value from 0 to 31 to dynamically select the target context. The `#immed` operand is a constant from the set of admissible values defined for each algorithm, used to manage the algorithm's internal state machine when additional states are required. `Xs` is a GPR that is either `X0` or contains an optional additional parameter for the state machine. The new state, if allowed, is written into the State_Number field of the metadata, unless the algorithm requires more than 16 states, in which case an ad-hoc field must be defined in the context (for both internal representation and SCCs).
+`Ks` or `K[Xs]` is the CR whose state is to be set. +
+The `#immed` operand is a constant from the set of admissible values defined for each algorithm, used to manage the algorithm's internal state machine when additional states are required. +
+`Xs` is a GPR that is either `X0` or contains an optional additional parameter for the state machine. +
+The new state, if allowed, is written into the State_Number field of the metadata, unless the algorithm requires more than 16 states, in which case an ad-hoc field must be defined in the context (for both internal representation and SCCs).
 
 The state numbers used in this specification are defined in the following table.
 
@@ -1543,8 +1536,7 @@ Encoding::
 Description::
 The ACE Unit may be in an error state due to the previous operation.
 The corresponding error code is written into GPR `Xd`.
-This is implemented as a read from CSR `aceerror`, which may cause the hart to wait if the error code is not yet available
-(cf.{nbsp}<<ACE-CSR-ace-error>>).
+This is implemented as a read from CSR `aceerror`, which may cause the hart to wait if the error code is not yet available (cf.{nbsp}<<ACE-CSR-ace-error>>).
 The error code list is architected and given in <<ACE-error-codes>>.
 
 // ///////////////////////////////////////////////////////////////////////////////////////////
@@ -2646,7 +2638,7 @@ If `VLEN` is larger than `b`, the most significant bits of `Vs` beyond the `b`-t
 [[ACE-hash-functions]]
 ==== Hash and MAC Functions (Including XOF Variants Thereof)
 
-We now define an interface for hash and MAC functions.
+This section defines an interface for hash and MAC functions.
 Because of the vast variety of such functions, we cannot define a completely general interface.
 However, the interface defined here is sufficiently general to allow to describe most commonly used and standardized functions, such as
 the SHA2, SHA3, SHAKE, and BLAKE families, as well HMAC keyed constructions.
@@ -2834,7 +2826,7 @@ Furthermore, it protects the key from other SW environments that may be crossed 
 [[ACE-V-dependency]]
 === Dependency on the V Extension
 
-While ACE can be implemented with the V extension as a requirement, we note that ACE actually depends on a minimal subset of the RISC-V Vector Extension (RVV), which we call RVV-mini, for correct operation.
+While ACE can be implemented with the V extension as a requirement, ACE actually depends on a minimal subset of the RISC-V Vector Extension (RVV), which we call RVV-mini, for correct operation.
 Required features include:
 (((RVV-mini)))
 
