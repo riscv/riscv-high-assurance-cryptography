@@ -67,6 +67,8 @@ Metadata stores the Locality as an index into this table (see <<ACE-Localities>>
 ACE requires a subset of the V extension, including the vector register file (see <<ACE-V-dependency>>).
 [.darkred]#Discussions are still ongoing on what subset will be required, and if a dependency on just the GPRs can be designed as well.#
 
+[comment]
+--
 [[ACE-instructions-overview]]
 ==== Instructions Overview
 
@@ -113,6 +115,7 @@ Returns zero if the algorithm is unsupported.
 | `ace.output`        | `%offset(Xd),Ks\|K[Xs]`          |  Optional. Writes output from the algorithm (for long outputs).
 | `ace.error`         | `Xd`                             |  Writes the ACE unit error code to GPR `Xd`.
 |===
+--
 
 // ///////////////////////////////////////////////////////////////////////////////////////////
 
@@ -129,10 +132,15 @@ CRs reside in a dedicated _CR file_ (CRF), accessible only by the ACE implementa
 CRs differ from conventional register in several ways:
 
 * In place of load and store instructions, CRs can be *initialized* with clear data, but only *exported* using an AEAD algorithm, for later re-**import**.
-** The initialization instruction is a load-type instruction that reads clear text into a CR, but there is no corresponding "store" instruction.
-** Exporting uses a nonce, so repeated export of the same content may result in different ciphertexts.
-** Import may fail if the authentication tag cannot be verified.
+  These actions correspond to the three instructions
+  `ace.init` (<<ACE-instruction-init>>),
+  `ace.export` (<<ACE-instruction-export>>), and
+  `ace.import` (<<ACE-instruction-import>>). In brief:
+** `ace.init` is a load-type instruction that reads clear text into a CR, but there is no corresponding "store" instruction;
+** `ace.export` uses a nonce, so repeated export of the same content may result in different ciphertexts; and
+** `ace.import` may fail if the authentication tag cannot be verified.
 * Unlike conventional registers, which always contain a value, CRs can be _unconfigured_, meaning they may hold no information.
+  This is achieved by using the `ace.clear` instruction (<<ACE-instruction-clear>>).
 * The amount of the capacity of the CRF used by a CR depends on the configured algorithm.
   Two CRs can use different amounts of capacity.
 * ACE instructions can refer to CRs directly, i.e., with a 5-bit immediate in the instruction encoding, but also indirectly, i.e., through a value in the range [0 .. 31] in a GPR.
@@ -163,7 +171,7 @@ The fact that CRs can be addressed indirectly two major implications:
 //==== Cryptographic Contexts
 
 [[ACE-metadata]]
-==== Metadata Section Format
+==== Metadata Format
 
 For software portability and interoperability, ACE defines two external formats for CCs:
 an _Initialization Input_ format, which is loaded into a CR to create a CC,
@@ -185,7 +193,7 @@ The metadata section is used as the header of the data formats used in CR initia
 (bits) .>| Name                  .>| Description
 |   [0:0] |   1  | Format                 | 0 for the current metadata format. +
 Future format will have a 1 in this position and may be longer than 64 bits.
-|   [1:1] |   1  | Incomplete             | Normally 0. The value is 1 if any operation involving the configuration of the CC has been interrupted and may have to be restarted or resumed. If export is interrupted, it only needs `acestart` for resumption.
+|   [1:1] |   1  | Incomplete             | Normally 0. The value is 1 if any operation involving the configuration of the CC has been interrupted and may have to be restarted or resumed. If export is interrupted, it only needs `acestart` (<<ACE-CSR-acestart>>) for resumption.
 |   [5:2] |   4  | Locality               | A field which is either -1 or an index into the Locality Secrets Table.
 |   [7:6] |   2  | Reserved               | Reserved for future use.
 |  [15:8] |   8  | Algorithm              | Algorithm (such as primitive or mode). 0 means the CC is invalid.
@@ -193,7 +201,7 @@ Future format will have a 1 in this position and may be longer than 64 bits.
 | [19:18] |   2  | Direction_Policy       | Determines whether the CC may be used for encryption (bit 12 set), decryption (bit 13 set), or both (bits 12 and 13 set).
 Valid only for encryption/decryption primitives or modes, and ignored, for instance, for hash functions.
 | [21:20] |   2  | Key_Type               | By explicit value / Immutable (index) / Internally generated.
-| [25:22] |   4  | State (also Direction) | Encoding the current state of the state machine of the algorithm as a number.
+| [25:22] |   4  | State_Number (also Direction) | Encoding the current state of the state machine of the algorithm as a number.
 The value must be zero in the initialization data.
 If the algorithm encoded in the CC has at most 16 states
 (including _initial_, _completed_, and _invalidated_, cf. <<ACE-state-constants>>), then this number is stored in this field,
@@ -205,7 +213,7 @@ Disallow the _usage_ of this CC in User, (Virtual) Supervisor, Hypervisor, or M-
 | [63:48] |  16  | UC_Policy_4            | Zero if bit 31 unset, else `VMID` to enforce.
 |===
 
-The information in the "incomplete" field is necessary to make sure that any cryptographic operation attempted on a CR containing an incomplete CC results in an error or is trapped. Note also that there is a second metadata format for _incomplete_ CRs, which is used when the CR is not fully initialized or imported, cf.{nbsp}<<ACE-format-configuration>>.
+The information in the "Incomplete" field is necessary to make sure that any cryptographic operation attempted on a CR containing an _incomplete_ CC results in an error or is trapped. Note also that there is a second metadata format for incomplete CRs, which is used when the CR is not fully initialized or imported, cf.{nbsp}<<ACE-format-configuration>>.
 (((Cryptographic Register,incomplete)))
 
 Algorithms are encoded in an 8-bit field.
@@ -332,7 +340,7 @@ See <<ACE-algorithms>> for algorithm-specific details on the format of the plain
 [[ACE-CSR]]
 ==== CSRs
 
-ACE extends `*status` and `misa`. and adds 20 new CSRs (of which 16 are optional and M-mode exclusive) to manage its execution environment.
+ACE extends `*status` and `misa`, and adds 20 new CSRs (of which 16 are optional and M-mode exclusive) to manage its execution environment.
 // It also requires a subset of the V extension CSRs (see <<ACE-V-dependency>>).
 
 .New ACE CSRs
@@ -506,6 +514,8 @@ Initial
 
 ===== New CSRs
 
+We define here the 20 new CSRs introduced by ACE.
+
 ====== `aceccstatus`
 
 The CSR `aceccstatus` tracks the configuration and dirtiness of CRs on a per-CR basis, so that privileged context switching code needs to save only the dirty CRs, and restore only the configured ones, unless the latter are lazy-loaded:
@@ -629,7 +639,7 @@ If executing an `ace.init`, `ace.import`, `ace.export`, `ace.input`, or `ace.out
 trap, as specified in the privileged architecture, `aceerror` remains unchanged.
 
 
-[[ACE-acestart-definition]]
+[[ACE-CSR-acestart]]
 ====== `acestart`
 
 `acestart` is an XLEN-bit RW CSR, similar to `vstart`, tracking progress of long-running interruptible instructions `ace.init`, `ace.import`, `ace.export`, `ace.input`, and `ace.output`.
@@ -1003,17 +1013,17 @@ The list of other architected algorithms is subject to change, but it includes a
 [[ACE-instructions-detailed]]
 === Instructions
 
-This section specifies the semantics and encodings of the ACE instructions.
+ACE provides a number of unprivileged instructions, some implemented as CSR read/write operations.
+This section specifies the semantics and encodings of these instructions.
+
+The notation `K[Xd]`, for a GPR `Xd`, refers to the CR whose number is contained in `Xd`,
+and `Kn|K[Xn]` means that there are two different encodings for when the CR number is passed as an immediate (`Kn`) or in `Xn`.
+When a GPR is used to index a CR, use of the zero register `X0` is reserved and results in an illegal instruction exception.
 
 NOTE: The encodings presented here are just examples, and may not be final.
 They serve as a starting point for discussion and refinement as
 well as a proof that, at the time of this writing, the ACE instruction set
 can be encoded.
-
-NOTE: ACE is an ideal candidate for the Composable Custom Extensions framework,
-even though our aim is to make it into a ratified extension.
-
-When a GPR is used to index a CR, use of the zero register `X0` is reserved and results in an illegal instruction exception.
 
 [.darkred]#TBD: Add to each instruction whether it may be usage-controlled or not.#
 
@@ -1165,7 +1175,7 @@ Exports the CRs `Ks` or `K[Xs]` to memory at address `Xd`, using the procedure d
 If the context `Ks` is clear, or `Xs` is out of range,
 the operation will report error ace_err_invalid.
 
-The instruction must follow the interruptibility rules defined in <<ACE-acestart-definition>>.
+The instruction must follow the interruptibility rules defined in <<ACE-CSR-acestart>>.
 Similarly to entire-vector-register store instructions, `ace.export` appears to other harts as sequences of individual stores.
 
 The initial cryptographic phase of `ace.export`, as well as the authentication phase of `ace.import`, must be uninterruptible.
@@ -1205,7 +1215,7 @@ It is set to true if the key is in a system defined format
 and not the format defined by the present architecture
 (`ace.import`).
 
-The instruction must follow the interruptibility rules defined in <<ACE-acestart-definition>>.
+The instruction must follow the interruptibility rules defined in <<ACE-CSR-acestart>>.
 Similarly to entire-vector-register load instructions, `ace.import` appears to other harts as sequences of individual loads.
 
 NOTE: The operation can be conceptually split into two phases.
@@ -1448,7 +1458,7 @@ Bit `r` (i.e., bit 15) is 0 if the context is encoded as an immediate, and 1 if 
 
 Description::
 `ace.state` and `ace.dir` are two names for the same instruction. +
-`Kn` specifies the CR whose state is to be set. Alternatively, `Xn` is a GPR containing a value from 0 to 31 to dynamically select the target context. The `#immed` operand is a constant from the set of admissible values defined for each algorithm, used to manage the algorithm's internal state machine when additional states are required. `Xs` is a GPR that is either `X0` or contains an optional additional parameter for the state machine.
+`Kn` specifies the CR whose state is to be set. Alternatively, `Xn` is a GPR containing a value from 0 to 31 to dynamically select the target context. The `#immed` operand is a constant from the set of admissible values defined for each algorithm, used to manage the algorithm's internal state machine when additional states are required. `Xs` is a GPR that is either `X0` or contains an optional additional parameter for the state machine. The new state, if allowed, is written into the State_Number field of the metadata, unless the algorithm requires more than 16 states, in which case an ad-hoc field must be defined in the context (for both internal representation and SCCs).
 
 The state numbers used in this specification are defined in the following table.
 
