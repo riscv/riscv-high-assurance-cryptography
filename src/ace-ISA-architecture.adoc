@@ -205,7 +205,8 @@ Disallow the _usage_ of this CC in User, (Virtual) Supervisor, Hypervisor, or M-
 | [63:48] |  16  | UC_Policy_4            | Zero if bit 31 unset, else `VMID` to enforce.
 |===
 
-Note that there is a second metadata format for _incomplete_ CRs, which is used when the CR is not fully initialized or imported, cf.{nbsp}<<ACE-format-initialization>>.
+The information in the "incomplete" field is necessary to make sure that any cryptographic operation attempted on a CR containing an incomplete CC results in an error or is trapped. Note also that there is a second metadata format for _incomplete_ CRs, which is used when the CR is not fully initialized or imported, cf.{nbsp}<<ACE-format-initialization>>.
+(((Cryptographic Register,incomplete)))
 
 Algorithms are encoded in an 8-bit field.
 Algorithm numbers 0-191 are architecture-defined and the list of such encodings is maintained by RVI.
@@ -237,23 +238,6 @@ In such a case, the value of the SC_Protection field must be set to 3.
 |   3   | Invalid.
 |===
 
-// [[ACE-CR-complete]]
-// .Encoding of Completion field
-// [float="center",align="center",width="58%",cols="^8%,<50%",options="header"]
-// |===
-// | Value | Description
-// |   0   | No `ace.init`, `ace.input`, `ace.output`, `ace.import` or `ace.export` operation currently incomplete.
-// |   1   | `ace.init`, `ace.input`, or `ace.output` was interrupted.
-// |   2   | `ace.import` was interrupted.
-// |   3   | `ace.export` was interrupted.
-// | Value | Description
-// |   0   | No instruction operating on this CR was interrupted.
-// |   1   | An  instruction operating on this CR was interrupted.
-// |   2   | `ace.import` was interrupted.
-// |   3   | `ace.export` was interrupted.
-// |===
-
-NOTE: The information in the "incomplete" field is necessary to make sure that any cryptographic operation attempted on a CR containing an incomplete CC results in an error or is trapped.
 
 // is in principle known to the system software/firmware stack, we duplicate it into the metadata to ensure that it remains accessible after nested interrupts, i.e., after switching partially configured/imported or exported CCs in or out. While authentication also guarantees the integrity of the SCCs and of their import, this is both a robustness measure and serves to simplify system stacks.[.darkred]#Do we really need it?#
 
@@ -344,7 +328,6 @@ Format of SCC:::
 Only the serialization of the content is encrypted, while both metadata and content are included in the computation of the authentication tag, as described next.
 
 See <<ACE-algorithms>> for algorithm-specific details on the format of the plaintext of the content of the SCC.
-
 
 [[ACE-CSR]]
 ==== CSRs
@@ -672,7 +655,7 @@ _A single `acestart` value suffices due to the way the init/import/export instru
 This design obviates the need to separate data transfer from cryptographic processing during import and export operations. A separate transfer phase would require buffering the entire input within the ACE unit before processing, increasing internal resource requirements, whereas the current architecture can process data inline and is loaded with minimal overhead.
 ====
 
-The exact semantics of `acestart` are defined in <<ACE-init-export-import>> and [.red]#TBD#.
+The semantics and use of `acestart` are described in <<ACE-init-export-import>> and [.red]#TBD#.
 
 [[ACE-CSR-macercsk]]
 ====== `macercsk`
@@ -719,6 +702,7 @@ NOTE: The software in each World/Supervisor Domain is normally responsible to ge
 
 
 [[ACE-init-export-import]]
+[[ACE-format-initialization]]
 === Semantics of Initialization, Export and Import of Cryptographic Contexts
 
 [[ACE-init]]
@@ -759,9 +743,7 @@ UNINTERRUPTIBLE_BLOCK_START
 UNINTERRUPTIBLE_BLOCK_END
 ----
 
-
-
-==== Authenticated Encryption of Sealed Cryptographic Contexts
+==== Authenticated Encryption for Sealed Cryptographic Contexts
 
 We first define the RFC8452 Key Derivation and the DCSK Derivation functions.
 
@@ -854,8 +836,8 @@ foreach(i from 0 to num_blocks - 1) {
 }
 ----
 
-NOTE: It can happen that we export an incomplete CR, for instance, M-mode or HS-mode code is saving a CR that was only partially configured in U-mode when the U-mode process was interrupted. In this case, the "incomplete" field shall reflect this, and the CR is exported as usual, with all the empty fields or not-yet complete parts of these fields filled with arbitrary data (implementations may choose to fill them with zeros). If the incomplete SCC is later imported, upon resuming these fields or parts thereof will be overwritten.  Whenever the export of a CR, configuration of a CR, or the import of a SCC into a CR, is interrupted, it is the responsibility of the interrupt handler to save the value of `acestart` and then restore it for that CR. This allows for multiple interruptions.
-[.red]#TBD: we need to make sure that doubly interrupted operations will be handled correctly, for instance, by not not configuring as complete a CR that is actually incomplete. This can probably be done by taking into account the values of `acestart` if set up correctly. We need to make sure also that we cannot create a random or zero key, at least not more easily than what more privileged levels can do already.#
+NOTE: It can happen that we export an incomplete CR, for instance, M-mode or HS-mode code is saving a CR that was only partially configured in U-mode when the U-mode process was interrupted. How this is handled in SCCs upon export and import (operation which could be interrupted as well) is <<ACE-incomplete-contexts>>.
+(((Cryptographic Register,incomplete)))
 
 [[ACE-import]]
 .Importing a SCC into a CR Using AES-GCM-SIV (RFC8452)
@@ -927,17 +909,17 @@ UNINTERRUPTIBLE_BLOCK_START
 UNINTERRUPTIBLE_BLOCK_END
 ----
 
-
 //
 
-[[ACE-format-initialization]]
-==== Metadata Header Format for Incomplete CRs
+[[ACE-incomplete-contexts]]
+==== Incomplete Cryptographic Contests
 
 An initialization or the import operation may be interrupted by context switching code, i.e., not returning to the original control flow immediately after the handler is done. In this case the intermediate state of the CR must be saved and then restored in a way that allows for resumption of the operation (by setting also the value of `acestart`).
+(((Cryptographic Register,incomplete)))
 Then exporting the incomplete CR, the following metadata header format is used as the first 8 bytes of the SCC to store information about the incomplete CR.
 After this header block, the SCC contains the nonce and SIV following <<ACE-format-SCC>>, and then the content section.
 
-The Incomplete CR Metadata Header must distinguish between incomplete CRs following interrupted
+The Incomplete CR Metadata Header (ICREM) must distinguish between incomplete CRs following interrupted
 initialization and import operations, and in the second case also the content section must be modified accordingly.
 In particular, for the interrupted import case, we need to save the current partial tag value that will have to be verified at the end,
 but the original metadata block, nonce and SIV can be recovered from the original SCC.
