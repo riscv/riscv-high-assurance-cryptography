@@ -1,19 +1,24 @@
 [[ACE-architecture]]
 == Architecture
 
+ACE is a complex architecture and relies on certain fundamental concepts, which we first introduce together in a short section.
+While this leads to some repetitions, we believe that it also brings better clarity to the presentation of the architecture.
+
+// the clarity gained from this approach outweighs the potential drawbacks.
+
 [[ACE-concepts]]
 === Fundamental Concepts
 
-Cryptographic Context:::
+Cryptographic Contexts:::
+The _Cryptographic Context_ (CC) is the fundamental concept in ACE.
 (((Cryptographic Context)))
-(((Cryptographic context, content)))
-(((Cryptographic context, metadata)))
-The _Cryptographic Context_ (CC) is the fundamental abstraction in ACE.
 All cryptographic operations performed by ACE execute within the constraints defined by a CC.
 A CC is an indivisible data structure comprising a *metadata* section and a *content* section.
-The metadata specifies the cryptographic algorithm that is used in conjunction with the CC and optional usage-control policies.
-The content holds sensitive material such as keys, secrets, and internal algorithm state.
-The metadata has a fixed architectural format, while the content format is algorithm-dependent
+The metadata specifies the cryptographic algorithm associated to the CC and optional usage-control policies.
+(((Cryptographic context, metadata)))
+The content holds sensitive material such as secrets and internal algorithm state.
+(((Cryptographic context, content)))
+The metadata has a fixed architectural format, while the content format is algorithm-dependent.
 Metadata requires integrity but not confidentiality; content requires both confidentiality and integrity.
 These properties are enforced architecturally by ACE.
 
@@ -21,7 +26,7 @@ Cryptographic Register:::
 (((Cryptographic Register)))
 Cryptographic Contexts are realized architecturally using _Cryptographic Registers_ (CRs).
 CRs are architectural, i.e., per-hart, containers that safeguard CCs.
-A CR is _configured_ by writing metadata and content into it, which are thusly bound to form a CC.
+A CR is _initialized_ by writing metadata and content into it, which are thusly bound to form a CC.
 A CC can be used for cryptographic operations only while resident in a CR.
 Only the ACE unit may access or modify CC contents, in accordance with the architecture and the programmed algorithm.
 CC content cannot be extracted in a manner that compromises its confidentiality.
@@ -57,7 +62,6 @@ Metadata stores the Locality as an index into this table (see <<ACE-Localities>>
 
 // ///////////////////////////////////////////////////////////////////////////////////////////
 
-<<<
 
 === Programmer-Visible Architectural State
 
@@ -113,50 +117,66 @@ Returns zero if the algorithm is unsupported.
 
 // ///////////////////////////////////////////////////////////////////////////////////////////
 
+[[ACE-cryptographic-registers]]
 ==== Cryptographic Registers
 
-ACE defines 32 Cryptographic Registers (CRs) for CC storage, rather than a traditional register file.
+ACE defines 32 Cryptographic Registers (CRs).
 Each CR is identified by a number from 0 to 31, and written in assembly as `K0`, `K1`, ... , `K31`.
 (((Cryptographic Context)))
 
 CRs reside in a dedicated _CR file_ (CRF), accessible only by the ACE implementation.
-Each CR uses a variable amount of the capacity of the CRF, depending on the configured algorithm.
 (((Cryptographic Register File)))
 
+CRs differ from conventional register in several ways:
+
+* In place of load and store instructions, CRs can be *initialized* with clear data, but only *exported* using an AEAD algorithm, for later re*import*.
+** The initialization instruction is a load-type instruction that reads clear text into a CR, but there is no corresponding "store" instruction.
+** Exporting uses a nonce, so repeated export of the same content may result in different ciphertexts.
+** Import may fail if the authentication tag cannot be verified.
+* Unlike conventional registers, which always contain a value, CRs can be _unconfigured_, meaning they may hold no information.
+* The amount of the capacity of the CRF used by a CR depends on the configured algorithm.
+  Two CRs can use different amounts of capacity.
+* ACE instructions can refer to CRs directly, i.e., with a 5-bit immediate in the instruction encoding, but also indirectly, i.e., through a value in the range [0 .. 31] in a GPR.
+
 ACE returns _ace_err_memory_ if insufficient memory prevents successful execution of any instruction that can configure a CR.
-// (`ace.init`, `ace.import`, `ace.clone`, or `ace.derive`-the names should be self-explicative,
-// and the authoritative definitions are given in <<ACE-instructions-detailed>>).
-If this happens, software needs to free memory by choosing another CR and clearing it.
+If this happens, software needs to free memory by choosing another CR, possibly exporting it if necessary, and then clearing it.
 
-[.red]#Move this somewhere else?#
-CRF capacity is implementation-defined, but implementations must provide sufficient CRF memory to prevent infinite
-exporting/importing
+[NOTE]
+====
+CRF capacity is implementation-defined, but implementations must provide sufficient CRF memory to allow all operations
+allowed by the architecture to be performed.
+For instance, the CRF must hold at least an instance of the largest possible CR or the largest CR pair for CR cloning or the derivation of a new CC from an existing one.
+====
+
+//Exporting/importing loops.
 //`ace.export`/ `ace.import`
-loops,
-and the CRF must hold at least an instance of the largest possible CC or the largest CC pair for CR cloning or derivation (i.e., the derivation of a new CC from an existing one, e.g., a key derivation function).
 
+[NOTE]
+====
 The fact that CRs can be addressed indirectly two major implications:
 
 . Adding renaming to CRs would add significant complexity to the microarchitecture.
   However CRs are much less often redefined than, say, integer or floating-point registers, except for internal implied changes, and therefore we can assume that CRs are not renamed without performance issues.
 . An additional bit in the instruction encoding determines whether a CR number is given by a 5-bit immediate or by the value in a GPR.
+====
 
-[[ACE-cryptographic-contexts]]
-==== Cryptographic Contexts
-
-For software portability and interoperability, ACE defines two external formats for cryptographic contexts:
-a _Configuration Input_ format, which is loaded by into a CR to create a CC,
-and an encrypted, authenticated format used when exporting a CR to memory for later re-import:
-the Sealed Cryptographic Context (SCC).
-
-//All formats are little-endian.
+// ///////////////////////////////////////////////////////////////////////////////////////////
+//==== Cryptographic Contexts
 
 [[ACE-metadata]]
-===== Metadata Section Format
+==== Metadata Section Format
+
+For software portability and interoperability, ACE defines two external formats for CCs:
+an _Initialization Input_ format, which is loaded into a CR to create a CC,
+and an encrypted, authenticated format used when exporting a CR to memory for later re-import:
+the Sealed Cryptographic Context (SCC) (cf. <<ACE-format-SCC>>).
+Both formats rely on the same metadata section format, which is described here.
+The formats of the Initialization Input and of the SCC are described in <<ACE-format-initialization>> and <<ACE-format-SCC>>, respectively.
+
 
 The metadata section is 64 bits long and its format is described in <<ACE-metadata-standard>>.
 The metadata section is used as the header of the data formats used in CR initialization, and CC export and import functions.
-The internal representation of the metadata in a CR is implementation specific.
+// The internal representation of the metadata in a CC  is implementation specific.
 (((Cryptographic Context,metadata,format)))
 
 [[ACE-metadata-standard]]
@@ -214,8 +234,8 @@ In such a case, the value of the SC_Protection field must be set to 3.
 |===
 | Value | Description
 |   0   | Explicit value.
-|   1   | Internal table. System specific. For each algorithm as specified in <<ACE-algorithms>>, the part of the content that normally contains the key(s) is replaced by a 64-bit value which is an index into an internal System Keys Table (SKT)-for both Configuration Input and the SCCs. The actual value of the key is never included in exported content. For threshold implementations, ACE may copy the key material from the SKT into the CR and expand it into multiple shares.
-|   2   | Internally generated key. System specific.  In the Configuration Input, the part of the content that normally contains the key(s) is replaced by a "recipe" in a system-specific format. The format is not specified by the ISA and may not be portable to other systems. Once the key material has been internally generated, the value is included in the SCC as part of the content - not the "recipe" - as for any other key(s) for the same specified algorithm.  The Key_Type field of the metadata in all representations of the CC, will keep the value 2.
+|   1   | Internal table. System specific. For each algorithm as specified in <<ACE-algorithms>>, the part of the content that normally contains the key(s) is replaced by a 64-bit value which is an index into an internal System Keys Table (SKT)-for both Initialization Input and the SCCs. The actual value of the key is never included in exported content. For threshold implementations, ACE may copy the key material from the SKT into the CR and expand it into multiple shares.
+|   2   | Internally generated key. System specific.  In the Initialization Input, the part of the content that normally contains the key(s) is replaced by a "recipe" in a system-specific format. The format is not specified by the ISA and may not be portable to other systems. Once the key material has been internally generated, the value is included in the SCC as part of the content - not the "recipe" - as for any other key(s) for the same specified algorithm.  The Key_Type field of the metadata in all representations of the CC, will keep the value 2.
 |   3   | Invalid.
 |===
 
@@ -297,19 +317,19 @@ A device-specific SKT entry may correspond to a different key on another device.
 Using the latter may lead to unspecified behavior.
 Implementations of the SKT *must* provide a suitable Locality to the ACE unit during CR configuration, and set usage policies that are at least as strict as the key's own.
 
-[[ACE-format-configuration]]
-===== Configuration Inputs
+[[ACE-format-initialization]]
+==== Cryptographic Contexts and Initialization Inputs
 
-The Configuration Input is used to configure a CR and thus create a Cryptographic Context (CC).
+The Initialization Input is used to initialize a CR and thus create a Cryptographic Context (CC).
 Its size must be a multiple of 8 bytes.
 
-The first 8 bytes of the Configuration Input contain the metadata section as specified in <<ACE-metadata>>.
+The first 8 bytes of the Initialization Input contain the metadata section as specified in <<ACE-metadata>>.
 
 This is followed by the _content_, i.e., the key(s) and possibly other algorithm-specific information, in a format that is algorithm-specific.
-See <<ACE-algorithms>> for algorithm-specific details of the content part of the configuration input.
+See <<ACE-algorithms>> for algorithm-specific details of the content part of the initialization input.
 
-===== Sealed Cryptographic Contexts
 [[ACE-format-SCC]]
+==== Sealed Cryptographic Contexts
 
 The format of the SCCs is used when exporting a CC from a CR and is used also to reimport the CC into a CR.
 It is dependent on the algorithm being used.
@@ -1016,10 +1036,10 @@ Encoding::
 ....
 
 Description::
-`ace.init` configures a CR with metadata and content to create a CC.
-`Kd` is the source CR to be configured, encoded as a 5-bit immediate.
+`ace.init` initializes a CR with metadata and content to create a CC.
+`Kd` is the source CR to be initialized, encoded as a 5-bit immediate.
 `Xd`, alternatively, is a GPR containing a number from 0 to 31 to select the context
-to be configured.
+to be initialized.
 `Xs` points to the region of memory containing the metadata and the key material.
 
 NOTE: `ace.init`, as well as `ace.import`, `ace.export`, `ace.input`, and `ace.output` as described later, perform direct memory accesses.
@@ -1028,7 +1048,7 @@ since `ace.init`, `ace.import` and `ace.input` can be seen as special kinds of l
 `ace.export` and `ace.output` as special store instructions.
 // as ACE is architected to behave like an _attached_ unit, which may have its own interfaces.
 
-NOTE: The operation follows the two-phases processing model defined in <<ACE-format-configuration>>.
+NOTE: The operation follows the two-phases processing model defined in <<ACE-format-initialization>>.
 In the first phase, the metadata block is read, which determines the length of the remaining information.
 Then, in the second phase, the configuration material is read and processed.
 
@@ -1568,9 +1588,9 @@ These include:
 Data Structures:::
 These include:
 
-. *Configuration Input*:
+. *Initialization Input*:
 The data following the metadata block in the initialization input to `ace.init`, such as keys and other required secrets.
-Fields are listed in the order they appear in the configuration input, each with its length in bytes.
+Fields are listed in the order they appear in the initialization input, each with its length in bytes.
 
 . *Internal State*:
 Information that must be maintained in the internal state of a CC.
@@ -1595,7 +1615,7 @@ This includes:
 
 We also add pseudocode to clarify how the algorithms supported by an ACE unit are implemented in software using the ACE ISA.
 
-// NOTE: While we do not specify the exact internal format of a CC in a CR, we observe that it must contain all the data in a Configuration Input or in a SCC (in plaintext), in some order within the CRF. Therefore, we assume that this information can be first copied into the CR as is, and then any aditional information will be reconstructed at the end of the configuration or import operation. This applies also to threshold implementations, where for any information in multiple shares the input can initially be input into the first share.  In the worst case, only 32 bits of additional information may be needed to be able to process incomplete CRs and SCCs.
+// NOTE: While we do not specify the exact internal format of a CC in a CR, we observe that it must contain all the data in a Initialization Input or in a SCC (in plaintext), in some order within the CRF. Therefore, we assume that this information can be first copied into the CR as is, and then any aditional information will be reconstructed at the end of the configuration or import operation. This applies also to threshold implementations, where for any information in multiple shares the input can initially be input into the first share.  In the worst case, only 32 bits of additional information may be needed to be able to process incomplete CRs and SCCs.
 
 The definitions of the algorithms also implicitly define the functions `SERIALIZE()` and `DESERIALIZE()` used in <<ACE-export>> and <<ACE-import>>.
 These functions do not need to be explicitly implemented as functions that convert the internal memory in the CRF into a structured byte array, called
@@ -1663,9 +1683,9 @@ In fact, some threshold implementations may have a different number of shares ev
 
 System keys that are referred to by an index will cause the following changes in all the algorithms described in what follows:
 
-. In the configuration input and in the SCC, the key/main key field will contain the index of the key in the SKT in place of a key value.
+. In the initialization input and in the SCC, the key/main key field will contain the index of the key in the SKT in place of a key value.
 . This field is always a 64-bit value, even if the key itself is larger. This saves space in the SCC and allows for faster export and import operations.
-. For algorithms that require more than one key, such as XEX/XTS, ALL the keys are referred to by a single index, i.e., a single 64-bit value in the configuration input and the SCC.
+. For algorithms that require more than one key, such as XEX/XTS, ALL the keys are referred to by a single index, i.e., a single 64-bit value in the initialization input and the SCC.
 . Accordingly, the SCC generation functions will support System Keys by producing and reading the shorter fields with the indexes in place of the longer fields that would be required when the key values are explicitly provided.
 
 NOTE: Internally, the ACE unit can either directly use the value from the SKT, or copy it to the internal state of the CR.
@@ -1687,7 +1707,7 @@ Parameters:::
 
 Data Structures:::
 
-* *Configuration Input*:
+* *Initialization Input*:
 [lowerroman]
  . `key`: `k/8` bytes, or 8 bytes if a System Key index.
 
@@ -1800,7 +1820,7 @@ Parameters:::
 * If the mode is an "X" mode, it is `b = n = j`.
 
 Data Structures:::
-* *Configuration Input*:
+* *Initialization Input*:
 [lowerroman]
  . `key`: `k/8` bytes, or 8 bytes if a System Key index.
 
@@ -1893,7 +1913,7 @@ Parameters:::
 
 Data Structures:::
 
-* *Configuration Input*:
+* *Initialization Input*:
 [lowerroman]
  . `key1`: `k/8` bytes, or 8 bytes if a System Key index.
  . `key2`: `k/8` bytes  -- omitted if only one key is used or if both keys come from an entry in the SKT.
@@ -2001,7 +2021,7 @@ Parameters:::
 
 Data Structures:::
 
-* *Configuration Input*:
+* *Initialization Input*:
 [lowerroman]
  . `key`: `k/8` bytes, or 8 bytes if a System Key index.
 
@@ -2275,7 +2295,7 @@ Parameters:::
 
 Data Structures:::
 
-* *Configuration Input*:
+* *Initialization Input*:
 [lowerroman]
  . `key`: `k/8` bytes, or 8 bytes if a System Key index.
 
@@ -2537,7 +2557,7 @@ Parameters:::
 
 Data Structures:::
 
-* *Configuration Input*:
+* *Initialization Input*:
 [lowerroman]
  . `key`: `k/8` bytes.
 
@@ -2645,7 +2665,7 @@ Either the block size is an integer multiple of the vector length or the vector 
 
 Data Structures:::
 
-* *Configuration Input*:
+* *Initialization Input*:
 [lowerroman]
  . `key`: `k/8` bytes -- Only if keyed, i.e., a MAC.
 
