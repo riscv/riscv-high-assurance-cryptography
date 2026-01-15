@@ -67,56 +67,6 @@ Metadata stores the Locality as an index into this table (see <<ACE-Localities>>
 ACE requires a subset of the V extension, including the vector register file (see <<ACE-V-dependency>>).
 [.darkred]#Discussions are still ongoing on what subset will be required, and if a dependency on just the GPRs can be designed as well.#
 
-[comment]
---
-[[ACE-instructions-overview]]
-==== Instructions Overview
-
-ACE provides a number of unprivileged instructions, some implemented as CSR read/write operations.
-The notation `K[Xd]`, for a GPR `Xd`, refers to the CR whose number is contained in `Xd`,
-and `Kn|K[Xn]` means that there are two different encodings for when the CR number is passed as an immediate (`Kn`) or in `Xn`.
-
-.The ACE instructions
-[width="100%",cols="17%,25%,58%",options="header",subs="+macros"]
-|===
-| Instruction         | Operands                         |  Description
-| `ace.enable` +
-`ace.disable`         |                                  |  Enables/Disables ACE.
-| `ace.reset`         |                                  |  Resets ACE.
-| `ace.init`          | `Kd\|K[Xd],%offset(Xs)`          |  Sets a CR's metadata and content.
-| `ace.clear`         | `Kd\|K[Xd]`                      |  Clears a CR and marks it as no longer in use and clean.
-| `ace.export`        | `%offset(Xn),Ks\|K[Xs]`          |  Securely exports the content of a CR to memory.
-| `ace.import{.S}`    | `Kd\|K[Xd],%offset(Xn)`          |  Authenticates and imports an SCC from memory. +
- `ace.import.S` provides optional support for system-defined formats.
-| `ace.exec`
-| A. {nbsp}{nbsp} `Vd,Kn\|K[Xn],Vs` +
-  B. {nbsp}{nbsp} `{nbsp}{nbsp}{nbsp}Kn\|K[Xn],Vs` +
-  C. {nbsp}{nbsp} `Vd,Kn\|K[Xn]` +
-  D. {nbsp}{nbsp} `{nbsp}{nbsp}{nbsp}Kn\|K[Xn]`
-| Performs a cryptographic operation. These instructions may modify CC state. This instruction admits four _Forms_, depending on whether it accepts an input or not, and whether it produces an output or not.
-| `ace.size`
-| `Xd,Ks\|K[Xs]` +
-`Xd,Xs` .2+|  Returns the SCC size in bytes for CR `Ks`/`K[Xs]` or for an algorithm with metadata `Xs`.
-Returns zero if the algorithm is unsupported.
-`ace.available` is an alias for `ace.size`.
-| `ace.available`     | `Xd,Xs`
-| `ace.clone`         | `Kd\|K[Xd],Ks\|K[Xs]`            |  Clones a source CR to a destination CR.
-| `ace.derive`        | `Kd\|K[Xd],Ks\|K[Xs]` +
-`Kd\|K[Xd],Ks\|K[Xs],Vs2` +
-|  Optional. Configures destination CR using source CR (e.g., the source CR could hold a KEM, and derive symmetric keys).
-| `ace.state` +
-`(ace.dir)`
-| `Kd\|K[Xd],#immed` +
-`Kd\|K[Xd],#immed,Xs` |  Modifies algorithm state (e.g., phase transitions). `ace.dir` is an alias for `ace.state`.
-| `ace.restrict` +
-  `(ace.harden)`      | `Kd\|K[Xd],Xs`                   |  Narrows Usage Policies and enables/increases side-channel protection.
-   Weakening Usage Policies and SCA protection is not permitted. `ace.harden` is an alias for `ace.restrict`.
-| `ace.input`         | `Kd\|K[Xd],%offset(Xs)`          |  Optional. Provides input to the algorithm (for long inputs).
-| `ace.output`        | `%offset(Xd),Ks\|K[Xs]`          |  Optional. Writes output from the algorithm (for long outputs).
-| `ace.error`         | `Xd`                             |  Writes the ACE unit error code to GPR `Xd`.
-|===
---
-
 // ///////////////////////////////////////////////////////////////////////////////////////////
 
 [[ACE-cryptographic-registers]]
@@ -636,7 +586,6 @@ Code        .>|Description
 If executing an `ace.init`, `ace.import`, `ace.export`, `ace.input`, or `ace.output` triggers a
 trap, as specified in the privileged architecture, `aceerror` remains unchanged.
 
-
 [[ACE-CSR-acestart]]
 ====== `acestart`
 
@@ -707,7 +656,6 @@ In the metadata section, `ASID` and `VMID` are always zero padded to the maximal
 //[.darkred]#Verification needed: Ensure we can use ASID/VMID to restrict usage even if not used in address translation.#
 
 NOTE: The software in each World/Supervisor Domain is normally responsible to generate or obtain their own keys, and if a process (applet) in one World/Supervisor Domain is responsible to provide keys to other Worlds/Supervisor Domains, it is the responsibility of the M-mode formware to perform an appropriate `ace.import`/RCSK switch/`ace.export` sequence.
-
 
 [[ACE-format-configuration]]
 === Semantics of Initialization, Export and Import of Cryptographic Contexts
@@ -1074,11 +1022,7 @@ The instruction will trap in the following cases: [.red]#TBD#.
 --
 +
 
-
-
 // [.darkred]#Proposal: With the immediate `0xa11` (all), all CRs will be cleared, as if `ace.clear` had been called on each of them, but the feature is not disabled.
-
-
 
 See
 //<<ACE-CSR-enable>> and
@@ -1179,7 +1123,6 @@ Similarly to entire-vector-register store instructions, `ace.export` appears to 
 The initial cryptographic phase of `ace.export`, as well as the authentication phase of `ace.import`, must be uninterruptible.
 Even if these parts are executed concurrently with other operations, an interrupt handler may need to wait for these steps to complete before proceeding with any memory accesses.
 
-
 [[ACE-instruction-import]]
 ==== ace.import
 
@@ -1225,7 +1168,6 @@ NOTE: The instruction encoding includes a single bit to indicate a system-define
 
 NOTE: The `ace.export` instruction does not have an `ace.export.S` analogue of `ace.import.S`.
 This means that system-specific dynamically generated keys can be imported but not exported in the same form: they must be exported in the format architected here for ACE CCs.
-
 
 [[ACE-instruction-exec]]
 ==== ace.exec
@@ -1275,7 +1217,8 @@ with non-zero values in `rd`, resp., `rs2`, to encode additional instructions.
 // To make indent in next line correct
 
 Description::
-Performs a cryptographic operation such as an encryption or decryption, absorbing a value in a hash, and possibly returning a value.
+Performs a cryptographic operation such as an encryption or decryption, absorbing a value in a hash,
+an elliptic curve point addition or scalar multiplication, etc., and possibly returning a value.
 
 NOTE: In many algorithms, the next state is often implied by the preceding operation.
 //For example, in AEAD algorithms, setting an IV or nonce could implicitly transition to the state for absorbing associated data.
@@ -1426,7 +1369,6 @@ The instruction is used to derive a new context from an existing one, with its o
 It is similar to `ace.clone`, but the derived context is not a copy of the source context,
 rather, it is a new context that is derived from it, for instance, through a key derivation mechanism.
 This instruction can be used multiple times, to generate multiple derived contexts.
-
 
 [[ACE-instruction-state]]
 ==== ace.state/ace.dir
@@ -1591,7 +1533,6 @@ Encoding::
     { bits:  7, name: 'imm[11:5]' },
 ]}
 ....
-
 
 [[ACE-instruction-error]]
 ==== ace.error
@@ -1868,7 +1809,6 @@ Output Feedback (OFB)
 as they can be easily implemented on top of the ECB functionality in software,
 and no intermediate value in these algorithms needs to be kept secret.
 
-
 [[ACE-keystream-modes]]
 ==== CTR/CRFSR/XCTR/XCRFSR Keystream Generation
 
@@ -2075,7 +2015,6 @@ To implement the XTS mode, the ciphertext stealing part is easy to realize using
 (((ACE, algorithm, XTS)))
 
 // N.B. another ace.state K0, #const_set_public_value would reset the internal state and allow to begin another decryption with a new IV.
-
 
 [[ACE-GCM-mode]]
 ==== GCM Mode
@@ -2338,8 +2277,6 @@ ace.exec V2,K0,V5
 tag ← V3 xor V2                                  // Last Horner scheme add
 ----
 
-
-
 [[ACE-GCM-SIV]]
 ==== GCM-SIV mode
 
@@ -2567,8 +2504,6 @@ for i = 0 to len_in_bytes(PT)/16-1  do
     - store V1 at address CT+16*i                // Store a block of ciphertext
 ----
 
-
-
 [[ACE-pseudocode-GCM-SIV-decryption]]
 .GCM-SIV Decryption
 ----
@@ -2609,8 +2544,6 @@ ace.exec K0,V0
 ace.error X1
 if (X1 != 0) then { handle error }               // do not use the plaintext if error occurred
 ----
-
-
 
 [[ACE-CMAC]]
 ==== CMAC Functions
@@ -2706,13 +2639,9 @@ If `VLEN` is a multiple of `b`, then the above operations are applied to each `b
 +
 If `VLEN` is larger than `b`, the most significant bits of `Vs` beyond the `b`-th (i.e., the "tail" of the vector) are ignored.
 
-
  ** In any state, issuing any Form of ``ace.exec`` that is not the allowed one will produce a null output and the CR will be *invalidated*.
 
-
 [.darkred]#Fill missing example#
-
-
 
 [[ACE-hash-functions]]
 ==== Hash and MAC Functions (Including XOF Variants Thereof)
