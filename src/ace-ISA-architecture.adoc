@@ -2616,17 +2616,19 @@ if (X1 != 0) then { handle error }               // do not use the plaintext if 
 ==== OCB Mode
 
 We only support the OCB3 variant of OCB as specified in RFC 7253.
+While this algorithm is asymptotically more efficient than GCM and GCM-SIV, it has a much heavier setup and
+its state, both internal and exported requires significantly more memory than the other modes.
 
 ===== Specification
 
 Parameters:::
 +
 --
-* `b` = block size in bits (8|`b`). For this algorithm we require `VLEN` to be an integer multiple of `b`.
-* `k` = key size in bits (8|`k`). If `k` <> `b`, the cipher must support a key size of `b` bits as well.
+* `b` = block size in bits. `b` is a power of two, at least 64. For this algorithm we require `VLEN` to be an integer multiple of `b`.
+* `k` = key size in bits, `b`|`k`.
 --
 +
-Also, define `g` = `ceil(log_2(b))` and `u` = `b - g - 1`.
+Also, define `g` = `log_2(b)`.
 
 Data Structures:::
 
@@ -2636,24 +2638,24 @@ Data Structures:::
 
 * *Internal State*:
  ** `key`: `k/8` bytes.
- ** `N`: `u` bits.
- ** `ktop`, `L`, `offset`, `hash_A`, `hash_P` : `b/8` bytes.
- ** `taglen`, `last_blk_len`: int
+ ** `N`: `u+1` bits (at most `u` bits are all used).
+ ** `L`, `offset`, `hash_A`, `hash_P` : `b/8` bytes.
+ ** `Nlen`,`taglen`, `last_blk_len`: int
 
 * *Serialized Content*:
 [lowerroman]
  . `key`: `k/8` bytes, or 8 bytes if a System Key index.
- . `N`: `b/8` bytes, but only `u` bits defined. The top `b-u` bits are set to zero.
+ . `N`: `b/8` bytes, but only `u+1` bits defined.
  . `L`: `b/8` bytes.
  . `offset`: `b/8` bytes.
  . `hash_A`: `b/8` bytes.
  . `hash_P`: `b/8` bytes.
- . `taglen`: 4 bytes
- . `last_blk_len`: 4 bytes
+ . `taglen`: 2 bytes
+ . `last_blk_len`: 2 bytes
+ . `Nlen` : 2 bytes
+ . padding : 2 bytes
 
-NOTE: `ktop`: is not serialized, and thus it is recomputed upon `ace.import`.
-
-Algorithm-Specific Functions:::
+ Algorithm-Specific Functions:::
 
 * `enc_blk(key,p) -> c` encrypts block `p` using the key, and returns the result `c`.
 * `dec_blk(key,c) -> p` decrypts block `c` using the key, and returns the result `p`.
@@ -2678,26 +2680,29 @@ State Machine:::
 ** In state _initial_ :
   *** Any {nbsp}``ace.exec``{nbsp} operation will produce null outputs and causes the CR to be *invalidated*.
   *** The following initialization operations are performed:
-   . `N <- 0`.
+   . `N <- 1'b1 @ zeros(u)`.
    . `hash_A <- zeros(128)`
    . `hash_P <- zeros(128)`
 
-** In state _set_public_value_, only  ``ace.exec`` instructions of Form B, "```ace.exec Kn|K[Xn],Vs```", is allowed.
-   whereby `N` is set to `Vs`.
-   *** If "```ace.exec Kn|K[Xn],Vs```," is repeated, it will just re-write `N` and repeat the above operations.
-   *** If no such `ace.exec` is issued, `N` remains zero, and the above operations are performed
+ ** To move to _set_public_value_, the `ace.state` operation must use the additional argument, which sets the nonce length `Nlen`.
+
+** In state _set_public_value_, only  ``ace.exec`` instructions of Form B, "```ace.exec Kn|K[Xn],Vs```", is allowed, whereby `N` is set to `Vs`, namely
+     `N <- zeros(u-Nlen) @ Vs[Nlen-1:0]`
+  *** If "```ace.exec Kn|K[Xn],Vs```," is repeated, it will rewrite `N`.
+  *** If no such `ace.exec` is issued, `N` remains zero and will cause an error later.
 
 ** To move to _set_public_value_2_, the `ace.state` operation must have the additional argument, which sets the tag length `taglen`.
    If this argument (interpreted as an unsigned value)is larger than `b` or `0` (the latter occurs also
    if `X0` is passed as the additional argument), an invalid instruction error is raised, and the CR is *invalidated*.
-   The following operation must be a `ace.state` to move to _hash_absorb_
+  *** If `N[u] == 1'b1`, this means that `N` was not set in state _set_public_value_. We do not allow code that skips nonce setting, as this mode is not secure under nonce reuse, therefore in this case invalid instruction error is raised, and the CR is *invalidated*.
+  *** The following operation must be a `ace.state` to move to _hash_absorb_
 
 ** Upon entering state _hash_absorb_,  following operations are performed:
 
   . `offset <- zeros(128)`
-  . `L <- enc_blk(key, zeros(128))   `  // L_* in RFC
-  . `L <- double(L)                  `  // L_$ in RFC
-  . `L <- double(L)                  `  // L_0 in RFC
+  . `L <- enc_blk(key, zeros(128))`
+  . `L <- double(L)`
+  . `L <- double(L)`
 
 ** In state _hash_absorb_, only  ``ace.exec`` instructions of Form B are allowed. +
   "```ace.exec Kn|K[Xn],Vs```" absorbs a data block in `auth_tag`, i.e.:
@@ -2722,7 +2727,7 @@ If `VLEN` > `b`, the above operation is executed `VLEN/b` times.
   * `tmp : bits(b)`
 
 []
-  . `offset <- offset xor enc_blk(key, zeros(128))`  // L_* in RFC
+  . `offset <- offset xor enc_blk(key, zeros(128))`
   . `tmp <- (zeros(b-last_blk_len-1) @ 1b'1 @ Vs[last_blk_len-1:0]) xor offset`
   . `hash_A <- hash_A xor enc_blk(K, tmp)`
 --
@@ -2730,17 +2735,25 @@ If `VLEN` > `b`, the above operation is executed `VLEN/b` times.
 If `last_blk_len` = 0, however, no `ace.exec` can be executed, and only an `ace.state` instruction is allowed to enter state _encrypt_ or _decrypt_.
 
 ** Upon entering states `_encrypt_` or `_decrypt_`, following operation are performed:
++
+--
+ * `Nonce : bits(b)`
+ * `Stretch : bits(3b/2)`
+ * `top : bits(g-1)`
+ * `Kbot : bits(b)`
 
+[]
  . `offset <- zeros(128)`
- . `L <- enc_blk(key, zeros(128))   `  // L_* in RFC
- . `L <- double(L)                  `  // L_$ in RFC
- . `L <- double(L)                  `  // L_0 in RFC
- . `Nonce <- num2str(taglen mod 128,7) || zeros(120-bitlen(N)) || 1 || N` [.red]#correct this#
- . `bottom <- str2num(Nonce[123..128])` [.red]#correct this#
- . `Ktop <- enc_blk(K, Nonce[1..122] || zeros(6))` [.red]#correct this#
- . `Stretch <- Ktop || (Ktop[1..64] xor Ktop[9..72])` [.red]#correct this#
- . `offset <- Stretch[1+bottom..128+bottom]` [.red]#correct this#
-
+ . `L <- enc_blk(key, zeros(128))`
+ . `L <- double(L)`
+ . `L <- double(L)`
+ . `Nonce <- N[Nlen-1:0] @ 1'b1 @ zeros(b-g-1-Nlen) @ numtobits(taglen,g)`
+ . `top <- str2num(Nonce[b-1:b-g+1])`
+ . `Kbot <- enc_blk(K, zeros(g-1) @ Nonce[b-g:0])`
+ . `Stretch <- (Kbot[b/2-1:0] xor Kbot[b/2+7..8]) @ Kbot`
+ . `offset <- Stretch[b+top:top]`
+--
++
 ** In state _encrypt_, only ``ace.exec`` instructions of Form A are allowed. +
    "```ace.exec Vd,Kn|K[Xn],Vs```" absorbs the plaintext `Vs` into the `auth_tag` an encrypts `Vs` into `Vd`, namely:
 +
@@ -2765,12 +2778,12 @@ In this case, following operations are performed:
 
 []
  . `aux <- enc_blk(key, zeros(128))`
- . `offset <- offset xor aux`                   // L_* in RFC
- . `tmp <- enc_blk(K, offset)[last_blk_len-1:0]` // pad
- . `tmp <- Vs[last_blk_len-1:0] xor tmp`         // C_*
+ . `offset <- offset xor aux`
+ . `tmp <- enc_blk(K, offset)[last_blk_len-1:0]`
+ . `tmp <- Vs[last_blk_len-1:0] xor tmp`
  . `Vd <- zeros(b-last_blk_len) @ tmp`
  . `tmp2 <- (zeros(b-last_blk_len-1) @ 1'b1 @ tmp) xor offset`
- . `aux <- double(aux)`                         // L_$
+ . `aux <- double(aux)`
  . `hash_P <- enc_blk(K, hash_P xor tmp2 xor offset xor aux) xor hash_A`
 --
 +
@@ -2781,7 +2794,7 @@ On the other hand, if `last_blk_len` is zero, only an ``ace.exec`` instruction o
 
 []
   . `aux <- enc_blk(key, zeros(128))`
-  . `aux <- double(aux)` // L_$
+  . `aux <- double(aux)`
   . `hash_P <- enc_blk(K, hash_P xor offset xor aux) xor hash_A`
 --
 +
@@ -2816,13 +2829,12 @@ In this case, the same operations as in state _last_block_enc_ are performed exc
 . `tmp2 <- (zeros(b-last_blk_len-1) @ 1'b1 @ Vs[last_blk_len-1:0]) xor offset`
 --
 +
-
 If `last_blk_len` is zero, only an ``ace.exec`` instruction of Form D, "```ace.exec Kn|K[Xn]```," is allowed, which performs the same operations as in state _last_block_enc_.
-
++
 For any value of `last_blk_len`, the state is changed to _hash_verify_.
 
 ** In state _hash_verify_, only an ``ace.exec`` instruction of Form B, i.e., "```ace.exec Kn|K[Xn],Vs```" is allowed.
-    It compares the `taglen` least significant bits of `Vs` with `hash_P`:
+    It compares the `taglen` least significant bits of `Vs` with the `taglen` least significant bits of `hash_P`:
 +
 --
   . If the values match, then the state is changed to _completed_, and `ace.error` returns no error,
