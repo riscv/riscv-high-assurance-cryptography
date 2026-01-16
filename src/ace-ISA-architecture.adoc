@@ -2671,9 +2671,7 @@ If S[`b`-1] = 0, then { `double(S)` = `S << 1` } else { `double(S)` = `(S << 1) 
 
 State Machine:::
 
-* *States:* _initial_, _set_public_value_, _set_public_value_2_, _hash_absorb_,
-_encrypt_, _last_block_enc_, _hash_finalize_enc_,
-_decrypt_, _last_block_dec_, _hash_finalize_dec_,_hash_verify_, and _completed_.
+* *States:* _initial_, _set_public_value_, _set_public_value_2_, _hash_absorb_, _encrypt_, _last_block_enc_, _hash_finalize_enc_, _decrypt_, _last_block_dec_, _hash_finalize_dec_, _hash_verify_, and _completed_.
 
 * *Allowed State Transitions:*
  ** From all states to _initial_.
@@ -2758,7 +2756,7 @@ If `final_blk_len` = 0, however, no `ace.exec` can be executed, and only an `ace
  . `Vd <- offset xor enc_blk(key, Vs xor offset)`
 --
 +
-If `VLEN` is a multiple of `b`, the above are executed `VLEN/b` times, encrypting each `b`-bit block of `Vs` into the corresponding `b`-bit block of `Vd`.
+If `VLEN` is a multiple of `b`, the above operation sequence is executed `VLEN/b` times, encrypting each `b`-bit block of `Vs` into the corresponding `b`-bit block of `Vd`.
 
 ** To move to _last_block_enc_, the `ace.state` operation must have the additional argument, which sets the bit length of the final block of the plaintext in `final_blk_len`.
 
@@ -2766,21 +2764,21 @@ If `VLEN` is a multiple of `b`, the above are executed `VLEN/b` times, encryptin
 In this case, following operations are performed:
 +
 --
-  . `aux <- enc_blk(key, zeros(128)`
-  . `offset <- offset xor aux      ` // L_* in RFC
-  . `tmp <- enc_blk(K, offset)     ` // pad
-  . `tmp <- Vs xor tmp             ` // C_*
-  . `Vd <- tmp[final_blk_len-1:0] || zeros(b-final_blk_len)`
-  . `tmp <- (tmp[final_blk_len-1:0] || 1 || zeros((b-1)-final_blk_len) xor offset`
-  . `aux <- double(aux)            ` // L_$
+  . `aux <- enc_blk(key, zeros(128))`
+  . `offset <- offset xor aux`                                             // L_* in RFC
+  . `tmp : bits(final_blk_len) <- enc_blk(K, offset)[final_blk_len-1:0]` // pad
+  . `tmp <- Vs[final_blk_len-1:0] xor tmp`                                 // C_*
+  . `Vd <- tmp || zeros(b-final_blk_len)`
+  . `tmp2 : bits(b) <- (tmp[final_blk_len-1:0] || 1 || zeros((b-1)-final_blk_len) xor offset`
+  . `aux <- double(aux)`                                                   // L_$
   . `hash_B <- enc_blk(K, hash_B xor offset xor aux) xor hash_A`
 --
 +
 On the other hand, if `final_blk_len` is zero, only an ``ace.exec`` instruction of Form D, "```ace.exec Kn|K[Xn]```," is allowed, which performs:
 +
 --
-  . `aux <- enc_blk(key, zeros(128)`
-  . `aux <- double(aux)            ` // L_$
+  . `aux <- enc_blk(key, zeros(128))`
+  . `aux <- double(aux)`                                                   // L_$
   . `hash_B <- enc_blk(K, hash_B xor offset xor aux) xor hash_A`
 --
 +
@@ -2793,16 +2791,43 @@ only an ``ace.exec`` instruction of Form C, "```ace.exec Vd,Kn|K[Xn]```," is all
     "```ace.exec Vd,Kn|K[Xn],Vs```" decrypts `Vs` into `Vd`, and absorbs the plaintext `Vd` into the `auth_tag`, namely:
 +
 --
-  . [.red]#TBD: encrypt#
-  . `absorb()`.
+  . `L <- double(L)`
+  . `offset <- offset xor L`
+  . `tmp <- offset xor enc_blk(key, Vs xor offset)`
+  . `hash_B <- hash_B xor tmp`
+  . `Vd <- tmp`
 --
 +
 If `VLEN` is a multiple of `b`, the same behavior applies as in state _encrypt_.
 
 ** To move to _last_block_dec_, the `ace.state` operation must have the additional argument, which sets the bit length of the final block of the ciphertext in `final_blk_len`.
 
+** In state _last_block_dec_, only an ``ace.exec`` instruction of Form A "```ace.exec Vd,Kn|K[Xn],Vs```," is allowed if `final_blk_len` is nonzero.
+In this case, following operations are performed:
++
+--
+  . `aux <- enc_blk(key, zeros(128))`
+  . `offset <- offset xor aux`                                             // L_* in RFC
+  . `tmp : bits(final_blk_len) <- enc_blk(K, offset)[final_blk_len-1:0]`   // pad
+  . `tmp <- Vs[final_blk_len-1:0] xor tmp`                                 // C_*
+  . `Vd <- tmp || zeros(b-final_blk_len)`
+  . `tmp2 : bits(b) <- (Vs[final_blk_len-1:0] || 1 || zeros((b-1)-final_blk_len) xor offset`
+  . `aux <- double(aux)`                                                   // L_$
+  . `hash_B <- enc_blk(K, hash_B xor offset xor aux) xor hash_A`
+--
++
+On the other hand, if `final_blk_len` is zero, only an ``ace.exec`` instruction of Form D, "```ace.exec Kn|K[Xn]```," is allowed, which performs:
++
+--
+  . `aux <- enc_blk(key, zeros(128))`
+  . `aux <- double(aux)`                                                   // L_$
+  . `hash_B <- enc_blk(K, hash_B xor offset xor aux) xor hash_A`
+--
+Then the state is changed to _hash_verify_.
++
+
 ** In state _hash_verify_, only an ``ace.exec`` instruction of Form B, i.e., "```ace.exec Kn|K[Xn],Vs```" is allowed.
-    It compares `Vs` with `auth_tag`:
+    It compares `Vs` with `hash_B`:
 +
 --
   . If the values match, then the state is changed to _completed_, and `ace.error` returns no error,
