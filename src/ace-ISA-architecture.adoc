@@ -1650,8 +1650,6 @@ The supporting instructions themselves must be uninterruptible.
 
 // ///////////////////////////////////////////////////////////////////////////////////////////
 
-<<<
-
 [#ACE-algorithms]
 === Algorithm-Specific Data Formats and Instruction Semantics
 
@@ -1708,8 +1706,6 @@ These functions do not need to be explicitly implemented as functions that conve
 `content[]` in the aforementioned pseudocodes, that satisfies the architected definition of the _Serialized Content_ for each algorithm, and viceversa.
 Instead, the output of `SERIALIZE()` and the input of `DESERIALIZE()` can just be an _interpretation_ of the internal memory in the CRF as if it were the SCC plaintext, such that any change in one (except for the absent fields) is reflected in the other, but does not have to be written explicitly in the inernal memory of the CRF.
 
-<<<
-
 [[ACE-generic-rules]]
 ==== Generic Rules
 
@@ -1748,8 +1744,6 @@ The rules from <<ACE-ECB-mode>> to  <<ACE-hash-functions>> can be instantiated, 
 
 // On the other hand, the specifications from <<ACE-hash-functions>> to <<ACE-Ascon>> are in general heavily primitive dependent.
 
-<<<
-
 [[ACE-rules-threshold-implementations]]
 ==== Rules for Threshold implementations
 
@@ -1765,8 +1759,6 @@ This in turn implies that ACE execution unit must have access to a source of ran
 This ensures not only the compactness of a SCC, but also that the key can be ported across architectures.
 In fact, some threshold implementations may have a different number of shares even if they claim the same order of side-channel protection.
 
-<<<
-
 [[ACE-rules-system-keys]]
 ==== Rules for System Keys
 
@@ -1780,8 +1772,6 @@ System keys that are referred to by an index will cause the following changes in
 NOTE: Internally, the ACE unit can either directly use the value from the SKT, or copy it to the internal state of the CR.
 The architecture does not restrict the choice of the implementation.
 On the other hand, keys generated from a system block, using a custom "recipe", are always represented by their values and once generated have the exact same behavior as any other key that does not come from the SKT.
-
-<<<
 
 [[ACE-ECB-mode]]
 ==== Electronic Codebook Modes (Direct Encryption/Decryption)
@@ -1878,8 +1868,6 @@ foreach (i from 0 to len_in_bytes(plaintext)/16-1) { // assume plaintext in whol
 // add plaintext, plaintext, 16          // advance plaintext pointer
 // add ciphertext, ciphertext, 16        // advance ciphertext pointer
 
-<<<
-
 [[ACE-chaining]]
 ==== Chaining/Feedback Modes
 
@@ -1891,8 +1879,6 @@ Cipher Feedback (CFB) and
 Output Feedback (OFB)
 as they can be easily implemented on top of the ECB functionality in software,
 and no intermediate value in these algorithms needs to be kept secret.
-
-<<<
 
 [[ACE-keystream-modes]]
 ==== CTR/LFSR/XCTR/XLFSR Keystream Generation
@@ -1990,8 +1976,6 @@ for i = 0 to len_in_bytes(PT)/16-1 do
     V1 ← V1 xor V0
     - store V1 at address CT+16*i
 ----
-
-<<<
 
 [[ACE-XEX-XTS-modes]]
 ==== XEX/XTS modes (one or two keys)
@@ -2102,8 +2086,6 @@ To implement the XTS mode, the ciphertext stealing part is easy to realize using
 (((ACE, algorithm, XTS)))
 
 // N.B. another ace.state K0, #const_set_public_value would reset the internal state and allow to begin another decryption with a new IV.
-
-<<<
 
 [[ACE-GCM-mode]]
 ==== GCM Mode
@@ -2363,8 +2345,6 @@ V5[32:0] ← 1                                     // Prepare IV || 1 for tag en
 ace.exec V2,K0,V5
 tag ← V3 xor V2                                  // Last Horner scheme add
 ----
-
-<<<
 
 [[ACE-GCM-SIV-mode]]
 ==== GCM-SIV mode
@@ -2635,9 +2615,7 @@ ace.error X1
 if (X1 != 0) then { handle error }               // do not use the plaintext if error occurred
 ----
 
-<<<
-
-[[ACE-OCB]]
+[[ACE-OCB-mode]]
 ==== OCB Mode
 
 We only support the OCB3 variant of OCB as specified in RFC 7253.
@@ -2687,21 +2665,23 @@ Algorithm-Specific Functions:::
 
 * `enc_blk(key,p) -> c` encrypts block `p` using the key, and returns the result `c`.
 * `dec_blk(key,c) -> p` decrypts block `c` using the key, and returns the result `p`.
-*  `double(S)`:
+* `double(S)`:
 Let `C` be  `0x1B` for `b` = 64, `0x87` for `b` = 128, and `0x425` for `b` = 256, then: +
 If S[`b`-1] = 0, then { `double(S)` = `S << 1` } else { `double(S)` = `(S << 1) xor C` } .
 
 State Machine:::
 
-* *States:* _initial_, _set_public_value_, _hash_absorb_, _encrypt_, _hash_finalize_enc_, _decrypt_, _hash_finalize_dec_, and _hash_verify_, _completed_.
+* *States:* _initial_, _set_public_value_, _set_public_value_2_, _hash_absorb_,
+_encrypt_, _last_block_enc_, _hash_finalize_enc_,
+_decrypt_, _last_block_dec_, _hash_finalize_dec_,_hash_verify_, and _completed_.
 
 * *Allowed State Transitions:*
  ** From all states to _initial_.
  ** _initial_ -> _set_public_value_ -> _set_public_value_2_ -> _hash_absorb_ -> _hash_finalize_
  ** _hash_finalize_ -> _encrypt_ -- if metadata allows encryption, else the CR is *invalidated*.
  ** _hash_finalize_ -> _decrypt_ -- if metadata allows decryption, else the CR is *invalidated*.
- ** _encrypt_ -> _hash_finalize_enc_, later automatically transitioning to _completed_.
- ** _decrypt_ -> _hash_finalize_dec_.
+ ** _encrypt_ -> _last_block_enc_ -> _hash_finalize_enc_ -> _hash_output_, later automatically transitioning to _completed_.
+ ** _decrypt_ -> _last_block_enc_ -> _hash_finalize_dec_.
  ** _hash_finalize_dec_ -> _hash_verify_, later automatically transitioning to _completed_.
 
 * *Behavior:*
@@ -2718,16 +2698,16 @@ State Machine:::
    *** If no such `ace.exec` is issued, `N` remains zero, and the above operations are performed
 
 ** To move to _set_public_value_2_, the `ace.state` operation must have the additional argument, which sets the tag length `taglen`.
-    If this argument (interpreted as an unsigned value)is larger than `b` or `0` (the latter occurs also
-    if `X0` is passed as the additional argument), an invalid instruction error is raised, and the CR is *invalidated*.
-    The following operation must be a `ace.state` to move to _hash_absorb_
+   If this argument (interpreted as an unsigned value)is larger than `b` or `0` (the latter occurs also
+   if `X0` is passed as the additional argument), an invalid instruction error is raised, and the CR is *invalidated*.
+   The following operation must be a `ace.state` to move to _hash_absorb_
 
 ** Upon entering state _hash_absorb_,  following operations are performed:
 
   . `offset <- zeros(128)`
-  . `L <- enc_blk(key, zeros(128))`  // L_* in RFC
-  . `L <- double(L)               `  // L_$ in RFC
-  . `L <- double(L)               `  // L_0 in RFC
+  . `L <- enc_blk(key, zeros(128))   `  // L_* in RFC
+  . `L <- double(L)                  `  // L_$ in RFC
+  . `L <- double(L)                  `  // L_0 in RFC
 
 ** In state _hash_absorb_, only  ``ace.exec`` instructions of Form B are allowed. +
   "```ace.exec Kn|K[Xn],Vs```" absorbs a data block in `auth_tag`, i.e.:
@@ -2756,39 +2736,58 @@ If `VLEN` > `b`, the above operation is executed `VLEN/b` times.
 +
 If `final_blk_len` = 0, however, no `ace.exec` can be executed, and only an `ace.state` instruction is allowed to enter state _encrypt_ or _decrypt_.
 
-** Upon entering states _encrypt_ or _decrypt_, following operation are performed:
+** Upon entering states `_encrypt_` or `_decrypt_`, following operation are performed:
 
  . `offset <- zeros(128)`
- . `L <- enc_blk(key, zeros(128))`  // L_* in RFC
- . `L <- double(L)               `  // L_$ in RFC
- . `L <- double(L)               `  // L_0 in RFC
- . `Nonce <- num2str(taglen mod 128,7) || zeros(120-bitlen(N)) || 1 || N`
- . `bottom <- str2num(Nonce[123..128])`
- . `Ktop <- enc_blk(K, Nonce[1..122] || zeros(6))`
- . `Stretch <- Ktop || (Ktop[1..64] xor Ktop[9..72])`
- . `offset <- Stretch[1+bottom..128+bottom]`
+ . `L <- enc_blk(key, zeros(128))   `  // L_* in RFC
+ . `L <- double(L)                  `  // L_$ in RFC
+ . `L <- double(L)                  `  // L_0 in RFC
+ . `Nonce <- num2str(taglen mod 128,7) || zeros(120-bitlen(N)) || 1 || N` [.red]#correct this#
+ . `bottom <- str2num(Nonce[123..128])` [.red]#correct this#
+ . `Ktop <- enc_blk(K, Nonce[1..122] || zeros(6))` [.red]#correct this#
+ . `Stretch <- Ktop || (Ktop[1..64] xor Ktop[9..72])` [.red]#correct this#
+ . `offset <- Stretch[1+bottom..128+bottom]` [.red]#correct this#
 
 ** In state _encrypt_, only ``ace.exec`` instructions of Form A are allowed. +
    "```ace.exec Vd,Kn|K[Xn],Vs```" absorbs the plaintext `Vs` into the `auth_tag` an encrypts `Vs` into `Vd`, namely:
 +
 --
-. `L <- double(L)`
-. `offset <- offset xor L`
-. `hash_B <- hash_B xor Vs`
-. `Vd <- offset xor enc_blk(key, Vs xor offset)`
+ . `L <- double(L)`
+ . `offset <- offset xor L`
+ . `hash_B <- hash_B xor Vs`
+ . `Vd <- offset xor enc_blk(key, Vs xor offset)`
 --
 +
-If `VLEN` is a multiple of `b`, the above are executed `VLEN/b` times, encrypting each `b`-bit block of `Vs` into the corresponding `b`-bit block of `Vd`. There is significant potential for parallelization, including in the `absorb` function. If the number `x` of blocks to encrypt is not a multiple of `VLEN`/`b`, `VL` can be set to the remainder of the division of `x` by `VLEN`/`b` for the last instruction.
+If `VLEN` is a multiple of `b`, the above are executed `VLEN/b` times, encrypting each `b`-bit block of `Vs` into the corresponding `b`-bit block of `Vd`.
 
-** To move to _hash_finalize_enc_, the `ace.state` operation must have the additional argument, which sets the length of the final block of the plaintext in `final_blk_len`.
+** To move to _last_block_enc_, the `ace.state` operation must have the additional argument, which sets the bit length of the final block of the plaintext in `final_blk_len`.
 
-** In state _hash_finalize_enc_, only ``ace.exec`` instructions of Form A are allowed. The value +
- `{nbsp}{nbsp}{nbsp}Vs = IntTo{b/2}Bits(bit_length(AD)) @ IntTo{b/2}Bits(bit_length(plaintext))` +
- must be set by the software, then,
-  "```ace.exec Vd,Kn|K[Xn],Vs```"
-  computes the authentication tag and completes the algorithm as follows: [.red]#TBD#.
+** In state _last_block_enc_, only an ``ace.exec`` instruction of Form A "```ace.exec Vd,Kn|K[Xn],Vs```," is allowed if `final_blk_len` is nonzero.
+In this case, following operations are performed:
 +
-If `VLEN` is larger than `b`, the most significant bits of `Vs` (i.e., the "tail" of the vector) are ignored.
+--
+  . `aux <- enc_blk(key, zeros(128)`
+  . `offset <- offset xor aux      ` // L_* in RFC
+  . `tmp <- enc_blk(K, offset)     ` // pad
+  . `tmp <- Vs xor tmp             ` // C_*
+  . `Vd <- tmp[final_blk_len-1:0] || zeros(b-final_blk_len)`
+  . `tmp <- (tmp[final_blk_len-1:0] || 1 || zeros((b-1)-final_blk_len) xor offset`
+  . `aux <- double(aux)            ` // L_$
+  . `hash_B <- enc_blk(K, hash_B xor offset xor aux) xor hash_A`
+--
++
+On the other hand, if `final_blk_len` is zero, only an ``ace.exec`` instruction of Form D, "```ace.exec Kn|K[Xn]```," is allowed, which performs:
++
+--
+  . `aux <- enc_blk(key, zeros(128)`
+  . `aux <- double(aux)            ` // L_$
+  . `hash_B <- enc_blk(K, hash_B xor offset xor aux) xor hash_A`
+--
++
+In both cases the state then transitions to _hash_finalize_enc_.
+
+** In state _hash_finalize_enc_,
+only an ``ace.exec`` instruction of Form C, "```ace.exec Vd,Kn|K[Xn]```," is allowed, which puts `hash_B[taglen-1:0]` into `Vd`, zero padded.
 
 ** In state _decrypt_, only ``ace.exec`` instructions of Form A are allowed. +
     "```ace.exec Vd,Kn|K[Xn],Vs```" decrypts `Vs` into `Vd`, and absorbs the plaintext `Vd` into the `auth_tag`, namely:
@@ -2800,7 +2799,7 @@ If `VLEN` is larger than `b`, the most significant bits of `Vs` (i.e., the "tail
 +
 If `VLEN` is a multiple of `b`, the same behavior applies as in state _encrypt_.
 
-** To move to _hash_finalize_dec_, the `ace.state` operation must have the additional argument, which sets the length of the final block of the ciphertext in `final_blk_len`.
+** To move to _last_block_dec_, the `ace.state` operation must have the additional argument, which sets the bit length of the final block of the ciphertext in `final_blk_len`.
 
 ** In state _hash_verify_, only an ``ace.exec`` instruction of Form B, i.e., "```ace.exec Kn|K[Xn],Vs```" is allowed.
     It compares `Vs` with `auth_tag`:
@@ -2816,9 +2815,8 @@ If `VLEN` is larger than `b`, only the `b` least significant bits of `Vs` are co
 
 [.red]#TBD#.
 
-<<<
 
-[[ACE-CMAC]]
+[[ACE-CMAC-mode]]
 ==== CMAC Functions
 
 CMAC is an algorithm for message authentication codes constructed from a block cipher.
@@ -2887,7 +2885,7 @@ State Machine:::
 +
 If `VLEN` is a multiple of `b`, then the above operations are applied to each `b`-bit block of `Vs`.
 
- ** Upon issuing `ace.state Kn|K[Xn],#ace_state_last_block, Xs` where `Xs` contains the length of the last block in bits, the following happens:
+ ** Upon issuing `ace.state Kn|K[Xn],#ace_state_last_block, Xs` where `Xs` contains the bit length of the last block in bits, the following happens:
    . if `partial_len` <> 0, then the CR is *invalidated*. (The previous block is not complete.)
    . if `Xs > b` then the CR is *invalidated*.
    . `last_block_len <- Xs`.
@@ -2915,8 +2913,6 @@ If `VLEN` is larger than `b`, the most significant bits of `Vs` beyond the `b`-t
  ** In any state, issuing any Form of ``ace.exec`` that is not the allowed one will produce a null output and the CR will be *invalidated*.
 
 [.darkred]#Fill missing example#
-
-<<<
 
 [[ACE-hash-functions]]
 ==== Hash and MAC Functions (Including XOF Variants Thereof)
@@ -3038,8 +3034,6 @@ The values 9 and 13 are used when there is a partial block.
 
 NOTE: The description of states _hash_absorb_ and _hash_finalize_ should make it clear that allowing `b` and `VLEN` to be in relations other than one being an integer multiple of the other, as well as allowing a change of `VLEN`, would significantly complicate the state machine.
 
-<<<
-
 [[ACE-Ascon]]
 ==== Ascon Specific Rules
 
@@ -3063,8 +3057,6 @@ We now describe the state machines of the various Ascon-based algorithms standar
 [.darkred]#TBD#
 
 // //////////////////////////////////////////////////////////////////////////////////////////
-
-<<<
 
 [[ACE-examples]]
 
