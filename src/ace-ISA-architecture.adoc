@@ -73,21 +73,21 @@ Unpriv:
 * `Zleaes192p` => Support for AES-192 encryption and decryption (all applicable modes)
 * `Zleaes256p` => Support for AES-256 encryption and decryption (all applicable modes)
 * `Zlsm4p` => Support for SM-4 encryption and decryption (all applicable modes)
-* `Zlctrm` => Support for counter mode (individual details depend on the underlying primitive)-the `m` at the end denotes a mode
-* `Zlxctrm` => Support for XCTR mode (individual details depend on the underlying primitive)
-* `Zlgcmm` => Support for GCM mode (individual details depend on the underlying primitive)
-* `Zlgcmsivm` => Support for GCM-SIV mode (individual details depend on the underlying primitive)
-* `Zlxexm` => Support for XEX and XTS modes (individual details depend on the underlying primitive)
-* `Zlocbm` => Support for OCB mode (individual details depend on the underlying primitive)
-* `Zlcmacm` => Support for CMAC (individual details depend on the underlying primitive)
-* `Zlesha2h` => Support for SHA-2 (all modes)-the `h` at the end denotes a hash function
-* `Zlesha3h` => Support for SHA-3 (all modes)
+* `Zlctrm` => Support for counter mode-the `m` at the end denotes a mode
+* `Zlxctrm` => Support for XCTR mode
+* `Zlgcmm` => Support for GCM mode
+* `Zlgcmsivm` => Support for GCM-SIV mode
+* `Zlxexm` => Support for XEX and XTS modes
+* `Zlocbm` => Support for OCB mode
+* `Zlcmacm` => Support for CMAC
+* `Zlesha2h` => Support for SHA-2 (all applicable modes)-the `h` at the end denotes a hash function
+* `Zlesha3h` => Support for SHA-3 (all applicable modes)
 * `Zlsm3h` => Support for SM-3 hash function (all applicable modes)
-* `Zlhmacm` => Support for HMAC (individual details depend on the underlying primitive)
+* `Zlhmacm` => Support for HMAC
 * `Zlascon` => Support for the ASCON suite
 * `Zlkned` => NIST Suite: AES Block Cipher. Depends on `Zleaes128` and `Zleaes256`.
 * `Zlkn` => NIST Algorithm Suite. Depends on `Zlkned` and `Zlesha2`.
-* `Zlace` => Must support for the following CSRs: `aceerror` and `acestart` (this is a dependency for Zicsr); must support the following instructions: `ace.init`, `ace.exec`, `ace.clear`, `ace.export`, `ace.import`, and `ace.size`; `ace.exec` must support `Zleaes128`.
+* `Zlace` => Must support for the following CSRs: `aceerror` and `crstart` (this is a dependency for Zicsr); must support the following instructions: `ace.init`, `ace.exec`, `ace.clear`, `ace.export`, `ace.import`, and `ace.size`; `ace.exec` must support `Zleaes128`.
 
 Priv:
 
@@ -181,10 +181,9 @@ The metadata section is used as the header of the data formats used in CR initia
 (bits) .>| Name                  .>| Description
 |   [0:0] |   1  | Format                 | Value is 0 for the current metadata format. +
 Future format will have a 1 in this position and may be longer than 64 bits.
-|   [1:1] |   1  | Incomplete             | Normally, the value is 0. The value is 1 if any operation involving the configuration of the CC has been interrupted and may have to be restarted or resumed. If export is interrupted, it only needs `acestart` (<<ACE-CSR-acestart>>) for resumption.
+|   [1:1] |   1  | Partial                | Normally, the value is 0. The value is 1 if any operation involving the configuration of the CC has been interrupted and may have to be restarted or resumed. If export is interrupted, it only needs `crstart` (<<ACE-CSR-crstart>>) for resumption.
 |   [5:2] |   4  | Locality               | A field which is either -1 or an index into the Locality Secrets Table.
-|   [7:6] |   2  | Reserved               | Reserved for future use.
-|  [15:8] |   8  | Algorithm              | Algorithm (such as primitive or mode). 0 means the CC is invalid.
+|  [15:6] |  10  | Algorithm              | Algorithm (such as primitive or mode). 0 means the CC is invalid.
 | [17:16] |   2  | SC_Protection          | Level of Side Channel Protection, encoded as per <<ACE-SC-protection-levels>>.
 | [19:18] |   2  | Direction_Policy       | Determines whether the CC may be used for encryption (bit 12 set), decryption (bit 13 set), or both (bits 12 and 13 set).
 Valid only for encryption/decryption primitives or modes, and ignored, for instance, for hash functions.
@@ -196,18 +195,23 @@ If the algorithm encoded in the CC has at most 16 states
 otherwise an algorithm-specific representation is used in the content, and this field only admits the values 0 (initial), 14 (invalidated), 15 (completed) or 1 (any other operational state). The values must conform to <<ACE-state-constants>>.
 | [29:26] |   4  | UC_Policy_1            | "UC Policy" means "Usage Control Policy". +
 Disallow the _usage_ of this CC in User, (Virtual) Supervisor, Hypervisor, or M-mode if bit 26, 27, 28, or 29 is set.
-| [31:30] |   2  | UC_Policy_2            | If bit 30, respectively, 31, is set, then restrict the usage by `ASID`, respectively, `VMID`. Restriction by `ASID` ignored if in S Mode or higher.
+| [31:30] |   2  | UC_Policy_2            | If bit 30, respectively, 31, is set, then restrict the usage by `ASID`, respectively, `VMID`. Restrictions by `ASID` are ignored if in S-mode or higher. Restrictions by `VMID` are ignored if in H- or M-mode.
 | [47:32] |  16  | UC_Policy_3            | Zero if bit 30 unset, else `ASID` to enforce.
 | [63:48] |  16  | UC_Policy_4            | Zero if bit 31 unset, else `VMID` to enforce.
 |===
 
-The information in the "Incomplete" field is necessary to make sure that any cryptographic operation attempted on a CR containing an _incomplete_ CC results in an error or is trapped. Note also that there is a second metadata format for incomplete CRs, which is used when the CR is not fully initialized or imported, cf.{nbsp}<<ACE-format-configuration>>.
+The "Partial" field signals whether any configuration operation on this cryptographic register has been initiated but not yet completed.
+The state of such a CR is defined as `partial`.
+This field applies only to `ace.init` and `ace.import` operations, because these access external memory, and not to `ace.clone` and `ace.derive` as they only operate internally.
+`ace.export` is simply resumed using `crstart`.
+Any cryptographic operation attempted on a CR containing an partial CC results in an error or is trapped.
+Note also that there is a second metadata format for partial CRs, which is used when the CR is not fully initialized or imported, cf.{nbsp}<<ACE-format-configuration>>.
 (((Cryptographic Register,incomplete)))
 
-Algorithms are encoded in an 8-bit field.
-Algorithm numbers 0-191 are architecture-defined and the list of such encodings is maintained by RVI.
+Algorithms are encoded in a 10-bit field.
+Algorithm numbers 0-959 are architecture-defined and the list of such encodings is maintained by RVI.
 See <<ACE-algorithms>> for the currently encoded algorithms.
-Algorithm numbers 192-255 are reserved for custom algorithms.
+Algorithm numbers 960-1023 are reserved for custom algorithms.
 
 [[ACE-SC-protection-levels]]
 .Encoding of Side-Channel Protection levels
@@ -335,7 +339,7 @@ ACE extends `*status` and `misa`, and adds 20 new CSRs (of which 16 are optional
 | Address        | Privilege | Name                     | Description
 | 0xXXX          | URW       | `aceerror`               | Error code of the last ACE instruction
 | 0xXXX          | URO       | `aceccstatus`            | Array of two-bit fields (similar to ACES state, but per CR)
-| 0xXXX          | URW       | `acestart`               | ACE start byte index
+| 0xXXX          | URW       | `crstart`               | ACE start byte index
 | 0xXXX--0xXXX   | MRW (RZ)  | `macercsk{0..7}`         | ACE Root Context Sealing Key
 | 0xXXX--0xXXX   | MRW (RZ)  | `maceOSSecret{0..3}`     | ACE OS Secret
 | 0xXXX--0xXXX   | MRW (RZ)  | `maceBootSecret0{0..3}`  | ACE Boot Secret
@@ -611,25 +615,25 @@ Code        .>|Description
 If executing an `ace.init`, `ace.import`, `ace.export`, `ace.input`, or `ace.output` triggers a
 trap, as specified in the privileged architecture, `aceerror` remains unchanged.
 
-[[ACE-CSR-acestart]]
-====== `acestart`
+[[ACE-CSR-crstart]]
+====== `crstart`
 
-`acestart` is an XLEN-bit RW CSR, similar to `vstart`, tracking progress of long-running interruptible instructions `ace.init`, `ace.import`, `ace.export`, `ace.input`, and `ace.output`.
-(((CSR, acestart)))
+`crstart` is an XLEN-bit RW CSR, similar to `vstart`, tracking progress of long-running interruptible instructions `ace.init`, `ace.import`, `ace.export`, `ace.input`, and `ace.output`.
+(((CSR, crstart)))
 
 Unlike the vector extension’s `vstart`, which tracks element indices, ACE has no notion equivalent to that of vector elements;
-`acestart` therefore records a byte offset.
+`crstart` therefore records a byte offset.
 For a load-type instruction (e.g., `ace.init`, `ace.import`, `ace.input`), this offset indicates how many bytes of input have already been read and processed. For a store-type instruction (e.g., `ace.export`, `ace.output`), it indicates how many bytes of output have already been computed and written.
 The value includes all payload bytes (metadata, content, nonce, tag) and accommodates piecewise execution via traps (see <<ACE-trappable-insns-support>>).
 
 This register is typically written by hardware.
 Software may safely write 0 to fully restart an operation, and the register can be saved and restored during context switches.
 However, software must not write arbitrary nonzero values to it, as this may result in an illegal-instruction exception, as the hardware or a trapped implementation are not required to support all possible values.
-Only the instructions explicitly mentioned above support non-zero `acestart` values; other ACE instructions ignore this register, and will be restarted.
+Only the instructions explicitly mentioned above support non-zero `crstart` values; other ACE instructions ignore this register, and will be restarted.
 
 [NOTE]
 ====
-_A single `acestart` value suffices due to the way the init/import/export instructions operate:_
+_A single `crstart` value suffices due to the way the init/import/export instructions operate:_
 
 * `_ace.init_` _and_ `_ace.import_` _use a single pass: all blocks are processed sequentially._
 * `_ace.export_` _uses two passes. However, the first pass to compute the SIV is purely internal, and never accesses memory, so page faults cannot occur. This first stage is uninterruptible. The second pass writes metadata, nonce, SIV, then encrypted content to memory. Only the second pass can cause page faults and requires resumption._
@@ -637,7 +641,7 @@ _A single `acestart` value suffices due to the way the init/import/export instru
 This design obviates the need to separate data transfer from cryptographic processing during import and export operations. A separate transfer phase would require buffering the entire input within the ACE unit before processing, increasing internal resource requirements, whereas the current architecture can process data inline and is loaded with minimal overhead.
 ====
 
-The semantics and use of `acestart` are described in <<ACE-format-configuration> and [.red]#TBD#. zzzz
+The semantics and use of `crstart` are described in <<ACE-format-configuration> and [.red]#TBD#. zzzz
 
 [[ACE-CSR-macercsk]]
 ====== `macercsk`
@@ -694,7 +698,7 @@ NOTE: The software in each World/Supervisor Domain is normally responsible to ge
 ----
 M : array of bytes // from memory
 
-// next instruction preemptible, with `acestart` from 0 to 7
+// next instruction preemptible, with `crstart` from 0 to 7
 UNINTERRUPTIBLE_BLOCK_START
 |   metadata : bits(64) = M[0 .. 7]
 |   if (there is not enough memory for the algorithm encoded in the metadata)
@@ -706,7 +710,7 @@ UNINTERRUPTIBLE_BLOCK_START
 UNINTERRUPTIBLE_BLOCK_END
 
 foreach(i from 0 to num_blocks - 1) {
-    // next instruction preemptible, with `acestart` from 32+i*16 to 39+i*16 or 47+i*16
+    // next instruction preemptible, with `crstart` from 32+i*16 to 39+i*16 or 47+i*16
     UNINTERRUPTIBLE_BLOCK_START
     |   if ((i == num_blocks - 1) and last_block_fractional)
     |       content[i*16 .. 7+i*16] = M[8+i*16 .. 15+i*16];
@@ -715,7 +719,7 @@ foreach(i from 0 to num_blocks - 1) {
     UNINTERRUPTIBLE_BLOCK_END
 }
 
-// if preempted here, `acestart` will be z
+// if preempted here, `crstart` will be z
 UNINTERRUPTIBLE_BLOCK_START
 |   - Now the content can be deserialized.
 |   - This includes computing any derived values not given in the initialization
@@ -797,18 +801,18 @@ UNINTERRUPTIBLE_BLOCK_START
 |   SIV = AESE(Kenc, 1'b0 @ (tmp[126:0] xor (31'b0 @ N)))) >> 32;
 UNINTERRUPTIBLE_BLOCK_END
 
-// preemptible here, with `acestart` from 0 to 15
+// preemptible here, with `crstart` from 0 to 15
 UNINTERRUPTIBLE_BLOCK_START
 |   M[0 .. 15] = N[63:0] @ metadata[63:0];
 UNINTERRUPTIBLE_BLOCK_END
 
-// preemptible here, with `acestart` from 16 to 31
+// preemptible here, with `crstart` from 16 to 31
 UNINTERRUPTIBLE_BLOCK_START
 |   M[16 .. 31] = SIV[95:0] @ N[95:64];
 UNINTERRUPTIBLE_BLOCK_END
 
 foreach(i from 0 to num_blocks - 1) {
-    // next instruction preemptible, with `acestart` from 32+i*16 to 39+i*16 or 47+i*16
+    // next instruction preemptible, with `crstart` from 32+i*16 to 39+i*16 or 47+i*16
     UNINTERRUPTIBLE_BLOCK_START
     |   if ((i == num_blocks - 1) and last_block_fractional)
     |       M[32+i*16 .. 39+i*16] = content[i*16 .. 7+i*16] xor
@@ -820,7 +824,7 @@ foreach(i from 0 to num_blocks - 1) {
 }
 ----
 
-NOTE: It can happen that we export an incomplete CR, for instance, M-mode or HS-mode code is saving a CR that was only partially configured in U-mode when the U-mode process was interrupted. How this is handled in SCCs upon export and import (operation which could be interrupted as well) is <<ACE-incomplete-contexts>>.
+NOTE: It can happen that we export an partial CR, for instance, M-mode or HS-mode code is saving a CR that was only partially configured in U-mode when the U-mode process was interrupted. How this is handled in SCCs upon export and import (operation which could be interrupted as well) is <<ACE-incomplete-contexts>>.
 (((Cryptographic Register,incomplete)))
 
 [[ACE-SCC-import]]
@@ -834,7 +838,7 @@ N, SIV : bits(96);
 tmp : bits(128);
 tag : bits(96);
 
-// next instruction preemptible, with `acestart` from 0 to 7
+// next instruction preemptible, with `crstart` from 0 to 7
 UNINTERRUPTIBLE_BLOCK_START
 |   metadata : bits(64) = M[0 .. 7]
 |   if (there is not enough memory for the algorithm encoded in the metadata)
@@ -854,11 +858,11 @@ UNINTERRUPTIBLE_BLOCK_START
 |
 |   {Kenc, Kauth} = RFC8452_KeyDeriv(CSK);
 |
-|   // next instruction preemptible, with `acestart` from 8 to 19
+|   // next instruction preemptible, with `crstart` from 8 to 19
 |   N = M[8 .. 19]
 UNINTERRUPTIBLE_BLOCK_END
 
-// next instruction preemptible, with `acestart` from 20 to 31
+// next instruction preemptible, with `crstart` from 20 to 31
 UNINTERRUPTIBLE_BLOCK_START
 |   SIV = M[20 .. 31]
 |   tmp = 64'b0 @ metadata;
@@ -866,7 +870,7 @@ UNINTERRUPTIBLE_BLOCK_START
 UNINTERRUPTIBLE_BLOCK_END
 
 foreach(i from 0 to num_blocks - 1) {
-    // next instruction preemptible, with `acestart` from 32+i*16 to 39+i*16 or 47+i*16
+    // next instruction preemptible, with `crstart` from 32+i*16 to 39+i*16 or 47+i*16
     UNINTERRUPTIBLE_BLOCK_START
     |   if ((i == num_blocks - 1) and last_block_fractional) {
     |       content[i*16 .. 7+i*16] = M[32+i*16 .. 39+i*16] xor
@@ -881,7 +885,7 @@ foreach(i from 0 to num_blocks - 1) {
     UNINTERRUPTIBLE_BLOCK_END
 }
 
-// if preempted here, `acestart` will be z + 32
+// if preempted here, `crstart` will be z + 32
 
 UNINTERRUPTIBLE_BLOCK_START
 |   tag = AESE(Kenc, 1'b0 @ (tmp[126:0] xor (31'b0 @ N)))) >> 32;
@@ -896,21 +900,21 @@ UNINTERRUPTIBLE_BLOCK_END
 //
 
 [[ACE-incomplete-contexts]]
-==== Incomplete Cryptographic Contests
+==== partial CRyptographic Contests
 
-An initialization or import operation may be interrupted by context switching code, i.e., not returning to the original control flow immediately after the handler is done. In this case the intermediate state of the CR must be saved and then restored in a way that allows for resumption of the operation (by setting also the value of `acestart`).
+An initialization or import operation may be interrupted by context switching code, i.e., not returning to the original control flow immediately after the handler is done. In this case the intermediate state of the CR must be saved and then restored in a way that allows for resumption of the operation (by setting also the value of `crstart`).
 (((Cryptographic Register,incomplete)))
-Then exporting the incomplete CR, the following metadata header format is used as the first 8 bytes of the SCC to store information about the incomplete CR.
+Then exporting the partial CR, the following metadata header format is used as the first 8 bytes of the SCC to store information about the partial CR.
 After this header block, the SCC contains the nonce and SIV following <<ACE-format-SCC>>, and then the content section.
 
-The Incomplete CR Metadata (ICREM) header must distinguish between incomplete CRs following interrupted
+The Partial CR Metadata (PCREM) header must distinguish between partial CRs following interrupted
 initialization and import operations, and in the second case also the content section must be modified accordingly.
 In particular, for the interrupted import case, we need to save the current partial tag value that will have to be verified at the end,
 but the original metadata block, nonce and SIV can be recovered from the original SCC.
 Note that the metadata of that SCC can also indicate a partial initialization or import operation.
 
-[[ACE-metadata-incomplete]]
-.Format of the Incomplete CR Metadata
+[[ACE-metadata-partial]]
+.Format of the partial CR Metadata (PCREM)
 [width="100%",cols="^9%,^7%,17%,67%",options="header"]
 |===
 .>|   Field .>| Width +
@@ -926,18 +930,18 @@ Future format will have a 1 in this position and may be longer than 64 bits.
 |===
 
 NOTE: Fields Algorithm, SC_Protection, State Number, Direction_Policy and, perhaps even more notably, the Usage Control policies UC_Policy_{empty}__i__ (_i_ = 0 .. 3)
-and Locality information are omitted, the reason being that usage of incomplete CRs is forbidden by the architecture anyway, and therefore the space can be used for other purposes.
-Regarding the Locality, Locality violation errors should be handled where the complete CR is used, and therefore the RCSK is always used for incomplete CRs. This may also reduce the need to compute or cache DCSKs at higher privileged levels, overall improving performance.
+and Locality information are omitted, the reason being that usage of partial CRs is forbidden by the architecture anyway, and therefore the space can be used for other purposes.
+Regarding the Locality, Locality violation errors should be handled where the complete CR is used, and therefore the RCSK is always used for partial CRs. This may also reduce the need to compute or cache DCSKs at higher privileged levels, overall improving performance.
 
 The content format to export incomplete initializations is the same, only truncated to the actual imported length, rounded to a multiple of 8 bytes.
 
 The content format to export incompletely imported CRs prepends the partial hash (`tmp` in <<ACE-SCC-import>>) to the content, which is thus extended by 16 bytes,
 These 16 bytes must be included in the Payload_Length field and encrypted as well.
 
-After the incomplete CR has been decrypted and authenticated in privileged mode, it is marked as to be resumed, in which case, upon returning to the less-privileged mode, the following operations must be performed:
+After the partial CR has been decrypted and authenticated in privileged mode, it is marked as to be resumed, in which case, upon returning to the less-privileged mode, the following operations must be performed:
 
 . The old metadata, nonce and SIV are recovered from the memory of the less-privileged mode. These reads may be interrupted by page faults, but they are easy to resume.
-. `z` and `num_blocks` are computed from the original content length, and the starting value of `i` with the help of the `acestart`.
+. `z` and `num_blocks` are computed from the original content length, and the starting value of `i` with the help of the `crstart`.
 . The `Kenc` and `Kauth` keys are derived.
 . The old partial hash value is restored.
 
@@ -948,14 +952,14 @@ At this point the initialization or import operation can resume from the interru
 [comment]
 --
 * Any number of bytes can be initialized or imported in a CR, and exported from it, before the operation is preempted, depending on the alignment of the data.
-* `acestart` counts all the bytes of the payload, including the metadata for all inputs and outputs, and the nonce and the tag as well for SCCs.
+* `crstart` counts all the bytes of the payload, including the metadata for all inputs and outputs, and the nonce and the tag as well for SCCs.
 * The internal state shall always assumes that all internal operations that would be performed in the algorithms above are performed as follows
  ** `ace.init`:
   *** Once the metadata (8 bytes) has been read, is must be completely processed and imported in the CR.
   *** Whenever 8+16__i__ bytes have been read, also _i_ blocks of content must be processed and imported in the CR.
    For instance, if 28 bytes have been read in, the incomplete state has processed the metadata and the first content block, and knows 4 further bytes.
-  *** If the operation is preempted, `acestart` will be the number of bytes read.
-  *** The corresponding exported SCC will include an 8-byte block in clear after the metadata with the `acestart` value, followed by the nonce and the tag, and the content will only contain the payload imported and read so far, zero padded up to a multiple of 8 bytes. This content is of course encrypted.
+  *** If the operation is preempted, `crstart` will be the number of bytes read.
+  *** The corresponding exported SCC will include an 8-byte block in clear after the metadata with the `crstart` value, followed by the nonce and the tag, and the content will only contain the payload imported and read so far, zero padded up to a multiple of 8 bytes. This content is of course encrypted.
   The AEAD algorithm will use `(length_of_payload)[64] @ metadata` in place of `0[64] @ metadata`.
   *** in the worst case, a SCC will be 8 bytes longer than the standard size for a complete exported CR for the same algorithm.#
 
@@ -1114,7 +1118,7 @@ Description::
 Exports the CR `Ks` or `K[Xs]` to memory at address `Xd`, using the procedure described in <<ACE-format-SCC>>.
 //If the context `Ks` is clear, or `Xs` is out of range, the operation will report error ace_err_invalid.
 
-The instruction must follow the interruptibility rules defined in <<ACE-CSR-acestart>>.
+The instruction must follow the interruptibility rules defined in <<ACE-CSR-crstart>>.
 Similarly to entire-vector-register store instructions, `ace.export` appears to other harts as sequences of individual stores.
 
 The initial cryptographic phase of `ace.export`, as well as the authentication phase of `ace.import`, must be uninterruptible.
@@ -1165,7 +1169,7 @@ Trappable: *YES*. +
 Interruptible: *YES*.
 
 
-The instruction must follow the interruptibility rules defined in <<ACE-CSR-acestart>>.
+The instruction must follow the interruptibility rules defined in <<ACE-CSR-crstart>>.
 Similarly to entire-vector-register load instructions, `ace.import` appears to other harts as sequences of individual loads.
 
 NOTE: The operation can be conceptually split into two phases.
@@ -1633,14 +1637,14 @@ Three types of supporting operations are required:
  * A `mv` instruction that loads a specified number of bytes from a GPR or vector register into the state of a CR within the ACE unit.
    Initially, `ace.size` returns the total payload length to transfer.
    After each move, this value is updated to reflect the remaining bytes.
-   The instruction also updates the `acestart` CSR to follow the internal progress.
+   The instruction also updates the `crstart` CSR to follow the internal progress.
  * A corresponding `mv` instruction that exports a specified number of bytes from a CR to a GPR or vector register.
    The behavior of `ace.size` will be similar to that of the `mv` instruction, but it will count the number of bytes to be exported.
  * A “`close`” instruction to suspend or finalize the procedure.
-   If executed before all bytes are transferred, the CR state matches that of an interrupted monolithic instruction, including the Incomplete metadata field and the `acestart` value. If executed after all bytes are transferred, it also performs any final cryptographic operations, such as authenticating the CR, if needed.
+   If executed before all bytes are transferred, the CR state matches that of an interrupted monolithic instruction, including the Incomplete metadata field and the `crstart` value. If executed after all bytes are transferred, it also performs any final cryptographic operations, such as authenticating the CR, if needed.
 
 Interrupting the firmware implementation of `ace.init`, `ace.export`, `ace.import`, `ace.input`, or `ace.output` must leave the architectural state indistinguishable from the state expected from interrupting a monolithic implementation of the instructions.
-in particular, they need to respect the value of `acestart` and update it in accordance with the expected architected behavior of the emulated instructions.
+in particular, they need to respect the value of `crstart` and update it in accordance with the expected architected behavior of the emulated instructions.
 
 The supporting instructions themselves must be uninterruptible.
 
@@ -1694,7 +1698,7 @@ This includes:
 
 We also add pseudocode to clarify how the algorithms supported by an ACE unit are implemented in software using the ACE ISA.
 
-// NOTE: While we do not specify the exact internal format of a CC in a CR, we observe that it must contain all the data in a Initialization Input or in a SCC (in plaintext), in some order within the CRF. Therefore, we assume that this information can be first copied into the CR as is, and then any aditional information will be reconstructed at the end of the configuration or import operation. This applies also to threshold implementations, where for any information in multiple shares the input can initially be input into the first share.  In the worst case, only 32 bits of additional information may be needed to be able to process incomplete CRs and SCCs.
+// NOTE: While we do not specify the exact internal format of a CC in a CR, we observe that it must contain all the data in a Initialization Input or in a SCC (in plaintext), in some order within the CRF. Therefore, we assume that this information can be first copied into the CR as is, and then any aditional information will be reconstructed at the end of the configuration or import operation. This applies also to threshold implementations, where for any information in multiple shares the input can initially be input into the first share.  In the worst case, only 32 bits of additional information may be needed to be able to process partial CRs and SCCs.
 
 The definitions of the algorithms also implicitly define the functions `SERIALIZE()` and `DESERIALIZE()` used in <<ACE-SCC-export>> and <<ACE-SCC-import>>.
 These functions do not need to be explicitly implemented as functions that convert the internal memory in the CRF into a structured byte array, called
