@@ -1460,13 +1460,13 @@ The state numbers used in this specification are defined in the following table.
 ace_state_hash_initialize
 | The context is initialized and ready for operation.
 |   1   | ace_state_hash_absorb         | Start (and initialize) a hash function or the sub-function of an algorithm, preparing it to absorb blocks of data.
-|   2   | ace_state_hash_finalize +
-ace_state_hash_finalize_enc             | Finalize the internal state of a hash function (including for the encryption algorithm of an authenticated encryption mode of operation) and prepare it for outputting the result. In this state additional data may be absorbed, such as lengths.
-|   3   | ace_state_hash_finalize_dec   | Finalize the internal state of a hash function for the decryption algorithm of an authenticated decryption mode of operation. In this state additional data may be absorbed, such as lengths.
-|   4   | ace_state_hash_verify         | Finalize the internal state of a hash function and compare it to the provided value.
-|   5   | ace_state_hash_last_block +
-ace_state_last_block_enc +
-| For a hash or MAC function, we provide the length of the last block of data. May be used also in the encryption path of authenticated encryption modes of operation.
+|   2   | ace_state_hash_finalize       | Finalize the internal state of a hash function and possibly prepare it for outputting the result. In this state additional data may be absorbed, such as lengths.
+|   3   | ace_state_hash_finalize_enc   | Finalize the internal state of a hash function for the encryption algorithm of an authenticated encryption mode of operation and possibly prepare it for outputting the result. In this state additional data may be absorbed, such as lengths.
+|   4   | ace_state_hash_finalize_dec   | Finalize the internal state of a hash function for the decryption algorithm of an authenticated decryption mode of operation. In this state additional data may be absorbed, such as lengths.
+|   5   | ace_state_hash_verify         | Finalize the internal state of a hash function and compare it to the provided value.
+// |   5   | ace_state_hash_last_block +
+// ace_state_last_block_enc +
+// | For a hash or MAC function, we provide the length of the last block of data. May be used also in the encryption path of authenticated encryption modes of operation.
 |   6   | ace_state_last_block_dec      | For the decryption path of authenticated encryption modes of operation if the length of the last block must be given.
 |   7   | ace_state_encrypt +
 ace_const_operate
@@ -1657,7 +1657,8 @@ In this chapter we specify the behavior of Cryptographic Contexts for various cr
 Some specifications are generic in the sense that they apply to all algorithms of a certain type and can be instantiated with different primitives with varying parameters such as block and key sizes.
 Further specifications pertain to cryptographic algorithms that require specific primitives.
 
-NOTE: This chapter is normative, defining the behavior of instructions and the data formats they use for certain classes of cryptographic algorithms including some mandatory ones. For example, AES-GCM-SIV is fully specified in <<ACE-GCM-SIV>>, where the block size `b` = 128 and the key size `k` is 128 or 256 bits and the hashing function is POLYVAL as defined in <<GCM-SIV>>. +
+NOTE: This chapter is normative, defining the behavior of instructions and the data formats they use for certain classes of cryptographic algorithms including some mandatory ones.
+For example, AES-GCM-SIV is fully specified in <<ACE-GCM-SIV-mode>>, where the block size `b` = 128 and the key size `k` is 128 or 256 bits and the hashing function is POLYVAL as defined in <<ACE-GCM-SIV-mode>>. +
 This specification ensures that an instantiation of the same mode of operation with a different primitive, such as SM4-GCM-SIV using the same hash, is also well defined.
 
 Each algorithm is fully defined by the following information:
@@ -2164,8 +2165,7 @@ State Machine:::
  . `absorb(Vs)`.
 --
 +
-If `VLEN` > `b`, the above operation is executed `VLEN/b` times, absorbing each time a `b`-bit block of `Vs` into the hash.
-This operation is parallelizable by having the implementation precompute the first four powers of `hash_key`, keeping it internally in the CR (and reconstructing these powers after `ace.import`). If the number `x` of blocks to process is not a multiple of `VLEN`/`b`, `VL` can be set to the remainder of the division of `x` by `VLEN`/`b` for the last instruction.
+If `VLEN` > `b`, the above operation is executed `VLEN/b` times.
 
 ** In state _encrypt_, only ``ace.exec`` instructions of Form A are allowed. +
    "```ace.exec Vd,Kn|K[Xn],Vs```" encrypts `Vs` into `Vd`, and absorbs the ciphertext `Vd` into the `auth_tag`, namely:
@@ -2346,7 +2346,7 @@ ace.exec V2,K0,V5
 tag ← V3 xor V2                                  // Last Horner scheme add
 ----
 
-[[ACE-GCM-SIV]]
+[[ACE-GCM-SIV-mode]]
 ==== GCM-SIV mode
 
 The GCM-SIV mode's main differences with GCM are that:
@@ -2619,6 +2619,137 @@ if (X1 != 0) then { handle error }               // do not use the plaintext if 
 ==== OCB Mode
 
 We only support the OCB3 variant of OCB as specified in RFC 7253.
+
+The mode has the states and data structures similar to GCM <<ACE-GCM-mode>>, but it adds a last partial block.
+
+===== Specification
+
+Parameters:::
+
+* `b` = block size in bits (8|`b`). For this algorithm we require `VLEN` to be an integer multiple of `b`.
+* `k` = key size in bits (8|`k`).
+
+Data Structures:::
+
+* *Initialization Input*:
+[lowerroman]
+ . `key`: `k/8` bytes, or 8 bytes if a System Key index.
+
+* *Internal State*:
+ ** `key`: `k/8` bytes.
+ ** `IV`: `b/8` bytes.
+ ** `hash_A`: `b/8` bytes.
+ ** `hash_P`: `b/8` bytes.
+ ** `taglen`: int
+ ** `final_block_len`: int
+
+* *Serialized Content*:
+[lowerroman]
+ . `key`: `k/8` bytes, or 8 bytes if a System Key index.
+ . `IV`: `b/8` bytes.
+ . `hash_A`: `b/8` bytes.
+ . `hash_P`: `b/8` bytes.
+ . `taglen`: 4 bytes
+ . `final_block_len`: 4 bytes
+
+NOTE: There are no fields for the lengths of the AD and of the plaintext, as they are maintained by the calling software.
+Also, `hash_key` is not serialized, and thus it is recomputed upon `ace.import`.
+
+Algorithm-Specific Functions:::
+
+* `enc_blk(key,p) -> c` encrypts block `p` using the key, and returns the result `c`.
+
+* `absorb(data)` absorbs data into the hash function.
+
+State Machine:::
+
+* *States:* _initial_, _set_public_value_, _hash_absorb_, _encrypt_, _hash_finalize_enc_, _decrypt_, _hash_finalize_dec_, and _hash_verify_, _completed_.
+
+* *Allowed State Transitions:*
+ ** From all states to _initial_.
+ ** _initial_ -> _set_public_value_ -> _set_public_value_2_ -> _hash_absorb_ -> _hash_finalize_
+ ** _hash_finalize_ -> _encrypt_ -- if metadata allows encryption, else the CR is *invalidated*.
+ ** _hash_finalize_ -> _decrypt_ -- if metadata allows decryption, else the CR is *invalidated*.
+ ** _encrypt_ -> _hash_finalize_enc_, later automatically transitioning to _completed_.
+ ** _decrypt_ -> _hash_finalize_dec_.
+ ** _hash_finalize_dec_ -> _hash_verify_, later automatically transitioning to _completed_.
+
+* *Behavior:*
+ ** In state _initial_ :
+  *** Any {nbsp}``ace.exec``{nbsp} operation will produce null outputs and causes the CR to be *invalidated*.
+  *** The following initialization operations are performed:
+   . [.red]#TBD#
+ ** In states _set_public_value_ and _set_public_value_2_:
+  *** Only  ``ace.exec`` instructions of Form B are allowed.
+   **** In state _set_public_value_, the `IV` is set to `Vs`.
+   **** In state _set_public_value_2_, `taglen` is set to `Vs`.
+  *** If "```ace.exec Kn|K[Xn],Vs```," is repeated, it will just re-write `IV` or `taglen`.
+  *** If no such `ace.exec` is issued, these values are set to zero and `b`, respectively.
+  *** If `VLEN` is larger than `b`, the most significant bits of `Vs` (i.e., the "tail" of the vector) are ignored.
+  *** Any other Form of `ace.exec` will produce null outputs and causes the CR to be *invalidated*.
+
+ ** In state _hash_absorb_, only  ``ace.exec`` instructions of Form B are allowed. +
+ "```ace.exec Kn|K[Xn],Vs```" absorbs a data block in `auth_tag`, i.e.:
++
+--
+ . `absorb(Vs)`.
+--
++
+If `VLEN` > `b`, the above operation is executed `VLEN/b` times.
+
+** In state _encrypt_, only ``ace.exec`` instructions of Form A are allowed. +
+   "```ace.exec Vd,Kn|K[Xn],Vs```" absorbs the plaintext `Vs` into the `auth_tag` an encrypts `Vs` into `Vd`, namely:
++
+--
+  . [.red]#TBD: encrypt#
+  . `absorb()`.
+--
++
+If `VLEN` is a multiple of `b`, the above are executed `VLEN/b` times, encrypting each `b`-bit block of `Vs` into the corresponding `b`-bit block of `Vd`. There is significant potential for parallelization, including in the `absorb` function. If the number `x` of blocks to encrypt is not a multiple of `VLEN`/`b`, `VL` can be set to the remainder of the division of `x` by `VLEN`/`b` for the last instruction.
+
+** To move to _hash_finalize_, the `ace.state` operation must have the additional argument, which sets the length of the final block of the AD.
+
+** To move to _hash_finalize_enc_, same, but for the plaintext block.
+
+** To move to _hash_finalize_dec_, same, but for the ciphertext block.
+
+** In state _hash_finalize_enc_, only ``ace.exec`` instructions of Form A are allowed. The value +
+ `{nbsp}{nbsp}{nbsp}Vs = IntTo{b/2}Bits(bit_length(AD)) @ IntTo{b/2}Bits(bit_length(plaintext))` +
+ must be set by the software, then,
+  "```ace.exec Vd,Kn|K[Xn],Vs```"
+  computes the authentication tag and completes the algorithm as follows: [.red]#TBD#.
++
+If `VLEN` is larger than `b`, the most significant bits of `Vs` (i.e., the "tail" of the vector) are ignored.
+
+** In state _decrypt__, only ``ace.exec`` instructions of Form A are allowed. +
+    "```ace.exec Vd,Kn|K[Xn],Vs```" decrypts `Vs` into `Vd`, and absorbs the plaintext `Vd` into the `auth_tag`, namely:
++
+--
+  . [.red]#TBD: encrypt#
+  . `absorb()`.
+--
++
+If `VLEN` is a multiple of `b`, the same behavior applies as in state _encrypt_.
+
+** In state _hash_finalize_enc_, only ``ace.exec`` instructions of Form A are allowed. The value +
+ `{nbsp}{nbsp}{nbsp}Vs = IntTo{b/2}Bits(bit_length(AD)) @ IntTo{b/2}Bits(bit_length(plaintext))` +
+ must be set by the software, then,
+  "```ace.exec Vd,Kn|K[Xn],Vs```"
+  computes the authentication tag and completes the algorithm as follows: [.red]#TBD#.
++
+If `VLEN` is larger than `b`, the most significant bits of `Vs` (i.e., the "tail" of the vector) are ignored.
+
+** In state _hash_verify_, only an ``ace.exec`` instruction of Form B, i.e., "```ace.exec Kn|K[Xn],Vs```" is allowed.
+    It compares `Vs` with `auth_tag`:
++
+--
+  . If the values match, then the state is changed to _completed_, and `ace.error` returns no error,
+  . else the state is changed to _completed_, and `ace.error` returns `ace_err_authentication`.
+--
++
+If `VLEN` is larger than `b`, only the `b` least significant bits of `Vs` are compared to `auth_tag`.
+
+
 
 [.red]#TBD#.
 
