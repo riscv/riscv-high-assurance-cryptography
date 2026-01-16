@@ -2627,7 +2627,7 @@ The mode has the states and data structures similar to GCM <<ACE-GCM-mode>>, but
 Parameters:::
 
 * `b` = block size in bits (8|`b`). For this algorithm we require `VLEN` to be an integer multiple of `b`.
-* `k` = key size in bits (8|`k`).
+* `k` = key size in bits (8|`k`). If `k` <> `b`, the cipher must support a key size of `b` bits as well.
 
 Data Structures:::
 
@@ -2637,29 +2637,34 @@ Data Structures:::
 
 * *Internal State*:
  ** `key`: `k/8` bytes.
- ** `IV`: `b/8` bytes.
+ ** `ktop`: `b/8` bytes.
+ ** `N`: `b/8` bytes.
+ ** `L`: `b/8` bytes.
  ** `hash_A`: `b/8` bytes.
  ** `hash_P`: `b/8` bytes.
  ** `taglen`: int
- ** `final_block_len`: int
+ ** `final_blk_len`: int
 
 * *Serialized Content*:
 [lowerroman]
  . `key`: `k/8` bytes, or 8 bytes if a System Key index.
- . `IV`: `b/8` bytes.
+ . `N`: `b/8` bytes.
+ . `L`: `b/8` bytes.
  . `hash_A`: `b/8` bytes.
  . `hash_P`: `b/8` bytes.
  . `taglen`: 4 bytes
- . `final_block_len`: 4 bytes
+ . `final_blk_len`: 4 bytes
 
-NOTE: There are no fields for the lengths of the AD and of the plaintext, as they are maintained by the calling software.
-Also, `hash_key` is not serialized, and thus it is recomputed upon `ace.import`.
+NOTE: `ktop`: is not serialized, and thus it is recomputed upon `ace.import`.
 
 Algorithm-Specific Functions:::
 
 * `enc_blk(key,p) -> c` encrypts block `p` using the key, and returns the result `c`.
-
-* `absorb(data)` absorbs data into the hash function.
+* `dec_blk(key,c) -> p` decrypts block `c` using the key, and returns the result `p`.
+*  `double(S)`:
+First, let `C` be the non-leading coefficients of the lexicographically first irreducible binary polynomial of degree `b` with the minimal number of ones:
+`0x1B` for `b` = 64, `0x87` for `b` = 128, and `0x425` for `b` = 256, then:
+If S[`b`-1] = 0, then { `double(S)` = `S << 1` } else { `double(S)` = `(S << 1) xor C` } .
 
 State Machine:::
 
@@ -2678,13 +2683,19 @@ State Machine:::
  ** In state _initial_ :
   *** Any {nbsp}``ace.exec``{nbsp} operation will produce null outputs and causes the CR to be *invalidated*.
   *** The following initialization operations are performed:
-   . [.red]#TBD#
- ** In states _set_public_value_ and _set_public_value_2_:
-  *** Only  ``ace.exec`` instructions of Form B are allowed.
-   **** In state _set_public_value_, the `IV` is set to `Vs`.
-   **** In state _set_public_value_2_, `taglen` is set to `Vs`.
-  *** If "```ace.exec Kn|K[Xn],Vs```," is repeated, it will just re-write `IV` or `taglen`.
-  *** If no such `ace.exec` is issued, these values are set to zero and `b`, respectively.
+   . `N <- 0`.
+   . `hash_A <- 0`.
+   . `hash_B <- 0`.
+
+ ** In state _set_public_value_, only  ``ace.exec`` instructions of Form B, "```ace.exec Kn|K[Xn],Vs```", is allowed.
+   whereby `N` is set to `Vs`.
+  *** If "```ace.exec Kn|K[Xn],Vs```," is repeated, it will just re-write `IV`.
+  *** If no such `ace.exec` is issued, `N` remains zero.
+ ** To move to _set_public_value_2_, the `ace.state` operation must have the additional argument, which sets the tag length `taglen`.
+     If this argument (interpreted as an unsigned value)is larger than `b` or `0` (the latter occurs also
+     if `X0` is passed as the additional argument), an invalid instruction error is raised, and the CR is *invalidated*.
+     The following operation must be a `ace.state` to move to _hash_absorb_
+
   *** If `VLEN` is larger than `b`, the most significant bits of `Vs` (i.e., the "tail" of the vector) are ignored.
   *** Any other Form of `ace.exec` will produce null outputs and causes the CR to be *invalidated*.
 
