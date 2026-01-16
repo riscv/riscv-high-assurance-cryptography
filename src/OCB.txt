@@ -1,0 +1,212 @@
+Processing Associated Data: HASH
+
+   OCB has the ability to authenticate unencrypted associated data at
+   the same time that it provides for authentication and encrypts a
+   plaintext.  The following hash function is central to providing this
+   functionality.  If an application has no associated data, then the
+   associated data should be considered to exist and to be the empty
+   string.  HASH, conveniently, always returns zeros(128) when the
+   associated data is the empty string.
+
+   Function name:
+     HASH
+   Input:
+     K, string of KEYLEN bits                      // Key
+     A, string of any length                       // Associated data
+   Output:
+     Sum, string of 128 bits                       // Hash result
+
+   Sum is defined as follows.
+
+     //
+     // Key-dependent variables
+     //
+     L_* = ENCIPHER(K, zeros(128))
+     L_$ = double(L_*)
+     L_0 = double(L_$)
+     L_i = double(L_{i-1}) for every integer i > 0
+
+     //
+     // Consider A as a sequence of 128-bit blocks
+     //
+     Let m be the largest integer so that 128m <= bitlen(A)
+     Let A_1, A_2, ..., A_m and A_* be strings so that
+       A == A_1 || A_2 || ... || A_m || A_*, and
+       bitlen(A_i) == 128 for each 1 <= i <= m.
+       Note: A_* may possibly be the empty string.
+
+     //
+     // Process any whole blocks
+     //
+     Sum_0 = zeros(128)
+     Offset_0 = zeros(128)
+     for each 1 <= i <= m
+        Offset_i = Offset_{i-1} xor L_{ntz(i)}
+        Sum_i = Sum_{i-1} xor ENCIPHER(K, A_i xor Offset_i)
+     end for
+
+     //
+     // Process any final partial block; compute final hash value
+     //
+     if bitlen(A_*) > 0 then
+        Offset_* = Offset_m xor L_*
+        CipherInput = (A_* || 1 || zeros(127-bitlen(A_*))) xor Offset_*
+        Sum = Sum_m xor ENCIPHER(K, CipherInput)
+     else
+        Sum = Sum_m
+     end if
+
+
+Encryption: OCB-ENCRYPT
+
+   This function computes a ciphertext (which includes a bundled
+   authentication tag) when given a plaintext, associated data, nonce,
+   and key.  For each invocation of OCB-ENCRYPT using the same key K,
+   the value of the nonce input N must be distinct.
+
+   Function name:
+     OCB-ENCRYPT
+   Input:
+     K, string of KEYLEN bits                      // Key
+     N, string of no more than 120 bits            // Nonce
+     A, string of any length                       // Associated data
+     P, string of any length                       // Plaintext
+   Output:
+     C, string of length bitlen(P) + TAGLEN bits   // Ciphertext
+
+   C is defined as follows.
+
+     //
+     // Key-dependent variables
+     //
+     L_* = ENCIPHER(K, zeros(128))
+     L_$ = double(L_*)
+     L_0 = double(L_$)
+     L_i = double(L_{i-1}) for every integer i > 0
+
+     //
+     // Consider P as a sequence of 128-bit blocks
+     //
+     Let m be the largest integer so that 128m <= bitlen(P)
+     Let P_1, P_2, ..., P_m and P_* be strings so that
+       P == P_1 || P_2 || ... || P_m || P_*, and
+       bitlen(P_i) == 128 for each 1 <= i <= m.
+       Note: P_* may possibly be the empty string.
+
+     //
+     // Nonce-dependent and per-encryption variables
+     //
+     Nonce = num2str(TAGLEN mod 128,7) || zeros(120-bitlen(N)) || 1 || N
+     bottom = str2num(Nonce[123..128])
+     Ktop = ENCIPHER(K, Nonce[1..122] || zeros(6))
+     Stretch = Ktop || (Ktop[1..64] xor Ktop[9..72])
+     Offset_0 = Stretch[1+bottom..128+bottom]
+     Checksum_0 = zeros(128)
+     //
+     // Process any whole blocks
+     //
+     for each 1 <= i <= m
+        Offset_i = Offset_{i-1} xor L_{ntz(i)}
+        C_i = Offset_i xor ENCIPHER(K, P_i xor Offset_i)
+        Checksum_i = Checksum_{i-1} xor P_i
+     end for
+
+     //
+     // Process any final partial block and compute raw tag
+     //
+     if bitlen(P_*) > 0 then
+        Offset_* = Offset_m xor L_*
+        Pad = ENCIPHER(K, Offset_*)
+        C_* = P_* xor Pad[1..bitlen(P_*)]
+        Checksum_* = Checksum_m xor (P_* || 1 || zeros(127-bitlen(P_*)))
+        Tag = ENCIPHER(K, Checksum_* xor Offset_* xor L_$) xor HASH(K,A)
+     else
+        C_* = <empty string>
+        Tag = ENCIPHER(K, Checksum_m xor Offset_m xor L_$) xor HASH(K,A)
+     end if
+
+     //
+     // Assemble ciphertext
+     //
+     C = C_1 || C_2 || ... || C_m || C_* || Tag[1..TAGLEN]
+
+
+Decryption: OCB-DECRYPT
+
+   This function computes a plaintext when given a ciphertext,
+   associated data, nonce, and key.  An authentication tag is embedded
+   in the ciphertext.  If the tag is not correct for the ciphertext,
+   associated data, nonce, and key, then an INVALID signal is produced.
+
+   Function name:
+     OCB-DECRYPT
+   Input:
+     K, string of KEYLEN bits                      // Key
+     N, string of no more than 120 bits            // Nonce
+     A, string of any length                       // Associated data
+     C, string of at least TAGLEN bits             // Ciphertext
+   Output:
+     P, string of length bitlen(C) - TAGLEN bits,  // Plaintext
+          or INVALID indicating authentication failure
+
+P is defined as follows.
+
+     //
+     // Key-dependent variables
+     //
+     L_* = ENCIPHER(K, zeros(128))
+     L_$ = double(L_*)
+     L_0 = double(L_$)
+     L_i = double(L_{i-1}) for every integer i > 0
+
+     //
+     // Consider C as a sequence of 128-bit blocks
+     //
+     Let m be the largest integer so that 128m <= bitlen(C) - TAGLEN
+     Let C_1, C_2, ..., C_m, C_* and T be strings so that
+       C == C_1 || C_2 || ... || C_m || C_* || T,
+       bitlen(C_i) == 128 for each 1 <= i <= m, and
+       bitlen(T) == TAGLEN.
+       Note: C_* may possibly be the empty string.
+
+     //
+     // Nonce-dependent and per-decryption variables
+     //
+     Nonce = num2str(TAGLEN mod 128,7) || zeros(120-bitlen(N)) || 1 || N
+     bottom = str2num(Nonce[123..128])
+     Ktop = ENCIPHER(K, Nonce[1..122] || zeros(6))
+     Stretch = Ktop || (Ktop[1..64] xor Ktop[9..72])
+     Offset_0 = Stretch[1+bottom..128+bottom]
+     Checksum_0 = zeros(128)
+
+     //
+     // Process any whole blocks
+     //
+     for each 1 <= i <= m
+        Offset_i = Offset_{i-1} xor L_{ntz(i)}
+        P_i = Offset_i xor DECIPHER(K, C_i xor Offset_i)
+        Checksum_i = Checksum_{i-1} xor P_i
+     end for
+
+     //
+     // Process any final partial block and compute raw tag
+     //
+     if bitlen(C_*) > 0 then
+        Offset_* = Offset_m xor L_*
+        Pad = ENCIPHER(K, Offset_*)
+        P_* = C_* xor Pad[1..bitlen(C_*)]
+        Checksum_* = Checksum_m xor (P_* || 1 || zeros(127-bitlen(P_*)))
+        Tag = ENCIPHER(K, Checksum_* xor Offset_* xor L_$) xor HASH(K,A)
+    else
+        P_* = <empty string>
+        Tag = ENCIPHER(K, Checksum_m xor Offset_m xor L_$) xor HASH(K,A)
+     end if
+
+     //
+     // Check for validity and assemble plaintext
+     //
+     if (Tag[1..TAGLEN] == T) then
+        P = P_1 || P_2 || ... || P_m || P_*
+     else
+        P = INVALID
+     end if
