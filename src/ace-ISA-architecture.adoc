@@ -1704,7 +1704,7 @@ We also add pseudocode to clarify how the algorithms supported by an ACE unit ar
 The definitions of the algorithms also implicitly define the functions `SERIALIZE()` and `DESERIALIZE()` used in <<ACE-SCC-export>> and <<ACE-SCC-import>>.
 These functions do not need to be explicitly implemented as functions that convert the internal memory in the CRF into a structured byte array, called
 `content[]` in the aforementioned pseudocodes, that satisfies the architected definition of the _Serialized Content_ for each algorithm, and viceversa.
-Instead, the output of `SERIALIZE()` and the input of `DESERIALIZE()` can just be an _interpretation_ of the internal memory in the CRF as if it were the SCC plaintext, such that any change in one (except for the absent fields) is reflected in the other, but does not have to be written explicitly in the inernal memory of the CRF.
+Instead, the output of `SERIALIZE()` and the input of `DESERIALIZE()` can just be an _interpretation_ of the internal memory in the CRF as if it were the SCC plaintext, such that any change in one (except for the absent fields) is reflected in the other, but does not have to be written explicitly in the internal memory of the CRF.
 
 [[ACE-generic-rules]]
 ==== Generic Rules
@@ -1996,11 +1996,11 @@ Data Structures:::
 * *Initialization Input*:
 [lowerroman]
  . `key1`: `k/8` bytes, or 8 bytes if a System Key index.
- . `key2`: `k/8` bytes  -- omitted if only one key is used or if both keys come from an entry in the SKT.
+ . `key2`: `k/8` bytes -- omitted if only one key is used or if both keys come from an entry in the SKT.
 
 * *Internal State*:
  ** `key1`: `k/8` bytes.
- ** `key2`: `k/8` bytes.
+ ** `key2`: `k/8` bytes -- omitted if only one key is used or if both keys come from an entry in the SKT.
  ** `mask`: `b/8` bytes.
 
 * *Serialized Content*:
@@ -2108,9 +2108,7 @@ Data Structures:::
 
 * *Internal State*:
  ** `key`: `k/8` bytes.
- ** `ctr`: `b/8` bytes.
- ** `hash_key`: `b/8` bytes.
- ** `auth_tag`: `b/8` bytes.
+ ** `ctr`, `hash_key`, `auth_tag`: `b/8` bytes.
 
 * *Serialized Content*:
 [lowerroman]
@@ -2377,8 +2375,7 @@ Data Structures:::
  . `key`: `k/8` bytes, or 8 bytes if a System Key index.
 
 * *Internal State*:
-** `key`: `k/8` bytes.
-** `enc_key`: `k/8` bytes.
+** `key`, `enc_key`: `k/8` bytes.
 ** `auth_key`: `b/8` bytes.
 ** `nonce`: `3b/32` bytes (`3b/4` bits).
 ** `ctr`: `b/32` bytes (`b/4` bits).
@@ -2629,7 +2626,7 @@ Parameters:::
 * `k` = key size in bits (8|`k`). If `k` <> `b`, the cipher must support a key size of `b` bits as well.
 --
 +
-Also, define `g` = `log_2(b)` and `u` = `b - g - 1`.
+Also, define `g` = `ceil(log_2(b))` and `u` = `b - g - 1`.
 
 Data Structures:::
 
@@ -2639,14 +2636,9 @@ Data Structures:::
 
 * *Internal State*:
  ** `key`: `k/8` bytes.
- ** `ktop`: `b/8` bytes.
  ** `N`: `u` bits.
- ** `L`: `b/8` bytes.
- ** `offset`: `b/8` bytes.
- ** `hash_A`: `b/8` bytes.
- ** `hash_P`: `b/8` bytes.
- ** `taglen`: int
- ** `final_blk_len`: int
+ ** `ktop`, `L`, `offset`, `hash_A`, `hash_P` : `b/8` bytes.
+ ** `taglen`, `last_blk_len`: int
 
 * *Serialized Content*:
 [lowerroman]
@@ -2657,7 +2649,7 @@ Data Structures:::
  . `hash_A`: `b/8` bytes.
  . `hash_P`: `b/8` bytes.
  . `taglen`: 4 bytes
- . `final_blk_len`: 4 bytes
+ . `last_blk_len`: 4 bytes
 
 NOTE: `ktop`: is not serialized, and thus it is recomputed upon `ace.import`.
 
@@ -2721,18 +2713,21 @@ If `VLEN` > `b`, the above operation is executed `VLEN/b` times.
   *** If `VLEN` is larger than `b`, the most significant bits of `Vs` (i.e., the "tail" of the vector) are ignored.
   *** Any other Form of `ace.exec` will produce null outputs and causes the CR to be *invalidated*.
 
-** To move to _hash_finalize_, the `ace.state` operation must have the additional argument, which sets the length of the final block of the AD in `final_blk_len`.
+** To move to _hash_finalize_, the `ace.state` operation must have the additional argument, which sets the length of the final block of the AD in `last_blk_len`.
 
-** In state _hash_finalize_, only one `ace.exec` instructions of Form B is allowed if `final_blk_len` <> 0.
+** In state _hash_finalize_, only one `ace.exec` instructions of Form B is allowed if `last_blk_len` <> 0.
  "```ace.exec Kn|K[Xn],Vs```" which absorbs the last data block in `auth_tag`, i.e.:
 +
 --
+  * `tmp : bits(b)`
+
+[]
   . `offset <- offset xor enc_blk(key, zeros(128))`  // L_* in RFC
-  . `tmp <- (Vs[final_blk_len-1:0] || 1 || zeros((b-1)-final_blk_len) xor offset`
-  . `hash_A <- hash_A xor enc_blk(K, Vs)`
+  . `tmp <- (zeros(b-last_blk_len-1) @ 1b'1 @ Vs[last_blk_len-1:0]) xor offset` // CipherInput
+  . `hash_A <- hash_A xor enc_blk(K, tmp)`
 --
 +
-If `final_blk_len` = 0, however, no `ace.exec` can be executed, and only an `ace.state` instruction is allowed to enter state _encrypt_ or _decrypt_.
+If `last_blk_len` = 0, however, no `ace.exec` can be executed, and only an `ace.state` instruction is allowed to enter state _encrypt_ or _decrypt_.
 
 ** Upon entering states `_encrypt_` or `_decrypt_`, following operation are performed:
 
@@ -2752,93 +2747,106 @@ If `final_blk_len` = 0, however, no `ace.exec` can be executed, and only an `ace
 --
  . `L <- double(L)`
  . `offset <- offset xor L`
- . `hash_B <- hash_B xor Vs`
+ . `hash_P <- hash_P xor Vs`
  . `Vd <- offset xor enc_blk(key, Vs xor offset)`
 --
 +
 If `VLEN` is a multiple of `b`, the above operation sequence is executed `VLEN/b` times, encrypting each `b`-bit block of `Vs` into the corresponding `b`-bit block of `Vd`.
 
-** To move to _last_block_enc_, the `ace.state` operation must have the additional argument, which sets the bit length of the final block of the plaintext in `final_blk_len`.
+** To move to _last_block_enc_, the `ace.state` operation must have the additional argument, which sets the bit length of the final block of the plaintext in `last_blk_len`.
 
-** In state _last_block_enc_, only an ``ace.exec`` instruction of Form A "```ace.exec Vd,Kn|K[Xn],Vs```," is allowed if `final_blk_len` is nonzero.
+** In state _last_block_enc_, only an ``ace.exec`` instruction of Form A "```ace.exec Vd,Kn|K[Xn],Vs```," is allowed if `last_blk_len` is nonzero.
 In this case, following operations are performed:
 +
 --
-  . `aux <- enc_blk(key, zeros(128))`
-  . `offset <- offset xor aux`                                             // L_* in RFC
-  . `tmp : bits(final_blk_len) <- enc_blk(K, offset)[final_blk_len-1:0]` // pad
-  . `tmp <- Vs[final_blk_len-1:0] xor tmp`                                 // C_*
-  . `Vd <- tmp || zeros(b-final_blk_len)`
-  . `tmp2 : bits(b) <- (tmp[final_blk_len-1:0] || 1 || zeros((b-1)-final_blk_len) xor offset`
-  . `aux <- double(aux)`                                                   // L_$
-  . `hash_B <- enc_blk(K, hash_B xor offset xor aux) xor hash_A`
+ * `tmp : bits(last_blk_len)`
+ * `tmp2 : bits(b)`
+ * `aux : bits(b)`
+
+[]
+ . `aux <- enc_blk(key, zeros(128))`
+ . `offset <- offset xor aux`                   // L_* in RFC
+ . `tmp <- enc_blk(K, offset)[last_blk_len-1:0]` // pad
+ . `tmp <- Vs[last_blk_len-1:0] xor tmp`         // C_*
+ . `Vd <- zeros(b-last_blk_len) @ tmp`
+ . `tmp2 <- (zeros(b-last_blk_len-1) @ 1'b1 @ tmp[last_blk_len-1:0]) xor offset`
+ . `aux <- double(aux)`                         // L_$
+ . `hash_P <- enc_blk(K, hash_P xor tmp2 xor offset xor aux) xor hash_A`
 --
 +
-On the other hand, if `final_blk_len` is zero, only an ``ace.exec`` instruction of Form D, "```ace.exec Kn|K[Xn]```," is allowed, which performs:
+On the other hand, if `last_blk_len` is zero, only an ``ace.exec`` instruction of Form D, "```ace.exec Kn|K[Xn]```," is allowed, which performs:
 +
 --
+* `aux : bits(b)`
+
+[]
   . `aux <- enc_blk(key, zeros(128))`
   . `aux <- double(aux)`                                                   // L_$
-  . `hash_B <- enc_blk(K, hash_B xor offset xor aux) xor hash_A`
+  . `hash_P <- enc_blk(K, hash_P xor offset xor aux) xor hash_A`
 --
 +
 In both cases the state then transitions to _hash_finalize_enc_.
 
 ** In state _hash_finalize_enc_,
-only an ``ace.exec`` instruction of Form C, "```ace.exec Vd,Kn|K[Xn]```," is allowed, which puts `hash_B[taglen-1:0]` into `Vd`, zero padded.
+only an ``ace.exec`` instruction of Form C, "```ace.exec Vd,Kn|K[Xn]```," is allowed, which puts `hash_P[taglen-1:0]` into `Vd`, zero padded.
 
 ** In state _decrypt_, only ``ace.exec`` instructions of Form A are allowed. +
     "```ace.exec Vd,Kn|K[Xn],Vs```" decrypts `Vs` into `Vd`, and absorbs the plaintext `Vd` into the `auth_tag`, namely:
 +
 --
+  * `tmp : bits(b)`
+
+[]
   . `L <- double(L)`
   . `offset <- offset xor L`
   . `tmp <- offset xor enc_blk(key, Vs xor offset)`
-  . `hash_B <- hash_B xor tmp`
+  . `hash_P <- hash_P xor tmp`
   . `Vd <- tmp`
 --
 +
 If `VLEN` is a multiple of `b`, the same behavior applies as in state _encrypt_.
 
-** To move to _last_block_dec_, the `ace.state` operation must have the additional argument, which sets the bit length of the final block of the ciphertext in `final_blk_len`.
+** To move to _last_block_dec_, the `ace.state` operation must have the additional argument, which sets the bit length of the final block of the ciphertext in `last_blk_len`.
 
-** In state _last_block_dec_, only an ``ace.exec`` instruction of Form A "```ace.exec Vd,Kn|K[Xn],Vs```," is allowed if `final_blk_len` is nonzero.
-In this case, following operations are performed:
-+
---
-  . `aux <- enc_blk(key, zeros(128))`
-  . `offset <- offset xor aux`                                             // L_* in RFC
-  . `tmp : bits(final_blk_len) <- enc_blk(K, offset)[final_blk_len-1:0]`   // pad
-  . `tmp <- Vs[final_blk_len-1:0] xor tmp`                                 // C_*
-  . `Vd <- tmp || zeros(b-final_blk_len)`
-  . `tmp2 : bits(b) <- (Vs[final_blk_len-1:0] || 1 || zeros((b-1)-final_blk_len) xor offset`
-  . `aux <- double(aux)`                                                   // L_$
-  . `hash_B <- enc_blk(K, hash_B xor offset xor aux) xor hash_A`
---
-+
-On the other hand, if `final_blk_len` is zero, only an ``ace.exec`` instruction of Form D, "```ace.exec Kn|K[Xn]```," is allowed, which performs:
-+
---
-  . `aux <- enc_blk(key, zeros(128))`
-  . `aux <- double(aux)`                                                   // L_$
-  . `hash_B <- enc_blk(K, hash_B xor offset xor aux) xor hash_A`
---
-Then the state is changed to _hash_verify_.
-+
+** In state _last_block_dec_, only an ``ace.exec`` instruction of Form A "```ace.exec Vd,Kn|K[Xn],Vs```," is allowed if `last_blk_len` is nonzero.
+In this case, the same operations as in state _last_block_enc_ are performed except for line 6., that reads instead
+
+[start=6]
+. `tmp2 <- (zeros(b-last_blk_len-1) @ 1'b1 @ Vs[last_blk_len-1:0]) xor offset`
+
+// +
+// --
+//  * `tmp : bits(last_blk_len)`
+//  * `tmp2 : bits(b)`
+//  * `aux : bits(b)`
+//
+// []
+//  . `aux <- enc_blk(key, zeros(128))`
+//  . `offset <- offset xor aux`                                             // L_* in RFC
+//  . `tmp <- enc_blk(K, offset)[last_blk_len-1:0]`                           // pad
+//  . `tmp <- Vs[last_blk_len-1:0] xor tmp`                                   // P_*
+//  . `Vd <- zeros(b-last_blk_len) @ tmp`
+//  . `tmp2 <- (zeros(b-last_blk_len-1) @ 1'b1 @ Vs[last_blk_len-1:0]) xor offset`
+//  . `aux <- double(aux)`                                                   // L_$
+//  . `hash_P <- enc_blk(K, hash_P xor tmp2 xor offset xor aux) xor hash_A`
+// --
+// +
+If `last_blk_len` is zero, only an ``ace.exec`` instruction of Form D, "```ace.exec Kn|K[Xn]```," is allowed, which performs the same operations as in state _last_block_enc_.
+
+For any value of `last_blk_len`, the state is changed to _hash_verify_.
 
 ** In state _hash_verify_, only an ``ace.exec`` instruction of Form B, i.e., "```ace.exec Kn|K[Xn],Vs```" is allowed.
-    It compares `Vs` with `hash_B`:
+    It compares the `taglen` least significant bits of `Vs` with `hash_P`:
 +
 --
   . If the values match, then the state is changed to _completed_, and `ace.error` returns no error,
   . else the state is changed to _completed_, and `ace.error` returns `ace_err_authentication`.
 --
 +
-If `VLEN` is larger than `b`, only the `b` least significant bits of `Vs` are compared to `auth_tag`.
 
 
 
-[.red]#TBD#.
+[.red]#TBD: fix the endianness and the base of all the fields!!!#.
 
 
 [[ACE-CMAC-mode]]
