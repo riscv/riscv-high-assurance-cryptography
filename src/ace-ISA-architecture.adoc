@@ -336,6 +336,10 @@ Clearing state is not performed by setting ACES to Off, Initial, or Clean, and i
 
 In <<fsxsstates-copy>> we describe the transitions between states.
 
+NOTE: <<fsxsstates-copy>> is a copy of <<fsxsstates>>
+of "The RISC-V Instruction Set Manual, Volume II - Privileged Architecture"
+and it will be removed from this document once the extension is ratified.
+
 //
 
 [[fsxsstates-copy]]
@@ -379,24 +383,7 @@ N/A
 
 [width=83,align=center,float=center,cols="<,<,<,<,<"]
 |===
-5+^|*Execute instruction that possibly modifies state,* +
-*including configuration, import, cloning, and derivation*
-
-|Action? +
-Next state
-|Exception +
-Off
-|Execute +
-Dirty
-|Execute +
-Dirty
-|Execute +
-Dirty
-|===
-
-[width=83,align=center,float=center,cols="<,<,<,<,<"]
-|===
-5+^| Export
+5+^| Execute instruction to read state
 
 |Action? +
 Next state
@@ -406,6 +393,22 @@ Off
 Initial
 |Execute +
 Clean
+|Execute +
+Dirty
+|===
+
+[width=83,align=center,float=center,cols="<,<,<,<,<"]
+|===
+5+^|Execute instruction that possibly modifies state
+
+|Action? +
+Next state
+|Exception +
+Off
+|Execute +
+Dirty
+|Execute +
+Dirty
 |Execute +
 Dirty
 |===
@@ -853,19 +856,19 @@ UNINTERRUPTIBLE_BLOCK_END
 [[ACE-incomplete-contexts]]
 ==== Incomplete Cryptographic Contests
 
-An initialization or the import operation may be interrupted by context switching code, i.e., not returning to the original control flow immediately after the handler is done. In this case the intermediate state of the CR must be saved and then restored in a way that allows for resumption of the operation (by setting also the value of `acestart`).
+An initialization or import operation may be interrupted by context switching code, i.e., not returning to the original control flow immediately after the handler is done. In this case the intermediate state of the CR must be saved and then restored in a way that allows for resumption of the operation (by setting also the value of `acestart`).
 (((Cryptographic Register,incomplete)))
 Then exporting the incomplete CR, the following metadata header format is used as the first 8 bytes of the SCC to store information about the incomplete CR.
 After this header block, the SCC contains the nonce and SIV following <<ACE-format-SCC>>, and then the content section.
 
-The Incomplete CR Metadata Header (ICREM) must distinguish between incomplete CRs following interrupted
+The Incomplete CR Metadata (ICREM) header must distinguish between incomplete CRs following interrupted
 initialization and import operations, and in the second case also the content section must be modified accordingly.
 In particular, for the interrupted import case, we need to save the current partial tag value that will have to be verified at the end,
 but the original metadata block, nonce and SIV can be recovered from the original SCC.
 Note that the metadata of that SCC can also indicate a partial initialization or import operation.
 
 [[ACE-metadata-incomplete]]
-.Format of the Metadata Section
+.Format of the Incomplete CR Metadata
 [width="100%",cols="^9%,^7%,17%,67%",options="header"]
 |===
 .>|   Field .>| Width +
@@ -873,15 +876,16 @@ Note that the metadata of that SCC can also indicate a partial initialization or
 |   [0:0] |   1  | Format                 | Value is 0 for the current metadata format. +
 Future format will have a 1 in this position and may be longer than 64 bits.
 |   [1:1] |   1  | Incomplete             | Value is 1.
-|   [5:2] |   4  | Locality               | A field which is either -1 or an index into the Locality Secrets Table.
-|   [6:6] |   1  | Variant                | The value is 0 if the configuration was interrupted at initialization, and
+|   [2:2] |   1  | Variant                | The value is 0 if the configuration was interrupted at initialization, and
                                             the value is 1 if the configuration was interrupted while importing.
-|   [7:7] |   1  | Reserved               | Reserved for future use.
+|   [7:3] |   5  | Reserved               | Reserved for future use.
 |  [31:8] |  24  | Payload_Length         | Length of the payload in bytes (excluding the first 32 bytes)
 | [63:32] |  16  | Reserved               | Zero for now.
 |===
 
-Fields Algorithm, SC_Protection, State Number, Direction_Policy and, perhaps even more notably, the Usage Control policies UC_Policy_{empty}__i__ (_i_ = 0 .. 3) are omitted, the reason being that usage of incomplete CRs is forbidden by the architecture anyway, and therefore the space can be used for other purposes.
+NOTE: Fields Algorithm, SC_Protection, State Number, Direction_Policy and, perhaps even more notably, the Usage Control policies UC_Policy_{empty}__i__ (_i_ = 0 .. 3)
+and Locality information are omitted, the reason being that usage of incomplete CRs is forbidden by the architecture anyway, and therefore the space can be used for other purposes.
+Regarding the Locality, Locality violation errors should be handled where the complete CR is used, and therefore the RCSK is always used for incomplete CRs. This may also reduce the need to compute or cache DCSKs at higher privileged levels, overall improving performance.
 
 The content format to export incomplete initializations is the same, only truncated to the actual imported length, rounded to a multiple of 8 bytes.
 
@@ -955,9 +959,6 @@ They serve as a starting point for discussion and refinement as
 well as a proof that, at the time of this writing, the ACE instruction set
 can be encoded.
 
-[.darkred]#TBD: Add to each instruction whether it may be usage-controlled or not.#
-
-
 [[ACE-instruction-init]]
 ==== ace.init
 
@@ -982,6 +983,10 @@ Description::
 `ace.init` initializes a CR with metadata and content to create a CC.
 `Kd` or `K[Xd]` denotes the CR to be initialized.
 `Xs` points to the region of memory containing the metadata and the key material.
+
+Possibly modifies state: *YES*.
+
+Usage-controlled: *NO*.
 
 NOTE: `ace.init`, as well as `ace.import`, `ace.export`, `ace.input`, and `ace.output` as described later, perform direct memory accesses.
 This does not violate the RISC-V load/store architecture principles,
@@ -1021,6 +1026,11 @@ Description::
 For `ace.clear`, `Kd` or `K[Xd]` denotes the CR to be cleared. +
 `ace.reset` uses the encoding for `ace.clear` with indirect CR addressing (the `ace.clear` field is `3'b111`) and `Xd` = `X0` (the `context` field is `0`).
 
+`ace.clear` possibly modifies state. +
+`ace.reset` unconfigures the unit.
+
+Usage-controlled: *NO*.
+
 [[ACE-instruction-export]]
 ==== ace.export
 
@@ -1051,6 +1061,10 @@ Similarly to entire-vector-register store instructions, `ace.export` appears to 
 
 The initial cryptographic phase of `ace.export`, as well as the authentication phase of `ace.import`, must be uninterruptible.
 Even if these parts are executed concurrently with other operations, an interrupt handler may need to wait for these steps to complete before proceeding with any memory accesses.
+
+Possibly modifies state: *NO*.
+
+Usage-controlled: *NO*.
 
 
 [[ACE-instruction-import]]
@@ -1084,6 +1098,10 @@ It is set to true if the key is in a system defined format
 and not the format defined by the present architecture
 (`ace.import`).
 
+Possibly modifies state: *YES*.
+
+Usage-controlled: *NO*.
+
 The instruction must follow the interruptibility rules defined in <<ACE-CSR-acestart>>.
 Similarly to entire-vector-register load instructions, `ace.import` appears to other harts as sequences of individual loads.
 
@@ -1108,8 +1126,6 @@ The `ace.exec` instruction admits four Forms, namely
 . `ace.exec  {nbsp}{nbsp}{nbsp}Kn|K[Xn],Vs` {nbsp}{nbsp} takes an input vector but does not write to an output vector.
 . `ace.exec  Vd,Kn|K[Xn]{nbsp}{nbsp}{nbsp}` {nbsp}{nbsp} does not take an input but writes to an output vector.
 . `ace.exec  {nbsp}{nbsp}{nbsp}Kn|K[Xn]{nbsp}{nbsp}{nbsp}` {nbsp}{nbsp} does not take an input vector and does not write to an output vector.
-
-Form D instructions perform internal processing only in the CC in the given CR.
 
 // Without this comment, the next part is not properly formatted...
 Encoding::
@@ -1144,6 +1160,10 @@ with non-zero values in `rd`, resp., `rs2`, to encode additional instructions.
 
 // To make indent in next line correct
 
+Possibly modifies state: *YES*.
+
+Usage-controlled: *YES*.
+
 Description::
 Performs a cryptographic operation such as an encryption or decryption, absorbing a value in a hash,
 an elliptic curve point addition or scalar multiplication, etc., and possibly returning a value.
@@ -1160,6 +1180,10 @@ or to the _completed_ or _invalidated_ states (see <<ACE-state-constants>> and <
 `ace.size` returns the size of the memory buffer that would be necessary to store the exported SCC.
 (((ACE, instruction, ace.size)))
 Knowing this size is necessary for any feature that relies on `ace.export`, including context switching.
+
+Possibly modifies state: *NO*.
+
+Usage-controlled: *NO*.
 
 ===== Context Variant
 
@@ -1187,7 +1211,7 @@ Bit `r` (i.e., bit 27) is 0 if the CR is encoded as an immediate, and 1 if the C
 Description::
 Returns the size of the SCC corresponding to the source CR `Ks` or `K[Xs]`.
 
-NOTE: The value can significantly differ from the internal resource usage to store the CC's data in a CR —
+NOTE: The returned value can significantly differ from the internal resource usage to store the CC's data in a CR —
 it can be larger (for simple primitives, because of the nonce/SIV overhead) but
 also smaller (for keys split into shares for threshold implementations, but saved
 externally in reconstructed form).
@@ -1223,6 +1247,10 @@ Only the Algorithm and SC_Protection fields of the metadata section of a CC are 
 
 Alias to the Metadata Variant of `ace.size`, as it returns zero if the algorithm is not supported.
 
+Possibly modifies state: *NO*.
+
+Usage-controlled: *NO*.
+
 [[ACE-instruction-clone]]
 ==== ace.clone
 
@@ -1255,6 +1283,10 @@ Bits [27:26], i.e., field `R`, take the following values depending on how the CR
 . `0b11` if the source and the output CRs are both selected using the values of GPRs.
 
 // Comment to ensure the proper indentation in the next Description
+
+Possibly modifies state: *YES*.
+
+Usage-controlled: *NO*.
 
 Description::
 Clones source CR `Ks` (or the CR indexed by `Xs`) into destination CR `Kd` (or into the CR indexed by `Xd`).
@@ -1296,6 +1328,10 @@ It is similar to `ace.clone`, but the derived context is not a copy of the sourc
 rather, it is a new context that is derived from it, for instance, through a key derivation mechanism.
 This instruction can be used multiple times, to generate multiple derived contexts.
 
+Possibly modifies state: *YES*.
+
+Usage-controlled: *YES*.
+
 [[ACE-instruction-state]]
 ==== ace.state/ace.dir
 
@@ -1323,11 +1359,15 @@ Encoding::
 Bit `r` (i.e., bit 15) is 0 if the context is encoded as an immediate, and 1 if a GPR is used to reference it.
 
 Description::
-`ace.state` and `ace.dir` are two names for the same instruction. +
+`ace.state` and `ace.dir` are the same instruction. +
 `Ks` or `K[Xs]` is the CR whose state is to be set. +
 The `#immed` operand is a constant from the set of admissible values defined for each algorithm, used to manage the algorithm's internal state machine when additional states are required. +
 `Xs` is a GPR that is either `X0` or contains an optional additional parameter for the state machine. +
-The new state, if allowed, is written into the State_Number field of the metadata, unless the algorithm requires more than 16 states, in which case an ad-hoc field must be defined in the context (for both internal representation and SCCs).
+The new state number, if allowed, is written into the State_Number field of the metadata, unless the algorithm requires more than 16 states, in which case an ad-hoc field must be defined in the context (for both internal representation and SCCs).
+
+Possibly modifies state: *YES*.
+
+Usage-controlled: *YES*.
 
 The state numbers used in this specification are defined in the following table.
 
@@ -1418,6 +1458,10 @@ The instruction works as follows:
 --
 +
 
+Possibly modifies state: *YES*.
+
+Usage-controlled: *YES*.
+
 //
 
 [[ACE-instruction-input]]
@@ -1442,6 +1486,10 @@ Encoding::
 
 // [.darkred]#(TBdetermined whether it is secure)# This instruction is trappable and may also be resumed or restarted.
 
+Possibly modifies state: *YES*.
+
+Usage-controlled: *YES*.
+
 [[ACE-instruction-output]]
 ==== ace.output (optional)
 
@@ -1463,6 +1511,10 @@ Encoding::
 ]}
 ....
 
+Possibly modifies state: *YES*.
+
+Usage-controlled: *YES*.
+
 [[ACE-instruction-error]]
 ==== ace.error
 
@@ -1474,6 +1526,10 @@ The ACE Unit may be in an error state due to the previous operation.
 The corresponding error code is written into GPR `Xd`.
 This is implemented as a read from CSR `aceerror`, which may cause the hart to wait if the error code is not yet available (cf.{nbsp}<<ACE-CSR-ace-error>>).
 The error code list is architected and given in <<ACE-error-codes>>.
+
+Possibly modifies state: *NO*.
+
+Usage-controlled: *NO*.
 
 // ///////////////////////////////////////////////////////////////////////////////////////////
 
