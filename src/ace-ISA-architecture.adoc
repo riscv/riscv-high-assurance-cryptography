@@ -1845,7 +1845,7 @@ The following pseudocode illustrates how to use an ECB CC to encrypt a block of 
 - Call OS API to get the necessary SCC. Assume X5 points to the SCC.
 - Allocate memory for ciphertext buffer.
 
-vsetvli zero,4,e32,m1,ta,ma                // Use 128-bit vectors
+vsetvli zero, 4, e32, m1, ta, ma           // Use 128-bit vectors
 ace.import K0, (X5)                        // Import the SCC into CR K0
 ace.error X1                               // Read error from a CSR
 if (X1 != 0) then { handle error }         // ACE may fail to validate SCC, algorithm may
@@ -2540,8 +2540,8 @@ We show in <<ACE-pseudocode-GCM-SIV-encryption>> how to perform AEAD encryption 
 - The API returns the SCC. Assume X5 is the pointer to it.
 - Allocate memory for ciphertext buffer CT (if not same as PT).
 
-vsetvli zero,4,e32,m1,ta,ma                      // Use 128-bit vectors
-ace.import K0,(X5)
+vsetvli zero, 4, e32, m1, ta, ma                 // Use 128-bit vectors
+ace.import K0, (X5)
 
 // Set the nonce (and the derived Authentication Key).
 ace.state K0, #ace_state_set_public_value
@@ -2557,7 +2557,7 @@ for i = 0 to len_in_bytes(PT)/16-1  do
     ace.exec K0, V0 		                         // Absorb it into hash
 
 V0 ← IntTo64Bits(len(AD)) @ IntTo64Bits(len(PT))
-ace.exec K0, V0		          	                 // Absorb lengths into hash
+ace.exec K0, V0		          	                   // Absorb lengths into hash
 
 // Finalize the SIV computation, set and return it
 ace.state K0, #ace_state_hash_finalize_enc
@@ -2568,7 +2568,7 @@ ace.exec V2,K0
 ace.state K0, #ace_state_encrypt
 for i = 0 to len_in_bytes(PT)/16-1  do
     - load V0 from address PT+16*i               // Load a block of plaintext
-    ace.exec V1, K0, V0                            // Encrypt the block
+    ace.exec V1, K0, V0                          // Encrypt the block
     - store V1 at address CT+16*i                // Store a block of ciphertext
 ----
 
@@ -2582,8 +2582,8 @@ for i = 0 to len_in_bytes(PT)/16-1  do
 - The API returns the SCC. Assume X5 is the pointer to it.
 - Allocate memory for plaintext buffer PT (if not same as CT).
 
-vsetvli zero,4,e32,m1,ta,ma                      // Use 128-bit vectors
-ace.import K0,(X5)
+vsetvli zero, 4, e32, m1, ta, ma                 // Use 128-bit vectors
+ace.import K0, (X5)
 
 // The next operations set the nonce and SIV.
 ace.state K0, #ace_state_set_public_value
@@ -2844,6 +2844,8 @@ For any value of `last_blk_len`, the state is changed to _hash_verify_.
 --
 +
 
+//
+
 ===== Usage
 
 Pseudocode for OCB encryption is given in <<ACE-pseudocode-OCB-encryption>> (again with `b` = `VL*SEW` = 128).
@@ -2862,7 +2864,7 @@ Pseudocode for OCB encryption is given in <<ACE-pseudocode-OCB-encryption>> (aga
 - Allocate memory for ciphertext buffer CT (if not same as PT).
 
 vsetvli zero,4,e32,m1,ta,ma                      // Use 128-bit vectors
-ace.import K0,(X5)
+ace.import K0, (X5)
 
 // The next operations set the nonce
 X1 ← N_len
@@ -2902,7 +2904,7 @@ if (X1 mod 128 != 0) then
 - store V1 at address CT+floor(AD_len/128)*i       // may be a shorter store
 
 ace.state K0, #ace_state_output
-ace.exec V1,K0,V1                                  // output tag
+ace.exec V1, K0, V1                                // output tag
 ----
 
 OCB decryption differs from encryption as follows:
@@ -2960,7 +2962,7 @@ Algorithm-Specific Functions:::
 * `enc_blk(key, p) -> c` encrypts block `p` using the key, and returns the result `c`.
 * `gen_subkeys(K) -> K1,K2` generates subkeys `K1` and `K2` from the master key `K` as follows: Let `C` be `0x1B` for `b` = 64, `0x87` for `b` = 128, and `0x425` for `b` = 256, then
 
- . `L <- AES-enc_blk(K, 0)`
+ . `L <- enc_blk(K, zeros(b))`
  . if (`most_significant_bit(L){nbsp}{nbsp}= 0`) then
    { `K1 <- L{nbsp}{nbsp}<< 1` }
    else
@@ -2976,19 +2978,18 @@ State Machine:::
 * *States:* _initial_ (0), _hash_absorb_, _hash_last_block_, _hash_finalize_, and _completed_.
 * *Allowed State Transitions:*
  ** _initial_ -> _hash_absorb_.
- ** _hash_absorb_ -> _hash_finalize_ -> _completed_.
+ ** _hash_absorb_ -> , _hash_last_block_ -> _hash_finalize_ -> _completed_.
  ** From any state to state _initial_.
 * *Behavior:*
  ** In state _initial_:
-  *** `last_block_len` is set to zero.
-  *** `hash` is set to zero.
+  *** `last_block_len <- zeros(64)`
+  *** `hash <- zeros(b)`
   *** Any `ace.exec` will result in the CR being *invalidated*.
 
  ** In state _hash_absorb_, we can only issue ``ace.exec`` instructions of Form B, i.e., "```ace.exec Kn|K[Xn], Vs```", to absorb the data block `Vs` into the hash. This is performed as follows:
 +
 --
-  . `tmp <- hash xor Vs`.
-   . `hash <- enc_blk(key, tmp)`.
+   . `hash <- enc_blk(key, hash xor Vs)`.
 --
 +
 If `VL*SEW` > `b`, then the above operations are applied to each `b`-bit block of `Vs`.
@@ -3019,7 +3020,39 @@ If `VL*SEW` > `b`, then the above operations are applied to each `b`-bit block o
 
   ** In any state, issuing any Form of ``ace.exec`` that is not explicitly allowed will produce a null output and the CR will be *invalidated*.
 
-[.red]#TBD: Write missing example!#
+//
+
+===== Usage
+
+[[ACE-pseudocode-CMAC]]
+.CMAC Computation
+----
+- Info: CMAC input = *M with bit length M_len
+- Process gets a CMAC CC from an API. Assume X5 is the pointer to the CC.
+
+vsetvli zero, 4, e32, m1, ta, ma                 // Use 128-bit vectors
+ace.import K0, (X5)
+
+ace.state K0, #ace_hash_absorb
+blocks = floor(M_len/128)
+remainder = M_len % 128
+if remainder == 0 then
+    blocks ← blocks - 1
+    remainder ← 128
+
+for i = 0 to blocks-1 do
+    - load V0 from address M+16*i
+    ace.exec K0, V0
+
+X1 ← remainder
+ace.state K0, #ace_hash_last_block, X1
+- load V0 from address M+16*blocks
+ace.exec K0, V0
+
+ace.state K0, #ace_hash_hash_finalize
+ace.exec V0, K0  // this is the value of the CMAC
+----
+
 
 [[ACE-hash-functions]]
 ==== Hash and MAC Functions (Including XOF Variants Thereof)
@@ -3052,17 +3085,17 @@ Data Structures:::
  ** `hash_state`: algorithm specific length.
  ** `last_block_len` -- Only if this Hash/MAC has special internal treatment for a fractional last block that goes beyond padding and appending the length, which are handled by user software  (field size at most 16 bits).
  ** `used_VLxSEW` -- Current used vector length.
- ** `partial_len` -- Length of absorbed data so far for the current block (field size at most 16 bits).
+ ** `partial_len` -- Length of absorbed data so far for the current block (field size at most 16 bits). Only if used by the algorithm.
  ** `partial_block`: `b` bits (a priori we cannot know whether `b > VL*SEW` or not, and changing the internal memory requirements of a CC depending on the `VL*SEW` can lead to memory exhaustion).
 
 * *Serialized Content*:
 [lowerroman]
  . `key`: `k` bits -- Only if keyed, i.e., a MAC.
  . `hash_state`: `n` bits.
- . padding: 16 bits.
  . `used_VLxSEW`: 16 bits -- Current vector length.
  . `last_block_len`: 16 bits -- Only if this Hash/MAC has special internal treatment for a fractional last block that goes beyond padding and appending the length, which are handled by user software. Otherwise, this is zero.
- . `partial_len`: 16 bits -- Length of absorbed data so far for the current block.
+ . `partial_len`: 16 bits -- Length of absorbed data so far for the current block. Only if used by the algorithm, else zero padding.
+ . padding: 16 bits.
  . `partial_block`: `b` bits -- We include it only if there is a partial block, and exclude it when not.
  We reuse the most significant bit of the `state` field to store this information.
  (In theory, we could include only the part filled so far, but this would complicate the parsing of a SCC.)
@@ -3140,6 +3173,10 @@ The values 9 and 13 are used when there is a partial block.
  ** In any state, issuing any Form of ``ace.exec`` that is not the allowed one will produce a null output and the CR will be *invalidated*.
 
 NOTE: The description of states _hash_absorb_ and _hash_finalize_ should make it clear that allowing `b` and `VL*SEW` to be in relations other than one being an integer multiple of the other, as well as allowing a change of `VL*SEW`, would significantly complicate the state machine.
+
+===== Usage
+
+The usage of this type of algorithms is very similar to that of CMAC (<<ACE-CMAC-mode>>), with the exception that if the last block is not treated in a special way, there is no state _hash_last_block_ and after the last block is absorbed, the state is changed to _hash_finalize_.
 
 [[ACE-Ascon]]
 ==== Ascon Specific Rules
