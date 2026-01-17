@@ -1736,6 +1736,9 @@ The function that puts the CR in this state is called `invalidate()`.
 
 In state _completed_, only `ace.init`, `ace.export`, `ace.import`, `ace.clear`, and `ace.error` are permitted. Any other instruction that produces an output returns zero and *invalidates* the CR.
 
+In any algorithm and in any state, only certain instructions are permitted.
+Any other operation-including any non allowed Form of `ace.exec`-will result in the CR being *invalidated*.
+
 We recall that operations performed by `ace.exec` or `ace.state`—as defined by the algorithm-specific rules—are uninterruptible. This includes processing of arbitrarily long vector inputs when all work is purely internal to ACE and in particular without access to external memory (e.g., encryption, decryption, hashing, or point multiplication). Because these operations may proceed independently of the CPU core, a hart implementation may require context-switching software to wait when accessing a CR that is being written. These instructions are therefore atomic and non-preemptible.
 
 In what follows, when we write of "state _name_" we refer to the state which has number _ace_state_name_ as described in <<ACE-state-constants>>.
@@ -1815,8 +1818,8 @@ State Machine:::
  ** In states _encrypt_ or _decrypt_, we can only issue a Form A `ace.exec`, i.e., `ace.exec Vd,Kn|K[Xn],Vs`.
   *** If the state is _encrypt_, then `Vd = enc_blk(Vs)`.
   *** If the state is _decrypt_, then `Vd = dec_blk(Vs)`.
-  *** If `VL*SEW` is a multiple of `b`, then `ace.exec Vd,Kn|K[Xn],Vs` encrypts/decrypts block-by-block.
-  *** If any other Form of `ace.exec` is issued, then the CR is *invalidated*.
+  *** If `VL*SEW` > `b`, then `ace.exec Vd,Kn|K[Xn],Vs` encrypts/decrypts block-by-block.
+  //*** If any other Form of `ace.exec` is issued, then the CR is *invalidated*.
 
 //
 
@@ -2029,13 +2032,14 @@ State Machine:::
 * *Behavior:*
  ** In state _initial_:
   *** The `mask` field is set to zero.
-  *** Any {nbsp}``ace.exec``{nbsp} operation will produce null outputs and causes the CR to be *invalidated*.
+  *** No {nbsp}``ace.exec``{nbsp} operation is allowed.
+  //*** Any {nbsp}``ace.exec``{nbsp} operation will produce null outputs and causes the CR to be *invalidated*.
  ** In state _set_public_value_, only ``ace.exec`` instructions of Form B are allowed. +
  "```ace.exec Kn|K[Xn], Vs```" sets the _tweak_. The `mask` field is used to store the tweak: `mask <- Vs`.
   *** If no such instruction is issued, the value of the tweak will remain zero.
   *** If `VL*SEW` > `b`, only the `b` least significant bits of `Vs` are considered.
   *** If "```ace.exec Kn|K[Xn], Vs```" is repeated, it will just re-write the mask.
-  *** Other forms of `ace.exec` not allowed, will produce null outputs and the CR is *invalidated*.
+  //*** Other forms of `ace.exec` not allowed, will produce null outputs and the CR is *invalidated*.
  ** When transitioning from _set_public_value_ to either _encrypt_ or _decrypt_, the following operations are performed:
   . `mask <- enc_blk(key2, mask)` or `mask <- enc_blk(key1, mask)` if only one key is used.
   . If only one key is used then update mask: `mask <- update_mask(mask)`.
@@ -2143,7 +2147,7 @@ State Machine:::
 
 * *Behavior:*
  ** In state _initial_ :
-  *** Any {nbsp}``ace.exec``{nbsp} operation will produce null outputs and causes the CR to be *invalidated*.
+  *** No {nbsp}``ace.exec``{nbsp} operation is allowed.
   *** The following initialization operations are performed:
    . `hash_key <- enc_blk(key, zeros(b))`,
    . `auth_tag <- zeros(b)`, and
@@ -2155,7 +2159,7 @@ State Machine:::
   *** If "```ace.exec Kn|K[Xn], Vs```," is repeated, it will just re-write the IV.
   *** If no such `ace.exec` to set the IV is issued, `ctr` remains zero.
   *** If `VL*SEW` > `b`, only the `b` least significant bits of `Vs` are considered.
-  *** Any other Form of `ace.exec` will produce null outputs and causes the CR to be *invalidated*.
+  //*** Any other Form of `ace.exec` will produce null outputs and causes the CR to be *invalidated*.
 
  ** In state _hash_absorb_, only  ``ace.exec`` instructions of Form B are allowed. +
  "```ace.exec Kn|K[Xn], Vs```" absorbs a data block in `auth_tag`, i.e.:
@@ -2433,7 +2437,7 @@ State Machine:::
 
 * *Behavior:*
 ** In state _initial_ :
-*** Any {nbsp}``ace.exec``{nbsp} operation will produce a null output and the CR will be *invalidated*.
+*** No {nbsp}``ace.exec``{nbsp} operation is allowed.
 *** The following initialization operations are performed:
   . `enc_key`, `auth_key <- RFC8452_KeyDeriv(key)`,
   . `nonce`, `ctr`, `auth_tag`, `SIV <- 0`.
@@ -2700,7 +2704,7 @@ State Machine:::
 
 * *Behavior:*
 ** In state _initial_ :
-  *** Any {nbsp}``ace.exec``{nbsp} operation will produce null outputs and causes the CR to be *invalidated*.
+  *** No {nbsp}``ace.exec``{nbsp} operation is allowed.
   *** The following initialization operations are performed:
    . `N <- 1'b1 @ zeros(u)`.
    . `hash_A <- zeros(b)`
@@ -2738,7 +2742,7 @@ State Machine:::
 If `VL*SEW` > `b`, the above operation is executed `VL*SEW/b` times.
 
   *** If `VL*SEW` > `b`, only the `b` least significant bits of `Vs` are considered.
-  *** Any other Form of `ace.exec` will produce null outputs and causes the CR to be *invalidated*.
+  //*** Any other Form of `ace.exec` will produce null outputs and causes the CR to be *invalidated*.
 
 ** To move to _hash_finalize_, the `ace.state` operation must have the additional argument, which sets the length of the final block of the AD in `last_blk_len`.
 
@@ -3002,7 +3006,7 @@ State Machine:::
  ** In state _initial_:
   *** `last_block_len <- zeros(64)`
   *** `hash <- zeros(b)`
-  *** Any `ace.exec` will result in the CR being *invalidated*.
+  *** No {nbsp}```ace.exec```{nbsp} operation is allowed.
 
  ** In state _hash_absorb_, we can only issue ``ace.exec`` instructions of Form B, i.e., "```ace.exec Kn|K[Xn], Vs```", to absorb the data block `Vs` into the hash. This is performed as follows:
 +
@@ -3036,7 +3040,7 @@ If `VL*SEW` > `b`, then the above operations are applied to each `b`-bit block o
    If `VL*SEW` > `b`, only the bits of `Vd` beyond the `b`-th are cleared.
    Upon issuing that instruction, the CC transitions to state _completed_ with no error.
 
-  ** In any state, issuing any Form of ``ace.exec`` that is not explicitly allowed will produce a null output and the CR will be *invalidated*.
+//  ** In any state, issuing any Form of ``ace.exec`` that is not explicitly allowed will produce a null output and the CR will be *invalidated*.
 
 //
 
@@ -3188,7 +3192,7 @@ The values 9 and 13 are used when there is a partial block.
      .. `last_block_len <- max(last_block_len - VL*SEW, 0)`
      .. if `last_block_len` = 0 then the state is changed to _completed_ with no errors, unless the algorithm is a XOF, in which case the internal state is updated again, `last_block_len <- b`, and more "```ace.exec Vd, Kn|K[Xn]```" instructions can be issued.
 
- ** In any state, issuing any Form of ``ace.exec`` that is not the allowed one will produce a null output and the CR will be *invalidated*.
+// ** In any state, issuing any Form of ``ace.exec`` that is not the allowed one will produce a null output and the CR will be *invalidated*.
 
 NOTE: The description of states _hash_absorb_ and _hash_finalize_ should make it clear that allowing `b` and `VL*SEW` to be in relations other than one being an integer multiple of the other, as well as allowing a change of `VL*SEW`, would significantly complicate the state machine.
 
