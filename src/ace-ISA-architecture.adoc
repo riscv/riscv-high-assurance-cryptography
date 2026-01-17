@@ -1463,11 +1463,11 @@ The state numbers used in this specification are defined in the following table.
 |   0   | ace_state_initial             | The context is initialized and ready for operation.
 |   1   | ace_state_hash_absorb         | Start (and initialize) a hash function or the sub-function of an algorithm, preparing it to absorb blocks of data.
 |   2   | ace_state_hash_finalize       | Finalize the internal state of a hash function and possibly prepare it for outputting the result. + In this state and in the following two states, additional data may be absorbed, such as partial blocks and lengths.
-|   3   | ace_state_hash_finalize_enc   | Finalize the internal state of a hash function for the encryption algorithm of an authenticated encryption mode of operation and possibly prepare it for outputting the result.
-|   4   | ace_state_hash_finalize_dec   | Finalize the internal state of a hash function for the decryption algorithm of an authenticated decryption mode of operation.
+|   3   | ace_state_enc_hash_finalize   | Finalize the internal state of a hash function for the encryption algorithm of an authenticated encryption mode of operation and possibly prepare it for outputting the result.
+|   4   | ace_state_dec_hash_finalize   | Finalize the internal state of a hash function for the decryption algorithm of an authenticated decryption mode of operation.
 |   5   | ace_state_hash_verify         | Compare the internal state of a hash function to the provided value.
-|   6   | ace_state_last_block_enc      | For the encryption path of authenticated encryption modes of operation if the length of the last block must be given.
-|   7   | ace_state_last_block_dec      | For the decryption path of authenticated encryption modes of operation if the length of the last block must be given.
+|   6   | ace_state_enc_last_block      | For the encryption path of authenticated encryption modes of operation if the length of the last block must be given.
+|   7   | ace_state_dec_last_block      | For the decryption path of authenticated encryption modes of operation if the length of the last block must be given.
 |   8   | ace_state_encrypt +
 ace_state_operate
 |  Encryption is requested. +
@@ -2135,16 +2135,16 @@ Algorithm-Specific Functions:::
 
 State Machine:::
 
-* *States:* _initial_, _set_public_value_, _hash_absorb_, _encrypt_, _hash_finalize_enc_, _decrypt_, _hash_finalize_dec_, and _hash_verify_, _completed_.
+* *States:* _initial_, _set_public_value_, _hash_absorb_, _encrypt_, _enc_hash_finalize_, _decrypt_, _dec_hash_finalize_, and _hash_verify_, _completed_.
 
 * *Allowed State Transitions:*
  ** From all states to _initial_.
  ** _initial_ -> _set_public_value_ -> _hash_absorb_.
  ** _hash_absorb_ -> _encrypt_ -- if metadata allows encryption, else the CR is *invalidated*.
  ** _hash_absorb_ -> _decrypt_ -- if metadata allows decryption, else the CR is *invalidated*.
- ** _encrypt_ -> _hash_finalize_enc_, later automatically transitioning to _completed_.
- ** _decrypt_ -> _hash_finalize_dec_.
- ** _hash_finalize_dec_ -> _hash_verify_, later automatically transitioning to _completed_.
+ ** _encrypt_ -> _enc_hash_finalize_, later automatically transitioning to _completed_.
+ ** _decrypt_ -> _dec_hash_finalize_.
+ ** _dec_hash_finalize_ -> _hash_verify_, later automatically transitioning to _completed_.
 
 * *Behavior:*
  ** In state _initial_ :
@@ -2186,7 +2186,7 @@ If `VL*SEW` > `b`, the above operation is executed `VL*SEW/b` times.
 +
 If `VL*SEW` is a multiple of `b`, the above operations are executed `VL*SEW/b` times, encrypting each `b`-bit block of `Vs` into the corresponding `b`-bit block of `Vd`. There is significant potential for parallelization, including in the `absorb` function. If the number `x` of blocks to encrypt is not a multiple of `VL*SEW`/`b`, `VL` can be set to the remainder of the division of `x` by `VL*SEW`/`b` for the last instruction.
 
-** In state _hash_finalize_enc_, only ``ace.exec`` instructions of Form A are allowed. The value
+** In state _enc_hash_finalize_, only ``ace.exec`` instructions of Form A are allowed. The value
 +
 --
 *** `Vs = IntTo{b/2}Bits(bit_length(AD)) @ IntTo{b/2}Bits(bit_length(plaintext))`
@@ -2221,7 +2221,7 @@ If `VL*SEW` > `b`, only the `b` least significant bits of `Vs` are considered.
 If `VL*SEW` is a multiple of `b`, the same behavior applies as in state _encrypt_, namely
 the above operations are executed `VL*SEW/b` times, decrypting each `b`-bit block of `Vs` into the corresponding `b`-bit block of `Vd`.
 
-** In state _hash_finalize_dec_, only a Form A ``ace.exec`` instruction is allowed.
+** In state _dec_hash_finalize_, only a Form A ``ace.exec`` instruction is allowed.
 The value +
  `{nbsp}{nbsp}{nbsp}Vs = IntTo{b/2}Bits(bit_length(AD)) @ IntTo{b/2}Bits(bit_length(plaintext))` +
  must be set by the software, then "```ace.exec Vd, Kn|K[Xn], Vs```" computes the authentication tag as follows:
@@ -2283,21 +2283,21 @@ for i = 0 to len_in_bytes(PT)/16-1 do
     - store V1 at address CT+16*i
 
 // Finally, we absorb the lengths into auth_tag, finalize it, and output it
-ace.state K0, #ace_state_hash_finalize_enc
+ace.state K0, #ace_state_enc_hash_finalize
 V1 ← IntTo64Bits(len(AD)) @ IntTo64Bits(len(PT))
 ace.exec V2, K0, V1                              // V2 contains the finalized hash
 ----
 
 GCM decryption differs from encryption as follows:
 the roles of `PT` and `CT` are reversed,
-states _encrypt_ and _hash_finalize_enc_ are replaced by states _decrypt_ and _hash_finalize_dec_,
+states _encrypt_ and _enc_hash_finalize_ are replaced by states _decrypt_ and _dec_hash_finalize_,
 and the last lines are as follows:
 
 [[ACE-pseudocode-GCM-decryption-difference]]
 .GCM Decryption
 ----
 // Finally, we absorb the lengths into auth_tag, finalize it, and verify it
-ace.state K0, #ace_state_hash_finalize_dec
+ace.state K0, #ace_state_dec_hash_finalize
 V1 ← IntTo64Bits(len(AD)) @ IntTo64Bits(len(CT))
 ace.exec V2, K0, V1                                // V2 contains the finalized hash
 
@@ -2372,8 +2372,8 @@ The GCM-SIV mode's main differences with GCM are that:
 
 The third difference affects the state machine. While GCM-SIV's decryption state machine is similar to the GCM's, the encryption state machine is different:
 
-* During encryption, the _hash_absorb_ state absorbs the entire associated data and plaintext. The _hash_finalize_enc_ state then absorbs the lengths and produces the SIV/tag. Finally, the _encrypt_ state performs a second pass to encrypt the plaintext using the SIV/tag as the initialization vector.
-* During decryption, the _hash_absorb_ state absorbs only the associated data. The _decrypt_ state decrypts the ciphertext and simultaneously absorbs the plaintext into the hash. Finally, the _hash_finalize_dec_ state absorbs the lengths, produces the SIV/tag, and internally compares it to the provided SIV/tag.
+* During encryption, the _hash_absorb_ state absorbs the entire associated data and plaintext. The _enc_hash_finalize_ state then absorbs the lengths and produces the SIV/tag. Finally, the _encrypt_ state performs a second pass to encrypt the plaintext using the SIV/tag as the initialization vector.
+* During decryption, the _hash_absorb_ state absorbs only the associated data. The _decrypt_ state decrypts the ciphertext and simultaneously absorbs the plaintext into the hash. Finally, the _dec_hash_finalize_ state absorbs the lengths, produces the SIV/tag, and internally compares it to the provided SIV/tag.
 
 ===== Specification
 
@@ -2425,14 +2425,14 @@ Algorithm-Specific Functions:::
   . `auth_tag <- auth_tag xor Vs`.
   . `auth_tag <- auth_tag * hash_key`, where `*` denotes either Galois field multiplication (for GHASH) or Montgomery multiplication (for POLYVAL/MHASH), as specified by the algorithm.
 State Machine:::
-* *States:* _initial_, _set_public_value_, _set_public_value_2_, _hash_absorb_, _hash_finalize_enc_, _hash_finalize_dec_, _encrypt_, _decrypt_, and _completed_.
+* *States:* _initial_, _set_public_value_, _set_public_value_2_, _hash_absorb_, _enc_hash_finalize_, _dec_hash_finalize_, _encrypt_, _decrypt_, and _completed_.
 
 * *Allowed State Transitions:*
 ** From all states to _initial_.
 ** For encryption:
-   _initial_ -> _set_public_value_ -> _hash_absorb_ -> _hash_finalize_enc_ -> _encrypt_.
+   _initial_ -> _set_public_value_ -> _hash_absorb_ -> _enc_hash_finalize_ -> _encrypt_.
 ** For decryption: +
-   _initial_ -> _set_public_value_ -> _set_public_value_2_ -> _hash_absorb_ -> _decrypt_ -> _hash_finalize_dec_.
+   _initial_ -> _set_public_value_ -> _set_public_value_2_ -> _hash_absorb_ -> _decrypt_ -> _dec_hash_finalize_.
 ** Transition to _encrypt_ possible only if metadata allows encryption, else the CR is *invalidated*.
 ** Transition to _decrypt_ possible only if metadata allows decryption, else the CR is *invalidated*.
 
@@ -2466,7 +2466,7 @@ If `VL*SEW` is a multiple of `b`, `absorb` is executed on each of the `VL*SEW/b`
 
 *** Other forms of `ace.exec` will produce null outputs and *invalidate* the CR.
 
-** In state _hash_finalize_enc_, only an {nbsp}``ace.exec``{nbsp} of Form A is allowed, i.e.,
+** In state _enc_hash_finalize_, only an {nbsp}``ace.exec``{nbsp} of Form A is allowed, i.e.,
   "```ace.exec Vd,Kn|K[Xn],Vs```," where it is the responsibility of the user to set
 +
 --
@@ -2519,7 +2519,7 @@ If `VL*SEW` > `b`, the above operations are applied to each of the `VL*SEW/b` bl
 If `VL*SEW` > `b`, the above operations are applied to each of the `VL*SEW/b` blocks in `Vs`.
 //*** Other forms of `ace.exec` will produce null outputs and *invalidate* the CR.
 
-** In state _hash_finalize_dec_,
+** In state _dec_hash_finalize_,
    only an ``ace.exec`` instruction of Form B is allowed,
    namely "```ace.exec Kn|K[Xn], Vs```," where it is the responsibility of the user to set
 +
@@ -2583,7 +2583,7 @@ V0 ← IntTo64Bits(len(AD)) @ IntTo64Bits(len(PT))
 ace.exec K0, V0		          	                   // Absorb lengths into hash
 
 // Finalize the SIV computation, set and return it
-ace.state K0, #ace_state_hash_finalize_enc
+ace.state K0, #ace_state_enc_hash_finalize
 ace.exec V2,K0
 - store V2 into tag
 
@@ -2629,7 +2629,7 @@ for i = 0 to len_in_bytes(CT)/16-1 do
     - store V1 at address PT+16*i
 
 // Finally, we absorb the lengths of AD and plaintext into auth_tag AND verify
-ace.state K0, #ace_state_hash_finalize_enc
+ace.state K0, #ace_state_enc_hash_finalize
 V0 ← IntTo64Bits(len(AD)) @ IntTo64Bits(len(PT))
 ace.exec K0, V0
 ace.error X1
@@ -2689,19 +2689,19 @@ Data Structures:::
 * `dec_blk(K,c) -> p` decrypts block `c` using the key `K` and returns the result `p`.
 * `double(S)`:
 Let `C` be  `0x1B` for `b` = 64, `0x87` for `b` = 128, and `0x425` for `b` = 256, then: +
-If S[`b`-1] = 0, then { `double(S)` = `S << 1` } else { `double(S)` = `(S << 1) xor C` } .
+If S[`b`-1] = 0, then { `double(S)` <- `S << 1` } else { `double(S)` <- `(S << 1) xor C` } .
 
 State Machine:::
 
-* *States:* _initial_, _set_public_value_, _set_public_value_2_, _hash_absorb_, _encrypt_, _last_block_enc_, _hash_finalize_enc_, _decrypt_, _last_block_dec_, _hash_finalize_dec_, _hash_verify_, and _completed_.
+* *States:* _initial_, _set_public_value_, _set_public_value_2_, _hash_absorb_, _encrypt_, _enc_last_block_, _enc_hash_finalize_, _decrypt_, _dec_last_block_, _dec_hash_finalize_, _hash_verify_, and _completed_.
 
 * *Allowed State Transitions:*
  ** From all states to _initial_.
  ** _initial_ -> _set_public_value_ -> _set_public_value_2_ -> _hash_absorb_ -> _hash_finalize_
  ** _hash_finalize_ -> _encrypt_ -- if metadata allows encryption, else the CR is *invalidated*.
  ** _hash_finalize_ -> _decrypt_ -- if metadata allows decryption, else the CR is *invalidated*.
- ** _encrypt_ -> _last_block_enc_ -> _hash_finalize_enc_ -> _hash_output_, later automatically transitioning to _completed_.
- ** _decrypt_ -> _last_block_dec_ -> _hash_verify_, later automatically transitioning to _completed_.
+ ** _encrypt_ -> _enc_last_block_ -> _enc_hash_finalize_ -> _hash_output_, later automatically transitioning to _completed_.
+ ** _decrypt_ -> _dec_last_block_ -> _hash_verify_, later automatically transitioning to _completed_.
 
 * *Behavior:*
 ** In state _initial_ :
@@ -2792,9 +2792,9 @@ If `last_blk_len` = 0, however, no `ace.exec` can be executed, and only an `ace.
 +
 If `VL*SEW` is a multiple of `b`, the above operation sequence is executed `VL*SEW/b` times, encrypting each `b`-bit block of `Vs` into the corresponding `b`-bit block of `Vd`.
 
-** To move to _last_block_enc_, the `ace.state` operation must have the additional argument, which sets the bit length of the final block of the plaintext in `last_blk_len`.
+** To move to _enc_last_block_, the `ace.state` operation must have the additional argument, which sets the bit length of the final block of the plaintext in `last_blk_len`.
 
-** In state _last_block_enc_, only an ``ace.exec`` instruction of Form A "```ace.exec Vd,Kn|K[Xn],Vs```," is allowed if `last_blk_len` is nonzero.
+** In state _enc_last_block_, only an ``ace.exec`` instruction of Form A "```ace.exec Vd,Kn|K[Xn],Vs```," is allowed if `last_blk_len` is nonzero.
 In this case, following operations are performed:
 +
 --
@@ -2824,9 +2824,9 @@ On the other hand, if `last_blk_len` is zero, only an ``ace.exec`` instruction o
   . `hash_P <- enc_blk(key, hash_P xor offset xor aux) xor hash_A`
 --
 +
-In both cases the state then transitions to _hash_finalize_enc_.
+In both cases the state then transitions to _enc_hash_finalize_.
 
-** In state _hash_finalize_enc_, only an ``ace.exec`` instruction of Form C, "```ace.exec Vd,Kn|K[Xn]```," is allowed, which
+** In state _enc_hash_finalize_, only an ``ace.exec`` instruction of Form C, "```ace.exec Vd,Kn|K[Xn]```," is allowed, which
 performs `Vd <- zeros(b-tag_len) @ hash_P[tag_len-1:0]`.
 ** In state _decrypt_, only ``ace.exec`` instructions of Form A are allowed.
     "```ace.exec Vd, Kn|K[Xn], Vs```" decrypts `Vs` into `Vd`, and absorbs the plaintext `Vd` into the `auth_tag`, namely:
@@ -2844,17 +2844,17 @@ performs `Vd <- zeros(b-tag_len) @ hash_P[tag_len-1:0]`.
 +
 If `VL*SEW` is a multiple of `b`, the same behavior applies as in state _encrypt_.
 
-** To move to _last_block_dec_, the `ace.state` operation must have the additional argument, which sets the bit length of the final block of the ciphertext in `last_blk_len`.
+** To move to _dec_last_block_, the `ace.state` operation must have the additional argument, which sets the bit length of the final block of the ciphertext in `last_blk_len`.
 
-** In state _last_block_dec_, only an ``ace.exec`` instruction of Form A "```ace.exec Vd,Kn|K[Xn],Vs```," is allowed if `last_blk_len` is nonzero.
-In this case, the same operations as in state _last_block_enc_ are performed except for line 6., that reads instead
+** In state _dec_last_block_, only an ``ace.exec`` instruction of Form A "```ace.exec Vd,Kn|K[Xn],Vs```," is allowed if `last_blk_len` is nonzero.
+In this case, the same operations as in state _enc_last_block_ are performed except for line 6., that reads instead
 +
 --
 [start=6]
 . `tmp2 <- (zeros(b-last_blk_len-1) @ 1'b1 @ Vs[last_blk_len-1:0]) xor offset`
 --
 +
-If `last_blk_len` is zero, only an ``ace.exec`` instruction of Form D, "```ace.exec Kn|K[Xn]```," is allowed, which performs the same operations as in state _last_block_enc_.
+If `last_blk_len` is zero, only an ``ace.exec`` instruction of Form D, "```ace.exec Kn|K[Xn]```," is allowed, which performs the same operations as in state _enc_last_block_.
 +
 For any value of `last_blk_len`, the state is changed to _hash_verify_.
 
@@ -2920,7 +2920,7 @@ for i = 0 to floor(PT_len/128)-1 do
     - store V1 at address CT+16*i
 
 X1 ← PT_len mod 128                                // Can be zero
-ace.state K0, #ace_state_hash_finalize_enc,X1
+ace.state K0, #ace_state_enc_hash_finalize,X1
 if (X1 mod 128 != 0) then
     - load V0 from address AD+floor(AD_len/128)*i  // may be a shorter load
     ace.exec V1, K0, V0                            // Absorb it into hash and encrypt
@@ -2932,7 +2932,7 @@ ace.exec V1, K0, V1                                // output tag
 
 OCB decryption differs from encryption as follows:
 the roles of `PT` and `CT` are reversed,
-states _encrypt_ and _hash_finalize_enc_ are replaced by states _decrypt_ and _hash_finalize_dec_,
+states _encrypt_ and _enc_hash_finalize_ are replaced by states _decrypt_ and _dec_hash_finalize_,
 and the last lines are as follows:
 
 [[ACE-pseudocode-OCB-decryption-difference]]
