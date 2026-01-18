@@ -88,7 +88,7 @@ Unprivileged::
 * `Zlascon` => Support for the ASCON suite
 * `Zlkned` => NIST Suite: AES Block Cipher. Depends on `Zleaes128` and `Zleaes256`.
 * `Zlkn` => NIST Algorithm Suite. Depends on `Zlkned` and `Zlesha2`.
-* `Zlace` => Must support for the following CSRs: `aceerror` and `crstart` (this is a dependency for Zicsr); must support the following instructions: `ace.init`, `ace.exec`, `ace.clear`, `ace.export`, `ace.import`, and `ace.size`; `ace.exec` must support `Zleaes128`.
+* `Zlace` => Must support for the following CSRs: `aceerror` and `acestart` (this is a dependency for Zicsr); must support the following instructions: `ace.init`, `ace.exec`, `ace.clear`, `ace.export`, `ace.import`, and `ace.size`; `ace.exec` must support `Zleaes128`.
 
 Privileged::
 
@@ -97,7 +97,7 @@ Privileged::
 * `Smacectkw` => ACE Root Context Sealing Key CSRs are MRW. Depends on `Smacectk`
 * `Smaceosscrt` => Defines the ACE OS Secret CSRs (`maceOSSecret{0..3}`)
 * `Smacebootscrt` => Defines the ACE Boot Secret CSRs (`maceBootSecret0{0..3}`)
-* `Smacestatus` => Defines the ACES per CC CSRs (`maceccstatus`)
+* `Smacestatus` => Defines the ACES per CC CSRs (`macecrstatus`)
 
 // ///////////////////////////////////////////////////////////////////////////////////////////
 
@@ -180,7 +180,7 @@ The metadata section is used as the header of the data formats used in CR initia
 (bits) .>| Name                  .>| Description
 |   [0:0] |   1  | Format                 | Value is 0 for the current metadata format. +
 Future format will have a 1 in this position and may be longer than 64 bits.
-|   [1:1] |   1  | Partial                | Normally, the value is 0. The value is 1 if any operation involving the configuration of the CC has been interrupted and may have to be restarted or resumed. If export is interrupted, it only needs `crstart` (<<ACE-CSR-crstart>>) for resumption.
+|   [1:1] |   1  | Partial                | Normally, the value is 0. The value is 1 if any operation involving the configuration of the CC has been interrupted and may have to be restarted or resumed. If export is interrupted, it only needs `acestart` (<<ACE-CSR-acestart>>) for resumption.
 |   [5:2] |   4  | Locality               | A field which is either -1 or an index into the Locality Secrets Table.
 |  [15:6] |  10  | Algorithm              | Algorithm (such as primitive or mode). 0 means the CC is invalid.
 | [17:16] |   2  | SC_Protection          | Level of Side Channel Protection, encoded as per <<ACE-SC-protection-levels>>.
@@ -203,7 +203,7 @@ Disallow the _usage_ of this CC in User, (Virtual) Supervisor, Hypervisor, or M-
 The "Partial" field signals whether any configuration operation on this cryptographic register has been initiated but not yet completed.
 The state of such a CR is defined as `partial`.
 This field applies only to `ace.init` and `ace.import` operations, because these access external memory, and not to `ace.clone` and `ace.derive` as they only operate internally.
-`ace.export` is simply resumed using `crstart`.
+`ace.export` is simply resumed using `acestart`.
 Any cryptographic operation attempted on a CR containing an partial CC results in an error or is trapped.
 Note also that there is a second metadata format for partial CRs, which is used when the CR is not fully initialized or imported, cf.{nbsp}<<ACE-format-configuration>>.
 (((Cryptographic Register,incomplete)))
@@ -336,8 +336,8 @@ ACE extends `*status` and `misa`, and adds 20 new CSRs (of which 16 are optional
 |===
 | Address        | Privilege | Name                     | Description
 | 0xXXX          | URW       | `aceerror`               | Error code of the last ACE instruction
-| 0xXXX          | URO       | `aceccstatus`            | Array of two-bit fields (similar to ACES state, but per CR)
-| 0xXXX          | URW       | `crstart`               | ACE start byte index
+| 0xXXX          | URO       | `acecrstatus`            | Array of two-bit fields (similar to ACES state, but per CR)
+| 0xXXX          | URW       | `acestart`               | ACE start byte index
 | 0xXXX--0xXXX   | MRW (RZ)  | `macercsk{0..7}`         | ACE Root Context Sealing Key
 | 0xXXX--0xXXX   | MRW (RZ)  | `maceOSSecret{0..3}`     | ACE OS Secret
 | 0xXXX--0xXXX   | MRW (RZ)  | `maceBootSecret0{0..3}`  | ACE Boot Secret
@@ -505,19 +505,19 @@ Initial
 
 The new CSRs introduced by ACE are defined here.
 
-====== `aceccstatus`
+====== `acecrstatus`
 
-The CSR `aceccstatus` tracks the configuration and dirtiness of CRs on a per-CR basis, so that privileged context switching code needs to save only the dirty CRs, and restore only the configured ones, unless the latter are lazy-loaded:
+The CSR `acecrstatus` tracks the configuration and dirtiness of CRs on a per-CR basis, so that privileged context switching code needs to save only the dirty CRs, and restore only the configured ones, unless the latter are lazy-loaded:
 
-. For RV64, `aceccstatus` has a size of 64 bits,
-``aceccstatus[``2__i__+1,2__i__``]`` can take the values Off, Init, Clean, Dirty as defined for `*status.ACES` for CR #__i__.
-. For RV32, there are two 32-bit registers `aceccstatush` and `aceccstatusl` (collectively referred to as `aceccstatus` in the following)
+. For RV64, `acecrstatus` has a size of 64 bits,
+``acecrstatus[``2__i__+1,2__i__``]`` can take the values Off, Init, Clean, Dirty as defined for `*status.ACES` for CR #__i__.
+. For RV32, there are two 32-bit registers `acecrstatush` and `acecrstatusl` (collectively referred to as `acecrstatus` in the following)
 where
-``aceccstatus[``2__i__+1,2__i__``]`` can take the values Off, Init, Clean, Dirty as defined for `*status.ACES` for CR #__i__
+``acecrstatus[``2__i__+1,2__i__``]`` can take the values Off, Init, Clean, Dirty as defined for `*status.ACES` for CR #__i__
 and
-``aceccstatus[``2__i__+1,2__i__``]`` for CR #__i__+16.
+``acecrstatus[``2__i__+1,2__i__``]`` for CR #__i__+16.
 
-We describe now the semantics of the `aceccstatus` bitfields:
+We describe now the semantics of the `acecrstatus` bitfields:
 
 * *INITIAL* (value: 1), i.e., CR unconfigured; no saved value in the context switching state.
 +
@@ -613,28 +613,25 @@ Code        .>|Description
 If executing an `ace.init`, `ace.import`, `ace.export`, `ace.input`, or `ace.output` triggers a
 trap, as specified in the privileged architecture, `aceerror` remains unchanged.
 
-[[ACE-CSR-crstart]]
-====== `crstart`
+[[ACE-CSR-acestart]]
+====== `acestart`
 
-[WARNING]
-[.red]#If this CSR is used also to load/store the input/output buffer, we should call it# `[.red]#acestart#`[.red]#.#
-
-`crstart` is an XLEN-bit RW CSR, similar to `vstart`, tracking progress of long-running interruptible instructions `ace.init`, `ace.import`, `ace.export`, `ace.input`, and `ace.output`.
-(((CSR, crstart)))
+`acestart` is an XLEN-bit RW CSR, similar to `vstart`, tracking progress of long-running interruptible instructions `ace.init`, `ace.import`, `ace.export`, `ace.input`, and `ace.output`.
+(((CSR, acestart)))
 
 Unlike the vector extension’s `vstart`, which tracks element indices, ACE has no notion equivalent to that of vector elements;
-`crstart` therefore records a byte offset.
+`acestart` therefore records a byte offset.
 For a load-type instruction (e.g., `ace.init`, `ace.import`, `ace.input`), this offset indicates how many bytes of input have already been read and processed. For a store-type instruction (e.g., `ace.export`, `ace.output`), it indicates how many bytes of output have already been computed and written.
 The value includes all payload bytes (metadata, content, nonce, tag) and accommodates piecewise execution via traps (see <<ACE-trappable-insns-support>>).
 
 This register is typically written by hardware.
 Software may safely write 0 to fully restart an operation, and the register can be saved and restored during context switches.
 However, software must not write arbitrary nonzero values to it, as this may result in an illegal-instruction exception, as the hardware or a trapped implementation are not required to support all possible values.
-Only the instructions explicitly mentioned above support non-zero `crstart` values; other ACE instructions ignore this register, and will be restarted.
+Only the instructions explicitly mentioned above support non-zero `acestart` values; other ACE instructions ignore this register, and will be restarted.
 
 [NOTE]
 ====
-_A single `crstart` value suffices due to the way the init/import/export instructions operate:_
+_A single `acestart` value suffices due to the way the init/import/export instructions operate:_
 
 * `_ace.init_` _and_ `_ace.import_` _use a single pass: all blocks are processed sequentially._
 * `_ace.export_` _uses two passes. However, the first pass to compute the SIV is purely internal, and never accesses memory, so page faults cannot occur. This first stage is uninterruptible. The second pass writes metadata, nonce, SIV, then encrypted content to memory. Only the second pass can cause page faults and requires resumption._
@@ -642,7 +639,18 @@ _A single `crstart` value suffices due to the way the init/import/export instruc
 This design obviates the need to separate data transfer from cryptographic processing during import and export operations. A separate transfer phase would require buffering the entire input within the ACE unit before processing, increasing internal resource requirements, whereas the current architecture can process data inline and is loaded with minimal overhead.
 ====
 
-The semantics and use of `crstart` are described in <<ACE-format-configuration>> and [.red]#TBD#.
+The semantics and use of `acestart` are described in <<ACE-format-configuration>> and [.red]#TBD#.
+
+[[ACE-CSR-aceiobuflen]]
+===== `aceiobuflen`, `aceiobuftop`
+
+`aceiobuflen` and `aceiobuftop` are both XLEN-bit RW CSRs. +
+`aceiobuflen` is used to program the size of the input/output buffer for the `ace.input` and `ace.output` instructions. +
+`aceiobuftop` is used to program the end of a transfer operation. It works in conjunction with `acestart` to define the range of the buffer. +
+Reconfiguring `aceiobuflen` will invalidate the buffer contents. +
+Reconfiguring `aceiobuftop` will not invalidate the buffer contents.
+
+If the size is zero, the buffer is disabled and the instructions will fail.
 
 [[ACE-CSR-macercsk]]
 ====== `macercsk`
@@ -706,7 +714,7 @@ We start with the algorithm that reads an initialization input and uses it to in
 ----
 M : array of bytes // from memory
 
-// next instruction preemptible, with `crstart` from 0 to 7
+// next instruction preemptible, with `acestart` from 0 to 7
 UNINTERRUPTIBLE_BLOCK_START
 |   metadata : bits(64) = M[0 .. 7]
 |   if (there is not enough memory for the algorithm encoded in the metadata)
@@ -718,7 +726,7 @@ UNINTERRUPTIBLE_BLOCK_START
 UNINTERRUPTIBLE_BLOCK_END
 
 foreach(i from 0 to num_blocks - 1) {
-    // next instruction preemptible, with `crstart` from 32+i*16 to 39+i*16 or 47+i*16
+    // next instruction preemptible, with `acestart` from 32+i*16 to 39+i*16 or 47+i*16
     UNINTERRUPTIBLE_BLOCK_START
     |   if ((i == num_blocks - 1) and last_block_fractional)
     |       content[i*16 .. 7+i*16] = M[8+i*16 .. 15+i*16];
@@ -727,7 +735,7 @@ foreach(i from 0 to num_blocks - 1) {
     UNINTERRUPTIBLE_BLOCK_END
 }
 
-// if preempted here, `crstart` will be z
+// if preempted here, `acestart` will be z
 UNINTERRUPTIBLE_BLOCK_START
 |   - Now the content can be deserialized.
 |   - This includes computing any derived values not given in the initialization
@@ -801,18 +809,18 @@ UNINTERRUPTIBLE_BLOCK_START
 |   SIV = AESE(Kenc, 1'b0 @ (tmp[126:0] xor (31'b0 @ N)))) >> 32;
 UNINTERRUPTIBLE_BLOCK_END
 
-// preemptible here, with `crstart` from 0 to 15
+// preemptible here, with `acestart` from 0 to 15
 UNINTERRUPTIBLE_BLOCK_START
 |   M[0 .. 15] = N[63:0] @ metadata[63:0];
 UNINTERRUPTIBLE_BLOCK_END
 
-// preemptible here, with `crstart` from 16 to 31
+// preemptible here, with `acestart` from 16 to 31
 UNINTERRUPTIBLE_BLOCK_START
 |   M[16 .. 31] = SIV[95:0] @ N[95:64];
 UNINTERRUPTIBLE_BLOCK_END
 
 foreach(i from 0 to num_blocks - 1) {
-    // next instruction preemptible, with `crstart` from 32+i*16 to 39+i*16 or 47+i*16
+    // next instruction preemptible, with `acestart` from 32+i*16 to 39+i*16 or 47+i*16
     UNINTERRUPTIBLE_BLOCK_START
     |   if ((i == num_blocks - 1) and last_block_fractional)
     |       M[32+i*16 .. 39+i*16] = content[i*16 .. 7+i*16] xor
@@ -838,7 +846,7 @@ N, SIV : bits(96);
 tmp : bits(128);
 tag : bits(96);
 
-// next instruction preemptible, with `crstart` from 0 to 7
+// next instruction preemptible, with `acestart` from 0 to 7
 UNINTERRUPTIBLE_BLOCK_START
 |   metadata : bits(64) = M[0 .. 7]
 |   if (there is not enough memory for the algorithm encoded in the metadata)
@@ -858,11 +866,11 @@ UNINTERRUPTIBLE_BLOCK_START
 |
 |   {Kenc, Kauth} = RFC8452_KeyDeriv(CSK);
 |
-|   // next instruction preemptible, with `crstart` from 8 to 19
+|   // next instruction preemptible, with `acestart` from 8 to 19
 |   N = M[8 .. 19]
 UNINTERRUPTIBLE_BLOCK_END
 
-// next instruction preemptible, with `crstart` from 20 to 31
+// next instruction preemptible, with `acestart` from 20 to 31
 UNINTERRUPTIBLE_BLOCK_START
 |   SIV = M[20 .. 31]
 |   tmp = 64'b0 @ metadata;
@@ -870,7 +878,7 @@ UNINTERRUPTIBLE_BLOCK_START
 UNINTERRUPTIBLE_BLOCK_END
 
 foreach(i from 0 to num_blocks - 1) {
-    // next instruction preemptible, with `crstart` from 32+i*16 to 39+i*16 or 47+i*16
+    // next instruction preemptible, with `acestart` from 32+i*16 to 39+i*16 or 47+i*16
     UNINTERRUPTIBLE_BLOCK_START
     |   if ((i == num_blocks - 1) and last_block_fractional) {
     |       content[i*16 .. 7+i*16] = M[32+i*16 .. 39+i*16] xor
@@ -885,7 +893,7 @@ foreach(i from 0 to num_blocks - 1) {
     UNINTERRUPTIBLE_BLOCK_END
 }
 
-// if preempted here, `crstart` will be z + 32
+// if preempted here, `acestart` will be z + 32
 
 UNINTERRUPTIBLE_BLOCK_START
 |   tag = AESE(Kenc, 1'b0 @ (tmp[126:0] xor (31'b0 @ N)))) >> 32;
@@ -902,7 +910,7 @@ UNINTERRUPTIBLE_BLOCK_END
 [[ACE-incomplete-contexts]]
 ==== Partial Cryptographic Contests
 
-An initialization or import operation may be interrupted by context switching code, i.e., not returning to the original control flow immediately after the handler is done. In this case the intermediate state of the CR must be saved and then restored in a way that allows for resumption of the operation (by setting also the value of `crstart`).
+An initialization or import operation may be interrupted by context switching code, i.e., not returning to the original control flow immediately after the handler is done. In this case the intermediate state of the CR must be saved and then restored in a way that allows for resumption of the operation (by setting also the value of `acestart`).
 (((Cryptographic Register,incomplete)))
 Then exporting the partial CR, the following metadata header format is used as the first 8 bytes of the SCC to store information about the partial CR.
 After this header block, the SCC contains the nonce and SIV following <<ACE-format-SCC>>, and then the content section.
@@ -941,7 +949,7 @@ These 16 bytes must be included in the Payload_Length field and encrypted as wel
 After the partial CR has been decrypted and authenticated in privileged mode, it is marked as to be resumed, in which case, upon returning to the less-privileged mode, the following operations must be performed:
 
 . The old metadata, nonce and SIV are recovered from the memory of the less-privileged mode. These reads may be interrupted by page faults, but they are easy to resume.
-. `z` and `num_blocks` are computed from the original content length, and the starting value of `i` with the help of the `crstart`.
+. `z` and `num_blocks` are computed from the original content length, and the starting value of `i` with the help of the `acestart`.
 . The `Kenc` and `Kauth` keys are derived.
 . The old partial hash value is restored.
 
@@ -952,14 +960,14 @@ At this point the initialization or import operation can resume from the interru
 [comment]
 --
 * Any number of bytes can be initialized or imported in a CR, and exported from it, before the operation is preempted, depending on the alignment of the data.
-* `crstart` counts all the bytes of the payload, including the metadata for all inputs and outputs, and the nonce and the tag as well for SCCs.
+* `acestart` counts all the bytes of the payload, including the metadata for all inputs and outputs, and the nonce and the tag as well for SCCs.
 * The internal state shall always assumes that all internal operations that would be performed in the algorithms above are performed as follows
  ** `ace.init`:
   *** Once the metadata (8 bytes) has been read, is must be completely processed and imported in the CR.
   *** Whenever 8+16__i__ bytes have been read, also _i_ blocks of content must be processed and imported in the CR.
    For instance, if 28 bytes have been read in, the incomplete state has processed the metadata and the first content block, and knows 4 further bytes.
-  *** If the operation is preempted, `crstart` will be the number of bytes read.
-  *** The corresponding exported SCC will include an 8-byte block in clear after the metadata with the `crstart` value, followed by the nonce and the tag, and the content will only contain the payload imported and read so far, zero padded up to a multiple of 8 bytes. This content is of course encrypted.
+  *** If the operation is preempted, `acestart` will be the number of bytes read.
+  *** The corresponding exported SCC will include an 8-byte block in clear after the metadata with the `acestart` value, followed by the nonce and the tag, and the content will only contain the payload imported and read so far, zero padded up to a multiple of 8 bytes. This content is of course encrypted.
   The AEAD algorithm will use `(length_of_payload)[64] @ metadata` in place of `0[64] @ metadata`.
   *** in the worst case, a SCC will be 8 bytes longer than the standard size for a complete exported CR for the same algorithm.#
 
@@ -1118,7 +1126,7 @@ Description::
 Exports the CR `Ks` or `K[Xs]` to memory at address `Xd`, using the procedure described in <<ACE-format-SCC>>.
 //If the context `Ks` is clear, or `Xs` is out of range, the operation will report error ace_err_invalid.
 
-The instruction must follow the interruptibility rules defined in <<ACE-CSR-crstart>>.
+The instruction must follow the interruptibility rules defined in <<ACE-CSR-acestart>>.
 Similarly to entire-vector-register store instructions, `ace.export` appears to other harts as sequences of individual stores.
 
 The initial cryptographic phase of `ace.export`, as well as the authentication phase of `ace.import`, must be uninterruptible.
@@ -1169,7 +1177,7 @@ Trappable: *YES*. +
 Interruptible: *YES*.
 
 
-The instruction must follow the interruptibility rules defined in <<ACE-CSR-crstart>>.
+The instruction must follow the interruptibility rules defined in <<ACE-CSR-acestart>>.
 Similarly to entire-vector-register load instructions, `ace.import` appears to other harts as sequences of individual loads.
 
 NOTE: The operation can be conceptually split into two phases.
@@ -1629,7 +1637,10 @@ Interruptible: *YES*.
 [[ACE-usage-input-output]]
 ==== Usage of the ace.input and ace.output Instructions
 
-Forms A, B, and C of `ace.exec` are replaced in the code as follows:
+First, the `ace.input` and `ace.output` instructions can replace the inputs and outputs to Forms A-C of `ace.exec` only if the size
+in CSR `aceiobuflen` is non-zero and is a valid size (for instance `b` for an algorithm or a multiple thereof).
+
+If `aceiobuflen` is non-zero, then forms A, B, and C of `ace.exec` can be replaced in the code as follows:
 
 [[ACE-replacement-instructions]]
 .Replacement for `ace.exec` instructions with input output
@@ -1645,6 +1656,8 @@ Forms A, B, and C of `ace.exec` are replaced in the code as follows:
 `ace.output{nbsp}Vd,  Xl`
 |===
 
+If a Form A-C of `ace.exec` is used, only the allowed form can be used and the input and output vectors are used instead.
+
 Any Form A-C `ace.exec` instruction can be replaced by a Form `D` instruction in all algorithms.
 The content of the internal buffers for inputs and outputs is zeroed by all algorithms in the _initial_ and _completed_ states.
 `ace.input` is allowed whenever a Form A or B `ace.exec` is expected by the architecture, and
@@ -1652,8 +1665,12 @@ The content of the internal buffers for inputs and outputs is zeroed by all algo
 Failure to issue these instructions can lead to undefined behavior, but it does not raise errors.
 Issuing them when they are _not_ expected raises an invalid instruction exception.
 
+NOTE: The internal input/output buffer, if enabled, it not part of a CR but is a separate structure.
+In fact, `ace.output` can be used to save the contents of the buffer, and `ace.input` can be used to restore it.
+Also, these operations start at the offset specified in `acestart`, so the state of the buffer can easily be saved and restored with the same approach used for vectors.
+
 [WARNING]
-[.red]#To be discussed: how to represent in a CC, how to save and resume the IO buffer upon context switch. I would not add state to the metadata, we could add the IO buffer as an extra architectural state that is simply saved as a variable-length register by privileged code and restored. This state does not require confidentiality nor integrity, and therefore it can be implemented easily. A sequence of# ``[.red]#ace.mv#``[.red]#'s like those mentioned in <<ACE-trappable-insns-support>> is sufficient. To denote partial load/store in this buffer we can probably re-use# `[.red]#crstart#`[.red]#.#
+[.red]#To be discussed: how to represent in a CC, how to save and resume the IO buffer upon context switch. I would not add state to the metadata, we could add the IO buffer as an extra architectural state that is simply saved as a variable-length register by privileged code and restored. This state does not require confidentiality nor integrity, and therefore it can be implemented easily. A sequence of# ``[.red]#ace.mv#``[.red]#'s like those mentioned in <<ACE-trappable-insns-support>> is sufficient. To denote partial load/store in this buffer we can probably re-use# `[.red]#acestart#`[.red]#.#
 
 // ///////////////////////////////////////////////////////////////////////////////////////////
 
@@ -1673,21 +1690,20 @@ Three types of supporting operations are required:
  * An `ace.mv` instruction that loads a specified number of bytes from a GPR or vector register into the state of a CR or in the input buffer within the ACE unit.
    Initially, `ace.size` returns the total payload length to transfer.
    After each move, this value is updated to reflect the remaining bytes.
-   The instruction also updates the `crstart` CSR to follow the internal progress.
+   The instruction also updates the `acestart` CSR to follow the internal progress.
  * A corresponding `ace.mv` instruction that exports a specified number of bytes from a CR or from the input buffer to a GPR or vector register.
    The behavior of `ace.size` will be similar to that of the `ace.mv` instruction, but it will count the number of bytes to be exported.
  * An “`ace.close`” instruction to suspend or finalize the procedure.
-   If executed before all bytes are transferred, the CR state matches that of an interrupted monolithic instruction, including the Incomplete metadata field and the `crstart` value. If executed after all bytes are transferred, it also performs any final cryptographic operations, such as authenticating the CR, if needed.
+   If executed before all bytes are transferred, the CR state matches that of an interrupted monolithic instruction, including the Incomplete metadata field and the `acestart` value. If executed after all bytes are transferred, it also performs any final cryptographic operations, such as authenticating the CR, if needed.
 
 All three instructions can be implemented as CSR RW instructions, for instance:
 
- * `acelen`, XLEN bits wide, holds the max size of the current CR or the input/output buffer.
  * `acedest`, XLEN bits wide, holds what we are transferring: 0..31 for the CRs and, say, 255 for the input/output buffer.
- * `aceoffset`, XLEN bits wide, holds the offset within the CR virtual `content` or the input/output buffer (maybe the same as `crstart` ?).
+ * `aceoffset`, XLEN bits wide, holds the offset within the CR virtual `content` or the input/output buffer (maybe the same as `acestart` ?).
  * `acecontent`, XLEN bits wide, to which we write the content of the CR or the input/output buffer or from which we read the current content.
 
 Interrupting the firmware implementation of `ace.init`, `ace.export`, `ace.import`, `ace.input`, or `ace.output` must leave the architectural state indistinguishable from the state expected from interrupting a monolithic implementation of the instructions.
-in particular, they need to respect the value of `crstart` and update it in accordance with the expected architected behavior of the emulated instructions.
+in particular, they need to respect the value of `acestart` and update it in accordance with the expected architected behavior of the emulated instructions.
 
 The supporting instructions themselves must be uninterruptible.
 
@@ -3283,7 +3299,7 @@ Users may migrate their virtual machines (VMs) between client devices with CPUs 
 In such a scenario, the ACE implementation on the destination device might have a Crypto Register File (CRF) with a smaller capacity (not necessarily a smaller internal memory, as the internal representation may be more redundant).
 System software could then be unable to restore all Cryptographic Contexts.
 
-To address this, the `aceccstatus` CSR can be used to enable lazy context reloading by causing the hart to trap to the parent mode if a CR being accessed is marked as "lazy".  When this requires freeing one or more CRs first, system software decides which contexts to evict.
+To address this, the `acecrstatus` CSR can be used to enable lazy context reloading by causing the hart to trap to the parent mode if a CR being accessed is marked as "lazy".  When this requires freeing one or more CRs first, system software decides which contexts to evict.
 
 ==== Key Management and Provisioning Applications
 
