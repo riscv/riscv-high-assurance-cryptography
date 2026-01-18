@@ -67,8 +67,9 @@ Metadata stores the Locality as an index into this table (see <<ACE-Localities>>
 
 [.red]#This section is an early draft.#
 
-Unpriv:
+Unprivileged::
 
+* `Zlio` => Support for `ace.input`/`ace.output` operations
 * `Zleaes128p` => Support for AES-128 encryption and decryption (all applicable modes)-the `p` at the end denotes a primitive
 * `Zleaes192p` => Support for AES-192 encryption and decryption (all applicable modes)
 * `Zleaes256p` => Support for AES-256 encryption and decryption (all applicable modes)
@@ -89,7 +90,7 @@ Unpriv:
 * `Zlkn` => NIST Algorithm Suite. Depends on `Zlkned` and `Zlesha2`.
 * `Zlace` => Must support for the following CSRs: `aceerror` and `crstart` (this is a dependency for Zicsr); must support the following instructions: `ace.init`, `ace.exec`, `ace.clear`, `ace.export`, `ace.import`, and `ace.size`; `ace.exec` must support `Zleaes128`.
 
-Priv:
+Privileged::
 
 * If `Zlace` is implemented: `misa` must implement the `L` bit, and `*status` must implement `ACES`.
 * `Smacectk` => Defines the Root Context Sealing Key CSRs (`macercsk{0..7}`), which are all MRO.
@@ -145,9 +146,6 @@ allowed by the architecture to be performed.
 For instance, the CRF must hold at least an instance of the largest possible CR or the largest CR pair for CR cloning or the derivation of a new CC from an existing one.
 ====
 
-//Exporting/importing loops.
-//`ace.export`/ `ace.import`
-
 [NOTE]
 ====
 The fact that CRs can be addressed indirectly two major implications:
@@ -158,7 +156,6 @@ The fact that CRs can be addressed indirectly two major implications:
 ====
 
 // ///////////////////////////////////////////////////////////////////////////////////////////
-//==== Cryptographic Contexts
 
 [[ACE-metadata]]
 ==== Metadata Format
@@ -199,7 +196,8 @@ otherwise an algorithm-specific representation is used in the content, and this 
 Disallow the _usage_ of this CC in User, (Virtual) Supervisor, Hypervisor, or M-mode if bit 26, 27, 28, or 29 is set.
 | [31:30] |   2  | UC_Policy_2            | If bit 30, respectively, 31, is set, then restrict the usage by `ASID`, respectively, `VMID`. Restrictions by `ASID` are ignored if in S-mode or higher. Restrictions by `VMID` are ignored if in H- or M-mode.
 | [47:32] |  16  | UC_Policy_3            | Zero if bit 30 unset, else `ASID` to enforce.
-| [63:48] |  16  | UC_Policy_4            | Zero if bit 31 unset, else `VMID` to enforce.
+| [61:48] |  14  | UC_Policy_4            | Zero if bit 31 unset, else `VMID` to enforce.
+| [63:62] |   2  | Reserved               | Zero.
 |===
 
 The "Partial" field signals whether any configuration operation on this cryptographic register has been initiated but not yet completed.
@@ -244,8 +242,7 @@ NOTE: The "State_Number" field accommodates modes of operation with a small numb
 For algorithms with more complex state machines, machine state information can be stored in a custom data section of the CC.
 
 If the H extension is not enabled, bit 28 must be set to 1, and bits 31 and [63:48] must be set to 0.
-The "UC_Policy_4" field is 16 bits long for compatibility with architectures employing 16-bit `VMID` fields (for instance, in heterogeneous systems).
-While interoperability cannot be guaranteed when this policy is used, this ensures that the two top bits are not used for other purposes.
+The "UC_Policy_4" field is 14 bits long, but the next two bits are reserved for compatibility with architectures employing 16-bit `VMID` fields (for instance, in heterogeneous systems).
 
 NOTE: Restricting usage by Supervisor Domain or World ID is not supported, and not only because of a lack of space in a 64-bit metadata section:
 Reconfiguring the RCSK is a better approach for such isolation requirements, whereas isolation by `ASID` and `VMID` is a weaker security feature.
@@ -332,7 +329,6 @@ See <<ACE-algorithms>> for algorithm-specific details on the format of the plain
 ==== CSRs
 
 ACE extends `*status` and `misa`, and adds 20 new CSRs (of which 16 are optional and M-mode exclusive) to manage its execution environment.
-// It also requires a subset of the V extension CSRs (see <<ACE-V-dependency>>).
 
 .New ACE CSRs
 [cols="<16%,^11%,<24%,<49%"]
@@ -507,7 +503,7 @@ Initial
 
 ===== New CSRs
 
-//We define here the 20 new CSRs introduced by ACE.
+The new CSRs introduced by ACE are defined here.
 
 ====== `aceccstatus`
 
@@ -621,7 +617,7 @@ trap, as specified in the privileged architecture, `aceerror` remains unchanged.
 ====== `crstart`
 
 [WARNING]
-[.red]#If this CSR is used also to load/store the input/output buffer, we should call it `acestart`.#
+[.red]#If this CSR is used also to load/store the input/output buffer, we should call it# `[.red]#acestart#`[.red]#.#
 
 `crstart` is an XLEN-bit RW CSR, similar to `vstart`, tracking progress of long-running interruptible instructions `ace.init`, `ace.import`, `ace.export`, `ace.input`, and `ace.output`.
 (((CSR, crstart)))
@@ -646,7 +642,7 @@ _A single `crstart` value suffices due to the way the init/import/export instruc
 This design obviates the need to separate data transfer from cryptographic processing during import and export operations. A separate transfer phase would require buffering the entire input within the ACE unit before processing, increasing internal resource requirements, whereas the current architecture can process data inline and is loaded with minimal overhead.
 ====
 
-The semantics and use of `crstart` are described in <<ACE-format-configuration> and [.red]#TBD#.
+The semantics and use of `crstart` are described in <<ACE-format-configuration>> and [.red]#TBD#.
 
 [[ACE-CSR-macercsk]]
 ====== `macercsk`
@@ -684,10 +680,7 @@ These are:
 ===== Reuse of `(v)satp`.ASID and `hgatp`.VMID
 
 ACE reuses `(v)satp`.ASID and `hgatp`.VMID to optionally restrict the usage of CCs to a specific process or virtual machine.
-// The maximal bit length of `ASID` is 9 for Sv32 addresses or 16 for Sv39, Sv48, and Sv57 addresses.
-// The maximal bit length of `VMID` is 7 for Sv32x4 or 14 for Sv39x4, Sv48x4, and Sv57x4 addresses.
 In the metadata section, `ASID` and `VMID` are always zero padded to the maximal lengths of 16 and 14 bits, respectively.
-//[.darkred]#Verification needed: Ensure we can use ASID/VMID to restrict usage even if not used in address translation.#
 
 NOTE: The software in each World/Supervisor Domain is normally responsible to generate or obtain their own keys, and if a process (applet) in one World/Supervisor Domain is responsible to provide keys to other Worlds/Supervisor Domains, it is the responsibility of the M-mode formware to perform an appropriate `ace.import`/RCSK switch/`ace.export` sequence.
 
