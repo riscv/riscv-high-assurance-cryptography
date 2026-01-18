@@ -182,7 +182,8 @@ The metadata section is used as the header of the data formats used in CR initia
 Future format will have a 1 in this position and may be longer than 64 bits.
 |   [1:1] |   1  | Partial                | Normally, the value is 0. The value is 1 if any operation involving the configuration of the CC has been interrupted and may have to be restarted or resumed. If export is interrupted, it only needs `acestart` (<<ACE-CSR-acestart>>) for resumption.
 |   [5:2] |   4  | Locality               | A field which is either -1 or an index into the Locality Secrets Table.
-|  [15:6] |  10  | Algorithm              | Algorithm (such as primitive or mode). 0 means the CC is invalid.
+|  [14:6] |   9  | Algorithm              | Algorithm (such as primitive or mode). 0 means the CC is invalid.
+| [15:15] |   1  | Reserved               | Zero.
 | [17:16] |   2  | SC_Protection          | Level of Side Channel Protection, encoded as per <<ACE-SC-protection-levels>>.
 | [19:18] |   2  | Direction_Policy       | Determines whether the CC may be used for encryption (bit 12 set), decryption (bit 13 set), or both (bits 12 and 13 set).
 Valid only for encryption/decryption primitives or modes, and ignored, for instance, for hash functions.
@@ -208,10 +209,10 @@ Any cryptographic operation attempted on a CR containing an partial CC results i
 Note also that there is a second metadata format for partial CRs, which is used when the CR is not fully initialized or imported, cf.{nbsp}<<ACE-format-configuration>>.
 (((Cryptographic Register,incomplete)))
 
-Algorithms are encoded in a 10-bit field.
-Algorithm numbers 0-959 are architecture-defined and the list of such encodings is maintained by RVI.
+Algorithms are encoded in a 9-bit field.
+Algorithm numbers 0-447 are architecture-defined and the list of such encodings is maintained by RVI.
 See <<ACE-algorithms>> for the currently encoded algorithms.
-Algorithm numbers 960-1023 are reserved for custom algorithms.
+Algorithm numbers 448-511 are reserved for custom algorithms.
 
 [[ACE-SC-protection-levels]]
 .Encoding of Side-Channel Protection levels
@@ -1247,9 +1248,9 @@ For the four Forms A-D above, the encodings are:
 +
 [upperalpha]
 . `ACE.exec` = `0b000`.
-. `ACE.exec` = `0b001` and `rs2`=`0b00000`.
-. `ACE.exec` = `0b010` and `rd`=`0b00000`.
-. `ACE.exec` = `0b011` and `rs2`=`rd`=`0b00000`.
+. `ACE.exec` = `0b001` and `rs2` = `0b00000`.
+. `ACE.exec` = `0b010` and `rd` = `0b00000`.
+. `ACE.exec` = `0b011` and `rs2` = `rd` = `0b00000`.
 
 NOTE: We admit variants of Forms B and D, which we call Form B', resp., Form D',
 with non-zero values in `rd`, resp., `rs2`, to encode additional instructions.
@@ -2145,18 +2146,18 @@ Using XEX mode is very easy. We include pseudocode for encryption only, decrypti
 - The API returns the SCC. Assume X5 is the pointer to it.
 - Allocate memory for ciphertext buffer CT (if not same as PT).
 
-vsetvli zero, 4, e32, m1, ta, ma                 // Use 128-bit vectors
+vsetvli zero, 4, e32, m1, ta, ma             // Use 128-bit vectors
 ace.import K0, (X5)
 
-ace.state K0, #const_set_public_value            // this can be an IV or a nonce.
+ace.state K0, #const_set_public_value        // this can be an IV or a nonce.
 V0 ← IV
 ace.exec K0, V0
 
-ace.state K0, #ace_state_encrypt                  // Configure CR for encryption
-foreach(i from 0 to ceil(len_in_bytes(plaintext)/16)-1) {
-    - load V0 from address plaintext+16*i
-    ace.exec V0, K0, V0                          // Encrypt one block of the plaintext
-    - store V0 at address ciphertext+16*i
+ace.state K0, #ace_state_encrypt             // Configure CR for encryption
+foreach(i from 0 to ceil(len_in_bytes(PT)/16)-1) {
+    - load V0 from address PT+16*i
+    ace.exec V0, K0, V0                      // Encrypt one block of the plaintext
+    - store V0 at address CT+16*i
 }
 ----
 
@@ -2517,7 +2518,7 @@ State Machine:::
 ** In state _initial_ :
 *** No {nbsp}``ace.exec``{nbsp} operation is allowed.
 *** The following initialization operations are performed:
-  . `enc_key`, `auth_key <- RFC8452_KeyDeriv(key)`,
+  . (`enc_key`, `auth_key`) <- `RFC8452_KeyDeriv(key)`,
   . `nonce`, `ctr`, `auth_tag`, `SIV <- 0`.
 
 ** In states _set_public_value_, resp. _set_public_value_2_:
@@ -2621,7 +2622,7 @@ If `VL*SEW` > `b`, the above operations are applied to each of the `VL*SEW/b` bl
 If `VL*SEW` > `b`, only the `b` least significant bits of `Vs` are considered.
 
 ** Upon completion of `ace.import`, the ACE unit recomputes `hash_key` and `auth_key`
-  . `enc_key`, `auth_key <- RFC8452_KeyDeriv(key)`.
+  . (`enc_key`, `auth_key`) <- `RFC8452_KeyDeriv(key)`.
 
 //
 
