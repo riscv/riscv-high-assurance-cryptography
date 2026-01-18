@@ -92,7 +92,7 @@ Unpriv:
 Priv:
 
 * If `Zlace` is implemented: `misa` must implement the `L` bit, and `*status` must implement `ACES`.
-* `Smacectk` => Defines the ACE Root Context Sealing Key CSRs (`macercsk{0..7}`), where all CSRs are MRO.
+* `Smacectk` => Defines the Root Context Sealing Key CSRs (`macercsk{0..7}`), which are all MRO.
 * `Smacectkw` => ACE Root Context Sealing Key CSRs are MRW. Depends on `Smacectk`
 * `Smaceosscrt` => Defines the ACE OS Secret CSRs (`maceOSSecret{0..3}`)
 * `Smacebootscrt` => Defines the ACE Boot Secret CSRs (`maceBootSecret0{0..3}`)
@@ -105,7 +105,7 @@ Priv:
 ACE requires a subset of the V extension, including the vector register file (see <<ACE-V-dependency>>).
 
 [WARNING]
-Discussions are still ongoing on what subset will be required, and if a dependency on just the GPRs can be designed as well.
+[.red]#Discussions are still ongoing on what subset will be required, and if a dependency on just the GPRs can be designed as well.#
 
 // ///////////////////////////////////////////////////////////////////////////////////////////
 
@@ -619,6 +619,9 @@ trap, as specified in the privileged architecture, `aceerror` remains unchanged.
 
 [[ACE-CSR-crstart]]
 ====== `crstart`
+
+[WARNING]
+[.red]#If this CSR is used also to load/store the input/output buffer, we should call it `acestart`.#
 
 `crstart` is an XLEN-bit RW CSR, similar to `vstart`, tracking progress of long-running interruptible instructions `ace.init`, `ace.import`, `ace.export`, `ace.input`, and `ace.output`.
 (((CSR, crstart)))
@@ -1138,8 +1141,8 @@ Interruptible: *YES*.
 [[ACE-instruction-import]]
 ==== ace.import
 
-`ace.import   Kd|K[Xd], %offset(Xn)` +
-`ace.import.S Kd|K[Xd], %offset(Xn)`
+`ace.import{nbsp}{nbsp}{nbsp}Kd|K[Xd], %offset(Xn)` +
+`ace.import.S{nbsp}Kd|K[Xd], %offset(Xn)`
 (((ACE, instruction, ace.import)))
 (((ACE, instruction, ace.import.S)))
 
@@ -1199,6 +1202,7 @@ The `ace.exec` instruction admits four Forms, namely
 . `ace.exec  {nbsp}{nbsp}{nbsp}{nbsp}Kn|K[Xn]{nbsp}{nbsp}{nbsp}{nbsp}` {nbsp}{nbsp} does not take an input vector and does not write to an output vector.
 
 // Without this comment, the next part is not properly formatted...
+
 Encoding::
 `ace.exec` is an R-type instruction.
 +
@@ -1360,7 +1364,7 @@ Bits [27:26], i.e., field `R`, take the following values depending on how the CR
 . `0b10` if the source CR is encoded as immediate and the output CR is selected using a GPR.
 . `0b11` if the source and the output CRs are both selected using the values of GPRs.
 
-// Comment to ensure the proper indentation in the next Description
+// Comment to ensure proper indentation in the next Description
 
 Properties::
 Possibly modifies state: *YES*. +
@@ -1371,7 +1375,7 @@ Interruptible: *NO*.
 Description::
 Clones source CR `Ks` (or the CR indexed by `Xs`) into destination CR `Kd` (or into the CR indexed by `Xd`).
 
-// NOTE: The `ace.clone` instruction is an optimization for the sequence `ace.export` followed by `ace.import`. While reusing cryptographic state (e.g., encrypting with the same counter) can enable certain attacks, this risk cannot be eliminated by omitting `ace.clone`, as a state can be exported and re-imported multiple times.
+NOTE: The `ace.clone` instruction is an optimization for the sequence `ace.export` followed by `ace.import`. While reusing cryptographic state (e.g., encrypting with the same counter) can enable certain attacks, this risk cannot be eliminated by omitting `ace.clone`, as a state can be exported and re-imported multiple times.
 
 [[ACE-instruction-derive]]
 ==== ace.derive (optional)
@@ -1486,8 +1490,8 @@ may reuse the same values in [1..12] with new constant mnemonics to define their
 [[ACE-instruction-restrict]]
 ==== ace.restrict/ace.harden
 
-`ace.restrict  Kd|K[Xd], Xs` +
-`ace.harden   Kd|K[Xd], Xs`
+`ace.restrict{nbsp}{nbsp}Kd|K[Xd], Xs` +
+`ace.harden{nbsp}{nbsp}{nbsp}{nbsp}Kd|K[Xd], Xs`
 (((ACE, instruction, ace.restrict)))
 (((ACE, instruction, ace.harden)))
 
@@ -1665,7 +1669,8 @@ Issuing them when they are _not_ expected raises an invalid instruction exceptio
 [[ACE-trappable-insns-support]]
 ==== Support for Trappable (Emulated) Operations
 
-This section is non-normative.
+[WARNING]
+[.red]#This section is currently non-normative. There are ongoing discussions on whether to formalize it completely and make it normative.#
 
 Instructions `ace.init`, `ace.export`, `ace.import`, `ace.input`, and `ace.output` support long inputs and outputs.
 To reduce hardware complexity, these operations can be trapped and emulated in software.
@@ -1682,6 +1687,13 @@ Three types of supporting operations are required:
    The behavior of `ace.size` will be similar to that of the `ace.mv` instruction, but it will count the number of bytes to be exported.
  * An “`ace.close`” instruction to suspend or finalize the procedure.
    If executed before all bytes are transferred, the CR state matches that of an interrupted monolithic instruction, including the Incomplete metadata field and the `crstart` value. If executed after all bytes are transferred, it also performs any final cryptographic operations, such as authenticating the CR, if needed.
+
+All three instructions can be implemented as CSR RW instructions, for instance:
+
+ * `acelen`, XLEN bits wide, holds the max size of the current CR or the input/output buffer.
+ * `acedest`, XLEN bits wide, holds what we are transferring: 0..31 for the CRs and, say, 255 for the input/output buffer.
+ * `aceoffset`, XLEN bits wide, holds the offset within the CR virtual `content` or the input/output buffer (maybe the same as `crstart` ?).
+ * `acecontent`, XLEN bits wide, to which we write the content of the CR or the input/output buffer or from which we read the current content.
 
 Interrupting the firmware implementation of `ace.init`, `ace.export`, `ace.import`, `ace.input`, or `ace.output` must leave the architectural state indistinguishable from the state expected from interrupting a monolithic implementation of the instructions.
 in particular, they need to respect the value of `crstart` and update it in accordance with the expected architected behavior of the emulated instructions.
@@ -3265,8 +3277,9 @@ We now describe the state machines of the various Ascon-based algorithms standar
 
 // //////////////////////////////////////////////////////////////////////////////////////////
 
+[comment]
+--
 [[ACE-examples]]
-
 === Examples
 
 ==== Context Switching
@@ -3306,6 +3319,7 @@ This is the most generic approach and allows each piece of software to use a CR 
 Furthermore, it protects the key from other SW environments that may be crossed while transferring control between the Requester process, the MM, and the Key Management application.
 
 // Various optimizations are possible, which can be interesting for embedded environments: Steps 3., 5., and 6. can be omitted if the CR used for these operations is fixed and no intermediate SW environments modify that CR.
+--
 
 // ///////////////////////////////////////////////////////////////////////////////////////////
 
