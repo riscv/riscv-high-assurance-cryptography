@@ -1558,7 +1558,7 @@ The instruction works as follows:
 * A one in any of the four bits `Xs`[29:26] means that usage by the corresponding mode is forbidden, and the corresponding bit in the metadata of the destination CC is set to 1.
 * If `Xs`[30] is set and `m`[30] is NOT set, then UC_Policy_3, i.e., `m`[47:32], is set to `Xs`[47:32].
 * If `Xs`[31] is set and `m`[31] is NOT set, then UC_Policy_4, i.e., `m`[63:48], is set to `Xs`[63:48].
-* If `Xs`[30] and `m`[30] are both set and `Xs`[47:32] <> `m`[47:32], or if `Xs`[31] and `m`[31] are both set and `Xs`[63:48] <> `m`[63:48], then `aceerror` is set to ace_error_invalid.
+* If `Xs`[30] and `m`[30] are both set and `Xs`[47:32] != `m`[47:32], or if `Xs`[31] and `m`[31] are both set and `Xs`[63:48] != `m`[63:48], then `aceerror` is set to ace_error_invalid.
 --
 +
 
@@ -1929,7 +1929,7 @@ ace.state K0, #ace_state_encrypt           // Configure CR for encryption
 ace.error X1                               // Read error from a CSR
 if (X1 != 0) then { handle error }         // Error if encryption not allowed
 
-foreach (i from 0 to len_in_bytes(plaintext)/16-1) { // assume plaintext in whole blocks
+foreach(i from 0 to len_in_bytes(plaintext)/16-1) { // assume plaintext in whole blocks
     - load V0 from address plaintext+16*i
     ace.exec V0, K0, V0                    // Encrypt one block of the plaintext
     - store V0 at address ciphertext+16*i
@@ -2045,11 +2045,12 @@ V0 ← nonce
 ace.exec K0, V0
 
 // Compute keystream, use it to encrypt plaintext
-for i = 0 to len_in_bytes(PT)/16-1 do
+foreach(i from 0 to len_in_bytes(PT)/16-1) {
     - load V0 from address PT+16*i
     ace.exec V1, K0
     V1 ← V1 xor V0
     - store V1 at address CT+16*i
+}
 ----
 
 [[ACE-XEX-XTS-modes]]
@@ -2152,10 +2153,11 @@ V0 ← IV
 ace.exec K0, V0
 
 ace.state K0, #ace_state_encrypt                  // Configure CR for encryption
-for i = 0 to ceil(len_in_bytes(plaintext)/16)-1 do
+foreach(i from 0 to ceil(len_in_bytes(plaintext)/16)-1) {
     - load V0 from address plaintext+16*i
     ace.exec V0, K0, V0                          // Encrypt one block of the plaintext
     - store V0 at address ciphertext+16*i
+}
 ----
 
 To implement the XTS mode, the ciphertext stealing part is easy to realize using the XEX algorithm together with vector masking and shifting operations.
@@ -2281,7 +2283,7 @@ If `VL*SEW` > `b`, only the `b` least significant bits of `Vs` are considered.
    absorbs the ciphertext `Vs` into the `auth_tag`, then decrypts `Vs` into `Vd`, namely
 +
 --
-  . If `ctr[b/4-1:0] = 0`, then
+  . If `ctr[b/4-1:0] == 0`, then
   .. the CR is *invalidated*.
   . else
   .. `absorb(Vs)`.
@@ -2342,16 +2344,18 @@ ace.exec K0, V0
 
 // Compute AD contribution to Auth Data
 ace.state K0, #ace_state_hash_absorb
-for i = 0 to len_in_bytes(AD)/16-1  do
+foreach(i from 0 to len_in_bytes(AD)/16-1) {
     - load V0 from address AD+16*i
     ace.exec K0, V0                              // Absorb it into hash
+}
 
 // Encrypt plaintext and continue computation of auth_tag
 ace.state K0, #ace_state_encrypt
-for i = 0 to len_in_bytes(PT)/16-1 do
+foreach(i from 0 to len_in_bytes(PT)/16-1) {
     - load V0 from address PT+16*i
     ace.exec V1, K0, V0
     - store V1 at address CT+16*i
+}
 
 // Finally, we absorb the lengths into auth_tag, finalize it, and output it
 ace.state K0, #ace_state_enc_hash_finalize
@@ -2408,13 +2412,14 @@ V5[31:0] ← zeros(31) @ 1
 
 V3 ← zeros(b)                                    // “Auth Data 1”
 ace.exec V4, K0, V3                              // compute H
-for i = 0 to ceil(len_in_bytes(AD)/16)-1  do
+foreach(i from 0 to ceil(len_in_bytes(AD)/16)-1) {
     - load 16 bytes from AD+16*i into V1
     V3 ← V3 xor V1                               // Horner scheme add
     V3 ← galois_mult(V4,V3)                      // Horner scheme mult
+}
 
 counter ← 1                                      // a 32-bit integer value
-for i = 0 to ceil(len_in_bytes(PT)/16)-1  do
+foreach(i from 0 to ceil(len_in_bytes(PT)/16)-1) {
     V5[32:0] ← counter
     - load 16 bytes from PT+16*i into V1
     ace.exec V2, K0, V5                          // create mask by encrypting the counter
@@ -2423,6 +2428,7 @@ for i = 0 to ceil(len_in_bytes(PT)/16)-1  do
     V3 ← galois_mult(V4,V3)                      // Horner scheme mult
     - store V1 at *(CT+16*i))
     counter ← counter + 1
+}
 
 V3 ← V3 xor (len_in_bits(AD) @ len_in_bits(PT))  // Horner scheme add
 V3 ← galois_mult(V4,V3)                          // Horner scheme mult
@@ -2563,7 +2569,7 @@ If `VL*SEW` > `b`, only the `b` least significant bits of `Vs` are considered.
 ** In state _encrypt_, only  ``ace.exec`` instructions of the Form A are allowed, namely "```ace.exec Vd,Kn|K[Xn],Vs```," to encrypt `Vs` into `Vd` as follows:
 +
 --
-. If `ctr = 0`, then the CR is *invalidated*.
+. If `ctr == 0`, then the CR is *invalidated*.
    . If the `SIV` is `b`-bits long, then
      .. ``Vd <- Vs xor enc_blk(key, 1'b1 @ SIV[b-2:b/4] @ (SIV[b/4-1:0] + ctr % 2^b/4^)),``
    . else (the `SIV` is `3b/4`-bits long)
@@ -2578,7 +2584,7 @@ If `VL*SEW` > `b`, the above operations are applied to each of the `VL*SEW/b` bl
 ** In state _decrypt_,  only  ``ace.exec`` instructions of the Form A are allowed, namely "```ace.exec Vd,Kn|K[Xn],Vs```," to decrypt `Vs` into `Vd` and then absorb the plaintext `Vs` into the `auth_tag`:
 +
 --
-     . If `ctr = 0`, then the CR is *invalidated*.
+     . If `ctr == 0`, then the CR is *invalidated*.
      . If the `SIV` is `b`-bits long, then +
        .. ``Vd <- Vs xor enc_blk(key, 1'b1 @ SIV[b-2:b/4] @ (SIV[b/4-1:0] + ctr % 2^b/4^)),``
      . else (it is `3b/4`-bits long) +
@@ -2642,13 +2648,15 @@ ace.state K0, #ace_state_set_public_value
 V0 ← nonce
 ace.exec K0, V0
 
-for i = 0 to len_in_bytes(AD)/16-1  do
+foreach(i from 0 to len_in_bytes(AD)/16-1) {
     - load V0 from address AD+16*i               // Load a block of associated data
     ace.exec K0, V0 		                         // Absorb it into hash
+}
 
-for i = 0 to len_in_bytes(PT)/16-1  do
+foreach(i from 0 to len_in_bytes(PT)/16-1) {
     - load V0 from address PT+16*i               // Load a block of plaintext
     ace.exec K0, V0 		                         // Absorb it into hash
+}
 
 V0 ← IntTo64Bits(len(AD)) @ IntTo64Bits(len(PT))
 ace.exec K0, V0		          	                   // Absorb lengths into hash
@@ -2660,10 +2668,11 @@ ace.exec V2,K0
 
 // Encrypt the plaintext
 ace.state K0, #ace_state_encrypt
-for i = 0 to len_in_bytes(PT)/16-1  do
+foreach(i from 0 to len_in_bytes(PT)/16-1) {
     - load V0 from address PT+16*i               // Load a block of plaintext
     ace.exec V1, K0, V0                          // Encrypt the block
     - store V1 at address CT+16*i                // Store a block of ciphertext
+}
 ----
 
 [[ACE-pseudocode-GCM-SIV-decryption]]
@@ -2689,15 +2698,17 @@ ace.exec K0, V0
 
 // Compute AD contribution to Auth Data
 ace.state K0, #ace_state_hash_absorb
-for i = 0 to len_in_bytes(AD)/16-1  do
+foreach(i from 0 to len_in_bytes(AD)/16-1) {
     - load V0 from address AD+16*i
     ace.exec K0, V0                              // Absorb it into hash
+}
 
 // Decrypt ciphertext and continue computation of auth_tag
-for i = 0 to len_in_bytes(CT)/16-1 do
+foreach(i from 0 to len_in_bytes(CT)/16-1) {
     - load V0 from address CT+16*i
     ace.exec V1, K0, V0
     - store V1 at address PT+16*i
+}
 
 // Finally, we absorb the lengths of AD and plaintext into auth_tag AND verify
 ace.state K0, #ace_state_enc_hash_finalize
@@ -2760,7 +2771,7 @@ Data Structures:::
 * `dec_blk(K,c) -> p` decrypts block `c` using the key `K` and returns the result `p`.
 * `double(S)`:
 Let `C` be  `0x1B` for `b` = 64, `0x87` for `b` = 128, and `0x425` for `b` = 256, then: +
-If S[`b`-1] = 0, then { `double(S)` <- `S << 1` } else { `double(S)` <- `(S << 1) xor C` } .
+If S[`b`-1] == 0, then { `double(S)` <- `S << 1` } else { `double(S)` <- `(S << 1) xor C` } .
 
 State Machine:::
 
@@ -2818,7 +2829,7 @@ If `VL*SEW` > `b`, the above operation is executed `VL*SEW/b` times.
 
 ** To move to _hash_finalize_, the `ace.state` operation must have the additional argument, which sets the length of the final block of the AD in `last_blk_len`.
 
-** In state _hash_finalize_, only one `ace.exec` instructions of Form B is allowed if `last_blk_len` <> 0.
+** In state _hash_finalize_, only one `ace.exec` instructions of Form B is allowed if `last_blk_len` != 0.
  "```ace.exec Kn|K[Xn], Vs```" which absorbs the last data block in `auth_tag`, i.e.:
 +
 --
@@ -2830,7 +2841,7 @@ If `VL*SEW` > `b`, the above operation is executed `VL*SEW/b` times.
   . `hash_A <- hash_A xor enc_blk(K, tmp)`
 --
 +
-If `last_blk_len` = 0, however, no `ace.exec` can be executed, and only an `ace.state` instruction is allowed to enter state _encrypt_ or _decrypt_.
+If `last_blk_len` == 0, however, no `ace.exec` can be executed, and only an `ace.state` instruction is allowed to enter state _encrypt_ or _decrypt_.
 
 ** Upon entering states `_encrypt_` or `_decrypt_`, the _setup_ and _init_ stages is performed:
 +
@@ -2973,9 +2984,10 @@ ace.state K0, #ace_state_set_public_value_2,X1
 // Compute AD contribution to tag
 ace.state K0, #ace_state_hash_absorb
 
-for i = 0 to floor(AD_len/128)-1 do
+foreach(i from 0 to floor(AD_len/128)-1) {
     - load V0 from address AD+16*i
     ace.exec K0, V0                                // Absorb it into hash
+}
 
 X1 ← AD_len mod 128                                // Can be zero
 ace.state K0, #ace_state_hash_finalize,X1
@@ -2985,10 +2997,11 @@ if (X1 mod 128 != 0) then
 
 // Encrypt plaintext and continue computation of auth_tag
 ace.state K0, #ace_state_encrypt
-for i = 0 to floor(PT_len/128)-1 do
+foreach(i from 0 to floor(PT_len/128)-1) {
     - load V0 from address PT+16*i
     ace.exec V1, K0, V0
     - store V1 at address CT+16*i
+}
 
 X1 ← PT_len mod 128                                // Can be zero
 ace.state K0, #ace_state_enc_hash_finalize,X1
@@ -3089,7 +3102,7 @@ State Machine:::
 If `VL*SEW` > `b`, then the above operations are applied to each `b`-bit block of `Vs`.
 
  ** Upon issuing `ace.state Kn|K[Xn],#ace_state_last_block, Xs` where `Xs` contains the bit length of the last block, the following happens:
-   . if `partial_len` <> 0, then the CR is *invalidated*. (The previous block is not complete.)
+   . if `partial_len` != 0, then the CR is *invalidated*. (The previous block is not complete.)
    . if `Xs > b` then the CR is *invalidated*.
    . `last_block_len <- Xs`.
 
@@ -3097,7 +3110,7 @@ If `VL*SEW` > `b`, then the above operations are applied to each `b`-bit block o
 +
 --
   . `(K1, K2) <- gen_subkeys(key)`.
-  . if `last_block_len` = `b`, then
+  . if `last_block_len` == `b`, then
     .. `tmp <- hash xor Vs xor K1`
   . else
     .. `tmp <- Vs`
@@ -3134,9 +3147,10 @@ if remainder == 0 then
     blocks ← blocks - 1
     remainder ← 128
 
-for i = 0 to blocks-1 do
+foreach(i from 0 to blocks-1) {
     - load V0 from address M+16*i
     ace.exec K0, V0
+}
 
 X1 ← remainder
 ace.state K0, #ace_hash_last_block, X1
@@ -3196,7 +3210,7 @@ Data Structures:::
 
 Algorithm-Specific Functions:::
 
-* `process_block(p)`: process block `p` into the hash or MAC.
+* `absorb(p)`: process block `p` into the hash or MAC.
 
 State Machine:::
 
@@ -3220,40 +3234,40 @@ The values 9 and 13 are used when there is a partial block.
   If there is a mismatch, the CR will be *invalidated* and any operation will result in an invalid instruction exception.
 
   ** In state _hash_absorb_, we can only issue ``ace.exec`` instructions of Form B, i.e., "```ace.exec Kn|K[Xn], Vs```", to absorb the data block `Vs` into the hash:
-  *** If `VL*SEW` is a multiple of `b` (including the case where `VL*SEW` = `b`), then `process_block` is applied to each `b`-bit segment of `Vs`.
+  *** If `VL*SEW` is a multiple of `b` (including the case where `VL*SEW` = `b`), then `absorb` is applied to each `b`-bit segment of `Vs`.
   *** If `b` is a multiple of `VL*SEW` and `b` > `VL*SEW`, then
    . `Vs` is written to `partial_block` starting at byte offset `partial_len`.
    . `partial_len <- partial_len + VL*SEW`.
-   . if `partial_len = b`, then
-   .. `process_block` is applied to `partial_block`,
+   . if `partial_len` == `b`, then
+   .. `absorb` is applied to `partial_block`,
    .. `partial_len <- 0` and `partial_block` is cleared.
 
  ** Upon issuing `ace.state Kn|K[Xn],#ace_last_block, Xs` where `Xs` contains the length of the last block, the following happens:
 +
 --
- . if `partial_len` <> 0, then the CR is *invalidated*. (The previous block is not complete.)
+ . if `partial_len` != 0, then the CR is *invalidated*. (The previous block is not complete.)
  . if `Xs > b`, then the CR is *invalidated*.
- . if `Xs = 0`, then the CR is *invalidated*.
+ . if `Xs == 0`, then the CR is *invalidated*.
  . `last_block_len <- Xs`.
 --
 +
 
  ** In state _hash_last_block_:
-  *** if `last_block_len` = 0, then the CR is *invalidated*.
-  *** If `VL*SEW` is a multiple of `b` (including the case where `VL*SEW` = `b`), then
+  *** if `last_block_len` == 0, then the CR is *invalidated*.
+  *** If `VL*SEW` is a multiple of `b` (including the case where `VL*SEW` == `b`), then
       we only issue a single ``ace.exec`` instruction of Form B, i.e., "```ace.exec Kn|K[Xn], Vs```", to absorb the least significant `b` bits of data block `Vs`.
   *** If `b` is a multiple of `VL*SEW` and `b` > `VL*SEW`, then we can issue one or more ``ace.exec`` instructions of Form B, i.e., "```ace.exec Kn|K[Xn], Vs```", to absorb the data block `Vs` into the hash, i.e. "```ace.exec Kn|K[Xn], Vs```":
    . if `partial_len < b`, then
    .. The instruction must be of Form B, else the CR is *invalidated*.
    .. `Vs` is written to `partial_block` starting at byte offset `partial_len`.
    .. `partial_len <- partial_len + VL*SEW`.
-   . else if `partial_len+VL*SEW = b`, then the CR is *invalidated*.
+   . else if `partial_len+VL*SEW == b`, then the CR is *invalidated*.
 
   ** In state _hash_finalize_:
    *** If the function is a XOF, then
        we can issue an arbitrarily large number of ``ace.exec`` of Form C instructions, i.e., "```ace.exec Vd, Kn|K[Xn]```", to output the hash.
        This can be done with any of the two mechanisms below, except that the state never transitions to _completed_.
-   *** If `VL*SEW` is a multiple of `b` (including the case where `VL*SEW` = `b`), then
+   *** If `VL*SEW` is a multiple of `b` (including the case where `VL*SEW` == `b`), then
       we only issue a single ``ace.exec`` of Form C, i.e., "```ace.exec Vd, Kn|K[Xn]```", to output the hash.
       The value is, if necessary, finalized, before being output.
       The state is then changed to _completed_ with no errors (unless the algorithm is a XOF).
@@ -3262,7 +3276,7 @@ The values 9 and 13 are used when there is a partial block.
     . After each "```ace.exec Vd, Kn|K[Xn]```":
      .. We write a new block of the final value of the hash function to `Vd`, with the caveat that if `last_block_len` is non-zero, but strictly smaller than `VL*SEW`, the value in `Vd` is accordingly truncated and zero-padded.
      .. `last_block_len <- max(last_block_len - VL*SEW, 0)`
-     .. if `last_block_len` = 0 then the state is changed to _completed_ with no errors, unless the algorithm is a XOF, in which case the internal state is updated again, `last_block_len <- b`, and more "```ace.exec Vd, Kn|K[Xn]```" instructions can be issued.
+     .. if `last_block_len` == 0 then the state is changed to _completed_ with no errors, unless the algorithm is a XOF, in which case the internal state is updated again, `last_block_len <- b`, and more "```ace.exec Vd, Kn|K[Xn]```" instructions can be issued.
 
 // ** In any state, issuing any Form of ``ace.exec`` that is not the allowed one will produce a null output and the CR will be *invalidated*.
 
