@@ -329,7 +329,9 @@ See <<ACE-algorithms>> for algorithm-specific details on the format of the plain
 ==== CSRs
 
 ACE extends `*status` and `misa`, and adds 21 new CSRs (of which 18 are optional, 16 M-mode exclusive) to manage its execution environment.
+They are listed in <<ACE-SCRs-table>>.
 
+[[ACE-SCRs-table]]
 .New ACE CSRs
 [cols="<16%,^11%,<24%,<49%"]
 [float="center",align="center",options="header"]
@@ -345,16 +347,16 @@ ACE extends `*status` and `misa`, and adds 21 new CSRs (of which 18 are optional
 | 0xXXX--0xXXX   | MRW (RZ)  | `maceBootSecret0{0..3}`  | ACE Boot Secret
 |===
 
-===== Extension to existing CSRs
+==== Extension to existing CSRs
 
 [[ACE-ACE-field-in-misa]]
-====== ACE field in `misa`
+===== ACE field in `misa`
 
 Bit `L` (11) in `misa` indicates that ACE is present.
 (((CSR, ACE field in `misa`)))
 
 [[ACE-ACES-field-in-status]]
-====== ACES field in `*status`
+===== ACES field in `*status`
 
 The ACES field (bits 26:25) is added to `mstatus` and shadowed in `sstatus` and `vsstatus` (if the hypervisor extension is present).
 (((CSR,ACES field in *status)))
@@ -503,11 +505,11 @@ Initial
 Initial
 |===
 
-===== New CSRs
+==== New CSRs
 
 The new CSRs introduced by ACE are defined here.
 
-====== `acecrstatus`
+===== `acecrstatus`
 
 The CSR `acecrstatus` tracks the configuration and dirtiness of CRs on a per-CR basis, so that privileged context switching code needs to save only the dirty CRs, and restore only the configured ones, unless the latter are lazy-loaded:
 
@@ -560,7 +562,7 @@ If all CRs were either unconfigured or to be lazy-loaded, the ACES field would b
 //
 
 [[ACE-CSR-ace-error]]
-====== `aceerror`
+===== `aceerror`
 
 The 8-bit `aceerror` CSR records the error code from most recent ACE instruction.
 Reading it may stall the hart until the operation completes.
@@ -616,7 +618,7 @@ If executing an `ace.init`, `ace.import`, `ace.export`, `ace.input`, or `ace.out
 trap, as specified in the privileged architecture, `aceerror` remains unchanged.
 
 [[ACE-CSR-acestart]]
-====== `acestart`
+===== `acestart`
 
 `acestart` is an XLEN-bit RW CSR, similar to `vstart`, tracking progress of long-running interruptible instructions `ace.init`, `ace.import`, `ace.export`, `ace.input`, and `ace.output`.
 (((CSR, acestart)))
@@ -644,7 +646,7 @@ This design obviates the need to separate data transfer from cryptographic proce
 The semantics and use of `acestart` are described in <<ACE-format-configuration>> and [.red]#TBD#.
 
 [[ACE-CSR-aceiobuflen]]
-====== `aceiobuflen`
+===== `aceiobuflen`
 
 `aceiobuflen` is an XLEN-bit RW CSR. +
 `aceiobuflen` is used to program the size of the input/output buffer for the `ace.input` and `ace.output` instructions. +
@@ -653,7 +655,7 @@ Reconfiguring `aceiobuflen` will invalidate the buffer contents.
 If the size is zero, the buffer is disabled and the instructions will fail.
 
 [[ACE-CSR-aceiobuftop]]
-====== `aceiobuftop`
+===== `aceiobuftop`
 
 `aceiobuftop` is an XLEN-bit RW CSR. +
 `aceiobuftop` is used to program the top end of a transfer operation.
@@ -663,7 +665,7 @@ Reconfiguring `aceiobuftop` will not invalidate the buffer contents.
 If the size is zero, the buffer is disabled and the instructions will fail.
 
 [[ACE-CSR-macercsk]]
-====== `macercsk`
+===== `macercsk` group
 
 This is a group of M-Mode WARZ XLEN-bit CSRs.
 
@@ -682,7 +684,7 @@ Cross-device RCSK migration must use a public-key key wrapping mechanism.
 Since M-mode FW cannot just trust any external entity claiming to be a trusted device:
 all receiving end points, whether they are the M-mode FW of another trusted device, a TPM for temporary storage of a VM's CSK during device hibernation, or an HSM for intermediate CSK storage, must authenticate themselves.
 
-====== `maceOSSecret` group
+===== `maceOSSecret` group
 
 This is a group of M-Mode WARZ XLEN-bit CSRs.
 
@@ -692,7 +694,7 @@ CSRs `maceOSSecret0` and `maceOSSecret1`, are used to configure the "OSSecret" L
 A write to `maceOSSecret{i}` set Bits [(_i_+1) XLEN - 1 : _i_ XLEN] of the "OSSecret".
 
 
-====== `maceBootSecret` group
+===== `maceBootSecret` group
 
 This is a group of M-Mode WARZ XLEN-bit CSRs.
 
@@ -706,7 +708,7 @@ A write to `maceBootSecret{i}` set Bits [(_i_+1) XLEN - 1 : _i_ XLEN] of the "Bo
 `maceBootSecret*` must be reconfigurable in order to support VM reboots which are independent of the boot cycles if the physical host.
 ====
 
-===== Reuse of `(v)satp`.ASID and `hgatp`.VMID
+==== Reuse of `(v)satp`.ASID and `hgatp`.VMID
 
 ACE reuses `(v)satp`.ASID and `hgatp`.VMID to optionally restrict the usage of CCs to a specific process or virtual machine.
 In the metadata section, `ASID` and `VMID` are always zero padded to the maximal lengths of 16 and 14 bits, respectively.
@@ -931,16 +933,11 @@ UNINTERRUPTIBLE_BLOCK_END
 [[ACE-incomplete-contexts]]
 ==== Partial Cryptographic Contests
 
-An initialization or import operation may be interrupted by context switching code, i.e., not returning to the original control flow immediately after the handler is done. In this case the intermediate state of the CR must be saved and then restored in a way that allows for resumption of the operation (by setting also the value of `acestart`).
+An initialization or import operation may be interrupted by a context switch, preventing immediate return to the original control flow. In this case, the intermediate state of the CR must be saved and later restored to allow the operation to be resumed (by setting `acestart` similarly to the use of `vstart`).
 (((Cryptographic Register,incomplete)))
-Then exporting the partial CR, the following metadata header format is used as the first 8 bytes of the SCC to store information about the partial CR.
-After this header block, the SCC contains the nonce and SIV following <<ACE-format-SCC>>, and then the content section.
+When exporting a partial CR, a Partial CR Metadata (PCREM) header is used as the first 8 bytes of the SCC, preceding the nonce, SIV, and content sections as defined in <<ACE-format-SCC>>.
 
-The Partial CR Metadata (PCREM) header must distinguish between partial CRs following interrupted
-initialization and import operations, and in the second case also the content section must be modified accordingly.
-In particular, for the interrupted import case, we need to save the current partial tag value that will have to be verified at the end,
-but the original metadata block, nonce and SIV can be recovered from the original SCC.
-Note that the metadata of that SCC can also indicate a partial initialization or import operation.
+//The PCREM header distinguishes between partial CRs resulting from interrupted initialization versus import operations. In the import case, the content section is also modified: it must preserve the current partial authentication tag value needed for final verification, while the original metadata, nonce, and SIV can be recovered from the source SCC. Note that the metadata within that source SCC may itself indicate a partial initialization or import.
 
 [[ACE-metadata-partial]]
 .Format of the partial CR Metadata (PCREM)
@@ -962,14 +959,16 @@ NOTE: Fields Algorithm, SC_Protection, State Number, Direction_Policy and, perha
 and Locality information are omitted, the reason being that usage of partial CRs is forbidden by the architecture anyway, and therefore the space can be used for other purposes.
 Regarding the Locality, Locality violation errors should be handled where the complete CR is used, and therefore the RCSK is always used for partial CRs. This may also reduce the need to compute or cache DCSKs at higher privileged levels, overall improving performance.
 
-The content format to export incomplete initializations is the same, only truncated to the actual imported length, rounded to a multiple of 8 bytes.
+The content format to export incomplete initializations and imports is the same as for the complete CRs,
+only truncated to the actual imported length, rounded to a multiple of 8 bytes.
+This length is stored in the Payload_Length field.
 
-The content format to export incompletely imported CRs prepends the partial hash (`tmp` in <<ACE-SCC-import>>) to the content, which is thus extended by 16 bytes,
-These 16 bytes must be included in the Payload_Length field and encrypted as well.
+The content format to export incompletely imported CRs prepends the partial hash (`tmp` in <<ACE-SCC-import>>) to the content, which is thus extended by 16 bytes. These 16 bytes must be included in the Payload_Length field and encrypted as well.
 
 After the partial CR has been decrypted and authenticated in privileged mode, it is marked as to be resumed, in which case, upon returning to the less-privileged mode, the following operations must be performed:
 
-. The old metadata, nonce and SIV are recovered from the memory of the less-privileged mode. These reads may be interrupted by page faults, but they are easy to resume.
+. The old metadata, nonce and SIV are recovered from the memory of the less-privileged mode.
+  These reads may be interrupted by page faults, but they upon mapping the target page the code is resumed immediately.
 . `z` and `num_blocks` are computed from the original content length, and the starting value of `i` with the help of the `acestart`.
 . The `Kenc` and `Kauth` keys are derived.
 . The old partial hash value is restored.
