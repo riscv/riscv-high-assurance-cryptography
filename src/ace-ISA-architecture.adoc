@@ -966,15 +966,22 @@ This length is stored in the Payload_Length field.
 
 The content format to export incompletely imported CRs prepends the partial hash (`tmp` in <<ACE-SCC-import>>) to the content, which is thus extended by 16 bytes. These 16 bytes must be included in the Payload_Length field and encrypted as well.
 
-After the partial CR has been decrypted and authenticated in privileged mode, it is marked as to be resumed, in which case, upon returning to the less-privileged mode, the following operations must be performed:
+After the partial CR has been decrypted and authenticated in privileged mode, it is marked as to be resumed.
+Upon returning from the context switch handler,
 
-. The old metadata, nonce and SIV are recovered from the memory of the less-privileged mode.
-  These reads may be interrupted by page faults, but they upon mapping the target page the code is resumed immediately.
-. `z` and `num_blocks` are computed from the original content length, and the starting value of `i` with the help of the `acestart`.
-. The `Kenc` and `Kauth` keys are derived.
-. The old partial hash value is restored.
+. the old metadata, nonce and SIV are recovered from the memory of the less-privileged mode;
 
-At this point the initialization or import operation can resume from the interrupted point.
+(These reads may be interrupted by page faults and immediately resumed upon mapping the target page.)
+
+The following operations are then performed as an uninterruptible block.
+
+[start=2]
+. `z` and `num_blocks` are computed from the original content length, the starting value of `i` from `acestart`.
+. If the interrupted operation was an import:
+.. The `Kenc` and `Kauth` keys are derived.
+.. The partial hash value is recomputed from the current content of the CR.
+
+At this point the initialization or import operation can resume from the point of interruption.
 
 //
 
@@ -2873,7 +2880,7 @@ If `last_blk_len` == 0, however, no `ace.exec` can be executed, and only an `ace
  . `Vd <- offset xor enc_blk(key, Vs xor offset)`
 --
 +
-If `VL*SEW` is a multiple of `b`, the above operation sequence is executed `VL*SEW/b` times, encrypting each `b`-bit block of `Vs` into the corresponding `b`-bit block of `Vd`.
+If `VL*SEW > b`, the above operation sequence is executed `VL*SEW/b` times, encrypting each `b`-bit block of `Vs` into the corresponding `b`-bit block of `Vd`.
 
 ** To move to _enc_last_block_, the `ace.state` operation must have the additional argument, which sets the bit length of the final block of the plaintext in `last_blk_len`.
 
@@ -2925,7 +2932,7 @@ performs `Vd <- zeros(b-tag_len) @ hash_P[tag_len-1:0]`.
   . `Vd <- tmp`
 --
 +
-If `VL*SEW` is a multiple of `b`, the same behavior applies as in state _encrypt_.
+If `VL*SEW` > `b`, the same behavior applies as in state _encrypt_.
 
 ** To move to _dec_last_block_, the `ace.state` operation must have the additional argument, which sets the bit length of the final block of the ciphertext in `last_blk_len`.
 
