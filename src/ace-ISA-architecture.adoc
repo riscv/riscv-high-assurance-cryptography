@@ -643,7 +643,7 @@ _A single `crstart` value suffices due to the way the init/import/export instruc
 This design obviates the need to separate data transfer from cryptographic processing during import and export operations. A separate transfer phase would require buffering the entire input within the ACE unit before processing, increasing internal resource requirements, whereas the current architecture can process data inline and is loaded with minimal overhead.
 ====
 
-The semantics and use of `crstart` are described in <<ACE-format-configuration> and [.red]#TBD#. zzzz
+The semantics and use of `crstart` are described in <<ACE-format-configuration> and [.red]#TBD#.
 
 [[ACE-CSR-macercsk]]
 ====== `macercsk`
@@ -1549,20 +1549,21 @@ Interruptible: *NO*.
 [[ACE-instruction-input]]
 ==== ace.input (optional)
 
-`ace.input Kd|K[Xd], %offset(Xs)`
+`ace.input %offset(Xs), Xl`
 (((ACE, instruction, ace.input)))
 
 Encoding::
-`ace.input` is an I-type instruction.
+`ace.input` is an S-type instruction.
 +
 [wavedrom, , svg]
 ....
 {reg:[
     { bits:  7, name: 0x27, attr: ['custom-1'] },
-    { bits:  5, name: 'context', attr: ['Kd','K[Xd]'] },
-    { bits:  3, name: 'ace.input', attr: [0x4,0x5] },
+    { bits:  5, name: 'imm[4:0]' },
+    { bits:  3, name: 'ace.output', attr: [0x4] },
+    { bits:  5, name: 'Xl' },
     { bits:  5, name: 'Xs' },
-    { bits: 12, name: 'imm' },
+    { bits:  7, name: 'imm[11:5]' },
 ]}
 ....
 
@@ -1575,58 +1576,32 @@ Trappable: *YES*. +
 Interruptible: *YES*.
 
 Description::
-+
---
 In all cases where the vector registers are not sufficiently long, or even absent, inputs can be read directly from memory and written directly to memory.
-For this reason, the architecture defines `ace.input` and `ace.output`.
+For this reason, the architecture defines `ace.input` and `ace.output` (cf. next section).
+Their usage is explained in  <<ACE-usage-input-output>>.
 
-Forms A, B, and C of `ace.exec` are replaced in the code as follows:
-
-[[ACE-replacement-instructions]]
-.Replacement for `ace.exec` instructions with input output
-[float="center",align="center",width="70%",cols="^8%,<32%,<30%",options="header"]
-|===
-| Form | Original Instruction          | Replacement
-|   A  | `ace.exec{nbsp}Vd, Kn\|K[Xn], Vs` | `ace.input{nbsp}{nbsp}Kn\|K[Xn], Vs` +
-`ace.exec{nbsp}{nbsp}{nbsp}Kn\|K[Xn]` +
-`ace.output{nbsp}Vd, Kn\|K[Xn]`
-|   B  | `ace.exec{nbsp}{nbsp}{nbsp}{nbsp}{nbsp}Kn\|K[Xn], Vs`     | `ace.input{nbsp}{nbsp}Kn\|K[Xn], Vs` +
-`ace.exec{nbsp}{nbsp}{nbsp}Kn\|K[Xn]`
-|   C  | `ace.exec{nbsp}Vd, Kn\|K[Xn]`     | `ace.exec{nbsp}{nbsp}{nbsp}Kn\|K[Xn]` +
-`ace.output{nbsp}Vd, Kn\|K[Xn]`
-|===
-
-Any Form A-C `ace.exec` instruction can be replaced by a Form `D` instruction in all algorithms.
-The content of the internal buffers for inputs and outputs is zeroed by all algorithms in the _initial_ and _completed_ states.
-`ace.input` is allowed whenever a Form A or B `ace.exec` is expected by the architecture, and
-`ace.output` is allowed whenever a Form B or C `ace.exec` is expected.
-Failure to issue these instructions can lead to undefined behavior, but it does not raise errors.
-Issuing them when they are _not_ expected raises an invalid instruction exception.
---
-
-[WARNING]
-[.red]#To be discussed: how to represent in a CC, how to save and resume the IO buffer upon context switch. I would not add state to the metadata, we could add the IO buffer as an extra architectural state that is simply saved as a variable-length register by privileged code and restored. This state does not require confidentiality nor integrity, and therefore it can be implemented easily. A sequence of# ``[.red]#mv#``[.red]#'s like those mentioned in <<ACE-trappable-insns-support>> is sufficient. To denote partial load/store in this buffer we can probably re-use# `[.red]#crstart#`[.red]#.#
+//
 
 [[ACE-instruction-output]]
 ==== ace.output (optional)
 
-`ace.output  %offset(Xd), Ks|K[Xs]`
+`ace.output %offset(Xd), Xl`
 (((ACE, instruction, ace.output)))
 
 Encoding::
-`ace.output` is an S-type instruction.
+`ace.output` is an I-type instruction.
 +
 [wavedrom, , svg]
 ....
 {reg:[
     { bits:  7, name: 0x0b, attr: ['custom-0'] },
-    { bits:  5, name: 'imm[4:0]' },
-    { bits:  3, name: 'ace.output', attr: [0x4,0x5] },
     { bits:  5, name: 'Xd' },
-    { bits:  5, name: 'context', attr: ['Ks','K[Xs]'] },
-    { bits:  7, name: 'imm[11:5]' },
+    { bits:  3, name: 'ace.output', attr: [0x4] },
+    { bits:  5, name: 'Xl' },
+    { bits: 12, name: 'imm' },
 ]}
 ....
+
 
 Properties::
 Possibly modifies state: *YES*. +
@@ -1652,6 +1627,37 @@ Usage-controlled: *NO*. +
 Trappable: *NO*. +
 Interruptible: *NO*.
 
+//
+
+[[ACE-usage-input-output]]
+==== Usage of the ace.input and ace.output Instructions
+
+Forms A, B, and C of `ace.exec` are replaced in the code as follows:
+
+[[ACE-replacement-instructions]]
+.Replacement for `ace.exec` instructions with input output
+[float="center",align="center",width="64%",cols="^8%,<31%,<25%",options="header"]
+|===
+| Form | Original Instruction          | Replacement
+|   A  | `ace.exec{nbsp}Vd, Kn\|K[Xn], Vs` | `ace.input{nbsp}{nbsp}Xl, Vs` +
+`ace.exec{nbsp}{nbsp}{nbsp}Kn\|K[Xn]` +
+`ace.output{nbsp}Vd,  Xl`
+|   B  | `ace.exec{nbsp}{nbsp}{nbsp}{nbsp}{nbsp}Kn\|K[Xn], Vs`     | `ace.input{nbsp}{nbsp}Xl, Vs` +
+`ace.exec{nbsp}{nbsp}{nbsp}Kn\|K[Xn]`
+|   C  | `ace.exec{nbsp}Vd, Kn\|K[Xn]`     | `ace.exec{nbsp}{nbsp}{nbsp}Kn\|K[Xn]` +
+`ace.output{nbsp}Vd,  Xl`
+|===
+
+Any Form A-C `ace.exec` instruction can be replaced by a Form `D` instruction in all algorithms.
+The content of the internal buffers for inputs and outputs is zeroed by all algorithms in the _initial_ and _completed_ states.
+`ace.input` is allowed whenever a Form A or B `ace.exec` is expected by the architecture, and
+`ace.output` is allowed whenever a Form B or C `ace.exec` is expected.
+Failure to issue these instructions can lead to undefined behavior, but it does not raise errors.
+Issuing them when they are _not_ expected raises an invalid instruction exception.
+
+[WARNING]
+[.red]#To be discussed: how to represent in a CC, how to save and resume the IO buffer upon context switch. I would not add state to the metadata, we could add the IO buffer as an extra architectural state that is simply saved as a variable-length register by privileged code and restored. This state does not require confidentiality nor integrity, and therefore it can be implemented easily. A sequence of# ``[.red]#ace.mv#``[.red]#'s like those mentioned in <<ACE-trappable-insns-support>> is sufficient. To denote partial load/store in this buffer we can probably re-use# `[.red]#crstart#`[.red]#.#
+
 // ///////////////////////////////////////////////////////////////////////////////////////////
 
 [[ACE-trappable-insns-support]]
@@ -1666,13 +1672,13 @@ Upon a trap, the handler identifies the trapped instruction and uses `ace.size` 
 Then, the emulation uses custom instructions to move data between the ACE unit and the CPU.
 Three types of supporting operations are required:
 
- * A `mv` instruction that loads a specified number of bytes from a GPR or vector register into the state of a CR within the ACE unit.
+ * An `ace.mv` instruction that loads a specified number of bytes from a GPR or vector register into the state of a CR or in the input buffer within the ACE unit.
    Initially, `ace.size` returns the total payload length to transfer.
    After each move, this value is updated to reflect the remaining bytes.
    The instruction also updates the `crstart` CSR to follow the internal progress.
- * A corresponding `mv` instruction that exports a specified number of bytes from a CR to a GPR or vector register.
-   The behavior of `ace.size` will be similar to that of the `mv` instruction, but it will count the number of bytes to be exported.
- * A “`close`” instruction to suspend or finalize the procedure.
+ * A corresponding `ace.mv` instruction that exports a specified number of bytes from a CR or from the input buffer to a GPR or vector register.
+   The behavior of `ace.size` will be similar to that of the `ace.mv` instruction, but it will count the number of bytes to be exported.
+ * An “`ace.close`” instruction to suspend or finalize the procedure.
    If executed before all bytes are transferred, the CR state matches that of an interrupted monolithic instruction, including the Incomplete metadata field and the `crstart` value. If executed after all bytes are transferred, it also performs any final cryptographic operations, such as authenticating the CR, if needed.
 
 Interrupting the firmware implementation of `ace.init`, `ace.export`, `ace.import`, `ace.input`, or `ace.output` must leave the architectural state indistinguishable from the state expected from interrupting a monolithic implementation of the instructions.
