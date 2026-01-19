@@ -100,6 +100,8 @@ Privileged::
 
 // ///////////////////////////////////////////////////////////////////////////////////////////
 
+<<<
+
 === Programmer-Visible Architectural State
 
 ACE requires a subset of the V extension, including the vector register file (see <<ACE-V-dependency>>).
@@ -205,8 +207,6 @@ Algorithm numbers 0-447 are architecture-defined and the list of such encodings 
 See <<ACE-algorithms>> for the currently encoded algorithms.
 Algorithm numbers 448-511 are reserved for custom algorithms.
 
-<<<
-
 [[ACE-SC-protection-levels]]
 .Encoding of Side-Channel Protection levels
 [float="center",align="center",width="76%",cols="^8%,<68%",options="header"]
@@ -254,8 +254,8 @@ Otherwise, this value is used as an index _i_ in the LST, and the actual CSK is 
 
 <<ACE-locality-indexes>> lists the architected Localities and whether M-mode can configure them.
 The domain of each Locality Secret is specified, i.e., whether the value is chip-wide
-(i.e., the same across all chiplets in the same SoC, note that two distinct SoCs on the same device may have different values),
-device-wide, or (usually) OS-wide.
+(i.e., the same across all chiplets in the same SoC),
+device-wide, or OS-wide.
 
 [[ACE-locality-indexes]]
 .Architected Locality Values
@@ -296,12 +296,8 @@ The Initialization Input is used to initialize a CR and thus create a Cryptograp
 Its size must be a multiple of 8 bytes.
 
 The first 8 bytes of the Initialization Input contain the metadata section as specified in <<ACE-metadata>>.
-
-This is followed by the _content_, i.e., the key(s) and possibly other algorithm-specific information, in a format that is algorithm-specific.
-
-The metadata has a fixed architectural format, while the content format is algorithm-dependent.
-
-See <<ACE-algorithms>> for algorithm-specific details of the content part of the initialization input.
+This is followed by the _content_, i.e., the key(s) and possibly other information, in a format that is algorithm-specific.
+See <<ACE-algorithms>> for the algorithm-specific formats of the content section of the Initialization Input.
 
 [[ACE-format-SCC]]
 ==== Sealed Cryptographic Contexts
@@ -319,9 +315,7 @@ Format of SCC:::
 +
 Only the serialization of the content is encrypted, while both metadata and content are included in the computation of the authentication tag, as described next.
 
-Similarly to initialization inputs, the metadata has a fixed architectural format (in fact it is the same format as in initialization inputs), while the content format is algorithm-dependent.
-
-See <<ACE-algorithms>> for algorithm-specific details on the format of the plaintext of the content of the SCC.
+The metadata section of a SCC has a fixed architectural format (in fact it is the same format as in the Initialization Inputs), while the content format is algorithm-dependent. See <<ACE-algorithms>> for the latter.
 
 [[ACE-CSR]]
 ==== CSRs
@@ -536,7 +530,8 @@ We describe now the semantics of the `acecrstatus` bitfields:
 ** *Configuration:* Works as expected; sets status to *DIRTY*.
 
 While the *LAZY* status reuses the FS/VS/ACES encoding for "OFF", this it does _not_ mean that the ISE is not active.
-The encoding for *OFF* is suitable though, since it would be the natural one to use in case state must be lazily loaded.
+The fact that the ISE is not active is only encoded in `*status`.
+The encoding for *OFF* in the per-CR fields of `acecrstatus` is suitable though, since it would be the natural one to use in case state must be lazily loaded.
 If all CRs were either unconfigured or to be lazy-loaded, the ACES field would be set to *CLEAN* and not to *OFF*.
 --
 +
@@ -618,18 +613,21 @@ trap, as specified in the privileged architecture, `aceerror` remains unchanged.
 [[ACE-CSR-acestart]]
 ===== `acestart`
 
-`acestart` is an XLEN-bit RW CSR, similar to `vstart`, tracking progress of long-running interruptible instructions `ace.init`, `ace.import`, `ace.export`, `ace.input`, and `ace.output`.
+`acestart` is an XLEN-bit RW CSR, similar to `vstart`, tracking progress of long-running interruptible instructions such as `ace.init`, `ace.import`, `ace.export`, `ace.input`, and `ace.output`.
 (((CSR, acestart)))
 
-Unlike the vector extension’s `vstart`, which tracks element indices, ACE has no notion equivalent to that of vector elements;
+Unlike the vector extension’s `vstart`, which tracks element indices, ACE has no notion equivalent to that of vector elements:
 `acestart` therefore records a byte offset.
-For a load-type instruction (e.g., `ace.init`, `ace.import`, `ace.input`), this offset indicates how many bytes of input have already been read and processed. For a store-type instruction (e.g., `ace.export`, `ace.output`), it indicates how many bytes of output have already been computed and written.
+For a load-type instruction (e.g., `ace.init`, `ace.import`, `ace.input`), this offset indicates how many bytes of input have already been read and processed.
+For a store-type instruction (e.g., `ace.export`, `ace.output`), it indicates how many bytes of output have already been computed and written.
 The value includes all payload bytes (metadata, content, nonce, tag) and accommodates piecewise execution via traps (see <<ACE-trappable-insns-support>>).
 
 This register is typically written by hardware.
 Software may safely write 0 to fully restart an operation, and the register can be saved and restored during context switches.
 However, software must not write arbitrary nonzero values to it, as this may result in an illegal-instruction exception, as the hardware or a trapped implementation are not required to support all possible values.
 Only the instructions explicitly mentioned above support non-zero `acestart` values; other ACE instructions ignore this register, and will be restarted.
+
+Initialization, import, and export operations can be interrupted and resumed if the interrupt does not result in a context switch, as indicated by the value in the `acestart` CSR.  If a context switch occurs, these operations have to be restarted.
 
 [NOTE]
 ====
@@ -641,13 +639,21 @@ _A single `acestart` value suffices due to the way the init/import/export instru
 This design obviates the need to separate data transfer from cryptographic processing during import and export operations. A separate transfer phase would require buffering the entire input within the ACE unit before processing, increasing internal resource requirements, whereas the current architecture can process data inline and is loaded with minimal overhead.
 ====
 
-The semantics and use of `acestart` are described in <<ACE-format-configuration>> and [.red]#TBD#.
+A different situation occurs if an `ace.exec` instruction is operating with long vectors that contains several elements to be processed.
+In the algorithm description we explicitly mention that a block of operation is repeated for each block in the vector:
+the execution of these iterative `ace.exec` instructions can be interrupted and resumed, and `acestart` reflects the number of bytes processed so far.
+
+The semantics and use of `acestart` are described in <<ACE-format-configuration>>.
+
+To optimize the save and restore of the input/output buffer, we also use the two CSRs described in the next two sections.
 
 [[ACE-CSR-aceiobuflen]]
 ===== `aceiobuflen`
 
-`aceiobuflen` is an XLEN-bit RW CSR. +
-`aceiobuflen` is used to program the size of the input/output buffer for the `ace.input` and `ace.output` instructions. +
+`aceiobuflen` is an XLEN-bit RW CSR.
+
+`aceiobuflen` is used to program the size of the input/output buffer for the `ace.input` and `ace.output` instructions.
+
 Reconfiguring `aceiobuflen` will invalidate the buffer contents.
 
 If the size is zero, the buffer is disabled and the instructions will fail.
@@ -655,9 +661,11 @@ If the size is zero, the buffer is disabled and the instructions will fail.
 [[ACE-CSR-aceiobuftop]]
 ===== `aceiobuftop`
 
-`aceiobuftop` is an XLEN-bit RW CSR. +
+`aceiobuftop` is an XLEN-bit RW CSR.
+
 `aceiobuftop` is used to program the top end of a transfer operation.
-It works in conjunction with `acestart` to define the range of the buffer. +
+It works in conjunction with `acestart` to define the range of the buffer.
+
 Reconfiguring `aceiobuftop` will not invalidate the buffer contents.
 
 If the size is zero, the buffer is disabled and the instructions will fail.
@@ -764,7 +772,7 @@ UNINTERRUPTIBLE_BLOCK_START
 UNINTERRUPTIBLE_BLOCK_END
 ----
 
-==== Authenticated Encryption for Sealed Cryptographic Contexts
+==== AEAD Algorithm for SCC Export and Import
 
 We first define the RFC8452 Key Derivation and the DCSK Derivation functions.
 
@@ -1505,15 +1513,17 @@ Description::
 --
 This instruction can be used to:
 
-* Restrict the usage of a CC (as stored in a CR) to specific modes or to a specified `ASID` or `VMID`; and
+* Restrict the usage of a CC (as stored in a CR) to specific modes or to a specified `ASID` or `VMID`;
+* Restrict the use of encryption or decryption in a CC that allows both; and
 * Activate the side-channel protection of the CC or increase it.
 
 Let `m` be the metadata field of the CC in the destination CR.
 The instruction works as follows:
 
-* Bits [17:16] and [63:26] of the input register `Xs` have the same format as the corresponding bits of the metadata.
-* Bits [15:0] and [25:18] of the input register `Xs` are ignored.
-* Bits [17:16] can be used to turn on or increase the level of the side-channel protection of the algorithm in the CC, if the microarchitecture supports the corresponding implementation. The levels are defined in <<ACE-SC-protection-levels>>. Downgrading side-channel protection is not permitted, and attempting to do so will result in error _ace_err_invalid_ (cf.{nbsp}<<ACE-error-codes>>).
+* Bits [14:0] and [25:19] of the input register `Xs` are ignored.
+* Bits [16:15], [18:17] and [63:32] of the input register `Xs` have the same format as the corresponding bits of the metadata.
+* Bits [16:15] can be used to turn on or increase the level of the side-channel protection of the algorithm in the CC, if the microarchitecture supports the corresponding implementation. The levels are defined in <<ACE-SC-protection-levels>>. Downgrading side-channel protection is not permitted, and attempting to do so will result in error _ace_err_invalid_ (cf.{nbsp}<<ACE-error-codes>>).
+* Bits [18:17] can be used to deactivate encryption or decryption in a CC that allows both. Writing to them cannot be used to deactivate both encryption and decryption simultaneously, nor to activate encryption, resp., decryption in a CC that did not allow it.
 * A zero in any of the six bits `Xs`[31:26] means that the corresponding policy is not changed.
 * A one in any of the four bits `Xs`[29:26] means that usage by the corresponding mode is forbidden, and the corresponding bit in the metadata of the destination CC is set to 1.
 * If `Xs`[30] is set and `m`[30] is NOT set, then UC_Policy_3, i.e., `m`[47:32], is set to `Xs`[47:32].
@@ -1739,7 +1749,7 @@ This includes:
 . A complete list of the *allowed state transitions*, including the conditions under which each transition is allowed.
 . The *behavior* of all ACE instructions at each state.
 
-For each algorithm, in any state, only certain instructions are permitted.
+// For each algorithm, in any state, only certain instructions are permitted.
 
 We also add pseudocode to clarify how the algorithms supported by an ACE unit are implemented in software using the ACE ISA.
 
@@ -1754,7 +1764,6 @@ Instead, the output of `SERIALIZE()` and the input of `DESERIALIZE()` can just b
 ==== Generic Rules
 
 Most modes of operations have a generic specification, i.e., the specification depends only on certain parameters of the underlying primitives, such as the block width `b` of a block cipher or key length `k` of a symmetric cipher.
-
 Other modes, whose description depends on other parameters or special properties of the underlying primitives, are specified separately.
 
 If the number of states of the algorithm is at most 16 (including _initial_, _completed_, and _invalidated_), the `state` of the metadata is used to store this value.
@@ -1764,7 +1773,7 @@ If an invalid input is provided to any ACE instruction, or an instruction that i
 (((ACE, algorithm, invalid state)))
 (((Cryptographic Register, invalidated)))
 
-* `Kn` is put into state _invalidated_;
+* `Kn` is put into state _invalid_;
 * For instructions that refer to `Kn`:
  ** any Form of `ace.exec` performs no operation and, if it provides an output, the latter is always zero;
  ** `ace.clone` and `ace.derive` clean the destination contexts;
@@ -1775,17 +1784,13 @@ If an invalid input is provided to any ACE instruction, or an instruction that i
     `ace.import` and `ace.export`, `ace.clean`, `ace.init`, and `ace.size`, which all work normally, and using `ace.state` to return to state _initial_.
 * The current instruction is terminated.
 
-The function that puts the CR in this state is called `invalidate()`.
-
-In state _completed_, only `ace.init`, `ace.export`, `ace.import`, `ace.clear`, and `ace.error` are permitted. Any other instruction that produces an output returns zero and *invalidates* the CR.
-
+In state _completed_, only `ace.init`, `ace.export`, `ace.import`, `ace.clear`, and `ace.error` are permitted.
 
 We recall that operations performed by `ace.exec` or `ace.state`—as defined by the algorithm-specific rules—are uninterruptible. This includes processing of arbitrarily long vector inputs when all work is purely internal to ACE and in particular without access to external memory (e.g., encryption, decryption, hashing, or point multiplication). Because these operations may proceed independently of the CPU core, a hart implementation may require context-switching software to wait when accessing a CR that is being written. These instructions are therefore atomic and non-preemptible.
 
-In what follows, when we write of "state _name_" we refer to the state which has number _ace_state_name_ as described in <<ACE-state-constants>>.
+In what follows, "state _name_" refers to the state which has number _ace_state_name_ as described in <<ACE-state-constants>>.
 
-The rules from <<ACE-ECB-mode>> to  <<ACE-hash-functions>> can be instantiated, like the modes that they describe, with a variety of block ciphers and polynomials for GHASH- or POLYVAL-like hashes, where only the block and key sizes are needed to get a full specification.
-
+// The rules from <<ACE-ECB-mode>> to  <<ACE-hash-functions>> can be instantiated, like the modes that they describe, with a variety of block ciphers and polynomials for GHASH- or POLYVAL-like hashes, where only the block and key sizes are needed to get a full specification.
 // On the other hand, the specifications from <<ACE-hash-functions>> to <<ACE-Ascon>> are in general heavily primitive dependent.
 
 [[ACE-rules-threshold-implementations]]
@@ -1855,12 +1860,11 @@ State Machine:::
  ** From any state to state _encrypt_, if metadata allows encryption, else the CR is *invalidated*.
  ** From any state to state _decrypt_, if metadata allows decryption, else the CR is *invalidated*.
 * *Behavior:*
- ** In state _initial_, any `ace.exec` will result in the CR being *invalidated*.
+ ** In state _initial_, no `ace.exec` instruction is allowed.
  ** In states _encrypt_ or _decrypt_, we can only issue a Form A `ace.exec`, i.e., `ace.exec Vd,Kn|K[Xn],Vs`.
   *** If the state is _encrypt_, then `Vd = enc_blk(Vs)`.
   *** If the state is _decrypt_, then `Vd = dec_blk(Vs)`.
   *** If `VL*SEW` > `b`, then `ace.exec Vd,Kn|K[Xn],Vs` encrypts/decrypts block-by-block.
-// *** If any other Form of `ace.exec` is issued, then the CR is *invalidated*.
 
 //
 
@@ -1967,7 +1971,6 @@ State Machine:::
   *** If no such instruction is issued, the value of the IV will remain zero.
   *** If `VL*SEW` > `b`, only the `b` least significant bits of `Vs` are considered.
   *** If such operations are issued more times, they will just update the IV value again. Since this can be done only before any encryption or decryption operation, this does not represent a security issue.
-//  *** Any other Form of `ace.exec` will produce a null output and *invalidate* the CR.
  ** In state _operate_, only ``ace.exec`` instructions of Form C are allowed. +
      "```ace.exec Vd, Kn|K[Xn]```" performs:
 +
@@ -1980,8 +1983,6 @@ State Machine:::
 +
 If `VL*SEW` is a multiple of `b`, the above three commands are applied to each of the `VL*SEW/b` `b`-bit blocks of `Vs`, producing each time the corresponding `b`-bit block of `Vd`.
 If the number `x` of blocks to be processed in an entire run of the algorithm is not a multiple of `VL*SEW`/`b`, `VL` can be set to the remainder of the division of `x` by `VL*SEW`/`b` for the last instruction.
-
-// ** In state _operate_, any other Form of `ace.exec` will produce a null output and *invalidate* the CR.
 
 Note that if `ace.state` is issued to return to state _initial_, the CC can be reused with a new `IV`.
 
@@ -2067,13 +2068,11 @@ State Machine:::
  ** In state _initial_:
   *** The `mask` field is set to zero.
   *** No {nbsp}``ace.exec``{nbsp} operation is allowed.
-// *** Any {nbsp}``ace.exec``{nbsp} operation will produce null outputs and causes the CR to be *invalidated*.
  ** In state _set_public_value_, only ``ace.exec`` instructions of Form B are allowed. +
  "```ace.exec Kn|K[Xn], Vs```" sets the _tweak_. The `mask` field is used to store the tweak: `mask <- Vs`.
   *** If no such instruction is issued, the value of the tweak will remain zero.
   *** If `VL*SEW` > `b`, only the `b` least significant bits of `Vs` are considered.
   *** If "```ace.exec Kn|K[Xn], Vs```" is repeated, it will just re-write the mask.
-// *** Other forms of `ace.exec` not allowed, will produce null outputs and the CR is *invalidated*.
  ** When transitioning from _set_public_value_ to either _encrypt_ or _decrypt_, the following operations are performed:
   . `mask <- enc_blk(key2, mask)` or `mask <- enc_blk(key1, mask)` if only one key is used.
   . If only one key is used then update mask: `mask <- update_mask(mask)`.
@@ -2194,7 +2193,6 @@ State Machine:::
   *** If "```ace.exec Kn|K[Xn], Vs```," is repeated, it will just re-write the IV.
   *** If no such `ace.exec` to set the IV is issued, `ctr` remains zero.
   *** If `VL*SEW` > `b`, only the `b` least significant bits of `Vs` are considered.
-// *** Any other Form of `ace.exec` will produce null outputs and causes the CR to be *invalidated*.
 
  ** In state _hash_absorb_, only  ``ace.exec`` instructions of Form B are allowed. +
  "```ace.exec Kn|K[Xn], Vs```" absorbs a data block in `auth_tag`, i.e.:
@@ -2486,7 +2484,6 @@ State Machine:::
 *** If "```ace.exec Kn|K[Xn], Vs```" is repeated, it will just re-write the value of `nonce`, resp. `SIV`.
 *** If no such `ace.exec` is issued, `nonce`, resp. `SIV`, remain equal to zero.
 *** If `VL*SEW` > `b`, only the `b` least significant bits of `Vs` are considered.
-// *** Other forms of `ace.exec` will produce null outputs and *invalidate* the CR.
 +
 NOTE: There is no harm in moving to state _set_public_value_2_ and setting the
 SIV while encrypting, since that field is not used in the encryption path until
@@ -2501,8 +2498,6 @@ Accepting this redundant but harmless behavior simplifies the state machine.
 --
 +
 If `VL*SEW` is a multiple of `b`, `absorb` is executed on each of the `VL*SEW/b` blocks in `Vs`.
-
-// *** Other forms of `ace.exec` will produce null outputs and *invalidate* the CR.
 
 ** In state _enc_hash_finalize_, only an {nbsp}``ace.exec``{nbsp} of Form A is allowed, i.e.,
   "```ace.exec Vd,Kn|K[Xn],Vs```," where it is the responsibility of the user to set
@@ -2525,8 +2520,6 @@ finalizes the computation of the SIV/tag, by performing:
 
 If `VL*SEW` > `b`, only the `b` least significant bits of `Vs` are considered.
 
-// *** Other forms of `ace.exec` will produce null outputs and *invalidate* the CR.
-
 ** In state _encrypt_, only  ``ace.exec`` instructions of the Form A are allowed, namely "```ace.exec Vd,Kn|K[Xn],Vs```," to encrypt `Vs` into `Vd` as follows:
 +
 --
@@ -2539,8 +2532,6 @@ If `VL*SEW` > `b`, only the `b` least significant bits of `Vs` are considered.
 --
 +
 If `VL*SEW` > `b`, the above operations are applied to each of the `VL*SEW/b` blocks in `Vs`.
-
-// *** Other forms of `ace.exec` will produce null outputs and *invalidate* the CR.
 
 ** In state _decrypt_,  only  ``ace.exec`` instructions of the Form A are allowed, namely "```ace.exec Vd,Kn|K[Xn],Vs```," to decrypt `Vs` into `Vd` and then absorb the plaintext `Vs` into the `auth_tag`:
 +
@@ -2555,7 +2546,6 @@ If `VL*SEW` > `b`, the above operations are applied to each of the `VL*SEW/b` bl
 --
 +
 If `VL*SEW` > `b`, the above operations are applied to each of the `VL*SEW/b` blocks in `Vs`.
-// *** Other forms of `ace.exec` will produce null outputs and *invalidate* the CR.
 
 ** In state _dec_hash_finalize_,
    only an ``ace.exec`` instruction of Form B is allowed,
@@ -2786,7 +2776,6 @@ State Machine:::
 If `VL*SEW` > `b`, the above operation is executed `VL*SEW/b` times.
 
   *** If `VL*SEW` > `b`, only the `b` least significant bits of `Vs` are considered.
-  //*** Any other Form of `ace.exec` will produce null outputs and causes the CR to be *invalidated*.
 
 ** To move to _hash_finalize_, the `ace.state` operation must have the additional argument, which sets the length of the final block of the AD in `last_blk_len`.
 
@@ -3086,8 +3075,6 @@ If `VL*SEW` > `b`, then the above operations are applied to each `b`-bit block o
    If `VL*SEW` > `b`, only the bits of `Vd` beyond the `b`-th are cleared.
    Upon issuing that instruction, the CC transitions to state _completed_ with no error.
 
-//  ** In any state, issuing any Form of ``ace.exec`` that is not explicitly allowed will produce a null output and the CR will be *invalidated*.
-
 //
 
 ===== Usage
@@ -3240,8 +3227,6 @@ The values 9 and 13 are used when there is a partial block.
      .. if `last_block_len` == 0 then the state is changed to _completed_ with no errors (unless the algorithm is a XOF).
 //, in which case the internal state is updated again, `last_block_len <- b`, and more "```ace.exec Vd, Kn|K[Xn]```" instructions can be issued.
 
-// ** In any state, issuing any Form of ``ace.exec`` that is not the allowed one will produce a null output and the CR will be *invalidated*.
-
 NOTE: The description of states _hash_absorb_ and _hash_finalize_ should make it clear that allowing `b` and `VL*SEW` to be in relations other than one being an integer multiple of the other, as well as allowing a change of `VL*SEW`, would significantly complicate the state machine.
 
 ===== Usage
@@ -3391,39 +3376,22 @@ Direct plaintext leakage, memory corruption attacks against the ACE-using proces
 
 // ///////////////////////////////////////////////////////////////////////////////////////////
 
-[[ACE-comparison-of-interruption]]
-=== Annex: Interrupting Long Instructions
-
-Initialization, import, and export operations can be interrupted and resumed if the interrupt does not result in a context switch.
-The presence of this situation is indicated by a non-zero value in the `acestart` CSR.
-Otherwise, these operations operations have to be restarted.
-
-A different situation occurs if an `ace.exec` instruction is operating with long vectors that contains several elements to be processed.
-In the algorithm description we explicitly mention that a block of operation is repeated for each block in the vector:
-the execution of these iterative `ace.exec` instructions can be interrupted and resumed, and `acestart` reflects the number of bytes processed so far.
-
 [[ACE-incomplete-contexts]]
-==== Partial Cryptographic Contests
+=== Appendix: Export of Partial Cryptographic Contexts
 
-These may have to be restarted or resumed.
-A "Partial" bit signals whether any configuration operation on this cryptographic register has been initiated but not yet completed.
-The state of such a CR is defined as `partial`.
+Suppose we want to save and restore a _partial_ context, i.e. a context whose initialization or import operation has been interrupted for a context switch, preventing immediate return to the original control flow.
+In this case, a "Partial" bit in the metadata signals whether any this has happened.
 This field applies only to `ace.init` and `ace.import` operations, because these access external memory, and not to `ace.clone` and `ace.derive` as they only operate internally.
 Any cryptographic operation attempted on a CR containing an partial CC results in an error or is trapped.
 (((Cryptographic Register,incomplete)))
 
-[WARNING]
-We still need to evaluate all pro and cons of restarting vs. resuming for contexts (this is a separate matter from the input/output buffer).
+An initialization operation can be interrupted at any 8-byte multiple, and resumed from there.
+An import operation can be interrupted at a 8-byte multiple, but it will be resumed only at the 48th byte or beyond.
+Otherwise, it will be restarted, and no state will be saved at context switch.
 
-An initialization or import operation may be interrupted by a context switch, preventing immediate return to the original control flow.
+NOTE: Resuming could possibly be more expensive than saving no state and restarting.
+The third option, to wait and complete the operation, could instead cause delays.
 
-An initialization operation can be interrupted at any 8-byte multiple, and resumed from there. [.red]#TBD: we could actually always restart an initialization.#
-
-As long as the operation can also be interrupted at a 8-byte multiple, but it will be resumed only at the 48th byte or beyond.
-Otherwise, it will be restarted, and no state will be saved at context switch. [.red]#TBD: resuming could possibly be more expensive than saving no state and restarting. The third option, to wait and complete the operation, could instead cause delays.#
-
-In case of context switch, the intermediate state of the CR must be saved and later restored to allow the operation to be resumed (by setting `acestart` similarly to the use of `vstart`).
-(((Cryptographic Register,incomplete)))
 When exporting a partial CR, a Partial CR Metadata (PCREM) header is used as the first 8 bytes of the SCC, preceding the nonce, SIV, and content sections as defined in <<ACE-format-SCC>>.
 
 [[ACE-metadata-partial]]
@@ -3473,31 +3441,10 @@ At this point the initialization or import operation can resume from the point o
 [.red]#We seem to agree that we can resume init/import after a page fault or a similar thing, but on context switch we do not export partial CRs.
 These are cleared and the instruction is restarted.#
 
-This document describes a secure mechanism analogous to RISC-V's `vstart` CSR, to enable hardware to resume a partially completed vector instruction after an interrupt or exception.
-
-Other architectures, such as ARM or Intel ISAs, lack a direct equivalent.
-For instance, ARM's SVE does not guarantee precise resume semantics like `vstart`.
-Its architects opted for a simpler model where an instruction is either completed or restarted, depending on implementation.
-
-Within the HAC TG, there has been significant debate on whether to adopt a similar model or to implement the more precise semantics of the V extension.
-Two key distinctions between vector operations and cryptographic operations are:
-
-. Cryptographic protocols often maintain additional state (e.g., a partially computed hash). This state must be stored externally for later resumption, leading to content expansion.
-. Interrupting and resuming a cryptographic operation (such as a mode of operation) and storing partial results in external memory makes that state vulnerable to manipulation.  The security of a cryptographic operation can be completely compromised if the internal state can be manipulated or observed.
-
-These issues persist even when modes are not programmer-facing, because an AEAD mode must be used to protect the confidentiality and integrity of any exported data. While `vstart` is a relatively simple feature, architecting a similar mechanism for cryptographic operations is far more complex.
-
-[WARNING]
-One could argue that these security concerns, coupled with the cost of encrypting and decrypting a partial SCC, outweigh the benefit of resuming an interrupted import versus restarting it. This reasoning could justify an "SVE-like" model for ACE: place the responsibility on software and the OS to ensure that all input and outputs  reside in physically mapped memory, and require that operations either complete before an interrupt handler runs or are restarted afterward.  However, this model departs from the current RISC-V approach.  Consequently, we have architected support for resumable operations, leaving it open whether to accept, reject, or make this feature optional.
 
 We performed a security analysis of potential scenarios.
-A particularly challenging scenario arises when a context switch occurs during an import: the partially imported context must be exported and later resumed.
-Resumption requires properly decrypting and authenticating the saved partial context, retrieving the original nonce and SIV, reconstructing the partially computed hash from the re-imported state, and continuing from the point of interruption. The chosen AEAD mode supports a mostly linear sequence of memory reads, which is essential for efficient resumption, but a non-adjacent sequence of memory reads is required for the initial recovery of metadata, nonce, and SIV
-
-We concluded that, while privileged code can always replace an SCC in a saved process's context or memory, it cannot violate the confidentiality or integrity of an SCC.
-
-If the ARC opts for the simpler approach, several simplifications become possible: `acestart` and the formats for partially saved contexts would be unnecessary. Resumption of `ace.input` and `ace.output` could also be removed, as saving and restoring partial I/O buffers is typically more expensive than restarting.
-These changes would be relatively minor architecturally, but could adversely affect system responsiveness for real-time applications, especially on smaller cores.
-
+A particularly challenging scenario arises when a context switch occurs during an import, where the partially imported context must be exported and later resumed.
+// Resumption requires properly decrypting and authenticating the saved partial context, retrieving the original nonce and SIV, reconstructing the partially computed hash from the re-imported state, and continuing from the point of interruption. The chosen AEAD mode supports a mostly linear sequence of memory reads, which is essential for efficient resumption, but a non-adjacent sequence of memory reads is required for the initial recovery of metadata, nonce, and SIV.
+We concluded that, while privileged code can always replace an SCC in a saved process's context or memory, it cannot violate the confidentiality or integrity of an SCC by abusing the resumption mechanism.
 
 // ///////////////////////////////////////////////////////////////////////////////////////////
