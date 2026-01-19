@@ -179,7 +179,7 @@ The metadata section is used as the header of the data formats used in CR initia
 (bits) .>| Name                  .>| Description
 |   [0:0] |   1  | Format                 | Value is 0 for the current metadata format. +
 Future format will have a 1 in this position and may be longer than 64 bits.
-|   [1:1] |   1  | Partial                | Normally, the value is 0. The value is 1 if any operation involving the configuration of the CC has been interrupted and may have to be restarted or resumed. If export is interrupted, it only needs `acestart` (<<ACE-CSR-acestart>>) for resumption.
+|   [1:1] |   1  | Reserved               | Zero
 |   [5:2] |   4  | Locality               | A field which is either -1 or an index into the Locality Secrets Table.
 |  [14:6] |   9  | Algorithm              | Algorithm (such as primitive or mode). 0 means the CC is invalid.
 | [16:15] |   2  | SC_Protection          | Level of Side Channel Protection, encoded as per <<ACE-SC-protection-levels>>.
@@ -199,14 +199,6 @@ Disallow the _usage_ of this CC in User, (Virtual) Supervisor, Hypervisor, or M-
 | [61:48] |  14  | UC_Policy_4            | Zero if bit 31 unset, else `VMID` to enforce.
 | [63:62] |   2  | Reserved               | Zero.
 |===
-
-The "Partial" field signals whether any configuration operation on this cryptographic register has been initiated but not yet completed.
-The state of such a CR is defined as `partial`.
-This field applies only to `ace.init` and `ace.import` operations, because these access external memory, and not to `ace.clone` and `ace.derive` as they only operate internally.
-`ace.export` is simply resumed using `acestart`.
-Any cryptographic operation attempted on a CR containing an partial CC results in an error or is trapped.
-Note also that there is a second metadata format for partial CRs, which is used when the CR is not fully initialized or imported, cf.{nbsp}<<ACE-format-configuration>>.
-(((Cryptographic Register,incomplete)))
 
 Algorithms are encoded in a 9-bit field.
 Algorithm numbers 0-447 are architecture-defined and the list of such encodings is maintained by RVI.
@@ -861,9 +853,6 @@ foreach(i from 0 to num_blocks - 1) {
 }
 ----
 
-NOTE: It can happen that we export an partial CR, for instance, M-mode or HS-mode code is saving a CR that was only partially configured in U-mode when the U-mode process was interrupted. How this is handled in SCCs upon export and import (operation which could be interrupted as well) is <<ACE-incomplete-contexts>>.
-(((Cryptographic Register,incomplete)))
-
 [[ACE-SCC-import]]
 .Importing a SCC into a CR Using AES-GCM-SIV (RFC8452)
 []
@@ -935,86 +924,6 @@ UNINTERRUPTIBLE_BLOCK_END
 ----
 
 //
-
-[[ACE-incomplete-contexts]]
-==== Partial Cryptographic Contests
-
-[WARNING]
-We still need to evaluate all pro and cons of restarting vs. resuming for contexts (this is a separate matter from the input/output buffer).
-
-An initialization or import operation may be interrupted by a context switch, preventing immediate return to the original control flow.
-
-An initialization operation can be interrupted at any 8-byte multiple, and resumed from there. [.red]#TBD: we could actually always restart an initialization.#
-
-As long as the operation can also be interrupted at a 8-byte multiple, but it will be resumed only at the 48th byte or beyond.
-Otherwise, it will be restarted, and no state will be saved at context switch. [.red]#TBD: resuming could possibly be more expensive than saving no state and restarting. The third option, to wait and complete the operation, could instead cause delays.#
-
-In case of context switch, the intermediate state of the CR must be saved and later restored to allow the operation to be resumed (by setting `acestart` similarly to the use of `vstart`).
-(((Cryptographic Register,incomplete)))
-When exporting a partial CR, a Partial CR Metadata (PCREM) header is used as the first 8 bytes of the SCC, preceding the nonce, SIV, and content sections as defined in <<ACE-format-SCC>>.
-
-[[ACE-metadata-partial]]
-.Format of the partial CR Metadata (PCREM)
-[width="100%",cols="^9%,^7%,17%,67%",options="header"]
-|===
-.>|   Field .>| Width +
-(bits) .>| Name                  .>| Description
-|   [0:0] |   1  | Format                 | Value is 0 for the current metadata format. +
-Future format will have a 1 in this position and may be longer than 64 bits.
-|   [1:1] |   1  | Incomplete             | Value is 1.
-|   [2:2] |   1  | Variant                | The value is 0 if the configuration was interrupted at initialization, and
-                                            the value is 1 if the configuration was interrupted while importing.
-|   [7:3] |   5  | Reserved               | Reserved for future use.
-|  [31:8] |  24  | Payload_Length         | Length of the payload in bytes (excluding the first 32 bytes)
-| [63:32] |  16  | Reserved               | Zero for now.
-|===
-
-NOTE: Fields Algorithm, SC_Protection, State Number, Direction_Policy and, perhaps even more notably, the Usage Control policies UC_Policy_{empty}__i__ (_i_ = 0 .. 3)
-and Locality information are omitted, the reason being that usage of partial CRs is forbidden by the architecture anyway, and therefore the space can be used for other purposes.
-Regarding the Locality, Locality violation errors should be handled where the complete CR is used, and therefore the RCSK is always used for partial CRs. This may also reduce the need to compute or cache DCSKs at higher privileged levels, overall improving performance.
-
-The content format to export incomplete initializations and imports is the same as for the complete CRs,
-only truncated to the actual imported length, rounded to a multiple of 8 bytes.
-This length is stored in the Payload_Length field.
-
-The content format to export incompletely imported CRs prepends the partial hash (`tmp` in <<ACE-SCC-import>>) to the content, which is thus extended by 16 bytes. These 16 bytes must be included in the Payload_Length field and encrypted as well.
-
-After the partial CR has been decrypted and authenticated in privileged mode, it is marked as to be resumed.
-Upon returning from the context switch handler,
-
-. the old metadata, nonce and SIV are recovered from the memory of the less-privileged mode;
-
-(These reads may be interrupted by page faults and immediately resumed upon mapping the target page.)
-
-The following operations are then performed as an uninterruptible block.
-
-[start=2]
-. `z` and `num_blocks` are computed from the original content length, the starting value of `i` from `acestart`.
-. If the interrupted operation was an import:
-.. The `Kenc` and `Kauth` keys are derived.
-.. The partial hash value is recomputed from the current content of the CR.
-
-At this point the initialization or import operation can resume from the point of interruption.
-
-//
-
-[comment]
---
-* Any number of bytes can be initialized or imported in a CR, and exported from it, before the operation is preempted, depending on the alignment of the data.
-* `acestart` counts all the bytes of the payload, including the metadata for all inputs and outputs, and the nonce and the tag as well for SCCs.
-* The internal state shall always assumes that all internal operations that would be performed in the algorithms above are performed as follows
- ** `ace.init`:
-  *** Once the metadata (8 bytes) has been read, is must be completely processed and imported in the CR.
-  *** Whenever 8+16__i__ bytes have been read, also _i_ blocks of content must be processed and imported in the CR.
-   For instance, if 28 bytes have been read in, the incomplete state has processed the metadata and the first content block, and knows 4 further bytes.
-  *** If the operation is preempted, `acestart` will be the number of bytes read.
-  *** The corresponding exported SCC will include an 8-byte block in clear after the metadata with the `acestart` value, followed by the nonce and the tag, and the content will only contain the payload imported and read so far, zero padded up to a multiple of 8 bytes. This content is of course encrypted.
-  The AEAD algorithm will use `(length_of_payload)[64] @ metadata` in place of `0[64] @ metadata`.
-  *** in the worst case, a SCC will be 8 bytes longer than the standard size for a complete exported CR for the same algorithm.#
-
- ** `ace.export` [.red]#TBD#
- ** `ace.import` [.red]#TBD#
---
 
 // ///////////////////////////////////////////////////////////////////////////////////////////
 
@@ -3452,73 +3361,6 @@ For example, it would necessitate secure management of large RCSK tables, includ
 
 // ///////////////////////////////////////////////////////////////////////////////////////////
 
-[[ACE-comparison-of-interruption]]
-=== Interrupting Long Instructions on RISC-V vs Other Architectures
-
-This document describes a secure mechanism analogous to RISC-V's `vstart` CSR, to enable hardware to resume a partially completed vector instruction after an interrupt or exception.
-
-Other architectures, such as ARM or Intel ISAs, lack a direct equivalent.
-For instance, ARM's SVE does not guarantee precise resume semantics like `vstart`.
-Its architects opted for a simpler model where an instruction is either completed or restarted, depending on implementation.
-
-Within the HAC TG, there has been significant debate on whether to adopt a similar model or to implement the more precise semantics of the V extension.
-Two key distinctions between vector operations and cryptographic operations are:
-
-. Cryptographic protocols often maintain additional state (e.g., a partially computed hash). This state must be stored externally for later resumption, leading to content expansion.
-. Interrupting and resuming a cryptographic operation (such as a mode of operation) and storing partial results in external memory makes that state vulnerable to manipulation.  The security of a cryptographic operation can be completely compromised if the internal state can be manipulated or observed.
-
-These issues persist even when modes are not programmer-facing, because an AEAD mode must be used to protect the confidentiality and integrity of any exported data. While `vstart` is a relatively simple feature, architecting a similar mechanism for cryptographic operations is far more complex.
-
-[WARNING]
-One could argue that these security concerns, coupled with the cost of encrypting and decrypting a partial SCC, outweigh the benefit of resuming an interrupted import versus restarting it. This reasoning could justify an "SVE-like" model for ACE: place the responsibility on software and the OS to ensure that all input and outputs  reside in physically mapped memory, and require that operations either complete before an interrupt handler runs or are restarted afterward.  However, this model departs from the current RISC-V approach.  Consequently, we have architected support for resumable operations, leaving it open whether to accept, reject, or make this feature optional.
-
-We performed a security analysis of potential scenarios.
-A particularly challenging scenario arises when a context switch occurs during an import: the partially imported context must be exported and later resumed.
-Resumption requires properly decrypting and authenticating the saved partial context, retrieving the original nonce and SIV, reconstructing the partially computed hash from the re-imported state, and continuing from the point of interruption. The chosen AEAD mode supports a mostly linear sequence of memory reads, which is essential for efficient resumption, but a non-adjacent sequence of memory reads is required for the initial recovery of metadata, nonce, and SIV
-
-We concluded that, while privileged code can always replace an SCC in a saved process's context or memory, it cannot violate the confidentiality or integrity of an SCC.
-
-If the ARC opts for the simpler approach, several simplifications become possible: `acestart` and the formats for partially saved contexts would be unnecessary. Resumption of `ace.input` and `ace.output` could also be removed, as saving and restoring partial I/O buffers is typically more expensive than restarting.
-These changes would be relatively minor architecturally, but could adversely affect system responsiveness for real-time applications, especially on smaller cores.
-
-//
-
-[comment]
---
-ACE has mechanism similar to RISC-V’s `vstart` CSR that lets the hardware resume a partially completed vector instruction after an interrupt or exception.
-
-Other architectures, such as the ARM or Intel ISAs do not provide a direct equivalent to this.
-For instance, SVE does not guarantee precise resume semantics like `vstart` does;
-the architects chose a simpler model where the instruction is either completed or restarted depending on implementation choice.
-
-There has been significant debate within the HAC TG on whether to adopt a similar model or try to implement the more precise sematics of the V extension.
-Two important differences between V's vectors and vector operation and handling cryptographic operations are:
-
-. Many cryptographic protocols need to keep additional state, for instance a partially computed hash value. Such a state must be stored in external memory for later resumption, with leading to content expansion.
-. Interrupting and resuming a cryptographic operation, such as a mode of operation, and storing the partial results in external memory, leaves the state amenable to manipulation.
-
-In particular, these issues arise even if modes are not implemented as programmer-facing features, since an AEAD mode of operation must be used to protect the confidentiality and integrity of any exported data.  It turns out that while `vstart` is a simple feature (no matter how brilliant), architecting a similar mechanism for resuming cryptographic operations is way more complex.  The security of a mode of operation can break completely if any form of manipulation or observation of the state is possible.
-
-We can argue that these security issues, and the costs of encrypting and decrypting a partial SCCs is higher than just re-decrypting the initial part of the interrupted import.
-This is sufficient to justify a "SVE" model for ACE:
-leave the responsibility to ensure that the entire buffer for any input and output is in physically mapped memory to the software and the OS,
-and ask that all operations, including those that require memory accesses, be either completed before handing the control flow to an interrupt handler or completely resumed after the interrupt handler has completed.
-However, this model represents a departure from the current RISC-V approach. +
-Therefore, we decided to architect resumable operations, leaving it open whether to accept or reject this feature, or make it optional.
-
-We performed a security analysis of all possible situations.
-A challenging case occurs when a context switch occurs during an import operation: the partial imported context must be exported, and later it must be resumed.
-Resumption involves properly decrypting and authenticating the saved partial context, and then retrieving the old nonce, and SIV, reconstructing the partially computed hash from the now re-imported partial state using the original nonce and SIV, and continuing the operation from where it left off.  The chosen AEAD mode of operation lends itself to a linear sequence of memory reads (except for the initial recovery or the original metadata, nonce and SIV), which is crucial for efficient resumption, and the fact that the partially saved information is not revealed eliminates the risk of successfully forging a different state.
-
-As a result, privileged while code can always replace a SCC with a different one in a saved process's context, or even directly in a process's memory space, it cannot violate the confidentiality and integrity of a SCC.
-
-It the ARC decides for the simpler approach, then some simplifications can be made: we do not need `acestart` and the formats for partially saved contexts.
-Further simplifications can be made by removing resumption of `ace.input` and `ace.output` (after all, saving a partial input/output buffer and restoring it for resuming the operation is also more expensive than restart).
-The overall changes to the architecture would be relatively small, but responsiveness of the system for real-time applications, especially on smaller cores, may be adversely affected.
---
-
-// ///////////////////////////////////////////////////////////////////////////////////////////
-
 [[ACE-threat-model]]
 === Threat Model
 
@@ -3546,5 +3388,116 @@ Threats can be addressed in four ways:
 ACE is designed to avoid the "***A***" and "***S***" options (as much as possible). It _controls_ threats through its own mechanisms and _transfers_ residual risk—specifically, the risk of key extraction from the privileged or trusted software and hardware environments that manage keys—to those same environments. For example, trusted software environments may employ control-flow integrity, memory encryption with integrity protection, and anti-replay mechanisms, while hardware key-management blocks can be hardened to protect entrusted keys.
 
 Direct plaintext leakage, memory corruption attacks against the ACE-using process, and Release of Unverified Plaintext (RUP) attacks on the cryptographic algorithms are considered out of scope. These threats cannot be mitigated by ACE because the processed information resides within the user execution context. Consequently, these threats are _accepted_.
+
+// ///////////////////////////////////////////////////////////////////////////////////////////
+
+[[ACE-comparison-of-interruption]]
+=== Annex: Interrupting Long Instructions
+
+Initialization, import, and export operations can be interrupted and resumed if the interrupt does not result in a context switch.
+The presence of this situation is indicated by a non-zero value in the `acestart` CSR.
+Otherwise, these operations operations have to be restarted.
+
+A different situation occurs if an `ace.exec` instruction is operating with long vectors that contains several elements to be processed.
+In the algorithm description we explicitly mention that a block of operation is repeated for each block in the vector:
+the execution of these iterative `ace.exec` instructions can be interrupted and resumed, and `acestart` reflects the number of bytes processed so far.
+
+[[ACE-incomplete-contexts]]
+==== Partial Cryptographic Contests
+
+These may have to be restarted or resumed.
+A "Partial" bit signals whether any configuration operation on this cryptographic register has been initiated but not yet completed.
+The state of such a CR is defined as `partial`.
+This field applies only to `ace.init` and `ace.import` operations, because these access external memory, and not to `ace.clone` and `ace.derive` as they only operate internally.
+Any cryptographic operation attempted on a CR containing an partial CC results in an error or is trapped.
+(((Cryptographic Register,incomplete)))
+
+[WARNING]
+We still need to evaluate all pro and cons of restarting vs. resuming for contexts (this is a separate matter from the input/output buffer).
+
+An initialization or import operation may be interrupted by a context switch, preventing immediate return to the original control flow.
+
+An initialization operation can be interrupted at any 8-byte multiple, and resumed from there. [.red]#TBD: we could actually always restart an initialization.#
+
+As long as the operation can also be interrupted at a 8-byte multiple, but it will be resumed only at the 48th byte or beyond.
+Otherwise, it will be restarted, and no state will be saved at context switch. [.red]#TBD: resuming could possibly be more expensive than saving no state and restarting. The third option, to wait and complete the operation, could instead cause delays.#
+
+In case of context switch, the intermediate state of the CR must be saved and later restored to allow the operation to be resumed (by setting `acestart` similarly to the use of `vstart`).
+(((Cryptographic Register,incomplete)))
+When exporting a partial CR, a Partial CR Metadata (PCREM) header is used as the first 8 bytes of the SCC, preceding the nonce, SIV, and content sections as defined in <<ACE-format-SCC>>.
+
+[[ACE-metadata-partial]]
+.Format of the partial CR Metadata (PCREM)
+[width="100%",cols="^9%,^7%,17%,67%",options="header"]
+|===
+.>|   Field .>| Width +
+(bits) .>| Name                  .>| Description
+|   [0:0] |   1  | Format                 | Value is 0 for the current metadata format. +
+Future format will have a 1 in this position and may be longer than 64 bits.
+|   [1:1] |   1  | Incomplete             | Value is 1.
+|   [2:2] |   1  | Variant                | The value is 0 if the configuration was interrupted at initialization, and
+                                            the value is 1 if the configuration was interrupted while importing.
+|   [7:3] |   5  | Reserved               | Reserved for future use.
+|  [31:8] |  24  | Payload_Length         | Length of the payload in bytes (excluding the first 32 bytes)
+| [63:32] |  16  | Reserved               | Zero for now.
+|===
+
+NOTE: Fields Algorithm, SC_Protection, State Number, Direction_Policy and, perhaps even more notably, the Usage Control policies UC_Policy_{empty}__i__ (_i_ = 0 .. 3)
+and Locality information are omitted, the reason being that usage of partial CRs is forbidden by the architecture anyway, and therefore the space can be used for other purposes.
+Regarding the Locality, Locality violation errors should be handled where the complete CR is used, and therefore the RCSK is always used for partial CRs. This may also reduce the need to compute or cache DCSKs at higher privileged levels, overall improving performance.
+
+The content format to export incomplete initializations and imports is the same as for the complete CRs,
+only truncated to the actual imported length, rounded to a multiple of 8 bytes.
+This length is stored in the Payload_Length field.
+
+The content format to export incompletely imported CRs prepends the partial hash (`tmp` in <<ACE-SCC-import>>) to the content, which is thus extended by 16 bytes. These 16 bytes must be included in the Payload_Length field and encrypted as well.
+
+After the partial CR has been decrypted and authenticated in privileged mode, it is marked as to be resumed.
+Upon returning from the context switch handler,
+
+. the old metadata, nonce and SIV are recovered from the memory of the less-privileged mode;
+
+(These reads may be interrupted by page faults and immediately resumed upon mapping the target page.)
+
+The following operations are then performed as an uninterruptible block.
+
+[start=2]
+. `z` and `num_blocks` are computed from the original content length, the starting value of `i` from `acestart`.
+. If the interrupted operation was an import:
+.. The `Kenc` and `Kauth` keys are derived.
+.. The partial hash value is recomputed from the current content of the CR.
+
+At this point the initialization or import operation can resume from the point of interruption.
+
+//
+[.red]#We seem to agree that we can resume init/import after a page fault or a similar thing, but on context switch we do not export partial CRs.
+These are cleared and the instruction is restarted.#
+
+This document describes a secure mechanism analogous to RISC-V's `vstart` CSR, to enable hardware to resume a partially completed vector instruction after an interrupt or exception.
+
+Other architectures, such as ARM or Intel ISAs, lack a direct equivalent.
+For instance, ARM's SVE does not guarantee precise resume semantics like `vstart`.
+Its architects opted for a simpler model where an instruction is either completed or restarted, depending on implementation.
+
+Within the HAC TG, there has been significant debate on whether to adopt a similar model or to implement the more precise semantics of the V extension.
+Two key distinctions between vector operations and cryptographic operations are:
+
+. Cryptographic protocols often maintain additional state (e.g., a partially computed hash). This state must be stored externally for later resumption, leading to content expansion.
+. Interrupting and resuming a cryptographic operation (such as a mode of operation) and storing partial results in external memory makes that state vulnerable to manipulation.  The security of a cryptographic operation can be completely compromised if the internal state can be manipulated or observed.
+
+These issues persist even when modes are not programmer-facing, because an AEAD mode must be used to protect the confidentiality and integrity of any exported data. While `vstart` is a relatively simple feature, architecting a similar mechanism for cryptographic operations is far more complex.
+
+[WARNING]
+One could argue that these security concerns, coupled with the cost of encrypting and decrypting a partial SCC, outweigh the benefit of resuming an interrupted import versus restarting it. This reasoning could justify an "SVE-like" model for ACE: place the responsibility on software and the OS to ensure that all input and outputs  reside in physically mapped memory, and require that operations either complete before an interrupt handler runs or are restarted afterward.  However, this model departs from the current RISC-V approach.  Consequently, we have architected support for resumable operations, leaving it open whether to accept, reject, or make this feature optional.
+
+We performed a security analysis of potential scenarios.
+A particularly challenging scenario arises when a context switch occurs during an import: the partially imported context must be exported and later resumed.
+Resumption requires properly decrypting and authenticating the saved partial context, retrieving the original nonce and SIV, reconstructing the partially computed hash from the re-imported state, and continuing from the point of interruption. The chosen AEAD mode supports a mostly linear sequence of memory reads, which is essential for efficient resumption, but a non-adjacent sequence of memory reads is required for the initial recovery of metadata, nonce, and SIV
+
+We concluded that, while privileged code can always replace an SCC in a saved process's context or memory, it cannot violate the confidentiality or integrity of an SCC.
+
+If the ARC opts for the simpler approach, several simplifications become possible: `acestart` and the formats for partially saved contexts would be unnecessary. Resumption of `ace.input` and `ace.output` could also be removed, as saving and restoring partial I/O buffers is typically more expensive than restarting.
+These changes would be relatively minor architecturally, but could adversely affect system responsiveness for real-time applications, especially on smaller cores.
+
 
 // ///////////////////////////////////////////////////////////////////////////////////////////
