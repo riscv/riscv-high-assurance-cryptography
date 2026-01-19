@@ -3422,6 +3422,36 @@ For example, it would necessitate secure management of large RCSK tables, includ
 [[ACE-comparison-of-interruption]]
 === Interrupting Long Instructions on RISC-V vs Other Architectures
 
+This document describes a secure mechanism analogous to RISC-V's `vstart` CSR, to enable hardware to resume a partially completed vector instruction after an interrupt or exception.
+
+Other architectures, such as ARM or Intel ISAs, lack a direct equivalent.
+For instance, ARM's SVE does not guarantee precise resume semantics like `vstart`.
+Its architects opted for a simpler model where an instruction is either completed or restarted, depending on implementation.
+
+Within the HAC TG, there has been significant debate on whether to adopt a similar model or to implement the more precise semantics of the V extension.
+Two key distinctions between vector operations and cryptographic operations are:
+
+. Cryptographic protocols often maintain additional state (e.g., a partially computed hash). This state must be stored externally for later resumption, leading to content expansion.
+. Interrupting and resuming a cryptographic operation (such as a mode of operation) and storing partial results in external memory makes that state vulnerable to manipulation.  The security of a cryptographic operation can be completely compromised if the internal state can be manipulated or observed.
+
+These issues persist even when modes are not programmer-facing, because an AEAD mode must be used to protect the confidentiality and integrity of any exported data. While `vstart` is a relatively simple feature, architecting a similar mechanism for cryptographic operations is far more complex.
+
+[WARNING]
+One could argue that these security concerns, coupled with the cost of encrypting and decrypting a partial SCC, outweigh the benefit of resuming an interrupted import versus restarting it. This reasoning could justify an "SVE-like" model for ACE: place the responsibility on software and the OS to ensure that all input and outputs  reside in physically mapped memory, and require that operations either complete before an interrupt handler runs or are restarted afterward.  However, this model departs from the current RISC-V approach.  Consequently, we have architected support for resumable operations, leaving it open whether to accept, reject, or make this feature optional.
+
+We performed a security analysis of potential scenarios.
+A particularly challenging scenario arises when a context switch occurs during an import: the partially imported context must be exported and later resumed.
+Resumption requires properly decrypting and authenticating the saved partial context, retrieving the original nonce and SIV, reconstructing the partially computed hash from the re-imported state, and continuing from the point of interruption. The chosen AEAD mode supports a mostly linear sequence of memory reads, which is essential for efficient resumption, but a non-adjacent sequence of memory reads is required for the initial recovery of metadata, nonce, and SIV
+
+We concluded that, while privileged code can always replace an SCC in a saved process's context or memory, it cannot violate the confidentiality or integrity of an SCC.
+
+If the ARC opts for the simpler approach, several simplifications become possible: `acestart` and the formats for partially saved contexts would be unnecessary. Resumption of `ace.input` and `ace.output` could also be removed, as saving and restoring partial I/O buffers is typically more expensive than restarting.
+These changes would be relatively minor architecturally, but could adversely affect system responsiveness for real-time applications, especially on smaller cores.
+
+//
+
+[comment]
+--
 ACE has mechanism similar to RISC-V’s `vstart` CSR that lets the hardware resume a partially completed vector instruction after an interrupt or exception.
 
 Other architectures, such as the ARM or Intel ISAs do not provide a direct equivalent to this.
@@ -3436,7 +3466,6 @@ Two important differences between V's vectors and vector operation and handling 
 
 In particular, these issues arise even if modes are not implemented as programmer-facing features, since an AEAD mode of operation must be used to protect the confidentiality and integrity of any exported data.  It turns out that while `vstart` is a simple feature (no matter how brilliant), architecting a similar mechanism for resuming cryptographic operations is way more complex.  The security of a mode of operation can break completely if any form of manipulation or observation of the state is possible.
 
-[WARNING]
 We can argue that these security issues, and the costs of encrypting and decrypting a partial SCCs is higher than just re-decrypting the initial part of the interrupted import.
 This is sufficient to justify a "SVE" model for ACE:
 leave the responsibility to ensure that the entire buffer for any input and output is in physically mapped memory to the software and the OS,
@@ -3453,6 +3482,7 @@ As a result, privileged while code can always replace a SCC with a different one
 It the ARC decides for the simpler approach, then some simplifications can be made: we do not need `acestart` and the formats for partially saved contexts.
 Further simplifications can be made by removing resumption of `ace.input` and `ace.output` (after all, saving a partial input/output buffer and restoring it for resuming the operation is also more expensive than restart).
 The overall changes to the architecture would be relatively small, but responsiveness of the system for real-time applications, especially on smaller cores, may be adversely affected.
+--
 
 // ///////////////////////////////////////////////////////////////////////////////////////////
 
