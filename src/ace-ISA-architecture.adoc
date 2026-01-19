@@ -3408,6 +3408,38 @@ For example, it would necessitate secure management of large RCSK tables, includ
 
 // ///////////////////////////////////////////////////////////////////////////////////////////
 
+[[ACE-comparison-of-interruption]]
+=== Interrupting Long Instructions on RISC-V vs Other Architectures
+
+ACE has mechanism similar to RISC-V’s `vstart` CSR that lets the hardware resume a partially completed vector instruction after an interrupt or exception.
+
+Other architectures, such as the ARM or Intel ISAs do not provide a direct equivalent to this.
+For instance, SVE does not guarantee precise resume semantics like vstart does; the architects chose a simpler model where the instruction is either completed or restarted depending on implementation choice.
+
+There has been significant debate within the HAC TG on whether to adopt a similar model or try to implement the more precise sematics of the V extension.
+Two important differences between V's vectors and vector operation and handling cryptographic operations are:
+
+. Many cryptographic protocols need to keep additional state, for instance a partially computed hash value. Such a state must be stored in external memory for later resumption, with leading to content expansion.
+. Interrupting and resuming a cryptographic operation, such as a mode of operation, and storing the partial results in external memory, leaves the state amenable to manipulation.
+
+In particular, these issues arise even if modes are not implemented as programmer-facing features, since an AEAD mode of operation must be used to protect the confidentiality and integrity of any exported data.  And this leads to a simple observation: while architecting and implementing `vstart` is easy (no matter how brilliant the concept is), a similar mechanism for resuming cryptographic operations is way more complex.  The security of a mode of operation can break completely if any form of manipulation or observation of the state is possible.
+
+We could have argued that these security issues are sufficient to justify a "SVE" model for ACE:
+leave the responsibility to ensure that the entire buffer for any input and output is in physically mapped memory to the software and the OS,
+and ask that all operations, including those that require memory accesses, be either completed before any interrupt or completely resumed afterwards.
+However, this model would have represented a major departure from the current RISC-V approach.
+
+Therefore, we have opted for an (unavoidable) _minor_ departure from a verbatim copy of the V extension approach.
+We introduced a more fine-grained approach to handle partial operations, and performed a security analysis of difficult cases.
+A challenging case follows a context switch occurring during an import operation, where the partial imported context must be exported, and later it must be resumed:
+Resumption involves properly decrypting and authenticating the saved partial context, and then retrieving the old nonce, and SIV, reconstructing the partially computed hash from the now re-imported partial state using the original nonce and SIV, and continuing the operation from where it left off.  The chosen AEAD mode of operation lends it to a mostly linear sequence of memory reads, which is crucial for efficient resumption, and the fact that the partially saved information is not revealed eliminates the risk of successfully forging a different state.
+
+As a result, privileged while code can always replace a SCC with a different one in a saved process's context, or even directly in a process's memory space, it cannot violate the confidentiality and integrity of a SCC.
+
+It the ARC decides for the simpler approach, then some simplifications can be made: we do not need `acestart`, `aceiobuftop`, and the formats for partially saved contexts. The overall changes to the architecture would be relatively small, but responsiveness of the system for real-time applications, especialyl on smaller cores, may be adversely affected.
+
+// ///////////////////////////////////////////////////////////////////////////////////////////
+
 [[ACE-threat-model]]
 === Threat Model
 
