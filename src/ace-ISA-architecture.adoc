@@ -166,8 +166,7 @@ Returns zero if the algorithm is unsupported.
 [[ACE-cryptographic-registers]]
 ==== Cryptographic Registers
 
-ACE defines 32 Cryptographic Registers (CRs).
-Each CR is identified by a number from 0 to 31, and written in assembly as `K0`, `K1`, ... , `K31`.
+ACE defines 32 Cryptographic Registers (CRs), identified by numbers from 0 to 31, and called `K0`, ... , `K31`.
 (((Cryptographic Context)))
 
 CRs reside in a dedicated _CR file_ (CRF), accessible only by the ACE implementation.
@@ -189,19 +188,20 @@ CRs differ from conventional register in several ways:
 * The amount of the capacity of the CRF used by a CR depends on the configured algorithm.
   Two CRs can use different amounts of capacity.
 * ACE instructions can refer to CRs directly, i.e., with a 5-bit immediate in the instruction encoding, but also indirectly, i.e., through a value in the range [0 .. 31] in a GPR.
-** There are very few instructions that can use and possibly change the contents of the CRs.
+* There are very few instructions that can use and possibly change the contents of the CRs.
   The most important ones are:
   ** `ace.exec`, used to perform cryptographic operations on data blocks according to the algorithm configured in a CR; and
   ** `ace.state`, used to determine whether a CR is used for encryption or decryption and move between the different stages of modes of operations and hash functions.
 
-ACE returns _ace_err_memory_ if insufficient memory prevents successful execution of any instruction that can configure a CR.
-If this happens, software needs to free memory by choosing another CR, possibly exporting it if necessary, and then clearing it.
+Insufficient residual CRF capacity may prevent the execution of an instruction that configures a CR, such as `ace.init` or `ace.import`,
+but also `ace.clone` (cf.{nbsp}<<ACE-instruction-clone>>) or `ace.derive` (cf.{nbsp}<<ACE-instruction-derive>>).
+In this case, ACE returns _ace_err_memory_, and software must free capacity by exporting the contents of another CR (if needed) and then clearing it.
 
 [NOTE]
 ====
 CRF capacity is implementation-defined, but implementations must provide sufficient CRF memory to allow all operations
 allowed by the architecture to be performed.
-For instance, the CRF must hold at least an instance of the largest possible CR or the largest CR pair for CR cloning or the derivation of a new CC from an existing one.
+For instance, the CRF must hold at least an instance of the largest possible CR or the largest CR pair for CR cloning or the derivation of a new CC from an existing one. An optional, possibly approximated, and implementation dependent mechanism to estimate the required capacity is defined in <<ACE-instruction-size-internal>>.
 ====
 
 [NOTE]
@@ -221,7 +221,7 @@ The fact that CRs can be addressed indirectly two major implications:
 For software portability and interoperability, ACE defines two external formats for CCs:
 an _Initialization Input_ format, which is loaded into a CR to create a CC,
 and an encrypted, authenticated format used when exporting a CR to memory for later re-import:
-the Sealed Cryptographic Context (SCC) (cf. <<ACE-format-SCC>>).
+the Sealed Cryptographic Context (SCC) (cf.{nbsp}<<ACE-format-SCC>>).
 Both formats rely on the same metadata section format, which is described here.
 The formats of the Initialization Input and of the SCC are described in <<ACE-format-configuration>> and <<ACE-format-SCC>>, respectively.
 
@@ -243,7 +243,7 @@ Future format will have a 1 in this position and may be longer than 64 bits.
 | [15:14] |   2  | SC_Protection          | Level of Side Channel Protection, encoded as per <<ACE-SC-protection-levels>>.
 | [17:16] |   2  | Direction_Policy       | Determines whether the CC may be used for encryption (bit 12 set), decryption (bit 13 set), or both (bits 12 and 13 set). Valid only for encryption/decryption primitives or modes, and ignored, for instance, for hash functions.
 | [19:18] |   2  | Key_Type               | Key given by explicit value / System Key (index) / Internally generated.
-| [23:20] |   4  | State_Number (also Direction) | Encoding the current state of the state machine of the algorithm as a number. The value must be zero in the initialization data. If the algorithm encoded in the CC has at most 16 states (including _initial_, _completed_, and _invalidated_, cf. <<ACE-state-constants>>), then this number is stored in this field, otherwise an algorithm-specific representation is used in the content, and this field only admits the values 0 (initial), 14 (invalidated), 15 (completed) or 1 (any other operational state). The values must conform to <<ACE-state-constants>>.
+| [23:20] |   4  | State_Number (also Direction) | Encoding the current state of the state machine of the algorithm as a number. The value must be zero in the initialization data. If the algorithm encoded in the CC has at most 16 states (including _initial_, _completed_, and _invalidated_, cf.{nbsp}<<ACE-state-constants>>), then this number is stored in this field, otherwise an algorithm-specific representation is used in the content, and this field only admits the values 0 (initial), 14 (invalidated), 15 (completed) or 1 (any other operational state). The values must conform to <<ACE-state-constants>>.
 | [25:24] |   2  | Reserved               | Zero.
 | [29:26] |   4  | UC_Policy_1            | “UC Policy” means “Usage Control Policy”.  Disallow the _usage_ of this CC in User, (Virtual) Supervisor, Hypervisor, or M-mode if bit 26, 27, 28, or 29 is set.
 | [31:30] |   2  | UC_Policy_2            | If bit 30, respectively, 31, is set, then restrict the usage by `ASID`, respectively, `VMID`. Restrictions by `ASID` are ignored if in S-mode or higher. Restrictions by `VMID` are ignored if in H- or M-mode.
@@ -343,10 +343,9 @@ Implementations of the SKT *must* provide a suitable Locality to the ACE unit du
 
 The Initialization Input is used to initialize a CR and thus create a Cryptographic Context (CC).
 Its size must be a multiple of 8 bytes.
-
 The first 8 bytes of the Initialization Input contain the metadata section as specified in <<ACE-metadata>>.
-This is followed by the _content_, i.e., the key(s) and possibly other information, in a format that is algorithm-specific.
-cf.{nbsp}<<ACE-algorithms>> for the algorithm-specific formats of the content section of the Initialization Input.
+This is followed by the _content_, i.e., the key(s) and possibly other information, in a format that is algorithm-specific and that is defined in <<ACE-algorithms>>
+for the currently architected algorithms.
 
 [[ACE-format-SCC]]
 ==== Sealed Cryptographic Contexts
@@ -1318,6 +1317,7 @@ Interruptible: *NO*.
 
 //
 
+[[ACE-instruction-size-CR]]
 ===== Context Variant
 
 `ace.size Xd, Ks|K[Xs]`
@@ -1348,6 +1348,7 @@ NOTE: The returned value can significantly differ from the internal resource usa
 also smaller (for keys split into shares for threshold implementations, but saved
 externally in reconstructed form).
 
+[[ACE-instruction-size-metadata]]
 ===== Metadata Variant
 
 `ace.size Xd, Xs`
@@ -1374,6 +1375,7 @@ Algorithm, SP_Protection, Direction_Policy and Key_Type fields fields are consid
 +
 On RV32 the GPR `Xs` needs to contain only the lower 32 bits of the metadata section, since they contain the fields which are required to determine the size of the SCC.
 
+[[ACE-instruction-size-internal]]
 ===== Internal Capacity Variant
 
 `ace.size.internal Xd, Xs`
@@ -1856,7 +1858,7 @@ This includes:
 . The enumeration of the *allowed instructions* at each state and their *behavior*.
 
 Regarding the allowed instructions, these are usually only `ace.exec` and `ace.state`.
-In particular, only a single form of `ace.exec` is allowed (cf. <<ACE-instruction-exec>>) and whenever we write “only Form X `ace.exec` instructions are allowed”, we also allow a replacement sequence using the `ace.input`, Form D `ace.exec`, and `ace.output` instructions as described in <<ACE-replacement-instructions>>.
+In particular, only a single form of `ace.exec` is allowed (cf.{nbsp}<<ACE-instruction-exec>>) and whenever we write “only Form X `ace.exec` instructions are allowed”, we also allow a replacement sequence using the `ace.input`, Form D `ace.exec`, and `ace.output` instructions as described in <<ACE-replacement-instructions>>.
 
 We also add pseudocode to clarify how the algorithms supported by an ACE unit are implemented in software using the ACE ISA.
 For simplicity's sake, pseudocode is usually restricted to set parameters and does not use the `ace.exec` Forms A-C replacement instruction sequences.
@@ -2483,7 +2485,7 @@ as shown below (for encryption only -- decryption is similar).
 However, this significantly increases code size and requires implementing `galois_mult(V4,V3)`.
 Adding a dedicated mode to the ACE unit is a minor effort, and it allows internal logic to optimize execution
 beyond the capabilities of, for instance, a compiler on an in-order CPU. It also means that the CPU
-does not have to implement the carryless multiplication (cf. <<ACE-V-dependency>>),
+does not have to implement the carryless multiplication (cf.{nbsp}<<ACE-V-dependency>>),
 and only a shared ACE unit has to,
 which saves hardware costs when several small cores share a single ACE unit.
 
@@ -3583,9 +3585,6 @@ At this point the initialization or import operation can resume from the point o
 [WARNING]
 In the TG there seems to be a consensus that we can resume init/import after a page fault or a similar event, but on context switches we do not export partial CRs. The CRs are cleared, and the instruction is restarted.
 
-
-We performed a security analysis of potential scenarios.
-A particularly challenging scenario arises when a context switch occurs during an import, where the partially imported context must be exported and later resumed.
-We concluded that, while privileged code can always replace an SCC in a saved process's context or memory, it cannot violate the confidentiality or integrity of an SCC by abusing the resumption mechanism.
+Our security analysis considered various scenarios, including a challenging case where a context switch interrupts an import operation, requiring the partially imported context to be exported and later resumed. We concluded that although privileged code can always replace an SCC in a saved process's context or memory, it cannot exploit the resumption mechanism to compromise the confidentiality or integrity of an SCC.
 
 // ///////////////////////////////////////////////////////////////////////////////////////////
