@@ -563,43 +563,50 @@ where
 and
 ``acecrstatus[``2__i__+1,2__i__``]`` for CR #__i__+16.
 
-We describe now the semantics of the `acecrstatus` bitfields:
+This section defines the semantics of the `acecrstatus` bitfields:
 
-* *INITIAL* (value: 1), i.e., CR unconfigured; no saved value in the context switching state.
+* *INITIAL* (value: 1).
 +
 --
-** *Usage:* Error _ace_err_unconfigured_ (no trap).
-** *Configuration:* does not trap, works as expected. Sets the status to *DIRTY*.
+** *State*: Unconfigured.
+** *Permitted operations*: None.
+** *Usage*: Raises _ace_err_unconfigured_. No trap is generated.
+** *Configuration*: Does not trap. Transitions to *DIRTY*.
 --
 +
 
-* *LAZY* (value: 0), i.e., CR unconfigured, but value saved for lazy loading.
+* *LAZY* (value: 0).
 +
 --
-** *Usage/Export:* Traps to OS for lazy load. Restarted instruction operates starting from state *CLEAN*.
-** *Configuration:* Works as expected; sets status to *DIRTY*.
+** *State*: Unconfigured. A value is saved for lazy loading.
+** *Permitted operations*: Export and usage trigger a trap to the operating system for lazy loading. Execution resumes from state *CLEAN*.
+** *Configuration*: Works as expected; sets status to *DIRTY*.
+--
++
 
-While the *LAZY* status reuses the FS/VS/ACES encoding for “OFF”, this does not indicate that the ISE is inactive, nor that the ISE cannot use that CR.
+* *CLEAN* (value: 2).
++
+--
+** *State*: The CR configured and loaded. Its state has not changed since the last switch.
+** *Permitted operations*: Unrestricted; modification sets status to *DIRTY*.
+** *Configuration*: Works as expected; sets status to *DIRTY*.
+--
++
+
+* *DIRTY* (value: 3).
++
+--
+** *State*: The CR configured and loaded. Its state has potentially changed since the last switch.
+** *Permitted operations*: Unrestricted.
+** *Configuration*: Works as expected; status unchanged.
+--
++
+
+//
+
+NOTE: The *LAZY* status reuses the FS/VS/ACES encoding for “OFF”, this does not indicate that the ISE is inactive, nor that the ISE cannot use that CR.
 Whether the ISE is active is encoded exclusively in ```*status```. The use of the **OFF** encoding in the per-CR fields of `acecrstatus` is a natural choice to denote an unavailable state that requires lazy loading to be made available.
 If all CRs were either unconfigured or to be lazy-loaded, the ACES field would be set to **CLEAN** and not to **OFF**.
---
-+
-
-* *CLEAN* (value: 2), i.e., CR configured and loaded; unchanged since switch.
-+
---
-** *Usage:* Unrestricted; modification sets status to *DIRTY*.
-** *Configuration:* Works as expected; sets status to *DIRTY*.
---
-+
-
-* *DIRTY* (value: 3), i.e. CR configured and loaded; potentially changed since last switch.
-+
---
-** *Usage:* Unrestricted.
-** *Configuration:* Works as expected; status unchanged.
---
-+
 
 //
 
@@ -610,7 +617,7 @@ The 8-bit `aceerror` CSR records the error code from the most recent ACE instruc
 Reading it may stall the hart until the operation completes.
 It is writable for context switching.
 
-Error codes 0-127 are reserved for RVI, 128-255 for custom algorithms.
+Error codes 0–127 are reserved for RVI, and codes 128–255 are reserved for custom algorithms.
 The standard error codes are:
 
 [[ACE-error-codes]]
@@ -676,7 +683,8 @@ Software may safely write 0 to fully restart an operation, and the register can 
 However, software must not write arbitrary nonzero values to it, as this may result in an illegal-instruction exception, as the hardware or a trapped implementation are not required to support all possible values.
 Only the instructions explicitly mentioned above support non-zero `acestart` values; other ACE instructions ignore this register, and will be restarted.
 
-Initialization, import, and export operations can be interrupted and resumed if the interrupt does not result in a context switch, as indicated by the value in the `acestart` CSR.  If a context switch occurs, these operations have to be restarted.
+Initialization, import, and export operations may be interrupted and resumed if no context switch occurs,
+as indicated by the value in the `acestart` CSR.  If a context switch occurs, these operations must be restarted.
 
 [NOTE]
 ====
@@ -690,7 +698,7 @@ This design obviates the need to separate data transfer from cryptographic proce
 
 A different situation arises when an `ace.exec` instruction operates on long vectors containing multiple elements.
 In the algorithm description we explicitly mention that a block of operations is repeated for each block in the vector:
-the execution of these iterative `ace.exec` instructions can be interrupted and resumed, and `acestart` reflects the number of bytes processed so far.
+the execution of these iterative `ace.exec` instructions may be interrupted and resumed, and `acestart` reflects the number of bytes processed so far.
 
 The semantics and use of `acestart` are described in <<ACE-format-configuration>>.
 
@@ -1984,10 +1992,10 @@ State Machine:::
  ** From any state to state _decrypt_, if metadata allows decryption, else the CR is *invalidated*.
 * *Behavior:*
  ** In state _initial_, no `ace.exec` instruction is allowed.
- ** In states _encrypt_ or _decrypt_, we can only issue a Form A `ace.exec`, i.e., `ace.exec Vd,Kn|K[Xn],Vs`.
+ ** In states _encrypt_ or _decrypt_, we can only issue Form A `ace.exec` instructions, i.e., of the Form “`ace.exec Vd, Kn|K[Xn], Vs`.”
   *** If the state is _encrypt_, then `Vd = enc_blk(Vs)`.
   *** If the state is _decrypt_, then `Vd = dec_blk(Vs)`.
-  *** If `VL*SEW` > `b`, then `ace.exec Vd,Kn|K[Xn],Vs` encrypts/decrypts block-by-block.
+  *** If `VL*SEW` > `b`, then “`ace.exec Vd, Kn|K[Xn], Vs`” encrypts/decrypts block-by-block.
 
 //
 
