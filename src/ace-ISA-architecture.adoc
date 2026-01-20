@@ -3456,7 +3456,10 @@ Furthermore, it protects the key from other SW environments that may be crossed 
 [[ACE-V-dependency]]
 === Dependency on the V Extension
 
-While ACE can be implemented when the full V extension is present, ACE actually depends on a minimal subset of the RISC-V Vector Extension (RVV), which we call RVV-mini, for correct operation. Required features include:
+[WARNING]
+RVV-mini is not yet fully defined.
+
+If ACE is implemented including the operations on vector registers-and thus not exclusively relying on `ace.input` and `ace.output`-it does not require the full V extension; it depends on a minimal subset, which we call RVV-mini. The required features are:
 (((RVV-mini)))
 
 * Support for vector registers sufficiently wide to host the block-wise operations required by the algorithms supported by ACE;
@@ -3533,18 +3536,14 @@ Direct plaintext leakage, memory corruption attacks against the ACE-using proces
 This section describes a hypothetical mechanism for exporting partially initialized or imported cryptographic contexts.
 This is _Gedankenexperiment_ only and _not_ a current part of the ACE specification.
 
-Suppose we want to save and restore a _partial_ context, i.e. a context whose initialization or import operation has been interrupted for a context switch, preventing immediate return to the original control flow.
-In this case, a “Partial” bit in the metadata signals whether any this has happened.
-This field applies only to `ace.init` and `ace.import` operations, because these access external memory, and not to `ace.clone` and `ace.derive` as they only operate internally.
+Suppose we want to save and restore a _partial_ context, i.e. a context whose initialization or import operation has been interrupted for a context switch, preventing immediate return to the original control flow.  A "Partial" bit in the metadata indicates this state.
+This field applies only to `ace.init` and `ace.import` operations, because they access external memory, and not to `ace.clone` and `ace.derive` as they only operate internally.
 Any cryptographic operation attempted on a CR containing an partial CC results in an error or is trapped.
 (((Cryptographic Register,incomplete)))
 
-An initialization operation can be interrupted at any 8-byte multiple, and resumed from there.
-An import operation can be interrupted at a 8-byte multiple, but it will be resumed only at the 48th byte or beyond.
-Otherwise, it will be restarted, and no state will be saved at context switch.
+An `ace.init` operation can be interrupted at any 8-byte boundary and resumed from that point. An `ace.import` operation can also be interrupted at an 8-byte boundary, but it will only be resumed from the 48th byte or later; otherwise, it is restarted with no state saved.
 
-NOTE: Resuming could possibly be more expensive than saving no state and restarting.
-The third option, to wait and complete the operation, could instead cause delays.
+NOTE: Resuming an operation may be more costly than restarting it without saved state. A third alternative—waiting to complete the operation—could introduce unacceptable delays.
 
 When exporting a partial CR, a Partial CR Metadata (PCREM) header is used as the first 8 bytes of the SCC, preceding the nonce, SIV, and content sections as defined in <<ACE-format-SCC>>.
 
@@ -3564,38 +3563,36 @@ Future format will have a 1 in this position and may be longer than 64 bits.
 | [63:32] |  16  | Reserved               | Zero for now.
 |===
 
-NOTE: Fields Algorithm, SC_Protection, State Number, Direction_Policy and, perhaps even more notably, the Usage Control policies UC_Policy_{empty}__i__ (_i_ = 0 .. 3)
-and Locality information are omitted, the reason being that usage of partial CRs is forbidden by the architecture anyway, and therefore the space can be used for other purposes.
-Regarding the Locality, Locality violation errors should be handled where the complete CR is used, and therefore the RCSK is always used for partial CRs. This may also reduce the need to compute or cache DCSKs at higher privileged levels, overall improving performance.
+NOTE: Fields such as Algorithm, SC_Protection, State Number, Direction_Policy, UC_Policy_{empty}__i__ (i = 0..3), and Locality are omitted. Since partial CRs are architecturally forbidden for normal use, the space normaly used by these fields is available for other purposes. Locality violations are handled when a complete CR is used; therefore, the RCSK is always used for partial CRs. This approach can reduce the need to compute or cache DCSKs at higher privilege levels, improving performance.
 
-The content format to export incomplete initializations and imports is the same as for the complete CRs,
-only truncated to the actual imported length, rounded to a multiple of 8 bytes.
-This length is stored in the Payload_Length field.
 
-The content format to export incompletely imported CRs prepends the partial hash (`tmp` in <<ACE-SCC-import>>) to the content, which is thus extended by 16 bytes. These 16 bytes must be included in the Payload_Length field and encrypted as well.
+The exported content format for an incomplete initialization or import matches that of a complete CR, except that it is truncated to the actual imported length (rounded up to an 8-byte multiple). This length is recorded in the Payload_Length field.
 
-After the partial CR has been decrypted and authenticated in privileged mode, it is marked as to be resumed.
-Upon returning from the context switch handler,
+For an incompletely imported CR, the partial hash (`tmp` from <<ACE-SCC-import>>) is prepended to the content, extending it by 16 bytes.
+These 16 bytes are included in the Payload_Length and are considered as part of the content, hence they are encrypted.
 
-. the old metadata, nonce, and SIV are recovered from the memory of the less-privileged mode;
+After a partial CR is decrypted and authenticated in privileged mode, it is marked for resumption.
+Upon returning from the context-switch handler:
 
-(These reads may be interrupted by page faults and immediately resumed upon mapping the target page.)
+. The original metadata, nonce, and SIV are recovered from less-privileged memory;
 
-The following operations are then performed as an uninterruptible block.
+(These reads may be interrupted by page faults and resumed once the target page is mapped.)
+
+The following steps are then executed as an atomic block:
 
 [start=2]
-. `z` and `num_blocks` are computed from the original content length, the starting value of `i` from `acestart`.
+. Compute `z` and `num_blocks` from the original content length, using the starting value of `i` from `acestart`.
 . If the interrupted operation was an import:
-.. The `Kenc` and `Kauth` keys are derived.
-.. The partial hash value is recomputed from the current content of the CR.
+.. Derive the `Kenc` and `Kauth` keys.
+.. Recompute the partial hash from the current CR content.
 
-At this point the initialization or import operation can resume from the point of interruption.
+The initialization or import operation can then resume from the point of interruption.
 
 //
 
 [WARNING]
-In the TG there seems to be a consensus that we can resume init/import after a page fault or a similar event, but on context switches we do not export partial CRs. The CRs are cleared, and the instruction is restarted.
+The TG consensus is that `init`/`import` may resume after a page fault, but on a full context switch, partial CRs are not exported. Instead, the CRs are cleared and the instruction is restarted.
 
-Our security analysis considered various scenarios, including a challenging case where a context switch interrupts an import operation, requiring the partially imported context to be exported and later resumed. We concluded that although privileged code can always replace an SCC in a saved process's context or memory, it cannot exploit the resumption mechanism to compromise the confidentiality or integrity of an SCC.
+Our security analysis examined various scenarios, including one where a context switch interrupts an import, forcing export and later resumption of a partially imported context. We concluded that while privileged code can replace an SCC in a saved process's context or memory, it cannot abuse the resumption mechanism to breach SCC confidentiality or integrity.
 
 // ///////////////////////////////////////////////////////////////////////////////////////////
