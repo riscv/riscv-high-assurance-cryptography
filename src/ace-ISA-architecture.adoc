@@ -101,8 +101,6 @@ Privileged::
 
 // ///////////////////////////////////////////////////////////////////////////////////////////
 
-<<<
-
 === Programmer-Visible Architectural State
 
 The recommended way to implement ACE is to implement the V extension, or at least a certain subset of it, as defined in <<ACE-V-dependency>>, which we call RVV-mini.
@@ -199,9 +197,9 @@ In this case, ACE returns _ace_err_memory_, and software must free capacity by e
 
 [NOTE]
 ====
-CRF capacity is implementation-defined, but implementations must provide sufficient CRF memory to allow all operations
-allowed by the architecture to be performed.
-For instance, the CRF must hold at least an instance of the largest possible CR or the largest CR pair for CR cloning or the derivation of a new CC from an existing one. An optional, possibly approximated, and implementation dependent mechanism to estimate the required capacity is defined in <<ACE-instruction-size-internal>>.
+CRF capacity is implementation-defined, but implementations must provide sufficient capacity to allow execution of all operations defined by the architecture.
+The CRF must hold at least an instance of the largest possible CR or the largest CR pair for CR cloning or derivation.
+An optional, possibly approximated, and implementation dependent mechanism to estimate the required capacity is defined in <<ACE-instruction-size-internal>>.
 ====
 
 [NOTE]
@@ -359,8 +357,8 @@ Format of SCC:::
 `bytes 8 .. 19  {nbsp}{nbsp}{nbsp}{nbsp}` nonce used in the encryption (96 bits), +
 `bytes 20 .. 31  {nbsp}{nbsp}{nbsp}` tag produced by the encryption method (96 bits), and +
 `bytes 32 .. u+31  {nbsp}` encryption of the serialization of the content of the CR, with a byte length of `u`.
-+
-Only the serialization of the content is encrypted, while both metadata and content are included in the computation of the authentication tag, as described next.
+
+Both metadata and the serialization of the content are authenticated, but only the latter is encrypted (the method is described in <<ACE-SCC-AEAD>>).
 
 The metadata section of an SCC follows the same fixed architectural format as for the corresponding section of the Initialization Input.
 The content format—and consequently its length—is algorithm-specific (cf.{nbsp}<<ACE-algorithms>>) and is determined solely by the Algorithm and Key_Type fields in the metadata as well, but in general differs from the content section of the Initialization Input.
@@ -422,8 +420,8 @@ Clearing state is not performed by setting ACES to Off, Initial, or Clean, and i
 
 In <<fsxsstates-copy>> we describe the transitions between states.
 
-NOTE: <<fsxsstates-copy>> is a copy of <<fsxsstates>>
-of “The RISC-V Instruction Set Manual, Volume II - Privileged Architecture”
+[WARNING]
+<<fsxsstates-copy>> is a copy of <<fsxsstates>> of cite:[RISCV-ISA-Priv]
 and it will be removed from this document once the extension is ratified.
 
 //
@@ -856,9 +854,12 @@ UNINTERRUPTIBLE_BLOCK_START
 UNINTERRUPTIBLE_BLOCK_END
 ----
 
+[[ACE-SCC-AEAD]]
 ==== AEAD Algorithm for SCC Export and Import
 
-We first define the RFC8452 Key Derivation and the DCSK Derivation functions.
+The AEAD algorithm chosen to export CRs into SCCs is AES-GCM-SIV.
+We follow the definition of the algorithm from cite:[DBLP-journals-iacr-GueronLL17] and cite:[RFC8452].
+We first define the Key Derivation and the DCSK Derivation functions.
 
 .RFC8452 Key Derivation
 []
@@ -1370,8 +1371,7 @@ The instruction is encoded using the Form D' `ace.exec` encoding, and is thus an
 
 Description::
 This instruction writes the size of a SCC having the metadata section given in `Xn` into GPR `Xd`, and zero if the algorithm is not supported.
-Only the Algorithm and SC_Protection fields of the metadata section of a CC are considered. Only the bits corresponding to the
-Algorithm, SP_Protection, Direction_Policy and Key_Type fields fields are considered and all other bits must be zero.
+Only the Algorithm and Key_Type fields of the metadata section of a CC are considered.
 +
 On RV32 the GPR `Xs` needs to contain only the lower 32 bits of the metadata section, since they contain the fields which are required to determine the size of the SCC.
 
@@ -1833,28 +1833,17 @@ Data Structures:::
 These include:
 
 . *Initialization Input*:
-+
---
 The data following the metadata block in the initialization input to `ace.init`, such as keys and other required secrets.
 Fields are listed in the order they appear in the initialization input, each with its length.
-
-NOTE: The structure of the content section for the Initialization Input and its size must be entirely determined by the Algorithm and Key_Type fields within the metadata.
---
-+
 
 . *Internal State*:
 Information that must be maintained in the internal state of a CC.
 The fields are unordered, and their lengths may differ from those listed—for example, in threshold or fault-tolerant implementations where redundancy is added. Notably, the full single-share key size is listed even when a System Key is used, as this reflects the size of the key material the algorithm operates on.
 
 . *Serialized Content*:
-+
---
 The data that follows the metadata block in the plaintext portion of the SCC.
 The fields are listed in the order they appear in the SCC, each with its length.
 
-NOTE: The serialized content's structure and size must be entirely determined by the Algorithm and Key_Type fields within the metadata.
---
-+
 // Generic Functions:::
 // If necessary, redefine generic functions that apply to all contexts.
 
@@ -1868,8 +1857,13 @@ This includes:
 . A complete list of the *allowed state transitions*, including the conditions under which each transition is allowed.
 . The enumeration of the *allowed instructions* at each state and their *behavior*.
 
+
+When defining an algorithm, it must be ensured the structure of the content section for the Initialization Input and its size
+as well as The serialized content's structure and size can be entirely determined by the Algorithm and Key_Type fields within the metadata, and no other field.
+
 Regarding the allowed instructions, these are usually only `ace.exec` and `ace.state`.
-In particular, only a single form of `ace.exec` is allowed (cf.{nbsp}<<ACE-instruction-exec>>) and whenever we write “only Form X `ace.exec` instructions are allowed”, we also allow a replacement sequence using the `ace.input`, Form D `ace.exec`, and `ace.output` instructions as described in <<ACE-replacement-instructions>>.
+In particular, only a single form of `ace.exec` may be allowed (cf.{nbsp}<<ACE-instruction-exec>>), together with a suitable replacement sequence
+as described in <<ACE-replacement-instructions>>.
 
 We also add pseudocode to clarify how the algorithms supported by an ACE unit are implemented in software using the ACE ISA.
 For simplicity's sake, pseudocode is usually restricted to set parameters and does not use the `ace.exec` Forms A-C replacement instruction sequences.
@@ -1902,11 +1896,9 @@ If an invalid input is provided to any ACE instruction, or an instruction that i
 
 * `Kn` is put into state _invalid_;
 * For instructions that refer to `Kn`:
- ** any Form of `ace.exec` performs no operation and, if it provides an output, the latter is always zero;
- ** `ace.clone` and `ace.derive` clean the destination contexts;
- ** `ace.restrict` and `ace.harden` perform no operation;
- ** `ace.input` and `ace.output` perform no operation;
- ** `ace.state` perform no operation, unless it is used to return to state _initial_;
+ ** any Form of `ace.exec`, `ace.clone, `ace.derive`, `ace.restrict`, and `ace.harden` raise an invalid instruction error;
+ ** `ace.input` and `ace.output` raise an invalid instruction error when `aceactivecr` is `Kn`;
+ ** `ace.state` raises an invalid instruction error unless it is used to return to state _initial_;
  ** `ace.error` always returns error _ace_err_invalid_ after any operation involving the CR except for
     `ace.import` and `ace.export`, `ace.clean`, `ace.init`, and `ace.size`, which all work normally, and using `ace.state` to return to state _initial_.
 * The current instruction is terminated.
@@ -1939,10 +1931,10 @@ For the purpose of architecture specification, all values are also always repres
 Threshold implementations are simply implementation variants of the exact same algorithm.
 (((ACE, algorithm, threshold variants)))
 
-NOTE: This assumes that reconstructing a key or re-randomizing it are fast operations, such as ``xor``s with random values.
+NOTE: This rule assumes that reconstructing a key or re-randomizing it are fast operations, such as ``xor``s with random values.
 This in turn implies that ACE execution unit must have access to a source of randomness, or at least a PRNG that is seeded at hardware boot.
 
-NOTE: This ensures not only the compactness of a SCC, but also that the key can be ported across architectures.
+NOTE: The rule not only  ensures the compactness of a SCC, but also that the key can be ported across architectures.
 In fact, some threshold implementations may have a different number of shares even if they claim the same order of side-channel protection.
 
 [[ACE-rules-system-keys]]
@@ -2162,6 +2154,9 @@ foreach(i from 0 to len_in_bytes(PT)/16-1) {
 [[ACE-XEX-XTS-modes]]
 ==== XEX/XTS modes (one or two keys)
 
+The XTS mode was designed for storage confidentiality cite:[DBLP-journals-ieeesp-Martin10]
+and made into a Recommendation by NIST cite:[nist-SP-800-38E].
+
 The use of a single key or two independently sampled keys is determined by the algorithm, and it is not a configuration parameter for the algorithm.
 We first define XEX mode functionality.
 (((ACE, algorithm, XEX)))
@@ -2272,7 +2267,8 @@ To implement the XTS mode, the ciphertext stealing part is easy to realize using
 [[ACE-GCM-mode]]
 ==== GCM Mode
 
-The GCM mode was defined by [.red]#to be completed#.
+The GCM mode was designed by David McGrew and John Viega cite:[DBLP-conf-indocrypt-McGrewV04]
+and became a NIST Recommendation in 2007 cite:[nist-SP-800-38D].
 (((ACE, algorithm, GCM)))
 
 ===== Specification
@@ -2542,6 +2538,8 @@ tag ← V3 xor V2                                  // Last Horner scheme add
 
 [[ACE-GCM-SIV-mode]]
 ==== GCM-SIV mode
+
+The GCM-SIV mode is described in cite:[DBLP-journals-iacr-GueronLL17] and cite:[RFC8452].
 
 The GCM-SIV mode's main differences with GCM are that:
 
@@ -2816,13 +2814,14 @@ if (X1 != 0) then { handle error }               // do not use the plaintext if 
 [[ACE-OCB-mode]]
 ==== OCB Mode
 
-We only support the OCB3 variant of OCB as specified in RFC 7253 and https://link.springer.com/article/10.1007/s00145-021-09399-8.
+We only architect the OCB3 variant of OCB as specified in RFC{nbsp}7253 cite:[RFC7253] and cite:[DBLP-journals-joc-KrovetzR21].
 While this algorithm is asymptotically more efficient than GCM and GCM-SIV, it has a much heavier setup and
 its exported state, requires significantly more memory than the other modes.
 On the other hand, since it uses only a single key and no derived keys, with ciphers with an expensive key expansion
 like the AES it may use fewer internal resources.
 
-The state machine of this algorithm closely follows RFC 7253 except for the bit ordering and the use of zero-based indexing in place of one-based indexing as in the RFC. The algorithm and is of course identical to the RFC's for 128-bit-wide block ciphers, with the generalisation to other widths being straightforward and according the security proof of the original algorithm and a lower bound on nonce length following https://eprint.iacr.org/2023/326.
+The state machine of this algorithm closely follows RFC{nbsp}7253 (except for the ordering and numbering of the bit fields).
+The algorithm and is of course identical to the RFC's for 128-bit-wide block ciphers, with the generalisation to other widths being straightforward and according the security proof of the original algorithm and a lower bound on nonce length following cite:[cryptoeprint-2023-326].
 
 ===== Specification
 
@@ -3131,7 +3130,7 @@ if (X1 != 0) then { handle error }       // do not use the plaintext if error oc
 ==== CMAC Functions
 
 CMAC is an algorithm for message authentication codes constructed from a block cipher.
-It was designed by Tetsu Iwata and Kaoru Kurosawa and became a NIST recommendation in May 2005.
+It was designed by Tetsu Iwata and Kaoru Kurosawa and became a NIST recommendation in May 2005 cite:[nist-SP-800-38B].
 (((ACE, algorithm, CMAC)))
 
 ===== Specification
@@ -3261,7 +3260,7 @@ ace.exec V0, K0  // this is the value of the CMAC
 This section defines an interface for hash and MAC functions.
 Because of the vast variety of such functions, we cannot define a completely general interface.
 However, the interface defined here is sufficiently general to allow to describe most commonly used and standardized functions, such as
-the SHA2, SHA3, SHAKE, and BLAKE families, as well HMAC keyed constructions.
+the SHA2 cite:[nist-fips-180-4], SHA3 and SHAKE cite:[nist-fips-202], as well HMAC cite:[nist-fips-198-1] keyed constructions, and many others.
 (((ACE, algorithm, general hashing)))
 (((ACE, algorithm, MAC functions)))
 (((ACE, algorithm, XOF)))
@@ -3381,7 +3380,7 @@ The usage of this type of algorithms is very similar to that of CMAC (cf.{nbsp}<
 [[ACE-Ascon]]
 ==== Ascon Specific Rules
 
-We now describe the state machines of the various Ascon-based algorithms standardized by the NIST.
+We now describe the state machines of the various Ascon-based cite:[DBLP-journals-joc-DobraunigEMS21] algorithms standardized by the NIST cite:[nist-SP-800-232].
 (((ACE, algorithm, Ascon)))
 
 ===== Ascon-128 and Ascon-128a authenticated ciphers
