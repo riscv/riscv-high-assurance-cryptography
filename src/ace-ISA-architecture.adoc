@@ -104,10 +104,10 @@ Privileged::
 
 === Programmer-Visible Architectural State
 
-ACE requires a subset of the V extension, including the vector register file (see <<ACE-V-dependency>>).
+The recommended way to implement ACE is to implement the V extension, or at least a certain subset of it, as defined in <<ACE-V-dependency>>, which we call RVV-mini.
 
-[WARNING]
-[.red]#Discussions are still ongoing on what subset will be required, and if a dependency on just the GPRs can be designed as well.#
+It is allowed to implement ACE without V or RVV-mini, by exclusively using the instructions `ace.input` and `ace.output` to provide input data and a buffer for output to and from the instructions that may use vectors.
+These are, currently, `ace.exec` (<<ACE-instruction-exec>>) and `ace.derive` (<<ACE-instruction-derive>>).
 
 [comment]
 --
@@ -179,7 +179,8 @@ CRs differ from conventional register in several ways:
   `ace.init` (<<ACE-instruction-init>>),
   `ace.export` (<<ACE-instruction-export>>), and
   `ace.import` (<<ACE-instruction-import>>). In brief:
-** `ace.init` is a load-type instruction that reads clear text into a CR, but there is no corresponding “store” instruction;
+** `ace.init` is a load-type instruction that reads clear text into a CR, but there is no corresponding “store” instruction, i.e.,
+    we can write clear data into a CR but not retrieve it as such;
 ** `ace.export` uses a nonce, so repeated export of the same content may result in different ciphertexts; and
 ** `ace.import` may fail if the authentication tag cannot be verified.
 * Unlike conventional registers, which always contain a value, CRs can be _unconfigured_, meaning they may hold no information.
@@ -187,6 +188,10 @@ CRs differ from conventional register in several ways:
 * The amount of the capacity of the CRF used by a CR depends on the configured algorithm.
   Two CRs can use different amounts of capacity.
 * ACE instructions can refer to CRs directly, i.e., with a 5-bit immediate in the instruction encoding, but also indirectly, i.e., through a value in the range [0 .. 31] in a GPR.
+** There are very few instructions that can use and possibly change the contents of the CRs.
+  The most important ones are:
+  ** `ace.exec`, used to perform cryptographic operations on data blocks according to the algorithm configured in a CR; and
+  ** `ace.state`, used to determine whether a CR is used for encryption or decryption and move between the different stages of modes of operations and hash functions.
 
 ACE returns _ace_err_memory_ if insufficient memory prevents successful execution of any instruction that can configure a CR.
 If this happens, software needs to free memory by choosing another CR, possibly exporting it if necessary, and then clearing it.
@@ -238,7 +243,7 @@ Future format will have a 1 in this position and may be longer than 64 bits.
 | [17:16] |   2  | Direction_Policy       | Determines whether the CC may be used for encryption (bit 12 set), decryption (bit 13 set), or both (bits 12 and 13 set). Valid only for encryption/decryption primitives or modes, and ignored, for instance, for hash functions.
 | [19:18] |   2  | Key_Type               | Key given by explicit value / System Key (index) / Internally generated.
 | [23:20] |   4  | State_Number (also Direction) | Encoding the current state of the state machine of the algorithm as a number. The value must be zero in the initialization data. If the algorithm encoded in the CC has at most 16 states (including _initial_, _completed_, and _invalidated_, cf. <<ACE-state-constants>>), then this number is stored in this field, otherwise an algorithm-specific representation is used in the content, and this field only admits the values 0 (initial), 14 (invalidated), 15 (completed) or 1 (any other operational state). The values must conform to <<ACE-state-constants>>.
-| [25:24] |   2  | Using_IOBuf            | Zero if using vector registers for the current `ace.exec`. 1 or 2 if using `ace.input`/`ace.output` in place of vector registers. Details in <<ACE-usage-input-output>>.
+| [25:24] |   2  | Using_IOBuf            | Zero if using vector registers for the current `ace.exec` or `ace.derive`. 1 or 2 if using `ace.input`/`ace.output` in place of vector registers. Details in <<ACE-usage-input-output>>.
 | [29:26] |   4  | UC_Policy_1            | “UC Policy” means “Usage Control Policy”.  Disallow the _usage_ of this CC in User, (Virtual) Supervisor, Hypervisor, or M-mode if bit 26, 27, 28, or 29 is set.
 | [31:30] |   2  | UC_Policy_2            | If bit 30, respectively, 31, is set, then restrict the usage by `ASID`, respectively, `VMID`. Restrictions by `ASID` are ignored if in S-mode or higher. Restrictions by `VMID` are ignored if in H- or M-mode.
 | [47:32] |  16  | UC_Policy_3            | Zero if bit 30 unset, else `ASID` to enforce.
@@ -1242,10 +1247,16 @@ with non-zero values in `rd`, resp., `rs2`, to encode additional instructions.
 Description::
 Performs a cryptographic operation such as an encryption or decryption, absorbing a value in a hash,
 an elliptic curve point addition or scalar multiplication, etc., and possibly returning a value.
++
+If the V extension register file is not implemented, only Form D of `ace.exec` is supported
+(the derived Forms used to define other instructions are still supported) and `ace.input`, `ace.output` must be used to
+provide inputs and extract outputs from `ace.exec`.
+<<ACE-usage-input-output>> described how this is done.
 
 NOTE: In many algorithms, the next state is often implied by the preceding operation.
-//For example, in AEAD algorithms, setting an IV or nonce could implicitly transition to the state for absorbing associated data.
+For example, in AEAD algorithms, setting an IV or nonce _could_ implicitly transition to the state for absorbing associated data.
 However, to ensure consistency, ACE requires explicit state transitions even when this incurs additional instructions.
+This also helps the design of algorithms in a way that only one type of `ace.exec` instruction is used per distinct state of the algorithm.
 Exceptions are made only when strictly necessary for security, such as automatic transitions from hash finalization to verification,
 or to the _completed_ or _invalidated_ states (see <<ACE-state-constants>> and <<ACE-algorithms>>).
 
@@ -1253,7 +1264,7 @@ Properties::
 Possibly modifies state: *YES*. +
 Usage-controlled: *YES*. +
 Trappable: *NO*. +
-Interruptible: *NO*.
+Interruptible: See interruptibility rules in <<ACE-generic-rules>>.
 
 [[ACE-instruction-size]]
 ==== ace.size
@@ -1324,6 +1335,8 @@ Description::
 This instruction writes the size of a SCC having the metadata section given in `Xn` into GPR `Xd`, and zero if the algorithm is not supported.
 Only the Algorithm and SC_Protection fields of the metadata section of a CC are considered. Only the bits corresponding to the
 Algorithm, SP_Protection, Direction_Policy and Key_Type fields fields are considered and all other bits must be zero.
++
+On RV32 the GPR `Xs` needs to contain only the lower 32 bits of the metadata section, since they contain the fields which are required to determine the size of the SCC.
 
 ===== Internal Capacity Variant
 
@@ -1348,6 +1361,9 @@ Description::
 This instruction writes into GPR `Xd` the amount of internal capacity a CC having the metadata section given in `Xn` would occupy in terms of implementation-dependent units. Passing the value `ones(64)` into `Xs` results in the total amount of internal capacity.
 Only the bits corresponding to the Algorithm, SP_Protection, Direction_Policy and Key_Type fields are considered and all other bits must be zero, except when passing `ones(64)`.
 If the combination of Algorithm, SP_Protection, Direction_Policy and Key_Type fields is not supported, the instruction writes zero into `Xd`.
++
+On RV32 the GPR `Xs` needs to contain only the lower 32 bits of the metadata section, since they contain the fields which are required to determine the size of the SCC.
+In this case, the value of `Xs` to obtain the fill CRF capacity is `ones(32)`.
 
 
 [[ACE-instruction-available]]
@@ -1443,6 +1459,10 @@ The instruction is used to derive a new context from an existing one, with its o
 It is similar to `ace.clone`, but the derived context is not a copy of the source context,
 rather, it is a new context that is derived from it, for instance, through a key derivation mechanism.
 This instruction can be used multiple times, to generate multiple derived contexts.
++
+The first variant of `ace.derive` has the same semantics of the second variant if the input/output buffer is not empty
+(see <<ACE-usage-input-output>>).
+
 
 Properties::
 Possibly modifies state: *YES*. +
@@ -1572,6 +1592,10 @@ The instruction works as follows:
 * If `Xs`[30] is set and `m`[30] is NOT set, then UC_Policy_3, i.e., `m`[47:32], is set to `Xs`[47:32].
 * If `Xs`[31] is set and `m`[31] is NOT set, then UC_Policy_4, i.e., `m`[63:48], is set to `Xs`[63:48].
 * If `Xs`[30] and `m`[30] are both set and `Xs`[47:32] != `m`[47:32], or if `Xs`[31] and `m`[31] are both set and `Xs`[63:48] != `m`[63:48], then `aceerror` is set to ace_error_invalid.
+
+The above semantics are defined for RV64. For RV32, `s` must be even and register pair `X[s]` and `X[s+1]` is read.
+In this case where `X[s]` corresponds to bits [31:0] and `X[s+1]` to bits [63:32] of the metadata.
+In other words, `Xs` is replaced by `(X[s+1] @ X[s])` in the above description.
 --
 +
 
@@ -1670,42 +1694,41 @@ Interruptible: *YES*.
 [[ACE-usage-input-output]]
 ==== Usage of the ace.input and ace.output Instructions
 
-First, the `ace.input` and `ace.output` instructions can replace the inputs and outputs to Forms A-C of `ace.exec` only if the size
-in CSR `aceiobuflen` is non-zero and is a valid size (for instance `b` for an algorithm or a multiple thereof).
+The `ace.input` and `ace.output` instructions can replace the inputs and outputs to Forms A-C of `ace.exec` and the input of `ace.derive`.
+They can be used only if the size in CSR `aceiobuflen` is non-zero and is a valid size (for instance `b` for an algorithm or a multiple thereof),
+otherwise an invalid instruction error is raised.
 
-If `aceiobuflen` is non-zero, then forms A, B, and C of `ace.exec` can be replaced in the code as follows:
+If `aceiobuflen` is non-zero, then forms A, B, and C of `ace.exec` and `ace.derive` can be replaced in the code as follows:
 
 [[ACE-replacement-instructions]]
 .Replacement for `ace.exec` instructions with input/output
-[float="center",align="center",width="64%",cols="^8%,<31%,<25%",options="header"]
+[float="center",align="center",width="80%",cols="<42%,<38%",options="header"]
 |===
-| Form | Original Instruction          | Replacement
-|   A  | `ace.exec{nbsp}Vd, Kn\|K[Xn], Vs` | `ace.input{nbsp}{nbsp}Xl, Vs` +
+| Original Instruction          | Replacement Sequence
+| `ace.exec{nbsp}{nbsp}{nbsp}Vd, Kn\|K[Xn], Vs` | `ace.input{nbsp}{nbsp}Xl, Vs` +
 `ace.exec{nbsp}{nbsp}{nbsp}Kn\|K[Xn]` +
 `ace.output{nbsp}Vd,  Xl`
-|   B  | `ace.exec{nbsp}{nbsp}{nbsp}{nbsp}{nbsp}Kn\|K[Xn], Vs`     | `ace.input{nbsp}{nbsp}Xl, Vs` +
+| `ace.exec{nbsp}{nbsp}{nbsp}{nbsp}{nbsp}{nbsp}{nbsp}Kn\|K[Xn], Vs`     | `ace.input{nbsp}{nbsp}Xl, Vs` +
 `ace.exec{nbsp}{nbsp}{nbsp}Kn\|K[Xn]`
-|   C  | `ace.exec{nbsp}Vd, Kn\|K[Xn]`     | `ace.exec{nbsp}{nbsp}{nbsp}Kn\|K[Xn]` +
+| `ace.exec{nbsp}{nbsp}{nbsp}Vd, Kn\|K[Xn]`     | `ace.exec{nbsp}{nbsp}{nbsp}Kn\|K[Xn]` +
 `ace.output{nbsp}Vd,  Xl`
+| `ace.derive Kd\|K[Xd], Ks1\|K[Xs1], Vs2` | `ace.input{nbsp}{nbsp}Xl, Vs2` +
+`ace.derive{nbsp}Kd\|K[Xd], Ks1\|K[Xs1]` +
 |===
 
 We use field `Using_IOBuf` in the metadata to indicate whether we are using buffer or the registers and to track the instruction sequence.
-Field `Using_IOBuf` is normally zero. It is set to 1 as soon as we use a `ace.input` in place of a Form A or B `ace.exec` or a Form D `ace.exec` in place of a Form C `ace.exec`.
+Field `Using_IOBuf` is normally zero.
+It is set to 1 as soon as we use a `ace.input` in place of a Form A or B `ace.exec` or `ace.derive`, or a Form D `ace.exec` in place of a Form C `ace.exec`.
 In this case, bit `Using_IOBuf` remains 1 until the end of the second instruction of the replacement sequence, in which case it is set to zero if the sequence is two instructions long, or set to 2 until the end of the third instruction of the replacement sequence if the sequence is three instructions long.
 At the end of the sequence, `Using_IOBuf` is reset to 0.
 The ordering of these instructions is enforced by the architecture by the state number and by the value of `Using_IOBuf`.
 Not properly following the instruction ordering raises an invalid instruction exception.
 
-// The content of the internal buffers for inputs and outputs is zeroed by all algorithms in the _initial_ and _completed_ states.
-// `ace.input` is allowed whenever a Form A or B `ace.exec` is expected by the architecture, and
-// `ace.output` is allowed whenever a Form B or C `ace.exec` is expected.
-// Failure to issue these instructions can lead to undefined behavior, but it does not raise errors.
-
 NOTE: The internal input/output buffer, if enabled, it not part of a CR but is a separate structure.
 In fact, `ace.output` can be used to save the contents of the buffer, and `ace.input` can be used to restore it.
 Also, these operations start at the offset specified in `acestart`, so the state of the buffer can easily be saved and restored with the same approach used for vectors.
 
-NOTE: This mechanism is one of the reasons, besides keeping the state machines simple, that in a given state of an algorithm, in each state only one form of `ace.exec` instruction is allowed.
+NOTE: This mechanism is one of the reasons, besides keeping the state machines simple, that in a given state of an algorithm, in each state only one Form of `ace.exec` instruction is allowed.
 
 // ///////////////////////////////////////////////////////////////////////////////////////////
 
@@ -1792,28 +1815,36 @@ This includes:
 
 . A list of *states* in which the internal state machine of the logic is executed, together with their representation, either as a number in the range [0..15] or by more complex structures. The values for the architected algorithms conform to <<ACE-state-constants>>.
 . A complete list of the *allowed state transitions*, including the conditions under which each transition is allowed.
-. The *behavior* of all ACE instructions at each state.
+. The enumeration of the *allowed instructions* at each state and their *behavior*.
 
-// For each algorithm, in any state, only certain instructions are permitted.
+Regarding the allowed instructions, these are usually only `ace.exec` and `ace.state`.
+In particular, only a single form of `ace.exec` is allowed (cf. <<ACE-instruction-exec>>) and whenever we write “only Form X `ace.exec` instructions are allowed”, we also allow a replacement sequence using the `ace.input`, Form D `ace.exec`, and `ace.output` instructions as described in <<ACE-replacement-instructions>>.
 
 We also add pseudocode to clarify how the algorithms supported by an ACE unit are implemented in software using the ACE ISA.
+For simplicity's sake, pseudocode is usually restricted to set parameters and does not use the `ace.exec` Forms A-C replacement instruction sequences.
 
-// NOTE: While we do not specify the exact internal format of a CC in a CR, we observe that it must contain all the data in a Initialization Input or in a SCC (in plaintext), in some order within the CRF. Therefore, we assume that this information can be first copied into the CR as is, and then any aditional information will be reconstructed at the end of the configuration or import operation. This applies also to threshold implementations, where for any information in multiple shares the input can initially be input into the first share.  In the worst case, only 32 bits of additional information may be needed to be able to process partial CRs and SCCs.
-
-The definitions of the algorithms also implicitly define the functions `SERIALIZE()` and `DESERIALIZE()` used in <<ACE-SCC-export>> and <<ACE-SCC-import>>.
+The Data Structures of the algorithms implicitly define the functions `SERIALIZE()` and `DESERIALIZE()` used in <<ACE-SCC-export>> and <<ACE-SCC-import>>.
 These functions do not need to be explicitly implemented as functions that convert the internal memory in the CRF into a structured byte array, called
-`content[]` in the aforementioned pseudocodes, that satisfies the architected definition of the _Serialized Content_ for each algorithm, and viceversa.
-Instead, the output of `SERIALIZE()` and the input of `DESERIALIZE()` can just be an _interpretation_ of the internal memory in the CRF as if it were the SCC plaintext, such that any change in one (except for the absent fields) is reflected in the other, but does not have to be written explicitly in the internal memory of the CRF.
+`content[]` in the aforementioned pseudocodes, that satisfies the architected definition of the _Serialized Content_ for each algorithm, and viceversa, but of course implementations are free to do so.
+`content[]` is a _view_ of (certain fields of the) the content of a CRF as if it were in the SCC plaintext format, such that any change in one (except for the absent fields) is reflected in the other, and converted on the fly by the microarchitecture:
+For instance, consecutive bytes of `content[]` may not be adjacent in the internal memory of the CR, and one byte may correspond to multiple bytes.
+
+In what follows, “state _name_” refers to the state with number _ace_state_name_ in <<ACE-state-constants>>.
 
 [[ACE-generic-rules]]
 ==== Generic Rules
 
+Modes of operation:::
 Most modes of operations have a generic specification, i.e., the specification depends only on certain parameters of the underlying primitives, such as the block width `b` of a block cipher or key length `k` of a symmetric cipher.
 Other modes, whose description depends on other parameters or special properties of the underlying primitives, are specified separately.
 
+States:::
 If the number of states of the algorithm is at most 16 (including _initial_, _completed_, and _invalidated_), the `state` of the metadata is used to store this value.
 Otherwise, the specification of the algorithm must include a suitable field in the content section of the CC/SCC.
 
+Invalid Inputs and Operations, CR Invalidation:::
++
+--
 If an invalid input is provided to any ACE instruction, or an instruction that is not explicitly allowed in a given state is executed, while processing the algorithm in CR, say, `Kn`, the `Kn` is *invalidated*, namely, the following happens:
 (((ACE, algorithm, invalid state)))
 (((Cryptographic Register, invalidated)))
@@ -1830,17 +1861,27 @@ If an invalid input is provided to any ACE instruction, or an instruction that i
 * The current instruction is terminated.
 
 In state _completed_, only `ace.init`, `ace.export`, `ace.import`, `ace.clear`, and `ace.error` are permitted.
+--
++
 
-We recall that operations performed by `ace.exec` or `ace.state`—as defined by the algorithm-specific rules—are uninterruptible. This includes processing of arbitrarily long vector inputs when all work is purely internal to ACE and in particular without access to external memory (e.g., encryption, decryption, hashing, or point multiplication). Because these operations may proceed independently of the CPU core, a hart implementation may require context-switching software to wait when accessing a CR that is being written. These instructions are therefore atomic and non-preemptible.
+Interruptibility:::
++
+--
+Operations performed by `ace.state` are uninterruptible.
 
-In what follows, “state _name_” refers to the state with number _ace_state_name_ in <<ACE-state-constants>>.
+For the operations performed by `ace.exec`, their actions on the basic processing blocks are uninterruptible.
+If the operation admits inputs which are a multiple of this basic processing block, then each block is processed uninterruptibly but the instruction can be interrupted between blocks-as permitted by the implementation. In this case `acestart` is used to determine the point of resumption of the instruction.
 
-// The rules from <<ACE-ECB-mode>> to  <<ACE-hash-functions>> can be instantiated, like the modes that they describe, with a variety of block ciphers and polynomials for GHASH- or POLYVAL-like hashes, where only the block and key sizes are needed to get a full specification.
-// On the other hand, the specifications from <<ACE-hash-functions>> to <<ACE-Ascon>> are in general heavily primitive dependent.
+An implementation may require context-switching software to wait when accessing a CR that is being written to.
+--
++
+
+//
 
 [[ACE-rules-threshold-implementations]]
 ==== Rules for Threshold implementations
 
+Single-Share Key Export:::
 Any CC with its algorithms implemented as threshold implementation will always initialize, import and export _all_ its keys and secrets as _single_, _reconstructed_ _shares_.
 The Configuration and SCC Formats will be the same as for the non-threshold implementation variants of the same algorithm, with the only difference being the value of the Side Channel Protection bits in the metadata.
 For the purpose of architecture specification, all values are also always represented as a single share in this document.
@@ -1850,22 +1891,29 @@ Threshold implementations are simply implementation variants of the exact same a
 NOTE: This assumes that reconstructing a key or re-randomizing it are fast operations, such as ``xor``s with random values.
 This in turn implies that ACE execution unit must have access to a source of randomness, or at least a PRNG that is seeded at hardware boot.
 
-This ensures not only the compactness of a SCC, but also that the key can be ported across architectures.
+NOTE: This ensures not only the compactness of a SCC, but also that the key can be ported across architectures.
 In fact, some threshold implementations may have a different number of shares even if they claim the same order of side-channel protection.
 
 [[ACE-rules-system-keys]]
 ==== Rules for System Keys
 
+Representation of System Keys in the Data Strctures:::
++
+--
 System keys that are referred to by an index will cause the following changes in all the algorithms described in what follows:
 
 . In the initialization input and in the SCC, the key/main key field will contain the index of the key in the SKT in place of a key value.
 . This field is always a 64-bit value, even if the key itself is larger. This saves space in the SCC and allows for faster export and import operations.
 . For algorithms that require more than one key, such as XEX/XTS, ALL the keys are referred to by a single index, i.e., a single 64-bit value in the initialization input and the SCC.
 . Accordingly, the SCC generation functions will support System Keys by producing and reading the shorter fields with the indexes in place of the longer fields that would be required when the key values are explicitly provided.
+--
++
 
-NOTE: Internally, the ACE unit can either directly use the value from the SKT, or copy it to the internal state of the CR.
+NOTE: Internally, the ACE unit may use the value from the SKT, or copy it to the internal state of the CR.
 The architecture does not restrict the choice of the implementation.
 On the other hand, keys generated from a system block, using a custom “recipe”, are always represented by their values and once generated have the exact same behavior as any other key that does not come from the SKT.
+
+//
 
 [[ACE-ECB-mode]]
 ==== Electronic Codebook Modes (Direct Encryption/Decryption)
@@ -3352,8 +3400,7 @@ Furthermore, it protects the key from other SW environments that may be crossed 
 [[ACE-V-dependency]]
 === Dependency on the V Extension
 
-While ACE can be implemented with the V extension as a requirement, ACE actually depends on a minimal subset of the RISC-V Vector Extension (RVV), which we call RVV-mini, for correct operation.
-Required features include:
+While ACE can be implemented when the full V extension is present, ACE actually depends on a minimal subset of the RISC-V Vector Extension (RVV), which we call RVV-mini, for correct operation. Required features include:
 (((RVV-mini)))
 
 * Support for vector registers sufficiently wide to host the block-wise operations required by the algorithms supported by ACE;
@@ -3367,6 +3414,7 @@ Moreover,
 * more complex operations for some corner-case cryptographic algorithms may be performed in GPRs, with results then inserted in vector registers via `vins`/`vext`.
 
 RVV-mini must maintain full opcode compatibility with RVV to guarantee that ACE code runs unmodified on full RVV implementations.
+
 
 // ///////////////////////////////////////////////////////////////////////////////////////////
 

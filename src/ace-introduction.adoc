@@ -5,19 +5,21 @@
 
 The _Atomic Cryptography Extension_ (ACE) provides an interface to high-performance cryptographic operations without giving software visibility into the keys.
 (((design, high performance)))
-The design of ACE has been motivated by use cases such as key and identity management, content protection (including local LLM decryption), link and storage encryption, and attestation.
+Its development has been motivated by use cases such as key and identity management, content protection (including local LLM decryption), link and storage encryption, and attestation.
 
 === Features
 
 ACE provides the following features:
 
-* ACE protects secret information such as keys from exposure to software by performing cryptographic operations atomically—for example, a complete AES block encryption/decryption or a full hash round sequence between message injections. This is in contrast to common round-based ISAs that expose the keys that must be added between cipher rounds or MAC algorithm stages.
+* ACE performs cryptographic operations atomically, such as a full AES block encryption/decryption or a complete hash round sequence between message injections.
+  This atomicity enables the use of keys held in _Cryptographic Registers_ (CRs), architectural containers that conceal their contents, without exposing the keys to software.
+  This design contrasts with typical round-based ISAs, which require keys to be explicitly supplied between cipher rounds or MAC stages.
 * ACE provides a unified interface to multiple cryptographic primitives, avoiding the need for separate instructions per primitive.
 ** Supporting only cryptographic primitives is insufficient for modes such as AES-GCM-SIV, XTS, and OCB, because leakage of derived keys or intermediate values can compromise their security. Hence, ACE also supplies modes of operation and secure key derivation.
 ** ACE also defines how CTR, GCM, CMAC algorithms can be exposed through its interface, and not only instantiated with AES-128/256, but also with other block ciphers like, for instance, SM4.  Hash functions are architected as well.
 ** The same interface can support SCA-resistant implementations of the algorithms.
 ** In fact, it can also be used to provide access to public-key and post-quantum algorithms.
-* To prevent misuse, ACE associates the secret information with metadata that restricts the usafe of the former to a specific algorithm and can optionally constrain usage by process/VM, security state, and other policies. ACE then treats the metadata and the secret information as a single entity, called a Cryptographic Context (CC).
+* To prevent misuse, ACE associates the secret information with metadata that restricts the usafe of the former to a specific algorithm and can optionally constrain usage by process/VM, security state, and other policies. ACE then treats the metadata and the secret information as a single entity, called a Cryptographic Context (CC). A CC, not only the key material, is the information contained in a CR.
 * CCs can be created and provisioned by trusted software or hardware entities, or they can be supplied by user software to itself to limit key exposure and take advantage of increased performance or of side-channel-protected implementations.
 * ACE scales from embedded to server cores with a unified ISA and ABI.
 * ACE is compatible with VM migration.
@@ -48,10 +50,13 @@ Therefore, they are better suited to handle these protocols, their data structur
 ACE complements existing SW vulnerability exploitation countermeasures and process isolation, but cannot replace them.
 Furthermore, in certain modes, such as in counter-mode encryption, the same method enables both encryption and decryption, potentially enabling misuse by malicious processes. This type of risk cannot be mitigated by ACE.
 
-[[ACE-outline]]
-=== Outline
+// [[ACE-outline]]
+// === Outline
+//
+// The remainder of this document describes the extension in full detail.
 
-The remainder of this document describes the extension in full detail.
+
+=== Open Discussion Points
 
 [WARNING]
 We could have used `L` in this document instead of `ACE` and `ace`, but we haven't changed it yet since a different `misa` bit and a different letter may ultimately be allocated to the extension.
@@ -63,11 +68,6 @@ We could have used `L` in this document instead of `ACE` and `ace`, but we haven
 *Discussion point:* Everything in this specification is still valid if the number of CRs is reduced to, say, 8 or 16.
 The important point here is that this number is fixed and architectural.
 Immediate values to refer to CCs are still 5 bits long because the same field can also be used to refer to a GPR, but the only valid values for the CR number are 0 to 7.
-
-[WARNING]
-*Discussion point:* In some algorithms we can have `VL*SEW` an integer multiple of the basic processing block size `b`.
-Currently `ace.exec` at algorithm states are uninterruptible.
-Can we allow them to be interruptible/resumable when they perform an operation multiple times on a vector because `b` > `VL*SEW`, and use `vstart` (same if they use an input/output buffer that is a integer multiple of `b` larger than `b`).
 
 [WARNING]
 *Discussion point:* The question of whether resumption of import operations can be supported is still open (cf. <<ACE-incomplete-contexts>> and <<ACE-comparison-of-interruption>>).
