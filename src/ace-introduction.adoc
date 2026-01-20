@@ -11,19 +11,29 @@ Its development has been motivated by use cases such as key and identity managem
 
 ACE provides the following features:
 
-* ACE performs cryptographic operations atomically, such as a full AES block encryption/decryption or a complete hash round sequence between message injections.
-  This atomicity enables the use of keys held in _Cryptographic Registers_ (CRs), architectural containers that conceal their contents, without exposing the keys to software.
-  This design contrasts with typical round-based ISAs, which require keys to be explicitly supplied between cipher rounds or MAC stages.
+* To prevent key misuse, ACE combines cryptographic secrets (e.g., key material) with metadata into an indivisible structure called a _Cryptographic Context_ (CC).
+Using the metadata, the architecture restricts the use of the secret material to a specific algorithm, and may optionally enforce usage constraints based on process, VM, security state, boot cycle, or other policies.
+
+* To create and use CCs, ACE introduces the concept of _Cryptographic Registers_ (CRs)–architectural containers that conceal secrets to software.
+A CC is created by writing metadata and secrets into a CR.
+
+* Instead of explicitly using key values, ACE instructions operate on CRs. Operations such as full AES block encryption/decryption or absorption of data blocks
+into a hash function are performed atomically.
+This way, assuming the primitive is secure, the secrets cannot be recovered from the input and output of the cryptographic operation.
+This contrasts with typical round-based ISAs, which require keys to be supplied between rounds or MAC stages: even if the key came from a hidden register, its value would be trivial to recover.
+
+* To enable CC reuse and support OS features like context switching, ACE provides a secure mechanism to store a CC to memory via authenticated encryption, producing a _Sealed Cryptographic Context_ (SCC). An SCC can be retrieved and reimported into a CR. If an SCC is passed to a process, the key is never exposed in that process’s memory. If an SCC is passed to a process by another software or hardware component, the key is never exposed in that process’s memory.
+
 * ACE provides a unified interface to multiple cryptographic primitives, avoiding the need for separate instructions per primitive.
-** Supporting only cryptographic primitives is insufficient for modes such as AES-GCM-SIV, XTS, and OCB, because leakage of derived keys or intermediate values can compromise their security. Hence, ACE also defines modes of operation and secure key derivation.
-** Beside XTS, OCB and GCM-SIV, ACE also defines modes CTR, GCM, CMAC, which not only can be instantiated not only with AES-128/256, but also with other block ciphers like, for instance, SM4.
+** Supporting only primitives is insufficient for modes like AES-GCM-SIV, XTS, and OCB, because leakage of derived keys or intermediate values can compromise security. Therefore, ACE also defines modes of operation and secure key derivation.
+** In addition to GCM-SIV, XTS, and OCB, ACE defines modes such as CTR, GCM, and CMAC. These can be instantiated not only with AES-128/256 but also with other block ciphers like SM4.
 ** Various hash functions are architected as well.
 ** The same interface can support SCA-resistant implementations of the algorithms.
 ** In fact, it can also be used to provide access to public-key and post-quantum algorithms.
 ** Not all these algorithms and primitives must be supported by an ACE implementation:
- A minimal subset and several optional extensions are also defined.
-* To prevent misuse, ACE associates the secret information with metadata that restricts the usafe of the former to a specific algorithm and can optionally constrain usage by process/VM, security state, and other policies. ACE then treats the metadata and the secret information as a single entity, called a Cryptographic Context (CC). A CC, not just the key material, is the information contained in a CR.
-* CCs can be created and provisioned by trusted software or hardware entities, or they can be supplied by user software to itself to limit key exposure and take advantage of increased performance or of side-channel-protected implementations.
+ A minimal subset and several optional extensions are defined.
+
+* Software can configure their own CCs to limit key exposure and leverage increased performance or side-channel-protected implementations.
 * ACE scales from embedded to server cores with a unified ISA and ABI.
 * ACE is compatible with VM migration.
 (((design, scalable)))
