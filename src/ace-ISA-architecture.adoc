@@ -879,8 +879,10 @@ When an interrupted init, export or import or operation is resumed, it will resu
 
 Anything before the first `UNINTERRUPTIBLE_BLOCK_START` consists only of type declarations and possibly information that is trivial to reconstruct.
 
-`SERIALIZE()` and `DESERIALIZE()` map the content of a CR into a `content` byte array to be encrypted for export (as defined in <<ACE-algorithms>>) and map such a decrypted byte array back into a CR.
-`content` is a virtual representation; its consecutive bytes do not imply physical contiguity within the CR, nor there is a 1-1 correspondence between its bytes and those in the CR.  For instance, keys may be split across shares in a threshold implementation.   However, any read or write to `content` must correctly map to the underlying representation. A write followed by a read must return the original data, and a read followed by a write must restore the identical microarchitectural state.
+The Data Structures of the algorithms (such as those defined in <<ACE-algorithms>>) also define the `content[]` array in the pseudocode.
+`content[]` offers a _view_ of (certain fields of the) the content of a CR as if it were serialized as in the plaintext format of the content in an SCC, such that any change in one, except for the non-serialized fields, is reflected in the other.
+As such, it is a virtual representation; its consecutive bytes do not imply physical contiguity within the CR, nor there is a 1-1 correspondence between its bytes and those in the CR.  For instance, keys may be split across shares in a threshold implementation, so that one key byte in `content[]` corresponds to two or three non-contiguous bytes in the CR.
+However, any read or write to `content` must reversibly map to the underlying representation. A write followed by a read must return the original data, and a read followed by a write must restore an equivalent microarchitectural state.
 
 [[ACE-init]]
 ==== Initialization
@@ -916,9 +918,8 @@ foreach(i from 0 to num_blocks - 1) {
 
 // if preempted here, `acestart` will be z
 UNINTERRUPTIBLE_BLOCK_START
-|   - Now the content can be deserialized.
-|   - This includes computing any derived values not given in the initialization
-|   - input, as well as creating shares for threshold implementations.
+|   - Now the content can be deserialized, for instance keys may be converted into shares.
+|   - Any derived values not given in the initialization input will be computed here
 UNINTERRUPTIBLE_BLOCK_END
 ----
 
@@ -985,7 +986,6 @@ UNINTERRUPTIBLE_BLOCK_START
 |   - must be computed at this point. Starting with the following POLYVAL operation
 |   - content will refer to the resulting data as architected for non-threshold
 |   - implementations.
-|   content = SERIALIZE();
 |
 |   tmp = POLYVAL(Kauth, 64'b0 @ metadata @ content);
 |   SIV = AESE(Kenc, 1'b0 @ (tmp[126:0] xor (31'b0 @ N)))) >> 32;
@@ -1080,7 +1080,6 @@ UNINTERRUPTIBLE_BLOCK_START
 |   - Now the content can be deserialized.
 |   - This includes computing any derived values not saved as part of the SCC,
 |   - as well as creating shares for threshold implementations.
-|   DESERIALIZE(content)
 UNINTERRUPTIBLE_BLOCK_END
 ----
 
@@ -1859,7 +1858,7 @@ The supporting instructions themselves must be uninterruptible.
 
 // ///////////////////////////////////////////////////////////////////////////////////////////
 
-[#ACE-algorithms]
+[[ACE-algorithms]]
 === Algorithm-Specific Data Formats and Instruction Semantics
 
 In this chapter we specify the behavior of Cryptographic Contexts for various cryptographic algorithms.
@@ -1917,12 +1916,6 @@ Regarding `ace.exec`, only a single form of `ace.exec` may be allowed (cf.{nbsp}
 We provide pseudocode to clarify how the algorithms supported by an ACE unit are implemented in software using the ACE ISA.
 For simplicity's sake, pseudocode is usually restricted to set parameters and does not use the `ace.exec` Forms A-C replacement instruction sequences.
 Pseudocode examples are naturally non-normative.
-
-The Data Structures of the algorithms implicitly define the functions `SERIALIZE()` and `DESERIALIZE()` used in <<ACE-SCC-export>> and <<ACE-SCC-import>>.
-These functions do not need to be explicitly implemented as functions that convert the internal memory in the CRF into a structured byte array, called
-`content[]` in the aforementioned pseudocodes, that satisfies the architected definition of the _Serialized Content_ for each algorithm, and viceversa, but of course implementations are free to do so.
-`content[]` is a _view_ of (certain fields of the) the content of a CRF as if it were in the SCC plaintext format, such that any change in one (except for the absent fields) is reflected in the other, and converted on the fly by the microarchitecture:
-For instance, consecutive bytes of `content[]` may not be adjacent in the internal memory of the CR, and one byte may correspond to multiple bytes.
 
 The following table defines the state numbers used by the algorithms defined in this specification.
 
