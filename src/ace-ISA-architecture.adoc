@@ -802,6 +802,10 @@ A write to `maceBootSecret{i}` set Bits [(_i_+1) XLEN - 1 : _i_ XLEN] of the “
 ACE reuses `(v)satp`.ASID and `hgatp`.VMID to optionally restrict the usage of CCs to a specific process or virtual machine.
 In the metadata section, `ASID` and `VMID` are always zero padded to the maximal lengths of 16 and 14 bits, respectively.
 
+[WARNING]
+If the H extension is not present, `hgatp` is also not present.
+We propose to add this register also when ACE is provided in order to allow M-mode to be able to separate a main OS from a TEE, for instance, on devices that implement TEEs using Supervisor Domains or other mechanisms based on PMP/Smepmp, Sv and Smmpt-see cite:[RISC-V-SPMP] and cite:[RISC-V-SD].
+
 NOTE: The software in each World/Supervisor Domain is normally responsible to generate or obtain their own keys, and if a process (applet) in one World/Supervisor Domain is responsible to provide keys to other Worlds/Supervisor Domains, it is the responsibility of the M-mode formware to perform an appropriate `ace.import`/RCSK switch/`ace.export` sequence.
 
 [[ACE-format-configuration]]
@@ -1625,7 +1629,7 @@ On RV64, the instruction works as follows:
 * `Xs`[15:0] and `Xs`[25:20] must be zero
 * `Xs`[19:16] and `Xs`[63:32] must have the same format as the corresponding bits of the metadata.
 * `Xs`[17:16] can be used to turn on or increase the level of the side-channel protection of the algorithm in the CC, if the microarchitecture supports the corresponding implementation. The levels are defined in <<ACE-SC-protection-levels>>. Downgrading side-channel protection is not permitted, and attempting to do so will result in error _ace_err_invalid_ (cf.{nbsp}<<ACE-error-codes>>).
-* `Xs`[19:18] can be used to deactivate encryption or decryption in a CC that allows both, otherwise it is ignored. Writing to them cannot be used to deactivate both encryption and decryption simultaneously, nor to activate encryption, resp., decryption in a CC that did not allow it.  In particular, if `m`[19:18] = `2`b11`, then this case at least one bit of `Xs`[19:18] must be set to 1. In all other cases, either `Xs`[19:18] = `m`[19:18] or zero, in which case it is ignored.
+* `Xs`[19:18] can be used to deactivate encryption or decryption in a CC that allows both, otherwise it is ignored. Writing to them cannot be used to deactivate both encryption and decryption simultaneously, nor to activate encryption, resp., decryption in a CC that did not allow it.  In particular, if `m`[19:18] = `2'b11`, then this case at least one bit of `Xs`[19:18] must be set to 1. In all other cases, either `Xs`[19:18] = `m`[19:18] or zero, in which case it is ignored.
 * A zero in any of the six bits `Xs`[31:26] means that the corresponding policy is _not_ changed.
 * A one in any of the four bits `Xs`[29:26] means that usage by the corresponding mode is forbidden, and the corresponding bit in the metadata of the destination CC is set to 1.
 * If `Xs`[30] is set and `m`[30] is NOT set, then UC_Policy_3, i.e., `m`[47:32], is set to `Xs`[47:32].
@@ -1644,6 +1648,19 @@ Possibly modifies state: *YES*. +
 Usage-controlled: *YES*. +
 Trappable: *NO*. +
 Interruptible: *NO*.
+
+//
+
+[NOTE]
+====
+This instruction enables several practical use cases:
+
+*   Enabling side-channel protection when supported by the microarchitecture, even if the original CC was not configured with it.
+*   Allowing privileged code to give a CC to several processes by first cloning it and setting UC_Policy_3 in each copy to the target process's `ASID`, thereby restricting usage of this CC only to authorized processes.
+*   Similarly, enabling privileged code to split a CC capable of both encryption and decryption into two CCs, one only capable of encryption and the other only capable of decryption, thereby creating a one-way channel between processes.
+
+The ability to perform such customizations saves both time and computational resources by avoiding additional round-trips to trusted environments.
+====
 
 //
 
