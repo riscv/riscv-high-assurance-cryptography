@@ -237,13 +237,14 @@ The metadata section is used as the header of the data formats used in CR initia
 |   [0:0] |   1  | Format                 | Value is 0 for the current metadata format. +
 Future format will have a 1 in this position and may be longer than 64 bits.
 |   [4:1] |   4  | Locality               | A field which is either all ones (15) or an index into the Locality Secrets Table.
-|  [13:5] |   9  | Algorithm              | Algorithm (such as primitive or mode). 0 means the CC is invalid.
-| [15:14] |   2  | SC_Protection          | Level of Side Channel Protection, encoded as per <<ACE-SC-protection-levels>>.
-| [17:16] |   2  | Direction_Policy       | Determines whether the CC may be used for encryption (bit 12 set), decryption (bit 13 set), or both (bits 12 and 13 set). Valid only for encryption/decryption primitives or modes, and ignored, for instance, for hash functions.
-| [19:18] |   2  | Key_Type               | Key given by explicit value / System Key (index) / Internally generated.
-| [23:20] |   4  | State_Number (also Direction) | Encoding the current state of the state machine of the algorithm as a number. The value must be zero in the initialization data. If the algorithm encoded in the CC has at most 16 states (including _initial_, _completed_, and _invalidated_, cf.{nbsp}<<ACE-state-constants>>), then this number is stored in this field, otherwise an algorithm-specific representation is used in the content, and this field only admits the values 0 (initial), 14 (invalidated), 15 (completed) or 1 (any other operational state). The values must conform to <<ACE-state-constants>>.
-| [25:24] |   2  | Reserved               | Zero.
-| [29:26] |   4  | UC_Policy_1            | “UC Policy” means “Usage Control Policy”.  Disallow the _usage_ of this CC in User, (Virtual) Supervisor, Hypervisor, or M-mode if bit 26, 27, 28, or 29 is set.
+|   [5:5] |   1  | Reserved               | Zero.
+|  [14:6] |   9  | Algorithm              | Algorithm (such as primitive or mode). 0 means the CC is invalid.
+| [15:15] |   1  | Reserved               | Zero.
+| [17:16] |   2  | SC_Protection          | Level of Side Channel Protection, encoded as per <<ACE-SC-protection-levels>>.
+| [19:18] |   2  | Direction_Policy       | Determines whether the CC may be used for encryption (bit 12 set), decryption (bit 13 set), or both (bits 12 and 13 set). Valid only for encryption/decryption primitives or modes, and ignored, for instance, for hash functions.
+| [21:20] |   2  | Key_Type               | Key given by explicit value / System Key (index) / Internally generated.
+| [25:22] |   4  | State_Number (also Direction) | Encoding the current state of the state machine of the algorithm as a number. The value must be zero in the initialization data. If the algorithm encoded in the CC has at most 16 states (including _initial_, _completed_, and _invalidated_, cf.{nbsp}<<ACE-state-constants>>), then this number is stored in this field, otherwise an algorithm-specific representation is used in the content, and this field only admits the values 0 (initial), 14 (invalidated), 15 (completed) or 1 (any other operational state). The values must conform to <<ACE-state-constants>>.
+| [29:26] |   4  | UC_Policy_1            | “UC Policy” means “Usage Control Policy”. If bit 26, 27, 28, resp. 29 is set, it disallows the _usage_ of this CC in User, (Virtual) Supervisor, Hypervisor, resp. M-mode .
 | [31:30] |   2  | UC_Policy_2            | If bit 30, respectively, 31, is set, then restrict the usage by `ASID`, respectively, `VMID`. Restrictions by `ASID` are ignored if in S-mode or higher. Restrictions by `VMID` are ignored if in H- or M-mode.
 | [47:32] |  16  | UC_Policy_3            | Zero if bit 30 unset, else `ASID` to enforce.
 | [61:48] |  14  | UC_Policy_4            | Zero if bit 31 unset, else `VMID` to enforce.
@@ -1621,15 +1622,16 @@ This instruction can be used to:
 Let `m` be the metadata field of the CC in the destination CR. +
 On RV64, the instruction works as follows:
 
-* Bits [13:0] and [25:19] of the input register `Xs` are ignored.
-* Bits [15:14], [17:16] and [63:32] of the input register `Xs` have the same format as the corresponding bits of the metadata.
-* Bits [15:14] can be used to turn on or increase the level of the side-channel protection of the algorithm in the CC, if the microarchitecture supports the corresponding implementation. The levels are defined in <<ACE-SC-protection-levels>>. Downgrading side-channel protection is not permitted, and attempting to do so will result in error _ace_err_invalid_ (cf.{nbsp}<<ACE-error-codes>>).
-* Bits [17:16] can be used to deactivate encryption or decryption in a CC that allows both. Writing to them cannot be used to deactivate both encryption and decryption simultaneously, nor to activate encryption, resp., decryption in a CC that did not allow it.
-* A zero in any of the six bits `Xs`[31:26] means that the corresponding policy is not changed.
+* `Xs`[15:0] and `Xs`[25:20] must be zero
+* `Xs`[19:16] and `Xs`[63:32] must have the same format as the corresponding bits of the metadata.
+* `Xs`[17:16] can be used to turn on or increase the level of the side-channel protection of the algorithm in the CC, if the microarchitecture supports the corresponding implementation. The levels are defined in <<ACE-SC-protection-levels>>. Downgrading side-channel protection is not permitted, and attempting to do so will result in error _ace_err_invalid_ (cf.{nbsp}<<ACE-error-codes>>).
+* `Xs`[19:18] can be used to deactivate encryption or decryption in a CC that allows both, otherwise it is ignored. Writing to them cannot be used to deactivate both encryption and decryption simultaneously, nor to activate encryption, resp., decryption in a CC that did not allow it.  In particular, if `m`[19:18] = `2`b11`, then this case at least one bit of `Xs`[19:18] must be set to 1. In all other cases, either `Xs`[19:18] = `m`[19:18] or zero, in which case it is ignored.
+* A zero in any of the six bits `Xs`[31:26] means that the corresponding policy is _not_ changed.
 * A one in any of the four bits `Xs`[29:26] means that usage by the corresponding mode is forbidden, and the corresponding bit in the metadata of the destination CC is set to 1.
 * If `Xs`[30] is set and `m`[30] is NOT set, then UC_Policy_3, i.e., `m`[47:32], is set to `Xs`[47:32].
 * If `Xs`[31] is set and `m`[31] is NOT set, then UC_Policy_4, i.e., `m`[63:48], is set to `Xs`[63:48].
-* If `Xs`[30] and `m`[30] are both set and `Xs`[47:32] != `m`[47:32], or if `Xs`[31] and `m`[31] are both set and `Xs`[63:48] != `m`[63:48], then `aceerror` is set to ace_error_invalid.
+* If `Xs`[30] and `m`[30] are both set and `Xs`[47:32] != `m`[47:32], then `aceerror` is set to ace_error_invalid.
+* If `Xs`[31] and `m`[31] are both set and `Xs`[63:48] != `m`[63:48], then `aceerror` is set to ace_error_invalid.
 
 On RV32, `s` must be even and register pair `X[s]` and `X[s+1]` is read, where
 `X[s]` corresponds to bits [31:0] and `X[s+1]` to bits [63:32] of the metadata.
