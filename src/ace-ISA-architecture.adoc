@@ -756,7 +756,7 @@ The new privileged CSRs introduced by ACE are defined here.
 [[ACE-CSR-macercsk]]
 ===== `macercsk` group
 
-This is a group of M-Mode WARZ XLEN-bit CSRs.
+This is a per-hart group of M-Mode WARZ XLEN-bit CSRs.
 
 Eight CSRs may be defined in RV32 and four in RV64 to configure `macercsk`.
 (((CSR, `macercsk`)))
@@ -775,7 +775,7 @@ all receiving end points, whether they are the M-mode FW of another trusted devi
 
 ===== `maceOSSecret` group
 
-This is a group of M-Mode WARZ XLEN-bit CSRs.
+This is a per-hart group of M-Mode WARZ XLEN-bit CSRs.
 
 CSRs `maceOSSecret0` and `maceOSSecret1`, are used to configure the "OSSecret" Locality (cf.{nbsp}<<ACE-Localities>>) in RV64, to which RV32 adds `maceOSSecret2` and `maceOSSecret3`.
 (((CSR, `maceOSSecret*`)))
@@ -785,7 +785,7 @@ A write to `maceOSSecret{i}` set Bits [(_i_+1) XLEN - 1 : _i_ XLEN] of the "OSSe
 
 ===== `maceBootSecret` group
 
-This is a group of M-Mode WARZ XLEN-bit CSRs.
+This is a per-hart group of M-Mode WARZ XLEN-bit CSRs.
 
 CSRs `maceBootSecret0` and `maceBootSecret1`, are used to configure the “BootSecret” Locality (cf.{nbsp}<<ACE-Localities>>) in RV64, to which RV32 adds `maceBootSecret2` and `maceBootSecret3`.
 (((CSR, `maceBootSecret*`)))
@@ -803,8 +803,11 @@ ACE reuses `(v)satp`.ASID and `hgatp`.VMID to optionally restrict the usage of C
 In the metadata section, `ASID` and `VMID` are always zero padded to the maximal lengths of 16 and 14 bits, respectively.
 
 [WARNING]
-If the H extension is not present, `hgatp` is also not present.
-We propose to add this register also when ACE is provided in order to allow M-mode to be able to separate a main OS from a TEE, for instance, on devices that implement TEEs using Supervisor Domains or other mechanisms based on PMP/Smepmp, Sv and Smmpt-see cite:[RISC-V-SPMP] and cite:[RISC-V-SD].
+If the Hypervisor extension is not present, `hgatp` is also not present.
+We propose to define the `VMID` field of this register also when ACE is provided in order to allow M-mode to be able to separate a main OS from a TEE, for instance, on devices that implement TEEs using mechanisms based on Sv, PMP/Smepmp cite:[RISCV-ISA-Priv].
+Regarding Supervisor Domains (SDs) cite:[RISC-V-SD] and Worlds cite:[RISC-V-Worlds] we observe that there is no room in the current metadata format for adding filtering by `SDID` (`mmtp.SDID`) and WID.
+This is not an issue since we recommend to use separation by RCTK in combination with SDs or Worlds, which does not prevent a program running in a SD or World to provide a CC to a program running in a different SD or World. This is done by by configuring a CR and then relinquishing control to M-mode to export the CR with the RCTK used by the target software.
+The same holds for any intended separation by hart ID (`mhartid`), which is facilitated by the fact that the RCTK CSR group is per-hart.
 
 NOTE: The software in each World/Supervisor Domain is normally responsible to generate or obtain their own keys, and if a process (applet) in one World/Supervisor Domain is responsible to provide keys to other Worlds/Supervisor Domains, it is the responsibility of the M-mode formware to perform an appropriate `ace.import`/RCSK switch/`ace.export` sequence.
 
@@ -1543,7 +1546,7 @@ Description::
 `ace.state` and `ace.dir` are the same instruction. +
 `Ks` or `K[Xs]` is the CR whose state is to be set. +
 The `#immed` operand is a constant from the set of admissible values defined for each algorithm, used to manage the algorithm's internal state machine when additional states are required. +
-`Xs` is a GPR that is either `X0` or contains an optional additional parameter for the state machine. +
+`Xs` is a GPR that is either `X0` or contains an optional additional parameter for the state machine.
 The new state number, if allowed, is written into the State_Number field of the metadata, unless the algorithm requires more than 16 states, in which case an ad-hoc field must be defined in the context (for both internal representation and SCCs).
 
 Properties::
@@ -1581,6 +1584,8 @@ Algorithm is ready to process.
 
 Algorithms that significantly differ from those we describe in <<ACE-algorithms>> and therefore cannot share the same software for their usage,
 may reuse the same values in [1..12] with new constant mnemonics to define their own states.
+
+It is always allowed to repeat `ace.state` instructions to the current state, provided that the correct form of the instruction is used.
 
 [[ACE-instruction-restrict]]
 ==== ace.restrict/ace.harden
@@ -1876,16 +1881,15 @@ This includes:
 . A complete list of the *allowed state transitions*, including the conditions under which each transition is allowed.
 . The enumeration of the *allowed instructions* at each state and their *behavior*.
 
+[WARNING]
+When defining an algorithm, the structure and size of the content of the Initialization Input and of the serialized content *must* be determinable solely from the Algorithm and Key_Type fields in the metadata.
 
-When defining an algorithm, it must be ensured the structure of the content section for the Initialization Input and its size
-as well as The serialized content's structure and size can be entirely determined by the Algorithm and Key_Type fields within the metadata, and no other field.
+The instructions allowed at each state of an algorithm are usually only `ace.exec` and `ace.state`, but this is not mandated.
+Regarding `ace.exec`, only a single form of `ace.exec` may be allowed (cf.{nbsp}<<ACE-instruction-exec>>), together with a suitable replacement sequence as described in <<ACE-replacement-instructions>>.
 
-Regarding the allowed instructions, these are usually only `ace.exec` and `ace.state`.
-In particular, only a single form of `ace.exec` may be allowed (cf.{nbsp}<<ACE-instruction-exec>>), together with a suitable replacement sequence
-as described in <<ACE-replacement-instructions>>.
-
-We also add pseudocode to clarify how the algorithms supported by an ACE unit are implemented in software using the ACE ISA.
+We provide pseudocode to clarify how the algorithms supported by an ACE unit are implemented in software using the ACE ISA.
 For simplicity's sake, pseudocode is usually restricted to set parameters and does not use the `ace.exec` Forms A-C replacement instruction sequences.
+Pseudocode examples are naturally non-normative.
 
 The Data Structures of the algorithms implicitly define the functions `SERIALIZE()` and `DESERIALIZE()` used in <<ACE-SCC-export>> and <<ACE-SCC-import>>.
 These functions do not need to be explicitly implemented as functions that convert the internal memory in the CRF into a structured byte array, called
