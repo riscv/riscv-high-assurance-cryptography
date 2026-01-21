@@ -580,6 +580,64 @@ Initial
 
 The new unprivileged CSRs introduced by ACE are defined here.
 
+[[ACE-CSR-ace-error]]
+===== `aceerror`
+
+The 8-bit `aceerror` CSR records the error code from the most recent ACE instruction.
+Reading it may stall the hart until the operation completes.
+It is writable for context switching.
+
+Error codes 0–127 are reserved for RVI, and codes 128–255 are reserved for custom algorithms.
+The standard error codes are:
+
+[[ACE-error-codes]]
+.Error codes and their meanings
+[float="center",align="center",width="100%",cols="^6%,<24%,<70%",options="header"]
+|===
+|Value | Mnemonic                | Examples (((ACE, error codes)))
+|  0   | ace_err_ok              | No error.
+|  1   | ace_err_authentication  | Authentication failure (`ace.import` or `ace.exec`).
+|  2   | ace_err_privilege       | Access control failure (`ace.exec`, `ace.state`, etc.).
+|  3   | ace_err_invalid         | Invalid input/operation. +
+Examples:
+invalid metadata passed to `ace.init` is invalid;
+encryption, resp., decryption is requested from a CC only configured for decryption, resp., encryption;
+a Form of `ace.exec` that is not permitted in the current algorithm state is used;
+the requested change of state in `ace.state` is not permitted;
+the change in usage policies in `ace.restrict` is not permitted;
+software tried to use an incomplete CC in a CR as a source in an `ace.exec`, `ace.state`, `ace.input`, `ace.output`, `ace.clone`, `ace.derive`, `ace.harden`, or `ace.restrict` operation.
+|  4   | ace_err_unimplemented   | Algorithm or algorithm variant not implemented.
+|  5   | ace_err_memory          | Insufficient CRF memory to perform `ace.init`, `ace.exec`, `ace.clone`, or `ace.derive`.
+|  6   | ace_err_unconfigured    | Usage of unconfigured CR in `ace.exec`, `ace.state`, `ace.input`, `ace.output`, `ace.clone`, `ace.derive`, or `ace.harden`/`ace.restrict`. Can trigger lazy reload.
+|===
+
+[[norm:ace_exc_priority]]
+.ACE error priority in decreasing priority order.
+[%autowidth,float="center",align="center",cols="<,>,<",options="header",]
+|===
+.>|Priority   .>|Exception +
+Code        .>|Description
+.>|_Highest_  |6               |Unconfigured CR
+|           .>|5             .>|Insufficient CRF memory
+|           .>|3             .>|Invalid input/output operation with `ace.exec`, `ace.state`, +
+                                `ace.input`, `ace.output`, `ace.clone`, `ace.derive`, +
+                                `ace.harden`, or `ace.restrict` (used incomplete CC as source)
+|           .>|3             .>|Invalid input/output operation with `ace.init` (invalid metadata)
+|           .>|2, 1          .>|Access Control Failure or authentication failure with `ace.import`
+|           .>|1             .>|Authentication failure with `ace.exec`
+|           .>|3             .>|Invalid input/output operation with `ace.exec` +
+                                (form not allowed in current algorithm), +
+                                `ace.state` (state change not allowed), +
+                                or `ace.restrict` (change of usage policy is not allowed)
+|           .>|4             .>|Algorithm or algorithm variant not implemented.
+.>|_Lowest_ .>|0             .>|No error
+|===
+
+If executing an `ace.init`, `ace.import`, `ace.export`, `ace.input`, or `ace.output` triggers a
+trap, as specified in the privileged architecture, `aceerror` remains unchanged.
+
+//
+
 ===== `acecrstatus`
 
 The CSR `acecrstatus` tracks the configuration and dirtiness of CRs on a per-CR basis, so that privileged context switching code needs to save only the dirty CRs, and restore only the configured ones, unless the latter are lazy-loaded:
@@ -638,62 +696,6 @@ Whether the ISE is active is encoded exclusively in ```*status```. The use of th
 If all CRs were either unconfigured or to be lazy-loaded, the ACES field would be set to **CLEAN** and not to **OFF**.
 
 //
-
-[[ACE-CSR-ace-error]]
-===== `aceerror`
-
-The 8-bit `aceerror` CSR records the error code from the most recent ACE instruction.
-Reading it may stall the hart until the operation completes.
-It is writable for context switching.
-
-Error codes 0–127 are reserved for RVI, and codes 128–255 are reserved for custom algorithms.
-The standard error codes are:
-
-[[ACE-error-codes]]
-.Error codes and their meanings
-[float="center",align="center",width="100%",cols="^6%,<24%,<70%",options="header"]
-|===
-|Value | Mnemonic                | Examples (((ACE, error codes)))
-|  0   | ace_err_ok              | No error.
-|  1   | ace_err_authentication  | Authentication failure (`ace.import` or `ace.exec`).
-|  2   | ace_err_privilege       | Access control failure (`ace.exec`, `ace.state`, etc.).
-|  3   | ace_err_invalid         | Invalid input/operation. +
-Examples:
-invalid metadata passed to `ace.init` is invalid;
-encryption, resp., decryption is requested from a CC only configured for decryption, resp., encryption;
-a Form of `ace.exec` that is not permitted in the current algorithm state is used;
-the requested change of state in `ace.state` is not permitted;
-the change in usage policies in `ace.restrict` is not permitted;
-software tried to use an incomplete CC in a CR as a source in an `ace.exec`, `ace.state`, `ace.input`, `ace.output`, `ace.clone`, `ace.derive`, `ace.harden`, or `ace.restrict` operation.
-|  4   | ace_err_unimplemented   | Algorithm or algorithm variant not implemented.
-|  5   | ace_err_memory          | Insufficient CRF memory to perform `ace.init`, `ace.exec`, `ace.clone`, or `ace.derive`.
-|  6   | ace_err_unconfigured    | Usage of unconfigured CR in `ace.exec`, `ace.state`, `ace.input`, `ace.output`, `ace.clone`, `ace.derive`, or `ace.harden`/`ace.restrict`. Can trigger lazy reload.
-|===
-
-[[norm:ace_exc_priority]]
-.ACE error priority in decreasing priority order.
-[%autowidth,float="center",align="center",cols="<,>,<",options="header",]
-|===
-.>|Priority   .>|Exception +
-Code        .>|Description
-.>|_Highest_  |6               |Unconfigured CR
-|           .>|5             .>|Insufficient CRF memory
-|           .>|3             .>|Invalid input/output operation with `ace.exec`, `ace.state`, +
-                                `ace.input`, `ace.output`, `ace.clone`, `ace.derive`, +
-                                `ace.harden`, or `ace.restrict` (used incomplete CC as source)
-|           .>|3             .>|Invalid input/output operation with `ace.init` (invalid metadata)
-|           .>|2, 1          .>|Access Control Failure or authentication failure with `ace.import`
-|           .>|1             .>|Authentication failure with `ace.exec`
-|           .>|3             .>|Invalid input/output operation with `ace.exec` +
-                                (form not allowed in current algorithm), +
-                                `ace.state` (state change not allowed), +
-                                or `ace.restrict` (change of usage policy is not allowed)
-|           .>|4             .>|Algorithm or algorithm variant not implemented.
-.>|_Lowest_ .>|0             .>|No error
-|===
-
-If executing an `ace.init`, `ace.import`, `ace.export`, `ace.input`, or `ace.output` triggers a
-trap, as specified in the privileged architecture, `aceerror` remains unchanged.
 
 [[ACE-CSR-acestart]]
 ===== `acestart`
