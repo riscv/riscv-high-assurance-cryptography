@@ -243,7 +243,7 @@ Future format will have a 1 in this position and may be longer than 64 bits.
 | [17:16] |   2  | SC_Protection          | Level of Side Channel Protection, encoded as per <<ACE-SC-protection-levels>>.
 | [19:18] |   2  | Direction_Policy       | Determines whether the CC may be used for encryption (bit 12 set), decryption (bit 13 set), or both (bits 12 and 13 set). Valid only for encryption/decryption primitives or modes, and ignored, for instance, for hash functions.
 | [21:20] |   2  | Key_Type               | Key given by explicit value / System Key (index) / Internally generated.
-| [25:22] |   4  | State_Number (also Direction) | Encoding the current state of the state machine of the algorithm as a number. The value must be zero in the initialization data. If the algorithm encoded in the CC has at most 16 states (including _initial_, _completed_, and _invalidated_, cf.{nbsp}<<ACE-state-constants>>), then this number is stored in this field, otherwise an algorithm-specific representation is used in the content, and this field only admits the values 0 (initial), 14 (invalidated), 15 (completed) or 1 (any other operational state). The values must conform to <<ACE-state-constants>>.
+| [25:22] |   4  | State_Number (also Direction) | Encoding the current state of the state machine of the algorithm as a number.
 | [29:26] |   4  | UC_Policy_1            | “UC Policy” means “Usage Control Policy”. If bit 26, 27, 28, resp. 29 is set, it disallows the _usage_ of this CC in User, (Virtual) Supervisor, Hypervisor, resp. M-mode .
 | [31:30] |   2  | UC_Policy_2            | If bit 30, respectively, 31, is set, then restrict the usage by `ASID`, respectively, `VMID`. Restrictions by `ASID` are ignored if in S-mode or higher. Restrictions by `VMID` are ignored if in H- or M-mode.
 | [47:32] |  16  | UC_Policy_3            | Zero if bit 30 unset, else `ASID` to enforce.
@@ -251,10 +251,15 @@ Future format will have a 1 in this position and may be longer than 64 bits.
 | [63:62] |   2  | Reserved               | Zero.
 |===
 
+Algorithm field:::
 Algorithms are encoded in a 9-bit field.
 Algorithm numbers 0-447 are architecture-defined and the list of such encodings is maintained by RVI.
 cf.{nbsp}<<ACE-algorithms>> for the currently encoded algorithms.
 
+SC_Protection field::: {empty}
++
+--
+Certain minimal Side-Channel protection levels are defined by the architecture.
 [[ACE-SC-protection-levels]]
 .Encoding of Side-Channel Protection levels
 [float="center",align="center",width="76%",cols="^8%,<68%",options="header"]
@@ -268,9 +273,16 @@ cf.{nbsp}<<ACE-algorithms>> for the currently encoded algorithms.
 
 Custom algorithms may offer stronger side channel protection guarantees than those specified in the encoding values 0 to 2.
 In such a case, the value of the SC_Protection field must be set to 3.
+--
++
 
+Key_Type field::: {empty}
++
+--
+ACE supports keys provided by software, as well as system keys and keys computed with a system “recipe”.
+These key types are encoded as follows:
 [[ACE-key-type]]
-.Encoding of Key Type
+.Encoding of Key_Type
 [float="center",align="center",width="76%",cols="^8%,<68%",options="header"]
 |===
 | Value | Description
@@ -279,15 +291,33 @@ In such a case, the value of the SC_Protection field must be set to 3.
 |   2   | Internally generated key.  System specific.  In the Initialization Input, the part of the content that normally contains the key(s) is replaced by a “recipe” in a system-specific format. The format is not specified by the ISA and may not be portable to other systems. Once the key material has been internally generated, the value is included in the SCC as part of the content—not the “recipe”—as for any other key(s) for the same specified algorithm.  The Key_Type field of the metadata in all representations of the CC, will keep the value 2.
 |   3   | Invalid.
 |===
+--
++
 
-NOTE: The “State_Number” field accommodates modes of operation with a small number of states.
-For algorithms with more complex state machines, machine state information can be stored in a custom data section of the CC.
+//
+State_Number field::: {empty}
++
+--
+The value of the State_Number Field must be zero in the initialization data.
+Three values are defined for all algorithms: 0, 14, and 15, for the states _initial_, _invalidated_, and _completed_.
+These states denote CCs that are ready to perform operations, that have been put into an invalid state, or that have completed their operations.
 
+If the algorithm encoded in the CC has at most 16 states (including _initial_, _completed_, and _invalidated_), then this number is stored in this field, otherwise an algorithm-specific representation is used in the content, and this field only admits the values 0, 14, 15, and 1, the latter being a placeholder for any other operational state. The values used in the algorithms defined in this specification are listed in <<ACE-state-constants>>.
+--
++
+
+Usage Control Policies fields::: {empty}
++
+--
 If the H extension is not enabled, bit 28 must be set to 1, and bits 31 and [63:48] must be set to 0.
 The “UC_Policy_4” field is 14 bits long, but the next two bits are reserved for compatibility with architectures employing 16-bit `VMID` fields (for instance, in heterogeneous systems).
 
-NOTE: Restricting usage by Supervisor Domain or World ID is not supported, and not only because of a lack of space in a 64-bit metadata section:
+Restricting usage by Supervisor Domain or World ID is not supported, and not only because of a lack of space in a 64-bit metadata section:
 Reconfiguring the RCSK is a better approach for such isolation requirements, whereas isolation by `ASID` and `VMID` is a weaker security feature.
+--
++
+
+//
 
 [[ACE-Localities]]
 ==== Localities
@@ -1555,35 +1585,7 @@ Usage-controlled: *YES*. +
 Trappable: *NO*. +
 Interruptible: *NO*.
 
-The state numbers used in this specification are defined in the following table.
-
-[[ACE-state-constants]]
-.Constants defining CC states
-[float="center",align="center",width="100%",cols="^6%,<29%,<65%",options="header"]
-|===
-| Value | Mnemonic                      | Examples
-|   0   | ace_state_initial             | The context is initialized and ready for operation.
-|   1   | ace_state_hash_absorb         | Start (and initialize) a hash function or the sub-function of an algorithm, preparing it to absorb blocks of data.
-|   2   | ace_state_hash_finalize       | Finalize the internal state of a hash function and possibly prepare it for outputting the result. In this state and in the following two states, additional data may be absorbed, such as partial blocks and lengths.
-|   3   | ace_state_enc_hash_finalize   | Finalize the internal state of a hash function for the encryption algorithm of an authenticated encryption mode of operation and possibly prepare it for outputting the result.
-|   4   | ace_state_dec_hash_finalize   | Finalize the internal state of a hash function for the decryption algorithm of an authenticated decryption mode of operation.
-|   5   | ace_state_hash_verify         | Compare the internal state of a hash function to the provided value.
-|   6   | ace_state_enc_last_block      | For the encryption path of authenticated encryption modes of operation if the length of the last block must be given.
-|   7   | ace_state_dec_last_block      | For the decryption path of authenticated encryption modes of operation if the length of the last block must be given.
-|   8   | ace_state_encrypt +
-ace_state_operate
-|  Encryption is requested. +
-Algorithm is ready to process.
-|   9   | ace_state_decrypt             | Decryption is requested.
-|  10   | ace_state_set_public_value    | Set a public value (like a nonce or an IV) in an algorithm. Some algorithms require more than one public value (for instance, they may admit a re-useable hash of some associated data and a unique nonce), in which case the second public value can be set using the next message.
-|  11   | ace_state_set_public_value_2  | Set the second public value in an algorithm.
-|  12   | ace_state_input_for_derive    | Tells the CC to expect additional information for feeding the `ace.derive` instruction.
-|  14   | ace_state_invalidated         | The algorithm has abnormally terminated. `ace.error` will always return error code _ace_err_invalid_.
-|  15   | ace_state_completed           | The algorithm has correctly completed.
-|===
-
-Algorithms that significantly differ from those we describe in <<ACE-algorithms>> and therefore cannot share the same software for their usage,
-may reuse the same values in [1..12] with new constant mnemonics to define their own states.
+The state numbers used in this specification are defined in <<ACE-state-constants>>.
 
 It is always allowed to repeat `ace.state` instructions to the current state, provided that the correct form of the instruction is used.
 
@@ -1896,6 +1898,36 @@ These functions do not need to be explicitly implemented as functions that conve
 `content[]` in the aforementioned pseudocodes, that satisfies the architected definition of the _Serialized Content_ for each algorithm, and viceversa, but of course implementations are free to do so.
 `content[]` is a _view_ of (certain fields of the) the content of a CRF as if it were in the SCC plaintext format, such that any change in one (except for the absent fields) is reflected in the other, and converted on the fly by the microarchitecture:
 For instance, consecutive bytes of `content[]` may not be adjacent in the internal memory of the CR, and one byte may correspond to multiple bytes.
+
+The following table defines the state numbers used by the algorithms defined in this specification.
+
+[[ACE-state-constants]]
+.Constants defining CC states
+[float="center",align="center",width="100%",cols="^6%,<29%,<65%",options="header"]
+|===
+| Value | Mnemonic                      | Examples
+|   0   | ace_state_initial             | The context is initialized and ready for operation.
+|   1   | ace_state_hash_absorb         | Start (and initialize) a hash function or the sub-function of an algorithm, preparing it to absorb blocks of data.
+|   2   | ace_state_hash_finalize       | Finalize the internal state of a hash function and possibly prepare it for outputting the result. In this state and in the following two states, additional data may be absorbed, such as partial blocks and lengths.
+|   3   | ace_state_enc_hash_finalize   | Finalize the internal state of a hash function for the encryption algorithm of an authenticated encryption mode of operation and possibly prepare it for outputting the result.
+|   4   | ace_state_dec_hash_finalize   | Finalize the internal state of a hash function for the decryption algorithm of an authenticated decryption mode of operation.
+|   5   | ace_state_hash_verify         | Compare the internal state of a hash function to the provided value.
+|   6   | ace_state_enc_last_block      | For the encryption path of authenticated encryption modes of operation if the length of the last block must be given.
+|   7   | ace_state_dec_last_block      | For the decryption path of authenticated encryption modes of operation if the length of the last block must be given.
+|   8   | ace_state_encrypt +
+ace_state_operate
+|  Encryption is requested. +
+Algorithm is ready to process.
+|   9   | ace_state_decrypt             | Decryption is requested.
+|  10   | ace_state_set_public_value    | Set a public value (like a nonce or an IV) in an algorithm. Some algorithms require more than one public value (for instance, they may admit a re-useable hash of some associated data and a unique nonce), in which case the second public value can be set using the next message.
+|  11   | ace_state_set_public_value_2  | Set the second public value in an algorithm.
+|  12   | ace_state_input_for_derive    | Tells the CC to expect additional information for feeding the `ace.derive` instruction.
+|  14   | ace_state_invalidated         | The algorithm has abnormally terminated. `ace.error` will always return error code _ace_err_invalid_.
+|  15   | ace_state_completed           | The algorithm has correctly completed.
+|===
+
+Algorithms that significantly differ from those we describe in <<ACE-algorithms>> and therefore cannot share the same software for their usage,
+may reuse the same values in [1..12] with new constant mnemonics to define their own states.
 
 In what follows, “state _name_” refers to the state with number _ace_state_name_ in <<ACE-state-constants>>.
 
