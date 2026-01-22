@@ -195,8 +195,7 @@ Insufficient residual CRF capacity may prevent the execution of an instruction t
 but also `ace.clone` (cf.{nbsp}<<ACE-instruction-clone>>) or `ace.derive` (cf.{nbsp}<<ACE-instruction-derive>>).
 In this case, ACE returns _ace_err_memory_, and software must free capacity by exporting the contents of another CR (if needed) and then clearing it.
 
-Indirectly accessing a CR that is outside the defined [0 .. 31] range, results
-in a _ace_err_unconfigured_ error.
+Indirectly accessing a CR that is outside the defined [0 .. 31] range raises a _ace_err_unconfigured_ error.
 
 [NOTE]
 ====
@@ -725,7 +724,10 @@ as indicated by the value in the `acestart` CSR.  If a context switch occurs, th
 _A single `acestart` value suffices due to the way the init/import/export instructions operate:_
 
 * `_ace.init_` _and_ `_ace.import_` _use a single pass: all blocks are processed sequentially._
-* `_ace.export_` _uses two passes. However, the first pass to compute the SIV is purely internal, and never accesses memory, so page faults cannot occur. This first stage is uninterruptible. The second pass writes metadata, nonce, SIV, then encrypted content to memory. Only the second pass can cause page faults and requires resumption._
+* `_ace.export_` _uses two passes. However, the first pass to compute the SIV is purely internal, and never accesses memory, so page faults cannot occur.
+This first pass is uninterruptible.
+The second pass writes metadata, nonce, SIV, then encrypted content to memory.
+Only the second pass can cause page faults and may require resumption._
 
 This design obviates the need to separate data transfer from cryptographic processing during import and export operations. A separate transfer phase would require buffering the entire input within the ACE unit before processing, increasing internal resource requirements, whereas the current architecture can process data inline and is loaded with minimal overhead.
 ====
@@ -820,10 +822,10 @@ The values written to the `macercsk` block must follow the value update rules de
 The implementation must keep track of which CSRs in the group have been written to and which CSRs have not,
 and only change the key when the entire group has been written to.
 
-This can be done by maintaining a bitmap with one bit per CSR in the group.
-The bitmap is initially all zeros.
-When the __i__-th CSR in the group is written to, the __i__-th bit of the bitmap is set to one.
-When the bitmap is all ones, the key is then set with the values written to all CSRs in the group and the bitmap is reset to zero.
+This can be done using a bitmap with one bit per CSR in the group.
+The bitmap is cleared upon entering M-mode.
+When the __i__-th CSR in the group is written to, the __i__-th bit of the bitmap is set.
+When the bitmap is all ones, the key is set with the values written to all CSRs in the group, and the bitmap is cleared.
 
 ===== `maceOSSecret` group
 
@@ -868,9 +870,11 @@ ACE reuses `(v)satp`.ASID and `hgatp`.VMID to optionally restrict the usage of C
 In the metadata section, `ASID` and `VMID` are always zero padded to the maximal lengths of 16 and 14 bits, respectively.
 
 [WARNING]
-If the Hypervisor extension is not present, `hgatp` is also not present.
-We propose to define the `VMID` field of this register also when ACE is provided in order to allow M-mode to be able to separate a main OS from a TEE, for instance, on devices that implement TEEs using mechanisms based on Sv, PMP/Smepmp cite:[RISCV-ISA-Priv].
-Regarding Supervisor Domains (SDs) cite:[RISC-V-SD] and Worlds cite:[RISC-V-Worlds] we observe that there is no room in the current metadata format for adding filtering by `SDID` (`mmtp.SDID`) and WID.
+Currently, `satp` is only defined when the Supervisor is enabled.
+similararly, `hgatp` is only defined if the Hypervisor extension is enabled.
+We propose to define the `ASID` and `VMID` fields of these registers also when ACE is provided in order to allow M-mode to be able to separate a main OS from a TEE, for instance, on devices that implement TEEs using mechanisms based on Sv, PMP/Smepmp cite:[RISCV-ISA-Priv]. If only U- and M-mode are available, this would allow M-mode to separate the CCs of the various U-mode processes.
+
+NOTE: Regarding Supervisor Domains (SDs) cite:[RISC-V-SD] and Worlds cite:[RISC-V-Worlds] we observe that there is no room in the current metadata format for adding filtering by `SDID` (`mmtp.SDID`) and WID.
 This is not an issue since we recommend to use separation by RCTK in combination with SDs or Worlds, which does not prevent a program running in a SD or World to provide a CC to a program running in a different SD or World. This is done by by configuring a CR and then relinquishing control to M-mode to export the CR with the RCTK used by the target software.
 The same holds for any intended separation by hart ID (`mhartid`), which is facilitated by the fact that the RCTK CSR group is per-hart.
 
@@ -1792,7 +1796,7 @@ otherwise an invalid instruction error is raised.
 If `aceiobuflen` is non-zero, then Forms A, B, and C of `ace.exec` and `ace.derive` can be replaced in the code as follows:
 
 [[ACE-replacement-instructions]]
-.Replacement for `ace.exec` instructions with input/output
+.Replacement sequences for `ace.exec` and `ace.derive` using `ace.input` and `ace.output`
 [float="center",align="center",width="80%",cols="<42%,<38%",options="header"]
 |===
 | Original Instruction          | Replacement Sequence
