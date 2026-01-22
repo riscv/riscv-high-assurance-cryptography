@@ -226,7 +226,7 @@ Both formats rely on the same metadata section format, which is described here.
 The formats of the Initialization Input and of the SCC are described in <<ACE-format-configuration>> and <<ACE-format-SCC>>, respectively.
 
 The metadata section is 64 bits long and its format is described in <<ACE-metadata-standard>>.
-The metadata section is used as the header of the data formats used in CR initialization, and CC export and import functions.
+The metadata section is used as the header of the data formats used in CR initialization, and SCC export and import functions.
 // The internal representation of the metadata in a CC  is implementation specific.
 (((Cryptographic Context,metadata,format)))
 
@@ -246,8 +246,8 @@ Future format will have a 1 in this position and may be longer than 64 bits.
 | [19:18] |   2  | Direction_Policy       | Determines whether the CC may be used for encryption (bit 12 set), decryption (bit 13 set), or both (bits 12 and 13 set). Valid only for encryption/decryption primitives or modes, and ignored, for instance, for hash functions.
 | [21:20] |   2  | Key_Type               | Key given by explicit value / System Key (index) / Internally generated.
 | [25:22] |   4  | State_Number (also Direction) | Encoding the current state of the state machine of the algorithm as a number.
-| [29:26] |   4  | UC_Policy_1            | “UC Policy” means “Usage Control Policy”. If bit 26, 27, 28, resp. 29 is set, it disallows the _usage_ of this CC in User, (Virtual) Supervisor, Hypervisor, resp. M-mode .
-| [31:30] |   2  | UC_Policy_2            | If bit 30, respectively, 31, is set, then restrict the usage by `ASID`, respectively, `VMID`. Restrictions by `ASID` are ignored if in S-mode or higher. Restrictions by `VMID` are ignored if in H- or M-mode.
+| [29:26] |   4  | UC_Policy_1            | “UC Policy” means “Usage Control Policy”. If bit 26, 27, 28, resp. 29 is set, it disallows the _usage_ of this CC in User, (V)S-mode, H-mode, resp. M-mode.
+| [31:30] |   2  | UC_Policy_2            | If bit 30, resp., 31, is set, then restrict the usage by `ASID`, resp., `VMID`.
 | [47:32] |  16  | UC_Policy_3            | Zero if bit 30 unset, else `ASID` to enforce.
 | [61:48] |  14  | UC_Policy_4            | Zero if bit 31 unset, else `VMID` to enforce.
 | [63:62] |   2  | Reserved               | Zero.
@@ -309,15 +309,20 @@ If the algorithm encoded in the CC has at most 16 states (including _initial_, _
 +
 
 Usage Control Policies fields::: {empty}
-+
---
-If the H extension is not enabled, bit 28 must be set to 1, and bits 31 and [63:48] must be set to 0.
-The “UC_Policy_4” field is 14 bits long, but the next two bits are reserved for compatibility with architectures employing 16-bit `VMID` fields (for instance, in heterogeneous systems).  Furthermore, the “UC_Policy_4” field may be used to filter domains also when H is not implemented.
+* Bits 26, 27, resp 28 must be set to 1 if U-mode, S-mode, resp. H-mode is not supported/enabled.
 
-Restricting usage by Supervisor Domain or World ID is not supported, and not only because of a lack of space in a 64-bit metadata section:
+* Restrictions by `ASID` are not applied if in S-mode or higher; and restrictions by `VMID` are not applied if in H- or M-mode.
+
+* If S-mode is not implemented, and bits 30 and [47:32] must be set to 0.
+
+* If the H extension is not enabled, bits 31 and [63:48] must be set to 0.
+
+* However, see <<ACE-CSR-reuse-ASID-VMID>> for possible extensions of this mechanism to the cases where S-mode or H-mode is not supported.
+
+* Restricting usage by Supervisor Domain or World ID is not supported, and not only because of a lack of space in a 64-bit metadata section:
 Reconfiguring the RCSK is a better approach for such isolation requirements, whereas isolation by `ASID` and `VMID` is a weaker security feature.
---
-+
+
+* The “UC_Policy_4” field is 14 bits long, but the next two bits are reserved for compatibility with architectures employing 16-bit `VMID` fields (for instance, in heterogeneous systems).
 
 //
 
@@ -864,6 +869,7 @@ The values written to the `maceeBootSecret` group must follow the update rules d
 `maceBootSecret*` must be reconfigurable in order to support VM reboots which are independent of the boot cycles if the physical host.
 ====
 
+[[ACE-CSR-reuse-ASID-VMID]]
 ==== Reuse of `(v)satp`.ASID and `hgatp`.VMID
 
 ACE reuses `(v)satp`.ASID and `hgatp`.VMID to optionally restrict the usage of CCs to a specific process or virtual machine.
