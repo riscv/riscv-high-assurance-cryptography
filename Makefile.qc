@@ -12,13 +12,17 @@
 # This Makefile is designed to automate the process of building and packaging
 # the Doc Template for RISC-V Extensions.
 
+
+
 DOCS := \
 	ace.adoc
 
+MAKE := make -f Makefile.qualcomm
+
 DATE ?= $(shell date +%Y-%m-%d)
 VERSION ?= v0.1.4
-REVMARK ?= Draft
-DOCKER_IMG := docker.io/riscvintl/riscv-docs-base-container-image:latest
+REMARK ?= Draft
+DOCKER_IMG := docker-registry.qualcomm.com/proxy-cache-qcom/riscvintl/riscv-docs-base-container-image:latest
 DOCKER_BIN ?= docker
 ifneq ($(SKIP_DOCKER),true)
 	DOCKER_IS_PODMAN = \
@@ -52,7 +56,7 @@ OPTIONS := --trace \
            -a revremark=${REVMARK} \
            -a revdate=${DATE} \
            -a pdf-fontsdir=docs-resources/fonts \
-           -a pdf-theme=default \
+           -a pdf-theme=src/riscv-pdf.yml \
            $(XTRA_ADOC_OPTS) \
 		   -D build \
            --failure-level=ERROR
