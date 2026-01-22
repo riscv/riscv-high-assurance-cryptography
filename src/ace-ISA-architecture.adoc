@@ -246,12 +246,16 @@ Future format will have a 1 in this position and may be longer than 64 bits.
 | [19:18] |   2  | Direction_Policy       | Determines whether the CC may be used for encryption (bit 12 set), decryption (bit 13 set), or both (bits 12 and 13 set). Valid only for encryption/decryption primitives or modes, and ignored, for instance, for hash functions.
 | [21:20] |   2  | Key_Type               | Key given by explicit value / System Key (index) / Internally generated.
 | [25:22] |   4  | State_Number (also Direction) | Encoding the current state of the state machine of the algorithm as a number.
-| [29:26] |   4  | UC_Policy_1            | “UC Policy” means “Usage Control Policy”. If bit 26, 27, 28, resp. 29 is set, it disallows the _usage_ of this CC in User, (V)S-mode, H-mode, resp. M-mode.
-| [31:30] |   2  | UC_Policy_2            | If bit 30, resp., 31, is set, then restrict the usage by `ASID`, resp., `VMID`.
-| [47:32] |  16  | UC_Policy_3            | Zero if bit 30 unset, else `ASID` to enforce.
-| [61:48] |  14  | UC_Policy_4            | Zero if bit 31 unset, else `VMID` to enforce.
-| [63:62] |   2  | Reserved               | Zero.
+| [29:26] |   4  | UC_Policy              | “UC Policy” means “Usage Control Policy”. If bit 26, 27, 28, resp. 29 is set, it disallows the _usage_ of this CC in User, (V)S-mode, H-mode, resp. M-mode.
+| [31:30] |   2  | Reserved               | Zero.
+| [33:32] |   2  | Filter-Mode            | Mode at which apply the filter: 0 = do not apply; 1 = U-mode; 2 = S-mode; 2 = H-mode.
+| [55:34] |  22  | Filter                 | A value that has to be matched against the `*acefilter` CSRs. See <<ACE-CSR-filters>> for more details.
+| [63:56] |   8  | Reserved               | Zero.
 |===
+// | [31:30] |   2  | UC_Policy_2            | If bit 30, resp., 31, is set, then restrict the usage by `ASID`, resp., `VMID`.
+// | [47:32] |  16  | UC_Policy_3            | Zero if bit 30 unset, else `ASID` to enforce.
+// | [61:48] |  14  | UC_Policy_4            | Zero if bit 31 unset, else `VMID` to enforce.
+// | [63:62] |   2  | Reserved               | Zero.
 
 Algorithm field:::
 Algorithms are encoded in a 9-bit field.
@@ -308,21 +312,8 @@ If the algorithm encoded in the CC has at most 16 states (including _initial_, _
 --
 +
 
-Usage Control Policies fields::: {empty}
+Usage Control Policy::: {empty}
 * Bits 26, 27, resp 28 must be set to 1 if U-mode, S-mode, resp. H-mode is not supported/enabled.
-
-* Restrictions by `ASID` are not applied if in S-mode or higher; and restrictions by `VMID` are not applied if in H- or M-mode.
-
-* If S-mode is not implemented, and bits 30 and [47:32] must be set to 0.
-
-* If the H extension is not enabled, bits 31 and [63:48] must be set to 0.
-
-* However, see <<ACE-CSR-reuse-ASID-VMID>> for possible extensions of this mechanism to the cases where S-mode or H-mode is not supported.
-
-* Restricting usage by Supervisor Domain or World ID is not supported, and not only because of a lack of space in a 64-bit metadata section:
-Reconfiguring the RCSK is a better approach for such isolation requirements, whereas isolation by `ASID` and `VMID` is a weaker security feature.
-
-* The “UC_Policy_4” field is 14 bits long, but the next two bits are reserved for compatibility with architectures employing 16-bit `VMID` fields (for instance, in heterogeneous systems).
 
 //
 
@@ -404,10 +395,10 @@ The content format—and consequently its length—is algorithm-specific (cf.{nb
 [[ACE-CSR]]
 ==== CSRs
 
-ACE extends `*status` and `misa`, and adds 23 new CSRs (of which 20 are optional, 16 M-mode exclusive) to manage its execution environment.
-They are listed in <<ACE-SCRs-table>>.
+ACE extends `*status` and `misa`, and adds up to 25 new CSRs to manage its execution environment.
+They are listed in <<ACE-CSRs-table>>.
 
-[[ACE-SCRs-table]]
+[[ACE-CSRs-table]]
 .New ACE CSRs
 [cols="<16%,^11%,<24%,<49%"]
 [float="center",align="center",options="header"]
@@ -420,6 +411,8 @@ They are listed in <<ACE-SCRs-table>>.
 | 0xXXX          | URW       | `aceiobuftop`            | ACE I/O buffer limit for current transfers
 | 0xXXX          | URO       | `acesequence`            | Sequence number of the last ACE instruction
 | 0xXXX          | URW       | `aceactivecr`            | Active CR for `ace.input`/`ace.output`
+| 0xXXX          | SRW       | `sacefilter`             | Filter for `ace.input`/`ace.output` that applies to U-mode
+| 0xXXX          | MRW       | `macefilter`             | Filter for `ace.input`/`ace.output` that applies to (V)S/H-mode
 | 0xXXX--0xXXX   | MRW (RZ)  | `macercsk{0..7}`         | ACE Root Context Sealing Key
 | 0xXXX--0xXXX   | MRW (RZ)  | `maceOSSecret{0..3}`     | ACE OS Secret
 | 0xXXX--0xXXX   | MRW (RZ)  | `maceBootSecret0{0..3}`  | ACE Boot Secret
@@ -869,6 +862,19 @@ The values written to the `maceeBootSecret` group must follow the update rules d
 `maceBootSecret*` must be reconfigurable in order to support VM reboots which are independent of the boot cycles if the physical host.
 ====
 
+[[ACE-CSR-filters]]
+===== `sacefilter`, `macefilter`
+
+`sacefilter` is an XLEN-bit SRW CSRs (22 bits defined).
+
+`macefilter` is an XLEN-bit MRW CSRs (22 bits defined).
+
+Their values are compared against the Filter field of the metadata, to determine whether an `ace.exec`, `ace.state`, `ace.harden` or `ace.derive` instruction is allowed to execute:
+* `sacefilter` is set and owned by (V)S-mode and it is used to filter CC usage in U-mode.
+* `macefilter` is set and owned by M-mode and it is used to filter CC usage in (V)S/H-mode.
+
+[comment]
+--
 [[ACE-CSR-reuse-ASID-VMID]]
 ==== Reuse of `(v)satp`.ASID and `hgatp`.VMID without S/H?
 
@@ -885,6 +891,7 @@ This is not an issue since we recommend to use separation by RCSK in combination
 The same holds for any intended separation by hart ID (`mhartid`), which is facilitated by the fact that the RCSK CSR group is per-hart.
 
 NOTE: The software in each World/Supervisor Domain is normally responsible to generate or obtain their own keys, and if a process (applet) in one World/Supervisor Domain is responsible to provide keys to other Worlds/Supervisor Domains, it is the responsibility of the M-mode formware to perform an appropriate `ace.import`/RCSK switch/`ace.export` sequence.
+--
 
 [[ACE-format-configuration]]
 === Semantics of Initialization, Export and Import of Cryptographic Contexts
