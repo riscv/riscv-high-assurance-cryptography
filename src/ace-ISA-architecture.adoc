@@ -245,11 +245,11 @@ Future format will have a 1 in this position and may be longer than 64 bits.
 | [17:16] |   2  | SC_Protection          | Level of Side Channel Protection, encoded as per <<ACE-SC-protection-levels>>.
 | [19:18] |   2  | Direction_Policy       | Determines whether the CC may be used for encryption (bit 12 set), decryption (bit 13 set), or both (bits 12 and 13 set). Valid only for encryption/decryption primitives or modes, and ignored, for instance, for hash functions.
 | [21:20] |   2  | Key_Type               | Key given by explicit value / System Key (index) / Internally generated.
-| [25:22] |   4  | State_Number (also Direction) | Encoding the current state of the state machine of the algorithm as a number.
+| [25:22] |   4  | State_Number           | Encoding the current state of the state machine of the algorithm as a number.
 | [29:26] |   4  | UC_Policy              | “UC Policy” means “Usage Control Policy”. If bit 26, 27, 28, resp. 29 is set, it disallows the _usage_ of this CC in User, (V)S-mode, H-mode, resp. M-mode.
 | [31:30] |   2  | Reserved               | Zero.
-| [33:32] |   2  | Filter-Mode            | Mode at which apply the filter: 0 = do not apply; 1 = U-mode; 2 = S-mode; 2 = H-mode.
-| [55:34] |  22  | Filter                 | A value that has to be matched against the `*acefilter` CSRs. See <<ACE-CSR-filters>> for more details.
+| [33:32] |   2  | Filter-Mode            | Mode at which to apply the filter: 0 = none; 1 = U; 2 = (V)S; 3 = H.
+| [55:34] |  22  | Filter                 | Value to match against the `*acefilter` CSRs: See <<ACE-CSR-filters>> for details.
 | [63:56] |   8  | Reserved               | Zero.
 |===
 // | [31:30] |   2  | UC_Policy_2            | If bit 30, resp., 31, is set, then restrict the usage by `ASID`, resp., `VMID`.
@@ -1015,7 +1015,9 @@ UNINTERRUPTIBLE_BLOCK_END
 
 // preemptible here, with `acestart` from 0 to 15
 UNINTERRUPTIBLE_BLOCK_START
-|   M[0 .. 15] = N[63:0] @ metadata[63:0];
+|   M[0 .. 15] = N[63:0]
+|              @ (metadata[63:32] xor AESE(Kenc, 1'b1 @ SIV[94:0] @ zeros(32))[31:0])
+|              @  metadata[31:0];
 UNINTERRUPTIBLE_BLOCK_END
 
 // preemptible here, with `acestart` from 16 to 31
@@ -1028,10 +1030,10 @@ foreach(i from 0 to num_blocks - 1) {
     UNINTERRUPTIBLE_BLOCK_START
     |   if ((i == num_blocks - 1) and last_block_fractional)
     |       M[32+i*16 .. 39+i*16] = content[i*16 .. 7+i*16] xor
-    |                       AESE(Kenc, 1'b1 @ SIV[94:0] @ (binary(i)[31:0]))[63:0];
+    |                       AESE(Kenc, 1'b1 @ SIV[94:0] @ (binary(i+1)[31:0]))[63:0];
     |   else
     |       M[32+i*16 .. 47+i*16] = content[i*16 .. 15+i*16] xor
-    |                       AESE(Kenc, 1'b1 @ SIV[94:0] @ (binary(i)[31:0]));
+    |                       AESE(Kenc, 1'b1 @ SIV[94:0] @ (binary(i+1)[31:0]));
     UNINTERRUPTIBLE_BLOCK_END
 }
 ----
@@ -1068,12 +1070,13 @@ UNINTERRUPTIBLE_BLOCK_START
 |   {Kenc, Kauth} = RFC8452_KeyDeriv(CSK);
 |
 |   // next instruction preemptible, with `acestart` from 8 to 19
-|   N = M[8 .. 19]
+|   N = M[8 .. 19];
 UNINTERRUPTIBLE_BLOCK_END
 
 // next instruction preemptible, with `acestart` from 20 to 31
 UNINTERRUPTIBLE_BLOCK_START
-|   SIV = M[20 .. 31]
+|   SIV = M[20 .. 31];
+|   metadata[63:32] = metadata[63:32] xor AESE(Kenc, 1'b1 @ SIV[94:0] @ zeros(32))[31:0];
 |   tmp = 64'b0 @ metadata;
 |   tmp = tmp * Kauth;  // * = Montgomery multiplication
 UNINTERRUPTIBLE_BLOCK_END
@@ -1083,11 +1086,11 @@ foreach(i from 0 to num_blocks - 1) {
     UNINTERRUPTIBLE_BLOCK_START
     |   if ((i == num_blocks - 1) and last_block_fractional) {
     |       content[i*16 .. 7+i*16] = M[32+i*16 .. 39+i*16] xor
-    |                     AESE(Kenc, 1'b1 @ SIV[94:0] @ (binary(i)[31:0]))[63:0];
+    |                     AESE(Kenc, 1'b1 @ SIV[94:0] @ (binary(i+1)[31:0]))[63:0];
     |       tmp[63:0] = tmp[63:0] xor content[i*16 .. 7+i*16];
     |   } else {
     |       content[i*16 .. 15+i*16] = M[32+i*16 .. 47+i*16] xor
-    |                     AESE(Kenc, 1'b1 @ SIV[94:0] @ (binary(i)[31:0]));
+    |                     AESE(Kenc, 1'b1 @ SIV[94:0] @ (binary(i+1)[31:0]));
     |       tmp = tmp xor content[i*16 .. 15+i*16];
     |   }
     |   tmp = tmp * Kauth;  // * = Montgomery multiplication
@@ -1672,7 +1675,7 @@ Description::
 --
 This instruction can be used to:
 
-* Restrict the usage of a CC (as stored in a CR) to specific modes or to a specified `ASID` or `VMID`;
+* Restrict the usage of a CC (as stored in a CR) to specific modes or to a specified Filter;
 * Restrict the use of encryption or decryption in a CC that allows both; and
 * Activate the side-channel protection of the CC or increase it.
 
@@ -1683,12 +1686,16 @@ On RV64, the instruction works as follows:
 * `Xs`[19:16] and `Xs`[63:32] must have the same format as the corresponding bits of the metadata.
 * `Xs`[17:16] can be used to turn on or increase the level of the side-channel protection of the algorithm in the CC, if the microarchitecture supports the corresponding implementation. The levels are defined in <<ACE-SC-protection-levels>>. Downgrading side-channel protection is not permitted, and attempting to do so will result in error _ace_err_invalid_ (cf.{nbsp}<<ACE-error-codes>>).
 * `Xs`[19:18] can be used to deactivate encryption or decryption in a CC that allows both, otherwise it is ignored. Writing to them cannot be used to deactivate both encryption and decryption simultaneously, nor to activate encryption, resp., decryption in a CC that did not allow it.  In particular, if `m`[19:18] = `2'b11`, then this case at least one bit of `Xs`[19:18] must be set to 1. In all other cases, either `Xs`[19:18] = `m`[19:18] or zero, in which case it is ignored.
-* A zero in any of the six bits `Xs`[31:26] means that the corresponding policy is _not_ changed.
+* A zero in any of the four bits `Xs`[29:26] means that the corresponding policy is _not_ changed.
 * A one in any of the four bits `Xs`[29:26] means that usage by the corresponding mode is forbidden, and the corresponding bit in the metadata of the destination CC is set to 1.
-* If `Xs`[30] is set and `m`[30] is NOT set, then UC_Policy_3, i.e., `m`[47:32], is set to `Xs`[47:32].
-* If `Xs`[31] is set and `m`[31] is NOT set, then UC_Policy_4, i.e., `m`[63:48], is set to `Xs`[63:48].
-* If `Xs`[30] and `m`[30] are both set and `Xs`[47:32] != `m`[47:32], then `aceerror` is set to ace_error_invalid.
-* If `Xs`[31] and `m`[31] are both set and `Xs`[63:48] != `m`[63:48], then `aceerror` is set to ace_error_invalid.
+* `Xs`[33:32] can be non-zero only if `m`[33:32] is zero, in which case  `m`[55:34] <- `Xs`[55:34], else `aceerror` is set to ace_error_invalid.
+
+// * A zero in any of the six bits `Xs`[31:26] means that the corresponding policy is _not_ changed.
+// * A one in any of the four bits `Xs`[29:26] means that usage by the corresponding mode is forbidden, and the corresponding bit in the metadata of the destination CC is set to 1.
+// * If `Xs`[30] is set and `m`[30] is NOT set, then UC_Policy_3, i.e., `m`[47:32], is set to `Xs`[47:32].
+// * If `Xs`[31] is set and `m`[31] is NOT set, then UC_Policy_4, i.e., `m`[63:48], is set to `Xs`[63:48].
+// * If `Xs`[30] and `m`[30] are both set and `Xs`[47:32] != `m`[47:32], then `aceerror` is set to ace_error_invalid.
+// * If `Xs`[31] and `m`[31] are both set and `Xs`[63:48] != `m`[63:48], then `aceerror` is set to ace_error_invalid.
 
 On RV32, `s` must be even and register pair `X[s]` and `X[s+1]` is read, where
 `X[s]` corresponds to bits [31:0] and `X[s+1]` to bits [63:32] of the metadata.
@@ -1709,7 +1716,7 @@ Interruptible: *NO*.
 This instruction enables several practical use cases:
 
 *   Enabling side-channel protection when supported by the microarchitecture, even if the original CC was not configured with it.
-*   Allowing privileged code to give a CC to several processes by first cloning it and setting UC_Policy_3 in each copy to the target process's `ASID`, thereby restricting usage of this CC only to authorized processes.
+*   Allowing privileged code to give a CC to several processes by first cloning it and setting the Filter in each copy to the target process's Filter, thereby restricting usage of this CC only to authorized processes.
 *   Similarly, enabling privileged code to split a CC capable of both encryption and decryption into two CCs, one only capable of encryption and the other only capable of decryption, thereby creating a one-way channel between processes.
 
 The ability to perform such customizations saves both time and computational resources by avoiding additional round-trips to trusted environments.
