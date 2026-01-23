@@ -980,7 +980,7 @@ function RFC8452_KeyDeriv(key) = {
 []
 ----
 function DCSK_KeyDeriv(key,L) = {
-    AESE256(key, L ^ (zeros(127) @ ones(1))) @ AESE256(key, L ^ zeros(128))
+    AESE256(key, L ^ (zeros(127) @ 1)) @ AESE256(key, L ^ zeros(128))
 }
 ----
 
@@ -1022,13 +1022,13 @@ UNINTERRUPTIBLE_BLOCK_START
 |   - implementations.
 |
 |   tmp ← POLYVAL(Kauth, zeros(64) @ metadata @ content);
-|   SIV ← AESE(Kenc, zeros(1) @ (tmp[126:0] xor (zeros(31) @ N)))) >> 32;
+|   SIV ← AESE(Kenc, 0 @ (tmp[126:0] xor (zeros(31) @ N)))) >> 32;
 UNINTERRUPTIBLE_BLOCK_END
 
 // preemptible here, with `acestart` from 0 to 15
 UNINTERRUPTIBLE_BLOCK_START
 |   M[0 .. 15] ← N[63:0]
-|              @ (metadata[63:32] xor AESE(Kenc, ones(1) @ SIV[94:0] @ zeros(32))[31:0])
+|              @ (metadata[63:32] xor AESE(Kenc, 1 @ SIV[94:0] @ zeros(32))[31:0])
 |              @  metadata[31:0];
 UNINTERRUPTIBLE_BLOCK_END
 
@@ -1042,10 +1042,10 @@ foreach(i from 0 to num_blocks - 1) {
     UNINTERRUPTIBLE_BLOCK_START
     |   if ((i == num_blocks - 1) and last_block_fractional)
     |       M[32+i*16 .. 39+i*16] ← content[i*16 .. 7+i*16] xor
-    |                       AESE(Kenc, ones(1) @ SIV[94:0] @ (binary(i+1)[31:0]))[63:0];
+    |                       AESE(Kenc, 1 @ SIV[94:0] @ (binary(i+1)[31:0]))[63:0];
     |   else
     |       M[32+i*16 .. 47+i*16] ← content[i*16 .. 15+i*16] xor
-    |                       AESE(Kenc, ones(1) @ SIV[94:0] @ (binary(i+1)[31:0]));
+    |                       AESE(Kenc, 1 @ SIV[94:0] @ (binary(i+1)[31:0]));
     UNINTERRUPTIBLE_BLOCK_END
 }
 ----
@@ -1087,10 +1087,11 @@ UNINTERRUPTIBLE_BLOCK_END
 
 // next instruction preemptible, with `acestart` from 20 to 31
 UNINTERRUPTIBLE_BLOCK_START
-| SIV ← M[20 .. 31];
-| metadata[63:32] ← metadata[63:32] xor AESE(Kenc, ones(1) @ SIV[94:0] @ zeros(32))[31:0];
-| tmp ← zeros(64) @ metadata;
-| tmp ← tmp * Kauth;  // * = Montgomery multiplication
+|   SIV ← M[20 .. 31];
+|   metadata[63:32] ← metadata[63:32]
+|                     xor AESE(Kenc, 1 @ SIV[94:0] @ zeros(32))[31:0];
+|   tmp ← zeros(64) @ metadata;
+|   tmp ← tmp * Kauth;  // * = Montgomery multiplication
 UNINTERRUPTIBLE_BLOCK_END
 
 foreach(i from 0 to num_blocks - 1) {
@@ -1098,11 +1099,11 @@ foreach(i from 0 to num_blocks - 1) {
     UNINTERRUPTIBLE_BLOCK_START
     |   if ((i == num_blocks - 1) and last_block_fractional) {
     |       content[i*16 .. 7+i*16] ← M[32+i*16 .. 39+i*16] xor
-    |                     AESE(Kenc, ones(1) @ SIV[94:0] @ (binary(i+1)[31:0]))[63:0];
+    |                     AESE(Kenc, 1 @ SIV[94:0] @ (binary(i+1)[31:0]))[63:0];
     |       tmp[63:0] ← tmp[63:0] xor content[i*16 .. 7+i*16];
     |   } else {
     |       content[i*16 .. 15+i*16] ← M[32+i*16 .. 47+i*16] xor
-    |                     AESE(Kenc, ones(1) @ SIV[94:0] @ (binary(i+1)[31:0]));
+    |                     AESE(Kenc, 1 @ SIV[94:0] @ (binary(i+1)[31:0]));
     |       tmp ← tmp xor content[i*16 .. 15+i*16];
     |   }
     |   tmp ← tmp * Kauth;  // * = Montgomery multiplication
@@ -1112,7 +1113,7 @@ foreach(i from 0 to num_blocks - 1) {
 // if preempted here, `acestart` will be z + 32
 
 UNINTERRUPTIBLE_BLOCK_START
-|   tag ← AESE(Kenc, zeros(1) @ (tmp[126:0] xor (zeros(31) @ N)))) >> 32;
+|   tag ← AESE(Kenc, 0 @ (tmp[126:0] xor (zeros(31) @ N)))) >> 32;
 |   if (tag != SIV) then { error ace_err_authentication; }
 |   - Now the content can be deserialized.
 |   - This includes computing any derived values not saved as part of the SCC,
@@ -1888,7 +1889,7 @@ Three types of supporting operations are required:
 All three instructions can be implemented as CSR RW instructions, for instance:
 
  * `acedest`, XLEN bits wide, determines what architectural state we are transferring to or from: 0..31 for the CRs and, say, 32 for the input/output buffer.
- * `aceoffset`, XLEN bits wide, holds the offset within the CR's virtual `content` or the input/output buffer (maybe the same as `acestart` ?).
+ * `aceoffset`, XLEN bits wide, holds the offset within the CR's virtual `content` or the input/output buffer [.red]#(maybe same CSR as `acestart` ?)#.
  * `acecontent`, XLEN bits wide, to which we write the content of the CR or the input/output buffer or from which we read the current content.
   A write to `acecontent` would also increase `aceoffset` (or `acestart`) by XLEN/8.
 
@@ -2444,7 +2445,7 @@ State Machine:::
  ** In state _set_public_value_:
   *** Only  ``ace.exec`` instructions of Form B are allowed.
   “```ace.exec Kn|K[Xn], Vs```” sets
-   . `ctr <- Vs @ (b/4-1)b'0 @ ones(1)`, i.e., the `b/4` most significant bits of `Vs` are ignored, and the `b/4` least significant bits of `ctr` represent the integer 1.
+   . `ctr <- Vs @ (b/4-1)b'0 @ 1`, i.e., the `b/4` most significant bits of `Vs` are ignored, and the `b/4` least significant bits of `ctr` represent the integer 1.
   *** If “```ace.exec Kn|K[Xn], Vs```,” is repeated, it will just re-write the IV.
   *** If no such `ace.exec` to set the IV is issued, `ctr` remains zero.
   *** If `VL*SEW` > `b`, only the `b` least significant bits of `Vs` are considered.
@@ -2646,7 +2647,7 @@ foreach(i from 0 to ceil(len_in_bytes(PT)/16)-1) {
 
 V3 ← V3 xor (len_in_bits(AD) @ len_in_bits(PT))  // Horner scheme add
 V3 ← galois_mult(V4,V3)                          // Horner scheme mult
-V5[32:0] ← zeros(31) @ 1                         // Prepare IV || 1 for tag encryption
+V5[32:0] ← zeros(31) @ 1                         // Prepare IV @ 1 for tag encryption
 ace.exec V2, K0, V5
 tag ← V3 xor V2                                  // Last Horner scheme add
 ----
@@ -2798,7 +2799,7 @@ finalizes the computation of the SIV/tag, by performing:
 +
 --
     . `absorb(Vs)`.
-    . `tmp <- enc_blk(enc_key, zeros(1) @ (auth_tag xor N)[b-2:0])`
+    . `tmp <- enc_blk(enc_key, 0 @ (auth_tag xor N)[b-2:0])`
     . If tag length is `b` bits, then
      .. `SIV <- tmp` and `Vd <- tmp`,
     . else (tag length is `3b/4` bits)
@@ -2813,9 +2814,9 @@ If `VL*SEW` > `b`, only the `b` least significant bits of `Vs` are considered.
 --
 . If `ctr == 0`, then the CR is *invalidated*.
    . If the `SIV` is `b`-bits long, then
-     .. ``Vd <- Vs xor enc_blk(key, ones(1) @ SIV[b-2:b/4] @ (SIV[b/4-1:0] + ctr % 2^b/4^)),``
+     .. ``Vd <- Vs xor enc_blk(key, 1 @ SIV[b-2:b/4] @ (SIV[b/4-1:0] + ctr % 2^b/4^)),``
    . else (the `SIV` is `3b/4`-bits long)
-      .. ``Vd <- Vs xor enc_blk(key, ones(1) @ SIV[3b/4-2:0] @ ctr``.
+      .. ``Vd <- Vs xor enc_blk(key, 1 @ SIV[3b/4-2:0] @ ctr``.
    . `ctr <- ctr + 1`.
 --
 +
@@ -2826,9 +2827,9 @@ If `VL*SEW` > `b`, the above operations are applied to each of the `VL*SEW/b` bl
 --
      . If `ctr == 0`, then the CR is *invalidated*.
      . If the `SIV` is `b`-bits long, then +
-       .. ``Vd <- Vs xor enc_blk(key, ones(1) @ SIV[b-2:b/4] @ (SIV[b/4-1:0] + ctr % 2^b/4^)),``
+       .. ``Vd <- Vs xor enc_blk(key, 1 @ SIV[b-2:b/4] @ (SIV[b/4-1:0] + ctr % 2^b/4^)),``
      . else (it is `3b/4`-bits long) +
-       .. ``Vd <- Vs xor enc_blk(key, ones(1) @ SIV[3b/4-2:0] @ ctr``.
+       .. ``Vd <- Vs xor enc_blk(key, 1 @ SIV[3b/4-2:0] @ ctr``.
      . `absorb(Vs)`.
      . `ctr <- ctr + 1`.
 --
@@ -2847,7 +2848,7 @@ If `VL*SEW` > `b`, the above operations are applied to each of the `VL*SEW/b` bl
 +
 --
   . `absorb(Vs)` (which modifies `auth_tag`).
-  . `tmp <- enc_blk(enc_key, zeros(1) @ (auth_tag xor N)[b-2:0])`.
+  . `tmp <- enc_blk(enc_key, 0 @ (auth_tag xor N)[b-2:0])`.
   . If tag length is `b` bits, then
      .. `auth_tag <- tmp`,
   . else (tag length is `3b/4` bits)
@@ -3029,7 +3030,7 @@ State Machine:::
 ** In state _initial_ :
   *** No {nbsp}``ace.exec``{nbsp} operation is allowed.
   *** The following initialization operations are performed:
-   . `N <- ones(1) @ zeros(u)`.
+   . `N <- 1 @ zeros(u)`.
    . `hash_A <- zeros(b)`
    . `hash_P <- zeros(b)`
 
@@ -3044,7 +3045,7 @@ State Machine:::
 ** To move to _set_public_value_2_, the `ace.state` operation must have the additional argument, which sets the tag length `tag_len`.
    If this argument (interpreted as an unsigned value) is larger than `b` or `0` (the latter occurs also
    if `X0` is passed as the additional argument), an invalid instruction error is raised, and the CR is *invalidated*.
-  *** If `N[u] == ones(1)`, this means that `N` was not set in state _set_public_value_. We do not allow code that skips nonce setting, as this mode is not secure under nonce reuse, therefore in this case an invalid instruction error is raised, and the CR is *invalidated*.
+  *** If `N[u] == 1`, this means that `N` was not set in state _set_public_value_. We do not allow code that skips nonce setting, as this mode is not secure under nonce reuse, therefore in this case an invalid instruction error is raised, and the CR is *invalidated*.
   *** The following operation must be an `ace.state` to move to _hash_absorb_
 
 ** Upon entering state _hash_absorb_,  following operations are performed:
@@ -3068,7 +3069,7 @@ If `VL*SEW` > `b`, the above operation is executed `VL*SEW/b` times.
 
 ** To move to _hash_finalize_, the `ace.state` operation must have the additional argument, which sets the length of the final block of the AD in `last_blk_len`.
 
-** In state _hash_finalize_, only one `ace.exec` instructions of Form B is allowed if `last_blk_len` != 0.
+** In state _hash_finalize_, only one `ace.exec` instructions of Form B is allowed if `last_blk_len` != `0`.
  “```ace.exec Kn|K[Xn], Vs```” which absorbs the last data block in `auth_tag`, i.e.:
 +
 --
@@ -3076,7 +3077,7 @@ If `VL*SEW` > `b`, the above operation is executed `VL*SEW/b` times.
 
 []
   . `offset <- offset xor enc_blk(key, zeros(b))`
-  . `tmp <- (zeros(b-last_blk_len-1) @ 1b'1 @ Vs[last_blk_len-1:0]) xor offset`
+  . `tmp <- (zeros(b-last_blk_len-1) @ 1 @ Vs[last_blk_len-1:0]) xor offset`
   . `hash_A <- hash_A xor enc_blk(K, tmp)`
 --
 +
@@ -3094,7 +3095,7 @@ If `last_blk_len` == 0, however, no `ace.exec` can be executed, and only an `ace
  . `offset <- zeros(b)`
  . `L <- enc_blk(key, zeros(b))`
  . `L <- double(double(L))`
- . `N_ext <- N[N_len-1:0] @ ones(1) @ zeros(b-g-1-N_len) @ numtobits(tag_len,g)`
+ . `N_ext <- N[N_len-1:0] @ 1 @ zeros(b-g-1-N_len) @ numtobits(tag_len,g)`
  . `bottom <- int(N_ext[b-1:b-g+1])` // Rogaway's paper number bits in opposite order
  . `Ktop <- enc_blk(key, zeros(g-1) @ N_ext[b-g:0])`
  . `Stretch <- (Ktop[b/2-1:0] xor Ktop[b/2+7..8]) @ Ktop`
@@ -3129,7 +3130,7 @@ In this case, following operations are performed:
  . `tmp <- enc_blk(key, offset)[last_blk_len-1:0]`
  . `tmp <- Vs[last_blk_len-1:0] xor tmp`
  . `Vd <- zeros(b-last_blk_len) @ tmp`
- . `tmp2 <- (zeros(b-last_blk_len-1) @ ones(1) @ tmp) xor offset`
+ . `tmp2 <- (zeros(b-last_blk_len-1) @ 1 @ tmp) xor offset`
  . `aux <- double(aux)`
  . `hash_P <- enc_blk(key, hash_P xor tmp2 xor offset xor aux) xor hash_A`
 --
@@ -3172,7 +3173,7 @@ In this case, the same operations as in state _enc_last_block_ are performed exc
 +
 --
 [start=6]
-. `tmp2 <- (zeros(b-last_blk_len-1) @ ones(1) @ Vs[last_blk_len-1:0]) xor offset`
+. `tmp2 <- (zeros(b-last_blk_len-1) @ 1 @ Vs[last_blk_len-1:0]) xor offset`
 --
 +
 If `last_blk_len` is zero, only an ``ace.exec`` instruction of Form D, “```ace.exec Kn|K[Xn]```,” is allowed, which performs the same operations as in state _enc_last_block_.
