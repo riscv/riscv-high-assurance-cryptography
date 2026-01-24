@@ -402,7 +402,7 @@ The content format—and consequently its length—is algorithm-specific (cf.{nb
 [[ACE-CSR]]
 ==== CSRs
 
-ACE extends `*status` and `misa`, and adds up to 25 new CSRs to manage its execution environment.
+ACE extends `*status` and `misa`, and adds up to 26 new CSRs to manage its execution environment.
 They are listed in <<ACE-CSRs-table>>.
 
 [[ACE-CSRs-table]]
@@ -419,6 +419,7 @@ They are listed in <<ACE-CSRs-table>>.
 | 0xXXX          | URO       | `acesequence`            | Sequence number of the last ACE instruction
 | 0xXXX          | URW       | `aceactivecr`            | Active CR for `ace.input`/`ace.output`
 | 0xXXX          | SRW       | `sacefilter`             | Filter that applies to U-mode
+| 0xXXX          | HRW       | `vacecrstatus`           | Array of two-bit fields (similar to ACES state, but per CR)
 | 0xXXX          | MRW       | `macefilter`             | Filter that applies to (V)S/H-mode
 | 0xXXX--0xXXX   | MRW (RZ)  | `macercsk{0..7}`         | ACE Root Context Sealing Key
 | 0xXXX--0xXXX   | MRW (RZ)  | `maceOSSecret{0..3}`     | ACE OS Secret
@@ -802,6 +803,39 @@ This serves to make sure that the instructions are issued in the correct order.
 
 The new privileged CSRs introduced by ACE are defined here.
 
+===== `vacecrstatus`
+
+The CSR `vacecrstatus` exists only if H-mode is implemented, and it is HRW.
+
+It is similar to `acecrstatus`, however it works to track the status of the CRs at the VS-mode.
+
+. For RV64, `vacecrstatus` has a size of 64 bits,
+`vacecrstatus[``2__i__+1,2__i__``]`` can take the values Off, Init, Clean, Dirty as defined for `*status.ACES` for CR #__i__.
+. For RV32, there are two 32-bit registers `vacecrstatush` and `vacecrstatusl` (collectively referred to as `vacecrstatus` in the following)
+where
+``vacecrstatus[``2__i__+1,2__i__``]`` can take the values Off, Init, Clean, Dirty as defined for `*status.ACES` for CR #__i__
+and
+``vacecrstatus[``2__i__+1,2__i__``]`` for CR #__i__+16.
+
+The semantics of the bitfields of `vacecrstatus` are the same as those of `acecrstatus`.
+
+[comment]
+--
+Any change to `acecrstatus` is reflected in `vacecrstatus` as follows:
+
+* If an operation in U-mode changes a field of `acecrstatus` to *DIRTY*, the corresponding field in `vacecrstatus` is set to *DIRTY*.
+* If an operation in U-mode changes a field of `acecrstatus` to *CLEAN* from a different state, the corresponding field in `vacecrstatus` is set to *DIRTY*.
+* If an operation in U-mode changes a field of `acecrstatus` to *INIT*, the corresponding field in `vacecrstatus` is set to *INIT*.
+* If an operation in U-mode changes a field of `acecrstatus` to *LAZY*, the corresponding field in `vacecrstatus` is set to ?.
+* An operation in VS-mode changes `vacecrstatus` in the same way as the corresponding operation in U-mode would change `acecrstatus`.
+* If S-mode changes a field of `acecrstatus` to *CLEAN*, the corresponding field in `vacecrstatus` is set to *CLEAN*.
+* If S-mode changes a field of `acecrstatus` to *DIRTY*, the corresponding field in `vacecrstatus` is set to *DIRTY*.
+* If S-mode changes a field of `acecrstatus` to *INIT*, the corresponding field in `vacecrstatus` is set to *INIT*.
+* If S-mode changes a field of `acecrstatus` to *LAZY*, the corresponding field in `vacecrstatus` is set to *CLEAN*.
+--
+
+//
+
 [[ACE-CSR-macercsk]]
 ===== `macercsk` group
 
@@ -936,29 +970,29 @@ M : array of bytes // from memory
 
 // next instruction preemptible, with `acestart` from 0 to 7
 UNINTERRUPTIBLE_BLOCK_START
-|   metadata : bits(64) = M[0 .. 7]
-|   if (there is not enough memory for the algorithm encoded in the metadata)
-|       error ace_err_insufficient_memory
-|   z ← size(content according to metadata);
-|   content ← internal buffer for z bytes;
-|   num_blocks = ceil(z / 16);
-|   last_block_fractional : boolean ← (z % 16 != 0);
+|  metadata : bits(64) = M[0 .. 7]
+|  if (there is not enough memory for the algorithm encoded in the metadata)
+|     error ace_err_insufficient_memory
+|  z ← size(content according to metadata);
+|  content ← internal buffer for z bytes;
+|  num_blocks = ceil(z / 16);
+|  last_block_fractional : boolean ← (z % 16 != 0);
 UNINTERRUPTIBLE_BLOCK_END
 
 foreach(i from 0 to num_blocks - 1) {
-    // next instruction preemptible, with `acestart` from 32+i*16 to 39+i*16 or 47+i*16
-    UNINTERRUPTIBLE_BLOCK_START
-    |   if ((i == num_blocks - 1) and last_block_fractional)
-    |       content[i*16 .. 7+i*16] ← M[8+i*16 .. 15+i*16];
-    |   else
-    |       content[i*16 .. 15+i*16] ← M[8+i*16 .. 23+i*16];
-    UNINTERRUPTIBLE_BLOCK_END
+  // next instruction preemptible, with `acestart` from 32+i*16 to 39+i*16 or 47+i*16
+  UNINTERRUPTIBLE_BLOCK_START
+  |  if ((i == num_blocks - 1) and last_block_fractional)
+  |     content[i*16 .. 7+i*16] ← M[8+i*16 .. 15+i*16];
+  |  else
+  |     content[i*16 .. 15+i*16] ← M[8+i*16 .. 23+i*16];
+  UNINTERRUPTIBLE_BLOCK_END
 }
 
 // if preempted here, `acestart` will be z
 UNINTERRUPTIBLE_BLOCK_START
-|   - Now the content can be deserialized: Keys may be converted into shares, and
-|   - any derived values not given in the initialization input will be computed here.
+|  - Now the content can be deserialized: Keys may be converted into shares, and
+|  - any derived values not given in the initialization input will be computed here.
 UNINTERRUPTIBLE_BLOCK_END
 ----
 
@@ -1011,30 +1045,30 @@ let last_block_fractional : boolean ← z % 16 != 0;
 let num_blocks : int ← ceil(z / 16);
 
 UNINTERRUPTIBLE_BLOCK_START
-|   N ← random(96 bits);
+|  N ← random(96 bits);
 |
-|   if (metadata.Locality == 15) then
-|       CSK ← RCSK;
-|   else
-|       CSK ← DCSK_KeyDeriv(RCSK, LST[metadata.Locality]);
+|  if (metadata.Locality == 15) then
+|     CSK ← RCSK;
+|  else
+|     CSK ← DCSK_KeyDeriv(RCSK, LST[metadata.Locality]);
 |
-|   {Kenc, Kauth} = RFC8452_KeyDeriv(CSK);
+|  {Kenc, Kauth} = RFC8452_KeyDeriv(CSK);
 |
-|   - If some internal operations are needed to make the content available,
-|   - such as reconstructing threshold keys/values into a single share, these
-|   - must be computed at this point. Starting with the following POLYVAL operation
-|   - content will refer to the resulting data as architected for non-threshold
-|   - implementations.
+|  - If some internal operations are needed to make the content available,
+|  - such as reconstructing threshold keys/values into a single share, these
+|  - must be computed at this point. Starting with the following POLYVAL operation
+|  - content will refer to the resulting data as architected for non-threshold
+|  - implementations.
 |
-|   tmp ← POLYVAL(Kauth, zeros(64) @ metadata @ content);
-|   SIV ← AESE(Kenc, 0 @ (tmp[126:0] xor (zeros(31) @ N)))) >> 32;
+|  tmp ← POLYVAL(Kauth, zeros(64) @ metadata @ content);
+|  SIV ← AESE(Kenc, 0 @ (tmp[126:0] xor (zeros(31) @ N)))) >> 32;
 UNINTERRUPTIBLE_BLOCK_END
 
 // preemptible here, with `acestart` from 0 to 15
 UNINTERRUPTIBLE_BLOCK_START
 |   M[0 .. 15] ← N[63:0]
-|              @ (metadata[63:32] xor AESE(Kenc, 1 @ SIV[94:0] @ zeros(32))[31:0])
-|              @  metadata[31:0];
+|                @ (metadata[63:32] xor AESE(Kenc, 1 @ SIV[94:0] @ zeros(32))[31:0])
+|                @  metadata[31:0];
 UNINTERRUPTIBLE_BLOCK_END
 
 // preemptible here, with `acestart` from 16 to 31
@@ -1043,15 +1077,15 @@ UNINTERRUPTIBLE_BLOCK_START
 UNINTERRUPTIBLE_BLOCK_END
 
 foreach(i from 0 to num_blocks - 1) {
-    // next instruction preemptible, with `acestart` from 32+i*16 to 39+i*16 or 47+i*16
-    UNINTERRUPTIBLE_BLOCK_START
-    |   if ((i == num_blocks - 1) and last_block_fractional)
-    |       M[32+i*16 .. 39+i*16] ← content[i*16 .. 7+i*16] xor
-    |                       AESE(Kenc, 1 @ SIV[94:0] @ (binary(i+1)[31:0]))[63:0];
-    |   else
-    |       M[32+i*16 .. 47+i*16] ← content[i*16 .. 15+i*16] xor
-    |                       AESE(Kenc, 1 @ SIV[94:0] @ (binary(i+1)[31:0]));
-    UNINTERRUPTIBLE_BLOCK_END
+  // next instruction preemptible, with `acestart` from 32+i*16 to 39+i*16 or 47+i*16
+  UNINTERRUPTIBLE_BLOCK_START
+  |  if ((i == num_blocks - 1) and last_block_fractional)
+  |     M[32+i*16 .. 39+i*16] ← content[i*16 .. 7+i*16]
+  |                             xor AESE(Kenc, 1 @ SIV[94:0] @ bin(i+1,32))[63:0];
+  |  else
+  |     M[32+i*16 .. 47+i*16] ← content[i*16 .. 15+i*16]
+  |                             xor AESE(Kenc, 1 @ SIV[94:0] @ bin(i+1,32));
+  UNINTERRUPTIBLE_BLOCK_END
 }
 ----
 
@@ -1068,61 +1102,61 @@ tag : bits(96);
 
 // next instruction preemptible, with `acestart` from 0 to 7
 UNINTERRUPTIBLE_BLOCK_START
-|   metadata : bits(64) ← M[0 .. 7]
-|   if (there is not enough memory for the algorithm encoded in the metadata)
-|       error ace_err_insufficient_memory
+|  metadata : bits(64) ← M[0 .. 7]
+|  if (there is not enough memory for the algorithm encoded in the metadata)
+|     error ace_err_insufficient_memory
 UNINTERRUPTIBLE_BLOCK_END
 
 UNINTERRUPTIBLE_BLOCK_START
-|   z ← size(content according to metadata);
-|   content ← internal buffer for z bytes;
-|   num_blocks ← ceil(z / 16);
-|   last_block_fractional : boolean ← (z % 16 != 0);
+|  z ← size(content according to metadata);
+|  content ← internal buffer for z bytes;
+|  num_blocks ← ceil(z / 16);
+|  last_block_fractional : boolean ← (z % 16 != 0);
 |
-|   if (metadata.Locality == 15) then
-|       CSK ← RCSK;
-|   else
-|       CSK ← DCSK_KeyDeriv(RCSK, LST[metadata.Locality]);
+|  if (metadata.Locality == 15) then
+|     CSK ← RCSK;
+|  else
+|     CSK ← DCSK_KeyDeriv(RCSK, LST[metadata.Locality]);
 |
-|   {Kenc, Kauth} = RFC8452_KeyDeriv(CSK);
+|  {Kenc, Kauth} = RFC8452_KeyDeriv(CSK);
 |
-|   // next instruction preemptible, with `acestart` from 8 to 19
-|   N ← M[8 .. 19];
+|  // next instruction preemptible, with `acestart` from 8 to 19
+|  N ← M[8 .. 19];
 UNINTERRUPTIBLE_BLOCK_END
 
 // next instruction preemptible, with `acestart` from 20 to 31
 UNINTERRUPTIBLE_BLOCK_START
-|   SIV ← M[20 .. 31];
-|   metadata[63:32] ← metadata[63:32]
-|                     xor AESE(Kenc, 1 @ SIV[94:0] @ zeros(32))[31:0];
-|   tmp ← zeros(64) @ metadata;
-|   tmp ← tmp * Kauth;  // * = Montgomery multiplication
+|  SIV ← M[20 .. 31];
+|  metadata[63:32] ← metadata[63:32]
+|                    xor AESE(Kenc, 1 @ SIV[94:0] @ zeros(32))[31:0];
+|  tmp ← zeros(64) @ metadata;
+|  tmp ← tmp * Kauth;  // * = Montgomery multiplication
 UNINTERRUPTIBLE_BLOCK_END
 
 foreach(i from 0 to num_blocks - 1) {
-    // next instruction preemptible, with `acestart` from 32+i*16 to 39+i*16 or 47+i*16
-    UNINTERRUPTIBLE_BLOCK_START
-    |   if ((i == num_blocks - 1) and last_block_fractional) {
-    |       content[i*16 .. 7+i*16] ← M[32+i*16 .. 39+i*16] xor
-    |                     AESE(Kenc, 1 @ SIV[94:0] @ (binary(i+1)[31:0]))[63:0];
-    |       tmp[63:0] ← tmp[63:0] xor content[i*16 .. 7+i*16];
-    |   } else {
-    |       content[i*16 .. 15+i*16] ← M[32+i*16 .. 47+i*16] xor
-    |                     AESE(Kenc, 1 @ SIV[94:0] @ (binary(i+1)[31:0]));
-    |       tmp ← tmp xor content[i*16 .. 15+i*16];
-    |   }
-    |   tmp ← tmp * Kauth;  // * = Montgomery multiplication
-    UNINTERRUPTIBLE_BLOCK_END
+   // next instruction preemptible, with `acestart` from 32+i*16 to 39+i*16 or 47+i*16
+   UNINTERRUPTIBLE_BLOCK_START
+   |  if ((i == num_blocks - 1) and last_block_fractional) {
+   |     content[i*16 .. 7+i*16] ← M[32+i*16 .. 39+i*16]
+   |                               xor AESE(Kenc, 1 @ SIV[94:0] @ bin(i+1,32))[63:0];
+   |     tmp[63:0] ← tmp[63:0] xor content[i*16 .. 7+i*16];
+   |  } else {
+   |     content[i*16 .. 15+i*16] ← M[32+i*16 .. 47+i*16]
+   |                                xor AESE(Kenc, 1 @ SIV[94:0] @ bin(i+1,32));
+   |     tmp ← tmp xor content[i*16 .. 15+i*16];
+   |  }
+   |  tmp ← tmp * Kauth;  // * = Montgomery multiplication
+   UNINTERRUPTIBLE_BLOCK_END
 }
 
 // if preempted here, `acestart` will be z + 32
 
 UNINTERRUPTIBLE_BLOCK_START
-|   tag ← AESE(Kenc, 0 @ (tmp[126:0] xor (zeros(31) @ N)))) >> 32;
-|   if (tag != SIV) then { error ace_err_authentication; }
-|   - Now the content can be deserialized.
-|   - This includes computing any derived values not saved as part of the SCC,
-|   - as well as creating shares for threshold implementations.
+|  tag ← AESE(Kenc, 0 @ (tmp[126:0] xor (zeros(31) @ N)))) >> 32;
+|  if (tag != SIV) then { error ace_err_authentication; }
+|  - Now the content can be deserialized.
+|  - This includes computing any derived values not saved as part of the SCC,
+|  - as well as creating shares for threshold implementations.
 UNINTERRUPTIBLE_BLOCK_END
 ----
 
@@ -1862,7 +1896,7 @@ The supporting instructions themselves must be uninterruptible.
 // ///////////////////////////////////////////////////////////////////////////////////////////
 
 [[ACE-algorithms]]
-=== Algorithm-Specific Data Formats and Instruction Semantics
+=== Data Formats and Instruction Semantics for Architected Algorithms
 
 In this chapter we specify the behavior of Cryptographic Contexts for various cryptographic algorithms.
 Some specifications are generic in the sense that they apply to all algorithms of a certain type and can be instantiated with different primitives with varying parameters such as block and key sizes.
@@ -1876,8 +1910,8 @@ Each algorithm is fully defined by the following information:
 
 Parameters:::
 These include:
-* The block size, which is the size of the basic unit of information processed by the algorithm, usually the block size of the main underlying primitive;
-* The key size, for keyed algorithms; and
+* The _block size_ `b`, which is the size of the basic unit of information processed by the algorithm, usually the block size of the main underlying primitive;
+* The _key size_ `k`, for keyed algorithms; and
 * Any other parameter (for instance, counter size) that is necessary to instantiate the algorithm with compatible primitives.
 
 Important: In this section, all field lengths are specified in bits except where otherwise noted.
@@ -2483,7 +2517,7 @@ If `VL*SEW` is a multiple of `b`, the above operations are executed `VL*SEW/b` t
 ** In state _enc_hash_finalize_, only ``ace.exec`` instructions of Form A are allowed. The value
 +
 --
-*** `Vs = IntTo{b/2}Bits(bit_length(AD)) @ IntTo{b/2}Bits(bit_length(plaintext))`
+*** `Vs = bin(bit_length(AD),b/2) @ bin(bit_length(plaintext),b/2)`
 --
 +
 
@@ -2517,7 +2551,7 @@ the above operations are executed `VL*SEW/b` times, decrypting each `b`-bit bloc
 
 ** In state _dec_hash_finalize_, only a Form A ``ace.exec`` instruction is allowed.
 The value +
- `{nbsp}{nbsp}{nbsp}Vs = IntTo{b/2}Bits(bit_length(AD)) @ IntTo{b/2}Bits(bit_length(plaintext))` +
+ `{nbsp}{nbsp}{nbsp}Vs = bin(bit_length(AD),b/2) @ bin(bit_length(plaintext),b/2)` +
  must be set by the software, then “```ace.exec Vd, Kn|K[Xn], Vs```” computes the authentication tag as follows:
 +
 --
@@ -2580,7 +2614,7 @@ foreach(i from 0 to len_in_bytes(PT)/16-1) {
 
 // Finally, we absorb the lengths into auth_tag, finalize it, and output it
 ace.state K0, #ace_state_enc_hash_finalize
-V1 ← IntTo64Bits(len(AD)) @ IntTo64Bits(len(PT))
+V1 ← bin(len_in_bits(AD),64) @ bin(len_in_bits(PT),64)
 ace.exec V2, K0, V1                              // V2 contains the finalized hash
 ----
 
@@ -2594,7 +2628,7 @@ and the last lines are as follows:
 ----
 // Finally, we absorb the lengths into auth_tag, finalize it, and verify it
 ace.state K0, #ace_state_dec_hash_finalize
-V1 ← IntTo64Bits(len(AD)) @ IntTo64Bits(len(CT))
+V1 ← bin(len_in_bits(AD),64) @ bin(len_in_bits(CT),64)
 ace.exec V2, K0, V1                                // V2 contains the finalized hash
 
 ace.state K0, #ace_state_hash_verify
@@ -2800,7 +2834,7 @@ If `VL*SEW` is a multiple of `b`, `absorb` is executed on each of the `VL*SEW/b`
   “```ace.exec Vd, Kn|K[Xn], Vs```,” where it is the responsibility of the user to set
 +
 --
-  *** `Vs <- IntTo{b/2}Bits(bit_length(AD)) @ IntTo{b/2}Bits(bit_length(plaintext))`,
+  *** `Vs <- bin(bit_length(AD),b/2) @ bin(bit_length(plaintext),b/2)`,
 --
 +
 finalizes the computation of the SIV/tag, by performing:
@@ -2849,7 +2883,7 @@ If `VL*SEW` > `b`, the above operations are applied to each of the `VL*SEW/b` bl
    namely “```ace.exec Kn|K[Xn], Vs```,” where it is the responsibility of the user to set
 +
 --
-  ***  `Vs = IntTo{b/2}Bits(bit_length(AD)) @ IntTo{b/2}Bits(bit_length(plaintext))`.
+  ***  `Vs = bin(bit_length(AD),b/2) @ bin(bit_length(plaintext),b/2)`.
 --
 +
 ``ace.exec`` thus performs the following operations:
@@ -2906,7 +2940,7 @@ foreach(i from 0 to len_in_bytes(PT)/16-1) {
     ace.exec K0, V0                              // Absorb it into hash
 }
 
-V0 ← IntTo64Bits(len(AD)) @ IntTo64Bits(len(PT))
+V0 ← bin(len_in_bits(AD),64) @ bin(len_in_bits(PT),64)
 ace.exec K0, V0                                  // Absorb lengths into hash
 
 // Finalize the SIV computation, set and return it
@@ -2960,7 +2994,7 @@ foreach(i from 0 to len_in_bytes(CT)/16-1) {
 
 // Finally, we absorb the lengths of AD and plaintext into auth_tag AND verify
 ace.state K0, #ace_state_enc_hash_finalize
-V0 ← IntTo64Bits(len(AD)) @ IntTo64Bits(len(PT))
+V0 ← bin(len_in_bits(AD),64) @ bin(len_in_bits(PT),64)
 ace.exec K0, V0
 ace.error X1
 if (X1 != 0) then { handle error }               // do not use the plaintext if error occurred
