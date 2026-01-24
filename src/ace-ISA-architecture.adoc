@@ -413,7 +413,7 @@ They are listed in <<ACE-CSRs-table>>.
 | Address        | Privilege | Name                     | Description
 | 0xXXX          | URW       | `aceerror`               | Error code of the last ACE instruction
 | 0xXXX          | URO       | `acecrstatus`            | Array of two-bit fields (similar to ACES state, but per CR)
-| 0xXXX          | URW       | `acestart`               | ACE start byte index
+| 0xXXX          | URW       | `acestart`               | ACE start bytes index
 | 0xXXX          | URW       | `aceiobuflen`            | ACE I/O buffer length
 | 0xXXX          | URW       | `aceiobuftop`            | ACE I/O buffer limit for current transfers
 | 0xXXX          | URO       | `acesequence`            | Sequence number of the last ACE instruction
@@ -424,6 +424,10 @@ They are listed in <<ACE-CSRs-table>>.
 | 0xXXX--0xXXX   | MRW (RZ)  | `maceOSSecret{0..3}`     | ACE OS Secret
 | 0xXXX--0xXXX   | MRW (RZ)  | `maceBootSecret0{0..3}`  | ACE Boot Secret
 |===
+
+[WARNING]
+`acestart` may be overloaded with `vstart`, regardless of the presence of the V extension.
+If a vector instruction is interrupted, the register would follow the `vstart` semantics, whereas if an ACE instruction is interrupted, the register would follow the `acestart` semantics.
 
 ==== Extension to existing CSRs
 
@@ -737,9 +741,10 @@ Only the second pass can cause page faults and may require resumption._
 This design obviates the need to separate data transfer from cryptographic processing during import and export operations. A separate transfer phase would require buffering the entire input within the ACE unit before processing, increasing internal resource requirements, whereas the current architecture can process data inline and is loaded with minimal overhead.
 ====
 
-A different situation arises when an `ace.exec` instruction operates on long vectors containing multiple elements.
+A different situation arises when an `ace.exec` instruction operates on long vectors containing multiple elements, in which case, usually, `VL*SEW` is a multiple of the basic processing unit usually denoted by `b` (such as a block size).
 In the algorithm description we explicitly mention that a block of operations is repeated for each block in the vector:
-the execution of these iterative `ace.exec` instructions may be interrupted and resumed, and `acestart` reflects the number of bytes processed so far.
+the execution of these iterative `ace.exec` instructions may be interrupted and resumed.
+Regardnless of whether the operations are on vectors or on the input/output buffer, `acestart` reflects the number of bytes processed so far.
 
 The semantics and use of `acestart` are described in <<ACE-format-configuration>>.
 
@@ -1817,50 +1822,6 @@ Usage-controlled: *YES*. +
 Trappable: *YES*. +
 Interruptible: *YES*.
 
-//
-
-[[ACE-usage-input-output]]
-==== Usage of the ace.input and ace.output Instructions
-
-The `ace.input` and `ace.output` instructions can replace the inputs and outputs to Forms A-C of `ace.exec` and the input of `ace.derive`.
-They can be used only if the size in CSR `aceiobuflen` is non-zero and is a valid size (for instance the block size `b` or a multiple thereof),
-otherwise an invalid instruction error is raised.
-
-If `aceiobuflen` is non-zero, then Forms A, B, and C of `ace.exec` and `ace.derive` can be replaced in the code as follows:
-
-[[ACE-replacement-instructions]]
-.Replacement sequences for `ace.exec` and `ace.derive` using `ace.input` and `ace.output`
-[float="center",align="center",width="80%",cols="<42%,<38%",options="header"]
-|===
-| Original Instruction          | Replacement Sequence
-| `ace.exec{nbsp}{nbsp}{nbsp}Vd, Kn\|K[Xn], Vs` | `ace.input{nbsp}{nbsp}Xl, Vs` +
-`ace.exec{nbsp}{nbsp}{nbsp}Kn\|K[Xn]` +
-`ace.output{nbsp}Vd,  Xl`
-| `ace.exec{nbsp}{nbsp}{nbsp}{nbsp}{nbsp}{nbsp}{nbsp}Kn\|K[Xn], Vs`     | `ace.input{nbsp}{nbsp}Xl, Vs` +
-`ace.exec{nbsp}{nbsp}{nbsp}Kn\|K[Xn]`
-| `ace.exec{nbsp}{nbsp}{nbsp}Vd, Kn\|K[Xn]`     | `ace.exec{nbsp}{nbsp}{nbsp}Kn\|K[Xn]` +
-`ace.output{nbsp}Vd,  Xl`
-| `ace.derive Kd\|K[Xd], Ks1\|K[Xs1], Vs2` | `ace.input{nbsp}{nbsp}Xl, Vs2` +
-`ace.derive{nbsp}Kd\|K[Xd], Ks1\|K[Xs1]` +
-|===
-
-In all cases, the `ace.input` and `ace.output` instructions must be temporarily tied to a specific context in order to properly determine the allowed sequences.
-This is done by setting the `aceactivecr` CSR (cf.{nbsp}<<ACE-CSR-aceactivecr>>) first. The user must not forget to set it back to 32 after the sequence is completed.
-
-We use the `acesequence` CSR to indicate whether we are using the input/output buffer or the vector registers to provide the inputs and outputs to ACE instructions, and to track the instruction sequence.
-The initial value of `acesequence` is zero.
-As soon as an `ace.input` is completed in place of a Form A or B `ace.exec` or `ace.derive`, or a Form D `ace.exec` is completed in place of a Form C `ace.exec`, `acesequence` is set to 1.
-In this case, `acesequence` remains 1 until the end of the second instruction of the replacement sequence, and-if there is a third instruction in the sequence-then set to 2 until the end of the third instruction of the sequence.
-At the end of the sequence, `acesequence` is reset to 0.
-The ordering of the instructions in a replacement sequence is enforced by the architecture according to the value of `acesequence` and the state number of the CR configured in `meta`.
-Not properly following the instruction ordering raises an invalid instruction exception.
-`acesequence` can be saved and restored by privileged code together with `acestart`.
-
-The internal input/output buffer, if enabled, is not part of a CR but is a separate structure. It is also architectural, i.e., per-hart.
-In fact, `ace.output` can be used to save the contents of the buffer, and `ace.input` can be used to restore it freely as long as `aceactivecr` takes the value 32.
-Also, these operations start at the offset specified in `acestart`, so the state of the buffer can easily be saved and restored with the same approach used for vectors.
-
-NOTE: This mechanism is one of the reasons, besides keeping the state machines simple, that in a given state of an algorithm, in each state only one Form of `ace.exec` instruction is allowed.
 
 // ///////////////////////////////////////////////////////////////////////////////////////////
 
@@ -2032,6 +1993,54 @@ An implementation must wait before accessing a CR that is still being written to
 +
 
 //
+
+[[ACE-usage-input-output]]
+==== Rules when using the `ace.input` and `ace.output` instructions
+
+The `ace.input` and `ace.output` instructions can replace the inputs and outputs to Forms A-C of `ace.exec` and the input of `ace.derive` in any algorihm, to the point that an implementation of ACE without the V extension or a subset thereof is possible.
+
+These two instructions can be used is implemented and the size in CSR `aceiobuflen` is non-zero and is a valid size (for instance the block size `b` or a multiple thereof), otherwise an invalid instruction error is raised.
+
+If `aceiobuflen` is non-zero, then Forms A, B, and C of `ace.exec` and `ace.derive` can be replaced in the code as follows:
+
+[[ACE-replacement-instructions]]
+.Replacement sequences for `ace.exec` and `ace.derive` using `ace.input` and `ace.output`
+[float="center",align="center",width="80%",cols="<42%,<38%",options="header"]
+|===
+| Original Instruction          | Replacement Sequence
+| `ace.exec{nbsp}{nbsp}{nbsp}Vd, Kn\|K[Xn], Vs` | `ace.input{nbsp}{nbsp}Xl, Vs` +
+`ace.exec{nbsp}{nbsp}{nbsp}Kn\|K[Xn]` +
+`ace.output{nbsp}Vd,  Xl`
+| `ace.exec{nbsp}{nbsp}{nbsp}{nbsp}{nbsp}{nbsp}{nbsp}Kn\|K[Xn], Vs`     | `ace.input{nbsp}{nbsp}Xl, Vs` +
+`ace.exec{nbsp}{nbsp}{nbsp}Kn\|K[Xn]`
+| `ace.exec{nbsp}{nbsp}{nbsp}Vd, Kn\|K[Xn]`     | `ace.exec{nbsp}{nbsp}{nbsp}Kn\|K[Xn]` +
+`ace.output{nbsp}Vd,  Xl`
+| `ace.derive Kd\|K[Xd], Ks1\|K[Xs1], Vs2` | `ace.input{nbsp}{nbsp}Xl, Vs2` +
+`ace.derive{nbsp}Kd\|K[Xd], Ks1\|K[Xs1]` +
+|===
+
+In all cases, the `ace.input` and `ace.output` instructions must be temporarily tied to a specific context in order to properly determine the allowed sequences.
+This is done by setting the `aceactivecr` CSR (cf.{nbsp}<<ACE-CSR-aceactivecr>>) first. The user must not forget to set it back to 32 after the sequence is completed.
+
+We use the `acesequence` CSR to indicate whether we are using the input/output buffer or the vector registers to provide the inputs and outputs to ACE instructions, and to track the instruction sequence.
+The initial value of `acesequence` is zero.
+As soon as an `ace.input` is completed in place of a Form A or B `ace.exec` or `ace.derive`, or a Form D `ace.exec` is completed in place of a Form C `ace.exec`, `acesequence` is set to 1.
+In this case, `acesequence` remains 1 until the end of the second instruction of the replacement sequence, and-if there is a third instruction in the sequence-then set to 2 until the end of the third instruction of the sequence.
+At the end of the sequence, `acesequence` is reset to 0.
+The ordering of the instructions in a replacement sequence is enforced by the architecture according to the value of `acesequence` and the state number of the CR configured in `meta`.
+Not properly following the instruction ordering raises an invalid instruction exception.
+`acesequence` can be saved and restored by privileged code together with `acestart`.
+
+The internal input/output buffer, if enabled, is not part of a CR but is a separate structure. It is also architectural, i.e., per-hart.
+In fact, `ace.output` can be used to save the contents of the buffer, and `ace.input` can be used to restore it freely as long as `aceactivecr` takes the value 32.
+Also, these operations start at the offset specified in `acestart`, so the state of the buffer can easily be saved and restored with the same approach used for vectors.
+
+In all algorithms, whenever a Form A-C `ace.exec`, or `ace.derive` is replaced by a sequence of instructions, we need to make another adjustment, namely that
+in place of `VL*SEW` we use `aceiobuflen`. In this case, `b` must divide `aceiobuflen` and `acestart`, instead of `VL*SEW` and `acestart`.
+
+NOTE: This mechanism is one of the reasons, besides keeping the state machines simple, that in a given state of an algorithm, in each state only one Form of `ace.exec` instruction is allowed.
+
+// zzz
 
 [[ACE-rules-threshold-implementations]]
 ==== Rules for Threshold implementations
