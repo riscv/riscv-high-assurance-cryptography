@@ -3799,15 +3799,97 @@ The algorithm has the same states as Ascon-AEAD128 as described in <<ACE-Ascon-A
 
 For encryption and decryption with both nonce masking and a set nonce, the algorithm described in <<ACE-Ascon-AEAD128-wsn>> is used, giving `K1` as the key `key` and providing `N xor K2` as the nonce value.
 
+[[ACE-Ascon-Hash256]]
 ===== Ascon-Hash256 cryptographic hash
 
-[WARNING]
-TBD
+In this mode it is the responsibility of the user to apply proper padding to the inputs.
+
+Parameters:::
+
+* `b` = 64. For this algorithm we require `VL*SEW` to be an integer multiple of `b`.
+* `k` = 128.
+
+Data Structures:::
+
+* *Initialization Input*:
+(no content)
+
+* *Internal State*:
+ ** `state[0 .. 4]`: five 64-bit words, i.e., 320 bits.
+ ** `countdown` : integer going from 3 down to 0.
+
+* *Serialized Content*:
+[lowerroman]
+ . `state[0 .. 4]`: five 64-bit words, i.e., 320 bits.
+ . `countdown` : integer going from 3 down to 0. Stored in a 64-bit field.
+
+Algorithm-Specific Functions:::
+
+* `ASCON(p)` applies `p` rounds of ASCON to the `state`.
+
+State Machine:::
+
+* *States:* _initial_, _hash_absorb_, _hash_finalize_, and _completed_.
+
+* *Allowed State Transitions:*
+ ** From all states to _initial_.
+ ** _initial_ -> _hash_absorb_ -> _hash_finalize_ -> _completed_.
+
+* *Behavior:*
+ ** In state _initial_ :
+  *** No {nbsp}``ace.exec``{nbsp} operation is allowed.
+  *** The following initialization operations are performed:
+   . `state[0] <- 0x0000080100cc0002`
+   . `state[1] <- zeros(64)`
+   . `state[2] <- zeros(64)`
+   . `state[3] <- zeros(64)`
+   . `state[4] <- zeros(64)`
+   . `ASCON(12)`
+
+  ** In state _hash_absorb_, only  ``ace.exec`` instructions of Form B are allowed. +
+ “```ace.exec Kn|K[Xn], Vs```” absorbs a data block into the state, i.e.:
++
+--
+ . `state[0] <- state[0] xor Vs`
+ . `ASCON(12)`
+--
++
+If `VL*SEW` > `64`, the above group of operations is executed `VL*SEW/64` times, once for each `64`-bit block of `Vs`.
+
+** Upon entering _hash_finalize_, `countdown` is set to 3.
+
+** In state _hash_finalize_, at most four ``ace.exec`` instructions of Form C, to compute the tag, are allowed.
+“```ace.exec Vd, Kn|K[Xn]```”  performs
++
+--
+. `ASCON(12)`
+. `Vd <- state[0]`
+. if `countdown == 0` then transition to state _completed_.
+. `countdown <- countdown - 1`
+--
++
+If `VL*SEW` > `64`, the above group of operations is executed `VL*SEW/64` times, writing to `Vd[63:0]` the first time,
+`Vd[127:64]` the second time, `Vd[191:128]` the third time, `Vd[255:192]` the fourth time.
+If more ``ace.exec`` instructions are required, writing restarts from `Vd[63:0]`.
+If `countdown` reaches zero before the entire output registers is written to, the state of the unwritten bits is undefined: for instance
+this may occur also if If `VL*SEW` > `256`.
+This is usually not a problem, since the output vectors will be usually configured for `64`-bit, `128`-bit, or `256`-bit blocks, in which case
+four, two, or one ``ace.exec`` instruction is required, respectively.
+
+//
+
+NOTE: There is no need to provide “keyed” versions of this algorithm.
+If a providing, trusted entity wants to provide a CC in which some secret content has already been provisioned, there is nothing to prevent it.
+
+
 
 ===== Ascon-XOF128 extendable-output function
 
-[WARNING]
-TBD
+The algorithm is the same as Ascon-Hash256 (<<ACE-Ascon-Hash256>>) with the following differences:
+
+. The IV written to `state[0]` in state _initial_ is `0x0000080100cc0002`.
+. There is no `countdown` field.
+. As much output as desired can be produced in state _hash_finalize_ and the algorithm never transitions to state _completed_.
 
 ===== Ascon-CXOF128 extendable-output function with user-defined customization string
 
