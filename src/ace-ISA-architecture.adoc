@@ -3581,6 +3581,11 @@ The usage of this type of algorithms is very similar to that of CMAC (cf.{nbsp}<
 We now describe the state machines of the various Ascon-based cite:[DBLP-journals-joc-DobraunigEMS21] algorithms standardized by the NIST cite:[nist-SP-800-232].
 (((ACE, algorithm, Ascon)))
 
+[WARNING]
+====
+In all ASCON algorithms, the ordering of the bits must be verified!
+====
+
 [[ACE-Ascon-AEAD128]]
 ===== Ascon-AEAD128
 
@@ -3600,11 +3605,13 @@ Data Structures:::
 * *Internal State*:
  ** `key`: 128 bits, or 64 bits if a System Key index.
  ** `state[0 .. 4]`: five 64-bit words, i.e., 320 bits.
+ ** `tag_len`: 8 bits.
 
 * *Serialized Content*:
 [lowerroman]
  . `key`: 128 bits, or 64 bits if a System Key index.
  . `state[0 .. 4]`: five 64-bit words, i.e., 320 bits.
+ . `tag_len`: lower 8 bits in a 64 bit field.
 
 Algorithm-Specific Functions:::
 
@@ -3612,15 +3619,16 @@ Algorithm-Specific Functions:::
 
 State Machine:::
 
-* *States:* _initial_, _set_public_value_, _hash_absorb_, _encrypt_, _enc_hash_finalize_, _decrypt_, _dec_hash_finalize_, and _completed_.
+* *States:* _initial_, _set_public_value_, _hash_absorb_, _encrypt_, _enc_last_block_, _enc_hash_finalize_,
+ _decrypt_, _dec_last_block_, _dec_hash_finalize_, _hash_verify_, and _completed_.
 
 * *Allowed State Transitions:*
  ** From all states to _initial_.
  ** _initial_ -> _set_public_value_ -> _hash_absorb_.
  ** _hash_absorb_ -> _encrypt_ -- if metadata allows encryption, else the CR is *invalidated*.
  ** _hash_absorb_ -> _decrypt_ -- if metadata allows decryption, else the CR is *invalidated*.
- ** _encrypt_ -> _enc_hash_finalize_, later automatically transitioning to _completed_.
- ** _decrypt_ -> _dec_hash_finalize_, later automatically transitioning to _completed_.
+ ** _encrypt_ -> _enc_last_block_, _enc_hash_finalize_, later automatically transitioning to _completed_.
+ ** _decrypt_ -> _dec_last_block_, _dec_hash_finalize_, _hash_verify_, later automatically transitioning to _completed_.
 
 * *Behavior:*
  ** In state _initial_ :
@@ -3631,6 +3639,7 @@ State Machine:::
    . `state[2] <- key[127:64]`
    . `state[3] <- zeros(64)`
    . `state[4] <- zeros(64)`
+   . `tag_len <- 128`
  ** In state _set_public_value_:
   *** Only  ``ace.exec`` instructions of Form B are allowed.
   “```ace.exec Kn|K[Xn], Vs```” sets
@@ -3670,7 +3679,18 @@ If `VL*SEW` > `128`, the above group of operations is executed `VL*SEW/128` time
 +
 If `VL*SEW` is a multiple of `128`, the above group of operations is executed `VL*SEW/128` times, encrypting each `128`-bit block of `Vs` into the corresponding `128`-bit block of `Vd`.
 
-** In state _enc_hash_finalize_, only one ``ace.exec`` instruction of Form C is allowed.
+** In state _enc_last_block_, only one ``ace.exec`` instruction of Form A, to process the last block is allowed.
+“```ace.exec Vd, Kn|K[Xn], Vs```”  performs
++
+--
+. `state[0] <- state[0] xor Vs[63:0]`
+. `state[1] <- state[1] xor Vs[127:64]`
+. `Vd <- state[0] @ state[1]`
+--
++
+The state machine then transitions to state _enc_hash_finalize_.
+
+** In state _enc_hash_finalize_, only one ``ace.exec`` instruction of Form C, to compute the tag, is allowed.
 “```ace.exec Vd, Kn|K[Xn]```”  performs
 +
 --
@@ -3696,8 +3716,23 @@ The state machine then transitions to state _completed_.
 +
 If `VL*SEW` is a multiple of `128`, the above group of operations is executed `VL*SEW/128` times, decrypting each `128`-bit block of `Vs` into the corresponding `128`-bit block of `Vd`.
 
-** In state _dec_hash_finalize_, only a Form A ``ace.exec`` instruction is allowed.
+** In state _dec_last_block_, only a Form A ``ace.exec`` instruction is allowed.
 “```ace.exec Vd, Kn|K[Xn], Vs```” performs:
++
+--
+. `Vd <- (state[0] xor Vs[63:0]) @ (state[1] xor Vs[127:64])`
+. `state[0] <- Vs[63:0]`
+. `state[1] <- Vs[127:64]`
+--
++
+The state machine then transitions to state _dec_hash_finalize_.
+
+** In _dec_hash_finalize_, an `ace.state Kn|K[Xn], #ace_const_dec_hash_finalize, Xs` instruction may executed with a parameter, which sets
+the tag len `tag_len` to the value of `Xs`, provided it is not smaller than 32 and not larger that `128`. If the value is out of bounds, it is simply not set and remains `128` as set in state _initial_.
+The state machine then transitions to state _hash_verify_.
+
+** In state _hash_verify_, only one ``ace.exec`` instruction of Form D, to verify the tag, is allowed.
+“```ace.exec Kn|K[Xn], Vs```”  performs
 +
 --
 . `state[2] <- state[2] xor key[63:0]`
@@ -3705,7 +3740,7 @@ If `VL*SEW` is a multiple of `128`, the above group of operations is executed `V
 . `ASCON(12)`
 . `state[3] <- state[3] xor key[63:0]`
 . `state[4] <- state[4] xor key[127:64]`
-. `Vs[127:0]` is compared to `state[3] @ state[4]` +
+. `Vs[tag_len-1:0]` is compared to `(state[3] @ state[4])[tag_len-1:0]` +
 If the values match, then the state is changed to _completed_, and `ace.error` returns no error,
 else the state is changed to _completed_, and `ace.error` returns `ace_err_authentication`.
 --
@@ -3713,6 +3748,7 @@ else the state is changed to _completed_, and `ace.error` returns `ace_err_authe
 
 
 //
+
 
 [[ACE-Ascon-AEAD1280-wsn]]
 ===== Ascon-AEAD128-with-set-nonce
