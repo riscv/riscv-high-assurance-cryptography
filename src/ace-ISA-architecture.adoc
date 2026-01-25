@@ -2717,7 +2717,8 @@ is replaced by
 
 * _initial_ -> _hash_absorb_.
 
-Finally, instead of transitioning to _completed_ the state machine transitions to _invalidated_.
+Finally, once in state _completed_, the CC with this algorithm *cannot* be brought back to state _initial_.
+
 This does not prevent cloning the CR at the beginning and reusing it, but, for decryption, it can only be used with the intended ciphertext.
 
 This mode _cannot_ be emulated with an ECB CR because it would reveal the internal data.
@@ -3580,10 +3581,158 @@ The usage of this type of algorithms is very similar to that of CMAC (cf.{nbsp}<
 We now describe the state machines of the various Ascon-based cite:[DBLP-journals-joc-DobraunigEMS21] algorithms standardized by the NIST cite:[nist-SP-800-232].
 (((ACE, algorithm, Ascon)))
 
-===== Ascon-128 and Ascon-128a authenticated ciphers
+[[ACE-Ascon-AEAD128]]
+===== Ascon-AEAD128
 
-[WARNING]
-TBD
+In this mode it is the responsibility of the user to apply proper padding to the inputs.
+
+Parameters:::
+
+* `b` = 128. For this algorithm we require `VL*SEW` to be an integer multiple of `b`.
+* `k` = 128.
+
+Data Structures:::
+
+* *Initialization Input*:
+[lowerroman]
+ . `key`: `128` bits, or 64 bits if a System Key index.
+
+* *Internal State*:
+ ** `key`: 128 bits, or 64 bits if a System Key index.
+ ** `state[0 .. 4]`: five 64-bit words, i.e., 320 bits.
+
+* *Serialized Content*:
+[lowerroman]
+ . `key`: 128 bits, or 64 bits if a System Key index.
+ . `state[0 .. 4]`: five 64-bit words, i.e., 320 bits.
+
+Algorithm-Specific Functions:::
+
+* `ASCON(p)` applies `p` rounds of ASCON to the `state`.
+
+State Machine:::
+
+* *States:* _initial_, _set_public_value_, _hash_absorb_, _encrypt_, _enc_hash_finalize_, _decrypt_, _dec_hash_finalize_, and _completed_.
+
+* *Allowed State Transitions:*
+ ** From all states to _initial_.
+ ** _initial_ -> _set_public_value_ -> _hash_absorb_.
+ ** _hash_absorb_ -> _encrypt_ -- if metadata allows encryption, else the CR is *invalidated*.
+ ** _hash_absorb_ -> _decrypt_ -- if metadata allows decryption, else the CR is *invalidated*.
+ ** _encrypt_ -> _enc_hash_finalize_, later automatically transitioning to _completed_.
+ ** _decrypt_ -> _dec_hash_finalize_, later automatically transitioning to _completed_.
+
+* *Behavior:*
+ ** In state _initial_ :
+  *** No {nbsp}``ace.exec``{nbsp} operation is allowed.
+  *** The following initialization operations are performed:
+   . `state[0] <- 0x00001000808c0001`
+   . `state[1] <- key[63:0]`
+   . `state[2] <- key[127:64]`
+   . `state[3] <- zeros(64)`
+   . `state[4] <- zeros(64)`
+ ** In state _set_public_value_:
+  *** Only  ``ace.exec`` instructions of Form B are allowed.
+  “```ace.exec Kn|K[Xn], Vs```” sets
+   . `state[3] <- Vs[63:0]`
+   . `state[4] <- Vs[127:64]`
+  *** If “```ace.exec Kn|K[Xn], Vs```,” is repeated, it will just re-write the nonce.
+  *** If no such `ace.exec` to set the nonce is issued, the nonce subfield of `state` remains zero.
+  *** If `VL*SEW` > `128`, only the `128` least significant bits of `Vs` are considered.
+
+  ** Upon entering the state _hash_absorb_, the following is performed:
+  . `ASCON(12)`
+  . `state[3] <- state[3] xor key[63:0]`
+  . `state[4] <- state[4] xor key[127:64]`
+  ** In state _hash_absorb_, only  ``ace.exec`` instructions of Form B are allowed. +
+ “```ace.exec Kn|K[Xn], Vs```” absorbs a data block into the state, i.e.:
++
+--
+ . `ASCON(8)`
+ . `state[0] <- state[0] xor Vs[63:0]`
+ . `state[1] <- state[1] xor Vs[127:64]`
+--
++
+If `VL*SEW` > `128`, the above group of operations is executed `VL*SEW/128` times, once for each `128`-bit block of `Vs`.
+
+** Upon entering state _encrypt_ or _decrypt_, the following domain separation operation is performed:
+ . `lsb(state[4]) <- lsb(state[4]) xor 1`
+
+** In state _encrypt_, only ``ace.exec`` instructions of Form A are allowed.
+   “```ace.exec Vd, Kn|K[Xn], Vs```” encrypts `Vs` into `Vd`, namely:
++
+--
+. `state[0] <- state[0] xor Vs[63:0]`
+. `state[1] <- state[1] xor Vs[127:64]`
+. `Vd <- state[0] @ state[1]`
+. `ASCON(8)`
+--
++
+If `VL*SEW` is a multiple of `128`, the above group of operations is executed `VL*SEW/128` times, encrypting each `128`-bit block of `Vs` into the corresponding `128`-bit block of `Vd`.
+
+** In state _enc_hash_finalize_, only one ``ace.exec`` instruction of Form C is allowed.
+“```ace.exec Vd, Kn|K[Xn]```”  performs
++
+--
+. `state[2] <- state[2] xor key[63:0]`
+. `state[3] <- state[3] xor key[127:64]`
+. `ASCON(12)`
+. `state[3] <- state[3] xor key[63:0]`
+. `state[4] <- state[4] xor key[127:64]`
+. `Vd <- state[3] @ state[4]`
+--
++
+The state machine then transitions to state _completed_.
+
+** In state _decrypt_, only  ``ace.exec`` instructions of Form A are allowed., i.e.,
+ `ace.exec Vd,Kn|K[Xn],Vs`. This operation performs:
++
+--
+. `Vd <- (state[0] xor Vs[63:0]) @ (state[1] xor Vs[127:64])`
+. `state[0] <- Vs[63:0]`
+. `state[1] <- Vs[127:64]`
+. `ASCON(8)`
+--
++
+If `VL*SEW` is a multiple of `128`, the above group of operations is executed `VL*SEW/128` times, decrypting each `128`-bit block of `Vs` into the corresponding `128`-bit block of `Vd`.
+
+** In state _dec_hash_finalize_, only a Form A ``ace.exec`` instruction is allowed.
+“```ace.exec Vd, Kn|K[Xn], Vs```” performs:
++
+--
+. `state[2] <- state[2] xor key[63:0]`
+. `state[3] <- state[3] xor key[127:64]`
+. `ASCON(12)`
+. `state[3] <- state[3] xor key[63:0]`
+. `state[4] <- state[4] xor key[127:64]`
+. `Vs[127:0]` is compared to `state[3] @ state[4]` +
+If the values match, then the state is changed to _completed_, and `ace.error` returns no error,
+else the state is changed to _completed_, and `ace.error` returns `ace_err_authentication`.
+--
++
+
+
+//
+
+[[ACE-Ascon-AEAD1280-wsn]]
+===== Ascon-AEAD128-with-set-nonce
+
+Similarly to GCM-with-set-IV, also Ascon-AEAD128 can be made in a version with a set nonce.
+In this case the state _set_public_value_ is skipped, and the initialisation input has the followin form
+
+* *Initialization Input*:
+[lowerroman]
+ . `key`: `128` bits, or 64 bits if a System Key index.
+ . `nonce`: `128` bits.
+
+In state _initial_, words 3 and 4 of `state` are initialized thus:
+
+. `state[3] <- nonce[63:0]`
+. `state[4] <- nonce[127:64]`
+
+Once in state _completed_, the CC cannot be brought back to state _initial_.
+
+//
 
 ===== Ascon-Hash cryptographic hash
 
