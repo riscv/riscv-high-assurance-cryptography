@@ -3675,9 +3675,10 @@ If `VL*SEW` is a multiple of `128`, the above group of operations is executed `V
 --
 . `state[0] <- state[0] xor Vs[63:0]`
 . `state[1] <- state[1] xor Vs[127:64]`
-. `Vd <- state[0] @ state[1]`
+. `Vd <- state[0] @ state[1]` // only the least significant 128 bits of `Vd` are written to.
 --
 +
+In this state only one 128-bit block is processed.
 The state machine then transitions to state _enc_hash_finalize_.
 
 ** In state _enc_hash_finalize_, only one ``ace.exec`` instruction of Form C, to compute the tag, is allowed.
@@ -3689,7 +3690,7 @@ The state machine then transitions to state _enc_hash_finalize_.
 . `ASCON(12)`
 . `state[3] <- state[3] xor key[63:0]`
 . `state[4] <- state[4] xor key[127:64]`
-. `Vd <- state[3] @ state[4]`
+. `Vd <- state[3] @ state[4]` // only the least significant 128 bits of `Vd` are written to.
 --
 +
 The state machine then transitions to state _completed_.
@@ -3698,10 +3699,14 @@ The state machine then transitions to state _completed_.
  `ace.exec Vd,Kn|K[Xn],Vs`. This operation performs:
 +
 --
-. `Vd <- (state[0] xor Vs[63:0]) @ (state[1] xor Vs[127:64])`
+* `tmp : bits(128)`
+
+[]
+. `tmp <- (state[0] xor Vs[63:0]) @ (state[1] xor Vs[127:64])`
 . `state[0] <- Vs[63:0]`
 . `state[1] <- Vs[127:64]`
 . `ASCON(8)`
+. `Vd <- tmp`
 --
 +
 If `VL*SEW` is a multiple of `128`, the above group of operations is executed `VL*SEW/128` times, decrypting each `128`-bit block of `Vs` into the corresponding `128`-bit block of `Vd`.
@@ -3710,14 +3715,18 @@ If `VL*SEW` is a multiple of `128`, the above group of operations is executed `V
 “```ace.exec Vd, Kn|K[Xn], Vs```” performs:
 +
 --
-. `Vd <- (state[0] xor Vs[63:0]) @ (state[1] xor Vs[127:64])`
+* `tmp : bits(128)`
+
+[]
+. `tmp <- (state[0] xor Vs[63:0]) @ (state[1] xor Vs[127:64])`
 . `state[0] <- Vs[63:0]`
 . `state[1] <- Vs[127:64]`
+. `Vd <- tmp`
 --
 +
 The state machine then transitions to state _dec_hash_finalize_.
 
-** In _dec_hash_finalize_, an `ace.state Kn|K[Xn], #ace_const_dec_hash_finalize, Xs` instruction may executed with a parameter, which sets
+** In state _dec_hash_finalize_, an `ace.state Kn|K[Xn], #ace_const_dec_hash_finalize, Xs` instruction may be executed, setting
 the tag len `tag_len` to the value of `Xs`, provided it is not smaller than 32 and not larger that `128`. If the value is out of bounds, it is simply not set and remains `128` as set in state _initial_.
 The state machine then transitions to state _hash_verify_.
 
