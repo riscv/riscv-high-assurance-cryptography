@@ -1036,8 +1036,8 @@ The generation of the SCC from the CC in a CR (cf.{nbsp}<<ACE-SCC-export>>) and 
 metadata : bits(64); // from the CR
 N, SIV : bits(96);
 tmp : bits(128);
-Kenc : bits(256);
-Kauth : bits(128);
+enc_key : bits(256);
+auth_key : bits(128);
 content : array[z] of bytes,      // from the CR's metadata
 where z : int ← size(content);    // content is serialized, size derived from metadata
 ASSERT(8 divides z);
@@ -1053,7 +1053,7 @@ UNINTERRUPTIBLE_BLOCK_START
 |  else
 |     CSK ← DCSK_KeyDeriv(RCSK, LST[metadata.Locality]);
 |
-|  {Kenc, Kauth} = RFC8452_KeyDeriv(CSK);
+|  {enc_key, auth_key} = RFC8452_KeyDeriv(CSK);
 |
 |  - If some internal operations are needed to make the content available,
 |  - such as reconstructing threshold keys/values into a single share, these
@@ -1061,14 +1061,14 @@ UNINTERRUPTIBLE_BLOCK_START
 |  - content will refer to the resulting data as architected for non-threshold
 |  - implementations.
 |
-|  tmp ← POLYVAL(Kauth, zeros(64) @ metadata @ content);
-|  SIV ← AESE(Kenc, 0 @ (tmp[126:0] xor (zeros(31) @ N)))) >> 32;
+|  tmp ← POLYVAL(auth_key, zeros(64) @ metadata @ content);
+|  SIV ← AESE(enc_key, 0 @ (tmp[126:0] xor (zeros(31) @ N)))) >> 32;
 UNINTERRUPTIBLE_BLOCK_END
 
 // preemptible here, with `acestart` from 0 to 15
 UNINTERRUPTIBLE_BLOCK_START
 |   M[0 .. 15] ← N[63:0]
-|                @ (metadata[63:32] xor AESE(Kenc, 1 @ SIV[94:0] @ zeros(32))[31:0])
+|                @ (metadata[63:32] xor AESE(enc_key, 1 @ SIV[94:0] @ zeros(32))[31:0])
 |                @  metadata[31:0];
 UNINTERRUPTIBLE_BLOCK_END
 
@@ -1082,10 +1082,10 @@ foreach(i from 0 to num_blocks - 1) {
   UNINTERRUPTIBLE_BLOCK_START
   |  if ((i == num_blocks - 1) and last_block_fractional)
   |     M[32+i*16 .. 39+i*16] ← content[i*16 .. 7+i*16]
-  |                             xor AESE(Kenc, 1 @ SIV[94:0] @ bin(i+1,32))[63:0];
+  |                             xor AESE(enc_key, 1 @ SIV[94:0] @ bin(i+1, 32))[63:0];
   |  else
   |     M[32+i*16 .. 47+i*16] ← content[i*16 .. 15+i*16]
-  |                             xor AESE(Kenc, 1 @ SIV[94:0] @ bin(i+1,32));
+  |                             xor AESE(enc_key, 1 @ SIV[94:0] @ bin(i+1, 32));
   UNINTERRUPTIBLE_BLOCK_END
 }
 ----
@@ -1095,8 +1095,8 @@ foreach(i from 0 to num_blocks - 1) {
 []
 ----
 M : array of bytes // from memory
-Kenc : bits(256);
-Kauth : bits(128);
+enc_key : bits(256);
+auth_key : bits(128);
 N, SIV : bits(96);
 tmp : bits(128);
 tag : bits(96);
@@ -1119,7 +1119,7 @@ UNINTERRUPTIBLE_BLOCK_START
 |  else
 |     CSK ← DCSK_KeyDeriv(RCSK, LST[metadata.Locality]);
 |
-|  {Kenc, Kauth} = RFC8452_KeyDeriv(CSK);
+|  {enc_key, auth_key} = RFC8452_KeyDeriv(CSK);
 |
 |  // next instruction preemptible, with `acestart` from 8 to 19
 |  N ← M[8 .. 19];
@@ -1129,9 +1129,9 @@ UNINTERRUPTIBLE_BLOCK_END
 UNINTERRUPTIBLE_BLOCK_START
 |  SIV ← M[20 .. 31];
 |  metadata[63:32] ← metadata[63:32]
-|                    xor AESE(Kenc, 1 @ SIV[94:0] @ zeros(32))[31:0];
+|                    xor AESE(enc_key, 1 @ SIV[94:0] @ zeros(32))[31:0];
 |  tmp ← zeros(64) @ metadata;
-|  tmp ← tmp * Kauth;  // * = Montgomery multiplication
+|  tmp ← Mont_mult(tmp, auth_key);
 UNINTERRUPTIBLE_BLOCK_END
 
 foreach(i from 0 to num_blocks - 1) {
@@ -1139,21 +1139,21 @@ foreach(i from 0 to num_blocks - 1) {
    UNINTERRUPTIBLE_BLOCK_START
    |  if ((i == num_blocks - 1) and last_block_fractional) {
    |     content[i*16 .. 7+i*16] ← M[32+i*16 .. 39+i*16]
-   |                               xor AESE(Kenc, 1 @ SIV[94:0] @ bin(i+1,32))[63:0];
+   |                               xor AESE(enc_key, 1 @ SIV[94:0] @ bin(i+1, 32))[63:0];
    |     tmp[63:0] ← tmp[63:0] xor content[i*16 .. 7+i*16];
    |  } else {
    |     content[i*16 .. 15+i*16] ← M[32+i*16 .. 47+i*16]
-   |                                xor AESE(Kenc, 1 @ SIV[94:0] @ bin(i+1,32));
+   |                                xor AESE(enc_key, 1 @ SIV[94:0] @ bin(i+1, 32));
    |     tmp ← tmp xor content[i*16 .. 15+i*16];
    |  }
-   |  tmp ← tmp * Kauth;  // * = Montgomery multiplication
+   |  tmp ← Mont_mult(tmp, auth_key);
    UNINTERRUPTIBLE_BLOCK_END
 }
 
 // if preempted here, `acestart` will be z + 32
 
 UNINTERRUPTIBLE_BLOCK_START
-|  tag ← AESE(Kenc, 0 @ (tmp[126:0] xor (zeros(31) @ N)))) >> 32;
+|  tag ← AESE(enc_key, 0 @ (tmp[126:0] xor (zeros(31) @ N)))) >> 32;
 |  if (tag != SIV) then { error ace_err_authentication; }
 |  - Now the content can be deserialized.
 |  - This includes computing any derived values not saved as part of the SCC,
@@ -2143,8 +2143,8 @@ Data Structures:::
 
 Algorithm-Specific Functions:::
 
-* `enc_blk(p) -> c` encrypts plaintext block `p` using the key, and returns the ciphertext result `c`.
-* `dec_blk(c) -> p` decrypts ciphertext block `c` using the key, and returns the plaintext result `p`.
+* `enc_blk(K,p) -> c` encrypts plaintext block `p` using the key `K`, and returns the ciphertext result `c`.
+* `dec_blk(K,c) -> p` decrypts ciphertext block `c` using the key `K`, and returns the plaintext result `p`.
 
 State Machine:::
 
@@ -2155,8 +2155,8 @@ State Machine:::
 * *Behavior:*
  ** In state _initial_, no `ace.exec` instruction is allowed.
  ** In states _encrypt_ or _decrypt_, we can only issue Form A `ace.exec` instructions, i.e., of the Form “`ace.exec Vd, Kn|K[Xn], Vs`.”
-  *** If the state is _encrypt_, then `Vd = enc_blk(Vs)`.
-  *** If the state is _decrypt_, then `Vd = dec_blk(Vs)`.
+  *** If the state is _encrypt_, then `Vd = enc_blk(key, Vs)`.
+  *** If the state is _decrypt_, then `Vd = dec_blk(key, Vs)`.
   *** If `VL*SEW` > `b`, then “`ace.exec Vd, Kn|K[Xn], Vs`” encrypts/decrypts block-by-block.
 
 //
@@ -2344,8 +2344,8 @@ Data Structures:::
 
 Algorithm-Specific Functions:::
 
-* `enc_blk(key, p) -> c` encrypts block `p` using the key, and returns the result `c`.
-* `dec_blk(key,c) -> p` decrypts block `c` using the key, and returns the result `p`.
+* `enc_blk(K, p) -> c` encrypts block `p` using the key `K`, and returns the result `c`.
+* `dec_blk(K, c) -> p` decrypts block `c` using the key `K`, and returns the result `p`.
 * `update_mask(mask) -> mask` updates the mask by a Galois Field multiplication in GF(2^b^).
 
 State Machine:::
@@ -2442,14 +2442,14 @@ Data Structures:::
 
 * *Internal State*:
  ** `key`: `k` bits.
- ** `ctr`:  `b` bits as integer.
- ** `hash_key`, `auth_tag`: `b` bits.
+ ** `ctr`:  `b` bits.
+ ** `auth_key`, `tag`: `b` bits.
 
 * *Serialized Content*:
 [lowerroman]
  . `key`: `k` bits, or 64 bits if a System Key index.
- . `ctr`: `b` bits as integer.
- . `auth_tag`: `b` bits.
+ . `ctr`: `b` bits.
+ . `tag`: `b` bits.
 
 NOTE: There are no fields for the lengths of the AD and of the plaintext, as they are maintained by the calling software.
 Also, `hash_key` is not serialized, and thus it is recomputed upon `ace.import`.
@@ -2459,8 +2459,8 @@ Algorithm-Specific Functions:::
 * `enc_blk(key, p) -> c` encrypts block `p` using the key, and returns the result `c`.
 
 * `absorb(data)` absorbs data into the hash function by performing:
-  . `auth_tag <- auth_tag xor Vs`.
-  . `auth_tag <- auth_tag * hash_key`.
+  . `tag <- tag xor Vs`.
+  . `tag <- Galois_mult(tag, hash_key)`.
 
 State Machine:::
 
@@ -2480,7 +2480,7 @@ State Machine:::
   *** No {nbsp}``ace.exec``{nbsp} operation is allowed.
   *** The following initialization operations are performed:
    . `hash_key <- enc_blk(key, zeros(b))`,
-   . `auth_tag <- zeros(b)`, and
+   . `tag <- zeros(b)`, and
    . `ctr <- zeros(b)`.
  ** In state _set_public_value_:
   *** Only  ``ace.exec`` instructions of Form B are allowed.
@@ -2491,7 +2491,7 @@ State Machine:::
   *** If `VL*SEW` > `b`, only the `b` least significant bits of `Vs` are considered.
 
  ** In state _hash_absorb_, only  ``ace.exec`` instructions of Form B are allowed. +
- “```ace.exec Kn|K[Xn], Vs```” absorbs a data block in `auth_tag`, i.e.:
+ “```ace.exec Kn|K[Xn], Vs```” absorbs a data block in `tag`, i.e.:
 +
 --
  . `absorb(Vs)`.
@@ -2500,7 +2500,7 @@ State Machine:::
 If `VL*SEW` > `b`, the above operation is executed `VL*SEW/b` times.
 
 ** In state _encrypt_, only ``ace.exec`` instructions of Form A are allowed.
-   “```ace.exec Vd, Kn|K[Xn], Vs```” encrypts `Vs` into `Vd`, and absorbs the ciphertext `Vd` into the `auth_tag`, namely:
+   “```ace.exec Vd, Kn|K[Xn], Vs```” encrypts `Vs` into `Vd`, and absorbs the ciphertext `Vd` into the `tag`, namely:
 +
 --
   . If `ctr[b/4-1:0] = 0`, then
@@ -2517,7 +2517,7 @@ If `VL*SEW` is a multiple of `b`, the above operations are executed `VL*SEW/b` t
 ** In state _enc_hash_finalize_, only ``ace.exec`` instructions of Form A are allowed. The value
 +
 --
-*** `Vs = bin(bit_length(AD),b/2) @ bin(bit_length(plaintext),b/2)`
+*** `Vs = bin(bit_length(AD), b/2) @ bin(bit_length(plaintext), b/2)`
 --
 +
 
@@ -2527,15 +2527,15 @@ must be set by the software, then,
 +
 --
   . `absorb(Vd)`.
-  . `auth_tag <- auth_tag xor enc_blk(key, ctr[b-1,b/4] @ 0[b/4-1,0])`.
-  . Finally, `auth_tag` is returned in `Vd`, and the state is changed to _completed_.
+  . `tag <- tag xor enc_blk(key, ctr[b-1,b/4] @ 0[b/4-1,0])`.
+  . Finally, `tag` is returned in `Vd`, and the state is changed to _completed_.
 --
 +
 If `VL*SEW` > `b`, only the `b` least significant bits of `Vs` are considered.
 
 ** In state _decrypt_, only  ``ace.exec`` instructions of Form A are allowed.
  `ace.exec Vd,Kn|K[Xn],Vs`
-   absorbs the ciphertext `Vs` into the `auth_tag`, then decrypts `Vs` into `Vd`, namely
+   absorbs the ciphertext `Vs` into the `tag`, then decrypts `Vs` into `Vd`, namely
 +
 --
   . If `ctr[b/4-1:0] == 0`, then
@@ -2551,25 +2551,25 @@ the above operations are executed `VL*SEW/b` times, decrypting each `b`-bit bloc
 
 ** In state _dec_hash_finalize_, only a Form A ``ace.exec`` instruction is allowed.
 The value +
- `{nbsp}{nbsp}{nbsp}Vs = bin(bit_length(AD),b/2) @ bin(bit_length(plaintext),b/2)` +
+ `{nbsp}{nbsp}{nbsp}Vs = bin(bit_length(AD), b/2) @ bin(bit_length(plaintext), b/2)` +
  must be set by the software, then “```ace.exec Vd, Kn|K[Xn], Vs```” computes the authentication tag as follows:
 +
 --
   . `absorb(Vs)`.
-  . `auth_tag <- auth_tag xor enc_blk(key, ctr[b-1,b/4] @ 0[b/4-1,0])`.
+  . `tag <- tag xor enc_blk(key, ctr[b-1,b/4] @ 0[b/4-1,0])`.
 --
 +
 If `VL*SEW` > `b`, only the `b` least significant bits of `Vs` are considered.
 
 ** In state _hash_verify_, only an ``ace.exec`` instruction of Form B, i.e., “```ace.exec Kn|K[Xn], Vs```” is allowed.
-    It compares `Vs` with `auth_tag`:
+    It compares `Vs` with `tag`:
 +
 --
   . If the values match, then the state is changed to _completed_, and `ace.error` returns no error,
   . else the state is changed to _completed_, and `ace.error` returns `ace_err_authentication`.
 --
 +
-If `VL*SEW` > `b`, only the `b` least significant bits of `Vs` are compared to `auth_tag`.
+If `VL*SEW` > `b`, only the `b` least significant bits of `Vs` are compared to `tag`.
 
 ** Upon completion of `ace.import`, the ACE unit recomputes `hash_key`:
   . `hash_key <- enc_blk(key, zeros(b))`.
@@ -2604,7 +2604,7 @@ foreach(i from 0 to len_in_bytes(AD)/16-1) {
    ace.exec K0, V0                              // Absorb it into hash
 }
 
-// Encrypt plaintext and continue computation of auth_tag
+// Encrypt plaintext and continue computation of tag
 ace.state K0, #ace_state_encrypt
 foreach(i from 0 to len_in_bytes(PT)/16-1) {
    V0 ← PT[16*i .. 16*i+15]
@@ -2612,10 +2612,10 @@ foreach(i from 0 to len_in_bytes(PT)/16-1) {
    CT[16*i .. 16*i+15] ← V1
 }
 
-// Finally, we absorb the lengths into auth_tag, finalize it, and output it
+// Finally, we absorb the lengths into tag, finalize it, and output it
 ace.state K0, #ace_state_enc_hash_finalize
-V1 ← bin(len_in_bits(AD),64) @ bin(len_in_bits(PT),64)
-ace.exec V2, K0, V1                              // V2 contains the finalized hash
+V1 ← bin(len_in_bits(AD), 64) @ bin(len_in_bits(PT), 64)
+ace.exec V2, K0, V1                             // V2 contains the finalized hash
 ----
 
 GCM decryption differs from encryption as follows:
@@ -2626,14 +2626,14 @@ and the last lines are as follows:
 [[ACE-pseudocode-GCM-decryption-difference]]
 .GCM Decryption
 ----
-// Finally, we absorb the lengths into auth_tag, finalize it, and verify it
+// Finally, we absorb the lengths into tag, finalize it, and verify it
 ace.state K0, #ace_state_dec_hash_finalize
-V1 ← bin(len_in_bits(AD),64) @ bin(len_in_bits(CT),64)
-ace.exec V2, K0, V1                                // V2 contains the finalized hash
+V1 ← bin(len_in_bits(AD), 64) @ bin(len_in_bits(CT), 64)
+ace.exec V2, K0, V1                             // V2 contains the finalized hash
 
 ace.state K0, #ace_state_hash_verify
 V1 ← tag_from_payload
-ace.exec K0, V1                                  // V1 contains the tag from the input
+ace.exec K0, V1                                 // V1 contains the tag from the input
 ace.error X1
 if (X1 != 0) then { handle error }       // do not use the plaintext if error occurred
 ----
@@ -2645,7 +2645,7 @@ if (X1 != 0) then { handle error }       // do not use the plaintext if error oc
 GCM security is not compromised if `H` is revealed.
 Consequently, an implementation based on a simpler ECB mode CC is possible,
 as shown below (for encryption only -- decryption is similar).
-However, this significantly increases code size and requires implementing `galois_mult(V4,V3)`.
+However, this significantly increases code size and requires implementing `Galois_mult(V4, V3)`.
 Adding a dedicated mode to the ACE unit is a minor effort, and it allows internal logic to optimize execution
 beyond the capabilities of, for instance, a compiler on an in-order CPU. It also means that the CPU
 does not have to implement the carryless multiplication (cf.{nbsp}<<ACE-V-dependency>>),
@@ -2663,14 +2663,14 @@ which saves hardware costs when several small cores share a single ACE unit.
 vsetvli zero, 4, e32, m1, ta, ma                 // Use 128-bit vectors
 ace.import K0, (X5)                              // Imports SCC into CR K0
 V5[127:32] ← IV
-V5[31:0] ← zeros(31) @ 1
+V5[31:0] ← bin(1, 32)
 
 V3 ← zeros(b)                                    // “Auth Data 1”
 ace.exec V4, K0, V3                              // compute H
 foreach(i from 0 to ceil(len_in_bytes(AD)/16)-1) {
    V1 ← AD[16*i .. 16*i+15]
    V3 ← V3 xor V1                                // Horner scheme add
-   V3 ← galois_mult(V4,V3)                       // Horner scheme mult
+   V3 ← Galois_mult(V4, V3)                      // Horner scheme mult
 }
 
 counter ← 1                                      // a 32-bit integer value
@@ -2680,14 +2680,14 @@ foreach(i from 0 to ceil(len_in_bytes(PT)/16)-1) {
    ace.exec V2, K0, V5                           // create mask by encrypting the counter
    V1 ← V1 xor V2                                // CTR encrypt
    V3 ← V3 xor V1                                // Horner scheme add
-   V3 ← galois_mult(V4,V3)                       // Horner scheme mult
+   V3 ← Galois_mult(V4, V3)                      // Horner scheme mult
    CT[16*i .. 16*i+15] ← V1
    counter ← counter + 1
 }
 
 V3 ← V3 xor (len_in_bits(AD) @ len_in_bits(PT))  // Horner scheme add
-V3 ← galois_mult(V4,V3)                          // Horner scheme mult
-V5[32:0] ← zeros(31) @ 1                         // Prepare IV @ 1 for tag encryption
+V3 ← Galois_mult(V4, V3)                         // Horner scheme mult
+V5[31:0] ← bin(1, 32)                            // Prepare IV @ 1 for tag encryption
 ace.exec V2, K0, V5
 tag ← V3 xor V2                                  // Last Horner scheme add
 ----
@@ -2762,25 +2762,25 @@ Data Structures:::
 ** `auth_key`: `b` bits.
 ** `nonce`: `3b/4` bits.
 ** `ctr`: `b/4` bits.
-** `auth_tag`: `b` bits.
+** `tag`: `b` bits.
 ** `SIV`: `b` or `3b/4` bits.
 +
-A `b`-bit `SIV` is computed by clearing the most significant bit of `auth_tag` and encrypting it. +
-For a `3b/4`-bit `SIV`, a full `b`-bit `auth_tag` value is kept while absorbing data.
-The public `SIV` value is computed by clearing the most significant bit of `auth_tag`, encrypting it, and then removing the `b/4` least significant bits.
+A `b`-bit `SIV` is computed by clearing the most significant bit of `tag` and encrypting it. +
+For a `3b/4`-bit `SIV`, a full `b`-bit `tag` value is kept while absorbing data.
+The public `SIV` value is computed by clearing the most significant bit of `tag`, encrypting it, and then removing the `b/4` least significant bits.
 
 * *Serialized Content*:
 [lowerroman]
  . `key`: `k` bits.
  . `nonce`, `3b/4` bits.
  . `ctr`, `b/4` bits.
- . `auth_tag`, `b` bits.
+ . `tag`, `b` bits.
  . `SIV`, `b` bits.
 
 NOTE: `hash_key` and `auth_key` are not serialized,
 and must be recomputed upon each `ace.import`. +
  +
-The `SIV` field is actually only needed for decryption, since it must be maintained separately from the `auth_tag` field, which changes with each processed block as it is computed, whereas for encryption it is first computed completely and then used in the encryption process. However, since the same CC could be configured to support both encryption and decryption, the `SIV` field always present in the internal state (even if not used) and in the exported state.
+The `SIV` field is actually only needed for decryption, since it must be maintained separately from the `tag` field, which changes with each processed block as it is computed, whereas for encryption it is first computed completely and then used in the encryption process. However, since the same CC could be configured to support both encryption and decryption, the `SIV` field always present in the internal state (even if not used) and in the exported state.
 
 //
 
@@ -2789,8 +2789,8 @@ Algorithm-Specific Functions:::
 * `enc_blk(key, p) -> c` encrypts block `p` using the key, and returns the result `c`.
 * `absorb(data)` absorbs data into the hash function by performing a step of (a variant of) GHASH or POLYVAL as specified by the algorithm
    (for instance, AES-GCM-SIV uses POLYVAL):
-  . `auth_tag <- auth_tag xor Vs`.
-  . `auth_tag <- auth_tag * hash_key`, where `*` denotes either Galois field multiplication (for GHASH) or Montgomery multiplication (for POLYVAL/MHASH), as specified by the algorithm.
+  . `tag <- tag xor Vs`.
+  . `tag <- Mont_mult(tag, hash_key)` or `tag <- Galois_mult(tag, hash_key)`, depending on the algorithm.
 State Machine:::
 * *States:* _initial_, _set_public_value_, _set_public_value_2_, _hash_absorb_, _enc_hash_finalize_, _dec_hash_finalize_, _encrypt_, _decrypt_, and _completed_.
 
@@ -2808,7 +2808,7 @@ State Machine:::
 *** No {nbsp}``ace.exec``{nbsp} operation is allowed.
 *** The following initialization operations are performed:
   . (`enc_key`, `auth_key`) `<-` `RFC8452_KeyDeriv(key)`,
-  . `nonce`, `ctr`, `auth_tag`, `SIV <- 0`.
+  . `nonce`, `ctr`, `tag`, `SIV <- 0`.
 
 ** In states _set_public_value_, resp. _set_public_value_2_:
 *** We can only issue  ``ace.exec`` instructions of Form B, i.e., “```ace.exec Kn|K[Xn], Vs```”, to set the value of `nonce`, resp. `SIV`.
@@ -2824,7 +2824,7 @@ Accepting this redundant but harmless behavior simplifies the state machine.
 ** In state _hash_absorb_:
 +
 --
-   *** Only ``ace.exec`` instructions of the Form “```ace.exec Kn|K[Xn], Vs```” are allowed. Such an instruction accumulates a value in the `auth_tag`:
+   *** Only ``ace.exec`` instructions of the Form “```ace.exec Kn|K[Xn], Vs```” are allowed. Such an instruction accumulates a value in the `tag`:
    i.e., perform `absorb(Vs)`.
 --
 +
@@ -2834,14 +2834,14 @@ If `VL*SEW` is a multiple of `b`, `absorb` is executed on each of the `VL*SEW/b`
   “```ace.exec Vd, Kn|K[Xn], Vs```,” where it is the responsibility of the user to set
 +
 --
-  *** `Vs <- bin(bit_length(AD),b/2) @ bin(bit_length(plaintext),b/2)`,
+  *** `Vs <- bin(bit_length(AD), b/2) @ bin(bit_length(plaintext), b/2)`,
 --
 +
 finalizes the computation of the SIV/tag, by performing:
 +
 --
     . `absorb(Vs)`.
-    . `tmp <- enc_blk(enc_key, 0 @ (auth_tag xor N)[b-2:0])`
+    . `tmp <- enc_blk(enc_key, 0 @ (tag xor N)[b-2:0])`
     . If tag length is `b` bits, then
      .. `SIV <- tmp` and `Vd <- tmp`,
     . else (tag length is `3b/4` bits)
@@ -2856,22 +2856,22 @@ If `VL*SEW` > `b`, only the `b` least significant bits of `Vs` are considered.
 --
 . If `ctr == 0`, then the CR is *invalidated*.
    . If the `SIV` is `b`-bits long, then
-     .. ``Vd <- Vs xor enc_blk(key, 1 @ SIV[b-2:b/4] @ (SIV[b/4-1:0] + ctr % 2^b/4^)),``
+     .. ``Vd <- Vs xor enc_blk(enc_key, 1 @ SIV[b-2:b/4] @ (SIV[b/4-1:0] + ctr % 2^b/4^)),``
    . else (the `SIV` is `3b/4`-bits long)
-      .. ``Vd <- Vs xor enc_blk(key, 1 @ SIV[3b/4-2:0] @ ctr``.
+      .. ``Vd <- Vs xor enc_blk(enc_key, 1 @ SIV[3b/4-2:0] @ ctr``.
    . `ctr <- ctr + 1`.
 --
 +
 If `VL*SEW` > `b`, the above operations are applied to each of the `VL*SEW/b` blocks in `Vs`.
 
-** In state _decrypt_,  only  ``ace.exec`` instructions of the Form A are allowed, namely “```ace.exec Vd, Kn|K[Xn], Vs```,” to decrypt `Vs` into `Vd` and then absorb the plaintext `Vs` into the `auth_tag`:
+** In state _decrypt_,  only  ``ace.exec`` instructions of the Form A are allowed, namely “```ace.exec Vd, Kn|K[Xn], Vs```,” to decrypt `Vs` into `Vd` and then absorb the plaintext `Vs` into the `tag`:
 +
 --
      . If `ctr == 0`, then the CR is *invalidated*.
      . If the `SIV` is `b`-bits long, then +
-       .. ``Vd <- Vs xor enc_blk(key, 1 @ SIV[b-2:b/4] @ (SIV[b/4-1:0] + ctr % 2^b/4^)),``
+       .. ``Vd <- Vs xor enc_blk(enc_key, 1 @ SIV[b-2:b/4] @ (SIV[b/4-1:0] + ctr % 2^b/4^))``,
      . else (it is `3b/4`-bits long) +
-       .. ``Vd <- Vs xor enc_blk(key, 1 @ SIV[3b/4-2:0] @ ctr``.
+       .. ``Vd <- Vs xor enc_blk(enc_key, 1 @ SIV[3b/4-2:0] @ ctr``.
      . `absorb(Vs)`.
      . `ctr <- ctr + 1`.
 --
@@ -2883,26 +2883,26 @@ If `VL*SEW` > `b`, the above operations are applied to each of the `VL*SEW/b` bl
    namely “```ace.exec Kn|K[Xn], Vs```,” where it is the responsibility of the user to set
 +
 --
-  ***  `Vs = bin(bit_length(AD),b/2) @ bin(bit_length(plaintext),b/2)`.
+  ***  `Vs = bin(bit_length(AD), b/2) @ bin(bit_length(plaintext), b/2)`.
 --
 +
 ``ace.exec`` thus performs the following operations:
 +
 --
-  . `absorb(Vs)` (which modifies `auth_tag`).
-  . `tmp <- enc_blk(enc_key, 0 @ (auth_tag xor N)[b-2:0])`.
+  . `absorb(Vs)` (which modifies `tag`).
+  . `tmp <- enc_blk(enc_key, 0 @ (tag xor N)[b-2:0])`.
   . If tag length is `b` bits, then
-     .. `auth_tag <- tmp`,
+     .. `tag <- tmp`,
   . else (tag length is `3b/4` bits)
-     .. `auth_tag <- tmp[b-1:0] @ (b/4)b0`.
-  . Finally, `auth_tag` and `SIV` are compared:
+     .. `tag <- tmp[b-1:0] @ (b/4)b0`.
+  . Finally, `tag` and `SIV` are compared:
      .. If the values match, the state transitions to _completed_ and `ace.error` returns no error,
   else the state transitions to _completed_ and `ace.error` returns `ace_err_authentication`.
 --
 +
 If `VL*SEW` > `b`, only the `b` least significant bits of `Vs` are considered.
 
-** Upon completion of `ace.import`, the ACE unit recomputes `hash_key` and `auth_key`
+** Upon completion of `ace.import`, the ACE unit recomputes `enc_key` and `auth_key`
   . (`enc_key`, `auth_key`) <- `RFC8452_KeyDeriv(key)`.
 
 //
@@ -2940,7 +2940,7 @@ foreach(i from 0 to len_in_bytes(PT)/16-1) {
    ace.exec K0, V0                               // Absorb it into hash
 }
 
-V0 ← bin(len_in_bits(AD),64) @ bin(len_in_bits(PT),64)
+V0 ← bin(len_in_bits(AD), 64) @ bin(len_in_bits(PT), 64)
 ace.exec K0, V0                                  // Absorb lengths into hash
 
 // Finalize the SIV computation, set and return it
@@ -2985,16 +2985,16 @@ foreach(i from 0 to len_in_bytes(AD)/16-1) {
    ace.exec K0, V0                               // Absorb it into hash
 }
 
-// Decrypt ciphertext and continue computation of auth_tag
+// Decrypt ciphertext and continue computation of tag
 foreach(i from 0 to len_in_bytes(CT)/16-1) {
    V0 ← CT[16*i .. 16*i+15]
    ace.exec V1, K0, V0
    PT[16*i .. 16*i+15] ← V1
 }
 
-// Finally, we absorb the lengths of AD and plaintext into auth_tag AND verify
+// Finally, we absorb the lengths of AD and plaintext into tag AND verify
 ace.state K0, #ace_state_enc_hash_finalize
-V0 ← bin(len_in_bits(AD),64) @ bin(len_in_bits(PT),64)
+V0 ← bin(len_in_bits(AD), 64) @ bin(len_in_bits(PT), 64)
 ace.exec K0, V0
 ace.error X1
 if (X1 != 0) then { handle error }               // do not use the plaintext if error occurred
@@ -3033,7 +3033,7 @@ Data Structures:::
  ** `key`: `k` bits.
  ** `N`: `u+1` bits (at most `u` bits are all used).
  ** `L`, `offset`, `hash_A`, `hash_P` : `b` bits.
- ** `N_len`, `tag_len`, `last_blk_len`: `g` bits as integer.
+ ** `N_len`, `tag_len`, `last_blk_len`: `g` bits.
 
 * *Serialized Content*:
 [lowerroman]
@@ -3097,7 +3097,7 @@ State Machine:::
   . `L <- double(double(L))`
 
 ** In state _hash_absorb_, only  ``ace.exec`` instructions of Form B are allowed:
-  “```ace.exec Kn|K[Xn], Vs```” absorbs a data block in `auth_tag`, i.e.:
+  “```ace.exec Kn|K[Xn], Vs```” absorbs a data block in `tag`, i.e.:
 +
 --
     . `L <- double(L)`
@@ -3112,7 +3112,7 @@ If `VL*SEW` > `b`, the above operation is executed `VL*SEW/b` times.
 ** To move to _hash_finalize_, the `ace.state` operation must have the additional argument, which sets the length of the final block of the AD in `last_blk_len`.
 
 ** In state _hash_finalize_, only one `ace.exec` instructions of Form B is allowed if `last_blk_len` != `0`.
- “```ace.exec Kn|K[Xn], Vs```” which absorbs the last data block in `auth_tag`, i.e.:
+ “```ace.exec Kn|K[Xn], Vs```” which absorbs the last data block in `tag`, i.e.:
 +
 --
   * `tmp : bits(b)`
@@ -3145,7 +3145,7 @@ If `last_blk_len` == 0, however, no `ace.exec` can be executed, and only an `ace
 --
 +
 ** In state _encrypt_, only ``ace.exec`` instructions of Form A are allowed:
-   “```ace.exec Vd, Kn|K[Xn], Vs```” absorbs the plaintext `Vs` into the `auth_tag` an encrypts `Vs` into `Vd`, namely:
+   “```ace.exec Vd, Kn|K[Xn], Vs```” absorbs the plaintext `Vs` into the `tag` an encrypts `Vs` into `Vd`, namely:
 +
 --
  . `L <- double(L)`
@@ -3193,7 +3193,7 @@ In both cases the state then transitions to _enc_hash_finalize_.
 ** In state _enc_hash_finalize_, only an ``ace.exec`` instruction of Form C, “```ace.exec Vd,Kn|K[Xn]```,” is allowed, which
 performs `Vd <- zeros(b-tag_len) @ hash_P[tag_len-1:0]`.
 ** In state _decrypt_, only ``ace.exec`` instructions of Form A are allowed.
-    “```ace.exec Vd, Kn|K[Xn], Vs```” decrypts `Vs` into `Vd`, and absorbs the plaintext `Vd` into the `auth_tag`, namely:
+    “```ace.exec Vd, Kn|K[Xn], Vs```” decrypts `Vs` into `Vd`, and absorbs the plaintext `Vd` into the `tag`, namely:
 +
 --
   * `tmp : bits(b)`
@@ -3261,7 +3261,7 @@ ace.exec K0, V0
 
 // The next operations set the tag lenth
 X1 ← tag_len
-ace.state K0, #ace_state_set_public_value_2,X1
+ace.state K0, #ace_state_set_public_value_2, X1
 
 // Compute AD contribution to tag
 ace.state K0, #ace_state_hash_absorb
@@ -3281,7 +3281,7 @@ if (X1 mod 128 != 0) then
    V0 ← AD[AD_fullblocks*16 .. AD_fullblocks*16+ceil(X1/8)]
    ace.exec K0, V0                                 // Absorb it into hash and encrypt
 
-// Encrypt plaintext and continue computation of auth_tag
+// Encrypt plaintext and continue computation of tag
 ace.state K0, #ace_state_encrypt
 foreach(i from 0 to PT_fullblocks-1) {
    V0 ← PT[16*i .. 16*i+15]
@@ -3353,20 +3353,20 @@ Data Structures:::
 
 Algorithm-Specific Functions:::
 
-* `enc_blk(key, p) -> c` encrypts block `p` using the key, and returns the result `c`.
+* `enc_blk(key, p) -> c` encrypts block `p` using the key `key`, and returns the result `c`.
 * `gen_subkeys(K) -> (K1,K2)` generates subkeys `K1` and `K2` from the master key `K` as follows: +
 Let `C` be `0x1B` for `b` = 64, `0x87` for `b` = 128, and `0x425` for `b` = 256, then
 
  . `L <- enc_blk(K, zeros(b))`
- . if (`most_significant_bit(L){nbsp}{nbsp}= 0`) then
+ . if (`msb(L){nbsp}{nbsp}== 0`) then
    { `K1 <- L{nbsp}{nbsp}<< 1` }
    else
    { `K1 <- (L{nbsp}{nbsp}<< 1) xor C` }.
- . if (`most_significant_bit(K1){nbsp}= 0`) then
+ . if (`msb(K1){nbsp}== 0`) then
    { `K2 <- K1{nbsp}<< 1` }
    else
    { `K2 <- (K1{nbsp}<< 1) xor C` }.
- . return ```(K1,K2)```.
+ . return ```(K1, K2)```.
 
 State Machine:::
 
@@ -3778,7 +3778,7 @@ The following steps are then executed as an atomic block:
 [start=2]
 . Compute `z` and `num_blocks` from the original content length, using the starting value of `i` from `acestart`.
 . If the interrupted operation was an import:
-.. Derive the `Kenc` and `Kauth` keys.
+.. Derive the `enc_key` and `auth_key` keys.
 .. Recompute the partial hash from the current CR content.
 
 The initialization or import operation can then resume from the point of interruption.
