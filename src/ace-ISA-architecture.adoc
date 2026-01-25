@@ -312,7 +312,7 @@ State_Number field::: {empty}
 +
 --
 The value of the State_Number Field must be zero in the initialization data.
-Three values are defined for all algorithms: 0, 14, and 15, for the states _initial_, _invalidated_, and _completed_.
+Three values are defined for *all* algorithms: 0, 14, and 15, for the states _initial_, _invalidated_, and _completed_.
 These states denote CCs that are ready to perform operations, that have been put into an invalid state, or that have completed their operations.
 
 If the algorithm encoded in the CC has at most 16 states (including _initial_, _completed_, and _invalidated_), then this number is stored in this field, otherwise an algorithm-specific representation is used in the content, and this field only admits the values 0, 14, 15, and 1, the latter being a placeholder for any other operational state. The values used in the algorithms defined in this specification are listed in <<ACE-state-constants>>.
@@ -1902,7 +1902,7 @@ The supporting instructions themselves must be uninterruptible.
 In this section we specify the behavior of Cryptographic Contexts for the supported cryptographic algorithms.
 Some specifications are generic: they define algorithm families that can be instantiated with any primitive meeting the required properties, typically parameterized only by block size `b` and key size `k`.
 For example, GCM-SIV is well defined not only with AES but also with alternative block ciphers, such as SM4-GCM-SIV, when used with the same hash function.
-By contrast, the specifications for the Ascon suite are specific to the Ascon permutation.
+By contrast, the specifications for other algorithm suites are specific to certain primitives, for instance, Ascon.
 
 This section is normative.
 
@@ -1981,22 +1981,21 @@ Algorithm is ready to process.
 Algorithms that significantly differ from those we describe in <<ACE-algorithms>> and therefore cannot share the same software for their usage,
 may reuse the same values in [1..12] with new constant mnemonics to define their own states.
 
+The state number is stored either in the metadata or in the content section of the CC/SCC, as described in <<ACE-metadata>>, with the provision that the State_Number
+must always take one of the values 0, 14, 15, and 1.
+
+// If the algorithm encoded in the CC has at most 16 states (including _initial_, _completed_, and _invalidated_), then this number is stored in this field, otherwise an algorithm-specific representation is used in the content, and this field only admits the values 0, 14, 15, and 1, the latter being a placeholder for any other operational state. The values used in the algorithms defined in this specification are listed in <<ACE-state-constants>>.
+// If the number of states of the algorithm is at most 16 (including _initial_, _completed_, and _invalidated_), the `state` of the metadata is used to store this value.
+// Otherwise, the specification of the algorithm must include a suitable field in the content section of the CC/SCC.
+
 In what follows, “state _name_” refers to the state with number _ace_state_name_ in <<ACE-state-constants>>.
 
 [[ACE-generic-rules]]
 ==== Generic Rules
 
-Modes of operation:::
-Most modes of operations have a generic specification, i.e., the specification depends only on certain parameters of the underlying primitives, such as the block width `b` of a block cipher or key length `k` of a symmetric cipher.
-Other modes, whose description depends on other parameters or special properties of the underlying primitives, are specified separately.
 
-States:::
-If the number of states of the algorithm is at most 16 (including _initial_, _completed_, and _invalidated_), the `state` of the metadata is used to store this value.
-Otherwise, the specification of the algorithm must include a suitable field in the content section of the CC/SCC.
+===== Invalid Inputs and Operations, CR Invalidation:::
 
-Invalid Inputs and Operations, CR Invalidation:::
-+
---
 If an invalid input is provided to any ACE instruction, or an instruction that is not explicitly allowed in a given state is executed, while processing the algorithm in CR, say, `Kn`, the `Kn` is *invalidated*, namely, the following happens:
 (((ACE, algorithm, invalid state)))
 (((Cryptographic Register, invalidated)))
@@ -2011,31 +2010,28 @@ If an invalid input is provided to any ACE instruction, or an instruction that i
 * The current instruction is terminated.
 
 In state _completed_, only `ace.init`, `ace.export`, `ace.import`, `ace.clear`, and `ace.error` are permitted.
---
-+
 
-Interruptibility:::
-+
---
+//
+
+===== Interruptibility
+
 Operations performed by `ace.state` are uninterruptible.
 
-The actions of the `ace.exec` operations on the basic processing units are uninterruptible.
-If the operation admits inputs which are a multiple of this basic processing unit, then each block is processed uninterruptibly but the instruction may be interrupted between blocks. `acestart` is used to determine the point of resumption of the instruction.
+The operation of `ace.exec` on a basic processing unit, in any state of any algorithm, is uninterruptible, even when described as a sequence of instructions.
+If the operation accepts an input that is an integer multiple of the basic processing unit, each block is processed uninterruptibly, but the instruction may be interrupted between blocks; the hardware sets `acestart` to the resumption point.
 
 An implementation must wait before accessing a CR that is still being written to asynchronously.
---
-+
 
 //
 
 [[ACE-usage-input-output]]
-==== Rules when using the `ace.input` and `ace.output` instructions
+===== Rules when using the `ace.input` and `ace.output` instructions
 
 The `ace.input` and `ace.output` instructions can replace the inputs and outputs to Forms A-C of `ace.exec` and the input of `ace.derive` in any algorithm, to the point that an implementation of ACE without the V extension or a subset thereof is possible.
 
-These two instructions can be used is implemented and the size in CSR `aceiobuflen` is non-zero and is a valid size (for instance the block size `b` or a multiple thereof), otherwise an invalid instruction error is raised.
+These two instructions can be used if enabled and the size in CSR `aceiobuflen` is non-zero and is a valid size (for instance, divisible by the block size `b), otherwise an invalid instruction error is raised.
 
-If `aceiobuflen` is non-zero, then Forms A, B, and C of `ace.exec` and `ace.derive` can be replaced in the code as follows:
+If `aceiobuflen` is non-zero, Forms A, B, and C of `ace.exec` and `ace.derive` can be replaced as follows:
 
 [[ACE-replacement-instructions]]
 .Replacement sequences for `ace.exec` and `ace.derive` using `ace.input` and `ace.output`
@@ -2065,7 +2061,7 @@ The ordering of the instructions in a replacement sequence is enforced by the ar
 Not properly following the instruction ordering raises an invalid instruction exception.
 `acesequence` can be saved and restored by privileged code together with `acestart`.
 
-The internal input/output buffer, if enabled, is not part of a CR but is a separate structure. It is also architectural, i.e., per-hart.
+The internal input/output buffer is not part of a CR but is a separate structure. It is also architectural, i.e., per-hart.
 In fact, `ace.output` can be used to save the contents of the buffer, and `ace.input` can be used to restore it freely as long as `aceactivecr` takes the value 32.
 Also, these operations start at the offset specified in `acestart`, so the state of the buffer can easily be saved and restored with the same approach used for vectors.
 
@@ -2077,9 +2073,8 @@ NOTE: This mechanism is one of the reasons, besides keeping the state machines s
 // zzz
 
 [[ACE-rules-threshold-implementations]]
-==== Rules for Threshold implementations
+===== Single-Share Key Export Rule for Threshold implementations
 
-Single-Share Key Export:::
 Any CC with its algorithms implemented as threshold implementation will always initialize, import and export _all_ its keys and secrets as _single_, _reconstructed_ _shares_.
 The Configuration and SCC Formats will be the same as for the non-threshold implementation variants of the same algorithm, with the only difference being the value of the Side Channel Protection bits in the metadata.
 For the purpose of architecture specification, all values are also always represented as a single share in this document.
@@ -2093,19 +2088,14 @@ NOTE: The rule not only  ensures the compactness of a SCC, but also that the key
 In fact, some threshold implementations may have a different number of shares even if they claim the same order of side-channel protection.
 
 [[ACE-rules-system-keys]]
-==== Rules for System Keys
+===== Representation of System Keys in the Data Structures
 
-Representation of System Keys in the Data Strctures:::
-+
---
 System keys that are referred to by an index will cause the following changes in all the algorithms described in what follows:
 
 . In the initialization input and in the SCC, the key/main key field will contain the index of the key in the SKT in place of a key value.
 . This field is always a 64-bit value, even if the key itself is larger. This saves space in the SCC and allows for faster export and import operations.
 . For algorithms that require more than one key, such as XEX/XTS, ALL the keys are referred to by a single index, i.e., a single 64-bit value in the initialization input and the SCC.
 . Accordingly, the SCC generation functions will support System Keys by producing and reading the shorter fields with the indexes in place of the longer fields that would be required when the key values are explicitly provided.
---
-+
 
 NOTE: Internally, the ACE unit may use the value from the SKT, or copy it to the internal state of the CR.
 The architecture does not restrict the choice of the implementation.
@@ -3786,6 +3776,14 @@ Ascon-CXOF128 differs from Ascon-XOF128 in that the message is prepended with th
 Except for the initialization of the state, Ascon-CXOF128 is identical to Ascon-XOF128 with customization string and message concatenated.
 The IV for Ascon-CXOF128 is `0x0000080000cc0004` (in place of `0x0000080000cc0003`).
 The states and their semantics are identical to Ascon-XOF128, and the management of the customization string is left to the user.
+
+// //////////////////////////////////////////////////////////////////////////////////////////
+
+[[ACE-Keccak]]
+==== Keccak Specific Rules
+
+[WARNING]
+TBD
 
 // //////////////////////////////////////////////////////////////////////////////////////////
 
