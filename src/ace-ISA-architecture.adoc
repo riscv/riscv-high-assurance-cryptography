@@ -3042,7 +3042,7 @@ Data Structures:::
  . `N_len` : 16 bits
  . padding : 16 bits
 
- Algorithm-Specific Functions:::
+Algorithm-Specific Functions:::
 
 * `enc_blk(K,p) -> c` encrypts block `p` using the key `K` and returns the result `c`.
 * `dec_blk(K,c) -> p` decrypts block `c` using the key `K` and returns the result `p`.
@@ -3384,7 +3384,7 @@ State Machine:::
 If `VL*SEW` > `b`, then the above operations are applied to each `b`-bit block of `Vs`.
 
  ** Upon issuing “```ace.state Kn|K[Xn], #ace_state_last_block, Xs```” where `Xs` contains the bit length of the last block, the following happens:
-   . if `partial_len` != 0, then the CR is *invalidated*. (The previous block is not complete.)
+   . if `partial_block_len` != 0, then the CR is *invalidated*. (The previous block is not complete.)
    . if `Xs > b` then the CR is *invalidated*.
    . `last_block_len <- Xs`.
 
@@ -3463,6 +3463,7 @@ the SHA2 cite:[nist-fips-180-4], SHA3 and SHAKE cite:[nist-fips-202], as well HM
 Parameters:::
 
 * `b` = block size (8|`b`). This is the size of an absorbed block and may be different from the size of the internal state that is kept by the function.
+* `t` = tag len (8|`t`). This is the size of the digest.
 * `n` = size of the internal state that is kept by the function (8|`n`).
 Either the block size is an integer multiple of the vector length or the vector length is an integer multiple of the block size.
 * `k` = key size (8|`k`). Present only if keyed, i.e., a MAC.
@@ -3475,27 +3476,28 @@ Data Structures:::
 
 * *Internal State*:
  ** `key`: `k` bits. Present only if keyed, i.e., a MAC.
- ** `hash_state`: algorithm specific length.
+ ** `state`: `n` bits.
  ** `last_block_len`. Present only if this Hash/MAC has special internal treatment for a fractional last block that goes beyond padding and appending the length, which are handled by user software  (field size at most 16 bits).
- ** `used_VLxSEW`.  Current used vector length.
- ** `partial_len`.  Length of absorbed data so far for the current block (field size at most 16 bits). Only if used by the algorithm.
- ** `partial_block`: `b` bits (a priori we cannot know whether `b > VL*SEW` or not, and changing the internal memory requirements of a CC depending on the `VL*SEW` can lead to memory exhaustion).
+ ** `partial_block_len`.  Length of absorbed data so far for the current block (field size at most 16 bits). Only if used by the algorithm.
+ ** `block`: `b` bits.
 
 * *Serialized Content*:
 [lowerroman]
  . `key`: `k` bits. Present only if keyed, i.e., a MAC.
  . `hash_state`: `n` bits.
- . `used_VLxSEW`: 16 bits. Current vector length.
+// . `used_VLxSEW`: 16 bits. Current vector length.
  . `last_block_len`: 16 bits. Only if this Hash/MAC has special internal treatment for a fractional last block that goes beyond padding and appending the length, which are handled by user software. Otherwise, this is zero.
- . `partial_len`: 16 bits. Length of absorbed data so far for the current block. Only if used by the algorithm, else zero padding.
+ . `partial_block_len`: 16 bits. Length of filled data so far into `block`.  Only if used by the algorithm, else zero padding.
  . padding: 16 bits.
- . `partial_block`: `b` bits. We include it only if there is a partial block, and exclude it when not.
- We reuse the most significant bit of the `state` field to store this information.
- (In theory, we could include only the part filled so far, but this would complicate the parsing of a SCC.)
+ . `block`: `b` bits.
+    We include it in a SCC only if there is a partial block, and exclude it when not.
+    We reuse the most significant bit of the `state` field to store this information.
+    (In theory, we could include only the part filled so far, but this would complicate the parsing of a SCC.)
 
 Algorithm-Specific Functions:::
 
-* `absorb(p)`: process block `p` into the hash or MAC.
+* `absorb()`: process the `block` into the hash or MAC.
+* `finalize() -> result`: process the `state` into the digest value.
 
 State Machine:::
 
@@ -3510,58 +3512,81 @@ The values 9 and 13 are used when there is a partial block.
 
 * *Behavior:*
  ** In state _initial_:
-  *** `last_block_len`, `partial_len` and `partial_block` are set to zero.
-  *** `hash`: the initial value is set as specified by the algorithm.
-  *** `used_VLxSEW` is set to the current value of `VL*SEW`.
+  *** `last_block_len`, `partial_block_len` and `block` are set to zero.
+  *** `state`: the initial value is set as specified by the algorithm.
   *** Any `ace.exec` will result in the CR being *invalidated*.
 
   ** In each state except _initial_, before performing any operation except `ace.import`, `ace.export`, and `ace.clone`, `used_VLxSEW` is compared to `VL*SEW`.
   If there is a mismatch, the CR will be *invalidated* and any operation will result in an invalid instruction exception.
 
-  ** In state _hash_absorb_, we can only issue ``ace.exec`` instructions of Form B, i.e., “```ace.exec Kn|K[Xn], Vs```”, to absorb the data block `Vs` into the hash:
-  *** If `VL*SEW` is a multiple of `b` (including the case where `VL*SEW` = `b`), then `absorb` is applied to each `b`-bit segment of `Vs`.
-  *** If `b` is a multiple of `VL*SEW` and `b` > `VL*SEW`, then
-   . `Vs` is written to `partial_block` starting at byte offset `partial_len`.
-   . `partial_len <- partial_len + VL*SEW`.
-   . if `partial_len` == `b`, then
-   .. `absorb` is applied to `partial_block`,
-   .. `partial_len <- 0` and `partial_block` is cleared.
-
- ** Upon issuing “`ace.state Kn|K[Xn], #ace_last_block, Xs`” where `Xs` contains the length of the last block, the following happens:
+  ** In state _hash_absorb_, we can only issue ``ace.exec`` instructions of Form B, i.e., “```ace.exec Kn|K[Xn], Vs```”, to absorb the data block `Vs` into the hash as follows.
 +
 --
- . if `partial_len` != 0, then the CR is *invalidated*. (The previous block is not complete.)
+  * `input_remaining` : int
+  * `input_base` : int
+
+[]
+  . `input_remaining <- VL*SEW`
+  . `input_base <- 0`
+  . while `(input_remaining > 0)` do {
+  .. if `(input_remaining ≤ b-partial_block_len)` then {
+  ... ``block[partial_block_len + input_remaining - 1 : partial_block_len] <- ``{empty} +
+``{nbsp}{nbsp}{nbsp}{nbsp}{nbsp}{nbsp}{nbsp}{nbsp}<- Vs[input_base + input_remaining - 1 : input_base]``
+  ... `input_base <- input_base + input_remaining`
+  ... `partial_block_len <- 0`
+  ... `partial_block_len <- partial_block_len + input_remaining`
+  .. } else {
+  ... ``block[b - 1 : partial_block_len] <- ``{empty} +
+``{nbsp}{nbsp}{nbsp}{nbsp}{nbsp}{nbsp}{nbsp}{nbsp}<- Vs[input_base + b - 1 - partial_block_len : input_base]``
+  ... `input_base <- input_base + (b - partial_block_len)`
+  ... `input_remaining <- input_remaining - (b - partial_block_len)`
+  ... `partial_block_len <- b`
+  .. }
+  .. if (`partial_block_len` == `b`) then {
+  ... `absorb()`
+  ... `partial_block_len <- 0`
+  .. }
+  . }
+--
++
+
+//
+
+** Upon issuing “`ace.state Kn|K[Xn], #ace_last_block, Xs`” where `Xs` contains the length of the last block, the following happens:
++
+--
+ . if `partial_block_len` != 0, then the CR is *invalidated*. (The previous block is not complete.)
  . if `Xs > b`, then the CR is *invalidated*.
  . if `Xs == 0`, then the CR is *invalidated*.
  . `last_block_len <- Xs`.
 --
 +
 
- ** In state _hash_last_block_:
-  *** if `last_block_len` == 0, then the CR is *invalidated*.
-  *** If `VL*SEW` is a multiple of `b` (including the case where `VL*SEW` == `b`), then
-      we only issue a single ``ace.exec`` instruction of Form B, i.e., “```ace.exec Kn|K[Xn], Vs```,” to absorb the least significant `b` bits of data block `Vs`.
-  *** If `b` is a multiple of `VL*SEW` and `b` > `VL*SEW`, then we can issue one or more ``ace.exec`` instructions of Form B, i.e., “```ace.exec Kn|K[Xn], Vs```,” to absorb the data block `Vs` into the hash, i.e. “```ace.exec Kn|K[Xn], Vs```”:
-   . if `partial_len < b`, then
-   .. The instruction must be of Form B, else the CR is *invalidated*.
-   .. `Vs` is written to `partial_block` starting at byte offset `partial_len`.
-   .. `partial_len <- partial_len + VL*SEW`.
-   . else if `partial_len+VL*SEW == b`, then the CR is *invalidated*.
+ ** In state _hash_last_block_: TBD
+//  *** if `last_block_len` == 0, then the CR is *invalidated*.
+//  *** If `VL*SEW` is a multiple of `b` (including the case where `VL*SEW` == `b`), then
+//      we only issue a single ``ace.exec`` instruction of Form B, i.e., “```ace.exec Kn|K[Xn], Vs```,” to absorb the least significant `b` bits of data block `Vs`.
+//  *** If `b` is a multiple of `VL*SEW` and `b` > `VL*SEW`, then we can issue one or more ``ace.exec`` instructions of Form B, i.e., “```ace.exec Kn|K[Xn], Vs```,” to absorb the data block `Vs` into the hash, i.e. “```ace.exec Kn|K[Xn], Vs```”:
+//   . if `partial_block_len < b`, then
+//   .. The instruction must be of Form B, else the CR is *invalidated*.
+//   .. `Vs` is written to `block` starting at byte offset `partial_block_len`.
+//   .. `partial_block_len <- partial_block_len + VL*SEW`.
+//   . else if `partial_block_len+VL*SEW == b`, then the CR is *invalidated*.
 
-  ** In state _hash_finalize_:
-   *** If the function is a XOF, then
-       we can issue an arbitrarily large number of ``ace.exec`` of Form C instructions, i.e., “```ace.exec Vd, Kn|K[Xn]```,” to output the hash.
-       This can be done with any of the two mechanisms below, except that the state never transitions to _completed_.
-   *** If `VL*SEW` is a multiple of `b` (including the case where `VL*SEW` == `b`), then
-      we only issue a single ``ace.exec`` of Form C, i.e., “```ace.exec Vd, Kn|K[Xn]```”, to output the hash.
-      The value is, if necessary, finalized, before being output.
-      The state is then changed to _completed_ with no errors (unless the algorithm is a XOF).
-   *** If `b` is a multiple of `VL*SEW` and `b` > `VL*SEW`, then we can issue one or more ``ace.exec`` instructions of Form C, i.e., “```ace.exec Vd, Kn|K[Xn]```”, to output the hash:
-    . Upon entering state _hash_finalize_, `last_block_len` is reused to store the length of the output hash (in any case `b` if the algorithm is a XOF).
-    . After each “```ace.exec Vd, Kn|K[Xn]```”:
-     .. We write a new block of the final value of the hash function to `Vd`, with the caveat that if `0` < `last_block_len`  < `VL*SEW`, the value in `Vd` is accordingly truncated to the least significant `last_block_len` bits and zero-padded.
-     .. `last_block_len <- max(last_block_len - VL*SEW, 0)`
-     .. if `last_block_len` == 0 then the state is changed to _completed_ with no errors (unless the algorithm is a XOF).
+  ** In state _hash_finalize_: TBD
+//   *** If the function is a XOF, then
+//       we can issue an arbitrarily large number of ``ace.exec`` of Form C instructions, i.e., “```ace.exec Vd, Kn|K[Xn]```,” to output the hash.
+//       This can be done with any of the two mechanisms below, except that the state never transitions to _completed_.
+//   *** If `VL*SEW` is a multiple of `b` (including the case where `VL*SEW` == `b`), then
+//      we only issue a single ``ace.exec`` of Form C, i.e., “```ace.exec Vd, Kn|K[Xn]```”, to output the hash.
+//      The value is, if necessary, finalized, before being output.
+//      The state is then changed to _completed_ with no errors (unless the algorithm is a XOF).
+//   *** If `b` is a multiple of `VL*SEW` and `b` > `VL*SEW`, then we can issue one or more ``ace.exec`` instructions of Form C, i.e., “```ace.exec Vd, Kn|K[Xn]```”, to output the hash:
+//    . Upon entering state _hash_finalize_, `last_block_len` is reused to store the length of the output hash (in any case `b` if the algorithm is a XOF).
+//    . After each “```ace.exec Vd, Kn|K[Xn]```”:
+//     .. We write a new block of the final value of the hash function to `Vd`, with the caveat that if `0` < `last_block_len`  < `VL*SEW`, the value in `Vd` is accordingly truncated to the least significant `last_block_len` bits and zero-padded.
+//     .. `last_block_len <- max(last_block_len - VL*SEW, 0)`
+//     .. if `last_block_len` == 0 then the state is changed to _completed_ with no errors (unless the algorithm is a XOF).
 //, in which case the internal state is updated again, `last_block_len <- b`, and more “```ace.exec Vd, Kn|K[Xn]```” instructions can be issued.
 
 NOTE: The description of states _hash_absorb_ and _hash_finalize_ should make it clear that allowing `b` and `VL*SEW` to be in relations other than one being an integer multiple of the other, as well as allowing a change of `VL*SEW`, would significantly complicate the state machine.
@@ -3916,7 +3941,7 @@ The SHA-3 family consists of four cryptographic hash functions, called SHA3-224,
 
 [WARNING]
 ====
-[.red]#*In <<ACE-hash-functions>> there is a condition that either the block size is an integer multiple of the vector length or the vector length is an integer multiple of the block size. It must be relaxed to allow for more flexibility in the design of hash functions, and include SHA3-224 more easily.*#
+[.red]#In <<ACE-hash-functions>> there is a condition that either the block size is an integer multiple of the vector length or the vector length is an integer multiple of the block size. It must be relaxed to allow for more flexibility in the design of hash functions, and include SHA3-224 more easily.#
 ====
 
 
@@ -3929,7 +3954,7 @@ These are simple instantiations of the algorithm specified in <<ACE-hash-functio
 
 Parameters:::
 
-* `b` = block size (8|`b`). It can be 448, 512, 768, or 1024.
+* `b` = block size (8|`b`). It can be 1600 - `c` with `c` = 448, 512, 768, or 1024.
 * `n` = 1600
 
 Data Structures:::
@@ -3940,19 +3965,22 @@ Data Structures:::
 
 * *Internal State*:
  ** `state`: 1600 bits.
- ** `used_VLxSEW`.  Current used vector length.
- ** `partial_len`.  Length of absorbed data so far for the current block (field size at most 16 bits). Only if used by the algorithm.
- ** `partial_block`: `b` bits (a priori we cannot know whether `b > VL*SEW` or not, and changing the internal memory requirements of a CC depending on the `VL*SEW` can lead to memory exhaustion).
+// ** `used_VLxSEW`.  Current used vector length.
+ ** `partial_block_len`.  Length of absorbed data so far for the current block (field size at most 16 bits). Only if used by the algorithm.
+ ** `block`: `b` bits (a priori we cannot know whether `b > VL*SEW` or not, and changing the internal memory requirements of a CC depending on the `VL*SEW` can lead to memory exhaustion).
 
 * *Serialized Content*:
 [lowerroman]
  . `state`: 1600 bits.
  . padding: 32 bits.
- . `used_VLxSEW`: 16 bits. Current vector length.
- . `partial_len`: 16 bits. Length of absorbed data so far for the current block.
- . `partial_block`: `b` bits. We include it only if there is a partial block, and exclude it when not.
+// . `used_VLxSEW`: 16 bits. Current vector length.
+ . `partial_block_len`: 16 bits. Length of absorbed data so far for the current block.
+ . `block`: `b` bits. We include it only if there is a partial block, and exclude it when not.
 
- State Machine:::
+Algorithm-Specific Functions:::
+ . `P()`, computes `KECCAK-p[1600, 24]` on `state`.
+
+State Machine:::
 * *Behavior:*
  ** In state _initial_:
   *** `state`: [.red]#insert here the IV etc.#
