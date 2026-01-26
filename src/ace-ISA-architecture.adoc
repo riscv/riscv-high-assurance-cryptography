@@ -1959,21 +1959,21 @@ The following table defines the state numbers used by the algorithms defined in 
 |===
 | Value | Mnemonic                      | Examples
 |   0   | ace_state_initial             | The context is initialized and ready for operation.
-|   1   | ace_state_hash_absorb +
-ace_state_operate
-| Start (and initialize) a hash function or the sub-function of an algorithm, preparing it to absorb blocks of data. +
-Generic operational state.
-|   2   | ace_state_hash_finalize       | Finalize the internal state of a hash function and possibly prepare it for outputting the result. In this state and in the following two states, additional data may be absorbed, such as partial blocks and lengths.
-|   3   | ace_state_enc_hash_finalize   | Finalize the internal state of a hash function for the encryption algorithm of an authenticated encryption mode of operation and possibly prepare it for outputting the result.
-|   4   | ace_state_dec_hash_finalize   | Finalize the internal state of a hash function for the decryption algorithm of an authenticated decryption mode of operation.
-|   5   | ace_state_hash_verify          | Compare the internal state of a hash function to the provided value.
-|   6   | ace_state_enc_last_block      | For the encryption path of authenticated encryption modes of operation if the length of the last block must be given.
-|   7   | ace_state_dec_last_block      | For the decryption path of authenticated encryption modes of operation if the length of the last block must be given.
-|   8   | ace_state_encrypt             | Encryption is requested.
-|   9   | ace_state_decrypt             | Decryption is requested.
-|  10   | ace_state_set_public_value    | Set a public value (like a nonce or an IV) in an algorithm. Some algorithms require more than one public value (for instance, they may admit a re-useable hash of some associated data and a unique nonce), in which case the second public value can be set using the next message.
-|  11   | ace_state_set_public_value_2  | Set the second public value in an algorithm.
-|  12   | ace_state_input_for_derive    | Tells the CC to expect additional information for feeding the `ace.derive` instruction.
+.2+| 1  | ace_state_hash_absorb         | Start (and initialize) a hash function or the sub-function of an algorithm, start to absorb blocks of data.
+<| ace_state_operate                     | Generic operational state.
+|   2   | ace_state_hash_last_block     | In this state additional data may be absorbed, such as partial blocks and lengths, if the algorithm processes the last block of (a section of) its input in a different way from the other blocks.
+|   3   | ace_state_hash_finalize       | Finalize the internal state of a hash function and possibly prepare it for outputting the result.
+|   4   | ace_state_hash_verify         | Compare the internal state of a hash function to the provided value.
+|   5   | ace_state_hash_output         | Enter the hash output phase of a hash_function.
+|   6   | ace_state_enc_last_block      | For the encryption path of authenticated encryption modes of operation to process “last block” separately.
+|   7   | ace_state_dec_last_block      | For the decryption path of authenticated encryption modes of operation to process “last block” separately.
+|   8   | ace_state_enc_hash_finalize   | Finalize the internal state of a hash function for the encryption algorithm of an authenticated encryption mode of operation and possibly prepare it for outputting the result.
+|   9   | ace_state_dec_hash_finalize   | Finalize the internal state of a hash function for the decryption algorithm of an authenticated decryption mode of operation.
+|  10   | ace_state_encrypt             | Encryption is requested.
+|  11   | ace_state_decrypt             | Decryption is requested.
+.2+| 12 | ace_state_set_public_value    | Set a public value (like a nonce or an IV) in an algorithm. Some algorithms require more than one public value (for instance, they may admit a re-useable hash of some associated data and a unique nonce), in which case the second public value can be set using the next message.
+<| ace_state_input_for_derive   | Tells the CC to expect additional information for feeding the `ace.derive` instruction.
+|  13   | ace_state_set_public_value_2  | Set the second public value in an algorithm.
 |  14   | ace_state_invalidated         | The algorithm has abnormally terminated. `ace.error` will always return error code _ace_err_invalid_.
 |  15   | ace_state_completed           | The algorithm has correctly completed.
 |===
@@ -3384,7 +3384,7 @@ State Machine:::
 If `VL*SEW` > `b`, then the above operations are applied to each `b`-bit block of `Vs`.
 
  ** Upon issuing “```ace.state Kn|K[Xn], #ace_state_last_block, Xs```” where `Xs` contains the bit length of the last block, the following happens:
-   . if `partial_block_len` != 0, then the CR is *invalidated*. (The previous block is not complete.)
+   . if `last_block_len` != 0, then the CR is *invalidated*. (The previous block is not complete.)
    . if `Xs > b` then the CR is *invalidated*.
    . `last_block_len <- Xs`.
 
@@ -3463,7 +3463,7 @@ the SHA2 cite:[nist-fips-180-4], SHA3 and SHAKE cite:[nist-fips-202], as well HM
 Parameters:::
 
 * `b` = block size (8|`b`). This is the size of an absorbed block and may be different from the size of the internal state that is kept by the function.
-* `t` = tag len (8|`t`). This is the size of the digest.
+* `t` = tag len (8|`t`). This is the size of the digest. The present description assumes `t` :le: `b`.
 * `n` = size of the internal state that is kept by the function (8|`n`).
 Either the block size is an integer multiple of the vector length or the vector length is an integer multiple of the block size.
 * `k` = key size (8|`k`). Present only if keyed, i.e., a MAC.
@@ -3479,38 +3479,43 @@ Data Structures:::
  ** `state`: `n` bits.
  ** `last_block_len`: int. Present only if this Hash/MAC has special internal treatment for a fractional last block that goes beyond padding and appending the length, which are handled by user software  (field size at most 16 bits).
  ** `input_base`: int. offset within input to read from (field size at most 16 bits).
- ** `partial_block_len`: int.  Length of absorbed data so far for the current block (field size at most 16 bits). Only if used by the algorithm.
+ ** `block_base`: int.  Length of absorbed data so far for the current block (field size at most 16 bits). Only if used by the algorithm.
+ ** `cumul_len`: int. Cumulative length of dta absorbed so far (if the algorithm must process and incorporate it in the hash on its own).
  ** `block`: `b` bits.
 
 * *Serialized Content*:
 [lowerroman]
  . `key`: `k` bits. Present only if keyed, i.e., a MAC.
  . `hash_state`: `n` bits.
- . `last_block_len`: 16 bits. Only if this Hash/MAC has special internal treatment for a fractional last block that goes beyond padding and appending the length, which are handled by user software. Otherwise, this is zero.
- . `partial_block_len`: 16 bits. Length of filled data so far into `block`.  Only if used by the algorithm, else zero padding.
- . padding: 16 bits.
+ . `last_block_len`: 16-bit unsigned int. Only if this Hash/MAC has special internal treatment for a fractional last block that goes beyond padding and appending the length, which are handled by user software. Otherwise, this is zero.
+ . `block_base`: 16-bit unsigned int. Length of filled data so far into `block`.  Only if used by the algorithm, else zero padding.
+ . `cumul_len`: 32-bit unsigned int. Cumulative length of all data absorbed so far (if the algorithm must process and incorporate it in the hash on its own).
  . `block`: `b` bits.
     We include it in a SCC only if there is a partial block, and exclude it when not.
     We reuse the most significant bit of the `state` field to store this information.
     (In theory, we could include only the part filled so far, but this would complicate the parsing of a SCC.)
 
+NOTE: Regarding the `last_block_len`/`block_base`/`cumul_len` group: if any of these fields is not used, it is replaced by a corresponding padding block.
+If all three are not used by the hashing algorithm, then the 64-bit block is omitted.
+
 Algorithm-Specific Functions:::
 
 * `absorb()`: process `block` into the hash or MAC.
 * `absorb_last_block()`: process `block` into the hash or MAC, using a different function for the last block.
-* `finalize() -> result`: process the `state` into the digest value.
+* `finalize() -> result`: process the `state` into the digest value. Assumed to re-use `block` (the digest or a unit of XOF output should not be be bigger).
+* `update()`: updates the `state` during the digest output stage.
 
 State Machine:::
 
-* *States:* _initial_, _hash_absorb_, _hash_finalize_, and _completed_.
+* *States:* _initial_, _hash_absorb_, _hash_last_block_, _hash_finalize_, _hash_output_ and _completed_.
 
 * *Allowed State Transitions:*
- ** _initial_ -> _hash_absorb_ ->  _hash_finalize_ -> _completed_.
+ ** _initial_ -> _hash_absorb_ -> _hash_last_block_ -> _hash_finalize_ -> _hash_output_ -> _completed_.
  ** From any state to state _initial_.
 
 * *Behavior:*
  ** In state _initial_:
-  *** `last_block_len`, `partial_block_len` and `block` are set to zero.
+  *** `last_block_len`, `block_base` and `block` are set to zero.
   *** `state`: the initial value is set as specified by the algorithm.
   *** Any `ace.exec` will result in the CR being *invalidated*.
 
@@ -3518,61 +3523,102 @@ State Machine:::
 +
 --
   * `input_remaining` : int
-  * `input_base` : int
+  * `input_base` : int {nbsp}{nbsp} // This is the value written into `acestart` if the operation is interrupted.
 
 []
-  . `input_remaining <- VL*SEW`
-  . `input_base <- 0`
+  . `input_remaining <- VL*SEW {nbsp}{nbsp}`// or `VL*SEW-acestart` upon resumption
+  . `input_base <- 0 {nbsp}{nbsp}` // or `acestart` upon resumption
   . while `(input_remaining > 0)` do {
-  .. if `(input_remaining ≤ b-partial_block_len)` then {
-  ... ``block[partial_block_len + input_remaining - 1 : partial_block_len] <- ``{empty} +
+  .. if `(input_remaining ≤ b-block_base)` then {
+  ... ``block[block_base + input_remaining - 1 : block_base] <- ``{empty} +
 ``{nbsp}{nbsp}{nbsp}{nbsp}{nbsp}{nbsp}{nbsp}{nbsp}<- Vs[input_base + input_remaining - 1 : input_base]``
   ... `input_base <- input_base + input_remaining`
-  ... `partial_block_len <- 0`
-  ... `partial_block_len <- partial_block_len + input_remaining`
+  ... `block_base <- block_base + input_remaining`
+  ... `input_remaining <- 0` // the input vector has been used up
+  ... `input_base <- 0`
   .. } else {
-  ... ``block[b - 1 : partial_block_len] <- ``{empty} +
-``{nbsp}{nbsp}{nbsp}{nbsp}{nbsp}{nbsp}{nbsp}{nbsp}<- Vs[input_base + b - 1 - partial_block_len : input_base]``
-  ... `input_base <- input_base + (b - partial_block_len)`
-  ... `input_remaining <- input_remaining - (b - partial_block_len)`
-  ... `partial_block_len <- b`
+  ... ``block[b - 1 : block_base] <- ``{empty} +
+``{nbsp}{nbsp}{nbsp}{nbsp}{nbsp}{nbsp}{nbsp}{nbsp}<- Vs[input_base + b - 1 - block_base : input_base]``
+  ... `input_base <- input_base + (b - block_base)`
+  ... `input_remaining <- input_remaining - (b - block_base)`
+  ... `block_base <- b` // the block buffer has been filled
   .. }
-  .. if (`partial_block_len` == `b`) then {
+  .. if (`block_base` == `b`) then {
   ... `absorb()`
-  ... `partial_block_len <- 0`
+  ... `block_base <- 0`
+  ... if (`input_remaining` == 0) then we terminate the instruction.
+  ... *Here* the instruction may be interrupted, with `acestart <- input_base`.
   .. }
   . }
 --
 +
 
 //
-** Upon issuing “`ace.state Kn|K[Xn], #ace_state_hash_finalize, Xs`” where `Xs` contains the length of the last block, the following happens:
+** Upon issuing “`ace.state Kn|K[Xn], #ace_state_hash_last_block, Xs`” where `Xs` contains the length of the last block, the following happens:
 +
 --
- . if `partial_block_len` != 0, then the CR is *invalidated*. (The previous block is not complete.)
+ . if `block_base` != 0, then the CR is *invalidated*. (The previous block is not complete.)
  . if `Xs > b`, then the CR is *invalidated*.
  . if `Xs == 0`, then the CR is *invalidated*.
  . `last_block_len <- Xs`.
 --
 +
-Then, state transitions to _hash_finalize_ as expected.
+Then, state transitions to _hash_last_block_ as expected.
 
- ** In state _hash_finalize_, we can have the following four situations:
- *** `partial_block_len` < `last_block_len` and `partial_block_len` != -1;
-  we can only issue ``ace.exec`` instructions of Form B, i.e., “```ace.exec Kn|K[Xn], Vs```”, to absorb a single data block `Vs` into the hash.
-  The operations are mostly the same as the operations for state _hash_absorb_ except that:
-  . Only one block is absorbed.
-  . The length of the block in bits is given by the length of the last block.
- *** `partial_block_len` > `last_block_len`  and `partial_block_len` != -1;: The CR is *invalidated*.
- *** `partial_block_len` = `last_block_len`.
-  . To handle this case, the last three instructions must be changed to
-[start=4]
-  .. if (`partial_block_len` == `last_block_len`) then {
-  ... `absorb_last_block()`
-  ... `partial_block_len <- -1`
-  . and when this happens [.red]#TBD#.
- ****  and `partial_block_len` == -1;
-   we can only issue ``ace.exec`` instructions of Form C, i.e., “```ace.exec Vd, Kn|K[Xn]```”, to output the hash value.
+ ** State _hash_last_block_ is very similar to _hash_absorb_, the only differences are:
+ *** `last_block_len` is used in place of `b` throughout.
+ *** `absorb_last_block()` is called instead of `absorb()` in Step 3.d.i.
+ *** The instruction is terminated after `absorb_last_block()`-only one block is absorbed-and the state transitions to _hash_output_
+
+// .. *** `block_base` != `ones(16)` and `block_base` < `last_block_len`;
+// ..  we can only issue ``ace.exec`` instructions of Form B, i.e., “```ace.exec Kn|K[Xn], Vs```”, to absorb a single data vector `Vs` into the hash.
+// ..  The operations are mostly the same as the operations for state _hash_absorb_ except that:
+// ..  . Only one block is absorbed.
+// ..  . The length of the block in bits is given by `block_base` and not by the parameter `b`.
+// .. *** `block_base` != `ones(16)` and `block_base` > `last_block_len`: The CR is *invalidated*.
+// .. *** `block_base` = `last_block_len`.
+// ..  . To handle this case, the last three instructions must be changed to
+// ..[start=4]
+// ..  .. if (`block_base` == `last_block_len`) then {
+// ..  ... `absorb_last_block()`
+// ..  ... the state transitions to _hash_outout_ and the instruction terminates. }
+// .. *** and `block_base` == `ones(16)`;
+// ..   We can only issue ``ace.exec`` instructions of Form C, i.e., “```ace.exec Vd, Kn|K[Xn]```”, to output the hash value.
+// ..   Then
+// ..   **** Hash Case
+// ..   **** XOF case
+
+** In state _hash_output_ we have two possible situations: we are in a hash function or in a XOF.
+ *** Hash case
+ *** Hash case [.red]#*TBD*#
+ *** XOF case [.red]#*TBD*#
+
+[comment]
+--
+Algorithm 8: SPONGE[f, pad, r](N, d)
+Input:
+string N,
+nonnegative integer d.
+
+Output:
+string Z such that len(Z) = d.
+Steps:
+1. Let P = N @ pad(r, len(N)).
+2. Let n = len(P)/r.
+3. Let c = b - r.
+4. Let P[0], … , P[n-1] be the unique sequence of strings of length r such that P = P[0] || … || P[n-1].
+5. Let S = zeros(b)
+.
+6. For i from 0 to n-1, let S = f (S xor (Pi @ zeros(c))).
+7. Let Z be the empty string.
+8. Let Z = Z || Trunc r (S).
+9. If d ≤ |Z|, then return Trunc d (Z); else continue.
+10. Let S = f(S), and continue with Step 8.
+--
+
+
+
+
 
 ===== Usage
 
@@ -3949,7 +3995,7 @@ Data Structures:::
 * *Internal State*:
  ** `state`: 1600 bits.
 // ** `used_VLxSEW`.  Current used vector length.
- ** `partial_block_len`.  Length of absorbed data so far for the current block (field size at most 16 bits). Only if used by the algorithm.
+ ** `block_base`.  Length of absorbed data so far for the current block (field size at most 16 bits). Only if used by the algorithm.
  ** `block`: `b` bits (a priori we cannot know whether `b > VL*SEW` or not, and changing the internal memory requirements of a CC depending on the `VL*SEW` can lead to memory exhaustion).
 
 * *Serialized Content*:
@@ -3957,7 +4003,7 @@ Data Structures:::
  . `state`: 1600 bits.
  . padding: 32 bits.
 // . `used_VLxSEW`: 16 bits. Current vector length.
- . `partial_block_len`: 16 bits. Length of absorbed data so far for the current block.
+ . `block_base`: 16 bits. Length of absorbed data so far for the current block.
  . `block`: `b` bits. We include it only if there is a partial block, and exclude it when not.
 
 Algorithm-Specific Functions:::
