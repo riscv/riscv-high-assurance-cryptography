@@ -1959,17 +1959,17 @@ The following table defines the state numbers used by the algorithms defined in 
 |===
 | Value | Mnemonic                      | Examples
 |   0   | ace_state_initial             | The context is initialized and ready for operation.
-|   1   | ace_state_hash_absorb         | Start (and initialize) a hash function or the sub-function of an algorithm, preparing it to absorb blocks of data.
+|   1   | ace_state_hash_absorb +
+ace_state_operate
+| Start (and initialize) a hash function or the sub-function of an algorithm, preparing it to absorb blocks of data. +
+Generic operational state.
 |   2   | ace_state_hash_finalize       | Finalize the internal state of a hash function and possibly prepare it for outputting the result. In this state and in the following two states, additional data may be absorbed, such as partial blocks and lengths.
 |   3   | ace_state_enc_hash_finalize   | Finalize the internal state of a hash function for the encryption algorithm of an authenticated encryption mode of operation and possibly prepare it for outputting the result.
 |   4   | ace_state_dec_hash_finalize   | Finalize the internal state of a hash function for the decryption algorithm of an authenticated decryption mode of operation.
-|   5   | ace_state_hash_verify         | Compare the internal state of a hash function to the provided value.
+|   5   | ace_state_hash_verify          | Compare the internal state of a hash function to the provided value.
 |   6   | ace_state_enc_last_block      | For the encryption path of authenticated encryption modes of operation if the length of the last block must be given.
 |   7   | ace_state_dec_last_block      | For the decryption path of authenticated encryption modes of operation if the length of the last block must be given.
-|   8   | ace_state_encrypt +
-ace_state_operate
-|  Encryption is requested. +
-Algorithm is ready to process.
+|   8   | ace_state_encrypt             | Encryption is requested.
 |   9   | ace_state_decrypt             | Decryption is requested.
 |  10   | ace_state_set_public_value    | Set a public value (like a nonce or an IV) in an algorithm. Some algorithms require more than one public value (for instance, they may admit a re-useable hash of some associated data and a unique nonce), in which case the second public value can be set using the next message.
 |  11   | ace_state_set_public_value_2  | Set the second public value in an algorithm.
@@ -3477,15 +3477,15 @@ Data Structures:::
 * *Internal State*:
  ** `key`: `k` bits. Present only if keyed, i.e., a MAC.
  ** `state`: `n` bits.
- ** `last_block_len`. Present only if this Hash/MAC has special internal treatment for a fractional last block that goes beyond padding and appending the length, which are handled by user software  (field size at most 16 bits).
- ** `partial_block_len`.  Length of absorbed data so far for the current block (field size at most 16 bits). Only if used by the algorithm.
+ ** `last_block_len`: int. Present only if this Hash/MAC has special internal treatment for a fractional last block that goes beyond padding and appending the length, which are handled by user software  (field size at most 16 bits).
+ ** `input_base`: int. offset within input to read from (field size at most 16 bits).
+ ** `partial_block_len`: int.  Length of absorbed data so far for the current block (field size at most 16 bits). Only if used by the algorithm.
  ** `block`: `b` bits.
 
 * *Serialized Content*:
 [lowerroman]
  . `key`: `k` bits. Present only if keyed, i.e., a MAC.
  . `hash_state`: `n` bits.
-// . `used_VLxSEW`: 16 bits. Current vector length.
  . `last_block_len`: 16 bits. Only if this Hash/MAC has special internal treatment for a fractional last block that goes beyond padding and appending the length, which are handled by user software. Otherwise, this is zero.
  . `partial_block_len`: 16 bits. Length of filled data so far into `block`.  Only if used by the algorithm, else zero padding.
  . padding: 16 bits.
@@ -3502,13 +3502,10 @@ Algorithm-Specific Functions:::
 
 State Machine:::
 
-* *States:* _initial_ (0), _hash_absorb_ (1 or 9), _hash_last_block_ (5 or 13), _hash_finalize_, and _completed_ (15).
-The values 9 and 13 are used when there is a partial block.
+* *States:* _initial_, _hash_absorb_, _hash_finalize_, and _completed_.
+
 * *Allowed State Transitions:*
- ** _initial_ -> _hash_absorb_.
- **  If the algorithm has a special treatment for the last block, either if it is partial or always, then
-  *** _hash_absorb_ ->  _hash_last_block ->  _hash_finalize_ -> _completed_.
-  *** else _hash_absorb_ ->  _hash_finalize_ -> _completed_.
+ ** _initial_ -> _hash_absorb_ ->  _hash_finalize_ -> _completed_.
  ** From any state to state _initial_.
 
 * *Behavior:*
@@ -3516,9 +3513,6 @@ The values 9 and 13 are used when there is a partial block.
   *** `last_block_len`, `partial_block_len` and `block` are set to zero.
   *** `state`: the initial value is set as specified by the algorithm.
   *** Any `ace.exec` will result in the CR being *invalidated*.
-
-  ** In each state except _initial_, before performing any operation except `ace.import`, `ace.export`, and `ace.clone`, `used_VLxSEW` is compared to `VL*SEW`.
-  If there is a mismatch, the CR will be *invalidated* and any operation will result in an invalid instruction exception.
 
   ** In state _hash_absorb_, we can only issue ``ace.exec`` instructions of Form B, i.e., “```ace.exec Kn|K[Xn], Vs```”, to absorb the data block `Vs` into the hash as follows.
 +
@@ -3552,8 +3546,7 @@ The values 9 and 13 are used when there is a partial block.
 +
 
 //
-
-** Upon issuing “`ace.state Kn|K[Xn], #ace_last_block, Xs`” where `Xs` contains the length of the last block, the following happens:
+** Upon issuing “`ace.state Kn|K[Xn], #ace_state_hash_finalize, Xs`” where `Xs` contains the length of the last block, the following happens:
 +
 --
  . if `partial_block_len` != 0, then the CR is *invalidated*. (The previous block is not complete.)
@@ -3562,35 +3555,24 @@ The values 9 and 13 are used when there is a partial block.
  . `last_block_len <- Xs`.
 --
 +
+Then, state transitions to _hash_finalize_ as expected.
 
- ** In state _hash_last_block_: TBD
-//  *** if `last_block_len` == 0, then the CR is *invalidated*.
-//  *** If `VL*SEW` is a multiple of `b` (including the case where `VL*SEW` == `b`), then
-//      we only issue a single ``ace.exec`` instruction of Form B, i.e., “```ace.exec Kn|K[Xn], Vs```,” to absorb the least significant `b` bits of data block `Vs`.
-//  *** If `b` is a multiple of `VL*SEW` and `b` > `VL*SEW`, then we can issue one or more ``ace.exec`` instructions of Form B, i.e., “```ace.exec Kn|K[Xn], Vs```,” to absorb the data block `Vs` into the hash, i.e. “```ace.exec Kn|K[Xn], Vs```”:
-//   . if `partial_block_len < b`, then
-//   .. The instruction must be of Form B, else the CR is *invalidated*.
-//   .. `Vs` is written to `block` starting at byte offset `partial_block_len`.
-//   .. `partial_block_len <- partial_block_len + VL*SEW`.
-//   . else if `partial_block_len+VL*SEW == b`, then the CR is *invalidated*.
-
-  ** In state _hash_finalize_: TBD
-//   *** If the function is a XOF, then
-//       we can issue an arbitrarily large number of ``ace.exec`` of Form C instructions, i.e., “```ace.exec Vd, Kn|K[Xn]```,” to output the hash.
-//       This can be done with any of the two mechanisms below, except that the state never transitions to _completed_.
-//   *** If `VL*SEW` is a multiple of `b` (including the case where `VL*SEW` == `b`), then
-//      we only issue a single ``ace.exec`` of Form C, i.e., “```ace.exec Vd, Kn|K[Xn]```”, to output the hash.
-//      The value is, if necessary, finalized, before being output.
-//      The state is then changed to _completed_ with no errors (unless the algorithm is a XOF).
-//   *** If `b` is a multiple of `VL*SEW` and `b` > `VL*SEW`, then we can issue one or more ``ace.exec`` instructions of Form C, i.e., “```ace.exec Vd, Kn|K[Xn]```”, to output the hash:
-//    . Upon entering state _hash_finalize_, `last_block_len` is reused to store the length of the output hash (in any case `b` if the algorithm is a XOF).
-//    . After each “```ace.exec Vd, Kn|K[Xn]```”:
-//     .. We write a new block of the final value of the hash function to `Vd`, with the caveat that if `0` < `last_block_len`  < `VL*SEW`, the value in `Vd` is accordingly truncated to the least significant `last_block_len` bits and zero-padded.
-//     .. `last_block_len <- max(last_block_len - VL*SEW, 0)`
-//     .. if `last_block_len` == 0 then the state is changed to _completed_ with no errors (unless the algorithm is a XOF).
-//, in which case the internal state is updated again, `last_block_len <- b`, and more “```ace.exec Vd, Kn|K[Xn]```” instructions can be issued.
-
-NOTE: The description of states _hash_absorb_ and _hash_finalize_ should make it clear that allowing `b` and `VL*SEW` to be in relations other than one being an integer multiple of the other, as well as allowing a change of `VL*SEW`, would significantly complicate the state machine.
+ ** In state _hash_finalize_, we can have the following four situations:
+ *** `partial_block_len` < `last_block_len` and `partial_block_len` != -1;
+  we can only issue ``ace.exec`` instructions of Form B, i.e., “```ace.exec Kn|K[Xn], Vs```”, to absorb a single data block `Vs` into the hash.
+  The operations are mostly the same as the operations for state _hash_absorb_ except that:
+  . Only one block is absorbed.
+  . The length of the block in bits is given by the length of the last block.
+ *** `partial_block_len` > `last_block_len`  and `partial_block_len` != -1;: The CR is *invalidated*.
+ *** `partial_block_len` = `last_block_len`.
+[start=4]
+  . To handle this case, the last three instructions must be changed to
+  .. if (`partial_block_len` == `last_block_len`) then {
+  ... `absorb_last_block()`
+  ... `partial_block_len <- -1`
+  . and when this happens [.red]#TBD#.
+ ****  and `partial_block_len` == -1;
+   we can only issue ``ace.exec`` instructions of Form C, i.e., “```ace.exec Vd, Kn|K[Xn]```”, to output the hash value.
 
 ===== Usage
 
