@@ -2464,9 +2464,8 @@ State Machine:::
  ** _initial_ -> _set_public_value_ -> _hash_absorb_.
  ** _hash_absorb_ -> _encrypt_ -- if metadata allows encryption, else the CR is *invalidated*.
  ** _hash_absorb_ -> _decrypt_ -- if metadata allows decryption, else the CR is *invalidated*.
- ** _encrypt_ -> _enc_hash_finalize_, later automatically transitioning to _completed_.
- ** _decrypt_ -> _dec_hash_finalize_.
- ** _dec_hash_finalize_ -> _hash_verify_, later automatically transitioning to _completed_.
+ ** _encrypt_ -> _enc_hash_finalize_ -> _completed_.
+ ** _decrypt_ -> _dec_hash_finalize_ -> _hash_verify_ -> _completed_.
 
 * *Behavior:*
  ** In state _initial_ :
@@ -3059,8 +3058,8 @@ State Machine:::
  ** _initial_ -> _set_public_value_ -> _set_public_value_2_ -> _hash_absorb_ -> _hash_finalize_
  ** _hash_finalize_ -> _encrypt_ -- if metadata allows encryption, else the CR is *invalidated*.
  ** _hash_finalize_ -> _decrypt_ -- if metadata allows decryption, else the CR is *invalidated*.
- ** _encrypt_ -> _enc_last_block_ -> _enc_hash_finalize_ -> _hash_output_, later automatically transitioning to _completed_.
- ** _decrypt_ -> _dec_last_block_ -> _hash_verify_, later automatically transitioning to _completed_.
+ ** _encrypt_ -> _enc_last_block_ -> _enc_hash_finalize_ -> _hash_output_ -> _completed_.
+ ** _decrypt_ -> _dec_last_block_ -> _hash_verify_ -> _completed_.
 
 * *Behavior:*
 ** In state _initial_ :
@@ -3457,9 +3456,9 @@ the SHA2 cite:[nist-fips-180-4], SHA3 and SHAKE cite:[nist-fips-202], as well HM
 
 Parameters:::
 
-* `b` = block size (8|`b`). This is the size of an absorbed block and may be different from the size of the internal state that is kept by the function.
-* `t` = tag len (8|`t`). This is the size of the digest. The present description assumes `t` {le} `b`.
-* `n` = size of the internal state that is kept by the function (8|`n`).
+* `b` = block size (8|`b`). This is the size of an absorbed block and may be different from the size of the internal state that is kept by the function. For a sponge function, this value is the _rate_ of the function.
+* `t` = tag len (8|`t`). This is the size of the digest, or of the block that is output each time in a XOF. The present description assumes `t` {le} `b`.
+* `n` = size of the internal state that is kept by the function (8|`n`).  For a sponge function, `n-b` is the _capacity_ of the function.
 Either the block size is an integer multiple of the vector length or the vector length is an integer multiple of the block size.
 * `k` = key size (8|`k`). Present only if keyed, i.e., a MAC.
 
@@ -3476,15 +3475,15 @@ Data Structures:::
  ** `input_base`: int. Offset within input/output to read from/write to (field size at most 16 bits).
  ** `block_base`: int. Length of absorbed data so far for the current block (field size at most 16 bits). Only if used by the algorithm.
  ** `cumul_len`: int. Cumulative length of dta absorbed so far (if the algorithm must process and incorporate it in the hash on its own).
- ** `block`: `b` bits.
+ ** `block`: `b` bits.  We include it only if there is a partial block, i.e., for instance if the absorbed unit is larger than a normally available vector size or not a submultiple thereof, and is not directly absorbed into `state`.
 
 * *Serialized Content*:
 [lowerroman]
  . `key`: `k` bits. Present only if keyed, i.e., a MAC.
- . `hash_state`: `n` bits.
+ . `state`: `n` bits.
  . `last_block_len`: 16-bit unsigned int. Only if this Hash/MAC has special internal treatment for a fractional last block that goes beyond padding and appending the length, which are handled by user software. Otherwise, this is zero.
  . `block_base`: 16-bit unsigned int. Length of filled data so far into `block`.  Only if used by the algorithm, else zero padding.
- . `cumul_len`: 32-bit unsigned int. Cumulative length of all data absorbed so far (if the algorithm must process and incorporate it in the hash on its own).
+ . `cumul_len`: 32-bit unsigned int. Cumulative length of all data absorbed so far. Only if the algorithm must process and incorporate it in the hash on its own, else zero padding.
  . `block`: `b` bits.
     We include it in a SCC only if there is a partial block, and exclude it when not.
     We reuse the most significant bit of the `state` field to store this information.
@@ -3495,17 +3494,17 @@ If all three are not used by the hashing algorithm, then the 64-bit block is omi
 
 Algorithm-Specific Functions:::
 
-* `absorb()`: process `block` into the hash or MAC.
+* `absorb()`: process `block` into the hash or MAC. This may include, for instance, state update operations.
 * `absorb_last_block()`: process `block` into the hash or MAC, using the function for the last block.
-* `finalize()`: process the `state` into the digest value. We assume this re-uses `block` (the digest or a unit of XOF output should not be be bigger).
+* `finalize()`: process the `state` into the digest value. We assume this either re-uses `block` (the entire digest, or a unit of XOF output should not be be bigger than that) or the digest will be part of `state`
 * `update()`: updates the `state` during the digest output stage.
 
 State Machine:::
 
-* *States:* _initial_, _hash_absorb_, _hash_last_block_, _hash_finalize_, _hash_output_ and _completed_.
+* *States:* _initial_, _hash_absorb_, _hash_last_block_, _hash_output_ and _completed_.
 
 * *Allowed State Transitions:*
- ** _initial_ -> _hash_absorb_ -> _hash_last_block_ -> _hash_finalize_ -> _hash_output_ -> _completed_.
+ ** _initial_ -> _hash_absorb_ -> _hash_last_block_ -> _hash_output_ -> _completed_.
  ** From any state to state _initial_.
 
 * *Behavior:*
@@ -3522,7 +3521,12 @@ State Machine:::
   . while `(input_base < VL*SEW)` do { // as long as we have input to process
   .. `amount <- min(VL*SEW-input_base, b-block_base)`
   .. ``block[block_base + amount - 1 : block_base] <-`` +
-      ``{nbsp}{nbsp}{nbsp}{nbsp}{nbsp}{nbsp} <- Vs[input_base + amount - 1 : input_base]``
+      ``{nbsp}{nbsp}{nbsp}{nbsp} <- Vs[input_base + amount - 1 : input_base]`` +
+        ``{nbsp}{nbsp}``(If there is no `block` field, could also be something like +
+        ``{nbsp}{nbsp}{nbsp}{nbsp}{nbsp}state[block_base + amount - 1 : block_base] <- `` +
+        ``{nbsp}{nbsp}{nbsp}{nbsp}{nbsp}{nbsp}{nbsp}{nbsp}{nbsp}<- state[block_base + amount - 1 : block_base] + `` +
+        ``{nbsp}{nbsp}{nbsp}{nbsp}{nbsp}{nbsp}{nbsp}{nbsp}{nbsp}{nbsp}{nbsp}{nbsp}{nbsp}+ Vs[input_base + amount - 1 : input_base]`` , +
+        ``{nbsp}{nbsp}{nbsp}``it could directly replace part of `state`, or some other function.)
   .. `input_base <- input_base + amount`
   .. `block_base <- block_base + amount`
   .. if (`block_base` == `b`) then { // it's time to absorb the block
@@ -3581,10 +3585,68 @@ Then, state transitions to _hash_last_block_ as expected.
 
 //
 
+[[ACE-SHA-3]]
+==== SHA-3 Family Specific Rules
 
-===== Usage
+We describe here the algorithms for the primitives in the SHA-3 family, which currently includes SHA3-224, SHA3-256, SHA3-384, SHA3-512, SHAKE128 and SHAKE256.
+These, and RawSHAKE128, RawSHAKE256 as well, are simple instantiations of the algorithm specified in <<ACE-hash-functions>>.
+These algorithms are instantiations of a specific parameter choice of KECCAC cite:[DBLP-conf-eurocrypt-BertoniDPA13], and have been standardized by NIST as SHA-3 cite:[nist-fips-202].
 
-The usage of this type of algorithms is very similar to that of CMAC (cf.{nbsp}<<ACE-CMAC-mode>>), with the exception that if the last block is not treated in a special way, there is no state _hash_last_block_ and after the last block is absorbed, the state is changed to _hash_finalize_.
+Parameters:::
+
+* `b` = rate (8|`b`). It can be 1600 - `c` with `c` = 448, 512, 768, or 1024 being the capacity.
+* `n` = 1600
+* `t` = `c/2`
+
+Data Structures:::
+
+* *Initialization Input*: the content is empty, i.e., there is only the metadata section.
+
+* *Internal State*:
+ ** `state`: `n` bits.
+ ** `last_block_len`: int.
+ ** `input_base`: int.
+ ** `block_base`: int.
+
+* *Serialized Content*:
+[lowerroman]
+ . `state`: `n` bits.
+ . `last_block_len`: 16-bit unsigned int.
+ . `block_base`: 16-bit unsigned int. Length of filled data so far into `block`.
+ . padding: 32 bits.
+
+Algorithm-Specific Functions:::
+ * `P()`, computes `KECCAK-p[1600, 24]` on `state`.
+ * `absorb()`: in this case there is no explicit operation to copy data into `state`, as the inputs will be directly XORed into it, however `absorb` applies `P()` to the state.
+ * `absorb_last_block()`: this is a NOP.
+ * `finalize()`: this is a NOP.
+ * `update()`: updates the `state` during the digest output stage.  It applies `P()` to the state.
+
+State Machine:::
+* *States:* _initial_, _hash_absorb_, _hash_last_block_, _hash_finalize_, _hash_output_ and _completed_.
+
+* *Allowed State Transitions:*
+ ** _initial_ -> _hash_absorb_ -> _hash_last_block_ -> _hash_finalize_ -> _hash_output_ -> _completed_.
+ ** From any state to state _initial_.
+
+* *Behavior:* (We describe only the differences with respect to the generic behavior described in <<ACE-hash-functions>>.)
+ ** In state _initial_, `state` is zeroed.
+ ** In state _hash_absorb_, the input data is directly XORed to `state`.
+ ** In state _hash_last_block_, the input data is directly XORed to `state`.
+ ** Upon transitioning to state _hash_output_:
+  . The suffix and padding string `S` is generated.
+  . If the bit length of `S` is `b-block_base`:
+   .. `S` is directly XORed to rate part of the state, and
+   .. `P()` is applied.
+  . If the bit length of `S` is `2b-block_base`:
+   .. The first `b-block_base` bits are XORed to the rate part of the state,
+   .. `P()` is applied,
+   .. the remaining `b` bits are XORed to the rate part of the state, and
+   .. `P()` is applied again.
+
+The rest of the algorithm follows <<ACE-hash-functions>>.
+
+//
 
 [[ACE-Ascon]]
 ==== Ascon Specific Rules
@@ -3638,8 +3700,8 @@ State Machine:::
  ** _initial_ -> _set_public_value_ -> _hash_absorb_.
  ** _hash_absorb_ -> _encrypt_ -- if metadata allows encryption, else the CR is *invalidated*.
  ** _hash_absorb_ -> _decrypt_ -- if metadata allows decryption, else the CR is *invalidated*.
- ** _encrypt_ -> _enc_last_block_, _enc_hash_finalize_, later automatically transitioning to _completed_.
- ** _decrypt_ -> _dec_last_block_, _dec_hash_finalize_, _hash_verify_, later automatically transitioning to _completed_.
+ ** _encrypt_ -> _enc_last_block_ -> _enc_hash_finalize_ -> _completed_.
+ ** _decrypt_ -> _dec_last_block_ -> _dec_hash_finalize_ -> _hash_verify_ -> _completed_.
 
 * *Behavior:*
  ** In state _initial_ :
@@ -3918,64 +3980,6 @@ Ascon-CXOF128 differs from Ascon-XOF128 in that the message is prepended with th
 Except for the initialization of the state, Ascon-CXOF128 is identical to Ascon-XOF128 with customization string and message concatenated.
 The IV for Ascon-CXOF128 is `0x0000080000cc0004` (in place of `0x0000080000cc0003`).
 The states and their semantics are identical to Ascon-XOF128, and the management of the customization string is left to the user.
-
-// //////////////////////////////////////////////////////////////////////////////////////////
-
-[[ACE-SHA-3]]
-==== SHA-3 Family Specific Rules
-
-We describe here the algorithms for the primitives in the SHA-3 family.
-
-The SHA-3 family consists of four cryptographic hash functions, called SHA3-224, SHA3-256, SHA3-384, and SHA3-512, and two extendable-output functions (XOFs), called SHAKE128 and SHAKE256.
-
-===== SHA3-224, SHA3-256, SHA3-384, and SHA3-512
-
-
-These are simple instantiations of the algorithm specified in <<ACE-hash-functions>>.
-
-// SHA3-224(M) = KECCAK[448] (M || 01, 224);
-// SHA3-256(M) = KECCAK[512] (M || 01, 256);
-// SHA3-384(M) = KECCAK[768] (M || 01, 384);
-// SHA3-512(M) = KECCAK[1024] (M || 01, 512).
-
-Parameters:::
-
-* `b` = block size (8|`b`). It can be 1600 - `c` with `c` = 448, 512, 768, or 1024.
-* `n` = 1600
-
-Data Structures:::
-
-* *Initialization Input*:
-[lowerroman]
- . `key`: `k` bits. Present only if keyed, i.e., a MAC.
-
-* *Internal State*:
- ** `state`: 1600 bits.
-// ** `used_VLxSEW`.  Current used vector length.
- ** `block_base`.  Length of absorbed data so far for the current block (field size at most 16 bits). Only if used by the algorithm.
- ** `block`: `b` bits (a priori we cannot know whether `b > VL*SEW` or not, and changing the internal memory requirements of a CC depending on the `VL*SEW` can lead to memory exhaustion).
-
-* *Serialized Content*:
-[lowerroman]
- . `state`: 1600 bits.
- . padding: 32 bits.
- . `block_base`: 16 bits. Length of absorbed data so far for the current block.
- . `block`: `b` bits. We include it only if there is a partial block, and exclude it when not.
-
-Algorithm-Specific Functions:::
- . `P()`, computes `KECCAK-p[1600, 24]` on `state`.
-
-State Machine:::
-* *Behavior:*
- ** In state _initial_:
-  *** `state`: [.red]#insert here the IV etc.#
-
-The rest of the algorithm follows <<ACE-hash-functions>>.
-
-===== SHAKE128 and SHAKE256
-
-[WARNING]
-TBD
 
 // //////////////////////////////////////////////////////////////////////////////////////////
 
