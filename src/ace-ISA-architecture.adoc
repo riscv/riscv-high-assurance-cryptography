@@ -804,9 +804,10 @@ The CSR `vacecrstatus` exists only if H-mode is implemented, and it is HRW.
 
 It is similar to `acecrstatus`, however it works to track the status of the CRs at the VS-mode.
 
-. For RV64, `vacecrstatus` has a size of 64 bits,
+For RV64, `vacecrstatus` has a size of 64 bits,
 `vacecrstatus[``2__i__+1,2__i__``]`` can take the values Off, Init, Clean, Dirty as defined for `*status.ACES` for CR #__i__.
-. For RV32, there are two 32-bit registers `vacecrstatush` and `vacecrstatusl` (collectively referred to as `vacecrstatus` in the following)
+
+For RV32, there are two 32-bit registers `vacecrstatush` and `vacecrstatusl` (collectively referred to as `vacecrstatus` in the following)
 where
 ``vacecrstatus[``2__i__+1,2__i__``]`` can take the values Off, Init, Clean, Dirty as defined for `*status.ACES` for CR #__i__
 and
@@ -834,26 +835,34 @@ Any change to `acecrstatus` is reflected in `vacecrstatus` as follows:
 [[ACE-CSR-macercsk]]
 ===== `macercsk` group
 
-This is a group of M-Mode WARZ XLEN-bit CSRs.
-
-Eight CSRs may be defined in RV32 and four in RV64 to configure `macercsk`:
+This is a group of M-Mode WARZ XLEN-bit CSRs used to configure `macercsk`.
 (((CSR, `macercsk`)))
 
-* In RV32 these are `macercsk0`, `macercsk!`, ... `macercsk7`.
-* In RV64 these are `macercsk0`, `macercsk1`, `macercsk2`, and `macercsk3`
+* In RV32 there are eight CSRs:  `macercsk0`, `macercsk1`, ... `macercsk7`.
+* In RV64 there are four CSRs: `macercsk0`, `macercsk1`, `macercsk2`, `macercsk3`
 
 A write to `macercsk{i}` set Bits [(_i_+1) XLEN - 1 : _i_ XLEN] of the RCSK.
 
 Any access to the `macercsk` block outside of M-mode will cause an illegal instruction exception.
 
+The values written to the `macercsk` block must follow the value update rules defined in <<ACE-CSR-group-update-policy>>.
+
+NOTE: We assume that  M-mode firmware is aware of whether the RCSK is configurable, ephemeral, or fixed.
+If not configurable, only a fixed RCSK is guaranteed to persist across power cycles.
+For reconfigurable RCSKs, system-specific mechanisms for persistence and cross-device transfer (e.g., to support VM migration) are the responsibility of M-mode firmware.
+RCSK migration to any other RCSK-receiving endpoint,
+whether it is the M-mode firmware of another device, a TPM for local hibernation storage, or an HSM for intermediate storage in a cloud,
+must employ an authenticated public-key key-wrapping mechanism.
+
+[comment]
+--
 NOTE: We assume that M-mode firmware knows if RCSK is configurable, ephemeral, or fixed.
 RCSK cannot be assumed to be preserved across power cycles, unless it is fixed.
 If the RCSK is reconfigurable, mechanisms for RCSK persistence and cross-device transfer to assist VM migration are system-specific and belong to M-mode firmware.
 Cross-device RCSK migration must use a public-key key wrapping mechanism.
 Since M-mode FW cannot just trust any external entity claiming to be a trusted device:
 all receiving end points, whether they are the M-mode FW of another trusted device, a TPM for temporary storage of a VM's CSK during device hibernation, or an HSM for intermediate CSK storage, must authenticate themselves.
-
-The values written to the `macercsk` block must follow the value update rules defined in <<ACE-CSR-group-update-policy>>.
+--
 
 [[ACE-CSR-group-update-policy]]
 ===== Value update policy for CSR groups
@@ -868,13 +877,10 @@ When the bitmap is all ones, the key is set with the values written to all CSRs 
 
 ===== `maceOSSecret` group
 
-This is a group of M-Mode WARZ XLEN-bit CSRs.
+This is a group of M-Mode WARZ XLEN-bit CSRs. It is used to configure `maceOSSecret`.
 
-Four CSRs may be defined in RV32 and two in RV64 to configure `maceOSSecret`:
-(((CSR, `maceOSSecret*`)))
-
-* In RV32 these are `maceOSSecret0`, `maceOSSecret1`, `maceOSSecret2`, and `maceOSSecret3`.
-* In RV64 these are `maceOSSecret0` and `maceOSSecret1`.
+* In RV32 there are four CSRs: `maceOSSecret0`, `maceOSSecret1`, `maceOSSecret2`, `maceOSSecret3`.
+* In RV64 there are two CSRs: `maceOSSecret0`, `maceOSSecret1`.
 
 A write to `maceOSSecret{i}` sets Bits [(_i_+1) XLEN - 1 : _i_ XLEN] of `OSSecret`.
 
@@ -884,13 +890,11 @@ The values written to the `maceOSSecret` group must follow the update rules defi
 
 ===== `maceBootSecret` group
 
-This is a group of M-Mode WARZ XLEN-bit CSRs.
-
-Four CSRs may be defined in RV32 and two in RV64 to configure `maceeBootSecret`:
+This is a group of M-Mode WARZ XLEN-bit CSRs. It is used to configure `maceBootSecret`.
 (((CSR, `maceeBootSecret*`)))
 
-* In RV32 these are `maceeBootSecret0`, `maceeBootSecret1`, `maceeBootSecret2`, and `maceeBootSecret3`.
-* In RV64 these are `maceeBootSecret0` and `maceeBootSecret1`.
+* In RV32 there are four CSRs: `maceBootSecret0`, `maceBootSecret1`, `maceBootSecret2`, `maceBootSecret3`.
+* In RV64 there are two CSRs: `maceBootSecret0`, `maceBootSecret1`.
 
 A write to `maceeBootSecret{i}` sets Bits [(_i_+1) XLEN - 1 : _i_ XLEN] of `maceBootSecret`.
 
@@ -911,8 +915,9 @@ The values written to the `maceeBootSecret` group must follow the update rules d
 `macefilter` is an XLEN-bit MRW CSRs (22 bits defined).
 
 Their values are compared against the Filter field of the metadata, to determine whether an `ace.exec`, `ace.state`, or `ace.derive` instruction is allowed to execute:
-* `sacefilter` is set and owned by (V)S-mode and it is used to filter CC usage in U-mode.
-* `macefilter` is set and owned by M-mode and it is used to filter CC usage in (V)S/H-mode.
+`sacefilter` is used to filter CC usage in U-mode
+and
+`macefilter` is used to filter CC usage in (V)S/H-mode.
 
 [WARNING]
 These two registers are placeholders for a later decision on how to handle the CR filtering in different modes.
