@@ -146,15 +146,14 @@ Returns zero if the algorithm is unsupported.
 | `ace.derive`        | `Kd\|K[Xd], Ks\|K[Xs]` +
 `Kd\|K[Xd], Ks\|K[Xs], Vs2` +
 |  Optional. Configures destination CR using source CR (e.g., the source CR could hold a KEM, and derive symmetric keys).
-| `ace.state` +
-`(ace.dir)`
+| `ace.state`
 | `Kd\|K[Xd], #immed` +
-`Kd\|K[Xd], #immed, Xs` |  Modifies algorithm state (e.g., phase transitions). `ace.dir` is an alias for `ace.state`.
-| `ace.restrict` +
-  `(ace.harden)`      | `Kd\|K[Xd], Xs`                   |  Narrows Usage Policies and enables/increases side-channel protection.
-   Weakening Usage Policies and SCA protection is not permitted. `ace.harden` is an alias for `ace.restrict`.
-| `ace.input`         | `Kd\|K[Xd], %offset(Xs)`          |  Optional. Provides input to the algorithm (for long inputs).
-| `ace.output`        | `%offset(Xd), Ks\|K[Xs]`          |  Optional. Writes output from the algorithm (for long outputs).
+`Kd\|K[Xd], #immed, Xs` +
+`Kd\|K[Xd], #immed, Vs`  |  Modifies algorithm state (e.g., phase transitions).
+| `ace.restrict`      | `Kd\|K[Xd], Xs`                   |  Narrows Usage Policies and enables/increases side-channel protection.
+   Weakening Usage Policies and SCA protection is not permitted.
+| `ace.input`         | `Kd\|K[Xd], %offset(Xs)`          |  Optional. Provides input to the algorithm.
+| `ace.output`        | `%offset(Xd), Ks\|K[Xs]`          |  Optional. Writes output from the algorithm.
 | `ace.error`         | `Xd`                              |  Writes the ACE unit error code to GPR `Xd`.
 |===
 --
@@ -462,7 +461,7 @@ Clearing state is not performed by setting ACES to Off, Initial, or Clean, and i
 In <<fsxsstates-copy>> we describe the transitions between states.
 
 [WARNING]
-<<fsxsstates-copy>> is a copy of <<fsxsstates>> of cite:[RISCV-ISA-Priv]
+<<fsxsstates-copy>> is a copy of Table “FS, VS, and XS state transitions” of cite:[RISCV-ISA-Priv]
 and it will be removed from this document once the extension is ratified.
 
 //
@@ -615,10 +614,10 @@ encryption, resp., decryption is requested from a CC only configured for decrypt
 a Form of `ace.exec` that is not permitted in the current algorithm state is used;
 the requested change of state in `ace.state` is not permitted;
 the change in usage policies in `ace.restrict` is not permitted;
-software tried to use an incomplete CC in a CR as a source in an `ace.exec`, `ace.state`, `ace.input`, `ace.output`, `ace.clone`, `ace.derive`, `ace.harden`, or `ace.restrict` operation.
+software tried to use an incomplete CC in a CR as a source in an `ace.exec`, `ace.state`, `ace.input`, `ace.output`, `ace.clone`, `ace.derive`, or `ace.restrict` operation.
 |  4   | ace_err_unimplemented   | Algorithm or algorithm variant not implemented.
 |  5   | ace_err_memory          | Insufficient CRF memory to perform `ace.init`, `ace.exec`, `ace.clone`, or `ace.derive`.
-|  6   | ace_err_unconfigured    | Usage of unconfigured CR in `ace.exec`, `ace.state`, `ace.input`, `ace.output`, `ace.clone`, `ace.derive`, or `ace.harden`/`ace.restrict`. May trigger lazy reload.
+|  6   | ace_err_unconfigured    | Usage of unconfigured CR in `ace.exec`, `ace.state`, `ace.input`, `ace.output`, `ace.clone`, `ace.derive`, or `ace.restrict`. May trigger lazy reload.
 |===
 
 <<<
@@ -635,7 +634,7 @@ Code        .>|Description
 |           .>|5             .>|Insufficient CRF memory
 |           .>|3             .>|Invalid input/output operation with `ace.exec`, `ace.state`,
                                 `ace.input`, `ace.output`, `ace.clone`, `ace.derive`,
-                                `ace.harden`, or `ace.restrict` (used incomplete CC as source)
+                                or `ace.restrict` (used incomplete CC as source)
 |           .>|2, 1          .>|Access Control Failure or authentication failure with `ace.import`
 |           .>|1             .>|Authentication failure with `ace.exec`
 |           .>|3             .>|Invalid input/output operation with `ace.exec`
@@ -915,7 +914,7 @@ The values written to the `maceeBootSecret` group must follow the update rules d
 
 `macefilter` is an XLEN-bit MRW CSRs (22 bits defined).
 
-Their values are compared against the Filter field of the metadata, to determine whether an `ace.exec`, `ace.state`, `ace.harden` or `ace.derive` instruction is allowed to execute:
+Their values are compared against the Filter field of the metadata, to determine whether an `ace.exec`, `ace.state`, or `ace.derive` instruction is allowed to execute:
 * `sacefilter` is set and owned by (V)S-mode and it is used to filter CC usage in U-mode.
 * `macefilter` is set and owned by M-mode and it is used to filter CC usage in (V)S/H-mode.
 
@@ -1648,15 +1647,15 @@ Trappable: *NO*. +
 Interruptible: *NO*.
 
 [[ACE-instruction-state]]
-==== ace.state/ace.dir
+==== ace.state
 
-`ace.state`/`ace.dir Kd|K[Xd], #immed7` +
-`ace.state`/`ace.dir Kd|K[Xd], #immed7, Xs`
+`ace.state Kd|K[Xd], #immed7` +
+`ace.state Kd|K[Xd], #immed7, Xs` +
+`ace.state Kd|K[Xd], #immed7, Vs`
 (((ACE, instruction, ace.state)))
-(((ACE, instruction, ace.dir)))
 
 Encoding::
-`ace.state`/`ace.dir` is an R-type instruction.
+`ace.state` is an R-type instruction.
 +
 [wavedrom, , svg]
 ....
@@ -1664,21 +1663,24 @@ Encoding::
     { bits:  7, name: 0x5b, attr: ['custom-2'] },
     { bits:  5, name: 'Kd|K[Xd]' },
     { bits:  3, name: 0x4, attr: ['ace.state'] },
-    { bits:  1, name: 'r' },
-    { bits:  4, name: 0x0 },
-    { bits:  5, name: 'Xs' },
+    { bits:  1, name: 'r', attr: ['0','1'] },
+    { bits:  1, name: 'v' },
+    { bits:  3, name: 0x0 },
+    { bits:  5, name: 'rs1', attr: ['Xd','Vd'] },
     { bits:  7, name: 'immed7' },
 ]}
 ....
 +
-Bit `r` (i.e., bit 15) is 0 if the context is encoded as an immediate, and 1 if a GPR is used to reference it.
+Bit `r` (i.e., bit 15) is 0 if the context is encoded as an immediate, and 1 if a GPR is used to reference it. +
+Bit `v` (i.e., bit 16) is 0 if the additional input comes from a GPR and 1 if it comes from a vector register.
 
 Description::
-`ace.state` and `ace.dir` are the same instruction. +
-`Ks` or `K[Xs]` is the CR whose state is to be set. +
+`Kd` or `K[Xd]` is the CR whose state is to be set. +
 The `#immed` operand is a constant from the set of admissible values defined for each algorithm, used to manage the algorithm's internal state machine when additional states are required. +
-`Xs` is a GPR that is either `X0` or contains an optional additional parameter for the state machine.
-The new state number, if allowed, is written into the State_Number field of the metadata, unless the algorithm requires more than 16 states, in which case an ad-hoc field must be defined in the context (for both internal representation and SCCs).
+The new state number, if allowed, is written into the State_Number field of the metadata, unless the algorithm requires more than 16 states, in which case an ad-hoc field must be defined in the context (for both internal representation and SCCs). +
+`Xs` or `Vs` is a register that contains an optional additional parameter for the state machine.
+Note that `X0` is used to encode the version without additional parameter when no additional parameter is expected, otherwise it provides zero as the additional parameter, and `V0` is a valid input.
+
 
 Properties::
 Possibly modifies state: *YES*. +
@@ -1691,11 +1693,10 @@ The state numbers used in this specification are defined in <<ACE-state-constant
 It is always allowed to repeat `ace.state` instructions to the current state, provided that the correct form of the instruction is used.
 
 [[ACE-instruction-restrict]]
-==== ace.restrict/ace.harden
+==== ace.restrict
 
-`ace.restrict/ace.harden{nbsp}{nbsp}Kd|K[Xd], Xs`
+`ace.restrict{nbsp}{nbsp}Kd|K[Xd], Xs`
 (((ACE, instruction, ace.restrict)))
-(((ACE, instruction, ace.harden)))
 
 // Without this comment, the next part is not properly formatted...
 Encoding::
@@ -1896,7 +1897,7 @@ The supporting instructions themselves must be uninterruptible.
 // ///////////////////////////////////////////////////////////////////////////////////////////
 
 [[ACE-algorithms]]
-=== Data Formats and Instruction Semantics for Architected Algorithms
+=== Algorithms
 
 In this section we specify the behavior of Cryptographic Contexts for the supported cryptographic algorithms.
 Some specifications are generic: they define algorithm families that can be instantiated with any primitive meeting the required properties, typically parameterized only by block size `b` and key size `k`.
@@ -2001,7 +2002,7 @@ If an invalid input is provided to any ACE instruction, or an instruction that i
 
 * `Kn` is put into state _invalidated_;
 * For instructions that refer to `Kn`:
- ** any Form of `ace.exec`, `ace.clone, `ace.derive`, `ace.restrict`, and `ace.harden` raise an invalid instruction error;
+ ** any Form of `ace.exec`, `ace.clone, `ace.derive`, and `ace.restrict` raise an invalid instruction error;
  ** `ace.input` and `ace.output` raise an invalid instruction error when `aceactivecr` is `Kn`;
  ** `ace.state` raises an invalid instruction error unless it is used to return to state _initial_;
  ** `ace.error` always returns error _ace_err_invalid_ after any operation involving the CR except for
@@ -2024,13 +2025,13 @@ An implementation must wait before accessing a CR that is still being written to
 //
 
 [[ACE-usage-input-output]]
-===== Rules when using the `ace.input` and `ace.output` instructions
+===== Usage of `ace.input` and `ace.output` to Replace Vector Inputs and Outputs
 
 The `ace.input` and `ace.output` instructions can replace the inputs and outputs to Forms A-C of `ace.exec` and the input of `ace.derive` in any algorithm, to the point that an implementation of ACE without the V extension or a subset thereof is possible.
 
 These two instructions can be used if enabled and the size in CSR `aceiobuflen` is non-zero and is a valid size (for instance, divisible by the block size `b), otherwise an invalid instruction error is raised.
 
-If `aceiobuflen` is non-zero, Forms A, B, and C of `ace.exec` and `ace.derive` can be replaced as follows:
+If `aceiobuflen` is non-zero, Forms A, B, and C of `ace.exec`, as well as `ace.derive` or `ace.state`, can be replaced as follows:
 
 [[ACE-replacement-instructions]]
 .Replacement sequences for `ace.exec` and `ace.derive` using `ace.input` and `ace.output`
@@ -2045,7 +2046,9 @@ If `aceiobuflen` is non-zero, Forms A, B, and C of `ace.exec` and `ace.derive` c
 | `ace.exec{nbsp}{nbsp}{nbsp}Vd, Kn\|K[Xn]`     | `ace.exec{nbsp}{nbsp}{nbsp}Kn\|K[Xn]` +
 `ace.output{nbsp}Vd,  Xl`
 | `ace.derive Kd\|K[Xd], Ks1\|K[Xs1], Vs2` | `ace.input{nbsp}{nbsp}Xl, Vs2` +
-`ace.derive{nbsp}Kd\|K[Xd], Ks1\|K[Xs1]` +
+`ace.derive{nbsp}Kd\|K[Xd], Ks1\|K[Xs1]`
+| `ace.state{nbsp}{nbsp}Kd\|K[Xd], #immed, Vs` | `ace.input{nbsp}{nbsp}Xl, Vs` +
+`ace.state{nbsp}{nbsp}Kd\|K[Xd], #immed`
 |===
 
 In all cases, the `ace.input` and `ace.output` instructions must be temporarily tied to a specific context in order to properly determine the allowed sequences.
@@ -2300,8 +2303,19 @@ foreach(i from 0 to len_in_bytes(PT)/16-1) {
 ==== XEX/XTS modes (one or two keys)
 
 The XTS mode was designed for storage confidentiality cite:[DBLP-journals-ieeesp-Martin10]
-and made into a Recommendation by NIST cite:[nist-SP-800-38E].
+and made into a Recommendation by NIST in 2010 cite:[nist-SP-800-38E].
+XTS is based on the XEX construction, formalized by Phillip Rogaway cite:[DBLP-conf-asiacrypt-Rogaway04], to design _Tweakable Block Ciphers_ cite:[DBLP-conf-crypto-LiskovRW02].
+A Tweakable Block Cipher (TBC) is a block cipher which, besides the key and the plaintext or ciphertext, also takes a tweak as input.
+The tweak is used together with the key to select the permutation computed by the block cipher.
 
+The XEX construction builds a TBC `Ẽ` from a block cipher `E`, with key `K`, tweak `T`, and plaintext `P`,  as follows: +
+ +
+`{nbsp}{nbsp}{nbsp}{nbsp}{nbsp}{nbsp}{nbsp}{nbsp}`
+`Ẽ(K, T, P) = E(K, P xor M) xor M` {nbsp}{nbsp} where {nbsp}{nbsp} `M = E(K, T)` {nbsp}{nbsp} is called a _mask_. +
+ +
+In XEX mode, once a mask is computed, it is then updated by using a Galois Multiplication for any successive block instead of updating the tweak and encrypting it again.
+
+The NIST standard uses two different keys, one on the data encryption path and one for the encryption of the tweak.
 The use of a single key or two independently sampled keys is determined by the algorithm, and it is not a configuration parameter for the algorithm.
 We first define XEX mode functionality.
 (((ACE, algorithm, XEX)))
@@ -2411,6 +2425,60 @@ To implement the XTS mode, the ciphertext stealing part is easy to realize using
 (((ACE, algorithm, XTS)))
 
 // N.B. another ace.state K0, #const_set_public_value would reset the internal state and allow to begin another decryption with a new IV.
+
+[[ACE-tweakable]]
+==== Generic Tweakable Blocks Ciphers
+
+The specification of a generic tweakable block cipher is similar to that of a non-tweakable block cipher in ECB mode.
+However, since `ace.exec` does not admit variants with two inputs, and we have a single input buffer, we need to set the tweak with a separate instruction.
+If block and tweak sizes are different, a reconfiguration of the vector length may be required between operations.
+
+Some commonly used TBCs are `Deoxys` cite:[Deoxys-141], `Skinny` cite:[DBLP-conf-crypto-BeierleJKL0PSSS16], `QARMA` cite:[DBLP-journals-tosc-Avanzi17], and `QARMAv2` cite:[DBLP-journals-tosc-AvanziBDEGNR23].
+
+===== Specification
+
+Parameters:::
+
+* `b` = block size (8|`b`). For this algorithm we require `VL*SEW` to be an integer multiple of `b`.
+* `k` = key size (8|`k`).
+* `t` = tweak size (8|`k`).
+
+Data Structures:::
+
+* *Initialization Input*:
+[lowerroman]
+ . `key`: `k` bits, or 64 bits if a System Key index.
+
+* *Internal State*:
+ ** `key`: `k` bits.
+ ** `tweak`: `t` bits.
+
+* *Serialized Content*:
+[lowerroman]
+ . `key`: `k` bits, or 64 bits if a System Key index.
+ . `tweak`: `t` bits.
+
+State Machine:::
+
+* *States:* _initial_, _set_public_value_, _encrypt_, _decrypt_.
+
+* *Allowed State Transitions:*
+ ** From all states to _initial_.
+ ** _initial_ -> _set_public_value_
+ ** _set_public_value_ -> _encrypt_ -- if metadata allows encryption, else the CR is *invalidated*.
+ ** _set_public_value_ -> _decrypt_ -- if metadata allows decryption, else the CR is *invalidated*.
+
+ * *Behavior:*
+  ** In state _initial_:
+   *** Upon entering the state, the `tweak` field is cleared.
+   *** Only `ace.state` operations are allowed.
+  ** Upon issuing ```ace.state Kn|K[Xn], #ace_state_set_public_value, Vs```
+   . `tweak` <- `Vs`, and
+   . The state transitions to the previous state (can be _initial_, _encrypt_, or _decrypt_).
+  ** In state _encrypt_, resp., _decrypt_, only ``ace.exec`` instructions of Form A are allowed.
+     “```ace.exec Vd, Kn|K[Xn], Vs```” encrypts, resp., decrypts `Vs` into `Vd`.
+
+No automatic update of the tweak value is provided by this algorithm.
 
 [[ACE-GCM-mode]]
 ==== GCM Mode
