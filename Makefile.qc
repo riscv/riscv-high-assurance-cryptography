@@ -17,7 +17,7 @@
 DOCS := \
 	ace.adoc
 
-MAKE := make -f Makefile.qualcomm
+MAKE := make -f Makefile.qc
 
 DATE ?= $(shell date +%Y-%m-%d)
 VERSION ?= v0.2.1
