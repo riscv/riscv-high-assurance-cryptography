@@ -1973,13 +1973,12 @@ The following table defines the state numbers used by the algorithms defined in 
 |  11   | ace_state_decrypt             | In this state decryption is performed, and also absorption in a tag computation function if part of the algorithm.
 .2+| 12 | ace_state_set_public_value    | Set a public value (like a nonce or an IV) in an algorithm. Some algorithms require more than one public value (for instance, they may admit a re-useable hash of some associated data and a unique nonce), in which case the second public value can be set using the next message.
 <| ace_state_input_for_derive   | Tells the CC to expect additional information for feeding the `ace.derive` instruction. Can also provide it directly in a GPR or vector register.
-|  13   | ace_state_set_public_value_2  | Set the second public value in an algorithm.
 |  14   | ace_state_invalidated         | The algorithm has abnormally terminated. `ace.error` will always return error code _ace_err_invalid_.
 |  15   | ace_state_completed           | The algorithm has correctly completed.
 |===
 
 Algorithms that significantly differ from those we describe in <<ACE-algorithms>> and therefore cannot share the same software for their usage,
-may reuse the same values in [1..13] with new constant mnemonics to define their own states.
+may reuse the same values in [1..12] with new constant mnemonics to define their own states.
 
 The state number is stored either in the metadata or in the content section of the CC/SCC, as described in <<ACE-metadata>>, with the provision that the State_Number
 must always take one of the values 0, 14, 15, and 1.
@@ -3050,15 +3049,12 @@ vsetvli zero, 4, e32, m1, ta, ma                 // Use 128-bit vectors
 ace.import K0, (X5)
 
 // The next operations set the nonce and SIV.
-ace.state K0, #ace_state_set_public_value
 V0 ← nonce
-ace.exec K0, V0
-ace.state K0, #ace_state_set_public_value_2
-V0 ← SIV
-ace.exec K0, V0
+ace.state K0, #ace_state_set_public_value, V0
 
 // Compute AD contribution to Auth Data
-ace.state K0, #ace_state_hash_absorb
+V0 ← SIV
+ace.state K0, #ace_state_hash_absorb, Vp
 foreach(i from 0 to len_in_bytes(AD)/16-1) {
    V0 ← AD[16*i .. 16*i+15]
    ace.exec K0, V0                               // Absorb it into hash
@@ -3137,11 +3133,11 @@ If S[`b`-1] == 0, then { `double(S)` <- `S << 1` } else { `double(S)` <- `(S << 
 
 State Machine:::
 
-* *States:* _initial_, _set_public_value_, _set_public_value_2_, _hash_absorb_, _encrypt_, _enc_last_block_, _enc_tag_finalize_, _decrypt_, _dec_last_block_, _dec_tag_finalize_, _hash_verify_, and _completed_.
+* *States:* _initial_, _set_public_value_, _hash_absorb_, _encrypt_, _enc_last_block_, _enc_tag_finalize_, _decrypt_, _dec_last_block_, _dec_tag_finalize_, _hash_verify_, and _completed_.
 
 * *Allowed State Transitions:*
  ** From all states to _initial_.
- ** _initial_ -> _set_public_value_ -> _set_public_value_2_ -> _hash_absorb_ -> _hash_finalize_
+ ** _initial_ -> _set_public_value_ -> _hash_absorb_ -> _hash_finalize_
  ** _hash_finalize_ -> _encrypt_ -- if metadata allows encryption, else the CR is *invalidated*.
  ** _hash_finalize_ -> _decrypt_ -- if metadata allows decryption, else the CR is *invalidated*.
  ** _encrypt_ -> _enc_last_block_ -> _enc_tag_finalize_ -> _hash_output_ -> _completed_.
@@ -3155,22 +3151,20 @@ State Machine:::
    . `hash_A <- zeros(b)`
    . `hash_P <- zeros(b)`
 
-** To move to _set_public_value_, the `ace.state` operation must use the additional argument, which sets the nonce length `N_len`.
- `N_len` must be at least `g-1`. If not, an invalid instruction error is raised, and the CR is *invalidated*.
+** To move to _set_public_value_, the `ace.state` operation must use the additional argument in a GPR, which sets the nonce length `N_len`.
+ `N_len` must be at least `g-1`. If not, or a different form of `ace.state` is used, then an invalid instruction error is raised, and the CR is *invalidated*.
 
 ** In state _set_public_value_, only  ``ace.exec`` instructions of Form B, “```ace.exec Kn|K[Xn], INPUT```”, or their replacement sequences, are allowed, whereby `N` is set to `INPUT`, namely
      `N <- zeros(u-N_len) @ INPUT[N_len-1:0]`
   *** If “```ace.exec Kn|K[Xn], INPUT```,” is repeated, it will rewrite `N`.
   *** If no such `ace.exec` is issued, `N` remains zero. This condition results in an error at a later state transition.
 
-** To move to _set_public_value_2_, the `ace.state` operation must have the additional argument, which sets the tag length `tag_len`.
-   If this argument (interpreted as an unsigned value) is larger than `b` or `0` (the latter occurs also
-   if `X0` is passed as the additional argument), an invalid instruction error is raised, and the CR is *invalidated*.
+** To move to _hash_absorb_, the `ace.state` operation must have the additional argument in a GPR `Xs`, which sets the tag length `tag_len`.
+  *** If this argument (interpreted as an unsigned value) is larger than `b` or `0` (the latter occurs also if `X0` is passed as the additional argument), an invalid instruction error is raised, and the CR is *invalidated*.
+  *** If different form of `ace.state` is used, then an invalid instruction error is raised, and the CR is *invalidated*.
   *** If `N[u] == 1`, this means that `N` was not set in state _set_public_value_. We do not allow code that skips nonce setting, as this mode is not secure under nonce reuse, therefore in this case an invalid instruction error is raised, and the CR is *invalidated*.
-  *** The following operation must be an `ace.state` to move to _hash_absorb_
-
-** Upon entering state _hash_absorb_,  following operations are performed:
-
+  *** Following operations are performed:
+  . `tag_len` <- `Xs`.
   . `offset <- zeros(b)`
   . `L <- enc_blk(key, zeros(b))`
   . `L <- double(double(L))`
@@ -3339,16 +3333,14 @@ ace.state K0, #ace_state_set_public_value,X1
 V0 ← N
 ace.exec K0, V0
 
-// The next operations set the tag lenth
+// The next state change also sets the tag lenth
 X1 ← tag_len
-ace.state K0, #ace_state_set_public_value_2, X1
-
-// Compute AD contribution to tag
-ace.state K0, #ace_state_hash_absorb
+ace.state K0, #ace_state_hash_absorb, X1
 
 AD_fullblocks ← floor(AD_len/128)
 PT_fullblocks ← floor(PT_len/128)
 
+// Compute AD contribution to tag
 foreach(i from 0 to AD_fullblocks-1) {
    V0 ← AD[16*i .. 16*i+15]
    ace.exec K0, V0                                 // Absorb it into hash
