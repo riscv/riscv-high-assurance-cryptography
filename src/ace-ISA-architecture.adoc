@@ -1960,19 +1960,19 @@ The following table defines the state numbers used by the algorithms defined in 
 | Value | Mnemonic                      | Examples
 |   0   | ace_state_initial             | The context is initialized and ready for operation.
 .2+| 1  | ace_state_hash_absorb         | Start (and initialize) a hash function or the sub-function of an algorithm, start to absorb blocks of data.
-<| ace_state_operate                     | Generic operational state.
+<| ace_state_operate                    | Generic operational state.
 |   2   | ace_state_hash_last_block     | In this state additional data may be absorbed, such as partial blocks and lengths, if the algorithm processes the last block of (a section of) its input in a different way from the other blocks.
 |   3   | ace_state_hash_finalize       | Finalize the internal state of a hash function and possibly prepare it for outputting the result.
 |   4   | ace_state_hash_verify         | Compare the internal state of a hash function to the provided value.
 |   5   | ace_state_hash_output         | Enter the hash output phase of a hash_function.
 |   6   | ace_state_enc_last_block      | For the encryption path of authenticated encryption modes of operation to process “last block” separately.
 |   7   | ace_state_dec_last_block      | For the decryption path of authenticated encryption modes of operation to process “last block” separately.
-|   8   | ace_state_enc_hash_finalize   | Finalize the internal state of a hash function for the encryption algorithm of an authenticated encryption mode of operation and possibly prepare it for outputting the result.
-|   9   | ace_state_dec_hash_finalize   | Finalize the internal state of a hash function for the decryption algorithm of an authenticated decryption mode of operation.
-|  10   | ace_state_encrypt             | Encryption is requested.
-|  11   | ace_state_decrypt             | Decryption is requested.
+|   8   | ace_state_enc_tag_finalize    | Finalize the internal state of a tag computation function for the encryption algorithm of an authenticated encryption mode of operation and possibly prepare it for outputting the result.
+|   9   | ace_state_dec_tag_finalize    | Finalize the internal state of a tag computation function for the decryption algorithm of an authenticated decryption mode of operation.
+|  10   | ace_state_encrypt             | In this state encryption is performed, possibly also absorption in a tag computation function.
+|  11   | ace_state_decrypt             | In this state decryption is performed, possibly also absorption in a tag computation function.
 .2+| 12 | ace_state_set_public_value    | Set a public value (like a nonce or an IV) in an algorithm. Some algorithms require more than one public value (for instance, they may admit a re-useable hash of some associated data and a unique nonce), in which case the second public value can be set using the next message.
-<| ace_state_input_for_derive   | Tells the CC to expect additional information for feeding the `ace.derive` instruction.
+<| ace_state_input_for_derive   | Tells the CC to expect additional information for feeding the `ace.derive` instruction. Can also provide it directly in a GPR or vector register.
 |  13   | ace_state_set_public_value_2  | Set the second public value in an algorithm.
 |  14   | ace_state_invalidated         | The algorithm has abnormally terminated. `ace.error` will always return error code _ace_err_invalid_.
 |  15   | ace_state_completed           | The algorithm has correctly completed.
@@ -2534,15 +2534,15 @@ Algorithm-Specific Functions:::
 
 State Machine:::
 
-* *States:* _initial_, _set_public_value_, _hash_absorb_, _encrypt_, _enc_hash_finalize_, _decrypt_, _dec_hash_finalize_, and _hash_verify_, _completed_.
+* *States:* _initial_, _set_public_value_, _hash_absorb_, _encrypt_, _enc_tag_finalize_, _decrypt_, _dec_tag_finalize_, and _hash_verify_, _completed_.
 
 * *Allowed State Transitions:*
  ** From all states to _initial_.
  ** _initial_ -> _set_public_value_ -> _hash_absorb_.
  ** _hash_absorb_ -> _encrypt_ -- if metadata allows encryption, else the CR is *invalidated*.
  ** _hash_absorb_ -> _decrypt_ -- if metadata allows decryption, else the CR is *invalidated*.
- ** _encrypt_ -> _enc_hash_finalize_ -> _completed_.
- ** _decrypt_ -> _dec_hash_finalize_ -> _hash_verify_ -> _completed_.
+ ** _encrypt_ -> _enc_tag_finalize_ -> _completed_.
+ ** _decrypt_ -> _dec_tag_finalize_ -> _hash_verify_ -> _completed_.
 
 * *Behavior:*
  ** In state _initial_ :
@@ -2583,7 +2583,7 @@ If `IOLEN` > `b`, the above operation is executed `IOLEN/b` times.
 +
 If `IOLEN` is a multiple of `b`, the above operations are executed `IOLEN/b` times, encrypting each `b`-bit block of `INPUT` into the corresponding `b`-bit block of `OUTPUT`. There is significant potential for parallelization, including in the `absorb` function. If the number `x` of blocks to encrypt is not a multiple of `IOLEN`/`b`, `VL` can be set to the remainder of the division of `x` by `IOLEN`/`b` for the last instruction.
 
-** In state _enc_hash_finalize_, only ``ace.exec`` instructions of Form A or their replacement sequences are allowed. The value
+** In state _enc_tag_finalize_, only ``ace.exec`` instructions of Form A or their replacement sequences are allowed. The value
 +
 --
 *** `INPUT <- bin(bit_length(AD), b/2) @ bin(bit_length(plaintext), b/2)`
@@ -2618,7 +2618,7 @@ If `IOLEN` > `b`, only the `b` least significant bits of `INPUT` are considered.
 If `IOLEN` is a multiple of `b`, the same behavior applies as in state _encrypt_, namely
 the above operations are executed `IOLEN/b` times, decrypting each `b`-bit block of `INPUT` into the corresponding `b`-bit block of `OUTPUT`.
 
-** In state _dec_hash_finalize_, only a Form A ``ace.exec`` instruction, or its replacement sequence, are allowed.
+** In state _dec_tag_finalize_, only a Form A ``ace.exec`` instruction, or its replacement sequence, are allowed.
 The value +
  +
  `{nbsp}{nbsp}{nbsp}INPUT <- bin(bit_length(AD), b/2) @ bin(bit_length(plaintext), b/2)` +
@@ -2684,21 +2684,21 @@ foreach(i from 0 to len_in_bytes(PT)/16-1) {
 }
 
 // Finally, we absorb the lengths into tag, finalize it, and output it
-ace.state K0, #ace_state_enc_hash_finalize
+ace.state K0, #ace_state_enc_tag_finalize
 V1 ← bin(len_in_bits(AD), 64) @ bin(len_in_bits(PT), 64)
 ace.exec V2, K0, V1                             // V2 contains the finalized hash
 ----
 
 GCM decryption differs from encryption as follows:
 the roles of `PT` and `CT` are reversed,
-states _encrypt_ and _enc_hash_finalize_ are replaced by states _decrypt_ and _dec_hash_finalize_,
+states _encrypt_ and _enc_tag_finalize_ are replaced by states _decrypt_ and _dec_tag_finalize_,
 and the last lines are as follows:
 
 [[ACE-pseudocode-GCM-decryption-difference]]
 .GCM Decryption
 ----
 // Finally, we absorb the lengths into tag, finalize it, and verify it
-ace.state K0, #ace_state_dec_hash_finalize
+ace.state K0, #ace_state_dec_tag_finalize
 V1 ← bin(len_in_bits(AD), 64) @ bin(len_in_bits(CT), 64)
 ace.exec V2, K0, V1                             // V2 contains the finalized hash
 
@@ -2810,8 +2810,8 @@ The GCM-SIV mode's main differences with GCM are that:
 
 The third difference affects the state machine. While GCM-SIV's decryption state machine is similar to the GCM's, the encryption state machine is different:
 
-* During encryption, the _hash_absorb_ state absorbs the entire associated data and plaintext. The _enc_hash_finalize_ state then absorbs the lengths and produces the SIV/tag. Finally, the _encrypt_ state performs a second pass to encrypt the plaintext using the SIV/tag as the initialization vector.
-* During decryption, the _hash_absorb_ state absorbs only the associated data. The _decrypt_ state decrypts the ciphertext and simultaneously absorbs the plaintext into the hash. Finally, the _dec_hash_finalize_ state absorbs the lengths, produces the SIV/tag, and internally compares it to the provided SIV/tag.
+* During encryption, the _hash_absorb_ state absorbs the entire associated data and plaintext. The _enc_tag_finalize_ state then absorbs the lengths and produces the SIV/tag. Finally, the _encrypt_ state performs a second pass to encrypt the plaintext using the SIV/tag as the initialization vector.
+* During decryption, the _hash_absorb_ state absorbs only the associated data. The _decrypt_ state decrypts the ciphertext and simultaneously absorbs the plaintext into the hash. Finally, the _dec_tag_finalize_ state absorbs the lengths, produces the SIV/tag, and internally compares it to the provided SIV/tag.
 
 ===== Specification
 
@@ -2860,14 +2860,14 @@ Algorithm-Specific Functions:::
   . `tag <- tag xor INPUT`.
   . `tag <- Mont_mult(tag, hash_key)` or `tag <- Galois_mult(tag, hash_key)`, depending on the algorithm.
 State Machine:::
-* *States:* _initial_, _set_public_value_, _set_public_value_2_, _hash_absorb_, _enc_hash_finalize_, _dec_hash_finalize_, _encrypt_, _decrypt_, and _completed_.
+* *States:* _initial_, _set_public_value_, _set_public_value_2_, _hash_absorb_, _enc_tag_finalize_, _dec_tag_finalize_, _encrypt_, _decrypt_, and _completed_.
 
 * *Allowed State Transitions:*
 ** From all states to _initial_.
 ** For encryption:
-   _initial_ -> _set_public_value_ -> _hash_absorb_ -> _enc_hash_finalize_ -> _encrypt_.
+   _initial_ -> _set_public_value_ -> _hash_absorb_ -> _enc_tag_finalize_ -> _encrypt_.
 ** For decryption: +
-   _initial_ -> _set_public_value_ -> _set_public_value_2_ -> _hash_absorb_ -> _decrypt_ -> _dec_hash_finalize_.
+   _initial_ -> _set_public_value_ -> _set_public_value_2_ -> _hash_absorb_ -> _decrypt_ -> _dec_tag_finalize_.
 ** Transition to _encrypt_ possible only if metadata allows encryption, else the CR is *invalidated*.
 ** Transition to _decrypt_ possible only if metadata allows decryption, else the CR is *invalidated*.
 
@@ -2898,7 +2898,7 @@ Accepting this redundant but harmless behavior simplifies the state machine.
 +
 If `IOLEN` is a multiple of `b`, `absorb` is executed on each of the `IOLEN/b` blocks in `INPUT`.
 
-** In state _enc_hash_finalize_, only an {nbsp}``ace.exec``{nbsp} instruction of Form A, or its replacement sequence, are allowed.
+** In state _enc_tag_finalize_, only an {nbsp}``ace.exec``{nbsp} instruction of Form A, or its replacement sequence, are allowed.
 The value
 +
 --
@@ -2949,7 +2949,7 @@ If `IOLEN` > `b`, the above operations are applied to each of the `IOLEN/b` bloc
 +
 If `IOLEN` > `b`, the above operations are applied to each of the `IOLEN/b` blocks in `INPUT`.
 
-** In state _dec_hash_finalize_,
+** In state _dec_tag_finalize_,
    only an ``ace.exec`` instruction of Form B, or its replacement sequence, are allowed,
    namely “```ace.exec Kn|K[Xn], INPUT```,” where it is the responsibility of the user to set
 +
@@ -3015,7 +3015,7 @@ V0 ← bin(len_in_bits(AD), 64) @ bin(len_in_bits(PT), 64)
 ace.exec K0, V0                                  // Absorb lengths into hash
 
 // Finalize the SIV computation, set and return it
-ace.state K0, #ace_state_enc_hash_finalize
+ace.state K0, #ace_state_enc_tag_finalize
 ace.exec V2,K0
 tag ← V2
 
@@ -3064,7 +3064,7 @@ foreach(i from 0 to len_in_bytes(CT)/16-1) {
 }
 
 // Finally, we absorb the lengths of AD and plaintext into tag AND verify
-ace.state K0, #ace_state_enc_hash_finalize
+ace.state K0, #ace_state_enc_tag_finalize
 V0 ← bin(len_in_bits(AD), 64) @ bin(len_in_bits(PT), 64)
 ace.exec K0, V0
 ace.error X1
@@ -3129,14 +3129,14 @@ If S[`b`-1] == 0, then { `double(S)` <- `S << 1` } else { `double(S)` <- `(S << 
 
 State Machine:::
 
-* *States:* _initial_, _set_public_value_, _set_public_value_2_, _hash_absorb_, _encrypt_, _enc_last_block_, _enc_hash_finalize_, _decrypt_, _dec_last_block_, _dec_hash_finalize_, _hash_verify_, and _completed_.
+* *States:* _initial_, _set_public_value_, _set_public_value_2_, _hash_absorb_, _encrypt_, _enc_last_block_, _enc_tag_finalize_, _decrypt_, _dec_last_block_, _dec_tag_finalize_, _hash_verify_, and _completed_.
 
 * *Allowed State Transitions:*
  ** From all states to _initial_.
  ** _initial_ -> _set_public_value_ -> _set_public_value_2_ -> _hash_absorb_ -> _hash_finalize_
  ** _hash_finalize_ -> _encrypt_ -- if metadata allows encryption, else the CR is *invalidated*.
  ** _hash_finalize_ -> _decrypt_ -- if metadata allows decryption, else the CR is *invalidated*.
- ** _encrypt_ -> _enc_last_block_ -> _enc_hash_finalize_ -> _hash_output_ -> _completed_.
+ ** _encrypt_ -> _enc_last_block_ -> _enc_tag_finalize_ -> _hash_output_ -> _completed_.
  ** _decrypt_ -> _dec_last_block_ -> _hash_verify_ -> _completed_.
 
 * *Behavior:*
@@ -3260,9 +3260,9 @@ On the other hand, if `last_blk_len` is zero, only an ``ace.exec`` instruction o
   . `hash_P <- enc_blk(key, hash_P xor offset xor aux) xor hash_A`
 --
 +
-In both cases the state then transitions to _enc_hash_finalize_.
+In both cases the state then transitions to _enc_tag_finalize_.
 
-** In state _enc_hash_finalize_, only an ``ace.exec`` instruction of Form C, “```ace.exec OUTPUT,Kn|K[Xn]```,” or its replacement sequence, are allowed, which
+** In state _enc_tag_finalize_, only an ``ace.exec`` instruction of Form C, “```ace.exec OUTPUT,Kn|K[Xn]```,” or its replacement sequence, are allowed, which
 performs `OUTPUT <- zeros(b-tag_len) @ hash_P[tag_len-1:0]`.
 ** In state _decrypt_, only ``ace.exec`` instructions of Form A or their replacement sequences are allowed.
     “```ace.exec OUTPUT, Kn|K[Xn], INPUT```” decrypts `INPUT` into `OUTPUT`, and absorbs the plaintext `OUTPUT` into the `tag`, namely:
@@ -3362,7 +3362,7 @@ foreach(i from 0 to PT_fullblocks-1) {
 }
 
 X1 ← PT_len mod 128                                // Can be zero
-ace.state K0, #ace_state_enc_hash_finalize, X1
+ace.state K0, #ace_state_enc_tag_finalize, X1
 if (X1 mod 128 != 0) then
    V0 ← zeros(128)
    V0 ← PT[PT_fullblocks*16 .. PT_fullblocks*16+ceil(X1/8)]
@@ -3375,7 +3375,7 @@ ace.exec V1, K0, V1                                // output tag
 
 OCB decryption differs from encryption as follows:
 the roles of `PT` and `CT` are reversed,
-states _encrypt_ and _enc_hash_finalize_ are replaced by states _decrypt_ and _dec_hash_finalize_,
+states _encrypt_ and _enc_tag_finalize_ are replaced by states _decrypt_ and _dec_tag_finalize_,
 and the last lines are as follows:
 
 [[ACE-pseudocode-OCB-decryption-difference]]
@@ -3776,16 +3776,16 @@ Algorithm-Specific Functions:::
 
 State Machine:::
 
-* *States:* _initial_, _set_public_value_, _hash_absorb_, _encrypt_, _enc_last_block_, _enc_hash_finalize_,
- _decrypt_, _dec_last_block_, _dec_hash_finalize_, _hash_verify_, and _completed_.
+* *States:* _initial_, _set_public_value_, _hash_absorb_, _encrypt_, _enc_last_block_, _enc_tag_finalize_,
+ _decrypt_, _dec_last_block_, _dec_tag_finalize_, _hash_verify_, and _completed_.
 
 * *Allowed State Transitions:*
  ** From all states to _initial_.
  ** _initial_ -> _set_public_value_ -> _hash_absorb_.
  ** _hash_absorb_ -> _encrypt_ -- if metadata allows encryption, else the CR is *invalidated*.
  ** _hash_absorb_ -> _decrypt_ -- if metadata allows decryption, else the CR is *invalidated*.
- ** _encrypt_ -> _enc_last_block_ -> _enc_hash_finalize_ -> _completed_.
- ** _decrypt_ -> _dec_last_block_ -> _dec_hash_finalize_ -> _hash_verify_ -> _completed_.
+ ** _encrypt_ -> _enc_last_block_ -> _enc_tag_finalize_ -> _completed_.
+ ** _decrypt_ -> _dec_last_block_ -> _dec_tag_finalize_ -> _hash_verify_ -> _completed_.
 
 * *Behavior:*
  ** In state _initial_ :
@@ -3845,9 +3845,9 @@ Padding is managed by the user software.
 --
 +
 In this state only one 128-bit block is processed. +
-The state machine then transitions to state _enc_hash_finalize_.
+The state machine then transitions to state _enc_tag_finalize_.
 
-** In state _enc_hash_finalize_, only one ``ace.exec`` instruction of Form C, or its replacement sequence, to compute the tag, is allowed.
+** In state _enc_tag_finalize_, only one ``ace.exec`` instruction of Form C, or its replacement sequence, to compute the tag, is allowed.
 “```ace.exec OUTPUT, Kn|K[Xn]```”  performs
 +
 --
@@ -3891,9 +3891,9 @@ If `IOLEN` is a multiple of 128, the above group of operations is executed `IOLE
 . `OUTPUT <- tmp`
 --
 +
-The state machine then transitions to state _dec_hash_finalize_.
+The state machine then transitions to state _dec_tag_finalize_.
 
-** In state _dec_hash_finalize_, an `ace.state Kn|K[Xn], #ace_const_dec_hash_finalize, Xs` instruction may be executed, setting
+** In state _dec_tag_finalize_, an `ace.state Kn|K[Xn], #ace_const_dec_tag_finalize, Xs` instruction may be executed, setting
 the tag len `tag_len` to the value of `Xs`, provided it is not smaller than 32 and not larger that 128. If the value is out of bounds, it is simply not set and remains 128 as set in state _initial_.
 The state machine then transitions to state _hash_verify_.
 
