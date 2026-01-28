@@ -1959,18 +1959,18 @@ The following table defines the state numbers used by the algorithms defined in 
 |===
 | Value | Mnemonic                      | Examples
 |   0   | ace_state_initial             | The context is initialized and ready for operation.
-.2+| 1  | ace_state_hash_absorb         | Start (and initialize) a hash function or the sub-function of an algorithm, start to absorb blocks of data.
+.2+| 1  | ace_state_hash_absorb         | Start and initialize a hash/tag function of an algorithm and start absorbing blocks of data.
 <| ace_state_operate                    | Generic operational state.
-|   2   | ace_state_hash_last_block     | In this state additional data may be absorbed, such as partial blocks and lengths, if the algorithm processes the last block of (a section of) its input in a different way from the other blocks.
-|   3   | ace_state_hash_finalize       | Finalize the internal state of a hash function and possibly prepare it for outputting the result.
-|   4   | ace_state_hash_verify         | Compare the internal state of a hash function to the provided value.
-|   5   | ace_state_hash_output         | Enter the hash output phase of a hash_function.
-|   6   | ace_state_enc_last_block      | For the encryption path of authenticated encryption modes of operation to process “last block” separately.
-|   7   | ace_state_dec_last_block      | For the decryption path of authenticated encryption modes of operation to process “last block” separately.
+|   2   | ace_state_hash_last_block     | In this state additional data may be absorbed, such as partial blocks and lengths, if the hash/tag algorithm processes the last block of its input or of the associated data part of its input in a different way from the other blocks.
+|   3   | ace_state_hash_finalize       | Finalize the internal state of a hash/tag function and possibly prepare it for outputting the result.
+|   4   | ace_state_hash_verify         | Compare the internal state of a hash/tag function to the provided value.
+|   5   | ace_state_hash_output         | Enter the hash output phase of a hash/tag function.
+|   6   | ace_state_enc_last_block      | For the encryption path of authenticated encryption modes of operation to process the last block separately.
+|   7   | ace_state_dec_last_block      | For the decryption path of authenticated encryption modes of operation to process the last block separately.
 |   8   | ace_state_enc_tag_finalize    | Finalize the internal state of a tag computation function for the encryption algorithm of an authenticated encryption mode of operation and possibly prepare it for outputting the result.
 |   9   | ace_state_dec_tag_finalize    | Finalize the internal state of a tag computation function for the decryption algorithm of an authenticated decryption mode of operation.
-|  10   | ace_state_encrypt             | In this state encryption is performed, possibly also absorption in a tag computation function.
-|  11   | ace_state_decrypt             | In this state decryption is performed, possibly also absorption in a tag computation function.
+|  10   | ace_state_encrypt             | In this state encryption is performed, and also absorption in a tag computation function if part of the algorithm.
+|  11   | ace_state_decrypt             | In this state decryption is performed, and also absorption in a tag computation function if part of the algorithm.
 .2+| 12 | ace_state_set_public_value    | Set a public value (like a nonce or an IV) in an algorithm. Some algorithms require more than one public value (for instance, they may admit a re-useable hash of some associated data and a unique nonce), in which case the second public value can be set using the next message.
 <| ace_state_input_for_derive   | Tells the CC to expect additional information for feeding the `ace.derive` instruction. Can also provide it directly in a GPR or vector register.
 |  13   | ace_state_set_public_value_2  | Set the second public value in an algorithm.
@@ -2642,7 +2642,7 @@ If `IOLEN` > `b`, only the `b` least significant bits of `INPUT` are considered.
 +
 If `IOLEN` > `b`, only the `b` least significant bits of `INPUT` are compared to `tag`.
 
-** Upon completion of `ace.import`, the ACE unit recomputes `hash_key`:
+** Upon completion of `ace.import`, the ACE unit recomputes `hash_key`, i.e.:
   . `hash_key <- enc_blk(key, zeros(b))`.
 
 //
@@ -2788,10 +2788,10 @@ Finally, once in state _completed_, the CC with this algorithm *cannot* be broug
 
 This does not prevent cloning the CR at the beginning and reusing it, but, for decryption, it can only be used with the intended ciphertext.
 
-This mode _cannot_ be emulated with an ECB CR because it would reveal the internal data.
+This mode _cannot_ be emulated with an ECB CC because it would reveal the internal data.
 
-For all the following IV- or nonce-based modes, versions with a set IV or nonce (such as for GCM-SIV) can also be defined.
-For instance, for GCM-SIV (cf.{nbsp}<<ACE-GCM-SIV-mode??), `nonce` would be included in the Initialization Input exactly as `IV` is included in the Initialization Input for GCM, and state _set_public_value_ would be skipped, going directly to _hash_absorb_  in the encryption path, and to _set_public_value_2_ in the decryption path.
+For all the following IV- or nonce-based modes, versions with a set IV or nonce (such as for GCM-SIV) can also be similarly defined.
+For instance, for GCM-SIV (cf.{nbsp}<<ACE-GCM-SIV-mode??), `nonce` would be included in the Initialization Input exactly as `IV` is included in the Initialization Input for GCM, and state _set_public_value_ would be skipped, going directly to _hash_absorb_, with unchanged semantics.
 
 
 [[ACE-GCM-SIV-mode]]
@@ -2821,6 +2821,7 @@ Parameters:::
 * `k` = key size (8|`k`).
 * It must be `k = b` or `k = 2b`.
 * It must be established by the algorithm whether the authentication tag is `b` or `3b/4` bits long.
+  In other words, there can be two variants.
 
 Data Structures:::
 
@@ -2829,12 +2830,13 @@ Data Structures:::
  . `key`: `k` bits, or 64 bits if a System Key index.
 
 * *Internal State*:
-** `key`, `enc_key`: `k` bits.
-** `auth_key`: `b` bits.
-** `nonce`: `3b/4` bits.
-** `ctr`: `b/4` bits.
-** `tag`: `b` bits.
-** `SIV`: `b` or `3b/4` bits. +
+ ** `key`, `enc_key`: `k` bits.
+ ** `auth_key`: `b` bits.
+ ** `nonce`: `3b/4` bits.
+ ** `ctr`: `b/4` bits.
+ ** `tag`: `b` bits.
+ ** `SIV`: `b` or `3b/4` bits.
++
 A `b`-bit `SIV` is computed by clearing the most significant bit of `tag` and encrypting it. +
 For a `3b/4`-bit `SIV`, a full `b`-bit `tag` value is kept while absorbing data.
 The public `SIV` value is computed by clearing the most significant bit of `tag`, encrypting it, and then removing the `b/4` least significant bits.
@@ -2860,43 +2862,49 @@ Algorithm-Specific Functions:::
   . `tag <- tag xor INPUT`.
   . `tag <- Mont_mult(tag, hash_key)` or `tag <- Galois_mult(tag, hash_key)`, depending on the algorithm.
 State Machine:::
-* *States:* _initial_, _set_public_value_, _set_public_value_2_, _hash_absorb_, _enc_tag_finalize_, _dec_tag_finalize_, _encrypt_, _decrypt_, and _completed_.
+* *States:* _initial_, _set_public_value_, _hash_absorb_, _enc_tag_finalize_, _dec_tag_finalize_, _encrypt_, _decrypt_, and _completed_.
 
 * *Allowed State Transitions:*
-** From all states to _initial_.
-** For encryption:
-   _initial_ -> _set_public_value_ -> _hash_absorb_ -> _enc_tag_finalize_ -> _encrypt_.
-** For decryption: +
-   _initial_ -> _set_public_value_ -> _set_public_value_2_ -> _hash_absorb_ -> _decrypt_ -> _dec_tag_finalize_.
-** Transition to _encrypt_ possible only if metadata allows encryption, else the CR is *invalidated*.
-** Transition to _decrypt_ possible only if metadata allows decryption, else the CR is *invalidated*.
+ ** From all states to _initial_.
+ ** For encryption:
+    _initial_ -> _set_public_value_ -> _hash_absorb_ -> _enc_tag_finalize_ -> _encrypt_.
+ ** For decryption:
+    _initial_ -> _set_public_value_ -> _hash_absorb_ -> _decrypt_ -> _dec_tag_finalize_.
+ ** Transition to _encrypt_ possible only if metadata allows encryption, else the CR is *invalidated*.
+ ** Transition to _decrypt_ possible only if metadata allows decryption, else the CR is *invalidated*.
 
 * *Behavior:*
-** In state _initial_ :
-*** No {nbsp}``ace.exec``{nbsp} operation is allowed.
-*** The following initialization operations are performed:
-  . (`enc_key`, `auth_key`) `<-` `RFC8452_KeyDeriv(key)`,
-  . `nonce`, `ctr`, `tag`, `SIV <- 0`.
+ ** In state _initial_ :
+  *** No {nbsp}``ace.exec``{nbsp} operation is allowed.
+  *** The following initialization operations are performed:
+   . (`enc_key`, `auth_key`) `<-` `RFC8452_KeyDeriv(key)`,
+   . `nonce`, `ctr`, `tag`, `SIV <- 0`.
 
-** In states _set_public_value_, resp. _set_public_value_2_:
-*** We can only issue  ``ace.exec`` instructions of Form B, i.e., “```ace.exec Kn|K[Xn], INPUT```”, or their replacement sequences, to set the value of `nonce`, resp. `SIV`.
-*** If “```ace.exec Kn|K[Xn], INPUT```” is repeated, it will just re-write the value of `nonce`, resp. `SIV`.
-*** If no such `ace.exec` is issued, `nonce`, resp. `SIV`, remain equal to zero.
-*** If `IOLEN` > `b`, only the `b` least significant bits of `INPUT` are considered.
-+
-NOTE: There is no harm in moving to state _set_public_value_2_ and setting the
-SIV while encrypting, since that field is not used in the encryption path until
-it is set (thus overwriting any previous content) by the state machine itself.
-Accepting this redundant but harmless behavior simplifies the state machine.
-+
-** In state _hash_absorb_:
+** Upon issuing ```ace.state Kn|K[Xn], #ace_state_set_public_value, INPUT``` with a vector additional parameter, or its replacement sequence:
+  *** The values of `nonce` is set to `INPUT`.
+
+** Upon issuing ```ace.state Kn|K[Xn], #ace_state_set_public_value``` with a GPR additional parameter or none.
+  *** An invalid instruction error is raised and the CR is *invalidated*.
+
+** Upon issuing ```ace.state Kn|K[Xn], #ace_state_hash_absorb, INPUT``` with a vector additional parameter, or its replacement sequence:
+  *** The values of `SIV` is set to `INPUT`.
+  *** This version of the instruction is to be used during decryption.
+
+ ** Upon issuing ```ace.state Kn|K[Xn], #ace_state_hash_absorb, Xm``` with a GPR additional parameter.
+  *** An invalid instruction error is raised and the CR is *invalidated*.
+
+ ** Upon issuing ```ace.state Kn|K[Xn], #ace_state_hash_absorb``` with no additional parameter.
+  *** The `SIV` is not modified (it is assumed to be already zero).
+  *** This version of the instruction is to be used during encryption.
+
+ ** In state _hash_absorb_:
 +
 --
-   *** Only ``ace.exec`` instructions of the Form “```ace.exec Kn|K[Xn], INPUT```” are allowed, or their replacement sequences. Such an instruction accumulates a value in the `tag`:
-   i.e., perform `absorb(INPUT)`.
+   *** Only ``ace.exec`` instructions of the Form “```ace.exec Kn|K[Xn], INPUT```” are allowed, or their replacement sequences.
+   This accumulates a value in the `tag`, i.e., it performs `absorb(INPUT)`.
 --
 +
-If `IOLEN` is a multiple of `b`, `absorb` is executed on each of the `IOLEN/b` blocks in `INPUT`.
+If `IOLEN` is a multiple of `b`, `absorb()` is executed on each of the `IOLEN/b` blocks in `INPUT`.
 
 ** In state _enc_tag_finalize_, only an {nbsp}``ace.exec``{nbsp} instruction of Form A, or its replacement sequence, are allowed.
 The value
@@ -2905,8 +2913,8 @@ The value
   *** `INPUT <- bin(bit_length(AD), b/2) @ bin(bit_length(plaintext), b/2)`,
 --
 +
-must be set by the user. Then,   “```ace.exec OUTPUT, Kn|K[Xn], INPUT```”
-finalizes the computation of the SIV/tag, by performing:
+must be set by the user.
+Then, “```ace.exec OUTPUT, Kn|K[Xn], INPUT```” finalizes the computation of the SIV/tag, by performing:
 +
 --
     . `absorb(INPUT)`.
@@ -2920,7 +2928,7 @@ finalizes the computation of the SIV/tag, by performing:
 
 If `IOLEN` > `b`, only the `b` least significant bits of `INPUT` are considered.
 
-** In state _encrypt_, only  ``ace.exec`` instructions of the Form A or their replacement sequences are allowed, namely “```ace.exec OUTPUT, Kn|K[Xn], INPUT```,” to encrypt `INPUT` into `OUTPUT` as follows:
+ ** In state _encrypt_, only  ``ace.exec`` instructions of the Form A or their replacement sequences are allowed, namely “```ace.exec OUTPUT, Kn|K[Xn], INPUT```,” to encrypt `INPUT` into `OUTPUT` as follows:
 +
 --
 . If `ctr == 0`, then the CR is *invalidated*.
@@ -2934,7 +2942,7 @@ If `IOLEN` > `b`, only the `b` least significant bits of `INPUT` are considered.
 +
 If `IOLEN` > `b`, the above operations are applied to each of the `IOLEN/b` blocks in `INPUT`.
 
-** In state _decrypt_,  only  ``ace.exec`` instructions of the Form A or their replacement sequences are allowed, namely “```ace.exec OUTPUT, Kn|K[Xn], INPUT```,” to decrypt `INPUT` into `OUTPUT` and then absorb the plaintext `INPUT` into the `tag`:
+ ** In state _decrypt_,  only  ``ace.exec`` instructions of the Form A or their replacement sequences are allowed, namely “```ace.exec OUTPUT, Kn|K[Xn], INPUT```,” to decrypt `INPUT` into `OUTPUT` and then absorb the plaintext `INPUT` into the `tag`:
 +
 --
      . If `ctr == 0`, then the CR is *invalidated*.
@@ -2949,7 +2957,7 @@ If `IOLEN` > `b`, the above operations are applied to each of the `IOLEN/b` bloc
 +
 If `IOLEN` > `b`, the above operations are applied to each of the `IOLEN/b` blocks in `INPUT`.
 
-** In state _dec_tag_finalize_,
+ ** In state _dec_tag_finalize_,
    only an ``ace.exec`` instruction of Form B, or its replacement sequence, are allowed,
    namely “```ace.exec Kn|K[Xn], INPUT```,” where it is the responsibility of the user to set
 +
@@ -2973,7 +2981,7 @@ If `IOLEN` > `b`, the above operations are applied to each of the `IOLEN/b` bloc
 +
 If `IOLEN` > `b`, only the `b` least significant bits of `INPUT` are considered.
 
-** Upon completion of `ace.import`, the ACE unit recomputes `enc_key` and `auth_key`
+ ** Upon completion of `ace.import`, the ACE unit recomputes `enc_key` and `auth_key`, i.e.:
   . (`enc_key`, `auth_key`) <- `RFC8452_KeyDeriv(key)`.
 
 //
