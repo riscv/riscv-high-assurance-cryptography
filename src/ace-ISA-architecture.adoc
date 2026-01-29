@@ -2178,7 +2178,7 @@ Algorithm-Specific Functions:::
 State Machine:::
 
 * *States:*
- ** _initial_: The CC is just initialised, or reset, and ready to start processing data.
+ ** _initial_: The CC is ready.
  ** _encrypt_: Encrypting blocks of input.
  ** _decrypt_: Decrypting blocks of input.
 
@@ -2284,7 +2284,7 @@ Algorithm-Specific Functions:::
 
 State Machine:::
 * *States:
-  ** _initial_: The CC is just initialised, or reset, and ready to start producing a keystream.
+  ** _initial_: The CC is ready.
   ** _operate_: In this state the CC will produce a keystream.
 
 * *Allowed State Transitions:* any.
@@ -2559,7 +2559,7 @@ Algorithm-Specific Functions:::
 State Machine:::
 
 * *States:*
- ** _initial_: Freshly initialized of reset.
+ ** _initial_: The CC is ready.
  ** _hash_absorb_: Process Associated Data (AD) into the tag.
  ** _encrypt_: Encrypt the plaintext and absorb the ciphertext into the tag.
  ** _enc_tag_finalize_: Finalize the encryption tag, prepare to return its value.
@@ -2886,7 +2886,7 @@ Algorithm-Specific Functions:::
 
 State Machine:::
 * *States:*
- ** _initial_: Freshly initialized or reset.
+ ** _initial_: The CC is ready.
  ** _set_aux_value:_ Set the value of `nonce`.
  ** _hash_absorb_: Set the SIV and process AD and, if encrypting, also the plaintext into the tag.
  ** _encrypt_: Encrypt the plaintext.
@@ -3164,8 +3164,8 @@ State Machine:::
 * *States:* _initial_, _set_aux_value_, _hash_absorb_, _hash_finalize_, _encrypt_, _enc_last_block_, _enc_tag_finalize_, _decrypt_, _dec_last_block_, _hash_verify_, and _completed_.
 
 * *States:*
- ** _initial_: Initialized or reset.
- ** _set_aux_value:_ Set the length and the value of the nonce.1
+ ** _initial_: The CC is ready.
+ ** _set_aux_value:_ Set the length and the value of the nonce.
  ** _hash_absorb_: Set the tag length, and process the AD.
  ** _hash_finalize_: Set the length of the final block of the AD and process it.
 
@@ -3484,10 +3484,16 @@ Let `C` be `0x1B` for `b` = 64, `0x87` for `b` = 128, and `0x425` for `b` = 256,
 
 State Machine:::
 
-* *States:* _initial_ (0), _hash_absorb_, _hash_last_block_, _hash_finalize_, and _completed_.
+* *States:*
+ ** _initial_: The CC is ready.
+ ** _hash_absorb_: Absorb data into the CMAC function.
+ ** _hash_last_block_: Set the length of the last block to absorb, then absorb it.
+ ** _hash_output_: Output the CMAC.
+ ** _completed_: The CC has completed the CMAC operation.
+
 * *Allowed State Transitions:*
  ** _initial_ -> _hash_absorb_.
- ** _hash_absorb_ -> _hash_last_block_ -> _hash_finalize_ -> _completed_.
+ ** _hash_absorb_ -> _hash_last_block_ -> _hash_output_ -> _completed_.
  ** From any state to state _initial_.
 * *Behavior:*
  ** In state _initial_:
@@ -3495,8 +3501,8 @@ State Machine:::
   *** `hash <- zeros(b)`
   *** No {nbsp}```ace.exec```{nbsp} operation is allowed.
 
- ** In state _hash_absorb_, we can only issue ``ace.exec`` instructions of Form B, i.e., “```ace.exec Kn|K[Xn], INPUT```,”
- to absorb the data block `INPUT` into the hash. This is performed as follows:
+ ** In state _hash_absorb_, we can only issue ``ace.exec`` instructions of Form B, i.e., +
+ “```ace.exec Kn|K[Xn], INPUT```,” to absorb the data block `INPUT` into the hash. This is performed as follows:
 +
 --
    . `hash <- enc_blk(key, hash xor INPUT)`.
@@ -3520,11 +3526,11 @@ If `IOLEN` > `b`, then the above operations are applied to each `b`-bit block of
     .. Remove the `b` - `last_block_len` most significant bits of `tmp` and pad the resulting value with a `1` and sufficiently many `0` bits to make it `b` bits long.
     .. `tmp <- hash xor tmp xor K2`
   . `hash <- enc_blk(key, tmp)`
-  . The state is changed to _hash_finalize_.
+  . The state is changed to _hash_output_.
 --
 +
 
-** In state _hash_finalize_, we can issue one ``ace.exec`` instruction of Form C, i.e., “```ace.exec OUTPUT, Kn|K[Xn]```”, to output the hash into `OUTPUT`.
+** In state _hash_output_, we can issue one ``ace.exec`` instruction of Form C, i.e., “```ace.exec OUTPUT, Kn|K[Xn]```”, to output the hash into `OUTPUT`.
    If `IOLEN` > `b`, only the bits of `OUTPUT` beyond the `b`-th are cleared.
    Upon issuing that instruction, the CC transitions to state _completed_ with no error.
 
@@ -3626,6 +3632,13 @@ State Machine:::
 
 * *States:* _initial_, _hash_absorb_, _hash_last_block_, _hash_output_ and _completed_.
 
+ ** _initial_: The CC is ready.
+ ** _hash_absorb_: Absorb data into the hash function.
+ ** _hash_last_block_: Set the length of the last block to absorb, then absorb it.
+ ** _hash_output_: Output the hash.
+ ** _completed_: The CC has completed the operation (XOF's do not have this state).
+
+
 * *Allowed State Transitions:*
  ** _initial_ -> _hash_absorb_ -> _hash_last_block_ -> _hash_output_ -> _completed_.
  ** From any state to state _initial_.
@@ -3636,7 +3649,7 @@ State Machine:::
   *** `state`: the initial value is set as specified by the algorithm.
   *** Any `ace.exec` will result in the CR being *invalidated*.
 
- ** In state _hash_absorb_, we can only issue ``ace.exec`` instructions of Form B, i.e.,
+ ** In state _hash_absorb_, we can only issue ``ace.exec`` instructions of Form B, i.e., +
  “```ace.exec Kn|K[Xn], INPUT```”, to absorb the data block `INPUT` into the hash as follows.
 +
 --
@@ -3686,11 +3699,11 @@ Then, state transitions to _hash_last_block_ as expected.
 +
 --
     * `amount : int`, `{nbsp}` amount of data to copy from `block` to `OUTPUT`
-    * `#define output_base input_base`
+    * `#define output_baseoutput_base input_base`
 
 []
    . `output_base <- 0` // or `acestart` upon resumption
-    . while (`output_base` < `IOLEN`) do {
+    . while (`output_base` < `IOLEN`) do { // as long as there is room in the OUTPUT
      .. `amount` <- `min(IOLEN - output_base, t - block_base)`
      .. ``OUTPUT[output_base + amount - 1 : output_base] <- `` +
            ``{nbsp}{nbsp}{nbsp}{nbsp}{nbsp}{nbsp}<- block[block_base + amount - 1 : block_base + amount]``
@@ -3789,7 +3802,7 @@ In all ASCON algorithms, the ordering of the bits must be verified!
 [[ACE-Ascon-AEAD128]]
 ===== Ascon-AEAD128
 
-In this mode it is the responsibility of the user to apply proper padding to the inputs.
+In this mode it is the responsibility of the user to apply proper padding to the AD and plaintext, and to remove the padding from the decryption of the ciphertext to recover the original plaintext.
 
 Parameters:::
 
@@ -3805,14 +3818,17 @@ Data Structures:::
 * *Internal State*:
  ** `key`: 128 bits, or 64 bits if a System Key index.
  ** `state[0 .. 4]`: five 64-bit words, i.e., 320 bits.
- ** `tag_len`: 8 bits.
+ ** `tag_len`: 8 bits as int.
+ ** `last_block_len`: 9 bits as int.
  ** `AD_empty`: boolean;
 
 * *Serialized Content*:
 [lowerroman]
  . `key`: 128 bits, or 64 bits if a System Key index.
  . `state[0 .. 4]`: five 64-bit words, i.e., 320 bits.
- . `tag_len`: lower 8 bits in a 64 bit field.
+ . padding: 32 bits.
+ . `last_block_len`: 16 bits.
+ . `tag_len`: 16 bits
 
 Algorithm-Specific Functions:::
 
@@ -3820,18 +3836,32 @@ Algorithm-Specific Functions:::
 
 State Machine:::
 
-* *States:* _initial_, _hash_absorb_, _encrypt_, _enc_last_block_, _enc_tag_finalize_,
- _decrypt_, _dec_last_block_, _dec_tag_finalize_, _hash_verify_, and _completed_.
+* *States:* _initial_, _hash_absorb_,
+ _encrypt_, _enc_last_block_, ,
+ _decrypt_, _dec_last_block_, _hash_verify_,
+ and _completed_.
+
+ ** _initial_: The CC is ready.
+ ** _hash_absorb_: Set the nonce, and process the AD.
+
+ ** _encrypt_: Encrypt the plaintext.
+ ** _enc_last_block_: Encrypt the last block of the plaintext.
+ ** _enc_tag_finalize_: Return the tag.
+
+ ** _decrypt_: Decrypt the ciphertext.
+ ** _dec_last_block_: Decrypt the last block of the ciphertext.
+ ** _hash_verify_: Compare a user-provided value with the internally computed tag.
+ ** _completed_: The algorithm terminated.
 
 * *Allowed State Transitions:*
- ** _initial_ -> _hash_absorb_ -> _hash_last_block_.
- **  _hash_absorb_, _hash_last_block_ -> _encrypt_ -- if encryption is allowed, else the CR is *invalidated*.
- **  _hash_absorb_, _hash_last_block_ -> _decrypt_ -- if decryption is allowed, else the CR is *invalidated*.
- ** _encrypt_ -> _enc_last_block_ -> _enc_tag_finalize_ -> _completed_.
- ** _decrypt_ -> _dec_last_block_ -> _dec_tag_finalize_ -> _hash_verify_ -> _completed_.
+ ** _initial_ -> _hash_absorb_.
+ **  _hash_absorb_ -> _encrypt_ -- if encryption is allowed, else the CR is *invalidated*.
+ **  _hash_absorb_ -> _decrypt_ -- if decryption is allowed, else the CR is *invalidated*.
+ ** _encrypt_ -> _enc_last_block_ -> _hash_output_ -> _completed_.
+ ** _decrypt_ -> _dec_last_block_ -> _hash_verify_ -> _completed_.
 
 * *Behavior:*
- ** In state _initial_ :
+** In state _initial_ :
   *** No {nbsp}``ace.exec``{nbsp} operation is allowed.
   *** The following initialization operations are performed:
    . `state[0] <- 0x00001000808c0001`
@@ -3842,15 +3872,19 @@ State Machine:::
    . `tag_len <- 128`
    . `AD_empty` <- `true`
 
-  ** To transition to state _hash_absorb_, a Form C ``ace.state`` must be used, whose `INPUT` sets the nonce of the algorithm as follows:
-    . `state[3] <- INPUT[63:0]`
+** To transition to state _hash_absorb_, a Form C ``ace.state`` must be used, whose `INPUT` sets the nonce of the algorithm as follows:
++
+--
+  . `state[3] <- INPUT[63:0]`
     . `state[4] <- INPUT[127:64]`
     . `ASCON(12)`
     . `state[3] <- state[3] xor key[63:0]`
     . `state[4] <- state[4] xor key[127:64]`
-    *** If `IOLEN` > 128, only the 128 least significant bits of `INPUT` are considered.
+--
++
+If `IOLEN` > 128, only the 128 least significant bits of `INPUT` are considered.
 
-  ** In state _hash_absorb_, only  ``ace.exec`` instructions of Form B are allowed.
+** In state _hash_absorb_, only  ``ace.exec`` instructions of Form B are allowed.
  “```ace.exec Kn|K[Xn], INPUT```” absorbs a data block into the state, i.e.:
 +
 --
@@ -3861,9 +3895,10 @@ State Machine:::
 --
 +
 If `IOLEN` > 128, the above group of operations is executed `IOLEN/128` times, once for each 128-bit block of `INPUT`.
- ** Upon entering state _encrypt_ or _decrypt_, the following domain separation operation is performed:
+** Upon entering state _encrypt_ or _decrypt_, the following domain separation operation is performed:
  . `lsb(state[4]) <- lsb(state[4]) xor 1`
- ** In state _encrypt_, only ``ace.exec`` instructions of Form A are allowed.
+
+** In state _encrypt_, only ``ace.exec`` instructions of Form A are allowed.
    “```ace.exec OUTPUT, Kn|K[Xn], INPUT```” encrypts `INPUT` into `OUTPUT`, namely:
 +
 --
@@ -3883,12 +3918,13 @@ Padding is managed by the user software.
  . `state[0] <- state[0] xor INPUT[63:0]`
  . `state[1] <- state[1] xor INPUT[127:64]`
  . `OUTPUT <- state[0] @ state[1]` // only the 128 lsb's of `OUTPUT` are written to.
+ .  The state machine then transitions to state _hash_output_.
 --
 +
 In this state only one 128-bit block is processed. +
-The state machine then transitions to state _enc_tag_finalize_.
+The differences between the operation `ace.exec` computes in this state and the operation is computes in state _encrypt_ are the absence of the final `ASCON(8)` and the automatic transition to state _hash_output_.
 
-** In state _enc_tag_finalize_, only one ``ace.exec`` instruction of Form C, to compute the tag, is allowed.
+** In state _hash_output_, only one ``ace.exec`` instruction of Form C, to compute the tag, is allowed.
 “```ace.exec OUTPUT, Kn|K[Xn]```”  performs
 +
 --
@@ -3929,14 +3965,14 @@ If `IOLEN` is a multiple of 128, the above group of operations is executed `IOLE
 . `tmp <- (state[0] xor INPUT[63:0]) @ (state[1] xor INPUT[127:64])`
 . `state[0] <- INPUT[63:0]`
 . `state[1] <- INPUT[127:64]`
+. The state machine transitions to state _hash_verify_.
 . `OUTPUT <- tmp`
 --
 +
-The state machine then transitions to state _dec_tag_finalize_.
 
 ** In state _dec_tag_finalize_, a form B `ace.state Kn|K[Xn], #ace_const_dec_tag_finalize, Xs` instruction may be executed, setting
-the tag len `tag_len` to the value of `Xs`, provided it is not smaller than 32 and not larger that 128. If the value is out of bounds, it is simply not set and remains 128 as set in state _initial_.
-The state machine then transitions to state _hash_verify_.
+the tag len `tag_len` to the value of `Xs`, provided it is not smaller than 32 and not larger that 128.
+If the value is out of bounds, the instruction raises an invalid instruction error and the CR is *invalidated*.s
 
 ** In state _hash_verify_, only one ``ace.exec`` instruction of Form D, to verify the tag, is allowed, .
 “```ace.exec Kn|K[Xn], INPUT```” performs
