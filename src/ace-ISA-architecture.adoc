@@ -1763,9 +1763,12 @@ NOTE: The `ace.clone` instruction is an optimization for the sequence `ace.expor
 [[ACE-instruction-derive]]
 ==== ace.derive
 
-`ace.derive Kd|K[Xd], Ks1|K[Xs1]` +
-`ace.derive Kd|K[Xd], Ks1|K[Xs1], Vs2`
+The `ace.derive` instruction admits three Forms, namely
 (((ACE, instruction, ace.derive)))
+[upperalpha]
+. `ace.derive Kd|K[Xd], Ks1|K[Xs1]{nbsp}{nbsp}{nbsp}{nbsp}{nbsp}{nbsp}{nbsp}` with no auxiliary input.
+. `ace.derive Kd|K[Xd], Ks1|K[Xs1], Xs2{nbsp}{nbsp}` with an auxiliary input in a GPR.
+. `ace.derive Kd|K[Xd], Ks1|K[Xs1], Vs2{nbsp}{nbsp}` with an auxiliary input in a vector register.
 
 Encoding::
 The encoding is a variant of Form A `ace.exec` encoding, and is thus an R-type instruction.
@@ -1777,17 +1780,22 @@ The encoding is a variant of Form A `ace.exec` encoding, and is thus an R-type i
     { bits:  5, name: 'Kd|K[Xd]' },
     { bits:  3, name: 0x0, attr: ['ace.exec (Form A)'] },
     { bits:  5, name: 'Ks1|K[Xs1]' },
-    { bits:  5, name: 'Vs2', attr: ['use for auxiliary input','no auxiliary input (zero field)'] },
+    { bits:  5, name: 'rs2'},
     { bits:  1, name: 0x1 },
     { bits:  2, name: 'R' },
-    { bits:  1, name: 'z', attr: [0x1,0x0] },
-    { bits:  3, name: 0x0 },
+    { bits:  1, name: 'v' },
+    { bits:  1, name: 'g' },
+    { bits:  2, name: 0x0 },
 ]}
 ....
 +
 This encoding differs from Form A `ace.exec` by having bit 25 set to 1.
 Bits [27:26], i.e., field `R`, is encoded exactly as for `ace.clone` (cf.{nbsp}<<ACE-instruction-clone>>).
 Bit 28 determines whether a vector register (or register group) is used to pass an auxiliary parameter to the key derivation mechanism or not.
+Bit `v` (i.e., bit 28) is 0 for Forms A and B and 1 for Form C. +
+Bit `g` (i.e., bit 29) is used to distinguish Form A, with `g` = 0, from Form B, with `g` = 1. +
+The value (`g`,`v`) = (1,1) is currently an invalid instruction and reserved for future use.
+
 
 Description::
 The instruction is used to derive a new context from an existing one, with its own opaque key material.
@@ -2013,28 +2021,28 @@ Unless explicitly stated otherwise in an algorithm's specification, it is always
 [[ACE-usage-input-output]]
 ===== Usage of `ace.input` and `ace.output` to Replace Vector Inputs and Outputs
 
-_The `ace.input` and `ace.output` instructions may be used to replace the inputs and outputs to Forms A-C of `ace.exec`, the auxiliary input of Form C of `ace.state`, and the input of `ace.derive` in any algorithm, to the point that an implementation of ACE without the V extension or a subset thereof is possible._
+_The `ace.input` and `ace.output` instructions may be used to replace the inputs and outputs to Forms A-C of `ace.exec`, the auxiliary inputs of Form C `ace.state` or of Form C of `ace.derive` in any algorithm, to the point that an implementation of ACE without the V extension or a subset thereof is possible._
 
 These two instructions can be used if enabled in the implementation and the range size `aceiobuftop-acestart` is non-zero and is a valid size for the algorithm, otherwise an invalid instruction error is raised.
 
-If `aceiobuflen` is non-zero, Forms A, B, and C of `ace.exec`, as well as `ace.derive` or `ace.state`, can be replaced as follows:
+If `aceiobuflen` is non-zero, Forms A, B, and C of `ace.exec`, as well as Forms C of `ace.derive` and `ace.state`, can be replaced as follows:
 
 [[ACE-replacement-instructions]]
 .Replacement sequences for `ace.exec` and `ace.derive` using `ace.input` and `ace.output`
 [float="center",align="center",width="100%",cols="<18%,<41%,<41%",options="header"]
 |===
-| Instruction Type | Original Instruction          | Replacement Sequence
-| Form A `ace.exec` | `ace.exec{nbsp}{nbsp}{nbsp}Vd, Kn\|K[Xn], Vs` | `ace.input{nbsp}{nbsp}Xl, Vs` +
+| Instruction/Form | Original Instruction          | Replacement Sequence
+| `ace.exec` / A | `ace.exec{nbsp}{nbsp}{nbsp}Vd, Kn\|K[Xn], Vs` | `ace.input{nbsp}{nbsp}Xl, Vs` +
 `ace.exec{nbsp}{nbsp}{nbsp}Kn\|K[Xn]` +
-`ace.output{nbsp}Vd,  Xl`  // Form D
-| Form B `ace.exec` | `ace.exec{nbsp}{nbsp}{nbsp}{nbsp}{nbsp}{nbsp}{nbsp}Kn\|K[Xn], Vs`     | `ace.input{nbsp}{nbsp}Xl, Vs` +
-`ace.exec{nbsp}{nbsp}{nbsp}Kn\|K[Xn]`  // Form D
-| Form C `ace.exec` | `ace.exec{nbsp}{nbsp}{nbsp}Vd, Kn\|K[Xn]`     | `ace.exec{nbsp}{nbsp}{nbsp}Kn\|K[Xn]` +
-`ace.output{nbsp}Vd,  Xl`  // Form D
-| | `ace.derive Kd\|K[Xd], Ks1\|K[Xs1], Vs2` | `ace.input{nbsp}{nbsp}Xl, Vs2` +
-`ace.derive{nbsp}Kd\|K[Xd], Ks1\|K[Xs1]`
-| Form C `ace.state` | `ace.state{nbsp}{nbsp}Kd\|K[Xd], #immed, Vs` | `ace.input{nbsp}{nbsp}Xl, Vs` +
-`ace.state{nbsp}{nbsp}Kd\|K[Xd], #immed`  // Form A
+`ace.output{nbsp}Vd,  Xl`  // D
+| `ace.exec` / B | `ace.exec{nbsp}{nbsp}{nbsp}{nbsp}{nbsp}{nbsp}{nbsp}Kn\|K[Xn], Vs`     | `ace.input{nbsp}{nbsp}Xl, Vs` +
+`ace.exec{nbsp}{nbsp}{nbsp}Kn\|K[Xn]`  // D
+| `ace.exec` / C | `ace.exec{nbsp}{nbsp}{nbsp}Vd, Kn\|K[Xn]`     | `ace.exec{nbsp}{nbsp}{nbsp}Kn\|K[Xn]` +
+`ace.output{nbsp}Vd,  Xl`  // D
+| `ace.state` / C | `ace.state{nbsp}{nbsp}Kd\|K[Xd], #immed, Vs` | `ace.input{nbsp}{nbsp}Xl, Vs` +
+`ace.state{nbsp}{nbsp}Kd\|K[Xd], #immed` // A
+| `ace.derive` / C | `ace.derive Kd\|K[Xd], Ks1\|K[Xs1], Vs2` | `ace.input{nbsp}{nbsp}Xl, Vs2` +
+`ace.derive{nbsp}Kd\|K[Xd], Ks1\|K[Xs1]` // A
 |===
 
 In all cases, the `ace.input` and `ace.output` instructions must be temporarily tied to a specific context in order to properly determine the allowed sequences.
