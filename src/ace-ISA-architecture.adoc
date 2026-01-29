@@ -4,8 +4,6 @@
 ACE is a complex architecture and relies on certain fundamental concepts, which we first introduce together in a short section.
 While this leads to some repetitions, we believe that it also brings better clarity to the presentation of the architecture.
 
-// the clarity gained from this approach outweighs the potential drawbacks.
-
 [[ACE-concepts]]
 === Fundamental Concepts
 
@@ -87,11 +85,11 @@ This list is an early draft.
 * `Zlkned` => NIST Suite: AES Block Cipher. Depends on `Zleaes128` and `Zleaes256`.
 * `Zlkn` => NIST Algorithm Suite. Depends on `Zlkned` and `Zlesha2`.
 * `Zlacev` => Must support for the following CSRs: `aceerror` and `acestart` (this is a dependency for Zicsr); must support the following instructions: `ace.init`, all four forms of `ace.exec`, `ace.clear`, `ace.export`, `ace.import`, and `ace.size`; must support `Zleaes128` and `Zleaes256` in ECB and GCM-SIV modes.
-* `Zlaceio` => Must support for the following CSRs: `aceerror`, `acestart` (this is a dependency for Zicsr), `aceiobuflen` and `aceiobuftop`; must support the following instructions: `ace.init`, Form D of `ace.exec`, `ace.input` and `aceoutput`, `ace.clear`, `ace.export`, `ace.import`, and `ace.size`; must support `Zleaes128` and `Zleaes256` in ECB and GCM-SIV modes.
+* `Zlaceio` => Must support for the following CSRs: `aceerror`, `acestart` (this is a dependency for Zicsr), `aceiobuflen` and `aceiobuftop`; must support the following instructions: `ace.init`, Form D of `ace.exec`, `ace.input` and `ace.output`, `ace.clear`, `ace.export`, `ace.import`, and `ace.size`; must support `Zleaes128` and `Zleaes256` in ECB and GCM-SIV modes.
 
 ==== Privileged
 
-* If `Zlace` is implemented: `misa` must implement the `L` bit, and `*status` must implement `ACES`.
+* If `Zlacev` or `Zlaceio` are implemented: `misa` must implement the `L` bit, and `*status` must implement `ACES`.
 * `SmaceCSK` => Defines the Root Context Sealing Key CSRs (`macercsk{0..7}`), which are all MRO.
 * `SmaceCSKw` => ACE Root Context Sealing Key CSRs are MRW. Depends on `SmaceCSK`
 * `Smaceosscrt` => Defines the ACE OS Secret CSRs (`maceOSSecret{0..3}`)
@@ -348,9 +346,9 @@ Configurable .>| Value +
 | ChipModelSecret           | Identifies specific chip model/family. Permanent. | SoC | N | 1
 | ChipUniqueSecret          | Unique for each SoC. Permanent. | SoC | N | 2
 | OEMSecret                 | Provisioned by OEM to differentiate their products from the competition.
-                              Can be permanent, or optionally reconfigurable by impdef HW authenticated mechanisms. | Device | N | 3
+                              Can be permanent, or optionally reconfigurable by an implementation-defined HW authenticated mechanisms. | Device | N | 3
 | ProductSecret             | Identifies device/system type/model (product). Not necessarily permanent. Reconfigurable like OEMSecret. | Device | N | 4
-| DeviceSecret              | Unique device (entire system) secret (_not_ the device ID such as a serial number). Shared across all harts in a SoC and shareable across multiple SoKs in a single device. Sharing mechanism impdef, i.e., not architected. Reconfigurable like OEMSecret. | Device | N | 5
+| DeviceSecret              | Unique device (entire system) secret (_not_ the device ID such as a serial number). Shared across all harts in a SoC and shareable across multiple SoKs in a single device. Sharing mechanism implementation-defined, i.e., not architected. Reconfigurable like OEMSecret. | Device | N | 5
 | OSSecret                  | Identifies Operating System (or System Stack).
                               Not permanent, must be configured at (virtual) boot. | OS | Allowed | 6
 | BootSecret                | Regenerated at each (virtual) boot. | OS | Allowed | 7
@@ -659,7 +657,7 @@ where
 and
 ``acecrstatus[``2__i__+1,2__i__``]`` for CR #__i__+16.
 
-This section defines the semantics of the `acecrstatus` bitfields:
+This section defines the semantics of the `acecrstatus` bit-fields:
 
 * *INITIAL* (value: 1).
 +
@@ -815,7 +813,7 @@ where
 and
 ``vacecrstatus[``2__i__+1,2__i__``]`` for CR #__i__+16.
 
-The semantics of the bitfields of `vacecrstatus` are the same as those of `acecrstatus`.
+The semantics of the bit-fields of `vacecrstatus` are the same as those of `acecrstatus`.
 
 [comment]
 --
@@ -936,14 +934,14 @@ In the metadata section, `ASID` and `VMID` are always zero padded to the maximal
 
 [WARNING]
 Currently, `satp` is only defined when the Supervisor is enabled.
-similararly, `hgatp` is only defined if the Hypervisor extension is enabled.
+similarly, `hgatp` is only defined if the Hypervisor extension is enabled.
 We propose to define the `ASID` and `VMID` fields of these registers also when ACE is provided in order to allow M-mode to be able to separate a main OS from a TEE, for instance, on devices that implement TEEs using mechanisms based on Sv, PMP/Smepmp cite:[RISCV-ISA-Priv]. If only U- and M-mode are available, this would allow M-mode to separate the CCs of the various U-mode processes.
 
 NOTE: Regarding Supervisor Domains (SDs) cite:[RISC-V-SD] and Worlds cite:[RISC-V-Worlds] we observe that there is no room in the current metadata format for adding filtering by `SDID` (`mmtp.SDID`) and WID.
 This is not an issue since we recommend to use separation by RCSK in combination with SDs or Worlds, which does not prevent a program running in a SD or World to provide a CC to a program running in a different SD or World. This is done by by configuring a CR and then relinquishing control to M-mode to export the CR with the RCSK used by the target software.
 The same holds for any intended separation by hart ID (`mhartid`), which is facilitated by the fact that the RCSK CSR group is per-hart.
 
-NOTE: The software in each World/Supervisor Domain is normally responsible to generate or obtain their own keys, and if a process (applet) in one World/Supervisor Domain is responsible to provide keys to other Worlds/Supervisor Domains, it is the responsibility of the M-mode formware to perform an appropriate `ace.import`/RCSK switch/`ace.export` sequence.
+NOTE: The software in each World/Supervisor Domain is normally responsible to generate or obtain their own keys, and if a process (applet) in one World/Supervisor Domain is responsible to provide keys to other Worlds/Supervisor Domains, it is the responsibility of the M-mode firmware to perform an appropriate `ace.import`/RCSK switch/`ace.export` sequence.
 --
 
 [[ACE-format-configuration]]
@@ -1211,9 +1209,7 @@ While the architecture does not prohibit this, such an approach substantially ex
 
 [WARNING]
 The encodings presented here are just examples, and for the moment RV64-only, and may not be final.
-They serve as a starting point for discussion and refinement as
-well as a proof that, at the time of this writing, the ACE instruction set
-can be encoded.
+They serve as a starting point for discussion and refinement as well as a proof that, at the time of this writing, the ACE instruction set can be encoded.
 
 
 [[ACE-instruction-init]]
@@ -1744,8 +1740,8 @@ The instruction is encoded using the Form D' `ace.exec` encoding, and is thus an
 Bits [27:26], i.e., field `R`, take the following values depending on how the CRs are given:
 +
 [upperalpha]
-. `00`{nbsp}{nbsp} if the source and the output CRs are both encoded as immediates.
-. `01`{nbsp}{nbsp} if the source CR is selected using a GPR and the output CR is encoded as an immediate.
+. `00`{nbsp}{nbsp} if the source and the output CRs are both encoded as immediate values.
+. `01`{nbsp}{nbsp} if the source CR is selected using a GPR and the output CR is encoded as an immediate value.
 . `10`{nbsp}{nbsp} if the source CR is encoded as immediate and the output CR is selected using a GPR.
 . `11`{nbsp}{nbsp} if the source and the output CRs are both selected using the values of GPRs.
 
@@ -2721,7 +2717,7 @@ as shown below (for encryption only -- decryption is similar).
 However, this significantly increases code size and requires implementing `Galoismul(V4, V3)`.
 Adding a dedicated mode to the ACE unit is a minor effort, and it allows internal logic to optimize execution
 beyond the capabilities of, for instance, a compiler on an in-order CPU. It also means that the CPU
-does not have to implement the carryless multiplication (cf.{nbsp}<<ACE-V-dependency>>),
+does not have to implement the carry-less multiplication (cf.{nbsp}<<ACE-V-dependency>>),
 and only a shared ACE unit has to,
 which saves hardware costs when several small cores share a single ACE unit.
 
@@ -2742,8 +2738,8 @@ V3 ← zeros(b)                                    // “Auth Data 1”
 ace.exec V4, K0, V3                              // compute H
 foreach(i from 0 to ceil(len_in_bytes(AD)/16)-1) {
    V1 ← AD[16*i .. 16*i+15]
-   V3 ← V3 xor V1                                // Horner scheme add
-   V3 ← Galoismul(V4, V3)                      // Horner scheme mult
+   V3 ← V3 xor V1                                // Horner scheme addition
+   V3 ← Galoismul(V4, V3)                        // Horner scheme multiplication
 }
 
 counter ← 1                                      // a 32-bit integer value
@@ -2752,14 +2748,14 @@ foreach(i from 0 to ceil(len_in_bytes(PT)/16)-1) {
    V1 ← PT[16*i .. 16*i+15]
    ace.exec V2, K0, V5                           // create mask by encrypting the counter
    V1 ← V1 xor V2                                // CTR encrypt
-   V3 ← V3 xor V1                                // Horner scheme add
-   V3 ← Galoismul(V4, V3)                      // Horner scheme mult
+   V3 ← V3 xor V1                                // Horner scheme addition
+   V3 ← Galoismul(V4, V3)                        // Horner multiply multiplication
    CT[16*i .. 16*i+15] ← V1
    counter ← counter + 1
 }
 
-V3 ← V3 xor (len_in_bits(AD) @ len_in_bits(PT))  // Horner scheme add
-V3 ← Galoismul(V4, V3)                         // Horner scheme mult
+V3 ← V3 xor (len_in_bits(AD) @ len_in_bits(PT))  // Horner scheme addition
+V3 ← Galoismul(V4, V3)                           // Horner scheme multiplication
 V5[31:0] ← zeros(31) @ 1                         // Prepare IV @ 1 for tag encryption
 ace.exec V2, K0, V5
 tag ← V3 xor V2                                  // Last Horner scheme add
@@ -3078,7 +3074,7 @@ On the other hand, since it uses only a single key and no derived keys, with cip
 like the AES it may use fewer internal resources.
 
 The state machine of this algorithm closely follows RFC{nbsp}7253 (except for the ordering and numbering of the bit fields).
-The algorithm and is of course identical to the RFC's for 128-bit-wide block ciphers, with the generalisation to other widths being straightforward and according the security proof of the original algorithm and a lower bound on nonce length following cite:[cryptoeprint-2023-326].
+The algorithm and is of course identical to the RFC's for 128-bit-wide block ciphers, with the generalization to other widths being straightforward and according the security proof of the original algorithm and a lower bound on nonce length following cite:[cryptoeprint-2023-326].
 
 ===== Specification
 
@@ -3203,7 +3199,7 @@ If `last_blk_len` == 0, however, no `ace.exec` can be executed, and only an `ace
  . `offset <- zeros(b)`
  . `L <- enc_blk(key, zeros(b))`
  . `L <- double(double(L))`
- . `N_ext <- N[N_len-1:0] @ 1 @ zeros(b-g-1-N_len) @ numtobits(tag_len,g)`
+ . `N_ext <- N[N_len-1:0] @ 1 @ zeros(b-g-1-N_len) @ bin(tag_len,g)`
  . `bottom <- int(N_ext[b-1:b-g+1])` // Rogaway's paper number bits in opposite order
  . `Ktop <- enc_blk(key, zeros(g-1) @ N_ext[b-g:0])`
  . `Stretch <- (Ktop[b/2-1:0] xor Ktop[b/2+7:8]) @ Ktop`
@@ -3327,7 +3323,7 @@ ace.state K0, #ace_state_set_aux_value,X1
 V0 ← N
 ace.exec K0, V0
 
-// The next state change also sets the tag lenth
+// The next state change also sets the tag length
 X1 ← tag_len
 ace.state K0, #ace_state_hash_absorb, X1
 
@@ -3664,7 +3660,7 @@ Then, state transitions to _hash_last_block_ as expected.
 {empty}
 (((ACE, algorithm, SHA-3)))
 We describe here the algorithms for the primitives in the SHA-3 family, which currently includes SHA3-224, SHA3-256, SHA3-384, SHA3-512, SHAKE128 and SHAKE256.
-These primitives are designed around a special parameter choice of KECCAC cite:[DBLP-conf-eurocrypt-BertoniDPA13] standardized by NIST cite:[nist-fips-202].
+These primitives are designed around a special parameter choice of KECCAK cite:[DBLP-conf-eurocrypt-BertoniDPA13] standardized by NIST cite:[nist-fips-202].
 These are instantiations of the algorithm specified in <<ACE-hash-functions>>, and we need to
 describe only the differences with respect to the behavior described there.
 
@@ -4211,8 +4207,7 @@ Future format will have a 1 in this position and may be longer than 64 bits.
 | [63:32] |  16  | Reserved               | Zero for now.
 |===
 
-NOTE: Fields such as Algorithm, SC_Protection, State Number, Direction_Policy, UC_Policy_{empty}__i__ (i = 0..3), and Locality are omitted. Since partial CRs are architecturally forbidden for normal use, the space normaly used by these fields is available for other purposes. Locality violations are handled when a complete CR is used; therefore, the RCSK is always used for partial CRs. This approach can reduce the need to compute or cache DCSKs at higher privilege levels, improving performance.
-
+NOTE: Fields such as Algorithm, SC_Protection, State Number, Direction_Policy, UC_Policy_{empty}__i__ (i = 0..3), and Locality are omitted. Since partial CRs are architecturally forbidden for normal use, the space normally used by these fields is available for other purposes. Locality violations are handled when a complete CR is used; therefore, the RCSK is always used for partial CRs. This approach can reduce the need to compute or cache DCSKs at higher privilege levels, improving performance.
 
 The exported content format for an incomplete initialization or import matches that of a complete CR, except that it is truncated to the actual imported length (rounded up to an 8-byte multiple). This length is recorded in the Payload_Length field.
 
