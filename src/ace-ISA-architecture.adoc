@@ -1798,10 +1798,6 @@ The instruction is used to derive a new context from an existing one, with its o
 It is similar to `ace.clone`, but the derived context is not a copy of the source context,
 rather, it is a new context that is derived from it, for instance, through a key derivation mechanism.
 This instruction can be used multiple times, to generate multiple derived contexts.
-+
-The first variant of `ace.derive` has the same semantics of the second variant if the input/output buffer is not empty
-(cf.{nbsp}<<ACE-usage-input-output>>).
-
 
 Properties::
 Possibly modifies state: *YES*. +
@@ -1901,7 +1897,7 @@ All three instructions can be implemented as CSR RW instructions, for instance:
  * `acedest`, XLEN bits wide, determines what architectural state we are transferring to or from: 0..31 for the CRs and, say, 32 for the input/output buffer.
  * `acestart`, XLEN bits wide, holds the offset within the CR's virtually serialized `content[]` or the input/output buffer.
  * `acecontent`, XLEN bits wide, to which we write the content of the CR or the input/output buffer or from which we read the current content.
-  A write to `acecontent` would also increase `acestart` by XLEN/8.
+  A write to `acecontent` increases `acestart` by XLEN/8.
 
 Interrupting the firmware implementation of `ace.init`, `ace.export`, `ace.import`, `ace.input`, or `ace.output` must leave the architectural state indistinguishable from the state expected from interrupting a monolithic implementation of the instructions.
 In particular, they need to respect the value of `acestart` and update it in accordance with the expected architected behavior of the emulated instructions.
@@ -2898,7 +2894,7 @@ State Machine:::
   *** The `SIV` is not modified (it is assumed to be already zero).
   *** This version of the instruction is to be used during encryption.
 
- ** In state _hash_absorb_, only ``ace.exec`` instructions of the Form “```ace.exec Kn|K[Xn], INPUT```” are allowed. +
+ ** In state _hash_absorb_, only ``ace.exec`` instructions of Form B are allowed.
    This instruction absorbs its `INPUT` in the `tag`, i.e., it performs `absorb(INPUT)`.
 If `IOLEN` is a multiple of `b`, `absorb()` is executed on each of the `IOLEN/b` blocks in `INPUT`.
 
@@ -4110,7 +4106,9 @@ Furthermore, it protects the key from other SW environments that may be crossed 
 [WARNING]
 RVV-mini is not yet fully defined.
 
-If ACE is implemented including the operations on vector registers-and thus not exclusively relying on `ace.input` and `ace.output`-it does not require the full V extension; it depends on a minimal subset, which we call RVV-mini. The required features are:
+If ACE is implemented including the operations on vector registers-and thus not exclusively relying on `ace.input` and `ace.output`-it does not require the full V extension; it depends on a minimal subset, which we call RVV-mini.
+RVV-mini must maintain full opcode compatibility with RVV.
+The required features are:
 (((RVV-mini)))
 
 * Support for vector registers sufficiently wide to host the block-wise operations required by the algorithms supported by ACE;
@@ -4118,12 +4116,11 @@ If ACE is implemented including the operations on vector registers-and thus not 
 * Unit-strided vector loads and stores exclusively; and
 * Vector bitwise logical operations such as `vxor`, `vand`, and `vor`.
 
-Moreover,
+Moreover, floating-point, fixed-point, and most arithmetic vector operations are not required, and
+more complex operations for some corner-case cryptographic algorithms may be performed in GPRs, with results then inserted in vector registers via `vins`/`vext`.
 
-* floating-point, fixed-point, and most arithmetic vector operations are not required, and
-* more complex operations for some corner-case cryptographic algorithms may be performed in GPRs, with results then inserted in vector registers via `vins`/`vext`.
 
-RVV-mini must maintain full opcode compatibility with RVV to guarantee that ACE code runs unmodified on full RVV implementations.
+//to guarantee that ACE code runs unmodified on full RVV implementations.
 
 
 // ///////////////////////////////////////////////////////////////////////////////////////////
@@ -4143,7 +4140,7 @@ This offers stronger security by also preventing unauthorized `ace.import` opera
 
 The envisioned usage model employs ASID/VMID filtering at the User level, and also at the Supervisor level in high-performance systems where migration is not required (e.g., automotive applications). Cryptographic domain separation via the RCSK is intended for Virtual Machines, Supervisor Domains, Worlds, and TEEs within those contexts, as these demand stronger security guarantees.
 
-NOTE: Although the architecture does not prevent assigning unique RCSKs to U-mode processes, doing so would impose a substantial burden on system software due to per-context-switch `ecall` overhead.
+Although the architecture does not prevent assigning unique RCSKs to U-mode processes, doing so would impose a substantial burden on system software due to per-context-switch `ecall` overhead.
 Hardware support—such as automatic RCSK switching based on ASID/VMID, could alleviate this burden.
 However, such a mechanism is not currently under consideration due to its architectural complexity, inflexibility, and hardware cost.
 For example, it would necessitate secure management of large RCSK tables, including saving, restoring, and potentially migrating entire RCSK blocks.
