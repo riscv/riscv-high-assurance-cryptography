@@ -1989,7 +1989,7 @@ The following table defines the state names and numbers used by the algorithms i
 |   6   | ace_state_enc_last_block      | _enc_last_block_    | For the encryption path of authenticated encryption modes of operation to process the last block separately.
 |   7   | ace_state_dec_last_block      | _dec_last_block_    | For the decryption path of authenticated encryption modes of operation to process the last block separately.
 |   8   | ace_state_enc_tag_finalize    | _enc_tag_finalize_  | Finalize the tag computation for AE mode encryption.
-|   9   | ace_state_dec_tag_finalize    | _dec_tag_finalize_  | Finalize internal tag computation for AE mode decryption.
+|   9   | ace_state_dec_tag_finalize    | _dec_tag_finalize_  | Finalize internal tag computation for AE mode decryption, verify the value.
 |  10   | ace_state_encrypt             | _encrypt_           | In this state encryption is performed, and also absorption in a tag computation function if part of the algorithm.
 |  11   | ace_state_decrypt             | _decrypt_           | In this state decryption is performed, and also absorption in a tag computation function if part of the algorithm.
 |  12   | ace_state_set_aux_value       | _set_aux_value_     | Set a public/auxiliary value in an algorithm.
@@ -2146,7 +2146,7 @@ is in principle easy, it does display all the rules that are required to describ
 
 Parameters:::
 
-* `b` = block size (8|`b`). `IOLEN` must be a multiple of `b`.
+* `b` = block size (8|`b`). `IOLEN` must be a multiple of `b` (including `b`).
 * `k` = key size (8|`k`).
 
 Data Structures:::
@@ -2169,7 +2169,11 @@ Algorithm-Specific Functions:::
 
 State Machine:::
 
-* *States:* _initial_, _encrypt_, and _decrypt_
+* *States:*
+ ** _initial_: The CC is just initialised, or reset, and ready to start processing data.
+ ** _encrypt_: Encrypting blocks of input.
+ ** _decrypt_: Decrypting blocks of input.
+
 * *Allowed State Transitions:*
  ** From any state to state _encrypt_, if encryption is allowed, else the CR is *invalidated*.
  ** From any state to state _decrypt_, if decryption is allowed, else the CR is *invalidated*.
@@ -2177,9 +2181,13 @@ State Machine:::
  ** In state _initial_, no `ace.exec` instruction is allowed.
  ** In states _encrypt_ or _decrypt_, we can only issue Form A `ace.exec` instructions, i.e., +
      “`ace.exec OUTPUT, Kn|K[Xn], INPUT`.”
-  *** If the state is _encrypt_, then `OUTPUT = enc_blk(key, INPUT)`.
-  *** If the state is _decrypt_, then `OUTPUT = dec_blk(key, INPUT)`.
+  *** If the state is _encrypt_, then `OUTPUT <- enc_blk(key, INPUT)`.
+  *** If the state is _decrypt_, then `OUTPUT <- dec_blk(key, INPUT)`.
   *** If `IOLEN` > `b`, then “`ace.exec OUTPUT, Kn|K[Xn], INPUT`” encrypts/decrypts block-by-block.
+      Here, and in the rest of this document, this means from the blocks in the least significant positions to the most significant positions:
+      . `foreach(i from 0 to IOLEN-b by b)` {
+      ..   `OUTPUT[i+b-1:i] <- enc_blk(key, INPUT[i+b-1:i])`
+      . }
 
 //
 
@@ -2267,7 +2275,9 @@ Algorithm-Specific Functions:::
 * `tick_ctr()` -- updates the `ctr` (either by a modular increment or a LFSR).
 
 State Machine:::
-* *States:* _initial_, _operate_.
+* *States:
+  ** _initial_: The CC is just initialised, or reset, and ready to start producing a keystream.
+  ** _operate_: In this state the CC will produce a keystream.
 
 * *Allowed State Transitions:* any.
 
@@ -2375,7 +2385,7 @@ Algorithm-Specific Functions:::
 
 State Machine:::
 
-* *States:* _initial_, _encrypt_, and _decrypt_.
+* *States:* _initial_, _encrypt_, and _decrypt_ (defined as before, cf. <<ACE-ECB-mode>>).
 
 * *Allowed State Transitions:*
  ** _initial_ -> _encrypt_, if encryption is allowed, else the CR is *invalidated*.
@@ -2476,7 +2486,9 @@ Data Structures:::
 
 State Machine:::
 
-* *States:* _initial_, _set_aux_value_, _encrypt_, _decrypt_.
+* *States:*
+ * _initial_, _encrypt_, and _decrypt_ defined as before.
+ * _set_aux_value_, for setting the tweak value in the next encryption or decryption operation.
 
 * *Allowed State Transitions:*.
  ** _initial_ -> _set_aux_value_
@@ -2486,11 +2498,10 @@ State Machine:::
  * *Behavior:*
   ** In state _initial_:
    *** Upon entering the state, the `tweak` field is cleared.
-   *** Only `ace.state` operations are allowed.
-  ** Upon issuing a Form C ```ace.state Kn|K[Xn], #ace_state_set_aux_value, INPUT```, following is performed:
+  ** In each state, we can issue Form C `ace.state` instructions, i.e., ```ace.state Kn|K[Xn], #ace_state_set_aux_value, INPUT```, which perform:
    . `tweak` <- `INPUT`, and
-   . *Instead of transitioning to state _set_aux_value_, the state remains unchanged (can be _initial_, _encrypt_, or _decrypt_).*
-  ** In state _encrypt_, resp., _decrypt_, only ``ace.exec`` instructions of Form A are allowed.
+   . _Instead of transitioning to state set_aux_value, the state remains unchanged (can be initial, encrypt, or decrypt)._
+  ** In state _encrypt_, resp., _decrypt_, besides Form C `ace.state` instructions, only ``ace.exec`` instructions of Form A are allowed.
      “```ace.exec OUTPUT, Kn|K[Xn], INPUT```” encrypts, resp., decrypts `INPUT` into `OUTPUT`.
 
 No automatic update of the tweak value is provided by this algorithm.
@@ -2539,7 +2550,15 @@ Algorithm-Specific Functions:::
 
 State Machine:::
 
-* *States:* _initial_, _hash_absorb_, _encrypt_, _enc_tag_finalize_, _decrypt_, _dec_tag_finalize_, _hash_verify_, and _completed_.
+* *States:*
+ ** _initial_: Freshly initialized of reset.
+ ** _hash_absorb_: Process Associated Data (AD) into the tag.
+ ** _encrypt_: Encrypt the plaintext and absorb the ciphertext into the tag.
+ ** _enc_tag_finalize_: Finalize the encryption tag, prepare to return its value.
+ ** _decrypt_: Absorb the ciphertext into the tag and decrypt it.
+ ** _dec_tag_finalize_: Finalize the encryption tag and keep it internally.
+ ** _hash_verify_: Compare the tag against a user supplied value.
+ ** _completed_: The algorithm terminated correctly.
 
 * *Allowed State Transitions:*
  ** _initial_ -> _hash_absorb_.
@@ -2856,8 +2875,17 @@ Algorithm-Specific Functions:::
    (for instance, AES-GCM-SIV uses POLYVAL):
   . `tag <- tag xor INPUT`.
   . `tag <- Montmul(tag, hash_key)` or `Galoismul(tag, hash_key)`, depending on the algorithm.
+
 State Machine:::
-* *States:* _initial_, _set_aux_value_, _hash_absorb_, _enc_tag_finalize_, _dec_tag_finalize_, _encrypt_, _decrypt_, and _completed_.
+* *States:*
+ ** _initial_: Freshly initialized or reset.
+ ** _set_aux_value:_ Set the value of `nonce`.
+ ** _hash_absorb_: Set the SIV and process AD and, if encrypting, also the plaintext into the tag.
+ ** _encrypt_: Encrypt the plaintext.
+ ** _enc_tag_finalize_: Finalize the tag with the AD and PT lengths, prepare to return its value.
+ ** _decrypt_: Absorb the ciphertext into the tag and decrypt it.
+ ** _dec_tag_finalize_: Finalize the tag with the AD and CT lengths, then compare it against the `SIV`.
+ ** _completed_: The algorithm terminated.
 
 * *Allowed State Transitions:*
  ** _initial_ -> _set_aux_value_ -> _hash_absorb_.
@@ -2874,25 +2902,28 @@ State Machine:::
    . `nonce`, `ctr`, `tag`, `SIV <- 0`.
 
 ** Upon issuing a Form C ```ace.state Kn|K[Xn], #ace_state_set_aux_value, INPUT``` :
-  *** The values of `nonce` is set to `INPUT`.
+  *** The value of `nonce` is set to `INPUT`.
+  *** (If the instruction is repeated, there is no harm, since it just overwrites the `nonce` before any other operation is performed.)
 
-** Upon issuing a Form B ```ace.state Kn|K[Xn], #ace_state_set_aux_value```:
+** Upon issuing a Form A or B ```ace.state Kn|K[Xn], #ace_state_set_aux_value```:
   *** An invalid instruction error is raised and the CR is *invalidated*.
 
 ** Upon issuing a Form C ```ace.state Kn|K[Xn], #ace_state_hash_absorb, INPUT```:
   *** The values of `SIV` is set to `INPUT`.
-  *** This version of the instruction is to be used during decryption.
+  *** NB: This version of the instruction is to be used during decryption.
+      It can be invoked also during encryption, however, the `SIV` field will be overwritten anyway with the synthetic value.
+
+** Upon issuing a Form A ```ace.state Kn|K[Xn], #ace_state_hash_absorb```:
+  *** The `SIV` is not modified (it is assumed to be already zero).
+  *** NB: This version of the instruction is to be used during encryption.
+      If used during decryption, by leaving the `SIV` to zero it will most likely lead to an authentication error.
 
  ** Upon issuing a Form B ```ace.state Kn|K[Xn], #ace_state_hash_absorb, Xm```:
   *** An invalid instruction error is raised and the CR is *invalidated*.
 
- ** Upon issuing a Form A ```ace.state Kn|K[Xn], #ace_state_hash_absorb```:
-  *** The `SIV` is not modified (it is assumed to be already zero).
-  *** This version of the instruction is to be used during encryption.
-
  ** In state _hash_absorb_, only ``ace.exec`` instructions of Form B are allowed.
-   This instruction absorbs its `INPUT` in the `tag`, i.e., it performs `absorb(INPUT)`.
-If `IOLEN` is a multiple of `b`, `absorb()` is executed on each of the `IOLEN/b` blocks in `INPUT`.
+   This instruction absorbs its `INPUT` in the `tag`, i.e., it performs `absorb(INPUT)`. +
+   If `IOLEN` is a multiple of `b`, `absorb()` is executed on each of the `IOLEN/b` blocks in `INPUT`.
 
 ** In state _enc_tag_finalize_, only an {nbsp}``ace.exec``{nbsp} instruction of Form A, are allowed.
 The value
@@ -3122,7 +3153,22 @@ If S[`b`-1] == 0, then { `double(S)` <- `S << 1` } else { `double(S)` <- `(S << 
 
 State Machine:::
 
-* *States:* _initial_, _set_aux_value_, _hash_absorb_, _encrypt_, _enc_last_block_, _enc_tag_finalize_, _decrypt_, _dec_last_block_, _dec_tag_finalize_, _hash_verify_, and _completed_.
+* *States:* _initial_, _set_aux_value_, _hash_absorb_, _hash_finalize_, _encrypt_, _enc_last_block_, _enc_tag_finalize_, _decrypt_, _dec_last_block_, _hash_verify_, and _completed_.
+
+* *States:*
+ ** _initial_: Initialized or reset.
+ ** _set_aux_value:_ Set the length and the value of the nonce.1
+ ** _hash_absorb_: Set the tag length, and process the AD.
+ ** _hash_finalize_: Set the length of the final block of the AD and process it.
+
+ ** _encrypt_: Process the plaintext by absorbing it into the tag and encrypting it.
+ ** _enc_last_block_: Provide the length of the last block of the plaintext, then absorb it into the tag and encrypt it.
+ ** _enc_tag_finalize_: Return the tag.
+
+ ** _decrypt_: Process the ciphertext by decrypting it and absorbing the plaintext into the tag.
+ ** _dec_last_block_: Provide the length of the last block of the ciphertext, then decrypt it and absorb the plaintext into the tag.
+ ** _hash_verify_: Compare a user-provided value with the internally computed tag.
+ ** _completed_: The algorithm terminated.
 
 * *Allowed State Transitions:*
  ** _initial_ -> _set_aux_value_ -> _hash_absorb_ -> _hash_finalize_
@@ -3286,11 +3332,11 @@ If `last_blk_len` is zero, only an ``ace.exec`` instruction of Form D, “```ace
 +
 For any value of `last_blk_len`, the state is changed to _hash_verify_.
 
-** To complete the algorithm in the decryption branch, a Form C ``ace.state`` operation must be used to transition to state _hash_verify_.
-This operation also compares the `tag_len` least significant bits of `INPUT` with the `tag_len` least significant bits of `hash_P`:
+** To complete the algorithm in the decryption branch, a Form C ``ace.state`` operation must be used to (confirm the)
+transition to state _hash_verify_ and compares the `tag_len` least significant bits of `INPUT` with the `tag_len` least significant bits of `hash_P`:
 +
 --
-  . If the values match, then the state is changed to _completed_, and `ace.error` returns no error,
+  . If the values match, then the state is changed to _completed_, and `ace.error` is set to no error,
   . else the state is changed to _completed_, and `ace.error` returns `ace_err_authentication`.
 --
 +
@@ -3433,7 +3479,7 @@ State Machine:::
 * *States:* _initial_ (0), _hash_absorb_, _hash_last_block_, _hash_finalize_, and _completed_.
 * *Allowed State Transitions:*
  ** _initial_ -> _hash_absorb_.
- ** _hash_absorb_ -> , _hash_last_block_ -> _hash_finalize_ -> _completed_.
+ ** _hash_absorb_ -> _hash_last_block_ -> _hash_finalize_ -> _completed_.
  ** From any state to state _initial_.
 * *Behavior:*
  ** In state _initial_:
