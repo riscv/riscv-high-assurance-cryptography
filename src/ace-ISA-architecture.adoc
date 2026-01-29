@@ -294,22 +294,24 @@ These key types are encoded as follows:
 |===
 | Value | Description
 |   0   | Explicit value.
-|   1   | The key comes from an internal, system specific System Keys Table (SKT). For each algorithm as specified in <<ACE-algorithms>>, the part of the content that normally contains the key(s) is replaced by a 64-bit value which is an index into the (SKT)-for both Initialization Input and the SCCs. The actual value of the key is never included in exported content. For threshold implementations, ACE may copy the key material from the SKT into the CR and expand it into multiple shares.
-|   2   | Internally generated key.  System specific.  In the Initialization Input, the part of the content that normally contains the key(s) is replaced by a “recipe” in a system-specific format. The format is not specified by the ISA and may not be portable to other systems. Once the key material has been internally generated, the value is included in the SCC as part of the content—not the “recipe”—as for any other key(s) for the same specified algorithm.  The Key_Type field of the metadata in all representations of the CC, will keep the value 2.
+|   1   | System Key.
+|   2   | Internally generated key.
 |   3   | Invalid.
 |===
 --
 +
+*System Keys* are given by an index into an internal, system specific System Keys Table (SKT). For each algorithm as specified in <<ACE-algorithms>>, the part of the content that normally contains the key(s) is replaced by its index into the SKT-for both Initialization Input and the SCCs. The actual value of the key is never included in exported content. For threshold implementations, ACE may copy the key material from the SKT into the CR and expand it into multiple shares.
++
+*Internally generated keys* are also system-specific. In the Initialization Input, the key material is replaced by a system-specific “recipe”, which is not defined by the ISA and may be non-portable. After internal key generation, the actual key value—not the recipe—is stored in the SCC content, consistent with other keys for the same algorithm. The Key_Type field in the metadata remains 2 across all CC representations.
 
 //
 State_Number field::: {empty}
 +
 --
-The value of the State_Number Field must be zero in the initialization data.
-Three values are defined for *all* algorithms: 0, 14, and 15, for the states _initial_, _invalidated_, and _completed_.
-These states denote CCs that are ready to perform operations, that have been put into an invalid state, or that have completed their operations.
+The State_Number field must be zero in the Initialization Input.
+Three values are architected for all algorithms: 0, 14, and 15, representing the _initial_, _invalidated_, and _completed_ states, respectively. These denote a CC that is ready to operate, has been invalidated, or has finished its operations.
 
-If the algorithm encoded in the CC has at most 16 states (including _initial_, _completed_, and _invalidated_), then this number is stored in this field, otherwise an algorithm-specific representation is used in the content, and this field only admits the values 0, 14, 15, and 1, the latter being a placeholder for any other operational state. The values used in the algorithms defined in this specification are listed in <<ACE-state-constants>>.
+If an algorithm defines 16 or fewer states (including _initial_, _completed_, and _invalidated_), the current state number is stored directly in this field. For algorithms with more than 16 states, an algorithm-specific representation is used in the CC content, and the State_Number field is restricted to the values 0, 1, 14, and 15, where 1 serves as a placeholder for any operational state other than the three architected ones. The state values for algorithms defined in this specification are listed in <<ACE-state-constants>>.
 --
 +
 
@@ -389,7 +391,8 @@ Format of SCC:::
 `bytes{nbsp}[{nbsp}20 .. 31{nbsp}{nbsp}{nbsp}]{nbsp}{nbsp}` Tag produced by the encryption method (96 bits). +
 `bytes{nbsp}[{nbsp}32 .. u+31{nbsp}]{nbsp}{nbsp}` Encrypted serialized content of the CR, with a byte length of `u`.
 
-Both metadata and the serialization of the content are authenticated, but only the latter is encrypted (the method is described in <<ACE-SCC-AEAD>>).
+Both metadata and the serialization of the content are authenticated, but only the latter is encrypted.
+The AEAD method used for this purpose is described in <<ACE-SCC-AEAD>>).
 
 The metadata section of an SCC follows the same fixed architectural format as for the corresponding section of the Initialization Input.
 The content format—and consequently its length—is algorithm-specific (cf.{nbsp}<<ACE-algorithms>>) and is determined solely by the Algorithm and Key_Type fields in the metadata as well, but in general differs from the content section of the Initialization Input.
@@ -397,8 +400,7 @@ The content format—and consequently its length—is algorithm-specific (cf.{nb
 [[ACE-CSR]]
 ==== CSRs
 
-ACE extends `*status` and `misa`, and adds up to 26 new CSRs to manage its execution environment.
-They are listed in <<ACE-CSRs-table>>.
+ACE extends `*status` and `misa`, and adds up to 26 new CSRs, which are listed in <<ACE-CSRs-table>>.
 
 [[ACE-CSRs-table]]
 .New ACE CSRs
@@ -1196,12 +1198,12 @@ The notation `K[Xd]`, for a GPR `Xd`, refers to the CR whose number is contained
 and `Kn|K[Xn]` means that there are two different encodings for when the CR number is passed as a 5-bit immediate (`Kn`) or via the value of `Xn`.
 When a GPR is used to index a CR, use of the zero register `X0` is reserved and results in an illegal instruction exception.
 
-For each instruction, we specify whether
+For each instruction, we specify whether:
 
-* it _possibly modifies state_,
-* it is _usage-controlled_,
-* it is _trappable_, i.e., can be implemented by privileged code as trap-and-emulate, and whether
-* the execution of the instruction itself can be _interrupted_, for instance by context switches or page faults, to be resumed or restarted later.
+* It _possibly modifies state_,
+* It is _usage-controlled_,
+* It is _trappable_, i.e., can be implemented by privileged code as trap-and-emulate, and whether
+* The execution of the instruction itself can be _interrupted_, for instance by context switches or page faults, to be resumed or restarted later.
 
 NOTE: Trappability refers only on the CPU-side of the implementation and it is a distinct concept from _custom implementations of primitives within the ACE unit_.
 Implementers may, for instance, incorporate a secure CPU with updatable firmware to support new primitives.
@@ -1442,6 +1444,7 @@ Usage-controlled: *YES*. +
 Trappable: *NO*. +
 Interruptible: See interruptibility rules in <<ACE-generic-rules>>.
 
+//
 
 [[ACE-instruction-state]]
 ==== ace.state
@@ -1450,9 +1453,9 @@ The `ace.state` instruction admits three Forms, namely
 (((ACE, instruction, ace.state)))
 
 [upperalpha]
-. `ace.state Kd|K[Xd], #immed7{nbsp}{nbsp}{nbsp}{nbsp}`, with no auxiliary input.
-. `ace.state Kd|K[Xd], #immed7, Xs`, with an auxiliary input in a GPR.
-. `ace.state Kd|K[Xd], #immed7, Vs`, with an auxiliary input in a vector register.
+. `ace.state Kd|K[Xd], #immed7{nbsp}{nbsp}{nbsp}{nbsp}{nbsp}{nbsp}` with no auxiliary input.
+. `ace.state Kd|K[Xd], #immed7, Xs{nbsp}{nbsp}` with an auxiliary input in a GPR.
+. `ace.state Kd|K[Xd], #immed7, Vs{nbsp}{nbsp}` with an auxiliary input in a vector register.
 
 Encoding::
 `ace.state` is an R-type instruction.
@@ -1473,15 +1476,15 @@ Encoding::
 ....
 +
 Bit `r` (i.e., bit 15) is 0 if the context is encoded as an immediate, and 1 if a GPR is used to reference it. +
-Bit `v` (i.e., bit 16) is 0 for Forms A and B and 1 for Form C.
-Bit `g` (i.e., bit 17) is used to distinguish Form A, with `g` = 0, from Form B, with `g` = 1.
+Bit `v` (i.e., bit 16) is 0 for Forms A and B and 1 for Form C. +
+Bit `g` (i.e., bit 17) is used to distinguish Form A, with `g` = 0, from Form B, with `g` = 1. +
 The value (`g`,`v`) = (1,1) is currently an invalid instruction and reserved for future use.
 
 Description::
-`Kd` or `K[Xd]` is the CR whose state is to be set. +
-The `#immed` operand is a constant from the set of admissible values defined for each algorithm, used to manage the algorithm's internal state machine when additional states are required. +
-The new state number, if allowed, is written into the State_Number field of the metadata, unless the algorithm requires more than 16 states, in which case an ad-hoc field must be defined in the context (for both internal representation and SCCs). +
-`Xs` or `Vs` is a register that contains an auxiliary parameter for the state machine.
+`Kd` or `K[Xd]` is the CR whose state is to be set.
+The `#immed` operand is a constant from the set of admissible values defined for each algorithm, used to manage the algorithm's internal state machine when additional states are required.
+The new state number, if allowed, is written into the State_Number field of the metadata, unless the algorithm requires more than 16 states, in which case an ad-hoc field must be defined in the context (for both internal representation and SCCs).
+`Xs` or `Vs` is a register that contains an auxiliary input for the state machine.
 
 Properties::
 Possibly modifies state: *YES*. +
@@ -1493,6 +1496,28 @@ The state numbers used in this specification are defined in <<ACE-state-constant
 
 It is in general allowed to repeat `ace.state` instructions to the current state, provided that the correct form of the instruction is used.
 When the algorithm needs to prevent this, it will automatically transition to a different state after `ace.state`.
+
+//
+
+[[ACE-instruction-error]]
+==== ace.error
+
+`ace.error Xd`
+(((ACE, instruction, ace.error)))
+
+Description::
+The ACE Unit may be in an error state due to the previous operation.
+The corresponding error code is written into GPR `Xd`.
+This is implemented as a read from CSR `aceerror`, which may cause the hart to wait if the error code is not yet available (cf.{nbsp}<<ACE-CSR-ace-error>>).
+The error code list is architected and given in <<ACE-error-codes>>.
+
+Properties::
+Possibly modifies state: *NO*. +
+Usage-controlled: *NO*. +
+Trappable: *NO*. +
+Interruptible: *NO*.
+
+//
 
 [[ACE-instruction-size]]
 ==== ace.size
@@ -1608,97 +1633,6 @@ Same as `ace.size`.
 
 //
 
-[[ACE-instruction-clone]]
-==== ace.clone
-
-`ace.clone Kd|K[Xd], Ks|K[Xs]`
-(((ACE, instruction, ace.clone)))
-
-Encoding::
-The instruction is encoded using the Form D' `ace.exec` encoding, and is thus an R-type instruction.
-+
-[wavedrom, , svg]
-....
-{reg:[
-    { bits:  7, name: 0x5b, attr: ['custom-2'] },
-    { bits:  5, name: 'Kd|K[Xd]' },
-    { bits:  3, name: 0x3, attr: ['ace.exec','(Form D\')'] },
-    { bits:  5, name: 'Ks|K[Xs]' },
-    { bits:  5, name: 0x3, attr: ['ace.clone'] },
-    { bits:  1, name: 0x0 },
-    { bits:  2, name: 'R' },
-    { bits:  4, name: 0x0 },
-]}
-....
-+
-Bits [27:26], i.e., field `R`, take the following values depending on how the CRs are given:
-+
-[upperalpha]
-. `00`{nbsp}{nbsp} if the source and the output CRs are both encoded as immediates.
-. `01`{nbsp}{nbsp} if the source CR is selected using a GPR and the output CR is encoded as an immediate.
-. `10`{nbsp}{nbsp} if the source CR is encoded as immediate and the output CR is selected using a GPR.
-. `11`{nbsp}{nbsp} if the source and the output CRs are both selected using the values of GPRs.
-
-(The first digit is bit 27 and the second digit is bit 26.)
-
-// Comment to ensure proper indentation in the next Description
-
-Properties::
-Possibly modifies state: *YES*. +
-Usage-controlled: *NO*. +
-Trappable: *YES*, it can be implemented as an export followed by an import in a handler. +
-Interruptible: *NO*.
-
-Description::
-Clones source CR `Ks` (or the CR indexed by `Xs`) into destination CR `Kd` (or into the CR indexed by `Xd`).
-
-NOTE: The `ace.clone` instruction is an optimization for the sequence `ace.export` followed by `ace.import`. While reusing cryptographic state (e.g., encrypting with the same counter) can enable certain attacks, this risk cannot be eliminated by omitting `ace.clone`, as a state can be exported and re-imported multiple times.
-
-[[ACE-instruction-derive]]
-==== ace.derive (optional)
-
-`ace.derive Kd|K[Xd], Ks1|K[Xs1]` +
-`ace.derive Kd|K[Xd], Ks1|K[Xs1], Vs2`
-(((ACE, instruction, ace.derive)))
-
-Encoding::
-The encoding is a variant of Form A `ace.exec` encoding, and is thus an R-type instruction.
-+
-[wavedrom, , svg]
-....
-{reg:[
-    { bits:  7, name: 0x5b, attr: ['custom-2'] },
-    { bits:  5, name: 'Kd|K[Xd]' },
-    { bits:  3, name: 0x0, attr: ['ace.exec (Form A)'] },
-    { bits:  5, name: 'Ks1|K[Xs1]' },
-    { bits:  5, name: 'Vs2', attr: ['use for auxiliary input','no auxiliary input (zero field)'] },
-    { bits:  1, name: 0x1 },
-    { bits:  2, name: 'R' },
-    { bits:  1, name: 'z', attr: [0x1,0x0] },
-    { bits:  3, name: 0x0 },
-]}
-....
-+
-This encoding differs from Form A `ace.exec` by having bit 25 set to 1.
-Bits [27:26], i.e., field `R`, is encoded exactly as for `ace.clone` (cf.{nbsp}<<ACE-instruction-clone>>).
-Bit 28 determines whether a vector register (or register group) is used to pass an auxiliary parameter to the key derivation mechanism or not.
-
-Description::
-The instruction is used to derive a new context from an existing one, with its own opaque key material.
-It is similar to `ace.clone`, but the derived context is not a copy of the source context,
-rather, it is a new context that is derived from it, for instance, through a key derivation mechanism.
-This instruction can be used multiple times, to generate multiple derived contexts.
-+
-The first variant of `ace.derive` has the same semantics of the second variant if the input/output buffer is not empty
-(cf.{nbsp}<<ACE-usage-input-output>>).
-
-
-Properties::
-Possibly modifies state: *YES*. +
-Usage-controlled: *YES*. +
-Trappable: *NO*. +
-Interruptible: *NO*.
-
 [[ACE-instruction-restrict]]
 ==== ace.restrict
 
@@ -1784,28 +1718,101 @@ The ability to perform such customizations saves both time and computational res
 
 //
 
-[[ACE-instruction-error]]
-==== ace.error
+[[ACE-instruction-clone]]
+==== ace.clone
 
-`ace.error Xd`
-(((ACE, instruction, ace.error)))
+`ace.clone Kd|K[Xd], Ks|K[Xs]`
+(((ACE, instruction, ace.clone)))
 
-Description::
-The ACE Unit may be in an error state due to the previous operation.
-The corresponding error code is written into GPR `Xd`.
-This is implemented as a read from CSR `aceerror`, which may cause the hart to wait if the error code is not yet available (cf.{nbsp}<<ACE-CSR-ace-error>>).
-The error code list is architected and given in <<ACE-error-codes>>.
+Encoding::
+The instruction is encoded using the Form D' `ace.exec` encoding, and is thus an R-type instruction.
++
+[wavedrom, , svg]
+....
+{reg:[
+    { bits:  7, name: 0x5b, attr: ['custom-2'] },
+    { bits:  5, name: 'Kd|K[Xd]' },
+    { bits:  3, name: 0x3, attr: ['ace.exec','(Form D\')'] },
+    { bits:  5, name: 'Ks|K[Xs]' },
+    { bits:  5, name: 0x3, attr: ['ace.clone'] },
+    { bits:  1, name: 0x0 },
+    { bits:  2, name: 'R' },
+    { bits:  4, name: 0x0 },
+]}
+....
++
+Bits [27:26], i.e., field `R`, take the following values depending on how the CRs are given:
++
+[upperalpha]
+. `00`{nbsp}{nbsp} if the source and the output CRs are both encoded as immediates.
+. `01`{nbsp}{nbsp} if the source CR is selected using a GPR and the output CR is encoded as an immediate.
+. `10`{nbsp}{nbsp} if the source CR is encoded as immediate and the output CR is selected using a GPR.
+. `11`{nbsp}{nbsp} if the source and the output CRs are both selected using the values of GPRs.
+
+(The first digit is bit 27 and the second digit is bit 26.)
+
+// Comment to ensure proper indentation in the next Description
 
 Properties::
-Possibly modifies state: *NO*. +
+Possibly modifies state: *YES*. +
 Usage-controlled: *NO*. +
+Trappable: *YES*, it can be implemented as an export followed by an import in a handler. +
+Interruptible: *NO*.
+
+Description::
+Clones source CR `Ks` (or the CR indexed by `Xs`) into destination CR `Kd` (or into the CR indexed by `Xd`).
+
+NOTE: The `ace.clone` instruction is an optimization for the sequence `ace.export` followed by `ace.import`. While reusing cryptographic state (e.g., encrypting with the same counter) can enable certain attacks, this risk cannot be eliminated by omitting `ace.clone`, as a state can be exported and re-imported multiple times.
+
+[[ACE-instruction-derive]]
+==== ace.derive
+
+`ace.derive Kd|K[Xd], Ks1|K[Xs1]` +
+`ace.derive Kd|K[Xd], Ks1|K[Xs1], Vs2`
+(((ACE, instruction, ace.derive)))
+
+Encoding::
+The encoding is a variant of Form A `ace.exec` encoding, and is thus an R-type instruction.
++
+[wavedrom, , svg]
+....
+{reg:[
+    { bits:  7, name: 0x5b, attr: ['custom-2'] },
+    { bits:  5, name: 'Kd|K[Xd]' },
+    { bits:  3, name: 0x0, attr: ['ace.exec (Form A)'] },
+    { bits:  5, name: 'Ks1|K[Xs1]' },
+    { bits:  5, name: 'Vs2', attr: ['use for auxiliary input','no auxiliary input (zero field)'] },
+    { bits:  1, name: 0x1 },
+    { bits:  2, name: 'R' },
+    { bits:  1, name: 'z', attr: [0x1,0x0] },
+    { bits:  3, name: 0x0 },
+]}
+....
++
+This encoding differs from Form A `ace.exec` by having bit 25 set to 1.
+Bits [27:26], i.e., field `R`, is encoded exactly as for `ace.clone` (cf.{nbsp}<<ACE-instruction-clone>>).
+Bit 28 determines whether a vector register (or register group) is used to pass an auxiliary parameter to the key derivation mechanism or not.
+
+Description::
+The instruction is used to derive a new context from an existing one, with its own opaque key material.
+It is similar to `ace.clone`, but the derived context is not a copy of the source context,
+rather, it is a new context that is derived from it, for instance, through a key derivation mechanism.
+This instruction can be used multiple times, to generate multiple derived contexts.
++
+The first variant of `ace.derive` has the same semantics of the second variant if the input/output buffer is not empty
+(cf.{nbsp}<<ACE-usage-input-output>>).
+
+
+Properties::
+Possibly modifies state: *YES*. +
+Usage-controlled: *YES*. +
 Trappable: *NO*. +
 Interruptible: *NO*.
 
 //
 
 [[ACE-instruction-input]]
-==== ace.input (optional)
+==== ace.input
 
 `ace.input %offset(Xs), Xl`
 (((ACE, instruction, ace.input)))
@@ -1839,7 +1846,7 @@ Their usage is explained in <<ACE-usage-input-output>>.
 //
 
 [[ACE-instruction-output]]
-==== ace.output (optional)
+==== ace.output
 
 `ace.output %offset(Xd), Xl`
 (((ACE, instruction, ace.output)))
@@ -2050,9 +2057,7 @@ The ordering of the instructions in a replacement sequence is enforced by the ar
 Not properly following the instruction ordering raises an invalid instruction exception.
 `acesequence` can be saved and restored by privileged code together with `acestart`.
 
-The internal input/output buffer is not part of any CR. It is architectural, i.e., per-hart.
-In fact, `ace.output` can be used to save the contents of the buffer, and `ace.input` can be used to restore it freely as long as `aceactivecr` takes the value 32.
-Also, these operations start at the offset specified in `acestart`, so the state of the buffer can easily be saved and restored with the same approach used for vectors.
+The internal input/output buffer is not part of any CR. It is architectural, i.e., per-hart. In fact, `ace.output` can be used to save the contents of the buffer, and `ace.input` can be used to restore it freely as long as `aceactivecr` takes the value 32. Also, these operations start at the offset specified in `acestart`, so the state of the buffer can easily be saved and restored with the same approach used for vectors.
 
 //
 
@@ -3148,7 +3153,8 @@ State Machine:::
 ** In state _set_aux_value_, only  ``ace.exec`` instructions of Form B, “```ace.exec Kn|K[Xn], INPUT```”, are allowed, whereby `N` is set to `INPUT`, namely
      `N <- zeros(u-N_len) @ INPUT[N_len-1:0]`
   *** If “```ace.exec Kn|K[Xn], INPUT```,” is repeated, it will rewrite `N`.
-  *** If no such `ace.exec` is issued, `N` remains zero. This condition results in an error at a later state transition.
+  *** If no such `ace.exec` is issued, `N` is not changed, which means that its msb is 1.
+      This condition results in an error when transitioning to _hash_absorb_.
 
 ** To move to _hash_absorb_, a Form A `ace.state` must be used, where the auxiliary argument `Xs` sets the tag length `tag_len`.
   *** If this argument (interpreted as an unsigned value) is larger than `b` or `0` (the latter occurs also if `X0` is passed as the auxiliary argument), an invalid instruction error is raised, and the CR is *invalidated*.
@@ -3209,7 +3215,7 @@ If `last_blk_len` == 0, however, no `ace.exec` can be executed, and only an `ace
 --
 +
 ** In state _encrypt_, only ``ace.exec`` instructions of Form A are allowed:
-   “```ace.exec OUTPUT, Kn|K[Xn], INPUT```” absorbs the plaintext `INPUT` into the `tag` an encrypts `INPUT` into `OUTPUT`, namely:
+   “```ace.exec OUTPUT, Kn|K[Xn], INPUT```” absorbs the plaintext `INPUT` into the `tag` and encrypts `INPUT` into `OUTPUT`, namely:
 +
 --
  . `L <- double(L)`
@@ -3222,7 +3228,7 @@ If `IOLEN > b`, the above operation sequence is executed `IOLEN/b` times, encryp
 
 ** To move to _enc_last_block_, a Form B `ace.state` instruction must be used to set the bit length of the final block of the plaintext in `last_blk_len`.
 
-** In state _enc_last_block_, only an ``ace.exec`` instruction of Form A “```ace.exec OUTPUT, Kn|K[Xn], INPUT```,” ,
+** In state _enc_last_block_, only an ``ace.exec`` instruction of Form A “```ace.exec OUTPUT, Kn|K[Xn], INPUT```,”
 are allowed if `last_blk_len` is nonzero.
 In this case, following operations are performed:
 +
@@ -3255,7 +3261,7 @@ On the other hand, if `last_blk_len` is zero, only an ``ace.exec`` instruction o
 +
 In both cases the state then transitions to _enc_tag_finalize_.
 
-** In state _enc_tag_finalize_, only an ``ace.exec`` instruction of Form C, “```ace.exec OUTPUT,Kn|K[Xn]```,” , are allowed, which
+** In state _enc_tag_finalize_, only an ``ace.exec`` instruction of Form C, “```ace.exec OUTPUT,Kn|K[Xn]```,” is allowed, which
 performs `OUTPUT <- zeros(b-tag_len) @ hash_P[tag_len-1:0]`.
 
 ** In state _decrypt_, only ``ace.exec`` instructions of Form A are allowed.
