@@ -101,9 +101,10 @@ This list is an early draft.
 === Programmer-Visible Architectural State
 
 The recommended way to implement ACE is to implement the V extension, or at least a certain subset of it, as defined in <<ACE-V-dependency>>, which we call RVV-mini.
-
-It is allowed to implement ACE without V or RVV-mini, by exclusively using the instructions `ace.input` and `ace.output` to provide input data and a buffer for output to and from the instructions that may use vectors.
-These are, currently, `ace.exec` (cf.{nbsp}<<ACE-instruction-exec>>) and `ace.derive` (cf.{nbsp}<<ACE-instruction-derive>>).
+It is possible to implement ACE without V or RVV-mini, by exclusively using the instructions `ace.input` and `ace.output` to provide input data and a buffer for output to and from the instructions that may use vectors, as described in <<ACE-usage-input-output>>.
+// These are, currently, `ace.exec` (cf.{nbsp}<<ACE-instruction-exec>>),
+// `ace.state` (cf.{nbsp}<<ACE-instruction-state>>),
+// and `ace.derive` (cf.{nbsp}<<ACE-instruction-derive>>).
 
 [comment]
 --
@@ -177,14 +178,14 @@ CRs differ from conventional register in several ways:
   `ace.import` (cf.{nbsp}<<ACE-instruction-import>>).
   In brief:
 ** `ace.init` is a load-type instruction that reads clear text into a CR, but there is no corresponding “store” instruction, i.e.,
-    we can write clear data into a CR but not retrieve it as such;
-** `ace.export` uses a random nonce, so repeated export of the same content may result in different ciphertexts; and
+    we can write clear data into a CR but not retrieve it as such.
+** `ace.export` exports a CR using an AEAD algorithm. The size of the exported data may be different from the data read by `ace.init` and the internal state of the CR; and
 ** `ace.import` may fail if the authentication tag cannot be verified.
 * Unlike conventional registers, which always contain a value, CRs can be _unconfigured_, meaning they may hold no information.
   This is achieved by using the `ace.clear` instruction (cf.{nbsp}<<ACE-instruction-clear>>).
 * The amount of the capacity of the CRF used by a CR depends on the configured algorithm.
   Two CRs can use different amounts of capacity.
-* ACE instructions can refer to CRs directly, i.e., with a 5-bit immediate in the instruction encoding, but also indirectly, i.e., through a value in the range [0 .. 31] in a GPR. Indirectly accessing a CR that is outside the defined range ([.red]#currently [0 .. 31]#) raises a invalid instruction error.
+* ACE instructions can refer to CRs directly, i.e., with a 5-bit immediate in the instruction encoding, but also indirectly, i.e., through a value in a GPR. Indirectly accessing a CR that is outside the defined range raises a invalid instruction error.
 * Few instructions can use and possibly change the contents of the CRs.
   The most important ones are:
   ** `ace.exec`, used to perform cryptographic operations on data blocks according to the algorithm configured in a CR; and
@@ -384,9 +385,8 @@ Format of SCC:::
 (((Cryptographic Context, SCC plaintext)))
 `bytes{nbsp}[{nbsp}{nbsp}0 .. 3{nbsp}{nbsp}{nbsp}{nbsp}]{nbsp}{nbsp}` Metadata, non-encrypted part (includes Algorithm and Key_Type). +
 `bytes{nbsp}[{nbsp}{nbsp}4 .. 7{nbsp}{nbsp}{nbsp}{nbsp}]{nbsp}{nbsp}` Metadata, encrypted part. +
-`bytes{nbsp}[{nbsp}{nbsp}8 .. 19{nbsp}{nbsp}{nbsp}]{nbsp}{nbsp}` Nonce used in the encryption (96 bits). +
-`bytes{nbsp}[{nbsp}20 .. 31{nbsp}{nbsp}{nbsp}]{nbsp}{nbsp}` Tag produced by the encryption method (96 bits). +
-`bytes{nbsp}[{nbsp}32 .. u+31{nbsp}]{nbsp}{nbsp}` Encrypted serialized content of the CR, with a byte length of `u`.
+`bytes{nbsp}[{nbsp}{nbsp}8 .. 23{nbsp}{nbsp}{nbsp}]{nbsp}{nbsp}` SIV produced by the encryption method (128 bits). +
+`bytes{nbsp}[{nbsp}24 .. u+23{nbsp}]{nbsp}{nbsp}` Encrypted serialized content of the CR, with a byte length of `u`.
 
 Both metadata and the serialization of the content are authenticated, but only the latter is encrypted.
 The AEAD method used for this purpose is described in <<ACE-SCC-AEAD>>).
@@ -713,7 +713,7 @@ Unlike the vector extension’s `vstart`, which tracks element indices, ACE has 
 `acestart` therefore records a byte offset.
 For a load-type instruction (e.g., `ace.init`, `ace.import`, `ace.input`), this offset indicates how many bytes of input have already been read and processed.
 For a store-type instruction (e.g., `ace.export`, `ace.output`), it indicates how many bytes of output have already been computed and written.
-The value includes all payload bytes (metadata, content, nonce, tag) and accommodates piecewise execution via traps (cf.{nbsp}<<ACE-trappable-insns-support>>).
+The value includes all sections of the output, i.e., metadata, SIV, and content, and accommodates piecewise execution via traps (cf.{nbsp}<<ACE-trappable-insns-support>>).
 
 This register is typically written by hardware.
 Software may safely write 0 to fully restart an operation, and the register can be saved and restored during context switches.
@@ -730,7 +730,7 @@ _A single `acestart` value suffices due to the way the init/import/export instru
 * `_ace.init_` _and_ `_ace.import_` _use a single pass: all blocks are processed sequentially._
 * `_ace.export_` _uses two passes. However, the first pass to compute the SIV is purely internal, and never accesses memory, so page faults cannot occur.
 This first pass is uninterruptible.
-The second pass writes metadata, nonce, SIV, then encrypted content to memory.
+The second pass writes metadata, the SIV, and then the content to memory.
 Only the second pass can cause page faults and may require resumption._
 
 This design obviates the need to separate data transfer from cryptographic processing during import and export operations. A separate transfer phase would require buffering the entire input within the ACE unit before processing, increasing internal resource requirements, whereas the current architecture can process data inline and is loaded with minimal overhead.
@@ -872,10 +872,10 @@ all receiving end points, whether they are the M-mode FW of another trusted devi
 The implementation must keep track of which CSRs in the group have been written to and which CSRs have not,
 and only change the key when the entire group has been written to.
 
-NOTE: This can be done using a bitmap with one bit per CSR in the group.
-The bitmap is cleared upon entering M-mode.
-When the __i__-th CSR in the group is written to, the __i__-th bit of the bitmap is set.
-When the bitmap is all ones, the key is set with the values written to all CSRs in the group, and the bitmap is cleared.
+// NOTE: This can be done using a bitmap with one bit per CSR in the group.
+// The bitmap is cleared upon entering M-mode.
+// When the __i__-th CSR in the group is written to, the __i__-th bit of the bitmap is set.
+// When the bitmap is all ones, the key is set and the bitmap is cleared.
 
 ===== `maceOSSecret` group
 
@@ -949,10 +949,12 @@ NOTE: The software in each World/Supervisor Domain is normally responsible to ge
 [[ACE-format-configuration]]
 === Semantics of Initialization, Export and Import of Cryptographic Contexts
 
-In the pseudocode listings of this section, `UNINTERRUPTIBLE_BLOCK_START` marks the start of an uninterruptible code block, and `UNINTERRUPTIBLE_BLOCK_END` its end.
-When an interrupted init, export or import or operation is resumed, it will resume at the point of interruption.
+Initialization, export and import instructions can only be interrupted in the places where reads from or writes to external memory may be interrupted, for instance because of memory access exceptions. In the pseudocode listings of this section, these memory read or write operations are explicitly marked, together with the corresponding range of values for `acestart`.
 
-Anything before the first `UNINTERRUPTIBLE_BLOCK_START` consists only of type declarations and possibly information that is easy to reconstruct.
+The instructions may resume from the point of interruption only if the control flow is returned to them immediately after the interrupt handler has completed.
+
+In case of a context switch, initialization, export and import of CCs must be restarted when control flow is returned to the interrupted process.
+Furthermore, the CR being initialized or into which a CC is being imported must be cleared and not saved by the (more) privileged code.
 
 The Data Structures of the algorithms (such as those defined in <<ACE-algorithms>>) also define the `content[]` array in the pseudocode.
 `content[]` offers a _view_ of (certain fields of the) the content of a CR as if the latter were serialized as in the plaintext format of the content in an SCC, such that any change in one, except for the non-serialized fields, is reflected in the other.
@@ -962,7 +964,7 @@ However, any read or write to `content[]` must bijectively map to the underlying
 [[ACE-init]]
 ==== Initialization
 
-We start with the algorithm that reads an initialization input and uses it to initialize a CR. The algorithm is as follows:
+We start with the algorithm that reads an initialization input and uses it to initialize a CR.
 
 [[ACE-init-listing]]
 .Initializing a CR with metadata and content
@@ -970,42 +972,32 @@ We start with the algorithm that reads an initialization input and uses it to in
 ----
 M : array of bytes // from memory
 
-// next instruction preemptible, with `acestart` from 0 to 7
-UNINTERRUPTIBLE_BLOCK_START
-|  metadata : bits(64) = M[0 .. 7]
-|  if (there is not enough memory for the algorithm encoded in the metadata)
-|     error ace_err_insufficient_memory
-|  z ← size(content according to metadata);
-|  content ← internal buffer for z bytes;
-|  num_blocks = ceil(z / 16);
-|  last_block_fractional : boolean ← (z % 16 != 0);
-UNINTERRUPTIBLE_BLOCK_END
+// FOLLOWING MEMORY READ PREEMPTIBLE, `ACESTART` FROM 0 TO 7
+metadata : bits(64) = M[0 .. 7]
+if (there is not enough memory for the algorithm encoded in the metadata)
+   error ace_err_memory
+z ← size(content according to metadata);
+content ← internal buffer for z bytes;
+num_blocks = ceil(z / 16);
+last_block_fractional : boolean ← (z % 16 != 0);
 
 foreach(i from 0 to num_blocks - 1) {
-  // next instruction preemptible, with `acestart` from 32+i*16 to 39+i*16 or 47+i*16
-  UNINTERRUPTIBLE_BLOCK_START
-  |  if ((i == num_blocks - 1) and last_block_fractional)
-  |     content[i*16 .. 7+i*16] ← M[8+i*16 .. 15+i*16];
-  |  else
-  |     content[i*16 .. 15+i*16] ← M[8+i*16 .. 23+i*16];
-  UNINTERRUPTIBLE_BLOCK_END
+   if ((i == num_blocks - 1) and last_block_fractional)
+      // FOLLOWING MEMORY READ PREEMPTIBLE, `ACESTART` FROM 8+i*16 TO 15+i*16
+      content[i*16 ..  7+i*16] ← M[8+i*16 .. 15+i*16];
+   else
+      // FOLLOWING MEMORY READ PREEMPTIBLE, `ACESTART` FROM 8+i*16 TO 23+i*16
+      content[i*16 .. 15+i*16] ← M[8+i*16 .. 23+i*16];
 }
-
-// if preempted here, `acestart` will be z
-UNINTERRUPTIBLE_BLOCK_START
-|  - Now the content can be deserialized: Keys may be converted into shares, and
-|  - any derived values not given in the initialization input will be computed here.
-UNINTERRUPTIBLE_BLOCK_END
 ----
 
 [[ACE-SCC-AEAD]]
 ==== AEAD Algorithm for SCC Export and Import
 
-The AEAD algorithm chosen to export CRs into SCCs is AES-GCM-SIV.
-We follow the definition of the algorithm from cite:[DBLP-journals-iacr-GueronLL17] and cite:[RFC8452].
-We define the Key Derivation and the DCSK Derivation functions
-before we describe the algorithms for
-SCC export (cf.{nbsp}<<ACE-SCC-export>>) and import (cf.{nbsp}<<ACE-SCC-import>>).
+The AEAD algorithm used to export CRs into SCCs is a slight modification of AES-GCM-SIV cite:[DBLP-journals-iacr-GueronLL17,RFC8452].
+We define the Key Derivation and the DCSK Derivation functions first.
+// before we describe the algorithms for
+// SCC export (cf.{nbsp}<<ACE-SCC-export>>) and import (cf.{nbsp}<<ACE-SCC-import>>).
 
 .RFC8452 Key Derivation
 []
@@ -1019,7 +1011,7 @@ function RFC8452_KeyDeriv(key) = {
 }
 ----
 
-.Derived Key Derivation
+.DCSK Derivation
 []
 ----
 function DCSK_KeyDeriv(key,L) = {
@@ -1036,60 +1028,44 @@ The generation of a SCC from a CR (cf.{nbsp}<<ACE-SCC-export>>) and the import o
 .Generation of the SCC from a CR Using AES-GCM-SIV (RFC8452)
 []
 ----
-metadata : bits(64); // from the CR
-N, SIV : bits(96);
+metadata : bits(64);              // from the CR
+SIV : bits(128);
 tmp : bits(128);
 enc_key : bits(256);
 auth_key : bits(128);
 content : array[z] of bytes,      // from the CR's metadata
-where z : int ← size(content);    // content is serialized, size derived from metadata
+where z : int ← size(content);    // content as serialized "view", size in bytes derived from metadata
 ASSERT(8 divides z);
 M : array[32 + z] of bytes;       // information
 let last_block_fractional : boolean ← z % 16 != 0;
 let num_blocks : int ← ceil(z / 16);
 
-UNINTERRUPTIBLE_BLOCK_START
-|  N ← random(96 bits);
-|
-|  if (metadata.Locality == 15) then
-|     CSK ← RCSK;
-|  else
-|     CSK ← DCSK_KeyDeriv(RCSK, LST[metadata.Locality]);
-|
-|  {enc_key, auth_key} = RFC8452_KeyDeriv(CSK);
-|
-|  - If some internal operations are needed to make the content available,
-|  - such as reconstructing threshold keys/values into a single share, these
-|  - must be computed at this point. Starting with the following POLYVAL operation
-|  - content will refer to the resulting data as architected for non-threshold
-|  - implementations.
-|
-|  tmp ← POLYVAL(auth_key, zeros(64) @ metadata @ content);
-|  SIV ← AESE(enc_key, 0 @ (tmp[126:0] xor (zeros(31) @ N)))) >> 32;
-UNINTERRUPTIBLE_BLOCK_END
+if (metadata.Locality == 15) then
+   CSK ← RCSK;
+else
+   CSK ← DCSK_KeyDeriv(RCSK, LST[metadata.Locality]);
 
-// preemptible here, with `acestart` from 0 to 15
-UNINTERRUPTIBLE_BLOCK_START
-|   M[0 .. 15] ← N[63:0]
-|                @ (metadata[63:32] xor AESE(enc_key, 1 @ SIV[94:0] @ zeros(32))[31:0])
-|                @  metadata[31:0];
-UNINTERRUPTIBLE_BLOCK_END
+{enc_key, auth_key} = RFC8452_KeyDeriv(CSK);
 
-// preemptible here, with `acestart` from 16 to 31
-UNINTERRUPTIBLE_BLOCK_START
-|   M[16 .. 31] ← SIV[95:0] @ N[95:64];
-UNINTERRUPTIBLE_BLOCK_END
+tmp ← POLYVAL(auth_key, zeros(64) @ metadata @ content[]);
+SIV ← AESE(enc_key, 0 @ tmp[126:0]));
+
+// FOLLOWING MEMORY WRITE PREEMPTIBLE, `ACESTART` FROM 0 TO 7
+M[0 .. 7] ← (metadata[63:32] xor AESE(enc_key, 1 @ SIV[126:0])[31:0])
+            @  metadata[31:0];
+
+// FOLLOWING MEMORY WRITE PREEMPTIBLE, `ACESTART` FROM 8 TO 23
+M[8 .. 23] ← SIV;
 
 foreach(i from 0 to num_blocks - 1) {
-  // next instruction preemptible, with `acestart` from 32+i*16 to 39+i*16 or 47+i*16
-  UNINTERRUPTIBLE_BLOCK_START
-  |  if ((i == num_blocks - 1) and last_block_fractional)
-  |     M[32+i*16 .. 39+i*16] ← content[i*16 .. 7+i*16]
-  |                             xor AESE(enc_key, 1 @ SIV[94:0] @ bin(i+1, 32))[63:0];
-  |  else
-  |     M[32+i*16 .. 47+i*16] ← content[i*16 .. 15+i*16]
-  |                             xor AESE(enc_key, 1 @ SIV[94:0] @ bin(i+1, 32));
-  UNINTERRUPTIBLE_BLOCK_END
+   if ((i == num_blocks - 1) and last_block_fractional)
+      // FOLLOWING MEMORY WRITE PREEMPTIBLE, `ACESTART` FROM 24+i*16 TO 31+i*16
+      M[24+i*16 .. 31+i*16] ← content[i*16 .. 7+i*16]
+         xor AESE(enc_key, 1 @ SIV[126:32] @ (SIV[31:0] + bin(i+1, 32) % 2**32)[63:0];
+   else
+      // FOLLOWING MEMORY WRITE PREEMPTIBLE, `ACESTART` FROM 24+i*16 TO 39+i*16
+      M[24+i*16 .. 39+i*16] ← content[i*16 .. 15+i*16]
+         xor AESE(enc_key, 1 @ SIV[126:32] @ (SIV[31:0] + bin(i+1, 32) % 2**32);
 }
 ----
 
@@ -1100,68 +1076,53 @@ foreach(i from 0 to num_blocks - 1) {
 M : array of bytes // from memory
 enc_key : bits(256);
 auth_key : bits(128);
-N, SIV : bits(96);
+SIV : bits(128);
+tag : bits(128);
 tmp : bits(128);
-tag : bits(96);
 
-// next instruction preemptible, with `acestart` from 0 to 7
-UNINTERRUPTIBLE_BLOCK_START
-|  metadata : bits(64) ← M[0 .. 7]
-|  if (there is not enough memory for the algorithm encoded in the metadata)
-|     error ace_err_insufficient_memory
-UNINTERRUPTIBLE_BLOCK_END
+// FOLLOWING MEMORY READ PREEMPTIBLE, `ACESTART` FROM 0 TO 7
+metadata : bits(64) ← M[0 .. 7]
+if (there is not enough memory for the algorithm encoded in the metadata)
+    error ace_err_insufficient_memory
 
-UNINTERRUPTIBLE_BLOCK_START
-|  z ← size(content according to metadata);
-|  content ← internal buffer for z bytes;
-|  num_blocks ← ceil(z / 16);
-|  last_block_fractional : boolean ← (z % 16 != 0);
-|
-|  if (metadata.Locality == 15) then
-|     CSK ← RCSK;
-|  else
-|     CSK ← DCSK_KeyDeriv(RCSK, LST[metadata.Locality]);
-|
-|  {enc_key, auth_key} = RFC8452_KeyDeriv(CSK);
-|
-|  // next instruction preemptible, with `acestart` from 8 to 19
-|  N ← M[8 .. 19];
-UNINTERRUPTIBLE_BLOCK_END
+z ← size(content according to metadata);
+content[] ← array[z] of bytes;
+num_blocks ← ceil(z / 16);
+last_block_fractional : boolean ← (z % 16 != 0);
 
-// next instruction preemptible, with `acestart` from 20 to 31
-UNINTERRUPTIBLE_BLOCK_START
-|  SIV ← M[20 .. 31];
-|  metadata[63:32] ← metadata[63:32]
-|                    xor AESE(enc_key, 1 @ SIV[94:0] @ zeros(32))[31:0];
-|  tmp ← zeros(64) @ metadata;
-|  tmp ← Montmul(tmp, auth_key);
-UNINTERRUPTIBLE_BLOCK_END
+if (metadata.Locality == 15) then
+    CSK ← RCSK;
+else
+    CSK ← DCSK_KeyDeriv(RCSK, LST[metadata.Locality]);
+
+{enc_key, auth_key} = RFC8452_KeyDeriv(CSK);
+
+// FOLLOWING MEMORY READ PREEMPTIBLE, `ACESTART` FROM 8 TO 23
+SIV ← M[8 .. 23];
+metadata[63:32] ← metadata[63:32] xor AESE(enc_key, 1 @ SIV[126:0])[31:0])
+tmp ← zeros(64) @ metadata;
+tmp ← Montmul(tmp, auth_key);
 
 foreach(i from 0 to num_blocks - 1) {
-   // next instruction preemptible, with `acestart` from 32+i*16 to 39+i*16 or 47+i*16
-   UNINTERRUPTIBLE_BLOCK_START
-   |  if ((i == num_blocks - 1) and last_block_fractional) {
-   |     content[i*16 .. 7+i*16] ← M[32+i*16 .. 39+i*16]
-   |                               xor AESE(enc_key, 1 @ SIV[94:0] @ bin(i+1, 32))[63:0];
-   |     tmp[63:0] ← tmp[63:0] xor content[i*16 .. 7+i*16];
-   |  } else {
-   |     content[i*16 .. 15+i*16] ← M[32+i*16 .. 47+i*16]
-   |                                xor AESE(enc_key, 1 @ SIV[94:0] @ bin(i+1, 32));
-   |     tmp ← tmp xor content[i*16 .. 15+i*16];
-   |  }
-   |  tmp ← Montmul(tmp, auth_key);
-   UNINTERRUPTIBLE_BLOCK_END
+   if ((i == num_blocks - 1) and last_block_fractional) {
+      // FOLLOWING MEMORY READ PREEMPTIBLE, `ACESTART` FROM 24+i*16 TO 31+i*16
+      content[i*16 .. 7+i*16] ← M[24+i*16 .. 31+i*16]
+         xor AESE(enc_key, 1 @ SIV[126:32] @ (SIV[31:0] + bin(i+1, 32) % 2**32)[63:0];
+      tmp[63:0] ← tmp[63:0] xor content[i*16 .. 7+i*16];
+   } else {
+      // FOLLOWING MEMORY READ PREEMPTIBLE, `ACESTART` FROM 24+i*16 TO 39+i*16
+      content[i*16 .. 15+i*16] ← M[24+i*16 .. 39+i*16]
+         xor AESE(enc_key, 1 @ SIV[126:32] @ (SIV[31:0] + bin(i+1, 32) % 2**32);
+      tmp ← tmp xor content[i*16 .. 15+i*16];
+   }
+   tmp ← Montmul(tmp, auth_key);
 }
 
-// if preempted here, `acestart` will be z + 32
-
-UNINTERRUPTIBLE_BLOCK_START
-|  tag ← AESE(enc_key, 0 @ (tmp[126:0] xor (zeros(31) @ N)))) >> 32;
-|  if (tag != SIV) then { error ace_err_authentication; }
-|  - Now the content can be deserialized.
-|  - This includes computing any derived values not saved as part of the SCC,
-|  - as well as creating shares for threshold implementations.
-UNINTERRUPTIBLE_BLOCK_END
+tag ← AESE(enc_key, 0 @ tmp[126:0]);
+if (tag != SIV) then { error ace_err_authentication; }
+- Now the content can be deserialized.
+- This includes computing any derived values not saved as part of the SCC,
+- as well as creating shares for threshold implementations.
 ----
 
 //
@@ -1537,9 +1498,7 @@ Bit `r` (i.e., bit 27) is 0 if the CR is encoded as an immediate, and 1 if the C
 Description::
 Returns the size of the SCC corresponding to the source CR `Ks` or `K[Xs]`.
 
-NOTE: The returned value can significantly differ from the internal resource usage to store the CC's data in a CR—it can be larger (for simple primitives, because of the nonce/SIV overhead) but
-also smaller (for keys split into shares for threshold implementations, but saved
-externally in reconstructed form).
+NOTE: The returned value can significantly differ from the internal resource usage to store the CC's data in a CR—it can be larger (for simple primitives, because of the nonce/SIV overhead) but also smaller (for threshold implementations, where keys are exported in reconstructed form).
 
 [[ACE-instruction-size-metadata]]
 ===== Metadata Variant
