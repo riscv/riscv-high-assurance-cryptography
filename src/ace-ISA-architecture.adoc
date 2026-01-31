@@ -200,7 +200,7 @@ In this case, ACE returns _ace_err_memory_, and software must free capacity by e
 CRF capacity is implementation-defined.
 Implementations must provide sufficient capacity to allow execution of all operations they support.
 The CRF must hold at least an instance of the largest possible CR or the largest CR pair for CR cloning or derivation.
-An optional, possibly approximated, and implementation-specific mechanism to estimate the required capacity is defined in <<ACE-instruction-size-internal>>.
+An optional, possibly approximated, and implementation-specific mechanism to estimate the required capacity is defined in <<ACE-instruction-size>>.
 ====
 
 [NOTE]
@@ -933,7 +933,9 @@ and
 These two registers are placeholders for a later decision on how to handle the CR filtering in different modes.
 One option could be to use `scontext`/`hcontext`/`mcontext` from the Sdtrig extension.
 We note that under Linux `scontext` is often filled with the PID of the used process, which is at most 22 bits.
-Therefore, this would fit in the metatada's `Filter` field's current length of 25 bits. `Filter` can also be expanded to use the currently reserved fields.
+Therefore, this would fit in the metadata's `Filter` field's current length of 25 bits, which is too small for the full 32 bits of `scontext`.
+`hcontext`/`mcontext` is just 14-bits long.
+`Filter` can also be expanded using the currently reserved fields.
 We believe that the final decision should be taken in accordance with the ARC.
 
 [comment]
@@ -1302,7 +1304,7 @@ Encoding::
 {reg:[
     { bits:  7, name: 0x27, attr: ['custom-1'] },
     { bits:  5, name: 'context', attr: ['Kd','K[Xd]'] },
-    { bits:  3, name: 'ace.import', attr: ['0{nbsp}{nbsp}{nbsp}{nbsp}0{nbsp}{nbsp}{nbsp}{nbsp}S','0{nbsp}{nbsp}{nbsp}{nbsp}1{nbsp}{nbsp}{nbsp}{nbsp}S'] },
+    { bits:  3, name: 'ace.import', attr: ['0    0    S','0    1    S'] },
     { bits:  5, name: 'Xn' },
     { bits: 12, name: 'imm' },
 ]}
@@ -1411,6 +1413,8 @@ The `ace.state` instruction admits three Forms, namely
 . `ace.state Kd|K[Xd], #immed7, Xs{nbsp}{nbsp}` with an auxiliary input in a GPR.
 . `ace.state Kd|K[Xd], #immed7, Vs{nbsp}{nbsp}` with an auxiliary input in a vector register.
 
+// Without this comment, the next part is not properly formatted...
+
 Encoding::
 `ace.state` is an R-type instruction.
 +
@@ -1476,9 +1480,57 @@ Interruptible: *NO*.
 [[ACE-instruction-size]]
 ==== ace.size
 
-`ace.size` returns the size of the memory buffer that would be necessary to store the exported SCC.
+There are three types of `ace.size` instructions:
 (((ACE, instruction, ace.size)))
-Knowing this size is necessary for any feature that relies on `ace.export`, including context switching.
+
+[upperalpha]
+. `ace.size Xd, Ks|K[Xs]` - context type.
+. `ace.size Xd, Xs` - metadata type.
+. `ace.size.internal Xd, Xs` - internal capacity type.
+
+// Without this comment, the next part is not properly formatted...
+
+Encoding::
+The instruction is encoded using the Form D' `ace.exec` encoding, and is thus an R-type instruction.
++
+[wavedrom, , svg]
+....
+{reg:[
+    { bits:  7, name: 0x5b, attr: ['custom-2'] },
+    { bits:  5, name: 'Xd' },
+    { bits:  3, name: 0x3, attr: ['ace.exec','(Form D\')'] },
+    { bits:  5, name: 'Ks/K[Xs]/Xs' },
+    { bits:  3, name: 'type'},
+    { bits:  2, name: 0x0 },
+    { bits:  7, name: 0x0 },
+]}
+....
++
+The type field can assume four possible values:
+
+`001`: Context type with the context given as `Ks`. +
+`010`: Context type with the context given indirectly as `K[Xs]`. +
+`011`: Metadata type. +
+`100`: Internal capacity type.
+
+
+Description:: {empty}
+
+* Context type `ace.size` returns the size (in bytes) of the memory buffer that would be necessary to store the exported SCC.
+Knowing this size is necessary for any feature that relies on `ace.export`, including context switching. +
+* Metadata type `ace.size` returns the size (in bytes) of a SCC having the metadata section given in `Xn` into GPR `Xd`, and zero if the algorithm is not supported.
+Only the Algorithm and Key_Type fields of the metadata section of a CC need to be considered to determine the size of the SCC (as per <<ACE-algorithms>>).
+On RV32, `Xs` needs to contain only the lower 32 bits of the metadata section, since they contain the fields which are required to determine the size of the SCC.
+* Internal Capacity `ace.size` returns the amount of internal CRF capacity a CC having the metadata section given in `Xn` would use.
+This is expressed in terms of implementation-dependent units. Passing the value `ones(64)` into `Xs` results in the total amount of internal capacity.
+Only the bits corresponding to the Algorithm, SP_Protection, and Key_Type metadata fields are considered and all other bits must be zero, except when passing `ones(64)`.
+If the combination of Algorithm, SP_Protection, and Key_Type fields is not supported, the instruction writes zero into `Xd`.
+On RV32 the GPR `Xs` needs to contain only the lower 32 bits of the metadata section, since they contain the fields which are required to determine the size of the SCC. In this case, the value of `Xs` to obtain the full CRF capacity is `ones(32)`.
+
+In other words we can assume that the implementation provides three functions:
+. `IIsize()` that maps the 12 bit value `Key_Type @ Algorithm` to the set of integers, returning the byte size of an II.
+. `SCCsize()` that maps the 12 bit value `Key_Type @ Algorithm` to the set of integers, returning the byte size of an SCC.
+. `CRsize()` that maps the 12 bit value `SP_Protection @ Key_Type @ Algorithm` to the set of integers, returning capacity usage of a CR of the total capacity of the CRF.
 
 Properties::
 Possibly modifies state: *NO*. +
@@ -1487,88 +1539,6 @@ Trappable: *NO*. +
 Interruptible: *NO*.
 
 //
-
-[[ACE-instruction-size-CR]]
-===== Context Variant
-
-`ace.size Xd, Ks|K[Xs]`
-
-Encoding::
-The instruction is encoded using the Form D' `ace.exec` encoding, and is thus an R-type instruction.
-+
-[wavedrom, , svg]
-....
-{reg:[
-    { bits:  7, name: 0x5b, attr: ['custom-2'] },
-    { bits:  5, name: 'Xd' },
-    { bits:  3, name: 0x3, attr: ['ace.exec', '(Form D\')'] },
-    { bits:  5, name: 'Ks|K[Xs]' },
-    { bits:  5, name: 0x1, attr: ['ace.size'] },
-    { bits:  2, name: 0x0 },
-    { bits:  1, name: 'r' },
-    { bits:  4, name: 0x0 },
-]}
-....
-+
-Bit `r` (i.e., bit 27) is 0 if the CR is encoded as an immediate, and 1 if the CR's number is given in a GPR.
-
-Description::
-Returns the size of the SCC corresponding to the source CR `Ks` or `K[Xs]`.
-
-[[ACE-instruction-size-metadata]]
-===== Metadata Variant
-
-`ace.size Xd, Xs`
-
-Encoding::
-The instruction is encoded using the Form D' `ace.exec` encoding, and is thus an R-type instruction.
-+
-[wavedrom, , svg]
-....
-{reg:[
-    { bits:  7, name: 0x5b, attr: ['custom-2'] },
-    { bits:  5, name: 'Xd' },
-    { bits:  3, name: 0x3, attr: ['ace.exec', '(Form D\')'] },
-    { bits:  5, name: 'Xs' },
-    { bits:  5, name: 0x2, attr: ['ace.size'] },
-    { bits:  7, name: 0x0 },
-]}
-....
-
-Description::
-This instruction writes the size of a SCC having the metadata section given in `Xn` into GPR `Xd`, and zero if the algorithm is not supported.
-Only the Algorithm and Key_Type fields of the metadata section of a CC need to be considered to determine the size of the SCC (as per <<ACE-algorithms>>).
-+
-On RV32 the GPR `Xs` needs to contain only the lower 32 bits of the metadata section, since they contain the fields which are required to determine the size of the SCC.
-
-[[ACE-instruction-size-internal]]
-===== Internal Capacity Variant
-
-`ace.size.internal Xd, Xs`
-
-Encoding::
-The instruction is encoded using the Form D' `ace.exec` encoding, and is thus an R-type instruction.
-+
-[wavedrom, , svg]
-....
-{reg:[
-    { bits:  7, name: 0x5b, attr: ['custom-2'] },
-    { bits:  5, name: 'Xd' },
-    { bits:  3, name: 0x3, attr: ['ace.exec', '(Form D\')'] },
-    { bits:  5, name: 'Xs' },
-    { bits:  5, name: 0x3, attr: ['ace.size'] },
-    { bits:  7, name: 0x0 },
-]}
-....
-
-Description::
-This instruction writes into GPR `Xd` the amount of internal capacity a CC having the metadata section given in `Xn` would occupy in terms of implementation-dependent units. Passing the value `ones(64)` into `Xs` results in the total amount of internal capacity.
-Only the bits corresponding to the Algorithm, SP_Protection, Direction_Policy and Key_Type fields are considered and all other bits must be zero, except when passing `ones(64)`.
-If the combination of Algorithm, SP_Protection, Direction_Policy and Key_Type fields is not supported, the instruction writes zero into `Xd`.
-+
-On RV32 the GPR `Xs` needs to contain only the lower 32 bits of the metadata section, since they contain the fields which are required to determine the size of the SCC.
-In this case, the value of `Xs` to obtain the fill CRF capacity is `ones(32)`.
-
 
 [[ACE-instruction-available]]
 ==== ace.available
@@ -1684,7 +1654,7 @@ The instruction is encoded using the Form D' `ace.exec` encoding, and is thus an
     { bits:  5, name: 'Kd|K[Xd]' },
     { bits:  3, name: 0x3, attr: ['ace.exec','(Form D\')'] },
     { bits:  5, name: 'Ks|K[Xs]' },
-    { bits:  5, name: 0x3, attr: ['ace.clone'] },
+    { bits:  5, name: 0x5, attr: ['ace.clone'] },
     { bits:  1, name: 0x0 },
     { bits:  2, name: 'R' },
     { bits:  4, name: 0x0 },
