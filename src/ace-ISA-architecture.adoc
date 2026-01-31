@@ -1016,8 +1016,6 @@ foreach(i from 0 to num_blocks - 1) {
 
 The AEAD algorithm used to export CRs into SCCs is a slight modification of AES-GCM-SIV cite:[DBLP-journals-iacr-GueronLL17,RFC8452].
 We define the Key Derivation and the DCSK Derivation functions first.
-// before we describe the algorithms for
-// SCC export (cf.{nbsp}<<ACE-SCC-export>>) and import (cf.{nbsp}<<ACE-SCC-import>>).
 
 .RFC8452 Key Derivation
 []
@@ -1190,7 +1188,7 @@ Encoding::
     { bits:  5, name: 'context', attr: ['Ks','K[Xd]'] },
     { bits:  3, name: 'ace.init', attr: [0x4,0x5] },
     { bits:  5, name: 'Xs' },
-    { bits: 12, name: 'imm', attr: ['offset'] },
+    { bits: 12, name: 'immed12', attr: ['offset'] },
 ]}
 ....
 
@@ -1263,11 +1261,11 @@ Encoding::
 ....
 {reg:[
     { bits:  7, name: 0x0b, attr: ['custom-0'] },
-    { bits:  5, name: 'imm[4:0]' },
+    { bits:  5, name: 'immed[4:0]' },
     { bits:  3, name: 'ace.export', attr: [0x0,0x1] },
     { bits:  5, name: 'Xd' },
     { bits:  5, name: 'context', attr: ['Ks','K[Xs]'] },
-    { bits:  7, name: 'imm[11:5]' },
+    { bits:  7, name: 'immed[11:5]' },
 ]}
 ....
 
@@ -1306,7 +1304,7 @@ Encoding::
     { bits:  5, name: 'context', attr: ['Kd','K[Xd]'] },
     { bits:  3, name: 'ace.import', attr: ['0    0    S','0    1    S'] },
     { bits:  5, name: 'Xn' },
-    { bits: 12, name: 'imm' },
+    { bits: 12, name: 'immed12' },
 ]}
 ....
 
@@ -1484,9 +1482,9 @@ There are three types of `ace.size` instructions:
 (((ACE, instruction, ace.size)))
 
 [upperalpha]
-. `ace.size Xd, Ks|K[Xs]` - context type.
-. `ace.size Xd, Xs` - metadata type.
-. `ace.size.internal Xd, Xs` - internal capacity type.
+. `ace.size Xd, Ks|K[Xs]` - Context type.
+. `ace.size Xd, Xs` - Metadata type.
+. `ace.size.internal Xd, Xs` - Internal capacity type.
 
 // Without this comment, the next part is not properly formatted...
 
@@ -1508,34 +1506,40 @@ The instruction is encoded using the Form D' `ace.exec` encoding, and is thus an
 +
 The type field can assume four possible values:
 
-`001`: Context type with the context given as `Ks`. +
-`010`: Context type with the context given indirectly as `K[Xs]`. +
-`011`: Metadata type. +
-`100`: Internal capacity type.
+* `001`: Context type with the context given as `Ks`.
+* `010`: Context type with the context given indirectly as `K[Xs]`.
+* `011`: Metadata type.
+* `100`: Internal capacity type.
 
 
 Description:: {empty}
 
 * Context type `ace.size` returns the total size (in bytes) of the memory buffer that would be necessary to store the exported SCC.
 Knowing this size is necessary for any feature that relies on `ace.export`, including context switching. +
-* Metadata type `ace.size` returns the total size (in bytes) of a SCC having the metadata section given in `Xn` into GPR `Xd`, and zero if the algorithm is not supported.
-On RV32, `Xs` needs to contain only the lower 32 bits of the metadata section, since they contain the fields which are required to determine the size of the SCC.
-* Internal Capacity `ace.size` returns the amount of internal CRF capacity a CC having the metadata section given in `Xn` would use.
-This is expressed in terms of implementation-dependent units. Passing the value `ones(64)` into `Xs` results in the total amount of internal capacity.
-Only the bits corresponding to the Algorithm, SP_Protection, and Key_Type metadata fields are considered and all other bits must be zero, except when passing `ones(64)`.
-If the combination of Algorithm, SP_Protection, and Key_Type fields is not supported, the instruction writes zero into `Xd`.
-On RV32 the GPR `Xs` needs to contain only the lower 32 bits of the metadata section, since they contain the fields which are required to determine the size of the SCC. In this case, the value of `Xs` to obtain the full CRF capacity is `ones(32)`.
 
+* Metadata type `ace.size` returns the total size (in bytes) of a SCC having the metadata section given in `Xn` into GPR `Xd`, and zero if the algorithm is not supported. +
+On RV32, `Xs` must contain only bits [31:0] of the metadata.  This suffices since they contain all fields required to determine the size of the SCC.
+
+* Internal Capacity `ace.size` returns the amount of internal CF capacity used by a CR with metadata section matching `Xn` on the
+the Algorithm, SP_Protection, and Key_Type metadata fields. In this case, all other bits must be zero.
+If the combination of Algorithm, SP_Protection, and Key_Type fields is not supported, `ace.size` returns 0.
+If, instead, only the State_Number is non zero and its value is 15, resp., 14, `ace.size` returns the total, resp., the remaining internal capacity of the CRF. +
+All the values returned by the instruction are expressed in terms of implementation-dependent units, and in principle cannot be compared across different implementations. +
+On RV32, `Xs` must contain only bits [31:0] of the metadata (as for the metadata type instruction).
+
+Size Functions::: {empty}
++
+--
+Suppose `x` is a variable representing the first 32 bits of the metadata section of a CC.
 We assume that the implementation provides the following functions (or an equivalent mechanism):
 
-. `MD_size()` maps the first 32 bits of the metadata section to the total byte length of the entire metadata section.
-  Currently, it just checks bit 0. If the value of this bit is 0, it returns 8, otherwise it fails.
-. `II_content_size()` maps the 12 bit value `Key_Type @ Algorithm` to the size in bytes of the content section of an II.
-. `SCC_content_size()` maps the 12 bit value `Key_Type @ Algorithm` to the size in bytes of the content section of an SCC.
-. `CRsize()` maps the 12 bit value `SP_Protection @ Key_Type @ Algorithm` to the set of integers, returning capacity usage of a CR of the total capacity of the CRF.
+. `MD_size(x)` returns the byte length of the entire metadata section. Currently, always 8.
+. `II_content_size(x)` returns the size in bytes of the content section of an II. It only depends on the 12 bits `Key_Type @ Algorithm`.
+. `SCC_content_size(x)` returns the size in bytes of the content section of an SCC. It only depends on the 12 bits `Key_Type @ Algorithm`.
 
 The total size of an II is therefore `MD_size()` + `II_content_size()`, and the total size of an SCC is `MD_size()` + `SCC_content_size()`.
-Since the `ace.size` instructions can read the entire metadata, they can provide this information.
+--
++
 
 Properties::
 Possibly modifies state: *NO*. +
@@ -1602,16 +1606,16 @@ Let `m` be the metadata field of the CC in the destination CR. +
 On RV64, the instruction works as follows:
 
 * `Xs`[15:0] and `Xs`[25:20] must be zero
-* `Xs`[19:16] and `Xs`[63:32] must have the same format as the corresponding bits of the metadata.
-* `Xs`[17:16] is used to turn on or increase the level of the side-channel protection, if the microarchitecture supports it.
-The levels are defined in <<ACE-SC-protection-levels>>.
-Downgrading side-channel protection is not permitted, and attempting to do so will result in error _ace_err_invalid_ (cf.{nbsp}<<ACE-error-codes>>).
+* `Xs`[19:16] and `Xs`[63:32] have the same format as the corresponding bits of the metadata.
+* `Xs`[17:16] is used to turn on side-channel protection or increase its level, if implemented.
+The level is encoded according to <<ACE-SC-protection-levels>>.
+Downgrading protection level is not permitted. Attempting to do so will cause error _ace_err_invalid_ (cf.{nbsp}<<ACE-error-codes>>).
 * `Xs`[19:18] is used to deactivate either encryption or decryption in a CC that allows both. +
 If `m`[19:18] = `0b11`, then at least one bit of `Xs`[19:18] must be set to 1 to select which operation is kept. +
 If `m`[19:18] != `0b11`, then it must be `Xs`[19:18] = `m`[19:18] or `Xs`[19:18] = 0, in which case no change is made, else this will result in error _ace_err_invalid_.
 * A zero in any of the four bits `Xs`[29:26] means that the corresponding policy is _not_ changed.
 * A one in any of the four bits `Xs`[29:26] means that usage by the corresponding mode is forbidden, and the corresponding bit in the metadata of the destination CC is set to 1.
-* `Xs`[33:32] can be non-zero only if `m`[33:32] is zero, in which case  `m`[55:34] <- `Xs`[55:34], else `aceerror` is set to ace_error_invalid.
+* `Xs`[33:32] can be non-zero only if `m`[33:32] is zero, in which case  `m`[55:34] <- `Xs`[55:34], else `aceerror` is set to _ace_err_invalid_.
 
 On RV32, `s` must be even, the register pair `X[s]` and `X[s+1]` is read,
 and `(X[s+1] @ X[s])` replaces `Xs` in the RV64 description.
@@ -1683,7 +1687,7 @@ Interruptible: *NO*.
 Description::
 Clones source CR `Ks` (or the CR indexed by `Xs`) into destination CR `Kd` (or into the CR indexed by `Xd`).
 
-NOTE: The `ace.clone` instruction is an optimization for the sequence `ace.export` followed by `ace.import`. While reusing cryptographic state (e.g., encrypting with the same counter) can enable certain attacks, this risk cannot be eliminated by omitting `ace.clone`, as a state can be exported and re-imported multiple times.
+// NOTE: The `ace.clone` instruction is an optimization for the sequence `ace.export` followed by `ace.import`. While reusing cryptographic state (e.g., encrypting with the same counter) can enable certain attacks, this risk cannot be eliminated by omitting `ace.clone`, as a state can be exported and re-imported multiple times.
 
 [[ACE-instruction-derive]]
 ==== ace.derive
