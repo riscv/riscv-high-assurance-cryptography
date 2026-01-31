@@ -218,11 +218,11 @@ The fact that CRs can be addressed indirectly two major implications:
 ==== Metadata Format
 
 For software portability and interoperability, ACE defines two external formats for CCs:
-an _Initialization Input_ format, which is loaded into a CR to create a CC,
+an _Initialization Input_ (II) format, which is loaded into a CR to create a CC,
 and an encrypted, authenticated format used when exporting a CR to memory for later re-import:
 the Sealed Cryptographic Context (SCC) (cf.{nbsp}<<ACE-format-SCC>>).
 Both formats rely on the same metadata section format, which is described here.
-The formats of the Initialization Input and of the SCC are described in <<ACE-format-configuration>> and <<ACE-format-SCC>>, respectively.
+The formats of the II and of the SCC are described in <<ACE-format-configuration>> and <<ACE-format-SCC>>, respectively.
 
 {empty}
 (((Cryptographic Context,metadata,format)))
@@ -236,7 +236,7 @@ The metadata section is used as the header of the data formats used in CR initia
 .>|   Field .>| Width +
 (bits) .>| Name                  .>| Description
 |   [0:0] |   1  | Format                 | Value is 0 for the current metadata format. +
-Future format will have a 1 in this position and may be longer than 64 bits.
+Future formats with a 1 in this position may be 128 bits long (or longer).
 |   [4:1] |   4  | Locality               | A field which is either all ones (15) or an index into the Locality Secrets Table.
 |   [5:5] |   1  | Reserved               | Zero.
 |  [15:6] |  10  | Algorithm              | Algorithm (such as primitive or mode).
@@ -298,15 +298,15 @@ These key types are encoded as follows:
 |===
 --
 +
-*System Keys* are given by an index into an internal, system specific System Keys Table (SKT). For each algorithm as specified in <<ACE-algorithms>>, the part of the content that normally contains the key(s) is replaced by its index into the SKT-for both Initialization Input and the SCCs. The actual value of the key is never included in exported content. For threshold implementations, ACE may copy the key material from the SKT into the CR and expand it into multiple shares.
+*System Keys* are given by an index into an internal, system specific System Keys Table (SKT). For each algorithm as specified in <<ACE-algorithms>>, the part of the content that normally contains the key(s) is replaced by its index into the SKT-for both II and the SCCs. The actual value of the key is never included in exported content. For threshold implementations, ACE may copy the key material from the SKT into the CR and expand it into multiple shares.
 +
-*Internally generated keys* are also system-specific. In the Initialization Input, the key material is replaced by a system-specific “recipe”, which is not defined by the ISA and may be non-portable. After internal key generation, the actual key value—not the recipe—is stored in the SCC content, consistent with other keys for the same algorithm. The Key_Type field in the metadata remains 2 across all CC representations.
+*Internally generated keys* are also system-specific. In the II, the key material is replaced by a system-specific “recipe”, which is not defined by the ISA and may be non-portable. After internal key generation, the actual key value—not the recipe—is stored in the SCC content, consistent with other keys for the same algorithm. The Key_Type field in the metadata remains 2 across all CC representations.
 
 //
 State_Number field::: {empty}
 +
 --
-The State_Number field must be zero in the Initialization Input.
+The State_Number field must be zero in the II.
 Three values are architected for all algorithms: 0, 14, and 15, representing the _initial_, _invalidated_, and _completed_ states, respectively. These denote a CC that is ready to operate, has been invalidated, or has finished its operations.
 
 If an algorithm defines 16 or fewer states (including _initial_, _completed_, and _invalidated_), the current state number is stored directly in this field. For algorithms with more than 16 states, an algorithm-specific representation is used in the CC content, and the State_Number field is restricted to the values 0, 1, 14, and 15, where 1 serves as a placeholder for any operational state other than the three architected ones. The state values for algorithms defined in this specification are listed in <<ACE-state-constants>>.
@@ -367,15 +367,18 @@ Using the latter may lead to unspecified behavior.
 Implementations of the SKT *must* provide a suitable Locality to the ACE unit during CR configuration, and set usage policies that are at least as strict as the key's own.
 
 [[ACE-format-definition]]
-==== Initialization Inputs
+==== Initialization Input
 
-The Initialization Input configures a Cryptographic Register (CR) to create a Cryptographic Context (CC).
-Its total length must be a multiple of 8 bytes.
+The total length of the II must be a multiple of 8 bytes.
 The first 8 bytes constitute the metadata section, as defined in <<ACE-metadata>>.
-The subsequent bytes form the *content*—the key material and any algorithm-specific data—whose format and length are specified in <<ACE-algorithms>> for all architected algorithms. The content's structure and size are entirely determined by the Algorithm and Key_Type fields within the metadata.
+The subsequent bytes form the *content*—the key material and any algorithm-specific data—whose format and length are specified in <<ACE-algorithms>> for all architected algorithms. The II content's structure and size are entirely determined by the Algorithm and Key_Type fields within the metadata.
+
+NOTE: The actual resource usage of a CR may be larger than the size of an II.
+In the simple ECB schemes (<<ACE-ECB-mode>>) not hardened against side-channel attacks, a CR need not contain more than the metadata and the key, hence their  resource usage matches the size of the II (unless the key is not a multiple of 64 bits).
+However, several algorithms need to compute and cache additional data once initialized, and their internal state will be larger than the size of the II.
 
 [[ACE-format-SCC]]
-==== Sealed Cryptographic Contexts
+==== Sealed Cryptographic Context
 
 The format of the SCCs is used when exporting a CC from a CR and is used also to reimport the CC into a CR.
 It is dependent on the algorithm being used.
@@ -383,16 +386,19 @@ Its size must be a multiple of 8 bytes.
 
 Format of SCC:::
 (((Cryptographic Context, SCC plaintext)))
-`bytes{nbsp}[{nbsp}{nbsp}0 .. 3{nbsp}{nbsp}{nbsp}{nbsp}]{nbsp}{nbsp}` Metadata, non-encrypted part (includes Algorithm and Key_Type). +
-`bytes{nbsp}[{nbsp}{nbsp}4 .. 7{nbsp}{nbsp}{nbsp}{nbsp}]{nbsp}{nbsp}` Metadata, encrypted part. +
+`bytes{nbsp}[{nbsp}{nbsp}0 .. 7{nbsp}{nbsp}{nbsp}{nbsp}]{nbsp}{nbsp}` Metadata, partially encrypted. +
 `bytes{nbsp}[{nbsp}{nbsp}8 .. 23{nbsp}{nbsp}{nbsp}]{nbsp}{nbsp}` SIV produced by the encryption method (128 bits). +
 `bytes{nbsp}[{nbsp}24 .. u+23{nbsp}]{nbsp}{nbsp}` Encrypted serialized content of the CR, with a byte length of `u`.
 
-Both metadata and the serialization of the content are authenticated, but only the latter is encrypted.
+Both metadata and the serialization of the content are authenticated, but only part of the metadata and the content are encrypted.
 The AEAD method used for this purpose is described in <<ACE-SCC-AEAD>>).
 
-The metadata section of an SCC follows the same fixed architectural format as for the corresponding section of the Initialization Input.
-The content format—and consequently its length—is algorithm-specific (cf.{nbsp}<<ACE-algorithms>>) and is determined solely by the Algorithm and Key_Type fields in the metadata as well, but in general differs from the content section of the Initialization Input.
+The metadata section of an SCC follows the same fixed architectural format as the metadata section of the II.
+The content format—and consequently its length—is algorithm-specific (cf.{nbsp}<<ACE-algorithms>>) and is determined solely by the Algorithm and Key_Type fields in the metadata as well, but in general differs from the content section of the II.
+
+NOTE: The size of the SCC can differ significantly from the internal resource usage to store the CC's data in a CR—it can be larger but also smaller.
+The most common case is when the SCC is larger, for instance for simple primitives, because of the SIV overhead.
+On the other hand, in case of threshold implementations, where keys are exported in reconstructed form, and in modes where some derived keys that are easily reconstructed are not exported, the SCC may be smaller than the internal resource usage.
 
 [[ACE-CSR]]
 ==== CSRs
@@ -605,17 +611,19 @@ The standard error codes are:
 |  1   | ace_err_authentication  | Authentication failure (`ace.import` or `ace.exec`).
 |  2   | ace_err_privilege       | Access control failure (`ace.exec`, `ace.state`, etc.).
 |  3   | ace_err_invalid         | Invalid input/operation.
-Examples:
-invalid metadata passed to `ace.init` is invalid;
+|  4   | ace_err_unimplemented   | Algorithm or algorithm variant not implemented.
+|  5   | ace_err_memory          | Insufficient CRF memory for `ace.init`, `ace.exec`, `ace.clone`, or `ace.derive`.
+|  6   | ace_err_unconfigured    | Usage of unconfigured CR in `ace.exec`, `ace.state`, `ace.input`, `ace.output`, `ace.clone`, `ace.derive`, or `ace.restrict`. May trigger lazy reload.
+|===
+
+Examples of Invalid input/operation:{empty}:::
+Invalid metadata passed to `ace.init` is invalid;
 encryption, resp., decryption is requested from a CC only configured for decryption, resp., encryption;
 a Form of `ace.exec` that is not permitted in the current algorithm state is used;
 the requested change of state in `ace.state` is not permitted;
 the change in usage policies in `ace.restrict` is not permitted;
 software tried to use an incomplete CC in a CR as a source in an `ace.exec`, `ace.state`, `ace.input`, `ace.output`, `ace.clone`, `ace.derive`, or `ace.restrict` operation.
-|  4   | ace_err_unimplemented   | Algorithm or algorithm variant not implemented.
-|  5   | ace_err_memory          | Insufficient CRF memory for `ace.init`, `ace.exec`, `ace.clone`, or `ace.derive`.
-|  6   | ace_err_unconfigured    | Usage of unconfigured CR in `ace.exec`, `ace.state`, `ace.input`, `ace.output`, `ace.clone`, `ace.derive`, or `ace.restrict`. May trigger lazy reload.
-|===
+
 
 [[norm:ace_exc_priority]]
 .ACE error priority in decreasing priority order.
@@ -912,9 +920,9 @@ The values written to the `maceBootSecret` group must follow the update rules de
 [[ACE-CSR-filters]]
 ===== `sacefilter`, `macefilter`
 
-`sacefilter` is an XLEN-bit SRW CSRs (22 bits defined).
+`sacefilter` is an XLEN-bit SRW CSRs (actual length to be defined).
 
-`macefilter` is an XLEN-bit MRW CSRs (22 bits defined).
+`macefilter` is an XLEN-bit MRW CSRs (actual length to be defined).
 
 Their values are compared against the Filter field of the metadata, to determine whether an `ace.exec`, `ace.state`, or `ace.derive` instruction is allowed to execute:
 `sacefilter` is used to filter CC usage in U-mode
@@ -924,7 +932,9 @@ and
 [WARNING]
 These two registers are placeholders for a later decision on how to handle the CR filtering in different modes.
 One option could be to use `scontext`/`hcontext`/`mcontext` from the Sdtrig extension.
-We believe that the final decision will be better taken in accordance with the ARC.
+We note that under Linux `scontext` is often filled with the PID of the used process, which is at most 22 bits.
+Therefore, this would fit in the metatada's `Filter` field's current length of 25 bits. `Filter` can also be expanded to use the currently reserved fields.
+We believe that the final decision should be taken in accordance with the ARC.
 
 [comment]
 --
@@ -956,15 +966,22 @@ The instructions may resume from the point of interruption only if the control f
 In case of a context switch, initialization, export and import of CCs must be restarted when control flow is returned to the interrupted process.
 Furthermore, the CR being initialized or into which a CC is being imported must be cleared and not saved by the (more) privileged code.
 
-The Data Structures of the algorithms (such as those defined in <<ACE-algorithms>>) also define the `content[]` array in the pseudocode.
-`content[]` offers a _view_ of (certain fields of the) the content of a CR as if the latter were serialized as in the plaintext format of the content in an SCC, such that any change in one, except for the non-serialized fields, is reflected in the other.
-As such, it is a virtual representation; its consecutive bytes do not imply physical contiguity within the CR, nor there is a 1-1 correspondence between its bytes and those in the CR.  For instance, keys may be split across shares in a threshold implementation, so that one key byte in `content[]` corresponds to two or three non-contiguous bytes in the CR.
-However, any read or write to `content[]` must bijectively map to the underlying representation, in the sense that a write followed by a read must return the original data, and a read followed by a write must restore an equivalent microarchitectural state.
+The Data Structures of the algorithms (as defined in <<ACE-algorithms>>) also define the `content[]` array used in the pseudocode.
+Architecturally, the `content[]` array gives access to the serialized representation of the content of a CR.
+
+[NOTE]
+====
+While `content[]` provides a view of (certain fields of the) the content of a CR  that matches the serialized SCC format, it need not be explicitly stored in the ACE unit's memory, and converted to and from the internal representation before exporting and after importing.
+
+`content[]` is a virtual representation: its byte ordering does not imply physical contiguity within the CR, nor is there a direct byte-for-byte correspondence. Changes to `content[]` are reflected in the underlying CR representation (except for excluded fields), and vice versa.
+
+For example, let us consider a threshold implementation. A single key byte in `content[]` may correspond to multiple bytes across the key shares within the CR. Reading that byte may return the XOR of the corresponding bytes in the shares; writing to it may distribute the value across the corresponding bytes in the shares such that their XOR equals the input. These operations may be deferred until the end of an initialization or import instruction: writing to `context[]` may initially write only to the first share of a key, and at the end of the initialization or import instruction, the various shares are generated.
+====
 
 [[ACE-init]]
 ==== Initialization
 
-We start with the algorithm that reads an initialization input and uses it to initialize a CR.
+We start with the algorithm that reads an II and uses it to initialize a CR.
 
 [[ACE-init-listing]]
 .Initializing a CR with metadata and content
@@ -974,20 +991,22 @@ M : array of bytes // from memory
 
 // FOLLOWING MEMORY READ PREEMPTIBLE, `ACESTART` FROM 0 TO 7
 metadata : bits(64) = M[0 .. 7]
+z ← size of initialization input according to metadata;
+z ← z - 8 // size of the metadata
 if (there is not enough memory for the algorithm encoded in the metadata)
    error ace_err_memory
-z ← size(content[] according to metadata);
 num_blocks = ceil(z / 16);
 last_block_fractional : boolean ← (z % 16 != 0);
 
 foreach(i from 0 to num_blocks - 1) {
    if ((i == num_blocks - 1) and last_block_fractional)
       // FOLLOWING MEMORY READ PREEMPTIBLE, `ACESTART` FROM 8+i*16 TO 15+i*16
-      content[i*16 ..  7+i*16] ← M[8+i*16 .. 15+i*16];
+      read M[8+i*16 .. 15+i*16]
    else
       // FOLLOWING MEMORY READ PREEMPTIBLE, `ACESTART` FROM 8+i*16 TO 23+i*16
-      content[i*16 .. 15+i*16] ← M[8+i*16 .. 23+i*16];
+      read M[8+i*16 .. 23+i*16];
 }
+// Now the content[] must be completed according to the algorithm.
 ----
 
 [[ACE-SCC-AEAD]]
@@ -1033,7 +1052,7 @@ tmp : bits(128);
 enc_key : bits(256);
 auth_key : bits(128);
 content : array[z] of bytes,      // from the CR's metadata
-where z : int ← size(content);    // content as serialized "view", size in bytes derived from metadata
+where z : int ← size(SCC) - 8;    // content as serialized "view", size in bytes derived from metadata
 ASSERT(8 divides z);
 M : array[32 + z] of bytes;       // information
 let last_block_fractional : boolean ← z % 16 != 0;
@@ -1496,8 +1515,6 @@ Bit `r` (i.e., bit 27) is 0 if the CR is encoded as an immediate, and 1 if the C
 Description::
 Returns the size of the SCC corresponding to the source CR `Ks` or `K[Xs]`.
 
-NOTE: The returned value can significantly differ from the internal resource usage to store the CC's data in a CR—it can be larger (for simple primitives, because of the nonce/SIV overhead) but also smaller (for threshold implementations, where keys are exported in reconstructed form).
-
 [[ACE-instruction-size-metadata]]
 ===== Metadata Variant
 
@@ -1895,8 +1912,8 @@ Data Structures:::
 These include:
 
 . *Initialization Input*:
-The data following the metadata block in the initialization input to `ace.init`, such as keys and other required secrets.
-Fields are listed in the order they appear in the initialization input, each with its length.
+The data following the metadata block in the II to `ace.init`, such as keys and other required secrets.
+Fields are listed in the order they appear in the II, each with its length.
 
 . *Internal State*:
 Information that must be maintained in the internal state of a CC.
@@ -1925,7 +1942,7 @@ This includes:
 //
 
 [WARNING]
-When defining an algorithm, the structure and size of the content of the Initialization Input and of the serialized content *must* be determinable solely from the Algorithm and Key_Type fields in the metadata.
+When defining an algorithm, the structure and size of the content of the II and of the serialized content *must* be determinable solely from the Algorithm and Key_Type fields in the metadata.
 
 The instructions permitted in each algorithm state are typically `ace.exec` and `ace.state`, though this is a general rule.
 For `ace.exec`, only one of its forms (see <<ACE-instruction-exec>>) is allowed per state, along with the corresponding replacement sequence defined in <<ACE-replacement-instructions>>.
@@ -2108,9 +2125,10 @@ such as between threshold implementations that use different numbers of shares w
 
 System keys will change all the algorithms described here in the following way:
 
-. In the initialization input and in the SCC, the key/main key field will contain the index of the key in the SKT in place of a key value.
-. This field is always a 64-bit value, even if the key itself is larger. This saves space in the SCC and allows for faster export and import operations.
-. For algorithms that require more than one key, such as XEX/XTS, ALL the keys are referred to by a single index, i.e., a single 64-bit value in the initialization input and the SCC. If the SKT does not provide entries with multiple keys for such algorithms, these algorithms cannot be used with system keys.
+. In the II and in the SCC, the key/main key field will contain the index of the key in the SKT in place of a key value.
+. This field is reduced from the original key size to a 64-bit value. This saves space in the SCC and allows for faster export and import operations.
+. For algorithms that require more than one key, such as XEX/XTS, a single index is still used-and thus a single 64-bit value in the II and SCC.
+  If the SKT does not contain entries with multiple keys for such algorithms, these algorithms cannot be used with system keys.
 
 //
 
@@ -2770,12 +2788,12 @@ The differences between GCM and GCM-with-set-IV start with the format of the Ini
 [lowerroman]
  . `key`: `k` bits, or 64 bits if a System Key index.
  . `IV`: `3b/4` bits.
- . Padding: `b/4` bits, unless 256 divides `b`, in which case the Initialization Input's length is already a multiple of 64 bits without this field.
+ . Padding: `b/4` bits, unless 256 divides `b`, in which case the II's length is already a multiple of 64 bits without this field.
 
 * *State Machine Behavior:*
 
  ** To transition to state _hash_absorb_:
- the ``ace.state`` instruction must be used _without any additional inputs_, since the IV is already included in the Initialization Input.
+ the ``ace.state`` instruction must be used _without any additional inputs_, since the IV is already included in the II.
 
  ** Once in state _completed_, the CC with this algorithm *cannot* be brought back to state _initial_.
 Other forms of  ``ace.state`` will raise an invalid instruction exception and the CR is *invalidated*.
@@ -2783,7 +2801,7 @@ Other forms of  ``ace.state`` will raise an invalid instruction exception and th
 These rules do not prevent cloning the CR at the beginning and reusing it, but, for decryption, it can only be used with the intended ciphertext.
 
 NOTE: For all the following IV- or nonce-based modes, versions with a set IV or nonce (such as for GCM-SIV) can also be similarly defined.
-For instance, for GCM-SIV (cf.{nbsp}<<ACE-GCM-SIV-mode>>), `nonce` would be included in the Initialization Input exactly as `IV` is included in the Initialization Input for GCM, and the transition to _hash_absorb_ would also use a Form A ``ace.state``.
+For instance, for GCM-SIV (cf.{nbsp}<<ACE-GCM-SIV-mode>>), `nonce` would be included in the II exactly as `IV` is included in the II for GCM, and the transition to _hash_absorb_ would also use a Form A ``ace.state``.
 All other semantics would be unchanged.
 
 [[ACE-GCM-SIV-mode]]
@@ -3958,7 +3976,7 @@ If the value is out of bounds, the instruction raises an invalid instruction err
 ===== Ascon-AEAD128-with-set-nonce
 
 Similarly to GCM-with-set-IV, also Ascon-AEAD128 can be made in a version with a set nonce.
-In this case the state _set_aux_value_ is skipped, and the initialization input has the following form
+In this case the state _set_aux_value_ is skipped, and the II has the following form.
 
 * *Initialization Input*:
 [lowerroman]
