@@ -1,8 +1,8 @@
 [[ACE-architecture]]
 == Architecture
 
-ACE is a complex architecture and relies on certain fundamental concepts, which we first introduce together in a short section.
-While this leads to some repetitions, we believe that it also brings better clarity to the presentation of the architecture.
+ACE is a complex architecture and relies on certain fundamental concepts, which we succinctly introduce here.
+While this leads to some repetitions, we believe that it also brings better clarity to the presentation.
 
 [[ACE-concepts]]
 === Fundamental Concepts
@@ -10,8 +10,8 @@ While this leads to some repetitions, we believe that it also brings better clar
 Cryptographic Context:::
 (((Cryptographic Context)))
 The _Cryptographic Context_ (CC) is the fundamental concept in ACE.
-All cryptographic operations performed by ACE execute within the constraints defined by a CC—an indivisible data structure comprising a *metadata* section and a *content* section.
-The metadata's format is fixed, and it specifies the cryptographic algorithm associated to the CC and optional usage control policies.
+A CC an indivisible data structure comprising a *metadata* section and a *content* section, and all cryptographic operations performed by ACE execute within the constraints defined by a CC.
+The metadata sections's format is fixed, and it specifies the cryptographic algorithm associated to the CC and optional usage control policies.
 (((Cryptographic Context, metadata)))
 The content's format is algorithm-specific, and it holds sensitive material such as keys and internal algorithm state.
 (((Cryptographic Context, content)))
@@ -1439,10 +1439,10 @@ Bit `g` (i.e., bit 17) is used to distinguish Form A, with `g` = 0, from Form B,
 The value (`g`,`v`) = (1,1) is currently an invalid instruction and reserved for future use.
 
 Description::
-`Kd` or `K[Xd]` is the CR whose state is to be set.
-The `#immed` operand is a constant from the set of admissible values defined for each algorithm, used to manage the algorithm's internal state machine when additional states are required.
+The instruction is used to control the state machine of the cryptographic algorithm in CR `Kd` or `K[Xd]`.
+The `#immed` operand is a constant from a set of admissible values defined for each algorithm.
 The new state number, if allowed, is written into the State_Number field of the metadata, unless the algorithm requires more than 16 states, in which case an ad-hoc field must be defined in the context (for both internal representation and SCCs).
-`Xs` or `Vs` is a register that contains an auxiliary input for the state machine.
+Optionally, `Xs` or `Vs` contains an auxiliary input.
 
 Properties::
 Possibly modifies state: *YES*. +
@@ -1452,8 +1452,8 @@ Interruptible: *NO*.
 
 The state numbers used in this specification are defined in <<ACE-state-constants>>.
 
-It is in general allowed to repeat `ace.state` instructions to the current state, provided that the correct form of the instruction is used.
-When the algorithm needs to prevent this, it will automatically transition to a different state after `ace.state`.
+It is allowed to repeat `ace.state` instructions to the current state.
+When the algorithm needs to prevent this, it will automatically transition to a different state after completing `ace.state`.
 
 //
 
@@ -1465,9 +1465,9 @@ When the algorithm needs to prevent this, it will automatically transition to a 
 
 Description::
 The ACE Unit may be in an error state due to the previous operation.
-The corresponding error code is written into GPR `Xd`.
-This is implemented as a read from CSR `aceerror`, which may cause the hart to wait if the error code is not yet available (cf.{nbsp}<<ACE-CSR-ace-error>>).
-The error code list is architected and given in <<ACE-error-codes>>.
+The error code is written into GPR `Xd`.
+`ace.error` is implemented as a read from CSR `aceerror`, which may cause the hart to wait if the error code is not yet available (cf.{nbsp}<<ACE-CSR-ace-error>>).
+The architected error codes are given in <<ACE-error-codes>>.
 
 Properties::
 Possibly modifies state: *NO*. +
@@ -1516,10 +1516,9 @@ The type field can assume four possible values:
 
 Description:: {empty}
 
-* Context type `ace.size` returns the size (in bytes) of the memory buffer that would be necessary to store the exported SCC.
+* Context type `ace.size` returns the total size (in bytes) of the memory buffer that would be necessary to store the exported SCC.
 Knowing this size is necessary for any feature that relies on `ace.export`, including context switching. +
-* Metadata type `ace.size` returns the size (in bytes) of a SCC having the metadata section given in `Xn` into GPR `Xd`, and zero if the algorithm is not supported.
-Only the Algorithm and Key_Type fields of the metadata section of a CC need to be considered to determine the size of the SCC (as per <<ACE-algorithms>>).
+* Metadata type `ace.size` returns the total size (in bytes) of a SCC having the metadata section given in `Xn` into GPR `Xd`, and zero if the algorithm is not supported.
 On RV32, `Xs` needs to contain only the lower 32 bits of the metadata section, since they contain the fields which are required to determine the size of the SCC.
 * Internal Capacity `ace.size` returns the amount of internal CRF capacity a CC having the metadata section given in `Xn` would use.
 This is expressed in terms of implementation-dependent units. Passing the value `ones(64)` into `Xs` results in the total amount of internal capacity.
@@ -1527,10 +1526,16 @@ Only the bits corresponding to the Algorithm, SP_Protection, and Key_Type metada
 If the combination of Algorithm, SP_Protection, and Key_Type fields is not supported, the instruction writes zero into `Xd`.
 On RV32 the GPR `Xs` needs to contain only the lower 32 bits of the metadata section, since they contain the fields which are required to determine the size of the SCC. In this case, the value of `Xs` to obtain the full CRF capacity is `ones(32)`.
 
-In other words we can assume that the implementation provides three functions:
-. `IIsize()` that maps the 12 bit value `Key_Type @ Algorithm` to the set of integers, returning the byte size of an II.
-. `SCCsize()` that maps the 12 bit value `Key_Type @ Algorithm` to the set of integers, returning the byte size of an SCC.
-. `CRsize()` that maps the 12 bit value `SP_Protection @ Key_Type @ Algorithm` to the set of integers, returning capacity usage of a CR of the total capacity of the CRF.
+We assume that the implementation provides the following functions (or an equivalent mechanism):
+
+. `MD_size()` maps the first 32 bits of the metadata section to the total byte length of the entire metadata section.
+  Currently, it just checks bit 0. If the value of this bit is 0, it returns 8, otherwise it fails.
+. `II_content_size()` maps the 12 bit value `Key_Type @ Algorithm` to the size in bytes of the content section of an II.
+. `SCC_content_size()` maps the 12 bit value `Key_Type @ Algorithm` to the size in bytes of the content section of an SCC.
+. `CRsize()` maps the 12 bit value `SP_Protection @ Key_Type @ Algorithm` to the set of integers, returning capacity usage of a CR of the total capacity of the CRF.
+
+The total size of an II is therefore `MD_size()` + `II_content_size()`, and the total size of an SCC is `MD_size()` + `SCC_content_size()`.
+Since the `ace.size` instructions can read the entire metadata, they can provide this information.
 
 Properties::
 Possibly modifies state: *NO*. +
@@ -1598,22 +1603,18 @@ On RV64, the instruction works as follows:
 
 * `Xs`[15:0] and `Xs`[25:20] must be zero
 * `Xs`[19:16] and `Xs`[63:32] must have the same format as the corresponding bits of the metadata.
-* `Xs`[17:16] can be used to turn on or increase the level of the side-channel protection of the algorithm in the CC, if the microarchitecture supports the corresponding implementation. The levels are defined in <<ACE-SC-protection-levels>>. Downgrading side-channel protection is not permitted, and attempting to do so will result in error _ace_err_invalid_ (cf.{nbsp}<<ACE-error-codes>>).
-* `Xs`[19:18] can be used to deactivate encryption or decryption in a CC that allows both, otherwise it is ignored. Writing to them cannot be used to deactivate both encryption and decryption simultaneously, nor to activate encryption, resp., decryption in a CC that did not allow it.  In particular, if `m`[19:18] = `2'b11`, then this case at least one bit of `Xs`[19:18] must be set to 1. In all other cases, either `Xs`[19:18] = `m`[19:18] or zero, in which case it is ignored.
+* `Xs`[17:16] is used to turn on or increase the level of the side-channel protection, if the microarchitecture supports it.
+The levels are defined in <<ACE-SC-protection-levels>>.
+Downgrading side-channel protection is not permitted, and attempting to do so will result in error _ace_err_invalid_ (cf.{nbsp}<<ACE-error-codes>>).
+* `Xs`[19:18] is used to deactivate either encryption or decryption in a CC that allows both. +
+If `m`[19:18] = `0b11`, then at least one bit of `Xs`[19:18] must be set to 1 to select which operation is kept. +
+If `m`[19:18] != `0b11`, then it must be `Xs`[19:18] = `m`[19:18] or `Xs`[19:18] = 0, in which case no change is made, else this will result in error _ace_err_invalid_.
 * A zero in any of the four bits `Xs`[29:26] means that the corresponding policy is _not_ changed.
 * A one in any of the four bits `Xs`[29:26] means that usage by the corresponding mode is forbidden, and the corresponding bit in the metadata of the destination CC is set to 1.
 * `Xs`[33:32] can be non-zero only if `m`[33:32] is zero, in which case  `m`[55:34] <- `Xs`[55:34], else `aceerror` is set to ace_error_invalid.
 
-// * A zero in any of the six bits `Xs`[31:26] means that the corresponding policy is _not_ changed.
-// * A one in any of the four bits `Xs`[29:26] means that usage by the corresponding mode is forbidden, and the corresponding bit in the metadata of the destination CC is set to 1.
-// * If `Xs`[30] is set and `m`[30] is NOT set, then UC_Policy_3, i.e., `m`[47:32], is set to `Xs`[47:32].
-// * If `Xs`[31] is set and `m`[31] is NOT set, then UC_Policy_4, i.e., `m`[63:48], is set to `Xs`[63:48].
-// * If `Xs`[30] and `m`[30] are both set and `Xs`[47:32] != `m`[47:32], then `aceerror` is set to ace_error_invalid.
-// * If `Xs`[31] and `m`[31] are both set and `Xs`[63:48] != `m`[63:48], then `aceerror` is set to ace_error_invalid.
-
-On RV32, `s` must be even and register pair `X[s]` and `X[s+1]` is read, where
-`X[s]` corresponds to bits [31:0] and `X[s+1]` to bits [63:32] of the metadata.
-In other words, `Xs` is replaced by `(X[s+1] @ X[s])` in the above description.
+On RV32, `s` must be even, the register pair `X[s]` and `X[s+1]` is read,
+and `(X[s+1] @ X[s])` replaces `Xs` in the RV64 description.
 --
 +
 
@@ -1630,7 +1631,7 @@ Interruptible: *NO*.
 This instruction enables several practical use cases:
 
 *   Enabling side-channel protection when supported by the microarchitecture, even if the original CC was not configured with it.
-*   Allowing privileged code to give a CC to several processes by first cloning it and setting the Filter in each copy to the target process's Filter, thereby restricting usage of this CC only to authorized processes.
+*   Allowing privileged code to give a CC to several processes by cloning it and customizing the Filter for each clone to an authorized process.
 *   Similarly, enabling privileged code to split a CC capable of both encryption and decryption into two CCs, one only capable of encryption and the other only capable of decryption, thereby creating a one-way channel between processes.
 
 The ability to perform such customizations saves both time and computational resources by avoiding additional round-trips to trusted environments.
