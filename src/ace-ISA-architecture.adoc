@@ -222,7 +222,7 @@ an _Initialization Input_ (II) format, which is loaded into a CR to create a CC,
 and an encrypted, authenticated format used when exporting a CR to memory for later re-import:
 the Sealed Cryptographic Context (SCC) (cf.{nbsp}<<ACE-format-SCC>>).
 Both formats rely on the same metadata section format, which is described here.
-The formats of the II and of the SCC are described in <<ACE-format-configuration>> and <<ACE-format-SCC>>, respectively.
+The formats of the II and of the SCC are described in <<ACE-init-export-import-semantics>> and <<ACE-format-SCC>>, respectively.
 
 {empty}
 (((Cryptographic Context,metadata,format)))
@@ -749,7 +749,7 @@ In the algorithm description we explicitly mention that a block of operations is
 the execution of these iterative `ace.exec` instructions may be interrupted and resumed.
 Regardless of whether the operations are on vectors or on the input/output buffer, `acestart` reflects the number of bytes processed so far.
 
-The semantics and use of `acestart` are described in <<ACE-format-configuration>>.
+The semantics and use of `acestart` are described in <<ACE-init-export-import-semantics>>.
 
 The two CSRs described next may be used to optimize saving and restoring the input/output buffer.
 
@@ -958,192 +958,6 @@ The same holds for any intended separation by hart ID (`mhartid`), which is faci
 NOTE: The software in each World/Supervisor Domain is normally responsible to generate or obtain their own keys, and if a process (applet) in one World/Supervisor Domain is responsible to provide keys to other Worlds/Supervisor Domains, it is the responsibility of the M-mode firmware to perform an appropriate `ace.import`/RCSK switch/`ace.export` sequence.
 --
 
-[[ACE-format-configuration]]
-=== Semantics of Initialization, Export and Import of Cryptographic Contexts
-
-Initialization, export and import instructions can only be interrupted in the places where reads from or writes to external memory may be interrupted, for instance because of memory access exceptions. In the pseudocode listings of this section, these memory read or write operations are explicitly marked, together with the corresponding range of values for `acestart`.
-
-The instructions may resume from the point of interruption only if the control flow is returned to them immediately after the interrupt handler has completed.
-
-In case of a context switch, initialization, export and import of CCs must be restarted when control flow is returned to the interrupted process.
-Furthermore, the CR being initialized or into which a CC is being imported must be cleared and not saved by the (more) privileged code.
-
-The Data Structures of the algorithms (as defined in <<ACE-algorithms>>) also define the `content[]` array used in the pseudocode.
-Architecturally, the `content[]` array gives access to the serialized representation of the content of a CR.
-
-[NOTE]
-====
-While `content[]` provides a view of (certain fields of the) the content of a CR  that matches the serialized SCC format, it need not be explicitly stored in the ACE unit's memory, and converted to and from the internal representation before exporting and after importing.
-
-`content[]` is a virtual representation: its byte ordering does not imply physical contiguity within the CR, nor is there a direct byte-for-byte correspondence. Changes to `content[]` are reflected in the underlying CR representation (except for excluded fields), and vice versa.
-
-For example, let us consider a threshold implementation. A single key byte in `content[]` may correspond to multiple bytes across the key shares within the CR. Reading that byte may return the XOR of the corresponding bytes in the shares; writing to it may distribute the value across the corresponding bytes in the shares such that their XOR equals the input. These operations may be deferred until the end of an initialization or import instruction: writing to `context[]` may initially write only to the first share of a key, and at the end of the initialization or import instruction, the various shares are generated.
-====
-
-[[ACE-init]]
-==== Initialization
-
-We start with the algorithm that reads an II and uses it to initialize a CR.
-
-[[ACE-init-listing]]
-.Initializing a CR with metadata and content
-[]
-----
-M : array of bytes // from memory
-
-// FOLLOWING MEMORY READ PREEMPTIBLE, `ACESTART` FROM 0 TO 7
-metadata : bits(64) = M[0 .. 7]
-z ← size of initialization input according to metadata;
-z ← z - 8 // size of the metadata
-if (there is not enough memory for the algorithm encoded in the metadata)
-   error ace_err_memory
-num_blocks = ceil(z / 16);
-last_block_fractional : boolean ← (z % 16 != 0);
-
-foreach(i from 0 to num_blocks - 1) {
-   if ((i == num_blocks - 1) and last_block_fractional)
-      // FOLLOWING MEMORY READ PREEMPTIBLE, `ACESTART` FROM 8+i*16 TO 15+i*16
-      read M[8+i*16 .. 15+i*16]
-   else
-      // FOLLOWING MEMORY READ PREEMPTIBLE, `ACESTART` FROM 8+i*16 TO 23+i*16
-      read M[8+i*16 .. 23+i*16];
-}
-// Now the content[] must be completed according to the algorithm.
-----
-
-[[ACE-SCC-AEAD]]
-==== AEAD Algorithm for SCC Export and Import
-
-The AEAD algorithm used to export CRs into SCCs is a slight modification of AES-GCM-SIV cite:[DBLP-journals-iacr-GueronLL17,RFC8452].
-We define the Key Derivation and the DCSK Derivation functions first.
-
-.RFC8452 Key Derivation
-[]
-----
-function RFC8452_KeyDeriv(key) = {
-  struct {
-    AESE256(key, (zeros(125) @ 0b101))[63:0] @ AESE256(key, (zeros(125) @ 0b100))[63:0] @
-    AESE256(key, (zeros(125) @ 0b011))[63:0] @ AESE256(key, (zeros(125) @ 0b010))[63:0],
-    AESE256(key, (zeros(125) @ 0b001))[63:0] @ AESE256(key, (zeros(125) @ 0b000))[63:0]
-  }
-}
-----
-
-.DCSK Derivation
-[]
-----
-function DCSK_KeyDeriv(key,L) = {
-    AESE256(key, L ^ (zeros(127) @ 1)) @ AESE256(key, L ^ zeros(128))
-}
-----
-
-NOTE: Due to the computational cost of the derivation functions, implementations may
-cache recently used derived keys for both the Root RCSK and Locality-derived keys.
-
-The generation of a SCC from a CR (cf.{nbsp}<<ACE-SCC-export>>) and the import of a SCC into a CR (cf.{nbsp}<<ACE-SCC-import>>) are defined next.
-
-[[ACE-SCC-export]]
-.Generation of the SCC from a CR Using AES-GCM-SIV (RFC8452)
-[]
-----
-metadata : bits(64);              // from the CR
-SIV : bits(128);
-tmp : bits(128);
-enc_key : bits(256);
-auth_key : bits(128);
-content : array[z] of bytes,      // from the CR's metadata
-where z : int ← size(SCC) - 8;    // content as serialized "view", size in bytes derived from metadata
-ASSERT(8 divides z);
-M : array[32 + z] of bytes;       // information
-let last_block_fractional : boolean ← z % 16 != 0;
-let num_blocks : int ← ceil(z / 16);
-
-if (metadata.Locality == 15) then
-   CSK ← RCSK;
-else
-   CSK ← DCSK_KeyDeriv(RCSK, LST[metadata.Locality]);
-
-{enc_key, auth_key} = RFC8452_KeyDeriv(CSK);
-
-tmp ← POLYVAL(auth_key, zeros(64) @ metadata @ content[]);
-SIV ← AESE(enc_key, 0 @ tmp[126:0]));
-
-// FOLLOWING MEMORY WRITE PREEMPTIBLE, `ACESTART` FROM 0 TO 7
-M[0 .. 7] ← (metadata[63:32] xor AESE(enc_key, 1 @ SIV[126:0])[31:0])
-            @  metadata[31:0];
-
-// FOLLOWING MEMORY WRITE PREEMPTIBLE, `ACESTART` FROM 8 TO 23
-M[8 .. 23] ← SIV;
-
-foreach(i from 0 to num_blocks - 1) {
-   if ((i == num_blocks - 1) and last_block_fractional)
-      // FOLLOWING MEMORY WRITE PREEMPTIBLE, `ACESTART` FROM 24+i*16 TO 31+i*16
-      M[24+i*16 .. 31+i*16] ← content[i*16 .. 7+i*16]
-         xor AESE(enc_key, 1 @ SIV[126:32] @ (SIV[31:0] + bin(i+1, 32) % 2**32)[63:0];
-   else
-      // FOLLOWING MEMORY WRITE PREEMPTIBLE, `ACESTART` FROM 24+i*16 TO 39+i*16
-      M[24+i*16 .. 39+i*16] ← content[i*16 .. 15+i*16]
-         xor AESE(enc_key, 1 @ SIV[126:32] @ (SIV[31:0] + bin(i+1, 32) % 2**32);
-}
-----
-
-[[ACE-SCC-import]]
-.Importing a SCC into a CR Using AES-GCM-SIV (RFC8452)
-[]
-----
-M : array of bytes // from memory
-enc_key : bits(256);
-auth_key : bits(128);
-SIV : bits(128);
-tag : bits(128);
-tmp : bits(128);
-
-// FOLLOWING MEMORY READ PREEMPTIBLE, `ACESTART` FROM 0 TO 7
-metadata : bits(64) ← M[0 .. 7]
-if (there is not enough memory for the algorithm encoded in the metadata)
-    error ace_err_insufficient_memory
-
-z ← size(content[] according to metadata);
-num_blocks ← ceil(z / 16);
-last_block_fractional : boolean ← (z % 16 != 0);
-
-if (metadata.Locality == 15) then
-    CSK ← RCSK;
-else
-    CSK ← DCSK_KeyDeriv(RCSK, LST[metadata.Locality]);
-
-{enc_key, auth_key} = RFC8452_KeyDeriv(CSK);
-
-// FOLLOWING MEMORY READ PREEMPTIBLE, `ACESTART` FROM 8 TO 23
-SIV ← M[8 .. 23];
-metadata[63:32] ← metadata[63:32] xor AESE(enc_key, 1 @ SIV[126:0])[31:0])
-tmp ← zeros(64) @ metadata;
-tmp ← Montmul(tmp, auth_key);
-
-foreach(i from 0 to num_blocks - 1) {
-   if ((i == num_blocks - 1) and last_block_fractional) {
-      // FOLLOWING MEMORY READ PREEMPTIBLE, `ACESTART` FROM 24+i*16 TO 31+i*16
-      content[i*16 .. 7+i*16] ← M[24+i*16 .. 31+i*16]
-         xor AESE(enc_key, 1 @ SIV[126:32] @ (SIV[31:0] + bin(i+1, 32) % 2**32)[63:0];
-      tmp[63:0] ← tmp[63:0] xor content[i*16 .. 7+i*16];
-   } else {
-      // FOLLOWING MEMORY READ PREEMPTIBLE, `ACESTART` FROM 24+i*16 TO 39+i*16
-      content[i*16 .. 15+i*16] ← M[24+i*16 .. 39+i*16]
-         xor AESE(enc_key, 1 @ SIV[126:32] @ (SIV[31:0] + bin(i+1, 32) % 2**32);
-      tmp ← tmp xor content[i*16 .. 15+i*16];
-   }
-   tmp ← Montmul(tmp, auth_key);
-}
-
-tag ← AESE(enc_key, 0 @ tmp[126:0]);
-if (tag != SIV) then { error ace_err_authentication; }
-- Now the content can be deserialized.
-- This includes computing any derived values not saved as part of the SCC,
-- as well as creating shares for threshold implementations.
-----
-
-//
-
 // ///////////////////////////////////////////////////////////////////////////////////////////
 
 [[ACE-instructions-detailed]]
@@ -1196,6 +1010,9 @@ Description::
 `ace.init` initializes a CR with metadata and content to create a CC.
 `Kd` or `K[Xd]` denotes the CR to be initialized.
 `Xs` points to the region of memory containing the metadata and the key material.
+The II must be stored at a 8-byte aligned address, and its length must be a multiple of 8 bytes.
++
+Similarly to entire-vector-register store instructions, `ace.init` appears to other harts as a sequence of individual reads.
 
 Properties::
 Possibly modifies state: *YES*. +
@@ -1209,9 +1026,11 @@ since `ace.init`, `ace.import` and `ace.input` can be seen as special kinds of l
 `ace.export` and `ace.output` as special store instructions.
 // as ACE is architected to behave like an _attached_ unit, which may have its own interfaces.
 
-NOTE: The operation follows the two-phases processing model defined in <<ACE-format-configuration>>.
+NOTE: The operation follows the two-phases processing model defined in <<ACE-init-export-import-semantics>>.
 In the first phase, the metadata block is read, which determines the length of the remaining information.
 Then, in the second phase, the configuration material is read and processed.
+
+//
 
 [[ACE-instruction-clear]]
 ==== ace.clear/ace.reset
@@ -1248,6 +1067,8 @@ Trappable: +
 {nbsp}{nbsp}``ace.reset``: *YES* (it can be implemented as a series of `ace.clear` instructions). +
 Interruptible: *NO*.
 
+//
+
 [[ACE-instruction-export]]
 ==== ace.export
 
@@ -1271,13 +1092,11 @@ Encoding::
 
 Description::
 Exports the CR `Ks` or `K[Xs]` to memory at address `Xd`, using the procedure described in <<ACE-format-SCC>>.
+The SCC must be stored at a 8-byte aligned address, and its length must be a multiple of 8 bytes.
 If the context is unconfigured, or `Xs` is out of range, the operation will report error ace_err_invalid.
-
-The instruction must follow the interruptibility rules defined in <<ACE-CSR-acestart>>.
-Similarly to entire-vector-register store instructions, `ace.export` appears to other harts as sequences of individual stores.
-
-The initial cryptographic phase of `ace.export`, as well as the authentication phase of `ace.import`, must be uninterruptible.
-Even if these parts are executed concurrently with other operations, an interrupt handler may need to wait for these steps to complete before proceeding with any memory accesses.
++
+The instruction must follow the interruptibility rules defined in <<ACE-CSR-acestart>> and <<ACE-init-export-import-semantics>>.
+Similarly to entire-vector-register store instructions, `ace.export` appears to other harts as a sequence of individual stores.
 
 Properties::
 Possibly modifies state: *NO*. +
@@ -1285,6 +1104,7 @@ Usage-controlled: *NO*. +
 Trappable: *YES*. +
 Interruptible: *YES*.
 
+//
 
 [[ACE-instruction-import]]
 ==== ace.import
@@ -1310,22 +1130,23 @@ Encoding::
 
 Description::
 `Kd` or `K[Xd]` denotes the CR into which the SCC is to be imported. +
-`Xn` is the GPR containing the base address of the buffer with the source SCC. +
+`Xn` is the GPR containing the base address of the buffer with the source SCC.
+The SCC base address must be 8-byte aligned. +
 The bit S takes the values 0 (false) or 1 (true).
 It is set to true if the key is in a system defined format
 (`ace.import.S`)
 and not the format defined by the present architecture
 (`ace.import`).
++
+`ace.import` must follow the interruptibility rules defined in <<ACE-CSR-acestart>> and <<ACE-init-export-import-semantics>>.
+Similarly to entire-vector-register load instructions, `ace.import` appears to other harts as sequences of individual loads.
+The behavior of `ace.import.S` is implementation defined.
 
 Properties::
 Possibly modifies state: *YES*. +
 Usage-controlled: *NO* +
 Trappable: *YES*. +
 Interruptible: *YES*.
-
-
-The instruction must follow the interruptibility rules defined in <<ACE-CSR-acestart>>.
-Similarly to entire-vector-register load instructions, `ace.import` appears to other harts as sequences of individual loads.
 
 NOTE: The operation can be conceptually split into two phases.
 In the first phase, the metadata
@@ -1336,6 +1157,9 @@ NOTE: The instruction encoding includes a single bit to indicate a system-define
 
 NOTE: The `ace.export` instruction does not have an `ace.export.S` analogue of `ace.import.S`.
 This means that system-specific dynamically generated keys can be imported but not exported in the same form: they must be exported in the format architected here for ACE CCs.
+
+
+//
 
 [[ACE-instruction-exec]]
 ==== ace.exec
@@ -1817,11 +1641,210 @@ Usage-controlled: *YES*. +
 Trappable: *YES*. +
 Interruptible: *YES*.
 
-
 // ///////////////////////////////////////////////////////////////////////////////////////////
 
+
+[[ACE-init-export-import-semantics]]
+=== Semantics of Initialization, Export and Import of Cryptographic Contexts
+
+From the point of view of the system outside the ACE unit
+`ace.init` and `ace.import`
+appear a series of sequential memory reads, and
+`ace.export`,
+appear a series of sequential memory writes.
+
+The only points of interruption of these instructions are the memory read or write operations.
+These may be interrupted because of a memory exception.
+
+The instructions may resume from the point of interruption only if the control flow is returned to them immediately after the interrupt handler has completed.
+The privileged interrupt handler must ensure that the CR is cleared and the instruction restarted only in this situation, and any other circumstance, such as any interruption of the handler itself, sleep, hibernation, transfer of the process to a different hart, all clear the CR and cause the instruction to be restarted. The implementation will also restart any operation if the internal state of the CR is not in a valid interrupted state.
+
+If the instruction is interrupted to perform context switching, it must be restarted upon resuming the process, and
+if the instruction is `ace.init` or `ace.import`, the involved CR must be cleared or marked as such.
+
+[WARNING]
+The initial cryptographic phase of `ace.export` is currently architected to be uninterruptible.
+Even if this phase is executed concurrently with other operations, an interrupt handler may need to wait for it to complete before proceeding with any access to the CR.
+
+[comment]
+--
+For very long SCCs, the requirement that the initial cryptographic phase of `ace.export` be uninterruptible may represent a performance bottleneck or a timing hurdle, for instance for real-time systems.
+Since `acestart` must be a multiple of 4 or 8, depending on the implementation, we could consider writing the next (odd) integer to mark an interruption of the SIV computation. Since the latter is performed in blocks of 16 bytes using POLYVAL,
+with reference to <<ACE-SCC-export>>
+`acestart` would take 17 after the metadata has been multiplied by the hashing key,
+then 33, 49, etc., after the first, second, third, etc., block of content has been added to the partial hash and the latter multiplied by the hashing key.
+The instruction would not be interrupted between the last hashing key multiplication and the subsequent encryption. Hence, a value of
+`SCC_content_size() + 17` would denote that the memory write of the metadata has been interrupted.
+However, all these features require the ability of saving an "interrupted" state for a CR.
+--
+
+The Data Structures of the algorithms (as defined in <<ACE-algorithms>>) also define the `content[]` array used in the pseudocode.
+Architecturally, the `content[]` array gives access to the serialized representation of the content of a CR.
+
+[NOTE]
+====
+While `content[]` provides a view of (certain fields of the) the content of a CR  that matches the serialized SCC format, it need not be explicitly stored in the ACE unit's memory, and converted to and from the internal representation before exporting and after importing.
+
+`content[]` is a virtual representation: its byte ordering does not imply physical contiguity within the CR, nor is there a direct byte-for-byte correspondence. Changes to `content[]` are reflected in the underlying CR representation (except for excluded fields), and vice versa.
+
+For example, let us consider a threshold implementation. A single key byte in `content[]` may correspond to multiple bytes across the key shares within the CR. Reading that byte may return the XOR of the corresponding bytes in the shares; writing to it may distribute the value across the corresponding bytes in the shares such that their XOR equals the input. These operations may be deferred until the end of an initialization or import instruction: writing to `context[]` may initially write only to the first share of a key, and at the end of the initialization or import instruction, the various shares are generated.
+====
+
+[[ACE-init]]
+==== Initialization
+
+We start with the algorithm performed by the initialization instruction, which reads an II and uses it to initialize a CR.
+
+[[ACE-init-listing]]
+.Initializing a CR with metadata and content
+[]
+----
+M : array of bytes // in memory
+
+metadata : bits(64) = M[0 .. 7]
+z ← SCC_content_size(metadata[31:0]);
+
+if (z == 0) // not enough CRF capacity left for the algorithm encoded in the metadata
+   error ace_err_memory
+
+- Complete metadata parsing.
+- Read sequentially and parse the z-8 bytes starting at M+8.
+----
+
+[[ACE-SCC-AEAD]]
+==== AEAD Algorithm for SCC Export and Import
+
+The AEAD algorithm used to export CRs into SCCs is a slight modification of AES-GCM-SIV cite:[DBLP-journals-iacr-GueronLL17,RFC8452].
+We define the Key Derivation and the DCSK Derivation functions first.
+
+.RFC8452 Key Derivation
+[]
+----
+function RFC8452_KeyDeriv(key) = {
+  struct {
+    AESE256(key, (zeros(125) @ 0b101))[63:0] @ AESE256(key, (zeros(125) @ 0b100))[63:0] @
+    AESE256(key, (zeros(125) @ 0b011))[63:0] @ AESE256(key, (zeros(125) @ 0b010))[63:0],
+    AESE256(key, (zeros(125) @ 0b001))[63:0] @ AESE256(key, (zeros(125) @ 0b000))[63:0]
+  }
+}
+----
+
+.DCSK Derivation
+[]
+----
+function DCSK_KeyDeriv(key,L) = {
+    AESE256(key, L ^ (zeros(127) @ 1)) @ AESE256(key, L ^ zeros(128))
+}
+----
+
+NOTE: Due to the computational cost of the derivation functions, implementations may
+cache recently used derived keys for both the Root RCSK and Locality-derived keys.
+
+The generation of a SCC from a CR (cf.{nbsp}<<ACE-SCC-export>>) and the import of a SCC into a CR (cf.{nbsp}<<ACE-SCC-import>>) are defined next.
+
+[[ACE-SCC-export]]
+.Generation of the SCC from a CR Using AES-GCM-SIV (RFC8452)
+[]
+----
+metadata : bits(64);              // from the CR
+SIV : bits(128);
+tmp : bits(128);
+enc_key : bits(256);
+auth_key : bits(128);
+content : array[z] of bytes,      // from the CR's metadata
+where z : int ← size(SCC) - 8;    // content as serialized "view", size in bytes derived from metadata
+ASSERT(8 divides z);
+M : array[32 + z] of bytes;       // information
+let last_block_fractional : boolean ← z % 16 != 0;
+let num_blocks : int ← ceil(z / 16);
+
+if (metadata.Locality == 15) then
+   CSK ← RCSK;
+else
+   CSK ← DCSK_KeyDeriv(RCSK, LST[metadata.Locality]);
+
+{enc_key, auth_key} = RFC8452_KeyDeriv(CSK);
+
+tmp ← POLYVAL(auth_key, zeros(64) @ metadata @ content[]);
+SIV ← AESE(enc_key, 0 @ tmp[126:0]));
+
+// FOLLOWING MEMORY WRITE PREEMPTIBLE, `ACESTART` FROM 0 TO 7
+M[0 .. 7] ← (metadata[63:32] xor AESE(enc_key, 1 @ SIV[126:0])[31:0])
+            @  metadata[31:0];
+
+// FOLLOWING MEMORY WRITE PREEMPTIBLE, `ACESTART` FROM 8 TO 23
+M[8 .. 23] ← SIV;
+
+foreach(i from 0 to num_blocks - 1) {
+   if ((i == num_blocks - 1) and last_block_fractional)
+      // FOLLOWING MEMORY WRITE PREEMPTIBLE, `ACESTART` FROM 24+i*16 TO 31+i*16
+      M[24+i*16 .. 31+i*16] ← content[i*16 .. 7+i*16]
+         xor AESE(enc_key, 1 @ SIV[126:32] @ (SIV[31:0] + bin(i+1, 32) % 2**32)[63:0];
+   else
+      // FOLLOWING MEMORY WRITE PREEMPTIBLE, `ACESTART` FROM 24+i*16 TO 39+i*16
+      M[24+i*16 .. 39+i*16] ← content[i*16 .. 15+i*16]
+         xor AESE(enc_key, 1 @ SIV[126:32] @ (SIV[31:0] + bin(i+1, 32) % 2**32);
+}
+----
+
+[[ACE-SCC-import]]
+.Importing a SCC into a CR Using AES-GCM-SIV (RFC8452)
+[]
+----
+M : array of bytes // from memory
+enc_key : bits(256);
+auth_key : bits(128);
+SIV : bits(128);
+tag : bits(128);
+tmp : bits(128);
+
+// FOLLOWING MEMORY READ PREEMPTIBLE, `ACESTART` FROM 0 TO 7
+metadata : bits(64) ← M[0 .. 7]
+if (there is not enough memory for the algorithm encoded in the metadata)
+    error ace_err_insufficient_memory
+
+z ← size(content[] according to metadata);
+num_blocks ← ceil(z / 16);
+last_block_fractional : boolean ← (z % 16 != 0);
+
+if (metadata.Locality == 15) then
+    CSK ← RCSK;
+else
+    CSK ← DCSK_KeyDeriv(RCSK, LST[metadata.Locality]);
+
+{enc_key, auth_key} = RFC8452_KeyDeriv(CSK);
+
+// FOLLOWING MEMORY READ PREEMPTIBLE, `ACESTART` FROM 8 TO 23
+SIV ← M[8 .. 23];
+metadata[63:32] ← metadata[63:32] xor AESE(enc_key, 1 @ SIV[126:0])[31:0])
+tmp ← zeros(64) @ metadata;
+tmp ← Montmul(tmp, auth_key);
+
+foreach(i from 0 to num_blocks - 1) {
+   if ((i == num_blocks - 1) and last_block_fractional) {
+      // FOLLOWING MEMORY READ PREEMPTIBLE, `ACESTART` FROM 24+i*16 TO 31+i*16
+      content[i*16 .. 7+i*16] ← M[24+i*16 .. 31+i*16]
+         xor AESE(enc_key, 1 @ SIV[126:32] @ (SIV[31:0] + bin(i+1, 32) % 2**32)[63:0];
+      tmp[63:0] ← tmp[63:0] xor content[i*16 .. 7+i*16];
+   } else {
+      // FOLLOWING MEMORY READ PREEMPTIBLE, `ACESTART` FROM 24+i*16 TO 39+i*16
+      content[i*16 .. 15+i*16] ← M[24+i*16 .. 39+i*16]
+         xor AESE(enc_key, 1 @ SIV[126:32] @ (SIV[31:0] + bin(i+1, 32) % 2**32);
+      tmp ← tmp xor content[i*16 .. 15+i*16];
+   }
+   tmp ← Montmul(tmp, auth_key);
+}
+
+tag ← AESE(enc_key, 0 @ tmp[126:0]);
+if (tag != SIV) then { error ace_err_authentication; }
+- Now the content can be deserialized.
+- This includes computing any derived values not saved as part of the SCC,
+- as well as creating shares for threshold implementations.
+----
+
+
 [[ACE-trappable-insns-support]]
-==== Support for Trappable (Emulated) Operations
+=== Support for Trappable (Emulated) Operations
 
 [WARNING]
 This section is currently non-normative. There are ongoing discussions on whether to formalize it completely and make it normative.
