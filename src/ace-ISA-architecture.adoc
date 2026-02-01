@@ -21,8 +21,8 @@ These requirements are architecturally guaranteed by ACE.
 
 Cryptographic Register:::
 (((Cryptographic Register)))
-Cryptographic Contexts are realized architecturally using _Cryptographic Registers_ (CRs).
-CRs are architectural, i.e., per-hart, containers that safeguard CCs.
+Cryptographic Contexts are realized using _Cryptographic Registers_ (CRs).
+CRs are architectural containers that safeguard CCs.
 A CR is _initialized_ by writing metadata and content into it: this operation also binds the metadata and the content to form a CC.
 A CC can be used for cryptographic operations only while resident in a CR.
 Only the ACE unit may access or modify CC contents, in accordance with the architecture and the programmed algorithm.
@@ -164,10 +164,9 @@ Returns zero if the algorithm is unsupported.
 {empty}
 (((Cryptographic Context)))
 ACE defines 32 Cryptographic Registers (CRs), identified by numbers from 0 to 31, and called `K0`, ... , `K31`.
-
-{empty}
+They are architectural, i.e., per-hart.
 (((Cryptographic Register File)))
-CRs reside in a dedicated _CR file_ (CRF), accessible only by the ACE implementation.
+CRs reside in a dedicated _CR file_ (CRF), accessible only by the ACE implementation. Each hart has its own CRF.
 
 CRs differ from conventional register in several ways:
 
@@ -222,7 +221,7 @@ an _Initialization Input_ (II) format, which is loaded into a CR to create a CC,
 and an encrypted, authenticated format used when exporting a CR to memory for later re-import:
 the Sealed Cryptographic Context (SCC) (cf.{nbsp}<<ACE-format-SCC>>).
 Both formats rely on the same metadata section format, which is described here.
-The formats of the II and of the SCC are described in <<ACE-init-export-import-semantics>> and <<ACE-format-SCC>>, respectively.
+The formats of the II and of the SCC are described in <<ACE-init-export-import>> and <<ACE-format-SCC>>, respectively.
 
 {empty}
 (((Cryptographic Context,metadata,format)))
@@ -624,7 +623,6 @@ the requested change of state in `ace.state` is not permitted;
 the change in usage policies in `ace.restrict` is not permitted;
 software tried to use an incomplete CC in a CR as a source in an `ace.exec`, `ace.state`, `ace.input`, `ace.output`, `ace.clone`, `ace.derive`, or `ace.restrict` operation.
 
-
 [[norm:ace_exc_priority]]
 .ACE error priority in decreasing priority order.
 [float="center",align="center",width="100%",cols="^9%,>7%,<84%",options="header"]
@@ -749,7 +747,7 @@ In the algorithm description we explicitly mention that a block of operations is
 the execution of these iterative `ace.exec` instructions may be interrupted and resumed.
 Regardless of whether the operations are on vectors or on the input/output buffer, `acestart` reflects the number of bytes processed so far.
 
-The semantics and use of `acestart` are described in <<ACE-init-export-import-semantics>>.
+The semantics and use of `acestart` are described in <<ACE-init-export-import>>.
 
 The two CSRs described next may be used to optimize saving and restoring the input/output buffer.
 
@@ -985,7 +983,6 @@ While the architecture does not prohibit this, such an approach substantially ex
 The encodings presented here are just examples, and for the moment RV64-only, and may not be final.
 They serve as a starting point for discussion and refinement as well as a proof that, at the time of this writing, the ACE instruction set can be encoded.
 
-
 [[ACE-instruction-init]]
 ==== ace.init
 
@@ -1026,7 +1023,7 @@ since `ace.init`, `ace.import` and `ace.input` can be seen as special kinds of l
 `ace.export` and `ace.output` as special store instructions.
 // as ACE is architected to behave like an _attached_ unit, which may have its own interfaces.
 
-NOTE: The operation follows the two-phases processing model defined in <<ACE-init-export-import-semantics>>.
+NOTE: The operation follows the two-phases processing model defined in <<ACE-init-export-import>>.
 In the first phase, the metadata block is read, which determines the length of the remaining information.
 Then, in the second phase, the configuration material is read and processed.
 
@@ -1095,7 +1092,7 @@ Exports the CR `Ks` or `K[Xs]` to memory at address `Xd`, using the procedure de
 The SCC must be stored at a 8-byte aligned address, and its length must be a multiple of 8 bytes.
 If the context is unconfigured, or `Xs` is out of range, the operation will report error ace_err_invalid.
 +
-The instruction must follow the interruptibility rules defined in <<ACE-CSR-acestart>> and <<ACE-init-export-import-semantics>>.
+The instruction must follow the interruptibility rules defined in <<ACE-CSR-acestart>> and <<ACE-init-export-import>>.
 Similarly to entire-vector-register store instructions, `ace.export` appears to other harts as a sequence of individual stores.
 
 Properties::
@@ -1138,7 +1135,7 @@ It is set to true if the key is in a system defined format
 and not the format defined by the present architecture
 (`ace.import`).
 +
-`ace.import` must follow the interruptibility rules defined in <<ACE-CSR-acestart>> and <<ACE-init-export-import-semantics>>.
+`ace.import` must follow the interruptibility rules defined in <<ACE-CSR-acestart>> and <<ACE-init-export-import>>.
 Similarly to entire-vector-register load instructions, `ace.import` appears to other harts as sequences of individual loads.
 The behavior of `ace.import.S` is implementation defined.
 
@@ -1157,7 +1154,6 @@ NOTE: The instruction encoding includes a single bit to indicate a system-define
 
 NOTE: The `ace.export` instruction does not have an `ace.export.S` analogue of `ace.import.S`.
 This means that system-specific dynamically generated keys can be imported but not exported in the same form: they must be exported in the format architected here for ACE CCs.
-
 
 //
 
@@ -1334,7 +1330,6 @@ The type field can assume four possible values:
 * `010`: Context type with the context given indirectly as `K[Xs]`.
 * `011`: Metadata type.
 * `100`: Internal capacity type.
-
 
 Description:: {empty}
 
@@ -1537,7 +1532,6 @@ Bit `v` (i.e., bit 28) is 0 for Forms A and B and 1 for Form C. +
 Bit `g` (i.e., bit 29) is used to distinguish Form A, with `g` = 0, from Form B, with `g` = 1. +
 The value (`g`,`v`) = (1,1) is currently an invalid instruction and reserved for future use.
 
-
 Description::
 The instruction is used to derive a new context from an existing one, with its own opaque key material.
 It is similar to `ace.clone`, but the derived context is not a copy of the source context,
@@ -1620,7 +1614,6 @@ If `Xl` == `0`, the operation is a nop. +
 `Xl` may be not greater than `aceiobuftop` - `acestart`. +
 If `Xl` is greater than `aceiobuftop` - `acestart`, and invalid instruction error is raised.
 
-
 Properties::
 Possibly modifies state: *YES*. +
 Usage-controlled: *YES*. +
@@ -1629,51 +1622,37 @@ Interruptible: *YES*.
 
 // ///////////////////////////////////////////////////////////////////////////////////////////
 
-[[ACE-init-export-import-semantics]]
-=== Semantics of Initialization, Export and Import of Cryptographic Contexts
+[[ACE-init-export-import]]
+=== Initialization, Export and Import of Cryptographic Contexts
 
-From the point of view of the system outside the ACE unit
-`ace.init` and `ace.import`
-appear a series of sequential memory reads, and
-`ace.export`,
-appear a series of sequential memory writes.
+From the point of view of the system outside the ACE unit, `ace.init` and `ace.import` appear a series of sequential memory reads, and `ace.export`, appear a series of sequential memory writes.
 
 The only points of interruption of these instructions are the memory read or write operations.
-These may be interrupted because of a memory exception.
-
-The instructions may resume from the point of interruption only if the control flow is returned to them immediately after the interrupt handler has completed.
-The privileged interrupt handler must ensure that the CR is cleared and the instruction restarted only in this situation, and any other circumstance, such as any interruption of the handler itself, sleep, hibernation, transfer of the process to a different hart, all clear the CR and cause the instruction to be restarted. The implementation will also restart any operation if the internal state of the CR is not in a valid interrupted state.
-
-If the instruction is interrupted to perform context switching, it must be restarted upon resuming the process, and
-if the instruction is `ace.init` or `ace.import`, the involved CR must be cleared or marked as such.
+The instructions may be interrupted because of a memory exception, and any other type of interrupt must either wait until the next memory read or write.
+They may resume from the point of interruption only if the control flow is returned to them immediately after the interrupt handler has completed.
+The privileged interrupt handler must ensure that the instruction is restarted only in this situation, and in any other circumstance, including context switching, the instruction must be restarted, in which case if the instruction is `ace.init` or `ace.import` it must also clear the CR.
+The implementation will also restart any operation if the internal state of the CR is not in a valid interrupted state.
 
 [WARNING]
 The initial cryptographic phase of `ace.export` is currently architected to be uninterruptible.
 Even if this phase is executed concurrently with other operations, an interrupt handler may need to wait for it to complete before proceeding with any access to the CR.
 
-[comment]
+[NOTE]
 --
-For very long SCCs, the requirement that the initial cryptographic phase of `ace.export` be uninterruptible may represent a performance bottleneck or a timing hurdle, for instance for real-time systems.
-Since `acestart` must be a multiple of 4 or 8, depending on the implementation, we could consider writing the next (odd) integer to mark an interruption of the SIV computation. Since the latter is performed in blocks of 16 bytes using POLYVAL,
-with reference to <<ACE-SCC-export>>
-`acestart` would take 17 after the metadata has been multiplied by the hashing key,
-then 33, 49, etc., after the first, second, third, etc., block of content has been added to the partial hash and the latter multiplied by the hashing key.
-The instruction would not be interrupted between the last hashing key multiplication and the subsequent encryption. Hence, a value of
-`SCC_content_size() + 17` would denote that the memory write of the metadata has been interrupted.
-However, all these features require the ability of saving an "interrupted" state for a CR.
+The requirement that the initial cryptographic phase of `ace.export` be uninterruptible could become a performance bottleneck for very long SCCs, or cause timing issues. To address this, we could allow the SIV computation to be interrupted by using odd values in `acestart`. With reference to <<ACE-SCC-export>>, the SIV computation processes 16-byte blocks via POLYVAL. An `acestart` value of 17 would indicate interruption after the metadata has been multiplied by the hashing key; values of 33, 49, and so on would indicate interruption after subsequent content blocks have been added to the partial hash and multiplied by the hashing key. The instruction remains uninterruptible between the final hash multiplication and the subsequent encryption. Consequently, a value of `SCC_content_size() + 17` would signify that the memory write of the metadata was interrupted immediately, replacing a zero `acestart` value.
 --
 
-The Data Structures of the algorithms (as defined in <<ACE-algorithms>>) also define the `content[]` array used in the pseudocode.
-Architecturally, the `content[]` array gives access to the serialized representation of the content of a CR.
+The Serialized Content section under Data Structures in an algorithm specification (cf.{nbsp}<<ACE-algorithms>>) defines the structure of the `content[]` array.
+Architecturally, `content[]` is the serialization of the content of a CR for export as a SCC.
 
 [NOTE]
-====
-While `content[]` provides a view of (certain fields of the) the content of a CR  that matches the serialized SCC format, it need not be explicitly stored in the ACE unit's memory, and converted to and from the internal representation before exporting and after importing.
+--
+While `content[]` provides a view of (certain fields of) the content of a CR that matches the serialized SCC format, it needs not be converted to and from the internal representation and explicitly stored in the ACE unit's memory before export and after import.
 
 `content[]` is a virtual representation: its byte ordering does not imply physical contiguity within the CR, nor is there a direct byte-for-byte correspondence. Changes to `content[]` are reflected in the underlying CR representation (except for excluded fields), and vice versa.
 
 For example, let us consider a threshold implementation. A single key byte in `content[]` may correspond to multiple bytes across the key shares within the CR. Reading that byte may return the XOR of the corresponding bytes in the shares; writing to it may distribute the value across the corresponding bytes in the shares such that their XOR equals the input. These operations may be deferred until the end of an initialization or import instruction: writing to `context[]` may initially write only to the first share of a key, and at the end of the initialization or import instruction, the various shares are generated.
-====
+--
 
 [[ACE-size-functions]]
 ==== Size Functions
@@ -1687,11 +1666,10 @@ We assume that the implementation provides the following functions (or an equiva
 
 The total size of an II is therefore `MD_size()` + `II_content_size()`, and the total size of an SCC is `MD_size()` + `SCC_content_size()`.
 
-
 [[ACE-init]]
 ==== Initialization
 
-We start with the algorithm performed by the initialization instruction, which reads an II and uses it to initialize a CR.
+We start with the algorithm performed by `ace.init`, which reads an II and uses it to initialize a CR.
 
 [[ACE-init-listing]]
 .Initializing a CR with metadata and content
@@ -1700,7 +1678,7 @@ We start with the algorithm performed by the initialization instruction, which r
 M : array of bytes // in memory
 
 metadata : bits(64) = M[0 .. 7] // PREEMPTIBLE WITH `ACESTART` IN [0 .. 7]
-z ← SCC_content_size(metadata[31:0]);
+z ← II_content_size(metadata[31:0]);
 
 if (z == 0) // Not enough CRF capacity left for the algorithm encoded in the metadata
    error ace_err_memory
@@ -1713,9 +1691,11 @@ if (z == 0) // Not enough CRF capacity left for the algorithm encoded in the met
 [[ACE-SCC-AEAD]]
 ==== Export and Import
 
-The AEAD algorithm used to export CRs into SCCs is a slight modification of AES-GCM-SIV cite:[DBLP-journals-iacr-GueronLL17,RFC8452].
-We define the Key Derivation and the DCSK Derivation functions first.
+The AEAD algorithm used to export CRs is an adaptation of AES-GCM-SIV cite:[DBLP-journals-iacr-GueronLL17,RFC8452].
+We define the Key Derivation (<<ACE-SCC-RFC8452-derivation>>) and the DCSK Derivation (<<ACE-SCC-DCSK-derivation>>) functions first,
+the generation of a SCC from a CR (<<ACE-SCC-export>>) and the import of a SCC into a CR (<<ACE-SCC-import>>) next.
 
+[[ACE-SCC-RFC8452-derivation]]
 .RFC8452 Key Derivation
 []
 ----
@@ -1728,6 +1708,7 @@ function RFC8452_KeyDeriv(key) = {
 }
 ----
 
+[[ACE-SCC-DCSK-derivation]]
 .DCSK Derivation
 []
 ----
@@ -1739,8 +1720,6 @@ function DCSK_KeyDeriv(key,L) = {
 NOTE: Due to the computational cost of the derivation functions, implementations may
 cache recently used derived keys for both the Root RCSK and Locality-derived keys.
 
-The generation of a SCC from a CR (cf.{nbsp}<<ACE-SCC-export>>) and the import of a SCC into a CR (cf.{nbsp}<<ACE-SCC-import>>) are defined next.
-
 [[ACE-SCC-export]]
 .Generation of the SCC from a CR Using AES-GCM-SIV (RFC8452)
 []
@@ -1750,10 +1729,11 @@ SIV : bits(128);
 tmp : bits(128);
 enc_key : bits(256);
 auth_key : bits(128);
-content : array[z] of bytes,      // from the CR's metadata
-where z : int ← size(SCC) - 8;    // content as serialized "view", size in bytes derived from metadata
+// content as serialized "view", size in bytes derived from metadata
+content : array[z] of bytes,        // from the CR's metadata
+where z : int ← SCC_content_size(metadata[31:0]);
 ASSERT(8 divides z);
-M : array[32 + z] of bytes;       // information
+M : array[32 + z] of bytes;          // information
 let last_block_fractional : boolean ← z % 16 != 0;
 let num_blocks : int ← ceil(z / 16);
 
@@ -1802,7 +1782,7 @@ metadata : bits(64) ← M[0 .. 7]
 if (there is not enough memory for the algorithm encoded in the metadata)
     error ace_err_insufficient_memory
 
-z ← size(content[] according to metadata);
+z ← SCC_content_size(metadata[31:0]);
 num_blocks ← ceil(z / 16);
 last_block_fractional : boolean ← (z % 16 != 0);
 
@@ -1841,9 +1821,8 @@ if (tag != SIV) then { error ace_err_authentication; }
 - as well as creating shares for threshold implementations.
 ----
 
-
 [[ACE-trappable-insns-support]]
-=== Support for Trappable (Emulated) Operations
+=== Trappable (Emulated) Operations
 
 [WARNING]
 This section is currently non-normative. There are ongoing discussions on whether to formalize it completely and make it normative.
@@ -2721,13 +2700,9 @@ if (X1 != 0) then { handle error }       // do not use the plaintext if error oc
 ===== Alternative Examples
 
 GCM security is not compromised if `H` is revealed.
-Consequently, an implementation based on a simpler ECB mode CC is possible,
-as shown below (for encryption only -- decryption is similar).
+Consequently, an implementation based on a simpler ECB mode CC is possible, as shown below (for encryption only -- decryption is similar).
 However, this significantly increases code size and requires implementing `Galoismul(V4, V3)`.
-Adding a dedicated mode to the ACE unit is a minor effort, and it allows internal logic to optimize execution
-beyond the capabilities of, for instance, a compiler on an in-order CPU. It also means that the CPU
-does not have to implement the carry-less multiplication (cf.{nbsp}<<ACE-V-dependency>>),
-and only a shared ACE unit has to,
+Adding a dedicated mode to the ACE unit is a minor effort, and it allows internal logic to optimize execution beyond the capabilities of, for instance, a compiler on an in-order CPU. It also means that the CPU does not have to implement the carry-less multiplication (cf.{nbsp}<<ACE-V-dependency>>), and only a shared ACE unit has to,
 which saves hardware costs when several small cores share a single ACE unit.
 
 [[ACE-pseudocode-GCM-encryption-alternate]]
@@ -3545,7 +3520,6 @@ ace.state K0, #ace_hash_hash_finalize
 ace.exec V0, K0  // this is the value of the CMAC
 ----
 
-
 [[ACE-hash-functions]]
 ==== Hash and MAC Functions, and XOFs
 
@@ -3614,7 +3588,6 @@ State Machine:::
  ** _hash_last_block_: Set the length of the last block to absorb, then absorb it.
  ** _hash_output_: Output the hash.
  ** _completed_: The CC has completed the operation (XOF's do not have this state).
-
 
 * *Allowed State Transitions:*
  ** _initial_ -> _hash_absorb_ -> _hash_last_block_ -> _hash_output_ -> _completed_.
@@ -4094,8 +4067,6 @@ four, two, or one ``ace.exec`` instructions are required, respectively.
 
 NOTE: There is no need to provide “keyed” versions of this algorithm.
 If a providing, trusted entity wants to provide a CC in which some secret content has already been provisioned, there is nothing to prevent it.
-
-
 
 ===== Ascon-XOF128
 
