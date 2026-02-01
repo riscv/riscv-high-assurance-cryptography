@@ -1343,7 +1343,7 @@ Knowing this size is necessary for any feature that relies on `ace.export`, incl
 
 * Metadata type `ace.size` returns the total size (in bytes) of a SCC having the metadata section given in `Xn` into GPR `Xd`, and zero if the algorithm is not supported.
 +
-On RV32, `Xs` must contain only bits [31:0] of the metadata.  This suffices since they contain all fields required to determine the size of the SCC.
+On RV32, `Xs` contains bits [31:0] of the metadata.  This suffices since they contain all fields required to determine the size of the SCC.
 
 * Internal Capacity `ace.size` returns the amount of internal CF capacity used by a CR with metadata section matching `Xn` on the
 the Algorithm, SP_Protection, and Key_Type metadata fields. In this case, all other bits must be zero.
@@ -1351,21 +1351,7 @@ If the combination of Algorithm, SP_Protection, and Key_Type fields is not suppo
 If, instead, only the State_Number is non zero and its value is 15, resp., 14, `ace.size` returns the total, resp., the remaining internal capacity of the CRF. +
 All the values returned by the instruction are expressed in terms of implementation-dependent units, and in principle cannot be compared across different implementations.
 +
-On RV32, `Xs` must contain only bits [31:0] of the metadata (as for the metadata type instruction).
-
-Size Functions::: {empty}
-+
---
-Suppose `x` is a variable representing the first 32 bits of the metadata section of a CC.
-We assume that the implementation provides the following functions (or an equivalent mechanism):
-
-. `MD_size(x)` returns the byte length of the entire metadata section. Currently, always 8.
-. `II_content_size(x)` returns the size in bytes of the content section of an II. It only depends on the 12 bits `Key_Type @ Algorithm`.
-. `SCC_content_size(x)` returns the size in bytes of the content section of an SCC. It only depends on the 12 bits `Key_Type @ Algorithm`.
-
-The total size of an II is therefore `MD_size()` + `II_content_size()`, and the total size of an SCC is `MD_size()` + `SCC_content_size()`.
---
-+
+On RV32, `Xs` contains bits [31:0] of the metadata (as for the metadata type instruction).
 
 Properties::
 Possibly modifies state: *NO*. +
@@ -1643,7 +1629,6 @@ Interruptible: *YES*.
 
 // ///////////////////////////////////////////////////////////////////////////////////////////
 
-
 [[ACE-init-export-import-semantics]]
 === Semantics of Initialization, Export and Import of Cryptographic Contexts
 
@@ -1690,6 +1675,19 @@ While `content[]` provides a view of (certain fields of the) the content of a CR
 For example, let us consider a threshold implementation. A single key byte in `content[]` may correspond to multiple bytes across the key shares within the CR. Reading that byte may return the XOR of the corresponding bytes in the shares; writing to it may distribute the value across the corresponding bytes in the shares such that their XOR equals the input. These operations may be deferred until the end of an initialization or import instruction: writing to `context[]` may initially write only to the first share of a key, and at the end of the initialization or import instruction, the various shares are generated.
 ====
 
+[[ACE-size-functions]]
+==== Size Functions
+
+Suppose `x` is a variable representing the first 32 bits of the metadata section of a CC.
+We assume that the implementation provides the following functions (or an equivalent mechanism):
+
+. `MD_size(x)` returns the byte length of the entire metadata section. Currently, always 8.
+. `II_content_size(x)` returns the size in bytes of the content section of an II. It only depends on the 12 bits `Key_Type @ Algorithm`.
+. `SCC_content_size(x)` returns the size in bytes of the content section of an SCC. It only depends on the 12 bits `Key_Type @ Algorithm`.
+
+The total size of an II is therefore `MD_size()` + `II_content_size()`, and the total size of an SCC is `MD_size()` + `SCC_content_size()`.
+
+
 [[ACE-init]]
 ==== Initialization
 
@@ -1701,18 +1699,19 @@ We start with the algorithm performed by the initialization instruction, which r
 ----
 M : array of bytes // in memory
 
-metadata : bits(64) = M[0 .. 7]
+metadata : bits(64) = M[0 .. 7] // PREEMPTIBLE WITH `ACESTART` IN [0 .. 7]
 z ← SCC_content_size(metadata[31:0]);
 
-if (z == 0) // not enough CRF capacity left for the algorithm encoded in the metadata
+if (z == 0) // Not enough CRF capacity left for the algorithm encoded in the metadata
    error ace_err_memory
 
 - Complete metadata parsing.
-- Read sequentially and parse the z-8 bytes starting at M+8.
+// NEXT OPERATION PREEMPTIBLE WITH `ACESTART` IN [8 .. Z+7]
+- Sequentially read and parse the z bytes at M+8.
 ----
 
 [[ACE-SCC-AEAD]]
-==== AEAD Algorithm for SCC Export and Import
+==== Export and Import
 
 The AEAD algorithm used to export CRs into SCCs is a slight modification of AES-GCM-SIV cite:[DBLP-journals-iacr-GueronLL17,RFC8452].
 We define the Key Derivation and the DCSK Derivation functions first.
