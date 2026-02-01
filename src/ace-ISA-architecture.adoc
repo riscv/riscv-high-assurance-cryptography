@@ -39,7 +39,7 @@ domains.
 Object-Orientation:::
 CCs act as _objects_ exposing a uniform interface across algorithms.
 A CC encapsulates algorithm-specific behavior, enabling interchangeable use of different primitives (e.g., AES-128, AES-256, Калина-128, Калина-256, Кузнечик, SM4, and so on) in identical modes (e.g., ECB, GCM-SIV, XEX/XTS) without requiring changes to compiled code.
-Side-channel-resistant variants are supported transparently.
+SCA-resistant variants are supported transparently.
 
 Usage Control Policy:::
 (((Cryptographic Context, Usage Control)))
@@ -368,12 +368,12 @@ Implementations of the SKT *must* provide a suitable Locality to the ACE unit du
 [[ACE-format-definition]]
 ==== Initialization Input
 
-The total length of the II must be a multiple of 8 bytes.
-The first 8 bytes constitute the metadata section, as defined in <<ACE-metadata>>.
+The length of an II must be a multiple of 8 bytes.
+The first 8 bytes contain the metadata section, as defined in <<ACE-metadata>>.
 The subsequent bytes form the *content*—the key material and any algorithm-specific data—whose format and length are specified in <<ACE-algorithms>> for all architected algorithms. The II content's structure and size are entirely determined by the Algorithm and Key_Type fields within the metadata.
 
 NOTE: The actual resource usage of a CR may be larger than the size of an II.
-In the simple ECB schemes (<<ACE-ECB-mode>>) not hardened against side-channel attacks, a CR need not contain more than the metadata and the key, hence their  resource usage matches the size of the II (unless the key is not a multiple of 64 bits).
+In the simple ECB schemes (<<ACE-ECB-mode>>) not hardened against SCA, a CR need not contain more than the metadata and the key, hence their resource usage matches the size of the II (unless the key is not a multiple of 64 bits).
 However, several algorithms need to compute and cache additional data once initialized, and their internal state will be larger than the size of the II.
 
 [[ACE-format-SCC]]
@@ -617,11 +617,11 @@ The standard error codes are:
 
 Examples of Invalid input/operation:{empty}:::
 Invalid metadata passed to `ace.init` is invalid;
-encryption, resp., decryption is requested from a CC only configured for decryption, resp., encryption;
+encryption, resp., decryption is requested from a CC not allowing it;
 a Form of `ace.exec` that is not permitted in the current algorithm state is used;
-the requested change of state in `ace.state` is not permitted;
-the change in usage policies in `ace.restrict` is not permitted;
-software tried to use an incomplete CC in a CR as a source in an `ace.exec`, `ace.state`, `ace.input`, `ace.output`, `ace.clone`, `ace.derive`, or `ace.restrict` operation.
+the State_number in `ace.state` is not allowed;
+invalid change in usage policies in `ace.restrict`;
+software tried to use an incomplete CC in a CR as a source in an `ace.exec`, `ace.export`, `ace.state`, `ace.input`, `ace.output`, `ace.clone`, `ace.derive`, or `ace.restrict` operation.
 
 [[norm:ace_exc_priority]]
 .ACE error priority in decreasing priority order.
@@ -742,9 +742,7 @@ Only the second pass can cause page faults and may require resumption._
 This design obviates the need to separate data transfer from cryptographic processing during import and export operations. A separate transfer phase would require buffering the entire input within the ACE unit before processing, increasing internal resource requirements, whereas the current architecture can process data inline and is loaded with minimal overhead.
 ====
 
-A different situation arises when an `ace.exec` instruction operates on long vectors containing multiple elements, in which case, usually, `VL*SEW` is a multiple of the basic processing unit usually denoted by `b` (such as a block size).
-In the algorithm description we explicitly mention that a block of operations is repeated for each block in the vector:
-the execution of these iterative `ace.exec` instructions may be interrupted and resumed.
+A different situation arises when an `ace.exec` instruction operates on long vectors containing multiple elements, in which case `VL*SEW` is a multiple of the basic processing unit usually denoted by `b` (such as a block size) in the algorithms. In this situation, `ace.exec` can work iteratively on each block of the input, and execution of `ace.exec` may be interrupted and resumed.
 Regardless of whether the operations are on vectors or on the input/output buffer, `acestart` reflects the number of bytes processed so far.
 
 The semantics and use of `acestart` are described in <<ACE-init-export-import>>.
@@ -768,13 +766,16 @@ If the size is zero, `ace.input` and `ace.output` will raise an invalid instruct
 `aceiobuftop` is an XLEN-bit RW CSR.
 
 `aceiobuftop` is used to program the top end of a transfer operation to and from the input/output buffer for the `ace.input` and `ace.output` instructions.
-In conjunction with `acestart` it defines the range of buffer.
+`aceiobuftop` must be {le} `aceiobuflen`. Setting a larger value will raise an invalid instruction exception.
+In conjunction with `acestart`, `aceiobuftop` defines the range of buffer used in the subsequent operations.
 
 Reconfiguring `aceiobuftop` will not invalidate the buffer contents.
 
-Reconfiguring `aceiobuflen` will initially set `aceiobuftop` to the same value.
+Writing to `aceiobuflen` will set `aceiobuftop` to the same value.
 
-If `aceiobuftop` is zero, `ace.input` and `ace.output` will raise an invalid instruction exception.
+// If `aceiobuftop` is zero, `ace.input` and `ace.output` will raise an invalid instruction exception.
+If `aceiobuflen-acestart` is zero or an invalid size for the operation that uses the buffer, `aceerror` is set to error code ace_err_invalid.
+
 
 [[ACE-CSR-acesequence]]
 ===== `acesequence`
@@ -1967,7 +1968,7 @@ Unless explicitly stated otherwise in an algorithm's specification, it is always
 NOTE: In many algorithms, an `ace.exec` or `ace.state` operation could logically imply a state change. For example, after setting an IV or nonce in an AEAD mode, the instruction might naturally transition to a subsequent state. To ensure consistent behavior, the ACE architecture favors explicit state transitions via separate instructions, even if this adds instruction count. It is always permissible to issue an `ace.state` instruction that transitions to the current state. Deviations from these behaviors may be necessary to avoid security issues.
 One such example is automatic transitions from hash finalization to verification, or from hash verification to the _completed_ state (cf.{nbsp}<<ACE-state-constants>> and <<ACE-algorithms>>) to prevent that the user may test several values against an unknown tag and thus potentially gain information about a hashing key.
 
-// zzz
+//
 
 [[ACE-generic-rules]]
 ==== Generic Rules
@@ -1976,10 +1977,7 @@ One such example is automatic transitions from hash finalization to verification
 ===== Usage of `ace.input` and `ace.output` to Replace Vector Inputs and Outputs
 
 The `ace.input` and `ace.output` instructions may be used to replace the inputs and outputs to Forms A-C of `ace.exec`, the auxiliary inputs of Form C `ace.state` or of Form C of `ace.derive` in any algorithm, to the point that an implementation of ACE without the V extension or a subset thereof is possible.
-
-These two instructions can be used if enabled in the implementation and the range size `aceiobuftop-acestart` is non-zero and is a valid size for the algorithm, otherwise an invalid instruction error is raised.
-
-If `aceiobuflen` is non-zero, Forms A, B, and C of `ace.exec`, as well as Forms C of `ace.derive` and `ace.state`, can be replaced as follows:
+Forms A, B, and C of `ace.exec`, as well as Forms C of `ace.derive` and `ace.state`, can be replaced as follows:
 
 [[ACE-replacement-instructions]]
 .Replacement sequences for `ace.exec` and `ace.derive` using `ace.input` and `ace.output`
@@ -1998,6 +1996,9 @@ If `aceiobuflen` is non-zero, Forms A, B, and C of `ace.exec`, as well as Forms 
 | `ace.derive` / C | `ace.derive Kd\|K[Xd], Ks1\|K[Xs1], Vs2` | `ace.input{nbsp}{nbsp}Xl, Vs2` +
 `ace.derive{nbsp}Kd\|K[Xd], Ks1\|K[Xs1]` // Form A
 |===
+
+`ace.input` and `ace.output` may be used if enabled and `aceiobuflen` is non zero, otherwise an invalid instruction error is raised.
+If `aceiobuflen` is non zero, and the range size `aceiobuftop-acestart` is zero or an invalid size for the algorithm, the `ace.exec` operation is not performed and `aceerror` is set to error code ace_err_invalid.
 
 In all cases, the `ace.input` and `ace.output` instructions must be temporarily tied to a specific context in order to properly determine the allowed sequences.
 This is done by setting the `aceactivecr` CSR (cf.{nbsp}<<ACE-CSR-aceactivecr>>) first. The user must not forget to set it back to 32 after the sequence is completed.
@@ -2270,7 +2271,7 @@ State Machine:::
 If `IOLEN` is a multiple of `b`, the above three commands are applied to each of the `IOLEN/b` `b`-bit blocks of `INPUT`, producing each time the corresponding `b`-bit block of `OUTPUT`.
 If the number `x` of blocks to be processed in an entire run of the algorithm is not a multiple of `IOLEN`/`b`, `VL` can be set to the remainder of the division of `x` by `IOLEN`/`b` for the last instruction.
 
-Note that if `ace.state` is issued to return to state _initial_, the CC can be reused with a new `IV`.
+Note that if `ace.state` is issued to return to state _initial_, the CC can be reused with a new IV.
 
 ===== Usage
 
