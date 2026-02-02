@@ -232,9 +232,9 @@ The metadata section is used as the header of the data formats used in CR initia
 .>|   Field .>| Width +
 (bits) .>| Name                  .>| Description
 |   [0:0] |   1  | Format                 | Value is 0 for the current metadata format. +
-Future formats with a 1 in this position may be 128 bits long or longer.
+The value 1 is reserved for future formats with a length of 128 bits.
 |   [1:1] |   1  | Reserved               | Zero.
-|  [11:2] |  10  | Algorithm              | Algorithm (such as primitive or mode).
+|  [11:2] |  10  | Algorithm              | Cryptographic algorithm (such as primitive, mode, or protocol).
 | [13:12] |   2  | SC_Protection          | Level of Side Channel Protection, encoded as per <<ACE-SC-protection-levels>>.
 | [15:14] |   2  | Direction_Policy       | Determines whether the CC may be used for encryption (bit 18 set), decryption (bit 19 set), or both (bits 18 and 19 set). Valid only for encryption/decryption primitives or modes, and ignored, for instance, for hash functions.
 | [17:16] |   2  | Key_Type               | Key given by explicit value / System Key (index) / Internally generated.
@@ -295,7 +295,7 @@ These key types are encoded as follows:
 
 *System Keys* are given by an index into an internal, system specific System Keys Table (SKT). For each algorithm as specified in <<ACE-algorithms>>, the part of the content that normally contains the key(s) is replaced by its index into the SKT-for both II and the SCCs. The actual value of the key is never included in exported content. For threshold implementations, ACE may copy the key material from the SKT into the CR and expand it into multiple shares.
 
-*Internally generated keys* are also system-specific. In the II, the key material is replaced by a system-specific “recipe”, which is not defined by the ISA and may be non-portable. After internal key generation, the actual key value—not the recipe—is stored in the SCC content, consistent with other keys for the same algorithm. The Key_Type field in the metadata remains 2 across all CC representations.
+*Internally generated keys* are also system-specific. In place of the II, the initialization operation reads a system-specific “recipe”, which is not portable. After internal key generation, the actual key value—not the recipe—is stored in the CR and SCC. The Key_Type field in the metadata remains 2.
 
 //
 
@@ -308,8 +308,8 @@ These denote a CC that is ready to operate, is in an invalid state, or has finis
 During import and init, internally the State_Number field is set to _invalid_, and only at the end of the operation is it set to _initial_.
 This means, by the rules in <<ACE-invalidation>>, that a partially initialized/imported CR cannot be exported.
 
-Export is unaffected by this, but any operation that could modify the internal state should not be performed while an interrupted export operation is in progress.
-Since privileged code knows that the instruction has been interrupted, it must avoid using such an operation-it is supposed not to use CCs from child processes anyway.
+Export is unaffected by this, but operations that could modify the internal state should not be performed on a CR with an interrupted export operation.
+//(Privileged code should not use CCs from child processes anyway.)
 
 [WARNING]
 --
@@ -324,24 +324,26 @@ The following situation may occur:
 
 This works because the actual value of the key is not changed.
 
-However, if a value such as a counter is modified between the interruption and resumption of an export operation, the resumed export may encrypt the remaining SCC data with an incorrect SIV.  Consequently, a later import of that SCC will fail.  This is a general issue with CRs, because more privileged code can use them unless restricted by the corresponding UC_Policy bit.  We do not regard this as a security threat, as it only affects SCC availability—not confidentiality or integrity—and compromised privileged code already has the ability to tamper with the availability of user‑process resources.
+However, if any value of the state (such as a counter) is altered between the interruption and resumption of an export operation, the resumed export may use an incorrect SIV for the remaining SCC data, causing a subsequent import to fail authentication. This is a general issue with CRs, since more privileged code can use them unless blocked by the UC_Policy. We do not consider this a security threat: it affects only SCC availability, not confidentiality or integrity,
+and privileged code can always deny resources to user processes.
 --
 
-If an algorithm defines 16 or fewer states (including _initial_, _completed_, and _invalid_), the current state number is stored directly in this field. For algorithms with more than 16 states, an algorithm-specific representation is used in the CC content, and the State_Number field is restricted to the values 0, 1, 14, and 15, where 1 serves as a placeholder for any operational state other than the three architected ones. The state values for algorithms defined in this specification are listed in <<ACE-state-constants>>.
+If an algorithm defines 16 or fewer states (including _initial_, _completed_, and _invalid_), the current state number is stored directly in this field. For algorithms with more than 16 states, an algorithm-specific representation is used in the CC content, and the State_Number field is restricted to the values 0, 1, 14, and 15, where 1 serves as a placeholder for any operational state other than the three architected ones.
+
+The state values for algorithms defined in this specification are listed in <<ACE-state-constants>>.
+
+All states different from _invalid_ are called valid states.
 
 //
 
 [[ACE-Localities]]
 ===== Locality Field
 
-Internally, ACE keeps a table of 128-bit Locality Secrets (LS), the Locality Secrets Table (LST).
-Some entries of the LST are fixed or configurable only using an implementation—specific authenticated hardware procedure, and these are
-global and shared across all ACE units in the same system or in the same SoC.
-A few entries may be programmed by M-mode and are architectural, i.e., per hart.
+ACE keeps a table of 128-bit Locality Secrets (LS), the Locality Secrets Table (LST).
+Some entries of the LST are fixed or configurable only using an implementation–specific authenticated hardware procedure: These are global and shared across all ACE units in the same system. Other entries may be programmed by privileged modes and are architectural, i.e., per hart.
 
 If the Locality Field of a CC is all ones (15), then the RCSK is used.
 Otherwise, this value is used as an index _i_ in the LST, and the actual CSK is derived from the RCSK and LST[_i_].
-
 <<ACE-locality-indexes>> lists the architected Localities and whether M-mode can configure them.
 The domain of each Locality Secret is specified, i.e., whether the value is chip-wide
 (i.e., the same across all chiplets in the same SoC),
@@ -422,7 +424,7 @@ Both metadata and the serialization of the content are authenticated, but only p
 The AEAD method used for this purpose is described in <<ACE-SCC-AEAD>>).
 
 The metadata section of an SCC follows the same fixed architectural format as the metadata section of the II.
-The content format—and consequently its length—is algorithm-specific (cf.{nbsp}<<ACE-algorithms>>) and is determined solely by the Algorithm and Key_Type fields in the metadata as well, but in general differs from the content section of the II.
+The content format—and consequently its length—is algorithm-specific (cf.{nbsp}<<ACE-algorithms>>) and is determined solely by the Algorithm, Key_Type, and Direction_Policy fields in the metadata.
 
 NOTE: The size of the SCC can differ significantly from the internal resource usage to store the CC's data in a CR—it can be larger but also smaller.
 The most common case is when the SCC is larger, for instance for simple primitives, because of the SIV overhead.
@@ -431,7 +433,7 @@ On the other hand, in case of threshold implementations, where keys are exported
 [[ACE-CSR]]
 ==== CSRs
 
-ACE extends `*status` and `misa`, and adds up to 25 new CSRs, which are listed in <<ACE-CSRs-table>>.
+ACE extends `*status` and `misa`, and adds up to 29 new CSRs, which are listed in <<ACE-CSRs-table>>.
 
 [[ACE-CSRs-table]]
 .New ACE CSRs
@@ -742,7 +744,7 @@ If all CRs were either unconfigured or to be lazy-loaded, the ACES field would b
 [[ACE-CSR-acestart]]
 ===== `acestart`
 
-`acestart` is an XLEN-bit RW CSR, similar to `vstart`, tracking progress of long-running interruptible instructions such as `ace.init`, `ace.import`, `ace.export`, `ace.input`, and `ace.output`, as well as `ace.exec` on long vectors.
+`acestart` is an XLEN-bit RW CSR, to track progress of long-running interruptible instructions such as `ace.init`, `ace.import`, `ace.export`, `ace.input`, and `ace.output`, as well as `ace.exec` on long inputs.
 (((CSR, acestart)))
 
 Unlike the vector extension’s `vstart`, which tracks element indices, ACE has no _intrinsic_ notion equivalent to that of vector elements.
@@ -783,7 +785,7 @@ The two CSRs described next may be used to optimize saving and restoring the inp
 
 `aceiobuflen` is an XLEN-bit RW CSR.
 
-`aceiobuflen` is used to program the size of the input/output buffer for the `ace.input` and `ace.output` instructions.
+`aceiobuflen` is used to program the size of the input/output buffer for `ace.input` and `ace.output`.
 
 Reconfiguring `aceiobuflen` will invalidate the buffer contents.
 
@@ -821,10 +823,10 @@ Its usage in conjunction with the `ace.input` and `ace.output` operations is det
 
 This is an XLEN-bit URW CSR (5 bits defined).
 
-It serves to tie `ace.input`,  `ace.output`, `ace.exec`, and `ace.derive` instructions to the state of a specific CR.
+It serves to tie `ace.input`, `ace.output`, `ace.exec`, `ace.state` and `ace.derive` instructions to the state of a specific CR.
 It can take values 0 to 31, or 32 to disable the tie.
 
-It can only be changed if `acesequence` is zero.
+It can only be changed if `acesequence` is zero, else an invalid instruction exception is raised.
 
 If the value is not 32, the CR in `ace.exec` and the source CR in `ace.derive` can only have this value, otherwise an invalid instruction exception is raised.
 This serves to make sure that the instructions are issued in the correct order.
@@ -1729,9 +1731,9 @@ We assume that the implementation provides the following functions (or an equiva
 
 . `MD_size(x)` returns the byte length of the entire metadata section. Currently, always 8.
 . `II_content_size(x)` returns the size in bytes of the content section of an II. It only depends on the 12 bits `Key_Type @ Algorithm`.
-. `SCC_content_size(x)` returns the size in bytes of the content section of an SCC. It only depends on the 12 bits `Key_Type @ Algorithm`.
+. `SCC_content_size(x)` returns the size in bytes of the content section of an SCC. It only depends on the 14 bits `Direction_Policy @ Key_Type @ Algorithm`.
 
-The total size of an II is therefore `MD_size()` + `II_content_size()`, and the total size of an SCC is `MD_size()` + `SCC_content_size()`.
+The total size of an II is therefore `MD_size(x)` + `II_content_size(x)`, and the total size of an SCC is `MD_size(x)` + `SCC_content_size(x)`.
 
 [[ACE-init]]
 ==== Initialization
@@ -2070,7 +2072,7 @@ Algorithms that differ substantially from those described in <<ACE-algorithms>> 
 
 The state number is stored in the metadata or content section of the CC/SCC, as described in <<ACE-metadata>>, with the constraint that the State_Number field must always contain one of the values 0, 14, 15, or 1.
 
-Unless explicitly stated otherwise in an algorithm's specification, it is always possible to transition from any state to state _initial_.
+Unless explicitly stated otherwise in an algorithm's specification, it is always possible to transition From any valid state to state _initial_.
 
 NOTE: In many algorithms, an `ace.exec` or `ace.state` operation could logically imply a state change. For example, after setting an IV or nonce in an AEAD mode, the instruction might naturally transition to a subsequent state. To ensure consistent behavior, the ACE architecture favors explicit state transitions via separate instructions, even if this adds instruction count. It is always permissible to issue an `ace.state` instruction that transitions to the current state. Deviations from these behaviors may be necessary to avoid security issues.
 One such example is automatic transitions from hash finalization to verification, or from hash verification to the _completed_ state (cf.{nbsp}<<ACE-state-constants>> and <<ACE-algorithms>>) to prevent that the user may test several values against an unknown tag and thus potentially gain information about a hashing key.
@@ -2237,8 +2239,8 @@ State Machine:::
  ** _decrypt_: Decrypting blocks of input.
 
 * *Allowed State Transitions:*
- ** From any state to _encrypt_, if encryption is allowed, else the CR is *invalidated* (cf.{nbsp}<<ACE-invalidation>>).
- ** From any state to _decrypt_, if decryption is allowed, else the CR is *invalidated*.
+ ** From any valid state to _encrypt_, if encryption is allowed, else the CR is *invalidated* (cf.{nbsp}<<ACE-invalidation>>).
+ ** From any valid state to _decrypt_, if decryption is allowed, else the CR is *invalidated*.
 
 * *Behavior:*
  ** In state _initial_, no `ace.exec` instruction is allowed.
@@ -2481,16 +2483,14 @@ Note that if `ace.state` is issued to return to state _initial_, the CC can be r
 
 ===== Usage
 
-Using XEX mode is very easy. We include pseudocode for encryption only, decryption is entirely similar
-(this example is also assuming `b` = `IOLEN` = 128).
+We provide only encryption pseudocode, decryption is similar
+(also this example assumes `b` = `IOLEN` = 128).
 
 [[ACE-pseudocode-basic-IV-mode]]
 .Pseudocode for encryption in any IV-based non-authenticated mode without associated data
 ----
-// Acquire payload
 - Info: plaintext = *PT
-- Call an API to get the corresponding key from a key management applet or HW block.
-- The API returns the SCC. Assume X5 is the pointer to it.
+- Call an API to get the corresponding SCC. Assume X5 is the pointer to it.
 - Allocate memory for ciphertext buffer CT (if not same as PT).
 
 vsetvli zero, 4, e32, m1, ta, ma          // Use 128-bit vectors
@@ -2507,8 +2507,6 @@ foreach(i from 0 to ceil(len_in_bytes(PT)/16)-1) {
 
 To implement the XTS mode, the ciphertext stealing part is easy to realize using the XEX algorithm together with vector masking and shifting operations.
 (((ACE, algorithm, XTS)))
-
-NOTE: Another ```ace.state K0, #ace_state_initial``` would reset the internal state and allow to begin another decryption with a new IV.
 
 [[ACE-tweakable]]
 ==== Generic Tweakable Blocks Ciphers
@@ -2682,7 +2680,7 @@ Finally, `tag` is returned in `OUTPUT`, and the state is changed to _completed_.
 If `IOLEN` > `b`, only the `b` least significant bits of `INPUT` are considered.
 
 ** In state _enc_tag_finalize_, only ``ace.exec`` instructions of Form C are allowed. +
-  “```ace.exec OUTPUT, Kn|K[Xn]```” writes the `tag` to `OUTPUT` and the state transitions to _completed_.
+  “```ace.exec OUTPUT, Kn|K[Xn]```” writes the `tag` to `OUTPUT`, and the state transitions to _completed_.
 
 ** In state _decrypt_, only  ``ace.exec`` instructions of Form A are allowed. +
  ```ace.exec OUTPUT, Kn|K[Xn], INPUT``` absorbs the ciphertext `INPUT` into the `tag`, then decrypts `INPUT` into `OUTPUT`, namely:
@@ -2715,8 +2713,9 @@ If `IOLEN` > `b`, only the `b` least significant bits of `INPUT` are considered.
 
 ** To transition to state _hash_verify_, a Form C ``ace.state`` instruction must be used to provide
 the value against which the internally computed tag must be compared:
-  . If the values match, then the state is changed to _completed_, and `ace.error` returns no error,
-  . else the state is changed to _completed_, and `ace.error` returns `ace_err_authentication`.
+   If the values match, then `aceerror` is set to _ace_err_ok_,
+   else and `aceerror` is set to _ace_err_authentication_.
+   The state transitions to _completed_.
 
 ** Upon completion of `ace.import`, the ACE unit recomputes `hash_key`, i.e.:
   . `hash_key <- enc_blk(key, zeros(b))`.
@@ -2917,8 +2916,7 @@ The public `SIV` value is computed by clearing the most significant bit of `tag`
  . `tag`, `b` bits.
  . `SIV`, `b` bits.
 
-NOTE: The internal state fields `hash_key` and `auth_key` are not serialized, and must be recomputed upon each `ace.import`. +
-The `SIV` field is actually only needed for decryption, since it must be maintained separately from the `tag` field, which changes with each processed block as it is computed, whereas for encryption it is first computed completely and then used in the encryption process. However, since the same CC could be configured to support both encryption and decryption, the `SIV` field always present in the internal state (even if not used) and in the exported state.
+NOTE: The internal state fields `hash_key` and `auth_key` are not serialized, and must be recomputed upon each `ace.import`.
 
 //
 
@@ -2986,8 +2984,8 @@ The value
   *** `INPUT <- bin(bit_length(AD), b/2) @ bin(bit_length(plaintext), b/2)`,
 --
 +
-must be set by the user.
-Then, “```ace.exec OUTPUT, Kn|K[Xn], INPUT```” finalizes the computation of the SIV/tag, by performing:
+is set by the user.
+Then, “```ace.exec```” finalizes the SIV/tag computation by performing:
 +
 --
     . `absorb(INPUT)`.
@@ -3015,7 +3013,7 @@ If `IOLEN` > `b`, only the `b` least significant bits of `INPUT` are considered.
 +
 If `IOLEN` > `b`, the above operations are applied to each of the `IOLEN/b` blocks in `INPUT`.
 
- ** In state _decrypt_,  only  ``ace.exec`` instructions of the Form A are allowed, namely “```ace.exec OUTPUT, Kn|K[Xn], INPUT```,” to decrypt `INPUT` into `OUTPUT` and then absorb the plaintext `INPUT` into the `tag`:
+ ** In state _decrypt_,  only Form A ``ace.exec`` instructions are allowed. “```ace.exec OUTPUT, Kn|K[Xn], INPUT```” decrypts `INPUT` into `OUTPUT` and then absorbs the plaintext `OUTPUT` into the `tag`:
 +
 --
      . If `ctr == 0`, then the CR is *invalidated*.
@@ -3024,7 +3022,7 @@ If `IOLEN` > `b`, the above operations are applied to each of the `IOLEN/b` bloc
           ``{nbsp}{nbsp}{nbsp}{nbsp}{nbsp}{nbsp}{nbsp}xor enc_blk(enc_key, 1 @ SIV[b-2:b/4] @ (SIV[b/4-1:0] + ctr % 2^b/4^))``,
      . else (it is `3b/4`-bits long) +
        .. ``OUTPUT <- INPUT xor enc_blk(enc_key, 1 @ SIV[3b/4-2:0] @ ctr``.
-     . `absorb(INPUT)`.
+     . `absorb(OUTPUT)`.
      . `ctr <- ctr + 1`.
 --
 +
@@ -3038,7 +3036,7 @@ If `IOLEN` > `b`, the above operations are applied to each of the `IOLEN/b` bloc
   ***  `INPUT <- bin(bit_length(AD), b/2) @ bin(bit_length(plaintext), b/2)`.
 --
 +
-``ace.exec`` thus performs the following operations:
+``ace.exec`` then performs the following operations:
 +
 --
   . `absorb(INPUT)` (which modifies `tag`).
@@ -3046,10 +3044,9 @@ If `IOLEN` > `b`, the above operations are applied to each of the `IOLEN/b` bloc
   . If tag length is `b` bits, then
      .. `tag <- tmp`,
   . else (tag length is `3b/4` bits)
-     .. `tag <- tmp[b-1:0] @ (b/4)b0`.
-  . Finally, `tag` and `SIV` are compared:
-     .. If the values match, the state transitions to _completed_ and `ace.error` returns no error,
-  else the state transitions to _completed_ and `ace.error` returns `ace_err_authentication`.
+     .. `tag <- tmp[3b/4-1:0] @ zeros(b/4)`.
+    If `tag` and `SIV` match, `aceerror` is set to _ace_err_ok_, else `aceerror` is set to _ace_err_authentication_.
+  . The state transitions to _completed_.
 --
 +
 If `IOLEN` > `b`, only the `b` least significant bits of `INPUT` are considered.
@@ -3352,7 +3349,7 @@ In both cases the state then transitions to _enc_tag_finalize_.
 performs `OUTPUT <- zeros(b-tag_len) @ hash_P[tag_len-1:0]`.
 
 ** In state _decrypt_, only ``ace.exec`` instructions of Form A are allowed.
-    “```ace.exec OUTPUT, Kn|K[Xn], INPUT```” decrypts `INPUT` into `OUTPUT`, and absorbs the plaintext `OUTPUT` into the `tag`, namely:
+    Such an ``ace.exec`` decrypts `INPUT` into `OUTPUT`, and absorbs the plaintext `OUTPUT` into the `tag`, namely:
 +
 --
   * `tmp : bits(b)`
@@ -3370,23 +3367,24 @@ If `IOLEN` > `b`, the same behavior applies as in state _encrypt_.
 ** To move to _dec_last_block_, a Form B `ace.state` operation must be used to set the bit length of the final block of the ciphertext in `last_blk_len`.
 
 ** In state _dec_last_block_, only an ``ace.exec`` instruction of Form A “```ace.exec OUTPUT, Kn|K[Xn], INPUT```,” is allowed if `last_blk_len` is nonzero.
-In this case, the same operations as in state _enc_last_block_ are performed except for line 6., that reads instead
+In this case, the same operations as in state _enc_last_block_ are performed except for Line 6, which is instead
 +
 --
 [start=6]
 . `tmp2 <- (zeros(b-last_blk_len-1) @ 1 @ INPUT[last_blk_len-1:0]) xor offset`
 --
 +
-If `last_blk_len` is zero, only an ``ace.exec`` instruction of Form D, “```ace.exec Kn|K[Xn]```,” is allowed, which performs the same operations as in state _enc_last_block_.
+and the state is changed to _hash_verify_.
 +
-For any value of `last_blk_len`, the state is changed to _hash_verify_.
+If `last_blk_len` is zero, only an ``ace.exec`` instruction of Form D, “```ace.exec Kn|K[Xn]```,” is allowed, which performs the same operations as in state _enc_last_block_, except for the final state transition, which also in this case is to _hash_verify_.
 
 ** To complete the algorithm in the decryption branch, a Form C ``ace.state`` operation must be used to (confirm the)
-transition to state _hash_verify_ and compares the `tag_len` least significant bits of `INPUT` with the `tag_len` least significant bits of `hash_P`:
+transition to state _hash_verify_ and compare the `tag_len` least significant bits of `INPUT` with the `tag_len` least significant bits of `hash_P`:
 +
 --
-  . If the values match, then the state is changed to _completed_, and `ace.error` is set to no error,
-  . else the state is changed to _completed_, and `ace.error` returns `ace_err_authentication`.
+  . If the values match, then `aceerror` is set to _ace_err_ok_,
+  . else `aceerror` is set to _ace_err_authentication_.
+  . The state transitions to _completed_.
 --
 +
 
@@ -3406,7 +3404,7 @@ Pseudocode for OCB encryption is given in <<ACE-pseudocode-OCB-encryption>> (aga
  - nonce N with bit length N_len
  - tag length tag_len
 
-- Process gets an OCB encryption CC from an API. Assume X5 is the pointer to the CC.
+ - Process gets an OCB encryption CC from an API. Assume X5 is the pointer to the CC.
 - Allocate memory for ciphertext buffer CT (if not same as PT).
 
 vsetvli zero,4,e32,m1,ta,ma                        // Use 128-bit vectors
@@ -3414,7 +3412,7 @@ ace.import K0, (X5)
 
 // The next operations set the nonce
 X1 ← N_len
-ace.state K0, #ace_state_set_aux_value,X1
+ace.state K0, #ace_state_set_aux_value, X1
 V0 ← N
 ace.exec K0, V0
 
@@ -3430,13 +3428,13 @@ foreach(i from 0 to AD_fullblocks-1) {
    V0 ← AD[16*i .. 16*i+15]
    ace.exec K0, V0                                 // Absorb it into hash
 }
-
 X1 ← AD_len mod 128                                // Can be zero
 ace.state K0, #ace_state_hash_finalize, X1
-if (X1 mod 128 != 0) then
+if (X1 mod 128 != 0) then {
    V0 ← zeros(128)
    V0 ← AD[AD_fullblocks*16 .. AD_fullblocks*16+ceil(X1/8)]
    ace.exec K0, V0                                 // Absorb it into hash and encrypt
+}
 
 // Encrypt plaintext and continue computation of tag
 ace.state K0, #ace_state_encrypt
@@ -3445,7 +3443,6 @@ foreach(i from 0 to PT_fullblocks-1) {
    ace.exec V1, K0, V0
    CT[16*i .. 16*i+15] ← V1
 }
-
 X1 ← PT_len mod 128                                // Can be zero
 ace.state K0, #ace_state_last_block, X1
 if (X1 mod 128 != 0) then {
@@ -3533,9 +3530,8 @@ State Machine:::
  ** _completed_: The CC has completed the CMAC operation.
 
 * *Allowed State Transitions:*
- ** _initial_ -> _hash_absorb_.
- ** _hash_absorb_ -> _hash_last_block_ -> _hash_output_ -> _completed_.
- ** From any state to state _initial_.
+ ** _initial_ -> _hash_absorb_ -> _hash_last_block_ -> _hash_output_ -> _completed_.
+ ** From any valid state to state _initial_.
 * *Behavior:*
  ** In state _initial_:
   *** `last_block_len <- zeros(64)`
@@ -3680,7 +3676,7 @@ State Machine:::
 
 * *Allowed State Transitions:*
  ** _initial_ -> _hash_absorb_ -> _hash_last_block_ -> _hash_output_ -> _completed_.
- ** From any state to state _initial_.
+ ** From any valid state to state _initial_.
 
 * *Behavior:*
  ** In state _initial_:
@@ -3805,7 +3801,7 @@ State Machine:::
 
 * *Allowed State Transitions:*
  ** _initial_ -> _hash_absorb_ -> _hash_last_block_ -> _hash_finalize_ -> _hash_output_ -> _completed_.
- ** From any state to state _initial_.
+ ** From any valid state to state _initial_.
 
 * *Behavior:*
  ** In state _initial_, `state` is zeroed.
@@ -3971,10 +3967,10 @@ The differences between the operation of `ace.exec` in this state and in state _
  . `state[3] <- state[3] xor key[63:0]`
  . `state[4] <- state[4] xor key[127:64]`
  . `OUTPUT <- state[3] @ state[4]` // only the 128 lsb's of `OUTPUT` are written to.
+ . The state machine then transitions to state _completed_.
 --
 +
-In this state only one 128-bit block is processed. +
-The state machine then transitions to state _completed_.
+In this state only one 128-bit block is processed.
 
 ** In state _decrypt_, only  ``ace.exec`` instructions of Form A are allowed., i.e.,
  `ace.exec OUTPUT,Kn|K[Xn],INPUT`. This operation performs:
@@ -4020,9 +4016,9 @@ If the value is out of bounds, the instruction raises an invalid instruction err
 . `ASCON(12)`
 . `state[3] <- state[3] xor key[63:0]`
 . `state[4] <- state[4] xor key[127:64]`
-. `INPUT[tag_len-1:0]` is compared to `(state[3] @ state[4])[tag_len-1:0]`
-. If the values match, then the state is changed to _completed_, and `ace.error` returns no error,
-  else the state is changed to _completed_, and `ace.error` returns `ace_err_authentication`.
+. `INPUT[tag_len-1:0]` is compared to `(state[3] @ state[4])[tag_len-1:0]` and the
+. If the values match, then `aceerror` is set to _ace_err_ok_,
+  else `aceerror` is set to _ace_err_authentication_. The state is changed to _completed_.
 --
 +
 
@@ -4320,7 +4316,7 @@ When exporting a partial CR, a Partial CR Metadata (PCREM) header is used as the
 .>|   Field .>| Width +
 (bits) .>| Name                  .>| Description
 |   [0:0] |   1  | Format                 | Value is 0 for the current metadata format. +
-Future format will have a 1 in this position and may be longer than 64 bits.
+The value 1 is reserved for future formats with a length of 128 bits.
 |   [1:1] |   1  | Incomplete             | Value is 1.
 |   [2:2] |   1  | Variant                | The value is 0 if the configuration was interrupted at initialization, and
                                             the value is 1 if the configuration was interrupted while importing.
