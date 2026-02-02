@@ -233,13 +233,13 @@ The metadata section is used as the header of the data formats used in CR initia
 (bits) .>| Name                  .>| Description
 |   [0:0] |   1  | Format                 | Value is 0 for the current metadata format. +
 Future formats with a 1 in this position may be 128 bits long (or longer).
-|   [4:1] |   4  | Locality               | A field which is either all ones (15) or an index into the Locality Secrets Table.
-|   [5:5] |   1  | Reserved               | Zero.
-|  [15:6] |  10  | Algorithm              | Algorithm (such as primitive or mode).
-| [17:16] |   2  | SC_Protection          | Level of Side Channel Protection, encoded as per <<ACE-SC-protection-levels>>.
-| [19:18] |   2  | Direction_Policy       | Determines whether the CC may be used for encryption (bit 18 set), decryption (bit 19 set), or both (bits 18 and 19 set). Valid only for encryption/decryption primitives or modes, and ignored, for instance, for hash functions.
-| [21:20] |   2  | Key_Type               | Key given by explicit value / System Key (index) / Internally generated.
-| [25:22] |   4  | State_Number           | Encoding the current state of the state machine of the algorithm as a number.
+|   [1:1] |   1  | Reserved               | Zero.
+|  [11:2] |  10  | Algorithm              | Algorithm (such as primitive or mode).
+| [13:12] |   2  | SC_Protection          | Level of Side Channel Protection, encoded as per <<ACE-SC-protection-levels>>.
+| [15:14] |   2  | Direction_Policy       | Determines whether the CC may be used for encryption (bit 18 set), decryption (bit 19 set), or both (bits 18 and 19 set). Valid only for encryption/decryption primitives or modes, and ignored, for instance, for hash functions.
+| [17:16] |   2  | Key_Type               | Key given by explicit value / System Key (index) / Internally generated.
+| [21:18] |   4  | State_Number           | Encoding the current state of the state machine of the algorithm as a number.
+| [25:22] |   4  | Locality               | A field which is either all ones (15) or an index into the Locality Secrets Table.
 | [29:26] |   4  | UC_Policy              | “UC Policy” means “Usage Control Policy”. If bit 26, 27, 28, resp. 29 is set, it disallows the _usage_ of this CC in User, (V)S-mode, H-mode, resp. M-mode.
 | [31:30] |   2  | Reserved               | Zero.
 | [34:32] |   3  | Filter-Mode            | Mode at which to apply the filter: 0 = none; 1 = U; 2 = (V)S; 3 = H; +
@@ -248,18 +248,21 @@ Future formats with a 1 in this position may be 128 bits long (or longer).
 | [63:60] |   4  | Reserved               | Zero.
 |===
 
-Confidentiality:::
+Some fields and their properties need further explanation. This is done in the following sections.
+
+===== Confidentiality
+
 Bits [31:0] are not confidential and will not be encrypted upon export as SCC. +
 Bits [63:32] are confidential and will be encrypted upon export as SCC.
 
-Algorithm field:::
+===== Algorithm field
+
 Algorithms are encoded in a 10-bit field.
 Algorithm numbers 0-895 are architecture-defined and the list of such encodings is maintained by RVI.
 cf.{nbsp}<<ACE-algorithms>> for the currently encoded algorithms.
 
-SC_Protection field::: {empty}
-+
---
+===== SC_Protection Field
+
 Certain minimal Side-Channel protection levels are defined by the architecture.
 [[ACE-SC-protection-levels]]
 .Encoding of Side-Channel Protection levels
@@ -274,12 +277,9 @@ Certain minimal Side-Channel protection levels are defined by the architecture.
 
 Custom algorithms may offer stronger side channel protection guarantees than those specified in the encoding values 0 to 2.
 In such a case, the value of the SC_Protection field must be set to 3.
---
-+
 
-Key_Type field::: {empty}
-+
---
+===== Key_Type Field
+
 ACE supports keys provided by software, as well as system keys and keys computed with a system “recipe”.
 These key types are encoded as follows:
 [[ACE-key-type]]
@@ -292,30 +292,47 @@ These key types are encoded as follows:
 |   2   | Internally generated key.
 |   3   | Invalid.
 |===
---
-+
+
 *System Keys* are given by an index into an internal, system specific System Keys Table (SKT). For each algorithm as specified in <<ACE-algorithms>>, the part of the content that normally contains the key(s) is replaced by its index into the SKT-for both II and the SCCs. The actual value of the key is never included in exported content. For threshold implementations, ACE may copy the key material from the SKT into the CR and expand it into multiple shares.
-+
+
 *Internally generated keys* are also system-specific. In the II, the key material is replaced by a system-specific “recipe”, which is not defined by the ISA and may be non-portable. After internal key generation, the actual key value—not the recipe—is stored in the SCC content, consistent with other keys for the same algorithm. The Key_Type field in the metadata remains 2 across all CC representations.
 
 //
-State_Number field::: {empty}
-+
---
+
+===== State_Number field
+
 The State_Number field must be zero in the II.
-Three values are architected for all algorithms: 0, 14, and 15, representing the _initial_, _invalidated_, and _completed_ states, respectively. These denote a CC that is ready to operate, has been invalidated, or has finished its operations.
+Three values are architected for all algorithms: 0, 14, and 15, representing the _initial_, _invalid_, and _completed_ states, respectively.
+These denote a CC that is ready to operate, is in an invalid state, or has finished its operations.
 
-If an algorithm defines 16 or fewer states (including _initial_, _completed_, and _invalidated_), the current state number is stored directly in this field. For algorithms with more than 16 states, an algorithm-specific representation is used in the CC content, and the State_Number field is restricted to the values 0, 1, 14, and 15, where 1 serves as a placeholder for any operational state other than the three architected ones. The state values for algorithms defined in this specification are listed in <<ACE-state-constants>>.
+During import and init, internally the State_Number field is set to _invalid_, and only at the end of the operation is it set to _initial_.
+This means, by the rules in <<ACE-invalidation>>, that a partially initialized/imported CR cannot be exported.
+
+Export is unaffected by this, but any operation that could modify the internal state should not be performed while an interrupted export operation is in progress.
+Since privileged code knows that the instruction has been interrupted, it must avoid using such an operation-it is supposed not to use CCs from child processes anyway.
+
+[WARNING]
 --
-+
+The following situation may occur:
 
-Usage Control Policy::: {empty}
-* Bits 26, 27, resp 28 must be set to 1 if U-mode, S-mode, resp. H-mode is not supported/enabled.
+. A process is exporting a threshold CC from a CR.
+. The process is interrupted for context switching.
+. The privileged code then saves the context, by exporting. The key in saved in the SCC as a single share.
+. Later, the privileged code re-imports the SCC into a CR.
+. This means that the key has been re-imported with a different randomization.
+. When the export operation resumes, it will continue to export the key as a single share, i.e., with the same value.
+
+This works because the actual value of the key is not changed.
+
+However, if a value such as a counter is modified between the interruption and resumption of an export operation, the resumed export may encrypt the remaining SCC data with an incorrect SIV.  Consequently, a later import of that SCC will fail.  This is a general issue with CRs, because more privileged code can use them unless restricted by the corresponding UC_Policy bit.  We do not regard this as a security threat, as it only affects SCC availability—not confidentiality or integrity—and compromised privileged code already has the ability to tamper with the availability of user‑process resources.
+--
+
+If an algorithm defines 16 or fewer states (including _initial_, _completed_, and _invalid_), the current state number is stored directly in this field. For algorithms with more than 16 states, an algorithm-specific representation is used in the CC content, and the State_Number field is restricted to the values 0, 1, 14, and 15, where 1 serves as a placeholder for any operational state other than the three architected ones. The state values for algorithms defined in this specification are listed in <<ACE-state-constants>>.
 
 //
 
 [[ACE-Localities]]
-==== Localities
+===== Localities
 
 Internally, ACE keeps a table of 128-bit Locality Secrets (LS), the Locality Secrets Table (LST).
 Some entries of the LST are fixed or configurable only using an implementation—specific authenticated hardware procedure, and these are
@@ -354,12 +371,16 @@ The constant Localities_MAX is the maximum number of Localities supported by the
 
 NOTE: M-mode is responsible for virtualizing the OSSecret and BootSecret Locality Secrets.
 
-*Example*: _If a key's metadata specifies a Locality field value of 2, the import/export key is derived from the RCSK and the OEM Secret. An SCC created on one device will fail authentication when imported on another device if their OEM Secrets differ._
+NOTE: Example: If a key's metadata specifies a Locality field value of 2, the import/export key is derived from the RCSK and the OEM Secret. An SCC created on one device will fail authentication when imported on another device if their OEM Secrets differ.
 
 NOTE: A CC may reference a key via an index into the System Key Table (SKT).
 A device-specific SKT entry may correspond to a different key on another device.
 Using the latter may lead to unspecified behavior.
 Implementations of the SKT *must* provide a suitable Locality to the ACE unit during CR configuration, and set usage policies that are at least as strict as the key's own.
+
+===== Usage Control Policy
+
+Bits 26, 27, resp 28 are ignored if U-mode, S-mode, resp. H-mode is not supported/enabled.
 
 [[ACE-format-definition]]
 ==== Initialization Input
@@ -1173,8 +1194,7 @@ Trappable: *YES*. +
 Interruptible: *YES*.
 
 NOTE: The operation can be conceptually split into two phases.
-In the first phase, the metadata
-block is read, which determines the length of the remaining information.
+In the first phase, the metadata block is read, which determines the length of the remaining information.
 Then, in the second phase, the rest of the SCC is read and processed.
 
 NOTE: The instruction encoding includes a single bit to indicate a system-defined format. If multiple such formats are supported, the data format itself must incorporate a unique identifier to differentiate them. The system is therefore responsible for embedding these identifiers within all system-defined formats.
@@ -1441,19 +1461,20 @@ This instruction can be used to:
 * Activate the side-channel protection of the CC or increase it.
 
 Let `m` be the metadata field of the CC in the destination CR. +
-On RV64, the instruction works as follows:
+On RV64, the semantics of the instruction are:
 
-* `Xs`[15:0] and `Xs`[25:20] must be zero
-* `Xs`[19:16] and `Xs`[63:32] have the same format as the corresponding bits of the metadata.
-* `Xs`[17:16] is used to turn on side-channel protection or increase its level, if implemented.
+* `Xs`[11:0] and `Xs`[25:16] must be zero.
+* `Xs`[15:12] and `Xs`[63:32] have the same format as the corresponding bits of the metadata.
+* `Xs`[13:12] is used to turn on side-channel protection or increase its level, if implemented.
 The level is encoded according to <<ACE-SC-protection-levels>>.
 Downgrading protection level is not permitted. Attempting to do so will cause error _ace_err_invalid_ (cf.{nbsp}<<ACE-error-codes>>).
-* `Xs`[19:18] is used to deactivate either encryption or decryption in a CC that allows both. +
-If `m`[19:18] = `0b11`, then at least one bit of `Xs`[19:18] must be set to 1 to select which operation is kept. +
-If `m`[19:18] != `0b11`, then it must be `Xs`[19:18] = `m`[19:18] or `Xs`[19:18] = 0, in which case no change is made, else this will result in error _ace_err_invalid_.
+* `Xs`[15:14] is used to deactivate either encryption or decryption in a CC that allows both. +
+If `m`[15:14] = `0b11`, then at least one bit of `Xs`[15:14] must be set to 1 to select which operation is kept. +
+If `m`[15:14] != `0b11`, then it must be `Xs`[15:14] = `m`[15:14] or `Xs`[15:14] = 0, in which case no change is made, else this will result in error _ace_err_invalid_.
 * A zero in any of the four bits `Xs`[29:26] means that the corresponding policy is _not_ changed.
 * A one in any of the four bits `Xs`[29:26] means that usage by the corresponding mode is forbidden, and the corresponding bit in the metadata of the destination CC is set to 1.
-* `Xs`[33:32] can be non-zero only if `m`[33:32] is zero, in which case  `m`[55:34] <- `Xs`[55:34], else `aceerror` is set to _ace_err_invalid_.
+* `Xs`[34:32] can be non-zero only if `m`[33:32] is zero, in which case  `m`[59:35] <- `Xs`[59:35], else `aceerror` is set to _ace_err_invalid_.
+* This instruction cannot set a Locality.
 
 On RV32, `s` must be even, the register pair `X[s]` and `X[s+1]` is read,
 and `(X[s+1] @ X[s])` replaces `Xs` in the RV64 description.
@@ -1661,17 +1682,17 @@ Interruptible: *YES*.
 
 From the point of view of the system outside the ACE unit, `ace.init` and `ace.import` appear a series of sequential memory reads, and `ace.export`, appear a series of sequential memory writes.
 
-The only points of interruption of these instructions are the memory read or write operations.
+The only admissible points of interruption of these instructions are the memory read or write operations.
 The instructions may be interrupted because of a memory exception, and any other type of interrupt must either wait until the next memory read or write.
 They may resume from the point of interruption only if the control flow is returned to them immediately after the interrupt handler has completed.
 The privileged interrupt handler must ensure that the instruction is restarted only in this situation, and in any other circumstance, including context switching, the instruction must be restarted, in which case if the instruction is `ace.init` or `ace.import` it must also clear the CR.
 The implementation will also restart any operation if the internal state of the CR is not in a valid interrupted state.
 
-[WARNING]
+[NOTE]
 The initial cryptographic phase of `ace.export` is currently architected to be uninterruptible.
 Even if this phase is executed concurrently with other operations, an interrupt handler may need to wait for it to complete before proceeding with any access to the CR.
 
-[NOTE]
+[WARNING]
 --
 The requirement that the initial cryptographic phase of `ace.export` be uninterruptible could become a performance bottleneck for very long SCCs, or cause timing issues. To address this, we could allow the SIV computation to be interrupted by using odd values in `acestart`. With reference to <<ACE-SCC-export>>, the SIV computation processes 16-byte blocks via POLYVAL. An `acestart` value of 17 would indicate interruption after the metadata has been multiplied by the hashing key; values of 33, 49, and so on would indicate interruption after subsequent content blocks have been added to the partial hash and multiplied by the hashing key. The instruction remains uninterruptible between the final hash multiplication and the subsequent encryption. Consequently, a value of `SCC_content_size() + 17` would signify that the memory write of the metadata was interrupted immediately, replacing a zero `acestart` value.
 --
@@ -1778,8 +1799,11 @@ else
 
 {enc_key, auth_key} = RFC8452_KeyDeriv(CSK);
 
+metadata.State_Number <- ace_state_initial
 tmp ← POLYVAL(auth_key, zeros(64) @ metadata @ content[]);
 SIV ← AESE(enc_key, 0 @ tmp[126:0]));
+
+metadata.State_Number <- ace_state_invalid
 
 // FOLLOWING MEMORY WRITE PREEMPTIBLE, `ACESTART` FROM 0 TO 7
 M[0 .. 7] ← (metadata[63:32] xor AESE(enc_key, 1 @ SIV[126:0])[31:0])
@@ -1798,7 +1822,19 @@ foreach(i from 0 to num_blocks - 1) {
       M[24+i*16 .. 39+i*16] ← content[i*16 .. 15+i*16]
          xor AESE(enc_key, 1 @ SIV[126:32] @ (SIV[31:0] + bin(i+1, 32) % 2**32);
 }
+
+metadata.State_Number <- ace_state_initial
 ----
+
+The import Algorithm needs some special care:
+
+* If an import operation is preempted, the hardware must save `metadata.State_Number` and set +
+`metadata.State_Number <- ace_state_invalid` before relinquishing control.
+* When control is returned, the previous value of `metadata.State_Number` is restored.
+* How to implement this is implementation dependent, but the corresponding information is stored in the CR, i.e., there must be a bit signaling whether a value of `metadata.State_Number` has been saved and a 4-bit field with this.
+* If, upon returning to the interrupted process, the bit signaling that a value for `metadata.State_Number` has been saved is unset, the operation must be restarted.
+* The first read is the read of the metadata block itself. If fewer than 4 bytes are read, the instruction is interrupted with `acestart` = 0 so it will be restarted.
+If at least 4 bytes have been read, the value of `metadata.State_Number` are known.
 
 [[ACE-SCC-import]]
 .Importing a SCC into a CR
@@ -1815,6 +1851,9 @@ tmp : bits(128);
 metadata : bits(64) ← M[0 .. 7]
 if (there is not enough memory for the algorithm encoded in the metadata)
     error ace_err_insufficient_memory
+
+saved_SN : bits(4) <- metadata.State_Number
+metadata.State_Number <- saved_SN
 
 z ← SCC_content_size(metadata[31:0]);
 num_blocks ← ceil(z / 16);
@@ -1853,7 +1892,34 @@ if (tag != SIV) then { error ace_err_authentication; }
 - Now the content can be deserialized.
 - This includes computing any derived values not saved as part of the SCC,
 - as well as creating shares for threshold implementations.
+
+// FINALLY:
+metadata.State_Number <- ace_state_initial
 ----
+
+//
+
+[[ACE-invalidation]]
+=== Invalid Inputs and Operations, CR Invalidation
+
+{empty}
+(((ACE, algorithm, invalid state)))
+(((Cryptographic Register, invalidation)))
+If an invalid input is provided to any ACE instruction, or an instruction that is not explicitly allowed in a given state is executed, while processing the algorithm in CR, say, `Kn`, the `Kn` is *invalidated*, namely, the following happens:
+
+* `Kn` is put into state _invalid_;
+* For instructions that refer to `Kn`:
+ ** `ace.init`, `ace.clear` (thus also `ace.reset`), `ace.import`, `ace.export`, `ace.size` and `ace.available` work normally.
+ ** `ace.exec`, `ace.clone`, `ace.derive`, and `ace.restrict` raise an invalid instruction error;
+ ** `ace.input` and `ace.output` raise an invalid instruction error when `aceactivecr` is `Kn`;
+ ** `ace.state` raises an invalid instruction error unless it is used to return to state _initial_;
+ ** `ace.error` always returns error _ace_err_invalid_ after any operation involving the CR except for
+    `ace.import` and `ace.export`, `ace.clean`, `ace.init`, and `ace.size`, which all work normally, and using `ace.state` to return to state _initial_.
+* The current instruction is terminated.
+
+In state _completed_, only `ace.init`, `ace.export`, `ace.import`, `ace.clear`, and `ace.error` are permitted.
+
+//
 
 [[ACE-trappable-insns-support]]
 === Trappable (Emulated) Operations
@@ -1980,7 +2046,7 @@ The following table defines the state names and numbers used by the algorithms i
 |  10   | ace_state_encrypt             | _encrypt_           | In this state encryption is performed, and also absorption in a tag computation function if part of the algorithm.
 |  11   | ace_state_decrypt             | _decrypt_           | In this state decryption is performed, and also absorption in a tag computation function if part of the algorithm.
 |  12   | ace_state_set_aux_value       | _set_aux_value_     | Set a public/auxiliary value in an algorithm.
-|  14   | ace_state_invalidated         | _invalidated_       | The algorithm has abnormally terminated: +
+|  14   | ace_state_invalid             | _invalid_           | The algorithm has abnormally terminated or initialization/import have not completed:
 `ace.error` will always return error code _ace_err_invalid_.
 |  15   | ace_state_completed           | _completed_         | The algorithm has completed, not necessarily without error.
 |===
@@ -2064,26 +2130,6 @@ The internal input/output buffer is not part of any CR. It is architectural, i.e
 In all algorithms, whenever one of the instructions in <<ACE-replacement-instructions>> occurs, it may be replaced by a replacement sequence. We do not write this explicitly in the algorithm descriptions for brevity.
 
 NOTE: This mechanism is one of the reasons, besides keeping the state machines simple, that in a given state of an algorithm, only one Form of `ace.exec` or `ace.state` is allowed.  Some exceptions may be possible.  For instance, both a Form D and a Form B could be allowed, with different semantics, and when using replacement sequences, these would be distinguished according to whether `aceiobuftop` - `acestart` is zero or not.
-
-[[ACE-invalidation]]
-===== Invalid Inputs and Operations, CR Invalidation
-
-{empty}
-(((ACE, algorithm, invalid state)))
-(((Cryptographic Register, invalidated)))
-If an invalid input is provided to any ACE instruction, or an instruction that is not explicitly allowed in a given state is executed, while processing the algorithm in CR, say, `Kn`, the `Kn` is *invalidated*, namely, the following happens:
-
-* `Kn` is put into state _invalidated_;
-* For instructions that refer to `Kn`:
- ** `ace.init`, `ace.clear` (thus also `ace.reset`), `ace.import`, `ace.export`, `ace.size` and `ace.available` work normally.
- ** `ace.exec`, `ace.clone`, `ace.derive`, and `ace.restrict` raise an invalid instruction error;
- ** `ace.input` and `ace.output` raise an invalid instruction error when `aceactivecr` is `Kn`;
- ** `ace.state` raises an invalid instruction error unless it is used to return to state _initial_;
- ** `ace.error` always returns error _ace_err_invalid_ after any operation involving the CR except for
-    `ace.import` and `ace.export`, `ace.clean`, `ace.init`, and `ace.size`, which all work normally, and using `ace.state` to return to state _initial_.
-* The current instruction is terminated.
-
-In state _completed_, only `ace.init`, `ace.export`, `ace.import`, `ace.clear`, and `ace.error` are permitted.
 
 //
 
@@ -2179,8 +2225,9 @@ State Machine:::
  ** _decrypt_: Decrypting blocks of input.
 
 * *Allowed State Transitions:*
- ** From any state to state _encrypt_, if encryption is allowed, else the CR is *invalidated*.
- ** From any state to state _decrypt_, if decryption is allowed, else the CR is *invalidated*.
+ ** From any state to _encrypt_, if encryption is allowed, else the CR is *invalidated* (cf.{nbsp}<<ACE-invalidation>>).
+ ** From any state to _decrypt_, if decryption is allowed, else the CR is *invalidated*.
+
 * *Behavior:*
  ** In state _initial_, no `ace.exec` instruction is allowed.
  ** In states _encrypt_ or _decrypt_, we can only issue Form A `ace.exec` instructions, i.e., +
