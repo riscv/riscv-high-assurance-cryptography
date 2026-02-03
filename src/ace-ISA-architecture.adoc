@@ -43,8 +43,7 @@ SCA-resistant variants are supported transparently.
 
 Usage Control Policy:::
 (((Cryptographic Context, Usage Control)))
-ACE distinguishes between CR management (e.g., import/export) and CC usage (cryptographic operations).
-To prevent denial of service scenarios, CR management operations must always be permitted.
+ACE distinguishes between CC/CR *management* (e.g., initialization, import, export, and cloning) and CC/CR *usage* (cryptographic operations, including including key derivation, and state change). To prevent denial of service scenarios, management operations must _always_ be permitted, unless the CR is an invalid state.
 Accordingly, the optional _Usage Control_ policies restrict only cryptographic operations and state modifications, not CR or SCC management.
 For this reason, the term Usage Control is used instead of Access Control.
 
@@ -179,7 +178,7 @@ Conventional registers do not provide such functionality-and do not need to.
 * Whereas conventional registers always contain a value, CRs can be _unconfigured_, meaning they may hold no information.
 * The amount of the capacity of the CRF used by a CR depends on the configured algorithm.
   Two CRs can use different amounts of capacity.
-  Insufficient residual CRF capacity may prevent the execution of an instruction that configures a CR, such as `ace.init`, `ace.import`,
+  Insufficient residual CRF capacity may prevent the execution of a CR *configuration* instruction, i.e. `ace.init`, `ace.import`,
    `ace.clone`, (<<ACE-instruction-clone>>) or `ace.derive` (<<ACE-instruction-derive>>).
   In this case,
 //, ACE returns _ace_err_memory_ (<<ACE-error-codes>>), and
@@ -192,6 +191,11 @@ software must free capacity by unconfiguring other CRs.
 //  ** `ace.state`, used to move between the different stages of modes of operations and hash functions, possibly performing certain state-state initialization operations.
 
 Accessing a CR that is outside the range [0..31] raises a invalid instruction error.
+
+[NOTE]
+====
+The management operations include the *configuration* instructions (`ace.init`, `ace.import`, `ace.clone`, and `ace.derive`) and the export operation (`ace.export`).
+====
 
 [NOTE]
 ====
@@ -373,13 +377,14 @@ device-wide, or OS-wide.
 The constant Localities_MAX is the maximum number of Localities supported by the system.
 
 NOTE: M-mode is responsible for virtualizing the OSSecret and BootSecret Locality Secrets.
+S-mode is responsible for virtualizing the SSecret Locality Secret.
 
 NOTE: Example: If a key's metadata specifies a Locality field value of 2, the import/export key is derived from the RCSK and the OEM Secret. An SCC created on one device will fail authentication when imported on another device if their OEM Secrets differ.
 
 NOTE: A CC may reference a key via an index into the System Key Table (SKT).
 A device-specific SKT entry may correspond to a different key on another device.
 Using the latter may lead to unspecified behavior.
-Implementations of the SKT *must* provide a suitable Locality to the ACE unit during CR configuration, and set usage policies that are at least as strict as the key's own.
+Implementations of the SKT *must* provide a suitable Locality to the ACE unit during CR initialization, and set usage policies that are at least as strict as the key's own.
 
 ===== UC_Policy Field
 
@@ -695,14 +700,15 @@ where
 and
 ``acecrstatus[``2__i__+1,2__i__``]`` for CR #__i__+16.
 
-This section defines the semantics of the `acecrstatus` bit-fields:
+This section defines the semantics of the `acecrstatus` bit-fields.
+Here, “Configuration” refers to the management operations that can configure a CR, namely `ace.init`, `ace.import` and being the destination of an `ace.derive` operation.
 
 * *INITIAL* (value: 1).
 +
 --
  ** *State*: Unconfigured.
- ** *Permitted operations*: None.
  ** *Usage*: Raises _ace_err_unconfigured_. No trap is generated.
+ ** *Export*: Raises _ace_err_unconfigured_. No trap is generated.
  ** *Configuration*: Does not trap. Transitions to *DIRTY*.
 --
 +
@@ -711,7 +717,8 @@ This section defines the semantics of the `acecrstatus` bit-fields:
 +
 --
  ** *State*: Unconfigured. A value is saved for lazy loading.
- ** *Permitted operations*: Export and usage trigger a trap to the operating system for lazy loading. Execution resumes from state *CLEAN*.
+ ** *Usage*: Trigger a trap to the operating system for lazy loading. Execution resumes from state *CLEAN*.
+ ** *Export*: Trigger a trap to the operating system for lazy loading. Execution resumes from state *CLEAN*.
  ** *Configuration*: Works as expected; sets status to *DIRTY*.
 --
 +
@@ -720,7 +727,8 @@ This section defines the semantics of the `acecrstatus` bit-fields:
 +
 --
  ** *State*: The CR configured and loaded. Its state has not changed since the last switch.
- ** *Permitted operations*: Unrestricted; modification sets status to *DIRTY*.
+ ** *Usage*: Unrestricted; State modification sets status to *DIRTY*.
+ ** *Export*: Works as expected.
  ** *Configuration*: Works as expected; sets status to *DIRTY*.
 --
 +
@@ -729,7 +737,8 @@ This section defines the semantics of the `acecrstatus` bit-fields:
 +
 --
  ** *State*: The CR configured and loaded. Its state has potentially changed since the last switch.
- ** *Permitted operations*: Unrestricted.
+ ** *Usage*: Unrestricted.
+ ** *Export*: Unrestricted.
  ** *Configuration*: Works as expected; status unchanged.
 --
 +
@@ -1932,7 +1941,7 @@ If an invalid input is provided to any ACE instruction, or an instruction that i
     `ace.import` and `ace.export`, `ace.clean`, `ace.init`, and `ace.size`, which all work normally, and using `ace.state` to return to state _initial_.
 * The current instruction is terminated.
 
-In state _completed_, only `ace.init`, `ace.export`, `ace.import`, `ace.clear`, and `ace.error` are permitted.
+In State _completed_, only `ace.init`, `ace.export`, `ace.import`, `ace.clear`, and `ace.error` are permitted.
 
 //
 
@@ -2239,8 +2248,8 @@ State Machine:::
  ** From any valid state to _decrypt_, if decryption is allowed, else the CR is *invalidated*.
 
 * *Behavior:*
- ** In state _initial_, no `ace.exec` instruction is allowed.
- ** In states _encrypt_ or _decrypt_, we can only issue Form A `ace.exec` instructions, i.e., +
+ ** In State _initial_, no `ace.exec` instruction is allowed.
+ ** In States _encrypt_ or _decrypt_, we can only issue Form A `ace.exec` instructions, i.e., +
      “`ace.exec OUTPUT, Kn|K[Xn], INPUT`.”
   *** If the state is _encrypt_, then `OUTPUT <- enc_blk(key, INPUT)`.
   *** If the state is _decrypt_, then `OUTPUT <- dec_blk(key, INPUT)`.
@@ -2338,13 +2347,13 @@ State Machine:::
 * *Allowed State Transitions:* any.
 
 * *Behavior:*
- ** In state _initial_, the `ctr` and `IV` fields are set to 0 (`ctr` is set to 1 if the algorithm is LFSR-based).
+ ** In State _initial_, the `ctr` and `IV` fields are set to 0 (`ctr` is set to 1 if the algorithm is LFSR-based).
 
  ** To transition to state _operate_, a Form C ``ace.state`` instruction must be issued.
   *** This sets the value of `IV` to `INPUT`.
   *** If `IOLEN` > `b`, only the `b` least significant bits of `INPUT` are considered.
 
-  ** In state _operate_, only Form C ``ace.exec`` instructions are allowed. +
+  ** In State _operate_, only Form C ``ace.exec`` instructions are allowed. +
      “```ace.exec OUTPUT, Kn|K[Xn]```” performs:
 +
 --
@@ -2449,7 +2458,7 @@ State Machine:::
  ** _encrypt_, _decrypt_ -> _initial_.
 
 * *Behavior:*
- ** In state _initial_:
+ ** In State _initial_:
   *** The `mask` field is set to zero.
   *** No {nbsp}``ace.exec``{nbsp} operation is allowed.
  ** The ``ace.state`` instruction to transition to either _encrypt_ or _decrypt_ must be of Form C. +
@@ -2462,12 +2471,12 @@ State Machine:::
   ..  `mask <- enc_blk(key1, mask)`
   ..  `mask <- update_mask(mask)`.
 
-  ** In states _encrypt_ and _decrypt_, only ``ace.exec`` instructions of Form A are allowed. +
+  ** In States _encrypt_ and _decrypt_, only ``ace.exec`` instructions of Form A are allowed. +
     “```ace.exec OUTPUT, Kn|K[Xn], INPUT```” performs the following operations:
 +
 --
-  . In state _encrypt_, it computes `OUTPUT = mask xor enc_blk(key1, INPUT xor mask)`. +
-    In state _decrypt_, it computes `OUTPUT = mask xor dec_blk(key1, INPUT xor mask)`.
+  . In State _encrypt_, it computes `OUTPUT = mask xor enc_blk(key1, INPUT xor mask)`. +
+    In State _decrypt_, it computes `OUTPUT = mask xor dec_blk(key1, INPUT xor mask)`.
   . `mask <- update_mask(mask)`.
 --
 +
@@ -2550,12 +2559,12 @@ State Machine:::
  ** _set_aux_value_ -> _decrypt_ -- if decryption is allowed, else the CR is *invalidated*.
 
  * *Behavior:*
-  ** In state _initial_:
+  ** In State _initial_:
    *** Upon entering the state, the `tweak` field is cleared.
   ** In each state, we can issue Form C `ace.state` instructions, i.e., ```ace.state Kn|K[Xn], #ace_state_set_aux_value, INPUT```, which perform:
    . `tweak` <- `INPUT`, and
    . _Instead of transitioning to state set_aux_value, the state remains unchanged (can be initial, encrypt, or decrypt)._
-  ** In state _encrypt_, resp., _decrypt_, besides Form C `ace.state` instructions, only ``ace.exec`` instructions of Form A are allowed.
+  ** In State _encrypt_, resp., _decrypt_, besides Form C `ace.state` instructions, only ``ace.exec`` instructions of Form A are allowed.
      “```ace.exec OUTPUT, Kn|K[Xn], INPUT```” encrypts, resp., decrypts `INPUT` into `OUTPUT`.
 
 This algorithm does not automatically update the tweak value.
@@ -2622,7 +2631,7 @@ State Machine:::
  ** _decrypt_ -> _dec_tag_finalize_ -> _hash_verify_ -> _completed_.
 
 * *Behavior:*
- ** In state _initial_ :
+ ** In State _initial_ :
   *** No {nbsp}``ace.exec``{nbsp} operation is allowed.
   *** The following initialization operations are performed:
    . `hash_key <- enc_blk(key, zeros(b))`,
@@ -2638,7 +2647,7 @@ State Machine:::
 
  ** If the AD is empty, the user can immediately issue an ``ace.state`` instruction to start encrypting or decrypting, but the transition to state _hash_absorb_ is necessary anyway to initialize the counter.
 
- ** In state _hash_absorb_, only  ``ace.exec`` instructions of Form B are allowed.
+ ** In State _hash_absorb_, only  ``ace.exec`` instructions of Form B are allowed.
  “```ace.exec Kn|K[Xn], INPUT```” absorbs a data block in `tag`, i.e.:
 +
 --
@@ -2647,7 +2656,7 @@ State Machine:::
 +
 If `IOLEN` > `b`, the above operation is executed `IOLEN/b` times.
 
-** In state _encrypt_, only ``ace.exec`` instructions of Form A are allowed.
+** In State _encrypt_, only ``ace.exec`` instructions of Form A are allowed.
    “```ace.exec OUTPUT, Kn|K[Xn], INPUT```” encrypts `INPUT` into `OUTPUT`, and absorbs the ciphertext `OUTPUT` into the `tag`, namely:
 +
 --
@@ -2677,10 +2686,10 @@ The authentication tag is computed as follows:
 Finally, `tag` is returned in `OUTPUT`, and the state is changed to _completed_. +
 If `IOLEN` > `b`, only the `b` least significant bits of `INPUT` are considered.
 
-** In state _enc_tag_finalize_, only ``ace.exec`` instructions of Form C are allowed. +
+** In State _enc_tag_finalize_, only ``ace.exec`` instructions of Form C are allowed. +
   “```ace.exec OUTPUT, Kn|K[Xn]```” writes the `tag` to `OUTPUT`, and the state transitions to _completed_.
 
-** In state _decrypt_, only  ``ace.exec`` instructions of Form A are allowed. +
+** In State _decrypt_, only  ``ace.exec`` instructions of Form A are allowed. +
  ```ace.exec OUTPUT, Kn|K[Xn], INPUT``` absorbs the ciphertext `INPUT` into the `tag`, then decrypts `INPUT` into `OUTPUT`, namely:
 +
 --
@@ -2945,7 +2954,7 @@ State Machine:::
  ** Transition to _decrypt_ possible only if decryption is allowed, else the CR is *invalidated*.
 
 * *Behavior:*
- ** In state _initial_ :
+ ** In State _initial_ :
   *** No {nbsp}``ace.exec``{nbsp} operation is allowed.
   *** The following initialization operations are performed:
    . (`enc_key`, `auth_key`) `<-` `RFC8452_KeyDeriv(key)`,
@@ -2971,11 +2980,11 @@ State Machine:::
  ** Upon issuing a Form B ```ace.state Kn|K[Xn], #ace_state_hash_absorb, Xm```:
   *** An invalid instruction error is raised and the CR is *invalidated*.
 
- ** In state _hash_absorb_, only ``ace.exec`` instructions of Form B are allowed.
+ ** In State _hash_absorb_, only ``ace.exec`` instructions of Form B are allowed.
    This instruction absorbs its `INPUT` in the `tag`, i.e., it performs `absorb(INPUT)`. +
    If `IOLEN` is a multiple of `b`, `absorb()` is executed on each of the `IOLEN/b` blocks in `INPUT`.
 
-** In state _enc_tag_finalize_, only an {nbsp}``ace.exec``{nbsp} instruction of Form A, are allowed.
+** In State _enc_tag_finalize_, only an {nbsp}``ace.exec``{nbsp} instruction of Form A, are allowed.
 The value
 +
 --
@@ -2997,7 +3006,7 @@ Then, “```ace.exec```” finalizes the SIV/tag computation by performing:
 
 If `IOLEN` > `b`, only the `b` least significant bits of `INPUT` are considered.
 
- ** In state _encrypt_, only  ``ace.exec`` instructions of the Form A are allowed, namely “```ace.exec OUTPUT, Kn|K[Xn], INPUT```,” to encrypt `INPUT` into `OUTPUT` as follows:
+ ** In State _encrypt_, only  ``ace.exec`` instructions of the Form A are allowed, namely “```ace.exec OUTPUT, Kn|K[Xn], INPUT```,” to encrypt `INPUT` into `OUTPUT` as follows:
 +
 --
 . If `ctr == 0`, then the CR is *invalidated*.
@@ -3011,7 +3020,7 @@ If `IOLEN` > `b`, only the `b` least significant bits of `INPUT` are considered.
 +
 If `IOLEN` > `b`, the above operations are applied to each of the `IOLEN/b` blocks in `INPUT`.
 
- ** In state _decrypt_,  only Form A ``ace.exec`` instructions are allowed. “```ace.exec OUTPUT, Kn|K[Xn], INPUT```” decrypts `INPUT` into `OUTPUT` and then absorbs the plaintext `OUTPUT` into the `tag`:
+ ** In State _decrypt_,  only Form A ``ace.exec`` instructions are allowed. “```ace.exec OUTPUT, Kn|K[Xn], INPUT```” decrypts `INPUT` into `OUTPUT` and then absorbs the plaintext `OUTPUT` into the `tag`:
 +
 --
      . If `ctr == 0`, then the CR is *invalidated*.
@@ -3026,7 +3035,7 @@ If `IOLEN` > `b`, the above operations are applied to each of the `IOLEN/b` bloc
 +
 If `IOLEN` > `b`, the above operations are applied to each of the `IOLEN/b` blocks in `INPUT`.
 
- ** In state _dec_tag_finalize_,
+ ** In State _dec_tag_finalize_,
    only an ``ace.exec`` instruction of Form B, are allowed,
    namely “```ace.exec Kn|K[Xn], INPUT```,” where it is the responsibility of the user to set
 +
@@ -3222,7 +3231,7 @@ State Machine:::
  ** _decrypt_ -> _dec_last_block_ -> _hash_verify_ -> _completed_.
 
 * *Behavior:*
-** In state _initial_ :
+** In State _initial_ :
   *** No {nbsp}``ace.exec``{nbsp} operation is allowed.
   *** The following initialization operations are performed:
    . `N <- 1 @ zeros(u)`.
@@ -3232,7 +3241,7 @@ State Machine:::
 ** To move to _set_aux_value_, a Form A `ace.state` must be used, where the auxiliary argument `Xs` sets the nonce length `N_len`.
  `N_len` must be at least `g-1`. If not, or a different form of `ace.state` is used, then an invalid instruction error is raised, and the CR is *invalidated*.
 
-** In state _set_aux_value_, only  ``ace.exec`` instructions of Form B, “```ace.exec Kn|K[Xn], INPUT```”, are allowed, whereby `N` is set to `INPUT`, namely
+** In State _set_aux_value_, only  ``ace.exec`` instructions of Form B, “```ace.exec Kn|K[Xn], INPUT```”, are allowed, whereby `N` is set to `INPUT`, namely
      `N <- zeros(u-N_len) @ INPUT[N_len-1:0]`
   *** If “```ace.exec Kn|K[Xn], INPUT```,” is repeated, it will rewrite `N`.
   *** If no such `ace.exec` is issued, `N` is not changed, which means that its most significant bit is 1.
@@ -3248,7 +3257,7 @@ State Machine:::
   . `L <- enc_blk(key, zeros(b))`
   . `L <- double(double(L))`
 
-** In state _hash_absorb_, only  ``ace.exec`` instructions of Form B are allowed:
+** In State _hash_absorb_, only  ``ace.exec`` instructions of Form B are allowed:
   “```ace.exec Kn|K[Xn], INPUT```” absorbs a data block in `tag`, i.e.:
 +
 --
@@ -3263,7 +3272,7 @@ If `IOLEN` > `b`, the above operation is executed `IOLEN/b` times.
 
 ** To move to _hash_finalize_, a Form B `ace.state` operation sets the length of the final block of the AD in `last_blk_len`.
 
-** In state _hash_finalize_, only one `ace.exec` instructions of Form B is allowed if `last_blk_len` != `0`.
+** In State _hash_finalize_, only one `ace.exec` instructions of Form B is allowed if `last_blk_len` != `0`.
  “```ace.exec Kn|K[Xn], INPUT```” which absorbs the last data block in `tag`, i.e.:
 +
 --
@@ -3296,7 +3305,7 @@ If `last_blk_len` == 0, however, no `ace.exec` can be executed, and only an `ace
  . `offset <- Stretch[b+bottom:bottom]`
 --
 +
-** In state _encrypt_, only ``ace.exec`` instructions of Form A are allowed:
+** In State _encrypt_, only ``ace.exec`` instructions of Form A are allowed:
    “```ace.exec OUTPUT, Kn|K[Xn], INPUT```” absorbs the plaintext `INPUT` into the `tag` and encrypts `INPUT` into `OUTPUT`, namely:
 +
 --
@@ -3310,7 +3319,7 @@ If `IOLEN > b`, the above operation sequence is executed `IOLEN/b` times, encryp
 
 ** To move to _enc_last_block_, a Form B `ace.state` instruction must be used to set the bit length of the final block of the plaintext in `last_blk_len`.
 
-** In state _enc_last_block_, only an ``ace.exec`` instruction of Form A “```ace.exec OUTPUT, Kn|K[Xn], INPUT```,”
+** In State _enc_last_block_, only an ``ace.exec`` instruction of Form A “```ace.exec OUTPUT, Kn|K[Xn], INPUT```,”
 are allowed if `last_blk_len` is nonzero.
 In this case, following operations are performed:
 +
@@ -3343,10 +3352,10 @@ On the other hand, if `last_blk_len` is zero, only an ``ace.exec`` instruction o
 +
 In both cases the state then transitions to _enc_tag_finalize_.
 
-** In state _enc_tag_finalize_, only an ``ace.exec`` instruction of Form C, “```ace.exec OUTPUT,Kn|K[Xn]```,” is allowed, which
+** In State _enc_tag_finalize_, only an ``ace.exec`` instruction of Form C, “```ace.exec OUTPUT,Kn|K[Xn]```,” is allowed, which
 performs `OUTPUT <- zeros(b-tag_len) @ hash_P[tag_len-1:0]`.
 
-** In state _decrypt_, only ``ace.exec`` instructions of Form A are allowed.
+** In State _decrypt_, only ``ace.exec`` instructions of Form A are allowed.
     Such an ``ace.exec`` decrypts `INPUT` into `OUTPUT`, and absorbs the plaintext `OUTPUT` into the `tag`, namely:
 +
 --
@@ -3364,7 +3373,7 @@ If `IOLEN` > `b`, the same behavior applies as in state _encrypt_.
 
 ** To move to _dec_last_block_, a Form B `ace.state` operation must be used to set the bit length of the final block of the ciphertext in `last_blk_len`.
 
-** In state _dec_last_block_, only an ``ace.exec`` instruction of Form A “```ace.exec OUTPUT, Kn|K[Xn], INPUT```,” is allowed if `last_blk_len` is nonzero.
+** In State _dec_last_block_, only an ``ace.exec`` instruction of Form A “```ace.exec OUTPUT, Kn|K[Xn], INPUT```,” is allowed if `last_blk_len` is nonzero.
 In this case, the same operations as in state _enc_last_block_ are performed except for Line 6, which is instead
 +
 --
@@ -3531,12 +3540,12 @@ State Machine:::
  ** _initial_ -> _hash_absorb_ -> _hash_last_block_ -> _hash_output_ -> _completed_.
  ** From any valid state to state _initial_.
 * *Behavior:*
- ** In state _initial_:
+ ** In State _initial_:
   *** `last_block_len <- zeros(64)`
   *** `hash <- zeros(b)`
   *** No {nbsp}```ace.exec```{nbsp} operation is allowed.
 
- ** In state _hash_absorb_, we can only issue ``ace.exec`` instructions of Form B. +
+ ** In State _hash_absorb_, we can only issue ``ace.exec`` instructions of Form B. +
  “```ace.exec Kn|K[Xn], INPUT```,” absorbs the data block `INPUT` into the hash as follows:
 +
 --
@@ -3550,7 +3559,7 @@ If `IOLEN` > `b`, then the above operations are applied to each `b`-bit block of
    . if `Xs > b` then the CR is *invalidated*.
    . `last_block_len <- Xs`.
 
- ** In state _hash_last_block_,  we can only issue a single ``ace.exec`` instruction of Form B, i.e., “```ace.exec Kn|K[Xn], INPUT```”, to absorb the data block `INPUT`. If `IOLEN` > `b`, only the least significant `b` bits of `INPUT` are considered.
+ ** In State _hash_last_block_,  we can only issue a single ``ace.exec`` instruction of Form B, i.e., “```ace.exec Kn|K[Xn], INPUT```”, to absorb the data block `INPUT`. If `IOLEN` > `b`, only the least significant `b` bits of `INPUT` are considered.
 +
 --
   . `(K1, K2) <- gen_subkeys(key)`.
@@ -3565,7 +3574,7 @@ If `IOLEN` > `b`, then the above operations are applied to each `b`-bit block of
 --
 +
 
-** In state _hash_output_, we can issue one ``ace.exec`` instruction of Form C, i.e., “```ace.exec OUTPUT, Kn|K[Xn]```”, to output the hash into `OUTPUT`.
+** In State _hash_output_, we can issue one ``ace.exec`` instruction of Form C, i.e., “```ace.exec OUTPUT, Kn|K[Xn]```”, to output the hash into `OUTPUT`.
    If `IOLEN` > `b`, only the bits of `OUTPUT` beyond the `b`-th are cleared.
    Upon issuing that instruction, the CC transitions to state _completed_ with no error.
 
@@ -3677,12 +3686,12 @@ State Machine:::
  ** From any valid state to state _initial_.
 
 * *Behavior:*
- ** In state _initial_:
+ ** In State _initial_:
   *** `last_block_len`, `block_base` and `block` are set to zero.
   *** `state`: the initial value is set as specified by the algorithm.
   *** Any `ace.exec` will result in the CR being *invalidated*.
 
- ** In state _hash_absorb_, we can only issue ``ace.exec`` instructions of Form B, i.e., +
+ ** In State _hash_absorb_, we can only issue ``ace.exec`` instructions of Form B, i.e., +
  “```ace.exec Kn|K[Xn], INPUT```”, to absorb the data block `INPUT` into the hash as follows.
 +
 --
@@ -3724,7 +3733,7 @@ Then, state transitions to _hash_last_block_ as expected.
   *** `absorb_last_block()` is called instead of `absorb()` in Step 3.d.i.
   *** The instruction is terminated after `absorb_last_block()`–only one block is absorbed–and the state transitions to _hash_output_.
 
- ** In state _hash_output_ we have two possible situations: we are in a hash function or in a XOF.
+ ** In State _hash_output_ we have two possible situations: we are in a hash function or in a XOF.
   *** Upon entering the state, the following operations are first performed:
   . `block[t - 1 : 0] <- finalize()`
   . `block_base <- 0`
@@ -3802,9 +3811,9 @@ State Machine:::
  ** From any valid state to state _initial_.
 
 * *Behavior:*
- ** In state _initial_, `state` is zeroed.
- ** In state _hash_absorb_, the input data is directly XORed to `state`.
- ** In state _hash_last_block_, the input data is directly XORed to `state`.
+ ** In State _initial_, `state` is zeroed.
+ ** In State _hash_absorb_, the input data is directly XORed to `state`.
+ ** In State _hash_last_block_, the input data is directly XORed to `state`.
  ** Upon transitioning to state _hash_output_:
   . The suffix and padding string `S` is generated.
   . If the bit length of `S` is `b-block_base`:
@@ -3893,7 +3902,7 @@ State Machine:::
  ** _decrypt_ -> _dec_last_block_ -> _hash_verify_ -> _completed_.
 
 * *Behavior:*
-** In state _initial_ :
+** In State _initial_ :
   *** No {nbsp}``ace.exec``{nbsp} operation is allowed.
   *** The following initialization operations are performed:
    . `state[0] <- 0x00001000808c0001`
@@ -3916,7 +3925,7 @@ State Machine:::
 +
 If `IOLEN` > 128, only the 128 least significant bits of `INPUT` are considered.
 
-** In state _hash_absorb_, only  ``ace.exec`` instructions of Form B are allowed.
+** In State _hash_absorb_, only  ``ace.exec`` instructions of Form B are allowed.
  “```ace.exec Kn|K[Xn], INPUT```” absorbs a data block into the state, i.e.:
 +
 --
@@ -3930,7 +3939,7 @@ If `IOLEN` > 128, these operations are executed `IOLEN/128` times, once for each
 ** Upon entering state _encrypt_ or _decrypt_, the following domain separation operation is performed:
  . `lsb(state[4]) <- lsb(state[4]) xor 1`
 
-** In state _encrypt_, only ``ace.exec`` instructions of Form A are allowed.
+** In State _encrypt_, only ``ace.exec`` instructions of Form A are allowed.
    “```ace.exec OUTPUT, Kn|K[Xn], INPUT```” encrypts `INPUT` into `OUTPUT`, namely:
 +
 --
@@ -3942,7 +3951,7 @@ If `IOLEN` > 128, these operations are executed `IOLEN/128` times, once for each
 +
 If `IOLEN` is a multiple of 128, these operations are executed `IOLEN/128` times, encrypting each 128-bit block of `INPUT` into the corresponding 128-bit block of `OUTPUT`.
 
-** In state _enc_last_block_, only one ``ace.exec`` instruction of Form A, to encrypt the last block is allowed.
+** In State _enc_last_block_, only one ``ace.exec`` instruction of Form A, to encrypt the last block is allowed.
 “```ace.exec OUTPUT, Kn|K[Xn], INPUT```”  performs
 +
 --
@@ -3955,7 +3964,7 @@ If `IOLEN` is a multiple of 128, these operations are executed `IOLEN/128` times
 In this state only one 128-bit block is processed. +
 The differences between the operation of `ace.exec` in this state and in state _encrypt_ are the absence of the final `ASCON(8)` and the automatic transition to state _hash_output_.
 
-** In state _hash_output_, only one ``ace.exec`` instruction of Form C, to compute the tag, is allowed.
+** In State _hash_output_, only one ``ace.exec`` instruction of Form C, to compute the tag, is allowed.
 “```ace.exec OUTPUT, Kn|K[Xn]```”  performs
 +
 --
@@ -3970,7 +3979,7 @@ The differences between the operation of `ace.exec` in this state and in state _
 +
 In this state only one 128-bit block is processed.
 
-** In state _decrypt_, only  ``ace.exec`` instructions of Form A are allowed., i.e.,
+** In State _decrypt_, only  ``ace.exec`` instructions of Form A are allowed., i.e.,
  `ace.exec OUTPUT,Kn|K[Xn],INPUT`. This operation performs:
 +
 --
@@ -3986,7 +3995,7 @@ In this state only one 128-bit block is processed.
 +
 If `IOLEN` is a multiple of 128, these operations are executed `IOLEN/128` times, decrypting each 128-bit block of `INPUT` into the corresponding 128-bit block of `OUTPUT`.
 
-** In state _dec_last_block_, only a Form A ``ace.exec`` instruction is allowed, .
+** In State _dec_last_block_, only a Form A ``ace.exec`` instruction is allowed, .
 “```ace.exec OUTPUT, Kn|K[Xn], INPUT```” performs:
 +
 --
@@ -4001,11 +4010,11 @@ If `IOLEN` is a multiple of 128, these operations are executed `IOLEN/128` times
 --
 +
 
-** In state _dec_tag_finalize_, a form B `ace.state Kn|K[Xn], #ace_const_dec_tag_finalize, Xs` instruction may be executed, setting
+** In State _dec_tag_finalize_, a form B `ace.state Kn|K[Xn], #ace_const_dec_tag_finalize, Xs` instruction may be executed, setting
 the tag len `tag_len` to the value of `Xs`, provided it is not smaller than 32 and not larger that 128.
 If the value is out of bounds, the instruction raises an invalid instruction error and the CR is *invalidated*.
 
-** In state _hash_verify_, only one ``ace.exec`` instruction of Form D, to verify the tag, is allowed, .
+** In State _hash_verify_, only one ``ace.exec`` instruction of Form D, to verify the tag, is allowed, .
 “```ace.exec Kn|K[Xn], INPUT```” performs
 +
 --
@@ -4033,7 +4042,7 @@ In this case the state _set_aux_value_ is skipped, and the II has the following 
  . `key`: 128 bits, or 64 bits if a System Key index.
  . `nonce`: 128 bits.
 
-In state _initial_, words 3 and 4 of `state` are initialized thus:
+In State _initial_, words 3 and 4 of `state` are initialized thus:
 
 . `state[3] <- nonce[63:0]`
 . `state[4] <- nonce[127:64]`
@@ -4106,7 +4115,7 @@ State Machine:::
  ** _initial_ -> _hash_absorb_ -> _hash_finalize_ -> _completed_.
 
 * *Behavior:*
- ** In state _initial_ :
+ ** In State _initial_ :
   *** No {nbsp}``ace.exec``{nbsp} operation is allowed.
   *** The following initialization operations are performed:
    . `state[0] <- 0x0000080100cc0002`
@@ -4116,7 +4125,7 @@ State Machine:::
    . `state[4] <- zeros(64)`
    . `ASCON(12)`
 
-  ** In state _hash_absorb_, only  ``ace.exec`` instructions of Form B are allowed.
+  ** In State _hash_absorb_, only  ``ace.exec`` instructions of Form B are allowed.
  “```ace.exec Kn|K[Xn], INPUT```” absorbs a data block into the state, i.e.:
 +
 --
@@ -4128,7 +4137,7 @@ If `IOLEN` > `64`, these operations are executed `IOLEN/64` times, once for each
 
 ** Upon entering _hash_finalize_, `countdown` is set to 3.
 
-** In state _hash_finalize_, at most four ``ace.exec`` instructions of Form C are allowed.
+** In State _hash_finalize_, at most four ``ace.exec`` instructions of Form C are allowed.
 To compute the tag, “```ace.exec OUTPUT, Kn|K[Xn]```”  performs
 +
 --
