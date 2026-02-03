@@ -168,26 +168,27 @@ CRs reside in a dedicated _CR file_ (CRF), accessible only by the ACE implementa
 
 CRs differ from conventional register in several ways:
 
-* In place of load and store instructions, CRs can be *initialized* with clear data, but only *exported* using an AEAD algorithm, for later re-**import**.
-  These actions correspond to three instructions:
+* One can load clear data into a CR via `ace.init` (cf.<<ACE-instruction-init>>), but
+there is no corresponding store instruction to extract a CR's entire content as it was initially loaded in it as clear text.
 
-  . `ace.init` (cf.{nbsp}<<ACE-instruction-init>>) is a load-type instruction that reads clear text into a CR, but there is no corresponding “store” instruction. In other words: _we can write clear data into a CR but not retrieve the clear data as such_.
-  . `ace.export` (cf.{nbsp}<<ACE-instruction-export>>) exports a CR using an AEAD algorithm. The size of the exported data may be different from the data read by `ace.init` and the internal state of the CR.
-  . `ace.import` (cf.{nbsp}<<ACE-instruction-import>>) may fail if the authentication tag cannot be verified.
+* A CR can be *exported* in an authenticated, encrypted format via `ace.export` (cf.<<ACE-instruction-export>>) creating a Sealed Cryptographic Context (SCC).
+A SCC can be later re-*imported*. into a CR, but the process, requiring authentication, may fail if the data in memory was altered.
+Conventional registers do not-and do not need to-provide such functionality.
 
-* Unlike conventional registers, which always contain a value, CRs can be _unconfigured_, meaning they may hold no information.
-  This is achieved by using the `ace.clear` instruction (cf.{nbsp}<<ACE-instruction-clear>>).
+* The external and internal representations of a CR may have different sizes, unlike conventional registers, which essentially act as very fast pieces of memory,
+* Whereas conventional registers always contain a value, CRs can be _unconfigured_, meaning they may hold no information.
 * The amount of the capacity of the CRF used by a CR depends on the configured algorithm.
   Two CRs can use different amounts of capacity.
-* ACE instructions can refer to CRs directly, i.e., with a 5-bit immediate in the instruction encoding, but also indirectly, i.e., through a value in a GPR.
-* Few instructions can use and possibly change the contents of the CRs.
-  The most important ones are:
-  ** `ace.exec`, used to perform cryptographic operations on data blocks according to the algorithm configured in a CR; and
-  ** `ace.state`, used to move between the different stages of modes of operations and hash functions, possibly performing certain state-state initialization operations.
+  Insufficient residual CRF capacity may prevent the execution of an instruction that configures a CR, such as `ace.init`, `ace.import`,
+   `ace.clone`, (cf.{nbsp}<<ACE-instruction-clone>>) or `ace.derive` (cf.{nbsp}<<ACE-instruction-derive>>).
+  In this case, ACE returns _ace_err_memory_ (cf.{nbsp}<<ACE-error-codes>>), and software must free capacity by unconfiguring one or more CRs.
 
-Insufficient residual CRF capacity may prevent the execution of an instruction that configures a CR, such as `ace.init`, `ace.import`,
- `ace.clone`, (cf.{nbsp}<<ACE-instruction-clone>>) or `ace.derive` (cf.{nbsp}<<ACE-instruction-derive>>).
-In this case, ACE returns _ace_err_memory_, and software must free capacity by unconfiguring one or more CRs.
+* ACE instructions can refer to CRs directly, i.e., with a 5-bit immediate in the instruction encoding, but also indirectly, i.e., through a value in a GPR.
+//* Only a few instructions can use and possibly change the contents of the CRs.
+//  The most important ones are:
+//  ** `ace.exec`, used to perform cryptographic operations on data blocks according to the algorithm configured in a CR; and
+//  ** `ace.state`, used to move between the different stages of modes of operations and hash functions, possibly performing certain state-state initialization operations.
+
 
 Accessing a CR that is outside the range [0..31] raises a invalid instruction error.
 
@@ -1864,7 +1865,7 @@ tmp : bits(128);
 // FOLLOWING MEMORY READ PREEMPTIBLE, `ACESTART` FROM 0 TO 7
 metadata : bits(64) ← M[0 .. 7]
 if (there is not enough memory for the algorithm encoded in the metadata)
-    error ace_err_insufficient_memory
+    error ace_err_memory
 
 saved_SN : bits(4) <- metadata.State_Number
 metadata.State_Number <- saved_SN
