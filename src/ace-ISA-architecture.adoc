@@ -167,11 +167,12 @@ CRs reside in a dedicated _CR file_ (CRF), accessible only by the ACE implementa
 
 CRs differ from conventional register in several ways:
 
-* One can load clear data into a CR via `ace.init` (<<ACE-instruction-init>>), but
+* One can load clear data into a CR via using the `ace.init` instruction (<<ACE-instruction-init>>), but
 there is no corresponding store instruction to extract a CR's entire content as it was initially loaded in it as clear text.
 
-* A CR can be *exported* in an authenticated, encrypted format via `ace.export` (<<ACE-instruction-export>>) creating a Sealed Cryptographic Context (SCC).
-A SCC can be later re-*imported*. into a CR, but the process, requiring authentication, may fail if the data in memory was altered.
+* A CR can be *exported* in an authenticated, encrypted format using the `ace.export` instruction (<<ACE-instruction-export>>), thereby creating a Sealed Cryptographic Context (SCC).
+A SCC can be later re-*imported* into a CR using the `ace.import` instruction (<<ACE-instruction-import>>)
+but the process, requiring authentication, may fail if the data in memory was altered.
 Conventional registers do not provide such functionality-and do not need to.
 
 * The external and internal representations of a CR may have different sizes.
@@ -180,9 +181,7 @@ Conventional registers do not provide such functionality-and do not need to.
   Two CRs can use different amounts of capacity.
   Insufficient residual CRF capacity may prevent the execution of a CR *configuration* instruction, i.e. `ace.init`, `ace.import`,
    `ace.clone`, (<<ACE-instruction-clone>>) or `ace.derive` (<<ACE-instruction-derive>>).
-  In this case,
-//, ACE returns _ace_err_memory_ (<<ACE-error-codes>>), and
-software must free capacity by unconfiguring other CRs.
+  In this case, software must free capacity by unconfiguring other CRs.
 
 * ACE instructions can refer to CRs directly, i.e., with a 5-bit immediate in the instruction encoding, but also indirectly, i.e., through a value in a GPR.
 //* Only a few instructions can use and possibly change the contents of the CRs.
@@ -640,16 +639,21 @@ The standard error codes are:
 
 [[ACE-error-codes]]
 .Error codes and their meanings
-[float="center",align="center",width="100%",cols="^6%,<23%,<71%",options="header"]
+[float="center",align="center",width="100%",cols="^7%,<23%,<70%",options="header"]
 |===
 |Value | Mnemonic                | Examples (((ACE, error codes)))
 |  0   | ace_err_ok              | No error.
-|  1   | ace_err_authentication  | Authentication failure (`ace.import` or `ace.exec`).
-|  2   | ace_err_privilege       | Access control failure (`ace.exec`, `ace.state`, etc.).
-|  3   | ace_err_invalid         | Invalid input/operation.
+|  1   | ace_err_authentication  | Authentication failure with `ace.import`.
+//(`ace.import` or `ace.exec`).
+|  2   | ace_err_privilege       | Violation of usage control policies.
+//(`ace.exec`, `ace.state`, etc.).
+|  3   | ace_err_invalid         | Invalid input/operation such as: Invalid metadata section in `ace.init` or `ace.import`;
+Use of non-allowed instruction in the current algorithm state; or Attempt to use a partially configured CR.
 |  4   | ace_err_unimplemented   | Algorithm or algorithm variant not implemented.
-|  5   | ace_err_memory          | Insufficient CRF memory for `ace.init`, `ace.exec`, `ace.clone`, or `ace.derive`.
-|  6   | ace_err_unconfigured    | Usage of unconfigured CR in `ace.exec`, `ace.state`, `ace.input`, `ace.output`, `ace.clone`, `ace.derive`, or `ace.restrict`. May trigger lazy reload.
+|  5   | ace_err_memory          | Insufficient CRF memory for configuration instruction.
+|  6   | ace_err_unconfigured    | Software attempted to use an unconfigured CR. +
+A lazy reload may be triggered instead.
+//in `ace.exec`, `ace.state`, `ace.input`, `ace.output`, `ace.clone`, `ace.derive`, or `ace.restrict`.
 |===
 
 Examples of Invalid input/operation:{empty}:::
@@ -667,14 +671,13 @@ software tried to use an incomplete CC in a CR as a source in an `ace.exec`, `ac
 .>|Priority   .>|Error +
 Code        .>|Description
 .>|_Highest_  |6               |Unconfigured CR
-|           .>|3             .>|Invalid input/output operation with `ace.init` (invalid metadata)
-|           .>|4             .>|Algorithm or algorithm variant not implemented.
-|           .>|5             .>|Insufficient CRF memory
-|           .>|3             .>|Invalid input/output operation with `ace.exec`, `ace.state`,
-                                `ace.input`, `ace.output`, `ace.clone`, `ace.derive`,
-                                or `ace.restrict` (used incomplete CC as source)
+|           .>|3             .>| Invalid metadata section in `ace.init` or `ace.import`
+|           .>|4             .>| Algorithm or algorithm variant not implemented.
+|           .>|5             .>| Insufficient CRF memory
+|           .>|3             .>| Use of non-allowed instruction in the current algorithm state.
+// Invalid input/output operation with `ace.exec`, `ace.state`, `ace.input`, `ace.output`, `ace.clone`, `ace.derive`, or `ace.restrict` (used incomplete CC as source)
 |           .>|2, 1          .>|Access Control Failure or authentication failure with `ace.import`
-|           .>|1             .>|Authentication failure with `ace.exec`
+|           .>|1             .>|Authentication failure in an algorithm.
 |           .>|3             .>|Invalid input/output operation with `ace.exec`
                                 (form not allowed in current algorithm),
                                 `ace.state` (state change not allowed),
@@ -716,8 +719,10 @@ Here, “Configuration” refers to the management operations that can configure
 +
 --
  ** *State*: Unconfigured. A value is saved for lazy loading.
- ** *Usage*: Trigger a trap to the operating system for lazy loading. Execution resumes from state *CLEAN*.
- ** *Export*: Trigger a trap to the operating system for lazy loading. Execution resumes from state *CLEAN*.
+ ** *Usage*: Trigger a trap to the operating system for lazy loading. +
+ Execution resumes from state *CLEAN*.
+ ** *Export*: Trigger a trap to the operating system for lazy loading. +
+ Execution resumes from state *CLEAN*.
  ** *Configuration*: Works as expected; sets status to *DIRTY*.
 --
 +
@@ -884,7 +889,7 @@ Any change to `acecrstatus` is reflected in `vacecrstatus` as follows:
 [[ACE-CSR-macercsk]]
 ===== `macercsk` group
 
-This is a group of M-Mode WARZ XLEN-bit CSRs used to configure `macercsk`.
+This is an optional group of M-Mode WARZ XLEN-bit CSRs used to configure `macercsk`.
 (((CSR, `macercsk`)))
 
 * In RV32 there are eight CSRs:  `macercsk0`, `macercsk1`, ... `macercsk7`.
@@ -903,15 +908,10 @@ RCSK migration to any other RCSK-receiving endpoint,
 whether it is the M-mode firmware of another device, a TPM for local hibernation storage, or an HSM for intermediate storage in a cloud,
 must employ an authenticated public-key key-wrapping mechanism.
 
-[comment]
---
-NOTE: We assume that M-mode firmware knows if RCSK is configurable, ephemeral, or fixed.
-RCSK cannot be assumed to be preserved across power cycles, unless it is fixed.
-If the RCSK is reconfigurable, mechanisms for RCSK persistence and cross-device transfer to assist VM migration are system-specific and belong to M-mode firmware.
-Cross-device RCSK migration must use a public-key key wrapping mechanism.
-Since M-mode FW cannot just trust any external entity claiming to be a trusted device:
-all receiving end points, whether they are the M-mode FW of another trusted device, a TPM for temporary storage of a VM's CSK during device hibernation, or an HSM for intermediate CSK storage, must authenticate themselves.
---
+NOTE: Alternative approaches to re-configuring the RCSK are possible.
+For instance, M-mode could have access, through an implementation-defined mechanism, to a secure IP block like Caliptra cite:[caliptra], which can be used to configure the RCSK, and also to provide the mechanism for RCSK export.
+An advantage of this method is that it also shields the values of the RCSKs from M-mode, which only would ask for reconfiguration using a token or a handle.
+The disadvantage would, potentially, be reduced performance, depending on the actual implementation.
 
 [[ACE-CSR-group-update-policy]]
 ===== Value update policy for CSR groups
