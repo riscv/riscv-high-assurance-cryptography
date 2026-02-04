@@ -484,15 +484,15 @@ If a vector instruction is interrupted, the CSR would follow the `vstart` semant
 (((CSR, ACE field in `misa`)))
 Bit `L` (11) in `misa` indicates that ACE is present.
 
-[[ACE-ACES-field-in-status]]
-===== ACES field in `*status`
+[[ACE-ACES-field-in-mstatus]]
+===== ACE Context Status in `mstatus`
 
 {empty}
 (((CSR,ACES field in *status)))
-The ACES field (bits [26:25]) is added to `mstatus` and shadowed in `sstatus` and `vsstatus` (if the hypervisor extension is present).
-Similarly to the FS and VS fields, it is used to optimize context switching.
-If ACE is implemented, ACES shall not be read-only zero.
-Its possible values are given in <<ACE-aces-encoding>>.
+An ACE context status field, ACES, is added to `mstatus`[26:25] and shadowed in `sstatus`[26:25].
+It is defined analogously to the floating-point context status field, FS, and to the vector context status field, VS.
+If ACE is implemented, the ACES fields shall not be read-only zero,
+the possible values are given in <<ACE-aces-encoding>>.
 
 [[ACE-aces-encoding]]
 .Encoding of ACES status field
@@ -505,10 +505,43 @@ Its possible values are given in <<ACE-aces-encoding>>.
 |   3   | Dirty              | ACE enabled. Some CRs may have been modified since last Clean.
 |===
 
-Writes to ACES do not affect CR contents.
-Clearing state is not performed by setting ACES to Off, Initial, or Clean, and it must be explicitly done by privileged code before changing ACES.
+Attempts to execute any ACE instruction, or to access the ACE state, raise an illegal-instruction exception when `mstatus.ACES` is set to Off.
+
+When `mstatus.ACES` is set to Initial or Clean, executing any instruction that changes ACE state will change `mstatus.ACES` to Dirty. Implementations may also change `mstatus.ACES` from Initial or Clean to Dirty at any time, even when there is no change in vector state.
+
+[NOTE]
+Accurate setting of `mstatus.ACES` is an optimization.
+Software will typically use ACES to reduce context-swap overhead.
+
+If `mstatus.ACES` (`sstatus.ACES`) is Dirty, `mstatus.SD` (`sstatus.SD`) is 1; otherwise, `mstatus.SD` (`sstatus.SD`) is set in accordance with existing specifications.
+
+Implementations may have a writable `misa.L` field. Analogous to the way in which the floating-point unit and the vector unit
+are handled, the `mstatus.ACES` field may exist even if `misa.L` is clear.
 
 The transitions between these states are the same as in Table “FS, VS, and XS state transitions” of cite:[RISCV-ISA-Priv]
+
+Writes to any ACES field do not affect CR contents.
+Clearing state is not performed by setting ACES to Off, Initial, or Clean, and it must be explicitly done before changing ACES.
+
+
+[[ACE-ACES-field-in-vsstatus]]
+===== ACE Context Status in `vsstatus`
+
+When the H extension is present, a vector context status field, ACES, is added to `vsstatus`[26:25].
+It is defined analogously to the floating-point context status field, FS, and to the vector context status field, VS.
+
+When V=1, both `vsstatus.ACES` and `mstatus.ACES` are in effect: attempts to execute any ACE instruction, or to
+access the CRs or the input/output buffer, raises an illegal-instruction exception when either field is set to Off.
+
+When V=1 and neither `vsstatus.ACES` nor `mstatus.ACES` is set to Off, executing any instruction that changes
+ACE state, including the ACE CSs or the input/output buffer, will change both `mstatus.ACES` and `vsstatus.ACES` to Dirty.
+Implementations may also change `mstatus.ACES` or `vsstatus.ACES` from Initial or Clean to Dirty at any time,
+even when there is no change in ACE state.
+
+If `vsstatus.ACES` is Dirty, `vsstatus.SD` is 1; otherwise, `vsstatus.SD` is set in accordance with existing specifications.
+
+For implementations with a writable `misa.L` field, the `vsstatus.ACES` field may exist even if `misa.L` is clear.
+
 
 [comment]
 --
@@ -667,7 +700,7 @@ A lazy reload may be triggered instead.
 |===
 
 Examples of Invalid input/operation:{empty}:::
-Invalid metadata passed to `ace.init` is invalid;
+Invalid metadata passed to `ace.init`;
 encryption, resp., decryption is requested from a CC not allowing it;
 a Form of `ace.exec` that is not permitted in the current algorithm state is used;
 the State_number in `ace.state` is not allowed;
@@ -4389,13 +4422,14 @@ The SCC corresponding to a *LAZY* CR is stored in S and not in H/M.
 //
 
 [WARNING]
-If VS/HS/ cannot import a SCC accessed by some process at U/VS/S
+If VS/HS/M cannot import a SCC accessed by some process at U/VS/S
 because of a capacity issue, then the instruction at the requesting mode must fail and return _ace_err_memory_.
 This means that, a least in theory, a piece of software should check for such an error after all operations, which can affect performance.
 This can be an issue with in-order processors with few execution ports.
 
-[WARNING]
-[.red]#In this case, it may be better to delegate addressing this error to a special in-process trapping handler to free other CRs, and we need to define this mechanism.#
+While this may be solved by delegating addressing this error to a special in-process trapping handler to free other CRs, we would have to  define this mechanism and expect software to handle it.
+
+Another option is to allow the parent mode to implement lazy switching, i.e., when they cannot import a SCC required by the interrupted instruction, the parent chooses another CR used by the child, exports it and makes it *LAZY*. This would be the alternative to a caching mechanism as well.
 
 * *M/H implements lazy switching for VM migration, but VS does not implement lazy switching.*
 +
@@ -4423,16 +4457,18 @@ Here, we have two situations:
 
 * *Both HS and VS support lazy switching*.
 
-[.red]#TBD#
+[.red]#TBD# (but fundamentally a combination of the above).
 
 // ///////////////////////////////////////////////////////////////////////////////////////////
 
+[comment]
+--
 [[ACE-incomplete-contexts]]
 === Discussion: Export of Partial Cryptographic Contexts
 
 [WARNING]
 This section describes a hypothetical mechanism for exporting partially initialized or imported cryptographic contexts.
-This is _Gedankenexperiment_ only and _not_ a current part of the ACE specification.
+This is a _Gedankenexperiment_ only and _not_ a current part of the ACE specification.
 
 Suppose we want to save and restore a _partial_ context, i.e. a context whose initialization or import operation has been interrupted for a context switch, preventing immediate return to the original control flow.  A “Partial” bit in the metadata indicates this state.
 This field applies only to `ace.init` and `ace.import` operations, because they access external memory, and not to `ace.clone` and `ace.derive` as they only operate internally.
@@ -4491,5 +4527,5 @@ The initialization or import operation can then resume from the point of interru
 The TG consensus is that `init`/`import` may resume after a page fault, but on a full context switch, partial CRs are not exported. Instead, the CRs are cleared and the instruction is restarted.
 
 Our security analysis examined various scenarios, including one where a context switch interrupts an import, forcing export and later resumption of a partially imported context. We concluded that while privileged code can replace an SCC in a saved process's context or memory, it cannot abuse the resumption mechanism to breach SCC confidentiality or integrity.
-
+--
 // ///////////////////////////////////////////////////////////////////////////////////////////
