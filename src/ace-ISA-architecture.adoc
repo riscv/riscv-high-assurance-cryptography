@@ -5,11 +5,11 @@ ACE is a complex architecture and relies on certain fundamental concepts, which 
 While this leads to some repetitions, we believe that it also brings better clarity to the presentation.
 
 [[ACE-concepts]]
-=== Fundamental Concepts
+=== Fundamental Concepts and Definitions
 
 Cryptographic Context:::
 (((Cryptographic Context)))
-The _Cryptographic Context_ (CC) is the fundamental concept in ACE.
+The *Cryptographic Context* (CC) is the fundamental concept in ACE.
 A CC an indivisible data structure comprising a *metadata* section and a *content* section, and all cryptographic operations performed by ACE execute within the constraints defined by a CC.
 The metadata section's format is fixed, and it specifies the cryptographic algorithm associated to the CC and optional usage control policies.
 (((Cryptographic Context, metadata)))
@@ -21,35 +21,40 @@ These requirements are architecturally guaranteed by ACE.
 
 Cryptographic Register:::
 (((Cryptographic Register)))
-Cryptographic Contexts are realized using _Cryptographic Registers_ (CRs).
+Cryptographic Contexts are realized using *Cryptographic Registers* (CRs).
 CRs are architectural containers that safeguard CCs.
-A CR is _initialized_ by writing metadata and content into it: this operation also binds the metadata and the content to form a CC.
+A CR is *initialized* by writing metadata and content into it: this operation also binds the metadata and the content to form a CC.
 A CC can be used for cryptographic operations only while resident in a CR.
 Only the ACE unit may access or modify CC contents, in accordance with the architecture and the programmed algorithm.
 CR content cannot be extracted in a manner that compromises its confidentiality.
 
 Sealed Cryptographic Context:::
 (((Cryptographic Context, sealed)))
-To support context switching while protecting CCs outside architectural state, a CC may be exported from a CR as a _Sealed Cryptographic Context_ (SCC).
-An SCC is an encrypted and authenticated representation of a CC that can later be re-imported into a CR.
-SCC import and export use _Context Sealing Keys_ (CSKs), which may be programmable by M-mode and may depend on _Localities_ (see below).
+To support context switching while protecting CCs outside architectural state, a CC may be *exported* from a CR as a *Sealed Cryptographic Context* (SCC).
+An SCC is an encrypted and authenticated representation of a CC that can later be *imported* into a CR.
+SCC import and export use _Context Sealing Keys_ (CSKs), which may be programmable by M-mode and may depend on *Localities* (see below).
 A CC sealed with a given CSK cannot be re-imported using a different CSK, enabling cryptographic domain separation across spatial and temporal
 domains.
 
 Object-Orientation:::
-CCs act as _objects_ exposing a uniform interface across algorithms.
+CCs act as *objects* exposing a uniform interface across algorithms.
 A CC encapsulates algorithm-specific behavior, enabling interchangeable use of different primitives (e.g., AES-128, AES-256, Калина-128, Калина-256, Кузнечик, SM4, and so on) in identical modes (e.g., ECB, GCM-SIV, XEX/XTS) without requiring changes to compiled code.
 SCA-resistant variants are supported transparently.
 
 Usage Control Policy:::
 (((Cryptographic Context, Usage Control)))
-ACE distinguishes between CC/CR *management* (e.g., initialization, import, export, and cloning) and CC/CR *usage* (cryptographic operations, including including key derivation, and state change). To prevent denial of service scenarios, management operations must _always_ be permitted, unless the CR is an invalid state.
-Accordingly, the optional _Usage Control_ policies restrict only cryptographic operations and state modifications, not CR or SCC management.
-For this reason, the term Usage Control is used instead of Access Control.
+ACE distinguishes between CC/CR *management* and *usage* operations.
+Management operations include *configuration* (e.g., initialization, import, cloning, key derivation from one CR to another) and *export*.
+Usage operations include cryptographic operations and state change;
+key derivation is both a configuration and a usage operation.
+All operations perform *access* to CRs.
+To prevent denial of service scenarios, management operations must _always_ be permitted, unless the CR is an invalid state.
+Accordingly, optional _Usage Control_ policies restrict only certain CC/CR usage operations.1
+For this reason, the term _Usage Control_ is used instead of _Access Control_.
 
 Locality:::
 (((Cryptographic Context, Locality)))
-Finally, ACE can bind CCs to a _Locality_, i.e., restrict usage to specific devices, device classes, software or hardware configurations, or boot cycles.
+Finally, ACE can bind CCs to a *Locality*, i.e., restrict usage to specific devices, device classes, software or hardware configurations, or boot cycles.
 This binding uses metadata when a CC is in a CR, and a _Derived Context Sealing Key_ (DCSK) derived from the _Root Context Sealing Key_ (RCSK) and a Locality-specific secret as the CSK for import and export.
 // The system maintains a _Locality Secrets Table_ (LST) with fixed, hardware-configured, and MM-programmable values.
 // Metadata stores the Locality as an index into this table (<<ACE-Localities>>).
@@ -692,7 +697,7 @@ trap, as specified in the privileged architecture, `aceerror` remains unchanged.
 
 ===== `acecrstatus`
 
-The CSR `acecrstatus` tracks the configuration and dirtiness of CRs on a per-CR basis, so that privileged context switching code needs to save only the dirty CRs, and, upon restore, restore only the configured ones and explicitly clear the unconfigured ones, unless the latter are lazy-loaded:
+The CSR `acecrstatus` tracks the configuration and dirtiness of CRs on a per-CR basis, so that context switching code needs to save only the dirty CRs, and, upon restore, restore only the configured ones and explicitly clear the unconfigured ones, unless the latter are lazy-loaded:
 
 . For RV64, `acecrstatus` has a size of 64 bits,
 ``acecrstatus[``2__i__+1,2__i__``]`` can take the values Off, Init, Clean, Dirty as defined for `*status.ACES` for CR #__i__.
@@ -748,7 +753,9 @@ Here, “Configuration” refers to the management operations that can configure
 
  ** *ace.clear*: sets status to *INITIAL*.
  ** *Configuration*: Works as expected; sets status to *DIRTY*.
- ** *ace.export*: Trigger a trap to the immediately higher mode for lazy loading. If that mode does not have a saved value, it will trap to its parent to request the value, and will also keep it.  This may have to be repeated a third time if H is implemented. +
+ ** *ace.export*: Trigger a trap to the immediately higher mode for lazy loading.
+ If that mode does not have a saved value, it will trap to its parent to request the value, and will also keep it.
+ This may have to be repeated a third time if H is implemented. +
  The CR is configured with the recovered value and execution resumes from state *CLEAN*.
  ** *Usage*: Trigger a trap to the operating system for lazy loading. +
  Execution resumes from state *CLEAN*.
@@ -757,9 +764,62 @@ Here, “Configuration” refers to the management operations that can configure
 
 //
 
-NOTE: The *LAZY* status reuses the FS/VS/ACES encoding for “OFF”, this does not indicate that the ISE is inactive, nor that the ISE cannot use that CR.
-Whether the ISE is active is encoded exclusively in ```*status```. The use of the **OFF** encoding in the per-CR fields of `acecrstatus` is a natural choice to denote an unavailable state that requires lazy loading to be made available.
+[NOTE]
+====
+The *LAZY* status reuses the FS/VS/ACES encoding for “OFF”, this does not indicate that the ISE is inactive, nor that the ISE cannot use that CR.
+Whether the ISE is active is encoded exclusively in ```*status```.
+
+The use of the **OFF** encoding in the per-CR fields of `acecrstatus` is a natural choice to denote an unavailable state that requires lazy loading to be made available.
+
 If all CRs were either unconfigured or to be lazy-loaded, the ACES field would be set to **CLEAN** and not to **OFF**.
+====
+
+====== Usage and Behavior
+
+We need to consider various situations:
+
+* Neither S nor M/H implement lazy switching. Then each privileged mode must implement the basic rule:
+. save only the dirty CRs, and,
+. upon restore, restore the configured ones and explicitly clear the unconfigured ones.
+
+* S implements lazy switching, whereas M/H does not, it only needs to maintain compatibility with it. Hence, a *LAZY* CR is only stored in S and not in H/M.
+
+. S, instead of restoring a CR, will instead
+.. clear it and
+.. set its status as *LAZY* before returning control to U.
+
+. The U process needs to access the CR.
+
+.. The system traps,
+.. S recovers the stored value,
+.. stores it in the CR,
+.. makes it *CLEAN*, and
+.. returns control to U.
+
+. The U process does not access the CR. So it stays in that state.
+
+..  Case 1: S interrupts the U process.
+... It sees that the CR is *LAZY* and therefore
+... does not save the context (it is unconfigured), and1
+..... it marks it as *CLEAN*
+... at context restore, it just clears the CR and sets its to *LAZY* again returning control to the U process.
+... Suppose however that S itself is now interrupted by H/M before S returns control to U
+.... H/M sees a *CLEAN* CR and does nothing, except calling `ace.clear` again before returning control to S.
+.... then S sees the sane state as before and there are no consistency or security issues.
+
+..  Case 2: H/M interrupts the U process.
+... It sees that the CR is *LAZY* and therefore
+... does nothing to save the context
+... at context restore, it just clears the CR and sets its  to *LAZY* again returning control to the U process.
+.... There are no consistency or security issues.
+
+* M/H implements lazy switching for the purpose of migrating VMs, where one cannot a priori know the size of the CRF at the destination, but S does not.
+
+[.red]#TBD#
+
+* Both S and M/H implement lazy switching.
+
+[.red]#TBD#
 
 //
 
