@@ -37,19 +37,24 @@ A CC sealed with a given CSK cannot be re-imported using a different CSK, enabli
 domains.
 
 Object-Orientation:::
+(((Cryptographic Context, object-oriented)))
 CCs act as *objects* exposing a uniform interface across algorithms.
 A CC encapsulates algorithm-specific behavior, enabling interchangeable use of different primitives (e.g., AES-128, AES-256, Калина-128, Калина-256, Кузнечик, SM4, and so on) in identical modes (e.g., ECB, GCM-SIV, XEX/XTS) without requiring changes to compiled code.
 SCA-resistant variants are supported transparently.
 
 Usage Control Policy:::
-(((Cryptographic Context, Usage Control)))
+(((Cryptographic Context, usage control)))
+(((Cryptographic Context, management operations)))
+(((Cryptographic Context, usage operations)))
 ACE distinguishes between CC/CR *management* and *usage* operations.
+(((Cryptographic Context, export)))
 Management operations include *configuration* (e.g., initialization, import, cloning, key derivation from one CR to another) and *export*.
 Usage operations include cryptographic operations and state change;
 key derivation is both a configuration and a usage operation.
-All operations perform *access* to CRs.
+(((Cryptographic Context, access)))
+All operations represent a form of *access* to CRs. +
 To prevent denial of service scenarios, management operations must _always_ be permitted, unless the CR is an invalid state.
-Accordingly, optional _Usage Control_ policies restrict only certain CC/CR usage operations.1
+Accordingly, optional _Usage Control_ policies restrict only certain CC/CR usage operations.
 For this reason, the term _Usage Control_ is used instead of _Access Control_.
 
 Locality:::
@@ -708,16 +713,16 @@ and
 ``acecrstatus[``2__i__+1,2__i__``]`` for CR #__i__+16.
 
 This section defines the semantics of the `acecrstatus` bit-fields.
-Here, “Configuration” refers to the management operations that can configure a CR, namely `ace.init`, `ace.import` and being the destination of an `ace.derive` operation.
+Here, “Configure” refers to the management operations that can configure a CR, namely `ace.init`, `ace.import` and being the destination of an `ace.clone` or `ace.derive` operation. “Unconfigure” refers to the use of `ace.clear` on a CR.
 
 * *INITIAL* (value: 1).
 +
 --
 *Definition*: Unconfigured.
 
- ** *ace.clear*: status remains *INITIAL*.
- ** *Configuration*: Does not trap. Transitions to *DIRTY*.
- ** *ace.export*: Raises _ace_err_unconfigured_. No trap is generated.
+ ** *Unconfigure*: status remains *INITIAL*.
+ ** *Configure*: Does not trap. Transitions to *DIRTY*.
+ ** *Export*: Raises _ace_err_unconfigured_. No trap is generated.
  ** *Usage*: Raises _ace_err_unconfigured_. No trap is generated.
 --
 +
@@ -727,9 +732,9 @@ Here, “Configuration” refers to the management operations that can configure
 --
 *Definition*: The CR is configured. Its state has not changed since the last switch.
 
- ** *ace.clear*: sets status to *INITIAL*.
- ** *Configuration*: Works as expected; sets status to *DIRTY*.
- ** *ace.export*: Works as expected.
+ ** *Unconfigure*: sets status to *INITIAL*.
+ ** *Configure*: Works as expected; sets status to *DIRTY*.
+ ** *Export*: Works as expected.
  ** *Usage*: Unrestricted; State modification sets status to *DIRTY*.
 --
 +
@@ -739,9 +744,9 @@ Here, “Configuration” refers to the management operations that can configure
 --
 *Definition*: The CR configured. Its state has potentially changed since the last switch.
 
- ** *ace.clear*: sets status to *INITIAL*.
- ** *Configuration*: Works as expected; status remains *DIRTY*.
- ** *ace.export*: Unrestricted.
+ ** *Unconfigure*: sets status to *INITIAL*.
+ ** *Configure*: Works as expected; status remains *DIRTY*.
+ ** *Export*: Unrestricted.
  ** *Usage*: Unrestricted.
 --
 +
@@ -751,14 +756,14 @@ Here, “Configuration” refers to the management operations that can configure
 --
 *Definition*: Unconfigured. A value is saved for lazy loading in one of the parent modes.
 
- ** *ace.clear*: sets status to *INITIAL*.
- ** *Configuration*: Works as expected; sets status to *DIRTY*.
- ** *ace.export*: Trigger a trap to the immediately higher mode for lazy loading.
+ ** *Unconfigure*: sets status to *INITIAL*.
+ ** *Configure*: Works as expected; sets status to *DIRTY*.
+ ** *Export*: Trigger a trap to the immediately higher mode for lazy loading.
  If that mode does not have a saved value, it will trap to its parent to request the value, and will also keep it.
  This may have to be repeated a third time if H is implemented. +
- The CR is configured with the recovered value and execution resumes from state *CLEAN*.
- ** *Usage*: Trigger a trap to the operating system for lazy loading. +
- Execution resumes from state *CLEAN*.
+ The CR is configured with the recovered value and execution of interrupted export restarts from state *CLEAN*.
+ ** *Usage*: Trigger a trap to the immediately higher mode for lazy loading. +
+ Execution of interrupted instruction restarts from state *CLEAN*.
 --
 +
 
@@ -768,19 +773,22 @@ Here, “Configuration” refers to the management operations that can configure
 ====
 The *LAZY* status reuses the FS/VS/ACES encoding for “OFF”, this does not indicate that the ISE is inactive, nor that the ISE cannot use that CR.
 Whether the ISE is active is encoded exclusively in ```*status```.
-
 The use of the **OFF** encoding in the per-CR fields of `acecrstatus` is a natural choice to denote an unavailable state that requires lazy loading to be made available.
-
 If all CRs were either unconfigured or to be lazy-loaded, the ACES field would be set to **CLEAN** and not to **OFF**.
 ====
 
-====== Usage and Behavior
+//
+
+===== Usage of `acecrstatus` and Software Behavior
+
+In this non-normative section we describe how the various components of the system software stack are expected to use `acecrstatus`.
 
 We need to consider various situations:
 
-* Neither S nor M/H implement lazy switching. Then each privileged mode must implement the basic rule:
-. save only the dirty CRs, and,
-. upon restore, restore the configured ones and explicitly clear the unconfigured ones.
+* Neither S nor M/H implement lazy switching. +
+Then, each privileged mode must implement the _Basic Rule_:
+. at context save, save only the dirty CRs, and,
+. at context restore, restore the configured ones and explicitly clear the unconfigured ones.
 
 * S implements lazy switching, whereas M/H does not, it only needs to maintain compatibility with it. Hence, a *LAZY* CR is only stored in S and not in H/M.
 
@@ -791,29 +799,37 @@ We need to consider various situations:
 . The U process needs to access the CR.
 
 .. The system traps,
-.. S recovers the stored value,
-.. stores it in the CR,
-.. makes it *CLEAN*, and
+.. S imports the stored SCC into the CR,
+.. sets its status of the CR to *CLEAN*, and
 .. returns control to U.
 
 . The U process does not access the CR. So it stays in that state.
 
 ..  Case 1: S interrupts the U process.
 ... It sees that the CR is *LAZY* and therefore
-... does not save the context (it is unconfigured), and1
-..... it marks it as *CLEAN*
-... at context restore, it just clears the CR and sets its to *LAZY* again returning control to the U process.
-... Suppose however that S itself is now interrupted by H/M before S returns control to U
-.... H/M sees a *CLEAN* CR and does nothing, except calling `ace.clear` again before returning control to S.
-.... then S sees the sane state as before and there are no consistency or security issues.
+... at context save
+.... it does not save the CR (it is unconfigured), and
+.... marks the CR as *CLEAN*;
+... at context restore:
+.... it clears the CR and
+.... sets its status to *LAZY*
+.... before returning control to the U process.
+... Suppose now that S itself is interrupted by H/M before S returns control to U
+.... H/M sees a *CLEAN* CR:
+..... H/M does nothing at context save, and
+..... at context restore, it uses `ace.clear` on the CR.
+.... then S observes no status change and there are no consistency or security issues.
 
 ..  Case 2: H/M interrupts the U process.
 ... It sees that the CR is *LAZY* and therefore
-... does nothing to save the context
-... at context restore, it just clears the CR and sets its  to *LAZY* again returning control to the U process.
-.... There are no consistency or security issues.
+... does nothing at context save.
+... At context restore:
+.... it clears the CR and
+.... sets its status to *LAZY*.
+... There are no consistency or security issues.
 
 * M/H implements lazy switching for the purpose of migrating VMs, where one cannot a priori know the size of the CRF at the destination, but S does not.
+Therefore, S implements the Basic Rule.
 
 [.red]#TBD#
 
