@@ -471,7 +471,6 @@ ACE extends `*status` and `misa`, and adds up to 29 new CSRs, which are listed i
 | 0xXXX          | URO       | `acesequence`            | Sequence number of the last ACE instruction
 | 0xXXX          | URW       | `aceactivecr`            | Active CR for `ace.input`/`ace.output`
 | 0xXXX          | SRW       | `sacefilter`             | Filter that applies to U-mode
-//| 0xXXX          | HRW       | `vacecrstatus`           | Array of two-bit fields (similar to ACES state, but per CR)
 | 0xXXX          | MRW       | `macefilter`             | Filter that applies to (V)S/H-mode
 | 0xXXX--0xXXX   | MRW (RZ)  | `macercsk{0..7}`         | ACE Root Context Sealing Key
 | 0xXXX--0xXXX   | MRW (RZ)  | `maceOSSecret{0..3}`     | ACE OS Secret
@@ -531,8 +530,22 @@ The transitions between these states are the same as in Table “FS, VS, and XS 
 Writes to any ACES field do not affect CR contents.
 Clearing state is not performed by setting ACES to Off, Initial, or Clean, and it must be explicitly done before changing ACES.
 
+[[ACE-ACEIOBS-field]]
+===== ACE IO Buffer Status in `mstatus`
 
-[[ACE-ACES-field-in-vsstatus]]
+An ACE IO Buffer status field, ACEIOBS, is added to `mstatus`[28:27] and shadowed in `sstatus`[28:27].
+It is defined analogously to the floating-point context status field, FS, and to the vector context status field, VS.
+If ACE is implemented, the ACEIOBS fields shall not be read-only zero, otherwise the field is read-only zero.
+the possible values are given in <<ACE-aces-encoding>>.
+
+[WARNING] If it is not possible to use four bits of `mstatus` for ACE, this field could be merged with , say, `aceerror`, `acesequence`, and  `aceactivecr` into a single CSR. This can be done in accordance with the ARC and does not need to be done now.
+
+If the buffer is enabled (a non-zero value of `aceiobuflen`, see <<ACE-CSR-aceiobuflen>>), then it takes a non-zero value.
+Its initial value is Initial, and upon any write to `aceiobuflen` its state returns to Initial.
+In this case, it cannot be read or used in any operation, it must be written to first.
+
+
+[[ACE-ACES-field-H]]
 ===== ACE Context Status in `vsstatus`
 
 When the H extension is present, a vector context status field, ACES, is added to `vsstatus`[26:25].
@@ -550,6 +563,23 @@ If `vsstatus.ACES` is Dirty, `vsstatus.SD` is 1; otherwise, `vsstatus.SD` is set
 
 For implementations with a writable `misa.L` field, the `vsstatus.ACES` field may exist even if `misa.L` is clear.
 
+[[ACE-ACEIOBS-field-H]]
+===== ACE IO Buffer Status in `vsstatus`
+
+When the H extension is present, an ACE IO Buffer status field, ACEIOBS, is added to `vsstatus`[28:27].
+It is defined analogously to the floating-point context status field, FS, and to the vector context status field, VS.
+
+When V=1, both `vsstatus.ACEIOBS` and `mstatus.ACEIOBS` are in effect: attempts to execute any ACE instruction that
+accesses the input/output buffer raises an illegal-instruction exception when either field is set to Off.
+
+When V=1 and neither `vsstatus.ACEIOBS` nor `mstatus.ACEIOBS` is set to Off, executing any instruction that changes
+the state of the input/output buffer, will change both `mstatus.ACEIOBS` and `vsstatus.ACEIOBS` to Dirty.
+Implementations may also change `mstatus.ACEIOBS` or `vsstatus.ACEIOBS` from Initial or Clean to Dirty at any time,
+even when there is no change in the state of the input/output buffer.
+
+If `vsstatus.ACEIOBS` is Dirty, `vsstatus.SD` is 1; otherwise, `vsstatus.SD` is set in accordance with existing specifications.
+
+For implementations with a writable `misa.L` field, the `vsstatus.ACEIOBS` field may exist even if `misa.L` is clear.
 
 [comment]
 --
@@ -744,7 +774,6 @@ trap, as specified in the privileged architecture, `aceerror` remains unchanged.
 ===== `acecrstatus`
 
 The CSR `acecrstatus` tracks the configuration and dirtiness of CRs on a per-CR basis, so that context switching code needs to save only the dirty CRs, and, upon restore, restore only the configured ones and explicitly clear the unconfigured ones.
-//, unless the latter are lazy-loaded:
 
 . For RV64, `acecrstatus` has a size of 64 bits,
 ``acecrstatus[``2__i__+1,2__i__``]`` can take the values Initial, Clean, Dirty as defined for `*status.ACES` for CR #__i__.
@@ -757,7 +786,7 @@ and
 NOTE: Accurate setting of `acecrstatus` is an optimization.
 Software will typically use `acecrstatus` to reduce context-swap overhead.
 
-This section defines the semantics of the `acecrstatus` CSR.
+We define the semantics of the `acecrstatus` CSR.
 Here, “Configure” refers to the management operations that can configure a CR, namely `ace.init`, `ace.import` and being the destination of an `ace.clone` or `ace.derive` operation. “Unconfigure” refers to the use of `ace.clear` on a CR.
 
 * *INITIAL* (value: 1).
@@ -796,6 +825,7 @@ Here, “Configure” refers to the management operations that can configure a C
 --
 
 * The value 0 is currently not defined.
+
 
 //
 
