@@ -705,10 +705,10 @@ trap, as specified in the privileged architecture, `aceerror` remains unchanged.
 The CSR `acecrstatus` tracks the configuration and dirtiness of CRs on a per-CR basis, so that context switching code needs to save only the dirty CRs, and, upon restore, restore only the configured ones and explicitly clear the unconfigured ones, unless the latter are lazy-loaded:
 
 . For RV64, `acecrstatus` has a size of 64 bits,
-``acecrstatus[``2__i__+1,2__i__``]`` can take the values Off, Init, Clean, Dirty as defined for `*status.ACES` for CR #__i__.
+``acecrstatus[``2__i__+1,2__i__``]`` can take the values Initial, Clean, Dirty as defined for `*status.ACES` for CR #__i__.
 . For RV32, there are two 32-bit registers `acecrstatush` and `acecrstatusl` (collectively referred to as `acecrstatus` in the following)
 where
-``acecrstatus[``2__i__+1,2__i__``]`` can take the values Off, Init, Clean, Dirty as defined for `*status.ACES` for CR #__i__
+``acecrstatus[``2__i__+1,2__i__``]`` can take the values Initial, Clean, Dirty as defined for `*status.ACES` for CR #__i__
 and
 ``acecrstatus[``2__i__+1,2__i__``]`` for CR #__i__+16.
 
@@ -749,93 +749,8 @@ Here, “Configure” refers to the management operations that can configure a C
  ** *Export*: Unrestricted.
  ** *Usage*: Unrestricted.
 --
-+
 
-* *LAZY* (value: 0).
-+
---
-*Definition*: Unconfigured. A value is saved for lazy loading in one of the parent modes.
-
- ** *Unconfigure*: sets status to *INITIAL*.
- ** *Configure*: Works as expected; sets status to *DIRTY*.
- ** *Export*: Trigger a trap to the immediately higher mode for lazy loading.
- If that mode does not have a saved value, it will trap to its parent to request the value, and will also keep it.
- This may have to be repeated a third time if H is implemented.
- The recovered SCC is imported into the CR, the status of the other is set to *CLEAN*, and the interrupted export operation is restarted.
- ** *Usage*: Trigger a trap to the immediately higher mode for lazy loading.
- The execution of the interrupted instruction restarts from state *CLEAN*.
---
-+
-
-//
-
-[NOTE]
-====
-The *LAZY* status reuses the FS/VS/ACES encoding for “OFF”, this does not indicate that the ISE is inactive, nor that the ISE cannot use that CR.
-Whether the ISE is active is encoded exclusively in ```*status```.
-The use of the **OFF** encoding in the per-CR fields of `acecrstatus` is a natural choice to denote an unavailable state that requires lazy loading to be made available.
-If all CRs were to be lazy-loaded, the ACES field would be set to **CLEAN** and not to **OFF**.
-====
-
-//
-
-===== Usage of `acecrstatus` and Software Behavior
-
-In this non-normative section we describe how the various components of the system software stack are expected to use `acecrstatus`.
-
-We need to consider various situations:
-
-* Neither S nor M/H implement lazy switching. +
-Then, each privileged mode must implement the _Basic Rule_:
-. at context save, save only the dirty CRs, and,
-. at context restore, restore the configured ones and explicitly clear the unconfigured ones.
-
-* S implements lazy switching, whereas M/H does not, it only needs to maintain compatibility with it. Hence, a *LAZY* CR is only stored in S and not in H/M.
-
-. S, instead of restoring a CR, will instead
-.. clear it and
-.. set its status as *LAZY* before returning control to U.
-
-. The U process needs to access the CR.
-
-.. The system traps,
-.. S imports the stored SCC into the CR,
-.. sets its status of the CR to *CLEAN*, and
-.. returns control to U.
-
-. The U process does not access the CR. So it stays in that state.
-
-..  Case 1: S interrupts the U process.
-... It sees that the CR is *LAZY* and therefore
-... at context save
-.... it does not save the CR (it is unconfigured), and
-.... marks the CR as *CLEAN*;
-... at context restore:
-.... it clears the CR and
-.... sets its status to *LAZY*
-.... before returning control to the U process.
-... Suppose now that S itself is interrupted by H/M before S returns control to U
-.... H/M sees a *CLEAN* CR:
-..... H/M does nothing at context save, and
-..... at context restore, it uses `ace.clear` on the CR.
-.... then S observes no status change and there are no consistency or security issues.
-
-..  Case 2: H/M interrupts the U process.
-... It sees that the CR is *LAZY* and therefore
-... does nothing at context save.
-... At context restore:
-.... it clears the CR and
-.... sets its status to *LAZY*.
-... There are no consistency or security issues.
-
-* M/H implements lazy switching for the purpose of migrating VMs, where one cannot a priori know the size of the CRF at the destination, but S does not.
-Therefore, S implements the Basic Rule.
-
-[.red]#TBD#
-
-* Both S and M/H implement lazy switching.
-
-[.red]#TBD#
+* The value 0 is currently not defined.
 
 //
 
@@ -4382,11 +4297,138 @@ ACE is designed to avoid the “***A***” and “***S***” options (as much as
 Direct plaintext leakage, memory corruption attacks against the ACE-using process, and Release of Unverified Plaintext (RUP) attacks on the cryptographic algorithms are considered out of scope. These threats cannot be mitigated by ACE because the processed information resides within the user execution context. Consequently, these threats are _accepted_.
 
 // ///////////////////////////////////////////////////////////////////////////////////////////
-[comment]
+
+[[ACE-LAZY]]
+=== Discussion: LAZY CRs
+
+Let us define also value 0 in the entries of `acecrstatus`, to support lazy loading.
+
+
+* *LAZY* (value: 0).
+
++
 --
+*Definition*: Unconfigured. A value is saved for lazy loading in one of the parent modes.
+
+ ** *Unconfigure*: sets status to *INITIAL*.
+ ** *Configure*: Works as expected; sets status to *DIRTY*.
+ ** *Export*: Trigger a trap to the immediately higher mode for lazy loading.
+ If that mode does not have a saved value, it will trap to its parent to request the value, and will also keep it.
+ This may have to be repeated a third time if H is implemented.
+ The recovered SCC is imported into the CR, the status of the other is set to *CLEAN*, and the interrupted export operation is restarted.
+ ** *Usage*: Trigger a trap to the immediately higher mode for lazy loading.
+ The execution of the interrupted instruction restarts from state *CLEAN*.
+--
++
+
+//
+
+[NOTE]
+====
+The *LAZY* status reuses the FS/VS/ACES encoding for “OFF”, this does not indicate that the ISE is inactive, nor that the ISE cannot use that CR.
+Whether the ISE is active is encoded exclusively in ```*status```.
+The use of the **OFF** encoding in the per-CR fields of `acecrstatus` is a natural choice to denote an unavailable state that requires lazy loading to be made available.
+If all CRs were to be lazy-loaded, the ACES field would be set to **CLEAN** and not to **OFF**.
+====
+
+//
+
+We describe how the various components of the system software stack are expected to use `acecrstatus`.
+We must consider various situations:
+
+* *Neither S nor M/H implement lazy switching.*
++
+--
+In this case, each privileged mode must implement the _Basic Rule_:
+
+. at context save, save only the dirty CRs, and,
+. at context restore, restore the configured ones and explicitly clear the unconfigured ones.
+--
++
+
+* *S implements lazy switching, whereas M/H does not.*
++
+--
+M/H only needs to maintain compatibility with it. +
+The SCC corresponding to a *LAZY* CR is stored in S and not in H/M.
+
+. S, instead of restoring a CR, will instead
+.. clear it and
+.. set its status as *LAZY* before returning control to U.
+
+. The U process needs to access the CR.
+.. The system traps,
+.. S imports the stored SCC into the CR,
+.. sets its status of the CR to *CLEAN*, and
+.. returns control to U.
+
+. The U process does not access the CR. So it stays in that state.
+..  Case 1: S interrupts the U process.
+... It sees that the CR is *LAZY* and therefore
+... at context save
+.... it does not save the CR (it is unconfigured), and
+.... marks the CR as *CLEAN*;
+... at context restore:
+.... it clears the CR and
+.... sets its status to *LAZY*.
+... Suppose now that S itself is interrupted by H/M before S returns control to U
+.... H/M sees a *CLEAN* CR:
+..... H/M does nothing at context save, and
+..... at context restore, it uses `ace.clear` on the CR.
+.... then S observes no status change and there are no consistency or security issues.
+..  Case 2: H/M interrupts the U process.
+... It sees that the CR is *LAZY* and therefore
+... does nothing at context save.
+... At context restore:
+.... it clears the CR and
+.... sets its status to *LAZY*.
+... There are no consistency or security issues.
+--
++
+
+//
+
+[WARNING]
+If VS/HS/ cannot import a SCC accessed by some process at U/VS/S
+because of a capacity issue, then the instruction at the requesting mode must fail and return _ace_err_memory_.
+This means that, a least in theory, a piece of software should check for such an error after all operations, which can affect performance.
+This can be an issue with in-order processors with few execution ports.
+
+[WARNING]
+[.red]#In this case, it may be better to delegate addressing this error to a special in-process trapping handler to free other CRs, and we need to define this mechanism.#
+
+* *M/H implements lazy switching for VM migration, but VS does not implement lazy switching.*
++
+--
+VS needs only basic support for restoring a CR.
+Therefore, S implements the Basic Rule.
+
+Here, we have two situations:
+
+. The VM was interrupted while in U. The hypervisor has saved the U state and migrated it.
+
+.. If a CR's original status was *INIT*, upon restore the hypervisor clears it (setting its status to *INIT*).
+.. What happens if do not lazy load?
+... If a CR's original status was *DIRTY*, upon restore the hypervisor imports the SCC into the CR and set its status to *DIRTY*.
+.. What happens if we instead lazy load it because we do not know the capacity of the CRF at the destination?
+... H cleans the CR and sets its status to *LAZY*.
+... If U accesses the CR, it will trap. VS is not supporting lazy switching, so it will trap again, and the value will be obtained from the hypervisor.
+.... The status of the CR may have beeb *CLEAN* or *DIRTY*. This means that the hypervisor must also pass the original status of the CR to VS, which sets it, or VS does not change it and lets it pass through. Putting a *CLEAN* instead of a *DIRTY* risks keeping a stale value instead of the authoritative one. If HS does not pass this information, VS should always set the status to *DIRTY*.
+
+. The VM was interrupted while in VS. The hypervisor has saved the VS state and migrated it.
+.. If we do not lazy load, the state in (V)S and the status of each CR is simply restored.
+.. If we lazy load, all the CRs that were configured are let unconfigured with *LAZY* status, and HS imports the original SCC in them on demand.
+--
++
+
+* *Both HS and VS support lazy switching*.
+
+[.red]#TBD#
+
+// ///////////////////////////////////////////////////////////////////////////////////////////
 
 [[ACE-incomplete-contexts]]
-=== Appendix: Export of Partial Cryptographic Contexts
+=== Discussion: Export of Partial Cryptographic Contexts
 
 [WARNING]
 This section describes a hypothetical mechanism for exporting partially initialized or imported cryptographic contexts.
@@ -4449,7 +4491,5 @@ The initialization or import operation can then resume from the point of interru
 The TG consensus is that `init`/`import` may resume after a page fault, but on a full context switch, partial CRs are not exported. Instead, the CRs are cleared and the instruction is restarted.
 
 Our security analysis examined various scenarios, including one where a context switch interrupts an import, forcing export and later resumption of a partially imported context. We concluded that while privileged code can replace an SCC in a saved process's context or memory, it cannot abuse the resumption mechanism to breach SCC confidentiality or integrity.
-
---
 
 // ///////////////////////////////////////////////////////////////////////////////////////////
