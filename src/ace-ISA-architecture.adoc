@@ -692,7 +692,7 @@ trap, as specified in the privileged architecture, `aceerror` remains unchanged.
 
 ===== `acecrstatus`
 
-The CSR `acecrstatus` tracks the configuration and dirtiness of CRs on a per-CR basis, so that privileged context switching code needs to save only the dirty CRs, and restore only the configured ones, unless the latter are lazy-loaded:
+The CSR `acecrstatus` tracks the configuration and dirtiness of CRs on a per-CR basis, so that privileged context switching code needs to save only the dirty CRs, and, upon restore, restore only the configured ones and explicitly clear the unconfigured ones, unless the latter are lazy-loaded:
 
 . For RV64, `acecrstatus` has a size of 64 bits,
 ``acecrstatus[``2__i__+1,2__i__``]`` can take the values Off, Init, Clean, Dirty as defined for `*status.ACES` for CR #__i__.
@@ -708,34 +708,23 @@ Here, “Configuration” refers to the management operations that can configure
 * *INITIAL* (value: 1).
 +
 --
-*State*: Unconfigured.
+*Definition*: Unconfigured.
 
+ ** *ace.clear*: status remains *INITIAL*.
  ** *Configuration*: Does not trap. Transitions to *DIRTY*.
- ** *Export*: Raises _ace_err_unconfigured_. No trap is generated.
+ ** *ace.export*: Raises _ace_err_unconfigured_. No trap is generated.
  ** *Usage*: Raises _ace_err_unconfigured_. No trap is generated.
---
-+
-
-* *LAZY* (value: 0).
-+
---
-*State*: Unconfigured. A value is saved for lazy loading.
-
- ** *Configuration*: Works as expected; sets status to *DIRTY*.
- ** *Export*: Trigger a trap to the operating system for lazy loading. +
- Execution resumes from state *CLEAN*.
- ** *Usage*: Trigger a trap to the operating system for lazy loading. +
- Execution resumes from state *CLEAN*.
 --
 +
 
 * *CLEAN* (value: 2).
 +
 --
-*State*: The CR configured and loaded. Its state has not changed since the last switch.
+*Definition*: The CR is configured. Its state has not changed since the last switch.
 
+ ** *ace.clear*: sets status to *INITIAL*.
  ** *Configuration*: Works as expected; sets status to *DIRTY*.
- ** *Export*: Works as expected.
+ ** *ace.export*: Works as expected.
  ** *Usage*: Unrestricted; State modification sets status to *DIRTY*.
 --
 +
@@ -743,11 +732,26 @@ Here, “Configuration” refers to the management operations that can configure
 * *DIRTY* (value: 3).
 +
 --
-*State*: The CR configured and loaded. Its state has potentially changed since the last switch.
+*Definition*: The CR configured. Its state has potentially changed since the last switch.
 
- ** *Configuration*: Works as expected; status unchanged.
- ** *Export*: Unrestricted.
+ ** *ace.clear*: sets status to *INITIAL*.
+ ** *Configuration*: Works as expected; status remains *DIRTY*.
+ ** *ace.export*: Unrestricted.
  ** *Usage*: Unrestricted.
+--
++
+
+* *LAZY* (value: 0).
++
+--
+*Definition*: Unconfigured. A value is saved for lazy loading.
+
+ ** *ace.clear*: sets status to *INITIAL*.
+ ** *Configuration*: Works as expected; sets status to *DIRTY*.
+ ** *ace.export*: Trigger a trap to the immediately higher mode for lazy loading. If that mode does not have a saved value, it will trap to its parent to request the value, and will also keep it.  This may have to be repeated a third time if H is implemented. +
+ The CR is configured with the recovered value and execution resumes from state *CLEAN*.
+ ** *Usage*: Trigger a trap to the operating system for lazy loading. +
+ Execution resumes from state *CLEAN*.
 --
 +
 
