@@ -2162,7 +2162,7 @@ This is done by setting the `aceactivecr` CSR (<<ACE-CSR-aceactivecr>>) first. T
 We use the `acesequence` CSR to indicate whether we are using the input/output buffer or the vector registers to provide the inputs and outputs to ACE instructions, and to track the instruction sequence.
 
 * The initial value of `acesequence` is zero.
-* As soon as one of the following events happen:
+* As soon as one of the following events happens:
 +
 --
  ** an `ace.input` is completed in place of a
@@ -4341,8 +4341,21 @@ Direct plaintext leakage, memory corruption attacks against the ACE-using proces
 [[ACE-LAZY]]
 === Discussion: LAZY CRs
 
-Let us define also value 0 in the entries of `acecrstatus`, to support lazy loading.
+Lazy loading defers loading a value until it is actually needed, which can improve performance and help manage limited CRF capacity.
+This may even be necessary to support migration to systems with smaller CRFs.
 
+However, if capacity is insufficient even for lazy loading, the software responsible for loading an offloaded CR must also be able to offload other CRs in order to free space for the requested one.
+An alternative approach would require software to check for errors after each operation and handle capacity exhaustion itself, or to use an in-process trap handler. This would impose significant burden on software and likely degrade performance.
+
+Therefore, a cooperative approach is recommended.
+Software should proactively offload CRs it no longer needs or does not expect to use soon.
+If the CRF capacity is exhausted, the more privileged software layer can offload other CRs and mark them as lazy.
+This also means that in place of raising an _ace_err_memory_ error, out of CRF capacity situations should trap.
+This mechanism could be architected, and the handler's address could be separately specified.
+The selection method for choosing the CR to offload could be random, heuristic, or based on implementation specific
+hardware-provided mechanisms to select a least-recently-used CR.
+
+Let us define also value 0 in the entries of `acecrstatus` to support lazy loading.
 
 * *LAZY* (value: 0).
 
@@ -4427,19 +4440,6 @@ The SCC corresponding to a *LAZY* CR is stored in S and not in H/M.
 +
 
 //
-
-[WARNING]
---
-If VS/HS/M cannot import a SCC accessed by some process at U/VS/S
-because of a capacity issue, then the instruction at the requesting mode must fail and return _ace_err_memory_.
-This means that, a least in theory, a piece of software should check for such an error after all operations, which can affect performance.
-This can be an issue with in-order processors with few execution ports.
-While this may be solved by delegating addressing this error to a special in-process trapping handler to free other CRs, we would have to  define this mechanism and expect software to handle it.
-
-A different option is to allow the parent mode to implement lazy switching, i.e., when they cannot import a SCC required by the interrupted instruction, the parent chooses another CR used by the child, exports it and makes it *LAZY*.
-This also means that in place of raising an _ace_err_memory_ error, out of CRF capacity situations should trap, which can be architected, and there could be a special address for the purpose.
-(This would be the alternative to a caching mechanism as well.)
---
 
 * *M/H implements lazy switching for VM migration, but VS does not implement lazy switching.*
 +
