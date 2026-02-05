@@ -4221,11 +4221,8 @@ Direct plaintext leakage, memory corruption attacks against the ACE-using proces
 
 _This section is non-normative._
 
-Lazy loading defers loading a value until it is actually needed, which can improve performance and help manage limited CRF capacity.
-This may even be necessary to support migration to systems with smaller CRFs.
-
-However, if capacity is insufficient even for lazy loading, the software responsible for reimporting an offloaded CR must also be able to offload other CRs in order to free space for the requested one.
-An alternative approach would require software to check for errors after each operation and handle capacity exhaustion itself, or to use an in-process trap handler. This would impose significant burden on software and likely degrade performance.
+Lazy loading defers loading a value until it is needed, improving performance and managing limited CRF capacity. It may also be required to support migration to systems with smaller CRFs:
+If capacity is insufficient for lazy loading, the software reimporting an offloaded CR must be able to offload other CRs to free space. An alternative—requiring software to check for errors after each operation or to use an in-process trap handler—would impose significant burden on the software and possibly degrade performance.
 
 Therefore, a cooperative approach is recommended:
 
@@ -4245,10 +4242,14 @@ Let us define also value 0 in the entries of `acecrstatus` to support lazy loadi
 
  ** *Unconfigure*: sets status to *INITIAL*.
  ** *Configure*: Works as expected; sets status to *DIRTY*.
- ** *Export*: Trap to parent mode for lazy loading, possibly repeating the process up to Machine.
- The recovered SCC is imported into the CR (space may need to be freed), its status is set to *CLEAN*, and the interrupted export operation is restarted.
- ** *Usage*: Trigger a trap as for *Export*.
- The execution of the interrupted instruction restarts from state *CLEAN*.
+ ** *Export* and *Usage*: The system traps to the higher-privileged mode that holds the authoritative SCC, which must import it into the CR. This may require freeing space by marking another CR as *LAZY*.
+  Identifying the correct higher-privileged mode is typically straightforward.
+  The complex case occurs when U‑mode is preempted by the hypervisor (HV). Assume HV saved a CR and marked it *LAZY*.
+  If the CR was *CLEAN*, the authoritative value is the one saved by S‑mode.
+  If the CR was *DIRTY*, the authoritative value resides in HV, while S‑mode may hold a stale copy.
+  Therefore, the prior dirtiness information must be consulted to retrieve the authoritative SCC from HV rather than from S‑mode.
+  S‑mode must retain this dirtiness information for each of its child U‑mode processes.
+  After the import, the CR is set to *CLEAN* and the interrupted operation is restarted.
 --
 +
 
@@ -4262,6 +4263,8 @@ If all CRs were to be lazy-loaded, the ACES field would be set to **CLEAN** and 
 
 //
 
+////
+
 [NOTE]
 ====
 Regarding Export or Usage operation, an interesting case occurs at VM migration where, at the target machine, all CRs are made lazy.
@@ -4274,6 +4277,8 @@ This can be addressed by having a driver in the OS of the VM that guarantees tha
 
 All other situations are addressed by simply using the LAZY state.
 ====
+
+////
 
 //
 
