@@ -4205,25 +4205,32 @@ Therefore, a cooperative approach is recommended:
 * The selection method for choosing the CR to offload could be random, heuristic, or based on implementation specific
 hardware-provided mechanisms to select a least-recently-used CR.
 
-Let us use value 0 in the entries of `acecrstatus` to support lazy loading.
+Let us use value 0 in the entries of `acecrstatus` to support lazy loading, so we call this state *LAZY* in place of *OFF*.
+Its definition is: A CR marked *LAZY* is Unconfigured. An authoritative value is saved for lazy loading in one of the parent modes.
+Unconfiguration and configuration operations on this CR work normally.
 
-* *LAZY* (value: 0).
-+
---
-*Definition*: Unconfigured. A value is saved for lazy loading in one of the parent modes.
+If an *Export* or *Usage* operations is issued at U-mode, then
+the system traps to the higher-privileged mode that holds the authoritative SCC, which must import it into the CR.
+This may require freeing space by making another CR *LAZY*.
 
- ** *Unconfigure*: sets status to *INITIAL*.
- ** *Configure*: Works as expected; sets status to *DIRTY*.
- ** *Export* and *Usage*: The system traps to the higher-privileged mode that holds the authoritative SCC, which must import it into the CR. This may require freeing space by making another CR *LAZY*.
-  Identifying the correct higher-privileged mode is typically straightforward.
-  There is however one complex case, which occurs when U‑mode is preempted by the hypervisor (HV). Assume HV saved a CR and marked it *LAZY*.
-  If the CR was *CLEAN*, the authoritative value is the one saved by S‑mode, so retrieving the value from the parent works well.
-  If the CR was *DIRTY*, the authoritative value resides in HV, while S‑mode may hold a stale copy.
+Identifying the correct higher-privileged mode is typically straightforward.
+There is however one complex case, which occurs when:
+
+  . U‑mode is preempted by the hypervisor (HV).
+  . HV saved the CR, cleared it and then marked it *LAZY* to be loaded on demand later.
+  . If the CR was *CLEAN*, a SCC in S-mode would be authoritative, and if there is no SCC in S-mode, the value in H is authoritative, so
+   .. retrieving the value from the parent works well.
+  . _However, if the CR was *DIRTY*, the authoritative value resides in HV, while S‑mode may hold a stale copy_.
   Therefore, the prior dirtiness information must be consulted to retrieve the authoritative SCC from HV rather than from S‑mode.
-  Either S‑mode must retain this dirtiness information for each of its child U‑mode processes, or the fields of `acecrstatus` must be expanded to three bits to accommodate a fifth status, *LAZY/DIRTY*. +
-  After the import, the CR is set to *CLEAN* and the interrupted operation is restarted.
---
-+
+
+Either S‑mode must retain this dirtiness information for each of its child U‑mode processes, or the fields of `acecrstatus` must be expanded to three bits to accommodate a fifth status, *LAZY/DIRTY*.
+After the import, the CR is set to *CLEAN* and the interrupted operation is restarted.
+
+This is a corner case and it would NOT happen in the most common case which is:
+
+  *** The OS at VS-mode may implement lazy loading
+  *** Hypervisors and M _always_ save _and_ restore the _entire_ state.
+  *** We do not migrate a VM if the CRF capacity at the destination machine is insufficient (which is the only case that would actually force the hypervisor to not restore everything but making at least some CRs LAZY).
 
 //
 
@@ -4232,7 +4239,7 @@ Whether the ISE is active is encoded exclusively in ```*status```.
 The use of the **OFF** encoding in the per-CR fields of `acecrstatus` is a natural choice to denote an unavailable state that requires lazy loading to be made available.
 If all CRs were to be lazy-loaded, the ACES field would be set to **CLEAN** and not to **OFF**.
 
-Architecting this feature requires careful consideration.
+Architecting this feature requires careful consideration-there may be further corner cases, so both architectural states and expected software behaviour need to be analyzed in depth.
 Focusing on the core features of ACE is more important and designing lazy-loading is a secondary concern.
 
 //
@@ -4343,6 +4350,8 @@ Here, we have two situations:
 ////
 
 // ///////////////////////////////////////////////////////////////////////////////////////////
+
+<<<
 
 [[ACE-threat-model]]
 === Threat Model
