@@ -665,7 +665,17 @@ NOTE: Accurate setting of `acecrstatus` is an optimization.
 Software will typically use `acecrstatus` to reduce context-swap overhead.
 
 We define the semantics of the `acecrstatus` CSR.
-Here, “Configure” refers to the management operations that can configure a CR, namely `ace.init`, `ace.import` and being the destination of an `ace.clone` or `ace.derive` operation. “Unconfigure” refers to the use of `ace.clear` on a CR.
+“Configure” refers to the management operations that can configure a CR, namely `ace.init`, `ace.import` and being the destination of an `ace.clone` or `ace.derive` operation. “Unconfigure” refers to the use of `ace.clear` on a CR.
+
+
+* *OFF* (value: 0).
++
+--
+*Definition*: Reserved for a future lazy-loading extension (under the name of *LAZY*).
+Lazy-loading will require an additional CSR to track additional CR status (cf.{nbsp}<<ACE-LAZY>>).
+--
++
+
 
 * *INITIAL* (value: 1).
 +
@@ -701,8 +711,6 @@ Here, “Configure” refers to the management operations that can configure a C
  ** *Export*: Unrestricted.
  ** *Usage*: Unrestricted.
 --
-
-* The value 0 is currently not defined.
 
 
 //
@@ -1327,9 +1335,10 @@ The Form and 'r' fields assume these values:
 Description:: {empty}
 
 * Context type `ace.size` returns the total size (in bytes) of the memory buffer that would be necessary to store the exported SCC.
-Knowing this size is necessary for any feature that relies on `ace.export`, including context switching. +
+Knowing this size is necessary for any feature that relies on `ace.export`, including context switching.
+The instruction returns 0 if the CR is unconfigured.
 
-* Metadata type `ace.size` returns the total size (in bytes) of a SCC having the metadata section given in `Xn` into GPR `Xd`, and zero if the algorithm is not supported.
+* Metadata type `ace.size` returns the total size (in bytes) of a SCC having the metadata section given in `Xn` into GPR `Xd`, and 0 if the algorithm is not supported.
 +
 On RV32, `Xs` contains bits [31:0] of the metadata.  This suffices since they contain all fields required to determine the size of the SCC.
 
@@ -1355,7 +1364,7 @@ Interruptible: *NO*.
 `ace.available Xd, Xs`
 (((ACE, instruction, ace.available)))
 
-Alias to the Metadata Variant of `ace.size`, as it returns zero if the algorithm is not supported.
+Alias to the Metadata Variant of `ace.size`, as it returns 0 if the algorithm is not supported.
 
 Properties::
 Same as `ace.size`.
@@ -1406,7 +1415,7 @@ This instruction can be used to:
 Let `m` be the metadata field of the CC in the destination CR. +
 On RV64, the semantics of the instruction are:
 
-* `Xs`[11:0] and `Xs`[27:16] must be zero.
+* `Xs`[11:0] and `Xs`[27:16] must be 0.
 * `Xs`[15:12] and `Xs`[63:32] have the same format as the corresponding bits of the metadata.
 * `Xs`[13:12] is used to turn on side-channel protection or increase its level, if implemented.
 The level is encoded according to <<ACE-SC-protection-levels>>.
@@ -1414,9 +1423,9 @@ Downgrading protection level is not permitted. Attempting to do so will cause er
 * `Xs`[15:14] is used to deactivate either encryption or decryption in a CC that allows both. +
 If `m`[15:14] = `0b11`, then at least one bit of `Xs`[15:14] must be set to 1 to select which operation is kept. +
 If `m`[15:14] != `0b11`, then it must be `Xs`[15:14] = `m`[15:14] or `Xs`[15:14] = 0, in which case no change is made, else this will result in error _ace_err_invalid_.
-* A zero in any of the four bits `Xs`[31:28] means that the corresponding policy is _not_ changed.
+* A 0 in any of the four bits `Xs`[31:28] means that the corresponding policy is _not_ changed.
 * A one in any of the four bits `Xs`[31:28] means that usage by the corresponding mode is forbidden, and the corresponding bit in the metadata of the destination CC is set to 1.
-* `Xs`[34:32] can be non-zero only if `m`[33:32] is zero, in which case  `m`[59:35] <- `Xs`[59:35], else `aceerror` is set to _ace_err_invalid_.
+* `Xs`[34:32] can be non-zero only if `m`[33:32] is 0, in which case  `m`[59:35] <- `Xs`[59:35], else `aceerror` is set to _ace_err_invalid_.
 * This instruction cannot set a Locality.
 
 On RV32, `s` must be even, the register pair `X[s]` and `X[s+1]` is read,
@@ -2039,7 +2048,7 @@ This is done by setting the `aceactivecr` CSR (<<ACE-CSR-aceactivecr>>) first. T
 
 We use the `acesequence` CSR to indicate whether we are using the input/output buffer or the vector registers to provide the inputs and outputs to ACE instructions, and to track the instruction sequence.
 
-* The initial value of `acesequence` is zero.
+* The initial value of `acesequence` is 0.
 * As soon as one of the following events happens:
 +
 --
@@ -2068,7 +2077,7 @@ The internal input/output buffer is not part of any CR. It is architectural, i.e
 
 In all algorithms, whenever one of the instructions in <<ACE-replacement-instructions>> occurs, it may be replaced by a replacement sequence. We do not write this explicitly in the algorithm descriptions for brevity.
 
-NOTE: This mechanism is one of the reasons, besides keeping the state machines simple, that in a given state of an algorithm, only one Form of `ace.exec` or `ace.state` is allowed.  Some exceptions may be possible.  For instance, both a Form D and a Form B could be allowed, with different semantics, and when using replacement sequences, these would be distinguished according to whether `aceiobuftop` - `acestart` is zero or not.
+NOTE: This mechanism is one of the reasons, besides keeping the state machines simple, that in a given state of an algorithm, only one Form of `ace.exec` or `ace.state` is allowed.  Some exceptions may be possible.  For instance, both a Form D and a Form B could be allowed, with different semantics, and when using replacement sequences, these would be distinguished according to whether `aceiobuftop` - `acestart` is 0 or not.
 
 //
 
@@ -4222,15 +4231,22 @@ There is however one complex case, which occurs when:
    .. retrieving the value from the parent works well.
   . _However, if the CR was *DIRTY*, the authoritative value resides in HV, while S‑mode may hold a stale copy_.
   Therefore, the prior dirtiness information must be consulted to retrieve the authoritative SCC from HV rather than from S‑mode.
++
+Possible solutions include:
 
-Either S‑mode must retain this dirtiness information for each of its child U‑mode processes, or the fields of `acecrstatus` must be expanded to three bits to accommodate a fifth status, *LAZY/DIRTY*.
-After the import, the CR is set to *CLEAN* and the interrupted operation is restarted.
+.. The required dirtiness information is passed by the hypervisor to the OS running at S-mode and the latter uses it; or
+.. The required dirtiness information is maintained architecturally, namely
+... The fields of `acecrstatus` must be expanded to three bits to accommodate a fifth status, *LAZY/DIRTY*;
+... Another 32 bits worth of CSRs, say `acecrstatusext` is used for this purpose; or
+... The *INITIAL* state in `acecrstatus` is repurposed to denote this state, and to check whether a CR is unconfigured we check whether `ace.size` returns 0.
+
+ . After the import, the CR is set to *CLEAN* and the interrupted operation is restarted.
 
 This is a corner case and it would NOT happen in the most common case which is:
 
-  *** The OS at VS-mode may implement lazy loading
-  *** Hypervisors and M _always_ save _and_ restore the _entire_ state.
-  *** We do not migrate a VM if the CRF capacity at the destination machine is insufficient (which is the only case that would actually force the hypervisor to not restore everything but making at least some CRs LAZY).
+*** The OS at VS-mode may implement lazy loading
+*** Hypervisors and M _always_ save _and_ restore the _entire_ state.
+*** We do not migrate a VM if the CRF capacity at the destination machine is insufficient (which is the only case that would actually force the hypervisor to not restore everything but making at least some CRs LAZY).
 
 //
 
