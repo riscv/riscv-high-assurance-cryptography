@@ -4217,35 +4217,35 @@ Direct plaintext leakage, memory corruption attacks against the ACE-using proces
 // ///////////////////////////////////////////////////////////////////////////////////////////
 
 [[ACE-LAZY]]
-=== Discussion: LAZY CRs
+=== Lazy-Loading CRs
+
+_This section is non-normative._
 
 Lazy loading defers loading a value until it is actually needed, which can improve performance and help manage limited CRF capacity.
 This may even be necessary to support migration to systems with smaller CRFs.
 
-However, if capacity is insufficient even for lazy loading, the software responsible for loading an offloaded CR must also be able to offload other CRs in order to free space for the requested one.
+However, if capacity is insufficient even for lazy loading, the software responsible for reimporting an offloaded CR must also be able to offload other CRs in order to free space for the requested one.
 An alternative approach would require software to check for errors after each operation and handle capacity exhaustion itself, or to use an in-process trap handler. This would impose significant burden on software and likely degrade performance.
 
-Therefore, a cooperative approach is recommended.
-Software should proactively offload CRs it no longer needs or does not expect to use soon.
-If the CRF capacity is exhausted, the more privileged software layer can offload other CRs and mark them as lazy.
-This also means that in place of raising an _ace_err_memory_ error, out of CRF capacity situations should trap.
+Therefore, a cooperative approach is recommended:
+
+* Software should proactively offload CRs it no longer needs or does not expect to use soon.
+* If the CRF capacity is exhausted, the more privileged software layer can offload other CRs and mark them as lazy.
+* This also means that in place of raising an _ace_err_memory_ error, out of CRF capacity situations should trap.
 This mechanism could be architected, and the handler's address could be separately specified.
-The selection method for choosing the CR to offload could be random, heuristic, or based on implementation specific
+* The selection method for choosing the CR to offload could be random, heuristic, or based on implementation specific
 hardware-provided mechanisms to select a least-recently-used CR.
 
 Let us define also value 0 in the entries of `acecrstatus` to support lazy loading.
 
 * *LAZY* (value: 0).
-
 +
 --
 *Definition*: Unconfigured. A value is saved for lazy loading in one of the parent modes.
 
  ** *Unconfigure*: sets status to *INITIAL*.
  ** *Configure*: Works as expected; sets status to *DIRTY*.
- ** *Export*: Trigger a trap to the immediately higher mode for lazy loading.
- If that mode does not have a saved value, it will trap to its parent to request the value, and will also keep it.
- This may have to be repeated a third time if H is implemented.
+ ** *Export*: Trap to parent mode for lazy loading, possibly repeating the process up to Machine.
  The recovered SCC is imported into the CR (space may need to be freed), its status is set to *CLEAN*, and the interrupted export operation is restarted.
  ** *Usage*: Trigger a trap as for *Export*.
  The execution of the interrupted instruction restarts from state *CLEAN*.
@@ -4255,13 +4255,22 @@ Let us define also value 0 in the entries of `acecrstatus` to support lazy loadi
 //
 
 [NOTE]
-====
 The *LAZY* status reuses the FS/VS/ACES encoding for “OFF”, this does not indicate that the ISE is inactive, nor that the ISE cannot use that CR.
 Whether the ISE is active is encoded exclusively in ```*status```.
 The use of the **OFF** encoding in the per-CR fields of `acecrstatus` is a natural choice to denote an unavailable state that requires lazy loading to be made available.
 If all CRs were to be lazy-loaded, the ACES field would be set to **CLEAN** and not to **OFF**.
-====
 
+//
+
+[NOTE]
+Regarding Export or Usage operation, an interesting case occurs at VM migration where, at the target machine, all CRs are made lazy.
+This may occur if we do not know if the CRF capacity of the target machine is large enough. +
+If the VM was interrupted while running at U, and a process had a *DIRTY* CR, the value of this CR is saved in the hypervisor and migrated together with the VM. The OS, running at S, contains a value for that CR, but it is stale and not authoritative. The authoritative value is the one in the hypervisor. +
+Therefore upon restore, we would need to encode additional information, namely that the CR is LAZY *and* that it was *DIRTY* before migration. This would mean a fifth status value, which we cannot encode in two bits. The fact that this is a potential future future does not seem to warrant expanding the fields in `acecrstatus` to three bits. However, this will need to be addressed in case we intend to architect lazy loading in combination with VM migration, to optimize CR handling and allow migration to machines with smaller CRF capacities. +
+This can be addressed by having a driver in the OS of the VM that guarantees that the VM always suspends while running in S mode, i.e., the hypervisor works together with a “guest freeze” mechanism. +
+All other situation are addressed by simply using the LAZY state.
+
+//
 
 ////
 We describe how the various components of the system software stack are expected to use `acecrstatus`.
