@@ -104,7 +104,7 @@ This list is an early draft.
 * `SmaceCSKw` => ACE Root Context Sealing Key CSRs are MRW. Depends on `SmaceCSK`.
 * `Smaceosscrt` => Defines the ACE OS Secret CSRs (`maceOSSecret{0..3}`).
 * `Smacebootscrt` => Defines the ACE Boot Secret CSRs (`maceBootSecret0{0..3}`).
-* `Smacestatus` => Defines the ACES per CC CSRs (`macecrstatus`).
+* `Smacestatus` => Defines the ACES per CC CSRs (`sacecrstatus`, `vsacecrstatus`).
 
 // ///////////////////////////////////////////////////////////////////////////////////////////
 
@@ -464,7 +464,8 @@ ACE extends `*status` and `misa`, and adds up to 29 new CSRs, which are listed i
 |===
 | Address        | Privilege | Name                     | Description
 | 0xXXX          | URW       | `aceerror`               | Error code of the last ACE instruction
-| 0xXXX          | URO       | `acecrstatus`            | Array of two-bit fields (similar to ACES field, but per CR)
+| 0xXXX          | SRW       | `sacecrstatus`           | Array of two-bit fields (similar to ACES field, but per CR)
+| 0xXXX          | HRW       | `vsacecrstatus`          | Array of two-bit fields (similar to ACES field, but per CR)
 | 0xXXX          | URW       | `acestart`               | ACE start byte index (see warning below)
 | 0xXXX          | URW       | `aceiobuflen`            | ACE I/O buffer length
 | 0xXXX          | URW       | `aceiobuftop`            | ACE I/O buffer limit for current transfers
@@ -514,7 +515,8 @@ the possible values are given in <<ACE-aces-encoding>>.
 
 Attempts to execute any ACE instruction, or to access the ACE state, raise an illegal-instruction exception when `mstatus.ACES` is set to Off.
 
-When `mstatus.ACES` is set to Initial or Clean, executing any instruction that changes ACE state will change `mstatus.ACES` to Dirty. Implementations may also change `mstatus.ACES` from Initial or Clean to Dirty at any time, even when there is no change in vector state.
+When `mstatus.ACES` is set to Initial or Clean, executing any instruction that changes ACE state will change `mstatus.ACES` to Dirty. Implementations may also change `mstatus.ACES` from Initial or Clean to Dirty at any time, even when there is no change in ACE state.
+// TODO: ace.reset should set Initial
 
 [NOTE]
 Accurate setting of `mstatus.ACES` is an optimization.
@@ -544,7 +546,6 @@ If the buffer is enabled (a non-zero value of `aceiobuflen`, see <<ACE-CSR-aceio
 Its initial value is Initial, and upon any write to `aceiobuflen` its state returns to Initial.
 In this case, it cannot be read or used in any operation, it must be written to first.
 
-
 [[ACE-ACES-field-H]]
 ===== ACE Context Status in `vsstatus`
 
@@ -556,6 +557,7 @@ access the CRs or the input/output buffer, raises an illegal-instruction excepti
 
 When V=1 and neither `vsstatus.ACES` nor `mstatus.ACES` is set to Off, executing any instruction that changes
 ACE state, including the ACE CSs or the input/output buffer, will change both `mstatus.ACES` and `vsstatus.ACES` to Dirty.
+// TODO: ace.reset should set Initial
 Implementations may also change `mstatus.ACES` or `vsstatus.ACES` from Initial or Clean to Dirty at any time,
 even when there is no change in ACE state.
 
@@ -649,21 +651,17 @@ trap, as specified in the privileged architecture, `aceerror` remains unchanged.
 
 //
 
-===== `acecrstatus`
+===== `sacecrstatus`
 
-The CSR `acecrstatus` tracks the configuration and dirtiness of CRs on a per-CR basis, so that context switching code needs to save only the dirty CRs, and, upon restore, restore only the configured ones and explicitly clear the unconfigured ones.
+The 64 bit register `sacecrstatus` tracks the configuration and dirtiness of CRs on a per-CR basis.
 
-. For RV64, `acecrstatus` has a size of 64 bits,
-``acecrstatus[``2__i__+1,2__i__``]`` can take the values Initial, Clean, Dirty as defined for `*status.ACES` for CR #__i__.
-. For RV32, there are two 32-bit registers `acecrstatush` and `acecrstatusl` (collectively referred to as `acecrstatus` in the following)
-where
-``acecrstatus[``2__i__+1,2__i__``]`` can take the values Initial, Clean, Dirty as defined for `*status.ACES` for CR #__i__
-and
-``acecrstatus[``2__i__+1,2__i__``]`` for CR #__i__+16.
+``sacecrstatus[``2__i__+1,2__i__``]`` can take the values Off, Initial, Clean, and Dirty, as defined for `sstatus.ACES`, for CR #__i__.
 
-NOTE: Accurate setting of `acecrstatus` is an optimization.
-Software will typically use `acecrstatus` to reduce context-swap overhead.
+When XLEN=32, `sacecrstatush` is a 32-bit register that aliases bits 63:32 of `sacecrstatus`.
+Register `sacecrstatush` does not exist when XLEN=64.
 
+Attempts to execute any ACE instruction that accesses CR #__i__ raise an illegal-instruction exception
+when ``sacecrstatus[``2__i__+1,2__i__``]`` is set to Off.
 We define the semantics of the `acecrstatus` CSR.
 “Configure” refers to the management operations that can configure a CR, namely `ace.init`, `ace.import` and being the destination of an `ace.clone` or `ace.derive` operation. “Unconfigure” refers to the use of `ace.clear` on a CR.
 
@@ -677,43 +675,51 @@ Lazy-loading will require an additional CSR to track additional CR status (cf.{n
 +
 
 
-* *INITIAL* (value: 1).
-+
---
-*Definition*: Unconfigured.
+When ``sacecrstatus[``2__i__+1,2__i__``]`` is set to Initial or Clean, executing
+any instruction that changes CR #__i__ will change
+``sacecrstatus[``2__i__+1,2__i__``]`` to Dirty.
+// TODO: ace.reset and ace.clear should set Initial
 
- ** *Unconfigure*: status remains *INITIAL*.
- ** *Configure*: Does not trap. Transitions to *DIRTY*.
- ** *Export*: Raises _ace_err_unconfigured_. No trap is generated.
- ** *Usage*: Raises _ace_err_unconfigured_. No trap is generated.
---
-+
+Implementations may also change ``sacecrstatus[``2__i__+1,2__i__``]`` from
+Initial or Clean to Dirty at any time, even when there is no change in CR #__i__ state.
 
-* *CLEAN* (value: 2).
-+
---
-*Definition*: The CR is configured. Its state has not changed since the last switch.
+NOTE: `sstatus.ACES` is also in effect.
 
- ** *Unconfigure*: sets status to *INITIAL*.
- ** *Configure*: Works as expected; sets status to *DIRTY*.
- ** *Export*: Works as expected.
- ** *Usage*: Unrestricted; State modification sets status to *DIRTY*.
---
-+
+NOTE: the `sacecrstatus` CSR does not depend on the S extension.  In an M-U
+system, M-mode can use the CSR to optimize U-mode context switches.
 
-* *DIRTY* (value: 3).
-+
---
-*Definition*: The CR configured. Its state has potentially changed since the last switch.
+===== `vsacecrstatus`
 
- ** *Unconfigure*: sets status to *INITIAL*.
- ** *Configure*: Works as expected; status remains *DIRTY*.
- ** *Export*: Unrestricted.
- ** *Usage*: Unrestricted.
---
+The 64 bit register `vsacecrstatus` tracks the configuration and dirtiness of CRs on a per-CR basis.
+The `vsacecrstatus` register exists only when the H extension is implemented.
 
+``vsacecrstatus[``2__i__+1,2__i__``]`` can take the values Off, Initial, Clean, and Dirty, as defined for `vsstatus.ACES`, for CR #__i__.
 
-//
+When XLEN=32, `vsacecrstatush` is a 32-bit register that aliases bits 63:32 of `vsacecrstatus`.
+Register `vsacecrstatush` does not exist when XLEN=64.
+
+When V=1, `vsacecrstatus` substitutes for the usual `sacecrstatus`, so
+instructions that normally read or modify `sacecrstatus` actually access
+`vsacecrstatus` instead.
+
+When V=1, attempts to execute any ACE instruction that accesses CR #__i__ raise
+an illegal-instruction exception when ``vsacecrstatus[``2__i__+1,2__i__``]`` is
+set to Off.
+
+When V=1 and ``vsacecrstatus[``2__i__+1,2__i__``]`` is set to Initial or Clean,
+executing any instruction that changes CR #__i__ will change
+``vsacecrstatus[``2__i__+1,2__i__``]`` to Dirty.
+// TODO: ace.reset and ace.clear should set Initial
+
+Implementations may also change ``vsacecrstatus[``2__i__+1,2__i__``]`` from
+Initial or Clean to Dirty at any time, even when there is no change in CR #__i__ state.
+
+NOTE: `sstatus.ACES`, `vsstatus.ACES`, and `sacecrstatus` are also in effect when V=1.
+
+NOTE: Future extensions might define a `macecrstatus` register that would allow
+M-mode to optimize context switches of Supervisor domains.
+// `uacecrstatus` might become useful when the HFI extension lands, but that is
+// pushing the concept
 
 [[ACE-CSR-acestart]]
 ===== `acestart`
