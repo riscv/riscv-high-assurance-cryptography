@@ -662,6 +662,18 @@ Register `sacecrstatush` does not exist when XLEN=64.
 
 Attempts to execute any ACE instruction that accesses CR #__i__ raise an illegal-instruction exception
 when ``sacecrstatus[``2__i__+1,2__i__``]`` is set to Off.
+We define the semantics of the `acecrstatus` CSR.
+“Configure” refers to the management operations that can configure a CR, namely `ace.init`, `ace.import` and being the destination of an `ace.clone` or `ace.derive` operation. “Unconfigure” refers to the use of `ace.clear` on a CR.
+
+
+* *OFF* (value: 0).
++
+--
+*Definition*: Reserved for a future lazy-loading extension (under the name of *LAZY*).
+Lazy-loading will require an additional CSR to track additional CR status (cf.{nbsp}<<ACE-LAZY>>).
+--
++
+
 
 When ``sacecrstatus[``2__i__+1,2__i__``]`` is set to Initial or Clean, executing
 any instruction that changes CR #__i__ will change
@@ -1329,9 +1341,10 @@ The Form and 'r' fields assume these values:
 Description:: {empty}
 
 * Context type `ace.size` returns the total size (in bytes) of the memory buffer that would be necessary to store the exported SCC.
-Knowing this size is necessary for any feature that relies on `ace.export`, including context switching. +
+Knowing this size is necessary for any feature that relies on `ace.export`, including context switching.
+The instruction returns 0 if the CR is unconfigured.
 
-* Metadata type `ace.size` returns the total size (in bytes) of a SCC having the metadata section given in `Xn` into GPR `Xd`, and zero if the algorithm is not supported.
+* Metadata type `ace.size` returns the total size (in bytes) of a SCC having the metadata section given in `Xn` into GPR `Xd`, and 0 if the algorithm is not supported.
 +
 On RV32, `Xs` contains bits [31:0] of the metadata.  This suffices since they contain all fields required to determine the size of the SCC.
 
@@ -1357,7 +1370,7 @@ Interruptible: *NO*.
 `ace.available Xd, Xs`
 (((ACE, instruction, ace.available)))
 
-Alias to the Metadata Variant of `ace.size`, as it returns zero if the algorithm is not supported.
+Alias to the Metadata Variant of `ace.size`, as it returns 0 if the algorithm is not supported.
 
 Properties::
 Same as `ace.size`.
@@ -1408,7 +1421,7 @@ This instruction can be used to:
 Let `m` be the metadata field of the CC in the destination CR. +
 On RV64, the semantics of the instruction are:
 
-* `Xs`[11:0] and `Xs`[27:16] must be zero.
+* `Xs`[11:0] and `Xs`[27:16] must be 0.
 * `Xs`[15:12] and `Xs`[63:32] have the same format as the corresponding bits of the metadata.
 * `Xs`[13:12] is used to turn on side-channel protection or increase its level, if implemented.
 The level is encoded according to <<ACE-SC-protection-levels>>.
@@ -1416,9 +1429,9 @@ Downgrading protection level is not permitted. Attempting to do so will cause er
 * `Xs`[15:14] is used to deactivate either encryption or decryption in a CC that allows both. +
 If `m`[15:14] = `0b11`, then at least one bit of `Xs`[15:14] must be set to 1 to select which operation is kept. +
 If `m`[15:14] != `0b11`, then it must be `Xs`[15:14] = `m`[15:14] or `Xs`[15:14] = 0, in which case no change is made, else this will result in error _ace_err_invalid_.
-* A zero in any of the four bits `Xs`[31:28] means that the corresponding policy is _not_ changed.
+* A 0 in any of the four bits `Xs`[31:28] means that the corresponding policy is _not_ changed.
 * A one in any of the four bits `Xs`[31:28] means that usage by the corresponding mode is forbidden, and the corresponding bit in the metadata of the destination CC is set to 1.
-* `Xs`[34:32] can be non-zero only if `m`[33:32] is zero, in which case  `m`[59:35] <- `Xs`[59:35], else `aceerror` is set to _ace_err_invalid_.
+* `Xs`[34:32] can be non-zero only if `m`[33:32] is 0, in which case  `m`[59:35] <- `Xs`[59:35], else `aceerror` is set to _ace_err_invalid_.
 * This instruction cannot set a Locality.
 
 On RV32, `s` must be even, the register pair `X[s]` and `X[s+1]` is read,
@@ -1923,7 +1936,7 @@ These include:
 --
 +
 
-Important: In this section, all field lengths are specified in bits except where otherwise noted.
+In this section, all field lengths are specified in bits except where otherwise noted.
 
 Data Structures:::
 +
@@ -1999,10 +2012,18 @@ Algorithms that differ substantially from those described in <<ACE-algorithms>> 
 
 The state number is stored in the metadata or content section of the CC/SCC, as described in <<ACE-metadata>>, with the constraint that the State_Number field must always contain one of the values 0, 14, 15, or 1.
 
-Unless explicitly stated otherwise in an algorithm's specification, it is always possible to transition From any valid state to state _initial_.
+Unless explicitly stated otherwise in an algorithm's specification, it is always possible to transition from any valid state to state _initial_.
 
-NOTE: In many algorithms, an `ace.exec` or `ace.state` operation could logically imply a state change. For example, after setting an IV or nonce in an AEAD mode, the instruction might naturally transition to a subsequent state. To ensure consistent behavior, the ACE architecture favors explicit state transitions via separate instructions, even if this adds instruction count. It is always permissible to issue an `ace.state` instruction that transitions to the current state. Deviations from these behaviors may be necessary to avoid security issues.
-One such example is automatic transitions from hash finalization to verification, or from hash verification to the _completed_ state (<<ACE-state-constants>> and <<ACE-algorithms>>) to prevent that the user may test several values against an unknown tag and thus potentially gain information about a hashing key.
+[NOTE]
+====
+In many algorithms, an `ace.exec` or `ace.state` operation could logically imply a state change.
+For example, after setting an IV or nonce in an AEAD mode, the instruction might naturally transition to a subsequent state.
+
+To ensure consistent behavior, the ACE architecture favors explicit state transitions via separate instructions, even if this adds instruction count. It is always permissible to issue an `ace.state` instruction that transitions to the current state.
+
+Deviations from these behaviors may be necessary to avoid security issues.
+An example is given by the automatic transitions from hash finalization to verification, or from hash verification to the _completed_ state (<<ACE-algorithms>>).
+====
 
 //
 
@@ -2013,24 +2034,26 @@ One such example is automatic transitions from hash finalization to verification
 ===== Usage of `ace.input` and `ace.output` to Replace Vector Inputs and Outputs
 
 The `ace.input` and `ace.output` instructions may be used to replace the inputs and outputs to Forms A-C of `ace.exec`, the auxiliary inputs of Form C `ace.state` or of Form C of `ace.derive` in any algorithm, to the point that an implementation of ACE without the V extension or a subset thereof is possible.
-Forms A, B, and C of `ace.exec`, as well as Forms C of `ace.derive` and `ace.state`, can be replaced as follows:
+Forms A, B, and C of `ace.exec`, as well as Forms C of `ace.derive` and `ace.state`, can be replaced
+by using `ace.input` and `ace.output` instructions surrounding a Form D `ace.exec` instruction or preceding
+a Form A `ace.state`, or a Form A `ace.derive` instruction as follows:
 
 [[ACE-replacement-instructions]]
 .Replacement sequences for `ace.exec` and `ace.derive` using `ace.input` and `ace.output`
-[float="center",align="center",width="100%",cols="<15%,<41%,<44%",options="header"]
+[float="center",align="center",width="100%",cols="<21%,<43%,<36%",options="header"]
 |===
-| Instr./Form | Original Instruction          | Replacement Sequence
-| `ace.exec` / A | `ace.exec{nbsp}{nbsp}{nbsp}Vd, Kn\|K[Xn], Vs` | `ace.input{nbsp}{nbsp}Xl, Vs` +
+| Instruction and Form | Original Instruction          | Replacement Sequence
+| `ace.exec`, Form A   | `ace.exec{nbsp}{nbsp}{nbsp}Vd, Kn\|K[Xn], Vs` | `ace.input{nbsp}{nbsp}Xl, Vs` +
 `ace.exec{nbsp}{nbsp}{nbsp}Kn\|K[Xn]` +
-`ace.output{nbsp}Vd,  Xl`  // Form D
-| `ace.exec` / B | `ace.exec{nbsp}{nbsp}{nbsp}{nbsp}{nbsp}{nbsp}{nbsp}Kn\|K[Xn], Vs`     | `ace.input{nbsp}{nbsp}Xl, Vs` +
-`ace.exec{nbsp}{nbsp}{nbsp}Kn\|K[Xn]`  // Form D
-| `ace.exec` / C | `ace.exec{nbsp}{nbsp}{nbsp}Vd, Kn\|K[Xn]`     | `ace.exec{nbsp}{nbsp}{nbsp}Kn\|K[Xn]` +
-`ace.output{nbsp}Vd,  Xl`  // Form D
-| `ace.state` / C | `ace.state{nbsp}{nbsp}Kd\|K[Xd], #immed, Vs` | `ace.input{nbsp}{nbsp}Xl, Vs` +
-`ace.state{nbsp}{nbsp}Kd\|K[Xd], #immed` // Form A
-| `ace.derive` / C | `ace.derive Kd\|K[Xd], Ks1\|K[Xs1], Vs2` | `ace.input{nbsp}{nbsp}Xl, Vs2` +
-`ace.derive{nbsp}Kd\|K[Xd], Ks1\|K[Xs1]` // Form A
+`ace.output{nbsp}Vd,  Xl`
+| `ace.exec`, Form B   | `ace.exec{nbsp}{nbsp}{nbsp}{nbsp}{nbsp}{nbsp}{nbsp}Kn\|K[Xn], Vs`     | `ace.input{nbsp}{nbsp}Xl, Vs` +
+`ace.exec{nbsp}{nbsp}{nbsp}Kn\|K[Xn]`
+| `ace.exec`, Form C   | `ace.exec{nbsp}{nbsp}{nbsp}Vd, Kn\|K[Xn]`     | `ace.exec{nbsp}{nbsp}{nbsp}Kn\|K[Xn]` +
+`ace.output{nbsp}Vd,  Xl`
+| `ace.state`, Form C  | `ace.state{nbsp}{nbsp}Kd\|K[Xd], #immed, Vs` | `ace.input{nbsp}{nbsp}Xl, Vs` +
+`ace.state{nbsp}{nbsp}Kd\|K[Xd], #immed`
+| `ace.derive`, Form C | `ace.derive Kd\|K[Xd], Ks1\|K[Xs1], Vs2` | `ace.input{nbsp}{nbsp}Xl, Vs2` +
+`ace.derive{nbsp}Kd\|K[Xd], Ks1\|K[Xs1]`
 |===
 
 `ace.input` and `ace.output` may be used if enabled and `aceiobuflen` is non zero, otherwise an illegal-instruction error is raised.
@@ -2041,7 +2064,7 @@ This is done by setting the `aceactivecr` CSR (<<ACE-CSR-aceactivecr>>) first. T
 
 We use the `acesequence` CSR to indicate whether we are using the input/output buffer or the vector registers to provide the inputs and outputs to ACE instructions, and to track the instruction sequence.
 
-* The initial value of `acesequence` is zero.
+* The initial value of `acesequence` is 0.
 * As soon as one of the following events happens:
 +
 --
@@ -2052,10 +2075,10 @@ We use the `acesequence` CSR to indicate whether we are using the input/output b
  ** or a Form D `ace.exec` is completed in place of a Form C `ace.exec`,
 --
 +
-the CSR `acesequence` is set to 1.
+and `acesequence` is set to 1.
 
-* In this case, `acesequence` remains 1 until the end of the second instruction of the replacement sequence, and
-* If there is a third instruction in the sequence, then `acesequence` is set to 2 until the end of the third instruction of the sequence.
+* `acesequence` remains 1 until the end of the second instruction of the replacement sequence, and
+* If there is a third instruction in the sequence, `acesequence` is set to 2 until the end of the instruction.
 * At the end of the replacement sequence, `acesequence` is reset to 0.
 
 The ordering of the instructions in a replacement sequence is enforced by the architecture according to the value of `acesequence` and the state number of the CR configured in `aceactivecr`.
@@ -2070,7 +2093,7 @@ The internal input/output buffer is not part of any CR. It is architectural, i.e
 
 In all algorithms, whenever one of the instructions in <<ACE-replacement-instructions>> occurs, it may be replaced by a replacement sequence. We do not write this explicitly in the algorithm descriptions for brevity.
 
-NOTE: This mechanism is one of the reasons, besides keeping the state machines simple, that in a given state of an algorithm, only one Form of `ace.exec` or `ace.state` is allowed.  Some exceptions may be possible.  For instance, both a Form D and a Form B could be allowed, with different semantics, and when using replacement sequences, these would be distinguished according to whether `aceiobuftop` - `acestart` is zero or not.
+NOTE: This mechanism is one of the reasons, besides keeping the state machines simple, that in a given state of an algorithm, only one Form of `ace.exec` or `ace.state` is allowed.  Some exceptions may be possible.  For instance, both a Form D and a Form B could be allowed, with different semantics, and when using replacement sequences, these would be distinguished according to whether `aceiobuftop` - `acestart` is 0 or not.
 
 //
 
@@ -4161,7 +4184,11 @@ The required features are:
 Moreover, floating-point, fixed-point, and most arithmetic vector operations are not required, and
 more complex operations for some corner-case cryptographic algorithms may be performed in GPRs, with results then inserted in vector registers via `vins`/`vext`.
 
-// to guarantee that ACE code runs unmodified on full RVV implementations.
+[WARNING]
+[.red]#It is not necessary to define RVV-mini before ratification of ACE begins.
+This subset can be defined at a later moment and the ACE specification amended to allow RVV-mini in place of V as a requirement.#
+
+//
 
 // ///////////////////////////////////////////////////////////////////////////////////////////
 
@@ -4187,82 +4214,69 @@ For example, it would necessitate secure management of large RCSK tables, includ
 
 // ///////////////////////////////////////////////////////////////////////////////////////////
 
-[[ACE-threat-model]]
-=== Threat Model
-
-_This section is informative and non-normative._
-
-The ACE threat model is straightforward.
-
-**Assets** consist of _keys_ and any other information that could aid an adversary in recovering plaintext or forging ciphertext. This includes items such as masks in tweakable XEX modes and derived keys in AES-GCM-SIV. The critical properties of these assets are their _confidentiality_ and _integrity_.
-Protecting the _Availability_ of the keys is not a goal of the architecture.
-
-**Adversaries** are assumed capable of compromising processes by exploiting software vulnerabilities.
-They are also able to gain access to memory contents, for instance, by abusing hardware interfaces or by SoC/memory interposition.
-The model does not include adversaries capable of sophisticated hardware attacks, such as using
-a Focused Ion Beam/Scanning Electron Microscope (FIB/SEM) to tamper with the hardware's functionality.
-
-Side channel attacks are addressed optionally. ACE offers interfaces to both SCA-unprotected and SCA-protected implementations of cryptographic algorithms, if these options are provided by the designer.
-
-Threats can be addressed in four ways:
-
-[horizontal]
-**C:**:: _Control_ the threat by implementing full or partial mitigations.
-**A:**:: _Accept_ the threat and its associated risks.
-**T:**:: _Transfer_ the threat to another party better suited to address it.
-**S:**:: _Suppress_ the features that give rise to the threat.
-
-ACE is designed to avoid the “***A***” and “***S***” options (as much as possible). It _controls_ threats through its own mechanisms and _transfers_ residual risk—specifically, the risk of key extraction from the privileged or trusted software and hardware environments that manage keys—to those same environments. For example, trusted software environments may employ control-flow integrity, memory encryption with integrity protection, and anti-replay mechanisms, while hardware key-management blocks can be hardened to protect entrusted keys.
-
-Direct plaintext leakage, memory corruption attacks against the ACE-using process, and Release of Unverified Plaintext (RUP) attacks on the cryptographic algorithms are considered out of scope. These threats cannot be mitigated by ACE because the processed information resides within the user execution context. Consequently, these threats are _accepted_.
-
-// ///////////////////////////////////////////////////////////////////////////////////////////
-
 [[ACE-LAZY]]
 === Lazy-Loading CRs
 
-_This section is non-normative._
+_This section is informative and non-normative._
 
-Lazy loading defers loading a value until it is actually needed, which can improve performance and help manage limited CRF capacity.
-This may even be necessary to support migration to systems with smaller CRFs.
-
-However, if capacity is insufficient even for lazy loading, the software responsible for reimporting an offloaded CR must also be able to offload other CRs in order to free space for the requested one.
-An alternative approach would require software to check for errors after each operation and handle capacity exhaustion itself, or to use an in-process trap handler. This would impose significant burden on software and likely degrade performance.
+Lazy loading defers loading a value until it is needed, improving performance and managing limited CRF capacity. It may also be required to support migration to systems with smaller CRFs:
+If capacity is insufficient for lazy loading, the software reimporting an offloaded CR must be able to offload other CRs to free space. An alternative—requiring software to check for errors after each operation or to use an in-process trap handler—would impose significant burden on the software and possibly degrade performance.
 
 Therefore, a cooperative approach is recommended:
 
 * Software should proactively offload CRs it no longer needs or does not expect to use soon.
 * If the CRF capacity is exhausted, the more privileged software layer can offload other CRs and mark them as lazy.
-* This also means that in place of raising an _ace_err_memory_ error, out of CRF capacity situations should trap.
-This mechanism could be architected, and the handler's address could be separately specified.
+  In place of raising an _ace_err_memory_ error, out of CRF capacity situations should trap to a suitable handler.
 * The selection method for choosing the CR to offload could be random, heuristic, or based on implementation specific
 hardware-provided mechanisms to select a least-recently-used CR.
 
-Let us define also value 0 in the entries of `acecrstatus` to support lazy loading.
+Let us use value 0 in the entries of `acecrstatus` to support lazy loading, so we call this state *LAZY* in place of *OFF*.
+Its definition is: A CR marked *LAZY* is Unconfigured. An authoritative value is saved for lazy loading in one of the parent modes.
+Unconfiguration and configuration operations on this CR work normally.
 
-* *LAZY* (value: 0).
-+
---
-*Definition*: Unconfigured. A value is saved for lazy loading in one of the parent modes.
+If an *Export* or *Usage* operations is issued at U-mode, then
+the system traps to the higher-privileged mode that holds the authoritative SCC, which must import it into the CR.
+This may require freeing space by making another CR *LAZY*.
 
- ** *Unconfigure*: sets status to *INITIAL*.
- ** *Configure*: Works as expected; sets status to *DIRTY*.
- ** *Export*: Trap to parent mode for lazy loading, possibly repeating the process up to Machine.
- The recovered SCC is imported into the CR (space may need to be freed), its status is set to *CLEAN*, and the interrupted export operation is restarted.
- ** *Usage*: Trigger a trap as for *Export*.
- The execution of the interrupted instruction restarts from state *CLEAN*.
---
+Identifying the correct higher-privileged mode is typically straightforward.
+There is however one complex case, which occurs when:
+
+  . U‑mode is preempted by the hypervisor (HV).
+  . HV saved the CR, cleared it and then marked it *LAZY* to be loaded on demand later.
+  . If the CR was *CLEAN*, a SCC in S-mode would be authoritative, and if there is no SCC in S-mode, the value in H is authoritative, so
+   .. retrieving the value from the parent works well.
+  . _However, if the CR was *DIRTY*, the authoritative value resides in HV, while S‑mode may hold a stale copy_.
+  Therefore, the prior dirtiness information must be consulted to retrieve the authoritative SCC from HV rather than from S‑mode.
 +
+Possible solutions include:
+
+.. The required dirtiness information is passed by the hypervisor to the OS running at S-mode and the latter uses it; or
+.. The required dirtiness information is maintained architecturally, namely
+... The fields of `acecrstatus` must be expanded to three bits to accommodate a fifth status, *LAZY/DIRTY*;
+... Another 32 bits worth of CSRs, say `acecrstatusext` is used for this purpose; or
+... The *INITIAL* state in `acecrstatus` is repurposed to denote this state, and to check whether a CR is unconfigured we check whether `ace.size` returns 0.
+
+ . After the import, the CR is set to *CLEAN* and the interrupted operation is restarted.
+
+This is a corner case and it would NOT happen in the most common case which is:
+
+*** The OS at VS-mode may implement lazy loading
+*** Hypervisors and M _always_ save _and_ restore the _entire_ state.
+*** We do not migrate a VM if the CRF capacity at the destination machine is insufficient (which is the only case that would actually force the hypervisor to not restore everything but making at least some CRs LAZY).
 
 //
 
-[NOTE]
 The *LAZY* status reuses the FS/VS/ACES encoding for “OFF”, this does not indicate that the ISE is inactive, nor that the ISE cannot use that CR.
 Whether the ISE is active is encoded exclusively in ```*status```.
 The use of the **OFF** encoding in the per-CR fields of `acecrstatus` is a natural choice to denote an unavailable state that requires lazy loading to be made available.
 If all CRs were to be lazy-loaded, the ACES field would be set to **CLEAN** and not to **OFF**.
 
+Architecting this feature requires careful consideration-there may be further corner cases, so both architectural states and expected software behaviour need to be analyzed in depth.
+Focusing on the core features of ACE is more important and designing lazy-loading is a secondary concern.
+
 //
+
+////
 
 [NOTE]
 ====
@@ -4276,6 +4290,8 @@ This can be addressed by having a driver in the OS of the VM that guarantees tha
 
 All other situations are addressed by simply using the LAZY state.
 ====
+
+////
 
 //
 
@@ -4364,6 +4380,39 @@ Here, we have two situations:
 [.red]#TBD# (but fundamentally a combination of the above).
 --
 ////
+
+// ///////////////////////////////////////////////////////////////////////////////////////////
+
+<<<
+
+[[ACE-threat-model]]
+=== Threat Model
+
+_This section is informative and non-normative._
+
+The ACE threat model is straightforward.
+
+**Assets** consist of _keys_ and any other information that could aid an adversary in recovering plaintext or forging ciphertext. This includes items such as masks in tweakable XEX modes and derived keys in AES-GCM-SIV. The critical properties of these assets are their _confidentiality_ and _integrity_.
+Protecting the _Availability_ of the keys is not a goal of the architecture.
+
+**Adversaries** are assumed capable of compromising processes by exploiting software vulnerabilities.
+They are also able to gain access to memory contents, for instance, by abusing hardware interfaces or by SoC/memory interposition.
+The model does not include adversaries capable of sophisticated hardware attacks, such as using
+a Focused Ion Beam/Scanning Electron Microscope (FIB/SEM) to tamper with the hardware's functionality.
+
+Side channel attacks are addressed optionally. ACE offers interfaces to both SCA-unprotected and SCA-protected implementations of cryptographic algorithms, if these options are provided by the designer.
+
+Threats can be addressed in four ways:
+
+[horizontal]
+**C:**:: _Control_ the threat by implementing full or partial mitigations.
+**A:**:: _Accept_ the threat and its associated risks.
+**T:**:: _Transfer_ the threat to another party better suited to address it.
+**S:**:: _Suppress_ the features that give rise to the threat.
+
+ACE is designed to avoid the “***A***” and “***S***” options (as much as possible). It _controls_ threats through its own mechanisms and _transfers_ residual risk—specifically, the risk of key extraction from the privileged or trusted software and hardware environments that manage keys—to those same environments. For example, trusted software environments may employ control-flow integrity, memory encryption with integrity protection, and anti-replay mechanisms, while hardware key-management blocks can be hardened to protect entrusted keys.
+
+Direct plaintext leakage, memory corruption attacks against the ACE-using process, and Release of Unverified Plaintext (RUP) attacks on the cryptographic algorithms are considered out of scope. These threats cannot be mitigated by ACE because the processed information resides within the user execution context. Consequently, these threats are _accepted_.
 
 // ///////////////////////////////////////////////////////////////////////////////////////////
 
