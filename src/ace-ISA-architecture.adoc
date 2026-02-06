@@ -522,10 +522,10 @@ The meanings of its values are given in <<ACE-aces-encoding>>.
 |   0   | Off                | ACE disabled. CRs and the input/output buffer are inaccessible. The hart will trap if the user requests to enable the feature.
 |   1   | Initial            | ACE enabled. All CRs and the input/output buffer are unconfigured.
 |   2   | Clean              | ACE enabled. Some CRs or the input/output buffer are configured, and the state matches the last context swap.
-|   3   | Dirty              | ACE enabled. Some CRs or the input/output buffer may have been modified since the last context swap.
+|   3   | Dirty              | ACE enabled. Some CRs or the input/output buffer may have been modified since the last context swap. This includes cleared/unconfigured states since switching code needs to act on them, erasing any saved state.
 |===
 
-Attempts to execute any ACE instruction, or to access the ACE state, raise an illegal-instruction exception when `mstatus.ACES` is set to Off.
+Attempts to execute any ACE instruction raise an illegal-instruction exception when `mstatus.ACES` is set to Off.
 
 When `mstatus.ACES` is set to Initial or Clean, executing any instruction that changes ACE state will change `mstatus.ACES` to Dirty.
 Implementations may also change `mstatus.ACES` from Initial or Clean to Dirty at any time, even when there is no change in ACE state.
@@ -552,7 +552,8 @@ Clearing state is not performed by setting ACES to Off, Initial, or Clean, and i
 When the H extension is present, an ACE context status field, ACES, is added to `vsstatus`[26:25].
 It is defined analogously to the floating-point context status field, FS, and to the vector context status field, VS.
 
-When V=1, both `vsstatus.ACES` and `mstatus.ACES` are in effect: attempts to execute any ACE instruction, or to access the CRs or the input/output buffer, raises an illegal-instruction exception when either field is set to Off.
+When V=1, both `vsstatus.ACES` and `mstatus.ACES` are in effect:
+attempts to execute any ACE instruction raises an illegal-instruction exception when either field is set to Off.
 
 When V=1 and neither `vsstatus.ACES` nor `mstatus.ACES` is set to Off, executing any instruction that changes ACE state, including the ACE CSs or the input/output buffer, will change both `mstatus.ACES` and `vsstatus.ACES` to Dirty.
 // TODO: ace.reset should set Initial
@@ -679,10 +680,9 @@ The two CSRs described next may be used to optimize saving and restoring the inp
 
 `aceiobuflen` is used to program the size of the input/output buffer for `ace.input` and `ace.output`.
 
-Reconfiguring `aceiobuflen` will invalidate the buffer contents.
+Reconfiguring `aceiobuflen` will invalidate the buffer's contents, and the contents of the buffer are zeroed.
 
-If the size is zero, the input/output buffer is _unconfigured_ (it does not hold any content, similarly to unconfigured CRs),
-and `ace.input` and `ace.output` will raise an invalid instruction exception.
+If `aceiobuflen` is zero, the input/output buffer is _unconfigured_ (it does not hold any content, similarly to unconfigured CRs, i.e., CRs in state Initial), and `ace.input` and `ace.output` will raise an invalid instruction exception.
 
 //
 
@@ -738,32 +738,30 @@ The new privileged CSRs introduced by ACE are defined here.
 ===== `sacecrstatus`
 
 The 64 bit register `sacecrstatus` tracks the configuration and dirtiness of CRs on a per-CR basis.
+When XLEN=32, `sacecrstatush` is a 32-bit register that aliases bits [63:32] of `sacecrstatus`.
+Register `sacecrstatush` does not exist when XLEN=64.
 
 ``sacecrstatus[``2__i__+1,2__i__``]`` can take the values Initial, Clean, and Dirty, as defined for `sstatus.ACES`, for CR #__i__.
 Off (value = 0) is reserved for a future lazy-loading extension (under the name of _Lazy_).
 Lazy-loading will require an additional CSR to track additional CR status (cf.{nbsp}<<ACE-LAZY>>).
-
-Initial (value = 1) meant that the CR is unconfigured, and in particular it is the state of a CR after
-`ace.clear` or `ace.reset` (<<ACE-instruction-clear>>).
-
-When XLEN=32, `sacecrstatush` is a 32-bit register that aliases bits [63:32] of `sacecrstatus`.
-Register `sacecrstatush` does not exist when XLEN=64.
 
 Attempts to execute any ACE instruction that accesses CR #__i__ raise an illegal-instruction exception
 when ``sacecrstatus[``2__i__+1,2__i__``]`` is set to Off.
 We define the semantics of the `acecrstatus` CSR.
 “Configure” refers to the management operations that can configure a CR, namely `ace.init`, `ace.import` and being the destination of an `ace.clone` or `ace.derive` operation. “Unconfigure” refers to the use of `ace.clear` on a CR.
 
+Initial (value = 1) means that the CR is unconfigured, and in particular it is the state of a CR after `ace.clear` or `ace.reset` (<<ACE-instruction-clear>>).
+Note that `ace.clear`, however, makes the `*status.ACES` field Dirty, to signal higher privileged code to erase any older saved state for unconfigured CRs during context switch.
+
 When ``sacecrstatus[``2__i__+1,2__i__``]`` is set to Initial or Clean, executing
 any instruction that changes CR #__i__ will change
 ``sacecrstatus[``2__i__+1,2__i__``]`` to Dirty.
-//`ace.reset` and ace.clear should set Initial
 
 When ``sacecrstatus[``2__i__+1,2__i__``]`` is set to Initial, attempts to _use_ or export the CR will
 cause `aceerror` to take the value of _ace_err_unconfigured_.
 
-Implementations may also change ``sacecrstatus[``2__i__+1,2__i__``]`` from
-Initial or Clean to Dirty at any time, even when there is no change in CR #__i__ state.
+// Implementations may also change ``sacecrstatus[``2__i__+1,2__i__``]`` from
+// Initial or Clean to Dirty at any time, even when there is no change in CR #__i__ state.
 
 NOTE: `sstatus.ACES` is also in effect.
 
@@ -773,31 +771,32 @@ system, M-mode can use the CSR to optimize U-mode context switches.
 [[ACE-CSR-vsacecrstatus]]
 ===== `vsacecrstatus`
 
-The 64 bit register `vsacecrstatus` tracks the configuration and dirtiness of CRs on a per-CR basis.
 The `vsacecrstatus` register exists only when the H extension is implemented.
-
-``vsacecrstatus[``2__i__+1,2__i__``]`` can take the values Off, Initial, Clean, and Dirty, as defined for `vsstatus.ACES`, for CR #__i__.
-
 When XLEN=32, `vsacecrstatush` is a 32-bit register that aliases bits 63:32 of `vsacecrstatus`.
 Register `vsacecrstatush` does not exist when XLEN=64.
 
-When V=1, `vsacecrstatus` substitutes for the usual `sacecrstatus`, so
+When V=1, the following holds:
+
+The 64 bit register `vsacecrstatus` tracks the configuration and dirtiness of CRs on a per-CR basis, and has essentially the same semantics as `sacecrstatus`.
+
+``vsacecrstatus[``2__i__+1,2__i__``]`` can take the values Off, Initial, Clean, and Dirty, as defined for `vsstatus.ACES`, for CR #__i__.
+
+`vsacecrstatus` substitutes for the usual `sacecrstatus`, so
 instructions that normally read or modify `sacecrstatus` actually access
 `vsacecrstatus` instead.
 
-When V=1, attempts to execute any ACE instruction that accesses CR #__i__ raise
+Attempts to execute any ACE instruction that accesses CR #__i__ raise
 an illegal-instruction exception when ``vsacecrstatus[``2__i__+1,2__i__``]`` is
 set to Off.
 
-When V=1 and ``vsacecrstatus[``2__i__+1,2__i__``]`` is set to Initial or Clean,
+If ``vsacecrstatus[``2__i__+1,2__i__``]`` is set to Initial or Clean,
 executing any instruction that changes CR #__i__ will change
 ``vsacecrstatus[``2__i__+1,2__i__``]`` to Dirty.
 // TODO: ace.reset and ace.clear should set Initial
 
-Implementations may also change ``vsacecrstatus[``2__i__+1,2__i__``]`` from
-Initial or Clean to Dirty at any time, even when there is no change in CR #__i__ state.
-
 NOTE: `sstatus.ACES`, `vsstatus.ACES`, and `vsacecrstatus` are also in effect when V=1.
+
+//
 
 [#ACE-CSR-macecrstatus,discrete]
 ===== On `macecrstatus`
@@ -1046,12 +1045,12 @@ If all CRs _and_ the input/output buffer are Clear, the state in `*status.ACES` 
 
 
 Properties::
-`ace.clear` does not make `*status.ACES` dirty. +
+`ace.clear` does not make ```*status.ACES``` Dirty. +
 `ace.reset` unconfigures the unit. +
 Usage-controlled: *NO*. +
 Trappable: +
 {nbsp}{nbsp}``ace.clear``: *NO*; +
-{nbsp}{nbsp}``ace.reset``: *YES* (it can be implemented as a series of `ace.clear` and a write to `aceiobuflen`). +
+{nbsp}{nbsp}``ace.reset``: *YES* (it can be implemented as multiple `ace.clear` and a write to `aceiobuflen`). +
 Interruptible: *NO*.
 
 //
