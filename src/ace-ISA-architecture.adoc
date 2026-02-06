@@ -238,10 +238,10 @@ Since ACE defines only three states for the CRs (Initial, Clean, and Dirty) and 
 [[ACE-iobuf]]
 ==== ACE Input/Output Buffer
 
-ACE defines an optional input/output buffer (ACEIOB) that can be used to store data for cryptographic operations.
+ACE defines an optional input/output buffer (ACEIOBUF) that can be used to store data for cryptographic operations.
 
 The preferred way to provide inputs and ACE operations and collect their outputs is using the vector register file of the V extensions.
-However, the ACEIOB can also be used instead, as explained in <<ACE-replacement-instructions>>.
+However, the ACEIOBUF can also be used instead, as explained in <<ACE-replacement-instructions>>.
 
 Its size and the range of it used in cryptographic instructions are defined by the `aceiobuflen` and `aceiobuftop` CSRs,
 defined in <<ACE-CSR-aceiobuflen>> and <<ACE-CSR-aceiobuftop>>.
@@ -523,8 +523,8 @@ ACE extends `*status` and `misa`, and adds up to 12 new CSRs, which are listed i
 | 0xXXX          | HRW       | `vsacecrstatus`         | Per-CR analogue of `vsstatus.ACES` field
 | N/A            | MRW       | `macecrstatus`          | Per-CR analogue of `mstatus.ACES` field
 | 0xXXX          | URW       | `acestart`              | ACE start byte index (see warning below)
-| 0xXXX          | URW       | `aceiobuflen`           | ACE I/O buffer length
-| 0xXXX          | URW       | `aceiobuftop`           | ACE I/O buffer limit for current transfers
+| 0xXXX          | URW       | `aceiobuflen`           | ACE input/output buffer length
+| 0xXXX          | URW       | `aceiobuftop`           | ACE input/output buffer limit for current transfers
 | 0xXXX          | URO       | `acesequence`           | Sequence number of the last ACE instruction
 | 0xXXX          | URW       | `aceactivecr`           | Active CR for `ace.input`/`ace.output`
 | 0xXXX          | SRW       | `sacefilter`            | Filter that applies to U-mode, also to VS-mode if H is active
@@ -573,10 +573,10 @@ The meanings of its values are given in <<ACE-aces-encoding>>.
 [float="center",align="center",width="100%",cols="^8%,<8%,<84%",options="header"]
 |===
 |Status |Name |Meaning
-|   0   | Off                | ACE disabled. CRs and the input/output buffer are inaccessible. The hart will trap if the user requests to enable the feature.
-|   1   | Initial            | ACE enabled. All CRs and the input/output buffer are unconfigured.
-|   2   | Clean              | ACE enabled. Some CRs or the input/output buffer are configured, and the state matches the last context swap.
-|   3   | Dirty              | ACE enabled. Some CRs or the input/output buffer may have been modified since the last context swap. This includes cleared/unconfigured states since switching code needs to act on them, erasing any saved state.
+|   0   | Off                | ACE disabled. CRs and the ACEIOBUF are inaccessible. The hart will trap if the user requests to enable the feature.
+|   1   | Initial            | ACE enabled. All CRs and the ACEIOBUF are unconfigured.
+|   2   | Clean              | ACE enabled. Some CRs or the ACEIOBUF are configured, and the state matches the last context swap.
+|   3   | Dirty              | ACE enabled. Some CRs or the ACEIOBUF may have been modified since the last context swap. This includes cleared/unconfigured states since switching code needs to act on them, erasing any saved state.
 |===
 
 When `mstatus.ACES` is set to Off, executing any ACE instruction raise an illegal-instruction exception.
@@ -596,7 +596,7 @@ are handled, the `mstatus.ACES` field may exist even if `misa.L` is clear.
 
 The transitions between these states are the same as in Table “FS, VS, and XS state transitions” of cite:[RISCV-ISA-Priv]
 
-Writes to any ACES field do not affect the contents of the CRs or of the input/output buffer.
+Writes to any ACES field do not affect the contents of the CRs or of the ACEIOBUF.
 Clearing state is not performed by setting ACES to Off, Initial, or Clean, and it must be explicitly done before changing ACES.
 
 
@@ -609,7 +609,7 @@ It is defined analogously to the floating-point context status field, FS, and to
 When V=1, both `vsstatus.ACES` and `mstatus.ACES` are in effect:
 attempts to execute any ACE instruction raises an illegal-instruction exception when either field is set to Off.
 
-When V=1 and neither `vsstatus.ACES` nor `mstatus.ACES` is set to Off, executing any instruction that changes ACE state, including the ACE CSs or the input/output buffer, will change both `mstatus.ACES` and `vsstatus.ACES` to Dirty.
+When V=1 and neither `vsstatus.ACES` nor `mstatus.ACES` is set to Off, executing any instruction that changes ACE state, including the ACE CSs or the ACEIOBUF, will change both `mstatus.ACES` and `vsstatus.ACES` to Dirty.
 // TODO: ace.reset should set Initial
 Implementations may also change `mstatus.ACES` or `vsstatus.ACES` from Initial or Clean to Dirty at any time,
 even when there is no change in ACE state.
@@ -709,11 +709,11 @@ This design obviates the need to separate data transfer from cryptographic proce
 ====
 
 A different situation arises when an `ace.exec` instruction operates on long vectors containing multiple elements, in which case `VL*SEW` is a multiple of the basic processing unit usually denoted by `b` (such as a block size) in the algorithms. In this situation, `ace.exec` can work iteratively on each block of the input, and execution of `ace.exec` may be interrupted and resumed.
-Regardless of whether the operations are on vectors or on the input/output buffer, `acestart` reflects the number of bytes processed so far.
+Regardless of whether the operations are on vectors or on the ACEIOBUF, `acestart` reflects the number of bytes processed so far.
 
 The semantics and use of `acestart` are described in <<ACE-init-export-import>>.
 
-The two CSRs described next may be used to optimize saving and restoring the input/output buffer.
+The two CSRs described next may be used to optimize saving and restoring the ACEIOBUF.
 
 //
 
@@ -722,11 +722,11 @@ The two CSRs described next may be used to optimize saving and restoring the inp
 
 `aceiobuflen` is an XLEN-bit RW CSR.
 
-`aceiobuflen` is used to program the size of the input/output buffer for `ace.input` and `ace.output`.
+`aceiobuflen` is used to program the size of the ACEIOBUF for `ace.input` and `ace.output`.
 
 Reconfiguring `aceiobuflen` will invalidate the buffer's contents, and the contents of the buffer are zeroed.
 
-If `aceiobuflen` is zero, the input/output buffer is _unconfigured_ (it does not hold any content, similarly to unconfigured CRs, i.e., CRs in state Initial), and `ace.input` and `ace.output` raises an invalid instruction exception.
+If `aceiobuflen` is zero, the ACEIOBUF is _unconfigured_ (it does not hold any content, similarly to unconfigured CRs, i.e., CRs in state Initial), and `ace.input` and `ace.output` raises an invalid instruction exception.
 
 //
 
@@ -735,7 +735,7 @@ If `aceiobuflen` is zero, the input/output buffer is _unconfigured_ (it does not
 
 `aceiobuftop` is an XLEN-bit RW CSR.
 
-`aceiobuftop` is used to program the top end of a transfer operation to and from the input/output buffer for the `ace.input` and `ace.output` instructions.
+`aceiobuftop` is used to program the top end of a transfer operation to and from the ACEIOBUF for the `ace.input` and `ace.output` instructions.
 `aceiobuftop` must be {le} `aceiobuflen`. Setting a larger value raises an invalid instruction exception.
 In conjunction with `acestart`, `aceiobuftop` defines the range of buffer used in the subsequent operations.
 
@@ -844,7 +844,7 @@ NOTE: `sstatus.ACES`, `vsstatus.ACES`, and `vsacecrstatus` are also in effect wh
 ====
 (((CSR, macecrstatus)))
 A separate `macecrstatus` can be defined, _mutatis mutandis_, like `sacecrstatus` and `vsacecrstatus`, to allow M-mode to optimize context switches of Supervisor domains.
-In this case, the `ACE` and `ACEIOB` fields in `sstatus` shall be un-shadowed.
+In this case, the `ACE` and `ACEIOBUF` fields in `sstatus` shall be un-shadowed.
 
 (A `uacecrstatus` might become useful if the HFI extension gets approved, together with the fields in an additional `ustatus` CSR.)
 ====
@@ -1074,7 +1074,7 @@ For `ace.clear`, `Kd` or `K[Xd]` denotes the CR to be cleared. +
 `ace.reset` uses the encoding for `ace.clear` and `Xd` = `X0` (the `context` field is `0`) or `Xd` != `X0` containing a value larger than 31.
 +
 `ace.clear` unconfigures the state of the relevant CR by releasing its internal resources in the CRF and setting the corresponding entry in `*acecrstatus` to Clear.
-If all CRs _and_ the input/output buffer are Clear, the state in `*status.ACES` is set to Initial.
+If all CRs _and_ the ACEIOBUF are Clear, the state in `*status.ACES` is set to Initial.
 `ace.reset` unconfigures the entire state of the unit, by clearing all CRs and  setting `aceiobuflen` to zero, and therefore it also sets `*status.ACES` to Initial.
 
 
@@ -1925,9 +1925,9 @@ Three types of supporting operations are required:
 
 All three instructions can be implemented as CSR RW instructions, for instance:
 
- * `acedest`, XLEN bits wide, determines what architectural state we are transferring to or from: 0..31 for the CRs and, say, 32 for the input/output buffer.
- * `acestart`, XLEN bits wide, holds the offset within the CR's virtually serialized `content[]` or the input/output buffer.
- * `acecontent`, XLEN bits wide, to which we write the content of the CR or the input/output buffer or from which we read the current content.
+ * `acedest`, XLEN bits wide, determines what architectural state we are transferring to or from: 0..31 for the CRs and, say, 32 for the ACEIOBUF.
+ * `acestart`, XLEN bits wide, holds the offset within the CR's virtually serialized `content[]` or the ACEIOBUF.
+ * `acecontent`, XLEN bits wide, to which we write the content of the CR or the ACEIOBUF or from which we read the current content.
   A write to `acecontent` increases `acestart` by XLEN/8.
 
 // Interrupting the firmware implementation of `ace.init`, `ace.export`, `ace.import`, `ace.input`, or `ace.output` must leave the architectural state indistinguishable from the state expected from interrupting a monolithic implementation of the instructions.
@@ -2112,7 +2112,7 @@ If `aceiobuflen` is non zero, and the range size `aceiobuftop-acestart` is zero 
 In all cases, the `ace.input` and `ace.output` instructions must be temporarily tied to a specific context in order to properly determine the allowed sequences.
 This is done by setting the `aceactivecr` CSR (<<ACE-CSR-aceactivecr>>) first. The user must not forget to set it back to 32 after the sequence is completed.
 
-We use the `acesequence` CSR to indicate whether we are using the input/output buffer or the vector registers to provide the inputs and outputs to ACE instructions, and to track the instruction sequence.
+We use the `acesequence` CSR to indicate whether we are using the ACEIOBUF or the vector registers to provide the inputs and outputs to ACE instructions, and to track the instruction sequence.
 
 * The initial value of `acesequence` is 0.
 * As soon as one of the following events happens:
@@ -2137,7 +2137,7 @@ Not properly following the instruction ordering raises an invalid instruction ex
 
 `acesequence` can be saved and restored by privileged code together with `acestart`.
 
-The internal input/output buffer is not part of any CR. It is architectural, i.e., per-hart. In fact, `ace.output` can be used to save the contents of the buffer, and `ace.input` can be used to restore it freely as long as `aceactivecr` takes the value 32. Also, these operations start at the offset specified in `acestart`, so the state of the buffer can easily be saved and restored with the same approach used for vectors.
+The internal ACEIOBUF is not part of any CR. It is architectural, i.e., per-hart. In fact, `ace.output` can be used to save the contents of the buffer, and `ace.input` can be used to restore it freely as long as `aceactivecr` takes the value 32. Also, these operations start at the offset specified in `acestart`, so the state of the buffer can easily be saved and restored with the same approach used for vectors.
 
 //
 
@@ -2163,12 +2163,12 @@ An implementation must wait before accessing a CR that is still being written to
 ===== Notation in the Algorithm Descriptions
 
 * `INPUT`: The input data to be processed by the following instructions: `ace.exec`, `ace.state`, `ace.derive`.
-   This can be the input vector register, or the input/output buffer, according to the semantics presented in <<ACE-usage-input-output>>.
+   This can be the input vector register, or the ACEIOBUF, according to the semantics presented in <<ACE-usage-input-output>>.
 
 * `OUTPUT`: The output data produced by `ace.exec`.
-   This can be the output vector register, or the input/output buffer, according to the semantics presented in <<ACE-usage-input-output>>.
+   This can be the output vector register, or the ACEIOBUF, according to the semantics presented in <<ACE-usage-input-output>>.
 
-* `IOLEN`: Either `VL*SEW` or the length `aceiobuftop` of the input/output buffer in bytes, depending on whether vector registers are used or the input/output buffer is used.
+* `IOLEN`: Either `VL*SEW` or the length `aceiobuftop` of the ACEIOBUF in bytes, depending on whether vector registers are used or the ACEIOBUF is used.
 
 //
 
