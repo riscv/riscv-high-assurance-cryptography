@@ -257,34 +257,38 @@ The metadata section is used as the header of the data formats used in CR initia
 .>|   Field .>| Width +
 (bits) .>| Name                  .>| Description
 |   [0:0] |   1  | Format                   | Value is 0 for the current 64-bit metadata format. +
-The value 1 is reserved for a format with a length of 128 bits.
+The value 1 is reserved for a format with a length of 128 bits or longer.
 |  [10:1] |  10  | _Algorithm_              | Cryptographic algorithm (such as primitive, mode, or protocol).
 | [12:11] |   2  | _Direction_Policy_       | For encryption/decryption primitives or modes, determines whether the CC may be used for encryption (bit 11 set), decryption (bit 12 set), or both (bits 11 and 12 set). The field can be reused to expand the algorithm space for other types of operations.
 | [14:13] |   2  | _SC_Protection_          | Level of Side Channel Protection, encoded as per <<ACE-SC-protection-levels>>.
 | [16:15] |   2  | _Key_Type_               | Key given by explicit value / System Key (index) / Internally generated.
-| [21:17] |   4  | _State_Number_           | Encoding the current state of the state machine of the algorithm as a number.
-| [22:21] |   2  | _Reserved_               | Zero.
-| [27:23] |   5  | _Locality_               | A field which is either all ones (`0x1F`) or an index into the Locality Secrets Table.
-| [31:28] |   4  | _UC_Policy_              | “UC Policy” means “Usage Control Policy”. If bit 28, 29, 30, resp. 31 is set, it disallows the _usage_ of this CC in User, (V)S-mode, H-mode, resp. M-mode.
-| [34:32] |   3  | _Filter_Mode_            | Mode at which to apply the filter: 0 = none; 1 = U; 2 = (V)S; 3 = H; +
-4 = expiration date ([.red]#minutes since January 1^st^, 2027?#).
-| [59:35] |  25  | _Filter_                 | Value to match against the `*acefilter` CSRs (see <<ACE-CSR-filters>> for details) or to compare to an internal secure clock.
-| [63:60] |   4  |  Reserved                | Zero.
+| [20:17] |   4  | _State_Number_           | Encoding the current state of the state machine of the algorithm as a number.
+| [24:21] |   4  | _Locality_               | A field which is either all ones (`0x1F`) or an index into the Locality Secrets Table.
+| [28:25] |   4  | _UC_Policy_              | “UC Policy” means “Usage Control Policy”. If bit 28, 29, 30, resp. 31 is set, it disallows the _usage_ of this CC in User, (V)S-mode, H-mode, resp. M-mode.
+| [32:29] |   4  | _Filter_Mode_            | Filter enablement:
+bits 0, 1, resp., 2 = enable the filter under S/VS-mode, HS-mode, resp., M-mode.
+bit 3 = enable expiration date ([.red]#minutes since January 1^st^, 2027?#).
+For the 64-bit metadata block, only one bit can be set.
+| [63:33] |  31  | _Filter_                 | Value to match against the `*acefilter` CSRs (see <<ACE-CSR-filters>> for details) or to compare to an internal secure clock.
 |===
 
 Some fields and their properties need further explanation. This is done in the following sections.
 
 ===== Confidentiality
 
-Bits [31:0] are not confidential and will not be encrypted upon export as SCC. +
-Bits [63:32] are confidential and will be encrypted upon export as SCC.
+Bits [32:0] are not confidential and will not be encrypted upon export as SCC. +
+Bits [63:33] are confidential and will be encrypted upon export as SCC.
 
-===== Algorithm Field
+===== Algorithm and Direction_Policy Fields
 
 Algorithms are encoded in a 10-bit field.
 Algorithm numbers 0-767 are architecture-defined and the list of such encodings is maintained by RVI.
 cf.{nbsp}<<ACE-algorithms>> for the currently encoded algorithms.
 The remaining values can be used to encode custom algorithms.
+
+The Direction_Policy is defined only if the Algorithm supports both encryption and decryption.
+For other types of algorithms, such as hash functions or certain public key operations, a Direction_Policy is not defined, and these
+two bits can be used to encode variants of the algorithm, in order to save encoding space in the Algorithm field.
 
 ===== SC_Protection Field
 
@@ -365,7 +369,7 @@ All states different from _invalid_ are called valid states.
 ACE keeps a table of 128-bit Locality Secrets (LS), the Locality Secrets Table (LST).
 Some entries of the LST are fixed or configurable only using an implementation–specific authenticated hardware procedure: These are global and shared across all ACE units in the same system. Other entries may be programmed by privileged modes and are architectural, i.e., per hart.
 
-If the Locality Field of a CC is all ones (`0x1F`), then the RCSK is used.
+If the Locality Field of a CC is all ones (`0xF`), then the RCSK is used.
 Otherwise, this value is used as an index _i_ in the LST, and the actual CSK is derived from the RCSK and LST[_i_].
 <<ACE-locality-indexes>> lists the architected Localities and which mode is allowed to configure them.
 The domain of each Locality Secret is specified, i.e., whether the value is chip-wide
@@ -377,7 +381,7 @@ device-wide, or OS-wide.
 [width="100%",cols="23%,50%,^9%,^9%,^9%",options="header"]
 |===
 | Name                      | Description                                                                               | Domain | Conf.. | Index
-| (No Locality binding)     | No CSK derivation. CC bound to Root CSK only.                                                             | --  | -- | 0x1F
+| (No Locality binding)     | No CSK derivation. CC bound to Root CSK only.                                                             | --  | -- | 0xF
 | ChipManufacturerSecret    | Identifies the manufacturer of the SoC. Permanent.                                                        | SoC | No | 0
 | ChipModelSecret           | Identifies specific chip model/family. Permanent.                                                         | SoC | No | 1
 | ChipUniqueSecret          | Unique for each SoC. Permanent.                                                                           | SoC | No | 2
@@ -389,7 +393,7 @@ device-wide, or OS-wide.
 | Device | M | 6
 | VBootSecret               | Regenerated at each (virtual) boot. Not permanent, to be configured at the virtual boot of each VM, or also per SD (see <<ACE-CSR-maceVBootSecret>>). | HV | H | 7
 | SSecret                   | Can be configured by Supervisor (see <<ACE-CSR-saceSSecret>>).                                             | OS | S | 8
-| Reserved                  | Reserved for future use (RZ if not defined).                                                              | Impdef | Impdef | 9-30
+| Reserved                  | Reserved for future use (RZ if not defined).                                                              | Impdef | Impdef | 9-14
 |===
 
 NOTE: Example: If a key's metadata specifies a Locality field value of 2, the import/export key is derived from the RCSK and the OEM Secret. An SCC created on one device will fail authentication when imported on another device if their OEM Secrets differ.
@@ -399,12 +403,16 @@ A device-specific SKT entry may correspond to a different key on another device.
 Using the latter may lead to unspecified behavior.
 Implementations of the SKT *must* provide a suitable Locality to the ACE unit during CR initialization, and set usage policies that are at least as strict as the key's own.
 
+[WARNING]
+An extension field for the Locality field may be provided in the 128-bit (or longer) medatata format, if defined.
+
 ===== UC_Policy Field
 
 Bits 28, 29, resp 30 are ignored if U-mode, S-mode, resp. H-mode is not supported/enabled.
 
 ===== Filter_Mode and Filter Fields
 
+[WARNING]
 The function of these fields must be finalized.
 
 Regarding filtering by process domain, we refer to <<ACE-CSR-filters>>.
@@ -413,7 +421,8 @@ Filtering by time is simple.
 The ACE Unit must have access to a secure clock, and the current time must be compared with it.
 When the current time is beyond the expiration time in the metadata, the ACE Unit invalidates the CC.
 
-A combination of both policies would be possible with an extended metadata format.
+[WARNING]
+A combination of more policies would be possible with an extended metadata format.
 
 [[ACE-format-definition]]
 ==== Initialization Input
@@ -935,10 +944,10 @@ The values written to the `saceSSecret` group must follow the update rules defin
 `macefilter` is an XLEN-bit MRW CSRs (actual length to be defined).
 
 Their values are compared against the Filter field of the metadata, to determine whether an `ace.exec`, `ace.state`, or `ace.derive` instruction is allowed to execute:
-`sacefilter` is used to filter CC usage in U-mode, or in VS-mode if the H extension is active,
-`macefilter` is used to filter CC usage in S-mode,
+`sacefilter` is used to filter CC usage in all modes below S-mode,
+`macefilter` is used to filter CC usage in all modes below M-mode,
 and
-`vsacefilter` is used to filter CC usage in U-mode if the H extension is active,
+`vsacefilter` is used to filter CC usage in U-mode if the H extension is active.
 
 [WARNING]
 These three registers are placeholders for a later decision on how to handle the CR filtering in different modes.
@@ -948,6 +957,8 @@ Therefore, this would fit in the metadata's `Filter` field's current length of 2
 `hcontext`/`mcontext` is only 14-bits long.
 `Filter` can also be expanded using the currently reserved fields, up to 29 bits.
 We believe that the final decision should be taken in accordance with the ARC.
+Open is also the mattes of whether `scontext`/`hcontext`/`mcontext` can be composed.
+This means that in theory we can have a filter that is 31+14+14=59 bits long.
 
 // ///////////////////////////////////////////////////////////////////////////////////////////
 
@@ -1764,8 +1775,8 @@ SIV ← AESE(enc_key, 0 @ tmp[126:0]));
 metadata.State_Number <- ace_state_invalid
 
 // FOLLOWING MEMORY WRITE PREEMPTIBLE, `ACESTART` FROM 0 TO 7
-M[0 .. 7] ← (metadata[63:32] xor AESE(enc_key, 1 @ SIV[126:0])[31:0])
-            @  metadata[31:0];
+M[0 .. 7] ← (metadata[63:33] xor AESE(enc_key, 1 @ SIV[126:0])[30:0])
+            @  metadata[32:0];
 
 // FOLLOWING MEMORY WRITE PREEMPTIBLE, `ACESTART` FROM 8 TO 23
 M[8 .. 23] ← SIV;
@@ -1826,7 +1837,7 @@ else
 
 // FOLLOWING MEMORY READ PREEMPTIBLE, `ACESTART` FROM 8 TO 23
 SIV ← M[8 .. 23];
-metadata[63:32] ← metadata[63:32] xor AESE(enc_key, 1 @ SIV[126:0])[31:0])
+metadata[63:33] ← metadata[63:33] xor AESE(enc_key, 1 @ SIV[126:0])[30:0])
 tmp ← zeros(64) @ metadata;
 tmp ← Montmul(tmp, auth_key);
 
