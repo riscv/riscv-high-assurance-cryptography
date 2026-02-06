@@ -264,7 +264,7 @@ The value 1 is reserved for a format with a length of 128 bits or longer.
 | [16:15] |   2  | _Key_Type_               | Key given by explicit value / System Key (index) / Internally generated.
 | [20:17] |   4  | _State_Number_           | Encoding the current state of the state machine of the algorithm as a number.
 | [24:21] |   4  | _Locality_               | A field which is either all ones (`0x1F`) or an index into the Locality Secrets Table.
-| [28:25] |   4  | _UC_Policy_              | “UC Policy” means “Usage Control Policy”. If bit 28, 29, 30, resp. 31 is set, it disallows the _usage_ of this CC in User, (V)S-mode, H-mode, resp. M-mode.
+| [28:25] |   4  | _UC_Policy_              | “UC Policy” means “Usage Control Policy”. If bit 25, 26, 27, resp. 28 is set, it disallows the _usage_ of this CC in User, (V)S-mode, H-mode, resp. M-mode.
 | [32:29] |   4  | _Filter_Mode_            | Filter enablement:
 bits 0, 1, resp., 2 = enable the filter under S/VS-mode, HS-mode, resp., M-mode.
 bit 3 = enable expiration date ([.red]#minutes since January 1^st^, 2027?#).
@@ -1428,22 +1428,23 @@ This instruction can be used to:
 Let `m` be the metadata field of the CC in the destination CR. +
 On RV64, the semantics of the instruction are:
 
-* `Xs`[10:0] and `Xs`[27:15] must be 0.
-* `Xs`[14:11] and `Xs`[63:32] have the same format as the corresponding bits of the metadata.
-* `Xs`[13:12] is used to turn on side-channel protection or increase its level, if implemented.
+* `Xs`[10:0] and `Xs`[24:15] must be 0.
+* `Xs`[14:11] and `Xs`[63:25] have the same format as the corresponding bits of the metadata.
+
+* If the algorithm in the CR supports encryption and decryption, then:
+** `Xs`[12:11] is used to deactivate either encryption or decryption in a CC that allows both.
+** If `m`[12:11] = `0b11`, then at least one bit of `Xs`[12:33] must be set to 1 to select the allowed operation(s).
+** If `m`[12:11] != `0b11`, then it must be `Xs`[12:11] = `m`[12:11] or `Xs`[12:11] = 0, in which case no change is made, else this will result in error _ace_err_invalid_.
+
+* If the algorithm in the CR does not encryption and decryption, then `Xs`[12:11] must be 0.
+* `Xs`[14:13] is used to turn on side-channel protection or increase its level, if implemented.
 The level is encoded according to <<ACE-SC-protection-levels>>.
 Downgrading protection level is not permitted. Attempting to do so will cause error _ace_err_invalid_ (<<ACE-error-codes>>).
 
-* If the algorithm in the CR supports encryption and decryption, then:
-** `Xs`[14:13] is used to deactivate either encryption or decryption in a CC that allows both.
-** If `m`[14:13] = `0b11`, then at least one bit of `Xs`[14:13] must be set to 1 to select the allowed operation(s).
-** If `m`[14:13] != `0b11`, then it must be `Xs`[14:13] = `m`[14:13] or `Xs`[14:13] = 0, in which case no change is made, else this will result in error _ace_err_invalid_.
-
-* If the algorithm in the CR does not encryption and decryption, then `Xs`[14:13] must be 0.
-
-* A zero in any of the four bits `Xs`[31:28] means that the corresponding policy is _not_ changed.
-* A one in any of the four bits `Xs`[31:28] means that usage by the corresponding mode is forbidden, and the corresponding bit in the metadata of the destination CC is set to 1.
-* `Xs`[34:32] can be non-zero only if `m`[33:32] is 0, in which case  `m`[59:35] <- `Xs`[59:35], else `aceerror` is set to _ace_err_invalid_.
+* A zero in any of the four bits `Xs`[28:25] means that the corresponding policy is _not_ changed.
+* A one in any of the four bits `Xs`[28:25] means that usage by the corresponding mode is forbidden, and the corresponding bit in the metadata of the destination CC is set to 1.
+* `Xs`[32:29] can be non-zero only if `m`[32:29] is 0, in which case  `m`[59:35] <- `Xs`[59:35], else `aceerror` is set to _ace_err_invalid_.
+With the 64-bit metadata format, at most one bit of `Xs`[32:29] can be set.
 * This instruction cannot set a Locality.
 --
 +
