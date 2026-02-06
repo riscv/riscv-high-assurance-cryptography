@@ -268,8 +268,8 @@ The value 1 is reserved for a format with a length of 128 bits or longer.
 | [32:29] |   4  | _Filter_Mode_            | Filter enablement:
 bits 0, 1, resp., 2 = enable the filter under S/VS-mode, HS-mode, resp., M-mode.
 bit 3 = enable expiration date ([.red]#minutes since January 1^st^, 2027?#).
-For the 64-bit metadata block, only one bit can be set.
-| [63:33] |  31  | _Filter_                 | Value to match against the `*acefilter` CSRs (see <<ACE-CSR-filters>> for details) or to compare to an internal secure clock.
+For the 64-bit metadata block, in general only one bit can be set, with exceptions described in <<>>.
+| [63:33] |  31  | _Filter_1_               | Value to match filters against (see <<ACE-combined-filters>> for details), including an internal secure clock.
 |===
 
 Some fields and their properties need further explanation. This is done in the following sections.
@@ -410,19 +410,55 @@ An extension field for the Locality field may be provided in the 128-bit (or lon
 
 Bits 28, 29, resp 30 are ignored if U-mode, S-mode, resp. H-mode is not supported/enabled.
 
+[[ACE-combined-filters]]
 ===== Filter_Mode and Filter Fields
 
 [WARNING]
 The function of these fields must be finalized.
 
-Regarding filtering by process domain, we refer to <<ACE-CSR-filters>>.
-
 Filtering by time is simple.
 The ACE Unit must have access to a secure clock, and the current time must be compared with it.
 When the current time is beyond the expiration time in the metadata, the ACE Unit invalidates the CC.
 
-[WARNING]
-A combination of more policies would be possible with an extended metadata format.
+We discuss now filtering by process domain.
+
+If we filter by `scontext`, the Filter field, which is 31 bits long, simply contains the value to match against.
+
+If the Filter Field is used to match against `mcontext` or `hcontext` or both, then its 31 bits are formatted as follows:
+
+[width="100%",cols="^9%,^7%,16%,68%",options="header"]
+|===
+.>|   Field .>| Width +
+(bits) .>| Name                  .>| Description
+| [46:33] |  14  | _Filter_1A_              | Value to match against `mcontext`, or zero.
+| [48:47] |   2  | Zero                     | Zero.
+| [62:49] |  14  | _Filter_1B_              | Value to match against `hcontext`, or zero.
+| [63:63] |   1  | Zero                     | Zero.
+|===
+
+In this case, bits 1 and 2 of Filter_Mode can be set.
+
+Other combinations of more than one bit in set in Filter_Mode are only allowed if the metadata type is set for 128-bit metadata, i.e., for Format bit in the metadata is set to 1.
+In this case, if Filter_1 is used to match against `scontext` or an expiration date, and we have at least another filter, then the format of the extension section is given in the following table.
+
+[[ACE-metadata-extension]]
+.Format of the Optional Metadata Extension Section
+[width="100%",cols="^9%,^7%,16%,68%",options="header"]
+|===
+.>|   Field .>| Width +
+(bits) .>| Name                  .>| Description
+|   [0:0] |   1  | Format2                  | Value is 0 for the current 128-bit metadata format.
+|  [14:1] |  14  | _Filter_2_               | Filter to match against a `mcontext` field.
+| [16:15] |   2  | Reserved                 | Reserved for future use.
+| [30:17] |  14  | _Filter_3_               | Filter to match against a  `hcontext` field.
+| [32:31] |   2  | Reserved                 | Reserved for future use.
+| [63:33] |  31  | _Filter_4_               | Value to match against an expiration date.
+|===
+
+If both filtering according to `scontext` and an expiration date are required, then `scontext` in the standard metadata block and
+the expiration date is encoded in the extension section.
+
+//
 
 [[ACE-format-definition]]
 ==== Initialization Input
@@ -465,7 +501,7 @@ ACE extends `*status` and `misa`, and adds up to 12 new CSRs, which are listed i
 
 [[ACE-CSRs-table]]
 .New ACE CSRs. N/A means that at the moment this is not defined.
-[cols="<16%,^11%,<24%,<49%"]
+[cols="<11%,^12%,<25%,<53%"]
 [float="center",align="center",options="header"]
 |===
 | Address        | Privilege | Name                    | Description
@@ -478,9 +514,9 @@ ACE extends `*status` and `misa`, and adds up to 12 new CSRs, which are listed i
 | 0xXXX          | URW       | `aceiobuftop`           | ACE I/O buffer limit for current transfers
 | 0xXXX          | URO       | `acesequence`           | Sequence number of the last ACE instruction
 | 0xXXX          | URW       | `aceactivecr`           | Active CR for `ace.input`/`ace.output`
-| 0xXXX          | SRW       | `sacefilter`            | Filter that applies to U-mode, or to VS-mode if H is active
+| 0xXXX          | SRW       | `sacefilter`            | Filter that applies to U-mode, also to VS-mode if H is active
 | 0xXXX          | HRW       | `vsacefilter`           | Filter that applies to U-mode if H is active
-| 0xXXX          | MRW       | `macefilter`            | Filter that applies to (V)S/H-mode
+| 0xXXX          | MRW       | `macefilter`            | Filter that applies to U/(V)S/H-mode
 | (Indirect)     | MRW (RZ)  | `macercsk{0..7}`        | ACE Root Context Sealing Key
 | (Indirect)     | MRW (RZ)  | `maceBootSecret{0..3}`  | ACE OS Secret
 | (Indirect)     | HRW (RZ)  | `maceVBootSecret{0..3}` | ACE Boot Secret
@@ -581,30 +617,29 @@ The standard error codes are:
 
 [[ACE-error-codes]]
 .Error codes and their meanings
-[float="center",align="center",width="100%",cols="^7%,<23%,<70%",options="header"]
+[float="center",align="center",width="100%",cols="^7%,<25%,<68%",options="header"]
 |===
-|Value | Mnemonic                | Examples (((ACE, error codes)))
-|  0   | ace_err_ok              | No error.
-|  1   | ace_err_authentication  | Authentication failure with `ace.import`.
-//(`ace.import` or `ace.exec`).
-|  2   | ace_err_privilege       | Violation of usage control policies.
-//(`ace.exec`, `ace.state`, etc.).
-|  3   | ace_err_invalid         | Invalid input/operation such as: Invalid metadata section in `ace.init` or `ace.import`;
-Use of non-allowed instruction in the current algorithm state; or Attempt to use an invalid or partially configured CR.
-|  4   | ace_err_unimplemented   | Algorithm or algorithm variant not implemented.
-|  5   | ace_err_memory          | Insufficient CRF memory for configuration instruction.
-|  6   | ace_err_unconfigured    | Software attempted to use an unconfigured CR. +
-A lazy reload may be triggered instead.
-//in `ace.exec`, `ace.state`, `ace.input`, `ace.output`, `ace.clone`, `ace.derive`, or `ace.restrict`.
+|Value | Mnemonic                   | Examples (((ACE, error codes)))
+|  0   | ace_err_ok                 | No error.
+|  1   | ace_err_authentication     | Authentication failure with `ace.import`, or in algorithm.
+|  2   | ace_err_privilege          | Violation of usage control policies.
+|  3   | ace_err_memory             | Insufficient CRF memory for configuration instruction. This causes an exception that may lead to a horizontal trap.
+|  4   | ace_err_unimplemented      | Algorithm or side-channel protected variant not implemented (in metadata).
+|  5   | ace_err_invalid_metadata   | Invalid metadata section in `ace.init` or `ace.import`, other than ace_err_unimplemented.
+|  6   | ace_err_unconfigured       | Software attempted to use an unconfigured or partially configured CR. +
+|  7   | ace_err_invalid_CR         | Attempt to use an invalid CR. This causes an exception that may lead to a horizontal trap.
+A lazy reload may be triggered instead through a vertical trap.
 |===
 
-Examples of Invalid input/operation:{empty}:::
-Invalid metadata passed to `ace.init`;
+Any use of non-allowed instruction in the current algorithm state raises an illegal-instruction exception.
+This includes:
 encryption, resp., decryption is requested from a CC not allowing it;
 a Form of `ace.exec` that is not permitted in the current algorithm state is used;
-the State_number in `ace.state` is not allowed;
-invalid change in usage policies in `ace.restrict`;
-software tried to use an incomplete CC in a CR as a source in an `ace.exec`, `ace.export`, `ace.state`, `ace.input`, `ace.output`, `ace.clone`, `ace.derive`, or `ace.restrict` operation.
+the provided State_number in `ace.state` is not allowed;
+invalid change in usage policies in `ace.restrict`; and
+software tried to use an incomplete CC in a CR as a source in an `ace.exec`, `ace.export`, `ace.state`, `ace.input`, `ace.output`, `ace.clone`, `ace.derive`, or `ace.restrict` operation.  Using an incomplete CC in `ace.size` is allowed.
+
+If executing an `ace.init`, `ace.import`, `ace.export`, `ace.input`, or `ace.output` triggers a trap, as specified in the privileged architecture, `aceerror` remains unchanged.
 
 [[norm:ace_exc_priority]]
 .ACE error priority in decreasing priority order.
@@ -612,23 +647,14 @@ software tried to use an incomplete CC in a CR as a source in an `ace.exec`, `ac
 |===
 .>|Priority   .>|Error +
 Code        .>|Description
-.>|_Highest_  |6               |Unconfigured CR
-|           .>|3             .>| Invalid metadata section in `ace.init` or `ace.import`
-|           .>|4             .>| Algorithm or algorithm variant not implemented.
-|           .>|5             .>| Insufficient CRF memory
-|           .>|3             .>| Use of non-allowed instruction in the current algorithm state.
-// Invalid input/output operation with `ace.exec`, `ace.state`, `ace.input`, `ace.output`, `ace.clone`, `ace.derive`, or `ace.restrict` (used incomplete CC as source)
-|           .>|2, 1          .>|Access Control Failure or authentication failure with `ace.import`
-|           .>|1             .>|Authentication failure in an algorithm.
-|           .>|3             .>|Invalid input/output operation with `ace.exec`
-                                (form not allowed in current algorithm),
-                                `ace.state` (state change not allowed),
-                                or `ace.restrict` (change of usage policy is not allowed)
-.>|_Lowest_ .>|0             .>|No error
+.>|_Highest_  | 7             .>| Attempt to use an invalid CR.
+|           .>| 6             .>| Unconfigured or partially configured CR
+|           .>| 5, 4          .>| Invalid metadata section in `ace.init` or `ace.import`, including specifying a not implemented algorithm or side-channel protected variant.
+|           .>| 3             .>| Insufficient CRF memory.
+|           .>| 2, 1          .>| Access Control Failure or authentication failure with `ace.import`
+|           .>| 1             .>| Authentication failure in an algorithm.
+.>|_Lowest_ .>| 0             .>|No error
 |===
-
-If executing an `ace.init`, `ace.import`, `ace.export`, `ace.input`, or `ace.output` triggers a
-trap, as specified in the privileged architecture, `aceerror` remains unchanged.
 
 //
 
@@ -682,7 +708,7 @@ The two CSRs described next may be used to optimize saving and restoring the inp
 
 Reconfiguring `aceiobuflen` will invalidate the buffer's contents, and the contents of the buffer are zeroed.
 
-If `aceiobuflen` is zero, the input/output buffer is _unconfigured_ (it does not hold any content, similarly to unconfigured CRs, i.e., CRs in state Initial), and `ace.input` and `ace.output` will raise an invalid instruction exception.
+If `aceiobuflen` is zero, the input/output buffer is _unconfigured_ (it does not hold any content, similarly to unconfigured CRs, i.e., CRs in state Initial), and `ace.input` and `ace.output` raises an invalid instruction exception.
 
 //
 
@@ -692,14 +718,14 @@ If `aceiobuflen` is zero, the input/output buffer is _unconfigured_ (it does not
 `aceiobuftop` is an XLEN-bit RW CSR.
 
 `aceiobuftop` is used to program the top end of a transfer operation to and from the input/output buffer for the `ace.input` and `ace.output` instructions.
-`aceiobuftop` must be {le} `aceiobuflen`. Setting a larger value will raise an invalid instruction exception.
+`aceiobuftop` must be {le} `aceiobuflen`. Setting a larger value raises an invalid instruction exception.
 In conjunction with `acestart`, `aceiobuftop` defines the range of buffer used in the subsequent operations.
 
 Reconfiguring `aceiobuftop` will not invalidate the buffer contents.
 
 Writing to `aceiobuflen` will set `aceiobuftop` to the same value.
 
-// If `aceiobuftop` is zero, `ace.input` and `ace.output` will raise an invalid instruction exception.
+// If `aceiobuftop` is zero, `ace.input` and `ace.output` raises an invalid instruction exception.
 If `aceiobuflen-acestart` is zero or an invalid size for the operation that uses the buffer, `aceerror` is set to error code ace_err_invalid.
 
 //
@@ -818,7 +844,7 @@ This is an optional group of M-Mode WARZ XLEN-bit CSRs used to configure `macerc
 
 A write to `macercsk{i}` set Bits [(_i_+1) XLEN - 1 : _i_ XLEN] of the RCSK.
 
-Any access to the `macercsk` block outside of M-mode will cause an illegal instruction exception.
+Any access to the `macercsk` block outside of M-mode causes an illegal instruction exception.
 
 The values written to the `macercsk` block must follow the value update rules defined in <<ACE-CSR-group-update-policy>>.
 
@@ -857,7 +883,7 @@ This is a group of M-Mode WARZ XLEN-bit CSRs. It is used to configure `maceBootS
 
 A write to `maceBootSecret{i}` sets Bits [(_i_+1) XLEN - 1 : _i_ XLEN] of `BootSecret`.
 
-Any access to the `maceBootSecret` block outside of M-mode will cause an illegal instruction exception.
+Any access to the `maceBootSecret` block outside of M-mode causes an illegal instruction exception.
 
 The values written to the `maceBootSecret` group must follow the update rules defined in <<ACE-CSR-group-update-policy>>.
 
@@ -874,7 +900,7 @@ This is a group of HS-Mode WARZ XLEN-bit CSRs. It is used to configure `maceVBoo
 
 A write to `maceVBootSecret{i}` sets Bits [(_i_+1) XLEN - 1 : _i_ XLEN] of `maceVBootSecret`.
 
-Any access to the `maceVBootSecret` block outside of HS-mode will cause an illegal instruction exception.
+Any access to the `maceVBootSecret` block outside of HS-mode causes an illegal instruction exception.
 
 The values written to the `maceVBootSecret` group must follow the update rules defined in <<ACE-CSR-group-update-policy>>.
 
@@ -883,7 +909,7 @@ The values written to the `maceVBootSecret` group must follow the update rules d
 `maceVBootSecret*` must be reconfigurable in order to support VM reboots which are independent of the boot cycles if the physical host.
 ====
 
-//
+// ///////////////////////////////////////////////////////////////////////////////////////////
 
 [[ACE-CSR-saceSSecret]]
 ===== `saceSSecret` group
@@ -896,14 +922,14 @@ This is a group of S-Mode WARZ XLEN-bit CSRs. It is used to configure `saceSSecr
 
 A write to `saceSSecret{i}` sets Bits [(_i_+1) XLEN - 1 : _i_ XLEN] of `saceSSecret`.
 
-Any access to the `saceSSecret` block outside of S-mode or higher will cause an illegal instruction exception.
+Any access to the `saceSSecret` block outside of S-mode or higher raises an illegal instruction exception.
 
 The values written to the `saceSSecret` group must follow the update rules defined in <<ACE-CSR-group-update-policy>>.
 
-//
-
 [[ACE-CSR-filters]]
 ===== `sacefilter`, `macefilter`, `vsacefilter`
+
+_This section is not (yet) normative._
 
 `sacefilter` is an XLEN-bit SRW CSRs (actual length to be defined).
 
@@ -921,12 +947,7 @@ and
 These three registers are placeholders for a later decision on how to handle the CR filtering in different modes.
 One option could be to use `scontext`/`hcontext`/`mcontext` from the Sdtrig extension.
 We note that under Linux `scontext` is often filled with the PID of the used process, which is at most 22 bits.
-Therefore, this would fit in the metadata's `Filter` field's current length of 25 bits, which is too small for the full 32 bits of `scontext`.
-`hcontext`/`mcontext` is only 14-bits long.
-`Filter` can also be expanded using the currently reserved fields, up to 29 bits.
-We believe that the final decision should be taken in accordance with the ARC.
-Open is also the mattes of whether `scontext`/`hcontext`/`mcontext` can be composed.
-This means that in theory we can have a filter that is 31+14+14=59 bits long.
+We believe that the final decision on which registers to use should be taken in accordance with the ARC.
 
 // ///////////////////////////////////////////////////////////////////////////////////////////
 
@@ -1411,7 +1432,7 @@ On RV64, the semantics of the instruction are:
 * If the algorithm in the CR does not encryption and decryption, then `Xs`[12:11] must be 0.
 * `Xs`[14:13] is used to turn on side-channel protection or increase its level, if implemented.
 The level is encoded according to <<ACE-SC-protection-levels>>.
-Downgrading protection level is not permitted. Attempting to do so will cause error _ace_err_invalid_ (<<ACE-error-codes>>).
+Downgrading protection level is not permitted. Attempting to do so causes error _ace_err_invalid_ (<<ACE-error-codes>>).
 
 * A zero in any of the four bits `Xs`[28:25] means that the corresponding policy is _not_ changed.
 * A one in any of the four bits `Xs`[28:25] means that usage by the corresponding mode is forbidden, and the corresponding bit in the metadata of the destination CC is set to 1.
@@ -2595,7 +2616,7 @@ State Machine:::
 
  ** To transition to state _hash_absorb_:
  the ``ace.state`` instruction must be a Form C to set the IV, i.e., the fixed part of the counter.
- Other forms of  ``ace.state`` will raise an invalid instruction exception and the CR is *invalidated*. Then:
+ Other forms of  ``ace.state`` raise an invalid instruction exception and the CR is *invalidated*. Then:
    . `ctr <- INPUT @ (b/4-1)b'0 @ 1`, i.e., the `b/4` most significant bits of `INPUT` are ignored, and the `b/4` least significant bits of `ctr` represent the integer 1.
   *** If the ``ace.state`` instruction is repeated, it will just update the counter again.
   *** If `IOLEN` > `b`, only the `b` least significant bits of `INPUT` are considered.
@@ -2815,7 +2836,7 @@ The differences between GCM and GCM with set IV start with the format of the Ini
  the ``ace.state`` instruction must be used _without any additional inputs_, since the IV is already included in the II.
 
  ** Once in state _completed_, the CC with this algorithm *cannot* be brought back to state _initial_.
-Other forms of  ``ace.state`` will raise an invalid instruction exception and the CR is *invalidated*.
+Other forms of ``ace.state`` raise an invalid instruction exception and the CR is *invalidated*.
 
 These rules do not prevent cloning the CR at the beginning and reusing it, but, for decryption, it can only be used with the intended ciphertext.
 
