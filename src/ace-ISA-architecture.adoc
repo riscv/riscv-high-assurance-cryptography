@@ -450,7 +450,7 @@ The most common case is when the SCC is larger, for instance for simple primitiv
 On the other hand, in case of threshold implementations, where keys are exported in reconstructed form, and in modes where some derived keys that are easily reconstructed are not exported, the SCC may be smaller than the internal resource usage.
 
 [[ACE-CSR]]
-==== CSRs
+==== CSR Summary
 
 ACE extends `*status` and `misa`, and adds up to 12 new CSRs, which are listed in <<ACE-CSRs-table>>.
 
@@ -612,7 +612,7 @@ The standard error codes are:
 |  2   | ace_err_privilege       | Violation of usage control policies.
 //(`ace.exec`, `ace.state`, etc.).
 |  3   | ace_err_invalid         | Invalid input/operation such as: Invalid metadata section in `ace.init` or `ace.import`;
-Use of non-allowed instruction in the current algorithm state; or Attempt to use a partially configured CR.
+Use of non-allowed instruction in the current algorithm state; or Attempt to use an invalid or partially configured CR.
 |  4   | ace_err_unimplemented   | Algorithm or algorithm variant not implemented.
 |  5   | ace_err_memory          | Insufficient CRF memory for configuration instruction.
 |  6   | ace_err_unconfigured    | Software attempted to use an unconfigured CR. +
@@ -948,26 +948,6 @@ Therefore, this would fit in the metadata's `Filter` field's current length of 2
 `hcontext`/`mcontext` is only 14-bits long.
 `Filter` can also be expanded using the currently reserved fields, up to 29 bits.
 We believe that the final decision should be taken in accordance with the ARC.
-
-[comment]
---
-[[ACE-CSR-reuse-ASID-VMID]]
-==== Reuse of `(v)satp`.ASID and `hgatp`.VMID without S/H?
-
-ACE reuses `(v)satp`.ASID and `hgatp`.VMID to optionally restrict the usage of CCs to a specific process or virtual machine.
-In the metadata section, `ASID` and `VMID` are always zero padded to the maximal lengths of 16 and 14 bits, respectively.
-
-[WARNING]
-Currently, `satp` is only defined when the Supervisor is enabled.
-similarly, `hgatp` is only defined if the Hypervisor extension is enabled.
-We propose to define the `ASID` and `VMID` fields of these registers also when ACE is provided in order to allow M-mode to be able to separate a main OS from a TEE, for instance, on devices that implement TEEs using mechanisms based on Sv, PMP/Smepmp cite:[RISCV-ISA-Priv]. If only U- and M-mode are available, this would allow M-mode to separate the CCs of the various U-mode processes.
-
-NOTE: Regarding Supervisor Domains (SDs) cite:[RISC-V-SD] and Worlds cite:[RISC-V-Worlds] we observe that there is no room in the current metadata format for adding filtering by `SDID` (`mmtp.SDID`) and WID.
-This is not an issue since we recommend to use separation by RCSK in combination with SDs or Worlds, which does not prevent a program running in a SD or World to provide a CC to a program running in a different SD or World. This is done by by configuring a CR and then relinquishing control to M-mode to export the CR with the RCSK used by the target software.
-The same holds for any intended separation by hart ID (`mhartid`), which is facilitated by the fact that the RCSK CSR group is per-hart.
-
-NOTE: The software in each World/Supervisor Domain is normally responsible to generate or obtain their own keys, and if a process (applet) in one World/Supervisor Domain is responsible to provide keys to other Worlds/Supervisor Domains, it is the responsibility of the M-mode firmware to perform an appropriate `ace.import`/RCSK switch/`ace.export` sequence.
---
 
 // ///////////////////////////////////////////////////////////////////////////////////////////
 
@@ -1930,6 +1910,32 @@ All three instructions can be implemented as CSR RW instructions, for instance:
 // Interrupting the firmware implementation of `ace.init`, `ace.export`, `ace.import`, `ace.input`, or `ace.output` must leave the architectural state indistinguishable from the state expected from interrupting a monolithic implementation of the instructions.
 // In particular, they need to respect the value of `acestart` and update it in accordance with the expected architected behavior of the emulated instructions.
 // The supporting instructions themselves must be uninterruptible.
+
+// ///////////////////////////////////////////////////////////////////////////////////////////
+
+[[ACE-horizontal-exception-handling]]
+=== Error Handling via Horizontal Traps
+
+_This section is non-normative._
+
+ACE has been architected so that in properly written code, the most common executed instructions, namely `ace.exec` and `ace.state`, rarely have to deal with errors. Errors should occur mostly with configuration operations, caused by insufficient CRF capacity or while authenticating SCCs.
+
+However, revocation of localities or reached expiration dates may cause a CR to suddenly became invalid just before executing an `ace.exec` or `ace.state` instruction.
+Requiring software to check for errors after each operation
+would impose significant burden on the software and possibly degrade performance.
+
+Horizontal traps can be used to implement a try/catch mechanism:
+
+. At the start of a subroutine that performs a cryptographic protocol, the address of the “catch” code as well as a mask with the error types to catch are loaded in two CSRs.
+. The code is written without considering the exceptions to be caught, usually only _ace_err_invalid_.
+. If the code runs without such errors, then the two CRSs are reset and the routine returns normally.
+. If, say, an _ace_err_invalid_ error occurs, the horizontal trap diverts the control flow to the catch code, which usually cleans up, and returns to the caller of the subroutine, not to the routine itself, with an error code.
+
+The main application of such code is when revocation or expiration cause a CR to become invalid.
+In such contexts, it is not the duty of the cryptographic subroutine to resolve the issue, but of the code that makes use of the latter, as the keys may have to be renegotiated, and this may need user intervention.
+
+[.red]From the point of view of the ACE architecture, we need only to define two CSRs and their behaviors.
+For this, we may either need to follow the development of the HFI extension or implement a solution that traps to S-mode first and then immediately returns to the catch code. We will discuss this with the ARC.
 
 // ///////////////////////////////////////////////////////////////////////////////////////////
 
@@ -4240,7 +4246,7 @@ For example, it would necessitate secure management of large RCSK tables, includ
 _This section is informative and non-normative._
 
 Lazy loading defers loading a value until it is needed, improving performance and managing limited CRF capacity. It may also be required to support migration to systems with smaller CRFs:
-If capacity is insufficient for lazy loading, the software reimporting an offloaded CR must be able to offload other CRs to free space. An alternative—requiring software to check for errors after each operation or to use an in-process trap handler—would impose significant burden on the software and possibly degrade performance.
+If capacity is insufficient for lazy loading, the software reimporting an offloaded CR must be able to offload other CRs to free space. Requiring software to check for errors after each operation would impose significant burden on the software and possibly degrade performance.
 
 Therefore, a cooperative approach is recommended:
 
@@ -4428,7 +4434,7 @@ Threats can be addressed in four ways:
 **T:**:: _Transfer_ the threat to another party better suited to address it.
 **S:**:: _Suppress_ the features that give rise to the threat.
 
-ACE is designed to avoid the “***A***” and “***S***” options (as much as possible). It _controls_ threats through its own mechanisms and _transfers_ residual risk—specifically, the risk of key extraction from the privileged or trusted software and hardware environments that manage keys—to those same environments. For example, trusted software environments may employ control-flow integrity, memory encryption with integrity protection, and anti-replay mechanisms, while hardware key-management blocks can be hardened to protect entrusted keys.
+ACE is designed to avoid the “*A*” and “*S*” options (as much as possible). It _controls_ threats through its own mechanisms and _transfers_ residual risk—specifically, the risk of key extraction from the privileged or trusted software and hardware environments that manage keys—to those same environments. For example, trusted software environments may employ control-flow integrity, memory encryption with integrity protection, and anti-replay mechanisms, while hardware key-management blocks can be hardened to protect entrusted keys.
 
 Direct plaintext leakage, memory corruption attacks against the ACE-using process, and Release of Unverified Plaintext (RUP) attacks on the cryptographic algorithms are considered out of scope. These threats cannot be mitigated by ACE because the processed information resides within the user execution context. Consequently, these threats are _accepted_.
 
