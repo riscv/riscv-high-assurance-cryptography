@@ -177,12 +177,13 @@ CRs reside in a dedicated _CR file_ (CRF), accessible only by the ACE implementa
 
 CRs differ from conventional register in several ways:
 
-* One can load clear data into a CR via using the `ace.init` instruction (<<ACE-instruction-init>>), but
-there is no corresponding store instruction to extract a CR's entire content as it was initially loaded in it as clear text.
+* Clear data is loaded into CR using the `ace.init` instruction (<<ACE-instruction-init>>), but
+there is no corresponding store instruction to extract the same data as clear text.
 
-* A CR can be *exported* in an authenticated, encrypted format using the `ace.export` instruction (<<ACE-instruction-export>>), thereby creating a Sealed Cryptographic Context (SCC).
+* A CR can be *exported* in an encrypted and authenticated format using the `ace.export` instruction (<<ACE-instruction-export>>).
+This creates a +Sealed Cryptographic Context+ (SCC).
 A SCC can be later re-*imported* into a CR using the `ace.import` instruction (<<ACE-instruction-import>>)
-but the process, requiring authentication, may fail if the data in memory was altered.
+but the process may fail if the data in memory was altered.
 Conventional registers do not provide such functionality-and do not need to.
 
 * The external and internal representations of a CR may have different sizes.
@@ -194,10 +195,11 @@ Conventional registers do not provide such functionality-and do not need to.
   In this case, software must free capacity by unconfiguring other CRs.
 
 * ACE instructions can refer to CRs directly, i.e., with a 5-bit immediate in the instruction encoding, but also indirectly, i.e., through a value in a GPR.
-//* Only a few instructions can use and possibly change the contents of the CRs.
-//  The most important ones are:
-//  ** `ace.exec`, used to perform cryptographic operations on data blocks according to the algorithm configured in a CR; and
-//  ** `ace.state`, used to move between the different stages of modes of operations and hash functions, possibly performing certain state-state initialization operations.
+
+* Only few instructions use and possibly change the contents of the CRs.
+  The most important ones are:
+  ** `ace.exec`, used to perform cryptographic operations on data blocks according to the algorithm configured in a CR; and
+  ** `ace.state`, used to move between the different stages of modes of operations and hash functions, possibly performing certain state-state initialization operations.
 
 Accessing a CR that is outside the range [0..31] raises a illegal-instruction error.
 
@@ -254,16 +256,15 @@ The metadata section is used as the header of the data formats used in CR initia
 |===
 .>|   Field .>| Width +
 (bits) .>| Name                  .>| Description
-|   [0:0] |   1  | Format                   | Value is 0 for the current metadata format. +
-The value 1 is reserved for future formats with a length of 128 bits.
+|   [0:0] |   1  | Format                   | Value is 0 for the current 64-bit metadata format. +
+The value 1 is reserved for a format with a length of 128 bits.
 |  [10:1] |  10  | _Algorithm_              | Cryptographic algorithm (such as primitive, mode, or protocol).
-| [11:11] |   1  |  Reserved                | Expansion for Algorithm or SC_Protection.
-| [13:12] |   2  | _SC_Protection_          | Level of Side Channel Protection, encoded as per <<ACE-SC-protection-levels>>.
-| [15:14] |   2  | _Direction_Policy_       | Determines whether the CC may be used for encryption (bit 14 set), decryption (bit 15 set), or both (bits 14 and 15 set). Valid only for encryption/decryption primitives or modes, and ignored, for instance, for hash functions.
-| [17:16] |   2  | _Key_Type_               | Key given by explicit value / System Key (index) / Internally generated.
-| [21:18] |   4  | _State_Number_           | Encoding the current state of the state machine of the algorithm as a number.
-| [23:22] |   2  | _Reserved_               | Zero.
-| [27:24] |   4  | _Locality_               | A field which is either all ones (15) or an index into the Locality Secrets Table.
+| [12:11] |   2  | _Direction_Policy_       | For encryption/decryption primitives or modes, determines whether the CC may be used for encryption (bit 11 set), decryption (bit 12 set), or both (bits 11 and 12 set). The field can be reused to expand the algorithm space for other types of operations.
+| [14:13] |   2  | _SC_Protection_          | Level of Side Channel Protection, encoded as per <<ACE-SC-protection-levels>>.
+| [16:15] |   2  | _Key_Type_               | Key given by explicit value / System Key (index) / Internally generated.
+| [21:17] |   4  | _State_Number_           | Encoding the current state of the state machine of the algorithm as a number.
+| [22:21] |   2  | _Reserved_               | Zero.
+| [27:23] |   5  | _Locality_               | A field which is either all ones (`0x1F`) or an index into the Locality Secrets Table.
 | [31:28] |   4  | _UC_Policy_              | “UC Policy” means “Usage Control Policy”. If bit 28, 29, 30, resp. 31 is set, it disallows the _usage_ of this CC in User, (V)S-mode, H-mode, resp. M-mode.
 | [34:32] |   3  | _Filter_Mode_            | Mode at which to apply the filter: 0 = none; 1 = U; 2 = (V)S; 3 = H; +
 4 = expiration date ([.red]#minutes since January 1^st^, 2027?#).
@@ -364,19 +365,19 @@ All states different from _invalid_ are called valid states.
 ACE keeps a table of 128-bit Locality Secrets (LS), the Locality Secrets Table (LST).
 Some entries of the LST are fixed or configurable only using an implementation–specific authenticated hardware procedure: These are global and shared across all ACE units in the same system. Other entries may be programmed by privileged modes and are architectural, i.e., per hart.
 
-If the Locality Field of a CC is all ones (15), then the RCSK is used.
+If the Locality Field of a CC is all ones (`0x1F`), then the RCSK is used.
 Otherwise, this value is used as an index _i_ in the LST, and the actual CSK is derived from the RCSK and LST[_i_].
-<<ACE-locality-indexes>> lists the architected Localities and whether M-mode can configure them.
+<<ACE-locality-indexes>> lists the architected Localities and which mode is allowed to configure them.
 The domain of each Locality Secret is specified, i.e., whether the value is chip-wide
 (i.e., the same across all chiplets in the same SoC),
 device-wide, or OS-wide.
 
 [[ACE-locality-indexes]]
 .Architected Locality Values
-[width="100%",cols="23%,45%,^9%,^15%,^8%",options="header"]
+[width="100%",cols="23%,50%,^9%,^9%,^9%",options="header"]
 |===
-| Name                      | Description                                                                               | Domain | Configurability | Index
-| (No Locality binding)     | No CSK derivation. CC bound to Root CSK only.                                                             | --  | -- | 15
+| Name                      | Description                                                                               | Domain | Conf.. | Index
+| (No Locality binding)     | No CSK derivation. CC bound to Root CSK only.                                                             | --  | -- | 0x1F
 | ChipManufacturerSecret    | Identifies the manufacturer of the SoC. Permanent.                                                        | SoC | No | 0
 | ChipModelSecret           | Identifies specific chip model/family. Permanent.                                                         | SoC | No | 1
 | ChipUniqueSecret          | Unique for each SoC. Permanent.                                                                           | SoC | No | 2
@@ -384,15 +385,12 @@ device-wide, or OS-wide.
                               Can be permanent, or optionally reconfigurable by an implementation-defined HW authenticated mechanisms.  | Device | No | 3
                               | ProductSecret             | Identifies device/system type/model (product). Not necessarily permanent. Reconfigurable like OEMSecret.  | Device | No | 4
 | DeviceSecret              | Unique device (entire system) secret (_not_ the device ID such as a serial number). Shared across all harts in a SoC and shareable across multiple SoKs in a single device. Sharing mechanism implementation-defined, i.e., not architected. Reconfigurable like OEMSecret.                | Device | No | 5
-| BootSecret                | Identifies the boot session of the host hardware and its software stack. Not permanent, to be configured at physical boot. | OS | M | 6
-| VBootSecret               | Regenerated at each (virtual) boot. Not permanent, to be configured at the virtual boot of each VM, or also per SD. | OS | H | 7
-| SSecret                   | Can be configured by Supervisor                                                                           | OS | S | 8
-| Reserved                  | Reserved for future use (RZ if not defined).                                                              | Impdef | Impdef | 9-14
+| BootSecret                | Identifies the boot session of the host hardware and its software stack. Not permanent, to be configured at physical boot (see <<ACE-CSR-maceBootSecret>>)(.
+| Device | M | 6
+| VBootSecret               | Regenerated at each (virtual) boot. Not permanent, to be configured at the virtual boot of each VM, or also per SD (see <<ACE-CSR-maceVBootSecret>>). | HV | H | 7
+| SSecret                   | Can be configured by Supervisor (see <<ACE-CSR-saceSSecret>>).                                             | OS | S | 8
+| Reserved                  | Reserved for future use (RZ if not defined).                                                              | Impdef | Impdef | 9-30
 |===
-
-The constant Localities_MAX is the maximum number of Localities supported by the system.
-
-M-Mode and S-Mode reconfigure (virtualize) VBootSecret, BootSecret, and SSecret, by writing to groups of CSR which are defined in <<ACE-CSR-maceBootSecret>>, <<ACE-CSR-maceVBootSecret>>, and <<ACE-CSR-saceSSecret>>.
 
 NOTE: Example: If a key's metadata specifies a Locality field value of 2, the import/export key is derived from the RCSK and the OEM Secret. An SCC created on one device will fail authentication when imported on another device if their OEM Secrets differ.
 
@@ -454,7 +452,7 @@ On the other hand, in case of threshold implementations, where keys are exported
 [[ACE-CSR]]
 ==== CSRs
 
-ACE extends `*status` and `misa`, and adds up to 11 new CSRs, which are listed in <<ACE-CSRs-table>>.
+ACE extends `*status` and `misa`, and adds up to 12 new CSRs, which are listed in <<ACE-CSRs-table>>.
 
 [[ACE-CSRs-table]]
 .New ACE CSRs. N/A means that at the moment this is not defined.
@@ -483,7 +481,6 @@ ACE extends `*status` and `misa`, and adds up to 11 new CSRs, which are listed i
 [WARNING]
 To configure the `macercsk`, `maceBootSecret` `maceVBootSecret`, and `saceSSecret` CSR groups
 we use the Indirect CSR Access defined in <<indirect-csr>> of cite:[RISCV-ISA-Priv] instead.
-This would limit the number of allocated CSRs to at most 11.
 
 [WARNING]
 `acestart` may be overloaded with `vstart`, regardless of whether the V extension is available.
@@ -1440,14 +1437,16 @@ This instruction can be used to:
 Let `m` be the metadata field of the CC in the destination CR. +
 On RV64, the semantics of the instruction are:
 
-* `Xs`[11:0] and `Xs`[27:16] must be 0.
-* `Xs`[15:12] and `Xs`[63:32] have the same format as the corresponding bits of the metadata.
+* `Xs`[10:0] and `Xs`[27:15] must be 0.
+* `Xs`[14:11] and `Xs`[63:32] have the same format as the corresponding bits of the metadata.
 * `Xs`[13:12] is used to turn on side-channel protection or increase its level, if implemented.
 The level is encoded according to <<ACE-SC-protection-levels>>.
 Downgrading protection level is not permitted. Attempting to do so will cause error _ace_err_invalid_ (<<ACE-error-codes>>).
-* `Xs`[15:14] is used to deactivate either encryption or decryption in a CC that allows both. +
-If `m`[15:14] = `0b11`, then at least one bit of `Xs`[15:14] must be set to 1 to select which operation is kept. +
-If `m`[15:14] != `0b11`, then it must be `Xs`[15:14] = `m`[15:14] or `Xs`[15:14] = 0, in which case no change is made, else this will result in error _ace_err_invalid_.
+* If the algorithm in the CR supports encryption and decryption, then
+** `Xs`[14:13] is used to deactivate either encryption or decryption in a CC that allows both. +
+If `m`[14:13] = `0b11`, then at least one bit of `Xs`[14:13] must be set to 1 to select the allowed operation. +
+If `m`[14:13] != `0b11`, then it must be `Xs`[14:13] = `m`[14:13] or `Xs`[14:13] = 0, in which case no change is made, else this will result in error _ace_err_invalid_.
+** else `Xs`[14:13] must be 0.
 * A 0 in any of the four bits `Xs`[31:28] means that the corresponding policy is _not_ changed.
 * A one in any of the four bits `Xs`[31:28] means that usage by the corresponding mode is forbidden, and the corresponding bit in the metadata of the destination CC is set to 1.
 * `Xs`[34:32] can be non-zero only if `m`[33:32] is 0, in which case  `m`[59:35] <- `Xs`[59:35], else `aceerror` is set to _ace_err_invalid_.
