@@ -345,7 +345,7 @@ The following situation may occur:
 
 . A process is exporting a threshold CC from a CR.
 . The process is interrupted for context switching.
-. The privileged code then saves the context, by exporting each multi-share field as a single share.
+. The privileged code saves the context, exporting each multi-share field as a single share.
 . Later, the privileged code re-imports the SCC into a CR.
 . This means that the shares have been re-imported with a different randomization.
 . When the export operation resumes, it will continue to export the values as single shares, i.e., with the same value.
@@ -511,23 +511,24 @@ Bit `L` (11) in `misa` indicates that ACE is present.
 (((CSR,ACES field in *status)))
 An ACE context status field, ACES, is added to `mstatus`[26:25] and shadowed in `sstatus`[26:25] (but, see <<ACE-CSR-macecrstatus>>).
 It is defined analogously to the floating-point context status field, FS, and to the vector context status field, VS.
-If ACE is implemented, the ACES fields shall not be read-only zero,
-the possible values are given in <<ACE-aces-encoding>>.
+If ACE is implemented, the ACES fields shall not be read-only zero.
+The meanings of its values are given in <<ACE-aces-encoding>>.
 
 [[ACE-aces-encoding]]
 .Encoding of ACES status field
 [float="center",align="center",width="100%",cols="^8%,<8%,<84%",options="header"]
 |===
 |Status |Name |Meaning
-|   0   | Off                | ACE disabled. CRs are inaccessible. The hart will trap if the user requests to enable the feature.
-|   1   | Initial            | ACE enabled. No CR is configured.
-|   2   | Clean              | ACE enabled. The state matches the last context swap (Clean).
-|   3   | Dirty              | ACE enabled. Some CRs may have been modified since last Clean.
+|   0   | Off                | ACE disabled. CRs and the input/output buffer are inaccessible. The hart will trap if the user requests to enable the feature.
+|   1   | Initial            | ACE enabled. All CRs and the input/output buffer are unconfigured.
+|   2   | Clean              | ACE enabled. Some CRs or the input/output buffer are configured, and the state matches the last context swap.
+|   3   | Dirty              | ACE enabled. Some CRs or the input/output buffer may have been modified since the last context swap.
 |===
 
 Attempts to execute any ACE instruction, or to access the ACE state, raise an illegal-instruction exception when `mstatus.ACES` is set to Off.
 
-When `mstatus.ACES` is set to Initial or Clean, executing any instruction that changes ACE state will change `mstatus.ACES` to Dirty. Implementations may also change `mstatus.ACES` from Initial or Clean to Dirty at any time, even when there is no change in ACE state.
+When `mstatus.ACES` is set to Initial or Clean, executing any instruction that changes ACE state will change `mstatus.ACES` to Dirty.
+Implementations may also change `mstatus.ACES` from Initial or Clean to Dirty at any time, even when there is no change in ACE state.
 // TODO: ace.reset should set Initial
 
 [NOTE]
@@ -541,34 +542,19 @@ are handled, the `mstatus.ACES` field may exist even if `misa.L` is clear.
 
 The transitions between these states are the same as in Table “FS, VS, and XS state transitions” of cite:[RISCV-ISA-Priv]
 
-Writes to any ACES field do not affect CR contents.
+Writes to any ACES field do not affect the contents of the CRs or of the input/output buffer.
 Clearing state is not performed by setting ACES to Off, Initial, or Clean, and it must be explicitly done before changing ACES.
 
-[[ACE-ACEIOBS-field]]
-===== ACE IO Buffer Status in `mstatus` and `sstatus`
-
-An ACE IO Buffer status field, ACEIOBS, is added to `mstatus`[28:27] and shadowed in `sstatus`[28:27]  (but, see <<ACE-CSR-macecrstatus>>).
-It is defined analogously to the floating-point context status field, FS, and to the vector context status field, VS.
-If ACE is implemented, the ACEIOBS fields shall not be read-only zero, otherwise the field is read-only zero.
-the possible values are given in <<ACE-aces-encoding>>.
-
-[WARNING] If it is not possible to use four bits of `mstatus` for ACE, this field could be merged with , say, `aceerror`, `acesequence`, and  `aceactivecr` into a single CSR. This can be done in accordance with the ARC and does not need to be done now.
-
-If the buffer is enabled (a non-zero value of `aceiobuflen`, see <<ACE-CSR-aceiobuflen>>), then it takes a non-zero value.
-Its initial value is Initial, and upon any write to `aceiobuflen` its state returns to Initial.
-In this case, it cannot be read or used in any operation, it must be written to first.
 
 [[ACE-ACES-field-H]]
 ===== ACE Context Status in `vsstatus`
 
-When the H extension is present, a vector context status field, ACES, is added to `vsstatus`[26:25].
+When the H extension is present, an ACE context status field, ACES, is added to `vsstatus`[26:25].
 It is defined analogously to the floating-point context status field, FS, and to the vector context status field, VS.
 
-When V=1, both `vsstatus.ACES` and `mstatus.ACES` are in effect: attempts to execute any ACE instruction, or to
-access the CRs or the input/output buffer, raises an illegal-instruction exception when either field is set to Off.
+When V=1, both `vsstatus.ACES` and `mstatus.ACES` are in effect: attempts to execute any ACE instruction, or to access the CRs or the input/output buffer, raises an illegal-instruction exception when either field is set to Off.
 
-When V=1 and neither `vsstatus.ACES` nor `mstatus.ACES` is set to Off, executing any instruction that changes
-ACE state, including the ACE CSs or the input/output buffer, will change both `mstatus.ACES` and `vsstatus.ACES` to Dirty.
+When V=1 and neither `vsstatus.ACES` nor `mstatus.ACES` is set to Off, executing any instruction that changes ACE state, including the ACE CSs or the input/output buffer, will change both `mstatus.ACES` and `vsstatus.ACES` to Dirty.
 // TODO: ace.reset should set Initial
 Implementations may also change `mstatus.ACES` or `vsstatus.ACES` from Initial or Clean to Dirty at any time,
 even when there is no change in ACE state.
@@ -576,24 +562,6 @@ even when there is no change in ACE state.
 If `vsstatus.ACES` is Dirty, `vsstatus.SD` is 1; otherwise, `vsstatus.SD` is set in accordance with existing specifications.
 
 For implementations with a writable `misa.L` field, the `vsstatus.ACES` field may exist even if `misa.L` is clear.
-
-[[ACE-ACEIOBS-field-H]]
-===== ACE IO Buffer Status in `vsstatus`
-
-When the H extension is present, an ACE IO Buffer status field, ACEIOBS, is added to `vsstatus`[28:27].
-It is defined analogously to the floating-point context status field, FS, and to the vector context status field, VS.
-
-When V=1, both `vsstatus.ACEIOBS` and `mstatus.ACEIOBS` are in effect: attempts to execute any ACE instruction that
-accesses the input/output buffer raises an illegal-instruction exception when either field is set to Off.
-
-When V=1 and neither `vsstatus.ACEIOBS` nor `mstatus.ACEIOBS` is set to Off, executing any instruction that changes
-the state of the input/output buffer, will change both `mstatus.ACEIOBS` and `vsstatus.ACEIOBS` to Dirty.
-Implementations may also change `mstatus.ACEIOBS` or `vsstatus.ACEIOBS` from Initial or Clean to Dirty at any time,
-even when there is no change in the state of the input/output buffer.
-
-If `vsstatus.ACEIOBS` is Dirty, `vsstatus.SD` is 1; otherwise, `vsstatus.SD` is set in accordance with existing specifications.
-
-For implementations with a writable `misa.L` field, the `vsstatus.ACEIOBS` field may exist even if `misa.L` is clear.
 
 //
 
@@ -702,6 +670,8 @@ The semantics and use of `acestart` are described in <<ACE-init-export-import>>.
 
 The two CSRs described next may be used to optimize saving and restoring the input/output buffer.
 
+//
+
 [[ACE-CSR-aceiobuflen]]
 ===== `aceiobuflen`
 
@@ -711,7 +681,10 @@ The two CSRs described next may be used to optimize saving and restoring the inp
 
 Reconfiguring `aceiobuflen` will invalidate the buffer contents.
 
-If the size is zero, `ace.input` and `ace.output` will raise an invalid instruction exception.
+If the size is zero, the input/output buffer is _unconfigured_ (it does not hold any content, similarly to unconfigured CRs),
+and `ace.input` and `ace.output` will raise an invalid instruction exception.
+
+//
 
 [[ACE-CSR-aceiobuftop]]
 ===== `aceiobuftop`
@@ -729,6 +702,7 @@ Writing to `aceiobuflen` will set `aceiobuftop` to the same value.
 // If `aceiobuftop` is zero, `ace.input` and `ace.output` will raise an invalid instruction exception.
 If `aceiobuflen-acestart` is zero or an invalid size for the operation that uses the buffer, `aceerror` is set to error code ace_err_invalid.
 
+//
 
 [[ACE-CSR-acesequence]]
 ===== `acesequence`
@@ -975,7 +949,6 @@ We currently use
 to align with store/load/operational instructions in the base and floating-point instruction sets.
 They serve as a starting point for discussion and refinement as well as a proof that, at the time of this writing, the ACE instruction set can be encoded.
 
-
 ACE provides a number of unprivileged instructions, some implemented as CSR read/write operations.
 This section specifies the semantics and encodings of these instructions.
 
@@ -1066,14 +1039,19 @@ Encoding::
 Description::
 For `ace.clear`, `Kd` or `K[Xd]` denotes the CR to be cleared. +
 `ace.reset` uses the encoding for `ace.clear` and `Xd` = `X0` (the `context` field is `0`) or `Xd` != `X0` containing a value larger than 31.
++
+`ace.clear` unconfigures the state of the relevant CR by releasing its internal resources in the CRF and setting the corresponding entry in `*acecrstatus` to Clear.
+If all CRs _and_ the input/output buffer are Clear, the state in `*status.ACES` is set to Initial.
+`ace.reset` unconfigures the entire state of the unit, by clearing all CRs and  setting `aceiobuflen` to zero, and therefore it also sets `*status.ACES` to Initial.
+
 
 Properties::
-`ace.clear` possibly modifies state. +
+`ace.clear` does not make `*status.ACES` dirty. +
 `ace.reset` unconfigures the unit. +
 Usage-controlled: *NO*. +
 Trappable: +
 {nbsp}{nbsp}``ace.clear``: *NO*; +
-{nbsp}{nbsp}``ace.reset``: *YES* (it can be implemented as a series of `ace.clear` instructions). +
+{nbsp}{nbsp}``ace.reset``: *YES* (it can be implemented as a series of `ace.clear` and a write to `aceiobuflen`). +
 Interruptible: *NO*.
 
 //
