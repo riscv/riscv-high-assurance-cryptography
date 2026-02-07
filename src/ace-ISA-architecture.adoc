@@ -110,59 +110,9 @@ This list is an early draft.
 
 === Programmer-Visible Architectural State
 
-The recommended way to implement ACE is to implement the V extension, or at least a certain subset of it, as defined in <<ACE-V-dependency>>, which we call RVV-mini.
-It is possible to implement ACE without V or RVV-mini, by exclusively using the instructions `ace.input` and `ace.output` to provide input data and a buffer for output to and from the instructions that may use vectors, as described in <<ACE-usage-input-output>>.
+//The recommended way to implement ACE is to implement the V extension, or at least a certain subset of it, as defined in <<ACE-V-dependency>>, which we call RVV-mini.
+//It is possible to implement ACE without V or RVV-mini, by exclusively using the instructions `ace.input` and `ace.output` to provide input data and a buffer for output to and from the instructions that may use vectors, as described in <<ACE-usage-input-output>>.
 
-[comment]
---
-[[ACE-instructions-overview]]
-==== Instructions Overview
-
-ACE provides a number of unprivileged instructions, some implemented as CSR read/write operations.
-The notation `K[Xd]`, for a GPR `Xd`, refers to the CR whose number is contained in `Xd`,
-and `Kn|K[Xn]` means that there are two different encodings for when the CR number is passed as an immediate (`Kn`) or in `Xn`.
-
-.The ACE instructions
-[width="100%",cols="17%,27%,56%",options="header",subs="+macros"]
-|===
-| Instruction         | Operands                          |  Description
-| `ace.init`          | `Kd\|K[Xd], %offset(Xs)`          |  Sets a CR's metadata and content.
-| `ace.clear`         | `Kd\|K[Xd]`                       |  Clears a CR and marks it as no longer in use and clean.
-| `ace.reset`         |                                   |  Resets ACE.
-| `ace.export`        | `%offset(Xn) ,Ks\|K[Xs]`          |  Securely exports the content of a CR to memory.
-| `ace.import{.S}`    | `Kd\|K[Xd], %offset(Xn)`          |  Authenticates and imports an SCC from memory. +
- `ace.import.S` provides optional support for system-defined formats.
-| `ace.exec`
-| A. {nbsp}{nbsp} `Vd, Kn\|K[Xn], Vs` +
-  B. {nbsp}{nbsp} `{nbsp}{nbsp}{nbsp}{nbsp}Kn\|K[Xn], Vs` +
-  C. {nbsp}{nbsp} `Vd, Kn\|K[Xn]` +
-  D. {nbsp}{nbsp} `{nbsp}{nbsp}{nbsp}{nbsp}Kn\|K[Xn]`
-| Performs a cryptographic operation. These instructions may modify CC state. This instruction admits four _Forms_, depending on whether it accepts an input or not, and whether it produces an output or not.
-| `ace.size`
-| `Xd, Ks\|K[Xs]` +
-`Xd, Xs` .2+|  Returns the SCC size in bytes for CR `Ks`/`K[Xs]` or for an algorithm with metadata `Xs`.
-Returns zero if the algorithm is unsupported.
-`ace.available` is an alias for `ace.size`.
-| `ace.available`     | `Xd, Xs`
-| `ace.size{nbsp}{nbsp}\` +
-`{nbsp}{nbsp}{nbsp}{nbsp}.internal`
-| `Xd, Xs` |  Returns the internal capacity occupation for an algorithm with metadata `Xs`.
-Returns zero if the algorithm is unsupported.
-| `ace.clone`         | `Kd\|K[Xd], Ks\|K[Xs]`            |  Clones a source CR to a destination CR.
-| `ace.derive`        | `Kd\|K[Xd], Ks\|K[Xs]` +
-`Kd\|K[Xd], Ks\|K[Xs], Vs2` +
-|  Optional. Configures destination CR using source CR (e.g., the source CR could hold a KEM, and derive symmetric keys).
-| `ace.state`
-| `Kd\|K[Xd], #immed` +
-`Kd\|K[Xd], #immed, Xs` +
-`Kd\|K[Xd], #immed, Vs`  |  Modifies algorithm state (e.g., phase transitions).
-| `ace.restrict`      | `Kd\|K[Xd], Xs`                   |  Narrows Usage Policies and enables/increases side-channel protection.
-   Weakening Usage Policies and SCA protection is not permitted.
-| `ace.input`         | `Kd\|K[Xd], %offset(Xs)`          |  Optional. Provides input to the algorithm.
-| `ace.output`        | `%offset(Xd), Ks\|K[Xs]`          |  Optional. Writes output from the algorithm.
-| `ace.error`         | `Xd`                              |  Writes the ACE unit error code to GPR `Xd`.
-|===
---
 // ///////////////////////////////////////////////////////////////////////////////////////////
 
 [[ACE-cryptographic-registers]]
@@ -238,12 +188,15 @@ Since ACE defines only three states for the CRs (Initial, Clean, and Dirty) and 
 [[ACE-iobuf]]
 ==== ACE Input/Output Buffer
 
-ACE defines an optional input/output buffer (ACEIOBUF) that can be used to store data for cryptographic operations.
+The preferred way to provide inputs and ACE operations and collect their outputs is to use the vector register file of the V extensions.
 
-The preferred way to provide inputs and ACE operations and collect their outputs is using the vector register file of the V extensions.
+However, ACE also defines an optional input/output buffer (ACEIOBUF) that can be used in place of the vector register file, as explained in <<ACE-usage-input-output>>.
 
-However, the ACEIOBUF can also be used instead, as explained in <<ACE-replacement-instructions>>.
-Its size and the range of it used in cryptographic instructions are defined by the `aceiobuflen` and `aceiobuftop` CSRs,
+The ACEIOBUF, like the CRs, is architectural, and this it is a per-hart state.
+
+The ACEIOBUF can be part of the CRF or as a separate memory region.
+
+Its size and the range used in cryptographic instructions are determined by the `aceiobuflen` and `aceiobuftop` CSRs,
 defined in <<ACE-CSR-aceiobuflen>> and <<ACE-CSR-aceiobuftop>>.
 
 // ///////////////////////////////////////////////////////////////////////////////////////////
@@ -510,7 +463,7 @@ On the other hand, in case of threshold implementations, where keys are exported
 [[ACE-CSR]]
 ==== CSR Summary
 
-ACE extends `*status` and `misa`, and adds up to 12 new CSRs, which are listed in <<ACE-CSRs-table>>.
+ACE extends `*status` and `misa`, and adds up to 12 (9) new CSRs, which are listed in <<ACE-CSRs-table>>.
 
 [[ACE-CSRs-table]]
 .New ACE CSRs. N/A means that at the moment this is not defined.
@@ -728,6 +681,9 @@ Reconfiguring `aceiobuflen` will invalidate the buffer's contents, and the conte
 
 If `aceiobuflen` is zero, the ACEIOBUF is _unconfigured_ (it does not hold any content, similarly to unconfigured CRs, i.e., CRs in state Initial), and `ace.input` and `ace.output` raises an invalid instruction exception.
 
+Writing to `aceiobuflen` may fail if the value is larger than the maximum allowed by the architecture.
+In this case, `aceerror` will take the value _ace_err_memory_.
+
 //
 
 [[ACE-CSR-aceiobuftop]]
@@ -745,6 +701,10 @@ Writing to `aceiobuflen` will set `aceiobuftop` to the same value.
 
 // If `aceiobuftop` is zero, `ace.input` and `ace.output` raises an invalid instruction exception.
 If `aceiobuflen-acestart` is zero or an invalid size for the operation that uses the buffer, `aceerror` is set to error code ace_err_invalid.
+
+NOTE: The purpose of `aceiobuftop` is not to allow the buffer to be used as a kind of scratchpad memory, but it simply an optimization to avoid having to reconfigure the buffer in case the algorithms require inputs of variable lengths such as the last blocks of an operation or providing IVs/nonces while still processing multiple blocks at the same time. In this case the buffer is configured to the maximum value that is used while processing the payloads while `aceiobuftop` is made shorter for certain operatons.
+Reconfiguring would instead imply zeroing the contents to avoid leaking sensitive data and possibly incurring in an additional performance hit if the ACEIOBUF is resized.
+A proper use as a scratchpad memory for cryptographic operations would have required the definition or arbitrary ranges, namely also with bases, using `acestart` are relative to the base, and for both input and output.
 
 //
 
