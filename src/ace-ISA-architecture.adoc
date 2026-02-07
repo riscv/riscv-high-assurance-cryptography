@@ -198,6 +198,8 @@ The ACEIOBUF, like the CRs, is architectural, and this it is a per-hart state.
 
 The ACEIOBUF can be part of the CRF or be a separate memory region internal to the ACE state.
 
+The total length of the ACEIOBUF, `aceiobuflen`, can be fixed or variable
+
 Its size and the range used in cryptographic instructions are determined by the `aceiobuflen` and `aceiobuftop` CSRs,
 defined in <<ACE-CSR-aceiobuflen>> and <<ACE-CSR-aceiobuftop>>.
 
@@ -644,7 +646,8 @@ However, in an attached architecture depending on these may slow down the implem
 
 This register is typically written by hardware.
 Software may safely write 0 to fully restart an operation, and the register can be saved and restored during context switches.
-However, software must not write arbitrary nonzero values to it, as this may result in an illegal-instruction exception, as the hardware or a trapped implementation are not required to support all possible values.
+However, software must not write arbitrary nonzero values to it, as this may result in an illegal-instruction exception, as the hardware or a trapped implementation -examples are provided in the definitions of `aceiobuflen` (<<ACE-CSR-aceiobuflen>>) and `aceiobuftop` (<<ACE-CSR-aceiobuftop>>).
+
 Only the instructions explicitly mentioned above support non-zero `acestart` values; other ACE instructions ignore this register, and will be restarted.
 
 Initialization, import, and export operations may be interrupted and resumed if no context switch occurs,
@@ -686,6 +689,11 @@ If `aceiobuflen` is zero, the ACEIOBUF is _unconfigured_ (it does not hold any c
 Writing to `aceiobuflen` may fail if the value is larger than the maximum allowed by the architecture.
 In this case, `aceerror` will take the value _ace_err_memory_.
 
+If the total length of the ACEIOBUF is fixed in the implementation, this can be discovered by writing an “impossible“ value to `aceiobuflen`, namely the all-ones length: `aceerror` will take the value _ace_err_memory_, but reading `aceiobuflen` will return the actual length, on which software can therefore act.
+This will also configure `aceiobuflen` to the maximum length and therefore set `aceiobuftop` (<<ACE-CSR-aceiobuftop>>) accordingly, and `acestart` to zero.
+
+If the total length of the ACEIOBUF is not fixed, the same operation will cause `aceiobuflen` to read as zero. `aceiobuftop` and `acestart` will also be set to zero.
+
 //
 
 [[ACE-CSR-aceiobuftop]]
@@ -694,7 +702,11 @@ In this case, `aceerror` will take the value _ace_err_memory_.
 `aceiobuftop` is an XLEN-bit RW CSR.
 
 `aceiobuftop` is used to program the top end of a transfer operation to and from the ACEIOBUF for the `ace.input` and `ace.output` instructions.
+
 `aceiobuftop` must be {le} `aceiobuflen`. Setting a larger value raises an invalid instruction exception.
+
+`aceiobuftop` must be {ge} `acestart`. Setting a smaller value raises an invalid instruction exception.
+
 In conjunction with `acestart`, `aceiobuftop` defines the range of buffer used in the subsequent operations.
 
 Reconfiguring `aceiobuftop` will not invalidate the buffer contents.
