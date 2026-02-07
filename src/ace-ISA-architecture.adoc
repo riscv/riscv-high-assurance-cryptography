@@ -188,11 +188,9 @@ Since ACE defines only three states for the CRs (Initial, Clean, and Dirty) and 
 [[ACE-iobuf]]
 ==== ACE Input/Output Buffer
 
-The preferred way to provide inputs and ACE operations and collect their outputs is to use the vector register file of the V extensions.
+The preferred way to provide inputs and ACE operations and collect their outputs is to use the vector register file of the V extension.
 
 However, ACE also defines an optional input/output buffer (ACEIOBUF) that can be used in place of the vector register file, as explained in <<ACE-usage-input-output>>.
-
-The implementation of the ACEIOBUF and the reliance on the V register file are not mutually exclusive features.
 
 The ACEIOBUF, like the CRs, is architectural, and thus it is a per-hart state.
 
@@ -202,6 +200,8 @@ The total length of the ACEIOBUF, `aceiobuflen`, can be fixed or variable
 
 Its size and the range used in cryptographic instructions are determined by the `aceiobuflen` and `aceiobuftop` CSRs,
 defined in <<ACE-CSR-aceiobuflen>> and <<ACE-CSR-aceiobuftop>>.
+
+The support for the vector register file in ACE instructions and the implementation of the ACEIOBUF are not mutually exclusive.
 
 // ///////////////////////////////////////////////////////////////////////////////////////////
 
@@ -385,15 +385,15 @@ Bits 28, 29, resp 30 are ignored if U-mode, S-mode, resp. H-mode is not supporte
 [WARNING]
 The function of these fields must be finalized.
 
-Filtering by time is simple.
-The ACE Unit must have access to a secure clock, and the current time must be compared with it.
+To filter by time is a simple comparison between the current time and the expiration time in the metadata.
+The ACE Unit must have access to a secure clock.
 When the current time is beyond the expiration time in the metadata, the ACE Unit invalidates the CR (see <<ACE-invalidation>>), and the `aceerror` CSR takes the value _ace_err_expired_CR_ (see <<ACE-CSR-ace-error>>).
 
 We discuss now filtering by process domain.
 
 If we filter by `scontext`, the Filter field, which is 31 bits long, simply contains the value to match against.
 
-If the Filter Field is used to match against `mcontext` or `hcontext` or both, then its 31 bits are formatted as follows:
+If the Filter field is used to match against `mcontext`, `hcontext` or both, its 31 bits are formatted as follows:
 
 [width="100%",cols="^9%,^7%,16%,68%",options="header"]
 |===
@@ -487,8 +487,8 @@ ACE extends `*status` and `misa`, and adds up to 12 (9) new CSRs, which are list
 | 0xXXX          | HRW       | `vsacefilter`           | Filter that applies to U-mode if H is active
 | 0xXXX          | MRW       | `macefilter`            | Filter that applies to U/(V)S/H-mode
 | (Indirect)     | MRW (RZ)  | `macercsk{0..7}`        | ACE Root Context Sealing Key
-| (Indirect)     | MRW (RZ)  | `maceBootSecret{0..3}`  | ACE OS Secret
-| (Indirect)     | HRW (RZ)  | `maceVBootSecret{0..3}` | ACE Boot Secret
+| (Indirect)     | MRW (RZ)  | `maceBootSecret{0..3}`  | ACE Physical Boot Session Secret
+| (Indirect)     | HRW (RZ)  | `maceVBootSecret{0..3}` | ACE Virtual Boot Session Secret
 | (Indirect)     | SRW (RZ)  | `saceSSecret{0..3}`     | ACE Supervisor Secret
 |===
 
@@ -532,7 +532,7 @@ The meanings of its values are given in <<ACE-aces-encoding>>.
 |   0   | Off                | ACE disabled. CRs and the ACEIOBUF are inaccessible. The hart will trap if the user requests to enable the feature.
 |   1   | Initial            | ACE enabled. All CRs and the ACEIOBUF are unconfigured.
 |   2   | Clean              | ACE enabled. Some CRs or the ACEIOBUF are configured, and the state matches the last context swap.
-|   3   | Dirty              | ACE enabled. Some CRs or the ACEIOBUF may have been modified since the last context swap. This includes cleared/unconfigured states since switching code needs to act on them, erasing any saved state.
+|   3   | Dirty              | ACE enabled. Some CRs or the ACEIOBUF may have been modified since the last context swap. This includes unconfigured states since switching code needs to act on them, by erasing any stale saved state.
 |===
 
 When `mstatus.ACES` is set to Off, executing any ACE instruction raise an illegal-instruction exception.
@@ -811,8 +811,7 @@ When V=1, the following holds:
 * ``vsacecrstatus[``2__i__+1,2__i__``]`` can take the values Off, Initial, Clean, and Dirty, as defined for `vsstatus.ACES`, for CR #__i__.
 * `vsacecrstatus` substitutes for `sacecrstatus`, so instructions that normally read or modify `sacecrstatus` actually access `vsacecrstatus` instead.
 If ``vsacecrstatus[``2__i__+1,2__i__``]`` is set to Initial or Clean, executing any instruction that changes CR #__i__ will change ``vsacecrstatus[``2__i__+1,2__i__``]`` to Dirty.
-
-Attempts to execute any ACE instruction that accesses CR #__i__ raise an illegal-instruction exception when ``vsacecrstatus[``2__i__+1,2__i__``]`` is set to Off.
+* Attempts to execute any ACE instruction that accesses CR #__i__ raise an illegal-instruction exception when ``vsacecrstatus[``2__i__+1,2__i__``]`` is set to Off.
 
 // TODO: ace.reset and ace.clear should set Initial
 
