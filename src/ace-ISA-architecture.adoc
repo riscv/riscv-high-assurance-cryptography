@@ -103,7 +103,7 @@ This list is an early draft.
 * `SmaceCSK` => Defines the Root Context Sealing Key CSRs (`macercsk{0..7}`), which are all MRO.
 * `SmaceCSKw` => ACE Root Context Sealing Key CSRs are MRW. Depends on `SmaceCSK`.
 * `Smaceosscrt` => Defines the ACE OS Secret CSRs (`maceBootSecret{0..3}`).
-* `Smacebootscrt` => Defines the ACE Boot Secret CSRs (`maceVBootSecret0{0..3}`).
+* `Smacebootscrt` => Defines the ACE Boot Secret CSRs (`haceVBootSecret0{0..3}`).
 * `Smacestatus` => Defines the ACES per CC CSRs (`sacecrstatus`, `vsacecrstatus`, `macecrstatus`).
 
 // ///////////////////////////////////////////////////////////////////////////////////////////
@@ -237,7 +237,7 @@ The value 1 is reserved for a format with a length of 128 bits or longer.
 | [25:24] |   2  | Reserved                 | Value is 0 for the current metadata formats. (Expansion of Locality?)
 | [28:26] |   3  | _UC_Policy_              | “UC Policy” means “Usage Control Policy”. If bit 25, 26, resp., 27 is set, it disallows the _usage_ of this CC in User, (V)S-mode, resp., H-mode.
 | [32:29] |   4  | _Filter_Mode_            | Filter enablement:
-bits 0, 1, resp., 2 = enable the filter below S/VS-mode, HS-mode, resp., M-mode.
+bits 0, 1, resp., 2 = enable the filter below S/VS-mode, H-mode, resp., M-mode.
 bit 3 = enable expiration date ([.red]#minutes since January 1^st^, 2027?#).
 For the 64-bit metadata block, in general only one bit can be set, [.red]#we define exceptions in <<ACE-combined-filters>>#.
 | [63:33] |  31  | _Filter_1_               | Value to match filters against (see <<ACE-combined-filters>> for details), including an internal secure clock.
@@ -360,7 +360,7 @@ device-wide, or OS-wide.
 | DeviceSecret              | Unique device (entire system) secret (_not_ the device ID such as a serial number). Shared across all harts in a SoC and shareable across multiple SoKs in a single device. Sharing mechanism implementation-defined, i.e., not architected. Reconfigurable like OEMSecret.                | Device | No | 5
 | BootSecret                | Identifies the boot session of the host hardware and its software stack. Not permanent, to be configured at physical boot (see <<ACE-CSR-maceBootSecret>>).
 | Device | M | 6
-| VBootSecret               | Regenerated at each (virtual) boot. Not permanent, to be configured at the virtual boot of each VM, or also per SD (see <<ACE-CSR-maceVBootSecret>>). | VM/SD | H/M | 7
+| VBootSecret               | Regenerated at each (virtual) boot. Not permanent, to be configured at the virtual boot of each VM, or also per SD (see <<ACE-CSR-haceVBootSecret>>). | VM/SD | H/M | 7
 | SSecret                   | Can be configured by Supervisor (see <<ACE-CSR-saceSSecret>>).                                             | Process  | S | 8
 | Reserved                  | Reserved for future use (RZ if not defined).                                                              | Impdef | Impdef | 9-14
 |===
@@ -487,13 +487,13 @@ ACE extends `*status` and `misa`, and adds up to 12 (9) new CSRs, which are list
 | 0xXXX          | HRW       | `vsacefilter`           | Filter that applies to U-mode if H is active
 | 0xXXX          | MRW       | `macefilter`            | Filter that applies to U/(V)S/H-mode
 | (Indirect)     | MRW (RZ)  | `macercsk{0..7}`        | ACE Root Context Sealing Key
-| (Indirect)     | MRW (RZ)  | `maceBootSecret{0..3}`  | ACE Physical Boot Session Secret
-| (Indirect)     | HRW (RZ)  | `maceVBootSecret{0..3}` | ACE Virtual Boot Session Secret
-| (Indirect)     | SRW (RZ)  | `saceSSecret{0..3}`     | ACE Supervisor Secret
+| (Indirect)     | MRW (RZ)  | `maceBootSecret{0..3}`  | Locality: Physical Boot Session Secret
+| (Indirect)     | HRW (RZ)  | `haceVBootSecret{0..3}` | Locality: Virtual Boot Session Secret
+| (Indirect)     | SRW (RZ)  | `saceSSecret{0..3}`     | Locality: Supervisor Secret
 |===
 
 [WARNING]
-To configure the `macercsk`, `maceBootSecret` `maceVBootSecret`, and `saceSSecret` CSR groups
+To configure the `macercsk`, `maceBootSecret` `haceVBootSecret`, and `saceSSecret` CSR groups
 we use the Indirect CSR Access defined in cite:[RISCV-ISA-Priv] instead.
 // <<indirect-csr>>
 
@@ -597,21 +597,24 @@ The standard error codes are:
 
 [[ACE-error-codes]]
 .Error codes and their meanings
-[float="center",align="center",width="100%",cols="^7%,<25%,<68%",options="header"]
+[float="center",align="center",width="100%",cols="^7%,<23%,<70%",options="header"]
 |===
 |Value | Mnemonic                     | Examples (((ACE, error codes)))
 |  0   | _ace_err_ok_                 | No error.
 |  1   | _ace_err_import_             | Authentication failure with `ace.import`.
-|  2   | _ace_err_unconfigured_       | Software used an unconfigured or _invalid_, but not expired, or partially configured CR, ACEIOBUF as a source in any instruction except `ace.size`. Software used an unconfigured ACEIOBUF as an input or an output.
+|  2   | _ace_err_unconfigured_       | Software used an unconfigured or _invalid_, but not expired, or partially configured CR as a source in any instruction except `ace.size`. +
+Software used an unconfigured ACEIOBUF as an input or an output.
 |  3   | _ace_err_invalid_CR_         | Attempt to use an invalid CR.
 |  4   | _ace_err_expired_CR_         | Attempt to use an expired CR.
 |  5   | _ace_err_memory_             | Insufficient CRF memory for configuration instruction. This causes an exception that may lead to a horizontal trap.
 |  6   | _ace_err_unimplemented_      | Not implemented algorithm or algorithm variant.
-|  7   | _ace_err_invalid_value_      | Invalid metadata section in `ace.init` or `ace.import`, other than ace_err_unimplemented.
-The ACEIOBUF range has an invalid length `aceiobuftop`-`acestart` (see <<ACE-CSR-aceiobuftop>> and (<<ACE-CSR-acestart>>) for the operation.
+|  7   | _ace_err_invalid_value_      | Invalid metadata section in `ace.init` or `ace.import`, other than ace_err_unimplemented, for instance:
+non-zeros in zero fields, invalid Filter_Mode for a 64-bit metadata block, non-implemented Locality value, State_Number is non-zero for `ace.init`. +
+ACE operation issued with invalid ACEIOBUF length `aceiobuftop`-`acestart` (see <<ACE-CSR-aceiobuftop>> and (<<ACE-CSR-acestart>>). +
 Invalid input to `ace.restrict`.
 |  8   | _ace_err_privilege_          | Violation of usage control policies in metadata (including Filters).
-|  9   | _ace_err_state_error_        | Not allowed State_number in `ace.state`; Encryption, resp., decryption is requested from a CC not allowing it;
+|  9   | _ace_err_state_error_        | Not allowed State_number in `ace.state`. +
+Encryption, resp., decryption is requested from a CC not allowing it;
 | 10   | _ace_err_not_permitted_      | A Form of `ace.exec`, `ace.state` or `ace.derive` that is not permitted in the current algorithm state is used;
 | 11   | _ace_err_auth_               | Authentication failure in an algorithm.
 |===
@@ -893,25 +896,25 @@ The values written to the `maceBootSecret` group must follow the update rules de
 
 //
 
-[[ACE-CSR-maceVBootSecret]]
-===== `maceVBootSecret` group
+[[ACE-CSR-haceVBootSecret]]
+===== `haceVBootSecret` group
 
-This is a group of HS-Mode WARZ XLEN-bit CSRs used to configure `maceVBootSecret`.
+This is a group of H-and-VS-Mode WARZ XLEN-bit CSRs used to configure `haceVBootSecret`.
 These are addressed using Indirect CSR Access.
-(((CSR, `maceVBootSecret`)))
+(((CSR, `haceVBootSecret`)))
 
 * In RV32 there are four CSRs.
 * In RV64 there are two CSRs.
 
-A write to the __i__-th CSR sets Bits [(_i_+1) XLEN - 1 : _i_ XLEN] of `maceVBootSecret`.
+A write to the __i__-th CSR sets Bits [(_i_+1) XLEN - 1 : _i_ XLEN] of `haceVBootSecret`.
 
-Any access to the `maceVBootSecret` group outside of HS-mode causes an illegal instruction exception.
+Any access to the `haceVBootSecret` group outside of VS-mode and higher causes an illegal instruction exception.
 
-The values written to the `maceVBootSecret` group must follow the update rules defined in <<ACE-CSR-group-update-policy>>.
+The values written to the `haceVBootSecret` group must follow the update rules defined in <<ACE-CSR-group-update-policy>>.
 
 [NOTE]
 ====
-`maceVBootSecret` must be reconfigurable in order to support VM reboots which are independent of the boot cycles if the physical host.
+`haceVBootSecret` must be reconfigurable in order to support VM reboots which are independent of the boot cycles if the physical host.
 ====
 
 // ///////////////////////////////////////////////////////////////////////////////////////////
@@ -1723,6 +1726,9 @@ if (z == 0)
 
 if (there is not enough memory for the algorithm encoded in the metadata)
     error ace_err_memory
+
+if (metadata is inconsistent)
+  error ace_err_invalid_value
 
 - Complete metadata parsing.
 // NEXT OPERATION PREEMPTIBLE WITH `ACESTART` IN [8 .. Z+7]
