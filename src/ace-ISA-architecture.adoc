@@ -387,7 +387,7 @@ The function of these fields must be finalized.
 
 Filtering by time is simple.
 The ACE Unit must have access to a secure clock, and the current time must be compared with it.
-When the current time is beyond the expiration time in the metadata, the ACE Unit invalidates the CC.
+When the current time is beyond the expiration time in the metadata, the ACE Unit invalidates the CR (see <<ACE-invalidation>>), and the `aceerror` CSR takes the value _ace_err_expired_CR_ (see <<ACE-CSR-ace-error>>).
 
 We discuss now filtering by process domain.
 
@@ -1029,7 +1029,9 @@ since `ace.init`, `ace.import` and `ace.input` can be seen as special kinds of l
 // as ACE is architected to behave like an _attached_ unit, which may have its own interfaces.
 
 NOTE: The operation follows the two-phases processing model defined in <<ACE-init-export-import>>.
-In the first phase, the metadata block is read, which determines the length of the remaining information.
+In the first phase, the metadata block is read, which determines whether the encoded algorithm and its side-channel protection are implemented
+zzzzzz
+the length of the remaining information.
 Then, in the second phase, the configuration material is read and processed.
 
 //
@@ -1713,11 +1715,15 @@ We start with the algorithm performed by `ace.init`, which reads an II and uses 
 ----
 M : array of bytes // in memory
 
-metadata : bits(64) = M[0 .. 7] // PREEMPTIBLE WITH `ACESTART` IN [0 .. 7]
+// PREEMPTIBLE WITH `ACESTART` IN [0 .. 7]
+metadata : bits(64) = M[0 .. 7]
 z ← II_content_size(metadata[31:0]);
 
-if (z == 0) // Not enough CRF capacity left for the algorithm encoded in the metadata
-   error ace_err_memory
+if (z == 0)
+   error ace_err_unimplemented
+
+if (there is not enough memory for the algorithm encoded in the metadata)
+    error ace_err_memory
 
 - Complete metadata parsing.
 // NEXT OPERATION PREEMPTIBLE WITH `ACESTART` IN [8 .. Z+7]
@@ -1780,11 +1786,11 @@ else
 
 {enc_key, auth_key} = RFC8452_KeyDeriv(CSK);
 
-metadata.State_Number <- ace_state_initial
+metadata.State_Number ← ace_state_initial
 tmp ← POLYVAL(auth_key, zeros(64) @ metadata @ content[]);
 SIV ← AESE(enc_key, 0 @ tmp[126:0]));
 
-metadata.State_Number <- ace_state_invalid
+metadata.State_Number ← ace_state_invalid
 
 // FOLLOWING MEMORY WRITE PREEMPTIBLE, `ACESTART` FROM 0 TO 7
 M[0 .. 7] ← (metadata[63:33] xor AESE(enc_key, 1 @ SIV[126:0])[30:0])
@@ -1804,7 +1810,7 @@ foreach(i from 0 to num_blocks - 1) {
          xor AESE(enc_key, 1 @ SIV[126:32] @ (SIV[31:0] + bin(i+1, 32) % 2**32);
 }
 
-metadata.State_Number <- ace_state_initial
+metadata.State_Number ← ace_state_initial
 ----
 
 The import Algorithm needs some special care:
@@ -1814,8 +1820,8 @@ The import Algorithm needs some special care:
 * When control is returned, the previous value of `metadata.State_Number` is restored.
 * How to implement this is implementation dependent, but the corresponding information is stored in the CR, i.e., there must be a bit signaling whether a value of `metadata.State_Number` has been saved and a 4-bit field with this.
 * If, upon returning to the interrupted process, the bit signaling that a value for `metadata.State_Number` has been saved is unset, the operation must be restarted.
-* The first read is the read of the metadata block itself. If fewer than 4 bytes are read, the instruction is interrupted with `acestart` = 0 so it will be restarted.
-If at least 4 bytes have been read, the value of `metadata.State_Number` are known.
+* The first read is the read of the metadata block itself. If fewer than 4 bytes are read, the instruction is interrupted with `acestart` = 0, so it will be restarted.
+If at least 4 bytes have been read, the value of `metadata.State_Number` is known.
 
 [[ACE-SCC-import]]
 .Importing a SCC into a CR
@@ -1830,13 +1836,17 @@ tmp : bits(128);
 
 // FOLLOWING MEMORY READ PREEMPTIBLE, `ACESTART` FROM 0 TO 7
 metadata : bits(64) ← M[0 .. 7]
+
+z ← SCC_content_size(metadata[31:0]);
+if (z == 0)
+    error ace_err_unimplemented
+
 if (there is not enough memory for the algorithm encoded in the metadata)
     error ace_err_memory
 
-saved_SN : bits(4) <- metadata.State_Number
-metadata.State_Number <- saved_SN
+saved_SN : bits(4) ← metadata.State_Number
+metadata.State_Number ← saved_SN
 
-z ← SCC_content_size(metadata[31:0]);
 num_blocks ← ceil(z / 16);
 last_block_fractional : boolean ← (z % 16 != 0);
 
@@ -1875,7 +1885,7 @@ if (tag != SIV) then { aceerror ← ace_err_import; return }
 - as well as creating shares for threshold implementations.
 
 // FINALLY:
-metadata.State_Number <- ace_state_initial
+metadata.State_Number ← ace_state_initial
 ----
 
 //
