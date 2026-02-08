@@ -207,7 +207,7 @@ For software portability and interoperability, ACE defines two external formats 
 . The Sealed Cryptographic Context (SCC) (<<ACE-format-SCC>>), an encrypted, authenticated format used when exporting a CR to memory for later re-import.
 
 Both formats rely on the same metadata section format, which is described here.
-The formats of the II and the SCC are described in <<ACE-init-export-import>> and <<ACE-format-SCC>>, respectively.
+The II and SCC formats are described in <<ACE-init-export-import>> and <<ACE-format-SCC>>, respectively.
 
 {empty}
 (((Cryptographic Context,metadata,format)))
@@ -284,7 +284,7 @@ These key types are encoded as follows:
 |   1   | System Key.
 |===
 
-System Keys are given by an index into an internal, system-specific System Keys Table (SKT). For each algorithm as specified in <<ACE-algorithms>>, the part of the content that normally contains the key(s) is replaced by its index into the SKT-for both II and the SCCs. The actual value of the key is never included in exported content. For threshold implementations, ACE may copy the key material from the SKT into the CR and expand it into multiple shares.
+System Keys are given by an index into an internal, system-specific System Keys Table (SKT). For each algorithm as specified in <<ACE-algorithms>>, the part of the content that normally contains the key(s) is replaced by its index into the SKT-for both II and SCCs. The actual value of the key is never included in exported content. For threshold implementations, ACE may copy the key material from the SKT into the CR and expand it into multiple shares.
 
 System Generated Keys are also system-specific. In place of the II, the initialization operation reads a system-specific “recipe”, which is not portable. After internal key generation, the actual key value—not the recipe—is stored in the CR and SCC. The Key_Type field in the metadata is 0.
 
@@ -1187,7 +1187,7 @@ Description::
 Performs a cryptographic operation such as an encryption or decryption, absorbing a value in a hash,
 an elliptic curve point addition or scalar multiplication, etc., and possibly returning a value.
 +
-If the V extension register file is not implemented, only Form D of `ace.exec` is supported
+If the V extension register file is not implemented, only Form D is supported
 (the derived Forms used to define other instructions are still supported) and `ace.input`, `ace.output` must be used to
 provide inputs and extract outputs from `ace.exec`.
 <<ACE-usage-input-output>> describes how this is done.
@@ -1413,18 +1413,17 @@ On RV64, the semantics of the instruction are:
 If `Xs`[12:33] = 0, then ACE error _ace_err_invalid_value_ is raised.
 ** If `m`[12:11] != `0b11`, then it must be `Xs`[12:11] = `m`[12:11] or `Xs`[12:11] = 0, in which case no change is made, else ACE error _ace_err_invalid_value_ is raised
 
-* If the algorithm in the CR does not encryption and decryption, then `Xs`[12:11] must be 0, else ACE error _ace_err_invalid_value_ is raised
+* If the algorithm in the CR does not support encryption and decryption, then `Xs`[12:11] must be 0, else ACE error _ace_err_invalid_value_ is raised
 * `Xs`[14:13] is used to turn on side-channel protection or increase its level, if implemented. The level is encoded according to <<ACE-SC-protection-levels>>.
-Downgrading protection level is not permitted. Attempting to do so raises ACE error _ace_err_invalid_ (<<ACE-error-codes>>).
+Downgrading protection level is not permitted. Attempting to do so raises ACE error _ace_err_invalid_value_ (<<ACE-error-codes>>).
 
 * A zero in any of the three bits `Xs`[28:26] means that the corresponding policy is _not_ changed.
 * A one in any of the three bits `Xs`[28:26] means that usage by the corresponding mode is forbidden, and the corresponding bit in the metadata of the destination CC is set to 1.
-* `Xs`[32:29] can be non-zero only if `m`[32:29] is 0, in which case  `m`[59:35] <- `Xs`[59:35], else ACE error _ace_err_invalid_value_ is raised
+* `Xs`[32:29] can be non-zero only if `m`[32:29] is 0, in which case  `m`[32:29] <- `Xs`[32:29], else ACE error _ace_err_invalid_value_ is raised
 * This instruction cannot set a Locality.
 --
 +
-On RV32, `s` must be even, the register pair `X[s]` and `X[s+1]` is read,
-and `(X[s+1] @ X[s])` replaces `Xs` in the RV64 description.
+On RV32, `s` must be even, the register pair `X[s]` and `X[s+1]` are read, and `(X[s+1] @ X[s])` replaces `Xs` in the RV64 description.
 
 NOTE: Setting multiple bits of `Xs`[32:29] may change the metadata format from 64 bits to 128 bits.
 
@@ -1493,7 +1492,7 @@ Trappable: *YES*, it can be implemented as an export followed by an import in a 
 Interruptible: *NO*.
 
 Description::
-Clones source CR `Ks` (or the CR indexed by `Xs`) into destination CR `Kd` (or into the CR indexed by `Xd`).
+Clones source CR `Ks` (or the CR indexed by `Xs`) into destination CR `Kd` (or the CR indexed by `Xd`).
 
 // NOTE: The `ace.clone` instruction is an optimization for the sequence `ace.export` followed by `ace.import`. While reusing cryptographic state (e.g., encrypting with the same counter) can enable certain attacks, this risk cannot be eliminated by omitting `ace.clone`, as a state can be exported and re-imported multiple times.
 
@@ -1581,7 +1580,7 @@ For this reason, the architecture defines `ace.input` and `ace.output` (cf. next
 `ace.input` reads `Xl` bytes from memory starting at address `%offset(Xs)` and copies them to the input buffer, starting at offset `acestart`.
 +
 If `Xl` == `0`, the operation is a NOP. +
-`Xl` may be not greater than `aceiobuftop` - `acestart`. +
+`Xl` may not be greater than `aceiobuftop` - `acestart`. +
 If `Xl` is greater than `aceiobuftop` - `acestart`, ACE error _ace_err_invalid_value_ is raised.
 +
 The intended usage of `ace.input` and `ace.output` is explained in detail in <<ACE-usage-input-output>>. +
@@ -1612,8 +1611,8 @@ Description::
 This is the output operation corresponding to `ace.input`.
 `ace.output` writes the contents of the input buffer, starting at offset `acestart`, to memory starting at address `%offset(Xs)`.
 +
-If `Xl` == `0`, the operation is a nop. +
-`Xl` may be not greater than `aceiobuftop` - `acestart`. +
+If `Xl` == `0`, the operation is a NOP. +
+`Xl` may not be greater than `aceiobuftop` - `acestart`. +
 If `Xl` is greater than `aceiobuftop` - `acestart`, ACE error _ace_err_invalid_value_ is raised.
 Properties::
 Possibly modifies state: *YES*. +
@@ -1626,10 +1625,10 @@ Interruptible: *YES*.
 [[ACE-init-export-import]]
 === Initialization, Export and Import of Cryptographic Contexts
 
-From the point of view of the system outside the ACE unit, `ace.init` and `ace.import` appear a series of sequential memory reads, and `ace.export`, appear a series of sequential memory writes.
+From the point of view of the system outside the ACE unit, `ace.init` and `ace.import` appear as a series of sequential memory reads, and `ace.export`, appears as a series of sequential memory writes.
 
 The only admissible points of interruption of these instructions are the memory read or write operations.
-The instructions may be interrupted because of a memory exception, and any other type of interrupt must either wait until the next memory read or write.
+The instructions may be interrupted because of a memory exception, and any other type of interrupt must wait for the next memory read or write.
 They may resume from the point of interruption only if the control flow is returned to them immediately after the interrupt handler has completed.
 The privileged interrupt handler must ensure that the instruction is restarted only in this situation, and in any other circumstance, including context switching, the instruction must be restarted, in which case if the instruction is `ace.init` or `ace.import` it must also clear the CR.
 The implementation will also restart any operation if the internal state of the CR is not in a valid interrupted state.
@@ -1648,7 +1647,7 @@ Architecturally, `content[]` is the serialization of the content of a CR for exp
 
 [NOTE]
 --
-While `content[]` provides a view of (certain fields of) the content of a CR that matches the serialized SCC format, it needs not be converted to and from the internal representation and explicitly stored in the ACE unit's memory before export and after import.
+While `content[]` provides a view of (certain fields of) the content of a CR that matches the serialized SCC format, it need not be converted to and from the internal representation and explicitly stored in the ACE unit's memory before export and after import.
 
 `content[]` is a virtual representation: its byte ordering does not imply physical contiguity within the CR, nor is there a direct byte-for-byte correspondence. Changes to `content[]` are reflected in the underlying CR representation (except for excluded fields), and vice versa.
 
@@ -1662,8 +1661,8 @@ Suppose `x` is a variable representing the first 32 bits of the metadata section
 We assume that the implementation provides the following functions (or an equivalent mechanism):
 
 . `MD_size(x)` returns the byte length of the entire metadata section. Currently, always 8.
-. `II_content_size(x)` returns the size in bytes of the content section of an II. It only depends on the 11 bits `Key_Type @ Algorithm`.
-. `SCC_content_size(x)` returns the size in bytes of the content section of an SCC. It only depends on the 13 bits `Direction_Policy @ Key_Type @ Algorithm`.
+. `II_content_size(x)` returns the size in bytes of the content section of an II. It depends only on the 11 bits `Key_Type @ Algorithm`.
+. `SCC_content_size(x)` returns the size in bytes of the content section of an SCC. It depends only on the 13 bits `Direction_Policy @ Key_Type @ Algorithm`.
 
 The total size of an II is therefore `MD_size(x)` + `II_content_size(x)`, and the total size of an SCC is `MD_size(x)` + `SCC_content_size(x)`.
 
@@ -1729,7 +1728,7 @@ NOTE: Due to the computational cost of the derivation functions, implementations
 cache recently used derived keys for both the Root RCSK and Locality-derived keys.
 
 [[ACE-SCC-export]]
-.Generation of the SCC from a CR
+.Generation of an SCC from a CR
 []
 ----
 metadata : bits(64);              // from the CR
@@ -1863,15 +1862,15 @@ metadata.State_Number ← ace_state_initial
 {empty}
 (((ACE, algorithm, invalid state)))
 (((Cryptographic Register, invalidation)))
-If an invalid input is provided to any ACE instruction, or an instruction that is not explicitly allowed in a given state is executed, while processing the algorithm in CR, say, `Kn`, the `Kn` is *invalidated*, namely, the following happens:
+If an invalid input is provided to any ACE instruction, or an instruction that is not explicitly allowed in a given state is executed, while processing the algorithm in CR, say, `Kn`, then `Kn` is *invalidated*, namely, the following happens:
 
 * `Kn` is put into state _invalid_;
 * For instructions that refer to `Kn`:
- ** `ace.init`, `ace.clear` (thus also `ace.reset`), `ace.import`, `ace.export`, `ace.size` and `ace.available` work normally.
+ ** `ace.init`, `ace.clear` (thus also `ace.reset`), `ace.import`, `ace.export`, `ace.size` and `ace.available` work normally;
  ** `ace.exec`, `ace.clone`, `ace.derive`, and `ace.restrict` raise an ACE error _ace_err_invalid_CR_;
  ** `ace.input` and `ace.output` raise an ACE error _ace_err_invalid_CR_ when `aceactivecr` is `Kn`;
  ** `ace.state` raises an ACE error _ace_err_invalid_CR_, unless it is used to return to state _initial_;
- ** `ace.error` always returns error _ace_err_invalid_CR_ after any operation involving the CR except for `ace.import` and `ace.export`, `ace.clean`, `ace.init`, and `ace.size`, which all work normally, and using `ace.state` to return to state _initial_.
+ ** `ace.error` always returns error _ace_err_invalid_CR_ after any operation involving the CR except for `ace.import` and `ace.export`, `ace.clear`, `ace.init`, and `ace.size`, which all work normally, and using `ace.state` to return to state _initial_.
 * The current instruction is terminated.
 
 In State _completed_, only `ace.init`, `ace.export`, `ace.import`, `ace.clear`, and `ace.error` are permitted.
@@ -1920,15 +1919,15 @@ _This section is currently informative and non-normative._
 ACE has been architected so that in properly written code, the most common executed instructions, namely `ace.exec` and `ace.state`, rarely have to deal with errors.
 Errors should occur mostly with configuration operations, caused by insufficient CRF capacity or while authenticating SCCs.
 
-However, revocation of localities or reached expiration dates may cause a CR to suddenly became invalid just before executing an `ace.exec` or `ace.state` instruction.
+However, revocation of localities or reached expiration dates may cause a CR to suddenly become invalid just before executing an `ace.exec` or `ace.state` instruction.
 Requiring software to check for errors after each operation
 would impose significant burden on the software and possibly degrade performance.
 
 Horizontal traps can be used to implement a try/catch mechanism:
 
-. At the start of a subroutine that performs a cryptographic protocol, the address of the “catch” code as well as a mask with the error types to catch are loaded in two CSRs.
+. At the start of a subroutine that performs a cryptographic protocol, two CSRs are configured with the address of the “catch” code and with a mask with the error types to catch.
 . The code is written without considering the exceptions to be caught, usually only _ace_err_invalid_ or _ace_err_expired_.
-. If the code runs without such errors, then the two CRSs are reset and the routine returns normally.
+. If the code runs without such errors, then the two CSRs are reset and the routine returns normally.
 . If, say, an _ace_err_invalid_ or _ace_err_expired_ error is raised, the horizontal trap diverts the control flow to the catch code, which usually cleans up, and returns to the caller of the subroutine, not to the routine itself, with an error code.
 
 The main application of such code is when revocation or expiration cause a CR to become invalid.
@@ -1979,8 +1978,8 @@ Information that must be maintained in the internal state of a CC.
 The fields are unordered and their lengths may differ from those listed, for example in threshold or fault-tolerant implementations where redundancy is added.
 
 . *Serialized Content*:
-The data that follows the metadata block in the plaintext portion of the SCC.
-The fields are listed in the order they appear in the SCC, each with its length.
+The data that follows the metadata block in the plaintext portion of an SCC.
+The fields are listed in the order they appear in an SCC, each with its length.
 --
 +
 
@@ -2061,7 +2060,7 @@ An example is given by the automatic transitions from hash finalization to verif
 ===== Usage of `ace.input` and `ace.output` to Replace Vector Inputs and Outputs
 
 The `ace.input` and `ace.output` instructions may be used to replace the inputs and outputs to Forms A-C of `ace.exec`, the auxiliary inputs of Form C `ace.state` or of Form C of `ace.derive` in any algorithm, to the point that an implementation of ACE without the V extension or a subset thereof is possible.
-Forms A, B, and C of `ace.exec`, as well as Forms C of `ace.derive` and `ace.state`, can be replaced
+Forms A, B, and C of `ace.exec`, as well as Forms C of both `ace.derive` and `ace.state`, can be replaced
 by using `ace.input` and `ace.output` instructions surrounding a Form D `ace.exec` instruction or preceding
 a Form A `ace.state`, or a Form A `ace.derive` instruction as follows:
 
@@ -2169,8 +2168,8 @@ that implement side-channel protection in different ways.
 
 System keys will change all the algorithms described here in the following way:
 
-. In the II and in the SCC, the key field will contain the index of the key in place of the value.
-. This field is reduced from the original key size to a 64-bit value. This saves space in the SCC and allows for faster export and import operations.
+. In an II and in an SCC, the key field will contain the index of the key in place of the value.
+. This field is reduced from the original key size to a 64-bit value. This saves space in an SCC and allows for faster export and import operations.
 . For algorithms that require more than one key, such as XEX/XTS, a single index is still used to an entry in the SKT that contains multiple keys-and thus a single 64-bit value in the II and SCC.
 
 //
@@ -4460,7 +4459,7 @@ An `ace.init` operation can be interrupted at any 8-byte boundary and resumed fr
 
 NOTE: Resuming an operation may be more costly than restarting it without saved state. A third alternative—waiting to complete the operation—could introduce unacceptable delays.
 
-When exporting a partial CR, a Partial CR Metadata (PCREM) header is used as the first 8 bytes of the SCC, preceding the nonce, SIV, and content sections as defined in <<ACE-format-SCC>>.
+When exporting a partial CR, a Partial CR Metadata (PCREM) header is used as the first 8 bytes of an SCC, preceding the nonce, SIV, and content sections as defined in <<ACE-format-SCC>>.
 
 [[ACE-metadata-partial]]
 .Format of the partial CR Metadata (PCREM)
