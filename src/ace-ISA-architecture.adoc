@@ -622,7 +622,7 @@ Using an incomplete CC in `ace.size` is allowed.
 If a Form of `ace.exec`, `ace.state` or `ace.derive` that is not permitted in the current algorithm state is used, then an illegal instruction exception is raised.
 
 [WARNING]
-Bit __i__ correspond also to bit __i__-1 in mask registers that determine whether the error traps instead of being handled directly by the software by checking `ace.error`.
+ACE error code __i__ corresponds to bit \#__i__ in a mask CSR (or more than one) that determines whether the error traps instead of being handled directly by the software by checking `ace.error`.
 This may be also a horizontal trap. Details [.red]#TBD#.
 
 [comment]
@@ -731,11 +731,13 @@ Reconfiguring `aceiobuftop` will not invalidate the buffer contents.
 
 Writing to `aceiobuflen` will set `aceiobuftop` to the same value.
 
-Using the ACEIOBUF while `aceiobuftop`-`acestart` is zero or an invalid value raises ACE error _ace_err_invalid_value_.
+Using the ACEIOBUF while `aceiobuftop`-`acestart` is zero (`aceiobuflen` being non-zero) or an invalid value raises ACE error _ace_err_invalid_value_.
 
-NOTE: The purpose of `aceiobuftop` is not to allow the buffer to be used as a kind of scratchpad memory, but it simply an optimization to avoid having to reconfigure the buffer in case the algorithms require inputs of variable lengths such as the last blocks of an operation or providing IVs/nonces while still processing multiple blocks at the same time. In this case the buffer is configured to the maximum value that is used while processing the payloads while `aceiobuftop` is made shorter for certain operatons.
-Reconfiguring would instead imply zeroing the contents to avoid leaking sensitive data and possibly incurring in an additional performance hit if the ACEIOBUF is resized.
-A proper use as a scratchpad memory for cryptographic operations would have required the definition or arbitrary ranges, namely also with bases, using `acestart` are relative to the base, and for both input and output.
+NOTE: The `aceiobuftop` CSR is an optimization to avoid reconfiguring the ACEIOBUF when algorithms require variable-length inputs.
+One such situation may occur when, say, processing 4 or 8 blocks at a time, and at the end of a payload there is a smaller residual number of blocks.
+Another example is when providing IVs/nonces. Software can configure the buffer to the maximum size it intends to use and then adjust `aceiobuftop` for shorter operations. Reconfiguration would necessitate zeroing the buffer to prevent data leakage and could incur a performance penalty if internal resizing occurs.
+The purpose of the ACEIOBUF is not to serve as a general scratchpad memory for cryptographic operations.
+//would require defining arbitrary ranges with base addresses and using `acestart` relative to those bases for both input and output.
 
 //
 
@@ -744,10 +746,8 @@ A proper use as a scratchpad memory for cryptographic operations would have requ
 
 This is an XLEN-bit URO CSR (2 bits defined).
 
-It takes the value zero if we are using vector registers for the current `ace.exec` or `ace.derive`.
-It may take non-zero values only if using `ace.input`/`ace.output` in place of vector registers.
-
-Its usage in conjunction with the `ace.input` and `ace.output` operations is detailed in <<ACE-usage-input-output>>.
+Its value is zero if we are using vector registers for the current ACE instruction.
+It may take non-zero values only if using `ace.input`/`ace.output` in place of vector registers, as detailed in <<ACE-usage-input-output>>.
 
 //
 
@@ -761,7 +761,7 @@ It can take values 0 to 31, or 32 to disable the tie.
 
 It can only be changed if `acesequence` is zero, else an illegal instruction exception is raised.
 
-If the value is not 32, the CR in all single-CR instructions, and the source CR in `ace.derive` or `ace.clone` can only have this value, otherwise an illegal instruction exception is raised.
+If the value is not 32, then the CR in all single-CR instructions, and the source CR in `ace.derive` or `ace.clone` can only have this value, otherwise an illegal instruction exception is raised.
 This serves to make sure that the instructions are issued in the correct order.
 
 //
@@ -1519,8 +1519,6 @@ Bits [27:26], i.e., field `R`, take the following values depending on how the CR
 . `01`{nbsp}{nbsp} if the source CR is encoded as immediate and the output CR is selected using a GPR.
 . `10`{nbsp}{nbsp} if the source CR is selected using a GPR and the output CR is encoded as an immediate value.
 . `11`{nbsp}{nbsp} if the source and the output CRs are both selected using the values of GPRs.
-
-(The first digit is bit 27 and the second digit is bit 26.)
 
 // Comment to ensure proper indentation in the next Description
 
