@@ -588,7 +588,7 @@ Reading it may stall the hart until the operation completes.
 
 It is writable for context switching.
 
-We say that some event _raises ACE error_ _some_number_ when it causes value _some_number_ to be written to `aceerror`.
+We say that some event _raises ACE error_ _some_number_ when it causes `aceerror` to take the value _some_number_.
 Other actions may be triggered by the same event, such as raising an exception causing a vertical or a horizontal trap:
 The value of `aceerror` may be used by the handler to determine the nature of the error and take appropriate action.
 
@@ -601,7 +601,7 @@ The standard error codes are:
 |===
 |Value | Mnemonic                     | Examples (((ACE, error codes)))
 |  0   | _ace_err_ok_                 | No error.
-|  1   | _ace_err_import_             | Authentication failure with `ace.import`.
+|  1   | _ace_err_import_auth_        | Authentication failure with `ace.import`.
 |  2   | _ace_err_unconfigured_       | Software used an unconfigured or _invalid_, but not expired, or partially configured CR as a source in any instruction except `ace.size`. +
 Software used an unconfigured ACEIOBUF as an input or an output.
 |  3   | _ace_err_invalid_CR_         | Attempt to use an invalid CR.
@@ -614,11 +614,12 @@ ACE operation issued with invalid or zero ACEIOBUF length `aceiobuftop`-`acestar
 Invalid input to `ace.restrict`.
 |  8   | _ace_err_privilege_          | Violation of usage control policies in metadata (including Filters).
 |  9   | _ace_err_state_error_        | Not allowed state transition in `ace.state`, including requesting encryption or decryption from a CC not allowing it.
-| 10   | _ace_err_not_permitted_      | A Form of `ace.exec`, `ace.state` or `ace.derive` that is not permitted in the current algorithm state is used;
-| 11   | _ace_err_auth_               | Authentication failure in an algorithm.
+| 10   | _ace_err_auth_               | Authentication failure in an algorithm.
 |===
 
 Using an incomplete CC in `ace.size` is allowed.
+
+If a Form of `ace.exec`, `ace.state` or `ace.derive` that is not permitted in the current algorithm state is used, then an illegal instruction exception is raised.
 
 [WARNING]
 Bit __i__ correspond also to bit __i__-1 in mask registers that determine whether the error traps instead of being handled directly by the software by checking `ace.error`.
@@ -1882,7 +1883,7 @@ foreach(i from 0 to num_blocks - 1) {
 }
 
 tag ← AESE(enc_key, 0 @ tmp[126:0]);
-if (tag != SIV) then { aceerror ← ace_err_import; return }
+if (tag != SIV) then { aceerror ← ace_err_import_auth; return }
 - Now the content can be deserialized.
 - This includes computing any derived values not saved as part of the SCC,
 - as well as creating shares for threshold implementations.
@@ -2647,7 +2648,7 @@ State Machine:::
 
  ** To transition to state _hash_absorb_:
  the ``ace.state`` instruction must be a Form C to set the IV, i.e., the fixed part of the counter.
- Other forms of  ``ace.state`` raise ACE error ace_err_not_permitted and the CR is *invalidated*. Then:
+ Other forms of  ``ace.state`` raise an illegal instruction exception and the CR is *invalidated*. Then:
    . `ctr <- INPUT @ (b/4-1)b'0 @ 1`, i.e., the `b/4` most significant bits of `INPUT` are ignored, and the `b/4` least significant bits of `ctr` represent the integer 1.
   *** If the ``ace.state`` instruction is repeated, it will just update the counter again.
   *** If `IOLEN` > `b`, only the `b` least significant bits of `INPUT` are considered.
@@ -2867,7 +2868,7 @@ The differences between GCM and GCM with set IV start with the format of the Ini
  the ``ace.state`` instruction must be used _without any additional inputs_, since the IV is already included in the II.
 
  ** Once in state _completed_, the CC with this algorithm *cannot* be brought back to state _initial_.
-Other forms of ``ace.state`` raise ACE error _ace_err_not_permitted_ and the CR is *invalidated*.
+Other forms of ``ace.state`` raise an illegal instruction exception and the CR is *invalidated*.
 
 These rules do not prevent cloning the CR at the beginning and reusing it, but, for decryption, it can only be used with the intended ciphertext.
 
@@ -2973,7 +2974,7 @@ State Machine:::
   *** (If the instruction is repeated, there is no harm, since it just overwrites the `nonce` before any other operation is performed.)
 
 ** Upon issuing a Form A or B ```ace.state Kn|K[Xn], #ace_state_set_aux_value```:
-  *** An ACE error _ace_err_not_permitted_ is raised and the CR is *invalidated*.
+  *** An illegal instruction exception is raised and the CR is *invalidated*.
 
 ** Upon issuing a Form C ```ace.state Kn|K[Xn], #ace_state_hash_absorb, INPUT```:
   *** The values of `SIV` is set to `INPUT`.
@@ -2986,7 +2987,7 @@ State Machine:::
       If used during decryption, by leaving the `SIV` to zero it will most likely lead to an authentication error.
 
  ** Upon issuing a Form B ```ace.state Kn|K[Xn], #ace_state_hash_absorb, Xm```:
-  *** An ACE error _ace_err_not_permitted_ is raised and the CR is *invalidated*.
+  *** An illegal instruction exception is raised and the CR is *invalidated*.
 
  ** In State _hash_absorb_, only ``ace.exec`` instructions of Form B are allowed.
    This instruction absorbs its `INPUT` in the `tag`, i.e., it performs `absorb(INPUT)`. +
@@ -3248,7 +3249,7 @@ State Machine:::
 
 ** To move to _set_aux_value_, a Form A `ace.state` must be used, where the auxiliary argument `Xs` sets the nonce length `N_len`.
  `N_len` must be at least `g-1`. If not, ACE error _ace_err_invalid_value_ is raised, and the CR is *invalidated*.
- If a different form of `ace.state` is used, then ACE error _ace_err_not_permitted_ is raised, and the CR is *invalidated*.
+ If a different form of `ace.state` is used, then an illegal instruction exception is raised, and the CR is *invalidated*.
 
 ** In State _set_aux_value_, only  ``ace.exec`` instructions of Form B, “```ace.exec Kn|K[Xn], INPUT```”, are allowed, whereby `N` is set to `INPUT`, namely
      `N <- zeros(u-N_len) @ INPUT[N_len-1:0]`
@@ -3258,7 +3259,7 @@ State Machine:::
 
 ** To move to _hash_absorb_, a Form A `ace.state` must be used, where the auxiliary argument `Xs` sets the tag length `tag_len`.
   *** If this argument (interpreted as an unsigned value) is larger than `b` or is equal to `0` (the latter occurs also if `X0` is passed as the auxiliary argument), an _ace_err_invalid_value_ error is raised, and the CR is *invalidated*.
-  *** If different Form of `ace.state` is used, then ACE error _ace_err_not_permitted_ is raised, and the CR is *invalidated*.
+  *** If a different Form of `ace.state` is used, then an illegal instruction exception is raised, and the CR is *invalidated*.
   *** If `N[u] == 1`, this means that `N` was not set in state _set_aux_value_. We do not allow code that skips nonce setting, as this mode is not secure under nonce reuse, therefore in this case ACE error _ace_err_invalid_value_ is raised, and the CR is *invalidated*.
   *** Following operations are performed:
   . `tag_len` <- `Xs`.
