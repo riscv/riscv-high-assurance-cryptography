@@ -10,7 +10,7 @@ While this leads to some repetitions, we believe that it also brings better clar
 Cryptographic Context:::
 (((Cryptographic Context)))
 The *Cryptographic Context* (CC) is the fundamental concept in ACE.
-A CC an indivisible data structure comprising a *metadata* section and a *content* section, and all cryptographic operations performed by ACE execute within the constraints defined by a CC.
+A CC is an indivisible data structure consisting of a *metadata* section and a *content* section, and all cryptographic operations performed by ACE execute within the constraints defined by a CC.
 The metadata section's format is fixed, and it specifies the cryptographic algorithm associated to the CC and optional usage control policies.
 (((Cryptographic Context, metadata)))
 The content's format is algorithm-specific, and it holds sensitive material such as keys and internal algorithm state.
@@ -48,21 +48,19 @@ Usage Control Policy:::
 (((Cryptographic Context, usage operations)))
 ACE distinguishes between CC/CR *management* and *usage* operations.
 (((Cryptographic Context, export)))
-Management operations include *configuration* (e.g., initialization, import, cloning, key derivation from one CR to another) and *export*.
+Management operations include *configuration* (e.g., CR initialization, import of a SCC, cloning or key derivation from one CR to another) and *export* of a CR as a SCC.
 Usage operations include cryptographic operations and state change;
 key derivation is both a configuration and a usage operation.
 (((Cryptographic Context, access)))
-All operations represent a form of *access* to CRs. +
+All operations represent a form of *access* to CRs.
 To prevent denial of service scenarios, management operations must _always_ be permitted, unless the CR is an invalid state.
-Accordingly, optional _Usage Control_ policies restrict only certain CC/CR usage operations.
-For this reason, the term _Usage Control_ is used instead of _Access Control_.
+Accordingly, the _Usage Control_ policies restrict only certain CC/CR usage operations.
+Hence, our use of the term _Usage Control_ instead of _Access Control_.
 
 Locality:::
 (((Cryptographic Context, Locality)))
 Finally, ACE can bind CCs to a *Locality*, i.e., restrict usage to specific devices, device classes, software or hardware configurations, or boot cycles.
 This binding uses metadata when a CC is in a CR, and a _Derived Context Sealing Key_ (DCSK) derived from the _Root Context Sealing Key_ (RCSK) and a Locality-specific secret as the CSK for import and export.
-// The system maintains a _Locality Secrets Table_ (LST) with fixed, hardware-configured, and MM-programmable values.
-// Metadata stores the Locality as an index into this table (<<ACE-Localities>>).
 
 // ///////////////////////////////////////////////////////////////////////////////////////////
 
@@ -488,17 +486,18 @@ ACE extends `*status` and `misa`, and adds up to 12 (9) new CSRs, which are list
 |===
 
 [WARNING]
-To configure the `macercsk`, `maceBootSecret` `haceVBootSecret`, and `saceSSecret` CSR groups
+====
+* To configure the `macercsk`, `maceBootSecret` `haceVBootSecret`, and `saceSSecret` CSR groups
 we use the Indirect CSR Access defined in cite:[RISCV-ISA-Priv] instead.
-// <<indirect-csr>>
 
-[WARNING]
-`sacefilter`, `vsacefilter`, and `macefilter` are placeholders for CSRs to be defined during the ratification process
+* `sacefilter`, `vsacefilter`, and `macefilter` are placeholders for CSRs to be defined during the ratification process
 (<<ACE-CSR-saceSSecret>>).
 
-[WARNING]
-`acestart` may be overloaded with `vstart`, regardless of whether the V extension is available.
-If a vector instruction is interrupted, the CSR would follow the `vstart` semantics (i.e., it would count the number of processed elements), whereas if an ACE instruction is interrupted, the CSR would follow the `acestart` semantics (i.e., it would count the number of bytes processed).
+* `acestart` may be overloaded with `vstart`, regardless of whether the V extension is available.
+If a vector instruction is interrupted, the CSR would follow the `vstart` semantics-i.e., it would count the number of processed elements- whereas if an ACE instruction is interrupted, the CSR would follow the `acestart` semantics-i.e., it would count the number of processed bytes.
+====
+
+//
 
 ==== Extension to existing CSRs
 
@@ -526,9 +525,15 @@ The meanings of its values are given in <<ACE-aces-encoding>>.
 |Status |Name |Meaning
 |   0   | Off                | ACE disabled. CRs and the ACEIOBUF are inaccessible. The hart will trap if the user requests to enable the feature.
 |   1   | Initial            | ACE enabled. All CRs and the ACEIOBUF are unconfigured.
-|   2   | Clean              | ACE enabled. Some CRs or the ACEIOBUF are configured, and the state matches the last context swap.
-|   3   | Dirty              | ACE enabled. Some CRs or the ACEIOBUF may have been modified since the last context swap. This includes unconfigured states since switching code needs to act on them, by erasing any stale saved state.
+|   2   | Clean              | ACE enabled. At least one CR or the ACEIOBUF are configured, and the state matches the last context swap.
+|   3   | Dirty              | ACE enabled. At least one CR or the ACEIOBUF may have been modified since the last context swap. This includes unconfigured states since switching code needs to act on them, by erasing any stale saved state.
 |===
+
+The transitions between these states are the same as in Table “FS, VS, and XS state transitions” of cite:[RISCV-ISA-Priv]
+
+[NOTE]
+Accurate setting of `mstatus.ACES` is an optimization.
+Software will typically use ACES to reduce context-swap overhead.
 
 When `mstatus.ACES` is set to Off, executing any ACE instruction raise an illegal instruction exception.
 
@@ -536,20 +541,14 @@ When `mstatus.ACES` is set to Initial or Clean, executing any instruction that c
 Implementations may also change `mstatus.ACES` from Initial or Clean to Dirty at any time, even when there is no change in ACE state.
 // TODO: ace.reset should set Initial
 
-[NOTE]
-Accurate setting of `mstatus.ACES` is an optimization.
-Software will typically use ACES to reduce context-swap overhead.
-
 If `mstatus.ACES` (`sstatus.ACES`) is Dirty, `mstatus.SD` (`sstatus.SD`) is 1; otherwise, `mstatus.SD` (`sstatus.SD`) is set in accordance with existing specifications.
-
-Implementations may have a writable `misa.L` field. Analogous to the way in which the floating-point unit and the vector unit
-are handled, the `mstatus.ACES` field may exist even if `misa.L` is clear.
-
-The transitions between these states are the same as in Table “FS, VS, and XS state transitions” of cite:[RISCV-ISA-Priv]
 
 Writes to any ACES field do not affect the contents of the CRs or of the ACEIOBUF.
 Clearing state is not performed by setting ACES to Off, Initial, or Clean, and it must be explicitly done before changing ACES.
 
+Implementations may have a writable `misa.L` field. Analogous to the way in which the floating-point unit and the vector unit are handled, the `mstatus.ACES` field may exist even if `misa.L` is clear.
+
+//
 
 [[ACE-ACES-field-H]]
 ===== ACE Context Status in `vsstatus`
@@ -835,9 +834,8 @@ In this case, the `ACE` and `ACEIOBUF` fields in `sstatus` shall be un-shadowed.
 
 This is an optional group of M-Mode WARZ XLEN-bit CSRs used to configure `macercsk`.
 (((CSR, `macercsk`)))
-
-* In RV32 there are eight CSRs.
-* In RV64 there are four CSRs.
+In RV32 there are eight CSRs.
+In RV64 there are four CSRs.
 
 A write to the __i__-th CSR sets Bits [(_i_+1) XLEN - 1 : _i_ XLEN] of the RCSK.
 
@@ -878,9 +876,8 @@ and only change the key when the entire group has been written to.
 This is a group of M-Mode WARZ XLEN-bit CSRs used to configure `maceBootSecret`.
 These are addressed using Indirect CSR Access.
 (((CSR, `maceBootSecret`)))
-
-* In RV32 there are four CSRs.
-* In RV64 there are two CSRs.
+In RV32 there are four CSRs.
+In RV64 there are two CSRs.
 
 A write to the __i__-th CSR sets Bits [(_i_+1) XLEN - 1 : _i_ XLEN] of `BootSecret`.
 
@@ -896,9 +893,8 @@ The values written to the `maceBootSecret` group must follow the update rules de
 This is a group of H-and-VS-Mode WARZ XLEN-bit CSRs used to configure `haceVBootSecret`.
 These are addressed using Indirect CSR Access.
 (((CSR, `haceVBootSecret`)))
-
-* In RV32 there are four CSRs.
-* In RV64 there are two CSRs.
+In RV32 there are four CSRs.
+In RV64 there are two CSRs.
 
 A write to the __i__-th CSR sets Bits [(_i_+1) XLEN - 1 : _i_ XLEN] of `haceVBootSecret`.
 
@@ -918,9 +914,8 @@ The values written to the `haceVBootSecret` group must follow the update rules d
 
 This is a group of S-Mode WARZ XLEN-bit CSRs. It is used to configure `saceSSecret`.
 (((CSR, `saceSSecret`)))
-
-* In RV32 there are four CSRs.
-* In RV64 there are two CSRs.
+In RV32 there are four CSRs.
+In RV64 there are two CSRs.
 
 A write to the __i__-th CSR sets Bits [(_i_+1) XLEN - 1 : _i_ XLEN] of `saceSSecret`.
 
@@ -1010,7 +1005,7 @@ Description::
 `Xs` points to the region of memory containing the metadata and the key material.
 The II must be stored at a 8-byte aligned address, and its length must be a multiple of 8 bytes.
 +
-Similarly to entire-vector-register store instructions, `ace.init` appears to other harts as a sequence of individual reads.
+Similarly to vector store instructions, `ace.init` appears to other harts as a sequence of individual reads.
 
 Properties::
 Possibly modifies state: *YES*. +
@@ -1024,11 +1019,7 @@ since `ace.init`, `ace.import` and `ace.input` can be seen as special kinds of l
 `ace.export` and `ace.output` as special store instructions.
 // as ACE is architected to behave like an _attached_ unit, which may have its own interfaces.
 
-NOTE: The operation follows the two-phases processing model defined in <<ACE-init-export-import>>.
-In the first phase, the metadata block is read, which determines whether the encoded algorithm and its side-channel protection are implemented
-zzzzzz
-the length of the remaining information.
-Then, in the second phase, the configuration material is read and processed.
+The operation is described in detail in <<ACE-init-export-import>>.
 
 //
 
@@ -1104,13 +1095,15 @@ If `Xs` is out of range, ACE error _ace_err_invalid_value_ is raised.
 +
 The instruction must follow the interruptibility rules defined in <<ACE-CSR-acestart>> and <<ACE-init-export-import>>.
 
-Similarly to entire-vector-register store instructions, `ace.export` appears to other harts as a sequence of individual stores.
+Similarly to vector register store instructions, `ace.export` appears to other harts as a sequence of individual stores.
 
 Properties::
 Possibly modifies state: *NO*. +
 Usage-controlled: *NO*. +
 Trappable: *YES*. +
 Interruptible: *YES*.
+
+The operation is described in detail in <<ACE-init-export-import>>.
 
 //
 
@@ -1147,7 +1140,7 @@ and not the format defined by the present architecture
 (`ace.import`).
 +
 `ace.import` must follow the interruptibility rules defined in <<ACE-CSR-acestart>> and <<ACE-init-export-import>>.
-Similarly to entire-vector-register load instructions, `ace.import` appears to other harts as sequences of individual loads.
+Similarly to vector register load instructions, `ace.import` appears to other harts as sequences of individual loads.
 The behavior of `ace.import.S` is implementation defined.
 
 Properties::
@@ -1156,9 +1149,7 @@ Usage-controlled: *NO* +
 Trappable: *YES*. +
 Interruptible: *YES*.
 
-NOTE: The operation can be conceptually split into two phases.
-In the first phase, the metadata block is read, which determines the length of the remaining information.
-Then, in the second phase, the rest of the SCC is read and processed.
+The operation is described in detail in <<ACE-init-export-import>>.
 
 NOTE: The instruction encoding includes a single bit to indicate a system-defined format. If multiple such formats are supported, the data format itself must incorporate a unique identifier to differentiate them. The system is therefore responsible for embedding these identifiers within all system-defined formats.
 
@@ -1815,10 +1806,11 @@ The import algorithm needs some special care:
 * If an import operation is preempted, the hardware must save `metadata.State_Number` and set +
 `metadata.State_Number <- ace_state_invalid` before relinquishing control.
 * When control is returned, the previous value of `metadata.State_Number` is restored.
-* There must be a 4-bit internal temporary state containing the original value of `metadata.State_Number`.
-* If, upon returning to the interrupted process, the bit signaling that a value for `metadata.State_Number` has been saved is unset, the operation must be restarted.
-* The first read is the read of the metadata block itself. If fewer than 4 bytes are read before the instruction is interrupted, `acestart` = 0, so the instruction will be restarted.
-If at least 4 bytes have been read, the original value of `metadata.State_Number` is known, so the instruction may be restarted with `acestart` {ge} 4.
+* There must be a 4-bit internal temporary state containing the original value of `metadata.State_Number` and a flag indicating whether the value has been saved.
+* If, upon returning to the interrupted process, the bit signaling that a value for `metadata.State_Number` has been saved is unset, the operation is restarted.
+* The first read is the read of the metadata block itself:
+ ** If fewer than 4 bytes are read before the instruction is interrupted, `acestart` = 0, so the instruction will be restarted.
+ ** If at least 4 bytes have been read, the original value of `metadata.State_Number` is known, so the instruction may be restarted with `acestart` {ge} 4.
 
 [[ACE-SCC-import]]
 .Importing a SCC into a CR
@@ -1842,7 +1834,7 @@ if (there is not enough memory for the algorithm encoded in the metadata)
     error ace_err_memory
 
 saved_SN : bits(4) ← metadata.State_Number
-metadata.State_Number ← saved_SN
+metadata.State_Number ← ace_state_invalid
 
 num_blocks ← ceil(z / 16);
 last_block_fractional : boolean ← (z % 16 != 0);
