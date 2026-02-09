@@ -290,14 +290,37 @@ System Generated Keys are also system-specific. In place of the II, the initiali
 
 ===== State_Number Field
 
-The State_Number field must be zero in the II.
-Three values are architected for all algorithms: 0, 14, and 15, representing the _initial_, _invalid_, and _completed_ states, respectively.
-These denote a CC that is ready to operate, is in an invalid state, or has finished its operations.
+The State_Number field must be zero in an II.
+
+Some values of State_Number are architected, and are defined in <<ACE-state-constants-fixed>>.
+these include _initial_, _operate_, _invalid_, and _completed_, which correspond to values 0, 1, 14, and 15.
+These denote a CC that is ready to operate, it is in an operational state, is in an invalid state, or has finished its operations.
+
+[[ACE-state-constants-fixed]]
+.Constants defining CC states
+[float="center",align="center",width="100%",cols="^6%,<26%,<16%,<52%",options="header"]
+|===
+| Value | Mnemonic for the Constant       | State Name          | Description
+|   0   | _ace_state_initial_             | _initial_           | The context is initialized and ready for operation.
+|   1   | _ace_state_operate_             | _operate_           | Generic operational state.
+|  14   | _ace_state_invalid_             | _invalid_           | The algorithm has abnormally terminated or initialization/import have not completed.
+|  15   | _ace_state_completed_           | _completed_         | The algorithm has completed, not necessarily without error.
+|===
+
+All states different from _invalid_ are _valid states_.
+
+If an algorithm defines 16 or fewer states (including the four architected ones), the current state number is stored in the State_Number field.
+These algorithms are allowed to redefine _ace_state_hash_absorb_, but not the states _initial_, _invalid_ and _completed_.
+
+For algorithms with more than 16 states, an algorithm-specific representation is used in the CC content, and the State_Number field is restricted to the
+architected values, where _operate_ must be used in any operational state—i.e., different from _initial_, _invalid_, and _completed_.
+
+The state values for the symmetric algorithms defined in this specification are listed in <<ACE-state-constants-symmetric>>.
 
 During import and init, internally the State_Number field is set to _invalid_, and only at the end of the operation is it set to _initial_.
-This means, by the rules in <<ACE-invalidation>>, that a partially initialized/imported CR cannot be exported.
-This state change does not occur during `ace.export`, but operations that could modify the internal state should not be performed on a CR with an interrupted export operation.
-// (Privileged code should not use CCs from child processes anyway.)
+This means, by the rules in <<ACE-invalidation>>, that a partially initialized/imported CR cannot be exported. In particular, if a context switch occurs, that the more privileged code must unconfigure the CR, and upon resumption, the instruction will be restarted.  Only an invalid CR with an `acestart` different from zero is recognized as an incomplete CR allowing an init or import operation to resume.
+
+This state change to _invalid_ does not occur during `ace.export`, but operations that could modify the internal state should not be performed on a CR with an interrupted export operation.
 
 [NOTE]
 --
@@ -314,12 +337,6 @@ This works because the actual value of the key is not changed.
 However, if any value of the state (such as a counter, or a partial hash value) is altered between the interruption and resumption of an export operation, the resumed export may use an incorrect SIV for the remaining SCC data, causing a subsequent import to fail authentication. This is a general issue with CRs, since more privileged code can use them unless blocked by the UC_Policy. We do not consider this a security threat: it affects only SCC availability, not confidentiality or integrity,
 and privileged code can always deny resources to user processes.
 --
-
-If an algorithm defines 16 or fewer states (including _initial_, _invalid_, and _completed_, which correspond to values 0, 14, and 15), the current state number is stored directly in this field. For algorithms with more than 16 states, an algorithm-specific representation is used in the CC content, and the State_Number field is restricted to the values 0, 1, 14, and 15, where 1 serves as a placeholder for any operational state other than the three architected ones.
-
-The state values for algorithms defined in this specification are listed in <<ACE-state-constants>>.
-
-All states different from _invalid_ are called valid states.
 
 //
 
@@ -1244,7 +1261,7 @@ Usage-controlled: *YES*. +
 Trappable: *NO*. +
 Interruptible: *NO*.
 
-The state numbers used in this specification are defined in <<ACE-state-constants>>.
+The state numbers used in this specification are defined in <<ACE-state-constants-fixed>> and <<ACE-state-constants-symmetric>>.
 
 It is allowed to repeat `ace.state` instructions to the current state.
 When the algorithm needs to prevent this, it will automatically transition to a different state after completing `ace.state`.
@@ -1940,9 +1957,8 @@ For this, we may either need to follow the development of the HFI extension or i
 
 _This section is normative._
 
-In this section we specify the behavior of ACE instructions for the supported cryptographic algorithms.
-Some specifications are generic: they define algorithm families that can be instantiated with any primitive meeting the required properties, typically parameterized only by block size `b` and key size `k`.
-For example, GCM-SIV is well defined not only with AES but also with alternative block ciphers, such as SM4-GCM-SIV, when used with the same hash function.
+This section specifies the behavior of the ACE instructions for the supported cryptographic algorithms.
+Some specifications define algorithm families that can be instantiated with any primitive meeting the required properties, typically the block size `b` and the key size `k`—such as GCM or GCM-SIV, which are well defined not only with AES but also with other block ciphers, such as SM4.
 By contrast, the specifications for other algorithm suites are specific to certain primitives, for instance, Ascon.
 
 Each algorithm is fully defined by the following information:
@@ -1987,7 +2003,7 @@ State Machine:::
 --
 This includes:
 
-. A list of *states* in which the internal state machine of the logic is executed, together with their representation, either as a number in the range [0..15] or by more complex structures. The values for the architected algorithms conform to <<ACE-state-constants>>.
+. A list of *states* in which the internal state machine of the logic is executed, together with their representation, either as a number in the range [0..15] or by more complex structures. The values for the architected algorithms conform to <<ACE-state-constants-fixed>> and <<ACE-state-constants-symmetric>>.
 . A complete list of the *allowed state transitions*, including the conditions under which each transition is allowed.
 . The enumeration of the *allowed instructions* at each state and their *behavior*.
 --
@@ -2002,30 +2018,29 @@ Pseudocode is provided to illustrate the software implementation of ACE-supporte
 For clarity, the pseudocode generally uses fixed parameters and omits the `ace.exec` Forms A-C replacement sequences.
 The examples are non-normative.
 
-The following table defines the state names and numbers used by the algorithms in this specification.
+The following table together with <<ACE-state-constants-fixed>>. defines the state names and numbers used by the symmetric algorithms in this specification.
 
-[[ACE-state-constants]]
-.Constants defining CC states
+[[ACE-state-constants-symmetric]]
+.Constants defining CC states for symmetric algorithms
 [float="center",align="center",width="100%",cols="^6%,<26%,<16%,<52%",options="header"]
 |===
 | Value | Mnemonic for the Constant       | State Name          | Description
-|   0   | _ace_state_initial_             | _initial_           | The context is initialized and ready for operation.
-.2+| 1  | _ace_state_hash_absorb_         | _hash_absorb_       | Start and initialize a hash/tag function of an algorithm and start absorbing blocks of data.
+.2+| 1  | _ace_state_hash_absorb_         | _hash_absorb_       | Start and initialize a hash function of the tag/MAC part of an algorithm and start absorbing blocks of data (in the case of an AEAD algorithm, this usually starts absorbing the associated data).
 <| _ace_state_operate_                    | _operate_           | Generic operational state.
 |   2   | _ace_state_hash_last_block_     | _hash_last_block_   | In this state additional data may be absorbed, such as partial blocks and lengths, if the hash/tag algorithm processes the last block of its input or of the associated data part of its input in a different way from the other blocks.
 |   3   | _ace_state_hash_finalize_       | _hash_finalize_     | Finalize the internal state of a hash/tag function.
 |   4   | _ace_state_hash_verify_         | _hash_verify_       | Compare the internal hash/tag value to the provided one.
 |   5   | _ace_state_hash_output_         | _hash_output_       | Enter the hash output phase of a hash/tag function.
-|   6   | _ace_state_enc_last_block_      | _enc_last_block_    | For the encryption path of authenticated encryption modes of operation to process the last block separately.
-|   7   | _ace_state_dec_last_block_      | _dec_last_block_    | For the decryption path of authenticated encryption modes of operation to process the last block separately.
-|   8   | _ace_state_enc_tag_finalize_    | _enc_tag_finalize_  | Finalize the tag computation for AE mode encryption.
-|   9   | _ace_state_dec_tag_finalize_    | _dec_tag_finalize_  | Finalize internal tag computation for AE mode decryption, verify the value.
-|  10   | _ace_state_encrypt_             | _encrypt_           | In this state encryption is performed, and an update to the tag computation if part of the algorithm.
-|  11   | _ace_state_decrypt_             | _decrypt_           | In this state decryption is performed, and an update to the tag computation if part of the algorithm.
+|   6   | _ace_state_encrypt_             | _encrypt_           | In this state encryption is performed, and an update to the tag computation if part of the algorithm.
+|   7   | _ace_state_decrypt_             | _decrypt_           | In this state decryption is performed, and an update to the tag computation if part of the algorithm.
+|   8   | _ace_state_enc_last_block_      | _enc_last_block_    | For the encryption path of authenticated encryption modes of operation to process the last block separately.
+|   9   | _ace_state_dec_last_block_      | _dec_last_block_    | For the decryption path of authenticated encryption modes of operation to process the last block separately.
+|  10   | _ace_state_enc_tag_finalize_    | _enc_tag_finalize_  | Finalize the tag computation for AE mode encryption.
+|  11   | _ace_state_dec_tag_finalize_    | _dec_tag_finalize_  | Finalize internal tag computation for AE mode decryption, verify the value.
 |  12   | _ace_state_set_aux_value_       | _set_aux_value_     | Set a public/auxiliary value in an algorithm.
-|  14   | _ace_state_invalid_             | _invalid_           | The algorithm has abnormally terminated or initialization/import have not completed.
-|  15   | _ace_state_completed_           | _completed_         | The algorithm has completed, not necessarily without error.
 |===
+
+The value of 1 means also _ace_state_hash_absorb_ for the symmetric algorithms defined here.
 
 NOTE: The `ace.state` instruction used to transition to states _hash_absorb_, _encrypt_, or _decrypt_ often also sets the first (or only) public value.
 For algorithms requiring multiple public values or additional parameters (e.g., tag length), these can be set by transitioning to state _set_aux_value_ using a Form of `ace.state` with an auxiliary argument, i.e., Form B or C.
