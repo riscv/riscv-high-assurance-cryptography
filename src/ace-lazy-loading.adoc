@@ -1,0 +1,104 @@
+////
+
+[NOTE]
+====
+Regarding Export or Usage operation, an interesting case occurs at VM migration where, at the target machine, all CRs are made lazy.
+This may occur if we do not know if the CRF capacity of the target machine is large enough.
+
+If the VM was interrupted while running at U, and a process had a *DIRTY* CR, the value of this CR is saved in the hypervisor and migrated together with the VM. The OS, running at S, contains a value for that CR, but it is stale and not authoritative. The authoritative value is the one in the hypervisor.
+
+Therefore upon restore, we would need to encode additional information, namely that the CR is LAZY *and* that it was *DIRTY* before migration. This would mean a fifth status value, which we cannot encode in two bits. The fact that this is a potential future does not seem to warrant expanding the fields in `acecrstatus` to three bits. However, this will need to be addressed in case we intend to architect lazy loading in combination with VM migration, to optimize CR handling and allow migration to machines with smaller CRF capacities. +
+This can be addressed by having a driver in the OS of the VM that guarantees that the VM always suspends while running in S mode, i.e., the hypervisor works together with a “guest freeze” mechanism.
+
+All other situations are addressed by simply using the LAZY state.
+====
+
+////
+
+//
+
+////
+We describe how the various components of the system software stack are expected to use `acecrstatus`.
+We must consider various situations:
+
+* *Neither S nor M/H implement lazy switching.*
++
+--
+In this case, each privileged mode must implement the _Basic Rule_:
+
+. at context save, save only the dirty CRs, and;
+. at context restore, restore the configured ones and explicitly clear the unconfigured ones.
+--
++
+
+* *S implements lazy switching, whereas M/H does not.*
++
+--
+M/H only needs to maintain compatibility with it. +
+The SCC corresponding to a *LAZY* CR is stored in S and not in H/M.
+
+. S, instead of restoring a CR, will instead
+.. clear it and
+.. set its status as *LAZY* before returning control to U.
+
+. The U process needs to access the CR.
+.. The system traps,
+.. S imports the stored SCC into the CR,
+.. sets its status of the CR to *CLEAN*, and
+.. returns control to U.
+
+. The U process does not access the CR. So it stays in that state.
+..  Case 1: S interrupts the U process.
+... It sees that the CR is *LAZY* and therefore
+... at context save
+.... it does not save the CR (it is unconfigured), and
+.... marks the CR as *CLEAN*;
+... at context restore:
+.... it clears the CR and
+.... sets its status to *LAZY*.
+... Suppose now that S itself is interrupted by H/M before S returns control to U
+.... H/M sees a *CLEAN* CR:
+..... H/M does nothing at context save, and
+..... at context restore, it uses `ace.clear` on the CR.
+.... then S observes no status change and there are no consistency or security issues.
+..  Case 2: H/M interrupts the U process.
+... It sees that the CR is *LAZY* and therefore
+... does nothing at context save.
+... At context restore:
+.... it clears the CR and
+.... sets its status to *LAZY*.
+... There are no consistency or security issues.
+--
++
+
+//
+
+* *M/H implements lazy switching for VM migration, but VS does not implement lazy switching.*
++
+--
+VS needs only basic support for restoring a CR.
+Therefore, it implements the Basic Rule.
+
+Here, we have two situations:
+
+. The VM was interrupted while in U. The hypervisor has saved the U state and migrated it.
+
+.. If a CR's original status was *INIT*, upon restore the hypervisor clears it (setting its status to *INIT*).
+.. What happens if we do not lazy load?
+... If a CR's original status was *DIRTY*, upon restore the hypervisor imports the SCC into the CR and set its status to *DIRTY*.
+.. What happens if we instead lazy load it because we do not know the capacity of the CRF at the destination?
+... H cleans the CR and sets its status to *LAZY*.
+... If U accesses the CR, it will trap. VS is not supporting lazy switching, so it will trap again, and the value will be obtained from the hypervisor.
+.... The status of the CR may have been *CLEAN* or *DIRTY*. This means that the hypervisor must also pass the original status of the CR to VS, which sets it, or VS does not change it and lets it pass through. Putting a *CLEAN* instead of a *DIRTY* risks keeping a stale value instead of the authoritative one. If HS does not pass this information, VS should always set the status to *DIRTY*.
+
+. The VM was interrupted while in VS. The hypervisor has saved the VS state and migrated it.
+.. If we do not lazy load, the state in (V)S and the status of each CR is simply restored.
+.. If we lazy load, all the CRs that were configured are left unconfigured with *LAZY* status, and HS imports the original SCC in them on demand.
+--
++
+
+* *Both HS and VS support lazy switching*.
+
+[.red]#TBD# (but fundamentally a combination of the above).
+--
+////

@@ -1,0 +1,67 @@
+[comment]
+--
+[[ACE-incomplete-contexts]]
+=== Discussion: Export of Partial Cryptographic Contexts
+
+[WARNING]
+This section describes a hypothetical mechanism for exporting partially initialized or imported cryptographic contexts.
+This is a _Gedankenexperiment_ only and _not_ a current part of the ACE specification.
+
+Suppose we want to save and restore a _partial_ context, i.e. a context whose initialization or import operation has been interrupted for a context switch, preventing immediate return to the original control flow.  A “Partial” bit in the metadata indicates this state.
+This field applies only to `ace.init` and `ace.import` operations, because they access external memory, and not to `ace.clone` and `ace.derive` as they only operate internally.
+Any cryptographic operation attempted on a CR containing an partial CC results in an error or is trapped.
+(((Cryptographic Register,incomplete)))
+
+An `ace.init` operation can be interrupted at any 8-byte boundary and resumed from that point. An `ace.import` operation can also be interrupted at an 8-byte boundary, but it will only be resumed from the 48th byte or later; otherwise, it is restarted with no state saved.
+
+NOTE: Resuming an operation may be more costly than restarting it without saved state. A third alternative—waiting to complete the operation—could introduce unacceptable delays.
+
+When exporting a partial CR, a Partial CR Metadata (PCREM) header is used as the first 8 bytes of an SCC, preceding the nonce, SIV, and content sections as defined in <<ACE-format-SCC>>.
+
+[[ACE-metadata-partial]]
+.Format of the partial CR Metadata (PCREM)
+[width="100%",cols="^9%,^7%,17%,67%",options="header"]
+|===
+.>|   Field .>| Width +
+(bits) .>| Name                  .>| Description
+|   [0:0] |   1  | Format                 | Value is 0 for the current metadata format. +
+The value 1 is reserved for future formats with a length of 128 bits.
+|   [1:1] |   1  | Incomplete             | Value is 1.
+|   [2:2] |   1  | Variant                | The value is 0 if the configuration was interrupted at initialization, and
+                                            the value is 1 if the configuration was interrupted while importing.
+|   [7:3] |   5  | Reserved               | Reserved for future use.
+|  [31:8] |  24  | Payload_Length         | Length of the payload in bytes (excluding the first 32 bytes)
+| [63:32] |  16  | Reserved               | Zero for now.
+|===
+
+NOTE: Fields such as Algorithm, SC_Protection, State Number, Direction_Policy, UC_Policy_{empty}__i__ (i = 0..3), and Locality are omitted. Since partial CRs are architecturally forbidden for normal use, the space normally used by these fields is available for other purposes. Locality violations are handled when a complete CR is used; therefore, the RCSK is always used for partial CRs. This approach can reduce the need to compute or cache DCSKs at higher privilege levels, improving performance.
+
+The exported content format for an incomplete initialization or import matches that of a complete CR, except that it is truncated to the actual imported length (rounded up to an 8-byte multiple). This length is recorded in the Payload_Length field.
+
+For an incompletely imported CR, the partial hash (`tmp` from <<ACE-SCC-import>>) is prepended to the content, extending it by 16 bytes.
+These 16 bytes are included in the Payload_Length and are considered as part of the content, hence they are encrypted.
+
+After a partial CR is decrypted and authenticated in privileged mode, it is marked for resumption.
+Upon returning from the context-switch handler:
+
+. The original metadata, nonce, and SIV are recovered from less-privileged memory;
+
+(These reads may be interrupted by page faults and resumed once the target page is mapped.)
+
+The following steps are then executed as an atomic block:
+
+[start=2]
+. Compute `z` and `num_blocks` from the original content length, using the starting value of `i` from `acestart`.
+. If the interrupted operation was an import:
+.. Derive the `enc_key` and `auth_key` keys.
+.. Recompute the partial hash from the current CR content.
+
+The initialization or import operation can then resume from the point of interruption.
+
+//
+
+[WARNING]
+The TG consensus is that `init`/`import` may resume after a page fault, but on a full context switch, partial CRs are not exported. Instead, the CRs are cleared and the instruction is restarted.
+
+Our security analysis examined various scenarios, including one where a context switch interrupts an import, forcing export and later resumption of a partially imported context. We concluded that while privileged code can replace an SCC in a saved process's context or memory, it cannot abuse the resumption mechanism to breach SCC confidentiality or integrity.
+--
