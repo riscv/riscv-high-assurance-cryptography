@@ -293,7 +293,7 @@ System Generated Keys are also system-specific. In place of the II, the initiali
 The State_Number field must be zero in an II.
 
 Some values of State_Number are architected, and are defined in <<ACE-state-constants-fixed>>.
-these include _initial_, _operate_, _invalid_, and _completed_, which correspond to values 0, 1, 14, and 15.
+these include _initial_, _invalid_, and _completed_, which correspond to values 0, 14, and 15.
 These denote a CC that is ready to operate, it is in an operational state, is in an invalid state, or has finished its operations.
 
 [[ACE-state-constants-fixed]]
@@ -302,22 +302,23 @@ These denote a CC that is ready to operate, it is in an operational state, is in
 |===
 | Value | Mnemonic for the Constant       | State Name          | Description
 |   0   | _ace_state_initial_             | _initial_           | The context is initialized and ready for operation.
-|   1   | _ace_state_operate_             | _operate_           | Generic operational state.
 |  14   | _ace_state_invalid_             | _invalid_           | The algorithm has abnormally terminated or initialization/import have not completed.
 |  15   | _ace_state_completed_           | _completed_         | The algorithm has completed, not necessarily without error.
 |===
 
 All states different from _invalid_ are _valid states_.
 
-If an algorithm defines 16 or fewer states (including the four architected ones), the current state number is stored in the State_Number field.
-These algorithms are allowed to redefine _ace_state_hash_absorb_, but not the states _initial_, _invalid_ and _completed_.
+Unless explicitly stated otherwise in an algorithm's specification, it is always possible to transition from any valid state to state _initial_.
 
-For algorithms with more than 16 states, an algorithm-specific representation is used in the CC content, and the State_Number field is restricted to the
-architected values, where _operate_ must be used in any operational state—i.e., different from _initial_, _invalid_, and _completed_.
+If an algorithm defines 16 or fewer states (including the four architected ones), the current state number may be stored in the State_Number field.
+
+For algorithms with more than 16 states, an algorithm-specific representation is used in the CR content and exported in the SCC.
+How to use information is up to the algorithm designer, with the following condition:
+State_Number must always be set to _initial_, _invalid_, and _completed_ if the state of the algorithm corresponds to these states.
 
 The state values for the symmetric algorithms defined in this specification are listed in <<ACE-state-constants-symmetric>>.
 
-During import and init, internally the State_Number field is set to _invalid_, and only at the end of the operation is it set to _initial_.
+During import and init, the State_Number field is set to _invalid_, and only at the end of the operation is it set to _initial_.
 This means, by the rules in <<ACE-invalidation>>, that a partially initialized/imported CR cannot be exported. In particular, if a context switch occurs, that the more privileged code must unconfigure the CR, and upon resumption, the instruction will be restarted.  Only an invalid CR with an `acestart` different from zero is recognized as an incomplete CR allowing an init or import operation to resume.
 
 This state change to _invalid_ does not occur during `ace.export`, but operations that could modify the internal state should not be performed on a CR with an interrupted export operation.
@@ -635,7 +636,7 @@ Using an incomplete CC in `ace.size` is allowed.
 If a Form of `ace.exec`, `ace.state` or `ace.derive` that is not permitted in the current algorithm state is used, then an illegal instruction exception is raised.
 
 [WARNING]
-[.red]#Optional (need more discussion): ACE error code __i__ corresponds to bit number __i__ in a mask CSR (or more than one) that determines whether the error traps instead of being handled directly by the software by checking# `[.red]#ace.error#`[.red]#. This may be also a horizontal trap. Details in <<TBD>>.#
+[.red]#Optional (need more discussion): ACE error code __i__ corresponds to bit number __i__ in a mask CSR (or more than one) that determines whether the error traps instead of being handled directly by the software by checking# `[.red]#ace.error#`[.red]#. This may be also a horizontal trap (see <<ACE-horizontal-exception-handling>>).#
 
 [comment]
 --
@@ -2030,7 +2031,8 @@ The following table together with <<ACE-state-constants-fixed>>. defines the sta
 [float="center",align="center",width="100%",cols="^6%,<26%,<16%,<52%",options="header"]
 |===
 | Value | Mnemonic for the Constant       | State Name          | Description
-|   1   | _ace_state_hash_absorb_         | _hash_absorb_       | Start and initialize a hash function of the tag/MAC part of an algorithm and start absorbing blocks of data (in the case of an AEAD algorithm, this usually starts absorbing the associated data).
+.2+| 1  | _ace_state_operate_             |  _operate_          |Generic operational state.
+<| _ace_state_hash_absorb_         | _hash_absorb_       |  Start and initialize a hash function of the tag/MAC part of an algorithm and start absorbing blocks of data (in the case of an AEAD algorithm, this usually starts absorbing the associated data).
 |   2   | _ace_state_hash_last_block_     | _hash_last_block_   | In this state additional data may be absorbed, such as partial blocks and lengths, if the hash/tag algorithm processes the last block of its input or of the associated data part of its input in a different way from the other blocks.
 |   3   | _ace_state_hash_finalize_       | _hash_finalize_     | Finalize the internal state of a hash/tag function.
 |   4   | _ace_state_hash_verify_         | _hash_verify_       | Compare the internal hash/tag value to the provided one.
@@ -2044,7 +2046,7 @@ The following table together with <<ACE-state-constants-fixed>>. defines the sta
 |  12   | _ace_state_set_aux_value_       | _set_aux_value_     | Set a public/auxiliary value in an algorithm.
 |===
 
-The value of 1 means also _ace_state_hash_absorb_ for the symmetric algorithms defined here.
+The value of 1 may indicate both states _operate_ and _hash_absorb_ for the symmetric algorithms defined here.
 
 NOTE: The `ace.state` instruction used to transition to states _hash_absorb_, _encrypt_, or _decrypt_ often also sets the first (or only) public value.
 For algorithms requiring multiple public values or additional parameters (e.g., tag length), these can be set by transitioning to state _set_aux_value_ using a Form of `ace.state` with an auxiliary argument, i.e., Form B or C.
@@ -2052,8 +2054,6 @@ For algorithms requiring multiple public values or additional parameters (e.g., 
 Algorithms that differ substantially from those described in <<ACE-algorithms>> and thus cannot be handled by the same software, may reuse the state values in [1..12] with new mnemonics and names for their states.
 
 The state number is stored in the metadata or content section of the CC/SCC, as described in <<ACE-metadata>>, with the constraint that the State_Number field must always contain one of the values 0, 1, 14, or 15, where 1 stands for all other internal states.
-
-Unless explicitly stated otherwise in an algorithm's specification, it is always possible to transition from any valid state to state _initial_.
 
 [NOTE]
 ====
