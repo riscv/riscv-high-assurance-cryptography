@@ -2019,12 +2019,12 @@ This includes:
 
 //
 
-The instructions permitted in each algorithm state are typically `ace.exec` and `ace.state`, though this is a general rule.
+The instructions permitted in each algorithm state are typically `ace.exec` and `ace.state`, though this is not a general rule.
 For `ace.exec`, only one of its forms (see <<ACE-instruction-exec>>) is allowed per state, along with the corresponding replacement sequence defined in <<ACE-replacement-instructions>>.
 
-If a non-allowed state transition is requested in `ace.state`, including requesting encryption or decryption from a CC not allowing it, an ACE error _ace_err_unimplemented_ is raised.
+If a non-allowed state transition is requested in `ace.state`, including requesting encryption or decryption from a CC not allowing it, an ACE error _ace_err_unimplemented_ is raised.  This also invalidates the CR.
 
-If a non-allowed `ace.exec`, `ace.state` instruction or form thereof is issued, an illegal instruction exception is raised.
+If a non explicitly allowed `ace.exec`, `ace.state` instruction or form thereof is issued, an illegal instruction exception is raised and the CR is invalidated.
 
 Pseudocode is provided to illustrate the software implementation of ACE-supported algorithms using the ACE ISA.
 For clarity, the pseudocode generally uses fixed parameters and omits the `ace.exec` Forms A-C replacement sequences.
@@ -2097,7 +2097,7 @@ We use the `acesequence` CSR to indicate whether we are using the ACEIOBUF or th
 
 The ordering of the instructions in a replacement sequence is enforced by the architecture according to the value of `acesequence` and the state number of the CR configured in `aceactivecr`.
 
-Not properly following the instruction ordering raises an illegal instruction exception.
+Not properly following the instruction ordering raises an illegal instruction exception and invalidates the CR.
 
 `acesequence` can be saved and restored by privileged code together with `acestart`.
 
@@ -2234,8 +2234,8 @@ State Machine:::
  ** _decrypt_: Decrypting blocks of input.
 
 * *Allowed State Transitions:*
- ** From any valid state to _encrypt_, if encryption is allowed, else the CR is *invalidated* (<<ACE-invalidation>>).
- ** From any valid state to _decrypt_, if decryption is allowed, else the CR is *invalidated*.
+ ** From any valid state to _encrypt_, if encryption is allowed.
+ ** From any valid state to _decrypt_, if decryption is allowed.
 
 * *Behavior:*
  ** In State _initial_, no `ace.exec` instruction is allowed.
@@ -2443,8 +2443,8 @@ State Machine:::
 * *States:* _initial_, _encrypt_, and _decrypt_ (defined as before, cf. <<ACE-ECB-mode>>).
 
 * *Allowed State Transitions:*
- ** _initial_ -> _encrypt_, if encryption is allowed, else the CR is *invalidated*.
- ** _initial_ -> _decrypt_, if decryption is allowed, else the CR is *invalidated*.
+ ** _initial_ -> _encrypt_, if encryption is allowed.
+ ** _initial_ -> _decrypt_, if decryption is allowed.
  ** _encrypt_, _decrypt_ -> _initial_.
 
 * *Behavior:*
@@ -2544,13 +2544,13 @@ State Machine:::
 
 * *Allowed State Transitions:*.
  ** _initial_ -> _set_aux_value_
- ** _set_aux_value_ -> _encrypt_ -- if encryption is allowed, else the CR is *invalidated*.
- ** _set_aux_value_ -> _decrypt_ -- if decryption is allowed, else the CR is *invalidated*.
+ ** _set_aux_value_ -> _encrypt_, if encryption is allowed.
+ ** _set_aux_value_ -> _decrypt_, if decryption is allowed.
 
  * *Behavior:*
   ** In State _initial_:
    *** Upon entering the state, the `tweak` field is cleared.
-  ** In each state, we can issue Form C `ace.state` instructions, i.e., ```ace.state Kn|K[Xn], #ace_state_set_aux_value, INPUT```, which perform:
+  ** In each state, we can issue Form C `ace.state` instructions, which perform:
    . `tweak` <- `INPUT`, and
    . _Instead of transitioning to state set_aux_value, the state remains unchanged (can be initial, encrypt, or decrypt)._
   ** In State _encrypt_, resp., _decrypt_, besides Form C `ace.state` instructions, only ``ace.exec`` instructions of Form A are allowed, where
@@ -2614,8 +2614,8 @@ State Machine:::
 
 * *Allowed State Transitions:*
  ** _initial_ -> _hash_absorb_.
- ** _hash_absorb_ -> _encrypt_ -- if encryption is allowed, else the CR is *invalidated*.
- ** _hash_absorb_ -> _decrypt_ -- if decryption is allowed, else the CR is *invalidated*.
+ ** _hash_absorb_ -> _encrypt_, if encryption is allowed.
+ ** _hash_absorb_ -> _decrypt_, if decryption is allowed.
  ** _encrypt_ -> _enc_tag_finalize_ -> _completed_.
  ** _decrypt_ -> _dec_tag_finalize_ -> _hash_verify_ -> _completed_.
 
@@ -2629,7 +2629,8 @@ State Machine:::
 
  ** To transition to state _hash_absorb_:
  the ``ace.state`` instruction must be a Form C to set the IV, i.e., the fixed part of the counter.
- Other forms of  ``ace.state`` raise an illegal instruction exception and the CR is *invalidated*. Then:
+//Other forms of  ``ace.state`` raise an illegal instruction exception and the CR is *invalidated*.
+ Then:
    . `ctr <- INPUT @ (b/4-1)b'0 @ 1`, i.e., the `b/4` most significant bits of `INPUT` are ignored, and the `b/4` least significant bits of `ctr` represent the integer 1.
   *** If the ``ace.state`` instruction is repeated, it will just update the counter again.
   *** If `IOLEN` > `b`, only the `b` least significant bits of `INPUT` are considered.
@@ -2849,7 +2850,7 @@ The differences between GCM and GCM with Set IV start with the format of the Ini
  the ``ace.state`` instruction must be used _without any additional inputs_, since the IV is already included in the II.
 
  ** Once in state _completed_, the CC with this algorithm *cannot* be brought back to state _initial_.
-Other forms of ``ace.state`` raise an illegal instruction exception and the CR is *invalidated*.
+//Other forms of ``ace.state`` raise an illegal instruction exception and the CR is *invalidated*.
 
 These rules do not prevent cloning the CR at the beginning and re-using it, but, for decryption, it can only be used with the intended ciphertext.
 
@@ -2940,35 +2941,38 @@ State Machine:::
  ** _initial_ -> _set_aux_value_ -> _hash_absorb_.
  ** For encryption: _hash_absorb_ -> _enc_tag_finalize_ -> _encrypt_.
  ** For decryption: _hash_absorb_ -> _decrypt_ -> _dec_tag_finalize_ -> _completed_.
- ** Transition to _encrypt_ possible only if encryption is allowed, else the CR is *invalidated*.
- ** Transition to _decrypt_ possible only if decryption is allowed, else the CR is *invalidated*.
+ ** Transition to _encrypt_ possible only if encryption is allowed.
+ ** Transition to _decrypt_ possible only if decryption is allowed.
 
 * *Behavior:*
  ** In State _initial_ :
-  *** No {nbsp}``ace.exec``{nbsp} operation is allowed.
-  *** The following initialization operations are performed:
+  *** Upon entering the state, the following initialization operations are performed:
    . (`enc_key`, `auth_key`) `<-` `RFC8452_KeyDeriv(key)`,
    . `nonce`, `ctr`, `tag`, `SIV <- 0`.
+ *** No {nbsp}``ace.exec``{nbsp} operation is allowed.
 
-** Upon issuing a Form C ```ace.state Kn|K[Xn], #ace_state_set_aux_value, INPUT``` :
+ *** Upon issuing a Form C ```ace.state Kn|K[Xn], #ace_state_set_aux_value, INPUT``` :
   *** The value of `nonce` is set to `INPUT`.
   *** (If the instruction is repeated, there is no harm, since it just overwrites the `nonce` before any other operation is performed.)
 
-** Upon issuing a Form A or B ```ace.state Kn|K[Xn], #ace_state_set_aux_value```:
-  *** An illegal instruction exception is raised and the CR is *invalidated*.
-
-** Upon issuing a Form C ```ace.state Kn|K[Xn], #ace_state_hash_absorb, INPUT```:
-  *** The value of `SIV` is set to `INPUT`.
-  *** NB: This version of the instruction is meant to be used during decryption.
+  ** In State _set_aux_value:
+*** Upon issuing a Form C ```ace.state Kn|K[Xn], #ace_state_hash_absorb, INPUT```:
++
+--
+**** The value of `SIV` is set to `INPUT`.
+--
++
+NOTE: This version of the instruction is meant to be used during decryption.
       It is harmless to invoke it during encryption, however, as the `SIV` field will be overwritten later with the correct synthetic value.
 
-** Upon issuing a Form A ```ace.state Kn|K[Xn], #ace_state_hash_absorb```:
-  *** The `SIV` is not modified (it is assumed to be already zero).
-  *** NB: This version of the instruction is meant to be used during encryption.
+*** Upon issuing a Form A ```ace.state Kn|K[Xn], #ace_state_hash_absorb```:
++
+--
+**** The `SIV` is not modified (it is assumed to be already zero).
+--
++
+NOTE: This version of the instruction is meant to be used during encryption.
       If used during decryption, by leaving the `SIV` to zero it will most likely lead to an authentication error.
-
- ** Upon issuing a Form B ```ace.state Kn|K[Xn], #ace_state_hash_absorb, Xm```:
-  *** An illegal instruction exception is raised and the CR is *invalidated*.
 
  ** In State _hash_absorb_, only ``ace.exec`` instructions of Form B are allowed.
    This instruction absorbs its `INPUT` in the `tag`, i.e., it performs `absorb(INPUT)`. +
@@ -3214,8 +3218,8 @@ State Machine:::
 
 * *Allowed State Transitions:*
  ** _initial_ -> _set_aux_value_ -> _hash_absorb_ -> _hash_finalize_
- ** _hash_finalize_ -> _encrypt_ -- if encryption is allowed, else the CR is *invalidated*.
- ** _hash_finalize_ -> _decrypt_ -- if decryption is allowed, else the CR is *invalidated*.
+ ** _hash_finalize_ -> _encrypt_, if encryption is allowed.
+ ** _hash_finalize_ -> _decrypt_, if decryption is allowed.
  ** _encrypt_ -> _enc_last_block_ -> _enc_tag_finalize_ -> _completed_.
  ** _decrypt_ -> _dec_last_block_ -> _hash_verify_ -> _completed_.
 
@@ -3229,7 +3233,7 @@ State Machine:::
 
 ** To move to _set_aux_value_, a Form B `ace.state` must be used, where the auxiliary argument `Xs` sets the nonce length `N_len`.
  `N_len` must be at least `g-1`. If not, ACE error _ace_err_invalid_value_ is raised, and the CR is *invalidated*.
- If a different form of `ace.state` is used, then an illegal instruction exception is raised, and the CR is *invalidated*.
+// If a different form of `ace.state` is used, then an illegal instruction exception is raised, and the CR is *invalidated*.
 
 ** In State _set_aux_value_, only  ``ace.exec`` instructions of Form B, “```ace.exec Kn|K[Xn], INPUT```”, are allowed, whereby `N` is set to `INPUT`, namely
      `N <- zeros(u-N_len) @ INPUT[N_len-1:0]`
@@ -3239,7 +3243,7 @@ State Machine:::
 
 ** To move to _hash_absorb_, a Form B `ace.state` must be used, where the auxiliary argument `Xs` sets the tag length `tag_len`.
   *** If this argument (interpreted as an unsigned value) is larger than `b` or is equal to `0` (the latter occurs also if `X0` is passed as the auxiliary argument), an _ace_err_invalid_value_ error is raised, and the CR is *invalidated*.
-  *** If a different Form of `ace.state` is used, then an illegal instruction exception is raised, and the CR is *invalidated*.
+//  *** If a different Form of `ace.state` is used, then an illegal instruction exception is raised, and the CR is *invalidated*.
   *** If `N[u] == 1`, this means that `N` was not set in state _set_aux_value_. We do not allow code that skips nonce setting, as this mode is not secure under nonce reuse, therefore in this case ACE error _ace_err_invalid_value_ is raised, and the CR is *invalidated*.
   *** Following operations are performed:
   . `tag_len` <- `Xs`.
@@ -3884,8 +3888,8 @@ State Machine:::
 
 * *Allowed State Transitions:*
  ** _initial_ -> _hash_absorb_.
- **  _hash_absorb_ -> _encrypt_ -- if encryption is allowed, else the CR is *invalidated*.
- **  _hash_absorb_ -> _decrypt_ -- if decryption is allowed, else the CR is *invalidated*.
+ **  _hash_absorb_ -> _encrypt_, if encryption is allowed.
+ **  _hash_absorb_ -> _decrypt_, if decryption is allowed.
  ** _encrypt_ -> _enc_last_block_ -> _hash_output_ -> _completed_.
  ** _decrypt_ -> _dec_last_block_ -> _hash_verify_ -> _completed_.
 
