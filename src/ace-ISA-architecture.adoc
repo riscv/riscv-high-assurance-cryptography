@@ -306,7 +306,7 @@ These denote a CC that is ready to operate, it is in an operational state, is in
 |  15   | _ace_state_completed_           | _completed_         | The algorithm has completed, not necessarily without error.
 |===
 
-All states different from _invalid_ are _valid states_.
+All states different from _invalid_ are called _valid_.
 
 Unless explicitly stated otherwise in an algorithm's specification, it is always possible to transition from any valid state to state _initial_.
 
@@ -318,7 +318,7 @@ State_Number must always be set to _initial_, _invalid_, and _completed_ if the 
 
 The state values for the symmetric algorithms defined in this specification are listed in <<ACE-state-constants-symmetric>>.
 
-During import and init, the State_Number field is set to _invalid_, and only at the end of the operation is it set to _initial_.
+During init and import, the State_Number field is set to _invalid_, and only at the end of the operation is it set to proper value, i.e., _initial_ or the value in the SCC (see <<ACE-init-export-import>>)
 This means, by the rules in <<ACE-invalidation>>, that a partially initialized/imported CR cannot be exported. In particular, if a context switch occurs, that the more privileged code must unconfigure the CR, and upon resumption, the instruction will be restarted.  Only an invalid CR with an `acestart` different from zero is recognized as an incomplete CR allowing an init or import operation to resume.
 
 This state change to _invalid_ does not occur during `ace.export`, but operations that could modify the internal state should not be performed on a CR with an interrupted export operation.
@@ -1967,6 +1967,8 @@ This section specifies the behavior of the ACE instructions for the supported cr
 Some specifications define algorithm families that can be instantiated with any primitive meeting the required properties, typically the block size `b` and the key size `k`—such as GCM or GCM-SIV, which are well defined not only with AES but also with other block ciphers, such as SM4.
 By contrast, the specifications for other algorithm suites are specific to certain primitives, for instance, Ascon.
 
+==== Definition of an Algorithm in ACE
+
 Each algorithm is fully defined by the following information:
 
 Parameters:::
@@ -2020,40 +2022,13 @@ This includes:
 The instructions permitted in each algorithm state are typically `ace.exec` and `ace.state`, though this is a general rule.
 For `ace.exec`, only one of its forms (see <<ACE-instruction-exec>>) is allowed per state, along with the corresponding replacement sequence defined in <<ACE-replacement-instructions>>.
 
+If a non-allowed state transition is requested in `ace.state`, including requesting encryption or decryption from a CC not allowing it, an ACE error _ace_err_unimplemented_ is raised.
+
+If a non-allowed `ace.exec`, `ace.state` instruction or form thereof is issued, an illegal instruction exception is raised.
+
 Pseudocode is provided to illustrate the software implementation of ACE-supported algorithms using the ACE ISA.
 For clarity, the pseudocode generally uses fixed parameters and omits the `ace.exec` Forms A-C replacement sequences.
 The examples are non-normative.
-
-The following table, together with <<ACE-state-constants-fixed>>, defines the state names and numbers used by the symmetric algorithms in this specification.
-
-[[ACE-state-constants-symmetric]]
-.Constants defining CC states for symmetric algorithms
-[float="center",align="center",width="100%",cols="^6%,<26%,<16%,<52%",options="header"]
-|===
-| Value | Mnemonic for the Constant       | State Name          | Description
-.2+| 1  | _ace_state_operate_             |  _operate_          |Generic operational state.
-<| _ace_state_hash_absorb_         | _hash_absorb_       |  Start and initialize a hash function of the tag/MAC part of an algorithm and start absorbing blocks of data (in the case of an AEAD algorithm, this usually starts absorbing the associated data).
-|   2   | _ace_state_hash_last_block_     | _hash_last_block_   | In this state additional data may be absorbed, such as partial blocks and lengths, if the hash/tag algorithm processes the last block of its input or of the associated data part of its input in a different way from the other blocks.
-|   3   | _ace_state_hash_finalize_       | _hash_finalize_     | Finalize the internal state of a hash/tag function.
-|   4   | _ace_state_hash_verify_         | _hash_verify_       | Compare the internal hash/tag value to the provided one.
-|   5   | _ace_state_hash_output_         | _hash_output_       | Enter the hash output phase of a hash/tag function.
-|   6   | _ace_state_encrypt_             | _encrypt_           | In this state encryption is performed, and an update to the tag computation if part of the algorithm.
-|   7   | _ace_state_decrypt_             | _decrypt_           | In this state decryption is performed, and an update to the tag computation if part of the algorithm.
-|   8   | _ace_state_enc_last_block_      | _enc_last_block_    | For the encryption path of authenticated encryption modes of operation to process the last block separately.
-|   9   | _ace_state_dec_last_block_      | _dec_last_block_    | For the decryption path of authenticated encryption modes of operation to process the last block separately.
-|  10   | _ace_state_enc_tag_finalize_    | _enc_tag_finalize_  | Finalize the tag computation for AE mode encryption.
-|  11   | _ace_state_dec_tag_finalize_    | _dec_tag_finalize_  | Finalize internal tag computation for AE mode decryption, verify the value.
-|  12   | _ace_state_set_aux_value_       | _set_aux_value_     | Set a public/auxiliary value in an algorithm.
-|===
-
-The value of 1 may indicate both states _operate_ and _hash_absorb_ for the symmetric algorithms defined here.
-
-NOTE: The `ace.state` instruction used to transition to states _hash_absorb_, _encrypt_, or _decrypt_ often also sets the first (or only) public value.
-For algorithms requiring multiple public values or additional parameters (e.g., tag length), these can be set by transitioning to state _set_aux_value_ using a Form of `ace.state` with an auxiliary argument, i.e., Form B or C.
-
-Algorithms that differ substantially from those described in <<ACE-algorithms>> and thus cannot be handled by the same software, may reuse the state values in [1..12] with new mnemonics and names for their states.
-
-The state number is stored in the metadata or content section of the CC/SCC, as described in <<ACE-metadata>>, with the constraint that the State_Number field must always contain one of the values 0, 1, 14, or 15, where 1 stands for all other internal states.
 
 [NOTE]
 ====
@@ -2151,10 +2126,10 @@ An implementation must wait before accessing a CR that is still being written to
 ===== Notation in the Algorithm Descriptions
 
 * `INPUT`: The input data to be processed by the following instructions: `ace.exec`, `ace.state`, `ace.derive`.
-   This can be the input vector register, or the ACEIOBUF, according to the semantics presented in <<ACE-usage-input-output>>.
+   This can be the input vector register, or the ACEIOBUF, as described in <<ACE-usage-input-output>>.
 
 * `OUTPUT`: The output data produced by `ace.exec`.
-   This can be the output vector register, or the ACEIOBUF, according to the semantics presented in <<ACE-usage-input-output>>.
+   This can be the output vector register, or the ACEIOBUF, as described in <<ACE-usage-input-output>>.
 
 * `IOLEN`: Either `VL*SEW` or the length `aceiobuftop` of the ACEIOBUF in bytes, depending on whether vector registers are used or the ACEIOBUF is used.
 
@@ -2170,7 +2145,7 @@ Threshold implementations are simply implementation variants of the exact same a
 (((ACE, algorithm, threshold variants)))
 
 NOTE: This rule assumes that reconstructing or re-randomizing a key is a fast operation, such as an ``xor`` with random values.
-This requires the ACE execution unit to have access to a randomness source, or at least a PRNG seeded at hardware boot. +
+This requires the ACE execution unit to have access to a random number generator.
 Besides ensuring the compactness of an SCC, this rule also guarantees key portability across architectures
 that implement side-channel protection in different ways.
 
@@ -2184,6 +2159,39 @@ System keys will change all the algorithms described here in the following way:
 . In an II and in an SCC, the key field will contain the index of the key in place of the value.
 . This field is reduced from the original key size to a 64-bit value. This saves space in an SCC and allows for faster export and import operations.
 . For algorithms that require more than one key, such as XEX/XTS, a single index is still used to an entry in the SKT that contains multiple keys—and thus a single 64-bit value in the II and SCC.
+
+//
+
+==== States for Symmetric Algorithms
+
+The following table, together with <<ACE-state-constants-fixed>>, defines the state names and numbers used by the symmetric algorithms in this specification.
+
+[[ACE-state-constants-symmetric]]
+.Constants defining CC states for symmetric algorithms
+[float="center",align="center",width="100%",cols="^6%,<26%,<16%,<52%",options="header"]
+|===
+| Value | Mnemonic for the Constant       | State Name          | Description
+.2+| 1  | _ace_state_operate_             |  _operate_          |Generic operational state.
+<| _ace_state_hash_absorb_         | _hash_absorb_       |  Start and initialize a hash function of the tag/MAC part of an algorithm and start absorbing blocks of data (in the case of an AEAD algorithm, this usually is the associated data).
+|   2   | _ace_state_hash_last_block_     | _hash_last_block_   | In this state additional data may be absorbed, such as partial blocks and lengths, if the hash/tag algorithm processes the last block of its input or of the associated data part of its input in a different way from the other blocks.
+|   3   | _ace_state_hash_finalize_       | _hash_finalize_     | Finalize the internal state of a hash/tag function.
+|   4   | _ace_state_hash_verify_         | _hash_verify_       | Compare the internal hash/tag value to the provided one.
+|   5   | _ace_state_hash_output_         | _hash_output_       | Enter the hash output phase of a hash/tag function.
+|   6   | _ace_state_encrypt_             | _encrypt_           | In this state encryption is performed, and an update to the tag computation if part of the algorithm.
+|   7   | _ace_state_decrypt_             | _decrypt_           | In this state decryption is performed, and an update to the tag computation if part of the algorithm.
+|   8   | _ace_state_enc_last_block_      | _enc_last_block_    | For the encryption path of authenticated encryption modes of operation to process the last block separately.
+|   9   | _ace_state_dec_last_block_      | _dec_last_block_    | For the decryption path of authenticated encryption modes of operation to process the last block separately.
+|  10   | _ace_state_enc_tag_finalize_    | _enc_tag_finalize_  | Finalize the tag computation for AE mode encryption.
+|  11   | _ace_state_dec_tag_finalize_    | _dec_tag_finalize_  | Finalize internal tag computation for AE mode decryption, verify the value.
+|  12   | _ace_state_set_aux_value_       | _set_aux_value_     | Set a public/auxiliary value in an algorithm.
+|===
+
+The value of 1 may indicate both states _operate_ and _hash_absorb_ for the symmetric algorithms defined here.
+
+NOTE: The `ace.state` instruction used to transition to states _hash_absorb_, _encrypt_, or _decrypt_ often also sets the first (or only) public value.
+For algorithms requiring multiple public values or additional parameters (e.g., tag length), these can be set by transitioning to state _set_aux_value_ using a Form of `ace.state` with an auxiliary argument, i.e., Form B or C.
+
+Algorithms that differ substantially from those described in <<ACE-algorithms>> and thus cannot be handled by the same software, may reuse the state values in [1..12] with new mnemonics and names for their states.
 
 //
 
