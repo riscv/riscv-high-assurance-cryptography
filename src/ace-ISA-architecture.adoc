@@ -940,7 +940,7 @@ Any access to `haceVBootSecret` outside of VS-mode and higher causes an illegal 
 `haceVBootSecret` must be reconfigurable in order to support VM reboots which are independent of the boot cycles of the physical host.
 ====
 
-// ///////////////////////////////////////////////////////////////////////////////////////////
+//
 
 [[ACE-CSR-saceSSecret]]
 ===== `saceSSecret` Group
@@ -4359,21 +4359,18 @@ For example, it would necessitate secure management of large RCSK tables, includ
 
 _This section is informative and non-normative._
 
-[WARNING]
-In this section we assume that there are two status bits per CR, i.e., we can have two additional status values beside Clean and Dirty.
-
 Lazy loading defers loading a value until it is needed, improving performance and managing limited CRF capacity. It may also be required to support migration to systems with smaller CRFs:
 If capacity is insufficient for lazy loading, the software reimporting an offloaded CR must be able to offload other CRs to free space. Requiring software to check for errors after each operation would impose significant burden on the software and possibly degrade performance.
 
-Therefore, a cooperative approach is recommended:
+// Therefore, a cooperative approach is recommended:
+//
+// * Software should proactively offload CRs it no longer needs or does not expect to use soon.
+// * If the CRF capacity is exhausted, the more privileged software layer can offload other CRs and mark them as lazy.
+//   In place of raising an _ace_err_memory_ error, out of CRF capacity situations should trap to a suitable handler.
+// * The selection method for choosing the CR to offload could be random, heuristic, or based on implementation-specific hardware-provided mechanisms to select a least-recently-used CR.
 
-* Software should proactively offload CRs it no longer needs or does not expect to use soon.
-* If the CRF capacity is exhausted, the more privileged software layer can offload other CRs and mark them as lazy.
-  In place of raising an _ace_err_memory_ error, out of CRF capacity situations should trap to a suitable handler.
-* The selection method for choosing the CR to offload could be random, heuristic, or based on implementation-specific hardware-provided mechanisms to select a least-recently-used CR.
-
-Since we have now four possible statuses per CR, we define an additional one and call it *LAZY*.
-Its definition is: A CR marked *LAZY* is Unconfigured. An authoritative value is saved for lazy loading in one of the parent modes.
+We assume that besides `scrdirty`, `vscrdirty` and `mcrdirty`, we have three more CSRs `scrlazy`, `vscrlazy` and `mcrlazy` that can be used to mark a CR as lazy, in particular CR number __i__ is *LAZY* is `*crlazy`[__i__] is set and `*crdirty`[__i__] is not set.
+A CR marked *LAZY* is Unconfigured. An authoritative value is saved for lazy loading in one of the parent modes.
 Unconfiguration and configuration operations on this CR work normally.
 
 If an *Export* or *Usage* operation is issued at U-mode, then the system traps to the higher-privileged mode that holds the authoritative SCC, which must import it into the CR.
@@ -4386,9 +4383,8 @@ There is however one complex case, which occurs when:
   . HV saved the CR, cleared it and then marked it *LAZY* to be loaded on demand later.
   . If the CR was *CLEAN*, an SCC in VS-mode would be authoritative, and if there is no SCC in VS-mode, the value in HS is authoritative, so retrieving the value from the parent first, and grandparent otherwise, works well.
   . _However, if the CR was *DIRTY*, the authoritative value resides in HS, while VS‑mode may hold a stale copy_.
-  Therefore, the prior dirtiness information must be consulted to retrieve the authoritative SCC from HV rather than from S‑mode.
-+
-This is easily solved by using the fourth possible CR status, which we call *LAZY/DIRTY*—this is set by the HV in the expanded `vscrdirty` CSR when it restores the CR before returning control to U-mode.
+  Therefore, the prior dirtiness information must be consulted to retrieve the authoritative SCC from HS rather than from S‑mode.
+  This is addressed by using the fourth possible CR status, which is encoded as ``*crlazy``[__i__] = ``*crdirty``[__i__] = 1, which we call **LAZY/DIRTY**.
 
  . After the import, the CR is set to *CLEAN* and the interrupted operation is restarted.
 
