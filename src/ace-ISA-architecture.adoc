@@ -4204,51 +4204,52 @@ We need to define the elliptic curves that are actually used in practice, such a
 
 Algorithms: scalar multiplication with known and unknown base point and ECDSA/EdDSA sign/verify.
 
-ECDSA-Verify on secp256r1 needs following information:
+For secp256r1 the size of the main fields `b` is 256 bits.
 
-. X coordinate of the Public Key, 32 bytes
-. Y coordinate of the Public Key, 32 bytes
-. Hash of message, 32 bytes
-. SignatureR, 32 bytes
-. SignatureS, 32 bytes
+. X coordinate of the Public Key, 256 bits
+. Y coordinate of the Public Key, 256 bits
+. Hash of message, 256 bits
+. SignatureR, 256 bits
+. SignatureS, 256 bits
 
-For secp384r1, the fields are all 48 bytes long.
+For secp384r1, `b` is` 384 bits.
 
-For secp521r1, the fields are all 72 bytes long (zero-padded).
+For secp521r1, `b` is` 576 bits.
 
-The input for ECDSA-Sign on secp256r1/secp384r1/secp521r1 are just the message hash, respectively 32. 48, and 72 bytes long.
+The input for ECDSA-Sign on secp256r1/secp384r1/secp521r1 are just the message hash, `b` bits long.
 
 Data Structures:::
 
 * *Provisioning Input*:
  ** Metadata:
   *** _Just_ the curve description is embedded in Algorithm. This needs to encode just 5 values.
-  *** For hashing, use the DirectionPolicy field to determine whether signature generation is allowed (bit 11) or signature verification (bit 10).
+  *** For hashing, use the DirectionPolicy field to determine whether signature generation is allowed (bit 12) or signature verification (bit 13).
   *** It is possible to have both or none of signature generation and verification.
 
 * *Internal State*:
   ** Metadata
   ** Content:
-   *** HasPoint: bool.
-   *** HasScalar: bool.
-   *** Progress/input_base: integer.
-   *** Block_base: integer.
-   *** Point (X coordinate, Y coordinate).
-   *** Scalar.
-   *** Random Number.
-   *** Additional data (in certain states)
+   *** `HasPoint`: bool.
+   *** `HasScalar`: bool.
+   *** `Progress`/input_base: integer.
+   *** `Block_base`: integer.
+   *** `Point` (X coordinate, Y coordinate): two `b`-bit strings.
+   *** `Scalar`: `b`-bit string.
+   *** `RandomNumber`: `b`-bit string.
+   *** Additional data (in certain states).
 
 * *Serialized Content*:
-  [lowerroman]
+
+[lowerroman]
   . Metadata.
-  . HasPoint: bool.
-  . HasNumber: bool.
-  . Progress/input_base: integer.
-  . Block_base: integer.
-  . Point (X coordinate, Y coordinate).
-  . Scalar.
-  . Random Number
-  . Additional data (in certain states)
+  . `HasPoint`: bool.
+  . `HasNumber`: bool.
+  . `Progress`/`input_base`: integer.
+  . `Block_base`: integer.
+  . `Point` (X coordinate, Y coordinate): two `b`-bit strings.
+  . `Scalar`: `b`-bit string.
+  . `RandomNumber`: `b`-bit string.
+  . Additional data (in certain states).
 
 State Machine:::
 
@@ -4266,19 +4267,19 @@ State Machine:::
  * _set_signature_ (7)
  * _output_ (8)
  * _completed_ (15)
- * The “*transient” states are used during long operations that require additional information.
-   The format of this additional information is implementation defined and its length is given by an extra block after the metadata block
-   in which the length, in bytes, is given as a 64-bit unsigned integer. This block is included in the authentication of the SCC.
+ * The “*transient” states are used during long operations that require additional information.  If the operations are interrupted, they are in the transient state. When they are completed, they are in the non-transient state.
+   The format of the additional information is implementation defined and its length is given by an extra 64-bit block after the metadata block
+   in which the length, in bytes, is given as an unsigned integer. This block is included in the authentication of the SCC.
 
 * *Allowed State Transitions:*
  * _initial_ -> { _set_point_, _set_scalar_ } -> *
  * _set_point_ -> _set_scalar_
  * _set_scalar_ -> _set_point_
- * _set_point_ can be skipped if HasPoint == true, but it can be repeated.
- * _set_scalar_ can be skipped if HasScalar == true, but it can be repeated.
+ * _set_point_ can be skipped if HasPoint == true, and it can be repeated.
+ * _set_scalar_ can be skipped if HasScalar == true, and it can be repeated.
  * * -> _point_mul_ (only if HasPoint == HasScalar == true) -> _output_ -> _initial_
- * * -> _set_hash_ -> _sign_generate_ -> _output_ -> _completed_
- * * -> _set_hash_ -> _set_signature_ -> _sign_verify_ -> _completed_
+ * * -> _set_hash_ -> _sign_generate_ (only if HasPoint == true) -> _output_ -> _completed_
+ * * -> _set_hash_ -> _set_signature_ (only if HasPoint == HasScalar == true) -> _sign_verify_ -> _completed_
 
 In state _set_point_ we can either set a point for scalar multiplication or a public key.
 In state _set_scalar_ we can either set a scalar for scalar multiplication or private key.
