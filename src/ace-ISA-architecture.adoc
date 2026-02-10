@@ -4359,6 +4359,9 @@ For example, it would necessitate secure management of large RCSK tables, includ
 
 _This section is informative and non-normative._
 
+[WARNING]
+In this section we assume that there are two status bits per CR, i.e., we can have two additional status values beside Clean and Dirty.
+
 Lazy loading defers loading a value until it is needed, improving performance and managing limited CRF capacity. It may also be required to support migration to systems with smaller CRFs:
 If capacity is insufficient for lazy loading, the software reimporting an offloaded CR must be able to offload other CRs to free space. Requiring software to check for errors after each operation would impose significant burden on the software and possibly degrade performance.
 
@@ -4369,16 +4372,11 @@ Therefore, a cooperative approach is recommended:
   In place of raising an _ace_err_memory_ error, out of CRF capacity situations should trap to a suitable handler.
 * The selection method for choosing the CR to offload could be random, heuristic, or based on implementation-specific hardware-provided mechanisms to select a least-recently-used CR.
 
-Let us use value 0 in the entries of `crdirty` to support lazy loading, so we call this state *LAZY* in place of *OFF*.
+Since we have now four possible statuses per CR, we define an additional one and call it *LAZY*.
 Its definition is: A CR marked *LAZY* is Unconfigured. An authoritative value is saved for lazy loading in one of the parent modes.
 Unconfiguration and configuration operations on this CR work normally.
 
-NOTE: The *LAZY* status reuses the FS/VS/ACES encoding for “OFF”, this does not indicate that the ISE is inactive, nor that the ISE cannot use that CR.
-Whether the ISE is active is encoded exclusively in ```*status```.
-The use of the **OFF** encoding in the per-CR fields of `crdirty` is a natural choice to denote an unavailable state that requires lazy loading to be made available. If all CRs were to be lazy-loaded, the ACES field would be set to **CLEAN** and not to **OFF**.
-
-If an *Export* or *Usage* operation is issued at U-mode, then
-the system traps to the higher-privileged mode that holds the authoritative SCC, which must import it into the CR.
+If an *Export* or *Usage* operation is issued at U-mode, then the system traps to the higher-privileged mode that holds the authoritative SCC, which must import it into the CR.
 This may require freeing space by making another CR *LAZY*.
 
 Identifying the correct higher-privileged mode is typically straightforward.
@@ -4391,15 +4389,11 @@ There is however one complex case, which occurs when:
   . _However, if the CR was *DIRTY*, the authoritative value resides in HV, while S‑mode may hold a stale copy_.
   Therefore, the prior dirtiness information must be consulted to retrieve the authoritative SCC from HV rather than from S‑mode.
 +
-Possible solutions where the dirtiness information is maintained architecturally include:
-
-... The fields of `crdirty` must be expanded to three bits to accommodate a fifth status, *LAZY/DIRTY*;
-... Another 32 bits worth of CSRs, say `crdirtyext`, is used for this purpose; or
-... The *INITIAL* state in `crdirty` is repurposed to denote this state, and to check whether a CR is unconfigured we check whether `ace.size` returns 0.
+This is easily solved by using the fourth possible CR status, which we call *LAZY/DIRTY*.
 
  . After the import, the CR is set to *CLEAN* and the interrupted operation is restarted.
 
-This is a corner case and it would NOT happen in the most common case which is:
+This is a corner case and it would _not_ happen in the most common case which is:
 
 *** The OS at VS-mode may implement lazy loading
 *** Hypervisors and M _always_ save _and_ restore the _entire_ state.
