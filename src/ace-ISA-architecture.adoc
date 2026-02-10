@@ -102,7 +102,7 @@ This binding uses metadata when a CC is in a CR, and a _Derived Context Sealing 
 * `SmaceCSKw` => ACE Root Context Sealing Key CSRs are MRW. Depends on `SmaceCSK`.
 * `Smaceosscrt` => Defines the ACE OS Secret CSRs (`maceBootSecret{0..3}`).
 * `Smacebootscrt` => Defines the ACE Boot Secret CSRs (`haceVBootSecret0{0..3}`).
-* `Smacestatus` => Defines the ACES per CC CSRs (`sacecrstatus`, `vsacecrstatus`, `macecrstatus`).
+* `Smacestatus` => Defines the ACES per CC CSRs (`scrstatus`, `vscrstatus`, `mcrstatus`).
 
 // ///////////////////////////////////////////////////////////////////////////////////////////
 
@@ -516,9 +516,9 @@ ACE extends `*status` and `misa`, and adds up to 12 (9) new CSRs, which are list
 |===
 | Address        | Privilege | Name                    | Description
 | 0xXXX          | URW       | `aceerror`              | Error code of the last ACE instruction
-| 0xXXX          | SRW       | `sacecrstatus`          | Per-CR analog of `sstatus.ACES` field
-| 0xXXX          | HRW       | `vsacecrstatus`         | Per-CR analog of `vsstatus.ACES` field
-| 0xXXX          | MRW       | `macecrstatus`          | Per-CR analog of `mstatus.ACES` field
+| 0xXXX          | SRW       | `scrstatus`             | Per-CR dirtiness tracking
+| 0xXXX          | HRW       | `vscrstatus`            | Per-CR dirtiness tracking
+| 0xXXX          | MRW       | `mcrstatus`             | Per-CR dirtiness tracking
 | 0xXXX          | URW       | `acestart`              | ACE start byte index (see warning below)
 | 0xXXX          | URW       | `aceiobuflen`           | ACE input/output buffer length
 | 0xXXX          | URW       | `aceiobuftop`           | ACE input/output buffer limit for current transfers
@@ -561,7 +561,7 @@ Bit `L` (11) in `misa` indicates that ACE is present.
 
 {empty}
 (((CSR,ACES field in *status)))
-An ACE context status field, ACES, is added to `mstatus`[26:25] and shadowed in `sstatus`[26:25] (but, see <<ACE-CSR-macecrstatus>>).
+An ACE context status field, ACES, is added to `mstatus`[26:25] and shadowed in `sstatus`[26:25] (but, see <<ACE-CSR-mcrstatus>>).
 It tracks the dirtiness of the ACE state, including the CRs, the ACEIOBUF, and all ACE-specific CSRs.
 If ACE is implemented, the ACES field shall not be read-only zero.
 The meanings of its values are given in <<ACE-aces-encoding>>.
@@ -814,76 +814,70 @@ This serves to make sure that the instructions are issued in the correct order.
 
 ==== New Privileged CSRs
 
-[[ACE-CSR-sacecrstatus]]
-===== `sacecrstatus`
+[[ACE-CSR-scrstatus]]
+===== `scrstatus`
 
-[WARNING]
-[.red]#change to just two states?.#
+The XLEN-bit register `scrstatus` tracks the dirtiness of CRs on a per-CR basis.
 
-The 64-bit register `sacecrstatus` tracks the configuration and dirtiness of CRs on a per-CR basis.
-When XLEN=32, `sacecrstatush` is a 32-bit register that aliases bits [63:32] of `sacecrstatus`.
-Register `sacecrstatush` does not exist when XLEN=64.
+NOTE: If we implement lazy-loading in the architecture at some point, `scrstatus` may be made into a 64-bit register to track the laziness status of individual CRs in the upper 32 bits.
+When XLEN=32, `scrstatush` would be a 32-bit register that aliases bits [63:32] of `scrstatus`, and `scrstatush` would not exist when XLEN=64.
 
-``sacecrstatus[``2__i__+1,2__i__``]`` can take the values Initial, Clean, and Dirty, as defined for `sstatus.ACES`, for CR #__i__.
-Off (value = 0) is currently an invalid value and unconditionally produces an error and currently it should not be allowed to set this value.
-We reserve to use it for a future lazy-loading extension (under the name of _Lazy_).
+``scrstatus[__i__]`` can take the values Clean (0), and Dirty (1), for CR #__i__.
 Lazy-loading will require an additional CSR to track additional CR status (cf.{nbsp}<<ACE-LAZY>>).
 
-Attempts to execute any ACE instruction that accesses CR #__i__ raise ACE error _ace_err_unconfigured_ when ``sacecrstatus[``2__i__+1,2__i__``]`` is set to Off.
-We define the semantics of the `acecrstatus` CSR.
-“Configure” refers to the management operations that can configure a CR, namely `ace.provision`, `ace.import` and being the destination of an `ace.clone` or `ace.derive` operation. “Unconfigure” refers to the use of `ace.clear` on a CR.
+The state of an individual CR in `scrstatus` after `ace.clear` or `ace.reset` (<<ACE-instruction-clear>>) is Clear.
+However, `ace.clear` makes the `*status.ACES` field Dirty, to signal higher privileged code to erase any older saved state for unconfigured CRs during context switch.
 
-Initial (value = 1) means that the CR is unconfigured, and in particular it is the state of a CR after `ace.clear` or `ace.reset` (<<ACE-instruction-clear>>).
-Note that `ace.clear`, however, makes the `*status.ACES` field Dirty, to signal higher privileged code to erase any older saved state for unconfigured CRs during context switch.
+When ``scrstatus[__i__]`` is set to Clean, executing any instruction that changes CR #__i__ will change ``scrstatus[__i__]`` to Dirty.
 
-When ``sacecrstatus[``2__i__+1,2__i__``]`` is set to Initial or Clean, executing
-any instruction that changes CR #__i__ will change
-``sacecrstatus[``2__i__+1,2__i__``]`` to Dirty.
-
-When ``sacecrstatus[``2__i__+1,2__i__``]`` is set to Initial, attempts to _use_ or export the CR raise ACE error _ace_err_unconfigured_.
-
-// Implementations may also change ``sacecrstatus[``2__i__+1,2__i__``]`` from
+// Implementations may also change ``scrstatus[__i__]`` from
 // Initial or Clean to Dirty at any time, even when there is no change in CR #__i__ state.
 
 NOTE: `sstatus.ACES` is also in effect.
 
-NOTE: the `sacecrstatus` CSR does not depend on the S extension.  In an M-U
-system, M-mode can use the CSR to optimize U-mode context switches.
+NOTE: the `scrstatus` CSR does not depend on the S extension.  In an M-U system, M-mode can use the CSR to optimize U-mode context switches.
 
-[[ACE-CSR-vsacecrstatus]]
-===== `vsacecrstatus`
+[[ACE-CSR-vscrstatus]]
+===== `vscrstatus`
 
-The `vsacecrstatus` register exists only when the H extension is implemented.
-When XLEN=32, `vsacecrstatush` is a 32-bit register that aliases bits [63:32] of `vsacecrstatus`.
-Register `vsacecrstatush` does not exist when XLEN=64.
+The `vscrstatus` register exists only when the H extension is implemented.
+
+The XLEN-bit register `vscrstatus` tracks the dirtiness of CRs on a per-CR basis.
+
+NOTE: Similarly to `scrstatus`, if we implement lazy-loading in the architecture at some point, `vscrstatus` may be made into a 64-bit register to track the laziness status of individual CRs in the upper 32 bits.
+When XLEN=32, `vscrstatush` would be a 32-bit register that aliases bits [63:32] of `vscrstatus`, and `vscrstatush` would not exist when XLEN=64.
 
 When V=1, the following holds:
 
-* The 64-bit register `vsacecrstatus` tracks the configuration and dirtiness of CRs on a per-CR basis, and has essentially the same semantics as `sacecrstatus`.
-* ``vsacecrstatus[``2__i__+1,2__i__``]`` can take the values Off, Initial, Clean, and Dirty, as defined for `vsstatus.ACES`, for CR #__i__.
-* `vsacecrstatus` substitutes for `sacecrstatus`, so instructions that normally read or modify `sacecrstatus` actually access `vsacecrstatus` instead.
-If ``vsacecrstatus[``2__i__+1,2__i__``]`` is set to Initial or Clean, executing any instruction that changes CR #__i__ will change ``vsacecrstatus[``2__i__+1,2__i__``]`` to Dirty.
-* Attempts to execute any ACE instruction that accesses CR #__i__ raise ACE error _ace_err_unconfigured_ when ``vsacecrstatus[``2__i__+1,2__i__``]`` is set to Off.
+* ``vscrstatus[__i__]`` can take the values Clean (0) or Dirty (1), as defined for `scrstatus`, for CR #__i__.
+* `vscrstatus` substitutes for `scrstatus`, so instructions that normally read or modify `scrstatus` actually access `vscrstatus` instead.
 
 // TODO: ace.reset and ace.clear should set Initial
 
-NOTE: `sstatus.ACES`, `vsstatus.ACES`, and `vsacecrstatus` are also in effect when V=1.
+NOTE: `sstatus.ACES`, `vsstatus.ACES`, and `vscrstatus` are also in effect when V=1.
 
 //
 
-[#ACE-CSR-macecrstatus,discrete]
-===== `macecrstatus`
+[#ACE-CSR-mcrstatus,discrete]
+===== `mcrstatus`
 
 [WARNING]
 ====
-(((CSR, macecrstatus)))
-A separate `macecrstatus` can be defined, _mutatis mutandis_, like `sacecrstatus` and `vsacecrstatus`, to allow M-mode to optimize context switches of Supervisor domains.
+(((CSR, mcrstatus)))
+A separate `mcrstatus` can be defined, _mutatis mutandis_, like `scrstatus` and `vscrstatus`, to allow M-mode to optimize context switches of Supervisor domains.
 In this case, the `ACE` and `ACEIOBUF` fields in `sstatus` shall be unshadowed.
 
-(A `uacecrstatus` might become useful if the HFI extension gets approved, together with the fields in an additional `ustatus` CSR.)
+(A `ucrstatus` might become useful if the HFI extension gets approved, together with the fields in an additional `ustatus` CSR.)
 ====
 
 //
+[#discrete]
+===== `*crstatus` Propagation.
+
+NOTE: CR status propagates from the least privileged modes to the higher privileged ones.
+Any instruction that changes bit \#__i__ of, say `vscrstatus` to Dirty, will also set the corresponding bit of `scrstatus` and `mcrstatus`.
+Any instruction that changes bit \#__i__ of, say `scrstatus` to Dirty, will also set the corresponding bit of `mcrstatus`.
+Consequently, also the ACES fields of `*status` will record the Dirty state.
 
 [[ACE-CSR-macercsk]]
 ===== `macercsk` group
@@ -1079,7 +1073,7 @@ Description::
 For `ace.clear`, `Kd` or `K[Xd]` denotes the CR to be cleared. +
 `ace.reset` uses the encoding for `ace.clear` and `Xd` = `X0` (the `context` field is `0`) or `Xd` != `X0` containing a value larger than 31.
 +
-`ace.clear` unconfigures the state of the relevant CR by releasing its internal resources in the CRF and setting the corresponding entry in `*acecrstatus` to Dirty
+`ace.clear` unconfigures the state of the relevant CR by releasing its internal resources in the CRF and setting the corresponding entry in `*crstatus` to Dirty
 unless the CR was already unconfigured, in which case it does nothing.
 
 Properties::
@@ -4235,13 +4229,13 @@ Therefore, a cooperative approach is recommended:
   In place of raising an _ace_err_memory_ error, out of CRF capacity situations should trap to a suitable handler.
 * The selection method for choosing the CR to offload could be random, heuristic, or based on implementation-specific hardware-provided mechanisms to select a least-recently-used CR.
 
-Let us use value 0 in the entries of `acecrstatus` to support lazy loading, so we call this state *LAZY* in place of *OFF*.
+Let us use value 0 in the entries of `crstatus` to support lazy loading, so we call this state *LAZY* in place of *OFF*.
 Its definition is: A CR marked *LAZY* is Unconfigured. An authoritative value is saved for lazy loading in one of the parent modes.
 Unconfiguration and configuration operations on this CR work normally.
 
 NOTE: The *LAZY* status reuses the FS/VS/ACES encoding for “OFF”, this does not indicate that the ISE is inactive, nor that the ISE cannot use that CR.
 Whether the ISE is active is encoded exclusively in ```*status```.
-The use of the **OFF** encoding in the per-CR fields of `acecrstatus` is a natural choice to denote an unavailable state that requires lazy loading to be made available. If all CRs were to be lazy-loaded, the ACES field would be set to **CLEAN** and not to **OFF**.
+The use of the **OFF** encoding in the per-CR fields of `crstatus` is a natural choice to denote an unavailable state that requires lazy loading to be made available. If all CRs were to be lazy-loaded, the ACES field would be set to **CLEAN** and not to **OFF**.
 
 If an *Export* or *Usage* operation is issued at U-mode, then
 the system traps to the higher-privileged mode that holds the authoritative SCC, which must import it into the CR.
@@ -4259,9 +4253,9 @@ There is however one complex case, which occurs when:
 +
 Possible solutions where the dirtiness information is maintained architecturally include:
 
-... The fields of `acecrstatus` must be expanded to three bits to accommodate a fifth status, *LAZY/DIRTY*;
-... Another 32 bits worth of CSRs, say `acecrstatusext`, is used for this purpose; or
-... The *INITIAL* state in `acecrstatus` is repurposed to denote this state, and to check whether a CR is unconfigured we check whether `ace.size` returns 0.
+... The fields of `crstatus` must be expanded to three bits to accommodate a fifth status, *LAZY/DIRTY*;
+... Another 32 bits worth of CSRs, say `crstatusext`, is used for this purpose; or
+... The *INITIAL* state in `crstatus` is repurposed to denote this state, and to check whether a CR is unconfigured we check whether `ace.size` returns 0.
 
  . After the import, the CR is set to *CLEAN* and the interrupted operation is restarted.
 
