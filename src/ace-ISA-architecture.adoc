@@ -562,22 +562,24 @@ Bit `L` (11) in `misa` indicates that ACE is present.
 {empty}
 (((CSR,ACES field in *status)))
 An ACE context status field, ACES, is added to `mstatus`[26:25] and shadowed in `sstatus`[26:25] (but, see <<ACE-CSR-macecrstatus>>).
-It is defined analogously to the floating-point context status field, FS, and to the vector context status field, VS.
+It tracks the dirtiness of the ACE state, including the CRs, the ACEIOBUF, and all ACE-specific CSRs.
 If ACE is implemented, the ACES field shall not be read-only zero.
 The meanings of its values are given in <<ACE-aces-encoding>>.
+
+NOTE: ACES is defined analogously to the floating-point context status field, FS, and to the vector context status field, VS.
 
 [[ACE-aces-encoding]]
 .Encoding of ACES status field
 [float="center",align="center",width="100%",cols="^8%,<8%,<84%",options="header"]
 |===
 |Status |Name |Meaning
-|   0   | Off                | ACE disabled. CRs and the ACEIOBUF are inaccessible. The hart will trap if the user requests to enable the feature.
-|   1   | Initial            | ACE enabled. All CRs and the ACEIOBUF are unconfigured.
+|   0   | Off                | ACE disabled. The entire ACE state is inaccessible. The hart will trap if the user requests to enable the feature.
+|   1   | Initial            | ACE enabled.
 |   2   | Clean              | ACE enabled. At least one CR or the ACEIOBUF is configured, and the state matches the last context swap.
-|   3   | Dirty              | ACE enabled. At least one CR or the ACEIOBUF may have been modified since the last context swap. This includes unconfigured states since switching code needs to act on them, by erasing any stale saved state.
+|   3   | Dirty              | ACE enabled. At least one CR or the ACEIOBUF, or any ACE-specific CSR may have been modified since the last context swap. This includes unconfigured states since switching code needs to act on them, by erasing any stale saved state.
 |===
 
-The transitions between these states are the same as in Table “FS, VS, and XS state transitions” of cite:[RISCV-ISA-Priv]
+The transitions between these states are the same as in Table “FS, VS, and XS state transitions” of cite:[RISCV-ISA-Priv].
 
 [NOTE]
 Accurate setting of `mstatus.ACES` is an optimization.
@@ -587,11 +589,10 @@ When `mstatus.ACES` is set to Off, executing any ACE instruction raises an illeg
 
 When `mstatus.ACES` is set to Initial or Clean, executing any instruction that changes ACE state will change `mstatus.ACES` to Dirty.
 Implementations may also change `mstatus.ACES` from Initial or Clean to Dirty at any time, even when there is no change in ACE state.
-// TODO: ace.reset should set Initial
 
 If `mstatus.ACES` (`sstatus.ACES`) is Dirty, `mstatus.SD` (`sstatus.SD`) is 1; otherwise, `mstatus.SD` (`sstatus.SD`) is set in accordance with existing specifications.
 
-Writes to any ACES field do not affect the contents of the CRs or of the ACEIOBUF.
+Writes to any ACES field do not affect the contents of the CRs, of the ACEIOBUF, or of any ACE-specific CSRs.
 Clearing state is not performed by setting ACES to Off, Initial, or Clean, and it must be explicitly done before changing ACES.
 
 Implementations may have a writable `misa.L` field. Analogous to the way in which the floating-point unit and the vector unit are handled, the `mstatus.ACES` field may exist even if `misa.L` is clear.
@@ -602,14 +603,15 @@ Implementations may have a writable `misa.L` field. Analogous to the way in whic
 ===== ACE Context Status in `vsstatus`
 
 When the H extension is present, an ACE context status field, ACES, is added to `vsstatus`[26:25].
-It is defined analogously to the floating-point context status field, FS, and to the vector context status field, VS.
+It tracks the dirtiness of the ACE state, including the CRs, the ACEIOBUF, and all ACE-specific CSRs.
+
+NOTE: It is defined analogously to the floating-point context status field, FS, and to the vector context status field, VS.
 
 When V=1:
 
 * Both `vsstatus.ACES` and `mstatus.ACES` are in effect.
 * Attempts to execute any ACE instruction raises an illegal instruction exception when either field is set to Off.
 * If neither `vsstatus.ACES` nor `mstatus.ACES` is set to Off, executing any instruction that changes ACE state, including the CRs or the ACEIOBUF, changes both `mstatus.ACES` and `vsstatus.ACES` to Dirty.
-// TODO: ace.reset should set Initial
 * Implementations may also change `mstatus.ACES` or `vsstatus.ACES` from Initial or Clean to Dirty at any time,
 even when there is no change in ACE state.
 * If `vsstatus.ACES` is Dirty, `vsstatus.SD` is 1; otherwise, `vsstatus.SD` is set in accordance with existing specifications.
@@ -1079,10 +1081,6 @@ For `ace.clear`, `Kd` or `K[Xd]` denotes the CR to be cleared. +
 +
 `ace.clear` unconfigures the state of the relevant CR by releasing its internal resources in the CRF and setting the corresponding entry in `*acecrstatus` to Dirty
 unless the CR was already unconfigured, in which case it does nothing.
-+
-If all CRs _and_ the ACEIOBUF are Clear, the state in `*status.ACES` is set to Initial.
-`ace.reset` unconfigures the entire state of the unit, by clearing all CRs and  setting `aceiobuflen` to zero, and therefore it also sets `*status.ACES` to Initial.
-
 
 Properties::
 `ace.clear` does not make ```*status.ACES``` Dirty. +
