@@ -208,7 +208,6 @@ The fact that CRs can be addressed indirectly has two major implications:
 VM migration can become an issue when the destination machine has a smaller CRF than the source machine.
 In this case, migration could fail, or the VM may have to let some processes terminate abnormally once migrated.
 Alternatively, a lazy-loading mechanism can be used to load the CRs on demand.
-Since ACE defines only three states for the CRs (Initial, Clean, and Dirty) and encodes them in two bits, we reserve the fourth state to implement lazy-loading in the future. This is currently not defined.
 ====
 
 // ///////////////////////////////////////////////////////////////////////////////////////////
@@ -827,13 +826,15 @@ Lazy-loading will require an additional CSR to track additional CR status (cf.{n
 The state of an individual CR in `scrstatus` after `ace.clear` or `ace.reset` (<<ACE-instruction-clear>>) is Clear.
 However, `ace.clear` makes the `*status.ACES` field Dirty, to signal higher privileged code to erase any older saved state for unconfigured CRs during context switch.
 
-When ``scrstatus[__i__]`` is set to Clean, executing any instruction that changes CR #__i__ will change ``scrstatus[__i__]`` to Dirty.
+When ``scrstatus[__i__]`` is set to Clean, executing any instruction that may change the CR #__i__ will change ``scrstatus[__i__]`` to Dirty.
 
-Implementations may also change ``scrstatus[__i__]`` from Initial or Clean to Dirty at any time, even when there is no change in CR #__i__ state.
+NOTE: Implementations may also change ``scrstatus[__i__]`` from Initial or Clean to Dirty at any time, even when there is no change in CR #__i__ state.
+
+NOTE: Context switching code will only see Clean or Dirty states. To check whether a CR is actually configured, `ace.size` (<<ACE-instruction-size>>) can be used, and if the instruction returns zero, thus means that CR is not configured, and any stale state for it shall be erased and released.
 
 NOTE: `sstatus.ACES` is also in effect.
 
-NOTE: the `scrstatus` CSR does not depend on the S extension.  In an M-U system, M-mode can use the CSR to optimize U-mode context switches.
+NOTE: T1he `scrstatus` CSR does not depend on the S extension.  In an M-U system, M-mode can use the CSR to optimize U-mode context switches.
 
 [[ACE-CSR-vscrstatus]]
 ===== `vscrstatus`
@@ -1069,8 +1070,7 @@ Description::
 For `ace.clear`, `Kd` or `K[Xd]` denotes the CR to be cleared. +
 `ace.reset` uses the encoding for `ace.clear` and `Xd` = `X0` (the `context` field is `0`) or `Xd` != `X0` containing a value larger than 31.
 +
-`ace.clear` unconfigures the state of the relevant CR by releasing its internal resources in the CRF and setting the corresponding entry in `*crstatus` to Dirty
-unless the CR was already unconfigured, in which case it does nothing.
+`ace.clear` unconfigures the state of the relevant CR by releasing its internal resources in the CRF and setting the corresponding entry in `*crstatus` to Dirty unless the CR was already unconfigured, in which case it does nothing.
 
 Properties::
 `ace.clear` does not make ```*status.ACES``` Dirty. +
