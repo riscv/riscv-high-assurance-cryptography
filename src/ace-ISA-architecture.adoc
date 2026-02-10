@@ -4194,7 +4194,8 @@ The states and their semantics are otherwise identical to Ascon-XOF128, and the 
 [[ACE-ECC]]
 ==== Elliptic Curve Asymmetric Algorithms
 
-[WARNING] This section needs finalization. The best approach is to have different sizes depending on whether signature generation and/or verification is required, and then always export the max. size except, perhaps, the additional data which may contain precomputations done by the backend.
+[WARNING]
+This section needs finalization. The best approach is to have different sizes depending on whether signature generation and/or verification is required, and then always export the max. size except, perhaps, the additional data which may contain precomputations done by the backend.
 
 We need to define the elliptic curves that are actually used in practice, such as:
 
@@ -4209,17 +4210,9 @@ Algorithms: scalar multiplication with known and unknown base point and ECDSA/Ed
 
 For secp256r1 the size `b` of the main fields (coordinates, signature R and S fields, scalars) is 256 bits.
 
-// . X coordinate of the Public Key, 256 bits
-// . Y coordinate of the Public Key, 256 bits
-// . Hash of message, 256 bits
-// . SignatureR, 256 bits
-// . SignatureS, 256 bits
-
 For secp384r1, `b` is 384 bits.
 
 For secp521r1, `b` is 576 bits.
-
-The input for ECDSA-Sign on secp256r1/secp384r1/secp521r1 are just the message hash, `b` bits long.
 
 Data Structures:::
 
@@ -4235,14 +4228,17 @@ Data Structures:::
    *** `HasGenerator`: bool.
    *** `HasNumber`: bool.
    *** `HasPublicKey`: bool.
+   *** `HasHash`: bool.
    *** `HasSignature`: bool.
    *** `Progress`/input_base: integer.
    *** `Block_base`: integer.
-   *** `Generator` (X coordinate, Y coordinate): two `b`-bit strings.
-   *** `Scalar`: `b`-bit string. // can be the private key
-   *** `PublicKey` (X coordinate, Y coordinate): two `b`-bit strings.
-   *** `Signature` (R,S): two `b`-bit strings.
-   *** `RandomNumber`: `b`-bit string.
+   *** `Generator` (X coordinate, Y coordinate): a `2b`-bit string representing Y @ X.
+   *** `Scalar`: `b`-bit string.
+   *** If either signature generation or verification is allowed:
+    **** `PublicKey` (X coordinate, Y coordinate): a `2b`-bit string representing Y @ X.
+    **** `Signature` (R,S): a `2b`-bit string representing S @ R.
+   *** For signature generation only:
+    **** `RandomNumber`: `b`-bit string.
    *** Additional data (in certain states).
 
 * *Serialized Content*:
@@ -4250,23 +4246,29 @@ Data Structures:::
 --
 [lowerroman]
   . Metadata.
-  . `HasGenerator`: bool (byte).
-  . `HasNumber`: bool (byte).
-  . `HasPublicKey`: bool (byte).
-  . `HasSignature`: bool (byte).
+  . `HasGenerator`: bool.
+  . `HasNumber`: bool.
+  . `HasPublicKey`: bool.
+  . `HasHash`: bool.
+  . `HasSignature`: bool.
   . `Progress`/`input_base`: integer (byte).
   . `Block_base`: integer (byte).
   . Padding: 16 bits.
-  . `HasGenerator`: `Generator` (X coordinate, Y coordinate): two `b`-bit strings.
+  . `HasGenerator`: `Generator` (X coordinate, Y coordinate): a `2b`-bit string representing Y @ X.
   . `Scalar`: `b`-bit string. Can be the private key.
-  . If `HasPublicKey`: `PublicKey` (X coordinate, Y coordinate): two `b`-bit strings.
-  . If `HasSignature`: `Signature` (R,S): two `b`-bit strings.
-  . If signing: `RandomNumber`: `b`-bit string.
+  . If either signature generation or verification is allowed:
+  .. If `HasPublicKey`: `PublicKey` (X coordinate, Y coordinate):a `2b`-bit string representing Y @ X.
+  .. If `HasSignature`: `Signature` (R,S): a `2b`-bit string representing S @ R.
+  . For signature generation only:
+  .. `RandomNumber`: `b`-bit string.
   . Additional data (in certain states).
 
 The total size of the serialized content after `Scalar`—i.e., starring with the `PublicKey` field—is encoded in the additional size block after the metadata.
+
+EdDSA formats are similar, but in the formats, the public key is represented as a `b`-bit string.
 --
 +
+
 
 State Machine:::
 
@@ -4296,8 +4298,8 @@ State Machine:::
  * _set_generator_ can be skipped if HasPoint == true, and it can be repeated.
  * _set_scalar_ can be skipped if HasNumber == true, and it can be repeated.
  * * -> _point_mul_ (only if HasPoint == HasNumber == true) -> _output_ -> _initial_
- * * -> {_set_hash_, _set_public_key_} -> _sign_generate_ (only if HasPoint == true) -> _output_ -> _completed_
- * * -> {_set_hash_, _set_public_key_} -> _set_signature_ (only if HasPoint == HasNumber == true) -> _sign_verify_ -> _completed_
+ * * -> {_set_hash_, _set_public_key_} -> _sign_generate_ (only if HasGenerator & HasPoint) -> _output_ -> _completed_
+ * * -> {_set_hash_, _set_public_key_} -> _set_signature_ (only if HasGenerator & HasPoint & HasNumber) -> _sign_verify_ -> _completed_
 
 In state _set_generator_ we can set a group generator.
 In state _set_scalar_ we can either set a scalar for scalar multiplication or private key.
