@@ -23,7 +23,7 @@ Cryptographic Register:::
 (((Cryptographic Register)))
 Cryptographic Contexts are realized using *Cryptographic Registers* (CRs).
 CRs are architectural containers that safeguard CCs.
-A CR is *initialized* by writing metadata and content into it: this operation also binds the metadata and the content to form a CC.
+A CR is *provisioned* by writing metadata and content into it: this operation also binds the metadata and the content to form a CC.
 A CC can be used for cryptographic operations only while resident in a CR.
 Only the ACE unit may access or modify CC contents, in accordance with the architecture and the algorithm specified in the metadata.
 CR content cannot be extracted in a manner that compromises its confidentiality.
@@ -48,7 +48,7 @@ Usage Control Policy:::
 (((Cryptographic Context, usage operations)))
 ACE distinguishes between CC/CR *management* and *usage* operations.
 (((Cryptographic Context, export)))
-Management operations include *configuration* (e.g., CR initialization, import of an SCC, cloning or key derivation from one CR to another) and *export* of a CR as an SCC.
+Management operations include *configuration* (e.g., CR provisioning, import of an SCC, cloning or key derivation from one CR to another) and *export* of a CR as an SCC.
 Usage operations include cryptographic operations and state change;
 key derivation is both a configuration and a usage operation.
 (((Cryptographic Context, access)))
@@ -91,8 +91,8 @@ This binding uses metadata when a CC is in a CR, and a _Derived Context Sealing 
 * `Zlascon` => Support for the ASCON suite.
 * `Zlkned` => NIST Suite: AES Block Cipher. Depends on `Zleaes128` and `Zleaes256`.
 * `Zlkn` => NIST Algorithm Suite. Depends on `Zlkned` and `Zlesha2`.
-* `Zlv` => Requires V (or a suitable subset thereof). Must support for the following CSRs: `aceerror` and `acestart` (this is a dependency for Zicsr); must support the following instructions: `ace.init`, all four forms of `ace.exec`, `ace.clear`, `ace.export`, `ace.import`, and `ace.size`; must support `Zleaes128` and `Zleaes256` in ECB and GCM-SIV modes.
-* `Zlio` => Must support for the following CSRs: `aceerror`, `acestart` (this is a dependency for Zicsr), `aceiobuflen` and `aceiobuftop`; must support the following instructions: `ace.init`, Form D of `ace.exec`, `ace.input` and `ace.output`, `ace.clear`, `ace.export`, `ace.import`, and `ace.size`; must support `Zleaes128` and `Zleaes256` in ECB and GCM-SIV modes.
+* `Zlv` => Requires V (or a suitable subset thereof). Must support for the following CSRs: `aceerror` and `acestart` (this is a dependency for Zicsr); must support the following instructions: `ace.prov`, all four forms of `ace.exec`, `ace.clear`, `ace.export`, `ace.import`, and `ace.size`; must support `Zleaes128` and `Zleaes256` in ECB and GCM-SIV modes.
+* `Zlio` => Must support for the following CSRs: `aceerror`, `acestart` (this is a dependency for Zicsr), `aceiobuflen` and `aceiobuftop`; must support the following instructions: `ace.prov`, Form D of `ace.exec`, `ace.input` and `ace.output`, `ace.clear`, `ace.export`, `ace.import`, and `ace.size`; must support `Zleaes128` and `Zleaes256` in ECB and GCM-SIV modes.
 * At least one of `Zlv` or `Zlio` must be implemented. (Note that, currently, we are not considering a version of ACE that uses the GPRs in place of the vectors registers.)
 
 ==== Privileged
@@ -155,7 +155,7 @@ CRs reside in a dedicated _CR file_ (CRF), accessible only by the ACE implementa
 
 CRs differ from conventional register in several ways:
 
-* Clear data is loaded into CR using the `ace.init` instruction (<<ACE-instruction-init>>), but
+* Clear data is loaded into CR using the `ace.prov` instruction (<<ACE-instruction-init>>), but
 there is no corresponding store instruction to extract the same data as clear text.
 
 * A CR can be *exported* in an encrypted and authenticated format using the `ace.export` instruction (<<ACE-instruction-export>>).
@@ -168,7 +168,7 @@ Conventional registers do not provide such functionality—and do not need to.
 * Whereas conventional registers always contain a value, CRs can be _unconfigured_, meaning they may hold no information.
 * The amount of the capacity of the CRF used by a CR depends on the configured algorithm.
   Two CRs can use different amounts of capacity.
-  Insufficient residual CRF capacity may prevent the execution of a CR *configuration* instruction, i.e. `ace.init`, `ace.import`,
+  Insufficient residual CRF capacity may prevent the execution of a CR *configuration* instruction, i.e. `ace.prov`, `ace.import`,
    `ace.clone`, (<<ACE-instruction-clone>>) or `ace.derive` (<<ACE-instruction-derive>>).
   In this case, software must free capacity by unconfiguring other CRs.
 
@@ -183,7 +183,7 @@ Accessing a CR that is outside the range [0..31] raises an illegal instruction e
 
 [NOTE]
 ====
-The management operations include the *configuration* instructions (`ace.init`, `ace.import`, `ace.clone`, and `ace.derive`) and the export operation (`ace.export`).
+The management operations include the *configuration* instructions (`ace.prov`, `ace.import`, `ace.clone`, and `ace.derive`) and the export operation (`ace.export`).
 ====
 
 [NOTE]
@@ -236,11 +236,11 @@ The support for the vector register file and for ACEIOBUF are not mutually exclu
 
 For software portability and interoperability, ACE defines two external formats for CCs:
 
-. The _Initialization Input_ (II) format, which is loaded into a CR to create a C; and
+. The _Provisioning Input_ (PI) format, which is loaded into a CR to create a C; and
 . The Sealed Cryptographic Context (SCC) (<<ACE-format-SCC>>), an encrypted, authenticated format used when exporting a CR to memory for later re-import.
 
 Both formats rely on the same metadata section format, which is described here.
-The II and SCC formats are described in <<ACE-init-export-import>> and <<ACE-format-SCC>>, respectively.
+The PI and SCC formats are described in <<ACE-provision-export-import>> and <<ACE-format-SCC>>, respectively.
 
 {empty}
 (((Cryptographic Context,metadata,format)))
@@ -315,15 +315,15 @@ These key types are encoded as follows:
 |   1   | System Key.
 |===
 
-System Keys are given by an index into an internal, system-specific System Keys Table (SKT). For each algorithm as specified in <<ACE-algorithms>>, the part of the content that normally contains the key(s) is replaced by its index into the SKT-for both II and SCCs. The actual value of the key is never included in exported content. For threshold implementations, ACE may copy the key material from the SKT into the CR and expand it into multiple shares.
+System Keys are given by an index into an internal, system-specific System Keys Table (SKT). For each algorithm as specified in <<ACE-algorithms>>, the part of the content that normally contains the key(s) is replaced by its index into the SKT-for both PI and SCCs. The actual value of the key is never included in exported content. For threshold implementations, ACE may copy the key material from the SKT into the CR and expand it into multiple shares.
 
-System Generated Keys are also system-specific. In place of the II, the initialization operation reads a system-specific “recipe”, which is not portable. After internal key generation, the actual key value—not the recipe—is stored in the CR and SCC. The KeyType field in the metadata is 0.
+System Generated Keys are also system-specific. In place of the PI, the provisioning operation reads a system-specific “recipe”, which is not portable. After internal key generation, the actual key value—not the recipe—is stored in the CR and SCC. The KeyType field in the metadata is 0.
 
 //
 
 ===== StateNumber Field
 
-The StateNumber field must be zero in an II.
+The StateNumber field must be zero in a PI.
 
 Some values of StateNumber are architected, and are defined in <<ACE-state-constants-fixed>>.
 these include _initial_, _invalid_, and _completed_, which correspond to values 0, 14, and 15.
@@ -334,8 +334,8 @@ These denote a CC that is ready to operate, it is in an operational state, is in
 [float="center",align="center",width="100%",cols="^6%,<26%,<16%,<52%",options="header"]
 |===
 | Value | Mnemonic for the Constant       | State Name          | Description
-|   0   | _ace_state_initial_             | _initial_           | The context is initialized and ready for operation.
-|  14   | _ace_state_invalid_             | _invalid_           | The algorithm has abnormally terminated or initialization/import have been interrupted.
+|   0   | _ace_state_initial_             | _initial_           | The context has just been provisioned or reset, and ready for operation.
+|  14   | _ace_state_invalid_             | _invalid_           | The algorithm has abnormally terminated or provisioning/import have been interrupted.
 |  15   | _ace_state_completed_           | _completed_         | The algorithm has completed, not necessarily without error.
 |===
 
@@ -351,8 +351,8 @@ StateNumber must always be set to _initial_, _invalid_, and _completed_ if the s
 
 The state values for the symmetric algorithms defined in this specification are listed in <<ACE-state-constants-symmetric>>.
 
-During init and import, the StateNumber field is set to _invalid_, and only at the end of the operation is it set to proper value, i.e., _initial_ or the value in the SCC (see <<ACE-init-export-import>>)
-This means, by the rules in <<ACE-invalidation>>, that a partially initialized/imported CR cannot be exported. In particular, if a context switch occurs, that the more privileged code must unconfigure the CR, and upon resumption, the instruction will be restarted.  Only an invalid CR with an `acestart` different from zero is recognized as an incomplete CR allowing an init or import operation to resume.
+During init and import, the StateNumber field is set to _invalid_, and only at the end of the operation is it set to proper value, i.e., _initial_ or the value in the SCC (see <<ACE-provision-export-import>>)
+This means, by the rules in <<ACE-invalidation>>, that a partially provisioned/imported CR cannot be exported. In particular, if a context switch occurs, that the more privileged code must unconfigure the CR, and upon resumption, the instruction will be restarted.  Only an invalid CR with an `acestart` different from zero is recognized as an incomplete CR allowing an init or import operation to resume.
 
 This state change to _invalid_ does not occur during `ace.export`, but operations that could modify the internal state should not be performed on a CR with an interrupted export operation.
 
@@ -411,7 +411,7 @@ An SCC created on one device will fail authentication when imported on another d
 NOTE: A CC may reference a key by an index into the System Key Table (SKT).
 A device-specific SKT entry may correspond to a different key on another device.
 Using the latter may lead to unspecified behavior.
-Implementations of the SKT *must* provide a suitable Locality to the ACE unit during CR initialization, and set usage policies that are at least as strict as the key's own.
+Implementations of the SKT *must* provide a suitable Locality to the ACE unit during CR provisioning, and set usage policies that are at least as strict as the key's own.
 
 [WARNING]
 An extension field for the Locality field may be provided in the 128-bit (or longer) metadata format, if defined.
@@ -471,15 +471,15 @@ If both filtering according to `scontext` and an expiration date are required, t
 //
 
 [[ACE-format-definition]]
-==== Initialization Input
+==== Provisioning Input
 
-The length of an II must be a multiple of 8 bytes.
+The length of a PI must be a multiple of 8 bytes.
 The first 8 bytes contain the metadata section, as defined in <<ACE-metadata>>.
-The subsequent bytes form the *content*—the key material and any algorithm-specific data—whose format and length are specified in <<ACE-algorithms>> for all architected algorithms. The II content's structure and size are entirely determined by the Algorithm and KeyType fields within the metadata.
+The subsequent bytes form the *content*—the key material and any algorithm-specific data—whose format and length are specified in <<ACE-algorithms>> for all architected algorithms. The PI content's structure and size are entirely determined by the Algorithm and KeyType fields within the metadata.
 
-NOTE: The actual resource usage of a CR may be larger than the size of an II.
-In the simple ECB schemes (<<ACE-ECB-mode>>) not hardened against SCA, a CR need not contain more than the metadata and the key, hence their resource usage matches the size of the II (unless the key is not a multiple of 64 bits).
-However, several algorithms need to compute and cache additional data once initialized, and their internal state will be larger than the size of the II.
+NOTE: The actual resource usage of a CR may be larger than the size of a PI.
+In the simple ECB schemes (<<ACE-ECB-mode>>) not hardened against SCA, a CR need not contain more than the metadata and the key, hence their resource usage matches the size of the PI (unless the key is not a multiple of 64 bits).
+However, several algorithms need to compute and cache additional data once initialized, and their internal state will be larger than the size of the PI.
 
 [[ACE-format-SCC]]
 ==== Sealed Cryptographic Context
@@ -497,7 +497,7 @@ Format of SCC:::
 Both metadata and the serialization of the content are authenticated, but only part of the metadata and the content are encrypted.
 The AEAD method used for this purpose is described in <<ACE-SCC-AEAD>>.
 
-The metadata section of an SCC follows the same fixed architectural format as the metadata section of the II.
+The metadata section of an SCC follows the same fixed architectural format as the metadata section of the PI.
 The content format—and consequently its length—are algorithm-specific (<<ACE-algorithms>>) and are determined solely by the Algorithm, KeyType, and DirectionPolicy fields in the metadata.
 
 NOTE: The size of the SCC can differ significantly from the internal resource usage to store the CC's data in a CR—it can be larger but also smaller.
@@ -658,11 +658,11 @@ Not allowed state number in `ace.state`, including requesting encryption or decr
 
 ACE error _ace_err_invalid_value_ collects various cases, for instance (but, there could be more):
 
-* Invalid metadata section in `ace.init` or `ace.import`, other than ace_err_unimplemented, for instance:
+* Invalid metadata section in `ace.prov` or `ace.import`, other than ace_err_unimplemented, for instance:
  ** Non-zeros in zero fields,
  ** Invalid FilterMode for a 64-bit metadata block,
  ** Non-implemented Locality value,
- ** StateNumber is non-zero for `ace.init`.
+ ** StateNumber is non-zero for `ace.prov`.
 * ACE operation issued with invalid or zero ACEIOBUF length `aceiobuftop`-`acestart` (see <<ACE-CSR-aceiobuftop>> and <<ACE-CSR-acestart>>).
 * Invalid input to `ace.restrict`.
 
@@ -683,7 +683,7 @@ If a Form of `ace.exec`, `ace.state` or `ace.derive` that is not permitted in th
 Code        .>|Description
 .>|_Highest_  | 7             .>| Attempt to use an invalid CR.
 |           .>| 6             .>| Unconfigured or partially configured CR
-|           .>| 5, 4          .>| Invalid metadata section in `ace.init` or `ace.import`, including specifying a not implemented algorithm or side-channel protected variant.
+|           .>| 5, 4          .>| Invalid metadata section in `ace.prov` or `ace.import`, including specifying a not implemented algorithm or side-channel protected variant.
 |           .>| 3             .>| Insufficient CRF memory.
 |           .>| 2, 1          .>| Access Control Failure or authentication failure with `ace.import`
 |           .>| 1             .>| Authentication failure in an algorithm.
@@ -696,7 +696,7 @@ Code        .>|Description
 [[ACE-CSR-acestart]]
 ===== `acestart`
 
-`acestart` is an XLEN-bit RW CSR, to track progress of long-running interruptible instructions such as `ace.init`, `ace.import`, `ace.export`, `ace.input`, and `ace.output`, as well as `ace.exec` on long inputs.
+`acestart` is an XLEN-bit RW CSR, to track progress of long-running interruptible instructions such as `ace.prov`, `ace.import`, `ace.export`, `ace.input`, and `ace.output`, as well as `ace.exec` on long inputs.
 (((CSR, acestart)))
 
 Unlike the vector extension’s `vstart`, which tracks element indices, ACE has no _intrinsic_ notion equivalent to that of vector elements.
@@ -707,7 +707,7 @@ Doing so may cause an exception.
 
 Only the instructions explicitly mentioned above support non-zero `acestart` values; other ACE instructions ignore this register, and will be restarted.
 
-Initialization, import, and export operations may be interrupted and resumed if no context switch occurs,
+Provisioning, import, and export operations may be interrupted and resumed if no context switch occurs,
 as indicated by the value in the `acestart` CSR.  If a context switch occurs, they must be restarted.
 
 ////
@@ -715,7 +715,7 @@ as indicated by the value in the `acestart` CSR.  If a context switch occurs, th
 ====
 _A single `acestart` value suffices due to the way the init/import/export instructions operate:_
 
-* `_ace.init_` _and_ `_ace.import_` _use a single pass: all blocks are processed sequentially._
+* `_ace.prov_` _and_ `_ace.import_` _use a single pass: all blocks are processed sequentially._
 * `_ace.export_` _uses two passes. However, the first pass to compute the SIV is purely internal, and never accesses memory, so page faults cannot occur.
 This first pass is uninterruptible.
 The second pass writes metadata, the SIV, and then the content to memory.
@@ -728,7 +728,7 @@ This design obviates the need to separate data transfer from cryptographic proce
 Another use of `acestart` arises when an `ace.exec` instruction operates on long vectors containing multiple elements, in which case `VL*SEW` is a multiple of the basic processing unit usually denoted by `b` (such as a block size) in the algorithms. In this situation, `ace.exec` can work iteratively on each block of the input, and execution of `ace.exec` may be interrupted and resumed.
 Regardless of whether the operations are on vectors or on the ACEIOBUF, `acestart` reflects the number of bytes processed so far.
 
-The semantics and use of `acestart` are described in <<ACE-init-export-import>>.
+The semantics and use of `acestart` are described in <<ACE-provision-export-import>>.
 
 The two CSRs described next may be used to optimize saving and restoring the ACEIOBUF.
 
@@ -825,7 +825,7 @@ Lazy-loading will require an additional CSR to track additional CR status (cf.{n
 
 Attempts to execute any ACE instruction that accesses CR #__i__ raise ACE error _ace_err_unconfigured_ when ``sacecrstatus[``2__i__+1,2__i__``]`` is set to Off.
 We define the semantics of the `acecrstatus` CSR.
-“Configure” refers to the management operations that can configure a CR, namely `ace.init`, `ace.import` and being the destination of an `ace.clone` or `ace.derive` operation. “Unconfigure” refers to the use of `ace.clear` on a CR.
+“Configure” refers to the management operations that can configure a CR, namely `ace.prov`, `ace.import` and being the destination of an `ace.clone` or `ace.derive` operation. “Unconfigure” refers to the use of `ace.clear` on a CR.
 
 Initial (value = 1) means that the CR is unconfigured, and in particular it is the state of a CR after `ace.clear` or `ace.reset` (<<ACE-instruction-clear>>).
 Note that `ace.clear`, however, makes the `*status.ACES` field Dirty, to signal higher privileged code to erase any older saved state for unconfigured CRs during context switch.
@@ -1004,32 +1004,32 @@ Implementers may, for instance, incorporate a secure CPU with updatable firmware
 While the architecture does not prohibit this, such an approach substantially expands the attack surface of the ACE unit.
 
 [[ACE-instruction-init]]
-==== ace.init
+==== ace.prov
 
-`ace.init Kd|K[Xd], %offset(Xs)`
-(((ACE, instruction, ace.init)))
+`ace.prov Kd|K[Xd], %offset(Xs)`
+(((ACE, instruction, ace.prov)))
 
 Encoding::
-`ace.init` is an I-type instruction.
+`ace.prov` is an I-type instruction.
 +
 [wavedrom, , svg]
 ....
 {reg:[
     { bits:  7, name: 0x0b, attr: ['custom-0'] },
     { bits:  5, name: 'context', attr: ['Kd','K[Xd]'] },
-    { bits:  3, name: 'ace.init', attr: [0x4,0x5] },
+    { bits:  3, name: 'ace.prov', attr: [0x4,0x5] },
     { bits:  5, name: 'Xs' },
     { bits: 12, name: 'immed12', attr: ['offset'] },
 ]}
 ....
 
 Description::
-`ace.init` initializes a CR with metadata and content to create a CC.
-`Kd` or `K[Xd]` denotes the CR to be initialized.
+`ace.prov` provisions a CR with metadata and content to create a CC.
+`Kd` or `K[Xd]` denotes the CR to be provisioned.
 `Xs` points to the region of memory containing the metadata and the key material.
-The II must be stored at an 8-byte aligned address, and its length must be a multiple of 8 bytes.
+The PI must be stored at an 8-byte aligned address, and its length must be a multiple of 8 bytes.
 +
-Similarly to vector store instructions, `ace.init` appears to other harts as a sequence of individual reads.
+Similarly to vector store instructions, `ace.prov` appears to other harts as a sequence of individual reads.
 
 Properties::
 Possibly modifies state: *YES*. +
@@ -1037,13 +1037,13 @@ Usage-controlled: *NO*. +
 Trappable: *YES*. +
 Interruptible: *YES*.
 
-NOTE: `ace.init`, as well as `ace.import`, `ace.export`, `ace.input`, and `ace.output` as described later, perform direct memory accesses.
+NOTE: `ace.prov`, as well as `ace.import`, `ace.export`, `ace.input`, and `ace.output` as described later, perform direct memory accesses.
 This does not violate the RISC-V load/store architecture principles,
-since `ace.init`, `ace.import` and `ace.input` can be seen as special kinds of load instructions and
+since `ace.prov`, `ace.import` and `ace.input` can be seen as special kinds of load instructions and
 `ace.export` and `ace.output` as special store instructions.
 // as ACE is architected to behave like an _attached_ unit, which may have its own interfaces.
 
-The operation is described in detail in <<ACE-init-export-import>>.
+The operation is described in detail in <<ACE-provision-export-import>>.
 
 //
 
@@ -1117,7 +1117,7 @@ The SCC must be stored at an 8-byte aligned address, and its length must be a mu
 If the context is unconfigured, ACE error _ace_err_unconfigured_ is raised.
 If `Xs` is out of range, ACE error _ace_err_invalid_value_ is raised.
 +
-The instruction must follow the interruptibility rules defined in <<ACE-CSR-acestart>> and <<ACE-init-export-import>>.
+The instruction must follow the interruptibility rules defined in <<ACE-CSR-acestart>> and <<ACE-provision-export-import>>.
 
 Similarly to vector register store instructions, `ace.export` appears to other harts as a sequence of individual stores.
 
@@ -1127,7 +1127,7 @@ Usage-controlled: *NO*. +
 Trappable: *YES*. +
 Interruptible: *YES*.
 
-The operation is described in detail in <<ACE-init-export-import>>.
+The operation is described in detail in <<ACE-provision-export-import>>.
 
 //
 
@@ -1163,7 +1163,7 @@ It is set to true if the key is in a system-defined format
 and not the format defined by the present architecture
 (`ace.import`).
 +
-`ace.import` must follow the interruptibility rules defined in <<ACE-CSR-acestart>> and <<ACE-init-export-import>>.
+`ace.import` must follow the interruptibility rules defined in <<ACE-CSR-acestart>> and <<ACE-provision-export-import>>.
 Similarly to vector register load instructions, `ace.import` appears to other harts as a sequence of individual loads.
 The behavior of `ace.import.S` is implementation-defined.
 
@@ -1173,7 +1173,7 @@ Usage-controlled: *NO* +
 Trappable: *YES*. +
 Interruptible: *YES*.
 
-The operation is described in detail in <<ACE-init-export-import>>.
+The operation is described in detail in <<ACE-provision-export-import>>.
 
 NOTE: The instruction encoding includes a single bit to indicate a system-defined format. If multiple such formats are supported, the data format itself must incorporate a unique identifier to differentiate them. The system is therefore responsible for embedding these identifiers within all system-defined formats.
 
@@ -1666,15 +1666,15 @@ Interruptible: *YES*.
 
 // ///////////////////////////////////////////////////////////////////////////////////////////
 
-[[ACE-init-export-import]]
-=== Initialization, Export and Import of Cryptographic Contexts
+[[ACE-provision-export-import]]
+=== Provisioning, Export and Import of Cryptographic Contexts
 
-From the point of view of the system outside the ACE unit, `ace.init` and `ace.import` appear as a series of sequential memory reads, and `ace.export`, appears as a series of sequential memory writes.
+From the point of view of the system outside the ACE unit, `ace.prov` and `ace.import` appear as a series of sequential memory reads, and `ace.export`, appears as a series of sequential memory writes.
 
 The only admissible points of interruption of these instructions are the memory read or write operations.
 The instructions may be interrupted because of a memory exception, and any other type of interrupt must wait for the next memory read or write.
 They may resume from the point of interruption only if the control flow is returned to them immediately after the interrupt handler has completed.
-The privileged interrupt handler must ensure that the instruction is restarted only in this situation, and in any other circumstance, including context switching, the instruction must be restarted, in which case if the instruction is `ace.init` or `ace.import` it must also clear the CR.
+The privileged interrupt handler must ensure that the instruction is restarted only in this situation, and in any other circumstance, including context switching, the instruction must be restarted, in which case if the instruction is `ace.prov` or `ace.import` it must also clear the CR.
 The implementation will also restart any operation if the internal state of the CR is not in a valid interrupted state.
 
 [NOTE]
@@ -1695,7 +1695,7 @@ While `content[]` provides a view of (certain fields of) the content of a CR tha
 
 `content[]` is a virtual representation: its byte ordering does not imply physical contiguity within the CR, nor is there a direct byte-for-byte correspondence. Changes to `content[]` are reflected in the underlying CR representation (except for excluded fields), and vice versa.
 
-For example, let us consider a threshold implementation. A single key byte in `content[]` may correspond to multiple bytes across the key shares within the CR. Reading that byte may return the XOR of the corresponding bytes in the shares; writing to it may distribute the value across the corresponding bytes in the shares such that their XOR equals the input. These operations may be deferred until the end of an initialization or import instruction: writing to `context[]` may initially write only to the first share of a key, and at the end of the initialization or import instruction, the various shares are generated.
+For example, let us consider a threshold implementation. A single key byte in `content[]` may correspond to multiple bytes across the key shares within the CR. Reading that byte may return the XOR of the corresponding bytes in the shares; writing to it may distribute the value across the corresponding bytes in the shares such that their XOR equals the input. These operations may be deferred until the end of an provisioning or import instruction: writing to `context[]` may initially write only to the first share of a key, and at the end of the provisioning or import instruction, the various shares are generated.
 --
 
 [[ACE-size-functions]]
@@ -1705,25 +1705,25 @@ Suppose `x` is a variable representing the first 32 bits of the metadata section
 We assume that the implementation provides the following functions (or an equivalent mechanism):
 
 . `MD_size(x)` returns the byte length of the entire metadata section. Currently, always 8.
-. `II_content_size(x)` returns the size in bytes of the content section of an II. It depends only on the 11 bits `KeyType @ Algorithm`.
+. `PI_content_size(x)` returns the size in bytes of the content section of a PI. It depends only on the 11 bits `KeyType @ Algorithm`.
 . `SCC_content_size(x)` returns the size in bytes of the content section of an SCC. It depends only on the 13 bits `DirectionPolicy @ KeyType @ Algorithm`.
 
-The total size of an II is therefore `MD_size(x)` + `II_content_size(x)`, and the total size of an SCC is `MD_size(x)` + `SCC_content_size(x)`.
+The total size of a PI is therefore `MD_size(x)` + `PI_content_size(x)`, and the total size of an SCC is `MD_size(x)` + `SCC_content_size(x)`.
 
-[[ACE-init]]
-==== Initialization
+[[ACE-provision]]
+==== Provisioning
 
-We start with the algorithm performed by `ace.init`, which reads an II and uses it to initialize a CR.
+We start with the algorithm performed by `ace.prov`, which reads a PI and uses it to provision a CR.
 
-[[ACE-init-listing]]
-.Initializing a CR with metadata and content
+[[ACE-provision-listing]]
+.Provisioning a CR with metadata and content
 []
 ----
 M : array of bytes // in memory
 
 // PREEMPTIBLE WITH `ACESTART` IN [0 .. 7]
 metadata : bits(64) = M[0 .. 7]
-z ← II_content_size(metadata[31:0]);
+z ← PI_content_size(metadata[31:0]);
 
 if (z == 0)
    error ace_err_unimplemented
@@ -1910,14 +1910,14 @@ If an invalid input is provided to any ACE instruction, or an instruction that i
 
 * `Kn` is put into state _invalid_;
 * For instructions that refer to `Kn`:
- ** `ace.init`, `ace.clear` (thus also `ace.reset`), `ace.import`, `ace.export`, `ace.size` and `ace.available` work normally;
+ ** `ace.prov`, `ace.clear` (thus also `ace.reset`), `ace.import`, `ace.export`, `ace.size` and `ace.available` work normally;
  ** `ace.exec`, `ace.clone`, `ace.derive`, and `ace.restrict` raise an ACE error _ace_err_invalid_CR_;
  ** `ace.input` and `ace.output` raise an ACE error _ace_err_invalid_CR_ when `aceactivecr` is `Kn`;
  ** `ace.state` raises an ACE error _ace_err_invalid_CR_, unless it is used to return to state _initial_;
- ** `ace.error` always returns error _ace_err_invalid_CR_ after any operation involving the CR except for `ace.import` and `ace.export`, `ace.clear`, `ace.init`, and `ace.size`, which all work normally, and using `ace.state` to return to state _initial_.
+ ** `ace.error` always returns error _ace_err_invalid_CR_ after any operation involving the CR except for `ace.import` and `ace.export`, `ace.clear`, `ace.prov`, and `ace.size`, which all work normally, and using `ace.state` to return to state _initial_.
 * The current instruction is terminated.
 
-In State _completed_, only `ace.init`, `ace.export`, `ace.import`, `ace.clear`, and `ace.error` are permitted.
+In State _completed_, only `ace.prov`, `ace.export`, `ace.import`, `ace.clear`, and `ace.error` are permitted.
 
 //
 
@@ -1926,7 +1926,7 @@ In State _completed_, only `ace.init`, `ace.export`, `ace.import`, `ace.clear`, 
 
 _This section is currently non-normative._
 
-Instructions `ace.init`, `ace.export`, `ace.import`, `ace.input`, and `ace.output` support long inputs and outputs.
+Instructions `ace.prov`, `ace.export`, `ace.import`, `ace.input`, and `ace.output` support long inputs and outputs.
 To reduce hardware complexity, these operations can be trapped and emulated in software.
 (((ACE, trappable instruction)))
 Upon a trap, the handler identifies the trapped instruction and uses `ace.size` on the metadata to determine the size of the data to be transferred.
@@ -1949,7 +1949,7 @@ All three instructions can be implemented as CSR RW instructions, for instance:
  * `acecontent`, XLEN bits wide, to which we write the content of the CR or the ACEIOBUF or from which we read the current content.
   A write to `acecontent` increases `acestart` by XLEN/8.
 
-// Interrupting the firmware implementation of `ace.init`, `ace.export`, `ace.import`, `ace.input`, or `ace.output` must leave the architectural state indistinguishable from the state expected from interrupting a monolithic implementation of the instructions.
+// Interrupting the firmware implementation of `ace.prov`, `ace.export`, `ace.import`, `ace.input`, or `ace.output` must leave the architectural state indistinguishable from the state expected from interrupting a monolithic implementation of the instructions.
 // In particular, they need to respect the value of `acestart` and update it in accordance with the expected architected behavior of the emulated instructions.
 // The supporting instructions themselves must be uninterruptible.
 
@@ -2014,9 +2014,9 @@ Data Structures:::
 --
 These include:
 
-. *Initialization Input*:
-The data following the metadata block in the II to `ace.init`, such as keys and other required secrets.
-Fields are listed in the order they appear in the II, each with its length.
+. *Provisioning Input*:
+The data following the metadata block in the PI to `ace.prov`, such as keys and other required secrets.
+Fields are listed in the order they appear in the PI, each with its length.
 
 . *Internal State*:
 Information that must be maintained in the internal state of a CC.
@@ -2163,8 +2163,8 @@ An implementation must wait before accessing a CR that is still being written to
 [[ACE-rules-threshold-implementations]]
 ===== Single-Share Key Export Rule for Threshold implementations
 
-Any CC with its algorithm implemented as a threshold will always initialize, import and export _all_ its keys and secrets as _single_, _reconstructed_ _shares_.
-The II and SCC formats will be the same as for the non-threshold implementation variants of the same algorithm, with the only difference being the value of the Side Channel Protection bits in the metadata.
+Any CC with its algorithm implemented as a threshold will always provision, import and export _all_ its keys and secrets as _single_, _reconstructed_ _shares_.
+The PI and SCC formats will be the same as for the non-threshold implementation variants of the same algorithm, with the only difference being the value of the Side Channel Protection bits in the metadata.
 For the purpose of architecture specification, all values are also always represented as a single share in this document.
 Threshold implementations are simply implementation variants of the exact same algorithm.
 (((ACE, algorithm, threshold variants)))
@@ -2181,9 +2181,9 @@ that implement side-channel protection in different ways.
 
 System keys will change all the algorithms described here in the following way:
 
-. In an II and in an SCC, the key field will contain the index of the key in place of the value.
+. In a PI and in an SCC, the key field will contain the index of the key in place of the value.
 . This field is reduced from the original key size to a 64-bit value. This saves space in an SCC and allows for faster export and import operations.
-. For algorithms that require more than one key, such as XEX/XTS, a single index is still used to an entry in the SKT that contains multiple keys—and thus a single 64-bit value in the II and SCC.
+. For algorithms that require more than one key, such as XEX/XTS, a single index is still used to an entry in the SKT that contains multiple keys—and thus a single 64-bit value in the PI and SCC.
 
 //
 
@@ -2235,7 +2235,7 @@ Parameters:::
 
 Data Structures:::
 
-* *Initialization Input*:
+* *Provisioning Input*:
 [lowerroman]
  . `key`: `k` bits, or 64 bits if it is a System Key index.
 
@@ -2335,7 +2335,7 @@ Parameters:::
 * If the mode is CTR or LFSR, it is `b = n + j`, else it is `b = n = j`.
 
 Data Structures:::
-* *Initialization Input*:
+* *Provisioning Input*:
 [lowerroman]
  . `key`: `k` bits, or 64 bits if it is a System Key index.
 
@@ -2441,7 +2441,7 @@ Parameters:::
 
 Data Structures:::
 
-* *Initialization Input*:
+* *Provisioning Input*:
 [lowerroman]
  . `key1`: `k` bits, or 64 bits if it is a System Key index.
  . `key2`: `k` bits -- omitted if only one key is used or if both keys come from an entry in the SKT.
@@ -2548,7 +2548,7 @@ Parameters:::
 
 Data Structures:::
 
-* *Initialization Input*:
+* *Provisioning Input*:
 [lowerroman]
  . `key`: `k` bits, or 64 bits if it is a System Key index.
 
@@ -2599,7 +2599,7 @@ Parameters:::
 
 Data Structures:::
 
-* *Initialization Input*:
+* *Provisioning Input*:
 [lowerroman]
  . `key`: `k` bits, or 64 bits if it is a System Key index.
 
@@ -2861,18 +2861,18 @@ tag ← V3 xor V2                                  // Last Horner's scheme add
 The mode of operation “GCM with a set IV” is a variant of the GCM mode where the initialization vector (IV) is predefined and not generated randomly.
 This variant _cannot_ be emulated with an ECB CC because it would reveal the internal data.
 
-The differences between GCM and GCM with Set IV start with the format of the Initialization Input:
+The differences between GCM and GCM with Set IV start with the format of the Provisioning Input:
 
-* *Initialization Input*:
+* *Provisioning Input*:
 [lowerroman]
  . `key`: `k` bits, or 64 bits if it is a System Key index.
  . `IV`: `3b/4` bits.
- . Padding: `b/4` bits, unless 256 divides `b`, in which case the II's length is already a multiple of 64 bits without this field.
+ . Padding: `b/4` bits, unless 256 divides `b`, in which case the PI's length is already a multiple of 64 bits without this field.
 
 * *State Machine Behavior:*
 
  ** To transition to state _hash_absorb_:
- the ``ace.state`` instruction must be used _without any additional inputs_, since the IV is already included in the II.
+ the ``ace.state`` instruction must be used _without any additional inputs_, since the IV is already included in the PI.
 
  ** Once in state _completed_, the CC with this algorithm *cannot* be brought back to state _initial_.
 //Other forms of ``ace.state`` raise an illegal instruction exception and the CR is *invalidated*.
@@ -2880,7 +2880,7 @@ The differences between GCM and GCM with Set IV start with the format of the Ini
 These rules do not prevent cloning the CR at the beginning and re-using it, but, for decryption, it can only be used with the intended ciphertext.
 
 NOTE: For all the following IV- or nonce-based modes, versions with a set IV or nonce (such as for GCM-SIV) can also be similarly defined.
-For instance, for GCM-SIV (<<ACE-GCM-SIV-mode>>), `nonce` would be included in the II exactly as `IV` is included in the II for GCM, and the transition to _hash_absorb_ would also use a Form A ``ace.state``.
+For instance, for GCM-SIV (<<ACE-GCM-SIV-mode>>), `nonce` would be included in the PI exactly as `IV` is included in the PI for GCM, and the transition to _hash_absorb_ would also use a Form A ``ace.state``.
 All other semantics would be unchanged.
 
 [[ACE-GCM-SIV-mode]]
@@ -2915,7 +2915,7 @@ Parameters:::
 
 Data Structures:::
 
-* *Initialization Input*:
+* *Provisioning Input*:
 [lowerroman]
  . `key`: `k` bits, or 64 bits if it is a System Key index.
 
@@ -3196,7 +3196,7 @@ Also, define `g` = `log_2(b)`.
 
 Data Structures:::
 
-* *Initialization Input*:
+* *Provisioning Input*:
 [lowerroman]
  . `key`: `k` bits, or 64 bits if it is a System Key index.
 
@@ -3513,7 +3513,7 @@ Parameters:::
 
 Data Structures:::
 
-* *Initialization Input*:
+* *Provisioning Input*:
 [lowerroman]
  . `key`: `k` bits.
 
@@ -3653,7 +3653,7 @@ Either the block size is an integer multiple of the vector length or the vector 
 
 Data Structures:::
 
-* *Initialization Input*:
+* *Provisioning Input*:
 [lowerroman]
  . `key`: `k` bits. Present only if keyed, i.e., a MAC.
 
@@ -3798,7 +3798,7 @@ Parameters:::
 
 Data Structures:::
 
-* *Initialization Input*: the content is empty, i.e., there is only the metadata section.
+* *Provisioning Input*: the content is empty, i.e., there is only the metadata section.
 
 * *Internal State*:
  ** `state`: `n` bits.
@@ -3872,7 +3872,7 @@ Parameters:::
 
 Data Structures:::
 
-* *Initialization Input*:
+* *Provisioning Input*:
 [lowerroman]
  . `key`: 128 bits, or 64 bits if it is a System Key index.
 
@@ -4052,9 +4052,9 @@ If the value is out of bounds, the instruction raises ACE error _ace_err_invalid
 ===== Ascon-AEAD128 with set Nonce
 
 Similarly to GCM with Set IV, Ascon-AEAD128 can also be made into a version with a set nonce.
-In this case the state _set_aux_value_ is skipped, and the II has the following form.
+In this case the state _set_aux_value_ is skipped, and the PI has the following form.
 
-* *Initialization Input*:
+* *Provisioning Input*:
 [lowerroman]
  . `key`: 128 bits, or 64 bits if it is a System Key index.
  . `nonce`: 128 bits.
@@ -4074,7 +4074,7 @@ Once in state _completed_, the CC cannot be brought back to state _initial_.
 The NIST specification also describes a version of Ascon-AEAD128 with _Nonce Masking_.
 This variant is described as follows:
 
-* *Initialization Input*:
+* *Provisioning Input*:
 [lowerroman]
  . `K1`: 128 bits, or 64 bits if it is a System Key index.
  . `K2`: 128 bits, omitted if a System Key is used.
@@ -4108,7 +4108,7 @@ Parameters:::
 
 Data Structures:::
 
-* *Initialization Input*:
+* *Provisioning Input*:
 (no content)
 
 * *Internal State*:
