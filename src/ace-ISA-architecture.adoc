@@ -1782,7 +1782,7 @@ content : array[z] of bytes,        // from the CR's metadata
 where z : int ← SCC_content_size(metadata[31:0]);
 ASSERT(8 divides z);
 M : array[32 + z] of bytes;          // information
-let last_block_fractional : boolean ← z % 16 != 0;
+let last_block_fractional : Boolean ← z % 16 != 0;
 let num_blocks : int ← ceil(z / 16);
 
 if (metadata.Locality == 15) then
@@ -1855,7 +1855,7 @@ saved_SN : bits(4) ← metadata.StateNumber
 metadata.StateNumber ← ace_state_invalid
 
 num_blocks ← ceil(z / 16);
-last_block_fractional : boolean ← (z % 16 != 0);
+last_block_fractional : Boolean ← (z % 16 != 0);
 
 if (metadata.Locality == 15) then
     CSK ← RCSK;
@@ -3878,7 +3878,7 @@ Data Structures:::
  ** `state[0 .. 4]`: five 64-bit words, i.e., 320 bits.
  ** `tag_len`: 8 bits as int.
  ** `last_block_len`: 9 bits as int.
- ** `AD_empty`: boolean;
+ ** `AD_empty`: Boolean;
 
 * *Serialized Content*:
 [lowerroman]
@@ -4217,26 +4217,26 @@ For secp521r1, `b` is 576 bits.
 Data Structures:::
 
 * *Provisioning Input*:
- ** In the metadata,
-  _Just_ the curve description is embedded in Algorithm. This needs to encode just 5 values.
+ ** In the metadata, _only_ the curve type is embedded in Algorithm. For now, this is just 5 values.
   For signatures, use the DirectionPolicy field to determine whether signature generation is allowed (bit 12) or signature verification (bit 13).
   It is possible to have both or none of signature generation and verification.
 
 * *Internal State*:
   ** Content:
-   *** `HasGenerator`: bool.
-   *** `HasNumber`: bool.
-   *** `HasPublicKey`: bool.
-   *** `HasHash`: bool.
-   *** `HasSignature`: bool.
+   *** `HasGenerator`: Bool.
+   *** `HasScalar`: Bool.
+   *** `HasPublicKey`: Bool.
+   *** `HasHash`: Bool.
+   *** `HasSignature`: Bool.
    *** `Progress`/input_base: integer.
    *** `Block_base`: integer.
    *** `Generator` (X coordinate, Y coordinate): a `2b`-bit string representing Y @ X.
    *** `Scalar`: `b`-bit string.
-   *** If either signature generation or verification is allowed:
+   *** If `HasPublicKey`:
     **** `PublicKey` (X coordinate, Y coordinate): a `2b`-bit string representing Y @ X.
+   *** If `HasSignature`:
     **** `Signature` (R,S): a `2b`-bit string representing S @ R.
-   *** For signature generation only:
+   *** During signature generation only:
     **** `RandomNumber`: `b`-bit string.
    *** Additional data (in certain states).
 
@@ -4246,30 +4246,23 @@ Data Structures:::
 The first five fields are serialized as bits 0, 1, 2, 3, and 4 of a byte.
 
 [lowerroman]
-  . `HasGenerator`: bool.
-  . `HasNumber`: bool.
-  . `HasPublicKey`: bool.
-  . `HasHash`: bool.
-  . `HasSignature`: bool.
+  . `HasGenerator`: Bool.
+  . `HasScalar`: Bool.
+  . `HasPublicKey`: Bool.
+  . `HasHash`: Bool.
+  . `HasSignature`: Bool.
   . `Progress`/`input_base`: integer (byte).
   . `Block_base`: integer (byte).
   . Padding: 40 bits.
   . `HasGenerator`: `Generator` (X coordinate, Y coordinate): a `2b`-bit string representing Y @ X.
   . `Scalar`: `b`-bit string. Can be the private key.
 
-If either signature generation or verification is allowed:
-
-[lowerroman,start=11]
+The additional size block after the metadata encodes the length of all fields after `Scalar`—i.e., starting with the `PublicKey` field:
+[lowerroman, start=11]
   . If `HasPublicKey`: `PublicKey` (X coordinate, Y coordinate):a `2b`-bit string representing Y @ X.
   . If `HasSignature`: `Signature` (R,S): a `2b`-bit string representing S @ R.
-
-For signature generation only:
-
-[lowerroman,start=13]
-  . `RandomNumber`: `b`-bit string.
+  . During signature generation: `RandomNumber`: `b`-bit string (erased upon completion, exported only if the signature operation is interrupted).
   . Additional data (in certain states).
-
-The total size of the serialized content after `Scalar`—i.e., starring with the `PublicKey` field—is encoded in the additional size block after the metadata.
 
 EdDSA formats are similar, but in the formats, the public key is represented as a `b`-bit string.
 --
@@ -4277,10 +4270,9 @@ EdDSA formats are similar, but in the formats, the public key is represented as 
 
 
 State Machine:::
-
-* *States:* {empty}
 +
 --
+* *States:*
  ** _initial_ (0)
  ** _set_generator_ (1)
  ** _set_scalar_ (2)
@@ -4305,20 +4297,31 @@ in which the length, in bytes, is given as an unsigned integer. This block is in
 --
 +
 
++
+--
 * *Allowed State Transitions:*
  ** _initial_ -> { _set_generator_, _set_scalar_ } -> *
  ** _set_generator_ -> _set_scalar_
  ** _set_scalar_ -> _set_generator_
  ** _set_generator_ can be skipped if HasPoint == true, and it can be repeated.
- ** _set_scalar_ can be skipped if HasNumber == true, and it can be repeated.
- ** * -> _point_mul_ (only if HasPoint == HasNumber == true) -> _output_ -> _initial_
+ ** _set_scalar_ can be skipped if HasScalar == true, and it can be repeated.
+ ** * -> _point_mul_ (only if HasPoint == HasScalar == true) -> _output_ -> _initial_
  ** * -> {_set_hash_, _set_public_key_} -> _sign_generate_ (only if HasGenerator & HasPoint) -> _output_ -> _completed_
- ** * -> {_set_hash_, _set_public_key_} -> _set_signature_ (only if HasGenerator & HasPoint & HasNumber) -> _sign_verify_ -> _completed_
+ ** * -> {_set_hash_, _set_public_key_} -> _set_signature_ (only if HasGenerator & HasPoint & HasScalar) -> _sign_verify_ -> _completed_
 
 In state _set_generator_ we can set a group generator.
 In state _set_scalar_ we can either set a scalar for scalar multiplication or private key.
 
 All the “set” and “output” operations work like the input and output of blocks in the Hash functions, in other words, they use input_base for the parsing of the `INPUT` and block_base for the fill level of any information to be provisioned.
+--
++
+
+* *Behavior:*
+
+ ** Upon returning to state _initial_, if a Form B `ace.state` is used, the parameter `Xs` will determine whether the fields
+ `Generator`, `Scalar`, and `PublicKey` are erased or kept for further operations. This is determined by Bits 0, 1, and 2 of `Xs` as follows: If Bit 0, 1, resp., 2 is set, then `Generator`, `Scalar`, and `PublicKey` is erased, and the corresponding Booleans `HasGenerator`, `HasScalar`, resp., `HasPublicKey` are unset as well.
+ A Form A `ace.state` does not modify these states.
+ `Signature` and the corresponding Boolean `HasSignature` are always reset.
 
 // ///////////////////////////////////////////////////////////////////////////////////////////
 
