@@ -253,9 +253,10 @@ The metadata section is used as the header of the data formats used in CR provis
 |   Field | Width | Name                     | Description
 |   [0:0] |   1   | Format                   | Value is 0 for the current 64-bit metadata format. +
 The value 1 is reserved for a format with a length of 128 bits or longer.
-|  [10:1] |  10   | _Algorithm_              | Cryptographic algorithm (such as primitive, mode, or protocol).
-| [12:11] |   2   | _DirectionPolicy_        | For encryption/decryption primitives or modes, determines whether the CC may be used for encryption (bit 11 set), decryption (bit 12 set), or both (bits 11 and 12 set). The field can be reused to expand the algorithm space for other types of operations.
-| [14:13] |   2   | _SCProtection_           | Level of Side Channel Protection, encoded as per <<ACE-SC-protection-levels>>.
+|   [1:1] |   1   | _AdditionalSize_         | Whether there is an additional block of data at the end of content.
+|  [11:2] |  10   | _Algorithm_              | Cryptographic algorithm (such as primitive, mode, or protocol).
+| [13:12] |   2   | _DirectionPolicy_        | For encryption/decryption primitives or modes, determines whether the CC may be used for encryption (bit 11 set), decryption (bit 12 set), or both (bits 11 and 12 set). The field can be reused to expand the algorithm space for other types of operations.
+| [14:14] |   1   | _SCProtection_           | Side-Channel Protected Implementation (0 if not protected, 1 if protected).
 | [15:15] |   1   | _KeyType_                | Key given by explicit value / System Key (index).
 | [19:16] |   4   | _StateNumber_            | Encoding the current state of the state machine of the algorithm as a number.
 | [23:20] |   4   | _Locality_               | A field which is either all ones (`0xF`) or an index into the Locality Secrets Table.
@@ -284,22 +285,22 @@ The remaining values can be used to encode custom algorithms.
 
 The DirectionPolicy field is defined only for algorithms that support both encryption and decryption. For algorithms that do not, such as hash functions or some public-key operations, these two bits are not used for selecting the primitive's direction and may instead encode additional algorithm identifiers, thereby expanding the available encoding space of the Algorithms field.
 
-===== SCProtection Field
-
-Certain minimal Side-Channel protection levels are defined by the architecture.
-[[ACE-SC-protection-levels]]
-.Encoding of Side-Channel Protection levels
-[%autowidth,float="center",align="center",options="header"]
-|===
-| Value | Description
-|   0   | No protection.
-|   1   | DIEL, (first-order) threshold implementation.
-|   2   | DIEL, (first-order) threshold, fault-tolerant implementation.
-|   3   | Custom, algorithm dependent.
-|===
-
-Custom algorithms may offer stronger side channel protection guarantees than those specified in the encoding values 0 to 2.
-In such a case, the value of the SCProtection field must be set to 3.
+// ===== SCProtection Field
+//
+// Certain minimal Side-Channel protection levels are defined by the architecture.
+// [[ACE-SC-protection-levels]]
+// .Encoding of Side-Channel Protection levels
+// [%autowidth,float="center",align="center",options="header"]
+// |===
+// | Value | Description
+// |   0   | No protection.
+// |   1   | DIEL, (first-order) threshold implementation.
+// |   2   | DIEL, (first-order) threshold, fault-tolerant implementation.
+// |   3   | Custom, algorithm dependent.
+// |===
+//
+// Custom algorithms may offer stronger side channel protection guarantees than those specified in the encoding values 0 to 2.
+// In such a case, the value of the SCProtection field must be set to 3.
 
 ===== KeyType Field
 
@@ -438,9 +439,9 @@ If the Filter field is used to match against `mcontext`, `hcontext` or both, its
 [width="100%",cols="^9%,^7%,16%,68%",options="header"]
 |===
 |   Field | Width | Name                     | Description
-| [46:33] |  14   | _Filter1A_              | Value to match against `mcontext`.
+| [46:33] |  14   | _Filter1A_               | Value to match against `mcontext`.
 | [48:47] |   2   | Zero                     | Zero.
-| [62:49] |  14   | _Filter1B_              | Value to match against `hcontext`.
+| [62:49] |  14   | _Filter1B_               | Value to match against `hcontext`.
 | [63:63] |   1   | Zero                     | Zero.
 |===
 
@@ -1445,18 +1446,18 @@ This instruction can be used to:
 Let `m` be the metadata field of the CC in the destination CR. +
 On RV64, the semantics of the instruction are:
 
-* `Xs`[10:0] and `Xs`[24:15] must be 0, else ACE error _ace_err_invalid_value_ is raised.
-* `Xs`[14:11] and `Xs`[63:25] have the same format as the corresponding bits of the metadata.
+* `Xs`[11:0] and `Xs`[24:15] must be 0, else ACE error _ace_err_invalid_value_ is raised.
+* `Xs`[14:12] and `Xs`[63:26] have the same format as the corresponding bits of the metadata.
 
 * If the algorithm in the CR supports encryption and decryption, then:
-** `Xs`[12:11] is used to deactivate either encryption or decryption in a CC that allows both.
-** If `m`[12:11] = `0b11`, then at least one bit of `Xs`[12:33] must be set to 1 to select the allowed operation(s).
-If `Xs`[12:33] = 0, then ACE error _ace_err_invalid_value_ is raised.
-** If `m`[12:11] != `0b11`, then it must be `Xs`[12:11] = `m`[12:11] or `Xs`[12:11] = 0, in which case no change is made, else ACE error _ace_err_invalid_value_ is raised
+** `Xs`[13:12] is used to deactivate either encryption or decryption in a CC that allows both.
+** If `m`[13:12] = `0b11`, then at least one bit of `Xs`[13:12] must be set to 1 to select the allowed operation(s).
+If `Xs`[13:12] = 0, then ACE error _ace_err_invalid_value_ is raised.
+** If `m`[13:12] != `0b11`, then it must be `Xs`[13:12] = `m`[13:12] or `Xs`[13:12] = 0, in which case no change is made, else ACE error _ace_err_invalid_value_ is raised
 
-* If the algorithm in the CR does not support encryption and decryption, then `Xs`[12:11] must be 0, else ACE error _ace_err_invalid_value_ is raised
-* `Xs`[14:13] is used to turn on side-channel protection or increase its level, if implemented. The level is encoded according to <<ACE-SC-protection-levels>>.
-Downgrading protection level is not permitted. Attempting to do so raises ACE error _ace_err_invalid_value_ (<<ACE-error-codes>>).
+* If the algorithm in the CR does not support encryption and decryption, then `Xs`[13:12] must be 0, else ACE error _ace_err_invalid_value_ is raised
+* `Xs`[14] is used to turn on side-channel protection, if implemented.
+Removing the side channel protection level is not permitted. Attempting to do so raises ACE error _ace_err_invalid_value_ (<<ACE-error-codes>>).
 
 * A zero in any of the three bits `Xs`[28:26] means that the corresponding policy is _not_ changed.
 * A one in any of the three bits `Xs`[28:26] means that usage by the corresponding mode is forbidden, and the corresponding bit in the metadata of the destination CC is set to 1.
@@ -4194,14 +4195,95 @@ The states and their semantics are otherwise identical to Ascon-XOF128, and the 
 
 We need to define the elliptic curves that are actually used in practice, such as:
 
-* prime256
-* secp256r1 (a.ka. prime256v1 or NIST P-256)
-* secp384
-* secp521
-* ed25519
-* ed448
+* secp256r1 (a.k.a. prime256v1, NIST P-256)
+* secp384r1 (a.k.a. prime384v1, NIST P-384)
+* secp521r1 (a.k.a. prime521v1, NIST P-521)
+* ed25519?
+* ed448?
+* Brainpool?
 
-Algorithms: scalar multiplication with known and unknown base point (use derivation?) and ECDSA sign/verify.
+Algorithms: scalar multiplication with known and unknown base point and ECDSA/EdDSA sign/verify.
+
+ECDSA-Verify on secp256r1 needs following information:
+
+. X coordinate of the Public Key, 32 bytes
+. Y coordinate of the Public Key, 32 bytes
+. Hash of message, 32 bytes
+. SignatureR, 32 bytes
+. SignatureS, 32 bytes
+
+For secp384r1, the fields are all 48 bytes long.
+
+For secp521r1, the fields are all 72 bytes long (zero-padded).
+
+The input for ECDSA-Sign on secp256r1/secp384r1/secp521r1 are just the message hash, respectively 32. 48, and 72 bytes long.
+
+Data Structures:::
+
+* *Provisioning Input*:
+ ** Metadata:
+  *** _Just_ the curve description is embedded in Algorithm. This needs to encode just 5 values.
+  *** For hashing, use the DirectionPolicy field to determine whether signature generation is allowed (bit 11) or signature verification (bit 10).
+  *** It is possible to have both or none of signature generation and verification.
+
+* *Internal State*:
+  ** Metadata
+  ** Content:
+   *** HasPoint: bool.
+   *** HasScalar: bool.
+   *** Progress/input_base: integer.
+   *** Block_base: integer.
+   *** Point (X coordinate, Y coordinate).
+   *** Scalar.
+   *** Random Number.
+   *** Additional data (in certain states)
+
+* *Serialized Content*:
+  [lowerroman]
+  . Metadata.
+  . HasPoint: bool.
+  . HasNumber: bool.
+  . Progress/input_base: integer.
+  . Block_base: integer.
+  . Point (X coordinate, Y coordinate).
+  . Scalar.
+  . Random Number
+  . Additional data (in certain states)
+
+State Machine:::
+
+* *States:*
+ * _initial_ (0)
+ * _set_point_ (1)
+ * _set_scalar_ (2)
+ * _point_mul_ (3)
+ * _point_mul_transient_ (11)
+ * _sign_generate_ (4)
+ * _sign_generate_transient_ (12)
+ * _sign_verify_ (5)
+ * _sign_verify_transient_ (13)
+ * _set_hash_ (6)
+ * _set_signature_ (7)
+ * _output_ (8)
+ * _completed_ (15)
+ * The “*transient” states are used during long operations that require additional information.
+   The format of this additional information is implementation defined and its length is given by an extra block after the metadata block
+   in which the length, in bytes, is given as a 64-bit unsigned integer. This block is included in the authentication of the SCC.
+
+* *Allowed State Transitions:*
+ * _initial_ -> { _set_point_, _set_scalar_ } -> *
+ * _set_point_ -> _set_scalar_
+ * _set_scalar_ -> _set_point_
+ * _set_point_ can be skipped if HasPoint == true, but it can be repeated.
+ * _set_scalar_ can be skipped if HasScalar == true, but it can be repeated.
+ * * -> _point_mul_ (only if HasPoint == HasScalar == true) -> _output_ -> _initial_
+ * * -> _set_hash_ -> _sign_generate_ -> _output_ -> _completed_
+ * * -> _set_hash_ -> _set_signature_ -> _sign_verify_ -> _completed_
+
+In state _set_point_ we can either set a point for scalar multiplication or a public key.
+In state _set_scalar_ we can either set a scalar for scalar multiplication or private key.
+
+All the “set” and “output” operations work like the input and output of blocks in the Hash functions, in other words, they use input_base for the parsing of the `INPUT` and block_base for the fill level of any information to be provisioned.
 
 // ///////////////////////////////////////////////////////////////////////////////////////////
 
