@@ -4231,10 +4231,10 @@ Data Structures:::
    ** `Block_base`: integer.
    ** `Generator` (X coordinate, Y coordinate): a `2b`-bit string representing Y @ X.
    ** `Scalar`: `b`-bit string.
-   ** If `HasPublicKey`:
+   ** If signature generation or verification allowed:
     *** `PublicKey` (X coordinate, Y coordinate): a `2b`-bit string representing Y @ X.
-   ** If `HasSignature`:
     *** `Signature` (R,S): a `2b`-bit string representing S @ R.
+    *** `Hash`: a `b`-bit string representing the hash.
    ** During signature generation only:
     *** `RandomNumber`: `b`-bit string.
    ** Additional data (in certain states).
@@ -4253,20 +4253,20 @@ The first five fields are serialized as bits 0, 1, 2, 3, and 4 of a byte.
   . `Progress`/`input_base`: integer (byte).
   . `Block_base`: integer (byte).
   . Padding: 40 bits.
-  . `HasGenerator`: `Generator` (X coordinate, Y coordinate): a `2b`-bit string representing Y @ X.
+  . `Generator` (X coordinate, Y coordinate): a `2b`-bit string representing Y @ X.
   . `Scalar`: `b`-bit string. Can be the private key.
 
 The additional size block after the metadata encodes the length of all fields after `Scalar`—i.e., starting with the `PublicKey` field:
 [lowerroman, start=11]
   . If `HasPublicKey`: `PublicKey` (X coordinate, Y coordinate):a `2b`-bit string representing Y @ X.
   . If `HasSignature`: `Signature` (R,S): a `2b`-bit string representing S @ R.
+  . If `HasHash`: `Hash`: a `b`-bit string representing the hash.
   . During signature generation: `RandomNumber`: `b`-bit string (erased upon completion, exported only if the signature operation is interrupted).
   . Additional data (in certain states).
 
 EdDSA formats are similar, but in the formats, the public key is represented as a `b`-bit string.
 --
 +
-
 
 State Machine:::
 +
@@ -4287,9 +4287,10 @@ State Machine:::
  ** _output_ (9)
  ** _completed_ (15)
 
-The “*_transient_” states are used during long operations that require additional information.
+The “*_transient_” states are used during long operations.
 If the operations are interrupted, they are in the transient state.
 When they are completed, they are in the non-transient state.
+In this state, these states may use additional information and append it to the state.
 
 The format of the additional information is implementation defined and its length is given by an extra 64-bit block after the metadata block
 in which the length, in bytes, is given as an unsigned integer. This block is included in the authentication of the SCC.
@@ -4299,16 +4300,17 @@ in which the length, in bytes, is given as an unsigned integer. This block is in
 +
 --
 * *Allowed State Transitions:*
- ** _initial_ -> { _set_generator_, _set_scalar_ } -> *
- ** _set_generator_ -> _set_scalar_
- ** _set_scalar_ -> _set_generator_
- ** _set_generator_ can be skipped if HasPoint == true, and it can be repeated.
- ** _set_scalar_ can be skipped if HasScalar == true, and it can be repeated.
- ** * -> _point_mul_ (only if HasPoint == HasScalar == true) -> _output_ -> _initial_
- ** * -> {_set_hash_, _set_public_key_} -> _sign_generate_ (only if HasGenerator & HasPoint) -> _output_ -> _completed_
- ** * -> {_set_hash_, _set_public_key_} -> _set_signature_ (only if HasGenerator & HasPoint & HasScalar) -> _sign_verify_ -> _completed_
+ ** _initial_ -> _set_generator_, _set_scalar_, _set_hash_, _set_public_key_, _sign_generate_, _set_signature_
+ ** It is allowed to freely transition between _set_generator_, _set_scalar_, _set_hash_, and _set_public_key_.
+ ** From any of _initial_, _set_generator_, _set_scalar_, _set_hash_, _set_public_key_:
+ *** -> _point_mul_ only if `HasPoint` & `HasScalar`
+ *** -> _sign_generate_ only if `HasGenerator` & `HasPublicKey` & `HasHash`
+ *** -> _sign_verify_ only if `HasGenerator` & `HasScalar` & `HasPublicKey` & `HasHash` & `HasSignature`
+ ** _point_mul_ -> _output_ -> _initial_
+ ** _sign_generate_ -> _output_ -> _completed_
+ ** _sign_verify_ -> _completed_
 
-In state _set_generator_ we can set a group generator.
+In state _set_generator_ we can set a group generator. +
 In state _set_scalar_ we can either set a scalar for scalar multiplication or private key.
 
 All the “set” and “output” operations work like the input and output of blocks in the Hash functions, in other words, they use input_base for the parsing of the `INPUT` and block_base for the fill level of any information to be provisioned.
@@ -4316,7 +4318,6 @@ All the “set” and “output” operations work like the input and output of 
 +
 
 * *Behavior:*
-
  ** Upon returning to state _initial_, if a Form B `ace.state` is used, the parameter `Xs` will determine whether the fields
  `Generator`, `Scalar`, and `PublicKey` are erased or kept for further operations. This is determined by Bits 0, 1, and 2 of `Xs` as follows: If Bit 0, 1, resp., 2 is set, then `Generator`, `Scalar`, and `PublicKey` is erased, and the corresponding Booleans `HasGenerator`, `HasScalar`, resp., `HasPublicKey` are unset as well.
  A Form A `ace.state` does not modify these states.
