@@ -273,7 +273,7 @@ If any of these bits is set, the 128-bit block described in <<ACE-metadata-exten
 |===
 
 [[ACE-metadata-extension]]
-.Format of the optional metadata filtering extension
+.Format of the optional metadata extension
 [width="100%",cols="^9%,^7%,14%,70%",options="header"]
 |===
 |     Field | Width | Name                    | Description
@@ -287,9 +287,8 @@ Some fields and their properties need further explanation. This is done in the f
 
 ===== Confidentiality
 
-Bits [32:0] are not confidential and will not be encrypted upon export as an SCC.
-Bits [63:33] and the optional metadata filtering extension
-are confidential and will be encrypted upon export as an SCC.
+The metadata header block is not confidential and will not be encrypted upon export as an SCC.
+The optional metadata extension is confidential and will be encrypted upon export as an SCC.
 
 ===== Algorithm and DirectionPolicy Fields
 
@@ -327,9 +326,13 @@ ACE supports keys provided by software, as well as system keys and keys computed
 A value of 0 in the KeyType field indicates an explicit value.
 A value of 1 in the KeyType field indicates a system key.
 
-System Keys are given by an index into an internal, system-specific System Keys Table (SKT). For each algorithm as specified in <<ACE-algorithms>>, the part of the content that normally contains the key(s) is replaced by its index into the SKT-for both PI and SCCs. The actual value of the key is never included in exported content. For threshold implementations, ACE may copy the key material from the SKT into the CR and expand it into multiple shares.
+System Keys are given by an index into an internal, system-specific System Keys Table (SKT).
+For each algorithm as specified in <<ACE-algorithms>>, the part of the content that normally contains the key(s) is replaced by its index into the SKT-for both PI and SCCs
+The actual value of the key is never included in exported content.
+For threshold implementations, ACE may copy the key material from the SKT into the CR and expand it into multiple shares.
 
-System Generated Keys are also system-specific. In place of the PI, the provisioning operation reads a system-specific “recipe”, which is not portable. After internal key generation, the actual key value—not the recipe—is stored in the CR and SCC. The KeyType field in the metadata is 0.
+System Generated Keys are also system-specific. In place of the PI, the provisioning operation reads a system-specific “recipe”, which is not portable.
+After internal key generation, the actual key value—not the recipe—is stored in the CR and SCC. The KeyType field in the metadata is 0.
 
 //
 
@@ -491,15 +494,15 @@ However, several algorithms need to compute and cache additional data once initi
 The SCC format is used when exporting a CC from a CR and also to re-import the CC into a CR.
 It is dependent on the algorithm being used.
 Its size must be a multiple of 8 bytes.
-For the purpose of exporting, the optional metadata filtering extension is prepended to the content.
+For the purpose of exporting, the optional metadata extension is prepended to the content.
 
 Format of SCC::: {empty}
 `bytes{nbsp}[{nbsp}{nbsp}0 .. 7{nbsp}{nbsp}{nbsp}{nbsp}]{nbsp}{nbsp}` Metadata, partially encrypted. +
 `bytes{nbsp}[{nbsp}{nbsp}8 .. 23{nbsp}{nbsp}{nbsp}]{nbsp}{nbsp}` SIV produced by the encryption method (128 bits). +
-`bytes{nbsp}[{nbsp}24 .. u+23{nbsp}]{nbsp}{nbsp}` Encrypted {metadata filtering extension and} serialized content of the CR
+`bytes{nbsp}[{nbsp}24 .. u+23{nbsp}]{nbsp}{nbsp}` Encrypted {optional metadata extension and} serialized content of the CR
 
 
-Both metadata and the serialization of the content are authenticated, but only a part of the metadata and the content are encrypted.
+Both metadata and the serialization of the content are authenticated, but the optional metadata extension and the content are encrypted.
 The AEAD method used for this purpose is described in <<ACE-SCC-AEAD>>.
 
 The metadata section of an SCC follows the same fixed architectural format as the metadata section of the PI.
@@ -666,7 +669,7 @@ ACE error _ace_err_invalid_value_ collects various cases, for instance (but, the
 
 * Invalid metadata section in `ace.prov` or `ace.import`, other than _ace_err_unimplemented_, for instance:
  ** Non-zeros in zero fields,
- ** Invalid FilterMode for a 64-bit metadata block,
+ ** Invalid FilterMode for a 64-bit metadata header block,
  ** Non-implemented Locality value,
  ** StateNumber is non-zero for `ace.prov`.
 * ACE operation issued with invalid or zero ACEIOBUF length `aceiobuftop`-`acestart` (see <<ACE-CSR-aceiobuftop>> and <<ACE-CSR-acestart>>).
@@ -1464,10 +1467,10 @@ A bit set to 1 in `Xs`._FilterMode_ will add the corresponding policy to `M`._Fi
 
 * If `Xs`._FilterMode_ is non-zero, then
 ** The value `s2` is even and both `Xs2` and `X[s2+1]` are read as the 128-bit value `X[s2+1] @ Xs2`.
-** `X[s2+1] @ Xs2` has the metadata filtering extension format described in <<ACE-metadata-extension>>, where only the fields corresponding to the filters actually added are considered.
+** `X[s2+1] @ Xs2` has the metadata extension format described in <<ACE-metadata-extension>>, where only the fields corresponding to the filters actually added are considered.
 //and the remaining bits are ignored.
 
-* If `Xs`._FilterMode_ is non-zero when `M`._FilterMode_ is zero, if the `ace.restrict` operation is successful, an exported SCC will contain the additional metadata filtering extension, where previously it would not have been included. Thus, the size of the SCC may be larger than a previous version.
+* If `Xs`._FilterMode_ is non-zero when `M`._FilterMode_ is zero, if the `ace.restrict` operation is successful, an exported SCC will contain the additional metadata extension, where previously it would not have been included. Thus, the size of the SCC may be larger than a previous version.
 --
 +
 On RV32:
@@ -1763,27 +1766,33 @@ The generation of an SCC from a CR (<<ACE-SCC-export>>) and the import of an SCC
 ----
 function KeyDeriv(key : bits(256), L : bits(125)) = {
   struct {
-    AESE256(key, (L @ 0b101))[63:0] @
-    AESE256(key, (L @ 0b100))[63:0] @
-    AESE256(key, (L @ 0b011))[63:0] @
-    AESE256(key, (L @ 0b010))[63:0],
-    AESE256(key, (L @ 0b001))[63:0] @
-    AESE256(key, (L @ 0b000))[63:0]
+    AESE256(key, (L @ 0b101))[63:0] @ AESE256(key, (L @ 0b100))[63:0] @
+    AESE256(key, (L @ 0b011))[63:0] @ AESE256(key, (L @ 0b010))[63:0],
+    AESE256(key, (L @ 0b001))[63:0] @ AESE256(key, (L @ 0b000))[63:0]
   }
 }
 ----
 
-An alternative key derivation <<ACE-SCC-alt-derivation>> method halves the number of AES256 calls by using, essentially, the CMAC based random generation, which is secure for up to 2^64^ key generations with the same CSK, and then the security gracefully degrades (after 2^96^ keys there is still an overall security level of 128 bits).
+An alternative key derivation (<<ACE-SCC-alt-derivation>>) method halves the number of AES256 calls by using, essentially, a CMAC based random generation.
+The scheme is secure for up to 2^126^ encryption key generations with the same CSK.
 
 [[ACE-SCC-alt-derivation]]
 .Alternative Key Derivation
 []
 ----
+function double(S : bits(128)) = {
+  if (S[127] == 0) then {
+    (S << 1)[127:0]
+  } else {
+    (S << 1)[127:0] xor (zeros(120) @ 0x1B)
+  }
+}
+
 function KeyDeriv(key : bits(256), L : bits(126)) = {
-  precomputed: t = AESE256(key, zeros(128)) * 2; // using the field multiplication
+  t ← double(AESE256(key, zeros(128))) // Precomputed
   struct {
-    AESE256(key, (L @ 0b00) xor t) @ AESE256(key, (L @ 0b01) xor t),
-    AESE256(key, (L @ 0b10) xor t)
+    AESE256(key, (L @ 0b01) xor t) @ AESE256(key, (L @ 0b10) xor t),
+    AESE256(key, (L @ 0b11) xor t)
   }
 }
 ----
@@ -1794,16 +1803,20 @@ NOTE: Due to the computational cost of the derivation functions, implementations
 .Generation of an SCC from a CR
 []
 ----
-metadata : bits(64);              // from the CR
+metadata : bits(64);                 // from the CR
 SIV : bits(128);
 tmp : bits(128);
 enc_key : bits(256);
 auth_key : bits(128);
+
 // content as serialized "view", size in bytes derived from metadata
-content : array[z] of bytes,        // from the CR's metadata
-where z : int ← SCC_content_size(metadata[31:0]);
-ASSERT(8 divides z);
-M : array[32 + z] of bytes;          // information
+z : int ← SCC_content_size(metadata[31:0]);
+z ← z + metadata.ExtraContent * 8
+if (metadata.FilterMode != 0) then
+  z ← z + sizeof(metadata extension)
+
+content : array[z] of bytes,         // {optional metadata extension) and content
+M : array[24 + z] of bytes;          // this is the memory
 let last_block_fractional : Boolean ← z % 16 != 0;
 let num_blocks : int ← ceil(z / 16);
 
@@ -1846,7 +1859,7 @@ The import algorithm needs some special care:
 * When control is returned, the previous value of `metadata.StateNumber` is restored.
 * There must be a 4-bit internal temporary state containing the original value of `metadata.StateNumber` and a flag indicating whether the value has been saved.
 * If, upon returning to the interrupted process, the bit signaling that a value for `metadata.StateNumber` has been saved is unset, the operation is restarted.
-* The first read is the read of the metadata block itself:
+* The first read is the read of the metadata header block itself:
  ** If fewer than 4 bytes are read before the instruction is interrupted, `acestart` = 0, so the instruction will be restarted.
  ** If at least 4 bytes have been read, the original value of `metadata.StateNumber` is known, so the instruction may be restarted with `acestart` {ge} 4.
 
@@ -1865,6 +1878,10 @@ tmp : bits(128);
 metadata : bits(64) ← M[0 .. 7]
 
 z ← SCC_content_size(metadata[31:0]);
+z ← z + metadata.ExtraContent * 8
+if (metadata.FilterMode != 0) then
+  z ← z + sizeof(metadata extension)
+
 if (z == 0)
     error ace_err_unimplemented
 
@@ -2030,7 +2047,7 @@ Data Structures:::
 These include:
 
 . *Provisioning Input*:
-The data following the metadata block in the PI to `ace.prov`, such as keys and other required secrets.
+The data following the metadata header block in the PI to `ace.prov`, such as keys and other required secrets.
 Fields are listed in the order they appear in the PI, each with its length.
 
 . *Internal State*:
@@ -2038,8 +2055,13 @@ Information that must be maintained in the internal state of a CC.
 The fields are unordered and their lengths may differ from those listed, for example in threshold or fault-tolerant implementations where redundancy is added.
 
 . *Serialized Content*:
-The data that follows the metadata block in the plaintext portion of an SCC.
+The data that follows the metadata header block in the plaintext portion of an SCC.
 The fields are listed in the order they appear in an SCC, each with its length.
+If there is a metadata extension block, it is prepended to the serialized content.
+====
+text
+====
+
 --
 +
 
@@ -2962,7 +2984,7 @@ Algorithm-Specific Functions:::
    (for instance, AES-GCM-SIV uses POLYVAL):
   . `tag <- tag xor INPUT`.
   . `tag <- Montmul(tag, hash_key)` or `Galoismul(tag, hash_key)`, depending on the algorithm.
-* `RFC8452_KeyDeriv(key)` = `KeyDeriv(key,zeros(125))`, per RFC8452 (<<ACE-SCC-RFC8452-derivation>>).
+* `RFC8452_KeyDeriv(key)` = `KeyDeriv(key,zeros(125))`, i.e., per RFC8452 (<<ACE-SCC-RFC8452-derivation>>).
 
 State Machine:::
 * *States:*
@@ -3091,7 +3113,7 @@ If `IOLEN` > `b`, the above operations are applied to each of the `IOLEN/b` bloc
 If `IOLEN` > `b`, only the `b` least significant bits of `INPUT` are considered.
 
  ** Upon completion of `ace.import`, the ACE unit recomputes `enc_key` and `auth_key`, i.e.:
-  . (`enc_key`, `auth_key`) <- `KeyDeriv(key, zeros(125))`. // RFC8452
+  . (`enc_key`, `auth_key`) <- `RFC8452_KeyDeriv(key)`.
 
 //
 
@@ -4249,9 +4271,9 @@ Data Structures:::
   *** `PublicKey` (X coordinate, Y coordinate): a `2b`-bit string representing Y @ X.
   *** `Signature` (R,S): a `2b`-bit string representing S @ R.
   *** `Hash`: a `b`-bit string representing the hash.
- ** During signature generation only:
-  *** `RandomNumber`: `b`-bit string.
- ** Additional data (in certain states).
+// ** During signature generation only:
+//  *** `RandomNumber`: `b`-bit string.
+ ** Additional data, for instance precomputed multiples of the Generator, but also intermediate information, such as a random number, in operations such as signature generation.
 
 * *Serialized Content*:
 +
@@ -4264,20 +4286,22 @@ The first five fields are serialized as bits 0, 1, 2, 3, and 4 of a byte.
   . `HasPublicKey`: Bool.
   . `HasHash`: Bool.
   . `HasSignature`: Bool.
-  . Padding: 8 bits.
+  . Padding: 13 bits.
   . `Progress`/`input_base`: integer (16 bits).
   . `Block_base`: integer (16 bits).
   . Padding: 16 bits.
   . `Generator` (X coordinate, Y coordinate): a `2b`-bit string representing Y @ X.
   . `Scalar`: `b`-bit string. Can be the private key.
 
-The additional size block after the metadata encodes the length of all fields after `Scalar`—i.e., starting with the `PublicKey` field:
-[lowerroman, start=11]
+The `SCC_content_size()` function returns only the length of the content so far.
+The total size of the following fields is stored in the _ExtraContent_ field of the metadata header.
+
+[lowerroman, start=12]
   . If `HasPublicKey`: `PublicKey` (X coordinate, Y coordinate):a `2b`-bit string representing Y @ X.
   . If `HasSignature`: `Signature` (R,S): a `2b`-bit string representing S @ R.
   . If `HasHash`: `Hash`: a `b`-bit string representing the hash.
   . During signature generation: `RandomNumber`: `b`-bit string (erased upon completion, exported only if the signature operation is interrupted).
-  . Additional data (in certain states).
+  . Additional data (as in the *Internal State*).
 
 EdDSA formats are similar, but in the formats, the public key is represented as a `b`-bit string.
 --
@@ -4308,8 +4332,7 @@ State Machine::: {empty}
 If the operations are interrupted, they are in the transient state.
 When they are completed, they are in the non-transient state.
 In this state, these states may use additional information and append it to the state.
-* The format of the additional information is implementation defined and its length is given by an extra 64-bit block after the metadata block
-in which the length, in bytes, is given as an unsigned integer. This block is included in the authentication of the SCC.
+* The format of the additional information is implementation defined and it is included in the _ExtraContent_ field of the metadata header.
 --
 +
 
