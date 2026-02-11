@@ -396,40 +396,46 @@ and privileged code can always deny resources to user processes.
 [[ACE-Localities]]
 ===== Locality Field
 
-ACE keeps a table of 128-bit [.red]#(maybe shorter)# Locality Secrets (LS), the Locality Secrets Table (LST).
+ACE keeps a table of 125-bit Locality Secrets (LS), the Locality Secrets Table (LST).
 Some entries of the LST are fixed or configurable only using an implementation-specific authenticated hardware procedure: These are global and shared across all ACE units in the same system. Other entries may be programmed by privileged modes and are architectural, i.e., per hart.
+Currently, nine values in the LST are architected.
+The first six Localities tie SCCs to the hardware.
 
-If the Locality Field of a CC is zero, then the CSK is not used with a tweak.
-Otherwise, this value of the Locality minus one is used as an index _i_ in the LST, and the encryption depends on both the CSK and LST[_i_].
-<<ACE-locality-indexes>> lists the architected Localities and which mode is allowed to configure them.
-The domain of each Locality Secret is specified, i.e., whether the value is chip-wide (i.e., the same across all chiplets in a SoC), device-wide, or OS-wide.
+The Locality Secrets are used to tweak the AEAD algorithm used to export and import CCs.
+If the Locality Field of a CC is zero, then the CSK is used directly without tweaking the AEAD algorithm.
+
+More than one Locality can be active at the same time, with restrictions, and Locality secrets may be combined.
+The 3 lsbs of the Locality field encodes one of the localities with index 0 to 5 into the LST, with an encoding of 1 to 6, respectively, and an encoded value of 0 means that no binding to a hardware locality is done.
+Bits 3 to 5 determine the use of Localities with index 6, 7, and 8 in the table.
+
+<<ACE-locality-indexes>> lists the architected Localities.
+For each Locality we provide the following information: its index in the LST; its _Domain_, i.e., whether the value is chip-wide (i.e., the same across all chiplets in a SoC), device-wide, or OS-wide; the configurability; the bit field it is encoded into and its value in that field.
 
 [[ACE-locality-indexes]]
 .Architected Locality Values
-[width="100%",cols="18%,43%,^9%,^9%,^7%,^7%,^7%",options="header"]
+[width="100%",cols="^7%,18%,43%,^9%,^9%,^7%,^7%",options="header"]
 |===
-| Name                      | Description                                                                   | Domain | Config |  Bits  | Value |Index
-| _NoHWBinding_             | Independent of Chip, OEM, Device                                              |  --    |   --   |  2:0   |   0   |  --
-| _ChipDesignerSecret_      | Identifies the designer of the SoC. Permanent.                                |  SoC   |   No   |  2:0   |   1   |  0
-| _ChipModelSecret_         | Identifies specific chip model/family. Permanent.                             |  SoC   |   No   |  2:0   |   2   |  1
-| _ChipUniqueSecret_        | Unique for each SoC. Permanent.                                               |  SoC   |   No   |  2:0   |   3   |  2
-| _OEMSecret_               | Provisioned by OEM to differentiate their products from the competition.
-Permanent, or reconfigurable via an implementation-defined HW authenticated mechanism.                      | Device |   No   |  2:0   |   4   |  3
-| _ProductSecret_           | Identifies device/system type/model (product). +
-Permanent or reconfigurable like OEMSecret.                                                                 | Device |   No   |  2:0   |   5   |  4
-| _DeviceSecret_            | Unique device (entire system) secret.
+| Index | Name                      | Description                                                                   | Domain | Config |  Bits  | Value
+|   --  | (No HW Binding)           | Independent of Chip, OEM, Device                                              |  --    |   --   | [2:0]  |   0
+|   0   | _ChipDesignerSecret_      | Identifies the designer of the SoC. Permanent.                                |  SoC   |   No   | [2:0]  |   1
+|   1   | _ChipModelSecret_         | Identifies specific chip model/family. Permanent.                             |  SoC   |   No   | [2:0]  |   2
+|   2   | _ChipUniqueSecret_        | Unique for each SoC. Permanent.                                               |  SoC   |   No   | [2:0]  |   3
+|   3   | _OEMSecret_               | Provisioned by OEM   to differentiate their products from the competition.
+Permanent, or reconfigurable via an implementation-defined HW authenticated mechanism.                              | Device |   HW   | [2:0]  |   4
+|   4   | _ProductSecret_           | Identifies device/system type/model (product). +
+Permanent or reconfigurable like _OEMSecret_.                                                                       | Device |   HW   | [2:0]  |   5
+|   5   | _DeviceSecret_            | Unique device (entire system) secret.
 Shared across all harts in a SoC and shareable across multiple SoCs in a single device.
 The sharing mechanism is implementation-defined. +
-Reconfigurable like OEMSecret.                                                                              | Device |   No   |  2:0   |   6   |  5
-| _BootSecret_              | Unique per the boot session of the host hardware and its firmware stack. +
-Configured by M-mode during the boot process of the host (see <<ACE-CSR-maceBootSecret>>).                  | Device |   M    |   3    |  0/1  |  6
-| _VBootSecret_             | Unique per the boot session of the virtual hardware and its software stack. +
-Regenerated by H or higher at each virtual boot of a VM (see <<ACE-CSR-haceVBootecret>>).                   |   VM   |  H/M   |   4    |  0/1  |  7
-| _SSecret_                 | Can be configured by Supervisor (see <<ACE-CSR-saceSSecret>>).                | Process |  S    |   5    |  0/1  |  8
-| _Reserved_                | Reserved for future use.                                                      | Impdef | Impdef |  7:6   | {ge} 64 | --
+Reconfigurable like _OEMSecret_.                                                                                    | Device |   HW   | [2:0]  |   6
+|   6   | _BootSecret_              | Unique per the boot session of the host hardware and its firmware stack. +
+Configured by M-mode during the boot process of the host (see <<ACE-CSR-maceBootSecret>>).                          | Device |   M    |   3    |  0/1
+|   7   | _VBootSecret_             | Unique per the boot session of the virtual hardware and its software stack. +
+Regenerated by H or higher at each virtual boot of a VM (see <<ACE-CSR-haceVBootSecret>>).                          |   VM   |  H/M   |   4    |  0/1
+|   8   | _SSecret_                 | Configurable by S/VS-mode to mutually isolate +
+processes in U-mode (see <<ACE-CSR-saceSSecret>>).                                                                  | Process | S/VS  |   5    |  0/1
+|  --   | _Reserved_                | Reserved for future use.                                                      | Impdef | Impdef | [7:6]  |  --
 |===
-
-The only restriction on the values of the LSs is that they must be randomly generated and be non-zero.
 
 NOTE: Example: If a key's metadata specifies a Locality field value of 2, the import/export key is derived from the CSK and the OEM Secret.
 An SCC created on one device will fail authentication when imported on another device if their OEM Secrets differ.
@@ -441,8 +447,6 @@ Implementations of the SKT *must* provide a suitable Locality to the ACE unit du
 
 [WARNING]
 --
-Locality secrets may be combined.
-The proposal is to have a 3-bit field to encode one of Localities 1–6 (0 means no binding to any of these), and 3 bits to encode respectively 7, 8, and 9.
 We shall discuss two methods to combine locality secrets for the purpose of creating the tweaks to be used in the key derivation process:
 
 . XOR them, allowing up to four to be added together.
