@@ -91,8 +91,8 @@ This binding uses metadata when a CC is in a CR, and augments _Root Context Seal
 * `Zlascon` => Support for the ASCON suite.
 * `Zlkned` => NIST Suite: AES Block Cipher. Depends on `Zleaes128` and `Zleaes256`.
 * `Zlkn` => NIST Algorithm Suite. Depends on `Zlkned` and `Zlesha2`.
-* `Zlv` => Requires V (or a suitable subset thereof). Must support for the following CSRs: `aceerror` and `acestart` (this is a dependency for Zicsr); must support the following instructions: `ace.provision`, all four forms of `ace.exec`, `ace.clear`, `ace.export`, `ace.import`, and `ace.size`; must support `Zleaes128` and `Zleaes256` in ECB and GCM-SIV modes.
-* `Zlio` => Must support for the following CSRs: `aceerror`, `acestart` (this is a dependency for Zicsr), `aceiobuflen` and `aceiobuftop`; must support the following instructions: `ace.provision`, Form D of `ace.exec`, `ace.input` and `ace.output`, `ace.clear`, `ace.export`, `ace.import`, and `ace.size`; must support `Zleaes128` and `Zleaes256` in ECB and GCM-SIV modes.
+* `Zlv` => Requires V (or a suitable subset thereof). Must support for the following CSRs: `aceerror` and `acestart` (this is a dependency for Zicsr); must support the following instructions: `ace.prov`, all four forms of `ace.exec`, `ace.clear`, `ace.export`, `ace.import`, and `ace.size`; must support `Zleaes128` and `Zleaes256` in ECB and GCM-SIV modes.
+* `Zlio` => Must support for the following CSRs: `aceerror`, `acestart` (this is a dependency for Zicsr), `aceiobuflen` and `aceiobuftop`; must support the following instructions: `ace.prov`, Form D of `ace.exec`, `ace.input` and `ace.output`, `ace.clear`, `ace.export`, `ace.import`, and `ace.size`; must support `Zleaes128` and `Zleaes256` in ECB and GCM-SIV modes.
 * At least one of `Zlv` or `Zlio` must be implemented. (Note that, currently, we are not considering a version of ACE that uses the GPRs in place of the vectors registers.)
 
 ==== Privileged
@@ -155,7 +155,7 @@ CRs reside in a dedicated _CR file_ (CRF), accessible only by the ACE implementa
 
 CRs differ from conventional register in several ways:
 
-* Clear data is loaded into CR using the `ace.provision` instruction (<<ACE-instruction-init>>), but
+* Clear data is loaded into CR using the `ace.prov` instruction (<<ACE-instruction-init>>), but
 there is no corresponding store instruction to extract the same data as clear text.
 
 * A CR can be *exported* in an encrypted and authenticated format using the `ace.export` instruction (<<ACE-instruction-export>>).
@@ -168,7 +168,7 @@ Conventional registers do not provide such functionality—and do not need to.
 * Whereas conventional registers always contain a value, CRs can be _unconfigured_, meaning they may hold no information.
 * The amount of the capacity of the CRF used by a CR depends on the configured algorithm.
   Two CRs can use different amounts of capacity.
-  Insufficient residual CRF capacity may prevent the execution of a CR *configuration* instruction, i.e. `ace.provision`, `ace.import`,
+  Insufficient residual CRF capacity may prevent the execution of a CR *configuration* instruction, i.e. `ace.prov`, `ace.import`,
    `ace.clone`, (<<ACE-instruction-clone>>) or `ace.derive` (<<ACE-instruction-derive>>).
   In this case, software must free capacity by unconfiguring other CRs.
 
@@ -183,7 +183,7 @@ Accessing a CR that is outside the range [0..31] raises an illegal instruction e
 
 [NOTE]
 ====
-The management operations include the *configuration* instructions (`ace.provision`, `ace.import`, `ace.clone`, and `ace.derive`) and the export operation (`ace.export`).
+The management operations include the *configuration* instructions (`ace.prov`, `ace.import`, `ace.clone`, and `ace.derive`) and the export operation (`ace.export`).
 ====
 
 [NOTE]
@@ -660,11 +660,11 @@ Not allowed state number in `ace.state`, including requesting encryption or decr
 
 ACE error _ace_err_invalid_value_ collects various cases, for instance (but, there could be more):
 
-* Invalid metadata section in `ace.provision` or `ace.import`, other than _ace_err_unimplemented_, for instance:
+* Invalid metadata section in `ace.prov` or `ace.import`, other than _ace_err_unimplemented_, for instance:
  ** Non-zeros in zero fields,
  ** Invalid FilterMode for a 64-bit metadata block,
  ** Non-implemented Locality value,
- ** StateNumber is non-zero for `ace.provision`.
+ ** StateNumber is non-zero for `ace.prov`.
 * ACE operation issued with invalid or zero ACEIOBUF length `aceiobuftop`-`acestart` (see <<ACE-CSR-aceiobuftop>> and <<ACE-CSR-acestart>>).
 * Invalid input to `ace.restrict`.
 
@@ -685,7 +685,7 @@ If a Form of `ace.exec`, `ace.state` or `ace.derive` that is not permitted in th
 Code        .>|Description
 .>|_Highest_  | 7             .>| Attempt to use an invalid CR.
 |           .>| 6             .>| Unconfigured or partially configured CR
-|           .>| 5, 4          .>| Invalid metadata section in `ace.provision` or `ace.import`, including specifying a not implemented algorithm or side-channel protected variant.
+|           .>| 5, 4          .>| Invalid metadata section in `ace.prov` or `ace.import`, including specifying a not implemented algorithm or side-channel protected variant.
 |           .>| 3             .>| Insufficient CRF memory.
 |           .>| 2, 1          .>| Access Control Failure or authentication failure with `ace.import`
 |           .>| 1             .>| Authentication failure in an algorithm.
@@ -698,7 +698,7 @@ Code        .>|Description
 [[ACE-CSR-acestart]]
 ===== `acestart`
 
-`acestart` is an XLEN-bit RW CSR, to track progress of long-running interruptible instructions such as `ace.provision`, `ace.import`, `ace.export`, `ace.input`, and `ace.output`, as well as `ace.exec` on long inputs.
+`acestart` is an XLEN-bit RW CSR, to track progress of long-running interruptible instructions such as `ace.prov`, `ace.import`, `ace.export`, `ace.input`, and `ace.output`, as well as `ace.exec` on long inputs.
 (((CSR, acestart)))
 
 Unlike the vector extension’s `vstart`, which tracks element indices, ACE has no _intrinsic_ notion equivalent to that of vector elements.
@@ -717,7 +717,7 @@ as indicated by the value in the `acestart` CSR.  If a context switch occurs, th
 ====
 _A single `acestart` value suffices due to the way the init/import/export instructions operate:_
 
-* `_ace.provision_` _and_ `_ace.import_` _use a single pass: all blocks are processed sequentially._
+* `_ace.prov_` _and_ `_ace.import_` _use a single pass: all blocks are processed sequentially._
 * `_ace.export_` _uses two passes. However, the first pass to compute the SIV is purely internal, and never accesses memory, so page faults cannot occur.
 This first pass is uninterruptible.
 The second pass writes metadata, the SIV, and then the content to memory.
@@ -970,7 +970,7 @@ and
 [WARNING]
 These three registers are placeholders for a later decision on how to handle the CR filtering in different modes—taken in accordance with the ARC.
 One option could be to use `scontext`, `mcontext`, and `hcontext` from the Sdtrig extension, and in <<ACE-combined-filters>> we use the sizes of these CSR
-as an example.
+as an example.  This type of filtering may also be removed completely.
 
 // ///////////////////////////////////////////////////////////////////////////////////////////
 
@@ -979,7 +979,7 @@ as an example.
 
 [WARNING]
 The encodings presented here are not final.
-We currently use `custom-0` for load-type instructions, `custom-1` for store-type instructions, and `custom-2` for operational instructions (with bits [1:0] always equal to 3-all instructions are 32 bits long), to align with store/load/operational instructions in the base and floating-point instruction sets.
+We currently use `custom-0` for load-type instructions, `custom-1` for store-type instructions, and `custom-2` for operational instructions), to align with store/load/operational instructions in the base and FP instruction sets.
 
 ACE provides a number of unprivileged instructions, some implemented as CSR read/write operations.
 This section specifies the semantics and encodings of these instructions.
@@ -991,7 +991,7 @@ When a GPR is used to index a CR, use of the zero register `X0` is not allowed a
 For each instruction, we specify whether:
 
 * It _possibly modifies state_;
-* It is _usage-controlled_, i.e., whether the instruction is subject to usage control, which determines which software entities can use it (by _UCPolicy_ and non-time-based _Filter*_);
+* It is _usage-controlled_, i.e., whether the instruction is subject to usage control, which determines which software entities can use it (by _UCPolicy_ and non-time-based _*Filter_);
 * It is _trappable_, i.e., whether it can be implemented by privileged code as trap-and-emulate; and
 * Whether the execution of the instruction itself can be _interrupted_, for instance by context switches or page faults, to be resumed or restarted later.
 
@@ -1000,32 +1000,32 @@ Implementers may, for instance, incorporate a secure CPU with updatable firmware
 While the architecture does not prohibit this, such an approach substantially expands the attack surface of the ACE unit.
 
 [[ACE-instruction-init]]
-==== ace.provision
+==== ace.prov
 
-`ace.provision Kd|K[Xd], %offset(Xs)`
-(((ACE, instruction, ace.provision)))
+`ace.prov Kd|K[Xd], %offset(Xs)`
+(((ACE, instruction, ace.prov)))
 
 Encoding::
-`ace.provision` is an I-type instruction.
+`ace.prov` is an I-type instruction.
 +
 [wavedrom, , svg]
 ....
 {reg:[
     { bits:  7, name: 0x0b, attr: ['custom-0'] },
     { bits:  5, name: 'context', attr: ['Kd','K[Xd]'] },
-    { bits:  3, name: 'ace.provision', attr: [0x4,0x5] },
+    { bits:  3, name: 'ace.prov', attr: [0x4,0x5] },
     { bits:  5, name: 'Xs' },
     { bits: 12, name: 'immed12', attr: ['offset'] },
 ]}
 ....
 
 Description::
-`ace.provision` provisions a CR with metadata and content to create a CC.
+`ace.prov` provisions a CR with metadata and content to create a CC.
 `Kd` or `K[Xd]` denotes the CR to be provisioned.
 `Xs` points to the region of memory containing the metadata and the key material.
 The PI must be stored at an 8-byte aligned address, and its length must be a multiple of 8 bytes.
 +
-Similarly to vector store instructions, `ace.provision` appears to other harts as a sequence of individual reads.
+Similarly to vector store instructions, `ace.prov` appears to other harts as a sequence of individual reads.
 
 Properties::
 Possibly modifies state: *YES*. +
@@ -1033,9 +1033,7 @@ Usage-controlled: *NO*. +
 Trappable: *YES*. +
 Interruptible: *YES*.
 
-NOTE: `ace.provision`, as well as `ace.import`, `ace.export`, `ace.input`, and `ace.output` as described later, perform direct memory accesses.
-This does not violate the RISC-V load/store architecture principles,
-since these instructions can be viewed as special kinds of load and store instructions
+NOTE: `ace.prov`, like `ace.import`, `ace.export`, `ace.input`, and `ace.output`, which are described later, can be viewed as special kinds of load and store instructions, and therefore they do not violate the load/store architecture principle.
 // as ACE is architected to behave like an _attached_ unit, which may have its own interfaces.
 
 The operation is described in detail in <<ACE-provision-export-import>>.
@@ -1066,10 +1064,11 @@ Encoding::
 ....
 
 Description::
-For `ace.clear`, `Kd` or `K[Xd]` denotes the CR to be cleared. +
-`ace.reset` uses the encoding for `ace.clear` and `Xd` = `X0` (the `context` field is `0`) or `Xd` != `X0` containing a value larger than 31.
+`ace.clear` unconfigures the state of the CR `Kd` or `K[Xd]` and releases its resources in the CRF.
+It also sets the corresponding entry in `*crdirty` to Dirty unless the CR was already unconfigured, in which case it does not change the state in `*crdirty`.
 +
-`ace.clear` unconfigures the state of the relevant CR by releasing its internal resources in the CRF and setting the corresponding entry in `*crdirty` to Dirty unless the CR was already unconfigured, in which case it does nothing.
+`ace.reset` unconfigures all the CRs and the ACEIOBUF.
+It uses the encoding for `ace.clear` with indirect CR addressing and `Xd` = `X0`.
 
 Properties::
 `ace.clear` does not make ```*status.ACES``` Dirty. +
@@ -1664,12 +1663,12 @@ Interruptible: *YES*.
 [[ACE-provision-export-import]]
 === Provisioning, Export and Import of Cryptographic Contexts
 
-From the point of view of the system outside the ACE unit, `ace.provision` and `ace.import` appear as a series of sequential memory reads, and `ace.export`, appears as a series of sequential memory writes.
+From the point of view of the system outside the ACE unit, `ace.prov` and `ace.import` appear as a series of sequential memory reads, and `ace.export`, appears as a series of sequential memory writes.
 
 The only admissible points of interruption of these instructions are the memory read or write operations.
 The instructions may be interrupted because of a memory exception, and any other type of interrupt must wait for the next memory read or write.
 They may resume from the point of interruption only if the control flow is returned to them immediately after the interrupt handler has completed.
-The privileged interrupt handler must ensure that the instruction is restarted only in this situation, and in any other circumstance, including context switching, the instruction must be restarted, in which case if the instruction is `ace.provision` or `ace.import` it must also clear the CR.
+The privileged interrupt handler must ensure that the instruction is restarted only in this situation, and in any other circumstance, including context switching, the instruction must be restarted, in which case if the instruction is `ace.prov` or `ace.import` it must also clear the CR.
 The implementation will also restart any operation if the internal state of the CR is not in a valid interrupted state.
 
 [NOTE]
@@ -1708,7 +1707,7 @@ The total size of a PI is therefore `MD_size(x)` + `PI_content_size(x)`, and the
 [[ACE-provision]]
 ==== Provisioning
 
-We start with the algorithm performed by `ace.provision`, which reads a PI and uses it to provision a CR.
+We start with the algorithm performed by `ace.prov`, which reads a PI and uses it to provision a CR.
 
 [[ACE-provision-listing]]
 .Provisioning a CR with metadata and content
@@ -1918,14 +1917,14 @@ In certain cases where an invalid input is provided to any ACE instruction, or a
 
 * `Kn` is put into state _invalid_;
 * For instructions that refer to `Kn`:
- ** `ace.provision`, `ace.clear` (thus also `ace.reset`), `ace.import`, `ace.export`, `ace.size` and `ace.available` work normally;
+ ** `ace.prov`, `ace.clear` (thus also `ace.reset`), `ace.import`, `ace.export`, `ace.size` and `ace.available` work normally;
  ** `ace.exec`, `ace.clone`, `ace.derive`, and `ace.restrict` raise an ACE error _ace_err_invalid_CR_;
  ** `ace.input` and `ace.output` raise an ACE error _ace_err_invalid_CR_ when `aceactivecr` is `Kn`;
  ** `ace.state` raises an ACE error _ace_err_invalid_CR_, unless it is used to return to state _initial_;
- ** `ace.error` always returns error _ace_err_invalid_CR_ after any operation involving the CR except for `ace.import` and `ace.export`, `ace.clear`, `ace.provision`, and `ace.size`, which all work normally, and using `ace.state` to return to state _initial_.
+ ** `ace.error` always returns error _ace_err_invalid_CR_ after any operation involving the CR except for `ace.import` and `ace.export`, `ace.clear`, `ace.prov`, and `ace.size`, which all work normally, and using `ace.state` to return to state _initial_.
 * The current instruction is terminated.
 
-In State _completed_, only `ace.provision`, `ace.export`, `ace.import`, `ace.clear`, and `ace.error` are permitted.
+In State _completed_, only `ace.prov`, `ace.export`, `ace.import`, `ace.clear`, and `ace.error` are permitted.
 
 //
 
@@ -1934,7 +1933,7 @@ In State _completed_, only `ace.provision`, `ace.export`, `ace.import`, `ace.cle
 
 _This section is currently non-normative._
 
-Instructions `ace.provision`, `ace.export`, `ace.import`, `ace.input`, and `ace.output` support long inputs and outputs.
+Instructions `ace.prov`, `ace.export`, `ace.import`, `ace.input`, and `ace.output` support long inputs and outputs.
 To reduce hardware complexity, these operations can be trapped and emulated in software.
 (((ACE, trappable instruction)))
 Upon a trap, the handler identifies the trapped instruction and uses `ace.size` on the metadata to determine the size of the data to be transferred.
@@ -1957,7 +1956,7 @@ All three instructions can be implemented as CSR RW instructions, for instance:
  * `acecontent`, XLEN bits wide, to which we write the content of the CR or the ACEIOBUF or from which we read the current content.
   A write to `acecontent` increases `acestart` by XLEN/8.
 
-// Interrupting the firmware implementation of `ace.provision`, `ace.export`, `ace.import`, `ace.input`, or `ace.output` must leave the architectural state indistinguishable from the state expected from interrupting a monolithic implementation of the instructions.
+// Interrupting the firmware implementation of `ace.prov`, `ace.export`, `ace.import`, `ace.input`, or `ace.output` must leave the architectural state indistinguishable from the state expected from interrupting a monolithic implementation of the instructions.
 // In particular, they need to respect the value of `acestart` and update it in accordance with the expected architected behavior of the emulated instructions.
 // The supporting instructions themselves must be uninterruptible.
 
@@ -2023,7 +2022,7 @@ Data Structures:::
 These include:
 
 . *Provisioning Input*:
-The data following the metadata block in the PI to `ace.provision`, such as keys and other required secrets.
+The data following the metadata block in the PI to `ace.prov`, such as keys and other required secrets.
 Fields are listed in the order they appear in the PI, each with its length.
 
 . *Internal State*:
