@@ -244,7 +244,7 @@ The PI and SCC formats are described in <<ACE-provision-export-import>> and <<AC
 [WARNING]
 The metadata section of a CC is used as the header of the data formats used in CR provisioning, and SCC export and import functions.
 Its definition is in flux, as it is subject to change based on the ACR feedback.
-For instance, if a less expensive key derivation method is allowed (<<ACE-SCC-AEAD>>), we could rely entirely on the cryptographic approach based on localities, and eliminate the filtering acording to the IDs of processes VMs and Hypervisors/SDs. In this case, bits [63:29] could be repurposed, and an expiration data field could be made smaller.
+For instance, if a less expensive key derivation method is allowed (<<ACE-SCC-AEAD>>), we could rely entirely on the cryptographic approach based on localities, and eliminate the filtering according to the IDs of processes VMs and Hypervisors/SDs. In this case we would not need a 128-bit additional block for filtering and a 64-bit additional block would suffice and leave also enough space for additional policies.
 
 {empty}
 (((Cryptographic Context,metadata,format)))
@@ -253,30 +253,28 @@ The metadata section is used as the header of the data formats used in CR provis
 
 [[ACE-metadata-standard]]
 .Format of the Metadata Section
-[width="100%",cols="^9%,^7%,16%,68%",options="header"]
+[width="100%",cols="^9%,^7%,14%,70%",options="header"]
 |===
 |   Field | Width | Name                     | Description
 |   [0:0] |   1   | Format                   | Value is 0 for the current version of the metadata format.
-|   [1:1] |   1   | _LengthExt_              | Value is 1 is there is an additional block of data at the end of content.
-|  [11:2] |  10   | _Algorithm_              | Cryptographic algorithm (such as primitive, mode, or protocol).
-| [13:12] |   2   | _DirectionPolicy_        | For encryption/decryption primitives or modes, determines whether the CC may be used for encryption (bit 11 set), decryption (bit 12 set), or both (bits 11 and 12 set). The field can be reused to expand the algorithm space for other types of operations.
-| [14:14] |   1   | _SCProtection_           | Side-Channel Protected Implementation (0 if not protected, 1 if protected).
-| [15:15] |   1   | _KeyType_                | Key given by explicit value / System Key (index).
-| [19:16] |   4   | _StateNumber_            | Encoding the current state of the state machine of the algorithm as a number.
-| [23:20] |   4   | _Locality_               | A field which is either all ones (`0xF`) or an index into the Locality Secrets Table.
-| [25:24] |   2   | Reserved                 | Value is 0 for the current metadata formats. (Expansion of Locality?)
-| [28:26] |   3   | _UCPolicy_               | “UC Policy” means “Usage Control Policy”. If bit 25, 26, resp., 27 is set, it disallows the _usage_ of this CC in User, (V)S-mode, resp., H-mode.
-| [32:29] |   4   | _FilterMode_             | Filter enablement:
-bits 0, 1, resp., 2 = enable the filter below S/VS-mode, H-mode, resp., M-mode.
-bit 3 = expiration date (minutes since January 1^st^, 2027). +
-If any of these bits is set, the metadata is extended by the 128-bit block as described in <<ACE-metadata-extension>> (see <<ACE-combined-filters>>).
-| [56:33] |  24   | _AdditionalLength_       | Additional content section in length
-| [63:57] |   7   | Reserved                 | Value is 0 for the current metadata formats.
+|  [11:1] |  11   | _Algorithm_              | Cryptographic algorithm (such as primitive, mode, or protocol).
+| [13:12] |   2   | _DirectionPolicy_        | Selects the allowed direction for the cryptographic operation.
+| [15:14] |   2   | _SCProtection_           | Side-Channel Protected Implementation (0 if not protected, 1 if protected).
+| [16:16] |   1   | _KeyType_                | Key given by explicit value / System Key (index).
+| [20:17] |   4   | _StateNumber_            | Encoding the current state of the state machine of the algorithm as a number.
+| [28:21] |   8   | _Locality_               | A field which is either all zeros or determines a Locality Secret.
+| [31:29] |   3   | _UCPolicy_               | “UC Policy” means “Usage Control Policy”. If bit 25, 26, resp., 27 is set, it disallows the _usage_ of this CC in User, (V)S-mode, resp., H-mode.
+| [35:32] |   4   | _FilterMode_             | Filters:
+Bits 0, 1, resp., 2 = enable the filter below S/VS-mode, H-mode, resp., M-mode.
+Bit 3 = expiration date.
+If any of these bits is set, the 128-bit block described in <<ACE-metadata-extension>> (see <<ACE-combined-filters>>) is appended to the metadata section.
+| [47:36] |  12   | _ExtraContent_           | Length of additional content section (as 64-bit blocks). If non-zero, there is an additional block of data at the end of the _content_.
+| [63:48] |  16   | Reserved                 | Value is 0 for the current metadata formats.
 |===
 
 [[ACE-metadata-extension]]
-.Format of the optional metadata section extension for filtering
-[width="100%",cols="^9%,^7%,16%,68%",options="header"]
+.Format of the optional metadata filtering extension
+[width="100%",cols="^9%,^7%,14%,70%",options="header"]
 |===
 |     Field | Width | Name                    | Description
 |    [31:0] |  32   | _SFilter_               | Value to match against `scontext`.
@@ -290,36 +288,38 @@ Some fields and their properties need further explanation. This is done in the f
 ===== Confidentiality
 
 Bits [32:0] are not confidential and will not be encrypted upon export as an SCC.
-
-Bits [63:33] are confidential and will be encrypted upon export as an SCC.
-
-The optional metadata section extension for filtering is also confidential and will be encrypted upon export as an SCC.
+Bits [63:33] and the optional metadata filtering extension
+are confidential and will be encrypted upon export as an SCC.
 
 ===== Algorithm and DirectionPolicy Fields
 
-Algorithms are encoded in a 10-bit field.
-Algorithm numbers 0-767 are architecture-defined and the list of such encodings is maintained by RVI.
+Algorithms are encoded in an 11-bit field.
+Algorithm numbers 0-1535 are architecture-defined and the list of such encodings is maintained by RVI.
 See{nbsp}<<ACE-algorithms>> for the currently encoded algorithms.
 The remaining values can be used to encode custom algorithms.
 
-The DirectionPolicy field is defined only for algorithms that support both encryption and decryption. For algorithms that do not, such as hash functions or some public-key operations, these two bits are not used for selecting the primitive's direction and may instead encode additional algorithm identifiers, thereby expanding the available encoding space of the Algorithms field.
+For encryption/decryption primitives or modes, the DirectionPolicy field determines whether the CC may be used for encryption (lower bit), decryption (higher bit), or both.
 
-// ===== SCProtection Field
-//
-// Certain minimal Side-Channel protection levels are defined by the architecture.
-// [[ACE-SC-protection-levels]]
-// .Encoding of Side-Channel Protection levels
-// [%autowidth,float="center",align="center",options="header"]
-// |===
-// | Value | Description
-// |   0   | No protection.
-// |   1   | DIEL, (first-order) threshold implementation.
-// |   2   | DIEL, (first-order) threshold, fault-tolerant implementation.
-// |   3   | Custom, algorithm dependent.
-// |===
-//
-// Custom algorithms may offer stronger side channel protection guarantees than those specified in the encoding values 0 to 2.
-// In such a case, the value of the SCProtection field must be set to 3.
+For certain asymmetric primitives, the DirectionPolicy field determines whether they can be used for signature generation (lower bit), verification (higher bit), or both.
+
+The DirectionPolicy field can be used by other primitives to encode additional algorithm identifiers, thereby expanding the available encoding space of the Algorithms field.
+
+===== SCProtection Field
+
+Certain minimal Side-Channel protection levels are defined by the architecture.
+[[ACE-SC-protection-levels]]
+.Encoding of Side-Channel Protection levels
+[%autowidth,float="center",align="center",options="header"]
+|===
+| Value | Description
+|   0   | No protection.
+|   1   | DIEL, (first-order) threshold implementation.
+|   2   | DIEL, (first-order) threshold, fault-tolerant implementation.
+|   3   | Custom, algorithm dependent.
+|===
+
+Custom algorithms may offer stronger side channel protection guarantees than those specified in the encoding values 0 to 2.
+In such a case, the value of the SCProtection field must be set to 3.
 
 ===== KeyType Field
 
@@ -399,8 +399,8 @@ and privileged code can always deny resources to user processes.
 ACE keeps a table of 128-bit [.red]#(maybe shorter)# Locality Secrets (LS), the Locality Secrets Table (LST).
 Some entries of the LST are fixed or configurable only using an implementation-specific authenticated hardware procedure: These are global and shared across all ACE units in the same system. Other entries may be programmed by privileged modes and are architectural, i.e., per hart.
 
-If the Locality Field of a CC is all ones (`0xF`), then the RCSK is used.
-Otherwise, this value is used as an index _i_ in the LST, and the encryption depends on both the RCSK and LST[_i_].
+If the Locality Field of a CC is all zeros, then the RCSK is not tweaked used.
+Otherwise, this value minus one is used as an index _i_ in the LST, and the encryption depends on both the RCSK and LST[_i_].
 <<ACE-locality-indexes>> lists the architected Localities and which mode is allowed to configure them.
 The domain of each Locality Secret is specified, i.e., whether the value is chip-wide (i.e., the same across all chiplets in a SoC), device-wide, or OS-wide.
 
@@ -409,19 +409,19 @@ The domain of each Locality Secret is specified, i.e., whether the value is chip
 [width="100%",cols="20%,53%,^9%,^9%,^9%",options="header"]
 |===
 | Name                      | Description                                                                                       | Domain | Conf.. | Value
-| (No Locality binding)     | No CSK derivation. CC bound to Root CSK only.                                                              | —  | — | 0xF
-| _ChipDesignerSecret_      | Identifies the designer of the SoC. Permanent.                                                             | SoC | No | 0
-| _ChipModelSecret_         | Identifies specific chip model/family. Permanent.                                                          | SoC | No | 1
-| _ChipUniqueSecret_        | Unique for each SoC. Permanent.                                                                            | SoC | No | 2
+| (No Locality binding)     | No CSK derivation. CC bound to Root CSK only.                                                              | —  | — | 0x00
+| _ChipDesignerSecret_      | Identifies the designer of the SoC. Permanent.                                                             | SoC | No | 1
+| _ChipModelSecret_         | Identifies specific chip model/family. Permanent.                                                          | SoC | No | 2
+| _ChipUniqueSecret_        | Unique for each SoC. Permanent.                                                                            | SoC | No | 3
 | _OEMSecret_               | Provisioned by OEM to differentiate their products from the competition.
-                              Permanent, or reconfigurable via an implementation-defined HW authenticated mechanism.                     | Device | No | 3
-| _ProductSecret_           | Identifies device/system type/model (product). Permanent or reconfigurable like OEMSecret.                 | Device | No | 4
-| _DeviceSecret_            | Unique device (entire system) secret (_not_ the device ID such as a serial number). Shared across all harts in a SoC and shareable across multiple SoKs in a single device. Sharing mechanism implementation-defined, i.e., not architected. Reconfigurable like OEMSecret.                                  | Device | No | 5
-| _BootSecret_              | Unique per the boot session of the host hardware and its software stack. Configured by M-mode during the boot process of the physical device (see <<ACE-CSR-maceBootSecret>>). | Device | M | 6
+                              Permanent, or reconfigurable via an implementation-defined HW authenticated mechanism.                     | Device | No | 4
+| _ProductSecret_           | Identifies device/system type/model (product). Permanent or reconfigurable like OEMSecret.                 | Device | No | 5
+| _DeviceSecret_            | Unique device (entire system) secret (_not_ the device ID such as a serial number). Shared across all harts in a SoC and shareable across multiple SoKs in a single device. Sharing mechanism implementation-defined, i.e., not architected. Reconfigurable like OEMSecret.                                  | Device | No | 6
+| _BootSecret_              | Unique per the boot session of the host hardware and its software stack. Configured by M-mode during the boot process of the physical device (see <<ACE-CSR-maceBootSecret>>). | Device | M | 7
 | _VBootSecret_             | Unique per the boot session of the virtualized hardware and its software stack.
-Regenerated by H or higher at each virtual boot of a VM (see <<ACE-CSR-haceVBootSecret>>).                                               | VM | H/M | 7
-| _SSecret_                 | Can be configured by Supervisor (see <<ACE-CSR-saceSSecret>>).                                             | Process  | S | 8
-| _Reserved_                | Reserved for future use.                                                                                   | Impdef | Impdef | 9-14
+Regenerated by H or higher at each virtual boot of a VM (see <<ACE-CSR-haceVBootSecret>>).                                               | VM | H/M | 8
+| _SSecret_                 | Can be configured by Supervisor (see <<ACE-CSR-saceSSecret>>).                                             | Process  | S | 9
+| _Reserved_                | Reserved for future use.                                                                                   | Impdef | Impdef | 10-255
 |===
 
 The only restriction on the values of the LSs is that they must be randomly generated and be non-zero.
@@ -436,14 +436,11 @@ Implementations of the SKT *must* provide a suitable Locality to the ACE unit du
 
 [WARNING]
 Locality secrets may be combined. Suggestion: just add them for the purpose of creating the tweaks to be used in the key derivation process, as, for instance, allowing four to be added together reduces the distinguishability of a sequence or random numbers by just two bits (from 128 to 126)—and these values are never observed directly.
-The proposal for combination would be to encode 0-6 in three bits (and an ignore value of 7), then having a secret per SD/hypervisor, _VBootSecret_ and _SSecret_, selectable each with one bit, so a total of 6 bits. Note that the secret for M-mode (_BootSecret_), is in the first group.
-
-[WARNING]
-An extension field for the Locality field may be provided in the 128-bit (or longer) metadata format, if defined.
+The proposal for combination would be to encode 1-7 in three bits, then having a secret per SD/hypervisor, _VBootSecret_ and _SSecret_, selectable each with one bit, so a total of 6 bits. Note that the secret for M-mode (_BootSecret_), is in the first group.
 
 ===== UCPolicy Field
 
-Bits 28, 29, resp., 30 are ignored if U-mode, S-mode, resp. H-mode is not supported/enabled.
+Bits 29, 30, resp., 31 are ignored if U-mode, S-mode, resp. H-mode is not supported/enabled.
 
 [[ACE-combined-filters]]
 ===== FilterMode and Filter Fields
@@ -1436,28 +1433,33 @@ This instruction can be used to:
 Let `m` be the metadata field of the CC in the destination CR. +
 On RV64, the semantics of the instruction are:
 
-* `Xs`[11:0] and `Xs`[24:15] must be 0, else ACE error _ace_err_invalid_value_ is raised.
-* `Xs`[14:12] and `Xs`[63:26] have the same format as the corresponding bits of the metadata.
+* The value `s2` is even and both `Xs2` and `X[s2+1]` are read as the 128-bit value `X[s2+1] @ Xs2`.
 
-* If the algorithm in the CR supports encryption and decryption, then:
-** `Xs`[13:12] is used to deactivate either encryption or decryption in a CC that allows both.
-** If `m`[13:12] = `0b11`, then at least one bit of `Xs`[13:12] must be set to 1 to select the allowed operation(s).
-If `Xs`[13:12] = 0, then ACE error _ace_err_invalid_value_ is raised.
-** If `m`[13:12] != `0b11`, then it must be `Xs`[13:12] = `m`[13:12] or `Xs`[13:12] = 0, in which case no change is made, else ACE error _ace_err_invalid_value_ is raised
+* `Xs` inherits the format of the first 64-bit block of the metadata section.
+Only the fields DirectionPolicy, SCProtection, Locality, UCPolicy, and FilterMode may be defined.
+All other fields must be 0, else ACE error _ace_err_invalid_value_ is raised (<<ACE-error-codes>>).
 
-* If the algorithm in the CR does not support encryption and decryption, then `Xs`[13:12] must be 0, else ACE error _ace_err_invalid_value_ is raised
-* `Xs`[14] is used to turn on side-channel protection, if implemented.
-Removing the side channel protection level is not permitted. Attempting to do so raises ACE error _ace_err_invalid_value_ (<<ACE-error-codes>>).
+* `Xs`.DirectionPolicy is used to set the new DirectionPolicy of the CR.
+No operation may be enabled, any attempt to do so raises ACE error _ace_err_invalid_value_.
+In some cases, a zero value is not permitted, such as disabling both encryption and decryption.
 
-* A zero in any of the three bits `Xs`[28:26] means that the corresponding policy is _not_ changed.
-* A one in any of the three bits `Xs`[28:26] means that usage by the corresponding mode is forbidden, and the corresponding bit in the metadata of the destination CC is set to 1.
-* `Xs`[32:29] can be non-zero only if `m`[32:29] is 0, in which case  `m`[32:29] <- `Xs`[32:29], else ACE error _ace_err_invalid_value_ is raised
-* This instruction cannot set a Locality.
+* `Xs`.SCProtection is used to turn on side-channel protection or raise its level, if such protection is implemented.
+Attempting to remove or downgrade side channel protection, or to set a non-implemented level raises ACE error _ace_err_invalid_value_.
+
+* If `Xs`.Locality is non-zero, then it can be used to restrict the Locality. Then, when the CR is exported as a CR, it will use the new tweak in the AEAD mode. Generalizing the Locality is not permitted. Attempting to do so raises ACE error _ace_err_invalid_value_.
+
+* A zero in any of the three bits `Xs`.UCPolicy means that the corresponding policy is _not_ changed. +
+A one in any of the three bits `Xs`.UCPolicy means that usage by the corresponding mode is not allowed, and the corresponding bit in the metadata of the destination CC is set to 1.
+
+* A zero bit in `Xs`.FilterMode means that the corresponding policy set in `m`.FilterMode is _not_ changed. +
+A set bit in `Xs`.FilterMode will add the corresponding policy to `m`.FilterMode only if none was programmed before, otherwise error ACE error _ace_err_invalid_value_ is raised. If `Xs`.FilterMode is non-zero, then `X[s2+1] @ Xs2` must be provided and it must have the same format as the metadata filtering extension in <<ACE-metadata-extension>>, where only the fields corresponding to the actual filters added are considered and the remaining bits are ignored.
+* When FilterMode is set on a CC where it was previously unset, the SCC will contain the additional metadata filtering extension, where previously it would not have been included. Thus, the size of the SCC may be larger than a previous version.
 --
 +
-On RV32, `s` must be even, the register pair `X[s]` and `X[s+1]` are read, and `(X[s+1] @ X[s])` replaces `Xs` in the RV64 description.
+On RV32:
 
-NOTE: Setting multiple bits of `Xs`[32:29] may require a change of the metadata format from 64 bits to 128 bits.
+* `s` must be even, the register pair `X[s]` and `X[s+1]` are read, and `(X[s+1] @ X[s])` replaces `Xs` in the RV64 description.
+* `s2` is a multiple of 4 and both `Xs2`, `X[s2+1]`, `X[s2+2]`, and `X[s2+3]` are read as the 128-bit value `X[s2+3] @ X[s2+2] @ X[s2+1] @ Xs2`, which replaces `X[s2+1] @ Xs2 in the RV64 description.
 
 Properties::
 Possibly modifies state: *YES*. +
