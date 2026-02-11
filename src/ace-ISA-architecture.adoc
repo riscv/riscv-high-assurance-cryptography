@@ -241,9 +241,6 @@ For software portability and interoperability, ACE defines two external formats 
 Both formats rely on the same metadata section format, which is described here.
 The PI and SCC formats are described in <<ACE-provision-export-import>> and <<ACE-format-SCC>>, respectively.
 
-
-==== Metadata Format
-
 [WARNING]
 The metadata section of a CC is used as the header of the data formats used in CR provisioning, and SCC export and import functions.
 Its definition is in flux, as it is subject to change based on the ACR feedback.
@@ -251,7 +248,7 @@ For instance, if a less expensive key derivation method is allowed (<<ACE-SCC-AE
 
 {empty}
 (((Cryptographic Context,metadata,format)))
-The metadata section is 64, 128, or 192 bits long.
+The metadata section is 64 or 192 bits long.
 The metadata section is used as the header of the data formats used in CR provisioning, and SCC export and import functions.
 
 [[ACE-metadata-standard]]
@@ -259,8 +256,8 @@ The metadata section is used as the header of the data formats used in CR provis
 [width="100%",cols="^9%,^7%,16%,68%",options="header"]
 |===
 |   Field | Width | Name                     | Description
-|   [0:0] |   1   | Format                   | Value is 1 if the optional metadata extension section (ACE-metadata-extension) is present, else 0.
-|   [1:1] |   1   | _LengthExt_              | Value is 1 is there is an additional block of data at the end of content, in which case the medata is extended with a block
+|   [0:0] |   1   | Format                   | Value is 0 for the current version of the metadata format.
+|   [1:1] |   1   | _LengthExt_              | Value is 1 is there is an additional block of data at the end of content.
 |  [11:2] |  10   | _Algorithm_              | Cryptographic algorithm (such as primitive, mode, or protocol).
 | [13:12] |   2   | _DirectionPolicy_        | For encryption/decryption primitives or modes, determines whether the CC may be used for encryption (bit 11 set), decryption (bit 12 set), or both (bits 11 and 12 set). The field can be reused to expand the algorithm space for other types of operations.
 | [14:14] |   1   | _SCProtection_           | Side-Channel Protected Implementation (0 if not protected, 1 if protected).
@@ -272,51 +269,31 @@ The metadata section is used as the header of the data formats used in CR provis
 | [32:29] |   4   | _FilterMode_             | Filter enablement:
 bits 0, 1, resp., 2 = enable the filter below S/VS-mode, H-mode, resp., M-mode.
 bit 3 = expiration date (minutes since January 1^st^, 2027). +
-For the 64-bit metadata block, there are limits on the bits set <<ACE-combined-filters>>.
-| [63:33] |  31   | _Filter1_                | Value to match filters against (see <<ACE-combined-filters>> for details), including an internal secure clock. +
-An alternative format for these fields is described in <<ACE-metadata-split-filter1>>.
-|===
-
-[[ACE-metadata-split-filter1]]
-.Format of the Filter1 field of the Metadata section for two short filters
-[width="100%",cols="^9%,^7%,16%,68%",options="header"]
-|===
-|   Field | Width | Name                     | Description
-| [46:33] |  14   | _Filter1A_               | Value to match against `mcontext`.
-| [48:47] |   2   | Zero                     | Zero.
-| [62:49] |  14   | _Filter1B_               | Value to match against `hcontext`.
-| [63:63] |   1   | Zero                     | Zero.
+If any of these bits is set, the metadata is extended by the 128-bit block as described in <<ACE-metadata-extension>> (see <<ACE-combined-filters>>).
+| [56:33] |  24   | _AdditionalLength_       | Additional content section in length
+| [63:57] |   7   | Reserved                 | Value is 0 for the current metadata formats.
 |===
 
 [[ACE-metadata-extension]]
-.Format of the optional metadata extension section
+.Format of the optional metadata section extension for filtering
 [width="100%",cols="^9%,^7%,16%,68%",options="header"]
 |===
-|   Field | Width | Name                     | Description
-|   [0:0] |   1   | _Format2_                | Value is 0 for the current 128-bit metadata format.
-|  [31:1] |  31   | _Filter2_                | Value to match against an expiration date.
-| [32:32] |   1   | Reserved                 | Reserved for future use.
-| [46:33] |  14   | _Filter3A_               | Filter to match against a `mcontext` field.
-| [48:47] |   2   | Reserved                 | Reserved for future use.
-| [62:49] |  14   | _Filter3B_               | Filter to match against a `hcontext` field.
-| [63:63] |   1   | Reserved                 | Reserved for future use.
-|===
-
-[[ACE-metadata-extension-data]]
-.Format of the optional metadata additional data length section
-[width="100%",cols="^9%,^7%,16%,68%",options="header"]
-|===
-|   Field | Width | Name                     | Description
-| [31:0]  |  32   | _Length_                 | Length of the additional block at the end of the content section.
-| [63:32] |  32   | Reserved                 | Reserved for future use.
+|     Field | Width | Name                    | Description
+|    [31:0] |  32   | _SFilter_               | Value to match against `scontext`.
+|   [63:32] |  32   | _MFilter_               | Value to match against `mcontext`.
+|   [95:64] |  32   | _HFilter_               | Value to match against `hcontext`.
+|  [127:96] |  32   | _TFilter_               | Value to match against an expiration date.
 |===
 
 Some fields and their properties need further explanation. This is done in the following sections.
 
 ===== Confidentiality
 
-Bits [32:0] are not confidential and will not be encrypted upon export as an SCC. +
+Bits [32:0] are not confidential and will not be encrypted upon export as an SCC.
+
 Bits [63:33] are confidential and will be encrypted upon export as an SCC.
+
+The optional metadata section extension for filtering is also confidential and will be encrypted upon export as an SCC.
 
 ===== Algorithm and DirectionPolicy Fields
 
@@ -471,29 +448,15 @@ Bits 28, 29, resp., 30 are ignored if U-mode, S-mode, resp. H-mode is not suppor
 [[ACE-combined-filters]]
 ===== FilterMode and Filter Fields
 
-[WARNING]
-The function of these fields must be finalized. In particular, the additional Filter fields and the 64-bit metadata expansion block are not yet agreed upon.
+If the FilterMode field is non-zero, an additional 128-bit block is added to the metadata to implement filtering according to secrets set by S/VS, HS, and M, and expiration time, depending on the bits set in FilterMode.
 
 To filter by time is a simple comparison between the current time and the expiration time in the metadata.
 The ACE Unit must have access to a secure clock.
 When the current time is beyond the expiration time in the metadata, the ACE Unit invalidates the CR (see <<ACE-invalidation>>), and the `aceerror` CSR takes the value _ace_err_expired_CR_ (see <<ACE-CSR-ace-error>>).
 
-We discuss now filtering by process domain.
+Filtering by process domain is a simple comparison with the corresponding secret.
 
-If we filter by `scontext`, the Filter field, which is 31 bits long, simply contains the value to match against.
-
-If the Filter field is used to match against `mcontext`, `hcontext` or both, its 31 bits are formatted as follows:
-
-
-In this case, bits 1 and 2 of FilterMode can be set.
-
-Other combinations of more than one bit set in FilterMode are only allowed if the metadata type is set for 128-bit metadata, i.e., if the Format bit in the metadata is set to 1.
-In this case, if Filter1 is used to match against `scontext` or an expiration date, and we have at least one other filter, then the format of the extension section is given in the following table.
-
-
-The _Format2_ field is not encrypted.
-
-If both filtering according to `scontext` and an expiration date are required, then `scontext` is encoded in the standard metadata block and the expiration date is encoded in the extension section.
+Currently, we use `scontext`, `mcontext`, and `hcontext` from the Sdtrig extension, which correspond to 31, 14, and 14 bit fields, respectively.
 
 //
 
