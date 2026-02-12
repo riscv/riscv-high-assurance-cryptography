@@ -236,7 +236,7 @@ The support for the vector register file and for ACEIOBUF are not mutually exclu
 For software portability and interoperability, ACE defines two external formats for CCs:
 
 . The _Provisioning Input_ (PI) format, which is loaded into a CR to create a C; and
-. The Sealed Cryptographic Context (SCC) (<<ACE-format-SCC>>), an encrypted, authenticated format used when exporting a CR to memory for later re-import.
+. The _Sealed Cryptographic Context_ (SCC) (<<ACE-format-SCC>>), an encrypted, authenticated format used when exporting a CR to memory for later re-import.
 
 Both formats rely on the same metadata section format, which is described here.
 The PI and SCC formats are described in <<ACE-provision-export-import>> and <<ACE-format-SCC>>, respectively.
@@ -247,11 +247,13 @@ Its definition is in flux, as it is subject to change based on the ACR feedback.
 For instance, if a less expensive key derivation method is allowed (<<ACE-SCC-AEAD>>), we could rely entirely on the cryptographic approach based on localities, and eliminate the filtering according to the IDs of processes VMs and Hypervisors/SDs. In this case we would not need a 128-bit additional block for filtering and a 64-bit additional block would suffice and leave also enough space for additional policies.
 
 {empty}
-(((Cryptographic Context,metadata,format)))
-The metadata section is 64 or 192 bits long.
-The metadata section is used as the header of the data formats used in CR provisioning, and SCC export and import functions.
+(((Cryptographic Context,metadata)))
+CCs contain 64 or 192 bits of metadata.
+(((Cryptographic Context,metadata,header)))
+The first 64 bits are the metadata header, which is also the header of the data formats used in CR provisioning, and SCC export and import functions.
+Its format is given in <<ACE-metadata-header>>
 
-[[ACE-metadata-standard]]
+[[ACE-metadata-header]]
 .Format of the Metadata Section
 [width="100%",cols="^9%,^7%,14%,70%",options="header"]
 |===
@@ -268,9 +270,14 @@ The metadata section is used as the header of the data formats used in CR provis
 Bits 0, 1, resp., 2 = enable the filter below S/VS-mode, H-mode, resp., M-mode.
 Bit 3 = expiration date.
 If any of these bits is set, the 128-bit block described in <<ACE-metadata-extension>> (see <<ACE-combined-filters>>) is appended to the metadata section.
-| [47:36] |  12   | _ExtraContent_           | Length of additional content section (as 64-bit blocks). If non-zero, there is an additional block of data at the end of the _content_.
+| [47:36] |  12   | _ExtraContent_           | If non-zero, there is an additional segment of data at the end of the _content_.
+The length of additional segment is _ExtraContent_ 64-bit blocks.
 | [63:48] |  16   | Reserved                 | Value is 0 for the current metadata formats.
 |===
+
+If _FilterMode_ is not zero, then the provisioning and SCC data formats contain an
+additional 128-bit block of metadata, called the _metadata extension_, defined in <<ACE-metadata-extension>>.
+(((Cryptographic Context,metadata,extension)))
 
 [[ACE-metadata-extension]]
 .Format of the optional metadata extension
@@ -489,7 +496,7 @@ Currently, we use `scontext`, `mcontext`, and `hcontext` from the Sdtrig extensi
 //
 
 [[ACE-extra-content]]
-==== ExtraContent Field
+===== ExtraContent Field
 
 The first eight bytes of the additional information store a copy of the `marchid` value from the machine that created the data.
 These eight bytes are counted within the 64‑bit blocks recorded by the _ExtraContent_ field.
@@ -1858,8 +1865,7 @@ SIV ← AESE(enc_key, 0 @ tmp[126:0]));
 metadata.StateNumber ← ace_state_invalid
 
 // FOLLOWING MEMORY WRITE PREEMPTIBLE, `acestart` FROM 0 TO 7
-M[0 .. 7] ← (metadata[63:33] xor AESE(enc_key, 1 @ SIV[126:0])[30:0])
-            @  metadata[32:0];
+M[0 .. 7] ← metadata[63:0];
 
 // FOLLOWING MEMORY WRITE PREEMPTIBLE, `acestart` FROM 8 TO 23
 M[8 .. 23] ← SIV;
@@ -1868,11 +1874,11 @@ foreach(i from 0 to num_blocks - 1) {
    if ((i == num_blocks - 1) and last_block_fractional)
       // FOLLOWING MEMORY WRITE PREEMPTIBLE, `acestart` FROM 24+i*16 TO 31+i*16
       M[24+i*16 .. 31+i*16] ← content[i*16 .. 7+i*16]
-         xor AESE(enc_key, 1 @ SIV[126:32] @ (SIV[31:0] + bin(i+1, 32) % 2**32)[63:0];
+         xor AESE(enc_key, 1 @ SIV[126:32] @ (SIV[31:0] + bin(i, 32) % 2**32)[63:0];
    else
       // FOLLOWING MEMORY WRITE PREEMPTIBLE, `acestart` FROM 24+i*16 TO 39+i*16
       M[24+i*16 .. 39+i*16] ← content[i*16 .. 15+i*16]
-         xor AESE(enc_key, 1 @ SIV[126:32] @ (SIV[31:0] + bin(i+1, 32) % 2**32);
+         xor AESE(enc_key, 1 @ SIV[126:32] @ (SIV[31:0] + bin(i, 32) % 2**32);
 }
 
 metadata.StateNumber ← ace_state_initial
@@ -1927,7 +1933,6 @@ else
 
 // FOLLOWING MEMORY READ PREEMPTIBLE, `acestart` FROM 8 TO 23
 SIV ← M[8 .. 23];
-metadata[63:33] ← metadata[63:33] xor AESE(enc_key, 1 @ SIV[126:0])[30:0])
 tmp ← zeros(64) @ metadata;
 tmp ← Montmul(tmp, auth_key);
 
@@ -1935,12 +1940,12 @@ foreach(i from 0 to num_blocks - 1) {
    if ((i == num_blocks - 1) and last_block_fractional) {
       // FOLLOWING MEMORY READ PREEMPTIBLE, `acestart` FROM 24+i*16 TO 31+i*16
       content[i*16 .. 7+i*16] ← M[24+i*16 .. 31+i*16]
-         xor AESE(enc_key, 1 @ SIV[126:32] @ (SIV[31:0] + bin(i+1, 32) % 2**32)[63:0];
+         xor AESE(enc_key, 1 @ SIV[126:32] @ (SIV[31:0] + bin(i, 32) % 2**32)[63:0];
       tmp[63:0] ← tmp[63:0] xor content[i*16 .. 7+i*16];
    } else {
       // FOLLOWING MEMORY READ PREEMPTIBLE, `acestart` FROM 24+i*16 TO 39+i*16
       content[i*16 .. 15+i*16] ← M[24+i*16 .. 39+i*16]
-         xor AESE(enc_key, 1 @ SIV[126:32] @ (SIV[31:0] + bin(i+1, 32) % 2**32);
+         xor AESE(enc_key, 1 @ SIV[126:32] @ (SIV[31:0] + bin(i, 32) % 2**32);
       tmp ← tmp xor content[i*16 .. 15+i*16];
    }
    tmp ← Montmul(tmp, auth_key);
