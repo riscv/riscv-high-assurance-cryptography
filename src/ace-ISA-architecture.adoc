@@ -473,6 +473,14 @@ Filtering by process domain is a simple comparison with the corresponding secret
 
 Currently, we use `scontext`, `mcontext`, and `hcontext` from the Sdtrig extension, which correspond to 31, 14, and 14 bit fields, respectively.
 
+[[ACE-extracontent]]
+==== ExtraContent Field
+
+The first eight bytes of the additional information store a copy of the `marchid` value from the machine that created the data.
+These eight bytes are counted within the 64‑bit blocks recorded by the _ExtraContent_ field.
+This value is matched against the `marchid` of the device performing the import, to determine whether the additional data is usable.
+This depends also on the algorithm.
+
 //
 
 [[ACE-format-definition]]
@@ -484,7 +492,7 @@ The subsequent bytes form the *content*—the key material and any algorithm-spe
 
 NOTE: The actual resource usage of a CR may be larger than the size of a PI.
 In the simple ECB schemes (<<ACE-ECB-mode>>) not hardened against SCA, a CR need not contain more than the metadata and the key, hence their resource usage matches the size of the PI (unless the key is not a multiple of 64 bits).
-However, several algorithms need to compute and cache additional data once initialized, and their internal state will be larger than the size of the PI.
+However, several algorithms need to compute and cache additional data once provisioned, and their internal state will be larger than the size of the PI.
 
 [[ACE-format-SCC]]
 ==== Sealed Cryptographic Context
@@ -4231,16 +4239,17 @@ The states and their semantics are otherwise identical to Ascon-XOF128, and the 
 ==== Elliptic Curve Asymmetric Algorithms
 
 [WARNING]
-This section needs finalization. The best approach is to have different sizes depending on whether signature generation and/or verification is required, and then always export the max. size except, perhaps, the additional data which may contain precomputations done by the backend.
+This section needs finalization.
 
 We need to define the elliptic curves that are actually used in practice, such as:
 
 * secp256r1 (a.k.a. prime256v1, NIST P-256)
 * secp384r1 (a.k.a. prime384v1, NIST P-384)
 * secp521r1 (a.k.a. prime521v1, NIST P-521)
-* ed25519?
-* ed448?
-* Brainpool?
+* ed25519
+* ed448
+* Brainpool Curves?
+* SM2 Curves?
 
 Algorithms: scalar multiplication with known and unknown base point and ECDSA/EdDSA sign/verify.
 
@@ -4286,14 +4295,14 @@ The first five fields are serialized as bits 0, 1, 2, 3, and 4 of a byte.
   . `HasPublicKey`: Bool.
   . `HasHash`: Bool.
   . `HasSignature`: Bool.
-  . Padding: 13 bits.
+  . Padding: 11 bits.
   . `Progress`/`input_base`: integer (16 bits).
   . `Block_base`: integer (16 bits).
   . Padding: 16 bits.
   . `Generator` (X coordinate, Y coordinate): a `2b`-bit string representing Y @ X.
   . `Scalar`: `b`-bit string. Can be the private key.
 
-The `SCC_content_size()` function returns only the length of the content so far.
+The `SCC_content_size()` function returns only the length of the content so far. +
 The total size of the following fields is stored in the _ExtraContent_ field of the metadata header.
 
 [lowerroman, start=12]
@@ -4333,6 +4342,10 @@ If the operations are interrupted, they are in the transient state.
 When they are completed, they are in the non-transient state.
 In this state, these states may use additional information and append it to the state.
 * The format of the additional information is implementation defined and it is included in the _ExtraContent_ field of the metadata header.
+* If there is a `marchid` mismatch, the additional data after
+`PublicKey`,
+`Signature`, and
+`Hash`—if they exist—, including `RandomNumber`, is discarded, and the operation is restarted.
 --
 +
 
@@ -4364,7 +4377,7 @@ the Boolean variable ``Has``__Var__ is set when all operations required in state
  A Form A `ace.state` does not modify these states.
  `Signature` and the corresponding Boolean `HasSignature` are always reset.
 
- ** All the “set” and “output” operations work like the input and output of blocks in the Hash functions, in other words, they use input_base for the parsing of the `INPUT` and block_base for the fill level of any information to be provisioned.
+ ** All the “set” and “output” operations work like the input and output of blocks in the Hash functions, in other words, they use input_base to track the parsing of the `INPUT` and block_base for the fill level of any information to be provisioned.
 
 // ///////////////////////////////////////////////////////////////////////////////////////////
 
