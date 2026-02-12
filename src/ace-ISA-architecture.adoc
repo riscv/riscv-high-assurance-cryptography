@@ -910,7 +910,7 @@ In this case, the `ACE` and `ACEIOBUF` fields in `sstatus` shall be unshadowed.
 [#discrete]
 ===== `*crdirty` Propagation
 
-NOTE: CR status propagates from the least privileged modes to the higher privileged ones.
+NOTE: CR status propagates from the least privileged modes to the higher privileged ones, like the FS, VS, and ACES fields in `*status`, but there are only two states: Clean and Dirty.
 Any instruction that changes bit \#__i__ of, say `vscrdirty` to Dirty, will also set the corresponding bit of `scrdirty` and `mcrdirty`.
 Any instruction that changes bit \#__i__ of, say `scrdirty` to Dirty, will also set the corresponding bit of `mcrdirty`.
 Consequently, also the ACES fields of `*status` will record the Dirty state.
@@ -1074,7 +1074,6 @@ Trappable: *YES*. +
 Interruptible: *YES*.
 
 NOTE: `ace.prov`, like `ace.import`, `ace.export`, `ace.input`, and `ace.output`, which are described later, can be viewed as special kinds of load and store instructions, and therefore they do not violate the load/store architecture principle.
-// as ACE is architected to behave like an _attached_ unit, which may have its own interfaces.
 
 The operation is described in detail in <<ACE-provision-export-import>>.
 
@@ -1895,9 +1894,9 @@ metadata.StateNumber ← ace_state_initial
 
 The import algorithm needs some special care:
 
-* The first block read from memory by the operation the metadata header block:
- ** If fewer than 4 bytes are read before the instruction is interrupted, `acestart` = 0, so the instruction will be restarted.
- ** If at least 4 bytes have been read, the original value of `metadata.StateNumber` is known, so the instruction may be restarted with `acestart` {ge} 4.
+* The first block read from memory by the operation is the metadata header block:
+ ** If strictly fewer than 4 bytes are read before the instruction is interrupted, ACE leaves `acestart` at 0, and the instruction will be restarted upon resumption.
+ ** If 4 bytes or more have been read, the value of `metadata.StateNumber` in the SCC is known. In this case, the instruction may be restarted with `acestart` {ge} 4 recording the amount of data read.
 
 * If an import operation is preempted, the hardware must save `metadata.StateNumber` and set +
 `metadata.StateNumber <- ace_state_invalid` before relinquishing control.
@@ -4279,9 +4278,7 @@ The states and their semantics are otherwise identical to Ascon-XOF128, and the 
 This section needs finalization.
 The EdDSA signature formats are missing (same for Brainpool and SM2).
 ECC based KEMs are also missing, or at least instructions on how to implement them with the basic functionality offered.
-
-
-We need to define the elliptic curves that are actually used in practice, such as:
+Also, we need to support the elliptic curves that are actually used in practice, such as:
 
 * secp256r1 (a.k.a. prime256v1, NIST P-256)
 * secp384r1 (a.k.a. prime384v1, NIST P-384)
@@ -4291,10 +4288,12 @@ We need to define the elliptic curves that are actually used in practice, such a
 * Brainpool Curves?
 * SM2 Curves?
 
-In this proof-of-concept, we define scalar multiplication with known and unknown base point and ECDSA/EdDSA sign/verify.
+In this proof-of-concept, we only define scalar multiplication with known and unknown base point and ECDSA/EdDSA sign/verify for the NIST curves.
 
-For secp256r1 the size `b` of the main fields (coordinates, signature R and S fields, scalars) is 256 bits. +
-For secp384r1, `b` is 384 bits. +
+For secp256r1 the size `b` of the main fields (coordinates, signature R and S fields, scalars) is 256 bits.
+
+For secp384r1, `b` is 384 bits.
+
 For secp521r1, `b` is 576 bits.
 
 Data Structures:::
@@ -4486,6 +4485,27 @@ This is a corner case and it would _not_ happen in the most common case which is
 *** The OS at VS-mode may implement lazy loading.
 *** Hypervisors and M _always_ save _and_ restore the _entire_ state.
 *** We do not migrate a VM if the CRF capacity at the destination machine is insufficient (the only case that would actually force the hypervisor to not restore everything but making at least some CRs lazy).
+
+// ///////////////////////////////////////////////////////////////////////////////////////////
+
+[[ACE-architectural-model]]
+=== Architectural Model
+
+ACE is architected as an _attached_ unit.
+This allows both implementations within each core and as a block which is shared by multiple cores, with a single instance of the hardware and one separate architectural state for each hart.
+The present specification mandates only its behavior, not its implementation.
+
+Consequently, ACE instructions behave as messages over a tightly coupled coprocessor interface.
+The ACE unit accepts operations, executes them independently of the issuing hart, and later returns results.
+To enforce this decoupling, the ACE unit may lock certain architectural states, for instance Cryptographic Registers and CSRs, causing the hart to wait when attempting to read them.
+
+This design permits a certain degree of concurrency: ACE operations may proceed even while the control flow of the hart is preempted, and long-running cryptographic computations are allowed. Certain interrupts, however, may be permitted to suspend ACE operations.
+
+For example, consider a U-mode process executing an ACE instruction that updates only internal state, such as a vector register.
+If the process is preempted for a context switch, the ACE unit could continue its work until the context-switching handler needs to access the affected vector register, in which case the hart would wait until the operation completes.
+Alternatively, an implementation may choose a more precise exception model, halting the ACE unit and setting `acestart` (the ACE analog of `vstart`) to enable later resumption, possibly at an earlier point.
+An implementation may also decide to wait only a certain amount of time before halting the ACE unit.
+All these approaches are architecturally permissible, and we architect the behavior of certain ACE instructions when interrupted at admissible points.
 
 // ///////////////////////////////////////////////////////////////////////////////////////////
 
