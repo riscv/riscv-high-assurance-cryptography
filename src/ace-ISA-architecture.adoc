@@ -686,15 +686,16 @@ The standard error codes are:
 [float="center",align="center",width="100%",cols="^7%,<23%,<70%",options="header"]
 |===
 |Value | Mnemonic                     | Examples (((ACE, error codes)))
-|  0   | _ace_err_no_error_                 | No error.
+|  0   | _ace_err_no_error_           | No error.
 |  1   | _ace_err_import_auth_        | Authentication failure with `ace.import`.
-|  2   | _ace_err_unconfigured_       | Attempted to use use an unconfigured, or partially configured CR as a source in any instruction except `ace.size`. +
-Attempted to use ACEIOBUF as an input or an output when it was unconfigured. +
-Attempted to use an out of range CR with indirect addressing.
+|  2   | _ace_err_unconfigured_       | Use of an unconfigured, or partially configured CR as a source in any instruction except `ace.size`. +
+Use of ACEIOBUF as an input or an output when it was unconfigured. +
+Use of an out of range CR with indirect addressing.
 |  3   | _ace_err_invalid_CR_         | Attempted to use an _invalid_, but not expired, CR.
 |  4   | _ace_err_expired_CR_         | Attempted to use an expired CR.
 |  5   | _ace_err_memory_             | Insufficient CRF memory for configuration instruction.
-|  6   | _ace_err_unimplemented_      | Not implemented algorithm or variant. State number not allowed in current algorithm in `ace.state`
+|  6   | _ace_err_unimplemented_      | Not implemented algorithm or variant. +
+State number not allowed in current algorithm in `ace.state`.
 |  7   | _ace_err_invalid_value_      | Invalid value, except _ace_err_unimplemented_ (see below).
 |  8   | _ace_err_privilege_          | Violation of usage control policies in metadata (including Filters).
 |  9   | _ace_err_auth_               | Authentication failure in an algorithm.
@@ -1786,7 +1787,7 @@ if (metadata is inconsistent)
 ----
 
 [[ACE-SCC-AEAD]]
-==== Export and Import
+==== Export
 
 The AEAD algorithm used to export CRs is an adaptation of AES-GCM-SIV cite:[DBLP-journals-iacr-GueronLL17,RFC8452].
 
@@ -1891,16 +1892,22 @@ foreach(i from 0 to num_blocks - 1) {
 metadata.StateNumber ← ace_state_initial
 ----
 
+[[ACE-SCC-AEAD]]
+==== Import
+
 The import algorithm needs some special care:
+
+* The first block read from memory by the operation the metadata header block:
+ ** If fewer than 4 bytes are read before the instruction is interrupted, `acestart` = 0, so the instruction will be restarted.
+ ** If at least 4 bytes have been read, the original value of `metadata.StateNumber` is known, so the instruction may be restarted with `acestart` {ge} 4.
 
 * If an import operation is preempted, the hardware must save `metadata.StateNumber` and set +
 `metadata.StateNumber <- ace_state_invalid` before relinquishing control.
-* When control is returned, the previous value of `metadata.StateNumber` is restored.
-* There must be a 4-bit internal temporary state containing the original value of `metadata.StateNumber` and a flag indicating whether the value has been saved.
-* If, upon returning to the interrupted process, the bit signaling that a value for `metadata.StateNumber` has been saved is unset, the operation is restarted.
-* The first read is the read of the metadata header block itself:
- ** If fewer than 4 bytes are read before the instruction is interrupted, `acestart` = 0, so the instruction will be restarted.
- ** If at least 4 bytes have been read, the original value of `metadata.StateNumber` is known, so the instruction may be restarted with `acestart` {ge} 4.
+** When control is returned, the previous value of `metadata.StateNumber` is restored.
+** There must be a 4-bit internal temporary state containing the original value of `metadata.StateNumber` and a flag indicating whether the value has been saved.
+** The flag is only set in this circumstance.
+ *** The implementation will resume the import operation only if the flag is set, otherwise it will restart the operation.
+ *** The flag is also used by the implementation to determine whether any attempt to use the partially imported CR will raise error _ace_err_unconfigured_ instead of _ace_err_invalid_CR_.
 
 [[ACE-SCC-import]]
 .Importing an SCC into a CR
