@@ -1783,13 +1783,13 @@ metadata : bits(64) = M[0 .. 7]
 z ← PI_content_size(metadata[31:0]);
 
 if (z == 0)
-   error ace_err_unimplemented
+   error ace_err_unimplemented;
 
 if (there is not enough memory for the algorithm encoded in the metadata)
-    error ace_err_memory
+    error ace_err_memory;
 
 if (metadata is inconsistent)
-  error ace_err_invalid_value
+  error ace_err_invalid_value;
 
 - Complete metadata parsing.
 // NEXT OPERATION PREEMPTIBLE WITH `acestart` IN [8 .. Z+7]
@@ -1802,7 +1802,8 @@ if (metadata is inconsistent)
 The AEAD algorithm used to export and import CRs is an adaptation of AES-GCM-SIV cite:[DBLP-journals-iacr-GueronLL17,RFC8452].
 
 [WARNING]
-AES-GCM-SIV has been chosen because it only required single passes of data in main memory, reducing the number of external memory accesses. GCM uses also a single pass but requires separate nonce and tag values, increasing the size of the exported data by one block.
+AES-GCM-SIV has been chosen because it only required single passes of data in main memory, reducing the number of external memory accesses.
+GCM uses also a single pass but requires separate nonce and tag values, increasing the size of the exported data by one block.
 
 We define the Key Derivation (<<ACE-SCC-RFC8452-derivation>>) function first.
 It is essentially the same function as in RFC8452, but the zeros in each AES256 call are replaced by the 125-bit Locality Secrets.
@@ -1823,7 +1824,7 @@ function KeyDeriv(key : bits(256), L : bits(125)) = {
 ----
 
 An alternative key derivation (<<ACE-SCC-alt-derivation>>) method halves the number of AES256 calls by using, essentially, a CMAC based random generation.
-The scheme is secure for up to 2^126^ encryption key generations with the same CSK.
+// The scheme is secure for up to 2^126^ encryption key generations with the same CSK.
 
 [[ACE-SCC-alt-derivation]]
 .Alternative Key Derivation
@@ -1840,8 +1841,8 @@ function double(S : bits(128)) = {
 function KeyDeriv(key : bits(256), L : bits(126)) = {
   t ← double(AESE256(key, zeros(128))) // Precomputed
   struct {
-    AESE256(key, (L @ 0b01) xor t) @ AESE256(key, (L @ 0b10) xor t),
-    AESE256(key, (L @ 0b11) xor t)
+     AESE256(key, (L @ 0b00) xor t) @ AESE256(key, (L @ 0b01) xor t),
+     AESE256(key, (L @ 0b10) xor t)
   }
 }
 ----
@@ -1860,9 +1861,9 @@ auth_key : bits(128);
 
 // content as serialized "view", size in bytes derived from metadata
 z : int ← SCC_content_size(metadata[31:0]);
-z ← z + metadata.ExtraContent * 8
+z ← z + metadata.ExtraContent * 8;
 if (metadata.FilterMode != 0) then
-  z ← z + sizeof(metadata extension)
+  z ← z + sizeof(metadata extension);
 
 content : array[z] of bytes,         // {optional metadata extension) and content
 M : array[24 + z] of bytes;          // this is the memory
@@ -1874,7 +1875,7 @@ if (metadata.Locality == 15) then
 else
     {enc_key, auth_key} = KeyDeriv(CSK, LST[metadata.Locality]);
 
-metadata.StateNumber ← ace_state_initial
+metadata.StateNumber ← ace_state_initial;
 tmp ← POLYVAL(auth_key, zeros(64) @ metadata @ content[]);
 SIV ← AESE(enc_key, 0 @ tmp[126:0]));
 
@@ -1897,7 +1898,7 @@ foreach(i from 0 to num_blocks - 1) {
          xor AESE(enc_key, 1 @ SIV[126:32] @ (SIV[31:0] + bin(i, 32) % 2**32);
 }
 
-metadata.StateNumber ← ace_state_initial
+metadata.StateNumber ← ace_state_initial;
 ----
 
 [[ACE-SCC-AEAD-import]]
@@ -1923,29 +1924,33 @@ The import algorithm needs some special care:
 .Importing an SCC into a CR
 []
 ----
-M : array of bytes // from memory
+M : array of bytes;         // from memory
+saved_SN_exists : bool;     // this is an ACE unit state
 enc_key : bits(256);
 auth_key : bits(128);
 SIV : bits(128);
 tag : bits(128);
 tmp : bits(128);
 
+saved_SN_exists ← false;
+
 // FOLLOWING MEMORY READ PREEMPTIBLE, `acestart` FROM 0 TO 7
-metadata : bits(64) ← M[0 .. 7]
+metadata : bits(64) ← M[0 .. 7];
 
 z ← SCC_content_size(metadata[31:0]);
-z ← z + metadata.ExtraContent * 8
+z ← z + metadata.ExtraContent * 8;
 if (metadata.FilterMode != 0) then
-  z ← z + sizeof(metadata extension)
+  z ← z + sizeof(metadata extension);
 
 if (z == 0)
-    error ace_err_unimplemented
+    error ace_err_unimplemented;
 
 if (there is not enough memory for the algorithm encoded in the metadata)
-    error ace_err_memory
+    error ace_err_memory;
 
-saved_SN : bits(4) ← metadata.StateNumber
-metadata.StateNumber ← ace_state_invalid
+saved_SN : bits(4) ← metadata.StateNumber;
+metadata.StateNumber ← ace_state_invalid;
+saved_SN_exists ← true;
 
 num_blocks ← ceil(z / 16);
 last_block_fractional : Boolean ← (z % 16 != 0);
@@ -1981,8 +1986,9 @@ if (tag != SIV) then { aceerror ← ace_err_import_auth; return }
 - This includes computing any derived values not saved as part of the SCC,
 - as well as creating shares for threshold implementations.
 
-// FINALLY:
-metadata.StateNumber ← ace_state_initial
+// FINALLY, restore the StateNumber from the SCC
+metadata.StateNumber ← saved_SN;
+saved_SN_exists ← false;
 ----
 
 //
