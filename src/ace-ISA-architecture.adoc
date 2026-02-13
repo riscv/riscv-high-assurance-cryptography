@@ -1858,40 +1858,44 @@ NOTE: Due to the computational cost of the derivation functions, implementations
 .Generation of an SCC from a CR
 []
 ----
-m : bits(64) = metadata;               // from the CR
+mh : bits(64) = CR.metadata_header;         // from the CR
+CR.exporting : bool;       // "hidden" per-CR ACE unit state
 SIV : bits(128);
 tmp : bits(128);
 enc_key : bits(256);
 auth_key : bits(128);
 
-// content as serialized "view", size in bytes derived from metadata
-z : int ← SCC_content_size(metadata[31:0]);
-z ← z + metadata.ExtraContent * 8;
-if (metadata.FilterMode != 0) then
-  z ← z + sizeof(metadata extension);
+// CR.exporting is always false except during export
+// Any other operation that may change the state of the CR
+// will set it to false again, to force a resumption of a restart
+CR.exporting = true;
 
-// note: content[] here already includes the optional metadata extension
+// Note: CR.content[] here includes the optional metadata extension
 // at the beginning and the optional extra content at the end
-content : array[z] of bytes;
 
-// External memory: metadata header, SIV, content
-M : array[MH_size(metadata) + 16 + z] of bytes;
+z : int ← SCC_content_size(mh);
+z ← z + ME_size(mm);
+z ← z + mh.ExtraContent * 8;
+CR.content : array[z] of bytes;
+
+// In external memory: metadata header, then SIV, then content
+// where content is extended as described above
+
+M : array[MH_size(mh) + 16 + z] of bytes;
 let last_block_fractional : Boolean ← z % 16 != 0;
 let num_blocks : int ← ceil(z / 16);
 
-if (metadata.Locality == 15) then
+if (m.Locality == 15) then {
     {enc_key, auth_key} = KeyDeriv(CSK, zeros(125));
-else
-    {enc_key, auth_key} = KeyDeriv(CSK, LST[metadata.Locality]);
+} else
+    {enc_key, auth_key} = KeyDeriv(CSK, LST[mh.Locality]);
+}
 
-metadata.StateNumber ← ace_state_initial;
-tmp ← POLYVAL(auth_key, zeros(64) @ metadata @ content[]);
+tmp ← POLYVAL(auth_key, zeros(64) @ mh @ CR.content[]);
 SIV ← AESE(enc_key, 0 @ tmp[126:0]));
 
-metadata.StateNumber ← ace_state_invalid
-
 // FOLLOWING MEMORY WRITE PREEMPTIBLE, `acestart` FROM 0 TO 7
-M[0 .. 7] ← metadata[63:0];
+M[0 .. 7] ← mh;
 
 // FOLLOWING MEMORY WRITE PREEMPTIBLE, `acestart` FROM 8 TO 23
 M[8 .. 23] ← SIV;
@@ -1899,15 +1903,14 @@ M[8 .. 23] ← SIV;
 foreach(i from 0 to num_blocks - 1) {
    if ((i == num_blocks - 1) and last_block_fractional)
       // FOLLOWING MEMORY WRITE PREEMPTIBLE, `acestart` FROM 24+i*16 TO 31+i*16
-      M[24+i*16 .. 31+i*16] ← content[i*16 .. 7+i*16]
+      M[24+i*16 .. 31+i*16] ← CR.content[i*16 .. 7+i*16]
          xor AESE(enc_key, 1 @ SIV[126:32] @ (SIV[31:0] + bin(i, 32) % 2**32)[63:0];
    else
       // FOLLOWING MEMORY WRITE PREEMPTIBLE, `acestart` FROM 24+i*16 TO 39+i*16
-      M[24+i*16 .. 39+i*16] ← content[i*16 .. 15+i*16]
+      M[24+i*16 .. 39+i*16] ← CR.content[i*16 .. 15+i*16]
          xor AESE(enc_key, 1 @ SIV[126:32] @ (SIV[31:0] + bin(i, 32) % 2**32);
 }
-
-metadata.StateNumber ← ace_state_initial;
+CR.exporting = false;
 ----
 
 [[ACE-SCC-AEAD-import]]
@@ -1917,12 +1920,12 @@ The import algorithm needs some special care:
 
 * The first block read from memory by the operation is the metadata header block:
  ** If strictly fewer than 4 bytes are read before the instruction is interrupted, ACE leaves `acestart` at 0, and the instruction will be restarted upon resumption.
- ** If 4 bytes or more have been read, the value of `metadata.StateNumber` in the SCC is known. In this case, the instruction may be restarted with `acestart` {ge} 4 recording the amount of data read.
+ ** If 4 bytes or more have been read, the value of `m.StateNumber` in the SCC is known. In this case, the instruction may be restarted with `acestart` {ge} 4 recording the amount of data read.
 
-* If an import operation is preempted, the hardware must save `metadata.StateNumber` and set +
-`metadata.StateNumber <- ace_state_invalid` before relinquishing control.
-** When control is returned, the previous value of `metadata.StateNumber` is restored.
-** The implementation must keep be a 4-bit internal temporary state containing the original value of `metadata.StateNumber` and a flag indicating whether the value has been saved.
+* If an import operation is preempted, the hardware must save `m.StateNumber` and set +
+`m.StateNumber <- ace_state_invalid` before relinquishing control.
+** When control is returned, the previous value of `m.StateNumber` is restored.
+** The implementation must keep be a 4-bit internal temporary state containing the original value of `m.StateNumber` and a flag indicating whether the value has been saved.
 ** The flag is only set upon interruption of the import operation, and is otherwise always clear.
  *** The implementation will resume the import operation only if the flag is set, otherwise it will restart the operation.
  *** The flag is also used by the implementation to
@@ -1934,22 +1937,30 @@ The import algorithm needs some special care:
 []
 ----
 M : array of bytes;         // from memory
-saved_SN_exists : bool;     // this is an ACE unit state
+CR.importing : bool;        // this is a "hidden" per-CR ACE unit state
 enc_key : bits(256);
 auth_key : bits(128);
 SIV : bits(128);
-tag : bits(128);
 tmp : bits(128);
-
-saved_SN_exists ← false;
+saved_SN : bits(4)
 
 // FOLLOWING MEMORY READ PREEMPTIBLE, `acestart` FROM 0 TO 7
-metadata : bits(64) ← M[0 .. 7];
+tmp[63:0] ← M[0 .. 7]; // read metadata header
 
-z ← SCC_content_size(metadata[31:0]);
-z ← z + metadata.ExtraContent * 8;
-if (metadata.FilterMode != 0) then
-  z ← z + sizeof(metadata extension);
+// CR.importing is always false except during import.
+// During import, the original StateNumber is saved and temporarily
+// replaced in the CR with ace_state_invalid to prevent other operations.
+
+saved_SN : bits(4) ← tmp[63:0].StateNumber;
+CR.metadata_header ← tmp[63:0];
+CR.metadata_header.StateNumber ← ace_state_invalid;
+importing ← true;
+
+mh = & CR.metadata_header
+
+z ← SCC_content_size(mh);
+z ← z + ME_size(mh);
+z ← z + mh.ExtraContent * 8;
 
 if (z == 0)
     error ace_err_unimplemented;
@@ -1957,21 +1968,17 @@ if (z == 0)
 if (there is not enough memory for the algorithm encoded in the metadata)
     error ace_err_memory;
 
-saved_SN : bits(4) ← metadata.StateNumber;
-metadata.StateNumber ← ace_state_invalid;
-saved_SN_exists ← true;
-
 num_blocks ← ceil(z / 16);
 last_block_fractional : Boolean ← (z % 16 != 0);
 
-if (metadata.Locality == 15) then
+if (mh.Locality == 15) then
     {enc_key, auth_key} = KeyDeriv(CSK, zeros(125));
 else
-    {enc_key, auth_key} = KeyDeriv(CSK, LST[metadata.Locality]);
+    {enc_key, auth_key} = KeyDeriv(CSK, LST[mh.Locality]);
 
 // FOLLOWING MEMORY READ PREEMPTIBLE, `acestart` FROM 8 TO 23
 SIV ← M[8 .. 23];
-tmp ← zeros(64) @ metadata;
+tmp ← zeros(64) @ mh;
 tmp ← Montmul(tmp, auth_key);
 
 foreach(i from 0 to num_blocks - 1) {
@@ -1989,15 +1996,16 @@ foreach(i from 0 to num_blocks - 1) {
    tmp ← Montmul(tmp, auth_key);
 }
 
-tag ← AESE(enc_key, 0 @ tmp[126:0]);
-if (tag != SIV) then { aceerror ← ace_err_import_auth; return }
+tmp ← AESE(enc_key, 0 @ tmp[126:0]); // tag
+if (tmp != SIV) then { aceerror ← ace_err_import_auth; return }
+
 - Now the content can be deserialized.
 - This includes computing any derived values not saved as part of the SCC,
 - as well as creating shares for threshold implementations.
 
 // FINALLY, restore the StateNumber from the SCC
-metadata.StateNumber ← saved_SN;
-saved_SN_exists ← false;
+mh.StateNumber ← saved_SN;
+CR.importing ← false;
 ----
 
 //
