@@ -1858,12 +1858,12 @@ NOTE: Due to the computational cost of the derivation functions, implementations
 .Generation of an SCC from a CR
 []
 ----
-mh : bits(64) = CR.metadata_header;         // from the CR
+mh : bits(64) = & CR.metadata_header;         // from the CR
 CR.exporting : bool;       // "hidden" per-CR ACE unit state
-SIV : bits(128);
-tmp : bits(128);
-enc_key : bits(256);
-auth_key : bits(128);
+local SIV : bits(128);
+local tmp : bits(128);
+local enc_key : bits(256);
+local auth_key : bits(128);
 
 // CR.exporting is always false except during export
 // Any other operation that may change the state of the CR
@@ -1901,14 +1901,15 @@ M[0 .. 7] ← mh;
 M[8 .. 23] ← SIV;
 
 foreach(i from 0 to num_blocks - 1) {
-   if ((i == num_blocks - 1) and last_block_fractional)
+   if ((i == num_blocks - 1) and last_block_fractional) {
       // FOLLOWING MEMORY WRITE PREEMPTIBLE, `acestart` FROM 24+i*16 TO 31+i*16
       M[24+i*16 .. 31+i*16] ← CR.content[i*16 .. 7+i*16]
          xor AESE(enc_key, 1 @ SIV[126:32] @ (SIV[31:0] + bin(i, 32) % 2**32)[63:0];
-   else
+   } else {
       // FOLLOWING MEMORY WRITE PREEMPTIBLE, `acestart` FROM 24+i*16 TO 39+i*16
       M[24+i*16 .. 39+i*16] ← CR.content[i*16 .. 15+i*16]
          xor AESE(enc_key, 1 @ SIV[126:32] @ (SIV[31:0] + bin(i, 32) % 2**32);
+   }
 }
 CR.exporting = false;
 ----
@@ -1938,11 +1939,12 @@ The import algorithm needs some special care:
 ----
 M : array of bytes;         // from memory
 CR.importing : bool;        // this is a "hidden" per-CR ACE unit state
-enc_key : bits(256);
-auth_key : bits(128);
-SIV : bits(128);
-tmp : bits(128);
-saved_SN : bits(4)
+CR.saved_SN : bits(4)       // this is a "hidden" per-CR ACE unit state
+
+local enc_key : bits(256);
+local auth_key : bits(128);
+local SIV : bits(128);
+local tmp : bits(128);
 
 // FOLLOWING MEMORY READ PREEMPTIBLE, `acestart` FROM 0 TO 7
 tmp[63:0] ← M[0 .. 7]; // read metadata header
@@ -1951,7 +1953,7 @@ tmp[63:0] ← M[0 .. 7]; // read metadata header
 // During import, the original StateNumber is saved and temporarily
 // replaced in the CR with ace_state_invalid to prevent other operations.
 
-saved_SN : bits(4) ← tmp[63:0].StateNumber;
+CR.saved_SN : bits(4) ← tmp[63:0].StateNumber;
 CR.metadata_header ← tmp[63:0];
 CR.metadata_header.StateNumber ← ace_state_invalid;
 importing ← true;
@@ -1962,19 +1964,21 @@ z ← SCC_content_size(mh);
 z ← z + ME_size(mh);
 z ← z + mh.ExtraContent * 8;
 
-if (z == 0)
+if (z == 0) {
     error ace_err_unimplemented;
+}
 
-if (there is not enough memory for the algorithm encoded in the metadata)
+if (there is not enough memory for the algorithm encoded in the metadata) {
     error ace_err_memory;
-
+}
 num_blocks ← ceil(z / 16);
 last_block_fractional : Boolean ← (z % 16 != 0);
 
-if (mh.Locality == 15) then
+if (mh.Locality == 15) then {
     {enc_key, auth_key} = KeyDeriv(CSK, zeros(125));
-else
+} else {
     {enc_key, auth_key} = KeyDeriv(CSK, LST[mh.Locality]);
+}
 
 // FOLLOWING MEMORY READ PREEMPTIBLE, `acestart` FROM 8 TO 23
 SIV ← M[8 .. 23];
@@ -2004,7 +2008,7 @@ if (tmp != SIV) then { aceerror ← ace_err_import_auth; return }
 - as well as creating shares for threshold implementations.
 
 // FINALLY, restore the StateNumber from the SCC
-mh.StateNumber ← saved_SN;
+mh.StateNumber ← CR.saved_SN;
 CR.importing ← false;
 ----
 
