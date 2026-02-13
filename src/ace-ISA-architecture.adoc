@@ -1858,7 +1858,7 @@ NOTE: Due to the computational cost of the derivation functions, implementations
 .Generation of an SCC from a CR
 []
 ----
-mh : bits(64) = & CR.metadata_header;         // from the CR
+& mh : bits(64) = CR.metadata_header;         // from the CR
 CR.exporting : bool;       // "hidden" per-CR ACE unit state
 local SIV : bits(128);
 local tmp : bits(128);
@@ -1950,15 +1950,19 @@ local tmp : bits(128);
 tmp[63:0] ← M[0 .. 7]; // read metadata header
 
 // CR.importing is always false except during import.
-// During import, the original StateNumber is saved and temporarily
-// replaced in the CR with ace_state_invalid to prevent other operations.
+// During import, the original StateNumber is saved and temporarily replaced in the CR
+// with ace_state_invalid to prevent any USAGE operations.  Any operation that writes
+// to the CR will set CR.importing to false: this allows context switching code to reuse
+// the CR and, upon returning to the interrupted import, the hardware will detect
+// CR.importing == false and restart the import instead of resume it.  OTOH, if the
+// interrupt was caused by a memory exception, the instruction can be resumed.
 
 CR.saved_SN : bits(4) ← tmp[63:0].StateNumber;
 CR.metadata_header ← tmp[63:0];
 CR.metadata_header.StateNumber ← ace_state_invalid;
 importing ← true;
 
-mh = & CR.metadata_header
+& mh = CR.metadata_header;
 
 z ← SCC_content_size(mh);
 z ← z + ME_size(mh);
