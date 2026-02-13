@@ -865,18 +865,19 @@ This serves to make sure that the instructions are issued in the correct order.
 [[ACE-CSR-scrdirty]]
 ===== `scrdirty`
 
-The XLEN-bit register `scrdirty` tracks the dirtiness of CRs on a per-CR basis.
-
-Any access to `scrdirty` outside of M-mode causes an illegal instruction exception
+The SXLEN-bit register `scrdirty` tracks the dirtiness of CRs on a per-CR basis.
 
 ``scrdirty[__i__]`` can take the values Clean (0), and Dirty (1), for CR #__i__.
 
-The state of an individual CR in `scrdirty` after `ace.clear` or `ace.reset` (<<ACE-instruction-clear>>) is Clear.
-However, `ace.clear` makes the `*status.ACES` field Dirty, to signal higher privileged code to erase any older saved state for unconfigured CRs during context switch.
+``scrdirty[SXLEN-1:32]`` bits are WPRI.
 
-When ``scrdirty[__i__]`` is set to Clean, executing any instruction that may change the CR #__i__ will change ``scrdirty[__i__]`` to Dirty.
-
-NOTE: Implementations may also change ``scrdirty[__i__]`` from Initial or Clean to Dirty at any time, even when there is no change in CR #__i__ state.
+When the privilege mode is S, VS, or U, the following holds:
+* When ``scrdirty[__i__]`` is set to Clean, executing any instruction that changes the state of CR #__i__ will change ``scrdirty[__i__]`` to Dirty.
+* Implementations may also change ``scrdirty[__i__]`` from Clean to Dirty at any time, even when there is no change in CR #__i__ state.
+// The main reason for allowing this is to permit implementations that do not
+// track the state and make fields read-only Dirty, but we could also require
+// precise tracking and hide the CSRs behind an extension, so implementations
+// that don't want to do it just don't implement the extension.
 
 NOTE: Context switching code sees only Clean or Dirty states. To establish whether a CR is actually configured, it can use `ace.size` (<<ACE-instruction-size>>) on a CR. If the instruction returns zero, this means that the CR is not configured, and any stale state for it shall be erased and released.
 
@@ -887,20 +888,20 @@ NOTE: `sstatus.ACES` is also in effect.
 [[ACE-CSR-vscrdirty]]
 ===== `vscrdirty`
 
-The `vscrdirty` register exists only when the H extension is implemented.
+NOTE: The `vscrdirty` register exists only when the H extension is implemented.
 
-The XLEN-bit register `vscrdirty` tracks the dirtiness of CRs on a per-CR basis.
+The VSXLEN-bit register `vscrdirty` tracks the dirtiness of CRs on a per-CR basis.
 
-Any access to `vscrdirty` outside of S-mode or higher causes an illegal instruction exception
+``vscrdirty[__i__]`` can take the values Clean (0) or Dirty (1), for CR #__i__.
 
-When V=1, the following holds:
+``vscrdirty[VSXLEN-1:32]`` bits are WPRI.
 
-* ``vscrdirty[__i__]`` can take the values Clean (0) or Dirty (1), as defined for `scrdirty`, for CR #__i__.
+When the privilege mode is VS or VU, the following holds:
 * `vscrdirty` substitutes for `scrdirty`, so instructions that normally read or modify `scrdirty` actually access `vscrdirty` instead.
+* When ``vscrdirty[__i__]`` is set to Clean, executing any instruction that changes the state of CR #__i__ will change ``vscrdirty[__i__]`` to Dirty.
+* Implementations may also change ``vscrdirty[__i__]`` from Clean to Dirty at any time, even when there is no change in CR #__i__ state.
 
-NOTE: `sstatus.ACES`, `vsstatus.ACES`, and `vscrdirty` are also in effect when V=1.
-
-//
+NOTE: `sstatus.ACES`, `vsstatus.ACES`, and `scrdirty` are also in effect when V=1.
 
 [#ACE-CSR-mcrdirty,discrete]
 ===== `mcrdirty`
@@ -1112,7 +1113,6 @@ Encoding::
 
 Description::
 `ace.clear` unconfigures the state of the CR `Kd` or `K[Xd]` and releases its resources in the CRF.
-It also sets the corresponding entry in `*crdirty` to Dirty unless the CR was already unconfigured, in which case it does not change the state in `*crdirty`.
 +
 `ace.reset` unconfigures all the CRs and the ACEIOBUF.
 It uses the encoding for `ace.clear` with indirect CR addressing and `Xd` = `X0`.
@@ -4481,8 +4481,22 @@ If capacity is insufficient for lazy loading, the software reimporting an offloa
 // * The selection method for choosing the CR to offload could be random, heuristic, or based on implementation-specific hardware-provided mechanisms to select a least-recently-used CR.
 
 We assume that besides `scrdirty`, `vscrdirty` and `mcrdirty`, we have three more CSRs `scrlazy`, `vscrlazy` and `mcrlazy` that can be used to mark a CR as lazy, in particular CR number __i__ is *LAZY* if `*crlazy`[__i__] is set and `*crdirty`[__i__] is not set.
+// Alternatively, we can define *crdirty to be a 64 bit register and reserve
+// the upper 32 bits for lazy.
+// We can define the crdirty to be a two bit per CR, just split over two
+// 32 bit blocks, a two bit per-CR field would be 32+X and X.
+// There might be even a slight case to make the upper 32 bits read-only-1 now, so we
+// could pretend to encode the Clean (0b10) and Dirty (0b11) consistently with
+// the previous format.
 A CR marked *LAZY* is Unconfigured. An authoritative value is saved for lazy loading in one of the parent modes.
 Unconfiguration and configuration operations on this CR work normally.
+// This allows lazy loads, but lazy stores are also potentially useful.
+// If we don't expect a context to use the CR, we could just keep the value
+// of another context there, which would allow us to preserve the CR for the
+// original context and avoid both save and load.
+// More traps would even allow for more evil optimizations, like giving just 8
+// CRs to a context, and keeping up to 4 contexts in the file, provided parent
+// mode also gets traps when there isn't enough memory to import.
 
 If an *Export* or *Usage* operation is issued at U-mode, then the system traps to the higher-privileged mode that holds the authoritative SCC, which must import it into the CR.
 This may require freeing space by making another CR *LAZY*.
