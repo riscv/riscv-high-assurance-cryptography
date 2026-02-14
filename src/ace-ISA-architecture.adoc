@@ -286,9 +286,9 @@ additional 128-bit block of metadata, called the _metadata extension_, defined i
 [width="100%",cols="^9%,^7%,14%,70%",options="header"]
 |===
 |     Field | Width | Name                    | Description
-|    [31:0] |  32   | _SFilter_               | Value to match against `scontext`.
-|   [63:32] |  32   | _MFilter_               | Value to match against `mcontext`.
-|   [95:64] |  32   | _HFilter_               | Value to match against `hcontext`.
+|    [31:0] |  32   | _SFilter_               | Value to match against `scontext` (least significant 31 bits).
+|   [63:32] |  32   | _MFilter_               | Value to match against `mcontext` (least significant 14 bits).
+|   [95:64] |  32   | _HFilter_               | Value to match against `hcontext` (least significant 14 bits).
 |  [127:96] |  32   | _TFilter_               | Value to match against an expiration date.
 |===
 
@@ -1755,29 +1755,29 @@ In a threshold implementation, a single key byte in `content[]` may correspond t
 [[ACE-size-functions]]
 ==== Size Functions
 
-Let `m` be a metadata header.
-// `{fournbsp}{fournbsp}x` <- `m`._FilterMode_ @ `m`._KeyType_ @ `m`._DirectionPolicy_ @ `m`._Algorithm_ @ `m`._Format_.
+Let `mh` be a metadata header.
+// `{fournbsp}{fournbsp}x` <- `mh`._FilterMode_ @ `mh`._KeyType_ @ `mh`._DirectionPolicy_ @ `mh`._Algorithm_ @ `mh`._Format_.
 The implementation provides the following functions and constants or an equivalent mechanism:
 
-. `MH_size(m)` returns the byte length of the metadata header. In the current specification, it is always 8.
-. `PI_content_size(m)` returns the byte length of the content section of a PI.
+. `MH_size(mh)` returns the byte length of the metadata header. In the current specification, it is always 8.
+. `PI_content_size(mh)` returns the byte length of the content section of a PI.
    It does not include the length of the optional Metadata Extension block.
-   It depends only on  `m`._Algorithm_, `m`._DirectionPolicy_, and `m`._KeyType_.
-   It does not depend on `m`._FilterMode_.
-. `SCC_content_size(m)` returns the byte length of the fixed part of the content section of an SCC.
-   It depends only on  `m`._Algorithm_, `m`._DirectionPolicy_, and `m`._KeyType_.
-   It does not depend on `m`._FilterMode_.
+   It depends only on  `mh`._Algorithm_, `mh`._DirectionPolicy_, and `mh`._KeyType_.
+   It does not depend on `mh`._FilterMode_.
+. `SCC_content_size(mh)` returns the byte length of the fixed part of the content section of an SCC.
+   It depends only on  `mh`._Algorithm_, `mh`._DirectionPolicy_, and `mh`._KeyType_.
+   It does not depend on `mh`._FilterMode_.
    It does not include the length of the variable part of the content of length _ExtraContent_ * 8 bytes, nor the length of the optional Metadata Extension block.
-.  `ME_size(m)` returns the byte length of the metadata extension.
-    In the specification, it is 0 when `m`._FilterMode_ is 0, and it is 16 otherwise.
+.  `ME_size(mh)` returns the byte length of the metadata extension.
+    In the specification, it is 0 when `mh`._FilterMode_ is 0, and it is 16 otherwise.
 
 The total size in bytes of a PI is therefore
 
-`{fournbsp}{fournbsp} MH_size(m)` + `ME_size(m)` + `PI_content_size(m)`,
+`{fournbsp}{fournbsp} MH_size(mh)` + `ME_size(mh)` + `PI_content_size(mh)`,
 
 and the total size in bytes of an SCC is
 
-`{fournbsp}{fournbsp} MH_size(m)` + 16 + `ME_size(m)` + `SCC_content_size(m)` + _ExtraContent_ * 8.
+`{fournbsp}{fournbsp} MH_size(mh)` + 16 + `ME_size(mh)` + `SCC_content_size(mh)` + _ExtraContent_ * 8.
 
 [[ACE-provision]]
 ==== Provisioning
@@ -2361,10 +2361,15 @@ Parameters:::
 Data Structures:::
 
 * *Provisioning Input*:
-[lowerroman]
- . `key`: `k` bits, or 64 bits if it is a System Key index.
+[%autowidth,options="header"]
+|===
+| Pos. | Size in Bytes   | Name
+|  1   | `ME_size(mh)`   | Optional Metadata Extension
+|  2   | `k/8`           | Key
+|===
 
-* *Internal State*:
+
+ * *Internal State*:
  ** `key`: `k` bits.
 
 * *Serialized Content*:
@@ -2372,7 +2377,6 @@ Data Structures:::
  . `key`: `k` bits, or 64 bits if it is a System Key index.
 
 Algorithm-Specific Functions:::
-
 * `enc_blk(K,p) -> c` encrypts plaintext block `p` using the key `K`, and returns the ciphertext result `c`.
 * `dec_blk(K,c) -> p` decrypts ciphertext block `c` using the key `K`, and returns the plaintext result `p`.
 
@@ -2396,8 +2400,7 @@ State Machine:::
   *** If `IOLEN` > `b`, then “`ace.exec OUTPUT, Kn|K[Xn], INPUT`” encrypts/decrypts block-by-block.
       Here, and in the rest of this document, this means from the blocks in the least significant positions to the most significant positions:
       . `foreach(i from 0 to IOLEN-b by b)` {
-      ..   `OUTPUT[i+b-1:i] <- enc_blk(key, INPUT[i+b-1:i])`
-      . }
+      ..   `OUTPUT[i+b-1:i] <- enc_blk(key, INPUT[i+b-1:i])` }
 
 //
 
