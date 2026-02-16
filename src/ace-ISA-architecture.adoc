@@ -581,9 +581,6 @@ ACE extends `*status` and `misa`, and adds up to 13 (10) new CSRs, which are lis
 | 0xXXX          | URW       | `aceiobuftop`           | ACE input/output buffer limit for current transfers
 | 0xXXX          | URO       | `acesequence`           | Sequence number of the last ACE instruction
 | 0xXXX          | URW       | `aceactivecr`           | Active CR for `ace.input`/`ace.output`
-| 0xXXX          | SRW       | `sacefilter`            | Filter that applies to U-mode, also to VS-mode if H is active
-| 0xXXX          | HRW       | `vsacefilter`           | Filter that applies to U-mode if H is active
-| 0xXXX          | MRW       | `macefilter`            | Filter that applies to U/(V)S/H-mode
 | (Indirect)     | MRW (RZ)  | `macecsk{0..7}`         | ACE Root Context Sealing Key
 | (Indirect)     | MRW (RZ)  | `maceBootSecret{0..3}`  | Locality: Physical Boot Session Secret
 | (Indirect)     | HRW (RZ)  | `haceVBootSecret{0..3}` | Locality: Virtual Boot Session Secret
@@ -594,9 +591,6 @@ ACE extends `*status` and `misa`, and adds up to 13 (10) new CSRs, which are lis
 ====
 * To configure the `macecsk`, `maceBootSecret`, `haceVBootSecret`, and `saceSSecret` CSR groups we use the Indirect CSR Access defined in cite:[RISCV-ISA-Priv] instead.
 However, if the ARC so desires, these CSRs can also be configured directly and addresses can be allocated for them.
-
-* `sacefilter`, `vsacefilter`, and `macefilter` are placeholders for CSRs to be defined during the ratification process
-(<<ACE-CSR-saceSSecret>>).
 
 * `acestart` may be overloaded with `vstart`, regardless of whether the V extension is available.
 If a vector instruction is interrupted, the CSR would follow the `vstart` semantics-i.e., it would count the number of processed elements- whereas if an ACE instruction is interrupted, the CSR would follow the `acestart` semantics-i.e., it would count the number of processed bytes.
@@ -1003,30 +997,6 @@ In RV64 there are two CSRs.
 A write to the __i__-th CSR sets Bits [(_i_+1) XLEN - 1 : _i_ XLEN] of `saceSSecret`.
 
 Any access to `saceSSecret` outside of S-mode or higher raises an illegal instruction exception.
-
-//
-
-[[ACE-CSR-filters]]
-===== `sacefilter`, `macefilter`, `vsacefilter`
-
-_This section is not (yet) normative._
-
-`sacefilter` is an XLEN-bit SRW CSR (actual length to be defined).
-
-`vsacefilter` is an XLEN-bit HRW CSR (actual length to be defined).
-
-`macefilter` is an XLEN-bit MRW CSR (actual length to be defined).
-
-Their values are compared against the Filter field of the metadata, to determine whether an `ace.exec`, `ace.state`, or `ace.derive` instruction is allowed to execute:
-`sacefilter` is used to filter CC usage in all modes below S-mode,
-`macefilter` is used to filter CC usage in all modes below M-mode,
-and
-`vsacefilter` is used to filter CC usage in U-mode if the H extension is active.
-
-[WARNING]
-These three registers are placeholders for a later decision on how to handle the CR filtering in different modes—taken in accordance with the ARC.
-One option could be to use `scontext`, `mcontext`, and `hcontext` from the Sdtrig extension, and in <<ACE-combined-filters>> we use the sizes of these CSR
-as an example.  This type of filtering may also be removed completely.
 
 // ///////////////////////////////////////////////////////////////////////////////////////////
 
@@ -4820,25 +4790,30 @@ the Boolean variable ``Has``__Var__ is set when all operations required in State
 === Annexes
 
 [[ACE-CSK-vs-ID]]
-==== Programmable CSKs vs. ID-based Usage Control
+==== Programmable CSKs vs. ID-based Usage Control vs. Localities
 
 _This section is informative and non-normative._
 
-ACE provides two architected layers of usage control:
+ACE provides different architected layers of usage control:
 
-. At the User and Supervisor levels, CC usage can optionally be constrained by `(v)sacefilter` and `macefilter`.
+. CC usage can optionally be constrained by filters configured at various modes and that must be matched at lower-privileged modes against values embedded in the metadata extension. The filters could correspond to `scontext`, `hcontext`, `mcontext` (respectively 31, 14, and 14 bits long) but longer CSRs could be be defined in their place to allow matching against longer string.
++
 This is a lightweight mechanism.
 Since filtering by `(v)sacefilter` is inactive when the hart is in S mode or higher, context switching at U can be performed without modifying the CSK.
-. At higher privilege levels, not only the usage, but even the import of CCs can be restricted by a programmable CSK.
-This offers stronger security by also preventing unauthorized `ace.import` operations, but incurs higher overhead as it typically requires an `ecall`.
-Localities programmable at M/H/S could be used in this case, however, we note that in order to allow proper context switching, they need to be readable as well by higher-execution environments, which opens up an attack surface. This said, also `*filter`'s can be written by higher-execution environments, and these are thus also manipulable by the latter—and are shorter.
 
-The envisioned usage model employs `*acefilter` filtering at the User level, and also at the Supervisor level in high-performance systems where migration is not required (e.g., automotive applications).
-Cryptographic domain separation via the CSK is intended for Virtual Machines, Supervisor Domains, Worlds, and TEEs, as these demand stronger security guarantees.
+. A programmable CSK can restrict not only the usage, but even the import of CCs.
+This offers stronger security by also preventing unauthorized `ace.import` operations, but incurs higher overhead as it typically requires an `ecall` to modify the CSK, and
+increases pressure on the ACE unit's internal resources in case keys derived from the most recent CSK values are caches.
+
+. Localities programmable at M/H/S could be used instead.
+Since these Localities can be combined with the HW Binding localities, this would be as flexible as context-based filtering, but based on significantly longer strings.
+
+The envisioned usage model employs context-based filtering at the User level, and also at the (Virtual) Supervisor level in high-performance systems where migration is not required (e.g., automotive applications).
+Cryptographic domain separation via the CSK or Localities is intended for Virtual Machines, Supervisor Domains, Worlds, and TEEs, as these demand stronger security guarantees.
 
 Although the architecture does not prevent assigning unique CSKs to U-mode processes, doing so would impose a substantial burden on system software due to per-context-switch `ecall` overhead.
-Hardware support—such as automatic CSK switching based on `*acefilter`, could alleviate this burden.
-However, such a mechanism is not currently under consideration due to its architectural complexity, inflexibility, and hardware cost.
+Hardware support—such as automatic CSK switching based on contexts could alleviate this burden.
+Such a mechanism is not under consideration due to its architectural complexity, inflexibility, and hardware cost.
 For example, it would necessitate secure management of large CSK tables, including saving, restoring, and potentially migrating entire CSK blocks.
 [.red]#Use only Localities instead?#
 
