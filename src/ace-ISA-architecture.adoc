@@ -2104,7 +2104,7 @@ In certain cases where an invalid input is provided to any ACE instruction, or a
 
 * `Kn` is put into State _invalid_;
 * For instructions that refer to `Kn`:
- ** `ace.prov`, `ace.clear` (thus also `ace.reset`), `ace.import`, `ace.export`, `ace.size` and `ace.avail` work normally;
+ ** `ace.prov`, `ace.clear`, `ace.reset`, `ace.import`, `ace.export`, `ace.size` and `ace.avail` work normally;
  ** `ace.exec`, `ace.clone`, `ace.derive`, and `ace.restrict` raise an ACE error _ace_err_invalid_CR_;
  ** `ace.input` and `ace.output` raise an ACE error _ace_err_invalid_CR_ when `aceactivecr` is `Kn`;
  ** `ace.state` raises an ACE error _ace_err_invalid_CR_, unless it is used to return to State _initial_;
@@ -2134,7 +2134,7 @@ Three types of supporting operations are required:
  * A corresponding “`ace.mv`” instruction that exports a specified number of bytes from a CR or from the input buffer to a GPR or vector register.
    The behavior of `ace.size` will be similar to that of the `ace.mv` instruction, but it will count the number of bytes to be exported.
  * An “`ace.close`” instruction to suspend or finalize the procedure.
-   If executed before all bytes are transferred, the CR state matches that of an interrupted monolithic instruction, including any special value of the _StateNumber_ metadata field and the value of `acestart`. If executed after all bytes are transferred, it also performs any final cryptographic operations, such as authenticating the CR, if needed.
+   If executed before all bytes are transferred, the CR state matches that of an interrupted monolithic instruction, including any special value of the _StateNumber_ metadata field and the value of `acestart`. If executed after all bytes are transferred, it also performs any final cryptographic operations, such as authenticating the CR.
 
 All three instructions can be implemented as CSR RW instructions, for instance:
 
@@ -2320,12 +2320,16 @@ Not following the instruction ordering raises an illegal instruction exception a
 
 `acesequence` can be saved and restored by privileged code together with `acestart`.
 
-The internal ACEIOBUF is not part of any CR. It is architectural, i.e., per-hart. In fact, `ace.output` can be used to save the contents of the buffer, and `ace.input` can be used to restore it freely as long as `aceactivecr` takes the value 32. Also, these operations start at the offset specified in `acestart`, so the state of the buffer can easily be saved and restored with the same approach used for vectors.
+NOTE: The internal ACEIOBUF is not part of any CR.
+In fact, `ace.output` can be used to save the contents of the buffer, and `ace.input` can be used to restore it freely as long as ``aceactivecr``'s value is 32.
+Also, these operations start at the offset specified in `acestart`, so the state of the buffer can easily be saved and restored with the same approach used for vectors.
 
 In all algorithms, whenever one of the instructions in <<ACE-replacement-instructions>> occurs, it may be substituted by a replacement sequence.
 We do not write this explicitly in the algorithm descriptions for brevity.
 
-NOTE: This mechanism is one of the reasons, besides keeping the state machines simple, that in a given state of an algorithm, only one Form of `ace.exec` or `ace.state` is allowed.  Some exceptions may be possible.  For instance, both a Form D and a Form B could be allowed, with different semantics, and when using replacement sequences, these would be distinguished according to whether `aceiobuftop` - `acestart` is 0 or not.
+// NOTE: This mechanism is one of the reasons, besides keeping the state machines simple, that in a given state of an algorithm, only one Form of `ace.exec` or `ace.state` is allowed.
+// Some exceptions may be possible.
+// For instance, both a Form D and a Form B could be allowed, with different semantics, and when using replacement sequences, these would be distinguished according to whether `aceiobuftop` - `acestart` is 0 or not.
 
 //
 
@@ -2335,9 +2339,10 @@ NOTE: This mechanism is one of the reasons, besides keeping the state machines s
 Operations performed by `ace.state` are uninterruptible, except when reading vector inputs, where the vector read operation may be interrupted and resumed.
 
 The operation of `ace.exec` on a basic processing unit, in any state of any algorithm, is uninterruptible, even when described as a sequence of instructions.
-If the operation accepts an input that is an integer multiple of the basic processing unit, each block is processed uninterruptibly, but the instruction may be interrupted between blocks; the hardware sets `acestart` to the resumption point.
 
-An implementation must wait before accessing a CR that is still being written to asynchronously.
+If the operation accepts an input that is an integer multiple of the basic processing unit, each block is processed uninterruptibly, but the instruction may be interrupted between blocks; the hardware sets `acestart` to the interruption point.
+
+An implementation must wait before accessing a CR that is still asynchronously being written to.
 
 //
 
@@ -2358,7 +2363,9 @@ An implementation must wait before accessing a CR that is still being written to
 ===== Single-Share Key Export Rule for Threshold implementations
 
 Any CC with its algorithm implemented as a threshold will always provision, import and export _all_ its keys and secrets as _single_, _reconstructed_ _shares_.
+
 The PI and SCC formats will be the same as for the non-threshold implementation variants of the same algorithm, with the only difference being the value of the Side Channel Protection bits in the metadata.
+
 For the purpose of architecture specification, all values are also always represented as a single share in this document.
 Threshold implementations are simply implementation variants of the exact same algorithm.
 (((ACE, algorithm, threshold variants)))
