@@ -239,10 +239,10 @@ The support for the vector register file and for ACEIOBUF are not mutually exclu
 For software portability and interoperability, ACE defines two external formats for CCs:
 
 . The _Provisioning Input_ (PI) format, which is loaded into a CR to create a C; and
-. The _Sealed Cryptographic Context_ (SCC) (<<ACE-provision-export-import>>), an encrypted, authenticated format used when exporting a CR to memory for later re-import.
+. The _Sealed Cryptographic Context_ (SCC) (<<ACE-provisioning-export-import>>), an encrypted, authenticated format used when exporting a CR to memory for later re-import.
 
 Both formats rely on the same Metadata format, which is described here.
-The PI and SCC formats are described in <<ACE-provision-export-import>> and <<ACE-provision-export-import>>, respectively.
+The PI and SCC formats are described in <<ACE-provisioning-export-import>> and <<ACE-provisioning-export-import>>, respectively.
 
 [WARNING]
 The Metadata format is in flux, as it is subject to change based on the ARC feedback.
@@ -263,7 +263,9 @@ The first 64 bits are the Metadata Header, defined in <<ACE-Metadata-header>>, w
 |  [11:1] |  11   | _Algorithm_              | Cryptographic algorithm (such as primitive, mode, or protocol).
 | [13:12] |   2   | _DirectionPolicy_        | Selects the allowed direction(s) for the cryptographic operation.
 | [15:14] |   2   | _SCProtection_           | Side-Channel Protected Implementation (0 if not protected, 1 if protected).
-| [16:16] |   1   | _KeyType_                | Key(s) given explicitly (0) or System Key(s) (1).
+| [16:16] |   1   | _KeyType_                |
+A value of 0 indicates that the key is expressed as an explicit value in the Content.
+A value of 1 indicates a system key that the key is given by an index into an internal, system-specific System Keys Table (SKT).
 | [20:17] |   4   | _StateNumber_            | Encoding the current state of the state machine of the algorithm as a number.
 | [28:21] |   8   | _Locality_               | A field which is either all zeros or determines a Locality Secret.
 | [31:29] |   3   | _UCPolicy_               | “UC Policy” means “Usage Control Policy”. If bit 25, 26, resp., 27 is set, it disallows the _usage_ of this CC in User, (V)S-mode, resp., H-mode.
@@ -271,10 +273,6 @@ The first 64 bits are the Metadata Header, defined in <<ACE-Metadata-header>>, w
 The length of additional segment is _ExtraContent_ 64-bit blocks. (14 bits allow up to 128 kB of additional data.)
 | [63:46] |  18   | _ExpirationDate_         | If this field is non-zero, it is an expiration date on this CC.
 |===
-
-If _ExpirationDate_ is not zero, then it contains the expiration date of this CC expressed as number of hours from the base date (January 1st, 2027).
-18 bits are used for an expiration date with a resolution of a hour, which allows for almost 30 years (2^18^ hours) from the base date.
-While this is a limited time span, we do not expect other formats to be used unchanged in, say, 10 or 15 years, and longer formats will accommodate larger time spans.
 
 ////
 
@@ -310,12 +308,6 @@ If we choose this option we then need NO Metadata Extension block.
 
 Some fields and their properties need further explanation. This is done in the following sections.
 ////
-
-[[ACE-Metadata-confidentiality]]
-===== Confidentiality
-
-The Metadata Header is not confidential and will not be encrypted upon export as an SCC.
-// The optional Metadata Extension is confidential and will be encrypted upon export as an SCC.
 
 //
 
@@ -355,23 +347,6 @@ In such a case, the value of the _SCProtection_ field must be set to 3.
 
 //
 
-[[ACE-KeyType-field]]
-===== KeyType Field
-
-ACE supports keys provided by software, as well as system keys and keys computed with a system “recipe”, i.e., _system generated keys_.
-A value of 0 in the _KeyType_ field indicates an explicit value.
-A value of 1 in the _KeyType_ field indicates a system key.
-
-System Keys are given by an index into an internal, system-specific System Keys Table (SKT).
-For each algorithm as specified in <<ACE-algorithms>>, the Content field that normally contains the key(s) is replaced by its index into the SKT-for both PIs and SCCs
-The actual value of the key is never included in exported Content.
-For threshold implementations, ACE may copy the key material from the SKT into the CR and expand it into multiple shares.
-
-System Generated Keys are also system-specific. In place of the PI, the provisioning operation reads a system-specific “recipe”, which is not portable.
-After internal key generation, the actual key value—not the recipe—is stored in the CR and SCC. The _KeyType_ field in the Metadata is 0.
-
-//
-
 [[ACE-StateNumber-field]]
 ===== StateNumber Field
 
@@ -403,7 +378,7 @@ StateNumber must always be set to _initial_, _invalid_, and _completed_ if the s
 
 The state values for the symmetric algorithms defined in this specification are listed in <<ACE-state-constants-symmetric>>.
 
-During init and import, the _StateNumber_ field is set to _invalid_, and only at the end of the operation is it set to proper value, i.e., _initial_ or the value in the SCC (see <<ACE-provision-export-import>>)
+During init and import, the _StateNumber_ field is set to _invalid_, and only at the end of the operation is it set to proper value, i.e., _initial_ or the value in the SCC (see <<ACE-provisioning-export-import>>)
 This means, by the rules in <<ACE-invalidation>>, that a partially provisioned/imported CR cannot be exported.
 In particular, if a context switch occurs, that the more privileged code must unconfigure the CR, and upon resumption, the instruction will be restarted.  Only an invalid CR with an `acestart` different from zero is recognized as an incomplete CR allowing an init or import operation to resume.
 
@@ -538,6 +513,13 @@ This value is considered by the implementation performing the import, to determi
 
 [NOTE]
 Examples of extra content are: precomputed point multiples (computing them is usually significantly expensive than encrypting and decrypting them), additional data for side-channel protected implementations (in the case the chosen method for computing multiple shares is expensive, so the key is still saved reconstructed, but additional data may be included to provide the key shares or to help reconstruct them).
+
+[[ACE-Metadata-expiration-date]]
+==== ExpirationDate Field
+
+If _ExpirationDate_ is not zero, then it contains the expiration date of this CC expressed as number of hours from the base date (January 1st, 2027).
+18 bits are used for an expiration date with a resolution of a hour, which allows for almost 30 years (2^18^ hours) from the base date.
+While this is a limited time span, we do not expect other formats to be used unchanged in, say, 10 or 15 years, and extended formats (with the _Format_ field equal to 1) will accommodate larger time spans.
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -761,7 +743,7 @@ This design obviates the need to separate data transfer from cryptographic proce
 Another use of `acestart` arises when an `ace.exec` instruction operates on long vectors containing multiple elements, in which case `VL*SEW` is a multiple of the basic processing unit usually denoted by `b` (such as a block size) in the algorithms. In this situation, `ace.exec` can work iteratively on each block of the input, and execution of `ace.exec` may be interrupted and resumed.
 Regardless of whether the operations are on vectors or on the ACEIOBUF, `acestart` reflects the number of bytes processed so far.
 
-The semantics and use of `acestart` are described in <<ACE-provision-export-import>>.
+The semantics and use of `acestart` are described in <<ACE-provisioning-export-import>>.
 
 The two CSRs described next may be used to optimize saving and restoring the ACEIOBUF.
 
@@ -1071,7 +1053,7 @@ The PI must be stored at an 8-byte aligned address, and its length must be a mul
 +
 Similarly to vector store instructions, `ace.prov` appears to other harts as a sequence of individual reads.
 +
-The operation is described in detail in <<ACE-provision-export-import>>.
+The operation is described in detail in <<ACE-provisioning-export-import>>.
 
 _Properties_::
 Possibly modifies state: *YES*. +
@@ -1153,14 +1135,14 @@ _Encoding_::
 ....
 
 _Description_::
-Exports the CR `Ks` or `K[Xs]` to memory at address `Xd`, using the procedure described in <<ACE-provision-export-import>>.
+Exports the CR `Ks` or `K[Xs]` to memory at address `Xd`, using the procedure described in <<ACE-provisioning-export-import>>.
 The SCC must be stored at an 8-byte aligned address, and its length must be a multiple of 8 bytes.
 +
-The instruction must follow the interruptibility rules defined in <<ACE-CSR-acestart>> and <<ACE-provision-export-import>>.
+The instruction must follow the interruptibility rules defined in <<ACE-CSR-acestart>> and <<ACE-provisioning-export-import>>.
 +
 Similarly to vector register store instructions, `ace.export` appears to other harts as a sequence of individual stores.
 +
-The operation is described in detail in <<ACE-provision-export-import>>.
+The operation is described in detail in <<ACE-provisioning-export-import>>.
 
 _Properties_::
 Possibly modifies state: *NO*. +
@@ -1171,7 +1153,7 @@ Interruptible: *YES*.
 //
 
 [[ACE-instruction-import]]
-==== ace.import
+==== ace.import/ace.import.S
 
 _Synopsis_::
 Import a SCC from memory into a CR.
@@ -1206,15 +1188,18 @@ It is set to true if the key is in a system-defined format
 and not the format defined by the present architecture
 (`ace.import`).
 +
-`ace.import` must follow the interruptibility rules defined in <<ACE-CSR-acestart>> and <<ACE-provision-export-import>>.
+`ace.import` must follow the interruptibility rules defined in <<ACE-CSR-acestart>> and <<ACE-provisioning-export-import>>.
 Similarly to vector register load instructions, `ace.import` appears to other harts as a sequence of individual loads.
 +
 The behavior of `ace.import.S` is implementation-defined.
 +
-The operation is described in detail in <<ACE-provision-export-import>>.
+The operation is described in detail in <<ACE-provisioning-export-import>>.
 
 NOTE: The instruction encoding includes a single bit to indicate a system-defined format.
 If multiple system-defined formats are supported, the system is responsible for distinguishing them.
+These formats do not necessarily include the key value itself, they may contain a “recipe” for an implementation-defined mechanism to generate the key.
+Such system generated heys are also system-specific. In place of the PI, the provisioning operation reads a system-specific “recipe”, which is not portable.  After internal key generation, the actual key value—not the recipe—is stored in the CR and SCC.
+For all keys provisioned using `ace.import.S`, the _KeyType_ field in the Metadata is 0, denoting a key represented by its value.
 
 NOTE: The `ace.export` instruction does not have an `ace.export.S` analog to `ace.import.S`.
 This means that system-specific dynamically generated keys can be imported but not exported in the same form: they must be exported in the format architected here for ACE CCs.
@@ -1443,6 +1428,11 @@ All the values returned by the instruction are expressed in terms of implementat
 On RV32, `Xs` contains bits [31:0] of the Metadata (as for the Metadata type instruction).
 
 * Form D: The source register contains the desired byte length of the buffer to be allocated, and the destination register contains the size of the buffer in the ACE unit.
+
+NOTE: In general. no correlation may be assumed between the size of a PI, the corresponding CR's usage of internal resources, and the size of the SCC.
+// The size of the SCC can differ significantly from the internal resource usage to store the CC's data in a CR.
+// On one hand, there is an overhead due to the SIV.
+// On the other hand, in case of threshold implementations, where keys are exported in reconstructed form, or in modes where some derived keys are not exported, the SCC may be smaller than the internal resource usage.
 
 _Properties_::
 Possibly modifies state: *NO*. +
@@ -1768,17 +1758,14 @@ Interruptible: *YES*.
 
 // ///////////////////////////////////////////////////////////////////////////////////////////
 
-[[ACE-provision-export-import]]
+[[ACE-provisioning-export-import]]
 === Provisioning, Export and Import of Cryptographic Contexts
 
 The length of a PI must be a multiple of 8 bytes.
 The first 8 bytes contain the Metadata Header, as defined in <<ACE-Metadata>>.
-// Optionally, the next 8 bytes contain the Metadata Extension.
 The subsequent bytes form the *Content*—the key material and any algorithm-specific data—whose format and length are specified in <<ACE-algorithms>> for all architected algorithms. The PI Content's size is entirely determined by the _Algorithm_ and _KeyType_ fields within the Metadata.
 
-// NOTE: The resource usage of a CR may be larger than the size of a PI.
-// In ECB schemes (<<ACE-ECB-mode>>) not hardened against SCA, a CR need not contain more than the Metadata and the key, hence their resource usage matches the size of the PI (unless the key is not a multiple of 64 bits).
-//However, for many algorithms, the internal state is larger than the size of the PI.
+System Keys are given by an index into an internal, system-specific System Keys Table (SKT), and therefore, in a PI, in place of the key value itself, a 64-bit field is used to store the index.
 
 {empty}
 (((Cryptographic Context, Sealed)))
@@ -1799,9 +1786,12 @@ The AEAD method used for this purpose is described in <<ACE-SCC-AEAD>>.
 The Metadata of an SCC-both Header and Extension-follows the same fixed architectural format as the Metadata of the PI.
 The Content format—and consequently its length—are algorithm-specific (<<ACE-algorithms>>) and are determined solely by the _Algorithm_, _KeyType_, and _DirectionPolicy_ fields in the Metadata.
 
-NOTE: The size of the SCC can differ significantly from the internal resource usage to store the CC's data in a CR.
-On one hand, there is an overhead due to the SIV.
-On the other hand, in case of threshold implementations, where keys are exported in reconstructed form, or in modes where some derived keys are not exported, the SCC may be smaller than the internal resource usage.
+For a system key, its actual value is never included in exported Content.
+The SCC contains just the index of the key in the SKT, like for the PI.
+
+For threshold implementations, ACE may copy the key material from the SKT into the CR and expand it into multiple shares.
+
+It is permissible to include some of the shares of a system key in a threshold implementation in the optional Additional Data of the content in order to accelerate share reconstruction, provided that the key cannot be reconstruced from these shares.
 
 The Serialized Content section under Data Structures in an algorithm specification (<<ACE-algorithms>>) defines the structure of the `content[]` array.
 Architecturally, `content[]` is the serialization of the content of a CR for export as an SCC.
@@ -1859,13 +1849,14 @@ Even if this phase is executed concurrently with other operations, an interrupt 
 The requirement that the initial cryptographic phase of `ace.export` be uninterruptible could become a performance bottleneck for very long SCCs, or cause timing issues. To address this, we could allow the SIV computation to be interrupted by using odd, or negative, values in `acestart`
 ====
 
+//
 
-[[ACE-provision]]
+[[ACE-provisioning]]
 ==== Provisioning
 
 We start with the algorithm performed by `ace.prov`, which reads a PI and uses it to provision a CR.
 
-[[ACE-provision-listing]]
+[[ACE-provisioning-listing]]
 .Provisioning a CR with Metadata and content
 []
 ----
@@ -1892,7 +1883,7 @@ if (Metadata is inconsistent)
 [[ACE-SCC-AEAD]]
 ==== Export and Import
 
-The AEAD algorithm used to export and import CRs is an adaptation of AES-GCM-SIV cite:[DBLP-journals-iacr-GueronLL17,RFC8452].
+To export and import CRs we use a the AES-GCM-SIV algorithm cite:[DBLP-journals-iacr-GueronLL17,RFC8452].
 
 [WARNING]
 AES-GCM-SIV has been chosen because it only required single passes of data in main memory, reducing the number of external memory accesses.
@@ -1907,7 +1898,7 @@ The generation of an SCC from a CR (<<ACE-SCC-export>>) and the import of an SCC
 .RFC8452 Key Derivation
 []
 ----
-function KeyDeriv(key : bits(256)) = {
+function RFC8452_KeyDeriv(key : bits(256)) = {
   struct {
     AESE256(key, (zeros(125) @ 0b101))[63:0] @ AESE256(key, (zeros(125) @ 0b100))[63:0] @
     AESE256(key, (zeros(125) @ 0b011))[63:0] @ AESE256(key, (zeros(125) @ 0b010))[63:0],
@@ -1932,7 +1923,7 @@ function double(S : bits(128)) = {
   }
 }
 
-function KeyDeriv(key : bits(256), L : bits(126)) = {
+function RFC8452_KeyDeriv(key : bits(256), L : bits(126)) = {
   t ← double(AESE256(key, zeros(128))) // Precomputed
   struct {
      AESE256(key, (L @ 0b00) xor t) @ AESE256(key, (L @ 0b01) xor t),
@@ -1977,7 +1968,7 @@ M : array[MH_size(mh) + 16 + z] of bytes;
 let last_block_fractional : Boolean ← z % 16 != 0;
 let num_blocks : int ← ceil(z / 16);
 
-{enc_key, auth_key} ← KeyDeriv(CSK);
+{enc_key, auth_key} ← RFC8452_KeyDeriv(CSK);
 L : list ← {} if (mh.Locality == 0) else get_locality(mh.Locality)
 
 // Include Locality "prefix" (zero or more 128-bit blocks)
@@ -2064,7 +2055,7 @@ if (there is not enough memory for the algorithm encoded in the Metadata) {
 num_blocks ← ceil(z / 16);
 last_block_fractional : Boolean ← (z % 16 != 0);
 
-{enc_key, auth_key} ← KeyDeriv(CSK);
+{enc_key, auth_key} ← RFC8452_KeyDeriv(CSK);
 
 // Absorb Locality "prefix" (zero or more 128-bit blocks)
 tmp ← zeros(128);
@@ -3247,7 +3238,6 @@ Algorithm-Specific Functions:::
    (for instance, AES-GCM-SIV uses POLYVAL):
   . `tag <- tag xor INPUT`.
   . `tag <- Montmul(tag, hash_key)` or `Galoismul(tag, hash_key)`, depending on the algorithm.
-* `RFC8452_KeyDeriv(key)` = `KeyDeriv(key,zeros(125))`, i.e., per RFC8452 (<<ACE-SCC-RFC8452-derivation>>).
 
 State Machine:::
 * *States:*
@@ -3270,7 +3260,7 @@ State Machine:::
 * *Behavior:*
  ** In State _initial_ :
   *** Upon entering the state, the following initialization operations are performed:
-   . (`enc_key`, `auth_key`) `<-` `RFC8452_KeyDeriv(key)`,
+   . (`enc_key`, `auth_key`) `<-` `RFC8452_RFC8452_KeyDeriv(key)`,
    . `nonce`, `ctr`, `tag`, `SIV <- 0`.
  *** No {nbsp}``ace.exec``{nbsp} operation is allowed.
 
@@ -3381,7 +3371,7 @@ If `IOLEN` > `b`, the above operations are applied to each of the `IOLEN/b` bloc
 If `IOLEN` > `b`, only the `b` least significant bits of `INPUT` are considered.
 
  ** Upon completion of `ace.import`, the ACE unit recomputes `enc_key` and `auth_key`, i.e.:
-  . (`enc_key`, `auth_key`) <- `RFC8452_KeyDeriv(key)`.
+  . (`enc_key`, `auth_key`) <- `RFC8452_RFC8452_KeyDeriv(key)`.
 
 //
 
