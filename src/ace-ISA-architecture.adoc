@@ -1950,9 +1950,9 @@ local tmp : bits(128);
 local enc_key : bits(256);
 local auth_key : bits(128);
 
-// CR.exporting is always false except during export
-// Any other operation that may change the state of the CR
-// will set it to false again, to force a resumption of a restart
+// CR.exporting is always false except during export. Any other operation that
+// may change the state of the CR will set it to false again, to force a restart
+// of the export operation in order to ensure that the CR is in a consistent state.
 CR.exporting = true;
 
 // Note: CR.content[] includes the optional extra content at the end
@@ -1961,15 +1961,13 @@ z : int ← SCC_content_size(mh);
 z ← z + mh.ExtraContent * 8;
 CR.content : array[z] of bytes;
 
-// In external memory: Metadata Header, then SIV, then content
-// where content is extended as described above
-
+// In external memory: Metadata Header, then SIV, then Content
 M : array[MH_size(mh) + 16 + z] of bytes;
 let last_block_fractional : Boolean ← z % 16 != 0;
 let num_blocks : int ← ceil(z / 16);
 
 {enc_key, auth_key} ← RFC8452_KeyDeriv(CSK);
-L : list ← {} if (mh.Locality == 0) else get_locality(mh.Locality)
+L : list ← {} if (mh.Locality == 0) else get_locality(mh.Locality);
 
 // Include Locality "prefix" (zero or more 128-bit blocks)
 tmp ← POLYVAL(auth_key, L @ zeros(64) @ mh @ CR.content[]);
@@ -1982,15 +1980,14 @@ M[0 .. 7] ← mh;
 M[8 .. 23] ← SIV;
 
 foreach(i from 0 to num_blocks - 1) {
-   if ((i == num_blocks - 1) and last_block_fractional) {
+   if ((i == num_blocks - 1) and last_block_fractional)
       // FOLLOWING MEMORY WRITE PREEMPTIBLE, `acestart` FROM 24+i*16 TO 31+i*16
       M[24+i*16 .. 31+i*16] ← CR.content[i*16 .. 7+i*16]
          xor AESE(enc_key, 1 @ SIV[126:32] @ (SIV[31:0] + bin(i, 32) % 2**32)[63:0];
-   } else {
+   else
       // FOLLOWING MEMORY WRITE PREEMPTIBLE, `acestart` FROM 24+i*16 TO 39+i*16
       M[24+i*16 .. 39+i*16] ← CR.content[i*16 .. 15+i*16]
          xor AESE(enc_key, 1 @ SIV[126:32] @ (SIV[31:0] + bin(i, 32) % 2**32);
-   }
 }
 CR.exporting = false;
 ----
@@ -2045,13 +2042,12 @@ importing ← true;
 z ← SCC_content_size(mh);
 z ← z + mh.ExtraContent * 8;
 
-if (z == 0) {
+if (z == 0)
     error ace_err_unimplemented;
-}
 
-if (there is not enough memory for the algorithm encoded in the Metadata) {
+if (there is not enough memory for the algorithm encoded in the Metadata)
     error ace_err_memory;
-}
+
 num_blocks ← ceil(z / 16);
 last_block_fractional : Boolean ← (z % 16 != 0);
 
@@ -2060,8 +2056,8 @@ last_block_fractional : Boolean ← (z % 16 != 0);
 // Absorb Locality "prefix" (zero or more 128-bit blocks)
 tmp ← zeros(128);
 L : list ← {} if (mh.Locality == 0) else get_locality(mh.Locality);
-foreach(i from 1 to length(L)) {
-  tmp ← tmp xor {content[i*16 .. 15+i*16]};
+foreach(i from 0 to length(L)-1) {
+  tmp ← tmp xor L[i];
   tmp ← Montmul(tmp, auth_key);
 }
 
@@ -2086,7 +2082,8 @@ foreach(i from 0 to num_blocks - 1) {
 }
 tmp ← AESE(enc_key, 0 @ tmp[126:0]);
 
-if (tmp != SIV) then { error ace_err_import_auth; }
+if (tmp != SIV) then
+   error ace_err_import_auth;
 
 - Now the content can be deserialized.
 - This includes computing any derived values not saved as part of the SCC,
