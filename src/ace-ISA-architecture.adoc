@@ -270,25 +270,26 @@ which serves as the header of the data formats used in CR provisioning and in SC
 | [28:21] |   8   | _Locality_               | A field which is either all zeros or determines a Locality Secret.
 | [31:29] |   3   | _UCPolicy_               | “UC Policy” means “Usage Control Policy”. If bit 25, 26, resp., 27 is set, it disallows the _usage_ of this CC in User, (V)S-mode, resp., H-mode.
 | [35:32] |   4   | _FilterMode_             | Filters:
-Bits 0, 1, resp., 2 = enable the filter below S/VS-mode, H-mode, resp., M-mode.
+Bits 0, resp., 2 = enable the filter below S/VS-mode, resp. M-mode.
 Bit 3 = expiration date.
-If any of these bits is set, the 128-bit block described in <<ACE-metadata-extension>> (see <<ACE-combined-filters>>) is appended to the metadata section.
+If any of these bits is set, the 64-bit block described in <<ACE-metadata-extension>> (see <<ACE-combined-filters>>) is appended to the metadata section.
 | [49:36] |  14   | _ExtraContent_           | If non-zero, there is an additional segment of data at the end of the _content_.
 The length of additional segment is _ExtraContent_ 64-bit blocks. (14 bits allow up to 128 kB of additional data.)
-| [63:50] |  14   | Reserved                 | Value is 0 for the current metadata formats.
+| [63:50] |  14   | Reserved +
+(or _MFilter_)  | --
 |===
 
-If _FilterMode_ is not zero, then the provisioning and SCC data formats contain an additional 128-bit block of metadata, called the _metadata extension_, defined in <<ACE-metadata-extension>>.
+If _FilterMode_ is not zero, then the provisioning and SCC data formats contain an additional 64-bit block of metadata, called the _metadata extension_, defined in <<ACE-metadata-extension>>, and the Reserved bits [63:50] are contain
+the _MFilter_ instead, i.e., a value to match against `mcontext`.
 (((Cryptographic Context,metadata,extension)))
+
 [[ACE-metadata-extension]]
 .Format of the optional metadata extension
 [width="100%",cols="^9%,^7%,14%,70%",options="header"]
 |===
 |     Field | Width | Field                   | Description
 |    [31:0] |  32   | _SFilter_               | Value to match against `scontext` (least significant 31 bits).
-|   [63:32] |  32   | _MFilter_               | Value to match against `mcontext` (least significant 14 bits).
-|   [95:64] |  32   | Reserved                | Reserved
-|  [127:96] |  32   | _TFilter_               | Value to match against an expiration date.
+|   [63:32] |  32   | _TFilter_               | Value to match against an expiration date.
 |===
 
 Some fields and their properties need further explanation. This is done in the following sections.
@@ -499,7 +500,7 @@ Bit 0, 1, resp., 2 of this field is ignored if U-mode, S-mode, resp. H-mode is n
 [[ACE-combined-filters]]
 ===== FilterMode and Filter Fields
 
-If the _FilterMode_ field is non-zero, an additional 128-bit block is added to the metadata to implement filtering according to secrets set by S/VS, HS, and M, and expiration date.
+If the _FilterMode_ field is non-zero, an additional 64-bit block is added to the metadata to implement filtering according to secrets set by S/VS, HS, and M, and expiration date.
 
 To filter by expiration date is a simple comparison between the current time and the expiration time in the metadata.
 The ACE Unit must have access to a secure clock.
@@ -1019,6 +1020,8 @@ A write to the __i__-th CSR sets Bits [(_i_+1) XLEN - 1 : _i_ XLEN] of `haceLoca
 
 This register group must be implemented if the H extension is implemented.
 Any access to `haceLocality` outside of H-mode and higher raises an illegal instruction exception.
+
+// This register group can be useful in systems where M-Mode implements hypervisor-like functionality directly.
 
 //
 
@@ -1837,7 +1840,7 @@ In the current specification, it is always 8.
    It does not depend on `mh`._FilterMode_.
    It does not include the length of the variable part of the content of length _ExtraContent_ * 8 bytes, nor the length of the optional Metadata Extension block.
 .  `ME_size(mh)` returns the byte length of the metadata extension. +
-    In the current specification, it is 0 when `mh`._FilterMode_ is 0, and it is 16 otherwise.
+    In the current specification, it is 0 when `mh`._FilterMode_ is 0, and it is 8 otherwise.
 
 The total size in bytes of a PI is therefore
 
@@ -3184,6 +3187,7 @@ All other semantics would be unchanged.
 
 The GCM-SIV mode is described in cite:[DBLP-journals-iacr-GueronLL17] and cite:[RFC8452].
 
+////
 The GCM-SIV mode's main differences with GCM are that:
 
 . Both encryption and authentication keys are derived from the main key, whereas in GCM the main key is used also for encryption;
@@ -3191,7 +3195,10 @@ The GCM-SIV mode's main differences with GCM are that:
 . Encryption requires two passes over the plaintext, since the tag computed on the AD and plaintext is used also as the initialization vector for the CTR encryption.
 (((ACE, algorithm, GCM-SIV)))
 
-The third difference affects the state machine. While GCM-SIV's decryption state machine is similar to the GCM's, the encryption state machine is different:
+The third difference affects the state machine.
+////
+
+While GCM-SIV's decryption state machine is similar to the GCM's, the encryption state machine is different:
 
 * During encryption, the _hash_absorb_ state absorbs the entire associated data and plaintext. The _enc_tag_finalize_ state then absorbs the lengths and produces the SIV/tag. Finally, the _encrypt_ state performs a second pass to encrypt the plaintext using the SIV/tag as the initialization vector.
 * During decryption, the _hash_absorb_ state absorbs only the associated data. The _decrypt_ state decrypts the ciphertext and simultaneously absorbs the plaintext into the hash. Finally, the _dec_tag_finalize_ state absorbs the lengths, produces the SIV/tag, and internally compares it to the provided SIV/tag.
@@ -4022,7 +4029,8 @@ Data Structures:::
  ** `input_base`: int. Offset within input/output to read from/write to (field size at most 16 bits).
  ** `block_base`: int. Length of absorbed data so far for the current block (field size at most 16 bits). Only if used by the algorithm.
  ** `cumul_len`: int. Cumulative length of data absorbed so far (if the algorithm must process and incorporate it in the hash on its own).
- ** `block`: `b` bits.  We include it only if there is a partial block, i.e., for instance if the absorbed unit is larger than a normally available vector size or not a submultiple thereof, and is not directly absorbed into `state`.
+ ** `block`: `b` bits.  Included only if a partial block must be maintained—for instance when the inputs are not directly absorbed into `state`.
+//, i.e., for instance if the absorbed unit is larger than a normally available vector size or not a submultiple thereof, and is not
 
 * *Serialized Content*:
 +
