@@ -10,23 +10,23 @@ While this leads to some repetitions, we believe that it also brings better clar
 Cryptographic Context:::
 (((Cryptographic Context)))
 The *Cryptographic Context* (CC) is the fundamental concept in ACE.
-A CC is an indivisible data structure consisting of a *metadata* section and a *content* section, and all cryptographic operations performed by ACE execute within the constraints defined by a CC.
-The metadata section's format is fixed, and it specifies the cryptographic algorithm associated with the CC and optional usage control policies.
-(((Cryptographic Context, metadata)))
-The content's format is algorithm-specific, and it holds sensitive material such as keys and internal algorithm state.
-(((Cryptographic Context, content)))
-The metadata require integrity, and only part of it requires confidentiality.
-The entire content requires both.
+A CC is an indivisible data structure consisting of a *Metadata* section and a *Content* section, and all cryptographic operations performed by ACE execute within the constraints defined by a CC.
+The Metadata's format is fixed, and it specifies the cryptographic algorithm associated with the CC and optional usage control policies.
+(((Cryptographic Context, Metadata)))
+The Content's format is algorithm-specific, and it holds sensitive material such as keys and internal algorithm state.
+(((Cryptographic Context, Content)))
+The Metadata require integrity, and only part of it requires confidentiality.
+The entire Content requires both.
 These requirements are architecturally guaranteed by ACE.
 
 Cryptographic Register:::
 (((Cryptographic Register)))
 Cryptographic Contexts are realized using *Cryptographic Registers* (CRs).
 CRs are architectural containers that safeguard CCs.
-A CR is *provisioned* by writing metadata and content into it: this operation also binds the metadata and the content to form a CC.
+A CR is *provisioned* by writing Metadata and Content into it: this operation also binds the Metadata and the Content to form a CC.
 A CC can be used for cryptographic operations only while resident in a CR.
-Only the ACE unit may access or modify CC contents, in accordance with the architecture and the algorithm specified in the metadata.
-CR content cannot be extracted in a manner that compromises its confidentiality.
+Only the ACE unit may access or modify a CC, and any modification may occur only when the CC is in a CR, in accordance with the architecture and the algorithm specified in the Metadata.
+CR Content cannot be extracted in a manner that compromises its confidentiality.
 
 Sealed Cryptographic Context:::
 (((Cryptographic Context, sealed)))
@@ -60,7 +60,7 @@ Hence, our use of the term _Usage Control_ instead of _Access Control_.
 Locality:::
 (((Cryptographic Context, Locality)))
 Finally, ACE can bind CCs to a *Locality*, i.e., restrict usage to specific devices, device classes, software or hardware configurations, or boot cycles.
-This binding uses metadata when a CC is in a CR, and augments _Root Context Sealing Key_ (CSK) by a Locality-specific _tweak_.
+This binding uses Metadata when a CC is in a CR, and augments _Root Context Sealing Key_ (CSK) by a Locality-specific _tweak_.
 
 // ///////////////////////////////////////////////////////////////////////////////////////////
 
@@ -176,7 +176,7 @@ Conventional registers do not provide such functionality—and do not need to.
 
 * ACE instructions can refer to CRs directly, i.e., with a 5-bit immediate in the instruction encoding, but also indirectly, i.e., through a value in a GPR.
 
-* Only few instructions use and possibly change the contents of the CRs.
+* Only few instructions use and possibly modify CRs.
   The most important ones are:
   ** `ace.exec`, used to perform cryptographic operations on data blocks according to the algorithm configured in a CR; and
   ** `ace.state`, used to move between the different stages of modes of operations and hash functions, possibly performing certain state initialization operations.
@@ -232,36 +232,33 @@ The support for the vector register file and for ACEIOBUF are not mutually exclu
 
 // ///////////////////////////////////////////////////////////////////////////////////////////
 
-[[ACE-metadata]]
+[[ACE-Metadata]]
 ==== Metadata Format
 
 For software portability and interoperability, ACE defines two external formats for CCs:
 
 . The _Provisioning Input_ (PI) format, which is loaded into a CR to create a C; and
-. The _Sealed Cryptographic Context_ (SCC) (<<ACE-format-SCC>>), an encrypted, authenticated format used when exporting a CR to memory for later re-import.
+. The _Sealed Cryptographic Context_ (SCC) (<<ACE-provision-export-import>>), an encrypted, authenticated format used when exporting a CR to memory for later re-import.
 
-Both formats rely on the same metadata section format, which is described here.
-The PI and SCC formats are described in <<ACE-provision-export-import>> and <<ACE-format-SCC>>, respectively.
+Both formats rely on the same Metadata format, which is described here.
+The PI and SCC formats are described in <<ACE-provision-export-import>> and <<ACE-provision-export-import>>, respectively.
 
 [WARNING]
-The metadata section of a CC is used as the header of the data formats used in CR provisioning, and SCC export and import functions.
-Its definition is in flux, as it is subject to change based on the ARC feedback.
-For instance, if a less expensive key derivation method is allowed (<<ACE-SCC-AEAD>>), we could rely entirely on the cryptographic approach based on localities, and eliminate the filtering according to the IDs of processes VMs and Hypervisors/SDs. In this case we would not need a 128-bit additional block for filtering and a 64-bit additional block would suffice and leave also enough space for additional policies.
+The Metadata format is in flux, as it is subject to change based on the ARC feedback.
+For instance, in the AEAD method for exporting and importing (<<ACE-SCC-AEAD>>), we could exclusively rely on localities used as tweaks, and eliminate the filtering according to the IDs of processes, VMs and Hypervisors/SDs.
 
 {empty}
-(((Cryptographic Context,metadata)))
-CCs contain 64 or 192 bits of metadata.
-(((Cryptographic Context,metadata,header)))
-The first 64 bits are the metadata header,
-defined in <<ACE-metadata-header>>,
-which serves as the header of the data formats used in CR provisioning and in SCC export and import.
+(((Cryptographic Context,Metadata)))
+(((Cryptographic Context,Metadata,Header)))
+CCs contain 64 or 128 bits of Metadata.
+The first 64 bits are the Metadata Header, defined in <<ACE-Metadata-header>>, which serves as the header of the data formats used in CR provisioning and in SCC export and import.
 
-[[ACE-metadata-header]]
+[[ACE-Metadata-header]]
 .Format of the Metadata Header
 [width="100%",cols="^9%,^7%,14%,70%",options="header"]
 |===
 |   Field | Width | Field                    | Description
-|   [0:0] |   1   | _Format_                 | Value is 0 for the current version of the metadata format.
+|   [0:0] |   1   | _Format_                 | Value is 0 for the current version of the Metadata format.
 |  [11:1] |  11   | _Algorithm_              | Cryptographic algorithm (such as primitive, mode, or protocol).
 | [13:12] |   2   | _DirectionPolicy_        | Selects the allowed direction for the cryptographic operation.
 | [15:14] |   2   | _SCProtection_           | Side-Channel Protected Implementation (0 if not protected, 1 if protected).
@@ -269,22 +266,32 @@ which serves as the header of the data formats used in CR provisioning and in SC
 | [20:17] |   4   | _StateNumber_            | Encoding the current state of the state machine of the algorithm as a number.
 | [28:21] |   8   | _Locality_               | A field which is either all zeros or determines a Locality Secret.
 | [31:29] |   3   | _UCPolicy_               | “UC Policy” means “Usage Control Policy”. If bit 25, 26, resp., 27 is set, it disallows the _usage_ of this CC in User, (V)S-mode, resp., H-mode.
+| [45:32] |  14   | _ExtraContent_           | If non-zero, there is an additional segment of data at the end of the Content.
+The length of additional segment is _ExtraContent_ 64-bit blocks. (14 bits allow up to 128 kB of additional data.)
+| [63:46] |  18   | _ExpirationDate_         | If this field is non-zero, it is an expiration date on this CC.
+|===
+
+If _ExpirationDate_ is not zero, then it contains the expiration date of this CC expressed as number of hours from the base date (January 1st, 2027).
+18 bits are used for an expiration date with a resolution of a hour, which allows for almost 30 years (2^18^ hours) from the base date.
+While this is a limited time span, we do not expect other formats to be used unchanged in, say, 10 or 15 years, and longer formats will accommodate larger time spans.
+
+////
+
 | [35:32] |   4   | _FilterMode_             | Filters:
 Bits 0, resp., 2 = enable the filter below S/VS-mode, resp. M-mode.
 Bit 3 = expiration date.
-If any of these bits is set, the 64-bit block described in <<ACE-metadata-extension>> (see <<ACE-combined-filters>>) is appended to the metadata section.
-| [49:36] |  14   | _ExtraContent_           | If non-zero, there is an additional segment of data at the end of the _content_.
+If any of these bits is set, the 64-bit block described in <<ACE-Metadata-extension>> (see <<ACE-combined-filters>>) is appended to the Metadata section.
+| [49:36] |  14   | _ExtraContent_           | If non-zero, there is an additional segment of data at the end of the Content.
 The length of additional segment is _ExtraContent_ 64-bit blocks. (14 bits allow up to 128 kB of additional data.)
 | [63:50] |  14   | Reserved +
 (or _MFilter_)  | --
 |===
 
-If _FilterMode_ is not zero, then the provisioning and SCC data formats contain an additional 64-bit block of metadata, called the _metadata extension_, defined in <<ACE-metadata-extension>>, and the Reserved bits [63:50] are contain
-the _MFilter_ instead, i.e., a value to match against `mcontext`.
-(((Cryptographic Context,metadata,extension)))
+If _ExpirationDate_ is not zero, then the provisioning and SCC data formats contain an additional 64-bit block of Metadata, called the _Metadata Extension_, defined in <<ACE-Metadata-extension>>, and the Reserved bits [63:50] contain the _MFilter_ field instead.
+(((Cryptographic Context,Metadata,extension)))
 
-[[ACE-metadata-extension]]
-.Format of the optional metadata extension
+[[ACE-Metadata-extension]]
+.Format of the optional Metadata Extension
 [width="100%",cols="^9%,^7%,14%,70%",options="header"]
 |===
 |     Field | Width | Field                   | Description
@@ -292,15 +299,22 @@ the _MFilter_ instead, i.e., a value to match against `mcontext`.
 |   [63:32] |  32   | _TFilter_               | Value to match against an expiration date.
 |===
 
+[WARNING]
+Keeping the process filtering based on matching against field values requires a Metadata Extension.
+Alternatively, if we use a cryptography base method instead, _ExpirationDate_ can be reduced to just one bit. We then have 31 bits to use.
+13 bits could be used for _ExtraContent_, allowing up to 64 Kb of extra data, and
+18 bits could be used for an expiration data with a resolution of a hour, which allows for almost 30 years (2^18^ hours) from the base date.
+While this is a limited time span, we do not expect other formats to be used unchanged in, say, 10 or 15 years, and longer formats will accommodate larger time spans.
+If we choose this option we then need NO Metadata Extension block.
+
 Some fields and their properties need further explanation. This is done in the following sections.
+////
 
-//
-
-[[ACE-metadata-confidentiality]]
+[[ACE-Metadata-confidentiality]]
 ===== Confidentiality
 
-The metadata header block is not confidential and will not be encrypted upon export as an SCC.
-The optional metadata extension is confidential and will be encrypted upon export as an SCC.
+The Metadata Header is not confidential and will not be encrypted upon export as an SCC.
+// The optional Metadata Extension is confidential and will be encrypted upon export as an SCC.
 
 //
 
@@ -348,12 +362,12 @@ A value of 0 in the _KeyType_ field indicates an explicit value.
 A value of 1 in the _KeyType_ field indicates a system key.
 
 System Keys are given by an index into an internal, system-specific System Keys Table (SKT).
-For each algorithm as specified in <<ACE-algorithms>>, the part of the content that normally contains the key(s) is replaced by its index into the SKT-for both PIs and SCCs
-The actual value of the key is never included in exported content.
+For each algorithm as specified in <<ACE-algorithms>>, the Content field that normally contains the key(s) is replaced by its index into the SKT-for both PIs and SCCs
+The actual value of the key is never included in exported Content.
 For threshold implementations, ACE may copy the key material from the SKT into the CR and expand it into multiple shares.
 
 System Generated Keys are also system-specific. In place of the PI, the provisioning operation reads a system-specific “recipe”, which is not portable.
-After internal key generation, the actual key value—not the recipe—is stored in the CR and SCC. The _KeyType_ field in the metadata is 0.
+After internal key generation, the actual key value—not the recipe—is stored in the CR and SCC. The _KeyType_ field in the Metadata is 0.
 
 //
 
@@ -382,7 +396,7 @@ Unless explicitly stated otherwise in an algorithm's specification, it is always
 
 If an algorithm defines 16 or fewer states (including the four architected ones), the current state number may be stored in the _StateNumber_ field.
 
-For algorithms with more than 16 states, an algorithm-specific representation is used in the CR content and exported in the SCC.
+For algorithms with more than 16 states, an algorithm-specific representation is used in the Content and exported in the SCC.
 How to use information is up to the algorithm designer, with the following condition:
 StateNumber must always be set to _initial_, _invalid_, and _completed_ if the state of the algorithm corresponds to these states.
 
@@ -414,16 +428,18 @@ and privileged code can always deny resources to user processes.
 [[ACE-Localities]]
 ===== Locality Field
 
-ACE keeps a table of 125-bit Locality Secrets (LS), the Locality Secrets Table (LST).
-Some entries of the LST are fixed or configurable only using an implementation-specific authenticated hardware procedure: These are global and shared across all ACE units in the same system. Other entries may be programmed by privileged modes and are architectural, i.e., per hart.
-Currently, nine values in the LST are architected.
+ACE keeps a table of 128-bit Locality Secrets (LS), the Locality Secrets Table (LST).
+Some entries of the LST are fixed or configurable only using an implementation-specific authenticated hardware procedure:
+These are global and shared across all ACE units in the same system.
+Other entries may be programmed by privileged modes and are architectural, i.e., per hart.
+Currently, eleven values in the LST are architected.
 The first six Localities tie SCCs to the hardware, and are called the HW Binding Group.
 Localities 8 to 10 are the SW Filter Group.
 
-The Locality Secrets are used to tweak the AEAD algorithm used to export and import CCs.
-If the _Locality_ Field of a CC is zero, then the CSK is used directly without tweaking the AEAD algorithm.
-
 More than one Locality can be active at the same time, with restrictions, and Locality secrets may be combined.
+The Locality Secrets are prepended to the string used to compute the SIV in the AEAD algorithm used to export and import CCs.
+If the _Locality_ Field of a CC is zero, then no value is prepended.
+
 // The 3 lsbs of the Locality field encodes one of the localities with index 0 to 5 into the LST, with an encoding of 1 to 6, respectively, and an encoded value of 0 means that no binding to a hardware locality is done.
 // Bits 3 to 5 determine the use of Localities with index 6, 7, and 8 in the table.
 // Bits 6 and 7 are currently unused and reserved for future use. They must be set to 0.
@@ -469,7 +485,7 @@ In this case, an undefined value is transparently replaced with the value associ
 
 where an arrow denotes a possible replacement.
 
-_HLocality_ is only active if the H extension is enabled and V=1.
+_HLocality_ is only active if the H extension is enabled and V=1. Otherwise, its value is a shadow of _MLocality_.
 
 NOTE: A CC may reference a key by an index into the System Key Table (SKT).
 A device-specific SKT entry may correspond to a different key on another device.
@@ -478,14 +494,17 @@ Implementations of the SKT *must* provide a suitable _Locality_ field value to t
 
 [WARNING]
 --
-We shall discuss two methods to combine locality secrets for the purpose of creating the tweaks to be used in the key derivation process:
+Up to three Locality Secrets can be combined: A HW Binding one, one of _PhysBootSecret_ or _VBootSecret_, and one from the SW Filter Group.
+We discuss two methods to combine them for the purpose of creating the data to prepend to the SIV computation or verification in AES-GCM-SIV:
 
-. XOR them, allowing up to four to be added together.
-. Multiply the 125-bit strings in the binary field defined by stem:[P(x)=x^{125}+x^{15}+x^{13}+x^{3}+1].
+. XOR them.
+. Concatenate them.
+
+// Multiply them in the binary field defined by stem:[P(x)=x^{127}+x+1]. This works because the given polynomial is primitive and the Locality Secrets are non-zero.
+// Multiply the 125-bit strings in the binary field defined by stem:[P(x)=x^{125}+x^{15}+x^{13}+x^{3}+1].
 // (for degrees 124 and 126 we can use the polynomials stem:[P(x)=x^{124}+x^{7}+x^{4}+x^{3}+1] and stem:[P(x)=x^{126}+x^{8}+x^{7}+x^{2}+1]).
-Note that the Locality Secrets are non-zero.
 
-Both methods theoretically reduce the distinguishability of a sequence or random numbers by just two bits (from 125 to 123 bits, say).
+Both methods theoretically reduce the distinguishability of a sequence or random numbers by just two bits (from 127 to 125 bits, say).
 --
 
 //
@@ -495,22 +514,20 @@ Both methods theoretically reduce the distinguishability of a sequence or random
 
 Bit 0, 1, resp., 2 of this field is ignored if U-mode, S-mode, resp. H-mode is not supported/enabled.
 
-//
-
+////
 [[ACE-combined-filters]]
-===== FilterMode and Filter Fields
+===== ExpirationDate and Filter Fields
 
-If the _FilterMode_ field is non-zero, an additional 64-bit block is added to the metadata to implement filtering according to secrets set by S/VS, HS, and M, and expiration date.
+If the _ExpirationDate_ field is non-zero, an additional 64-bit block is added to the Metadata to implement filtering according to secrets set by S/VS, HS, and M, and expiration date.
 
-To filter by expiration date is a simple comparison between the current time and the expiration time in the metadata.
+To filter by expiration date is a simple comparison between the current time and the expiration time in the Metadata.
 The ACE Unit must have access to a secure clock.
-When the current time is beyond the expiration time in the metadata, the ACE Unit invalidates the CR (see <<ACE-invalidation>>), and the `aceerror` CSR takes the value _ace_err_expired_CR_ (see <<ACE-CSR-ace-error>>).
+When the current time is beyond the expiration time in the Metadata, the ACE Unit invalidates the CR (see <<ACE-invalidation>>), and the `aceerror` CSR takes the value _ace_err_expired_CR_ (see <<ACE-CSR-ace-error>>).
 
 Filtering by process domain is a simple comparison with the corresponding secret.
 
 Currently, we use `scontext`, `mcontext`, and `hcontext` from the Sdtrig extension, which correspond to 31, 14, and 14 bit fields, respectively.
-
-//
+////
 
 [[ACE-extra-content]]
 ===== ExtraContent Field
@@ -519,52 +536,12 @@ The first eight bytes of the additional information store a copy of the CSR `ace
 
 The eight bytes containing `acemarchid` are included in the length recorded by the _ExtraContent_ field.
 
-This value is considered by the implementation performing the import, to determine whether the additional data is usable.
+This value is considered by the implementation performing the import, to determine whether the additional data is usable, and which.
 
 [NOTE]
 Examples of extra content are: precomputed point multiples (computing them is usually significantly expensive than encrypting and decrypting them), additional data for side-channel protected implementations (in the case the chosen method for computing multiple shares is expensive, so the key is still saved reconstructed, but additional data may be included to provide the key shares or to help reconstruct them).
 
-//
-
-[[ACE-format-definition]]
-==== Provisioning Input
-
-The length of a PI must be a multiple of 8 bytes.
-The first 8 bytes contain the metadata section, as defined in <<ACE-metadata>>.
-The subsequent bytes form the *content*—the key material and any algorithm-specific data—whose format and length are specified in <<ACE-algorithms>> for all architected algorithms. The PI content's structure and size are entirely determined by the _Algorithm_ and _KeyType_ fields within the metadata.
-
-NOTE: The resource usage of a CR may be larger than the size of a PI.
-In ECB schemes (<<ACE-ECB-mode>>) not hardened against SCA, a CR need not contain more than the metadata and the key, hence their resource usage matches the size of the PI (unless the key is not a multiple of 64 bits).
-However, for many algorithms, the internal state is larger than the size of the PI.
-
-//
-
-[[ACE-format-SCC]]
-==== Sealed Cryptographic Context
-
-{empty}
-(((Cryptographic Context, Sealed)))
-The SCC format is used when exporting a CC from a CR and also to re-import the CC into a CR.
-It is dependent on the algorithm being used.
-Its size must be a multiple of 8 bytes.
-For the purpose of exporting, the optional metadata extension is prepended to the content.
-
-Format of SCC::: {empty}
-`bytes{nbsp}[{nbsp}{nbsp}0 .. 7{nbsp}{nbsp}{nbsp}{nbsp}]{nbsp}{nbsp}` Metadata, partially encrypted. +
-`bytes{nbsp}[{nbsp}{nbsp}8 .. 23{nbsp}{nbsp}{nbsp}]{nbsp}{nbsp}` SIV produced by the encryption method (128 bits). +
-`bytes{nbsp}[{nbsp}24 .. u+23{nbsp}]{nbsp}{nbsp}` Encrypted {optional metadata extension and} serialized content of the CR.
-
-Both metadata and the serialization of the content are authenticated, but the optional metadata extension and the content are encrypted.
-The AEAD method used for this purpose is described in <<ACE-SCC-AEAD>>.
-
-The metadata section of an SCC follows the same fixed architectural format as the metadata section of the PI.
-The content format—and consequently its length—are algorithm-specific (<<ACE-algorithms>>) and are determined solely by the _Algorithm_, _KeyType_, and _DirectionPolicy_ fields in the metadata.
-
-NOTE: The size of the SCC can differ significantly from the internal resource usage to store the CC's data in a CR.
-On one hand, there is an overhead due to the SIV.
-On the other hand, in case of threshold implementations, where keys are exported in reconstructed form, or in modes where some derived keys are not exported, the SCC may be smaller than the internal resource usage.
-
-//
+// ////////////////////////////////////////////////////////////////////
 
 [[ACE-CSR-summary]]
 ==== CSR Summary
@@ -651,7 +628,7 @@ Implementations may also change `mstatus.ACES` from Initial or Clean to Dirty at
 
 If `mstatus.ACES` (`sstatus.ACES`) is Dirty, `mstatus.SD` (`sstatus.SD`) is 1; otherwise, `mstatus.SD` (`sstatus.SD`) is set in accordance with existing specifications.
 
-Writes to any ACES field do not affect the contents of the CRs, of the ACEIOBUF, or of any ACE-specific CSRs.
+Writes to any ACES field do not modify the CRs, the ACEIOBUF, or any ACE-specific CSRs.
 Clearing state is not performed by setting ACES to Off, Initial, or Clean, and it must be explicitly done before changing ACES.
 
 Implementations may have a writable `misa.L` field. Analogous to the way in which the floating-point unit and the vector unit are handled, the `mstatus.ACES` field may exist even if `misa.L` is clear.
@@ -713,15 +690,14 @@ Use of an out of range CR with indirect addressing.
 |  6   | _ace_err_unimplemented_      | Not implemented algorithm or variant. +
 State number not allowed in current algorithm in `ace.state`.
 |  7   | _ace_err_invalid_value_      | Invalid value, except _ace_err_unimplemented_ (see below).
-|  8   | _ace_err_privilege_          | Violation of usage control policies in metadata (including Filters).
+|  8   | _ace_err_privilege_          | Violation of usage control policies in Metadata (including Filters).
 |  9   | _ace_err_auth_               | Authentication failure in an algorithm.
 |===
 
 ACE error _ace_err_invalid_value_ collects various cases, for instance (but, there could be more):
 
-* Invalid metadata section in `ace.prov` or `ace.import`, other than _ace_err_unimplemented_, for instance:
+* Invalid Metadata section in `ace.prov` or `ace.import`, other than _ace_err_unimplemented_, for instance:
  ** Non-zeros in zero fields,
- ** Invalid _FilterMode_ for a 64-bit metadata header block,
  ** Non-implemented _Locality_ value,
  ** _StateNumber_ is non-zero for `ace.prov`.
 * ACE operation issued with invalid or zero ACEIOBUF length `aceiobuftop`-`acestart` (see <<ACE-CSR-aceiobuftop>> and <<ACE-CSR-acestart>>).
@@ -742,7 +718,7 @@ ACE error _ace_err_invalid_value_ collects various cases, for instance (but, the
 Code        .>|Description
 .>|_Highest_  | 7             .>| Attempt to use an invalid CR.
 |           .>| 6             .>| Unconfigured or partially configured CR
-|           .>| 5, 4          .>| Invalid metadata section in `ace.prov` or `ace.import`, including specifying a not implemented algorithm or side-channel protected variant.
+|           .>| 5, 4          .>| Invalid Metadata section in `ace.prov` or `ace.import`, including specifying a not implemented algorithm or side-channel protected variant.
 |           .>| 3             .>| Insufficient CRF memory.
 |           .>| 2, 1          .>| Access Control Failure or authentication failure with `ace.import`
 |           .>| 1             .>| Authentication failure in an algorithm.
@@ -777,7 +753,7 @@ _A single `acestart` value suffices due to the way the init/import/export instru
 * `_ace.prov_` _and_ `_ace.import_` _use a single pass: all blocks are processed sequentially._
 * `_ace.export_` _uses two passes. However, the first pass to compute the SIV is purely internal, and never accesses memory, so page faults cannot occur.
 This first pass is uninterruptible.
-The second pass writes metadata, the SIV, and then the content to memory.
+The second pass writes Metadata, the SIV, and then the Content to memory.
 Only the second pass can cause page faults and may require resumption._
 
 This design obviates the need to separate data transfer from cryptographic processing during import and export operations. A separate transfer phase would require buffering the entire input within the ACE unit before processing, increasing internal resource requirements, whereas the current architecture can process data inline and load it with minimal overhead.
@@ -800,7 +776,7 @@ The two CSRs described next may be used to optimize saving and restoring the ACE
 
 `aceiobuflen` is used to program the size of the ACEIOBUF for `ace.input` and `ace.output`.
 
-Reconfiguring `aceiobuflen` will invalidate the buffer's contents, and the contents of the buffer are zeroed.
+Reconfiguring `aceiobuflen` will also zero the buffer.
 
 If `aceiobuflen` is zero, the ACEIOBUF is _unconfigured_ (it does not hold any content, similarly to unconfigured CRs, i.e., CRs in state Initial), and `ace.input` and `ace.output` raise ACE error _ace_err_unconfigured_.
 
@@ -1069,7 +1045,7 @@ While the architecture does not prohibit this, such an approach substantially ex
 ==== ace.prov
 
 _Synopsis_::
-Provision metadata and secrets into a CR.
+Provision Metadata and secrets into a CR.
 
 _Mnemonic_::
 `ace.prov Kd|K[Xd], %offset(Xs)`
@@ -1090,9 +1066,9 @@ _Encoding_::
 ....
 
 _Description_::
-`ace.prov` provisions a CR with metadata and content to create a CC.
+`ace.prov` provisions a CR with Metadata and Content to create a CC.
 `Kd` or `K[Xd]` denotes the CR to be provisioned.
-`Xs` points to the region of memory containing the metadata and the key material.
+`Xs` points to the region of memory containing the Metadata and the key material.
 The PI must be stored at an 8-byte aligned address, and its length must be a multiple of 8 bytes.
 +
 Similarly to vector store instructions, `ace.prov` appears to other harts as a sequence of individual reads.
@@ -1179,7 +1155,7 @@ _Encoding_::
 ....
 
 _Description_::
-Exports the CR `Ks` or `K[Xs]` to memory at address `Xd`, using the procedure described in <<ACE-format-SCC>>.
+Exports the CR `Ks` or `K[Xs]` to memory at address `Xd`, using the procedure described in <<ACE-provision-export-import>>.
 The SCC must be stored at an 8-byte aligned address, and its length must be a multiple of 8 bytes.
 +
 The instruction must follow the interruptibility rules defined in <<ACE-CSR-acestart>> and <<ACE-provision-export-import>>.
@@ -1363,7 +1339,7 @@ The encodings for the three Forms are:
 _Description_::
 The instruction is used to control the state machine of the cryptographic algorithm in CR `Kd` or `K[Xd]`.
 The `#immed` operand is a constant from a set of admissible values defined for each algorithm.
-The new state number, if allowed, is written into the _StateNumber_ field of the metadata, unless the algorithm requires more than 16 states, in which case an ad hoc field must be defined in the context (for both internal representation and SCCs).
+The new state number, if allowed, is written into the _StateNumber_ field of the Metadata, unless the algorithm requires more than 16 states, in which case an ad hoc field must be defined in the context (for both internal representation and SCCs).
 Optionally, `Xs` or `Vs` contains an auxiliary input.
 
 _Properties_::
@@ -1418,7 +1394,7 @@ There are four Forms of the `ace.size` instruction:
 
 [upperalpha]
 . `ace.size Xd, Ks|K[Xs]` - Size from a context.
-. `ace.size Xd, Xs` - Size from metadata header.
+. `ace.size Xd, Xs` - Size from Metadata Header.
 . `ace.size.internal Xd, Xs` - Internal capacity estimate for a CR.
 . `ace.size.iobuf Xd, Xs` - Internal capacity estimate for the ACEIOBUF.
 
@@ -1447,7 +1423,7 @@ The `F` field and the `r` bit may assume the following values:
 
 * `F` = `0b00`, `r` = `0` {implies} Form A: Size from a context given as `Ks`.
 * `F` = `0b00`, `r` = `1` {implies} Form A: Size from a context given indirectly as `K[Xs]`.
-* `F` = `0b01`, `r` = `0` {implies} Form B: Size from metadata header.
+* `F` = `0b01`, `r` = `0` {implies} Form B: Size from Metadata Header.
 * `F` = `0b10`, `r` = `0` {implies} Form C: Internal capacity of a CR.
 * `F` = `0b11`, `r` = `0` {implies} Form D: Internal capacity of the ACEIOBUF.
 
@@ -1457,16 +1433,16 @@ _Description_:: {empty}
 Knowing this size is necessary for any feature that relies on `ace.export`, including context switching.
 The instruction returns 0 if the CR is unconfigured.
 
-* Form B `ace.size` returns the total size (in bytes) of an SCC having the metadata section given in `Xn` into GPR `Xd`, and 0 if the algorithm is not supported.
+* Form B `ace.size` returns the total size (in bytes) of an SCC having the Metadata section given in `Xn` into GPR `Xd`, and 0 if the algorithm is not supported.
 +
-On RV32, `Xs` contains bits [31:0] of the metadata.  This suffices since they contain all fields required to determine the size of the SCC.
+On RV32, `Xs` contains bits [31:0] of the Metadata.  This suffices since they contain all fields required to determine the size of the SCC.
 
-* Form C `ace.size` returns the amount of internal CRF capacity used by a CR with metadata section matching `Xn` on the _Algorithm_, _SCProtection_, and _KeyType_ metadata fields. In this case, all other bits must be zero.
+* Form C `ace.size` returns the amount of internal CRF capacity used by a CR with Metadata section matching `Xn` on the _Algorithm_, _SCProtection_, and _KeyType_ Metadata fields. In this case, all other bits must be zero.
 If the combination of _Algorithm_, _SCProtection_, and _KeyType_ fields is not supported, `ace.size` returns 0.
 If, instead, only the _StateNumber_ is non-zero and its value is 15, resp., 14, `ace.size` returns the total, resp., the remaining internal capacity of the CRF. +
 All the values returned by the instruction are expressed in terms of implementation-dependent units, and in principle cannot be compared across different implementations.
 +
-On RV32, `Xs` contains bits [31:0] of the metadata (as for the metadata type instruction).
+On RV32, `Xs` contains bits [31:0] of the Metadata (as for the Metadata type instruction).
 
 * Form D: The source register contains the desired byte length of the buffer to be allocated, and the destination register contains the size of the buffer in the ACE unit.
 
@@ -1503,8 +1479,8 @@ _Synopsis_::
 Restrict the policies encoded in a CC in a CR.
 
 _Mnemonic_::
-`ace.restrict{nbsp}{nbsp}Kd|K[Xd], Xs1` +
-`ace.restrict{nbsp}{nbsp}Kd|K[Xd], Xs1, Xs2`
+`ace.restrict{nbsp}{nbsp}Kd|K[Xd], Xs1`
+// `ace.restrict{nbsp}{nbsp}Kd|K[Xd], Xs1, Xs2`
 (((ACE, instruction, ace.restrict)))
 
 // Without this comment, the next part is not properly formatted...
@@ -1519,7 +1495,7 @@ The source register field encodes a GPR and not a vector register.
     { bits:  7, name: 0x5b, attr: ['custom-2'] },
     { bits:  5, name: 'Kd|K[Xd]' },
     { bits:  3, name: 0x0, attr: ['ace.exec'] },
-    { bits:  5, name: 'Xs2' },
+    { bits:  5, name: 0x0 },
     { bits:  5, name: 'Xs1' },
     { bits:  1, name: 0x1 },
     { bits:  1, name: 'r' },
@@ -1543,12 +1519,12 @@ This instruction can be used to:
 * Restrict the usage of a CC (as stored in a CR) to specific modes or to a specified Filter; and
 * Add a Locality.
 
-Let `M` be the metadata field of the CC in the destination CR.
+Let `M` be the Metadata field of the CC in the destination CR.
 
 On RV64, the semantics of the instruction are:
 
-* `Xs` inherits its format from the first 64-bit block of the metadata section.
-Only the fields _DirectionPolicy_, _SCProtection_, _Locality_, _UCPolicy_, and _FilterMode_ may be defined.
+* `Xs` inherits its format from the first 64-bit block of the Metadata section.
+Only the fields _DirectionPolicy_, _SCProtection_, _Locality_, _UCPolicy_, and _ExpirationDate_ may be defined.
 All other fields must be 0, else ACE error _ace_err_invalid_value_ is raised.
 
 * `Xs`._DirectionPolicy_ is used to set the new _DirectionPolicy_ of the CR.
@@ -1561,23 +1537,24 @@ Attempting to remove or downgrade side channel protection, or to set a non-imple
 * If `Xs`._Locality_ is non-zero, then it can be used to restrict the Locality. Then, when the CR is exported as a CR, it will use the new tweak in the AEAD mode. Generalizing the Locality is not permitted. Attempting to do so raises ACE error _ace_err_invalid_value_.
 
 * A zero in any of the three bits `Xs`._UCPolicy_ means that the corresponding policy is _not_ changed. +
-A one in any of the three bits `Xs`._UCPolicy_ means that usage by the corresponding mode is not allowed, and the corresponding bit in the metadata of the destination CC is set to 1.
+A one in any of the three bits `Xs`._UCPolicy_ means that usage by the corresponding mode is not allowed, and the corresponding bit in the Metadata of the destination CC is set to 1.
 
-* A zero bit in `Xs`._FilterMode_ means that the corresponding policy in `M`._FilterMode_ is _not_ changed. +
-A bit set to 1 in `Xs`._FilterMode_ will add the corresponding policy to `M`._FilterMode_, but only if that policy was not already programmed, otherwise error ACE error _ace_err_invalid_value_ is raised.
+* A zero value in `Xs`._ExpirationDate_ means that the corresponding policy in `M`._ExpirationDate_ is _not_ changed. +
 
-* If `Xs`._FilterMode_ is non-zero, then
-** The value `s2` is even and both `Xs2` and `X[s2+1]` are read as the 128-bit value `X[s2+1] @ Xs2`.
-** `X[s2+1] @ Xs2` has the metadata extension format described in <<ACE-metadata-extension>>, where only the fields corresponding to the filters actually added are considered.
-//and the remaining bits are ignored.
+* A non-zero value in `Xs`._ExpirationDate_ will be copied to `M`._ExpirationDate_, but only if that policy was not already programmed, otherwise error ACE error _ace_err_invalid_value_ is raised.
 
-* If `Xs`._FilterMode_ is non-zero when `M`._FilterMode_ is zero, if the `ace.restrict` operation is successful, an exported SCC will contain the additional metadata extension, where previously it would not have been included. Thus, the size of the SCC may be larger than a previous version.
+// If `Xs`._ExpirationDate_ is non-zero, then
+// The value `s2` is even and both `Xs2` and `X[s2+1]` are read as the 128-bit value `X[s2+1] @ Xs2`.
+// `X[s2+1] @ Xs2` has the Metadata Extension format described in <<ACE-Metadata-extension>>, where only the fields corresponding to the filters actually added are considered.
+// and the remaining bits are ignored.
+
+// If `Xs`._ExpirationDate_ is non-zero when `M`._ExpirationDate_ is zero, if the `ace.restrict` operation is successful, an exported SCC will contain the additional Metadata Extension, where previously it would not have been included. Thus, the size of the SCC may be larger than a previous version.
 --
 +
 On RV32:
 
 * `s` must be even, the register pair `X[s]` and `X[s+1]` are read, and `(X[s+1] @ X[s])` replaces `Xs` in the RV64 description.
-* `s2` is a multiple of 4 and both `Xs2`, `X[s2+1]`, `X[s2+2]`, and `X[s2+3]` are read as the 128-bit value `X[s2+3] @ X[s2+2] @ X[s2+1] @ Xs2`, which replaces `X[s2+1] @ Xs2` in the RV64 description.
+// * `s2` is a multiple of 4 and both `Xs2`, `X[s2+1]`, `X[s2+2]`, and `X[s2+3]` are read as the 128-bit value `X[s2+3] @ X[s2+2] @ X[s2+1] @ Xs2`, which replaces `X[s2+1] @ Xs2` in the RV64 description.
 
 _Properties_::
 Possibly modifies state: *YES*. +
@@ -1792,24 +1769,37 @@ Interruptible: *YES*.
 [[ACE-provision-export-import]]
 === Provisioning, Export and Import of Cryptographic Contexts
 
-From the point of view of the system outside the ACE unit, `ace.prov` and `ace.import` appear as a series of sequential memory reads, and `ace.export`, appears as a series of sequential memory writes.
+The length of a PI must be a multiple of 8 bytes.
+The first 8 bytes contain the Metadata Header, as defined in <<ACE-Metadata>>.
+// Optionally, the next 8 bytes contain the Metadata Extension.
+The subsequent bytes form the *Content*—the key material and any algorithm-specific data—whose format and length are specified in <<ACE-algorithms>> for all architected algorithms. The PI Content's size is entirely determined by the _Algorithm_ and _KeyType_ fields within the Metadata.
 
-The only admissible points of interruption of these instructions are the memory read or write operations.
-The instructions may be interrupted because of a memory exception, and any other type of interrupt must wait for the next memory read or write.
-They may resume from the point of interruption only if the control flow is returned to them immediately after the interrupt handler has completed.
-The privileged interrupt handler must ensure that the instruction is restarted only in this situation, and in any other circumstance, including context switching, the instruction must be restarted, in which case if the instruction is `ace.prov` or `ace.import` it must also clear the CR.
-The implementation will also restart any operation if the internal state of the CR is not in a valid interrupted state.
+// NOTE: The resource usage of a CR may be larger than the size of a PI.
+// In ECB schemes (<<ACE-ECB-mode>>) not hardened against SCA, a CR need not contain more than the Metadata and the key, hence their resource usage matches the size of the PI (unless the key is not a multiple of 64 bits).
+//However, for many algorithms, the internal state is larger than the size of the PI.
 
-[NOTE]
-The initial cryptographic phase of `ace.export` is currently architected to be uninterruptible.
-Even if this phase is executed concurrently with other operations, an interrupt handler may need to wait for it to complete before proceeding with any access to the CR.
+{empty}
+(((Cryptographic Context, Sealed)))
+The SCC format is used when exporting a CC from a CR and also to re-import the CC into a CR.
+Its size must be a multiple of 8 bytes.
+It is dependent on the algorithm being used.
+// For the purpose of exporting, the optional Metadata Extension is prepended to the Content.
+// The purpose of this separation is to keep the SIV in the same relative place in an SCC.
 
-[WARNING]
---
-The requirement that the initial cryptographic phase of `ace.export` be uninterruptible could become a performance bottleneck for very long SCCs, or cause timing issues. To address this, we could allow the SIV computation to be interrupted by using odd, or negative, values in `acestart`
+Format of SCC::: {empty}
+`bytes{nbsp}[{nbsp}{nbsp}0 .. 7{nbsp}{nbsp}{nbsp}{nbsp}]{nbsp}{nbsp}` Metadata Header, not encrypted. +
+`bytes{nbsp}[{nbsp}{nbsp}8 .. 23{nbsp}{nbsp}{nbsp}]{nbsp}{nbsp}` SIV produced by the encryption method (128 bits). +
+`bytes{nbsp}[{nbsp}24 .. u+23{nbsp}]{nbsp}{nbsp}` Encrypted Serialized Content of the CR.
 
-// With reference to <<ACE-SCC-export>>, the SIV computation processes 16-byte blocks via POLYVAL. An `acestart` value of 17 would indicate interruption after the metadata has been multiplied by the hashing key; values of 33, 49, and so on would indicate interruption after subsequent content blocks have been added to the partial hash and multiplied by the hashing key. The instruction remains uninterruptible between the final hash multiplication and the subsequent encryption. Consequently, a value of `SCC_content_size() + 17` would signify that the memory write of the metadata was interrupted immediately, replacing a zero `acestart` value.
---
+The entire Metadata and Content are authenticated, but only the Content is encrypted.
+The AEAD method used for this purpose is described in <<ACE-SCC-AEAD>>.
+
+The Metadata of an SCC-both Header and Extension-follows the same fixed architectural format as the Metadata of the PI.
+The Content format—and consequently its length—are algorithm-specific (<<ACE-algorithms>>) and are determined solely by the _Algorithm_, _KeyType_, and _DirectionPolicy_ fields in the Metadata.
+
+NOTE: The size of the SCC can differ significantly from the internal resource usage to store the CC's data in a CR.
+On one hand, there is an overhead due to the SIV.
+On the other hand, in case of threshold implementations, where keys are exported in reconstructed form, or in modes where some derived keys are not exported, the SCC may be smaller than the internal resource usage.
 
 The Serialized Content section under Data Structures in an algorithm specification (<<ACE-algorithms>>) defines the structure of the `content[]` array.
 Architecturally, `content[]` is the serialization of the content of a CR for export as an SCC.
@@ -1825,30 +1815,48 @@ In a threshold implementation, a single key byte in `content[]` may correspond t
 [[ACE-size-functions]]
 ==== Size Functions
 
-Let `mh` be a metadata header.
-// `{fournbsp}{fournbsp}x` <- `mh`._FilterMode_ @ `mh`._KeyType_ @ `mh`._DirectionPolicy_ @ `mh`._Algorithm_ @ `mh`._Format_.
+Let `mh` be a Metadata Header.
 The implementation provides the following functions and constants or an equivalent mechanism:
 
-. `MH_size(mh)` returns the byte length of the metadata header. +
+. `MH_size(mh)` returns the byte length of the Metadata Header. +
 In the current specification, it is always 8.
 . `PI_content_size(mh)` returns the byte length of the content section of a PI.
-   It does not include the length of the optional Metadata Extension block.
-   It depends only on  `mh`._Algorithm_, `mh`._DirectionPolicy_, and `mh`._KeyType_.
-   It does not depend on `mh`._FilterMode_.
+//   It does not include the length of the optional Metadata Extension block.
+   It depends only on `mh`._Algorithm_, `mh`._DirectionPolicy_, and `mh`._KeyType_.
 . `SCC_content_size(mh)` returns the byte length of the fixed part of the content section of an SCC.
    It depends only on  `mh`._Algorithm_, `mh`._DirectionPolicy_, and `mh`._KeyType_.
-   It does not depend on `mh`._FilterMode_.
-   It does not include the length of the variable part of the content of length _ExtraContent_ * 8 bytes, nor the length of the optional Metadata Extension block.
-.  `ME_size(mh)` returns the byte length of the metadata extension. +
-    In the current specification, it is 0 when `mh`._FilterMode_ is 0, and it is 8 otherwise.
+   It does not include the length of the variable part of the content of length _ExtraContent_ * 8 bytes.
+// nor the length of the optional Metadata Extension block.
+//.  `ME_size(mh)` returns the byte length of the Metadata Extension. +
+//    In the current specification, it is 0 when `mh`._ExpirationDate_ is 0, and it is 8 otherwise.
 
 The total size in bytes of a PI is therefore
 
-`{fournbsp}{fournbsp} MH_size(mh)` + `ME_size(mh)` + `PI_content_size(mh)`,
+`{fournbsp}{fournbsp} MH_size(mh)` + `PI_content_size(mh)`,
+// `{fournbsp}{fournbsp} MH_size(mh)` + `ME_size(mh)` + `PI_content_size(mh)`,
 
 and the total size in bytes of an SCC is
 
-`{fournbsp}{fournbsp} MH_size(mh)` + 16 + `ME_size(mh)` + `SCC_content_size(mh)` + _ExtraContent_ * 8.
+`{fournbsp}{fournbsp} MH_size(mh)` + 16 `SCC_content_size(mh)` + _ExtraContent_ * 8.
+// `{fournbsp}{fournbsp} MH_size(mh)` + 16 + `ME_size(mh)` + `SCC_content_size(mh)` + _ExtraContent_ * 8.
+
+[[ACE-interruption-points]]
+==== Interruption Points
+
+Memory read or write operations are the only admissible points of interruption the provisioning, export and import operations.
+The instructions may be interrupted because of a memory exception, and any other type of interrupt must wait for the next memory read or write.
+They may resume from the point of interruption only if the control flow is returned to them immediately after the interrupt handler has completed.
+The privileged interrupt handler must ensure that the instruction is restarted only in this situation, and in any other circumstance, including context switching, the instruction must be restarted, in which case if the instruction is `ace.prov` or `ace.import` it must also clear the CR.
+The implementation will also restart any operation if the internal state of the CR is not in a valid interrupted state.
+
+[WARNING]
+====
+The initial cryptographic phase of `ace.export` is currently architected to be uninterruptible.
+Even if this phase is executed concurrently with other operations, an interrupt handler may need to wait for it to complete before proceeding with any access to the CR.
+
+The requirement that the initial cryptographic phase of `ace.export` be uninterruptible could become a performance bottleneck for very long SCCs, or cause timing issues. To address this, we could allow the SIV computation to be interrupted by using odd, or negative, values in `acestart`
+====
+
 
 [[ACE-provision]]
 ==== Provisioning
@@ -1856,31 +1864,31 @@ and the total size in bytes of an SCC is
 We start with the algorithm performed by `ace.prov`, which reads a PI and uses it to provision a CR.
 
 [[ACE-provision-listing]]
-.Provisioning a CR with metadata and content
+.Provisioning a CR with Metadata and content
 []
 ----
 M : array of bytes // in memory
 
 // PREEMPTIBLE WITH `acestart` IN [0 .. 7]
-metadata : bits(64) = M[0 .. 7]
-z ← PI_content_size(metadata[31:0]);
+Metadata : bits(64) = M[0 .. 7]
+z ← PI_content_size(Metadata[31:0]);
 
 if (z == 0)
    error ace_err_unimplemented;
 
-if (there is not enough memory for the algorithm encoded in the metadata)
+if (there is not enough memory for the algorithm encoded in the Metadata)
     error ace_err_memory;
 
-if (metadata is inconsistent)
+if (Metadata is inconsistent)
   error ace_err_invalid_value;
 
-- Complete metadata parsing.
+- Complete Metadata parsing.
 // NEXT OPERATION PREEMPTIBLE WITH `acestart` IN [8 .. Z+7]
 - Sequentially read and parse the z bytes at M+8.
 ----
 
 [[ACE-SCC-AEAD]]
-==== Export
+==== Export and Import
 
 The AEAD algorithm used to export and import CRs is an adaptation of AES-GCM-SIV cite:[DBLP-journals-iacr-GueronLL17,RFC8452].
 
@@ -1889,23 +1897,24 @@ AES-GCM-SIV has been chosen because it only required single passes of data in ma
 GCM uses also a single pass but requires separate nonce and tag values, increasing the size of the exported data by one block.
 
 We define the Key Derivation (<<ACE-SCC-RFC8452-derivation>>) function first.
-It is essentially the same function as in RFC8452, but the zeros in each AES256 call are replaced by the 125-bit Locality Secrets.
-(or 126 with <<ACE-SCC-alt-derivation>>).
+// It is essentially the same function as in RFC8452, but the zeros in each AES256 call are replaced by the 125-bit Locality Secrets.
+// (or 126 with <<ACE-SCC-alt-derivation>>).
 The generation of an SCC from a CR (<<ACE-SCC-export>>) and the import of an SCC into a CR (<<ACE-SCC-import>>) are defined next.
 
 [[ACE-SCC-RFC8452-derivation]]
 .RFC8452 Key Derivation
 []
 ----
-function KeyDeriv(key : bits(256), L : bits(125)) = {
+function KeyDeriv(key : bits(256)) = {
   struct {
-    AESE256(key, (L @ 0b101))[63:0] @ AESE256(key, (L @ 0b100))[63:0] @
-    AESE256(key, (L @ 0b011))[63:0] @ AESE256(key, (L @ 0b010))[63:0],
-    AESE256(key, (L @ 0b001))[63:0] @ AESE256(key, (L @ 0b000))[63:0]
+    AESE256(key, (zeros(125) @ 0b101))[63:0] @ AESE256(key, (zeros(125) @ 0b100))[63:0] @
+    AESE256(key, (zeros(125) @ 0b011))[63:0] @ AESE256(key, (zeros(125) @ 0b010))[63:0],
+    AESE256(key, (zeros(125) @ 0b001))[63:0] @ AESE256(key, (zeros(125) @ 0b000))[63:0]
   }
 }
 ----
 
+////
 An alternative key derivation (<<ACE-SCC-alt-derivation>>) method halves the number of AES256 calls by using, essentially, a CMAC based random generation.
 // The scheme is secure for up to 2^126^ encryption key generations with the same CSK.
 
@@ -1929,14 +1938,19 @@ function KeyDeriv(key : bits(256), L : bits(126)) = {
   }
 }
 ----
+////
 
 NOTE: Due to the computational cost of the derivation functions, implementations may cache recently used derived keys indexed by Locality.
+
+The export and import algorithms are the nonced version of the AES-GCM-SIV algorithm.
+However, we use the Locality as the nonce, which completely changes the encryption and authentication values.
+
 
 [[ACE-SCC-export]]
 .Generation of an SCC from a CR
 []
 ----
-& mh : bits(64) = CR.metadata_header;         // from the CR
+& mh : bits(64) = CR.Metadata_header;         // from the CR
 CR.exporting : bool;       // "hidden" per-CR ACE unit state
 local SIV : bits(128);
 local tmp : bits(128);
@@ -1948,29 +1962,26 @@ local auth_key : bits(128);
 // will set it to false again, to force a resumption of a restart
 CR.exporting = true;
 
-// Note: CR.content[] here includes the optional metadata extension
-// at the beginning and the optional extra content at the end
+// Note: CR.content[] includes the optional extra content at the end
 
 z : int ← SCC_content_size(mh);
 z ← z + ME_size(mm);
 z ← z + mh.ExtraContent * 8;
 CR.content : array[z] of bytes;
 
-// In external memory: metadata header, then SIV, then content
+// In external memory: Metadata Header, then SIV, then content
 // where content is extended as described above
 
 M : array[MH_size(mh) + 16 + z] of bytes;
 let last_block_fractional : Boolean ← z % 16 != 0;
 let num_blocks : int ← ceil(z / 16);
 
-if (mh.Locality == 15) then {
-    {enc_key, auth_key} = KeyDeriv(CSK, zeros(125));
-} else
-    {enc_key, auth_key} = KeyDeriv(CSK, LST[mh.Locality]);
-}
+{enc_key, auth_key} ← KeyDeriv(CSK);
+L : list ← {} if (mh.Locality == 0) else get_locality(mh.Locality)
 
-tmp ← POLYVAL(auth_key, zeros(64) @ mh @ CR.content[]);
-SIV ← AESE(enc_key, 0 @ tmp[126:0]));
+// Include Locality "prefix" (zero or more 128-bit blocks)
+tmp ← POLYVAL(auth_key, L @ zeros(64) @ mh @ CR.content[]);
+SIV ← AESE(enc_key, 0 @ tmp[126:0]);
 
 // FOLLOWING MEMORY WRITE PREEMPTIBLE, `acestart` FROM 0 TO 7
 M[0 .. 7] ← mh;
@@ -1992,12 +2003,9 @@ foreach(i from 0 to num_blocks - 1) {
 CR.exporting = false;
 ----
 
-[[ACE-SCC-AEAD-import]]
-==== Import
-
 The import algorithm needs some special care:
 
-* The first block read from memory by the operation is the metadata header block `mh`:
+* The first block read from memory by the operation is the Metadata Header `mh`:
  ** If strictly fewer than 4 bytes are read before the instruction is interrupted, ACE leaves `acestart` at 0, and the instruction will be restarted upon resumption.
  ** If 4 bytes or more have been read, the value of `mh.StateNumber` in the SCC is known. In this case, the instruction may be restarted with `acestart` {ge} 4 recording the amount of data read.
 
@@ -2025,7 +2033,7 @@ local SIV : bits(128);
 local tmp : bits(128);
 
 // FOLLOWING MEMORY READ PREEMPTIBLE, `acestart` FROM 0 TO 7
-tmp[63:0] ← M[0 .. 7]; // read metadata header
+tmp[63:0] ← M[0 .. 7]; // read Metadata Header
 
 // CR.importing is always false except during import.
 // During import, the original StateNumber is saved and temporarily replaced in the CR
@@ -2036,11 +2044,11 @@ tmp[63:0] ← M[0 .. 7]; // read metadata header
 // interrupt was caused by a memory exception, the instruction can be resumed.
 
 CR.saved_SN : bits(4) ← tmp[63:0].StateNumber;
-CR.metadata_header ← tmp[63:0];
-CR.metadata_header.StateNumber ← ace_state_invalid;
+CR.Metadata_header ← tmp[63:0];
+CR.Metadata_header.StateNumber ← ace_state_invalid;
 importing ← true;
 
-& mh = CR.metadata_header;
+& mh = CR.Metadata_header;
 
 z ← SCC_content_size(mh);
 z ← z + ME_size(mh);
@@ -2050,21 +2058,25 @@ if (z == 0) {
     error ace_err_unimplemented;
 }
 
-if (there is not enough memory for the algorithm encoded in the metadata) {
+if (there is not enough memory for the algorithm encoded in the Metadata) {
     error ace_err_memory;
 }
 num_blocks ← ceil(z / 16);
 last_block_fractional : Boolean ← (z % 16 != 0);
 
-if (mh.Locality == 15) then {
-    {enc_key, auth_key} = KeyDeriv(CSK, zeros(125));
-} else {
-    {enc_key, auth_key} = KeyDeriv(CSK, LST[mh.Locality]);
+{enc_key, auth_key} ← KeyDeriv(CSK);
+
+// Absorb Locality "prefix" (zero or more 128-bit blocks)
+tmp ← zeros(128);
+L : list ← {} if (mh.Locality == 0) else get_locality(mh.Locality);
+foreach(i from 1 to length(L)) {
+  tmp ← tmp xor {content[i*16 .. 15+i*16]};
+  tmp ← Montmul(tmp, auth_key);
 }
 
 // FOLLOWING MEMORY READ PREEMPTIBLE, `acestart` FROM 8 TO 23
 SIV ← M[8 .. 23];
-tmp ← zeros(64) @ mh;
+tmp ← tmp xor zeros(64) @ mh;
 tmp ← Montmul(tmp, auth_key);
 
 foreach(i from 0 to num_blocks - 1) {
@@ -2081,8 +2093,8 @@ foreach(i from 0 to num_blocks - 1) {
    }
    tmp ← Montmul(tmp, auth_key);
 }
+tmp ← AESE(enc_key, 0 @ tmp[126:0]);
 
-tmp ← AESE(enc_key, 0 @ tmp[126:0]); // tag
 if (tmp != SIV) then { error ace_err_import_auth; }
 
 - Now the content can be deserialized.
@@ -2125,7 +2137,7 @@ _This section is currently non-normative._
 Instructions `ace.prov`, `ace.export`, `ace.import`, `ace.input`, and `ace.output` support long inputs and outputs.
 To reduce hardware complexity, these operations can be trapped and emulated in software.
 (((ACE, trappable instruction)))
-Upon a trap, the handler identifies the trapped instruction and uses `ace.size` on the metadata to determine the size of the data to be transferred.
+Upon a trap, the handler identifies the trapped instruction and uses `ace.size` on the Metadata to determine the size of the data to be transferred.
 Then, the emulation uses custom instructions to move data between the ACE unit and the CPU.
 Three types of supporting operations are required:
 
@@ -2136,7 +2148,7 @@ Three types of supporting operations are required:
  * A corresponding “`ace.mv`” instruction that exports a specified number of bytes from a CR or from the input buffer to a GPR or vector register.
    The behavior of `ace.size` will be similar to that of the `ace.mv` instruction, but it will count the number of bytes to be exported.
  * An “`ace.close`” instruction to suspend or finalize the procedure.
-   If executed before all bytes are transferred, the CR state matches that of an interrupted monolithic instruction, including any special value of the _StateNumber_ metadata field and the value of `acestart`. If executed after all bytes are transferred, it also performs any final cryptographic operations, such as authenticating the CR.
+   If executed before all bytes are transferred, the CR state matches that of an interrupted monolithic instruction, including any special value of the _StateNumber_ Metadata field and the value of `acestart`. If executed after all bytes are transferred, it also performs any final cryptographic operations, such as authenticating the CR.
 
 All three instructions can be implemented as CSR RW instructions, for instance:
 
@@ -2211,7 +2223,7 @@ Data Structures:::
 These include:
 
 . *Provisioning Input*:
-The data following the metadata header block in the PI to `ace.prov`, such as keys and other required secrets.
+The data following the Metadata Header in the PI to `ace.prov`, such as keys and other required secrets.
 Fields are listed in the order they appear in the PI, each with its length.
 
 . *Internal State*:
@@ -2219,9 +2231,9 @@ Information that must be maintained in the internal state of a CC.
 The fields are unordered and their lengths may differ from those listed, for example in threshold or fault-tolerant implementations where redundancy is added.
 
 . *Serialized Content*:
-The data that follows the metadata header block in the plaintext portion of an SCC.
+The data that follows the Metadata Header in the plaintext portion of an SCC.
 The fields are listed in the order they appear in an SCC, each with its length.
-If there is a metadata extension block, it is prepended to the serialized content.
+//If there is a Metadata Extension block, it is prepended to the serialized content.
 --
 +
 
@@ -2366,7 +2378,7 @@ An implementation must wait before accessing a CR that is still asynchronously b
 
 Any CC with its algorithm implemented as a threshold will always provision, import and export _all_ its keys and secrets as _single_, _reconstructed_ _shares_.
 
-The PI and SCC formats will be the same as for the non-threshold implementation variants of the same algorithm, with the only difference being the value of the Side Channel Protection bits in the metadata.
+The PI and SCC formats will be the same as for the non-threshold implementation variants of the same algorithm, with the only difference being the value of the Side Channel Protection bits in the Metadata.
 
 For the purpose of architecture specification, all values are also always represented as a single share in this document.
 Threshold implementations are simply implementation variants of the exact same algorithm.
@@ -2443,8 +2455,7 @@ Data Structures:::
 [%autowidth,cols="^,<,<",options="header"]
 |===
 | Pos. | Size in Bytes   | Field
-|   i  | `ME_size`       | Metadata Extension
-|  ii  | `k`/8 or 8      | Key or System Key index
+|   i  | `k`/8 or 8      | Key or System Key index
 |===
 --
 +
@@ -2458,8 +2469,7 @@ Data Structures:::
 [%autowidth,cols="^,<,<",options="header"]
 |===
 |  Pos. | Size in Bytes   | Field
-|   i   | `ME_size`       | Metadata Extension
-|  ii   | `k`/8 or 8      | Key or System Key index
+|   i   | `k`/8 or 8      | Key or System Key index
 |===
 --
 +
@@ -2557,8 +2567,7 @@ Data Structures:::
 [%autowidth,cols="^,<,<",options="header"]
 |===
 | Pos. | Size in Bytes   | Field
-|   i  | `ME_size`       | Metadata Extension
-|  ii  | `k`/8 or 8      | `key` or System Key index
+|   i  | `k`/8 or 8      | `key` or System Key index
 |===
 --
 +
@@ -2574,10 +2583,9 @@ Data Structures:::
 [%autowidth,cols="^,<,<",options="header"]
 |===
 |  Pos. | Size in Bytes   | Field
-|    i  | `ME_size`       | Metadata Extension
-|   ii  | `k`/8 or 8      | `key` or System Key index
-|  iii  | `n`/8           | `IV`
-|   iv  | `j`/8           | `ctr`
+|    i  | `k`/8 or 8      | `key` or System Key index
+|   ii  | `n`/8           | `IV`
+|  iii  | `j`/8           | `ctr`
 |===
 --
 +
@@ -2679,9 +2687,8 @@ Data Structures:::
 [%autowidth,cols="^,<,<",options="header"]
 |===
 |  Pos. | Size in Bytes   | Field
-|    i  | `ME_size`      | Metadata Extension
-|   ii  | `k`/8 or 8      | `key1` or System Key index
-|  iii  | `k`/8 or 0      | `key2` or System Key index for `key1` given
+|   i   | `k`/8 or 8      | `key1` or System Key index
+|  ii   | `k`/8 or 0      | `key2` or System Key index for `key1` given
 |===
 --
 +
@@ -2697,10 +2704,9 @@ Data Structures:::
 [%autowidth,cols="^,<,<",options="header"]
 |===
 | Pos. | Size in Bytes   | Field
-|    i | `ME_size`      | Metadata Extension
-|   ii | `k`/8 or 8      | `key1` or System Key index
-|  iii | `k`/8 or 0      | `key2` or System Key index for `key1` given
-|   iv | `b`/8           | `mask`
+|   i  | `k`/8 or 8      | `key1` or System Key index
+|  ii  | `k`/8 or 0      | `key2` or System Key index for `key1` given
+| iii  | `b`/8           | `mask`
 |===
 --
 +
@@ -2804,8 +2810,7 @@ Data Structures:::
 [%autowidth,cols="^,<,<",options="header"]
 |===
 | Pos. | Size in Bytes   | Field
-|   i  | `ME_size`       | Metadata Extension
-|  ii  | `k`/8 or 8      | `key` or System Key index
+|  i   | `k`/8 or 8      | `key` or System Key index
 |===
 --
 +
@@ -2820,9 +2825,8 @@ Data Structures:::
 [%autowidth,cols="^,<,<",options="header"]
 |===
 | Pos. | Size in Bytes   | Field
-|   i  | `ME_size`       | Metadata Extension
-|  ii  | `k`/8 or 8      | `key` or System Key index
-| iii  | `t`/8           | `tweak`
+|   i  | `k`/8 or 8      | `key` or System Key index
+|  ii  | `t`/8           | `tweak`
 |===
 --
 +
@@ -2871,8 +2875,7 @@ Data Structures:::
 [%autowidth,cols="^,<,<",options="header"]
 |===
 | Pos. | Size in Bytes   | Field
-|   i  | `ME_size`      | Metadata Extension
-|  ii  | `k`/8 or 8      | `key` or System Key index
+|   i  | `k`/8 or 8      | `key` or System Key index
 |===
 --
 +
@@ -2888,10 +2891,9 @@ Data Structures:::
 [%autowidth,cols="^,<,<",options="header"]
 |===
 |  Pos. | Size in Bytes   | Field
-|    i  | `ME_size`       | Metadata Extension
-|   ii  | `k`/8 or 8      | `key` or System Key index
-|  iii  | `b`/8           | `ctr`
-|   iv  | `b`/8           | `tag`
+|   i   | `k`/8 or 8      | `key` or System Key index
+|  ii   | `b`/8           | `ctr`
+| iii   | `b`/8           | `tag`
 |===
 --
 +
@@ -3160,9 +3162,8 @@ The differences between GCM and GCM with Set IV start with the format of the Pro
 [%autowidth,cols="^,<,<",options="header"]
 |===
 |  Pos. | Size in Bytes   | Field
-|   i   | `ME_size`       | Metadata Extension
-|  ii   | `k`/8 or 8      | `key` or System Key index
-| iii   | 3``b``/32       | `IV`, i.e., bits [b-1:b/4] of the counter
+|   i   | `k`/8 or 8      | `key` or System Key index
+|  ii   | 3``b``/32       | `IV`, i.e., bits [b-1:b/4] of the counter
 |===
 --
 +
@@ -3221,8 +3222,7 @@ Data Structures:::
 [%autowidth,cols="^,<,<",options="header"]
 |===
 | Pos. | Size in Bytes   | Field
-|   i  | `ME_size`       | Metadata Extension
-|  ii  | `k`/8 or 8      | `key` or System Key index
+|   i  | `k`/8 or 8      | `key` or System Key index
 |===
 --
 +
@@ -3245,12 +3245,11 @@ The public `SIV` value is computed by clearing the most significant bit of `tag`
 [%autowidth,cols="^,<,<",options="header"]
 |===
 |  Pos. | Size in Bytes   | Field
-|    i  | `ME_size`       | Metadata Extension
-|   ii  | `k`/8 or 8      | `key` or System Key index
-|  iii  | 3``b``/32       | `nonce`
-|   iv  | `b`/32          | `ctr`
-|    v  | `b`/8           | `tag`
-|   vi  | `b`/8           | `SIV`
+|    i  | `k`/8 or 8      | `key` or System Key index
+|   ii  | 3``b``/32       | `nonce`
+|  iii  | `b`/32          | `ctr`
+|   iv  | `b`/8           | `tag`
+|    v  | `b`/8           | `SIV`
 |===
 --
 +
@@ -3524,8 +3523,7 @@ Data Structures:::
 [%autowidth,cols="^,<,<",options="header"]
 |===
 | Pos. | Size in Bytes   | Field
-|   i  | `ME_size`       | Metadata Extension
-|  ii  | `k`/8 or 8      | `key` or System Key index
+|   i  | `k`/8 or 8      | `key` or System Key index
 |===
 --
 +
@@ -3542,17 +3540,16 @@ Data Structures:::
 [%autowidth,cols="^,<,<",options="header"]
 |===
 |  Pos. | Size in Bytes          | Field
-|    i  | `ME_size`              | Metadata Extension
-|   ii  | `k`/8 or 8             | `key` or System Key index
-|  iii  |  `b`/8                 | `N`
-|   iv  |  `b`/8                 | `L` (only `u+1` bits used)
-|    v  |  `b`/8                 | `offset`
-|   vi  |  `b`/8                 | `hash_A`
-|  vii  |  `b`/8                 | `hash_P`
-| viii  |  `2`                   | `tag_len`
-|   ix  |  `2`                   | `last_blk_len`
-|    x  |  `2`                   | `N_len`
-|   xi  |  `2`                   | Padding
+|    i  | `k`/8 or 8             | `key` or System Key index
+|   ii  |  `b`/8                 | `N`
+|  iii  |  `b`/8                 | `L` (only `u+1` bits used)
+|   iv  |  `b`/8                 | `offset`
+|    v  |  `b`/8                 | `hash_A`
+|   vi  |  `b`/8                 | `hash_P`
+|  vii  |  `2`                   | `tag_len`
+| viii  |  `2`                   | `last_blk_len`
+|   ix  |  `2`                   | `N_len`
+|    x  |  `2`                   | Padding
 |===
 --
 +
@@ -3858,8 +3855,7 @@ Data Structures:::
 [%autowidth,cols="^,<,<",options="header"]
 |===
 | Pos. | Size in Bytes   | Field
-|   i  | `ME_size`       |  Metadata Extension
-|  ii  | `k`/8 or 8      | `key` or System Key index
+|   i  | `k`/8 or 8      | `key` or System Key index
 |===
 --
 +
@@ -3875,10 +3871,9 @@ Data Structures:::
 [%autowidth,cols="^,<,<",options="header"]
 |===
 |  Pos. | Size in Bytes   | Field
-|    i  | `ME_size`       | Metadata Extension
-|   ii  | `k`/8 or 8      | `key` or System Key index
-|  iii  | `b`/8           | `hash`
-|   iv  | `8`             | `last_block_len`
+|    i  | `k`/8 or 8      | `key` or System Key index
+|   ii  | `b`/8           | `hash`
+|  iii  | `8`             | `last_block_len`
 |===
 --
 +
@@ -4016,8 +4011,7 @@ Data Structures:::
 [%autowidth,cols="^,<,<",options="header"]
 |===
 | Pos. | Size in Bytes            | Field
-|  i   | `ME_size`                | Metadata Extension
-|  ii  | If keyed: `k`/8 or 8     | `key` or System Key index
+|   i  | If keyed: `k`/8 or 8     | `key` or System Key index
 |===
 --
 +
@@ -4038,13 +4032,12 @@ Data Structures:::
 [cols="^6%,^19%,<25%,<50%",options="header"]
 |===
 |  Pos. | Size in Bytes            | Field                       | Notes
-|    i  | `ME_size`                | Metadata Extension          | --
-|   ii  | If keyed: `k`/8 or 8     | `key` or System Key index   | --
-|  iii  | `n`/8                    | `state`                     | --
-|   iv  | `2`                      | `last_block_len`            | Only if this Hash/MAC has special internal treatment for a fractional last block that goes beyond padding and appending the length, which are handled by user software. Otherwise, this is zero.
-|    v  | `2`                      | `block_base`                | Amount of data stored so far into `block`.  Only if used by the algorithm, else zero padding.
-|   vi  | `4`                      | `cumul_len`                 | Cumulative length of all data absorbed so far. Only if the algorithm must process and incorporate it in the hash on its own, else zero padding.
-|  vii  | `b`/8                    | `block`                     | It is included it the SCC only if there is a partial block, and the block must be stored separately from the `state`, and exclude it when not.
+|    i  | If keyed: `k`/8 or 8     | `key` or System Key index   | --
+|   ii  | `n`/8                    | `state`                     | --
+|  iii  | `2`                      | `last_block_len`            | Only if this Hash/MAC has special internal treatment for a fractional last block that goes beyond padding and appending the length, which are handled by user software. Otherwise, this is zero.
+|   iv  | `2`                      | `block_base`                | Amount of data stored so far into `block`.  Only if used by the algorithm, else zero padding.
+|    v  | `4`                      | `cumul_len`                 | Cumulative length of all data absorbed so far. Only if the algorithm must process and incorporate it in the hash on its own, else zero padding.
+|   vi  | `b`/8                    | `block`                     | It is included it the SCC only if there is a partial block, and the block must be stored separately from the `state`, and exclude it when not.
 We reuse the most significant bit of the `state` field to store this information.
 (In theory, we could include only the part filled so far, but this would complicate the parsing of an SCC.)
 |===
@@ -4181,7 +4174,7 @@ Data Structures:::
 [%autowidth,cols="^,<,<",options="header"]
 |===
 | Pos. | Size in Bytes   | Field
-|  i   | `ME_size`      | Metadata Extension
+| --   | --              | --
 |===
 --
 +
@@ -4200,11 +4193,10 @@ Data Structures:::
 [%autowidth,cols="^,<,<",options="header"]
 |===
 | Pos. | Size in Bytes   | Field
-|   i  | `ME_size`      | Metadata Extension
-|  ii  | 200             | `state`
-| iii  | 2               | `last_block_len`
-|  iv  | 2               | `block_base`
-|   v  | 4               | Padding
+|   i  | 200             | `state`
+|  ii  | 2               | `last_block_len`
+| iii  | 2               | `block_base`
+|  iv  | 4               | Padding
 |===
 --
 +
@@ -4295,16 +4287,15 @@ Data Structures:::
 [%autowidth,cols="^,<,<",options="header"]
 |===
 | Pos. | Size in Bytes   | Field
-|    i | `ME_size`      | Metadata Extension
-|   ii | 16 or 8         | `key` or System Key index
-|  iii | 8               | `state`[0]
-|   iv | 8               | `state`[1]
-|    v | 8               | `state`[2]
-|   vi | 8               | `state`[3]
-|  vii | 8               | `state`[4]
-| viii | 2               | `last_block_len`
-|   ix | 2               | `tag_len`
-|    x | 4               | Padding
+|    i | 16 or 8         | `key` or System Key index
+|   ii | 8               | `state`[0]
+|  iii | 8               | `state`[1]
+|   iv | 8               | `state`[2]
+|    v | 8               | `state`[3]
+|   vi | 8               | `state`[4]
+|  vii | 2               | `last_block_len`
+| viii | 2               | `tag_len`
+|   ix | 4               | Padding
 |===
 --
 +
@@ -4478,9 +4469,8 @@ In this case the State _set_aux_value_ is skipped, and the PI has the following 
 [%autowidth,cols="^,<,<",options="header"]
 |===
 | Pos. | Size in Bytes   | Field
-|   i  | `ME_size`       | Metadata Extension
-|  ii  | 16 or 8         | `key` or System Key index
-| iii  | 16              | `nonce`
+|   i  | 16 or 8         | `key` or System Key index
+|  ii  | 16              | `nonce`
 |===
 --
 +
@@ -4506,9 +4496,8 @@ This variant is described as follows:
 [%autowidth,cols="^,<,<",options="header"]
 |===
 | Pos. | Size in Bytes   | Field
-|   i  | `ME_size`      | Metadata Extension
-|  ii  | 16 or 8         | `K1` or System Key index
-| iii  | 16 or 0         | `K2` or System Key index in `K1`
+|   i  | 16 or 8         | `K1` or System Key index
+|  ii  | 16 or 0         | `K2` or System Key index in `K1`
 |===
 --
 +
@@ -4525,16 +4514,15 @@ This variant is described as follows:
 [%autowidth,cols="^,<,<",options="header"]
 |===
 |  Pos. | Size in Bytes   | Field
-|    i  | `ME_size`      | Metadata Extension
-|   ii  | 16 or 8         | `K1` or System Key index
-|  iii  | 16 or 0         | `K2` or System Key index in `K1`
-|   iv  | 8               | `state`[0]
-|    v  | 8               | `state`[1]
-|   vi  | 8               | `state`[2]
-|  vii  | 8               | `state`[3]
-| viii  | 8               | `state`[4]
-|   ix  | 2               | `tag_len`
-|    x  | 6               | Padding
+|    i  | 16 or 8         | `K1` or System Key index
+|   ii  | 16 or 0         | `K2` or System Key index in `K1`
+|  iii  | 8               | `state`[0]
+|   iv  | 8               | `state`[1]
+|    v  | 8               | `state`[2]
+|   vi  | 8               | `state`[3]
+|  vii  | 8               | `state`[4]
+| viii  | 2               | `tag_len`
+|   ix  | 6               | Padding
 |===
 --
 +
@@ -4560,7 +4548,7 @@ Data Structures:::
 [%autowidth,cols="^,<,<",options="header"]
 |===
 | Pos. | Size in Bytes   | Field
-|  i   | `ME_size`      | Metadata Extension
+|  --  | --              | --
 |===
 --
 +
@@ -4575,14 +4563,13 @@ Data Structures:::
 [%autowidth,cols="^,<,<",options="header"]
 |===
 |  Pos. | Size in Bytes   | Field
-|    i  | `ME_size`      | Metadata Extension
-|   ii  | 8               | `state`[0]
-|  iii  | 8               | `state`[1]
-|   iv  | 8               | `state`[2]
-|    v  | 8               | `state`[3]
-|   vi  | 8               | `state`[4]
-|  vii  | 1               | `countdown` (from 3 down to 0)
-| viii  | 7               | Padding
+|    i  | 8               | `state`[0]
+|   ii  | 8               | `state`[1]
+|  iii  | 8               | `state`[2]
+|   iv  | 8               | `state`[3]
+|    v  | 8               | `state`[4]
+|   vi  | 1               | `countdown` (from 3 down to 0)
+|  vii  | 7               | Padding
 |===
 --
 +
@@ -4703,7 +4690,7 @@ Data Structures:::
 --
 +
 
-NOTE: In the metadata, _only_ the curve is embedded in Algorithm.
+NOTE: In the Metadata, _only_ the curve is embedded in Algorithm.
 The _DirectionPolicy_ field determines whether signature generation (bit 12) and signature verification (bit 13) are allowed
 All four combinations are admissible.
 
@@ -4732,42 +4719,41 @@ All four combinations are admissible.
 [cols="^5%,<32%,<60",width="100%",options="header"]
 |===
 |  Pos. | Size in Bytes   | Field
-|  i    | `ME_size`       | Metadata Extension
-|  ii   | 2               |  Bit 0: `HasGenerator` +
+|   i   | 2               |  Bit 0: `HasGenerator` +
 Bit 1: `HasScalar` +
 Bit 2: `HasPublicKey` +
 Bit 3: `HasHash` +
 Bit 4: `HasSignature` +
 Bit 5: `HasRandomNumber`
-|  iii  | 2               | `Progress`/`input_base`
-|  iv   | 2               | `block_base`
-|  v    | 2               | Padding
-|  vi   | 2``b``/8        | `Generator`, X coordinate
-|  vii  | 2``b``/8        | `Generator`, Y coordinate
-|  viii | `b`/8           | `Scalar`: `b`-bit string. Can be the private key.
+|   ii  | 2               | `Progress`/`input_base`
+|  iii  | 2               | `block_base`
+|  iv   | 2               | Padding
+|  v    | 2``b``/8        | `Generator`, X coordinate
+|  vi   | 2``b``/8        | `Generator`, Y coordinate
+|  vii  | `b`/8           | `Scalar`: `b`-bit string. Can be the private key.
 |===
 
-`SCC_content_size()` returns only the length of the content from Position i to Position viii.
+`SCC_content_size()` returns only the length of the content from Position i to Position vii.
 
-The size of following fields is included in the _ExtraContent_ field of the metadata header.
+The size of following fields is included in the _ExtraContent_ field of the Metadata Header.
 
 [cols="^5%,<32%,<60",width="100%",options="header"]
 |===
 |  Pos. | Size in Bytes                             | Field
-|   ix  | If `mh`._ExtraContent_ != 0: 8, else: 0   |  `acemarchid`
-|   x   | If `HasPublicKey`: `b`/8, else: 0         | `PublicKey`, X coordinate.
-|   xi  | If `HasPublicKey`: `b`/8, else: 0         | `PublicKey`, Y coordinate.
-|   xii | If `HasSignature`: `b`/8, else: 0         | `Signature`, R value.
-|  xiii | If `HasSignature`: `b`/8, else: 0         | `Signature`, S value.
-|  xiv  | If `HasHash`: `h`/8, else: 0              | `Hash`: a `h`-bit string representing the hash.
-|  xv   | If `HasRandomNumber`: `h`/8, else: 0      | `RandomNumber`.
-|  xvi  | (variable)                                | Additional data from the *Internal State*..
+| viii  | If `mh`._ExtraContent_ != 0: 8, else: 0   |  `acemarchid`
+|   ix  | If `HasPublicKey`: `b`/8, else: 0         | `PublicKey`, X coordinate.
+|    x  | If `HasPublicKey`: `b`/8, else: 0         | `PublicKey`, Y coordinate.
+|   xi  | If `HasSignature`: `b`/8, else: 0         | `Signature`, R value.
+|  xii  | If `HasSignature`: `b`/8, else: 0         | `Signature`, S value.
+| xiii  | If `HasHash`: `h`/8, else: 0              | `Hash`: a `h`-bit string representing the hash.
+|  xiv  | If `HasRandomNumber`: `h`/8, else: 0      | `RandomNumber`.
+|   xv  | (variable)                                | Additional data from the *Internal State*..
 |===
 
 The `HasRandomNumber` flag is set and the `RandomNumber` field is used only during signature generation.
 `RandomNumber` is exported only if the signature operation is interrupted.
 
-The size in bytes of Fields ix to xv is:
+The size in bytes of Fields vii to xiv is:
 
 `{fournbsp}{fournbsp}` `varlen` <- 8 + (`HasPublicKey` != 0) {interpunct} 2``b``/8 + (`HasSignature` != 0) {interpunct} 2``b``/8 + +
 `{fournbsp}{fournbsp}{fournbsp}{fournbsp}{fournbsp}{fournbsp}{fournbsp}` + (`HasHash` != 0) {interpunct} ``h``/8 + (`HasRandomNumber` != 0) {interpunct} ``h``/8.
@@ -4803,7 +4789,7 @@ State Machine::: {empty}
 If the operations are interrupted, they are in the transient state.
 When they are completed, they are in the non-transient state.
 In this state, these states may require to save additional data.
-* The format of the additional data is implementation defined. The data itself is saved at Position xvi in the content, and its length is included in the _ExtraContent_ field of the metadata header.
+* The format of the additional data is implementation defined. The data itself is saved at Position xvi in the content, and its length is included in the _ExtraContent_ field of the Metadata Header.
 * If there is a `acemarchid` mismatch, both `RandomNumber` (Position xv) andthe additional data at Position xvi are discarded, and the operation is restarted.
 --
 +
@@ -4847,12 +4833,12 @@ the Boolean variable ``Has``__Var__ is set when all operations required in State
 
 _This section is informative and non-normative._
 
-ACE provides different architected layers of usage control:
+ACE provides a layer of usage control based on the use of Localities.
 
-. CC usage can optionally be constrained by filters configured at various modes and that must be matched at lower-privileged modes against values embedded in the metadata extension. The filters could correspond to `scontext`, `hcontext`, `mcontext` (respectively 31, 14, and 14 bits long) but longer CSRs could be be defined in their place to allow matching against longer string.
+- We can suppose to add an optional Metadata Extension block that contains values of `scontext` and `mcontext` to match against, or alternative values based on other CSRs, perhaps defined ad-hoc.
 +
 This is a lightweight mechanism.
-Since filtering by `(v)sacefilter` is inactive when the hart is in S mode or higher, context switching at U can be performed without modifying the CSK.
+Since filtering at one mode is inactive when the hart is in a higher mode, context switching can be performed without modifying the CSK.
 
 . A programmable CSK can restrict not only the usage, but even the import of CCs.
 This offers stronger security by also preventing unauthorized `ace.import` operations, but incurs higher overhead as it typically requires an `ecall` to modify the CSK, and
@@ -4868,7 +4854,6 @@ Although the architecture does not prevent assigning unique CSKs to U-mode proce
 Hardware support—such as automatic CSK switching based on contexts could alleviate this burden.
 Such a mechanism is not under consideration due to its architectural complexity, inflexibility, and hardware cost.
 For example, it would necessitate secure management of large CSK tables, including saving, restoring, and potentially migrating entire CSK blocks.
-[.red]#Use only Localities instead?#
 
 // ///////////////////////////////////////////////////////////////////////////////////////////
 
