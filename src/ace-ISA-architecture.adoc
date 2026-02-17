@@ -221,6 +221,7 @@ The preferred way to provide inputs and ACE operations and collect their outputs
 However, ACE also defines an optional input/output buffer (ACEIOBUF) that can be used in place of the vector register file, as explained in <<ACE-usage-input-output>>.
 
 The ACEIOBUF, like the CRs, is architectural, and thus it is a per-hart state.
+The ACEIOBUF is not part of any CR.
 It can be part of the CRF memory or be a separate memory region internal to the ACE state.
 
 The total length of the ACEIOBUF, `aceiobuflen`, can be fixed or variable.
@@ -1705,12 +1706,6 @@ _Encoding_::
 ]}
 ....
 
-_Properties_::
-Possibly modifies state: *YES*. +
-Usage-controlled: *YES* +
-Trappable: *YES*. +
-Interruptible: *YES*.
-
 _Description_::
 In all cases where the vector registers are not sufficiently long, or not implemented, inputs can be read directly from memory and written directly to memory.
 For this reason, the architecture defines `ace.input` and `ace.output` (cf. next section).
@@ -1721,6 +1716,15 @@ If `Xl` == 0, the operation is a NOP. +
 If `Xl` is greater than `aceiobuftop` - `acestart`, ACE error _ace_err_invalid_value_ is raised.
 +
 The intended usage of `ace.input` and `ace.output` is explained in detail in <<ACE-usage-input-output>>. +
+
+`ace.output` (see below) and `ace.input` can be used to save and restore the contents of the ACEIOBUF freely as long as ``aceactivecr``'s value is 32, for instance by
+context switching code. Also, these operations start at the offset specified in `acestart`, so the state of the buffer can easily be saved and restored with the same approach used for vectors.
+
+_Properties_::
+Possibly modifies state: *YES*. +
+Usage-controlled: *YES* +
+Trappable: *YES*. +
+Interruptible: *YES*.
 
 //
 
@@ -1755,6 +1759,7 @@ This is the output operation corresponding to `ace.input`.
 If `Xl` == 0, the operation is a NOP. +
 `Xl` may not be greater than `aceiobuftop` - `acestart`. +
 If `Xl` is greater than `aceiobuftop` - `acestart`, ACE error _ace_err_invalid_value_ is raised.
+
 _Properties_::
 Possibly modifies state: *YES*. +
 Usage-controlled: *YES*. +
@@ -2277,6 +2282,9 @@ An example is given by the automatic transitions from hash finalization to verif
 [[ACE-usage-input-output]]
 ===== Usage of `ace.input` and `ace.output` to Replace Vector Inputs and Outputs
 
+In all algorithms, whenever one of the instructions in <<ACE-replacement-instructions>> occurs, it may be substituted by a replacement sequence.
+This is not written explicitly in the algorithm descriptions for brevity.
+
 The `ace.input` and `ace.output` instructions may be used to replace the inputs and outputs to Forms A-C of `ace.exec`, the auxiliary inputs of Form C `ace.state` or of Form C of `ace.derive` in any algorithm, to the point that an implementation of ACE without the V extension or a subset thereof is possible.
 Forms A, B, and C of `ace.exec`, as well as Forms C of both `ace.derive` and `ace.state`, can be replaced by using `ace.input` and `ace.output` instructions together with a Form D `ace.exec`, a Form A `ace.state`, or a Form A `ace.derive` instruction as follows:
 
@@ -2305,37 +2313,19 @@ In all cases, the `ace.input` and `ace.output` instructions must be temporarily 
 This is done by setting the `aceactivecr` CSR (<<ACE-CSR-aceactivecr>>) first. The user must not forget to set it back to 32 after the sequence is completed.
 
 We use the `acesequence` CSR to indicate whether we are using the ACEIOBUF or the vector registers to provide the inputs and outputs to ACE instructions, and to track the instruction sequence.
+The initial value of `acesequence` is 0.
+As soon as one of the following events happens:
 
-* The initial value of `acesequence` is 0.
-* As soon as one of the following events happens:
-+
---
- ** an `ace.input` is completed in place of a
-  *** Form A or B `ace.exec`,
-  *** Form C `ace.derive`, or
-  *** Form C `ace.state`
- ** or a Form D `ace.exec` is completed in place of a Form C `ace.exec`,
---
-+
-`acesequence` is set to 1.
-* `acesequence` keeps track of how many instructions of the replacement sequence have been completed.
-* At the end of the replacement sequence, `acesequence` is reset to 0.
+. An `ace.input` is completed in place of a Form A or B `ace.exec`, Form C `ace.derive`, or Form C `ace.state`; or
+. A Form D `ace.exec` is completed in place of a Form C `ace.exec`,
+
+`acesequence` is set to 1. Then, `acesequence` keeps track of how many instructions of the replacement sequence have been completed.
+At the end of the replacement sequence, `acesequence` is reset to 0.
 
 The ordering of the instructions in a replacement sequence is enforced by the architecture according to the value of `acesequence` and the state number of the CR configured in `aceactivecr`.
 Not following the instruction ordering raises an illegal instruction exception and invalidates the CR.
 
 `acesequence` can be saved and restored by privileged code together with `acestart`.
-
-NOTE: The internal ACEIOBUF is not part of any CR.
-In fact, `ace.output` can be used to save the contents of the buffer, and `ace.input` can be used to restore it freely as long as ``aceactivecr``'s value is 32.
-Also, these operations start at the offset specified in `acestart`, so the state of the buffer can easily be saved and restored with the same approach used for vectors.
-
-In all algorithms, whenever one of the instructions in <<ACE-replacement-instructions>> occurs, it may be substituted by a replacement sequence.
-We do not write this explicitly in the algorithm descriptions for brevity.
-
-// NOTE: This mechanism is one of the reasons, besides keeping the state machines simple, that in a given state of an algorithm, only one Form of `ace.exec` or `ace.state` is allowed.
-// Some exceptions may be possible.
-// For instance, both a Form D and a Form B could be allowed, with different semantics, and when using replacement sequences, these would be distinguished according to whether `aceiobuftop` - `acestart` is 0 or not.
 
 //
 
