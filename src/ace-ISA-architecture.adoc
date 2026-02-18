@@ -274,40 +274,7 @@ The length of additional segment is _ExtraContent_ 64-bit blocks. (14 bits allow
 | [63:46] |  18   | _ExpirationDate_         | If this field is non-zero, it is an expiration date on this CC.
 |===
 
-////
-
-| [35:32] |   4   | _FilterMode_             | Filters:
-Bits 0, resp., 2 = enable the filter below S/VS-mode, resp. M-mode.
-Bit 3 = expiration date.
-If any of these bits is set, the 64-bit block described in <<ACE-Metadata-extension>> (see <<ACE-combined-filters>>) is appended to the Metadata section.
-| [49:36] |  14   | _ExtraContent_           | If non-zero, there is an additional segment of data at the end of the Content.
-The length of additional segment is _ExtraContent_ 64-bit blocks. (14 bits allow up to 128 kB of additional data.)
-| [63:50] |  14   | Reserved +
-(or _MFilter_)  | --
-|===
-
-If _ExpirationDate_ is not zero, then the provisioning and SCC data formats contain an additional 64-bit block of Metadata, called the _Metadata Extension_, defined in <<ACE-Metadata-extension>>, and the Reserved bits [63:50] contain the _MFilter_ field instead.
-(((Cryptographic Context,Metadata,extension)))
-
-[[ACE-Metadata-extension]]
-.Format of the optional Metadata Extension
-[width="100%",cols="^9%,^7%,14%,70%",options="header"]
-|===
-|     Field | Width | Field                   | Description
-|    [31:0] |  32   | _SFilter_               | Value to match against `scontext` (least significant 31 bits).
-|   [63:32] |  32   | _TFilter_               | Value to match against an expiration date.
-|===
-
-[WARNING]
-Keeping the process filtering based on matching against field values requires a Metadata Extension.
-Alternatively, if we use a cryptography base method instead, _ExpirationDate_ can be reduced to just one bit. We then have 31 bits to use.
-13 bits could be used for _ExtraContent_, allowing up to 64 Kb of extra data, and
-18 bits could be used for an expiration data with a resolution of a hour, which allows for almost 30 years (2^18^ hours) from the base date.
-While this is a limited time span, we do not expect other formats to be used unchanged in, say, 10 or 15 years, and longer formats will accommodate larger time spans.
-If we choose this option we then need NO Metadata Extension block.
-
 Some fields and their properties need further explanation. This is done in the following sections.
-////
 
 //
 
@@ -1528,19 +1495,11 @@ A one in any of the three bits `Xs`._UCPolicy_ means that usage by the correspon
 * A zero value in `Xs`._ExpirationDate_ means that the corresponding policy in `M`._ExpirationDate_ is _not_ changed. +
 
 * A non-zero value in `Xs`._ExpirationDate_ will be copied to `M`._ExpirationDate_, but only if that policy was not already programmed, otherwise error ACE error ace_err_invalid_value is raised.
-
-// If `Xs`._ExpirationDate_ is non-zero, then
-// The value `s2` is even and both `Xs2` and `X[s2+1]` are read as the 128-bit value `X[s2+1] @ Xs2`.
-// `X[s2+1] @ Xs2` has the Metadata Extension format described in <<ACE-Metadata-extension>>, where only the fields corresponding to the filters actually added are considered.
-// and the remaining bits are ignored.
-
-// If `Xs`._ExpirationDate_ is non-zero when `M`._ExpirationDate_ is zero, if the `ace.restrict` operation is successful, an exported SCC will contain the additional Metadata Extension, where previously it would not have been included. Thus, the size of the SCC may be larger than a previous version.
 --
 +
 On RV32:
 
 * `s` must be even, the register pair `X[s]` and `X[s+1]` are read, and `(X[s+1] @ X[s])` replaces `Xs` in the RV64 description.
-// * `s2` is a multiple of 4 and both `Xs2`, `X[s2+1]`, `X[s2+2]`, and `X[s2+3]` are read as the 128-bit value `X[s2+3] @ X[s2+2] @ X[s2+1] @ Xs2`, which replaces `X[s2+1] @ Xs2` in the RV64 description.
 
 _Properties_::
 Possibly modifies state: *YES*. +
@@ -1770,8 +1729,6 @@ System Keys are given by an index into an internal, system-specific System Keys 
 The SCC format is used when exporting a CC from a CR and also to re-import the CC into a CR.
 Its size must be a multiple of 8 bytes.
 It is dependent on the algorithm being used.
-// For the purpose of exporting, the optional Metadata Extension is prepended to the Content.
-// The purpose of this separation is to keep the SIV in the same relative place in an SCC.
 
 Format of SCC::: {empty}
 `bytes{nbsp}[{nbsp}{nbsp}0 .. 7{nbsp}{nbsp}{nbsp}{nbsp}]{nbsp}{nbsp}` Metadata Header, not encrypted. +
@@ -1811,14 +1768,10 @@ The implementation provides the following functions and constants or an equivale
 . `MH_size(mh)` returns the byte length of the Metadata Header. +
 In the current specification, it is always 8.
 . `PI_content_size(mh)` returns the byte length of the content section of a PI.
-//   It does not include the length of the optional Metadata Extension block.
    It depends only on `mh`._Algorithm_, `mh`._DirectionPolicy_, and `mh`._KeyType_.
 . `SCC_content_size(mh)` returns the byte length of the fixed part of the content section of an SCC.
    It depends only on  `mh`._Algorithm_, `mh`._DirectionPolicy_, and `mh`._KeyType_.
    It does not include the length of the variable part of the content of length _ExtraContent_ * 8 bytes.
-// nor the length of the optional Metadata Extension block.
-//.  `ME_size(mh)` returns the byte length of the Metadata Extension. +
-//    In the current specification, it is 0 when `mh`._ExpirationDate_ is 0, and it is 8 otherwise.
 
 The total size in bytes of a PI is therefore
 
@@ -2207,7 +2160,6 @@ The fields are unordered and their lengths may differ from those listed, for exa
 . *Serialized Content*:
 The data that follows the Metadata Header in the plaintext portion of an SCC.
 The fields are listed in the order they appear in an SCC, each with its length.
-//If there is a Metadata Extension block, it is prepended to the serialized content.
 --
 +
 
