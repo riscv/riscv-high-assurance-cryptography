@@ -2270,29 +2270,32 @@ An example is given by the automatic transitions from hash finalization to verif
 [[ACE-usage-input-output]]
 ===== Usage of `ace.input` and `ace.output` to Replace Vector Inputs and Outputs
 
-In all algorithms, whenever one of the instructions in <<ACE-replacement-instructions>> occurs, it may be substituted by a replacement sequence.
-This is not written explicitly in the algorithm descriptions for brevity.
+In all algorithms, any occurrence of the “Original Instructions” in <<ACE-replacement-instructions>> may be substituted by the corresponding “Replacement Sequence” where `ace.input` and `ace.output` instructions are used to replace the vector register inputs and outputs.
+We do not explicitly write the alternative use of such replacement sequences in the algorithm descriptions for brevity—but they are always allowed if ACEIOBUF is implemented.
 
-The `ace.input` and `ace.output` instructions may be used to replace the inputs and outputs to Forms A-C of `ace.exec`, the auxiliary inputs of Form C `ace.state` or of Form C of `ace.derive` in any algorithm, to the point that an implementation of ACE without the V extension or a subset thereof is possible.
-Forms A, B, and C of `ace.exec`, as well as Forms C of both `ace.derive` and `ace.state`, can be replaced by using `ace.input` and `ace.output` instructions together with a Form D `ace.exec`, a Form A `ace.state`, or a Form A `ace.derive` instruction as follows:
+// Forms A-C of `ace.exec`, the auxiliary inputs of Form C `ace.state` or of Form C of `ace.derive` in any algorithm, to the point that an implementation of ACE without the V extension or a subset thereof is possible.
+// Forms A, B, and C of `ace.exec`, as well as Forms C of both `ace.derive` and `ace.state`, can be replaced by using `ace.input` and `ace.output` instructions together with a Form D `ace.exec`, a Form A `ace.state`, or a Form A `ace.derive` instruction as follows:
 
 [[ACE-replacement-instructions]]
 .Replacement sequences for `ace.exec` and `ace.derive` using `ace.input` and `ace.output`
-[float="center",align="center",width="100%",cols="<21%,<43%,<36%",options="header"]
+[float="center",align="center",width="100%",cols="<21%,<41%,<38%",options="header"]
 |===
 | Instruction and Form | Original Instruction          | Replacement Sequence
-| `ace.exec`, Form A   | `ace.exec{nbsp}{nbsp}{nbsp}Vd, Kn\|K[Xn], Vs` | `ace.input{nbsp}{nbsp}Xl, Vs` +
-`ace.exec{nbsp}{nbsp}{nbsp}Kn\|K[Xn]` +
-`ace.output{nbsp}Vd,  Xl`
-| `ace.exec`, Form B   | `ace.exec{nbsp}{nbsp}{nbsp}{nbsp}{nbsp}{nbsp}{nbsp}Kn\|K[Xn], Vs`     | `ace.input{nbsp}{nbsp}Xl, Vs` +
-`ace.exec{nbsp}{nbsp}{nbsp}Kn\|K[Xn]`
-| `ace.exec`, Form C   | `ace.exec{nbsp}{nbsp}{nbsp}Vd, Kn\|K[Xn]`     | `ace.exec{nbsp}{nbsp}{nbsp}Kn\|K[Xn]` +
-`ace.output{nbsp}Vd,  Xl`
-| `ace.state`, Form C  | `ace.state{nbsp}{nbsp}Kd\|K[Xd], #immed, Vs` | `ace.input{nbsp}{nbsp}Xl, Vs` +
-`ace.state{nbsp}{nbsp}Kd\|K[Xd], #immed`
-| `ace.derive`, Form C | `ace.derive Kd\|K[Xd], Ks1\|K[Xs1], Vs2` | `ace.input{nbsp}{nbsp}Xl, Vs2` +
-`ace.derive{nbsp}Kd\|K[Xd], Ks1\|K[Xs1]`
+| `ace.exec`, Form A   | `ace.exec{nbsp}{nbsp}{nbsp}Vd, Kn\|K[Xn], Vs` | `1: ace.input{nbsp}{nbsp}Xl, Vs` +
+`2: ace.exec{nbsp}{nbsp}{nbsp}Kn\|K[Xn]` +
+`3: ace.output{nbsp}Vd,  Xl`
+| `ace.exec`, Form B   | `ace.exec{nbsp}{nbsp}{nbsp}{nbsp}{nbsp}{nbsp}{nbsp}Kn\|K[Xn], Vs`     | `1: ace.input{nbsp}{nbsp}Xl, Vs` +
+`2: ace.exec{nbsp}{nbsp}{nbsp}Kn\|K[Xn]`
+| `ace.exec`, Form C   | `ace.exec{nbsp}{nbsp}{nbsp}Vd, Kn\|K[Xn]`     | `1: ace.exec{nbsp}{nbsp}{nbsp}Kn\|K[Xn]` +
+`2: ace.output{nbsp}Vd,  Xl`
+| `ace.state`, Form C  | `ace.state{nbsp}{nbsp}Kd\|K[Xd], #immed, Vs` | `1: ace.input{nbsp}{nbsp}Xl, Vs` +
+`2: ace.state{nbsp}{nbsp}Kd\|K[Xd], #immed`
+| `ace.derive`, Form C | `ace.derive Kd\|K[Xd], Ks1\|K[Xs1], Vs2` | `1: ace.input{nbsp}{nbsp}Xl, Vs2` +
+`2: ace.derive{nbsp}Kd\|K[Xd], Ks1\|K[Xs1]`
 |===
+
+The only operations performed by `ace.input` and `ace.output` is to provide the inputs and read out the output of the operations.
+The entirety of the computations and internal state changes of the `ace.exec`, `ace.derive`, and `ace.state` operations remains in the `ace.exec`, `ace.derive`, and `ace.state` operations
 
 `ace.input` and `ace.output` may be used if enabled and `aceiobuflen` is non-zero, otherwise an ACE error _ace_err_unconfigured_ is raised.
 If `aceiobuflen` is non-zero, and the range size `aceiobuftop` - `acestart` is zero or an invalid size for the algorithm, the `ace.exec` operation is not performed and ACE error _ace_err_invalid_value_ is raised.
@@ -2300,20 +2303,24 @@ If `aceiobuflen` is non-zero, and the range size `aceiobuftop` - `acestart` is z
 In all cases, the `ace.input` and `ace.output` instructions must be temporarily tied to a specific context in order to properly determine the allowed sequences.
 This is done by setting the `aceactivecr` CSR (<<ACE-CSR-aceactivecr>>) first. The user must not forget to set it back to 32 after the sequence is completed.
 
-We use the `acesequence` CSR to indicate whether we are using the ACEIOBUF or the vector registers to provide the inputs and outputs to ACE instructions, and to track the instruction sequence.
-The initial value of `acesequence` is 0.
+The architecture uses the `acesequence` CSR to track the progress of the replacement sequences.
+// of the ACEIOBUF in place of the vector registers to provide the inputs and outputs to ACE instructions.
+The initial value of `acesequence` is 0. It remains zero while we are using the forms of `ace.exec`, `ace.derive`, and `ace.state` as their are written in the algorithm specifications.
 As soon as one of the following events happens:
 
 . An `ace.input` is completed in place of a Form A or B `ace.exec`, Form C `ace.derive`, or Form C `ace.state`; or
 . A Form D `ace.exec` is completed in place of a Form C `ace.exec`,
 
-`acesequence` is set to 1. Then, `acesequence` keeps track of how many instructions of the replacement sequence have been completed.
+`acesequence` is set to 1, to denote that the first instruction in the replacement sequence has completed
+Then, `acesequence` keeps track of how many instructions of the replacement sequence have been completed.
 At the end of the replacement sequence, `acesequence` is reset to 0.
 
 The ordering of the instructions in a replacement sequence is enforced by the architecture according to the value of `acesequence` and the state number of the CR configured in `aceactivecr`.
 Not following the instruction ordering raises an illegal instruction exception and invalidates the CR.
 
-`acesequence` can be saved and restored by privileged code together with `acestart`.
+`acesequence` can be freely read and written in all modes. For instance, this may allow to repeat `ace.exec` or `ace.state` instructions, but it will not allow the user to manipulate the internal state of the algorithms in a way to compromise it, provided that the algorithm is correctly designed.
+
+In particular, `acesequence` may be saved and restored by privileged code at context switch together with `acestart`.
 
 //
 
@@ -2366,9 +2373,9 @@ that implement side-channel protection in different ways.
 
 System Keys will change all the algorithms described here in the following way:
 
-. In a PI and in an SCC, the key field will contain the index of the key in place of the value.
+. In a PI and in an SCC, the key field will contain the index of the key in the SKT in place of the value.
 . This field is reduced from the original key size to a 64-bit value. This saves space in an SCC and allows for faster export and import operations.
-. For algorithms that require more than one key, such as XEX/XTS, a single index is still used to an entry in the SKT that contains multiple keys—and thus a single 64-bit value in the PI and SCC.
+. For algorithms that require more than one key, such as XEX/XTS, a single index is still used to refer toan entry in the SKT that contains multiple keys—and thus a single 64-bit value in the PI and SCC.
 
 //
 
