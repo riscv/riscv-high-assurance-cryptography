@@ -1990,22 +1990,26 @@ The import algorithm needs some special care:
  ** If strictly fewer than 4 bytes are read before the instruction is interrupted, ACE leaves `acestart` at 0, and the instruction will be restarted upon resumption.
  ** If 4 bytes or more have been read, the value of `mh.StateNumber` in the SCC is known. In this case, the instruction may be restarted with `acestart` {ge} 4 recording the amount of data read.
 
-* If an import operation is preempted, the hardware must save `mh.StateNumber` and set +
-`mh.StateNumber <- ace_state_invalid` before relinquishing control.
-** When control is returned, the previous value of `mh.StateNumber` is restored.
-** The implementation must keep be a 4-bit internal temporary state containing the original value of `mh.StateNumber` and a flag indicating whether the value has been saved.
-** The flag is only set upon interruption of the import operation, and is otherwise always clear.
- *** The implementation will resume the import operation only if the flag is set, otherwise it will restart the operation.
- *** The flag is also used by the implementation to
- raise error _ace_err_unconfigured_ instead of _ace_err_invalid_CR_
- upon an attempt to use the partially imported CR.
+* During the import operation, the hardware saves the `StateNumber` value in the metadata and sets
+`mh.StateNumber <- ace_state_invalid` instead until the end of the import operation, where `mh.StateNumber` is set to the correct value.
+// ** The flag is also used by the implementation to raise error _ace_err_unconfigured_ instead of _ace_err_invalid_CR_ upon an attempt to use the partially imported CR.
+** Since context switching code cannot export a partially imported CR when saving the state, it will clear the CR instead, forcing the hardware to restart the import operation.
+** Exceptions that immediately return to the interrupted import operation, such as memory exception, may cause the hardware to resume the import operation instead, if the CR was not otherwise touched.
+
+// *** The hardware will only resume the import operation if the flag is set, otherwise it will restart the operation.
+// CR.importing is always false except during import.
+// During import, the original StateNumber is saved and temporarily replaced in the CR
+// with ace_state_invalid to prevent any USAGE operations.  Any operation that writes
+// to the CR will set CR.importing to false: this allows context switching code to reuse
+// the CR and, upon returning to the interrupted import, the hardware will detect
+// CR.importing == false and restart the import instead of resume it.  OTOH, if the
+// interrupt was caused by a memory exception, the instruction can be resumed.
 
 [[ACE-SCC-import]]
 .Importing an SCC into a CR
 []
 ----
 M : array of bytes;         // from memory
-CR.importing : bool;        // this is a "hidden" per-CR ACE unit state
 CR.saved_SN : bits(4);      // this is a "hidden" per-CR ACE unit state
 
 local enc_key : bits(256);
@@ -2016,18 +2020,9 @@ local tmp : bits(128);
 // FOLLOWING MEMORY READ PREEMPTIBLE, `acestart` FROM 0 TO 7
 tmp[63:0] ← M[0 .. 7]; // read Metadata Header
 
-// CR.importing is always false except during import.
-// During import, the original StateNumber is saved and temporarily replaced in the CR
-// with ace_state_invalid to prevent any USAGE operations.  Any operation that writes
-// to the CR will set CR.importing to false: this allows context switching code to reuse
-// the CR and, upon returning to the interrupted import, the hardware will detect
-// CR.importing == false and restart the import instead of resume it.  OTOH, if the
-// interrupt was caused by a memory exception, the instruction can be resumed.
-
 CR.saved_SN : bits(4) ← tmp[63:0].StateNumber;
 CR.Metadata_header ← tmp[63:0];
 CR.Metadata_header.StateNumber ← ace_state_invalid;
-importing ← true;
 
 & mh = CR.Metadata_header;
 
@@ -2083,7 +2078,6 @@ if (tmp != SIV) then
 
 // FINALLY, restore the StateNumber from the SCC
 mh.StateNumber ← CR.saved_SN;
-CR.importing ← false;
 ----
 
 //
