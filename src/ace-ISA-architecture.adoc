@@ -372,9 +372,9 @@ Unless explicitly stated otherwise in an algorithm's specification, it is always
 
 If an algorithm defines 16 or fewer states (including the four architected ones), the current state number may be stored in the _StateNumber_ field.
 
-For algorithms with more than 16 states, an algorithm-specific representation is used in the Content and exported in the SCC.
+For algorithms with more than 16 states, an algorithm-specific representation is stored in the Content.
 How to use information is up to the algorithm designer, with the following condition:
-StateNumber must always be set to _initial_, _invalid_, and _completed_ if the state of the algorithm corresponds to these states, and to some value other than _initial_, _invalid_, and _completed_  (for instance, 1) if it is in a different state.
+StateNumber must always be set to _initial_, _invalid_, and _completed_ if the state of the algorithm corresponds to these states, and to some value other than these three (for instance, 1) if it is in a different state.
 
 // The state values for the symmetric algorithms defined in this specification are listed in <<ACE-state-constants-symmetric>>.
 
@@ -382,8 +382,11 @@ During init and import, the _StateNumber_ field is set to _invalid_, and only at
 This means, by the rules in <<ACE-invalidation>>, that a partially provisioned/imported CR cannot be exported.
 In particular, if a context switch occurs, that the more privileged code must unconfigure the CR, and upon resumption, the instruction will be restarted.  Only an invalid CR with an `acestart` different from zero is recognized as an incomplete CR allowing an init or import operation to resume.
 
-[NOTE]
---
+This state change to _invalid_ does not occur during `ace.export`, but operations that could modify the internal state should not be performed on a CR with an interrupted export operation.
+However, if any value of the state (such as a counter, or a partial hash value) is altered between the interruption and resumption of an export operation, the resumed export may use an incorrect SIV for the remaining SCC data, causing a subsequent import to fail authentication.
+Therefor any operation that uses the same CR shall set a flag in it to indicate that the interrupted export operation must be restarted.
+
+////
 This state change to _invalid_ does not occur during `ace.export`, but operations that could modify the internal state should not be performed on a CR with an interrupted export operation.
 The following situation may occur:
 
@@ -397,7 +400,7 @@ The following situation may occur:
 This works because the actual value of the key is not changed.
 However, if any value of the state (such as a counter, or a partial hash value) is altered between the interruption and resumption of an export operation, the resumed export may use an incorrect SIV for the remaining SCC data, causing a subsequent import to fail authentication. This is a general issue with CRs, since more privileged code can use them unless blocked by the _UCPolicy_. We do not consider this a security threat: it affects only SCC availability, not confidentiality or integrity,
 and privileged code can always deny resources to user processes.
---
+////
 
 //
 
@@ -421,7 +424,7 @@ If the _Locality_ Field of a CC is zero, then no value is prepended.
 // Bits 6 and 7 are currently unused and reserved for future use. They must be set to 0.
 
 <<ACE-locality-indexes>> lists the architected Localities.
-For each _Locality_ we provide the following information: its index in the LST; its _domain_, i.e., whether the value is SoC-wide, device-wide, VM-wide, or per-process; its configurability; the bit field it is encoded into and its value in that field.
+For each _Locality_ we provide the following information: its index in the LST; its _domain_, i.e., whether the value is SoC-wide, device-wide, VM-wide, or per-process; its configurability; the bit field it is encoded into and its value in that field. Seven bits out of the eight bits of the Field are defined. Bit 7 is currently undefined and can be used to define additional Localities.
 
 [[ACE-locality-indexes]]
 .Architected Localities
@@ -459,14 +462,12 @@ where an arrow denotes a possible replacement.
 
 _HLocality_ is only active if the H extension is enabled and V=1. Otherwise, its value is a shadow of _MLocality_.
 
-Bit 7 is currently undefined. It can be used to define additional Localities.
-
 NOTE: Referencing a key by an index into the System Key Table (SKT) may correspond to keys with unrelated purposes on different devices, leading to unspecified behavior.
 Implementations *must* provide a suitable _Locality_ field value to the ACE unit during CR provisioning from the SKT, set usage policies that are at least as strict as the key's own.
 
 [WARNING]
 --
-Up to three Locality Secrets can be combined: A HW Binding one, one of _PhysBootSecret_ or _VBootSecret_, and one from the SW Filter Group.
+Up to three Locality Secrets can be combined: A HW Binding one, one of either _PhysBootSecret_ or _VBootSecret_, and one from the SW Filter Group.
 Two methods to combine them for the purpose of creating the data to prepend to the SIV computation or verification in AES-GCM-SIV
 are: to XOR the values; and to concatenate them. Another possibility is to multiply them in the 128-bit binary Galois field, but
 but this would not be faster than prepending the values to the input to the tag computation function, as it requires the same number of additional Galois Multiplications.
