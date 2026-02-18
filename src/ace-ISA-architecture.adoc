@@ -382,9 +382,7 @@ During init and import, the _StateNumber_ field is set to _invalid_, and only at
 This means, by the rules in <<ACE-invalidation>>, that a partially provisioned/imported CR cannot be exported.
 In particular, if a context switch occurs, that the more privileged code must unconfigure the CR, and upon resumption, the instruction will be restarted.  Only an invalid CR with an `acestart` different from zero is recognized as an incomplete CR allowing an init or import operation to resume.
 
-This state change to _invalid_ does not occur during `ace.export`, but operations that could modify the internal state should not be performed on a CR with an interrupted export operation.
-However, if any value of the state (such as a counter, or a partial hash value) is altered between the interruption and resumption of an export operation, the resumed export may use an incorrect SIV for the remaining SCC data, causing a subsequent import to fail authentication.
-Therefor any operation that uses the same CR shall set a flag in it to indicate that the interrupted export operation must be restarted.
+This state change to _invalid_ does not occur during `ace.export`.
 
 ////
 This state change to _invalid_ does not occur during `ace.export`, but operations that could modify the internal state should not be performed on a CR with an interrupted export operation.
@@ -1933,20 +1931,24 @@ NOTE: Due to the computational cost of the derivation functions, implementations
 For a Metadata Header `mh`,
 `get_localities(mh)` returns a variable length array with zero or more 128-bit values, corresponding to the active localities, ordered by increasing index value, as defined in <<ACE-Localities>>. These are used as a variable length prefix to the POLYVAL computation, to create unique SIV values. Using these as a prefix allows some degree of pre-computation.
 
+The export operation maintains a per-CR flag indicating that an export is in progress.
+The reason is that operations that modify the internal state may be performed on a CR with an interrupted export operation.
+In this case, resuming the export operation may use an incorrect SIV for the remaining SCC data, causing a subsequent import to fail authentication.
+Therefore, any operations that modifies the internal state of the CR will also unset this flag.
+If an export operation resumes with the flag cleared, it is restarted from the beginning instead.
+
 [[ACE-SCC-export]]
 .Generation of an SCC from a CR
 []
 ----
 & mh : bits(64) = CR.Metadata_header;         // from the CR
-CR.exporting : bool;       // "hidden" per-CR ACE unit state
+CR.exporting : bool;                          // "hidden" per-CR ACE unit state
 local SIV : bits(128);
 local tmp : bits(128);
 local enc_key : bits(256);
 local auth_key : bits(128);
 
-// CR.exporting is always false except during export. Any other operation that
-// may change the state of the CR will set it to false again, to force a restart
-// of the export operation in order to ensure that the CR is in a consistent state.
+// CR.exporting is always false except during export.
 CR.exporting = true;
 
 // Note: CR.content[] includes the optional extra content at the end
