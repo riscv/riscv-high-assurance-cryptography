@@ -21,12 +21,13 @@ These requirements are architecturally guaranteed by ACE.
 
 Cryptographic Register:::
 (((Cryptographic Register)))
-Cryptographic Contexts are realized using *Cryptographic Registers* (CRs).
-CRs are architectural containers that safeguard CCs.
-A CR is *provisioned* by writing Metadata and Content into it: this operation also binds the Metadata and the Content to form a CC.
-A CC can be used for cryptographic operations only while resident in a CR.
-Only the ACE unit may access or modify a CC, and any modification may occur only when the CC is in a CR, in accordance with the architecture and the algorithm specified in the Metadata.
+Cryptographic Contexts are realized using *Cryptographic Registers* (CRs), architectural containers provided by ACE to safeguard the CCs.
+Metadata and Content are bound to each other to form a CC by writing them into a CR, i.e., by *provisioning* the CR.
+A CC can be used for cryptographic operations only when stored in a CR.
+Only the ACE unit may access or modify a CC, and only when the CC is in a CR, in accordance with the rules of the architecture and of the algorithm the CC is bound to.
 CR Content cannot be extracted in a manner that compromises its confidentiality.
+
+//Cryptographic Contexts are realized as *Cryptographic Registers* (CRs), which are architectural containers that safeguard CCs. A CR is *provisioned* by writing Metadata and Content into it; this operation binds the two sections to form a CC. A CC can be used for cryptographic operations only while stored in a CR. Only the ACE unit may access or modify a CC, and only when the CC resides in a CR, in accordance with architectural rules and the algorithm bound to the CC. The confidentiality of a CR’s Content cannot be violated.
 
 Sealed Cryptographic Context:::
 (((Cryptographic Context, sealed)))
@@ -59,8 +60,9 @@ Hence, our use of the term _Usage Control_ instead of _Access Control_.
 
 Locality:::
 (((Cryptographic Context, Locality)))
-Finally, ACE can bind CCs to a *Locality*, i.e., restrict usage to specific devices, device classes, software or hardware configurations, or boot cycles.
-This binding uses Metadata when a CC is in a CR, and augments _Root Context Sealing Key_ (CSK) by a Locality-specific _tweak_.
+Finally, ACE can bind CCs to a *Locality*, i.e., restrict usage to specific devices or device classes, hardware configurations, physical or virtual boot cycles,
+and process domains at various modes.
+This binding uses Metadata when a CC is in a CR, and augments the _Context Sealing Key_ (CSK) by a Locality-specific _tweak_.
 
 // ///////////////////////////////////////////////////////////////////////////////////////////
 
@@ -98,8 +100,8 @@ This binding uses Metadata when a CC is in a CR, and augments _Root Context Seal
 ==== Privileged
 
 * If `Zlv` or `Zlio` are implemented: `misa` must implement the `L` bit, `*status` must implement `ACES`.
-* `SmaceCSK` {implies} Defines the Root Context Sealing Key CSRs (`macecsk{0..7}`), which are all MRO.
-* `SmaceCSKw` {implies} ACE Root Context Sealing Key CSRs are MRW. Depends on `SmaceCSK`.
+* `SmaceCSK` {implies} Defines the Context Sealing Key CSRs (`macecsk{0..7}`), which are all MRO.
+* `SmaceCSKw` {implies} ACE Context Sealing Key CSRs are MRW. Depends on `SmaceCSK`.
 * `Smaceosscrt` {implies} Defines the ACE OS Secret CSRs (`macePhysBootSecret{0..3}`).
 * `Smacebootscrt` {implies} Defines the ACE Boot Secret CSRs (`haceVirtBootSecret0{0..3}`).
 * `Smacestatus` {implies} Defines the ACES per CC CSRs (`scrdirty`, `vscrdirty`, `mcrdirty`).
@@ -133,7 +135,7 @@ more complex operations for some corner-case cryptographic algorithms may be per
 
 [WARNING]
 [.red]#It is not necessary to define RVV-mini before ratification of ACE begins.
-This subset can be defined at a later moment and the ACE specification amended to allow RVV-mini in place of V as a requirement.
+This subset can be defined at a later moment and the ACE specification amended to allow the use of RVV-mini in place of V.
 This will allow to collect more requirements, such as whether to require, for instance, `vclmul.v[vx]` and `vclmulh.v[vx]` from `Zvbc` or not.#
 
 ===== Sdtrig
@@ -221,12 +223,12 @@ The preferred way to provide inputs and ACE operations and collect their outputs
 However, ACE also defines an optional input/output buffer (ACEIOBUF) that can be used in place of the vector register file, as explained in <<ACE-usage-input-output>>.
 
 The ACEIOBUF, like the CRs, is architectural, and thus it is a per-hart state.
+The ACEIOBUF is not part of any CR.
 It can be part of the CRF memory or be a separate memory region internal to the ACE state.
 
 The total length of the ACEIOBUF, `aceiobuflen`, can be fixed or variable.
 
-Its size and the range used in cryptographic instructions are determined by the `aceiobuflen` and `aceiobuftop` CSRs,
-defined in <<ACE-CSR-aceiobuflen>> and <<ACE-CSR-aceiobuftop>>.
+Its total size and the range thereof used in cryptographic instructions are determined by the `aceiobuflen` (<<ACE-CSR-aceiobuflen>>) and `aceiobuftop` (<<ACE-CSR-aceiobuftop>>) CSRs.
 
 The support for the vector register file and for ACEIOBUF are not mutually exclusive.
 
@@ -235,76 +237,34 @@ The support for the vector register file and for ACEIOBUF are not mutually exclu
 [[ACE-Metadata]]
 ==== Metadata Format
 
-For software portability and interoperability, ACE defines two external formats for CCs:
+ACE defines two external formats for CCs:
 
-. The _Provisioning Input_ (PI) format, which is loaded into a CR to create a C; and
-. The _Sealed Cryptographic Context_ (SCC) (<<ACE-provision-export-import>>), an encrypted, authenticated format used when exporting a CR to memory for later re-import.
-
-Both formats rely on the same Metadata format, which is described here.
-The PI and SCC formats are described in <<ACE-provision-export-import>> and <<ACE-provision-export-import>>, respectively.
-
-[WARNING]
-The Metadata format is in flux, as it is subject to change based on the ARC feedback.
-For instance, in the AEAD method for exporting and importing (<<ACE-SCC-AEAD>>), we could exclusively rely on localities used as tweaks, and eliminate the filtering according to the IDs of processes, VMs and Hypervisors/SDs.
+. The _Provisioning Input_ (PI) format, which is loaded into a CR to create a CC; and
+. The _Sealed Cryptographic Context_ (SCC), an encrypted, authenticated format used when exporting a CR to memory for later re-import.
 
 {empty}
 (((Cryptographic Context,Metadata)))
 (((Cryptographic Context,Metadata,Header)))
-CCs contain 64 or 128 bits of Metadata.
-The first 64 bits are the Metadata Header, defined in <<ACE-Metadata-header>>, which serves as the header of the data formats used in CR provisioning and in SCC export and import.
+The first 64 bits of both PI and SCC consist of the Metadata Header, whose format is given below.
 
 [[ACE-Metadata-header]]
 .Format of the Metadata Header
 [width="100%",cols="^9%,^7%,14%,70%",options="header"]
 |===
-|   Field | Width | Field                    | Description
-|   [0:0] |   1   | _Format_                 | Value is 0 for the current version of the Metadata format.
-|  [11:1] |  11   | _Algorithm_              | Cryptographic algorithm (such as primitive, mode, or protocol).
-| [13:12] |   2   | _DirectionPolicy_        | Selects the allowed direction for the cryptographic operation.
-| [15:14] |   2   | _SCProtection_           | Side-Channel Protected Implementation (0 if not protected, 1 if protected).
-| [16:16] |   1   | _KeyType_                | Key(s) given explicitly (0) or System Key(s) (1).
-| [20:17] |   4   | _StateNumber_            | Encoding the current state of the state machine of the algorithm as a number.
-| [28:21] |   8   | _Locality_               | A field which is either all zeros or determines a Locality Secret.
-| [31:29] |   3   | _UCPolicy_               | “UC Policy” means “Usage Control Policy”. If bit 25, 26, resp., 27 is set, it disallows the _usage_ of this CC in User, (V)S-mode, resp., H-mode.
-| [35:32] |   4   | _FilterMode_             | Filters:
-Bits 0, resp., 2 = enable the filter below S/VS-mode, resp. M-mode.
-Bit 3 = expiration date.
-If any of these bits is set, the 64-bit block described in <<ACE-Metadata-extension>> (see <<ACE-combined-filters>>) is appended to the Metadata section.
-| [49:36] |  14   | _ExtraContent_           | If non-zero, there is an additional segment of data at the end of the Content.
-The length of additional segment is _ExtraContent_ 64-bit blocks. (14 bits allow up to 128 kB of additional data.)
-| [63:50] |  14   | Reserved +
-(or _MFilter_)  | --
+|   Field | Width | Field              | Description
+|   [0:0] |   1   | _Format_           | Value is 0 for the current version of the Metadata format.
+|  [11:1] |  11   | _Algorithm_        | Cryptographic algorithm (such as primitive, mode, or protocol).
+| [13:12] |   2   | _DirectionPolicy_  | Selects the allowed direction(s) for the cryptographic operation.
+| [15:14] |   2   | _SCProtection_     | Side-Channel Protected Implementation (0 if not protected, 1 if protected).
+| [16:16] |   1   | _KeyType_          | A value of 0 indicates that the key is expressed as an explicit value in the Content. A value of 1 indicates a system key that the key is given by an index into an internal, system-specific System Keys Table (SKT).
+| [20:17] |   4   | _StateNumber_      | Encoding the current state of the state machine of the algorithm as a number.
+| [28:21] |   8   | _Locality_         | A field which is either all zeros or determines a Locality Secret.
+| [31:29] |   3   | _UCPolicy_         | “UC Policy” means “Usage Control Policy”. If bit 25, 26, resp., 27 is set, it disallows the _usage_ of this CC in User, (V)S-mode, resp., H-mode.
+| [45:32] |  14   | _ExtraContent_     | If non-zero, there is an additional segment of data at the end of the Content. The length of additional segment is _ExtraContent_ 64-bit blocks. (14 bits allow up to 128 kB of additional data.)
+| [63:46] |  18   | _ExpirationDate_   | If this field is non-zero, it is an expiration date on this CC.
 |===
-
-If _FilterMode_ is not zero, then the provisioning and SCC data formats contain an additional 64-bit block of Metadata, called the _Metadata Extension_, defined in <<ACE-Metadata-extension>>, and the Reserved bits [63:50] contain the _MFilter_ field instead.
-(((Cryptographic Context,Metadata,extension)))
-
-[[ACE-Metadata-extension]]
-.Format of the optional Metadata Extension
-[width="100%",cols="^9%,^7%,14%,70%",options="header"]
-|===
-|     Field | Width | Field                   | Description
-|    [31:0] |  32   | _SFilter_               | Value to match against `scontext` (least significant 31 bits).
-|   [63:32] |  32   | _TFilter_               | Value to match against an expiration date.
-|===
-
-[WARNING]
-Keeping the process filtering based on matching against field values requires a Metadata Extension.
-Alternatively, if we use a cryptography base method instead, _FilterMode_ can be reduced to just one bit. We then have 31 bits to use.
-13 bits could be used for _ExtraContent_, allowing up to 64 Kb of extra data, and
-18 bits could be used for an expiration data with a resolution of a hour, which allows for almost 30 years (2^18^ hours) from the base date.
-While this is a limited time span, we do not expect other formats to be used unchanged in, say, 10 or 15 years, and longer formats will accommodate larger time spans.
-If we choose this option we then need NO Metadata Extension block.
 
 Some fields and their properties need further explanation. This is done in the following sections.
-
-//
-
-[[ACE-Metadata-confidentiality]]
-===== Confidentiality
-
-The Metadata Header is not confidential and will not be encrypted upon export as an SCC.
-The optional Metadata Extension is confidential and will be encrypted upon export as an SCC.
 
 //
 
@@ -344,23 +304,6 @@ In such a case, the value of the _SCProtection_ field must be set to 3.
 
 //
 
-[[ACE-KeyType-field]]
-===== KeyType Field
-
-ACE supports keys provided by software, as well as system keys and keys computed with a system “recipe”, i.e., _system generated keys_.
-A value of 0 in the _KeyType_ field indicates an explicit value.
-A value of 1 in the _KeyType_ field indicates a system key.
-
-System Keys are given by an index into an internal, system-specific System Keys Table (SKT).
-For each algorithm as specified in <<ACE-algorithms>>, the Content field that normally contains the key(s) is replaced by its index into the SKT-for both PIs and SCCs
-The actual value of the key is never included in exported Content.
-For threshold implementations, ACE may copy the key material from the SKT into the CR and expand it into multiple shares.
-
-System Generated Keys are also system-specific. In place of the PI, the provisioning operation reads a system-specific “recipe”, which is not portable.
-After internal key generation, the actual key value—not the recipe—is stored in the CR and SCC. The _KeyType_ field in the Metadata is 0.
-
-//
-
 [[ACE-StateNumber-field]]
 ===== StateNumber Field
 
@@ -375,9 +318,9 @@ These denote a CC that is ready to operate, it is in an operational state, is in
 [float="center",align="center",width="100%",cols="^6%,<26%,<16%,<52%",options="header"]
 |===
 | Value | Mnemonic for the Constant       | State Name          | Description
-|   0   | _ace_state_initial_             | _initial_           | The context has just been provisioned or reset, and ready for operation.
-|  14   | _ace_state_invalid_             | _invalid_           | The algorithm has abnormally terminated or provisioning/import have been interrupted.
-|  15   | _ace_state_completed_           | _completed_         | The algorithm has completed, not necessarily without error.
+|   0   |  ace_state_initial              | _initial_           | The context has just been provisioned or reset, and ready for operation.
+|  14   |  ace_state_invalid              | _invalid_           | The algorithm has abnormally terminated or provisioning/import have been interrupted.
+|  15   |  ace_state_completed            | _completed_         | The algorithm has completed, not necessarily without error.
 |===
 
 All states different from _invalid_ are called _valid_.
@@ -386,19 +329,20 @@ Unless explicitly stated otherwise in an algorithm's specification, it is always
 
 If an algorithm defines 16 or fewer states (including the four architected ones), the current state number may be stored in the _StateNumber_ field.
 
-For algorithms with more than 16 states, an algorithm-specific representation is used in the Content and exported in the SCC.
+For algorithms with more than 16 states, an algorithm-specific representation is stored in the Content.
 How to use information is up to the algorithm designer, with the following condition:
-StateNumber must always be set to _initial_, _invalid_, and _completed_ if the state of the algorithm corresponds to these states.
+StateNumber must always be set to _initial_, _invalid_, and _completed_ if the state of the algorithm corresponds to these states, and to some value other than these three (for instance, 1) if it is in a different state.
 
-The state values for the symmetric algorithms defined in this specification are listed in <<ACE-state-constants-symmetric>>.
+// The state values for the symmetric algorithms defined in this specification are listed in <<ACE-state-constants-symmetric>>.
 
-During init and import, the _StateNumber_ field is set to _invalid_, and only at the end of the operation is it set to proper value, i.e., _initial_ or the value in the SCC (see <<ACE-provision-export-import>>)
-This means, by the rules in <<ACE-invalidation>>, that a partially provisioned/imported CR cannot be exported. In particular, if a context switch occurs, that the more privileged code must unconfigure the CR, and upon resumption, the instruction will be restarted.  Only an invalid CR with an `acestart` different from zero is recognized as an incomplete CR allowing an init or import operation to resume.
+During init and import, the _StateNumber_ field is set to _invalid_, and only at the end of the operation is it set to proper value, i.e., _initial_ or the value in the SCC (see <<ACE-provisioning-export-import>>)
+This means, by the rules in <<ACE-invalidation>>, that a partially provisioned/imported CR cannot be exported.
+In particular, if a context switch occurs, that the more privileged code must unconfigure the CR, and upon resumption, the instruction will be restarted.  Only an invalid CR with an `acestart` different from zero is recognized as an incomplete CR allowing an init or import operation to resume.
 
+This state change to _invalid_ does not occur during `ace.export`.
+
+////
 This state change to _invalid_ does not occur during `ace.export`, but operations that could modify the internal state should not be performed on a CR with an interrupted export operation.
-
-[NOTE]
---
 The following situation may occur:
 
 . A process is exporting a threshold CC from a CR.
@@ -411,86 +355,79 @@ The following situation may occur:
 This works because the actual value of the key is not changed.
 However, if any value of the state (such as a counter, or a partial hash value) is altered between the interruption and resumption of an export operation, the resumed export may use an incorrect SIV for the remaining SCC data, causing a subsequent import to fail authentication. This is a general issue with CRs, since more privileged code can use them unless blocked by the _UCPolicy_. We do not consider this a security threat: it affects only SCC availability, not confidentiality or integrity,
 and privileged code can always deny resources to user processes.
---
+////
 
 //
 
 [[ACE-Localities]]
 ===== Locality Field
 
-ACE keeps a table of 125-bit Locality Secrets (LS), the Locality Secrets Table (LST).
-Some entries of the LST are fixed or configurable only using an implementation-specific authenticated hardware procedure: These are global and shared across all ACE units in the same system. Other entries may be programmed by privileged modes and are architectural, i.e., per hart.
-Currently, nine values in the LST are architected.
+ACE keeps a table of 128-bit Locality Secrets (LS), the Locality Secrets Table (LST).
+Some entries of the LST are fixed or configurable only using an implementation-specific authenticated hardware procedure:
+These are global and shared across all ACE units in the same system.
+Other entries may be programmed by privileged modes and are architectural, i.e., per hart.
+Currently, eleven values in the LST are architected.
 The first six Localities tie SCCs to the hardware, and are called the HW Binding Group.
 Localities 8 to 10 are the SW Filter Group.
 
-The Locality Secrets are used to tweak the AEAD algorithm used to export and import CCs.
-If the _Locality_ Field of a CC is zero, then the CSK is used directly without tweaking the AEAD algorithm.
-
 More than one Locality can be active at the same time, with restrictions, and Locality secrets may be combined.
+The Locality Secrets are prepended to the string used to compute the SIV in the AEAD algorithm used to export and import CCs.
+If the _Locality_ Field of a CC is zero, then no value is prepended.
+
 // The 3 lsbs of the Locality field encodes one of the localities with index 0 to 5 into the LST, with an encoding of 1 to 6, respectively, and an encoded value of 0 means that no binding to a hardware locality is done.
 // Bits 3 to 5 determine the use of Localities with index 6, 7, and 8 in the table.
 // Bits 6 and 7 are currently unused and reserved for future use. They must be set to 0.
 
 <<ACE-locality-indexes>> lists the architected Localities.
-For each _Locality_ we provide the following information: its index in the LST; its _domain_, i.e., whether the value is SoC-wide, device-wide, VM-wide, or per-process; its configurability; the bit field it is encoded into and its value in that field.
+For each _Locality_ we provide the following information: its index in the LST; its _domain_, i.e., whether the value is SoC-wide, device-wide, VM-wide, or per-process; its configurability; the bit field it is encoded into and its value in that field. Seven bits out of the eight bits of the Field are defined. Bit 7 is currently undefined and can be used to define additional Localities.
 
 [[ACE-locality-indexes]]
 .Architected Localities
 [width="100%",cols="^5%,18%,47%,^9%,^9%,^6%,^6%",options="header"]
 |===
-|  Idx  | Field                     | Description                                                                      | Domain | Config?|  Bits  | Value
-|  --   | (No HW Binding)           | Independent of Chip, OEM, Device                                                 |  --    |   --   | [2:0]  |   0
-|   0   | _ChipDesignerSecret_      | Identifies the designer of the SoC. Permanent.                                   |  SoC   |   No   | [2:0]  |   1
-|   1   | _ChipModelSecret_         | Identifies specific chip model/family. Permanent.                                |  SoC   |   No   | [2:0]  |   2
-|   2   | _ChipSecret_              | Unique for each SoC. Permanent.                                                  |  SoC   |   No   | [2:0]  |   3
-|   3   | _OEMSecret_               | Provisioned by OEM   to differentiate their products from the competition.  +
-Permanent, or reconfigurable via a custom hardware authenticated mechanism.                                            | Device |   HW   | [2:0]  |   4
-|   4   | _ProductSecret_           | Identifies device/system type/model (product). +
-Permanent or reconfigurable like _OEMSecret_.                                                                          | Device |   HW   | [2:0]  |   5
-|   5   | _DeviceSecret_            | Unique device (entire system) secret.
-Shared across all harts in a SoC and shareable across multiple SoCs in a single device. +
-The sharing mechanism is implementation-defined. Reconfigurable like _OEMSecret_.                                      | Device |   HW   | [2:0]  |   6
-|   6   | _PhysBootSecret_          | Unique per the boot session of the host hardware and its firmware stack.  +
-Configured by M-mode during the boot process of the host (see <<ACE-CSR-macePhysBootSecret>>).                         | Device |   M    |   3    |  0/1
-|   7   | _VBootSecret_             | Unique per the boot session of the virtual hardware and its software stack. +
-Regenerated by H or higher at each virtual boot of a VM (see <<ACE-CSR-haceVirtBootSecret>>).                          |   VM   |  H/M   |   4    |  0/1
-|  --   | (No Binding at Modes)     | Independent of M-, S-, or VS-mode filters.                                       |  --    |   --   | [6:5]  |   0
-|   8   | _MLocality_               | Configurable by M to mutually isolate processes in lower-privileged modes.       |  S/HS  |   M    | [6:5]  |   1
-|   9   | _HLocality_               | Configurable by H to mutually isolate processes in lower-privileged modes.       |  VS    |   H    | [6:5]  |   2
-|  10   | _SLocality_               | Configurable by (V)S to mutually isolate processes in U-mode.                    |  U     |  (V)S  | [6:5]  |   3
+|  Idx  | Field                   | Description                                                                      | Domain | Config?|  Bits  | Value
+2+|   _No HW Binding_             | Independent of Chip, OEM, Device                                                ^|  --   ^|   --   | [2:0]  |   0
+|   0   | ChipDesignerSecret      | Identifies the designer of the SoC. Permanent.                                   |  SoC   |   No   | [2:0]  |   1
+|   1   | ChipModelSecret         | Identifies specific chip model/family. Permanent.                                |  SoC   |   No   | [2:0]  |   2
+|   2   | ChipSecret              | Unique for each SoC. Permanent.                                                  |  SoC   |   No   | [2:0]  |   3
+|   3   | OEMSecret               | Provisioned by OEM   to differentiate their products from the competition.
+Permanent, or reconfigurable via a custom hardware authenticated mechanism.                                          | Device |   HW   | [2:0]  |   4
+|   4   | ProductSecret           | Identifies device/system type/model (product).
+Permanent or reconfigurable like OEMSecret.                                                                          | Device |   HW   | [2:0]  |   5
+|   5   | DeviceSecret            | Unique device (entire system) secret.
+Shared across all harts in a SoC and shareable across multiple SoCs in a single device using an implementation-defined mechanism.
+Reconfigurable like OEMSecret.                                      | Device |   HW   | [2:0]  |   6
+|   6   | PhysBootSecret          | Unique per the boot session of the host hardware and its firmware stack.
+Configured by M-mode during the boot process of the host (see <<ACE-CSR-macePhysBootSecret>>).                       | Device |   M    |   3    |  0/1
+|   7   | VBootSecret             | Unique per the boot session of the virtual hardware and its software stack.
+Regenerated by H or higher at each virtual boot of a VM (see <<ACE-CSR-haceVirtBootSecret>>).                        |   VM   |  H/M   |   4    |  0/1
+2+|   _No Binding at Modes_       | Independent of M-, S-, or VS-mode filters.                                      ^|  --   ^|   --   | [6:5]  |   0
+|   8   | MLocality               | Configurable by M to mutually isolate processes in lower-privileged modes.       |  S/HS  |   M    | [6:5]  |   1
+|   9   | HLocality               | Configurable by H to mutually isolate processes in lower-privileged modes.       |  VS    |   H    | [6:5]  |   2
+|  10   | SLocality               | Configurable by (V)S to mutually isolate processes in U-mode.                    |  U     |  (V)S  | [6:5]  |   3
 |===
 
-// maceLocality
-// haceLocality
-// saceLocality
+An implementation is not required to provide values for all the fields in the HW Binding group.
+In this case, an undefined value is transparently replaced with the value associated to the immediately _stricter_ Locality, and so on, as follows:
 
-An implementation may not implement all the fields in the HW Binding group.
-In this case, an undefined value is transparently replaced with the value associated to the immediately more _general_ Locality, and so on, as follows:
-
-* _ChipSecret_ -> _ChipModelSecret_ -> _ChipDesignerSecret_, and
-* _DeviceSecret_ -> _ProductSecret_ -> _OEMSecret_,
+* ChipSecret <- ChipModelSecret <- ChipDesignerSecret, and
+* DeviceSecret <- ProductSecret <- OEMSecret,
 
 where an arrow denotes a possible replacement.
 
-_HLocality_ is only active if the H extension is enabled and V=1.
+HLocality is only active if the H extension is enabled and V=1. Otherwise, it is a shadow of MLocality.
 
-NOTE: A CC may reference a key by an index into the System Key Table (SKT).
-A device-specific SKT entry may correspond to a different key on another device.
-Using the latter may lead to unspecified behavior.
-Implementations of the SKT *must* provide a suitable _Locality_ field value to the ACE unit during CR provisioning, and set usage policies that are at least as strict as the key's own.
+NOTE: Referencing a key by an index into the System Key Table (SKT) may correspond to keys with unrelated purposes on different devices, leading to unspecified behavior.
+Implementations shall set usage policies that are at least as strict as the key's own, and possibly provide a suitable _Locality_ field value to the ACE unit during CR provisioning.
 
 [WARNING]
 --
-We shall discuss two methods to combine locality secrets for the purpose of creating the tweaks to be used in the key derivation process:
-
-. XOR them, allowing up to four to be added together.
-. Multiply the 125-bit strings in the binary field defined by stem:[P(x)=x^{125}+x^{15}+x^{13}+x^{3}+1].
-// (for degrees 124 and 126 we can use the polynomials stem:[P(x)=x^{124}+x^{7}+x^{4}+x^{3}+1] and stem:[P(x)=x^{126}+x^{8}+x^{7}+x^{2}+1]).
-Note that the Locality Secrets are non-zero.
-
-Both methods theoretically reduce the distinguishability of a sequence or random numbers by just two bits (from 125 to 123 bits, say).
+Locality Secrets can be combined. Currently, up to three: A HW Binding Locality, one of either PhysBootSecret or VBootSecret, and one from the SW Filter Group.
+Two methods to combine them for the purpose of creating the data to prepend to the SIV computation or verification in AES-GCM-SIV
+are: to XOR the values; and to concatenate them (the current choice).
 --
+//127-bit strings instead and multiply the, but
+//in the binary field defined by stem:[P(x)=x^{127}+x+1], this would work as well,
 
 //
 
@@ -499,22 +436,20 @@ Both methods theoretically reduce the distinguishability of a sequence or random
 
 Bit 0, 1, resp., 2 of this field is ignored if U-mode, S-mode, resp. H-mode is not supported/enabled.
 
-//
-
+////
 [[ACE-combined-filters]]
-===== FilterMode and Filter Fields
+===== ExpirationDate and Filter Fields
 
-If the _FilterMode_ field is non-zero, an additional 64-bit block is added to the Metadata to implement filtering according to secrets set by S/VS, HS, and M, and expiration date.
+If the _ExpirationDate_ field is non-zero, an additional 64-bit block is added to the Metadata to implement filtering according to secrets set by S/VS, HS, and M, and expiration date.
 
 To filter by expiration date is a simple comparison between the current time and the expiration time in the Metadata.
 The ACE Unit must have access to a secure clock.
-When the current time is beyond the expiration time in the Metadata, the ACE Unit invalidates the CR (see <<ACE-invalidation>>), and the `aceerror` CSR takes the value _ace_err_expired_CR_ (see <<ACE-CSR-ace-error>>).
+When the current time is beyond the expiration time in the Metadata, the ACE Unit invalidates the CR (see <<ACE-invalidation>>), and the `aceerror` CSR takes the value ace_err_expired_CR (see <<ACE-CSR-ace-error>>).
 
 Filtering by process domain is a simple comparison with the corresponding secret.
 
 Currently, we use `scontext`, `mcontext`, and `hcontext` from the Sdtrig extension, which correspond to 31, 14, and 14 bit fields, respectively.
-
-//
+////
 
 [[ACE-extra-content]]
 ===== ExtraContent Field
@@ -523,20 +458,28 @@ The first eight bytes of the additional information store a copy of the CSR `ace
 
 The eight bytes containing `acemarchid` are included in the length recorded by the _ExtraContent_ field.
 
-This value is considered by the implementation performing the import, to determine whether the additional data is usable.
+This value is considered by the implementation performing the import, to determine whether the additional data is usable, and which.
 
 [NOTE]
 Examples of extra content are: precomputed point multiples (computing them is usually significantly expensive than encrypting and decrypting them), additional data for side-channel protected implementations (in the case the chosen method for computing multiple shares is expensive, so the key is still saved reconstructed, but additional data may be included to provide the key shares or to help reconstruct them).
+
+[[ACE-Metadata-expiration-date]]
+==== ExpirationDate Field
+
+If _ExpirationDate_ is not zero, then it contains the expiration date of this CC expressed as number of hours from the base date (January 1st, 2027).
+18 bits are used for an expiration date with a resolution of a hour, which allows for almost 30 years (2^18^ hours) from the base date.
+While this is a limited time span, we do not expect other formats to be used unchanged in, say, 10 or 15 years, and extended formats (with the _Format_ field equal to 1) will accommodate larger time spans.
 
 // ////////////////////////////////////////////////////////////////////
 
 [[ACE-CSR-summary]]
 ==== CSR Summary
 
-ACE extends `*status` and `misa`, and adds up to 10 new CSRs and (up to) 28 indirect CSRs, which are listed in <<ACE-CSRs-table>>.
+ACE extends `*status` and `misa`, and adds up to 10 new CSRs and (up to) 28 indirect CSRs.
+//, which are listed in <<ACE-CSRs-table>>.
 
 [[ACE-CSRs-table]]
-.New ACE CSRs. N/A means that at the moment this is not defined.
+.New ACE CSRs.
 [cols="^12%,^12%,<28%,<48%"]
 [float="center",align="center",options="header"]
 |===
@@ -551,7 +494,7 @@ ACE extends `*status` and `misa`, and adds up to 10 new CSRs and (up to) 28 indi
 | 0xXXX       | URW        | `aceiobuftop`               | ACE input/output buffer limit for current transfers
 | 0xXXX       | URO        | `acesequence`               | Sequence number of the last ACE instruction
 | 0xXXX       | URW        | `aceactivecr`               | Active CR for `ace.input`/`ace.output`
-| (Indirect)  | MRW (RZ)   | `macecsk{0..7}`             | ACE Root Context Sealing Key
+| (Indirect)  | MRW (RZ)   | `macecsk{0..7}`             | ACE Context Sealing Key
 | (Indirect)  | MRW (RZ)   | `macePhysBootSecret{0..3}`  | Locality: Physical Boot Session Secret
 | (Indirect)  | HRW (RZ)   | `haceVirtBootSecret{0..3}`  | Locality: Virtual Boot Session Secret
 | (Indirect)  | MRW (RZ)   | `maceLocality{0..3}`        | Locality: Mutually isolate processes below M-mode
@@ -585,11 +528,11 @@ Bit `L` (11) in `misa` indicates that ACE is present.
 {empty}
 (((CSR,ACES field in *status)))
 An ACE context status field, ACES, is added to `mstatus`[26:25] and shadowed in `sstatus`[26:25] (but, see <<ACE-CSR-mcrdirty>>).
+ACES is defined analogously to the floating-point context status field, FS, and to the vector context status field, VS.
 It tracks the dirtiness of the ACE state, including the CRs, the ACEIOBUF, and all ACE-specific CSRs.
 If ACE is implemented, the ACES field shall not be read-only zero.
 The meanings of its values are given in <<ACE-aces-encoding>>.
 
-NOTE: ACES is defined analogously to the floating-point context status field, FS, and to the vector context status field, VS.
 
 [[ACE-aces-encoding]]
 .Encoding of ACES status field
@@ -615,8 +558,9 @@ Implementations may also change `mstatus.ACES` from Initial or Clean to Dirty at
 
 If `mstatus.ACES` (`sstatus.ACES`) is Dirty, `mstatus.SD` (`sstatus.SD`) is 1; otherwise, `mstatus.SD` (`sstatus.SD`) is set in accordance with existing specifications.
 
-Writes to any ACES field do not modify the CRs, the ACEIOBUF, or any ACE-specific CSRs.
-Clearing state is not performed by setting ACES to Off, Initial, or Clean, and it must be explicitly done before changing ACES.
+Writes to any ACES field do not modify any other ACE state.
+In particular, setting ACES to Off, Initial, or Clean does not clear the CRs or the ACEIOBUF:
+Any state reset must be done explicitly before setting ACES to one of these values.
 
 Implementations may have a writable `misa.L` field. Analogous to the way in which the floating-point unit and the vector unit are handled, the `mstatus.ACES` field may exist even if `misa.L` is clear.
 
@@ -627,13 +571,12 @@ Implementations may have a writable `misa.L` field. Analogous to the way in whic
 
 When the H extension is present, an ACE context status field, ACES, is added to `vsstatus`[26:25].
 It tracks the dirtiness of the ACE state, including the CRs, the ACEIOBUF, and all ACE-specific CSRs.
-
-NOTE: It is defined analogously to the floating-point context status field, FS, and to the vector context status field, VS.
+It is defined analogously to the floating-point context status field, FS, and to the vector context status field, VS.
 
 When V=1:
 
 * Both `vsstatus.ACES` and `mstatus.ACES` are in effect.
-* Attempts to execute any ACE instruction raises an illegal instruction exception when either field is set to Off.
+* Any ACE instruction raises an illegal instruction exception when either field is set to Off.
 * If neither `vsstatus.ACES` nor `mstatus.ACES` is set to Off, executing any instruction that changes ACE state changes both `mstatus.ACES` and `vsstatus.ACES` to Dirty.
 * Implementations may also change `mstatus.ACES` or `vsstatus.ACES` from Initial or Clean to Dirty at any time, even when there is no change in ACE state.
 * If `vsstatus.ACES` is Dirty, `vsstatus.SD` is 1; otherwise, `vsstatus.SD` is set in accordance with existing specifications.
@@ -665,27 +608,26 @@ The standard error codes are:
 .Error codes and their meanings
 [float="center",align="center",width="100%",cols="^7%,<23%,<70%",options="header"]
 |===
-|Value | Mnemonic                     | Examples (((ACE, error codes)))
-|  0   | _ace_err_no_error_           | No error.
-|  1   | _ace_err_import_auth_        | Authentication failure with `ace.import`.
-|  2   | _ace_err_unconfigured_       | Use of an unconfigured, or partially configured CR as a source in any instruction except `ace.size`. +
+|Value | Mnemonic                   | Examples (((ACE, error codes)))
+|  0   | ace_err_no_error           | No error.
+|  1   | ace_err_import_auth        | Authentication failure with `ace.import`.
+|  2   | ace_err_unconfigured       | Use of an unconfigured, or partially configured CR as a source in any instruction except `ace.size`. +
 Use of ACEIOBUF as an input or an output when it was unconfigured. +
 Use of an out of range CR with indirect addressing.
-|  3   | _ace_err_invalid_CR_         | Attempted to use an _invalid_, but not expired, CR.
-|  4   | _ace_err_expired_CR_         | Attempted to use an expired CR.
-|  5   | _ace_err_memory_             | Insufficient CRF memory for configuration instruction.
-|  6   | _ace_err_unimplemented_      | Not implemented algorithm or variant. +
+|  3   | ace_err_invalid_CR         | Attempted to use an _invalid_, but not expired, CR.
+|  4   | ace_err_expired_CR         | Attempted to use an expired CR.
+|  5   | ace_err_memory             | Insufficient CRF memory for configuration instruction.
+|  6   | ace_err_unimplemented      | Not implemented algorithm or variant. +
 State number not allowed in current algorithm in `ace.state`.
-|  7   | _ace_err_invalid_value_      | Invalid value, except _ace_err_unimplemented_ (see below).
-|  8   | _ace_err_privilege_          | Violation of usage control policies in Metadata (including Filters).
-|  9   | _ace_err_auth_               | Authentication failure in an algorithm.
+|  7   | ace_err_invalid_value      | Invalid value, except ace_err_unimplemented (see below).
+|  8   | ace_err_privilege          | Violation of usage control policies in Metadata (including Filters).
+|  9   | ace_err_auth               | Authentication failure in an algorithm.
 |===
 
-ACE error _ace_err_invalid_value_ collects various cases, for instance (but, there could be more):
+ACE error ace_err_invalid_value collects various cases, for instance (but, there could be more):
 
-* Invalid Metadata section in `ace.prov` or `ace.import`, other than _ace_err_unimplemented_, for instance:
+* Invalid Metadata section in `ace.prov` or `ace.import`, other than ace_err_unimplemented, for instance:
  ** Non-zeros in zero fields,
- ** Invalid _FilterMode_ for a 64-bit Metadata Header,
  ** Non-implemented _Locality_ value,
  ** _StateNumber_ is non-zero for `ace.prov`.
 * ACE operation issued with invalid or zero ACEIOBUF length `aceiobuftop`-`acestart` (see <<ACE-CSR-aceiobuftop>> and <<ACE-CSR-acestart>>).
@@ -751,7 +693,7 @@ This design obviates the need to separate data transfer from cryptographic proce
 Another use of `acestart` arises when an `ace.exec` instruction operates on long vectors containing multiple elements, in which case `VL*SEW` is a multiple of the basic processing unit usually denoted by `b` (such as a block size) in the algorithms. In this situation, `ace.exec` can work iteratively on each block of the input, and execution of `ace.exec` may be interrupted and resumed.
 Regardless of whether the operations are on vectors or on the ACEIOBUF, `acestart` reflects the number of bytes processed so far.
 
-The semantics and use of `acestart` are described in <<ACE-provision-export-import>>.
+The semantics and use of `acestart` are described in <<ACE-provisioning-export-import>>.
 
 The two CSRs described next may be used to optimize saving and restoring the ACEIOBUF.
 
@@ -766,15 +708,15 @@ The two CSRs described next may be used to optimize saving and restoring the ACE
 
 Reconfiguring `aceiobuflen` will also zero the buffer.
 
-If `aceiobuflen` is zero, the ACEIOBUF is _unconfigured_ (it does not hold any content, similarly to unconfigured CRs, i.e., CRs in state Initial), and `ace.input` and `ace.output` raise ACE error _ace_err_unconfigured_.
+If `aceiobuflen` is zero, the ACEIOBUF is _unconfigured_ (it does not hold any content, similarly to unconfigured CRs, i.e., CRs in state Initial), and `ace.input` and `ace.output` raise ACE error ace_err_unconfigured.
 
-Writing to `aceiobuflen` may fail if the value is larger than the maximum allowed by the architecture, and raises ACE error _ace_err_memory_.
+Writing to `aceiobuflen` may fail if the value is larger than the maximum allowed by the architecture, and raises ACE error ace_err_memory.
 
 If the total length of the ACEIOBUF is fixed in the implementation, this can be discovered by writing an “impossible” value to `aceiobuflen`, namely the all-ones length:
-ACE error _ace_err_memory_ is raised, but reading `aceiobuflen` will return the actual length, on which software can therefore act.
+ACE error ace_err_memory is raised, but reading `aceiobuflen` will return the actual length, on which software can therefore act.
 This will also configure `aceiobuflen` to the maximum length and therefore set `aceiobuftop` (<<ACE-CSR-aceiobuftop>>) accordingly, and `acestart` to zero.
 
-If the total length of the ACEIOBUF is not fixed, the same operation will also raise ACE error _ace_err_memory_, and cause `aceiobuflen` to read as zero.
+If the total length of the ACEIOBUF is not fixed, the same operation will also raise ACE error ace_err_memory, and cause `aceiobuflen` to read as zero.
 `aceiobuftop` and `acestart` will also be set to zero.
 
 //
@@ -787,10 +729,10 @@ If the total length of the ACEIOBUF is not fixed, the same operation will also r
 `aceiobuftop` is used to program the top end of a transfer operation to and from the ACEIOBUF for the `ace.input` and `ace.output` instructions.
 
 `aceiobuftop` must be {le} `aceiobuflen`.
-Setting a larger value raises ACE error _ace_err_invalid_value_.
+Setting a larger value raises ACE error ace_err_invalid_value.
 
 `aceiobuftop` must be {ge} `acestart`.
-Setting a smaller value raises ACE error _ace_err_invalid_value_.
+Setting a smaller value raises ACE error ace_err_invalid_value.
 
 In conjunction with `acestart`, `aceiobuftop` defines the range of buffer used in the subsequent operations.
 
@@ -798,7 +740,7 @@ Reconfiguring `aceiobuftop` will not invalidate the buffer contents.
 
 Writing to `aceiobuflen` will set `aceiobuftop` to the same value.
 
-Using the ACEIOBUF while `aceiobuftop`-`acestart` is zero (`aceiobuflen` being non-zero) or an invalid value raises ACE error _ace_err_invalid_value_.
+Using the ACEIOBUF while `aceiobuftop`-`acestart` is zero (`aceiobuflen` being non-zero) or an invalid value raises ACE error ace_err_invalid_value.
 
 NOTE: The `aceiobuftop` CSR is an optimization to avoid reconfiguring the ACEIOBUF when algorithms require variable-length inputs.
 One such situation may occur when, say, processing 4 or 8 blocks at a time, and at the end of a payload there is a smaller residual number of blocks.
@@ -893,12 +835,15 @@ In this case, the `ACES` field in `sstatus` shall be unshadowed.
 ====
 
 //
+
 [#discrete]
 ===== Propagation of `*crdirty` Dirtiness Values
 
 CR status propagates from the least privileged modes to the higher privileged ones, like the FS, VS, and ACES fields in `*status`, but there are only two states: Clean and Dirty.
 Any instruction that changes bit #__i__ of, say `vscrdirty`, resp., `scrdirty`, to Dirty, will also set the corresponding bit of `scrdirty` and `mcrdirty`, resp., `mcrdirty`.
 Consequently, also the ACES fields of `*status` will record the Dirty state.
+
+//
 
 [[ACE-CSR-macecsk]]
 ===== `macecsk` Group
@@ -1014,7 +959,7 @@ We currently use `custom-0` for load-type instructions, `custom-1` for store-typ
 ACE provides a number of unprivileged instructions, some implemented as CSR read/write operations.
 This section specifies the semantics and encodings of these instructions.
 
-The notation `K[Xd]`, for a GPR `Xd`, refers to the CR whose number is contained in `Xd`, and `Kn|K[Xn]` means that there are two different encodings:
+The notation `K(Xd)`, for a GPR `Xd`, refers to the CR whose number is contained in `Xd`, and `Kn|K(Xn)` means that there are two different encodings:
 one for when the CR number is passed as a 5-bit immediate (`Kn`) and one for when the value is passed in a GPR `Xn`.
 When a GPR is used to index a CR, use of the zero register `X0` is not allowed and results in an illegal instruction exception.
 
@@ -1025,9 +970,11 @@ For each instruction, we specify whether:
 * It is _trappable_, i.e., whether it can be implemented by privileged code as trap-and-emulate; and
 * Whether the execution of the instruction itself can be _interrupted_, for instance by context switches or page faults, to be resumed or restarted later.
 
-NOTE: Trappability refers only to the CPU-side of the implementation and it is a distinct concept from _custom implementations of primitives within the ACE unit_.
-Implementers may, for instance, incorporate a secure CPU with updatable firmware to support new primitives.
-While the architecture does not prohibit this, such an approach substantially expands the attack surface of the ACE unit.
+NOTE: By “trappability” we refer solely to the CPU-side implementation, for instance to allow the implementation of certain ACE instructions using custom instructions that perform smaller units of work.
+This is a distinct concept from the custom implementations of primitives within the ACE unit.
+The latter can be achieved, for instance, by including a secure CPU with updatable firmware in the ACE unit, but it is beyond the scope of the ACE architecture.
+
+//
 
 [[ACE-instruction-init]]
 ==== ace.prov
@@ -1036,7 +983,7 @@ _Synopsis_::
 Provision Metadata and secrets into a CR.
 
 _Mnemonic_::
-`ace.prov Kd|K[Xd], %offset(Xs)`
+`ace.prov Kd|K(Xd), %offset(Xs)`
 (((ACE, instruction, ace.prov)))
 
 _Encoding_::
@@ -1046,7 +993,7 @@ _Encoding_::
 ....
 {reg:[
     { bits:  7, name: 0x0b, attr: ['custom-0'] },
-    { bits:  5, name: 'context', attr: ['Kd','K[Xd]'] },
+    { bits:  5, name: 'context', attr: ['Kd','K(Xd)'] },
     { bits:  3, name: 'ace.prov', attr: [0x4,0x5] },
     { bits:  5, name: 'Xs' },
     { bits: 12, name: 'immed12', attr: ['offset'] },
@@ -1055,13 +1002,13 @@ _Encoding_::
 
 _Description_::
 `ace.prov` provisions a CR with Metadata and Content to create a CC.
-`Kd` or `K[Xd]` denotes the CR to be provisioned.
+`Kd` or `K(Xd)` denotes the CR to be provisioned.
 `Xs` points to the region of memory containing the Metadata and the key material.
 The PI must be stored at an 8-byte aligned address, and its length must be a multiple of 8 bytes.
 +
 Similarly to vector store instructions, `ace.prov` appears to other harts as a sequence of individual reads.
 +
-The operation is described in detail in <<ACE-provision-export-import>>.
+The operation is described in detail in <<ACE-provisioning-export-import>>.
 
 _Properties_::
 Possibly modifies state: *YES*. +
@@ -1080,7 +1027,7 @@ _Synopsis_::
 Clears and unconfigures a CR, or the ACE state.
 
 _Mnemonic_::
-`ace.clear Kd|K[Xd]` +
+`ace.clear Kd|K(Xd)` +
 (((ACE, instruction, ace.clear)))
 `ace.reset`
 (((ACE, instruction, ace.reset)))
@@ -1092,7 +1039,7 @@ _Encoding_::
 ....
 {reg:[
     { bits:  7, name: 0x5b, attr: ['custom-2'] },
-    { bits:  5, name: 'context', attr: ['Ks','K[Xd]'] },
+    { bits:  5, name: 'context', attr: ['Ks','K(Xd)'] },
     { bits:  3, name: 'ace.clear', attr: [0x4,0x5] },
     { bits:  5, name: 0x0 },
     { bits:  5, name: 0x0 },
@@ -1101,7 +1048,7 @@ _Encoding_::
 ....
 
 _Description_::
-`ace.clear` unconfigures the state of the CR `Kd` or `K[Xd]` and releases its resources in the CRF.
+`ace.clear` unconfigures the state of the CR `Kd` or `K(Xd)` and releases its resources in the CRF.
 +
 `ace.reset` unconfigures all the CRs and the ACEIOBUF.
 It uses the encoding for `ace.clear` with indirect CR addressing and `Xd` = `X0`.
@@ -1124,7 +1071,7 @@ _Synopsis_::
 Export a CR as a SCC in memory.
 
 _Mnemonic_::
-`ace.export %offset(Xd), Ks|K[Xs]`
+`ace.export %offset(Xd), Ks|K(Xs)`
 (((ACE, instruction, ace.export)))
 
 _Encoding_::
@@ -1137,20 +1084,20 @@ _Encoding_::
     { bits:  5, name: 'immed[4:0]' },
     { bits:  3, name: 'ace.export', attr: [0x0,0x1] },
     { bits:  5, name: 'Xd' },
-    { bits:  5, name: 'context', attr: ['Ks','K[Xs]'] },
+    { bits:  5, name: 'context', attr: ['Ks','K(Xs)'] },
     { bits:  7, name: 'immed[11:5]' },
 ]}
 ....
 
 _Description_::
-Exports the CR `Ks` or `K[Xs]` to memory at address `Xd`, using the procedure described in <<ACE-provision-export-import>>.
+Exports the CR `Ks` or `K(Xs)` to memory at address `Xd`, using the procedure described in <<ACE-provisioning-export-import>>.
 The SCC must be stored at an 8-byte aligned address, and its length must be a multiple of 8 bytes.
 +
-The instruction must follow the interruptibility rules defined in <<ACE-CSR-acestart>> and <<ACE-provision-export-import>>.
+The instruction must follow the interruptibility rules defined in <<ACE-CSR-acestart>> and <<ACE-provisioning-export-import>>.
 +
 Similarly to vector register store instructions, `ace.export` appears to other harts as a sequence of individual stores.
 +
-The operation is described in detail in <<ACE-provision-export-import>>.
+The operation is described in detail in <<ACE-provisioning-export-import>>.
 
 _Properties_::
 Possibly modifies state: *NO*. +
@@ -1161,14 +1108,14 @@ Interruptible: *YES*.
 //
 
 [[ACE-instruction-import]]
-==== ace.import
+==== ace.import/ace.import.S
 
 _Synopsis_::
 Import a SCC from memory into a CR.
 
 _Mnemonics_::
-`ace.import{nbsp}{nbsp}{nbsp}Kd|K[Xd], %offset(Xn)` +
-`ace.import.S{nbsp}Kd|K[Xd], %offset(Xn)`
+`ace.import{nbsp}{nbsp}{nbsp}Kd|K(Xd), %offset(Xn)` +
+`ace.import.S{nbsp}Kd|K(Xd), %offset(Xn)`
 (((ACE, instruction, ace.import)))
 (((ACE, instruction, ace.import.S)))
 
@@ -1179,7 +1126,7 @@ _Encoding_::
 ....
 {reg:[
     { bits:  7, name: 0x0b, attr: ['custom-0'] },
-    { bits:  5, name: 'context', attr: ['Kd','K[Xd]'] },
+    { bits:  5, name: 'context', attr: ['Kd','K(Xd)'] },
     { bits:  3, name: 'ace.import', attr: ['0    0    S','0    1    S'] },
     { bits:  5, name: 'Xn' },
     { bits: 12, name: 'immed12' },
@@ -1187,7 +1134,7 @@ _Encoding_::
 ....
 
 _Description_::
-`Kd` or `K[Xd]` denotes the CR into which the SCC is to be imported. +
+`Kd` or `K(Xd)` denotes the CR into which the SCC is to be imported. +
 `Xn` is the GPR containing the base address of the buffer with the source SCC.
 The SCC base address must be 8-byte aligned. +
 The bit S takes the values 0 (false) or 1 (true).
@@ -1196,15 +1143,18 @@ It is set to true if the key is in a system-defined format
 and not the format defined by the present architecture
 (`ace.import`).
 +
-`ace.import` must follow the interruptibility rules defined in <<ACE-CSR-acestart>> and <<ACE-provision-export-import>>.
+`ace.import` must follow the interruptibility rules defined in <<ACE-CSR-acestart>> and <<ACE-provisioning-export-import>>.
 Similarly to vector register load instructions, `ace.import` appears to other harts as a sequence of individual loads.
 +
 The behavior of `ace.import.S` is implementation-defined.
 +
-The operation is described in detail in <<ACE-provision-export-import>>.
+The operation is described in detail in <<ACE-provisioning-export-import>>.
 
 NOTE: The instruction encoding includes a single bit to indicate a system-defined format.
 If multiple system-defined formats are supported, the system is responsible for distinguishing them.
+These formats do not necessarily include the key value itself, they may contain a “recipe” for an implementation-defined mechanism to generate the key.
+Such system generated heys are also system-specific. In place of the PI, the provisioning operation reads a system-specific “recipe”, which is not portable.  After internal key generation, the actual key value—not the recipe—is stored in the CR and SCC.
+For all keys provisioned using `ace.import.S`, the _KeyType_ field in the Metadata is 0, denoting a key represented by its value.
 
 NOTE: The `ace.export` instruction does not have an `ace.export.S` analog to `ace.import.S`.
 This means that system-specific dynamically generated keys can be imported but not exported in the same form: they must be exported in the format architected here for ACE CCs.
@@ -1228,10 +1178,10 @@ The `ace.exec` instruction admits four Forms, namely
 (((ACE, instruction, ace.exec)))
 
 [upperalpha]
-. `ace.exec  Vd, Kn|K[Xn], Vs` {nbsp}{nbsp} takes an input vector and writes to an output vector.
-. `ace.exec  {nbsp}{nbsp}{nbsp}{nbsp}Kn|K[Xn], Vs` {nbsp}{nbsp} takes an input vector but does not write to an output vector.
-. `ace.exec  Vd, Kn|K[Xn]{nbsp}{nbsp}{nbsp}{nbsp}` {nbsp}{nbsp} does not take an input but writes to an output vector.
-. `ace.exec  {nbsp}{nbsp}{nbsp}{nbsp}Kn|K[Xn]{nbsp}{nbsp}{nbsp}{nbsp}` {nbsp}{nbsp} does not take an input vector and does not write to an output vector.
+. `ace.exec  Vd, Kn|K(Xn), Vs` {nbsp}{nbsp} takes an input vector and writes to an output vector.
+. `ace.exec  {nbsp}{nbsp}{nbsp}{nbsp}Kn|K(Xn), Vs` {nbsp}{nbsp} takes an input vector but does not write to an output vector.
+. `ace.exec  Vd, Kn|K(Xn){nbsp}{nbsp}{nbsp}{nbsp}` {nbsp}{nbsp} does not take an input but writes to an output vector.
+. `ace.exec  {nbsp}{nbsp}{nbsp}{nbsp}Kn|K(Xn){nbsp}{nbsp}{nbsp}{nbsp}` {nbsp}{nbsp} does not take an input vector and does not write to an output vector.
 
 // Without this comment, the next part is not properly formatted...
 
@@ -1244,7 +1194,7 @@ _Encoding_::
     { bits:  7, name: 0x5b, attr: ['custom-2'] },
     { bits:  5, name: 'rd', attr: ['Vd','—','Vd','—'] },
     { bits:  3, name: 0x0, attr: ['ace.exec'] },
-    { bits:  5, name: 'rs1', attr: ['Kn|K[Xn]'] },
+    { bits:  5, name: 'rs1', attr: ['Kn|K(Xn)'] },
     { bits:  5, name: 'rs2', attr: ['Vs','Vs','—','—'] },
     { bits:  1, name: 0x0 },
     { bits:  1, name: 'r' },
@@ -1295,9 +1245,9 @@ The `ace.state` instruction admits three Forms, namely
 (((ACE, instruction, ace.state)))
 
 [upperalpha]
-. `ace.state Kd|K[Xd], #immed7{nbsp}{nbsp}{nbsp}{nbsp}{nbsp}{nbsp}` with no auxiliary input.
-. `ace.state Kd|K[Xd], #immed7, Xs{nbsp}{nbsp}` with an auxiliary input in a GPR.
-. `ace.state Kd|K[Xd], #immed7, Vs{nbsp}{nbsp}` with an auxiliary input in a vector register.
+. `ace.state Kd|K(Xd), #immed7{nbsp}{nbsp}{nbsp}{nbsp}{nbsp}{nbsp}` with no auxiliary input.
+. `ace.state Kd|K(Xd), #immed7, Xs{nbsp}{nbsp}` with an auxiliary input in a GPR.
+. `ace.state Kd|K(Xd), #immed7, Vs{nbsp}{nbsp}` with an auxiliary input in a vector register.
 
 //
 
@@ -1308,7 +1258,7 @@ _Encoding_::
 ....
 {reg:[
     { bits:  7, name: 0x5b, attr: ['custom-2'] },
-    { bits:  5, name: 'Kd|K[Xd]' },
+    { bits:  5, name: 'Kd|K(Xd)' },
     { bits:  3, name: 'ace.state', attr: ['0    0    1','0    1    0','0    1    1'] },
     { bits:  5, name: 0x0 },
     { bits:  5, name: 'rs1', attr: ['—','Xs','Vs'] },
@@ -1325,7 +1275,7 @@ The encodings for the three Forms are:
 //
 
 _Description_::
-The instruction is used to control the state machine of the cryptographic algorithm in CR `Kd` or `K[Xd]`.
+The instruction is used to control the state machine of the cryptographic algorithm in CR `Kd` or `K(Xd)`.
 The `#immed` operand is a constant from a set of admissible values defined for each algorithm.
 The new state number, if allowed, is written into the _StateNumber_ field of the Metadata, unless the algorithm requires more than 16 states, in which case an ad hoc field must be defined in the context (for both internal representation and SCCs).
 Optionally, `Xs` or `Vs` contains an auxiliary input.
@@ -1381,7 +1331,7 @@ There are four Forms of the `ace.size` instruction:
 (((ACE, instruction, ace.size)))
 
 [upperalpha]
-. `ace.size Xd, Ks|K[Xs]` - Size from a context.
+. `ace.size Xd, Ks|K(Xs)` - Size from a context.
 . `ace.size Xd, Xs` - Size from Metadata Header.
 . `ace.size.internal Xd, Xs` - Internal capacity estimate for a CR.
 . `ace.size.iobuf Xd, Xs` - Internal capacity estimate for the ACEIOBUF.
@@ -1397,7 +1347,7 @@ The encoding shares `func3` with `ace.exec`, however with bit 25 (the lsb of `fu
     { bits:  7, name: 0x5b, attr: ['custom-2'] },
     { bits:  5, name: 'Xd' },
     { bits:  3, name: 0x0, attr: ['ace.exec'] },
-    { bits:  5, name: 'Ks/K[Xs]/Xs' },
+    { bits:  5, name: 'Ks/K(Xs)/Xs' },
     { bits:  5, name: 0x0 },
     { bits:  1, name: 0x1 },
     { bits:  1, name: 'r' },
@@ -1410,7 +1360,7 @@ The encoding shares `func3` with `ace.exec`, however with bit 25 (the lsb of `fu
 The `F` field and the `r` bit may assume the following values:
 
 * `F` = `0b00`, `r` = `0` {implies} Form A: Size from a context given as `Ks`.
-* `F` = `0b00`, `r` = `1` {implies} Form A: Size from a context given indirectly as `K[Xs]`.
+* `F` = `0b00`, `r` = `1` {implies} Form A: Size from a context given indirectly as `K(Xs)`.
 * `F` = `0b01`, `r` = `0` {implies} Form B: Size from Metadata Header.
 * `F` = `0b10`, `r` = `0` {implies} Form C: Internal capacity of a CR.
 * `F` = `0b11`, `r` = `0` {implies} Form D: Internal capacity of the ACEIOBUF.
@@ -1433,6 +1383,11 @@ All the values returned by the instruction are expressed in terms of implementat
 On RV32, `Xs` contains bits [31:0] of the Metadata (as for the Metadata type instruction).
 
 * Form D: The source register contains the desired byte length of the buffer to be allocated, and the destination register contains the size of the buffer in the ACE unit.
+
+NOTE: In general. no correlation may be assumed between the size of a PI, the corresponding CR's usage of internal resources, and the size of the SCC.
+// The size of the SCC can differ significantly from the internal resource usage to store the CC's data in a CR.
+// On one hand, there is an overhead due to the SIV.
+// On the other hand, in case of threshold implementations, where keys are exported in reconstructed form, or in modes where some derived keys are not exported, the SCC may be smaller than the internal resource usage.
 
 _Properties_::
 Possibly modifies state: *NO*. +
@@ -1467,8 +1422,8 @@ _Synopsis_::
 Restrict the policies encoded in a CC in a CR.
 
 _Mnemonic_::
-`ace.restrict{nbsp}{nbsp}Kd|K[Xd], Xs1` +
-`ace.restrict{nbsp}{nbsp}Kd|K[Xd], Xs1, Xs2`
+`ace.restrict{nbsp}{nbsp}Kd|K(Xd), Xs1`
+// `ace.restrict{nbsp}{nbsp}Kd|K(Xd), Xs1, Xs2`
 (((ACE, instruction, ace.restrict)))
 
 // Without this comment, the next part is not properly formatted...
@@ -1481,9 +1436,9 @@ The source register field encodes a GPR and not a vector register.
 ....
 {reg:[
     { bits:  7, name: 0x5b, attr: ['custom-2'] },
-    { bits:  5, name: 'Kd|K[Xd]' },
+    { bits:  5, name: 'Kd|K(Xd)' },
     { bits:  3, name: 0x0, attr: ['ace.exec'] },
-    { bits:  5, name: 'Xs2' },
+    { bits:  5, name: 0x0 },
     { bits:  5, name: 'Xs1' },
     { bits:  1, name: 0x1 },
     { bits:  1, name: 'r' },
@@ -1512,36 +1467,30 @@ Let `M` be the Metadata field of the CC in the destination CR.
 On RV64, the semantics of the instruction are:
 
 * `Xs` inherits its format from the first 64-bit block of the Metadata section.
-Only the fields _DirectionPolicy_, _SCProtection_, _Locality_, _UCPolicy_, and _FilterMode_ may be defined.
-All other fields must be 0, else ACE error _ace_err_invalid_value_ is raised.
+Only the fields _DirectionPolicy_, _SCProtection_, _Locality_, _UCPolicy_, and _ExpirationDate_ may be defined.
+All other fields must be 0, else ACE error ace_err_invalid_value is raised.
 
 * `Xs`._DirectionPolicy_ is used to set the new _DirectionPolicy_ of the CR.
-No operation may be enabled, any attempt to do so raises ACE error _ace_err_invalid_value_.
+No operation may be enabled, any attempt to do so raises ACE error ace_err_invalid_value.
 In some cases, a zero value is not permitted, such as disabling both encryption and decryption.
 
 * `Xs`._SCProtection_ is used to turn on side-channel protection or raise its level, if such protection is implemented.
-Attempting to remove or downgrade side channel protection, or to set a non-implemented level raises ACE error _ace_err_invalid_value_.
+Attempting to remove or downgrade side channel protection, or to set a non-implemented level raises ACE error ace_err_invalid_value.
 
-* If `Xs`._Locality_ is non-zero, then it can be used to restrict the Locality. Then, when the CR is exported as a CR, it will use the new tweak in the AEAD mode. Generalizing the Locality is not permitted. Attempting to do so raises ACE error _ace_err_invalid_value_.
+* If `Xs`._Locality_ is non-zero, then it can be used to restrict the Locality. Then, when the CR is exported as a CR, it will use the new tweak in the AEAD mode. Generalizing the Locality is not permitted. Attempting to do so raises ACE error ace_err_invalid_value.
 
-* A zero in any of the three bits `Xs`._UCPolicy_ means that the corresponding policy is _not_ changed. +
-A one in any of the three bits `Xs`._UCPolicy_ means that usage by the corresponding mode is not allowed, and the corresponding bit in the Metadata of the destination CC is set to 1.
+* A zero in any of the three bits `Xs`._UCPolicy_ means that the corresponding policy is _not_ changed.
 
-* A zero bit in `Xs`._FilterMode_ means that the corresponding policy in `M`._FilterMode_ is _not_ changed. +
-A bit set to 1 in `Xs`._FilterMode_ will add the corresponding policy to `M`._FilterMode_, but only if that policy was not already programmed, otherwise error ACE error _ace_err_invalid_value_ is raised.
+* A one in any of the three bits `Xs`._UCPolicy_ means that usage by the corresponding mode is not allowed, and the corresponding bit in the Metadata of the destination CC is set to 1.
 
-* If `Xs`._FilterMode_ is non-zero, then
-** The value `s2` is even and both `Xs2` and `X[s2+1]` are read as the 128-bit value `X[s2+1] @ Xs2`.
-** `X[s2+1] @ Xs2` has the Metadata Extension format described in <<ACE-Metadata-extension>>, where only the fields corresponding to the filters actually added are considered.
-//and the remaining bits are ignored.
+* If `Xs`._ExpirationDate_ is zero, the corresponding policy in `M`._ExpirationDate_ is _not_ changed.
 
-* If `Xs`._FilterMode_ is non-zero when `M`._FilterMode_ is zero, if the `ace.restrict` operation is successful, an exported SCC will contain the additional Metadata Extension, where previously it would not have been included. Thus, the size of the SCC may be larger than a previous version.
+* A non-zero value in `Xs`._ExpirationDate_ will be copied to `M`._ExpirationDate_, but only if that policy was not already programmed, otherwise error ACE error ace_err_invalid_value is raised.
 --
 +
 On RV32:
 
 * `s` must be even, the register pair `X[s]` and `X[s+1]` are read, and `(X[s+1] @ X[s])` replaces `Xs` in the RV64 description.
-* `s2` is a multiple of 4 and both `Xs2`, `X[s2+1]`, `X[s2+2]`, and `X[s2+3]` are read as the 128-bit value `X[s2+3] @ X[s2+2] @ X[s2+1] @ Xs2`, which replaces `X[s2+1] @ Xs2` in the RV64 description.
 
 _Properties_::
 Possibly modifies state: *YES*. +
@@ -1572,7 +1521,7 @@ _Synopsis_::
 Copy a CR into another CR.
 
 _Mnemonic_::
-`ace.clone Kd|K[Xd], Ks|K[Xs]`
+`ace.clone Kd|K(Xd), Ks|K(Xs)`
 (((ACE, instruction, ace.clone)))
 
 _Encoding_::
@@ -1583,9 +1532,9 @@ The instruction is encoded using the Form D' `ace.exec` encoding, and is thus an
 ....
 {reg:[
     { bits:  7, name: 0x5b, attr: ['custom-2'] },
-    { bits:  5, name: 'Kd|K[Xd]' },
+    { bits:  5, name: 'Kd|K(Xd)' },
     { bits:  3, name: 0x0, attr: ['ace.exec'] },
-    { bits:  5, name: 'Ks|K[Xs]' },
+    { bits:  5, name: 'Ks|K(Xs)' },
     { bits:  5, name: 0x0 },
     { bits:  1, name: 0x1 },
     { bits:  2, name: 'R' },
@@ -1625,9 +1574,9 @@ _Mnemonic_::
 The `ace.derive` instruction admits three Forms, namely
 (((ACE, instruction, ace.derive)))
 [upperalpha]
-. `ace.derive Kd|K[Xd], Ks1|K[Xs1] {fournbsp}{nbsp}{nbsp}{nbsp}` with no auxiliary input.
-. `ace.derive Kd|K[Xd], Ks1|K[Xs1], Xs2{nbsp}{nbsp}` with an auxiliary input in a GPR.
-. `ace.derive Kd|K[Xd], Ks1|K[Xs1], Vs2{nbsp}{nbsp}` with an auxiliary input in a vector register.
+. `ace.derive Kd|K(Xd), Ks1|K(Xs1) {fournbsp}{nbsp}{nbsp}{nbsp}` with no auxiliary input.
+. `ace.derive Kd|K(Xd), Ks1|K(Xs1), Xs2{nbsp}{nbsp}` with an auxiliary input in a GPR.
+. `ace.derive Kd|K(Xd), Ks1|K(Xs1), Vs2{nbsp}{nbsp}` with an auxiliary input in a vector register.
 
 //
 
@@ -1638,9 +1587,9 @@ The encoding shares `func3` with `ace.exec`, however with bit 25 equal to 1 and 
 ....
 {reg:[
     { bits:  7, name: 0x6b, attr: ['custom-2'] },
-    { bits:  5, name: 'Kd|K[Xd]' },
+    { bits:  5, name: 'Kd|K(Xd)' },
     { bits:  3, name: 0x0, attr: ['ace.exec'] },
-    { bits:  5, name: 'Ks1|K[Xs1]' },
+    { bits:  5, name: 'Ks1|K(Xs1)' },
     { bits:  5, name: 'rs2'},
     { bits:  1, name: 0x1 },
     { bits:  2, name: 'R' },
@@ -1695,12 +1644,6 @@ _Encoding_::
 ]}
 ....
 
-_Properties_::
-Possibly modifies state: *YES*. +
-Usage-controlled: *YES* +
-Trappable: *YES*. +
-Interruptible: *YES*.
-
 _Description_::
 In all cases where the vector registers are not sufficiently long, or not implemented, inputs can be read directly from memory and written directly to memory.
 For this reason, the architecture defines `ace.input` and `ace.output` (cf. next section).
@@ -1708,9 +1651,18 @@ For this reason, the architecture defines `ace.input` and `ace.output` (cf. next
 +
 If `Xl` == 0, the operation is a NOP. +
 `Xl` may not be greater than `aceiobuftop` - `acestart`. +
-If `Xl` is greater than `aceiobuftop` - `acestart`, ACE error _ace_err_invalid_value_ is raised.
+If `Xl` is greater than `aceiobuftop` - `acestart`, ACE error ace_err_invalid_value is raised.
 +
 The intended usage of `ace.input` and `ace.output` is explained in detail in <<ACE-usage-input-output>>. +
+
+`ace.output` (see below) and `ace.input` can be used to save and restore the contents of the ACEIOBUF freely as long as ``aceactivecr``'s value is 32, for instance by
+context switching code. Also, these operations start at the offset specified in `acestart`, so the state of the buffer can easily be saved and restored with the same approach used for vectors.
+
+_Properties_::
+Possibly modifies state: *YES*. +
+Usage-controlled: *YES* +
+Trappable: *YES*. +
+Interruptible: *YES*.
 
 //
 
@@ -1744,7 +1696,8 @@ This is the output operation corresponding to `ace.input`.
 +
 If `Xl` == 0, the operation is a NOP. +
 `Xl` may not be greater than `aceiobuftop` - `acestart`. +
-If `Xl` is greater than `aceiobuftop` - `acestart`, ACE error _ace_err_invalid_value_ is raised.
+If `Xl` is greater than `aceiobuftop` - `acestart`, ACE error ace_err_invalid_value is raised.
+
 _Properties_::
 Possibly modifies state: *YES*. +
 Usage-controlled: *YES*. +
@@ -1753,40 +1706,38 @@ Interruptible: *YES*.
 
 // ///////////////////////////////////////////////////////////////////////////////////////////
 
-[[ACE-provision-export-import]]
+[[ACE-provisioning-export-import]]
 === Provisioning, Export and Import of Cryptographic Contexts
 
 The length of a PI must be a multiple of 8 bytes.
 The first 8 bytes contain the Metadata Header, as defined in <<ACE-Metadata>>.
-Optionally, the next 8 bytes contain the Metadata Extension.
 The subsequent bytes form the *Content*—the key material and any algorithm-specific data—whose format and length are specified in <<ACE-algorithms>> for all architected algorithms. The PI Content's size is entirely determined by the _Algorithm_ and _KeyType_ fields within the Metadata.
 
-// NOTE: The resource usage of a CR may be larger than the size of a PI.
-// In ECB schemes (<<ACE-ECB-mode>>) not hardened against SCA, a CR need not contain more than the Metadata and the key, hence their resource usage matches the size of the PI (unless the key is not a multiple of 64 bits).
-//However, for many algorithms, the internal state is larger than the size of the PI.
+System Keys are given by an index into an internal, system-specific System Keys Table (SKT), and therefore, in a PI, in place of the key value itself, a 64-bit field is used to store the index.
 
 {empty}
 (((Cryptographic Context, Sealed)))
 The SCC format is used when exporting a CC from a CR and also to re-import the CC into a CR.
 Its size must be a multiple of 8 bytes.
 It is dependent on the algorithm being used.
-For the purpose of exporting, the optional Metadata Extension is prepended to the Content.
-The purpose of this separation is to keep the SIV in the same relative place in an SCC.
 
 Format of SCC::: {empty}
 `bytes{nbsp}[{nbsp}{nbsp}0 .. 7{nbsp}{nbsp}{nbsp}{nbsp}]{nbsp}{nbsp}` Metadata Header, not encrypted. +
 `bytes{nbsp}[{nbsp}{nbsp}8 .. 23{nbsp}{nbsp}{nbsp}]{nbsp}{nbsp}` SIV produced by the encryption method (128 bits). +
-`bytes{nbsp}[{nbsp}24 .. u+23{nbsp}]{nbsp}{nbsp}` Encrypted {optional Metadata Extension and} Serialized Content of the CR.
+`bytes{nbsp}[{nbsp}24 .. u+23{nbsp}]{nbsp}{nbsp}` Encrypted Serialized Content of the CR.
 
-The entire Metadata and Content are authenticated, but only the optional Metadata Extension and the Content are encrypted.
+The entire Metadata and Content are authenticated, but only the Content is encrypted.
 The AEAD method used for this purpose is described in <<ACE-SCC-AEAD>>.
 
 The Metadata of an SCC-both Header and Extension-follows the same fixed architectural format as the Metadata of the PI.
-The content format—and consequently its length—are algorithm-specific (<<ACE-algorithms>>) and are determined solely by the _Algorithm_, _KeyType_, and _DirectionPolicy_ fields in the Metadata.
+The Content format—and consequently its length—are algorithm-specific (<<ACE-algorithms>>) and are determined solely by the _Algorithm_, _KeyType_, and _DirectionPolicy_ fields in the Metadata.
 
-NOTE: The size of the SCC can differ significantly from the internal resource usage to store the CC's data in a CR.
-On one hand, there is an overhead due to the SIV.
-On the other hand, in case of threshold implementations, where keys are exported in reconstructed form, or in modes where some derived keys are not exported, the SCC may be smaller than the internal resource usage.
+For a system key, its actual value is never included in exported Content.
+The SCC contains just the index of the key in the SKT, like for the PI.
+
+For threshold implementations, ACE may copy the key material from the SKT into the CR and expand it into multiple shares.
+
+It is permissible to include some of the shares of a system key in a threshold implementation in the optional Additional Data of the content in order to accelerate share reconstruction, provided that the key cannot be reconstruced from these shares.
 
 The Serialized Content section under Data Structures in an algorithm specification (<<ACE-algorithms>>) defines the structure of the `content[]` array.
 Architecturally, `content[]` is the serialization of the content of a CR for export as an SCC.
@@ -1803,29 +1754,25 @@ In a threshold implementation, a single key byte in `content[]` may correspond t
 ==== Size Functions
 
 Let `mh` be a Metadata Header.
-// `{fournbsp}{fournbsp}x` <- `mh`._FilterMode_ @ `mh`._KeyType_ @ `mh`._DirectionPolicy_ @ `mh`._Algorithm_ @ `mh`._Format_.
 The implementation provides the following functions and constants or an equivalent mechanism:
 
 . `MH_size(mh)` returns the byte length of the Metadata Header. +
 In the current specification, it is always 8.
 . `PI_content_size(mh)` returns the byte length of the content section of a PI.
-   It does not include the length of the optional Metadata Extension block.
-   It depends only on  `mh`._Algorithm_, `mh`._DirectionPolicy_, and `mh`._KeyType_.
-   It does not depend on `mh`._FilterMode_.
+   It depends only on `mh`._Algorithm_, `mh`._DirectionPolicy_, and `mh`._KeyType_.
 . `SCC_content_size(mh)` returns the byte length of the fixed part of the content section of an SCC.
    It depends only on  `mh`._Algorithm_, `mh`._DirectionPolicy_, and `mh`._KeyType_.
-   It does not depend on `mh`._FilterMode_.
-   It does not include the length of the variable part of the content of length _ExtraContent_ * 8 bytes, nor the length of the optional Metadata Extension block.
-.  `ME_size(mh)` returns the byte length of the Metadata Extension. +
-    In the current specification, it is 0 when `mh`._FilterMode_ is 0, and it is 8 otherwise.
+   It does not include the length of the variable part of the content of length _ExtraContent_ * 8 bytes.
 
 The total size in bytes of a PI is therefore
 
-`{fournbsp}{fournbsp} MH_size(mh)` + `ME_size(mh)` + `PI_content_size(mh)`,
+`{fournbsp}{fournbsp} MH_size(mh)` + `PI_content_size(mh)`,
+// `{fournbsp}{fournbsp} MH_size(mh)` + `ME_size(mh)` + `PI_content_size(mh)`,
 
 and the total size in bytes of an SCC is
 
-`{fournbsp}{fournbsp} MH_size(mh)` + 16 + `ME_size(mh)` + `SCC_content_size(mh)` + _ExtraContent_ * 8.
+`{fournbsp}{fournbsp} MH_size(mh)` + 16 `SCC_content_size(mh)` + _ExtraContent_ * 8.
+// `{fournbsp}{fournbsp} MH_size(mh)` + 16 + `ME_size(mh)` + `SCC_content_size(mh)` + _ExtraContent_ * 8.
 
 [[ACE-interruption-points]]
 ==== Interruption Points
@@ -1840,17 +1787,17 @@ The implementation will also restart any operation if the internal state of the 
 ====
 The initial cryptographic phase of `ace.export` is currently architected to be uninterruptible.
 Even if this phase is executed concurrently with other operations, an interrupt handler may need to wait for it to complete before proceeding with any access to the CR.
-
-The requirement that the initial cryptographic phase of `ace.export` be uninterruptible could become a performance bottleneck for very long SCCs, or cause timing issues. To address this, we could allow the SIV computation to be interrupted by using odd, or negative, values in `acestart`
+A very long such phase could become a performance bottleneck for very long SCCs, or cause timing issues. To address this, we could allow the SIV computation to be interrupted and use odd, or negative, values in `acestart` to denote this.
 ====
 
+//
 
-[[ACE-provision]]
+[[ACE-provisioning]]
 ==== Provisioning
 
 We start with the algorithm performed by `ace.prov`, which reads a PI and uses it to provision a CR.
 
-[[ACE-provision-listing]]
+[[ACE-provisioning-listing]]
 .Provisioning a CR with Metadata and content
 []
 ----
@@ -1860,14 +1807,10 @@ M : array of bytes // in memory
 Metadata : bits(64) = M[0 .. 7]
 z ← PI_content_size(Metadata[31:0]);
 
-if (z == 0)
-   error ace_err_unimplemented;
-
-if (there is not enough memory for the algorithm encoded in the Metadata)
-    error ace_err_memory;
-
-if (Metadata is inconsistent)
-  error ace_err_invalid_value;
+if (z == 0) { error ace_err_unimplemented; }
+if (there is not enough memory for the algorithm encoded in the Metadata) then
+   { error ace_err_memory; }
+if (Metadata is inconsistent) { error ace_err_invalid_value; }
 
 - Complete Metadata parsing.
 // NEXT OPERATION PREEMPTIBLE WITH `acestart` IN [8 .. Z+7]
@@ -1877,14 +1820,14 @@ if (Metadata is inconsistent)
 [[ACE-SCC-AEAD]]
 ==== Export and Import
 
-The AEAD algorithm used to export and import CRs is an adaptation of AES-GCM-SIV cite:[DBLP-journals-iacr-GueronLL17,RFC8452].
+To export and import CRs we use a the AES-GCM-SIV algorithm cite:[DBLP-journals-iacr-GueronLL17,RFC8452].
 
 [WARNING]
 AES-GCM-SIV has been chosen because it only required single passes of data in main memory, reducing the number of external memory accesses.
 GCM uses also a single pass but requires separate nonce and tag values, increasing the size of the exported data by one block.
 
 We define the Key Derivation (<<ACE-SCC-RFC8452-derivation>>) function first.
-It is essentially the same function as in RFC8452, but the zeros in each AES256 call are replaced by the 125-bit Locality Secrets.
+// It is essentially the same function as in RFC8452, but the zeros in each AES256 call are replaced by the 125-bit Locality Secrets.
 // (or 126 with <<ACE-SCC-alt-derivation>>).
 The generation of an SCC from a CR (<<ACE-SCC-export>>) and the import of an SCC into a CR (<<ACE-SCC-import>>) are defined next.
 
@@ -1892,11 +1835,11 @@ The generation of an SCC from a CR (<<ACE-SCC-export>>) and the import of an SCC
 .RFC8452 Key Derivation
 []
 ----
-function KeyDeriv(key : bits(256), L : bits(125)) = {
+function RFC8452_KeyDeriv(key : bits(256)) = {
   struct {
-    AESE256(key, (L @ 0b101))[63:0] @ AESE256(key, (L @ 0b100))[63:0] @
-    AESE256(key, (L @ 0b011))[63:0] @ AESE256(key, (L @ 0b010))[63:0],
-    AESE256(key, (L @ 0b001))[63:0] @ AESE256(key, (L @ 0b000))[63:0]
+    AESE256(key, (zeros(125) @ 0b101))[63:0] @ AESE256(key, (zeros(125) @ 0b100))[63:0] @
+    AESE256(key, (zeros(125) @ 0b011))[63:0] @ AESE256(key, (zeros(125) @ 0b010))[63:0],
+    AESE256(key, (zeros(125) @ 0b001))[63:0] @ AESE256(key, (zeros(125) @ 0b000))[63:0]
   }
 }
 ----
@@ -1910,14 +1853,14 @@ An alternative key derivation (<<ACE-SCC-alt-derivation>>) method halves the num
 []
 ----
 function double(S : bits(128)) = {
-  if (S[127] == 0) then {
+  if (S[127] == 0) {
     (S << 1)[127:0]
   } else {
     (S << 1)[127:0] xor (zeros(120) @ 0x1B)
   }
 }
 
-function KeyDeriv(key : bits(256), L : bits(126)) = {
+function RFC8452_KeyDeriv(key : bits(256), L : bits(126)) = {
   t ← double(AESE256(key, zeros(128))) // Precomputed
   struct {
      AESE256(key, (L @ 0b00) xor t) @ AESE256(key, (L @ 0b01) xor t),
@@ -1929,45 +1872,46 @@ function KeyDeriv(key : bits(256), L : bits(126)) = {
 
 NOTE: Due to the computational cost of the derivation functions, implementations may cache recently used derived keys indexed by Locality.
 
+For a Metadata Header `mh`,
+`get_localities(mh)` returns a variable length array with zero or more 128-bit values, corresponding to the active localities, ordered by increasing index value, as defined in <<ACE-Localities>>. These are used as a variable length prefix to the POLYVAL computation, to create unique SIV values. Using these as a prefix allows some degree of pre-computation.
+
+The export operation maintains a per-CR flag indicating that an export is in progress.
+The reason is that operations that modify the internal state may be performed on a CR with an interrupted export operation pending.
+In this case, resuming the export operation may use an incorrect SIV for the remaining SCC data, causing a subsequent import to fail authentication.
+Therefore, any operations that modifies the internal state of the CR will also unset this flag.
+If an export operation resumes with this flag cleared, it is restarted instead.
+
 [[ACE-SCC-export]]
 .Generation of an SCC from a CR
 []
 ----
 & mh : bits(64) = CR.Metadata_header;         // from the CR
-CR.exporting : bool;       // "hidden" per-CR ACE unit state
+CR.exporting : bool;                          // "hidden" per-CR ACE unit state
 local SIV : bits(128);
 local tmp : bits(128);
 local enc_key : bits(256);
 local auth_key : bits(128);
 
-// CR.exporting is always false except during export
-// Any other operation that may change the state of the CR
-// will set it to false again, to force a resumption of a restart
+// CR.exporting is always false except during export.
 CR.exporting = true;
 
-// Note: CR.content[] here includes the optional Metadata Extension
-// at the beginning and the optional extra content at the end
+// Note: CR.content[] includes the optional extra content at the end
 
 z : int ← SCC_content_size(mh);
-z ← z + ME_size(mm);
 z ← z + mh.ExtraContent * 8;
 CR.content : array[z] of bytes;
 
-// In external memory: Metadata Header, then SIV, then content
-// where content is extended as described above
-
+// In external memory: Metadata Header, then SIV, then Content
 M : array[MH_size(mh) + 16 + z] of bytes;
 let last_block_fractional : Boolean ← z % 16 != 0;
 let num_blocks : int ← ceil(z / 16);
 
-if (mh.Locality == 15) then {
-    {enc_key, auth_key} = KeyDeriv(CSK, zeros(125));
-} else
-    {enc_key, auth_key} = KeyDeriv(CSK, LST[mh.Locality]);
-}
+{enc_key, auth_key} ← RFC8452_KeyDeriv(CSK);
+L : list ← {} if (mh.Locality == 0) else get_localities(mh.Locality);
 
-tmp ← POLYVAL(auth_key, zeros(64) @ mh @ CR.content[]);
-SIV ← AESE(enc_key, 0 @ tmp[126:0]));
+// Include Locality "prefix" (zero or more 128-bit blocks)
+tmp ← POLYVAL(auth_key, L @ zeros(64) @ mh @ CR.content[]);
+SIV ← AESE(enc_key, 0 @ tmp[126:0]);
 
 // FOLLOWING MEMORY WRITE PREEMPTIBLE, `acestart` FROM 0 TO 7
 M[0 .. 7] ← mh;
@@ -1976,17 +1920,17 @@ M[0 .. 7] ← mh;
 M[8 .. 23] ← SIV;
 
 foreach(i from 0 to num_blocks - 1) {
-   if ((i == num_blocks - 1) and last_block_fractional) {
+   if ((i == num_blocks - 1) and last_block_fractional)
       // FOLLOWING MEMORY WRITE PREEMPTIBLE, `acestart` FROM 24+i*16 TO 31+i*16
       M[24+i*16 .. 31+i*16] ← CR.content[i*16 .. 7+i*16]
          xor AESE(enc_key, 1 @ SIV[126:32] @ (SIV[31:0] + bin(i, 32) % 2**32)[63:0];
-   } else {
+   else
       // FOLLOWING MEMORY WRITE PREEMPTIBLE, `acestart` FROM 24+i*16 TO 39+i*16
       M[24+i*16 .. 39+i*16] ← CR.content[i*16 .. 15+i*16]
          xor AESE(enc_key, 1 @ SIV[126:32] @ (SIV[31:0] + bin(i, 32) % 2**32);
-   }
 }
-CR.exporting = false;
+
+CR.exporting ← false;
 ----
 
 The import algorithm needs some special care:
@@ -1995,22 +1939,26 @@ The import algorithm needs some special care:
  ** If strictly fewer than 4 bytes are read before the instruction is interrupted, ACE leaves `acestart` at 0, and the instruction will be restarted upon resumption.
  ** If 4 bytes or more have been read, the value of `mh.StateNumber` in the SCC is known. In this case, the instruction may be restarted with `acestart` {ge} 4 recording the amount of data read.
 
-* If an import operation is preempted, the hardware must save `mh.StateNumber` and set +
-`mh.StateNumber <- ace_state_invalid` before relinquishing control.
-** When control is returned, the previous value of `mh.StateNumber` is restored.
-** The implementation must keep be a 4-bit internal temporary state containing the original value of `mh.StateNumber` and a flag indicating whether the value has been saved.
-** The flag is only set upon interruption of the import operation, and is otherwise always clear.
- *** The implementation will resume the import operation only if the flag is set, otherwise it will restart the operation.
- *** The flag is also used by the implementation to
- raise error _ace_err_unconfigured_ instead of _ace_err_invalid_CR_
- upon an attempt to use the partially imported CR.
+* During the import operation, the hardware saves the `StateNumber` value in the metadata and sets
+`mh.StateNumber <- ace_state_invalid` instead until the end of the import operation, where `mh.StateNumber` is set to the correct value.
+// ** The flag is also used by the implementation to raise error ace_err_unconfigured instead of ace_err_invalid_CR upon an attempt to use the partially imported CR.
+** Since context switching code cannot export a partially imported CR when saving the state, it will clear the CR instead, forcing the hardware to restart the import operation.
+** Exceptions that immediately return to the interrupted operation, such as memory exceptions, may cause the hardware to resume the operation instead, if the CR was touched.
+
+// *** The hardware will only resume the import operation if the flag is set, otherwise it will restart the operation.
+// CR.importing is always false except during import.
+// During import, the original StateNumber is saved and temporarily replaced in the CR
+// with ace_state_invalid to prevent any USAGE operations.  Any operation that writes
+// to the CR will set CR.importing to false: this allows context switching code to reuse
+// the CR and, upon returning to the interrupted import, the hardware will detect
+// CR.importing == false and restart the import instead of resume it.  OTOH, if the
+// interrupt was caused by a memory exception, the instruction can be resumed.
 
 [[ACE-SCC-import]]
 .Importing an SCC into a CR
 []
 ----
 M : array of bytes;         // from memory
-CR.importing : bool;        // this is a "hidden" per-CR ACE unit state
 CR.saved_SN : bits(4);      // this is a "hidden" per-CR ACE unit state
 
 local enc_key : bits(256);
@@ -2021,44 +1969,35 @@ local tmp : bits(128);
 // FOLLOWING MEMORY READ PREEMPTIBLE, `acestart` FROM 0 TO 7
 tmp[63:0] ← M[0 .. 7]; // read Metadata Header
 
-// CR.importing is always false except during import.
-// During import, the original StateNumber is saved and temporarily replaced in the CR
-// with ace_state_invalid to prevent any USAGE operations.  Any operation that writes
-// to the CR will set CR.importing to false: this allows context switching code to reuse
-// the CR and, upon returning to the interrupted import, the hardware will detect
-// CR.importing == false and restart the import instead of resume it.  OTOH, if the
-// interrupt was caused by a memory exception, the instruction can be resumed.
-
 CR.saved_SN : bits(4) ← tmp[63:0].StateNumber;
 CR.Metadata_header ← tmp[63:0];
 CR.Metadata_header.StateNumber ← ace_state_invalid;
-importing ← true;
 
 & mh = CR.Metadata_header;
 
 z ← SCC_content_size(mh);
-z ← z + ME_size(mh);
 z ← z + mh.ExtraContent * 8;
 
-if (z == 0) {
-    error ace_err_unimplemented;
-}
-
-if (there is not enough memory for the algorithm encoded in the Metadata) {
+if (z == 0) { error ace_err_unimplemented; }
+if (there is not enough memory for the algorithm encoded in the Metadata) then
     error ace_err_memory;
-}
+
 num_blocks ← ceil(z / 16);
 last_block_fractional : Boolean ← (z % 16 != 0);
 
-if (mh.Locality == 15) then {
-    {enc_key, auth_key} = KeyDeriv(CSK, zeros(125));
-} else {
-    {enc_key, auth_key} = KeyDeriv(CSK, LST[mh.Locality]);
+{enc_key, auth_key} ← RFC8452_KeyDeriv(CSK);
+
+// Absorb Locality "prefix" (zero or more 128-bit blocks)
+tmp ← zeros(128);
+L : list ← {} if (mh.Locality == 0) else get_localities(mh.Locality);
+foreach(i from 0 to length(L)-1) {
+  tmp ← tmp xor L[i];
+  tmp ← Montmul(tmp, auth_key);
 }
 
 // FOLLOWING MEMORY READ PREEMPTIBLE, `acestart` FROM 8 TO 23
 SIV ← M[8 .. 23];
-tmp ← zeros(64) @ mh;
+tmp ← tmp xor zeros(64) @ mh;
 tmp ← Montmul(tmp, auth_key);
 
 foreach(i from 0 to num_blocks - 1) {
@@ -2075,9 +2014,9 @@ foreach(i from 0 to num_blocks - 1) {
    }
    tmp ← Montmul(tmp, auth_key);
 }
+tmp ← AESE(enc_key, 0 @ tmp[126:0]);
 
-tmp ← AESE(enc_key, 0 @ tmp[126:0]); // tag
-if (tmp != SIV) then { error ace_err_import_auth; }
+if (tmp != SIV) { error ace_err_import_auth; }
 
 - Now the content can be deserialized.
 - This includes computing any derived values not saved as part of the SCC,
@@ -2085,7 +2024,6 @@ if (tmp != SIV) then { error ace_err_import_auth; }
 
 // FINALLY, restore the StateNumber from the SCC
 mh.StateNumber ← CR.saved_SN;
-CR.importing ← false;
 ----
 
 //
@@ -2101,10 +2039,10 @@ In certain cases where an invalid input is provided to any ACE instruction, or a
 * `Kn` is put into State _invalid_;
 * For instructions that refer to `Kn`:
  ** `ace.prov`, `ace.clear`, `ace.reset`, `ace.import`, `ace.export`, `ace.size` and `ace.avail` work normally;
- ** `ace.exec`, `ace.clone`, `ace.derive`, and `ace.restrict` raise an ACE error _ace_err_invalid_CR_;
- ** `ace.input` and `ace.output` raise an ACE error _ace_err_invalid_CR_ when `aceactivecr` is `Kn`;
- ** `ace.state` raises an ACE error _ace_err_invalid_CR_, unless it is used to return to State _initial_;
- ** `ace.error` always returns error _ace_err_invalid_CR_ after any operation involving the CR except for `ace.import` and `ace.export`, `ace.clear`, `ace.prov`, and `ace.size`, which all work normally, and using `ace.state` to return to State _initial_.
+ ** `ace.exec`, `ace.clone`, `ace.derive`, and `ace.restrict` raise an ACE error ace_err_invalid_CR;
+ ** `ace.input` and `ace.output` raise an ACE error ace_err_invalid_CR when `aceactivecr` is `Kn`;
+ ** `ace.state` raises an ACE error ace_err_invalid_CR, unless it is used to return to State _initial_;
+ ** `ace.error` always returns error ace_err_invalid_CR after any operation involving the CR except for `ace.import` and `ace.export`, `ace.clear`, `ace.prov`, and `ace.size`, which all work normally, and using `ace.state` to return to State _initial_.
 * The current instruction is terminated.
 
 In State _completed_, only `ace.prov`, `ace.export`, `ace.import`, `ace.clear`, and `ace.error` are permitted.
@@ -2160,9 +2098,9 @@ would impose significant burden on the software and possibly degrade performance
 Horizontal traps can be used to implement a try/catch mechanism:
 
 . At the start of a subroutine that performs a cryptographic protocol, two CSRs are configured with the address of the “catch” code and with a mask with the error types to catch.
-. The code is written without considering the exceptions to be caught, usually only _ace_err_invalid_CR_ or _ace_err_expired_CR_.
+. The code is written without considering the exceptions to be caught, usually only ace_err_invalid_CR or ace_err_expired_CR.
 . If the code runs without such errors, then the two CSRs are reset and the routine returns normally.
-. If, say, an _ace_err_invalid_CR_ or _ace_err_expired_CR_ error is raised, the horizontal trap diverts the control flow to the catch code, which usually cleans up, and returns to the caller of the subroutine, not to the routine itself, with an error code.
+. If, say, an ace_err_invalid_CR or ace_err_expired_CR error is raised, the horizontal trap diverts the control flow to the catch code, which usually cleans up, and returns to the caller of the subroutine, not to the routine itself, with an error code.
 
 The main application of such code is when revocation or expiration cause a CR to become invalid.
 In such contexts, it is not the duty of the cryptographic subroutine to resolve the issue, but of the code that makes use of the latter, as the keys may have to be renegotiated, and this may need user intervention.
@@ -2197,25 +2135,22 @@ These include:
 --
 +
 
-In this section, all field lengths are specified in bits except where otherwise noted.
-
 Data Structures:::
 +
 --
 These include:
 
-. *Provisioning Input*:
-The data following the Metadata Header in the PI to `ace.prov`, such as keys and other required secrets.
-Fields are listed in the order they appear in the PI, each with its length.
+. *Provisioning Input* (Content):
+The data following the Metadata Header in the PI, such as keys and other required secrets.
+The fields are listed in the order they appear in the PI, each with its length.
 
-. *Internal State*:
-Information that must be maintained in the internal state of a CC.
-The fields are unordered and their lengths may differ from those listed, for example in threshold or fault-tolerant implementations where redundancy is added.
+. *Internal State* (Content):
+Information that must be maintained in the internal state of a CC, besides the information provided by the metadata.
+The ordering of the fields is not given, and their lengths may differ from those listed, for example for threshold or fault-tolerant implementations.
 
 . *Serialized Content*:
 The data that follows the Metadata Header in the plaintext portion of an SCC.
 The fields are listed in the order they appear in an SCC, each with its length.
-If there is a Metadata Extension block, it is prepended to the serialized content.
 --
 +
 
@@ -2239,7 +2174,7 @@ The instructions permitted in each algorithm state are typically `ace.exec` and 
 For `ace.exec`, only one of its forms (see <<ACE-instruction-exec>>) is allowed per state, along with the corresponding replacement sequence defined in <<ACE-replacement-instructions>>.
 If a Form of `ace.exec`, `ace.state` or `ace.derive` that is not non explicitly allowed in the current algorithm state is used, then an illegal instruction exception is raised.
 
-If a non-allowed state transition is requested in `ace.state`, including requesting encryption or decryption from a CC not allowing it, an ACE error _ace_err_unimplemented_ is raised.  This also invalidates the CR.
+If a non-allowed state transition is requested in `ace.state`, including requesting encryption or decryption from a CC not allowing it, an ACE error ace_err_unimplemented is raised.  This also invalidates the CR.
 
 Pseudocode is provided to illustrate the software implementation of ACE-supported algorithms using the ACE ISA.
 For clarity, the pseudocode generally uses fixed parameters and omits the `ace.exec` Forms A-C replacement sequences.
@@ -2264,79 +2199,69 @@ An example is given by the automatic transitions from hash finalization to verif
 [[ACE-usage-input-output]]
 ===== Usage of `ace.input` and `ace.output` to Replace Vector Inputs and Outputs
 
-The `ace.input` and `ace.output` instructions may be used to replace the inputs and outputs to Forms A-C of `ace.exec`, the auxiliary inputs of Form C `ace.state` or of Form C of `ace.derive` in any algorithm, to the point that an implementation of ACE without the V extension or a subset thereof is possible.
-Forms A, B, and C of `ace.exec`, as well as Forms C of both `ace.derive` and `ace.state`, can be replaced by using `ace.input` and `ace.output` instructions together with a Form D `ace.exec`, a Form A `ace.state`, or a Form A `ace.derive` instruction as follows:
+In all algorithms, any occurrence of the “Original Instructions” in <<ACE-replacement-instructions>> may be substituted by the corresponding “Replacement Sequence” where `ace.input` and `ace.output` instructions are used to replace the vector register inputs and outputs.
+We do not explicitly write the alternative use of such replacement sequences in the algorithm descriptions for brevity—but they are always allowed if ACEIOBUF is implemented.
+
+// Forms A-C of `ace.exec`, the auxiliary inputs of Form C `ace.state` or of Form C of `ace.derive` in any algorithm, to the point that an implementation of ACE without the V extension or a subset thereof is possible.
+// Forms A, B, and C of `ace.exec`, as well as Forms C of both `ace.derive` and `ace.state`, can be replaced by using `ace.input` and `ace.output` instructions together with a Form D `ace.exec`, a Form A `ace.state`, or a Form A `ace.derive` instruction as follows:
 
 [[ACE-replacement-instructions]]
 .Replacement sequences for `ace.exec` and `ace.derive` using `ace.input` and `ace.output`
-[float="center",align="center",width="100%",cols="<21%,<43%,<36%",options="header"]
+[float="center",align="center",width="100%",cols="<21%,<41%,<38%",options="header"]
 |===
 | Instruction and Form | Original Instruction          | Replacement Sequence
-| `ace.exec`, Form A   | `ace.exec{nbsp}{nbsp}{nbsp}Vd, Kn\|K[Xn], Vs` | `ace.input{nbsp}{nbsp}Xl, Vs` +
-`ace.exec{nbsp}{nbsp}{nbsp}Kn\|K[Xn]` +
-`ace.output{nbsp}Vd,  Xl`
-| `ace.exec`, Form B   | `ace.exec{nbsp}{nbsp}{nbsp}{nbsp}{nbsp}{nbsp}{nbsp}Kn\|K[Xn], Vs`     | `ace.input{nbsp}{nbsp}Xl, Vs` +
-`ace.exec{nbsp}{nbsp}{nbsp}Kn\|K[Xn]`
-| `ace.exec`, Form C   | `ace.exec{nbsp}{nbsp}{nbsp}Vd, Kn\|K[Xn]`     | `ace.exec{nbsp}{nbsp}{nbsp}Kn\|K[Xn]` +
-`ace.output{nbsp}Vd,  Xl`
-| `ace.state`, Form C  | `ace.state{nbsp}{nbsp}Kd\|K[Xd], #immed, Vs` | `ace.input{nbsp}{nbsp}Xl, Vs` +
-`ace.state{nbsp}{nbsp}Kd\|K[Xd], #immed`
-| `ace.derive`, Form C | `ace.derive Kd\|K[Xd], Ks1\|K[Xs1], Vs2` | `ace.input{nbsp}{nbsp}Xl, Vs2` +
-`ace.derive{nbsp}Kd\|K[Xd], Ks1\|K[Xs1]`
+| `ace.exec`, Form A   | `ace.exec{nbsp}{nbsp}{nbsp}Vd, Kn\|K(Xn), Vs` | `1: ace.input{nbsp}{nbsp}Xl, Vs` +
+`2: ace.exec{nbsp}{nbsp}{nbsp}Kn\|K(Xn)` +
+`3: ace.output{nbsp}Vd,  Xl`
+| `ace.exec`, Form B   | `ace.exec{nbsp}{nbsp}{nbsp}{nbsp}{nbsp}{nbsp}{nbsp}Kn\|K(Xn), Vs`     | `1: ace.input{nbsp}{nbsp}Xl, Vs` +
+`2: ace.exec{nbsp}{nbsp}{nbsp}Kn\|K(Xn)`
+| `ace.exec`, Form C   | `ace.exec{nbsp}{nbsp}{nbsp}Vd, Kn\|K(Xn)`     | `1: ace.exec{nbsp}{nbsp}{nbsp}Kn\|K(Xn)` +
+`2: ace.output{nbsp}Vd,  Xl`
+| `ace.state`, Form C  | `ace.state{nbsp}{nbsp}Kd\|K(Xd), #immed, Vs` | `1: ace.input{nbsp}{nbsp}Xl, Vs` +
+`2: ace.state{nbsp}{nbsp}Kd\|K(Xd), #immed`
+| `ace.derive`, Form C | `ace.derive Kd\|K(Xd), Ks1\|K(Xs1), Vs2` | `1: ace.input{nbsp}{nbsp}Xl, Vs2` +
+`2: ace.derive{nbsp}Kd\|K(Xd), Ks1\|K(Xs1)`
 |===
 
-`ace.input` and `ace.output` may be used if enabled and `aceiobuflen` is non-zero, otherwise an ACE error _ace_err_unconfigured_ is raised.
-If `aceiobuflen` is non-zero, and the range size `aceiobuftop` - `acestart` is zero or an invalid size for the algorithm, the `ace.exec` operation is not performed and ACE error _ace_err_invalid_value_ is raised.
+The only operations performed by `ace.input` and `ace.output` is to provide the inputs and read out the output of the operations.
+The entirety of the computations and internal state changes of the `ace.exec`, `ace.derive`, and `ace.state` operations remains in the `ace.exec`, `ace.derive`, and `ace.state` operations
+
+`ace.input` and `ace.output` may be used if enabled and `aceiobuflen` is non-zero, otherwise an ACE error ace_err_unconfigured is raised.
+If `aceiobuflen` is non-zero, and the range size `aceiobuftop` - `acestart` is zero or an invalid size for the algorithm, the `ace.exec` operation is not performed and ACE error ace_err_invalid_value is raised.
 
 In all cases, the `ace.input` and `ace.output` instructions must be temporarily tied to a specific context in order to properly determine the allowed sequences.
 This is done by setting the `aceactivecr` CSR (<<ACE-CSR-aceactivecr>>) first. The user must not forget to set it back to 32 after the sequence is completed.
 
-We use the `acesequence` CSR to indicate whether we are using the ACEIOBUF or the vector registers to provide the inputs and outputs to ACE instructions, and to track the instruction sequence.
+The architecture uses the `acesequence` CSR to track the progress of the replacement sequences.
+// of the ACEIOBUF in place of the vector registers to provide the inputs and outputs to ACE instructions.
+The initial value of `acesequence` is 0. It remains zero while we are using the forms of `ace.exec`, `ace.derive`, and `ace.state` as their are written in the algorithm specifications.
+As soon as one of the following events happens:
 
-* The initial value of `acesequence` is 0.
-* As soon as one of the following events happens:
-+
---
- ** an `ace.input` is completed in place of a
-  *** Form A or B `ace.exec`,
-  *** Form C `ace.derive`, or
-  *** Form C `ace.state`
- ** or a Form D `ace.exec` is completed in place of a Form C `ace.exec`,
---
-+
-`acesequence` is set to 1.
+. An `ace.input` is completed in place of a Form A or B `ace.exec`, Form C `ace.derive`, or Form C `ace.state`; or
+. A Form D `ace.exec` is completed in place of a Form C `ace.exec`,
 
-* `acesequence` remains 1 until the end of the second instruction of the replacement sequence, and
-* If there is a third instruction in the sequence, `acesequence` is set to 2 until the end of the instruction.
-* At the end of the replacement sequence, `acesequence` is reset to 0.
+`acesequence` is set to 1, to denote that the first instruction in the replacement sequence has completed
+Then, `acesequence` keeps track of how many instructions of the replacement sequence have been completed.
+At the end of the replacement sequence, `acesequence` is reset to 0.
 
 The ordering of the instructions in a replacement sequence is enforced by the architecture according to the value of `acesequence` and the state number of the CR configured in `aceactivecr`.
-
 Not following the instruction ordering raises an illegal instruction exception and invalidates the CR.
 
-`acesequence` can be saved and restored by privileged code together with `acestart`.
-
-NOTE: The internal ACEIOBUF is not part of any CR.
-In fact, `ace.output` can be used to save the contents of the buffer, and `ace.input` can be used to restore it freely as long as ``aceactivecr``'s value is 32.
-Also, these operations start at the offset specified in `acestart`, so the state of the buffer can easily be saved and restored with the same approach used for vectors.
-
-In all algorithms, whenever one of the instructions in <<ACE-replacement-instructions>> occurs, it may be substituted by a replacement sequence.
-We do not write this explicitly in the algorithm descriptions for brevity.
-
-// NOTE: This mechanism is one of the reasons, besides keeping the state machines simple, that in a given state of an algorithm, only one Form of `ace.exec` or `ace.state` is allowed.
-// Some exceptions may be possible.
-// For instance, both a Form D and a Form B could be allowed, with different semantics, and when using replacement sequences, these would be distinguished according to whether `aceiobuftop` - `acestart` is 0 or not.
+`acesequence` can be freely read and written in all modes.
+In particular, `acesequence` may be saved and restored by privileged code at context switch together with `acestart`.
+This may also allow to repeat `ace.exec` or `ace.state` instructions, but it will not allow the user to manipulate the internal state of the algorithms in a way to compromise it, provided that the algorithm is correctly designed.
 
 //
 
 [[ACE-interruptibility]]
 ===== Interruptibility
 
-Operations performed by `ace.state` are uninterruptible, except when reading vector inputs, where the vector read operation may be interrupted and resumed.
+Except for exceptions caused by memory accesses or the interruption of vector accesses, most ACE operations are uninterruptible.
 
-The operation of `ace.exec` on a basic processing unit, in any state of any algorithm, is uninterruptible, even when described as a sequence of instructions.
+//Operations performed by `ace.state` are uninterruptible, except when reading vector inputs, where the vector read operation may be interrupted and resumed.
 
-If the operation accepts an input that is an integer multiple of the basic processing unit, each block is processed uninterruptibly, but the instruction may be interrupted between blocks; the hardware sets `acestart` to the interruption point.
+The operation of `ace.exec` on a basic processing unit, in any state of any algorithm, is uninterruptible, unless explicitly allowed by the algorithm.
+When `ace.exec` operates iteratively on an inputs who length is an integer multiple of the basic processing unit, each block is processed uninterruptibly, but the instruction may be interrupted between blocks; the hardware sets `acestart` to the interruption point.
 
 An implementation must wait before accessing a CR that is still asynchronously being written to.
 
@@ -2378,9 +2303,9 @@ that implement side-channel protection in different ways.
 
 System Keys will change all the algorithms described here in the following way:
 
-. In a PI and in an SCC, the key field will contain the index of the key in place of the value.
+. In a PI and in an SCC, the key field will contain the index of the key in the SKT in place of the value.
 . This field is reduced from the original key size to a 64-bit value. This saves space in an SCC and allows for faster export and import operations.
-. For algorithms that require more than one key, such as XEX/XTS, a single index is still used to an entry in the SKT that contains multiple keys—and thus a single 64-bit value in the PI and SCC.
+. For algorithms that require more than one key, such as XEX/XTS, a single index is still used to refer toan entry in the SKT that contains multiple keys—and thus a single 64-bit value in the PI and SCC.
 
 //
 
@@ -2393,19 +2318,19 @@ The following table, together with <<ACE-state-constants-fixed>>, defines the st
 [float="center",align="center",width="100%",cols="^6%,<26%,<16%,<52%",options="header"]
 |===
 | Value | Mnemonic for the Constant       | State Name          | Description
-.2+| 1  | _ace_state_operate_             |  _operate_          |Generic operational state.
-<| _ace_state_hash_absorb_         | _hash_absorb_       |  Start and initialize a hash function of the tag/MAC part of an algorithm and start absorbing blocks of data (in the case of an AEAD algorithm, this usually is the associated data).
-|   2   | _ace_state_hash_last_block_     | _hash_last_block_   | In this state additional data may be absorbed, such as partial blocks and lengths, if the hash/tag algorithm processes the last block of its input or of the associated data part of its input in a different way from the other blocks.
-|   3   | _ace_state_hash_finalize_       | _hash_finalize_     | Finalize the internal state of a hash/tag function.
-|   4   | _ace_state_hash_verify_         | _hash_verify_       | Compare the internal hash/tag value to the provided one.
-|   5   | _ace_state_hash_output_         | _hash_output_       | Enter the hash output phase of a hash/tag function.
-|   6   | _ace_state_encrypt_             | _encrypt_           | In this state encryption is performed, and an update to the tag computation if part of the algorithm.
-|   7   | _ace_state_decrypt_             | _decrypt_           | In this state decryption is performed, and an update to the tag computation if part of the algorithm.
-|   8   | _ace_state_enc_last_block_      | _enc_last_block_    | For the encryption path of authenticated encryption modes of operation to process the last block separately.
-|   9   | _ace_state_dec_last_block_      | _dec_last_block_    | For the decryption path of authenticated encryption modes of operation to process the last block separately.
-|  10   | _ace_state_enc_tag_finalize_    | _enc_tag_finalize_  | Finalize the tag computation for AE mode encryption.
-|  11   | _ace_state_dec_tag_finalize_    | _dec_tag_finalize_  | Finalize internal tag computation for AE mode decryption, verify the value.
-|  12   | _ace_state_set_aux_value_       | _set_aux_value_     | Set a public/auxiliary value in an algorithm.
+.2+| 1  |  ace_state_operate              |  _operate_          |Generic operational state.
+<|  ace_state_hash_absorb                 | _hash_absorb_       | Start and initialize a hash function of the tag/MAC part of an algorithm and start absorbing blocks of data (in the case of an AEAD algorithm, this usually is the associated data).
+|   2   |  ace_state_hash_last_block      | _hash_last_block_   | In this state additional data may be absorbed, such as partial blocks and lengths, if the hash/tag algorithm processes the last block of its input or of the associated data part of its input in a different way from the other blocks.
+|   3   |  ace_state_hash_finalize        | _hash_finalize_     | Finalize the internal state of a hash/tag function.
+|   4   |  ace_state_hash_verify          | _hash_verify_       | Compare the internal hash/tag value to the provided one.
+|   5   |  ace_state_hash_output          | _hash_output_       | Enter the hash output phase of a hash/tag function.
+|   6   |  ace_state_encrypt              | _encrypt_           | In this state encryption is performed, and an update to the tag computation if part of the algorithm.
+|   7   |  ace_state_decrypt              | _decrypt_           | In this state decryption is performed, and an update to the tag computation if part of the algorithm.
+|   8   |  ace_state_enc_last_block       | _enc_last_block_    | For the encryption path of authenticated encryption modes of operation to process the last block separately.
+|   9   |  ace_state_dec_last_block       | _dec_last_block_    | For the decryption path of authenticated encryption modes of operation to process the last block separately.
+|  10   |  ace_state_enc_tag_finalize     | _enc_tag_finalize_  | Finalize the tag computation for AE mode encryption.
+|  11   |  ace_state_dec_tag_finalize     | _dec_tag_finalize_  | Finalize internal tag computation for AE mode decryption, verify the value.
+|  12   |  ace_state_set_aux_value        | _set_aux_value_     | Set a public/auxiliary value in an algorithm.
 |===
 
 The value of 1 may indicate both states _operate_ and _hash_absorb_.
@@ -2431,19 +2356,18 @@ Parameters:::
 * `k` = key size (8|`k`).
 
 Data Structures:::
-* *Provisioning Input*:
+* *Provisioning Input* (Content):
 +
 --
 [%autowidth,cols="^,<,<",options="header"]
 |===
 | Pos. | Size in Bytes   | Field
-|   i  | `ME_size`       | Metadata Extension
-|  ii  | `k`/8 or 8      | Key or System Key index
+|   i  | `k`/8 or 8      | Key or System Key index
 |===
 --
 +
 
- * *Internal State*:
+ * *Internal State* (Content):
  ** `key`: `k` bits.
 
 * *Serialized Content*:
@@ -2452,8 +2376,7 @@ Data Structures:::
 [%autowidth,cols="^,<,<",options="header"]
 |===
 |  Pos. | Size in Bytes   | Field
-|   i   | `ME_size`       | Metadata Extension
-|  ii   | `k`/8 or 8      | Key or System Key index
+|   i   | `k`/8 or 8      | Key or System Key index
 |===
 --
 +
@@ -2476,10 +2399,10 @@ State Machine:::
 * *Behavior:*
  ** In State _initial_, no `ace.exec` instruction is allowed.
  ** In States _encrypt_ or _decrypt_, we can only issue Form A `ace.exec` instructions, i.e., +
-     “`ace.exec OUTPUT, Kn|K[Xn], INPUT`.”
+     “`ace.exec OUTPUT, Kn|K(Xn), INPUT`.”
   *** If the state is _encrypt_, then `OUTPUT <- enc_blk(key, INPUT)`.
   *** If the state is _decrypt_, then `OUTPUT <- dec_blk(key, INPUT)`.
-  *** If `IOLEN` > `b`, then “`ace.exec OUTPUT, Kn|K[Xn], INPUT`” encrypts/decrypts block-by-block.
+  *** If `IOLEN` > `b`, then “`ace.exec OUTPUT, Kn|K(Xn), INPUT`” encrypts/decrypts block-by-block.
       Here, and in the rest of this document, this means from the blocks in the least significant positions to the most significant positions:
       . `foreach(i from 0 to IOLEN-b by b)` {
       ..   `OUTPUT[i+b-1:i] <- enc_blk(key, INPUT[i+b-1:i])` }
@@ -2545,19 +2468,18 @@ Parameters:::
 * If the mode is CTR or LFSR, it is `b = n + j`, else it is `b = n = j`.
 
 Data Structures:::
-* *Provisioning Input*:
+* *Provisioning Input* (Content):
 +
 --
 [%autowidth,cols="^,<,<",options="header"]
 |===
 | Pos. | Size in Bytes   | Field
-|   i  | `ME_size`       | Metadata Extension
-|  ii  | `k`/8 or 8      | `key` or System Key index
+|   i  | `k`/8 or 8      | `key` or System Key index
 |===
 --
 +
 
-* *Internal State*:
+* *Internal State* (Content):
  ** `key`: `k` bits.
  ** `IV`: `n` bits.
  ** `ctr`: `j` bits.
@@ -2568,10 +2490,9 @@ Data Structures:::
 [%autowidth,cols="^,<,<",options="header"]
 |===
 |  Pos. | Size in Bytes   | Field
-|    i  | `ME_size`       | Metadata Extension
-|   ii  | `k`/8 or 8      | `key` or System Key index
-|  iii  | `n`/8           | `IV`
-|   iv  | `j`/8           | `ctr`
+|    i  | `k`/8 or 8      | `key` or System Key index
+|   ii  | `n`/8           | `IV`
+|  iii  | `j`/8           | `ctr`
 |===
 --
 +
@@ -2595,7 +2516,7 @@ State Machine:::
   *** If `IOLEN` > `b`, only the `b` least significant bits of `INPUT` are considered.
 
   ** In State _operate_, only Form C ``ace.exec`` instructions are allowed. +
-     “```ace.exec OUTPUT, Kn|K[Xn]```” performs:
+     “```ace.exec OUTPUT, Kn|K(Xn)```” performs:
 +
 --
   . If in a CTR or LFSR mode then `tmp ← keystream_block(IV @ ctr)`, +
@@ -2667,20 +2588,19 @@ Parameters:::
 
 Data Structures:::
 
-* *Provisioning Input*:
+* *Provisioning Input* (Content):
 +
 --
 [%autowidth,cols="^,<,<",options="header"]
 |===
 |  Pos. | Size in Bytes   | Field
-|    i  | `ME_size`      | Metadata Extension
-|   ii  | `k`/8 or 8      | `key1` or System Key index
-|  iii  | `k`/8 or 0      | `key2` or System Key index for `key1` given
+|   i   | `k`/8 or 8      | `key1` or System Key index
+|  ii   | `k`/8 or 0      | `key2` or System Key index for `key1` given
 |===
 --
 +
 
-* *Internal State*:
+* *Internal State* (Content):
  ** `key1`: `k` bits.
  ** `key2`: `k` bits -- omitted if only one key is used or if both keys come from an entry in the SKT.
  ** `mask`: `b` bits.
@@ -2691,10 +2611,9 @@ Data Structures:::
 [%autowidth,cols="^,<,<",options="header"]
 |===
 | Pos. | Size in Bytes   | Field
-|    i | `ME_size`      | Metadata Extension
-|   ii | `k`/8 or 8      | `key1` or System Key index
-|  iii | `k`/8 or 0      | `key2` or System Key index for `key1` given
-|   iv | `b`/8           | `mask`
+|   i  | `k`/8 or 8      | `key1` or System Key index
+|  ii  | `k`/8 or 0      | `key2` or System Key index for `key1` given
+| iii  | `b`/8           | `mask`
 |===
 --
 +
@@ -2729,7 +2648,7 @@ State Machine:::
   ..  `mask <- update_mask(mask)`.
 
   ** In States _encrypt_ and _decrypt_, only ``ace.exec`` instructions of Form A are allowed. +
-    “```ace.exec OUTPUT, Kn|K[Xn], INPUT```” performs the following operations:
+    “```ace.exec OUTPUT, Kn|K(Xn), INPUT```” performs the following operations:
 +
 --
   . In State _encrypt_, it computes `OUTPUT = mask xor enc_blk(key1, INPUT xor mask)`. +
@@ -2792,19 +2711,18 @@ Parameters:::
 
 Data Structures:::
 
-* *Provisioning Input*:
+* *Provisioning Input* (Content):
 +
 --
 [%autowidth,cols="^,<,<",options="header"]
 |===
 | Pos. | Size in Bytes   | Field
-|   i  | `ME_size`       | Metadata Extension
-|  ii  | `k`/8 or 8      | `key` or System Key index
+|  i   | `k`/8 or 8      | `key` or System Key index
 |===
 --
 +
 
-* *Internal State*:
+* *Internal State* (Content):
  ** `key`: `k` bits.
  ** `tweak`: `t` bits.
 
@@ -2814,9 +2732,8 @@ Data Structures:::
 [%autowidth,cols="^,<,<",options="header"]
 |===
 | Pos. | Size in Bytes   | Field
-|   i  | `ME_size`       | Metadata Extension
-|  ii  | `k`/8 or 8      | `key` or System Key index
-| iii  | `t`/8           | `tweak`
+|   i  | `k`/8 or 8      | `key` or System Key index
+|  ii  | `t`/8           | `tweak`
 |===
 --
 +
@@ -2839,7 +2756,7 @@ State Machine:::
    . `tweak` <- `INPUT`, and
    . _Instead of transitioning to state set_aux_value, the state remains unchanged (can be initial, encrypt, or decrypt)._
   ** In State _encrypt_, resp., _decrypt_, besides Form C `ace.state` instructions, only ``ace.exec`` instructions of Form A are allowed, where
-     “```ace.exec OUTPUT, Kn|K[Xn], INPUT```” encrypts, resp., decrypts `INPUT` into `OUTPUT`.
+     “```ace.exec OUTPUT, Kn|K(Xn), INPUT```” encrypts, resp., decrypts `INPUT` into `OUTPUT`.
 
 This algorithm does not automatically update the tweak value.
 
@@ -2859,19 +2776,18 @@ Parameters:::
 
 Data Structures:::
 
-* *Provisioning Input*:
+* *Provisioning Input* (Content):
 +
 --
 [%autowidth,cols="^,<,<",options="header"]
 |===
 | Pos. | Size in Bytes   | Field
-|   i  | `ME_size`      | Metadata Extension
-|  ii  | `k`/8 or 8      | `key` or System Key index
+|   i  | `k`/8 or 8      | `key` or System Key index
 |===
 --
 +
 
-* *Internal State*:
+* *Internal State* (Content):
  ** `key`: `k` bits.
  ** `ctr`:  `b` bits.
  ** `auth_key`, `tag`: `b` bits.
@@ -2882,10 +2798,9 @@ Data Structures:::
 [%autowidth,cols="^,<,<",options="header"]
 |===
 |  Pos. | Size in Bytes   | Field
-|    i  | `ME_size`       | Metadata Extension
-|   ii  | `k`/8 or 8      | `key` or System Key index
-|  iii  | `b`/8           | `ctr`
-|   iv  | `b`/8           | `tag`
+|   i   | `k`/8 or 8      | `key` or System Key index
+|  ii   | `b`/8           | `ctr`
+| iii   | `b`/8           | `tag`
 |===
 --
 +
@@ -2938,7 +2853,7 @@ State Machine:::
  ** If the AD is empty, the transition to State _hash_absorb_ is necessary to initialize the counter.
 
  ** In State _hash_absorb_, only  ``ace.exec`` instructions of Form B are allowed.
- “```ace.exec Kn|K[Xn], INPUT```” absorbs a data block in `tag`, i.e.:
+ “```ace.exec Kn|K(Xn), INPUT```” absorbs a data block in `tag`, i.e.:
 +
 --
  . `absorb(INPUT)`.
@@ -2947,7 +2862,7 @@ State Machine:::
 If `IOLEN` > `b`, the above operation is executed `IOLEN/b` times.
 
 ** In State _encrypt_, only ``ace.exec`` instructions of Form A are allowed.
-   “```ace.exec OUTPUT, Kn|K[Xn], INPUT```” encrypts `INPUT` into `OUTPUT`, and absorbs `OUTPUT` into the `tag`, namely:
+   “```ace.exec OUTPUT, Kn|K(Xn), INPUT```” encrypts `INPUT` into `OUTPUT`, and absorbs `OUTPUT` into the `tag`, namely:
 +
 --
   . If `ctr[b/4-1:0] = 0`, then
@@ -2979,10 +2894,10 @@ If `IOLEN` > `b`, only the `b` least significant bits of `INPUT` are considered.
 +
 
 ** In State _enc_tag_finalize_, only ``ace.exec`` instructions of Form C are allowed. +
-  “```ace.exec OUTPUT, Kn|K[Xn]```” writes the `tag` to `OUTPUT`, and the state transitions to _completed_.
+  “```ace.exec OUTPUT, Kn|K(Xn)```” writes the `tag` to `OUTPUT`, and the state transitions to _completed_.
 
 ** In State _decrypt_, only  ``ace.exec`` instructions of Form A are allowed. +
- ```ace.exec OUTPUT, Kn|K[Xn], INPUT``` absorbs the ciphertext `INPUT` into the `tag`, then decrypts `INPUT` into `OUTPUT`, namely:
+ ```ace.exec OUTPUT, Kn|K(Xn), INPUT``` absorbs the ciphertext `INPUT` into the `tag`, then decrypts `INPUT` into `OUTPUT`, namely:
 +
 --
   . If `ctr[b/4-1:0] == 0`, then
@@ -3013,8 +2928,8 @@ If `IOLEN` > `b`, only the `b` least significant bits of `INPUT` are considered.
 
 ** To transition to State _hash_verify_, a Form C ``ace.state`` instruction must be used to provide
 the value against which the internally computed tag must be compared:
-   If the values match, then `aceerror` is set to _ace_err_no_error_,
-   else an ACE error _ace_err_auth_ is raised.
+   If the values match, then `aceerror` is set to ace_err_no_error,
+   else an ACE error ace_err_auth is raised.
    The state transitions to _completed_.
 
 ** Upon completion of `ace.import`, the ACE unit recomputes `hash_key`, i.e.:
@@ -3047,7 +2962,7 @@ ace.exec K0, V0
 ace.state K0, #ace_state_hash_absorb
 foreach(i from 0 to len_in_bytes(AD)/16-1) {
    V0 ← AD[16*i .. 16*i+15]
-   ace.exec K0, V0                              // Absorb it into hash
+   ace.exec K0, V0                               // Absorb it into hash
 }
 
 // Encrypt plaintext and continue computation of tag
@@ -3061,7 +2976,7 @@ foreach(i from 0 to len_in_bytes(PT)/16-1) {
 // Finally, we absorb the lengths into tag, finalize it, and output it
 V1 ← bin(len_in_bits(AD), 64) @ bin(len_in_bits(PT), 64)
 ace.state K0, #ace_state_enc_tag_finalize, V1
-ace.exec V2, K0                                 // V2 contains the finalized hash
+ace.exec V2, K0                                  // V2 contains the finalized hash
 ----
 
 GCM decryption differs from encryption as follows:
@@ -3075,7 +2990,7 @@ and the last lines are as follows:
 // Finally, we absorb the lengths into tag, finalize it, and verify it
 ace.state K0, #ace_state_dec_tag_finalize
 V1 ← bin(len_in_bits(AD), 64) @ bin(len_in_bits(CT), 64)
-ace.exec V2, K0, V1                             // V2 contains the finalized hash
+ace.exec V2, K0, V1                              // V2 contains the finalized hash
 
 V1 ← tag_from_payload
 ace.state K0, #ace_state_hash_verify, V1
@@ -3088,17 +3003,14 @@ if (X1 != 0) then { handle error }       // do not use the plaintext if error oc
 [NOTE]
 ====
 GCM security is not compromised if `H` is revealed.
-Consequently, an implementation based on a simpler ECB mode CC is possible, as shown below (for encryption only -- decryption is similar).
-
-However, this significantly increases code size and requires support for carry-less multiplication.
-Adding a dedicated mode to the ACE unit is a minor effort, and it allows internal logic to optimize execution beyond the capabilities of, for instance, a compiler on an in-order CPU. It also means that the CPU does not have to implement the carry-less multiplication (<<ACE-dependencies>>), and only a shared ACE unit has to, which saves hardware costs when several small cores share a single ACE unit.
+Consequently, an implementation of GCM based on an ECB mode CC is possible, and we include it as an example below.
+However, this significantly increases code size and requires support for carry-less multiplication, which may not be available in all hardware.
 
 Furthermore, a GCM implementation is necessary to support the use case where the IV is also set in advance and not modifiable by the user.
 Thus, we need to be able to configure a GCM CC with both secret key and the IV.
 This is described in the next section.
 ====
 
-////
 [[ACE-pseudocode-GCM-encryption-alternate]]
 .Implementing GCM encryption using an ECB CC
 ----
@@ -3138,7 +3050,6 @@ V5[31:0] ← zeros(31) @ 1                         // Prepare IV @ 1 for tag enc
 ace.exec V2, K0, V5
 tag ← V3 xor V2                                  // Last Horner's scheme add
 ----
-////
 
 [[ACE-GCM-with-IV-mode]]
 ==== GCM with Set IV
@@ -3148,20 +3059,19 @@ This variant _cannot_ be emulated with an ECB CC because it would reveal the int
 
 The differences between GCM and GCM with Set IV start with the format of the Provisioning Input:
 
-* *Provisioning Input*:
+* *Provisioning Input* (Content):
 +
 --
 [%autowidth,cols="^,<,<",options="header"]
 |===
 |  Pos. | Size in Bytes   | Field
-|   i   | `ME_size`       | Metadata Extension
-|  ii   | `k`/8 or 8      | `key` or System Key index
-| iii   | 3``b``/32       | `IV`, i.e., bits [b-1:b/4] of the counter
+|   i   | `k`/8 or 8      | `key` or System Key index
+|  ii   | 3``b``/32       | `IV`, i.e., bits [b-1:b/4] of the counter
 |===
 --
 +
 
-* *Internal State*:
+* *Internal State* (Content):
 Same as for GCM.
 
 * *Serialized Content*:
@@ -3209,19 +3119,18 @@ Parameters:::
 
 Data Structures:::
 
-* *Provisioning Input*:
+* *Provisioning Input* (Content):
 +
 --
 [%autowidth,cols="^,<,<",options="header"]
 |===
 | Pos. | Size in Bytes   | Field
-|   i  | `ME_size`       | Metadata Extension
-|  ii  | `k`/8 or 8      | `key` or System Key index
+|   i  | `k`/8 or 8      | `key` or System Key index
 |===
 --
 +
 
-* *Internal State*:
+* *Internal State* (Content):
  ** `key`, `enc_key`: `k` bits.
  ** `auth_key`: `b` bits.
  ** `nonce`: `3b/4` bits.
@@ -3239,12 +3148,11 @@ The public `SIV` value is computed by clearing the most significant bit of `tag`
 [%autowidth,cols="^,<,<",options="header"]
 |===
 |  Pos. | Size in Bytes   | Field
-|    i  | `ME_size`       | Metadata Extension
-|   ii  | `k`/8 or 8      | `key` or System Key index
-|  iii  | 3``b``/32       | `nonce`
-|   iv  | `b`/32          | `ctr`
-|    v  | `b`/8           | `tag`
-|   vi  | `b`/8           | `SIV`
+|    i  | `k`/8 or 8      | `key` or System Key index
+|   ii  | 3``b``/32       | `nonce`
+|  iii  | `b`/32          | `ctr`
+|   iv  | `b`/8           | `tag`
+|    v  | `b`/8           | `SIV`
 |===
 --
 +
@@ -3260,7 +3168,6 @@ Algorithm-Specific Functions:::
    (for instance, AES-GCM-SIV uses POLYVAL):
   . `tag <- tag xor INPUT`.
   . `tag <- Montmul(tag, hash_key)` or `Galoismul(tag, hash_key)`, depending on the algorithm.
-* `RFC8452_KeyDeriv(key)` = `KeyDeriv(key,zeros(125))`, i.e., per RFC8452 (<<ACE-SCC-RFC8452-derivation>>).
 
 State Machine:::
 * *States:*
@@ -3283,16 +3190,16 @@ State Machine:::
 * *Behavior:*
  ** In State _initial_ :
   *** Upon entering the state, the following initialization operations are performed:
-   . (`enc_key`, `auth_key`) `<-` `RFC8452_KeyDeriv(key)`,
+   . (`enc_key`, `auth_key`) `<-` `RFC8452_RFC8452_KeyDeriv(key)`,
    . `nonce`, `ctr`, `tag`, `SIV <- 0`.
  *** No {nbsp}``ace.exec``{nbsp} operation is allowed.
 
- *** Upon issuing a Form C ```ace.state Kn|K[Xn], #ace_state_set_aux_value, INPUT``` :
+ *** Upon issuing a Form C ```ace.state Kn|K(Xn), #ace_state_set_aux_value, INPUT``` :
   *** The value of `nonce` is set to `INPUT`.
   *** (If the instruction is repeated, there is no harm, since it just overwrites the `nonce` before any other operation is performed.)
 
   ** In State _set_aux_value:
-*** Upon issuing a Form C ```ace.state Kn|K[Xn], #ace_state_hash_absorb, INPUT```:
+*** Upon issuing a Form C ```ace.state Kn|K(Xn), #ace_state_hash_absorb, INPUT```:
 +
 --
 **** The value of `SIV` is set to `INPUT`.
@@ -3301,7 +3208,7 @@ State Machine:::
 NOTE: This version of the instruction is meant to be used during decryption.
       It is harmless to invoke it during encryption, however, as the `SIV` field will be overwritten later with the correct synthetic value.
 
-*** Upon issuing a Form A ```ace.state Kn|K[Xn], #ace_state_hash_absorb```:
+*** Upon issuing a Form A ```ace.state Kn|K(Xn), #ace_state_hash_absorb```:
 +
 --
 **** The `SIV` is not modified (it is assumed to be already zero).
@@ -3337,7 +3244,7 @@ Then, “```ace.exec```” finalizes the SIV/tag computation by performing:
 
 If `IOLEN` > `b`, only the `b` least significant bits of `INPUT` are considered.
 
- ** In State _encrypt_, only  ``ace.exec`` instructions of Form A are allowed, namely “```ace.exec OUTPUT, Kn|K[Xn], INPUT```,” to encrypt `INPUT` into `OUTPUT` as follows:
+ ** In State _encrypt_, only  ``ace.exec`` instructions of Form A are allowed, namely “```ace.exec OUTPUT, Kn|K(Xn), INPUT```,” to encrypt `INPUT` into `OUTPUT` as follows:
 +
 --
 . If `ctr == 0`, then the CR is *invalidated*.
@@ -3351,7 +3258,7 @@ If `IOLEN` > `b`, only the `b` least significant bits of `INPUT` are considered.
 +
 If `IOLEN` > `b`, the above operations are applied to each of the `IOLEN/b` blocks in `INPUT`.
 
- ** In State _decrypt_,  only Form A ``ace.exec`` instructions are allowed. “```ace.exec OUTPUT, Kn|K[Xn], INPUT```” decrypts `INPUT` into `OUTPUT` and then absorbs the plaintext `OUTPUT` into the `tag`:
+ ** In State _decrypt_,  only Form A ``ace.exec`` instructions are allowed. “```ace.exec OUTPUT, Kn|K(Xn), INPUT```” decrypts `INPUT` into `OUTPUT` and then absorbs the plaintext `OUTPUT` into the `tag`:
 +
 --
      . If `ctr == 0`, then the CR is *invalidated*.
@@ -3368,7 +3275,7 @@ If `IOLEN` > `b`, the above operations are applied to each of the `IOLEN/b` bloc
 
  ** In State _dec_tag_finalize_,
    only an ``ace.exec`` instruction of Form B, is allowed,
-   namely “```ace.exec Kn|K[Xn], INPUT```,” where it is the responsibility of the user to set
+   namely “```ace.exec Kn|K(Xn), INPUT```,” where it is the responsibility of the user to set
 +
 --
 [none]
@@ -3385,16 +3292,16 @@ If `IOLEN` > `b`, the above operations are applied to each of the `IOLEN/b` bloc
   . else (tag length is `3b/4` bits)
      .. `tag <- tmp[3b/4-1:0] @ zeros(b/4)`.
      .. If `tag` and `SIV` match, then
-     ... `aceerror` <- _ace_err_no_error_,
+     ... `aceerror` <- ace_err_no_error,
      .. else
-     ... `aceerror` <- _ace_err_auth_.
+     ... `aceerror` <- ace_err_auth.
   . The state transitions to _completed_.
 --
 +
 If `IOLEN` > `b`, only the `b` least significant bits of `INPUT` are considered.
 
  ** Upon completion of `ace.import`, the ACE unit recomputes `enc_key` and `auth_key`, i.e.:
-  . (`enc_key`, `auth_key`) <- `RFC8452_KeyDeriv(key)`.
+  . (`enc_key`, `auth_key`) <- `RFC8452_RFC8452_KeyDeriv(key)`.
 
 //
 
@@ -3512,19 +3419,18 @@ Also, define `g` = `log_2(b)`.
 
 Data Structures:::
 
-* *Provisioning Input*:
+* *Provisioning Input* (Content):
 +
 --
 [%autowidth,cols="^,<,<",options="header"]
 |===
 | Pos. | Size in Bytes   | Field
-|   i  | `ME_size`       | Metadata Extension
-|  ii  | `k`/8 or 8      | `key` or System Key index
+|   i  | `k`/8 or 8      | `key` or System Key index
 |===
 --
 +
 
-* *Internal State*:
+* *Internal State* (Content):
  ** `key`: `k` bits.
  ** `N`: `u+1` bits (at most `u` bits are all used).
  ** `L`, `offset`, `hash_A`, `hash_P` : `b` bits.
@@ -3536,17 +3442,16 @@ Data Structures:::
 [%autowidth,cols="^,<,<",options="header"]
 |===
 |  Pos. | Size in Bytes          | Field
-|    i  | `ME_size`              | Metadata Extension
-|   ii  | `k`/8 or 8             | `key` or System Key index
-|  iii  |  `b`/8                 | `N`
-|   iv  |  `b`/8                 | `L` (only `u+1` bits used)
-|    v  |  `b`/8                 | `offset`
-|   vi  |  `b`/8                 | `hash_A`
-|  vii  |  `b`/8                 | `hash_P`
-| viii  |  `2`                   | `tag_len`
-|   ix  |  `2`                   | `last_blk_len`
-|    x  |  `2`                   | `N_len`
-|   xi  |  `2`                   | Padding
+|    i  | `k`/8 or 8             | `key` or System Key index
+|   ii  |  `b`/8                 | `N`
+|  iii  |  `b`/8                 | `L` (only `u+1` bits used)
+|   iv  |  `b`/8                 | `offset`
+|    v  |  `b`/8                 | `hash_A`
+|   vi  |  `b`/8                 | `hash_P`
+|  vii  |  `2`                   | `tag_len`
+| viii  |  `2`                   | `last_blk_len`
+|   ix  |  `2`                   | `N_len`
+|    x  |  `2`                   | Padding
 |===
 --
 +
@@ -3570,10 +3475,10 @@ State Machine:::
  ** _hash_absorb_: Set the tag length, and process the AD.
  ** _hash_finalize_: Set the length of the final block of the AD and process it.
  ** _encrypt_: Process the plaintext by absorbing it into the tag and encrypting it.
- ** _enc_last_block_: Provide the length of the last block of the plaintext, then absorb it into the tag and encrypt it.
+ ** _enc_last_block_: Provide the last block of the plaintext, then process it.
  ** _enc_tag_finalize_: Return the tag.
  ** _decrypt_: Process the ciphertext by decrypting it and absorbing the plaintext into the tag.
- ** _dec_last_block_: Provide the length of the last block of the ciphertext, then decrypt it and absorb the plaintext into the tag.
+ ** _dec_last_block_: Provide the last block of the ciphertext, then process it.
  ** _hash_verify_: Compare a user-provided value with the internally computed tag.
  ** _completed_: The algorithm has completed its operation.
 
@@ -3593,17 +3498,17 @@ State Machine:::
    . `hash_P <- zeros(b)`
 
 ** To move to _set_aux_value_, a Form B `ace.state` must be used, where the auxiliary argument `Xs` sets the nonce length `N_len`.
- `N_len` must be at least `g-1`. If not, ACE error _ace_err_invalid_value_ is raised, and the CR is *invalidated*.
+ `N_len` must be at least `g-1`. If not, ACE error ace_err_invalid_value is raised, and the CR is *invalidated*.
 
-** In State _set_aux_value_, only  ``ace.exec`` instructions of Form B, “```ace.exec Kn|K[Xn], INPUT```”, are allowed, whereby `N` is set to `INPUT`, namely
+** In State _set_aux_value_, only  ``ace.exec`` instructions of Form B, “```ace.exec Kn|K(Xn), INPUT```”, are allowed, whereby `N` is set to `INPUT`, namely
      `N <- zeros(u-N_len) @ INPUT[N_len-1:0]`
-  *** If “```ace.exec Kn|K[Xn], INPUT```,” is repeated, it will rewrite `N`.
+  *** If “```ace.exec Kn|K(Xn), INPUT```,” is repeated, it will rewrite `N`.
   *** If no such `ace.exec` is issued, `N` is not changed, which means that its most significant bit is 1.
       This condition results in an error when transitioning to _hash_absorb_.
 
 ** To move to _hash_absorb_, a Form B `ace.state` must be used, where the auxiliary argument `Xs` sets the tag length `tag_len`.
-  *** If this argument (interpreted as an unsigned value) is larger than `b` or is equal to `0` (the latter occurs also if `X0` is passed as the auxiliary argument), an _ace_err_invalid_value_ error is raised, and the CR is *invalidated*.
-  *** If `N[u] == 1`, this means that `N` was not set in State _set_aux_value_. We do not allow code that skips nonce setting, as this mode is not secure under nonce reuse, therefore in this case ACE error _ace_err_invalid_value_ is raised, and the CR is *invalidated*.
+  *** If this argument (interpreted as an unsigned value) is larger than `b` or is equal to `0` (the latter occurs also if `X0` is passed as the auxiliary argument), an ace_err_invalid_value error is raised, and the CR is *invalidated*.
+  *** If `N[u] == 1`, this means that `N` was not set in State _set_aux_value_. We do not allow code that skips nonce setting, as this mode is not secure under nonce reuse, therefore in this case ACE error ace_err_invalid_value is raised, and the CR is *invalidated*.
   *** Following operations are performed:
   . `tag_len` <- `Xs`.
   . `offset <- zeros(b)`
@@ -3611,7 +3516,7 @@ State Machine:::
   . `L <- double(double(L))`
 
 ** In State _hash_absorb_, only  ``ace.exec`` instructions of Form B are allowed:
-  “```ace.exec Kn|K[Xn], INPUT```” absorbs a data block in `tag`, i.e.:
+  “```ace.exec Kn|K(Xn), INPUT```” absorbs a data block in `tag`, i.e.:
 +
 --
     . `L <- double(L)`
@@ -3624,7 +3529,7 @@ If `IOLEN` > `b`, the above operation is executed `IOLEN/b` times.
 ** To move to _hash_finalize_, a Form B `ace.state` operation sets the length of the final block of the AD in `last_blk_len`.
 
 ** In State _hash_finalize_, only one `ace.exec` instruction of Form B is allowed if `last_blk_len` != `0`.
- “```ace.exec Kn|K[Xn], INPUT```” which absorbs the last data block in `tag`, i.e.:
+ “```ace.exec Kn|K(Xn), INPUT```” which absorbs the last data block in `tag`, i.e.:
 +
 --
   * `tmp : bits(b)`
@@ -3657,7 +3562,7 @@ If `last_blk_len` == 0, however, no `ace.exec` can be executed, and only an `ace
 --
 +
 ** In State _encrypt_, only ``ace.exec`` instructions of Form A are allowed:
-   “```ace.exec OUTPUT, Kn|K[Xn], INPUT```” absorbs the plaintext `INPUT` into the `tag` and encrypts `INPUT` into `OUTPUT`, namely:
+   “```ace.exec OUTPUT, Kn|K(Xn), INPUT```” absorbs the plaintext `INPUT` into the `tag` and encrypts `INPUT` into `OUTPUT`, namely:
 +
 --
  . `L <- double(L)`
@@ -3670,7 +3575,7 @@ If `IOLEN > b`, the above operation sequence is executed `IOLEN/b` times, encryp
 
 ** To move to _enc_last_block_, a Form B `ace.state` instruction must be used to set the bit length of the final block of the plaintext in `last_blk_len`.
 
-** In State _enc_last_block_, only an ``ace.exec`` instruction of Form A “```ace.exec OUTPUT, Kn|K[Xn], INPUT```,” is allowed if `last_blk_len` is nonzero.
+** In State _enc_last_block_, only an ``ace.exec`` instruction of Form A “```ace.exec OUTPUT, Kn|K(Xn), INPUT```,” is allowed if `last_blk_len` is nonzero.
 In this case, following operations are performed:
 +
 --
@@ -3689,7 +3594,7 @@ In this case, following operations are performed:
  . `hash_P <- enc_blk(key, hash_P xor tmp2 xor offset xor aux) xor hash_A`
 --
 +
-On the other hand, if `last_blk_len` is zero, only an ``ace.exec`` instruction of Form D, “```ace.exec Kn|K[Xn]```,” is allowed, which performs:
+On the other hand, if `last_blk_len` is zero, only an ``ace.exec`` instruction of Form D, “```ace.exec Kn|K(Xn)```,” is allowed, which performs:
 +
 --
 * `aux : bits(b)`
@@ -3702,7 +3607,7 @@ On the other hand, if `last_blk_len` is zero, only an ``ace.exec`` instruction o
 +
 In both cases the state then transitions to _enc_tag_finalize_.
 
-** In State _enc_tag_finalize_, only an ``ace.exec`` instruction of Form C, “```ace.exec OUTPUT,Kn|K[Xn]```,” is allowed, which
+** In State _enc_tag_finalize_, only an ``ace.exec`` instruction of Form C, “```ace.exec OUTPUT,Kn|K(Xn)```,” is allowed, which
 performs `OUTPUT <- zeros(b-tag_len) @ hash_P[tag_len-1:0]`.
 
 ** In State _decrypt_, only ``ace.exec`` instructions of Form A are allowed.
@@ -3723,7 +3628,7 @@ If `IOLEN` > `b`, the same behavior applies as in State _encrypt_.
 
 ** To move to State _dec_last_block_, a Form B `ace.state` operation must be used to also contextually set the bit length of the final block of the ciphertext in `last_blk_len`.
 
-** In State _dec_last_block_, only an ``ace.exec`` instruction of Form A “```ace.exec OUTPUT, Kn|K[Xn], INPUT```,” is allowed if `last_blk_len` is nonzero.
+** In State _dec_last_block_, only an ``ace.exec`` instruction of Form A “```ace.exec OUTPUT, Kn|K(Xn), INPUT```,” is allowed if `last_blk_len` is nonzero.
 In this case, the same operations as in State _enc_last_block_ are performed except for Line 6, which is instead
 +
 --
@@ -3733,14 +3638,14 @@ In this case, the same operations as in State _enc_last_block_ are performed exc
 +
 and the state is changed to _hash_verify_.
 +
-If `last_blk_len` is zero, only an ``ace.exec`` instruction of Form D, “```ace.exec Kn|K[Xn]```,” is allowed, which performs the same operations as in State _enc_last_block_, except for the final state transition, which also in this case is to _hash_verify_.
+If `last_blk_len` is zero, only an ``ace.exec`` instruction of Form D, “```ace.exec Kn|K(Xn)```,” is allowed, which performs the same operations as in State _enc_last_block_, except for the final state transition, which also in this case is to _hash_verify_.
 
 ** To complete the algorithm in the decryption branch, a Form C ``ace.state`` operation must be used to (confirm the)
 transition to State _hash_verify_ and compare the `tag_len` least significant bits of `INPUT` with the `tag_len` least significant bits of `hash_P`:
 +
 --
-  . If the values match, then `aceerror` is set to _ace_err_no_error_,
-  . else `aceerror` is set to _ace_err_auth_.
+  . If the values match, then `aceerror` is set to ace_err_no_error,
+  . else `aceerror` is set to ace_err_auth.
   . The state transitions to _completed_.
 --
 +
@@ -3846,19 +3751,18 @@ Parameters:::
 
 Data Structures:::
 
-* *Provisioning Input*:
+* *Provisioning Input* (Content):
 +
 --
 [%autowidth,cols="^,<,<",options="header"]
 |===
 | Pos. | Size in Bytes   | Field
-|   i  | `ME_size`       |  Metadata Extension
-|  ii  | `k`/8 or 8      | `key` or System Key index
+|   i  | `k`/8 or 8      | `key` or System Key index
 |===
 --
 +
 
-* *Internal State*:
+* *Internal State* (Content):
  ** `key`: `k` bits.
  ** `hash`: `b` bits.
  ** `last_block_len`: 64 bits.
@@ -3869,10 +3773,9 @@ Data Structures:::
 [%autowidth,cols="^,<,<",options="header"]
 |===
 |  Pos. | Size in Bytes   | Field
-|    i  | `ME_size`       | Metadata Extension
-|   ii  | `k`/8 or 8      | `key` or System Key index
-|  iii  | `b`/8           | `hash`
-|   iv  | `8`             | `last_block_len`
+|    i  | `k`/8 or 8      | `key` or System Key index
+|   ii  | `b`/8           | `hash`
+|  iii  | `8`             | `last_block_len`
 |===
 --
 +
@@ -3915,7 +3818,7 @@ State Machine:::
   *** No {nbsp}```ace.exec```{nbsp} operation is allowed.
 
  ** In State _hash_absorb_, we can only issue ``ace.exec`` instructions of Form B. +
- “```ace.exec Kn|K[Xn], INPUT```,” absorbs the data block `INPUT` into the hash as follows:
+ “```ace.exec Kn|K(Xn), INPUT```,” absorbs the data block `INPUT` into the hash as follows:
 +
 --
    . `hash <- enc_blk(key, hash xor INPUT)`.
@@ -3923,12 +3826,12 @@ State Machine:::
 +
 If `IOLEN` > `b`, then the above operations are applied to each `b`-bit block of `INPUT`.
 
- ** Upon issuing a Form B “```ace.state Kn|K[Xn], #ace_state_hash_last_block, Xs```” where `Xs` contains the bit length of the last block, the following happens:
+ ** Upon issuing a Form B “```ace.state Kn|K(Xn), #ace_state_hash_last_block, Xs```” where `Xs` contains the bit length of the last block, the following happens:
    . if `last_block_len` != 0, then the CR is *invalidated*. (The previous block is not complete.)
    . if `Xs > b` then the CR is *invalidated*.
    . `last_block_len <- Xs`.
 
- ** In State _hash_last_block_,  we can only issue a single ``ace.exec`` instruction of Form B, i.e., “```ace.exec Kn|K[Xn], INPUT```”, to absorb the data block `INPUT`. If `IOLEN` > `b`, only the least significant `b` bits of `INPUT` are considered.
+ ** In State _hash_last_block_,  we can only issue a single ``ace.exec`` instruction of Form B, i.e., “```ace.exec Kn|K(Xn), INPUT```”, to absorb the data block `INPUT`. If `IOLEN` > `b`, only the least significant `b` bits of `INPUT` are considered.
 +
 --
   . `(K1, K2) <- gen_subkeys(key)`.
@@ -3943,7 +3846,7 @@ If `IOLEN` > `b`, then the above operations are applied to each `b`-bit block of
 --
 +
 
-** In State _hash_output_, we can issue one ``ace.exec`` instruction of Form C, i.e., “```ace.exec OUTPUT, Kn|K[Xn]```”, to output the hash into `OUTPUT`.
+** In State _hash_output_, we can issue one ``ace.exec`` instruction of Form C, i.e., “```ace.exec OUTPUT, Kn|K(Xn)```”, to output the hash into `OUTPUT`.
    If `IOLEN` > `b`, only the bits of `OUTPUT` beyond the `b`-th are cleared.
    Upon issuing that instruction, the CC transitions to State _completed_ with no error.
 
@@ -4004,19 +3907,18 @@ Either the block size is an integer multiple of the vector length or the vector 
 
 Data Structures:::
 
-* *Provisioning Input*:
+* *Provisioning Input* (Content):
 +
 --
 [%autowidth,cols="^,<,<",options="header"]
 |===
 | Pos. | Size in Bytes            | Field
-|  i   | `ME_size`                | Metadata Extension
-|  ii  | If keyed: `k`/8 or 8     | `key` or System Key index
+|   i  | If keyed: `k`/8 or 8     | `key` or System Key index
 |===
 --
 +
 
-* *Internal State*:
+* *Internal State* (Content):
  ** `key`: `k` bits. Present only if keyed, i.e., a MAC.
  ** `state`: `n` bits.
  ** `last_block_len`: int. Present only if this Hash/MAC has special internal treatment for a fractional last block that goes beyond padding and appending the length, which are handled by user software  (field size at most 16 bits).
@@ -4024,7 +3926,6 @@ Data Structures:::
  ** `block_base`: int. Length of absorbed data so far for the current block (field size at most 16 bits). Only if used by the algorithm.
  ** `cumul_len`: int. Cumulative length of data absorbed so far (if the algorithm must process and incorporate it in the hash on its own).
  ** `block`: `b` bits.  Included only if a partial block must be maintained—for instance when the inputs are not directly absorbed into `state`.
-//, i.e., for instance if the absorbed unit is larger than a normally available vector size or not a submultiple thereof, and is not
 
 * *Serialized Content*:
 +
@@ -4032,13 +3933,12 @@ Data Structures:::
 [cols="^6%,^19%,<25%,<50%",options="header"]
 |===
 |  Pos. | Size in Bytes            | Field                       | Notes
-|    i  | `ME_size`                | Metadata Extension          | --
-|   ii  | If keyed: `k`/8 or 8     | `key` or System Key index   | --
-|  iii  | `n`/8                    | `state`                     | --
-|   iv  | `2`                      | `last_block_len`            | Only if this Hash/MAC has special internal treatment for a fractional last block that goes beyond padding and appending the length, which are handled by user software. Otherwise, this is zero.
-|    v  | `2`                      | `block_base`                | Amount of data stored so far into `block`.  Only if used by the algorithm, else zero padding.
-|   vi  | `4`                      | `cumul_len`                 | Cumulative length of all data absorbed so far. Only if the algorithm must process and incorporate it in the hash on its own, else zero padding.
-|  vii  | `b`/8                    | `block`                     | It is included it the SCC only if there is a partial block, and the block must be stored separately from the `state`, and exclude it when not.
+|    i  | If keyed: `k`/8 or 8     | `key` or System Key index   | --
+|   ii  | `n`/8                    | `state`                     | --
+|  iii  | `2`                      | `last_block_len`            | Only if this Hash/MAC has special internal treatment for a fractional last block that goes beyond padding and appending the length, which are handled by user software. Otherwise, this is zero.
+|   iv  | `2`                      | `block_base`                | Amount of data stored so far into `block`.  Only if used by the algorithm, else zero padding.
+|    v  | `4`                      | `cumul_len`                 | Cumulative length of all data absorbed so far. Only if the algorithm must process and incorporate it in the hash on its own, else zero padding.
+|   vi  | `b`/8                    | `block`                     | It is included it the SCC only if there is a partial block, and the block must be stored separately from the `state`, and exclude it when not.
 We reuse the most significant bit of the `state` field to store this information.
 (In theory, we could include only the part filled so far, but this would complicate the parsing of an SCC.)
 |===
@@ -4078,7 +3978,7 @@ State Machine:::
   *** Any `ace.exec` will result in the CR being *invalidated*.
 
  ** In State _hash_absorb_, we can only issue ``ace.exec`` instructions of Form B, i.e., +
- “```ace.exec Kn|K[Xn], INPUT```”, to absorb the data block `INPUT` into the hash as follows.
+ “```ace.exec Kn|K(Xn), INPUT```”, to absorb the data block `INPUT` into the hash as follows.
 +
 --
   . `input_base <- 0` // or `acestart` upon resumption
@@ -4104,7 +4004,7 @@ State Machine:::
 +
 
 //
- ** Upon issuing a Form B “`ace.state Kn|K[Xn], #ace_state_hash_last_block, Xs`” where `Xs` contains the length of the last block, the following happens:
+ ** Upon issuing a Form B “`ace.state Kn|K(Xn), #ace_state_hash_last_block, Xs`” where `Xs` contains the length of the last block, the following happens:
 +
 --
  . if `block_base` != 0, then the CR is *invalidated*. (The previous block is not complete.)
@@ -4124,7 +4024,7 @@ Then, state transitions to _hash_last_block_ as expected.
   *** Upon entering the state, the following operations are first performed:
   . `block[t - 1 : 0] <- finalize()`
   . `block_base <- 0`
- *** For each Form C `ace.exec` instruction “`ace.exec OUTPUT, Kn|K[Xn]`”, the following operations are performed:
+ *** For each Form C `ace.exec` instruction “`ace.exec OUTPUT, Kn|K(Xn)`”, the following operations are performed:
 +
 --
     * `amount : int`, `{nbsp}` amount of data to copy from `block` to `OUTPUT`
@@ -4169,20 +4069,11 @@ Parameters:::
 
 Data Structures:::
 
-* *Provisioning Input*:
-+
---
-[%autowidth,cols="^,<,<",options="header"]
-|===
-| Pos. | Size in Bytes   | Field
-|  i   | `ME_size`      | Metadata Extension
-|===
---
-+
+* *Provisioning Input* (Content): Empty.
 
 //
 
-* *Internal State*:
+* *Internal State* (Content):
  ** `state`: `n` bits.
  ** `last_block_len`: int.
  ** `input_base`: int.
@@ -4194,11 +4085,10 @@ Data Structures:::
 [%autowidth,cols="^,<,<",options="header"]
 |===
 | Pos. | Size in Bytes   | Field
-|   i  | `ME_size`      | Metadata Extension
-|  ii  | 200             | `state`
-| iii  | 2               | `last_block_len`
-|  iv  | 2               | `block_base`
-|   v  | 4               | Padding
+|   i  | 200             | `state`
+|  ii  | 2               | `last_block_len`
+| iii  | 2               | `block_base`
+|  iv  | 4               | Padding
 |===
 --
 +
@@ -4264,19 +4154,18 @@ Parameters:::
 
 Data Structures:::
 
-* *Provisioning Input*:
+* *Provisioning Input* (Content):
 +
 --
 [%autowidth,cols="^,<,<",options="header"]
 |===
 | Pos. | Size in Bytes   | Field
-|  i   | `ME_size`       | Metadata Extension
-| ii   | 16 or 8         | `key` or System Key index
+|   i  | 16 or 8         | `key` or System Key index
 |===
 --
 +
 
-* *Internal State*:
+* *Internal State* (Content):
  ** `key`: 128 bits, or 64 bits if it is a System Key index.
  ** `state[0 .. 4]`: five 64-bit words, i.e., 320 bits.
  ** `tag_len`: 8 bits as int.
@@ -4289,16 +4178,15 @@ Data Structures:::
 [%autowidth,cols="^,<,<",options="header"]
 |===
 | Pos. | Size in Bytes   | Field
-|    i | `ME_size`      | Metadata Extension
-|   ii | 16 or 8         | `key` or System Key index
-|  iii | 8               | `state`[0]
-|   iv | 8               | `state`[1]
-|    v | 8               | `state`[2]
-|   vi | 8               | `state`[3]
-|  vii | 8               | `state`[4]
-| viii | 2               | `last_block_len`
-|   ix | 2               | `tag_len`
-|    x | 4               | Padding
+|    i | 16 or 8         | `key` or System Key index
+|   ii | 8               | `state`[0]
+|  iii | 8               | `state`[1]
+|   iv | 8               | `state`[2]
+|    v | 8               | `state`[3]
+|   vi | 8               | `state`[4]
+|  vii | 2               | `last_block_len`
+| viii | 2               | `tag_len`
+|   ix | 4               | Padding
 |===
 --
 +
@@ -4355,7 +4243,7 @@ State Machine:::
 If `IOLEN` > 128, only the 128 least significant bits of `INPUT` are considered.
 
 ** In State _hash_absorb_, only  ``ace.exec`` instructions of Form B are allowed.
- “```ace.exec Kn|K[Xn], INPUT```” absorbs a data block into the state, i.e.:
+ “```ace.exec Kn|K(Xn), INPUT```” absorbs a data block into the state, i.e.:
 +
 --
  . `AD_empty` <- `false`
@@ -4369,7 +4257,7 @@ If `IOLEN` > 128, this sequence of four operations is executed `IOLEN/128` times
  . `lsb(state[4]) <- lsb(state[4]) xor 1`
 
 ** In State _encrypt_, only ``ace.exec`` instructions of Form A are allowed.
-   “```ace.exec OUTPUT, Kn|K[Xn], INPUT```” encrypts `INPUT` into `OUTPUT`, namely:
+   “```ace.exec OUTPUT, Kn|K(Xn), INPUT```” encrypts `INPUT` into `OUTPUT`, namely:
 +
 --
  . `state[0] <- state[0] xor INPUT[63:0]`
@@ -4381,7 +4269,7 @@ If `IOLEN` > 128, this sequence of four operations is executed `IOLEN/128` times
 If `IOLEN` is a multiple of 128, these operations are executed `IOLEN/128` times, encrypting each 128-bit block of `INPUT` into the corresponding 128-bit block of `OUTPUT`.
 
 ** In State _enc_last_block_, only one ``ace.exec`` instruction of Form A, to encrypt the last block is allowed.
-“```ace.exec OUTPUT, Kn|K[Xn], INPUT```”  performs
+“```ace.exec OUTPUT, Kn|K(Xn), INPUT```”  performs
 +
 --
  . `state[0] <- state[0] xor INPUT[63:0]`
@@ -4394,7 +4282,7 @@ In this state only one 128-bit block is processed. +
 The differences between the operation of `ace.exec` in this state and in State _encrypt_ are the absence of the final `ASCON(8)` and the automatic transition to State _hash_output_.
 
 ** In State _hash_output_, only one ``ace.exec`` instruction of Form C is allowed, to compute the tag.
-“```ace.exec OUTPUT, Kn|K[Xn]```”  performs
+“```ace.exec OUTPUT, Kn|K(Xn)```”  performs
 +
 --
  . `state[2] <- state[2] xor key[63:0]`
@@ -4409,7 +4297,7 @@ The differences between the operation of `ace.exec` in this state and in State _
 In this state only one 128-bit block is processed.
 
 ** In State _decrypt_, only  ``ace.exec`` instructions of Form A are allowed, i.e.,
- `ace.exec OUTPUT,Kn|K[Xn],INPUT`. This operation performs:
+ `ace.exec OUTPUT,Kn|K(Xn),INPUT`. This operation performs:
 +
 --
 * `tmp : bits(128)`
@@ -4425,7 +4313,7 @@ In this state only one 128-bit block is processed.
 If `IOLEN` is a multiple of 128, these operations are executed `IOLEN/128` times, decrypting each 128-bit block of `INPUT` into the corresponding 128-bit block of `OUTPUT`.
 
 ** In State _dec_last_block_, only a Form A ``ace.exec`` instruction is allowed.
-“```ace.exec OUTPUT, Kn|K[Xn], INPUT```” performs:
+“```ace.exec OUTPUT, Kn|K(Xn), INPUT```” performs:
 +
 --
 * `tmp : bits(128)`
@@ -4439,12 +4327,12 @@ If `IOLEN` is a multiple of 128, these operations are executed `IOLEN/128` times
 --
 +
 
-** In State _dec_tag_finalize_, a Form B `ace.state Kn|K[Xn], #ace_state_dec_tag_finalize, Xs` instruction may be executed, setting
+** In State _dec_tag_finalize_, a Form B `ace.state Kn|K(Xn), #ace_state_dec_tag_finalize, Xs` instruction may be executed, setting
 the tag len `tag_len` to the value of `Xs`, provided it is not smaller than 32 and not larger than 128.
-If the value is out of bounds, the instruction raises ACE error _ace_err_invalid_value_ and the CR is *invalidated*.
+If the value is out of bounds, the instruction raises ACE error ace_err_invalid_value and the CR is *invalidated*.
 
 ** In State _hash_verify_, only one ``ace.exec`` instruction of Form D is allowed, to verify the tag.
-“```ace.exec Kn|K[Xn], INPUT```” performs
+“```ace.exec Kn|K(Xn), INPUT```” performs
 +
 --
 . `state[2] <- state[2] xor key[63:0]`
@@ -4453,8 +4341,8 @@ If the value is out of bounds, the instruction raises ACE error _ace_err_invalid
 . `state[3] <- state[3] xor key[63:0]`
 . `state[4] <- state[4] xor key[127:64]`
 . `INPUT[tag_len-1:0]` is compared to `(state[4] @ state[3])[tag_len-1:0]`.
-. If the values match, then `aceerror` is set to _ace_err_no_error_,
-  else ACE error _ace_err_auth_ is raised. The state is changed to _completed_.
+. If the values match, then `aceerror` is set to ace_err_no_error,
+  else ACE error ace_err_auth is raised. The state is changed to _completed_.
 --
 +
 
@@ -4466,15 +4354,14 @@ If the value is out of bounds, the instruction raises ACE error _ace_err_invalid
 Similarly to GCM with Set IV, Ascon-AEAD128 can also be made into a version with a set nonce.
 In this case the State _set_aux_value_ is skipped, and the PI has the following form.
 
-* *Provisioning Input*:
+* *Provisioning Input* (Content):
 +
 --
 [%autowidth,cols="^,<,<",options="header"]
 |===
 | Pos. | Size in Bytes   | Field
-|   i  | `ME_size`       | Metadata Extension
-|  ii  | 16 or 8         | `key` or System Key index
-| iii  | 16              | `nonce`
+|   i  | 16 or 8         | `key` or System Key index
+|  ii  | 16              | `nonce`
 |===
 --
 +
@@ -4494,20 +4381,19 @@ Once in State _completed_, the CC cannot be brought back to State _initial_.
 The NIST specification also describes a version of Ascon-AEAD128 with _Nonce Masking_.
 This variant is described as follows:
 
-* *Provisioning Input*:
+* *Provisioning Input* (Content):
 +
 --
 [%autowidth,cols="^,<,<",options="header"]
 |===
 | Pos. | Size in Bytes   | Field
-|   i  | `ME_size`      | Metadata Extension
-|  ii  | 16 or 8         | `K1` or System Key index
-| iii  | 16 or 0         | `K2` or System Key index in `K1`
+|   i  | 16 or 8         | `K1` or System Key index
+|  ii  | 16 or 0         | `K2` or System Key index in `K1`
 |===
 --
 +
 
-* *Internal State*:
+* *Internal State* (Content):
  . `K1`: 128 bits, or 64 bits if it is a System Key index.
  . `K2`: 128 bits, omitted if a System Key is used.
  ** `state[0 .. 4]`: five 64-bit words, i.e., 320 bits.
@@ -4519,16 +4405,15 @@ This variant is described as follows:
 [%autowidth,cols="^,<,<",options="header"]
 |===
 |  Pos. | Size in Bytes   | Field
-|    i  | `ME_size`      | Metadata Extension
-|   ii  | 16 or 8         | `K1` or System Key index
-|  iii  | 16 or 0         | `K2` or System Key index in `K1`
-|   iv  | 8               | `state`[0]
-|    v  | 8               | `state`[1]
-|   vi  | 8               | `state`[2]
-|  vii  | 8               | `state`[3]
-| viii  | 8               | `state`[4]
-|   ix  | 2               | `tag_len`
-|    x  | 6               | Padding
+|    i  | 16 or 8         | `K1` or System Key index
+|   ii  | 16 or 0         | `K2` or System Key index in `K1`
+|  iii  | 8               | `state`[0]
+|   iv  | 8               | `state`[1]
+|    v  | 8               | `state`[2]
+|   vi  | 8               | `state`[3]
+|  vii  | 8               | `state`[4]
+| viii  | 2               | `tag_len`
+|   ix  | 6               | Padding
 |===
 --
 +
@@ -4548,18 +4433,9 @@ Parameters:::
 
 Data Structures:::
 
-* *Provisioning Input*:
-+
---
-[%autowidth,cols="^,<,<",options="header"]
-|===
-| Pos. | Size in Bytes   | Field
-|  i   | `ME_size`      | Metadata Extension
-|===
---
-+
+* *Provisioning Input* (Content): Empty.
 
-* *Internal State*:
+* *Internal State* (Content):
  ** `state[0 .. 4]`: five 64-bit words, i.e., 320 bits.
  ** `countdown` : integer going from 3 down to 0.
 
@@ -4569,14 +4445,13 @@ Data Structures:::
 [%autowidth,cols="^,<,<",options="header"]
 |===
 |  Pos. | Size in Bytes   | Field
-|    i  | `ME_size`      | Metadata Extension
-|   ii  | 8               | `state`[0]
-|  iii  | 8               | `state`[1]
-|   iv  | 8               | `state`[2]
-|    v  | 8               | `state`[3]
-|   vi  | 8               | `state`[4]
-|  vii  | 1               | `countdown` (from 3 down to 0)
-| viii  | 7               | Padding
+|    i  | 8               | `state`[0]
+|   ii  | 8               | `state`[1]
+|  iii  | 8               | `state`[2]
+|   iv  | 8               | `state`[3]
+|    v  | 8               | `state`[4]
+|   vi  | 1               | `countdown` (from 3 down to 0)
+|  vii  | 7               | Padding
 |===
 --
 +
@@ -4604,7 +4479,7 @@ State Machine:::
    . `ASCON(12)`
 
   ** In State _hash_absorb_, only  ``ace.exec`` instructions of Form B are allowed.
- “```ace.exec Kn|K[Xn], INPUT```” absorbs a data block into the state, i.e.:
+ “```ace.exec Kn|K(Xn), INPUT```” absorbs a data block into the state, i.e.:
 +
 --
  . `state[0] <- state[0] xor INPUT`
@@ -4616,7 +4491,7 @@ If `IOLEN` > `64`, these operations are executed `IOLEN/64` times, once for each
 ** Upon entering _hash_finalize_, `countdown` is set to 3.
 
 ** In State _hash_finalize_, at most four ``ace.exec`` instructions of Form C are allowed.
-To compute the tag, “```ace.exec OUTPUT, Kn|K[Xn]```”  performs
+To compute the tag, “```ace.exec OUTPUT, Kn|K(Xn)```”  performs
 +
 --
 . `ASCON(12)`
@@ -4686,22 +4561,13 @@ For secp521r1, `b` is 576 bits, of which only 521 are used, and `h` is 512 bits.
 
 Data Structures:::
 
-* *Provisioning Input*:
-+
---
-[%autowidth,cols="^,<,<",options="header"]
-|===
-| Pos. | Size in Bytes   | Field
-|  i   | `ME_size`      | Metadata Extension
-|===
---
-+
+* *Provisioning Input* (Content): Empty.
 
 NOTE: In the Metadata, _only_ the curve is embedded in Algorithm.
 The _DirectionPolicy_ field determines whether signature generation (bit 12) and signature verification (bit 13) are allowed
 All four combinations are admissible.
 
-* *Internal State*:
+* *Internal State* (Content):
  ** `HasGenerator`: Bool.
  ** `HasScalar`: Bool.
  ** `HasPublicKey`: Bool.
@@ -4726,42 +4592,41 @@ All four combinations are admissible.
 [cols="^5%,<32%,<60",width="100%",options="header"]
 |===
 |  Pos. | Size in Bytes   | Field
-|  i    | `ME_size`       | Metadata Extension
-|  ii   | 2               |  Bit 0: `HasGenerator` +
+|   i   | 2               |  Bit 0: `HasGenerator` +
 Bit 1: `HasScalar` +
 Bit 2: `HasPublicKey` +
 Bit 3: `HasHash` +
 Bit 4: `HasSignature` +
 Bit 5: `HasRandomNumber`
-|  iii  | 2               | `Progress`/`input_base`
-|  iv   | 2               | `block_base`
-|  v    | 2               | Padding
-|  vi   | 2``b``/8        | `Generator`, X coordinate
-|  vii  | 2``b``/8        | `Generator`, Y coordinate
-|  viii | `b`/8           | `Scalar`: `b`-bit string. Can be the private key.
+|   ii  | 2               | `Progress`/`input_base`
+|  iii  | 2               | `block_base`
+|  iv   | 2               | Padding
+|  v    | 2``b``/8        | `Generator`, X coordinate
+|  vi   | 2``b``/8        | `Generator`, Y coordinate
+|  vii  | `b`/8           | `Scalar`: `b`-bit string. Can be the private key.
 |===
 
-`SCC_content_size()` returns only the length of the content from Position i to Position viii.
+`SCC_content_size()` returns only the length of the content from Position i to Position vii.
 
 The size of following fields is included in the _ExtraContent_ field of the Metadata Header.
 
 [cols="^5%,<32%,<60",width="100%",options="header"]
 |===
 |  Pos. | Size in Bytes                             | Field
-|   ix  | If `mh`._ExtraContent_ != 0: 8, else: 0   |  `acemarchid`
-|   x   | If `HasPublicKey`: `b`/8, else: 0         | `PublicKey`, X coordinate.
-|   xi  | If `HasPublicKey`: `b`/8, else: 0         | `PublicKey`, Y coordinate.
-|   xii | If `HasSignature`: `b`/8, else: 0         | `Signature`, R value.
-|  xiii | If `HasSignature`: `b`/8, else: 0         | `Signature`, S value.
-|  xiv  | If `HasHash`: `h`/8, else: 0              | `Hash`: a `h`-bit string representing the hash.
-|  xv   | If `HasRandomNumber`: `h`/8, else: 0      | `RandomNumber`.
-|  xvi  | (variable)                                | Additional data from the *Internal State*..
+| viii  | If `mh`._ExtraContent_ != 0: 8, else: 0   |  `acemarchid`
+|   ix  | If `HasPublicKey`: `b`/8, else: 0         | `PublicKey`, X coordinate.
+|    x  | If `HasPublicKey`: `b`/8, else: 0         | `PublicKey`, Y coordinate.
+|   xi  | If `HasSignature`: `b`/8, else: 0         | `Signature`, R value.
+|  xii  | If `HasSignature`: `b`/8, else: 0         | `Signature`, S value.
+| xiii  | If `HasHash`: `h`/8, else: 0              | `Hash`: a `h`-bit string representing the hash.
+|  xiv  | If `HasRandomNumber`: `h`/8, else: 0      | `RandomNumber`.
+|   xv  | (variable)                                | Additional data from the *Internal State* (Content)..
 |===
 
 The `HasRandomNumber` flag is set and the `RandomNumber` field is used only during signature generation.
 `RandomNumber` is exported only if the signature operation is interrupted.
 
-The size in bytes of Fields ix to xv is:
+The size in bytes of Fields vii to xiv is:
 
 `{fournbsp}{fournbsp}` `varlen` <- 8 + (`HasPublicKey` != 0) {interpunct} 2``b``/8 + (`HasSignature` != 0) {interpunct} 2``b``/8 + +
 `{fournbsp}{fournbsp}{fournbsp}{fournbsp}{fournbsp}{fournbsp}{fournbsp}` + (`HasHash` != 0) {interpunct} ``h``/8 + (`HasRandomNumber` != 0) {interpunct} ``h``/8.
@@ -4841,12 +4706,12 @@ the Boolean variable ``Has``__Var__ is set when all operations required in State
 
 _This section is informative and non-normative._
 
-ACE provides different architected layers of usage control:
+ACE provides a layer of usage control based on the use of Localities.
 
-. CC usage can optionally be constrained by filters configured at various modes and that must be matched at lower-privileged modes against values embedded in the Metadata Extension. The filters could correspond to `scontext`, `hcontext`, `mcontext` (respectively 31, 14, and 14 bits long) but longer CSRs could be be defined in their place to allow matching against longer string.
+- We can suppose to add an optional Metadata Extension block that contains values of `scontext` and `mcontext` to match against, or alternative values based on other CSRs, perhaps defined ad-hoc.
 +
 This is a lightweight mechanism.
-Since filtering by `(v)sacefilter` is inactive when the hart is in S mode or higher, context switching at U can be performed without modifying the CSK.
+Since filtering at one mode is inactive when the hart is in a higher mode, context switching can be performed without modifying the CSK.
 
 . A programmable CSK can restrict not only the usage, but even the import of CCs.
 This offers stronger security by also preventing unauthorized `ace.import` operations, but incurs higher overhead as it typically requires an `ecall` to modify the CSK, and
@@ -4862,7 +4727,6 @@ Although the architecture does not prevent assigning unique CSKs to U-mode proce
 Hardware support—such as automatic CSK switching based on contexts could alleviate this burden.
 Such a mechanism is not under consideration due to its architectural complexity, inflexibility, and hardware cost.
 For example, it would necessitate secure management of large CSK tables, including saving, restoring, and potentially migrating entire CSK blocks.
-[.red]#Use only Localities instead?#
 
 // ///////////////////////////////////////////////////////////////////////////////////////////
 
@@ -4935,7 +4799,8 @@ For example, consider a U-mode process executing an ACE instruction that updates
 If the process is preempted for a context switch, the ACE unit could continue its work until the context-switching handler needs to access the affected vector register, in which case the hart would wait until the operation completes.
 Alternatively, an implementation may choose a more precise exception model, halting the ACE unit and setting `acestart` (the ACE analog of `vstart`) to enable later resumption, possibly at an earlier point.
 An implementation may also decide to wait only a certain amount of time before halting the ACE unit.
-All these approaches are architecturally permissible, and we architect the behavior of certain ACE instructions when interrupted at admissible points.
+All these approaches are allowed by the architecture,
+and the behavior of certain ACE instructions when interrupted at admissible points is fully architected.
 
 // ///////////////////////////////////////////////////////////////////////////////////////////
 

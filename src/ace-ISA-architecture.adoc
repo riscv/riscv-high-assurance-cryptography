@@ -4,6 +4,9 @@
 [[ACE-concepts]]
 === Fundamental Concepts and Definitions
 
+ACE is a complex architecture and relies on certain fundamental concepts, which we succinctly introduce here.
+While this leads to some repetitions, we believe that it also brings better clarity to the presentation.
+
 Cryptographic Context:::
 (((Cryptographic Context)))
 The *Cryptographic Context* (CC) is the fundamental concept of ACE.
@@ -32,8 +35,8 @@ A CC sealed under one CSK cannot be re-imported under a different CSK, enabling 
 Object-Orientation:::
 (((Cryptographic Context, object-oriented)))
 CCs act as *objects* exposing a uniform interface across algorithms.
-A CC encapsulates algorithm-specific behavior, enabling interchangeable use of different primitives (e.g., AES-128, AES-256, Калина-128, Калина-256, Кузнечик, SM4) in the same mode of operation (e.g., ECB, GCM-SIV, XEX/XTS) without changes to compiled code.
-Side-channel-resistant variants are supported transparently.
+A CC encapsulates algorithm-specific behavior, enabling interchangeable use of different primitives (e.g., AES-128, AES-256, SM4) in identical modes (e.g., ECB, GCM-SIV, XTS) without requiring changes to compiled code.
+Side-channel attack (SCA) resistant variants are supported transparently.
 
 Usage Control Policy:::
 (((Cryptographic Context, usage control)))
@@ -41,20 +44,19 @@ Usage Control Policy:::
 (((Cryptographic Context, usage operations)))
 ACE distinguishes between CC/CR *management* and *usage* operations.
 (((Cryptographic Context, export)))
-Management operations include *configuration* (e.g., CR provisioning, import of an SCC, cloning or key derivation from one CR to another) and *export* of a CR as an SCC.
-Usage operations include cryptographic operations and state change;
-key derivation is both a configuration and a usage operation.
+Management operations include *configuration* (e.g., CR provisioning, SCC import, cloning, key derivation) and *export* of a CR as an SCC.
+Usage operations include cryptographic operations and state changes.
+Key derivation is both a configuration and a usage operation.
 (((Cryptographic Context, access)))
 All operations represent a form of *access* to CRs.
-To prevent denial of service, management operations must _always_ be permitted, unless the CR is in an invalid state.
-Accordingly, the _Usage Control_ policies restrict only certain CC/CR usage operations.
-Hence, our use of the term _Usage Control_ instead of _Access Control_.
+To prevent denial-of-service scenarios, management operations are always permitted, except when the CR is in an invalid state.
+_Usage Control_ policies restrict only certain CC/CR usage operations.
 
-Locality:::
+Localities:::
 (((Cryptographic Context, Locality)))
-Finally, ACE can bind CCs to a *Locality*, i.e., restrict usage to specific devices or device classes, hardware configurations, physical or virtual boot cycles,
-and process domains at various modes.
-This binding uses Metadata when a CC is in a CR, and augments the _Context Sealing Key_ (CSK) by a Locality-specific _tweak_.
+Finally, ACE can bind CCs to a *Localities*, i.e., restrict usage to specific devices or device classes, hardware configurations, physical or virtual boot cycles,
+and process domains at various privilege modes.
+This binding is achieved by using the Localities as _tweaks_ in the encryption and decryption of SCCs.
 
 // ///////////////////////////////////////////////////////////////////////////////////////////
 
@@ -125,11 +127,6 @@ Floating-point, fixed-point, and general arithmetic vector operations are not re
 
 [WARNING]
 [.red]#RVV-mini need not be formally defined before ACE ratification begins; it may be defined later, with the ACE specification amended accordingly. This allows additional requirements to be collected, for example whether to mandate `vclmul.v[vx]` and `vclmulh.v[vx]` from `Zvbc`.#
-
-===== Sdtrig
-
-If we implement Filtering at various modes by ID/context, then we reuse the `scontext`, `mcontext`, and `hcontext` CSRs from Sdtrig.
-The rest of Sdtrig is not required per se.
 
 // ///////////////////////////////////////////////////////////////////////////////////////////
 
@@ -384,21 +381,6 @@ Locality Secrets are prepended to the input of the tag computation in the AEAD a
 
 Bits 0, 1, and 2 of this field are ignored if U-mode, S-mode, and H-mode, respectively, are not supported or not enabled.
 
-////
-[[ACE-combined-filters]]
-===== ExpirationDate and Filter Fields
-
-If the _ExpirationDate_ field is non-zero, an additional 64-bit block is added to the Metadata to implement filtering according to secrets set by S/VS, HS, and M, and expiration date.
-
-To filter by expiration date is a simple comparison between the current time and the expiration time in the Metadata.
-The ACE Unit must have access to a secure clock.
-When the current time is beyond the expiration time in the Metadata, the ACE Unit invalidates the CR (see <<ACE-invalidation>>), and the `aceerror` CSR takes the value ace_err_expired_CR (see <<ACE-CSR-ace-error>>).
-
-Filtering by process domain is a simple comparison with the corresponding secret.
-
-Currently, we use `scontext`, `mcontext`, and `hcontext` from the Sdtrig extension, which correspond to 31, 14, and 14 bit fields, respectively.
-////
-
 [[ACE-extra-content]]
 ===== ExtraContent Field
 
@@ -476,7 +458,7 @@ Encodings are given in <<ACE-aces-encoding>>.
 |===
 |Value |Name |Meaning
 |   0   | Off     | ACE disabled. The ACE state is inaccessible. Executing any ACE instruction raises an illegal instruction exception.
-|   1   | Initial | ACE enabled. No CR or ACEIOBUF is configured.
+|   1   | Initial | ACE enabled.
 |   2   | Clean   | ACE enabled. At least one CR or ACEIOBUF is configured; state matches the last context swap.
 |   3   | Dirty   | ACE enabled. At least one CR, ACEIOBUF, or ACE-specific CSR may have changed since the last context swap. Unconfigured CRs that were previously configured also cause Dirty, since context-switching code must erase any stale saved state.
 |===
@@ -612,7 +594,7 @@ This design obviates the need to separate data transfer from cryptographic proce
 
 Full `acestart` semantics are described in <<ACE-provisioning-export-import>>.
 
-The following two CSRs may be used to optimize ACEIOBUF save and restore.
+//The following two CSRs may be used to optimize ACEIOBUF save and restore.
 
 //
 
@@ -640,6 +622,10 @@ The constraints `acestart` {le} `aceiobuftop` {le} `aceiobuflen` must hold; viol
 Using ACEIOBUF when `aceiobuftop` − `acestart` is zero (with `aceiobuflen` nonzero) or yields an invalid transfer size raises `ace_err_invalid_value`.
 
 NOTE: `aceiobuftop` allows per-operation length adjustment without reconfiguring ACEIOBUF. For example, when processing a residual block shorter than the nominal block size, or when supplying a short IV or nonce, software adjusts only `aceiobuftop` rather than resizing the buffer—avoiding the zeroing and potential resizing overhead that a write to `aceiobuflen` would entail.
+
+NOTE: The dirtiness of ACEIOBUF is not tracked.
+We recommend software to set `aceiobuftop` to zero once the contents of the ACEIOBUF are no longer needed.
+Context switching code can use this information to avoid unnecessary save and restore of ACEIOBUF contents.
 
 //
 
@@ -671,7 +657,9 @@ When `aceactivecr` is not 32, the CR operand in all single-CR instructions and t
 [[ACE-CSR-scrdirty]]
 ===== `scrdirty`
 
-The SXLEN-bit register `scrdirty` tracks per-CR dirtiness. `scrdirty[__i__]` encodes Clean (0) or Dirty (1) for CR #__i__. Bits [SXLEN-1:32] are WPRI.
+The SXLEN-bit register `scrdirty` tracks per-CR dirtiness.
+`scrdirty[__i__]` encodes Clean (0) or Dirty (1) for CR #__i__.
+Bits [SXLEN-1:32] are WPRI.
 
 When the privilege mode is S, VS, or U:
 
@@ -682,7 +670,6 @@ When the privilege mode is S, VS, or U:
 // precise tracking and hide the CSRs behind an extension, so implementations
 // that don't want to do it just don't implement the extension.
 
-
 NOTE: Context-switching code observes only Clean or Dirty. To determine whether a CR is configured, software may execute `ace.size` (<<ACE-instruction-size>>) on it; a return value of zero indicates an unconfigured CR, and any stale saved state for it shall be erased and released.
 
 NOTE: `scrdirty` is independent of the S extension. In an M-U system, M-mode may use it to optimize U-mode context switches.
@@ -692,9 +679,11 @@ NOTE: `sstatus.ACES` is also in effect.
 [[ACE-CSR-vscrdirty]]
 ===== `vscrdirty`
 
-NOTE: `vscrdirty` exists only when the H extension is implemented.
+The VSXLEN-bit register `vscrdirty` tracks per-CR dirtiness for virtualized contexts.
+`vscrdirty[__i__]` encodes Clean (0) or Dirty (1) for CR #__i__.
+Bits [VSXLEN-1:32] are WPRI.
 
-The VSXLEN-bit register `vscrdirty` tracks per-CR dirtiness for virtualized contexts. `vscrdirty[__i__]` encodes Clean (0) or Dirty (1) for CR #__i__. Bits [VSXLEN-1:32] are WPRI.
+`vscrdirty` exists only when the H extension is implemented.
 
 When the privilege mode is VS or VU:
 
@@ -983,7 +972,6 @@ and not the format defined by the present architecture
 +
 `ace.import` must follow the interruptibility rules defined in <<ACE-CSR-acestart>> and <<ACE-provisioning-export-import>>.
 Similarly to vector register load instructions, `ace.import` appears to other harts as a sequence of individual loads.
-+
 The behavior of `ace.import.S` is implementation-defined.
 +
 The operation is described in detail in <<ACE-provisioning-export-import>>.
@@ -1583,6 +1571,7 @@ Architecturally, `content[]` is the serialization of the content of a CR for exp
 [NOTE]
 --
 While `content[]` provides a view of (certain fields of) the content of a CR that matches the serialized SCC format, it need not be converted to and from the internal representation and explicitly stored in the ACE unit's memory before export and after import.
+
 `content[]` is a virtual representation: its byte ordering does not imply physical contiguity within the CR, nor is there a direct byte-for-byte correspondence. Changes to `content[]` are reflected in the underlying CR representation (except for excluded fields), and vice versa.
 
 In a threshold implementation, a single key byte in `content[]` may correspond to multiple bytes across the key shares within the CR. Reading that byte may return the XOR of the corresponding bytes in the shares; writing to it may distribute the value across the corresponding bytes in the shares such that their XOR equals the input. These operations may be deferred until the end of an provisioning or import instruction: writing to `context[]` may initially write only to the first share of a key, and at the end of the provisioning or import instruction, the other shares would be generated.
@@ -1876,7 +1865,7 @@ In certain cases where an invalid input is provided to any ACE instruction, or a
 
 * `Kn` is put into State _invalid_;
 * For instructions that refer to `Kn`:
- ** `ace.prov`, `ace.clear`, `ace.reset`, `ace.import`, `ace.export`, `ace.size` and `ace.avail` work normally;
+ ** `ace.prov`, `ace.clear` (thus also `ace.reset`), `ace.import`, `ace.export`, `ace.size` and `ace.avail` work normally.
  ** `ace.exec`, `ace.clone`, `ace.derive`, and `ace.restrict` raise an ACE error ace_err_invalid_CR;
  ** `ace.input` and `ace.output` raise an ACE error ace_err_invalid_CR when `aceactivecr` is `Kn`;
  ** `ace.state` raises an ACE error ace_err_invalid_CR, unless it is used to return to State _initial_;
@@ -1935,8 +1924,8 @@ would impose significant burden on the software and possibly degrade performance
 
 Horizontal traps can be used to implement a try/catch mechanism:
 
-. At the start of a subroutine that performs a cryptographic protocol, two CSRs are configured with the address of the “catch” code and with a mask with the error types to catch.
-. The code is written without considering the exceptions to be caught, usually only ace_err_invalid_CR or ace_err_expired_CR.
+. At the start of a subroutine that performs a cryptographic protocol, the address of the “catch” code as well as a mask with the error types to catch are loaded in two CSRs.
+. The code is written without considering the exceptions to be caught, usually only ace_err_invalid or ace_err_expired.
 . If the code runs without such errors, then the two CSRs are reset and the routine returns normally.
 . If, say, an ace_err_invalid_CR or ace_err_expired_CR error is raised, the horizontal trap diverts the control flow to the catch code, which usually cleans up, and returns to the caller of the subroutine, not to the routine itself, with an error code.
 
@@ -2010,7 +1999,7 @@ This includes:
 
 The instructions permitted in each algorithm state are typically `ace.exec` and `ace.state`, though this is not a general rule.
 For `ace.exec`, only one of its forms (see <<ACE-instruction-exec>>) is allowed per state, along with the corresponding replacement sequence defined in <<ACE-replacement-instructions>>.
-If a Form of `ace.exec`, `ace.state` or `ace.derive` that is not non explicitly allowed in the current algorithm state is used, then an illegal instruction exception is raised.
+If a Form of `ace.exec`, `ace.state` or `ace.derive` that is not explicitly allowed in the current algorithm state is used, then an illegal instruction exception is raised.
 
 If a non-allowed state transition is requested in `ace.state`, including requesting encryption or decryption from a CC not allowing it, an ACE error ace_err_unimplemented is raised.  This also invalidates the CR.
 
@@ -2041,7 +2030,7 @@ In all algorithms, any occurrence of the “Original Instructions” in <<ACE-re
 We do not explicitly write the alternative use of such replacement sequences in the algorithm descriptions for brevity—but they are always allowed if ACEIOBUF is implemented.
 
 // Forms A-C of `ace.exec`, the auxiliary inputs of Form C `ace.state` or of Form C of `ace.derive` in any algorithm, to the point that an implementation of ACE without the V extension or a subset thereof is possible.
-// Forms A, B, and C of `ace.exec`, as well as Forms C of both `ace.derive` and `ace.state`, can be replaced by using `ace.input` and `ace.output` instructions together with a Form D `ace.exec`, a Form A `ace.state`, or a Form A `ace.derive` instruction as follows:
+// Forms A, B, and C of `ace.exec`, as well as Form C of both `ace.derive` and `ace.state`, can be replaced by using `ace.input` and `ace.output` instructions together with a Form D `ace.exec`, a Form A `ace.state`, or a Form A `ace.derive` instruction as follows:
 
 [[ACE-replacement-instructions]]
 .Replacement sequences for `ace.exec` and `ace.derive` using `ace.input` and `ace.output`
@@ -2071,14 +2060,13 @@ In all cases, the `ace.input` and `ace.output` instructions must be temporarily 
 This is done by setting the `aceactivecr` CSR (<<ACE-CSR-aceactivecr>>) first. The user must not forget to set it back to 32 after the sequence is completed.
 
 The architecture uses the `acesequence` CSR to track the progress of the replacement sequences.
-// of the ACEIOBUF in place of the vector registers to provide the inputs and outputs to ACE instructions.
 The initial value of `acesequence` is 0. It remains zero while we are using the forms of `ace.exec`, `ace.derive`, and `ace.state` as their are written in the algorithm specifications.
 As soon as one of the following events happens:
 
 . An `ace.input` is completed in place of a Form A or B `ace.exec`, Form C `ace.derive`, or Form C `ace.state`; or
 . A Form D `ace.exec` is completed in place of a Form C `ace.exec`,
 
-`acesequence` is set to 1, to denote that the first instruction in the replacement sequence has completed
+then `acesequence` is set to 1, to denote that the first instruction in the replacement sequence has completed.
 Then, `acesequence` keeps track of how many instructions of the replacement sequence have been completed.
 At the end of the replacement sequence, `acesequence` is reset to 0.
 
@@ -2121,9 +2109,9 @@ An implementation must wait before accessing a CR that is still asynchronously b
 [[ACE-rules-threshold-implementations]]
 ===== Single-Share Key Export Rule for Threshold implementations
 
-Any CC with its algorithm implemented as a threshold will always provision, import and export _all_ its keys and secrets as _single_, _reconstructed_ _shares_.
+Any CC with its algorithm implemented as a threshold implementation will always provision, import and export _all_ its keys and secrets as _single_, _reconstructed_ _shares_.
 
-The PI and SCC formats will be the same as for the non-threshold implementation variants of the same algorithm, with the only difference being the value of the Side Channel Protection bits in the Metadata.
+The PI and SCC Formats will be the same as for the non-threshold implementation variants of the same algorithm, with the only difference being the value of the Side Channel Protection bits in the Metadata.
 
 For the purpose of architecture specification, all values are also always represented as a single share in this document.
 Threshold implementations are simply implementation variants of the exact same algorithm.
@@ -2143,7 +2131,7 @@ System Keys will change all the algorithms described here in the following way:
 
 . In a PI and in an SCC, the key field will contain the index of the key in the SKT in place of the value.
 . This field is reduced from the original key size to a 64-bit value. This saves space in an SCC and allows for faster export and import operations.
-. For algorithms that require more than one key, such as XEX/XTS, a single index is still used to refer toan entry in the SKT that contains multiple keys—and thus a single 64-bit value in the PI and SCC.
+. For algorithms that require more than one key, such as XEX/XTS, a single index is still used to refer to an entry in the SKT that contains multiple keys—and thus a single 64-bit value in the PI and SCC.
 
 //
 
@@ -2593,8 +2581,8 @@ State Machine:::
   ** In each state, we can issue Form C `ace.state` instructions, which perform:
    . `tweak` <- `INPUT`, and
    . _Instead of transitioning to state set_aux_value, the state remains unchanged (can be initial, encrypt, or decrypt)._
-  ** In State _encrypt_, resp., _decrypt_, besides Form C `ace.state` instructions, only ``ace.exec`` instructions of Form A are allowed, where
-     “```ace.exec OUTPUT, Kn|K(Xn), INPUT```” encrypts, resp., decrypts `INPUT` into `OUTPUT`.
+  ** In State _encrypt_, respectively, _decrypt_, besides Form C `ace.state` instructions, only ``ace.exec`` instructions of Form A are allowed, where
+     “```ace.exec OUTPUT, Kn|K(Xn), INPUT```” encrypts, respectively, decrypts `INPUT` into `OUTPUT`.
 
 This algorithm does not automatically update the tweak value.
 
@@ -2690,7 +2678,7 @@ State Machine:::
 
  ** If the AD is empty, the transition to State _hash_absorb_ is necessary to initialize the counter.
 
- ** In State _hash_absorb_, only  ``ace.exec`` instructions of Form B are allowed.
+ ** In State _hash_absorb_, only Form B of ``ace.exec`` is allowed.
  “```ace.exec Kn|K(Xn), INPUT```” absorbs a data block in `tag`, i.e.:
 +
 --
@@ -2892,7 +2880,7 @@ tag ← V3 xor V2                                  // Last Horner's scheme add
 [[ACE-GCM-with-IV-mode]]
 ==== GCM with Set IV
 
-The mode of operation “GCM with a set IV” is a variant of the GCM mode where the initialization vector (IV) is predefined and not generated randomly.
+The mode of operation “GCM with a Set IV” is a variant of the GCM mode where the initialization vector (IV) is predefined and not generated randomly.
 This variant _cannot_ be emulated with an ECB CC because it would reveal the internal data.
 
 The differences between GCM and GCM with Set IV start with the format of the Provisioning Input:
@@ -3055,7 +3043,7 @@ NOTE: This version of the instruction is meant to be used during decryption.
 NOTE: This version of the instruction is meant to be used during encryption.
       If used during decryption, by leaving the `SIV` to zero it will most likely lead to an authentication error.
 
- ** In State _hash_absorb_, only ``ace.exec`` instructions of Form B are allowed.
+ ** In State _hash_absorb_, only Form B of ``ace.exec`` is allowed.
    This instruction absorbs its `INPUT` in the `tag`, i.e., it performs `absorb(INPUT)`. +
    If `IOLEN` is a multiple of `b`, `absorb()` is executed on each of the `IOLEN/b` blocks in `INPUT`.
 
@@ -3082,7 +3070,7 @@ Then, “```ace.exec```” finalizes the SIV/tag computation by performing:
 
 If `IOLEN` > `b`, only the `b` least significant bits of `INPUT` are considered.
 
- ** In State _encrypt_, only  ``ace.exec`` instructions of Form A are allowed, namely “```ace.exec OUTPUT, Kn|K(Xn), INPUT```,” to encrypt `INPUT` into `OUTPUT` as follows:
+ ** In State _encrypt_, only Form A of ``ace.exec`` is allowed, namely “```ace.exec OUTPUT, Kn|K(Xn), INPUT```,” to encrypt `INPUT` into `OUTPUT` as follows:
 +
 --
 . If `ctr == 0`, then the CR is *invalidated*.
@@ -3090,13 +3078,13 @@ If `IOLEN` > `b`, only the `b` least significant bits of `INPUT` are considered.
      .. ``OUTPUT <- INPUT `` +
         ``{fournbsp}{fournbsp}xor enc_blk(enc_key, 1 @ SIV[b-2:b/4] @ (SIV[b/4-1:0] + ctr % 2^b/4^)),``
    . else (the `SIV` is `3b/4`-bits long)
-      .. ``OUTPUT <- INPUT xor enc_blk(enc_key, 1 @ SIV[3b/4-2:0] @ ctr``.
+      .. ``OUTPUT <- INPUT xor enc_blk(enc_key, 1 @ SIV[3b/4-2:0] @ ctr)``.
    . `ctr <- ctr + 1`.
 --
 +
 If `IOLEN` > `b`, the above operations are applied to each of the `IOLEN/b` blocks in `INPUT`.
 
- ** In State _decrypt_,  only Form A ``ace.exec`` instructions are allowed. “```ace.exec OUTPUT, Kn|K(Xn), INPUT```” decrypts `INPUT` into `OUTPUT` and then absorbs the plaintext `OUTPUT` into the `tag`:
+ ** In State _decrypt_,  only Form A of ``ace.exec`` is allowed. “```ace.exec OUTPUT, Kn|K(Xn), INPUT```” decrypts `INPUT` into `OUTPUT` and then absorbs the plaintext `OUTPUT` into the `tag`:
 +
 --
      . If `ctr == 0`, then the CR is *invalidated*.
@@ -4469,7 +4457,7 @@ The size in bytes of Fields vii to xiv is:
 `{fournbsp}{fournbsp}` `varlen` <- 8 + (`HasPublicKey` != 0) {interpunct} 2``b``/8 + (`HasSignature` != 0) {interpunct} 2``b``/8 + +
 `{fournbsp}{fournbsp}{fournbsp}{fournbsp}{fournbsp}{fournbsp}{fournbsp}` + (`HasHash` != 0) {interpunct} ``h``/8 + (`HasRandomNumber` != 0) {interpunct} ``h``/8.
 
-If _ExtraContent_ > `varlen`, Position xvi contains the microarchitectural dependent part.
+If _ExtraContent_ > `varlen`, Position xv contains the microarchitectural dependent part.
 
 EdDSA formats are similar, but in the formats, the public key is represented as a single `b`-bit string.
 --
@@ -4501,7 +4489,7 @@ If the operations are interrupted, they are in the transient state.
 When they are completed, they are in the non-transient state.
 In this state, these states may require to save additional data.
 * The format of the additional data is implementation defined. The data itself is saved at Position xvi in the content, and its length is included in the _ExtraContent_ field of the Metadata Header.
-* If there is a `acemarchid` mismatch, both `RandomNumber` (Position xv) andthe additional data at Position xvi are discarded, and the operation is restarted.
+* If there is a `acemarchid` mismatch, both `RandomNumber` (Position xiv) and the additional data at Position xv are discarded, and the operation is restarted.
 --
 +
 
@@ -4529,7 +4517,7 @@ the Boolean variable ``Has``__Var__ is set when all operations required in State
 
 * *Behavior:*
  ** Upon returning to State _initial_, if a Form B `ace.state` is used, the parameter `Xs` will determine whether the fields
- `Generator`, `Scalar`, and `PublicKey` are erased or kept for further operations. This is determined by Bits 0, 1, and 2 of `Xs` as follows: If Bit 0, 1, resp., 2 is set, then `Generator`, `Scalar`, and `PublicKey` is erased, and the corresponding Booleans `HasGenerator`, `HasScalar`, resp., `HasPublicKey` are unset as well.
+ `Generator`, `Scalar`, and `PublicKey` are erased or kept for further operations. This is determined by Bits 0, 1, and 2 of `Xs` as follows: If Bit 0, 1, resp., 2 is set, then `Generator`, `Scalar`, resp., `PublicKey` is erased, and the corresponding Boolean flags `HasGenerator`, `HasScalar`, resp., `HasPublicKey` is unset as well.
  A Form A `ace.state` does not modify these states.
  `Signature` and the corresponding Boolean `HasSignature` are always reset.
 
@@ -4546,14 +4534,14 @@ _This section is informative and non-normative._
 
 ACE provides a layer of usage control based on the use of Localities.
 
-- We can suppose to add an optional Metadata Extension block that contains values of `scontext` and `mcontext` to match against, or alternative values based on other CSRs, perhaps defined ad-hoc.
+- One option is to add an optional Metadata Extension block that contains values of `scontext` and `mcontext` (from Sdtrig) to match against, or alternative values based on other CSRs, perhaps defined ad hoc.
 +
 This is a lightweight mechanism.
 Since filtering at one mode is inactive when the hart is in a higher mode, context switching can be performed without modifying the CSK.
 
 . A programmable CSK can restrict not only the usage, but even the import of CCs.
 This offers stronger security by also preventing unauthorized `ace.import` operations, but incurs higher overhead as it typically requires an `ecall` to modify the CSK, and
-increases pressure on the ACE unit's internal resources in case keys derived from the most recent CSK values are caches.
+increases pressure on the ACE unit's internal resources in case keys derived from the most recent CSK values are cached.
 
 . Localities programmable at M/H/S could be used instead.
 Since these Localities can be combined with the HW Binding localities, this would be as flexible as context-based filtering, but based on significantly longer strings.
@@ -4624,7 +4612,7 @@ This is a corner case and it would _not_ happen in the most common case which is
 ==== Architectural Model
 
 ACE is architected as an _attached_ unit.
-This allows both implementations within each core and as a block which is shared by multiple cores, with a single instance of the hardware and one separate architectural state for each hart.
+This allows implementations both within each core and as a block shared by multiple cores, with a single instance of the hardware and one separate architectural state for each hart.
 The present specification mandates only its behavior, not its implementation.
 
 Consequently, ACE instructions behave as messages over a tightly coupled coprocessor interface.
