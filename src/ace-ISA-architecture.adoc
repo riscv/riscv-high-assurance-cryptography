@@ -1,47 +1,39 @@
 [[ACE-architecture]]
 == Architecture
 
-ACE is a complex architecture and relies on certain fundamental concepts, which we succinctly introduce here.
-While this leads to some repetitions, we believe that it also brings better clarity to the presentation.
-
 [[ACE-concepts]]
 === Fundamental Concepts and Definitions
 
 Cryptographic Context:::
 (((Cryptographic Context)))
-The *Cryptographic Context* (CC) is the fundamental concept in ACE.
-A CC is an indivisible data structure consisting of a *Metadata* section and a *Content* section, and all cryptographic operations performed by ACE execute within the constraints defined by a CC.
-The Metadata's format is fixed, and it specifies the cryptographic algorithm associated with the CC and optional usage control policies.
+The *Cryptographic Context* (CC) is the fundamental concept of ACE.
+A CC is an indivisible structure consisting of a *Metadata* section and a *Content* section; all cryptographic operations performed by ACE execute within the constraints defined by a CC.
+The Metadata has a fixed format and specifies the cryptographic algorithm and optional usage control policies associated with the CC.
 (((Cryptographic Context, Metadata)))
-The Content's format is algorithm-specific, and it holds sensitive material such as keys and internal algorithm state.
+The Content has an algorithm-specific format and holds sensitive material such as keys and internal algorithm state.
 (((Cryptographic Context, Content)))
-The Metadata require integrity, and only part of it requires confidentiality.
-The entire Content requires both.
-These requirements are architecturally guaranteed by ACE.
+The Metadata requires integrity; the Content requires both integrity and confidentiality.
+These requirements are architecturally enforced by ACE.
 
 Cryptographic Register:::
 (((Cryptographic Register)))
-Cryptographic Contexts are realized using *Cryptographic Registers* (CRs), architectural containers provided by ACE to safeguard the CCs.
-Metadata and Content are bound to each other to form a CC by writing them into a CR, i.e., by *provisioning* the CR.
-A CC can be used for cryptographic operations only when stored in a CR.
-Only the ACE unit may access or modify a CC, and only when the CC is in a CR, in accordance with the rules of the architecture and of the algorithm the CC is bound to.
+CCs are realized using *Cryptographic Registers* (CRs), per-hart architectural containers that safeguard CCs.
+A CR is *provisioned* by writing Metadata and Content into it; this operation binds the latter to form a CC.
+A CC may be used for cryptographic operations only while resident in a CR.
+Only the ACE unit may access or modify a CC residing in a CR, in accordance with architectural rules and the algorithm bound to the CC.
 CR Content cannot be extracted in a manner that compromises its confidentiality.
-
-//Cryptographic Contexts are realized as *Cryptographic Registers* (CRs), which are architectural containers that safeguard CCs. A CR is *provisioned* by writing Metadata and Content into it; this operation binds the two sections to form a CC. A CC can be used for cryptographic operations only while stored in a CR. Only the ACE unit may access or modify a CC, and only when the CC resides in a CR, in accordance with architectural rules and the algorithm bound to the CC. The confidentiality of a CR’s Content cannot be violated.
 
 Sealed Cryptographic Context:::
 (((Cryptographic Context, sealed)))
-To support context switching while protecting CCs outside architectural state, a CC may be *exported* from a CR as a *Sealed Cryptographic Context* (SCC).
-An SCC is an encrypted and authenticated representation of a CC that can later be *imported* into a CR.
-SCC import and export use _Context Sealing Keys_ (CSKs), which may be programmable by M-mode and may depend on *Localities* (see below).
-A CC sealed with a given CSK cannot be re-imported using a different CSK, enabling cryptographic domain separation across spatial and temporal
-domains.
+To support context switching while protecting CCs outside architectural state, a CC may be *exported* from a CR as a *Sealed Cryptographic Context* (SCC), an encrypted and authenticated representation of a CC that can later be *imported* into a CR.
+SCC export and import use a _Context Sealing Key_ (CSK), which may be programmable by M-mode.
+A CC sealed under one CSK cannot be re-imported under a different CSK, enabling cryptographic domain separation across spatial and temporal domains.
 
 Object-Orientation:::
 (((Cryptographic Context, object-oriented)))
 CCs act as *objects* exposing a uniform interface across algorithms.
-A CC encapsulates algorithm-specific behavior, enabling interchangeable use of different primitives (e.g., AES-128, AES-256, Калина-128, Калина-256, Кузнечик, SM4, and so on) in identical modes (e.g., ECB, GCM-SIV, XEX/XTS) without requiring changes to compiled code.
-SCA-resistant variants are supported transparently.
+A CC encapsulates algorithm-specific behavior, enabling interchangeable use of different primitives (e.g., AES-128, AES-256, Калина-128, Калина-256, Кузнечик, SM4) in the same mode of operation (e.g., ECB, GCM-SIV, XEX/XTS) without changes to compiled code.
+Side-channel-resistant variants are supported transparently.
 
 Usage Control Policy:::
 (((Cryptographic Context, usage control)))
@@ -54,7 +46,7 @@ Usage operations include cryptographic operations and state change;
 key derivation is both a configuration and a usage operation.
 (((Cryptographic Context, access)))
 All operations represent a form of *access* to CRs.
-To prevent denial of service scenarios, management operations must _always_ be permitted, unless the CR is in an invalid state.
+To prevent denial of service, management operations must _always_ be permitted, unless the CR is in an invalid state.
 Accordingly, the _Usage Control_ policies restrict only certain CC/CR usage operations.
 Hence, our use of the term _Usage Control_ instead of _Access Control_.
 
@@ -113,30 +105,26 @@ This binding uses Metadata when a CC is in a CR, and augments the _Context Seali
 
 ===== Smcsrind/Sscsrind
 
-We use the Indirect CSR access mechanism defined in Smcsrind/Sscsrind.
+ACE uses the Indirect CSR Access mechanism defined in Smcsrind/Sscsrind.
 
 ===== V
 
-There are two non-mutually exclusive ways ACE can be implemented.
-The first way is to provide the inputs and outputs of the ACE instructions through vector registers, and the second way uses an architectural input/output buffer which can be loaded from and stored to memory (ACEIOBUF).
+ACE inputs and outputs may be conveyed through vector registers or through an architectural input/output buffer (ACEIOBUF) loadable from and storable to memory; these two mechanisms are not mutually exclusive.
 
-If the ACE implementation supports vector registers, it does not require the full V extension; it depends on a minimal subset, which we call RVV-mini.
+When vector registers are used, the full V extension is not required. ACE depends only on a minimal subset, denoted RVV-mini.
 (((RVV-mini)))
-RVV-mini must maintain full opcode compatibility with RVV: Code written against RVV-mini must run with unmodified behavior under RVV.
+RVV-mini must be fully opcode-compatible with RVV: code written for RVV-mini must execute with identical behavior under RVV.
 The required features are:
 
-* Support for vector registers sufficiently wide to host the block-wise operations required by the implemented algorithms;
-* The `vsetvli` instruction with restricted parameters (e.g., “```vsetvli zero,4,e32,m1,ta,ma```” for 128-bit-side operations); unsupported configurations must generate defined errors;
-* Unit-strided vector loads and stores exclusively; and
-* Vector bitwise logical operations such as `vxor`, `vand`, and `vor`.
+* Vector registers wide enough to accommodate the block-wise operations of the implemented algorithms;
+* The `vsetvli` instruction with restricted parameters (e.g., `vsetvli zero,4,e32,m1,ta,ma` for 128-bit operations); unsupported configurations must produce defined errors;
+* Unit-strided vector loads and stores; and
+* Vector bitwise logical operations: `vxor`, `vand`, and `vor`.
 
-Moreover, floating-point, fixed-point, and most arithmetic vector operations are not required, and
-more complex operations for some corner-case cryptographic algorithms may be performed in GPRs, with results then inserted in vector registers via `vins`/`vext`.
+Floating-point, fixed-point, and general arithmetic vector operations are not required. Complex operations for certain cryptographic algorithms may be performed in GPRs, with data inserted into vector registers and result extracted from them via `vins`/`vext`.
 
 [WARNING]
-[.red]#It is not necessary to define RVV-mini before ratification of ACE begins.
-This subset can be defined at a later moment and the ACE specification amended to allow the use of RVV-mini in place of V.
-This will allow to collect more requirements, such as whether to require, for instance, `vclmul.v[vx]` and `vclmulh.v[vx]` from `Zvbc` or not.#
+[.red]#RVV-mini need not be formally defined before ACE ratification begins; it may be defined later, with the ACE specification amended accordingly. This allows additional requirements to be collected, for example whether to mandate `vclmul.v[vx]` and `vclmulh.v[vx]` from `Zvbc`.#
 
 ===== Sdtrig
 
@@ -152,66 +140,62 @@ The rest of Sdtrig is not required per se.
 
 {empty}
 (((Cryptographic Context)))
-ACE defines 32 Cryptographic Registers (CRs), identified by numbers from 0 to 31, and called `K0`, ... , `K31`.
-They are architectural, i.e., per-hart.
+ACE defines 32 Cryptographic Registers (CRs), numbered 0 to 31 and denoted `K0`–`K31`.
+CRs are architectural, i.e., per-hart.
 (((Cryptographic Register File)))
-CRs reside in a dedicated _CR file_ (CRF), accessible only by the ACE implementation. Each hart has its own CRF.
+CRs reside in a dedicated, per-hart _CR file_ (CRF) accessible only to the ACE implementation.
 
-CRs differ from conventional register in several ways:
+CRs differ from conventional registers in several respects:
 
-* Clear data is loaded into CR using the `ace.prov` instruction (<<ACE-instruction-init>>), but
-there is no corresponding store instruction to extract the same data as clear text.
+* Clear Content is loaded into a CR via `ace.prov` (<<ACE-instruction-init>>); there is no corresponding instruction to extract Content as cleartext.
 
-* A CR can be *exported* in an encrypted and authenticated format using the `ace.export` instruction (<<ACE-instruction-export>>).
-This creates a +Sealed Cryptographic Context+ (SCC).
-An SCC can be later re-*imported* into a CR using the `ace.import` instruction (<<ACE-instruction-import>>)
-but the process may fail if the data in memory was altered.
-Conventional registers do not provide such functionality—and do not need to.
+* A CR may be *exported* in encrypted and authenticated form via `ace.export` (<<ACE-instruction-export>>), producing an SCC that may later be re-*imported* into a CR via `ace.import` (<<ACE-instruction-import>>); import fails if the SCC has been modified.
 
-* The external and internal representations of a CR may have different sizes.
+* The internal and external representations of a CR may differ in size.
+
 * Whereas conventional registers always contain a value, CRs can be _unconfigured_, meaning they may hold no information.
-* The amount of the capacity of the CRF used by a CR depends on the configured algorithm.
-  Two CRs can use different amounts of capacity.
-  Insufficient residual CRF capacity may prevent the execution of a CR *configuration* instruction, i.e. `ace.prov`, `ace.import`,
-   `ace.clone`, (<<ACE-instruction-clone>>) or `ace.derive` (<<ACE-instruction-derive>>).
-  In this case, software must free capacity by unconfiguring other CRs.
+// * The amount of the capacity of the CRF used by a CR depends on the configured algorithm.
+//   Two CRs can use different amounts of capacity.
+//   Insufficient residual CRF capacity may prevent the execution of a CR *configuration* instruction, i.e. `ace.prov`, `ace.import`,
+//    `ace.clone`, (<<ACE-instruction-clone>>) or `ace.derive` (<<ACE-instruction-derive>>).
+//   In this case, software must free capacity by unconfiguring other CRs.
 
-* ACE instructions can refer to CRs directly, i.e., with a 5-bit immediate in the instruction encoding, but also indirectly, i.e., through a value in a GPR.
 
-* Only few instructions use and possibly modify CRs.
-  The most important ones are:
-  ** `ace.exec`, used to perform cryptographic operations on data blocks according to the algorithm configured in a CR; and
-  ** `ace.state`, used to move between the different stages of modes of operations and hash functions, possibly performing certain state initialization operations.
+* Unlike conventional registers, a CR may be _unconfigured_, which means that they hold no content.
 
-Accessing a CR that is outside the range [0..31] raises an illegal instruction error.
+* CRF capacity consumed by a CR depends on the configured algorithm; two CRs may consume different amounts. Insufficient residual CRF capacity may prevent execution of a configuration instruction (`ace.prov`, `ace.import`, `ace.clone` (<<ACE-instruction-clone>>), or `ace.derive` (<<ACE-instruction-derive>>)); software must then free capacity by unconfiguring other CRs.
+
+* CRs may be addressed directly, as a 5-bit immediate, or indirectly, via a GPR value.
+
+* The principal instructions that use and may modify CRs are:
+  ** `ace.exec`, which performs cryptographic operations on data blocks according to the algorithm configured in a CR; and
+  ** `ace.state`, which transitions between states of a mode of operation or hash function, optionally performing state initialization.
+
+Accessing a CR with an index outside [0..31] raises an illegal instruction exception.
 
 [NOTE]
 ====
-The management operations include the *configuration* instructions (`ace.prov`, `ace.import`, `ace.clone`, and `ace.derive`) and the export operation (`ace.export`).
-====
-
-[NOTE]
-====
-CRF capacity is implementation-defined.
-Implementations must provide sufficient capacity to allow execution of all operations they support.
-The CRF must hold at least an instance of the largest possible CR or the largest CR pair for CR cloning or derivation.
-An optional, possibly approximated, and implementation-specific mechanism to estimate the required capacity is defined in <<ACE-instruction-size>>.
+Management operations comprise the configuration instructions (`ace.prov`, `ace.import`, `ace.clone`, and `ace.derive`) and the export operation (`ace.export`).
 ====
 
 [NOTE]
 ====
-The fact that CRs can be addressed indirectly has two major implications:
+CRF capacity is implementation-defined. Implementations must provide sufficient capacity for all supported operations. At a minimum, the CRF must hold the largest possible single CR, or the largest CR pair used in cloning or derivation operations. An optional, implementation-specific mechanism for estimating required capacity is described in <<ACE-instruction-size>>.
+====
 
-. Adding renaming to CRs would add significant complexity to the microarchitecture.
-  However, CRs are much less often redefined than integer or floating-point registers, except for internal implied changes, hence CRs can be renamed without performance issues.
-. An additional bit in the instruction encoding determines whether a CR number is given by a 5-bit immediate or by the value in a GPR.
+[NOTE]
+====
+Indirect CR addressing has two microarchitectural implications:
+
+. Adding CR renaming would significantly increase microarchitectural complexity. However, CRs are redefined far less frequently than integer or floating-point registers (internal implied changes aside), so the absence of renaming is not expected to cause performance issues.
+. An additional bit in the instruction encoding selects between a 5-bit immediate CR number and a GPR-supplied CR number.
 ====
 
 [WARNING]
 ====
 VM migration can become an issue when the destination machine has a smaller CRF than the source machine.
 In this case, migration could fail, or the VM may have to let some processes terminate abnormally once migrated.
-Alternatively, a lazy-loading mechanism can be used to load the CRs on demand, cf. <<ACE-lazy-loading>>.
+A lazy-loading mechanism may be used to load CRs on demand; see <<ACE-lazy-loading>>.
 ====
 
 // ///////////////////////////////////////////////////////////////////////////////////////////
@@ -219,127 +203,113 @@ Alternatively, a lazy-loading mechanism can be used to load the CRs on demand, c
 [[ACE-iobuf]]
 ==== ACE Input/Output Buffer
 
-The preferred way to provide inputs and ACE operations and collect their outputs is to use the vector register file of the V extension.
-However, ACE also defines an optional input/output buffer (ACEIOBUF) that can be used in place of the vector register file, as explained in <<ACE-usage-input-output>>.
+The preferred mechanism for supplying inputs to, and collecting outputs from, ACE operations is the vector register file of the V extension. ACE also defines an optional architectural input/output buffer (ACEIOBUF) that may be used in place of vector registers, as described in <<ACE-usage-input-output>>. Support for vector registers and for the ACEIOBUF is not mutually exclusive.
 
-The ACEIOBUF, like the CRs, is architectural, and thus it is a per-hart state.
-The ACEIOBUF is not part of any CR.
-It can be part of the CRF memory or be a separate memory region internal to the ACE state.
+The ACEIOBUF is per-hart architectural state, separate from the CRs.
+It may reside within CRF memory or in a separate memory region internal to the ACE state.
 
-The total length of the ACEIOBUF, `aceiobuflen`, can be fixed or variable.
-
-Its total size and the range thereof used in cryptographic instructions are determined by the `aceiobuflen` (<<ACE-CSR-aceiobuflen>>) and `aceiobuftop` (<<ACE-CSR-aceiobuftop>>) CSRs.
-
-The support for the vector register file and for ACEIOBUF are not mutually exclusive.
+The total length and the range used in cryptographic instructions are controlled by the `aceiobuflen` (<<ACE-CSR-aceiobuflen>>) and `aceiobuftop` (<<ACE-CSR-aceiobuftop>>) CSRs.
 
 // ///////////////////////////////////////////////////////////////////////////////////////////
 
 [[ACE-Metadata]]
 ==== Metadata Format
 
-ACE defines two external formats for CCs:
+ACE defines two external CC formats:
 
-. The _Provisioning Input_ (PI) format, which is loaded into a CR to create a CC; and
-. The _Sealed Cryptographic Context_ (SCC), an encrypted, authenticated format used when exporting a CR to memory for later re-import.
+. The _Provisioning Input_ (PI), loaded into a CR to create a CC; and
+. The _Sealed Cryptographic Context_ (SCC), an encrypted and authenticated representation of a CC used when exporting a CR to memory for later re-import.
 
 {empty}
 (((Cryptographic Context,Metadata)))
 (((Cryptographic Context,Metadata,Header)))
-The first 64 bits of both PI and SCC consist of the Metadata Header, whose format is given below.
+Both formats begin with a 64-bit Metadata Header, whose format is defined below.
 
 [[ACE-Metadata-header]]
 .Format of the Metadata Header
 [width="100%",cols="^9%,^7%,14%,70%",options="header"]
 |===
-|   Field | Width | Field              | Description
-|   [0:0] |   1   | _Format_           | Value is 0 for the current version of the Metadata format.
-|  [11:1] |  11   | _Algorithm_        | Cryptographic algorithm (such as primitive, mode, or protocol).
-| [13:12] |   2   | _DirectionPolicy_  | Selects the allowed direction(s) for the cryptographic operation.
-| [15:14] |   2   | _SCProtection_     | Side-Channel Protected Implementation (0 if not protected, 1 if protected).
-| [16:16] |   1   | _KeyType_          | A value of 0 indicates that the key is expressed as an explicit value in the Content. A value of 1 indicates a system key that the key is given by an index into an internal, system-specific System Keys Table (SKT).
-| [20:17] |   4   | _StateNumber_      | Encoding the current state of the state machine of the algorithm as a number.
-| [28:21] |   8   | _Locality_         | A field which is either all zeros or determines a Locality Secret.
-| [31:29] |   3   | _UCPolicy_         | “UC Policy” means “Usage Control Policy”. If bit 25, 26, resp., 27 is set, it disallows the _usage_ of this CC in User, (V)S-mode, resp., H-mode.
-| [45:32] |  14   | _ExtraContent_     | If non-zero, there is an additional segment of data at the end of the Content. The length of additional segment is _ExtraContent_ 64-bit blocks. (14 bits allow up to 128 kB of additional data.)
-| [63:46] |  18   | _ExpirationDate_   | If this field is non-zero, it is an expiration date on this CC.
+|   Field | Width | Name               | Description
+|   [0:0] |   1   | _Format_           | Set to 0 for the current Metadata format version.
+|  [11:1] |  11   | _Algorithm_        | Cryptographic algorithm (primitive, mode, or protocol).
+| [13:12] |   2   | _DirectionPolicy_  | Permitted operation direction(s). See <<ACE-Algorithm-field>>.
+| [15:14] |   2   | _SCProtection_     | Side-channel protection level. See <<ACE-SCProtection-field>>.
+| [16:16] |   1   | _KeyType_          | 0: key is an explicit value in Content. 1: key is an index into the system-specific System Keys Table (SKT).
+| [20:17] |   4   | _StateNumber_      | Current algorithm state-machine state, encoded as an integer.
+| [28:21] |   8   | _Locality_         | Zero, or an index determining a Locality Secret. See <<ACE-Localities>>.
+| [31:29] |   3   | _UCPolicy_         | Usage Control Policy. Bits 29, 30, and 31, when set, disallow CC usage in U-mode, (V)S-mode, and H-mode, respectively.
+| [45:32] |  14   | _ExtraContent_     | If non-zero, indicates an additional data segment appended to Content. Length is _ExtraContent_ × 8 bytes (up to 128 KiB).
+| [63:46] |  18   | _ExpirationDate_   | If non-zero, the expiration date of this CC. See <<ACE-Metadata-expiration-date>>.
 |===
 
-Some fields and their properties need further explanation. This is done in the following sections.
+Selected fields require additional explanation, provided in the following subsections.
 
 //
 
 [[ACE-Algorithm-field]]
 ===== Algorithm and DirectionPolicy Fields
 
-Algorithms are encoded in an 11-bit field.
-Algorithm numbers 0-1535 are architecture-defined and the list of such encodings is maintained by RVI.
-See{nbsp}<<ACE-algorithms>> for the currently encoded algorithms.
-The remaining values can be used to encode custom algorithms.
+Algorithms are encoded in an 11-bit field. Values 0–1535 are architecture-defined; the list of encodings is maintained by RVI (see <<ACE-algorithms>>). The remaining values are available for custom algorithms.
 
-For encryption/decryption primitives or modes, the _DirectionPolicy_ field determines whether the CC may be used for encryption (lower bit), decryption (higher bit), or both.
+For encryption/decryption primitives and modes, the _DirectionPolicy_ field indicates whether the CC may be used for encryption (lower bit set), decryption (upper bit set), or both.
 
-For certain asymmetric primitives, the _DirectionPolicy_ field determines whether they can be used for signature generation (lower bit), verification (higher bit), or both.
+For asymmetric primitives supporting signatures, the lower bit permits signature generation and the upper bit permits verification.
 
-The _DirectionPolicy_ field can be used by other primitives to encode additional algorithm identifiers, thereby expanding the available encoding space of the Algorithms field.
+For other primitives, the _DirectionPolicy_ field may encode additional algorithm identifiers to expand the effective encoding space of the _Algorithm_ field.
 
 //
 
 [[ACE-SCProtection-field]]
 ===== SCProtection Field
 
-Certain minimal Side-Channel protection levels are defined by the architecture.
+The architecture defines the following side-channel protection levels.
+
 [[ACE-SC-protection-levels]]
 .Encoding of Side-Channel Protection levels
 [%autowidth,float="center",align="center",options="header"]
 |===
 | Value | Description
 |   0   | No protection.
-|   1   | DIEL, (first-order) threshold implementation.
-|   2   | DIEL, (first-order) threshold, fault-tolerant implementation.
-|   3   | Custom, algorithm dependent.
+|   1   | Data-independent execution latency (DIEL); first-order threshold implementation.
+|   2   | DIEL; first-order threshold, fault-tolerant implementation.
+|   3   | Custom, algorithm-dependent.
 |===
 
-Custom algorithms may offer stronger side channel protection guarantees than those specified in the encoding values 0 to 2.
-In such a case, the value of the _SCProtection_ field must be set to 3.
+Custom algorithms offering stronger protection than encodings 0–2 shall set _SCProtection_ to 3.
 
 //
 
 [[ACE-StateNumber-field]]
 ===== StateNumber Field
 
-The _StateNumber_ field must be zero in a PI.
+The _StateNumber_ field shall be zero in a PI.
 
-Some values of _StateNumber_ are architected, and are defined in <<ACE-state-constants-fixed>>.
-these include _initial_, _invalid_, and _completed_, which correspond to values 0, 14, and 15.
-These denote a CC that is ready to operate, it is in an operational state, is in an invalid state, or has finished its operations.
+The architected  _StateNumber_ values which are common to all algorithms are defined in <<ACE-state-constants-fixed>>.
 
 [[ACE-state-constants-fixed]]
-.Constants defining CC states
+.Global CC State Numbers
 [float="center",align="center",width="100%",cols="^6%,<26%,<16%,<52%",options="header"]
 |===
-| Value | Mnemonic for the Constant       | State Name          | Description
-|   0   |  ace_state_initial              | _initial_           | The context has just been provisioned or reset, and ready for operation.
-|  14   |  ace_state_invalid              | _invalid_           | The algorithm has abnormally terminated or provisioning/import have been interrupted.
-|  15   |  ace_state_completed            | _completed_         | The algorithm has completed, not necessarily without error.
+| Value | Mnemonic                | State Name   | Description
+|   0   | ace_state_initial       | _initial_    | CC immediately after provisioning or reset; ready for operation.
+|  14   | ace_state_invalid       | _invalid_    | Algorithm terminated abnormally, or provisioning/import was interrupted.
+|  15   | ace_state_completed     | _completed_  | Algorithm has completed (not necessarily without error).
 |===
 
-All states different from _invalid_ are called _valid_.
+All states other than _invalid_ are termed _valid_. Unless an algorithm's specification states otherwise, a transition from any valid state to _initial_ is always permitted.
 
-Unless explicitly stated otherwise in an algorithm's specification, it is always possible to transition from any valid state to State _initial_.
+If an algorithm has 16 or fewer states (including the architected ones), the current state may be stored in the _StateNumber_ field. For algorithms with more than 16 states, an algorithm-specific representation is stored in Content; in this case, _StateNumber_ shall be set to _initial_ (0), _invalid_ (14), or _completed_ (15) when the algorithm is in the corresponding state, and to a non-reserved value (e.g., 1) otherwise.
 
-If an algorithm defines 16 or fewer states (including the four architected ones), the current state number may be stored in the _StateNumber_ field.
+During `ace.prov` and `ace.import`, _StateNumber_ is set to _invalid_ for the duration of the operation and updated to the correct value only upon successful completion (see <<ACE-provisioning-export-import>>). By the rules of <<ACE-invalidation>>, a partially provisioned or imported CR cannot be exported. If a context switch occurs during such an operation, privileged code must unconfigure the CR; upon resumption, the instruction is restarted. An invalid CR with a nonzero `acestart` is recognized as an incomplete CR, permitting resumption of provisioning or import.
 
-For algorithms with more than 16 states, an algorithm-specific representation is stored in the Content.
-How to use information is up to the algorithm designer, with the following condition:
-StateNumber must always be set to _initial_, _invalid_, and _completed_ if the state of the algorithm corresponds to these states, and to some value other than these three (for instance, 1) if it is in a different state.
+This state change to _invalid_ does not apply during `ace.export`.
+
+
+// For algorithms with more than 16 states, an algorithm-specific representation is stored in the Content.
+// How to use information is up to the algorithm designer, with the following condition:
+// StateNumber must always be set to _initial_, _invalid_, and _completed_ if the state of the algorithm corresponds to these states, and to some value other than these three (for instance, 1) if it is in a different state.
 
 // The state values for the symmetric algorithms defined in this specification are listed in <<ACE-state-constants-symmetric>>.
-
-During init and import, the _StateNumber_ field is set to _invalid_, and only at the end of the operation is it set to proper value, i.e., _initial_ or the value in the SCC (see <<ACE-provisioning-export-import>>)
-This means, by the rules in <<ACE-invalidation>>, that a partially provisioned/imported CR cannot be exported.
-In particular, if a context switch occurs, that the more privileged code must unconfigure the CR, and upon resumption, the instruction will be restarted.  Only an invalid CR with an `acestart` different from zero is recognized as an incomplete CR allowing an init or import operation to resume.
-
-This state change to _invalid_ does not occur during `ace.export`.
 
 ////
 This state change to _invalid_ does not occur during `ace.export`, but operations that could modify the internal state should not be performed on a CR with an interrupted export operation.
@@ -362,24 +332,9 @@ and privileged code can always deny resources to user processes.
 [[ACE-Localities]]
 ===== Locality Field
 
-ACE keeps a table of 128-bit Locality Secrets (LS), the Locality Secrets Table (LST).
-Some entries of the LST are fixed or configurable only using an implementation-specific authenticated hardware procedure:
-These are global and shared across all ACE units in the same system.
-Other entries may be programmed by privileged modes and are architectural, i.e., per hart.
-Currently, eleven values in the LST are architected.
-The first six Localities tie SCCs to the hardware, and are called the HW Binding Group.
-Localities 8 to 10 are the SW Filter Group.
+ACE maintains a table of 128-bit Locality Secrets (LS), the Locality Secrets Table (LST). Some entries are fixed or configurable only via an implementation-specific authenticated hardware procedure; these are global and shared across all ACE units in the same SoC. Other entries are per-hart architectural state programmed by privileged modes. Eleven LST entries are currently architected: the first six constitute the _HW Binding Group_, binding SCCs to the hardware; entries 8–10 form the _SW Filter Group_.
 
-More than one Locality can be active at the same time, with restrictions, and Locality secrets may be combined.
-The Locality Secrets are prepended to the string used to compute the SIV in the AEAD algorithm used to export and import CCs.
-If the _Locality_ Field of a CC is zero, then no value is prepended.
-
-// The 3 lsbs of the Locality field encodes one of the localities with index 0 to 5 into the LST, with an encoding of 1 to 6, respectively, and an encoded value of 0 means that no binding to a hardware locality is done.
-// Bits 3 to 5 determine the use of Localities with index 6, 7, and 8 in the table.
-// Bits 6 and 7 are currently unused and reserved for future use. They must be set to 0.
-
-<<ACE-locality-indexes>> lists the architected Localities.
-For each _Locality_ we provide the following information: its index in the LST; its _domain_, i.e., whether the value is SoC-wide, device-wide, VM-wide, or per-process; its configurability; the bit field it is encoded into and its value in that field. Seven bits out of the eight bits of the Field are defined. Bit 7 is currently undefined and can be used to define additional Localities.
+<<ACE-locality-indexes>> lists the architected Localities. For each Locality we provide: index in the LST; domain (SoC-wide, device-wide, VM-wide, or per-process); configurability; bit-field encoding and value. Seven of the eight _Locality_ field bits are defined; bit 7 is reserved for future use.
 
 [[ACE-locality-indexes]]
 .Architected Localities
@@ -407,34 +362,27 @@ Regenerated by H or higher at each virtual boot of a VM (see <<ACE-CSR-haceVirtB
 |  10   | SLocality               | Configurable by (V)S to mutually isolate processes in U-mode.                    |  U     |  (V)S  | [6:5]  |   3
 |===
 
-An implementation is not required to provide values for all the fields in the HW Binding group.
-In this case, an undefined value is transparently replaced with the value associated to the immediately _stricter_ Locality, and so on, as follows:
+Implementations are not required to populate every HW Binding Group entry.
+Only DeviceSecret and DeviceSecret are mandated.
+An unpopulated entry is transparently replaced by the value of the immediately stricter Locality, propagating as follows:
 
-* ChipSecret <- ChipModelSecret <- ChipDesignerSecret, and
-* DeviceSecret <- ProductSecret <- OEMSecret,
+* ChipSecret {leftarrow} ChipModelSecret {leftarrow} ChipDesignerSecret
+* DeviceSecret {leftarrow} ProductSecret {leftarrow} OEMSecret
 
-where an arrow denotes a possible replacement.
+HLocality is active only when the H extension is enabled and V=1; otherwise, it mirrors MLocality.
 
-HLocality is only active if the H extension is enabled and V=1. Otherwise, it is a shadow of MLocality.
+NOTE: A system-key index may refer to keys with unrelated purposes on different devices, leading to unspecified behavior. Implementations shall assign usage policies at least as restrictive as the key's own policies, and shall supply an appropriate _Locality_ value during CR provisioning.
 
-NOTE: Referencing a key by an index into the System Key Table (SKT) may correspond to keys with unrelated purposes on different devices, leading to unspecified behavior.
-Implementations shall set usage policies that are at least as strict as the key's own, and possibly provide a suitable _Locality_ field value to the ACE unit during CR provisioning.
-
-[WARNING]
---
-Locality Secrets can be combined. Currently, up to three: A HW Binding Locality, one of either PhysBootSecret or VBootSecret, and one from the SW Filter Group.
-Two methods to combine them for the purpose of creating the data to prepend to the SIV computation or verification in AES-GCM-SIV
-are: to XOR the values; and to concatenate them (the current choice).
---
-//127-bit strings instead and multiply the, but
-//in the binary field defined by stem:[P(x)=x^{127}+x+1], this would work as well,
+Multiple Localities may be simultaneously active, subject to restrictions.
+At present, up to three may be active simultaneously: one from the HW Binding Group, one of PhysBootSecret or VBootSecret, and one from the SW Filter Group.
+Locality Secrets are prepended to the input of the tag computation in the AEAD algorithm used for SCC export and import. If the _Locality_ field is zero, no value is prepended.
 
 //
 
 [[ACE-UCPolicy-field]]
 ===== UCPolicy Field
 
-Bit 0, 1, resp., 2 of this field is ignored if U-mode, S-mode, resp. H-mode is not supported/enabled.
+Bits 0, 1, and 2 of this field are ignored if U-mode, S-mode, and H-mode, respectively, are not supported or not enabled.
 
 ////
 [[ACE-combined-filters]]
@@ -454,29 +402,21 @@ Currently, we use `scontext`, `mcontext`, and `hcontext` from the Sdtrig extensi
 [[ACE-extra-content]]
 ===== ExtraContent Field
 
-The first eight bytes of the additional information store a copy of the CSR `acemarchid` (<<ACE-CSR-acemarchid>>) of the machine that created the data.
+The first eight bytes of the additional data segment hold a copy of the `acemarchid` CSR (<<ACE-CSR-acemarchid>>) of the originating machine, and are counted within the length recorded by the _ExtraContent_ field. The importing implementation uses this value to determine whether the additional data can be used.
 
-The eight bytes containing `acemarchid` are included in the length recorded by the _ExtraContent_ field.
-
-This value is considered by the implementation performing the import, to determine whether the additional data is usable, and which.
-
-[NOTE]
-Examples of extra content are: precomputed point multiples (computing them is usually significantly expensive than encrypting and decrypting them), additional data for side-channel protected implementations (in the case the chosen method for computing multiple shares is expensive, so the key is still saved reconstructed, but additional data may be included to provide the key shares or to help reconstruct them).
+NOTE: Typical extra content includes precomputed point multiples (whose computation is generally far more expensive than their encryption) and auxiliary data for side-channel-protected implementations, such as key shares or data to accelerate share reconstruction.
 
 [[ACE-Metadata-expiration-date]]
 ==== ExpirationDate Field
 
-If _ExpirationDate_ is not zero, then it contains the expiration date of this CC expressed as number of hours from the base date (January 1st, 2027).
-18 bits are used for an expiration date with a resolution of a hour, which allows for almost 30 years (2^18^ hours) from the base date.
-While this is a limited time span, we do not expect other formats to be used unchanged in, say, 10 or 15 years, and extended formats (with the _Format_ field equal to 1) will accommodate larger time spans.
+If non-zero, _ExpirationDate_ specifies the CC expiration time as a number of hours elapsed since the base date of January 1, 2027. The 18-bit field provides for a span of approximately 30 years (2^18^ hours). Future extended formats (with _Format_ = 1) may support expanded time spans.
 
 // ////////////////////////////////////////////////////////////////////
 
 [[ACE-CSR-summary]]
 ==== CSR Summary
 
-ACE extends `*status` and `misa`, and adds up to 10 new CSRs and (up to) 28 indirect CSRs.
-//, which are listed in <<ACE-CSRs-table>>.
+ACE extends `*status` and `misa`, and adds up to 10 new direct CSRs and up to 28 indirect CSRs.
 
 [[ACE-CSRs-table]]
 .New ACE CSRs.
@@ -504,84 +444,71 @@ ACE extends `*status` and `misa`, and adds up to 10 new CSRs and (up to) 28 indi
 
 [WARNING]
 ====
-* For the last CSR groups we use the Indirect CSR Access defined in cite:[RISCV-ISA-Priv] instead.
-However, if the ARC so desires, these CSRs can also be configured directly and addresses can be allocated for them.
-
-* `acestart` may be overloaded with `vstart`, regardless of whether the V extension is available.
-If a vector instruction is interrupted, the CSR would follow the `vstart` semantics-i.e., it would count the number of processed elements- whereas if an ACE instruction is interrupted, the CSR would follow the `acestart` semantics-i.e., it would count the number of processed bytes.
+* The last CSR groups use the Indirect CSR Access mechanism defined in cite:[RISCV-ISA-Priv]. Direct addresses may be allocated instead if desired.
 ====
 
 //
 
-==== Extension to existing CSRs
+==== Extensions to Existing CSRs
 
 [[ACE-ACE-field-in-misa]]
 ===== ACE field in `misa`
 
 {empty}
 (((CSR, ACE field in `misa`)))
-Bit `L` (11) in `misa` indicates that ACE is present.
+Bit `L` (11) of `misa` indicates that the ACE extension is present. If ACE is implemented, this bit shall not be read-only zero.
 
 [[ACE-ACES-field-in-mstatus]]
 ===== ACE Context Status in `mstatus` and `sstatus`
 
 {empty}
 (((CSR,ACES field in *status)))
-An ACE context status field, ACES, is added to `mstatus`[26:25] and shadowed in `sstatus`[26:25] (but, see <<ACE-CSR-mcrdirty>>).
-ACES is defined analogously to the floating-point context status field, FS, and to the vector context status field, VS.
-It tracks the dirtiness of the ACE state, including the CRs, the ACEIOBUF, and all ACE-specific CSRs.
-If ACE is implemented, the ACES field shall not be read-only zero.
-The meanings of its values are given in <<ACE-aces-encoding>>.
+The ACES field is added to `mstatus`[26:25] and shadowed in `sstatus`[26:25] (see <<ACE-CSR-mcrdirty>>).
+ACES is defined analogously to the floating-point context status field FS and the vector context status field VS.
+It tracks the dirtiness of the ACE state, including CRs, ACEIOBUF, and all ACE-specific CSRs.
+If ACE is implemented, ACES shall not be read-only zero.
+Encodings are given in <<ACE-aces-encoding>>.
 
 
 [[ACE-aces-encoding]]
-.Encoding of ACES status field
+.Encoding of the ACES field
 [float="center",align="center",width="100%",cols="^8%,<8%,<84%",options="header"]
 |===
-|Status |Name |Meaning
-|   0   | Off                | ACE disabled. The entire ACE state is inaccessible. The hart will trap if the user requests to enable the feature.
-|   1   | Initial            | ACE enabled.
-|   2   | Clean              | ACE enabled. At least one CR or the ACEIOBUF is configured, and the state matches the last context swap.
-|   3   | Dirty              | ACE enabled. At least one CR or the ACEIOBUF, or any ACE-specific CSR may have been modified since the last context swap. This includes unconfigured states since switching code needs to act on them, by erasing any stale saved state.
+|Value |Name |Meaning
+|   0   | Off     | ACE disabled. The ACE state is inaccessible. Executing any ACE instruction raises an illegal instruction exception.
+|   1   | Initial | ACE enabled. No CR or ACEIOBUF is configured.
+|   2   | Clean   | ACE enabled. At least one CR or ACEIOBUF is configured; state matches the last context swap.
+|   3   | Dirty   | ACE enabled. At least one CR, ACEIOBUF, or ACE-specific CSR may have changed since the last context swap. Unconfigured CRs that were previously configured also cause Dirty, since context-switching code must erase any stale saved state.
 |===
 
-The transitions between these states are the same as in Table “FS, VS, and XS state transitions” of cite:[RISCV-ISA-Priv].
+ACES state transitions follow the same rules as the FS, VS, and XS transitions defined in cite:[RISCV-ISA-Priv].
 
-[NOTE]
-Accurate setting of `mstatus.ACES` is an optimization.
-Software will typically use ACES to reduce context-swap overhead.
+NOTE: Precise management of `mstatus.ACES` is an optimization that software may use to reduce context-switch overhead.
 
-When `mstatus.ACES` is set to Off, executing any ACE instruction raises an illegal instruction exception.
+When `mstatus.ACES` is Initial or Clean, any instruction that modifies ACE state sets `mstatus.ACES` to Dirty. Implementations may also set `mstatus.ACES` to Dirty from Initial or Clean at any time, even in the absence of a state change.
 
-When `mstatus.ACES` is set to Initial or Clean, executing any instruction that changes ACE state will change `mstatus.ACES` to Dirty.
-Implementations may also change `mstatus.ACES` from Initial or Clean to Dirty at any time, even when there is no change in ACE state.
+When `mstatus.ACES` (resp. `sstatus.ACES`) is Dirty, `mstatus.SD` (resp. `sstatus.SD`) is 1; otherwise, `mstatus.SD` is set per existing specifications.
 
-If `mstatus.ACES` (`sstatus.ACES`) is Dirty, `mstatus.SD` (`sstatus.SD`) is 1; otherwise, `mstatus.SD` (`sstatus.SD`) is set in accordance with existing specifications.
+Writes to ACES do not modify any other ACE state. Setting ACES to Off, Initial, or Clean does not clear CRs or ACEIOBUF; any state reset must be explicit and must precede such a write.
 
-Writes to any ACES field do not modify any other ACE state.
-In particular, setting ACES to Off, Initial, or Clean does not clear the CRs or the ACEIOBUF:
-Any state reset must be done explicitly before setting ACES to one of these values.
-
-Implementations may have a writable `misa.L` field. Analogous to the way in which the floating-point unit and the vector unit are handled, the `mstatus.ACES` field may exist even if `misa.L` is clear.
+In implementations with a writable `misa.L`, the `mstatus.ACES` field may be present even when `misa.L` is clear, analogously to `mstatus.FS` and `mstatus.VS`.
 
 //
 
 [[ACE-ACES-field-H]]
 ===== ACE Context Status in `vsstatus`
 
-When the H extension is present, an ACE context status field, ACES, is added to `vsstatus`[26:25].
-It tracks the dirtiness of the ACE state, including the CRs, the ACEIOBUF, and all ACE-specific CSRs.
-It is defined analogously to the floating-point context status field, FS, and to the vector context status field, VS.
+When the H extension is present, an ACES field is added to `vsstatus`[26:25], defined analogously to `mstatus.FS` and `mstatus.VS`, and tracking the dirtiness of CRs, ACEIOBUF, and all ACE-specific CSRs.
 
 When V=1:
 
 * Both `vsstatus.ACES` and `mstatus.ACES` are in effect.
-* Any ACE instruction raises an illegal instruction exception when either field is set to Off.
-* If neither `vsstatus.ACES` nor `mstatus.ACES` is set to Off, executing any instruction that changes ACE state changes both `mstatus.ACES` and `vsstatus.ACES` to Dirty.
-* Implementations may also change `mstatus.ACES` or `vsstatus.ACES` from Initial or Clean to Dirty at any time, even when there is no change in ACE state.
-* If `vsstatus.ACES` is Dirty, `vsstatus.SD` is 1; otherwise, `vsstatus.SD` is set in accordance with existing specifications.
+* Any ACE instruction raises an illegal instruction exception if either field is Off.
+* If neither field is Off, any instruction that modifies ACE state sets both `mstatus.ACES` and `vsstatus.ACES` to Dirty.
+* Implementations may set either field to Dirty from Initial or Clean at any time, even without a state change.
+* When `vsstatus.ACES` is Dirty, `vsstatus.SD` is 1; otherwise, `vsstatus.SD` is set per existing specifications.
 
-For implementations with a writable `misa.L` field, the `vsstatus.ACES` field may exist even if `misa.L` is clear.
+In implementations with a writable `misa.L`, `vsstatus.ACES` may be present even when `misa.L` is clear.
 
 //
 
@@ -591,18 +518,11 @@ For implementations with a writable `misa.L` field, the `vsstatus.ACES` field ma
 [[ACE-CSR-ace-error]]
 ===== `aceerror`
 
-The 8-bit `aceerror` CSR records the error code from the most recent ACE instruction.
+The 8-bit `aceerror` CSR holds the error code from the most recent ACE instruction. A read may stall until the preceding ACE operation completes. The CSR is writable to support context switching.
 
-Reading it may stall execution until the operation completes.
+The phrase _raises ACE error X_ means that `aceerror` is set to value _X_. The same event may also raise an exception, triggering a vertical or horizontal trap; the handler may inspect `aceerror` to determine the error type.
 
-It is writable for context switching.
-
-We say that some event _raises ACE error_ _some_number_ when it causes `aceerror` to take the value _some_number_.
-Other actions may be triggered by the same event, such as raising an exception causing a vertical or a horizontal trap:
-The value of `aceerror` may be used by the handler to determine the nature of the error and take appropriate action.
-
-Error codes 0–127 are reserved for RVI, and codes 128–255 are error codes reserved for custom algorithms.
-The standard error codes are:
+Error codes 0–127 are reserved by RVI; codes 128–255 are available for custom algorithms. The standard error codes are:
 
 [[ACE-error-codes]]
 .Error codes and their meanings
@@ -624,14 +544,14 @@ State number not allowed in current algorithm in `ace.state`.
 |  9   | ace_err_auth               | Authentication failure in an algorithm.
 |===
 
-ACE error ace_err_invalid_value collects various cases, for instance (but, there could be more):
+`ace_err_invalid_value` covers, among others:
 
-* Invalid Metadata section in `ace.prov` or `ace.import`, other than ace_err_unimplemented, for instance:
- ** Non-zeros in zero fields,
- ** Non-implemented _Locality_ value,
- ** _StateNumber_ is non-zero for `ace.prov`.
-* ACE operation issued with invalid or zero ACEIOBUF length `aceiobuftop`-`acestart` (see <<ACE-CSR-aceiobuftop>> and <<ACE-CSR-acestart>>).
-* Invalid input to `ace.restrict`.
+* Invalid Metadata in `ace.prov` or `ace.import` (other than `ace_err_unimplemented`), such as:
+ ** Nonzero bits in reserved fields,
+ ** Unsupported _Locality_ value,
+ ** Nonzero _StateNumber_ in a PI.
+* An ACE operation issued with an invalid or zero ACEIOBUF transfer length (`aceiobuftop` − `acestart`); see <<ACE-CSR-aceiobuftop>> and <<ACE-CSR-acestart>>.
+* Invalid operand to `ace.restrict`.
 
 // Using an incomplete CC in `ace.size` is allowed.
 
@@ -661,19 +581,17 @@ Code        .>|Description
 [[ACE-CSR-acestart]]
 ===== `acestart`
 
-`acestart` is an XLEN-bit RW CSR, to track progress of long-running interruptible instructions such as `ace.prov`, `ace.import`, `ace.export`, `ace.exec`, as well as `ace.input` and `ace.output`.
+`acestart` is an XLEN-bit RW CSR that tracks the progress of long-running, interruptible ACE instructions: `ace.prov`, `ace.import`, `ace.export`, `ace.exec` (when iterating over multiple blocks), `ace.input`, and `ace.output`.
 (((CSR, acestart)))
 
-Only the instructions explicitly mentioned above support non-zero `acestart` values; other ACE instructions ignore this register, and will be restarted.
+Only the instructions listed above honor a nonzero `acestart`; all other ACE instructions ignore it and are restarted.
 
-Unlike the vector extension’s `vstart`, which tracks element indices, ACE has no _intrinsic_ notion equivalent to that of vector elements.
-`acestart` therefore records a “raw” byte offset.
+Unlike `vstart`, which tracks element indices, `acestart` records a byte offset, reflecting the number of bytes processed so far. Hardware typically writes this register on interruption. Software may write zero to force a full restart and may save and restore the register across context switches. Writing arbitrary nonzero values is not supported and may raise an exception.
 
-Hardware typically writes to this register. Software may safely write zero to fully restart an operation, and the register can be saved and restored during context switches. Software must not write arbitrary nonzero values, as the hardware is not required to support all such values.
-Doing so may cause an exception.
+Provisioning, import, and export operations may be interrupted and resumed provided no context switch occurs; if a context switch occurs, they must be restarted.
 
-Provisioning, import, and export operations may be interrupted and resumed if no context switch occurs,
-as indicated by the value in the `acestart` CSR.  If a context switch occurs, they must be restarted.
+[WARNING]
+`acestart` may share the encoding of `vstart`, regardless of whether the V extension is present. When a vector instruction is interrupted, the CSR follows `vstart` semantics (count of processed elements); when an ACE instruction is interrupted, it follows `acestart` semantics (amount of processed bytes).
 
 ////
 [NOTE]
@@ -690,87 +608,56 @@ This design obviates the need to separate data transfer from cryptographic proce
 ====
 ////
 
-Another use of `acestart` arises when an `ace.exec` instruction operates on long vectors containing multiple elements, in which case `VL*SEW` is a multiple of the basic processing unit usually denoted by `b` (such as a block size) in the algorithms. In this situation, `ace.exec` can work iteratively on each block of the input, and execution of `ace.exec` may be interrupted and resumed.
-Regardless of whether the operations are on vectors or on the ACEIOBUF, `acestart` reflects the number of bytes processed so far.
+`acestart` also applies when `ace.exec` processes a multi-block vector operand (`VL*SEW` is a multiple of the algorithm's basic processing unit `b`): `ace.exec` operates iteratively and may be interrupted between blocks. Whether inputs and outputs use vector registers or ACEIOBUF, `acestart` always reflects the number of bytes processed.
 
-The semantics and use of `acestart` are described in <<ACE-provisioning-export-import>>.
+Full `acestart` semantics are described in <<ACE-provisioning-export-import>>.
 
-The two CSRs described next may be used to optimize saving and restoring the ACEIOBUF.
+The following two CSRs may be used to optimize ACEIOBUF save and restore.
 
 //
 
 [[ACE-CSR-aceiobuflen]]
 ===== `aceiobuflen`
 
-`aceiobuflen` is an XLEN-bit RW CSR.
+`aceiobuflen` is an XLEN-bit RW CSR that programs the ACEIOBUF length for use by `ace.input` and `ace.output`.
+Writing this register-even when re-writing the old value-also zeroes the buffer and sets `aceiobuftop` to the same length and `acestart` to zero.
 
-`aceiobuflen` is used to program the size of the ACEIOBUF for `ace.input` and `ace.output`.
+When `aceiobuflen` is zero, the ACEIOBUF is _unconfigured_ (analogous to an unconfigured CR in state Initial); `ace.input` and `ace.output` raise `ace_err_unconfigured`.
 
-Reconfiguring `aceiobuflen` will also zero the buffer.
+Writing a value larger than the implementation maximum raises `ace_err_memory`.
 
-If `aceiobuflen` is zero, the ACEIOBUF is _unconfigured_ (it does not hold any content, similarly to unconfigured CRs, i.e., CRs in state Initial), and `ace.input` and `ace.output` raise ACE error ace_err_unconfigured.
-
-Writing to `aceiobuflen` may fail if the value is larger than the maximum allowed by the architecture, and raises ACE error ace_err_memory.
-
-If the total length of the ACEIOBUF is fixed in the implementation, this can be discovered by writing an “impossible” value to `aceiobuflen`, namely the all-ones length:
-ACE error ace_err_memory is raised, but reading `aceiobuflen` will return the actual length, on which software can therefore act.
-This will also configure `aceiobuflen` to the maximum length and therefore set `aceiobuftop` (<<ACE-CSR-aceiobuftop>>) accordingly, and `acestart` to zero.
-
-If the total length of the ACEIOBUF is not fixed, the same operation will also raise ACE error ace_err_memory, and cause `aceiobuflen` to read as zero.
-`aceiobuftop` and `acestart` will also be set to zero.
+To discover the maximum buffer size supported by an implementation, or by the current residual capacity of the internal memory of the ACE unit, write all-ones to `aceiobuflen`: `ace_err_memory` is raised, but a subsequent read of `aceiobuflen` returns the actual maximum length; the buffer is simultaneously configured to that length, `aceiobuftop` is set accordingly, and `acestart` is set to zero.
 
 //
 
 [[ACE-CSR-aceiobuftop]]
 ===== `aceiobuftop`
 
-`aceiobuftop` is an XLEN-bit RW CSR.
+`aceiobuftop` is an XLEN-bit RW CSR that marks the upper bound of the buffer range used by `ace.input` and `ace.output`. Together with `acestart`, it defines the active transfer window.
 
-`aceiobuftop` is used to program the top end of a transfer operation to and from the ACEIOBUF for the `ace.input` and `ace.output` instructions.
+The constraints `acestart` {le} `aceiobuftop` {le} `aceiobuflen` must hold; violating either bound raises `ace_err_invalid_value`. Modifying `aceiobuftop` does not alter or invalidate buffer contents.
 
-`aceiobuftop` must be {le} `aceiobuflen`.
-Setting a larger value raises ACE error ace_err_invalid_value.
+Using ACEIOBUF when `aceiobuftop` − `acestart` is zero (with `aceiobuflen` nonzero) or yields an invalid transfer size raises `ace_err_invalid_value`.
 
-`aceiobuftop` must be {ge} `acestart`.
-Setting a smaller value raises ACE error ace_err_invalid_value.
-
-In conjunction with `acestart`, `aceiobuftop` defines the range of buffer used in the subsequent operations.
-
-Reconfiguring `aceiobuftop` will not invalidate the buffer contents.
-
-Writing to `aceiobuflen` will set `aceiobuftop` to the same value.
-
-Using the ACEIOBUF while `aceiobuftop`-`acestart` is zero (`aceiobuflen` being non-zero) or an invalid value raises ACE error ace_err_invalid_value.
-
-NOTE: The `aceiobuftop` CSR is an optimization to avoid reconfiguring the ACEIOBUF when algorithms require variable-length inputs.
-One such situation may occur when, say, processing 4 or 8 blocks at a time, and at the end of a payload there is a smaller residual number of blocks.
-Another example is when providing IVs/nonces. Software can configure the buffer to the maximum size it intends to use and then adjust `aceiobuftop` for shorter operations.
-Reconfiguring `aceiobuflen`, instead, would necessitate zeroing the buffer to prevent data leakage and could incur a performance penalty if internal resizing occurs.
+NOTE: `aceiobuftop` allows per-operation length adjustment without reconfiguring ACEIOBUF. For example, when processing a residual block shorter than the nominal block size, or when supplying a short IV or nonce, software adjusts only `aceiobuftop` rather than resizing the buffer—avoiding the zeroing and potential resizing overhead that a write to `aceiobuflen` would entail.
 
 //
 
 [[ACE-CSR-acesequence]]
 ===== `acesequence`
 
-This is an XLEN-bit URW CSR (2 bits defined).
-
-Its value is zero if we are using vector registers for the current ACE instruction.
-It may take non-zero values only if using `ace.input`/`ace.output` in place of vector registers, as detailed in <<ACE-usage-input-output>>.
+`acesequence` is an XLEN-bit URW CSR; only the low 2 bits are defined. It is zero when vector registers are used for the current ACE instruction, and takes nonzero values when `ace.input`/`ace.output` are used in place of vector registers, as described in <<ACE-usage-input-output>>.
 
 //
 
 [[ACE-CSR-aceactivecr]]
 ===== `aceactivecr`
 
-This is an XLEN-bit URW CSR (5 bits defined).
+`aceactivecr` is an XLEN-bit URW CSR; only the low 5 bits are defined. It binds `ace.input`, `ace.output`, `ace.exec`, `ace.state`, and `ace.derive` to a specific CR. Valid values are 0–31 (selecting a CR) or 32 (disabled).
 
-It serves to tie the `ace.input`, `ace.output`, `ace.exec`, `ace.state` and `ace.derive` instructions to the state of a specific CR.
-It can take values 0 to 31, or 32 to disable the tie.
+`aceactivecr` may only be modified when `acesequence` is zero; otherwise, an illegal instruction exception is raised.
 
-It can only be changed if `acesequence` is zero, otherwise an illegal instruction exception is raised.
-
-If the value is not 32, then the CR in all single-CR instructions, and the source CR in `ace.derive` or `ace.clone` can only have this value, otherwise an illegal instruction exception is raised.
-This serves to make sure that the instructions are issued in the correct order.
+When `aceactivecr` is not 32, the CR operand in all single-CR instructions and the source CR in `ace.derive` and `ace.clone` must equal the selected value; any deviation raises an illegal instruction exception, ensuring correct instruction sequencing.
 
 //
 
@@ -779,46 +666,41 @@ This serves to make sure that the instructions are issued in the correct order.
 [[ACE-CSR-acemarchid]]
 ===== `acemarchid`
 
-`acemarchid` is similar to `marchid`, but it refers to the version of the ACE unit.
+`acemarchid` identifies the microarchitectural version of the ACE unit, analogously to `marchid` for the hart.
 
 [[ACE-CSR-scrdirty]]
 ===== `scrdirty`
 
-The SXLEN-bit register `scrdirty` tracks the dirtiness of CRs on a per-CR basis.
+The SXLEN-bit register `scrdirty` tracks per-CR dirtiness. `scrdirty[__i__]` encodes Clean (0) or Dirty (1) for CR #__i__. Bits [SXLEN-1:32] are WPRI.
 
-``scrdirty[__i__]`` can take the values Clean (0), and Dirty (1), for CR #__i__.
+When the privilege mode is S, VS, or U:
 
-``scrdirty[SXLEN-1:32]`` bits are WPRI.
-
-When the privilege mode is S, VS, or U, the following holds:
-* When ``scrdirty[__i__]`` is set to Clean, executing any instruction that changes the state of CR #__i__ will change ``scrdirty[__i__]`` to Dirty.
-* Implementations may also change ``scrdirty[__i__]`` from Clean to Dirty at any time, even when there is no change in CR #__i__ state.
+* Any instruction that modifies CR #__i__ sets `scrdirty[__i__]` to Dirty.
+* Implementations may set `scrdirty[__i__]` to Dirty from Clean at any time, even without a state change.
 // The main reason for allowing this is to permit implementations that do not
 // track the state and make fields read-only Dirty, but we could also require
 // precise tracking and hide the CSRs behind an extension, so implementations
 // that don't want to do it just don't implement the extension.
 
-NOTE: Context switching code sees only Clean or Dirty states. To establish whether a CR is actually configured, it can use `ace.size` (<<ACE-instruction-size>>) on a CR. If the instruction returns zero, this means that the CR is not configured, and any stale state for it shall be erased and released.
 
-NOTE: The `scrdirty` CSR does not depend on the S extension.  In an M-U system, M-mode can use the CSR to optimize U-mode context switches.
+NOTE: Context-switching code observes only Clean or Dirty. To determine whether a CR is configured, software may execute `ace.size` (<<ACE-instruction-size>>) on it; a return value of zero indicates an unconfigured CR, and any stale saved state for it shall be erased and released.
+
+NOTE: `scrdirty` is independent of the S extension. In an M-U system, M-mode may use it to optimize U-mode context switches.
 
 NOTE: `sstatus.ACES` is also in effect.
 
 [[ACE-CSR-vscrdirty]]
 ===== `vscrdirty`
 
-NOTE: The `vscrdirty` register exists only when the H extension is implemented.
+NOTE: `vscrdirty` exists only when the H extension is implemented.
 
-The VSXLEN-bit register `vscrdirty` tracks the dirtiness of CRs on a per-CR basis.
+The VSXLEN-bit register `vscrdirty` tracks per-CR dirtiness for virtualized contexts. `vscrdirty[__i__]` encodes Clean (0) or Dirty (1) for CR #__i__. Bits [VSXLEN-1:32] are WPRI.
 
-``vscrdirty[__i__]`` can take the values Clean (0) or Dirty (1), for CR #__i__.
+When the privilege mode is VS or VU:
 
-``vscrdirty[VSXLEN-1:32]`` bits are WPRI.
-
-When the privilege mode is VS or VU, the following holds:
-* `vscrdirty` substitutes for `scrdirty`, so instructions that normally read or modify `scrdirty` actually access `vscrdirty` instead.
-* When ``vscrdirty[__i__]`` is set to Clean, executing any instruction that changes the state of CR #__i__ will change ``vscrdirty[__i__]`` to Dirty.
-* Implementations may also change ``vscrdirty[__i__]`` from Clean to Dirty at any time, even when there is no change in CR #__i__ state.
+* `vscrdirty` shadows `scrdirty`; accesses that would target `scrdirty` instead access `vscrdirty`.
+* Any instruction that modifies CR #__i__ sets `vscrdirty[__i__]` to Dirty.
+* Implementations may set `vscrdirty[__i__]` to Dirty from Clean at any time, even without a state change.
 
 NOTE: `sstatus.ACES`, `vsstatus.ACES`, and `scrdirty` are also in effect when V=1.
 
@@ -828,10 +710,9 @@ NOTE: `sstatus.ACES`, `vsstatus.ACES`, and `scrdirty` are also in effect when V=
 [WARNING]
 ====
 (((CSR, mcrdirty)))
-A separate `mcrdirty` can be defined, _mutatis mutandis_, like `scrdirty` and `vscrdirty`, to allow M-mode to optimize context switches of Supervisor domains.
-In this case, the `ACES` field in `sstatus` shall be unshadowed.
+A `mcrdirty` register may be defined, _mutatis mutandis_, in the same manner as `scrdirty` and `vscrdirty`, to allow M-mode to optimize context switches across Supervisor domains. In such a case, the `ACES` field in `sstatus` shall be unshadowed and be independent instead.
 
-(A `ucrdirty` might become useful if the HFI extension gets approved, together with the fields in an additional `ustatus` CSR.)
+(A `ucrdirty` may become useful if the HFI extension is ratified, together with corresponding fields in a `ustatus` CSR.)
 ====
 
 //
@@ -839,31 +720,25 @@ In this case, the `ACES` field in `sstatus` shall be unshadowed.
 [#discrete]
 ===== Propagation of `*crdirty` Dirtiness Values
 
-CR status propagates from the least privileged modes to the higher privileged ones, like the FS, VS, and ACES fields in `*status`, but there are only two states: Clean and Dirty.
-Any instruction that changes bit #__i__ of, say `vscrdirty`, resp., `scrdirty`, to Dirty, will also set the corresponding bit of `scrdirty` and `mcrdirty`, resp., `mcrdirty`.
-Consequently, also the ACES fields of `*status` will record the Dirty state.
+Per-CR dirtiness propagates from less-privileged to more-privileged modes, analogously to the FS, VS, and ACES fields in `*status`, but with only two states: Clean and Dirty. Any instruction that sets bit #__i__ of `vscrdirty` (resp. `scrdirty`) to Dirty also sets the corresponding bit of `scrdirty` and `mcrdirty` (resp. `mcrdirty`). The ACES fields of `*status` are also set accordingly.
 
 //
 
 [[ACE-CSR-macecsk]]
 ===== `macecsk` Group
 
-This is an optional group of M-Mode WARZ XLEN-bit CSRs used to configure `macecsk`.
+The optional `macecsk` group consists of XLEN-bit M-mode WARZ CSRs: eight in RV32, four in RV64.
 (((CSR, `macecsk`)))
-In RV32 there are eight CSRs.
-In RV64 there are four CSRs.
-
-A write to the __i__-th CSR sets Bits [(_i_+1) XLEN - 1 : _i_ XLEN] of the CSK.
-
-Any access to `macecsk` outside of M-mode causes an illegal instruction exception.
+A write to the __i__-th CSR sets bits [(_i_+1)·XLEN−1 : _i_·XLEN] of the CSK. Access outside M-mode raises an illegal instruction exception.
 
 [NOTE]
 ====
-M-mode firmware must be aware of whether the CSK is configurable, ephemeral, or fixed. For configurable CSKs, persistence mechanisms are implementation-specific and must be handled by M-mode firmware.
+M-mode firmware must be aware of whether the CSK is configurable, ephemeral, or fixed.
+Persistence mechanisms for configurable CSKs are implementation-specific.
 
-Migration of a CSK to any other endpoint—such as the M-mode firmware of a different device, a local TPM for hibernation storage, or a cloud-based HSM for in-flight preservation—requires an authenticated public-key key-wrapping mechanism.
+Transferring a CSK to another endpoint—such as the M-mode firmware of another device, a local TPM (for instance to preserve a CSK upon suspension or host hibernation), or a cloud-based HSM—requires an authenticated public-key key-wrapping mechanism.
 
-Alternative methods for reconfiguring the CSK are allowed. For example, M-mode may utilize an implementation-defined secure IP block, such as Caliptra cite:[caliptra], to configure the CSK and provide a CSK export mechanism.
+Alternative reconfiguration mechanisms (e.g., a Caliptra-style cite:[caliptra] secure IP block) are permitted.
 ====
 
 //
@@ -871,34 +746,22 @@ Alternative methods for reconfiguring the CSK are allowed. For example, M-mode m
 [[ACE-CSR-macePhysBootSecret]]
 ===== `macePhysBootSecret` Group
 
-This is a group of M-Mode WARZ XLEN-bit CSRs used to configure `macePhysBootSecret`.
-These are addressed using Indirect CSR Access.
+The `macePhysBootSecret` group consists of M-mode WARZ XLEN-bit CSRs, accessed via Indirect CSR Access: four in RV32, two in RV64.
 (((CSR, `macePhysBootSecret`)))
-In RV32 there are four CSRs.
-In RV64 there are two CSRs.
-
-A write to the __i__-th CSR sets Bits [(_i_+1) XLEN - 1 : _i_ XLEN] of `BootSecret`.
-
-Any access to `macePhysBootSecret` outside of M-mode and Debug mode. causes an illegal instruction exception.
+A write to the __i__-th CSR sets bits [(_i_+1)XLEN−1 : _i_·XLEN] of `BootSecret`. Access outside M-mode or Debug mode raises an illegal instruction exception.
 
 //
 
 [[ACE-CSR-haceVirtBootSecret]]
 ===== `haceVirtBootSecret` Group
 
-This is a group of H- and VS-Mode WARZ XLEN-bit CSRs used to configure `haceVirtBootSecret`.
-These are addressed using Indirect CSR Access.
+The `haceVirtBootSecret` group consists of H- and VS-mode WARZ XLEN-bit CSRs, accessed via Indirect CSR Access: four in RV32, two in RV64.
 (((CSR, `haceVirtBootSecret`)))
-In RV32 there are four CSRs.
-In RV64 there are two CSRs.
-
-A write to the __i__-th CSR sets Bits [(_i_+1) XLEN - 1 : _i_ XLEN] of `haceVirtBootSecret`.
-
-Any access to `haceVirtBootSecret` outside of VS-mode and higher causes an illegal instruction exception.
+A write to the __i__-th CSR sets bits [(_i_+1)XLEN−1 : _i_·XLEN] of `haceVirtBootSecret`. Access below VS-mode raises an illegal instruction exception.
 
 [NOTE]
 ====
-`haceVirtBootSecret` must be reconfigurable in order to support VM reboots which are independent of the boot cycles of the physical host.
+`haceVirtBootSecret` must be reconfigurable to support VM reboots independently of the physical host boot cycle.
 ====
 
 //
@@ -906,46 +769,27 @@ Any access to `haceVirtBootSecret` outside of VS-mode and higher causes an illeg
 [[ACE-CSR-maceLocality]]
 ===== `maceLocality` Group
 
-This is a group of M-Mode WARZ XLEN-bit CSRs, used to configure `maceLocality`.
+The `maceLocality` group consists of M-mode WARZ XLEN-bit CSRs, accessed via Indirect CSR Access: four in RV32, two in RV64.
 (((CSR, `maceLocality`)))
-In RV32 there are four CSRs.
-In RV64 there are two CSRs.
-
-A write to the __i__-th CSR sets Bits [(_i_+1) XLEN - 1 : _i_ XLEN] of `maceLocality`.
-
-Any access to `maceLocality` outside of M-mode and Debug mode raises an illegal instruction exception.
+A write to the __i__-th CSR sets bits [(_i_+1)XLEN−1 : _i_·XLEN] of `maceLocality`. Access outside M-mode and Debug mode raises an illegal instruction exception.
 
 //
 
 [[ACE-CSR-haceLocality]]
 ===== `haceLocality` Group
 
-This is a group of H-Mode WARZ XLEN-bit CSRs, used to configure `haceLocality`.
+The `haceLocality` group consists of H-mode WARZ XLEN-bit CSRs, accessed via Indirect CSR Access: four in RV32, two in RV64.
 (((CSR, `haceLocality`)))
-In RV32 there are four CSRs.
-In RV64 there are two CSRs.
-
-A write to the __i__-th CSR sets Bits [(_i_+1) XLEN - 1 : _i_ XLEN] of `haceLocality`.
-
-This register group must be implemented if the H extension is implemented.
-Any access to `haceLocality` outside of H-mode and higher raises an illegal instruction exception.
-
-// This register group can be useful in systems where M-Mode implements hypervisor-like functionality directly.
+A write to the __i__-th CSR sets bits [(_i_+1)XLEN−1 : _i_·XLEN] of `haceLocality`. This group shall be implemented whenever the H extension is implemented. Access below H-mode raises an illegal instruction exception.
 
 //
 
 [[ACE-CSR-saceLocality]]
 ===== `saceLocality` Group
 
-This is a group of (V)S-Mode WARZ XLEN-bit CSRs, used to configure `saceLocality`.
-(((CSR, `maceLocality`)))
-In RV32 there are four CSRs.
-In RV64 there are two CSRs.
-
-A write to the __i__-th CSR sets Bits [(_i_+1) XLEN - 1 : _i_ XLEN] of `saceLocality`.
-
-The register group is only accessible in S/HS-mode, VS-mode, M-mode, and Debug mode.
-Any access to `saceLocality` outside of these modes raises an illegal instruction exception.
+The `saceLocality` group consists of (V)S-mode WARZ XLEN-bit CSRs, accessed via Indirect CSR Access: four in RV32, two in RV64.
+(((CSR, `saceLocality`)))
+A write to the __i__-th CSR sets bits [(_i_+1)XLEN−1 : _i_·XLEN] of `saceLocality`. The group is accessible in S/HS-mode, VS-mode, M-mode, and Debug mode; access from any other mode raises an illegal instruction exception.
 
 // ///////////////////////////////////////////////////////////////////////////////////////////
 
@@ -953,26 +797,20 @@ Any access to `saceLocality` outside of these modes raises an illegal instructio
 === Instructions
 
 [WARNING]
-The encodings presented here are not final.
-We currently use `custom-0` for load-type instructions, `custom-1` for store-type instructions, and `custom-2` for operational instructions), to align with store/load/operational instructions in the base and FP instruction sets.
+The encodings presented here are preliminary. The usage of `custom-0` for load-type, `custom-1` for store-type, and `custom-2` for operational instructions aligns with the base ISA and FP instruction-set conventions.
 
-ACE provides a number of unprivileged instructions, some implemented as CSR read/write operations.
-This section specifies the semantics and encodings of these instructions.
+ACE provides a set of unprivileged instructions, some of which are implemented as CSR read/write operations. This section specifies their semantics and encodings.
 
-The notation `K(Xd)`, for a GPR `Xd`, refers to the CR whose number is contained in `Xd`, and `Kn|K(Xn)` means that there are two different encodings:
-one for when the CR number is passed as a 5-bit immediate (`Kn`) and one for when the value is passed in a GPR `Xn`.
-When a GPR is used to index a CR, use of the zero register `X0` is not allowed and results in an illegal instruction exception.
+The notation `K(Xd)` denotes the CR whose index is held in GPR `Xd`. `Kn|K(Xn)` indicates two alternative encodings: a 5-bit immediate CR index (`Kn`) or a CR number supplied by GPR `Xn`. Use of the zero register `X0` as a CR index register raises an illegal instruction exception unless explicitly indicated otherwise.
 
-For each instruction, we specify whether:
+Each instruction is characterized by the following properties:
 
-* It _possibly modifies state_;
-* It is _usage-controlled_, i.e., whether the instruction is subject to usage control, which determines which software entities can use it (by _UCPolicy_ and non-time-based _*Filter_);
-* It is _trappable_, i.e., whether it can be implemented by privileged code as trap-and-emulate; and
-* Whether the execution of the instruction itself can be _interrupted_, for instance by context switches or page faults, to be resumed or restarted later.
+* _Modifies state_: whether the instruction may modify ACE architectural state;
+* _Usage-controlled_: whether the instruction is subject to usage control policies (_UCPolicy_);
+* _Trappable_: whether the instruction may be implemented by privileged code via trap-and-emulate; and
+* _Interruptible_: whether execution may be interrupted (e.g., by a context switch or page fault) and later resumed or restarted.
 
-NOTE: By “trappability” we refer solely to the CPU-side implementation, for instance to allow the implementation of certain ACE instructions using custom instructions that perform smaller units of work.
-This is a distinct concept from the custom implementations of primitives within the ACE unit.
-The latter can be achieved, for instance, by including a secure CPU with updatable firmware in the ACE unit, but it is beyond the scope of the ACE architecture.
+NOTE: Trappability refers solely to the CPU-side implementation—for example, to enable decomposition of certain ACE instructions into smaller custom operations. This is distinct from custom algorithm implementations within the ACE unit itself (e.g., via a secure embedded CPU with updatable firmware), which are outside the scope of this specification.
 
 //
 
@@ -2141,8 +1979,8 @@ Data Structures:::
 These include:
 
 . *Provisioning Input* (Content):
-The data following the Metadata Header in the PI to `ace.prov`, such as keys and other required secrets.
-Fields are listed in the order they appear in the PI, each with its length.
+The data following the Metadata Header in the PI, such as keys and other required secrets.
+The fields are listed in the order they appear in the PI, each with its length.
 
 . *Internal State* (Content):
 Information that must be maintained in the internal state of a CC, besides the information provided by the metadata.
@@ -2247,20 +2085,21 @@ At the end of the replacement sequence, `acesequence` is reset to 0.
 The ordering of the instructions in a replacement sequence is enforced by the architecture according to the value of `acesequence` and the state number of the CR configured in `aceactivecr`.
 Not following the instruction ordering raises an illegal instruction exception and invalidates the CR.
 
-`acesequence` can be freely read and written in all modes. For instance, this may allow to repeat `ace.exec` or `ace.state` instructions, but it will not allow the user to manipulate the internal state of the algorithms in a way to compromise it, provided that the algorithm is correctly designed.
-
+`acesequence` can be freely read and written in all modes.
 In particular, `acesequence` may be saved and restored by privileged code at context switch together with `acestart`.
+This may also allow to repeat `ace.exec` or `ace.state` instructions, but it will not allow the user to manipulate the internal state of the algorithms in a way to compromise it, provided that the algorithm is correctly designed.
 
 //
 
 [[ACE-interruptibility]]
 ===== Interruptibility
 
-Operations performed by `ace.state` are uninterruptible, except when reading vector inputs, where the vector read operation may be interrupted and resumed.
+Except for exceptions caused by memory accesses or the interruption of vector accesses, most ACE operations are uninterruptible.
 
-The operation of `ace.exec` on a basic processing unit, in any state of any algorithm, is uninterruptible, even when described as a sequence of instructions.
+//Operations performed by `ace.state` are uninterruptible, except when reading vector inputs, where the vector read operation may be interrupted and resumed.
 
-If the operation accepts an input that is an integer multiple of the basic processing unit, each block is processed uninterruptibly, but the instruction may be interrupted between blocks; the hardware sets `acestart` to the interruption point.
+The operation of `ace.exec` on a basic processing unit, in any state of any algorithm, is uninterruptible, unless explicitly allowed by the algorithm.
+When `ace.exec` operates iteratively on an inputs who length is an integer multiple of the basic processing unit, each block is processed uninterruptibly, but the instruction may be interrupted between blocks; the hardware sets `acestart` to the interruption point.
 
 An implementation must wait before accessing a CR that is still asynchronously being written to.
 
