@@ -1,0 +1,404 @@
+== Pseudocode Examples
+
+[[ACE-ECB-mode-example]]
+=== Electronic Codebook Modes (Direct Encryption/Decryption)
+
+The following pseudocode illustrates how to use an ECB CC to encrypt a data using a block cipher.
+In this example, as with most other examples, we assume that the block cipher has a width of 128 bits (`IOLEN` is also 128).
+
+
+[[ACE-pseudocode-ECB-encryption]]
+.Simple Example: Encryption with no Authentication
+----
+- Call OS API to get the necessary SCC. Assume X5 points to the SCC.
+- Allocate memory for ciphertext buffer.
+
+vsetvli zero, 4, e32, m1, ta, ma           // Use 128-bit vectors
+ace.import K0, (X5)                        // Import the SCC into CR K0
+ace.error X1                               // Read error from a CSR
+if (X1 != 0) then { handle error }         // ACE may fail to validate SCC, algorithm may
+                                           // be not supported, or CRF memory may be full
+ace.state K0, #ace_state_encrypt           // Configure CR for encryption
+ace.error X1                               // Read error from a CSR
+if (X1 != 0) then { handle error }         // Error if encryption not allowed
+
+foreach(i from 0 to len_in_bytes(plaintext)/16-1) { // assume plaintext in whole blocks
+   V0 ← plaintext[16*i .. 16*i+15]
+   ace.exec V0, K0, V0                     // Encrypt one block of the plaintext
+   ciphertext[16*i .. 16*i+15] ← V0
+}
+----
+
+[[ACE-keystream-modes-example]]
+=== CTR/LFSR/XCTR/XLFSR Keystream Generation
+
+[[ACE-pseudocode-keystream-modes]]
+.Encrypt with Keystream Generation
+----
+// Acquire payload, initialize
+- Info: plaintext = *PT
+- Process gets a Keystream Generation CC from an API. Assume X5 is the pointer to the CC.
+- Allocate memory for ciphertext buffer CT (if not same as PT).
+
+vsetvli zero, 4, e32, m1, ta, ma                 // Use 128-bit vectors
+ace.import K0, (X5)
+
+// The next operations set the nonce
+V1 ← nonce
+ace.state K0, #ace_state_operate, V1
+
+// Compute keystream, use it to encrypt plaintext
+foreach(i from 0 to len_in_bytes(PT)/16-1) {
+   V0 ← PT[16*i .. 16*i+15]
+   ace.exec V1, K0
+   V1 ← V1 xor V0
+   CT[16*i .. 16*i+15] ← V1
+}
+----
+
+[[ACE-XEX-XTS-modes-example]]
+=== XEX/XTS modes (one or two keys)
+
+We provide only encryption pseudocode, decryption is similar
+(also this example assumes `b` = `IOLEN` = 128).
+
+[[ACE-pseudocode-basic-IV-mode]]
+.Pseudocode for encryption in any IV-based non-authenticated mode without associated data
+----
+// Acquire payload and SCC, initialize
+- Info: plaintext = *PT
+- Call an API to get the corresponding SCC. Assume X5 is the pointer to it.
+- Allocate memory for ciphertext buffer CT (if not same as PT).
+
+vsetvli zero, 4, e32, m1, ta, ma          // Use 128-bit vectors
+ace.import K0, (X5)
+
+V0 ← IV
+ace.state K0, #ace_state_encrypt, V1      // Configure CR for encryption
+foreach(i from 0 to ceil(len_in_bytes(PT)/16)-1) {
+   V0 ← PT[16*i .. 16*i+15]
+   ace.exec V0, K0, V0                    // Encrypt one block of the plaintext
+   CT[16*i .. 16*i+15] ← V0
+}
+----
+
+To implement the XTS mode, the ciphertext stealing part is easy to realize using the XEX algorithm together with vector masking and shifting operations.
+(((ACE, algorithm, XTS)))
+
+//
+
+[[ACE-GCM-mode-examples]]
+=== GCM Mode
+
+In <<ACE-pseudocode-GCM-encryption>> we show pseudocode for GCM encryption, again with `b` = `IOLEN` = 128, and `c` = 32).
+The code assumes that both AD and plaintext (or the ciphertext for the decryption) are zero-padded to a multiple of `b` bits, in this case 128 bits.
+
+[[ACE-pseudocode-GCM-encryption]]
+.GCM Encryption
+----
+// Acquire payload, initialize
+- Info: authenticated data = *AD, plaintext = *PT
+- Process gets a GCM encryption CC from an API. Assume X5 is the pointer to the CC.
+- Allocate memory for ciphertext buffer CT (if not same as PT).
+
+vsetvli zero, 4, e32, m1, ta, ma                 // Use 128-bit vectors
+ace.import K0, (X5)     //  Import, and compute the derived Authentication Key.
+
+// The next operations set the nonce
+ace.state K0, #ace_state_set_aux_value
+V0 ← nonce
+ace.exec K0, V0
+
+// Compute AD contribution to Auth Data
+ace.state K0, #ace_state_hash_absorb
+foreach(i from 0 to len_in_bytes(AD)/16-1) {
+   V0 ← AD[16*i .. 16*i+15]
+   ace.exec K0, V0                               // Absorb it into hash
+}
+
+// Encrypt plaintext and continue computation of tag
+ace.state K0, #ace_state_encrypt
+foreach(i from 0 to len_in_bytes(PT)/16-1) {
+   V0 ← PT[16*i .. 16*i+15]
+   ace.exec V1, K0, V0
+   CT[16*i .. 16*i+15] ← V1
+}
+
+// Finally, we absorb the lengths into tag, finalize it, and output it
+V1 ← bin(len_in_bits(AD), 64) @ bin(len_in_bits(PT), 64)
+ace.state K0, #ace_state_enc_tag_finalize, V1
+ace.exec V2, K0                                  // V2 contains the finalized hash
+----
+
+GCM decryption differs from encryption as follows:
+the roles of `PT` and `CT` are reversed,
+states _encrypt_ and _enc_tag_finalize_ are replaced by states _decrypt_ and _dec_tag_finalize_,
+and the last lines are as follows:
+
+[[ACE-pseudocode-GCM-decryption-difference]]
+.GCM Decryption
+----
+// Finally, we absorb the lengths into tag, finalize it, and verify it
+ace.state K0, #ace_state_dec_tag_finalize
+V1 ← bin(len_in_bits(AD), 64) @ bin(len_in_bits(CT), 64)
+ace.exec V2, K0, V1                              // V2 contains the finalized hash
+
+V1 ← tag_from_payload
+ace.state K0, #ace_state_hash_verify, V1
+ace.error X1
+if (X1 != 0) then { handle error }       // do not use the plaintext if error occurred
+----
+
+//
+
+[[ACE-pseudocode-GCM-encryption-alternate]]
+.Implementing GCM encryption using an ECB CC
+----
+// Acquire payload, initialize
+- Info: authenticated data = *AD, plaintext = *PT
+- Process gets an ECB encryption CC from an API. Assume X5 is the pointer to the CC.
+- Allocate memory for ciphertext buffer CT (if not same as PT).
+
+vsetvli zero, 4, e32, m1, ta, ma                 // Use 128-bit vectors
+ace.import K0, (X5)                              // Imports SCC into CR K0
+V5[127:32] ← IV
+V5[31:0] ← zeros(31) @ 1
+
+V3 ← zeros(b)                                    // “Auth Data 1”
+ace.exec V4, K0, V3                              // compute H
+foreach(i from 0 to ceil(len_in_bytes(AD)/16)-1) {
+   V1 ← AD[16*i .. 16*i+15]
+   V3 ← V3 xor V1                                // Horner's scheme addition
+   V3 ← Galoismul(V4, V3)                        // Horner's scheme multiplication
+}
+
+counter ← 1                                      // a 32-bit integer value
+foreach(i from 0 to ceil(len_in_bytes(PT)/16)-1) {
+   V5[32:0] ← counter
+   V1 ← PT[16*i .. 16*i+15]
+   ace.exec V2, K0, V5                           // create mask by encrypting the counter
+   V1 ← V1 xor V2                                // CTR encrypt
+   V3 ← V3 xor V1                                // Horner's scheme addition
+   V3 ← Galoismul(V4, V3)                        // Horner's scheme multiplication
+   CT[16*i .. 16*i+15] ← V1
+   counter ← counter + 1
+}
+
+V3 ← V3 xor (len_in_bits(AD) @ len_in_bits(PT))  // Horner's scheme addition
+V3 ← Galoismul(V4, V3)                           // Horner's scheme multiplication
+V5[31:0] ← zeros(31) @ 1                         // Prepare IV @ 1 for tag encryption
+ace.exec V2, K0, V5
+tag ← V3 xor V2                                  // Last Horner's scheme add
+----
+
+[[ACE-GCM-SIV-mode-examples]]
+=== GCM-SIV Mode
+
+
+We show in <<ACE-pseudocode-GCM-SIV-encryption>> how to perform AEAD encryption with a GCM-SIV CC (with `b` = `IOLEN` = 128).
+<<ACE-pseudocode-GCM-SIV-decryption>> is the corresponding pseudocode for decryption.
+
+[[ACE-pseudocode-GCM-SIV-encryption]]
+.GCM-SIV Encryption
+----
+// Acquire payload, initialize
+- Info: authenticated data = *AD
+- Info: plaintext = *PT
+- Call an API to get the corresponding key from a key management applet or HW block.
+- The API returns the SCC. Assume X5 is the pointer to it.
+- Allocate memory for ciphertext buffer CT (if not same as PT).
+
+vsetvli zero, 4, e32, m1, ta, ma                 // Use 128-bit vectors
+ace.import K0, (X5)
+
+// Set the nonce (and the derived Authentication Key).
+ace.state K0, #ace_state_set_aux_value
+V0 ← nonce
+ace.exec K0, V0
+
+foreach(i from 0 to len_in_bytes(AD)/16-1) {
+   V0 ← AD[16*i .. 16*i+15]                      // Load a block of associated data
+   ace.exec K0, V0                               // Absorb it into hash
+}
+
+foreach(i from 0 to len_in_bytes(PT)/16-1) {
+   V0 ← PT[16*i .. 16*i+15]                      // Load a block of plaintext
+   ace.exec K0, V0                               // Absorb it into hash
+}
+
+V0 ← bin(len_in_bits(AD), 64) @ bin(len_in_bits(PT), 64)
+ace.exec K0, V0                                  // Absorb lengths into hash
+
+// Finalize the SIV computation, set and return it
+ace.state K0, #ace_state_enc_tag_finalize
+ace.exec V2,K0
+tag ← V2
+
+// Encrypt the plaintext
+ace.state K0, #ace_state_encrypt
+foreach(i from 0 to len_in_bytes(PT)/16-1) {
+   V0 ← PT[16*i .. 16*i+15]                      // Load a block of plaintext
+   ace.exec V1, K0, V0                           // Encrypt the block
+   CT[16*i .. 16*i+15] ← V1                      // Store a block of ciphertext
+}
+----
+
+[[ACE-pseudocode-GCM-SIV-decryption]]
+.GCM-SIV Decryption
+----
+// Acquire payload, initialize
+- Info: authenticated data = *AD
+- Info: ciphertext = *CT
+- Call an API to get the corresponding key from a key management applet or HW block.
+- The API returns the SCC. Assume X5 is the pointer to it.
+- Allocate memory for plaintext buffer PT (if not same as CT).
+
+vsetvli zero, 4, e32, m1, ta, ma                 // Use 128-bit vectors
+ace.import K0, (X5)
+
+// The next operations set the nonce and SIV.
+V0 ← nonce
+ace.state K0, #ace_state_set_aux_value, V0
+
+// Compute AD contribution to Auth Data
+V0 ← SIV
+ace.state K0, #ace_state_hash_absorb, V0
+foreach(i from 0 to len_in_bytes(AD)/16-1) {
+   V0 ← AD[16*i .. 16*i+15]
+   ace.exec K0, V0                               // Absorb it into hash
+}
+
+// Decrypt ciphertext and continue computation of tag
+foreach(i from 0 to len_in_bytes(CT)/16-1) {
+   V0 ← CT[16*i .. 16*i+15]
+   ace.exec V1, K0, V0
+   PT[16*i .. 16*i+15] ← V1
+}
+
+// Finally, we absorb the lengths of AD and plaintext into tag AND verify
+ace.state K0, #ace_state_enc_tag_finalize
+V0 ← bin(len_in_bits(AD), 64) @ bin(len_in_bits(PT), 64)
+ace.exec K0, V0
+ace.error X1
+if (X1 != 0) then { handle error }     // do not use the plaintext if error occurred
+----
+
+//
+
+[[ACE-OCB-mode-examples]]
+=== OCB Mode
+
+In this section we show pseudocode for OCB encryption and decryption (`b` = `IOLEN` = 128).
+
+[[ACE-pseudocode-OCB-encryption]]
+.OCB Encryption
+----
+// Acquire payload, initialize
+- Info:
+ - authenticated data = *AD with bit length AD_len
+ - plaintext = *PT with bit length PT_len
+ - nonce N with bit length N_len
+ - tag length tag_len
+
+- Process gets an OCB encryption CC from an API. Assume X5 is the pointer to the CC.
+- Allocate memory for ciphertext buffer CT (if not same as PT).
+
+vsetvli zero,4,e32,m1,ta,ma                        // Use 128-bit vectors
+ace.import K0, (X5)
+
+// The next operations set the nonce
+X1 ← N_len
+ace.state K0, #ace_state_set_aux_value, X1
+V0 ← N
+ace.exec K0, V0
+
+// The next state change also sets the tag length
+X1 ← tag_len
+ace.state K0, #ace_state_hash_absorb, X1
+
+AD_fullblocks ← floor(AD_len/128)
+PT_fullblocks ← floor(PT_len/128)
+
+// Compute AD contribution to tag
+foreach(i from 0 to AD_fullblocks-1) {
+   V0 ← AD[16*i .. 16*i+15]
+   ace.exec K0, V0                                 // Absorb it into hash
+}
+X1 ← AD_len mod 128                                // Can be zero
+ace.state K0, #ace_state_hash_finalize, X1
+if (X1 mod 128 != 0) then {
+   V0 ← zeros(128)
+   V0 ← AD[AD_fullblocks*16 .. AD_fullblocks*16+ceil(X1/8)]
+   ace.exec K0, V0                                 // Absorb it into hash and encrypt
+}
+
+// Encrypt plaintext and continue computation of tag
+ace.state K0, #ace_state_encrypt
+foreach(i from 0 to PT_fullblocks-1) {
+   V0 ← PT[16*i .. 16*i+15]
+   ace.exec V1, K0, V0
+   CT[16*i .. 16*i+15] ← V1
+}
+X1 ← PT_len mod 128                                // Can be zero
+ace.state K0, #ace_state_last_block, X1
+if (X1 mod 128 != 0) then {
+   V0 ← zeros(128)
+   V0 ← PT[PT_fullblocks*16 .. PT_fullblocks*16+ceil(X1/8)]
+   ace.exec V1, K0, V0                             // Absorb it into hash and encrypt
+   CT[PT_fullblocks*16 .. PT_fullblocks*16+ceil(X1/8)] ← V1
+} else
+   ace.exec K0
+
+ace.exec V1, K0                                    // output tag
+----
+
+OCB decryption differs from encryption as follows:
+the roles of `PT` and `CT` are reversed,
+states _encrypt_ and _enc_tag_finalize_ are replaced by states _decrypt_ and _dec_tag_finalize_,
+and the last lines are as follows:
+
+[[ACE-pseudocode-OCB-decryption-difference]]
+.OCB Decryption
+----
+
+V1 ← tag
+ace.state K0, #ace_hash_verify, V1
+ace.error X1
+if (X1 != 0) then { handle error }       // do not use the plaintext if error occurred
+----
+
+
+
+
+[[ACE-CMAC-mode-example]]
+=== CMAC Functions
+
+[[ACE-pseudocode-CMAC]]
+.CMAC Computation
+----
+- Info: CMAC input = *M with bit length M_len
+- Process gets a CMAC CC from an API. Assume X5 is the pointer to the CC.
+
+vsetvli zero, 4, e32, m1, ta, ma                 // Use 128-bit vectors
+ace.import K0, (X5)
+
+ace.state K0, #ace_hash_absorb
+blocks = floor(M_len/128)
+remainder = M_len % 128
+if remainder == 0 then
+   blocks ← blocks - 1
+   remainder ← 128
+
+foreach(i from 0 to blocks-1) {
+   V0 ← M[16*i .. 16*i+15]
+   ace.exec K0, V0
+}
+
+X1 ← remainder
+ace.state K0, #ace_hash_last_block, X1
+V0 ← M[16*blocks .. 16*blocks+15]
+ace.exec K0, V0
+
+ace.state K0, #ace_hash_hash_finalize
+ace.exec V0, K0  // this is the value of the CMAC
+----
