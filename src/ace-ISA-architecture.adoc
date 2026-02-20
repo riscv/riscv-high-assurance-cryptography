@@ -158,7 +158,7 @@ We summarize the most important operations on CRs:
 
 [NOTE]
 ====
-CRF capacity consumed by a CR depends on the configured algorithm; two CRs may consume different amounts. Insufficient residual CRF capacity may prevent execution of a configuration instruction (`ace.prov`, `ace.import`, `ace.clone` (<<ACE-instruction-clone>>), or `ace.derive` (<<ACE-instruction-derive>>); software must then free capacity by unconfiguring other CRs.
+CRF capacity consumed by a CR depends on the configured algorithm; two CRs may consume different amounts. Insufficient residual CRF capacity may prevent execution of a configuration instruction (`ace.prov`, `ace.import`, `ace.clone` (<<ACE-instruction-clone>>); software must then free capacity by unconfiguring other CRs.
 
 CRF capacity is implementation-defined. Implementations must provide sufficient capacity for all supported operations. At a minimum, the CRF must hold the largest possible single CR, or the largest CR pair used in cloning or derivation operations. An optional, implementation-specific mechanism for estimating required capacity is described in <<ACE-instruction-size>>.
 ====
@@ -634,11 +634,11 @@ Context switching code can use this information to avoid unnecessary save and re
 
 {empty}
 (((CSR, `aceactivecr`)))
-`aceactivecr` is an XLEN-bit URW CSR; only the low 5 bits are defined. It binds `ace.input`, `ace.output`, `ace.exec`, `ace.state`, and `ace.derive` to a specific CR. Valid values are 0–31 (selecting a CR) or 32 (disabled).
+`aceactivecr` is an XLEN-bit URW CSR; only the low 5 bits are defined. It binds `ace.input`, `ace.output`, `ace.exec`, and `ace.state` to a specific CR. Valid values are 0–31 (selecting a CR) or 32 (disabled).
 
 `aceactivecr` may only be modified when `acesequence` is zero or an illegal instruction exception is raised.
 
-When `aceactivecr` is not 32, the CR operand in all single-CR instructions and the source CR in `ace.derive` and `ace.clone` must equal the selected value; any deviation raises an illegal instruction exception, ensuring correct instruction sequencing.
+When `aceactivecr` is not 32, the CR operand in all single-CR instructions and the source CR in `ace.clone` must equal the selected value; any deviation raises an illegal instruction exception, ensuring correct instruction sequencing.
 
 //
 
@@ -1417,6 +1417,8 @@ Clones source CR `Ks` (or the CR indexed by `Xs`) into destination CR `Kd` (or t
 
 //
 
+////
+
 [[ACE-instruction-derive]]
 ==== ace.derive
 
@@ -1469,6 +1471,8 @@ Possibly modifies state: *YES*. +
 Usage-controlled: *YES*. +
 Trappable: *NO*. +
 Interruptible: *NO*.
+
+////
 
 //
 
@@ -1893,7 +1897,7 @@ In certain cases where an invalid input is provided to any ACE instruction, or a
 * `Kn` is put into State _invalid_;
 * For instructions that refer to `Kn`:
  ** `ace.prov`, `ace.clear` (thus also `ace.reset`), `ace.import`, `ace.export`, `ace.size` and `ace.avail` work normally.
- ** `ace.exec`, `ace.clone`, `ace.derive`, and `ace.restrict` raise an ACE error ace_err_invalid_CR;
+ ** `ace.exec`, `ace.clone`, and `ace.restrict` raise an ACE error ace_err_invalid_CR;
  ** `ace.input` and `ace.output` raise an ACE error ace_err_invalid_CR when `aceactivecr` is `Kn`;
  ** `ace.state` raises an ACE error ace_err_invalid_CR, unless it is used to return to State _initial_;
  ** `ace.error` always returns error ace_err_invalid_CR after any operation involving the CR except for `ace.import` and `ace.export`, `ace.clear`, `ace.prov`, and `ace.size`, which all work normally, and using `ace.state` to return to State _initial_.
@@ -2026,7 +2030,7 @@ This includes:
 
 The instructions permitted in each algorithm state are typically `ace.exec` and `ace.state`, though this is not a general rule.
 For `ace.exec`, only one of its forms (see <<ACE-instruction-exec>>) is allowed per state, along with the corresponding replacement sequence defined in <<ACE-replacement-instructions>>.
-If a Form of `ace.exec`, `ace.state` or `ace.derive` not explicitly allowed in the current algorithm state is used, then an illegal instruction exception is raised.
+If a Form of `ace.exec`, or `ace.state` not explicitly allowed in the current algorithm state is used, then an illegal instruction exception is raised.
 
 If a non-allowed state transition is requested in `ace.state`, including requesting encryption or decryption from a CC not allowing it, an ACE error ace_err_unimplemented is raised.  This also invalidates the CR.
 
@@ -2053,11 +2057,10 @@ An example is given by the automatic transitions from hash finalization to verif
 Whenever ACEIOBUF is implemented, in all algorithms the following applies:
 any occurrence of the “Original Instructions” in <<ACE-replacement-instructions>> may be substituted by the corresponding “Replacement Sequence” where `ace.input` and `ace.output` instructions are used in place of the vector register inputs and outputs, even if we do not explicitly write it each time.
 
-// Forms A-C of `ace.exec`, the auxiliary inputs of Form C `ace.state` or of Form C of `ace.derive` in any algorithm, to the point that an implementation of ACE without the V extension or a subset thereof is possible.
-// Forms A, B, and C of `ace.exec`, as well as Form C of both `ace.derive` and `ace.state`, can be replaced by using `ace.input` and `ace.output` instructions together with a Form D `ace.exec`, a Form A `ace.state`, or a Form A `ace.derive` instruction as follows:
+//
 
 [[ACE-replacement-instructions]]
-.Replacement sequences for `ace.exec` and `ace.derive` using `ace.input` and `ace.output`
+.Replacement sequences for `ace.exec` and `ace.state` using `ace.input` and `ace.output`
 [float="center",align="center",width="100%",cols="<21%,<41%,<38%",options="header"]
 |===
 | Instruction and Form | Original Instruction          | Replacement Sequence
@@ -2070,12 +2073,12 @@ any occurrence of the “Original Instructions” in <<ACE-replacement-instructi
 `2: ace.output{nbsp}Vd,  Xl`
 | `ace.state`, Form C  | `ace.state{nbsp}{nbsp}Kd\|K(Xd), #immed, Vs` | `1: ace.input{nbsp}{nbsp}Xl, Vs` +
 `2: ace.state{nbsp}{nbsp}Kd\|K(Xd), #immed`
-| `ace.derive`, Form C | `ace.derive Kd\|K(Xd), Ks1\|K(Xs1), Vs2` | `1: ace.input{nbsp}{nbsp}Xl, Vs2` +
+// | `ace.derive`, Form C | `ace.derive Kd\|K(Xd), Ks1\|K(Xs1), Vs2` | `1: ace.input{nbsp}{nbsp}Xl, Vs2` +
 `2: ace.derive{nbsp}Kd\|K(Xd), Ks1\|K(Xs1)`
 |===
 
 The only operations performed by `ace.input` and `ace.output` is to provide the inputs and read out the output of the operations.
-The entirety of the computations and internal state changes of the `ace.exec`, `ace.derive`, and `ace.state` operations remains in the `ace.exec`, `ace.derive`, and `ace.state` operations
+The entirety of the computations and internal state changes of the `ace.exec` and `ace.state` operations remains in the `ace.exec` and `ace.state` operations
 
 `ace.input` and `ace.output` may be used if enabled and `aceiobuflen` is non-zero, otherwise an ACE error ace_err_unconfigured is raised.
 If `aceiobuflen` is non-zero, and the range size `aceiobuftop` - `acestart` is zero or an invalid size for the algorithm, the `ace.exec` operation is not performed and ACE error ace_err_invalid_value is raised.
@@ -2084,10 +2087,10 @@ In all cases, the `ace.input` and `ace.output` instructions must be temporarily 
 This is done by setting the `aceactivecr` CSR (<<ACE-CSR-aceactivecr>>) first. The user must not forget to set it back to 32 after the sequence is completed.
 
 The architecture uses the `acesequence` CSR to track the progress of the replacement sequences.
-The initial value of `acesequence` is 0. It remains zero while we are using the forms of `ace.exec`, `ace.derive`, and `ace.state` specified in the algorithm.
+The initial value of `acesequence` is 0. It remains zero while we are using the forms of `ace.exec` and `ace.state` specified in the algorithm.
 As soon as one of the following events happens:
 
-. An `ace.input` is completed in place of a Form A or B `ace.exec`, Form C `ace.derive`, or Form C `ace.state`; or
+. An `ace.input` is completed in place of a Form A or B `ace.exec`, or Form C `ace.state`; or
 . A Form D `ace.exec` is completed in place of a Form C `ace.exec`,
 
 then `acesequence` is set to 1, to denote that the first instruction in the replacement sequence has completed.
@@ -2120,7 +2123,7 @@ An implementation must wait before accessing a CR that is still asynchronously b
 [[ACE-notation]]
 ===== Notation in the Algorithm Descriptions
 
-* `INPUT`: The input data to be processed by the following instructions: `ace.exec`, `ace.state`, `ace.derive`.
+* `INPUT`: The input data to be processed by `ace.exec` or `ace.state`.
    This can be the input vector register, or the ACEIOBUF, as described in <<ACE-usage-input-output>>.
 
 * `OUTPUT`: The output data produced by `ace.exec`.
