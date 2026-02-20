@@ -238,3 +238,35 @@ A write to the __i__-th CSR sets bits [(_i_+1)XLEN−1 : _i_·XLEN] of `haceLoca
 (((CSR, `saceLocality`)))
 The `saceLocality` group consists of (V)S-mode WARZ XLEN-bit CSRs, accessed via Indirect CSR Access: four in RV32, two in RV64.
 A write to the __i__-th CSR sets bits [(_i_+1)XLEN−1 : _i_·XLEN] of `saceLocality`. The group is accessible in S/HS-mode, VS-mode, M-mode, and Debug mode; access from any other mode raises an illegal instruction exception.
+
+[[ACE-trappable-insns-support]]
+=== Trappable (Emulated) Operations
+
+_This section is currently non-normative._
+
+Instructions `ace.prov`, `ace.export`, `ace.import`, `ace.input`, and `ace.output` support long inputs and outputs.
+To reduce hardware complexity, these operations can be trapped and emulated in software.
+(((ACE, trappable instruction)))
+Upon a trap, the handler identifies the trapped instruction and uses `ace.size` on the Metadata to determine the size of the data to be transferred.
+Then, the emulation uses custom instructions to move data between the ACE unit and the CPU.
+Three types of supporting operations are required:
+
+ * An “`ace.mv`” instruction that loads a specified number of bytes from a GPR or vector register into the state of a CR or in the input buffer within the ACE unit.
+   Initially, `ace.size` returns the total payload length to transfer.
+   After each move, this value is updated to reflect the remaining bytes.
+   The instruction also updates the `acestart` CSR to follow the internal progress.
+ * A corresponding “`ace.mv`” instruction that exports a specified number of bytes from a CR or from the input buffer to a GPR or vector register.
+   The behavior of `ace.size` will be similar to that of the `ace.mv` instruction, but it will count the number of bytes to be exported.
+ * An “`ace.close`” instruction to suspend or finalize the procedure.
+   If executed before all bytes are transferred, the CR state matches that of an interrupted monolithic instruction, including any special value of the _StateNumber_ Metadata field and the value of `acestart`. If executed after all bytes are transferred, it also performs any final cryptographic operations, such as authenticating the CR.
+
+All three instructions can be implemented as CSR RW instructions, for instance:
+
+ * `acedest`, XLEN bits wide, determines what architectural state we are transferring to or from: 0..31 for the CRs and, say, 32 for the ACEIOBUF.
+ * `acestart`, XLEN bits wide, holds the offset within the CR's virtually serialized `content[]` or the ACEIOBUF.
+ * `acecontent`, XLEN bits wide, to which we write the content of the CR or the ACEIOBUF or from which we read the current content.
+  A write to `acecontent` increases `acestart` by XLEN/8.
+
+// Interrupting the firmware implementation of `ace.prov`, `ace.export`, `ace.import`, `ace.input`, or `ace.output` must leave the architectural state indistinguishable from the state expected from interrupting a monolithic implementation of the instructions.
+// In particular, they need to respect the value of `acestart` and update it in accordance with the expected architected behavior of the emulated instructions.
+// The supporting instructions themselves must be uninterruptible.
