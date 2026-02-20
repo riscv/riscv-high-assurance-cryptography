@@ -22,9 +22,9 @@ Cryptographic Register:::
 (((Cryptographic Register)))
 CCs are realized using *Cryptographic Registers* (CRs), per-hart architectural containers that safeguard CCs.
 A CR is *provisioned* by writing Metadata and Content into it; this operation binds the latter to form a CC.
+There is no store-like instruction to extract the Content of the CR in a manner that compromises its confidentiality.
 A CC may be used for cryptographic operations only while resident in a CR.
 Only the ACE unit may access or modify a CC residing in a CR, in accordance with architectural rules and the algorithm bound to the CC.
-CR Content cannot be extracted in a manner that compromises its confidentiality.
 
 Sealed Cryptographic Context:::
 (((Cryptographic Context, sealed)))
@@ -54,7 +54,7 @@ _Usage Control_ policies restrict only certain CC/CR usage operations.
 
 Localities:::
 (((Cryptographic Context, Locality)))
-Finally, ACE can bind CCs to a *Localities*, i.e., restrict usage to specific devices or device classes, hardware configurations, physical or virtual boot cycles,
+ACE can bind CCs to a *Localities*, i.e., restrict usage to specific devices or device classes, hardware configurations, physical or virtual boot cycles,
 and process domains at various privilege modes.
 This binding is achieved by using the Localities as _tweaks_ in the encryption and decryption of SCCs.
 
@@ -137,46 +137,31 @@ Floating-point, fixed-point, and general arithmetic vector operations are not re
 
 {empty}
 (((Cryptographic Context)))
-ACE defines 32 Cryptographic Registers (CRs), numbered 0 to 31 and denoted `K0`–`K31`.
+ACE defines up to 32 Cryptographic Registers (CRs), numbered 0 to 31 and denoted `K0`–`K31`.
 CRs are architectural, i.e., per-hart.
 (((Cryptographic Register File)))
 CRs reside in a dedicated, per-hart _CR file_ (CRF) accessible only to the ACE implementation.
 
-CRs differ from conventional registers in several respects:
-
-* Clear Content is loaded into a CR via `ace.prov` (<<ACE-instruction-init>>); there is no corresponding instruction to extract Content as cleartext.
-
-* A CR may be *exported* in encrypted and authenticated form via `ace.export` (<<ACE-instruction-export>>), producing an SCC that may later be re-*imported* into a CR via `ace.import` (<<ACE-instruction-import>>); import fails if the SCC has been modified.
-
-* The internal and external representations of a CR may differ in size.
-
-* Whereas conventional registers always contain a value, CRs can be _unconfigured_, meaning they may hold no information.
-// * The amount of the capacity of the CRF used by a CR depends on the configured algorithm.
-//   Two CRs can use different amounts of capacity.
-//   Insufficient residual CRF capacity may prevent the execution of a CR *configuration* instruction, i.e. `ace.prov`, `ace.import`,
-//    `ace.clone`, (<<ACE-instruction-clone>>) or `ace.derive` (<<ACE-instruction-derive>>).
-//   In this case, software must free capacity by unconfiguring other CRs.
-
-
-* Unlike conventional registers, a CR may be _unconfigured_, which means that they hold no content.
-
-* CRF capacity consumed by a CR depends on the configured algorithm; two CRs may consume different amounts. Insufficient residual CRF capacity may prevent execution of a configuration instruction (`ace.prov`, `ace.import`, `ace.clone` (<<ACE-instruction-clone>>), or `ace.derive` (<<ACE-instruction-derive>>)); software must then free capacity by unconfiguring other CRs.
-
-* CRs may be addressed directly, as a 5-bit immediate, or indirectly, via a GPR value.
-
-* The principal instructions that use and may modify CRs are:
-  ** `ace.exec`, which performs cryptographic operations on data blocks according to the algorithm configured in a CR; and
-  ** `ace.state`, which transitions between states of a mode of operation or hash function, optionally performing state initialization.
-
+In ACE instructions, a CR may be addressed directly, as a 5-bit immediate, or indirectly, via a GPR value.
 Accessing a CR with an index outside [0..31] raises an illegal instruction exception.
 
-[NOTE]
-====
-Management operations comprise the configuration instructions (`ace.prov`, `ace.import`, `ace.clone`, and `ace.derive`) and the export operation (`ace.export`).
-====
+Unlike a conventional register, a CR can be _unconfigured_, meaning it holds no information.
+
+We summarize the most important operations on CRs:
+
+* Metadata and Content are loaded into a CR via `ace.prov` (<<ACE-instruction-init>>).
+* A CR is cleared and unconfigured using `ace.clear` (<<ACE-instruction-clear>>).
+* `ace.export` (<<ACE-instruction-export>>) exports a CR to memory as an SCC.
+* An SCC may later re-imported into a CR via `ace.import` (<<ACE-instruction-import>>).  Import may fail if the SCC has been modified.
+* `ace.exec` (<<ACE-instruction-exec>>) performs cryptographic operations on data blocks according to the algorithm configured in a CR.
+* `ace.state` (<<ACE-instruction-state>>) transitions between states of a cryptographic algorithm.
+
+// * The internal and external representations of a CR may differ in size.
 
 [NOTE]
 ====
+CRF capacity consumed by a CR depends on the configured algorithm; two CRs may consume different amounts. Insufficient residual CRF capacity may prevent execution of a configuration instruction (`ace.prov`, `ace.import`, `ace.clone` (<<ACE-instruction-clone>>), or `ace.derive` (<<ACE-instruction-derive>>); software must then free capacity by unconfiguring other CRs.
+
 CRF capacity is implementation-defined. Implementations must provide sufficient capacity for all supported operations. At a minimum, the CRF must hold the largest possible single CR, or the largest CR pair used in cloning or derivation operations. An optional, implementation-specific mechanism for estimating required capacity is described in <<ACE-instruction-size>>.
 ====
 
