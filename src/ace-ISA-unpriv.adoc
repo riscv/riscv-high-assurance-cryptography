@@ -150,14 +150,16 @@ CRF capacity is implementation-defined. Implementations must provide sufficient 
 ====
 Indirect CR addressing has two microarchitectural implications:
 
-. Adding CR renaming would significantly increase microarchitectural complexity. However, CRs are redefined far less frequently than integer or floating-point registers (internal implied changes aside), so the absence of renaming is not expected to cause performance issues.
+. Adding CR renaming would significantly increase microarchitectural complexity.
+However, CRs are redefined far less frequently than GPRs or FP registers (internal implied changes aside), so the absence of CR renaming
+is not expected to cause performance issues.
 . An additional bit in the instruction encoding selects between a 5-bit immediate CR number and a GPR-supplied CR number.
 ====
 
 [WARNING]
 ====
 VM migration can become an issue when the destination machine has a smaller CRF than the source machine.
-In this case, migration could fail, or the VM may have to let some processes terminate abnormally once migrated.
+Migration could fail, or the VM may have to let some processes terminate abnormally.
 A lazy-loading mechanism may be used to load CRs on demand; see <<ACE-lazy-loading>>.
 ====
 
@@ -196,7 +198,8 @@ Both formats begin with a 64-bit Metadata Header, whose format is defined below.
 |  [11:1] |  11   | _Algorithm_        | Cryptographic algorithm (primitive, mode, or protocol).
 | [13:12] |   2   | _DirectionPolicy_  | Permitted operation direction(s). See <<ACE-Algorithm-field>>.
 | [15:14] |   2   | _SCProtection_     | Side-channel protection level. See <<ACE-SCProtection-field>>.
-| [16:16] |   1   | _KeyType_          | 0: key is an explicit value in Content. 1: key is an index into the system-specific System Keys Table (SKT).
+| [16:16] |   1   | _KeyType_          | 0: key is an explicit value in Content. +
+1: key is an index into the system-specific System Keys Table (SKT).
 | [20:17] |   4   | _StateNumber_      | Current algorithm state-machine state, encoded as an integer.
 | [28:21] |   8   | _Locality_         | Zero, or an index determining a Locality Secret. See <<ACE-Localities>>.
 | [31:29] |   3   | _UCPolicy_         | Usage Control Policy. Bits 29, 30, and 31, when set, disallow CC usage in U-mode, (V)S-mode, and H-mode, respectively.
@@ -248,28 +251,20 @@ The architected  _StateNumber_ values which are common to all algorithms are def
 
 [[ACE-state-constants-fixed]]
 .Global CC State Numbers
-[float="center",align="center",width="100%",cols="^6%,<26%,<16%,<52%",options="header"]
+[float="center",align="center",width="100%",cols="^6%,<20%,<12%,<62%",options="header"]
 |===
 | Value | Mnemonic                | State Name   | Description
 |   0   | ace_state_initial       | _initial_    | CC immediately after provisioning or reset; ready for operation.
-|  14   | ace_state_invalid       | _invalid_    | Algorithm terminated abnormally, or provisioning/import was interrupted.
+|  14   | ace_state_invalid       | _invalid_    | Algorithm terminated abnormally, or interrupted provisioning/import.
 |  15   | ace_state_completed     | _completed_  | Algorithm has completed (not necessarily without error).
 |===
 
-All states other than _invalid_ are termed _valid_. Unless an algorithm's specification states otherwise, a transition from any valid state to _initial_ is always permitted.
+All states other than _invalid_ are termed _valid_. Unless an algorithm's specification explicitly states otherwise, a transition from any valid state to _initial_ is always permitted.
 
-If an algorithm has 16 or fewer states (including the architected ones), the current state may be stored in the _StateNumber_ field. For algorithms with more than 16 states, an algorithm-specific representation is stored in Content; in this case, _StateNumber_ shall be set to _initial_ (0), _invalid_ (14), or _completed_ (15) when the algorithm is in the corresponding state, and to a non-reserved value (e.g., 1) otherwise.
+If an algorithm has 16 or fewer states (including the three fixed ones), the current state may be stored in the _StateNumber_ field. For algorithms with more than 16 states, additional algorithm-specific state information is stored in Content; in this case, _StateNumber_ shall still be set to _initial_ (0), _invalid_ (14), or _completed_ (15) if in the corresponding state, and to some other value (e.g., 1) otherwise.
 
 During `ace.prov` and `ace.import`, _StateNumber_ is set to _invalid_ for the duration of the operation and updated to the correct value only upon successful completion (see <<ACE-provisioning-export-import>>). By the rules of <<ACE-invalidation>>, a partially provisioned or imported CR cannot be exported. If a context switch occurs during such an operation, privileged code must unconfigure the CR; upon resumption, the instruction is restarted. An invalid CR with a nonzero `acestart` is recognized as an incomplete CR, permitting resumption of provisioning or import.
-
-This state change to _invalid_ does not apply during `ace.export`.
-
-
-// For algorithms with more than 16 states, an algorithm-specific representation is stored in the Content.
-// How to use information is up to the algorithm designer, with the following condition:
-// StateNumber must always be set to _initial_, _invalid_, and _completed_ if the state of the algorithm corresponds to these states, and to some value other than these three (for instance, 1) if it is in a different state.
-
-// The state values for the symmetric algorithms defined in this specification are listed in <<ACE-state-constants-symmetric>>.
+This state change to _invalid_ does not occur during `ace.export`.
 
 ////
 This state change to _invalid_ does not occur during `ace.export`, but operations that could modify the internal state should not be performed on a CR with an interrupted export operation.
@@ -417,17 +412,11 @@ State number not allowed in current algorithm in `ace.state`.
 
 `ace_err_invalid_value` covers, among others:
 
-* Invalid Metadata in `ace.prov` or `ace.import` (other than `ace_err_unimplemented`), such as:
- ** Nonzero bits in reserved fields,
- ** Unsupported _Locality_ value,
- ** Nonzero _StateNumber_ in a PI.
+* Invalid Metadata in `ace.prov` or `ace.import` (other than `ace_err_unimplemented`), such as, for instance: Nonzero bits in reserved fields; Unsupported _Locality_ value; and Nonzero _StateNumber_ in a PI.
 * An ACE operation issued with an invalid or zero ACEIOBUF transfer length (`aceiobuftop` − `acestart`); see <<ACE-CSR-aceiobuftop>> and <<ACE-CSR-acestart>>.
 * Invalid operand to `ace.restrict`.
 
 // Using an incomplete CC in `ace.size` is allowed.
-
-[WARNING]
-[.red]#Optional (need more discussion): ACE error code __i__ corresponds to bit number __i__ in a mask CSR (or more than one) that determines whether the error traps instead of being handled directly by the software by checking# `[.red]#ace.error#`[.red]#. This may be also a horizontal trap (see <<ACE-horizontal-exception-handling>>).#
 
 [comment]
 --
@@ -454,13 +443,15 @@ Code        .>|Description
 
 {empty}
 (((CSR, `acestart`)))
-`acestart` is an XLEN-bit RW CSR that tracks the progress of long-running, interruptible ACE instructions: `ace.prov`, `ace.import`, `ace.export`, `ace.exec` (when iterating over multiple blocks), `ace.input`, and `ace.output`.
+`acestart` is an XLEN-bit RW CSR that tracks the progress of interruptible ACE instructions: `ace.prov`, `ace.import`, `ace.export`, `ace.input`, and `ace.output`.
+`acestart` also applies to `ace.exec` when processing a multi-block vector operand (`IOLEN` is a multiple of the algorithm's basic processing unit `b`): `ace.exec` operates iteratively and may be interrupted between blocks.
+Only these instructions honor a nonzero `acestart`; all other ACE instructions ignore it and are restarted, with `acestart` also being cleared.
 
-Only the instructions listed above honor a nonzero `acestart`; all other ACE instructions ignore it and are restarted.
-
-Unlike `vstart`, which tracks element indices, `acestart` records a byte offset, reflecting the number of bytes processed so far. Hardware typically writes this register on interruption. Software may write zero to force a full restart and may save and restore the register across context switches. Writing arbitrary nonzero values is not supported and may raise an exception.
+Unlike `vstart`, which tracks element indices, `acestart` records a byte offset, reflecting the number of bytes processed so far. Hardware typically writes this register on interruption. Software may write zero to force a full restart and may save and restore the register across context switches.
+Writing an invalid or non-supported nonzero value may raise ACE exception ace_err_invalid_value.
 
 Provisioning, import, and export operations may be interrupted and resumed provided no context switch occurs; if a context switch occurs, they must be restarted.
+The semantics of `acestart` for these operations are described in <<ACE-provisioning-export-import>>.
 
 [WARNING]
 `acestart` may share the encoding of `vstart`, regardless of whether the V extension is present. When a vector instruction is interrupted, the CSR follows `vstart` semantics (count of processed elements); when an ACE instruction is interrupted, it follows `acestart` semantics (amount of processed bytes).
@@ -479,12 +470,6 @@ Only the second pass can cause page faults and may require resumption._
 This design obviates the need to separate data transfer from cryptographic processing during import and export operations. A separate transfer phase would require buffering the entire input within the ACE unit before processing, increasing internal resource requirements, whereas the current architecture can process data inline and load it with minimal overhead.
 ====
 ////
-
-`acestart` also applies when `ace.exec` processes a multi-block vector operand (`VL*SEW` is a multiple of the algorithm's basic processing unit `b`): `ace.exec` operates iteratively and may be interrupted between blocks. Whether inputs and outputs use vector registers or ACEIOBUF, `acestart` always reflects the number of bytes processed.
-
-Full `acestart` semantics are described in <<ACE-provisioning-export-import>>.
-
-//The following two CSRs may be used to optimize ACEIOBUF save and restore.
 
 //
 
@@ -545,21 +530,21 @@ When `aceactivecr` is not 32, the CR operand in all single-CR instructions and t
 
 //
 
+[[ACE-CSR-acehtrapmask]]
 ==== `acehtrapmask`
 
 {empty}
 (((CSR, `acehtrapmask`)))
 Mask that determines which ACE exceptions horizontally trap.
-Bit __i__ of this CSR is set if ACE error __i__+1 causes a horizontal trap.
+Bit __i__ of this CSR is set if ACE error __i__+1 may cause a horizontal trap.
 
+[[ACE-CSR-acehtrapvector]]
 ==== `acehtrapvector`
 
 {empty}
 (((CSR, `acehtrapvector`)))
 Address of the horizontal ACE trap handler.
-If it is NULL, then
-
-
+If this pointer is NULL, then, horizontal traps on ACE exceptions are disabled.
 
 // ///////////////////////////////////////////////////////////////////////////////////////////
 
@@ -1655,26 +1640,28 @@ In State _completed_, only `ace.prov`, `ace.export`, `ace.import`, `ace.clear`, 
 
 _This section is currently informative and non-normative._
 
+// [WARNING]
+// [.red]#Optional (need more discussion): ACE error code __i__ corresponds to bit number __i__ in a mask CSR (or more than one) that determines whether the error traps instead of being handled directly by the software by checking# `[.red]#ace.error#`[.red]#. This may be also a horizontal trap (see <<ACE-horizontal-exception-handling>>).#
+
 ACE has been architected so that in properly written code, the most common executed instructions, namely `ace.exec` and `ace.state`, rarely have to deal with errors.
 Errors should occur mostly with configuration operations, caused by insufficient CRF capacity or while authenticating SCCs.
 
 However, revocation of localities or reached expiration dates may cause a CR to suddenly become invalid just before executing an `ace.exec` or `ace.state` instruction.
-Requiring software to check for errors after each operation
-would impose significant burden on the software and possibly degrade performance.
+Requiring software to check for errors after each operation would impose significant burden on the software and possibly degrade performance.
 
 Horizontal traps can be used to implement a try/catch mechanism:
 
-. At the start of a subroutine that performs a cryptographic protocol, the address of the “catch” code as well as a mask with the error types to catch are loaded in two CSRs.
-. The code is written without considering the exceptions to be caught, usually only ace_err_invalid or ace_err_expired.
-. If the code runs without such errors, then the two CSRs are reset and the routine returns normally.
+. At the start of a subroutine that performs a cryptographic protocol, the address of the “catch” code is written in CSR `acehtrapvector` (<<ACE-CSR-acehtrapvector>>) and the mask with the error types to catch is loaded in CSRs `acehtrapmask` (<<ACE-CSR-acehtrapmask>>).
+
+. The code does not directly handle the exceptions to be caught, usually only ace_err_invalid or ace_err_expired.
+. If the code runs without such errors, then the two CSRs are cleared at the end of the routine before returning.
 . If, say, an ace_err_invalid_CR or ace_err_expired_CR error is raised, the horizontal trap diverts the control flow to the catch code, which usually cleans up, and returns to the caller of the subroutine, not to the routine itself, with an error code.
 
 The main application of such code is when revocation or expiration cause a CR to become invalid.
 In such contexts, it is not the duty of the cryptographic subroutine to resolve the issue, but of the code that makes use of the latter, as the keys may have to be renegotiated, and this may need user intervention.
 
 [WARNING]
-From the point of view of the ACE architecture, we need only to define two CSRs and their behaviors.
-For this, we may either need to follow the development of the HFI extension or implement a solution that traps to S-mode first and then immediately returns to the catch code. We will discuss this with the ARC.
+If our definition of horizontal traps is not allowed, we may have to follow the development of the HFI extension or implement a solution that traps to S-mode first and then immediately returns to the catch code. We will discuss this with the ARC.
 
 // ///////////////////////////////////////////////////////////////////////////////////////////
 
