@@ -2635,8 +2635,9 @@ and was made into a NIST Recommendation in 2007 cite:[nist-SP-800-38D].
 
 Parameters:::
 
-* `b` = block size (8|`b`). For this algorithm we require `IOLEN` to be an integer multiple of `b`.
 * `k` = key size (8|`k`).
+* `b` = block size (8|`b`). For this algorithm we require `IOLEN` to be an integer multiple of `b`.
+* `c` = counter size (8|`b`). It must be `c < b`.
 
 Data Structures:::
 
@@ -2653,7 +2654,8 @@ Data Structures:::
 
 * *Internal State* (Content):
  ** `key`: `k` bits.
- ** `ctr`:  `b` bits.
+ ** `ctr`:  ``c``/4 bits.
+ ** `IV`:  (`b`-`c`)/4 bits.
  ** `auth_key`, `tag`: `b` bits.
 
 * *Serialized Content*:
@@ -2663,8 +2665,9 @@ Data Structures:::
 |===
 |  Pos. | Size in Bytes   | Field
 |   i   | `k`/8 or 8      | `key` or System Key index
-|  ii   | `b`/8           | `ctr`
-| iii   | `b`/8           | `tag`
+|  ii   | ``c``/32        | `ctr`
+| iii   | (`b`-`c`)/32    | `IV`
+|  iv   | `b`/8           | `tag`
 |===
 --
 +
@@ -2704,15 +2707,15 @@ State Machine:::
   *** No {nbsp}``ace.exec``{nbsp} operation is allowed.
   *** The following initialization operations are performed:
    . `hash_key <- enc_blk(key, zeros(b))`,
-   . `tag <- zeros(b)`, and
-   . `ctr <- zeros(b)`.
+   . `tag <- zeros(b)`,
+   . `ctr <- `zeros(c-1) @ 1`, and
+   . `IV <- zeros(b)`.
 
  ** To transition to State _hash_absorb_:
  the ``ace.state`` instruction must be a Form C to set the IV, i.e., the fixed part of the counter.
  Then:
-   . `ctr <- INPUT @ (b/4-1)b'0 @ 1`, i.e., the `b/4` most significant bits of `INPUT` are ignored, and the `b/4` least significant bits of `ctr` represent the integer 1.
+   . `IV <- INPUT[(b-c)/4-1:0]`.
   *** If the ``ace.state`` instruction is repeated, it will just update the counter again.
-  *** If `IOLEN` > `b`, only the `b` least significant bits of `INPUT` are considered.
 
  ** If the AD is empty, the transition to State _hash_absorb_ is necessary to initialize the counter.
 
@@ -2729,12 +2732,12 @@ If `IOLEN` > `b`, the above operation is executed `IOLEN/b` times.
    “```ace.exec OUTPUT, Kn|K(Xn), INPUT```” encrypts `INPUT` into `OUTPUT`, and absorbs `OUTPUT` into the `tag`, namely:
 +
 --
-  . If `ctr[b/4-1:0] = 0`, then
+  . If `ctr == ones(c-1)`, then
   ..  the CR is *invalidated*.
   . else
-  .. `tmp <- INPUT xor enc_blk(key, ctr)`.
+  .. `tmp <- INPUT xor enc_blk(key, IV @ ctr)`.
   .. `absorb(tmp)`.
-  .. `ctr[b/4-1:0] <- ctr[b/4-1:0] + 1 % 2^b/4^`.
+  .. `ctr <- ctr + 1 % 2^c^`.
   .. `OUTPUT <- tmp`.
 --
 +
@@ -2750,7 +2753,7 @@ the following value, which must be set by the software:
 The authentication tag is computed as follows:
 
 . `absorb(INPUT)`.
-  . `tag <- tag xor enc_blk(key, ctr[b-1,b/4] @ zeros(b/4))`.
+  . `tag <- tag xor enc_blk(key, IV @ zeros(c))`.
 
 Finally, `tag` is returned in `OUTPUT`, and the state is changed to _completed_. +
 If `IOLEN` > `b`, only the `b` least significant bits of `INPUT` are considered.
@@ -2764,12 +2767,12 @@ If `IOLEN` > `b`, only the `b` least significant bits of `INPUT` are considered.
  ```ace.exec OUTPUT, Kn|K(Xn), INPUT``` absorbs the ciphertext `INPUT` into the `tag`, then decrypts `INPUT` into `OUTPUT`, namely:
 +
 --
-  . If `ctr[b/4-1:0] == 0`, then
+  . If `ctr == ones(c-1)`, then
   .. the CR is *invalidated*.
   . else
   .. `absorb(INPUT)`.
-  .. `OUTPUT  <- INPUT xor enc_blk(key, ctr)`.
-  .. `ctr[b/4-1:0] <- ctr[b/4-1:0] + 1`.
+  .. `OUTPUT  <- INPUT xor enc_blk(key, IV @ ctr)`.
+  .. `ctr <- ctr % 2^c^`.
 --
 +
 If `IOLEN` is a multiple of `b`, the same behavior applies as in State _encrypt_, namely
@@ -2785,7 +2788,7 @@ the following value, which must be set by the software:
 The authentication tag is computed as follows:
 
 . `absorb(INPUT)`.
-  . `tag <- tag xor enc_blk(key, ctr[b-1,b/4] @ zeros(b/4))`.
+  . `tag <- tag xor enc_blk(key, ctr[b-1,c] @ zeros(c))`.
 --
 +
 If `IOLEN` > `b`, only the `b` least significant bits of `INPUT` are considered.
@@ -2803,7 +2806,7 @@ the value against which the internally computed tag must be compared:
 
 ===== Usage
 
-In <<ACE-pseudocode-GCM-encryption>> we show pseudocode for GCM encryption (again with `b` = `IOLEN` = 128).
+In <<ACE-pseudocode-GCM-encryption>> we show pseudocode for GCM encryption (again with `b` = `IOLEN` = 128, and `c` = 32).
 The code assumes that both AD and plaintext (or the ciphertext for the decryption) are zero-padded to a multiple of `b` bits, in this case 128 bits.
 
 [[ACE-pseudocode-GCM-encryption]]
@@ -2930,7 +2933,8 @@ The differences between GCM and GCM with Set IV start with the format of the Pro
 |===
 |  Pos. | Size in Bytes   | Field
 |   i   | `k`/8 or 8      | `key` or System Key index
-|  ii   | 3``b``/32       | `IV`, i.e., bits [b-1:b/4] of the counter
+|  ii   | ``(b-c)``/32    | `IV`
+|  iii  | (Padding)       | Zero padding
 |===
 --
 +
@@ -2944,7 +2948,9 @@ Same as for GCM.
 * *State Machine Behavior:*
 
  ** To transition to State _hash_absorb_:
- the ``ace.state`` instruction must be of Form A, i.e., _without any additional inputs_, since the IV is already included in the PI.
+ The ``ace.state`` instruction must be of Form A, i.e., _without any additional inputs_, since the IV is already included in the PI.
+ ** When transitioning back to State _hash_initial_:
+ The CR's `IV` field is _not_ reset to zero.
 
 NOTE: For all the following IV- or nonce-based modes, versions with a set IV or nonce (such as for GCM-SIV) can also be similarly defined.
 For instance, for GCM-SIV (<<ACE-GCM-SIV-mode>>), `nonce` would be included in the PI exactly as `IV` is included in the PI for GCM, and the transition to _hash_absorb_ would also use a Form A ``ace.state``.
@@ -2975,11 +2981,11 @@ While GCM-SIV's decryption state machine is similar to the GCM's, the encryption
 
 Parameters:::
 
-* `b` = block size, (64|`b`). For this algorithm we require `IOLEN` to be an integer multiple of `b`.
 * `k` = key size (64|`k`).
+* `b` = block size, (64|`b`). For this algorithm we require `IOLEN` to be an integer multiple of `b`.
 * It must be `k = b` or `k = 2b`.
 * It must be established by the algorithm whether the authentication tag is `b` or `3b/4` bits long.
-  In other words, there can be two variants.
+//* `c` = counter size (8|`b`). It must be `c < b`.
 
 Data Structures:::
 
