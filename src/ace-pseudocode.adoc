@@ -13,19 +13,19 @@ In this example, as with most other examples, we assume that the block cipher ha
 - Call OS API to get the necessary SCC. Assume X5 points to the SCC.
 - Allocate memory for ciphertext buffer.
 
-vsetvli zero, 4, e32, m1, ta, ma           // Use 128-bit vectors
-ace.import K0, (X5)                        // Import the SCC into CR K0
-ace.error X1                               // Read error from a CSR
-if (X1 != 0) then { handle error }         // ACE may fail to validate SCC,
-                  // algorithm may be not supported, or CRF memory may be full
-ace.state K0, #ace_state_encrypt           // Configure CR for encryption
-ace.error X1                               // Read error from a CSR
-if (X1 != 0) then { handle error }         // Error if encryption not allowed
+vsetvli zero, 4, e32, m1, ta, ma         // Use 128-bit vectors
+ace.import K0, (X5)                      // Import the SCC into CR K0
+ace.error X1
+if (X1 != 0) then { handle error }
+
+ace.state K0, #ace_state_encrypt         // Configure CR for encryption
+ace.error X1
+if (X1 != 0) then { handle error }
 
 // assume plaintext in whole blocks
 foreach(i from 0 to len_in_bytes(plaintext)/16-1) {
    V0 ← plaintext[16*i .. 16*i+15]
-   ace.exec V0, K0, V0                     // Encrypt one block of plaintext
+   ace.exec V0, K0, V0                   // Encrypt one block of plaintext
    ciphertext[16*i .. 16*i+15] ← V0
 }
 ----
@@ -41,7 +41,7 @@ foreach(i from 0 to len_in_bytes(plaintext)/16-1) {
 - Process gets a Keystream Generation CC from an API. X5 = pointer to the CC.
 - Allocate memory for ciphertext buffer CT (if not same as PT).
 
-vsetvli zero, 4, e32, m1, ta, ma  // Use 128-bit vectors
+vsetvli zero, 4, e32, m1, ta, ma         // Use 128-bit vectors
 ace.import K0, (X5)
 
 // The next operations set the nonce
@@ -71,14 +71,14 @@ We provide only encryption pseudocode, decryption is similar
 - Call an API to get the corresponding SCC.  X5 = pointer to it.
 - Allocate memory for ciphertext buffer CT (if not same as PT).
 
-vsetvli zero, 4, e32, m1, ta, ma  // Use 128-bit vectors
+vsetvli zero, 4, e32, m1, ta, ma         // Use 128-bit vectors
 ace.import K0, (X5)
 
 V0 ← IV
-ace.state K0, #ace_state_encrypt, V1  // Configure CR for encryption
+ace.state K0, #ace_state_encrypt, V1     // Configure CR for encryption
 foreach(i from 0 to ceil(len_in_bytes(PT)/16)-1) {
    V0 ← PT[16*i .. 16*i+15]
-   ace.exec V0, K0, V0  // Encrypt one block of plaintext
+   ace.exec V0, K0, V0                   // Encrypt one block of plaintext
    CT[16*i .. 16*i+15] ← V0
 }
 ----
@@ -102,8 +102,8 @@ The code assumes that both AD and plaintext (or the ciphertext for the decryptio
 - Process gets a GCM encryption CC from an API.  X5 = pointer to the CC.
 - Allocate memory for ciphertext buffer CT (if not same as PT).
 
-vsetvli zero, 4, e32, m1, ta, ma  // Use 128-bit vectors
-ace.import K0, (X5)  //  Import, and compute the derived Authentication Key.
+vsetvli zero, 4, e32, m1, ta, ma         // Use 128-bit vectors
+ace.import K0, (X5)                      // Import, and compute the derived Auth Key
 
 // The next operations set the nonce
 ace.state K0, #ace_state_set_aux_value
@@ -114,10 +114,10 @@ ace.exec K0, V0
 ace.state K0, #ace_state_hash_absorb
 foreach(i from 0 to len_in_bytes(AD)/16-1) {
    V0 ← AD[16*i .. 16*i+15]
-   ace.exec K0, V0  // Absorb it into hash
+   ace.exec K0, V0                       // Absorb it into hash
 }
 
-// Encrypt plaintext and continue computation of tag
+// Encrypt plaintext and continue tag computation
 ace.state K0, #ace_state_encrypt
 foreach(i from 0 to len_in_bytes(PT)/16-1) {
    V0 ← PT[16*i .. 16*i+15]
@@ -128,7 +128,7 @@ foreach(i from 0 to len_in_bytes(PT)/16-1) {
 // Finally, we absorb the lengths into tag, finalize it, and output it
 V1 ← bin(len_in_bits(AD), 64) @ bin(len_in_bits(PT), 64)
 ace.state K0, #ace_state_enc_tag_finalize, V1
-ace.exec V2, K0  // V2 contains the finalized hash
+ace.exec V2, K0                          // V2 contains the finalized hash
 ----
 
 GCM decryption differs from encryption as follows:
@@ -142,12 +142,12 @@ and the last lines are as follows:
 // Finally, we absorb the lengths into tag, finalize it, and verify it
 ace.state K0, #ace_state_dec_tag_finalize
 V1 ← bin(len_in_bits(AD), 64) @ bin(len_in_bits(CT), 64)
-ace.exec V2, K0, V1                // V2 contains the finalized hash
+ace.exec V2, K0, V1                      // V2 contains the finalized hash
 
 V1 ← tag_from_payload
 ace.state K0, #ace_state_hash_verify, V1
 ace.error X1
-if (X1 != 0) then { handle error } // do not use the plaintext if error occurred
+if (X1 != 0) then { handle error }       // Do not use the plaintext if error occurred
 ----
 
 //
@@ -165,8 +165,8 @@ ace.import K0, (X5)
 V5[127:32] ← IV
 V5[31:0] ← zeros(31) @ 1
 
-V3 ← zeros(b)                        // “Auth Data 1”
-ace.exec V4, K0, V3                  // compute H
+V3 ← zeros(b)                            // “Auth Data 1”
+ace.exec V4, K0, V3                      // compute H
 foreach(i from 0 to ceil(len_in_bytes(AD)/16)-1) {
    V1 ← AD[16*i .. 16*i+15]
    V3 ← V3 xor V1
@@ -177,8 +177,8 @@ counter ← 1
 foreach(i from 0 to ceil(len_in_bytes(PT)/16)-1) {
    V5[32:0] ← counter
    V1 ← PT[16*i .. 16*i+15]
-   ace.exec V2, K0, V5               // create mask by encrypting the counter
-   V1 ← V1 xor V2                    // CTR encrypt
+   ace.exec V2, K0, V5                   // create mask by encrypting the counter
+   V1 ← V1 xor V2                        // CTR encrypt
    V3 ← V3 xor V1
    V3 ← Galoismul(V4, V3)
    CT[16*i .. 16*i+15] ← V1
@@ -187,7 +187,7 @@ foreach(i from 0 to ceil(len_in_bytes(PT)/16)-1) {
 
 V3 ← V3 xor (len_in_bits(AD) @ len_in_bits(PT))
 V3 ← Galoismul(V4, V3)
-V5[31:0] ← zeros(31) @ 1             // Prepare IV @ 1 for tag encryption
+V5[31:0] ← zeros(31) @ 1                 // Prepare IV @ 1 for tag encryption
 ace.exec V2, K0, V5
 tag ← V3 xor V2
 ----
@@ -281,7 +281,7 @@ ace.state K0, #ace_state_enc_tag_finalize
 V0 ← bin(len_in_bits(AD), 64) @ bin(len_in_bits(PT), 64)
 ace.exec K0, V0
 ace.error X1
-if (X1 != 0) then { handle error }   // do not use the plaintext if error
+if (X1 != 0) then { handle error }       // Do not use the plaintext if error
 ----
 
 //
@@ -304,7 +304,7 @@ In this section we show pseudocode for OCB encryption and decryption (`b` = `IOL
 - Process gets an OCB encryption CC from an API.  X5 = pointer to the CC.
 - Allocate memory for ciphertext buffer CT (if not same as PT).
 
-vsetvli zero,4,e32,m1,ta,ma                // Use 128-bit vectors
+vsetvli zero,4,e32,m1,ta,ma              // Use 128-bit vectors
 ace.import K0, (X5)
 
 // The next operations set the nonce
@@ -323,14 +323,14 @@ PT_fullblocks ← floor(PT_len/128)
 // Compute AD contribution to tag
 foreach(i from 0 to AD_fullblocks-1) {
    V0 ← AD[16*i .. 16*i+15]
-   ace.exec K0, V0                         // Absorb it into hash
+   ace.exec K0, V0                       // Absorb it into hash
 }
-X1 ← AD_len mod 128                        // Can be zero
+X1 ← AD_len mod 128                      // Can be zero
 ace.state K0, #ace_state_hash_finalize, X1
 if (X1 mod 128 != 0) then {
    V0 ← zeros(128)
    V0 ← AD[AD_fullblocks*16 .. AD_fullblocks*16+ceil(X1/8)]
-   ace.exec K0, V0                         // Absorb it into hash and encrypt
+   ace.exec K0, V0                       // Absorb it into hash and encrypt
 }
 
 // Encrypt plaintext and continue computation of tag
@@ -340,17 +340,17 @@ foreach(i from 0 to PT_fullblocks-1) {
    ace.exec V1, K0, V0
    CT[16*i .. 16*i+15] ← V1
 }
-X1 ← PT_len mod 128                        // Can be zero
+X1 ← PT_len mod 128                      // Can be zero
 ace.state K0, #ace_state_last_block, X1
 if (X1 mod 128 != 0) then {
    V0 ← zeros(128)
    V0 ← PT[PT_fullblocks*16 .. PT_fullblocks*16+ceil(X1/8)]
-   ace.exec V1, K0, V0                     // Absorb it into hash and encrypt
+   ace.exec V1, K0, V0                   // Absorb it into hash and encrypt
    CT[PT_fullblocks*16 .. PT_fullblocks*16+ceil(X1/8)] ← V1
 } else
    ace.exec K0
 
-ace.exec V1, K0                            // output tag
+ace.exec V1, K0                          // output tag
 ----
 
 OCB decryption differs from encryption as follows:
