@@ -1447,9 +1447,12 @@ The generation of an SCC from a CR (<<ACE-SCC-export>>) and the import of an SCC
 ----
 function RFC8452_KeyDeriv(key : bits(256)) = {
   struct {
-    AESE256(key, (zeros(125) @ 0b101))[63:0] @ AESE256(key, (zeros(125) @ 0b100))[63:0] @
-    AESE256(key, (zeros(125) @ 0b011))[63:0] @ AESE256(key, (zeros(125) @ 0b010))[63:0],
-    AESE256(key, (zeros(125) @ 0b001))[63:0] @ AESE256(key, (zeros(125) @ 0b000))[63:0]
+    AESE256(key, (zeros(125) @ 0b101))[63:0] @
+    AESE256(key, (zeros(125) @ 0b100))[63:0] @
+    AESE256(key, (zeros(125) @ 0b011))[63:0] @
+    AESE256(key, (zeros(125) @ 0b010))[63:0],
+    AESE256(key, (zeros(125) @ 0b001))[63:0] @
+    AESE256(key, (zeros(125) @ 0b000))[63:0]
   }
 }
 ----
@@ -1504,14 +1507,16 @@ M[0 .. 7] ← mh;
 M[8 .. 23] ← SIV;
 
 foreach(i from 0 to num_blocks - 1) {
-   if ((i == num_blocks - 1) and last_block_fractional)
-      // FOLLOWING MEMORY WRITE PREEMPTIBLE, `acestart` FROM 24+i*16 TO 31+i*16
-      M[24+i*16 .. 31+i*16] ← CR.content[i*16 .. 7+i*16]
-         xor AESE(enc_key, 1 @ SIV[126:32] @ (SIV[31:0] + bin(i, 32) % 2**32)[63:0];
-   else
-      // FOLLOWING MEMORY WRITE PREEMPTIBLE, `acestart` FROM 24+i*16 TO 39+i*16
-      M[24+i*16 .. 39+i*16] ← CR.content[i*16 .. 15+i*16]
-         xor AESE(enc_key, 1 @ SIV[126:32] @ (SIV[31:0] + bin(i, 32) % 2**32);
+  if ((i == num_blocks - 1) and last_block_fractional)
+    // FOLLOWING MEMORY WRITE PREEMPTIBLE, `acestart` FROM 24+i*16 TO 31+i*16
+    M[24+i*16 .. 31+i*16]
+      ← CR.content[i*16 .. 7+i*16]
+      xor AESE(enc_key, 1 @ SIV[126:32] @ (SIV[31:0]+bin(i,32) % 2**32)[63:0];
+  else
+    // FOLLOWING MEMORY WRITE PREEMPTIBLE, `acestart` FROM 24+i*16 TO 39+i*16
+    M[24+i*16 .. 39+i*16]
+      ← CR.content[i*16 .. 15+i*16]
+      xor AESE(enc_key, 1 @ SIV[126:32] @ (SIV[31:0]+bin(i,32) % 2**32);
 }
 
 CR.exporting ← false;
@@ -1585,18 +1590,18 @@ tmp ← tmp xor zeros(64) @ mh;
 tmp ← Montmul(tmp, auth_key);
 
 foreach(i from 0 to num_blocks - 1) {
-   if ((i == num_blocks - 1) and last_block_fractional) {
-      // FOLLOWING MEMORY READ PREEMPTIBLE, `acestart` FROM 24+i*16 TO 31+i*16
-      content[i*16 .. 7+i*16] ← M[24+i*16 .. 31+i*16]
-         xor AESE(enc_key, 1 @ SIV[126:32] @ (SIV[31:0] + bin(i, 32) % 2**32)[63:0];
-      tmp[63:0] ← tmp[63:0] xor content[i*16 .. 7+i*16];
-   } else {
-      // FOLLOWING MEMORY READ PREEMPTIBLE, `acestart` FROM 24+i*16 TO 39+i*16
-      content[i*16 .. 15+i*16] ← M[24+i*16 .. 39+i*16]
-         xor AESE(enc_key, 1 @ SIV[126:32] @ (SIV[31:0] + bin(i, 32) % 2**32);
-      tmp ← tmp xor content[i*16 .. 15+i*16];
-   }
-   tmp ← Montmul(tmp, auth_key);
+  if ((i == num_blocks - 1) and last_block_fractional) {
+    // FOLLOWING MEMORY READ PREEMPTIBLE, `acestart` FROM 24+i*16 TO 31+i*16
+    content[i*16 .. 7+i*16] ← M[24+i*16 .. 31+i*16]
+      xor AESE(enc_key, 1 @ SIV[126:32] @ (SIV[31:0]+bin(i,32) % 2**32)[63:0];
+    tmp[63:0] ← tmp[63:0] xor content[i*16 .. 7+i*16];
+  } else {
+    // FOLLOWING MEMORY READ PREEMPTIBLE, `acestart` FROM 24+i*16 TO 39+i*16
+    content[i*16 .. 15+i*16] ← M[24+i*16 .. 39+i*16]
+      xor AESE(enc_key, 1 @ SIV[126:32] @ (SIV[31:0]+bin(i,32) % 2**32);
+    tmp ← tmp xor content[i*16 .. 15+i*16];
+  }
+  tmp ← Montmul(tmp, auth_key);
 }
 tmp ← AESE(enc_key, 0 @ tmp[126:0]);
 
@@ -2234,7 +2239,6 @@ The GCM mode was designed by David McGrew and John Viega cite:[DBLP-conf-indocry
 and was made into a NIST Recommendation in 2007 cite:[nist-SP-800-38D].
 (((ACE, algorithm, GCM)))
 
-
 Parameters:::
 
 * `k` = key size (8|`k`).
@@ -2310,7 +2314,7 @@ State Machine:::
   *** The following initialization operations are performed:
    . `hash_key <- enc_blk(key, zeros(b))`,
    . `tag <- zeros(b)`,
-   . `ctr <- `zeros(c-1) @ 1`, and
+   . `ctr <- zeros(c-1) @ 1`, and
    . `IV <- zeros(b)`.
 
  ** To transition to State _hash_absorb_:
@@ -2406,15 +2410,14 @@ the value against which the internally computed tag must be compared:
 
 //
 
-<<ACE-pseudocode-GCM-encryption,ACE-pseudocode-GCM-decryption>>
-provide pseudocode for GCM encryption
+<<ACE-pseudocode-GCM-encryption>> and <<ACE-pseudocode-GCM-decryption>> provide pseudocode for GCM encryption and decryption.
 
 //
 
 [NOTE]
 ====
 GCM security is not compromised if `H` is revealed.
-Consequently, an implementation of GCM based on an ECB mode CC is possible, and we include it as an example is <<[ACE-pseudocode-GCM-encryption-alternate>>.
+Consequently, an implementation of GCM based on an ECB mode CC would be acceptable, for instance as in <<ACE-pseudocode-GCM-encryption-alternate>>.
 However, this significantly increases code size and requires support for carry-less multiplication, which may not be available in all hardware.
 
 Furthermore, a GCM implementation is necessary to support the use case where the IV is also set in advance and not modifiable by the user.
@@ -2477,6 +2480,8 @@ While GCM-SIV's decryption state machine is similar to the GCM's, the encryption
 
 * During encryption, the _hash_absorb_ state absorbs the entire associated data and plaintext. The _enc_tag_finalize_ state then absorbs the lengths and produces the SIV/tag. Finally, the _encrypt_ state performs a second pass to encrypt the plaintext using the SIV/tag as the initialization vector.
 * During decryption, the _hash_absorb_ state absorbs only the associated data. The _decrypt_ state decrypts the ciphertext and simultaneously absorbs the plaintext into the hash. Finally, the _dec_tag_finalize_ state absorbs the lengths, produces the SIV/tag, and internally compares it to the provided SIV/tag.
+
+//
 
 Parameters:::
 
@@ -3713,35 +3718,28 @@ The states and their semantics are otherwise identical to Ascon-XOF128, and the 
 This section needs finalization.
 The EdDSA signature formats are missing (same for Brainpool and SM2).
 ECC based KEMs are also missing, or at least instructions on how to implement them with the basic functionality offered.
-Also, we need to support the elliptic curves that are actually used in practice, such as:
 
-* secp256r1 (a.k.a. prime256v1, NIST P-256)
-* secp384r1 (a.k.a. prime384v1, NIST P-384)
-* secp521r1 (a.k.a. prime521v1, NIST P-521)
-* ed25519
-* ed448
-* Brainpool Curves?
-* SM2 Curves?
+Curves that we may support include:
+secp256r1 (NIST P-256), secp384r1 (NIST P-384), and secp521r1 (NIST P-521);
+ed25519 and ed448;
+maybe Brainpool Curves and SM2 Curves.
 
-We only define scalar multiplication with known and unknown base point and ECDSA/EdDSA sign/verify for the NIST curves.
-
-NOTE: Further curves can be defined later.
+NOTE:
+Currently, we only define scalar multiplication with known and unknown base point and ECDSA/EdDSA sign/verify for the NIST curves.
+Further curves and algorithms can be defined later.
 
 For secp256r1 the size `b` of the main fields (coordinates, signature R and S fields, scalars) is 256 bits.
 The length `h` of the hash used in the signature scheme is 256 bits.
-The random number (the nonce in signature generation) is a `h`-bit string as well.
-
-For secp384r1, `b` is 384 bits, and `h` is 384 bits.
-
+The random number (the nonce in signature generation) is a `h`-bit string as well. +
+For secp384r1, `b` is 384 bits, and `h` is 384 bits. +
 For secp521r1, `b` is 576 bits, of which only 521 are used, and `h` is 512 bits.
 
 Data Structures:::
 
 * *Provisioning Input* (Content): Empty.
 
-NOTE: In the Metadata, _only_ the curve is embedded in Algorithm.
-The _DirectionPolicy_ field determines whether signature generation (bit 12) and signature verification (bit 13) are allowed
-All four combinations are admissible.
+NOTE: In the Metadata, Algorithm only defines a curve.
+DirectionPolicy enables signature generation (bit 12) and verification (bit 13), where all four combinations are admissible.
 
 * *Internal State* (Content):
  ** `HasGenerator`: Bool.
@@ -3765,28 +3763,25 @@ All four combinations are admissible.
 * *Serialized Content*:
 +
 --
-[cols="^5%,<32%,<60",width="100%",options="header"]
+[cols="^7%,<31%,<31,<31",width="100%",options="header"]
 |===
-|  Pos. | Size in Bytes   | Field
-|   i   | 2               |  Bit 0: `HasGenerator` +
-Bit 1: `HasScalar` +
-Bit 2: `HasPublicKey` +
-Bit 3: `HasHash` +
-Bit 4: `HasSignature` +
-Bit 5: `HasRandomNumber`
-|   ii  | 2               | `Progress`/`input_base`
-|  iii  | 2               | `block_base`
-|  iv   | 2               | Padding
-|  v    | 2``b``/8        | `Generator`, X coordinate
-|  vi   | 2``b``/8        | `Generator`, Y coordinate
-|  vii  | `b`/8           | `Scalar`: `b`-bit string. Can be the private key.
+|  Pos. | Size in Bytes   2+| Field
+.3+|   i   .3+| 2           | Bit 0: `HasGenerator`  | Bit 1: `HasScalar`
+                           <| Bit 2: `HasPublicKey` <| Bit 3: `HasHash`
+                           <| Bit 4: `HasSignature` <| Bit 5: `HasRandomNumber`
+|   ii  | 2               2+| `Progress`/`input_base`
+|  iii  | 2               2+| `block_base`
+|  iv   | 2               2+| Padding
+|  v    | 2``b``/8        2+| `Generator`, X coordinate
+|  vi   | 2``b``/8        2+| `Generator`, Y coordinate
+|  vii  | `b`/8           2+| `Scalar`: `b`-bit string. Can be the private key.
 |===
 
 `SCC_content_size()` returns only the length of the content from Position i to Position vii.
 
 The size of following fields is included in the _ExtraContent_ field of the Metadata Header.
 
-[cols="^5%,<32%,<60",width="100%",options="header"]
+[cols="^7%,<31%,<62",width="100%",options="header"]
 |===
 |  Pos. | Size in Bytes                             | Field
 | viii  | If `mh`._ExtraContent_ != 0: 8, else: 0   |  `acemarchid`
@@ -3818,7 +3813,7 @@ State Machine::: {empty}
 Beside
 _initial_ (0),
 _invalid_ (14), and
-_completed_ (15), the ECC algorithms define the following states:
+_completed_ (15), ECC algorithms define:
  ** _set_generator_ (1)
  ** _set_scalar_ (2)
  ** _gen_rnd_scalar_ (10)
@@ -3847,15 +3842,15 @@ In this state, these states may require to save additional data.
 --
 * *Allowed State Transitions:*
 
- ** _initial_ -> _set_generator_, _set_scalar_, _set_hash_, _set_publickey_, _sign_generate_, _set_signature_
- ** It is allowed to freely transition between _set_generator_, _set_scalar_, _set_hash_, and _set_publickey_.
- ** From any of _initial_, _set_generator_, _set_scalar_, _set_hash_, _set_publickey_:
- *** -> _point_mul_ only if `HasGenerator` & `HasScalar`
- *** -> _sign_generate_ only if `HasGenerator` & `HasPublicKey` & `HasHash`
- *** -> _sign_verify_ only if `HasGenerator` & `HasScalar` & `HasPublicKey` & `HasHash` & `HasSignature`
- ** _point_mul_ -> _output_ -> _initial_
- ** _sign_generate_ -> _output_ -> _completed_
- ** _sign_verify_ -> _completed_
+ ** _initial_ -> _set_generator_, _set_scalar_, _set_hash_, _set_publickey_, _sign_generate_, _set_signature_.
+ ** One can freely transition between _set_generator_, _set_scalar_, _set_hash_, and _set_publickey_.
+ ** From any of _initial_, _set_generator_, _set_scalar_, _set_hash_, _set_publickey_ ->
+ *** _point_mul_ only if `HasGenerator` amd `HasScalar`;
+ *** _sign_generate_ only if `HasGenerator`, `HasPublicKey`, and `HasHash`;
+ *** _sign_verify_ only if `HasGenerator`, `HasScalar`, `HasPublicKey`, `HasHash`, and `HasSignature`.
+ ** _point_mul_ -> _output_ -> _initial_.
+ ** _sign_generate_ -> _output_ -> _completed_.
+ ** _sign_verify_ -> _completed_.
 
 [none]
 * In State _set_generator_ we can set a group generator.
