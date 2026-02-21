@@ -40,7 +40,7 @@ Architecting this feature requires careful consideration—there may be further 
 Lazy loading defers loading a value until it is needed, improving performance and managing limited CRF capacity. It may also be required to support migration to systems with smaller CRFs:
 If capacity is insufficient for lazy loading, the software reimporting an offloaded CR must be able to offload other CRs to free space. Requiring software to check for errors after each operation would impose significant burden on the software and possibly degrade performance.
 
-We assume that besides `scrdirty`, `vscrdirty` and `mcrdirty`, we have three more CSRs `scrlazy`, `vscrlazy` and `mcrlazy` that can be used to mark a CR as lazy, in particular CR number __i__ is *LAZY* if `*crlazy`[__i__] is set and `*crdirty`[__i__] is not set.
+Assume that, besides `scrdirty`, `vscrdirty` and `mcrdirty`, three more CSRs `scrlazy`, `vscrlazy` and `mcrlazy` are defined to mark a CR as lazy, i.e., CR number __i__ is *LAZY* if ```\*crlazy```[__i__] is set and ```*crdirty```[__i__] is not set.
 // Alternatively, we can define *crdirty to be a 64 bit register and reserve
 // the upper 32 bits for lazy.
 // We can define the crdirty to be a two bit per CR, just split over two
@@ -69,15 +69,19 @@ There is however one complex case, which occurs when:
   . If the CR was *CLEAN*, an SCC in VS-mode would be authoritative, and if there were no SCC in VS-mode, the value in HS would be authoritative, so retrieving the value from the parent first, and grandparent otherwise, works well.
   . _However, if the CR was *DIRTY*, the authoritative value resides in HS, while VS‑mode may hold a stale copy_.
   Therefore, the prior dirtiness information must be consulted to retrieve the authoritative SCC from HS rather than from S‑mode.
-  This is addressed by using the fourth possible CR status, which is encoded as ``*crlazy``[__i__] = ``*crdirty``[__i__] = 1, which we call **LAZY/DIRTY**.
+  This is addressed by using the fourth possible CR status, which is encoded as ``*crlazy``[__i__] = ``*crdirty``[__i__] = 1, which we call **LAZY/DIRTY**:
+  When S receives the request to restore the CR, it must relay it to HS, and both VM and hypervisor must support the feature.
 
  . After the import, the CR is set to *CLEAN* and the interrupted operation is restarted.
 
-This is a corner case and it would _not_ happen in the most common case which is:
+This is a corner case and it would _not_ happen in the most common situation, namely:
 
 *** The OS at VS-mode may implement lazy loading.
 *** Hypervisors and M _always_ save _and_ restore the _entire_ state.
 *** We do not migrate a VM if the CRF capacity at the destination machine is insufficient (the only case that would actually force the hypervisor to not restore everything but making at least some CRs lazy).
+
+Furthermore, one can envision a more complex situation where U-mode is interrupted by M-mode and _both_ the OS and the HV contain stale copies.
+This situation is resolved in this case by having M always saving and restoring the entire state, whereas only at HS and VS CRs can be made LAZY.
 
 // ///////////////////////////////////////////////////////////////////////////////////////////
 
