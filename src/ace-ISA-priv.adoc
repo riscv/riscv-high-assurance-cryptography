@@ -10,8 +10,8 @@
 * If `Zlv` or `Zlio` are implemented: `misa` must implement the `L` bit, `*status` must implement `ACES`.
 * `SmaceCSK` {implies} Defines the Context Sealing Key CSRs (`macecsk{0..7}`), which are all MRO.
 * `SmaceCSKw` {implies} ACE Context Sealing Key CSRs are MRW. Depends on `SmaceCSK`.
-* `Smaceosscrt` {implies} Defines the ACE OS Secret CSRs (`macePhysBootSecret{0..3}`).
-* `Smacebootscrt` {implies} Defines the ACE Boot Secret CSRs (`haceVirtBootSecret0{0..3}`).
+* `Smacepbootscrt` {implies} Defines the ACE OS Secret CSRs (`macePhysBootSecret{0..3}`).
+* `Smacevbootscrt` {implies} Defines the ACE Boot Secret CSRs (`haceVirtBootSecret0{0..3}`).
 * `Smacestatus` {implies} Defines the ACES per CC CSRs (`scrdirty`, `vscrdirty`, `mcrdirty`).
 
 [[ACE-dependencies-priv]]
@@ -35,8 +35,8 @@ ACE extends `*status` and `misa`, and provides up to 4 direct and up to 28 indir
 | 0xXXX       | MRW        | `mcrdirty`                  | Per-CR dirtiness tracking
 | 0xXXX       | SRW        | `sacetrapmask`              | [.red]#Discuss:# Mask to determine which ACE exceptions vertically trap
 | (Indirect)  | MRW (RZ)   | `macecsk{0..7}`             | ACE Context Sealing Key
-| (Indirect)  | MRW (RZ)   | `macePhysBootSecret{0..3}`  | Locality: Physical Boot Session Secret
-| (Indirect)  | HRW (RZ)   | `haceVirtBootSecret{0..3}`  | Locality: Virtual Boot Session Secret
+| (Indirect)  | MRW (RZ)   | `macePhysBootSecret{0..3}`  | Locality: Physical (host) Boot Session Secret
+| (Indirect)  | HRW (RZ)   | `haceVirtBootSecret{0..3}`  | Locality: Virtual (guest) Boot Session Secret
 | (Indirect)  | MRW (RZ)   | `maceLocality{0..3}`        | Locality: Mutually isolate processes below M-mode
 | (Indirect)  | SRW (RZ)   | `haceLocality{0..3}`        | Locality: Mutually isolate processes below H-mode
 | (Indirect)  | HRW (RZ)   | `saceLocality{0..3}`        | Locality: Mutually isolate U-mode processes
@@ -57,7 +57,7 @@ Bit `L` (11) of `misa` indicates that the ACE extension is present. If ACE is im
 (((CSR,ACES field in sstatus)))
 The ACES field is added to `mstatus`[26:25] and shadowed in `sstatus`[26:25] (see <<ACE-CSR-mcrdirty>>).
 ACES is defined analogously to the floating-point context status field FS and the vector context status field VS.
-It tracks the dirtiness of the ACE state, including CRs, ACEIOBUF, and all ACE-specific CSRs.
+It tracks the dirtiness of the entire ACE state, including CRs, ACEIOBUF, and all ACE-specific CSRs.
 If ACE is implemented, ACES shall not be read-only zero.
 Encodings are given in <<ACE-aces-encoding>>.
 
@@ -98,17 +98,10 @@ When V=1:
 * Both `vsstatus.ACES` and `mstatus.ACES` are in effect.
 * Any ACE instruction raises an illegal instruction exception if either field is Off.
 * If neither field is Off, any instruction that modifies ACE state sets both `mstatus.ACES` and `vsstatus.ACES` to Dirty.
-* Implementations may set either field to Dirty from Initial or Clean at any time, even without a state change.
-* When `vsstatus.ACES` is Dirty, `vsstatus.SD` is 1; otherwise, `vsstatus.SD` is set per existing specifications.
+* Implementations may set `ACES`` to Dirty from Initial or Clean at any time, even without a state change.
+* When `vsstatus.ACES` is Dirty, `vsstatus.SD` is 1; else, `vsstatus.SD` is set per existing specifications.
 
 In implementations with a writable `misa.L`, `vsstatus.ACES` may be present even when `misa.L` is clear.
-
-[[ACE-CSR-acemarchid]]
-==== `acemarchid`
-
-{empty}
-(((CSR, `acemarchid`)))
-`acemarchid` identifies the microarchitectural version of the ACE unit, analogously to `marchid` for the hart.
 
 [[ACE-CSR-scrdirty]]
 ==== `scrdirty`
@@ -175,8 +168,8 @@ Per-CR dirtiness propagates from less-privileged to more-privileged modes, analo
 
 {empty}
 (((CSR, `sacetrapmask`)))
-Mask that determines which ACE exceptions vertically trap.
-Bit __i__ of this CSR is set if ACE error __i__+1 causes a vertical trap.
+Mask to determine which ACE exceptions vertically trap.
+Bit __i__ set makes ACE error __i__+1 cause a trap.
 
 [[ACE-CSR-macecsk]]
 ==== `macecsk` Group
@@ -193,7 +186,6 @@ Access outside M-mode raises an illegal instruction exception.
 ====
 M-mode firmware must be aware of whether the CSK is configurable, ephemeral, or fixed.
 Persistence mechanisms for configurable CSKs are implementation-specific.
-
 Transferring a CSK to another endpoint—such as the M-mode firmware of another device, a local TPM (for instance to preserve a CSK upon suspension or host hibernation), or a cloud-based HSM—requires an authenticated public-key key-wrapping mechanism.
 
 Alternative reconfiguration mechanisms (e.g., a Caliptra-style cite:[caliptra] secure IP block) are permitted.
@@ -224,11 +216,6 @@ The `haceVirtBootSecret` group consists of H- and VS-mode WARZ XLEN-bit CSRs, ac
 A write to the __i__-th CSR sets bits [(_i_+1)XLEN−1 : _i_·XLEN] of the Locality Secret VirtBootSecret (<<ACE-locality-indexes>>).
 
 Access below VS-mode raises an illegal instruction exception.
-
-[NOTE]
-====
-`haceVirtBootSecret` must be reconfigurable to support VM reboots independently of the physical host boot cycle.
-====
 
 //
 
@@ -292,11 +279,10 @@ Three types of supporting operations are required:
 
 All three instructions can be implemented as CSR RW instructions, for instance:
 
- * `acedest`, XLEN bits wide, determines what architectural state we are transferring to or from: 0..31 for the CRs and, say, 32 for the ACEIOBUF.
+ * `aceactivecr`, XLEN bits wide, determines what architectural state we are transferring to or from: 0..31 for the CRs and, say, 33 for the ACEIOBUF.
  * `acestart`, XLEN bits wide, holds the offset within the CR's virtually serialized `content[]` or the ACEIOBUF.
- * `acecontent`, XLEN bits wide, to which we write the content of the CR or the ACEIOBUF or from which we read the current content.
+ * `acecontent` (new), XLEN bits wide, to which we write the content of the CR or the ACEIOBUF or from which we read the current content.
   A write to `acecontent` increases `acestart` by XLEN/8.
 
-// Interrupting the firmware implementation of `ace.prov`, `ace.export`, `ace.import`, `ace.input`, or `ace.output` must leave the architectural state indistinguishable from the state expected from interrupting a monolithic implementation of the instructions.
-// In particular, they need to respect the value of `acestart` and update it in accordance with the expected architected behavior of the emulated instructions.
-// The supporting instructions themselves must be uninterruptible.
+Interrupting the firmware implementation of `ace.prov`, `ace.export`, `ace.import`, `ace.input`, or `ace.output` must leave the architectural state indistinguishable from the state expected from interrupting a monolithic implementation of the instructions.
+The supporting instructions themselves must be uninterruptible.
