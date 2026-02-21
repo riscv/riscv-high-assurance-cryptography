@@ -3753,7 +3753,7 @@ DirectionPolicy enables signature generation (bit 12) and verification (bit 13),
  ** `HasHash`: Bool.
  ** `HasSignature`: Bool.
  ** `HasRandomNumber`: Bool.
- ** `Progress`/input_base: integer.
+ ** `Progress`: integer.
  ** `block_base`: integer.
  ** `Generator` (X coordinate, Y coordinate): two `b`-bit strings representing the X and Y coordinates.
  ** `Scalar`: `b`-bit string.
@@ -3771,38 +3771,40 @@ DirectionPolicy enables signature generation (bit 12) and verification (bit 13),
 [cols="^7%,<31%,<31,<31",width="100%",options="header"]
 |===
 |  Pos. | Size in Bytes   2+| Field
-.3+|   i   .3+| 2           | Bit 0: `HasGenerator`  | Bit 1: `HasScalar`
-                           <| Bit 2: `HasPublicKey` <| Bit 3: `HasHash`
-                           <| Bit 4: `HasSignature` <| Bit 5: `HasRandomNumber`
-|   ii  | 2               2+| `Progress`/`input_base`
-|  iii  | 2               2+| `block_base`
-|  iv   | 2               2+| Padding
-|  v    | 2``b``/8        2+| `Generator`, X coordinate
-|  vi   | 2``b``/8        2+| `Generator`, Y coordinate
-|  vii  | `b`/8           2+| `Scalar`: `b`-bit string. Can be the private key.
+.4+|   i   .4+| 2           | Bit 0: `HasGenerator`     | Bit 1: `HasSecondPoint`
+                           <| Bit 2: `HasScalar`       <| Bit 3: `HasPublicKey`
+                           <| Bit 4: `HasSignature`    <| Bit 5: `HasHash`
+                           <| Bit 6: `HasRandomNumber` <| Bit 7: `OutputType`
+|   ii  | 2               2+| `Progress`
+|  iii  | 4               2+| Padding
+|   iv  | 2``b``/8        2+| `Generator`, X coordinate
+|    v  | 2``b``/8        2+| `Generator`, Y coordinate
+|   vi  | `b`/8           2+| `Scalar`: `b`-bit string. Can be the private key.
 |===
 
-`SCC_content_size()` returns only the length of the content from Position i to Position vii.
+`SCC_content_size()` returns only the length of the content from Position i to Position vi.
 
 The size of the following fields is included in the _AdditionalData_ field of the Metadata Header.
 
 [cols="^7%,<31%,<62",width="100%",options="header"]
 |===
 |  Pos. | Size in Bytes                             | Field
-| viii  | If `mh`._AdditionalData_ != 0: 8, else: 0 |  `acemarchid`
-|   ix  | If `HasPublicKey`: `b`/8, else: 0         | `PublicKey`, X coordinate.
-|    x  | If `HasPublicKey`: `b`/8, else: 0         | `PublicKey`, Y coordinate.
-|   xi  | If `HasSignature`: `b`/8, else: 0         | `Signature`, R value.
-|  xii  | If `HasSignature`: `b`/8, else: 0         | `Signature`, S value.
-| xiii  | If `HasHash`: `h`/8, else: 0              | `Hash`: a `h`-bit string representing the hash.
-|  xiv  | If `HasRandomNumber`: `h`/8, else: 0      | `RandomNumber`.
-|   xv  | (variable)                                | Additional data from the *Internal State* (Content)..
+|  vii  | If `mh`._AdditionalData_ != 0: 8, else: 0 |  `acemarchid`
+| viii  | If `HasSecondPoint`: `b`/8, else: 0       | `SecondPoint`, X coordinate.
+|   ix  | If `HasSecondPoint`: `b`/8, else: 0       | `SecondPoint`, Y coordinate. Does not exist if Edwards Curve.
+|    x  | If `HasPublicKey`: `b`/8, else: 0         | `PublicKey`, X coordinate.
+|   xi  | If `HasPublicKey`: `b`/8, else: 0         | `PublicKey`, Y coordinate. Does not exist if Edwards Curve.
+|  xii  | If `HasSignature`: `b`/8, else: 0         | `Signature`, R value.
+| xiii  | If `HasSignature`: `b`/8, else: 0         | `Signature`, S value.  Not used if Edwards Curve.
+|  xiv  | If `HasHash`: `h`/8, else: 0              | `Hash`: a `h`-bit string representing the hash.
+|   xv  | If `HasRandomNumber`: `h`/8, else: 0      | `RandomNumber`.
+|  xvi  | (variable)                                | Additional data from the *Internal State* (Content)..
 |===
 
 The `HasRandomNumber` flag is set and the `RandomNumber` field is used only during signature generation.
 `RandomNumber` is exported only if the signature operation is interrupted.
 
-The size in bytes of Fields vii to xiv is:
+The size in bytes of Fields vii to xv is:
 
 `{fournbsp}{fournbsp}` `varlen` <- 8 + (`HasPublicKey` != 0) {interpunct} 2``b``/8 + (`HasSignature` != 0) {interpunct} 2``b``/8 + +
 `{fournbsp}{fournbsp}{fournbsp}{fournbsp}{fournbsp}{fournbsp}{fournbsp}` + (`HasHash` != 0) {interpunct} ``h``/8 + (`HasRandomNumber` != 0) {interpunct} ``h``/8.
@@ -3850,10 +3852,10 @@ In this state, these states may require to save additional data.
  ** _initial_ -> _set_generator_, _set_scalar_, _set_hash_, _set_publickey_, _sign_generate_, _set_signature_.
  ** One can freely transition between _set_generator_, _set_scalar_, _set_hash_, and _set_publickey_.
  ** From any of _initial_, _set_generator_, _set_scalar_, _set_hash_, _set_publickey_ ->
- *** _point_mul_ only if `HasGenerator` amd `HasScalar`;
+ *** _point_mul_ only if `HasGenerator` and `HasScalar`;
  *** _sign_generate_ only if `HasGenerator`, `HasPublicKey`, and `HasHash`;
  *** _sign_verify_ only if `HasGenerator`, `HasScalar`, `HasPublicKey`, `HasHash`, and `HasSignature`.
- ** _point_mul_ -> _output_ -> _initial_.
+ ** _point_mul_ -> _output_ -> _completed_.
  ** _sign_generate_ -> _output_ -> _completed_.
  ** _sign_verify_ -> _completed_.
 
@@ -3867,7 +3869,7 @@ the Boolean variable ``Has``__Var__ is set when all operations required in State
 
 * *Behavior:*
 
- ** All the “set” and “output” operations work like the input and output of blocks in the Hash functions, in other words, they use input_base to track the parsing of the `INPUT` and block_base for the fill level of any information to be provisioned.
+ ** All the “set” and “output” operations work like the input and output of blocks in the Hash functions, in other words, they use `Progress` (instead of `block_base`) to track how much information has been read in or written out.
 
  ** To transition to State _set_generator_, a Form A or B `ace.state` is used.
 
@@ -3877,33 +3879,44 @@ the Boolean variable ``Has``__Var__ is set when all operations required in State
 
  *** Otherwise:
   . If `Generator` contains a value, it is erased and `HasGenerator` is set to False.
-  . `block_base` <- 0
-  . A value for `Generator` is loaded, using one or more Form B `ace.exec` operations, each one increasing `block_base` by the amount of data provided by `ace.exec`.
-  . Once `block_base` has reached the length of the generator point (excess data in the last `ace.exec` is ignored):
+  . `Progress` <- 0.
+  . A value for `Generator` is loaded, using one or more Form B `ace.exec` operations, each one increasing `Progress` by the amount of data provided by `ace.exec`.
+  . Once `Progress` has reached the length of the generator point (excess data in the last `ace.exec` is ignored):
    **** `HasGenerator` is set to True.
    **** No further `ace.exec` instructions may be issued.
-   **** A state change operation can be issued, including to states that require a set `Generator`. This state change also clears `block_base`.
+   **** A state change operation can be issued, including to states that require a set `Generator`. This state change also clears `Progress`.
 
  ** To transition to any of the States _set_scalar_, _set_hash_, _set_publickey_, or _set_signature_ a Form A `ace.state` is used.
-
  . If there is a current value in the corresponding field _X_ = `Scalar`, `Hash`, `PublicKey`, or `Signature`,
      it is erased, and the Boolean ``Has``_X_ is set to False.
- . `block_base` <- 0, and a value for Field _X_ is loaded, using one o more Form B `ace.exec` operations (similarly to `Generator`).
- . Once the values `block_base` has reached the length of field _X_  (excess data in the last `ace.exec` is ignored):
+ . `Progress` <- 0, and a value for Field _X_ is loaded, using one o more Form B `ace.exec` operations (similarly to `Generator`).
+ . Once the values `Progress` has reached the length of field _X_  (excess data in the last `ace.exec` is ignored):
   *** The corresponding Boolean ``Has``_X_ is set to True.
   *** No further `ace.exec` instructions may be issued.
-  *** A state change operation can be issued, including to states that require a value for _X_ to be set. This state change also clears `block_base`.
+  *** A state change operation can be issued, including to states that require a value for _X_ to be set. This state change also clears `Progress`.
 
  ** It is allowed to transition to _set_scalar_ also using a Form B `ace.state` with a non-zero value in the GPR.
     In this case, a random value is set, and `HasScalar` is set to true.
 
+ ** When the operations in states _point_mul_ and _sign_generate_ are completed:
+   . If the output is a point, then `OutputType` <- False, and if the output is a signature, then `OutputType` <- True.
+     This allows the ACE implementation to determine not only which output must be written out, but also its length.
+     *** If `OutputType` == False, the output is in `SecondPoint`.
+     *** If 'OutputType` == True,  the output is in `Signature`.
+   . `Progress` <- 0.
+   . One or more Form C `ace.exec` instructions may be issued to export segments of the result to memory, each time increasing `Progress` by the length of the output of `ace.exec`.
+     . Data beyond the length of the output is replaced with zeros in the last exported part.
+     . Once `Progress` has reached the length of the output, the state transitions automatically to _completed_.
+
  ** Upon returning to State _initial_:
   *** If a Form B `ace.state` is used, the parameter `Xs` will determine whether the fields
  `Generator`, `Scalar`, and `PublicKey` are reset/erased or kept for further operations.
- This is determined by Bits 0, 1, and 2 of `Xs` as follows: If Bit 0, 1, resp., 2 is set, then `Generator`, `Scalar`, resp., `PublicKey` is erased, and the corresponding Boolean flags `HasGenerator`, `HasScalar`, resp., `HasPublicKey` is unset as well.
+ This is determined by Bits 0, 1, 2, and 3 of `Xs` as follows:
+   **** If Bit 0, 1, 3, resp., 3 is set, then `Generator`, `SecondPoint`, `Scalar`, resp., `PublicKey` is erased, and the corresponding Boolean flags `HasGenerator`, `HasScalar`, resp., `HasPublicKey` is unset as well.
+   **** If Bit 4 is set, then Bit 0 is ignored, and `Generator` is copied onto `Generator`.
+   **** If Bit 5 is set, then Bit 1 is ignored, and `Generator` is copied onto `Generator`.
   *** A Form A `ace.state` does not modify these states.
   *** `Signature` and the corresponding Boolean `HasSignature` are always reset.
-
 
 EdDSA formats are similar, but, for instance, the public key is represented as a single `b`-bit string.
 Depending on the algorithm, in states _set_generator_ or _set_publickey_ we may input non-compressed or compressed points.
