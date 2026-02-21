@@ -289,7 +289,7 @@ and privileged code can always deny resources to user processes.
 
 ACE maintains a table of 128-bit Locality Secrets (LS), the Locality Secrets Table (LST). Some entries are fixed or configurable only via an implementation-specific authenticated hardware procedure; these are global and shared across all ACE units in the same SoC. Other entries are per-hart architectural state programmed by privileged modes. Eleven LST entries are currently architected: the first six constitute the _HW Binding Group_, binding SCCs to the hardware; entries 8–10 form the _SW Filter Group_.
 
-<<ACE-locality-indexes>> lists the architected Localities. For each Locality we provide: index in the LST; domain (SoC-wide, device-wide, VM-wide, or per-process); configurability; bit-field encoding and value. Seven of the eight _Locality_ field bits are defined; bit 7 is reserved for future use or custom Localities [.red]#(to be defined)#.
+<<ACE-locality-indexes>> lists the architected Localities. For each Locality we provide: index in the LST; domain (SoC-, device-, VM-wide, or per-process); configurability; bit-field encoding and value. Seven of the eight _Locality_ field bits are defined; bit 7 is reserved for future use or custom Localities [.red]#(Partitioning TBdef.)#.
 
 [[ACE-locality-indexes]]
 .Architected Localities
@@ -342,7 +342,8 @@ Bit 0, 1, resp., 2 of this field is ignored if U-, S-, resp., H-mode is not supp
 
 The first eight bytes of the additional data segment hold a copy of the `acemarchid` CSR (<<ACE-CSR-acemarchid>>) of the originating machine, and are counted within the length recorded by the _AdditionalData_ field. The importing implementation uses this value to determine whether the additional data can be used.
 
-NOTE: Typical extra content includes precomputed point multiples (whose computation is generally far more expensive than their encryption) and auxiliary data for side-channel-protected implementations, such as key shares or data to accelerate share reconstruction.
+NOTE: Examples of additional data are: “decryption AES keys”, i.e., the last one or two AES round keys, from which one can work backwards when performing AES decryptions;
+precomputed point multiples for elliptic curve scalar multiplication (their computation can be far more expensive than their encryption and decryption); and auxiliary data for side-channel-protected implementations, such as key shares or other data to accelerate share reconstruction.
 
 [[ACE-Metadata-expiration-date]]
 ===== ExpirationDate Field
@@ -397,13 +398,13 @@ The same event may also trigger a vertical or horizontal trap; the handler may i
 |Value | Mnemonic                   | Examples (((ACE, error codes)))
 |  0   | ace_err_no_error           | No error.
 |  1   | ace_err_import_auth        | Authentication failure with `ace.import`.
-|  2   | ace_err_unconfigured       | Use of an unconfigured, or partially configured CR as a source in any instruction except `ace.size`. +
-Use of ACEIOBUF as an input or an output when it was unconfigured. +
+|  2   | ace_err_unconfigured       | Use of an unconfigured, or partially configured CR as a source in any instruction except `ace.size`.
+Use of ACEIOBUF as an input or an output when it was unconfigured.
 Use of an out of range CR with indirect addressing.
 |  3   | ace_err_invalid_CR         | Attempted to use an _invalid_, but not expired, CR.
 |  4   | ace_err_expired_CR         | Attempted to use an expired CR.
 |  5   | ace_err_memory             | Insufficient CRF memory for configuration instruction.
-|  6   | ace_err_unimplemented      | Not implemented algorithm or variant. +
+|  6   | ace_err_unimplemented      | Not implemented algorithm or variant.
 State number not allowed in current algorithm in `ace.state`.
 |  7   | ace_err_invalid_value      | Invalid value, except ace_err_unimplemented (see below).
 |  8   | ace_err_privilege          | Violation of usage control policies in Metadata (including Filters).
@@ -413,7 +414,7 @@ State number not allowed in current algorithm in `ace.state`.
 `ace_err_invalid_value` covers, among others:
 
 * Invalid Metadata in `ace.prov` or `ace.import` (other than `ace_err_unimplemented`), such as, for instance: Nonzero bits in reserved fields; Unsupported _Locality_ value; and Nonzero _StateNumber_ in a PI.
-* An ACE operation issued with an invalid or zero ACEIOBUF transfer length (`aceiobuftop` − `acestart`); see <<ACE-CSR-aceiobuftop>> and <<ACE-CSR-acestart>>.
+* An ACE operation issued with an invalid or zero ACEIOBUF transfer length (`aceiobuftop` − `acestart`); see <<ACE-CSR-acestart>> and <<ACE-CSR-aceiobuftop>>.
 * Invalid operand to `ace.restrict`.
 
 // Using an incomplete CC in `ace.size` is allowed.
@@ -1325,11 +1326,8 @@ Interruptible: *YES*. +
 
 The length of a PI must be a multiple of 8 bytes.
 The first 8 bytes contain the Metadata Header, as defined in <<ACE-Metadata>>.
-The subsequent contain the *Content*, key material and any algorithm-specific data used to initialize the CR.
-The format and length of this information are specified in <<ACE-algorithms>> for all architected algorithms.
-The PI Content's size is entirely determined by the _Algorithm_ and _KeyType_ fields within the Metadata.
-
-System Keys are given by an index into an internal, system-specific System Keys Table (SKT), and therefore, in a PI, in place of the key value itself, a 64-bit field is used to store the index.
+The subsequent data contain the *Content*, key material and any algorithm-specific data used to initialize the CR.
+The Content's format is entirely determined by the _Algorithm_ and _KeyType_ fields within the Metadata, and is specified in <<ACE-algorithms>> for each architected algorithm.
 
 Format of Provisioning Input:::
 `bytes{nbsp}[{nbsp}{nbsp}0 .. {nbsp}7{nbsp}]{nbsp}{nbsp}` Metadata Header. +
@@ -1368,8 +1366,7 @@ In a threshold implementation, a single key byte in `content[]` may correspond t
 [[ACE-system-keys]]
 ==== System Keys
 
-For a system key, its actual value is never included in exported Content.
-The SCC contains just the index of the key in the SKT, like for the PI.
+System Keys are given by an index into an internal, system-specific System Keys Table (SKT), and therefore, in a PI or in a SCC, in place of the key value itself, a 64-bit field is used to store the index.
 
 For threshold implementations of system keys, ACE may copy the key material from the SKT into the CR and expand it into multiple shares.
 However, the key must be still be exported as a single index.
