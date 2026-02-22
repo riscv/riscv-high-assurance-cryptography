@@ -49,7 +49,7 @@ Usage operations include cryptographic operations and state changes.
 Key derivation is both a configuration and a usage operation.
 (((Cryptographic Context, access)))
 All operations represent a form of *access* to CRs.
-To prevent denial-of-service scenarios, management operations are always permitted, except when the CR is in an invalid state.
+To prevent denial-of-service scenarios, management operations, in particular configuration operations, are far less restricted than usage operations.
 _Usage Control_ policies restrict only certain CC/CR usage operations.
 
 Localities:::
@@ -101,7 +101,7 @@ When vector registers are used, the full V extension is not required. ACE depend
 RVV-mini must be fully opcode-compatible with RVV: code written for RVV-mini must execute with identical behavior under RVV.
 The required features are:
 
-* Vector registers wide enough to accommodate the block-wise operations of the implemented algorithms;
+* Vector registers wide enough to support the inputs and outputs of the implemented algorithms;
 * The `vsetvli` instruction with restricted parameters (e.g., `vsetvli zero,4,e32,m1,ta,ma` for 128-bit operations); unsupported configurations must produce defined errors;
 * Unit-strided vector loads and stores; and
 * Vector bitwise logical operations: `vxor`, `vand`, and `vor`.
@@ -195,14 +195,14 @@ Both formats begin with a 64-bit Metadata Header, whose format is defined below.
 |===
 |   Field | Width | Name               | Description
 |   [0:0] |   1   | _Format_           | Set to 0 for the current Metadata format version.
-|  [11:1] |  11   | _Algorithm_        | Cryptographic algorithm (primitive, mode, or protocol).
-| [13:12] |   2   | _DirectionPolicy_  | Permitted operation direction(s). See <<ACE-Algorithm-field>>.
+|  [11:1] |  11   | _Algorithm_        | Cryptographic algorithm (primitive, mode, or protocol). See <<ACE-Algorithm-field>>.
+| [13:12] |   2   | _AlgorithmPolicy_  | Allowed algorithm variants(s). See <<ACE-Algorithm-field>>.
 | [15:14] |   2   | _SCProtection_     | Side-channel protection level. See <<ACE-SCProtection-field>>.
 | [16:16] |   1   | _KeyType_          | 0: key is an explicit value in Content. +
 1: key is an index into the system-specific System Keys Table (SKT).
 | [20:17] |   4   | _StateNumber_      | Current algorithm state-machine state, encoded as an integer.
 | [28:21] |   8   | _Locality_         | Zero, or an index determining a Locality Secret. See <<ACE-Localities>>.
-| [31:29] |   3   | _UCPolicy_         | Usage Control Policy. Bits 29, 30, and 31, when set, disallow CC usage in U-mode, (V)S-mode, and H-mode, respectively.
+| [31:29] |   3   | _UsagePolicy_      | Usage (Control) Policy. Bits 29, 30, and 31, when set, disallow CC usage in U-mode, (V)S-mode, and H-mode, respectively.
 | [45:32] |  14   | _AdditionalData_   | If non-zero, indicates an additional data segment appended to Content. The length of this additional Data segment is _AdditionalData_ × 8 bytes (up to 128 KiB).
 | [63:46] |  18   | _ExpirationDate_   | If non-zero, the expiration date of this CC. See <<ACE-Metadata-expiration-date>>.
 |===
@@ -212,13 +212,13 @@ Selected fields require additional explanation, provided in the following subsec
 //
 
 [[ACE-Algorithm-field]]
-===== Algorithm and DirectionPolicy Fields
+===== Algorithm and AlgorithmPolicy Fields
 
 Algorithms are encoded in an 11-bit field. Values 0–1535 are architecture-defined; the list of encodings is maintained by RVI (see <<ACE-algorithms>>). The remaining values are available for custom algorithms.
 
-For encryption/decryption primitives and modes, the _DirectionPolicy_ field indicates whether the CC may be used for encryption (lower bit set), decryption (upper bit set), or both.
+For encryption/decryption primitives and modes, the _AlgorithmPolicy_ field indicates whether the CC may be used for encryption (lower bit set), decryption (upper bit set), or both.
 For asymmetric primitives supporting signatures, the lower bit permits signature generation and the upper bit permits verification.
-For other primitives, the _DirectionPolicy_ field may encode additional algorithm identifiers to expand the effective encoding space of the _Algorithm_ field.
+For other primitives, the _AlgorithmPolicy_ field may encode additional algorithm identifiers to expand the effective encoding space of the _Algorithm_ field.
 
 //
 
@@ -261,7 +261,10 @@ The architected  _StateNumber_ values common to all algorithms are defined in <<
 
 All states other than _invalid_ are termed _valid_. Unless an algorithm's specification explicitly states otherwise, a transition from any valid state to _initial_ is always permitted.
 
-If an algorithm has 16 or fewer states (including the three fixed ones), the current state may be stored in the _StateNumber_ field. For algorithms with more than 16 states, additional algorithm-specific state information is stored in Content; in this case, _StateNumber_ shall still be set to _initial_ (0), _invalid_ (14), or _completed_ (15) if in the corresponding state, and to some other value (e.g., 1) otherwise.
+If an algorithm defines 16 or fewer states (including the three fixed states), the current state is stored in the _StateNumber_ field.
+For algorithms with more than 16 states, additional state information is stored in the Content section.
+In all cases, the _StateNumber_ field shall be set to _initial_ (0), _invalid_ (14), or _completed_ (15) when the CC is in the corresponding state, and to a different value otherwise.
+These three fixed states must be identifiable solely from the _StateNumber_ field, without inspecting the Content.
 
 During `ace.prov` and `ace.import`, _StateNumber_ is set to _invalid_ for the duration of the operation and updated to the correct value only upon successful completion (see <<ACE-provisioning-export-import>>). By the rules of <<ACE-invalidation>>, a partially provisioned or imported CR cannot be exported. If a context switch occurs during such an operation, privileged code must unconfigure the CR; upon resumption, the instruction is restarted. An invalid CR with a nonzero `acestart` is recognized as an incomplete CR, permitting resumption of provisioning or import.
 This state change to _invalid_ does not occur during `ace.export`.
@@ -278,7 +281,7 @@ The following situation may occur:
 . When the export operation resumes, it will continue to export the values as single shares, i.e., with the same value.
 
 This works because the actual value of the key is not changed.
-However, if any value of the state (such as a counter, or a partial hash value) is altered between the interruption and resumption of an export operation, the resumed export may use an incorrect SIV for the remaining SCC data, causing a subsequent import to fail authentication. This is a general issue with CRs, since more privileged code can use them unless blocked by the _UCPolicy_. We do not consider this a security threat: it affects only SCC availability, not confidentiality or integrity,
+However, if any value of the state (such as a counter, or a partial hash value) is altered between the interruption and resumption of an export operation, the resumed export may use an incorrect SIV for the remaining SCC data, causing a subsequent import to fail authentication. This is a general issue with CRs, since more privileged code can use them unless blocked by the _UsagePolicy_. We do not consider this a security threat: it affects only SCC availability, not confidentiality or integrity,
 and privileged code can always deny resources to user processes.
 ////
 
@@ -297,8 +300,8 @@ ACE maintains a table of 128-bit Locality Secrets (LS), the Locality Secrets Tab
 |===
 |  Idx  | Field                   | Description                                                                      | Domain | Config?|  Bits  | Value
 2+|   _No HW Binding_             | Independent of Chip, OEM, Device                                                ^|  --   ^|   --   | [2:0]  |   0
-|   0   | ChipDesignerSecret      | Identifies the designer of the SoC. Permanent.                                   |  SoC   |   No   | [2:0]  |   1
-|   1   | ChipModelSecret         | Identifies specific chip model/family. Permanent.                                |  SoC   |   No   | [2:0]  |   2
+|   0   | SiPSecret               | Identifies the designer of the SoC. Permanent.                                   |  SoC   |   No   | [2:0]  |   1
+|   1   | ChipFamilySecret        | Identifies specific chip/SoC model/family. Permanent.                            |  SoC   |   No   | [2:0]  |   2
 |   2   | ChipSecret              | Unique for each SoC. Permanent.                                                  |  SoC   |   No   | [2:0]  |   3
 |   3   | OEMSecret               | Provisioned by OEM to differentiate their products from the competition.
 Permanent, or reconfigurable via a custom hardware authenticated mechanism.                                          | Device |   HW   | [2:0]  |   4
@@ -317,23 +320,23 @@ Regenerated by H or higher at each virtual boot of a VM (see <<ACE-CSR-haceVirtB
 |  10   | SLocality               | Configurable by (V)S to mutually isolate processes in U-mode.                    |  U     |  (V)S  | [6:5]  |   3
 |===
 
-Implementations are not required to populate every HW Binding Group entry.
-Only DeviceSecret and DeviceSecret are mandated.
-An unconfigured entry is transparently replaced by the next more restrictive Locality which is defined, as in:
-ChipDesignerSecret {rightarrow} ChipModelSecret {rightarrow} ChipSecret, and OEMSecret {rightarrow} ProductSecret {rightarrow} DeviceSecret.
+Implementations are not required to populate every entry in the HW Binding Group, except for ChipSecret and DeviceSecret.
+If an entry is unconfigured, it is transparently replaced by the next defined entry in its chain:
+SiPSecret {rightarrow} ChipFamilySecret {rightarrow} ChipSecret, and OEMSecret {rightarrow} ProductSecret {rightarrow} DeviceSecret.
 
 HLocality is active only when the H extension is enabled and V=1; otherwise, it mirrors MLocality.
 
 NOTE: A system-key index may refer to keys with unrelated purposes on different devices, leading to unspecified behavior.
 Implementations shall assign usage policies at least as restrictive as the key's own native policies, and supply an appropriate _Locality_ during CR provisioning.
 
-Multiple Localities may be active concurrently, subject to architectural restrictions.
-Currently, up to three Localities can be active at once: one from the HW Binding Group, one of either PhysBootSecret or VirtBootSecret, and one from the SW Filter Group. During SCC export and import, the corresponding Locality Secrets are prepended, in ascending index order, to the input of the AEAD tag computation. If the _Locality_ field is zero, no Locality Secrets are prepended.
+Up to three Localities may be active concurrently:
+one from the HW Binding Group, one of either PhysBootSecret or VirtBootSecret, and one from the SW Filter Group.
+The enforcement of the policies by including them in the export and import operations is explained in <<ACE-provisioning-export-import>>.
 
 //
 
-[[ACE-UCPolicy-field]]
-===== UCPolicy Field
+[[ACE-UsagePolicy-field]]
+===== UsagePolicy Field
 
 Bit 0, 1, resp., 2 of this field is ignored if U-, S-, resp., H-mode is not supported or not enabled.
 
@@ -364,16 +367,16 @@ ACE provides a number of unprivileged CSRs.
 [cols="^10%,^10%,<18%,<62%"]
 [float="center",options="header"]
 |===
-| Address | Privilege | Field            | Description
-| 0xXXX   | URW       | `aceerror`       | Error code of the last ACE instruction
-| 0xXXX   |  RO       | `acemarchid`     | ID of the microarchitecture of the ACE unit
-| 0xXXX   | URW       | `acestart`       | ACE start byte index (see warning below)
-| 0xXXX   | URW       | `aceiobuflen`    | ACE input/output buffer length
-| 0xXXX   | URW       | `aceiobuftop`    | ACE input/output buffer limit for current transfers
-| 0xXXX   | URW       | `acesequence`    | Sequence number of the last ACE instruction
-| 0xXXX   | URW       | `aceactivecr`    | Active CR for `ace.input`/`ace.output`
-| 0xXXX   | URW       | `acehtrapmask`   | [.red]#Discuss:# Mask that determines which ACE exceptions horizontally trap
-| 0xXXX   | URW       | `acehtrapvector` | [.red]#Discuss:# Address of the horizontal ACE trap handler
+|  Address | Privilege | Field            | Description
+|  0xXXX   | URW       | `aceerror`       | Error code of the last ACE instruction
+|  0xXXX   |  RO       | `acemarchid`     | ID of the microarchitecture of the ACE unit
+| `vstart` | URW       | `acestart`       | ACE start byte index
+|  0xXXX   | URW       | `aceiobuflen`    | ACE input/output buffer length
+|  0xXXX   | URW       | `aceiobuftop`    | ACE input/output buffer limit for current transfers
+|  0xXXX   | URW       | `acesequence`    | Sequence number of the last ACE instruction
+|  0xXXX   | URW       | `aceactivecr`    | Active CR for `ace.input`/`ace.output`
+|  0xXXX   | URW       | `acehtrapmask`   | [.red]#{warn} Discuss:# Mask to determine which ACE exceptions horizontally trap
+|  0xXXX   | URW       | `acehtrapvector` | [.red]#{warn} Discuss:# Address of the horizontal ACE trap handler
 |===
 
 //
@@ -384,7 +387,8 @@ ACE provides a number of unprivileged CSRs.
 
 {empty}
 (((CSR,`aceerror`)))
-The 4-bit `aceerror` CSR holds the error code from the most recent ACE instruction.
+`aceerror` is an XLEN-bit CSR, of which only the least significant 4 bits are defined, and the top XLEN - 4 bits are WARZ.
+It holds the error code from the most recent ACE instruction.
 A read of this CSR may stall until the preceding ACE operation completes.
 The CSR is writable to support context switching.
 
@@ -411,7 +415,7 @@ State number not allowed in current algorithm in `ace.state`.
 |  9   | ace_err_auth               | Authentication failure in an algorithm.
 |===
 
-`ace_err_invalid_value` covers, among others:
+ace_err_invalid_value covers, among others:
 
 * Invalid Metadata in `ace.prov` or `ace.import` (other than `ace_err_unimplemented`), such as, for instance: Nonzero bits in reserved fields; Unsupported _Locality_ value; and Nonzero _StateNumber_ in a PI.
 * An ACE operation issued with an invalid or zero ACEIOBUF transfer length (`aceiobuftop` − `acestart`); see <<ACE-CSR-acestart>> and <<ACE-CSR-aceiobuftop>>.
@@ -446,24 +450,29 @@ Code        .>|Description
 (((CSR, `acemarchid`)))
 `acemarchid` identifies the microarchitectural version of the ACE unit, analogously to `marchid` for the hart.
 
+//
 
 [[ACE-CSR-acestart]]
 ==== `acestart`
 
 {empty}
 (((CSR, `acestart`)))
-`acestart` is an XLEN-bit RW CSR that tracks the progress of interruptible ACE instructions: `ace.prov`, `ace.import`, `ace.export`, `ace.input`, and `ace.output`.
-`acestart` also applies to `ace.exec` when processing a multi-block vector operand (`IOLEN` is a multiple of the algorithm's basic processing unit `b`): `ace.exec` operates iteratively and may be interrupted between blocks.
-Only these instructions honor a nonzero `acestart`; all other ACE instructions ignore it and are restarted, with `acestart` also being cleared.
+`acestart` is an alias for `vstart`.
+ACE defines it also when the V extension is not enabled.
 
-Unlike `vstart`, which tracks element indices, `acestart` records a byte offset, reflecting the number of bytes processed so far. Hardware typically writes this register on interruption. Software may write zero to force a full restart and may save and restore the register across context switches.
+// The XLEN-bit RW CSR
+`acestart` tracks the progress of interruptible ACE instructions, namely `ace.prov`, `ace.import`, `ace.export`, `ace.input`, and `ace.output`.
+It also applies to `ace.exec` when iteratively processing a multi-block operand, as `ace.exec` may be interrupted between blocks.
+Only these instructions honor a nonzero `acestart`; all other instructions ignore it and are restarted, with `acestart` also being cleared.
+Provisioning, import, and export are resumed only under certain conditions, as explained in <<ACE-provisioning-export-import>>.
+
+Since ACE does not have an _intrinsic_ concept of element length, `acestart` counts the number of bytes processed so far, not the number of elements.
+Hardware typically writes this register on interruption.
+Software may write zero to force a full restart and may save and restore the register across context switches.
 Writing an invalid or non-supported nonzero value may raise ACE exception ace_err_invalid_value.
 
-Provisioning, import, and export operations may be interrupted and resumed provided no context switch occurs; if a context switch occurs, they must be restarted.
-The semantics of `acestart` for these operations are described in <<ACE-provisioning-export-import>>.
-
-[WARNING]
-`acestart` may share the encoding of `vstart`, regardless of whether the V extension is present. When a vector instruction is interrupted, the CSR follows `vstart` semantics (count of processed elements); when an ACE instruction is interrupted, it follows `acestart` semantics (amount of processed bytes).
+When a vector instruction is interrupted, the CSR follows `vstart` semantics, i.e., it counts the number of processed elements.
+When an ACE instruction is interrupted, the CSR follows `acestart` semantics, namely, it counts the number of bytes processed so far.
 
 ////
 [NOTE]
@@ -570,7 +579,7 @@ The notation `K(Xd)` denotes the CR whose index is held in GPR `Xd`. `Kn|K(Xn)` 
 Each instruction is characterized by the following properties:
 
 * _Modifies state_: whether the instruction may modify ACE architectural state;
-* _Usage-controlled_: whether the instruction is subject to usage control policies (_UCPolicy_);
+* _Usage-controlled_: whether the instruction is subject to usage control policies (_UsagePolicy_);
 * _Trappable_: whether the instruction may be implemented by privileged code via trap-and-emulate; and
 * _Interruptible_: whether execution may be interrupted (e.g., by a context switch or page fault) and later resumed or restarted.
 
@@ -760,7 +769,7 @@ If there are no system-defined formats, `ace.import.S` raises an illegal instruc
 NOTE: The instruction encoding includes a single bit to indicate a system-defined format.
 If multiple system-defined formats are supported, the system is responsible for distinguishing them.
 These formats do not necessarily include the key value itself, they may contain a “recipe” for an implementation-defined mechanism to generate the key.
-Such system generated heys are also system-specific. In place of the PI, the provisioning operation reads a system-specific “recipe”, which is not portable.  After internal key generation, the actual key value—not the recipe—is stored in the CR and SCC.
+Such system generated keys are also system-specific. In place of the PI, the provisioning operation reads a system-specific “recipe”, which is not portable.  After internal key generation, the actual key value—not the recipe—is stored in the CR and SCC.
 For all keys provisioned using `ace.import.S`, the _KeyType_ field in the Metadata is 0, denoting a key represented by its value.
 
 NOTE: The `ace.export` instruction does not have an `ace.export.S` analog to `ace.import.S`.
@@ -1074,10 +1083,10 @@ Let `M` be the Metadata field of the CC in the destination CR.
 On RV64, the semantics of the instruction are:
 
 * `Xs` inherits its format from the first 64-bit block of the Metadata section.
-Only the fields _DirectionPolicy_, _SCProtection_, _Locality_, _UCPolicy_, and _ExpirationDate_ may be defined.
+Only the fields _AlgorithmPolicy_, _SCProtection_, _Locality_, _UsagePolicy_, and _ExpirationDate_ may be defined.
 All other fields must be 0, else ACE error ace_err_invalid_value is raised.
 
-* `Xs`._DirectionPolicy_ is used to set the new _DirectionPolicy_ of the CR.
+* `Xs`._AlgorithmPolicy_ is used to set the new _AlgorithmPolicy_ of the CR.
 No operation may be enabled, any attempt to do so raises ACE error ace_err_invalid_value.
 In some cases, a zero value is not permitted, such as disabling both encryption and decryption.
 
@@ -1086,9 +1095,9 @@ Attempting to remove or downgrade side channel protection, or to set a non-imple
 
 * If `Xs`._Locality_ is non-zero, then it can be used to restrict the Locality. Then, when the CR is exported as a CR, it will use the new tweak in the AEAD mode. Generalizing the Locality is not permitted. Attempting to do so raises ACE error ace_err_invalid_value.
 
-* A zero in any of the three bits `Xs`._UCPolicy_ means that the corresponding policy is _not_ changed.
+* A zero in any of the three bits `Xs`._UsagePolicy_ means that the corresponding policy is _not_ changed.
 
-* A one in any of the three bits `Xs`._UCPolicy_ means that usage by the corresponding mode is not allowed, and the corresponding bit in the Metadata of the destination CC is set to 1.
+* A one in any of the three bits `Xs`._UsagePolicy_ means that usage by the corresponding mode is not allowed, and the corresponding bit in the Metadata of the destination CC is set to 1.
 
 * If `Xs`._ExpirationDate_ is zero, the corresponding policy in `M`._ExpirationDate_ is _not_ changed.
 
@@ -1339,7 +1348,7 @@ The SCC format is used when exporting a CC from a CR and also to re-import the C
 Its size must be a multiple of 8 bytes.
 The first 8 bytes contain the Metadata Header, as defined in <<ACE-Metadata>>.
 The format and length of the exported Content are algorithm-specific (<<ACE-algorithms>>) and, excluding the Additional Data of length `mh`._AdditionalData_,
-are determined solely by the _Algorithm_, _KeyType_, and _DirectionPolicy_ fields in the Metadata.
+are determined solely by the _Algorithm_, _KeyType_, and _AlgorithmPolicy_ fields in the Metadata.
 
 Format of Sealed Cryptographic Context:::
 `bytes{nbsp}[{nbsp}{nbsp}0 .. {nbsp}7{nbsp}]{nbsp}{nbsp}` Metadata Header, not encrypted. +
@@ -1386,10 +1395,10 @@ the implementation provides the following functions or an equivalent mechanism:{
 In the current specification, it is always 8.
 
 . ``PI_content_size(mh)`` returns the byte length of the content section of a PI.
-   It depends only on `mh`._Algorithm_, `mh`._DirectionPolicy_, and `mh`._KeyType_.
+   It depends only on `mh`._Algorithm_, `mh`._AlgorithmPolicy_, and `mh`._KeyType_.
 
 . ``SCC_content_size(mh)`` returns the byte length of the fixed part of the content section of an SCC.
-   It depends only on  `mh`._Algorithm_, `mh`._DirectionPolicy_, and `mh`._KeyType_.
+   It depends only on  `mh`._Algorithm_, `mh`._AlgorithmPolicy_, and `mh`._KeyType_.
    It does not include the length of the variable part of the content of length _AdditionalData_ * 8 bytes.
 
 The total size in bytes of a PI is therefore
@@ -1461,20 +1470,19 @@ The generation of an SCC from a CR (<<ACE-SCC-export>>) and the import of an SCC
 ----
 function RFC8452_KeyDeriv(key : bits(256)) = {
   struct {
-    AESE256(key, (zeros(125) @ 0b101))[63:0] @
-    AESE256(key, (zeros(125) @ 0b100))[63:0] @
-    AESE256(key, (zeros(125) @ 0b011))[63:0] @
-    AESE256(key, (zeros(125) @ 0b010))[63:0],
-    AESE256(key, (zeros(125) @ 0b001))[63:0] @
-    AESE256(key, (zeros(125) @ 0b000))[63:0]
+    AESE256(key, (zeros(125) @ 0b101))[63:0] @ AESE256(key, (zeros(125) @ 0b100))[63:0] @
+    AESE256(key, (zeros(125) @ 0b011))[63:0] @ AESE256(key, (zeros(125) @ 0b010))[63:0],
+    AESE256(key, (zeros(125) @ 0b001))[63:0] @ AESE256(key, (zeros(125) @ 0b000))[63:0]
   }
 }
 ----
 
 NOTE: Due to the computational cost of the derivation functions, implementations may cache recently used derived keys indexed by Locality.
 
-For a Metadata Header `mh`,
-`get_localities(mh)` returns a variable length array with zero or more 128-bit values, corresponding to the active localities, ordered by increasing index value, as defined in <<ACE-Localities>>. These are used as a variable length prefix to the POLYVAL computation, to create unique SIV values. Using these as a prefix allows some degree of pre-computation.
+For a Metadata Header `mh`, `get_localities(mh)` returns a variable length array with zero or more Locality Secrets, corresponding to the active localities, ordered by increasing index value, as defined in <<ACE-Localities>>.
+//These are used as a variable length prefix to the POLYVAL computation, to create unique SIV values. Using these as a prefix allows some degree of pre-computation.
+During SCC export and import, these Locality Secrets are prepended, in ascending index order, to the input of the AEAD tag computation.
+If the _Locality_ field is zero, no Locality Secrets are prepended.
 
 The export operation maintains a per-CR flag indicating that an export is in progress.
 The reason is that operations that modify the internal state may be performed on a CR with an interrupted export operation pending.
@@ -3748,7 +3756,7 @@ Data Structures:::
 * *Provisioning Input* (Content): Empty.
 
 NOTE: In the Metadata, Algorithm only defines a curve.
-DirectionPolicy enables signature generation (bit 12) and verification (bit 13), where all four combinations are admissible.
+AlgorithmPolicy enables signature generation (bit 12) and verification (bit 13), where all four combinations are admissible.
 
 * *Internal State* (Content):
  ** `HasGenerator`: Bool.
