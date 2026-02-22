@@ -402,44 +402,50 @@ The same event may also trigger a vertical or horizontal trap; the handler may i
 |Value | Mnemonic                   | Examples (((ACE, error codes)))
 |  0   | ace_err_no_error           | No error.
 |  1   | ace_err_import_auth        | Authentication failure with `ace.import`.
-|  2   | ace_err_unconfigured       | Use of an unconfigured, or partially configured CR as a source in any instruction except `ace.size`.
-Use of ACEIOBUF as an input or an output when it was unconfigured.
+|  2   | ace_err_unconf_CR          | Use of an unconfigured, or partially configured CR as a source in any instruction except `ace.size`.
 Use of an out of range CR with indirect addressing.
-|  3   | ace_err_invalid_CR         | Attempted to use an _invalid_, but not expired, CR.
-|  4   | ace_err_expired_CR         | Attempted to use an expired CR.
-|  5   | ace_err_memory             | Insufficient CRF memory for configuration instruction.
-|  6   | ace_err_unimplemented      | Not implemented algorithm or variant.
+|  3   | ace_err_unconf_buf         | Use of ACEIOBUF as an input or an output when it was unconfigured.
+|  4   | ace_err_invalid_CR         | Attempted to use an _invalid_, but not expired, CR.
+|  5   | ace_err_expired_CR         | Attempted to use an expired CR.
+|  6   | ace_err_memory             | Insufficient CRF memory for configuration instruction.
+|  7   | ace_err_unimpl             | Not implemented algorithm or variant.
 State number not allowed in current algorithm in `ace.state`.
-|  7   | ace_err_invalid_value      | Invalid value, except ace_err_unimplemented (see below).
-|  8   | ace_err_privilege          | Violation of usage control policies in Metadata (including Filters).
-|  9   | ace_err_auth               | Authentication failure in an algorithm.
+|  8   | ace_err_invalid_value      | Invalid value, except ace_err_unimpl (see below).
+|  9   | ace_err_privilege          | Violation of Usage Control policies.
+| 10   | ace_err_auth               | Authentication failure in an algorithm.
 |===
 
+////
 ace_err_invalid_value covers, among others:
 
-* Invalid Metadata in `ace.prov` or `ace.import` (other than `ace_err_unimplemented`), such as, for instance: Nonzero bits in reserved fields; Unsupported _Locality_ value; and Nonzero _StateNumber_ in a PI.
+* Invalid Metadata in `ace.prov` or `ace.import` (other than `ace_err_unimpl`), such as, for instance: Nonzero bits in reserved fields; Unsupported _Locality_ value; and Nonzero _StateNumber_ in a PI.
 * An ACE operation issued with an invalid or zero ACEIOBUF transfer length (`aceiobuftop` − `acestart`); see <<ACE-CSR-acestart>> and <<ACE-CSR-aceiobuftop>>.
 * Invalid operand to `ace.restrict`.
 
-// Using an incomplete CC in `ace.size` is allowed.
+Using an incomplete CC in `ace.size` is allowed.
+////
 
-[comment]
---
+We now list the errors in order of priority.
+
 [[norm:ace_exc_priority]]
 .ACE error priority in decreasing priority order.
 [float="center",align="center",width="100%",cols="^9%,>7%,<84%",options="header"]
 |===
 .>|Priority   .>|Error +
 Code        .>|Description
-.>|_Highest_  | 7      .>| Attempt to use an invalid CR.
-|           .>| 6      .>| Unconfigured or partially configured CR
-|           .>| 5, 4   .>| Invalid Metadata section in `ace.prov` or `ace.import`, including specifying a not implemented algorithm or side-channel protected variant.
-|           .>| 3      .>| Insufficient CRF memory.
-|           .>| 2, 1   .>| Access Control Failure or authentication failure with `ace.import`
-|           .>| 1      .>| Authentication failure in an algorithm.
-.>|_Lowest_ .>| 0      .>|No error
+.>|_Highest_  | 4      .>| Attempt to use an invalid, but not expired, CR.
+|           .>| 2      .>| Attempt to use an out of range, unconfigured or partially configured CR.
+|           .>| 5      .>| Attempt to use an expired CR.
+|           .>| 9      .>| Violation of Usage Control policies.
+|           .>| 8      .>| Invalid value, except ace_err_unimpl or invalid state.
+|           .>| 7      .>| Not implemented algorithm or variant. State number not allowed in current algorithm in `ace.state`.
+|           .>| 5, 6   .>| Invalid Metadata section in `ace.prov` or `ace.import`, including specifying a not implemented algorithm or side-channel protected variant.
+|           .>| 4      .>| Insufficient CRF memory.
+|           .>| 3      .>| Use of ACEIOBUF as an input or an output when it was unconfigured.
+|           .>| 2, 1   .>| Usage Control Failure or authentication failure with `ace.import`.
+|           .>| 10     .>| Authentication failure in an algorithm.
+.>|_Lowest_ .>| 0      .>| No error.
 |===
---
 
 //
 
@@ -499,7 +505,7 @@ This design obviates the need to separate data transfer from cryptographic proce
 `aceiobuflen` is an XLEN-bit RW CSR that programs the ACEIOBUF length for use by `ace.input` and `ace.output`.
 Writing this register-even when re-writing the old value-also zeroes the buffer and sets `aceiobuftop` to the same length and `acestart` to zero.
 
-When `aceiobuflen` is zero, the ACEIOBUF is _unconfigured_ (analogous to an unconfigured CR in state Initial); `ace.input` and `ace.output` raise `ace_err_unconfigured`.
+When `aceiobuflen` is zero, the ACEIOBUF is _unconfigured_ (analogous to an unconfigured CR in state Initial); `ace.input` and `ace.output` raise `ace_err_unconf_buf`.
 
 Writing a value larger than the implementation maximum raises `ace_err_memory`.
 
@@ -514,9 +520,9 @@ To discover the maximum buffer size supported by an implementation, or by the cu
 (((CSR, `aceiobuftop`)))
 `aceiobuftop` is an XLEN-bit RW CSR that marks the upper bound of the buffer range used by `ace.input` and `ace.output`. Together with `acestart`, it defines the active transfer window.
 
-The constraints `acestart` {le} `aceiobuftop` {le} `aceiobuflen` must hold; violating either bound raises `ace_err_invalid_value`. Modifying `aceiobuftop` does not alter or invalidate buffer contents.
+The constraints `acestart` {le} `aceiobuftop` {le} `aceiobuflen` must hold; violating either bound raises ace_err_invalid_value. Modifying `aceiobuftop` does not alter or invalidate buffer contents.
 
-Using ACEIOBUF when `aceiobuftop` − `acestart` is zero (with `aceiobuflen` nonzero) or yields an invalid transfer size raises `ace_err_invalid_value`.
+Using ACEIOBUF when `aceiobuftop` − `acestart` is zero (with `aceiobuflen` nonzero) or an invalid transfer size raises ACE error ace_err_invalid_value.
 
 NOTE: `aceiobuftop` allows per-operation length adjustment without reconfiguring ACEIOBUF. For example, when processing a residual block shorter than the nominal block size, or when supplying a short IV or nonce, software adjusts only `aceiobuftop` rather than resizing the buffer—avoiding the zeroing and potential resizing overhead that a write to `aceiobuflen` would entail.
 
@@ -618,6 +624,11 @@ _Description_::
 The PI must be stored at an 8-byte aligned address, and its length must be a multiple of 8 bytes.
 +
 All previous contents of the target CR are destroyed, even if the instruction fails.
++
+ACE error ace_err_unimpl is raised if the combination of Algorithm, AlgorithmPolicy, and SCProtection is not supported.
++
+ACE error ace_err_invalid_value is raised if the Metadata is invalid (other than `ace_err_unimpl`), such as, for instance:
+nonzero bits in reserved fields; unsupported _Locality_ value; or a nonzero _StateNumber_ in a PI.
 +
 Similarly to vector store instructions, `ace.prov` appears to other harts as a sequence of individual reads.
 +
@@ -751,6 +762,11 @@ _Description_::
 The SCC base address must be 8-byte aligned.
 +
 All previous contents of the target CR are destroyed, even if the instruction fails.
++
+ACE error ace_err_unimpl is raised if the combination of Algorithm, AlgorithmPolicy, and SCProtection is not supported.
++
+ACE error ace_err_invalid_value is raised if the Metadata is invalid (other than `ace_err_unimpl`), such as, for instance:
+nonzero bits in reserved fields; or unsupported _Locality_ value..
 +
 The bit S takes the values 0 (false) or 1 (true).
 It is set to true if the key is in a system-defined format
@@ -1442,7 +1458,7 @@ M : array of bytes // in memory
 Metadata : bits(64) = M[0 .. 7]
 z ← PI_content_size(Metadata[31:0]);
 
-if (z == 0) { error ace_err_unimplemented; }
+if (z == 0) { error ace_err_unimpl; }
 if (there is not enough memory for the algorithm encoded in the Metadata) then
    { error ace_err_memory; }
 if (Metadata is inconsistent) { error ace_err_invalid_value; }
@@ -1551,7 +1567,7 @@ The import algorithm needs some special care:
 
 * During the import operation, the hardware saves the `StateNumber` value in the metadata and sets
 `mh.StateNumber <- ace_state_invalid` instead until the end of the import operation, where `mh.StateNumber` is set to the correct value.
-// ** The flag is also used by the implementation to raise error ace_err_unconfigured instead of ace_err_invalid_CR upon an attempt to use the partially imported CR.
+// ** The flag is also used by the implementation to raise error ace_err_unconf_CR instead of ace_err_invalid_CR upon an attempt to use the partially imported CR.
 ** Since context switching code cannot export a partially imported CR when saving the state, it will clear the CR instead, forcing the hardware to restart the import operation.
 ** Exceptions that immediately return to the interrupted operation, such as memory exceptions, may cause the hardware to resume the operation instead, if the CR was touched.
 
@@ -1587,7 +1603,7 @@ CR.Metadata_header.StateNumber ← ace_state_invalid;
 z ← SCC_content_size(mh);
 z ← z + mh.AdditionalData * 8;
 
-if (z == 0) { error ace_err_unimplemented; }
+if (z == 0) { error ace_err_unimpl; }
 if (there is not enough memory for the algorithm encoded in the Metadata) then
     error ace_err_memory;
 
@@ -1757,7 +1773,7 @@ The instructions permitted in each algorithm state are typically `ace.exec` and 
 For `ace.exec`, only one of its forms (see <<ACE-instruction-exec>>) is allowed per state, along with the corresponding replacement sequence defined in <<ACE-replacement-instructions>>.
 If a Form of `ace.exec`, or `ace.state` not explicitly allowed in the current algorithm state is used, then an illegal instruction exception is raised.
 
-If a non-allowed state transition is requested in `ace.state`, including requesting encryption or decryption from a CC not allowing it, an ACE error ace_err_unimplemented is raised.  This also invalidates the CR.
+If a non-allowed state transition is requested in `ace.state`, including requesting encryption or decryption from a CC not allowing it, an ACE error ace_err_unimpl is raised.  This also invalidates the CR.
 
 Pseudocode is provided to illustrate the software implementation of ACE-supported algorithms using the ACE ISA.
 For clarity, the pseudocode generally uses fixed parameters and omits the `ace.exec` Forms A-C replacement sequences.
@@ -1805,7 +1821,7 @@ any occurrence of the “Original Instructions” in <<ACE-replacement-instructi
 The only operations performed by `ace.input` and `ace.output` is to provide the inputs and read out the output of the operations.
 The entirety of the computations and internal state changes of the `ace.exec` and `ace.state` operations remains in the `ace.exec` and `ace.state` operations
 
-`ace.input` and `ace.output` may be used if enabled and `aceiobuflen` is non-zero, otherwise an ACE error ace_err_unconfigured is raised.
+`ace.input` and `ace.output` may be used if enabled and `aceiobuflen` is non-zero, otherwise an ACE error ace_err_unconf_buf is raised.
 If `aceiobuflen` is non-zero, and the range size `aceiobuftop` - `acestart` is zero or an invalid size for the algorithm, the `ace.exec` operation is not performed and ACE error ace_err_invalid_value is raised.
 
 In all cases, the `ace.input` and `ace.output` instructions must be temporarily tied to a specific context in order to properly determine the allowed sequences.
