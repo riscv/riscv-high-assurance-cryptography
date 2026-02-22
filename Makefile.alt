@@ -16,7 +16,7 @@ DOCS := \
 	ace.adoc
 
 DATE ?= $(shell date +%Y-%m-%d)
-VERSION ?= v0.3.2
+VERSION ?= v0.3.3
 REVMARK ?= Draft
 DOCKER_IMG := docker.io/riscvintl/riscv-docs-base-container-image:latest
 DOCKER_BIN ?= docker
