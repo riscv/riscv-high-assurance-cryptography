@@ -296,7 +296,7 @@ ACE maintains a table of 128-bit Locality Secrets (LS), the Locality Secrets Tab
 <<ACE-locality-indexes>> lists the architected Localities.
 Eleven LST entries are defined: the first six constitute the _HW Binding Group_, binding SCCs to the hardware,
 entries 6–7 form the _Boot Session Group_, and entries 8–10 form the _SW Filter Group_.
-Seven of the eight _Locality_ field bits are defined; bit 7 is reserved for future use or custom Localities [.red]#({warn} To be defined.)#.
+Seven of the eight _Locality_ field bits are defined; bit 7 is reserved for future use or custom Localities #({warn} To be defined.)#.
 For each Locality we provide: index in the LST; domain (SoC-, device-, VM-wide, or per-process); configurability; bit-field encoding and value.
 
 [[ACE-locality-indexes]]
@@ -386,7 +386,6 @@ ACE provides a number of unprivileged CSRs.
 |===
 
 //
-
 
 [[ACE-CSR-ace-error]]
 ==== `aceerror`
@@ -1987,16 +1986,30 @@ State Machine:::
       ..   `OUTPUT[i+b-1:i] <- enc_blk(key, INPUT[i+b-1:i])` }
 
 //
-
-[NOTE]
-====
-Supporting vector lengths smaller than a cipher's block size would not only complicate both the architecture and its implementation, but it would also burden the software using the feature. We could define an buffer in the internal state which is filled by repeated Form B `ace.exec` instructions until `b` bits have been provided, in which case the cryptographic function is performed, and successive Form C `ace.exec` instructions would be used to output the result.  The tracking mechanism could use `acesequence` values from 1 to 2`b/IOLEN` to determine the Form of the next expected operation and when to perform the encryption or decryption operation.
-
-A simpler approach in this case, would be to reconfigure the vector lengths, to use vector register groups, or to use the `ace.input` and `ace.output` instructions.
-We do define piece-wise loading of the state for functions with significantly longer inputs, such as hash functions, because these may use the state of the hash function to absorb partial inputs instead of requiring a separate buffer to be used only when full.
-====
-
 In <<ACE-pseudocode-ECB-encryption>> we illustrates how to use an ECB CC to encrypt a block of data.
+
+
+===== Note on Short Vectors
+
+_This paragraph is not normative._
+
+Supporting vector lengths smaller than a cipher's block size in modes of encryption would work as follows.
+
+. If `IOLEN` is smaller than `b`, we first add an internal `b`-bit buffer to the internal state of the CR.
+. For `r` = {lceil}``IOLEN``/``b``{rceil}, we replace a Form A `ace.exec` instruction by `r` Form B `ace.exec` instruction
+followed by `r` Form C `ace.exec` ones. These are tracked in `acesequence` using values 1 to 2``r``.
+. The Form B `ace.exec` instructions read bits [`IOLEN`-1:0], then [2``IOLEN``-1,``IOLEN``], and so on,
+discarding the `b`-`r`{interpunct} `IOLEN` significant bits of the last input if `IOLEN` does not divide `b` exactly.
+. The `r`-th instruction also applies the primitive to this buffer.
+. Then Form C `ace.exec` instructions write out bits [`IOLEN`-1:0], then [2``IOLEN``-1,``IOLEN``], and so on, of the result into the output vector register,
+padding the last output with `b`-`r`{interpunct} `IOLEN` zeros in the most if `IOLEN` does not divide `b` exactly.
+
+Specifying this behavior would complicate both the architecture and its implementation.
+It would require a `b`-bit buffer for each CR implementing such a cipher when `IOLEN` is smaller than `b`, whereas a single ACEIOBUF would require fewer resources.
+It would also burden the software using the feature by requiring to use more instructions, potentially in variable length loops for portability.
+Using existing architectural features, such as reconfiguring the vector lengths, or using vector register groups, would be a simpler approach–beside the aforementioned use of ACEIOBUF.
+
+We do define piece-wise loading of the state for functions with significantly longer inputs, such as hash functions, because these may use the state of the hash function to absorb partial inputs instead of requiring a separate buffer to be used only when full, and for some architectures the long inputs to hash functions could require unsupported vector lengths.
 
 //
 
@@ -3118,7 +3131,7 @@ Data Structures:::
 [%autowidth,cols="^,<,<",options="header"]
 |===
 | Pos. | Size in Bytes            | Field
-|   i  | If keyed: `k`/8 or 8     | `key` or System Key index
+|   i  | If keyed: `k`/8, else 8  | `key` or System Key index
 |===
 --
 +
@@ -3136,10 +3149,11 @@ Data Structures:::
 * *Serialized Content*:
 +
 --
-[cols="^6%,^19%,<25%,<50%",options="header"]
+[cols="^6%,<18%,<18%,<58%",options="header"]
 |===
 |  Pos. | Size in Bytes            | Field                       | Notes
-|    i  | If keyed: `k`/8 or 8     | `key` or System Key index   | --
+.2+|  i | If keyed: `k`/8 or 8     | `key` or SKT index          | --
+<|         If unkeyed: 0            | none                        | --
 |   ii  | `n`/8                    | `state`                     | --
 |  iii  | `2`                      | `last_block_len`            | Only if this Hash/MAC has special internal treatment for a fractional last block that goes beyond padding and appending the length, which are handled by user software. Otherwise, this is zero.
 |   iv  | `2`                      | `block_base`                | Amount of data stored so far into `block`.  Only if used by the algorithm, else zero padding.
@@ -3274,17 +3288,17 @@ These primitives are designed around a special parameter choice of KECCAK cite:[
 These are instantiations of the algorithm specified in <<ACE-hash-functions>>, and we need to
 describe only the differences with respect to the behavior described there.
 
+//
+
 Parameters:::
 
-* `b` = rate (8|`b`). It can be 1600 - `c` with `c` = 448, 512, 768, or 1024 being the capacity.
+* `b` = rate (8|`b`). It is `b` = 1600 - `c`, where `c` = 448, 512, 768, or 1024 is the capacity.
 * `n` = 1600
 * `t` = `c/2`
 
 Data Structures:::
 
 * *Provisioning Input* (Content): Empty.
-
-//
 
 * *Internal State* (Content):
  ** `state`: `n` bits.
@@ -3306,9 +3320,8 @@ Data Structures:::
 --
 +
 
-//
-
 Algorithm-Specific Functions:::
+
  * `P()`: computes `KECCAK-p[1600, 24]` on `state`.
  * `absorb()`: in this case there is no explicit operation to copy data into `state`, as the inputs will be directly XORed into it, however `absorb` applies `P()` to the state.
  * `absorb_last_block()`: this is a NOP.
@@ -3403,7 +3416,6 @@ Data Structures:::
 +
 
 Algorithm-Specific Functions:::
-
 * `ASCON(p)` applies `p` rounds of ASCON to the `state`.
 
 State Machine:::
@@ -3755,7 +3767,7 @@ Parameters:::
 
 * For secp256r1 (NIST P-256) the size `b` of the main fields (coordinates, signature R and S fields, scalars) is 256 bits.
 The length `h` of the hash used in the signature scheme is 256 bits.
-The random number (the nonce in signature generation) is a `h`-bit string as well.
+The random number used as nonce in signature generation is an `h`-bit string as well.
 
 * For secp384r1 (NIST P-384), `b` is 384 bits, and `h` is 384 bits.
 
