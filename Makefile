@@ -18,7 +18,9 @@ DOCS := \
 DATE ?= $(shell date +%Y-%m-%d)
 VERSION ?= v0.3.3
 REVMARK ?= Draft
-DOCKER_IMG := docker.io/riscvintl/riscv-docs-base-container-image:latest
+DOCKER_IMG := ghcr.io/riscv/riscv-docs-base-container-image:latest
+#DOCKER_IMG := docker.io/riscvintl/riscv-docs-base-container-image:latest
+#DOCKER_IMG := docker.io/riscvintl/riscv-docs-base-container-image:70fdb2d2dd1f89eff6f01aa2458801794aa22d5d
 DOCKER_BIN ?= docker
 
 ifneq ($(SKIP_DOCKER),true)
@@ -57,12 +59,14 @@ OPTIONS := --trace \
            -a pdf-fontsdir=docs-resources/fonts \
            -a pdf-theme=src/riscv-pdf.yml \
            $(XTRA_ADOC_OPTS) \
-		   -D build \
+           -D build \
            --failure-level=ERROR
+
+#           -a pdf-theme=docs-resources/themes/riscv-pdf.yml \
 
 REQUIRES := --require=asciidoctor-bibtex \
             --require=asciidoctor-diagram \
-			--require=asciidoctor-lists \
+            --require=asciidoctor-lists \
             --require=asciidoctor-mathematical \
             --require=asciidoctor-sail
 
