@@ -15,6 +15,10 @@
 DOCS := \
 	ace.adoc
 
+#DOCS := \
+#	test.adoc
+
+
 DATE ?= $(shell date +%Y-%m-%d)
 VERSION ?= v0.3.3
 REVMARK ?= Draft
