@@ -14,8 +14,8 @@ The ACE Privileged Architecture consists of CSRs and of optional custom instruct
 * If `Zlv` or `Zlio` are implemented: `misa` must implement the `L` bit, `*status` must implement `ACES`.
 * `SmaceCSK` {implies} Defines the Context Sealing Key CSRs (`macecsk{0..7}`), which are all MRO.
 * `SmaceCSKw` {implies} ACE Context Sealing Key CSRs are MRW. Depends on `SmaceCSK`.
-* `Smacepbootscrt` {implies} Defines the ACE OS Secret CSRs (`macePhysBootSecret{0..3}`).
-* `Smacevbootscrt` {implies} Defines the ACE Boot Secret CSRs (`haceVirtBootSecret0{0..3}`).
+* `Smacepbootscrt` {implies} Defines the ACE OS Secret CSRs (`macePhysBootScrt{0..3}`).
+* `Smacevbootscrt` {implies} Defines the ACE Boot Secret CSRs (`haceVirtBootScrt0{0..3}`).
 * `Smacestatus` {implies} Defines the ACES per CC CSRs (`scrstatus`, `vscrstatus`, `mcrstatus`).
 
 // ////////////////////////////////////////////////////////////////////
@@ -31,19 +31,22 @@ ACE extends `*status` and `misa`, and provides up to 4 direct and up to 28 indir
 
 [[ACE-CSRs-priv]]
 .ACE Privileged CSRs.
-[cols="^12%,^12%,<28%,<48%"]
+[cols="^12%,^12%,<26%,<50%"]
 [float="center",align="center",options="header"]
 |===
-| 0xXXX       | SRW        | `scrstatus`                 | Per-CR dirtiness and laziness tracking
-| 0xXXX       | HRW        | `vscrstatus`                | Per-CR dirtiness and laziness tracking
-| 0xXXX       | MRW        | `mcrstatus`                 | Per-CR dirtiness and laziness tracking
-| 0xXXX       | SRW        | `sacetrapmask`              | [.red]#{warn} Discuss:# Mask to determine which ACE exceptions vertically trap
-| (Indirect)  | MRW (RZ)   | `macecsk{0..7}`             | ACE Context Sealing Key
-| (Indirect)  | MRW (RZ)   | `macePhysBootSecret{0..3}`  | Locality: Physical (host) Boot Session Secret
-| (Indirect)  | HRW (RZ)   | `haceVirtBootSecret{0..3}`  | Locality: Virtual (guest) Boot Session Secret
-| (Indirect)  | MRW (RZ)   | `maceLocality{0..3}`        | Locality: Mutually isolate processes below M-mode
-| (Indirect)  | SRW (RZ)   | `haceLocality{0..3}`        | Locality: Mutually isolate processes below H-mode
-| (Indirect)  | HRW (RZ)   | `saceLocality{0..3}`        | Locality: Mutually isolate U-mode processes
+| Address     | Privilege  | Field                    | Description
+| 0xXXX       | SRW        | `scrstatus`               | Per-CR dirtiness and laziness tracking
+| 0xXXX       | HRW        | `vscrstatus`              | Per-CR dirtiness and laziness tracking
+| 0xXXX       | MRW        | `mcrstatus`               | Per-CR dirtiness and laziness tracking
+| 0xXXX       | SRW        | `sacetrapmask`            | [.red]#{warn}:# Mask to determine which ACE exceptions vertically trap from U (V=0) or VS (V=1) to S
+| 0xXXX       | MRW        | `vsacetrapmask`           | [.red]#{warn}:# Mask to determine which ACE exceptions vertically trap from U (V=1) to VS
+| 0xXXX       | SRW        | `macetrapmask`            | [.red]#{warn}:# Mask to determine which ACE exceptions vertically trap from S/HS to M
+| (Indirect)  | MRW (RZ)   | `macecsk{0..7}`           | ACE Context Sealing Key
+| (Indirect)  | MRW (RZ)   | `macePhysBootScrt{0..3}`  | Locality: Physical (host) Boot Session Secret
+| (Indirect)  | HRW (RZ)   | `haceVirtBootScrt{0..3}`  | Locality: Virtual (guest) Boot Session Secret
+| (Indirect)  | MRW (RZ)   | `maceLocality{0..3}`      | Locality: Mutually isolate processes below M-mode
+| (Indirect)  | SRW (RZ)   | `haceLocality{0..3}`      | Locality: Mutually isolate processes below H-mode
+| (Indirect)  | HRW (RZ)   | `saceLocality{0..3}`      | Locality: Mutually isolate U-mode processes
 |===
 
 // ////////////////////////////////////////////////////////////////////
@@ -53,7 +56,8 @@ ACE extends `*status` and `misa`, and provides up to 4 direct and up to 28 indir
 
 {empty}
 (((CSR, ACE field in `misa`)))
-Bit `L` (11) of `misa` indicates that the ACE extension is present. If ACE is implemented, this bit shall not be read-only zero.
+Bit `L` (11) of `misa` indicates that the ACE extension is present.
+If ACE is implemented, this bit shall not be read-only zero.
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -120,14 +124,14 @@ In implementations with a writable `misa.L`, `vsstatus.ACES` may be present even
 (((CSR, `scrstatus`)))
 The 64-bit register `scrstatus` tracks per-CR dirtiness.
 
-`scrstatus[__i__]` encodes Clean (0) or Dirty (1) for CR #__i__.
+`scrstatus`[__i__] encodes Clean (0) or Dirty (1) for ``K(``__i__``)``.
 
 Bits [63:32] are WPRI.
 
 When the privilege mode is S, VS, or U:
 
-* Any instruction that modifies CR #__i__ sets `scrstatus[__i__]` to Dirty.
-* Implementations may set `scrstatus[__i__]` to Dirty from Clean at any time, even without a state change.
+* Any instruction that modifies ``K(``__i__``)`` sets `scrstatus`[__i__] to Dirty.
+* Implementations may set `scrstatus`[__i__] to Dirty from Clean at any time, even without a state change.
 // The main reason for allowing this is to permit implementations that do not
 // track the state and make fields read-only Dirty, but we could also require
 // precise tracking and hide the CSRs behind an extension, so implementations
@@ -148,7 +152,7 @@ NOTE: `sstatus.ACES` is also in effect.
 (((CSR, `vscrstatus`)))
 The 64-bit register `vscrstatus` tracks per-CR dirtiness for virtualized contexts.
 
-`vscrstatus[__i__]` encodes Clean (0) or Dirty (1) for CR #__i__.
+`vscrstatus`[__i__] encodes Clean (0) or Dirty (1) for ``K(``__i__``)``.
 
 Bits [63:32] are WPRI.
 
@@ -157,8 +161,8 @@ Bits [63:32] are WPRI.
 When the privilege mode is VS or VU:
 
 * `vscrstatus` shadows `scrstatus`; accesses that would target `scrstatus` instead access `vscrstatus`.
-* Any instruction that modifies CR #__i__ sets `vscrstatus[__i__]` to Dirty.
-* Implementations may set `vscrstatus[__i__]` to Dirty from Clean at any time, even without a state change.
+* Any instruction that modifies ``K(``__i__``)`` sets `vscrstatus`[__i__] to Dirty.
+* Implementations may set `vscrstatus`[__i__] to Dirty from Clean at any time, even without a state change.
 
 NOTE: `sstatus.ACES`, `vsstatus.ACES`, and `scrstatus` are also in effect when V=1.
 
@@ -178,49 +182,72 @@ A `mcrstatus` register may be defined, _mutatis mutandis_, in the same manner as
 [[ACE-lazy-loading]]
 ==== Extension of `*crstatus` for Lazy Loading
 
+Lazy loading defers the restoration of a CR from its saved SCC at context restore.
+Instead, the CR is marked as “lazy”.
+Any subsequent access to that CR—including export, but not operations that would overwrite it (such as clear, provisioning, or import)—causes a trap to the environment that holds the authoritative SCC.
+The trap handler checks whether the associated SCC can be imported and, if not, it must select another configured CR first, export it, free it and mark it instead as “lazy”.
+The selection of which CR to free is delegated to software or to an implementation defined mechanism.
+// may be performed by software (for example, via a random choice) or may be assisted by an implementation‑defined hardware implementation of a least-recently-used algorithm.
+
+We consider a model where M-mode always saves and restores the entire configured context, whereas the context switch handlers at H and (V)S may implement lazy loading.
+
+Since processes can be interrupted by any higher-privileged mode, U-mode processes may be interrupted by H or VS.
+Therefore, upon resuming a VM, it is important to know _which_ environment has been the last one to export the authoritative value of a given CR.
+
 To support lazy loading of CR values, `scrstatus` and `vscrstatus` are extended to 64 bits.
-On RV32, 32-bit CSRs `scrstatush` and `vscrstatush` shadow, respetively, bits [63:32] of `scrstatus` and `vscrstatus`.
+On RV32, 32-bit CSRs `scrstatush` and `vscrstatush` shadow, respectively, bits [63:32] of `scrstatus` and `vscrstatus`.
 
-_X_``crstatus[__i__+32]`` encodes Standard (0) or Lazy (1) for CR #__i__.
+_X_``crstatus``[__i__+32] encodes Normal (0) or Lazy (1) for ``K(``__i__``)``.
 
-When X``crstatus[__i__+32]`` is Lazy, the semantic of but X``crstatus[__i__]`` changes as follows:
-X``crstatus[__i__]`` is 0 to signal that the authoritative value of the CR has been saved in VS, or in S if V=0.
-X``crstatus[__i__]`` is 1 to signal that the authoritative value of the CR has been saved in S and V=1.
+When _X_``crstatus``[__i__+32] is set to Lazy (1), the semantics of bit _X_``crstatus``[__i__] change as follows:
 
-These extensions to X``crstatus`` address the use case where context switching code does not restore a CR upon state restore, but sets the X``crstatus[__i__+32]`` bit instead to cause a trap on access ``K(``__i__``)`` and this trap serves to import the value.  The optimization can be extremely efficient if all the trap handler has to do is to check whether the associated SCC can be imported and, if not, to free another CR first. The latter can use a random selection or an implementation-defined HW assisted mechanism that marks the longest untouched configured CR.
+** _X_``crstatus``[__i__] is 0 if the authoritative value of ``K(``__i__``)`` has been saved in S when V=0, or in VS when V=1.
+** _X_``crstatus``[__i__] is 1 if the authoritative value of ``K(``__i__``)`` has been saved in HS and V=1.
 
-Therefore, it is important to know _which_ environment has been the last one to export the authoritative value of ``K(``__i__``)``.
+In other words, with lazy loading enabled, CRs can have four states.
+Beside (_X_``crstatus``[__i__+32], _X_``crstatus``[__i__]) =
+(0,0) and (0,1), which correspond to Clean and Dirty, respectively,
+(1,0) and (1,1) are called Lazy-S and Lazy-H.
 
-This feature would be necessary also to support VM migration, where it may happen that a VM is migrated to a target device where the CRF capacity is insufficient to import all the SCCs saved by the hypervisor.
+Using these extensions to _X_``crstatus``, when a context switching handler does not restore a CR at context restore, it instead sets _X_``crstatus``[__i__+32]
+and _X_``crstatus``[__i__] accordingly.
+When _X_``crstatus``[__i__+32] is set, accessing ``K(``__i__``)`` causes a trap and allows the authoritative value of ``K(``__i__``)`` to be restored.
 
-[WARNING]
-====
-We recommend to define two CSRs: one to set the ad-hoc handler for lazy loading, and one to store the number of the CR to lazy-load.
-====
+NOTE: This feature is not only a context switching optimization, but it necessary to provide enhanced support VM migration, where it may happen that a VM is migrated to a target device where the CRF capacity is insufficient to import all the SCCs saved by the hypervisor.
+
+// [WARNING]
+// ====
+// We recommend to define two CSRs: one to set the ad-hoc handler for lazy loading, and one to store the number of the CR to lazy-load.
+// ====
 
 // ////////////////////////////////////////////////////////////////////
 
 ==== Propagation of `*crstatus` Status Values
 
-Per-CR status propagates from less-privileged to more-privileged modes, analogously to the FS, VS, and ACES fields in `*status`, but with only two states: Clean and Dirty. Any instruction that sets bit #__i__ of `vscrstatus` (resp. `scrstatus`) to Dirty also sets the corresponding bit of `scrstatus` and `mcrstatus` (resp. `mcrstatus`). The ACES fields of `*status` are also set accordingly.
+The per-CR status in `vscrstatus` (resp. `scrstatus`) propagates from less-privileged to more-privileged modes, analogously to the FS, VS, and ACES fields in `*status`.
+
+Any instruction that sets bit #__i__ of `vscrstatus` (resp. `scrstatus`) to Dirty also sets the corresponding bit of `scrstatus` (resp. `mcrstatus`).
+The ACES fields of `*status` are also set accordingly.
 
 // ////////////////////////////////////////////////////////////////////
 
-==== U-mode Status for HFI
-
-_This section is not normative._
-
-A `ucrstatus` in the Unprivileged specification may become useful if the HFI extension is ratified, together with corresponding fields in a `ustatus` CSR.
-This may require the addition of another 32 bits worth of status to signal that the authoritative value of a CR is instead keep by U-mode itself, if such a mechanism is required.
+// ==== U-mode Status for HFI
+//
+// _This section is not normative._
+//
+// A `ucrstatus` in the Unprivileged specification may become useful if the HFI extension is ratified, together with corresponding fields in a `ustatus` CSR.
+// This may require the addition of another 32 bits worth of status to signal that the authoritative value of a CR is instead keep by U-mode itself, if such a mechanism is required.
 
 // ////////////////////////////////////////////////////////////////////
 
-==== `sacetrapmask`
+==== `sacetrapmask`, `vsacetrapmask`, and `macetrapmask`
 
 {empty}
-(((CSR, `sacetrapmask`)))
-Mask to determine which ACE exceptions vertically trap.
+(((CSR, `sacetrapmask`)))(((CSR, `vsacetrapmask`)))(((CSR, `macetrapmask`)))
+Mask to determine which ACE exceptions vertically trap from the less-privileged modes.
 Bit __i__ set makes ACE error __i__+1 cause a trap.
+
+To handle these traps, we use the architectural `*vec`, `*epc`, `*cause`, and `*tval` CSRs.
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -246,27 +273,27 @@ Alternative reconfiguration mechanisms (e.g., a Caliptra-style cite:[caliptra] s
 
 // ////////////////////////////////////////////////////////////////////
 
-[[ACE-CSR-macePhysBootSecret]]
-==== `macePhysBootSecret` Group
+[[ACE-CSR-macePhysBootScrt]]
+==== `macePhysBootScrt` Group
 
 {empty}
-(((CSR, `macePhysBootSecret`)))
-The `macePhysBootSecret` group consists of M-mode WARZ XLEN-bit CSRs, accessed via Indirect CSR Access: four in RV32, two in RV64.
+(((CSR, `macePhysBootScrt`)))
+The `macePhysBootScrt` group consists of M-mode WARZ XLEN-bit CSRs, accessed via Indirect CSR Access: four in RV32, two in RV64.
 
-A write to the __i__-th CSR sets bits [(_i_+1)XLEN−1 : _i_·XLEN] of the Locality Secret PhysBootSecret (<<ACE-locality-indexes>>).
+A write to the __i__-th CSR sets bits [(_i_+1)XLEN−1 : _i_·XLEN] of the Locality Secret PhysBootScrt (<<ACE-locality-indexes>>).
 
 Access outside M-mode or Debug mode raises an illegal instruction exception.
 
 // ////////////////////////////////////////////////////////////////////
 
-[[ACE-CSR-haceVirtBootSecret]]
-==== `haceVirtBootSecret` Group
+[[ACE-CSR-haceVirtBootScrt]]
+==== `haceVirtBootScrt` Group
 
 {empty}
-(((CSR, `haceVirtBootSecret`)))
-The `haceVirtBootSecret` group consists of H- and VS-mode WARZ XLEN-bit CSRs, accessed via Indirect CSR Access: four in RV32, two in RV64.
+(((CSR, `haceVirtBootScrt`)))
+The `haceVirtBootScrt` group consists of H- and VS-mode WARZ XLEN-bit CSRs, accessed via Indirect CSR Access: four in RV32, two in RV64.
 
-A write to the __i__-th CSR sets bits [(_i_+1)XLEN−1 : _i_·XLEN] of the Locality Secret VirtBootSecret (<<ACE-locality-indexes>>).
+A write to the __i__-th CSR sets bits [(_i_+1)XLEN−1 : _i_·XLEN] of the Locality Secret VirtBootScrt (<<ACE-locality-indexes>>).
 
 Access below VS-mode raises an illegal instruction exception.
 

@@ -15,16 +15,10 @@
 DOCS := \
 	ace.adoc
 
-#DOCS := \
-#	test.adoc
-
-
 DATE ?= $(shell date +%Y-%m-%d)
 VERSION ?= v0.3.3
 REVMARK ?= Draft
 DOCKER_IMG := ghcr.io/riscv/riscv-docs-base-container-image:latest
-#DOCKER_IMG := docker.io/riscvintl/riscv-docs-base-container-image:latest
-#DOCKER_IMG := docker.io/riscvintl/riscv-docs-base-container-image:70fdb2d2dd1f89eff6f01aa2458801794aa22d5d
 DOCKER_BIN ?= docker
 
 ifneq ($(SKIP_DOCKER),true)
