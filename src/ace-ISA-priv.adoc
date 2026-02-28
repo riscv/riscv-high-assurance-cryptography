@@ -200,15 +200,22 @@ On RV32, 32-bit CSRs `scrstatush` and `vscrstatush` shadow, respectively, bits [
 
 _X_``crstatus``[__i__+32] encodes Normal (0) or Lazy (1) for ``K(``__i__``)``.
 
-When _X_``crstatus``[__i__+32] is set to Lazy (1), the semantics of bit _X_``crstatus``[__i__] change as follows:
+// When _X_``crstatus``[__i__+32] is set to Lazy (1), the semantics of bit _X_``crstatus``[__i__] change as follows:
+//
+// ** _X_``crstatus``[__i__] is 0 if the authoritative value of ``K(``__i__``)`` has been saved in S when V=0, or in VS when V=1.
+// ** _X_``crstatus``[__i__] is 1 if the authoritative value of ``K(``__i__``)`` has been saved in HS and V=1.
+//
+// In other words, with lazy loading enabled, CRs can have four states.
+// Beside (_X_``crstatus``[__i__+32], _X_``crstatus``[__i__]) =
+// (0,0) and (0,1), i.e., Clean and Dirty,
+// there are also (1,0) and (1,1), which we call Lazy-S and Lazy-H.
 
-** _X_``crstatus``[__i__] is 0 if the authoritative value of ``K(``__i__``)`` has been saved in S when V=0, or in VS when V=1.
-** _X_``crstatus``[__i__] is 1 if the authoritative value of ``K(``__i__``)`` has been saved in HS and V=1.
+Let us associate numbers to the modes, 0 for U up to 3 for M, but the numbers may be larger in case we have one or more levels of nested virtualization.
 
-In other words, with lazy loading enabled, CRs can have four states.
-Beside (_X_``crstatus``[__i__+32], _X_``crstatus``[__i__]) =
-(0,0) and (0,1), which correspond to Clean and Dirty, respectively,
-(1,0) and (1,1) are called Lazy-S and Lazy-H.
+When a mode A saves CR ``K(``__i__``)`` for a process in mode B < A, and then lazy restores it, it sets the `crstatus` for ``K(``__i__``)`` for all modes below A down to B to Lazy, but since this is done in SW, these values do not propagate. In other word, the `crstatus` for mode A and above becomes Dirty since the handler at mode A clears ``K(``__i__``)``.
+The important thing is that when the process in mode B is resumed and accesses ``K(``__i__``)``, the value is found in the first mode that has the `crstatus` for the ``K(``__i__``)`` different from Lazy. Whether it is lest at Clear or Dirty, the value is authoritative (if it is Dirty, it means just that it is more recent than the value actually stored in some mode above A).
+
+NOTE: This means that the software must support a call to the parent to get the SCC for the __i__-th CR, and it is a good idea to standardise the trap, even make it into an instruction.
 
 Using these extensions to _X_``crstatus``, when a context switching handler does not restore a CR at context restore, it instead sets _X_``crstatus``[__i__+32]
 and _X_``crstatus``[__i__] accordingly.
