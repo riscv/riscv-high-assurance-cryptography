@@ -192,7 +192,7 @@ The selection of which CR to free is delegated to software or to an implementati
 // We consider a model where M-mode always saves and restores the entire configured context, whereas the context switch handlers at H and (V)S may implement lazy loading.
 
 Since a processes can be interrupted by any one of the higher-privileged modes, U-mode processes may be interrupted for the purpose of context switching by handles at VS-, H-, or even M-mode. VS-node software may be interrupted by H-, or even M-mode.
-Therefore, upon resuming a process, it is important to know _which_ environment has been the last one to export the authoritative value of a given CR.
+Therefore, when accessing a lazily restored CR, it is important to know _which_ environment has exported the value of the CR last.
 
 To support lazy loading of CR values, `scrstatus` and `vscrstatus` are extended to XLEN=64 bits.
 On RV32, 32-bit CSRs `scrstatush` and `vscrstatush` shadow, respectively, bits [63:32] of `scrstatus` and `vscrstatus`.
@@ -214,19 +214,18 @@ Let us associate numbers to the modes, with 0 denoting U-mode up to 3 for M-mode
 When a mode A saves CR ``K(``__i__``)`` for a process in mode B < A, and then lazy restores it, it sets the _X_``crstatus``[__i__+32] for all modes from A down to B+1.
 It suffices for A to set this value only at B+1 since the values propagate.
 In a second moment, when the handler at mode A unconfigures ``K(``__i__``)``, the hardware implicitly clears _X_``crstatus``[__i__+32] and sets _X_``crstatus``[i]= Dirty for all modes above A.
-The important thing is that when the process in mode B is resumed and accesses ``K(``__i__``)``, the authoritative SCC is found in the first mode that has the `crstatus` for the ``K(``__i__``)`` not Lazy. (If it is Dirty, it means just that it is more recent than the value stored in some even higher-privileged mode).
+When the process in mode B is resumed and accesses ``K(``__i__``)``, the authoritative SCC is found in the first mode that does not mark its ``K(``__i__``)`` as Lazy in its `crstatus`.
 
 [WARNING]
 This means that the software must support a call to the parent to get the SCC for the __i__-th CR, and it is a good idea to standardize the trap, even make it into an instruction.
 
-Using these extensions to _X_``crstatus``, when a context switching handler does not restore a CR at context restore, it instead sets _X_``crstatus``[__i__+32]
-and _X_``crstatus``[__i__] accordingly.
-When _X_``crstatus``[__i__+32] is set, accessing ``K(``__i__``)`` causes a trap and allows the authoritative value of ``K(``__i__``)`` to be restored.
+Using these extensions to _X_``crstatus``, when a context switching handler does not restore a CR at context restore, it instead sets _X_``crstatus``[__i__+32] to Lazy.
+When _X_``crstatus``[__i__+32] is set, accessing ``K(``__i__``)`` causes the hardware to trap to allow the authoritative value of ``K(``__i__``)`` to be restored.
 
 NOTE: This feature is not only a context switching optimization, but it necessary to provide enhanced support VM migration, where it may happen that a VM is migrated to a target device where the CRF capacity is insufficient to import all the SCCs saved by the hypervisor.
 
-[NOTE]
-(At this point we may return to the two bits, and define the states as Off, Clean, Dirty, Lazy?)
+// [NOTE]
+// (At this point we may return to the two bits, and define the states as Off, Clean, Dirty, Lazy?)
 
 // [WARNING]
 // ====
@@ -237,10 +236,7 @@ NOTE: This feature is not only a context switching optimization, but it necessar
 
 ==== Propagation of `*crstatus` Status Values
 
-The per-CR status in `vscrstatus` (resp. `scrstatus`) propagates from less-privileged to more-privileged modes, analogously to the FS, VS, and ACES fields in `*status`,
-when it is changed by hardware. If it is set by software, there is no propagation, to allow software to cover all situations that mzy occur when a process is interrupted by different modes.
-
-The LAZY statuses are never created by hardware.
+The per-CR status in `vscrstatus` (resp. `scrstatus`) propagates from less-privileged to more-privileged modes, analogously to the FS, VS, and ACES fields in `*status`.
 
 Any instruction that sets bit #__i__ of `vscrstatus` (resp. `scrstatus`) to Dirty also sets the corresponding bit of `scrstatus` (resp. `mcrstatus`).
 The ACES fields of `*status` are also set accordingly.
@@ -264,6 +260,9 @@ Mask to determine which ACE exceptions vertically trap from the less-privileged 
 Bit __i__ set makes ACE error __i__+1 cause a trap.
 
 To handle these traps, we use the architectural `*vec`, `*epc`, `*cause`, and `*tval` CSRs.
+
+[WARNING]
+[.red]#Trap cause constants must be defined during ratification.#
 
 // ////////////////////////////////////////////////////////////////////
 
