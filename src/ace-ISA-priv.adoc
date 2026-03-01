@@ -186,7 +186,7 @@ To support lazy context switching of CR values, `scrstatus` and `vscrstatus` are
 _X_``crstatus``[__i__+32] encodes two states called Normal (0) and Lazy (1) for ``K(``__i__``)``.
 On RV32, 32-bit CSRs `scrstatush` and `vscrstatush` shadow, respectively, bits [63:32] of `scrstatus` and `vscrstatus`.
 
-Using this extension to _X_``crstatus``, when a context switching handler does not restore a CR at context restore, it instead sets _X_``crstatus``[__i__+32] to Lazy.
+Using this extension to _X_``crstatus``, when a context switching handler does not intend to restore ``K(``__i__``)`` at context restore, it sets instead _X_``crstatus``[__i__+32] to Lazy.
 When _X_``crstatus``[__i__+32] is set, accessing ``K(``__i__``)`` causes the hardware to trap to allow the authoritative value of ``K(``__i__``)`` to be restored.
 
 [NOTE]
@@ -201,10 +201,10 @@ Processes can be interrupted for the purpose of context switch by any higher-pri
 U-mode processes may be interrupted for the purpose of context switching by handles at VS-, H-, or even M-mode, and VS-node processes may be interrupted by H- or M-mode.
 Therefore, when accessing a lazily restored CR, it is important to know _which_ environment has exported the value of the CR last.
 
-When a mode A saves CR ``K(``__i__``)`` for a process in mode B < A, and then lazy restores it, it sets the _X_``crstatus``[__i__+32] for all modes from __X__ = A down to B's parent.
+When an exception handler in Mode A saves CR ``K(``__i__``)`` for a process running in Mode B (less privileged than A), and then lazy restores it, it sets the _X_``crstatus``[__i__+32] for all modes from __X__ = A down to B's parent.
 It suffices for A to set this value only at B's parent since the values propagate.
-In a second moment, when the handler at mode A unconfigures ``K(``__i__``)``, the hardware implicitly clears _X_``crstatus``[__i__+32] and sets _X_``crstatus``[i]= Dirty for all modes __X__ above A.
-When the process in mode B is resumed and accesses ``K(``__i__``)``, the authoritative SCC is found in the first mode that does not mark its ``K(``__i__``)`` as Lazy in its `crstatus`.
+In a second moment, the handler at Mode A unconfigures ``K(``__i__``)``, which causes the hardware to implicitly clear _X_``crstatus``[__i__+32] and set _X_``crstatus``[i]= Dirty for all modes __X__ above A.
+When the process in Mode B is resumed and accesses ``K(``__i__``)``, the authoritative SCC is found in the first mode that does not mark its ``K(``__i__``)`` as Lazy in its `crstatus`.
 
 This feature is not only a context switching optimization, but it necessary to provide enhanced support VM migration, where it may happen that a VM is migrated to a target device where the CRF capacity is insufficient to import all the SCCs saved by the hypervisor.
 ====
@@ -258,8 +258,7 @@ Cleared Lazy values also propagate.
 (((CSR, `sacetrapmask`)))(((CSR, `vsacetrapmask`)))(((CSR, `macetrapmask`)))
 Mask to determine which ACE exceptions vertically trap from the less-privileged modes.
 Bit __i__ set makes ACE error __i__+1 cause a trap.
-
-To handle these traps, we use the architectural `*vec`, `*epc`, `*cause`, and `*tval` CSRs.
+These traps are handled using the architectural `*vec`, `*epc`, `*cause`, and `*tval` CSRs.
 
 [WARNING]
 [.red]#Trap cause constants must be defined during ratification.#
