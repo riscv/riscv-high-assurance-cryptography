@@ -180,21 +180,22 @@ A `mcrstatus` register may be defined, _mutatis mutandis_, in the same manner as
 // ////////////////////////////////////////////////////////////////////
 
 [[ACE-lazy-loading]]
-==== Extension of `*crstatus` for Lazy Loading
+==== Extension of `*crstatus` for Lazy Context Switching
 
-Lazy loading defers the restoration of a CR from its saved SCC at context restore.
+_Lazy Context Switching_ defers the restoration of a CR from its saved SCC at context restore.
 Instead, the CR is marked as “lazy”.
-Any subsequent access to that CR—including export, but not operations that would overwrite it (such as clear, provisioning, or import)—causes a trap to the environment that holds the authoritative SCC.
+Any subsequent access to that CR—including export, but not operations that would overwrite it (such as clear, provisioning, or import)—causes a trap to the environment that holds the authoritative SCC: that environment will then import the SCC and return to the initial requester.
 The trap handler checks whether the associated SCC can be imported and, if not, it must select another configured CR first, export it, free it and mark it instead as “lazy”.
 The selection of which CR to free is delegated to software or to an implementation defined mechanism.
+
 // may be performed by software (for example, via a random choice) or may be assisted by an implementation‑defined hardware implementation of a least-recently-used algorithm.
 
 We consider a model where M-mode always saves and restores the entire configured context, whereas the context switch handlers at H and (V)S may implement lazy loading.
 
-Since processes can be interrupted by any higher-privileged mode, U-mode processes may be interrupted by H or VS.
+Since a processes can be interrupted by any one of the higher-privileged modes, U-mode processes may be interrupted by H or VS.
 Therefore, upon resuming a VM, it is important to know _which_ environment has been the last one to export the authoritative value of a given CR.
 
-To support lazy loading of CR values, `scrstatus` and `vscrstatus` are extended to 64 bits.
+To support lazy loading of CR values, `scrstatus` and `vscrstatus` are extended to XLEN=64 bits.
 On RV32, 32-bit CSRs `scrstatush` and `vscrstatush` shadow, respectively, bits [63:32] of `scrstatus` and `vscrstatus`.
 
 _X_``crstatus``[__i__+32] encodes Normal (0) or Lazy (1) for ``K(``__i__``)``.
@@ -209,12 +210,15 @@ _X_``crstatus``[__i__+32] encodes Normal (0) or Lazy (1) for ``K(``__i__``)``.
 // (0,0) and (0,1), i.e., Clean and Dirty,
 // there are also (1,0) and (1,1), which we call Lazy-S and Lazy-H.
 
-Let us associate numbers to the modes, 0 for U up to 3 for M, but the numbers may be larger in case we have one or more levels of nested virtualization.
+Let us associate numbers to the modes, with 0 denoting U-mode up to 3 for M-mode, but the range can be extended in case we have one or more levels of nested virtualization.
 
-When a mode A saves CR ``K(``__i__``)`` for a process in mode B < A, and then lazy restores it, it sets the `crstatus` for ``K(``__i__``)`` for all modes below A down to B to Lazy, but since this is done in SW, these values do not propagate. In other word, the `crstatus` for mode A and above becomes Dirty since the handler at mode A clears ``K(``__i__``)``.
-The important thing is that when the process in mode B is resumed and accesses ``K(``__i__``)``, the value is found in the first mode that has the `crstatus` for the ``K(``__i__``)`` different from Lazy. Whether it is lest at Clear or Dirty, the value is authoritative (if it is Dirty, it means just that it is more recent than the value actually stored in some mode above A).
+When a mode A saves CR ``K(``__i__``)`` for a process in mode B < A, and then lazy restores it, it sets the _X_``crstatus``[__i__+32] for all modes from A down to B+1.
+It suffices for A to set this value only at B+1 since the values propagate.
+In a second moment, when the handler at mode A unconfigures ``K(``__i__``)``, the hardware implicitly clears _X_``crstatus``[__i__+32] and sets _X_``crstatus``[i]= Dirty for all modes above A.
+The important thing is that when the process in mode B is resumed and accesses ``K(``__i__``)``, the authoritative SCC is found in the first mode that has the `crstatus` for the ``K(``__i__``)`` not Lazy. (If it is Dirty, it means just that it is more recent than the value stored in some even higher-privileged mode).
 
-NOTE: This means that the software must support a call to the parent to get the SCC for the __i__-th CR, and it is a good idea to standardise the trap, even make it into an instruction.
+[WARNING]
+This means that the software must support a call to the parent to get the SCC for the __i__-th CR, and it is a good idea to standardize the trap, even make it into an instruction.
 
 Using these extensions to _X_``crstatus``, when a context switching handler does not restore a CR at context restore, it instead sets _X_``crstatus``[__i__+32]
 and _X_``crstatus``[__i__] accordingly.
