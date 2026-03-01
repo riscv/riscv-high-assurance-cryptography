@@ -182,22 +182,32 @@ A `mcrstatus` register may be defined, _mutatis mutandis_, in the same manner as
 [[ACE-lazy-loading]]
 ==== Extension of `*crstatus` for Lazy Context Switching
 
+To support lazy context switching of CR values, `scrstatus` and `vscrstatus` are extended to XLEN=64 bits.
+_X_``crstatus``[__i__+32] encodes two states called Normal (0) and Lazy (1) for ``K(``__i__``)``.
+On RV32, 32-bit CSRs `scrstatush` and `vscrstatush` shadow, respectively, bits [63:32] of `scrstatus` and `vscrstatus`.
+
+Using this extension to _X_``crstatus``, when a context switching handler does not restore a CR at context restore, it instead sets _X_``crstatus``[__i__+32] to Lazy.
+When _X_``crstatus``[__i__+32] is set, accessing ``K(``__i__``)`` causes the hardware to trap to allow the authoritative value of ``K(``__i__``)`` to be restored.
+
+[NOTE]
+====
 _Lazy Context Switching_ defers the restoration of a CR from its saved SCC at context restore.
 Instead, the CR is marked as “lazy”.
 Any subsequent access to that CR—including export, but not operations that would overwrite it (such as clear, provisioning, or import)—causes a trap to the environment that holds the authoritative SCC: that environment will then import the SCC and return to the initial requester.
 The trap handler checks whether the associated SCC can be imported and, if not, it must select another configured CR first, export it, free it and mark it instead as “lazy”.
 The selection of which CR to free is delegated to software or to an implementation defined mechanism.
 
-// may be performed by software (for example, via a random choice) or may be assisted by an implementation‑defined hardware implementation of a least-recently-used algorithm.
-// We consider a model where M-mode always saves and restores the entire configured context, whereas the context switch handlers at H and (V)S may implement lazy loading.
-
-Since a processes can be interrupted by any one of the higher-privileged modes, U-mode processes may be interrupted for the purpose of context switching by handles at VS-, H-, or even M-mode. VS-node software may be interrupted by H-, or even M-mode.
+Processes can be interrupted for the purpose of context switch by any higher-privileged mode:
+U-mode processes may be interrupted for the purpose of context switching by handles at VS-, H-, or even M-mode, and VS-node processes may be interrupted by H- or M-mode.
 Therefore, when accessing a lazily restored CR, it is important to know _which_ environment has exported the value of the CR last.
 
-To support lazy loading of CR values, `scrstatus` and `vscrstatus` are extended to XLEN=64 bits.
-On RV32, 32-bit CSRs `scrstatush` and `vscrstatush` shadow, respectively, bits [63:32] of `scrstatus` and `vscrstatus`.
+When a mode A saves CR ``K(``__i__``)`` for a process in mode B < A, and then lazy restores it, it sets the _X_``crstatus``[__i__+32] for all modes from __X__ = A down to B's parent.
+It suffices for A to set this value only at B's parent since the values propagate.
+In a second moment, when the handler at mode A unconfigures ``K(``__i__``)``, the hardware implicitly clears _X_``crstatus``[__i__+32] and sets _X_``crstatus``[i]= Dirty for all modes __X__ above A.
+When the process in mode B is resumed and accesses ``K(``__i__``)``, the authoritative SCC is found in the first mode that does not mark its ``K(``__i__``)`` as Lazy in its `crstatus`.
 
-_X_``crstatus``[__i__+32] encodes Normal (0) or Lazy (1) for ``K(``__i__``)``.
+This feature is not only a context switching optimization, but it necessary to provide enhanced support VM migration, where it may happen that a VM is migrated to a target device where the CRF capacity is insufficient to import all the SCCs saved by the hypervisor.
+====
 
 // When _X_``crstatus``[__i__+32] is set to Lazy (1), the semantics of bit _X_``crstatus``[__i__] change as follows:
 //
@@ -208,25 +218,13 @@ _X_``crstatus``[__i__+32] encodes Normal (0) or Lazy (1) for ``K(``__i__``)``.
 // Beside (_X_``crstatus``[__i__+32], _X_``crstatus``[__i__]) =
 // (0,0) and (0,1), i.e., Clean and Dirty,
 // there are also (1,0) and (1,1), which we call Lazy-S and Lazy-H.
-
-Let us associate numbers to the modes, with 0 denoting U-mode up to 3 for M-mode, but the range can be extended in case we have one or more levels of nested virtualization.
-
-When a mode A saves CR ``K(``__i__``)`` for a process in mode B < A, and then lazy restores it, it sets the _X_``crstatus``[__i__+32] for all modes from A down to B+1.
-It suffices for A to set this value only at B+1 since the values propagate.
-In a second moment, when the handler at mode A unconfigures ``K(``__i__``)``, the hardware implicitly clears _X_``crstatus``[__i__+32] and sets _X_``crstatus``[i]= Dirty for all modes above A.
-When the process in mode B is resumed and accesses ``K(``__i__``)``, the authoritative SCC is found in the first mode that does not mark its ``K(``__i__``)`` as Lazy in its `crstatus`.
-
-[WARNING]
-This means that the software must support a call to the parent to get the SCC for the __i__-th CR, and it is a good idea to standardize the trap, even make it into an instruction.
-
-Using these extensions to _X_``crstatus``, when a context switching handler does not restore a CR at context restore, it instead sets _X_``crstatus``[__i__+32] to Lazy.
-When _X_``crstatus``[__i__+32] is set, accessing ``K(``__i__``)`` causes the hardware to trap to allow the authoritative value of ``K(``__i__``)`` to be restored.
-
-NOTE: This feature is not only a context switching optimization, but it necessary to provide enhanced support VM migration, where it may happen that a VM is migrated to a target device where the CRF capacity is insufficient to import all the SCCs saved by the hypervisor.
-
+//
+// [WARNING]
+// This means that the software must support a call to the parent to get the SCC for the __i__-th CR, and it is a good idea to standardize the trap, even make it into an instruction.
+//
 // [NOTE]
 // (At this point we may return to the two bits, and define the states as Off, Clean, Dirty, Lazy?)
-
+//
 // [WARNING]
 // ====
 // We recommend to define two CSRs: one to set the ad-hoc handler for lazy loading, and one to store the number of the CR to lazy-load.
@@ -237,9 +235,11 @@ NOTE: This feature is not only a context switching optimization, but it necessar
 ==== Propagation of `*crstatus` Status Values
 
 The per-CR status in `vscrstatus` (resp. `scrstatus`) propagates from less-privileged to more-privileged modes, analogously to the FS, VS, and ACES fields in `*status`.
+Any instruction that sets bit #__i__ of `vscrstatus` (resp. `scrstatus`) to Dirty, for 0 {le} __i__ < 32, also sets the corresponding bit of `scrstatus` (resp. `mcrstatus`) to Dirty. The ACES fields of `*status` are also set accordingly.
 
-Any instruction that sets bit #__i__ of `vscrstatus` (resp. `scrstatus`) to Dirty also sets the corresponding bit of `scrstatus` (resp. `mcrstatus`).
-The ACES fields of `*status` are also set accordingly.
+If the Lazy bits are defined,
+any operation that sets the state of a CR to Clear or Dirty will also clear the Lazy bit.
+Cleared Lazy values also propagate.
 
 // ////////////////////////////////////////////////////////////////////
 
