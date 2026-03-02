@@ -123,22 +123,35 @@ In implementations with a writable `misa.L`, `vsstatus.ACES` may be present even
 
 {empty}
 (((CSR, `scrstatus`)))
-The 64-bit register `scrstatus` tracks per-CR dirtiness.
+The 64-bit register `scrstatus` tracks per-CR status, including dirtiness.
 
-`scrstatus`[__i__] encodes Clean (0) or Dirty (1) for ``K(``__i__``)``.
+`scrstatus`(__i__) = `scrstatus`[2{interpunct}__i__+1:2{interpunct}__i__] is a two-bit field that encodes four statuses:
 
-Bits [63:32] are WPRI.
+[[ACE-crstatus-encoding]]
+.Encoding of the `*crstatus` bits
+[float="center",align="center",width="100%",cols="^8%,<12%,<80%",options="header"]
+|===
+|Value |Name |Meaning
+|   0   | Off         | The CR is unconfigured. Attempts to configure or use it will raise ACE error ace_err_unconf_CR or trap.
+|   1   | Other/Lazy  | The CR is may be configured or unconfigured. Attempts to export or use it will always trap. This can be used for lazy context switching at per-CR granularity.
+|   2   | Clean       | The CR is configured and its state matches the last context swap.
+|   3   | Dirty       | The CR is configured and its state may have been modified since the last context swap.
+|===
+
+for ``K(``__i__``)``.
+
+On RV32, 32-bit CSRs `scrstatush` shadows bits [63:32] of `scrstatus`, allowing these bits to be accessed.
 
 When the privilege mode is S, VS, or U:
 
-* Any instruction that modifies ``K(``__i__``)`` sets `scrstatus`[__i__] to Dirty.
-* Implementations may set `scrstatus`[__i__] to Dirty from Clean at any time, even without a state change.
+* Any instruction that modifies ``K(``__i__``)`` sets `scrstatus`(__i__) to Dirty.
+* Implementations may set `scrstatus`(__i__) to Dirty from Clean at any time, even without a state change.
 // The main reason for allowing this is to permit implementations that do not
 // track the state and make fields read-only Dirty, but we could also require
 // precise tracking and hide the CSRs behind an extension, so implementations
 // that don't want to do it just don't implement the extension.
 
-NOTE: Context-switching code observes only Clean or Dirty. To determine whether a CR is configured, software may execute `ace.size` (<<ACE-instruction-size>>) on it; a return value of zero indicates an unconfigured CR, and any stale saved state for it shall be erased and released.
+Status Off is used only when a CR is not configured.
 
 NOTE: `scrstatus` is independent of the S extension. In an M-U system, M-mode may use it to optimize U-mode context switches.
 
@@ -151,18 +164,20 @@ NOTE: `sstatus.ACES` is also in effect.
 
 {empty}
 (((CSR, `vscrstatus`)))
-The 64-bit register `vscrstatus` tracks per-CR dirtiness for virtualized contexts.
-
-`vscrstatus`[__i__] encodes Clean (0) or Dirty (1) for ``K(``__i__``)``.
-Bits [63:32] are WPRI.
+The 64-bit register `scrstatus` tracks per-CR status, including dirtiness, for virtualized contexts.
 
 `vscrstatus` exists only when the H extension is implemented.
+
+`vscrstatus`(__i__) = `scrstatus`[2{interpunct}__i__+1:2{interpunct}__i__] is a two-bit field that
+encodes four statuses for ``K(``__i__``)``, as in <<ACE-crstatus-encoding>>.
+
+On RV32, 32-bit CSRs `scrstatush` shadows bits [63:32] of `scrstatus`, allowing these bits to be accessed.
 
 When the privilege mode is VS or VU:
 
 * `vscrstatus` shadows `scrstatus`; accesses that would target `scrstatus` instead access `vscrstatus`.
-* Any instruction that modifies ``K(``__i__``)`` sets `vscrstatus`[__i__] to Dirty.
-* Implementations may set `vscrstatus`[__i__] to Dirty from Clean at any time, even without a state change.
+* Any instruction that modifies ``K(``__i__``)`` sets `vscrstatus`(__i__) to Dirty.
+* Implementations may set `vscrstatus`(__i__) to Dirty from Clean at any time, even without a state change.
 
 NOTE: `sstatus.ACES`, `vsstatus.ACES`, and `scrstatus` are also in effect when V=1.
 
@@ -180,17 +195,13 @@ A `mcrstatus` register may be defined, _mutatis mutandis_, in the same manner as
 // ////////////////////////////////////////////////////////////////////
 
 [[ACE-lazy-loading]]
-==== Extension of `*crstatus` for Lazy Context Switching
+==== Use of ``*crstatus``'s “Other” Value for Lazy Context Switching
 
-To support lazy context switching of CR values, `scrstatus` and `vscrstatus` are extended to XLEN=64 bits.
-_X_``crstatus``[__i__+32] encodes two states called Normal (0) and Lazy (1) for ``K(``__i__``)``.
-On RV32, 32-bit CSRs `scrstatush` and `vscrstatush` shadow, respectively, bits [63:32] of `scrstatus` and `vscrstatus`.
+_This section is non-normative._
 
-Using this extension to _X_``crstatus``, when a context switching handler does not intend to restore ``K(``__i__``)`` at context restore, it sets instead _X_``crstatus``[__i__+32] to Lazy.
-When _X_``crstatus``[__i__+32] is set, accessing ``K(``__i__``)`` causes the hardware to trap to allow the authoritative value of ``K(``__i__``)`` to be restored.
+When a context switching handler does not intend to restore ``K(``__i__``)`` at context restore, it sets instead _X_``crstatus``(__i__) to Lazy.
+When _X_``crstatus``(__i__) is set, attempts to use or export ``K(``__i__``)`` causes the hardware to trap to allow the authoritative value of ``K(``__i__``)`` to be restored.
 
-[NOTE]
-====
 _Lazy Context Switching_ defers the restoration of a CR from its saved SCC at context restore.
 Instead, the CR is marked as “lazy”.
 Any subsequent access to that CR—including export, but not operations that would overwrite it (such as clear, provisioning, or import)—causes a trap to the environment that holds the authoritative SCC: that environment will then import the SCC and return to the initial requester.
@@ -201,13 +212,14 @@ Processes can be interrupted for the purpose of context switch by any higher-pri
 U-mode processes may be interrupted for the purpose of context switching by handles at VS-, H-, or even M-mode, and VS-node processes may be interrupted by H- or M-mode.
 Therefore, when accessing a lazily restored CR, it is important to know _which_ environment has exported the value of the CR last.
 
-When an exception handler in Mode A saves CR ``K(``__i__``)`` for a process running in Mode B (less privileged than A), and then lazy restores it, it sets the _X_``crstatus``[__i__+32] for all modes from __X__ = A down to B's parent.
-It suffices for A to set this value only at B's parent since the values propagate.
-In a second moment, the handler at Mode A unconfigures ``K(``__i__``)``, which causes the hardware to implicitly clear _X_``crstatus``[__i__+32] and set _X_``crstatus``[i]= Dirty for all modes __X__ above A.
-When the process in Mode B is resumed and accesses ``K(``__i__``)``, the authoritative SCC is found in the first mode that does not mark its ``K(``__i__``)`` as Lazy in its `crstatus`.
+Let __B__ be a privilege mode and __A__ its immediate parent.
+When an exception handler in __A__-Mode saves CR ``K(``__i__``)`` for the software running at __B__-Mode, it may choose to set
+__A__``crstatus``(__i__) to Lazy instead, and then unconfigure ``K(``__i__``)``, which causes the hardware to set _X_``crstatus``(__i__) to Dirty for __X__ corresponding to all modes above __A__.
+This means that authoritative SCC for ``K(``__i__``)`` is found in the first mode __C__, starting from M and going down, with __C__``crstatus``(__i__) = Lazy
+
+When, at a later point, the process in Mode __B__ is resumed and accesses ``K(``__i__``)``, the trap handler for lazy reloading starts at _X_ = M, and looks whether _X_``crstatus``(__i__) is Lazy or not. If it is Lazy, this means that __X__ possesses the authoritative value of ``K(``__i__``)`` and can import it from the SCC, otherwise the trap is taken to the immediately higher mode, which performs the same evaluation.
 
 This feature is not only a context switching optimization, but it necessary to provide enhanced support VM migration, where it may happen that a VM is migrated to a target device where the CRF capacity is insufficient to import all the SCCs saved by the hypervisor.
-====
 
 // When _X_``crstatus``[__i__+32] is set to Lazy (1), the semantics of bit _X_``crstatus``[__i__] change as follows:
 //
@@ -232,14 +244,9 @@ This feature is not only a context switching optimization, but it necessary to p
 
 // ////////////////////////////////////////////////////////////////////
 
-==== Propagation of `*crstatus` Status Values
+==== Propagation of ``*crstatus`` Status Values
 
 The per-CR status in `vscrstatus` (resp. `scrstatus`) propagates from less-privileged to more-privileged modes, analogously to the FS, VS, and ACES fields in `*status`.
-Any instruction that sets bit #__i__ of `vscrstatus` (resp. `scrstatus`) to Dirty, for 0 {le} __i__ < 32, also sets the corresponding bit of `scrstatus` (resp. `mcrstatus`) to Dirty. The ACES fields of `*status` are also set accordingly.
-
-If the Lazy bits are defined,
-any operation that sets the state of a CR to Clear or Dirty will also clear the Lazy bit.
-Cleared Lazy values also propagate.
 
 // ////////////////////////////////////////////////////////////////////
 
