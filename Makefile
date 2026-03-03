@@ -18,7 +18,8 @@ DOCS := \
 DATE ?= $(shell date +%Y-%m-%d)
 VERSION ?= v0.3.4
 REVMARK ?= Draft
-DOCKER_IMG := ghcr.io/riscv/riscv-docs-base-container-image:latest
+DOCKER_IMG := ghcr.io/riscv/riscv-docs-base-container-image@sha256:c90f312cef31366106486940fbcafe63baee437df79171d321e8135672d819ae
+#DOCKER_IMG := ghcr.io/riscv/riscv-docs-base-container-image:21a2c824d312dcfe4119b368266ff8ca79b29b61
 DOCKER_BIN ?= docker
 
 ifneq ($(SKIP_DOCKER),true)
@@ -64,8 +65,12 @@ OPTIONS := --trace \
 
 REQUIRES := --require=asciidoctor-bibtex \
             --require=asciidoctor-diagram \
+            --require=asciidoctor-mathematical \
             --require=asciidoctor-lists \
             --require=asciidoctor-sail
+
+
+#            --require=asciidoctor-mathematical \
 
 .PHONY: all build clean build-container build-no-container build-docs
 
