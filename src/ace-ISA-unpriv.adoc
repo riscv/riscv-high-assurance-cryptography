@@ -1612,20 +1612,33 @@ We start with the algorithm performed by `ace.prov`, which reads a PI and uses i
 .Provisioning a CR with Metadata and content
 []
 ----
-M : array of bytes // in memory
+function ace.prov(&CR, M[]) = {
+  mh : bits(64) ← & CR.Metadata;           // By reference, from the CR
+  provisioning[CR] : bool;                 // "hidden" per-CR ACE unit state
 
-// PREEMPTIBLE WITH `acestart` IN [0 .. 7]
-Metadata : bits(64) = M[0 .. 7]
-z ← PI_content_size(Metadata[31:0]);
+  // PREEMPTIBLE WITH `acestart` IN [0 .. 7]
+  mh ← M[0 .. 7]
+  z ← PI_content_size(Metadata[31:0]);
 
-if (z == 0) { error ace_err_unimpl; }
-if (there is not enough memory for the algorithm encoded in the Metadata) then
-   { error ace_err_memory; }
-if (Metadata is inconsistent) { error ace_err_invalid_value; }
+  provisioning[CR] ← true;
+  CR.Metadata.StateNumber ← ace_state_invalid;
 
-- Complete Metadata parsing.
-// NEXT OPERATION PREEMPTIBLE WITH `acestart` IN [8 .. Z+7]
-- Sequentially read and parse the z bytes at M+8.
+  if (z == 0)
+    error ace_err_unimpl;
+
+  if (there is not enough memory for the algorithm encoded in the Metadata)
+    error ace_err_memory;
+
+  if (Metadata is inconsistent)
+    error ace_err_invalid_value;
+
+  - Complete Metadata parsing.
+  // NEXT OPERATION PREEMPTIBLE WITH `acestart` IN [8 .. Z+7]
+  - Sequentially read and parse the z bytes at M+8.
+
+  CR.Metadata.StateNumber ← ace_state_initial;
+  provisioning[CR] ← false;
+}
 ----
 
 // ////////////////////////////////////////////////////////////////////
@@ -1666,19 +1679,19 @@ In the pseudocode below for POLYVAL, the data to be digested by POLYVAL is repre
 .Polyval Hashing Function
 []
 ----
-
 function POLYVAL(&tmp : bits(128), auth_key : bits(128), blocks[0 .. n-1] : bits(128),
                  last_block_fractional : bool) = {
   tmp ← zeros(128);
   local i : int;
   foreach(i from 0 to n-1) {
-    if (i == n-1 && last_block_fractional) {
+    if ((i == n-1) and last_block_fractional) {
       tmp[63:0] ← tmp[63:0] xor blocks[i];
-      tmp ← Montmul(h, auth_key);
+      tmp ← Montmul(tmp, auth_key);
     } else {
       tmp ← tmp xor blocks[i];
-      tmp ← Montmul(h, auth_key);
-  } }
+      tmp ← Montmul(tmp, auth_key);
+    }
+  }
 }
 ----
 
@@ -1692,8 +1705,8 @@ The export operation maintains a per-CR flag indicating whether an export is in 
 
 [WARNING]
 ====
-Do we need a mechanism to clear the `CR.exporting/importing` flag upon context switch, to force a restart in this case?
-Or would simply clearing the CR be sufficient?
+Do we need a mechanism to clear the `CR.provisioning/exporting/importing` flag upon context switch, to force a restart in this case?
+Or would simply clearing the CR be sufficient, since it does?
 ====
 
 // These variables are kept by the microarchitecture internally, and we need
@@ -1706,16 +1719,15 @@ Or would simply clearing the CR be sufficient?
 []
 ----
 function ace.export(&CR, M[]) = {
-  & mh : bits(64) = CR.Metadata_header;    // By reference, from the CR
-  CR.exporting : bool;                     // "hidden" per-CR ACE unit state
-  local SIV, tmp : bits(128);
-
+  mh : bits(64) = & CR.Metadata;           // By reference, from the CR
+  external exporting[CR] : bool;           // "hidden" per-CR ACE unit state
   external CSK : bits(256);
-  external enc_key : bits(256);   // NOTE: {enc_key, auth_key} ← RFC8452_KeyDeriv(CSK);
+  external enc_key : bits(256);            // RFC8452_KeyDeriv(CSK)
   external auth_key : bits(128);
 
-  CR.exporting ← true;                     // always false unless during export.
+  exporting[CR] ← true;                    // always false unless during export.
 
+  local SIV, tmp : bits(128);
   local z : int ← SCC_content_size(mh);
   z ← z + mh._AdditionalData_ * 8;
 
@@ -1734,7 +1746,8 @@ function ace.export(&CR, M[]) = {
     if (CR.Metadata.Locality includes locality[i]) {
       L[num_localities * 128 + 127:num_localities * 128] ← LST[i];
       num_localities ← num_localities + 1;
-  } }
+    }
+  }
 
   POLYVAL(&tmp, auth_key, L[num_localities*128-1:0] @ zeros(64) @ mh @ CR.content[],
            last_block_fractional);
@@ -1754,7 +1767,7 @@ function ace.export(&CR, M[]) = {
                xor AESE(enc_key, 1 @ SIV[126:32] @ (SIV[31:0]+bin(i,32) % 2**32);
   }
 
-  CR.exporting ← false;
+  exporting[CR] ← false;
 }
 ----
 
@@ -1791,32 +1804,34 @@ The import algorithm needs some special care:
 ----
 function ace.import(&CR, M[]) = {
   // M : array of bytes;   from memory
-  CR.importing : bool;           // Architecturally "hidden" per-CR ACE unit state
-  local saved_SN : bits(4);      // this is a "hidden" state
+  external importing[CR] : bool;           // "hidden" per-CR ACE unit state
+  local saved_SN : bits(4);                // This is a "hidden" state as well
   local SIV, tmp : bits(128);
 
   external CSK : bits(256);
   external enc_key : bits(256);
   external auth_key : bits(128);
 
-  // CR.importing is always false except during import.
-  CR.importing ← true;
+  // importing is always false except during import.
+  importing[CR] ← true;
 
   // FOLLOWING MEMORY READ IS PREEMPTIBLE, WITH `acestart` FROM 0 TO 7
-  tmp[63:0] ← M[0 .. 7]; // read Metadata Header
+  tmp[63:0] ← M[0 .. 7];         // read Metadata Header
 
-  saved_SN : bits(4) ← tmp[63:0].StateNumber;
-  CR.Metadata_header ← tmp[63:0];
-  CR.Metadata_header.StateNumber ← ace_state_invalid;
+  saved_SN ← tmp[63:0].StateNumber;
+  CR.Metadata ← tmp[63:0];
+  CR.Metadata.StateNumber ← ace_state_invalid;
 
-  & mh = CR.Metadata_header;
+  & mh = CR.Metadata;
 
   z ← SCC_content_size(mh);
   z ← z + mh._AdditionalData_ * 8;
 
-  if (z == 0) { error ace_err_unimpl; }
-  if (there is not enough memory for the algorithm encoded in the Metadata) then
-  error ace_err_memory;
+  if (z == 0)
+    error ace_err_unimpl;
+
+  if (there is not enough memory for the algorithm encoded in the Metadata)
+    error ace_err_memory;
 
   num_blocks ← ceil(z / 16);
   last_block_fractional : Boolean ← (z % 16 != 0);
@@ -1853,7 +1868,8 @@ function ace.import(&CR, M[]) = {
   }
   tmp ← AESE(enc_key, 0 @ tmp[126:0]);
 
-  if (tmp != SIV) { error ace_err_import_auth; }
+  if (tmp != SIV)
+    error ace_err_import_auth;
 
   - Now the content can be deserialized.
   - This includes computing any derived values not saved as part of the SCC,
@@ -1862,24 +1878,21 @@ function ace.import(&CR, M[]) = {
   // FINALLY, restore the StateNumber from the SCC
   mh.StateNumber ← saved_SN;
 
-  CR.importing ← false;
+  importing[CR] ← false;
 }
 ----
 
 [NOTE]
 ====
-`CR.importing` and `CR.exporting` need not be distinct bits.
+`provisioning[CR]`, `importing[CR]` and `exporting[CR]` need not be distinct bits.
 So, in theory, 32 bits would be sufficient.
 Also, since only one of these bits is ever set at a time,
 we actually only need a single bit and a 5-bit field for the CR number.
 
 When privileged code sets `acestart` to the saved value (or leaves it
 untouched, as when addressing a memory exception), the hardware needs
-to check whether the `CR.importing/exporting` bit is set and the CR
+to check whether the `provisioning/importing/exporting[CR]` bit is set and the CR
 number also matches. If not, the instruction is restarted anyway.
-
-[.red]#{warn} We need a mechanism to clear# `[.red]#CR.importing/exporting#` [.red]# when a
-context switch occurs.#
 
 Microarchitectures may in theory support keeping track of several
 interrupted import/export operations at the same time. This
