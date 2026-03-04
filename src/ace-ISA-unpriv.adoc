@@ -1670,7 +1670,8 @@ In the pseudocode below for POLYVAL, the data to be digested by POLYVAL is repre
 []
 ----
 
-function POLYVAL(&tmp : bits(128), auth_key : bits(128), blocks[0 .. n-1] : bits(128), last_block_fractional : bool) = {
+function POLYVAL(&tmp : bits(128), auth_key : bits(128), blocks[0 .. n-1] : bits(128),
+                 last_block_fractional : bool) = {
   tmp ← zeros(128);
   local i : int;
   foreach(i from 0 to n-1) {
@@ -1711,15 +1712,15 @@ function ace.export(&CR, M[]) = {
 
   // These variables are kept by the microarchitecture internally, and we need
   // one instance per hart, we assume only one export/import is performed.
+  // per hart at any given time, which means that there cannot be two interrupted
+  // export or import operations.
+
   local SIV, tmp : bits(128);
 
   external CSK : bits(256);
   external enc_key : bits(256);
   external auth_key : bits(128);
   // NOTE: {enc_key, auth_key} ← RFC8452_KeyDeriv(CSK);
-
-  // per hart at any given time, which means that there cannot be two interrupted
-  // export or import operations.
 
   // exporting is always false except during export.
   CR.exporting ← true;
@@ -1744,7 +1745,8 @@ function ace.export(&CR, M[]) = {
     }
   }
 
-  POLYVAL(&tmp, auth_key, L[num_localities*128-1:0] @ zeros(64) @ mh @ CR.content[], last_block_fractional);
+  POLYVAL(&tmp, auth_key, L[num_localities*128-1:0] @ zeros(64) @ mh @ CR.content[],
+           last_block_fractional);
   SIV ← AESE(enc_key, 0 @ tmp[126:0]);
 
   // FOLLOWING MEMORY WRITE PREEMPTIBLE, `acestart` FROM 0 TO 7
@@ -1783,9 +1785,8 @@ The import algorithm needs some special care:
 * The first block read from memory by the operation is the Metadata Header `mh`:
  ** If strictly fewer than four bytes are read before the instruction is interrupted, ACE leaves `acestart` at 0, and the instruction will be restarted upon resumption.
  ** If four bytes or more have been read, the value of `mh.StateNumber` in the SCC is known. In this case, the instruction may be restarted with `acestart` {ge} 4 recording the amount of data read.
-
-* Af the beginning of the import operation, the hardware saves the `StateNumber` value in the metadata and sets
-`mh.StateNumber <- ace_state_invalid`. At the end of the import operation, `mh.StateNumber` is set to the correct value.
+* Af the beginning of the import operation, the hardware saves the `StateNumber` value from the original metadata and sets
+`mh.StateNumber <- ace_state_invalid`. At the end of the import operation, `mh.StateNumber` is set to the saved value.
 ** Since context switching code cannot export a partially imported CR when saving the state, it will clear the CR instead, forcing the hardware to restart the import operation.
 ** Exceptions that immediately return to the interrupted operation, such as memory exceptions, may cause the hardware to resume the operation instead, if the CR was touched.
 
