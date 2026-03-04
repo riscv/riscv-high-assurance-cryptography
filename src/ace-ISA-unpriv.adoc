@@ -1693,17 +1693,23 @@ If an attempt is made to resume an export operation while this flag is cleared, 
 function ace.export(&CR, M[]) = {
   & mh : bits(64) = CR.Metadata_header;  // By reference, from the CR
 
-  exporting : bool;            // Architecturally "hidden" per-CR ACE unit state
+  CR.exporting : bool;         // Architecturally "hidden" per-CR ACE unit state
   // TBD: how to reset "exporting" automatically? What operations reset it?
 
-  local SIV, tmp : bits(128);  // These variables are kept by the microarchitecture
-  local enc_key : bits(256);   // internally. We need only one instance per hart,
-  local auth_key : bits(128);  // and we assume only one export/import is performed
+  // These variables are kept by the microarchitecture internally, and we need
+  // one instance per hart, we assume only one export/import is performed.
+  local SIV, tmp : bits(128);
+
+  external CSK : bits(256);
+  external enc_key : bits(256);
+  external auth_key : bits(128);
+  // NOTE: {enc_key, auth_key} ← RFC8452_KeyDeriv(CSK);
+
   // per hart at any given time, which means that there cannot be two interrupted
   // export or import operations.
 
   // exporting is always false except during export.
-  exporting ← true;
+  CR.exporting ← true;
 
   // CR.content[] includes the optional extra content at the end
   local z : int ← SCC_content_size(mh);
@@ -1715,7 +1721,6 @@ function ace.export(&CR, M[]) = {
   local let last_block_fractional : Boolean ← z % 16 != 0;
   local let num_blocks : int ← ceil(z / 16);
 
-  {enc_key, auth_key} ← RFC8452_KeyDeriv(CSK);
   local L : list ← {} if (mh.Locality == 0) else get_localities(mh.Locality);
 
   // Include Locality "prefix" (zero or more 128-bit blocks) in the POLYVAL
@@ -1742,7 +1747,7 @@ function ace.export(&CR, M[]) = {
                xor AESE(enc_key, 1 @ SIV[126:32] @ (SIV[31:0]+bin(i,32) % 2**32);
   }
 
-  exporting ← false;
+  CR.exporting ← false;
 }
 ----
 
@@ -1752,7 +1757,7 @@ Interrupting `ace.export` after the key derivation may be possible only immediat
 `acestart` will be 16{interpunct}(`i`+1)+1, the number of bytes absorbed so far, plus 1.
 
 [[ACE-SCC-import]]
-===== Import
+==== Import
 
 The import algorithm needs some special care:
 
@@ -1780,14 +1785,17 @@ The import algorithm needs some special care:
 ----
 function ace.import(&CR, M[]) = {
   // M : array of bytes;   from memory
-  importing : bool;              // Architecturally "hidden" per-CR ACE unit state
+  CR.importing : bool;           // Architecturally "hidden" per-CR ACE unit state
   local saved_SN : bits(4);      // this is a "hidden" state
-  local enc_key : bits(256);
-  local auth_key : bits(128);
   local SIV, tmp : bits(128);
 
-  // importing is always false except during import.
-  importing ← true;
+  external CSK : bits(256);
+  external enc_key : bits(256);
+  external auth_key : bits(128);
+  // NOTE: {enc_key, auth_key} ← RFC8452_KeyDeriv(CSK);
+
+  // CR.importing is always false except during import.
+  CR.importing ← true;
 
   // FOLLOWING MEMORY READ PREEMPTIBLE, `acestart` FROM 0 TO 7
   tmp[63:0] ← M[0 .. 7]; // read Metadata Header
@@ -1807,8 +1815,6 @@ function ace.import(&CR, M[]) = {
 
   num_blocks ← ceil(z / 16);
   last_block_fractional : Boolean ← (z % 16 != 0);
-
-  {enc_key, auth_key} ← RFC8452_KeyDeriv(CSK);
 
   // Absorb Locality "prefix" (zero or more 128-bit blocks)
   tmp ← zeros(128);
@@ -1848,9 +1854,36 @@ function ace.import(&CR, M[]) = {
   // FINALLY, restore the StateNumber from the SCC
   mh.StateNumber ← saved_SN;
 
-  importing ← false;
+  CR.importing ← false;
 }
 ----
+
+[NOTE]
+====
+`CR.importing` and `CR.exporting` need not be distinct bits.
+So, in theory, 32 bits would be sufficient.
+Also, since only one of these bits is ever set at a time,
+we actually only need a single bit and a 5-bit field for the CR number.
+
+When privileged code sets `acestart` to the saved value (or leaves it
+untouched, as when addressing a memory exception), the hardware needs
+to check whether the `CR.importing/exporting` bit is set and the CR
+number also matches. If not, the instruction is restarted anyway.
+
+[.red]#{warn} We need a mechanism to clear# `[.red]#CR.importing/exporting#` [.red]# when a
+context switch occurs.#
+
+Microarchitectures may in theory support keeping track of several
+interrupted import/export operations at the same time, but this
+would require keeping also copies of the `SIV` and `tmp` values,
+i.e., 256 bits worth of information, and a few other small quantities,
+per interrupted operation. Since we believe that interrupted import/export
+operations are not very common, and would be significant only for very
+large states, of which there would be very few in flight at any given
+moment, we are not mandating this.  However, a single instance of
+interrupted import or export must be architected to correctly address memory
+exceptions correctly.
+====
 
 //
 
