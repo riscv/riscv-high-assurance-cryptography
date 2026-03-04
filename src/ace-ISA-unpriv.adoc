@@ -1660,28 +1660,37 @@ function RFC8452_KeyDeriv(key : bits(256)) = {
 
 NOTE: Due to the computational cost of the derivation functions, implementations may cache recently used derived keys.
 
+`POLYVAL` is a so-called Almost XOR-Universal (AXU) Hash Function.
+The SIV is the encryption of the computation of this AXU hash on the concatenation of the associated data–namely, the Localities and the Metadata zero-padded to 128 bits–and the Content of the CR.
+
+In the pseudocode below for POLYVAL, the data to be digested by POLYVAL is represented an array with an integral number of 16-byte blocks, where the last one may be just 8 bytes long.
+
 [[ACE-SCC-POLYVAL]]
 .Polyval Hashing Function
 []
 ----
-// The second input to POLYVAL is an integral number of 16-byte blocks.  This means that
-// the last block may have to be padded with zeros to reach the next 16-byte boundary.
 
-function POLYVAL(&tmp : bits(128), auth_key : bits(128), blocks[0 .. n-1] : bits(128)) = {
-  // tmp is from the parent environment
+function POLYVAL(&tmp : bits(128), auth_key : bits(128), blocks[0 .. n-1] : bits(128), last_block_fractional : bool) = {
+  tmp ← zeros(128);
   local i : int;
   foreach(i from 0 to n-1) {
-    tmp ← tmp xor blocks[i];
-    tmp ← Montmul(h, auth_key);
-  }  return tmp;
+    if (i == n-1 && last_block_fractional) {
+      tmp[63:0] ← tmp[63:0] xor blocks[i];
+      tmp ← Montmul(h, auth_key);
+    } else {
+      tmp ← tmp xor blocks[i];
+      tmp ← Montmul(h, auth_key);
+    }
+  }
 }
 ----
 
 [[ACE-SCC-export]]
 ==== Export
 
-For a Metadata Header `mh`, `get_localities(mh)` returns a variable length array with zero or more Locality Secrets, corresponding to the active localities, ordered by increasing index value, as defined in <<ACE-Localities>>.
-During SCC export and import, these Locality Secrets are prepended, in ascending index order, to the input of the AEAD tag computation, before the metadata.
+During SCC export and import, the Locality Secrets
+associated with the Localities encoded in the _Locality_ field of the Metadata
+are prepended, in ascending index order, to the input of the AEAD tag computation, before the metadata.
 If the _Locality_ field is zero, no Locality Secrets are prepended.
 
 The export operation maintains a per-CR flag indicating that an export is in progress.
@@ -1725,11 +1734,17 @@ function ace.export(&CR, M[]) = {
   local let last_block_fractional : Boolean ← z % 16 != 0;
   local let num_blocks : int ← ceil(z / 16);
 
-  local L : list ← {} if (mh.Locality == 0) else get_localities(mh.Locality);
+  local L : bits(MAX_LOCALITIES*128); // Currently, MAX_LOCALITIES = 3
+  local num_localities : int ← 0;
 
-  // Include Locality "prefix" (zero or more 128-bit blocks) in the POLYVAL
-  tmp ← zeros(128);
-  POLYVAL(&tmp, auth_key, L @ zeros(64) @ mh @ CR.content[]);
+  foreach(i from 0 to number of localities - 1) {
+    if (CR.Metadata.Locality includes locality[i]) {
+      L[num_localities * 128 + 127:num_localities * 128] ← LST[i];
+      num_localities ← num_localities + 1;
+    }
+  }
+
+  POLYVAL(&tmp, auth_key, L[num_localities*128-1:0] @ zeros(64) @ mh @ CR.content[], last_block_fractional);
   SIV ← AESE(enc_key, 0 @ tmp[126:0]);
 
   // FOLLOWING MEMORY WRITE PREEMPTIBLE, `acestart` FROM 0 TO 7
@@ -1821,11 +1836,14 @@ function ace.import(&CR, M[]) = {
   last_block_fractional : Boolean ← (z % 16 != 0);
 
   // Absorb Locality "prefix" (zero or more 128-bit blocks)
+  local L : bits(MAX_LOCALITIES*128); // Currently, MAX_LOCALITIES = 3
+  local num_localities : int ← 0;
   tmp ← zeros(128);
-  L : list ← {} if (mh.Locality == 0) else get_localities(mh.Locality);
-  foreach(i from 0 to length(L)-1) {
-    tmp ← tmp xor L[i];
-    tmp ← Montmul(tmp, auth_key);
+  foreach(i from 0 to number of localities - 1) {
+    if (CR.Metadata.Locality includes locality[i]) {
+      tmp ← tmp xor LST[i];
+      tmp ← Montmul(tmp, auth_key);
+    }
   }
 
   // FOLLOWING MEMORY READ PREEMPTIBLE, `acestart` FROM 8 TO 23
