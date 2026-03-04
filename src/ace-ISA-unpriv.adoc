@@ -1561,9 +1561,7 @@ It is permissible to include some of the shares of a system key in a threshold i
 // ////////////////////////////////////////////////////////////////////
 
 [[ACE-size-functions]]
-==== Size Functions (Notation)
-
-_This section describes the size functions used throughout the specification. It provides definitions for other normative sections._
+==== Notation for the Size Functions
 
 Let `mh` denote a Metadata Header.
 In order to determine the total lengths of the PI and of the SCC,
@@ -1597,12 +1595,11 @@ This means that interrupts other than memory exceptions must wait until the next
 
 Provisioning and import instructions may resume from the point of interruption only if control returns directly after the interrupt handler completes. The privileged interrupt handler must guarantee restart only in this case. In any other circumstance, including a context switch, the instruction must be restarted, and if it is `ace.prov` or `ace.import`, the target CR must also be cleared before restarting.
 
-An export may resume only if the CR has not been modified before returning to the interrupted control flow.
+An export may resume only if the CR has not been modified before returning to the original control flow.
 
 The implementation will restart any of these operations if the CR is not in a valid interrupted state.
 
-The initial cryptographic phase of `ace.export` can be interruptible or uninterruptible.
-In the second case, even if this phase is executed concurrently with other operations, an interrupt handler may need to wait for it to complete before proceeding with any access to the CR. This could become a performance bottleneck or cause timing issues. To address this, we could allow the SIV computation to be interrupted and use odd values in `acestart` to denote this. This is described after the description of the `POLYVAL` function <<ACE-SCC-POLYVAL>>.
+The initial SIV computation of `ace.export` may be implemented as either uninterruptible or interruptible. If uninterruptible, interrupt handlers may need to wait for completion before accessing the CR, potentially creating performance bottlenecks or timing issues. To mitigate these issues, this computation can be made interruptible. as described following the `POLYVAL` function specification in <<ACE-SCC-POLYVAL>>.
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -1658,10 +1655,10 @@ function RFC8452_KeyDeriv(key : bits(256)) = {
 }
 ----
 
-NOTE: Due to the computational cost of the derivation functions, implementations may cache recently used derived keys.
+// NOTE: Due to the computational cost of the derivation functions, implementations may cache recently used derived keys.
 
 `POLYVAL` is a so-called Almost XOR-Universal (AXU) Hash Function.
-The SIV is the encryption of the computation of this AXU hash on the concatenation of the associated data–namely, the Localities and the Metadata zero-padded to 128 bits–and the Content of the CR.
+The SIV is the encryption of the computation of this AXU hash on the concatenation of the Locality Secrets, the Metadata zero-padded to 128 bits, and the Content of the CR.
 
 In the pseudocode below for POLYVAL, the data to be digested by POLYVAL is represented an array with an integral number of 16-byte blocks, where the last one may be just 8 bytes long.
 
@@ -1681,90 +1678,79 @@ function POLYVAL(&tmp : bits(128), auth_key : bits(128), blocks[0 .. n-1] : bits
     } else {
       tmp ← tmp xor blocks[i];
       tmp ← Montmul(h, auth_key);
-    }
-  }
+  } }
 }
 ----
 
 [[ACE-SCC-export]]
 ==== Export
 
-During SCC export and import, the Locality Secrets
-associated with the Localities encoded in the _Locality_ field of the Metadata
-are prepended, in ascending index order, to the input of the AEAD tag computation, before the metadata.
+During SCC export and import, the Locality Secrets associated with the Localities encoded in the _Locality_ field of the Metadata are prepended, in ascending index order, to the input of the AEAD tag computation, before the metadata.
 If the _Locality_ field is zero, no Locality Secrets are prepended.
 
-The export operation maintains a per-CR flag indicating that an export is in progress.
-The reason is that operations that modify the internal state may be performed on a CR with an interrupted export operation pending.
-In this case, resuming the export operation may use an incorrect SIV for the remaining SCC data, causing a subsequent import to fail authentication.
-Therefore, any operations that modifies the internal state of the CR will also unset this flag.
-If an attempt is made to resume an export operation while this flag is cleared, it is restarted instead.
+The export operation maintains a per-CR flag indicating whether an export is in progress. This flag prevents the resumption of an export after an instruction that modifies the CR's internal state is performed. If this scenario were allowed, resuming the export could compute an incorrect SIV for the remaining SCC data, causing subsequent import authentication failures. Consequently, any operation that modifies the CR's internal state clears this flag. If an attempt is made to resume an export operation when the flag is cleared, the export restarts from the beginning.
+
+[WARNING]
+====
+Do we need a mechanism to clear the `CR.exporting/importing` flag upon context switch, to force a restart in this case?
+Or would simply clearing the CR be sufficient?
+====
+
+// These variables are kept by the microarchitecture internally, and we need
+// one instance per hart, we assume only one export/import is performed.
+// per hart at any given time, which means that there cannot be two interrupted
+// export or import operations.
 
 [[ACE-SCC-export-listing]]
 .Generation of an SCC from a CR
 []
 ----
 function ace.export(&CR, M[]) = {
-  & mh : bits(64) = CR.Metadata_header;  // By reference, from the CR
-
-  CR.exporting : bool;         // Architecturally "hidden" per-CR ACE unit state
-  // TBD: how to reset "exporting" automatically? What operations reset it?
-
-  // These variables are kept by the microarchitecture internally, and we need
-  // one instance per hart, we assume only one export/import is performed.
-  // per hart at any given time, which means that there cannot be two interrupted
-  // export or import operations.
-
+  & mh : bits(64) = CR.Metadata_header;    // By reference, from the CR
+  CR.exporting : bool;                     // "hidden" per-CR ACE unit state
   local SIV, tmp : bits(128);
 
   external CSK : bits(256);
-  external enc_key : bits(256);
+  external enc_key : bits(256);   // NOTE: {enc_key, auth_key} ← RFC8452_KeyDeriv(CSK);
   external auth_key : bits(128);
-  // NOTE: {enc_key, auth_key} ← RFC8452_KeyDeriv(CSK);
 
-  // exporting is always false except during export.
-  CR.exporting ← true;
+  CR.exporting ← true;                     // always false unless during export.
 
-  // CR.content[] includes the optional extra content at the end
   local z : int ← SCC_content_size(mh);
   z ← z + mh._AdditionalData_ * 8;
+
+  // CR.content[] includes the optional Additional Data at the end
   CR.content = array of z bytes;
+
   // In external memory: Metadata Header, then SIV, then Content
   M = array of MH_size(mh) + 16 + z bytes.
 
   local let last_block_fractional : Boolean ← z % 16 != 0;
   local let num_blocks : int ← ceil(z / 16);
-
-  local L : bits(MAX_LOCALITIES*128); // Currently, MAX_LOCALITIES = 3
+  local L : bits(MAX_LOCALITIES*128);      // Currently, MAX_LOCALITIES = 3
   local num_localities : int ← 0;
 
   foreach(i from 0 to number of localities - 1) {
     if (CR.Metadata.Locality includes locality[i]) {
       L[num_localities * 128 + 127:num_localities * 128] ← LST[i];
       num_localities ← num_localities + 1;
-    }
-  }
+  } }
 
   POLYVAL(&tmp, auth_key, L[num_localities*128-1:0] @ zeros(64) @ mh @ CR.content[],
            last_block_fractional);
   SIV ← AESE(enc_key, 0 @ tmp[126:0]);
 
-  // FOLLOWING MEMORY WRITE PREEMPTIBLE, `acestart` FROM 0 TO 7
-  M[0 .. 7] ← mh;
-
-  // FOLLOWING MEMORY WRITE PREEMPTIBLE, `acestart` FROM 8 TO 23
-  M[8 .. 23] ← SIV;
+  M[0 .. 7]  ← mh;  // THIS MEMORY WRITE IS PREEMPTIBLE, WITH `acestart` FROM 0 TO 7
+  M[8 .. 23] ← SIV; // THIS MEMORY WRITE IS PREEMPTIBLE, WITH `acestart` FROM 8 TO 23
 
   foreach(i from 0 to num_blocks - 1) {
     if ((i == num_blocks - 1) and last_block_fractional)
-      // FOLLOWING MEMORY WRITE PREEMPTIBLE, `acestart` FROM 24+i*16 TO 31+i*16
-      M[24+i*16 .. 31+i*16]
-             ← CR.content[i*16 .. 7+i*16]
+      // FOLLOWING MEMORY WRITE IS PREEMPTIBLE, WITH `acestart` FROM 24+i*16 TO 31+i*16
+      M[24+i*16 .. 31+i*16] ← CR.content[i*16 .. 7+i*16]
                xor AESE(enc_key, 1 @ SIV[126:32] @ (SIV[31:0]+bin(i,32) % 2**32)[63:0];
     else
-      // FOLLOWING MEMORY WRITE PREEMPTIBLE, `acestart` FROM 24+i*16 TO 39+i*16
-      M[24+i*16 .. 39+i*16]
-             ← CR.content[i*16 .. 15+i*16]
+      // FOLLOWING MEMORY WRITE IS PREEMPTIBLE, WITH `acestart` FROM 24+i*16 TO 39+i*16
+      M[24+i*16 .. 39+i*16] ← CR.content[i*16 .. 15+i*16]
                xor AESE(enc_key, 1 @ SIV[126:32] @ (SIV[31:0]+bin(i,32) % 2**32);
   }
 
@@ -1812,12 +1798,11 @@ function ace.import(&CR, M[]) = {
   external CSK : bits(256);
   external enc_key : bits(256);
   external auth_key : bits(128);
-  // NOTE: {enc_key, auth_key} ← RFC8452_KeyDeriv(CSK);
 
   // CR.importing is always false except during import.
   CR.importing ← true;
 
-  // FOLLOWING MEMORY READ PREEMPTIBLE, `acestart` FROM 0 TO 7
+  // FOLLOWING MEMORY READ IS PREEMPTIBLE, WITH `acestart` FROM 0 TO 7
   tmp[63:0] ← M[0 .. 7]; // read Metadata Header
 
   saved_SN : bits(4) ← tmp[63:0].StateNumber;
@@ -1847,19 +1832,19 @@ function ace.import(&CR, M[]) = {
     }
   }
 
-  // FOLLOWING MEMORY READ PREEMPTIBLE, `acestart` FROM 8 TO 23
+  // FOLLOWING MEMORY READ IS PREEMPTIBLE, WITH `acestart` FROM 8 TO 23
   SIV ← M[8 .. 23];
   tmp ← tmp xor (zeros(64) @ mh);
   tmp ← Montmul(tmp, auth_key);
 
   foreach(i from 0 to num_blocks - 1) {
     if ((i == num_blocks - 1) and last_block_fractional) {
-      // FOLLOWING MEMORY READ PREEMPTIBLE, `acestart` FROM 24+i*16 TO 31+i*16
+      // FOLLOWING MEMORY READ IS PREEMPTIBLE, WITH `acestart` FROM 24+i*16 TO 31+i*16
       content[i*16 .. 7+i*16] ← M[24+i*16 .. 31+i*16]
           xor AESE(enc_key, 1 @ SIV[126:32] @ (SIV[31:0]+bin(i,32) % 2**32)[63:0];
       tmp[63:0] ← tmp[63:0] xor content[i*16 .. 7+i*16];
     } else {
-      // FOLLOWING MEMORY READ PREEMPTIBLE, `acestart` FROM 24+i*16 TO 39+i*16
+      // FOLLOWING MEMORY READ IS PREEMPTIBLE, WITH `acestart` FROM 24+i*16 TO 39+i*16
       content[i*16 .. 15+i*16] ← M[24+i*16 .. 39+i*16]
           xor AESE(enc_key, 1 @ SIV[126:32] @ (SIV[31:0]+bin(i,32) % 2**32);
       tmp ← tmp xor content[i*16 .. 15+i*16];
