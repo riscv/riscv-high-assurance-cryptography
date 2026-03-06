@@ -490,21 +490,28 @@ _Included in_::
 {empty}
 (((CSR, `acestart`)))
 `acestart` is an alias for `vstart`.
+Therefore, it is an XLEN-bit CSR.
 ACE defines it also when the V extension is not enabled.
 
 // The XLEN-bit RW CSR
 `acestart` tracks the progress of interruptible ACE instructions, namely `ace.prov`, `ace.import`, `ace.export`, `ace.input`, and `ace.output`.
 It also applies to `ace.exec` when iteratively processing a multi-block operand, as `ace.exec` may be interrupted between blocks.
-Only these instructions honor a nonzero `acestart`; all other instructions ignore it and are restarted, with `acestart` also being cleared.
+Only these instructions honor a nonzero `acestart`; all other instructions ignore it and are restarted, WITH acestart[XLEN-9:0] also being cleared.
 Provisioning, import, and export are resumed only under certain conditions, as explained in <<ACE-provisioning-export-import>>.
 
-Since ACE does not have an _intrinsic_ concept of element length, `acestart` counts the number of bytes processed so far, not the number of elements.
+The bottom XLEN-8 bits of `acestart` record the progress of an interrupted operation.
+Since ACE does not have an _intrinsic_ concept of element length, `acestart`[XLEN-9:0] counts the number of bytes processed so far, not the number of elements.
+The top 8 bits of `acestart` are used to encode additional information and are ignored if not used.
+
+`acestart`[XLEN-1:XLEN-8] is non-zero only if the interrupted instruction is `ace.prov`, `ace.import`, or `ace.export`, in which case it is equal to
+`acestart`[XLEN-1:XLEN-8] = `3'b100 @ bin(n,5)` wheren `n` is the number of the CR being provisioned, imported, or exported at the time of interruption.
+
 Hardware typically writes this register on interruption.
 Software may write zero to force a full restart and may save and restore the register across context switches.
 Writing an invalid or non-supported nonzero value may raise ACE exception ace_err_invalid_value.
 
 When a vector instruction is interrupted, the CSR follows `vstart` semantics, i.e., it counts the number of processed elements.
-When an ACE instruction is interrupted, the CSR follows `acestart` semantics, namely, it counts the number of bytes processed so far.
+When an ACE instruction is interrupted, the CSR follows `acestart` semanticsn described here.
 
 _Included in_::
 [%header,cols="4,2,2"]
@@ -545,11 +552,11 @@ _Included in_::
 
 {empty}
 (((CSR, `aceiobuftop`)))
-`aceiobuftop` is an XLEN-bit URW CSR that marks the upper bound of the buffer range used by `ace.input` and `ace.output`. Together with `acestart`, it defines the active transfer window.
+`aceiobuftop` is an XLEN-bit URW CSR that marks the upper bound of the buffer range used by `ace.input` and `ace.output`. Together WITH acestart[XLEN-9:0][XLEN-9:0], it defines the active transfer window.
 
-The constraints `acestart` {le} `aceiobuftop` {le} `aceiobuflen` must hold; violating either bound raises ace_err_invalid_value. Modifying `aceiobuftop` does not alter or invalidate buffer contents.
+The constraints `acestart[XLEN-9:0]` {le} `aceiobuftop` {le} `aceiobuflen` must hold; violating either bound raises ace_err_invalid_value. Modifying `aceiobuftop` does not alter or invalidate buffer contents.
 
-Using ACEIOBUF when `aceiobuftop` − `acestart` is zero (with `aceiobuflen` nonzero) or an invalid transfer size raises ACE error ace_err_invalid_value.
+Using ACEIOBUF when `aceiobuftop` − `acestart[XLEN-9:0]` is zero (with `aceiobuflen` nonzero) or an invalid transfer size raises ACE error ace_err_invalid_value.
 
 NOTE: `aceiobuftop` enables per-operation length adjustments without reconfiguring the ACEIOBUF, which can be expensive due to the fact that writing to `aceiobuflen` clears the buffer and may lead to internal garbage collection.
 This is useful to process an incomplete “last block” or to supply a short IV or nonce.
@@ -866,7 +873,6 @@ and not the format defined by the present architecture
 (`ace.import`).
 +
 `ace.import`
-//follows the interruptibility rules defined in <<ACE-CSR-acestart>> and <<ACE-provisioning-export-import>>.
 appears to other harts as a sequence of individual loads.
 +
 The operation of `ace.import` is described in detail in <<ACE-provisioning-export-import>>.
@@ -1433,16 +1439,16 @@ _Encoding_::
 _Description_::
 In all cases where the vector registers are not sufficiently long, or not implemented, inputs can be read directly from memory and written directly to memory.
 For this reason, the architecture defines `ace.input` and `ace.output` (cf. next section).
-`ace.input` reads `Xl` bytes from memory starting at address `%offset(Xs)` and copies them to the input buffer, starting at offset `acestart`.
+`ace.input` reads `Xl` bytes from memory starting at address `%offset(Xs)` and copies them to the input buffer, starting at offset `acestart`[XLEN-9:0].
 +
 If `Xl` == 0, the operation is a NOP.
 +
-If `Xl` is greater than `aceiobuftop` - `acestart`, ACE error ace_err_invalid_value is raised.
+If `Xl` is greater than `aceiobuftop` - `acestart`[XLEN-9:0], ACE error ace_err_invalid_value is raised.
 +
 The intended usage of `ace.input` and `ace.output` is explained in detail in <<ACE-usage-input-output>>.
 
 `ace.output` (see below) and `ace.input` can be used to save and restore the contents of the ACEIOBUF freely as long as ``aceactivecr``'s value is 32, for instance by
-context switching code. Also, these operations start at the offset specified in `acestart`, so the state of the buffer can easily be saved and restored with the same approach used for vectors.
+context switching code. Also, these operations start at the offset specified in `acestart`[XLEN-9:0], so the state of the buffer can easily be saved and restored with the same approach used for vectors.
 
 _Properties_::
 Possibly modifies state: *YES*. +
@@ -1485,11 +1491,11 @@ _Encoding_::
 
 _Description_::
 This is the output operation corresponding to `ace.input`.
-`ace.output` writes the contents of the input buffer, starting at offset `acestart`, to memory starting at address `%offset(Xs)`.
+`ace.output` writes the contents of the input buffer, starting at offset `acestart`[XLEN-9:0], to memory starting at address `%offset(Xs)`.
 +
 If `Xl` == 0, the operation is a NOP.
 +
-If `Xl` is greater than `aceiobuftop` - `acestart`, ACE error ace_err_invalid_value is raised.
+If `Xl` is greater than `aceiobuftop` - `acestart`[XLEN-9:0], ACE error ace_err_invalid_value is raised.
 
 _Properties_::
 Possibly modifies state: *YES*. +
@@ -1503,6 +1509,20 @@ _Included in_::
 |Extension | Minimum version | Lifecycle state
 | `Zlio`   | v0.0.0          | --
 |===
+
+// ////////////////////////////////////////////////////////////////////
+
+[[ACE-interruptibility]]
+=== Interruptibility
+
+Except for exceptions caused by memory accesses or the interruption of vector accesses, most ACE operations are uninterruptible.
+
+The operation of `ace.exec` on a basic processing unit, in any state of any algorithm, is uninterruptible, unless explicitly allowed by the algorithm.
+When `ace.exec` operates iteratively on an inputs who length is an integer multiple of the basic processing unit, each block is processed uninterruptibly, but the instruction may be interrupted between blocks; the hardware sets `acestart` to the interruption point and possibly additional information.
+
+The interruptibility of provisioning, import, and export operations is defined in <<ACE-provisioning-export-import>>.
+
+An implementation must wait before accessing a CR that is still asynchronously being written to.
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -1549,17 +1569,16 @@ In a threshold implementation, a single key byte in `content[]` may correspond t
 // ////////////////////////////////////////////////////////////////////
 
 [[ACE-system-keys]]
-==== System Keys
+==== System Keys and Random System-Generated Key Values
 
-System Keys are given by an index into an internal, system-specific System Keys Table (SKT), and therefore, in a PI or in a SCC, in place of the key value itself, a 64-bit field is used to store the index.
+* System Keys are given by an index into an internal, system-specific System Keys Table (SKT), and therefore, in a PI or in a SCC, in place of the key value itself, a 64-bit field is used to store the index.
 
-For threshold implementations of system keys, ACE may copy the key material from the SKT into the CR and expand it into multiple shares.
+* For threshold implementations of system keys, ACE may copy the key material from the SKT into the CR and expand it into multiple shares.
 However, the key must be still be exported as a single index.
 
-It is permissible to include some of the shares of a system key in a threshold implementation in the optional Additional Data of the content in order to accelerate share reconstruction, provided that the key cannot be reconstructed from these shares.
+* It is permissible to include some of the shares of a system key in a threshold implementation in the optional Additional Data of the content in order to accelerate share reconstruction, provided that the key cannot be reconstructed from these shares.
 
-When the 64-bit index system key index in the PI read nby `ace.prov` is an all all-ones value (i.e., `ones(64)`), it denotes that the key material must be generated randomly and, similarly to the behaviour of `ace.import.S`, the _KeyType_ field of the metadata is internally set to 0, just as for any other explicitly provisioned key, and exported as such, i.e., by value.
-This applies to all key material in all algorithms, unless otherwise specified.
+* When the 64-bit index system key index in the PI read nby `ace.prov` is an all all-ones value (i.e., `ones(64)`), it denotes that the key material must be generated randomly and, similarly to the behaviour of `ace.import.S`, the _KeyType_ field of the metadata is internally set to 0, just as for any other explicitly provisioned key, and exported as such, i.e., by value. This applies to all key material in all algorithms, unless otherwise specified.
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -1590,18 +1609,6 @@ and the total size in bytes of an SCC is
 
 // ////////////////////////////////////////////////////////////////////
 
-[[ACE-interruptibility]]
-===== Interruptibility
-
-Except for exceptions caused by memory accesses or the interruption of vector accesses, most ACE operations are uninterruptible.
-
-The operation of `ace.exec` on a basic processing unit, in any state of any algorithm, is uninterruptible, unless explicitly allowed by the algorithm.
-When `ace.exec` operates iteratively on an inputs who length is an integer multiple of the basic processing unit, each block is processed uninterruptibly, but the instruction may be interrupted between blocks; the hardware sets `acestart` to the interruption point.
-
-An implementation must wait before accessing a CR that is still asynchronously being written to.
-
-// ////////////////////////////////////////////////////////////////////
-
 [[ACE-interruption-points]]
 ==== Interruption Points
 
@@ -1629,13 +1636,13 @@ We start with the algorithm performed by `ace.prov`, which reads a PI and uses i
 ----
 function ace.prov(&CR, M[]) = {
   mh : bits(64) ← & CR.Metadata;           // By reference, from the CR
-  provisioning[CR] : bool;                 // "hidden" per-CR ACE unit state
 
-  // PREEMPTIBLE WITH `acestart` IN [0 .. 7]
+  // PREEMPTIBLE WITH acestart[XLEN-9:0] IN [0 .. 7]
   mh ← M[0 .. 7]
   z ← PI_content_size(Metadata[31:0]);
 
-  provisioning[CR] ← true;
+  acestart[XLEN-1:XLEN-1] ← 1;
+  acestart[XLEN-2:XLEN-8] ← bin(CR,7);
   CR.Metadata.StateNumber ← ace_state_invalid;
 
   if (z == 0)
@@ -1648,11 +1655,11 @@ function ace.prov(&CR, M[]) = {
     error ace_err_invalid_value;
 
   - Complete Metadata parsing.
-  // NEXT OPERATION PREEMPTIBLE WITH `acestart` IN [8 .. Z+7]
+  // NEXT OPERATION PREEMPTIBLE WITH acestart[XLEN-9:0] IN [8 .. Z+7]
   - Sequentially read and parse the z bytes at M+8.
 
   CR.Metadata.StateNumber ← ace_state_initial;
-  provisioning[CR] ← false;
+  acestart[XLEN-1:XLEN-8] ← zeros(8);
 }
 ----
 
@@ -1715,12 +1722,6 @@ If the _Locality_ field is zero, no Locality Secrets are prepended.
 
 The export operation maintains a per-CR flag indicating whether an export is in progress. This flag prevents the resumption of an export after an instruction that modifies the CR's internal state is performed. If this scenario were allowed, resuming the export could compute an incorrect SIV for the remaining SCC data, causing subsequent import authentication failures. Consequently, any operation that modifies the CR's internal state clears this flag. If an attempt is made to resume an export operation when the flag is cleared, the export restarts from the beginning.
 
-[WARNING]
-====
-Do we need a mechanism to clear the `CR.provisioning/exporting/importing` flag upon context switch, to force a restart in this case?
-Or would simply clearing the CR be sufficient, since it does?
-====
-
 // These variables are kept by the microarchitecture internally, and we need
 // one instance per hart, we assume only one export/import is performed.
 // per hart at any given time, which means that there cannot be two interrupted
@@ -1732,12 +1733,12 @@ Or would simply clearing the CR be sufficient, since it does?
 ----
 function ace.export(&CR, M[]) = {
   mh : bits(64) = & CR.Metadata;           // By reference, from the CR
-  external exporting[CR] : bool;           // "hidden" per-CR ACE unit state
   external CSK : bits(256);
   external enc_key : bits(256);            // RFC8452_KeyDeriv(CSK)
   external auth_key : bits(128);
 
-  exporting[CR] ← true;                    // always false unless during export.
+  acestart[XLEN-1:XLEN-1] ← 1;
+  acestart[XLEN-2:XLEN-8] ← bin(CR,7);
 
   local SIV, tmp : bits(128);
   local z : int ← SCC_content_size(mh);
@@ -1763,21 +1764,21 @@ function ace.export(&CR, M[]) = {
            last_block_fractional);
   SIV ← AESE(enc_key, 0 @ tmp[126:0]);
 
-  M[0 .. 7]  ← mh;  // THIS MEMORY WRITE IS PREEMPTIBLE, WITH `acestart` FROM 0 TO 7
-  M[8 .. 23] ← SIV; // THIS MEMORY WRITE IS PREEMPTIBLE, WITH `acestart` FROM 8 TO 23
+  M[0 .. 7]  ← mh;  // PREEMPTIBLE MEMORY WRITE, WITH acestart[XLEN-9:0] FROM 0 TO 7
+  M[8 .. 23] ← SIV; // PREEMPTIBLE MEMORY WRITE, WITH acestart[XLEN-9:0] FROM 8 TO 23
 
   foreach(i from 0 to num_blocks - 1) {
     if ((i == num_blocks - 1) and last_block_fractional)
-      // FOLLOWING MEMORY WRITE IS PREEMPTIBLE, WITH `acestart` FROM 24+i*16 TO 31+i*16
+      // PREEMPTIBLE MEMORY WRITE, WITH acestart[XLEN-9:0] FROM 24+i*16 TO 31+i*16
       M[24+i*16 .. 31+i*16] ← CR.content[i*16 .. 7+i*16]
                xor AESE(enc_key, 1 @ SIV[126:32] @ (SIV[31:0]+bin(i,32) % 2**32)[63:0];
     else
-      // FOLLOWING MEMORY WRITE IS PREEMPTIBLE, WITH `acestart` FROM 24+i*16 TO 39+i*16
+      // PREEMPTIBLE MEMORY WRITE, WITH acestart[XLEN-9:0] FROM 24+i*16 TO 39+i*16
       M[24+i*16 .. 39+i*16] ← CR.content[i*16 .. 15+i*16]
                xor AESE(enc_key, 1 @ SIV[126:32] @ (SIV[31:0]+bin(i,32) % 2**32);
   }
 
-  exporting[CR] ← false;
+  acestart[XLEN-1:XLEN-8] ← zeros(8);
 }
 ----
 
@@ -1793,7 +1794,7 @@ The import algorithm needs some special care:
 
 * The first block read from memory by the operation is the Metadata Header `mh`:
  ** If strictly fewer than four bytes are read before the instruction is interrupted, ACE leaves `acestart` at 0, and the instruction will be restarted upon resumption.
- ** If four bytes or more have been read, the value of `mh.StateNumber` in the SCC is known. In this case, the instruction may be restarted with `acestart` {ge} 4 recording the amount of data read.
+ ** If four bytes or more have been read, the value of `mh.StateNumber` in the SCC is known. In this case, the instruction may be restarted WITH acestart[XLEN-9:0] {ge} 4 recording the amount of data read.
 * Af the beginning of the import operation, the hardware saves the `StateNumber` value from the original metadata and sets
 `mh.StateNumber <- ace_state_invalid`. At the end of the import operation, `mh.StateNumber` is set to the saved value.
 ** Since context switching code cannot export a partially imported CR when saving the state, it will clear the CR instead, forcing the hardware to restart the import operation.
@@ -1814,7 +1815,6 @@ The import algorithm needs some special care:
 ----
 function ace.import(&CR, M[]) = {
   // M : array of bytes;   from memory
-  external importing[CR] : bool;           // "hidden" per-CR ACE unit state
   local saved_SN : bits(4);                // This is a "hidden" state as well
   local SIV, tmp : bits(128);
 
@@ -1822,10 +1822,10 @@ function ace.import(&CR, M[]) = {
   external enc_key : bits(256);
   external auth_key : bits(128);
 
-  // importing is always false except during import.
-  importing[CR] ← true;
+  acestart[XLEN-1:XLEN-1] ← 1;
+  acestart[XLEN-2:XLEN-8] ← bin(CR,7);
 
-  // FOLLOWING MEMORY READ IS PREEMPTIBLE, WITH `acestart` FROM 0 TO 7
+  // PREEMPTIBLE MEMORY READ, WITH acestart[XLEN-9:0] FROM 0 TO 7
   tmp[63:0] ← M[0 .. 7];         // read Metadata Header
 
   saved_SN ← tmp[63:0].StateNumber;
@@ -1857,19 +1857,19 @@ function ace.import(&CR, M[]) = {
     }
   }
 
-  // FOLLOWING MEMORY READ IS PREEMPTIBLE, WITH `acestart` FROM 8 TO 23
+  // PREEMPTIBLE MEMORY READ, WITH acestart[XLEN-9:0] FROM 8 TO 23
   SIV ← M[8 .. 23];
   tmp ← tmp xor (zeros(64) @ mh);
   tmp ← Montmul(tmp, auth_key);
 
   foreach(i from 0 to num_blocks - 1) {
     if ((i == num_blocks - 1) and last_block_fractional) {
-      // FOLLOWING MEMORY READ IS PREEMPTIBLE, WITH `acestart` FROM 24+i*16 TO 31+i*16
+      // PREEMPTIBLE MEMORY READ, WITH acestart[XLEN-9:0] FROM 24+i*16 TO 31+i*16
       content[i*16 .. 7+i*16] ← M[24+i*16 .. 31+i*16]
           xor AESE(enc_key, 1 @ SIV[126:32] @ (SIV[31:0]+bin(i,32) % 2**32)[63:0];
       tmp[63:0] ← tmp[63:0] xor content[i*16 .. 7+i*16];
     } else {
-      // FOLLOWING MEMORY READ IS PREEMPTIBLE, WITH `acestart` FROM 24+i*16 TO 39+i*16
+      // PREEMPTIBLE MEMORY READ, WITH acestart[XLEN-9:0] FROM 24+i*16 TO 39+i*16
       content[i*16 .. 15+i*16] ← M[24+i*16 .. 39+i*16]
           xor AESE(enc_key, 1 @ SIV[126:32] @ (SIV[31:0]+bin(i,32) % 2**32);
       tmp ← tmp xor content[i*16 .. 15+i*16];
@@ -1888,32 +1888,15 @@ function ace.import(&CR, M[]) = {
   // FINALLY, restore the StateNumber from the SCC
   mh.StateNumber ← saved_SN;
 
-  importing[CR] ← false;
+  acestart[XLEN-1:XLEN-8] ← zeros(8);
 }
 ----
 
 [NOTE]
 ====
-`provisioning[CR]`, `importing[CR]` and `exporting[CR]` need not be distinct bits.
-So, in theory, 32 bits would be sufficient.
-Also, since only one of these bits is ever set at a time,
-we actually only need a single bit and a 5-bit field for the CR number.
+The top 8 bits of `acestart` indicate whether a provisioning, import, or export operation is in progress, eliminating the need for separate `provisioning`, `importing`, or `exporting` bits per CR. This design also means that only one such operation can be interrupted at a time.
 
-When privileged code sets `acestart` to the saved value (or leaves it
-untouched, as when addressing a memory exception), the hardware needs
-to check whether the `provisioning/importing/exporting[CR]` bit is set and the CR
-number also matches. If not, the instruction is restarted anyway.
-
-Microarchitectures may in theory support keeping track of several
-interrupted import/export operations at the same time. This
-would require keeping also copies of the `SIV` and `tmp` values,
-i.e., 256 bits worth of information, and a few other small quantities,
-per interrupted operation. Since we believe that interrupted import/export
-operations are not very common, and would be significant only for very
-large states, of which there would be very few in flight at any given
-moment, we are not mandating this.  However, a single instance of
-interrupted import or export must be architected to correctly address memory
-exceptions.
+An architecture could theoretically support tracking multiple interrupted import/export operations simultaneously. This would require storing copies of the `SIV` and `tmp` values (256 bits) along with other small quantities for each interrupted operation. Since interrupted import/export operations are uncommon and would only be significant for very large states—of which few would be in flight simultaneously—this capability is perceived as not necessary. It is the responsibility of the exception handlers to fully erase `acestart` in these cases to prevent unpredictable behaviour because of the restart of interrupted privisioning or import, or of the export of a CR which has been modified in the meantime.
 ====
 
 //
@@ -2105,7 +2088,7 @@ The ordering of the instructions in a replacement sequence is enforced by the ar
 Not following the instruction ordering raises an illegal instruction exception and invalidates the CR.
 
 `acesequence` can be freely read and written in all modes.
-In particular, `acesequence` may be saved and restored by privileged code at context switch together with `acestart`.
+In particular, `acesequence` may be saved and restored by privileged code at context switch together WITH acestart[XLEN-9:0].
 Abusing this register may also allow to arbitrarily repeat `ace.exec` or `ace.state` instructions.
 However, if the algorithm and its state machine are correctly designed, this will not allow the user to compromise the internal state of the algorithm.
 
