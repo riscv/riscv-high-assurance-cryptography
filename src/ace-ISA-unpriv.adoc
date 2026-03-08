@@ -455,6 +455,7 @@ The non-zero error codes are also listed in decreasing priority order, i.e., err
 |  8   | ace_err_unimpl             | Not implemented algorithm or variant. Invalid state number in `ace.state`.
 |  9   | ace_err_unconf_buf         | Use of ACEIOBUF as an input or an output when it was unconfigured.
 | 10   | ace_err_auth               | Authentication failure in an algorithm.
+| 255  | ace_err_not_infty          | Used in special cases (such as a non-infinity point on an elliptic curve)
 |===
 
 _Included in_::
@@ -650,7 +651,7 @@ _Included in_::
 
 [WARNING]
 ====
-The encodings presented here are preliminary. The usage of `custom-0` for load-type, `custom-1` for store-type, and `custom-2` for operational instructions aligns with the base ISA and FP instruction-set conventions.
+The encodings presented here are preliminary.
 ====
 
 ACE provides a set of unprivileged instructions, some of which are implemented as CSRRW operations.
@@ -1356,9 +1357,7 @@ _Included in_::
 | `Zlio`   | v0.0.0          | --
 |===
 
-//
-
-////
+// ////////////////////////////////////////////////////////////////////
 
 [[ACE-instruction-derive]]
 ==== ace.derive
@@ -1390,7 +1389,6 @@ The encoding shares `func3` with `ace.exec`, however with bit 25 equal to 1 and 
 ]}
 ....
 +
-This encoding differs from Form A `ace.exec` by having bit 25 set to 1.
 Bits [27:26], i.e., field `R`, is encoded exactly as for `ace.clone` (<<ACE-instruction-clone>>).
 Bit 28 determines whether a vector register (or register group) is used to pass an auxiliary parameter to the key derivation mechanism or not.
 Bit `v` (i.e., bit 28) is 0 for Forms A and B and 1 for Form C. +
@@ -1406,7 +1404,12 @@ Usage-controlled: *YES*. +
 Trappable: *NO*. +
 Interruptible: *NO*. +
 
-////
+_Included in_::
+[%header,cols="4,2,2"]
+|===
+|Extension | Minimum version | Lifecycle state
+| `Zl*c`   | v0.0.0          | --
+|===
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -1426,9 +1429,9 @@ _Encoding_::
 [wavedrom, , svg]
 ....
 {reg:[
-    { bits:  7, name: 0x0b, attr: ['custom-0'] },
+    { bits:  7, name: 0x27, attr: ['custom-1'] },
     { bits:  5, name: 'immed[4:0]' },
-    { bits:  3, name: 0x4, attr: ['ace.input'] },
+    { bits:  3, name: 0x2, attr: ['ace.input'] },
     { bits:  5, name: 'Xl' },
     { bits:  5, name: 'Xs' },
     { bits:  7, name: 'immed[11:5]' },
@@ -1482,7 +1485,7 @@ _Encoding_::
 {reg:[
     { bits:  7, name: 0x27, attr: ['custom-1'] },
     { bits:  5, name: 'Xd' },
-    { bits:  3, name: 0x4, attr: ['ace.output'] },
+    { bits:  3, name: 0x3, attr: ['ace.output'] },
     { bits:  5, name: 'Xl' },
     { bits: 12, name: 'immed' },
 ]}
@@ -4044,11 +4047,11 @@ The parameters that are used in this section are:
 +
 The parameters for the defined curves are:
 
- * secp256r1 (NIST P-256): `b` = 256, `h` = 256, `j` = 256, `u` = 2, `v` = 2.
- * secp384r1 (NIST P-384): `b` = 384, `h` = 384, `j` = 384, `u` = 2, `v` = 2.
- * secp521r1 (NIST P-521): `b` = 576 (the top 55 bits are zero-padding), `h` = 512, `j` = 512, `u` = 2, `v` = 2.
+ * secp256r1 (NIST P-256) cite:[NIST-SP-800-186,nist-fips-186-5]: `b` = 256, `h` = 256, `j` = 256, `u` = 2, `v` = 2.
+ * secp384r1 (NIST P-384) cite:[NIST-SP-800-186,nist-fips-186-5]: `b` = 384, `h` = 384, `j` = 384, `u` = 2, `v` = 2.
+ * secp521r1 (NIST P-521) cite:[NIST-SP-800-186,nist-fips-186-5]: `b` = 576 (the 55 most significant bits are zero-padding), `h` = 512, `j` = 512, `u` = 2, `v` = 2.
  * ed25519 cite:[RFC7748]: `b` = 256; `h` = 256; `j` = 256; `u` = 1; `v` = 1.
- * ed448 cite:[RFC7748]: `b` = 480 (the top 32 bits are zero-padding); `h` = 480 (the top 32 bits are zero-padding); `j` = 480 (the top 32 bits are zero-padding); `u` = 1; `v` = 1.
+ * ed448 cite:[RFC7748]: `b` = 480 (the top 32 bits are zero-padding); `h` = 480 (the 32 most significant bits are zero-padding); `j` = 480 (the 32 most significant bits are zero-padding); `u` = 1; `v` = 1.
  * brainpoolP256r1: `b` = 256; `h` = 256; `j` = 256; `u` = 2; `v` = 2.
  * brainpoolP256t1: `b` = 256; `h` = 256; `j` = 256; `u` = 2; `v` = 2.
  * brainpoolP384r1: `b` = 384; `h` = 384; `j` = 384; `u` = 2; `v` = 2.
@@ -4066,7 +4069,9 @@ NOTE: In the Metadata, Algorithm only defines a curve.
 AlgorithmPolicy enables signature generation (bit 12) and verification (bit 13), where all four combinations are admissible.
 +
 * *Internal State* (Content):
+ ** `IsGenInfty`: Bool.
  ** `HasSecondPt`: Bool.
+ ** `IsSecondPtInfty`: Bool.
  ** `HasScalar`: Bool.
  ** `HasSecondPt`: Bool.
  ** `HasSignature`: Bool.
@@ -4092,10 +4097,11 @@ AlgorithmPolicy enables signature generation (bit 12) and verification (bit 13),
 [cols="^7%,<33%,<30,<30",width="100%",options="header"]
 |===
 |   Pos.  | Size in Bytes  2+| Field
-.4+| i .4+| 2                | Bit 0: `HasScalar`     | Bit 1: `HasSecondPt`
-                            <| Bit 2: `HasSignature` <| Bit 3: `HasHash`
-                            <| Bit 4: `HasRndNum`    <| Bit 5: `OutputType`
-                            <| Bit 6-15: Reserved    <| {empty}
+.5+| i .5+| 2                | Bit 0: `HasScalar`     | Bit 1: `IsGenInfty`
+                            <| Bit 2: `HasSecondPt`  <| Bit 3: `IsSecondPtInfty`
+                            <| Bit 4: `HasSignature` <| Bit 5: `HasHash`
+                            <| Bit 6: `HasRndNum`    <| Bit 7: `OutputType`
+                            <| Bit 8-15: Reserved    <| {empty}
 |    ii   | 2              2+| `Progress`
 |   iii   | 4              2+| Padding
 |    iv   | ``ub``/8       2+| `Generator`, X coordinate, followed by Y coordinate if `u=2`.
@@ -4147,6 +4153,8 @@ _completed_ (15), ECC algorithms define:
  ** _set_secondpt_ (8)
  ** _set_signature_ (9)
  ** _output_ (10)
+ ** _get_gen_infty_ (11)
+ ** _get_secondpt_infty_ (12)
 --
 +
 
@@ -4160,7 +4168,8 @@ _completed_ (15), ECC algorithms define:
   *** _point_mul_ only if `HasScalar`;
   *** _sign_generate_ only if `HasSecondPt`, and `HasHash`;
   *** _sign_verify_ only if `HasScalar`, `HasSecondPt`, `HasHash`, and `HasSignature`.
- ** _point_mul_ -> _output_ -> _completed_.
+ ** From any state to _get_secondpt_infty_ only if `IsSecondPtInfty` is true.
+ ** _point_mul_ -> _get_secondpt_infty_, _output_
  ** _sign_generate_ -> _output_ -> _completed_.
  ** _sign_verify_ -> _completed_.
 
@@ -4215,6 +4224,11 @@ the Boolean variable ``Has``__Var__ is set when all operations required in State
    . One or more Form C `ace.exec` instructions may be issued to export segments of the result to memory, each time increasing `Progress` by the length of the output of `ace.exec`.
      . Data beyond the length of the output is replaced with zeros in the last exported part.
      . Once `Progress` has reached the length of the output, the state transitions automatically to _completed_.
+
+ ** If a Form A `ace.state` is used to request a transition to _get_gen_infty_, resp., _get_secondpt_infty_,
+ `aceerror` is set to ace_err_not_infty if the `Generator`, resp., `SecondPt` is not at infinity, else `aceerror` is set to zero.
+ If `HasSecondPt` is false, and the requested state is _get_secondpt_infty_, then `aceerror` is set to ace_err_invalid_value.
+ The state of the CC is _not_ changed.
 
  ** Upon returning to State _initial_:
   *** If a Form B `ace.state` is used, the parameter `Xs` will determine whether the fields
