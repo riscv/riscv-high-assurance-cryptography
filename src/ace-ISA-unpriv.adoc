@@ -100,13 +100,8 @@ Ascon-Hash256, Ascon-XOF128 and Ascon-CXOF128.                 | <<ACE-Ascon-AEA
 | `Zled25519c`   | -- Edwards curve ed25519.                   | <<ACE-ECC>>                                    | v0.0.0          | --
 | `Zled448c`     | -- Edwards curve ed448.                     | <<ACE-ECC>>                                    | v0.0.0          | --
 | `ZlbpP256r1c`  | -- Brainpool curve brainpoolP256r1.         | TBD                                            | v0.0.0          | --
-| `ZlbpP256t1c`  | -- Twisted Brainpool curve brainpoolP256t1. | TBD                                            | v0.0.0          | --
-| `ZlbpP320r1c`  | -- Brainpool curve brainpoolP320r1.         | TBD                                            | v0.0.0          | --
-| `ZlbpP320t1c`  | -- Twisted Brainpool curve brainpoolP320t1. | TBD                                            | v0.0.0          | --
 | `ZlbpP384r1c`  | -- Brainpool curve brainpoolP384r1.         | TBD                                            | v0.0.0          | --
-| `ZlbpP384t1c`  | -- Twisted Brainpool curve brainpoolP384t1. | TBD                                            | v0.0.0          | --
 | `ZlbpP512r1c`  | -- Brainpool curve brainpoolP512r1.         | TBD                                            | v0.0.0          | --
-| `ZlbpP512t1c`  | -- Twisted Brainpool curve brainpoolP512t1. | TBD                                            | v0.0.0          | --
 | `ZlSM2c`       | -- Chinese 256-bit SM2 curve.               | TBD                                            | v0.0.0          | --
 | `Zlkn`       2+| NIST Symmetric Suite. Depends on `Zleaes128`, `Zleaes256`, `Zlesha2`, `Zlgcmm`, `Zlxexm`, and `Zlgcmsivm`.  | v0.0.0 | --
 5+| ^1^ Must support the following CSRs: `aceerror`, `acestart` (this is a dependency for Zicsr), `aceiobuflen` and `aceiobuftop`; must support the following instructions: `ace.prov`, Form D of `ace.exec`, `ace.input` and `ace.output`, `ace.clear`, `ace.export`, `ace.import`, `ace.clone`, `ace.size` (and thus `ace.avail`), and `ace.restrict`; must support `Zlkn`.
@@ -455,7 +450,7 @@ The non-zero error codes are also listed in decreasing priority order, i.e., err
 |  8   | ace_err_unimpl             | Not implemented algorithm or variant. Invalid state number in `ace.state`.
 |  9   | ace_err_unconf_buf         | Use of ACEIOBUF as an input or an output when it was unconfigured.
 | 10   | ace_err_auth               | Authentication failure in an algorithm.
-| 255  | ace_err_not_infty          | Used in special cases (such as a non-infinity point on an elliptic curve)
+| 255  | ace_err_infty              | Used in the special case of a point at infinity on an elliptic curve.
 |===
 
 _Included in_::
@@ -4053,11 +4048,8 @@ The parameters for the defined curves are:
  * ed25519 cite:[RFC7748]: `b` = 256; `h` = 256; `j` = 256; `u` = 1; `v` = 1.
  * ed448 cite:[RFC7748]: `b` = 448; `h` = 448; `j` = 448; `u` = 1; `v` = 1.
  * brainpoolP256r1: `b` = 256; `h` = 256; `j` = 256; `u` = 2; `v` = 2.
- * brainpoolP256t1: `b` = 256; `h` = 256; `j` = 256; `u` = 2; `v` = 2.
  * brainpoolP384r1: `b` = 384; `h` = 384; `j` = 384; `u` = 2; `v` = 2.
- * brainpoolP384t1: `b` = 384; `h` = 384; `j` = 384; `u` = 2; `v` = 2.
  * brainpoolP512r1: `b` = 512; `h` = 512; `j` = 512; `u` = 2; `v` = 2.
- * brainpoolP512t1: `b` = 512; `h` = 512; `j` = 512; `u` = 2; `v` = 2.
  * SM2 cite:[GMT-0003-1-2012,GMT-0003-2-2012,GMT-0003-3-2012,GMT-0003-4-2012,ISOIEC-14888-3-2018]: `b` = 256; `h` = 256; `j` = 256; `u` = 2; `v` = 2.
 
 //
@@ -4153,8 +4145,7 @@ _completed_ (15), ECC algorithms define:
  ** _set_secondpt_ (8)
  ** _set_signature_ (9)
  ** _output_ (10)
- ** _get_gen_infty_ (11)
- ** _get_secondpt_infty_ (12)
+ ** _absorb_S1_ (11)
 --
 +
 
@@ -4225,10 +4216,7 @@ the Boolean variable ``Has``__Var__ is set when all operations required in State
      . Data beyond the length of the output is replaced with zeros in the last exported part.
      . Once `Progress` has reached the length of the output, the state transitions automatically to _completed_.
 
- ** If a Form A `ace.state` is used to request a transition to _get_gen_infty_, resp., _get_secondpt_infty_,
- `aceerror` is set to ace_err_not_infty if the `Generator`, resp., `SecondPt` is not at infinity, else `aceerror` is set to zero.
- If `HasSecondPt` is false, and the requested state is _get_secondpt_infty_, then `aceerror` is set to ace_err_invalid_value.
- The state of the CC is _not_ changed.
+ ** If, after any computation, either `Generator` or `SecondPt` is the point at infinity, then `aceerror` is set to ace_err_infty.
 
  ** Upon returning to State _initial_:
   *** If a Form B `ace.state` is used, the parameter `Xs` will determine whether the fields
@@ -4239,6 +4227,11 @@ the Boolean variable ``Has``__Var__ is set when all operations required in State
    **** If Bit 5 is set, then `SecondPt` is copied onto `Generator`. If Bit 1 is set, then `SecondPt` is erased afterwards and `HasSecondPt` is set to False.
   *** A Form A `ace.state` does not modify these states.
   *** `Signature` and the corresponding Boolean `HasSignature` are always reset.
+
+  ** If `IsGenInfty` is not true, `ace.derive` can be called, depending on the type of the curve, once or twice, to create an encryption or decryption CR and a CR for the computation of a MAC. For encryption, the `PublicKey` field must be set with the recipient's public key.
+  Before invoking `ace.derive`, it is allowed to transition to
+  State _absorb_S1_ where the bit length of the optional S1 must be given as a parameter to the `ace.state` transition call through a GPR, and this value is set in `Progress`.
+  Then, one or more Form B `ace.exec` calls can be made to absorb values into the state, and the amount of absorbed data so far is subtracted from `Progress` until it is zero. Excess data is ignored. S2 must be handled by the used using the MAC function (for NIST curves, an HMAC, with S2 appended to the ciphertext).
 
 EdDSA formats are similar, but, for instance, the public key is represented as a single `b`-bit string.
 Depending on the algorithm, in states _set_generator_ or _set_secondpt_ we may input non-compressed or compressed points.
