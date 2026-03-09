@@ -4043,18 +4043,18 @@ The parameters that are used in this section are:
 The parameters for the defined curves are:
 +
 --
- * NIST curves cite:[NIST-SP-800-186,nist-fips-186-5]:
-  ** secp256r1 (NIST P-256): `b` = 256, `h` = 256, `j` = 256, `u` = 2, `v` = 2.
-  ** secp384r1 (NIST P-384): `b` = 384, `h` = 384, `j` = 384, `u` = 2, `v` = 2.
-  ** secp521r1 (NIST P-521): `b` = 576 (the 55 most significant bits are zero-padding), `h` = 512, `j` = 512, `u` = 2, `v` = 2.
- * Edwards curves cite:[RFC7748]:
-  ** ed25519:  `b` = 256; `h` = 256; `j` = 256; `u` = 1; `v` = 1.
-  ** ed448: `b` = 448; `h` = 448; `j` = 448; `u` = 1; `v` = 1.
- * Brainpool curves cite:[RFC5639,RFC8734]:
-  ** brainpoolP256r1: `b` = 256; `h` = 256; `j` = 256; `u` = 2; `v` = 2.
-  ** brainpoolP384r1: `b` = 384; `h` = 384; `j` = 384; `u` = 2; `v` = 2.
-  ** brainpoolP512r1: `b` = 512; `h` = 512; `j` = 512; `u` = 2; `v` = 2.
- * SM2 curve cite:[GMT-0003-1-2012,GMT-0003-2-2012,GMT-0003-3-2012,GMT-0003-4-2012]: `b` = 256; `h` = 256; `j` = 256; `u` = 2; `v` = 2.
+ * NIST cite:[NIST-SP-800-186,nist-fips-186-5]:
+  ** secp256r1 (NIST P-256): `b` = `h` = `j` = 256, `u` = `v` = 2.
+  ** secp384r1 (NIST P-384): `b` = `h` = `j` = 384, `u` = `v` = 2.
+  ** secp521r1 (NIST P-521): `b` = 576 (55 msbs set to zero), `h` = `j` = 512, `u` = `v` = 2.
+ * Edwards cite:[RFC7748]:
+  ** ed25519:  `b` = `h` = `j` = 256; `u` = `v` = 1.
+  ** ed448: `b` = `h` = `j` = 448; `u` = `v` = 1.
+ * Brainpool cite:[RFC5639,RFC8734]:
+  ** brainpoolP256r1: `b` = `h` = `j` = 256; `u` = `v` = 2.
+  ** brainpoolP384r1: `b` = `h` = `j` = 384; `u` = `v` = 2.
+  ** brainpoolP512r1: `b` = `h` = `j` = 512; `u` = `v` = 2.
+ * SM2 cite:[GMT-0003-1-2012,GMT-0003-2-2012,GMT-0003-3-2012,GMT-0003-4-2012]: `b` = `h` = `j` = 256; `u` = `v` = 2.
 --
 +
 The algorithms may require non-compressed or compressed points as inputs and outputs, depending on the value of `u`.
@@ -4126,8 +4126,8 @@ The `HasRndNum` flag is set and the `RndNum` field is used only during signature
 
 The size in bytes of Fields vi to x is:
 
-`{fournbsp}{fournbsp}` `varlen` <- 8 + (`HasSecondPt` != 0) {interpunct} ``ub``/8 + (`HasSignature` != 0) {interpunct} 2``b``/8 + +
-`{fournbsp}{fournbsp}{fournbsp}{fournbsp}{fournbsp}{fournbsp}{fournbsp}` + (`HasHash` != 0) {interpunct} ``h``/8 + (`HasRndNum` != 0) {interpunct} ``h``/8.
+`{fournbsp}{fournbsp}` `varlen` <- 8 + (`HasSecondPt` != 0) {interpunct} ``ub``/8 + (`HasSignature` != 0) {interpunct} ``vb``/8 + +
+`{fournbsp}{fournbsp}{fournbsp}{fournbsp}{fournbsp}{fournbsp}{fournbsp}` + (`HasHash` != 0) {interpunct} ``h``/8 + (`HasRndNum` != 0) {interpunct} ``j``/8.
 
 If _AdditionalData_ > `varlen`, Position xvi contains the microarchitectural dependent part, which starts with `acemarchid`.
 --
@@ -4169,6 +4169,7 @@ _completed_ (15), ECC algorithms define:
  ** _point_mul_ -> _get_secondpt_infty_, _output_
  ** _sign_generate_ -> _output_ -> _completed_.
  ** _sign_verify_ -> _completed_.
+ ** If `HasSecondPt` -> _absorb_S1_.
 
 [none]
 * In State _set_generator_ we can set a group generator, or a default one.
@@ -4201,7 +4202,7 @@ the Boolean variable ``Has``__Var__ is set when all operations required in State
    **** A state change operation can be issued, including to states that require a set `Generator`. This state change also clears `Progress`.
 
  ** To transition to any of the States _set_scalar_, _set_hash_, _set_secondpt_, or _set_signature_ a Form A `ace.state` is used.
- . If there is a current value in the corresponding field _X_ = `Scalar`, `Hash`, `PublicKey`, or `Signature`,
+ . If there is a current value in the corresponding field _X_ = `Scalar`, `Hash`, `SecondPt`, or `Signature`,
      it is erased, and the Boolean ``Has``_X_ is set to False.
  . `Progress` <- 0, and a value for Field _X_ is loaded, using one or more Form B `ace.exec` operations (similarly to `Generator`).
  . Once the values `Progress` has reached the length of field _X_  (excess data in the last `ace.exec` is ignored):
@@ -4226,24 +4227,26 @@ the Boolean variable ``Has``__Var__ is set when all operations required in State
 
  ** Upon returning to State _initial_:
   *** If a Form B `ace.state` is used, the parameter `Xs` will determine whether the fields
- `Generator`, `Scalar`, and `PublicKey` are reset/erased or kept for further operations.
+ `Generator`, `Scalar`, and `SecondPt` are reset/erased or kept for further operations.
  This is determined by Bits 0, 1, 2, and 3 of `Xs` as follows:
-   **** If Bit 0, 1, 2, resp., 3 is set, then `Generator` is reset to the default value, `SecondPt`, `Scalar`, resp., `PublicKey` is erased, and the corresponding Boolean flags `HasScalar`, resp., `HasSecondPt` is unset as well.
+   **** If Bit 0, 1, 2, resp., 3 is set, then `Generator` is reset to the default value, `SecondPt`, `Scalar`, resp., `SecondPt` is erased, and the corresponding Boolean flags `HasScalar`, resp., `HasSecondPt` is unset as well.
    **** If Bit 4 is set, then `Generator` is copied onto `SecondPt`. If Bit 0 is set, then `Generator` is set to the default value.
    **** If Bit 5 is set, then `SecondPt` is copied onto `Generator`. If Bit 1 is set, then `SecondPt` is erased afterwards and `HasSecondPt` is set to False.
   *** A Form A `ace.state` does not modify these states.
   *** `Signature` and the corresponding Boolean `HasSignature` are always reset.
 
-  ** If `IsGenInfty` is not true, `ace.derive` can be called, depending on the type of the curve, once or twice, to create an encryption or decryption CR and a CR for the computation of a MAC.
-+
-For encryption, the `PublicKey` field must be set with the recipient's public key.
-+
-For decryption, the `PublicKey` field must be set with the sender's public key and the `Scalar` field must be set with the recipient's private key.
-+
-Before invoking `ace.derive`, it is allowed to transition to
-State _absorb_S1_ where the bit length of the optional S1 must be given as a parameter to the `ace.state` transition call through a GPR, and this value is set in `Progress`.
-Then, one or more Form B `ace.exec` calls can be made to absorb values into the state, and the amount of absorbed data so far is subtracted from `Progress` until it is zero. Excess data is ignored. S2 must be handled by the used using the MAC function (for NIST curves, an HMAC, with S2 appended to the ciphertext).
-+
+  ** If `IsGenInfty` is not true, `ace.derive` can be called, depending on the type of the curve, once or twice, to create an encryption or decryption CR and a CR for the computation of a MAC. The details for each defined typs of curve are explained next.
+
+===== Key Derivation Options
+
+For a sender to perform public-key encryption, the `SecondPt` field must be set with the _recipient_'s public key, `HasSecondPt` must be True, and the `Scalar` field must be set with the _sender_'s private key.
+
+For a recipient to decrypt a public-key encrypted message, the `SecondPt` field must be set with the _sender_'s public key, `HasSecondPt` must be True, and the `Scalar` field must be set with the _recipient_'s private key.
+
+For ECIES: Before invoking `ace.derive`, it is allowed to transition to State _absorb_S1_ where the bit length of the optional S1 must be given as a parameter to the `ace.state` transition call through a GPR, and this value is set in `Progress`.
+Then, one or more Form B `ace.exec` calls can be made to absorb consecutive parts of S1 into the state, and the amount of absorbed data so far is subtracted from `Progress` until it is zero. Excess data is ignored. S2 must be handled by the user using the MAC function (for NIST curves, an HMAC, with S2 appended to the ciphertext).
 `ace.derive` must be of Form B, where the optional parameter contains (the first 32-bits of) a metadata header, that defines either an encryption algorithm, or a MAC algorithm, or an authenticated encryption algorithm. The _KeyType_ field must be 0, as well as _Locality_ and _UsagePolicy_. The latter two will be copied from the source CR to the destination CR.
+
+SM2 public-key encryption cite:[GMT-0003-4-2012].
 
 // ////////////////////////////////////////////////////////////////////
