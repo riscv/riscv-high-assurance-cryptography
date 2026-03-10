@@ -66,10 +66,10 @@ OPTIONS := --trace \
 
 REQUIRES := --require=asciidoctor-bibtex \
             --require=asciidoctor-diagram \
+            --require=asciidoctor-mathematical \
             --require=asciidoctor-lists \
             --require=asciidoctor-sail
 
-#            --require=asciidoctor-mathematical \
 
 .PHONY: all build clean build-container build-no-container build-docs
 
