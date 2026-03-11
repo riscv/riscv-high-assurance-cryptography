@@ -4013,19 +4013,26 @@ The states and their semantics are otherwise identical to Ascon-XOF128, and the 
 ==== Elliptic Curve Asymmetric Algorithms
 
 Elliptic Curve Asymmetric Algorithms provide following functionality:
+
 . Scalar multiplication with known and unknown base point. This can be used to implement Diffie-Hellman key exchange.
 . ECDSA/EdDSA signature generation and verification.
 . Support for Key Encapsulation Mechanisms (KEMs) and Public-Key Encryption (PKE) schemes.
+
+Point 3. is very difficult to implement in full generality, since there are several options, with multiple choice of KDF, hash function, and input formats.
+In most cases, covering all options would be impractical.
+Only the Chinese SM2 standards fully specify an integrated encryption scheme cite:[GMT-0003-4-2012], and therefore we define how to implement it.
+For the other curve families, point multiplication is the basic mechanism by which KEM and PKE schemes are implemented and this implies that the key values derived from these must be live in the memory of the environment deriving them, albeit shortly if these are then used in CR self-provisioning.
+This may be hardened by delegating the actual key derivation to a more secure environment and then returning the derived key to the less secure environment as SCCs.
+
+[WARNING]
+This section needs finalization.
+ECC based KEMs are missing, or at least instructions on how to implement them with the basic functionality offered.
+For the moment, Integrated Public-Key Encryption (PKE) schemes are sketched: the semantics of `ace.derive` must be fleshed out better, and only when properly standardized.
 
 When an elliptic curve is provisioned into a CR, the default base point (“generator”) according to the standards listed is configured as the `Generator` field in the CR.
 This field may be overwritten, and when `ace.state` is issued on the CR with next state `initial` the default base point may be restored.
 
 All values (integers, coordinates, etc.) are in little-endian format.
-
-[WARNING]
-This section needs finalization.
-ECC based KEMs are missing, or at least instructions on how to implement them with the basic functionality offered.
-For the moment, Integrated Public-Key Encryption (PKE) schemes are sketched: the semantics of `ace.derive` must be fleshed out better.
 
 Parameters:::
 
@@ -4236,6 +4243,7 @@ the Boolean variable ``Has``__Var__ is set when all operations required in State
 
   ** If `IsGenInfty` is not true, `ace.derive` can be called, depending on the type of the curve, once or twice, to create an encryption or decryption CR and a CR for the computation of a MAC. The details for each defined typs of curve are explained next.
 
+////
 ===== Key Derivation Options
 
 [WARNING]
@@ -4267,5 +4275,122 @@ We need to determine the states/modes for:
 . For instance, AES/SM2-CTR followed by some MAC function that can absorb an additional string after the plaintext.
   These strings are different from the associated data because they are provided _after_ the ciphertext.
 ====
+
+===== KDF
+
+This family of algorithms will work in two modes: generating L bits of output, or generated two keys of size L1, L2, with prescribed metadata headers M1, M2.
+
+We need to support: NIST SP 800-56C Rev. 2
+
+Parameters:::
+
+* `b` = block size (8|`b`). Similarly to Hash functions, this is the size of an absorbed block and may be different from the size of the internal state that is kept by the function.
+* `t` = tag len (8|`t`). This is the size of the a block that is output each time by the function. The present description assumes `t` {le} `b`.
+* `h` = The length of the output of a single invocation of the PRF in bits.
+* `r` = The length of the counter `i`.
+* `j` = The length of the encoding of the output size `L`.
+* `k` = key size, if a key is used.
+* `l` = The length of the `label`.
+* `s` = The length of the “S1” (`context`) string.
+
+
+Data Structures:::
+
+* *Provisioning Input* (Content):
++
+--
+[%autowidth,cols="^,<,<",options="header"]
+|===
+| Pos. | Size in Bytes            | Field
+|   i  | If keyed: `k`/8, else 8  | `key`
+|===
+--
++
+
+* *Internal State* (Content):
+ ** `key`: `k` bits. Present only if keyed, i.e., a MAC.
+
+
+* *Serialized Content*:
++
+--
+[cols="^6%,<21%,<18%,<55%",options="header"]
+|===
+|  Pos.| Size in Bytes            | Field                       | Notes
+.2+| i | If keyed: `k`/8 or 8     | `key` or SKT index          | --
+<|        If unkeyed: 0            | none                        | --
+|===
+--
++
+
+//
+
+State Machine:::
+
+* *States:*
+
+. _initial_
+. _set_KIN_
+. _absorb_label_
+. _absorb_context_
+. _output_
+. _completed_
+
+* *Allowed State Transitions:*
+
+TBD.
+
+
+Parameters:::
+
+
+Input: KIN, Label, Context, and L
+
+Process:::
+
+. `n` <- {lceil} `L/h` {rceil}
+. If `n` > 2^`r`^-1 then output an error indicator and stop
+. `i`  <- 1
+. foreach Form C ``ace.exec`` while in state _output_
+.. if `i` > `n` then
+.. {kappa} := `PRF`(`KIN`, `bin(i,r) || Label || 0x00 || Context || bin(L,j)`)
+.. `bits` <- min(`h`, `L` - ``i`` * ``h``)
+.. `i` <- `i` + 1
+.. `OUTPUT` <- `zeros`(`h`-`bits`) @ {kappa}[bits-1:0]
+.. if `i` > `n` then transition to state _completed_
+
+
+===== ECIES Encryption
+
+Inputs{empty}:::
+
+* Random scalar `r` = `RndNum`.
+* `PublicKey` = `SecondPt`: The recipient's public key.
+* Message: The plaintext message to be encrypted.
+* `S1`: Shared information for key derivation.
+* `S2`: Shared information for MAC.
+
+Output:::
+
+* The ciphertext
+
+Algorithm:::
+
+. Generate or use a random scalar `r`.
+. Compute the public key on chosen curve `R` = `r` {interpunct} `G`, where `G` = `Generator` is the base point of that elliptic curve.
+. Derive the symmetric encryption key (Ke) and MAC key (Km):
+   `(Ke, Km) = KDF(S || s1)`
+   Where KDF is a key derivation function (e.g., HKDF with SHA-256)
+. Encrypt the message:
+   `c = SymmetricEncrypt(Ke, message)`
+   Where SymmetricEncrypt is a symmetric encryption algorithm (e.g., AES-CTR)
+. Compute the MAC:
+   `t = HMAC(Km, c || s2)`
+   Where HMAC is implemented as described in the specification
+. Construct the ciphertext:
+   `ciphertext = R || c || t`
+. Return the ciphertext
+
+////
 
 // ////////////////////////////////////////////////////////////////////
