@@ -17,7 +17,7 @@ DOCS := \
 
 MAKE := make -f Makefile.qc
 DATE ?= $(shell date +%Y-%m-%d)
-VERSION ?= v0.3.4
+VERSION ?= v0.3.5
 REMARK ?= Draft
 DOCKER_IMG := docker-registry.qualcomm.com/proxy-cache-qcom/riscvintl/riscv-docs-base-container-image:latest
 DOCKER_BIN ?= docker
