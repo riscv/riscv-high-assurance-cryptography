@@ -52,25 +52,16 @@ These use cases demand low-latency, high-throughput cryptography tightly integra
 === The Exposure Problem
 
 Traditional software implementations expose keys and intermediate values in memory.
-This exposure enables serious attacks, for instance through memory disclosure vulnerabilities, or cold boot attacks.
+This enables serious attacks, for instance through memory disclosure vulnerabilities, or cold boot attacks.
 
 
 == Limitations of Existing Approaches
 
 === Protected Software Environments and Hardened Hardware
 
-Trusted Execution Environments (TEEs), enclaves, and dedicated cryptographic accelerators provide strong protection by isolating sensitive material.
-
-However:
-
-Requiring switches to protected software environments or hardened hardware blocks for cryptographic operations provides the necessary security but also heavily affects performance.
-
-The performance penalties arise from:
-
-* Context switches across protection domains
-* Serialization of execution
-* Limited parallelism and bandwidth
-* Data movement overhead between domains
+Trusted Execution Environments, enclaves, and dedicated cryptographic accelerators provide strong protection by isolating sensitive material.
+Such solutions provide a high level of security but also heavily affects performance.
+The performance penalties arise from the necessary context switches, limited parallelism and bandwidth, as well as for the need of data movement overhead between domains.
 
 As a result, these solutions are often unsuitable for high-throughput or latency-sensitive workloads.
 
@@ -79,44 +70,26 @@ As a result, these solutions are often unsuitable for high-throughput or latency
 Some architectures attempt to improve security by hiding keys in special registers or hardware compartments while still exposing computation steps.
 Examples include Intel's KeyLocker and IBM's Protected Key functionalities.
 
-This approach is insufficient.
+This approach is, however, insufficient.
 
-Only hiding the keys does not necessarily ensure that the cryptographic guarantees needed by the features relying on those keys cannot be broken.
+Only hiding the keys does not necessarily ensure that the requested cryptographic guarantees cannot be broken.
 Complex modes of operation require the confidentiality and integrity also of derived keys and other internal state (e.g., chaining values, counters, masks, intermediate authentication values).
-Knowledge of said values may facilitate breaking these modes, or even lead to complete compromises, allowing attacker to either violate confidentiality or forge their own messages.
+Knowledge of said values may facilitate breaking these modes, or even lead to complete compromises, allowing attacker to either violate confidentiality or forge their own messages, regardless of whether the attacker can recover the key.
 This applies to modes such as GCM-SIV, OCB, and also the upcoming _accordions_ that will be standardized by the NIST.
 
-== Architectural Insight: Cryptographic Contexts
+== A Solution
+
+=== Architectural Insight: Cryptographic Contexts
 
 A more robust approach is to treat cryptographic execution as stateful, encapsulated objects rather than stateless primitive invocations.
+We achieve this by defining _Cryptographic Contexts_ that encapsulate the state of a cryptographic algorithm, and not only one key.
 
-=== Cryptographic Contexts (CCs)
+A Cryptographic Context does not only contain one or more keys.
+It also binds the key to a specific algorithm, in order to prevent key misuse.
+It also contains any derived material, intermediate values, a representation of the current state of a cryptographic algorithm, and usage policies and constraints.
 
-A cryptographic context encapsulates:
-
-* Secrets: keys and derived material
-* State: intermediate values, mode state machines
-* Metadata: algorithm, policies, usage constraints
-
-Key properties:
-
-* Indivisible structure (cannot be partially accessed)
-* Strong confidentiality and integrity guarantees
-* Policy-bound usage (algorithm, privilege, locality, expiration)
-
-=== Hardware-Enforced Isolation Without Context Switching
-
-Contexts reside in dedicated architectural storage (e.g., context registers):
-
-* Not addressable as normal memory
-* Not directly readable by software
-* Operated on only via controlled instructions
-
-This enables:
-
-* In-place, high-performance execution
-* No need for domain switching
-* Reduced attack surface
+Cryptographic Contexts reside in dedicated architectural storage (e.g., context registers).
+These are not addressable as normal memory, not directly readable by software, and managed only via controlled instructions.
 
 === Atomic Cryptographic Operations
 
@@ -129,9 +102,9 @@ Operations are executed atomically at the algorithm or mode level:
 This prevents leakage from intermediate steps and mitigates oracle-based attacks.
 
 
-== Secure Lifecycle of Cryptographic Contexts
+=== Secure Lifecycle of Cryptographic Contexts
 
-=== Provisioning
+==== Provisioning
 
 Contexts are initialized with:
 
@@ -140,14 +113,14 @@ Contexts are initialized with:
 
 Provisioning binds these into a single protected entity.
 
-=== Execution
+==== Execution
 
 Operations reference contexts rather than keys:
 
 * No key material appears in registers or memory
 * All computation remains inside the protected domain
 
-=== Export and Import
+==== Export and Import
 
 Contexts can be externalized as sealed cryptographic contexts:
 
