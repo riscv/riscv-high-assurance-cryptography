@@ -17,7 +17,7 @@ include::../docs-resources/global-config.adoc[]
 :section-refsig: Section
 :appendix-refsig: Appendix
 
-
+[discrete]
 == Executive Summary
 
 Cloud platforms are now the backbone of global digital infrastructure.
@@ -45,21 +45,21 @@ This affects
 * Secure communications;
 * Content protection (e.g., DRM, model decryption);
 * Secure enclaves and attestation; and
-* Cloud and edge computing pipelines
+* Cloud and edge computing pipelines.
 
 These use cases demand low-latency, high-throughput cryptography tightly integrated with general-purpose compute.
 
 === The Exposure Problem
 
 Traditional software implementations expose keys and intermediate values in memory.
+This happens also is specialized instructions are used that compute the cryptographic operation directly in the CPU.
 This enables serious attacks, for instance through memory disclosure vulnerabilities, or cold boot attacks.
-
 
 == Limitations of Existing Approaches
 
 === Protected Software Environments and Hardened Hardware
 
-Trusted Execution Environments, enclaves, and dedicated cryptographic accelerators provide strong protection by isolating sensitive material.
+Trusted Execution Environments (TEEs), enclaves, and dedicated cryptographic accelerators provide strong protection by isolating sensitive material.
 These technologies provide a high level of security but also heavily affects performance.
 The performance penalties arise from the necessary context switches, limited parallelism and bandwidth, as well as for the need of data movement overhead between domains.
 Therefore, these solutions are often unsuitable for high-throughput or latency-sensitive workloads.
@@ -68,6 +68,7 @@ Therefore, these solutions are often unsuitable for high-throughput or latency-s
 
 Some architectures improve security by hiding keys in special registers or hardware compartments while still exposing computation steps.
 Examples include Intel's KeyLocker and IBM's Protected Key functionalities.
+These technologies use encrypted keys instead of their actual values, and the hardware decrypts them when they are used: the values may be set by software, for instance a TEE, or hardware, but never revealed by the hardware itself.
 
 However, this is only a partial solution: Only hiding the keys does not necessarily ensure that the requested cryptographic guarantees cannot be broken.
 
@@ -82,43 +83,44 @@ Finally, it is customary to define new instructions for each new cryptographic a
 It is clear that this will lead to a proliferation of instructions over time, as various state actors define new standards.
 In modern RISC architectures with a single or few instruction lengths, encoding space comes at a premium and defining new instructions requires a thorough review.
 
+_Therefore, we need a solution that limits encoding space usage–ideally, a constant number of instructions, regardless of how many algorithms are supported._
+
 == A Solution
 
 === Architectural Insight: Cryptographic Contexts
 
-A more robust approach is to treat cryptographic execution as stateful, encapsulated objects rather than stateless primitive invocations.
-We achieve this by defining _Cryptographic Contexts_ that encapsulate the state of a cryptographic algorithm, and not only one key.
+We suggest to treat cryptographic execution as stateful, encapsulated objects rather than stateless primitive invocations.
 
-A Cryptographic Context does not only contain one or more keys.
-It also binds the key to a specific algorithm, in order to prevent key misuse.
+We achieve this by defining _Cryptographic Contexts_, which extend the notion of encrypted keys by including additional information.
+A Cryptographic Context also binds its key(s) to a specific algorithm, in order to prevent key misuse.
 It also contains any derived material, intermediate values, a representation of the current state of a cryptographic algorithm, and usage policies and constraints.
 
-Cryptographic Contexts reside in dedicated architectural storage (e.g., context registers).
-These are not addressable as normal memory, not directly readable by software, and managed only via controlled instructions.
+Cryptographic Contexts reside in dedicated architectural storage, which we call _Context Registers_.
+These are not addressable as normal memory, not directly readable by software, and managed only via instructions that follow very strict rules.
 
 === Atomic Cryptographic Operations
 
-Operations are executed atomically at the algorithm or mode level, such as
-full AES block encryption/decryption, processing steps in modes of operation, and hash absorption rounds.
-This prevents leakage from intermediate steps.
+Operations are executed atomically, such as full AES block encryption/decryption, steps in modes of operation, and hash absorption rounds.
+This prevents leakage from revealing the outputs of intermediate steps.
 
 === Secure Lifecycle of Cryptographic Contexts
 
 ==== Provisioning
 
-Contexts are initialized with:
+Cryptographic Contexts are initialized by writing two pieces of data into them:
 
-* Metadata (algorithm, policies)
-* Secret material
+* Secret material, including one or more keys, but also other data required by the algorithm; and
+* The metadata that specifies which algorithm can use the key(s), and also defines its usage policies.
 
-Provisioning binds these into a single protected entity.
+Writing these two pieces into a Context is called “provisioning”.
+Provisioning binds them into a single inseparable entity.
 
 ==== Execution
 
 Operations reference contexts rather than keys:
 
-* No key material appears in registers or memory
-* All computation remains inside the protected domain
+* No key material appears in registers or memory; and
+* All computation remains inside the protected domain.
 
 ==== Export and Import
 
@@ -136,7 +138,9 @@ Contexts maintain internal state machines:
 * Protection of intermediate values across steps
 
 
-== Security Advantages
+== Advantages and Challenges
+
+=== Security Advantages
 
 This model provides:
 
@@ -147,7 +151,8 @@ This model provides:
 * Composability: primitives and modes treated uniformly
 
 
-== Performance Advantages
+=== Performance Advantages
+
 * Elimination of enclave or accelerator switching overhead
 * Tight integration with CPU pipelines
 * Parallelism across multiple contexts
@@ -155,7 +160,7 @@ This model provides:
 * Support for vectorized or buffered data paths
 
 
-== Interoperability Challenge
+=== Interoperability Challenge
 
 While the architectural direction is clear, a major barrier remains:
 
