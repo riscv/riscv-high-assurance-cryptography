@@ -31,37 +31,39 @@ strong protection of cryptographic secrets comes at the cost of performance, whi
 
 This white paper analyzes this problem and outlines an architectural direction—exemplified by the concept of cryptographic contexts—that enables high-performance cryptographic execution while preserving the confidentiality and integrity of keys and all derived sensitive values.
 
+////
+Cloud computing has evolved into the foundation of modern digital infrastructure, supporting everything from financial systems to artificial intelligence workloads. At the core of this infrastructure lies cryptography, which protects data, secures communication, and enables trust in distributed environments. Yet, despite its central role, cryptography remains constrained by a persistent and increasingly problematic trade-off: systems can either protect sensitive material effectively or process it efficiently, but rarely both at once.
+
+This paper argues that this trade-off is no longer acceptable. It introduces an architectural direction based on cryptographic contexts, an approach that allows systems to perform cryptographic operations at high speed while ensuring that keys and all related sensitive values remain protected. It further argues that, to fully realize this vision in cloud-scale environments, the industry must converge on common standards for representing and managing protected cryptographic material.
+////
 
 == Why This Matters Now
 
-=== Cryptography in Performance-Critical Software
+In earlier generations of computing, cryptography was often confined to well-defined boundaries: secure channels, authentication steps, or specialized hardware modules. In today’s cloud environments, this is no longer the case. Cryptographic operations are deeply embedded in continuous data flows, protecting storage, memory, network traffic, and increasingly even application logic itself.
+
+This shift is particularly visible in emerging workloads. Artificial intelligence models are encrypted at rest and often decrypted only at the point of execution. Distributed systems rely on continuous encryption and authentication across services. Confidential computing aims to ensure that sensitive data remains protected even during processing. In all these cases, cryptography is not an occasional operation—it is part of the steady-state execution of the system.
+
+As a result, performance is no longer a secondary concern. Any inefficiency in cryptographic processing directly impacts latency, throughput, and ultimately the cost and scalability of cloud services. However, any security weakness of the cryptographic processing directly impacts the assets of cloud service providers and users.
+
+== The Limits of Existing Approaches
+
+=== Specialized Environments
 
 The use of isolated security modules for cryptographic operations guarantees a high level of protection of cryptographic secrets.
 However, this often comes at a high performance cost.
-Therefore, cryptographic operations are often implemented in the firmware or software that requires them, either directly or through the use of special instructions.
 
-This affects
-
-* Secure communications;
-* Content protection (e.g., DRM, model decryption);
-* Secure enclaves and attestation; and
-* Cloud and edge computing pipelines.
-
-These use cases demand low-latency, high-throughput cryptography tightly integrated with general-purpose compute.
-
-=== The Exposure Problem
-
-Traditional software implementations expose keys and intermediate values in memory.
-This happens also is specialized instructions are used that compute the cryptographic operation directly in the CPU.
+When low-latency, high-throughput cryptography is required, cryptographic operations are often implemented in the firmware or software that requires them, sometime through the use of special accelerator instructions.
+// This affects many use cases, including, for instance, Secure communications, Content protection (e.g., DRM, model decryption), and Secure enclaves and attestation.
+Such software implementations expose keys and intermediate values in memory.
 This enables serious attacks, for instance through memory disclosure vulnerabilities, or cold boot attacks.
-
-== The Limits of Existing Approaches
 
 To protect cryptographic keys and sensitive data, existing systems typically rely on isolation. This isolation may take the form of trusted execution environments, secure enclaves, or dedicated hardware blocks designed to handle cryptographic operations. These mechanisms are effective in ensuring that secrets are not exposed to general-purpose software.
 
 However, this protection comes at a price.
 
 Requiring switches to protected software environments or hardened hardware blocks for such operations provides the necessary security but also heavily affects performance. Each transition into a protected domain introduces overhead, disrupts execution flow, and limits opportunities for parallelism. In large-scale cloud systems, where millions of cryptographic operations may occur every second, these costs accumulate rapidly.
+
+=== Genreal Purpose Computation Environments
 
 The alternative, namely to implement cryptography in the general execution environment, possibly aided by acceleration instructions, solves the performance problem, but exposes the key to memory.
 
@@ -86,132 +88,85 @@ In modern RISC architectures with a single or few instruction lengths, encoding 
 
 _Therefore, we need a solution that limits encoding space usage–ideally, a constant number of instructions, regardless of how many algorithms are supported._
 
+// In effect, protecting only the initial key while leaving the rest of the computation visible is comparable to locking the front door while leaving the windows open. It creates a false sense of security without addressing the full scope of the problem.
+
 == A Solution
 
-=== Architectural Insight: Cryptographic Contexts
+What is needed is not just a more secure way to store and use keys, but a more secure way to think about cryptographic execution as a whole.
+Our concept of _Cryptographic Context_ provides such an abstraction.
 
-We suggest to treat cryptographic execution as stateful, encapsulated objects rather than stateless primitive invocations.
+=== Cryptographic Contexts
 
-We achieve this by defining _Cryptographic Contexts_, which extend the notion of encrypted keys by including additional information.
-A Cryptographic Context also binds its key(s) to a specific algorithm, in order to prevent key misuse.
-It also contains any derived material, intermediate values, a representation of the current state of a cryptographic algorithm, and usage policies and constraints.
+A Cryptographic Context extends the concept of an encrypted key by including all the information required for a cryptographic operation to be realized as a sequence of smaller operations: the key material, the algorithm that can be used with the key material, any additional values used by the algorithm, the internal state of the latter, and _Metadata_ governing how it may be used. Besides the allowed algorithm, the Metyadata also includes usage policies which optionally define usage constraints based on the hardware and software environment, security state, boot cycle, or other policies.
+Instead of treating these elements as separate pieces of information that move through the system, the context binds them together into a single protected entity.
+Cryptographic Contexts allow us to treat cryptographic algorithms as stateful, encapsulated objects, to which information is passed in a structured manner rather than sequences of stateless primitive invocations.
+
+While software can _provision_ key(s) and Metadata into Cryptographic Context, the latter, once provisioned, cannot be inspected, copied, or modified arbitrarily by software. Instead, it can only be used through well-defined operations that strictly follows the policies allowed by the architecture and by the algorithm.
+//In this sense, a cryptographic context behaves like a secure object whose internal structure is opaque but whose functionality is precisely controlled.
 
 Cryptographic Contexts reside in dedicated architectural storage, which we call _Context Registers_.
-These are not addressable as normal memory, not directly readable by software, and managed only via instructions that follow very strict rules.
+These are not addressable as normal memory and not directly readable by software.
 
 === Atomic Cryptographic Operations
 
 Operations are executed atomically, such as full AES block encryption/decryption, steps in modes of operation, and hash absorption rounds.
 This prevents leakage from revealing the outputs of intermediate steps.
 
+Operations reference Context Registers rather than the key values.
+This limits the visibility of key material to the provisioning phase only, which can be performed by trusted entities.
+All computation remains inside a protected hardware domain, and only the final results are visible to software.
+
 === Secure Lifecycle of Cryptographic Contexts
 
-==== Provisioning
+// ==== Provisioning
+//
+// Cryptographic Contexts are initialized by writing two pieces of data into them:
+//
+// * Secret material, including one or more keys, but also other data required by the algorithm; and
+// * The metadata that specifies which algorithm can use the key(s), and also defines its usage policies.
+//
+// Writing these two pieces into a Context is called “provisioning”.
+// Provisioning binds them into a single inseparable entity.
+// ==== Execution
 
-Cryptographic Contexts are initialized by writing two pieces of data into them:
-
-* Secret material, including one or more keys, but also other data required by the algorithm; and
-* The metadata that specifies which algorithm can use the key(s), and also defines its usage policies.
-
-Writing these two pieces into a Context is called “provisioning”.
-Provisioning binds them into a single inseparable entity.
-
-==== Execution
-
-Operations reference contexts rather than keys:
-
-* No key material appears in registers or memory; and
-* All computation remains inside the protected domain.
 
 ==== Export and Import
 
-Contexts can be externalized as sealed cryptographic contexts:
-
-* Encrypted and authenticated representations
-* Bound to hardware, locality, or system keys
-* Safe for storage or migration
-
-=== State Management
-
-Contexts maintain internal state machines:
-
-* Support for streaming and multi-step algorithms
-* Protection of intermediate values across steps
+A Cryptographic Context in a Context Register can be exported to memory as a Sealed Cryptographic Context (SCC), and the latter can be reimported into a Context Register. A SCC is an encrypted and authenticated representation of the contents of the Context Register, and it preserves all the policies defined in the metadata. This mechanism enables secure context switching.
+This process uses a key which can be securely reconfigured to allow for cryptographic separation of CCs between process domains, but also to migrate keys between devices along with their VMs.
 
 
-== Advantages and Challenges
-
-=== Security Advantages
-
-This model provides:
-
-* End-to-end confidentiality: keys and derived values never exposed
-* Integrity guarantees: metadata and state are protected
-* Misuse resistance: policies restrict operations and contexts
-* Side-channel mitigation: supports constant-time and masked implementations
-* Composability: primitives and modes treated uniformly
+// === State Management
+//
+// Contexts maintain internal state machines:
+//
+// * Support for streaming and multi-step algorithms
+// * Protection of intermediate values across steps
 
 
-=== Performance Advantages
+== Advantages
 
-* Elimination of enclave or accelerator switching overhead
-* Tight integration with CPU pipelines
-* Parallelism across multiple contexts
-* Reduced memory traffic for sensitive data
-* Support for vectorized or buffered data paths
+By design, Cryptographic Contexts eliminate many of the traditional sources of vulnerability. Keys and derived values never appear in software-visible form, reducing the risk of leakage through memory inspection or side-channel attacks. The integrity of the context is preserved, ensuring that both the data and the policies governing its use remain intact. At the same time, the architecture can enforce constraints on how a context is used, preventing certain classes of misuse.
 
+Equally important, this model enables cryptographic operations to be executed at high speed. Because there is no need to move data into and out of isolated environments, latency is reduced and throughput increases. The system can take advantage of existing computational resources, including parallelism and vectorization, without compromising security.
 
-=== Interoperability Challenge
+Since the choice of the algorithm is embedded in the Metadata, the architecture can offer also offer masked implementations of the same primitives and algorithms to protect against side-channel attacks. The software that uses Cryptographic Contexts does not need to be modified to support side-channel protected operations.
 
-While the architectural direction is clear, a major barrier remains:
-
-* Different instruction set architectures (ISAs) define different formats
-* Incompatible representations of protected keys and contexts
-* Divergent semantics for cryptographic operations
-
-This fragmentation prevents:
-
-* Portability across heterogeneous systems
-* Migration of protected workloads
-* Standardized software stacks
-
+For cloud providers, this combination is particularly valuable. It allows cryptography to be integrated into performance-critical paths—such as storage, networking, and AI inference—without introducing bottlenecks or excessive complexity.
 
 == Call for Action
 
-To unlock the full potential of high-performance confidential cryptography, the industry must converge on common standards.
+While the concept of cryptographic contexts provides a powerful foundation, its full potential can only be realized if it is adopted consistently across the industry.  This does not stop at various ISAs adopting it independently:
+Today’s cloud environments are heterogeneous, combining multiple processor architectures and hardware platforms, and some providers of keys may be based on a different ISA than the consumers.
+Without a common specification, protected cryptographic material becomes difficult to move across these boundaries, limiting flexibility and increasing operational complexity.
 
-=== Standardized Wrapped Key Format
+First, we need ISAs to expose similar functionality for the use of Cryptographic Contexts, which consumes the same data formats for the initialization of Context Registers and for the SCCs.
 
-We need:
+Second, there must be a shared understanding of how cryptographic contexts behave. This includes the semantics of the algorithms they implement, the way their state evolves, and the constraints governing their use. A consistent definition ensures that a Cryptographic Contexts created in one environment can be used correctly and securely in another.
 
-* A common, architecture-neutral format for sealed/wrapped keys and contexts
-* Cryptographic binding to policies and metadata
-* Portability across devices, vendors, and environments
-
-=== Common Semantics for Cryptographic Contexts
-
-We must define:
-
-* A shared specification of cryptographic context semantics
-* Standardized behavior for:
-** Algorithms and modes
-** State machines
-** Key derivation
-** Policy enforcement
-
-This ensures:
-
-* Consistent security guarantees
-* Cross-platform correctness
-* Interoperability in heterogeneous deployments
-
-=== Cross-ISA Collaboration
-
-Vendors, standards bodies, and the research community should collaborate to:
-
-* Align ISA extensions
-* Define ABI-level contracts for cryptographic contexts
-* Ensure compatibility across CPUs, accelerators, and virtualized environments
+// To address this, two forms of standardization are essential.
+// First, there must be a common format for representing protected keys and contexts. Such a format must ensure that both the sensitive material and its associated policies are preserved, while remaining portable across different systems. Without this, interoperability remains an aspiration rather than a reality.
+// Achieving this level of alignment will require collaboration among cloud providers, hardware designers, and software ecosystem leaders. It is not merely a technical challenge, but a strategic one, with implications for the future of secure computing.
 
 
 == Conclusion
@@ -220,4 +175,34 @@ The demand for secure, high-performance cryptography is rapidly increasing, driv
 
 Architectural support for cryptographic contexts offers a path forward: enabling software to perform high-throughput cryptographic operations while ensuring that keys and all sensitive derived values remain protected.
 
-However, realizing this vision at scale requires standardization—in formats, semantics, and interfaces. Only through a coordinated effort can we achieve secure, interoperable, and high-performance cryptographic execution across the heterogeneous computing landscape.
+However, realizing this vision at scale requires an industry-wide effort towards standardization—in formats, semantics, and interfaces.
+Only through a coordinated effort can we achieve secure, interoperable, and high-performance cryptographic execution across the heterogeneous computing landscape,
+without forcing a compromise between efficiency and security.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+//== 7. Conclusion
+//
+//The growing importance of cryptography in cloud computing has exposed the limitations of existing approaches. Systems that rely on isolation achieve strong security but struggle to meet performance demands, while those that prioritize efficiency often leave critical gaps in protection.
+//
+//The concept of cryptographic contexts offers a way forward. By treating cryptographic operations as encapsulated, protected entities, it becomes possible to secure not only keys but all sensitive aspects of computation, without sacrificing performance. This approach aligns with the needs of modern cloud workloads, enabling secure, scalable, and efficient processing.
+//
+//However, realizing this vision at scale requires more than architectural innovation. It demands a coordinated effort to define common formats and semantics that ensure interoperability across heterogeneous systems.
+//
+//For cloud providers and security architects, the message is clear: the next generation of infrastructure must integrate security and performance at a fundamental level. Cryptographic contexts provide the foundation for doing so, and the time to act is now.
+//
