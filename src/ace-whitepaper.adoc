@@ -106,14 +106,16 @@ These are not addressable as normal memory and not directly readable by software
 
 All ACE operations reference Context Registers rather than the key values.
 This limits the visibility of key material to the provisioning phase only, which can be performed by trusted entities.
-All computation remains inside a protected hardware domain, and only the final results are visible to software.
+All successive cryptographic computations remain inside a protected hardware domain while avoiding additional switches to protected environments,
+and only the final results are visible to software.
 
+While cryptographic modes and protocols are split into calls to primitives, the primitives themselves are not split into individual rounds.
 It is important that these operations are executed atomically, such as full AES block encryptions and decryptions, steps in modes of operation, and hash absorption rounds.
 This prevents leakage from revealing the outputs of intermediate steps: even knowing the input and output to five rounds of an AES encryption will significantly facilitate key recovery, therefore we must always compute the full operation.
 
 The two most important ACE instructions are the _execution_ of a unit of the algorithm (e.g., encrypting or decrypting a block of data, absorbing a block of data into a hash), and the request for a _change in the state_ of the algorithm (e.g., moving from initialization to data absorption and to finalization in a hash, or moving from the processing of associated data to the processing of data to be encrypted/decrypted and finally to a tag generation or verification in an AEAD algorithm).
 
-The ACE instructions function like messages to a closely coupled–i.e., “attached”–hardware unit, which can be shared amongst several cores, even heterogeneous ones, while keeping a separate architectural state for each hardware thread in each core. Of course, the unit itself can also be implemented as an integral part of a core, becaus the architecture only specifies the behavior, not the type of the implementation.
+The ACE instructions function like messages to a closely coupled–i.e., “attached”–hardware unit, which can be shared amongst several cores, even heterogeneous ones, while keeping a separate architectural state for each hardware thread in each core. Of course, the unit itself can also be implemented as an integral set ofd pipelines of a core, becaus the architecture only specifies the behavior, not the type of the implementation.
 
 === -- Lifecycle of a Cryptographic Context
 
@@ -124,16 +126,33 @@ allows for cryptographic separation of CCs between process domains, and also ena
 
 == Advantages
 
-By design, Cryptographic Contexts eliminate many of the traditional sources of vulnerability. Keys and derived values never appear in software-visible form, reducing the risk of leakage through memory inspection or side-channel attacks. The integrity of the context is preserved, ensuring that both the data and the policies governing its use remain intact. At the same time, the architecture can enforce constraints on how a context is used, preventing certain classes of misuse.
+By design, ACE eliminates many traditional sources of vulnerability. Keys and derived values are never exposed to software, reducing the risk of leakage through memory inspection, memory disclosure vulnerabilities, or side-channel attacks. The integrity of a CC is preserved, ensuring that both the data and the policies governing its use remain intact. At the same time, the architecture can enforce constraints on how a context is used, preventing certain classes of misuse: The fact that a state is carefully maintained ensures that the instructions for processing and state changes execute in a strictly prescribed manner,
+even if the process is interrupted for context switching, the Context Registers are exported and then reimported before resuming the process.
+This significantly reduces the ways an algorithm can be misused or compromised.
+There is in principle no limit to the complexity of the algorithm that can be represented in a Cryptographic Context, for instance even complex integrated public key encryption algorithms can be defined by using a very rich state and multiple execution phases.
 
-There is in principle no limit to the complexity of the algorithm that can be represented in a Cryptographic Context, for instance even complex integrated public key encryption algorithms can be defined with a very rich state and a large number of states. The fact that a state is carefully maintained forces the execution of instructions for processing and state change in a strictly prescribed manner, even if the process is interrupted for context switching, the Context Registers are exported and then reimported before resuming the process.
+Equally important, this approach enables high-speed cryptographic operations. By eliminating the need to move data into and out of isolated environments, latency decreases and throughput increases.
 
+Since the choice of the algorithm is embedded in the Metadata, the architecture can offer also offer masked implementations of the same primitives and algorithms to protect against side-channel attacks. Software using Cryptographic Contexts requires no modification to support these protected operations.
 
-Equally important, this model enables cryptographic operations to be executed at high speed. Because there is no need to move data into and out of isolated environments, latency is reduced and throughput increases. The system can take advantage of existing computational resources, including parallelism and vectorization, without compromising security.
+ACE is particularly valuable for cloud providers. It allows cryptography to be integrated into performance-critical paths—such as storage, networking, and AI inference—minimizing bottlenecks and complexity.
 
-Since the choice of the algorithm is embedded in the Metadata, the architecture can offer also offer masked implementations of the same primitives and algorithms to protect against side-channel attacks. The software that uses Cryptographic Contexts does not need to be modified to support side-channel protected operations.
+////
+By design, ACE eliminates many traditional sources of vulnerability. Keys and derived values never appear in software-visible form, reducing the risk of leakage through memory inspection or side-channel attacks. The integrity of the context is preserved, ensuring that both the data and the policies governing its use remain intact. The architecture can enforce strict constraints on context usage, preventing certain classes of misuse.
 
-For cloud providers, this combination is particularly valuable. It allows cryptography to be integrated into performance-critical paths—such as storage, networking, and AI inference—without introducing bottlenecks or excessive complexity.
+State maintenance is carefully enforced: . Even if a process is interrupted for context switching and the Context Registers are exported and reimported, this discipline is preserved. This significantly reduces the ways an algorithm can be misused or compromised.
+
+The model supports arbitrary algorithmic complexity. Even sophisticated public-key encryption schemes can be represented with rich state and multiple execution phases.
+
+Equally important, this approach enables high-speed cryptographic operations. By eliminating the need to move data into and out of isolated environments, latency decreases and throughput increases. The system leverages existing computational resources—including parallelism and vectorization—without sacrificing security.
+
+The architecture can offer masked implementations of primitives and algorithms to protect against side-channel attacks, with the algorithm choice embedded in the Metadata. Software using Cryptographic Contexts requires no modification to support these protected operations.
+
+For cloud providers, this combination is particularly valuable. It enables cryptography to be integrated into performance-critical paths—such as storage, networking, and AI inference—without introducing bottlenecks or unnecessary complexity.
+
+///
+//
+
 
 == Call for Action
 
