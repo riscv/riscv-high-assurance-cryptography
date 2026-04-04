@@ -6,52 +6,66 @@ Author: Roberto Avanzi
 [discrete]
 == Executive Summary
 
-Cloud computing has become the foundation of modern digital infrastructure, supporting everything from financial systems to artificial intelligence workloads. Cryptography is a key enabler of this infrastructure, protecting data, securing communication, and enabling trust in distributed environments. Yet despite its central role, cryptography faces a persistent and increasingly problematic trade-off: systems can either protect sensitive material effectively or process it efficiently, but rarely both.
+Cloud computing has become the foundation of modern digital infrastructure, supporting everything from financial systems to artificial intelligence workloads. Cryptography is essential to this infrastructure, protecting data, securing communication, and enabling trust in distributed environments. Yet despite its central role, cryptography faces a persistent trade-off: systems can either protect sensitive material effectively or process it efficiently, but rarely both.
 
 This trade-off is no longer acceptable.
 
-We propose an architectural solution called ACE, the _Atomic Cryptographic Extension_, for integration into modern instruction set architectures.
-The core notion around which ACE is designed is the _Cryptographic Context_, a protected data structure that encapsulates cryptographic secrets, policies for their use, and other state information. ACE instructions use these Cryptographic Contexts in place of actual key values when performing cryptographic operations.
-These operations are furthermore performed _atomically_: cryptographic modes and protocols are split into calls to cryptographic primitives, but the primitives themselves are not split into individual rounds. This allows systems to perform cryptographic operations at high speed while ensuring correctness and integrity.
+We propose ACE, the _Atomic Cryptographic Extension_, an architectural solution for integration into modern instruction set architectures. ACE is built around the notion of a _Cryptographic Context_, a protected data structure that encapsulates cryptographic secrets, usage policies, and state information. ACE instructions use these Cryptographic Contexts in place of actual key values when performing cryptographic operations, executed _atomically_: cryptographic modes and protocols are split into calls to primitives, but the primitives themselves are not split into individual rounds. This allows systems to perform cryptographic operations at high speed while ensuring correctness and integrity.
 
-We further argue that to fully realize this vision in cloud-scale environments, the industry must converge on common standards for representing Cryptographic Contexts, as well as guidelines for managing and using them.
+XTo fully realize this vision in cloud-scale environments, the industry must converge on common standards for representing Cryptographic Contexts and guidelines for managing and using them.
+
 
 == Why This Matters Now
 
-In earlier generations of computing, cryptography was typically confined within specific boundaries, mainly for establishing secure communication channels and protecting stored data for selected applications.
-The internet, mobile devices, and cloud computing have dramatically expanded these use cases.
-Today, cryptography is a fundamental component across most data flows, protecting storage (including files encrypted even when device-level encryption is already enabled), memory (both physical and virtual), most network traffic, and, increasingly, application logic itself.
+In earlier generations of computing, cryptography was typically confined to establishing secure communication channels and protecting stored data for selected applications. The internet, mobile devices, and cloud computing have dramatically expanded these use cases. Today, cryptography is a fundamental component across most data flows, protecting storage (files are often encrypted also on file systems with encryption enabled at the block level), memory (both physical and virtual), most network traffic, and increasingly application logic itself.
 
-This shift affects emerging workloads as well, for instance:
-Large Language Models are encrypted at rest and often decrypted only at execution time;
-Distributed systems rely on encryption and authentication across services; and
-confidential computing aims to protect sensitive data during processing.
-In all these cases, cryptography is no longer an occasional operation: it has become part of the steady-state execution of contemporary systems.
+This shift affects emerging workloads as well:
+LLMs are encrypted at rest and decrypted only at execution time;
+distributed systems rely on encryption and authentication across services; and
+confidential computing protects sensitive data during processing.
+In all these cases, cryptography is no longer an occasional operation—it is part of the steady-state execution of the system.
 
-As a result, its performance is no longer a secondary concern.
-Any inefficiency in cryptographic processing directly impacts latency, throughput, and ultimately the cost and scalability of cloud services.
-At the same time, any security weakness in cryptographic processing directly threatens the assets of both cloud service providers and their users.
-These two contrasting needs create a tension that is not trivial to resolve.
+As a result, its performance is no longer a secondary concern. Any inefficiency in cryptographic processing directly impacts latency, throughput, and ultimately the cost and scalability of cloud services. Simultaneously, any weakness in it threatens the assets of both cloud service providers and their users. These two contrasting needs create a tension that is not trivial to resolve.
+
 
 
 == The Limits of Existing Approaches
 
-=== Specialized Environments
+=== -- Specialized Environments
 
-Historically, the computational complexity of cryptographic operations and the limitations of general-purpose CPUs led to the development of separate hardware cryptographic accelerators. These later evolved into hardened modules, particularly for embedded and high-assurance environments.
+Historically, the computational cost of cryptographic operations and limitations of general-purpose CPUs led to the development of separate hardware cryptographic accelerators. These later evolved into hardened modules, for embedded or high-assurance environments.
 
-While such components provide strong protection of cryptographic secrets, they often come at a significant performance cost. As general-purpose CPUs became faster, the overhead of calling these hardware components grew, sometimes negating the performance benefits of specialized hardware, especially for smaller payloads.
+While such components provide strong protection of cryptographic secrets, they come with expensive setup and invocation overheads.
+As general-purpose CPUs became faster, these overheads sometimes negated the performance benefits of specialized hardware, especially for smaller payloads.
+This drove a shift: when low-latency and responsiveness matter, cryptographic operations are now frequently implemented directly in firmware or software. However, such implementations expose keys and intermediate values in memory, enabling serious attacks such as memory disclosure vulnerabilities or cold boot attacks.
 
-This led to a shift: when low-latency and responsiveness matter, cryptographic operations are now frequently implemented directly in the firmware or software. However, such implementations expose keys and intermediate values in memory, enabling serious attacks such as memory disclosure vulnerabilities or cold boot attacks.
+To protect cryptographic keys and sensitive data, systems have added isolation layers in the form of trusted execution environments or secure enclaves, often paired with memory encryption and authentication or private on-chip memory. While these mechanisms may be more efficient than specialized hardware and reduce exposure of secrets to general-purpose software, they still carry a performance penalty from switches to protected environments and overhead of additional countermeasures, which sometimes include disabling processor caches. Other factors include disruption of execution flow, increased cache pressure (if caches are not disabled), and increased memory access latency.
 
-To protect cryptographic keys and sensitive data, systems have added isolation layers through trusted execution environments or secure enclaves. These are often paired with physical memory protection via memory encryption and authentication, though execution remains confined to the general-purpose CPU.
-While these mechanisms reduce exposure of secrets to general-purpose software, they carry a performance penalty, caused by
-the switches to protected software environments and the overhead of the additional protection countermeasures, which sometimes even include disabling the processor caches.  Other factors include the disruption of execution flow, increased cache pressure (if these are left enabled), and increased memory access latency.
+In large-scale cloud systems performing millions of cryptographic operations per second, such costs accumulate quickly.
 
-In large-scale cloud systems where millions of cryptographic operations occur every second, these costs accumulate quickly.
 
-=== General Purpose Computation Environments
 
+=== -- General Purpose Computation Environments
+
+Implementing cryptography in general execution environments with acceleration instructions such as Intel's AES-NI addresses the performance problem. However, as noted earlier, this approach exposes keys to memory or requires additional countermeasures to prevent it. Protecting keys without switching to specialized environments for each operation is therefore essential.
+
+Intel's KeyLocker and IBM's Protected Key functionalities represent a move in the right direction by allowing encrypted keys to be used instead of actual values. The hardware decrypts the keys internally when needed—their values may be set by software or hardware but are never exposed to software environments by using the functionalities.
+
+However, this leaves a more subtle but equally serious problem unaddressed: _hiding the keys does not necessarily ensure that the desired cryptographic guarantees cannot be violated._
+
+Complex modes of operation require confidentiality and integrity not only of the main key but also of derived keys and internal state (chaining values, counters, masks, intermediate authentication values). Exposure of these values can compromise modes entirely, allowing attackers to violate confidentiality or forge messages regardless of key recovery. This applies to modes such as GCM-SIV and OCB, as well as upcoming NIST-standardized algorithms whose security proofs depend on the secrecy of all derived keys and values.
+
+Additionally, some cryptographic accelerators accept both a secret key and an initialization vector to prevent misuse. Key-hiding-only ISAs lack this capability.
+
+Protecting only the initial key while leaving the rest of the computation visible is comparable to locking the front door while leaving the shutters of the windows up. While the latter may be made of highly resistant glass, it creates a false sense of security without addressing the full scope of the problem.
+
+Finally, the current practice of defining new instructions for each cryptographic algorithm is unsustainable. As state actors and the European Union plan new cryptographic standards, this approach will lead to instruction proliferation. In modern RISC architectures with limited encoding space, each new instruction requires extensive review.
+
+We therefore need a solution that uses a constant number of instructions regardless of algorithm support, minimizing encoding space consumption.
+
+// In effect, protecting only the initial key while leaving the rest of the computation visible is comparable to locking the front door while leaving the windows open. It creates a false sense of security without addressing the full scope of the problem.
+
+////
 Implementing cryptography in general execution environments, possibly with acceleration instructions such as Intel's AES-NI, addresses the performance problem. However, as noted above, this approach exposes the key to memory or requires the deployment of additional countermeasures. Methods for protecting keys without switching to specialized software or hardware environments for each cryptographic operation are therefore necessary.
 
 Intel's KeyLocker and IBM's Protected Key functionalities move in the right direction by allowing encrypted keys to be used instead of their actual values. The hardware decrypts them using an internal key when they are used: the values may be set by software, such as a TEE, or by hardware, but are never revealed by the hardware itself to software environments.
@@ -60,7 +74,7 @@ However, this leaves a more subtle but equally serious problem unaddressed: _hid
 
 Complex modes of operation require confidentiality and integrity not only of the main key but also of derived keys and other internal state (such as chaining values, counters, masks, and intermediate authentication values). Knowledge of these values may facilitate breaking these modes or even lead to complete compromises, allowing an attacker to violate data confidentiality or forge messages, regardless of whether the attacker can recover the key. This applies to modes such as GCM-SIV and OCB, as well as the upcoming accordions that will be standardized by NIST: the security proofs of all such modes rely on the secrecy of all derived keys and values.
 
-Additionally, current cryptographic accelerators may be configured to work not only with a secret key but also with a set initialization vector to reduce misuse. Current _Key-Hiding-Only_ ISAs do not provide such an option.
+Also, some cryptographic accelerators may be configured to work not only with a secret key but also with a set initialization vector to reduce misuse. _Key-Hiding-Only_ ISAs do not provide such an option.
 
 Protecting only the initial key while leaving the rest of the computation visible is comparable to locking the front door while leaving the shutters of the windows up. While the latter may be made of highly resistant glass, it creates a false sense of security without addressing the full scope of the problem.
 
@@ -68,9 +82,12 @@ Finally, until now it has been customary to define new instructions for each new
 With various state actors planning to define new cryptographic standards and the European Union even planning to define a catalogue of approved cryptographic algorithms, this approach will lead to a proliferation of instructions over time. In modern RISC architectures with a single or few instruction lengths, encoding space is at a premium, and defining each new instructions requires thorough review.
 
 Therefore, we need a solution that limits encoding space usage, ideally using a constant number of instructions regardless of how many algorithms are supported.
-// In effect, protecting only the initial key while leaving the rest of the computation visible is comparable to locking the front door while leaving the windows open. It creates a false sense of security without addressing the full scope of the problem.
+////
+
 
 == A Holistic Approach
+
+=== -- Cryptographic Contexts
 
 What is needed is not just a more secure way to store and use keys, but a more secure way to think about cryptographic execution overall and a way to abstract cryptographic algorithm specifics from the instruction set.
 Our concept of _Cryptographic Context_ provides such an abstraction.
@@ -85,12 +102,20 @@ While software can _provision_ key(s) and Metadata into Cryptographic Context, t
 Cryptographic Contexts reside in dedicated architectural storage, which we call _Context Registers_.
 These are not addressable as normal memory and not directly readable by software.
 
+=== -- ACE Instructions and the ACE Unit
+
 All ACE operations reference Context Registers rather than the key values.
 This limits the visibility of key material to the provisioning phase only, which can be performed by trusted entities.
 All computation remains inside a protected hardware domain, and only the final results are visible to software.
 
 It is important that these operations are executed atomically, such as full AES block encryptions and decryptions, steps in modes of operation, and hash absorption rounds.
 This prevents leakage from revealing the outputs of intermediate steps: even knowing the input and output to five rounds of an AES encryption will significantly facilitate key recovery, therefore we must always compute the full operation.
+
+The two most important ACE instructions are the _execution_ of a unit of the algorithm (e.g., encrypting or decrypting a block of data, absorbing a block of data into a hash), and the request for a _change in the state_ of the algorithm (e.g., moving from initialization to data absorption and to finalization in a hash, or moving from the processing of associated data to the processing of data to be encrypted/decrypted and finally to a tag generation or verification in an AEAD algorithm).
+
+The ACE instructions function like messages to a closely coupled–i.e., “attached”–hardware unit, which can be shared amongst several cores, even heterogeneous ones, while keeping a separate architectural state for each hardware thread in each core. Of course, the unit itself can also be implemented as an integral part of a core, becaus the architecture only specifies the behavior, not the type of the implementation.
+
+=== -- Lifecycle of a Cryptographic Context
 
 A Cryptographic Context can be exported from a Context Register to memory as a Sealed Cryptographic Context (SCC), and the latter can be reimported into a Context Register.  A SCC is an encrypted and authenticated representation of the contents of the Context Register, and it preserves all the policies defined in the metadata.
 This mechanism uses a _Sealing Key_ which can be securely reconfigured.
@@ -100,6 +125,9 @@ allows for cryptographic separation of CCs between process domains, and also ena
 == Advantages
 
 By design, Cryptographic Contexts eliminate many of the traditional sources of vulnerability. Keys and derived values never appear in software-visible form, reducing the risk of leakage through memory inspection or side-channel attacks. The integrity of the context is preserved, ensuring that both the data and the policies governing its use remain intact. At the same time, the architecture can enforce constraints on how a context is used, preventing certain classes of misuse.
+
+There is in principle no limit to the complexity of the algorithm that can be represented in a Cryptographic Context, for instance even complex integrated public key encryption algorithms can be defined with a very rich state and a large number of states. The fact that a state is carefully maintained forces the execution of instructions for processing and state change in a strictly prescribed manner, even if the process is interrupted for context switching, the Context Registers are exported and then reimported before resuming the process.
+
 
 Equally important, this model enables cryptographic operations to be executed at high speed. Because there is no need to move data into and out of isolated environments, latency is reduced and throughput increases. The system can take advantage of existing computational resources, including parallelism and vectorization, without compromising security.
 
