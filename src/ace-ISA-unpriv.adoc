@@ -114,7 +114,7 @@ the Localities as _tweaks_ in the encryption and decryption of SCCs.
 | `ZlbpP384r1c`   | -- Brainpool curve brainpoolP384r1.                                                                                 | TBD                                            | v0.0.0          | --
 | `ZlbpP512r1c`   | -- Brainpool curve brainpoolP512r1.                                                                                 | TBD                                            | v0.0.0          | --
 | `ZlSM2c`        | -- Chinese 256-bit SM2 curve.                                                                                       | TBD                                            | v0.0.0          | --
-| `Zlkn`       2+ | NIST Symmetric Suite. Depends on `Zleaes128`, `Zleaes256`, `Zlesha2`, `Zlgcmm`, `Zlxexm`, and `Zlgcmsivm`.          | v0.0.0                                         | --
+| `Zlkn`        2+| NIST Symmetric Suite. Depends on `Zleaes128`, `Zleaes256`, `Zlesha2`, `Zlgcmm`, `Zlxexm`, and `Zlgcmsivm`.          | v0.0.0                                         | --
 5+| ^1^ Requires V (or a suitable subset thereof). Must support the following CSRs: `aceerror` and `acestart` (this is a dependency for Zicsr); must support the following instructions: `ace.prov`, all four forms of `ace.exec`, `ace.clear`, `ace.export`, `ace.import`, `ace.clone`, `ace.size` (and thus `ace.avail`), and `ace.restrict`; must support `Zlkn`.
 5+| ^2^ Must support the following CSRs: `aceerror`, `acestart` (this is a dependency for Zicsr), `aceiobuflen` and `aceiobuftop`; must support the following instructions: `ace.prov`, Form D of `ace.exec`, `ace.input` and `ace.output`, `ace.clear`, `ace.export`, `ace.import`, `ace.clone`, `ace.size` (and thus `ace.avail`), and `ace.restrict`; must support `Zlkn`.
 5+| ^3^ Beside defining the basic encryption and decryption operations, these extensions also select which ciphers can be used with the various modes of operations that follow.
@@ -2272,18 +2272,27 @@ Similar to `ace.export`, `ace.import` requires implementation-specific
 {empty}
 (((ACE, algorithm, invalid state)))
 (((Context Register, invalidation)))
-In certain situations, in addition to raising an ACE error, an ACE instruction may cause a CR to be *invalidated*. This means that the following happens:
+In certain situations, in addition to raising an ACE error, an ACE instruction
+may cause a CR to be *invalidated*. This means that the following happens:
 
 * The CR is put into State _invalid_;
 * For instructions that refer to that CR:
- ** `ace.prov`, `ace.clear`, `ace.reset`, `ace.import`, `ace.export`, `ace.size` and `ace.avail` work normally.
- ** `ace.exec`, `ace.clone`, and `ace.restrict` raise an ACE error ace_err_invalid_CR;
- ** `ace.input` and `ace.output` raise ACE error ace_err_invalid_CR when `aceactivecr` points to an invalid CR;
- ** `ace.state` raises an ACE error ace_err_invalid_CR, unless it is used to return to State _initial_;
- ** `ace.error` always returns error ace_err_invalid_CR after any operation involving the CR except for `ace.import` and `ace.export`, `ace.clear`, `ace.prov`, and `ace.size`, which all work normally, and using `ace.state` to return to State _initial_.
+ ** `ace.prov`, `ace.clear`, `ace.reset`, `ace.import`, `ace.export`,
+    `ace.size` and `ace.avail` work normally.
+ ** `ace.exec`, `ace.clone`, and `ace.restrict` raise an ACE error
+    ace_err_invalid_CR;
+ ** `ace.input` and `ace.output` raise ACE error ace_err_invalid_CR when
+    `aceactivecr` points to an invalid CR;
+ ** `ace.state` raises an ACE error ace_err_invalid_CR, unless it is used to
+    return to State _initial_;
+ ** `ace.error` always returns error ace_err_invalid_CR after any operation
+    involving the CR except for `ace.import` and `ace.export`, `ace.clear`,
+    `ace.prov`, and `ace.size`, which all work normally, and using `ace.state`
+    to return to State _initial_.
 * The current instruction is terminated.
 
-In State _completed_, only `ace.prov`, `ace.export`, `ace.import`, `ace.clear`, and `ace.error` are permitted.
+In State _completed_, only `ace.prov`, `ace.export`, `ace.import`, `ace.clear`,
+and `ace.error` are permitted.
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -2292,31 +2301,58 @@ In State _completed_, only `ace.prov`, `ace.export`, `ace.import`, `ace.clear`, 
 
 _This section is currently informative and non-normative._
 
-ACE has been architected so that in properly written code, the most common executed instructions, namely `ace.exec` and `ace.state`, rarely have to deal with errors.
-Errors should occur mostly with configuration operations, caused by insufficient CRF capacity or while authenticating SCCs.
+ACE has been architected so that in properly written code, the most common
+executed instructions, namely `ace.exec` and `ace.state`, rarely have to deal
+with errors. Errors should occur mostly with configuration operations, caused
+by insufficient CRF capacity or while authenticating SCCs.
 
-However, revocation of localities or reached expiration dates may cause a CR to suddenly become invalid just before executing an `ace.exec` or `ace.state` instruction.
-Requiring software to check for errors after each operation would impose significant burden on the software and possibly degrade performance.
+However, revocation of localities or reached expiration dates may cause a CR to
+suddenly become invalid just before executing an `ace.exec` or `ace.state`
+instruction. Requiring software to check for errors after each operation would
+impose significant burden on the software and possibly degrade performance.
 
-Such horizontal traps can be used to implement a try/catch mechanism:
-At the start of a subroutine that performs a cryptographic protocol, the address of the “catch” code is written in CSR `acehtrapvector` (<<ACE-CSR-acehtrapvector>>) and the mask with the error types to catch is loaded in CSRs `acehtrapmask` (<<ACE-CSR-acehtrapmask>>).
-When exiting the routine, the two CSRs are cleared.
+Such horizontal traps can be used to implement a try/catch mechanism: At the
+start of a subroutine that performs a cryptographic protocol, the address of
+the “catch” code is written in CSR `acehtrapvector`
+(<<ACE-CSR-acehtrapvector>>) and the mask with the error types to catch is
+loaded in CSRs `acehtrapmask` (<<ACE-CSR-acehtrapmask>>). When exiting the
+routine, the two CSRs are cleared.
 
-The trap is precise, i.e., all instructions before the one that causes the trap are completed, and [.red]#{warn} the address of the instruction may be set in the User EPC# `[.red]#uepc#` [.red]#CSR. _If_# `[.red]#uepc#` [.red]#_is not defined, it could be defined anyway, however for this type of applications, a local variable can be used to keep track of the place where the error occurred_.# Since `aceerror` provides the cause, a CSR like `ucause` is not necessary as well.
+The trap is precise, i.e., all instructions before the one that causes the trap
+are completed, and [.red]#{warn} the address of the instruction may be set in
+the User EPC# `[.red]#uepc#` [.red]#CSR. _If_# `[.red]#uepc#` [.red]#_is not
+defined, it could be defined anyway, however for this type of applications, a
+local variable can be used to keep track of the place where the error
+occurred_.# Since `aceerror` provides the cause, a CSR like `ucause` is not
+necessary as well.
 
-NOTE: The main application of such code is when revocation or expiration cause a CR to become invalid.
-In such contexts, it is not the duty of the cryptographic subroutine to resolve the issue, but of the code that makes use of the latter, as the keys may have to be renegotiated, and this may even need user intervention.
+NOTE: The main application of such code is when revocation or expiration cause
+a CR to become invalid. In such contexts, it is not the duty of the
+cryptographic subroutine to resolve the issue, but of the code that makes use
+of the latter, as the keys may have to be renegotiated, and this may even need
+user intervention.
 
 ////
-. At the start of a subroutine that performs a cryptographic protocol, the address of the “catch” code is written in CSR `acehtrapvector` (<<ACE-CSR-acehtrapvector>>) and the mask with the error types to catch is loaded in CSRs `acehtrapmask` (<<ACE-CSR-acehtrapmask>>).
+. At the start of a subroutine that performs a cryptographic protocol, the
+  address of the “catch” code is written in CSR `acehtrapvector`
+  (<<ACE-CSR-acehtrapvector>>) and the mask with the error types to catch is
+  loaded in CSRs `acehtrapmask` (<<ACE-CSR-acehtrapmask>>).
 
-. The code does not directly handle the exceptions to be caught, usually only ace_err_invalid or ace_err_expired.
-. If the code runs without such errors, then the two CSRs are cleared at the end of the routine before returning.
-. If, say, an ace_err_invalid_CR or ace_err_expired_CR error is raised, the horizontal trap diverts the control flow to the catch code, which usually cleans up, and returns to the caller of the subroutine, not to the routine itself, with an error code.
+. The code does not directly handle the exceptions to be caught, usually only
+  ace_err_invalid or ace_err_expired.
+. If the code runs without such errors, then the two CSRs are cleared at the
+  end of the routine before returning.
+. If, say, an ace_err_invalid_CR or ace_err_expired_CR error is raised, the
+  horizontal trap diverts the control flow to the catch code, which usually
+  cleans up, and returns to the caller of the subroutine, not to the routine
+  itself, with an error code.
 ////
 
 [WARNING]
-If our definition of horizontal traps is not allowed, we may have to follow the development of the HFI extension or implement a solution that traps to S-mode first and then immediately returns to the catch code. We will discuss this with the ARC.
+If our definition of horizontal traps is not allowed, we may have to follow the
+development of the HFI extension or implement a solution that traps to S-mode
+first and then immediately returns to the catch code. We will discuss this with
+the ARC.
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -2325,9 +2361,114 @@ If our definition of horizontal traps is not allowed, we may have to follow the 
 
 _This section is normative._
 
-This section specifies the behavior of the ACE instructions for the supported cryptographic algorithms.
-Some specifications define algorithm families that can be instantiated with any primitive meeting certain properties, typically constraints on the block size `b` and the key size `k`—such as GCM or GCM-SIV, which are well defined not only with AES but also with other block ciphers, such as SM4.
-By contrast, the specifications for other algorithm suites are specific only to some primitives, for instance, Ascon.
+This section specifies the behavior of the ACE instructions for the supported
+cryptographic algorithms. Some specifications define algorithm families that
+can be instantiated with any primitive meeting certain properties, typically
+constraints on the block size `b` and the key size `k`—such as GCM or GCM-SIV,
+which are well defined not only with AES but also with other block ciphers,
+such as SM4. By contrast, the specifications for other algorithm suites are
+specific only to some primitives, for instance, Ascon.
+
+The following table defines the operation encodings for each algorithm in
+`ace.exec` encoded in the metadata field "Algorithm". The algorithm is encoded
+using two forms: type and mode. Type is encoded in the four LSBs of
+"Algorithm", and mode is encoded in the next four LSBs of "Algorithm".
+
+[[ACE-exec-encodings]]
+.Algorithm Type and Mode Encodings
+[float="center",align="center",width="70%",cols="^5%,^5%,<10%,<15%",options="header"]
+|===
+| Algorithm Type | Algorithm Mode | Algorithm name           | Extensions Requirement
+| 0              | 0              | AES128_RAW               | Zleaes128p
+| 0              | 1              | AES128_ECB               | Zleaes128p
+| 0              | 2              | AES128_OCB               | Zleaes128p and Zlocbm
+| 0              | 3              | AES128_OCB_IV            | Zleaes128p and Zlocbm
+| 0              | 4              | AES128_OFB               | Zleaes128p
+| 0              | 5              | AES128_CTR               | Zleaes128p and Zlctrm
+| 0              | 6              | AES128_LFSR              | Zleaes128p and Zlctrm
+| 0              | 7              | AES128_XCTR              | Zleaes128p and Zlxctrm
+| 0              | 8              | AES128_XLFSR             | Zleaes128p and Zlxctrm
+| 0              | 9              | AES128_XEX               | Zleaes128p and Zlxexm
+| 0              | 10             | AES128_XTS               | Zleaes128p and Zlxexm
+| 0              | 11             | AES128_GCM               | Zleaes128p and Zlgcmm
+| 0              | 12             | AES128_GCM_IV            | Zleaes128p and Zlgcmm
+| 0              | 13             | AES128_GCM_SIV           | Zleaes128p and Zlgcmsivm
+| 0              | 14             | AES128_CMAC              | Zleaes128p and Zlcmac
+| 1              | 0              | AES192_RAW               | Zleaes192p
+| 1              | 1              | AES192_ECB               | Zleaes192p
+| 1              | 2              | AES192_OCB               | Zleaes192p and Zlocbm
+| 1              | 3              | AES192_OCB_IV            | Zleaes192p and Zlocbm
+| 1              | 4              | AES192_OFB               | Zleaes192p
+| 1              | 5              | AES192_CTR               | Zleaes192p and Zlctrm
+| 1              | 6              | AES192_LFSR              | Zleaes192p and Zlctrm
+| 1              | 7              | AES192_XCTR              | Zleaes192p and Zlxctrm
+| 1              | 8              | AES192_XLFSR             | Zleaes192p and Zlxctrm
+| 1              | 9              | AES192_XEX               | Zleaes192p and Zlxexm
+| 1              | 10             | AES192_XTS               | Zleaes192p and Zlxexm
+| 1              | 11             | AES192_GCM               | Zleaes192p and Zlgcmm
+| 1              | 12             | AES192_GCM_IV            | Zleaes192p and Zlgcmm
+| 1              | 13             | AES192_GCM_SIV           | Zleaes192p and Zlgcmsivm
+| 1              | 14             | AES192_CMAC              | Zleaes192p and Zlcmac
+| 2              | 0              | AES256_RAW               | Zleaes256p
+| 2              | 1              | AES256_ECB               | Zleaes256p
+| 2              | 2              | AES256_OCB               | Zleaes256p and Zlocbm
+| 2              | 3              | AES256_OCB_IV            | Zleaes256p and Zlocbm
+| 2              | 4              | AES256_OFB               | Zleaes256p
+| 2              | 5              | AES256_CTR               | Zleaes256p and Zlctrm
+| 2              | 6              | AES256_LFSR              | Zleaes256p and Zlctrm
+| 2              | 7              | AES256_XCTR              | Zleaes256p and Zlxctrm
+| 2              | 8              | AES256_XLFSR             | Zleaes256p and Zlxctrm
+| 2              | 9              | AES256_XEX               | Zleaes256p and Zlxexm
+| 2              | 10             | AES256_XTS               | Zleaes256p and Zlxexm
+| 2              | 11             | AES256_GCM               | Zleaes256p and Zlgcmm
+| 2              | 12             | AES256_GCM_IV            | Zleaes256p and Zlgcmm
+| 2              | 13             | AES256_GCM_SIV           | Zleaes256p and Zlgcmsivm
+| 2              | 14             | AES256_CMAC              | Zleaes256p and Zlcmac
+| 3              | 0              | SM4_RAW                  | Zlsm4p
+| 3              | 1              | SM4_ECB                  | Zlsm4p
+| 3              | 4              | SM4_OFB                  | Zlsm4p
+| 3              | 5              | SM4_CTR                  | Zlsm4p and Zlctrm
+| 3              | 6              | SM4_LFSR                 | Zlsm4p and Zlctrm
+| 3              | 7              | SM4_XCTR                 | Zlsm4p and Zlxctrm
+| 3              | 8              | SM4_XLFSR                | Zlsm4p and Zlxctrm
+| 3              | 9              | SM4_XEX                  | Zlsm4p and Zlxexm
+| 3              | 10             | SM4_XTS                  | Zlsm4p and Zlxexm
+| 3              | 11             | SM4_GCM                  | Zlsm4p and Zlgcmm
+| 3              | 12             | SM4_GCM_IV               | Zlsm4p and Zlgcmm
+| 3              | 13             | SM4_GCM_SIV              | Zlsm4p and Zlgcmsivm
+| 3              | 14             | SM4_CMAC                 | Zlsm4p and Zlcmac
+| 4              | 0              | SHA2-224                 | Zlesha2h
+| 4              | 1              | SHA2-256                 | Zlesha2h
+| 4              | 2              | SHA2-384                 | Zlesha2h
+| 4              | 3              | SHA2-512                 | Zlesha2h
+| 4              | 4              | SHA2-512/224             | Zlesha2h
+| 4              | 5              | SHA2-512/256             | Zlesha2h
+| 4              | 6              | SHA2-224_HMAC            | Zlesha2h and Zlhmacm
+| 4              | 7              | SHA2-256_HMAC            | Zlesha2h and Zlhmacm
+| 4              | 8              | SHA2-384_HMAC            | Zlesha2h and Zlhmacm
+| 4              | 9              | SHA2-512_HMAC            | Zlesha2h and Zlhmacm
+| 4              | 10             | SHA2-512/224_HMAC        | Zlesha2h and Zlhmacm
+| 4              | 11             | SHA2-512/256_HMAC        | Zlesha2h and Zlhmacm
+| 5              | 0              | SHA3-224                 | Zlesha3h
+| 5              | 1              | SHA3-256                 | Zlesha3h
+| 5              | 2              | SHA3-384                 | Zlesha3h
+| 5              | 3              | SHA3-512                 | Zlesha3h
+| 5              | 4              | SHAKE128                 | Zlesha3h
+| 5              | 5              | SHAKE256                 | Zlesha3h
+| 5              | 6              | SHA3-224_HMAC            | Zlesha3h and Zlhmacm
+| 5              | 7              | SHA3-256_HMAC            | Zlesha3h and Zlhmacm
+| 5              | 8              | SHA3-384_HMAC            | Zlesha3h and Zlhmacm
+| 5              | 9              | SHA3-512_HMAC            | Zlesha3h and Zlhmacm
+| 5              | 10             | KMAC128                  | Zlesha3h and Zlkmacm
+| 5              | 11             | KMAC256                  | Zlesha3h and Zlkmacm
+| 6              | 0              | SM3                      | Zlsm3h
+| 7              | 0              | Ascon-AEAD128            | Zlascon
+| 7              | 1              | Ascon-AEAD128_Nonce      | Zlascon
+| 7              | 2              | Ascon-AEAD128_Nonce_Mask | Zlascon
+| 7              | 3              | Ascon-Hash256            | Zlascon
+| 7              | 4              | Ascon-XOF128             | Zlascon
+| 7              | 4              | Ascon-CXOF128            | Zlascon
+|===
 
 //
 
@@ -2340,9 +2481,12 @@ Parameters:::
 --
 These include:
 
-* The _block size_ `b`, which is the size of the basic unit of information processed by the algorithm, usually the block size of the main underlying primitive;
+* The _block size_ `b`, which is the size of the basic unit of information
+  processed by the algorithm, usually the block size of the main underlying
+  primitive;
 * The _key size_ `k`, for keyed algorithms; and
-* Any other parameter needed to instantiate the algorithm with compatible primitives.
+* Any other parameter needed to instantiate the algorithm with compatible
+  primitives.
 --
 +
 
@@ -2352,12 +2496,15 @@ Data Structures:::
 These include:
 
 . *Provisioning Input* (Content):
-The data following the Metadata Header in the PI, such as keys and other required secrets.
-The fields are listed in the order they appear in the PI, each with its length.
+The data following the Metadata Header in the PI, such as keys and other
+required secrets. The fields are listed in the order they appear in the PI,
+each with its length.
 
 . *Internal State* (Content):
-Information that must be maintained in the internal state of a CC, besides the information provided by the metadata.
-The ordering of the fields is not given, and their lengths may differ from those listed, for example for threshold or fault-tolerant implementations.
+Information that must be maintained in the internal state of a CC, besides the
+information provided by the metadata. The ordering of the fields is not given,
+and their lengths may differ from those listed, for example for threshold or
+fault-tolerant implementations.
 
 . *Serialized Content*:
 The data that follows the Metadata Header in the plaintext portion of an SCC.
@@ -2373,30 +2520,45 @@ State Machine:::
 --
 The state machine is defined by the following information:
 
-. A list of *States* in which the internal state machine of the logic is executed, together with their representation according to the rules set in <<ACE-StateNumber-field>>.
-. A complete list of the *allowed state transitions*, including the precise conditions under which each transition is allowed, the Form of `ace.state` used for each of these transitions and the meaning of any additional parameter;
-. The enumeration of the *allowed instructions* at each state and their *behavior*.
+. A list of *States* in which the internal state machine of the logic is
+  executed, together with their representation according to the rules set in
+  <<ACE-StateNumber-field>>.
+. A complete list of the *allowed state transitions*, including the precise
+  conditions under which each transition is allowed, the Form of `ace.state`
+  used for each of these transitions and the meaning of any additional
+  parameter;
+. The enumeration of the *allowed instructions* at each state and their
+  *behavior*.
 --
 +
 
 //
 
-The instructions permitted in each algorithm state are typically `ace.exec` and `ace.state`, though this is not a general rule.
-For `ace.exec`, only one of its forms (see <<ACE-instruction-exec>>) is allowed per state, along with the corresponding replacement sequence defined in <<ACE-replacement-instructions>>.
-If a Form of `ace.exec`, or `ace.state` not explicitly allowed in the current algorithm state is used, then an illegal instruction exception is raised.
+The instructions permitted in each algorithm state are typically `ace.exec` and
+`ace.state`, though this is not a general rule. For `ace.exec`, only one of its
+forms (see <<ACE-instruction-exec>>) is allowed per state, along with the
+corresponding replacement sequence defined in <<ACE-replacement-instructions>>.
+If a Form of `ace.exec`, or `ace.state` not explicitly allowed in the current
+algorithm state is used, then an illegal instruction exception is raised.
 
-If a non-allowed state transition is requested in `ace.state`, including requesting encryption or decryption from a CC not allowing it, an ACE error ace_err_unimpl is raised.  This also invalidates the CR.
+If a non-allowed state transition is requested in `ace.state`, including
+requesting encryption or decryption from a CC not allowing it, an ACE error
+ace_err_unimpl is raised.  This also invalidates the CR.
 
-Pseudocode is provided to illustrate the software implementation of ACE-supported algorithms using the ACE ISA.
-For clarity, the pseudocode generally uses fixed parameters and omits the `ace.exec` Forms A-C replacement sequences.
-The examples are non-normative.
+Pseudocode is provided to illustrate the software implementation of
+ACE-supported algorithms using the ACE ISA. For clarity, the pseudocode
+generally uses fixed parameters and omits the `ace.exec` Forms A-C replacement
+sequences. The examples are non-normative.
 
 [NOTE]
 ====
-In many algorithms, an `ace.exec` or `ace.state` operation could logically imply a state change.
-For example, after setting an IV or nonce in an AEAD mode, the instruction might naturally transition to a subsequent state.
-Deviations from this behavior may be necessary to avoid security issues.
-An example is given by the automatic transitions from hash finalization to verification, or from hash verification to the _completed_ state (<<ACE-algorithms>>).
+In many algorithms, an `ace.exec` or `ace.state` operation could logically
+imply a state change. For example, after setting an IV or nonce in an AEAD
+mode, the instruction might naturally transition to a subsequent state.
+Deviations from this behavior may be necessary to avoid security issues. An
+example is given by the automatic transitions from hash finalization to
+verification, or from hash verification to the _completed_ state
+(<<ACE-algorithms>>).
 ====
 
 // ////////////////////////////////////////////////////////////////////
@@ -2407,8 +2569,11 @@ An example is given by the automatic transitions from hash finalization to verif
 [[ACE-usage-input-output]]
 ===== Usage of `ace.input` and `ace.output` to Replace Vector Inputs and Outputs
 
-When ACEIOBUF is implemented, in all algorithms the following applies:
-any occurrence of the “Original Instructions” in <<ACE-replacement-instructions>> may be substituted by the corresponding “Replacement Sequence” where `ace.input` and `ace.output` instructions are used in place of the vector register inputs and outputs, even if this is not explicitly written each time.
+When ACEIOBUF is implemented, in all algorithms the following applies: any
+occurrence of the “Original Instructions” in <<ACE-replacement-instructions>>
+may be substituted by the corresponding “Replacement Sequence” where
+`ace.input` and `ace.output` instructions are used in place of the vector
+register inputs and outputs, even if this is not explicitly written each time.
 
 [[ACE-replacement-instructions]]
 .Replacement sequences for `ace.exec` and `ace.state` using `ace.input` and `ace.output`
@@ -2428,66 +2593,93 @@ any occurrence of the “Original Instructions” in <<ACE-replacement-instructi
 // `2: ace.derive{nbsp}Kd\|K(Xd), Ks1\|K(Xs1)` +
 |===
 
-The only operations performed by `ace.input` and `ace.output` are to provide the inputs to the cryptographic operations and read out their output.
-No computation is performed on the data by `ace.input` and `ace.output`.
-The entirety of the computations and internal state changes of the `ace.exec` and `ace.state` operations remains in the `ace.exec` and `ace.state` operations
+The only operations performed by `ace.input` and `ace.output` are to provide
+the inputs to the cryptographic operations and read out their output. No
+computation is performed on the data by `ace.input` and `ace.output`. The
+entirety of the computations and internal state changes of the `ace.exec` and
+`ace.state` operations remains in the `ace.exec` and `ace.state` operations
 
-`ace.input` and `ace.output` may be used if enabled and `aceiobuflen` is non-zero, otherwise an ACE error ace_err_unconf_buf is raised.
-If `aceiobuflen` is non-zero, and the range size `aceiobuftop` - `acestart` is an invalid size for the algorithm, the `ace.exec` operation is not performed and ACE error ace_err_invalid_value is raised.
+`ace.input` and `ace.output` may be used if enabled and `aceiobuflen` is
+non-zero, otherwise an ACE error ace_err_unconf_buf is raised. If `aceiobuflen`
+is non-zero, and the range size `aceiobuftop` - `acestart` is an invalid size
+for the algorithm, the `ace.exec` operation is not performed and ACE error
+ace_err_invalid_value is raised.
 
-In all cases, the `ace.input` and `ace.output` instructions must be temporarily tied to a specific context in order to properly determine the allowed sequences.
-This is done by setting the `aceactivecr` CSR (<<ACE-CSR-aceactivecr>>) first. The user must not forget to set it back to 32 at the end of their code.
+In all cases, the `ace.input` and `ace.output` instructions must be temporarily
+tied to a specific context in order to properly determine the allowed
+sequences. This is done by setting the `aceactivecr` CSR
+(<<ACE-CSR-aceactivecr>>) first. The user must not forget to set it back to 32
+at the end of their code.
 
-The architecture uses the `acesequence` CSR to track the progress of the replacement sequences.
-The initial value of `acesequence` is 0. It remains zero while the forms of `ace.exec` and `ace.state` specified in the algorithm are used.
-As soon as one of the following events happens:
+The architecture uses the `acesequence` CSR to track the progress of the
+replacement sequences. The initial value of `acesequence` is 0. It remains zero
+while the forms of `ace.exec` and `ace.state` specified in the algorithm are
+used. As soon as one of the following events happens:
 
-. An `ace.input` is completed in place of a Form A or B `ace.exec`, or Form C `ace.state`; or
+. An `ace.input` is completed in place of a Form A or B `ace.exec`, or Form C
+  `ace.state`; or
 . A Form D `ace.exec` is completed in place of a Form C `ace.exec`,
 
-then `acesequence` is set to 1, to denote that the first instruction in the replacement sequence has completed.
-Then, `acesequence` keeps track of how many instructions of the replacement sequence have been completed.
-At the end of the replacement sequence, `acesequence` is reset to 0.
+then `acesequence` is set to 1, to denote that the first instruction in the
+replacement sequence has completed. Then, `acesequence` keeps track of how many
+instructions of the replacement sequence have been completed. At the end of the
+replacement sequence, `acesequence` is reset to 0.
 
-The ordering of the instructions in a replacement sequence is enforced by the architecture according to the value of `acesequence` and the state number of the CR configured in `aceactivecr`.
-Not following the instruction ordering raises an illegal instruction exception and invalidates the CR.
+The ordering of the instructions in a replacement sequence is enforced by the
+architecture according to the value of `acesequence` and the state number of
+the CR configured in `aceactivecr`. Not following the instruction ordering
+raises an illegal instruction exception and invalidates the CR.
 
-`acesequence` can be freely read and written in all modes.
-In particular, `acesequence` may be saved and restored by privileged code at context switch together WITH acestart[XLEN-9:0].
-Abusing this register may also allow to arbitrarily repeat `ace.exec` or `ace.state` instructions.
-However, if the algorithm and its state machine are correctly designed, this will not allow the user to compromise the internal state of the algorithm.
+`acesequence` can be freely read and written in all modes. In particular,
+`acesequence` may be saved and restored by privileged code at context switch
+together WITH acestart[XLEN-9:0]. Abusing this register may also allow to
+arbitrarily repeat `ace.exec` or `ace.state` instructions. However, if the
+algorithm and its state machine are correctly designed, this will not allow the
+user to compromise the internal state of the algorithm.
 
 // ////////////////////////////////////////////////////////////////////
 
 [[ACE-notation]]
 ===== Notation in the Algorithm Descriptions
 
-* `INPUT`: The input data to be processed by `ace.exec` or `ace.state`.
-   This can be the input vector register, or the ACEIOBUF, as described in <<ACE-usage-input-output>>.
+* `INPUT`: The input data to be processed by `ace.exec` or `ace.state`. This
+  can be the input vector register, or the ACEIOBUF, as described in
+  <<ACE-usage-input-output>>.
 
-* `OUTPUT`: The output data produced by `ace.exec`.
-   This can be the output vector register, or the ACEIOBUF, as described in <<ACE-usage-input-output>>.
+* `OUTPUT`: The output data produced by `ace.exec`. This can be the output
+  vector register, or the ACEIOBUF, as described in <<ACE-usage-input-output>>.
 
-* `IOLEN`: Either `VL*SEW` or the length `aceiobuftop` of the ACEIOBUF in bytes, depending on whether vector registers are used or the ACEIOBUF is used.
+* `IOLEN`: Either `VL*SEW` or the length `aceiobuftop` of the ACEIOBUF in
+  bytes, depending on whether vector registers are used or the ACEIOBUF is
+  used.
 
 //
 
 [[ACE-rules-threshold-implementations]]
 ===== Single-Share Key Export Rule for Threshold implementations
 
-Any CC with its algorithm implemented as a threshold implementation will always provision, import and export _all_ its keys and secrets as _single_, _reconstructed_ _shares_.
+Any CC with its algorithm implemented as a threshold implementation will always
+provision, import and export _all_ its keys and secrets as _single_,
+_reconstructed_ _shares_.
 
-The PI and SCC Formats will be the same as for the non-threshold implementation variants of the same algorithm, with the only difference being the value of the _SCProtection_ in the Metadata.
+The PI and SCC Formats will be the same as for the non-threshold implementation
+variants of the same algorithm, with the only difference being the value of the
+_SCProtection_ in the Metadata.
 
-For the purpose of architecture specification, all values are also always represented as a single share in this document.
-Threshold implementations are simply implementation variants of the same algorithm.
-(((ACE, algorithm, threshold variants)))
+For the purpose of architecture specification, all values are also always
+represented as a single share in this document. Threshold implementations are
+simply implementation variants of the same algorithm. (((ACE, algorithm,
+threshold variants)))
 
-NOTE: This rule assumes that reconstructing or re-randomizing a key is a fast operation, such as an ``xor`` with random values.
-This requires the ACE execution unit to have access to a random number generator.
-Besides ensuring the compactness of an SCC, this rule also guarantees key portability across architectures
-that implement side-channel protection in different ways.
-If reconstructing the values is efficient but generating the shares is a slow process, the implementation may take advantage of the optional Additional Data in the Content to store information that can accelerate share generation, such as a copy of some (or all) shares.
+NOTE: This rule assumes that reconstructing or re-randomizing a key is a fast
+operation, such as an ``xor`` with random values. This requires the ACE
+execution unit to have access to a random number generator. Besides ensuring
+the compactness of an SCC, this rule also guarantees key portability across
+architectures that implement side-channel protection in different ways. If
+reconstructing the values is efficient but generating the shares is a slow
+process, the implementation may take advantage of the optional Additional Data
+in the Content to store information that can accelerate share generation, such
+as a copy of some (or all) shares.
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -2496,16 +2688,21 @@ If reconstructing the values is efficient but generating the shares is a slow pr
 
 System Keys will change all the algorithms described here in the following way:
 
-. In a PI and in an SCC, the key field will contain the index of the key in the SKT in place of the value.
-. This field is reduced from the original key size to a 64-bit value. This saves space in an SCC and allows for faster export and import operations.
-. For algorithms that require more than one key, such as XEX/XTS, a single index is still used to refer to an entry in the SKT that contains multiple keys—and thus a single 64-bit value in the PI and SCC.
+. In a PI and in an SCC, the key field will contain the index of the key in the
+  SKT in place of the value.
+. This field is reduced from the original key size to a 64-bit value. This
+  saves space in an SCC and allows for faster export and import operations.
+. For algorithms that require more than one key, such as XEX/XTS, a single
+  index is still used to refer to an entry in the SKT that contains multiple
+  keys—and thus a single 64-bit value in the PI and SCC.
 
 //
 
 [[ACE-states-symmetric]]
 ==== States for the Symmetric Algorithms Defined in this Specification
 
-The following table, together with <<ACE-state-constants-fixed>>, defines the states used by the symmetric algorithms in this specification.
+The following table, together with <<ACE-state-constants-fixed>>, defines the
+states used by the symmetric algorithms in this specification.
 
 [[ACE-state-constants-symmetric]]
 .Constants defining CC states for symmetric algorithms
@@ -2527,8 +2724,11 @@ The following table, together with <<ACE-state-constants-fixed>>, defines the st
 |  12   |  ace_state_set_aux_value        | _set_aux_value_     | Set a public/auxiliary value in an algorithm.
 |===
 
-NOTE: The `ace.state` instruction used to transition to states _hash_absorb_, _encrypt_, or _decrypt_ often also sets a public value.
-For algorithms requiring multiple public values or additional parameters (e.g., tag length), these can be set by transitioning to State _set_aux_value_ using a Form of `ace.state` with an auxiliary argument, i.e., Form B or C.
+NOTE: The `ace.state` instruction used to transition to states _hash_absorb_,
+_encrypt_, or _decrypt_ often also sets a public value. For algorithms
+requiring multiple public values or additional parameters (e.g., tag length),
+these can be set by transitioning to State _set_aux_value_ using a Form of
+`ace.state` with an auxiliary argument, i.e., Form B or C.
 
 // ////////////////////////////////////////////////////////////////////
 
