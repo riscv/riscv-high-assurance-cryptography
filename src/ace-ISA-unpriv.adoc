@@ -1780,10 +1780,12 @@ being written to.
 [[ACE-provisioning-export-import]]
 === Provisioning, Export and Import of Cryptographic Contexts
 
-The length of a PI must be a multiple of 8 bytes.
-The first 8 bytes contain the *Metadata* Header, as defined in <<ACE-Metadata>>.
-The subsequent data contain the *Content*, key material and any algorithm-specific data used to initialize the CR.
-The Content's format is entirely determined by the _Algorithm_ and _KeyType_ fields within the Metadata, and is specified in <<ACE-algorithms>> for each architected algorithm.
+The length of a PI must be a multiple of 8 bytes. The first 8 bytes contain the
+*Metadata* Header, as defined in <<ACE-Metadata>>. The subsequent data contain
+the *Content*, key material and any algorithm-specific data used to initialize
+the CR. The Content's format is entirely determined by the _Algorithm_ and
+_KeyType_ fields within the Metadata, and is specified in <<ACE-algorithms>>
+for each architected algorithm.
 
 Format of Provisioning Input:::
 `bytes{nbsp}[{nbsp}0 .. 7{nbsp}{nbsp}{nbsp}]{nbsp}{nbsp}` Metadata Header. +
@@ -1791,30 +1793,47 @@ Format of Provisioning Input:::
 
 {empty}
 (((Cryptographic Context, Sealed)))
-The SCC format is used when exporting a CC from a CR and also to re-import the CC into a CR.
-Its size must be a multiple of 8 bytes.
-The first 8 bytes contain the Metadata Header, as defined in <<ACE-Metadata>>.
-The format and length of the exported Content are algorithm-specific (<<ACE-algorithms>>) and, excluding the Additional Data of length `mh`._AdditionalData_,
-are determined solely by the _Algorithm_, _KeyType_, and _AlgorithmPolicy_ fields in the Metadata.
+The SCC format is used when exporting a CC from a CR and also to re-import the
+CC into a CR. Its size must be a multiple of 8 bytes. The first 8 bytes contain
+the Metadata Header, as defined in <<ACE-Metadata>>. The format and length of
+the exported Content are algorithm-specific (<<ACE-algorithms>>) and, excluding
+the Additional Data of length `mh`._AdditionalData_, are determined solely by
+the _Algorithm_, _KeyType_, and _AlgorithmPolicy_ fields in the Metadata.
 
 Format of Sealed Cryptographic Context:::
 `bytes{nbsp}[{nbsp}{nbsp}0 .. 7{nbsp}{nbsp}{nbsp}]{nbsp}{nbsp}` Metadata Header, not encrypted. +
 `bytes{nbsp}[{nbsp}{nbsp}8 .. 23{nbsp}{nbsp}]{nbsp}{nbsp}` SIV produced by the encryption method (128 bits). +
 `bytes{nbsp}[{nbsp}24 .. u-1{nbsp}]{nbsp}{nbsp}` Encrypted Serialized Content of the CR. Here, `u` = `len_in_bytes(SCC)`. +
 
-The entire Metadata and Content are authenticated, but only the Content is encrypted.
-The AEAD method used for this purpose is described in <<ACE-SCC-AEAD>>.
+The entire Metadata and Content are authenticated, but only the Content is
+encrypted. The AEAD method used for this purpose is described in
+<<ACE-SCC-AEAD>>.
 
-The Serialized Content section under Data Structures in an algorithm specification (<<ACE-algorithms>>) defines the structure of the `content[]` array.
-Architecturally, `content[]` is the serialization of the content of a CR for export as an SCC.
+The Serialized Content section under Data Structures in an algorithm
+specification (<<ACE-algorithms>>) defines the structure of the `content[]`
+array. Architecturally, `content[]` is the serialization of the content of a CR
+for export as an SCC.
 
 [NOTE]
 --
-While `content[]` provides a view of (certain fields of) the content of a CR that matches the serialized SCC format, it need not be converted to and from the internal representation and explicitly stored in the ACE unit's memory before export and after import.
+While `content[]` provides a view of (certain fields of) the content of a CR
+that matches the serialized SCC format, it need not be converted to and from
+the internal representation and explicitly stored in the ACE unit's memory
+before export and after import.
 
-`content[]` is a virtual representation: its byte ordering does not imply physical contiguity within the CR, nor is there a direct byte-for-byte correspondence. Changes to `content[]` are reflected in the underlying CR representation (except for excluded fields), and vice versa.
+`content[]` is a virtual representation: its byte ordering does not imply
+physical contiguity within the CR, nor is there a direct byte-for-byte
+correspondence. Changes to `content[]` are reflected in the underlying CR
+representation (except for excluded fields), and vice versa.
 
-In a threshold implementation, a single key byte in `content[]` may correspond to multiple bytes across the key shares within the CR. Reading that byte may return the XOR of the corresponding bytes in the shares; writing to it may distribute the value across the corresponding bytes in the shares such that their XOR equals the input. These operations may be deferred until the end of an provisioning or import instruction: writing to `context[]` may initially write only to the first share of a key, and at the end of the provisioning or import instruction, the other shares would be generated.
+In a threshold implementation, a single key byte in `content[]` may correspond
+to multiple bytes across the key shares within the CR. Reading that byte may
+return the XOR of the corresponding bytes in the shares; writing to it may
+distribute the value across the corresponding bytes in the shares such that
+their XOR equals the input. These operations may be deferred until the end of
+an provisioning or import instruction: writing to `context[]` may initially
+write only to the first share of a key, and at the end of the provisioning or
+import instruction, the other shares would be generated.
 --
 
 // ////////////////////////////////////////////////////////////////////
@@ -1822,33 +1841,46 @@ In a threshold implementation, a single key byte in `content[]` may correspond t
 [[ACE-system-keys]]
 ==== System Keys and Random System-Generated Key Values
 
-* System Keys are given by an index into an internal, system-specific System Keys Table (SKT), and therefore, in a PI or in a SCC, in place of the key value itself, a 64-bit field is used to store the index.
+* System Keys are given by an index into an internal, system-specific System
+  Keys Table (SKT), and therefore, in a PI or in a SCC, in place of the key
+  value itself, a 64-bit field is used to store the index.
 
-* For threshold implementations of system keys, ACE may copy the key material from the SKT into the CR and expand it into multiple shares.
-However, the key must be still be exported as a single index.
+* For threshold implementations of system keys, ACE may copy the key material
+  from the SKT into the CR and expand it into multiple shares. However, the key
+  must be still be exported as a single index.
 
-* It is permissible to include some of the shares of a system key in a threshold implementation in the optional Additional Data of the content in order to accelerate share reconstruction, provided that the key cannot be reconstructed from these shares.
+* It is permissible to include some of the shares of a system key in a
+  threshold implementation in the optional Additional Data of the content in
+  order to accelerate share reconstruction, provided that the key cannot be
+  reconstructed from these shares.
 
-* When the 64-bit index system key index in the PI read nby `ace.prov` is an all all-ones value (i.e., `ones(64)`), it denotes that the key material must be generated randomly and, similarly to the behaviour of `ace.import.S`, the _KeyType_ field of the metadata is internally set to 0, just as for any other explicitly provisioned key, and exported as such, i.e., by value. This applies to all key material in all algorithms, unless otherwise specified.
+* When the 64-bit index system key index in the PI read nby `ace.prov` is an
+  all all-ones value (i.e., `ones(64)`), it denotes that the key material must
+  be generated randomly and, similarly to the behaviour of `ace.import.S`, the
+  _KeyType_ field of the metadata is internally set to 0, just as for any other
+  explicitly provisioned key, and exported as such, i.e., by value. This
+  applies to all key material in all algorithms, unless otherwise specified.
 
 // ////////////////////////////////////////////////////////////////////
 
 [[ACE-size-functions]]
 ==== Notation for the Size Functions
 
-Let `mh` denote a Metadata Header.
-In order to determine the total lengths of the PI and of the SCC,
-the implementation provides the following functions or an equivalent mechanism:{empty}
+Let `mh` denote a Metadata Header. In order to determine the total lengths of
+the PI and of the SCC, the implementation provides the following functions or
+an equivalent mechanism:{empty}
 
-. ``MH_size(mh)`` returns the byte length of the Metadata Header.
-In the current specification, it is always 8.
+. ``MH_size(mh)`` returns the byte length of the Metadata Header. In the
+  current specification, it is always 8.
 
-. ``PI_content_size(mh)`` returns the byte length of the content section of a PI.
-   It depends only on `mh`._Algorithm_, `mh`._AlgorithmPolicy_, and `mh`._KeyType_.
+. ``PI_content_size(mh)`` returns the byte length of the content section of a
+  PI. It depends only on `mh`._Algorithm_, `mh`._AlgorithmPolicy_, and
+  `mh`._KeyType_.
 
-. ``SCC_content_size(mh)`` returns the byte length of the fixed part of the content section of an SCC.
-   It depends only on  `mh`._Algorithm_, `mh`._AlgorithmPolicy_, and `mh`._KeyType_.
-   It does not include the length of the variable part of the content of length _AdditionalData_ * 8 bytes.
+. ``SCC_content_size(mh)`` returns the byte length of the fixed part of the
+  content section of an SCC. It depends only on  `mh`._Algorithm_,
+  `mh`._AlgorithmPolicy_, and `mh`._KeyType_. It does not include the length of
+  the variable part of the content of length _AdditionalData_ * 8 bytes.
 
 The total size in bytes of a PI is therefore
 
@@ -1863,23 +1895,37 @@ and the total size in bytes of an SCC is
 [[ACE-interruption-points]]
 ==== Interruption Points
 
-Provisioning, export, and import are interruptible only before any memory access they perform.
-This means that interrupts other than memory exceptions must wait until the next memory access.
+Provisioning, export, and import are interruptible only before any memory
+access they perform. This means that interrupts other than memory exceptions
+must wait until the next memory access.
 
-Provisioning and import instructions may resume from the point of interruption only if control returns directly after the interrupt handler completes. The privileged interrupt handler must guarantee restart only in this case. In any other circumstance, including a context switch, the instruction must be restarted, and if it is `ace.prov` or `ace.import`, the target CR must also be cleared before restarting.
+Provisioning and import instructions may resume from the point of interruption
+only if control returns directly after the interrupt handler completes. The
+privileged interrupt handler must guarantee restart only in this case. In any
+other circumstance, including a context switch, the instruction must be
+restarted, and if it is `ace.prov` or `ace.import`, the target CR must also be
+cleared before restarting.
 
-An export may resume only if the CR has not been modified before returning to the original control flow.
+An export may resume only if the CR has not been modified before returning to
+the original control flow.
 
-The implementation will restart any of these operations if the CR is not in a valid interrupted state.
+The implementation will restart any of these operations if the CR is not in a
+valid interrupted state.
 
-The initial SIV computation of `ace.export` may be implemented as either uninterruptible or interruptible. If uninterruptible, interrupt handlers may need to wait for completion before accessing the CR, potentially creating performance bottlenecks or timing issues. To mitigate these issues, this computation can be made interruptible. as described following the `POLYVAL` function specification in <<ACE-SCC-POLYVAL>>.
+The initial SIV computation of `ace.export` may be implemented as either
+uninterruptible or interruptible. If uninterruptible, interrupt handlers may
+need to wait for completion before accessing the CR, potentially creating
+performance bottlenecks or timing issues. To mitigate these issues, this
+computation can be made interruptible. as described following the `POLYVAL`
+function specification in <<ACE-SCC-POLYVAL>>.
 
 // ////////////////////////////////////////////////////////////////////
 
 [[ACE-provisioning]]
 ==== Provisioning
 
-We start with the algorithm performed by `ace.prov`, which reads a PI and uses it to provision a CR.
+We start with the algorithm performed by `ace.prov`, which reads a PI and uses
+it to provision a CR.
 
 [[ACE-provisioning-listing]]
 .Provisioning a CR with Metadata and content
@@ -1919,14 +1965,19 @@ function ace.prov(&CR, M[]) = {
 [[ACE-SCC-AEAD]]
 ==== Key Derivation and POLYVAL
 
-AES-GCM-SIV cite:[DBLP-journals-iacr-GueronLL17,RFC8452] is used to export and import CRs.
+AES-GCM-SIV cite:[DBLP-journals-iacr-GueronLL17,RFC8452] is used to export and
+import CRs.
 
 [WARNING]
-AES-GCM-SIV has been chosen because it only required single passes of data in main memory, reducing the number of external memory accesses.
-GCM uses also a single pass but requires separate nonce and tag values, increasing the size of the exported data by one block.
+AES-GCM-SIV has been chosen because it only required single passes of data in
+main memory, reducing the number of external memory accesses. GCM uses also a
+single pass but requires separate nonce and tag values, increasing the size of
+the exported data by one block.
 
-We define the Key Derivation (<<ACE-SCC-RFC8452-derivation>>) and POLYVAL (<<ACE-SCC-POLYVAL>>) functions first.
-The generation of an SCC from a CR (<<ACE-SCC-export>>) and the import of an SCC into a CR (<<ACE-SCC-import>>) are defined next.
+We define the Key Derivation (<<ACE-SCC-RFC8452-derivation>>) and POLYVAL
+(<<ACE-SCC-POLYVAL>>) functions first. The generation of an SCC from a CR
+(<<ACE-SCC-export>>) and the import of an SCC into a CR (<<ACE-SCC-import>>)
+are defined next.
 
 [[ACE-SCC-RFC8452-derivation]]
 .RFC8452 Key Derivation
@@ -1941,12 +1992,17 @@ function RFC8452_KeyDeriv(key : bits(256)) = {
 }
 ----
 
-// NOTE: Due to the computational cost of the derivation functions, implementations may cache recently used derived keys.
+// NOTE: Due to the computational cost of the derivation functions,
+implementations may cache recently used derived keys.
 
-`POLYVAL` is a so-called Almost XOR-Universal (AXU) Hash Function.
-The SIV is the encryption of the computation of this AXU hash on the concatenation of the Locality Secrets, the Metadata zero-padded to 128 bits, and the Content of the CR.
+`POLYVAL` is a so-called Almost XOR-Universal (AXU) Hash Function. The SIV is
+the encryption of the computation of this AXU hash on the concatenation of the
+Locality Secrets, the Metadata zero-padded to 128 bits, and the Content of the
+CR.
 
-In the pseudocode below for POLYVAL, the data to be digested by POLYVAL is represented an array with an integral number of 16-byte blocks, where the last one may be just 8 bytes long.
+In the pseudocode below for POLYVAL, the data to be digested by POLYVAL is
+represented an array with an integral number of 16-byte blocks, where the last
+one may be just 8 bytes long.
 
 [[ACE-SCC-POLYVAL]]
 .Polyval Hashing Function
@@ -1971,10 +2027,19 @@ function POLYVAL(&tmp : bits(128), auth_key : bits(128), blocks[0 .. n-1] : bits
 [[ACE-SCC-export]]
 ==== Export
 
-During SCC export and import, the Locality Secrets associated with the Localities encoded in the _Locality_ field of the Metadata are prepended, in ascending index order, to the input of the AEAD tag computation, before the metadata.
-If the _Locality_ field is zero, no Locality Secrets are prepended.
+During SCC export and import, the Locality Secrets associated with the
+Localities encoded in the _Locality_ field of the Metadata are prepended, in
+ascending index order, to the input of the AEAD tag computation, before the
+metadata. If the _Locality_ field is zero, no Locality Secrets are prepended.
 
-The export operation maintains a per-CR flag indicating whether an export is in progress. This flag prevents the resumption of an export after an instruction that modifies the CR's internal state is performed. If this scenario were allowed, resuming the export could compute an incorrect SIV for the remaining SCC data, causing subsequent import authentication failures. Consequently, any operation that modifies the CR's internal state clears this flag. If an attempt is made to resume an export operation when the flag is cleared, the export restarts from the beginning.
+The export operation maintains a per-CR flag indicating whether an export is in
+progress. This flag prevents the resumption of an export after an instruction
+that modifies the CR's internal state is performed. If this scenario were
+allowed, resuming the export could compute an incorrect SIV for the remaining
+SCC data, causing subsequent import authentication failures. Consequently, any
+operation that modifies the CR's internal state clears this flag. If an attempt
+is made to resume an export operation when the flag is cleared, the export
+restarts from the beginning.
 
 // These variables are kept by the microarchitecture internally, and we need
 // one instance per hart, we assume only one export/import is performed.
@@ -2039,21 +2104,36 @@ function ace.export(&CR, M[]) = {
 
 Optional Feature: Interruption of ace.export:::
 
-Interrupting `ace.export` after the key derivation may be possible only immediately before the first block of to the input of `POLYVAL` is processed, resulting in a `acestart` value of 1. `POLYVAL` itself cannot be interrupted between the two arithmetic operations inside the loop. If `POLYVAL` is interrupted after the `montmul` operation, the value of
-`acestart` will be 16{interpunct}(`i`+1)+1, the number of bytes absorbed so far, plus 1.
+Interrupting `ace.export` after the key derivation may be possible only
+immediately before the first block to the input of `POLYVAL` is processed,
+resulting in a `acestart` value of 1. `POLYVAL` itself cannot be interrupted
+between the two arithmetic operations inside the loop. If `POLYVAL` is
+interrupted after the `montmul` operation, the value of `acestart` will be
+16{interpunct}(`i`+1)+1, the number of bytes absorbed so far, plus 1.
 
 [[ACE-SCC-import]]
 ==== Import
 
 The import algorithm needs some special care:
 
-* The first block read from memory by the operation is the Metadata Header `mh`:
- ** If strictly fewer than four bytes are read before the instruction is interrupted, ACE leaves `acestart` at 0, and the instruction will be restarted upon resumption.
- ** If four bytes or more have been read, the value of `mh.StateNumber` in the SCC is known. In this case, the instruction may be restarted WITH acestart[XLEN-9:0] {ge} 4 recording the amount of data read.
-* Af the beginning of the import operation, the hardware saves the `StateNumber` value from the original metadata and sets
-`mh.StateNumber <- ace_state_invalid`. At the end of the import operation, `mh.StateNumber` is set to the saved value.
-** Since context switching code cannot export a partially imported CR when saving the state, it will clear the CR instead, forcing the hardware to restart the import operation.
-** Exceptions that immediately return to the interrupted operation, such as memory exceptions, may cause the hardware to resume the operation instead, if the CR was touched.
+* The first block read from memory by the operation is the Metadata Header
+  `mh`:
+ ** If strictly fewer than four bytes are read before the instruction is
+    interrupted, ACE leaves `acestart` at 0, and the instruction will be
+    restarted upon resumption.
+ ** If four bytes or more have been read, the value of `mh.StateNumber` in the
+    SCC is known. In this case, the instruction may be restarted WITH
+    acestart[XLEN-9:0] {ge} 4 recording the amount of data read.
+* At the beginning of the import operation, the hardware saves the
+  `StateNumber` value from the original metadata and sets `mh.StateNumber <-
+  ace_state_invalid`. At the end of the import operation, `mh.StateNumber` is
+  set to the saved value.
+** Since context switching code cannot export a partially imported CR when
+   saving the state, it will clear the CR instead, forcing the hardware to
+   restart the import operation.
+** Exceptions that immediately return to the interrupted operation, such as
+   memory exceptions, may cause the hardware to resume the operation instead,
+   if the CR was touched.
 
 // *** The hardware will only resume the import operation if the flag is set, otherwise it will restart the operation.
 // CR.importing is always false except during import.
@@ -2149,9 +2229,21 @@ function ace.import(&CR, M[]) = {
 
 [NOTE]
 ====
-The top 8 bits of `acestart` indicate whether a provisioning, import, or export operation is in progress, eliminating the need for separate `provisioning`, `importing`, or `exporting` bits per CR. This design also means that only one such operation can be interrupted at a time.
+The top 8 bits of `acestart` indicate whether a provisioning, import, or export
+operation is in progress, eliminating the need for separate `provisioning`,
+`importing`, or `exporting` bits per CR. This design also means that only one
+such operation can be interrupted at a time.
 
-An architecture could theoretically support tracking multiple interrupted import/export operations simultaneously. This would require storing copies of the `SIV` and `tmp` values (256 bits) along with other small quantities for each interrupted operation. Since interrupted import/export operations are uncommon and would only be significant for very large states—of which few would be in flight simultaneously—this capability is perceived as not necessary. It is the responsibility of the exception handlers to fully erase `acestart` in these cases to prevent unpredictable behaviour because of the restart of interrupted privisioning or import, or of the export of a CR which has been modified in the meantime.
+An architecture could theoretically support tracking multiple interrupted
+import/export operations simultaneously. This would require storing copies of
+the `SIV` and `tmp` values (256 bits) along with other small quantities for
+each interrupted operation. Since interrupted import/export operations are
+uncommon and would only be significant for very large states—of which few would
+be in flight simultaneously—this capability is perceived as not necessary. It
+is the responsibility of the exception handlers to fully erase `acestart` in
+these cases to prevent unpredictable behaviour because of the restart of
+interrupted privisioning or import, or of the export of a CR which has been
+modified in the meantime.
 ====
 
 //
