@@ -86,7 +86,6 @@ the Localities as _tweaks_ in the encryption and decryption of SCCs.
 | Extension       | Features                                                                                                            | Defined in:                                    | Minimum version | Lifecycle state
 | `Zlv`           | ACE with support for vector registers.^1^                                                                           | <<ACE-instructions-detailed>>                  | v0.0.0          | --
 | `Zlio`          | ACE with support for `ace.input` and `ace.output`.^2^                                                               | <<ACE-usage-input-output>>                     | v0.0.0          | --
-| `Zlhtrap`       | Support for horizontal trapping.                                                                                    | <<ACE-horizontal-exception-handling>>          | v0.0.0          | --
 | `Zlaes128p`     | AES-128 encryption/decryption.^3^                                                                                   | <<ACE-ECB-mode>>                               | v0.0.0          | --
 | `Zlaes192p`     | AES-192 encryption/decryption.^3^                                                                                   | <<ACE-ECB-mode>>                               | v0.0.0          | --
 | `Zlaes256p`     | AES-256 encryption/decryption.^3^                                                                                   | <<ACE-ECB-mode>>                               | v0.0.0          | --
@@ -123,6 +122,11 @@ the Localities as _tweaks_ in the encryption and decryption of SCCs.
 |===
 
 At least one of `Zlv` or `Zlio` must be implemented.
+
+[WARNING]
+[.red]#ACE may depend on a further extension, `Zlhtrap', which defines
+a horizontal trapping mechanism to implement a try/catch mechanism for errors.
+This extension is described in <<ACE-horizontal-exception-handling>>.#
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -517,8 +521,6 @@ ACE provides a number of unprivileged CSRs.
 |  0xXXX   | URW       | `aceiobuftop`    | ACE input/output buffer limit for current transfers.
 |  0xXXX   | URW       | `acesequence`    | Sequence number of the last ACE instruction.
 |  0xXXX   | URW       | `aceactivecr`    | Active CR for `ace.input`/`ace.output`.
-|  0xXXX   | URW       | `acehtrapmask`   | [.red]#{warn} Discuss:# Mask to determine which ACE exceptions horizontally trap.
-|  0xXXX   | URW       | `acehtrapvector` | [.red]#{warn} Discuss:# Address of the horizontal ACE trap handler.
 |===
 
 // ////////////////////////////////////////////////////////////////////
@@ -2293,66 +2295,6 @@ may cause a CR to be *invalidated*. This means that the following happens:
 
 In State _completed_, only `ace.prov`, `ace.export`, `ace.import`, `ace.clear`,
 and `ace.error` are permitted.
-
-// ////////////////////////////////////////////////////////////////////
-
-[[ACE-horizontal-exception-handling]]
-=== Exception Handling via Horizontal Traps
-
-_This section is currently informative and non-normative._
-
-ACE has been architected so that in properly written code, the most common
-executed instructions, namely `ace.exec` and `ace.state`, rarely have to deal
-with errors. Errors should occur mostly with configuration operations, caused
-by insufficient CRF capacity or while authenticating SCCs.
-
-However, revocation of localities or reached expiration dates may cause a CR to
-suddenly become invalid just before executing an `ace.exec` or `ace.state`
-instruction. Requiring software to check for errors after each operation would
-impose significant burden on the software and possibly degrade performance.
-
-Such horizontal traps can be used to implement a try/catch mechanism: At the
-start of a subroutine that performs a cryptographic protocol, the address of
-the “catch” code is written in CSR `acehtrapvector`
-(<<ACE-CSR-acehtrapvector>>) and the mask with the error types to catch is
-loaded in CSRs `acehtrapmask` (<<ACE-CSR-acehtrapmask>>). When exiting the
-routine, the two CSRs are cleared.
-
-The trap is precise, i.e., all instructions before the one that causes the trap
-are completed, and [.red]#{warn} the address of the instruction may be set in
-the User EPC# `[.red]#uepc#` [.red]#CSR. _If_# `[.red]#uepc#` [.red]#_is not
-defined, it could be defined anyway, however for this type of applications, a
-local variable can be used to keep track of the place where the error
-occurred_.# Since `aceerror` provides the cause, a CSR like `ucause` is not
-necessary as well.
-
-NOTE: The main application of such code is when revocation or expiration cause
-a CR to become invalid. In such contexts, it is not the duty of the
-cryptographic subroutine to resolve the issue, but of the code that makes use
-of the latter, as the keys may have to be renegotiated, and this may even need
-user intervention.
-
-////
-. At the start of a subroutine that performs a cryptographic protocol, the
-  address of the “catch” code is written in CSR `acehtrapvector`
-  (<<ACE-CSR-acehtrapvector>>) and the mask with the error types to catch is
-  loaded in CSRs `acehtrapmask` (<<ACE-CSR-acehtrapmask>>).
-
-. The code does not directly handle the exceptions to be caught, usually only
-  ace_err_invalid or ace_err_expired.
-. If the code runs without such errors, then the two CSRs are cleared at the
-  end of the routine before returning.
-. If, say, an ace_err_invalid_CR or ace_err_expired_CR error is raised, the
-  horizontal trap diverts the control flow to the catch code, which usually
-  cleans up, and returns to the caller of the subroutine, not to the routine
-  itself, with an error code.
-////
-
-[WARNING]
-If our definition of horizontal traps is not allowed, we may have to follow the
-development of the HFI extension or implement a solution that traps to S-mode
-first and then immediately returns to the catch code. We will discuss this with
-the ARC.
 
 // ////////////////////////////////////////////////////////////////////
 
