@@ -157,6 +157,13 @@ passing the actual input length to the algorithm at the proper places with the
 proper instructions, unless for algorithm security reasons we must must define
 such handling in the algorithm specification itself.
 
+The ACE unit is agnostic to `VL` and `SEW`, but not to their product
+`VL*SEW` (or the length `aceiobuftop` of the ACEIOBUF in bits).
+This means that while the CPU instruction-decoding side of ACE will use
+`VL` and `SEW` to determine the amount of data to send to the “ACE Unit”
+side of the implementation, the latter will need only to know the product
+`VL*SEW` (or `aceiobuftop`) for its functionality.
+
 Floating-point, fixed-point, and general arithmetic vector operations are not
 required. Complex operations for certain cryptographic algorithms may be
 performed in GPRs, with data inserted into vector registers and result
@@ -822,7 +829,7 @@ and
 Element Group Size as the vector crypto extension does.
 Because of the fact that the architecture decouples instructions like `ace.exec` from the
 actual operations, the high level architecture of ACE only needs to know the total size
-of the inputs and outpout, which is `IOLEN`, namely either `VL*SEW` or the length
+of the inputs and outpout, which is `ACELEN`, namely either `VL*SEW` or the length
 `aceiobuftop` of the ACEIOBUF as defiend in <<ACE-notation>>.
 
 
@@ -2615,8 +2622,8 @@ user to compromise the internal state of the algorithm.
 * `OUTPUT`: The output data produced by `ace.exec`. This can be the output
   vector register, or the ACEIOBUF, as described in <<ACE-usage-input-output>>.
 
-* `IOLEN`: Either `VL*SEW` or the length `aceiobuftop` of the ACEIOBUF in
-  bytes, depending on whether vector registers are used or the ACEIOBUF is
+* `ACELEN`: Either `VL*SEW` or the length `aceiobuftop` of the ACEIOBUF in
+  bits, depending on whether vector registers are used or the ACEIOBUF is
   used.
 
 //
@@ -2706,7 +2713,7 @@ ECB mode cite:[nist-SP-800-38A-1] is the simplest way to use a block cipher.
 
 Parameters:::
 
-* `b` = block size (8|`b`). `IOLEN` must be a multiple of `b` (including `b`).
+* `b` = block size (8|`b`). `ACELEN` must be a multiple of `b` (including `b`).
 * `k` = key size (8|`k`).
 
 Data Structures:::
@@ -2758,11 +2765,11 @@ State Machine:::
      “`ace.exec OUTPUT, Kn|K(Xn), INPUT`.”
   *** If the state is _encrypt_, then `OUTPUT <- enc_blk(key, INPUT)`.
   *** If the state is _decrypt_, then `OUTPUT <- dec_blk(key, INPUT)`.
-  *** If `IOLEN` > `b`, then “`ace.exec OUTPUT, Kn|K(Xn), INPUT`”
+  *** If `ACELEN` > `b`, then “`ace.exec OUTPUT, Kn|K(Xn), INPUT`”
       encrypts/decrypts block-by-block. Here, and in the rest of this document,
       this means from the blocks in the least significant positions to the most
       significant positions:
-      . `foreach(i from 0 to IOLEN-b by b)` {
+      . `foreach(i from 0 to ACELEN-b by b)` {
       ..   `OUTPUT[i+b-1:i] <- enc_blk(key, INPUT[i+b-1:i])` }
 
 //
@@ -2776,9 +2783,9 @@ encrypt a block of data.
 
 _This paragraph is not normative._
 
-It is conceivable to support a vector length `IOLEN` smaller than a cipher’s
+It is conceivable to support a vector length `ACELEN` smaller than a cipher’s
 block size `b` in encryption modes. We add a `b`-bit field called `buffer` to
-the state of the CR. Let __r__ <- {lceil}``IOLEN``/``b``{rceil}. We define
+the state of the CR. Let __r__ <- {lceil}``ACELEN``/``b``{rceil}. We define
 first how to replace a Form A `ace.exec` instruction:
 
 .  The idea is to replace a Form A `ace.exec` instruction by __r__ Form B
@@ -2787,16 +2794,16 @@ first how to replace a Form A `ace.exec` instruction:
    (after the 2__r__-th instruction, `acesequence` is set to zero and not to
    2__r__).
 . The __i__-th Form B `ace.exec` instructions copies its input into bits
-  {nbsp}[min(__i__{interpunct}``IOLEN``,`b`)-1 :
-  (__i__-1){interpunct}``IOLEN``]{nbsp} of the `b`-bit `buffer`, for __i__ =
+  {nbsp}[min(__i__{interpunct}``ACELEN``,`b`)-1 :
+  (__i__-1){interpunct}``ACELEN``]{nbsp} of the `b`-bit `buffer`, for __i__ =
   1,2,..,__r__. The use of “min” ensures that the
-  `b`-__r__{interpunct}``IOLEN`` significant bits of the last input are
-  discarded if `IOLEN` does not divide `b` exactly.
+  `b`-__r__{interpunct}``ACELEN`` significant bits of the last input are
+  discarded if `ACELEN` does not divide `b` exactly.
 . The __r__-th Form B `ace.exec` instruction also applies the primitive to this
   `buffer`.
 . The __i__-th Form C `ace.exec` instructions can be issued to write out bits
-  {nbsp}[min(__i__{interpunct}``IOLEN``,`b`)-1 :
-  (__i__-1){interpunct}``IOLEN``]{nbsp} of the `b`-bit `buffer` to its output
+  {nbsp}[min(__i__{interpunct}``ACELEN``,`b`)-1 :
+  (__i__-1){interpunct}``ACELEN``]{nbsp} of the `b`-bit `buffer` to its output
   vector register, for __i__ = 1,2,..,__r__.
 . After the __r__-th Form C `ace.exec` instruction is completed, `acesequence`
   is reset to zero.
@@ -2805,7 +2812,7 @@ Form B and C `ace.exec` instructions can be replaced in a similar way.
 
 Specifying this behavior would complicate both the architecture and its
 implementation. It would to require a `b`-bit field tp each CR implementing
-such a cipher where `b` is larger than `IOLEN`, whereas a single ACEIOBUF would
+such a cipher where `b` is larger than `ACELEN`, whereas a single ACEIOBUF would
 require fewer resources. It would also burden the software using the feature by
 requiring to use more instructions, potentially in variable length loops for
 portability. Using existing architectural features, such as reconfiguring the
@@ -2845,7 +2852,7 @@ of the underlying keyed PRP or PRF. IV and counter/LFSR are ``xor``ed together
 to form the input to the keyed PRP or PRF.
 
 Parameters:::
-* `b` = block size (8|`b`). For this algorithm `IOLEN` must be a multiple of `b`.
+* `b` = block size (8|`b`). For this algorithm `ACELEN` must be a multiple of `b`.
 * `k` = key size (8|`k`).
 * `j` = counter size (8|`j`).
 * `n` = IV size (8|`n`).
@@ -2899,7 +2906,7 @@ State Machine:::
  ** To transition to State _operate_, a Form C ``ace.state`` instruction must
     be issued.
   *** This sets the value of `IV` to `INPUT`.
-  *** If `IOLEN` > `b`, only the `b` least significant bits of `INPUT` are
+  *** If `ACELEN` > `b`, only the `b` least significant bits of `INPUT` are
       considered.
 
   ** In State _operate_, only Form C ``ace.exec`` instructions are allowed. +
@@ -2912,16 +2919,16 @@ State Machine:::
   . `OUTPUT ← tmp`.
 --
 +
-If `IOLEN` is a multiple of `b`, the above three commands are applied to each
-of the `IOLEN/b` `b`-bit blocks of `INPUT`, producing the corresponding `b`-bit
+If `ACELEN` is a multiple of `b`, the above three commands are applied to each
+of the `ACELEN/b` `b`-bit blocks of `INPUT`, producing the corresponding `b`-bit
 block of `OUTPUT` each time.
-// If the number `x` of blocks to be processed in an entire run of the algorithm is not a multiple of `IOLEN`/`b`, `VL` can be set to the remainder of the division of `x` by `IOLEN`/`b` for the last instruction.
+// If the number `x` of blocks to be processed in an entire run of the algorithm is not a multiple of `ACELEN`/`b`, `VL` can be set to the remainder of the division of `x` by `ACELEN`/`b` for the last instruction.
 
 Note that if `ace.state` is issued to return to State _initial_, the CC can be
 reused with a new IV.
 
 Example pseudocode is given in <<ACE-pseudocode-keystream-modes>> (for the case
-`b` = `IOLEN` = 128).
+`b` = `ACELEN` = 128).
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -2956,7 +2963,7 @@ functionality.
 
 Parameters:::
 
-* `b` = block size (8|`b`). For this algorithm, `IOLEN` must be an integer multiple of `b`.
+* `b` = block size (8|`b`). For this algorithm, `ACELEN` must be an integer multiple of `b`.
 * `k` = key size (8|`k`).
 
 Data Structures:::
@@ -3012,7 +3019,7 @@ State Machine:::
   *** No {nbsp}``ace.exec``{nbsp} operation is allowed.
  ** The ``ace.state`` instruction to transition to either _encrypt_ or _decrypt_ must be of Form C.
     It sets the tweak, and the `mask` field is used to store it: `mask <- INPUT`.
-  *** If `IOLEN` > `b`, only the `b` least significant bits of `INPUT` are considered.
+  *** If `ACELEN` > `b`, only the `b` least significant bits of `INPUT` are considered.
   *** Then, the following operations are performed:
   . if two independent keys are used then
   .. `mask <- enc_blk(key2, mask)`
@@ -3029,7 +3036,7 @@ State Machine:::
   . `mask <- update_mask(mask)`.
 --
 +
-If `IOLEN` is a multiple of `b`, the above commands are executed `IOLEN/b` times, processing each `b`-bit block of `INPUT` into a `b`-bit block of `OUTPUT`.
+If `ACELEN` is a multiple of `b`, the above commands are executed `ACELEN/b` times, processing each `b`-bit block of `INPUT` into a `b`-bit block of `OUTPUT`.
 
 //
 
@@ -3059,7 +3066,7 @@ cite:[DBLP-journals-tosc-AvanziBDEGNR23].
 
 Parameters:::
 
-* `b` = block size (8|`b`). For this algorithm, `IOLEN` must be an integer multiple of `b`.
+* `b` = block size (8|`b`). For this algorithm, `ACELEN` must be an integer multiple of `b`.
 * `k` = key size (8|`k`).
 * `t` = tweak size (8|`k`).
 
@@ -3130,7 +3137,7 @@ cite:[DBLP-conf-indocrypt-McGrewV04] and was made into a NIST Recommendation in
 Parameters:::
 
 * `k` = key size (8|`k`).
-* `b` = block size (8|`b`). For this algorithm, `IOLEN` must be an integer multiple of `b`.
+* `b` = block size (8|`b`). For this algorithm, `ACELEN` must be an integer multiple of `b`.
 * `c` = counter size (8|`b`). It must be `c < b`.
 
 Data Structures:::
@@ -3223,7 +3230,7 @@ State Machine:::
  . `absorb(INPUT)`.
 --
 +
-If `IOLEN` > `b`, the above operation is executed `IOLEN/b` times.
+If `ACELEN` > `b`, the above operation is executed `ACELEN/b` times.
 
 ** In State _encrypt_, only ``ace.exec`` instructions of Form A are allowed.
    “```ace.exec OUTPUT, Kn|K(Xn), INPUT```” encrypts `INPUT` into `OUTPUT`, and
@@ -3239,7 +3246,7 @@ If `IOLEN` > `b`, the above operation is executed `IOLEN/b` times.
   .. `OUTPUT <- tmp`.
 --
 +
-If `IOLEN` is a multiple of `b`, the above operations are executed `IOLEN/b`
+If `ACELEN` is a multiple of `b`, the above operations are executed `ACELEN/b`
 times, encrypting each `b`-bit block of `INPUT` into the corresponding `b`-bit
 block of `OUTPUT`.
 
@@ -3257,7 +3264,7 @@ The authentication tag is computed as follows:
   . `tag <- tag xor enc_blk(key, IV @ zeros(c))`.
 
 Finally, `tag` is returned in `OUTPUT`, and the state is changed to _completed_. +
-If `IOLEN` > `b`, only the `b` least significant bits of `INPUT` are considered.
+If `ACELEN` > `b`, only the `b` least significant bits of `INPUT` are considered.
 --
 +
 
@@ -3278,8 +3285,8 @@ If `IOLEN` > `b`, only the `b` least significant bits of `INPUT` are considered.
   .. `ctr <- ctr + 1 % 2^c^`.
 --
 +
-If `IOLEN` is a multiple of `b`, the same behavior applies as in State
-_encrypt_, namely the above operations are executed `IOLEN/b` times, decrypting
+If `ACELEN` is a multiple of `b`, the same behavior applies as in State
+_encrypt_, namely the above operations are executed `ACELEN/b` times, decrypting
 each `b`-bit block of `INPUT` into the corresponding `b`-bit block of `OUTPUT`.
 
 ** To transition to State _dec_tag_finalize_, a Form C ``ace.state``
@@ -3296,7 +3303,7 @@ The authentication tag is computed as follows:
   . `tag <- tag xor enc_blk(key, ctr[b-1,c] @ zeros(c))`.
 --
 +
-If `IOLEN` > `b`, only the `b` least significant bits of `INPUT` are considered.
+If `ACELEN` > `b`, only the `b` least significant bits of `INPUT` are considered.
 
 ** To transition to State _hash_verify_, a Form C ``ace.state`` instruction
    must be used to provide the value against which the internally computed tag
@@ -3402,7 +3409,7 @@ GCM's, the encryption state machine is different:
 Parameters:::
 
 * `k` = key size (64|`k`).
-* `b` = block size, (64|`b`). For this algorithm, `IOLEN` must be an integer
+* `b` = block size, (64|`b`). For this algorithm, `ACELEN` must be an integer
   multiple of `b`.
 * It must be `k = b` or `k = 2b`.
 * It must be established by the algorithm whether the authentication tag is `b`
@@ -3520,7 +3527,7 @@ to an authentication error.
 
  ** In State _hash_absorb_, only Form B of ``ace.exec`` is allowed.
    This instruction absorbs its `INPUT` in the `tag`, i.e., it performs `absorb(INPUT)`. +
-   If `IOLEN` is a multiple of `b`, `absorb()` is executed on each of the `IOLEN/b` blocks in `INPUT`.
+   If `ACELEN` is a multiple of `b`, `absorb()` is executed on each of the `ACELEN/b` blocks in `INPUT`.
 
 ** In State _enc_tag_finalize_, only an {nbsp}``ace.exec``{nbsp} instruction of
    Form A is allowed. The value
@@ -3543,7 +3550,7 @@ Then, “```ace.exec```” finalizes the SIV/tag computation by performing:
 --
 +
 
-If `IOLEN` > `b`, only the `b` least significant bits of `INPUT` are considered.
+If `ACELEN` > `b`, only the `b` least significant bits of `INPUT` are considered.
 
  ** In State _encrypt_, only Form A of ``ace.exec`` is allowed, namely
     “```ace.exec OUTPUT, Kn|K(Xn), INPUT```,” to encrypt `INPUT` into `OUTPUT`
@@ -3559,7 +3566,7 @@ If `IOLEN` > `b`, only the `b` least significant bits of `INPUT` are considered.
    . `ctr <- ctr + 1`.
 --
 +
-If `IOLEN` > `b`, the above operations are applied to each of the `IOLEN/b`
+If `ACELEN` > `b`, the above operations are applied to each of the `ACELEN/b`
 blocks in `INPUT`.
 
  ** In State _decrypt_,  only Form A of ``ace.exec`` is allowed. “```ace.exec OUTPUT, Kn|K(Xn), INPUT```” decrypts `INPUT` into `OUTPUT` and then absorbs the plaintext `OUTPUT` into the `tag`:
@@ -3575,7 +3582,7 @@ blocks in `INPUT`.
      . `ctr <- ctr + 1`.
 --
 +
-If `IOLEN` > `b`, the above operations are applied to each of the `IOLEN/b`
+If `ACELEN` > `b`, the above operations are applied to each of the `ACELEN/b`
 blocks in `INPUT`.
 
  ** In State _dec_tag_finalize_,
@@ -3603,7 +3610,7 @@ blocks in `INPUT`.
   . The state transitions to _completed_.
 --
 +
-If `IOLEN` > `b`, only the `b` least significant bits of `INPUT` are considered.
+If `ACELEN` > `b`, only the `b` least significant bits of `INPUT` are considered.
 
  ** Upon completion of `ace.import`, the ACE unit recomputes `enc_key` and `auth_key`, i.e.:
   . (`enc_key`, `auth_key`) <- `RFC8452_RFC8452_KeyDeriv(key)`.
@@ -3635,7 +3642,7 @@ cite:[cryptoeprint-2023-326].
 Parameters:::
 +
 --
-* `b` = block size. `b` is a power of two, and {ge} 64. For OCB, `IOLEN` must
+* `b` = block size. `b` is a power of two, and {ge} 64. For OCB, `ACELEN` must
   be an integer multiple of `b`.
 * `k` = key size, `b`|`k`.
 --
@@ -3765,7 +3772,7 @@ State Machine:::
     . `hash_A <- hash_A xor enc_blk(key, INPUT xor offset)`
 --
 +
-If `IOLEN` > `b`, the above operation is executed `IOLEN/b` times.
+If `ACELEN` > `b`, the above operation is executed `ACELEN/b` times.
 
 ** To move to _hash_finalize_, a Form B `ace.state` operation sets the length
    of the final block of the AD in `last_blk_len`.
@@ -3817,7 +3824,7 @@ If `last_blk_len` == 0, however, no `ace.exec` can be executed, and only an
  . `OUTPUT <- offset xor enc_blk(key, INPUT xor offset)`
 --
 +
-If `IOLEN > b`, the above operation sequence is executed `IOLEN/b` times,
+If `ACELEN > b`, the above operation sequence is executed `ACELEN/b` times,
 encrypting each `b`-bit block of `INPUT` into the corresponding `b`-bit block
 of `OUTPUT`.
 
@@ -3878,7 +3885,7 @@ In both cases the state then transitions to _enc_tag_finalize_.
   . `OUTPUT <- tmp`
 --
 +
-If `IOLEN` > `b`, the same behavior applies as in State _encrypt_.
+If `ACELEN` > `b`, the same behavior applies as in State _encrypt_.
 
 ** To move to State _dec_last_block_, a Form B `ace.state` operation must be
    used to also contextually set the bit length of the final block of the
@@ -3930,7 +3937,7 @@ Recommendation in May 2005 cite:[nist-SP-800-38B].
 
 Parameters:::
 
-* `b` = block size (8|`b`).  For this algorithm, `IOLEN` must be an integer multiple of `b`.
+* `b` = block size (8|`b`).  For this algorithm, `ACELEN` must be an integer multiple of `b`.
 * `k` = key size (8|`k`).
 
 Data Structures:::
@@ -4008,14 +4015,14 @@ State Machine:::
    . `hash <- enc_blk(key, hash xor INPUT)`.
 --
 +
-If `IOLEN` > `b`, then the above operations are applied to each `b`-bit block of `INPUT`.
+If `ACELEN` > `b`, then the above operations are applied to each `b`-bit block of `INPUT`.
 
  ** Upon issuing a Form B “```ace.state Kn|K(Xn), #ace_state_hash_last_block, Xs```” where `Xs` contains the bit length of the last block, the following happens:
    . if `last_block_len` != 0, then the CR is *invalidated*. (The previous block is not complete.)
    . if `Xs > b` then the CR is *invalidated*.
    . `last_block_len <- Xs`.
 
- ** In State _hash_last_block_, only a single ``ace.exec`` instruction of Form B may be issued, i.e., “```ace.exec Kn|K(Xn), INPUT```”, to absorb the data block `INPUT`. If `IOLEN` > `b`, only the least significant `b` bits of `INPUT` are considered.
+ ** In State _hash_last_block_, only a single ``ace.exec`` instruction of Form B may be issued, i.e., “```ace.exec Kn|K(Xn), INPUT```”, to absorb the data block `INPUT`. If `ACELEN` > `b`, only the least significant `b` bits of `INPUT` are considered.
 +
 --
   . `(K1, K2) <- gen_subkeys(key)`.
@@ -4031,7 +4038,7 @@ If `IOLEN` > `b`, then the above operations are applied to each `b`-bit block of
 +
 
 ** In State _hash_output_, we can issue one ``ace.exec`` instruction of Form C, i.e., “```ace.exec OUTPUT, Kn|K(Xn)```”, to output the hash into `OUTPUT`.
-   If `IOLEN` > `b`, only the bits of `OUTPUT` beyond the `b`-th are cleared.
+   If `ACELEN` > `b`, only the bits of `OUTPUT` beyond the `b`-th are cleared.
    Upon issuing that instruction, the CC transitions to State _completed_ with no error.
 
 //
@@ -4154,8 +4161,8 @@ State Machine:::
 +
 --
   . `input_base <- 0` // or `acestart` upon resumption
-  . while `(input_base < IOLEN)` do { // as long as we have input to process
-  .. `amount <- min(IOLEN-input_base, b-block_base)`
+  . while `(input_base < ACELEN)` do { // as long as we have input to process
+  .. `amount <- min(ACELEN-input_base, b-block_base)`
   .. ``block[block_base + amount - 1 : block_base] <-`` +
       ``{nbsp}{nbsp}{nbsp}{nbsp} <- INPUT[input_base + amount - 1 : input_base]`` +
         ``{nbsp}{nbsp}``(If there is no `block` field, could also be something like +
@@ -4210,8 +4217,8 @@ Then, state transitions to _hash_last_block_ as expected.
 
 []
    . `output_base <- 0` // or `acestart` upon resumption
-    . while (`output_base` < `IOLEN`) do { // as long as there is room in the OUTPUT
-     .. `amount` <- `min(IOLEN - output_base, t - block_base)`
+    . while (`output_base` < `ACELEN`) do { // as long as there is room in the OUTPUT
+     .. `amount` <- `min(ACELEN - output_base, t - block_base)`
      .. ``OUTPUT[output_base + amount - 1 : output_base] <- `` +
            ``{fournbsp}{fournbsp}<- block[block_base + amount - 1 : block_base + amount]``
      .. `output_base <- output_base + amount`
@@ -4343,7 +4350,7 @@ the original plaintext.
 
 Parameters:::
 
-* `b` = 128. For this algorithm, `IOLEN` must be an integer multiple of `b`.
+* `b` = 128. For this algorithm, `ACELEN` must be an integer multiple of `b`.
 * `k` = 128.
 
 Data Structures:::
@@ -4434,7 +4441,7 @@ State Machine:::
     . `state[4] <- state[4] xor key[127:64]`
 --
 +
-If `IOLEN` > 128, only the 128 least significant bits of `INPUT` are considered.
+If `ACELEN` > 128, only the 128 least significant bits of `INPUT` are considered.
 
 ** In State _hash_absorb_, only  ``ace.exec`` instructions of Form B are allowed.
  “```ace.exec Kn|K(Xn), INPUT```” absorbs a data block into the state, i.e.:
@@ -4446,7 +4453,7 @@ If `IOLEN` > 128, only the 128 least significant bits of `INPUT` are considered.
  . `state[1] <- state[1] xor INPUT[127:64]`
 --
 +
-If `IOLEN` > 128, this sequence of four operations is executed `IOLEN/128`
+If `ACELEN` > 128, this sequence of four operations is executed `ACELEN/128`
 times, once for each 128-bit block of `INPUT`.
 ** Upon entering State _encrypt_ or _decrypt_, the following domain separation
    operation is performed:
@@ -4462,7 +4469,7 @@ times, once for each 128-bit block of `INPUT`.
  . `ASCON(8)`
 --
 +
-If `IOLEN` is a multiple of 128, these operations are executed `IOLEN/128`
+If `ACELEN` is a multiple of 128, these operations are executed `ACELEN/128`
 times, encrypting each 128-bit block of `INPUT` into the corresponding 128-bit
 block of `OUTPUT`.
 
@@ -4512,7 +4519,7 @@ In this state only one 128-bit block is processed.
 . `OUTPUT <- tmp`
 --
 +
-If `IOLEN` is a multiple of 128, these operations are executed `IOLEN/128`
+If `ACELEN` is a multiple of 128, these operations are executed `ACELEN/128`
 times, decrypting each 128-bit block of `INPUT` into the corresponding 128-bit
 block of `OUTPUT`.
 
@@ -4644,7 +4651,7 @@ the inputs.
 
 Parameters:::
 
-* `b` = 64. For this algorithm, `IOLEN` must be an integer multiple of `b`.
+* `b` = 64. For this algorithm, `ACELEN` must be an integer multiple of `b`.
 
 Data Structures:::
 
@@ -4702,7 +4709,7 @@ State Machine:::
  . `ASCON(12)`
 --
 +
-If `IOLEN` > `64`, these operations are executed `IOLEN/64` times, once for
+If `ACELEN` > `64`, these operations are executed `ACELEN/64` times, once for
 each `64`-bit block of `INPUT`.
 
 ** Upon entering _hash_finalize_, `countdown` is set to 3.
@@ -4717,12 +4724,12 @@ each `64`-bit block of `INPUT`.
 . `countdown <- countdown - 1`
 --
 +
-If `IOLEN` {ge} `128`, these operations are executed `IOLEN/64` times, writing
+If `ACELEN` {ge} `128`, these operations are executed `ACELEN/64` times, writing
 to `OUTPUT`[63:0] the first time, then `OUTPUT`[127:64], `OUTPUT`[191:128] and
 `OUTPUT`[255:192]. If more than one ``ace.exec`` instructions are required,
 writing restarts from `OUTPUT`[63:0]. If `countdown` reaches zero before the
 entire output registers is written to, the state of the unwritten bits is
-undefined: for instance this may occur if `IOLEN` = `192` or `IOLEN` > `256`.
+undefined: for instance this may occur if `ACELEN` = `192` or `ACELEN` > `256`.
 This is usually not a problem, since the output vectors will be usually
 configured for 64-bit, 128-bit, or 256-bit blocks, in which case four, two, or
 one ``ace.exec`` instructions are required, respectively.
