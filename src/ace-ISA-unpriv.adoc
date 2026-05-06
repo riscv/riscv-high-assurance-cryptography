@@ -213,7 +213,7 @@ We summarize the most important operations on CRs:
   (<<ACE-instruction-import>>).  Import may fail if the SCC has been modified.
 * `ace.exec` (<<ACE-instruction-exec>>) performs cryptographic operations on
   data blocks according to the algorithm configured in a CR.
-* `ace.state` (<<ACE-instruction-state>>) transitions between states of a
+* `ace.setstate` (<<ACE-instruction-state>>) transitions between states of a
   cryptographic algorithm.
 
 [NOTE]
@@ -408,7 +408,7 @@ The states in the range 24-31 are termed _error_ states, and are used to report 
 
 State 23, i.e., _Interrupted_, is used to report that provisioning or import was interrupted, and is handled differently from the error stated.
 
-Unless an algorithm's specification explicitly states otherwise, a transition from any valid state to _Initial_ using instruction `ace.state` is always permitted.
+Unless an algorithm's specification explicitly states otherwise, a transition from any valid state to _Initial_ using instruction `ace.setstate` is always permitted.
 A transition from any state, including _Clear_, to _Initial_ is only permitted as the result of provisioning or import.
 
 Transition from an interrupted or error state to _Initial_ is not allowed.
@@ -447,7 +447,7 @@ invalid CR with a nonzero `acestart` is recognized as an incomplete CR,
 permitting resumption of provisioning or import. This state change to _Interrupted_
 does not occur during `ace.export`.
 
-Explicitly setting an error state can be done using `ace.state` (cf. <<ACE-instruction-state>>) without additional parameters.
+Explicitly setting an error state can be done using `ace.setstate` (cf. <<ACE-instruction-state>>) without additional parameters.
 
 Error conditions that lead to exceptions are treated in <<ACE-CSR-ace-error>>.
 
@@ -604,7 +604,7 @@ Errors are returned by setting an error code in the _State_ field of the metadat
 Attempting to configure a CR with a not implemented algorithm will
 raise exception `ace_exc_not_impl`, and the privileged code may either set
 the metadata _State_ field to `ace_state_not_impl`, or implement its operations
-in software, by trapping the `ace.exec` and `ace.state` instructions and emulating
+in software, by trapping the `ace.exec` and `ace.setstate` instructions and emulating
 them in software when they are used with that CR.
 
 If an expired CR is imported, provisioned, or used, the _State_ field of the
@@ -824,7 +824,7 @@ _Included in_::
 {empty}
 (((CSR, `aceactivecr`)))
 `aceactivecr` is an XLEN-bit URW CSR; only the low 5 bits are defined. It binds
-`ace.input`, `ace.output`, `ace.exec`, and `ace.state` to a specific CR. Valid
+`ace.input`, `ace.output`, `ace.exec`, and `ace.setstate` to a specific CR. Valid
 values are 0–31 (selecting a CR) or 32 (disabled).
 
 `aceactivecr` may only be modified when `acesequence` is zero or an illegal
@@ -975,7 +975,7 @@ _Mnemonic_::
 (((ACE, instruction, ace.reset)))
 
 _Encoding_::
-`ace.clear`/`ace.reset` are pseudo instructions, implemented as `ace.state` (see <<ACE-instruction-state>>).
+`ace.clear`/`ace.reset` are pseudo instructions, implemented as `ace.setstate` (see <<ACE-instruction-state>>).
 
 _Description_::
 `ace.clear` unconfigures the state of the CR `Kd` or `K(Xd)` and releases its
@@ -1220,31 +1220,31 @@ _Included in_::
 // ////////////////////////////////////////////////////////////////////
 
 [[ACE-instruction-state]]
-==== ace.state
+==== ace.setstate
 
 _Synopsis_::
 Change the state of the algorithm encoded in the CC in a CR.
 
 _Mnemonic_::
-The `ace.state` instruction admits three Forms, namely
-(((ACE, instruction, ace.state)))
+The `ace.setstate` instruction admits three Forms, namely
+(((ACE, instruction, ace.setstate)))
 
 [upperalpha]
-. `ace.state Kd|K(Xd), #immed7{nbsp}{nbsp}{nbsp}{nbsp}{nbsp}{nbsp}` with no auxiliary input.
-. `ace.state Kd|K(Xd), #immed7, Xs{nbsp}{nbsp}` with an auxiliary input in a GPR.
-. `ace.state Kd|K(Xd), #immed7, Vs{nbsp}{nbsp}` with an auxiliary input in a vector register.
+. `ace.setstate Kd|K(Xd), #immed7{nbsp}{nbsp}{nbsp}{nbsp}{nbsp}{nbsp}` with no auxiliary input.
+. `ace.setstate Kd|K(Xd), #immed7, Xs{nbsp}{nbsp}` with an auxiliary input in a GPR.
+. `ace.setstate Kd|K(Xd), #immed7, Vs{nbsp}{nbsp}` with an auxiliary input in a vector register.
 
 //
 
 _Encoding_::
-`ace.state` is an R-type instruction.
+`ace.setstate` is an R-type instruction.
 +
 [wavedrom, ,svg]
 ....
 {reg:[
     { bits:  7, name: 0x5b, attr: ['custom-2'] },
     { bits:  5, name: 'Kd|K(Xd)' },
-    { bits:  3, name: 'ace.state', attr: ['0    0    1','0    1    0','0    1    1'] },
+    { bits:  3, name: 'ace.setstate', attr: ['0    0    1','0    1    0','0    1    1'] },
     { bits:  5, name: 0x0 },
     { bits:  5, name: 'rs1', attr: ['—','Xs','Vs'] },
     { bits:  7, name: 'immed7' },
@@ -1253,9 +1253,9 @@ _Encoding_::
 +
 The encodings for the three Forms are:
 [upperalpha]
-. `ace.state` = `0b001`.
-. `ace.state` = `0b010`.
-. `ace.state` = `0b011`.
+. `ace.setstate` = `0b001`.
+. `ace.setstate` = `0b010`.
+. `ace.setstate` = `0b011`.
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -1288,9 +1288,9 @@ Interruptible: *NO*. +
 
 // The state numbers used in this specification are defined in <<ACE-states-valid>> and <<ACE-state-constants-symmetric>>.
 
-It is allowed to repeat `ace.state` instructions to the current state. When the
+It is allowed to repeat `ace.setstate` instructions to the current state. When the
 algorithm needs to prevent this, it will automatically transition to a
-different state after completing `ace.state`.
+different state after completing `ace.setstate`.
 
 _Included in_::
 [%header,cols="4,2,2"]
@@ -1303,26 +1303,26 @@ _Included in_::
 // ////////////////////////////////////////////////////////////////////
 
 [[ACE-instruction-error]]
-==== ace.error
+==== ace.getstate
 
 _Synopsis_::
-Return an error code from the ACE unit.
+Returns the _State_ field of the metadata of the source CR.
+This is useful to determine whether a CR is in an error state, as defined in <<ACE-State-field>>.
 
 _Mnemonic_::
-`ace.error Xd, Ks|K(Xs)`
-(((ACE, instruction, ace.error)))
+`ace.getstate Xd, Ks|K(Xs)`
+(((ACE, instruction, ace.getstate)))
 
 _Encoding_::
 The operations is a pseudo instruction.
 
 _Description_::
-A CR may be in an error state due to the last operation involving it.
-`ace.error` is implemented as a read of the source CR's metadata, using `ace.getmd`
+`ace.getstate` is implemented as a read of the source CR's metadata, using `ace.getmd`
 and logical or bit manipulation instructions to extract the _State_ field of the latter.
 The operations are, essentially:
 
- . `ace.getmd Xd, Ks|K(Xs)`
- . `srli  Xd, Xs, 16`
+ . `ace.getmd Xd, Ks` or `ace.getmd Xd, K(Xs)`
+ . `srli  Xd, Xd, 16`
  . `andi  Xd, Xd, 0x1F`
 
  _Properties_::
@@ -2403,7 +2403,7 @@ This section is being replaced with a broader treatment of _error states_.
 (((Context Register, invalidation)))
 In certain situations, an ACE instruction may cause a CR to enter an error state.
 Such states are characterized by values of the State field of the metadata record as in <<ACE-states-error>>.
-This may occur also as a consequence of an explicit `ace.state` instruction.
+This may occur also as a consequence of an explicit `ace.setstate` instruction.
 
 This means that the following happens:
 
@@ -2416,10 +2416,10 @@ This means that the following happens:
 
 * For instructions that refer to that CR:
  ** `ace.prov`, `ace.reset`, `ace.import`, `ace.export`, `ace.getmd`, `ace.size` and `ace.avail` work normally.
- ** `ace.state` can only be used as `ace.clear/ace.reset` in which case the CR returns to state _Clear_.
+ ** `ace.setstate` can only be used as `ace.clear/ace.reset` in which case the CR returns to state _Clear_.
  ** All other operations, such as`ace.exec`, `ace.clone`, and `ace.restrict` do not perform any operation in the ACE unit and
  in particular do not change the State field of the CR's metadata.
 
-In States _Success_ and _failed_, only `ace.prov`, `ace.export`, `ace.import`, `ace.clear`, and `ace.error` are permitted.
+In States _Success_ and _failed_, only `ace.prov`, `ace.export`, `ace.import`, `ace.clear`, and `ace.getstate` are permitted.
 
 // ////////////////////////////////////////////////////////////////////
