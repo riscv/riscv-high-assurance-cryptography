@@ -301,7 +301,7 @@ below.
 | [12:11] | 2     | _AlgorithmPolicy_ | Allowed algorithm variants(s) _or_ extension of the _Algorithm_ field. See <<ACE-Algorithm-field>>.
 | [14:13] | 2     | _SCProtection_    | Side-channel protection level. See <<ACE-SCProtection-field>>.
 | [15:15] | 1     | _KeyType_         | 0: key is an explicit value in Content. 1: key is an index into the system-specific System Keys Table (SKT).
-| [20:16] | 5     | _State_           | Current algorithm state-machine state, encoded as an integer.
+| [20:16] | 5     | _State_           | Current state of teh CR/algorithm, encoded as an integer.
 | [28:21] | 8     | _Locality_        | Zero, or an index determining a Locality Secret. See <<ACE-Localities>>.
 | [31:29] | 3     | _UsagePolicy_     | Usage (Control) Policy. Bits 29, 30, and 31, when set, disallow CC usage in U-mode, (V)S-mode, and H-mode, respectively.
 | [45:32] | 14    | _AdditionalData_  | If non-zero, indicates an additional data segment appended to Content. The length of this additional Data segment is _AdditionalData_ × 8 bytes (up to 128 KiB).
@@ -381,7 +381,7 @@ The architected values of _State_ which are common to all algorithms are defined
 | Value | Mnemonic                | State Name     | Description
 |   0   | ace_state_clear         | _clear_        | The CR is not configured.
 |   1   | ace_state_initial       | _initial_      | The state of a CC immediately after provisioning or reset; ready for operation.
-|  21   | ace_state_completed     | _completed_    | Algorithm completed successfully. No further cryptographic operations may be performed until the CC is reset.
+|  21   | ace_state_success       | _success_    | Algorithm completed successfully. No further cryptographic operations may be performed until the CC is reset.
 |  22   | ace_state_failure       | _failure_      | Failure in an algorithm, usually an authentication failure in AE(AD) algorithms or a signature verification failure. No further cryptographic operations may be performed until the CC is reset.
 |===
 
@@ -402,7 +402,7 @@ The architected values of _State_ which are common to all algorithms are defined
 The state with value 0 is termed _clear_, and is used to indicate that the CR is not configured.
 The metadata record in this case is the all-zeros value `zeros(64)`.
 
-All states in the range 1-22 are termed _valid_. This includes both _completed_ and _failure_ states, which must be used for
+All states in the range 1-22 are termed _valid_. This includes both _success_ and _failure_ states, which must be used for
 normal termination of an algorithm in the cases of its successful completion or failure.
 The states in the range 24-31 are termed _error_ states, and are used to report certain specific ACE errors.
 
@@ -418,11 +418,11 @@ The corresponding internal resources may also be released, so that the CR's only
 In this case, exporting the CR will only export the metadata, and the SCC will be just 24 bytes long.
 The resulting SCC can be reimported, so that user software may be able to take the necessary actions even after a context switch.
 
-If an algorithm defines 22 or fewer valid states (including the three fixed valid states _initial_, _completed_, and _failure_),
+If an algorithm defines 22 or fewer valid states (including the three fixed valid states _initial_, _success_, and _failure_),
 the current state is stored in the _State_ field. For algorithms with
 more than 22 valid states, additional state information is stored in the Content
 section. In all cases, the _State_ field shall be set to _initial_ (1),
-_completed_ (21), _failure_ (22) or any of the values in the range 23-31 when the CC is in the corresponding state
+_success_ (21), _failure_ (22) or any of the values in the range 23-31 when the CC is in the corresponding state
 These states shall be unambiguously identifiable solely from the _State_ field,
 without inspecting the Content.
 
@@ -627,8 +627,8 @@ reconstruction.
 
 If non-zero, _ExpirationDate_ specifies the CC expiration time as a number of
 hours elapsed since the base date of January 1, 2027. The 18-bit field provides
-for a span of approximately 30 years (2^18^ hours). Future extended formats
-(with _Format_ = 1) may support expanded time spans.
+for a span of approximately 30 years (2^18^ hours). Future 128-bit metadata formats
+(encoded with _Algorithm_ = `ones(11)`) may support expanded time spans.
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -644,7 +644,6 @@ ACE provides a number of unprivileged CSRs.
 [float="center",options="header"]
 |===
 |  Address | Privilege | Field            | Description
-//|  0xXXX   | URW       | `aceerror`       | Error code of the last ACE instruction.
 |  0xXXX   |  RO       | `acemarchid`     | ID of the microarchitecture of the ACE unit.
 | `vstart` | URW       | `acestart`       | ACE start byte index.
 |  0xXXX   | URW       | `aceiobuflen`    | ACE input/output buffer length.
@@ -1307,11 +1306,6 @@ _Included in_::
 [[ACE-instruction-error]]
 ==== ace.error
 
-[WARNING]
-======
-To be finished.
-======
-
 _Synopsis_::
 Return an error code from the ACE unit.
 
@@ -1320,18 +1314,19 @@ _Mnemonic_::
 (((ACE, instruction, ace.error)))
 
 _Encoding_::
-The operations is a CSR read operation.
+The operations is a pseudo instruction.
 
 _Description_::
-The ACE Unit may be in an error state due to the previous operation.
-`ace.error` is implemented as a read a CR's metadata, in particular from
-the _State_ field of the latter.
+A CR may be in an error state due to the last operation involving it.
+`ace.error` is implemented as a read of the source CR's metadata, using `ace.getmd`
+and logical or bit manipulation instructions to extract the _State_ field of the latter.
+
 
 _Properties_::
 Possibly modifies state: *NO*. +
 Usage-controlled: *NO*. +
 Trappable: *NO*. +
-Interruptible: *NO*. +
+Interruptible: *N/A*. +
 
 _Included in_::
 [%header,cols="4,2,2"]
@@ -2393,36 +2388,33 @@ Similar to `ace.export`, `ace.import` requires implementation-specific
 //
 
 [[ACE-invalidation]]
-=== CR Invalidation
+=== CRs in Completed, Failed, or Error States
 
 [WARNING]
 ====
-This section myst be replaced with a broader treatment of _error states_.
+This section is being replaced with a broader treatment of _error states_.
 ====
 
 {empty}
 (((ACE, algorithm, invalid state)))
 (((Context Register, invalidation)))
-In certain situations, in addition to raising an ACE error, an ACE instruction
-may cause a CR to be *invalidated*. This means that the following happens:
+In certain situations, an ACE instruction may cause a CR to enter an error state.
+Such states are characterized by values of the State field of the metadata record as in <<ACE-states-error>>.
+This may occur also as a consequence of an explicit `ace.state` instruction.
 
-* The CR is put into State _invalid_;
+This means that the following happens:
+
+* The content of the CR is invalidated. The implementation may release
+  the internal resources used by the Content of the CR, including any Additional Data, without
+  the need to use `ace.clear` first.
+  In the latter case, the _AdditionalData_ field of the metadata record is zeroed.
+
 * For instructions that refer to that CR:
- ** `ace.prov`, `ace.clear`, `ace.reset`, `ace.import`, `ace.export`,
-    `ace.size` and `ace.avail` work normally.
- ** `ace.exec`, `ace.clone`, and `ace.restrict` raise an ACE error
-    ace_err_invalid_CR;
- ** `ace.input` and `ace.output` raise ACE error ace_err_invalid_CR when
-    `aceactivecr` points to an invalid CR;
- ** `ace.state` raises an ACE error ace_err_invalid_CR, unless it is used to
-    return to State _initial_;
- ** `ace.error` always returns error ace_err_invalid_CR after any operation
-    involving the CR except for `ace.import` and `ace.export`, `ace.clear`,
-    `ace.prov`, and `ace.size`, which all work normally, and using `ace.state`
-    to return to State _initial_.
-* The current instruction is terminated.
+ ** `ace.prov`, `ace.reset`, `ace.import`, `ace.export`, `ace.getmd`, `ace.size` and `ace.avail` work normally.
+ ** `ace.state` can only be used as `ace.clear/ace.reset` in which case the CR returns to state _clear_.
+ ** All other operations, such as`ace.exec`, `ace.clone`, and `ace.restrict` do not perform any operation in the ACE unit and
+ in particular do not change the State field of the CR's metadata.
 
-In State _completed_, only `ace.prov`, `ace.export`, `ace.import`, `ace.clear`,
-and `ace.error` are permitted.
+In States _success_ and _failed_, only `ace.prov`, `ace.export`, `ace.import`, `ace.clear`, and `ace.error` are permitted.
 
 // ////////////////////////////////////////////////////////////////////

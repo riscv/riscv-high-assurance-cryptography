@@ -209,7 +209,7 @@ imply a state change. For example, after setting an IV or nonce in an AEAD
 mode, the instruction might naturally transition to a subsequent state.
 Deviations from this behavior may be necessary to avoid security issues. An
 example is given by the automatic transitions from hash finalization to
-verification, or from hash verification to the _completed_ state
+verification, or from hash verification to the _success_ state
 (<<ACE-algorithms>>).
 ====
 
@@ -875,14 +875,15 @@ State Machine:::
  ** _decrypt_: Absorb the ciphertext into the tag and decrypt it.
  ** _dec_tag_finalize_: Finalize the encryption tag and keep it internally.
  ** _hash_verify_: Compare the tag against a user supplied value.
- ** _completed_: The algorithm has completed its operation correctly.
+ ** _success_: The algorithm has completed its operation correctly.
+ ** _failure_: The algorithm has completed its operation with an authentication failure.
 
 * *Allowed State Transitions:*
  ** _initial_ -> _hash_absorb_.
  ** _hash_absorb_ -> _encrypt_, if encryption is allowed.
  ** _hash_absorb_ -> _decrypt_, if decryption is allowed.
- ** _encrypt_ -> _enc_tag_finalize_ -> _completed_.
- ** _decrypt_ -> _dec_tag_finalize_ -> _hash_verify_ -> _completed_.
+ ** _encrypt_ -> _enc_tag_finalize_ -> _success_.
+ ** _decrypt_ -> _dec_tag_finalize_ -> _hash_verify_ -> _success_ or _failure_.
 
 * *Behavior:*
  ** In State _initial_ :
@@ -1162,12 +1163,13 @@ State Machine:::
  ** _decrypt_: Absorb the ciphertext into the tag and decrypt it.
  ** _dec_tag_finalize_: Finalize the tag with the AD and CT lengths, then
     compare it against the `SIV`.
- ** _completed_: The algorithm has completed its operation.
+ ** _success_: The algorithm has completed its operation correctly.
+ ** _failure_: The algorithm has completed its operation with an authentication failure.
 
 * *Allowed State Transitions:*
  ** _initial_ -> _set_aux_value_ -> _hash_absorb_.
  ** For encryption: _hash_absorb_ -> _enc_tag_finalize_ -> _encrypt_.
- ** For decryption: _hash_absorb_ -> _decrypt_ -> _dec_tag_finalize_ -> _completed_.
+ ** For decryption: _hash_absorb_ -> _decrypt_ -> _dec_tag_finalize_ -> _success_ or _failure_.
  ** Transition to _encrypt_ possible only if encryption is allowed.
  ** Transition to _decrypt_ possible only if decryption is allowed.
 
@@ -1396,14 +1398,15 @@ State Machine:::
     it.
  ** _hash_verify_: Compare a user-provided value with the internally computed
     tag.
- ** _completed_: The algorithm has completed its operation.
+  ** _success_: The algorithm has completed its operation correctly.
+  ** _failure_: The algorithm has completed its operation with an authentication failure.
 
 * *Allowed State Transitions:*
  ** _initial_ -> _set_aux_value_ -> _hash_absorb_ -> _hash_finalize_
  ** _hash_finalize_ -> _encrypt_, if encryption is allowed.
  ** _hash_finalize_ -> _decrypt_, if decryption is allowed.
  ** _encrypt_ -> _enc_last_block_ -> _enc_tag_finalize_ -> _completed_.
- ** _decrypt_ -> _dec_last_block_ -> _hash_verify_ -> _completed_.
+ ** _decrypt_ -> _dec_last_block_ -> _hash_verify_ -> _success_ or _failure__.
 
 * *Behavior:*
 ** In State _initial_ :
@@ -1676,10 +1679,10 @@ State Machine:::
  ** _hash_absorb_: Absorb data into the CMAC function.
  ** _hash_last_block_: Set the length of the last block to absorb, then absorb it.
  ** _hash_output_: Output the CMAC.
- ** _completed_: The CC has completed the CMAC operation.
+ ** _success_: The CC has completed the CMAC operation.
 
 * *Allowed State Transitions:*
- ** _initial_ -> _hash_absorb_ -> _hash_last_block_ -> _hash_output_ -> _completed_.
+ ** _initial_ -> _hash_absorb_ -> _hash_last_block_ -> _hash_output_ -> _success_.
  ** From any valid state to State _initial_.
 * *Behavior:*
  ** In State _initial_:
@@ -1718,7 +1721,7 @@ If `ACELEN` > `b`, then the above operations are applied to each `b`-bit block o
 
 ** In State _hash_output_, we can issue one ``ace.exec`` instruction of Form C, i.e., “```ace.exec OUTPUT, Kn|K(Xn)```”, to output the hash into `OUTPUT`.
    If `ACELEN` > `b`, only the bits of `OUTPUT` beyond the `b`-th are cleared.
-   Upon issuing that instruction, the CC transitions to State _completed_ with no error.
+   Upon issuing that instruction, the CC transitions to State _success_ with no error.
 
 //
 
@@ -1817,16 +1820,16 @@ Algorithm-Specific Functions:::
 
 State Machine:::
 
-* *States:* _initial_, _hash_absorb_, _hash_last_block_, _hash_output_ and _completed_.
+* *States:* _initial_, _hash_absorb_, _hash_last_block_, _hash_output_ and _success_.
 
  ** _initial_: The CC is ready.
  ** _hash_absorb_: Absorb data into the hash function.
  ** _hash_last_block_: Set the length of the last block to absorb, then absorb it.
  ** _hash_output_: Output the hash.
- ** _completed_: The CC has completed the operation (XOFs do not have this state).
+ ** _success_: The CC has completed the operation (XOFs do not have this state).
 
 * *Allowed State Transitions:*
- ** _initial_ -> _hash_absorb_ -> _hash_last_block_ -> _hash_output_ -> _completed_.
+ ** _initial_ -> _hash_absorb_ -> _hash_last_block_ -> _hash_output_ -> _success_.
  ** From any valid state to State _initial_.
 
 * *Behavior:*
@@ -1981,11 +1984,11 @@ Algorithm-Specific Functions:::
 
 State Machine:::
 * *States:* _initial_, _hash_absorb_, _hash_last_block_, _hash_finalize_,
-  _hash_output_ and _completed_.
+  _hash_output_ and _success_.
 
 * *Allowed State Transitions:*
  ** _initial_ -> _hash_absorb_ -> _hash_last_block_ -> _hash_finalize_ ->
-    _hash_output_ -> _completed_.
+    _hash_output_ -> _success_.
  ** From any valid state to State _initial_.
 
 * *Behavior:*
@@ -2088,14 +2091,15 @@ State Machine:::
  ** _dec_last_block_: Decrypt the last block of the ciphertext.
  ** _hash_verify_: Compare a user-provided value with the internally computed tag.
 
- ** _completed_: The algorithm has completed its operation.
+ ** _success_: The algorithm has completed its operation without errors.
+ ** _success_: The algorithm has completed its operation with an authentication failure.
 
 * *Allowed State Transitions:*
  ** _initial_ -> _hash_absorb_.
  **  _hash_absorb_ -> _encrypt_, if encryption is allowed.
  **  _hash_absorb_ -> _decrypt_, if decryption is allowed.
  ** _encrypt_ -> _enc_last_block_ -> _hash_output_ -> _completed_.
- ** _decrypt_ -> _dec_last_block_ -> _hash_verify_ -> _completed_.
+ ** _decrypt_ -> _dec_last_block_ -> _hash_verify_ -> _success_ or _success_.
 
 * *Behavior:*
 ** In State _initial_ :
@@ -2592,20 +2596,21 @@ State Machine::: {empty}
 --
 * *States:*
 Beside
-_initial_ (0),
-_invalid_ (14), and
-_completed_ (15), ECC algorithms define:
- ** _set_generator_ (1)
- ** _set_scalar_ (2)
- ** _gen_rnd_scalar_ (3)
- ** _point_mul_ (4)
- ** _sign_generate_ (5)
- ** _sign_verify_ (6)
- ** _set_hash_ (7)
- ** _set_secondpt_ (8)
- ** _set_signature_ (9)
- ** _output_ (10)
- ** _absorb_S1_ (11)
+_initial_ (1),
+_success_ (21), and
+_failure_ (22), and the error states,
+ECC algorithms define:
+ ** _set_generator_ (2)
+ ** _set_scalar_ (3)
+ ** _gen_rnd_scalar_ (4)
+ ** _point_mul_ (5)
+ ** _sign_generate_ (6)
+ ** _sign_verify_ (7)
+ ** _set_hash_ (8)
+ ** _set_secondpt_ (9)
+ ** _set_signature_ (10)
+ ** _output_ (11)
+ ** _absorb_S1_ (12)
 --
 +
 
@@ -2619,10 +2624,10 @@ _completed_ (15), ECC algorithms define:
   *** _point_mul_ only if `HasScalar`;
   *** _sign_generate_ only if `HasSecondPt`, and `HasHash`;
   *** _sign_verify_ only if `HasScalar`, `HasSecondPt`, `HasHash`, and `HasSignature`.
- ** From any state to _get_secondpt_infty_ only if `IsSecondPtInfty` is true.
+ ** From any valid state to _get_secondpt_infty_ only if `IsSecondPtInfty` is true.
  ** _point_mul_ -> _get_secondpt_infty_, _output_
- ** _sign_generate_ -> _output_ -> _completed_.
- ** _sign_verify_ -> _completed_.
+ ** _sign_generate_ -> _output_ -> _success_.
+ ** _sign_verify_ -> _success_ or _failure_.
  ** If `HasSecondPt` -> _absorb_S1_.
 
 [none]
