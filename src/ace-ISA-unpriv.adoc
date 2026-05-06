@@ -384,10 +384,9 @@ The architected _State_ values common to all algorithms are defined in
 |  25   | ace_state_import_auth   | _import_auth_  | Authentication failure with `ace.import`.
 |  26   | ace_state_privilege     | _privilege_    | Violation of Usage Control policies.
 |  27   | ace_state_memory        | _memory_       | Insufficient CRF memory for configuration instruction. This may be set by privileged code in case they do not handle the CR allocation.
-|  28   | ace_state_unimpl        | _unimplemented_ | Not implemented algorithm or variant. Invalid state number in `ace.state`.
+|  28   | ace_state_unimpl        | _unimplemented_ | Not implemented algorithm. It must be set by privileged software if it does not implement the algorithm. Also: Invalid state number in `ace.state`.
 | 29, 30 | (Reserved)             |                | Reserved for future use.
 |  31   | ace_state_invalidated   | _invalidated_  | Invalid/invalidated state, for instance because of the use of an invalid value (argument, state, or metadata).
-This error is reported also in the case of an unimplemented algorithm if the latter is not implemented by trapping.
 |===
 
 All states in the range 0-22 are termed _valid_. This includes both _completed_ and _failure_ states, which must be used for
@@ -416,6 +415,10 @@ the _State_ field (now containing an error code) unchanged.
 Any _usage_ instruction that would violate the Usage Control policies will
 not perform any operation in the ACE unit and set the  _State_ field to ace_state_privilege.
 
+
+If an algorithm is unimplemented and instead emulated by software, an exception is raised with `mcause` equal to ace_excp_unimpl
+(cf. <<ACE-exception-codes>>).
+If the software stack does not implement the algorithm, it must set the _State_ metadata field to ace_state_unimpl and return.
 
 During `ace.prov` and `ace.import`, _State_ is set to _interrupted_ for the
 duration of the operation and updated to the correct value only upon successful
@@ -466,6 +469,11 @@ will reflect the error condition. The actual values taken by `mcause` is TBD.
 Table <<ACE-exception-codes>> lists `mcause` values codes defined by ACE.
 The error codes are listed in decreasing priority order.
 
+Attempts to _use_ a CR in an error state, be it invalidated or expired, will
+not perform any operation in the ACE unit, and in particular they will leave
+the _State_ field (now containing an error code) unchanged.
+
+A Violation of Usage Control policies will set the _State_ field to ace_state_privilege.
 
 If there is Insufficient CRF memory for a configuration instruction, the ACE instruction
 will trap. It is up to the system software to manage the CRs by freeing internal ACE Unit space
@@ -483,10 +491,11 @@ the _State_ field of the  metadata is immediately set to zzzzzz
 [float="center",align="center",width="100%",cols="^7%,<23%,<70%",options="header"]
 |===
 |Value | Mnemonic              | Examples (((ACE, error codes)))
-| TBD  | ace_err_unconf_CR     | Use of an unconfigured, or partially configured CR as a source in any instruction except `ace.size`. This should never happen in privileged code because this code is supposed to read the medatada field first before doing anything with a CR.
-| TBD  | ace_err_expired_CR    | Attempted to use an expired CR. This may trap into more privileged code, but the handler may choose to simply set the _State_ field to ace_state_expired and return.
-| TBD  | ace_err_memory        | Insufficient CRF memory for configuration instruction. This may be set by privileged code in case they do not handle the CR allocation.
-| TBD  | ace_err_unconf_buf    | Use of ACEIOBUF as an input or an output while unconfigured.
+| TBD  | ace_excp_unconf_CR    | Use of an unconfigured, or partially configured CR as a source in any instruction except `ace.size`. This should never happen in privileged code because this code is supposed to read the medatada field first before doing anything with a CR.
+| TBD  | ace_excp_expired_CR   | Attempted to use an expired CR. This may trap into more privileged code, but the handler may choose to simply set the _State_ field to ace_state_expired and return.
+| TBD  | ace_excp_memory        | Insufficient CRF memory for configuration instruction. This may be set by privileged code in case they do not handle the CR allocation.
+| TBD  | ace_expc_unconf_buf    | Use of ACEIOBUF as an input or an output while unconfigured.
+| TBD  | ace_excp_unimpl        | Unimplemented algorithm or variant.
 |===
 
 Define Error States:
@@ -693,7 +702,7 @@ CR being provisioned, imported, or exported at the time of interruption.
 Hardware typically writes this register on interruption. Software may write
 zero to force a full restart and may save and restore the register across
 context switches. Writing an invalid or non-supported nonzero value may raise
-ACE exception ace_err_invalid_value.
+exception ace_err_invalid_value.
 
 When a vector instruction is interrupted, the CSR follows `vstart` semantics,
 i.e., it counts the number of processed elements. When an ACE instruction is
@@ -721,17 +730,17 @@ old value-also zeroes the buffer and sets `aceiobuftop` to the same length and
 
 When `aceiobuflen` is zero, the ACEIOBUF is _unconfigured_ (analogous to an
 unconfigured CR in state Initial). Attempting to execute with an unconfigured
-ACEIOBUF `ace.input` and `ace.output` raise ACE error ace_err_unconf_buf.
+ACEIOBUF `ace.input` and `ace.output` raise exceptions ace_excp_unconf_buf.
 
-Writing a value larger than the implementation maximum raises ACE error
-ace_err_memory.
+Writing a value larger than the implementation maximum raises exception
+ace_excp_memory.
 
-To discover the maximum buffer size supported by an implementation, or by the
-current residual capacity of the internal memory of the ACE unit, write
-all-ones to `aceiobuflen`: ACE error ace_err_memory is raised, but a subsequent
-read of `aceiobuflen` returns the actual maximum length; the buffer is
-simultaneously configured to that length, `aceiobuftop` is set accordingly, and
-`acestart` is set to zero.
+// To discover the maximum buffer size supported by an implementation, or by the
+// current residual capacity of the internal memory of the ACE unit, write
+// all-ones to `aceiobuflen`: Exception ace_excp_memory is raised, but a subsequent
+// read of `aceiobuflen` returns the actual maximum length; the buffer is
+// simultaneously configured to that length, `aceiobuftop` is set accordingly, and
+// `acestart` is set to zero.
 
 _Included in_::
 [%header,cols="4,2,2"]
@@ -905,7 +914,7 @@ If the instruction fails, the target CR is unconfigured, with the same
 semantics as if `ace.clear` were invoked on the same CR
 (<<ACE-instruction-clear>>).
 +
-ACE error ace_err_unimpl is raised if the combination of _Algorithm_,
+Exception ace_err_unimpl is raised if the combination of _Algorithm_,
 _AlgorithmPolicy_, and _SCProtection_ is not supported.
 +
 ACE error ace_err_invalid_value is raised if the Metadata is invalid (other
@@ -2005,7 +2014,7 @@ function ace.prov(&CR, M[]) = {
     error ace_err_unimpl;
 
   if (there is not enough memory for the algorithm encoded in the Metadata)
-    error ace_err_memory;
+    raise exception ace_excp_memory;
 
   if (Metadata is inconsistent)
     error ace_err_invalid_value;
@@ -2247,7 +2256,7 @@ function ace.import(&CR, M[]) = {
     error ace_err_unimpl;
 
   if (there is not enough memory for the algorithm encoded in the Metadata)
-    error ace_err_memory;
+    raise exception ace_excp_memory;
 
   num_blocks ← ceil(z / 16);
   last_block_fractional : Boolean ← (z % 16 != 0);
