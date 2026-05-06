@@ -297,12 +297,11 @@ below.
 [width="100%",cols="^9%,^7%,14%,70%",options="header"]
 |===
 | Field   | Width | Name              | Description
-| [0:0]   | 1     | _Format_          | Set to 0 for the current Metadata format version.
-| [11:1]  | 11    | _Algorithm_       | Cryptographic algorithm (primitive, mode, or protocol). See <<ACE-Algorithm-field>>.
-| [13:12] | 2     | _AlgorithmPolicy_ | Allowed algorithm variants(s) _or_ extension of the _Algorithm_ field. See <<ACE-Algorithm-field>>.
-| [15:14] | 2     | _SCProtection_    | Side-channel protection level. See <<ACE-SCProtection-field>>.
-| [16:16] | 1     | _KeyType_         | 0: key is an explicit value in Content. 1: key is an index into the system-specific System Keys Table (SKT).
-| [20:17] | 4     | _StateNumber_     | Current algorithm state-machine state, encoded as an integer.
+| [10:0]  | 11    | _Algorithm_       | Cryptographic algorithm (primitive, mode, or protocol). See <<ACE-Algorithm-field>>.
+| [12:11] | 2     | _AlgorithmPolicy_ | Allowed algorithm variants(s) _or_ extension of the _Algorithm_ field. See <<ACE-Algorithm-field>>.
+| [14:13] | 2     | _SCProtection_    | Side-channel protection level. See <<ACE-SCProtection-field>>.
+| [15:15] | 1     | _KeyType_         | 0: key is an explicit value in Content. 1: key is an index into the system-specific System Keys Table (SKT).
+| [20:16] | 5     | _State_           | Current algorithm state-machine state, encoded as an integer.
 | [28:21] | 8     | _Locality_        | Zero, or an index determining a Locality Secret. See <<ACE-Localities>>.
 | [31:29] | 3     | _UsagePolicy_     | Usage (Control) Policy. Bits 29, 30, and 31, when set, disallow CC usage in U-mode, (V)S-mode, and H-mode, respectively.
 | [45:32] | 14    | _AdditionalData_  | If non-zero, indicates an additional data segment appended to Content. The length of this additional Data segment is _AdditionalData_ × 8 bytes (up to 128 KiB).
@@ -359,11 +358,11 @@ _SCProtection_ to 3.
 // ////////////////////////////////////////////////////////////////////
 
 [[ACE-StateNumber-field]]
-===== _StateNumber_ Field
+===== _State_ Field
 
-The _StateNumber_ field shall be zero in a PI.
+The _State_ field shall be zero in a PI.
 
-The architected  _StateNumber_ values common to all algorithms are defined in
+The architected  _State_ values common to all algorithms are defined in
 <<ACE-state-constants-fixed>>.
 
 [[ACE-state-constants-fixed]]
@@ -372,8 +371,8 @@ The architected  _StateNumber_ values common to all algorithms are defined in
 |===
 | Value | Mnemonic                | State Name   | Description
 |   0   | ace_state_initial       | _initial_    | CC immediately after provisioning or reset; ready for operation.
-|  14   | ace_state_invalid       | _invalid_    | Algorithm terminated abnormally, or interrupted provisioning/import.
 |  15   | ace_state_completed     | _completed_  | Algorithm has completed (not necessarily without error).
+|  16 and...   | ace_state_invalid       | _invalid_    | Algorithm terminated abnormally, or interrupted provisioning/import.
 |===
 
 All states other than _invalid_ are termed _valid_. Unless an algorithm's
@@ -381,17 +380,17 @@ specification explicitly states otherwise, a transition from any valid state to
 _initial_ is always permitted.
 
 If an algorithm defines 16 or fewer states (including the three fixed states),
-the current state is stored in the _StateNumber_ field. For algorithms with
+the current state is stored in the _State_ field. For algorithms with
 more than 16 states, additional state information is stored in the Content
-section. In all cases, the _StateNumber_ field shall be set to _initial_ (0),
+section. In all cases, the _State_ field shall be set to _initial_ (0),
 _invalid_ (14), or _completed_ (15) when the CC is in the corresponding state,
 and to a different value otherwise. These _initial_, _invalid_, or _completed_
-shall be unambiguously identifiable solely from the _StateNumber_ field,
+shall be unambiguously identifiable solely from the _State_ field,
 without inspecting the Content; in other words, the values 0, 14, and 15 in
-_StateNumber_ cannot be used together with additional information in the
+_State_ cannot be used together with additional information in the
 Content to encode additional states.
 
-During `ace.prov` and `ace.import`, _StateNumber_ is set to _invalid_ for the
+During `ace.prov` and `ace.import`, _State_ is set to _invalid_ for the
 duration of the operation and updated to the correct value only upon successful
 completion (see <<ACE-provisioning-export-import>>). By the rules of
 <<ACE-invalidation>>, a partially provisioned or imported CR cannot be
@@ -531,31 +530,8 @@ for a span of approximately 30 years (2^18^ hours). Future extended formats
 
 // ////////////////////////////////////////////////////////////////////
 
-[[ACE-CSR-unpriv]]
-=== CSRs
-
-ACE provides a number of unprivileged CSRs.
-// The privileged CSRs are documented in <<ACE-priv>>.
-
-[[ACE-CSRs-unpriv]]
-.ACE Unprivileged CSRs.
-[cols="^10%,^10%,<18%,<62%"]
-[float="center",options="header"]
-|===
-|  Address | Privilege | Field            | Description
-//|  0xXXX   | URW       | `aceerror`       | Error code of the last ACE instruction.
-|  0xXXX   |  RO       | `acemarchid`     | ID of the microarchitecture of the ACE unit.
-| `vstart` | URW       | `acestart`       | ACE start byte index.
-|  0xXXX   | URW       | `aceiobuflen`    | ACE input/output buffer length.
-|  0xXXX   | URW       | `aceiobuftop`    | ACE input/output buffer limit for current transfers.
-|  0xXXX   | URW       | `acesequence`    | Sequence number of the last ACE instruction.
-|  0xXXX   | URW       | `aceactivecr`    | Active CR for `ace.input`/`ace.output`.
-|===
-
-// ////////////////////////////////////////////////////////////////////
-
 [[ACE-CSR-ace-error]]
-==== Errors and Exceptions
+=== Errors and Exceptions
 
 [WARNING]
 AI(RA): need to rework this and distinguish between errors in the ACE instructions and
@@ -622,6 +598,29 @@ _Included in_::
 |Extension | Minimum version | Lifecycle state
 | `Zlv`    | v0.0.0          | --
 | `Zlio`   | v0.0.0          | --
+|===
+
+// ////////////////////////////////////////////////////////////////////
+
+[[ACE-CSR-unpriv]]
+=== CSRs
+
+ACE provides a number of unprivileged CSRs.
+// The privileged CSRs are documented in <<ACE-priv>>.
+
+[[ACE-CSRs-unpriv]]
+.ACE Unprivileged CSRs.
+[cols="^10%,^10%,<18%,<62%"]
+[float="center",options="header"]
+|===
+|  Address | Privilege | Field            | Description
+//|  0xXXX   | URW       | `aceerror`       | Error code of the last ACE instruction.
+|  0xXXX   |  RO       | `acemarchid`     | ID of the microarchitecture of the ACE unit.
+| `vstart` | URW       | `acestart`       | ACE start byte index.
+|  0xXXX   | URW       | `aceiobuflen`    | ACE input/output buffer length.
+|  0xXXX   | URW       | `aceiobuftop`    | ACE input/output buffer limit for current transfers.
+|  0xXXX   | URW       | `acesequence`    | Sequence number of the last ACE instruction.
+|  0xXXX   | URW       | `aceactivecr`    | Active CR for `ace.input`/`ace.output`.
 |===
 
 // ////////////////////////////////////////////////////////////////////
@@ -902,7 +901,7 @@ ACE error ace_err_unimpl is raised if the combination of _Algorithm_,
 _AlgorithmPolicy_, and _SCProtection_ is not supported.
 +
 ACE error ace_err_invalid_value is raised if the Metadata is invalid (other
-than ace_err_unimpl), such as, for instance: a nonzero _StateNumber_ or
+than ace_err_unimpl), such as, for instance: a nonzero _State_ or
 reserved field; or an unsupported _Locality_ value.
 +
 Similarly to vector store instructions, `ace.prov` appears to other harts as a
@@ -1074,7 +1073,7 @@ _AlgorithmPolicy_, and _SCProtection_ is not supported.
 +
 ACE error ace_err_invalid_value is raised if the Metadata is invalid (other
 than ace_err_unimpl), such as, for instance: nonzero bits in reserved fields;
-unsupported _Locality_ value; or an undefined value of _StateNumber_ for the
+unsupported _Locality_ value; or an undefined value of _State_ for the
 _Algorithm_ and _AlgorithmPolicy_.
 +
 The bit S takes the values 0 (false) or 1 (true). It is set to true if the key
@@ -1369,7 +1368,7 @@ contain all fields required to determine the size of the SCC.
   _KeyType_ Metadata fields. In this case, all other bits must be zero. If the
   combination of _Algorithm_, _SCProtection_, and _KeyType_ fields is not
   supported, or the metadata fields are invalid, then `ace.size` returns 0.
-  If, instead, only the _StateNumber_ is
+  If, instead, only the _State_ is
   non-zero and its value is 15, resp., 14, `ace.size` returns the total, resp.,
   the remaining internal capacity of the CRF. +
   All the values returned by the
