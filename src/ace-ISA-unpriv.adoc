@@ -371,41 +371,51 @@ The architected _State_ values common to all algorithms are defined in
 |===
 | Value | Mnemonic                | State Name     | Description
 |   0   | ace_state_initial       | _initial_      | CC immediately after provisioning or reset; ready for operation.
-|  22   | ace_state_completed     | _completed_    | Algorithm completed succesfully
-|  23   | ace_state_failure       | _failure_      | Failure in an algorithm, usually an authentication failure in AE(AD) algorithms or a signature verification failure.
+|  21   | ace_state_completed     | _completed_    | Algorithm completed succesfully
+|  22   | ace_state_failure       | _failure_      | Failure in an algorithm, usually an authentication failure in AE(AD) algorithms or a signature verification failure.
 |===
 
 [[ACE-states-error]]
-.Global CC State Numbers (error states)
+.Global CC State Numbers (interrupted and error states)
 [float="center",align="center",width="100%",cols="^7%,<22,<15%,<56%"]
 |===
-|  24   | ace_state_interrupted   | _interrupted_  | Provisioning or import interrupted.
-|  25   | ace_state_expired       | _expired_      | Attempted to use an expired CR.
-|  26   | ace_state_import_auth   | _import_auth_  | Authentication failure with `ace.import`.
-|  27   | ace_state_privilege     | _privilege_    | Violation of Usage Control policies.
-|  28   | ace_state_memory        | _memory_       | Insufficient CRF memory for configuration instruction. This may be set by privileged code in case they do not handle the CR allocation.
-|  29   | ace_state_unimpl        | _unimplemented_ | Not implemented algorithm or variant. Invalid state number in `ace.state`.
-|  30   | (Reserved)              |                | Reserved for future use.
+|  23   | ace_state_interrupted   | _interrupted_  | Provisioning or import interrupted.
+|  24   | ace_state_expired       | _expired_      | Attempted to use an expired CR.
+|  25   | ace_state_import_auth   | _import_auth_  | Authentication failure with `ace.import`.
+|  26   | ace_state_privilege     | _privilege_    | Violation of Usage Control policies.
+|  27   | ace_state_memory        | _memory_       | Insufficient CRF memory for configuration instruction. This may be set by privileged code in case they do not handle the CR allocation.
+|  28   | ace_state_unimpl        | _unimplemented_ | Not implemented algorithm or variant. Invalid state number in `ace.state`.
+| 29, 30 | (Reserved)             |                | Reserved for future use.
 |  31   | ace_state_invalidated   | _invalidated_  | Invalid/invalidated state, for instance because of the use of an invalid value (argument, state, or metadata).
 This error is reported also in the case of an unimplemented algorithm if the latter is not implemented by trapping.
 |===
 
-All states in the range 0-23 are termed _valid_. This includes both _completed_ and _failure_ states, which must be used for
+All states in the range 0-22 are termed _valid_. This includes both _completed_ and _failure_ states, which must be used for
 normal termination of an algorithm in the cases of its successful completion or failure.
 The states in the range 24-31 are termed _error_ states, and are used to report certain specific ACE errors.
+State 23, i.e., _interrupted_, is used to report that provisioning or import was interrupted, and is handled differently from the error stated.
 
 Unless an algorithm's specification explicitly states otherwise, a transition from any valid state to _initial_ is always permitted.
 
-If an algorithm defines 24 or fewer valid states (including the three fixed valid states),
+Transition from an interrupted or error state to _initial_ is not allowed.
+
+When a CR transitions to an error state, the content of the CR becomes invalid and is erased. The corresponding resources may also be released, so that the CR's only information is the metadata record. In this case, exporting the CR will only export the metadata, and the SCC will be just 24 bytes long.  The SCC can be reimported, so that user software may be able to take the necessary actions even after a context switch.
+
+If an algorithm defines 23 or fewer valid states (including the three fixed valid states),
 the current state is stored in the _State_ field. For algorithms with
-more than 24 valid states, additional state information is stored in the Content
+more than 23 valid states, additional state information is stored in the Content
 section. In all cases, the _State_ field shall be set to _initial_ (0),
-_completed_ (22), _failure_ (23) or any of the values in the range 24-31 when the CC is in the corresponding state,
-and to a different value otherwise. These _initial_, _invalid_, or _completed_
-shall be unambiguously identifiable solely from the _State_ field,
-without inspecting the Content; in other words, the values 0, 14, and 15 in
-_State_ cannot be used together with additional information in the
-Content to encode additional states.
+_completed_ (21), _failure_ (22) or any of the values in the range 23-31 when the CC is in the corresponding state
+These states shall be unambiguously identifiable solely from the _State_ field,
+without inspecting the Content.
+
+Attempts to _use_ a CR in an error state, be it invalidated or expired, will
+not perform any operation in the ACE unit, and in particular they will leave
+the _State_ field (now containing an error code) unchanged.
+
+Any _usage_ instruction that would violate the Usage Control policies will
+not perform any operation in the ACE unit and set the  _State_ field to ace_state_privilege.
+
 
 During `ace.prov` and `ace.import`, _State_ is set to _interrupted_ for the
 duration of the operation and updated to the correct value only upon successful
@@ -416,6 +426,8 @@ must unconfigure the CR; upon resumption, the instruction is restarted. An
 invalid CR with a nonzero `acestart` is recognized as an incomplete CR,
 permitting resumption of provisioning or import. This state change to _interrupted_
 does not occur during `ace.export`.
+
+Explicitly setting an error state can be done using `ace.state` (cf. <<ACE-instruction-state>>) without additional parameters.
 
 [[ACE-CSR-ace-error]]
 ====== Errors and Exceptions
@@ -437,10 +449,6 @@ writes the metadata field to a GPR. From this we can read error fields in the me
 We can also use a similar instruction to set a CR as an invalid state with an error code (`ace.setmeta`), which would create a CR with
 only an error code, no valid data. The latter would be overloaded with (`ace.restrict`).
  +
-Rename and move the `Format` field and merge it with `State`: an error will be stored as certain values with
-the high bit set. (Done)
-To extend the format, for instance to allow more algorithm or larger states, in the future we write an all-ones into `Algorithm` field of the metadata and possibly add a new 64-bit block.
- +
 Errors which are a functional result of the execution of an ACE instruction
 will not trigger a trap. However, there are other ACE instructions
 which can trigger trap besides providing a functional error. Traps have higher
@@ -448,17 +456,6 @@ priority than functional errors. `ace.export`, `ace.import` and `ace.prov` are
 able to trigger traps as they interact with the memory system.  Every other
 functional ACE error is written to `state` field of the metadata.
 
-[WARNING]
-
-====
-{empty}
-(((CSR,`aceerror`)))
-`aceerror` is an XLEN-bit URW CSR. Only the least significant 4 bits of
-`aceerror` are defined, and the top XLEN - 4 bits are WARZ. It holds the error
-code from the last commited ACE instruction in program-order. A read of this
-CSR may stall until the preceding ACE operation completes. The CSR is writable
-to support context switching.
-====
 
 The phrase “_raises ACE error X_” means that an exception is raised, and the CSR `mcause`
 will reflect the error condition. The actual values taken by `mcause` is TBD.
@@ -466,14 +463,9 @@ will reflect the error condition. The actual values taken by `mcause` is TBD.
 // The same event may also trigger a vertical or horizontal trap; the handler may
 // inspect `aceerror` to determine the error type.
 
-Table <<ACE-error-codes>> lists `mcause` values codes defined by ACE.
+Table <<ACE-exception-codes>> lists `mcause` values codes defined by ACE.
 The error codes are listed in decreasing priority order.
 
-Attempts to _use_ a CR in an error state, be it invalidated or expired, will
-not perform any operation in the ACE unit, and in particular they will leave
-the _State_ field (now containing an error code) unchanged.
-
-A Violation of Usage Control policies will set the _State_ field to 16+ace_err_privilege.
 
 If there is Insufficient CRF memory for a configuration instruction, the ACE instruction
 will trap. It is up to the system software to manage the CRs by freeing internal ACE Unit space
@@ -501,14 +493,6 @@ Define Error States:
 _unimplemented_
 _ace_err_auth_ -> _failure_
 
-[[ACE-error-codes]]
-.Error states and their meanings
-[float="center",align="center",width="100%",cols="^6%,<20%,<12%,<62%",options="header"]
-|===
-|Value | Mnemonic                | State Name    | Description
-|===
-
-Setting an error state uses `ace.state`.
 `ace.restrict` is distinct because it cannot modify the _State_ field.
 
 
