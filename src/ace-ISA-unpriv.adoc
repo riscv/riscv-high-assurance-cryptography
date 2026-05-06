@@ -357,12 +357,21 @@ _SCProtection_ to 3.
 
 // ////////////////////////////////////////////////////////////////////
 
-[[ACE-StateNumber-field]]
-===== _State_ Field
+[[ACE-State-field]]
+===== The _State_ Field and Error Reporting
 
 The _State_ field shall be zero in a PI.
+It used to track the currently state of an algorithm, including errors.
 
-The architected _State_ values common to all algorithms are defined in
+Two types of errors may occur as a result of executing ACE instructions:
+
+. Errors occurring in the instructions themselves or because wrong instructions are issued.
+. Errors arising from the correct execution of the algorithms, as well as any other exceptional situations occurring despite the correct instructions being performed.
+
+In general, the first type of errors generates an exception, while the second type will cause an error code to be reported directly to the user software.
+There are however exceptions to this rule, as well as conditions that may be reported either way.
+
+The architected values of _State_ which are common to all algorithms are defined in
 <<ACE-states-valid>>.
 
 [[ACE-states-valid]]
@@ -370,9 +379,10 @@ The architected _State_ values common to all algorithms are defined in
 [float="center",align="center",width="100%",cols="^7%,<22,<15%,<56%",options="header"]
 |===
 | Value | Mnemonic                | State Name     | Description
-|   0   | ace_state_initial       | _initial_      | CC immediately after provisioning or reset; ready for operation.
-|  21   | ace_state_completed     | _completed_    | Algorithm completed succesfully
-|  22   | ace_state_failure       | _failure_      | Failure in an algorithm, usually an authentication failure in AE(AD) algorithms or a signature verification failure.
+|   0   | ace_state_clear         | _clear_        | The CR is not configured.
+|   1   | ace_state_initial       | _initial_      | The state of a CC immediately after provisioning or reset; ready for operation.
+|  21   | ace_state_completed     | _completed_    | Algorithm completed successfully. No further cryptographic operations may be performed until the CC is reset.
+|  22   | ace_state_failure       | _failure_      | Failure in an algorithm, usually an authentication failure in AE(AD) algorithms or a signature verification failure. No further cryptographic operations may be performed until the CC is reset.
 |===
 
 [[ACE-states-error]]
@@ -380,30 +390,38 @@ The architected _State_ values common to all algorithms are defined in
 [float="center",align="center",width="100%",cols="^7%,<22,<15%,<56%"]
 |===
 |  23   | ace_state_interrupted   | _interrupted_  | Provisioning or import interrupted.
-|  24   | ace_state_expired       | _expired_      | Attempted to use an expired CR.
+|  24   | ace_state_expired       | _expired_      | The CR has expired.
 |  25   | ace_state_import_auth   | _import_auth_  | Authentication failure with `ace.import`.
-|  26   | ace_state_privilege     | _privilege_    | Violation of Usage Control policies.
+|  26   | ace_state_priv_viol     | _priv_viol_    | Violation of Usage Control policies.
 |  27   | ace_state_memory        | _memory_       | Insufficient CRF memory for configuration instruction. This may be set by privileged code in case they do not handle the CR allocation.
 |  28   | ace_state_unimpl        | _unimplemented_ | Not implemented algorithm. It must be set by privileged software if it does not implement the algorithm. Also: Invalid state number in `ace.state`.
 | 29, 30 | (Reserved)             |                | Reserved for future use.
-|  31   | ace_state_invalidated   | _invalidated_  | Invalid/invalidated state, for instance because of the use of an invalid value (argument, state, or metadata).
+|  31   | ace_state_invalid       | _invalid_      | Invalid/invalidated state, for instance because of the use of an invalid value (argument, state, or metadata).
 |===
 
-All states in the range 0-22 are termed _valid_. This includes both _completed_ and _failure_ states, which must be used for
+The state with value 0 is termed _clear_, and is used to indicate that the CR is not configured.
+The metadata record in this case is the all-zeros value `zeros(64)`.
+
+All states in the range 1-22 are termed _valid_. This includes both _completed_ and _failure_ states, which must be used for
 normal termination of an algorithm in the cases of its successful completion or failure.
 The states in the range 24-31 are termed _error_ states, and are used to report certain specific ACE errors.
+
 State 23, i.e., _interrupted_, is used to report that provisioning or import was interrupted, and is handled differently from the error stated.
 
-Unless an algorithm's specification explicitly states otherwise, a transition from any valid state to _initial_ is always permitted.
+Unless an algorithm's specification explicitly states otherwise, a transition from any valid state to _initial_ using instruction `ace.state` is always permitted.
+A transition from any state, including _clear_, to _initial_ is only permitted as the result of provisioning or import.
 
 Transition from an interrupted or error state to _initial_ is not allowed.
 
-When a CR transitions to an error state, the content of the CR becomes invalid and is erased. The corresponding resources may also be released, so that the CR's only information is the metadata record. In this case, exporting the CR will only export the metadata, and the SCC will be just 24 bytes long.  The SCC can be reimported, so that user software may be able to take the necessary actions even after a context switch.
+When a CR transitions to an error state, the content of the CR becomes invalid and is erased.
+The corresponding internal resources may also be released, so that the CR's only information is the metadata record.
+In this case, exporting the CR will only export the metadata, and the SCC will be just 24 bytes long.
+The resulting SCC can be reimported, so that user software may be able to take the necessary actions even after a context switch.
 
-If an algorithm defines 23 or fewer valid states (including the three fixed valid states),
+If an algorithm defines 22 or fewer valid states (including the three fixed valid states _initial_, _completed_, and _failure_),
 the current state is stored in the _State_ field. For algorithms with
-more than 23 valid states, additional state information is stored in the Content
-section. In all cases, the _State_ field shall be set to _initial_ (0),
+more than 22 valid states, additional state information is stored in the Content
+section. In all cases, the _State_ field shall be set to _initial_ (1),
 _completed_ (21), _failure_ (22) or any of the values in the range 23-31 when the CC is in the corresponding state
 These states shall be unambiguously identifiable solely from the _State_ field,
 without inspecting the Content.
@@ -413,10 +431,10 @@ not perform any operation in the ACE unit, and in particular they will leave
 the _State_ field (now containing an error code) unchanged.
 
 Any _usage_ instruction that would violate the Usage Control policies will
-not perform any operation in the ACE unit and set the  _State_ field to ace_state_privilege.
+not perform any operation in the ACE unit and set the  _State_ field to ace_state_priv_viol.
 
 
-If an algorithm is unimplemented and instead emulated by software, an exception is raised with `mcause` equal to ace_excp_unimpl
+If an algorithm is unimplemented and instead emulated by software, an exception is raised with `mcause` equal to ace_exc_unimpl
 (cf. <<ACE-exception-codes>>).
 If the software stack does not implement the algorithm, it must set the _State_ metadata field to ace_state_unimpl and return.
 
@@ -447,10 +465,10 @@ reported by algorithms.
  +
 Errors such as authentication error in an AEAD algorithm must be reported in a different way.
  +
-Add an instruction (`ace.getmeta`) to extract the metadata field only, overloaded on the `ace.exec` encoding, which
+Add an instruction (`ace.getmd`) to extract the metadata field only, overloaded on the `ace.exec` encoding, which
 writes the metadata field to a GPR. From this we can read error fields in the metadata.
-We can also use a similar instruction to set a CR as an invalid state with an error code (`ace.setmeta`), which would create a CR with
-only an error code, no valid data. The latter would be overloaded with (`ace.restrict`).
+ +
+To explicitly put a CR in an error state it is sufficient to use `ace.state`. This cannot be done if the CR is in the _clear_ state.
  +
 Errors which are a functional result of the execution of an ACE instruction
 will not trigger a trap. However, there are other ACE instructions
@@ -458,7 +476,6 @@ which can trigger trap besides providing a functional error. Traps have higher
 priority than functional errors. `ace.export`, `ace.import` and `ace.prov` are
 able to trigger traps as they interact with the memory system.  Every other
 functional ACE error is written to `state` field of the metadata.
-
 
 The phrase “_raises ACE error X_” means that an exception is raised, and the CSR `mcause`
 will reflect the error condition. The actual values taken by `mcause` is TBD.
@@ -473,7 +490,7 @@ Attempts to _use_ a CR in an error state, be it invalidated or expired, will
 not perform any operation in the ACE unit, and in particular they will leave
 the _State_ field (now containing an error code) unchanged.
 
-A Violation of Usage Control policies will set the _State_ field to ace_state_privilege.
+A Violation of Usage Control policies will set the _State_ field to ace_state_priv_viol.
 
 If there is Insufficient CRF memory for a configuration instruction, the ACE instruction
 will trap. It is up to the system software to manage the CRs by freeing internal ACE Unit space
@@ -484,26 +501,22 @@ A Not implemented algorithm or variant will trap and the privileged code may eit
 _unimplemented_ in the _State_ or implement it.
 
 If an expired CR is imported or provisioned, or the code attempts to use it,
-the _State_ field of the  metadata is immediately set to zzzzzz
+the _State_ field of the Metadata is immediately set to value `ace_state_expired`.
 
 [[ACE-exception-codes]]
 .Exception causes and their meanings
 [float="center",align="center",width="100%",cols="^7%,<23%,<70%",options="header"]
 |===
 |Value | Mnemonic              | Examples (((ACE, error codes)))
-| TBD  | ace_excp_unconf_CR    | Use of an unconfigured, or partially configured CR as a source in any instruction except `ace.size`. This should never happen in privileged code because this code is supposed to read the medatada field first before doing anything with a CR.
-| TBD  | ace_excp_expired_CR   | Attempted to use an expired CR. This may trap into more privileged code, but the handler may choose to simply set the _State_ field to ace_state_expired and return.
-| TBD  | ace_excp_memory        | Insufficient CRF memory for configuration instruction. This may be set by privileged code in case they do not handle the CR allocation.
-| TBD  | ace_expc_unconf_buf    | Use of ACEIOBUF as an input or an output while unconfigured.
-| TBD  | ace_excp_unimpl        | Unimplemented algorithm or variant.
+| TBD  | ace_exc_unconf_CR     | Use of an unconfigured, or partially configured CR as a source in any instruction except `ace.size`. This should never happen in a context switch handler since this code is supposed to read the metadata field first before doing anything to CR.
+| TBD  | ace_exc_expired_CR    | Attempted to use an expired CR. This may trap into more privileged code, but the handler may choose to simply set the _State_ field to ace_state_expired and return.
+| TBD  | ace_exc_memory        | Insufficient CRF memory for configuration instruction. This may be set by privileged code in case they do not handle the CR allocation.
+| TBD  | ace_exc_unconf_buf    | Use of ACEIOBUF as an input or an output while unconfigured.
+| TBD  | ace_exc_unimpl        | Unimplemented algorithm or variant.
+| TBD  | ace_exc_invalid       | Invalid parameters in metadata.
 |===
 
-Define Error States:
-_unimplemented_
-_ace_err_auth_ -> _failure_
-
 `ace.restrict` is distinct because it cannot modify the _State_ field.
-
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -696,17 +709,17 @@ information and are ignored if not used.
 
 `acestart`[XLEN-1:XLEN-8] is non-zero only if the interrupted instruction is
 `ace.prov`, `ace.import`, or `ace.export`, in which case it is equal to
-`acestart`[XLEN-1:XLEN-8] = `3'b100 @ bin(n,5)` wheren `n` is the number of the
+`acestart`[XLEN-1:XLEN-8] = `3'b100 @ bin(n,5)` where `n` is the number of the
 CR being provisioned, imported, or exported at the time of interruption.
 
 Hardware typically writes this register on interruption. Software may write
 zero to force a full restart and may save and restore the register across
 context switches. Writing an invalid or non-supported nonzero value may raise
-exception ace_err_invalid_value.
+an illegal instruction exception.
 
 When a vector instruction is interrupted, the CSR follows `vstart` semantics,
 i.e., it counts the number of processed elements. When an ACE instruction is
-interrupted, the CSR follows `acestart` semanticsn described here.
+interrupted, the CSR follows `acestart` semantics described here.
 
 _Included in_::
 [%header,cols="4,2,2"]
@@ -730,14 +743,14 @@ old value-also zeroes the buffer and sets `aceiobuftop` to the same length and
 
 When `aceiobuflen` is zero, the ACEIOBUF is _unconfigured_ (analogous to an
 unconfigured CR in state Initial). Attempting to execute with an unconfigured
-ACEIOBUF `ace.input` and `ace.output` raise exceptions ace_excp_unconf_buf.
+ACEIOBUF `ace.input` and `ace.output` raise exceptions ace_exc_unconf_buf.
 
 Writing a value larger than the implementation maximum raises exception
-ace_excp_memory.
+ace_exc_memory.
 
 // To discover the maximum buffer size supported by an implementation, or by the
 // current residual capacity of the internal memory of the ACE unit, write
-// all-ones to `aceiobuflen`: Exception ace_excp_memory is raised, but a subsequent
+// all-ones to `aceiobuflen`: Exception ace_exc_memory is raised, but a subsequent
 // read of `aceiobuflen` returns the actual maximum length; the buffer is
 // simultaneously configured to that length, `aceiobuftop` is set accordingly, and
 // `acestart` is set to zero.
@@ -761,12 +774,12 @@ range used by `ace.input` and `ace.output`. Together WITH
 acestart[XLEN-9:0][XLEN-9:0], it defines the active transfer window.
 
 The constraints `acestart[XLEN-9:0]` {le} `aceiobuftop` {le} `aceiobuflen` must
-hold; violating either bound raises ace_err_invalid_value. Modifying
-`aceiobuftop` does not alter or invalidate buffer contents.
+hold; violating either bound raises an illegal instruction exception.
+Modifying `aceiobuftop` does not alter or invalidate buffer contents.
 
 Using ACEIOBUF when `aceiobuftop` − `acestart[XLEN-9:0]` is zero (with
-`aceiobuflen` nonzero) or an invalid transfer size raises ACE error
-ace_err_invalid_value.
+`aceiobuflen` nonzero) or an invalid transfer size raises an
+illegal instruction exception
 
 NOTE: `aceiobuftop` enables per-operation length adjustments without
 reconfiguring the ACEIOBUF, which can be expensive due to the fact that writing
@@ -874,8 +887,8 @@ and
 Element Group Size as the vector crypto extension does.
 Because of the fact that the architecture decouples instructions like `ace.exec` from the
 actual operations, the high level architecture of ACE only needs to know the total size
-of the inputs and outpout, which is `ACELEN`, namely either `VL*SEW` or the length
-`aceiobuftop` of the ACEIOBUF as defiend in <<ACE-notation>>.
+of the inputs and output, which is `ACELEN`, namely either `VL*SEW` or the length
+`aceiobuftop` of the ACEIOBUF as defined in <<ACE-notation>>.
 
 
 // ////////////////////////////////////////////////////////////////////
@@ -914,12 +927,16 @@ If the instruction fails, the target CR is unconfigured, with the same
 semantics as if `ace.clear` were invoked on the same CR
 (<<ACE-instruction-clear>>).
 +
-Exception ace_err_unimpl is raised if the combination of _Algorithm_,
+Exception ace_exc_unimpl is raised if the combination of _Algorithm_,
 _AlgorithmPolicy_, and _SCProtection_ is not supported.
+The handler may simply set the CR to error state `ace_state_unimpl` and
+return to the original control flow.
 +
-ACE error ace_err_invalid_value is raised if the Metadata is invalid (other
-than ace_err_unimpl), such as, for instance: a nonzero _State_ or
+Exception `ace_exc_invalid` is raised if the Metadata is invalid (other
+than unimplemented algorithm), such as, for instance: a nonzero _State_ or
 reserved field; or an unsupported _Locality_ value.
+The handler may simply set the CR to error state `ace_state_invalid` and
+return to the original control flow.
 +
 Similarly to vector store instructions, `ace.prov` appears to other harts as a
 sequence of individual reads.
@@ -960,7 +977,7 @@ _Mnemonic_::
 (((ACE, instruction, ace.reset)))
 
 _Encoding_::
-`ace.clear`/`ace.reset` are pseudo instructions, implemented as `ace.restrict' (see <<ACE-instruction-restrict>>).
+`ace.clear`/`ace.reset` are pseudo instructions, implemented as `ace.state` (see <<ACE-instruction-state>>).
 
 _Description_::
 `ace.clear` unconfigures the state of the CR `Kd` or `K(Xd)` and releases its
@@ -1073,11 +1090,13 @@ If the instruction fails, the target CR is unconfigured, with the same
 semantics as if `ace.clear` were invoked on the same CR
 (<<ACE-instruction-clear>>).
 +
-ACE error ace_err_unimpl is raised if the combination of _AlgorithmPolicy_,
+Exception `ace_exc_unimpl` is raised if the combination of _Algorithm_,
 _AlgorithmPolicy_, and _SCProtection_ is not supported.
+The handler may simply set the CR to error state `ace_state_unimpl` and
+return to the original control flow.
 +
-ACE error ace_err_invalid_value is raised if the Metadata is invalid (other
-than ace_err_unimpl), such as, for instance: nonzero bits in reserved fields;
+Exception `ace_exc_invalid` is raised if the Metadata is invalid (other
+than unimplemented algorithm), such as, for instance: nonzero bits in reserved fields;
 unsupported _Locality_ value; or an undefined value of _State_ for the
 _Algorithm_ and _AlgorithmPolicy_.
 +
@@ -1243,12 +1262,25 @@ The encodings for the three Forms are:
 // ////////////////////////////////////////////////////////////////////
 
 _Description_::
-The instruction is used to transition the state machine of the cryptographic
-algorithm in CR `Kd` or `K(Xd)` from one stage to another-for example,
+The instruction is used to modify the _State_ field of the metadata
+of the CR `Kd` or `K(Xd)`.
+This can be used to move from one stage of an algorithm to another-for example,
 advancing from initialization to data absorption in a hash function, then to
-finalization and output of the digest. The `#immed` operand is a constant from
+finalization and output of the digest.
+ +
+The `#immed` operand is a constant from
 a set of admissible values defined for each algorithm. Optionally, `Xs` or `Vs`
 contain an auxiliary input.
+ +
+If the `#immed` is zero, i.e., the value corresponding to the _clear_ state, the
+CR is cleared.
+ +
+It is always allowed to use an error state (see <<ACE-states-error>>) for the
+`#immed`. This will also invalidate the contents of the CR and possibly release them.
+ +
+In these last two cases, the internal ACE memory used by Contents of the CR
+may also be released, including any Additional Data, in which case the
+_AdditionalData_ field of the metadata will be set to zero.
 
 _Properties_::
 Possibly modifies state: *YES*. +
@@ -1275,11 +1307,16 @@ _Included in_::
 [[ACE-instruction-error]]
 ==== ace.error
 
+[WARNING]
+======
+To be finished.
+======
+
 _Synopsis_::
 Return an error code from the ACE unit.
 
 _Mnemonic_::
-`ace.error Xd`
+`ace.error Xd, Ks|K(Xs)`
 (((ACE, instruction, ace.error)))
 
 _Encoding_::
@@ -1287,10 +1324,8 @@ The operations is a CSR read operation.
 
 _Description_::
 The ACE Unit may be in an error state due to the previous operation.
-`ace.error` is implemented as a read from CSR `aceerror`, which may cause the
-hart to wait if the error code is not yet available (<<ACE-CSR-ace-error>>).
-The error code is written into GPR `Xd`. The architected error codes are given
-in <<ACE-error-codes>>.
+`ace.error` is implemented as a read a CR's metadata, in particular from
+the _State_ field of the latter.
 
 _Properties_::
 Possibly modifies state: *NO*. +
@@ -1312,7 +1347,7 @@ _Included in_::
 ==== ace.size
 
 _Synopsis_::
-Return the size of a CC.
+Return the size of a CC or an error value.
 
 _Mnemonics_::
 There are four Forms of the `ace.size` instruction:
@@ -1351,48 +1386,26 @@ The `F` field and the `r` bit may assume the following values:
 * `F` = `0b00`, `r` = `0` {implies} Form A: Size from a context given as `Ks`.
 * `F` = `0b00`, `r` = `1` {implies} Form A: Size from a context given indirectly as `K(Xs)`.
 * `F` = `0b01`, `r` = `0` {implies} Form B: Size from Metadata Header.
-* `F` = `0b10`, `r` = `0` {implies} Form C: Internal capacity of a CR.
-* `F` = `0b11`, `r` = `0` {implies} Form D: Internal capacity of the ACEIOBUF.
+* `F` = `0b11`, `r` = `0` {implies} Form C: Internal capacity of the ACEIOBUF.
 
 _Description_:: {empty}
 
 * Form A `ace.size` returns the total size (in bytes) of the memory buffer that
-  would be necessary to store the exported SCC. Knowing this size is necessary
+  would be necessary to store the exported SCC, including the Additional Data.
+  Knowing this size is necessary
   for any feature that relies on `ace.export`, including context switching. The
   instruction returns 0 if the CR is unconfigured.
 
 * Form B `ace.size` returns the total size (in bytes) of an SCC having the
-  Metadata section given in `Xn` into GPR `Xd`, and 0 if the algorithm is not
-  supported or the Metadata is invalid.
-+
-On RV32, `Xs` contains bits [31:0] of the Metadata.  This suffices since they
-contain all fields required to determine the size of the SCC.
+  Metadata section given in `Xn` into GPR `Xd` including the Additional Data,
+  , `NOT(ace_state_unimpl, XLEN)` if the algorithm is not
+  supported, and `NOT(ace_state_invalid)` if the Metadata is invalid.
+ +
+On RV32, `s` must be even and `Xs` and `X[s+1]` contain bits [31:0] and [63:32] of the Metadata.
 
-* Form C `ace.size` returns the amount of internal CRF capacity used by a CR
-  with Metadata section matching `Xn` on the _Algorithm_, _SCProtection_, and
-  _KeyType_ Metadata fields. In this case, all other bits must be zero. If the
-  combination of _Algorithm_, _SCProtection_, and _KeyType_ fields is not
-  supported, or the metadata fields are invalid, then `ace.size` returns 0.
-  If, instead, only the _State_ is
-  non-zero and its value is 15, resp., 14, `ace.size` returns the total, resp.,
-  the remaining internal capacity of the CRF. +
-  All the values returned by the
-  instruction are expressed in terms of implementation-dependent units, and in
-  principle cannot be compared across different implementations.
-+
-On RV32, `Xs` contains bits [31:0] of the Metadata (as for the Metadata type
-instruction).
-
-* Form D: The source register contains the desired byte length of the buffer to
+* Form C: The source register contains the desired byte length of the buffer to
   be allocated, and the destination register contains the size of the buffer in
   the ACE unit.
-
-* Besides returning 0, in case the algorithm is not supported or the metadata
-is malformed or invalid, the corresponding error
-ace_err_unimpl
-of
-ace_err_invalid_value
-is raised.
 
 NOTE: In general, no correlation may be assumed between the size of a PI, the
 corresponding CR's usage of internal resources, and the size of the SCC.
@@ -1410,8 +1423,8 @@ _Included in_::
 [%header,cols="4,2,2"]
 |===
 |Extension | Minimum version | Lifecycle state
-| `Zlv` (Forms A-C)   | v0.0.0          | --
-| `Zlio` (Forms A-D)  | v0.0.0          | --
+| `Zlv` (Forms A-B)   | v0.0.0          | --
+| `Zlio` (Forms A-C)  | v0.0.0          | --
 |===
 
 // ////////////////////////////////////////////////////////////////////
@@ -1440,6 +1453,46 @@ _Included in_::
 | `Zlv`    | v0.0.0          | --
 | `Zlio`   | v0.0.0          | --
 |===
+
+// ////////////////////////////////////////////////////////////////////
+
+[[ACE-instruction-getmd]]
+==== ace.getmd
+
+_Synopsis_::
+Read the metadata record of a CR.
+
+_Mnemonic_::
+`ace.getmd Xd, Ks|K(Xs)
+(((ACE, instruction, ace.getmd)))
+
+_Encoding_::
+TBD.
+
+_Description_::
++
+--
+On RV64, the instruction copies the metadata record of a CR `Ks` or `K(Xs)` into GPRT `Xd`.
+
+On RV32, `s` must be even, the register pair `X[d]` and `X[d+1]` are written to, and
+  `(X[d+1] @ X[d])` replaces `Xd` in the RV64 description.
+--
++
+
+_Properties_::
+Possibly modifies state: *NO*. +
+Usage-controlled: *NO*. +
+Trappable: *NO*. +
+Interruptible: *NO*. +
+
+_Included in_::
+[%header,cols="4,2,2"]
+|===
+|Extension | Minimum version | Lifecycle state
+| `Zlv`    | v0.0.0          | --
+| `Zlio`   | v0.0.0          | --
+|===
+
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -1498,7 +1551,7 @@ On RV64, the semantics of the instruction are:
 * `Xs` follows the format of the Metadata Header.
 Only the fields _AlgorithmPolicy_, _SCProtection_, _Locality_, _UsagePolicy_,
 and _ExpirationDate_ of `Xs` may be defined. All other fields must be 0, else
-ACE error ace_err_invalid_value is raised, except in the following case.
+exception `ace_exc_invalid` is raised.
 
 [WARNING]
 We implement `ace.clear` by setting a special value through `ace.restrict`, such
@@ -1508,13 +1561,13 @@ If the encoding with indirect CR addressing is used and Xd = X0, then `ace.restr
 
 
 * `Xs`._AlgorithmPolicy_ is used to set the new `mh`._AlgorithmPolicy_ of the
-  CR. No operation may be enabled, any attempt to do so raises ACE error
-  ace_err_invalid_value. In some cases, a zero value is not permitted, such as
+  CR. No currently disabled operation may be enabled, any attempt to do so raises
+  exception `ace_exc_invalid`. In some cases, a zero value is not permitted, such as
   disabling both encryption and decryption.
 
 * `Xs`._SCProtection_ is used to turn on side-channel protection or raise its
   level. Attempting to remove or downgrade side channel protection, or to set a
-  non-implemented level raises ACE error ace_err_invalid_value.
+  non-implemented level raises exception `ace_exc_invalid`.
 
 * If `Xs`._Locality_ is non-zero, then it can be used to restrict the Locality.
   Allowed replacements of Locality are:
@@ -1528,7 +1581,7 @@ If the encoding with indirect CR addressing is used and Xd = X0, then `ace.restr
 
 Then, when the CR is exported as a CR, it will use the new Locality values to
 tweak the export and import algorithms. Generalizing the Locality is not
-permitted. Attempting to do so raises ACE error ace_err_invalid_value
+permitted. Attempting to do so raises exception `ace_exc_invalid`.
 
 * A zero in any of the three bits `Xs`._UsagePolicy_ means that the
   corresponding policy is _not_ changed.
@@ -1541,8 +1594,9 @@ permitted. Attempting to do so raises ACE error ace_err_invalid_value
   `mh`._ExpirationDate_ is _not_ changed.
 
 * A non-zero value in `Xs`._ExpirationDate_ will be copied to
-  `mh`._ExpirationDate_, but only if that policy was not already programmed,
-  otherwise error ACE error ace_err_invalid_value is raised.
+  `mh`._ExpirationDate_, but only if that policy was not already programmed before
+  or the original value of `mh`._ExpirationDate_ was equal or larger.
+  Otherwise exception `ace_exc_invalid` is raised.
 --
 +
 On RV32:
@@ -1744,8 +1798,7 @@ address `%offset(Xs)` and copies them to the input buffer, starting at offset
 +
 If `Xl` == 0, the operation is a NOP.
 +
-If `Xl` is greater than `aceiobuftop` - `acestart`[XLEN-9:0], ACE error
-ace_err_invalid_value is raised.
+If `Xl` is greater than `aceiobuftop` - `acestart`[XLEN-9:0], exception `ace_exc_invalid` is raised.
 +
 The intended usage of `ace.input` and `ace.output` is explained in detail in
 <<ACE-usage-input-output>>.
@@ -1801,7 +1854,7 @@ This is the output operation corresponding to `ace.input`.
 +
 If `Xl` == 0, the operation is a NOP.
 +
-If `Xl` is greater than `aceiobuftop` - `acestart`[XLEN-9:0], ACE error ace_err_invalid_value is raised.
+If `Xl` is greater than `aceiobuftop` - `acestart`[XLEN-9:0], exception `ace_exc_invalid` is raised.
 
 _Properties_::
 Possibly modifies state: *YES*. +
@@ -2008,22 +2061,22 @@ function ace.prov(&CR, M[]) = {
 
   acestart[XLEN-1:XLEN-1] ← 1;
   acestart[XLEN-2:XLEN-8] ← bin(CR,7);
-  CR.Metadata.StateNumber ← ace_state_interrupted;
+  CR.Metadata.State ← ace_state_interrupted;
 
   if (z == 0)
-    error ace_err_unimpl;
+    raise exception ace_exc_unimpl;
 
   if (there is not enough memory for the algorithm encoded in the Metadata)
-    raise exception ace_excp_memory;
+    raise exception ace_exc_memory;
 
   if (Metadata is inconsistent)
-    error ace_err_invalid_value;
+    raise exception ace_exc_invalid;
 
   - Complete Metadata parsing.
   // NEXT OPERATION PREEMPTIBLE WITH acestart[XLEN-9:0] IN [8 .. Z+7]
   - Sequentially read and parse the z bytes at M+8.
 
-  CR.Metadata.StateNumber ← ace_state_initial;
+  CR.Metadata.State ← ace_state_initial;
   acestart[XLEN-1:XLEN-8] ← zeros(8);
 }
 ----
@@ -2189,12 +2242,12 @@ The import algorithm needs some special care:
  ** If strictly fewer than four bytes are read before the instruction is
     interrupted, ACE leaves `acestart` at 0, and the instruction will be
     restarted upon resumption.
- ** If four bytes or more have been read, the value of `mh.StateNumber` in the
+ ** If four bytes or more have been read, the value of `mh.State` in the
     SCC is known. In this case, the instruction may be restarted WITH
     acestart[XLEN-9:0] {ge} 4 recording the amount of data read.
 * At the beginning of the import operation, the hardware saves the
-  `StateNumber` value from the original metadata and sets `mh.StateNumber <-
-  ace_state_invalid`. At the end of the import operation, `mh.StateNumber` is
+  `State` value from the original metadata and sets `mh.State <-
+  ace_state_invalid`. At the end of the import operation, `mh.State` is
   set to the saved value.
 ** Since context switching code cannot export a partially imported CR when
    saving the state, it will clear the CR instead, forcing the hardware to
@@ -2217,7 +2270,7 @@ on how the ACE unit is implemented.
 // *** The hardware will only resume the import operation if the flag is set,
 // otherwise it will restart the operation.
 // CR.importing is always false except during import.
-// During import, the original StateNumber is saved and temporarily replaced in the CR
+// During import, the original State is saved and temporarily replaced in the CR
 // with ace_state_invalid to prevent any USAGE operations.  Any operation that writes
 // to the CR will set CR.importing to false: this allows context switching code to reuse
 // the CR and, upon returning to the interrupted import, the hardware will detect
@@ -2243,9 +2296,9 @@ function ace.import(&CR, M[]) = {
   // PREEMPTIBLE MEMORY READ, WITH acestart[XLEN-9:0] FROM 0 TO 7
   tmp[63:0] ← M[0 .. 7];         // read Metadata Header
 
-  saved_SN ← tmp[63:0].StateNumber;
+  saved_SN ← tmp[63:0].State;
   CR.Metadata ← tmp[63:0];
-  CR.Metadata.StateNumber ← ace_state_interrupted;
+  CR.Metadata.State ← ace_state_interrupted;
 
   & mh = CR.Metadata;
 
@@ -2253,10 +2306,10 @@ function ace.import(&CR, M[]) = {
   z ← z + mh._AdditionalData_ * 8;
 
   if (z == 0)
-    error ace_err_unimpl;
+    raise exception ace_exc_unimpl;
 
   if (there is not enough memory for the algorithm encoded in the Metadata)
-    raise exception ace_excp_memory;
+    raise exception ace_exc_memory;
 
   num_blocks ← ceil(z / 16);
   last_block_fractional : Boolean ← (z % 16 != 0);
@@ -2293,15 +2346,20 @@ function ace.import(&CR, M[]) = {
   }
   tmp ← AESE(enc_key, 0 @ tmp[126:0]);
 
-  if (tmp != SIV)
-    error ace_err_import_auth;
+  if (tmp != SIV) {
+    mh ← zeros(64)
+    mh.State ← ace_state_import_auth
+    Clear all Contents and possibly release their memory
+    acestart[XLEN-1:XLEN-8] ← zeros(8);
+    return
+  }
 
   - Now the content can be deserialized.
   - This includes computing any derived values not saved as part of the SCC,
   - as well as creating shares for threshold implementations.
 
-  // FINALLY, restore the StateNumber from the SCC
-  mh.StateNumber ← saved_SN;
+  // FINALLY, restore the State from the SCC
+  mh.State ← saved_SN;
 
   acestart[XLEN-1:XLEN-8] ← zeros(8);
 }
@@ -2336,6 +2394,11 @@ Similar to `ace.export`, `ace.import` requires implementation-specific
 
 [[ACE-invalidation]]
 === CR Invalidation
+
+[WARNING]
+====
+This section myst be replaced with a broader treatment of _error states_.
+====
 
 {empty}
 (((ACE, algorithm, invalid state)))
