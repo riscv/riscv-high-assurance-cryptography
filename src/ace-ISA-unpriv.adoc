@@ -420,7 +420,7 @@ The architected values of _State_ which are common to all algorithms are defined
 |===
 | Value | Mnemonic                  | State Name     | Description
 |   0   | `ace_state_off`           | _Off_          | The CR is not configured.
-|   1   | `ace_state_initial`       | _Initial_      | The state of a CC immediately after provisioning or reset; ready for operation.
+|   1   | `ace_state_initial`       | _Initial_      | The state of a CC immediately after provisioning; ready for operation.
 |  21   | `ace_state_success`       | _Success_      | Algorithm completed successfully. No further cryptographic operations may be performed until the CC is reset.
 |  22   | `ace_state_failure`       | _Failure_      | Failure in an algorithm, usually an authentication failure in AE(AD) algorithms or a signature verification failure. No further cryptographic operations may be performed until the CC is reset.
 |===
@@ -439,8 +439,6 @@ The architected values of _State_ which are common to all algorithms are defined
 |  31   | `ace_state_invalid`         | _Invalid_       | Invalid/invalidated state, for instance because of the use of an invalid value (argument, state, or metadata).
 |===
 
-====== State Classes
-
 The state with value 0 is termed _Off_, and is used to indicate that the CR is not configured.
 The Metadata Header in this case is the all-zeros value `zeros(64)`.
 
@@ -451,40 +449,23 @@ State 23, i.e., _Partial_Config_, is used to report that provisioning or import 
 
 States 24-31 are termed _error states_, and are used to report certain specific ACE errors.
 
-Explicitly setting an error state is done by `ace.setst` (cf. <<ACE-instruction-setst>>) with no auxiliary input.
+Explicitly setting an error state is done by the instruction `ace.setst` (cf. <<ACE-instruction-setst>>) with no auxiliary input.
 
 NOTE: Error conditions that lead to exceptions are treated in <<ACE-exceptions-raised>>.
-
-====== General Rules
-
-In States _Success_ and _Failed_, only the following ACE instructions are permitted: configuration, export, `ace.clear`, `ace.size`, `ace.setst`, and `ace.getst`.  From these two states, `ace.setst` is only permitted to transition to _Initial_ (or _Off_ if used as `ace.clear`).
-
-Unless an algorithm's specification explicitly states otherwise, a transition from any valid state to _Initial_ using instruction `ace.setst` is always permitted.
-A transition from any state, including _Off_, to _Initial_ is only permitted as the result of
-
-Provisioning allows transitioning from _any_ state, including _Off_, to _Initial_
-
-Import allows transitions from _any_ state, including _Off_, to any state allowed by the algorithm encoded in the imported SCC.
-
-With exception to the above two cases, transitioning from an interrupted or error state to _Initial_ is not allowed.
-
-When a CR transitions to an error state, the content of the CR becomes invalid and is erased.
-The corresponding internal resources may also be released, so that the CR's only information is the Metadata Header.
-In this case, exporting the CR will only export the metadata, and the SCC will be just 24 bytes long.
-The resulting SCC can be reimported, so that user software may be able to take the necessary actions even after a context switch.
 
 If an algorithm defines 22 or fewer valid states (including _Initial_, _Success_, and _Failure_), the current state is stored in the _State_ field.
 For algorithms with more than 22 valid states, additional state information resides in the Content section.
 In all cases, the _State_ field must be set to _Initial_ (1), _Success_ (21), _Failure_ (22), or to one of the error values 23–31 while the CC is in the corresponding state. These states must be unambiguously identifiable from the _State_ field alone, without inspecting the Content.
 
-Attempts to _use_ a CR in an error state, be it invalidated or expired, will
-not perform any operation in the ACE unit, and in particular they will leave
-the _State_ field (now containing an error code) unchanged.
+When a CR transitions to an error state, the content of the CR is considered invalid and therefore becomes empty.
+The internal resources of the Content may also be released.
+The CR's only information is the Metadata Header, and exporting the CR will only export the metadata.
+This SCC can be reimported, to allow software to take the necessary actions even after a context switch.
 
-Any _usage_ instruction that would violate the Usage Control policies will
-not perform any operation in the ACE unit and set _State_ to `ace_state_priv_viol`.
+Attempts to _use_ a CR in any error state will not perform any operation, and in particular they leave the _State_ field unchanged.
 
-//If an algorithm is not implemented in the ACE hardware, an exception is raised with `mcause` = `ace_exc_not_impl` (cf. <<ACE-exception-codes>>). The handler may either implement the algorithm in software or just the _State_ metadata field to `ace_state_not_impl`.
+Any _usage_ instruction that would violate the Usage Control policies will not perform its operation, and will set _State_ to `ace_state_priv_viol` instead.
+
 
 // ////////////////////////////////////////////////////////////////////
 
