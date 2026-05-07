@@ -70,9 +70,9 @@ Alternatively, an implementation may adopt a more precise exception model: halti
 The architecture permits all these approaches and fully specifies the behavior of ACE instructions when interrupted at admissible points.
 
 Furthermore, the following model will help understanding the architecture while reading the spec.
-From the logical point of view, for each of the 32 CRs, ACE maintains an entire 64-bit Metadata record
+From the logical point of view, for each of the 32 CRs, ACE maintains an entire 64-bit Metadata Section
 as well as an offset into an internal memory for the storage of the Content of each configured CR.
-If a CR is not configured, the information in the metadata record will reflect that.
+If a CR is not configured, the information in the Metadata Section will reflect that.
 The actual implementation may considerably differ.
 
 // ////////////////////////////////////////////////////////////////////
@@ -251,8 +251,61 @@ instructions are controlled by the `aceiobuflen` (<<ACE-CSR-aceiobuflen>>) and
 
 // ////////////////////////////////////////////////////////////////////
 
-[[ACE-Metadata]]
-==== Metadata Header
+////
+[wavedrom, , svg]
+....
+{
+  reg: [
+    {
+      bits: 8,
+      name: "Metadata Section"
+    },
+    {
+      bits: 16,
+      name: "Fixed Architected Data Section"
+    },
+    {
+      bits: 16,
+      name: "Variable Architected Data Section"
+    },
+    {
+      bits: 24,
+      name: "Variable Implementation-Defined Data Section"
+    }
+  ],
+  config: {
+    bits: 64,
+    lanes: 1,
+    fontsize: 12
+  },
+  head: {
+    text: [
+      "tspan",
+      {
+        "text-anchor": "middle",
+        x: 440,
+        y: -20
+      },
+      "⏞ Maximal Content Length ⏞"
+    ]
+  },
+  foot: {
+    text: [
+      "tspan",
+      {
+        "text-anchor": "middle",
+        x: 520,
+        y: 60
+      },
+      "⏟ Content ⏟"
+    ]
+  }
+}
+....
+////
+
+[[ACE-data-formats-intro]]
+==== Data Formats
 
 ACE defines two external CC formats:
 
@@ -264,11 +317,16 @@ ACE defines two external CC formats:
 {empty}
 (((Cryptographic Context,Metadata)))
 (((Cryptographic Context,Metadata,Header)))
-Both formats begin with a 64-bit Metadata Header, whose format is defined
-below.
+Both formats begin with a 64-bit Metadata Section, whose format we define next.
 
-[[ACE-Metadata-header]]
-.Format of the Metadata Header
+
+[[ACE-Metadata]]
+==== Metadata Section
+
+The following table lists the fields of the 64-bit Metadata Section.
+
+[[ACE-metadata-record]]
+.Format of the Metadata Section
 [width="100%",cols="^9%,^7%,14%,70%",options="header"]
 |===
 | Field   | Width | Name              | Description
@@ -279,7 +337,7 @@ below.
 | [20:16] | 5     | _State_           | Current state of teh CR/algorithm, encoded as an integer.
 | [28:21] | 8     | _Locality_        | Zero, or an index determining a Locality Secret. See <<ACE-Localities>>.
 | [31:29] | 3     | _UsagePolicy_     | Usage (Control) Policy. Bits 29, 30, and 31, when set, disallow CC usage in U-mode, (V)S-mode, and H-mode, respectively.
-| [45:32] | 14    | _AddDataSize_     | If non-zero, indicates an additional data segment appended to Content. The length of this additional Data segment is _AddDataSize_ × 8 bytes (up to 128 KiB).
+| [45:32] | 14    | _AddDataSize_     | If non-zero, indicates an additional data section appended to Content. The length of this additional data section is _AddDataSize_ × 8 bytes (up to 128 KiB).
 | [63:46] | 18    | _ExpirationDate_  | If non-zero, the expiration date of this CC. See <<ACE-Metadata-expiration-date>>.
 |===
 
@@ -375,7 +433,7 @@ The architected values of _State_ which are common to all algorithms are defined
 |===
 
 The state with value 0 is termed _Off_, and is used to indicate that the CR is not configured.
-The metadata record in this case is the all-zeros value `zeros(64)`.
+The Metadata Section in this case is the all-zeros value `zeros(64)`.
 
 All states in the range 1-22 are termed _valid_. This includes both _Success_ and _Failure_ states, which must be used for
 normal termination of an algorithm in the cases of its successful completion or failure.
@@ -389,7 +447,7 @@ A transition from any state, including _Off_, to _Initial_ is only permitted as 
 Transition from an interrupted or error state to _Initial_ is not allowed.
 
 When a CR transitions to an error state, the content of the CR becomes invalid and is erased.
-The corresponding internal resources may also be released, so that the CR's only information is the metadata record.
+The corresponding internal resources may also be released, so that the CR's only information is the Metadata Section.
 In this case, exporting the CR will only export the metadata, and the SCC will be just 24 bytes long.
 The resulting SCC can be reimported, so that user software may be able to take the necessary actions even after a context switch.
 
@@ -511,29 +569,16 @@ supported or not enabled.
 [[ACE-extra-content]]
 ===== _AddDataSize_ Field
 
-The Content of a CR consists of two parts:
+The _AddDataSize_ Metadata field records the length of the _Additional Data Section_ of the content, which is a variable-size part which may
+depend on the state of the algorithm.
 
-. A fixed-size part, whose length is architected and is determined by the specified algorithm; and
-. A variable-size part, which may hold optional architected algorithm-specific data depending on the state of the latter, or implementation-dependent data.
+The format of the _Additional Data Section_ is described in <<ACE-data-formats>>.
 
-The first part is called the _Fixed Data Segment_ of the Content.
-Its length depends only on the _Algorithm_, _AlgorithmPolicy_, and _KeyType_ fields of the Metadata Record.
+The first eight bytes of the Implementation-Dependent Additional Data Section of the Content, if not empty, always hold a copy of the `acemarchid` CSR (<<ACE-CSR-acemarchid>>) of the originating machine, and are counted within the length recorded by the _AddDataSize_ field.
+The importing implementation uses this value to determine whether any information in the Implementation-Dependent Data Section can be used.
 
-The second part is called the _Additional Data Segment_ of the Content.
-It is further divided in the _Architected_ Additional Data Segment and the _Implementation-Dependent_ Additional Data Segment.
-The latter always follows the first.
-The _Architected_ Additional Data Segment may depend, additionally, on the _State_ field of the Metadata Record.
-The _Implementation-Dependent_ Additional Data Segment may hold only _optional_ implementation-specific data, i.e., data that is not required for the correct functioning of the algorithm and that may only be used for purposes such as optimization.
-
-Any of the aforementioned parts may be empty.
-
-The _AddDataSize_ Metadata field records the length of the _entire_ Additional Data.
-
-The first eight bytes of the Implementation-Dependent Additional Data Segment of the Content, if not empty, always hold a copy of the `acemarchid` CSR (<<ACE-CSR-acemarchid>>) of the originating machine, and are counted within the length recorded by the _AddDataSize_ field.
-The importing implementation uses this value to determine whether any information in the Implementation-Dependent Data Segment can be used.
-
-It is the responsibility of the *algorithm* to determine the lengths of the two parts of the Additional Data Segment.
-If the Implementation-Dependent Additional Data Segment is not empty, the *implementation* will check the value of `acemarchid` stored therein to decide whether the Implementation-Dependent part can be used or should be ignored.
+It is the responsibility of the *algorithm* to determine the lengths of the two parts of the Additional Data Section.
+If the Implementation-Dependent Additional Data Section is not empty, the *implementation* will check the value of `acemarchid` stored therein to decide whether the Implementation-Dependent part can be used or should be ignored.
 
 [NOTE]
 ====
@@ -545,9 +590,9 @@ encryption and decryption);
 . Information, such as additional elliptic curve points or random numbers used by Elliptic Curve algorithms only in certain states;
 . any auxiliary data for side-channel-protected implementations, such as key shares or other data to accelerate share reconstruction.
 
-Examples 1., 2, and 4. are optional data, and therefore should be stored in the _Implementation-Dependent_ Additional Data Segment.
+Examples 1., 2, and 4. are optional data, and therefore should be stored in the _Implementation-Dependent_ Additional Data Section.
 
-The third example, however, describes information that is required for the correct functioning of the algorithm. Therefore, its format must be defined by the algorithm specification and the data should be stored in the _Architected_ Additional Data Segment.
+The third example, however, describes information that is required for the correct functioning of the algorithm. Therefore, its format must be defined by the algorithm specification and the data should be stored in the _Architected_ Additional Data Section.
 ====
 
 // ////////////////////////////////////////////////////////////////////
@@ -559,6 +604,57 @@ If non-zero, _ExpirationDate_ specifies the CC expiration time as a number of
 hours elapsed since the base date of January 1, 2027. The 18-bit field provides
 for a span of approximately 30 years (2^18^ hours). Future 128-bit metadata formats
 (encoded with _Algorithm_ = `ones(11)`) may support expanded time spans.
+
+// ////////////////////////////////////////////////////////////////////
+
+[[ACE-data-formats]]
+==== Formats of Provisioning Input, Sealed Cryptographic Context, and Content
+
+The format of the Provisioning Input (PI) is shown in <<ACE-provisioning-input>>.
+
+[[ACE-provisioning-input]]
+.Format of the Provisioning Input (PI), sections in order
+[options="header"]
+|===
+| Section                       | Size | Description
+| Metadata Section             | 64 bits | Contains the metadata information as described in <<ACE-Metadata>>.
+| Provisioning Content         | Depends only on the _Algorithm_, _AlgorithmPolicy_, and _KeyType_ fields of the Metadata Section. | Contains keys and other algorithm-specific information.
+|===
+
+The CR itself may contain significantly more information than the Provisioning Content.
+It is important to understand that this information may be categorized under different classes.
+
+Some information inside a CR may be easily reconstructed from other information, so there is no need to export it.
+In this case, an *algorithm* may choose to not include it into an SCC.
+
+Other data may be useful for performance purposes on some implementation and be expensive to recompute, more expensive than encrypting and storing it externally. In this case, an *implementation* may choose to export it in a custom format inside a SCC, to be able to reuse it efficiently, whereas the same data may be safely ignored by a different implementation if the latter receives the same SCC for import.
+
+[[ACE-SCC]]
+.Plaintext Sealed Cryptographic Context (SCC) Format, sections in order
+[options="header"]
+|===
+| Section                       | Size | Description
+| Metadata Section              | 64 bits | Contains the metadata information as described in <<ACE-Metadata>>.
+//
+| Content: _Fixed Data Section_ (Fixed Content)
+| Empty if the context is in an Error State, otherwise it depends only
+on the _Algorithm_, _AlgorithmPolicy_, and _KeyType_ fields of the Metadata Section. Always multiple of 64 bits.
+| Contains keys and other algorithm-specific information.
+//
+| Content: _Architected Additional Data Section_ (Architected ADS)
+| Empty if the context is in an Error State, otherwise it depends on the information contained in the Metadata and Fixed Data Sections.
+  Always multiple of 64 bits.
+| The data in this Section is necessary for the correct functioning of the algorithm.
+//
+| Content: _Implementation-Dependent Additional Data Section_  (Implementation ADS)
+| Empty if the context is in an Error State, otherwise it is implementation-dependent.
+  This size is a always multiple of 64 bits.
+| The data in this Section is _not_ necessary for the correct functioning of the algorithm.
+|===
+
+The second and third parts together of the Content form the _Additional Data Section_ of the Content.
+
+The Metadata _AddDataSize_ field specifies the size of the _Additional Data Section_ in 64-bit blocks, and it does not distinguish between the architected and implementation-dependent components. The architected order of the sections of the SCC guarantees that the sizes of the two components can be determined while reading and decrypting an SCC.
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -593,7 +689,7 @@ raise exception `ace_exc_out_of_mem`.
 It is up to the system software to manage the CRs by freeing internal ACE Unit space
 and retry the instruction.
 
-Errors are returned by setting an error code in the _State_ field of the metadata record of the CR.
+Errors are returned by setting an error code in the _State_ field of the Metadata Section of the CR.
 
 Attempting to configure a CR with a not implemented algorithm will
 raise exception `ace_exc_not_impl`, and the privileged code may either set
@@ -1300,7 +1396,7 @@ _Included in_::
 ==== ace.getmd
 
 _Synopsis_::
-Read the metadata record of a CR.
+Read the Metadata Section of a CR.
 
 _Mnemonic_::
 `ace.getmd Xd, Ks|K(Xs)`
@@ -1334,7 +1430,7 @@ destination is a GPR and Bit 30 is set to 1.
 _Description_::
 +
 --
-On RV64, the instruction copies the metadata record of a CR `Ks` or `K(Xs)` into GPRT `Xd`.
+On RV64, the instruction copies the Metadata Section of a CR `Ks` or `K(Xs)` into GPRT `Xd`.
 
 On RV32, `s` must be even, the register pair `X[d]` and `X[d+1]` is used as the destination,
 and  `(X[d+1] @ X[d])` replaces `Xd` in the RV64 description.
@@ -1444,11 +1540,11 @@ This instruction can be used to:
 * Restrict the usage of a CC (as stored in a CR) to specific modes; and
 * Add a Locality or replace a Locality with a stricter one.
 
-Let `mh` be the Metadata Header of the CC in the destination CR.
+Let `mh` be the Metadata Section of the CC in the destination CR.
 
 On RV64, the semantics of the instruction are:
 
-* `Xs` follows the format of the Metadata Header.
+* `Xs` follows the format of the Metadata Section.
 Only the fields _AlgorithmPolicy_, _SCProtection_, _Locality_, _UsagePolicy_,
 and _ExpirationDate_ of `Xs` may be defined. All other fields must be 0, else
 exception `ace_exc_invalid` is raised.
@@ -1675,7 +1771,7 @@ There are four Forms of the `ace.size` instruction:
 
 [upperalpha]
 . `ace.size Xd, Ks|K(Xs)` - Size from a context.
-. `ace.size Xd, Xs` - Size from Metadata Header.
+. `ace.size Xd, Xs` - Size from Metadata Section.
 . `ace.size.internal Xd, Xs` - Internal capacity estimate for a CR.
 . `ace.size.iobuf Xd, Xs` - Internal capacity estimate for the ACEIOBUF.
 
@@ -1705,7 +1801,7 @@ The `F` field and the `r` bit may assume the following values:
 
 * `F` = `0b00`, `r` = `0` {implies} Form A: Size from a context given as `Ks`.
 * `F` = `0b00`, `r` = `1` {implies} Form A: Size from a context given indirectly as `K(Xs)`.
-* `F` = `0b01`, `r` = `0` {implies} Form B: Size from Metadata Header.
+* `F` = `0b01`, `r` = `0` {implies} Form B: Size from Metadata Section.
 * `F` = `0b11`, `r` = `0` {implies} Form C: Internal capacity of the ACEIOBUF.
 
 _Description_:: {empty}
@@ -1922,20 +2018,20 @@ _KeyType_ fields within the Metadata, and is specified in <<ACE-algorithms>>
 for each architected algorithm.
 
 Format of Provisioning Input:::
-`bytes{nbsp}[{nbsp}0 .. 7{nbsp}{nbsp}{nbsp}]{nbsp}{nbsp}` Metadata Header. +
+`bytes{nbsp}[{nbsp}0 .. 7{nbsp}{nbsp}{nbsp}]{nbsp}{nbsp}` Metadata Section. +
 `bytes{nbsp}[{nbsp}8 .. u-1{nbsp}]{nbsp}{nbsp}` PI Content: Keys and other secrets. Here, `u` = `len_in_bytes(PI)`. +
 
 {empty}
 (((Cryptographic Context, Sealed)))
 The SCC format is used when exporting a CC from a CR and also to re-import the
 CC into a CR. Its size must be a multiple of 8 bytes. The first 8 bytes contain
-the Metadata Header, as defined in <<ACE-Metadata>>. The format and length of
+the Metadata Section, as defined in <<ACE-Metadata>>. The format and length of
 the exported Content are algorithm-specific (<<ACE-algorithms>>) and, excluding
 the Additional Data of length `mh`._AddDataSize_, are determined solely by
 the _Algorithm_, _KeyType_, and _AlgorithmPolicy_ fields in the Metadata.
 
 Format of Sealed Cryptographic Context:::
-`bytes{nbsp}[{nbsp}{nbsp}0 .. 7{nbsp}{nbsp}{nbsp}]{nbsp}{nbsp}` Metadata Header, not encrypted. +
+`bytes{nbsp}[{nbsp}{nbsp}0 .. 7{nbsp}{nbsp}{nbsp}]{nbsp}{nbsp}` Metadata Section, not encrypted. +
 `bytes{nbsp}[{nbsp}{nbsp}8 .. 23{nbsp}{nbsp}]{nbsp}{nbsp}` SIV produced by the encryption method (128 bits). +
 `bytes{nbsp}[{nbsp}24 .. u-1{nbsp}]{nbsp}{nbsp}` Encrypted Serialized Content of the CR. Here, `u` = `len_in_bytes(SCC)`. +
 
@@ -2000,11 +2096,11 @@ import instruction, the other shares would be generated.
 [[ACE-size-functions]]
 ==== Notation for the Size Functions
 
-Let `mh` denote a Metadata Header. In order to determine the total lengths of
+Let `mh` denote a Metadata Section. In order to determine the total lengths of
 the PI and of the SCC, the implementation provides the following functions or
 an equivalent mechanism:{empty}
 
-. ``MH_size(mh)`` returns the byte length of the Metadata Header. In the
+. ``MH_size(mh)`` returns the byte length of the Metadata Section. In the
   current specification, it is always 8.
 
 . ``PI_content_size(mh)`` returns the byte length of the content section of a
@@ -2199,7 +2295,7 @@ function ace.export(&CR, M[]) = {
 
   // CR.content[] includes the optional Additional Data at the end
   CR.content = array of z bytes;
-  // In external memory: Metadata Header, then SIV, then Content
+  // In external memory: Metadata Section, then SIV, then Content
   M = array of MH_size(mh) + 16 + z bytes.
 
   local let last_block_fractional : Boolean ← z % 16 != 0;
@@ -2250,7 +2346,7 @@ interrupted after the `montmul` operation, the value of `acestart` will be
 
 The import algorithm needs some special care:
 
-* The first block read from memory by the operation is the Metadata Header
+* The first block read from memory by the operation is the Metadata Section
   `mh`:
  ** If strictly fewer than four bytes are read before the instruction is
     interrupted, ACE leaves `acestart` at 0, and the instruction will be
@@ -2307,7 +2403,7 @@ function ace.import(&CR, M[]) = {
   acestart[XLEN-2:XLEN-8] ← bin(CR,7);
 
   // PREEMPTIBLE MEMORY READ, WITH acestart[XLEN-9:0] FROM 0 TO 7
-  tmp[63:0] ← M[0 .. 7];         // read Metadata Header
+  tmp[63:0] ← M[0 .. 7];         // read Metadata Section
 
   saved_SN ← tmp[63:0].State;
   CR.Metadata ← tmp[63:0];
@@ -2417,7 +2513,7 @@ This section is being replaced with a broader treatment of _error states_.
 (((ACE, algorithm, invalid state)))
 (((Context Register, invalidation)))
 In certain situations, an ACE instruction may cause a CR to enter an error state.
-Such states are characterized by values of the State field of the metadata record as in <<ACE-states-error>>.
+Such states are characterized by values of the State field of the Metadata Section as in <<ACE-states-error>>.
 This may occur also as a consequence of an explicit `ace.setst` instruction.
 
 This means that the following happens:
@@ -2425,7 +2521,7 @@ This means that the following happens:
 * The content of the CR may be in an undefined state, and can no longer be used.
   The implementation may release the internal resources used by the Content of the
   CR, including any Additional Data, without the need to use `ace.clear` first.
-  In the latter case, the _AddDataSize_ field of the metadata record is zeroed.
+  In the latter case, the _AddDataSize_ field of the Metadata Section is zeroed.
 
 * In particular, if the new State is `ace_state_invalid`, we say that the CR is _invalidated_.
 
