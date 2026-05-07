@@ -228,8 +228,6 @@ This extends also to the use of replacement sequences for `ace.exec` and `ace.se
 
 In particular, any configuration instruction, `ace.export` and `ace.clone` may with either the CR as source or destination, and `ace.clear`, are always allowed.
 
-
-
 [[ACE-usage-input-output]]
 ==== Usage of `ace.input` and `ace.output` to Replace Vector Inputs and Outputs
 
@@ -353,13 +351,12 @@ System Keys will change all the algorithms described here in the following way:
   index is still used to refer to an entry in the SKT that contains multiple
   keys—and thus a single 64-bit value in the PI and SCC.
 
-//
+// ////////////////////////////////////////////////////////////////////
 
 [[ACE-states-symmetric]]
 === States for the Symmetric Algorithms Defined in this Specification
 
-The following table, together with <<ACE-states-valid>>, defines the
-states used by the symmetric algorithms in this specification.
+The following table, together with <<ACE-states-valid>>, defines the states used by the symmetric algorithms in this specification.
 
 [[ACE-state-constants-symmetric]]
 .Constants defining CC states for symmetric algorithms
@@ -2454,20 +2451,19 @@ the customization string is left to the user.
 
 Elliptic Curve Asymmetric Algorithms provide following functionality:
 
-. Scalar multiplication with known and unknown base point. This can be used to
-  implement Diffie-Hellman key exchange.
+. Scalar multiplication with known and unknown base point.
+//This can be used to implement Diffie-Hellman key exchange.
 . ECDSA/EdDSA signature generation and verification.
-. Support for Key Encapsulation Mechanisms (KEMs) and Public-Key Encryption
-  (PKE) schemes.
 
-The last point is very difficult to implement in full generality, since there
+Support for Key Encapsulation Mechanisms (KEMs) and Public-Key Encryption (PKE) schemes
+is very difficult to implement in full generality, since there
 are several options, with multiple choice of KDF, hash function, and input
 formats. In most cases, covering all options would be impractical. Only the
 Chinese SM2 standards fully specify an integrated encryption scheme
-cite:[GMT-0003-4-2012]–a later revision of the present specification may add
-direct support for the corresponding algorithm. In general, point
-multiplication is the basic mechanism by which KEM and PKE schemes are
-implemented and this implies that the key values derived using these must be
+cite:[GMT-0003-4-2012].
+We therefore only provide scalar multiplication and the implementation
+of specific KEM and PKE schemes is left to the user code.
+This implies that the key values derived using these must be
 present in the memory of the environment deriving them, albeit shortly if these
 are then only used to provision a CR.
 
@@ -2479,7 +2475,7 @@ are then only used to provision a CR.
 ////
 
 When an elliptic curve is provisioned into a CR, the default base point (“generator”) according to the standards listed is configured as the `Generator` field in the CR.
-This field may be overwritten, and when `ace.setst` is issued on the CR with next state `initial` the default base point may be restored.
+This field may be overwritten, and when `ace.setst` is issued on the CR with next state _Initial_, the default base point may be restored.
 
 All values (integers, coordinates, etc.) are in little-endian format.
 
@@ -2514,7 +2510,9 @@ The parameters for the defined curves are:
 +
 The algorithms may require non-compressed or compressed points as inputs and outputs, depending on the value of `u`.
  +
-All curves currently used are defined over prime fields. Therefore, all-ones string can be used in the coordinates of a point to represent the point at infinity, since the corresponding value is larger than the modulus, and therefore does not represent any valid point on the curve.
+All curves currently used are defined over prime fields, and no prime is of the form 2^`b`^-1 9`b` is even).
+Therefore, the all-ones string does not represent any valid field value, and these are used
+as the coordinate(s) of a point to represent the point at infinity.
 
 //
 
@@ -2525,9 +2523,7 @@ NOTE: In the Metadata, _Algorithm_ only defines a curve.
 _AlgorithmPolicy_ enables signature generation (_AlgorithmPolicy_[0]) and verification (_AlgorithmPolicy_[1]), where all four combinations are admissible.
 +
 * *Internal State* (Content):
- ** `IsGenInfty`: Bool.
  ** `HasSecondPt`: Bool.
- ** `IsSecondPtInfty`: Bool.
  ** `HasScalar`: Bool.
  ** `HasSignature`: Bool.
  ** `HasHash`: Bool.
@@ -2552,11 +2548,10 @@ _AlgorithmPolicy_ enables signature generation (_AlgorithmPolicy_[0]) and verifi
 [cols="^7%,<33%,<30,<30",width="100%",options="header"]
 |===
 |   Pos.  | Size in Bytes  2+| Field
-.5+| i .5+| 2                | Bit 0: `HasScalar`     | Bit 1: `IsGenInfty`
-                            <| Bit 2: `HasSecondPt`  <| Bit 3: `IsSecondPtInfty`
-                            <| Bit 4: `HasSignature` <| Bit 5: `HasHash`
-                            <| Bit 6: `HasRndNum`    <| Bit 7: `OutputType`
-                            <| Bit 8-15: Reserved    <| {empty}
+.4+| i .4+| 2                | Bit 0: `HasScalar`     | Bit 1: `HasSecondPt`
+                            <| Bit 2: `HasSignature` <| Bit 3: `HasHash`
+                            <| Bit 4: `HasRndNum`    <| Bit 5: `OutputType`
+                            <| Bit 6-15: Reserved    <| {empty}
 |    ii   | 2              2+| `Progress`
 |   iii   | 4              2+| Padding
 |    iv   | ``ub``/8       2+| `Generator`, X coordinate, followed by Y coordinate if `u=2`.
@@ -2608,8 +2603,8 @@ ECC algorithms define:
  ** _Set_Hash_ (8)
  ** _Set_SecondPt_ (9)
  ** _Set_Signature_ (10)
- ** _output_ (11)
- ** _Absorb_S1_ (12)
+ ** _Output_ (11)
+// ** _Absorb_S1_ (12)
 --
 +
 
@@ -2619,16 +2614,14 @@ ECC algorithms define:
 
  ** _Initial_ -> _Set_Generator_, _Set_Scalar_, _Set_Hash_, _Set_SecondPt_, _Sign_Generate_, _Set_Signature_.
  ** One can freely transition between _Set_Generator_, _Set_Scalar_, _Set_Hash_, and _Set_SecondPt_.
- ** From any of _Initial_, _Set_Generator_, _Set_Scalar_, _Set_Hash_, _Set_SecondPt_ ->
+ ** From any of _Initial_, _Set_Generator_, _Set_Scalar_, _Set_Hash_, _Set_SecondPt_ -> one of the following states:
   *** _Point_Mul_ only if `HasScalar`;
   *** _Sign_Generate_ only if `HasSecondPt`, and `HasHash`;
   *** _Sign_Verify_ only if `HasScalar`, `HasSecondPt`, `HasHash`, and `HasSignature`.
-// ** From any valid state to _get_secondpt_infty_ only if `IsSecondPtInfty` is true.
-// ** _Point_Mul_ -> _get_secondpt_infty_, _output_
- ** _Point_Mul_ -> _output_
- ** _Sign_Generate_ -> _output_ -> _Success_.
+ ** _Point_Mul_ -> _Output_.
+ ** _Sign_Generate_ -> _Output_ -> _Success_.
  ** _Sign_Verify_ -> _Success_ or _Failure_.
- ** If `HasSecondPt` -> _Absorb_S1_.
+// ** If `HasSecondPt` -> _Absorb_S1_.
 
 [none]
 * In State _Set_Generator_ we can set a group generator, or a default one.
@@ -2694,7 +2687,7 @@ the Boolean variable ``Has``__Var__ is set when all operations required in State
   *** A Form A `ace.setst` does not modify these states.
   *** `Signature` and the corresponding Boolean `HasSignature` are always reset.
 
-//  ** If `IsGenInfty` is not true, `ace.derive` can be called, depending on the type of the curve, once or twice, to create an encryption or decryption CR and a CR for the computation of a MAC. The details for each defined typs of curve are explained next.
+// ////////////////////////////////////////////////////////////////////
 
 ////
 ===== Key Derivation Options
@@ -2805,11 +2798,11 @@ State Machine:::
 * *States:*
 
 . _Initial_
-. _set_KIN_
-. _absorb_label_
-. _absorb_context_
-. _output_
-. _completed_
+. _Set_KIN_
+. _Absorb_Label_
+. _Absorb_Context_
+. _Output_
+. _Completed_
 
 * *Allowed State Transitions:*
 
@@ -2826,7 +2819,7 @@ Process:::
 . `n` <- {lceil} `L/h` {rceil}
 . If `n` > 2^`r`^-1 then output an error indicator and stop
 . `i`  <- 1
-. foreach Form C ``ace.exec`` while in state _output_
+. foreach Form C ``ace.exec`` while in state _Output_
 .. if `i` > `n` then
 .. {kappa} := `PRF`(`KIN`, `bin(i,r) || Label || 0x00 || Context || bin(L,j)`)
 .. `bits` <- min(`h`, `L` - ``i`` * ``h``)
