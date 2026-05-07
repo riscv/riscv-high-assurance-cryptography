@@ -121,6 +121,12 @@ not completely defined or has some ambiguity because of the lack of a standard.
 
 //
 
+=== Padding
+
+As a general rule, inputs shorter than a full vector length must be handled by the caller.
+The caller is responsible for proper padding and for passing the actual input length to the algorithm at the appropriate places using the correct instructions, usually `ace.setst`.
+An exception applies when an algorithm specification defines such handling itself for cryptographic security reasons.
+
 === Definition of an Algorithm in ACE
 
 Each algorithm is fully defined by the following information:
@@ -183,40 +189,46 @@ The state machine is defined by the following information:
 
 //
 
-The instructions permitted in each algorithm state are typically `ace.exec` and
-`ace.setst`, though this is not a general rule. For `ace.exec`, only one of its
-forms (see <<ACE-instruction-exec>>) is allowed per state, along with the
-corresponding replacement sequence defined in <<ACE-replacement-instructions>>.
+The instructions permitted in each algorithm state are typically `ace.exec` and `ace.setst`, though this is not a general rule. For `ace.exec`, only one of its Forms (see <<ACE-instruction-exec>>) is allowed per state, along with the corresponding replacement sequence defined in <<ACE-replacement-instructions>>.
 
-If a Form of `ace.exec`, or `ace.setst` not explicitly allowed in the current
-algorithm state is used, then an _illegal instruction exception_ is raised.
-In this case, we expect the privileged code to invalidate the CR, however other
-behaviours, such as killing the process, are also acceptable.
-
-If a non-allowed state transition is requested in `ace.setst`, including
-requesting encryption or decryption from a CC not allowing it, the
-CR is invalidated.
-
-Pseudocode is provided to illustrate the software implementation of
-ACE-supported algorithms using the ACE ISA. For clarity, the pseudocode
-generally uses fixed parameters and omits the `ace.exec` Forms A-C replacement
-sequences. The examples are non-normative.
+Pseudocode is provided to illustrate the software implementation of ACE-supported algorithms using the ACE ISA.
+For clarity, the pseudocode generally uses fixed parameters and omits the `ace.exec` Forms A–C replacement sequences.
+The examples are non-normative.
 
 [NOTE]
 ====
-In many algorithms, an `ace.exec` or `ace.setst` operation could logically
-imply a state change. For example, after setting an IV or nonce in an AEAD
-mode, the instruction might naturally transition to a subsequent state.
-Deviations from this behavior may be necessary to avoid security issues. An
-example is given by the automatic transitions from hash finalization to
-verification, or from hash verification to the _Success_ state
-(<<ACE-algorithms>>).
+In certain circumstances, executing an `ace.exec` instruction may logically imply a state change.
+Similarly, an `ace.setst` instruction may cause a transition to a different state than the one specified in the instruction itself.
+This is typically motivated by security considerations—to prevent state manipulation by a malicious caller—or to achieve more compact code.
+
+For example, after setting an IV or nonce in an AEAD mode, the instruction may automatically transition to a plaintext or ciphertext processing state. Another common example is hash or MAC verification: after `ace.setst` is issued with an `ace_state_hash_verify` immediate as the next state and the value to be verified as the additional parameter, the algorithm transitions to either _Success_ or _Failure_.
 ====
 
 // ////////////////////////////////////////////////////////////////////
 
 [[ACE-generic-rules]]
 === Generic Rules
+
+// ////////////////////////////////////////////////////////////////////
+
+[[ACE-disallowed]]
+==== Disallowed Instructions and CR invalidation
+
+Under any of the following conditions, an _illegal instruction exception_ is raised, and the CR is invalidated:
+
+. A usage instruction that may modify the state of a CR is issued,
+
+. Any Form of `ace.exec` or `ace.setst` is issued, or
+
+. A state transition is requested in `ace.setst`
+
+that are not explicitly allowed by the current state of the algorithm encoded in the CC in the CR.
+
+This extends also to the use of replacement sequences for `ace.exec` and `ace.setst` as defined in the next section.
+
+In particular, any configuration instruction, `ace.export` and `ace.clone` may with either the CR as source or destination, and `ace.clear`, are always allowed.
+
+
 
 [[ACE-usage-input-output]]
 ==== Usage of `ace.input` and `ace.output` to Replace Vector Inputs and Outputs
@@ -225,7 +237,8 @@ When ACEIOBUF is implemented, in all algorithms the following applies: any
 occurrence of the “Original Instructions” in <<ACE-replacement-instructions>>
 may be substituted by the corresponding “Replacement Sequence” where
 `ace.input` and `ace.output` instructions are used in place of the vector
-register inputs and outputs, even if this is not explicitly written each time.
+register inputs and outputs.
+The use of such Replacement Sequences is implied in all algorithms and not explicitly written each time.
 
 [[ACE-replacement-instructions]]
 .Replacement sequences for `ace.exec` and `ace.setst` using `ace.input` and `ace.output`
@@ -245,23 +258,15 @@ register inputs and outputs, even if this is not explicitly written each time.
 // `2: ace.derive{nbsp}Kd\|K(Xd), Ks1\|K(Xs1)` +
 |===
 
-The only operations performed by `ace.input` and `ace.output` are to provide
-the inputs to the cryptographic operations and read out their output. No
-computation is performed on the data by `ace.input` and `ace.output`. The
-entirety of the computations and internal state changes of the `ace.exec` and
-`ace.setst` operations remains in the `ace.exec` and `ace.setst` operations
+The sole functions of `ace.input` and `ace.output` are to supply inputs to cryptographic operations and to read out their outputs. No computation is performed on the data by these instructions. All computations and internal state changes of `ace.exec` and `ace.setst` remain within those operations.
 
-`ace.input` and `ace.output` may be used if enabled and `aceiobuflen` is
-non-zero, otherwise exception `ace_exc_unconf_buf` is raised. If `aceiobuflen`
-is non-zero, and the range size `aceiobuftop` - `acestart` is an invalid size
-for the algorithm, the `ace.exec` operation is not performed and
-exception `ace_exc_invalid` is raised.
+`ace.input` and `ace.output` may be used only if the ACEIOBUF is enabled and `aceiobuflen` is non-zero. Otherwise, exception `ace_exc_unconf_buf` is raised. If `aceiobuflen` is non-zero but the range size `aceiobuftop - acestart` is invalid for the algorithm, exception `ace_exc_invalid` is raised and the `ace.exec` operation is not performed.
 
-In all cases, the `ace.input` and `ace.output` instructions must be temporarily
-tied to a specific context in order to properly determine the allowed
-sequences. This is done by setting the `aceactivecr` CSR
-(<<ACE-CSR-aceactivecr>>) first. The user must not forget to set it back to 32
-at the end of their code.
+The `ace.input` and `ace.output` instructions must be tied to a specific context to determine the allowed sequences.
+This is done by setting the `aceactivecr` CSR (<<ACE-CSR-aceactivecr>>).
+It is the responsibility of the user to reset it to the value of 32 at the end of the code.
+
+If the execution of any `ace.exec` or `ace.setst` operation leads to an error state for the `aceactivecr` CR, the implementation must reset `aceactivecr` to teh value of 32.
 
 The architecture uses the `acesequence` CSR to track the progress of the
 replacement sequences. The initial value of `acesequence` is 0. It remains zero
@@ -361,19 +366,19 @@ states used by the symmetric algorithms in this specification.
 [float="center",align="center",width="100%",cols="^6%,<26%,<16%,<52%",options="header"]
 |===
 | Value | Mnemonic for the Constant       | State Name          | Description
-.2+| 2  |  ace_state_operate              |  _Operate_          | Generic operational state.
-<|  ace_state_hash_absorb                 | _Hash_Absorb_       | Start and initialize a hash function of the tag/MAC part of an algorithm and start absorbing blocks of data (in the case of an AEAD algorithm, this usually is the associated data).
-|   3   |  ace_state_hash_last_block      | _Hash_Last_Block_   | In this state additional data may be absorbed, such as partial blocks and lengths, if the hash/tag algorithm processes the last block of its input or of the associated data part of its input in a different way from the other blocks.
-|   4   |  ace_state_hash_finalize        | _Hash_Finalize_     | Finalize the internal state of a hash/tag function.
-|   5   |  ace_state_hash_verify          | _Hash_Verify_       | Compare the internal hash/tag value to the provided one.
-|   6   |  ace_state_hash_output          | _Hash_output_       | Enter the hash output phase of a hash/tag function.
-|   7   |  ace_state_encrypt              | _Encrypt_           | In this state encryption is performed, as well as an update to the tag computation if this operation is part of the algorithm.
-|   8   |  ace_state_decrypt              | _Decrypt_           | In this state decryption is performed, as well as an update to the tag computation if this operation is part of the algorithm.
-|   9   |  ace_state_enc_last_block       | _Enc_Last_Block_    | For the encryption path of authenticated encryption modes of operation to process the last block separately.
-|  10   |  ace_state_dec_last_block       | _Dec_Last_Block_    | For the decryption path of authenticated encryption modes of operation to process the last block separately.
-|  11   |  ace_state_enc_tag_finalize     | _Enc_Tag_Finalize_  | Finalize the tag computation for AE mode encryption.
-|  12   |  ace_state_dec_tag_finalize     | _Dec_Tag_Finalize_  | Finalize internal tag computation for AE mode decryption, verify the value.
-|  13   |  ace_state_set_aux_value        | _Set_Aux_Value_     | Set a public/auxiliary value in an algorithm.
+.2+| 2  |  `ace_state_operate`              |  _Operate_          | Generic operational state.
+<|  `ace_state_hash_absorb`                 | _Hash_Absorb_       | Start and initialize a hash function of the tag/MAC part of an algorithm and start absorbing blocks of data (in the case of an AEAD algorithm, this usually is the associated data).
+|   3   |  `ace_state_hash_last_block`      | _Hash_Last_Block_   | In this state additional data may be absorbed, such as partial blocks and lengths, if the hash/tag algorithm processes the last block of its input or of the associated data part of its input in a different way from the other blocks.
+|   4   |  `ace_state_hash_finalize`        | _Hash_Finalize_     | Finalize the internal state of a hash/tag function.
+|   5   |  `ace_state_hash_verify`          | _Hash_Verify_       | Compare the internal hash/tag value to the provided one.
+|   6   |  `ace_state_hash_output`          | _Hash_output_       | Enter the hash output phase of a hash/tag function.
+|   7   |  `ace_state_encrypt`              | _Encrypt_           | In this state encryption is performed, as well as an update to the tag computation if this operation is part of the algorithm.
+|   8   |  `ace_state_decrypt`              | _Decrypt_           | In this state decryption is performed, as well as an update to the tag computation if this operation is part of the algorithm.
+|   9   |  `ace_state_enc_last_block`       | _Enc_Last_Block_    | For the encryption path of authenticated encryption modes of operation to process the last block separately.
+|  10   |  `ace_state_dec_last_block`       | _Dec_Last_Block_    | For the decryption path of authenticated encryption modes of operation to process the last block separately.
+|  11   |  `ace_state_enc_tag_finalize`     | _Enc_Tag_Finalize_  | Finalize the tag computation for AE mode encryption.
+|  12   |  `ace_state_dec_tag_finalize`     | _Dec_Tag_Finalize_  | Finalize internal tag computation for AE mode decryption, verify the value.
+|  13   |  `ace_state_set_aux_value`        | _Set_Aux_Value_     | Set a public/auxiliary value in an algorithm.
 |===
 
 NOTE: The `ace.setst` instruction used to transition to states _Hash_Absorb_,
