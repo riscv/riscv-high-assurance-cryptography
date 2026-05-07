@@ -1,8 +1,10 @@
 [[ACE-unpriv]]
 == ACE Unprivileged Architecture
 
+=== Introduction
+
 [[ACE-concepts]]
-=== Fundamental Concepts and Definitions
+==== Fundamental Concepts and Definitions
 
 ACE relies on certain fundamental concepts, which are introduced here. While
 this leads to some repetitions, this also brings better clarity to the
@@ -46,6 +48,32 @@ To prevent denial-of-service scenarios, management operations, in particular con
 Localities:::
 (((Cryptographic Context, Locality)))
 ACE can bind CCs to a *Localities*, i.e., restrict usage to specific devices or device classes, hardware configurations, physical or virtual boot cycles, and process domains at various privilege modes. This binding is achieved by using the Localities as _tweaks_ in the encryption and decryption of SCCs.
+
+// ////////////////////////////////////////////////////////////////////
+
+[[ACE-architectural-model]]
+==== Architectural Model
+
+ACE is architected as an _attached_ unit.
+This allows implementations both within each core and as a block shared by multiple cores, with a single instance of the hardware and one separate architectural state for each hart.
+The present specification mandates only its behavior, not its implementation.
+
+Consequently, ACE instructions behave as messages over a tightly coupled coprocessor interface.
+The ACE unit accepts operations, executes them independently of the issuing hart, and later returns results.
+To enforce this decoupling, the ACE unit may lock certain architectural states, for instance Context Registers and CSRs, causing the hart to wait when attempting to read them.
+
+This design permits a certain degree of concurrency: ACE operations may proceed even while the control flow of the hart is preempted, and long-running cryptographic computations are allowed. Certain interrupts, however, may be permitted to suspend ACE operations.
+
+For example, let us consider a U‑mode process executing an ACE instruction that modifies only internal state, say, a vector register.
+If the process is preempted, the ACE unit may continue its work until the context‑switch handler attempts to access that register, at which point the hart would wait for the operation to finish.
+Alternatively, an implementation may adopt a more precise exception model: halting the ACE unit, setting `acestart` to allow later resumption. Optionally the implementation may impose a timeout before halting precisely.
+The architecture permits all these approaches and fully specifies the behavior of ACE instructions when interrupted at admissible points.
+
+Furthermore, the following model will help understanding the architecture while reading the spec.
+From the logical point of view, for each of the 32 CRs the microarchitecture may maintain an entire 64-bit Metadata record
+as well as an offset into an internal memory for the storage of the Content of each configured CR.
+If a CR is not configured, the information in the metadata record will reflect that.
+The actual implementation may considerably differ from this.
 
 // ////////////////////////////////////////////////////////////////////
 
