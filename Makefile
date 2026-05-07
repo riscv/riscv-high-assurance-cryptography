@@ -17,7 +17,7 @@ DOCS := \
 
 MAKE := make -f Makefile
 DATE ?= $(shell date +%Y-%m-%d)
-VERSION ?= v0.3.5
+VERSION ?= v0.4.0
 REVMARK ?= Draft
 DOCKER_IMG := ghcr.io/riscv/riscv-docs-base-container-image:latest
 #DOCKER_IMG := ghcr.io/riscv/riscv-docs-base-container-image@sha256:c90f312cef31366106486940fbcafe63baee437df79171d321e8135672d819ae
