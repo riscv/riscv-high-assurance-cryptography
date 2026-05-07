@@ -279,7 +279,7 @@ below.
 | [20:16] | 5     | _State_           | Current state of teh CR/algorithm, encoded as an integer.
 | [28:21] | 8     | _Locality_        | Zero, or an index determining a Locality Secret. See <<ACE-Localities>>.
 | [31:29] | 3     | _UsagePolicy_     | Usage (Control) Policy. Bits 29, 30, and 31, when set, disallow CC usage in U-mode, (V)S-mode, and H-mode, respectively.
-| [45:32] | 14    | _AdditionalData_  | If non-zero, indicates an additional data segment appended to Content. The length of this additional Data segment is _AdditionalData_ × 8 bytes (up to 128 KiB).
+| [45:32] | 14    | _AddDataSize_     | If non-zero, indicates an additional data segment appended to Content. The length of this additional Data segment is _AddDataSize_ × 8 bytes (up to 128 KiB).
 | [63:46] | 18    | _ExpirationDate_  | If non-zero, the expiration date of this CC. See <<ACE-Metadata-expiration-date>>.
 |===
 
@@ -509,32 +509,40 @@ supported or not enabled.
 // ////////////////////////////////////////////////////////////////////
 
 [[ACE-extra-content]]
-===== _AdditionalData_ Field
+===== _AddDataSize_ Field
 
-The Additional Data segment of the content consists of two parts: an
-architecture-independent part, whose length is determined by the specified
-algorithm, and an architecture-dependent part.  One, none, or both of these
-parts may be empty. The first eight bytes of the architecture-dependent of the
-additional data segment hold a copy of the `acemarchid` CSR
-(<<ACE-CSR-acemarchid>>) of the originating machine, and are counted within the
-length recorded by the _AdditionalData_ field. The importing implementation
-uses this value to determine whether the architecture-dependent additional data
-can be used.
+The Content of a CR consists of two parts:
 
-_AdditionalData_ records the length of the _entire_ Additional Data. It is the
-responsibility of the algorithm to determine the length of the
-architecture-independent part and process it. Then, if _AdditionalData_ is
-larger than then architecture-independent part, the _implementation_ will check
-the value of `acemarchid` to decide whether the architecture-dependent part can
-be used.
+. A fixed-size part, whose length is architected and is determined by the specified algorithm; and
+. A variable-size part, which may hold optional architected algorithm-specific data depending on the state of the latter, or implementation-dependent data.
 
-NOTE: Examples of additional data are: “decryption AES keys”, i.e., the last
-one or two AES round keys, from which one can work backwards when performing
-AES decryptions; precomputed point multiples for elliptic curve scalar
-multiplication (their computation can be far more expensive than their
-encryption and decryption); and auxiliary data for side-channel-protected
-implementations, such as key shares or other data to accelerate share
-reconstruction.
+The first part is called the _Fixed Data Segment_ of the Content.
+Its length depends only on the _Algorithm_, _AlgorithmPolicy_, and _KeyType_ fields of the Metadata Record.
+
+The second part is called the _Additional Data Segment_ of the Content.
+It is further divided in the _Architected_ Additional Data Segment and the _Implementation-Dependent_ Additional Data Segment.
+The latter always follows the first.
+The _Architected_ Additional Data Segment may depend, additionally, on the _State_ field of the Metadata Record.
+
+Any of the aforementioned parts may be empty.
+
+The _AddDataSize_ Metadata field records the length of the _entire_ Additional Data.
+
+The first eight bytes of the Additional Data Segment of the Content, if not empty, always hold a copy of the `acemarchid` CSR (<<ACE-CSR-acemarchid>>) of the originating machine, and are counted within the length recorded by the _AddDataSize_ field.
+The importing implementation uses this value to determine whether any information in the Implementation-Dependent Data Segment can be used.
+
+It is the responsibility of the *algorithm* to determine the lengths of the two parts of the Additional Data Segment.
+If the Implementation-Dependent Additional Data Segment is not empty, the *implementation* will check the value of `acemarchid` to decide whether the architecture-dependent part can be used.
+
+[NOTE]
+====
+Examples of Additional Data are:
+
+* “Decryption AES keys”, i.e., the last one or two AES round keys, from which one can work backwards when performing AES decryptions;
+* Precomputed point multiples for elliptic curve scalar multiplication (their computation can be far more expensive than their
+encryption and decryption); or
+* any auxiliary data for side-channel-protected implementations, such as key shares or other data to accelerate share reconstruction.
+====
 
 [[ACE-Metadata-expiration-date]]
 ===== _ExpirationDate_ Field
@@ -1256,7 +1264,7 @@ It is always allowed to use an error state (see <<ACE-states-error>>) for the
  +
 In these last two cases, the internal ACE memory used by Contents of the CR
 may also be released, including any Additional Data, in which case the
-_AdditionalData_ field of the metadata will be set to zero.
+_AddDataSize_ field of the metadata will be set to zero.
 
 _Properties_::
 Possibly modifies state: *YES*. +
@@ -1915,7 +1923,7 @@ The SCC format is used when exporting a CC from a CR and also to re-import the
 CC into a CR. Its size must be a multiple of 8 bytes. The first 8 bytes contain
 the Metadata Header, as defined in <<ACE-Metadata>>. The format and length of
 the exported Content are algorithm-specific (<<ACE-algorithms>>) and, excluding
-the Additional Data of length `mh`._AdditionalData_, are determined solely by
+the Additional Data of length `mh`._AddDataSize_, are determined solely by
 the _Algorithm_, _KeyType_, and _AlgorithmPolicy_ fields in the Metadata.
 
 Format of Sealed Cryptographic Context:::
@@ -1998,7 +2006,7 @@ an equivalent mechanism:{empty}
 . ``SCC_content_size(mh)`` returns the byte length of the fixed part of the
   content section of an SCC. It depends only on  `mh`._Algorithm_,
   `mh`._AlgorithmPolicy_, and `mh`._KeyType_. It does not include the length of
-  the variable part of the content of length _AdditionalData_ * 8 bytes.
+  the variable part of the content of length _AddDataSize_ * 8 bytes.
 
 The total size in bytes of a PI is therefore
 
@@ -2006,7 +2014,7 @@ The total size in bytes of a PI is therefore
 
 and the total size in bytes of an SCC is
 
-`{fournbsp}{fournbsp}len_in_bytes(SCC)` = `MH_size(mh)` + 16 + `SCC_content_size(mh)` + _AdditionalData_ * 8.
+`{fournbsp}{fournbsp}len_in_bytes(SCC)` = `MH_size(mh)` + 16 + `SCC_content_size(mh)` + _AddDataSize_ * 8.
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -2179,7 +2187,7 @@ function ace.export(&CR, M[]) = {
 
   local SIV, tmp : bits(128);
   local z : int ← SCC_content_size(mh);
-  z ← z + mh._AdditionalData_ * 8;
+  z ← z + mh._AddDataSize_ * 8;
 
   // CR.content[] includes the optional Additional Data at the end
   CR.content = array of z bytes;
@@ -2300,7 +2308,7 @@ function ace.import(&CR, M[]) = {
   & mh = CR.Metadata;
 
   z ← SCC_content_size(mh);
-  z ← z + mh._AdditionalData_ * 8;
+  z ← z + mh._AddDataSize_ * 8;
 
   if (z == 0)
     raise exception ace_exc_not_impl;
@@ -2409,7 +2417,7 @@ This means that the following happens:
 * The content of the CR may be in an undefined state, and can no longer be used.
   The implementation may release the internal resources used by the Content of the
   CR, including any Additional Data, without the need to use `ace.clear` first.
-  In the latter case, the _AdditionalData_ field of the metadata record is zeroed.
+  In the latter case, the _AddDataSize_ field of the metadata record is zeroed.
 
 * In particular, if the new State is `ace_state_invalid`, we say that the CR is _invalidated_.
 
