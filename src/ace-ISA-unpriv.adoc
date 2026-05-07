@@ -3,12 +3,12 @@
 
 === Introduction
 
-[[ACE-concepts]]
-==== Fundamental Concepts and Definitions
-
 ACE relies on certain fundamental concepts, which are introduced here. While
 this leads to some repetitions, this also brings better clarity to the
 presentation.
+
+[[ACE-concepts]]
+==== Fundamental Concepts and Definitions
 
 Cryptographic Context:::
 (((Cryptographic Context)))
@@ -69,11 +69,11 @@ If the process is preempted, the ACE unit may continue its work until the contex
 Alternatively, an implementation may adopt a more precise exception model: halting the ACE unit, setting `acestart` to allow later resumption. Optionally the implementation may impose a timeout before halting precisely.
 The architecture permits all these approaches and fully specifies the behavior of ACE instructions when interrupted at admissible points.
 
-Furthermore, the following model will help understanding the architecture while reading the spec.
+// Furthermore, the following model will help understanding the architecture while reading the spec.
 From the logical point of view, for each of the 32 CRs, ACE maintains an entire 64-bit Metadata Header
-as well as an offset into an internal memory for the storage of the Content of each configured CR.
+as well as an offset into an internal memory to point to the CR's Content if configured.
 If a CR is not configured, the information in the Metadata Header will reflect that.
-The actual implementation may considerably differ.
+A concrete implementation may be significantly different.
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -135,7 +135,7 @@ At least one of `Zlv` or `Zlio` must be implemented.
 
 ACE inputs and outputs may be conveyed through vector registers or through an architectural input/output buffer (ACEIOBUF) loadable from and storable to memory; these two mechanisms are not mutually exclusive.
 
-When vector registers are used, the full V extension is not required. ACE depends only on a minimal subset, [.red]#which we shall define in due time#, denoted RVV-mini.
+When vector registers are used, the full V extension is not required. ACE depends only on a minimal subset, termed _RVV-mini_.
 (((RVV-mini)))
 RVV-mini must be fully opcode-compatible with RVV: code written for RVV-mini must execute with identical behavior under RVV. The required features are:
 
@@ -173,7 +173,7 @@ This allows additional requirements to be collected, for example whether to mand
 
 {empty}
 (((Cryptographic Context)))
-ACE defines up to 32 Context Registers (CRs), numbered 0 to 31 and denoted `K0`–`K31`. CRs are architectural, i.e., per-hart.
+ACE defines 32 Context Registers (CRs), numbered 0 to 31 and denoted `K0`–`K31`. CRs are architectural, i.e., per-hart.
 (((Context Register File)))
 CRs reside in a dedicated, per-hart _CR file_ (CRF) accessible only to the ACE implementation.
 
@@ -196,7 +196,7 @@ We summarize the most important operations on CRs:
 CRF capacity consumed by a CR depends on the configured algorithm; two CRs may
 consume different amounts. Insufficient residual CRF capacity may prevent
 execution of a configuration instruction (`ace.prov`, `ace.import`, `ace.clone`
-(<<ACE-instruction-clone>>); software must then free capacity by unconfiguring
+(<<ACE-instruction-clone>>)); software must then free capacity by unconfiguring
 other CRs.
 
 CRF capacity is implementation-defined. Implementations must provide sufficient
@@ -359,9 +359,9 @@ indicates whether the CC may be used for encryption (lower bit set), decryption
 
 For asymmetric primitives supporting signatures, the lower bit permits
 signature generation and the upper bit permits verification.
-Note that such an asymmetric primitive could be configured to support
+Such an asymmetric primitive can be configured to support
 primitives such as key agreement or key encapsulation but _not_ signatures,
-and in this case both bits are allowed to be zero.
+and in this case both bits are zero.
 
 For other primitives, the _AlgorithmPolicy_ field may encode additional
 algorithm identifiers to expand the effective encoding space of the _Algorithm_
@@ -393,9 +393,9 @@ _SCProtection_ to 3.
 [[ACE-State-field]]
 ===== _State_ Field
 
-The _State_ field shall be zero in a PI.
-It used to track the currently state of an algorithm, including errors.
+The _State_ field is used to track the currently state of an algorithm, including certain types of errors.
 
+////
 Two types of errors may occur as a result of executing ACE instructions:
 
 . Memory errors, issuing the wrong instructions, or passing wrong parameters to the instructions.
@@ -403,6 +403,7 @@ Two types of errors may occur as a result of executing ACE instructions:
 
 In general, the first type of errors generates an exception, while the second type will cause an error code to be reported directly to the user software.
 There are however exceptions to this rule, as well as conditions that may be reported either way.
+////
 
 The architected values of _State_ which are common to all algorithms are defined in
 <<ACE-states-valid>>.
@@ -423,11 +424,11 @@ The architected values of _State_ which are common to all algorithms are defined
 [float="center",align="center",width="100%",cols="^7%,<27,<15%,<51%"]
 |===
 |  23   | `ace_state_partial_config`  | _Partial_Config_   | Provisioning or import interrupted.
-|  24   | `ace_state_expired`         | _Expired_       | The CR has expired.
+|  24   | `ace_state_expired`         | _Expired_       | The CR has expired.  This is set by the hardware even if the condition also raises an exception.
 |  25   | `ace_state_import_auth`     | _Auth_Failed_   | Authentication failure with `ace.import`.
 |  26   | `ace_state_priv_viol`       | _Priv_Viol_     | Violation of Usage Control policies.
 |  27   | `ace_state_out_of_mem`      | _Out_of_Memory_ | Insufficient CRF memory for configuration instruction. This may be set by privileged code in case they do not handle the CR allocation.
-|  28   | `ace_state_not_impl`        | _Not_Impl_      | Not implemented algorithm. It must be set by privileged software if it does not implement the algorithm.
+|  28   | `ace_state_not_impl`        | _Not_Impl_      | Not implemented algorithm. It is set by the hardware upon an attempt to provision or import a CR that is not supported by the implementation.
 | 29, 30 | (Reserved)                 |                 | Reserved for future use.
 |  31   | `ace_state_invalid`         | _Invalid_       | Invalid/invalidated state, for instance because of the use of an invalid value (argument, state, or metadata).
 |===
@@ -440,20 +441,26 @@ The Metadata Header in this case is the all-zeros value `zeros(64)`.
 All states in the range 1-22 are termed _valid_. This includes both _Success_ and _Failure_ states, which must be used for
 normal termination of an algorithm in the cases of its successful completion or failure.
 
-State 23, i.e., _Partial_Config_, is used to report that provisioning or import was interrupted, and is handled differently from the error stated.
+State 23, i.e., _Partial_Config_, is used to report that provisioning or import was interrupted.
 
 States 24-31 are termed _error states_, and are used to report certain specific ACE errors.
 
 Explicitly setting an error state is done by `ace.setst` (cf. <<ACE-instruction-setst>>) with no auxiliary input.
 
-NOTE: Error conditions that lead to exceptions are treated in <<ACE-CSR-ace-error>>.
+NOTE: Error conditions that lead to exceptions are treated in <<ACE-exceptions-raised>>.
 
 ====== General Rules
 
-Unless an algorithm's specification explicitly states otherwise, a transition from any valid state to _Initial_ using instruction `ace.setst` is always permitted.
-A transition from any state, including _Off_, to _Initial_ is only permitted as the result of provisioning or import.
+In States _Success_ and _Failed_, only the following ACE instructions are permitted: configuration, export, `ace.clear`, `ace.size`, `ace.setst`, and `ace.getst`.  From these two states, `ace.setst` is only permitted to transition to _Initial_ (or _Off_ if used as `ace.clear`).
 
-Transition from an interrupted or error state to _Initial_ is not allowed.
+Unless an algorithm's specification explicitly states otherwise, a transition from any valid state to _Initial_ using instruction `ace.setst` is always permitted.
+A transition from any state, including _Off_, to _Initial_ is only permitted as the result of
+
+Provisioning allows transitioning from _any_ state, including _Off_, to _Initial_
+
+Import allows transitions from _any_ state, including _Off_, to any state allowed by the algorithm encoded in the imported SCC.
+
+With exception to the above two cases, transitioning from an interrupted or error state to _Initial_ is not allowed.
 
 When a CR transitions to an error state, the content of the CR becomes invalid and is erased.
 The corresponding internal resources may also be released, so that the CR's only information is the Metadata Header.
@@ -471,26 +478,7 @@ the _State_ field (now containing an error code) unchanged.
 Any _usage_ instruction that would violate the Usage Control policies will
 not perform any operation in the ACE unit and set _State_ to `ace_state_priv_viol`.
 
-If an algorithm is not implemented in the ACE hardware and is instead emulated by software, an exception is raised with `mcause` = `ace_exc_not_impl`.
-(cf. <<ACE-exception-codes>>).
-If the software stack does not implement the algorithm, it must set the _State_ metadata field to `ace_state_not_impl` and return.
-
-====== Handling of Interrupted Configuration Operations
-
-During `ace.prov` and `ace.import`, _State_ is set to _Partial_Config_ for the
-duration of the operation. It is updated to the correct value only upon
-successful completion (see <<ACE-provisioning-export-import>>). A partially
-provisioned or imported CR cannot be exported, as specified by
-<<ACE-invalidation>>.
-
-If a context switch occurs during such an operation, privileged code must
-unconfigure the CR; upon resumption, the instruction is restarted.
-
-If an interrupt or an exception occurs during the operation, and the original control
-flow is then immediately resumed, an invalid CR with a nonzero `acestart` is recognized
-as incomplete, permitting resumption of provisioning or import.
-
-This transition to _Partial_Config_ does not occur during `ace.export`.
+//If an algorithm is not implemented in the ACE hardware, an exception is raised with `mcause` = `ace_exc_not_impl` (cf. <<ACE-exception-codes>>). The handler may either implement the algorithm in software or just the _State_ metadata field to `ace_state_not_impl`.
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -647,18 +635,18 @@ Other data may be useful for performance purposes on some implementation and be 
 | Metadata Header              | 64 bits | Contains the metadata information as described in <<ACE-Metadata>>.
 //
 | Content: _Fixed Data Section_
-| Empty if the context is in an Error State, otherwise it depends only
+| Empty if the context is in an error state, otherwise it depends only
 on the _Algorithm_, _AlgorithmPolicy_, and _KeyType_ fields of the Metadata Header.
  Always a multiple of 64 bits.
 | Contains keys and other algorithm-specific information.
 //
 | Content: _Architected Additional Data Section_ (Architected ADS)
-| Empty if the context is in an Error State, otherwise it depends on the information contained in the Metadata and Fixed Data Sections.
+| Empty if the context is in an error state, otherwise it depends on the information contained in the Metadata and Fixed Data Sections.
   Always a multiple of 64 bits.
 | The data in this Section is necessary for the correct functioning of the algorithm.
 //
-| Content: _Implementation(-Specific) Additional Data Section_ (Implementation ADS)
-| Empty if the context is in an Error State, otherwise it is Implementation-Specific.
+| Content: _Implementation (Specific) Additional Data Section_ (Implementation ADS)
+| Empty if the context is in an error state, otherwise it is Implementation-Specific.
   Always a multiple of 64 bits.
 | The data in this Section is _not_ necessary for the correct functioning of the algorithm.
 |===
@@ -669,18 +657,10 @@ The Metadata _AddDataSize_ field specifies the size of the _Additional Data Sect
 
 // ////////////////////////////////////////////////////////////////////
 
-[[ACE-CSR-ace-error]]
-=== Exceptions
-
-[WARNING]
-Migrate part of this to the Privileged Architecture chapter?
+[[ACE-exceptions-raised]]
+=== Exceptions Raised by ACE
 
 With reference to <<ACE-State-field>>, we discuss here error conditions that raise exceptions.
-
-// [WARNING]
-// Errors resulting functionally from the execution of an ACE instruction do not trigger an exception.
-// However, some ACE instructions may raise an exception in addition to producing a functional error.
-// Exceptions have higher priority than functional errors. `ace.export`, `ace.import`, and `ace.prov` may trigger exceptions because they interact with the memory system. All other functional ACE errors are written to the _State_ field of the Metadata.
 
 When an exception is raised, the CSR `mcause` will reflect the error condition.
 <<ACE-exception-codes>> lists `mcause` values defined by ACE.
@@ -694,10 +674,10 @@ The actual numbers are TBD.
 |Value | Mnemonic                | Examples (((ACE, error codes)))
 | TBD  | `ace_exc_CR_unconf`     | Use of an unconfigured, or partially configured CR as a source in any instruction except `ace.size`.
 | TBD  | `ace_exc_CR_other`      | Use of an unconfigured, or partially configured CR as a source in any instruction except `ace.size`, but to be used if the privileged architecture is implemented and the status of the CR is “Other/Lazy”, in place of `ace_exc_CR_unconf`.
-| TBD  | `ace_exc_expired_CR`    | Attempted to use an expired CR. This may trap into more privileged code, but the handler may choose to simply set the _State_ field to ace_state_expired and return.
+| TBD  | `ace_exc_expired_CR`    | Attempted to use an expired CR. We recall that the hardware also sets the _State_ field of the CR's metadata to `ace_state_expired`.
 | TBD  | `ace_exc_out_of_mem`    | Insufficient CRF memory for configuration instruction. This may be set by privileged code in case they do not handle the CR allocation.
 | TBD  | `ace_exc_buf_unconf`    | Use of ACEIOBUF as an input or an output while unconfigured.
-| TBD  | `ace_exc_not_impl`      | Unimplemented algorithm or variant.
+//| TBD  | `ace_exc_not_impl`      | Unimplemented algorithm or variant.
 | TBD  | `ace_exc_invalid`       | Invalid parameters in metadata.
 |===
 
@@ -709,11 +689,13 @@ It is up to the system software to manage the CRs by freeing internal ACE Unit s
 and retry the instruction.
 The system software has also the option of setting the State to `ace_state_out_of_mem` and return from the exception.
 
+////
 Attempting to configure a CR with a not implemented algorithm will
 raise exception `ace_exc_not_impl`, and the privileged code may either set
 the metadata _State_ field to `ace_state_not_impl`, or implement its operations
 in software, by trapping the `ace.exec` and `ace.setst` instructions and emulating
 them in software when they are used with that CR.
+////
 
 If an expired CR is imported, provisioned, or used, the _State_ field of the
 Metadata is immediately set to `ace_state_expired`, and the instruction raises
@@ -768,26 +750,15 @@ _Included in_::
 
 {empty}
 (((CSR, `acestart`)))
-`acestart` is an alias for `vstart`. Therefore, it is an XLEN-bit RW CSR. ACE
-defines it also when the V extension is not enabled.
-
-[WARNING]
-[red]#`acestart` is currently defined as an alias for `vstart`.
-The reason for this is that the ISA (in fact, almost all ISAs) expose a model
-of computation whose semantics correspond to instructions being executed in-order
-and one instruction starting only after the previous one has completed.
-The current point of execution is given by the Program Counter (PC). Therefore,
-only one instruction may be interrupted for resumption in such an architecture,
-and this includes the RISC-V vector instructions. If the implementation is
-executing other instructions past the PC, these are discarded, and will have to
-be completely resumed upon returning from an interrupt.#
+`acestart` is an alias for `vstart`. Therefore, it is an XLEN-bit RW CSR.
+ACE defines it also when the V extension is not enabled.
 
 `acestart` tracks the progress of interruptible ACE instructions, namely
 `ace.prov`, `ace.import`, `ace.export`, `ace.input`, and `ace.output`. It also
 applies to `ace.exec` when iteratively processing a multi-block operand, as
 `ace.exec` may be interrupted between blocks. Only these instructions honor a
-nonzero `acestart`; all other instructions ignore it and are restarted, WITH
-acestart[XLEN-9:0] also being cleared. Provisioning, import, and export are
+nonzero `acestart`; all other instructions ignore it and are restarted, with
+`acestart`[XLEN-9:0] also being cleared. Provisioning, import, and export are
 resumed only under certain conditions, as explained in
 <<ACE-provisioning-export-import>>.
 
@@ -802,14 +773,23 @@ information and are ignored if not used.
 `acestart`[XLEN-1:XLEN-8] = `3'b100 @ bin(n,5)` where `n` is the number of the
 CR being provisioned, imported, or exported at the time of interruption.
 
-Hardware typically writes this register on interruption. Software may write
-zero to force a full restart and may save and restore the register across
-context switches. Writing an invalid or non-supported nonzero value may raise
+Hardware writes this register on interruption.
+Software may save and restore the register across context switches.
+For certain algorithms, writing zero to `acestart` to force a full restart
+of `ace.exec` may lead to inconsistent or unpredictable results.
+Writing an invalid or non-supported nonzero value raises
 an illegal instruction exception.
 
-When a vector instruction is interrupted, the CSR follows `vstart` semantics,
-i.e., it counts the number of processed elements. When an ACE instruction is
-interrupted, the CSR follows `acestart` semantics described here.
+When a vector instruction is interrupted, the CSR follows `vstart` semantics as expected,
+i.e., it counts the number of processed elements.
+//When an ACE instruction is interrupted, the CSR follows the `acestart` semantics described here.
+
+[WARNING]
+The reason `acestart` can be defined as an alias for `vstart`
+is that the Risc-V ISA exposes a computation model in which the observable results are the same as if the instructions were executed in order.
+If an implementation has executed instructions past the PC when an interrupt occurs, those instructions are discarded and must be re‑executed upon return from the handler. Only the instruction at the PC may be interrupted in a way that it saves temporary state that allows it to be resumed later.
+There is no situation in which the microarchitecture of a hart can simultaneously interrupt multiple instructions allowing them to resume at the same time.
+Hence, `vstart` can safely be reused by ACE as `acestart`.
 
 _Included in_::
 [%header,cols="4,2,2"]
@@ -828,7 +808,7 @@ _Included in_::
 (((CSR, `aceiobuflen`)))
 `aceiobuflen` is an XLEN-bit URW CSR that programs the ACEIOBUF length for use
 by `ace.input` and `ace.output`. Writing this register-even when re-writing the
-old value-also zeroes the buffer and sets `aceiobuftop` to the same length and
+current value-also zeroes the buffer and sets `aceiobuftop` to the same length and
 `acestart` to zero.
 
 When `aceiobuflen` is zero, the ACEIOBUF is _unconfigured_ (analogous to an
@@ -1017,10 +997,9 @@ If the instruction fails, the target CR is unconfigured, with the same
 semantics as if `ace.clear` were invoked on the same CR
 (<<ACE-instruction-clear>>).
 +
-Exception `ace_exc_not_impl` is raised if the combination of _Algorithm_,
-_AlgorithmPolicy_, and _SCProtection_ is not supported.
-The handler may simply set the CR to error state `ace_state_not_impl` and
-return to the original control flow.
+If the combination of _Algorithm_,
+_AlgorithmPolicy_, and _SCProtection_ is not supported, the hardware simply
+configures the CR in error state `ace_state_not_impl`.
 +
 Exception `ace_exc_invalid` is raised if the Metadata is invalid (other
 than unimplemented algorithm), such as, for instance: a nonzero _State_ or
@@ -1180,10 +1159,13 @@ If the instruction fails, the target CR is unconfigured, with the same
 semantics as if `ace.clear` were invoked on the same CR
 (<<ACE-instruction-clear>>).
 +
-Exception `ace_exc_not_impl` is raised if the combination of _Algorithm_,
-_AlgorithmPolicy_, and _SCProtection_ is not supported.
-The handler may simply set the CR to error state `ace_state_not_impl` and
-return to the original control flow.
+If the combination of _Algorithm_,
+_AlgorithmPolicy_, and _SCProtection_ is not supported, the hardware simply
+configures the CR in error state `ace_state_not_impl`.
+// Exception `ace_exc_not_impl` is raised if the combination of _Algorithm_,
+// _AlgorithmPolicy_, and _SCProtection_ is not supported.
+// The handler may simply set the CR to error state `ace_state_not_impl` and
+// return to the original control flow.
 +
 Exception `ace_exc_invalid` is raised if the Metadata is invalid (other
 than unimplemented algorithm), such as, for instance: nonzero bits in reserved fields;
@@ -1983,29 +1965,34 @@ _Included in_::
 // ////////////////////////////////////////////////////////////////////
 
 [[ACE-interruptibility]]
-=== Interruptibility
+=== Interruptibility of `ace.exec`
 
 Except for `ace.import`, `ace.export`, `ace.prov`, `ace.input`, and
-`ace.output`, all ACE operations are uninterruptible.
+`ace.output`, all ACE operations are uninterruptible, with the exception of
+`ace.exec`.
 
-The operation of `ace.exec` on a basic processing unit, in any state of any
-algorithm, is uninterruptible, unless explicitly allowed by the algorithm. When
-`ace.exec` operates iteratively on any inputs whose length is an integer
-multiple of the basic processing unit, each block is processed uninterruptibly,
-but the instruction may be interrupted between blocks; the hardware sets
-`acestart` to the interruption point and possibly additional information.
+The operation of `ace.exec` on a basic processing unit is uninterruptible,
+unless explicitly allowed by the algorithm. In general, most cryptographic
+primitives cannot be interrupted; therefore, state information to encode
+round number or round key value is not needed.  For certain very long running
+operations, such as public key primitives, an algorithm specific
+interruptibility behavior is defined.
 
-The interruptibility of provisioning, import, and export operations is defined
-in <<ACE-provisioning-export-import>>.
+When `ace.exec` operates iteratively on multiple blocks, each block is processed
+uninterruptibly. The instruction may however be interrupted between blocks:
+Upon receiving an interrupt during computation of a primitive on a block,
+the implementation may either continue and capture the state when
+available before yielding to the interrupt handler, or discard the partially
+executed operation and restore the state before it started processing that block.
+In the former case, `acestart` points to the next block; in the latter, it points to the
+partially processed block.  Only the processing of block may be resumed, and not
+necessarily the entire operation.
 
-An implementation must wait before accessing a CR that is still asynchronously
-being written to.
+The interruptibility of provisioning, import, and export operations is
+defined in <<ACE-provisioning-export-import>>.
 
-[WARNING]
-This is takes from a github comment and must be rewritten: +
-In `ace.exec`, the primitives themselves are not interrupted, so round number or round key value are not needed.
-An implementation can store and cache internally a key expansion, and they could also save it in the optional data section of a Context (but recreating the key expansion would be faster than decrypting anyway...). +
-However, if an interrupt occurs WHILE processing, say, an AES operation, the implementation has two choices: either to continue and take the state available only then, or to discard the partially executed operation. acestart in the two cases will either point to the next block or to the discarded block, which is resumed. Only that block will be resumed, not necessarily the entire operation.
+An implementation must wait before accessing a CR that is still being
+written to asynchronously.
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -2037,11 +2024,8 @@ The entire Metadata and Content are authenticated, but only the Content is
 encrypted. The AEAD method used for this purpose is described in
 <<ACE-SCC-AEAD>>.
 
-The Serialized Content section under Data Structures in an algorithm
-specification (<<ACE-algorithms>>) defines the structure of the `content[]`
-array.
-Architecturally, `content[]` is the serialization of the content of a CR
-for export as an SCC.
+The Serialized Content section under Data Structures in an algorithm specification (<<ACE-algorithms>>) defines the structure of the `content[]` array.
+Architecturally, `content[]` is the serialization of the content of a CR for export as an SCC.
 This array is this the concatenation of the Fixed Data Section and of the Architected and Implementation ADSs.
 
 [NOTE]
@@ -2056,14 +2040,11 @@ physical contiguity within the CR, nor is there a direct byte-for-byte
 correspondence. Changes to `content[]` are reflected in the underlying CR
 representation (except for excluded fields), and vice versa.
 
-In a threshold implementation, a single key byte in `content[]` may correspond
-to multiple bytes across the key shares within the CR. Reading that byte may
-return the XOR of the corresponding bytes in the shares; writing to it may
-distribute the value across the corresponding bytes in the shares such that
-their XOR equals the input. These operations may be deferred until the end of
-an provisioning or import instruction: writing to `context[]` may initially
-write the unmasked to the first share of a key, and at the end of the provisioning or
-import instruction, all shares would be generated.
+In a threshold implementation, a single key byte in `content[]` may correspond to multiple bytes distributed across all key shares within the CR.
+Reading that byte returns the XOR of the corresponding bytes from the shares, which may not be stored contiguously.
+Writing to that byte may trigger multiple writes of single bytes, one per share, such that their XOR equals the input.
+Alternatively, these operations may be deferred until the end of a provisioning or import instruction.
+For example, writing to `content[]` may initially write the unmasked value to the first share; the remaining shares are generated only when the instruction completes.
 --
 
 // ////////////////////////////////////////////////////////////////////
@@ -2071,20 +2052,20 @@ import instruction, all shares would be generated.
 [[ACE-system-keys]]
 ==== System Keys and Random System-Generated Key Values
 
-* System Keys are given by an index into an internal, system-specific System
+System Keys are given by an index into an internal, system-specific System
   Keys Table (SKT), and therefore, in a PI or in a SCC, in place of the key
   value itself, a 64-bit field is used to store the index.
 
-* For threshold implementations of system keys, ACE may copy the key material
+For threshold implementations of system keys, ACE may copy the key material
   from the SKT into the CR and expand it into multiple shares. However, the key
   must be still be exported as a single index.
 
-* It is permissible to include some of the shares of a system key in a
+It is permissible to include some of the shares of a system key in a
   threshold implementation in the optional Additional Data of the content in
   order to accelerate share reconstruction, provided that the key cannot be
   reconstructed from these shares.
 
-* When the 64-bit index system key index in the PI read nby `ace.prov` is an
+When the 64-bit index system key index in the PI read nby `ace.prov` is an
   all all-ones value (i.e., `ones(64)`), it denotes that the key material must
   be generated randomly and, similarly to the behaviour of `ace.import.S`, the
   _KeyType_ field of the metadata is internally set to 0, just as for any other
@@ -2123,7 +2104,22 @@ and the total size in bytes of an SCC is
 // ////////////////////////////////////////////////////////////////////
 
 [[ACE-interruption-points]]
-==== Interruption Points
+==== Interruptibility of Configuration and Export Operations
+
+During `ace.prov` and `ace.import`, _State_ is set to _Partial_Config_ for the
+duration of the operation. It is updated to the correct value only upon
+successful completion (see <<ACE-provisioning-export-import>>). A partially
+provisioned or imported CR cannot be exported, as specified by
+<<ACE-invalidation>>.
+
+If a context switch occurs during such an operation, privileged code must
+unconfigure the CR; upon resumption, the instruction is restarted.
+
+If an interrupt or an exception occurs during the operation, and the original control
+flow is then immediately resumed, an invalid CR with a nonzero `acestart` is recognized
+as incomplete, permitting resumption of provisioning or import.
+
+This transition to _Partial_Config_ does not occur during `ace.export`.
 
 Provisioning, export, and import are interruptible only before any memory
 access they perform. This means that interrupts other than memory exceptions
@@ -2136,13 +2132,13 @@ other circumstance, including a context switch, the instruction must be
 restarted, and if it is `ace.prov` or `ace.import`, the target CR must also be
 cleared before restarting.
 
-An export may resume only if the CR has not been modified before returning to
-the original control flow.
+Upon returning to the original control flow from an interrupt or exception,
+an export may resume only if the CR has not been modified.
 
 The implementation will restart any of these operations if the CR is not in a
 valid interrupted state.
 
-The initial SIV computation of `ace.export` may be implemented as either
+The implementation of the initial SIV computation of `ace.export` may be either
 uninterruptible or interruptible. If uninterruptible, interrupt handlers may
 need to wait for completion before accessing the CR, potentially creating
 performance bottlenecks or timing issues. To mitigate these issues, this
@@ -2502,12 +2498,7 @@ Similar to `ace.export`, `ace.import` requires implementation-specific
 //
 
 [[ACE-invalidation]]
-=== CRs in Completed, Failed, or Error States
-
-[WARNING]
-====
-This section is being replaced with a broader treatment of _error states_.
-====
+=== CRs in Error States
 
 {empty}
 (((ACE, algorithm, invalid state)))
@@ -2528,9 +2519,7 @@ This means that the following happens:
 * For instructions that refer to that CR:
  ** `ace.prov`, `ace.reset`, `ace.import`, `ace.export`, `ace.getmd`, `ace.size` and `ace.avail` work normally.
  ** `ace.setst` can only be used as `ace.clear/ace.reset` in which case the CR returns to state _Off_.
- ** All other operations, such as`ace.exec`, `ace.clone`, and `ace.restrict` do not perform any operation in the ACE unit and
+ ** All other operations, such as `ace.exec`, `ace.clone`, and `ace.restrict` do not perform any operation in the ACE unit and
  in particular do not change the State field of the CR's metadata.
-
-In States _Success_ and _Failed_, only `ace.prov`, `ace.export`, `ace.import`, `ace.clear`, and `ace.getst` are permitted.
 
 // ////////////////////////////////////////////////////////////////////
