@@ -2270,18 +2270,16 @@ Localities encoded in the _Locality_ field of the Metadata are prepended, in
 ascending index order, to the input of the AEAD tag computation, before the
 metadata. If the _Locality_ field is zero, no Locality Secrets are prepended.
 
-//The implementation will not maintain multiple temporary variables for `SIV` and `tmp`.
-The implementation must maintain an internal per-CR flag to tracks whether an export is
-in progress. Any instruction that modifies the CR's internal state clears its flag.
-Export may be resumed only if the flag is set, otherwise the export is restarted.
-Without this protection, resuming an export could produce an incorrect SIV for the
-remaining SCC data. Accordingly, if an export is resumed while the flag is cleared, the
-operation restarts from the beginning.
-
-// These variables are kept by the microarchitecture internally, and we need
-// one instance per hart, we assume only one export/import is performed.
-// per hart at any given time, which means that there cannot be two interrupted
-// export or import operations.
+The ACE architecture supports only one export/import operation per hart at a time.
+Accordingly, an implementation will maintain only a single per hart instance of variables for `SIV` and `tmp`.
+The implementation maintains information to track an export in progress:
+a 1-bit flag `ace_exporting` and a 5-bit value `ace_exported_cr` recording the number of the CR being exported.
+`ace_exporting` and `ace_exported_cr` are set when an export is started, and cleared when it is completed.
+If the export is interrupted, `acestart` is set accordingly.
+When this flag is set, any instruction that modifies the internal state of CR number `ace_exported_cr` clears `ace_exporting`.
+Export may be resumed only if the flag is set and only for the recorded CR.
+Otherwise the export is restarted and `acestart` is ignored.
+Without this protection, resuming an export could produce an incorrect SIV for the remaining SCC data.
 
 [[ACE-SCC-export-listing]]
 .Generation of an SCC from a CR
@@ -2295,8 +2293,8 @@ function ace.export(&CR, M[]) = {
 
   acestart[XLEN-1:XLEN-8] ← 0b1 @ bin(CR,7);
 
-  local SIV, tmp : bits(128);
-  local z : int ← fixed_content_size(mh);
+  global SIV, tmp : bits(128);
+  local z : int ← fixed_content_size(mh);  // can be recomputed upon resumption
   z ← z + mh._AddDataSize_ * 8;
 
   CR.content = array of z bytes; // includes the Additional Data
@@ -2305,18 +2303,13 @@ function ace.export(&CR, M[]) = {
 
   local let last_block_fractional : Boolean ← z % 16 != 0;
   local let num_blocks : int ← ceil(z / 16);
-  local L : bits(MAX_LOCALITIES*128);      // Currently, MAX_LOCALITIES = 3
-  local num_localities : int ← 0;
+  local L : string of bits;
 
-  foreach(i from 0 to number of localities - 1) {
-    if (CR.Metadata.Locality includes locality[i]) {
-      L[num_localities * 128 + 127:num_localities * 128] ← LST[i];
-      num_localities ← num_localities + 1;
-    }
-  }
+  foreach(i from 0 to number of localities - 1)
+    if (CR.Metadata.Locality includes locality[i])
+      L ← L @ LST[i];
 
-  POLYVAL(&tmp, auth_key, L[num_localities*128-1:0] @ zeros(64) @ mh @ CR.content[],
-           last_block_fractional);
+  POLYVAL(&tmp, auth_key, L @ (zeros(64) @) mh @ CR.content[], last_block_fractional);
   SIV ← AESE(enc_key, 0 @ tmp[126:0]);
 
   M[0 .. 7]  ← mh;  // PREEMPTIBLE MEMORY WRITE, WITH acestart[XLEN-9:0] FROM 0 TO 7
@@ -2337,14 +2330,13 @@ function ace.export(&CR, M[]) = {
 }
 ----
 
-Optional Feature: Interruption of ace.export:::
+Optional Feature: Interruption of ace.export's SIV computation:::
 
-Interrupting `ace.export` after the key derivation may be possible only
-immediately before the first block to the input of `POLYVAL` is processed,
-resulting in a `acestart` value of 1. `POLYVAL` itself cannot be interrupted
-between the two arithmetic operations inside the loop. If `POLYVAL` is
-interrupted after the `montmul` operation, the value of `acestart` will be
-16{interpunct}(`i`+1)+1, the number of bytes absorbed so far, plus 1.
+Normally, the first point of interruption of `ace.export` after the key derivation would be immediately before the first block to the input of `POLYVAL` is processed, resulting in a `acestart` value of 1.
+An implementation is allowed to either prevent `POLYVAL` to be interrupted or to interrupt it and restart its computation if `acestart` is equal to 1.
+A third option, namely resumption of 'POLYVAL', is allowed: With reference to <<ACE-SCC-POLYVAL>>, it is possible to interrupt `POLYVAL`
+immediately after the completion of the `montmul` operation.
+In this case the value of `acestart` will be 16{interpunct}`i`+ 2, the number of bytes absorbed so far (which is always a multiple of 16), plus 2.
 
 [[ACE-SCC-import]]
 ==== Import
@@ -2443,8 +2435,6 @@ function ace.import(&CR, M[]) = {
   last_block_fractional : Boolean ← (z % 16 != 0);
 
   // Absorb Locality "prefix" (zero or more 128-bit blocks)
-  local L : bits(MAX_LOCALITIES*128); // Currently, MAX_LOCALITIES = 3
-  local num_localities : int ← 0;
   tmp ← zeros(128);
   foreach(i from 0 to number of localities - 1) {
     if (CR.Metadata.Locality includes locality[i]) {
