@@ -389,9 +389,14 @@ For algorithms with more than 22 valid states, additional state information resi
 
 The following rules are generic and are valid for all algorithms:
 
-. Even if additional state information is stored in the Content section, the Metadata's _State_ field must reflect the current state whenever the CC is in _Initial_, _Success_, _Failure_, or any error state. This ensures that these states can be unambiguously determined from the _State_ field alone, without inspecting the Content.
+. The Metadata's _State_ field must reflect the current state whenever the CC is in _Initial_, _Success_, _Failure_, or any error state.
+This ensures that these states can be unambiguously determined from the _State_ field alone, without inspecting the Content.
 
-. When a CR transitions to an error state, its Content is invalidated and emptied.
+. In States _Success_ and _Failed_, only the following ACE instructions are permitted: `ace.prov`, `ace.import`, `ace.export`, `ace.clear`, `ace.size`, `ace.setst`, and `ace.getst`.  From these two states, `ace.setst` is only permitted to transition to _Initial_ (or _Off_ if used as `ace.clear`).
+
+. Unless an algorithm's specification explicitly states otherwise, a transition from any valid state to _Initial_ using instruction `ace.setst` is always permitted.
+
+. Upon transitioning to an error state, the Content of a CR is invalidated and emptied.
 Internal resources associated with the Content may also be released. In that case, any Additional Data is released and the _AddDataSize_ field is set to 0.
 The CR then retains only the Metadata Header.
 
@@ -399,17 +404,13 @@ The CR then retains only the Metadata Header.
   Requesting the SCC's size (`ace.size` <<ACE-instruction-size>>) wil reflect this.
   The resulting SCC can be reimported, allowing software to take appropriate actions even after a context switch.
 
-. A CR in any error state can also always be reconfigured, cloned, or cleared: `ace.setst` cannot transition to any state other than _Off_.
+. If a CR is in any error state, it can still be reconfigured, cloned, or cleared. In particular, `ace.setst` can only transition it to _Off_.
 
 . The metadata of a CR in an error state can be read (using `ace.getmd`: <<ACE-instruction-getmd>>).
 
 . Attempts to _use_ a CR in any error state will not perform any operation, and in particular they leave the _State_ field unchanged.
 
-. In States _Success_ and _Failed_, only the following ACE instructions are permitted: `ace.prov`, `ace.import`, `ace.export`, `ace.clear`, `ace.size`, `ace.setst`, and `ace.getst`.  From these two states, `ace.setst` is only permitted to transition to _Initial_ (or _Off_ if used as `ace.clear`).
-
-. Unless an algorithm's specification explicitly states otherwise, a transition from any valid state to _Initial_ using instruction `ace.setst` is always permitted.
-
-. Transitioning from an interrupted or error state to _Initial_ using `ace.setst` or `ace.exec` is not allowed.
+. If a CR is in State _Partial_Config_, transitioning it to any State other than _Off_ or _Invalid_ is only possible as a consequence of a restart or resumption of the interrupted configuration instruction.  `ace.setst` can only transition it to _Off_ or _Invalid_.
 
 . Any _usage_ instruction that would violate the Usage Control policies will not perform its operation, and will set _State_ to `ace_state_priv_viol` instead.
 
@@ -2122,40 +2123,35 @@ and the total size in bytes of an SCC is
 
 During `ace.prov` and `ace.import`, _State_ is set to _Partial_Config_ for the
 duration of the operation. It is updated to the correct value only upon
-successful completion (see <<ACE-provisioning-export-import>>). A partially
-provisioned or imported CR cannot be exported.
-
-If a context switch occurs during such an operation, privileged code must
-unconfigure the CR; upon resumption, the instruction is restarted.
-
-If an interrupt or an exception occurs during the operation, and the original control
-flow is then immediately resumed, an invalid CR with a nonzero `acestart` is recognized
-as incomplete, permitting resumption of provisioning or import.
+successful completion (see <<ACE-provisioning-export-import>>).
 
 This transition to _Partial_Config_ does not occur during `ace.export`.
 
+Provisioning and import instructions may resume from the point of interruption
+only if control returns directly after the interrupt handler completes.
+This is characterized by a CR with _State_ set to _Partial_Config_ and
+a nonzero `acestart` value.
+The privileged interrupt handler must guarantee restart only in this case.
+
+A partially configured CR cannot be exported.
+Therefore, in case of a context switch, privileged code must unconfigure the partially configured CR at context save.
+Before returning control flow to the process where the configuration operation was interrupted, the CR must be in the unconfigured state, so that,
+upon resumption, the configuration instruction is restarted.
+
 Provisioning, export, and import are interruptible only before any memory
 access they perform. This means that interrupts other than memory exceptions
-must wait until the next memory access.
-
-Provisioning and import instructions may resume from the point of interruption
-only if control returns directly after the interrupt handler completes. The
-privileged interrupt handler must guarantee restart only in this case. In any
-other circumstance, including a context switch, the instruction must be
-restarted, and if it is `ace.prov` or `ace.import`, the target CR must also be
-cleared before restarting.
+must wait until the next memory access, or can be served immediately provided
+the CR is reverted to the last interruptible point.
 
 Upon returning to the original control flow from an interrupt or exception,
 an export may resume only if the CR has not been modified.
+The mechanism to enforce this rule is described in <<ACE-SCC-export>>.
 
-The implementation will restart any of these operations if the CR is not in a
-valid interrupted state.
-
-The implementation of the initial SIV computation of `ace.export` may be
-uninterruptible or interruptible. If uninterruptible, interrupt handlers may
-need to wait for completion before accessing the CR, potentially creating
-performance bottlenecks or timing issues. To mitigate these issues, this
-computation can be made interruptible. as described after <<ACE-SCC-export-listing>>.
+The rules for resuming configuration and export operations imply that these
+can only occur on the same hart where they have been interrupted. In particular,
+these resumptions can only occur on the same microarchitecture and therefore
+the implementation can define arbitrary interruption points and corresponding
+non-zero values of `acestart`.
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -2172,12 +2168,9 @@ it to provision a CR.
 function ace.prov(&CR, M[]) = {
   mh : bits(64) ← & CR.Metadata;           // By reference, from the CR
 
-  // PREEMPTIBLE WITH acestart[XLEN-9:0] IN [0 .. 7]
   mh ← M[0 .. 7]
   z ← PI_content_size(Metadata[31:0]);
 
-  acestart[XLEN-1:XLEN-1] ← 1;
-  acestart[XLEN-2:XLEN-8] ← bin(CR,7);
   CR.Metadata.State ← ace_state_partial_config;
 
   if (z == 0)
@@ -2190,11 +2183,9 @@ function ace.prov(&CR, M[]) = {
     raise exception ace_exc_invalid;
 
   - Complete Metadata parsing.
-  // NEXT OPERATION PREEMPTIBLE WITH acestart[XLEN-9:0] IN [8 .. Z+7]
   - Sequentially read and parse the z bytes at M+8.
 
   CR.Metadata.State ← ace_state_initial;
-  acestart[XLEN-1:XLEN-8] ← zeros(8);
 }
 ----
 
@@ -2291,9 +2282,7 @@ function ace.export(&CR, M[]) = {
   external enc_key : bits(256);            // RFC8452_KeyDeriv(CSK)
   external auth_key : bits(128);
 
-  acestart[XLEN-1:XLEN-8] ← 0b1 @ bin(CR,7);
-
-  global SIV, tmp : bits(128);
+  external SIV, tmp : bits(128);
   local z : int ← fixed_content_size(mh);  // can be recomputed upon resumption
   z ← z + mh._AddDataSize_ * 8;
 
@@ -2305,62 +2294,76 @@ function ace.export(&CR, M[]) = {
   local let num_blocks : int ← ceil(z / 16);
   local L : string of bits;
 
+  // Start POLYVAL
+  // Absorb Locality "prefix" (zero or more 128-bit blocks)
+  tmp ← zeros(128);
   foreach(i from 0 to number of localities - 1)
-    if (CR.Metadata.Locality includes locality[i])
-      L ← L @ LST[i];
+    if (CR.Metadata.Locality includes locality[i]) {
+      tmp ← tmp xor LST[i];
+      tmp ← Montmul(tmp, auth_key);
+    }
 
-  POLYVAL(&tmp, auth_key, L @ (zeros(64) @) mh @ CR.content[], last_block_fractional);
-  SIV ← AESE(enc_key, 0 @ tmp[126:0]);
+  // Absorb the metadata block into POLYVAL
+  tmp ← tmp xor (zeros(64) @ mh);
+  tmp ← Montmul(tmp, auth_key);
 
-  M[0 .. 7]  ← mh;  // PREEMPTIBLE MEMORY WRITE, WITH acestart[XLEN-9:0] FROM 0 TO 7
-  M[8 .. 23] ← SIV; // PREEMPTIBLE MEMORY WRITE, WITH acestart[XLEN-9:0] FROM 8 TO 23
-
+  // Absorb the entire content into POLYVAL
   foreach(i from 0 to num_blocks - 1) {
     if ((i == num_blocks - 1) and last_block_fractional)
-      // PREEMPTIBLE MEMORY WRITE, WITH acestart[XLEN-9:0] FROM 24+i*16 TO 31+i*16
+      tmp[63:0] ← tmp[63:0] xor content[i*16 .. 7+i*16];
+    else
+      tmp ← tmp xor content[i*16 .. 15+i*16];
+    tmp ← Montmul(tmp, auth_key);
+  }
+  // compute the SIV
+  SIV ← AESE(enc_key, 0 @ tmp[126:0]);
+
+  // Export metadata and the SIV to memory
+  M[0 .. 7]  ← mh;
+  M[8 .. 23] ← SIV;
+
+  // Encrypt the content and store it in memory
+  foreach(i from 0 to num_blocks - 1) {
+    if ((i == num_blocks - 1) and last_block_fractional)
       M[24+i*16 .. 31+i*16] ← CR.content[i*16 .. 7+i*16]
                xor AESE(enc_key, 1 @ SIV[126:32] @ (SIV[31:0]+bin(i,32) % 2**32)[63:0];
     else
-      // PREEMPTIBLE MEMORY WRITE, WITH acestart[XLEN-9:0] FROM 24+i*16 TO 39+i*16
       M[24+i*16 .. 39+i*16] ← CR.content[i*16 .. 15+i*16]
                xor AESE(enc_key, 1 @ SIV[126:32] @ (SIV[31:0]+bin(i,32) % 2**32);
   }
-
-  acestart[XLEN-1:XLEN-8] ← zeros(8);
 }
 ----
 
-Optional Feature: Interruption of ace.export's SIV computation:::
-
-Normally, the first point of interruption of `ace.export` after the key derivation would be immediately before the first block to the input of `POLYVAL` is processed, resulting in a `acestart` value of 1.
-An implementation is allowed to either prevent `POLYVAL` to be interrupted or to interrupt it and restart its computation if `acestart` is equal to 1.
-A third option, namely resumption of 'POLYVAL', is allowed: With reference to <<ACE-SCC-POLYVAL>>, it is possible to interrupt `POLYVAL`
-immediately after the completion of the `montmul` operation.
-In this case the value of `acestart` will be 16{interpunct}`i`+ 2, the number of bytes absorbed so far (which is always a multiple of 16), plus 2.
+// Optional Feature: Interruption of ace.export's SIV computation:::
+// Normally, the first point of interruption of `ace.export` after the key derivation would be immediately before the first block to the input of `POLYVAL` is processed, resulting in a `acestart` value of 1.
+// An implementation is allowed to either prevent `POLYVAL` to be interrupted or to interrupt it and restart its computation if `acestart` is equal to 1.
+// A third option, namely the resumption of `POLYVAL`, is allowed: with reference to <<ACE-SCC-POLYVAL>>, it is possible to interrupt `POLYVAL`
+// immediately after the completion of the `montmul` operation.
+// In this case the value of `acestart` will be 16{interpunct}`i`+ 2, the number of bytes absorbed so far (which is always a multiple of 16), plus 2.
 
 [[ACE-SCC-import]]
 ==== Import
 
 The import algorithm needs some special care:
 
-* The first block read from memory by the operation is the Metadata Header
-  `mh`:
- ** If strictly fewer than four bytes are read before the instruction is
-    interrupted, ACE leaves `acestart` at 0, and the instruction will be
-    restarted upon resumption.
- ** If four bytes or more have been read, the value of `mh.State` in the
-    SCC is known. In this case, the instruction may be restarted WITH
-    acestart[XLEN-9:0] {ge} 4 recording the amount of data read.
-* At the beginning of the import operation, the hardware saves the
-  `State` value from the original metadata and sets `mh.State <-
-  ace_state_invalid`. At the end of the import operation, `mh.State` is
+// * The first block read from memory by the operation is the Metadata Header
+//   `mh`.
+// ** If strictly fewer than four bytes are read before the instruction is
+//    interrupted, ACE leaves `acestart` at 0, and the instruction will be
+//    restarted upon resumption.
+// ** If four bytes or more have been read, the value of `mh.State` in the
+//    SCC is known. In this case, the instruction may be restarted WITH
+//    `acestart` {ge} 4 recording the amount of data read.
+* At the beginning of the import operation, the hardware saves the value of
+  `State` from the original metadata and sets `mh.State <-
+  ace_state_partial_config`. At the end of the import operation, `mh.State` is
   set to the saved value.
-** Since context switching code cannot export a partially imported CR when
-   saving the state, it will clear the CR instead, forcing the hardware to
-   restart the import operation.
-** Exceptions that immediately return to the interrupted operation, such as
-   memory exceptions, may cause the hardware to resume the operation instead,
-   if the CR was left untouched.
+// ** Since context switching code cannot export a partially imported CR when
+//    saving the state, it will clear the CR instead, forcing the hardware to
+//    restart the import operation.
+// ** Exceptions that immediately return to the interrupted operation, such as
+//    memory exceptions, may cause the hardware to resume the operation instead,
+//    if the CR was left untouched.
 * The SCC to be imported may have been generated by a different implementation
   than the one importing it, and may contain an Implementation-Specific ADS
   that exceed the maximum size supported by the importing hardware for the
@@ -2404,7 +2407,7 @@ The import algorithm needs some special care:
 function ace.import(&CR, M[]) = {
   // M : array of bytes;   from memory
   local saved_SN : bits(4);                // This is a "hidden" state as well
-  local SIV, tmp : bits(128);
+  external SIV, tmp : bits(128);
 
   external CSK : bits(256);
   external enc_key : bits(256);
@@ -2413,7 +2416,6 @@ function ace.import(&CR, M[]) = {
   acestart[XLEN-1:XLEN-1] ← 1;
   acestart[XLEN-2:XLEN-8] ← bin(CR,7);
 
-  // PREEMPTIBLE MEMORY READ, WITH acestart[XLEN-9:0] FROM 0 TO 7
   tmp[63:0] ← M[0 .. 7];         // read Metadata Header
 
   saved_SN ← tmp[63:0].State;
@@ -2434,6 +2436,7 @@ function ace.import(&CR, M[]) = {
   num_blocks ← ceil(z / 16);
   last_block_fractional : Boolean ← (z % 16 != 0);
 
+  // Start POLYVAL
   // Absorb Locality "prefix" (zero or more 128-bit blocks)
   tmp ← zeros(128);
   foreach(i from 0 to number of localities - 1) {
@@ -2443,19 +2446,16 @@ function ace.import(&CR, M[]) = {
     }
   }
 
-  // PREEMPTIBLE MEMORY READ, WITH acestart[XLEN-9:0] FROM 8 TO 23
   SIV ← M[8 .. 23];
   tmp ← tmp xor (zeros(64) @ mh);
   tmp ← Montmul(tmp, auth_key);
 
   foreach(i from 0 to num_blocks - 1) {
     if ((i == num_blocks - 1) and last_block_fractional) {
-      // PREEMPTIBLE MEMORY READ, WITH acestart[XLEN-9:0] FROM 24+i*16 TO 31+i*16
       content[i*16 .. 7+i*16] ← M[24+i*16 .. 31+i*16]
           xor AESE(enc_key, 1 @ SIV[126:32] @ (SIV[31:0]+bin(i,32) % 2**32)[63:0];
       tmp[63:0] ← tmp[63:0] xor content[i*16 .. 7+i*16];
     } else {
-      // PREEMPTIBLE MEMORY READ, WITH acestart[XLEN-9:0] FROM 24+i*16 TO 39+i*16
       content[i*16 .. 15+i*16] ← M[24+i*16 .. 39+i*16]
           xor AESE(enc_key, 1 @ SIV[126:32] @ (SIV[31:0]+bin(i,32) % 2**32);
       tmp ← tmp xor content[i*16 .. 15+i*16];
@@ -2483,18 +2483,12 @@ function ace.import(&CR, M[]) = {
 }
 ----
 
-[NOTE]
-====
-The top 8 bits of `acestart` indicate whether a provisioning, import, or export
-operation is in progress, eliminating the need for separate `provisioning`,
-`importing`, or `exporting` bits per CR. This design also means that only one
-such operation can be interrupted at a time.
-
-An architecture could theoretically support tracking multiple, nested, interrupted
-import/export operations simultaneously. However, this would complicate both
-architecture and implementation for a rare situation.
-It is the responsibility of the exception and interrupt handlers to erase
-`acestart` in these cases to force restarts and prevent unpredictable behavior.
-====
+// [NOTE]
+// ====
+// The top 8 bits of `acestart` indicate whether a provisioning, import, or export
+// operation is in progress, eliminating the need for separate `provisioning`,
+// `importing`, or `exporting` bits per CR. This design also means that only one
+// such operation can be interrupted at a time.
+// ====
 
 // ////////////////////////////////////////////////////////////////////
