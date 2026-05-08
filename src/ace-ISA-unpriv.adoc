@@ -69,10 +69,9 @@ If the process is preempted, the ACE unit may continue its work until the contex
 Alternatively, an implementation may adopt a more precise exception model: halting the ACE unit, setting `acestart` to allow later resumption. Optionally the implementation may impose a timeout before halting precisely.
 The architecture permits all these approaches and fully specifies the behavior of ACE instructions when interrupted at admissible points.
 
-// Furthermore, the following model will help understanding the architecture while reading the spec.
-From the logical point of view, for each of the 32 CRs, ACE maintains an entire 64-bit Metadata Header
-as well as an offset into an internal memory to point to the CR's Content if configured.
-If a CR is not configured, the information in the Metadata Header will reflect that.
+From an intuitive point of view, for each of the 32 CRs ACE maintains an entire 64-bit Metadata Header
+as well as an offset into an internal memory to point to the CR's Content (if not empty).
+The information in the Metadata Header will reflect whether a CR is configured or not.
 A concrete implementation may be significantly different.
 
 // ////////////////////////////////////////////////////////////////////
@@ -188,17 +187,8 @@ We briefly summarize the most important operations on CRs, in order to be able t
 * `ace.import` (<<ACE-instruction-import>>) imports a SCC into a CR.
 * `ace.exec` (<<ACE-instruction-exec>>) performs cryptographic operations as specified by the algorithm configured in a CR and according to the state of the CR.
 * `ace.setst` (<<ACE-instruction-setst>>) transitions between states of a cryptographic algorithm.
+//* `ace.getmd` (<<ACE-instruction-getmd>>) reads the metadata of a CR.
 * `ace.clone` (<<ACE-instruction-clone>>) creates a copy of a CR into a second CR.
-
-[WARNING]
-====
-[.red]#Move this warning somewhere else.#
-VM migration can become an issue when the destination machine has a smaller CRF
-than the source machine. Migration could fail, or the VM may have to let some
-processes terminate abnormally. A lazy-loading mechanism for CRs, besides
-optimizing the performance of context switching, may be used to load CRs on
-demand; see <<ACE-lazy-loading>>.
-====
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -349,16 +339,6 @@ _SCProtection_ to 3.
 
 The _State_ field is used to track the currently state of an algorithm, including certain types of errors.
 
-////
-Two types of errors may occur as a result of executing ACE instructions:
-
-. Memory errors, issuing the wrong instructions, or passing wrong parameters to the instructions.
-. Errors occurring at the algorithm level.
-
-In general, the first type of errors generates an exception, while the second type will cause an error code to be reported directly to the user software.
-There are however exceptions to this rule, as well as conditions that may be reported either way.
-////
-
 The architected values of _State_ which are common to all algorithms are defined in
 <<ACE-states-valid>>.
 
@@ -396,6 +376,9 @@ normal termination of an algorithm in the cases of its successful completion or 
 State 23, i.e., _Partial_Config_, is used to report that provisioning or import was interrupted.
 
 States 24-31 are termed _error states_, and are used to report certain specific ACE errors.
+(((ACE, algorithm, invalid state)))
+(((Context Register, invalidation)))
+In particular, if the State is `ace_state_invalid`, we say that the CR is _invalidated_.
 
 An error state can be set by software using `ace.setst` (with no auxiliary input).
 
@@ -408,19 +391,27 @@ The following rules are generic and are valid for all algorithms:
 
 . Even if additional state information is stored in the Content section, the Metadata's _State_ field must reflect the current state whenever the CC is in _Initial_, _Success_, _Failure_, or any error state. This ensures that these states can be unambiguously determined from the _State_ field alone, without inspecting the Content.
 
-. When a CR transitions to an error state, its Content is considered invalid and is emptied.
-Internal resources associated with the Content may also be released, in which case any Additional Data is also released and the _AddDataSize_ field is set to 0.
-The CR then retains only the Metadata Header; exporting such a CR exports only the metadata. The resulting SCC can be reimported, allowing software to take appropriate actions even after a context switch.
+. When a CR transitions to an error state, its Content is invalidated and emptied.
+Internal resources associated with the Content may also be released. In that case, any Additional Data is released and the _AddDataSize_ field is set to 0.
+The CR then retains only the Metadata Header.
+
+. Exporting a CR in an error state exports only the metadata (and the authentication tag).
+  Requesting the SCC's size (`ace.size` <<ACE-instruction-size>>) wil reflect this.
+  The resulting SCC can be reimported, allowing software to take appropriate actions even after a context switch.
+
+. A CR in any error state can also always be reconfigured, cloned, or cleared: `ace.setst` cannot transition to any state other than _Off_.
+
+. The metadata of a CR in an error state can be read (using `ace.getmd`: <<ACE-instruction-getmd>>).
 
 . Attempts to _use_ a CR in any error state will not perform any operation, and in particular they leave the _State_ field unchanged.
-
-. Any _usage_ instruction that would violate the Usage Control policies will not perform its operation, and will set _State_ to `ace_state_priv_viol` instead.
 
 . In States _Success_ and _Failed_, only the following ACE instructions are permitted: `ace.prov`, `ace.import`, `ace.export`, `ace.clear`, `ace.size`, `ace.setst`, and `ace.getst`.  From these two states, `ace.setst` is only permitted to transition to _Initial_ (or _Off_ if used as `ace.clear`).
 
 . Unless an algorithm's specification explicitly states otherwise, a transition from any valid state to _Initial_ using instruction `ace.setst` is always permitted.
 
 . Transitioning from an interrupted or error state to _Initial_ using `ace.setst` or `ace.exec` is not allowed.
+
+. Any _usage_ instruction that would violate the Usage Control policies will not perform its operation, and will set _State_ to `ace_state_priv_viol` instead.
 
 We note that the State after `ace.setst` is issued may differ from the State specified by the instruction.
 A common example is MAC verification: after `ace.setst` is issued with an `ace_state_hash_verify` immediate as the next state and the value to be verified as the additional parameter, the algorithm transitions to either _Success_ or _Failure_. This is done to prevent the manipulation of a CR's state and to reduce code size.
@@ -1737,7 +1728,7 @@ The `F` field and the `r` bit may assume the following values:
 _Description_:: {empty}
 
 * Form A `ace.size` returns the total size (in bytes) of the memory buffer that
-  would be necessary to store the exported SCC, including the Additional Data.
+  would be necessary to store the exported SCC, including the authentication tag and the Additional Data.
   Knowing this size is necessary
   for any feature that relies on `ace.export`, including context switching. The
   instruction returns 0 if the CR is unconfigured.
@@ -1944,12 +1935,7 @@ written to asynchronously.
 [[ACE-provisioning-export-import]]
 === Provisioning, Export and Import of Cryptographic Contexts
 
-In this section we implicitly refer throughout to
-<<ACE-data-formats-intro>>
-<<ACE-Metadata>>
-and
-<<ACE-data-formats>>, and in particular to
-<<ACE-PI>> and <<ACE-SCC>>.
+In this section we implicitly refer throughout to <<ACE-data-formats-intro>>, and in particular to <<ACE-PI>> and <<ACE-SCC>>.
 
 // {empty}
 // (((Cryptographic Context, Sealed)))
@@ -1995,27 +1981,29 @@ For example, writing to `content[]` may initially write the unmasked value to th
 // ////////////////////////////////////////////////////////////////////
 
 [[ACE-system-keys]]
-==== System Keys and Random System-Generated Key Values
+==== System Keys and Randomly Generated Key Values
 
 System Keys are given by an index into an internal, system-specific System
-  Keys Table (SKT), and therefore, in a PI or in a SCC, in place of the key
-  value itself, a 64-bit field is used to store the index.
+Keys Table (SKT), and therefore, in a PI or in a SCC, in place of the key
+value itself, a 64-bit field is used to store the index. This may reduce the
+size of the PI or SCC content with respect to the case where they key material
+is explicitly given.
 
 For threshold implementations of system keys, ACE may copy the key material
-  from the SKT into the CR and expand it into multiple shares. However, the key
-  must be still be exported as a single index.
+from the SKT into the CR and expand it into multiple shares. However, the key
+must be still be exported as a single index.
 
 It is permissible to include some of the shares of a system key in a
-  threshold implementation in the optional Additional Data of the content in
-  order to accelerate share reconstruction, provided that the key cannot be
-  reconstructed from these shares.
+threshold implementation in the optional Additional Data of the content in
+order to accelerate share reconstruction, provided that the key cannot be
+reconstructed from these shares.
 
-When the 64-bit index system key index in the PI read nby `ace.prov` is an
-  all all-ones value (i.e., `ones(64)`), it denotes that the key material must
-  be generated randomly and, similarly to the behaviour of `ace.import.S`, the
-  _KeyType_ field of the metadata is internally set to 0, just as for any other
-  explicitly provisioned key, and exported as such, i.e., by value. This
-  applies to all key material in all algorithms, unless otherwise specified.
+When the system key index in the PI read by `ace.prov` is an
+all-ones value (i.e., `ones(64)`), it denotes that the key material must
+be generated randomly. Similarly to the behavior of `ace.import.S`, the
+_KeyType_ field of the metadata is internally set to 0.
+The key is therefore exported by value. This
+applies to all key material in all algorithms, unless otherwise specified.
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -2033,7 +2021,7 @@ an equivalent mechanism:{empty}
   PI. It depends only on `mh`._Algorithm_, `mh`._AlgorithmPolicy_, and
   `mh`._KeyType_.
 
-. ``SCC_content_size(mh)`` returns the byte length of the fixed part of the
+. ``fixed_content_size(mh)`` returns the byte length of the fixed part of the
   content section of an SCC. It depends only on  `mh`._Algorithm_,
   `mh`._AlgorithmPolicy_, and `mh`._KeyType_. It does not include the length of
   the Additional Data of the Content, of length _AddDataSize_ * 8 bytes.
@@ -2044,7 +2032,7 @@ The total size in bytes of a PI is therefore
 
 and the total size in bytes of an SCC is
 
-`{fournbsp}{fournbsp}len_in_bytes(SCC)` = `MH_size(mh)` + 16 + `SCC_content_size(mh)` + _AddDataSize_ * 8.
+`{fournbsp}{fournbsp}len_in_bytes(SCC)` = `MH_size(mh)` + 16 + `fixed_content_size(mh)` + _AddDataSize_ * 8.
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -2054,8 +2042,7 @@ and the total size in bytes of an SCC is
 During `ace.prov` and `ace.import`, _State_ is set to _Partial_Config_ for the
 duration of the operation. It is updated to the correct value only upon
 successful completion (see <<ACE-provisioning-export-import>>). A partially
-provisioned or imported CR cannot be exported, as specified by
-<<ACE-invalidation>>.
+provisioned or imported CR cannot be exported.
 
 If a context switch occurs during such an operation, privileged code must
 unconfigure the CR; upon resumption, the instruction is restarted.
@@ -2083,12 +2070,11 @@ an export may resume only if the CR has not been modified.
 The implementation will restart any of these operations if the CR is not in a
 valid interrupted state.
 
-The implementation of the initial SIV computation of `ace.export` may be either
+The implementation of the initial SIV computation of `ace.export` may be
 uninterruptible or interruptible. If uninterruptible, interrupt handlers may
 need to wait for completion before accessing the CR, potentially creating
 performance bottlenecks or timing issues. To mitigate these issues, this
-computation can be made interruptible. as described following the `POLYVAL`
-function specification in <<ACE-SCC-POLYVAL>>.
+computation can be made interruptible. as described after <<ACE-SCC-export-listing>>.
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -2231,7 +2217,7 @@ function ace.export(&CR, M[]) = {
   acestart[XLEN-2:XLEN-8] ← bin(CR,7);
 
   local SIV, tmp : bits(128);
-  local z : int ← SCC_content_size(mh);
+  local z : int ← fixed_content_size(mh);
   z ← z + mh._AddDataSize_ * 8;
 
   // CR.content[] includes the optional Additional Data at the end
@@ -2305,6 +2291,20 @@ The import algorithm needs some special care:
 ** Exceptions that immediately return to the interrupted operation, such as
    memory exceptions, may cause the hardware to resume the operation instead,
    if the CR was left untouched.
+* The SCC to be imported may have been generated by a different implementation
+  than the one importing it, and may contain an Implementation-Specific ADS
+  that exceed the maximum size supported by the importing hardware for the
+  algorithm encoded in the metadata. +
+  In this scenario, once the Metadata and the Fixed Content Data Sections have been
+  read, the implementation must determine the length of the Architected ADS
+  corresponding to the algorithm's state, and ignore all writes to `content[]`
+  beyond the end of the Architected ADS.
+  It must still process the entire SCC to verify the authentication tag.
+  After successful verification, the _AddDataSize_ field will be adjusted
+  to the size of the Architected ADS.
+  The Implementation-Specific ADS will be ignored.
+  The details of this adjustment are not reflected in the pseudocode
+  <<ACE-SCC-import-listing>> to avoid excessive complexity.
 
 // [NOTE]
 // ====
@@ -2352,7 +2352,7 @@ function ace.import(&CR, M[]) = {
 
   & mh = CR.Metadata;
 
-  z ← SCC_content_size(mh);
+  z ← fixed_content_size(mh);
   z ← z + mh._AddDataSize_ * 8;
 
   if (z == 0)
@@ -2422,49 +2422,11 @@ operation is in progress, eliminating the need for separate `provisioning`,
 `importing`, or `exporting` bits per CR. This design also means that only one
 such operation can be interrupted at a time.
 
-An architecture could theoretically support tracking multiple interrupted
-import/export operations simultaneously. This would require storing copies of
-the `SIV` and `tmp` values (256 bits) along with other small quantities for
-each interrupted operation. Since interrupted import/export operations are
-uncommon and would only be significant for very large states—of which few would
-be in flight simultaneously—this capability is perceived as not necessary. It
-is the responsibility of the exception handlers to fully erase `acestart` in
-these cases to prevent unpredictable behaviour because of the restart of
-interrupted privisioning or import, or of the export of a CR which has been
-modified in the meantime.
+An architecture could theoretically support tracking multiple, nested, interrupted
+import/export operations simultaneously. However, this would complicate both
+architecture and implementation for a rare situation.
+It is the responsibility of the exception and interrupt handlers to erase
+`acestart` in these cases to force restarts and prevent unpredictable behavior.
 ====
-
-[NOTE]
-====
-Similar to `ace.export`, `ace.import` requires implementation-specific
-`ace.exec` operations to decrypt data from a register into the CR.
-====
-
-//
-
-[[ACE-invalidation]]
-=== CRs in Error States
-
-{empty}
-(((ACE, algorithm, invalid state)))
-(((Context Register, invalidation)))
-In certain situations, an ACE instruction may cause a CR to enter an error state.
-Such states are characterized by values of the State field of the Metadata Header as in <<ACE-states-error>>.
-This may occur also as a consequence of an explicit `ace.setst` instruction.
-
-This means that the following happens:
-
-* The content of the CR may be in an undefined state, and can no longer be used.
-  The implementation may release the internal resources used by the Content of the
-  CR, including any Additional Data, without the need to use `ace.clear` first.
-  In the latter case, the _AddDataSize_ field of the Metadata Header is zeroed.
-
-* In particular, if the new State is `ace_state_invalid`, we say that the CR is _invalidated_.
-
-* For instructions that refer to that CR:
- ** `ace.prov`, `ace.reset`, `ace.import`, `ace.export`, `ace.getmd`, `ace.size` and `ace.avail` work normally.
- ** `ace.setst` can only be used as `ace.clear/ace.reset` in which case the CR returns to state _Off_.
- ** All other operations, such as `ace.exec`, `ace.clone`, and `ace.restrict` do not perform any operation in the ACE unit and
- in particular do not change the State field of the CR's metadata.
 
 // ////////////////////////////////////////////////////////////////////
