@@ -1993,14 +1993,10 @@ round number or round key value is not needed.  For certain very long running
 operations, such as public key primitives, an algorithm specific
 interruptibility behavior is defined.
 
-When `ace.exec` operates iteratively on multiple blocks, each block is processed
-uninterruptibly. The instruction may however be interrupted between blocks:
-Upon receiving an interrupt during computation of a primitive on a block,
-the implementation may either continue and capture the state when
-available before yielding to the interrupt handler, or discard the partially
-executed operation and restore the state before it started processing that block.
-In the former case, `acestart` points to the next block; in the latter, it points to the
-partially processed block.
+When `ace.exec` processes multiple blocks iteratively, each block is handled atomically. The instruction may be interrupted between blocks. Upon receiving an interrupt during block processing, the implementation has two options:
+
+* Complete the current block before yielding to the interrupt handler. `acestart` points to the next block.
+* Discard the partially executed block and restore the state prior to that block's processing. `acestart` points to the partially processed block.
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -2009,26 +2005,10 @@ partially processed block.
 
 In this section we implicitly refer throughout to <<ACE-data-formats-intro>>, and in particular to <<ACE-PI>> and <<ACE-SCC>>.
 
-// {empty}
-// (((Cryptographic Context, Sealed)))
-// The SCC format is used when exporting a CC from a CR and also to re-import the
-// CC into a CR. Its size must be a multiple of 8 bytes. The first 8 bytes contain
-// the Metadata Header, as defined in <<ACE-Metadata>>. The format and length of
-// the exported Content are algorithm-specific (<<ACE-algorithms>>) and, excluding
-// the Additional Data of length `mh`._AddDataSize_, are determined solely by
-// the _Algorithm_, _KeyType_, and _AlgorithmPolicy_ fields in the Metadata.
-//
-// Format of Sealed Cryptographic Context:::
-// `bytes{nbsp}[{nbsp}{nbsp}0 .. 7{nbsp}{nbsp}{nbsp}]{nbsp}{nbsp}` Metadata Header, not encrypted. +
-// `bytes{nbsp}[{nbsp}{nbsp}8 .. 23{nbsp}{nbsp}]{nbsp}{nbsp}` SIV produced by the encryption method (128 bits). +
-// `bytes{nbsp}[{nbsp}24 .. u-1{nbsp}]{nbsp}{nbsp}` Encrypted Serialized Content of the CR. Here, `u` = `len_in_bytes(SCC)`. +
+The entire Metadata and Content are authenticated, but only the Content is encrypted.
+The AEAD method used for this purpose is described in <<ACE-SCC-AEAD>>.
 
-The entire Metadata and Content are authenticated, but only the Content is
-encrypted. The AEAD method used for this purpose is described in
-<<ACE-SCC-AEAD>>.
-
-The Serialized Content section under Data Structures in an algorithm specification (<<ACE-algorithms>>) defines the structure of the `content[]` array.
-Architecturally, `content[]` is the serialization of the content of a CR for export as an SCC.
+In an algorithm specification (<<ACE-algorithms>>), under Data Structures there is a section named “Serialized Content”: It defines the structure of the `content[]` array.  Architecturally, `content[]` is the serialization of the content of a CR for export as an SCC.
 This array is this the concatenation of the Fixed Data Section and of the Architected and Implementation ADSs.
 
 [NOTE]
@@ -2055,36 +2035,23 @@ For example, writing to `content[]` may initially write the unmasked value to th
 [[ACE-system-keys]]
 ==== System Keys and Randomly Generated Key Values
 
-System Keys are given by an index into an internal, system-specific System
-Keys Table (SKT), and therefore, in a PI or in a SCC, in place of the key
-value itself, a 64-bit field is used to store the index. This may reduce the
-size of the PI or SCC content with respect to the case where they key material
-is explicitly given.
+In a PI or SCC, System Keys are encoded as a 64-bit index into an internal, system-specific System Keys Table (SKT). This replaces the key value itself, which may reduce the size of the PI or SCC content.
 
-For threshold implementations of system keys, ACE may copy the key material
-from the SKT into the CR and expand it into multiple shares. However, the key
-must be still be exported as a single index.
+For threshold implementations of system keys, ACE may copy key material from the SKT into the CR and expand it into multiple shares. The key is still exported as a single index.
 
-It is permissible to include some of the shares of a system key in a
-threshold implementation in the optional Additional Data of the content in
-order to accelerate share reconstruction, provided that the key cannot be
-reconstructed from these shares.
+For the purpose of accelerating key share reconstruction in a threshold implementation, some shares of a system key can be included in the content's Additional Data, as long as the key cannot be recovered from those shares alone.
 
-When the system key index in the PI read by `ace.prov` is an
-all-ones value (i.e., `ones(64)`), it denotes that the key material must
-be generated randomly. Similarly to the behavior of `ace.import.S`, the
-_KeyType_ field of the metadata is internally set to 0.
-The key is therefore exported by value. This
-applies to all key material in all algorithms, unless otherwise specified.
+An all-ones (i.e., `ones(64)`) system key index in a PI means that the key material is generated randomly upon provisioning.
+The _KeyType_ field in the metadata is then internally set to 0, and the key is then exported by value.
+This applies to all keys at once in an algorithms, unless otherwise specified.
 
 // ////////////////////////////////////////////////////////////////////
 
 [[ACE-size-functions]]
 ==== Notation for the Size Functions
 
-Let `mh` denote a Metadata Header. In order to determine the total lengths of
-the PI and of the SCC, the implementation provides the following functions or
-an equivalent mechanism:{empty}
+Let `mh` denote a Metadata Header.
+In order to determine the total lengths of the PI and of the SCC, the implementation provides the following functions or an equivalent mechanism:
 
 . ``MH_size(mh)`` returns the byte length of the Metadata Header. In the
   current specification, it is always 8.
@@ -2124,9 +2091,9 @@ a nonzero `acestart` value.
 The privileged interrupt handler must guarantee restart only in this case.
 
 A partially configured CR cannot be exported.
-Therefore, in case of a context switch, privileged code must unconfigure the partially configured CR at context save.
-Before returning control flow to the process where the configuration operation was interrupted, the CR must be in the unconfigured state, so that,
-upon resumption, the configuration instruction is restarted.
+Therefore, at context save privileged code must clear a partially configured CR.
+Before returning control flow to the process of the interrupted configuration operation, the CR must be cleared as well
+to force the instruction's restart.
 
 Provisioning, export, and import are interruptible only before any memory
 access they perform. This means that interrupts other than memory exceptions
