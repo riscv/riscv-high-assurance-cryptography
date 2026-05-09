@@ -604,17 +604,13 @@ The actual numbers are TBD.
 
 // `ace.restrict` is distinct because it cannot modify the _State_ field.
 
-If there is insufficient CRF memory for a configuration instruction, the ACE instruction
-raise exception `ace_exc_out_of_mem`.
-It is up to the system software to manage the CRs by freeing internal ACE Unit space
-and retry the instruction.
-The system software has also the option of setting the State to `ace_state_out_of_mem` and return from the exception.
+If a configuration instruction cannot be performed because of insufficient residual CRF memory, exception `ace_exc_out_of_mem` is raised. System software is responsible for freeing internal ACE unit space and retrying the instruction. Alternatively, the software may set the CR's State to `ace_state_out_of_mem` and return from the exception handler.
 
-If an expired CR is imported, provisioned, or used, the _State_ field of the
-Metadata is immediately set to `ace_state_expired`, and the instruction raises
-exception `ace_exc_expired_CR`. Privileged code may then take appropriate
-action, such as provisioning a new key or returning to the caller for suitable
-handling.
+When a non-configuration instruction is executed on a CR whose _ExpirationDate_ lies in the past, the hardware immediately sets the Metadata _State_ field to `ace_state_expired` and performs any action prescribed for error states, including implementation-specific tasks such as releasing the CRF capacity held by the Content.  If the instruction is a usage instruction, the operation is suppressed and exception `ace_exc_expired_CR` is raised.  Exporting, cloning, or configuring an expired CR is allowed.
+
+When an expired CR is used, privileged code may take appropriate action—for example, provisioning a new key or returning to the caller for handling.
+
+Since privileged code may replace expired CRs, any user code that uses CRs that are known to potentially expire should always export the CR when it has finished using it, in case it may be needed later, instead of recovering it from a previously saved copy.
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -704,8 +700,7 @@ i.e., it counts the number of processed elements.
 //When an ACE instruction is interrupted, the CSR follows the `acestart` semantics described here.
 
 [WARNING]
-The reason `acestart` can be defined as an alias for `vstart`
-is that the Risc-V ISA exposes a computation model in which the observable results are the same as if the instructions were executed in order.
+The reason `vstart` can be reused as `acestart` comes from the fact that the Risc-V ISA exposes a computation model in which the observable results are the same as if the instructions were executed in order.
 If an implementation has executed instructions past the PC when an interrupt occurs, those instructions are discarded and must be re‑executed upon return from the handler. Only the instruction at the PC may be interrupted in a way that it saves temporary state that allows it to be resumed later.
 There is no situation in which the microarchitecture of a hart can simultaneously interrupt multiple instructions allowing them to resume at the same time.
 Hence, `vstart` can safely be reused by ACE as `acestart`.
