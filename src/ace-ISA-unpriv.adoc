@@ -25,6 +25,7 @@ There is no store-like instruction to extract the Content of the CR in a manner 
 
 Sealed Cryptographic Context:::
 (((Cryptographic Context, sealed)))
+
 To support context switching while at the same time protecting CCs outside architectural state, a CC may be *exported* from a CR as a *Sealed Cryptographic Context* (SCC), an encrypted and authenticated representation of a CC that can later be *imported* into a CR. SCC export and import use a _Context Sealing Key_ (CSK), which may be programmable by M-mode.
 A CC sealed under one CSK cannot be re-imported under a different CSK, enabling cryptographic domain separation across spatial and temporal domains.
 
@@ -270,27 +271,27 @@ The following table lists the fields of the 64-bit Metadata Header.
 ////
 
 The following table lists the fields of the 128-bit Metadata Header.
+Currently, 82 bits are defined and 46 are reserved for future use.
 
 [[ACE-metadata-section]]
 .Format of the 128-bit Metadata Header
 [width="100%",cols="^9%,^7%,14%,70%",options="header"]
 |===
-| Field   | Width | Name              | Description
-| [11:0]  | 12    | _Algorithm_       | Cryptographic algorithm (primitive, mode, or protocol). See <<ACE-Algorithm-field>>.
-| [15:12] | 4     | _AlgorithmPolicy_ | Allowed algorithm variants(s) _or_ extension of the _Algorithm_ field. See <<ACE-Algorithm-field>>.
+|  Field   | Width | Name              | Description
+|  [11:0]  | 12    | _Algorithm_       | Cryptographic algorithm (primitive, mode, or protocol). See <<ACE-Algorithm-field>>.
+|  [15:12] | 4     | _AlgorithmPolicy_ | Allowed algorithm variants(s) _or_ extension of the _Algorithm_ field. See <<ACE-Algorithm-field>>.
 Bits 0 and 1 as before, bits 3 and 4 reserved.
-| [18:16] | 3     | _SCProtection_    | Side-channel protection level. See <<ACE-SCProtection-field>>.
-| [19:19] | 1     | _KeyType_         | 0: key is an explicit value in Content. 1: key is an index into the system-specific System Keys Table (SKT).
-| [27:20] | 8     | _Locality_        | Zero, or an index determining a Locality Secret. See <<ACE-Localities>>.
-| [32:28] | 5     | _State_           | Current state of the CR/algorithm, encoded as an integer.
-| [35:33] | 3     | _Sequence_        | Replaces `acesequence` and `aceactivecr`?
-| [39:36] | 4     | _UsagePolicy_     | Usage (Control) Policy. Bits 0, 1, 2 and 3 of the field,, when set, disallow CC usage in U-mode, (V)S-mode, H-mode, and M-Mode, respectively.
-| [55:40] | 16    | _AddDataSize_     | If non-zero, indicates an additional data section appended to Content. The length of this additional data section is _AddDataSize_ × 16 bytes (up to 512 KiB).
-| [63:56} | 8     | Reserved          | Reserved for future use
-| [89:64] | 26    | _ExpirationDate_  | If non-zero, the expiration date of this CC. See <<ACE-Metadata-expiration-date>>. Minutes since 00:00, January 1, 2027. (127 years...)
-| [127:90] | 38    | Reserved         | Reserved for future use
+|  [18:16] | 3     | _SCProtection_    | Side-channel protection level. See <<ACE-SCProtection-field>>.
+|  [19:19] | 1     | _KeyType_         | 0: key is an explicit value in Content. 1: key is an index into the system-specific System Keys Table (SKT).
+|  [24:20] | 5     | _State_           | Current state of the CR/algorithm, encoded as an integer.
+|  [27:25] | 3     | _Sequence_        | Replaces `acesequence` and `aceactivecr`?
+|  [31:28] | 4     | _UsagePolicy_     | Usage (Control) Policy. Bits 0, 1, 2 and 3 of the field,, when set, disallow CC usage in U-mode, (V)S-mode, H-mode, and M-Mode, respectively.
+|  [39:32] | 8     | _Locality_        | Zero, or an index determining a Locality Secret. See <<ACE-Localities>>.
+|  [47:40} | 8     | Reserved          | Reserved for future use. Currently, it must be equal to zero.
+|  [63:48] | 16    | _AddDataSize_     | If non-zero, indicates an additional data section appended to Content. The length of this additional data section is _AddDataSize_ * 16 bytes (up to 1024 KiB).
+|  [89:64] | 26    | _ExpirationDate_  | If non-zero, the expiration date of this CC. See <<ACE-Metadata-expiration-date>>. Minutes since 00:00, January 1, 2027. (127 years...)
+| [127:90] | 38    | Reserved         | Reserved for future use.  Currently, it must be equal to zero.
 |===
-
 
 In the following subsections we describe the fields of the Metadata section.
 
@@ -367,7 +368,7 @@ The architected values of _State_ which are common to all algorithms are defined
 |===
 
 The state with value 0 is termed _Off_, and is used to indicate that the CR is not configured.
-The Metadata Header in this case is the all-zeros value `zeros(64)`.
+The Metadata Header in this case is the all-zeros value `zeros(128)`.
 
 All states in the range 1-22 are termed _valid_. This includes both _Success_ and _Failure_ states, which must be used for
 normal termination of an algorithm in the cases of its successful completion or failure.
@@ -551,10 +552,10 @@ The format of a Provisioning Input (PI) is shown in <<ACE-PI>>.
 |===
 | Section                      | Size | Description
 | Metadata Header              | 64 bits | Contains the metadata information as described in <<ACE-Metadata>>.
-| Provisioning Content         | Depends only on the _Algorithm_, _AlgorithmPolicy_, and _KeyType_ fields of the Metadata Header. Always a multiple of 64 bits. | Contains keys and other algorithm-specific information.
+| Provisioning Content         | Depends only on the _Algorithm_, _AlgorithmPolicy_, and _KeyType_ fields of the Metadata Header. Always a multiple of 128 bits. | Contains keys and other algorithm-specific information.
 |===
 
-The length of a PI must be a multiple of 64 bits.
+The length of a PI must be a multiple of 128 bits.
 
 The CR itself may contain significantly more information than the Provisioning Content.
 This information may be categorized under different classes:
@@ -580,17 +581,17 @@ The format of a Sealed Cryptographic Context (SCC) is shown in <<ACE-SCC>>.
 | Content: _Fixed Data Section_
 | Empty if the context is in an error state, otherwise it depends only
 on the _Algorithm_, _AlgorithmPolicy_, and _KeyType_ fields of the Metadata Header.
- Always a multiple of 64 bits.
+ Always a multiple of 128 bits.
 | Contains keys and other algorithm-specific information.
 //
 | Content: _Architected Additional Data Section_ (Architected ADS)
 | Empty if the context is in an error state, otherwise it depends on the information contained in the Metadata and Fixed Data Sections.
-  Always a multiple of 64 bits.
+  Always a multiple of 128 bits.
 | The data in this Section is necessary for the correct functioning of the algorithm.
 //
 | Content: _Implementation (Specific) Additional Data Section_ (Implementation ADS)
 | Empty if the context is in an error state, otherwise it is Implementation-Specific.
-  Always a multiple of 64 bits.
+  Always a multiple of 128 bits.
 | The data in this Section is _not_ necessary for the correct functioning of the algorithm.
 |===
 
@@ -957,7 +958,7 @@ _Description_::
 `ace.prov` provisions a CR with Metadata and Content to create a CC. `Kd` or
 `K(Xd)` denotes the CR to be provisioned. `Xs` points to the region of memory
 containing the Metadata and the key material. The PI must be stored at an
-8-byte aligned address, and its length must be a multiple of 8 bytes.
+8-byte aligned address, and its length must be a multiple of 16 bytes.
 +
 If the instruction fails, the target CR is unconfigured, with the same
 semantics as if `ace.clear` were invoked on the same CR
@@ -1075,7 +1076,7 @@ _Encoding_::
 _Description_::
 Exports the CR `Ks` or `K(Xs)` to memory at address `Xd`, using the procedure
 described in <<ACE-provisioning-export-import>>. The SCC must be stored at an
-8-byte aligned address, and its length must be a multiple of 8 bytes.
+8-byte aligned address, and its length must be a multiple of 16 bytes.
 +
 `ace.export` appears to other harts as a sequence of individual stores.
 +
@@ -1403,10 +1404,16 @@ destination is a GPR and Bit 30 is set to 1.
 _Description_::
 +
 --
-On RV64, the instruction copies the Metadata Header of a CR `Ks` or `K(Xs)` into GPRT `Xd`.
+On RV64, `d` must be even.
+The instruction copies bits [63:0] of
+the Metadata Header of a CR `Ks` or `K(Xs)` into GPR `Xd`.
+and bits [126:64] into GPR `X[d+1]`.
 
-On RV32, `s` must be even, the register pair `X[d]` and `X[d+1]` is used as the destination,
-and  `(X[d+1] @ X[d])` replaces `Xd` in the RV64 description.
+On RV32, `d` must be a multiple of 4.
+The instruction copies bits [31:0] of the Metadata Header of a CR `Ks` or `K(Xs)` into GPR `Xd`.
+bits [63:32] into GPR `X[d+1]`,
+bits [95:64] into GPR `X[d+2]`,
+and bits [127:96] into GPR `X[d+3]`.
 --
 +
 
@@ -1447,10 +1454,10 @@ The operations is a pseudo-instruction.
 _Description_::
 `ace.getst` is implemented as a read of the source CR's metadata using `ace.getmd`
 followed by logical or bit manipulation instructions to extract the _State_ field of the latter.
-The operations are, essentially:
+Onb RV64, the operations are, essentially:
 
- . `ace.getmd Xd, Ks` or `ace.getmd Xd, K(Xs)`
- . `srli  Xd, Xd, 16`
+ . `ace.getmd Xd, Ks` or `K(Xs)`
+ . `srli  Xd, Xd, 20`
  . `andi  Xd, Xd, 0x1F`
 
 // ////////////////////////////////////////////////////////////////////
@@ -2038,10 +2045,8 @@ In order to determine the total lengths of the PI and of the SCC, the implementa
 
 . ``PI_content_size(mh)`` returns the byte length of the content section of a PI. It depends only on `mh`._Algorithm_, `mh`._AlgorithmPolicy_, and `mh`._KeyType_.
 
-. ``fixed_content_size(mh)`` returns the byte length of the fixed part of the
-  content section of an SCC. It depends only on  `mh`._Algorithm_,
-  `mh`._AlgorithmPolicy_, and `mh`._KeyType_. It does not include the length of
-  the Additional Data of the Content, of length _AddDataSize_ * 8 bytes.
+. ``fixed_content_size(mh)`` returns the byte length of the fixed part of the content section of an SCC. It depends only on  `mh`._Algorithm_,
+  `mh`._AlgorithmPolicy_, and `mh`._KeyType_. It does not include the length of the Additional Data of the Content, of length _AddDataSize_ * 16 bytes.
 
 The total size in bytes of a PI is therefore
 
@@ -2049,33 +2054,27 @@ The total size in bytes of a PI is therefore
 
 and the total size in bytes of an SCC is
 
-`{fournbsp}{fournbsp}len_in_bytes(SCC)` = `MH_size(mh)` + 16 + `fixed_content_size(mh)` + _AddDataSize_ * 8.
+`{fournbsp}{fournbsp}len_in_bytes(SCC)` = `MH_size(mh)` + 16 + `fixed_content_size(mh)` + _AddDataSize_ * 16.
 
 // ////////////////////////////////////////////////////////////////////
 
 [[ACE-interruption-points]]
 ==== Interruptibility of Configuration and Export Operations
 
-During `ace.prov` and `ace.import`, _State_ is set to _Partial_Config_ for the
-duration of the operation. It is updated to the correct value only upon
-successful completion (see <<ACE-provisioning-export-import>>).
+During `ace.prov` and `ace.import`, _State_ is set to _Partial_Config_ for the duration of the operation. It is updated to the correct value only upon successful completion (see <<ACE-provisioning-export-import>>).
 
 This transition to _Partial_Config_ does not occur during `ace.export`.
 
-Provisioning and import instructions may resume from the point of interruption
-only if control returns directly after the interrupt handler completes.
-This is characterized by a CR with _State_ set to _Partial_Config_ and
-a nonzero `acestart` value.
+Provisioning and import instructions may resume from the point of interruption only if control returns directly after the interrupt handler completes.
+This is characterized by a CR with _State_ set to _Partial_Config_ and a nonzero `acestart` value.
 The privileged interrupt handler must guarantee restart only in this case.
 
 A partially configured CR cannot be exported.
 Therefore, at context save privileged code must clear a partially configured CR.
-Before returning control flow to the process of the interrupted configuration operation, the CR must be cleared as well
-to force the instruction's restart.
+Before returning control flow to the process of the interrupted configuration operation, the CR must be cleared as well to force the instruction's restart.
 
-Provisioning, export, and import are interruptible only before any memory
-access they perform. This means that interrupts other than memory exceptions
-must wait until the next memory access, or can be served immediately provided
+Provisioning, export, and import are interruptible only before any memory access they perform.
+This means that interrupts other than memory exceptions must wait until the next memory access, or can be served immediately provided
 the CR is reverted to the last interruptible point.
 
 Upon returning to the original control flow from an interrupt or exception,
@@ -2101,7 +2100,7 @@ it to provision a CR.
 []
 ----
 function ace.prov(&CR, M[]) = {
-  mh : bits(64) ← & CR.Metadata;           // By reference, from the CR
+  mh : bits(128) ← & CR.Metadata;           // By reference, from the CR
 
   mh ← M[0 .. 7]
   z ← PI_content_size(Metadata[31:0]);
@@ -2162,24 +2161,18 @@ implementations may cache recently used derived keys.
 `POLYVAL` is a so-called Almost XOR-Universal (AXU) Hash Function.
 The SIV is the encryption of the computation of this AXU hash on the concatenation of the Locality Secrets, the Metadata zero-padded to 128 bits, and the Content of the CR.
 
-In the pseudocode below for POLYVAL, the data to be digested by POLYVAL is represented an array with an integral number of 16-byte blocks, where the last one may be just 8 bytes long.
+In the pseudocode below for POLYVAL, the data to be digested by POLYVAL is represented an array with an integral number of 16-byte blocks.
 
 [[ACE-SCC-POLYVAL]]
 .Polyval Hashing Function
 []
 ----
-function POLYVAL(&tmp : bits(128), auth_key : bits(128), blocks[0 .. n-1] : bits(128),
-                 last_block_fractional : bool) = {
+function POLYVAL(&tmp : bits(128), auth_key : bits(128), blocks[0 .. n-1] : bits(128)) = {
   tmp ← zeros(128);
   local i : int;
   foreach(i from 0 to n-1) {
-    if ((i == n-1) and last_block_fractional) {
-      tmp[63:0] ← tmp[63:0] xor blocks[i];
-      tmp ← Montmul(tmp, auth_key);
-    } else {
-      tmp ← tmp xor blocks[i];
-      tmp ← Montmul(tmp, auth_key);
-    }
+    tmp ← tmp xor blocks[i];
+    tmp ← Montmul(tmp, auth_key);
   }
 }
 ----
@@ -2208,20 +2201,19 @@ Without this protection, resuming an export could produce an incorrect SIV for t
 []
 ----
 function ace.export(&CR, M[]) = {
-  mh : bits(64) = & CR.Metadata;           // By reference, from the CR
+  mh : bits(128) = & CR.Metadata;          // By reference, from the CR
   external CSK : bits(256);
   external enc_key : bits(256);            // RFC8452_KeyDeriv(CSK)
   external auth_key : bits(128);
 
   external SIV, tmp : bits(128);
   local z : int ← fixed_content_size(mh);  // can be recomputed upon resumption
-  z ← z + mh._AddDataSize_ * 8;
+  z ← z + mh._AddDataSize_ * 16;
 
   CR.content = array of z bytes; // includes the Additional Data
   // In external memory: Metadata Header, then SIV, then Content
-  M = array of MH_size(mh) + 16 + z bytes.
+  M = array of (MH_size(mh) + 16 + z) bytes.
 
-  local let last_block_fractional : Boolean ← z % 16 != 0;
   local let num_blocks : int ← ceil(z / 16);
   local L : string of bits;
 
@@ -2235,15 +2227,12 @@ function ace.export(&CR, M[]) = {
     }
 
   // Absorb the metadata block into POLYVAL
-  tmp ← tmp xor (zeros(64) @ mh);
+  tmp ← tmp xor mh;
   tmp ← Montmul(tmp, auth_key);
 
   // Absorb the entire content into POLYVAL
   foreach(i from 0 to num_blocks - 1) {
-    if ((i == num_blocks - 1) and last_block_fractional)
-      tmp[63:0] ← tmp[63:0] xor content[i*16 .. 7+i*16];
-    else
-      tmp ← tmp xor content[i*16 .. 15+i*16];
+    tmp ← tmp xor CR.content[i*16 .. 15+i*16];
     tmp ← Montmul(tmp, auth_key);
   }
   // compute the SIV
@@ -2255,13 +2244,8 @@ function ace.export(&CR, M[]) = {
 
   // Encrypt the content and store it in memory
   foreach(i from 0 to num_blocks - 1) {
-    if ((i == num_blocks - 1) and last_block_fractional)
-      M[24+i*16 .. 31+i*16] ← CR.content[i*16 .. 7+i*16]
-               xor AESE(enc_key, 1 @ SIV[126:32] @ (SIV[31:0]+bin(i,32) % 2**32)[63:0];
-    else
-      M[24+i*16 .. 39+i*16] ← CR.content[i*16 .. 15+i*16]
-               xor AESE(enc_key, 1 @ SIV[126:32] @ (SIV[31:0]+bin(i,32) % 2**32);
-  }
+    M[24+i*16 .. 39+i*16] ← CR.content[i*16 .. 15+i*16]
+            xor AESE(enc_key, 1 @ SIV[126:32] @ (SIV[31:0]+bin(i,32) % 2**32);
 }
 ----
 
@@ -2353,7 +2337,7 @@ function ace.import(&CR, M[]) = {
   & mh = CR.Metadata;
 
   z ← fixed_content_size(mh);
-  z ← z + mh._AddDataSize_ * 8;
+  z ← z + mh._AddDataSize_ * 16;
 
   if (z == 0)
     raise exception ace_exc_not_impl;
@@ -2362,7 +2346,6 @@ function ace.import(&CR, M[]) = {
     raise exception ace_exc_out_of_mem;
 
   num_blocks ← ceil(z / 16);
-  last_block_fractional : Boolean ← (z % 16 != 0);
 
   // Start POLYVAL
   // Absorb Locality "prefix" (zero or more 128-bit blocks)
@@ -2375,25 +2358,19 @@ function ace.import(&CR, M[]) = {
   }
 
   SIV ← M[8 .. 23];
-  tmp ← tmp xor (zeros(64) @ mh);
+  tmp ← tmp xor mh;
   tmp ← Montmul(tmp, auth_key);
 
   foreach(i from 0 to num_blocks - 1) {
-    if ((i == num_blocks - 1) and last_block_fractional) {
-      content[i*16 .. 7+i*16] ← M[24+i*16 .. 31+i*16]
-          xor AESE(enc_key, 1 @ SIV[126:32] @ (SIV[31:0]+bin(i,32) % 2**32)[63:0];
-      tmp[63:0] ← tmp[63:0] xor content[i*16 .. 7+i*16];
-    } else {
-      content[i*16 .. 15+i*16] ← M[24+i*16 .. 39+i*16]
-          xor AESE(enc_key, 1 @ SIV[126:32] @ (SIV[31:0]+bin(i,32) % 2**32);
-      tmp ← tmp xor content[i*16 .. 15+i*16];
-    }
+    content[i*16 .. 15+i*16] ← M[24+i*16 .. 39+i*16]
+        xor AESE(enc_key, 1 @ SIV[126:32] @ (SIV[31:0]+bin(i,32) % 2**32);
+    tmp ← tmp xor content[i*16 .. 15+i*16];
     tmp ← Montmul(tmp, auth_key);
   }
   tmp ← AESE(enc_key, 0 @ tmp[126:0]);
 
   if (tmp != SIV) {
-    mh ← zeros(64)
+    mh ← zeros(128)
     mh.State ← ace_state_import_auth
     Clear all Contents and possibly release their memory
     return
