@@ -271,7 +271,7 @@ The following table lists the fields of the 64-bit Metadata Header.
 ////
 
 The following table lists the fields of the 128-bit Metadata Header.
-Currently, 82 bits are defined and 46 are reserved for future use.
+Currently, 81 bits are defined and 47 are reserved for future use.
 
 [[ACE-metadata-section]]
 .Format of the 128-bit Metadata Header
@@ -284,8 +284,9 @@ Bits 0 and 1 as before, bits 3 and 4 reserved.
 |  [18:16] | 3     | _SCProtection_    | Side-channel protection level. See <<ACE-SCProtection-field>>.
 |  [19:19] | 1     | _KeyType_         | 0: key is an explicit value in Content. 1: key is an index into the system-specific System Keys Table (SKT).
 |  [24:20] | 5     | _State_           | Current state of the CR/algorithm, encoded as an integer.
-|  [27:25] | 3     | _Sequence_        | Replaces `acesequence` and `aceactivecr`?
-|  [31:28] | 4     | _UsagePolicy_     | Usage (Control) Policy. Bits 0, 1, 2 and 3 of the field,, when set, disallow CC usage in U-mode, (V)S-mode, H-mode, and M-Mode, respectively.
+|  [26:25] | 2     | _Sequence_        | Tracks the position in the replacement sequence of an `ace.exec` or `ace.setst` instruction. The `aceactivecr` CSR must match the CR number.
+|  [30:27] | 4     | _UsagePolicy_     | Usage (Control) Policy. Bits 0, 1, 2 and 3 of the field,, when set, disallow CC usage in U-mode, (V)S-mode, H-mode, and M-Mode, respectively.
+|  [31:31} | 1     | Reserved          | Reserved for future use. Currently, it must be equal to zero.
 |  [39:32] | 8     | _Locality_        | Zero, or an index determining a Locality Secret. See <<ACE-Localities>>.
 |  [47:40} | 8     | Reserved          | Reserved for future use. Currently, it must be equal to zero.
 |  [63:48] | 16    | _AddDataSize_     | If non-zero, indicates an additional data section appended to Content. The length of this additional data section is _AddDataSize_ * 16 bytes (up to 1024 KiB).
@@ -655,7 +656,6 @@ ACE provides a number of unprivileged CSRs.
 |  0xXXX   | URW       | `aceiobuflen`    | ACE input/output buffer length.
 |  0xXXX   |  RO       | `acemaxiobuflen` | ACE maximum input/output buffer length. Read only.
 |  0xXXX   | URW       | `aceiobuftop`    | ACE input/output buffer limit for current transfers.
-|  0xXXX   | URW       | `acesequence`    | Sequence number of the last ACE instruction.
 |  0xXXX   | URW       | `aceactivecr`    | Active CR for `ace.input`/`ace.output`.
 |===
 
@@ -829,28 +829,28 @@ _Included in_::
 
 // ////////////////////////////////////////////////////////////////////
 
-[[ACE-CSR-acesequence]]
-===== `acesequence`
-
-{empty}
-(((CSR, `acesequence`)))
-`acesequence` is an XLEN-bit URW CSR.
-Currently, only the two least significant bits are defined and the other bits read as zero.
-
-`acesequence` is zero when vector registers are used for the current ACE instruction, and takes nonzero values when `ace.input`/`ace.output` are used in place of vector registers, as described in <<ACE-usage-input-output>>.
-
-`acesequence` may only be modified the corresponding CR is _Off_ or in an error mode.
-
-_Included in_::
-+
---
-[%header,cols="4,2,2"]
-|===
-|Extension | Minimum version | Lifecycle state
-| `Zlio`   | v0.0.0          | --
-|===
---
-+
+// [[ACE-CSR-acesequence]]
+// ===== `acesequence`
+//
+// {empty}
+// (((CSR, `acesequence`)))
+// `acesequence` is an XLEN-bit URW CSR.
+// Currently, only the two least significant bits are defined and the other bits read as zero.
+//
+// `acesequence` is zero when vector registers are used for the current ACE instruction, and takes nonzero values when `ace.input`/`ace.output` are used in place of vector registers, as described in <<ACE-usage-input-output>>.
+//
+// `acesequence` may only be modified the corresponding CR is _Off_ or in an error mode.
+//
+// _Included in_::
+// +
+// --
+// [%header,cols="4,2,2"]
+// |===
+// |Extension | Minimum version | Lifecycle state
+// | `Zlio`   | v0.0.0          | --
+// |===
+// --
+// +
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -863,10 +863,9 @@ _Included in_::
 It binds `ace.input`, `ace.output`, `ace.exec`, and `ace.setst` to a specific CR.
 The valid values are 0–31, which are used to bind to a CR, or 32, which disables any such binding.
 
-`aceactivecr` may only be modified when `acesequence` is zero, or the corresponding CR is _Off_ or in an error mode.
-This rule implies that
-
 When `aceactivecr` is not 32, the CR operand in all single-CR instructions and the source CR in `ace.clone` must equal the selected value.
+
+At any given moment, only one _Sequence_ field in the Metadata Sections of all CRs may be non-zero, and `aceactivecr` must match the number of that CR.
 
 Any deviation from these behaviors raises an illegal instruction exception.
 
@@ -2099,7 +2098,7 @@ it to provision a CR.
 .Provisioning a CR with Metadata and content
 []
 ----
-function ace.prov(&CR, M[]) = {
+function ace.prov(&CR, M[]) ={
   mh : bits(128) ← & CR.Metadata;           // By reference, from the CR
 
   mh ← M[0 .. 7]
@@ -2181,9 +2180,8 @@ function POLYVAL(&tmp : bits(128), auth_key : bits(128), blocks[0..n-1] : bits(1
 ==== Export
 
 During SCC export and import, the Locality Secrets associated with the
-Localities encoded in the _Locality_ field of the Metadata are prepended, in
-ascending index order, to the input of the AEAD tag computation, before the
-metadata. If the _Locality_ field is zero, no Locality Secrets are prepended.
+Localities encoded in the _Locality_ field of the Metadata are prepended, in ascending index order, to the input of the AEAD tag computation, before the metadata.
+If the _Locality_ field is zero, no Locality Secrets are prepended.
 
 The ACE architecture supports only one export/import operation per hart at a time.
 Accordingly, an implementation will maintain only a single per hart instance of variables for `SIV` and `tmp`.
@@ -2280,7 +2278,8 @@ The import algorithm needs some special care:
 .Importing an SCC into a CR
 []
 ----
-function ace.import(&CR, M[]) = {
+function ace.import(&CR, M[]) =
+{
   // M : array of bytes;   from memory
   local saved_SN : bits(4);                // This is a "hidden" state as well
   external SIV, tmp : bits(128);
