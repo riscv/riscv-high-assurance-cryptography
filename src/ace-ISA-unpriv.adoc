@@ -73,7 +73,7 @@ or the system may impose a timeout before halting.
 The architecture permits all these approaches.
 It only specifies the allowed interruption points for its instructions and algorithms.
 
-Conceptually, for each of the 32 CRs, ACE maintains a full 64-bit Metadata Header and an offset into internal memory pointing to the CR's Content (if not empty). The Metadata Header indicates whether a CR is configured. The actual representation of CRs in a concrete implementation may differ significantly.
+Conceptually, for each of the 32 CRs, ACE maintains a full 128-bit Metadata Header and an offset into internal memory pointing to the CR's Content (if not empty). The Metadata Header indicates whether a CR is configured. The actual representation of CRs in a concrete implementation may differ significantly.
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -242,13 +242,14 @@ ACE defines two external CC formats:
 {empty}
 (((Cryptographic Context,Metadata)))
 (((Cryptographic Context,Metadata,Header)))
-Both formats begin with a 64-bit Metadata Header, whose format we define next.
+Both formats begin with a 128-bit Metadata Header, whose format we define next.
 
 // ////////////////////////////////////////////////////////////////////
 
 [[ACE-Metadata]]
 ===== Metadata Header
 
+////
 The following table lists the fields of the 64-bit Metadata Header.
 
 [[ACE-metadata-section]]
@@ -260,37 +261,54 @@ The following table lists the fields of the 64-bit Metadata Header.
 | [12:11] | 2     | _AlgorithmPolicy_ | Allowed algorithm variants(s) _or_ extension of the _Algorithm_ field. See <<ACE-Algorithm-field>>.
 | [14:13] | 2     | _SCProtection_    | Side-channel protection level. See <<ACE-SCProtection-field>>.
 | [15:15] | 1     | _KeyType_         | 0: key is an explicit value in Content. 1: key is an index into the system-specific System Keys Table (SKT).
-| [20:16] | 5     | _State_           | Current state of teh CR/algorithm, encoded as an integer.
+| [20:16] | 5     | _State_           | Current state of the CR/algorithm, encoded as an integer.
 | [28:21] | 8     | _Locality_        | Zero, or an index determining a Locality Secret. See <<ACE-Localities>>.
 | [31:29] | 3     | _UsagePolicy_     | Usage (Control) Policy. Bits 29, 30, and 31, when set, disallow CC usage in U-mode, (V)S-mode, and H-mode, respectively.
 | [45:32] | 14    | _AddDataSize_     | If non-zero, indicates an additional data section appended to Content. The length of this additional data section is _AddDataSize_ × 8 bytes (up to 128 KiB).
 | [63:46] | 18    | _ExpirationDate_  | If non-zero, the expiration date of this CC. See <<ACE-Metadata-expiration-date>>.
 |===
+////
 
-Selected fields require additional explanation, provided in the following subsections.
+The following table lists the fields of the 128-bit Metadata Header.
+
+[[ACE-metadata-section]]
+.Format of the 128-bit Metadata Header
+[width="100%",cols="^9%,^7%,14%,70%",options="header"]
+|===
+| Field   | Width | Name              | Description
+| [11:0]  | 12    | _Algorithm_       | Cryptographic algorithm (primitive, mode, or protocol). See <<ACE-Algorithm-field>>.
+| [15:12] | 4     | _AlgorithmPolicy_ | Allowed algorithm variants(s) _or_ extension of the _Algorithm_ field. See <<ACE-Algorithm-field>>.
+Bits 0 and 1 as before, bits 3 and 4 reserved.
+| [18:16] | 3     | _SCProtection_    | Side-channel protection level. See <<ACE-SCProtection-field>>.
+| [19:19] | 1     | _KeyType_         | 0: key is an explicit value in Content. 1: key is an index into the system-specific System Keys Table (SKT).
+| [27:20] | 8     | _Locality_        | Zero, or an index determining a Locality Secret. See <<ACE-Localities>>.
+| [32:28] | 5     | _State_           | Current state of the CR/algorithm, encoded as an integer.
+| [35:33] | 3     | _Sequence_        | Replaces `acesequence` and `aceactivecr`?
+| [39:36] | 4     | _UsagePolicy_     | Usage (Control) Policy. Bits 0, 1, 2 and 3 of the field,, when set, disallow CC usage in U-mode, (V)S-mode, H-mode, and M-Mode, respectively.
+| [55:40] | 16    | _AddDataSize_     | If non-zero, indicates an additional data section appended to Content. The length of this additional data section is _AddDataSize_ × 16 bytes (up to 512 KiB).
+| [63:56} | 8     | Reserved          | Reserved for future use
+| [89:64] | 26    | _ExpirationDate_  | If non-zero, the expiration date of this CC. See <<ACE-Metadata-expiration-date>>. Minutes since 00:00, January 1, 2027. (127 years...)
+| [127:90] | 38    | Reserved         | Reserved for future use
+|===
+
+
+In the following subsections we describe the fields of the Metadata section.
 
 //
 
 [[ACE-Algorithm-field]]
 ====== _Algorithm_ and _AlgorithmPolicy_ Fields
 
-Algorithms are encoded in an 11-bit field. Values 0–1535 and 2047 are
-architecture-defined; the list of encodings is maintained by RVI (see
-<<ACE-algorithms>>). The remaining values are available for custom algorithms.
+Algorithms are encoded in a 12-bit field. Values 0–3071 and 4095 are architecture-defined.
+The list of encodings is maintained by RVI (see <<ACE-algorithms>>).
+The remaining values are available for custom algorithms.
 
-For encryption/decryption primitives and modes, the _AlgorithmPolicy_ field
-indicates whether the CC may be used for encryption (lower bit set), decryption
-(upper bit set), or both. At least one of the bits must be set.
+For encryption/decryption primitives and modes, the _AlgorithmPolicy_ field indicates whether the CC may be used for encryption (lower bit set), decryption (upper bit set), or both. At least one of the bits must be set.
 
-For asymmetric primitives supporting signatures, the lower bit permits
-signature generation and the upper bit permits verification.
-Such an asymmetric primitive can be configured to support
-primitives such as key agreement or key encapsulation but _not_ signatures,
-and in this case both bits are zero.
+For asymmetric primitives supporting signatures, the lower bit permits signature generation and the upper bit permits verification.
+Such an asymmetric primitive can be configured to support primitives such as key agreement or key encapsulation but _not_ signatures, and in this case both bits are zero.
 
-For other primitives, the _AlgorithmPolicy_ field may encode additional
-algorithm identifiers to expand the effective encoding space of the _Algorithm_
-field.
+For other primitives, the _AlgorithmPolicy_ field may encode additional algorithm identifiers to expand the effective encoding space of the _Algorithm_ field.
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -757,8 +775,10 @@ Attempting to execute an operation that expects an input or an output in the ACE
 Writing a value larger than `acemaxiobuflen` raises exception `ace_exc_out_of_mem`.
 
 As per the Privileged Architecture, the dirtiness of the ACEIOBUF is not tracked except as part of the entire ACE state in `*status`.
+Context switching code is expected to save and restore the contents of the ACEIOBUF up to `aceiobuflen`.
 We recommend software to set `aceiobuflen` to zero once the contents of the ACEIOBUF are no longer needed.
 Context switching code can use this information to avoid unnecessary save and restore of ACEIOBUF contents.
+
 
 _Included in_::
 +
@@ -785,20 +805,15 @@ The constraints `acestart` {le} `aceiobuftop` {le} `aceiobuflen` must hold.
 Violating either bound raises an illegal instruction exception.
 Modifying `aceiobuftop` does not modify buffer contents.
 
-NOTE: `aceiobuftop` enables per-operation length adjustments without
-reconfiguring the ACEIOBUF, which can be expensive due to the fact that writing
-to `aceiobuflen` clears the buffer and may lead to internal garbage collection.
-// This is useful to process an incomplete "last block" or to supply a short IV or
-// nonce.
+NOTE: `aceiobuftop` enables per-operation length adjustments without the need to reconfigure the ACEIOBUF using `aceiobuflen`, which can be expensive due to the fact that it clears the buffer and may lead to internal garbage collection.
+This can be used similarly to the reconfiguration of `VL*SEW` to provide an partial “last block” or to supply a short IV/nonce to cryptographic algorithms.
 
 Using a replacement sequence for `ace.exec` or `ace.setst` for any Form with an input or output
 when `aceiobuftop` − `acestart` is zero (and `aceiobuflen` nonzero) will result in no operation being performed.
 
 Using ACEIOBUF when `aceiobuftop` − `acestart` is an invalid length raises an illegal instruction exception.
 
-Context switching code is expected to save and restore the contents of the ACEIOBUF up to
-`aceiobuflen`, hence the contents of the ACEIOBUF between `aceiobuftop` and `aceiobuflen`
-are saved.
+Since context switching code saves and restores the contents of the ACEIOBUF up to `aceiobuflen`, the contents between `aceiobuftop` and `aceiobuflen` are preserved.
 
 _Included in_::
 +
@@ -818,11 +833,12 @@ _Included in_::
 
 {empty}
 (((CSR, `acesequence`)))
-`acesequence` is an XLEN-bit URW CSR. Currently, only the two least significant bits are defined
-and the other bits read as zero.
-`acesequence`  is zero when vector registers are used for the current ACE instruction, and takes
-nonzero values when `ace.input`/`ace.output` are used in place of vector
-registers, as described in <<ACE-usage-input-output>>.
+`acesequence` is an XLEN-bit URW CSR.
+Currently, only the two least significant bits are defined and the other bits read as zero.
+
+`acesequence` is zero when vector registers are used for the current ACE instruction, and takes nonzero values when `ace.input`/`ace.output` are used in place of vector registers, as described in <<ACE-usage-input-output>>.
+
+`acesequence` may only be modified the corresponding CR is _Off_ or in an error mode.
 
 _Included in_::
 +
@@ -842,17 +858,16 @@ _Included in_::
 
 {empty}
 (((CSR, `aceactivecr`)))
-`aceactivecr` is an XLEN-bit URW CSR; only the low 5 bits are defined. It binds
-`ace.input`, `ace.output`, `ace.exec`, and `ace.setst` to a specific CR. Valid
-values are 0–31 (selecting a CR) or 32 (disabled).
+`aceactivecr` is an XLEN-bit URW CSR; only the low 5 bits are defined.
+It binds `ace.input`, `ace.output`, `ace.exec`, and `ace.setst` to a specific CR.
+The valid values are 0–31, which are used to bind to a CR, or 32, which disables any such binding.
 
-`aceactivecr` may only be modified when `acesequence` is zero or an illegal
-instruction exception is raised.
+`aceactivecr` may only be modified when `acesequence` is zero, or the corresponding CR is _Off_ or in an error mode.
+This rule implies that
 
-When `aceactivecr` is not 32, the CR operand in all single-CR instructions and
-the source CR in `ace.clone` must equal the selected value; any deviation
-raises an illegal instruction exception, ensuring correct instruction
-sequencing.
+When `aceactivecr` is not 32, the CR operand in all single-CR instructions and the source CR in `ace.clone` must equal the selected value.
+
+Any deviation from these behaviors raises an illegal instruction exception.
 
 _Included in_::
 +
@@ -1427,7 +1442,7 @@ _Mnemonic_::
 (((ACE, instruction, ace.getst)))
 
 _Encoding_::
-The operations is a pseudo instruction.
+The operations is a pseudo-instruction.
 
 _Description_::
 `ace.getst` is implemented as a read of the source CR's metadata using `ace.getmd`
@@ -1437,24 +1452,6 @@ The operations are, essentially:
  . `ace.getmd Xd, Ks` or `ace.getmd Xd, K(Xs)`
  . `srli  Xd, Xd, 16`
  . `andi  Xd, Xd, 0x1F`
-
- _Properties_::
-Possibly modifies state: *NO*. +
-Usage-controlled: *NO*. +
-Trappable: *NO*. +
-Interruptible: *N/A*. +
-
-_Included in_::
-+
---
-[%header,cols="4,2,2"]
-|===
-|Extension | Minimum version | Lifecycle state
-| `Zlv`    | v0.0.0          | --
-| `Zlio`   | v0.0.0          | --
-|===
---
-+
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -1876,12 +1873,9 @@ _Encoding_::
 ....
 
 _Description_::
-In all cases where the vector registers are not sufficiently long, or not
-implemented, inputs can be read directly from memory and written directly to
-memory. For this reason, the architecture defines `ace.input` and `ace.output`
-(cf. next section). `ace.input` reads `Xl` bytes from memory starting at
-address `%offset(Xs)` and copies them to the ACEIOBUF, starting at offset
-`acestart`.
+If the vector registers are not sufficiently long, or not implemented, inputs can be read directly from memory and outputs written directly to memory.
+For this reason, the architecture defines `ace.input` and `ace.output` (cf. next section).
+`ace.input` reads `Xl` bytes from memory starting at address `%offset(Xs)` and copies them to the ACEIOBUF, starting at offset `acestart`.
 +
 If `Xl` == 0, the operation is a NOP.
 +
@@ -1968,24 +1962,20 @@ _Included in_::
 === Interruptibility of ACE instructions
 
 `ace.clear`, `ace.reset`, `ace.setst`, `ace.getst`, `ace.restrict`, `ace.clone`, `ace.size` and `ace.avail` are uninterruptible.
+`ace.prov`, `ace.import`, `ace.export`, `ace.input`, and `ace.output` may be interrupted.
+For `ace.prov`, `ace.import`, and `ace.export`, see <<ACE-provisioning-export-import>>.
+For `ace.input` and `ace.output`, the value of `acestart` will reflect the amount of data read or written before the interrupt and resumption will start from that point.
 
-`ace.import`, `ace.export`, `ace.prov`, `ace.input`, and `ace.output` can be interrupted.
-The interruptibility of provisioning, import, and export operations is
-defined in <<ACE-provisioning-export-import>>.
-For `ace.input` and `ace.output`, interruptibility limited to interrupts and memory errors.
-`acestart` will reflect the amount of data read or written before the interrupt and resumption will start from that point.
+The operation of `ace.exec` on a basic processing unit is uninterruptible, unless explicitly allowed by the algorithm.
+In general, most cryptographic primitives cannot be interrupted; therefore, state information to encode round number or round key value is not needed.
+For certain very long running operations, such as public key primitives, an algorithm specific interruptibility behavior is defined.
 
-The operation of `ace.exec` on a basic processing unit is uninterruptible,
-unless explicitly allowed by the algorithm. In general, most cryptographic
-primitives cannot be interrupted; therefore, state information to encode
-round number or round key value is not needed.  For certain very long running
-operations, such as public key primitives, an algorithm specific
-interruptibility behavior is defined.
-
-When `ace.exec` processes multiple blocks iteratively, each block is handled atomically. The instruction may be interrupted between blocks. Upon receiving an interrupt during block processing, the implementation has two options:
-
-* Complete the current block before yielding to the interrupt handler. `acestart` points to the next block.
-* Discard the partially executed block and restore the state prior to that block's processing. `acestart` points to the partially processed block.
+When `ace.exec` processes multiple blocks iteratively, each block is handled atomically but the instruction may be interrupted between blocks.
+Upon receiving an interrupt during block processing, the implementation may either
+complete the current block before yielding to the interrupt handler
+or
+discard the partially executed block and restore the state prior to that block's processing.
+`acestart` is set accordingly.
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -2024,9 +2014,11 @@ For example, writing to `content[]` may initially write the unmasked value to th
 [[ACE-system-keys]]
 ==== System Keys and Randomly Generated Key Values
 
-In a PI or SCC, System Keys are encoded as a 64-bit index into an internal, system-specific System Keys Table (SKT). This replaces the key value itself, which may reduce the size of the PI or SCC content.
+In a PI or SCC, System Keys are encoded as a 64-bit index into an internal, system-specific System Keys Table (SKT).
+This replaces the key value itself, which may reduce the size of the PI or SCC content.
 
-For threshold implementations of system keys, ACE may copy key material from the SKT into the CR and expand it into multiple shares. The key is still exported as a single index.
+For threshold implementations of system keys, ACE may copy key material from the SKT into the CR and expand it into multiple shares.
+The key is still exported as a single index.
 
 For the purpose of accelerating key share reconstruction in a threshold implementation, some shares of a system key can be included in the content's Additional Data, as long as the key cannot be recovered from those shares alone.
 
@@ -2042,12 +2034,9 @@ This applies to all keys at once in an algorithms, unless otherwise specified.
 Let `mh` denote a Metadata Header.
 In order to determine the total lengths of the PI and of the SCC, the implementation provides the following functions or an equivalent mechanism:
 
-. ``MH_size(mh)`` returns the byte length of the Metadata Header. In the
-  current specification, it is always 8.
+. ``MH_size(mh)`` returns the byte length of the Metadata Header. In the current specification, it is always 8.
 
-. ``PI_content_size(mh)`` returns the byte length of the content section of a
-  PI. It depends only on `mh`._Algorithm_, `mh`._AlgorithmPolicy_, and
-  `mh`._KeyType_.
+. ``PI_content_size(mh)`` returns the byte length of the content section of a PI. It depends only on `mh`._Algorithm_, `mh`._AlgorithmPolicy_, and `mh`._KeyType_.
 
 . ``fixed_content_size(mh)`` returns the byte length of the fixed part of the
   content section of an SCC. It depends only on  `mh`._Algorithm_,
