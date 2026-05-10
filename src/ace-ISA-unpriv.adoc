@@ -172,7 +172,7 @@ is described in <<ACE-instruction-size>>.
 Any corruption of the CRF associated with a hart shall cause an unrecoverable error condition.
 The entire architectural state of the ACE unit associated with the hart is reset, and exception `ace_guru_meditation` is raised (cf. <<ACE-exceptions>>).
 
-We briefly summarize the most important operations on CRs, in order to be able to refer to them before they are fully defined.
+We list the most important operations on CRs, so we can refer to them before they are fully defined.
 
 * `ace.prov` (<<ACE-instruction-init>>) loads metadata and plaintext Content into a CR, binding them together.
 * `ace.clear` (<<ACE-instruction-clear>>) unconfigures and clears a CR.
@@ -216,10 +216,11 @@ This allows additional requirements to be collected, for example, whether to man
 The optional architectural, per-hart input/output buffer (ACEIOBUF) may be
 used in place of vector registers, as described in <<ACE-usage-input-output>>.
 The ACEIOBUF is not part of any CR.
+Instructions `ace.input` and `ace.output` are used to write inputs to the ACEIOBUF and read outputs from it.
 
-The total length and the range of the ACEIOBUF used in cryptographic
-instructions are controlled by the `aceiobuflen` (<<ACE-CSR-aceiobuflen>>) and
-`aceiobuftop` (<<ACE-CSR-aceiobuftop>>) CSRs.
+// The total length and the range of the ACEIOBUF used in cryptographic
+// instructions are controlled by the `aceiobuflen` (<<ACE-CSR-aceiobuflen>>) and
+// `aceiobuftop` (<<ACE-CSR-aceiobuftop>>) CSRs.
 
 // Some instructions will accept an input and an output in the ACEIOBUF.
 // The input and output may be identical or different, but there must be either
@@ -284,11 +285,12 @@ Currently, 79 bits are defined and 49 are reserved for future use.
 |  [18:16] | 3     | _SCProtection_    | Side-channel protection level. See <<ACE-SCProtection-field>>.
 |  [19:19] | 1     | _KeyType_         | 0: key is an explicit value in Content. 1: key is an index into the system-specific System Keys Table (SKT).
 |  [24:20] | 5     | _State_           | Current state of the CR/algorithm, encoded as an integer.
-|  [26:25] | 2     | _Sequence_        | Tracks the position in the replacement sequence of an `ace.exec` or `ace.setst` instruction. The `aceactivecr` CSR must match the CR number.
-|  [30:27] | 4     | _UsagePolicy_     | Usage (Control) Policy. Bits 0, 1, 2 and 3 of the field,, when set, disallow CC usage in U-mode, (V)S-mode, H-mode, and M-Mode, respectively.
-|  [31:31] | 1     | Reserved          | Reserved for future use. Currently, it must be equal to zero.
-|  [39:32] | 8     | _Locality_        | Zero, or an index determining a Locality Secret. See <<ACE-Localities>>.
-|  [47:40} | 8     | Reserved          | Reserved for future use. Currently, it must be equal to zero.
+|  [26:25] | 2     | _Sequence_        | Tracks the progress in the replacement sequence of an `ace.exec` or `ace.setst` instruction. The `aceactivecr` CSR must match the CR number.
+|  [31:27] | 5     | Reserved          | Reserved for future use. Currently, it must be equal to zero.
+|  [35:32] | 4     | _UsagePolicy_     | Usage (Control) Policy. Bits 0, 1, 2 and 3 of the field,, when set, disallow CC usage in U-mode, (V)S-mode, H-mode, and M-Mode, respectively.
+|  [36:36] | 1     | Reserved          | Reserved for future use. Currently, it must be equal to zero.
+|  [44:37] | 8     | _Locality_        | Zero, or an index determining a Locality Secret. See <<ACE-Localities>>.
+|  [47:45] | 3     | Reserved          | Reserved for future use. Currently, it must be equal to zero.
 |  [63:48] | 16    | _AddDataSize_     | If non-zero, indicates an additional data section appended to Content. The length of this additional data section is _AddDataSize_ * 16 bytes (up to 1024 KiB).
 |  [89:64] | 26    | _ExpirationDate_  | If non-zero, the expiration date of this CC. See <<ACE-Metadata-expiration-date>>. Minutes since 00:00, January 1, 2027. (127 years...)
 | [127:90] | 38    | Reserved         | Reserved for future use.  Currently, it must be equal to zero.
@@ -524,8 +526,8 @@ encryption and decryption);
 . Information, such as additional elliptic curve points or random numbers used by Elliptic Curve algorithms only in certain states;
 . any auxiliary data for side-channel-protected implementations, such as key shares or other data to accelerate share reconstruction.
 
-Examples 1., 2, and 4. are optional data, and therefore should be stored in the _Implementation-Specific_ Additional Data Section.
-The third example, however, describes information that is required for the correct functioning of the algorithm. Therefore, its format must be defined by the algorithm specification and the data should be stored in the _Architected_ Additional Data Section.
+Examples 1., 2., and 4. are optional data, and therefore are stored in the _Implementation-Specific_ ADS.
+The third example, however, describes information that is required for the correct functioning of the algorithm. Therefore, its format must be defined by the algorithm specification and the data should be stored in the _Architected_ ADS.
 ====
 
 // ////////////////////////////////////////////////////////////////////
@@ -2095,7 +2097,7 @@ This applies to all keys at once in an algorithms, unless otherwise specified.
 Let `mh` denote a Metadata Header.
 In order to determine the total lengths of the PI and of the SCC, the implementation provides the following functions or an equivalent mechanism:
 
-. ``MH_size(mh)`` returns the byte length of the Metadata Header. In the current specification, it is always 8.
+. ``MH_size`` returns the byte length of the Metadata Header. It is always 16.
 
 . ``PI_content_size(mh)`` returns the byte length of the content section of a PI. It depends only on `mh`._Algorithm_, `mh`._AlgorithmPolicy_, and `mh`._KeyType_.
 
@@ -2104,11 +2106,11 @@ In order to determine the total lengths of the PI and of the SCC, the implementa
 
 The total size in bytes of a PI is therefore
 
-`{fournbsp}{fournbsp}len_in_bytes(PI){nbsp}` = `MH_size(mh)` + `PI_content_size(mh)`,
+`{fournbsp}{fournbsp}len_in_bytes(PI){nbsp}` = `MH_size` + `PI_content_size(mh)`,
 
 and the total size in bytes of an SCC is
 
-`{fournbsp}{fournbsp}len_in_bytes(SCC)` = `MH_size(mh)` + 16 + `fixed_content_size(mh)` + _AddDataSize_ * 16.
+`{fournbsp}{fournbsp}len_in_bytes(SCC)` = `MH_size` + 16 + `fixed_content_size(mh)` + _AddDataSize_ * 16.
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -2266,7 +2268,7 @@ function ace.export(&CR, M[]) =
 
   CR.content = array of z bytes; // includes the Additional Data
   // In external memory: Metadata Header, then SIV, then Content
-  M = array of (MH_size(mh) + 16 + z) bytes.
+  M = array of (MH_size + 16 + z) bytes.
 
   local let num_blocks : int ← ceil(z / 16);
   local L : string of bits;
@@ -2345,10 +2347,10 @@ function ace.import(&CR, M[]) =
   external enc_key : bits(256);
   external auth_key : bits(128);
 
-  tmp[63:0] ← M[0 .. 7];         // read Metadata Header
+  tmp ← M[0 .. 15];         // read Metadata Header
 
-  saved_SN ← tmp[63:0].State;
-  CR.Metadata ← tmp[63:0];
+  saved_SN ← ((Metadata field)tmp).State;
+  CR.Metadata ← tmp;
   CR.Metadata.State ← ace_state_partial_config;
 
   & mh = CR.Metadata;
