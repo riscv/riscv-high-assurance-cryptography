@@ -860,9 +860,10 @@ _Included in_::
 It binds `ace.input`, `ace.output`, `ace.exec`, and `ace.setst` to a specific CR.
 The valid values are 0–31, which are used to bind to a CR, or 32, which disables any such binding.
 
-When `aceactivecr` is not 32, the CR operand in all single-CR instructions and the source CR in `ace.clone` must equal the selected value.
+When `aceactivecr` is not 32, the CR operand in all single-CR instructions and the source CR in `ace.clone` must equal the selected value, and the
+_Sequence_ metadata field of that CR must track the operation in an instruction replacement sequence zzz
 
-At any given moment, only one _Sequence_ field in the Metadata Sections of all CRs may be non-zero, and `aceactivecr` must match the number of that CR.
+// At any given moment, only one _Sequence_ field in the Metadata Sections of all CRs may be non-zero, and `aceactivecr` must match the number of that CR.
 
 Any deviation from these behaviors raises an illegal instruction exception.
 
@@ -1957,6 +1958,64 @@ _Included in_::
 |===
 --
 +
+// ////////////////////////////////////////////////////////////////////
+
+[[ACE-usage-input-output]]
+=== Usage of `ace.input` and `ace.output` to Replace Vector Inputs and Outputs
+
+When ACEIOBUF is implemented, in all algorithms the following applies: any
+occurrence of the “Original Instructions” in <<ACE-replacement-instructions>>
+may be substituted by the corresponding “Replacement Sequence” where
+`ace.input` and `ace.output` instructions are used in place of the vector
+register inputs and outputs.
+The use of such Replacement Sequences is implied in all algorithms and not explicitly written each time.
+
+[[ACE-replacement-instructions]]
+.Replacement sequences for `ace.exec` and `ace.setst` using `ace.input` and `ace.output`
+[float="center",align="center",width="100%",cols="<24%,<38%,<38%",options="header"]
+|===
+| Instruction and Form | Original Instruction          | Replacement Sequence
+| `ace.exec`, Form A   | `ace.exec{nbsp}{nbsp}Vd, Kn\|K(Xn), Vs` | `1: ace.input{nbsp}{nbsp}Xl, Vs` +
+`2: ace.exec{nbsp}{nbsp}{nbsp}Kn\|K(Xn)` +
+`3: ace.output{nbsp}Vd,  Xl` +
+| `ace.exec`, Form B   | `ace.exec{nbsp}{nbsp}{nbsp}{nbsp}{nbsp}{nbsp}Kn\|K(Xn), Vs`     | `1: ace.input{nbsp}{nbsp}Xl, Vs` +
+`2: ace.exec{nbsp}{nbsp}{nbsp}Kn\|K(Xn)` +
+| `ace.exec`, Form C   | `ace.exec{nbsp}{nbsp}Vd, Kn\|K(Xn)`     | `1: ace.exec{nbsp}{nbsp}{nbsp}Kn\|K(Xn)` +
+`2: ace.output{nbsp}Vd,  Xl` +
+| `ace.setst`, Form C  | `ace.setst{nbsp}Kd\|K(Xd), #immed, Vs` | `1: ace.input{nbsp}{nbsp}Xl, Vs` +
+`2: ace.setst{nbsp}{nbsp}Kd\|K(Xd), #immed` +
+// | `ace.derive`, Form C | `ace.derive Kd\|K(Xd), Ks1\|K(Xs1), Vs2` | `1: ace.input{nbsp}{nbsp}Xl, Vs2` +
+// `2: ace.derive{nbsp}Kd\|K(Xd), Ks1\|K(Xs1)` +
+|===
+
+The sole functions of `ace.input` and `ace.output` are to supply inputs to cryptographic operations and to read out their outputs. No computation is performed on the data by these instructions. All computations and internal state changes of `ace.exec` and `ace.setst` remain within those operations.
+
+`ace.input` and `ace.output` may be used only if the ACEIOBUF is enabled and `aceiobuflen` is non-zero. Otherwise, exception `ace_exc_buf_unconf` is raised. If `aceiobuflen` is non-zero but the range size `aceiobuftop - acestart` is invalid for the algorithm, exception `ace_exc_invalid` is raised and the `ace.exec` operation is not performed.
+
+The `ace.input` and `ace.output` instructions must be tied to a specific context to determine the allowed sequences.
+This is done by setting the `aceactivecr` CSR (<<ACE-CSR-aceactivecr>>).
+It is the responsibility of the user to reset it to the value of 32 at the end of the code.
+
+If the execution of any `ace.exec` or `ace.setst` operation leads to an error state for the `aceactivecr` CR, the implementation must reset `aceactivecr` to teh value of 32.
+
+The architecture uses the _Sequence_ field in the metadata field of each CR to track the progress of the replacement sequences.
+The initial value of _Sequence_ is 0.
+It remains zero while the forms of `ace.exec` and `ace.setst` specified in the algorithm are used.
+As soon as one of the following events happens:
+
+. An `ace.input` is completed in place of a Form A or B `ace.exec`, or Form C `ace.setst`; or
+. A Form D `ace.exec` is completed in place of a Form C `ace.exec`,
+
+then _Sequence_ is set to 1, to denote that the first instruction in the
+replacement sequence has completed, provided that `aceactivecr` is configured
+correctly to the CR used in the original instruction, and not 32.
+Then, _Sequence_ keeps track of how many instructions of the replacement sequence have been completed.
+At the end of the replacement sequence, _Sequence_  is reset to 0.
+
+The ordering of the instructions in a replacement sequence is enforced by the
+architecture according to the value of _Sequence_ and the state number of
+the CR configured in `aceactivecr`. Not following the instruction ordering
+raises an illegal instruction exception and invalidates the CR.
 
 // ////////////////////////////////////////////////////////////////////
 

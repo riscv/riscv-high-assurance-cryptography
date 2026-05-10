@@ -217,70 +217,6 @@ This extends also to the use of replacement sequences for `ace.exec` and `ace.se
 
 In particular, any configuration instruction, `ace.export` and `ace.clone` may with either the CR as source or destination, and `ace.clear`, are always allowed.
 
-[[ACE-usage-input-output]]
-==== Usage of `ace.input` and `ace.output` to Replace Vector Inputs and Outputs
-
-When ACEIOBUF is implemented, in all algorithms the following applies: any
-occurrence of the “Original Instructions” in <<ACE-replacement-instructions>>
-may be substituted by the corresponding “Replacement Sequence” where
-`ace.input` and `ace.output` instructions are used in place of the vector
-register inputs and outputs.
-The use of such Replacement Sequences is implied in all algorithms and not explicitly written each time.
-
-[[ACE-replacement-instructions]]
-.Replacement sequences for `ace.exec` and `ace.setst` using `ace.input` and `ace.output`
-[float="center",align="center",width="100%",cols="<24%,<38%,<38%",options="header"]
-|===
-| Instruction and Form | Original Instruction          | Replacement Sequence
-| `ace.exec`, Form A   | `ace.exec{nbsp}{nbsp}Vd, Kn\|K(Xn), Vs` | `1: ace.input{nbsp}{nbsp}Xl, Vs` +
-`2: ace.exec{nbsp}{nbsp}{nbsp}Kn\|K(Xn)` +
-`3: ace.output{nbsp}Vd,  Xl` +
-| `ace.exec`, Form B   | `ace.exec{nbsp}{nbsp}{nbsp}{nbsp}{nbsp}{nbsp}Kn\|K(Xn), Vs`     | `1: ace.input{nbsp}{nbsp}Xl, Vs` +
-`2: ace.exec{nbsp}{nbsp}{nbsp}Kn\|K(Xn)` +
-| `ace.exec`, Form C   | `ace.exec{nbsp}{nbsp}Vd, Kn\|K(Xn)`     | `1: ace.exec{nbsp}{nbsp}{nbsp}Kn\|K(Xn)` +
-`2: ace.output{nbsp}Vd,  Xl` +
-| `ace.setst`, Form C  | `ace.setst{nbsp}Kd\|K(Xd), #immed, Vs` | `1: ace.input{nbsp}{nbsp}Xl, Vs` +
-`2: ace.setst{nbsp}{nbsp}Kd\|K(Xd), #immed` +
-// | `ace.derive`, Form C | `ace.derive Kd\|K(Xd), Ks1\|K(Xs1), Vs2` | `1: ace.input{nbsp}{nbsp}Xl, Vs2` +
-// `2: ace.derive{nbsp}Kd\|K(Xd), Ks1\|K(Xs1)` +
-|===
-
-The sole functions of `ace.input` and `ace.output` are to supply inputs to cryptographic operations and to read out their outputs. No computation is performed on the data by these instructions. All computations and internal state changes of `ace.exec` and `ace.setst` remain within those operations.
-
-`ace.input` and `ace.output` may be used only if the ACEIOBUF is enabled and `aceiobuflen` is non-zero. Otherwise, exception `ace_exc_buf_unconf` is raised. If `aceiobuflen` is non-zero but the range size `aceiobuftop - acestart` is invalid for the algorithm, exception `ace_exc_invalid` is raised and the `ace.exec` operation is not performed.
-
-The `ace.input` and `ace.output` instructions must be tied to a specific context to determine the allowed sequences.
-This is done by setting the `aceactivecr` CSR (<<ACE-CSR-aceactivecr>>).
-It is the responsibility of the user to reset it to the value of 32 at the end of the code.
-
-If the execution of any `ace.exec` or `ace.setst` operation leads to an error state for the `aceactivecr` CR, the implementation must reset `aceactivecr` to teh value of 32.
-
-The architecture uses the `acesequence` CSR to track the progress of the
-replacement sequences. The initial value of `acesequence` is 0. It remains zero
-while the forms of `ace.exec` and `ace.setst` specified in the algorithm are
-used. As soon as one of the following events happens:
-
-. An `ace.input` is completed in place of a Form A or B `ace.exec`, or Form C
-  `ace.setst`; or
-. A Form D `ace.exec` is completed in place of a Form C `ace.exec`,
-
-then `acesequence` is set to 1, to denote that the first instruction in the
-replacement sequence has completed. Then, `acesequence` keeps track of how many
-instructions of the replacement sequence have been completed. At the end of the
-replacement sequence, `acesequence` is reset to 0.
-
-The ordering of the instructions in a replacement sequence is enforced by the
-architecture according to the value of `acesequence` and the state number of
-the CR configured in `aceactivecr`. Not following the instruction ordering
-raises an illegal instruction exception and invalidates the CR.
-
-`acesequence` can be freely read and written in all modes. In particular,
-`acesequence` may be saved and restored by privileged code at context switch
-together WITH acestart[XLEN-9:0]. Abusing this register may also allow to
-arbitrarily repeat `ace.exec` or `ace.setst` instructions. However, if the
-algorithm and its state machine are correctly designed, this will not allow the
-user to compromise the internal state of the algorithm.
-
 // ////////////////////////////////////////////////////////////////////
 
 [[ACE-notation]]
@@ -449,49 +385,49 @@ encrypt a block of data.
 
 // ////////////////////////////////////////////////////////////////////
 
-==== Note on Short Vectors
-
-_This paragraph is not normative._
-
-It is conceivable to support a vector length `ACELEN` smaller than a cipher’s
-block size `b` in encryption modes. We add a `b`-bit field called `buffer` to
-the state of the CR. Let __r__ `<-` {lceil}``ACELEN``/``b``{rceil}. We define
-first how to replace a Form A `ace.exec` instruction:
-
-.  The idea is to replace a Form A `ace.exec` instruction by __r__ Form B
-   `ace.exec` instruction followed by __r__ Form C `ace.exec` ones. This
-   replacement sequence is tracked in `acesequence` using values 1 to 2__r__-1
-   (after the 2__r__-th instruction, `acesequence` is set to zero and not to
-   2__r__).
-. The __i__-th Form B `ace.exec` instructions copies its input into bits
-  {nbsp}[min(__i__{interpunct}``ACELEN``,`b`)-1 :
-  (__i__-1){interpunct}``ACELEN``]{nbsp} of the `b`-bit `buffer`, for __i__ =
-  1,2,..,__r__. The use of “min” ensures that the
-  `b`-__r__{interpunct}``ACELEN`` significant bits of the last input are
-  discarded if `ACELEN` does not divide `b` exactly.
-. The __r__-th Form B `ace.exec` instruction also applies the primitive to this
-  `buffer`.
-. The __i__-th Form C `ace.exec` instructions can be issued to write out bits
-  {nbsp}[min(__i__{interpunct}``ACELEN``,`b`)-1 :
-  (__i__-1){interpunct}``ACELEN``]{nbsp} of the `b`-bit `buffer` to its output
-  vector register, for __i__ = 1,2,..,__r__.
-. After the __r__-th Form C `ace.exec` instruction is completed, `acesequence`
-  is reset to zero.
-
-Form B and C `ace.exec` instructions can be replaced in a similar way.
-
-Specifying this behavior would complicate both the architecture and its
-implementation. It would to require a `b`-bit field tp each CR implementing
-such a cipher where `b` is larger than `ACELEN`, whereas a single ACEIOBUF would
-require fewer resources. It would also burden the software using the feature by
-requiring to use more instructions, potentially in variable length loops for
-portability. Using existing architectural features, such as reconfiguring the
-vector lengths, or using vector register groups, would be a simpler
-approach–beside the aforementioned use of ACEIOBUF.
-
-Piece-wise loading of the state is defined for hash functions and for similar functions with very long inputs. These functions can use their internal state to absorb partial inputs. This eliminates the need for a separate buffer that is used only when full. On some architectures, piece-wise loading also accommodates inputs that exceed the supported vector lengths.
-
-// ////////////////////////////////////////////////////////////////////
+// ==== Note on Short Vectors
+//
+// _This paragraph is not normative._
+//
+// It is conceivable to support a vector length `ACELEN` smaller than a cipher’s
+// block size `b` in encryption modes. We add a `b`-bit field called `buffer` to
+// the state of the CR. Let __r__ `<-` {lceil}``ACELEN``/``b``{rceil}. We define
+// first how to replace a Form A `ace.exec` instruction:
+//
+// .  The idea is to replace a Form A `ace.exec` instruction by __r__ Form B
+//    `ace.exec` instruction followed by __r__ Form C `ace.exec` ones. This
+//    replacement sequence is tracked in `acesequence` using values 1 to 2__r__-1
+//    (after the 2__r__-th instruction, `acesequence` is set to zero and not to
+//    2__r__).
+// . The __i__-th Form B `ace.exec` instructions copies its input into bits
+//   {nbsp}[min(__i__{interpunct}``ACELEN``,`b`)-1 :
+//   (__i__-1){interpunct}``ACELEN``]{nbsp} of the `b`-bit `buffer`, for __i__ =
+//   1,2,..,__r__. The use of “min” ensures that the
+//   `b`-__r__{interpunct}``ACELEN`` significant bits of the last input are
+//   discarded if `ACELEN` does not divide `b` exactly.
+// . The __r__-th Form B `ace.exec` instruction also applies the primitive to this
+//   `buffer`.
+// . The __i__-th Form C `ace.exec` instructions can be issued to write out bits
+//   {nbsp}[min(__i__{interpunct}``ACELEN``,`b`)-1 :
+//   (__i__-1){interpunct}``ACELEN``]{nbsp} of the `b`-bit `buffer` to its output
+//   vector register, for __i__ = 1,2,..,__r__.
+// . After the __r__-th Form C `ace.exec` instruction is completed, `acesequence`
+//   is reset to zero.
+//
+// Form B and C `ace.exec` instructions can be replaced in a similar way.
+//
+// Specifying this behavior would complicate both the architecture and its
+// implementation. It would to require a `b`-bit field tp each CR implementing
+// such a cipher where `b` is larger than `ACELEN`, whereas a single ACEIOBUF would
+// require fewer resources. It would also burden the software using the feature by
+// requiring to use more instructions, potentially in variable length loops for
+// portability. Using existing architectural features, such as reconfiguring the
+// vector lengths, or using vector register groups, would be a simpler
+// approach–beside the aforementioned use of ACEIOBUF.
+//
+// Piece-wise loading of the state is defined for hash functions and for similar functions with very long inputs. These functions can use their internal state to absorb partial inputs. This eliminates the need for a separate buffer that is used only when full. On some architectures, piece-wise loading also accommodates inputs that exceed the supported vector lengths.
+//
+// // ////////////////////////////////////////////////////////////////////
 
 [[ACE-chaining]]
 ==== Chaining/Feedback Modes
