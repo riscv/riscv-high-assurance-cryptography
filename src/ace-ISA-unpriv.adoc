@@ -291,10 +291,12 @@ Currently, 79 bits are defined and 49 are reserved for future use.
 |  [36:36] | 1     | Reserved          | Reserved for future use. Currently, it must be equal to zero.
 |  [44:37] | 8     | _Locality_        | Zero, or an index determining a Locality Secret. See <<ACE-Localities>>.
 |  [47:45] | 3     | Reserved          | Reserved for future use. Currently, it must be equal to zero.
-|  [63:48] | 16    | _AddDataSize_     | If non-zero, indicates an additional data section appended to Content. The length of this additional data section is _AddDataSize_ * 16 bytes (up to 1024 KiB).
+|  [63:48] | 16    | _AddDataSize_     | If non-zero, indicates an additional data section appended to Content. The length of this additional data section is _AddDataSize_ * 16 bytes (up to 512 KiB).
 |  [89:64] | 26    | _ExpirationDate_  | If non-zero, the expiration date of this CC. See <<ACE-Metadata-expiration-date>>. Minutes since 00:00, January 1, 2027. (127 years...)
 | [127:90] | 38    | Reserved         | Reserved for future use.  Currently, it must be equal to zero.
 |===
+
+Only the first 64 bits of the Metadata Header
 
 In the following subsections we describe the fields of the Metadata section.
 
@@ -474,8 +476,7 @@ transparently replaced by the next defined entry in its chain: _SiPScrt_
 {rightarrow} _ChipFamScrt_ {rightarrow} _ChipScrt_, and _OEMScrt_ {rightarrow}
 _ProdScrt_ {rightarrow} _DevScrt_ .
 
-_HLocality_ is active only when the H extension is enabled and V=1; otherwise, it
-mirrors _MLocality_.
+_HLocality_ is active only when the H extension is enabled and V=1; otherwise, it mirrors _MLocality_.
 
 NOTE: A system-key index may refer to keys with unrelated purposes on different
 devices, leading to unspecified behavior. Implementations shall assign usage
@@ -538,6 +539,13 @@ The third example, however, describes information that is required for the corre
 If non-zero, _ExpirationDate_ specifies the CC expiration time as a number of
 minutes elapsed since the base date of January 1, 2027.
 The 26-bit field provides for a span of approximately 127 years (2^26^ minutes).
+
+Checking against the _ExpirationDate_ field is, semantically, the first step performed by any operation.
+When a non-configuration instruction is executed on a CR whose _ExpirationDate_ lies in the past, the hardware immediately sets the Metadata _State_ field to `ace_state_expired` and performs any action prescribed for error states, including implementation-specific tasks such as releasing the CRF capacity held by the Content.  If the instruction is a usage instruction, the operation is suppressed and exception `ace_exc_expired_CR` is raised (cf. <<[ACE-exceptions>>) if the ACE privileged architecture is implemented.  Exporting, cloning, or configuring an expired CR is allowed.
+
+When an expired CR is used, privileged code may take appropriate action—for example, provisioning a new key or returning to the caller for handling.
+
+Since privileged code may replace expired CRs, any user code that uses CRs that are known to potentially expire should always export the CR when it has finished using it, in case it may be needed later, instead of recovering it from a previously saved copy.
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -629,12 +637,6 @@ The actual numbers are TBD.
 // `ace.restrict` is distinct because it cannot modify the _State_ field.
 
 If a configuration instruction cannot be performed because of insufficient residual CRF memory, exception `ace_exc_out_of_mem` is raised. System software is responsible for freeing internal ACE unit space and retrying the instruction. Alternatively, the software may set the CR's State to `ace_state_out_of_mem` and return from the exception handler.
-
-When a non-configuration instruction is executed on a CR whose _ExpirationDate_ lies in the past, the hardware immediately sets the Metadata _State_ field to `ace_state_expired` and performs any action prescribed for error states, including implementation-specific tasks such as releasing the CRF capacity held by the Content.  If the instruction is a usage instruction, the operation is suppressed and exception `ace_exc_expired_CR` is raised.  Exporting, cloning, or configuring an expired CR is allowed.
-
-When an expired CR is used, privileged code may take appropriate action—for example, provisioning a new key or returning to the caller for handling.
-
-Since privileged code may replace expired CRs, any user code that uses CRs that are known to potentially expire should always export the CR when it has finished using it, in case it may be needed later, instead of recovering it from a previously saved copy.
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -2274,7 +2276,7 @@ function ace.export(&CR, M[]) =
   local L : string of bits;
 
   // Start POLYVAL
-  // Absorb Locality "prefix" (zero or more 128-bit blocks)
+  // Absorb Locality "prefix" (zero or more bit blocks)
   tmp ← zeros(128);
   foreach(i from 0 to number of localities - 1)
     if (CR.Metadata.Locality includes locality[i]) {
