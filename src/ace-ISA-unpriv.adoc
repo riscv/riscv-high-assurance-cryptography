@@ -265,10 +265,8 @@ Currently, 79 bits are defined and 49 are reserved for future use.
 |  [24:20] | 5     | _State_           | Current state of the CR/algorithm, encoded as an integer.
 |  [26:25] | 2     | _Sequence_        | Tracks the progress in the replacement sequence of an `ace.exec` or `ace.setst` instruction. The `aceactivecr` CSR must match the CR number.
 |  [31:27] | 5     | Reserved          | Reserved for future use. Currently, it must be equal to zero.
-|  [35:32] | 4     | _UsagePolicy_     | Usage (Control) Policy. Bits 0, 1, 2 and 3 of the field,, when set, disallow CC usage in U-mode, (V)S-mode, H-mode, and M-Mode, respectively.
-|  [36:36] | 1     | Reserved          | Reserved for future use. Currently, it must be equal to zero.
-|  [44:37] | 8     | _Locality_        | Zero, or an index determining a Locality Secret. See <<ACE-Localities>>.
-|  [47:45] | 3     | Reserved          | Reserved for future use. Currently, it must be equal to zero.
+|  [35:32] | 5     | _UsagePolicy_     | Usage (Control) Policy. Bits 0, 1, 2, 4 and 4 of the field,, when set, disallow CC usage in U-mode, (V)S-mode, H-mode, M-Mode, and Debug mode, respectively.
+|  [47:37] | 11    | _Locality_        | Zero, or an index determining a Locality Secret. See <<ACE-Localities>>.
 |  [63:48] | 16    | _AddDataSize_     | If non-zero, indicates an additional data section appended to Content. The length of this additional data section is _AddDataSize_ * 16 bytes (up to 512 KiB).
 |  [89:64] | 26    | _ExpirationDate_  | If non-zero, the expiration date of this CC. See <<ACE-Metadata-expiration-date>>. Minutes since 00:00, January 1, 2027. (127 years...)
 | [127:90] | 38    | Reserved          | Reserved for future use.  Currently, it must be equal to zero.
@@ -412,38 +410,41 @@ These are global, shared across all ACE units within the same SoC.
 Other entries are per-hart architectural state, programmed by privileged modes.
 
 <<ACE-locality-indexes>> lists the architected Localities.
-Eleven LST entries are defined: the first six form the _HW Binding Group_, which binds SCCs to the hardware;
+Twelve LST entries are defined: the first six form the _HW Binding Group_, which binds SCCs to the hardware;
 entries 6–7 form the _Boot Session Group_;
-entries 8–10 form the _SW Filter Group_.
-Seven of the eight _Locality_ field bits are defined.
-Bit 7 is zero for the architected Localities.
+entries 8–11 form the _SW Filter Group_.
+
+Nine of the eleven _Locality_ field bits are defined.
+Bits 9-10 are zero for the Localities architected below.
+
 For each Locality, the table provides: index in the LST; domain (SoC-, device-, VM-wide, or per-process); configurability; bit-field encoding; and value.
 
 [[ACE-locality-indexes]]
 .Architected Localities (Bit 7 = 0)
 [width="100%",cols="^5%,15%,50%,^9%,^9%,^6%,^6%",options="header"]
 |===
-|  Idx  | Locality                  | Description                                                                      | Domain | Config?|  Bits  | Value
-2+|    No HW Binding                | Independent of Chip, OEM, Device                                                ^|  --   ^|   --   | [2:0]  |   0
-|   0   | _SiPScrt_                 | Identifies the designer of the SoC. Permanent.                                   |  SoC   |   No   | [2:0]  |   1
-|   1   | _ChipFamScrt_             | Identifies specific chip/SoC model/family. Permanent.                            |  SoC   |   No   | [2:0]  |   2
-|   2   | _ChipScrt_                | Unique for each SoC. Permanent.                                                  |  SoC   |   No   | [2:0]  |   3
+|  Idx  | Locality                  | Description                                                                          | Domain | Config?|  Bits  | Value
+2+|    No HW Binding                | Independent of Chip, OEM, Device                                                    ^|  --   ^|   --   | [2:0]  |   0
+|   0   | _SiPScrt_                 | Identifies the designer of the SoC. Permanent.                                       |  SoC   |   No   | [2:0]  |   1
+|   1   | _ChipFamScrt_             | Identifies specific chip/SoC model/family. Permanent.                                |  SoC   |   No   | [2:0]  |   2
+|   2   | _ChipScrt_                | Unique for each SoC. Permanent.                                                      |  SoC   |   No   | [2:0]  |   3
 |   3   | _OEMScrt_                 | Provisioned by OEM to differentiate their products from the competition.
-Permanent, or reconfigurable via a custom hardware authenticated mechanism.                                            | Device |   HW   | [2:0]  |   4
+Permanent, or reconfigurable via a custom hardware authenticated mechanism.                                                | Device |   HW   | [2:0]  |   4
 |   4   | _ProdScrt_                | Identifies device/system type/model (product).
-Permanent or reconfigurable like OEMScrt.                                                                              | Device |   HW   | [2:0]  |   5
+Permanent or reconfigurable like OEMScrt.                                                                                  | Device |   HW   | [2:0]  |   5
 |   5   | _DevScrt_                 | Unique device (entire system) secret.
 Shared across all harts in a SoC and shareable across multiple SoCs in a single device using an implementation-defined mechanism.
-Reconfigurable like OEMScrt.                                                                                           | Device |   HW   | [2:0]  |   6
-2+|   No Boot Binding               | Independent of Physical or Virtual Boot Session                                 ^|  --   ^|   --   | [4:3]  |   0
+Reconfigurable like OEMScrt.                                                                                               | Device |   HW   | [2:0]  |   6
+2+|   No Boot Binding               | Independent of Physical or Virtual Boot Session                                     ^|  --   ^|   --   | [4:3]  |   0
 |   6   | _PhysBootScrt_            | Unique per the boot session of the host hardware and its firmware stack.
-Configured by M-mode during the boot process of the host (see <<ACE-CSR-macePhysBootScrt>>).                           | Device |   M    | [4:3]  |   1
+Configured by M-mode during the boot process of the host (see <<ACE-CSR-macePhysBootScrt>>).                               | Device |   M    | [4:3]  |   1
 |   7   | _VirtBootScrt_            | Unique per the boot session of the virtual hardware and its software stack.
-Regenerated by H or higher at each virtual boot of a VM (see <<ACE-CSR-haceVirtBootScrt>>).                            |   VM   |  H/M   | [4:3]  |   2
-2+|    No Binding at Modes          | Independent of M-, S-, or VS-mode filters.                                      ^|  --   ^|   --   | [6:5]  |   0
-|   8   | _MLocality_               | Configurable at M to restrict import of SCCs                                     |  < M   |   M    | [6:5]  |   1
-|   9   | _HLocality_               | Configurable at H to restrict import of SCCs                                     |  < H   |   H    | [6:5]  |   2
-|  10   | _SLocality_               | Configurable at (V)S to restrict import of SCCs                                  | < (V)S |  (V)S  | [6:5]  |   3
+Regenerated by H or higher at each virtual boot of a VM (see <<ACE-CSR-haceVirtBootScrt>>).                                |   VM   |  H/M   | [4:3]  |   2
+2+|    No Binding at Modes          | Independent of M-, S-, or VS-mode filters.                                          ^|  --   ^|   --   | [8:5]  |   0
+|   8   | _MLocality_               | Configurable at M to restrict import of SCCs                                         |  < M   |   M    | [5:5]  |  0/1
+|   9   | _HLocality_               | Configurable at H to restrict import of SCCs                                         |  < H   |   H    | [6:6]  |  0/1
+|  10   | _SLocality_               | Configurable at (V)S to restrict import of SCCs                                      | < (V)S |  (V)S  | [7:7]  |  0/1
+|  11   | _ULocality_               | Configurable at any mode to restrict import of SCCs (out-of-band peer-to-peer nonce) |  hart  |   U    | [8:8]  |  0/1
 |===
 
 Implementations are not required to populate every entry in the HW Binding
@@ -459,11 +460,10 @@ devices, leading to unspecified behavior. Implementations shall assign usage
 policies at least as restrictive as the key's own native policies, and supply
 an appropriate _Locality_ during CR provisioning.
 
-Up to three architected Localities may be active concurrently:
+Up to six architected Localities may be active concurrently:
 one from the HW Binding Group,
 one of either _PhysBootScrt_ or _VirtBootScrt_,
-and one from the SW Filter
-Group.
+and four from the SW Filter Group.
 In <<ACE-provisioning-export-import>> it is explained how the associated policies are enforced.
 
 If bit 7 is set, bits [6:0] are used to define custom, implementation-defined Localities instead.
@@ -474,8 +474,7 @@ Each defined custom value bits [6:0] will be translated into one or more 128-bit
 [[ACE-UsagePolicy-field]]
 ===== _UsagePolicy_ Field
 
-Bit 0, 1, resp., 2 of this field is ignored if U-, S-, resp., H-mode is not
-supported or not enabled.
+Any bit of this field is ignored if the corresponding mode is not supported or not enabled.
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -800,7 +799,7 @@ It binds `ace.input`, `ace.output`, `ace.exec`, and `ace.setst` to a specific CR
 The valid values are 0–31, which are used to bind to a CR, or 32, which disables any such binding.
 
 When `aceactivecr` is not 32, the CR operand in all single-CR instructions and the source CR in `ace.clone` must equal the selected value, and the
-_Sequence_ metadata field of that CR must track the operation in an instruction replacement sequence zzz
+_Sequence_ metadata field of that CR must track the operation in an instruction replacement sequence.
 
 // At any given moment, only one _Sequence_ field in the Metadata Sections of all CRs may be non-zero, and `aceactivecr` must match the number of that CR.
 
@@ -1453,15 +1452,13 @@ exception `ace_exc_invalid` is raised.
   level. Attempting to remove or downgrade side channel protection, or to set a
   non-implemented level raises exception `ace_exc_invalid`.
 
-* If `Xs`._Locality_ is non-zero, then it can be used to restrict the Locality.
+* If `Xs`._Locality_ is non-zero, then it can be used to restrict the Locality, either by adding a new one or by replacing one.
   Allowed replacements of Locality are:
 
  ** _SiPScrt_ {rightarrow} _ChipFamScrt_, _ChipScrt_;
  ** _ChipFamScrt_ {rightarrow} _ChipScrt_;
- ** _OEMScrt_ {rightarrow} _ProdScrt_, _DevScrt_;
- ** _ProdScrt_ {rightarrow} _DevScrt_;
- ** _MLocality_ {rightarrow} _HLocality_, _SLocality_; and
- ** _HLocality_ {rightarrow} _SLocality_.
+ ** _OEMScrt_ {rightarrow} _ProdScrt_, _DevScrt_; and
+ ** _ProdScrt_ {rightarrow} _DevScrt_.
 
 Then, when the CR is exported as a CR, it will use the new Locality values to
 tweak the export and import algorithms. Generalizing the Locality is not
