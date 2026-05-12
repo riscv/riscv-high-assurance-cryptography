@@ -1,7 +1,370 @@
 // ////////////////////////////////////////////////////////////////////
 
 [[ACE-algorithms]]
-== ACE Unprivileged Architecture: Algorithms
+== ACE Unprivileged Architecture: Data Formats and Architected Algorithms
+
+[[ACE-data-formats-intro]]
+=== Data Formats
+
+ACE defines two external CC formats:
+
+. The _Provisioning Input_ (PI), loaded into a CR to create a CC; and
+. The _Sealed Cryptographic Context_ (SCC), an encrypted and authenticated representation of a CC used when exporting a CR to memory for later import.
+
+{empty}
+(((Cryptographic Context,Metadata)))
+(((Cryptographic Context,Metadata,Header)))
+Both formats begin with a 128-bit Metadata Header, whose format we define next.
+
+// ////////////////////////////////////////////////////////////////////
+
+[[ACE-Metadata]]
+==== Metadata Header Format
+
+The following table lists the fields of the 128-bit Metadata Header.
+Currently, 79 bits are defined and 49 are reserved for future use.
+
+[[ACE-metadata-section]]
+.Format of the 128-bit Metadata Header
+[width="100%",cols="^9%,^7%,14%,70%",options="header"]
+|===
+|  Field   | Width | Name              | Description
+|  [11:0]  | 12    | _Algorithm_       | Cryptographic algorithm (primitive, mode, or protocol). See <<ACE-Algorithm-field>>.
+|  [13:12] | 2     | _AlgorithmPolicy_ | Allowed algorithm variants(s) _or_ extension of the _Algorithm_ field. See <<ACE-Algorithm-field>>.
+|  [15:14] | 2     | Reserved          | Reserved for future expansion of _AlgorithmPolicy_ field.
+|  [18:16] | 3     | _SCProtection_    | Side-channel protection level. See <<ACE-SCProtection-field>>.
+|  [19:19] | 1     | _KeyType_         | 0: key is an explicit value in Content. 1: key is an index into the system-specific System Keys Table (SKT).
+|  [24:20] | 5     | _State_           | Current state of the CR/algorithm, encoded as an integer.
+|  [26:25] | 2     | _Sequence_        | Tracks the progress in the replacement sequence of an `ace.exec` or `ace.setst` instruction. The `aceactivecr` CSR must match the CR number.
+|  [31:27] | 5     | Reserved          | Reserved for future use. Currently, it must be equal to zero.
+|  [35:32] | 5     | _UsagePolicy_     | Usage (Control) Policy. Bits 0, 1, 2, 4 and 4 of the field,, when set, disallow CC usage in U-mode, (V)S-mode, H-mode, M-Mode, and Debug mode, respectively.
+|  [46:37] | 10    | _Locality_        | Zero, or an index determining a Locality Secret. See <<ACE-Localities>>.
+|  [47:47] | 1     | Reserved          | Reserved for future use.
+|  [63:48] | 16    | _AddDataSize_     | If non-zero, indicates an additional data section appended to Content. The length of this additional data section is _AddDataSize_ * 16 bytes (up to 512 KiB).
+|  [89:64] | 26    | _ExpirationDate_  | If non-zero, the expiration date of this CC. See <<ACE-Metadata-expiration-date>>. Minutes since 00:00, January 1, 2027 (about 127 years).
+| [127:90] | 38    | Reserved          | Reserved for future use.  Currently, it must be equal to zero.
+|===
+
+In the following subsections we describe the fields of the Metadata section.
+
+//
+
+[[ACE-Algorithm-field]]
+===== _Algorithm_ and _AlgorithmPolicy_ Fields
+
+Algorithms are encoded in a 12-bit field. Values 0–3071 and 4095 are architecture-defined.
+The list of encodings is maintained by RVI (see <<ACE-algorithms>>).
+The remaining values are available for custom algorithms.
+
+For encryption/decryption primitives and modes, the _AlgorithmPolicy_ field indicates whether the CC may be used for encryption (lower bit set), decryption (upper bit set), or both. At least one of the bits must be set.
+
+For asymmetric primitives supporting signatures, the lower bit permits signature generation and the upper bit permits verification.
+Such an asymmetric primitive can be configured to support primitives such as key agreement or key encapsulation but _not_ signatures, and in this case both bits are zero.
+
+For other primitives, the _AlgorithmPolicy_ field may encode additional algorithm identifiers to expand the effective encoding space of the _Algorithm_ field.
+
+// ////////////////////////////////////////////////////////////////////
+
+[[ACE-SCProtection-field]]
+===== _SCProtection_ Field
+
+The architecture defines the following side-channel protection levels.
+
+[[ACE-SC-protection-levels]]
+.Encoding of Side-Channel Protection levels
+[%autowidth,float="center",align="center",cols="^,<"options="header"]
+|===
+| Value | Description
+|   0   | No protection.
+|   1   | Data-independent execution latency (DIEL); first-order threshold implementation.
+|   2   | DIEL; first-order threshold, fault-tolerant implementation.
+|   3   | Custom, algorithm-dependent.
+|===
+
+Custom algorithms offering stronger protection than encodings 0–2 shall set
+_SCProtection_ to 3.
+
+// ////////////////////////////////////////////////////////////////////
+
+[[ACE-State-field]]
+===== _State_ Field
+
+The _State_ field is used to track the currently state of an algorithm, including certain types of errors.
+
+The architected values of _State_ which are common to all algorithms are defined in
+<<ACE-states-valid>>.
+
+[[ACE-states-valid]]
+.Global CC State Numbers: Valid States
+[float="center",align="center",width="100%",cols="^7%,<27,<15%,<51%",options="header"]
+|===
+| Value | Mnemonic                  | State Name     | Description
+|   0   | `ace_state_off`           | _Off_          | The CR is not configured.
+|   1   | `ace_state_initial`       | _Initial_      | The state of a CC immediately after provisioning; ready for operation.
+| 2-20  3+| Defined by the specification of the Algorithm encoded in the _Algorithm_ field.
+|  21   | `ace_state_success`       | _Success_      | Algorithm completed successfully. No further cryptographic operations may be performed until the CC is reset.
+|  22   | `ace_state_failure`       | _Failure_      | Failure in an algorithm, usually an authentication failure in AE(AD) algorithms or a signature verification failure. No further cryptographic operations may be performed until the CC is reset.
+|===
+
+[[ACE-states-error]]
+.Global CC State Numbers: Interrupted and Error States
+[float="center",align="center",width="100%",cols="^7%,<27,<15%,<51%"]
+|===
+|  23    | `ace_state_partial_config`  | _Partial_Config_  | Provisioning or import interrupted.
+|  24    | `ace_state_expired`         | _Expired_         | The CR has expired.  This is set by the hardware even if the condition also raises an exception.
+|  25    | `ace_state_import_auth`     | _Auth_Failed_     | Authentication failure with `ace.import`.
+|  26    | `ace_state_priv_viol`       | _Priv_Viol_       | Violation of Usage Control policies.
+|  27    | `ace_state_out_of_mem`      | _Out_of_Memory_   | Insufficient CRF memory for configuration instruction. This may be set by privileged code in case they do not handle the CR allocation.
+|  28    | `ace_state_not_impl`        | _Not_Impl_        | Not implemented algorithm. It is set by the hardware upon an attempt to provision or import a CR that is not supported by the implementation.
+| 29, 30 | (Reserved)                 |                   | Reserved for future use.
+|  31    | `ace_state_invalid`         | _Invalid_         | Invalid/invalidated state, for instance because of the use of an invalid value (argument, state, or metadata).
+|===
+
+The state with value 0 is termed _Off_, and is used to indicate that the CR is not configured.
+
+All states in the range 1-22 are termed _valid_. This includes both _Success_ and _Failure_ states, which must be used for
+normal termination of an algorithm in the cases of its successful completion or failure.
+
+State 23, i.e., _Partial_Config_, is used to report that provisioning or import was interrupted.
+
+States 24-31 are termed _error states_, and are used to report certain specific ACE errors.
+(((ACE, algorithm, invalid state)))
+(((Context Register, invalidation)))
+In particular, if the State is `ace_state_invalid`, we say that the CR is _invalidated_.
+
+An error state can be set by software using `ace.setst` (with no auxiliary input).
+
+Error conditions that lead to exceptions are treated in <<ACE-exceptions>>.
+
+If an algorithm defines 22 or fewer valid states (including _Initial_, _Success_, and _Failure_), the current state is stored in the _State_ field.
+For algorithms with more than 22 valid states, additional state information resides in the Content section.
+
+The following rules are generic and apply to all algorithms:
+
+. The Metadata's _State_ field must reflect the current state whenever the CC is in _Initial_, _Success_, _Failure_, or any error state.
+This ensures that these states can be unambiguously determined from the _State_ field alone, without inspecting the Content.
+
+. In States _Success_ and _Failed_, only the following ACE instructions are permitted: `ace.prov`, `ace.import`, `ace.export`, `ace.clear`, `ace.size`, `ace.setst`, and `ace.getst`.
+
+. In States _Success_ and _Failed_, `ace.setst` can only be used permitted to transition to _Initial_ (or _Off_ if used as `ace.clear`).
+
+. Unless an algorithm's specification explicitly states otherwise, a transition from any valid state to _Initial_ using instruction `ace.setst` is always permitted.
+
+. Upon transitioning to an error state, the Content of a CR is invalidated and emptied.
+Internal resources associated with the Content may also be released. In that case, any Additional Data is released and the _AddDataSize_ field is set to 0.
+The CR then retains only the Metadata Header.
+
+. Exporting a CR in an error state exports only the metadata (and the authentication tag).
+  Requesting the SCC's size (`ace.size` <<ACE-instruction-size>>) wil reflect this.
+  The resulting SCC can be reimported, allowing software to take appropriate actions even after a context switch.
+
+. If a CR is in any error state, it can still be reconfigured, cloned, or cleared. In particular, `ace.setst` can only transition it to _Off_.
+
+. The metadata of a CR in an error state can be read (using `ace.getmd`: <<ACE-instruction-getmd>>).
+
+. Attempts to _use_ a CR in any error state will not perform any operation, and in particular they leave the _State_ field unchanged.
+
+. If a CR is in State _Partial_Config_, transitioning it to any State other than _Off_ or _Invalid_ is only possible as a consequence of a restart or resumption of the interrupted configuration instruction.  `ace.setst` can only transition it to _Off_ or _Invalid_.
+
+. Any _usage_ instruction that would violate the Usage Control policies will not perform its operation, and will set _State_ to `ace_state_priv_viol` instead.
+
+We note that the State after `ace.setst` is issued may differ from the State specified by the instruction.
+A common example is MAC verification: after `ace.setst` is issued with an `ace_state_hash_verify` immediate as the next state and the value to be verified as the additional parameter, the algorithm transitions to either _Success_ or _Failure_. This is done to prevent the manipulation of a CR's state and to reduce code size.
+An `ace.exec` instruction may also trigger a state change.
+
+// ////////////////////////////////////////////////////////////////////
+
+[[ACE-Localities]]
+===== _Locality_ Field
+
+ACE maintains a table of 128-bit Locality Secrets (LS), called the Locality Secrets Table (LST).
+Some entries are fixed or are configurable only through an implementation-specific authenticated hardware procedure.
+These are global, shared across all ACE units within the same SoC.
+Other entries are per-hart architectural state, programmed by privileged modes.
+
+<<ACE-locality-indexes>> lists the architected Localities.
+Twelve LST entries are defined: the first six form the _HW Binding Group_, which binds SCCs to the hardware;
+entries 6–7 form the _Boot Session Group_;
+entries 8–11 form the _SW Filter Group_.
+
+Eight _Locality_ field bits are defined.
+
+For each Locality, the table provides: index in the LST; domain (SoC-, device-, VM-wide, or per-process); configurability; bit-field encoding; and value.
+
+[[ACE-locality-indexes]]
+.Architected Localities
+[width="100%",cols="^5%,15%,50%,^9%,^9%,^6%,^6%",options="header"]
+|===
+|  Idx  | Locality                  | Description                                                                          | Domain | Config?|  Bits  | Value
+2+|    No HW Binding                | Independent of Chip, OEM, Device                                                    ^|  --   ^|   --   | [2:0]  |   0
+|   0   | _SiPScrt_                 | Identifies the designer of the SoC. Permanent.                                       |  SoC   |   No   | [2:0]  |   1
+|   1   | _ChipFamScrt_             | Identifies specific chip/SoC model/family. Permanent.                                |  SoC   |   No   | [2:0]  |   2
+|   2   | _ChipScrt_                | Unique for each SoC. Permanent.                                                      |  SoC   |   No   | [2:0]  |   3
+|   3   | _OEMScrt_                 | Provisioned by OEM to differentiate their products from the competition.
+Permanent, or reconfigurable via a custom hardware authenticated mechanism.                                                | Device |   HW   | [2:0]  |   4
+|   4   | _ProdScrt_                | Identifies device/system type/model (product).
+Permanent or reconfigurable like OEMScrt.                                                                                  | Device |   HW   | [2:0]  |   5
+|   5   | _DevScrt_                 | Unique device (entire system) secret.
+Shared across all harts in a SoC and shareable across multiple SoCs in a single device using an implementation-defined mechanism.
+Reconfigurable like OEMScrt.                                                                                               | Device |   HW   | [2:0]  |   6
+2+|   No Boot Binding               | Independent of Physical or Virtual Boot Session                                     ^|  --   ^|   --   | [4:3]  |   0
+|   6   | _PhysBootScrt_            | Unique per the boot session of the host hardware and its firmware stack.
+Configured by M-mode during the boot process of the host (see <<ACE-CSR-macePhysBootScrt>>).                               | Device |   M    | [4:3]  |   1
+|   7   | _VirtBootScrt_            | Unique per the boot session of the virtual hardware and its software stack.
+Regenerated by H or higher at each virtual boot of a VM (see <<ACE-CSR-haceVirtBootScrt>>).                                |   VM   |  H/M   | [4:3]  |   2
+2+| No Binding at Modes             | Independent of M-, S-, or VS-mode filters                                           ^|  --   ^|   --   | [6:5]  |   0
+|   8   | _MLocality_               | Configurable at M to restrict import of SCCs.
+                                      Useful to separate Supervisor Domains/Security States.                               |  < M   |   M    | [6:5]  |   1
+|   9   | _HLocality_               | Configurable at H to restrict import of SCCs                                         |  < H   |   H    | [6:5]  |   2
+|  10   | _SLocality_               | Configurable at (V)S to restrict import of SCCs                                      | < (V)S |  (V)S  | [6:5]  |   3
+|  11   | _Nonce_                   | Configurable at any mode to restrict import of SCCs (out-of-band peer-to-peer nonce) |  hart  |   U    | [7:7]  |  0/1
+|===
+
+Implementations are not required to populate every entry in the HW Binding Group, except for _ChipFamScrt_ and _DevScrt_.
+If an entry is unconfigured, it is transparently replaced by the next defined entry in its chain: _SiPScrt_ {rightarrow} _ChipFamScrt_ {rightarrow} _ChipScrt_, and _OEMScrt_ {rightarrow} _ProdScrt_ {rightarrow} _DevScrt_ .
+
+_HLocality_ is active only when the H extension is enabled and V=1; otherwise, it mirrors _MLocality_.
+
+NOTE: A system-key index may refer to keys with unrelated purposes on different devices, leading to unspecified behavior.
+Implementations shall assign usage policies at least as restrictive as the key's own native policies, and supply an appropriate _Locality_ during CR provisioning.
+
+Up to six architected Localities may be active concurrently: one from the HW Binding Group, one of either _PhysBootScrt_ or _VirtBootScrt_, and four from the SW Filter Group.
+In <<ACE-provisioning-export-import>> it is explained how the associated policies are enforced.
+
+// If Bits 8-9 are not both equal to zero, bits [9:0] are used to define custom, implementation-defined Localities instead.
+// Each defined custom value of the bits bits [9:0] will be translated into one or more 128-bit values that are used in the same way as the architected ones in <<ACE-provisioning-export-import>>.
+
+The instruction `ace.restrict` can be used to set Localities, as well as replace Localities with more restrictive ones such as:
+
+** _SiPScrt_ {rightarrow} _ChipFamScrt_, _ChipScrt_;
+** _ChipFamScrt_ {rightarrow} _ChipScrt_;
+** _OEMScrt_ {rightarrow} _ProdScrt_, _DevScrt_; and
+** _ProdScrt_ {rightarrow} _DevScrt_.
+** _MLocality_ {rightarrow} _HLocality_, _SLocality_.
+** _HLocality_ {rightarrow} _SLocality_.
+
+Then, when the CR is exported as an SCC, it will use the new Locality values to
+tweak the export and import algorithms. Generalizing the Locality is not
+permitted. Attempting to do so raises exception `ace_exc_invalid`.
+
+// ////////////////////////////////////////////////////////////////////
+
+[[ACE-UsagePolicy-field]]
+===== _UsagePolicy_ Field
+
+Any bit of this field is ignored if the corresponding mode is not supported or not enabled.
+
+// ////////////////////////////////////////////////////////////////////
+
+[[ACE-extra-content]]
+===== _AddDataSize_ Field
+
+The _AddDataSize_ Metadata field records the length of the _Additional Data Section_ of the content, which is a variable-size part and may depend on the state of the algorithm.
+
+The format of the _Additional Data Section_ is described in <<ACE-data-formats>>.
+
+The first eight bytes of the Implementation-Specific Additional Data Section of the Content, if not empty, always hold a copy of the `acemarchid` CSR (<<ACE-CSR-acemarchid>>) of the originating machine, and are counted within the length recorded by the _AddDataSize_ field.
+The importing implementation uses this value to determine whether any information in the Implementation-Specific Data Section can be used.
+
+It is the responsibility of the *algorithm* to determine the lengths of the two parts of the Additional Data Section.
+If the Implementation-Specific Additional Data Section is not empty, the *implementation* will check the value of `acemarchid` stored therein to decide whether the Implementation-Specific part can be used or should be ignored.
+
+[NOTE]
+====
+Examples of Additional Data are:
+
+. “Decryption AES keys”, i.e., the last one or two AES round keys, from which one can work backwards when performing AES decryptions.
+. Precomputed point multiples for elliptic curve scalar multiplication (their computation can be far more expensive than their
+encryption and decryption);
+. Information, such as additional elliptic curve points or random numbers used by Elliptic Curve algorithms only in certain states;
+. any auxiliary data for side-channel-protected implementations, such as key shares or other data to accelerate share reconstruction.
+
+Examples 1., 2., and 4. are optional data, and therefore are stored in the _Implementation-Specific_ ADS.
+The third example, however, describes information that is required for the correct functioning of the algorithm. Therefore, its format must be defined by the algorithm specification and the data should be stored in the _Architected_ ADS.
+====
+
+// ////////////////////////////////////////////////////////////////////
+
+[[ACE-Metadata-expiration-date]]
+===== _ExpirationDate_ Field
+
+If non-zero, _ExpirationDate_ specifies the CC expiration time as a number of minutes elapsed since the base date of January 1, 2027.
+The 26-bit field provides for a span of approximately 127 years (2^26^ minutes).
+
+Checking against the _ExpirationDate_ field is, semantically, the first step performed by any operation.
+When a non-configuration instruction is executed on a CR whose _ExpirationDate_ lies in the past, the hardware immediately sets the Metadata _State_ field to `ace_state_expired` and performs any action prescribed for error states, including implementation-specific tasks such as releasing the CRF capacity held by the Content.  If the instruction is a usage instruction, the operation is suppressed and exception `ace_exc_invalid` is raised (cf. <<ACE-exceptions>>) if the ACE privileged architecture is implemented.  Exporting, cloning, or configuring an expired CR is allowed.
+
+When an expired CR is used, privileged code may take appropriate action—for example, provisioning a new key or returning to the caller for handling.
+
+Since privileged code may replace expired CRs, any user code that uses CRs that are known to potentially expire should always export the CR when it has finished using it, in case it may be needed later, instead of recovering it from a previously saved copy.
+
+// ////////////////////////////////////////////////////////////////////
+
+[[ACE-data-formats]]
+===== Provisioning Input, Sealed Cryptographic Context, and Content
+
+Determining the length of a PI or SCC requires the knowledge of only the first 64 bits of the Metadata Header.
+
+The format of a Provisioning Input (PI) is shown in <<ACE-PI>>.
+
+[[ACE-PI]]
+.Format of the Provisioning Input (PI), All Sections in Order
+[width="100%",cols="28%,44%,28%",options="header"]
+|===
+| Section                      | Size | Description
+| Metadata Header              | 128 bits | Contains the metadata information as described in <<ACE-Metadata>>.
+| Provisioning Content         | Depends only on the _Algorithm_, _AlgorithmPolicy_, and _KeyType_ fields of the Metadata Header. Always a multiple of 128 bits. | Contains keys and other algorithm-specific information.
+|===
+
+The length of a PI must be a multiple of 128 bits.
+
+The CR itself may contain significantly more information than the Provisioning Content.
+This information may be categorized under different classes:
+
+. Information that is necessary for the algorithm to function, and cannot be reconstructed from other information.
+For instance, random values that are generated in the _Initial_ state.
+
+. Information that may be easily reconstructed from other information in the State, so that there is no need to export it.
+In this case, the *algorithm* may choose to not include it into an SCC.
+
+. Data that can be used to optimize performance on a specific *implementation*, and that is more expensive to recompute than encrypting and storing externally. The hardware may choose to export such data in a custom format inside an SCC for efficient reuse.
+A different implementation that receives the same SCC (i.e., with a `acemarchid` mismatch) may safely ignore this data during import.
+
+The format of a Sealed Cryptographic Context (SCC) is shown in <<ACE-SCC>>.
+
+[[ACE-SCC]]
+.Plaintext Sealed Cryptographic Context (SCC) Format, All Sections in Order
+[width="100%",cols="28%,44%,28%",options="header"]
+|===
+| Section                      | Size     | Description
+| Metadata Header              | 128 bits | Contains the metadata information as described in <<ACE-Metadata>>.
+//
+| Content: _Fixed Data Section_
+| Empty if the context is in an error state, otherwise it depends only
+on the _Algorithm_, _AlgorithmPolicy_, and _KeyType_ fields of the Metadata Header.
+ Always a multiple of 128 bits.
+| Contains keys and other algorithm-specific information.
+//
+| Content: _Architected Additional Data Section_ (Architected ADS)
+| Empty if the context is in an error state, otherwise it depends on the information contained in the Metadata and Fixed Data Sections.
+  Always a multiple of 128 bits.
+| The data in this Section is necessary for the correct functioning of the algorithm.
+//
+| Content: _Implementation (Specific) Additional Data Section_ (Implementation ADS)
+| Empty if the context is in an error state, otherwise it is Implementation-Specific.
+  Always a multiple of 128 bits.
+| The data in this Section is _not_ necessary for the correct functioning of the algorithm.
+|===
+
+The second and third parts together of the Content form the _Additional Data Section_ of the Content.
+
+The Metadata _AddDataSize_ field specifies the total size of the _Additional Data Section_. It does not partition this total between the Architected and Implementation-Specific components. The ordering of sections within the SCC allows to determine the lengths of these two components before reading them.
+
+
+// ////////
+
+[[ACE-algorithms-spec]]
+=== Algorithms
 
 _This chapter is normative._
 
@@ -13,7 +376,7 @@ which are well defined not only with AES but also with other block ciphers,
 such as SM4. By contrast, the specifications for other algorithm suites are
 specific only to some primitives, for instance, Ascon.
 
-Table <<ACE-exec-encodings>> defines the operation encodings for the symmetric
+<<ACE-exec-encodings>> defines the operation encodings for the symmetric
 algorithms encoded in the metadata field _Algorithm_.
 These algorithms are encoded using two sub-fields: Type and Mode.
 Type is encoded in the six LSBs of _Algorithm_, and mode is encoded in the
@@ -43,46 +406,12 @@ not completely defined or has some ambiguity because of the lack of a standard.
 //
 | 1    | 0    | `AES192_ECB`               | `Zlaes192p`
 | 1    | 1--12 2+| Analogues to Modes 1--11 for `AES128`, but with 192 replacing 128.
-// | 1    | 1    | `AES192_CTR`               | `Zlaes192p` and `Zlctrm`
-// | 1    | 2    | `AES192_LFSR` (reserved)   | `Zlaes192p` and `Zlctrm`
-// | 1    | 3    | `AES192_XCTR`              | `Zlaes192p` and `Zlxctrm`
-// | 1    | 4    | `AES192_XLFSR` (reserved)  | `Zlaes192p` and `Zlxctrm`
-// | 1    | 5    | `AES192_XEX1`               | `Zlaes192p` and `Zlxexm`
-// | 1    | 6    | `AES192_XEX2`               | `Zlaes192p` and `Zlxexm`
-// | 1    | 7    | `AES192_GCM`               | `Zlaes192p` and `Zlgcmm`
-// | 1    | 8    | `AES192_GCM_IV`            | `Zlaes192p` and `Zlgcmm`
-// | 1    | 9    | `AES192_GCM_SIV`           | `Zlaes192p` and `Zlgcmsivm`
-// | 1    | 10   | `AES192_CMAC`              | `Zlaes192p` and `Zlcmac`
-// | 1    | 11   | `AES192_OCB`               | `Zlaes192p` and `Zlocbm`
-// | 1    | 12   | `AES192_OCB_IV`            | `Zlaes192p` and `Zlocbm`
 //
 | 2    | 0    | `AES256_ECB`               | `Zlaes256p`
 | 2    | 1--12 2+| Analogues to Modes 1--11 for `AES128`, but with 256 replacing 128.
-// | 2    | 1    | `AES256_CTR`               | `Zlaes256p` and `Zlctrm`
-// | 2    | 2    | `AES256_LFSR` (reserved)   | `Zlaes256p` and `Zlctrm`
-// | 2    | 3    | `AES256_XCTR`              | `Zlaes256p` and `Zlxctrm`
-// | 2    | 4    | `AES256_XLFSR` (reserved)  | `Zlaes256p` and `Zlxctrm`
-// | 2    | 5    | `AES256_XEX1`               | `Zlaes256p` and `Zlxexm`
-// | 2    | 6    | `AES256_XEX2`               | `Zlaes256p` and `Zlxexm`
-// | 2    | 7    | `AES256_GCM`               | `Zlaes256p` and `Zlgcmm`
-// | 2    | 8    | `AES256_GCM_IV`            | `Zlaes256p` and `Zlgcmm`
-// | 2    | 9    | `AES256_GCM_SIV`           | `Zlaes256p` and `Zlgcmsivm`
-// | 2    | 10   | `AES256_CMAC`              | `Zlaes256p` and `Zlcmac`
-// | 2    | 11   | `AES256_OCB`               | `Zlaes256p` and `Zlocbm`
-// | 2    | 12   | `AES256_OCB_IV`            | `Zlaes256p` and `Zlocbm`
 //
 | 3    | 0    | `SM4_ECB`                  | `Zlsm4p`
 | 3    | 1--10 2+| Analogues to Modes 1--10 for `AES128`, but with `SM4`, resp., `sm4` replacing `AES128`, resp., `aes128`.
-// | 3    | 1    | `SM4_CTR`                  | `Zlsm4p` and `Zlctrm`
-// | 3    | 2    | `SM4_LFSR` (reserved)      | `Zlsm4p` and `Zlctrm`
-// | 3    | 3    | `SM4_XCTR`                 | `Zlsm4p` and `Zlxctrm`
-// | 3    | 4    | `SM4_XLFSR` (reserved)     | `Zlsm4p` and `Zlxctrm`
-// | 3    | 5    | `SM4_XEX1`                 | `Zlsm4p` and `Zlxexm`
-// | 3    | 6    | `SM4_XEX2`                 | `Zlsm4p` and `Zlxexm`
-// | 3    | 7    | `SM4_GCM`                  | `Zlsm4p` and `Zlgcmm`
-// | 3    | 8    | `SM4_GCM_IV`               | `Zlsm4p` and `Zlgcmm`
-// | 3    | 9    | `SM4_GCM_SIV`              | `Zlsm4p` and `Zlgcmsivm`
-// | 3    | 10   | `SM4_CMAC`                 | `Zlsm4p` and `Zlcmac`
 //
 | 4    | 0    | `SHA2-224`                 | `Zlesha2h`
 | 4    | 1    | `SHA2-256`                 | `Zlesha2h`
@@ -121,13 +450,13 @@ not completely defined or has some ambiguity because of the lack of a standard.
 
 //
 
-=== Padding
+==== Padding
 
 As a general rule, inputs shorter than a full vector length must be handled by the caller.
 The caller is responsible for proper padding and for passing the actual input length to the algorithm at the appropriate places using the correct instructions, usually `ace.setst`.
 An exception applies when an algorithm specification defines such handling itself for cryptographic security reasons.
 
-=== Definition of an Algorithm in ACE
+==== Definition of an Algorithm in ACE
 
 Each algorithm is fully defined by the following information:
 
@@ -198,10 +527,10 @@ The examples are non-normative.
 // ////////////////////////////////////////////////////////////////////
 
 [[ACE-generic-rules]]
-=== Generic Rules
+==== Generic Rules
 
 [[ACE-disallowed]]
-==== Disallowed Instructions and CR invalidation
+===== Disallowed Instructions and CR invalidation
 
 Under any of the following conditions, an _illegal instruction exception_ is raised, and the CR is invalidated:
 
@@ -220,7 +549,7 @@ In particular, any configuration instruction, `ace.export` and `ace.clone` may w
 // ////////////////////////////////////////////////////////////////////
 
 [[ACE-notation]]
-==== Notation in the Algorithm Descriptions
+===== Notation in the Algorithm Descriptions
 
 * `INPUT`: The input data to be processed by `ace.exec` or `ace.setst`. This
   can be the input vector register, or the ACEIOBUF, as described in
@@ -236,7 +565,7 @@ In particular, any configuration instruction, `ace.export` and `ace.clone` may w
 //
 
 [[ACE-rules-threshold-implementations]]
-==== Single-Share Key Export Rule for Threshold implementations
+===== Single-Share Key Export Rule for Threshold implementations
 
 Any CC with its algorithm implemented as a threshold implementation will always
 provision, import and export _all_ its keys and secrets as _single_,
@@ -264,7 +593,7 @@ as a copy of some (or all) shares.
 // ////////////////////////////////////////////////////////////////////
 
 [[ACE-rules-system-keys]]
-==== Representation of System Keys in the Data Structures
+===== Representation of System Keys in the Data Structures
 
 System Keys will change all the algorithms described here in the following way:
 
@@ -279,7 +608,7 @@ System Keys will change all the algorithms described here in the following way:
 // ////////////////////////////////////////////////////////////////////
 
 [[ACE-states-symmetric]]
-=== States for the Symmetric Algorithms Defined in this Specification
+==== States for the Symmetric Algorithms Defined in this Specification
 
 The following table, together with <<ACE-states-valid>>, defines the states used by the symmetric algorithms in this specification.
 
@@ -312,7 +641,7 @@ these can be set by transitioning to State _Set_Aux_Value_ using a Form of
 // ////////////////////////////////////////////////////////////////////
 
 [[ACE-ECB-mode]]
-==== Electronic Codebook Modes (Direct Encryption/Decryption)
+===== Electronic Codebook Modes (Direct Encryption/Decryption)
 
 ECB mode cite:[nist-SP-800-38A-1] is the simplest way to use a block cipher.
 (((ACE, algorithm, ECB)))
@@ -430,7 +759,7 @@ encrypt a block of data.
 // // ////////////////////////////////////////////////////////////////////
 
 [[ACE-chaining]]
-==== Chaining/Feedback Modes
+===== Chaining/Feedback Modes
 
 There is no need to explicitly architect the behavior of chaining modes, such
 as Cipher Block Chaining (CBC), Cipher Feedback (CFB) and Output Feedback
@@ -441,7 +770,7 @@ confidentiality.
 // ////////////////////////////////////////////////////////////////////
 
 [[ACE-keystream-modes]]
-==== CTR/LFSR/XCTR/XLFSR Keystream Generation
+===== CTR/LFSR/XCTR/XLFSR Keystream Generation
 
 In the “non-X” modes, i.e., CTR mode and its analog with an LFSR replacing the
 arithmetic counter, the sum of the lengths of IV and counter/LFSR equals the
@@ -535,7 +864,7 @@ Example pseudocode is given in <<ACE-pseudocode-keystream-modes>> (for the case
 // ////////////////////////////////////////////////////////////////////
 
 [[ACE-XEX-XTS-modes]]
-==== XEX/XTS modes (one or two keys)
+===== XEX/XTS modes (one or two keys)
 
 The XTS mode was designed for storage confidentiality
 cite:[DBLP-journals-ieeesp-Martin10] and made into a Recommendation by NIST in
@@ -651,7 +980,7 @@ decryption is similar
 // ////////////////////////////////////////////////////////////////////
 
 [[ACE-tweakable]]
-==== Generic Tweakable Block Ciphers
+===== Generic Tweakable Block Ciphers
 
 The specification of a generic tweakable block cipher is similar to that of a
 non-tweakable block cipher in ECB mode. Since `ace.exec` does not admit
@@ -728,7 +1057,7 @@ State Machine:::
 // ////////////////////////////////////////////////////////////////////
 
 [[ACE-GCM-mode]]
-==== GCM Mode
+===== GCM Mode
 
 The GCM mode was designed by David McGrew and John Viega
 cite:[DBLP-conf-indocrypt-McGrewV04] and was made into a NIST Recommendation in
@@ -939,7 +1268,7 @@ described in the next section.
 // ////////////////////////////////////////////////////////////////////
 
 [[ACE-GCM-with-IV-mode]]
-==== GCM with Set IV
+===== GCM with Set IV
 
 The mode of operation “GCM with a Set IV” is a variant of the GCM mode where
 the initialization vector (IV) is predefined and not generated randomly. This
@@ -989,7 +1318,7 @@ also use a Form A ``ace.setst``. All other semantics would be unchanged.
 // ////////////////////////////////////////////////////////////////////
 
 [[ACE-GCM-SIV-mode]]
-==== GCM-SIV Mode
+===== GCM-SIV Mode
 
 The GCM-SIV mode is described in cite:[DBLP-journals-iacr-GueronLL17] and
 cite:[RFC8452]. While GCM-SIV's decryption state machine is similar to the
@@ -1223,7 +1552,7 @@ Encryption and decryption pseudocode is found in <<ACE-GCM-SIV-mode-examples>>.
 // ////////////////////////////////////////////////////////////////////
 
 [[ACE-OCB-mode]]
-==== OCB Mode
+===== OCB Mode
 
 We only architect the OCB3 variant of OCB as specified in RFC{nbsp}7253
 cite:[RFC7253] and cite:[DBLP-journals-joc-KrovetzR21]. While this algorithm is
@@ -1525,7 +1854,7 @@ Pseudocode for OCB encryption is given in <<ACE-OCB-mode-examples>>.
 // ////////////////////////////////////////////////////////////////////
 
 [[ACE-CMAC-mode]]
-==== CMAC Functions
+===== CMAC Functions
 
 {empty}
 (((ACE, algorithm, CMAC)))
@@ -1646,7 +1975,7 @@ Pseudocode is given in <<ACE-CMAC-mode-example>>.
 // ////////////////////////////////////////////////////////////////////
 
 [[ACE-hash-functions]]
-==== Hash and MAC Functions, and XOFs
+===== Hash and MAC Functions, and XOFs
 
 {empty}
 (((ACE, algorithm, general hashing)))
@@ -1834,7 +2163,7 @@ Then, state transitions to _Hash_Last_Block_ as expected.
 // ////////////////////////////////////////////////////////////////////
 
 [[ACE-HMAC]]
-==== HMAC
+===== HMAC
 
 Hash function acceleration is sufficient to compute HMACs, and no dedicated
 algorithms are needed for either performance or security reasons.
@@ -1842,7 +2171,7 @@ algorithms are needed for either performance or security reasons.
 // ////////////////////////////////////////////////////////////////////
 
 [[ACE-SHA-3]]
-==== SHA-3 Family Specific Rules
+===== SHA-3 Family Specific Rules
 
 {empty}
 (((ACE, algorithm, SHA-3)))
@@ -1926,7 +2255,7 @@ The rest of the algorithm follows <<ACE-hash-functions>>.
 // ////////////////////////////////////////////////////////////////////
 
 [[ACE-Ascon-AEAD128]]
-==== Ascon-AEAD128
+===== Ascon-AEAD128
 
 {empty}
 (((ACE, algorithm, Ascon)))
@@ -2160,7 +2489,7 @@ block of `OUTPUT`.
 // ////////////////////////////////////////////////////////////////////
 
 [[ACE-Ascon-AEAD128-wsn]]
-==== Ascon-AEAD128 with set Nonce
+===== Ascon-AEAD128 with set Nonce
 
 Similarly to GCM with Set IV, Ascon-AEAD128 can also be made into a version
 with a set nonce. In this case the State _Set_Aux_Value_ is skipped, and the PI
@@ -2188,7 +2517,7 @@ Once in State _Success_, the CC cannot be brought back to State _Initial_.
 // ////////////////////////////////////////////////////////////////////
 
 [[ACE-Ascon-AEAD128-N-masking]]
-==== Ascon-AEAD128 with Nonce Masking
+===== Ascon-AEAD128 with Nonce Masking
 
 The NIST specification also describes a version of Ascon-AEAD128 with _Nonce
 Masking_. This variant is described as follows:
@@ -2241,7 +2570,7 @@ key `key` and providing `N xor K2` as the nonce value.
 // ////////////////////////////////////////////////////////////////////
 
 [[ACE-Ascon-Hash256]]
-==== Ascon-Hash256
+===== Ascon-Hash256
 
 In this mode it is the responsibility of the user to apply proper padding to
 the inputs.
@@ -2340,7 +2669,7 @@ content in it first.
 // ////////////////////////////////////////////////////////////////////
 
 [[ACE-Ascon-XOF128]]
-==== Ascon-XOF128
+===== Ascon-XOF128
 
 The algorithm is the same as Ascon-Hash256 (<<ACE-Ascon-Hash256>>) with the
 following differences:
@@ -2354,7 +2683,7 @@ following differences:
 // ////////////////////////////////////////////////////////////////////
 
 [[ACE-Ascon-CXOF128]]
-==== Ascon-CXOF128
+===== Ascon-CXOF128
 
 Ascon-CXOF128 differs from Ascon-XOF128 in that the message is prepended with
 the customization string. Except for the initialization of the state,
@@ -2367,7 +2696,7 @@ the customization string is left to the user.
 // ////////////////////////////////////////////////////////////////////
 
 [[ACE-ECC]]
-=== Elliptic Curve Asymmetric Algorithms
+==== Elliptic Curve Asymmetric Algorithms
 
 Elliptic Curve Asymmetric Algorithms provide following functionality:
 
