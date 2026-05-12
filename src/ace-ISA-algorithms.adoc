@@ -454,9 +454,9 @@ At context save, therefore, privileged code must clear a partially configured CR
 Before returning control flow to the process of the interrupted configuration operation, the CR must be cleared as well, forcing the instruction to restart.
 
 Upon returning to the original control flow from an interrupt or exception, an export may resume only if the CR has not been modified.
-This is achieved by the privileged code as follows: the `*crstatus` of the CR is saved and set to _Clear_.
-If, upon returning to the original control flow, the `*crstatus` is not _Clear_, the CR has been modified and therefore the code sets `acestart` to zero to force the export to restart. Otherwise, the code restores the saved `*crstatus` field and continues.
-<<ACE-SCC-export>> describes a mechanism used by the implementation to enforce this rule.
+// This is achieved by the privileged code as follows: the `*crstatus` of the CR is saved and set to _Clear_.
+// If, upon returning to the original control flow, the `*crstatus` is not _Clear_, the CR has been modified and therefore the code sets `acestart` to zero to force the export to restart. Otherwise, the code restores the saved `*crstatus` field and continues.
+<<ACE-SCC-export>> describes the mechanism used to enforce this rule.
 
 The above rules imply that interrupted configuration and export operations may resume only on the same hart.
 This guarantees that resumption occurs on the same implementation, which is therefore free to define the interruption points and the corresponding non-zero values of `acestart`.
@@ -473,9 +473,9 @@ it to provision a CR.
 .Provisioning a CR with Metadata and content
 []
 ----
-function ace.prov(&CR, M[]) =
+function ace.prov(CR_number, M[]) =
 {
-  MH : bits(128) & ← CR.Metadata;           // By reference, from the CR
+  MH : bits(128) & ← CR[CR_number].Metadata;           // By reference, from the CR
   MH ← M[0 .. 15]
   MH.State ← ace_state_partial_config;
 
@@ -569,14 +569,20 @@ Without this protection, resuming could produce an incorrect SIV.
 .Generation of an SCC from a CR
 []
 ----
-function ace.export(&CR, M[]) =
+function ace.export(CR_number, M[]) =
 {
-  MH : bits(128) & = CR.Metadata;          // By reference, from the CR
-  Content : array of & bytes = CR.content; // By reference, from the CR
+  MH : bits(128) & = CR[CR_number].Metadata;          // By reference
+  Content : array of & bytes = CR[CR_number].content; // By reference
 
+  external ace_exporting : bool;
+  external ace_exported_cr : bits(5);
   external CSK : bits(256);
   external enc_key : bits(256), auth_key : bits(128); // RFC8452_KeyDeriv(CSK)
   external SIV, tmp : bits(128);
+
+  ace_exporting ← true;
+  ace_exported_cr ← CR_number;
+
   local z : int ← fixed_content_size(MH);  // can be recomputed upon resumption
   z ← z + MH._VarDataLen_ * 16;            // Length of Content
   local let num_blocks : int ← ceil(z / 16);
@@ -612,6 +618,8 @@ function ace.export(&CR, M[]) =
   foreach(i from 0 to num_blocks - 1)
     M[32+i*16 .. 47+i*16] ← Content[i*16 .. 15+i*16]
             xor AESE(enc_key, 1 @ SIV[126:32] @ (SIV[31:0]+bin(i,32) % 2**32);
+
+  ace_exporting ← false;
 }
 ----
 
@@ -646,11 +654,11 @@ The import algorithm needs some special care:
 .Importing an SCC into a CR
 []
 ----
-function ace.import(&CR, M[]) =
+function ace.import(CR_number, M[]) =
 {
   // M : array of bytes;   from memory
-  MH : bits(128) & = CR.Metadata;          // By reference, from the CR
-  Content : array of bytes & = CR.content; // By reference, from the CR
+  MH : bits(128) & = CR[CR_number].Metadata;          // By reference, from the CR
+  Content : array of bytes & = CR[CR_number].content; // By reference, from the CR
   local saved_SN : bits(5);                // This is a "hidden" state as well
   external SIV, tmp, t2 : bits(128);
 
