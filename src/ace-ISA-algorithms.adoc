@@ -418,23 +418,23 @@ This applies to all keys at once in an algorithms, unless otherwise specified.
 [[ACE-size-functions]]
 ==== Notation for the Size Functions
 
-Let `mh` denote a Metadata Header.
+Let `MH` denote a Metadata Header.
 In order to determine the total lengths of the PI and of the SCC, the implementation provides the following functions or an equivalent mechanism:
 
 . ``MH_size`` returns the byte length of the Metadata Header. It is always 16.
 
-. ``PI_content_size(mh)`` returns the byte length of the content section of a PI. It depends only on `mh`._Algorithm_, `mh`._AlgorithmPolicy_, and `mh`._KeyType_.
+. ``PI_content_size(MH)`` returns the byte length of the content section of a PI. It depends only on `MH`._Algorithm_, `MH`._AlgorithmPolicy_, and `MH`._KeyType_.
 
-. ``fixed_content_size(mh)`` returns the byte length of the fixed part of the content section of an SCC. It depends only on  `mh`._Algorithm_,
-  `mh`._AlgorithmPolicy_, and `mh`._KeyType_. It does not include the length of the Additional Data of the Content, of length _VarDataLen_ * 16 bytes.
+. ``fixed_content_size(MH)`` returns the byte length of the fixed part of the content section of an SCC. It depends only on  `MH`._Algorithm_,
+  `MH`._AlgorithmPolicy_, and `MH`._KeyType_. It does not include the length of the Additional Data of the Content, of length _VarDataLen_ * 16 bytes.
 
 The total size in bytes of a PI is therefore
 
-`{fournbsp}{fournbsp}len_in_bytes(PI){nbsp}` = `MH_size` + `PI_content_size(mh)`,
+`{fournbsp}{fournbsp}len_in_bytes(PI){nbsp}` = `MH_size` + `PI_content_size(MH)`,
 
 and the total size in bytes of an SCC is
 
-`{fournbsp}{fournbsp}len_in_bytes(SCC)` = `MH_size` + 16 + `fixed_content_size(mh)` + _VarDataLen_ * 16.
+`{fournbsp}{fournbsp}len_in_bytes(SCC)` = `MH_size` + 16 + `fixed_content_size(MH)` + _VarDataLen_ * 16.
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -480,12 +480,12 @@ it to provision a CR.
 []
 ----
 function ace.prov(&CR, M[]) ={
-  mh : bits(128) ← & CR.Metadata;           // By reference, from the CR
+  MH : bits(128) ← & CR.Metadata;           // By reference, from the CR
 
-  mh ← M[0 .. 15]
+  MH ← M[0 .. 15]
   z ← PI_content_size(Metadata[31:0]);
 
-  CR.Metadata.State ← ace_state_partial_config;
+  MH.State ← ace_state_partial_config;
 
   if (there is not enough memory for the algorithm encoded in the Metadata)
     raise exception ace_exc_out_of_mem;
@@ -496,7 +496,7 @@ function ace.prov(&CR, M[]) ={
   // Complete Metadata parsing.
   // Deserialize the z bytes at M+16.
 
-  CR.Metadata.State ← ace_state_initial;
+  MH.State ← ace_state_initial;
 }
 ----
 
@@ -561,15 +561,16 @@ Localities encoded in the _Locality_ field of the Metadata are prepended, in asc
 If the _Locality_ field is zero, no Locality Secrets are prepended.
 
 The ACE architecture supports only one export/import operation per hart at a time.
-Accordingly, an implementation will maintain only a single per hart instance of variables for `SIV` and `tmp`.
-The implementation maintains information to track an export in progress:
-a 1-bit flag `ace_exporting` and a 5-bit value `ace_exported_cr` recording the number of the CR being exported.
-`ace_exporting` and `ace_exported_cr` are set when an export is started, and cleared when it is completed.
+Accordingly, an implementation maintains only a single per-hart instance of the variables `SIV` and `tmp`.
+To track an export in progress, the implementation uses:
+ a 1-bit flag `ace_exporting`, and
+ a 5-bit value `ace_exported_cr` recording the number of the CR being exported.
+Both are set when an export starts and cleared upon completion.
 If the export is interrupted, `acestart` is set accordingly.
-When this flag is set, any instruction that modifies the internal state of CR number `ace_exported_cr` clears `ace_exporting`.
-Export may be resumed only if the flag is set and only for the recorded CR.
-Otherwise the export is restarted and `acestart` is ignored.
-Without this protection, resuming an export could produce an incorrect SIV for the remaining SCC data.
+While the flag is set, any instruction that modifies the internal state of CR `ace_exported_cr` clears `ace_exporting`.
+An export may resume only if the flag is set and only for the recorded CR.
+Otherwise, the export is restarted and `acestart` is ignored.
+Without this protection, resuming could produce an incorrect SIV.
 
 [[ACE-SCC-export-listing]]
 .Generation of an SCC from a CR
@@ -577,15 +578,14 @@ Without this protection, resuming an export could produce an incorrect SIV for t
 ----
 function ace.export(&CR, M[]) =
 {
-  mh : bits(128) = & CR.Metadata;          // By reference, from the CR
+  MH : bits(128) = & CR.Metadata;          // By reference, from the CR
   Content : array of bytes = & CR.content; // By reference, from the CR
 
   external CSK : bits(256);
-  external enc_key : bits(256);            // RFC8452_KeyDeriv(CSK)
-  external auth_key : bits(128);
+  external enc_key : bits(256), auth_key : bits(128); // RFC8452_KeyDeriv(CSK)
   external SIV, tmp : bits(128);
-  local z : int ← fixed_content_size(mh);  // can be recomputed upon resumption
-  z ← z + mh._VarDataLen_ * 16;            // Length of Content
+  local z : int ← fixed_content_size(MH);  // can be recomputed upon resumption
+  z ← z + MH._VarDataLen_ * 16;            // Length of Content
   local let num_blocks : int ← ceil(z / 16);
 
   // In external memory: Metadata Header, then SIV, then Content
@@ -600,7 +600,7 @@ function ace.export(&CR, M[]) =
     }
 
   // POLYVAL: Absorb the metadata block into POLYVAL
-  tmp ← tmp xor mh;
+  tmp ← tmp xor MH;
   tmp ← Montmul(tmp, auth_key);
 
   // POLYVAL: Absorb the entire content into POLYVAL
@@ -612,7 +612,7 @@ function ace.export(&CR, M[]) =
   SIV ← AESE(enc_key, 0 @ tmp[126:0]);
 
   // Export metadata and the SIV to memory
-  M[0 .. 15]  ← mh;
+  M[0 .. 15]  ← MH;
   M[16 .. 31] ← SIV;
 
   // Export encrypted context to memory
@@ -630,8 +630,8 @@ function ace.export(&CR, M[]) =
 The import algorithm needs some special care:
 
 * At the beginning of the import operation, the hardware saves the value of
-  `State` from the original metadata and sets `mh.State <-
-  ace_state_partial_config`. At the end of the import operation, `mh.State` is
+  `State` from the original metadata and sets `MH.State <-
+  ace_state_partial_config`. At the end of the import operation, `MH.State` is
   set to the saved value.
 * The SCC to be imported may have been generated by a different implementation
   than the one importing it. This is detected by an `acemarchid` mismatch.
@@ -656,7 +656,9 @@ The import algorithm needs some special care:
 function ace.import(&CR, M[]) =
 {
   // M : array of bytes;   from memory
-  local saved_SN : bits(4);                // This is a "hidden" state as well
+  MH : bits(128) = & CR.Metadata;          // By reference, from the CR
+  Content : array of bytes = & CR.content; // By reference, from the CR
+  local saved_SN : bits(5);                // This is a "hidden" state as well
   external SIV, tmp, t2 : bits(128);
 
   external CSK : bits(256);
@@ -664,15 +666,12 @@ function ace.import(&CR, M[]) =
   external auth_key : bits(128);
 
   tmp ← M[0 .. 15];         // read Metadata Header
-
   saved_SN ← ((Metadata field)tmp).State;
-  CR.Metadata ← tmp;
-  CR.Metadata.State ← ace_state_partial_config;
+  MH ← tmp;
+  MH.State ← ace_state_partial_config;
 
-  & mh = CR.Metadata;
-
-  z ← fixed_content_size(mh);
-  z ← z + mh._VarDataLen_ * 16;
+  z ← fixed_content_size(MH);
+  z ← z + MH._VarDataLen_ * 16;
 
   if (there is not enough memory for the algorithm encoded in the Metadata)
     raise exception ace_exc_out_of_mem;
@@ -683,28 +682,28 @@ function ace.import(&CR, M[]) =
   // Absorb Locality "prefix" (zero or more 128-bit blocks)
   tmp ← zeros(128);
   foreach(i from 0 to number of localities - 1) {
-    if (CR.Metadata.Locality includes locality[i]) {
+    if (MH.Locality includes locality[i]) {
       tmp ← tmp xor LST[i];
       tmp ← Montmul(tmp, auth_key);
     }
   }
 
   SIV ← M[16 .. 31];
-  tmp ← tmp xor mh;
+  tmp ← tmp xor MH;
   tmp ← Montmul(tmp, auth_key);
 
   foreach(i from 0 to num_blocks - 1) {
     t2 ← M[32+i*16 .. 47+i*16]
          xor AESE(enc_key, 1 @ SIV[126:32] @ (SIV[31:0]+bin(i,32) % 2**32);
-    content[i*16 .. 15+i*16] ← t2;
+    Content[i*16 .. 15+i*16] ← t2;
     tmp ← tmp xor t2;
     tmp ← Montmul(tmp, auth_key);
   }
   tmp ← AESE(enc_key, 0 @ tmp[126:0]);
 
   if (tmp != SIV) {
-    mh ← zeros(128)
-    mh.State ← ace_state_import_auth
+    MH ← zeros(128)
+    MH.State ← ace_state_import_auth
     Clear all Contents and possibly release their memory
     return
   }
@@ -714,7 +713,7 @@ function ace.import(&CR, M[]) =
   // as well as creating shares for threshold implementations.
 
   // FINALLY, restore the State from the SCC
-  mh.State ← saved_SN;
+  MH.State ← saved_SN;
 }
 ----
 
