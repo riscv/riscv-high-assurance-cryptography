@@ -1,7 +1,7 @@
 // ////////////////////////////////////////////////////////////////////
 
 [[ACE-algorithms]]
-== ACE Unprivileged Architecture: Data Formats and Architected Algorithms
+== ACE Unprivileged Architecture: Algorithms + Data Structures
 
 [[ACE-data-formats-intro]]
 === Data Formats
@@ -360,6 +360,364 @@ The second and third parts together of the Content form the _Additional Data Sec
 
 The Metadata _AddDataSize_ field specifies the total size of the _Additional Data Section_. It does not partition this total between the Architected and Implementation-Specific components. The ordering of sections within the SCC allows to determine the lengths of these two components before reading them.
 
+// ////////////////////////////////////////////////////////////////////
+
+[[ACE-provisioning-export-import]]
+=== Provisioning, Export and Import of Cryptographic Contexts
+
+In this section we implicitly refer throughout to <<ACE-data-formats-intro>>, and in particular to <<ACE-PI>> and <<ACE-SCC>>.
+
+The entire Metadata and Content are authenticated, but only the Content is encrypted.
+The AEAD method used for this purpose is described in <<ACE-SCC-AEAD>>.
+
+In an algorithm specification (<<ACE-algorithms>>), under Data Structures there is a section named “Serialized Content”: It defines the structure of the `content[]` array.  Architecturally, `content[]` is the serialization of the content of a CR for export as an SCC.
+This array is this the concatenation of the Fixed Data Section and of the Architected and Implementation ADSs.
+
+[NOTE]
+--
+While `content[]` provides a view of (certain fields of) the content of a CR
+that matches the serialized SCC format, it need not be converted to and from
+the internal representation and explicitly stored in the ACE unit's memory
+before export and after import.
+
+`content[]` is a virtual representation: its byte ordering does not imply
+physical contiguity within the CR, nor is there a direct byte-for-byte
+correspondence. Changes to `content[]` are reflected in the underlying CR
+representation (except for excluded fields), and vice versa.
+
+In a threshold implementation, a single key byte in `content[]` may correspond to multiple bytes distributed across all key shares within the CR.
+Reading that byte returns the XOR of the corresponding bytes from the shares, which may not be stored contiguously.
+Writing to that byte may trigger multiple writes of single bytes, one per share, such that their XOR equals the input.
+Alternatively, these operations may be deferred until the end of a provisioning or import instruction.
+For example, writing to `content[]` may initially write the unmasked value to the first share; the remaining shares are generated only when the instruction completes.
+--
+
+// ////////////////////////////////////////////////////////////////////
+
+[[ACE-system-keys]]
+==== System Keys and Randomly Generated Key Values
+
+In a PI or SCC, System Keys are encoded as a 64-bit index into an internal, system-specific System Keys Table (SKT).
+This replaces the key value itself, which may reduce the size of the PI or SCC content.
+
+For threshold implementations of system keys, ACE may copy key material from the SKT into the CR and expand it into multiple shares.
+The key is still exported as a single index.
+
+For the purpose of accelerating key share reconstruction in a threshold implementation, some shares of a system key can be included in the content's Additional Data, as long as the key cannot be recovered from those shares alone.
+
+An all-ones (i.e., `ones(64)`) system key index in a PI means that the key material is generated randomly upon provisioning.
+The _KeyType_ field in the metadata is then internally set to 0, and the key is then exported by value.
+This applies to all keys at once in an algorithms, unless otherwise specified.
+
+// ////////////////////////////////////////////////////////////////////
+
+[[ACE-size-functions]]
+==== Notation for the Size Functions
+
+Let `mh` denote a Metadata Header.
+In order to determine the total lengths of the PI and of the SCC, the implementation provides the following functions or an equivalent mechanism:
+
+. ``MH_size`` returns the byte length of the Metadata Header. It is always 16.
+
+. ``PI_content_size(mh)`` returns the byte length of the content section of a PI. It depends only on `mh`._Algorithm_, `mh`._AlgorithmPolicy_, and `mh`._KeyType_.
+
+. ``fixed_content_size(mh)`` returns the byte length of the fixed part of the content section of an SCC. It depends only on  `mh`._Algorithm_,
+  `mh`._AlgorithmPolicy_, and `mh`._KeyType_. It does not include the length of the Additional Data of the Content, of length _AddDataSize_ * 16 bytes.
+
+The total size in bytes of a PI is therefore
+
+`{fournbsp}{fournbsp}len_in_bytes(PI){nbsp}` = `MH_size` + `PI_content_size(mh)`,
+
+and the total size in bytes of an SCC is
+
+`{fournbsp}{fournbsp}len_in_bytes(SCC)` = `MH_size` + 16 + `fixed_content_size(mh)` + _AddDataSize_ * 16.
+
+// ////////////////////////////////////////////////////////////////////
+
+[[ACE-interruption-points]]
+==== Interruptibility of Configuration and Export Operations
+
+During `ace.prov` and `ace.import`, _State_ is set to _Partial_Config_ for the duration of the operation. It is updated to the correct value only upon successful completion (see <<ACE-provisioning-export-import>>).
+
+This transition to _Partial_Config_ does not occur during `ace.export`.
+
+Provisioning and import instructions may resume from the point of interruption only if control returns directly after the interrupt handler completes.
+This is characterized by a CR with _State_ set to _Partial_Config_ and a nonzero `acestart` value.
+The privileged interrupt handler must guarantee restart only in this case.
+
+A partially configured CR cannot be exported.
+Therefore, at context save privileged code must clear a partially configured CR.
+Before returning control flow to the process of the interrupted configuration operation, the CR must be cleared as well to force the instruction's restart.
+
+Provisioning, export, and import are interruptible only before any memory access they perform.
+This means that interrupts other than memory exceptions must wait until the next memory access, or can be served immediately provided
+the CR is reverted to the last interruptible point.
+
+Upon returning to the original control flow from an interrupt or exception,
+an export may resume only if the CR has not been modified.
+The mechanism to enforce this rule is described in <<ACE-SCC-export>>.
+
+The rules for resuming configuration and export operations imply that these
+can only occur on the same hart where they have been interrupted. In particular,
+these resumptions can only occur on the same microarchitecture and therefore
+the implementation can define arbitrary interruption points and corresponding
+non-zero values of `acestart`.
+
+// ////////////////////////////////////////////////////////////////////
+
+[[ACE-provisioning]]
+==== Provisioning
+
+We start with the algorithm performed by `ace.prov`, which loads a PI and uses
+it to provision a CR.
+
+[[ACE-provisioning-listing]]
+.Provisioning a CR with Metadata and content
+[]
+----
+function ace.prov(&CR, M[]) ={
+  mh : bits(128) ← & CR.Metadata;           // By reference, from the CR
+
+  mh ← M[0 .. 15]
+  z ← PI_content_size(Metadata[31:0]);
+
+  CR.Metadata.State ← ace_state_partial_config;
+
+  if (there is not enough memory for the algorithm encoded in the Metadata)
+    raise exception ace_exc_out_of_mem;
+
+  if (Metadata is inconsistent)
+    raise exception ace_exc_invalid;
+
+  // Complete Metadata parsing.
+  // Deserialize the z bytes at M+16.
+
+  CR.Metadata.State ← ace_state_initial;
+}
+----
+
+// ////////////////////////////////////////////////////////////////////
+
+[[ACE-SCC-AEAD]]
+==== Key Derivation and POLYVAL
+
+AES-GCM-SIV cite:[DBLP-journals-iacr-GueronLL17,RFC8452] is used to export and
+import CRs.
+
+[WARNING]
+AES-GCM-SIV has been chosen because it only required single passes of data in
+main memory, reducing the number of external memory accesses. GCM uses also a
+single pass but requires separate nonce and tag values, increasing the size of
+the exported data by one block.
+
+We define the Key Derivation (<<ACE-SCC-RFC8452-derivation>>) and POLYVAL
+(<<ACE-SCC-POLYVAL>>) functions first. The generation of an SCC from a CR
+(<<ACE-SCC-export>>) and the import of an SCC into a CR (<<ACE-SCC-import>>)
+are defined next.
+
+[[ACE-SCC-RFC8452-derivation]]
+.RFC8452 Key Derivation
+[]
+----
+function RFC8452_KeyDeriv(key : bits(256)) =
+{
+  struct {
+    AESE256(key, (zeros(125) @ 0b101))[63:0] @ AESE256(key, (zeros(125) @ 0b100))[63:0] @
+    AESE256(key, (zeros(125) @ 0b011))[63:0] @ AESE256(key, (zeros(125) @ 0b010))[63:0],
+    AESE256(key, (zeros(125) @ 0b001))[63:0] @ AESE256(key, (zeros(125) @ 0b000))[63:0]
+  }
+}
+----
+
+NOTE: Due to the computational cost of the derivation functions,
+implementations may cache recently used derived keys.
+
+`POLYVAL` is a so-called Almost XOR-Universal (AXU) Hash Function.
+The SIV is the encryption of the computation of this AXU hash on the concatenation of the Locality Secrets, the Metadata zero-padded to 128 bits, and the Content of the CR. In the pseudocode below for POLYVAL, the digested data is an array with an integral number of 16-byte blocks.
+
+[[ACE-SCC-POLYVAL]]
+.Polyval Hashing Function
+[]
+----
+function POLYVAL(&tmp : bits(128), auth_key : bits(128), blocks[0..n-1] : bits(128)) =
+{
+  tmp ← zeros(128);
+  local i : int;
+  foreach(i from 0 to n-1) {
+    tmp ← tmp xor blocks[i];
+    tmp ← Montmul(tmp, auth_key);
+  }
+}
+----
+
+[[ACE-SCC-export]]
+==== Export
+
+During SCC export and import, the Locality Secrets associated with the
+Localities encoded in the _Locality_ field of the Metadata are prepended, in ascending index order, to the input of the AEAD tag computation, before the metadata.
+If the _Locality_ field is zero, no Locality Secrets are prepended.
+
+The ACE architecture supports only one export/import operation per hart at a time.
+Accordingly, an implementation will maintain only a single per hart instance of variables for `SIV` and `tmp`.
+The implementation maintains information to track an export in progress:
+a 1-bit flag `ace_exporting` and a 5-bit value `ace_exported_cr` recording the number of the CR being exported.
+`ace_exporting` and `ace_exported_cr` are set when an export is started, and cleared when it is completed.
+If the export is interrupted, `acestart` is set accordingly.
+When this flag is set, any instruction that modifies the internal state of CR number `ace_exported_cr` clears `ace_exporting`.
+Export may be resumed only if the flag is set and only for the recorded CR.
+Otherwise the export is restarted and `acestart` is ignored.
+Without this protection, resuming an export could produce an incorrect SIV for the remaining SCC data.
+
+[[ACE-SCC-export-listing]]
+.Generation of an SCC from a CR
+[]
+----
+function ace.export(&CR, M[]) =
+{
+  mh : bits(128) = & CR.Metadata;          // By reference, from the CR
+  external CSK : bits(256);
+  external enc_key : bits(256);            // RFC8452_KeyDeriv(CSK)
+  external auth_key : bits(128);
+
+  external SIV, tmp : bits(128);
+  local z : int ← fixed_content_size(mh);  // can be recomputed upon resumption
+  z ← z + mh._AddDataSize_ * 16;
+
+  CR.content = array of z bytes; // includes the Additional Data
+  // In external memory: Metadata Header, then SIV, then Content
+  M = array of (MH_size + 16 + z) bytes.
+
+  local let num_blocks : int ← ceil(z / 16);
+  local L : string of bits;
+
+  // Start POLYVAL
+  // Absorb Locality "prefix" (zero or more bit blocks)
+  tmp ← zeros(128);
+  foreach(i from 0 to number of localities - 1)
+    if (CR.Metadata.Locality includes locality[i]) {
+      tmp ← tmp xor LST[i];
+      tmp ← Montmul(tmp, auth_key);
+    }
+
+  // Absorb the metadata block into POLYVAL
+  tmp ← tmp xor mh;
+  tmp ← Montmul(tmp, auth_key);
+
+  // Absorb the entire content into POLYVAL
+  foreach(i from 0 to num_blocks - 1) {
+    tmp ← tmp xor CR.content[i*16 .. 15+i*16];
+    tmp ← Montmul(tmp, auth_key);
+  }
+  // compute the SIV
+  SIV ← AESE(enc_key, 0 @ tmp[126:0]);
+
+  // Export metadata and the SIV to memory
+  M[0 .. 15]  ← mh;
+  M[16 .. 31] ← SIV;
+
+  //
+  foreach(i from 0 to num_blocks - 1) {
+    M[32+i*16 .. 47+i*16] ← CR.content[i*16 .. 15+i*16]
+            xor AESE(enc_key, 1 @ SIV[126:32] @ (SIV[31:0]+bin(i,32) % 2**32);
+  }
+}
+----
+
+// ///////////////////////////////////////////////////////////////////
+
+[[ACE-SCC-import]]
+==== Import
+
+The import algorithm needs some special care:
+
+* At the beginning of the import operation, the hardware saves the value of
+  `State` from the original metadata and sets `mh.State <-
+  ace_state_partial_config`. At the end of the import operation, `mh.State` is
+  set to the saved value.
+* The SCC to be imported may have been generated by a different implementation
+  than the one importing it. This is detected by an `acemarchid` mismatch.
+  In this case, the SCC may even contain an Implementation-Specific ADS
+  that exceed the maximum size supported by the importing hardware for the
+  specific algorithm encoded in the Metadata.
+  Once the Metadata and the Fixed Content Data Sections have been
+  read, the implementation must determine the length of the Architected ADS
+  corresponding to the algorithm's state, and ignore all writes to `content[]`
+  beyond the end of the Architected ADS in case there is an `acemarchid` mismatch.
+  It must still process the entire SCC to verify the authentication tag.
+  After successful verification, the _AddDataSize_ field will be adjusted
+  to the size of the Architected ADS.
+  The Implementation-Specific ADS will be ignored.
+  The details of this adjustment are not reflected in the pseudocode
+  <<ACE-SCC-import-listing>> to avoid excessive complexity.
+
+[[ACE-SCC-import-listing]]
+.Importing an SCC into a CR
+[]
+----
+function ace.import(&CR, M[]) =
+{
+  // M : array of bytes;   from memory
+  local saved_SN : bits(4);                // This is a "hidden" state as well
+  external SIV, tmp, t2 : bits(128);
+
+  external CSK : bits(256);
+  external enc_key : bits(256);
+  external auth_key : bits(128);
+
+  tmp ← M[0 .. 15];         // read Metadata Header
+
+  saved_SN ← ((Metadata field)tmp).State;
+  CR.Metadata ← tmp;
+  CR.Metadata.State ← ace_state_partial_config;
+
+  & mh = CR.Metadata;
+
+  z ← fixed_content_size(mh);
+  z ← z + mh._AddDataSize_ * 16;
+
+  if (there is not enough memory for the algorithm encoded in the Metadata)
+    raise exception ace_exc_out_of_mem;
+
+  num_blocks ← ceil(z / 16);
+
+  // Start POLYVAL
+  // Absorb Locality "prefix" (zero or more 128-bit blocks)
+  tmp ← zeros(128);
+  foreach(i from 0 to number of localities - 1) {
+    if (CR.Metadata.Locality includes locality[i]) {
+      tmp ← tmp xor LST[i];
+      tmp ← Montmul(tmp, auth_key);
+    }
+  }
+
+  SIV ← M[16 .. 31];
+  tmp ← tmp xor mh;
+  tmp ← Montmul(tmp, auth_key);
+
+  foreach(i from 0 to num_blocks - 1) {
+    t2 ← M[32+i*16 .. 47+i*16]
+         xor AESE(enc_key, 1 @ SIV[126:32] @ (SIV[31:0]+bin(i,32) % 2**32);
+    content[i*16 .. 15+i*16] ← t2;
+    tmp ← tmp xor t2;
+    tmp ← Montmul(tmp, auth_key);
+  }
+  tmp ← AESE(enc_key, 0 @ tmp[126:0]);
+
+  if (tmp != SIV) {
+    mh ← zeros(128)
+    mh.State ← ace_state_import_auth
+    Clear all Contents and possibly release their memory
+    return
+  }
+
+  // Now the content can be deserialized.
+  // This includes computing any derived values not saved as part of the SCC,
+  // as well as creating shares for threshold implementations.
+
+  // FINALLY, restore the State from the SCC
+  mh.State ← saved_SN;
+}
+----
 
 // ////////
 
