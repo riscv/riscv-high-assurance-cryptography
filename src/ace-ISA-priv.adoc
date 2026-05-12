@@ -62,7 +62,7 @@ The actual numbers are TBD.
 |      | Store page fault        | {empty}
 | TBD  | `ace_guru_meditation`   | Fatal and unrecoverable system failure in the ACE unit.
 | TBD  | `ace_exc_CR_unconf`     | Use of an unconfigured, or partially configured CR as a source in any instruction except `ace.size`.
-| TBD  | `ace_exc_CR_other`      | Use of a CR as a source in any instruction (including `ace.size`), when the status of the CR is “Other/Lazy”.
+| TBD  | `ace_exc_CR_other`      | Use of a CR as a source in any instruction (including `ace.size`), when the status of the CR is “Other/Lazy”, as per <<ACE-CSR-scrstatus>>.
 | TBD  | `ace_exc_out_of_mem`    | Insufficient CRF memory for configuration instruction. This may be set by privileged code in case they do not handle the CR allocation themselves.
 | TBD  | `ace_exc_buf_unconf`    | Use of ACEIOBUF as an input or an output while unconfigured.
 | TBD  | `ace_exc_invalid`       | Invalid parameters in metadata, including expired CR state. In the latter case, we recall that the hardware also sets the _State_ field of the CR's metadata to `ace_state_expired`.
@@ -170,21 +170,25 @@ In implementations with a writable `misa.L`, `vsstatus.ACES` may be present even
 
 {empty}
 (((CSR, `scrstatus`)))
-The Reserved for future uset register `scrstatus` tracks per-CR status, including dirtiness.
+The 64-bit register `scrstatus` tracks per-CR status, including dirtiness.
 
-`scrstatus`(__i__) = `scrstatus`[2{interpunct}__i__+1:2{interpunct}__i__] is a two-bit field that encodes four possible statuses for ``K(``__i__``)``.:
+`scrstatus`(__i__) = `scrstatus`[2{interpunct}__i__+1:2{interpunct}__i__] is a two-bit field that encodes four possible statuses for ``K(``__i__``)``, as described in the following table. Note that there are conditions for the values of the _State_ metadata field in a CR and the corresponding `*crstatus` field.
 
 [[ACE-crstatus-encoding]]
 .Encoding of the `*crstatus` bits
 [float="center",align="center",width="100%",cols="^8%,<12%,<80%",options="header"]
 |===
 |Value |Name |Meaning
-|   0   | Off         | The CR is unconfigured. Attempts to use it will raise exception `ace_exc_CR_unconf`. It can be configured.
-|   1   | Other/Lazy  | The CR is may be configured or unconfigured. Attempts to export or use it will raise exception `ace_exc_CR_other`.
-This can be used for lazy context switching at per-CR granularity.
+|   0   | _Off_            | The CR is unconfigured.
+If the metadata record's State field of a CR is _Off_, then this `*s*crstatus` field shall be _Off_ of _Other_.
+Attempts to use it will raise exception `ace_exc_CR_unconf`. The CR can be configured.
+|   1   | _Other_ (_Lazy_) | The CR is may be configured or unconfigured.
+The metadata record's State field of a CR can assume any admissible value.
+Attempts to export or use the CR will raise exception `ace_exc_CR_other`.
+This `*s*crstatus` can be used for lazy context switching at per-CR granularity.
 It is the responsibility of the exception handler to ensure that the CR is configured before returning to caller.
-|   2   | Clean       | The CR is configured and its state matches the last context swap.
-|   3   | Dirty       | The CR is configured and its state may have been modified since the last context swap.
+|   2   | _Clean_          | The CR is configured and its state matches the last context swap.
+|   3   | _Dirty_          | The CR is configured and its state may have been modified since the last context swap.
 |===
 
 On RV32, 32-bit CSRs `scrstatush` shadows bits [63:32] of `scrstatus`, allowing these bits to be accessed.
