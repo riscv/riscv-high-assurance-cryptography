@@ -42,7 +42,7 @@ Currently, 79 bits are defined and 49 are reserved for future use.
 |  [35:32] | 5     | _UsagePolicy_     | Usage (Control) Policy. Bits 0, 1, 2, 4 and 4 of the field,, when set, disallow CC usage in U-mode, (V)S-mode, H-mode, M-Mode, and Debug mode, respectively.
 |  [46:37] | 10    | _Locality_        | Zero, or an index determining a Locality Secret. See <<ACE-Localities>>.
 |  [47:47] | 1     | Reserved          | Reserved for future use.
-|  [63:48] | 16    | _VarDataLen_      | If non-zero, indicates that an additional data section appended to Content. The length of this additional data section is _VarDataLen_ * 16 bytes (up to 512 KiB).
+|  [63:48] | 16    | _VarDataLen_      | If non-zero, indicates that an additional, variable-length data section appended to Content. The length of this additional data section is _VarDataLen_ * 16 bytes (up to 512 KiB).
 |  [89:64] | 26    | _ExpirationDate_  | If non-zero, the expiration date of this CC. See <<ACE-Metadata-expiration-date>>. Minutes since 00:00, January 1, 2027 (about 127 years).
 | [127:90] | 38    | Reserved          | Reserved for future use.  Currently, it must be equal to zero.
 |===
@@ -153,8 +153,7 @@ This ensures that these states can be unambiguously determined from the _State_ 
 . Unless an algorithm's specification explicitly states otherwise, a transition from any valid state to _Initial_ using instruction `ace.setst` is always permitted.
 
 . Upon transitioning to an error state, the Content of a CR is invalidated and emptied.
-Internal resources associated with the Content may also be released.
-In that case, any additional variable-length data is released as well and the _VarDataLen_ field is set to 0.
+Internal resources associated with the Content may also be released. In that case, any additional variable-length data is released as well and the _VarDataLen_ field is set to 0.
 The CR then retains only the Metadata Header.
 
 . Exporting a CR in an error state exports only the metadata (and the authentication tag).
@@ -579,23 +578,20 @@ Without this protection, resuming an export could produce an incorrect SIV for t
 function ace.export(&CR, M[]) =
 {
   mh : bits(128) = & CR.Metadata;          // By reference, from the CR
+  Content : array of bytes = & CR.content; // By reference, from the CR
+
   external CSK : bits(256);
   external enc_key : bits(256);            // RFC8452_KeyDeriv(CSK)
   external auth_key : bits(128);
-
   external SIV, tmp : bits(128);
   local z : int ← fixed_content_size(mh);  // can be recomputed upon resumption
-  z ← z + mh._VarDataLen_ * 16;
-
-  CR.content = array of z bytes; // includes the Additional Data
-  // In external memory: Metadata Header, then SIV, then Content
-  M = array of (MH_size + 16 + z) bytes.
-
+  z ← z + mh._VarDataLen_ * 16;            // Length of Content
   local let num_blocks : int ← ceil(z / 16);
-  local L : string of bits;
 
-  // Start POLYVAL
-  // Absorb Locality "prefix" (zero or more bit blocks)
+  // In external memory: Metadata Header, then SIV, then Content
+  external M: array of (MH_size + 16 + z) bytes.
+
+  // Start POLYVAL: absorb Locality "prefix" (zero or more bit blocks)
   tmp ← zeros(128);
   foreach(i from 0 to number of localities - 1)
     if (CR.Metadata.Locality includes locality[i]) {
@@ -603,16 +599,16 @@ function ace.export(&CR, M[]) =
       tmp ← Montmul(tmp, auth_key);
     }
 
-  // Absorb the metadata block into POLYVAL
+  // POLYVAL: Absorb the metadata block into POLYVAL
   tmp ← tmp xor mh;
   tmp ← Montmul(tmp, auth_key);
 
-  // Absorb the entire content into POLYVAL
+  // POLYVAL: Absorb the entire content into POLYVAL
   foreach(i from 0 to num_blocks - 1) {
-    tmp ← tmp xor CR.content[i*16 .. 15+i*16];
+    tmp ← tmp xor content[i*16 .. 15+i*16];
     tmp ← Montmul(tmp, auth_key);
   }
-  // compute the SIV
+
   SIV ← AESE(enc_key, 0 @ tmp[126:0]);
 
   // Export metadata and the SIV to memory
@@ -620,10 +616,9 @@ function ace.export(&CR, M[]) =
   M[16 .. 31] ← SIV;
 
   // Export encrypted context to memory
-  foreach(i from 0 to num_blocks - 1) {
-    M[32+i*16 .. 47+i*16] ← CR.content[i*16 .. 15+i*16]
+  foreach(i from 0 to num_blocks - 1)
+    M[32+i*16 .. 47+i*16] ← Content[i*16 .. 15+i*16]
             xor AESE(enc_key, 1 @ SIV[126:32] @ (SIV[31:0]+bin(i,32) % 2**32);
-  }
 }
 ----
 
