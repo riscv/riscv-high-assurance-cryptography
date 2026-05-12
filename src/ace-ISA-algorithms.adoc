@@ -441,31 +441,25 @@ and the total size in bytes of an SCC is
 [[ACE-interruption-points]]
 ==== Interruptibility of Configuration and Export Operations
 
-During `ace.prov` and `ace.import`, _State_ is set to _Partial_Config_ for the duration of the operation. It is updated to the correct value only upon successful completion (see <<ACE-provisioning-export-import>>).
+During `ace.prov` and `ace.import`, _State_ is set to _Partial_Config_ for the duration of the operation.
+It is updated to the correct value only upon successful completion (see <<ACE-provisioning-export-import>>).
+This transition does not occur during `ace.export`.
 
-This transition to _Partial_Config_ does not occur during `ace.export`.
-
-Provisioning and import instructions may resume from the point of interruption only if control returns directly after the interrupt handler completes.
-This is characterized by a CR with _State_ set to _Partial_Config_ and a nonzero `acestart` value.
-The privileged interrupt handler must guarantee restart only in this case.
+A provisioning or import instruction may resume from the point of interruption only if control returns directly after the interrupt handler completes.
+The implementation resumes such an instruction only if the CR has _State_ set to _Partial_Config_ and a nonzero `acestart` value.
+The privileged interrupt handler may allow resumption only in this case.
 
 A partially configured CR cannot be exported.
-Therefore, at context save privileged code must clear a partially configured CR.
-Before returning control flow to the process of the interrupted configuration operation, the CR must be cleared as well to force the instruction's restart.
+At context save, therefore, privileged code must clear a partially configured CR.
+Before returning control flow to the process of the interrupted configuration operation, the CR must be cleared as well, forcing the instruction to restart.
 
-Provisioning, export, and import are interruptible only before any memory access they perform.
-This means that interrupts other than memory exceptions must wait until the next memory access, or can be served immediately provided
-the CR is reverted to the last interruptible point.
+Upon returning to the original control flow from an interrupt or exception, an export may resume only if the CR has not been modified.
+This is achieved by the privileged code as follows: the `*crstatus` of the CR is saved and set to _Clear_.
+If, upon returning to the original control flow, the `*crstatus` is not _Clear_, the CR has been modified and therefore the code sets `acestart` to zero to force the export to restart. Otherwise, the code restores the saved `*crstatus` field and continues.
+<<ACE-SCC-export>> describes a mechanism used by the implementation to enforce this rule.
 
-Upon returning to the original control flow from an interrupt or exception,
-an export may resume only if the CR has not been modified.
-The mechanism to enforce this rule is described in <<ACE-SCC-export>>.
-
-The rules for resuming configuration and export operations imply that these
-can only occur on the same hart where they have been interrupted. In particular,
-these resumptions can only occur on the same microarchitecture and therefore
-the implementation can define arbitrary interruption points and corresponding
-non-zero values of `acestart`.
+The above rules imply that interrupted configuration and export operations may resume only on the same hart.
+This guarantees that resumption occurs on the same implementation, which is therefore free to define the interruption points and the corresponding non-zero values of `acestart`.
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -479,21 +473,20 @@ it to provision a CR.
 .Provisioning a CR with Metadata and content
 []
 ----
-function ace.prov(&CR, M[]) ={
+function ace.prov(&CR, M[]) =
+{
   MH : bits(128) & ← CR.Metadata;           // By reference, from the CR
-
   MH ← M[0 .. 15]
-  z ← PI_content_size(Metadata[31:0]);
-
   MH.State ← ace_state_partial_config;
 
-  if (there is not enough memory for the algorithm encoded in the Metadata)
+  if (not enough memory for the algorithm encoded in the Metadata)
     raise exception ace_exc_out_of_mem;
 
+  // Complete Metadata parsing
   if (Metadata is inconsistent)
     raise exception ace_exc_invalid;
 
-  // Complete Metadata parsing.
+  z ← PI_content_size(Metadata[31:0]);
   // Deserialize the z bytes at M+16.
 
   MH.State ← ace_state_initial;
