@@ -129,7 +129,7 @@ normal termination of an algorithm in the cases of its successful completion or 
 
 State 23, i.e., _Partially_Configured_, is used to report that provisioning or import was interrupted.
 
-States 24-31 are termed _error states_, and are used to report certain specific ACE errors.
+States 24-31 are termed _Error States_, and are used to report certain specific ACE errors.
 (((ACE, algorithm, invalid state)))
 (((Context Register, invalidation)))
 In particular, if the State is `ace_state_invalid`, we say that the CR is _invalidated_.
@@ -146,7 +146,7 @@ For algorithms with more than 22 valid states, additional state information resi
 
 The following rules are generic and apply to all algorithms:
 
-. The Metadata's _State_ field must reflect the current state whenever the CC is in _Initial_, _Success_, _Failure_, or any error state.
+. The Metadata's _State_ field must reflect the current state whenever the CC is in _Initial_, _Success_, _Failure_, or any Error State.
 This ensures that these states can be unambiguously determined from the _State_ field alone, without inspecting the Content.
 
 . In States _Success_ and _Failed_, only the following ACE instructions are permitted: `ace.prov`, `ace.import`, `ace.export`, `ace.clear`, `ace.size`, `ace.setst`, and `ace.getst`.
@@ -155,19 +155,19 @@ This ensures that these states can be unambiguously determined from the _State_ 
 
 . Unless an algorithm's specification explicitly states otherwise, a transition from any valid state to _Initial_ using instruction `ace.setst` is always permitted.
 
-. Upon transitioning to an error state, the Content of a CR is invalidated and emptied.
+. Upon transitioning to an Error State, the Content of a CR is invalidated and emptied.
 Internal resources associated with the Content may also be released. In that case, any additional variable-length data is released as well and the _VarDataLen_ field is set to 0.
 The CR then retains only the Metadata Header.
 
-. Exporting a CR in an error state exports only the metadata (and the authentication tag).
+. Exporting a CR in an Error State exports only the metadata (and the authentication tag).
   Requesting the SCC's size (`ace.size` <<ACE-instruction-size>>) wil reflect this.
   The resulting SCC can be reimported, allowing software to take appropriate actions even after a context switch.
 
-. If a CR is in any error state, it can still be reconfigured, cloned, or cleared. `ace.setst` can only be used to change the error state (for instance by an exception handler) or transition the CR to _Off_.
+. If a CR is in any Error State, it can still be reconfigured, cloned, or cleared. `ace.setst` can only be used to change the Error State (for instance by an exception handler) or transition the CR to _Off_.
 
-. The metadata of a CR in an error state can be read (using `ace.getmd`: <<ACE-instruction-getmd>>).
+. The metadata of a CR in an Error State can be read (using `ace.getmd`: <<ACE-instruction-getmd>>).
 
-. Attempts to _use_ a CR in any error state will not perform any operation, and in particular they leave the _State_ field unchanged.
+. Attempts to _use_ a CR in any Error State will not perform any operation, and in particular they leave the _State_ field unchanged.
 
 . If a CR is in State _Partially_Configured_, transitioning it to any State other than _Off_ or _Invalid_ is only possible as a consequence of a restart or resumption of the interrupted configuration instruction.  `ace.setst` can only transition it to _Off_ or _Invalid_.
 
@@ -201,12 +201,12 @@ The graph is read as follows:
 . State _Partially Configured_ has a trapezium shape.
 . The continuous edges represent state transitions induced by both configuration and usage instructions.
 . However, a transition from _Success_ or _Failure_ to _Initial_ may be forbidden by certain single-use CRs as per the _Algorithm_'s policies.
-. The transitions from _Off_ to any error state are a result of configuration instructions, whereas the corresponding transitions from these error states to _Off_ are a result of explicitly clearing the CR.
+. The transitions from _Off_ to any Error State are a result of configuration instructions, whereas the corresponding transitions from these Error States to _Off_ are a result of explicitly clearing the CR.
 . The dashed edges represent state transitions induced by reaching the expiration date.
 . The dotted edges represent state transitions induced by configuration instructions. We note that completion of a provisioning operations can only bring to the _Initial_ state, whereas completion of an import can bring a CR to any state, except _Partially Configured_.
 . State _Partially Configured_ occurs normally while configuration operations are in progress and is therefore only exposed via exceptions or interrupts.
 . Any transition may be caused by an performing explicit operation performed while in a given state, or be caused implicitly by reaching the latter under conditions specified in the algorithm's specification.
-. The round _Configuration_ “hub” simplifies the graph to represent that it is always possible to reach any error state, even from other error states, by performing explicit configuration operations (or by using `ace.setst` between error states).
+. The round _Configuration_ “hub” simplifies the graph to represent that it is always possible to reach any Error State, even from other Error States, by performing explicit configuration operations (or by using `ace.setst` between Error States).
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -326,7 +326,7 @@ If non-zero, _ExpirationDate_ specifies the CC expiration time as a number of mi
 The 26-bit field provides for a span of approximately 127 years (2^26^ minutes).
 
 Checking against the _ExpirationDate_ field is, semantically, the first step performed by any operation.
-When a non-configuration instruction is executed on a CR whose _ExpirationDate_ lies in the past, the hardware immediately sets the Metadata _State_ field to `ace_state_expired` and performs any action prescribed for error states, including implementation-specific tasks such as releasing the CRF capacity held by the Content.  If the instruction is a usage instruction, the operation is suppressed and exception `ace_exc_invalid` is raised (cf. <<ACE-exceptions>>) if the ACE privileged architecture is implemented.  Exporting, cloning, or configuring an expired CR is allowed.
+When a non-configuration instruction is executed on a CR whose _ExpirationDate_ lies in the past, the hardware immediately sets the Metadata _State_ field to `ace_state_expired` and performs any action prescribed for Error States, including implementation-specific tasks such as releasing the CRF capacity held by the Content.  If the instruction is a usage instruction, the operation is suppressed and exception `ace_exc_invalid` is raised (cf. <<ACE-exceptions>>) if the ACE privileged architecture is implemented.  Exporting, cloning, or configuring an expired CR is allowed.
 
 When an expired CR is used, privileged code may take appropriate action—for example, provisioning a new key or returning to the caller for handling.
 
@@ -374,18 +374,18 @@ The format of a Sealed Cryptographic Context (SCC) is shown in <<ACE-SCC>>.
 | Metadata Header              | 128 bits | Contains the metadata information as described in <<ACE-Metadata>>.
 //
 | Content: _Fixed Data Section_
-| Empty if the context is in an error state, otherwise it depends only
+| Empty if the context is in an Error State, otherwise it depends only
 on the _Algorithm_, _AlgorithmPolicy_, and _KeyType_ fields of the Metadata Header.
  Always a multiple of 128 bits.
 | Contains keys and other algorithm-specific information.
 //
 | Content: _Architected Variable-Length Data Section_ (Architected VDS)
-| Empty if the context is in an error state, otherwise it depends on the information contained in the Metadata and Fixed Data Sections.
+| Empty if the context is in an Error State, otherwise it depends on the information contained in the Metadata and Fixed Data Sections.
   Always a multiple of 128 bits.
 | The data in this Section is necessary for the correct functioning of the algorithm.
 //
 | Content: _Implementation (Specific) Variable-Length Data Section_ (Implementation VDS)
-| Empty if the context is in an error state, otherwise it is Implementation-Specific.
+| Empty if the context is in an Error State, otherwise it is Implementation-Specific.
   Always a multiple of 128 bits.
 | The data in this Section is _not_ necessary for the correct functioning of the algorithm.
 |===
@@ -2064,7 +2064,7 @@ State Machine:::
 ** To move to _Set_Aux_Value_, a Form B `ace.setst` must be used, where the
    auxiliary argument `Xs` sets the nonce length `N_len`. `N_len` must be at
    least `g-1`. If not, `State <- ace_state_invalid`, that is the CR is
-   in an error state.
+   in an Error State.
 
 ** In State _Set_Aux_Value_, only  ``ace.exec`` instructions of Form B,
    “```ace.exec Kn|K(Xn), INPUT```”, are allowed, whereby `N` is set to
@@ -3236,7 +3236,7 @@ State Machine::: {empty}
 Beside
 _Initial_ (1),
 _Success_ (21),
-_Failure_ (22), and the error states,
+_Failure_ (22), and the Error States,
 ECC algorithms define:
  ** _Set_Generator_ (2)
  ** _Set_Scalar_ (3)
