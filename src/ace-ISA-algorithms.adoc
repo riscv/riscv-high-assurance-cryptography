@@ -1,7 +1,7 @@
 // ////////////////////////////////////////////////////////////////////
 
 [[ACE-algorithms]]
-== ACE ISA-Orthogonal Architecture: Data Formats and Algorithms
+== Book 2: ISA-Orthogonal Architecture -- Data Formats + Algorithms
 
 This chapter is normative.
 
@@ -112,14 +112,14 @@ The architected values of _State_ which are common to all algorithms are defined
 .Global CC State Numbers: Interrupted and Error States
 [float="center",align="center",width="100%",cols="^7%,<27,<15%,<51%"]
 |===
-|  23    | `ace_state_partial_config`  | _Partial_Config_  | Provisioning or import interrupted.
-|  24    | `ace_state_expired`         | _Expired_         | The CR has expired.  This is set by the hardware even if the condition also raises an exception.
-|  25    | `ace_state_import_auth`     | _Auth_Failed_     | Authentication failure with `ace.import`.
-|  26    | `ace_state_priv_viol`       | _Priv_Viol_       | Violation of Usage Control policies.
-|  27    | `ace_state_out_of_mem`      | _Out_of_Memory_   | Insufficient CRF memory for configuration instruction. This may be set by privileged code in case they do not handle the CR allocation.
-|  28    | `ace_state_not_impl`        | _Not_Impl_        | Not implemented algorithm. It is set by the hardware upon an attempt to provision or import a CR that is not supported by the implementation.
-| 29, 30 | (Reserved)                 |                   | Reserved for future use.
-|  31    | `ace_state_invalid`         | _Invalid_         | Invalid/invalidated state, for instance because of the use of an invalid value (argument, state, or metadata).
+|  23    | `ace_state_partial_config`  | _Partially_Configured_  | Provisioning or import interrupted.
+|  24    | `ace_state_not_impl`        | _Not_Impl_        | Not implemented algorithm. It is set by the hardware upon an attempt to provision or import a CR that is not supported by the implementation.
+|  25    | `ace_state_invalid`         | _Invalid_         | Invalid/invalidated state, for instance because of the use of an invalid value (argument, state, or metadata).
+|  26    | `ace_state_out_of_mem`      | _Out_of_Memory_   | Insufficient CRF memory for configuration instruction. This may be set by privileged code in case they do not handle the CR allocation.
+|  27    | `ace_state_import_auth`     | _Auth_Failed_     | Authentication failure with `ace.import`.
+|  28    | `ace_state_priv_viol`       | _Priv_Viol_       | Violation of Usage Control policies.
+|  29    | `ace_state_expired`         | _Expired_         | The CR has expired.  This is set by the hardware even if the condition also raises an exception.
+| 30, 31 | (Reserved)                  |                   | Reserved for future use.
 |===
 
 The state with value 0 is termed _Off_, and is used to indicate that the CR is not configured.
@@ -127,13 +127,20 @@ The state with value 0 is termed _Off_, and is used to indicate that the CR is n
 All states in the range 1-22 are termed _valid_. This includes both _Success_ and _Failure_ states, which must be used for
 normal termination of an algorithm in the cases of its successful completion or failure.
 
-State 23, i.e., _Partial_Config_, is used to report that provisioning or import was interrupted.
+(((ACE, CR, partially configured)))
+State 23, i.e., _Partially_Configured_, is used to report that provisioning or import was interrupted.
 
-States 24-31 are termed _error states_, and are used to report certain specific ACE errors.
+(((ACE, algorithm, error states)))
+States 24-31 are termed _Error States_, and are used to report certain specific ACE errors.
 (((ACE, algorithm, invalid state)))
 (((Context Register, invalidation)))
 In particular, if the State is `ace_state_invalid`, we say that the CR is _invalidated_.
 
+The Error States are currently listed in decreasing severity order, with Error State 24 being the most severe and Error State 29 the least severe.
+Error States 30 and 31, if defined, will not necessarily have a lower priority than Error State 29, and may be therefore not in order.
+
+(((ACE, instruction, invalid state)))
+(((ACE, instruction, ace.setst)))
 An error state can be set by software using `ace.setst` (with no auxiliary input).
 
 Error conditions that lead to exceptions are treated in <<ACE-exceptions>>.
@@ -143,7 +150,7 @@ For algorithms with more than 22 valid states, additional state information resi
 
 The following rules are generic and apply to all algorithms:
 
-. The Metadata's _State_ field must reflect the current state whenever the CC is in _Initial_, _Success_, _Failure_, or any error state.
+. The Metadata's _State_ field must reflect the current state whenever the CC is in _Initial_, _Success_, _Failure_, or any Error State.
 This ensures that these states can be unambiguously determined from the _State_ field alone, without inspecting the Content.
 
 . In States _Success_ and _Failed_, only the following ACE instructions are permitted: `ace.prov`, `ace.import`, `ace.export`, `ace.clear`, `ace.size`, `ace.setst`, and `ace.getst`.
@@ -152,27 +159,58 @@ This ensures that these states can be unambiguously determined from the _State_ 
 
 . Unless an algorithm's specification explicitly states otherwise, a transition from any valid state to _Initial_ using instruction `ace.setst` is always permitted.
 
-. Upon transitioning to an error state, the Content of a CR is invalidated and emptied.
+. Upon transitioning to an Error State, the Content of a CR is invalidated and emptied.
 Internal resources associated with the Content may also be released. In that case, any additional variable-length data is released as well and the _VarDataLen_ field is set to 0.
 The CR then retains only the Metadata Header.
 
-. Exporting a CR in an error state exports only the metadata (and the authentication tag).
+. Exporting a CR in an Error State exports only the metadata (and the authentication tag).
   Requesting the SCC's size (`ace.size` <<ACE-instruction-size>>) wil reflect this.
   The resulting SCC can be reimported, allowing software to take appropriate actions even after a context switch.
 
-. If a CR is in any error state, it can still be reconfigured, cloned, or cleared. In particular, `ace.setst` can only transition it to _Off_.
+. If a CR is in any Error State, it can still be reconfigured, cloned, or cleared. `ace.setst` can only be used to change the Error State (for instance by an exception handler) or transition the CR to _Off_.
 
-. The metadata of a CR in an error state can be read (using `ace.getmd`: <<ACE-instruction-getmd>>).
+. The metadata of a CR in an Error State can be read (using `ace.getmd`: <<ACE-instruction-getmd>>).
 
-. Attempts to _use_ a CR in any error state will not perform any operation, and in particular they leave the _State_ field unchanged.
+. Attempts to _use_ a CR in any Error State will not perform any operation, and in particular they leave the _State_ field unchanged.
 
-. If a CR is in State _Partial_Config_, transitioning it to any State other than _Off_ or _Invalid_ is only possible as a consequence of a restart or resumption of the interrupted configuration instruction.  `ace.setst` can only transition it to _Off_ or _Invalid_.
+. If a CR is in State _Partially_Configured_, transitioning it to any State other than _Off_ or _Invalid_ is only possible as a consequence of a restart or resumption of the interrupted configuration instruction.  `ace.setst` can only transition it to _Off_ or _Invalid_.
 
 . Any _usage_ instruction that would violate the Usage Control policies will not perform its operation, and will set _State_ to `ace_state_priv_viol` instead.
 
 We note that the State after `ace.setst` is issued may differ from the State specified by the instruction.
 A common example is MAC verification: after `ace.setst` is issued with an `ace_state_hash_verify` immediate as the next state and the value to be verified as the additional parameter, the algorithm transitions to either _Success_ or _Failure_. This is done to prevent the manipulation of a CR's state and to reduce code size.
 An `ace.exec` instruction may also trigger a state change.
+
+In <<ACE-states-graph>> we display the default possible state transitions.
+
+[[ACE-states-graph]]
+.Default State Transitions
+[float="center",align="center"]
+image::../../src/statestikz-2.svg[]
+
+////
+[[ACE-states-graph-2]]
+.Another
+[tikz,,pdf,preamble=true,float="center",align="center"]
+....
+~~~~
+....
+////
+
+The graph is read as follows:
+
+. The double circled state is the _Off_ State.
+. Valid States have single rounded rectangular borders.
+. Error States have double rounded rectangular borders.
+. State _Partially Configured_ has a trapezium shape.
+. The continuous edges represent state transitions induced by both configuration and usage instructions.
+. However, a transition from _Success_ or _Failure_ to _Initial_ may be forbidden by certain single-use CRs as per the _Algorithm_'s policies.
+. The transitions from _Off_ to any Error State are a result of configuration instructions, whereas the corresponding transitions from these Error States to _Off_ are a result of explicitly clearing the CR.
+. The dashed edges represent state transitions induced by reaching the expiration date.
+. The dotted edges represent state transitions induced by configuration instructions. We note that completion of a provisioning operations can only bring to the _Initial_ state, whereas completion of an import can bring a CR to any state, except _Partially Configured_.
+. State _Partially Configured_ occurs normally while configuration operations are in progress and is therefore only exposed via exceptions or interrupts.
+. Any transition may be caused by an performing explicit operation performed while in a given state, or be caused implicitly by reaching the latter under conditions specified in the algorithm's specification.
+. The round _Configuration_ “hub” simplifies the graph to represent that it is always possible to reach any Error State, even from other Error States, by performing explicit configuration operations (or by using `ace.setst` between Error States).
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -189,65 +227,63 @@ Twelve LST entries are defined: the first six form the _HW Binding Group_, which
 entries 6–7 form the _Boot Session Group_;
 entries 8–11 form the _SW Filter Group_.
 
-Eight _Locality_ field bits are defined.
-
 For each Locality, the table provides: index in the LST; domain (SoC-, device-, VM-wide, or per-process); configurability; bit-field encoding; and value.
+
+Eight _Locality_ field bits are defined.
 
 [[ACE-locality-indexes]]
 .Architected Localities
 [width="100%",cols="^5%,15%,50%,^9%,^9%,^6%,^6%",options="header"]
 |===
 |  Idx  | Locality                  | Description                                                                          | Domain | Config?|  Bits  | Value
-2+|    No HW Binding                | Independent of Chip, OEM, Device                                                    ^|  --   ^|   --   | [2:0]  |   0
-|   0   | _SiPScrt_                 | Identifies the designer of the SoC. Permanent.                                       |  SoC   |   No   | [2:0]  |   1
-|   1   | _ChipFamScrt_             | Identifies specific chip/SoC model/family. Permanent.                                |  SoC   |   No   | [2:0]  |   2
-|   2   | _ChipScrt_                | Unique for each SoC. Permanent.                                                      |  SoC   |   No   | [2:0]  |   3
+2+|    No HW Binding                | Independent of Chip, OEM, Device                                                    ^|  --   ^|   --   | [2:0]  |  0
+|   0   | _SiPScrt_                 | Identifies the designer of the SoC. Permanent.                                       |  SoC   |   No   | [2:0]  |  1
+|   1   | _ChipFamScrt_             | Identifies specific chip/SoC model/family. Permanent.                                |  SoC   |   No   | [2:0]  |  2
+|   2   | _ChipScrt_                | Unique for each SoC. Permanent.                                                      |  SoC   |   No   | [2:0]  |  3
 |   3   | _OEMScrt_                 | Provisioned by OEM to differentiate their products from the competition.
-Permanent, or reconfigurable via a custom hardware authenticated mechanism.                                                | Device |   HW   | [2:0]  |   4
+Permanent, or reconfigurable via a custom hardware authenticated mechanism.                                                | Device |   HW   | [2:0]  |  4
 |   4   | _ProdScrt_                | Identifies device/system type/model (product).
-Permanent or reconfigurable like OEMScrt.                                                                                  | Device |   HW   | [2:0]  |   5
+Permanent or reconfigurable like OEMScrt.                                                                                  | Device |   HW   | [2:0]  |  5
 |   5   | _DevScrt_                 | Unique device (entire system) secret.
 Shared across all harts in a SoC and shareable across multiple SoCs in a single device using an implementation-defined mechanism.
-Reconfigurable like OEMScrt.                                                                                               | Device |   HW   | [2:0]  |   6
-2+|   No Boot Binding               | Independent of Physical or Virtual Boot Session                                     ^|  --   ^|   --   | [4:3]  |   0
+Reconfigurable like OEMScrt.                                                                                               | Device |   HW   | [2:0]  |  6
+2+|   No Boot Binding               | Independent of Physical or Virtual Boot Session                                     ^|  --   ^|   --   | [4:3]  |  0
 |   6   | _PhysBootScrt_            | Unique per the boot session of the host hardware and its firmware stack.
-Configured by M-mode during the boot process of the host (see <<ACE-CSR-macePhysBootScrt>>).                               | Device |   M    | [4:3]  |   1
+{empty}                   Configured by M-mode during the boot process of the host (see <<ACE-CSR-macePhysBootScrt>>).     | Device |   M    | [4:3]  |  1
 |   7   | _VirtBootScrt_            | Unique per the boot session of the virtual hardware and its software stack.
-Regenerated by H or higher at each virtual boot of a VM (see <<ACE-CSR-haceVirtBootScrt>>).                                |   VM   |  H/M   | [4:3]  |   2
-2+| No Binding at Modes             | Independent of M-, S-, or VS-mode filters                                           ^|  --   ^|   --   | [6:5]  |   0
-|   8   | _MLocality_               | Configurable at M to restrict import of SCCs.
-                                      Useful to separate Supervisor Domains/Security States.                               |  < M   |   M    | [6:5]  |   1
-|   9   | _HLocality_               | Configurable at H to restrict import of SCCs                                         |  < H   |   H    | [6:5]  |   2
-|  10   | _SLocality_               | Configurable at (V)S to restrict import of SCCs                                      | < (V)S |  (V)S  | [6:5]  |   3
-|  11   | _Nonce_                   | Configurable at any mode to restrict import of SCCs (out-of-band peer-to-peer nonce) |  hart  |   U    | [7:7]  |  0/1
+Regenerated by H or higher at each virtual boot of a VM (see <<ACE-CSR-haceVirtBootScrt>>).                                |   VM   |  H/M   | [4:3]  |  2
+2+| No Binding at Modes             | Independent of M-, S-, or VS-mode filters                                           ^|  --   ^|   --   | [6:5]  |  0
+|   8   | _MLocality_               | Configurable at M.  Useful to separate Supervisor Domains/Security States.           |  < M   |   M    | [6:5]  |  1
+|   9   | _HLocality_               | Configurable at H.                                                                   |  < H   |   H    | [6:5]  |  2
+|  10   | _SLocality_               | Configurable at (V)S.                                                                | < (V)S |  (V)S  | [6:5]  |  3
+|  11   | _Nonce_                   | Always re-configurable (out-of-band peer-to-peer nonce).                             |  hart  |   U    | [7:7]  | 0/1
 |===
 
 Implementations are not required to populate every entry in the HW Binding Group, except for _ChipFamScrt_ and _DevScrt_.
 If an entry is unconfigured, it is transparently replaced by the next defined entry in its chain: _SiPScrt_ {rightarrow} _ChipFamScrt_ {rightarrow} _ChipScrt_, and _OEMScrt_ {rightarrow} _ProdScrt_ {rightarrow} _DevScrt_ .
+If no entry is configured in these chain but one Locality is requested, the implementation must raise an authentication failure error.
 
 _HLocality_ is active only when the H extension is enabled and V=1; otherwise, it mirrors _MLocality_.
 
 NOTE: A system-key index may refer to keys with unrelated purposes on different devices, leading to unspecified behavior.
 Implementations shall assign usage policies at least as restrictive as the key's own native policies, and supply an appropriate _Locality_ during CR provisioning.
 
-Up to six architected Localities may be active concurrently: one from the HW Binding Group, one of either _PhysBootScrt_ or _VirtBootScrt_, and four from the SW Filter Group.
-In <<ACE-provisioning-export-import>> it is explained how the associated policies are enforced.
+Up to four architected Localities may be active concurrently: one from the HW Binding Group, one of either _PhysBootScrt_ or _VirtBootScrt_, one from the SW Filter Group and the _Nonce_. In <<ACE-provisioning-export-import>>, it is explained how the associated policies are enforced.
 
-// If Bits 8-9 are not both equal to zero, bits [9:0] are used to define custom, implementation-defined Localities instead.
-// Each defined custom value of the bits bits [9:0] will be translated into one or more 128-bit values that are used in the same way as the architected ones in <<ACE-provisioning-export-import>>.
+//
 
 The instruction `ace.restrict` can be used to set Localities, as well as replace Localities with more restrictive ones such as:
 
 ** _SiPScrt_ {rightarrow} _ChipFamScrt_, _ChipScrt_;
 ** _ChipFamScrt_ {rightarrow} _ChipScrt_;
-** _OEMScrt_ {rightarrow} _ProdScrt_, _DevScrt_; and
+** _OEMScrt_ {rightarrow} _ProdScrt_, _DevScrt_;
 ** _ProdScrt_ {rightarrow} _DevScrt_.
-** _MLocality_ {rightarrow} _HLocality_, _SLocality_.
+** _MLocality_ {rightarrow} _HLocality_, _SLocality_; and
 ** _HLocality_ {rightarrow} _SLocality_.
 
-Then, when the CR is exported as an SCC, it will use the new Locality values to
-tweak the export and import algorithms. Generalizing the Locality is not
-permitted. Attempting to do so raises exception `ace_exc_invalid`.
+When the CR is exported, it will use the new Locality values to tweak the export algorithm.
+Generalizing Localities is not permitted: Attempting to do so raises exception `ace_exc_invalid`, but the
+State is not automatically set to _ace_state_invalid_ (the exception handler may of course do that).
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -294,7 +330,7 @@ If non-zero, _ExpirationDate_ specifies the CC expiration time as a number of mi
 The 26-bit field provides for a span of approximately 127 years (2^26^ minutes).
 
 Checking against the _ExpirationDate_ field is, semantically, the first step performed by any operation.
-When a non-configuration instruction is executed on a CR whose _ExpirationDate_ lies in the past, the hardware immediately sets the Metadata _State_ field to `ace_state_expired` and performs any action prescribed for error states, including implementation-specific tasks such as releasing the CRF capacity held by the Content.  If the instruction is a usage instruction, the operation is suppressed and exception `ace_exc_invalid` is raised (cf. <<ACE-exceptions>>) if the ACE privileged architecture is implemented.  Exporting, cloning, or configuring an expired CR is allowed.
+When a non-configuration instruction is executed on a CR whose _ExpirationDate_ lies in the past, the hardware immediately sets the Metadata _State_ field to `ace_state_expired` and performs any action prescribed for Error States, including implementation-specific tasks such as releasing the CRF capacity held by the Content.  If the instruction is a usage instruction, the operation is suppressed and exception `ace_exc_invalid` is raised (cf. <<ACE-exceptions>>) if the ACE privileged architecture is implemented.  Exporting, cloning, or configuring an expired CR is allowed.
 
 When an expired CR is used, privileged code may take appropriate action—for example, provisioning a new key or returning to the caller for handling.
 
@@ -342,18 +378,18 @@ The format of a Sealed Cryptographic Context (SCC) is shown in <<ACE-SCC>>.
 | Metadata Header              | 128 bits | Contains the metadata information as described in <<ACE-Metadata>>.
 //
 | Content: _Fixed Data Section_
-| Empty if the context is in an error state, otherwise it depends only
+| Empty if the context is in an Error State, otherwise it depends only
 on the _Algorithm_, _AlgorithmPolicy_, and _KeyType_ fields of the Metadata Header.
  Always a multiple of 128 bits.
 | Contains keys and other algorithm-specific information.
 //
 | Content: _Architected Variable-Length Data Section_ (Architected VDS)
-| Empty if the context is in an error state, otherwise it depends on the information contained in the Metadata and Fixed Data Sections.
+| Empty if the context is in an Error State, otherwise it depends on the information contained in the Metadata and Fixed Data Sections.
   Always a multiple of 128 bits.
 | The data in this Section is necessary for the correct functioning of the algorithm.
 //
 | Content: _Implementation (Specific) Variable-Length Data Section_ (Implementation VDS)
-| Empty if the context is in an error state, otherwise it is Implementation-Specific.
+| Empty if the context is in an Error State, otherwise it is Implementation-Specific.
   Always a multiple of 128 bits.
 | The data in this Section is _not_ necessary for the correct functioning of the algorithm.
 |===
@@ -441,12 +477,12 @@ and the total size in bytes of an SCC is
 [[ACE-interruption-points]]
 ==== Interruptibility of Configuration and Export Operations
 
-During `ace.prov` and `ace.import`, _State_ is set to _Partial_Config_ for the duration of the operation.
+During `ace.prov` and `ace.import`, _State_ is set to _Partially_Configured_ for the duration of the operation.
 It is updated to the correct value only upon successful completion (see <<ACE-provisioning-export-import>>).
 This transition does not occur during `ace.export`.
 
 A provisioning or import instruction may resume from the point of interruption only if control returns directly after the interrupt handler completes.
-The implementation resumes such an instruction only if the CR has _State_ set to _Partial_Config_ and a nonzero `acestart` value.
+The implementation resumes such an instruction only if the CR has _State_ set to _Partially_Configured_ and a nonzero `acestart` value.
 The privileged interrupt handler may allow resumption only in this case.
 
 A partially configured CR cannot be exported.
@@ -515,9 +551,10 @@ are defined next.
 .RFC8452 Key Derivation
 []
 ----
-function RFC8452_KeyDeriv(key : bits(256)) =
+function RFC8452_KeyDeriv(key : bits(256))
+    -> struct{enc_key : bits(256), auth_key : bits(128)} =
 {
-  struct {
+  return struct {
     AESE256(key, (zeros(125) @ 0b101))[63:0] @ AESE256(key, (zeros(125) @ 0b100))[63:0] @
     AESE256(key, (zeros(125) @ 0b011))[63:0] @ AESE256(key, (zeros(125) @ 0b010))[63:0],
     AESE256(key, (zeros(125) @ 0b001))[63:0] @ AESE256(key, (zeros(125) @ 0b000))[63:0]
@@ -535,14 +572,16 @@ The SIV is the encryption of the computation of this AXU hash on the concatenati
 .Polyval Hashing Function
 []
 ----
-function POLYVAL(&tmp : bits(128), auth_key : bits(128), blocks[0..n-1] : bits(128)) =
+function POLYVAL(auth_key : bits(128), blocks[0..n-1] : bits(128))
+    -> bits(128) =
 {
-  tmp ← zeros(128);
+  local tmp : bits(128) ← zeros(128);
   local i : int;
   foreach(i from 0 to n-1) {
     tmp ← tmp xor blocks[i];
     tmp ← Montmul(tmp, auth_key);
   }
+  return tmp;
 }
 ----
 
@@ -2032,7 +2071,7 @@ State Machine:::
 ** To move to _Set_Aux_Value_, a Form B `ace.setst` must be used, where the
    auxiliary argument `Xs` sets the nonce length `N_len`. `N_len` must be at
    least `g-1`. If not, `State <- ace_state_invalid`, that is the CR is
-   in an error state.
+   in an Error State.
 
 ** In State _Set_Aux_Value_, only  ``ace.exec`` instructions of Form B,
    “```ace.exec Kn|K(Xn), INPUT```”, are allowed, whereby `N` is set to
@@ -3119,21 +3158,20 @@ The parameters for the defined curves are:
   ** brainpoolP384r1: `b` = `h` = `j` = 384; `u` = `v` = 2.
   ** brainpoolP512r1: `b` = `h` = `j` = 512; `u` = `v` = 2.
  * SM2 cite:[GMT-0003-1-2012,GMT-0003-2-2012,GMT-0003-3-2012,GMT-0003-4-2012]: `b` = `h` = `j` = 256; `u` = `v` = 2.
+
+Depending on the specifications of the algorithms, non-compressed or compressed points may be used.
+
+All curves currently used are defined over fields of odd characteristic.
+Since the all-ones strings do not represent any valid field value, these are used as coordinate(s) values of a point to represent the point at infinity.
 --
 +
-The algorithms may require non-compressed or compressed points as inputs and outputs, depending on the value of `u`.
- +
-All curves currently used are defined over prime fields, and no prime is of the form 2^`b`^-1 9`b` is even).
-Therefore, the all-ones string does not represent any valid field value, and these are used
-as the coordinate(s) of a point to represent the point at infinity.
 
 //
 
 Data Structures:::
 * *Provisioning Input* (Content): Empty.
 +
-NOTE: In the Metadata, _Algorithm_ only defines a curve.
-_AlgorithmPolicy_ enables signature generation (_AlgorithmPolicy_[0]) and verification (_AlgorithmPolicy_[1]), where all four combinations are admissible.
+NOTE: _AlgorithmPolicy_ enables signature generation (_AlgorithmPolicy_[0]) and verification (_AlgorithmPolicy_[1]), where all four combinations are admissible.
 +
 * *Internal State* (Content):
  ** `HasSecondPt`: Bool.
@@ -3161,10 +3199,9 @@ _AlgorithmPolicy_ enables signature generation (_AlgorithmPolicy_[0]) and verifi
 [cols="^7%,<33%,<30,<30",width="100%",options="header"]
 |===
 |   Pos.  | Size in Bytes  2+| Field
-.4+| i .4+| 2                | Bit 0: `HasScalar`     | Bit 1: `HasSecondPt`
-                            <| Bit 2: `HasSignature` <| Bit 3: `HasHash`
-                            <| Bit 4: `HasRndNum`    <| Bit 5: `OutputType`
-                            <| Bit 6-15: Reserved    <| {empty}
+.3+| i .3+| 2 (Bits 6-15 are reserved) | Bit 0: `HasScalar`     | Bit 1: `HasSecondPt`
+                                      <| Bit 2: `HasSignature` <| Bit 3: `HasHash`
+                                      <| Bit 4: `HasRndNum`    <| Bit 5: `OutputType`
 |    ii   | 2              2+| `Progress`
 |   iii   | 4              2+| Padding
 |    iv   | ``ub``/8       2+| `Generator`, X coordinate, followed by Y coordinate if `u=2`.
@@ -3204,7 +3241,7 @@ State Machine::: {empty}
 Beside
 _Initial_ (1),
 _Success_ (21),
-_Failure_ (22), and the error states,
+_Failure_ (22), and the Error States,
 ECC algorithms define:
  ** _Set_Generator_ (2)
  ** _Set_Scalar_ (3)
