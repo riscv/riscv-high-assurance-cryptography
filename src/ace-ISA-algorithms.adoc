@@ -5,26 +5,6 @@
 
 This chapter is normative.
 
-[WARNING]
-====
-Make sure that in all algorithms there is no state where more than one version of `ace.exec` or `ace.setst` is allowed.
-
-`acesequence` most likely not needed. Double check.
-
-`aceactivecr`/`activecr` can be removed.
-
-`ace.exec` or `ace.setst` will read/write to ACEIOBUF depending on the semantics of the instruction.
-
-Do we still need to define the mode of operation? No, because if Form D `ace.exec` is used where an in0put or an output is expeted, then
-the implementation shall automatically use the ACEIOBUF if available and raise an invalid instruction exception otherwise.
-
-Go through ALL algorithms to make sure this is fixed.
-
-If an output is expected and it is not provided, but the input is from a vector register, then the output is ignored.
-
-If an input is expected and it is not provided, and the output vector is defined, then the result is undefined, or we raise an invalid instruction exception otherwise?
-====
-
 [[ACE-data-formats-intro]]
 === Data Formats
 
@@ -57,8 +37,7 @@ Currently, 79 bits are defined and 49 are reserved for future use.
 |  [18:16] | 3     | _SCProtection_    | Side-channel protection level. See <<ACE-SCProtection-field>>.
 |  [20:19] | 2     | _KeyType_         | 0: key is an explicit value in Content. 1: key is an index into a _system-specific_ System Keys Table (SKT). See <<ACE-system-keys>>.
 |  [25:21] | 5     | _State_           | Current state of the CR/algorithm, encoded as an integer.
-|  [27:26] | 2     | _Sequence_        | Tracks the progress in the replacement sequence of an `ace.exec` or `ace.setst` instruction. The `aceactivecr` CSR must match the CR number.
-|  [31:28] | 4     | Reserved          | Reserved for future use. Currently, it must be equal to zero.
+|  [31:26] | 6     | Reserved          | Reserved for future use. Currently, it must be equal to zero.
 |  [35:32] | 5     | _UsagePolicy_     | Usage (Control) Policy. Bits 0, 1, 2, 4 and 4 of the field,, when set, disallow CC usage in U-mode, (V)S-mode, H-mode, M-Mode, and Debug mode, respectively.
 |  [46:37] | 10    | _Locality_        | Zero, or an index determining a Locality Secret. See <<ACE-Localities>>.
 |  [47:47] | 1     | Reserved          | Reserved for future use.
@@ -941,17 +920,28 @@ The state machine is defined by the following information:
   conditions under which each transition is allowed, the Form of `ace.setst`
   used for each of these transitions and the meaning of any additional
   parameter;
-. The enumeration of the *allowed instructions* at each state and their
+. The enumeration of the *allowed/expected instructions* at each state and their
   *behavior*.
+  Besides configuration and export instructions,
+  the instructions permitted in each algorithm state are typically `ace.exec` and `ace.setst`.
+  For `ace.exec`, only one of its Forms (see <<ACE-instruction-exec>>) is _expected_ per state.
+  By this we intend that either the specified Form must be issued, or Form D `ace.exec` or
+  Form C `ace.setst` instead, with appropriate setup instructions for the ACEIOBUF.
+  Issuing the `ace.input`/`ace.output` instructions are not enforced, as properly
+  handling of the inputs and outputs is the responsibility of the caller.
 
-The instructions permitted in each algorithm state are typically `ace.exec` and `ace.setst`, though this is not a general rule. For `ace.exec`, only one of its Forms (see <<ACE-instruction-exec>>) is allowed per state, along with the corresponding replacement sequence defined in <<ACE-replacement-instructions>>.
+// [WARNING]
+// ====
+// CHANGE:
+//
+// ====
 --
 +
 
 //
 
 Pseudocode is provided to illustrate the software implementation of ACE-supported algorithms using the ACE ISA.
-For clarity, the pseudocode generally uses fixed parameters and omits the `ace.exec` Forms A–C replacement sequences.
+The pseudocode uses the vector registers and omits the alternative sequences based on ACEIOBUF.
 The examples are non-normative.
 
 // ////////////////////////////////////////////////////////////////////
@@ -959,22 +949,25 @@ The examples are non-normative.
 [[ACE-generic-rules]]
 ==== Generic Rules
 
-[[ACE-disallowed]]
-===== Disallowed Instructions and CR invalidation
+. `ace.prov`, `ace.import`, `ace.export`, `ace.clone`, and `ace.clear` are always allowed, even if not explicitly mentioned in an algorithm specification.
 
-Under any of the following conditions, an _illegal instruction exception_ is raised, and the CR is invalidated:
+. If a usage instruction that may modify the state of a CR is issued, or a state transition is requested in `ace.setst`, that are not explicitly allowed by the current state of the algorithm encoded in the CC in the CR an _illegal instruction exception_ is raised, and the CR is invalidated.
 
-. A usage instruction that may modify the state of a CR is issued,
+// ////////////////////////////////////////////////////////////////////
 
-. Any Form of `ace.exec` or `ace.setst` is issued, or
+[[ACE-replacement]]
+===== Usage of ACEIOBUF, ace.input, and ace.output
 
-. A state transition is requested in `ace.setst`
+In all algorithms, following holds:
 
-that are not explicitly allowed by the current state of the algorithm encoded in the CC in the CR.
+. Whenever a Form D `ace.exec` is used where an input or an output is instead expected, i.e. the Algorithm specifies a Form A-C `ace.exec`,
+the implementation shall automatically use the ACEIOBUF if `Zlio` is available, and raise an invalid instruction exception otherwise.
 
-This extends also to the use of replacement sequences for `ace.exec` and `ace.setst` as defined in the next section.
+. If a Form B `ace.exec` is issued in place of a Form A `ace.exec`, i.e., an output vector register is expected but it is not provided, and the input vector register is given, then the output of the `ace.exec` instruction is simply discarded.
 
-In particular, any configuration instruction, `ace.export` and `ace.clone` may with either the CR as source or destination, and `ace.clear`, are always allowed.
+. If a Form C `ace.exec` is issued in place of a Form A `ace.exec`, i.e., an input vector register is expected but it is not provided, and the output vector is defined, then an invalid instruction exception is raised.
+
+. Similarly, for `ace.setst`, if a vector input is expected (Form C `ace.setst`) and it is not provided, the implementation shall automatically use the ACEIOBUF if `Zlio` is available, and raise an invalid instruction exception otherwise. This instruction replacement is not allowed in the case of a Form B `ace.setst`, i.e., when the auxiliary input should come from a GPR, and an invalid instruction exception is raised regardless of whether `Zlio` is available.
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -992,7 +985,7 @@ In particular, any configuration instruction, `ace.export` and `ace.clone` may w
   bits, depending on whether vector registers are used or the ACEIOBUF is
   used.
 
-//
+// ////////////////////////////////////////////////////////////////////
 
 [[ACE-rules-threshold-implementations]]
 ===== Single-Share Key Export Rule for Threshold implementations
@@ -1126,7 +1119,7 @@ State Machine:::
 
 * *Behavior:*
  ** In State _Initial_, no `ace.exec` instruction is allowed.
- ** In States _Encrypt_ or _Decrypt_, only Form A `ace.exec` instructions can be issued, i.e., +
+ ** In States _Encrypt_ or _Decrypt_, Form A `ace.exec` instructions can be issued, i.e., +
      “`ace.exec OUTPUT, Kn|K(Xn), INPUT`.”
   *** If the state is _Encrypt_, then `OUTPUT <- enc_blk(key, INPUT)`.
   *** If the state is _Decrypt_, then `OUTPUT <- dec_blk(key, INPUT)`.
@@ -1142,50 +1135,6 @@ State Machine:::
 In <<ACE-pseudocode-ECB-encryption>> we illustrates how to use an ECB CC to
 encrypt a block of data.
 
-// ////////////////////////////////////////////////////////////////////
-
-// ==== Note on Short Vectors
-//
-// _This paragraph is not normative._
-//
-// It is conceivable to support a vector length `ACELEN` smaller than a cipher’s
-// block size `b` in encryption modes. We add a `b`-bit field called `buffer` to
-// the state of the CR. Let __r__ `<-` {lceil}``ACELEN``/``b``{rceil}. We define
-// first how to replace a Form A `ace.exec` instruction:
-//
-// .  The idea is to replace a Form A `ace.exec` instruction by __r__ Form B
-//    `ace.exec` instruction followed by __r__ Form C `ace.exec` ones. This
-//    replacement sequence is tracked in `acesequence` using values 1 to 2__r__-1
-//    (after the 2__r__-th instruction, `acesequence` is set to zero and not to
-//    2__r__).
-// . The __i__-th Form B `ace.exec` instructions copies its input into bits
-//   {nbsp}[min(__i__{interpunct}``ACELEN``,`b`)-1 :
-//   (__i__-1){interpunct}``ACELEN``]{nbsp} of the `b`-bit `buffer`, for __i__ =
-//   1,2,..,__r__. The use of “min” ensures that the
-//   `b`-__r__{interpunct}``ACELEN`` significant bits of the last input are
-//   discarded if `ACELEN` does not divide `b` exactly.
-// . The __r__-th Form B `ace.exec` instruction also applies the primitive to this
-//   `buffer`.
-// . The __i__-th Form C `ace.exec` instructions can be issued to write out bits
-//   {nbsp}[min(__i__{interpunct}``ACELEN``,`b`)-1 :
-//   (__i__-1){interpunct}``ACELEN``]{nbsp} of the `b`-bit `buffer` to its output
-//   vector register, for __i__ = 1,2,..,__r__.
-// . After the __r__-th Form C `ace.exec` instruction is completed, `acesequence`
-//   is reset to zero.
-//
-// Form B and C `ace.exec` instructions can be replaced in a similar way.
-//
-// Specifying this behavior would complicate both the architecture and its
-// implementation. It would to require a `b`-bit field tp each CR implementing
-// such a cipher where `b` is larger than `ACELEN`, whereas a single ACEIOBUF would
-// require fewer resources. It would also burden the software using the feature by
-// requiring to use more instructions, potentially in variable length loops for
-// portability. Using existing architectural features, such as reconfiguring the
-// vector lengths, or using vector register groups, would be a simpler
-// approach–beside the aforementioned use of ACEIOBUF.
-//
-// Piece-wise loading of the state is defined for hash functions and for similar functions with very long inputs. These functions can use their internal state to absorb partial inputs. This eliminates the need for a separate buffer that is used only when full. On some architectures, piece-wise loading also accommodates inputs that exceed the supported vector lengths.
-//
 // // ////////////////////////////////////////////////////////////////////
 
 [[ACE-chaining]]
@@ -1270,11 +1219,11 @@ State Machine:::
   *** If `ACELEN` > `b`, only the `b` least significant bits of `INPUT` are
       considered.
 
-  ** In State _Operate_, only Form C ``ace.exec`` instructions are allowed. +
+  ** In State _Operate_, Form C ``ace.exec`` instructions are expected.
      “```ace.exec OUTPUT, Kn|K(Xn)```” performs:
 +
 --
-  . If in a CTR or LFSR mode then `tmp ← keystream_block(IV @ ctr)`, +
+  . If in a CTR or LFSR mode then `tmp ← keystream_block(IV @ ctr)`,
     else (i.e., if in a XCTR or XLFSR mode) `tmp ← keystream_block(IV xor ctr)`,
   . `tick_ctr()`, and
   . `OUTPUT ← tmp`.
@@ -1378,7 +1327,7 @@ State Machine:::
  ** In State _Initial_:
   *** The `mask` field is set to zero.
   *** No {nbsp}``ace.exec``{nbsp} operation is allowed.
- ** The ``ace.setst`` instruction to transition to either _Encrypt_ or _Decrypt_ must be of Form C.
+ ** The ``ace.setst`` instruction to transition to either _Encrypt_ or _Decrypt_ is expected to be of Form C.
     It sets the tweak, and the `mask` field is used to store it: `mask <- INPUT`.
   *** If `ACELEN` > `b`, only the `b` least significant bits of `INPUT` are considered.
   *** Then, the following operations are performed:
@@ -1388,12 +1337,13 @@ State Machine:::
   ..  `mask <- enc_blk(key1, mask)`
   ..  `mask <- update_mask(mask)`.
 
-  ** In States _Encrypt_ and _Decrypt_, only ``ace.exec`` instructions of Form A are allowed.
+  ** In States _Encrypt_ and _Decrypt_, ``ace.exec`` instructions of Form A are expected.
     “```ace.exec OUTPUT, Kn|K(Xn), INPUT```” performs the following operations:
 +
 --
-  . In State _Encrypt_, it computes `OUTPUT = mask xor enc_blk(key1, INPUT xor mask)`. +
-    In State _Decrypt_, it computes `OUTPUT = mask xor dec_blk(key1, INPUT xor mask)`.
+  . `OUTPUT` is computed as follows:
+  .. In State _Encrypt_, `OUTPUT <- mask xor enc_blk(key1, INPUT xor mask)`.
+  .. In State _Decrypt_, `OUTPUT <- mask xor dec_blk(key1, INPUT xor mask)`.
   . `mask <- update_mask(mask)`.
 --
 +
@@ -1401,8 +1351,7 @@ If `ACELEN` is a multiple of `b`, the above commands are executed `ACELEN/b` tim
 
 //
 
-Note that if `ace.setst` is issued to return to State _Initial_, the CC can be
-reused with a new tweak.
+Note that if `ace.setst` is issued to return to State _Initial_, the CC can be reused with a new tweak.
 
 Encryption pseudocode is provided in  <<ACE-pseudocode-basic-IV-mode>>,
 decryption is similar
@@ -1479,7 +1428,7 @@ State Machine:::
    . Instead of transitioning to State _Set_Aux_Value_, the State remains
      unchanged (can be initial, encrypt, or decrypt).
   ** In State _Encrypt_, respectively, _Decrypt_, besides Form C `ace.setst`
-     instructions, only ``ace.exec`` instructions of Form A are allowed, where
+     instructions, only ``ace.exec`` instructions of Form A are expected, where
      “```ace.exec OUTPUT, Kn|K(Xn), INPUT```” encrypts, respectively, decrypts
      `INPUT` into `OUTPUT`.
   ** This algorithm does not automatically update the tweak value.
@@ -1584,7 +1533,7 @@ State Machine:::
  ** If the AD is empty, the transition to State _Hash_Absorb_ is necessary to
     initialize the counter.
 
- ** In State _Hash_Absorb_, only Form B of ``ace.exec`` is allowed.
+ ** In State _Hash_Absorb_, Form B of ``ace.exec`` is expected, whereby
  “```ace.exec Kn|K(Xn), INPUT```” absorbs a data block in `tag`, i.e.:
 +
 --
@@ -1593,12 +1542,12 @@ State Machine:::
 +
 If `ACELEN` > `b`, the above operation is executed `ACELEN/b` times.
 
-** In State _Encrypt_, only ``ace.exec`` instructions of Form A are allowed.
+** In State _Encrypt_, only ``ace.exec`` instructions of Form A are expected.
    “```ace.exec OUTPUT, Kn|K(Xn), INPUT```” encrypts `INPUT` into `OUTPUT`, and
    absorbs `OUTPUT` into the `tag`, namely:
 +
 --
-  . If `ctr == ones(c-1)`, then
+  . If `ctr = ones(c-1)`, then
   ..  the CR is *invalidated*.
   . else
   .. `tmp <- INPUT xor enc_blk(key, IV @ ctr)`.
@@ -1607,51 +1556,58 @@ If `ACELEN` > `b`, the above operation is executed `ACELEN/b` times.
   .. `OUTPUT <- tmp`.
 --
 +
-If `ACELEN` is a multiple of `b`, the above operations are executed `ACELEN/b`
-times, encrypting each `b`-bit block of `INPUT` into the corresponding `b`-bit
-block of `OUTPUT`.
+If `ACELEN` is a multiple of `b`, the above operations are executed `ACELEN/b` times, encrypting each `b`-bit block of `INPUT` into the corresponding `b`-bit block of `OUTPUT`.
 
-** To transition to State _Enc_Tag_Finalize_, a Form C `ace.setst` instruction
-   must be used to provide the following value, which must be set by the
-   software:
+** To transition to State _Enc_Tag_Finalize_, a Form C `ace.setst` instruction is issued, with the following value, as computed by the software itself:
 +
 --
 [none]
 * `INPUT <- bin(bit_length(AD), b/2) @ bin(bit_length(plaintext), b/2){nbsp}` .
 
-The authentication tag is computed as follows:
+The authentication tag is then computed as follows:
 
 . `absorb(INPUT)`.
   . `tag <- tag xor enc_blk(key, IV @ zeros(c))`.
 
-Finally, `tag` is returned in `OUTPUT`, and the state is changed to _Success_. +
+Finally, `tag` is returned in `OUTPUT`, and the state is changed to _Success_.
+
 If `ACELEN` > `b`, only the `b` least significant bits of `INPUT` are considered.
 --
 +
 
-** In State _Enc_Tag_Finalize_, only ``ace.exec`` instructions of Form C are allowed. +
-  “```ace.exec OUTPUT, Kn|K(Xn)```” writes the `tag` to `OUTPUT`, and the state
-  transitions to _Success_.
-
-** In State _Decrypt_, only  ``ace.exec`` instructions of Form A are allowed. +
- ```ace.exec OUTPUT, Kn|K(Xn), INPUT``` absorbs the ciphertext `INPUT` into the
- `tag`, then decrypts `INPUT` into `OUTPUT`, namely:
+** {empty}
 +
 --
-  . If `ctr == ones(c-1)`, then
+In State _Enc_Tag_Finalize_, only ``ace.exec`` instructions of Form C are expected.
+
+“```ace.exec OUTPUT, Kn|K(Xn)```” writes the `tag` to `OUTPUT`, and the state
+  transitions to _Success_.
+--
++
+
+** {empty}
++
+--
+In State _Decrypt_, only ``ace.exec`` instructions of Form A are expected.
+
+ ```ace.exec OUTPUT, Kn|K(Xn), INPUT``` absorbs the ciphertext `INPUT` into the
+ `tag`, then decrypts `INPUT` into `OUTPUT`, namely:
+
+ . If `ctr == ones(c-1)`, then
   .. the CR is *invalidated*.
   . else
   .. `absorb(INPUT)`.
   .. `OUTPUT  <- INPUT xor enc_blk(key, IV @ ctr)`.
   .. `ctr <- ctr + 1 % 2^c^`.
---
-+
+
 If `ACELEN` is a multiple of `b`, the same behavior applies as in State
 _Encrypt_, namely the above operations are executed `ACELEN/b` times, decrypting
 each `b`-bit block of `INPUT` into the corresponding `b`-bit block of `OUTPUT`.
+--
++
 
 ** To transition to State _Dec_Tag_Finalize_, a Form C ``ace.setst``
-   instruction must be used to provide the following value, which must be set
+   instruction is expected to provide the following value, which must be set
    by the software:
 +
 --
@@ -1721,16 +1677,30 @@ Provisioning Input:
 --
 +
 
-* *Internal State* (Content): {empty} +
+* *Internal State* (Content): {empty}
++
+--
 Same as for GCM.
+--
++
 
-* *Serialized Content*: {empty} +
+* *Serialized Content*: {empty}
++
+--
 Same as for GCM.
+--
++
 
-* *States and Allowed Transitions:* {empty} +
+* *States and Allowed Transitions:* {empty}
++
+--
 Same as for GCM.
+--
++
 
-* *State Machine Behavior:* {empty} +
+* *State Machine Behavior:* {empty}
++
+--
 The differences with respect to GCM are:
 
  ** To transition to State _Hash_Absorb_: The ``ace.setst`` instruction shall
@@ -1738,6 +1708,8 @@ The differences with respect to GCM are:
     already included in the PI.
  ** When transitioning back to State _hash_Initial_: The CR's `IV` field is
     _not_ reset to zero.
+--
++
 
 NOTE: For all the following IV- or nonce-based modes, versions with a set IV or
 nonce (such as for GCM-SIV) can also be similarly defined. For instance, for
@@ -1865,33 +1837,41 @@ State Machine:::
   (If the instruction is repeated, there is no harm, since it just overwrites
   the `nonce` before any other operation is performed.)
 
-  ** In State _set_aux_value:
-*** Upon issuing a Form C ```ace.setst Kn|K(Xn), #ace_state_hash_absorb, INPUT```:
+  ** In State _Set_Aux_Value_:
+   *** Upon issuing a Form C ```ace.setst Kn|K(Xn), #ace_state_hash_absorb, INPUT```:
 +
 --
 **** The value of `SIV` is set to `INPUT`.
---
-+
+
 NOTE: This version of the instruction is meant to be used during decryption. It
 is harmless to invoke it during encryption, however, as the `SIV` field will be
 overwritten later with the correct synthetic value.
+--
++
 
 *** Upon issuing a Form A ```ace.setst Kn|K(Xn), #ace_state_hash_absorb```:
 +
 --
 **** The `SIV` is not modified (it is assumed to be already zero).
---
-+
+
 NOTE: This version of the instruction is meant to be used during encryption. If
 used during decryption, by leaving the `SIV` to zero it will most likely lead
 to an authentication error.
+--
++
 
- ** In State _Hash_Absorb_, only Form B of ``ace.exec`` is allowed.
-   This instruction absorbs its `INPUT` in the `tag`, i.e., it performs `absorb(INPUT)`. +
-   If `ACELEN` is a multiple of `b`, `absorb()` is executed on each of the `ACELEN/b` blocks in `INPUT`.
+** {empty}
++
+--
+In State _Hash_Absorb_, Form B ``ace.exec`` instructions are expected.
 
-** In State _Enc_Tag_Finalize_, only an {nbsp}``ace.exec``{nbsp} instruction of
-   Form A is allowed. The value
+Such an instruction absorbs its `INPUT` in the `tag`, i.e., it performs `absorb(INPUT)`.
+
+If `ACELEN` is a multiple of `b`, `absorb()` is executed on each of the `ACELEN/b` blocks in `INPUT`.
+--
++
+
+** In State _Enc_Tag_Finalize_, an {nbsp}``ace.exec``{nbsp} instruction of Form A is expected. Its input value
 +
 --
 [none]
@@ -1913,7 +1893,7 @@ Then, “```ace.exec```” finalizes the SIV/tag computation by performing:
 
 If `ACELEN` > `b`, only the `b` least significant bits of `INPUT` are considered.
 
- ** In State _Encrypt_, only Form A of ``ace.exec`` is allowed, namely
+ ** In State _Encrypt_, Form A ``ace.exec`` instruction are expected, namely
     “```ace.exec OUTPUT, Kn|K(Xn), INPUT```,” to encrypt `INPUT` into `OUTPUT`
     as follows:
 +
@@ -1930,7 +1910,8 @@ If `ACELEN` > `b`, only the `b` least significant bits of `INPUT` are considered
 If `ACELEN` > `b`, the above operations are applied to each of the `ACELEN/b`
 blocks in `INPUT`.
 
- ** In State _Decrypt_,  only Form A of ``ace.exec`` is allowed. “```ace.exec OUTPUT, Kn|K(Xn), INPUT```” decrypts `INPUT` into `OUTPUT` and then absorbs the plaintext `OUTPUT` into the `tag`:
+ ** In State _Decrypt_,  Form A ``ace.exec`` instructions are expected.
+ "```ace.exec OUTPUT, Kn|K(Xn), INPUT```" decrypts `INPUT` into `OUTPUT` and then absorbs the plaintext `OUTPUT` into the `tag`:
 +
 --
      . If `ctr == 0`, then the CR is *invalidated*.
@@ -1947,7 +1928,7 @@ If `ACELEN` > `b`, the above operations are applied to each of the `ACELEN/b`
 blocks in `INPUT`.
 
  ** In State _Dec_Tag_Finalize_,
-   only an ``ace.exec`` instruction of Form B, is allowed,
+   a single ``ace.exec`` instruction of Form B is expected,
    namely “```ace.exec Kn|K(Xn), INPUT```,” where it is the responsibility of the user to set
 +
 --
@@ -2095,20 +2076,20 @@ State Machine:::
    . `hash_A <- zeros(b)`
    . `hash_P <- zeros(b)`
 
-** To move to _Set_Aux_Value_, a Form B `ace.setst` must be used, where the
+** To move to _Set_Aux_Value_, a Form B `ace.setst` is expected, where the
    auxiliary argument `Xs` sets the nonce length `N_len`. `N_len` must be at
-   least `g-1`. If not, `State <- ace_state_invalid`, that is the CR is
-   in an Error State.
+   least `g-1`. If not, `State <- ace_state_invalid`, that is, the CR is
+   enters an Error State.
 
 ** In State _Set_Aux_Value_, only  ``ace.exec`` instructions of Form B,
-   “```ace.exec Kn|K(Xn), INPUT```”, are allowed, whereby `N` is set to
+   “```ace.exec Kn|K(Xn), INPUT```”, are expected, whereby `N` is set to
    `INPUT`, namely `N <- zeros(u-N_len) @ INPUT[N_len-1:0]`
   *** If “```ace.exec Kn|K(Xn), INPUT```,” is repeated, it will rewrite `N`.
   *** If no such `ace.exec` is issued, `N` is not changed, which means that its
       most significant bit is 1. This condition results in an error when
       transitioning to State _Hash_Absorb_.
 
-** To move to _Hash_Absorb_, a Form B `ace.setst` must be used, where the
+** To move to _Hash_Absorb_, a Form B `ace.setst` is expected, where the
    auxiliary argument `Xs` sets the tag length `tag_len`.
   *** If this argument (interpreted as an unsigned value) is larger than `b` or
       is equal to `0` (the latter occurs also if `X0` is passed as the
@@ -2122,7 +2103,7 @@ State Machine:::
   . `L <- enc_blk(key, zeros(b))`
   . `L <- double(double(L))`
 
-** In State _Hash_Absorb_, only  ``ace.exec`` instructions of Form B are allowed:
+** In State _Hash_Absorb_, only  ``ace.exec`` instructions of Form B are expected:
   “```ace.exec Kn|K(Xn), INPUT```” absorbs a data block in `tag`, i.e.:
 +
 --
@@ -2133,11 +2114,10 @@ State Machine:::
 +
 If `ACELEN` > `b`, the above operation is executed `ACELEN/b` times.
 
-** To move to _Hash_Finalize_, a Form B `ace.setst` operation sets the length
-   of the final block of the AD in `last_blk_len`.
+** To move to _Hash_Finalize_, a Form B `ace.setst` operation is expected, to set the length of the final block of the AD in `last_blk_len`.
 
 ** In State _Hash_Finalize_, only one `ace.exec` instruction of Form B is
-   allowed if `last_blk_len` != `0`. “```ace.exec Kn|K(Xn), INPUT```” which
+   expected if `last_blk_len` != `0`. “```ace.exec Kn|K(Xn), INPUT```” which
    absorbs the last data block in `tag`, i.e.:
 +
 --
@@ -2172,7 +2152,7 @@ If `last_blk_len` == 0, however, no `ace.exec` can be executed, and only an
  . `offset <- Stretch[b+bottom:bottom]`
 --
 +
-** In State _Encrypt_, only ``ace.exec`` instructions of Form A are allowed:
+** In State _Encrypt_, only ``ace.exec`` instructions of Form A are expected:
    “```ace.exec OUTPUT, Kn|K(Xn), INPUT```” absorbs the plaintext `INPUT` into
    the `tag` and encrypts `INPUT` into `OUTPUT`, namely:
 +
@@ -2187,15 +2167,18 @@ If `ACELEN > b`, the above operation sequence is executed `ACELEN/b` times,
 encrypting each `b`-bit block of `INPUT` into the corresponding `b`-bit block
 of `OUTPUT`.
 
-** To move to _Enc_Last_Block_, a Form B `ace.setst` instruction must be used
+** To move to _Enc_Last_Block_, a Form B `ace.setst` instruction is expected to be issued
    to set the bit length of the final block of the plaintext in `last_blk_len`.
 
-** In State _Enc_Last_Block_, only an ``ace.exec`` instruction of Form A
-   “```ace.exec OUTPUT, Kn|K(Xn), INPUT```,” is allowed if `last_blk_len` is
-   nonzero.
-In this case, following operations are performed:
+** {empty}
 +
 --
+In State _Enc_Last_Block_, only an ``ace.exec`` instruction of Form A
+   “```ace.exec OUTPUT, Kn|K(Xn), INPUT```,” is expected if `last_blk_len` is
+   nonzero.
+
+In this case, following operations are performed:
+
  * `tmp : bits(last_blk_len)`
  * `tmp2 : bits(b)`
  * `aux : bits(b)`
@@ -2212,7 +2195,7 @@ In this case, following operations are performed:
 --
 +
 On the other hand, if `last_blk_len` is zero, only an ``ace.exec`` instruction
-of Form D, “```ace.exec Kn|K(Xn)```,” is allowed, which performs:
+of Form D, “```ace.exec Kn|K(Xn)```,” is expected, which performs:
 +
 --
 * `aux : bits(b)`
@@ -2226,10 +2209,10 @@ of Form D, “```ace.exec Kn|K(Xn)```,” is allowed, which performs:
 In both cases the state then transitions to _Enc_Tag_Finalize_.
 
 ** In State _Enc_Tag_Finalize_, only an ``ace.exec`` instruction of Form C,
-   “```ace.exec OUTPUT,Kn|K(Xn)```,” is allowed, which performs `OUTPUT <-
+   “```ace.exec OUTPUT,Kn|K(Xn)```,” is expected, which performs `OUTPUT <-
    zeros(b-tag_len) @ hash_P[tag_len-1:0]`.
 
-** In State _Decrypt_, only ``ace.exec`` instructions of Form A are allowed.
+** In State _Decrypt_, only ``ace.exec`` instructions of Form A are expected.
    Such an ``ace.exec`` decrypts `INPUT` into `OUTPUT`, and absorbs the
    plaintext `OUTPUT` into the `tag`, namely:
 +
@@ -2268,7 +2251,7 @@ State _Enc_Last_Block_, except for the final state transition, which also in
 this case is to _Hash_Verify_.
 
 ** To complete the algorithm in the decryption branch, a Form C ``ace.setst``
-   operation must be used to (confirm the) transition to State _Hash_Verify_
+   operation is expected, to (confirm the) transition to State _Hash_Verify_
    and compare the `tag_len` least significant bits of `INPUT` with the
    `tag_len` least significant bits of `hash_P`:
 +
@@ -2787,7 +2770,7 @@ State Machine:::
    . `tag_len <- 128`
    . `AD_empty <- true`
 
-** To transition to State _Hash_Absorb_, a Form C ``ace.setst`` must be used,
+** To transition to State _Hash_Absorb_, a Form C ``ace.setst`` is expected,
    whose `INPUT` sets the nonce of the algorithm as follows:
 +
 --
