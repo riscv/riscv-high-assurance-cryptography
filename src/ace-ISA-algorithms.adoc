@@ -41,7 +41,7 @@ Currently, 81 bits are defined and 47 are reserved for future use.
 |  [36:32] | 5     | _UsagePolicy_     | Usage (Control) Policy. Bits 0, 1, 2, 4 and 4 of the field,, when set, disallow CC usage in U-mode, (V)S-mode, H-mode, M-Mode, and Debug mode, respectively.
 |  [46:37] | 10    | _Locality_        | Zero, or an index determining a Locality Secret. See <<ACE-Localities>>.
 |  [47:47] | 1     | Reserved          | Reserved for future use.
-|  [63:48] | 16    | _VarDataLen_      | If non-zero, indicates that an additional, variable-length data section appended to Content. The length of this additional data section is _VarDataLen_ * 16 bytes (up to 512 KiB).
+|  [63:48] | 16    | _VarDataLen_      | If non-zero, indicates that an additional, variable-length data section appended to Content. The length of this additional data section is _VarDataLen_ * 128 bits (up to 512 KiB).
 |  [89:64] | 26    | _ExpirationDate_  | If non-zero, the expiration date of this CC. See <<ACE-Metadata-expiration-date>>. Minutes since 00:00, January 1, 2027 (about 127 years).
 | [127:90] | 38    | Reserved          | Reserved for future use.  Currently, it must be equal to zero.
 |===
@@ -212,9 +212,9 @@ image::../../src/statestikz-2.svg[]
 }
 \usepackage{fontspec}
 \setmainfont[UprightFont={Petrona-Light.ttf},
-             BoldFont={Petrona-Semibold.ttf},
+             BoldFont={Petrona-Medium.ttf},
              ItalicFont={Petrona-LightItalic.ttf},
-             BoldItalicFont={Petrona-SemiBoldItalic.ttf},
+             BoldItalicFont={Petrona-MediumItalic.ttf},
             ]{Petrona-Light.ttf}
 ~~~~
 \begin{tikzpicture}[scale=1.1]
@@ -377,7 +377,7 @@ The _VarDataLen_ Metadata field records the length of the _Additional Data Secti
 
 The format of the _Additional Data Section_ is described in <<ACE-data-formats>>.
 
-The first eight bytes of the Implementation-Specific Variable-Length Data Section of the Content, if not empty, always hold a copy of the `acemarchid` CSR (<<ACE-CSR-acemarchid>>) of the originating machine, and are counted within the length recorded by the _VarDataLen_ field.
+The first 64 bits of the Implementation-Specific Variable-Length Data Section of the Content, if not empty, always hold a copy of the `acemarchid` CSR (<<ACE-CSR-acemarchid>>) of the originating machine, and are counted within the length recorded by the _VarDataLen_ field.
 The importing implementation uses this value to determine whether any information in the Implementation-Specific Data Section can be used.
 
 It is the responsibility of the *algorithm* to determine the lengths of the two parts of the Variable-Length Data Section.
@@ -533,20 +533,20 @@ This applies to all keys at once in an algorithms, unless otherwise specified.
 Let `MH` denote a Metadata Header.
 In order to determine the total lengths of the PI and of the SCC, the implementation provides the following functions or an equivalent mechanism:
 
-. ``MH_size`` returns the byte length of the Metadata Header. It is always 16.
+. ``MH_size`` returns the bit length of the Metadata Header. It is always 16.
 
-. ``PI_content_size(MH)`` returns the byte length of the content section of a PI. It depends only on `MH`._Algorithm_, `MH`._AlgorithmPolicy_, and `MH`._KeyType_.
+. ``PI_content_size(MH)`` returns the bit length of the content section of a PI. It depends only on `MH`._Algorithm_, `MH`._AlgorithmPolicy_, and `MH`._KeyType_.
 
-. ``fixed_content_size(MH)`` returns the byte length of the fixed part of the content section of an SCC. It depends only on  `MH`._Algorithm_,
-  `MH`._AlgorithmPolicy_, and `MH`._KeyType_. It does not include the length of the Additional Data of the Content, of length _VarDataLen_ * 16 bytes.
+. ``fixed_content_size(MH)`` returns the bit length of the fixed part of the content section of an SCC. It depends only on  `MH`._Algorithm_,
+  `MH`._AlgorithmPolicy_, and `MH`._KeyType_. It does not include the length of the Additional Data of the Content, of length _VarDataLen_ * 128 bits.
 
-The total size in bytes of a PI is therefore
+The total size in bits of a PI is therefore
 
-`{fournbsp}{fournbsp}len_in_bytes(PI){nbsp}` = `MH_size` + `PI_content_size(MH)`,
+`{fournbsp}{fournbsp}len_in_bits(PI){nbsp}` = `MH_size` + `PI_content_size(MH)`,
 
-and the total size in bytes of an SCC is
+and the total size in bits of an SCC is
 
-`{fournbsp}{fournbsp}len_in_bytes(SCC)` = `MH_size` + 16 + `fixed_content_size(MH)` + _VarDataLen_ * 16.
+`{fournbsp}{fournbsp}len_in_bits(SCC)` = `MH_size` + 16 + `fixed_content_size(MH)` + _VarDataLen_ * 128 bits.
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -643,7 +643,7 @@ implementations may cache recently used derived keys.
 
 The SIV ("synthetic IV") serves as both the initialization vector and the authentication tag in GCM-SIV.
 It is computed by encrypting the `POLYVAL` hash of the concatenation of the Locality Secrets, the Metadata zero-padded to 128 bits, and the Content of the CR.
-In the `POLYVAL` pseudocode below, the digested data is an array containing an integral number of 16-byte blocks.
+In the `POLYVAL` pseudocode below, the digested data is an array containing an integral number of 128-bit blocks.
 
 [[ACE-SCC-POLYVAL]]
 .Polyval Hashing Function
@@ -692,7 +692,7 @@ While the pseudocode follows this mechanism to enforce the rule, implementation 
 function ace.export(CR_number, M[]) =
 {
   MH : bits(128) & = CR[CR_number].Metadata;          // By reference
-  Content : array of & bytes = CR[CR_number].content; // By reference
+  Content : array of bytes & = CR[CR_number].content; // By reference
 
   global ace_exporting, ace_importing : bool;
   global ace_expimported_cr : bits(5);
@@ -705,11 +705,11 @@ function ace.export(CR_number, M[]) =
   ace_importing ← false;
 
   local z : int ← fixed_content_size(MH);  // can be recomputed upon resumption
-  z ← z + MH._VarDataLen_ * 16;            // Length of Content
-  local let num_blocks : int ← ceil(z / 16);
+  z ← z + MH._VarDataLen_ * 128;           // Length of Content (in bits)
+  local let num_blocks : int ← ceil(z / 128);
 
   // In external memory: Metadata Header, then SIV, then Content
-  external M: array of (MH_size + 16 + z) bytes.
+  external M: array of ((MH_size + 128 + z) / 8) bytes.
 
   // Start POLYVAL: absorb Locality "prefix" (zero or more bit blocks)
   tmp ← zeros(128);
@@ -800,12 +800,12 @@ function ace.import(CR_number, M[]) =
   MH.State ← ace_state_partial_config;
 
   z ← fixed_content_size(MH);
-  z ← z + MH._VarDataLen_ * 16;
+  z ← z + MH._VarDataLen_ * 128;
 
   if (there is not enough memory for the algorithm encoded in the Metadata)
     raise exception ace_exc_out_of_mem;
 
-  num_blocks ← ceil(z / 16);
+  num_blocks ← ceil(z / 128);
 
   // Start POLYVAL
   // Absorb Locality "prefix" (zero or more 128-bit blocks)
@@ -1153,8 +1153,8 @@ Data Structures:::
 --
 [%autowidth,cols="^,<,<",options="header"]
 |===
-| Pos. | Size in Bytes   | Field
-|   i  | `k`/8 or 8      | Key or System Key index
+| Pos. | Size (Bits)   | Field
+|   i  | `k` or 64      | Key or System Key index
 |===
 --
 +
@@ -1167,8 +1167,8 @@ Data Structures:::
 --
 [%autowidth,cols="^,<,<",options="header"]
 |===
-|  Pos. | Size in Bytes   | Field
-|   i   | `k`/8 or 8      | Key or System Key index
+|  Pos. | Size (Bits)   | Field
+|   i   | `k` or 64      | Key or System Key index
 |===
 --
 +
@@ -1247,8 +1247,8 @@ Data Structures:::
 --
 [%autowidth,cols="^,<,<",options="header"]
 |===
-| Pos. | Size in Bytes   | Field
-|   i  | `k`/8 or 8      | `key` or System Key index
+| Pos. | Size (Bits)   | Field
+|   i  | `k` or 64     | `key` or System Key index
 |===
 --
 +
@@ -1263,10 +1263,10 @@ Data Structures:::
 --
 [%autowidth,cols="^,<,<",options="header"]
 |===
-|  Pos. | Size in Bytes   | Field
-|    i  | `k`/8 or 8      | `key` or System Key index
-|   ii  | `n`/8           | `IV`
-|  iii  | `j`/8           | `ctr`
+|  Pos. | Size (Bits)   | Field
+|    i  | `k` or 64       | `key` or System Key index
+|   ii  | `n`             | `IV`
+|  iii  | `j`             | `ctr`
 |===
 --
 +
@@ -1356,9 +1356,9 @@ Data Structures:::
 --
 [%autowidth,cols="^,<,<",options="header"]
 |===
-|  Pos. | Size in Bytes   | Field
-|   i   | `k`/8 or 8      | `key1` or System Key index
-|  ii   | `k`/8 or 0      | `key2` or System Key index for `key1` given
+|  Pos. | Size (Bits)     | Field
+|   i   | `k` or 64       | `key1` or System Key index
+|  ii   | `k` or 0        | `key2` or System Key index for `key1` given
 |===
 --
 +
@@ -1373,10 +1373,10 @@ Data Structures:::
 --
 [%autowidth,cols="^,<,<",options="header"]
 |===
-| Pos. | Size in Bytes   | Field
-|   i  | `k`/8 or 8      | `key1` or System Key index
-|  ii  | `k`/8 or 0      | `key2` or System Key index for `key1` given
-| iii  | `b`/8           | `mask`
+| Pos. | Size (Bits)   | Field
+|   i  | `k` or 64     | `key1` or System Key index
+|  ii  | `k` or 0      | `key2` or System Key index for `key1` given
+| iii  | `b`           | `mask`
 |===
 --
 +
@@ -1460,8 +1460,8 @@ Data Structures:::
 --
 [%autowidth,cols="^,<,<",options="header"]
 |===
-| Pos. | Size in Bytes   | Field
-|  i   | `k`/8 or 8      | `key` or System Key index
+| Pos. | Size (Bits)   | Field
+|  i   | `k` or 64       | `key` or System Key index
 |===
 --
 +
@@ -1475,9 +1475,9 @@ Data Structures:::
 --
 [%autowidth,cols="^,<,<",options="header"]
 |===
-| Pos. | Size in Bytes   | Field
-|   i  | `k`/8 or 8      | `key` or System Key index
-|  ii  | `t`/8           | `tweak`
+| Pos. | Size (Bits)   | Field
+|   i  | `k` or 64     | `key` or System Key index
+|  ii  | `t`           | `tweak`
 |===
 --
 +
@@ -1529,8 +1529,8 @@ Data Structures:::
 --
 [%autowidth,cols="^,<,<",options="header"]
 |===
-| Pos. | Size in Bytes   | Field
-|   i  | `k`/8 or 8      | `key` or System Key index
+| Pos. | Size (Bits)   | Field
+|   i  | `k` or 64     | `key` or System Key index
 |===
 --
 +
@@ -1546,11 +1546,11 @@ Data Structures:::
 --
 [%autowidth,cols="^,<,<",options="header"]
 |===
-|  Pos. | Size in Bytes   | Field
-|   i   | `k`/8 or 8      | `key` or System Key index
-|  ii   | ``c``/8         | `ctr`
-| iii   | (``b``-``c``)/8 | `IV`
-|  iv   | `b`/8           | `tag`
+|  Pos. | Size (Bits)   | Field
+|   i   | `k` or 64     | `key` or System Key index
+|  ii   | ``c``         | `ctr`
+| iii   | ``b``-``c``   | `IV`
+|  iv   | `b`           | `tag`
 |===
 --
 +
@@ -1742,10 +1742,10 @@ Provisioning Input:
 --
 [%autowidth,cols="^,<,<",options="header"]
 |===
-|  Pos. | Size in Bytes   | Field
-|   i   | `k`/8 or 8      | `key` or System Key index
-|  ii   | (``b``-``c``)/8 | `IV`
-|  iii  | (Padding)       | Zero padding
+|  Pos. | Size (Bits)   | Field
+|   i   | `k` or 64     | `key` or System Key index
+|  ii   | ``b``-``c``   | `IV`
+|  iii  | (Padding)     | Zero padding
 |===
 --
 +
@@ -1817,9 +1817,7 @@ Parameters:::
 * `b` = block size, (64|`b`). For this algorithm, `ACELEN` must be an integer
   multiple of `b`.
 * It must be `k = b` or `k = 2b`.
-* It must be established by the algorithm whether the authentication tag is `b`
-  or `3b/4` bits long.
-//* `c` = counter size (8|`b`). It must be `c < b`.
+* The authentication tag is `b` bits long.
 
 Data Structures:::
 
@@ -1828,8 +1826,8 @@ Data Structures:::
 --
 [%autowidth,cols="^,<,<",options="header"]
 |===
-| Pos. | Size in Bytes   | Field
-|   i  | `k`/8 or 8      | `key` or System Key index
+| Pos. | Size (Bits)   | Field
+|   i  | `k` or 64       | `key` or System Key index
 |===
 --
 +
@@ -1839,24 +1837,20 @@ Data Structures:::
  ** `auth_key`: `b` bits.
  ** `nonce`: `3b/4` bits.
  ** `ctr`: `b/4` bits.
- ** `tag`: `b` bits.
- ** `SIV`: `b` or `3b/4` bits.
-+
-A `b`-bit `SIV` is computed by clearing the most significant bit of `tag` and encrypting it. +
-For a `3b/4`-bit `SIV`, a full `b`-bit `tag` value is kept while absorbing data. +
-The public `SIV` value is computed by clearing the most significant bit of `tag`, encrypting it, and then removing the `b/4` least significant bits.
+ ** `SIV`: `b` bits.
+ ** `tmp`: `b` bits.
 
 * *Serialized Content*:
 +
 --
 [%autowidth,cols="^,<,<",options="header"]
 |===
-|  Pos. | Size in Bytes   | Field
-|    i  | `k`/8 or 8      | `key` or System Key index
-|   ii  | 3``b``/32       | `nonce`
-|  iii  | `b`/32          | `ctr`
-|   iv  | `b`/8           | `tag`
-|    v  | `b`/8           | `SIV`
+|  Pos. | Size (Bits)   | Field
+|    i  | `k` or 64       | `key` or System Key index
+|   ii  | 3``b``/4        | `nonce`
+|  iii  | `b`/4           | `ctr`
+|    v  | `b`             | `SIV`
+|   iv  | `b`             | `tmp`
 |===
 --
 +
@@ -1870,24 +1864,19 @@ Algorithm-Specific Functions:::
 
 * `enc_blk(key, p) -> c` encrypts block `p` using the key, and returns the
   result `c`.
-* `absorb(data)` absorbs data into the hash function by performing a step of (a
-  variant of) GHASH or POLYVAL as specified by the algorithm (for instance,
-  AES-GCM-SIV uses POLYVAL):
-  . `tag <- tag xor INPUT`.
-  . `tag <- Montmul(tag, hash_key)` or `Galoismul(tag, hash_key)`, depending on the algorithm.
+* `absorb(data)` absorbs data into the hash function by performing a step of (a variant of) POLYVAL:
+  . `tmp <- tmp xor INPUT`.
+  . `tmp <- Montmul(tmp, hash_key)`.
 
 State Machine:::
 * *States:*
  ** _Initial_: The CC is ready.
  ** _Set_Aux_Value_: Set the value of `nonce`.
- ** _Hash_Absorb_: Set the SIV and process AD and, if encrypting, also the
-    plaintext into the tag.
+ ** _Hash_Absorb_: Set the SIV and process AD and, if encrypting, also the plaintext into the partial tag (this is accumulated in the state variable `tmp`).
  ** _Encrypt_: Encrypt the plaintext.
- ** _Enc_Tag_Finalize_: Finalize the tag with the AD and PT lengths, prepare to
-    return its value.
- ** _Decrypt_: Absorb the ciphertext into the tag and decrypt it.
- ** _Dec_Tag_Finalize_: Finalize the tag with the AD and CT lengths, then
-    compare it against the `SIV`.
+ ** _Enc_Tag_Finalize_: Finalize the SIV with the AD and PT lengths, prepare to return its value.
+ ** _Decrypt_: Absorb the ciphertext into the partial tag and decrypt it.
+ ** _Dec_Tag_Finalize_: Finalize the tag with the AD and CT lengths, then compare it against the `SIV`.
  ** _Success_: The algorithm has completed its operation correctly.
  ** _Failure_: The algorithm has completed its operation with an authentication failure.
 
@@ -1902,7 +1891,7 @@ State Machine:::
  ** In State _Initial_ :
   *** Upon entering the state, the following initialization operations are performed:
    . (`enc_key`, `auth_key`) `<-` `RFC8452_RFC8452_KeyDeriv(key)`,
-   . `nonce`, `ctr`, `tag`, `SIV <- 0`.
+   . `nonce`, `ctr`, `tmp`, `SIV <- 0`.
  *** No {nbsp}``ace.exec``{nbsp} operation is allowed.
 
  *** Upon issuing a Form C ```ace.setst Kn|K(Xn), #ace_state_set_aux_value, INPUT```,
@@ -1938,7 +1927,7 @@ to an authentication error.
 --
 In State _Hash_Absorb_, Form B ``ace.exec`` instructions are expected.
 
-Such an instruction absorbs its `INPUT` in the `tag`, i.e., it performs `absorb(INPUT)`.
+Such an instruction absorbs its `INPUT` in the internal state variable `tmp`, i.e., it performs `absorb(INPUT)`.
 
 If `ACELEN` is a multiple of `b`, `absorb()` is executed on each of the `ACELEN/b` blocks in `INPUT`.
 --
@@ -1952,15 +1941,12 @@ If `ACELEN` is a multiple of `b`, `absorb()` is executed on each of the `ACELEN/
 --
 +
 is set by the user.
-Then, “```ace.exec```” finalizes the SIV/tag computation by performing:
+Then, “```ace.exec```” finalizes the SIV computation by performing:
 +
 --
   . `absorb(INPUT)`.
-  . `tmp <- enc_blk(enc_key, 0 @ (tag xor N)[b-2:0])`
-  . If tag length is `b` bits, then
-   .. `SIV <- tmp` and `OUTPUT <- tmp`,
-  . else (tag length is `3b/4` bits)
-   .. `SIV <- tmp[b-1:b/4]` and `OUTPUT <- (tmp >> b/4)`.
+  . `tmp <- enc_blk(enc_key, 0 @ (tmp xor N)[b-2:0])`
+  . `SIV <- 0 @ tmp[b-2:0]` and `OUTPUT <- SIV`,
 --
 +
 
@@ -1972,11 +1958,8 @@ If `ACELEN` > `b`, only the `b` least significant bits of `INPUT` are considered
 +
 --
 . If `ctr == 0`, then the CR is *invalidated*.
-   . If the `SIV` is `b`-bits long, then
-     .. ``OUTPUT <- INPUT `` +
-        ``{fournbsp}{fournbsp}xor enc_blk(enc_key, 1 @ SIV[b-2:b/4] @ (SIV[b/4-1:0] + ctr % 2^b/4^)),``
-   . else (the `SIV` is `3b/4`-bits long)
-      .. ``OUTPUT <- INPUT xor enc_blk(enc_key, 1 @ SIV[3b/4-2:0] @ ctr)``.
+   . ``OUTPUT <- INPUT `` +
+      ``{fournbsp}{fournbsp}xor enc_blk(enc_key, 1 @ SIV[b-2:b/4] @ (SIV[b/4-1:0] + ctr % 2^b/4^)),``
    . `ctr <- ctr + 1`.
 --
 +
@@ -1984,15 +1967,12 @@ If `ACELEN` > `b`, the above operations are applied to each of the `ACELEN/b`
 blocks in `INPUT`.
 
  ** In State _Decrypt_,  Form A ``ace.exec`` instructions are expected.
- "```ace.exec OUTPUT, Kn|K(Xn), INPUT```" decrypts `INPUT` into `OUTPUT` and then absorbs the plaintext `OUTPUT` into the `tag`:
+ "```ace.exec OUTPUT, Kn|K(Xn), INPUT```" decrypts `INPUT` into `OUTPUT` and then absorbs the plaintext `OUTPUT` into the `tmp`:
 +
 --
      . If `ctr == 0`, then the CR is *invalidated*.
-     . If the `SIV` is `b`-bits long, then +
-       .. ``OUTPUT <- INPUT `` +
+     . ``OUTPUT <- INPUT `` +
           ``{fournbsp}{fournbsp}xor enc_blk(enc_key, 1 @ SIV[b-2:b/4] @ (SIV[b/4-1:0] + ctr % 2^b/4^))``,
-     . else (it is `3b/4`-bits long) +
-       .. ``OUTPUT <- INPUT xor enc_blk(enc_key, 1 @ SIV[3b/4-2:0] @ ctr``.
      . `absorb(OUTPUT)`.
      . `ctr <- ctr + 1`.
 --
@@ -2012,13 +1992,10 @@ blocks in `INPUT`.
 ``ace.exec`` then performs the following operations:
 +
 --
-  . `absorb(INPUT)` (which modifies `tag`).
-  . `tmp <- enc_blk(enc_key, 0 @ (tag xor N)[b-2:0])`.
-  . If tag length is `b` bits, then
-    .. `tag <- tmp`,
-  . else (tag length is `3b/4` bits)
-    .. `tag <- tmp[3b/4-1:0] @ zeros(b/4)`.
-   . If `tag` and `SIV` match, then
+  . `absorb(INPUT)` (which modifies `tmp`).
+  . `tmp <- enc_blk(enc_key, 0 @ (tmp xor N)[b-2:0])`.
+  . `tmp <- tmp[n-2:0]`,
+   . If `tmp` and `SIV` match, then
    ..  `State <- ace_state_success`
    . else
    ..  `State <- ace_state_failure`
@@ -2070,8 +2047,8 @@ Data Structures:::
 --
 [%autowidth,cols="^,<,<",options="header"]
 |===
-| Pos. | Size in Bytes   | Field
-|   i  | `k`/8 or 8      | `key` or System Key index
+| Pos. | Size (Bits)   | Field
+|   i  | `k` or 64       | `key` or System Key index
 |===
 --
 +
@@ -2087,17 +2064,17 @@ Data Structures:::
 --
 [%autowidth,cols="^,<,<",options="header"]
 |===
-|  Pos. | Size in Bytes          | Field
-|    i  | `k`/8 or 8             | `key` or System Key index
-|   ii  |  `b`/8                 | `N`
-|  iii  |  `b`/8                 | `L` (only `u+1` bits used)
-|   iv  |  `b`/8                 | `offset`
-|    v  |  `b`/8                 | `hash_A`
-|   vi  |  `b`/8                 | `hash_P`
-|  vii  |  `2`                   | `tag_len`
-| viii  |  `2`                   | `last_blk_len`
-|   ix  |  `2`                   | `N_len`
-|    x  |  `2`                   | Padding
+|  Pos. | Size (Bits)          | Field
+|    i  | `k` or 64              | `key` or System Key index
+|   ii  |  `b`                   | `N`
+|  iii  |  `b`                   | `L` (only `u+1` bits used)
+|   iv  |  `b`                   | `offset`
+|    v  |  `b`                   | `hash_A`
+|   vi  |  `b`                   | `hash_P`
+|  vii  |   16                   | `tag_len`
+| viii  |   16                   | `last_blk_len`
+|   ix  |   16                   | `N_len`
+|    x  |   16                   | Padding
 |===
 --
 +
@@ -2154,7 +2131,7 @@ State Machine:::
    least `g-1`. If not, `State <- ace_state_invalid`, that is, the CR is
    enters an Error State.
 
-** In State _Set_Aux_Value_, only  ``ace.exec`` instructions of Form B,
+** In State _Set_Aux_Value_, ``ace.exec`` instructions of Form B,
    “```ace.exec Kn|K(Xn), INPUT```”, are expected, whereby `N` is set to
    `INPUT`, namely `N <- zeros(u-N_len) @ INPUT[N_len-1:0]`
   *** If “```ace.exec Kn|K(Xn), INPUT```,” is repeated, it will rewrite `N`.
@@ -2360,8 +2337,8 @@ Data Structures:::
 --
 [%autowidth,cols="^,<,<",options="header"]
 |===
-| Pos. | Size in Bytes   | Field
-|   i  | `k`/8 or 8      | `key` or System Key index
+| Pos. | Size (Bits)   | Field
+|   i  | `k` or 64       | `key` or System Key index
 |===
 --
 +
@@ -2376,10 +2353,10 @@ Data Structures:::
 --
 [%autowidth,cols="^,<,<",options="header"]
 |===
-|  Pos. | Size in Bytes   | Field
-|    i  | `k`/8 or 8      | `key` or System Key index
-|   ii  | `b`/8           | `hash`
-|  iii  | `8`             | `last_block_len`
+|  Pos. | Size (Bits)   | Field
+|    i  | `k` or 64     | `key` or System Key index
+|   ii  | `b`           | `hash`
+|  iii  | 64            | `last_block_len`
 |===
 --
 +
@@ -2493,8 +2470,8 @@ Data Structures:::
 --
 [%autowidth,cols="^,<,<",options="header"]
 |===
-| Pos. | Size in Bytes            | Field
-|   i  | If keyed: `k`/8, else 8  | `key` or System Key index
+| Pos. | Size (Bits)             | Field
+|   i  | If keyed: `k`, else 64  | `key` or System Key index
 |===
 --
 +
@@ -2519,14 +2496,15 @@ Data Structures:::
 --
 [cols="^6%,<21%,<18%,<55%",options="header"]
 |===
-|  Pos.| Size in Bytes            | Field                       | Notes
-.2+| i | If keyed: `k`/8 or 8     | `key` or SKT index          | --
+|  Pos.| Size (Bits)            | Field                       | Notes
+.2+| i | If keyed: `k` or 64      | `key` or SKT index          | --
 <|        If unkeyed: 0           | none                        | --
-|   ii | `n`/8                    | `state`                     | --
-|  iii | `2`                      | `last_block_len`            | Present only if this Hash/MAC has special internal treatment for a fractional last block that goes beyond padding and appending the length, which are handled by user software.
-|   iv | `2`                      | `block_base`                | Amount of data stored so far into `block`.  Only if used by the algorithm, else zero padding.
-|    v | `4`                      | `cumul_len`                 | Cumulative length of all data absorbed so far. Only if the algorithm must process and incorporate it in the hash on its own, else zero padding.
-|   vi | 8{interpunct}{lceil}``block_base``/64{rceil} | `block` | Only if `block_base` is defined and != 0 and the block must be stored separately from the `state`.
+|   ii | `n`                      | `state`                     | --
+|  iii | 16                       | `last_block_len`            | Present only if this Hash/MAC has special internal treatment for a fractional last block that goes beyond padding and appending the length, which are handled by user software.
+|   iv | 16                       | `block_base`                | Amount of data stored so far into `block`.  Only if used by the algorithm, else zero padding.
+|    v | 32                       | `cumul_len`                 | Cumulative length of all data absorbed so far. Only if the algorithm must process and incorporate it in the hash on its own, else zero padding.
+|   vi | 64{interpunct}{lceil}``block_base``/64{rceil} | `block` | Only if `block_base` is defined and != 0 and the block must be stored separately from the `state`.
+|  vii | 0 or 64                  | Padding                     | To reach a multiple of 128 bits.
 |===
 --
 +
@@ -2692,11 +2670,11 @@ Data Structures:::
 --
 [%autowidth,cols="^,<,<",options="header"]
 |===
-| Pos. | Size in Bytes   | Field
-|   i  | 200             | `state`
-|  ii  | 2               | `last_block_len`
-| iii  | 2               | `block_base`
-|  iv  | 4               | Padding
+| Pos. | Size (Bits)   | Field
+|   i  | 1600            | `state`
+|  ii  | 16              | `last_block_len`
+| iii  | 16              | `block_base`
+|  iv  | 96              | Padding
 |===
 --
 +
@@ -2772,8 +2750,8 @@ Data Structures:::
 --
 [%autowidth,cols="^,<,<",options="header"]
 |===
-| Pos. | Size in Bytes   | Field
-|   i  | 16 or 8         | `key` or System Key index
+| Pos. | Size (Bits)   | Field
+|   i  | 128 or 64     | `key` or System Key index
 |===
 --
 +
@@ -2790,16 +2768,16 @@ Data Structures:::
 --
 [%autowidth,cols="^,<,<",options="header"]
 |===
-| Pos. | Size in Bytes   | Field
-|    i | 16 or 8         | `key` or System Key index
-|   ii | 8               | `state`[0]
-|  iii | 8               | `state`[1]
-|   iv | 8               | `state`[2]
-|    v | 8               | `state`[3]
-|   vi | 8               | `state`[4]
-|  vii | 2               | `last_block_len`
-| viii | 2               | `tag_len`
-|   ix | 4               | Padding
+| Pos. | Size (Bits)   | Field
+|    i | 128 or 64         | `key` or System Key index
+|   ii | 64              | `state`[0]
+|  iii | 64              | `state`[1]
+|   iv | 64              | `state`[2]
+|    v | 64              | `state`[3]
+|   vi | 64              | `state`[4]
+|  vii | 16              | `last_block_len`
+| viii | 16              | `tag_len`
+|   ix | 32 or 96        | Padding
 |===
 --
 +
@@ -2986,9 +2964,9 @@ has the following form.
 --
 [%autowidth,cols="^,<,<",options="header"]
 |===
-| Pos. | Size in Bytes   | Field
-|   i  | 16 or 8         | `key` or System Key index
-|  ii  | 16              | `nonce`
+| Pos. | Size (Bits)   | Field
+|   i  | 128 or 64     | `key` or System Key index
+|  ii  | 128           | `nonce`
 |===
 --
 +
@@ -3013,9 +2991,9 @@ Masking_. This variant is described as follows:
 --
 [%autowidth,cols="^,<,<",options="header"]
 |===
-| Pos. | Size in Bytes   | Field
-|   i  | 16 or 8         | `K1` or System Key index
-|  ii  | 16 or 0         | `K2` or System Key index in `K1`
+| Pos. | Size (Bits)   | Field
+|   i  | 128 or 64         | `K1` or System Key index
+|  ii  | 128 or 0         | `K2` or System Key index in `K1`
 |===
 --
 +
@@ -3031,16 +3009,16 @@ Masking_. This variant is described as follows:
 --
 [%autowidth,cols="^,<,<",options="header"]
 |===
-|  Pos. | Size in Bytes   | Field
-|    i  | 16 or 8         | `K1` or System Key index
-|   ii  | 16 or 0         | `K2` or System Key index in `K1`
-|  iii  | 8               | `state`[0]
-|   iv  | 8               | `state`[1]
-|    v  | 8               | `state`[2]
-|   vi  | 8               | `state`[3]
-|  vii  | 8               | `state`[4]
-| viii  | 2               | `tag_len`
-|   ix  | 6               | Padding
+|  Pos. | Size (Bits)   | Field
+|    i  | 128 or 64     | `K1` or System Key index
+|   ii  | 128 or 0      | `K2` or System Key index in `K1`
+|  iii  | 64            | `state`[0]
+|   iv  | 64            | `state`[1]
+|    v  | 64            | `state`[2]
+|   vi  | 64            | `state`[3]
+|  vii  | 64            | `state`[4]
+| viii  | 16            | `tag_len`
+|   ix  | 48 or 112     | Padding
 |===
 --
 +
@@ -3078,14 +3056,14 @@ Data Structures:::
 --
 [%autowidth,cols="^,<,<",options="header"]
 |===
-|  Pos. | Size in Bytes   | Field
-|    i  | 8               | `state`[0]
-|   ii  | 8               | `state`[1]
-|  iii  | 8               | `state`[2]
-|   iv  | 8               | `state`[3]
-|    v  | 8               | `state`[4]
-|   vi  | 1               | `countdown` (from 3 down to 0)
-|  vii  | 7               | Padding
+|  Pos. | Size (Bits)   | Field
+|    i  | 64              | `state`[0]
+|   ii  | 64              | `state`[1]
+|  iii  | 64              | `state`[2]
+|   iv  | 64              | `state`[3]
+|    v  | 64              | `state`[4]
+|   vi  | 8               | `countdown` (from 3 down to 0)
+|  vii  | 56              | Padding
 |===
 --
 +
@@ -3160,8 +3138,8 @@ The algorithm is the same as Ascon-Hash256 (<<ACE-Ascon-Hash256>>) with the
 following differences:
 
 . The IV written to `state[0]` in State _Initial_ is `0x0000080100cc0002`.
-. There is no `countdown` field (and therefore also no padding: the last 8
-  bytes of the serialized content of Ascon-Hash256 are not present).
+. There is no `countdown` field (and therefore also no padding: the last 64
+  bits of the serialized content of Ascon-Hash256 are not present).
 . As much output as desired can be produced in State _Hash_Finalize_, and the
   algorithm never transitions to State _Success_.
 
@@ -3280,14 +3258,14 @@ NOTE: _AlgorithmPolicy_ enables signature generation (_AlgorithmPolicy_[0]) and 
 --
 [cols="^7%,<33%,<30,<30",width="100%",options="header"]
 |===
-|   Pos.  | Size in Bytes  2+| Field
-.3+| i .3+| 2 (Bits 6-15 are reserved) | Bit 0: `HasScalar`     | Bit 1: `HasSecondPt`
+|   Pos.  | Size (Bits)  2+| Field
+.3+| i .3+| 16(Bits 6-15 are reserved) | Bit 0: `HasScalar`     | Bit 1: `HasSecondPt`
                                       <| Bit 2: `HasSignature` <| Bit 3: `HasHash`
                                       <| Bit 4: `HasRndNum`    <| Bit 5: `OutputType`
-|    ii   | 2              2+| `Progress`
-|   iii   | 4              2+| Padding
-|    iv   | ``ub``/8       2+| `Generator`, X coordinate, followed by Y coordinate if `u=2`.
-|     v   | `b`/8          2+| `Scalar`: `b`-bit string. Can be the Private Key.
+|    ii   | 16              2+| `Progress`
+|   iii   | 32             2+| Padding
+|    iv   | ``ub``         2+| `Generator`, X coordinate, followed by Y coordinate if `u=2`.
+|     v   | `b`            2+| `Scalar`: `b`-bit string. Can be the Private Key.
 |===
 
 `SCC_content_size()` returns only the length of the content from Position i to Position v.
@@ -3296,18 +3274,18 @@ The size of the following fields is included in the _VarDataLen_ field of the Me
 
 [cols="^7%,<33%,<60",width="100%",options="header"]
 |===
-|   Pos.  | Size in Bytes                             | Field
-|    vi   | If `HasSecondPt`: `ub`/8, else: 0         | `SecondPt`, X coordinate, followed by Y coordinate if `u=2`. Can be the Public Key.
-|   vii   | If `HasSignature`: `vb`/8, else: 0        | `Signature`, R value, followed by S coordinate if `v=2`.
-|  viii   | If `HasHash`: `h`/8, else: 0              | `Hash`: a `h`-bit string representing the hash.
-|    ix   | If `HasRndNum`: `j`/8, else: 0            | `RndNum`.
-|     x   | (variable)                                | Optional and implementation-specific data from the *Internal State* (Content), starting with `acemarchid` if not empty.
+|   Pos.  | Size (Bits)                             | Field
+|    vi   | If `HasSecondPt`: `ub`, else: 0         | `SecondPt`, X coordinate, followed by Y coordinate if `u=2`. Can be the Public Key.
+|   vii   | If `HasSignature`: `vb`, else: 0        | `Signature`, R value, followed by S coordinate if `v=2`.
+|  viii   | If `HasHash`: `h`, else: 0              | `Hash`: a `h`-bit string representing the hash.
+|    ix   | If `HasRndNum`: `j`, else: 0            | `RndNum`.
+|     x   | (variable)                              | Optional and implementation-specific data from the *Internal State* (Content), starting with `acemarchid` if not empty.
 |===
 
 The `HasRndNum` flag is set and the `RndNum` field is used only during signature generation.
 `RndNum` is exported only if the signature operation is interrupted.
 
-The size in bytes of Fields vi to ix is:
+The size in bits of Fields vi to ix is:
 
 `{fournbsp}{fournbsp}` `varlen` <- 8 + (`HasSecondPt` != 0) {interpunct} ``ub``/8 + (`HasSignature` != 0) {interpunct} ``vb``/8 + +
 `{fournbsp}{fournbsp}{fournbsp}{fournbsp}{fournbsp}{fournbsp}{fournbsp}` + (`HasHash` != 0) {interpunct} ``h``/8 + (`HasRndNum` != 0) {interpunct} ``j``/8.
@@ -3501,8 +3479,8 @@ Data Structures:::
 --
 [%autowidth,cols="^,<,<",options="header"]
 |===
-| Pos. | Size in Bytes            | Field
-|   i  | If keyed: `k`/8, else 8  | `key`
+| Pos. | Size (Bits)            | Field
+|   i  | If keyed: `k`  , else 64  | `key`
 |===
 --
 +
@@ -3516,8 +3494,8 @@ Data Structures:::
 --
 [cols="^6%,<21%,<18%,<55%",options="header"]
 |===
-|  Pos.| Size in Bytes            | Field                       | Notes
-.2+| i | If keyed: `k`/8 or 8     | `key` or SKT index          | --
+|  Pos.| Size (Bits)            | Field                       | Notes
+.2+| i | If keyed: `k` or 64      | `key` or SKT index          | --
 <|        If unkeyed: 0            | none                        | --
 |===
 --
