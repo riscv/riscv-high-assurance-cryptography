@@ -1408,6 +1408,9 @@ If `Xl` is greater than `aceiobuftop` - `acestart`, exception `ace_exc_invalid` 
 The intended usage of `ace.input` and `ace.output` is explained in detail in
 <<ACE-usage-input-output>>.
 
+`ace.input` may be used only if the ACEIOBUF is enabled and `aceiobuflen` is non-zero.
+Otherwise, exception `ace_exc_buf_unconf` is raised.
+
 _Properties_::
 Possibly modifies state: *YES*. +
 Usage-controlled: *YES*. +
@@ -1462,6 +1465,9 @@ If `Xl` == 0, the operation does nothing.
 If `Xl` is greater than `aceiobuftop` - `acestart`, exception `ace_exc_invalid` is raised.
 --
 +
+
+`ace.output` may be used only if the ACEIOBUF is enabled and `aceiobuflen` is non-zero.
+Otherwise, exception `ace_exc_buf_unconf` is raised.
 
 _Properties_::
 Possibly modifies state: *YES*. +
@@ -1560,11 +1566,7 @@ Onb RV64, the operations are, essentially:
 [[ACE-usage-input-output]]
 === Usage of `ace.input` and `ace.output` to Replace Vector Inputs and Outputs
 
-Any occurrence of the _Original Instructions_ in <<ACE-replacement-instructions>>
-may be substituted by the corresponding _Alternative Sequence_ where
-`ace.input` and `ace.output` instructions are used in place of the vector
-register inputs and outputs.
-The use of such alternative sequences is implied in all algorithms and not explicitly written each time.
+When the vector register file is unavailable, any _Original Instruction_ listed in <<ACE-replacement-instructions>> may be replaced by the corresponding _Alternative Sequence_.
 
 [[ACE-replacement-instructions]]
 .alternative sequences for `ace.exec` and `ace.setst` using `ace.input` and `ace.output`
@@ -1586,18 +1588,20 @@ The use of such alternative sequences is implied in all algorithms and not expli
 
 The sole functions of `ace.input` and `ace.output` are to supply inputs to cryptographic operations and to read out their outputs. No computation is performed on the data by these instructions. All computations and internal state changes of `ace.exec` and `ace.setst` remain within those operations.
 
-`ace.input` and `ace.output` may be used only if the ACEIOBUF is enabled and `aceiobuflen` is non-zero. Otherwise, exception `ace_exc_buf_unconf` is raised. If `aceiobuflen` is non-zero but the range size `aceiobuftop - acestart` is invalid for the algorithm, exception `ace_exc_invalid` is raised and no cryptographic operation is performed.
+The usage and ordering of the alternative sequences is not enforced architecturally in distinct modes of the ACE unit where one way to provide inputs and outputs.
+Instead, the ACE architecture has the following rules:
 
-//
-// [WARNING]
-// ====
-// We do not need this!
-//
-// The ordering of the instructions in a alternative sequence is enforced by the
-// architecture according to the value of _Sequence_ and the state number of
-// the CR configured in `aceactivecr`. Not following the instruction ordering
-// raises an illegal instruction exception and invalidates the CR.
-// ====
+. Whenever a Form D `ace.exec` is used where a Form of `ace.exec` requiring an input or providing an output is instead expected, i.e., the Algorithm specifies a Form A-C `ace.exec`, the implementation shall automatically use the ACEIOBUF if `Zlio` is available, and raise an invalid instruction exception otherwise.
+
+.. If a Form B `ace.exec` is issued in place of a Form A `ace.exec`, i.e., an output vector register is expected but it is not provided, and the input vector register is given, then the output of the `ace.exec` instruction is simply discarded.
+
+.. If a Form C `ace.exec` is issued in place of a Form A `ace.exec`, i.e., an input vector register is expected but it is not provided, and the output vector is defined, then an invalid instruction exception is raised.
+
+. Similarly, for `ace.setst`, if a vector input is expected (Form C `ace.setst`) and it is not provided, the implementation shall automatically use the ACEIOBUF if `Zlio` is available, and raise an invalid instruction exception otherwise. This instruction replacement is not allowed in the case of a Form B `ace.setst`, i.e., when the auxiliary input should come from a GPR, and an invalid instruction exception is raised regardless of whether `Zlio` is available.
+
+.  Form D `ace.exec` in place of Forms A-C, and Form A `ace.setst` in place of Form C `ace.setst` may be issued only if the ACEIOBUF is enabled and `aceiobuflen` is non-zero. Otherwise, exception `ace_exc_buf_unconf` is raised. If `aceiobuflen` is non-zero but the range size `aceiobuftop - acestart` is invalid for the algorithm, exception `ace_exc_invalid` is raised and no cryptographic operation is performed.
+
+NOTE: It is because of these rules that, in the Algorithms, we write that a certain Form of `ace.exec` or `ace.setst` is _expected_ instead of _required_ (or _only [...] allowed_). The above substitutions are implicit in all algorithms and are not restated for each occurrence.
 
 // ////////////////////////////////////////////////////////////////////
 
