@@ -1369,7 +1369,7 @@ If the vector registers are not sufficiently long, or not implemented, inputs ca
 For this reason, the architecture defines `ace.input` and `ace.output` (cf. next section).
 `ace.input` loads `Xl` bytes from memory starting at address `%offset(Xs)` and copies them to the ACEIOBUF, starting at offset `acestart`.
 +
-If `Xl` == 0, the operation does nothing.
+If `Xl` = 0, the operation does nothing.
 +
 If `Xl` is greater than `aceiobuftop` - `acestart`, exception `ace_exc_invalid` is raised.
 +
@@ -1428,7 +1428,7 @@ _Description_:: {empty}
 This is the output operation corresponding to `ace.input`.
 `ace.output` writes the contents of the input buffer, starting at offset `acestart`, to memory starting at address `%offset(Xs)`.
 
-If `Xl` == 0, the operation does nothing.
+If `Xl` = 0, the operation does nothing.
 
 If `Xl` is greater than `aceiobuftop` - `acestart`, exception `ace_exc_invalid` is raised.
 --
@@ -1474,7 +1474,7 @@ _Mnemonic_::
 (((ACE, instruction, ace.reset)))
 
 _Encoding_::
-`ace.clear`/`ace.reset` are pseudo instructions, implemented as `ace.setst` (see <<ACE-instruction-setst>>) with no auxiliary operands, and the immediate for _State_ set to `ace_state_off` (as defined in <<ACE-State-field>>, i.e., 0).
+Pseudo-instructions `ace.clear`/`ace.reset` are implemented as `ace.setst` (see <<ACE-instruction-setst>>) with no auxiliary operands and the immediate for _State_ set to `ace_state_off` (as defined in <<ACE-State-field>>).
 
 _Description_::
 `ace.clear` unconfigures the state of the CR `Kd` or `K(Xd)` and releases its resources in the CRF.
@@ -1521,8 +1521,8 @@ The operations is a pseudo-instruction.
 
 _Description_::
 `ace.getst` is implemented as a read of the source CR's metadata using `ace.getmd`
-followed by logical or bit manipulation instructions to extract the _State_ field of the latter.
-Onb RV64, the operations are, essentially:
+followed by instructions to extract the _State_ field of the latter.
+For instance, on RV64, we can use:
 
  . `ace.getmd Xd, Ks` or `K(Xs)`
  . `srli  Xd, Xd, 20`
@@ -1588,8 +1588,10 @@ When the vector register file is unavailable, any _Original Instruction_ listed 
 
 The sole functions of `ace.input` and `ace.output` are to supply inputs to cryptographic operations and to read out their outputs. No computation is performed on the data by these instructions. All computations and internal state changes of `ace.exec` and `ace.setst` remain within those operations.
 
-The usage and ordering of the alternative sequences is not enforced architecturally in distinct modes of the ACE unit where one way to provide inputs and outputs.
-Instead, the ACE architecture has the following rules:
+The usage and ordering of the alternative sequences are not enforced architecturally.
+Thus, the caller may omit `ace.input` or `ace.output`, meaning that the contents of the ACEIOBUF are reused, or the output is ignored.
+This does not expand the attack surface, since the caller always retains full control over the data passed to ACE instructions and their outputs.
+Instead, the ACE architecture defines the following rules:
 
 . Whenever a Form D `ace.exec` is used where a Form of `ace.exec` requiring an input or providing an output is instead expected, i.e., the Algorithm specifies a Form A-C `ace.exec`, the implementation shall automatically use the ACEIOBUF if `Zlio` is available, and raise an invalid instruction exception otherwise.
 
@@ -1599,7 +1601,7 @@ Instead, the ACE architecture has the following rules:
 
 . Similarly, for `ace.setst`, if a vector input is expected (Form C `ace.setst`) and it is not provided, the implementation shall automatically use the ACEIOBUF if `Zlio` is available, and raise an invalid instruction exception otherwise. This instruction replacement is not allowed in the case of a Form B `ace.setst`, i.e., when the auxiliary input should come from a GPR, and an invalid instruction exception is raised regardless of whether `Zlio` is available.
 
-.  Form D `ace.exec` in place of Forms A-C, and Form A `ace.setst` in place of Form C `ace.setst` may be issued only if the ACEIOBUF is enabled and `aceiobuflen` is non-zero. Otherwise, exception `ace_exc_buf_unconf` is raised. If `aceiobuflen` is non-zero but the range size `aceiobuftop - acestart` is invalid for the algorithm, exception `ace_exc_invalid` is raised and no cryptographic operation is performed.
+.  Form D `ace.exec` in place of its Forms A-C, and Form A `ace.setst` in place of its Form C may be issued only if the ACEIOBUF is enabled and `aceiobuflen` is non-zero. Else, exception `ace_exc_buf_unconf` is raised. If `aceiobuflen` is non-zero but the range size `aceiobuftop-acestart` is invalid for the algorithm, exception `ace_exc_invalid` is raised and no cryptographic operation is performed.
 
 NOTE: It is because of these rules that, in the Algorithms, we write that a certain Form of `ace.exec` or `ace.setst` is _expected_ instead of _required_ (or _only [...] allowed_). The above substitutions are implicit in all algorithms and are not restated for each occurrence.
 
