@@ -1,0 +1,92 @@
+Assume we have an instruction that works on 64 bit values, and 0 < N < 64
+
+MACC_N (dh,dl, a,b)
+    tmp = a * b    // result is 2N bits
+    dh += tmp >> N   // high N bits
+    dl += tmp & ((1 << N) - 1) // low N bits
+
+which can also be seen as
+
+MACC_N (dh,dl, a,b)
+    tmpl = mull_N(a * b)  // keep only the low N bits
+    tmph = mulh_N(a * b)  // shift down by N bits and keep high bits (up to 64, in fact: a and b are not restricted to N bits)
+    dh += tmph   // high bits
+    dl += tmpl   // low N bits
+
+For a and b < 2^N-1,  we have that tmph <= 2^N-2 and tmpl <= 2^N-1.
+
+Let two integers A, B, be represented as arrays a[L] and b[L] of L elements indexed from 0 to L-1,
+and the product C = A * B, represented as an array c[2L-1] of 2L-1 elements indexed from 0 to 2L-2
+as follows
+
+A = sum a[i] * 2^i for i = 0 to L-1
+B = sum b[i] * 2^i for i = 0 to L-1
+C = sum c[i] * 2^i for i = 0 to 2L-2
+
+so
+
+scholbook_mult(C, A, B)
+  c[i] = 0 for i = 0 to 2L-2
+  for i = 0 to L-1
+    for j = 0 to L-1
+      MACC_N(c[i+j+1], c[i+j], a[i], b[j])
+  reduce(C)
+
+It is easy to see that the maximum number of values accumulated in c[i] is 2L-1, which
+occurs in the middle:
+the 2L-2 elements of the array C[] are each the sum of
+1, 3, 5, ...2L-3 , 2L-1, 2L-1, 2L-3, ..., 5, 3, 1 digits of type dh or dl, which we
+can bound by 2^N-1
+
+
+To avoid overflows, we need (2L-1) * (2^N-1) < 2^64,
+(2L-1) < 2^64/(2^N-1)
+2L < 2^64/(2^N-1)+1
+L < 2^63/(2^N-1)+1/2
+
+Hence, if N = 56, we have L < 2^63/(2^56-1)+1/2 ≈ 128.5, so L <= 128, in other
+words we can multiply two numbers of at most 128*56 bits = 7168 bits.
+If N = 54, we have L < 2^63/(2^54-1)+1/2 ≈ 512.5, so L <= 512, in other
+words we can multiply two numbers of at most 64*54 bits = 3456 bits.
+in general L <= 2^(63-N).
+If N = 60, we have L <= 8.
+
+Let us return to N = 56, which is nice because of byte-coarse entire-vector shifts.
+
+This means that if we want to multiply two 8192 numbers, we first expand them to
+147 digits of 56-bits each. Since 56*74=4144, we write
+
+A = AH * 2^4188 + AL
+B = BH * 2^4188 + BL
+
+A * B = (AH * BH) * 2^8376 + (AH * BL + AL * BH) * 2^4188 + AL * BL
+      = (AH * BH) * 2^8376 + ((AH + AL) * (BH + BL) - AH * BH - AL * BL)) * 2^4188 + AL * BL
+
+When we compute (AH * BL + AL * BH) either way, the accumulated digits may overflow,
+esp if we add (AH + AL) and (BH + BL) first and the multiply them.
+so we need to reduce the digits in the middle result to avoid overflow.
+
+If we use N = 54, L <= 512, and the number of 54-bit digits needed to represent a
+8192 bit numnber is 152. So for a full product, we need
+
+N = 56 --- 21609 multiplications (scholbook), 16281 (karatsuba), 152*2 = 304 extra reductions (1 shift, 1 mask, 1 add), and consider the signs in the subtractions.
+N = 54 --- 23104 multiplications (scholbook), 17328 (karatsuba)
+
+Not clear which one wins. The code seen online seems to point to N = 56 having a slight edge.
+
+One way to get around the reduction problem with the schoolbook method is to split the outer loop.
+
+scholbook_mult(C, A, B)
+  c[i] = 0 for i = 0 to 2L-2
+  for i = 0 to ceil(L/2)-1
+    for j = 0 to L-1
+      MACC_N(c[i+j+1], c[i+j], a[i], b[j])
+  reduce(C)
+  for i = ceil(L/2) to L-1
+    for j = 0 to L-1
+      MACC_N(c[i+j+1], c[i+j], a[i], b[j])
+  reduce(C)
+
+By this way, using N-56 works also with 8192-bit numbers (double check)
+and the same mechanism can be used for the middle multiplication in Karatsuba
+(since the double size digits mean that the loops must be half so long).
