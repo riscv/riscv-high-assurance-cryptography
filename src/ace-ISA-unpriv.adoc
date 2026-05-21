@@ -139,6 +139,7 @@ At least one of `Zlv` or `Zlio` must be implemented.
 ACE defines 32 Context Registers (CRs), numbered 0 to 31 and denoted `K0`–`K31`.
 
 CRs are architectural state, i.e., per-hart, like the GPRs or the vector registers.
+They are a common set for a hart, that is, they are not separated per Mode.
 
 Unlike a conventional register, a CR can be _unconfigured_, meaning it does not contain a CC.
 
@@ -590,8 +591,7 @@ _Encoding_::
 _Description_::
 `ace.prov` provisions a CR with Metadata and Content to create a CC. `Kd` or
 `K(Xd)` denotes the CR to be provisioned. `Xs` points to the region of memory
-containing the Metadata and the key material. The PI must be stored at an
-8-byte aligned address.
+containing the Metadata and the key material.
 +
 If the instruction fails, the target CR is unconfigured, with the same
 semantics as if `ace.clear` were invoked on the same CR
@@ -660,13 +660,12 @@ _Encoding_::
 
 _Description_::
 Exports the CR `Ks` or `K(Xs)` to memory at address `Xd`, using the procedure
-described in <<ACE-provisioning-export-import>>. The SCC must be stored at an
-8-byte aligned address.
+described in <<ACE-provisioning-export-import>>.
 +
 The operation is described in detail in <<ACE-provisioning-export-import>>.
 
 _Properties_::
-Possibly modifies state: *NO*. +
+Possibly modifies state: May not change the CR's state. `ACES` may be modified, for instance when `acestart` is affected. +
 Usage-controlled: *NO*. +
 // Trappable: *YES*. +
 // Interruptible: *YES*. +
@@ -713,8 +712,7 @@ _Encoding_::
 
 _Description_::
 `Kd` or `K(Xd)` denotes the CR into which the SCC is to be imported. `Xn` is
-the GPR containing the base address of the buffer with the source SCC. The SCC
-base address must be 8-byte aligned.
+the GPR containing the base address of the memory region with the source SCC.
 +
 If the instruction fails, the target CR is unconfigured, with the same
 semantics as if `ace.clear` were invoked on the same CR
@@ -751,7 +749,9 @@ in the Metadata is 0, denoting a key represented by value.
 NOTE: The `ace.export` instruction does not have an `ace.export.S` analog to
 `ace.import.S`. This means that system-specific dynamically generated keys can
 be imported but not exported in the same form: they must be exported in the
-format architected here for ACE CCs.
+format architected here for ACE CCs, or recreated with another `ace.import.S`
+call.
+
 
 _Properties_::
 Possibly modifies state: *YES*. +
@@ -848,7 +848,7 @@ _Included in_::
 |===
 |Extension | Minimum version | Lifecycle state
 | `Zlv` (Forms A-D)    | v0.0.0          | --
-| `Zlio` (Forms D)     | v0.0.0          | --
+| `Zlio` (Form D)      | v0.0.0          | --
 |===
 --
 +
@@ -911,7 +911,7 @@ Setting an Error State does _not_ however trigger an exception, even if reaching
 that state implicitly would normally do. This does not prevent further usage of
 the same CR from raising exceptions (for instance by issuing an `ace.exec` instruction later).
 
-It is never allowed to set the State to _Partially_Configured_ directly.
+Not all state transitions are legal, see <<ACE-State-field>> for more details.
 
 In the last two cases, the CRF capacity used by the Content of the CR
 may also be released, including any additional variable-length data, in which case the
@@ -1064,6 +1064,11 @@ This instruction can be used to:
 * Restrict the usage of a CC (as stored in a CR) to specific modes; and
 * Add a Locality or replace a Locality with a stricter one.
 
+[WARNING]
+====
+Do we want to restrict `ace.restrict` only if the state is _Initial_, at least for some fields?
+====
+
 Let `mh` be the Metadata Header of the CC in the destination CR.
 
 On RV64, the semantics of the instruction are:
@@ -1075,9 +1080,18 @@ exception `ace_exc_invalid` is raised.
 
 * `Xs`._AlgorithmPolicy_ is used to set the new `mh`._AlgorithmPolicy_ of the
   CR, if the CC configured in the latter makes use of this field.
-  No currently disabled operation may be enabled, any attempt to do so raises
+  No currently disabled operation may be (re)enabled, any attempt to do so raises
   exception `ace_exc_invalid`. In some cases, a zero value is not permitted, such as
-  disabling both encryption and decryption.
+  disabling both encryption and decryption. +
+  If the CR is in a state only allowed while performing an operation currently
+  allowed by `mh`._AlgorithmPolicy_, any change to _AlgorithmPolicy_ that would
+  disable that operation raises exception `ace_exc_invalid`.
+
+[WARNING]
+====
+Do we want to just invalidate the CR and then raise the exception `ace_exc_invalid` only
+when the next operation uses it?
+====
 
 * If `Xs`._Locality_ is non-zero, then it can be used to restrict the Locality,
   either by adding a new one or by replacing one.
@@ -1287,7 +1301,6 @@ There are four Forms of the `ace.size` instruction:
 . `ace.size Xd, Ks|K(Xs)` - Size from a context.
 . `ace.size Xd, Xs` - Size from Metadata Header.
 . `ace.size.internal Xd, Xs` - Internal capacity estimate for a CR.
-. `ace.size.iobuf Xd, Xs` - Internal capacity estimate for the ACEIOBUF.
 
 // Without this comment, the next part is not properly formatted...
 
@@ -1316,7 +1329,6 @@ The `F` field and the `r` bit may assume the following values:
 * `F` = `0b00`, `r` = `0` {implies} Form A: Size from a context given as `Ks`.
 * `F` = `0b00`, `r` = `1` {implies} Form A: Size from a context given indirectly as `K(Xs)`.
 * `F` = `0b01`, `r` = `0` {implies} Form B: Size from Metadata Header.
-* `F` = `0b11`, `r` = `0` {implies} Form C: Internal capacity of the ACEIOBUF.
 
 _Description_:: {empty}
 
@@ -1405,7 +1417,7 @@ Otherwise, exception `ace_exc_buf_unconf` is raised.
 
 _Properties_::
 Possibly modifies state: *YES*. +
-Usage-controlled: *YES*. +
+Usage-controlled: *NO*. +
 // Trappable: *YES*. +
 // Interruptible: *YES*. +
 
@@ -1463,7 +1475,7 @@ Otherwise, exception `ace_exc_buf_unconf` is raised.
 
 _Properties_::
 Possibly modifies state: *YES*. +
-Usage-controlled: *YES*. +
+Usage-controlled: *NO*. +
 // Trappable: *YES*. +
 // Interruptible: *YES*. +
 
