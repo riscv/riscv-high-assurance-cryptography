@@ -37,7 +37,9 @@ Currently, 81 bits are defined and 47 are reserved for future use.
 |  [18:16] | 3     | _SCProtection_    | Side-channel protection level. See <<ACE-SCProtection-field>>.
 |  [20:19] | 2     | _KeyType_         | 0: key is an explicit value in Content. 1:  1: Key is a system-specific System Key Identifier. See <<ACE-system-keys>>.
 |  [25:21] | 5     | _State_           | Current state of the CR/algorithm, encoded as an integer.
-|  [31:26] | 6     | Reserved          | Reserved for future use. Currently, it must be equal to zero.
+|  [26:26] | 1     | _Provisioning_    | Set if the CR has been only partially configured.
+|  [27:27] | 1     | _Importing_       | Set if the CR has been only partially imported.
+|  [31:28] | 4     | Reserved          | Reserved for future use. Currently, it must be equal to zero.
 |  [36:32] | 5     | _UsagePolicy_     | Usage (Control) Policy. Bits 0, 1, 2, 4 and 4 of the field,, when set, disallow CC usage in U-mode, (V)S-mode, H-mode, M-Mode, and Debug mode, respectively.
 |  [46:37] | 10    | _Locality_        | Zero, or an index determining a Locality Secret. See <<ACE-Localities>>.
 |  [47:47] | 1     | Reserved          | Reserved for future use.
@@ -118,7 +120,7 @@ The architected values of _State_ which are common to all algorithms are defined
 .Global CC State Numbers: Interrupted and Error States
 [float="center",align="center",width="100%",cols="^7%,<27,<15%,<51%"]
 |===
-|  23    | `ace_state_partial_config`  | _Partially_Configured_  | Provisioning or import interrupted.
+//|  23    | `ace_state_partial_config`  | _Partially_Configured_  | Provisioning or import interrupted.
 |  24    | `ace_state_not_impl`        | _Not_Impl_        | Not implemented algorithm. It is set by the hardware upon an attempt to provision or import a CR that is not supported by the implementation.
 |  25    | `ace_state_invalid`         | _Invalid_         | Invalid/invalidated state, for instance because of the use of an invalid value (argument, state, or metadata).
 |  26    | `ace_state_out_of_mem`      | _Out_of_Memory_   | Insufficient CRF memory for configuration instruction. This may be set by privileged code in case they do not handle the CR allocation.
@@ -130,12 +132,12 @@ The architected values of _State_ which are common to all algorithms are defined
 
 The state with value 0 is termed _Off_, and is used to indicate that the CR is not configured.
 
-All states in the range 1-22 are termed _valid_. This includes both _Success_ and _Failure_ states, which must be used for
+All states in the range 1-23 are termed _valid_. This includes both _Success_ and _Failure_ states, which must be used for
 normal termination of an algorithm in the cases of its successful completion or failure.
 
-(((ACE, CR, partially configured)))
-State 23, i.e., _Partially_Configured_, is used to report that provisioning or import was interrupted.
-It is never allowed to set the State to _Partially_Configured_ directly using `ace.setst`.
+// (((ACE, CR, partially configured)))
+// State 23, i.e., _Partially_Configured_, is used to report that provisioning or import was interrupted.
+// It is never allowed to set the State to _Partially_Configured_ directly using `ace.setst`.
 
 (((ACE, algorithm, error states)))
 States 24-31 are termed _Error States_, and are used to report certain specific ACE errors.
@@ -180,7 +182,7 @@ The CR then retains only the Metadata Header.
 
 . Attempts to _use_ a CR in any Error State will not perform any operation, and in particular they leave the _State_ field unchanged.
 
-. If a CR is in State _Partially_Configured_, transitioning it to any State other than _Off_ or _Invalid_ is only possible as a consequence of a restart or resumption of the interrupted configuration instruction.  `ace.setst` can only transition it to _Off_ or _Invalid_.
+. If a CR is _partially configured_ (i.e., one of the bits _Provisioning_ or _Importing_ is set), transitioning it to any State other than _Off_ or _Invalid_ is only possible as a consequence of a restart or resumption of the interrupted configuration instruction.  `ace.setst` can only transition it to _Off_ or _Invalid_.
 
 . Any _usage_ instruction that would violate the Usage Control policies will not perform its operation, and will set _State_ to `ace_state_priv_viol` instead.
 
@@ -278,14 +280,14 @@ The graph is read as follows:
 . The double circled state is the _Off_ State.
 . Valid States have single rounded rectangular borders.
 . Error States have double rounded rectangular borders.
-. State _Partially Configured_ has a trapezium shape.
+. The _Partially Configured_ conditions have a trapezium shape.
 . The continuous edges represent state transitions induced by both configuration and usage instructions.
 . However, a transition from _Success_ or _Failure_ to _Initial_ may be forbidden by certain single-use CRs as per the _Algorithm_'s policies.
 . The transitions from _Off_ to any Error State are a result of configuration instructions, whereas the corresponding transitions from these Error States to _Off_ are a result of explicitly clearing the CR.
 . The dashed edges represent state transitions induced by reaching the expiration date.
-. The dotted edges represent state transitions induced by configuration instructions. We note that completion of a provisioning operations can only bring to the _Initial_ state, whereas completion of an import can bring a CR to any state, except _Partially Configured_.
-. State _Partially Configured_ occurs only while configuration operations are in progress and is therefore only reached via exceptions or interrupts.
-  This explains why there are no arrows leading to _Partially Configured_ from any other state.
+. The dotted edges represent state transitions induced by configuration instructions. We note that completion of a provisioning operations can only bring to the _Initial_ state, whereas completion of an import can bring a CR to any state.
+. Partially configured conditions occur only while configuration operations are in progress and is therefore only reached via exceptions or interrupts.
+//  This explains why there are no arrows leading to _Partially Configured_ from any other state.
 . Any transition may be caused by an performing explicit operation performed while in a given state, or be caused implicitly by reaching the latter under conditions specified in the algorithm's specification.
 . The round _Configuration_ “hub” simplifies the graph to represent that it is always possible to reach any Error State, even from other Error States, by performing explicit configuration operations (or by using `ace.setst` between Error States).
 
@@ -558,7 +560,9 @@ and the total size in bits of an SCC is
 [[ACE-interruption-points]]
 ==== Interruptibility of Configuration and Export Operations
 
-During `ace.prov` and `ace.import`, _State_ is set to _Partially_Configured_ for the duration of the operation.
+During `ace.prov`, flag _Provisioning_ is set to 1, and
+during `ace.import`, flag _Importing_ is set to 1.
+These flags are cleared to upon completion of `ace.prov` and `ace.import`.
 It is updated to the correct value only upon successful completion (see <<ACE-provisioning-export-import>>).
 This transition does not occur during `ace.export`.
 
