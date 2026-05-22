@@ -864,6 +864,98 @@ function ace.import(CR_number, M[]) =
 }
 ----
 
+==== Why `ace.prov`, `ace.export`, and `ace.import` are CISC-like monolithic instructions.
+
+[WARNING]
+====
+This is a non-normative section describing why the current specification has CISC-like monolithic instructions `ace.prov`, `ace.export`, and `ace.import`.
+====
+
+It is envisionable that these operations could be described in a more RISC-like manner by splitting them into more operations.
+
+*Import*
+----
+ace.open K0, import    // import is a flag/field
+ld t0, 0(t6)           // load the medatada from memory
+ace.setmd K0, t0       // this may fail if internal memory is not sufficient.
+ace.size t1, t0        // now the size (except metadata) is in t1
+ace.load K0, 8(t0), t1 // load t1 bytes or bits starting with the tag, fails if t1 is different than the expected data, but this can be checked asynchronously, so the actual size does not have to be fetched from the ACE unit
+ace.seal K0 // this also decrypts and verifies
+----
+
+*Export*
+----
+ace.open K0, export // export is a flag/field
+ace.getmd t0, K0
+ace.size t1, t0      // now the size of the SCC (except metadata) is in t1
+sd 0(t6), t0         // store the metadata
+ace.seal K0         // in this case, this computes the SIV
+ace.store 8(t0), K0, t1 // stores t1 bytes or bits starting with the tag,
+// fails if t1 is different than the expected data, etc
+ace.close K0 // at this point, this is redundant...
+----
+
+*Provisioning*
+----
+ace.open K0, provision // provision is a flag/field
+ld t0, 0(t6)           // load the medatada from memory
+ace.setmd K0, t0       // this may fail if internal memory is not sufficient.
+ace.size t1, t0, provision // now the size of the PI (except metadata) is in t1
+ace.load K0, 8(t0), t1 // load t1 bytes or bits starting with the tag, fails if t1 is ace.seal K0            // this also reconstructs data if needed, makes CR useable
+----
+
+Shorter sequences could be as follows:
+
+*Import*
+----
+ace.open K0, import // import is a flag/field
+ld t0, 0(t6)
+ace.setmd K0, t0    // this may fail if internal memory is not sufficient.
+ace.load K0, 8(t0)  // load the right number of bytes or bits starting with the tag
+ace.seal K0         // this also decrypts and verifies,
+                    // then reconstructs the data if needed, makes CR useable
+----
+
+*Export*
+----
+ace.open K0, export // export is a flag/field
+ace.getmd t0, K0
+sd 0(t6), t0        // store the metadata
+ace.seal K0         // in this case, this computes the SIV
+ace.store 8(t0), K0 // stores t1 bytes or bits starting with the SIV,
+                    // fails if t1 is different than the expected data, etc
+----
+
+*Provisioning*
+----
+ace.open K0, provision // provision is a flag/field
+ld t0, 0(t6)
+ace.setmd K0, t0       // this may fail if internal memory is not sufficient.
+ace.load K0, 8(t0)     // load the right number of bytes or bits starting with the tag
+ace.seal K0            // this also reconstructs data if needed, makes CR useable
+----
+
+On the opposite side, even longer instruction sequences could be used with explicit writing of XLEN-long values from the GPRs into a CR's state, in loops (a CSR and `acestart` or CSR indirect addressing can be used to implement such a mechanism.
+
+However, such code cannot be safely resumed after preemption, particularly in the case of export.
+The architecture does not guarantee that exporting and then reimporting a CR yields an identical CR; it only guarantees that the reimported CR can be used as if nothing had happened.
+Hence, resuming when the CR may have been modified is hazardous.
+
+In the current CISC-like model, this situation is handled naturally:
+if for any reason the export operation must be restarted instead of resumed,
+the single monolithic instruction will indeed be restarted.
+
+With separate instructions, however (for example, `ace.open` followed by `ace.getmd`, then storing the metadata and emitting the contents via a single instruction or a loop), this situation cannot be avoided.
+There is no general mechanism to restart an instruction sequence or force control flow to revert, since privileged code cannot be assumed to know the semantics of the interrupted sequence and backtrack accordingly.
+
+Let us consider the case an export operation for a CR is preempted.
+The CR expires during a context switch, or even during the brief time an exception is handled (for instance, a memory page access fault is remediated).
+Upon restoration, the operation marks the CR as _Expired_ and may release internal resources.
+The restored CR is therefore internally smaller than before.
+If the export operation is then resumed in software, the hardware produces a smaller output, yielding an inconsistent SCC: the SIV will be incorrect, and the metadata will not match the version already written to memory.
+
+_Unless the last `ace.open` instruction causes its PC to be written into a special CSR that can be used by privileged code to resume from there instead of from the PC..._
+
 // ////////
 
 [[ACE-algorithms-spec]]
