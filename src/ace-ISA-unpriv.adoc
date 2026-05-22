@@ -245,7 +245,7 @@ The detailed description of these fields is given in <<ACE-Metadata>>.
 | _Algorithm_       | Cryptographic algorithm (primitive, mode, or protocol).
 | _AlgorithmPolicy_ | Allowed algorithm variants(s) _or_ extension of the _Algorithm_ field.
 | _SCProtection_    | Side-channel protection level.
-| _KeyType_         | 0: key is an explicit value in Content. 1: key is an index into the system-specific System Keys Table (SKT).
+| _KeyType_         | 0: key is an explicit value in Content. 1: Key is a system-specific System Key Identifier.
 | _State_           | Current state of the CR/algorithm, encoded as an integer.
 This includes also value signifying: _Off_ (0), i.e., that the CR is not configured, and certain Error States (<<ACE-states-error>>).
 | _UsagePolicy_     | Usage (Control) Policy. Bits 0, 1, 2, 4 and 4 of the field,, when set, disallow CC usage in U-mode, (V)S-mode, H-mode, M-Mode, and Debug mode, respectively.
@@ -1629,15 +1629,17 @@ Thus, the caller may omit `ace.input` or `ace.output`, meaning that the contents
 This does not expand the attack surface, since the caller always retains full control over the data passed to ACE instructions and their outputs.
 Instead, the ACE architecture defines the following rules:
 
-. Whenever a Form D `ace.exec` is used where a Form of `ace.exec` requiring an input or providing an output is instead expected, i.e., the Algorithm specifies a Form A-C `ace.exec`, the implementation shall automatically use the ACEIOBUF if `Zlio` is available, and raise an invalid instruction exception otherwise.
+. A Form D `ace.exec` can be used whenever a Form of `ace.exec` with an input and/or an output is instead expected, i.e., any of the Forms A, B, or C `ace.exec`. The implementation shall automatically use the ACEIOBUF if `Zlio` is available, and raise an invalid instruction exception otherwise.
 
-.. If a Form B `ace.exec` is issued in place of a Form A `ace.exec`, i.e., an output vector register is expected but it is not provided, and the input vector register is given, then the output of the `ace.exec` instruction is simply discarded.
+. A Form A `ace.exec` cannot be replaced by a Form B `ace.exec`, where the input is provided by a vector register but an output vector register is not defined, expecting that the output be written to the ACEIOBUF.
+Any attempt to do so raises an invalid instruction exception
 
-.. If a Form C `ace.exec` is issued in place of a Form A `ace.exec`, i.e., an input vector register is expected but it is not provided, and the output vector is defined, then an invalid instruction exception is raised.
+. A Form A `ace.exec` cannot be replaced by a Form C `ace.exec`, where the output is provided by a vector register but an input vector register is not defined, expecting that the input be read from the ACEIOBUF.
+Any attempt to do so raises an invalid instruction exception
 
 . Similarly, for `ace.setst`, if a vector input is expected (Form C `ace.setst`) and it is not provided, the implementation shall automatically use the ACEIOBUF if `Zlio` is available, and raise an invalid instruction exception otherwise. This instruction replacement is not allowed in the case of a Form B `ace.setst`, i.e., when the auxiliary input should come from a GPR, and an invalid instruction exception is raised regardless of whether `Zlio` is available.
 
-.  Form D `ace.exec` in place of its Forms A-C, and Form A `ace.setst` in place of its Form C may be issued only if the ACEIOBUF is enabled and `aceiobuflen` is non-zero. Else, exception `ace_exc_buf_unconf` is raised. If `aceiobuflen` is non-zero but the range size `aceiobuftop-acestart` is invalid for the algorithm, exception `ace_exc_invalid` is raised and no cryptographic operation is performed.
+. Form D `ace.exec` in place of its Forms A-C, and Form A `ace.setst` in place of its Form C may be issued only if the ACEIOBUF is enabled and `aceiobuflen` is non-zero. Else, exception `ace_exc_buf_unconf` is raised. If `aceiobuflen` is non-zero but the range size `aceiobuftop-acestart` is invalid for the algorithm, exception `ace_exc_invalid` is raised and no cryptographic operation is performed.
 
 NOTE: It is because of these rules that, in the Algorithms, we write that a certain Form of `ace.exec` or `ace.setst` is _expected_ instead of _required_ (or _only [...] allowed_). The above substitutions are implicit in all algorithms and are not restated for each occurrence.
 
