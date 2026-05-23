@@ -426,7 +426,6 @@ Since privileged code may replace expired CRs, any user code that uses CRs that 
 [[ACE-provisioning-export-import]]
 === Provisioning, Export and Import of Cryptographic Contexts
 
-
 [[ACE-data-formats]]
 ==== Formats of Provisioning Input and Sealed Cryptographic Context
 
@@ -465,29 +464,29 @@ The format of a Sealed Cryptographic Context (SCC) is shown in <<ACE-SCC>>.
 [width="100%",cols="8%,25%,42%,25%",options="header"]
 |===
 | Section | Section Name                   | Size     | Description
-| 1     | Metadata Header              | 128 bits | The metadata information as described in <<ACE-Metadata>>.
-| 2     | SIV                          | 128 bits | The SIV used to encrypt and authenticate sections 3.
+| 1     | `Metadata`, Metadata Header      | 128 bits | The metadata information as described in <<ACE-Metadata>>.
+| 2     | `SIV`                            | 128 bits | The SIV used to encrypt and authenticate sections 3.
 //
 | 3.a
-| Content: _Fixed Data Section_
+| `Content`: _Fixed Data Section_
 | If the CR is not in an Error State, the length depends only the
 on the _Algorithm_, _AlgorithmPolicy_, and _KeyType_ fields of the Metadata Header.
  Always a multiple of 128 bits.
-| Contains keys and other algorithm-specific information. Encrypted in memory and during import.
+| Contains keys and other algorithm-specific information. Encrypted in memory and during partial import.
 //
 | 3.b
-| Content: _Architected Variable-Length Data Section_ (Architected VDS)
+| `Content`: _Architected Variable-Length Data Section_ (Architected VDS)
 | If the CR is not in an Error State, the length depends only on the information contained in the Metadata and Fixed Data Sections.
   Always a multiple of 128 bits.
 | The data in this Section is necessary for the correct functioning of the algorithm.
-| 4      | Implementation Identifier    | 128 bits if present | Used to identify the implementation of the ACE Unit
-| 5.     | SIV2                         | 128 bits if present | The SIV used to encrypt and authenticate section 6.
+| 4      | `IMPLID`, Implementation Identifier    | 128 bits if present | Used to identify the implementation of the ACE Unit
+| 5.     | `SIV2`                         | 128 bits if present | The SIV used to encrypt and authenticate section 6.
 | 6
-| Content: _Implementation (Specific) Variable-Length Data Section_ (Implementation VDS)
+| `Content2`: _Implementation (Specific) Variable-Length Data Section_ (Implementation VDS)
 | Implementation-Specific.
   Always a multiple of 128 bits.
 | The data in this Section is _not_ necessary for the correct functioning of the algorithm.
-  Encrypted in memory and during import.
+  Encrypted in memory and during partial import.
 |===
 
 Fields 2-6 are empty if the context is exported in an Error State, in other words, the entire SCC consists only of a Metadata Header in plaintext.
@@ -495,6 +494,39 @@ Fields 2-6 are empty if the context is exported in an Error State, in other word
 The Metadata _VarDataLen_ field specifies the total size of the _Variable-Length Section_.
 It does not partition this total between the Architected and Implementation-Specific segments.
 The ordering of sections within the SCC allows to determine the lengths of these two parts before reading them.
+
+// ////////////////////////////////////////////////////////////////////
+
+[[ACE-rules-threshold-implementations]]
+==== Single-Share Key Export Rule for Threshold implementations
+
+. Any CC with its algorithm implemented as a threshold implementation will always
+provision, import and export _all_ its keys and secrets as _single_,
+_reconstructed_ _shares_.
+
+. The PI and SCC Formats will be the same as for the non-threshold implementation
+variants of the same algorithm, with the only difference being the value of the
+_SCProtection_ in the Metadata.
+
+. {empty}
++
+--
+For the purpose of architecture specification, all values are also always
+represented as a single share in this document. Threshold implementations are
+simply implementation variants of the same algorithm.
+(((ACE, algorithm, threshold variants)))
+
+NOTE: This rule assumes that reconstructing or re-randomizing a key is a fast
+operation, such as an ``xor`` with random values. This requires the ACE
+execution unit to have access to a random number generator. Besides ensuring
+the compactness of an SCC, this rule also guarantees key portability across
+architectures that implement side-channel protection in different ways. If
+reconstructing the values is efficient but generating the shares is a slow
+process, the implementation may take advantage of the optional Additional Data
+in the Content to store information that can accelerate share generation, such
+as a copy of some (or all) shares.
+--
++
 
 // //////////////////////////////////////////////////////////////////
 
@@ -505,6 +537,15 @@ Conceptually, for each of the 32 CRs, ACE maintains an offset into internal an m
 The actual representation of CRs in a concrete implementation may differ significantly.
 
 While an implementation is free to choose the representation of a cryptographic context inside a CR, we observe that it must host at least as many bits of information as specified by the CR's Algorithm. Therefore, a CR can be viewed as an array of bits at least as large as the size of the SCC (see <<ACE-SCC>>) excluding the SIV, the Implementation Identifier, and SIV2.
+
+This has a few major implication:
+
+* The information stored in a CR can be identified with the format of an SCC, again, without the SIV, the Implementation Identifier, and SIV2.
+This identification holds even if the SCC does not contain some information that can be easily reconstructed upon successful import, for instance
+`hash_key` in GCM (see <<ACE-GCM-mode>>) and
+`enc_key` and `auth_key` in GCM-SIV (see <<ACE-GCM-SIV-mode>>).
+
+* We can describe an import operation as a sequence of load operations to copy the encrypted and authenticated SCC into the CR, followed by an in-situ decryption and authentication operation to extract the plaintext, and finally an step to reconstruct missing information or expand keys in multiple shares.
 
 The notation ``K``_i_ is used to refer to the _i_-th CR.
 The Metadata section is written as ``K``__i__.``Metadata``.
@@ -522,33 +563,6 @@ When an SCC is imported, with the respect to the equivalent storage capacity of 
 Therefore, the ACE architecture only supports a single import operation at a time per hart.
 If a CR is “open” for importing, no other CR can be opened until the import operation of first one is finalized.
 This reduces the impact of the storage for SIV and SIV2 to just 128 or 256 bits per hart.
-
-// Architecturally, this is the serialization of the content of a CR for export as an SCC.
-// The “Serialized Context” section in the specification of each Algorithm (<<ACE-algorithms>>), defines the Content of
-// a CC's content as an array: This array is the concatenation of all fields after the metadata header in a SCC specification.
-
-// [[ACE-operations]]
-// ==== Operations
-//
-// // In this section we implicitly refer throughout to <<ACE-data-formats-intro>>, and in particular to <<ACE-PI>> and <<ACE-SCC>>.
-//
-// The entire Metadata and Content are authenticated, but only the Content is encrypted.
-// The AEAD method used for this purpose is described in <<ACE-SCC-AEAD>>.
-//
-//
-// [NOTE]
-// --
-// The structure of `ser_con[]` does not imply that the internal representation of a CR shall follow the same structure.
-//
-// In some cases, this would not even be possible.
-// For instance, in a threshold implementation, a single key byte in `ser_con[]` may correspond to multiple bytes distributed across all key shares within the CR. Reading that byte returns the XOR of the corresponding bytes from the shares.
-// Writing to that byte may trigger multiple writes of single bytes, one per share, such that their XOR equals the input.
-// --
-
-// `ser_con[]` is a virtual representation: its byte ordering does not imply
-// physical contiguity within the CR, nor is there a direct byte-for-byte
-// correspondence. Changes to `ser_con[]` are reflected in the underlying CR
-// representation (except for excluded fields), and vice versa.
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -580,6 +594,40 @@ and the total size in bits of an SCC is
 
 // ////////////////////////////////////////////////////////////////////
 
+[[ACE-provisioning]]
+==== Provisioning
+
+We start with the algorithm performed by `ace.prov`, which loads a PI and uses it to configure a CR.
+
+Provisioning ``K``__i__ performs the following steps:
+
+[sidebar]
+.Provisioning
+--
+. Clear ``K``__i__.
+. Read the metadata block `M` from memory, check it for consistency and integrity.
+. Allocate internal resources for ``K``__i__. This may fail and raise an exception.
+. Save the original value of M`._Provisioning_.
+. Set `M`._Provisioning_, store `M` in ``K``__i__.``Metadata``.
+. Read the rest of the PI content from memory, store it in ``K``__i__.``Content[]`` viewed as a buffer.
+. Perform any necessary readjustment of the CR's content to turn it into the format internally consumed by the ACE Unit, if necessary.
+. Restore the saved value of the _Provisioning_ bit of ``K``__i__.``Metadata``.
+It is used to present information related to the main content.
+--
+
+A partially configured CR can be exported.
+In this case:
+
+* The _Provisioning_ bit in the exported Metadata is set.
+* No encryption or authentication occurs, the information is exported verbatim.
+* The length of the exported Content is the same as the length of the PI.
+* The information imported so far is exported verbatim, while the information not yet imported is replaced by zeros.
+* We call the exported context an _Exported Partial Context_ (EPC).
+
+Importing such an EPC into a CR follows the same algorithm as for provisioning above.
+
+// ////////////////////////////////////////////////////////////////////
+
 [[ACE-interruption-points]]
 ==== Resumability of Configuration and Export Operations
 
@@ -594,8 +642,6 @@ These flags are cleared to upon completion of `ace.prov` and `ace.import`.
 It is updated to the correct value only upon successful completion (see <<ACE-provisioning-export-import>>).
 This transition does not occur during `ace.export`.
 
-A provisioning or import instruction may resume from the point of interruption.
-
 A partially configured CR can be exported.
 
 At context save, however, privileged code has also the option to not export the partially configured CR and to force a restart of the interrupted configuration operation once at context restore. The latter is achieved by clearing the CR.
@@ -605,23 +651,6 @@ Upon returning to the original control flow from an interrupt or exception, an e
 
 The above rules imply that an interrupted import operation may be resumed on a different hart, even with a different implementation of the ACE Unit.
 In the latter case, the system must be able to handle the cases where the SCC is too large to fit in a CR because of the optional Implementation VDS or the latter is incompatible.
-
-// ////////////////////////////////////////////////////////////////////
-
-[[ACE-provisioning]]
-==== Provisioning
-
-We start with the algorithm performed by `ace.prov`, which loads a PI and uses it to configure a CR.
-
-Provisioning ``K``__i__ performs the following steps:
-
-. Clear ``K``__i__.
-. Read the metadata block `M` from memory, check it for consistency and integrity.
-. Allocate internal resources for ``K``__i__. This may fail and raise an exception.
-. Set `M`._Provisioning_, store `M` in ``K``__i__.``Metadata``.
-. Read the rest of the PI content from memory, store it in ``K``__i__.``Content[]`` viewed as a buffer.
-. Perform any necessary readjustment of the CR's content to turn it into the format internally consumed by the ACE Unit, if necessary.
-. Clear the _Provisioning_ bit of ``K``__i__.``Metadata``.
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -1288,39 +1317,6 @@ The examples are non-normative.
 * `ACELEN`: Either `VL*SEW` or the length `aceiobuftop` of the ACEIOBUF in
   bits, depending on whether vector registers are used or the ACEIOBUF is
   used.
-
-// ////////////////////////////////////////////////////////////////////
-
-[[ACE-rules-threshold-implementations]]
-===== Single-Share Key Export Rule for Threshold implementations
-
-. Any CC with its algorithm implemented as a threshold implementation will always
-provision, import and export _all_ its keys and secrets as _single_,
-_reconstructed_ _shares_.
-
-. The PI and SCC Formats will be the same as for the non-threshold implementation
-variants of the same algorithm, with the only difference being the value of the
-_SCProtection_ in the Metadata.
-
-. {empty}
-+
---
-For the purpose of architecture specification, all values are also always
-represented as a single share in this document. Threshold implementations are
-simply implementation variants of the same algorithm.
-(((ACE, algorithm, threshold variants)))
-
-NOTE: This rule assumes that reconstructing or re-randomizing a key is a fast
-operation, such as an ``xor`` with random values. This requires the ACE
-execution unit to have access to a random number generator. Besides ensuring
-the compactness of an SCC, this rule also guarantees key portability across
-architectures that implement side-channel protection in different ways. If
-reconstructing the values is efficient but generating the shares is a slow
-process, the implementation may take advantage of the optional Additional Data
-in the Content to store information that can accelerate share generation, such
-as a copy of some (or all) shares.
---
-+
 
 // ////////////////////////////////////////////////////////////////////
 
