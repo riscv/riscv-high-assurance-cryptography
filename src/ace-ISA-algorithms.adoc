@@ -423,8 +423,12 @@ Since privileged code may replace expired CRs, any user code that uses CRs that 
 
 // ////////////////////////////////////////////////////////////////////
 
+[[ACE-provisioning-export-import]]
+=== Provisioning, Export and Import of Cryptographic Contexts
+
+
 [[ACE-data-formats]]
-===== Provisioning Input, Sealed Cryptographic Context, and Content
+==== Formats of Provisioning Input and Sealed Cryptographic Context
 
 Only the first 64 bits of the Metadata Header are needed to determine the length of a PI or SCC.
 
@@ -432,11 +436,11 @@ The format of a Provisioning Input (PI) is shown in <<ACE-PI>>.
 
 [[ACE-PI]]
 .Format of the Provisioning Input (PI), All Sections in Order
-[width="100%",cols="8%,26%,40%,26%",options="header"]
+[width="100%",cols="8%,25%,42%,25%",options="header"]
 |===
 | Section | Section Name                | Size | Description
-| 1       | Metadata Header             | 128 bits | Contains the metadata information as described in <<ACE-Metadata>>.
-| 2       | Provisioning Content        | Depends only on the _Algorithm_, _AlgorithmPolicy_, and _KeyType_ fields of the Metadata Header. Always a multiple of 128 bits. | Contains keys and other algorithm-specific information.
+| 1     | Metadata Header           | 128 bits | Contains the metadata information as described in <<ACE-Metadata>>.
+| 2     | Provisioning Content      | Depends only on the _Algorithm_, _AlgorithmPolicy_, and _KeyType_ fields of the Metadata Header. Always a multiple of 128 bits. | Contains keys and other algorithm-specific information.
 |===
 
 The length of a PI must be a multiple of 128 bits.
@@ -458,28 +462,27 @@ The format of a Sealed Cryptographic Context (SCC) is shown in <<ACE-SCC>>.
 
 [[ACE-SCC]]
 .Plaintext of the Sealed Cryptographic Context (SCC) Format, All Sections in Order
-[width="100%",cols="6%,26%,42%,26%",options="header"]
+[width="100%",cols="8%,25%,42%,25%",options="header"]
 |===
-| Field | Field Name                   | Size     | Description
+| Section | Section Name                   | Size     | Description
 | 1     | Metadata Header              | 128 bits | The metadata information as described in <<ACE-Metadata>>.
-| 2     | SIV                          | 128 bits | The SIV used to encrypt and authenticate sections 3 and 4.
+| 2     | SIV                          | 128 bits | The SIV used to encrypt and authenticate sections 3.
 //
-| 3
+| 3.a
 | Content: _Fixed Data Section_
 | If the CR is not in an Error State, the length depends only the
 on the _Algorithm_, _AlgorithmPolicy_, and _KeyType_ fields of the Metadata Header.
  Always a multiple of 128 bits.
 | Contains keys and other algorithm-specific information. Encrypted in memory and during import.
 //
-| 4
+| 3.b
 | Content: _Architected Variable-Length Data Section_ (Architected VDS)
 | If the CR is not in an Error State, the length depends only on the information contained in the Metadata and Fixed Data Sections.
   Always a multiple of 128 bits.
 | The data in this Section is necessary for the correct functioning of the algorithm.
-//
-| 5      | Implementation Identifier    | 128 bits if present | Used to identify the implementation of the ACE Unit
-| 6.     | SIV2                         | 128 bits if present | The SIV used to encrypt and authenticate section 7.
-| 7
+| 4      | Implementation Identifier    | 128 bits if present | Used to identify the implementation of the ACE Unit
+| 5.     | SIV2                         | 128 bits if present | The SIV used to encrypt and authenticate section 6.
+| 6
 | Content: _Implementation (Specific) Variable-Length Data Section_ (Implementation VDS)
 | Implementation-Specific.
   Always a multiple of 128 bits.
@@ -487,56 +490,65 @@ on the _Algorithm_, _AlgorithmPolicy_, and _KeyType_ fields of the Metadata Head
   Encrypted in memory and during import.
 |===
 
-Fields 2-7 are empty if the context is exported in an Error State, in other words, the entire SCC consists only of a Metadata Header in plaintext.
+Fields 2-6 are empty if the context is exported in an Error State, in other words, the entire SCC consists only of a Metadata Header in plaintext.
 
 The Metadata _VarDataLen_ field specifies the total size of the _Variable-Length Section_.
 It does not partition this total between the Architected and Implementation-Specific segments.
 The ordering of sections within the SCC allows to determine the lengths of these two parts before reading them.
 
-// ////////////////////////////////////////////////////////////////////
+// //////////////////////////////////////////////////////////////////
 
-[[ACE-provisioning-export-import]]
-=== Provisioning, Export and Import of Cryptographic Contexts
+[[ACE-CR-representation]]
+==== Notation and Representation of CR Internals
 
-// In this section we implicitly refer throughout to <<ACE-data-formats-intro>>, and in particular to <<ACE-PI>> and <<ACE-SCC>>.
+Conceptually, for each of the 32 CRs, ACE maintains an offset into internal an memory pointing to the CR's 128-bit Metadata Header and Content (if not empty). The offset takes a special value if the CR is not configured.
+The actual representation of CRs in a concrete implementation may differ significantly.
 
-The entire Metadata and Content are authenticated, but only the Content is encrypted.
-The AEAD method used for this purpose is described in <<ACE-SCC-AEAD>>.
+While an implementation is free to choose the representation of a cryptographic context inside a CR, we observe that it must host at least as many bits of information as specified by the CR's Algorithm. Therefore, a CR can be viewed as an array of bits at least as large as the size of the SCC (see <<ACE-SCC>>) excluding the SIV, the Implementation Identifier, and SIV2.
 
-The “Serialized Content” section in the specification of each Algorithm (<<ACE-algorithms>>), defines the structure of the `ser_con[]` array.
-Architecturally, `ser_con[]` is the serialization of the content of a CR for export as an SCC.
-This array is the concatenation of all fields after the metadata header in a SCC specification.
+The notation ``K``_i_ is used to refer to the _i_-th CR.
+The Metadata section is written as ``K``__i__.``Metadata``.
+With respect to <<ACE-SCC>>, after the metadata we have the SIV, which we denote as
+``K``__i__.``SIV``, and then Section 3, consisting of Sections 3.a and 3.b, namely ``K``__i__.``Content[]``.
+After this we have the 128-bit blocks corresponding to, Sections 4 and 5, i.e.,
+``K``__i__.``IMPLID`` and ``K``__i__.``SIV2``,
+and finally
+``K``__i__.``Content2[]`` (i.e., Section 6), the latter being an array of 128-bit words like ``K``__i__.``Content[]``.
 
-[NOTE]
---
-The structure of `ser_con[]` does not imply that the internal representation of a CR shall follow the same structure.
+Whenever we access the contents of a CR in the descriptions of provisioning, export and import operations, we refer to them using this notation and the ordering of the sections in <<ACE-SCC>>.
 
-In some cases, this would not even be possible.
-For instance, in a threshold implementation, a single key byte in `ser_con[]` may correspond to multiple bytes distributed across all key shares within the CR. Reading that byte returns the XOR of the corresponding bytes from the shares.
-Writing to that byte may trigger multiple writes of single bytes, one per share, such that their XOR equals the input.
---
+When an SCC is imported, with the respect to the equivalent storage capacity of a CR, additional space for `SIV` (and for `SIV2`) may be needed.
+128 additional bits of storage for each of the 32 CRs (or 256 if at least one Algorithm supports implementation-specific additional data) could be quite expensive.
+Therefore, the ACE architecture only supports a single import operation at a time per hart.
+If a CR is “open” for importing, no other CR can be opened until the import operation of first one is finalized.
+This reduces the impact of the storage for SIV and SIV2 to just 128 or 256 bits per hart.
+
+// Architecturally, this is the serialization of the content of a CR for export as an SCC.
+// The “Serialized Context” section in the specification of each Algorithm (<<ACE-algorithms>>), defines the Content of
+// a CC's content as an array: This array is the concatenation of all fields after the metadata header in a SCC specification.
+
+// [[ACE-operations]]
+// ==== Operations
+//
+// // In this section we implicitly refer throughout to <<ACE-data-formats-intro>>, and in particular to <<ACE-PI>> and <<ACE-SCC>>.
+//
+// The entire Metadata and Content are authenticated, but only the Content is encrypted.
+// The AEAD method used for this purpose is described in <<ACE-SCC-AEAD>>.
+//
+//
+// [NOTE]
+// --
+// The structure of `ser_con[]` does not imply that the internal representation of a CR shall follow the same structure.
+//
+// In some cases, this would not even be possible.
+// For instance, in a threshold implementation, a single key byte in `ser_con[]` may correspond to multiple bytes distributed across all key shares within the CR. Reading that byte returns the XOR of the corresponding bytes from the shares.
+// Writing to that byte may trigger multiple writes of single bytes, one per share, such that their XOR equals the input.
+// --
 
 // `ser_con[]` is a virtual representation: its byte ordering does not imply
 // physical contiguity within the CR, nor is there a direct byte-for-byte
 // correspondence. Changes to `ser_con[]` are reflected in the underlying CR
 // representation (except for excluded fields), and vice versa.
-
-// ////////////////////////////////////////////////////////////////////
-
-[[ACE-system-keys]]
-==== System Keys and Randomly Generated Key Values
-
-In a PI or SCC, System Keys are encoded as a 64-bit value used to retrieve the key from a system-specific structure, which we do not specify. The 64-bit value is called the System Key Identifier (SKID) and the structure is called the System Keys Store (SKS).
-This replaces the key value itself, which may reduce the size of the PI or SCC content.
-
-For threshold implementations of system keys, ACE may copy key material from the SKS into the CR and expand it into multiple shares.
-The key is still exported as a SKID.
-
-For the purpose of accelerating key share reconstruction in a threshold implementation, some shares of a system key can be included in the content's Additional Data, as long as the key cannot be recovered from those shares alone.
-
-An all-ones (i.e., `ones(64)`) system key identifier in a PI means that the key material is generated randomly upon provisioning.
-The _KeyType_ field in the metadata is then internally set to 0, and the key is then exported by value.
-This applies to all keys at once in an algorithms, unless otherwise specified.
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -569,7 +581,7 @@ and the total size in bits of an SCC is
 // ////////////////////////////////////////////////////////////////////
 
 [[ACE-interruption-points]]
-==== Interruptibility of Configuration and Export Operations
+==== Resumability of Configuration and Export Operations
 
 [WARNING]
 ====
@@ -582,66 +594,39 @@ These flags are cleared to upon completion of `ace.prov` and `ace.import`.
 It is updated to the correct value only upon successful completion (see <<ACE-provisioning-export-import>>).
 This transition does not occur during `ace.export`.
 
-A provisioning or import instruction may resume from the point of interruption only if control returns directly after the interrupt handler completes.
-The implementation resumes such an instruction only if the CR has _State_ set to _Partially_Configured_ and a nonzero `acestart` value.
-The privileged interrupt handler may allow resumption only in this case.
+A provisioning or import instruction may resume from the point of interruption.
 
-A partially configured CR cannot be exported.
-At context save, therefore, privileged code must clear a partially configured CR.
-Before returning control flow to the process of the interrupted configuration operation, the CR must be cleared as well, forcing the instruction to restart.
+A partially configured CR can be exported.
+
+At context save, however, privileged code has also the option to not export the partially configured CR and to force a restart of the interrupted configuration operation once at context restore. The latter is achieved by clearing the CR.
 
 Upon returning to the original control flow from an interrupt or exception, an export may resume only if the CR has not been modified.
-// This is achieved by the privileged code as follows: the `*crstatus` of the CR is saved and set to _Clear_.
-// If, upon returning to the original control flow, the `*crstatus` is not _Clear_, the CR has been modified and therefore the code sets `acestart` to zero to force the export to restart. Otherwise, the code restores the saved `*crstatus` field and continues.
 <<ACE-SCC-export>> describes the mechanism used to enforce this rule.
 
-The above rules imply that interrupted configuration and export operations may resume only on the same hart.
-This guarantees that resumption occurs on the same implementation, which is therefore free to define the interruption points and the corresponding non-zero values of `acestart`.
+The above rules imply that an interrupted import operation may be resumed on a different hart, even with a different implementation of the ACE Unit.
+In the latter case, the system must be able to handle the cases where the SCC is too large to fit in a CR because of the optional Implementation VDS or the latter is incompatible.
 
 // ////////////////////////////////////////////////////////////////////
 
 [[ACE-provisioning]]
 ==== Provisioning
 
-[WARNING]
-====
-Provisioning, import and export are being rewritten!
-====
+We start with the algorithm performed by `ace.prov`, which loads a PI and uses it to configure a CR.
 
-We start with the algorithm performed by `ace.prov`, which loads a PI and uses
-it to provision a CR.
+Provisioning ``K``__i__ performs the following steps:
 
-[[ACE-provisioning-listing]]
-.Provisioning a CR with Metadata and content
-[]
-----
-function ace.prov(CR_number, M[]) =
-{
-  MH : bits(128) & ← CR[CR_number].Metadata;  // By reference, from the CR
-  MH ← M[0 .. 15]
-  MH.State ← ace_state_partial_config;
-
-  if (not enough memory for the algorithm encoded in the Metadata)
-    raise exception ace_exc_out_of_mem;
-
-  // Complete Metadata parsing
-  if (Metadata is inconsistent)
-    raise exception ace_exc_invalid;
-
-  z ← PI_content_size(Metadata[31:0]);
-
-  * Read and deserialize the z bytes at M+16 into the CR.
-  * This includes computing any derived values not saved as part of the SCC,
-  * as well as creating shares for threshold implementations.
-
-  MH.State ← ace_state_initial;
-}
-----
+. Clear ``K``__i__.
+. Read the metadata block `M` from memory, check it for consistency and integrity.
+. Allocate internal resources for ``K``__i__. This may fail and raise an exception.
+. Set `M`._Provisioning_, store `M` in ``K``__i__.``Metadata``.
+. Read the rest of the PI content from memory, store it in ``K``__i__.``Content[]`` viewed as a buffer.
+. Perform any necessary readjustment of the CR's content to turn it into the format internally consumed by the ACE Unit, if necessary.
+. Clear the _Provisioning_ bit of ``K``__i__.``Metadata``.
 
 // ////////////////////////////////////////////////////////////////////
 
 [[ACE-SCC-AEAD]]
-==== Key Derivation and POLYVAL
+==== AES-GCM-SIV Key Derivation and POLYVAL
 
 AES-GCM-SIV cite:[DBLP-journals-iacr-GueronLL17,RFC8452] is used to export and
 import CRs.
@@ -654,7 +639,7 @@ the exported data by one block.
 We define the Key Derivation (<<ACE-SCC-RFC8452-derivation>>) and POLYVAL
 (<<ACE-SCC-POLYVAL>>) functions first. The generation of an SCC from a CR
 (<<ACE-SCC-export>>) and the import of an SCC into a CR (<<ACE-SCC-import>>)
-are defined next.
+are defined next. Then, we define AES-GCM-SIV encryption and decryption.
 
 [[ACE-SCC-RFC8452-derivation]]
 .RFC8452 Key Derivation
@@ -682,7 +667,7 @@ In the `POLYVAL` pseudocode below, the digested data is an array containing an i
 .Polyval Hashing Function
 []
 ----
-function POLYVAL(auth_key : bits(128), blocks[0..n-1] : bits(128))
+function POLYVAL(auth_key : bits(128), blocks[0..n-1] : bits(128), n : int)
     -> bits(128) =
 {
   local tmp : bits(128) ← zeros(128);
@@ -695,6 +680,72 @@ function POLYVAL(auth_key : bits(128), blocks[0..n-1] : bits(128))
 }
 ----
 
+[[ACE-SCC-GCM-SIV-enc]]
+.AES-GCM-SIV Encryption for SCC Generation
+[]
+----
+// Inputs:   AD[]          = Associated Data
+//           N[]           = Nonce
+//           P[]           = Plaintext
+//           K             = Key
+//           num_blocks_AD = length of Associated Data in blocks
+//           num_blocks_PC = length of Plaintext/Ciphertext in blocks
+// Outputs:  SIV           = SIV/tag
+//           C[]           = Ciphertext
+
+function AES_GCM_SIV_Encrypt(AD[] : array of bits(128), N[] : bits(96),
+    P[] : array of bits(128), K : bits(256), num_blocks_AD : int, num_blocks_P : int)
+  -> {SIV : bits(128), C[] : array of bits(128)} =
+{
+  enc_key, auth_key ← RFC8452_KeyDeriv(K);
+  SIV ← POLYVAL(auth_key, AD @ P, num_blocks_AD + num_blocks_PC);
+  SIV[95:0] <- SIV[95:0] xor N[95:0];
+  SIV ← AESE(enc_key, 0 @ SIV[126:0]);
+
+  foreach(i from 0 to num_blocks_PC - 1)
+    C[i] ← P[i] xor AESE(enc_key, 1 @ SIV[126:32] @ (SIV[31:0]+bin(i,32) % 2**32));
+
+  return { SIV, C[] };
+}
+----
+
+[[ACE-SCC-GCM-SIV-dec]]
+.AES-GCM-SIV Decryption for SCC Import
+[]
+----
+// Inputs:   AD[]          = Associated Data
+//           N[]           = Nonce
+//           SIV           = SIV tag
+//           C[]           = Ciphertext
+//           K             = Key
+//           num_blocks_AD = length of Associated Data in blocks
+//           num_blocks_PC = length of Plaintext/Ciphertext in blocks
+// Outputs:  correct       = true if authentication succeeds
+//           P[]           = Plaintext
+
+function AES_GCM_SIV_Decrypt(AD[] : array of bits(128), N[] : bits(96), SIV : bits(128),
+    C[] : array of bits(128), K : bits(256), num_blocks_AD : int, num_blocks_PC : int)
+  -> {correct : bool, P[] : array of bits(128)} =
+{
+  enc_key, auth_key ← RFC8452_KeyDeriv(K);
+
+  foreach(i from 0 to num_blocks_PC - 1)
+    P[i] ← C[i] xor AESE(enc_key, 1 @ SIV[126:32] @ (SIV[31:0]+bin(i,32) % 2**32);
+
+  SIV ← POLYVAL(auth_key, AD @ P, num_blocks_AD + num_blocks_PC);
+  tmp[95:0] <- tmp[95:0] xor N[95:0];
+  tmp ← AESE(enc_key, 0 @ SIV[126:0]);
+
+  if (tmp != SIV) {
+    foreach(i from 0 to num_blocks_PC - 1)
+      P[i] ← zeros(128);
+    return { false, P[i] };
+  }
+
+  return { true, P[] };
+}
+----
+
 [[ACE-SCC-export]]
 ==== Export
 
@@ -703,8 +754,25 @@ function POLYVAL(auth_key : bits(128), blocks[0..n-1] : bits(128))
 Provisioning, import and export are being rewritten!
 ====
 
-During SCC export and import, the Locality Secrets associated with the Localities encoded in the Metadata's _Locality_ field are prepended to the input of the AEAD tag computation, in ascending index order, before the metadata.
-If the _Locality_ field is zero, no Locality Secrets are prepended.
+
+Exporting ``K``__i__ performs the following steps:
+
+. If any other CR is in the process of being configured, raise an illegal instruction exception.
+. If ``K``__i__ is _not_ being configured:..
+.. ``AD`` <- ``K``__i__.``Metadata``
+.. `foreach(j from 0 to number of localities - 1, except "Nonce" Locality)`
+...  Append `LST[j]` to `AD`
+.. If _Nonce_ is required, `N` <- `LST[11]`, else `N` <- zeros(96)`
+..`AES_GCM_SIV_Encrypt(AD, N,
+    P[] : array of bits(128), K : bits(256), num_blocks_AD : int, num_blocks_P : int)
+  -> {SIV : bits(128), C[] : array of bits(128)} =
+..
+. If ``K``__i__ is being configured:
+
+
+
+During SCC export and import, the Locality Secrets associated with the Localities encoded in the Metadata's _Locality_ field are appended to the input of the AEAD tag computation, in ascending index order, before the metadata.
+If the _Locality_ field is zero, no Locality Secrets are appended.
 
 The ACE architecture supports at most one export or import resumable operation per hart at a time.
 
@@ -871,7 +939,7 @@ function ace.import(CR_number, M[]) =
   tmp ← tmp xor MH;
   tmp ← Montmul(tmp, auth_key);
 
-  * Create array of bytes ser_con[] to absorb the serialized content
+  * Create array of bytes ser_con[] to absorb the Serialized Context
   * It may internally overlap with the CR itself. Deserialization
   * can be performed in-place.
 
@@ -906,6 +974,24 @@ function ace.import(CR_number, M[]) =
   ace_importing ← false;
 }
 ----
+
+// ////////////////////////////////////////////////////////////////////
+
+[[ACE-system-keys]]
+==== System Keys and Randomly Generated Key Values
+
+In a PI or SCC, System Keys are encoded as a 64-bit value used to retrieve the key from a system-specific structure, which we do not specify. The 64-bit value is called the System Key Identifier (SKID) and the structure is called the System Keys Store (SKS).
+This replaces the key value itself, which may reduce the size of the PI or SCC content.
+
+For threshold implementations of system keys, ACE may copy key material from the SKS into the CR and expand it into multiple shares.
+The key is still exported as a SKID.
+
+For the purpose of accelerating key share reconstruction in a threshold implementation, some shares of a system key can be included in the content's Additional Data, as long as the key cannot be recovered from those shares alone.
+
+An all-ones (i.e., `ones(64)`) system key identifier in a PI means that the key material is generated randomly upon provisioning.
+The _KeyType_ field in the metadata is then internally set to 0, and the key is then exported by value.
+This applies to all keys at once in an algorithms, unless otherwise specified.
+
 
 ==== Why `ace.prov`, `ace.export`, and `ace.import` are CISC-like monolithic instructions
 
@@ -1133,8 +1219,8 @@ Field ordering is unspecified, and field lengths may differ from those listed—
 This information is necessary to be able to define the algorithms and their semantics, and must exist internally, though not necessarily in a prescribed format.
 An actual implementation may define the internal state and the behavior at each state in a different way, however the semantics of the algorithm must be equivalent to those defined in this specification.
 
-. *Serialized Content*:
-The data that follows the Metadata Header in the plaintext portion of an SCC.
+. *Serialized Context*:
+The SCC, as plaintext.
 The fields are listed in the order they appear in an SCC, each with its length.
 --
 +
@@ -1312,12 +1398,13 @@ Data Structures:::
  * *Internal State* (Content):
  ** `key`: `k` bits.
 
-* *Serialized Content*:
+* *Serialized Context*:
 +
 --
 [%autowidth,cols="^,<,<",options="header"]
 |===
 |  Pos. | Size (Bits)   | Field
+|   i   | 128            | Metadata Header
 |   i   | `k` or 64      | Key or System Key Identifier
 |===
 --
@@ -1410,15 +1497,16 @@ Data Structures:::
  ** `IV`: `n` bits.
  ** `ctr`: `j` bits.
 
-* *Serialized Content*:
+* *Serialized Context*:
 +
 --
 [%autowidth,cols="^,<,<",options="header"]
 |===
 |  Pos. | Size (Bits)   | Field
-|    i  | `k` or 64       | `key` or System Key Identifier
-|   ii  | `n`             | `IV`
-|  iii  | `j`             | `ctr`
+|    i  | 128            | Metadata Header
+|   ii  | `k` or 64       | `key` or System Key Identifier
+|  iii  | `n`             | `IV`
+|   iv  | `j`             | `ctr`
 |===
 --
 +
@@ -1520,15 +1608,16 @@ Data Structures:::
  ** `key2`: `k` bits -- omitted if only one key is used or if both keys come from an entry in the SKS.
  ** `mask`: `b` bits.
 
-* *Serialized Content*:
+* *Serialized Context*:
 +
 --
 [%autowidth,cols="^,<,<",options="header"]
 |===
 | Pos. | Size (Bits)   | Field
-|   i  | `k` or 64     | `key1` or System Key Identifier
-|  ii  | `k` or 0      | `key2` or empty if `key1` given
-| iii  | `b`           | `mask`
+|   i  | 128            | Metadata Header
+|  ii  | `k` or 64     | `key1` or System Key Identifier
+| iii  | `k` or 0      | `key2` or empty if `key1` given
+|  iv  | `b`           | `mask`
 |===
 --
 +
@@ -1622,14 +1711,15 @@ Data Structures:::
  ** `key`: `k` bits.
  ** `tweak`: `t` bits.
 
-* *Serialized Content*:
+* *Serialized Context*:
 +
 --
 [%autowidth,cols="^,<,<",options="header"]
 |===
 | Pos. | Size (Bits)   | Field
-|   i  | `k` or 64     | `key` or System Key Identifier
-|  ii  | `t`           | `tweak`
+|   i   | 128            | Metadata Header
+|  ii  | `k` or 64     | `key` or System Key Identifier
+| iii  | `t`           | `tweak`
 |===
 --
 +
@@ -1693,16 +1783,17 @@ Data Structures:::
  ** `IV`:  `b`-`c` bits.
  ** `auth_key`, `tag`: `b` bits.
 
-* *Serialized Content*:
+* *Serialized Context*:
 +
 --
 [%autowidth,cols="^,<,<",options="header"]
 |===
 |  Pos. | Size (Bits)   | Field
-|   i   | `k` or 64     | `key` or System Key Identifier
-|  ii   | ``c``         | `ctr`
-| iii   | ``b``-``c``   | `IV`
-|  iv   | `b`           | `tag`
+|   i   | 128            | Metadata Header
+|  ii   | `k` or 64     | `key` or System Key Identifier
+| iii   | ``c``         | `ctr`
+|  iv   | ``b``-``c``   | `IV`
+|   v   | `b`           | `tag`
 |===
 --
 +
@@ -1907,7 +1998,7 @@ Same as for GCM.
 --
 +
 
-* *Serialized Content*: {empty}
+* *Serialized Context*: {empty}
 +
 --
 Same as for GCM.
@@ -1990,17 +2081,18 @@ Data Structures:::
  ** `SIV`: `b` bits.
  ** `tmp`: `b` bits.
 
-* *Serialized Content*:
+* *Serialized Context*:
 +
 --
 [%autowidth,cols="^,<,<",options="header"]
 |===
-|  Pos. | Size (Bits)   | Field
-|    i  | `k` or 64       | `key` or System Key Identifier
-|   ii  | 3``b``/4        | `nonce`
-|  iii  | `b`/4           | `ctr`
+|  Pos. | Size (Bits)     | Field
+|    i  | 128             | Metadata Header
+|   ii  | `k` or 64       | `key` or System Key Identifier
+|  iii  | 3``b``/4        | `nonce`
+|   iv  | `b`/4           | `ctr`
 |    v  | `b`             | `SIV`
-|   iv  | `b`             | `tmp`
+|   vi  | `b`             | `tmp`
 |===
 --
 +
@@ -2209,22 +2301,23 @@ Data Structures:::
  ** `L`, `offset`, `hash_A`, `hash_P` : `b` bits.
  ** `N_len`, `tag_len`, `last_blk_len`: `g` bits.
 
-* *Serialized Content*:
+* *Serialized Context*:
 +
 --
 [%autowidth,cols="^,<,<",options="header"]
 |===
-|  Pos. | Size (Bits)          | Field
-|    i  | `k` or 64              | `key` or System Key Identifier
-|   ii  |  `b`                   | `N`
-|  iii  |  `b`                   | `L` (only `u+1` bits used)
-|   iv  |  `b`                   | `offset`
-|    v  |  `b`                   | `hash_A`
-|   vi  |  `b`                   | `hash_P`
-|  vii  |   16                   | `tag_len`
-| viii  |   16                   | `last_blk_len`
-|   ix  |   16                   | `N_len`
-|    x  |   16                   | Padding
+|  Pos. | Size (Bits)            | Field
+|    i  | 128                    | Metadata Header
+|   ii  | `k` or 64              | `key` or System Key Identifier
+|  iii  |  `b`                   | `N`
+|   iv  |  `b`                   | `L` (only `u+1` bits used)
+|    v  |  `b`                   | `offset`
+|   vi  |  `b`                   | `hash_A`
+|  vii  |  `b`                   | `hash_P`
+| viii  |   16                   | `tag_len`
+|   ix  |   16                   | `last_blk_len`
+|    x  |   16                   | `N_len`
+|   xi  |   16 or 80             | Padding
 |===
 --
 +
@@ -2496,12 +2589,13 @@ Data Structures:::
  ** `hash`: `b` bits.
  ** `last_block_len`: 64 bits.
 
-* *Serialized Content*:
+* *Serialized Context*:
 +
 --
 [%autowidth,cols="^,<,<",options="header"]
 |===
 |  Pos. | Size (Bits)   | Field
+|   i   | 128            | Metadata Header
 |    i  | `k` or 64     | `key` or System Key Identifier
 |   ii  | `b`           | `hash`
 |  iii  | 64            | `last_block_len`
@@ -2639,20 +2733,21 @@ Data Structures:::
     instance when the inputs are not directly absorbed into `state`.
 
 
-* *Serialized Content*:
+* *Serialized Context*:
 +
 --
 [cols="^6%,<21%,<18%,<55%",options="header"]
 |===
-|  Pos.| Size (Bits)            | Field                       | Notes
-.2+| i | If keyed: `k` or 64      | `key` or SKID               | --
-<|        If unkeyed: 0           | none                        | --
-|   ii | `n`                      | `state`                     | --
-|  iii | 16                       | `last_block_len`            | Present only if this Hash/MAC has special internal treatment for a fractional last block that goes beyond padding and appending the length, which are handled by user software.
-|   iv | 16                       | `block_base`                | Amount of data stored so far into `block`.  Only if used by the algorithm, else zero padding.
-|    v | 32                       | `cumul_len`                 | Cumulative length of all data absorbed so far. Only if the algorithm must process and incorporate it in the hash on its own, else zero padding.
-|   vi | 64{interpunct}{lceil}``block_base``/64{rceil} | `block` | Only if `block_base` is defined and != 0 and the block must be stored separately from the `state`.
-|  vii | 0 or 64                  | Padding                     | To reach a multiple of 128 bits.
+|  Pos. | Size (Bits)             | Field                        | Notes
+|   i   | 128                     | Metadata Header              | --
+.2+| ii | If keyed: `k` or 64     | `key` or SKID                | --
+<|        If unkeyed: 0           | none                         | --
+|   iii | `n`                     | `state`                      | --
+|    iv | 16                      | `last_block_len`             | Present only if this Hash/MAC has special internal treatment for a fractional last block that goes beyond padding and appending the length, which are handled by user software.
+|    v | 16                       | `block_base`                 | Amount of data stored so far into `block`.  Only if used by the algorithm, else zero padding.
+|   vi | 32                       | `cumul_len`                  | Cumulative length of all data absorbed so far. Only if the algorithm must process and incorporate it in the hash on its own, else zero padding.
+|  vii | 64{interpunct}{lceil}``block_base``/64{rceil} | `block` | Only if `block_base` is defined and != 0 and the block must be stored separately from the `state`.
+| viii | 0 or 64                  | Padding                      | To reach a multiple of 128 bits.
 |===
 --
 +
@@ -2813,12 +2908,13 @@ Data Structures:::
  ** `input_base`: int.
  ** `block_base`: int.
 
-* *Serialized Content*:
+* *Serialized Context*:
 +
 --
 [%autowidth,cols="^,<,<",options="header"]
 |===
 | Pos. | Size (Bits)   | Field
+|   i   | 128            | Metadata Header
 |   i  | 1600            | `state`
 |  ii  | 16              | `last_block_len`
 | iii  | 16              | `block_base`
@@ -2911,21 +3007,22 @@ Data Structures:::
  ** `last_block_len`: 9 bits as int.
  ** `AD_empty`: Boolean;
 
-* *Serialized Content*:
+* *Serialized Context*:
 +
 --
 [%autowidth,cols="^,<,<",options="header"]
 |===
-| Pos. | Size (Bits)   | Field
-|    i | 128 or 64         | `key` or System Key Identifier
-|   ii | 64              | `state`[0]
-|  iii | 64              | `state`[1]
-|   iv | 64              | `state`[2]
-|    v | 64              | `state`[3]
-|   vi | 64              | `state`[4]
-|  vii | 16              | `last_block_len`
-| viii | 16              | `tag_len`
-|   ix | 32 or 96        | Padding
+| Pos. | Size (Bits)     | Field
+|    i | 128             | Metadata Header
+|   ii | 128 or 64       | `key` or System Key Identifier
+|  iii | 64              | `state`[0]
+|   iv | 64              | `state`[1]
+|    v | 64              | `state`[2]
+|   vi | 64              | `state`[3]
+|  vii | 64              | `state`[4]
+| viii | 16              | `last_block_len`
+|   ix | 16              | `tag_len`
+|    x | 32 or 96        | Padding
 |===
 --
 +
@@ -3151,21 +3248,22 @@ Masking_. This variant is described as follows:
  ** `state[0 .. 4]`: five 64-bit words, i.e., 320 bits.
  ** `tag_len`: 8 bits.
 
-* *Serialized Content*:
+* *Serialized Context*:
 +
 --
 [%autowidth,cols="^,<,<",options="header"]
 |===
 |  Pos. | Size (Bits)   | Field
-|    i  | 128 or 64     | `K1` or System Key Identifier
-|   ii  | 128 or 0      | `K2` or System Key Identifier in `K1`
-|  iii  | 64            | `state`[0]
-|   iv  | 64            | `state`[1]
-|    v  | 64            | `state`[2]
-|   vi  | 64            | `state`[3]
-|  vii  | 64            | `state`[4]
-| viii  | 16            | `tag_len`
-|   ix  | 48 or 112     | Padding
+|    i  | 128            | Metadata Header
+|   ii  | 128 or 64     | `K1` or System Key Identifier
+|  iii  | 128 or 0      | `K2` or System Key Identifier in `K1`
+|   iv  | 64            | `state`[0]
+|    v  | 64            | `state`[1]
+|   vi  | 64            | `state`[2]
+|  vii  | 64            | `state`[3]
+| viii  | 64            | `state`[4]
+|   ix  | 16            | `tag_len`
+|    x  | 48 or 112     | Padding
 |===
 --
 +
@@ -3198,19 +3296,20 @@ Data Structures:::
  ** `state[0 .. 4]`: five 64-bit words, i.e., 320 bits.
  ** `countdown` : integer going from 3 down to 0.
 
-* *Serialized Content*:
+* *Serialized Context*:
 +
 --
 [%autowidth,cols="^,<,<",options="header"]
 |===
 |  Pos. | Size (Bits)   | Field
-|    i  | 64              | `state`[0]
-|   ii  | 64              | `state`[1]
-|  iii  | 64              | `state`[2]
-|   iv  | 64              | `state`[3]
-|    v  | 64              | `state`[4]
-|   vi  | 8               | `countdown` (from 3 down to 0)
-|  vii  | 56              | Padding
+|    i  | 128            | Metadata Header
+|   ii  | 64              | `state`[0]
+|  iii  | 64              | `state`[1]
+|   iv  | 64              | `state`[2]
+|    v  | 64              | `state`[3]
+|   vi  | 64              | `state`[4]
+|  vii  | 8               | `countdown` (from 3 down to 0)
+| viii  | 56              | Padding
 |===
 --
 +
@@ -3286,7 +3385,7 @@ following differences:
 
 . The IV written to `state[0]` in State _Initial_ is `0x0000080100cc0002`.
 . There is no `countdown` field (and therefore also no padding: the last 64
-  bits of the serialized content of Ascon-Hash256 are not present).
+  bits of the Serialized Context of Ascon-Hash256 are not present).
 . As much output as desired can be produced in State _Hash_Finalize_, and the
   algorithm never transitions to State _Success_.
 
@@ -3400,19 +3499,20 @@ NOTE: _AlgorithmPolicy_ enables signature generation (_AlgorithmPolicy_[0]) and 
   *** `RndNum`: a `h`-bit string representing the random number.
  ** Additional data, for instance precomputed multiples of the Generator.
 
-* *Serialized Content*:
+* *Serialized Context*:
 +
 --
 [cols="^7%,<33%,<30,<30",width="100%",options="header"]
 |===
-|   Pos.  | Size (Bits)  2+| Field
-.3+| i .3+| 16 (Bits 6-15 are reserved) | Bit 0: `HasScalar`     | Bit 1: `HasSecondPt`
-                                       <| Bit 2: `HasSignature` <| Bit 3: `HasHash`
-                                       <| Bit 4: `HasRndNum`    <| Bit 5: `OutputType`
-|    ii   | 16                        2+| `Progress`
-|   iii   | 32                        2+| Padding
-|    iv   | `ub`                      2+| `Generator`, X coordinate, followed by Y coordinate if `u=2`.
-|     v   | `b`                       2+| `Scalar`: `b`-bit string. Can be the Private Key.
+|   Pos.  | Size (Bits)                 2+| Field
+|    i    | 128                         2+| Metadata Header
+.3+| ii .3+| 16 (Bits 6-15 are reserved)  | Bit 0: `HasScalar`     | Bit 1: `HasSecondPt`
+{empty}                                  <| Bit 2: `HasSignature` <| Bit 3: `HasHash`
+{empty}                                  <| Bit 4: `HasRndNum`    <| Bit 5: `OutputType`
+|   iii   | 16                          2+| `Progress`
+|    iv   | 32                          2+| Padding
+|     v   | `ub`                        2+| `Generator`, X coordinate, followed by Y coordinate if `u=2`.
+|    vi   | `b`                         2+| `Scalar`: `b`-bit string. Can be the Private Key.
 |===
 
 `SCC_content_size()` returns only the length of the content from Position i to Position v.
@@ -3422,17 +3522,17 @@ The size of the following fields is included in the _VarDataLen_ field of the Me
 [cols="^7%,<33%,<60",width="100%",options="header"]
 |===
 |   Pos.  | Size (Bits)                             | Field
-|    vi   | If `HasSecondPt`: `ub`, else: 0         | `SecondPt`, X coordinate, followed by Y coordinate if `u=2`. Can be the Public Key.
-|   vii   | If `HasSignature`: `vb`, else: 0        | `Signature`, R value, followed by S coordinate if `v=2`.
-|  viii   | If `HasHash`: `h`, else: 0              | `Hash`: a `h`-bit string representing the hash.
-|    ix   | If `HasRndNum`: `j`, else: 0            | `RndNum`.
-|     x   | (variable)                              | Optional and implementation-specific data from the *Internal State* (Content), starting with `aceunitid := zeros(32) @ aceimpid @ acearchid @ acevendorid` if not empty.
+|   vii   | If `HasSecondPt`: `ub`, else: 0         | `SecondPt`, X coordinate, followed by Y coordinate if `u=2`. Can be the Public Key.
+|  viii   | If `HasSignature`: `vb`, else: 0        | `Signature`, R value, followed by S coordinate if `v=2`.
+|    ix   | If `HasHash`: `h`, else: 0              | `Hash`: a `h`-bit string representing the hash.
+|     x   | If `HasRndNum`: `j`, else: 0            | `RndNum`.
+|    xi   | (variable)                              | Optional and implementation-specific data from the *Internal State* (Content), starting with `aceunitid := zeros(32) @ aceimpid @ acearchid @ acevendorid` if not empty.
 |===
 
 The `HasRndNum` flag is set and the `RndNum` field is used only during signature generation.
 `RndNum` is exported only if the signature operation is interrupted.
 
-The size in bits of Fields vi to ix is:
+The size in bits of Fields vii to x is:
 
 `{fournbsp}{fournbsp}` `varlen` <- 8 + (`HasSecondPt` != 0) {interpunct} ``ub``/8 + (`HasSignature` != 0) {interpunct} ``vb``/8 + +
 `{fournbsp}{fournbsp}{fournbsp}{fournbsp}{fournbsp}{fournbsp}{fournbsp}` + (`HasHash` != 0) {interpunct} ``h``/8 + (`HasRndNum` != 0) {interpunct} ``j``/8.
@@ -3643,12 +3743,13 @@ Data Structures:::
  ** `key`: `k` bits. Present only if keyed, i.e., a MAC.
 
 
-* *Serialized Content*:
+* *Serialized Context*:
 +
 --
 [cols="^6%,<21%,<18%,<55%",options="header"]
 |===
 |  Pos.| Size (Bits)            | Field                       | Notes
+|   i   | 128            | Metadata Header
 .2+| i | If keyed: `k` or 64      | `key` or SKID          | --
 <|        If unkeyed: 0            | none                        | --
 |===
