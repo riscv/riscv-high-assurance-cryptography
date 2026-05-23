@@ -453,7 +453,7 @@ For instance, random values that are generated in the _Initial_ state.
 . Information that may be easily reconstructed from other information in the State, so that there is no need to export it.
 In this case, the *algorithm* may choose to not include it into an SCC.
 
-. Data that can be used to optimize performance on a specific *implementation*, and that is more expensive to recompute than encrypting and storing externally. The hardware may choose to export such data in a custom format inside an SCC for efficient reuse.
+. Data that can be used to optimize performance on a specific *implementation*, and is more expensive to recompute than encrypting and storing it externally. The hardware may choose to export such data in a custom format inside an SCC for efficient reuse.
 A different implementation that receives the same SCC  may safely ignore this data during import
 after checking `aceunitid`.
 
@@ -612,14 +612,13 @@ Provisioning ``K``__i__ performs the following steps:
 . Read the rest of the PI content from memory, store it in ``K``__i__.``Content[]`` viewed as a buffer.
 . Perform any necessary readjustment of the CR's content to turn it into the format internally consumed by the ACE Unit, if necessary.
 . Restore the saved value of the _Provisioning_ bit of ``K``__i__.``Metadata``.
-It is used to present information related to the main content.
 --
 
 A partially configured CR can be exported.
 In this case:
 
 * The _Provisioning_ bit in the exported Metadata is set.
-* No encryption or authentication occurs, the information is exported verbatim.
+* No encryption or authentication occurs.
 * The length of the exported Content is the same as the length of the PI.
 * The information imported so far is exported verbatim, while the information not yet imported is replaced by zeros.
 * We call the exported context an _Exported Partial Context_ (EPC).
@@ -723,7 +722,7 @@ i.e. <<ACE-SCC-GCM-SIV-enc>> and <<ACE-SCC-GCM-SIV-dec>>:
 []
 ----
 function AES_GCM_SIV_Encrypt(AD[] : array of bits(128), N : bits(96),
-    P[] : array of bits(128), K : bits(256), num_blocks_AD : int, num_blocks_P : int)
+    P[] : array of bits(128), K : bits(256), num_blocks_AD : int, num_blocks_PC : int)
   -> {SIV : bits(128), C[] : array of bits(128)} =
 {
   enc_key, auth_key ← RFC8452_KeyDeriv(K);
@@ -772,6 +771,56 @@ function AES_GCM_SIV_Decrypt(AD[] : array of bits(128), N : bits(96), SIV : bits
 ====
 Provisioning, import and export are being rewritten!
 ====
+
+Exporting ``K``__i__ performs the following steps:
+
+[sidebar]
+.Exporting
+--
+. If any other CR is being provisioned, exported, or imported, raise an illegal instruction exception.
+. If ``K``__i__ is being _Imported_:
+
+.. The _Importing_ bit in the exported Metadata is left set.
+The length of the exported Content is the same as the length of the original SCC being imported, without the `IMPLID`, `SIV2`, and `Content2[]` fields if they are above the maximal length allowed for this type of CC.
+.. No encryption or authentication occurs, the information in the CR is exported verbatim, in the same order as they appear in the SCC, namely:
+ `Metadata`, `SIV`, `Content[]`, and, if they are present `IMPLID`, `SIV2`, and `Content2[]`.
+ `Metadata`, `SIV`, `IMPLID`, `SIV2` are left unencrypted, `Content[]` and `Content[]` are exported in the original encrypted form.
+.. We call the exported context an _Exported Partial Context_ (EPC) as in the _Provisioning_ case.
+
+. If ``K``__i__ is being _Provisioned_:
+
+.. The _Provisioning_ bit in the exported Metadata is left set.
+.. No encryption or authentication occurs.
+.. The length of the exported Content is the same as the length of the PI.
+.. The information imported so far is exported verbatim, while the information not yet imported is replaced by zeros.
+
+. We note that in the two cases above, the information that was imported or provisioned so far is exported verbatim, while the information not yet imported is replaced by zeros. This is achieved not by keeping track of which fields have been imported so far, but by erasing the contents of the CR at the start of an import operation.
+
+. If ``K``__i__ is fully provisioned (both _Importing_ and _Provisioning_ flags are unset), then
+ one or two ACE-GCM-SIV encryption operations (<<ACE-SCC-GCM-SIV-enc>>) are performed:
+
+.. First, the algorithm-dependent data is processed:
+... ``AD`` <- ``K``__i__.``Metadata``
+... `foreach(j from 0 to number of localities - 1, except "Nonce" Locality)`
+....  Append `LST[j]` to `AD`
+... `num_blocks_AD` <- 1 + number of localities
+... If _Nonce_ is required, `N` <- `LST[11]`, else `N` <- zeros(96)`
+... `num_blocks_PC` <- lengths of Sections 3.a and 3.b combined.
+... `SIV`, `C[]` <- ``AES_GCM_SIV_Encrypt(AD, N, ``K``__i__.``Content[]``, CSK, num_blocks_AD, num_blocks_PC)``
+.. Second, if VarDataLen {ne} 0, the implementation-dependent data is processed:
+... ``AD`` <- ``K``__i__.``IMLID`` || `SIV`
+... `num_blocks_AD` <- 2
+... `num_blocks_PC` <- length of Sections 6 (obtained by subtracting the size of Section 3.b from VarDataLen)
+... `SIV2`, `C2[]` <- ``AES_GCM_SIV_Encrypt(AD, N, ``K``__i__.``Content2[]``, CSK, num_blocks_AD, num_blocks_PC)``
+... Output `Metadata`, `SIV`, `Content[]`, and, VarDataLen {ne} 0, `IMPLID`, `SIV2`, and `Content2[]`.
+--
+
+////
+function AES_GCM_SIV_Encrypt(AD[] : array of bits(128), N : bits(96),
+    P[] : array of bits(128), K : bits(256), num_blocks_AD : int, num_blocks_P : int)
+  -> {SIV : bits(128), C[] : array of bits(128)} =
+////
+
 
 ////
 Exporting ``K``__i__ performs the following steps:
