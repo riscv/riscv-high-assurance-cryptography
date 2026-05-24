@@ -26,7 +26,7 @@ Both formats begin with a 128-bit Metadata Header, whose format we define next.
 The following table lists the fields of the 128-bit Metadata Header.
 Currently, 81 bits are defined and 47 are reserved for future use.
 
-[[ACE-metadata-section]]
+[[ACE-metadata-header]]
 .Format of the 128-bit Metadata Header
 [width="100%",cols="^9%,^7%,14%,70%",options="header"]
 |===
@@ -48,7 +48,7 @@ Currently, 81 bits are defined and 47 are reserved for future use.
 | [127:90] | 38    | Reserved          | Reserved for future use.  Currently, it must be equal to zero.
 |===
 
-In the following subsections we describe the fields of the Metadata section.
+In the following subsections we describe the fields of the Metadata Header.
 
 //
 
@@ -158,7 +158,7 @@ For algorithms with more than 23 valid states, additional state information resi
 
 The following rules are generic and apply to all algorithms:
 
-. The Metadata's _State_ field must reflect the current state whenever the CC is in _Initial_, _Success_, _Failure_, or any Error State.
+. The Metadata Headers's _State_ field must reflect the current state whenever the CC is in _Initial_, _Success_, _Failure_, or any Error State.
 This ensures that these states can be unambiguously determined from the _State_ field alone, without inspecting the Content.
 
 . In States _Success_ and _Failed_, only the following ACE instructions are permitted: `ace.prov`, `ace.import`, `ace.export`, `ace.clear`, `ace.size`, `ace.setst`, and `ace.getst`.
@@ -171,13 +171,13 @@ This ensures that these states can be unambiguously determined from the _State_ 
 Internal resources associated with the Content may also be released. In that case, any additional variable-length data is released as well and the _VarDataLen_ field is set to 0.
 The CR then retains only the Metadata Header.
 
-. Exporting a CR in an Error State exports only the metadata (and the authentication tag).
-  Requesting the SCC's size (`ace.size` <<ACE-instruction-size>>) wil reflect this.
+. Exporting a CR in an Error State exports only the Metadata Header (and the authentication tag).
+  Requesting the SCC's size (`ace.size` <<ACE-instruction-size>>) will reflect this, i.e., it will return 16 (bytes).
   The resulting SCC can be reimported, allowing software to take appropriate actions even after a context switch.
 
 . If a CR is in any Error State, it can still be reconfigured, cloned, or cleared. `ace.setst` can only be used to change the Error State (for instance by an exception handler) or transition the CR to _Off_.
 
-. The metadata of a CR in an Error State can be read (using `ace.getmd`: <<ACE-instruction-getmd>>).
+. The Metadata Header of a CR in an Error State can be read (using `ace.getmd`: <<ACE-instruction-getmd>>).
 
 . Attempts to _use_ a CR in any Error State will not perform any operation, and in particular they leave the _State_ field unchanged.
 
@@ -376,7 +376,7 @@ Any bit of this field is ignored if the corresponding mode is not supported or n
 [[ACE-extra-content]]
 ===== _VarDataLen_ Field
 
-The _VarDataLen_ Metadata field records the length of the _Additional Data Section_ of the content, which is a variable-size part and may depend on the state of the algorithm.
+The _VarDataLen_ Metadata Header field records the length of the _Additional Data Section_ of the content, which is a variable-size part and may depend on the state of the algorithm.
 
 The format of the _Additional Data Section_ is described in <<ACE-data-formats>>.
 
@@ -415,7 +415,7 @@ If non-zero, _ExpirationDate_ specifies the CC expiration time as a number of mi
 The 26-bit field provides for a span of approximately 127 years (2^26^ minutes).
 
 Checking against the _ExpirationDate_ field is, semantically, the first step performed by any operation.
-When a non-configuration instruction is executed on a CR whose _ExpirationDate_ lies in the past, the hardware immediately sets the Metadata _State_ field to `ace_state_expired` and performs any action prescribed for Error States, including implementation-specific tasks such as releasing the CRF capacity held by the Content.  If the instruction is a usage instruction, the operation is suppressed and exception `ace_exc_invalid` is raised (cf. <<ACE-exceptions>>) if the ACE privileged architecture is implemented.  Exporting, cloning, or configuring an expired CR is allowed.
+When a non-configuration instruction is executed on a CR whose _ExpirationDate_ lies in the past, the hardware immediately sets the Metadata Header's _State_ field to `ace_state_expired` and performs any action prescribed for Error States, including implementation-specific tasks such as releasing the CRF capacity held by the Content.  If the instruction is a usage instruction, the operation is suppressed and exception `ace_exc_invalid` is raised (cf. <<ACE-exceptions>>) if the ACE privileged architecture is implemented.  Exporting, cloning, or configuring an expired CR is allowed.
 
 When an expired CR is used, privileged code may take appropriate action—for example, provisioning a new key or returning to the caller for handling.
 
@@ -438,7 +438,7 @@ The format of a Provisioning Input (PI) is shown in <<ACE-PI>>.
 [width="100%",cols="8%,25%,42%,25%",options="header"]
 |===
 | Section | Section Name                | Size | Description
-| 1     | Metadata Header           | 128 bits | Contains the metadata information as described in <<ACE-Metadata>>.
+| 1     | Metadata Header           | 128 bits | Contains the metadata described in <<ACE-Metadata>>.
 | 2     | Provisioning Content      | Depends only on the _Algorithm_, _AlgorithmPolicy_, and _KeyType_ fields of the Metadata Header. Always a multiple of 128 bits. | Contains keys and other algorithm-specific information.
 |===
 
@@ -464,7 +464,7 @@ The format of a Sealed Cryptographic Context (SCC) is shown in <<ACE-SCC>>.
 [width="100%",cols="8%,25%,42%,25%",options="header"]
 |===
 | Section | Section Name                   | Size     | Description
-| 1     | `Metadata`, Metadata Header      | 128 bits | The metadata information as described in <<ACE-Metadata>>.
+| 1     | `MH`, Metadata Header            | 128 bits | The metadata information described in <<ACE-Metadata>>.
 | 2     | `SIV`                            | 128 bits | The SIV used to encrypt and authenticate sections 3.
 //
 | 3.a
@@ -476,11 +476,11 @@ on the _Algorithm_, _AlgorithmPolicy_, and _KeyType_ fields of the Metadata Head
 //
 | 3.b
 | `Content`: _Architected Variable-Length Data Section_ (Architected VDS)
-| If the CR is not in an Error State, the length depends only on the information contained in the Metadata and Fixed Data Sections.
+| If the CR is not in an Error State, the length depends only on the information contained in the Metadata Header and Fixed Data Sections.
   Always a multiple of 128 bits.
 | The data in this Section is necessary for the correct functioning of the algorithm.
-| 4      | `IMPLID`, Implementation Identifier    | 128 bits if present | Used to identify the implementation of the ACE Unit
-| 5.     | `SIV2`                         | 128 bits if present | The SIV used to encrypt and authenticate section 6.
+| 4.     | `SIV2`                         | 128 bits if present | The SIV used to authenticate sections 5 and 6.
+| 5      | `IMPLID`, Implementation Identifier    | 128 bits if present | Used to identify the implementation of the ACE Unit
 | 6
 | `Content2`: _Implementation (Specific) Variable-Length Data Section_ (Implementation VDS)
 | Implementation-Specific.
@@ -491,7 +491,7 @@ on the _Algorithm_, _AlgorithmPolicy_, and _KeyType_ fields of the Metadata Head
 
 Fields 2-6 are empty if the context is exported in an Error State, in other words, the entire SCC consists only of a Metadata Header in plaintext.
 
-The Metadata _VarDataLen_ field specifies the total size of the _Variable-Length Section_.
+The Metadata Header's _VarDataLen_ field specifies the total size of the _Variable-Length Section_.
 It does not partition this total between the Architected and Implementation-Specific segments.
 The ordering of sections within the SCC allows to determine the lengths of these two parts before reading them.
 
@@ -506,7 +506,7 @@ _reconstructed_ _shares_.
 
 . The PI and SCC Formats will be the same as for the non-threshold implementation
 variants of the same algorithm, with the only difference being the value of the
-_SCProtection_ in the Metadata.
+_SCProtection_ in the Metadata Header.
 
 . {empty}
 +
@@ -548,11 +548,11 @@ This identification holds even if the SCC does not contain some information that
 * We can describe an import operation as a sequence of load operations to copy the encrypted and authenticated SCC into the CR, followed by an in-situ decryption and authentication operation to extract the plaintext, and finally an step to reconstruct missing information or expand keys in multiple shares.
 
 The notation ``K``_i_ is used to refer to the _i_-th CR.
-The Metadata section is written as ``K``__i__.``Metadata``.
-With respect to <<ACE-SCC>>, after the metadata we have the SIV, which we denote as
+The Metadata Header is written as ``K``__i__.``Metadata``.
+With respect to <<ACE-SCC>>, after the Metadata Header we have the SIV, which we denote as
 ``K``__i__.``SIV``, and then Section 3, consisting of Sections 3.a and 3.b, namely ``K``__i__.``Content[]``.
 After this we have the 128-bit blocks corresponding to, Sections 4 and 5, i.e.,
-``K``__i__.``IMPLID`` and ``K``__i__.``SIV2``,
+``K``__i__.``SIV2`` and ``K``__i__.``IMPLID``,
 and finally
 ``K``__i__.``Content2[]`` (i.e., Section 6), the latter being an array of 128-bit words like ``K``__i__.``Content[]``.
 
@@ -605,19 +605,18 @@ Provisioning ``K``__i__ performs the following steps:
 .Provisioning
 --
 . Clear ``K``__i__. In particular, the internal CRF memory corresponding to ``K``__i__ wil read as zero.
-. Read the metadata block `M` from memory, check it for consistency and integrity.
+. Read the Metadata Header `M` from memory, check it for consistency and integrity.
 . Allocate internal resources for ``K``__i__. This may fail and raise an exception.
-. Save the original value of M`._Provisioning_.
-. Set `M`._Provisioning_, store `M` in ``K``__i__.``Metadata``.
+. Set `M`._Provisioning_, store `M` in ``K``__i__.``MH``.
 . Read the rest of the PI content from memory, store it in ``K``__i__.``Content[]`` viewed as a buffer.
 . Perform any necessary readjustment of the CR's content to turn it into the format internally consumed by the ACE Unit, if necessary.
-. Restore the saved value of the _Provisioning_ bit of ``K``__i__.``Metadata``.
+. Clear the _Provisioning_ bit of ``K``__i__.``Metadata``.
 --
 
 A partially configured CR can be exported.
 In this case:
 
-* The _Provisioning_ bit in the exported Metadata is set.
+* The _Provisioning_ bit in the exported Metadata Header is set.
 * No encryption or authentication occurs.
 * The length of the exported Content is the same as the length of the PI.
 * All information is exported verbatim from the serialized representation of the CR:
@@ -627,12 +626,32 @@ This procedure is fully described in <<ACE-SCC-export>>.
 
 We call such ab exported context an _Exported Partial Context_ (EPC).
 
-Importing such an EPC into a CR follows the same algorithm as for provisioning above.
+Importing such an EPC into a CR follows the a similar algorithm as for provisioning above, however the
+value of the _Provisioning_ bit in the exported Metadata Header is maintained and not cleared at the end.
 
 // ////////////////////////////////////////////////////////////////////
 
 [[ACE-interruption-points]]
 ==== Resumability of Configuration and Export Operations
+
+[NOTE]
+====
+Resumption of an interrupted provisioning operation:
+
+. *Current approach.* If the provisioning is a single instruction,
+the implementation must first re-read the Metadata Header,
+to determine the length of the PI and verify its integrity before proceeding. In this case the data is
+read sequentially and `acestart` is set to the offset of the first non-imported bit.
+
+. If provisioning is performed by split operations, the software will be able to save the length of the PI in its
+environment.
+
+.. If loading the data in the CR is done by a single instruction, this length is explicitly passed to the
+loading instruction so that resumption can be restarted from the value in `acestart`.
+
+.. If loading the data in multiple blocks and keeping track of the loaded data is left to the software,
+then the implementation will not update `acestart`.
+====
 
 [WARNING]
 ====
@@ -692,7 +711,7 @@ NOTE: Due to the computational cost of the derivation functions,
 implementations may cache recently used derived keys.
 
 The SIV ("synthetic IV") serves as both the initialization vector and the authentication tag in GCM-SIV.
-It is computed by encrypting the `POLYVAL` hash of the concatenation of the Locality Secrets, the Metadata zero-padded to 128 bits, and the Content of the CR.
+It is computed by encrypting the `POLYVAL` hash of the concatenation of the Locality Secrets, the Metadata Header, and the Content of the CR.
 In the `POLYVAL` pseudocode below, the digested data is an array containing an integral number of 128-bit blocks.
 
 [[ACE-SCC-POLYVAL]]
@@ -771,80 +790,120 @@ function AES_GCM_SIV_Decrypt(AD[] : array of bits(128), N : bits(96), SIV : bits
 [[ACE-SCC-export]]
 ==== Export
 
-[WARNING]
-====
-Provisioning, import and export are being rewritten!
-====
+An export process cannot be initiated if any other CR is being provisioned, exported, or imported.
+Attempts to do so raise an illegal instruction exception.
 
-Exporting ``K``__i__ performs the following steps:
+Before an export is initiated, any provisioning, export, or import operation on a different CR must be completed or that CR cleared.
+
+Exporting ``K``__i__ distinguishes two cases
 
 [sidebar]
-.Exporting
+.Exporting a Partially Configured CR ``K``__i__
 --
-. If any other CR is being provisioned, exported, or imported, raise an illegal instruction exception.
-. If ``K``__i__ is being _Imported_:
-
-.. The _Importing_ bit in the exported Metadata is left set.
-.. The length of the exported Content is the same as the length of the original SCC being imported, with the provision that the `IMPLID`, `SIV2`, and `Content2[]` fields are omitted if they are above the maximal length allowed for this type of CC.
-.. No encryption or authentication occurs, the information in the CR is exported verbatim, in the same order as they appear in the SCC, namely:
- `Metadata`, `SIV`, `Content[]`, and, if they are present `IMPLID`, `SIV2`, and `Content2[]`.
- `Metadata`, `SIV`, `IMPLID`, `SIV2` are left unencrypted, `Content[]` and `Content[]` are exported in the original encrypted form.
-.. We call the exported context an _Exported Partial Context_ (EPC) as in the _Provisioning_ case.
-
 . If ``K``__i__ is being _Provisioned_:
 
-.. The _Provisioning_ bit in the exported Metadata is left set.
+.. The _Provisioning_ bit in the exported Metadata Header is left set.
 .. The length of the exported Content is the same as the length of the PI.
-.. No encryption or authentication occurs, the information in the CR is exported verbatim, in the same order as they appear in the PI.
+.. No encryption or authentication occurs, the information in the CR is exported verbatim, in the same order as they appear in the PI. This implies that the provisioned data is exported in the clear. However, this does not increase the attack surface since more privileged modes have access to their children processes's address spaces.
+.. We call the exported context an _Exported Partial Context_ (EPC).
 
+. If ``K``__i__ is being _Imported_:
+
+.. The _Importing_ bit in the exported Metadata Header is left set.
+.. The length of the exported Content is the same as the length of the original SCC being imported, with the provision that the `IMPLID`, `SIV2`, and `Content2[]` fields are omitted if they are above the maximal length allowed for this type of CC.
+.. No encryption or authentication occurs, the information in the CR is exported verbatim, in the same order as they appear in the SCC, namely:
+ `MH`, `SIV`, `Content[]`, and, if they are present `IMPLID`, `SIV2`, and `Content2[]`.
+ `MH`, `SIV`, `IMPLID`, `SIV2` are left unencrypted, `Content[]` and `Content2[]` are exported in the original encrypted form.
+.. We call the exported context an _Exported Partial Context_ (EPC) as in the _Provisioning_ case.
+--
+
+[sidebar]
+.Exporting a Fully Configured CR ``K``__i__
+--
 . If ``K``__i__ is fully provisioned (both _Importing_ and _Provisioning_ flags are unset), then
  one or two ACE-GCM-SIV encryption operations (<<ACE-SCC-GCM-SIV-enc>>) are performed:
 
 .. First, the algorithm-dependent data is processed:
-... ``AD[0]`` <- ``K``__i__.``Metadata``, ``len_AD`` <- 1
+... ``AD[0]`` <- ``K``__i__.``MH``, ``len_AD`` <- 1
 ... `foreach(j from 0 to 10 (included))`
-.... If `Metadata`.Locality includes Locality #j
+.... If `MH`.Locality includes Locality #j
 .....  ``AD[len_AD]`` <-  `LST[j]`
 .....  ``len_AD`` <- ``len_AD`` + 1
-... If _Nonce_ (Locality #11) is included, then `N`` <- `LST[11]`, else `N` <- `zeros(96)`
+... If _Nonce_ (Locality #11) is included, then `N` <- `LST[11]`, else `N` <- `zeros(96)`
 ... `len_PC` <- lengths of Sections 3.a and 3.b combined.
 ... `SIV`, `C[]` <- ``AES_GCM_SIV_Encrypt(AD, N, K``__i__.``Content[], CSK, len_AD, len_PC)``
 .. Second, if VarDataLen {ne} 0, the implementation-dependent data is processed:
 ... `len_AD` <- 2, ``AD[0]`` <- ``K``__i__.``IMLID``, ``AD[0]`` <- `SIV`.
 ... `len_PC` <- length of Section 6 (subtract the size of Section 3.b from VarDataLen)
 ... `SIV2`, `C2[]` <- ``AES_GCM_SIV_Encrypt(AD, N,`K``__i__.``Content2[], CSK,§ len_AD, len_PC)``
-.. Finally, output `Metadata`, `SIV`, `Content[]`, and, if VarDataLen {ne} 0, `IMPLID`, `SIV2`, and `Content2[]`.
+.. Finally, output `MH`, `SIV`, `Content[]`, and, if VarDataLen {ne} 0, `IMPLID`, `SIV2`, and `Content2[]`.
 --
 
+
+[[ACE-SCC-import]]
+==== Import
+
+[sidebar]
+.Reimporting a Partially Configured CR ``K``__i__
+--
+. Clear ``K``__i__. In particular, the internal CRF memory corresponding to ``K``__i__ wil read as zero.
+. Read the Metadata Header `M` from memory, check it for consistency and integrity.
+. Allocate internal resources for ``K``__i__. This may fail and raise an exception.
+. Store `M` in the first 16 bytes of ``K``__i__.``Content[]`` viewed as a buffer.
+. If `M`._Provisioning_ is set, `length` is the length of the PI corresponding to the `MH` block.
+. If `M`._Importing_ is set, `length` is the length of the SCC corresponding to the `MH` block.
+. In case of split instructions, `length` is the value returned by `ace.size`.
+. Read `length`-16 bytes from memory, store it in ``K``__i__.``Content[16..]`` viewed as a buffer.
+. Perform any necessary readjustment of the CR's content to turn it into the format internally consumed by the ACE Unit, if necessary.
+. Restore the saved value of the _Provisioning_ bit of ``K``__i__.``MH``.
+--
+
+
+--
+. If ``K``__i__ is being _Provisioned_:
+
+.. The _Provisioning_ bit in the exported Metadata Header is left set.
+.. The length of the exported Content is the same as the length of the PI.
+.. No encryption or authentication occurs, the information in the CR is exported verbatim, in the same order as they appear in the PI. This implies that the provisioned data is exported in the clear. However, this does not increase the attack surface since more privileged modes have access to their children processes's address spaces.
+.. We call the exported context an _Exported Partial Context_ (EPC).
+
+. If ``K``__i__ is being _Imported_:
+
+.. The _Importing_ bit in the exported Metadata Header is left set.
+.. The length of the exported Content is the same as the length of the original SCC being imported, with the provision that the `IMPLID`, `SIV2`, and `Content2[]` fields are omitted if they are above the maximal length allowed for this type of CC.
+.. No encryption or authentication occurs, the information in the CR is exported verbatim, in the same order as they appear in the SCC, namely:
+ `MH`, `SIV`, `Content[]`, and, if they are present `IMPLID`, `SIV2`, and `Content2[]`.
+ `MH`, `SIV`, `IMPLID`, `SIV2` are left unencrypted, `Content[]` and `Content[]` are exported in the original encrypted form.
+.. We call the exported context an _Exported Partial Context_ (EPC) as in the _Provisioning_ case.
+--
+
+[sidebar]
+.Exporting a Fully Configured CR ``K``__i__
+--
+. If ``K``__i__ is fully provisioned (both _Importing_ and _Provisioning_ flags are unset), then
+ one or two ACE-GCM-SIV encryption operations (<<ACE-SCC-GCM-SIV-enc>>) are performed:
+
+.. First, the algorithm-dependent data is processed:
+... ``AD[0]`` <- ``K``__i__.``MH``, ``len_AD`` <- 1
+... `foreach(j from 0 to 10 (included))`
+.... If `MH`.Locality includes Locality #j
+.....  ``AD[len_AD]`` <-  `LST[j]`
+.....  ``len_AD`` <- ``len_AD`` + 1
+... If _Nonce_ (Locality #11) is included, then `N` <- `LST[11]`, else `N` <- `zeros(96)`
+... `len_PC` <- lengths of Sections 3.a and 3.b combined.
+... `SIV`, `C[]` <- ``AES_GCM_SIV_Encrypt(AD, N, K``__i__.``Content[], CSK, len_AD, len_PC)``
+.. Second, if VarDataLen {ne} 0, the implementation-dependent data is processed:
+... `len_AD` <- 2, ``AD[0]`` <- ``K``__i__.``IMLID``, ``AD[0]`` <- `SIV`.
+... `len_PC` <- length of Section 6 (subtract the size of Section 3.b from VarDataLen)
+... `SIV2`, `C2[]` <- ``AES_GCM_SIV_Encrypt(AD, N,`K``__i__.``Content2[], CSK,§ len_AD, len_PC)``
+.. Finally, output `MH`, `SIV`, `Content[]`, and, if VarDataLen {ne} 0, `IMPLID`, `SIV2`, and `Content2[]`.
+--
+
+
+
+
+
 ////
-function AES_GCM_SIV_Encrypt(AD[] : array of bits(128), N : bits(96),
-    P[] : array of bits(128), K : bits(256), len_AD : int, len_P : int)
-  -> {SIV : bits(128), C[] : array of bits(128)} =
-////
-
-
-////
-Exporting ``K``__i__ performs the following steps:
-
-. If any other CR is in the process of being configured, raise an illegal instruction exception.
-. If ``K``__i__ is _not_ being configured:..
-.. ``AD`` <- ``K``__i__.``Metadata``
-.. `foreach(j from 0 to number of localities - 1, except "Nonce" Locality)`
-...  Append `LST[j]` to `AD`
-.. If _Nonce_ is required, `N` <- `LST[11]`, else `N` <- zeros(96)`
-..`AES_GCM_SIV_Encrypt(AD, N,
-    P[] : array of bits(128), K : bits(256), len_AD : int, len_P : int)
-  -> {SIV : bits(128), C[] : array of bits(128)} =
-..
-. If ``K``__i__ is being configured:
-
-
-
-During SCC export and import, the Locality Secrets associated with the Localities encoded in the Metadata's _Locality_ field are appended to the input of the AEAD tag computation, in ascending index order, before the metadata.
-If the _Locality_ field is zero, no Locality Secrets are appended.
-
-The ACE architecture supports at most one export or import resumable operation per hart at a time.
-
 [NOTE]
 ====
 This can be enforced as follows:
@@ -859,77 +918,10 @@ This can be enforced as follows:
 Without such a safeguard, resumption could yield an incorrect SIV.
 While the pseudocode follows this mechanism to enforce the rule, implementation may choose to implement the rule differently.
 ====
-
-[[ACE-SCC-export-listing]]
-.Generation of an SCC from a CR
-[]
-----
-function ace.export(CR_number, M[]) =
-{
-  MH : bits(128) & = CR[CR_number].Metadata;          // By reference
-
-  * Create array of bytes ser_con[] from the CR's information.
-  * ser_con[] can be either a serialization in a separate buffer, or temporary
-  * in place, or even act like a functionof the actual information
-
-  global ace_exporting, ace_importing : bool;
-  global ace_expimported_cr : bits(5);
-  global CSK : bits(256);
-  global enc_key : bits(256), auth_key : bits(128); // RFC8452_KeyDeriv(CSK)
-  global SIV, tmp : bits(128);
-
-  ace_exporting ← true;
-  ace_expimported_cr ← CR_number;
-  ace_importing ← false;
-
-  local z : int ← base_content_size(MH);  // can be recomputed upon resumption
-  z ← z + MH._VarDataLen_ * 128;           // Length of Content (in bits)
-  local let num_blocks : int ← ceil(z / 128);
-
-  // In external memory: Metadata Header, then SIV, then Encrypted Content
-  external M: array of ((MH_size + 128 + z) / 8) bytes.
-
-  // Start POLYVAL: absorb Locality "prefix" (zero or more bit blocks)
-  tmp ← zeros(128);
-  foreach(i from 0 to number of localities - 1, except "Nonce" Locality)
-    if (CR.Metadata.Locality includes locality[i]) {
-      tmp ← tmp xor LST[i];
-      tmp ← Montmul(tmp, auth_key);
-    }
-
-  // POLYVAL: Absorb the metadata block into POLYVAL
-  tmp ← tmp xor MH;
-  tmp ← Montmul(tmp, auth_key);
-
-  // POLYVAL: Absorb the entire content into POLYVAL
-  foreach(i from 0 to num_blocks - 1) {
-    tmp ← tmp xor ser_con[i*16 .. 15+i*16];
-    tmp ← Montmul(tmp, auth_key);
-  }
-
-  if (MH.Locality includes the "Nonce" Locality) {
-    tmp[95:0] <- tmp[95:0] xor LST[index of "Nonce" Locality][95:0];
-  }
-  SIV ← AESE(enc_key, 0 @ tmp[126:0]);
-
-  // Export metadata and the SIV to memory
-  M[0 .. 15]  ← MH;
-  M[16 .. 31] ← SIV;
-
-  // Export encrypted context to memory
-  foreach(i from 0 to num_blocks - 1)
-    M[32+i*16 .. 47+i*16] ← ser_con[i*16 .. 15+i*16]
-            xor AESE(enc_key, 1 @ SIV[126:32] @ (SIV[31:0]+bin(i,32) % 2**32);
-
-  ace_exporting ← false;
-}
-----
 ////
 
 // ///////////////////////////////////////////////////////////////////
 
-[[ACE-SCC-import]]
-==== Import
 
 [WARNING]
 ====
@@ -940,7 +932,7 @@ Provisioning, import and export are being rewritten!
 The import algorithm needs some special care:
 
 * At the beginning of the import operation, the hardware saves the value of
-  `State` from the original metadata and sets `MH.State <-
+  `State` from the original Metadata Header and sets `MH.State <-
   ace_state_partial_config`. At the end of the import operation, `MH.State` is
   set to the saved value.
 * The SCC to be imported may have been generated by a different implementation
@@ -950,8 +942,8 @@ The import algorithm needs some special care:
   whether it known how to import the Implementation-Specific VDS.
   The SCC may even contain an Implementation-Specific VDS
   that exceed the maximum size supported by the importing hardware for the
-  specific algorithm encoded in the Metadata.
-  Once the Metadata and the Fixed Content Data Sections have been
+  specific algorithm encoded in the Metadata Header.
+  Once the Metadata Header and the Fixed Content Data Sections have been
   read, the implementation must determine the length of the Architected VDS
   corresponding to the algorithm's state, and ignore all writes to `ser_con[]`
   beyond the end of the Architected VDS in case it cannot import the implementation-dependent
@@ -970,7 +962,7 @@ The import algorithm needs some special care:
 function ace.import(CR_number, M[]) =
 {
   // M : array of bytes;   from memory
-  MH : bits(128) & = CR[CR_number].Metadata;          // By reference, from the CR
+  MH : bits(128) & = CR[CR_number].MH;          // By reference, from the CR
 
   local saved_SN : bits(5);                // This is a "hidden" state as well
 
@@ -984,14 +976,14 @@ function ace.import(CR_number, M[]) =
   ace_exporting ← false;
 
   tmp ← M[0 .. 15];         // read Metadata Header
-  saved_SN ← ((Metadata field)tmp).State;
+  saved_SN ← ((MH field)tmp).State;
   MH ← tmp;
   MH.State ← ace_state_partial_config;
 
   z ← base_content_size(MH);
   z ← z + MH._VarDataLen_ * 128;
 
-  if (there is not enough memory for the algorithm encoded in the Metadata)
+  if (there is not enough memory for the algorithm encoded in the Metadata Header)
     raise exception ace_exc_out_of_mem;
 
   num_blocks ← ceil(z / 128);
@@ -1061,7 +1053,7 @@ The key is still exported as a SKID.
 For the purpose of accelerating key share reconstruction in a threshold implementation, some shares of a system key can be included in the content's Additional Data, as long as the key cannot be recovered from those shares alone.
 
 An all-ones (i.e., `ones(64)`) system key identifier in a PI means that the key material is generated randomly upon provisioning.
-The _KeyType_ field in the metadata is then internally set to 0, and the key is then exported by value.
+The _KeyType_ field in the Metadata Header is then internally set to 0, and the key is then exported by value.
 This applies to all keys at once in an algorithms, unless otherwise specified.
 
 
@@ -1079,7 +1071,9 @@ It is envisionable that these operations could be described in a more RISC-like 
 ace.open K0, import    // import is a flag/field
 ld t0, 0(t6)           // load the medatada from memory
 ace.setmd K0, t0       // this may fail if internal memory is not sufficient.
-ace.size t1, t0        // now the size (except metadata) is in t1
+ace.size t1, t0        // now the size is in t1
+if t1 is zero, then there was not enough memory and the privileged code has not fixed it
+addi t1, t1, -16       // subtract 16 bytes for the metadata header
 ace.load K0, 8(t0), t1 // load t1 bytes or bits starting with the tag, fails if t1 is
                        // different than the expected data, but this can be checked
                        // asynchronously, so the actual size does not have to be
@@ -1091,9 +1085,10 @@ ace.seal K0            // this also decrypts and verifies
 ----
 ace.open K0, export    // export is a flag/field
 ace.getmd t0, K0
-ace.size t1, t0        // now the size of the SCC (except metadata) is in t1
-sd 0(t6), t0           // store the metadata
-ace.seal K0            // in this case, this computes the SIV
+ace.size t1, t0        // now the size of the SCC (except MH) is in t1
+sd 0(t6), t0           // store the metadata header
+addi t1, t1, -16       // subtract 16 bytes for the metadata header
+ace.seal K0            // in this case, this computes the SIV // alias to ace.exec ?
 ace.store 8(t0), K0, t1 // stores t1 bytes or bits starting with the tag,
                        // fails if t1 is different than the expected data, etc
 ace.close K0           // at this point, this is redundant...
@@ -1104,7 +1099,7 @@ ace.close K0           // at this point, this is redundant...
 ace.open K0, provision // provision is a flag/field
 ld t0, 0(t6)           // load the medatada from memory
 ace.setmd K0, t0       // this may fail if internal memory is not sufficient.
-ace.size t1, t0, provision // now the size of the PI (except metadata) is in t1
+ace.size t1, t0, provision // stoore size of the PI (except metadata header) in t1
 ace.load K0, 8(t0), t1 // load t1 bytes or bits starting with the tag, fails if t1 is
                        // different than the expected data, etc
 ace.seal K0            // this also reconstructs data if needed, makes CR useable
@@ -1126,7 +1121,7 @@ ace.seal K0         // this also decrypts and verifies,
 ----
 ace.open K0, export // export is a flag/field
 ace.getmd t0, K0
-sd 0(t6), t0        // store the metadata
+sd 0(t6), t0        // store the metadata header
 ace.seal K0         // in this case, this computes the SIV
 ace.store 8(t0), K0 // stores t1 bytes or bits starting with the SIV,
                     // fails if t1 is different than the expected data, etc
@@ -1151,7 +1146,7 @@ In the current CISC-like model, this situation is handled naturally:
 if for any reason the export operation must be restarted instead of resumed,
 the single monolithic instruction will indeed be restarted.
 
-With separate instructions, however (for example, `ace.open` followed by `ace.getmd`, then storing the metadata and emitting the contents via a single instruction or a loop), this situation cannot be avoided.
+With separate instructions, however (for example, `ace.open` followed by `ace.getmd`, then storing the Metadata Header and emitting the contents via a single instruction or a loop), this situation cannot be avoided.
 There is no general mechanism to restart an instruction sequence or force control flow to revert, since privileged code cannot be assumed to know the semantics of the interrupted sequence and backtrack accordingly.
 
 Let us consider the case an export operation for a CR is preempted.
@@ -1178,7 +1173,7 @@ such as SM4. By contrast, the specifications for other algorithm suites are
 specific only to some primitives, for instance, Ascon.
 
 <<ACE-exec-encodings>> defines the operation encodings for the symmetric
-algorithms encoded in the metadata field _Algorithm_.
+algorithms encoded in the Metadata Header field _Algorithm_.
 These algorithms are encoded using two sub-fields: Type and Mode.
 Type is encoded in the six LSBs of _Algorithm_, and mode is encoded in the
 next five LSBs of _Algorithm_.
@@ -1286,7 +1281,7 @@ required secrets. The fields are listed in the order they appear in the PI,
 each with its length.
 
 . *Internal State* (Content):
-Information maintained in the internal state of a CC beyond what the metadata provides.
+Information maintained in the internal state of a CC beyond what the Metadata Header provides.
 Field ordering is unspecified, and field lengths may differ from those listed—for example, in threshold or fault-tolerant implementations.
 This information is necessary to be able to define the algorithms and their semantics, and must exist internally, though not necessarily in a prescribed format.
 An actual implementation may define the internal state and the behavior at each state in a different way, however the semantics of the algorithm must be equivalent to those defined in this specification.
