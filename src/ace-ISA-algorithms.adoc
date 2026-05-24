@@ -465,7 +465,7 @@ The format of a Sealed Cryptographic Context (SCC) is shown in <<ACE-SCC>>.
 |===
 | Section | Section Name                   | Size     | Description
 | 1       | `MH`, Metadata Header            | 128 bits | The metadata information described in <<ACE-Metadata>>.
-| 2       | `SIV`                            | 128 bits | The SIV used to encrypt and authenticate sections 3.
+| 2       | `SIV`                            | 128 bits | Authentication tag for section 3.
 //
 | 3.a
 | `Content1`: _Fixed Data Section_
@@ -479,8 +479,8 @@ on the _Algorithm_, _AlgorithmPolicy_, and _KeyType_ fields of the Metadata Head
 | If the CR is not in an Error State, the length depends only on the information contained in the Metadata Header and Fixed Data Sections.
   Always a multiple of 128 bits.
 | The data in this Section is necessary for the correct functioning of the algorithm.
-| 4.      | `SIV2`                         | 128 bits if present | The SIV used to authenticate sections 5 and 6.
-| 5       | `IMPQUAL`, Implementation Qualifier    | 128 bits if present | Used to identify the implementation of the ACE Unit
+| 4       | `IMPQUAL`, Implementation Qualifier    | 128 bits if present | Used to identify the implementation of the ACE Unit
+| 5.      | `SIV2`                         | 128 bits if present | Authentication tag for sections 4 and 6.
 | 6
 | `Content2`: _Implementation (Specific) Variable-Length Data Section_ (Implementation VDS)
 | Implementation-Specific.
@@ -536,15 +536,15 @@ as a copy of some (or all) shares.
 Conceptually, for each of the 32 CRs, ACE maintains an offset into internal an memory pointing to the CR's 128-bit Metadata Header and Content (if not empty). The offset takes a special value if the CR is not configured.
 The actual representation of CRs in a concrete implementation may differ significantly from a string of bits.
 
-While an implementation is free to choose the representation of a cryptographic context inside a CR, we observe that it must host at least as many bits of information as specified by the CR's Algorithm. Therefore, a CR can be viewed as an array of bits whose size is at least the size of the SCC (see <<ACE-SCC>>) excluding the SIV, the Implementation Qualifier, and SIV2.
+While an implementation is free to choose the representation of a cryptographic context inside a CR, we observe that it must host at least as many bits of information as specified by the CR's Algorithm. Therefore, a CR can be viewed as an array of bits whose size is at least the size of the SCC (see <<ACE-SCC>>) excluding `SIV`, the Implementation Qualifier `IMPQUAL`, and `SIV2`.
 
-This has a few major implication:
+// This has a few major implication:
 
-* The information stored in a CR can be identified with the format of an SCC, again, without the SIV, the Implementation Qualifier, and SIV2.
+// * The information stored in a CR can be identified with the format of an SCC (except for `SIV`, `IMPQUAL`, and `SIV2`).
 This identification holds even if the SCC does not contain some information that can be easily reconstructed upon successful import, for instance
 `hash_key` in GCM (see <<ACE-GCM-mode>>) and `enc_key` and `auth_key` in GCM-SIV (see <<ACE-GCM-SIV-mode>>).
 
-* We can describe an import operation as a sequence of load operations to copy the encrypted and authenticated SCC into the CR, followed by an in-situ decryption and authentication operation to extract the plaintext, and finally a step to reconstruct missing information or expand keys in multiple shares.
+We can describe an import operation as a sequence of load operations to copy the encrypted and authenticated SCC into the CR, followed by an in-place decryption and authentication operation to extract the plaintext, and finally a step to reconstruct missing information or expand keys in multiple shares.
 
 When an SCC is imported, with the respect to the equivalent storage capacity of a CR, additional space for `SIV` (and for `IMPQUAL`, `SIV2`) may be needed.
 128 additional bits of storage for each of the 32 CRs (or 384 if at least one Algorithm supports implementation-specific additional data) could be quite expensive.
@@ -552,15 +552,19 @@ Therefore, the ACE architecture only supports a single import operation at a tim
 If a CR is “open” for importing, no other CR can be opened until the import operation of first one is finalized.
 This reduces the impact of the storage for `SIV`, `IMPQUAL`, and `SIV2` to just 128 or 384 bits per hart.
 
-The notation ``K``_i_ is used to refer to the _i_-th CR.
-When ``K``_i_ is being provisioned, resp., imported, we can refer to it as if it were a buffer with the length of the PI, resp., of the SCC with an additional 128 or 384 bits of additional storage. In this case, the format of this (virtual) buffer's format follows <<ACE-PI>>, resp., <<ACE-SCC>>.
-In particular:
-`K``__i__.``MH`` is the metadata field, followed by the `SIV` as
-``K``__i__.``SIV``, and Section 3, consisting of Sections 3.a and 3.b, namely ``K``__i__.``Content1[]``.
-After this we have the 128-bit blocks corresponding to, Sections 4 and 5, i.e.,
-``K``__i__.``SIV2`` and ``K``__i__.``IMPQUAL``,
-and finally
-``K``__i__.``Content2[]`` (i.e., Section 6), the latter being an array of 128-bit words like ``K``__i__.``Content1[]``.
+The _i_-th CR is denoted by ``K``_i_.
+When ``K``_i_ is being provisioned, resp., imported, we can refer to it as if it were a buffer with the length of the PI, resp., of the SCC with an additional 128 or 384 bits of additional storage. In this case, the format of this (virtual) buffer's format is the same as <<ACE-PI>>, resp., <<ACE-SCC>>.
+In particular, for provisioning we address the content as
+``K``__i__.``MH`` and ``K``__i__.``Content1``,
+and
+for import as
+``K``__i__.``MH``,
+``K``__i__.``SIV``,
+``K``__i__.``Content1[]`` (encompassing Sections 3.a and 3.b),
+``K``__i__.``IMPQUAL``,
+``K``__i__.``SIV2``,
+and
+``K``__i__.``Content2[]``.
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -844,43 +848,42 @@ Exporting ``K``__i__ distinguishes two cases
 [sidebar]
 .Reimporting a Partially Configured CR ``K``__i__
 --
-. If ``K``__i__ is being _Provisioned_:
+ . If ``K``__i__ is being _Provisioned_:
 
-.. The _Provisioning_ bit in the exported Metadata Header is left set.
-.. The length of the exported Content is the same as the length of the PI.
-.. No encryption or authentication occurs, the information in the CR is exported verbatim, in the same order as they appear in the PI. This implies that the provisioned data is exported in the clear. However, this does not increase the attack surface since more privileged modes have access to their children processes's address spaces.
-.. We call the exported context an _Exported Partial Context_ (EPC).
+ .. The _Provisioning_ bit in the exported Metadata Header is left set.
+ .. The length of the exported Content is the same as the length of the PI.
+ .. No encryption or authentication occurs, the information in the CR is exported verbatim, in the same order as they appear in the PI. This implies that the provisioned data is exported in the clear. However, this does not increase the attack surface since more privileged modes have access to their children processes's address spaces.
+ .. We call the exported context an _Exported Partial Context_ (EPC).
 
-. If ``K``__i__ is being _Imported_:
+ . If ``K``__i__ is being _Imported_:
 
-.. The _Importing_ bit in the exported Metadata Header is left set.
-.. The length of the exported Content is the same as the length of the original SCC being imported, with the provision that the `IMPQUAL`, `SIV2`, and `Content2[]` fields are omitted if they are above the maximal length allowed for this type of CC.
-.. No encryption or authentication occurs, the information in the CR is exported verbatim, in the same order as they appear in the SCC, namely:
- `MH`, `SIV`, `Content1[]`, and, if they are present `IMPQUAL`, `SIV2`, and `Content2[]`.
- `MH`, `SIV`, `IMPQUAL`, `SIV2` are left unencrypted, `Content1[]` and `Content2[]` are exported in the original encrypted form.
-.. We call the exported context an _Exported Partial Context_ (EPC) as in the _Provisioning_ case.
+ .. The _Importing_ bit in the exported Metadata Header is left set.
+ .. The length of the exported Content is the same as the length of the original SCC being imported, with the provision that the `IMPQUAL`, `SIV2`, and `Content2[]` fields are omitted if they are above the maximal length allowed for this type of CC.
+ .. No encryption or authentication occurs, the information in the CR is exported verbatim, in the same order as they appear in the SCC, namely:
+  `MH`, `SIV`, `Content1[]`, and, if they are present `IMPQUAL`, `SIV2`, and `Content2[]`.
+  `MH`, `SIV`, `IMPQUAL`, `SIV2` are left unencrypted, `Content1[]` and `Content2[]` are exported in the original encrypted form.
+  .. We call the exported context an _Exported Partial Context_ (EPC) as in the _Provisioning_ case.
 --
 
 [sidebar]
 .Exporting a Fully Configured CR ``K``__i__
 --
-. If ``K``__i__ is fully provisioned (both _Importing_ and _Provisioning_ flags are unset), then
- one or two ACE-GCM-SIV encryption operations (<<ACE-SCC-GCM-SIV-enc>>) are performed:
+ . If ``K``__i__ is fully provisioned (both _Importing_ and _Provisioning_ flags are unset), then one or two ACE-GCM-SIV encryption operations (<<ACE-SCC-GCM-SIV-enc>>) are performed:
 
-.. First, the algorithm-dependent data is processed:
-... ``AD[0]`` <- ``K``__i__.``MH``, ``len_AD`` <- 1
-... `foreach(j from 0 to 10 (included))`
-.... If `MH`.Locality includes Locality #j
-.....  ``AD[len_AD]`` <-  `LST[j]`
-.....  ``len_AD`` <- ``len_AD`` + 1
-... If _Nonce_ (Locality #11) is included, then `N` <- `LST[11]`, else `N` <- `zeros(96)`
-... `len_PC` <- lengths of Sections 3.a and 3.b combined.
-... `SIV`, `C[]` <- ``AES_GCM_SIV_Encrypt(AD, N, K``__i__.``Content1[], CSK, len_AD, len_PC)``
-.. Second, if VarDataLen {ne} 0, the implementation-dependent data is processed:
-... `len_AD` <- 2, ``AD[0]`` <- ``K``__i__.``IMLID``, ``AD[0]`` <- `SIV`.
-... `len_PC` <- length of Section 6 (subtract the size of Section 3.b from VarDataLen)
-... `SIV2`, `C2[]` <- ``AES_GCM_SIV_Encrypt(AD, N,`K``__i__.``Content2[], CSK,§ len_AD, len_PC)``
-.. Finally, output `MH`, `SIV`, `Content1[]`, and, if VarDataLen {ne} 0, `IMPQUAL`, `SIV2`, and `Content2[]`.
+ .. First, the Algorithm-dependent data is processed:
+ ... ``AD[0]`` <- ``K``__i__.``MH``, ``len_AD`` <- 1
+ ... `foreach(j from 0 to 10 (included))`
+ .... If `MH`.Locality includes Locality #j
+ .....  ``AD[len_AD]`` <-  `LST[j]`
+ .....  ``len_AD`` <- ``len_AD`` + 1
+ ... If _Nonce_ (Locality #11) is included, then `N` <- `LST[11]`, else `N` <- `zeros(96)`
+ ... `len_PC` <- lengths of Sections 3.a and 3.b combined.
+ ... `SIV`, `C[]` <- ``AES_GCM_SIV_Encrypt(AD, N, K``__i__.``Content1[], CSK, len_AD, len_PC)``
+ .. Second, if VarDataLen {ne} 0, the Implementation-dependent data is processed:
+ ... `len_AD` <- 2, ``AD[0]`` <- ``K``__i__.``IMLID``, ``AD[1]`` <- `SIV`.
+ ... `len_PC` <- length of Section 6 (subtract the size of Section 3.b from VarDataLen)
+ ... `SIV2`, `C2[]` <- ``AES_GCM_SIV_Encrypt(AD, N, K``__i__.``Content2[], CSK,§ len_AD, len_PC)``
+ .. Finally, output `MH`, `SIV`, `Content1[]`, and, if VarDataLen {ne} 0, `IMPQUAL`, `SIV2`, and `Content2[]`.
 --
 
 ////
