@@ -24,7 +24,7 @@ Both formats begin with a 128-bit Metadata Header, whose format we define next.
 ==== Metadata Header Format
 
 The following table lists the fields of the 128-bit Metadata Header.
-Currently, 83 bits are defined and 45 are reserved for future use.
+Currently, 101 bits are defined and 27 are reserved for future use.
 
 [[ACE-metadata-header]]
 .Format of the 128-bit Metadata Header
@@ -37,15 +37,16 @@ Currently, 83 bits are defined and 45 are reserved for future use.
 |  [18:16] | 3     | _SCProtection_    | Side-channel protection level. See <<ACE-SCProtection-field>>.
 |  [20:19] | 2     | _KeyType_         | 0: key is an explicit value in Content. 1:  1: Key is a system-specific System Key Identifier. See <<ACE-system-keys>>.
 |  [25:21] | 5     | _State_           | Current state of the CR/algorithm, encoded as an integer.
-|  [26:26] | 1     | _Provisioning_    | Set if the CR has been only partially provisioned.
-|  [27:27] | 1     | _Importing_       | Set if the CR has been only partially imported.
-|  [31:28] | 4     | Reserved          | Reserved for future use. Currently, this field must be zero.
+|  [31:28] | 4     | _StateExtension_  | May be used by the algorithm to extend the _State_ field with additional information, otherwise zero.
+|  [30:30] | 1     | _Provisioning_    | Set if the CR has been only partially provisioned.
+|  [31:31] | 1     | _Importing_       | Set if the CR has been only partially imported.
 |  [36:32] | 5     | _UsagePolicy_     | Usage (Control) Policy. Bits 0, 1, 2, 4 and 4 of the field,, when set, disallow CC usage in U-mode, (V)S-mode, H-mode, M-Mode, and Debug mode, respectively.
-|  [46:37] | 10    | _Locality_        | Zero, or an index determining a Locality Secret. See <<ACE-Localities>>.
-|  [47:47] | 1     | Reserved          | Reserved for future use.  Currently, this field must be zero.
-|  [63:48] | 16    | _VarDataLen_      | If non-zero, indicates that an additional, variable-length data section appended to Content. The length of this additional data section is _VarDataLen_ * 128 bits (up to 512 KiB).
+|  [44:37] | 8     | _Locality_        | Zero, or an index determining a Locality Secret. See <<ACE-Localities>>.
+|  [47:45] | 3      | Reserved          | Reserved for future expansion of the _Locality_ field use.  Currently, this field must be zero.
+|  [63:48] | 16    | _ImpDataLen_      | If non-zero, indicates that an additional, variable-length, implementation-dependent data section appended to Content. The length of this additional data section is _ImpDataLen_ * 128 bits (up to 1024 KiB).
 |  [89:64] | 26    | _ExpirationDate_  | If non-zero, the expiration date of this CC. See <<ACE-Metadata-expiration-date>>. Minutes since 00:00, January 1, 2027 (about 127 years).
-| [127:90] | 38    | Reserved          | Reserved for future use.  Currently, this field must be zero.
+| [109:90] | 20    | _AlgorithmUse_     | Reserved for algorithms and implementations to store additional state information.
+| [127:110] | 18   | Reserved          | Reserved for future use.  Currently, this field must be zero.
 |===
 
 In the following subsections we describe the fields of the Metadata Header.
@@ -86,13 +87,13 @@ The architecture defines the following side-channel protection levels.
 
 Custom implementations of algorithms offering different protection than encodings 0–2 shall set
 _SCProtection_ to additional values.
-In this case, the _VarDataLen_ field shall be non-zero to ensure that the `IMPQUAL` value
+In this case, the _ImpDataLen_ field shall be non-zero to ensure that the `IMPQUAL` value
 is checked in order to allow the implementation to verify whether it can accept the
 _SCProtection_ values.
 
 NOTE: To discuss with the ARC: use values 3-5 for potential expansion of the architecture and
 values 6-7 for implementation-dependent custom values. Only the latter two would need the
-copy of `IMPQUAL` and therefore a non-zero _VarDataLen_.
+copy of `IMPQUAL` and therefore a non-zero _ImpDataLen_.
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -168,7 +169,7 @@ This ensures that these states can be unambiguously determined from the _State_ 
 . Unless an algorithm's specification explicitly states otherwise, a transition from any valid state to _Initial_ using instruction `ace.setst` is always permitted.
 
 . Upon transitioning to an Error State, the Content of a CR is invalidated and emptied.
-Internal resources associated with the Content may also be released. In that case, any additional variable-length data is released as well and the _VarDataLen_ field is set to 0.
+Internal resources associated with the Content may also be released. In that case, any additional variable-length data is released as well and the _ImpDataLen_ field is set to 0.
 The CR then retains only the Metadata Header.
 
 . Exporting a CR in an Error State exports only the Metadata Header (and the authentication tag).
@@ -292,6 +293,13 @@ The graph is read as follows:
 
 // ////////////////////////////////////////////////////////////////////
 
+[[ACE-StateExtension]]
+===== _StateExtension_ Field
+
+The _StateExtension_ field can be used by an Algorithm to store state information, in particular state information that contribute to determining the size of an SCC.
+
+// ////////////////////////////////////////////////////////////////////
+
 [[ACE-Localities]]
 ===== _Locality_ Field
 
@@ -374,37 +382,22 @@ Any bit of this field is ignored if the corresponding mode is not supported or n
 // ////////////////////////////////////////////////////////////////////
 
 [[ACE-extra-content]]
-===== _VarDataLen_ Field
+===== _ImpDataLen_ Field
 
-The _VarDataLen_ Metadata Header field records the length of the _Additional Data Section_ of the content, which is a variable-size part and may depend on the state of the algorithm.
+The _ImpDataLen_ Metadata Header field records the length of the _Additional Data Section_ of the content, which is a variable-size additional part that depends on the implementation.
 
 The format of the _Additional Data Section_ is described in <<ACE-data-formats>>.
 
-The first 128 bits of the Implementation-Specific Variable-Length Data Section of the Content, if not empty, always hold a copy of the
+The first 128 bits of the Implementation VDS of the Content, if not empty, always hold a copy of the
 following value
 ----
 IMPQUAL := zeros(32) @ aceimpid @ acearchid @ acevendorid
 ----
-(cf. <<ACE-CSR-impl-ids>>) of the originating machine, and are counted within the length recorded by the _VarDataLen_ field.
+(cf. <<ACE-CSR-impl-ids>>) of the originating machine, and are counted within the length recorded by the _ImpDataLen_ field.
 The importing implementation uses this value to determine whether any information in the Implementation-Specific Data Section can be used.
 
-It is the responsibility of the *algorithm* to determine the lengths of the two parts of the Variable-Length Data Section.
-If the Implementation-Specific Variable-Length Data Section is not empty, the *implementation* will check the `IMPQUAL`
+If the Implementation VDS is not empty, the *implementation* will check the `IMPQUAL`
 stored therein to decide whether the Implementation-Specific part can be used or should be ignored.
-
-[NOTE]
-====
-Examples of Variable-Length Data are:
-
-. “Decryption AES keys”, i.e., the last one or two AES round keys, from which one can work backwards when performing AES decryptions.
-. Precomputed point multiples for elliptic curve scalar multiplication (their computation can be far more expensive than their
-encryption and decryption);
-. Information, such as additional elliptic curve points or random numbers used by Elliptic Curve algorithms only in certain states;
-. any auxiliary data for side-channel-protected implementations, such as key shares or other data to accelerate share reconstruction.
-
-Examples 1., 2., and 4. are optional data, and therefore are stored in the _Implementation-Specific_ VDS.
-The third example, however, describes information that is required for the correct functioning of the algorithm. Therefore, its format must be defined by the algorithm specification and the data should be stored in the _Architected_ VDS.
-====
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -420,6 +413,15 @@ When a non-configuration instruction is executed on a CR whose _ExpirationDate_ 
 When an expired CR is used, privileged code may take appropriate action—for example, provisioning a new key or returning to the caller for handling.
 
 Since privileged code may replace expired CRs, any user code that uses CRs that are known to potentially expire should always export the CR when it has finished using it, in case it may be needed later, instead of recovering it from a previously saved copy.
+
+// ////////////////////////////////////////////////////////////////////
+
+[[ACE-AlgorithmUse]]
+===== _AlgorithmUse_ Field
+
+The _AlgorithmUse_ field can be used by an Algorithm to store state information.
+Also the implementation may use this field to store state information.
+This information cannot contribute to determining the size of an SCC.
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -467,18 +469,12 @@ The format of a Sealed Cryptographic Context (SCC) is shown in <<ACE-SCC>>.
 | 1       | `MH`, Metadata Header            | 128 bits | The metadata information described in <<ACE-Metadata>>.
 | 2       | `SIV`                            | 128 bits | Authentication tag for section 3.
 //
-| 3.a
-| `Content1`: _Fixed Data Section_
-| If the CR is not in an Error State, the length depends only the
-on the _Algorithm_, _AlgorithmPolicy_, and _KeyType_ fields of the Metadata Header.
- Always a multiple of 128 bits.
+| 3
+| `Content1`: _Algorithm Data Section_
+| If the CR is not in an Error State, the length of the SCC depends only on the _Algorithm_, _AlgorithmPolicy_, _KeyType_ and _StateExtension_ fields of the Metadata Header.  Always a multiple of 128 bits.
 | Contains keys and other algorithm-specific information. Encrypted in memory and during partial import.
+ The data in this Section is necessary for the correct functioning of the algorithm.
 //
-| 3.b
-| `Content1`: _Architected Variable-Length Data Section_ (Architected VDS)
-| If the CR is not in an Error State, the length depends only on the information contained in the Metadata Header and Fixed Data Sections.
-  Always a multiple of 128 bits.
-| The data in this Section is necessary for the correct functioning of the algorithm.
 | 4       | `IMPQUAL`, Implementation Qualifier    | 128 bits if present | Used to identify the implementation of the ACE Unit
 | 5.      | `SIV2`                         | 128 bits if present | Authentication tag for sections 4 and 6.
 | 6
@@ -491,9 +487,7 @@ on the _Algorithm_, _AlgorithmPolicy_, and _KeyType_ fields of the Metadata Head
 
 Fields 2-6 are empty if the context is exported in an Error State, in other words, the entire SCC consists only of a Metadata Header in plaintext.
 
-The Metadata Header's _VarDataLen_ field specifies the total size of the _Variable-Length Section_.
-It does not partition this total between the Architected and Implementation-Specific segments.
-The ordering of sections within the SCC allows to determine the lengths of these two parts before reading them.
+The Metadata Header's _ImpDataLen_ field specifies the total size of the _Variable-Length Section_.
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -579,20 +573,21 @@ Provisioning, import and export are being rewritten!
 Let `MH` denote a Metadata Header.
 In order to determine the total lengths of the PI and of the SCC, the implementation provides the following functions or an equivalent mechanism:
 
-. ``MH_size`` returns the bit length of the Metadata Header. It is always 128.
+. ``MH_size`` returns the byte length of the Metadata Header. It is always 16.
 
-. ``PI_content_size(MH)`` returns the bit length of the content section of a PI. It depends only on `MH`._Algorithm_, `MH`._AlgorithmPolicy_, and `MH`._KeyType_.
+. ``PI_content_size(MH)`` returns the byte length of the content section of a PI. It depends only on `MH`._Algorithm_, `MH`._AlgorithmPolicy_, and `MH`._KeyType_.
 
-. ``base_content_size(MH)`` returns the bit length of the part of the content section of an SCC that depends only on  `MH`._Algorithm_,
-  `MH`._AlgorithmPolicy_, and `MH`._KeyType_. It does not include the length of the Additional Data of the Content, of length _VarDataLen_ * 128 bits.
+. ``base_content_size(MH)`` returns the byte length of the part of the content section of an SCC that depends only on  `MH`._Algorithm_,
+  `MH`._AlgorithmPolicy_, `MH`._KeyType_ and `MH`._StateExtension_.
+  It does not include the length of the Additional Data of the Content, of length _ImpDataLen_ * 128 bits.
 
-The total size in bits of a PI is therefore
+The total size in bytes of a PI is therefore
 
 `{fournbsp}{fournbsp}len_in_bits(PI){nbsp}` = `MH_size` + `PI_content_size(MH)`,
 
 and the total size in bits of an SCC is
 
-`{fournbsp}{fournbsp}len_in_bits(SCC)` = `MH_size` + 128 + `base_content_size(MH)` + _VarDataLen_ * 128 bits.
+`{fournbsp}{fournbsp}len_in_bits(SCC)` = `MH_size` + 16 + `base_content_size(MH)` + _ImpDataLen_ * 16 bits.
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -806,7 +801,6 @@ Exporting ``K``__i__ distinguishes two cases
 .. The _Provisioning_ bit in the exported Metadata Header is left set.
 .. The length of the exported Content is the same as the length of the PI.
 .. No encryption or authentication occurs, the information in the CR is exported verbatim, in the same order as they appear in the PI. This implies that the provisioned data is exported in the clear. However, this does not increase the attack surface since more privileged modes have access to their children processes's address spaces.
-.. We call the exported context an _Exported Partial Context_ (EPC).
 
 . If ``K``__i__ is being _Imported_:
 
@@ -815,29 +809,28 @@ Exporting ``K``__i__ distinguishes two cases
 .. No encryption or authentication occurs, the information in the CR is exported verbatim, in the same order as they appear in the SCC, namely:
  `MH`, `SIV`, `Content1[]`, and, if they are present `IMPQUAL`, `SIV2`, and `Content2[]`.
  `MH`, `SIV`, `IMPQUAL`, `SIV2` are left unencrypted, `Content1[]` and `Content2[]` are exported in the original encrypted form.
-.. We call the exported context an _Exported Partial Context_ (EPC) as in the _Provisioning_ case.
 --
+
+In both cases, We call the exported context an _Exported Partial Context_ (EPC).
+
+If both _Importing_ and _Provisioning_ flags are unset, then
+``K``__i__ is fully provisioned and `ace.export` works as follows:
 
 [sidebar]
 .Exporting a Fully Configured CR ``K``__i__
 --
-. If ``K``__i__ is fully provisioned (both _Importing_ and _Provisioning_ flags are unset), then
- one or two ACE-GCM-SIV encryption operations (<<ACE-SCC-GCM-SIV-enc>>) are performed:
-
-.. First, the algorithm-dependent data is processed:
-... ``AD[0]`` <- ``K``__i__.``MH``, ``len_AD`` <- 1
-... `foreach(j from 0 to 10 (included))`
-.... If `MH`.Locality includes Locality #j
-.....  ``AD[len_AD]`` <-  `LST[j]`
-.....  ``len_AD`` <- ``len_AD`` + 1
-... If _Nonce_ (Locality #11) is included, then `N` <- `LST[11]`, else `N` <- `zeros(96)`
-... `len_PC` <- lengths of Sections 3.a and 3.b combined.
-... `SIV`, `C[]` <- ``AES_GCM_SIV_Encrypt(AD, N, K``__i__.``Content1[], CSK, len_AD, len_PC)``
-.. Second, if VarDataLen {ne} 0, the implementation-dependent data is processed:
-... `len_AD` <- 2, ``AD[0]`` <- ``K``__i__.``IMLID``, ``AD[0]`` <- `SIV`.
-... `len_PC` <- length of Section 6 (subtract the size of Section 3.b from VarDataLen)
-... `SIV2`, `C2[]` <- ``AES_GCM_SIV_Encrypt(AD, N,`K``__i__.``Content2[], CSK,§ len_AD, len_PC)``
-.. Finally, output `MH`, `SIV`, `Content1[]`, and, if VarDataLen {ne} 0, `IMPQUAL`, `SIV2`, and `Content2[]`.
+. First, the algorithm-dependent data is processed:
+.. ``AD[0]`` <- ``K``__i__.``MH``, ``len_AD`` <- 1
+.. foreach(_j_ from 0 to 10) :
+... If `MH`.Locality includes Locality #j, then ``AD[len_AD]`` <-  ``LST[``_j_``]``, ``len_AD`` <- ``len_AD`` + 1
+.. If _Nonce_ (Locality #11) is included, then `N` <- `LST[11]`, else `N` <- `zeros(96)`
+.. `len_PC` <- lengths of Sections 3.a and 3.b combined.
+.. `SIV`, `C[]` <- ``AES_GCM_SIV_Encrypt(AD, N, K``__i__.``Content1[], CSK, len_AD, len_PC)``
+. Second, if VarDataLen {ne} 0, the implementation-dependent data is processed:
+.. `len_AD` <- 2, ``AD[0]`` <- ``K``__i__.``IMPQUAL``, ``AD[0]`` <- `SIV`.
+.. `len_PC` <- length of Section 6 (subtract the size of Section 3.b from VarDataLen)
+.. `SIV2`, `C2[]` <- ``AES_GCM_SIV_Encrypt(AD, N,`K``__i__.``Content2[], CSK, len_AD, len_PC)``
+. Finally, output `MH`, `SIV`, `Content1[]`, and, if VarDataLen {ne} 0, `IMPQUAL`, `SIV2`, and `Content2[]`.
 --
 
 // ////////////////////////////////////////////////////////////////////
@@ -866,24 +859,25 @@ Exporting ``K``__i__ distinguishes two cases
 --
 
 [sidebar]
-.Exporting a Fully Configured CR ``K``__i__
+.Importing a Fully Configured CR ``K``__i__
 --
- . If ``K``__i__ is fully provisioned (both _Importing_ and _Provisioning_ flags are unset), then one or two ACE-GCM-SIV encryption operations (<<ACE-SCC-GCM-SIV-enc>>) are performed:
-
- .. First, the Algorithm-dependent data is processed:
- ... ``AD[0]`` <- ``K``__i__.``MH``, ``len_AD`` <- 1
- ... `foreach(j from 0 to 10 (included))`
- .... If `MH`.Locality includes Locality #j
- .....  ``AD[len_AD]`` <-  `LST[j]`
- .....  ``len_AD`` <- ``len_AD`` + 1
- ... If _Nonce_ (Locality #11) is included, then `N` <- `LST[11]`, else `N` <- `zeros(96)`
- ... `len_PC` <- lengths of Sections 3.a and 3.b combined.
- ... `SIV`, `C[]` <- ``AES_GCM_SIV_Encrypt(AD, N, K``__i__.``Content1[], CSK, len_AD, len_PC)``
- .. Second, if VarDataLen {ne} 0, the Implementation-dependent data is processed:
- ... `len_AD` <- 2, ``AD[0]`` <- ``K``__i__.``IMLID``, ``AD[1]`` <- `SIV`.
- ... `len_PC` <- length of Section 6 (subtract the size of Section 3.b from VarDataLen)
- ... `SIV2`, `C2[]` <- ``AES_GCM_SIV_Encrypt(AD, N, K``__i__.``Content2[], CSK,§ len_AD, len_PC)``
- .. Finally, output `MH`, `SIV`, `Content1[]`, and, if VarDataLen {ne} 0, `IMPQUAL`, `SIV2`, and `Content2[]`.
+ . Clear ``K``__i__.
+ . Load `M`, the Metadata Header, from the SCC, into ``K``__i__.``MH``.
+ . Check correctness of `M`, and whether the Algorithm is supported.
+ . Determine the length of the entire SCC.
+ . If the length is greater than the maximum supported by the implementation for the Algorithm, it means that the Implementation VDS is present in the SCC but not supported, so adjust the length to only the SCC including any Algorithm VDS.
+ . Load the rest of the SCC, up to the determined length.
+ . ``AD[0]`` <- ``K``__i__.``MH``, ``len_AD`` <- 1
+ . foreach(_j_ from 0 to 10) :
+ .. If `MH`.Locality includes Locality #j, then ``AD[len_AD]`` <-  ``LST[``__j__``]``, ``len_AD`` <- ``len_AD`` + 1
+ . If _Nonce_ (Locality #11) is included, then `N` <- `LST[11]`, else `N` <- `zeros(96)`
+ . `len_PC` <- lengths of Sections 3.a and 3.b combined.
+ . `SIV`, `C[]` <- ``AES_GCM_SIV_Decrypt(AD, N, K``__i__.``Content1[], CSK, len_AD, len_PC)``
+ .Second, if VarDataLen {ne} 0, the Implementation-dependent data is processed:
+ . `len_AD` <- 2, ``AD[0]`` <- ``K``__i__.``IMPQUAL``, ``AD[1]`` <- `SIV`.
+ . `len_PC` <- length of Section 6 (subtract the size of Section 3.b from VarDataLen)
+ . `SIV2`, `C2[]` <- ``AES_GCM_SIV_Encrypt(AD, N, K``__i__.``Content2[], CSK,§ len_AD, len_PC)``
+ . Finally, output `MH`, `SIV`, `Content1[]`, and, if VarDataLen {ne} 0, `IMPQUAL`, `SIV2`, and `Content2[]`.
 --
 
 ////
@@ -926,7 +920,7 @@ The import algorithm needs some special care:
   beyond the end of the Architected VDS in case it cannot import the implementation-dependent
   data after checking `acevendorid`, `acearchid` and `aceimpid`.
   It must still process the entire SCC to verify the authentication tag.
-  After successful verification, the _VarDataLen_ field will be adjusted
+  After successful verification, the _ImpDataLen_ field will be adjusted
   to the size of the Architected VDS.
   The Implementation-Specific VDS will be ignored.
   The details of this adjustment are not reflected in the pseudocode
@@ -958,7 +952,7 @@ function ace.import(CR_number, M[]) =
   MH.State ← ace_state_partial_config;
 
   z ← base_content_size(MH);
-  z ← z + MH._VarDataLen_ * 128;
+  z ← z + MH._ImpDataLen_ * 128;
 
   if (there is not enough memory for the algorithm encoded in the Metadata Header)
     raise exception ace_exc_out_of_mem;
@@ -3486,18 +3480,42 @@ Since the all-ones strings do not represent any valid field value, these are use
 //
 
 Data Structures:::
+* *Metadata Header*:
++
+--
+The elliptic curve algorithm use the _StateExtension_ field as follows:
+
+[[ACE-ECC-StateExtension]]
+.StateExtension bits used by the elliptic curve algorithms
+[cols="^7%,<20%,<73%",width="100%",options="header"]
+|===
+|  Bit  | Name            | Description
+|   0   | `HasSecondPt`   |  A second point has been set.
+|   1   | `HasSignature`  |  A signature has been set.
+|   2   | `HasHash`       |  A hash has been set.
+|   3   | `HasRndNum`     |  A random number has been set.
+|===
+
+The elliptic curve algorithm use the _AlgorithmUse_ field as follows:
+
+[[ACE-ECC-AlgorithmUse]]
+.AlgorithmUse bits used by the elliptic curve algorithms
+[cols="^7%,<20%,<73%",width="100%",options="header"]
+|===
+|  Bits   | Name            | Description
+|   0     | `OutputType`    |  Determines whether the output is a point (and thus comes from `SecondPt`) or a signature (and thus comes from `Signature`).
+|  [19:1] | `Progress`      |  May be used by the implementation to track the progress of long running operations in a non-portable way.
+|===
+--
++
+
 * *Provisioning Input* (Content): Empty.
 +
 NOTE: _AlgorithmPolicy_ enables signature generation (_AlgorithmPolicy_[0]) and verification (_AlgorithmPolicy_[1]), where all four combinations are admissible.
 +
 * *Internal State* (Content):
- ** `HasSecondPt`: Bool.
- ** `HasScalar`: Bool.
- ** `HasSignature`: Bool.
- ** `HasHash`: Bool.
- ** `HasRndNum`: Bool.
  ** `OutputType`: Bool.
- ** `Progress`: integer.
+ ** `Progress`: integer (19 bits).
  ** `block_base`: integer.
  ** `Generator` (X, {Y}): one or two `b`-bit strings representing the X {and Y} coordinate{s}.
  ** `SecondPt` (X, {Y}): one or two `b`-bit strings representing the X {and Y} coordinate{s}.
@@ -3513,32 +3531,29 @@ NOTE: _AlgorithmPolicy_ enables signature generation (_AlgorithmPolicy_[0]) and 
 * *Serialized Context*:
 +
 --
-[cols="^7%,<33%,<30,<30",width="100%",options="header"]
+[cols="^7%,<33%,<60%",width="100%",options="header"]
 |===
-|   Pos.  | Size (Bits)                 2+| Field
-|    i    | 128                         2+| Metadata Header
-.3+| ii .3+| 16 (Bits 6-15 are reserved)  | Bit 0: `HasScalar`     | Bit 1: `HasSecondPt`
-{empty}                                  <| Bit 2: `HasSignature` <| Bit 3: `HasHash`
-{empty}                                  <| Bit 4: `HasRndNum`    <| Bit 5: `OutputType`
-|   iii   | 16                          2+| `Progress`
-|    iv   | 32                          2+| Padding
-|     v   | `ub`                        2+| `Generator`, X coordinate, followed by Y coordinate if `u=2`.
-|    vi   | `b`                         2+| `Scalar`: `b`-bit string. Can be the Private Key.
+|   Pos.  | Size (Bits)        | Field
+|     i   | 128                | Metadata Header
+|    ii   | 32                 | Padding
+|   iii   | `ub`               | `Generator`, X coordinate, followed by Y coordinate if `u=2`.
+|    iv   | `b`                | `Scalar`: `b`-bit string. Can be the Private Key.
 |===
 
-`SCC_content_size()` returns only the length of the content from Position i to Position v.
+The following fields are also optionally included in the `Content1[]` field of the SCC
 
-The size of the following fields is included in the _VarDataLen_ field of the Metadata Header.
-
-[cols="^7%,<33%,<60",width="100%",options="header"]
+[cols="^7%,<33%,<60%",width="100%",options="header"]
 |===
 |   Pos.  | Size (Bits)                             | Field
-|   vii   | If `HasSecondPt`: `ub`, else: 0         | `SecondPt`, X coordinate, followed by Y coordinate if `u=2`. Can be the Public Key.
-|  viii   | If `HasSignature`: `vb`, else: 0        | `Signature`, R value, followed by S coordinate if `v=2`.
-|    ix   | If `HasHash`: `h`, else: 0              | `Hash`: a `h`-bit string representing the hash.
-|     x   | If `HasRndNum`: `j`, else: 0            | `RndNum`.
-|    xi   | (variable)                              | Optional and implementation-specific data from the *Internal State* (Content), starting with the `IMPQUAL` if not empty.
+|     v   | If `HasSecondPt`: `ub`, else: 0         | `SecondPt`, X coordinate, followed by Y coordinate if `u=2`. Can be the Public Key.
+|    vi   | If `HasSignature`: `vb`, else: 0        | `Signature`, R value, followed by S coordinate if `v=2`.
+|   vii   | If `HasHash`: `h`, else: 0              | `Hash`: a `h`-bit string representing the hash.
+|  viii   | If `HasRndNum`: `j`, else: 0            | `RndNum`.
+not empty.
 |===
+
+`SCC_content_size()` returns the length of the content from Position i to Position viii, and thus the elliptic curve algorithms make use
+of the _StateExtension_ Metadata Header field to determine the length of the SCC.
 
 The `HasRndNum` flag is set and the `RndNum` field is used only during signature generation.
 `RndNum` is exported only if the signature operation is interrupted.
@@ -3548,7 +3563,7 @@ The size in bits of Fields vii to x is:
 `{fournbsp}{fournbsp}` `varlen` <- 8 + (`HasSecondPt` != 0) {interpunct} ``ub``/8 + (`HasSignature` != 0) {interpunct} ``vb``/8 + +
 `{fournbsp}{fournbsp}{fournbsp}{fournbsp}{fournbsp}{fournbsp}{fournbsp}` + (`HasHash` != 0) {interpunct} ``h``/8 + (`HasRndNum` != 0) {interpunct} ``j``/8.
 
-If _VarDataLen_ > `varlen`, Position x contains the microarchitectural dependent part, which starts with
+If _ImpDataLen_ > `varlen`, Position x contains the microarchitectural dependent part, which starts with
 the Implementation Qualifier `aceunitid`.
 --
 +
@@ -3583,9 +3598,9 @@ ECC algorithms define:
  ** _Initial_ -> _Set_Generator_, _Set_Scalar_, _Set_Hash_, _Set_SecondPt_, _Sign_Generate_, _Set_Signature_.
  ** One can freely transition between _Set_Generator_, _Set_Scalar_, _Set_Hash_, and _Set_SecondPt_.
  ** From any of _Initial_, _Set_Generator_, _Set_Scalar_, _Set_Hash_, _Set_SecondPt_ -> one of the following states:
-  *** _Point_Mul_ only if `HasScalar`;
+  *** _Point_Mul_;
   *** _Sign_Generate_ only if `HasSecondPt`, and `HasHash`;
-  *** _Sign_Verify_ only if `HasScalar`, `HasSecondPt`, `HasHash`, and `HasSignature`.
+  *** _Sign_Verify_ only if `HasSecondPt`, `HasHash`, and `HasSignature`.
  ** _Point_Mul_ -> _Output_.
  ** _Sign_Generate_ -> _Output_ -> _Success_.
  ** _Sign_Verify_ -> _Success_ or _Failure_.
@@ -3601,7 +3616,7 @@ the Boolean variable ``Has``__Var__ is set when all operations required in State
 
 * *Behavior:*
 
- ** When the CC is created, the `Generator` is set to the default parameter.
+ ** When the CC is created, i.e., provisioned, the `Generator` is set to the default parameter, and `Scalar` is set to zero.
 
  ** All the “set” and “output” operations work like the input and output of blocks in the Hash functions, in other words, they use `Progress` (just as the Hash/MAC functions use `block_base`) to track how much information has been read in or written out.
 
@@ -3635,7 +3650,7 @@ the Boolean variable ``Has``__Var__ is set when all operations required in State
   *** A state change operation can be issued, including to states that require a value for _X_ to be set. This state change also clears `Progress`.
 
  ** It is allowed to transition to _Set_Scalar_ also using a Form B `ace.setst` with a non-zero value in the GPR.
-    In this case, a random value is set, and `HasScalar` is set to true.
+    In this case, a random value is set.
 
  ** When the operations in states _Point_Mul_ and _Sign_Generate_ are completed:
    . If the output is a point, then `OutputType` <- False, and if the output is a signature, then `OutputType` <- True.
@@ -3653,7 +3668,7 @@ the Boolean variable ``Has``__Var__ is set when all operations required in State
   *** If a Form B `ace.setst` is used, the parameter `Xs` will determine whether the fields
  `Generator`, `Scalar`, and `SecondPt` are reset/erased or kept for further operations.
  This is determined by Bits 0, 1, 2, and 3 of `Xs` as follows:
-   **** If Bit 0, 1, 2, resp., 3 is set, then `Generator` is reset to the default value, `SecondPt`, `Scalar`, resp., `SecondPt` is erased, and the corresponding Boolean flags `HasScalar`, resp., `HasSecondPt` is unset as well.
+   **** If Bit 0, 1, 2, resp., 3 is set, then `Generator` is reset to the default value, `SecondPt`, `Scalar`, resp., `SecondPt` is erased, and in the second case flag `HasSecondPt` is unset as well.
    **** If Bit 4 is set, then `Generator` is copied onto `SecondPt`. If Bit 0 is set, then `Generator` is set to the default value.
    **** If Bit 5 is set, then `SecondPt` is copied onto `Generator`. If Bit 1 is set, then `SecondPt` is erased afterwards and `HasSecondPt` is set to False.
   *** A Form A `ace.setst` does not modify these states.
@@ -3662,6 +3677,7 @@ the Boolean variable ``Has``__Var__ is set when all operations required in State
 // ////////////////////////////////////////////////////////////////////
 
 ////
+
 ===== Key Derivation Options
 
 [WARNING]
