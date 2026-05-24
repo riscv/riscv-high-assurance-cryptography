@@ -24,7 +24,7 @@ Both formats begin with a 128-bit Metadata Header, whose format we define next.
 ==== Metadata Header Format
 
 The following table lists the fields of the 128-bit Metadata Header.
-Currently, 81 bits are defined and 47 are reserved for future use.
+Currently, 83 bits are defined and 45 are reserved for future use.
 
 [[ACE-metadata-header]]
 .Format of the 128-bit Metadata Header
@@ -33,19 +33,19 @@ Currently, 81 bits are defined and 47 are reserved for future use.
 |  Field   | Width | Name              | Description
 |  [11:0]  | 12    | _Algorithm_       | Cryptographic algorithm (primitive, mode, or protocol). See <<ACE-Algorithm-field>>.
 |  [13:12] | 2     | _AlgorithmPolicy_ | Allowed algorithm variants(s) _or_ extension of the _Algorithm_ field. See <<ACE-Algorithm-field>>.
-|  [15:14] | 2     | Reserved          | Reserved for future expansion of _AlgorithmPolicy_ field.
+|  [15:14] | 2     | Reserved          | Reserved for future expansion of _AlgorithmPolicy_ field.  Currently, this field must be zero.
 |  [18:16] | 3     | _SCProtection_    | Side-channel protection level. See <<ACE-SCProtection-field>>.
 |  [20:19] | 2     | _KeyType_         | 0: key is an explicit value in Content. 1:  1: Key is a system-specific System Key Identifier. See <<ACE-system-keys>>.
 |  [25:21] | 5     | _State_           | Current state of the CR/algorithm, encoded as an integer.
-|  [26:26] | 1     | _Provisioning_    | Set if the CR has been only partially configured.
+|  [26:26] | 1     | _Provisioning_    | Set if the CR has been only partially provisioned.
 |  [27:27] | 1     | _Importing_       | Set if the CR has been only partially imported.
-|  [31:28] | 4     | Reserved          | Reserved for future use. Currently, it must be equal to zero.
+|  [31:28] | 4     | Reserved          | Reserved for future use. Currently, this field must be zero.
 |  [36:32] | 5     | _UsagePolicy_     | Usage (Control) Policy. Bits 0, 1, 2, 4 and 4 of the field,, when set, disallow CC usage in U-mode, (V)S-mode, H-mode, M-Mode, and Debug mode, respectively.
 |  [46:37] | 10    | _Locality_        | Zero, or an index determining a Locality Secret. See <<ACE-Localities>>.
-|  [47:47] | 1     | Reserved          | Reserved for future use.
+|  [47:47] | 1     | Reserved          | Reserved for future use.  Currently, this field must be zero.
 |  [63:48] | 16    | _VarDataLen_      | If non-zero, indicates that an additional, variable-length data section appended to Content. The length of this additional data section is _VarDataLen_ * 128 bits (up to 512 KiB).
 |  [89:64] | 26    | _ExpirationDate_  | If non-zero, the expiration date of this CC. See <<ACE-Metadata-expiration-date>>. Minutes since 00:00, January 1, 2027 (about 127 years).
-| [127:90] | 38    | Reserved          | Reserved for future use.  Currently, it must be equal to zero.
+| [127:90] | 38    | Reserved          | Reserved for future use.  Currently, this field must be zero.
 |===
 
 In the following subsections we describe the fields of the Metadata Header.
@@ -86,13 +86,13 @@ The architecture defines the following side-channel protection levels.
 
 Custom implementations of algorithms offering different protection than encodings 0–2 shall set
 _SCProtection_ to additional values.
-In this case, the _VarDataLen_ field shall be non-zero to ensure that the `macearchid` value
+In this case, the _VarDataLen_ field shall be non-zero to ensure that the `IMPQUAL` value
 is checked in order to allow the implementation to verify whether it can accept the
 _SCProtection_ values.
 
 NOTE: To discuss with the ARC: use values 3-5 for potential expansion of the architecture and
 values 6-7 for implementation-dependent custom values. Only the latter two would need the
-copy of `macearchid` and therefore a non-zero _VarDataLen_.
+copy of `IMPQUAL` and therefore a non-zero _VarDataLen_.
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -383,13 +383,13 @@ The format of the _Additional Data Section_ is described in <<ACE-data-formats>>
 The first 128 bits of the Implementation-Specific Variable-Length Data Section of the Content, if not empty, always hold a copy of the
 following value
 ----
-aceunitid := zeros(32) @ aceimpid @ acearchid @ acevendorid
+IMPQUAL := zeros(32) @ aceimpid @ acearchid @ acevendorid
 ----
 (cf. <<ACE-CSR-impl-ids>>) of the originating machine, and are counted within the length recorded by the _VarDataLen_ field.
 The importing implementation uses this value to determine whether any information in the Implementation-Specific Data Section can be used.
 
 It is the responsibility of the *algorithm* to determine the lengths of the two parts of the Variable-Length Data Section.
-If the Implementation-Specific Variable-Length Data Section is not empty, the *implementation* will check the `aceunitid`
+If the Implementation-Specific Variable-Length Data Section is not empty, the *implementation* will check the `IMPQUAL`
 stored therein to decide whether the Implementation-Specific part can be used or should be ignored.
 
 [NOTE]
@@ -437,9 +437,9 @@ The format of a Provisioning Input (PI) is shown in <<ACE-PI>>.
 .Format of the Provisioning Input (PI), All Sections in Order
 [width="100%",cols="8%,25%,42%,25%",options="header"]
 |===
-| Section | Section Name                | Size | Description
-| 1     | Metadata Header           | 128 bits | Contains the metadata described in <<ACE-Metadata>>.
-| 2     | Provisioning Content      | Depends only on the _Algorithm_, _AlgorithmPolicy_, and _KeyType_ fields of the Metadata Header. Always a multiple of 128 bits. | Contains keys and other algorithm-specific information.
+| Section | Section Name                      | Size     | Description
+| 1       | `MH`, Metadata Header             | 128 bits | Contains the metadata described in <<ACE-Metadata>>.
+| 2       | `Content[]`, Provisioning Content | Depends only on the _Algorithm_, _AlgorithmPolicy_, and _KeyType_ fields of the Metadata Header. Always a multiple of 128 bits. | Contains keys and other algorithm-specific information.
 |===
 
 The length of a PI must be a multiple of 128 bits.
@@ -464,23 +464,23 @@ The format of a Sealed Cryptographic Context (SCC) is shown in <<ACE-SCC>>.
 [width="100%",cols="8%,25%,42%,25%",options="header"]
 |===
 | Section | Section Name                   | Size     | Description
-| 1     | `MH`, Metadata Header            | 128 bits | The metadata information described in <<ACE-Metadata>>.
-| 2     | `SIV`                            | 128 bits | The SIV used to encrypt and authenticate sections 3.
+| 1       | `MH`, Metadata Header            | 128 bits | The metadata information described in <<ACE-Metadata>>.
+| 2       | `SIV`                            | 128 bits | The SIV used to encrypt and authenticate sections 3.
 //
 | 3.a
-| `Content`: _Fixed Data Section_
+| `Content1`: _Fixed Data Section_
 | If the CR is not in an Error State, the length depends only the
 on the _Algorithm_, _AlgorithmPolicy_, and _KeyType_ fields of the Metadata Header.
  Always a multiple of 128 bits.
 | Contains keys and other algorithm-specific information. Encrypted in memory and during partial import.
 //
 | 3.b
-| `Content`: _Architected Variable-Length Data Section_ (Architected VDS)
+| `Content1`: _Architected Variable-Length Data Section_ (Architected VDS)
 | If the CR is not in an Error State, the length depends only on the information contained in the Metadata Header and Fixed Data Sections.
   Always a multiple of 128 bits.
 | The data in this Section is necessary for the correct functioning of the algorithm.
-| 4.     | `SIV2`                         | 128 bits if present | The SIV used to authenticate sections 5 and 6.
-| 5      | `IMPLID`, Implementation Identifier    | 128 bits if present | Used to identify the implementation of the ACE Unit
+| 4.      | `SIV2`                         | 128 bits if present | The SIV used to authenticate sections 5 and 6.
+| 5       | `IMPQUAL`, Implementation Qualifier    | 128 bits if present | Used to identify the implementation of the ACE Unit
 | 6
 | `Content2`: _Implementation (Specific) Variable-Length Data Section_ (Implementation VDS)
 | Implementation-Specific.
@@ -534,35 +534,33 @@ as a copy of some (or all) shares.
 ==== Notation and Representation of CR Internals
 
 Conceptually, for each of the 32 CRs, ACE maintains an offset into internal an memory pointing to the CR's 128-bit Metadata Header and Content (if not empty). The offset takes a special value if the CR is not configured.
-The actual representation of CRs in a concrete implementation may differ significantly.
+The actual representation of CRs in a concrete implementation may differ significantly from a string of bits.
 
-While an implementation is free to choose the representation of a cryptographic context inside a CR, we observe that it must host at least as many bits of information as specified by the CR's Algorithm. Therefore, a CR can be viewed as an array of bits at least as large as the size of the SCC (see <<ACE-SCC>>) excluding the SIV, the Implementation Identifier, and SIV2.
+While an implementation is free to choose the representation of a cryptographic context inside a CR, we observe that it must host at least as many bits of information as specified by the CR's Algorithm. Therefore, a CR can be viewed as an array of bits whose size is at least the size of the SCC (see <<ACE-SCC>>) excluding the SIV, the Implementation Qualifier, and SIV2.
 
 This has a few major implication:
 
-* The information stored in a CR can be identified with the format of an SCC, again, without the SIV, the Implementation Identifier, and SIV2.
+* The information stored in a CR can be identified with the format of an SCC, again, without the SIV, the Implementation Qualifier, and SIV2.
 This identification holds even if the SCC does not contain some information that can be easily reconstructed upon successful import, for instance
-`hash_key` in GCM (see <<ACE-GCM-mode>>) and
-`enc_key` and `auth_key` in GCM-SIV (see <<ACE-GCM-SIV-mode>>).
+`hash_key` in GCM (see <<ACE-GCM-mode>>) and `enc_key` and `auth_key` in GCM-SIV (see <<ACE-GCM-SIV-mode>>).
 
-* We can describe an import operation as a sequence of load operations to copy the encrypted and authenticated SCC into the CR, followed by an in-situ decryption and authentication operation to extract the plaintext, and finally an step to reconstruct missing information or expand keys in multiple shares.
+* We can describe an import operation as a sequence of load operations to copy the encrypted and authenticated SCC into the CR, followed by an in-situ decryption and authentication operation to extract the plaintext, and finally a step to reconstruct missing information or expand keys in multiple shares.
 
-The notation ``K``_i_ is used to refer to the _i_-th CR.
-The Metadata Header is written as ``K``__i__.``Metadata``.
-With respect to <<ACE-SCC>>, after the Metadata Header we have the SIV, which we denote as
-``K``__i__.``SIV``, and then Section 3, consisting of Sections 3.a and 3.b, namely ``K``__i__.``Content[]``.
-After this we have the 128-bit blocks corresponding to, Sections 4 and 5, i.e.,
-``K``__i__.``SIV2`` and ``K``__i__.``IMPLID``,
-and finally
-``K``__i__.``Content2[]`` (i.e., Section 6), the latter being an array of 128-bit words like ``K``__i__.``Content[]``.
-
-Whenever we access the contents of a CR in the descriptions of provisioning, export and import operations, we refer to them using this notation and the ordering of the sections in <<ACE-SCC>>.
-
-When an SCC is imported, with the respect to the equivalent storage capacity of a CR, additional space for `SIV` (and for `SIV2`) may be needed.
-128 additional bits of storage for each of the 32 CRs (or 256 if at least one Algorithm supports implementation-specific additional data) could be quite expensive.
+When an SCC is imported, with the respect to the equivalent storage capacity of a CR, additional space for `SIV` (and for `IMPQUAL`, `SIV2`) may be needed.
+128 additional bits of storage for each of the 32 CRs (or 384 if at least one Algorithm supports implementation-specific additional data) could be quite expensive.
 Therefore, the ACE architecture only supports a single import operation at a time per hart.
 If a CR is “open” for importing, no other CR can be opened until the import operation of first one is finalized.
-This reduces the impact of the storage for SIV and SIV2 to just 128 or 256 bits per hart.
+This reduces the impact of the storage for `SIV`, `IMPQUAL`, and `SIV2` to just 128 or 384 bits per hart.
+
+The notation ``K``_i_ is used to refer to the _i_-th CR.
+When ``K``_i_ is being provisioned, resp., imported, we can refer to it as if it were a buffer with the length of the PI, resp., of the SCC with an additional 128 or 384 bits of additional storage. In this case, the format of this (virtual) buffer's format follows <<ACE-PI>>, resp., <<ACE-SCC>>.
+In particular:
+`K``__i__.``MH`` is the metadata field, followed by the `SIV` as
+``K``__i__.``SIV``, and Section 3, consisting of Sections 3.a and 3.b, namely ``K``__i__.``Content1[]``.
+After this we have the 128-bit blocks corresponding to, Sections 4 and 5, i.e.,
+``K``__i__.``SIV2`` and ``K``__i__.``IMPQUAL``,
+and finally
+``K``__i__.``Content2[]`` (i.e., Section 6), the latter being an array of 128-bit words like ``K``__i__.``Content1[]``.
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -634,6 +632,11 @@ value of the _Provisioning_ bit in the exported Metadata Header is maintained an
 [[ACE-interruption-points]]
 ==== Resumability of Configuration and Export Operations
 
+[WARNING]
+====
+Provisioning, import and export are being rewritten!
+====
+
 [NOTE]
 ====
 Resumption of an interrupted provisioning operation:
@@ -651,11 +654,6 @@ loading instruction so that resumption can be restarted from the value in `acest
 
 .. If loading the data in multiple blocks and keeping track of the loaded data is left to the software,
 then the implementation will not update `acestart`.
-====
-
-[WARNING]
-====
-Provisioning, import and export are being rewritten!
 ====
 
 During `ace.prov`, flag _Provisioning_ is set to 1, and
@@ -810,10 +808,10 @@ Exporting ``K``__i__ distinguishes two cases
 . If ``K``__i__ is being _Imported_:
 
 .. The _Importing_ bit in the exported Metadata Header is left set.
-.. The length of the exported Content is the same as the length of the original SCC being imported, with the provision that the `IMPLID`, `SIV2`, and `Content2[]` fields are omitted if they are above the maximal length allowed for this type of CC.
+.. The length of the exported Content is the same as the length of the original SCC being imported, with the provision that the `IMPQUAL`, `SIV2`, and `Content2[]` fields are omitted if they are above the maximal length allowed for this type of CC.
 .. No encryption or authentication occurs, the information in the CR is exported verbatim, in the same order as they appear in the SCC, namely:
- `MH`, `SIV`, `Content[]`, and, if they are present `IMPLID`, `SIV2`, and `Content2[]`.
- `MH`, `SIV`, `IMPLID`, `SIV2` are left unencrypted, `Content[]` and `Content2[]` are exported in the original encrypted form.
+ `MH`, `SIV`, `Content1[]`, and, if they are present `IMPQUAL`, `SIV2`, and `Content2[]`.
+ `MH`, `SIV`, `IMPQUAL`, `SIV2` are left unencrypted, `Content1[]` and `Content2[]` are exported in the original encrypted form.
 .. We call the exported context an _Exported Partial Context_ (EPC) as in the _Provisioning_ case.
 --
 
@@ -831,34 +829,38 @@ Exporting ``K``__i__ distinguishes two cases
 .....  ``len_AD`` <- ``len_AD`` + 1
 ... If _Nonce_ (Locality #11) is included, then `N` <- `LST[11]`, else `N` <- `zeros(96)`
 ... `len_PC` <- lengths of Sections 3.a and 3.b combined.
-... `SIV`, `C[]` <- ``AES_GCM_SIV_Encrypt(AD, N, K``__i__.``Content[], CSK, len_AD, len_PC)``
+... `SIV`, `C[]` <- ``AES_GCM_SIV_Encrypt(AD, N, K``__i__.``Content1[], CSK, len_AD, len_PC)``
 .. Second, if VarDataLen {ne} 0, the implementation-dependent data is processed:
 ... `len_AD` <- 2, ``AD[0]`` <- ``K``__i__.``IMLID``, ``AD[0]`` <- `SIV`.
 ... `len_PC` <- length of Section 6 (subtract the size of Section 3.b from VarDataLen)
 ... `SIV2`, `C2[]` <- ``AES_GCM_SIV_Encrypt(AD, N,`K``__i__.``Content2[], CSK,§ len_AD, len_PC)``
-.. Finally, output `MH`, `SIV`, `Content[]`, and, if VarDataLen {ne} 0, `IMPLID`, `SIV2`, and `Content2[]`.
+.. Finally, output `MH`, `SIV`, `Content1[]`, and, if VarDataLen {ne} 0, `IMPQUAL`, `SIV2`, and `Content2[]`.
 --
 
+// ////////////////////////////////////////////////////////////////////
 
 [[ACE-SCC-import]]
 ==== Import
 
+////
 [sidebar]
 .Reimporting a Partially Configured CR ``K``__i__
 --
 . Clear ``K``__i__. In particular, the internal CRF memory corresponding to ``K``__i__ wil read as zero.
 . Read the Metadata Header `M` from memory, check it for consistency and integrity.
 . Allocate internal resources for ``K``__i__. This may fail and raise an exception.
-. Store `M` in the first 16 bytes of ``K``__i__.``Content[]`` viewed as a buffer.
+. Store `M` in the first 16 bytes of ``K``__i__.``MH``.
 . If `M`._Provisioning_ is set, `length` is the length of the PI corresponding to the `MH` block.
 . If `M`._Importing_ is set, `length` is the length of the SCC corresponding to the `MH` block.
 . In case of split instructions, `length` is the value returned by `ace.size`.
-. Read `length`-16 bytes from memory, store it in ``K``__i__.``Content[16..]`` viewed as a buffer.
+. Read `length`-16 bytes from memory, store it in ``K``__i__.``Content[]`` viewed as a buffer.
 . Perform any necessary readjustment of the CR's content to turn it into the format internally consumed by the ACE Unit, if necessary.
 . Restore the saved value of the _Provisioning_ bit of ``K``__i__.``MH``.
 --
+////
 
-
+[sidebar]
+.Reimporting a Partially Configured CR ``K``__i__
 --
 . If ``K``__i__ is being _Provisioned_:
 
@@ -870,10 +872,10 @@ Exporting ``K``__i__ distinguishes two cases
 . If ``K``__i__ is being _Imported_:
 
 .. The _Importing_ bit in the exported Metadata Header is left set.
-.. The length of the exported Content is the same as the length of the original SCC being imported, with the provision that the `IMPLID`, `SIV2`, and `Content2[]` fields are omitted if they are above the maximal length allowed for this type of CC.
+.. The length of the exported Content is the same as the length of the original SCC being imported, with the provision that the `IMPQUAL`, `SIV2`, and `Content2[]` fields are omitted if they are above the maximal length allowed for this type of CC.
 .. No encryption or authentication occurs, the information in the CR is exported verbatim, in the same order as they appear in the SCC, namely:
- `MH`, `SIV`, `Content[]`, and, if they are present `IMPLID`, `SIV2`, and `Content2[]`.
- `MH`, `SIV`, `IMPLID`, `SIV2` are left unencrypted, `Content[]` and `Content[]` are exported in the original encrypted form.
+ `MH`, `SIV`, `Content[]`, and, if they are present `IMPQUAL`, `SIV2`, and `Content2[]`.
+ `MH`, `SIV`, `IMPQUAL`, `SIV2` are left unencrypted, `Content[]` and `Content[]` are exported in the original encrypted form.
 .. We call the exported context an _Exported Partial Context_ (EPC) as in the _Provisioning_ case.
 --
 
@@ -896,12 +898,8 @@ Exporting ``K``__i__ distinguishes two cases
 ... `len_AD` <- 2, ``AD[0]`` <- ``K``__i__.``IMLID``, ``AD[0]`` <- `SIV`.
 ... `len_PC` <- length of Section 6 (subtract the size of Section 3.b from VarDataLen)
 ... `SIV2`, `C2[]` <- ``AES_GCM_SIV_Encrypt(AD, N,`K``__i__.``Content2[], CSK,§ len_AD, len_PC)``
-.. Finally, output `MH`, `SIV`, `Content[]`, and, if VarDataLen {ne} 0, `IMPLID`, `SIV2`, and `Content2[]`.
+.. Finally, output `MH`, `SIV`, `Content[]`, and, if VarDataLen {ne} 0, `IMPQUAL`, `SIV2`, and `Content2[]`.
 --
-
-
-
-
 
 ////
 [NOTE]
@@ -921,12 +919,6 @@ While the pseudocode follows this mechanism to enforce the rule, implementation 
 ////
 
 // ///////////////////////////////////////////////////////////////////
-
-
-[WARNING]
-====
-Provisioning, import and export are being rewritten!
-====
 
 ////
 The import algorithm needs some special care:
@@ -3560,7 +3552,7 @@ The size of the following fields is included in the _VarDataLen_ field of the Me
 |  viii   | If `HasSignature`: `vb`, else: 0        | `Signature`, R value, followed by S coordinate if `v=2`.
 |    ix   | If `HasHash`: `h`, else: 0              | `Hash`: a `h`-bit string representing the hash.
 |     x   | If `HasRndNum`: `j`, else: 0            | `RndNum`.
-|    xi   | (variable)                              | Optional and implementation-specific data from the *Internal State* (Content), starting with `aceunitid := zeros(32) @ aceimpid @ acearchid @ acevendorid` if not empty.
+|    xi   | (variable)                              | Optional and implementation-specific data from the *Internal State* (Content), starting with the `IMPQUAL` if not empty.
 |===
 
 The `HasRndNum` flag is set and the `RndNum` field is used only during signature generation.
@@ -3572,7 +3564,7 @@ The size in bits of Fields vii to x is:
 `{fournbsp}{fournbsp}{fournbsp}{fournbsp}{fournbsp}{fournbsp}{fournbsp}` + (`HasHash` != 0) {interpunct} ``h``/8 + (`HasRndNum` != 0) {interpunct} ``j``/8.
 
 If _VarDataLen_ > `varlen`, Position x contains the microarchitectural dependent part, which starts with
-the implementation identifier `aceunitid`.
+the Implementation Qualifier `aceunitid`.
 --
 +
 
@@ -3631,12 +3623,9 @@ the Boolean variable ``Has``__Var__ is set when all operations required in State
  ** `Progress` can be used by instructions such as Point Multiplication, Signature Generation or Verification, to track the progress of the operations in case they are interrupted.
  In this case, if the CR is exported, the Additional Data Section may contain an implementation-specific section that contain sufficient information to allow resumption, such as certain precomputed multiples of the base point.
  This implementation-specific section starts with the 128-bit value
- `aceunitid = zeros(32) @ aceimpid @ acearchid @ acevendorid`.
- The hardware, after reading `acevendorid`, `acearchid` or  `aceimpid` ,
- decides whether it can retain the additional data and trust the random number generator of the
- originating implementation, in which case it can then resume the computation.
- Otherwise, it will discard the additional data at Position x and `RndNum`
- (Position ix, if present), and restart the operation.
+ `IMPQUAL = zeros(32) @ aceimpid @ acearchid @ acevendorid`.
+ The implementation, after comparing `acevendorid`, `acearchid` or  `aceimpid` with the values in `IMPQUAL`, decides whether it can retain the additional data and trust the random number generator of the originating implementation, in which case it can then resume the computation.
+ Otherwise, it will discard the additional data at Position x and `RndNum` (Position ix, if present), and restart the operation.
 
  ** To transition to State _Set_Generator_, a Form A or B `ace.setst` is used.
 
