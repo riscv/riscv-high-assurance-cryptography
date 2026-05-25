@@ -29,9 +29,9 @@ Most algorithms use only 81 bits of the metadata, since _StateExtension_ and _Al
 
 [[ACE-metadata-header]]
 .Format of the 128-bit Metadata Header
-[width="100%",cols="^9%,^7%,14%,70%",options="header"]
+[width="100%",cols="^9%,^6%,14%,71%",options="header"]
 |===
-|  Field   | Width | Name              | Description
+|  Field   | Size  | Name              | Description
 |  [11:0]  | 12    | _Algorithm_       | Cryptographic algorithm (primitive, mode, or protocol). See <<ACE-Algorithm-field>>.
 |  [13:12] | 2     | _AlgorithmPolicy_ | Allowed algorithm variants(s) _or_ extension of the _Algorithm_ field. See <<ACE-Algorithm-field>>.
 |  [15:14] | 2     | Reserved          | Reserved for future expansion of _AlgorithmPolicy_ field.  Currently, this field must be zero.
@@ -86,15 +86,11 @@ The architecture defines the following side-channel protection levels.
 |  {ge} 3 | Currently not defined.
 |===
 
-Custom implementations of algorithms offering different protection than encodings 0–2 shall set
-_SCProtection_ to additional values.
-In this case, the _ImpDataLen_ field shall be non-zero to ensure that the `IMPQUAL` value
-is checked in order to allow the implementation to verify whether it can accept the
-_SCProtection_ values.
+Custom implementations offering a different levels of protection may set _SCProtection_ to a value greater than 2.
+In this case, _ImpDataLen_ shall be non-zero, ensuring that the `IMPQUAL` value is checked so that the implementation can verify whether it understands the given _SCProtection_ value.
 
-NOTE: To discuss with the ARC: use values 3-5 for potential expansion of the architecture and
-values 6-7 for implementation-dependent custom values. Only the latter two would need the
-copy of `IMPQUAL` and therefore a non-zero _ImpDataLen_.
+NOTE: Discuss with ARC: reserve values 3-5 for future use by the architecture and
+6-7 for implementation-custom protection levels. Only the latter would require a `IMPQUAL` check.
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -112,10 +108,10 @@ The architected values of _State_ which are common to all algorithms are defined
 |===
 | Value | Mnemonic                  | State Name     | Description
 |   0   | `ace_state_off`           | _Off_          | The CR is not configured.
-|   1   | `ace_state_initial`       | _Initial_      | The state of a CC immediately after provisioning; ready for operation.
+|   1   | `ace_state_initial`       | _Initial_      | The state of a just provisioned CC; ready for operation.
 | 2-20  3+| Defined by the specification of the Algorithm encoded in the _Algorithm_ field.
-|  22   | `ace_state_success`       | _Success_      | Algorithm completed successfully. No further cryptographic operations may be performed until the CC is reset.
-|  23   | `ace_state_failure`       | _Failure_      | Failure in an algorithm, usually an authentication failure in AE(AD) algorithms or a signature verification failure. No further cryptographic operations may be performed until the CC is reset.
+|  22   | `ace_state_success`       | _Success_      | Algorithm completed successfully. No further cryptographic operations may be performed until the CC is reset or, if allowed, transitioned to _Initial_.
+|  23   | `ace_state_failure`       | _Failure_      | Failure in an algorithm, usually an authentication failure in AE(AD) algorithms or a signature verification failure. No further cryptographic operations may be performed until the CC is reset or, if allowed, transitioned to _Initial_.
 |===
 
 [[ACE-states-error]]
@@ -165,7 +161,7 @@ This ensures that these states can be unambiguously determined from the _State_ 
 
 . In States _Success_ and _Failed_, only the following ACE instructions are permitted: `ace.prov`, `ace.import`, `ace.export`, `ace.clear`, `ace.size`, `ace.setst`, and `ace.getst`.
 
-. In States _Success_ and _Failed_, `ace.setst` can only be used permitted to transition to _Initial_ (or _Off_ if used as `ace.clear`).
+. In States _Success_ and _Failed_, `ace.setst` can only be used permitted to transition to _Initial_ or _Off_.
 
 . Unless an algorithm's specification explicitly states otherwise, a transition from any valid state to _Initial_ using instruction `ace.setst` is always permitted.
 
@@ -173,8 +169,8 @@ This ensures that these states can be unambiguously determined from the _State_ 
 Internal resources associated with the Content may also be released. In that case, any additional variable-length data is released as well and the _ImpDataLen_ field is set to 0.
 The CR then retains only the Metadata Header.
 
-. Exporting a CR in an Error State exports only the Metadata Header (and the authentication tag).
-  Requesting the SCC's size (`ace.size` <<ACE-instruction-size>>) will reflect this, i.e., it will return 16 (bytes).
+. Exporting a CR in an Error State exports only the Metadata Header and the authentication tag.
+  Requesting the SCC's size (`ace.size` <<ACE-instruction-size>>) will return 32 (bytes).
   The resulting SCC can be reimported, allowing software to take appropriate actions even after a context switch.
 
 . If a CR is in any Error State, it can still be reconfigured, cloned, or cleared. `ace.setst` can only be used to change the Error State (for instance by an exception handler) or transition the CR to _Off_.
