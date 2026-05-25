@@ -991,41 +991,41 @@ It is envisionable that these operations could be described in a more RISC-like 
 
 *Import*
 ----
-ace.open K0, import    // import is a flag/field
-ld t0, 0(t6)           // load the medatada from memory
-ace.setmd K0, t0       // this may fail if internal memory is not sufficient.
-ace.size t1, t0        // now the size is in t1
-if t1 is zero, then there was not enough memory and the privileged code has not fixed it
-addi t1, t1, -16       // subtract 16 bytes for the metadata header
-ace.load K0, 8(t0), t1 // load t1 bytes or bits starting with the tag, fails if t1 is
-                       // different than the expected data, but this can be checked
-                       // asynchronously, so the actual size does not have to be
-                       // fetched from the ACE unit
-ace.seal K0            // this also decrypts and verifies
+ace.unseal K0, #import     // import is a flag/field
+ld t0, 0(t6)               // load the medatada from memory
+ace.setmd K0, t0           // this may fail if internal memory is not sufficient.
+ace.size t1, K0            // get size. we use of K0 to catch errors (?)
+beq t1, zero, label        // handle error
+ld t1, saved_size          // load the actually saved size from memory
+addi t1, t1, -16           // subtract 16 bytes for the metadata header
+ace.load K0, 8(t0), t1     // load t1 bytes starting with the tag, fails if t1 is
+ace.seal K0                // this also decrypts and verifies
+ace.size t1, K0            // now the size is in t1
+beq t1, zero, label        // handle error
 ----
 
 *Export*
 ----
-ace.open K0, export    // export is a flag/field
+ace.unseal K0, #export     // export is a flag/field
 ace.getmd t0, K0
-ace.size t1, t0        // now the size of the SCC (except MH) is in t1
-sd 0(t6), t0           // store the metadata header
-addi t1, t1, -16       // subtract 16 bytes for the metadata header
-ace.seal K0            // in this case, this computes the SIV // alias to ace.exec ?
-ace.store 8(t0), K0, t1 // stores t1 bytes or bits starting with the tag,
-                       // fails if t1 is different than the expected data, etc
-ace.close K0           // at this point, this is redundant...
+ace.size t1, K0            // get size of the SCC (or partially imported PI) is
+beq t1, zero, label        // handle error
+addi t1, t1, -16           // subtract 16 bytes for the metadata header
+sd 0(t6), t0               // store the metadata header
+ace.seal K0                // in this case, this computes the SIV // alias to ace.exec ?
+ace.store 16(t0), K0, t1   // stores t1 bytes starting with the tag,
+ace.close K0               // needed?
 ----
 
 *Provisioning*
 ----
-ace.open K0, provision // provision is a flag/field
-ld t0, 0(t6)           // load the medatada from memory
-ace.setmd K0, t0       // this may fail if internal memory is not sufficient.
-ace.size t1, t0, provision // stoore size of the PI (except metadata header) in t1
-ace.load K0, 8(t0), t1 // load t1 bytes or bits starting with the tag, fails if t1 is
-                       // different than the expected data, etc
-ace.seal K0            // this also reconstructs data if needed, makes CR useable
+ace.unseal K0, #provision  // provision is a flag/field
+ld t0, 0(t6)               // load the metadata from memory
+ace.setmd K0, t0           // this may fail if internal memory is not sufficient.
+ace.size t1, t0, provision // store size of the PI (except metadata header) in t1
+ace.load K0, 8(t0), t1     // load t1 bytes or bits starting with the tag, fails if t1 is
+                           // different than the expected data, etc
+ace.seal K0                // this also reconstructs data if needed, makes CR useable
 ----
 
 Shorter sequences could be as follows:
