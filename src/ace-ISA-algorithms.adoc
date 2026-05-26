@@ -987,34 +987,48 @@ It is envisionable that `ace.prov`, `ace.export`, and `ace.import` could be desc
 
 *Import*
 ----
-ace.unseal K0, #import     // import is a flag/field
 ld t0, 0(t6)               // load metadata bits [63:0] from memory
-ld t1, 8(t6)               // load metadata bits [127:64] from memory
-ace.setmd K0, t0           // this may fail if internal memory is not sufficient
-ace.size t2, K0            // get size. we use of K0 to catch errors (?)
-beq t2, zero, label        // handle error
-lw t2, saved_size          // load the actually saved size from memory
-addiw t2, t2, -16          // subtract 16 bytes for the metadata header
-ace.load K0, 8(t0), t2     // load t2 bytes starting with the tag
-ace.seal K0                // this also decrypts and verifies
-ace.size t2, K0            // now the size is in t2
+ace.state K0, t0, #unseal_for_import  // any errors fall through following instructions
+ace.load K0, 8(t6)         // load remaining bytes starting with the tag (this is
+                           // the only new instruction, can be restarted using acestart)
+ace.state K0, #seal_after_import  // decrypts, verifies, and possibly reconstructs data
+ace.size t2, K0            // size is zero if error
 beq t2, zero, label        // handle error
 ----
 
+NOTE: `ace.load` can be a form of `ace.input`.
+
+NOTE: We are _not_ assuming that `ace.load` takes the `SIV` and starts decrypting online.
+Decryption and authentication are completed at latest when `ace.seal` is retired.
+Nothing prevents implementations from interleaving decryption and authentication with the load operation.
+
 *Export*
 ----
-ace.unseal K0, #export     // export is a flag/field
-ace.getmd t0, K0           // in RV64 the metadata goes into t0, t1
-ace.size t2, K0            // get size of the SCC (or partially imported PI)
-sw saved_size, t2          // load the actually saved size from memory
-beq t2, zero, label        // handle error
-addi t2, t2, -16           // subtract 16 bytes for the metadata header
-sd 0(t6), t0               // store metadata bits [63:0] to memory
-sd 8(t6), t1               // store metadata bits [127:64] to memory
-ace.seal K0                // in this case, this computes the SIV // alias to ace.exec ?
-ace.store 16(t6), K0, t2   // stores t2 bytes starting with the tag
-ace.close K0               // needed?
+ace.size t2, K0                   // get size of the blob to export
+{...}                             // here goes the code that allocate the buffer
+
+ace.getmd t1, K0                  // get MH of SCC/PI to remember what it was
+ace.state K0, #unseal_for_export  // export is a flag/field, computes SIV (SIV2)
+// and internally changes the state by encrypting it (and possibly using the
+// per-hart storage for SIV/SIV2. Is also sets the MH's _Exporting_ flag (which
+// is ignored, i.e. 0, in the SIV computation).
+
+ace.store 0(t6), K0               // stores all data starting with the tag
+// if the store is preempted, then the handler will see the _Exporting_ bit.
+
+ace.state K0, t1, #maybe_seal_after_export  // reverts to the saved state
+// which may have the _Exporting_ bit set or cleared. Only the _Exporting_ bit
+// of t1 is used in this instruction and t1 does not affect other MH fields.
 ----
+
+NOTE: The three instructions are essentially the same as `ace.export`.
+This first splitting is useful if we want to consider splitting also the entire loading.
+
+NOTE: Maybe we can have multiple export open, but only one prov/init.
+
+NOTE: If we reseal prematurely, then we get an auth error.
+If we forget to reseal, we also get errors because we cannot use the CR.
+The _Exporting_ (_Provisioning_ and _Importing_ bits are jsut hints).
 
 *Provisioning*
 ----
@@ -1030,42 +1044,6 @@ ace.seal K0                // this also reconstructs data if needed, makes CR us
 ----
 
 NOTE: `ace.unseal`/`ace.seal` can be a special case of `ace.state`.
-
-////
-Shorter sequences could be as follows:
-
-*Import*
-----
-ace.unseal K0, #import     // import is a flag/field
-ld t0, 0(t6)
-ld t1, 8(t6)
-ace.setmd K0, t0           // this may fail if internal memory is not sufficient.
-ace.load K0, 16(t6)        // load the right number of bytes starting with the ag
-ace.seal K0                // decrypt and verify, reconstruct the data.----
-----
-
-*Export*
-----
-ace.unseal K0, #export     // export is a flag/field
-ace.getmd t0, K0           // in RV64 the metadata goes into t0, t1
-sd 0(t6), t0               // store the metadata header
-sd 8(t6), t1               // store the metadata header
-ace.exec K0                // in this case, this computes the SIV
-ace.store 16(t0), K0       // stores t1 bytes or bits starting with the SIV,
-                           // fails if t1 is different than the expected data, etc
-ace.seal K0                // complete export, erase auxiliary state
-----
-
-*Provisioning*
-----
-ace.unseal K0, #provision  // provision is a flag/field
-ld t0, 0(t6)
-ld t1, 8(t6)
-ace.setmd K0, t0           // this may fail if internal memory is not sufficient.
-ace.load K0, 16(t0)        // load the right number of bytes starting with the tag
-ace.seal K0                // this also reconstructs data if needed, makes CR useable
-----
-////
 
 Even longer instruction sequences could be used with explicit writing of XLEN-long values from the GPRs into a CR's state.
 However, in order for such code to be safely resumed after preemption, particularly in the case of export, several checks needs to be performed.
