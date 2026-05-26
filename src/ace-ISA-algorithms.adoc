@@ -930,6 +930,11 @@ provided that if an import is interrupted and the partial state exported, then t
 data loaded so far is exported, and not a re-encryption of a partially decrypted payload.
 This is important not only for correctness, but also for security.
 
+A CR can be in two general states: internally clear or internally encrypted for export.
+This is signalled by the _Exporting_ bit in the MH.
+Once in the _Exporting_ state, it cannot be used in cryptographic operations: It must be
+“resealed” first.
+
 *Export*
 ----
 ace.size t2, K0                   // get size of the blob to export
@@ -941,17 +946,29 @@ ace.setst K0, #unseal_for_export
 // If the state is fully provisioned, then this computes SIV (SIV2)
 // and internally changes the state by encrypting it (and possibly using the
 // per-hart storage for SIV/SIV2.
-// If the state is NOT fully provisioned, then no SIV/SIV2 and encryption is
-// performed.
-// Also sets MH's _Exporting_ flag (which is ignored, i.e. 0, in the SIV computation).
+// If the state is NOT fully provisioned OR it is already in _Exporting_ state, then
+// no SIV/SIV2 is computed and no encryption is performed.
+// This operation is performed atomically.
+// Its last task is to set the MH's _Exporting_ flag (which is ignored,
+// i.e., treated as 0, in the SIV computation).
 
 ace.store 0(t6), K0               // stores all data starting with the tag
-// if the store is preempted, then the handler will see the _Exporting_ bit.
+// if this store is preempted, then when the context switch handler runs
+// its own export code, ace.setst  will see the _Exporting_ bit and therefore
+// it will not encrypt the data again.
 
 ace.setst K0, t1, #maybe_seal_after_export  // reverts to the saved state
 // which may have the _Exporting_ bit set or cleared. Only the _Exporting_ bit
 // of t1 is used in this instruction and t1 does not affect other MH fields.
 ----
+
+[WARNING]
+====
+If the sequence of operations is interrupted between `ace.setst` and `ace.store`, or at the
+beginning of the latter before SIV (resp., SIV2) is entirely written out, may we lose the value of SIV (resp., SIV2)?
+No, if we make sure that we have only one such encryption at a time.
+Either we move the cryptographic part to `ace.store`, or we need to save the SIV/SIV2 in the context of the interrupt handler.
+====
 
 NOTE: The three instructions are essentially the same as `ace.export`.
 This first splitting is useful if we want to consider splitting also the entire loading.
