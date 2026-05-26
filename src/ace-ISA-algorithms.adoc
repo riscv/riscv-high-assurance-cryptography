@@ -403,8 +403,8 @@ For instance, random values that are generated in the _Initial_ state.
 In this case, the *algorithm* may choose to not include it into an SCC.
 
 . Data that can be used to optimize performance on a specific *implementation*, and is more expensive to recompute than encrypting and storing it externally. The hardware may choose to export such data in a custom format inside an SCC for efficient reuse.
-A different implementation that receives the same SCC  may safely ignore this data during import
-after checking `aceunitid`.
+A different implementation that receives the same SCC may safely ignore this data during import after checking `aceunitid`.
+In fact, the originating implementation may decide to silently restart a cryptographic operation if the additional data is corrupted.
 
 The format of a Sealed Cryptographic Context (SCC) is shown in <<ACE-SCC>>.
 
@@ -412,9 +412,9 @@ The format of a Sealed Cryptographic Context (SCC) is shown in <<ACE-SCC>>.
 .Plaintext of the Sealed Cryptographic Context (SCC) Format, All Sections in Order
 [width="100%",cols="8%,25%,42%,25%",options="header"]
 |===
-| Section | Section Name                   | Size     | Description
-| 1       | `MH`, Metadata Header            | 128 bits | The metadata information described in <<ACE-Metadata>>.
-| 2       | `SIV`                            | 128 bits | Authentication tag for section 3.
+| Section | Section Name                            | Size               | Description
+| 1       | `MH`, Metadata Header                   | 128 bits           | The metadata information described in <<ACE-Metadata>>.
+| 2       | `SIV`                                   | 128 bits           | Authentication tag for section 3.
 //
 | 3
 | `Content1`: _Algorithm Data Section_
@@ -423,7 +423,7 @@ The format of a Sealed Cryptographic Context (SCC) is shown in <<ACE-SCC>>.
  The data in this Section is necessary for the correct functioning of the algorithm.
 //
 | 4       | `IMPQUAL`, Implementation Qualifier    | 128 bits if present | Used to identify the implementation of the ACE Unit
-| 5.      | `SIV2`                         | 128 bits if present | Authentication tag for sections 4 and 6.
+| 5.      | `SIV2`                                 | 128 bits if present | Authentication tag for sections 4 and 6.
 | 6
 | `Content2`: _Implementation (Specific) Variable-Length Data Section_ (Implementation VDS)
 | Implementation-Specific.
@@ -988,8 +988,8 @@ It is envisionable that `ace.prov`, `ace.export`, and `ace.import` could be desc
 *Import*
 ----
 ace.unseal K0, #import     // import is a flag/field
-ld t0, 0(t6)               // load the metadata from memory
-ld t1, 8(t6)               // load the metadata from memory
+ld t0, 0(t6)               // load metadata bits [63:0] from memory
+ld t1, 8(t6)               // load metadata bits [127:64] from memory
 ace.setmd K0, t0           // this may fail if internal memory is not sufficient.
 ace.size t2, K0            // get size. we use of K0 to catch errors (?)
 beq t2, zero, label        // handle error
@@ -1009,8 +1009,8 @@ ace.size t2, K0            // get size of the SCC (or partially imported PI)
 sw saved_size, t2          // load the actually saved size from memory
 beq t2, zero, label        // handle error
 addi t2, t2, -16           // subtract 16 bytes for the metadata header
-sd 0(t6), t0               // store the metadata header
-sd 8(t6), t1               // store the metadata header
+sd 0(t6), t0               // store metadata bits [63:0] to memory
+sd 8(t6), t1               // store metadata bits [127:64] to memory
 ace.seal K0                // in this case, this computes the SIV // alias to ace.exec ?
 ace.store 16(t6), K0, t2   // stores t2 bytes starting with the tag,
 ace.close K0               // needed?
@@ -1019,8 +1019,8 @@ ace.close K0               // needed?
 *Provisioning*
 ----
 ace.unseal K0, #provision  // provision is a flag/field
-ld t0, 0(t6)               // load the metadata from memory
-ld t1, 8(t6)               // load the metadata from memory
+ld t0, 0(t6)               // load metadata bits [63:0] from memory
+ld t1, 8(t6)               // load metadata bits [127:64] from memory
 ace.setmd K0, t0           // reads from t0 and t1
 ace.size t2, K0            // t2 = size of the PI, uses K0 to read provisioning flag
 beq t2, zero, label        // handle error
@@ -1028,6 +1028,9 @@ ace.load K0, 8(t0), t2     // load t2 bytes or bits starting with the tag, fails
                            // different than the expected data, etc
 ace.seal K0                // this also reconstructs data if needed, makes CR useable
 ----
+
+NOTE: `ace.unseal`/`ace.seal` can be a special case of `ace.state`.
+
 
 Shorter sequences could be as follows:
 
