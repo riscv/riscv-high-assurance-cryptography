@@ -45,10 +45,10 @@ The fields are arranged so that the first 64 bits suffice to determine the lengt
 |  [31:31] | 1     | _Importing_       | Set if the CR has been only partially imported.
 |  [36:32] | 5     | _UsagePolicy_     | Usage (Control) Policy. Bits 0, 1, 2, 4 and 4 of the field,, when set, disallow CC usage in U-mode, (V)S-mode, H-mode, M-Mode, and Debug mode, respectively.
 |  [44:37] | 8     | _Locality_        | Zero, or an index determining a Locality Secret. See <<ACE-Localities>>.
-|  [47:45] | 3      | Reserved          | Reserved for future expansion of the _Locality_ field use.
+|  [47:45] | 3     | Reserved          | Reserved for future expansion of the _Locality_ field use.
 |  [63:48] | 16    | _ImpDataLen_      | If non-zero, indicates that an additional, variable-length, implementation-dependent data section appended to Content. The length of this additional data section is _ImpDataLen_ * 128 bits (up to 1024 KiB).
 |  [89:64] | 26    | _ExpirationDate_  | If non-zero, the expiration date of this CC. See <<ACE-Metadata-expiration-date>>. Minutes since 00:00, January 1, 2027 (about 127 years).
-| [109:90] | 20    | _AlgorithmUse_     | Reserved for algorithms and implementations to store additional state information.
+| [109:90] | 20    | _AlgorithmUse_    | Reserved for algorithms and implementations to store additional state information.
 | [127:110] | 18   | Reserved          | Reserved for future use.
 |===
 
@@ -60,7 +60,7 @@ In the following subsections we describe the fields of the Metadata Header.
 ===== _Algorithm_ and _AlgorithmPolicy_ Fields
 
 Algorithms are encoded in a 12-bit field. Values 0–3071 and 4095 are architecture-defined.
-The list of encodings is maintained by RVI (see <<ACE-algorithms>>).
+The list of encodings is maintained by RVI (see <<ACE-algorithms>>).dd
 The remaining values are available for custom algorithms.
 
 For encryption/decryption primitives and modes, the _AlgorithmPolicy_ field indicates whether the CC may be used for encryption (lower bit set), decryption (upper bit set), or both. At least one of the bits must be set.
@@ -874,88 +874,6 @@ The import algorithm needs some special care:
   The details of this adjustment are not reflected in the pseudocode
   <<ACE-SCC-import-listing>> to avoid excessive complexity.
 
-[[ACE-SCC-import-listing]]
-.Importing an SCC into a CR
-[]
-----
-function ace.import(CR_number, M[]) =
-{
-  // M : array of bytes;   from memory
-  MH : bits(128) & = CR[CR_number].MH;          // By reference, from the CR
-
-  local saved_SN : bits(5);                // This is a "hidden" state as well
-
-  global ace_exporting, ace_importing : bool;
-  global ace_expimported_cr : bits(5);
-  global CSK : bits(256), enc_key : bits(256), auth_key : bits(128);
-  global SIV, tmp, t2 : bits(128);
-
-  ace_importing ← true;
-  ace_expimported_cr ← CR_number;
-  ace_exporting ← false;
-
-  tmp ← M[0 .. 15];         // read Metadata Header
-  saved_SN ← ((MH field)tmp).State;
-  MH ← tmp;
-  MH.State ← ace_state_partial_config;
-
-  z ← base_content_size(MH);
-  z ← z + MH._ImpDataLen_ * 128;
-
-  if (there is not enough memory for the algorithm encoded in the Metadata Header)
-    raise exception ace_exc_out_of_mem;
-
-  num_blocks ← ceil(z / 128);
-
-  // Start POLYVAL
-  // Absorb Locality "prefix" (zero or more 128-bit blocks)
-  tmp ← zeros(128);
-  foreach(i from 0 to number of localities - 1, except "Nonce" Locality)
-    if (MH.Locality includes locality[i]) {
-      tmp ← tmp xor LST[i];
-      tmp ← Montmul(tmp, auth_key);
-    }
-  }
-
-  SIV ← M[16 .. 31];
-  tmp ← tmp xor MH;
-  tmp ← Montmul(tmp, auth_key);
-
-  * Create array of bytes ser_con[] to absorb the Serialized Context
-  * It may internally overlap with the CR itself. Deserialization
-  * can be performed in-place.
-
-  foreach(i from 0 to num_blocks - 1) {
-    t2 ← M[32+i*16 .. 47+i*16]
-         xor AESE(enc_key, 1 @ SIV[126:32] @ (SIV[31:0]+bin(i,32) % 2**32);
-    ser_con[i*16 .. 15+i*16] ← t2;
-    tmp ← tmp xor t2;
-    tmp ← Montmul(tmp, auth_key);
-  }
-
-  if (MH.Locality includes the "Nonce" Locality) {
-    tmp[95:0] <- tmp[95:0] xor LST[index of "Nonce" Locality][95:0];
-  }
-  tmp ← AESE(enc_key, 0 @ tmp[126:0]);
-
-  if (tmp != SIV) {
-    MH ← zeros(128);
-    MH.State ← ace_state_import_auth;
-    Clear all Contents and possibly release their memory;
-    return;
-  }
-
-  * If the content has not been deserialized inline while absorbed,
-  * it shall be deserialized here.
-  * This includes computing any derived values not saved as part of the SCC,
-  * as well as creating shares for threshold implementations.
-
-  // FINALLY, restore the State from the SCC
-  MH.State ← saved_SN;
-
-  ace_importing ← false;
-}
-----
 ////
 
 // ////////////////////////////////////////////////////////////////////
