@@ -975,14 +975,15 @@ The _KeyType_ field in the Metadata Header is then internally set to 0, and the 
 This applies to all keys at once in an algorithms, unless otherwise specified.
 
 
-==== Why `ace.prov`, `ace.export`, and `ace.import` are CISC-like monolithic instructions
+==== Splitting `ace.prov`, `ace.export`, and `ace.import` into more RISC-like instructions
 
 [WARNING]
 ====
-This is a non-normative section describing why the current specification has CISC-like monolithic instructions `ace.prov`, `ace.export`, and `ace.import`.
+This is a non-normative section discussing alternative ways to perform `ace.prov`, `ace.export`, and `ace.import` through sequences of
+smaller instructions instead of the current single CISC-like monolithic instructions.
 ====
 
-It is envisionable that these operations could be described in a more RISC-like manner by splitting them into more operations.
+It is envisionable that `ace.prov`, `ace.export`, and `ace.import` could be described in a more RISC-like manner by splitting them into more operations.
 
 *Import*
 ----
@@ -1062,26 +1063,11 @@ ace.load K0, 16(t0)        // load the right number of bytes starting with the t
 ace.seal K0                // this also reconstructs data if needed, makes CR useable
 ----
 
-On the opposite side, even longer instruction sequences could be used with explicit writing of XLEN-long values from the GPRs into a CR's state, in loops (a CSR and `acestart` or CSR indirect addressing can be used to implement such a mechanism.
+On the opposite side, even longer instruction sequences could be used with explicit writing of XLEN-long values from the GPRs into a CR's state, in loops
+However, in order for such code to be safely resumed after preemption, particularly in the case of export, several checks needs to be performed.
 
-However, such code cannot be safely resumed after preemption, particularly in the case of export.
-The architecture does not guarantee that exporting and then reimporting a CR yields an identical CR; it only guarantees that the reimported CR can be used as if nothing had happened.
-Hence, resuming when the CR may have been modified is hazardous.
-
-In the current CISC-like model, this situation is handled naturally:
-if for any reason the export operation must be restarted instead of resumed,
-the single monolithic instruction will indeed be restarted.
-
-With separate instructions, however (for example, `ace.open` followed by `ace.getmd`, then storing the Metadata Header and emitting the contents via a single instruction or a loop), this situation cannot be avoided.
-There is no general mechanism to restart an instruction sequence or force control flow to revert, since privileged code cannot be assumed to know the semantics of the interrupted sequence and backtrack accordingly.
-
-Let us consider the case an export operation for a CR is preempted.
-The CR expires during a context switch, or even during the brief time an exception is handled (for instance, a memory page access fault is remediated).
-Upon restoration, the operation marks the CR as _Expired_ and may release internal resources.
-The restored CR is therefore internally smaller than before.
-If the export operation is then resumed in software, the hardware produces a smaller output, yielding an inconsistent SCC: the SIV will be incorrect, and the metadata will not match the version already written to memory.
-
-_Unless the last `ace.open` instruction causes its PC to be written into a special CSR that can be used by privileged code to resume from there instead of from the PC. But this opens another can of worms since the loading code may be subtly different or have some side effects..._
+This is entirely possible and has a minimal impact on code size, since, the code for provisioning, importing and exporting a CR can be relegated to a separate library. The fact that we allow indirect addressing of CRs permits such a routing to use a parameter to select the CR.
+Leaving the actual information of what has been imported/provisioned to the caller code avoids the necessity to store this information, for instance, in a dedicated CSR.
 
 // ////////
 
