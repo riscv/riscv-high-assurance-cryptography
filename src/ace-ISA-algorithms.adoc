@@ -134,9 +134,8 @@ The state with value 0 is termed _Off_, and is used to indicate that the CR is n
 All states in the range 1-23 are termed _valid_. This includes both _Success_ and _Failure_ states, which must be used for
 normal termination of an algorithm in the cases of its successful completion or failure.
 
-// (((ACE, CR, partially configured)))
-// State 23, i.e., _Partially_Configured_, is used to report that provisioning or import was interrupted.
-// It is never allowed to set the State to _Partially_Configured_ directly using `ace.setst`.
+The immediate in the `ace.setst` instruction (<<ACE-instruction-setst>>) is a 7-bit value, whereas the _State_ field is only 5 bits long.
+This allows to encode additional operations related to state changes (such as stages of import, export, or provisioning code) as `ace.setst` with the two high bits of the immediate taking non-zero values.
 
 (((ACE, algorithm, error states)))
 States 24-31 are termed _Error States_, and are used to report certain specific ACE errors.
@@ -983,7 +982,7 @@ This is a non-normative section discussing alternative ways to perform `ace.prov
 smaller instructions instead of the current single CISC-like monolithic instructions.
 ====
 
-It is envisionable that `ace.prov`, `ace.export`, and `ace.import` could be described in a more RISC-like manner by splitting them into more operations.
+`ace.prov`, `ace.export`, and `ace.import` could be split into multiple, more RISC-like operations.
 
 *Import*
 ----
@@ -996,7 +995,13 @@ ace.size t2, K0            // size is zero if error
 beq t2, zero, label        // handle error
 ----
 
-NOTE: `ace.load` can be a form of `ace.input`.
+[WARNING]
+====
+If we implement this change, we do not need additional instructions for `ace.load`, resp., `ace.store`,
+since we would just use the already defined encodings for `ace.import` and `ace.export`.
+We should only take care that `ace.import.S` is retained.
+We would also free the encoding for `ace.prov`.
+====
 
 NOTE: We are _not_ assuming that `ace.load` takes the `SIV` and starts decrypting online.
 Decryption and authentication are completed at latest when `ace.seal` is retired.
@@ -1047,7 +1052,7 @@ NOTE: `ace.unseal`/`ace.seal` can be a special case of `ace.state`.
 Even longer instruction sequences could be used with explicit writing of XLEN-long values from the GPRs into a CR's state.
 However, in order for such code to be safely resumed after preemption, particularly in the case of export, several checks needs to be performed.
 This is entirely possible and has a minimal overall impact on code size, since, the code for provisioning, importing and exporting a CR can be relegated to a separate library. The fact that we allow indirect addressing of CRs permits such a routing to use a parameter to select the CR.
-Leaving the actual information of what has been imported/provisioned to the caller code avoids the necessity to store this information, for instance, in a dedicated CSR.
+Leaving certain state information in the state of caller code reduces the use of dedicated CSRs.
 
 // ////////
 
