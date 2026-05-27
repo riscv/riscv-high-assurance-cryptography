@@ -443,56 +443,59 @@ The Metadata Header's _ImpDataLen_ field specifies the total size of the _Variab
 ==== Single-Share Key Export Rule for Threshold implementations
 
 . Any CC with its algorithm implemented as a threshold implementation will always
-provision, import and export _all_ its keys and secrets as _single_,
-_reconstructed_ _shares_.
+provision, import and export _all_ its keys and secrets as reconstructed values.
+(((ACE, algorithm, threshold variants)))
 
 . The PI and SCC Formats will be the same as for the non-threshold implementation
 variants of the same algorithm, with the only difference being the value of the
 _SCProtection_ in the Metadata Header.
 
-. {empty}
-+
---
-For the purpose of architecture specification, all values are also always
-represented as a single share in this document. Threshold implementations are
-simply implementation variants of the same algorithm.
-(((ACE, algorithm, threshold variants)))
+. To accelerate key share reconstruction in a threshold variant of an algorithm,
+some shares of a system key can be included in the content's Additional Data.
 
-NOTE: This rule assumes that reconstructing or re-randomizing a key is a fast
-operation, such as an ``xor`` with random values. This requires the ACE
-execution unit to have access to a random number generator. Besides ensuring
-the compactness of an SCC, this rule also guarantees key portability across
-architectures that implement side-channel protection in different ways. If
-reconstructing the values is efficient but generating the shares is a slow
-process, the implementation may take advantage of the optional Additional Data
-in the Content to store information that can accelerate share generation, such
-as a copy of some (or all) shares.
---
-+
+NOTE: These rules assumes that reconstructing or re-randomizing a key is an
+inexpensive operation, such as XORing with pseudo-random values from a
+PRNG internal to the ACE execution unit. Besides ensuring that an SCC
+remains compact, this rule also guarantees key portability across
+architectures that implement side-channel protection in different ways.
+If reconstructing the values is efficient but generating the shares is slow,
+the implementation may use the optional Additional Data in the Content to
+store information—such as a copy of some (or all) shares—that accelerates
+share generation.
+
+All values are represented as a single share also for the purposes of the architectural specification.
+Side-channel-analysis (SCA) protected algorithms are defined as implementation variants of the same unprotected algorithm and are not specified separately.
+The only difference between a protected and an unprotected algorithm is the value of the _SCProtection_ field in the Metadata Header.
+
+// ////////////////////////////////////////////////////////////////////
+
+[[ACE-system-keys]]
+==== System Keys and Randomly Generated Key Values
+
+In a PI or SCC, System Keys are encoded as a 64-bit value used to retrieve the key from a system-specific structure, which we do not specify.
+The 64-bit value is called the System Key Identifier (SKID) and the structure is called the System Keys Store (SKS).
+This replaces the key value itself with an usually smaller field, which may reduce the size of the PI or SCC, or internal resource occupation of the CR itself.
+
+For threshold implementations of system keys, ACE may copy key material from the SKS into the CR and expand it into multiple shares.
+The key is still exported as a SKID.
+
+Rule 3 of <<ACE-rules-threshold-implementations>> can be applied to system keys as well, as long as the system key's value cannot be recovered from the included shares.
+
+An all-ones (i.e., `ones(64)`) system key identifier in a PI means that the key material is generated randomly upon provisioning.
+The _KeyType_ field in the Metadata Header is then internally set to 0, and the key is then exported by value.
+This applies to all keys at once in an algorithms, unless otherwise specified.
 
 // //////////////////////////////////////////////////////////////////
 
 [[ACE-CR-representation]]
 ==== Notation and Representation of CR Internals
 
-Conceptually, for each of the 32 CRs, ACE maintains an offset into internal an memory pointing to the CR's 128-bit Metadata Header and Content (if not empty). The offset takes a special value if the CR is not configured.
-The actual representation of CRs in a concrete implementation may differ significantly from a string of bits.
+Conceptually, the information inside a CR is represented as a bit string whose minimum length equals the SCC size (see <<ACE-SCC>>), excluding the `SIV`, `IMPQUAL`, and `SIV2` fields.
+Additional size depends on the presence of information reconstructed only upon successful import, such as derived keys, multiple shares, or implementation-specific auxiliary data.
 
-While an implementation is free to choose the representation of a cryptographic context inside a CR, we observe that it must host at least as many bits of information as specified by the CR's Algorithm. Therefore, a CR can be viewed as an array of bits whose size is at least the size of the SCC (see <<ACE-SCC>>) excluding `SIV`, the Implementation Qualifier `IMPQUAL`, and `SIV2`.
+While a concrete implementation may differ considerably from this model, we use it to describe the architectural behavior of provisioning, importing, and exporting. For instance, an import operation is modeled as a load of the encrypted, authenticated SCC into the CR, followed by in-place decryption and authentication of the plaintext, and finally a step to reconstruct missing information or expand keys into multiple shares.
 
-// This has a few major implication:
-
-// * The information stored in a CR can be identified with the format of an SCC (except for `SIV`, `IMPQUAL`, and `SIV2`).
-This identification holds even if the SCC does not contain some information that can be easily reconstructed upon successful import, for instance
-`hash_key` in GCM (see <<ACE-GCM-mode>>) and `enc_key` and `auth_key` in GCM-SIV (see <<ACE-GCM-SIV-mode>>).
-
-We can describe an import operation as a sequence of load operations to copy the encrypted and authenticated SCC into the CR, followed by an in-place decryption and authentication operation to extract the plaintext, and finally a step to reconstruct missing information or expand keys in multiple shares.
-
-When an SCC is imported, with the respect to the equivalent storage capacity of a CR, additional space for `SIV` (and for `IMPQUAL`, `SIV2`) may be needed.
-128 additional bits of storage for each of the 32 CRs (or 384 if at least one Algorithm supports implementation-specific additional data) could be quite expensive.
-Therefore, the ACE architecture only supports a single import or export operation at a time per hart.
-If a CR is “open” for importing or exporting, no other CR can be opened until the import operation of first one is finalized.
-This reduces the impact of the storage for `SIV`, `IMPQUAL`, and `SIV2` to just 128 or 384 bits per hart.
+When an SCC is imported, the CR may require additional space for `SIV` (and for `IMPQUAL` and `SIV2`). Providing an extra 128 bits of storage for each of the 32 CRs (or 384 bits if at least one Algorithm supports implementation-specific additional data) would be costly. The ACE architecture therefore permits only a single import or export operation at a time per hart. While a CR is "open" for importing or exporting, no other CR can be opened until the current operation completes. This limits the storage overhead for `SIV`, `IMPQUAL`, and `SIV2` to just 128 or 384 bits per hart.
 
 The _i_-th CR is denoted by ``K``_i_.
 When ``K``_i_ is being provisioned, resp., imported, we can refer to it as if it were a buffer with the length of the PI, resp., of the SCC with an additional 128 or 384 bits of additional storage. In this case, the format of this (virtual) buffer's format is the same as <<ACE-PI>>, resp., <<ACE-SCC>>.
@@ -509,6 +512,8 @@ and
 ``K``__i__.``Content2[]``.
 
 // ////////////////////////////////////////////////////////////////////
+
+////
 
 [[ACE-size-functions]]
 ==== Notation for the Size Functions
@@ -536,6 +541,8 @@ The total size in bytes of a PI is therefore
 and the total size in bytes of an SCC is
 
 `{fournbsp}{fournbsp}len_in_bytes(SCC)` = `MH_size` + 16 + `base_content_size(MH)` + _ImpDataLen_ * 16 bits.
+
+////
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -610,7 +617,9 @@ This transition does not occur during `ace.export`.
 
 A partially configured CR can be exported.
 
-At context save, however, privileged code has also the option to not export the partially configured CR and to force a restart of the interrupted configuration operation once at context restore. The latter is achieved by clearing the CR.
+At context save, privileged code has also the option to not export the partially configured CR, but instead to clear it at context restore to force a restart of the interrupted configuration operation.
+
+// The caller code must handle the case where the CR is cleared and the configuration operation must be restarted.
 
 Upon returning to the original control flow from an interrupt or exception, an export may resume only if the CR has not been modified.
 <<ACE-SCC-export>> describes the mechanism used to enforce this rule.
@@ -875,24 +884,6 @@ The import algorithm needs some special care:
   <<ACE-SCC-import-listing>> to avoid excessive complexity.
 
 ////
-
-// ////////////////////////////////////////////////////////////////////
-
-[[ACE-system-keys]]
-==== System Keys and Randomly Generated Key Values
-
-In a PI or SCC, System Keys are encoded as a 64-bit value used to retrieve the key from a system-specific structure, which we do not specify. The 64-bit value is called the System Key Identifier (SKID) and the structure is called the System Keys Store (SKS).
-This replaces the key value itself, which may reduce the size of the PI or SCC content.
-
-For threshold implementations of system keys, ACE may copy key material from the SKS into the CR and expand it into multiple shares.
-The key is still exported as a SKID.
-
-For the purpose of accelerating key share reconstruction in a threshold implementation, some shares of a system key can be included in the content's Additional Data, as long as the key cannot be recovered from those shares alone.
-
-An all-ones (i.e., `ones(64)`) system key identifier in a PI means that the key material is generated randomly upon provisioning.
-The _KeyType_ field in the Metadata Header is then internally set to 0, and the key is then exported by value.
-This applies to all keys at once in an algorithms, unless otherwise specified.
-
 
 ==== Splitting `ace.prov`, `ace.export`, and `ace.import` into more RISC-like instructions
 
