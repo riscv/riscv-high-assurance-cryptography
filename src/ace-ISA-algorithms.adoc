@@ -615,23 +615,31 @@ value of the _Provisioning_ bit in the exported Metadata Header is maintained an
 Provisioning, import and export are being rewritten!
 ====
 
-[NOTE]
-====
 Resumption of an interrupted provisioning operation:
 
-. *Current approach.* If the provisioning is a single instruction,
-the implementation must first re-read the Metadata Header,
+. *Current approach.* Handlers should allow an interrupted configuration or export operation to only be resumed if control flow is returned to the same caller, i.e., no context switch has occurred. This is achieved by clearing the partially configured or exported CRs at context save, and ensuring they are cleared at context restore, so the caller software can restart the operation instead.
+This also ensures that:
+
+.. If any VM migration occurs, no partially configured or exported CRs are left in the VM's context;
+.. The implementation can choose how to represent a partially configured CR, for instance in which order to read certain data; and
+.. The implementation can freely define their own `acestart` values for resumption, depending on the granularity of the interruption points, and the actual semantics of the work between interruption points.
+
+. *Current approach.* If the provisioning is a single instruction, the implementation must first re-read the Metadata Header,
 to determine the length of the PI and verify its integrity before proceeding. In this case the data is
 read sequentially and `acestart` is set to the offset of the first non-imported bit.
 
-. If provisioning is performed by split operations, the software will be able to save the length of the PI in its
-environment.
+. If provisioning is performed by split operations, the software will be able to save the length of the PI in its environment.
 
 .. If loading the data in the CR is done by a single instruction, this length is explicitly passed to the
 loading instruction so that resumption can be restarted from the value in `acestart`.
 
 .. If loading the data in multiple blocks and keeping track of the loaded data is left to the software,
 then the implementation will not update `acestart`.
+
+[NOTE]
+====
+Our goal is to have instructions that are as RISC-y as possible, but without compromising security.
+Also, these should scale unchanged from small cores to high-performance CPUs, and therefore not enforce any specific hardware microarchitecture.
 ====
 
 During `ace.prov`, flag _Provisioning_ is set to 1, and
