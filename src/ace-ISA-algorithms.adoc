@@ -192,10 +192,12 @@ An `ace.exec` instruction may also trigger a state change.
 
 In <<ACE-states-graph>> we display the default possible state transitions.
 
+// //
 [[ACE-states-graph]]
 .Default State Transitions
 [float="center",align="center"]
 image::../../src/statestikz-3.svg[]
+// //
 
 ////
 [[ACE-states-graph]]
@@ -222,6 +224,57 @@ image::../../src/statestikz-3.svg[]
 ~~~~
 \begin{tikzpicture}[scale=1.1]
 
+  \node[off state]   at (-1.75,0)    (off)            {Off\,\vphantom{g}};
+
+  \node[error state, text width=1.3cm] at (2,-2)    (invalid)        {Invalid\vphantom{g}};
+  \node[error state] at (2,2)                       (various errors) {\scriptsize\begin{tabular}{@{}c@{}}Privilege Violation,\\Not Implemented,\\Out of Memory\end{tabular}};
+  \node[error state] at (2,3.5)                     (authfail)       {\footnotesize\begin{tabular}{@{}c@{}}Authentication\\Failure\end{tabular}};
+  \node[error state, text width=1.3cm] at (2,-3.5)  (expired)        {Expired};
+
+  \node[circle,thick,draw=black] at (4.75,2.75) (configuration hub) {};
+  \node[coordinate] at ($(expired.east)+(0.5,0)$) (before expired) {};
+
+  \node[state, thick, text width=1.3cm] at (5.5,0)    (initial)           {Initial\vphantom{g}};
+  \node[state, thick, text width=2.9cm] at (8.5,-1.5) (algorithm defined) {Algorithm-Defined};
+  \node[state, thick, text width=2.9cm] at (8.5,1.5)  (success failure)   {Success / Failure};
+
+  %%%%%%%%%%%
+
+  \node[above=0mm  of configuration hub,xshift=5mm] (ignore) {\small\textit{Configuration}};
+  \node[below right=0mm and -4mm of before expired] (ignore) {\small\textit{Expiration}};
+
+  %%%%%%%%%%%
+
+  \draw[-,densely dashed]   (before expired) to[out=9,in=270,looseness=0.8] (initial);
+  \draw[-,densely dashed]   (before expired) to[out=7,in=225,looseness=0.8] (algorithm defined);
+  \draw[-,densely dashed]   (before expired) to[out=3,in=225,looseness=0.8] (success failure);
+  \draw[->,densely dashed]  ($(before expired)+(-0.1,0)$) -- (expired);
+
+  \draw[<->,densely dotted] (configuration hub) to[out=-40,in=90,looseness=0.8] (initial);
+  \draw[<->,densely dotted] (configuration hub) to[out=-20,in=125] ($(algorithm defined.north)+(-0.333,0)$);
+  \draw[<->,densely dotted] (configuration hub) to[out=0,in=140] ($(success failure.north)!0.5!(success failure.north west)$);
+  \draw[<->,densely dotted] (configuration hub) to[out=160,in=0] (authfail);
+  \draw[<->,densely dotted] (configuration hub) to[out=190,in=10] (various errors);
+  \draw[<->,densely dotted] (configuration hub) -- (invalid.north east);
+  \draw[<->,densely dotted] (configuration hub) to[out=270,in=10,looseness=0.6] ($(expired.east)+(0,0.1)$);
+
+  \draw[<->] (off) to[out=-66,in=180] (invalid);
+  \draw[<->] (off) to[out=78,in=180,looseness=0.7] (authfail);
+  \draw[<->] (off) to[out=66,in=180] (various errors);
+  \draw[<->] (off) to[out=-78,in=180,looseness=0.7] (expired);
+
+  \draw[->] (algorithm defined) to[out=250,in=180] ($(algorithm defined)+(0,-1)$) to[out=0,in=290] (algorithm defined);
+  \draw[->, cross line] (algorithm defined) -- (invalid);
+  \draw[->,cross line] ($(algorithm defined.north)+(-0.667,0)$) to[out=130,in=0] (various errors);
+
+  \draw[<->,cross line] (off) -- (initial);
+  \draw[<->,cross line] (off) to[out=-33,in=180,looseness=0.3] (algorithm defined);
+  \draw[<->,cross line] (off) to[out=33,in=180,looseness=0.3] (success failure);
+
+  \draw[->,cross line]  ($(success failure.south)+(-1,0)$)   to[out=225,in=10,looseness=0.8] node[near start, above, yshift=-3pt] () {*} ($(initial.east)!0.5!(initial.north east)$);
+  \draw[<->,cross line] ($(algorithm defined.north)+(-1,0)$) to[out=135,in=-10,looseness=0.8] ($(initial.east)!0.5!(initial.south east)$);
+  \draw[->,cross line] (algorithm defined) -- (success failure);
+
 \end{tikzpicture}
 ....
 ////
@@ -247,7 +300,8 @@ The graph is read as follows:
 [[ACE-StateExtension]]
 ===== _StateExtension_ Field
 
-The _StateExtension_ field can be used by an Algorithm to store state information, in particular state information that contribute to determining the size of an SCC.
+The _StateExtension_ field can be used by an Algorithm to store additional state information.
+This field may be used to determine the size of an SCC.
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -357,12 +411,15 @@ stored therein to decide whether the Implementation-Specific part can be used or
 If non-zero, _ExpirationDate_ specifies the CC expiration time as a number of minutes elapsed since the base date of January 1, 2027.
 The 26-bit field provides for a span of approximately 127 years (2^26^ minutes).
 
-Checking against the _ExpirationDate_ field is, semantically, the first step performed by any operation.
-When a non-configuration instruction is executed on a CR whose _ExpirationDate_ lies in the past, the hardware immediately sets the Metadata Header's _State_ field to `ace_state_expired` and performs any action prescribed for Error States, including implementation-specific tasks such as releasing the CRF capacity held by the Content.  If the instruction is a usage instruction, the operation is suppressed and exception `ace_exc_invalid` is raised (cf. <<ACE-exceptions>>) if the ACE privileged architecture is implemented.  Exporting, cloning, or configuring an expired CR is allowed.
+Checking against the _ExpirationDate_ field is the first step performed by any usage operation.
+When a _usage_ instruction executes on a CR whose _ExpirationDate_ has passed, the hardware immediately sets the Metadata Header's _State_ field to `ace_state_expired` and performs all actions prescribed for Error States, including implementation-specific tasks such as releasing the CRF capacity held by the Content.
+If the ACE privileged architecture is implemented, an `ace_exc_invalid` exception is raised (see <<ACE-exceptions>>).
 
-When an expired CR is used, privileged code may take appropriate action—for example, provisioning a new key or returning to the caller for handling.
+Exporting, cloning, or configuring an expired CR is always permitted.
+This includes the case when the _ExpirationDate_ has passed but no usage operation has yet been executed (so the above Error-State actions have not been triggered), in which case the _State_ field is not changed, and when the _State_ field has already been set to `ace_state_expired` and all content beyond the metadata has been cleared.
+This way, when an expired CR is used, any exception will be raised in the caller code.
 
-Since privileged code may replace expired CRs, any user code that uses CRs that are known to potentially expire should always export the CR when it has finished using it, in case it may be needed later, instead of recovering it from a previously saved copy.
+//Since privileged code may replace expired CRs, any user code that uses CRs that are known to potentially expire should always export the CR when it has finished using it, in case it may be needed later, instead of recovering it from a previously saved copy.
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -370,8 +427,10 @@ Since privileged code may replace expired CRs, any user code that uses CRs that 
 ===== _AlgorithmUse_ Field
 
 The _AlgorithmUse_ field can be used by an Algorithm to store state information.
-Also the implementation may use this field to store state information.
-This information cannot contribute to determining the size of an SCC.
+
+If not used by the Algorithm, the implementation may use this field to store state information.
+
+This information shall _not_ be required to determine the size of an SCC.
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -384,15 +443,15 @@ This information cannot contribute to determining the size of an SCC.
 The format of a Provisioning Input (PI) is shown in <<ACE-PI>>.
 
 [[ACE-PI]]
-.Format of the Provisioning Input (PI), All Sections in Order
+.Format of the Provisioning Input (PI), all Sections in Order
 [width="100%",cols="8%,25%,42%,25%",options="header"]
 |===
 | Section | Section Name                      | Size     | Description
-| 1       | `MH`, Metadata Header             | 128 bits | Contains the metadata described in <<ACE-Metadata>>.
-| 2       | `Content[]`, Provisioning Content | Depends only on the _Algorithm_, _AlgorithmPolicy_, and _KeyType_ fields of the Metadata Header. Always a multiple of 128 bits. | Contains keys and other algorithm-specific information.
+| 1       | `MH`, Metadata Header             | 128 bits | See <<ACE-Metadata>>.
+| 2       | `Content[]`, Provisioning Content | Depends only on the _Algorithm_, _AlgorithmPolicy_, and _KeyType_ fields of the Metadata Header. | Contains keys and other algorithm-specific information.
 |===
 
-The length of a PI must be a multiple of 128 bits.
+The length of a PI, and thus that of `Content[]`, must be a multiple of 128 bits.
 
 The CR itself may contain significantly more information than the Provisioning Content.
 This information may be categorized under different classes:
@@ -403,39 +462,38 @@ For instance, random values that are generated in the _Initial_ state.
 . Information that may be easily reconstructed from other information in the State, so that there is no need to export it.
 In this case, the *algorithm* may choose to not include it into an SCC.
 
-. Data that can be used to optimize performance on a specific *implementation*, and is more expensive to recompute than encrypting and storing it externally. The hardware may choose to export such data in a custom format inside an SCC for efficient reuse.
-A different implementation that receives the same SCC may safely ignore this data during import after checking `aceunitid`.
-In fact, the originating implementation may decide to silently restart a cryptographic operation if the additional data is corrupted.
+. Data that can be used to optimize performance on a specific *implementation*, and is more expensive to recompute than encrypting and saving it to external memory. The implementation may choose to export such data in a custom format within an SCC for efficient reuse.  A different receiving implementation may safely ignore this data during import after checking the `IMPQUAL` value. The originating implementation may decide to silently restart a cryptographic operation if the additional data is corrupted.
 
 The format of a Sealed Cryptographic Context (SCC) is shown in <<ACE-SCC>>.
 
 [[ACE-SCC]]
-.Plaintext of the Sealed Cryptographic Context (SCC) Format, All Sections in Order
-[width="100%",cols="8%,25%,42%,25%",options="header"]
+.Plaintext of the Sealed Cryptographic Context (SCC) Format, all Sections in Order
+[width="100%",cols="8%,25%,32%,35%",options="header"]
 |===
 | Section | Section Name                            | Size               | Description
-| 1       | `MH`, Metadata Header                   | 128 bits           | The metadata information described in <<ACE-Metadata>>.
+| 1       | `MH`, Metadata Header                   | 128 bits           | See <<ACE-Metadata>>.
 | 2       | `SIV`                                   | 128 bits           | Authentication tag for section 3.
 //
 | 3
 | `Content1`: _Algorithm Data Section_
-| If the CR is not in an Error State, the length of the SCC depends only on the _Algorithm_, _AlgorithmPolicy_, _KeyType_ and _StateExtension_ fields of the Metadata Header.  Always a multiple of 128 bits.
+| If the CR is not in an Error State, the length of the SCC depends only on the _Algorithm_, _AlgorithmPolicy_, _KeyType_ and _StateExtension_ fields of the Metadata Header.
 | Contains keys and other algorithm-specific information. Encrypted in memory and during partial import.
- The data in this Section is necessary for the correct functioning of the algorithm.
+ The data in this section is necessary for the correct functioning of the algorithm.
 //
 | 4       | `IMPQUAL`, Implementation Qualifier    | 128 bits if present | Used to identify the implementation of the ACE Unit
-| 5.      | `SIV2`                                 | 128 bits if present | Authentication tag for sections 4 and 6.
+| 5       | `SIV2`                                 | 128 bits if present | Authentication tag for sections 4 and 6.
 | 6
 | `Content2`: _Implementation (Specific) Variable-Length Data Section_ (Implementation VDS)
-| Implementation-Specific.
-  Always a multiple of 128 bits.
-| The data in this Section is _not_ necessary for the correct functioning of the algorithm.
+| Implementation-Specific
+| The data in this section is _not_ necessary for the correct functioning of the algorithm.
   Encrypted in memory and during partial import.
 |===
 
-Fields 2-6 are empty if the context is exported in an Error State, in other words, the entire SCC consists only of a Metadata Header in plaintext.
+The length of each section must be a multiple of 128 bits.
 
-The Metadata Header's _ImpDataLen_ field specifies the total size of the _Variable-Length Section_.
+If the context is exported while in an Error State, Sections 3–6 are empty; that is, the SCC consists only of a plaintext Metadata Header and of `SIV`.
+
+The Metadata Header's _ImpDataLen_ field specifies the total size of the Variable-Length Section (`IMPQUAL`, `SIV2`, and `Content2[]`).
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -513,44 +571,11 @@ and
 
 // ////////////////////////////////////////////////////////////////////
 
-////
-
-[[ACE-size-functions]]
-==== Notation for the Size Functions
-
-[WARNING]
-====
-Provisioning, import and export are being rewritten!
-====
-
-Let `MH` denote a Metadata Header.
-In order to determine the total lengths of the PI and of the SCC, the implementation provides the following functions or an equivalent mechanism:
-
-. ``MH_size`` returns the byte length of the Metadata Header. It is always 16.
-
-. ``PI_content_size(MH)`` returns the byte length of the content section of a PI. It depends only on `MH`._Algorithm_, `MH`._AlgorithmPolicy_, and `MH`._KeyType_.
-
-. ``base_content_size(MH)`` returns the byte length of the part of the content section of an SCC that depends only on  `MH`._Algorithm_,
-  `MH`._AlgorithmPolicy_, `MH`._KeyType_ and `MH`._StateExtension_.
-  It does not include the length of the Additional Data of the Content, of length _ImpDataLen_ * 128 bits.
-
-The total size in bytes of a PI is therefore
-
-`{fournbsp}{fournbsp}len_in_bytes(PI){nbsp}` = `MH_size` + `PI_content_size(MH)`,
-
-and the total size in bytes of an SCC is
-
-`{fournbsp}{fournbsp}len_in_bytes(SCC)` = `MH_size` + 16 + `base_content_size(MH)` + _ImpDataLen_ * 16 bits.
-
-////
-
-// ////////////////////////////////////////////////////////////////////
-
 [[ACE-provisioning]]
 ==== Provisioning
 
 We start with the algorithm performed by `ace.prov`, which loads a PI and uses it to configure a CR.
-
+˝
 Provisioning ``K``__i__ performs the following steps:
 
 [sidebar]
