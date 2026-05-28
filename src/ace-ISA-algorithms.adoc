@@ -915,14 +915,35 @@ smaller instructions instead of the current single CISC-like monolithic instruct
 
 *Import*
 ----
-ld         t0, 0(t6)                  // load metadata header bits [63:0] from memory
-ace.setst  K0, t0, #unseal_for_import // any errors fall through following instructions
-ace.load   K0, 8(t6)                  // load remaining bytes starting with bits [127:64]
-                                      // of the metadata header
-ace.setst  K0, #seal_after_import     // decrypts and authenticates CR, reconstructs data
-ace.size   t2, K0                     // size is zero if error
-beq        t2, zero, label            // handle error
+  ld         t0, 0(t6)                  // load metadata header bits [63:0] from memory
+restart:
+  ace.setst  K0, t0, #unseal_for_import // prepare CR for import and write MH[63:0] in it
+  ace.size   t1, K0                     // size is zero if metadata invalid
+  beqz       t1, handle_invalid_MH      // check whether it was an authentication failure
+  bne        t1, zero, success          // handle error
+  ace.load   K0, 8(t6)                  // load remaining bytes starting with bits [127:64]
+                                        // of the metadata header
+  ace.setst  K0, #seal_after_import     // decrypts and authenticates CR, reconstructs data
+  ace.size   t1, K0                     // size is zero if auth error or need to restart
+  bne        t1, zero, success          // handle error
+  ace.getst  t2, K0                     // get _State_ field from MH[63:0]
+  li         t3, #ace_state_import_auth
+  beq        t2, t3, handle_auth_fail   // handle authentication failure
+  li         t3, #ace_state_invalid
+  beq        t2, t3, handle_invalid_SCC // handle state invalid (corner case)
+  j          restart                    // else restart
+
+success:
 ----
+
+There may be other cases where the metadata field is not valid, for instance, in Bits [127:64] only
+the _ExpirationDate_ field is in general defined, and it can take any value.
+However, this is deferred, since the entire metadata is also subject to authentication, so if
+Bits [127:64] are invalid (for instance, a non-admissible value for _AlgorithmUse_, or non-zero
+Bits [127:110]) then we assume this will be caught by the authentication process.
+In any case, if the values were not valid, a successive `ace.exec` or `ace.setst` will fail,
+invalidating the CR with Error State `ace_state_invalid`.
+
 
 [NOTE]
 ====
@@ -950,19 +971,21 @@ This is required for both correctness and security.
 
 *Export*
 ----
-ace.size  t2, K0                  // get size of the blob to export
-{...}  // here goes the code that allocates the buffer to store the exported data
+  ace.size  t2, K0                  // get size of the blob to export
+  {...}  // here goes the code that allocates the buffer to store the exported data
 
-ace.setst K0, #unseal_for_export  // Compute SIV/SIV2 and encrypt the state
+restart:
+  ace.setst K0, #unseal_for_export  // Compute SIV/SIV2 and encrypt the state
 
-ace.store 0(t6), K0               // stores all data starting with the MH
-// if this store is preempted, then when the context switch handler runs
-// its own export code, ace.setst  will see the _Exporting_ bit and therefore
-// it will not encrypt the data again.
+  // The next instruction stores all data starting with the MH.
+  // In case of interrupt/exception, the handler will decide whether
+  // to keep `acestart` or clear it to force restart.
+  ace.store 0(t6), K0
+  ace.size  t2, K0                  // size is zero if error: in this case the
+  beqz      t2, restart             // store op was preempted but not be restarted
 
-ace.setst K0, #seal_after_export  // reverts to the saved state
-// which may have the _Exporting_ bit set or cleared. Only the _Exporting_ bit
-// of t1 is used in this instruction and t1 does not affect other MH fields.
+success:
+  ace.setst K0, #seal_after_export  // reseal
 ----
 
 // If the state is fully provisioned, then this computes SIV (SIV2)
@@ -997,14 +1020,25 @@ The _Exporting_ (_Provisioning_ and _Importing_ bits are just hints).
 
 *Provisioning*
 ----
-ld t0, 0(t6)                            // load metadata bits [63:0] from memory
-ace.setst K0, t0, #unseal_for_provision // any errors fall through following insns
-beq t2, zero, label                     // handle error
-ace.load K0, 8(t0)                      // load rest of PI
-ace.setst K0, #seal_after_prov          // possibly reconstructs data
-ace.size t2, K0                         // size is zero if error
-beq t2, zero, label                     // handle error
+restart:
+  ace.setst K0, t0, #unseal_for_provision // any errors fall through following insns
+  beqz      t2, error_handling            // handle error
+  ace.load  K0, 8(t0)                     // load rest of PI
+  ace.size  t2, K0                        // size is zero if error
+  beqz      t2, restart                   // load was preempted but not be restarted
+  ace.setst K0, #seal_after_prov          // possibly reconstructs data
+  ace.getst  t2, K0                       // get _State_ field from MH[63:0]
+  li         t3, #ace_state_invalid
+  beq        t2, t3, SCC_invalid          // handle an invalid state
+
+success:
 ----
+
+Similarly to Provisioning, the metadata field may be not valid, in Bits [127:64],
+for instance, a non-admissible value for _AlgorithmUse_ for the Algorithm or the Implementation,
+or a non-zero value in Bits [127:110] in the current version of the specification.
+If this occurs, the CR will be invalidated upon executing `ace.setst K0, #seal_after_prov`
+and so the following `ace.size` will catch this situation.
 
 Longer instruction sequences based on XLEN-wide writes from GPRs into a CR's state are also possible.
 However, safely resuming such code after preemption may be more cumbersome.
