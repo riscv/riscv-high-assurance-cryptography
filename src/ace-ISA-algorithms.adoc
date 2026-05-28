@@ -918,7 +918,7 @@ The import algorithm needs some special care:
 
 ////
 
-==== Splitting `ace.prov`, `ace.export`, and `ace.import` into more RISC-like instructions
+==== Use of Split Provisioning, Import and Export Instructions
 
 [WARNING]
 ====
@@ -930,27 +930,32 @@ smaller instructions instead of the current single CISC-like monolithic instruct
 
 *Import*
 ----
-ld t0, 0(t6)                         // load metadata bits [63:0] from memory
-ace.setst K0, t0, #unseal_for_import // any errors fall through following instructions
-ace.load K0, 8(t6)                   // load remaining bytes starting with the tag
-ace.setst K0, #seal_after_import     // decrypts, authentifies, reconstructs data
-ace.size t2, K0                      // size is zero if error
-beq t2, zero, label                  // handle error
+ld         t0, 0(t6)                  // load metadata bits [63:0] from memory
+ace.setst  K0, t0, #unseal_for_import // any errors fall through following instructions
+ace.load   K0, 8(t6)                  // load remaining bytes starting with the tag
+ace.setst  K0, #seal_after_import     // decrypts and authenticates CR, reconstructs data
+ace.size   t2, K0                     // size is zero if error
+beq        t2, zero, label            // handle error
 ----
+
+[NOTE]
+====
+When operating to unseal a CR, or to seal an unsealed one, `ace.setst` is _not_ considered an usage instruction because it is part of a configuration operation.
+It is therefore not subject to the limitations on usage instructions, and it will not cause the CR to enter any Error State, or change it in case of expiration.
+====
 
 [WARNING]
 ====
-If we implement this change, we do not need additional instructions for `ace.load`, resp., `ace.store`, since we would just use the already defined encodings for `ace.import` and `ace.export`.
-We should only take care that `ace.import.S` is retained.
-We would also free the encoding for `ace.prov`.
+If we implement this change, we reuse the `ace.import`, resp., `ace.export` encodings for `ace.load`, resp., `ace.store`.
+We free the encoding for `ace.prov`.
+We keep `ace.import.S`.
 ====
 
-NOTE: We are _not_ assuming that `ace.load` takes the `SIV` and starts decrypting online.
-Decryption and authentication are completed at latest when `ace.seal` is retired.
-Nothing prevents implementations from interleaving decryption and authentication with the load operation,
-provided that if an import is interrupted and the partial state exported, then the original encrypted
-data loaded so far is exported, and not a re-encryption of a partially decrypted payload.
-// This is important not only for correctness, but also for security.
+NOTE: Implementations may interleave decryption and authentication with the load operation.
+If an import is interrupted and the partial state exported (assuming we allow that),
+the exported data must be the original
+encrypted data loaded so far, and not a re-encryption of a partially decrypted payload.
+This is required for both correctness and security.
 
 A CR can be in two general states: internally clear or internally encrypted for export.
 This is signalled by the _Exporting_ bit in the MH.
