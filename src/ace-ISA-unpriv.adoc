@@ -191,7 +191,7 @@ We list the most important operations on CRs, so we can refer to them before the
 
 // ////////////////////////////////////////////////////////////////////
 
-==== Inputs and Outputs, RVV-mini
+==== Inputs and Outputs: RVV-mini and ACEIOBUF
 
 ACE inputs and outputs may use vector registers or an architectural input/output buffer (ACEIOBUF)
 that can be loaded from and stored to external memory. Both mechanisms may be supported simultaneously.
@@ -261,22 +261,22 @@ The fields are arranged so that the first 64 bits suffice to determine the lengt
 .Format of the 128-bit Metadata Header
 [width="100%",cols="^9%,^6%,14%,71%",options="header"]
 |===
-|    Field  | Size  | Name              | Description
-|    [11:0] | 12    | _Algorithm_       | Cryptographic algorithm (primitive, mode, or protocol). See <<ACE-Algorithm-field>>.
-|   [13:12] | 2     | _AlgorithmPolicy_ | Allowed algorithm variants(s) _or_ extension of the _Algorithm_ field. See <<ACE-Algorithm-field>>.
-|   [15:14] | 2     | Reserved          | Reserved for future expansion of _AlgorithmPolicy_ field.
-|   [18:16] | 3     | _SCProtection_    | Side-channel protection level. See <<ACE-SCProtection-field>>.
-|   [20:19] | 2     | _KeyType_         | 0: key is an explicit value in Content. 1:  Key is a system-specific System Key Identifier, i.e., a 64-bit value to identify implementation-specific keys. Values 2 and 3 currently reserved. See <<ACE-system-keys>>.
-|   [25:21] | 5     | _State_           | Current state of the CR/algorithm, encoded as an integer. For instance, whether the CR/algorithm is _Off_ (unconfigured), encrypting or decrypting data, absorbing data in a hash/mac/tag, computing elliptic curve point multiples, generating or verifying signatures, or in an error state. It can be modified by the user to advance through various phases of an algorithm. See <<ACE-State-field>>.
-|   [31:28] | 4     | _StateExtension_  | May be used by the algorithm to extend the _State_ field with additional information.
-|   [31:30] | 2     | _SealingStatus_  | Used to indicate whether the CR is fully configured and ready to operate, or is being provisioned, imported, or exported. See <<ACE-SealingStatus>>.
-|   [36:32] | 5     | _UsagePolicy_     | Usage (Control) Policy. Bits 0, 1, 2, 4 and 4 of the field,, when set, disallow CC usage in U-mode, (V)S-mode, H-mode, M-Mode, and Debug mode, respectively.
-|   [44:37] | 8     | _Locality_        | Zero, or a value determining one or more Locality Secrets, used in the export/import encryption and decryption algorithm to bind the CR to specific environments. See <<ACE-Localities>>.
-|   [47:45] | 3     | Reserved          | Reserved for future expansion of the _Locality_ field use.
-|   [63:48] | 16    | _ImpDataLen_      | If non-zero, indicates that an additional, variable-length, implementation-dependent data section appended to Content. The length of this additional data section is _ImpDataLen_ * 128 bits (up to 1024 KiB).
-|   [89:64] | 26    | _ExpirationDate_  | If non-zero, the expiration date of this CC. See <<ACE-Metadata-expiration-date>>. Expressed in minutes since 00:00, January 1, 2027 (about 127 years).
-|  [109:90] | 20    | _AlgorithmUse_    | Reserved for algorithms and implementations to store additional state information.
-| [127:110] | 18    | Reserved          | Reserved for future use.
+|    Field  | Size | Name              | Description
+|    [11:0] | 12   | _Algorithm_       | Cryptographic algorithm (primitive, mode, or protocol). See <<ACE-Algorithm-field>>.
+|   [13:12] | 2    | _AlgorithmPolicy_ | Allowed algorithm variants(s) _or_ extension of the _Algorithm_ field. See <<ACE-Algorithm-field>>.
+|   [15:14] | 2    | Reserved          | Reserved for future expansion of _AlgorithmPolicy_ field.
+|   [18:16] | 3    | _SCProtection_    | Side-channel protection level. See <<ACE-SCProtection-field>>.
+|   [20:19] | 2    | _KeyType_         | 0: key is an explicit value in Content. 1:  Key is a system-specific System Key Identifier, i.e., a 64-bit value to identify implementation-specific keys. Values 2 and 3 currently reserved. See <<ACE-system-keys>>.
+|   [25:21] | 5    | _State_           | Current state of the CR/algorithm, encoded as an integer. For instance, whether the CR/algorithm is _Off_ (unconfigured), encrypting or decrypting data, absorbing data in a hash/mac/tag, computing elliptic curve point multiples, generating or verifying signatures, or in an error state. It can be modified by the user to advance through various phases of an algorithm. See <<ACE-State-field>>.
+|   [31:28] | 4    | _StateExtension_  | May be used by the algorithm to extend the _State_ field with additional information.
+|   [31:30] | 2    | _SealingStatus_   | Used to indicate whether the CR is fully configured and ready to operate, or is being provisioned, imported, or exported. See <<ACE-SealingStatus>>.
+|   [36:32] | 5    | _UsagePolicy_     | Usage (Control) Policy. Bits 0, 1, 2, 4 and 4 of the field,, when set, disallow CC usage in U-mode, (V)S-mode, H-mode, M-Mode, and Debug mode, respectively.
+|   [44:37] | 8    | _Locality_        | Zero, or a value determining one or more Locality Secrets, used in the export/import encryption and decryption algorithm to bind the CR to specific environments. See <<ACE-Localities>>.
+|   [47:45] | 3    | Reserved          | Reserved for future expansion of the _Locality_ field use.
+|   [63:48] | 16   | _ImpDataLen_      | If non-zero, indicates that an additional, variable-length, implementation-dependent data section appended to Content. The length of this additional data section is _ImpDataLen_ * 128 bits (up to 1024 KiB).
+|   [89:64] | 26   | _ExpirationDate_  | If non-zero, the expiration date of this CC. See <<ACE-Metadata-expiration-date>>. Expressed in minutes since 00:00, January 1, 2027 (about 127 years).
+|  [109:90] | 20   | _AlgorithmUse_    | Reserved for algorithms and implementations to store additional state information.
+| [127:110] | 18   | Reserved          | Reserved for future use.
 |===
 
 The above description of the Metadata Header fields is sufficient to describe the semantics of the instructions.
@@ -399,14 +399,10 @@ _Included in_::
 `acestart` is an alias for `vstart`. Therefore, it is an XLEN-bit RW CSR.
 ACE defines it also when the V extension is not enabled.
 
-`acestart` tracks the progress of resumable ACE instructions, namely
-`ace.prov`, `ace.import`, `ace.export`, `ace.input`, and `ace.output`. It also
-applies to `ace.exec` when iteratively processing a multi-block operand, as
-`ace.exec` may be interrupted between blocks. Only these instructions honor a
-nonzero `acestart`; all other instructions ignore it and are restarted, with
-`acestart` also being cleared. Provisioning, import, and export are
-resumed only under certain conditions, as explained in
-<<ACE-provisioning-export-import>>.
+`acestart` tracks the progress of resumable ACE instructions, namely `ace.prov`, `ace.import`, `ace.export`, `ace.input`, and `ace.output`.
+It also applies to `ace.exec` when iteratively processing a multi-block operand, as `ace.exec` may be interrupted between blocks.
+Only these instructions honor a nonzero `acestart`; all other instructions ignore it and are restarted, with `acestart` also being cleared.
+Provisioning, import, and export are resumed only under certain conditions, as explained in <<ACE-provisioning-export-import>>.
 
 `acestart` records the progress of an interrupted operation.
 Since ACE does not have an _intrinsic_ concept of element length, `acestart` counts the number of bits processed so far, not the number of elements.
@@ -578,8 +574,6 @@ _Included in_::
 // --
 // +
 
-//
-
 // ////////////////////////////////////////////////////////////////////
 
 [[ACE-instructions-detailed]]
@@ -593,11 +587,8 @@ The encodings presented here are preliminary.
 ACE provides a number of unprivileged instructions.
 This section specifies their semantics and encodings.
 
-The notation `K(Xd)` denotes the CR whose index is held in GPR `Xd`. `Kn|K(Xn)`
-indicates two alternative encodings: a 5-bit immediate CR index (`Kn`) or a CR
-number supplied by GPR `Xn`. Use of the zero register `X0` as a CR index
-register raises an illegal instruction exception unless explicitly indicated
-otherwise.
+The notation `K(Xd)` denotes the CR whose index is held in GPR `Xd`.
+`Kn|K(Xn)` indicates two alternative encodings: a 5-bit immediate CR index (`Kn`) or a CR number supplied by GPR `Xn`. Use of the zero register `X0` as a CR index register raises an illegal instruction exception unless explicitly indicated otherwise.
 
 Each instruction is characterized by the following properties:
 
@@ -609,11 +600,8 @@ Each instruction is characterized by the following properties:
 // * _Interruptible_: whether execution may be interrupted (e.g., by a context
 //   switch or page fault) and later resumed or restarted.
 
-NOTE: Trappability refers solely to the CPU-side implementation—for example, to
-enable decomposition of certain ACE instructions into smaller custom
-operations. This is distinct from custom algorithm implementations within the
-ACE unit itself (e.g., via a secure embedded CPU with updatable firmware),
-which are outside the scope of this specification.
+NOTE: Trappability refers solely to the CPU-side implementation—for example, to enable decomposition of certain ACE instructions into smaller custom operations.
+This is distinct from custom algorithm implementations within the ACE unit itself (e.g., via a secure embedded CPU with updatable firmware), which are outside the scope of this specification.
 
 NOTE: ACE does not have concepts similar to the vector crypto extension's Element Group Width (EGW), Effective Element Width (EEW), and Element Group Size (EGS).
 Since the architecture decouples instructions like `ace.exec` from the actual operations, the high-level design of ACE needs only the total input and output size, denoted `ACELEN`. This is equal to either `VL * SEW` or the `aceiobuftop` length of the ACEIOBUF, as defined in <<ACE-notation>>.
@@ -827,19 +815,19 @@ _Included in_::
 ==== Provisioning, Import and Export, Version 2 (Split Instructions)
 
 [[ACE-instruction-init-2]]
-===== ace.load/ace.import_system
+===== ace.load/ace.sysimport
 
 Same encoding as `ace.import`.
 
 _Mnemonics_::
 `ace.load{nbsp}{nbsp}{nbsp}Kd|K(Xd), %offset(Xn)` +
-`ace.import_system{nbsp}Kd|K(Xd), %offset(Xn)`
+`ace.sysimport{nbsp}Kd|K(Xd), %offset(Xn)`
 
 _Description_::
 `ace.load` imports a PI or a SCC, starting with the 8th byte of the Metadata Header, at memory address `%offset(Xn)`, into the CR `Ks` or `K(Xs)`.
 Assumes that the CR is ready to import information and that the first 8 bytes of the Metadata Header have already been loaded.
 +
-The semantics of `ace.import_system` are entirely implementation dependent and do not assume that the CR has been readied to import information and
+The semantics of `ace.sysimport` are entirely implementation dependent and do not assume that the CR has been readied to import information and
 that some metadata has already been loaded in it.
 
 [[ACE-instruction-export-2]]
@@ -1081,11 +1069,11 @@ _Description_::
 On RV64:
 
 * `ace.getmdl` copies bits [63:0] of the Metadata Header of a CR `Ks` or `K(Xs)` into GPR `Xd`.
-* `ace.getmdh` bits [126:64] into GPR `X[d]`.
+* `ace.getmdh` bits [127:64] into GPR `X[d]`.
 
 On RV32, `d` must be even, and:
 
-* `ace.getmdl` copies bits [31:0] of the Metadata Header of a CR `Ks` or `K(Xs)` into GPR `Xd` and bits [63:32] into GPR `X[d+1]`, atomically.
+* `ace.getmdl` copies bits  [31:0] of the Metadata Header of a CR `Ks` or `K(Xs)` into GPR `Xd`   and bits  [63:32] into GPR `X[d+1]`, atomically.
 * `ace.getmdh` copies bits [95:64] of the Metadata Header of a CR `Ks` or `K(Xs)` into GPR `X[d]` and bits [127:96] into GPR `X[d+1]`, atomically.
 --
 +
