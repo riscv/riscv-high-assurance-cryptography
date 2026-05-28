@@ -20,41 +20,12 @@ Both formats begin with a 128-bit Metadata Header, whose format we define next.
 
 // ////////////////////////////////////////////////////////////////////
 
-[[ACE-Metadata]]
-==== Metadata Header Format
-
-The following table lists the fields of the 128-bit Metadata Header.
-Of these 128 bits, 105 are currently defined and 23 are reserved for future use.
-Most algorithms use only 81 bits, as _StateExtension_ and _AlgorithmUse_ are currently used only by the Elliptic Curve Algorithms (<<ACE-ECC>>).
-All Reserved bits, as well as bits unused by a given algorithm, must be zero.
-The fields are arranged so that the first 64 bits suffice to determine the length of a PI or SCC.
-
-[[ACE-metadata-header]]
-.Format of the 128-bit Metadata Header
-[width="100%",cols="^9%,^6%,14%,71%",options="header"]
-|===
-|  Field   | Size  | Name              | Description
-|  [11:0]  | 12    | _Algorithm_       | Cryptographic algorithm (primitive, mode, or protocol). See <<ACE-Algorithm-field>>.
-|  [13:12] | 2     | _AlgorithmPolicy_ | Allowed algorithm variants(s) _or_ extension of the _Algorithm_ field. See <<ACE-Algorithm-field>>.
-|  [15:14] | 2     | Reserved          | Reserved for future expansion of _AlgorithmPolicy_ field.
-|  [18:16] | 3     | _SCProtection_    | Side-channel protection level. See <<ACE-SCProtection-field>>.
-|  [20:19] | 2     | _KeyType_         | 0: key is an explicit value in Content. 1:  Key is a system-specific System Key Identifier. See <<ACE-system-keys>>.
-|  [25:21] | 5     | _State_           | Current state of the CR/algorithm, encoded as an integer.
-|  [31:28] | 4     | _StateExtension_  | May be used by the algorithm to extend the _State_ field with additional information.
-|  [30:30] | 1     | _Provisioning_    | Set if the CR has been only partially provisioned.
-|  [31:31] | 1     | _Importing_       | Set if the CR has been only partially imported.
-|  [36:32] | 5     | _UsagePolicy_     | Usage (Control) Policy. Bits 0, 1, 2, 4 and 4 of the field,, when set, disallow CC usage in U-mode, (V)S-mode, H-mode, M-Mode, and Debug mode, respectively.
-|  [44:37] | 8     | _Locality_        | Zero, or an index determining a Locality Secret. See <<ACE-Localities>>.
-|  [47:45] | 3     | Reserved          | Reserved for future expansion of the _Locality_ field use.
-|  [63:48] | 16    | _ImpDataLen_      | If non-zero, indicates that an additional, variable-length, implementation-dependent data section appended to Content. The length of this additional data section is _ImpDataLen_ * 128 bits (up to 1024 KiB).
-|  [89:64] | 26    | _ExpirationDate_  | If non-zero, the expiration date of this CC. See <<ACE-Metadata-expiration-date>>. Minutes since 00:00, January 1, 2027 (about 127 years).
-| [109:90] | 20    | _AlgorithmUse_    | Reserved for algorithms and implementations to store additional state information.
-| [127:110] | 18   | Reserved          | Reserved for future use.
-|===
+[[ACE-Metadata-Fields]]
+==== Metadata Header Fields
 
 In the following subsections we describe the fields of the Metadata Header.
 
-//
+// ////////////////////////////////////////////////////////////////////
 
 [[ACE-Algorithm-field]]
 ===== _Algorithm_ and _AlgorithmPolicy_ Fields
@@ -183,8 +154,6 @@ The CR then retains only the Metadata Header.
 . Attempts to _use_ a CR in any Error State will not perform any operation, and in particular they leave the _State_ field unchanged.
 
 . Any _usage_ instruction that would violate the Usage Control policies will not perform its operation, and will set _State_ to `ace_state_priv_viol` instead.
-
-// . If a CR is _partially configured_ (i.e., one of the bits _Provisioning_ or _Importing_ is set), transitioning it to any State other than _Off_ or _Invalid_ is only possible as a consequence of a restart or resumption of the interrupted configuration instruction.  `ace.setst` can only transition it to _Off_ or _Invalid_.
 
 We note that the State after `ace.setst` is issued may differ from the State specified by the instruction.
 A common example is MAC verification: after `ace.setst` is issued with an `ace_state_hash_verify` immediate as the next state and the value to be verified as the additional parameter, the algorithm transitions to either _Success_ or _Failure_. This is done to prevent the manipulation of a CR's state and to reduce code size.
@@ -584,16 +553,18 @@ Provisioning ``K``__i__ performs the following steps:
 . Clear ``K``__i__. In particular, the internal CRF memory corresponding to ``K``__i__ wil read as zero.
 . Read the Metadata Header `M` from memory, check it for consistency and integrity.
 . Allocate internal resources for ``K``__i__. This may fail and raise an exception.
-. Set `M`._Provisioning_, store `M` in ``K``__i__.``MH``.
+. Set `M`._Configuring_, store `M` in ``K``__i__.``MH``.
 . Read the rest of the PI content from memory, store it in ``K``__i__.``Content[]`` viewed as a buffer.
 . Perform any necessary readjustment of the CR's content to turn it into the format internally consumed by the ACE Unit, if necessary.
-. Clear the _Provisioning_ bit of ``K``__i__.``Metadata``.
+. Clear the _Configuring_ bit of ``K``__i__.``Metadata``.
 --
 
-A partially configured CR can be exported.
+[WARNING]
+====
+The architecture can *in theory* exported a partially configured CR:
 In this case:
 
-* The _Provisioning_ bit in the exported Metadata Header is set.
+* The _Configuring_ bit in the exported Metadata Header is set.
 * No encryption or authentication occurs.
 * The length of the exported Content is the same as the length of the PI.
 * All information is exported verbatim from the serialized representation of the CR: the data that has been imported so far as it was provisioned, and the rest as zeros.
@@ -603,7 +574,11 @@ This procedure is fully described in <<ACE-SCC-export>>.
 We call such ab exported context an _Exported Partial Context_ (EPC).
 
 Importing such an EPC into a CR follows the a similar algorithm as for provisioning above, however the
-value of the _Provisioning_ bit in the exported Metadata Header is maintained and not cleared at the end.
+value of the _Configuring_ bit in the exported Metadata Header is maintained and not cleared at the end.
+
+If there is a very strong argument to support such a feature (instead of clearing the CR upon context switch
+to force a restart], then we can consider it.
+====
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -642,13 +617,14 @@ Our goal is to have instructions that are as RISC-y as possible, but without com
 Also, these should scale unchanged from small cores to high-performance CPUs, and therefore not enforce any specific hardware microarchitecture.
 ====
 
-During `ace.prov`, flag _Provisioning_ is set to 1, and
-during `ace.import`, flag _Importing_ is set to 1.
-These flags are cleared to upon completion of `ace.prov` and `ace.import`.
+During provisioning or import, flag _Configuring_ is set to 1.
+This flag are cleared to upon completion of `ace.prov` and `ace.import`.
 It is updated to the correct value only upon successful completion (see <<ACE-provisioning-export-import>>).
 This transition does not occur during `ace.export`.
 
-A partially configured CR can be exported.
+[WARNING]
+====
+*In case we intend to support export of partially configured CRs:*
 
 At context save, privileged code has also the option to not export the partially configured CR, but instead to clear it at context restore to force a restart of the interrupted configuration operation.
 
@@ -659,6 +635,7 @@ Upon returning to the original control flow from an interrupt or exception, an e
 
 The above rules imply that an interrupted import operation may be resumed on a different hart, even with a different implementation of the ACE Unit.
 In the latter case, the system must be able to handle the cases where the SCC is too large to fit in a CR because of the optional Implementation VDS or the latter is incompatible.
+====
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -781,29 +758,7 @@ Attempts to do so raise an illegal instruction exception.
 
 Before an export is initiated, any provisioning, export, or import operation on a different CR must be completed or that CR cleared.
 
-Exporting ``K``__i__ distinguishes two cases
-
-[sidebar]
-.Exporting a Partially Configured CR ``K``__i__
---
-. If ``K``__i__ is being _Provisioned_:
-
-.. The _Provisioning_ bit in the exported Metadata Header is left set.
-.. The length of the exported Content is the same as the length of the PI.
-.. No encryption or authentication occurs, the information in the CR is exported verbatim, in the same order as they appear in the PI. This implies that the provisioned data is exported in the clear. However, this does not increase the attack surface since more privileged modes have access to their children processes's address spaces.
-
-. If ``K``__i__ is being _Imported_:
-
-.. The _Importing_ bit in the exported Metadata Header is left set.
-.. The length of the exported Content is the same as the length of the original SCC being imported, with the provision that the `IMPQUAL`, `SIV2`, and `Content2[]` fields are omitted if they are above the maximal length allowed for this type of CC.
-.. No encryption or authentication occurs, the information in the CR is exported verbatim, in the same order as they appear in the SCC, namely:
- `MH`, `SIV`, `Content1[]`, and, if they are present `IMPQUAL`, `SIV2`, and `Content2[]`.
- `MH`, `SIV`, `IMPQUAL`, `SIV2` are left unencrypted, `Content1[]` and `Content2[]` are exported in the original encrypted form.
---
-
-In both cases, We call the exported context an _Exported Partial Context_ (EPC).
-
-If both _Importing_ and _Provisioning_ flags are unset, then
+If the _Configuring_ flag is unset, then
 ``K``__i__ is fully provisioned and `ace.export` works as follows:
 
 [sidebar]
@@ -823,30 +778,36 @@ If both _Importing_ and _Provisioning_ flags are unset, then
 . Finally, output `MH`, `SIV`, `Content1[]`, and, if VarDataLen {ne} 0, `IMPQUAL`, `SIV2`, and `Content2[]`.
 --
 
+[WARNING]
+====
+Exporting a Partially Configured CR ``K``__i__ needs to distiguish between provisioning and import.
+We can use an additional bit of the metadata to distinguish between the two cases. This is TBD.
+
+[sidebar]
+.Exporting a Partially Configured CR ``K``__i__
+--
+. If ``K``__i__ is being _Provisioned_:
+
+.. The _Configuring_ bit in the exported Metadata Header is left set.
+.. The length of the exported Content is the same as the length of the PI.
+.. No encryption or authentication occurs, the information in the CR is exported verbatim, in the same order as they appear in the PI. This implies that the provisioned data is exported in the clear. However, this does not increase the attack surface since more privileged modes have access to their children processes's address spaces.
+
+. If ``K``__i__ is being _Imported_:
+
+.. The _Importing_ bit in the exported Metadata Header is left set.
+.. The length of the exported Content is the same as the length of the original SCC being imported, with the provision that the `IMPQUAL`, `SIV2`, and `Content2[]` fields are omitted if they are above the maximal length allowed for this type of CC.
+.. No encryption or authentication occurs, the information in the CR is exported verbatim, in the same order as they appear in the SCC, namely:
+ `MH`, `SIV`, `Content1[]`, and, if they are present `IMPQUAL`, `SIV2`, and `Content2[]`.
+ `MH`, `SIV`, `IMPQUAL`, `SIV2` are left unencrypted, `Content1[]` and `Content2[]` are exported in the original encrypted form.
+--
+
+In both cases, We call the exported context an _Exported Partial Context_ (EPC).
+====
+
 // ////////////////////////////////////////////////////////////////////
 
 [[ACE-SCC-import]]
 ==== Import
-
-[sidebar]
-.Reimporting a Partially Configured CR ``K``__i__
---
- . If ``K``__i__ is being _Provisioned_:
-
- .. The _Provisioning_ bit in the exported Metadata Header is left set.
- .. The length of the exported Content is the same as the length of the PI.
- .. No encryption or authentication occurs, the information in the CR is exported verbatim, in the same order as they appear in the PI. This implies that the provisioned data is exported in the clear. However, this does not increase the attack surface since more privileged modes have access to their children processes's address spaces.
- .. We call the exported context an _Exported Partial Context_ (EPC).
-
- . If ``K``__i__ is being _Imported_:
-
- .. The _Importing_ bit in the exported Metadata Header is left set.
- .. The length of the exported Content is the same as the length of the original SCC being imported, with the provision that the `IMPQUAL`, `SIV2`, and `Content2[]` fields are omitted if they are above the maximal length allowed for this type of CC.
- .. No encryption or authentication occurs, the information in the CR is exported verbatim, in the same order as they appear in the SCC, namely:
-  `MH`, `SIV`, `Content1[]`, and, if they are present `IMPQUAL`, `SIV2`, and `Content2[]`.
-  `MH`, `SIV`, `IMPQUAL`, `SIV2` are left unencrypted, `Content1[]` and `Content2[]` are exported in the original encrypted form.
-  .. We call the exported context an _Exported Partial Context_ (EPC) as in the _Provisioning_ case.
---
 
 [sidebar]
 .Importing a Fully Configured CR ``K``__i__
@@ -869,6 +830,30 @@ If both _Importing_ and _Provisioning_ flags are unset, then
  . `SIV2`, `C2[]` <- ``AES_GCM_SIV_Encrypt(AD, N, K``__i__.``Content2[], CSK,§ len_AD, len_PC)``
  . Finally, output `MH`, `SIV`, `Content1[]`, and, if VarDataLen {ne} 0, `IMPQUAL`, `SIV2`, and `Content2[]`.
 --
+
+[WARNING]
+====
+[sidebar]
+.Reimporting a Partially Configured CR ``K``__i__
+--
+ . If ``K``__i__ is being _Provisioned_:
+
+ .. The _Provisioning_ bit in the exported Metadata Header is left set.
+ .. The length of the exported Content is the same as the length of the PI.
+ .. No encryption or authentication occurs, the information in the CR is exported verbatim, in the same order as they appear in the PI. This implies that the provisioned data is exported in the clear. However, this does not increase the attack surface since more privileged modes have access to their children processes's address spaces.
+ .. We call the exported context an _Exported Partial Context_ (EPC).
+
+ . If ``K``__i__ is being _Imported_:
+
+ .. The _Importing_ bit in the exported Metadata Header is left set.
+ .. The length of the exported Content is the same as the length of the original SCC being imported, with the provision that the `IMPQUAL`, `SIV2`, and `Content2[]` fields are omitted if they are above the maximal length allowed for this type of CC.
+ .. No encryption or authentication occurs, the information in the CR is exported verbatim, in the same order as they appear in the SCC, namely:
+  `MH`, `SIV`, `Content1[]`, and, if they are present `IMPQUAL`, `SIV2`, and `Content2[]`.
+  `MH`, `SIV`, `IMPQUAL`, `SIV2` are left unencrypted, `Content1[]` and `Content2[]` are exported in the original encrypted form.
+  .. We call the exported context an _Exported Partial Context_ (EPC) as in the _Provisioning_ case.
+--
+====
+
 
 ////
 [NOTE]
@@ -930,9 +915,10 @@ smaller instructions instead of the current single CISC-like monolithic instruct
 
 *Import*
 ----
-ld         t0, 0(t6)                  // load metadata bits [63:0] from memory
+ld         t0, 0(t6)                  // load metadata header bits [63:0] from memory
 ace.setst  K0, t0, #unseal_for_import // any errors fall through following instructions
-ace.load   K0, 8(t6)                  // load remaining bytes starting with the tag
+ace.load   K0, 8(t6)                  // load remaining bytes starting with bits [127:64]
+                                      // of the metadata header
 ace.setst  K0, #seal_after_import     // decrypts and authenticates CR, reconstructs data
 ace.size   t2, K0                     // size is zero if error
 beq        t2, zero, label            // handle error
@@ -957,19 +943,30 @@ the exported data must be the original
 encrypted data loaded so far, and not a re-encryption of a partially decrypted payload.
 This is required for both correctness and security.
 
-A CR can be in two general states: internally clear or internally encrypted for export.
-This is signalled by the _Exporting_ bit in the MH.
-Once in the _Exporting_ state, it cannot be used in cryptographic operations: It must be
-“resealed” first.
+// A CR can be in two general states: internally clear or internally encrypted for export.
+// This is signalled by the _Exporting_ bit in the MH. (Currently not defined.)
+// Once in the _Exporting_ state, it cannot be used in cryptographic operations: It must be
+// “resealed” first.
 
 *Export*
 ----
-ace.size t2, K0                   // get size of the blob to export
+ace.size  t2, K0                  // get size of the blob to export
 {...}  // here goes the code that allocates the buffer to store the exported data
 
 ace.getmd t1, K0                  // get MH of SCC/PI to remember what it was
 
-ace.setst K0, #unseal_for_export
+ace.setst K0, #unseal_for_export  // Compute SIV/SIV2 and encrypt the state
+
+ace.store 0(t6), K0               // stores all data starting with the tag
+// if this store is preempted, then when the context switch handler runs
+// its own export code, ace.setst  will see the _Exporting_ bit and therefore
+// it will not encrypt the data again.
+
+ace.setst K0, #seal_after_export  // reverts to the saved state
+// which may have the _Exporting_ bit set or cleared. Only the _Exporting_ bit
+// of t1 is used in this instruction and t1 does not affect other MH fields.
+----
+
 // If the state is fully provisioned, then this computes SIV (SIV2)
 // and internally changes the state by encrypting it, and possibly using the
 // per-hart storage for SIV/SIV2.
@@ -981,16 +978,6 @@ ace.setst K0, #unseal_for_export
 //
 // Its last task is to set the MH's _Exporting_ flag (which is ignored,
 // i.e., treated as 0, in the SIV computation).
-
-ace.store 0(t6), K0               // stores all data starting with the tag
-// if this store is preempted, then when the context switch handler runs
-// its own export code, ace.setst  will see the _Exporting_ bit and therefore
-// it will not encrypt the data again.
-
-ace.setst K0, t1, #maybe_seal_after_export  // reverts to the saved state
-// which may have the _Exporting_ bit set or cleared. Only the _Exporting_ bit
-// of t1 is used in this instruction and t1 does not affect other MH fields.
-----
 
 [WARNING]
 ====
