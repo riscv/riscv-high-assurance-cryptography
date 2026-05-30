@@ -544,7 +544,9 @@ Providing an extra 128 bits of storage for each of the 32 CRs (or 256 bits if at
 The `IMPQUAL` value must be instead stored inside the CR. hence, if an algorithm supports Implementation VDS, the internal state of the CR must be able to accommodate its 128 bits.
 
 The _i_-th CR is denoted by ``K``_i_.
-When ``K``_i_ is being provisioned, resp., imported, we can refer to it as if it were a buffer with the length of the PI, resp., of the SCC with an additional 128 or 384 bits of additional storage. In this case, the format of this (virtual) buffer's format is the same as <<ACE-PI>>, resp., <<ACE-SCC>>.
+When ``K``_i_ is being provisioned, resp., imported, we can refer to it as if it were a buffer with the length of the PI, resp., of the SCC, with an additional 128 or 384 bits of additional length if needed because of the presence of `SIV`, `IMPQUAL`, and `SIV2`.
+This additional length is per-hart, not per-CR, and the implementation must handle it transparently as if it were a part of the CR.
+The format of this (virtual) buffer's format is the same as <<ACE-PI>>, resp., <<ACE-SCC>>.
 In particular, for provisioning we address the content as
 ``K``__i__.``MH`` and ``K``__i__.``Content1``,
 and
@@ -563,7 +565,7 @@ and
 ==== Provisioning
 
 We start with the algorithm performed by `ace.prov`, which loads a PI and uses it to configure a CR.
-˝
+
 Provisioning ``K``__i__ performs the following steps:
 
 [sidebar]
@@ -836,31 +838,40 @@ If the _Configuring_ flag is unset, then
 . Finally, output `MH`, `SIV`, `Content1[]`, and, if VarDataLen {ne} 0, `IMPQUAL`, `SIV2`, and `Content2[]`.
 --
 
+===== Export of a partially configured CR
+
 [WARNING]
 ====
+This section is not (yet) complete nor normative.
+====
+
 Exporting a Partially Configured CR ``K``__i__ needs to distinguish between provisioning and import.
 We can use an additional bit of the metadata to distinguish between the two cases. This is TBD.
 
 [sidebar]
-.Exporting a Partially Configured CR ``K``__i__
+.Exporting a Partially Provisioned CR ``K``__i__
 --
-. If ``K``__i__ is being _Provisioned_:
+. The _SealingStatus_ field in the exported Metadata Header is not changed.
+. The length of the exported Content is the same as the length of the PI.
+. No encryption or authentication occurs, the information in the CR is exported verbatim, in the same order as they appear in the PI. This implies that the provisioned data is exported in the clear. However, this does not increase the attack surface since more privileged modes have access to their children processes's address spaces.
+--
 
-.. The _Configuring_ bit in the exported Metadata Header is left set.
-.. The length of the exported Content is the same as the length of the PI.
-.. No encryption or authentication occurs, the information in the CR is exported verbatim, in the same order as they appear in the PI. This implies that the provisioned data is exported in the clear. However, this does not increase the attack surface since more privileged modes have access to their children processes's address spaces.
-
-. If ``K``__i__ is being _Imported_:
-
-.. The _Importing_ bit in the exported Metadata Header is left set.
-.. The length of the exported Content is the same as the length of the original SCC being imported, with the provision that the `IMPQUAL`, `SIV2`, and `Content2[]` fields are omitted if they are above the maximal length allowed for this type of CC.
-.. No encryption or authentication occurs, the information in the CR is exported verbatim, in the same order as they appear in the SCC, namely:
+[sidebar]
+.Exporting a Partially Imported CR ``K``__i__
+--
+. The _SealingStatus_ field in the exported Metadata Header is not changed.
+. (The handler code notices that _SealingStatus_ = _SSImporting_.)
+. The max length of the exported Content is the same as the length of the original SCC that was being imported (including the adjustments made by the import operation).
+. No encryption or authentication occurs, the information in the CR is exported verbatim, in the same order as they appear in the SCC, namely:
  `MH`, `SIV`, `Content1[]`, and, if they are present `IMPQUAL`, `SIV2`, and `Content2[]`.
  `MH`, `SIV`, `IMPQUAL`, `SIV2` are left unencrypted, `Content1[]` and `Content2[]` are exported in the original encrypted form.
 --
 
 In both cases, We call the exported context an _Exported Partial Context_ (EPC).
-====
+
+//   The handler uses a Form C `ace.exec`, with a 48-byte vector (from a 512-bit or longer output vector/vector group)–or an equivalent instruction sequence based on Form D `ace.exec` and `ace.output`–to export `SIV`, `IMPQUAL`, and `SIV2`, where bits [127:0] of the output contain `SIV`, bits [255:128] contain `IMPQUAL`, and bits [383:256] contain the `SIV2` value.  Reimporting this CR will do the same check and accordingly recover the saved SIV and `SIV2` values.  Note that these values themselves may have been only partially imported by the interrupted import.
+
+
 
 // ////////////////////////////////////////////////////////////////////
 
