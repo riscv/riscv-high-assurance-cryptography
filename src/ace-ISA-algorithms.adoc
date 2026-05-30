@@ -59,14 +59,11 @@ The architecture defines the following side-channel protection levels.
 |  {ge} 3 | Currently not defined.
 |===
 
-Custom implementations offering a different levels of protection may set _SCProtection_ to a value greater than 2.
-In this case, _ImpDataLen_ shall be non-zero, ensuring that the `IMPQUAL` value is checked so that the implementation can verify whether it understands the given _SCProtection_ value.
+Custom implementations offering a different levels of protection may set _SCProtection_ to a value greater than 2:
 
-[WARNING]
-====
-Discuss with ARC: reserve values 3-5 for future use by the architecture and 6-7 for implementation-custom protection levels.
-Only the latter would require a `IMPQUAL` check.
-====
+* Values 3-5 are reserved for future use by the architecture.
+* Values 6-7 are reserved for implementation-custom protection levels.
+  In this case, the generating environment must use localities that prevent the use of the SCC on different architectures.
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -90,7 +87,7 @@ The architected values of _State_ which are common to all algorithms are defined
 |===
 
 [[ACE-states-error]]
-.Global CC State Numbers: Interrupted and Error States
+.Global CC State Numbers: Error States
 [float="center",align="center",width="100%",cols="^7%,<27,<15%,<51%"]
 |===
 |  24    | `ace_state_not_impl`        | _Not_Impl_        | Not implemented algorithm. It is set by the hardware upon an attempt to provision or import a CR that is not supported by the implementation.
@@ -112,18 +109,18 @@ This allows to encode additional operations related to state changes (such as st
 
 (((ACE, algorithm, error states)))
 States 24-31 are termed _Error States_, and are used to report certain specific ACE errors.
-(((ACE, algorithm, invalid state)))
+(((ACE, algorithm, invfgalid state)))
 (((Context Register, invalidation)))
 In particular, if the State is `ace_state_invalid`, we say that the CR is _invalidated_.
 
 The Error States are currently listed in decreasing severity order, with Error State 24 being the most severe and Error State 29 the least severe.
 Error States 30 and 31, if defined, will not necessarily have a lower priority than Error State 29, and may be therefore not in order.
 
-(((ACE, instruction, invalid state)))
-(((ACE, instruction, ace.setst)))
-An error state can be set by software using `ace.setst` (with no auxiliary input).
-
 Error conditions that lead to exceptions are treated in <<ACE-exceptions>>.
+
+// (((ACE, instruction, invalid state)))
+// (((ACE, instruction, ace.setst)))
+// `ace.setst` can be used to transition to an Error State, but without triggering an exception (cf. <<ACE-instruction-setst>>).
 
 If an algorithm defines 23 or fewer valid states (including _Initial_, _Success_, and _Failure_), the current state is stored in the _State_ field.
 For algorithms with more than 23 valid states, additional state information resides in the Content section.
@@ -160,6 +157,18 @@ A common example is MAC verification: after `ace.setst` is issued with an `ace_s
 An `ace.exec` instruction may also trigger a state change.
 
 In <<ACE-states-graph>> we display the default possible state transitions.
+The legend for the graph is:
+
+* The double circled state is the _Off_ State.
+* Valid States have single rounded rectangular borders.
+* Error States have double rounded rectangular borders.
+* The continuous edges represent state transitions induced by both configuration and usage instructions.
+* However, a transition from _Success_ or _Failure_ to _Initial_ may be forbidden by certain single-use CRs as per the _Algorithm_'s policies.
+* The transitions from _Off_ to any Error State are a result of configuration instructions, whereas the corresponding transitions from these Error States to _Off_ are a result of explicitly clearing the CR.
+* The dashed edges represent state transitions induced by reaching the expiration date.
+* The dotted edges represent state transitions induced by configuration instructions. We note that completion of a provisioning operations can only bring to the _Initial_ state, whereas completion of an import can bring a CR to any state.
+* Any transition may be caused by an performing explicit operation performed while in a given state, or be caused implicitly by reaching the latter under conditions specified in the algorithm's specification.
+* The round _Configuration_ “hub” simplifies the graph to represent that it is always possible to reach any Error State, even from other Error States, by performing explicit configuration operations (or by using `ace.setst` between Error States).
 
 // //
 [[ACE-states-graph]]
@@ -248,22 +257,6 @@ image::../../src/statestikz-3.svg[]
 ....
 ////
 
-The graph is read as follows:
-
-. The double circled state is the _Off_ State.
-. Valid States have single rounded rectangular borders.
-. Error States have double rounded rectangular borders.
-//. The _Partially Configured_ conditions have a trapezium shape.
-. The continuous edges represent state transitions induced by both configuration and usage instructions.
-. However, a transition from _Success_ or _Failure_ to _Initial_ may be forbidden by certain single-use CRs as per the _Algorithm_'s policies.
-. The transitions from _Off_ to any Error State are a result of configuration instructions, whereas the corresponding transitions from these Error States to _Off_ are a result of explicitly clearing the CR.
-. The dashed edges represent state transitions induced by reaching the expiration date.
-. The dotted edges represent state transitions induced by configuration instructions. We note that completion of a provisioning operations can only bring to the _Initial_ state, whereas completion of an import can bring a CR to any state.
-//. Partially configured conditions occur only while configuration operations are in progress and is therefore only reached via exceptions or interrupts.
-//  This explains why there are no arrows leading to _Partially Configured_ from any other state.
-. Any transition may be caused by an performing explicit operation performed while in a given state, or be caused implicitly by reaching the latter under conditions specified in the algorithm's specification.
-. The round _Configuration_ “hub” simplifies the graph to represent that it is always possible to reach any Error State, even from other Error States, by performing explicit configuration operations (or by using `ace.setst` between Error States).
-
 // ////////////////////////////////////////////////////////////////////
 
 [[ACE-StateExtension]]
@@ -277,14 +270,25 @@ This field may be used to determine the size of an SCC.
 [[ACE-SealingStatus]]
 ===== _SealingStatus_ Field
 
-The value of this field is
+The admissible values of this field are given in the table below.
 
-* 0 if the CR is fully configured and ready to operate;
-* 1  while it is being provisioned;
-* 2  while a SCC is being imported in it; and
-* 3  while it is being exported.
+[[ACE-SC-sealing-status]]
+.Encoding of _SealingStatus_ field
+[float="center",align="center",cols="^7%,<25%,<68%"options="header"]
+|===
+| Value | Mnemonic           | Description
+|   0   | _SSComplete_       | The CR is fully configured and ready to operate.
+|   1   | _SSProvisioning_   | The CR is partially configured as a result of an interrupted provisioning operation.
+|   2   | _SSImporting_      | The CR is partially configured as a result of an interrupted import operation.
+|   3   | _SSExporting_      | The CR has been placed in exporting mode, i.e., its contents have been encrypted and authenticated for export. SIV and SIV2 have been computed.
+|===
 
 The authentication process ignores _SealingStatus_ and therefore the SIV is computed as if this field were always zero.
+
+[WARNING]
+====
+Modify import and export code to handle _SealingStatus_ as if always zero.
+====
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -303,35 +307,35 @@ entries 8–11 form the _SW Filter Group_.
 
 For each Locality, the table provides: index in the LST; domain (SoC-, device-, VM-wide, or per-process); configurability; bit-field encoding; and value.
 
-Eight _Locality_ field bits are defined.
-
 [[ACE-locality-indexes]]
-.Architected Localities
+.Architected Localities. Bits refer to the _Locality_ field in the Metadata Header.
 [width="100%",cols="^5%,15%,50%,^9%,^9%,^6%,^6%",options="header"]
 |===
-|  Idx  | Locality                  | Description                                                                          | Domain | Config?|  Bits  | Value
-2+|    No HW Binding                | Independent of Chip, OEM, Device                                                    ^|  --   ^|   --   | [2:0]  |  0
-|   0   | _SiPScrt_                 | Identifies the designer of the SoC. Permanent.                                       |  SoC   |   No   | [2:0]  |  1
-|   1   | _ChipFamScrt_             | Identifies specific chip/SoC model/family. Permanent.                                |  SoC   |   No   | [2:0]  |  2
-|   2   | _ChipScrt_                | Unique for each SoC. Permanent.                                                      |  SoC   |   No   | [2:0]  |  3
+|  Idx  | Locality                  | Description                                                                            | Domain | Config?|  Bits  | Value
+2+|    No HW Binding                | Independent of Chip, OEM, Device                                                      ^|  --   ^|   --   | [3:0]  |  0
+|   0   | _SiPScrt_                 | Identifies the designer of the SoC. Permanent.                                         |  SoC   |   No   | [1:0]  |  1
+|   1   | _ChipFamScrt_             | Identifies specific chip/SoC model/family. Permanent.                                  |  SoC   |   No   | [1:0]  |  2
+|   2   | _ChipScrt_                | Unique for each SoC. Permanent.                                                        |  SoC   |   No   | [1:0]  |  3
 |   3   | _OEMScrt_                 | Provisioned by OEM to differentiate their products from the competition.
-Permanent, or reconfigurable via a custom hardware authenticated mechanism.                                                | Device |   HW   | [2:0]  |  4
+{empty}                               Permanent, or reconfigurable via a custom hardware authenticated mechanism.            | Device |   HW   | [3:2]  |  1
 |   4   | _ProdScrt_                | Identifies device/system type/model (product).
-Permanent or reconfigurable like OEMScrt.                                                                                  | Device |   HW   | [2:0]  |  5
-|   5   | _DevScrt_                 | Unique device (entire system) secret.
-Shared across all harts in a SoC and shareable across multiple SoCs in a single device using an implementation-defined mechanism.
-Reconfigurable like OEMScrt.                                                                                               | Device |   HW   | [2:0]  |  6
-2+|   No Boot Binding               | Independent of Physical or Virtual Boot Session                                     ^|  --   ^|   --   | [4:3]  |  0
+{empty}                               Permanent or reconfigurable like OEMScrt.                                              | Device |   HW   | [3:2]  |  2
+|   5   | _DevScrt_                 | Unique device (entire system) secret. Shared across all harts in a SoC and shareable
+{empty}                               across multiple SoCs in a single device using an implementation-defined mechanism.
+{empty}                               Reconfigurable like OEMScrt.                                                           | Device |   HW   | [3:2]  |  3
+2+|   No Boot Binding               | Independent of Physical or Virtual Boot Session                                       ^|  --   ^|   --   | [5:4]  |  0
 |   6   | _PhysBootScrt_            | Unique per the boot session of the host hardware and its firmware stack.
-{empty}                   Configured by M-mode during the boot process of the host (see <<ACE-CSR-macePhysBootScrt>>).     | Device |   M    | [4:3]  |  1
+{empty}                     Configured by M-mode during the boot process of the host (see <<ACE-CSR-macePhysBootScrt>>).     | Device |   M    | [5:4]  |  1
 |   7   | _VirtBootScrt_            | Unique per the boot session of the virtual hardware and its software stack.
-Regenerated by H or higher at each virtual boot of a VM (see <<ACE-CSR-haceVirtBootScrt>>).                                |   VM   |  H/M   | [4:3]  |  2
-2+| No Binding at Modes             | Independent of M-, S-, or any VS-mode Localities                                    ^|  --   ^|   --   | [6:5]  |  0
-|   8   | _MLocality_               | Configurable at M.  Useful to separate Supervisor Domains/Security States.           |  < M   |   M    | [6:5]  |  1
-|   9   | _HLocality_               | Configurable at H.                                                                   |  < H   |   H    | [6:5]  |  2
-|  10   | _SLocality_               | Configurable at (V)S.                                                                | < (V)S |  (V)S  | [6:5]  |  3
-|  11   | _Nonce_                   | Always re-configurable (out-of-band peer-to-peer nonce). Only the 96 bits _Nonce_[95:0] are defined. |  hart  |   U    | [7:7]  | 0/1
+Regenerated by H or higher at each virtual boot of a VM (see <<ACE-CSR-haceVirtBootScrt>>).                                  |   VM   |  H/M   | [5:4]  |  2
+2+| No Binding at Modes             | Independent of M-, S-, or any VS-mode Localities                                      ^|  --   ^|   --   | [7:6]  |  0
+|   8   | _MLocality_               | Configurable at M.  Useful to separate Supervisor Domains/Security States.             |  < M   |   M    | [7:6]  |  1
+|   9   | _HLocality_               | Configurable at H.                                                                     |  < H   |   H    | [7:6]  |  2
+|  10   | _SLocality_               | Configurable at (V)S.                                                                  | < (V)S |  (V)S  | [7:6]  |  3
+|  11   | _Nonce_                   | Always re-configurable (out-of-band peer-to-peer nonce). Only bits [95:0] are defined. |  hart  |   U    | [8:8]  | 0/1
 |===
+
+// |   6   | _ACEImplementation_       | Identifies ACE vendor/architecture/implementation. Public and Permanent.               | ACE Unit | No   | [4:4]  | 0/1
 
 Implementations are not required to populate every entry in the HW Binding Group, except for _ChipFamScrt_ and _DevScrt_.
 If an entry is unconfigured, it is transparently replaced by the next defined entry in its chain: _SiPScrt_ {rightarrow} _ChipFamScrt_ {rightarrow} _ChipScrt_, and _OEMScrt_ {rightarrow} _ProdScrt_ {rightarrow} _DevScrt_.
@@ -342,7 +346,7 @@ _HLocality_ is active only when the H extension is enabled and V=1; otherwise, i
 NOTE: A system key identifier may refer to keys with unrelated purposes on different devices, leading to unspecified behavior.
 Implementations shall assign usage policies at least as restrictive as the key's own native policies, and supply an appropriate _Locality_ during CR provisioning.
 
-Up to four architected Localities may be active concurrently: one from the HW Binding Group, one of either _PhysBootScrt_ or _VirtBootScrt_, one from the SW Filter Group and the _Nonce_.
+Up to five architected Localities may be active concurrently: two from the HW Binding Group, one of either _PhysBootScrt_ or _VirtBootScrt_, one from the SW Filter Group and the _Nonce_.
 In <<ACE-provisioning-export-import>>, it is explained how the associated policies are enforced.
 
 //
@@ -376,15 +380,13 @@ The _ImpDataLen_ Metadata Header field records the length of the _Additional Dat
 
 The format of the _Additional Data Section_ is described in <<ACE-data-formats>>.
 
-The first 128 bits of the Implementation VDS of the Content, if not empty, always hold a copy of
+If _ImpDataLen_ is nonzero, the first 128-bit block of this additional section contains
+a copy of the implementation qualifier
 
 ``{fournbsp}{fournbsp}IMPQUAL := zeros(32) @ aceimpid @ acearchid @ acevendorid``
 
-(cf. <<ACE-CSR-impl-ids>>) from the originating machine, and are counted within the length recorded by the _ImpDataLen_ field.
+(cf. <<ACE-CSR-impl-ids>>) from the originating machine. Its 16 bytes are counted within the length recorded by the _ImpDataLen_ field.
 The importing implementation uses this value to determine whether any information in the Implementation-Specific Data Section can be used.
-
-If the Implementation VDS is not empty, the *implementation* will check the `IMPQUAL`
-stored therein to decide whether the Implementation-Specific part can be used or should be ignored.
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -453,9 +455,9 @@ The format of a Sealed Cryptographic Context (SCC) is shown in <<ACE-SCC>>.
 .Plaintext of the Sealed Cryptographic Context (SCC) Format, all Sections in Order
 [width="100%",cols="8%,25%,32%,35%",options="header"]
 |===
-| Section | Section Name                            | Size               | Description
-| 1       | `MH`, Metadata Header                   | 128 bits           | See <<ACE-Metadata>>.
-| 2       | `SIV`                                   | 128 bits           | Authentication tag for section 3.
+| Section | Section Name                            | Size                 | Description
+| 1       | `MH`, Metadata Header                   | 128 bits             | See <<ACE-Metadata>>.
+| 2       | `SIV`                                   | 128 bits             | Authentication tag for section 4.
 //
 | 3
 | `Content1`: _Algorithm Data Section_
@@ -463,8 +465,8 @@ The format of a Sealed Cryptographic Context (SCC) is shown in <<ACE-SCC>>.
 | Contains keys and other algorithm-specific information. Encrypted in memory and during partial import.
  The data in this section is necessary for the correct functioning of the algorithm.
 //
-| 4       | `IMPQUAL`, Implementation Qualifier    | 128 bits if present | Used to identify the implementation of the ACE Unit
-| 5       | `SIV2`                                 | 128 bits if present | Authentication tag for sections 4 and 6.
+| 4       | `IMPQUAL`, Implementation Qualifier     | 128 bits, if present | Used to identify the implementation of the ACE Unit
+| 5       | `SIV2`                                  | 128 bits, if present | Authentication tag for sections 4 and 6.
 | 6
 | `Content2`: _Implementation (Specific) Variable-Length Data Section_ (Implementation VDS)
 | Implementation-Specific
@@ -476,7 +478,7 @@ The length of each section must be a multiple of 128 bits.
 
 If the context is exported while in an Error State, Sections 3–6 are empty; that is, the SCC consists only of a plaintext Metadata Header and of `SIV`.
 
-The Metadata Header's _ImpDataLen_ field specifies the total size of the Variable-Length Section (`IMPQUAL`, `SIV2`, and `Content2[]`).
+The Metadata Header's _ImpDataLen_ field specifies the total size of the Variable-Length Section (`SIV2`, `IMPQUAL`, and `Content2[]`).
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -531,12 +533,15 @@ This applies to all keys at once in an algorithms, unless otherwise specified.
 [[ACE-CR-representation]]
 ==== Notation and Representation of CR Internals
 
-Conceptually, the information inside a CR is represented as a bit string whose minimum length equals the SCC size (see <<ACE-SCC>>), excluding the `SIV`, `IMPQUAL`, and `SIV2` fields.
+Conceptually, the information inside a CR is represented as a bit string whose minimum length equals the SCC size (see <<ACE-SCC>>), excluding the `SIV` and `SIV2` fields.
 Additional size depends on the presence of information reconstructed only upon successful import, such as derived keys, multiple shares, or implementation-specific auxiliary data.
 
 While a concrete implementation may differ considerably from this model, we use it to describe the architectural behavior of provisioning, importing, and exporting. For instance, an import operation is modeled as a load of the encrypted, authenticated SCC into the CR, followed by in-place decryption and authentication of the plaintext, and finally a step to reconstruct missing information or expand keys into multiple shares.
 
-When an SCC is imported, the CR may require additional space for `SIV` (and for `IMPQUAL` and `SIV2`). Providing an extra 128 bits of storage for each of the 32 CRs (or 384 bits if at least one Algorithm supports implementation-specific additional data) would be costly. The ACE architecture therefore permits only a single import or export operation at a time per hart. While a CR is "open" for importing or exporting, no other CR can be opened until the current operation completes. This limits the storage overhead for `SIV`, `IMPQUAL`, and `SIV2` to just 128 or 384 bits per hart.
+When an SCC is imported, the CR may require additional space for `SIV`, and also for `SIV2` if there is an Implementation VDS.
+Providing an extra 128 bits of storage for each of the 32 CRs (or 256 bits if at least one Algorithm supports implementation-specific additional data) would be costly. The ACE architecture therefore permits only a single import or export operation at a time per hart. While a CR is "open" for importing or exporting, no other CR can be opened until the current operation completes. This limits the storage overhead for `SIV`, and `SIV2` to just 128 or 256 bits per hart.
+
+The `IMPQUAL` value must be instead stored inside the CR. hence, if an algorithm supports Implementation VDS, the internal state of the CR must be able to accommodate its 128 bits.
 
 The _i_-th CR is denoted by ``K``_i_.
 When ``K``_i_ is being provisioned, resp., imported, we can refer to it as if it were a buffer with the length of the PI, resp., of the SCC with an additional 128 or 384 bits of additional storage. In this case, the format of this (virtual) buffer's format is the same as <<ACE-PI>>, resp., <<ACE-SCC>>.
@@ -546,9 +551,9 @@ and
 for import as
 ``K``__i__.``MH``,
 ``K``__i__.``SIV``,
-``K``__i__.``Content1[]`` (encompassing Sections 3.a and 3.b),
-``K``__i__.``IMPQUAL``,
 ``K``__i__.``SIV2``,
+``K``__i__.``IMPQUAL``,
+``K``__i__.``Content1[]`` (encompassing Sections 3.a and 3.b),
 and
 ``K``__i__.``Content2[]``.
 
@@ -567,10 +572,10 @@ Provisioning ``K``__i__ performs the following steps:
 . Clear ``K``__i__. In particular, the internal CRF memory corresponding to ``K``__i__ wil read as zero.
 . Read the Metadata Header `M` from memory, check it for consistency and integrity.
 . Allocate internal resources for ``K``__i__. This may fail and raise an exception.
-. Set `M`._Configuring_, store `M` in ``K``__i__.``MH``.
+. Set `M`._SealingStatus_ <- _SSProvisioning_ , store `M` in ``K``__i__.``MH``.
 . Read the rest of the PI content from memory, store it in ``K``__i__.``Content[]`` viewed as a buffer.
 . Perform any necessary readjustment of the CR's content to turn it into the format internally consumed by the ACE Unit, if necessary.
-. Clear the _Configuring_ bit of ``K``__i__.``Metadata``.
+. `M`._SealingStatus_ <- _SSComplete_.
 --
 
 [WARNING]
@@ -668,7 +673,7 @@ For starters, a CR should have a “raw” state and a “complete” state.
 
 . They are not necessarily the unsealed and sealed states.
 . But it means that the original operation can be resumed if
-.. The SIV is known and saved in the handler in the mode which interrupted the original operation
+.. The SIV is saved in the mode which interrupted the original operation by the handler; and
 .. The fill level is also known and transferred from one mode to the next if there are nested. I think a good place would be a GPR where we save “size”, so that the handler of the interrupted instruction will look at the instruction, extract the GPR’s number, use it. So, it must be passed as a parameter to the “load” instruction. “store” insns do not need that, because if I am interrupting a “store”, the resumption point to is given by acestart​ and the code that is restarted has the fill level stored somewhere.
 
 Need to distinguish provision and store, so the states are: fully configured, prov interrupted, and import interrupted as before.
