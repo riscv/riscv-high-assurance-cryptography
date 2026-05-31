@@ -923,23 +923,18 @@ smaller instructions instead of the current single CISC-like monolithic instruct
 *Import*
 ----
   ld         t0, 0(t6)                   # load metadata header bits [63:0] from memory
+  li         t3, #23
 restart:
   ace.setst  K0, t0, #unseal_for_import  # prepare CR for import and write MH[63:0] in it
-  ace.size   t1, K0                      # size is zero if metadata invalid
-  beqz       t1, handle_invalid_MH       # check whether it was an authentication failure
-  bne        t1, zero, success           # handle error
-  ace.load   K0, 8(t6)                   # load all the rest starting with MH[127:64]
-                                         # of the metadata header
-  ace.setst  K0, #seal_after_import      # decrypts/authenticates CR, reconstructs data
-  ace.size   t1, K0                      # size is zero if auth error or need to restart
-  bne        t1, zero, success           # handle error
   ace.getst  t2, K0                      # get _State_ field from MH[63:0]
-  li         t3, #ace_state_import_auth
-  beq        t2, t3, handle_auth_fail    # handle authentication failure
-  li         t3, #ace_state_invalid
-  beq        t2, t3, handle_invalid_SCC  # handle state invalid (corner case)
-  j          restart                     # else restart
-
+  bltu       t3, t2, handle_errors       # errors (larger than 23, i.e. ≥ 24)
+  ace.load   K0, 8(t6)                   # load all the rest starting with MH[127:64]
+  ace.getst  t2, K0                      # get _State_ field from MH[63:0]
+  li         t3, #ace_state_off          # compare to off state
+  beq        t2, t3, restart             # CR cleared means force restart
+  ace.setst  K0, #seal_after_import      # decrypts/authenticates/reconstructs CR
+  ace.getst  t2, K0                      # get _State_ field from MH[63:0]
+  bltu       t3, t2, handle_errors       # handle other errors (larger than 23, i.e. ≥ 24)
 success:
 ----
 
