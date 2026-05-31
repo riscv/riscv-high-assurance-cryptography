@@ -533,20 +533,19 @@ This applies to all keys at once in an algorithms, unless otherwise specified.
 [[ACE-CR-representation]]
 ==== Notation and Representation of CR Internals
 
-Conceptually, the information inside a CR is represented as a bit string whose minimum length equals the SCC size (see <<ACE-SCC>>), excluding the `SIV` and `SIV2` fields.
-Additional size depends on the presence of information reconstructed only upon successful import, such as derived keys, multiple shares, or implementation-specific auxiliary data.
+Conceptually, the information inside a CR comprises at least as many bits as the SCC (see <<ACE-SCC>>), excluding `SIV`, `IMPQUAL`, and `SIV2`.
+Additional storage may be required for information reconstructed only upon successful import.
+Hence, a CR can be viewed as a register of variable, and discoverable, length.
 
-While a concrete implementation may differ considerably from this model, we use it to describe the architectural behavior of provisioning, importing, and exporting. For instance, an import operation is modeled as a load of the encrypted, authenticated SCC into the CR, followed by in-place decryption and authentication of the plaintext, and finally a step to reconstruct missing information or expand keys into multiple shares.
+Although a concrete implementation may differ considerably from this model, we use it here to describe the architectural semantics of CR management operations. For example, importing an SCC is modeled as loading the encrypted, authenticated SCC into the CR, then decrypting and authenticating it in place, and finally reconstructing any derived information or expanding keys into multiple shares.
 
-When an SCC is imported, the CR may require additional space for `SIV`, and also for `SIV2` if there is an Implementation VDS.
-Providing an extra 128 bits of storage for each of the 32 CRs (or 256 bits if at least one Algorithm supports implementation-specific additional data) would be costly. The ACE architecture therefore permits only a single import or export operation at a time per hart. While a CR is "open" for importing or exporting, no other CR can be opened until the current operation completes. This limits the storage overhead for `SIV`, and `SIV2` to just 128 or 256 bits per hart.
+When an SCC is imported, if an Implementation Variable-Length Data Section (VDS) is present the CR may also need extra space for the `SIV`, and for `IMPQUAL` and `SIV2`. Allocating an additional 128 bits per CR (or 384 bits if at least one algorithm supports implementation-specific data) would be costly.
+Therefore, the ACE Unit keeps only a single instance of extra capacity per hart to store `SIV`, `IMPQUAL` and `SIV2`.
+The ACE architecture permits only one import or export operation at a time per hart active at any given moment.
+// While a CR is open for importing or exporting, no other CR can be opened until the current operation completes.
+// This limits the storage overhead for `SIV`, `IMPQUAL`, and `SIV2` to just 128 or 384 bits per hart.
 
-The `IMPQUAL` value must be instead stored inside the CR. hence, if an algorithm supports Implementation VDS, the internal state of the CR must be able to accommodate its 128 bits.
-
-The _i_-th CR is denoted by ``K``_i_.
-When ``K``_i_ is being provisioned, resp., imported, we can refer to it as if it were a buffer with the length of the PI, resp., of the SCC, with an additional 128 or 384 bits of additional length if needed because of the presence of `SIV`, `IMPQUAL`, and `SIV2`.
-This additional length is per-hart, not per-CR, and the implementation must handle it transparently as if it were a part of the CR.
-The format of this (virtual) buffer's format is the same as <<ACE-PI>>, resp., <<ACE-SCC>>.
+The _i_-th CR is denoted by ``K``_i_. When ``K``_i_ is being provisioned or imported, we can think of it as a buffer whose length equals that of the PI or SCC respectively, plus an additional 128 or 384 bits if `SIV`, `IMPQUAL`, or `SIV2` are needed. This extra capacity is per-hart, not per-CR, and the implementation must handle it transparently as if it were part of the CR. The format of this (virtual) buffer follows <<ACE-PI>> for provisioning and <<ACE-SCC>> for import.
 In particular, for provisioning we address the content as
 ``K``__i__.``MH`` and ``K``__i__.``Content1``,
 and
@@ -555,7 +554,7 @@ for import as
 ``K``__i__.``SIV``,
 ``K``__i__.``SIV2``,
 ``K``__i__.``IMPQUAL``,
-``K``__i__.``Content1[]`` (encompassing Sections 3.a and 3.b),
+``K``__i__.``Content1[]``
 and
 ``K``__i__.``Content2[]``.
 
@@ -564,28 +563,31 @@ and
 [[ACE-provisioning]]
 ==== Provisioning
 
-We start with the algorithm performed by `ace.prov`, which loads a PI and uses it to configure a CR.
+We start with the provisioning algorithm, which loads a cleartext PI and uses it to configure a CR.
 
 Provisioning ``K``__i__ performs the following steps:
 
 [sidebar]
 .Provisioning
 --
-. Clear ``K``__i__. In particular, the internal CRF memory corresponding to ``K``__i__ wil read as zero.
+. Clear ``K``__i__. In particular, the internal CRF memory corresponding to ``K``__i__ will read as zero.
 . Read the Metadata Header `M` from memory, check it for consistency and integrity.
-. Allocate internal resources for ``K``__i__. This may fail and raise an exception.
+ * This may fail and result in an Error State.
+. Allocate internal resources for ``K``__i__.
+ * This may fail and raise an exception.
 . Set `M`._SealingStatus_ <- _SSProvisioning_ , store `M` in ``K``__i__.``MH``.
-. Read the rest of the PI content from memory, store it in ``K``__i__.``Content[]`` viewed as a buffer.
-. Perform any necessary readjustment of the CR's content to turn it into the format internally consumed by the ACE Unit, if necessary.
+. Read the rest of the PI content from memory, store it in ``K``__i__, viewed as a buffer.
+ * This read operation starts with the 16th byte of the PI and stores it in ``K``__i__.``Content[]``.
+. Perform any necessary readjustment of the CR's content to turn it into the format internally consumed by the ACE Unit.
 . `M`._SealingStatus_ <- _SSComplete_.
 --
 
 [WARNING]
 ====
-The architecture can *in theory* exported a partially configured CR:
+The architecture can *in theory* export a partially configured CR:
 In this case:
 
-* The _Configuring_ bit in the exported Metadata Header is set.
+* The _SealingStatus_ bit in the exported Metadata Header is left unchanged.
 * No encryption or authentication occurs.
 * The length of the exported Content is the same as the length of the PI.
 * All information is exported verbatim from the serialized representation of the CR: the data that has been imported so far as it was provisioned, and the rest as zeros.
@@ -613,12 +615,13 @@ Provisioning, import and export are being rewritten!
 
 Resumption of an interrupted provisioning operation:
 
-. *Current approach.* Handlers should allow an interrupted configuration or export operation to only be resumed if control flow is returned to the same caller, i.e., no context switch has occurred. This is achieved by clearing the partially configured or exported CRs at context save, and ensuring they are cleared at context restore, so the caller software can restart the operation instead.
-This also ensures that:
+*Current approach.* The software stack must ensure that an interrupted configuration or export operation may resume only if control returns to the same caller without an intervening context switch.  To enforce this, the context switch handler clears partially configured or exported CRs at context save and again at context restore, forcing the instruction to restart the operation from the beginning.
 
-.. If any VM migration occurs, no partially configured or exported CRs are left in the VM's context;
-.. The implementation can choose how to represent a partially configured CR, for instance in which order to read certain data; and
-.. The implementation can freely define their own `acestart` values for resumption, depending on the granularity of the interruption points, and the actual semantics of the work between interruption points.
+This approach ensures that:
+
+.. No partially configured or exported CRs remain in a VM's context if a migration occurs;
+.. The implementation is free to choose any internal representation of a partially configured CR (including the order in which data is read); and
+.. Any implementation may define its own `acestart` values for resumption, depending on the granularity of interruption points and the semantics of the work between them.
 
 . *Current approach.* If the provisioning is a single instruction, the implementation must first re-read the Metadata Header,
 to determine the length of the PI and verify its integrity before proceeding. In this case the data is
@@ -658,6 +661,8 @@ The above rules imply that an interrupted import operation may be resumed on a d
 In the latter case, the system must be able to handle the cases where the SCC is too large to fit in a CR because of the optional Implementation VDS or the latter is incompatible.
 ====
 
+// //
+
 ===== Remarks
 
 _This section is not normative. The ideas may be integrated into the specification._
@@ -666,36 +671,16 @@ _This section is not normative. The ideas may be integrated into the specificati
 // Of course we can make it large and have a aceiobufbase​ so that we can have more pieces of info there
 // (even aceiobufinputbase and aceiobufoutputbase, why not?), but would it be large enough for larger stuff?
 
-We must:
-
-. Record the “fill level” and store it in the memory of the handlers as a separate quantity from acestart.
+. Record the “fill level” and store it in the memory of the handlers.
+. This is given by `acestart` if the operation was interrupted and by the full length of PI or SCC if the operation was completed.
+. The load/store instruction of the management code block will restart from `acestart`.
 . Define very clearly when we may/shall resume and when we may/shall/restart.
-
-For starters, a CR should have a “raw” state and a “complete” state.
-
-. They are not necessarily the unsealed and sealed states.
-. But it means that the original operation can be resumed if
+. That the original operation can be resumed if
 .. The SIV is saved in the mode which interrupted the original operation by the handler; and
-.. The fill level is also known and transferred from one mode to the next if there are nested. I think a good place would be a GPR where we save “size”, so that the handler of the interrupted instruction will look at the instruction, extract the GPR’s number, use it. So, it must be passed as a parameter to the “load” instruction. “store” insns do not need that, because if I am interrupting a “store”, the resumption point to is given by acestart​ and the code that is restarted has the fill level stored somewhere.
-
-Need to distinguish provision and store, so the states are: fully configured, prov interrupted, and import interrupted as before.
-
-Thoughts:
-
+.. The fill level is also known and saved.
 . Sealing moves from prov/import interrupted to fully configured only if the fill level–which may start from 0 to acestart–reaches the PI or SCC size, otherwise the state does not change.
-. But it needs to SAVE SIV and fill level. The sealing operation does not save them, and unsealing another CR will just change the “current” one to which SIV/SIV2 is associated.
-. So, it is not really having only one unsealed CR at a time, but SIV/SIV2 are associated to only one.
-. If we interrupt an import
-.. While importing, we do not need to have a saved SIV.  We import everything verbatim, skip the SIV/SIV2
-.. Then, we pass the SIV/SIV2 to check against when we have finished the operation.
-... How? Vector/ACEIOBUF. This is an ace.setst insn after all.
-... If we need to pass two 128 bit values we need a 256-bit ACEIOBUF (possible), or a 256-bit vector or a group of 2 128-bit vectors
-.. The “first” handler that interrupts an import saves SIV/SIV2
-.. Other handlers may do the same, and restore it.
-... It is not an issue, since the “right” handler will restore the correct values, and thus overwrite the wrong ones
-... If some code tries to be smart and loads more stuff and tries to more from “raw” to “complete” early, either the SIV/SIV2 are wrong or they are right but the data is partially bogus, so authentication will fail with high lilelihood
 
-Now, turning this into an architecture...
+// //
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -871,8 +856,6 @@ In both cases, We call the exported context an _Exported Partial Context_ (EPC).
 
 //   The handler uses a Form C `ace.exec`, with a 48-byte vector (from a 512-bit or longer output vector/vector group)–or an equivalent instruction sequence based on Form D `ace.exec` and `ace.output`–to export `SIV`, `IMPQUAL`, and `SIV2`, where bits [127:0] of the output contain `SIV`, bits [255:128] contain `IMPQUAL`, and bits [383:256] contain the `SIV2` value.  Reimporting this CR will do the same check and accordingly recover the saved SIV and `SIV2` values.  Note that these values themselves may have been only partially imported by the interrupted import.
 
-
-
 // ////////////////////////////////////////////////////////////////////
 
 [[ACE-SCC-import]]
@@ -900,29 +883,22 @@ In both cases, We call the exported context an _Exported Partial Context_ (EPC).
  . Finally, output `MH`, `SIV`, `Content1[]`, and, if VarDataLen {ne} 0, `IMPQUAL`, `SIV2`, and `Content2[]`.
 --
 
-[WARNING]
-====
+====== Re-Import of a partially configured, then exported CR
+
 [sidebar]
-.Reimporting a Partially Configured CR ``K``__i__
+.Reimporting a Partially Provisioned or Imported CR ``K``__i__
 --
- . If ``K``__i__ is being _Provisioned_:
-
- .. The _Provisioning_ bit in the exported Metadata Header is left set.
- .. The length of the exported Content is the same as the length of the PI.
- .. No encryption or authentication occurs, the information in the CR is exported verbatim, in the same order as they appear in the PI. This implies that the provisioned data is exported in the clear. However, this does not increase the attack surface since more privileged modes have access to their children processes's address spaces.
- .. We call the exported context an _Exported Partial Context_ (EPC).
-
- . If ``K``__i__ is being _Imported_:
-
- .. The _Importing_ bit in the exported Metadata Header is left set.
- .. The length of the exported Content is the same as the length of the original SCC being imported, with the provision that the `IMPQUAL`, `SIV2`, and `Content2[]` fields are omitted if they are above the maximal length allowed for this type of CC.
- .. No encryption or authentication occurs, the information in the CR is exported verbatim, in the same order as they appear in the SCC, namely:
-  `MH`, `SIV`, `Content1[]`, and, if they are present `IMPQUAL`, `SIV2`, and `Content2[]`.
-  `MH`, `SIV`, `IMPQUAL`, `SIV2` are left unencrypted, `Content1[]` and `Content2[]` are exported in the original encrypted form.
-  .. We call the exported context an _Exported Partial Context_ (EPC) as in the _Provisioning_ case.
+ . Read the Metadata Header.
+ . The _SealingStatus_ field in the exported Metadata Header is left unchanged.
+ . Get the length of the payload:
+  * The length of the exported Content must have been saved by the export operation.
+ . No decryption or authentication occurs, the information is imported verbatim in the CR
 --
-====
 
+Explain: This does not increase the attack surface since:
+
+. More privileged modes have access to their children processes's address spaces and therefore they can access plaintext data (such as a PI), and
+. Encrypted and authenticated data must be complete before it can be authenticated, otherwise authentication will fail with high probability. (1-1^128^).
 
 ////
 [NOTE]
@@ -942,35 +918,6 @@ While the pseudocode follows this mechanism to enforce the rule, implementation 
 ////
 
 // ///////////////////////////////////////////////////////////////////
-
-////
-The import algorithm needs some special care:
-
-* At the beginning of the import operation, the hardware saves the value of
-  `State` from the original Metadata Header and sets `MH.State <-
-  ace_state_partial_config`. At the end of the import operation, `MH.State` is
-  set to the saved value.
-* The SCC to be imported may have been generated by a different implementation
-  than the one importing it.
-  The implementation will check the values of `acevendorid`, `acearchid`, and `aceimpid`
-  in the `aceunitid` block to determine
-  whether it known how to import the Implementation-Specific VDS.
-  The SCC may even contain an Implementation-Specific VDS
-  that exceed the maximum size supported by the importing hardware for the
-  specific algorithm encoded in the Metadata Header.
-  Once the Metadata Header and the Fixed Content Data Sections have been
-  read, the implementation must determine the length of the Architected VDS
-  corresponding to the algorithm's state, and ignore all writes to `ser_con[]`
-  beyond the end of the Architected VDS in case it cannot import the implementation-dependent
-  data after checking `acevendorid`, `acearchid` and `aceimpid`.
-  It must still process the entire SCC to verify the authentication tag.
-  After successful verification, the _ImpDataLen_ field will be adjusted
-  to the size of the Architected VDS.
-  The Implementation-Specific VDS will be ignored.
-  The details of this adjustment are not reflected in the pseudocode
-  <<ACE-SCC-import-listing>> to avoid excessive complexity.
-
-////
 
 ==== Use of Split Provisioning, Import and Export Instructions
 
@@ -1012,7 +959,6 @@ Bits [127:64] are invalid (for instance, a non-admissible value for _AlgorithmUs
 Bits [127:110]) then we assume this will be caught by the authentication process.
 In any case, if the values were not valid, a successive `ace.exec` or `ace.setst` will fail,
 invalidating the CR with Error State `ace_state_invalid`.
-
 
 [NOTE]
 ====
