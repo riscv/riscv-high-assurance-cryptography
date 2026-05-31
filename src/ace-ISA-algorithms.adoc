@@ -31,7 +31,7 @@ In the following subsections we describe the fields of the Metadata Header.
 ===== _Algorithm_ and _AlgorithmPolicy_ Fields
 
 Algorithms are encoded in a 12-bit field. Values 0–3071 and 4095 are architecture-defined.
-The list of encodings is maintained by RVI (see <<ACE-algorithms>>).dd
+The list of encodings is maintained by RVI (see <<ACE-algorithms>>).
 The remaining values are available for custom algorithms.
 
 For encryption/decryption primitives and modes, the _AlgorithmPolicy_ field indicates whether the CC may be used for encryption (lower bit set), decryption (upper bit set), or both. At least one of the bits must be set.
@@ -81,7 +81,7 @@ The architected values of _State_ which are common to all algorithms are defined
 | Value | Mnemonic                  | State Name     | Description
 |   0   | `ace_state_off`           | _Off_          | The CR is not configured.
 |   1   | `ace_state_initial`       | _Initial_      | The state of a just provisioned CC; ready for operation.
-| 2-20  3+| Defined by the specification of the Algorithm encoded in the _Algorithm_ field.
+| 2-21  3+| Defined by the specification of the Algorithm encoded in the _Algorithm_ field.
 |  22   | `ace_state_success`       | _Success_      | Algorithm completed successfully. No further cryptographic operations may be performed until the CC is reset or, if allowed, transitioned to _Initial_.
 |  23   | `ace_state_failure`       | _Failure_      | Failure in an algorithm, usually an authentication failure in AE(AD) algorithms or a signature verification failure. No further cryptographic operations may be performed until the CC is reset or, if allowed, transitioned to _Initial_.
 |===
@@ -353,12 +353,9 @@ In <<ACE-provisioning-export-import>>, it is explained how the associated polici
 
 `ace.restrict` can be used to set Localities and to replace Localities with more restrictive ones such as:
 
-** _SiPScrt_ {rightarrow} _ChipFamScrt_, _ChipScrt_;
-** _ChipFamScrt_ {rightarrow} _ChipScrt_;
-** _OEMScrt_ {rightarrow} _ProdScrt_, _DevScrt_;
-** _ProdScrt_ {rightarrow} _DevScrt_.
-** _MLocality_ {rightarrow} _HLocality_, _SLocality_; and
-** _HLocality_ {rightarrow} _SLocality_.
+** _SiPScrt_ {rightarrow} _ChipFamScrt_, _ChipScrt_; _ChipFamScrt_ {rightarrow} _ChipScrt_;
+** _OEMScrt_ {rightarrow} _ProdScrt_, _DevScrt_; _ProdScrt_ {rightarrow} _DevScrt_.
+** _MLocality_ {rightarrow} _HLocality_, _SLocality_; and _HLocality_ {rightarrow} _SLocality_.
 
 When the CR is exported, it will use the new Locality values to tweak the export algorithm.
 Generalizing Localities is not permitted: Attempting to do so raises exception `ace_exc_invalid`, but the
@@ -571,31 +568,25 @@ Provisioning ``K``__i__ performs the following steps:
 .Provisioning
 --
 . Clear ``K``__i__. In particular, the internal CRF memory corresponding to ``K``__i__ will read as zero.
-. Read the Metadata Header `M` from memory, check it for consistency and integrity.
+. Read the first 64 bits of the Metadata Header `ml` from memory, check it for consistency and integrity.
  * This may fail and result in an Error State.
 . Allocate internal resources for ``K``__i__.
  * This may fail and raise an exception.
-. Set `M`._SealingStatus_ <- _SSProvisioning_ , store `M` in ``K``__i__.``MH``.
+. Set `ml`._SealingStatus_ <- _SSProvisioning_ , store `ml` in ``K``__i__.``MH[63:0]``.
 . Read the rest of the PI content from memory, store it in ``K``__i__, viewed as a buffer.
- * This read operation starts with the 16th byte of the PI and stores it in ``K``__i__.``Content[]``.
+ * This read operation starts with the 8th byte of the PI and stores it in ``K``__i__.``Content[]``.
 . Perform any necessary readjustment of the CR's content to turn it into the format internally consumed by the ACE Unit.
 . `M`._SealingStatus_ <- _SSComplete_.
 --
 
 [WARNING]
 ====
-The architecture can *in theory* export a partially configured CR:
-
-
+The architecture can be extended to export a partially configured CR:
 This procedure is fully described in <<ACE-SCC-export>>.
 
-We call such ab exported context an _Exported Partial Context_ (EPC).
-
+We call such an exported context an _Exported Partial Context_ (EPC).
 Importing such an EPC into a CR follows the a similar algorithm as for provisioning above, however the
-value of the _Configuring_ bit in the exported Metadata Header is maintained and not cleared at the end.
-
-If there is a very strong argument to support such a feature (instead of clearing the CR upon context switch
-to force a restart], then we can consider it.
+value of the _SealingStatus_ field in the exported Metadata Header is maintained and not cleared at the end.
 ====
 
 // ////////////////////////////////////////////////////////////////////
@@ -791,7 +782,7 @@ function AES_GCM_SIV_Decrypt(AD[] : array of bits(128), N : bits(96), SIV : bits
 ----
 
 [[ACE-SCC-export]]
-==== Export
+==== Export of a Fully Configured CR
 
 An export process cannot be initiated if any other CR is being provisioned, exported, or imported.
 Attempts to do so raise an illegal instruction exception.
@@ -818,7 +809,7 @@ If the _Configuring_ flag is unset, then
 . Finally, output `MH`, `SIV`, `Content1[]`, and, if VarDataLen {ne} 0, `IMPQUAL`, `SIV2`, and `Content2[]`.
 --
 
-===== Export of a partially configured CR
+==== Export of a Partially Configured CR
 
 [WARNING]
 ====
@@ -851,6 +842,10 @@ We can use an additional bit of the metadata to distinguish between the two case
 
 In both cases, We call the exported context an _Exported Partial Context_ (EPC).
 
+If an export operation of a partially configured/imported CR is interrupted, the same CR may have to be exported again.
+This is conceptually no different from multiply interrupted vector load and store operations.
+The CR will be recognized by the handler in the new mode as a partially configured CR, and the handler code will follow the same semantics as the interrupted handler.
+
 //   The handler uses a Form C `ace.exec`, with a 48-byte vector (from a 512-bit or longer output vector/vector group)–or an equivalent instruction sequence based on Form D `ace.exec` and `ace.output`–to export `SIV`, `IMPQUAL`, and `SIV2`, where bits [127:0] of the output contain `SIV`, bits [255:128] contain `IMPQUAL`, and bits [383:256] contain the `SIV2` value.  Reimporting this CR will do the same check and accordingly recover the saved SIV and `SIV2` values.  Note that these values themselves may have been only partially imported by the interrupted import.
 
 // ////////////////////////////////////////////////////////////////////
@@ -880,7 +875,7 @@ In both cases, We call the exported context an _Exported Partial Context_ (EPC).
  . Finally, output `MH`, `SIV`, `Content1[]`, and, if VarDataLen {ne} 0, `IMPQUAL`, `SIV2`, and `Content2[]`.
 --
 
-===== Re-Import of a partially configured, then exported CR
+==== Re-Import of a Partially Configured, then Exported CR
 
 [sidebar]
 .Reimporting a Partially Provisioned or Imported CR ``K``__i__
