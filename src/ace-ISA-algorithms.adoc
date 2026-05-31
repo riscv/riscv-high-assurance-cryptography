@@ -585,12 +585,7 @@ Provisioning ``K``__i__ performs the following steps:
 [WARNING]
 ====
 The architecture can *in theory* export a partially configured CR:
-In this case:
 
-* The _SealingStatus_ bit in the exported Metadata Header is left unchanged.
-* No encryption or authentication occurs.
-* The length of the exported Content is the same as the length of the PI.
-* All information is exported verbatim from the serialized representation of the CR: the data that has been imported so far as it was provisioned, and the rest as zeros.
 
 This procedure is fully described in <<ACE-SCC-export>>.
 
@@ -661,7 +656,7 @@ The above rules imply that an interrupted import operation may be resumed on a d
 In the latter case, the system must be able to handle the cases where the SCC is too large to fit in a CR because of the optional Implementation VDS or the latter is incompatible.
 ====
 
-// //
+////
 
 ===== Remarks
 
@@ -680,7 +675,7 @@ _This section is not normative. The ideas may be integrated into the specificati
 .. The fill level is also known and saved.
 . Sealing moves from prov/import interrupted to fully configured only if the fill level–which may start from 0 to acestart–reaches the PI or SCC size, otherwise the state does not change.
 
-// //
+////
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -838,6 +833,7 @@ We can use an additional bit of the metadata to distinguish between the two case
 --
 . The _SealingStatus_ field in the exported Metadata Header is not changed.
 . The length of the exported Content is the same as the length of the PI.
+. Any data that has not been transferred to the CR yet is exported as zeros–the scenario of an interrupted and context switched import operation is rare, and therefore there is no point to optimize it by exporting only the data actually provisioned so far.
 . No encryption or authentication occurs, the information in the CR is exported verbatim, in the same order as they appear in the PI. This implies that the provisioned data is exported in the clear. However, this does not increase the attack surface since more privileged modes have access to their children processes's address spaces.
 --
 
@@ -846,7 +842,8 @@ We can use an additional bit of the metadata to distinguish between the two case
 --
 . The _SealingStatus_ field in the exported Metadata Header is not changed.
 . (The handler code notices that _SealingStatus_ = _SSImporting_.)
-. The max length of the exported Content is the same as the length of the original SCC that was being imported (including the adjustments made by the import operation).
+. The length of the exported Content is the same as the length of the original SCC that was being imported (including the adjustments made by the import operation).
+. Any data that has not been transferred to the CR yet is exported as zeros–exactly as in the case of a partially provisioned CR, and for the same reasons.
 . No encryption or authentication occurs, the information in the CR is exported verbatim, in the same order as they appear in the SCC, namely:
  `MH`, `SIV`, `Content1[]`, and, if they are present `IMPQUAL`, `SIV2`, and `Content2[]`.
  `MH`, `SIV`, `IMPQUAL`, `SIV2` are left unencrypted, `Content1[]` and `Content2[]` are exported in the original encrypted form.
@@ -868,7 +865,7 @@ In both cases, We call the exported context an _Exported Partial Context_ (EPC).
  . Load `M`, the Metadata Header, from the SCC, into ``K``__i__.``MH``.
  . Check correctness of `M`, and whether the Algorithm is supported.
  . Determine the length of the entire SCC.
- . If the length is greater than the maximum supported by the implementation for the Algorithm, it means that the Implementation VDS is present in the SCC but not supported, so adjust the length to the SCC excluding the Implementation VDS.
+ . If the length is greater than the maximum supported by the implementation for the Algorithm, it means that the Implementation VDS is present in the SCC but its format is not supported by the importing implementation. hence, the length to the SCC is adjusted by excluding the Implementation VDS.
  . Load the rest of the SCC, up to the determined length.
  . ``AD[0]`` <- ``K``__i__.``MH``, ``len_AD`` <- 1
  . foreach(_j_ from 0 to 10) :
@@ -890,8 +887,7 @@ In both cases, We call the exported context an _Exported Partial Context_ (EPC).
 --
  . Read the Metadata Header.
  . The _SealingStatus_ field in the exported Metadata Header is left unchanged.
- . Get the length of the payload:
-  * The length of the exported Content must have been saved by the export operation.
+ . Determine the length of the payload (length of PI or SCC).
  . No decryption or authentication occurs, the information is imported verbatim in the CR
 --
 
