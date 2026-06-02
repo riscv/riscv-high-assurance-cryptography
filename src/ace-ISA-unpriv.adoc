@@ -71,7 +71,7 @@ This design allows a certain level of concurrency.
 Long-running ACE operations may proceed even if the hart is preempted.
 In this case, when the context‑switch handler accesses an output of the operation register, different behaviors are allowed:
 the hart may wait for the operation to finish;
-the implementation may adopt a precise exception model, whereby the ACE unit is halted and sets `acestart` to allow later resumption;
+the implementation may adopt a precise exception model, whereby the ACE unit is halted and sets a value in a CSR called `acestart` to allow later resumption;
 or the system may impose a timeout before halting.
 The architecture permits all these approaches: It only specifies the allowed interruption points for its instructions and algorithms.
 
@@ -410,13 +410,12 @@ _Included in_::
 `acestart` is an alias for `vstart`. Therefore, it is an XLEN-bit RW CSR.
 ACE defines it also when the V extension is not enabled.
 
-`acestart` tracks the progress of resumable ACE instructions, namely `ace.prov`, `ace.import`, `ace.export`, `ace.input`, and `ace.output`.
+`acestart` tracks the progress of resumable ACE instructions, such as `ace.input` and `ace.output`, but also of provisioning and import/export operations if they support resumption (for the latter, see <<ACE-provisioning-export-import>>).
 It also applies to `ace.exec` when iteratively processing a multi-block operand, as `ace.exec` may be interrupted between blocks.
 Only these instructions honor a nonzero `acestart`; all other instructions ignore it and are restarted, with `acestart` also being cleared.
-Provisioning, import, and export are resumed only under certain conditions, as explained in <<ACE-provisioning-export-import>>.
 
 `acestart` records the progress of an interrupted operation.
-Since ACE does not have an _intrinsic_ concept of element length, `acestart` counts the number of bits processed so far, not the number of elements.
+Since ACE does not have an _intrinsic_ concept of element length, `acestart` counts the number of _bits_ processed so far, not the number of elements.
 
 Hardware writes this register on interruption.
 Software may save and restore the register across context switches.
@@ -831,30 +830,31 @@ _Included in_::
 ===== ace.load/ace.sysimport
 
 _Encoding_::
-`ace.load` either has the same encoding of `ace.import` (hence, it has no `length` parameter) or
-is an R-type instruction as follows:
-+
-[wavedrom, , svg]
-....
-{reg:[
-    { bits:  7, name: 0x0b, attr: ['custom-0'] },
-    { bits:  5, name: 'rd', attr: ['Kd|K(Xd)'] },
-    { bits:  3, name: 'ace.import', attr: ['0    0    S','0    1    S'] },
-    { bits:  5, name: 'Xs1' },
-    { bits:  5, name: 'Xs2' },
-    { bits:  1, name: 0x0 },
-    { bits:  1, name: 'r' },
-    { bits:  5, name: 0x0 },
-]}
-....
-+
+`ace.load` either has the same encoding of `ace.import`.
+// (hence, it has no `length` parameter) or
+// is an R-type instruction as follows:
+// +
+// [wavedrom, , svg]
+// ....
+// {reg:[
+//     { bits:  7, name: 0x0b, attr: ['custom-0'] },
+//     { bits:  5, name: 'rd', attr: ['Kd|K(Xd)'] },
+//     { bits:  3, name: 'ace.import', attr: ['0    0    S','0    1    S'] },
+//     { bits:  5, name: 'Xs1' },
+//     { bits:  5, name: 'Xs2' },
+//     { bits:  1, name: 0x0 },
+//     { bits:  1, name: 'r' },
+//     { bits:  5, name: 0x0 },
+// ]}
+// ....
+// +
 Bit `r` (i.e., bit 26) takes the value 0 if the context is encoded as an
 immediate, and it takes the value 1 if a GPR (scalar integer value) is used to
 reference it.
 
 _Mnemonics_::
-`ace.load{fournbsp}{nbsp}{nbsp}{nbsp}Kd|K(Xd), (Xs1), Xs2` +
-`ace.sysimport{nbsp}Kd|K(Xd), (Xs1), Xs2`
+`ace.load{fournbsp}{nbsp}{nbsp}{nbsp}Kd|K(Xd), %offset(Xs1)` +
+`ace.sysimport{nbsp}Kd|K(Xd), %offset(Xs1)`
 
 _Description_::
 `ace.load` imports a PI or a SCC, starting with the 8th byte of the Metadata Header, at memory address `(Xs1)`, into the CR `Kd` or `K(Xd)`.
@@ -869,34 +869,35 @@ that some metadata has already been loaded in it.
 ===== ace.store
 
 _Encoding_::
-`ace.store` either has the same encoding of `ace.export` (hence, it has no `length` parameter) or
-is an R-type instruction as follows:
-+
-[wavedrom, , svg]
-....
-{reg:[
-    { bits:  7, name: 0x27, attr: ['custom-1'] },
-    { bits:  5, name: 'Xd' },
-    { bits:  3, name: 'ace.import', attr: [0x0,0x1] },
-    { bits:  5, name: 's1', attr: ['Ks1|K(Xs1)'] },
-    { bits:  5, name: 'Xs2' },
-    { bits:  1, name: 0x0 },
-    { bits:  1, name: 'r' },
-    { bits:  5, name: 0x0 },
-]}
-....
+`ace.store` has the same encoding of `ace.export`.
+// (hence, it has no `length` parameter) or
+// is an R-type instruction as follows:
+// +
+// [wavedrom, , svg]
+// ....
+// {reg:[
+//     { bits:  7, name: 0x27, attr: ['custom-1'] },
+//     { bits:  5, name: 'Xd' },
+//     { bits:  3, name: 'ace.import', attr: [0x0,0x1] },
+//     { bits:  5, name: 's1', attr: ['Ks1|K(Xs1)'] },
+//     { bits:  5, name: 'Xs2' },
+//     { bits:  1, name: 0x0 },
+//     { bits:  1, name: 'r' },
+//     { bits:  5, name: 0x0 },
+// ]}
+// ....
 +
 Bit `r` (i.e., bit 26) takes the value 0 if the context is encoded as an
 immediate, and it takes the value 1 if a GPR (scalar integer value) is used to
 reference it.
 
 _Mnemonic_::
-`ace.store (Xd), Ks1|K(Xs1), Xs2`
+`ace.store %offset(Xd), Ks1|K(Xs1)`
 (((ACE, instruction, ace.export)))
 
 _Description_::
-Exports raw data from the CR `Ks1` or `K(Xs1)` to memory at address `Xd`.
-It also exports the Metadata Header.
+Exports raw data from the CR `Ks1` or `K(Xs1)` to memory at address `%offset`.
+The operation starts with the 8th byte of the Metadata Header.
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -1768,7 +1769,7 @@ Any attempt to do so raises an invalid instruction exception
 
 . Similarly, for `ace.setst`, if a vector input is expected (Form C `ace.setst`) and it is not provided, the implementation shall automatically use the ACEIOBUF if `Zlio` is available, and raise an invalid instruction exception otherwise. This instruction replacement is not allowed in the case of a Form B `ace.setst`, i.e., when the auxiliary input should come from a GPR, and an invalid instruction exception is raised regardless of whether `Zlio` is available.
 
-. Form D `ace.exec` in place of its Forms A-C, and Form A `ace.setst` in place of its Form C may be issued only if the ACEIOBUF is enabled and `aceiobuflen` is non-zero. Else, exception `ace_exc_buf_unconf` is raised. If `aceiobuflen` is non-zero but the range size `aceiobuftop-acestart` is invalid for the algorithm, exception `ace_exc_invalid` is raised and no cryptographic operation is performed.
+. Form D `ace.exec` in place of its Forms A-C, and Form A `ace.setst` in place of its Form C may be issued only if the ACEIOBUF is enabled and `aceiobuflen` is non-zero. Else, exception `ace_exc_buf_unconf` is raised. If `aceiobuflen` is non-zero but the range size `aceiobuftop - acestart` is invalid for the algorithm, exception `ace_exc_invalid` is raised and no cryptographic operation is performed.
 
 NOTE: It is because of these rules that, in the Algorithms, we write that a certain Form of `ace.exec` or `ace.setst` is _expected_ instead of _required_ (or _only [...] allowed_). The above substitutions are implicit in all algorithms and are not restated for each occurrence.
 
@@ -1780,7 +1781,7 @@ NOTE: It is because of these rules that, in the Algorithms, we write that a cert
 `ace.clear`, `ace.reset`, `ace.setst`, `ace.getst`, `ace.restrict`, `ace.clone`, `ace.size` and `ace.avail` are uninterruptible.
 `ace.prov`, `ace.import`, `ace.export`, `ace.input`, and `ace.output` may be interrupted and resumed under certain conditions.
 For `ace.prov`, `ace.import`, and `ace.export`, see <<ACE-provisioning-export-import>>.
-For `ace.input` and `ace.output`, the value of `acestart` will reflect the amount of data read or written before the interrupt and resumption will start from that point.
+For `ace.input` and `ace.output`, `acestart` may be used to reflect the amount of data read or written before the interrupt. In this case resumption will start from that point.
 
 The operation of `ace.exec` on a basic processing unit is uninterruptible, unless explicitly allowed by the algorithm.
 Most cryptographic primitives cannot be interrupted; therefore, state information to encode round number or round key value is not needed.

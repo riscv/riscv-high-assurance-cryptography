@@ -653,6 +653,19 @@ First, note that, even if the feature is supported, at context save, privileged 
 Upon returning to the original control flow from an interrupt or exception, an export may resume only if the CR has not been modified.
 In this case, this is enforced by preventing use of a CR with _SealingStatus_ different from _SSComplete_.
 
+=====  About resumption and memory model
+
+RISC-V implementations may read or write long inputs in an arbitrary order. Enforcing a strict access ordering for ACE inputs and outputs could therefore be complex on  microarchitectures that are optimized for a particular use case.
+
+However, this does not require to write different code for different behaviors.
+The ACE unit itself sends commands to the LSU to read and write memory sequentially—analogously to software looping over an array.
+The LSU may then issue those reads and writes in any order it chooses.
+
+An implementation always has the option to restart an operation instead of resuming it, for any reason, and ignore and clear `acestart`.
+The ACE instructions are designed so that the same instruction sequences work correctly in all such cases.
+
+For example, in the split-instruction mode, the instruction that loads or stores a CR's content (except the first 8 bytes) may always fail, signalling that the import, provisioning, or export operation must be restarted. The software then reprograms the CR for that operation and processes the first 8 bytes separately. Consequently, any correct code sequence operates correctly on every ACE implementation.
+
 // ////////////////////////////////////////////////////////////////////
 
 [[ACE-SCC-AEAD]]
@@ -917,7 +930,7 @@ restart:
   beq        t2, t3, restart             # CR cleared means force restart
   ace.setst  K0, #seal_after_import      # decrypts/authenticates/reconstructs CR
   ace.getst  t2, K0                      # get _State_ field from MH[63:0]
-  bltu       t3, t2, handle_errors       # handle other errors (larger than 23, i.e. ≥ 24)
+  bltu       t3, t2, handle_errors       # handle other errors (> 23, i.e. ≥ 24)
 success:
 ----
 
@@ -958,16 +971,24 @@ This is required for both correctness and security.
   ace.size  t2, K0                   # get size of the blob to export
   {...}  # here goes the code that allocates the buffer to store the exported data
 
-restart:
-  ace.setst K0, #unseal_for_export   # Compute SIV/SIV2 and encrypt the state
+  ace.getmd t0, K0
+  ace.setst K0, #unseal_for_export   # If not already done, compute SIVs + encrypt state
+  sd 0(t6), t0
 
-  # The next instruction stores all data starting with the MH.
+  # The next instruction stores all data starting with the 8th byte of the MH.
   # In case of interrupt/exception, the handler will decide whether
   # to keep `acestart` or clear it to force restart.
-  ace.store 0(t6), K0
+  # the instruction gets the length of the blob to export from the MH
+  # no special handling from the SW is necessary
+
+  ace.store 8(t6), K0
 
 success:
-  ace.setst K0, #seal_after_export   # reseal
+  # Reset the first 64 bits of MH to saved value.  If the saved state is _SScomplete_,
+  # the operation also re-decrypts the state and verifies the SIV/SIV2 tag, then releases
+  # 128 or 384 bits for SIV/IMPQUAL/SIV2 storage.
+
+  ace.setst K0, t0, #seal_after_export
 ----
 
 // If the state is fully provisioned, then this computes SIV (SIV2)
