@@ -177,14 +177,13 @@ The entire architectural state of the ACE unit associated with the hart is reset
 
 We list the most important operations on CRs, so we can refer to them before they are fully defined.
 
-* `ace.clear` (<<ACE-instruction-clear>>) unconfigures and clears a CR.
 * `ace.prov` (<<ACE-instruction-init>>) loads metadata and plaintext Content into a CR, binding them together.
 * `ace.export` (<<ACE-instruction-export>>) exports a CR to memory as an SCC.
 * `ace.import` (<<ACE-instruction-import>>) imports a SCC into a CR.
-* [.red]#{warn} We are currently discussing whether the last three operations may be replaced by: An explicit instruction to prepare a CR for management, followed by suitable load/store instructions, and then a last instruction to terminate the management operation.#
+* [.red]#{warn} We are currently discussing whether the first three operations may be replaced by: An explicit instruction to prepare a CR for management, followed by suitable load/store instructions, and then a last instruction to terminate the management operation.#
+* `ace.clear` (<<ACE-instruction-clear>>) unconfigures and clears a CR.
 * `ace.exec` (<<ACE-instruction-exec>>) performs cryptographic operations as specified by the algorithm configured in a CR and according to the state of the CR.
 * `ace.setst` (<<ACE-instruction-setst>>) transitions between states of a cryptographic algorithm.
-//* `ace.getmd` (<<ACE-instruction-getmd>>) reads the metadata of a CR.
 * `ace.clone` (<<ACE-instruction-clone>>) creates a copy of a CR into a second CR.
 
 // ////////////////////////////////////////////////////////////////////
@@ -330,7 +329,7 @@ There are no atomicity requirements for any ACE memory instruction.
 
 ACE memory instructions appear to execute in program order on the local hart.
 
-ACE memory instructions follow RVWMO at the instruction level. If the Ztso
+ACE memory instructions follow RVWMO at the instruction level. If the `Ztso`
 extension is implemented, ACE memory instructions additionally follow RVTSO at
 the instruction level.
 
@@ -341,7 +340,7 @@ and it depends on the chosen memory model and implementation,
 as long as the the semantics of the configuration and export instruction and
 `ace.exec` are respected.
 
-NOTE: Ztso only imposes RVTSO at the instruction level; intra-instruction
+NOTE: `Ztso` only imposes RVTSO at the instruction level; intra-instruction
 ordering follows RVWMO regardless of whether Ztso is implemented.
 
 NOTE: More formal definitions required.
@@ -605,8 +604,7 @@ The notation `K(Xd)` denotes the CR whose index is held in GPR `Xd`.
 Each instruction is characterized by the following properties:
 
 * _Modifies state_: whether the instruction may modify ACE architectural state;
-* _Usage-controlled_: whether the instruction is subject to usage control
-  policies (_UsagePolicy_);
+* _Usage-controlled_: whether the instruction is subject to usage control policies.
 // * Trappable: whether the instruction may be implemented by privileged code
 //   via trap-and-emulate; and
 // * _Interruptible_: whether execution may be interrupted (e.g., by a context
@@ -1126,12 +1124,12 @@ _Description_::
 On RV64:
 
 * `ace.getmdl` copies bits [63:0] of the Metadata Header of a CR `Ks` or `K(Xs)` into GPR `Xd`.
-* `ace.getmdh` bits [127:64] into GPR `X[d]`.
+* `ace.getmdh` bits [127:64] into GPR `Xd`.
 
 On RV32, `d` must be even, and:
 
-* `ace.getmdl` copies bits  [31:0] of the Metadata Header of a CR `Ks` or `K(Xs)` into GPR `Xd`   and bits  [63:32] into GPR `X[d+1]`, atomically.
-* `ace.getmdh` copies bits [95:64] of the Metadata Header of a CR `Ks` or `K(Xs)` into GPR `X[d]` and bits [127:96] into GPR `X[d+1]`, atomically.
+* `ace.getmdl` copies bits  [31:0] of the Metadata Header of a CR `Ks` or `K(Xs)` into GPR `Xd` and bits  [63:32] into GPR `X[d+1]`, atomically.
+* `ace.getmdh` copies bits [95:64] of the Metadata Header of a CR `Ks` or `K(Xs)` into GPR `Xd` and bits [127:96] into GPR `X[d+1]`, atomically.
 --
 +
 
@@ -1305,7 +1303,7 @@ _Mnemonic_::
 
 _Encoding_::
 The encoding shares opcode and `func3` with `ace.exec`, however `func2` is 2.
-The instruction is encoded using the Form D' `ace.exec` encoding, and is thus an R-type instruction.
+The instruction is thus an R-type instruction.
 +
 [wavedrom, , svg]
 ....
@@ -1316,13 +1314,13 @@ The instruction is encoded using the Form D' `ace.exec` encoding, and is thus an
     { bits:  5, name: 'Ks|K(Xs)' },
     { bits:  5, name: 0x0 },
     { bits:  1, name: 0x0 },
-    { bits:  2, name: 'R' },
     { bits:  2, name: 0x0 },
+    { bits:  2, name: 'R' },
     { bits:  2, name: 0x2, attr: ['func2'] },
 ]}
 ....
 +
-Bits [27:26], i.e., field `R`, take the following values depending on how the
+Bits [29:28], i.e., field `R`, take the following values depending on how the
 CRs are given:
 +
 [upperalpha]
@@ -1360,12 +1358,19 @@ _Included in_::
 
 // ////////////////////////////////////////////////////////////////////
 
-////
+// //
 
 [[ACE-instruction-derive]]
 ==== ace.derive
+
+[NOTE]
+====
+This instruction is not yet used by any algorithm. The encoding is reserved for future use.
+====
+
 _Synopsis_::
 Derive a CR from a source CR, such as a key derivation.
+
 _Mnemonic_::
 The `ace.derive` instruction admits three Forms, namely
 (((ACE, instruction, ace.derive)))
@@ -1373,34 +1378,42 @@ The `ace.derive` instruction admits three Forms, namely
 . `ace.derive Kd|K(Xd), Ks1|K(Xs1) {fournbsp}{nbsp}{nbsp}{nbsp}` with no auxiliary input.
 . `ace.derive Kd|K(Xd), Ks1|K(Xs1), Xs2{nbsp}{nbsp}` with an auxiliary input in a GPR.
 . `ace.derive Kd|K(Xd), Ks1|K(Xs1), Vs2{nbsp}{nbsp}` with an auxiliary input in a vector register.
+
 _Encoding_::
 The encoding shares `func3` with `ace.exec`, however with bit 25 equal to 1 and `func2` equal to 3.
+It differs from `ace.clone` in that bit 27 is set to 1.
+The instruction is thus an R-type instruction.
 +
 [wavedrom, , svg]
 ....
 {reg:[
-    { bits:  7, name: 0x6b, attr: ['custom-2'] },
+    { bits:  7, name: 0x5b, attr: ['custom-2'] },
     { bits:  5, name: 'Kd|K(Xd)' },
     { bits:  3, name: 0x0, attr: ['ace.exec'] },
     { bits:  5, name: 'Ks1|K(Xs1)' },
-    { bits:  5, name: 'rs2'},
+    { bits:  5, name: 's2', attr: ['Xs2/Vs2']  },
+    { bits:  2, name: 'Form' },
     { bits:  1, name: 0x1 },
     { bits:  2, name: 'R' },
-    { bits:  1, name: 'v' },
-    { bits:  1, name: 'g' },
-    { bits:  2, name: 0x3, attr: ['func2'] },
+    { bits:  2, name: 0x2, attr: ['func2'] },
 ]}
 ....
 +
-Bits [27:26], i.e., field `R`, is encoded exactly as for `ace.clone` (<<ACE-instruction-clone>>).
-Bit 28 determines whether a vector register (or register group) is used to pass an auxiliary parameter to the key derivation mechanism or not.
-Bit `v` (i.e., bit 28) is 0 for Forms A and B and 1 for Form C. +
-Bit `g` (i.e., bit 29) is used to distinguish Form A, with `g` = 0, from Form B, with `g` = 1. +
-The value (`g`,`v`) = (1,1) is currently an illegal instruction and reserved for future use.
+Bits [29:28], i.e., field `R`, are encoded exactly as for `ace.clone` (<<ACE-instruction-clone>>).
++
+Bits [26:25], i.e., field `Form`, determine whether a GPR, or a vector register (or register group) is used to pass an auxiliary parameter to the key derivation mechanism or not:
++
+[upperalpha]
+. `00`{nbsp}{nbsp} the instruction has with no auxiliary input.
+. `01`{nbsp}{nbsp} the instruction accepts an auxiliary input in a GPR.
+. `10`{nbsp}{nbsp} the instruction accepts an auxiliary input in a vector register.
+. `11`{nbsp}{nbsp} is reserved for future use.
+
 _Description_::
 Derive a new context from an existing one, with its own opaque key material, for instance using a key derivation mechanism.
 The behavior of the instruction is not expected to be deterministic.
 It can be used multiple times, to generate multiple derived contexts.
+
 _Properties_::
 Possibly modifies state: *YES*. +
 Usage-controlled: *YES*. +
@@ -1408,16 +1421,18 @@ Usage-controlled: *YES*. +
 // Interruptible: *NO*. +
 
 _Included in_::
-+--
++
+--
 [%header,cols="4,2,2"]
 |===
 |Extension | Minimum version | Lifecycle state
-| `ZlSM2c`  v0.0.0          | --
+| `Zlv`    | v0.0.0          | --
+| `Zlio`   | v0.0.0          | --
 |===
 --
 +
 
-////
+// //
 
 // ////////////////////////////////////////////////////////////////////
 
