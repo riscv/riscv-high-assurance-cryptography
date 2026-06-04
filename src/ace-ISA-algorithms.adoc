@@ -274,27 +274,27 @@ This field may be used to determine the size of an SCC.
 
 // ////////////////////////////////////////////////////////////////////
 
-[[ACE-SealingStatus]]
-===== _SealingStatus_ Field
+[[ACE-ConfigStatus]]
+===== _ConfigStatus_ Field
 
 The admissible values of this field are given in the table below.
 
 [[ACE-SC-sealing-status]]
-.Encoding of _SealingStatus_ field
+.Encoding of _ConfigStatus_ field
 [float="center",align="center",cols="^7%,<25%,<68%"options="header"]
 |===
 | Value | Mnemonic           | Description
-|   0   | _SSComplete_       | The CR is fully configured and ready to operate.
-|   1   | _SSProvisioning_   | The CR is partially configured as a result of an interrupted provisioning operation.
-|   2   | _SSImporting_      | The CR is partially configured as a result of an interrupted import operation.
-|   3   | _SSExporting_      | The CR has been placed in exporting mode, i.e., its contents have been encrypted and authenticated for export. SIV and SIV2 have been computed.
+|   0   | _ConfStatComplete_       | The CR is fully configured and ready to operate.
+|   1   | _ConfStatProvisioning_   | The CR is partially configured as a result of an interrupted provisioning operation.
+|   2   | _ConfStatImporting_      | The CR is partially configured as a result of an interrupted import operation.
+|   3   | _ConfStatExporting_      | The CR has been placed in exporting mode, i.e., its contents have been encrypted and authenticated for export. SIV and SIV2 have been computed.
 |===
 
-The authentication process ignores _SealingStatus_ and therefore the SIV is computed as if this field were always zero.
+The authentication process ignores _ConfigStatus_ and therefore the SIV is computed as if this field were always zero.
 
 [WARNING]
 ====
-Modify import and export code to handle _SealingStatus_ as if always zero.
+Modify import and export code to handle _ConfigStatus_ as if always zero.
 ====
 
 // ////////////////////////////////////////////////////////////////////
@@ -579,11 +579,11 @@ Provisioning ``K``__i__ performs the following steps:
  * This may fail and result in an Error State.
 . Allocate internal resources for ``K``__i__.
  * This may fail and raise an exception.
-. Set `ml`._SealingStatus_ <- _SSProvisioning_ , store `ml` in ``K``__i__.``MH[63:0]``.
+. Set `ml`._ConfigStatus_ <- _ConfStatProvisioning_ , store `ml` in ``K``__i__.``MH[63:0]``.
 . Read the rest of the PI content from memory, store it in ``K``__i__, viewed as a buffer.
  * This read operation starts with the 8th byte of the PI and stores it in ``K``__i__.``Content[]``.
 . Perform any necessary readjustment of the CR's content to turn it into the format internally consumed by the ACE Unit.
-. `M`._SealingStatus_ <- _SSComplete_.
+. `M`._ConfigStatus_ <- _ConfStatComplete_.
 --
 
 [WARNING]
@@ -593,7 +593,7 @@ This procedure is fully described in <<ACE-SCC-export>>.
 
 We call such an exported context an _Exported Partial Context_ (EPC).
 Importing such an EPC into a CR follows the a similar algorithm as for provisioning above, however the
-value of the _SealingStatus_ field in the exported Metadata Header is maintained and not cleared at the end.
+value of the _ConfigStatus_ field in the exported Metadata Header is maintained and not cleared at the end.
 ====
 
 // ////////////////////////////////////////////////////////////////////
@@ -628,8 +628,8 @@ read sequentially and `acestart` is set to the offset of the first non-imported 
 . If loading the data in multiple blocks and keeping track of the loaded data is left to the software,
 then the implementation will not update `acestart`.
 
-During provisioning or import, metadata field _SealingStatus_ is set accordingly to _SSProvisioning_ or _SSImporting_.
-This field is only reset to _SSComplete_ upon completion of `ace.prov` and `ace.import`.
+During provisioning or import, metadata field _ConfigStatus_ is set accordingly to _ConfStatProvisioning_ or _ConfStatImporting_.
+This field is only reset to _ConfStatComplete_ upon completion of `ace.prov` and `ace.import`.
 It is updated to the correct value only upon successful completion (see <<ACE-provisioning-export-import>>).
 This transition does not occur during `ace.export`.
 
@@ -651,7 +651,7 @@ In case we intend to support export of partially configured CRs:
 First, note that, even if the feature is supported, at context save, privileged code must be able to choose the option to not export the partially configured CR, but instead to clear it at context restore to force a restart of the interrupted configuration operation.
 
 Upon returning to the original control flow from an interrupt or exception, an export may resume only if the CR has not been modified.
-In this case, this is enforced by preventing use of a CR with _SealingStatus_ different from _SSComplete_.
+In this case, this is enforced by preventing use of a CR with _ConfigStatus_ different from _ConfStatComplete_.
 
 =====  About resumption and memory model
 
@@ -817,7 +817,7 @@ We can use an additional bit of the metadata to distinguish between the two case
 .Exporting a Partially Provisioned CR ``K``__i__
 [example]
 --
-. The _SealingStatus_ field in the exported Metadata Header is not changed.
+. The _ConfigStatus_ field in the exported Metadata Header is not changed.
 . The length of the exported Content is the same as the length of the PI.
 . Any data that has not been transferred to the CR yet is exported as zeros–the scenario of an interrupted and context switched import operation is rare, and therefore there is no point to optimize it by exporting only the data actually provisioned so far.
 . No encryption or authentication occurs, the information in the CR is exported verbatim, in the same order as they appear in the PI. This implies that the provisioned data is exported in the clear. However, this does not increase the attack surface since more privileged modes have access to their children processes's address spaces.
@@ -826,8 +826,8 @@ We can use an additional bit of the metadata to distinguish between the two case
 .Exporting a Partially Imported CR ``K``__i__
 [example]
 --
-. The _SealingStatus_ field in the exported Metadata Header is not changed.
-. (The handler code notices that _SealingStatus_ = _SSImporting_.)
+. The _ConfigStatus_ field in the exported Metadata Header is not changed.
+. (The handler code notices that _ConfigStatus_ = _ConfStatImporting_.)
 . The length of the exported Content is the same as the length of the original SCC that was being imported (including the adjustments made by the import operation).
 . Any data that has not been transferred to the CR yet is exported as zeros–exactly as in the case of a partially provisioned CR, and for the same reasons.
 . No encryption or authentication occurs, the information in the CR is exported verbatim, in the same order as they appear in the SCC, namely:
@@ -875,7 +875,7 @@ The CR will be recognized by the handler in the new mode as a partially configur
 [example]
 --
  . Read the Metadata Header.
- . The _SealingStatus_ field in the exported Metadata Header is left unchanged.
+ . The _ConfigStatus_ field in the exported Metadata Header is left unchanged.
  . Determine the length of the payload (length of PI or SCC).
  . No decryption or authentication occurs, the information is imported verbatim in the CR
 --
@@ -893,6 +893,10 @@ Explain: This does not increase the attack surface since:
 ====
 This is a non-normative section discussing alternative ways to perform `ace.prov`, `ace.export`, and `ace.import` through sequences of
 smaller instructions instead of the current single CISC-like monolithic instructions.
+
+If we implement this change, we reuse the `ace.import`, resp., `ace.export` encodings for `ace.load`, resp., `ace.store`.
+We free the encoding for `ace.prov`.
+We keep `ace.import.S`.
 ====
 
 `ace.prov`, `ace.export`, and `ace.import` could be split into multiple, more RISC-like operations.
@@ -923,29 +927,10 @@ Bits [127:110]) then we assume this will be caught by the authentication process
 In any case, if the values were not valid, a successive `ace.exec` or `ace.setst` will fail,
 invalidating the CR with Error State `ace_state_invalid`.
 
-[NOTE]
-====
-When operating to unseal a CR, or to seal an unsealed one, `ace.setst` is _not_ considered an usage instruction because it is part of a configuration operation.
-It is therefore not subject to the limitations on usage instructions, and it will not cause the CR to enter any Error State, or change it in case of expiration.
-====
-
-[WARNING]
-====
-If we implement this change, we reuse the `ace.import`, resp., `ace.export` encodings for `ace.load`, resp., `ace.store`.
-We free the encoding for `ace.prov`.
-We keep `ace.import.S`.
-====
-
 NOTE: Implementations may interleave decryption and authentication with the load operation.
 If an import is interrupted and the partial state exported (assuming we allow that),
-the exported data must be the original
-encrypted data loaded so far, and not a re-encryption of a partially decrypted payload.
-This is required for both correctness and security.
-
-// A CR can be in two general states: internally clear or internally encrypted for export.
-// This is signalled by the _Exporting_ bit in the MH. (Currently not defined.)
-// Once in the _Exporting_ state, it cannot be used in cryptographic operations: It must be
-// “resealed” first.
+the exported data must be the original encrypted data loaded so far, and not a re-encryption
+of a partially decrypted payload.  This is required for both correctness and security.
 
 *Export*
 ----
@@ -965,29 +950,16 @@ This is required for both correctness and security.
   ace.store 8(t6), K0
 
 success:
-  # Reset the first 64 bits of MH to saved value.  If the saved state is _SScomplete_,
+  # Reset the first 64 bits of MH to saved value.  If the saved state is _ConfStatcomplete_,
   # the operation also re-decrypts the state and verifies the SIV/SIV2 tag, then releases
   # 128 or 384 bits for SIV/IMPQUAL/SIV2 storage.
 
   ace.setst K0, t0, #seal_after_export
 ----
 
-// If the state is fully provisioned, then this computes SIV (SIV2)
-// and internally changes the state by encrypting it, and possibly using the
-// per-hart storage for SIV/SIV2.
-//
-// If the state is NOT fully provisioned OR it is already in _Exporting_ state, then
-// no SIV/SIV2 is computed and no encryption is performed.
-//
-// This operation is performed atomically.
-//
-// Its last task is to set the MH's _Exporting_ flag (which is ignored,
-// i.e., treated as 0, in the SIV computation).
-
-NOTE: The three instructions are essentially the same as `ace.export`.
-This first splitting is useful if we want to consider splitting also the entire loading.
-
-NOTE: Maybe we can have multiple export operations open, but only one prov/init.
+// NOTE: The three instructions are essentially the same as `ace.export`.
+// This first splitting is useful if we want to consider splitting also the entire loading.
+// NOTE: Maybe we can have multiple export operations open, but only one prov/init.
 
 NOTE: If we seal prematurely, then we get an auth error.
 If we forget to seal, we also get errors because we cannot use the CR.
@@ -1009,10 +981,8 @@ success:
 ----
 
 Similarly to Provisioning, Bits [127:64] of the the metadata field may be not valid.
-For instance, a non-admissible value for _AlgorithmUse_ for the Algorithm or the Implementation,
-or a non-zero value in Bits [127:110] in the current version of the specification.
-If this occurs, the CR will be invalidated upon executing `ace.setst K0, #seal_after_prov`
-and so the following `ace.size` will catch this situation.
+For instance, a non-admissible value for _AlgorithmUse_ for the Algorithm or the Implementation, or a non-zero value in Bits [127:110] in the current version of the specification.
+If this occurs, the CR will be invalidated upon executing `ace.setst K0, #seal_after_prov` and so the following `ace.size` will catch this situation.
 
 Longer instruction sequences based on XLEN-wide writes from GPRs into a CR's state are also possible.
 However, safely resuming such code after preemption may be more cumbersome.
