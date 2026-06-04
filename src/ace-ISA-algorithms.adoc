@@ -782,13 +782,7 @@ function AES_GCM_SIV_Decrypt(AD[] : array of bits(128), N : bits(96), SIV : bits
 [[ACE-SCC-export]]
 ==== Export of a Fully Configured CR
 
-An export process cannot be initiated if any other CR is being provisioned, exported, or imported.
-Attempts to do so raise an illegal instruction exception.
-
-Before an export is initiated, any provisioning, export, or import operation on a different CR must be completed or that CR cleared.
-
-If the _Configuring_ flag is unset, then
-``K``__i__ is fully provisioned and `ace.export` works as follows:
+If the _Configuring_ flag is unset, then ``K``__i__ is fully provisioned and `ace.export` works as follows:
 
 .Exporting a Fully Configured CR ``K``__i__
 [example]
@@ -808,6 +802,9 @@ If the _Configuring_ flag is unset, then
 --
 
 ==== Export of a Partially Configured CR
+
+The architecture does not prevent to initiate a CR management process while the same or any other CR is being managed.
+However, software–including interrupt and exception handlers–must take care to avoid situations that may lead to corruption of CRs and SCCs.
 
 [WARNING]
 ====
@@ -841,7 +838,8 @@ We can use an additional bit of the metadata to distinguish between the two case
 In both cases, We call the exported context an _Exported Partial Context_ (EPC).
 
 If an export operation of a partially configured/imported CR is interrupted, the same CR may have to be exported again.
-This is conceptually no different from multiply interrupted vector load and store operations.
+No matter how rare such event, we must architect the proper behavior of export operations and give the proper guidelines for using theml
+This is luckily conceptually no different from multiply interrupted vector load and store operations.
 The CR will be recognized by the handler in the new mode as a partially configured CR, and the handler code will follow the same semantics as the interrupted handler.
 
 // ////////////////////////////////////////////////////////////////////
@@ -886,23 +884,6 @@ Explain: This does not increase the attack surface since:
 
 . More privileged modes have access to their children processes's address spaces and therefore they can access plaintext data (such as a PI), and
 . Encrypted and authenticated data must be complete before it can be authenticated, otherwise authentication will fail with high probability. (1-1^128^).
-
-////
-[NOTE]
-====
-This can be enforced as follows:
-
-. An implementation maintains a single per-hart instance of the variables containing the `SIV` and related temporary state.
-. To track an operation in progress, the implementation uses two 1-bit flags, `ace_exporting` and `ace_importing`, together with a 5-bit value `ace_expimported_cr` that records the number of the CR being exported or imported.
-. These fields are set when an export or import begins and cleared upon completion.
-. If the operation is interrupted, `acestart` is set accordingly.
-. While `ace_exporting` is set, any instruction that modifies the internal state of CR `ace_expimported_cr` clears the flag.
-. An export may resume only if the flag is still set and only for the recorded CR; otherwise, the export is restarted and `acestart` is ignored.
-
-Without such a safeguard, resumption could yield an incorrect SIV.
-While the pseudocode follows this mechanism to enforce the rule, implementation may choose to implement the rule differently.
-====
-////
 
 // ///////////////////////////////////////////////////////////////////
 
