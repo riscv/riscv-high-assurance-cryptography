@@ -184,10 +184,12 @@ Provisioning ``K(i)`` performs the following steps:
 [example]
 --
 . Clear ``K(i)``. In particular, the internal CRF memory corresponding to ``K(i)`` will read as zero.
-. Read the least significant 64 bits of the Metadata Header `ml` = `MH[63:0]` from memory, i.e., the first 8 bytes of the PI, check it for consistency and integrity. This may fail and result in an Error State.
-. Allocate internal resources for ``K(i)``. This may fail and raise an exception.
-. Set `ml`._ConfigStatus_ <- _CfgStProvisioning_ , store `ml` in ``K(i)``.``MH[63:0]``.
-. Read the rest of the PI content from memory, store it in ``K(i)``, viewed as a buffer.  This read operation starts with the 8th byte of the PI and stores it in ``K(i)``.``Content[]``.
+. Read the least significant 64 bits of the Metadata Header `ml` = `MH[63:0]` from memory, i.e., the first 8 bytes of the PI.
+Check `ml` for consistency and integrity: Failure shall result in an Error State.
+. Allocate internal resources for ``K(i)``. Failure raises an exception.
+. Set `ml`._ConfigStatus_ <- _CfgStProvisioning_, store `ml` in ``K(i)``.``MH[63:0]``.
+. Read the rest of the PI content from memory, store it in ``K(i)``, viewed as a buffer.
+  This read operation starts with the 8th byte of the PI and stores it in ``K(i)``.``Content[]``.
 . Perform any necessary readjustment of the CR's content to turn it into the format internally consumed by the ACE Unit.
 . ``K(i)``.``MH``._ConfigStatus_ <- _CfgStComplete_.
 --
@@ -210,11 +212,12 @@ value of the _ConfigStatus_ field in the exported Metadata Header is maintained 
 [WARNING]
 ====
 Provisioning, import and export are being rewritten!
+Our goal is to have instructions that are as RISC-y as possible, but without compromising security.
+Also, these should scale unchanged from small cores to high-performance CPUs, and therefore not enforce any specific hardware microarchitecture.
 ====
 
-Resumption of an interrupted provisioning operation:
-
-===== Current Approach
+////
+// ===== Current Approach
 
 The software stack must ensure that an interrupted configuration or export operation may resume only if control returns to the same caller without an intervening context switch and the CR has not been modified. The latter is in general difficult to enforce, and either some internal flag is set to force restart and ignore the value of `acestart`.
 To enforce this, instead, the context switch handler clears partially configured or exported CRs at context save and again at context restore, forcing the instruction to restart the operation from the beginning.
@@ -241,27 +244,63 @@ This transition does not occur during `ace.export`.
 
 The above rules imply that an interrupted import operation may be resumed on a different hart, even with a different implementation of the ACE Unit.
 In the latter case, the system must be able to handle the cases where the SCC is too large to fit in a CR because of the optional Implementation VDS or the latter is incompatible.
+////
 
-===== Discussed Approach
+// ===== Discussed Approach
 
-_This section is not normative. The ideas may be integrated into the specification._
+// _This section is not normative. The ideas may be integrated into the specification._
 
-[NOTE]
-====
-Our goal is to have instructions that are as RISC-y as possible, but without compromising security.
-Also, these should scale unchanged from small cores to high-performance CPUs, and therefore not enforce any specific hardware microarchitecture.
-====
+Software must ensure that an interrupted configuration or export operation is allowed to resume, in order to support implementations that provide this feature.
+The implementation is not required to support resumption and can choose to ignore the `acestart` value and always restart the interrupted operation.
 
-In case we intend to support export of partially configured CRs:
-
-First, note that, even if the feature is supported, at context save, privileged code must be able to choose the option to not export the partially configured CR, but instead to clear it at context restore to force a restart of the interrupted configuration operation.
+// to instance by keeping a per-CR flag that is set when a configuration instruction is interrupted and cleared if the CR is modified.
 
 Upon returning to the original control flow from an interrupt or exception, an export may resume only if the CR has not been modified.
-In this case, this is enforced by preventing use of a CR with _ConfigStatus_ different from _CfgStComplete_.
+This is enforced by preventing use of a CR with _ConfigStatus_ different from _CfgStComplete_.
+In this case, CR cloning is also not allowed.
+
+// The implementation shall ignore the value of `acestart` and restart the operation from the beginning if this flag is cleared.
+
+A context switch handler can also force restart by clearing partially configured or exported CRs at context save and again at context restore.
+
+// This approach ensures that:
+//
+// .. No partially configured or exported CRs remain in a VM's context if a migration occurs;
+// .. The implementation is free to choose any internal representation of a partially configured CR (including the order in which data is read); and
+// .. Any implementation may define its own `acestart` values for resumption, depending on the granularity of interruption points and the semantics of the work between them.
+
+[NOTE]
++
+--
+If a management operation is architected as a single instruction, the implementation must first re-read the Metadata Header,
+to determine the length of the data to be read or written. This adds significant complication to the implementation logic.
+
+If provisioning is performed by split operations, the first 64 bits of the Metadata Header are handled by the software.
+--
++
+
+During provisioning or import, metadata field _ConfigStatus_ is set accordingly to _CfgStProvisioning_ or _CfgStImporting_.
+This field may only be reset to _CfgStComplete_ upon successful completion of the operation (see <<ACE-provisioning-export-import>>).
+
+Exporting requires the software to first save bits [63:0] of the Metadata Header to memory.
+At this point, the operation must distinguish between two cases:
+
+. If the current value of _ConfigStatus_ is _CfgStComplete_, the export operation must first prepare the CR to be exported as authenticated ciphertext, and set
+_ConfigStatus_ to _CfgStExporting_. Upon successful completion of the export operation, the CR is returned to its usual internal representation, and _ConfigStatus_ is set to _CfgStComplete_.
+. If the current value of _ConfigStatus_ is different from _CfgStComplete_, the CR mut be already in a state which is directly exportable, and _ConfigStatus_ will not be modified.
+No preparation of the CR or restoration of a previous representation is performed.  Upon successful completion of the export operation, _ConfigStatus_ must be set to the value set by the software.
+
+These rules are necessary because any management operation may be interrupted and there may be multiple nested interrupts or exceptions, with or without context switches. Leaving the burden to save and restore _ConfigStatus_ to the interrupted software simplifies the logic and allows for arbitrarily many levels of nested virtualization.
+
+These rules also imply that an interrupted import operation may be resumed on a different hart, even with a different implementation of the ACE Unit.
+The architecture ensures interoperability provided the importing implementation supports the algorithm encoded in the SCC.
+The implementation must however be able to handle the cases where the SCC is too large to fit in a CR because of the optional Implementation VDS or the latter is incompatible, namely by ignoring the optional data.
+
 
 =====  About resumption and memory model
 
-RISC-V implementations may read or write long inputs in an arbitrary order. Enforcing a strict access ordering for ACE inputs and outputs could therefore be complex on  microarchitectures that are optimized for a particular use case.
+RISC-V implementations may read or write long inputs in an arbitrary order.
+Enforcing a strict access ordering for ACE inputs and outputs could therefore be complex on microarchitectures that are optimized for a particular use case.
 
 However, this does not require to write different code for different behaviors.
 The ACE unit itself sends commands to the LSU to read and write memory sequentially—analogously to software looping over an array.
