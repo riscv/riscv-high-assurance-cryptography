@@ -177,12 +177,13 @@ The entire architectural state of the ACE unit associated with the hart is reset
 
 We list the most important operations on CRs, so we can refer to them before they are fully defined.
 
-* Provisioning (<<ACE-management-operations>>) loads metadata and plaintext Content into a CR, binding them together.
-* Exporting (<<ACE-management-operations>>) exports a CR to memory as an SCC.
-* Importing (<<ACE-management-operations>>) imports a SCC into a CR.
+* `ace.prov` (<<ACE-instruction-init>>) loads metadata and plaintext Content into a CR, binding them together.
+* `ace.export` (<<ACE-instruction-export>>) exports a CR to memory as an SCC.
+* `ace.import` (<<ACE-instruction-import>>) imports a SCC into a CR.
+* [.red]#{warn} We are currently discussing whether the first three operations may be replaced by: An explicit instruction to prepare a CR for management, followed by suitable load/store instructions, and then a last instruction to terminate the management operation.#
 * `ace.clear` (<<ACE-instruction-clear>>) unconfigures and clears a CR.
 * `ace.exec` (<<ACE-instruction-exec>>) performs cryptographic operations as specified by the algorithm configured in a CR and according to the state of the CR.
-* `ace.setst` (<<ACE-instruction-setst>>) transitions between states of a cryptographic algorithm or of a CR.
+* `ace.setst` (<<ACE-instruction-setst>>) transitions between states of a cryptographic algorithm.
 * `ace.clone` (<<ACE-instruction-clone>>) creates a copy of a CR into a second CR.
 
 // ////////////////////////////////////////////////////////////////////
@@ -974,13 +975,216 @@ Since the architecture decouples instructions like `ace.exec` from the actual op
 
 // ////////////////////////////////////////////////////////////////////
 
-[[ACE-management-operations]]
-==== Provisioning, Import and Export
+==== Provisioning, Import and Export, Version 1 (Monolithic Instructions)
+
+[[ACE-instruction-init]]
+===== ace.prov
+
+_Synopsis_::
+Provision Metadata and secrets into a CR.
+
+_Mnemonic_::
+`ace.prov Kd|K(Xd), %offset(Xs)`
+(((ACE, instruction, ace.prov)))
+
+_Encoding_::
+`ace.prov` is an I-type instruction.
++
+[wavedrom, , svg]
+....
+{reg:[
+    { bits:  7, name: 0x0b, attr: ['custom-0'] },
+    { bits:  5, name: 'context', attr: ['Kd','K(Xd)'] },
+    { bits:  3, name: 'ace.prov', attr: [0x4,0x5] },
+    { bits:  5, name: 'Xs' },
+    { bits: 12, name: 'immed12', attr: ['offset'] },
+]}
+....
+
+_Description_::
+`ace.prov` provisions a CR with Metadata and Content to create a CC. `Kd` or
+`K(Xd)` denotes the CR to be provisioned. `Xs` points to the region of memory
+containing the Metadata and the key material.
++
+If the instruction fails, the target CR is unconfigured, with the same
+semantics as if `ace.clear` were invoked on the same CR
+(<<ACE-instruction-clear>>).
++
+If the combination of _Algorithm_, _AlgorithmPolicy_, and _SCProtection_ is not supported, exception `ace_exc_invalid` may be raised as defined in the Privileged Architecture.
+The handler may simply set the CR to Error State `ace_state_not_impl` and return to the original control flow.
++
+Exception `ace_exc_invalid` is raised if the Metadata is invalid (other than unimplemented algorithm), such as, for instance: a nonzero _State_ or reserved field; or an unsupported _Locality_ value.
+The handler may simply set the CR to Error State `ace_state_invalid` and return to the original control flow.
++
+Exception `ace_exc_invalid` is raised also if the PI refers to a system key that the current hart or mode is not allowed to directly use.
+The corresponding policies are implementation and system defined.
++
+The operation is described in detail in <<ACE-provisioning-export-import>>.
+
+_Properties_::
+Possibly modifies state: *YES*. +
+Usage-controlled: *NO*. +
+//Trappable: *YES*. +
+//Interruptible: *YES*. +
+
+_Included in_::
++
+--
+[%header,cols="4,2,2"]
+|===
+|Extension | Minimum version | Lifecycle state
+| `Zlv`    | v0.0.0          | --
+| `Zlio`   | v0.0.0          | --
+|===
+--
++
+
+NOTE: `ace.prov`, like `ace.import`, `ace.export`, `ace.input`, and
+`ace.output`, which are described later, can be viewed as special kinds of load
+and store instructions, and therefore they do not violate the load/store
+architecture principle.
+
+// ////////////////////////////////////////////////////////////////////
+
+[[ACE-instruction-export]]
+===== ace.export
+
+_Synopsis_::
+Export a CR as a SCC in memory.
+
+_Mnemonic_::
+`ace.export %offset(Xd), Ks|K(Xs)`
+(((ACE, instruction, ace.export)))
+
+_Encoding_::
+`ace.export` is an S-type instruction.
++
+[wavedrom, , svg]
+....
+{reg:[
+    { bits:  7, name: 0x27, attr: ['custom-1'] },
+    { bits:  5, name: 'immed[4:0]' },
+    { bits:  3, name: 'ace.export', attr: [0x0,0x1] },
+    { bits:  5, name: 'Xd' },
+    { bits:  5, name: 'context', attr: ['Ks','K(Xs)'] },
+    { bits:  7, name: 'immed[11:5]' },
+]}
+....
+
+_Description_::
+Exports the CR `Ks` or `K(Xs)` to memory at address `Xd`, using the procedure
+// Trappable: *YES*. +
+// Interruptible: *YES*. +
+
+_Included in_::
++
+--
+[%header,cols="4,2,2"]
+|===
+|Extension | Minimum version | Lifecycle state
+| `Zlv`    | v0.0.0          | --
+| `Zlio`   | v0.0.0          | --
+|===
+--
++
+
+// ////////////////////////////////////////////////////////////////////
+
+[[ACE-instruction-import]]
+===== ace.import/ace.import.S
+
+_Synopsis_::
+Import a SCC from memory into a CR.
+
+_Mnemonics_::
+`ace.import{nbsp}{nbsp}{nbsp}Kd|K(Xd), %offset(Xn)` +
+`ace.import.S{nbsp}Kd|K(Xd), %offset(Xn)`
+(((ACE, instruction, ace.import)))
+(((ACE, instruction, ace.import.S)))
+
+_Encoding_::
+`ace.import` is an I-type instruction.
++
+[wavedrom, , svg]
+....
+{reg:[
+    { bits:  7, name: 0x0b, attr: ['custom-0'] },
+    { bits:  5, name: 'context', attr: ['Kd','K(Xd)'] },
+    { bits:  3, name: 'ace.import', attr: ['0    0    S','0    1    S'] },
+    { bits:  5, name: 'Xn' },
+    { bits: 12, name: 'immed12' },
+]}
+....
+
+_Description_::
+`Kd` or `K(Xd)` denotes the CR into which the SCC is to be imported. `Xn` is
+the GPR containing the base address of the memory region with the source SCC.
++
+If the instruction fails, the target CR is unconfigured, with the same
+semantics as if `ace.clear` were invoked on the same CR
+(<<ACE-instruction-clear>>).
++
+If the combination of _Algorithm_,
+_AlgorithmPolicy_, and _SCProtection_ is not supported, exception `ace_exc_invalid` may be raised as defined in the Privileged Architecture.
+The handler may simply set the CR to Error State `ace_state_not_impl` and return to the original control flow.
++
+Exception `ace_exc_invalid` is raised if the Metadata is invalid (other than unimplemented algorithm), such as, for instance: nonzero bits in reserved fields;
+unsupported _Locality_ value;
+or a value of _State_ which is not allowed by the current _Algorithm_ and _AlgorithmPolicy_.
++
+The bit S takes the values 0 (false) or 1 (true). It is set to true if the key
+is in a system-defined format (`ace.import.S`) and not the format defined by
+the present architecture (`ace.import`).
++
+The operation of `ace.import` is described in detail in
+<<ACE-provisioning-export-import>>.
++
+The behavior of `ace.import.S` is implementation-defined. If there are no
+system-defined formats, `ace.import.S` raises an illegal instruction exception.
+
+NOTE: The instruction encoding includes a single bit to indicate a
+system-defined format. If multiple system-defined formats are supported, the
+system is responsible for distinguishing them. These formats do not necessarily
+include the key value itself, they may contain a “recipe” for an
+implementation-defined mechanism to generate the key. Such system generated
+keys are system-specific and the “recipe” is in general not portable. After
+internal key generation, the actual key value—not the recipe—is stored in the
+CR and SCC. For all keys provisioned using `ace.import.S`, the _KeyType_ field
+in the Metadata is 0, denoting a key represented by value.
+
+NOTE: The `ace.export` instruction does not have an `ace.export.S` analog to
+`ace.import.S`. This means that system-specific dynamically generated keys can
+be imported but not exported in the same form: they must be exported in the
+format architected here for ACE CCs, or recreated with another `ace.import.S`
+call.
+
+
+_Properties_::
+Possibly modifies state: *YES*. +
+Usage-controlled: *NO*. +
+// Trappable: *YES*. +
+// Interruptible: *YES*. +
+
+_Included in_::
++
+--
+[%header,cols="4,2,2"]
+|===
+|Extension | Minimum version | Lifecycle state
+| `Zlv`    | v0.0.0          | --
+| `Zlio`   | v0.0.0          | --
+|===
+--
++
+
+// ////////////////////////////////////////////////////////////////////
+
+==== Provisioning, Import and Export, Version 2 (Split Instructions)
 
 Provisioning is performed by the following three steps:
 
-. Use `ace.setst` (<<ACE-instruction-setst>>) to prepare a CR to be provisioned, store the low 64 bits of the Metadata Header in it, check the metadata.
-. Use `ace.load` (<<ACE-instruction-load>>) to load the rest of the provisioning information into the CR.
+. Use `ace.setst` to prepare a CR to be provisioned, store the low 64 bits of the Metadata Header in it, check the metadata.
+. Use `ace.load` to load the rest of the provisioning information into the CR.
 . Use `ace.setst` to make the CR available to software.
 
 Importing a SCC into a CR is similar:
@@ -991,32 +1195,17 @@ Importing a SCC into a CR is similar:
 
 Exporting a CR as an SCC consists of the following steps:
 
-. Use `ace.getmd` (<<ACE-instruction-getmd>>) to get the low 64 bits of the Metadata Header of the CR to be exported to be able to determine its size and allocate resources.
+. Use `ace.getmd` to get the low 64 bits of the Metadata Header of the CR to be exported to be able to determine its size and allocate resources.
 . Store the low 64 bits of the Metadata Header into memory.
 . Use `ace.setst` to prepare a CR to produce a SCC, by encrypting the contents and computing the authentication tag.
-. Use `ace.store` (<<ACE-instruction-store>>) to store the high 64 bits of the Metadata Header and the rest of the SCC to memory.
+. Use `ace.store` to store the high 64 bits of the Metadata Header and the rest of the SCC to memory.
 . Use `ace.setst` to restore the CR in a form available to software.
 
-NOTE: The instruction encoding of `ace.load` includes a single bit to indicate a
-system-defined format. If multiple system-defined formats are supported, the
-system is responsible for distinguishing them. These formats do not necessarily
-include the key value itself, they may contain a “recipe” for an
-implementation-defined mechanism to generate the key. Such system generated
-keys are system-specific and the “recipe” is in general not portable. After
-internal key generation, the actual key value—not the recipe—is stored in the
-CR and SCC. For all keys provisioned in this way, the _KeyType_ field
-in the Metadata is 0, denoting a key represented by value.
-
-NOTE: The export procedure does not have an export equivalent for system-defined formats.
-This means that system-specific dynamically generated keys can be imported but not exported
-in the same form: they must be exported in the format architected here for ACE CCs.
-
-// ////////////////////////////////////////////////////////////////////
-
-[[ACE-instruction-load]]
+[[ACE-instruction-init-2]]
 ===== ace.load/ace.sysimport
 
 _Encoding_::
+(`ace.load` has the same encoding of `ace.import`.)
 `ace.load` is an I-type instruction.
 +
 [wavedrom, , svg]
@@ -1041,28 +1230,13 @@ Assumes that the CR is ready to import information and that the first 8 bytes of
 The semantics of `ace.sysimport` are entirely implementation dependent and do not assume that the CR has been readied to import information and
 that some metadata has already been loaded in it.
 
-_Properties_::
-Possibly modifies state: *YES*. +
-Usage-controlled: *NO*. +
-
-_Included in_::
-+
---
-[%header,cols="4,2,2"]
-|===
-|Extension | Minimum version | Lifecycle state
-| `Zlv` (Forms A-D)    | v0.0.0          | --
-| `Zlio` (Form D)      | v0.0.0          | --
-|===
---
-+
-
 // ////////////////////////////////////////////////////////////////////
 
-[[ACE-instruction-store]]
+[[ACE-instruction-export-2]]
 ===== ace.store
 
 _Encoding_::
+(`ace.store` has the same encoding of `ace.export`.)
 `ace.store` is an S-type instruction.
 +
 [wavedrom, , svg]
@@ -1084,22 +1258,6 @@ _Mnemonic_::
 _Description_::
 Exports raw data from the CR `Ks` or `K(Xs)` to memory at address `%offset`.
 The operation starts with the 8th byte of the Metadata Header.
-
-_Properties_::
-Possibly modifies state: *NO*. +
-Usage-controlled: *NO*. +
-
-_Included in_::
-+
---
-[%header,cols="4,2,2"]
-|===
-|Extension | Minimum version | Lifecycle state
-| `Zlv` (Forms A-D)    | v0.0.0          | --
-| `Zlio` (Form D)      | v0.0.0          | --
-|===
---
-+
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -1269,29 +1427,6 @@ The special values of `#immed7` to prepare a CR for provisioning, importing, and
 | 100   | `open_for_export`         |  Prepare a CR for exporting it as a SCC (if not yet in the correct format), set _ConfigStatus_ to _CfgExporting_.
 | 101   | `seal_after_export`       |  Restore the exported CR in the internal clear format (only if already complete) and make it available to software, set _ConfigStatus_ to a provided value.
 |===
-
-If `ace.setst` is used to initiate provisioning:
-
-. If the instruction fails, the target CR is unconfigured, with the same semantics as if `ace.clear` were invoked on the same CR (<<ACE-instruction-clear>>).
-. If the combination of _Algorithm_, _AlgorithmPolicy_, and _SCProtection_ is not supported, exception `ace_exc_invalid` may be raised as defined in the Privileged Architecture. The handler may simply set the CR to Error State `ace_state_not_impl` and return to the original control flow.
-. Exception `ace_exc_invalid` is raised in other cases here where the Metadata is invalid, such as, for instance: a nonzero _State_ or reserved field; or an unsupported _Locality_ value. The handler may simply set the CR to Error State `ace_state_invalid` and return to the original control flow.
-. Exception `ace_exc_invalid` is raised also if the PI refers to a system key that the current hart or mode is not allowed to directly use.
-The corresponding policies are implementation and system defined.
-. The operation is described in detail in <<ACE-provisioning-export-import>>.
-
-If `ace.setst` is used to initiate import:
-
-. If the instruction fails, the target CR is unconfigured, with the same semantics as if `ace.clear` were invoked on the same CR (<<ACE-instruction-clear>>).
-. If the combination of _Algorithm_, _AlgorithmPolicy_, and _SCProtection_ is not supported, exception `ace_exc_invalid` may be raised as defined in the Privileged Architecture. The handler may simply set the CR to Error State `ace_state_not_impl` and return to the original control flow.
-. Exception `ace_exc_invalid` is raised if the Metadata is invalid (other than unimplemented algorithm), such as, for instance: nonzero bits in reserved fields;
-unsupported _Locality_ value;
-or a value of _State_ which is not allowed by the current _Algorithm_ and _AlgorithmPolicy_.
-. The bit S takes the values 0 (false) or 1 (true). It is set to true if the key
-is in a system-defined format (`ace.import.S`) and not the format defined by
-the present architecture (`ace.import`).
-
-If `ace.setst` is used to initiate export:
-
 --
 +
 
