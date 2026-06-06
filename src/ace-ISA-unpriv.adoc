@@ -170,7 +170,8 @@ However, the implementation of side-channel protected algorithms in the ACE unit
 
 The amount of CRF capacity consumed by each CR depends on the algorithm encoded in the MDH, and it may differ from one CR to another.
 
-Insufficient residual CRF capacity may prevent execution of a configuration instruction (`ace.prov`, `ace.import`, `ace.clone`):
+Insufficient residual CRF capacity may prevent execution of a configuration instruction.
+// (`ace.prov`, `ace.import`, `ace.clone`):
 Capacity is freed by unconfiguring other CRs.
 
 The CRF capacity is implementation-defined. Implementations shall provide sufficient
@@ -194,7 +195,9 @@ We list the most important operations on CRs, so we can refer to them before the
 
 // ////////////////////////////////////////////////////////////////////
 
-==== Inputs and Outputs: RVV-mini and ACEIOBUF
+==== Inputs and Outputs
+
+===== RVV/RVV-mini
 
 ACE inputs and outputs may use vector registers or an architectural input/output buffer (ACEIOBUF)
 that can be loaded from and stored to external memory. Both mechanisms may be supported simultaneously.
@@ -204,12 +207,12 @@ When vector registers are used, the full V extension is not required. ACE depend
 RVV-mini must be fully opcode-compatible with RVV: code written for RVV-mini must execute with identical behavior under RVV.
 The current set of features is:
 
-* Vector registers wide enough to support the inputs and outputs of the implemented algorithms, that is, currently, 128 bits.
+* Vector registers (or groups) wide enough to support the inputs and outputs of the implemented algorithms, that is, currently, 128 bits.
 * Configuration-setting instructions (`vsetvli`/`vsetivli`/`vsetvl`):
  ** Since all ACE operations ignore masks while accessing vector registers, RVV-mini only needs tail and mask agnostic configurations;
  ** Since ACE operations do not depend on a concept of element (from a logical point of view, they are not performed in the vector unit),
-    they view the vector/vector group as bit strings of length `VL` * `SEW` with `VL` = min(`AVL`,`VLMAX`),
-    in groups of `LMUL` processing in each operation `VL` * `SEW` bits in a vector group.
+    they view a vector (group) as a bit string of length `VL` * `SEW` with `VL` = min(`AVL`,`VLMAX`),
+    processing in each operation `VL` * `SEW` bits.
  ** Support for `LMUL` integer values of 1, 2, 4, and 8;
  ** Unsupported configurations shall raise an illegal instruction exception.
 * Unit-strided vector loads and stores; and
@@ -240,20 +243,25 @@ may be defined later, and the ACE specification amended accordingly.
 This allows additional requirements to be collected, for example, whether to mandate
 `vclmul.v[vx]` and `vclmulh.v[vx]` from `Zvbc`.#
 
-The optional per-hart input/output buffer (ACEIOBUF) may be used in place of vector registers.
-The ACEIOBUF is not part of the CRF.
-Instructions `ace.input` and `ace.output` are used to write inputs to the ACEIOBUF and read outputs from it.
-When the ACEIOBUF is used in place of vector registers, instructions `ace.exec` and `ace.setst` that use vector registers are replaced by instruction sequences  as described in <<ACE-usage-input-output>>.
+When vector registers are used, ACE determines the lengths of its operands from `VL*SEW`.
+The specific choice of `VL` and `SEW` is irrelevant; for example, `VL`=2, `SEW`=64 and `VL`=4, `SEW`=32 both define a 128-bit input.
+The CPU instruction-decoding side of ACE uses `VL` and `SEW` to determine how much data to send to the ACE unit proper, but the ACE unit itself requires only the product `VL*SEW` (or `aceiobuftop`).
 
-To determine the lengths of the inputs and outputs of its operations when the vector registers are used, ACE uses `VL*SEW`.
-The actual choice of `VL` and `SEW` is not significant. For instance, both `VL`=2, `SEW`=64 and `VL`=4, `SEW`=32 define a 128-bit input.
-The CPU instruction-decoding side of ACE uses `VL` and `SEW` to determine the amount of data to send to the ACE unit proper.
-The ACE unit itself only needs the product `VL*SEW` (or `aceiobuftop`) for its functionality.
+===== ACEIOBUF
+
+ACEIOBUF is an optional per-hart input/output buffer that may be used in place of vector registers.
+It is not part of the CRF.
+
+The `ace.input` and `ace.output` instructions write data to the ACEIOBUF to supply inputs to other ACE operations and read their outputs from it.
+When the ACEIOBUF is used in place of vector registers, the `ace.exec`, `ace.setst`, and `ace.derive` instructions that would otherwise use vector registers for their inputs and outputs are replaced by instruction sequences that combine the no-input/no-output versions of the same operations with `ace.input` and `ace.output`.
+These sequences are described in <<ACE-usage-input-output>>.
+
+When the ACEIOBUF is used, the length of the input to be processed is given in CSR `aceiobuflen` (<<ACE-CSR-aceiobuflen>>).
 
 // ////////////////////////////////////////////////////////////////////
 
 [[ACE-Metadata]]
-==== MDH Format
+==== Metadata Formats
 
 The ACE architecture recognizes two types of metadata that may be contained in a CC or associated with it.
 
@@ -333,11 +341,11 @@ The architecture defines the following side-channel protection levels.
 .Encoding of Side-Channel Protection levels
 [%autowidth,float="center",align="center",cols="^,<"options="header"]
 |===
-| Value   | Description
-|   0     | Data-independent execution latency (DIEL) for cryptographic operations.
-|   1     | First-order threshold implementation.
-|   2     | DIEL; first-order threshold, fault-tolerant implementation.
-|  {ge} 3 | Reserved/Currently not defined.
+| Value  | Description
+|   0    | Data-independent execution latency (DIEL) for cryptographic operations.
+|   1    | First-order threshold implementation.
+|   2    | DIEL; first-order threshold, fault-tolerant implementation.
+| {ge} 3 | Reserved/Currently not defined.
 |===
 
 Implementations offering additional levels of protection may set _SCProtection_ to a value greater than 2:
@@ -442,6 +450,21 @@ An `ace.exec` instruction may also trigger a state change.
 
 In <<ACE-states-graph>> we display the default possible state transitions.
 
+The legend for the graph is:
+
+* The double circled state is the _Off_ State.
+* Valid States have single rounded rectangular borders.
+* Error States have double rounded rectangular borders.
+* The continuous edges represent state transitions induced by both configuration and usage instructions.
+* However, a transition from _Success_ or _Failure_ to _Initial_ may be forbidden by certain single-use CRs as per the _Algorithm_'s policies.
+* The transitions from _Off_ to any Error State are a result of configuration instructions, whereas the corresponding transitions from these Error States to _Off_ are a result of explicitly clearing the CR.
+* The dashed edges represent state transitions induced by reaching the expiration date.
+* The dotted edges represent state transitions induced by configuration operations.
+  Completing a provisioning operation can only lead to the _Initial_ state.
+  Completing an import can lead to any state.
+* Any transition may be caused by an performing explicit operation performed while in a given state, or be caused implicitly by reaching the latter under conditions specified in the algorithm's specification.
+* The round _Configuration_ “hub” simplifies the graph by expressing that any Error State is always reachable—even from another Error State—through configuration operations (or via `ace.setst`).
+
 // //
 [[ACE-states-graph]]
 .Default State Transitions
@@ -528,19 +551,6 @@ image::../../src/statestikz-3.svg[]
 \end{tikzpicture}
 ....
 ////
-
-The legend for the graph is:
-
-* The double circled state is the _Off_ State.
-* Valid States have single rounded rectangular borders.
-* Error States have double rounded rectangular borders.
-* The continuous edges represent state transitions induced by both configuration and usage instructions.
-* However, a transition from _Success_ or _Failure_ to _Initial_ may be forbidden by certain single-use CRs as per the _Algorithm_'s policies.
-* The transitions from _Off_ to any Error State are a result of configuration instructions, whereas the corresponding transitions from these Error States to _Off_ are a result of explicitly clearing the CR.
-* The dashed edges represent state transitions induced by reaching the expiration date.
-* The dotted edges represent state transitions induced by configuration instructions. We note that completion of a provisioning operations can only bring to the _Initial_ state, whereas completion of an import can bring a CR to any state.
-* Any transition may be caused by an performing explicit operation performed while in a given state, or be caused implicitly by reaching the latter under conditions specified in the algorithm's specification.
-* The round _Configuration_ “hub” simplifies the graph to represent that it is always possible to reach any Error State, even from other Error States, by performing explicit configuration operations (or by using `ace.setst` between Error States).
 
 The _StateExtension_ field can be used by an Algorithm to store additional state information.
 This field may be used to determine the size of an SCC.
@@ -722,7 +732,7 @@ ACE provides a number of unprivileged CSRs.
 // ////////////////////////////////////////////////////////////////////
 
 [[ACE-CSR-impl-ids]]
-===== `acevendorid`, `acearchid`, `aceimpid`
+===== `acevendorid`, `acearchid`, and `aceimpid`
 
 {empty}
 (((CSR, `acemvendorid`)))
@@ -942,7 +952,7 @@ Since the architecture decouples instructions like `ace.exec` from the actual op
 // ////////////////////////////////////////////////////////////////////
 
 [[ACE-management-operations]]
-==== Provisioning, Import and Export
+==== Provisioning, Import, and Export
 
 Broadly speaking, and removing error handling, *Provisioning* is performed by the following three steps:
 
