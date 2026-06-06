@@ -16,7 +16,7 @@ ACE defines two external CC formats:
 {empty}
 (((Cryptographic Context,Metadata)))
 (((Cryptographic Context,Metadata,Header)))
-Both formats begin with the 128-bit Metadata Header described in <<ACE-Metadata>>.
+Both formats begin with the 128-bit MDH described in <<ACE-Metadata>>.
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -30,8 +30,8 @@ The format of a Provisioning Input (PI) is shown in <<ACE-PI>>.
 [width="100%",cols="8%,25%,42%,25%",options="header"]
 |===
 | Section | Section Name                      | Size     | Description
-| 1       | `MH`, Metadata Header             | 128 bits | See <<ACE-Metadata>>.
-| 2       | `Content[]`, Provisioning Content | Depends only on the _Algorithm_, _AlgorithmPolicy_, and _KeyType_ fields of the Metadata Header. | Contains keys and other algorithm-specific information.
+| 1       | `MDH`, MDH             | 128 bits | See <<ACE-Metadata>>.
+| 2       | `Content[]`, Provisioning Content | Depends only on the _Algorithm_, _AlgorithmPolicy_, and _KeyType_ fields of the MDH. | Contains keys and other algorithm-specific information.
 |===
 
 The length of a PI, and thus of `Content[]`, must be a multiple of 128 bits.
@@ -52,12 +52,12 @@ The format of a Sealed Cryptographic Context (SCC) is shown in <<ACE-SCC>>.
 [width="100%",cols="8%,25%,32%,35%",options="header"]
 |===
 | Section | Section Name                            | Size                 | Description
-| 1       | `MH`, Metadata Header                   | 128 bits             | See <<ACE-Metadata>>.
+| 1       | `MDH`, MDH                   | 128 bits             | See <<ACE-Metadata>>.
 | 2       | `SIV`                                   | 128 bits             | Authentication tag for section 4.
 //
 | 3
 | `Content1`: _Algorithm Data Section_
-| If the CR is not in an Error State, the length of the SCC depends only on the _Algorithm_, _AlgorithmPolicy_, _KeyType_ and _StateExtension_ fields of the Metadata Header.
+| If the CR is not in an Error State, the length of the SCC depends only on the _Algorithm_, _AlgorithmPolicy_, _KeyType_ and _StateExtension_ fields of the MDH.
 | Contains keys and other algorithm-specific information. Encrypted in memory and during partial import.
  The data in this section is necessary for the correct functioning of the algorithm.
 //
@@ -72,9 +72,9 @@ The format of a Sealed Cryptographic Context (SCC) is shown in <<ACE-SCC>>.
 
 The length of each section must be a multiple of 128 bits.
 
-If the context is exported while in an Error State, Sections 3–6 are empty; that is, the SCC consists only of a plaintext Metadata Header and of `SIV`.
+If the context is exported while in an Error State, Sections 3–6 are empty; that is, the SCC consists only of a plaintext MDH and of `SIV`.
 
-The Metadata Header's _ImpDataLen_ field specifies the total size of the Variable-Length Section (`SIV2`, `IMPQUAL`, and `Content2[]`).
+The MDH's _ImpDataLen_ field specifies the total size of the Variable-Length Section (`SIV2`, `IMPQUAL`, and `Content2[]`).
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -87,7 +87,7 @@ provision, import and export _all_ its keys and secrets as reconstructed values.
 
 . The PI and SCC Formats will be the same as for the non-threshold implementation
 variants of the same algorithm, with the only difference being the value of the
-_SCProtection_ in the Metadata Header.
+_SCProtection_ in the MDH.
 
 . To accelerate key share reconstruction in a threshold variant of an algorithm,
 some shares of a system key can be included in the content's Additional Data.
@@ -104,7 +104,7 @@ share generation.
 
 All values are represented as a single share also for the purposes of the architectural specification.
 Side-channel-analysis (SCA) protected algorithms are defined as implementation variants of the same unprotected algorithm and are not specified separately.
-The only difference between a protected and an unprotected algorithm is the value of the _SCProtection_ field in the Metadata Header.
+The only difference between a protected and an unprotected algorithm is the value of the _SCProtection_ field in the MDH.
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -122,7 +122,7 @@ The key must still be exported as a SKID.
 Rule 3 of <<ACE-rules-threshold-implementations>> can be applied to system keys as well, as long as the system key's value cannot be recovered from the included shares.
 
 An all-ones (i.e., `ones(64)`) system key identifier in a PI means that the key material is generated randomly upon provisioning.
-The _KeyType_ field in the Metadata Header is then internally set to 0, and the key is then exported by value.
+The _KeyType_ field in the MDH is then internally set to 0, and the key is then exported by value.
 This applies to all keys at once in an algorithms, unless otherwise specified.
 
 // //////////////////////////////////////////////////////////////////
@@ -150,13 +150,13 @@ However, this does not affect any conceivable use case.
 
 The format of this structure follows <<ACE-PI>> for provisioning and <<ACE-SCC>> for import:
 For provisioning, the structure consists of
-``K(i)``.`MH`[63:0],
-``K(i)``.`MH`[127:64] and
+``K(i)``.`MDH`[63:0],
+``K(i)``.`MDH`[127:64] and
 ``K(i)``.`Content[]`, in this order.
 For import, the structure consists of
-``K(i)``.`MH`[63:0],
-``K(i)``.`MH`[127:64],
-``K(i)``.``MH``,
+``K(i)``.`MDH`[63:0],
+``K(i)``.`MDH`[127:64],
+``K(i)``.``MDH``,
 ``K(i)``.``SIV``, and
 ``K(i)``.``Content1[]``, followed by
 ``K(i)``.``IMPQUAL``,
@@ -186,14 +186,14 @@ Provisioning ``K(i)`` performs the following steps:
 [example]
 --
 . Clear ``K(i)``. In particular, the internal CRF memory corresponding to ``K(i)`` will read as zero.
-. Read the least significant 64 bits of the Metadata Header `ml` = `MH[63:0]` from memory, i.e., the first 8 bytes of the PI.
+. Read the least significant 64 bits of the MDH `ml` = `MDH[63:0]` from memory, i.e., the first 8 bytes of the PI.
 Check `ml` for consistency and integrity: Failure shall result in an Error State.
 . Allocate internal resources for ``K(i)``. Failure raises an exception.
-. Set `ml`._ConfigStatus_ <- _CfgStProvisioning_, store `ml` in ``K(i)``.``MH[63:0]``.
+. Set `ml`._ConfigStatus_ <- _CfgStProvisioning_, store `ml` in ``K(i)``.``MDH[63:0]``.
 . Read the rest of the PI content from memory, store it in ``K(i)``, viewed as a buffer.
   This read operation starts with the 8th byte of the PI and stores it in ``K(i)``.``Content[]``.
 . Perform any necessary readjustment of the CR's content to turn it into the format internally consumed by the ACE Unit.
-. ``K(i)``.``MH``._ConfigStatus_ <- _CfgStComplete_.
+. ``K(i)``.``MDH``._ConfigStatus_ <- _CfgStComplete_.
 --
 
 // [WARNING]
@@ -203,7 +203,7 @@ Check `ml` for consistency and integrity: Failure shall result in an Error State
 //
 // We call such an exported context an _Exported Partial Context_ (EPC).
 // Importing such an EPC into a CR follows the a similar algorithm as for provisioning above, however the
-// value of the _ConfigStatus_ field in the exported Metadata Header is maintained and not cleared at the end.
+// value of the _ConfigStatus_ field in the exported MDH is maintained and not cleared at the end.
 // ====
 
 // ////////////////////////////////////////////////////////////////////
@@ -230,11 +230,11 @@ This approach ensures that:
 .. The implementation is free to choose any internal representation of a partially configured CR (including the order in which data is read); and
 .. Any implementation may define its own `acestart` values for resumption, depending on the granularity of interruption points and the semantics of the work between them.
 
-. Also, if the provisioning is a single instruction, the implementation must first re-read the Metadata Header,
+. Also, if the provisioning is a single instruction, the implementation must first re-read the MDH,
 to determine the length of the PI and verify its integrity before proceeding. In this case the data is
 read sequentially and `acestart` is set to the offset of the first non-imported bit.
 
-. If provisioning is performed by split operations, the first 64 bits of the Metadata Header must be stored first into the CR.
+. If provisioning is performed by split operations, the first 64 bits of the MDH must be stored first into the CR.
 
 . If loading the data in multiple blocks and keeping track of the loaded data is left to the software,
 then the implementation will not update `acestart`.
@@ -262,14 +262,14 @@ A context switch handler can force a restart by clearing partially configured or
 
 // [NOTE]
 // ====
-// Architecting a management operation as a single instruction would require the implementation to re-read the Metadata Header—even at resumption—to determine the length of the data to be read or written. This adds significant complexity.
-// With split operations, it is up to the software to handle the first 64 bits of the Metadata Header.
+// Architecting a management operation as a single instruction would require the implementation to re-read the MDH—even at resumption—to determine the length of the data to be read or written. This adds significant complexity.
+// With split operations, it is up to the software to handle the first 64 bits of the MDH.
 // ====
 
 During provisioning or import, the _ConfigStatus_ metadata field is set to _CfgStProvisioning_ or _CfgStImporting_, respectively.
 This field may only be reset to _CfgStComplete_ upon successful completion of the operation (see <<ACE-provisioning-export-import>>).
 
-Exporting requires the software to first save bits [63:0] of the Metadata Header to memory.
+Exporting requires the software to first save bits [63:0] of the MDH to memory.
 At this point, the operation distinguishes between two cases:
 
 . If _ConfigStatus_ is _CfgStComplete_, the export operation must first prepare the CR to be exported as authenticated ciphertext, and set _ConfigStatus_ to _CfgStExporting_. Upon successful completion, the CR is restored to its usual internal representation and _ConfigStatus_ is set to _CfgStComplete_.
@@ -334,7 +334,7 @@ NOTE: Due to the computational cost of the derivation functions,
 implementations may cache recently used derived keys.
 
 The SIV (“Synthetic IV”) serves as both the initialization vector and the authentication tag in GCM-SIV.
-It is computed by encrypting the `POLYVAL` hash of the concatenation of the Locality Secrets, the Metadata Header, and the Content of the CR.
+It is computed by encrypting the `POLYVAL` hash of the concatenation of the Locality Secrets, the MDH, and the Content of the CR.
 In the `POLYVAL` pseudocode below, the digested data is an array containing an integral number of 128-bit blocks.
 
 [[ACE-SCC-POLYVAL]]
@@ -424,9 +424,9 @@ If the _ConfigStatus_ field is set to _CfgStComplete_, then ``K(i)`` is fully pr
 [example]
 --
 . First, the algorithm-dependent data is processed:
-.. ``AD[0]`` <- ``K(i)``.``MH``, ``len_AD`` <- 1
+.. ``AD[0]`` <- ``K(i)``.``MDH``, ``len_AD`` <- 1
 .. foreach(_j_ from 0 to 10) :
-... If `MH`.Locality includes Locality #j, then ``AD[len_AD]`` <-  ``LST[``_j_``]``, ``len_AD`` <- ``len_AD`` + 1
+... If `MDH`.Locality includes Locality #j, then ``AD[len_AD]`` <-  ``LST[``_j_``]``, ``len_AD`` <- ``len_AD`` + 1
 .. If _Nonce_ (Locality #11) is included, then `N` <- `LST[11]`, else `N` <- `zeros(96)`
 .. `len_PC` <- lengths of Sections 3.a and 3.b combined.
 .. `SIV`, `C[]` <- ``AES_GCM_SIV_Encrypt(AD, N, K``__i__.``Content1[], CSK, len_AD, len_PC)``
@@ -434,7 +434,7 @@ If the _ConfigStatus_ field is set to _CfgStComplete_, then ``K(i)`` is fully pr
 .. `len_AD` <- 2, ``AD[0]`` <- ``K(i)``.``IMPQUAL``, ``AD[0]`` <- `SIV`.
 .. `len_PC` <- length of Section 6 (subtract the size of Section 3.b from VarDataLen)
 .. `SIV2`, `C2[]` <- ``AES_GCM_SIV_Encrypt(AD, N, K``__i__.``Content2[], CSK, len_AD, len_PC)``
-. Finally, output `MH`, `SIV`, `Content1[]`, and, if VarDataLen {ne} 0, `IMPQUAL`, `SIV2`, and `Content2[]`.
+. Finally, output `MDH`, `SIV`, `Content1[]`, and, if VarDataLen {ne} 0, `IMPQUAL`, `SIV2`, and `Content2[]`.
 --
 
 ==== Export of a Partially Configured CR
@@ -452,7 +452,7 @@ Exporting a Partially Configured CR ``K(i)`` needs to distinguish between provis
 .Exporting a Partially Provisioned CR ``K(i)``
 [example]
 --
-. The _ConfigStatus_ field in the exported Metadata Header is not changed.
+. The _ConfigStatus_ field in the exported MDH is not changed.
 . The length of the exported Content is the same as the length of the PI.
 . Any data that has not been transferred to the CR yet is exported as zeros–the scenario of an interrupted and context switched import operation is rare, and therefore there is no point to optimize it by exporting only the data actually provisioned so far.
 . No encryption or authentication occurs, the information in the CR is exported verbatim, in the same order as they appear in the PI. This implies that the provisioned data is exported in the clear. However, this does not increase the attack surface since more privileged modes have access to their children processes's address spaces.
@@ -461,13 +461,13 @@ Exporting a Partially Configured CR ``K(i)`` needs to distinguish between provis
 .Exporting a Partially Imported CR ``K(i)``
 [example]
 --
-. The _ConfigStatus_ field in the exported Metadata Header is not changed.
+. The _ConfigStatus_ field in the exported MDH is not changed.
 . (The handler code notices that _ConfigStatus_ = _CfgStImporting_.)
 . The length of the exported Content is the same as the length of the original SCC that was being imported (including the adjustments made by the import operation).
 . Any data that has not been transferred to the CR yet is exported as zeros–exactly as in the case of a partially provisioned CR, and for the same reasons.
 . No encryption or authentication occurs, the information in the CR is exported verbatim, in the same order as they appear in the SCC, namely:
- `MH`, `SIV`, `Content1[]`, and, if they are present `IMPQUAL`, `SIV2`, and `Content2[]`.
- `MH`, `SIV`, `IMPQUAL`, `SIV2` are left unencrypted, `Content1[]` and `Content2[]` are exported in the original encrypted form.
+ `MDH`, `SIV`, `Content1[]`, and, if they are present `IMPQUAL`, `SIV2`, and `Content2[]`.
+ `MDH`, `SIV`, `IMPQUAL`, `SIV2` are left unencrypted, `Content1[]` and `Content2[]` are exported in the original encrypted form.
 --
 
 In both cases, We call the exported context an _Exported Partial Context_ (EPC).
@@ -491,14 +491,14 @@ The content and placement of the material in this section is provisional.
 [example]
 --
  . Clear ``K(i)``.
- . Load `M`, the Metadata Header, from the SCC, into ``K(i)``.``MH``.
+ . Load `M`, the MDH, from the SCC, into ``K(i)``.``MDH``.
  . Check correctness of `M`, and whether the Algorithm is supported.
  . Determine the length of the entire SCC.
  . If the length exceeds the implementation's maximum for the given Algorithm, the SCC contains an Implementation VDS that the importing implementation does not support. The SCC length is therefore adjusted by excluding the Implementation VDS.
  . Load the rest of the SCC, up to the determined length.
- . ``AD[0]`` <- ``K(i)``.``MH``, ``len_AD`` <- 1
+ . ``AD[0]`` <- ``K(i)``.``MDH``, ``len_AD`` <- 1
  . foreach(_j_ from 0 to 10) :
- .. If `MH`.Locality includes Locality #j, then ``AD[len_AD]`` <-  ``LST[``__j__``]``, ``len_AD`` <- ``len_AD`` + 1
+ .. If `MDH`.Locality includes Locality #j, then ``AD[len_AD]`` <-  ``LST[``__j__``]``, ``len_AD`` <- ``len_AD`` + 1
  . If _Nonce_ (Locality #11) is included, then `N` <- `LST[11]`, else `N` <- `zeros(96)`
  . `len_PC` <- lengths of Sections 3.a and 3.b combined.
  . `SIV`, `C[]` <- ``AES_GCM_SIV_Decrypt(AD, N, K``__i__.``Content1[], CSK, len_AD, len_PC)``
@@ -506,7 +506,7 @@ The content and placement of the material in this section is provisional.
  . `len_AD` <- 2, ``AD[0]`` <- ``K(i)``.``IMPQUAL``, ``AD[1]`` <- `SIV`.
  . `len_PC` <- length of Section 6 (subtract the size of Section 3.b from VarDataLen)
  . `SIV2`, `C2[]` <- ``AES_GCM_SIV_Encrypt(AD, N, K``__i__.``Content2[], CSK,§ len_AD, len_PC)``
- . Finally, output `MH`, `SIV`, `Content1[]`, and, if VarDataLen {ne} 0, `IMPQUAL`, `SIV2`, and `Content2[]`.
+ . Finally, output `MDH`, `SIV`, `Content1[]`, and, if VarDataLen {ne} 0, `IMPQUAL`, `SIV2`, and `Content2[]`.
 --
 
 ==== Re-Import of a Partially Configured, then Exported CR
@@ -514,8 +514,8 @@ The content and placement of the material in this section is provisional.
 .Reimporting a Partially Provisioned or Imported CR ``K(i)``
 [example]
 --
- . Read the Metadata Header.
- . The _ConfigStatus_ field in the exported Metadata Header is left unchanged.
+ . Read the MDH.
+ . The _ConfigStatus_ field in the exported MDH is left unchanged.
  . Determine the length of the payload (length of PI or SCC).
  . No decryption or authentication occurs, the information is imported verbatim in the CR
 --
@@ -539,40 +539,40 @@ We keep `ace.import.S`.
 
 *Provisioning*
 ----
-  ld         t0, 0(t6)                 # load metadata header bits [63:0] from memory
+  ld         t0, 0(t6)                # load MDH bits [63:0] from memory
   li         t3, #23
 restart:
-  ace.setst  K0, t0, #provision_open   # prepare CR for provisioning, load MH[63:0] in it
-  ace.getst  t2, K0                    # get _State_ field from MH[63:0]
-  bltu       t3, t2, handle_errors     # errors (larger than 23, i.e. ≥ 24)
-  beqz       t2, handle_errors         # handle error (is _Off_ needed?)
-  ace.load   K0, 8(t6)                 # load rest of PI starting with MH[127:64]
-  ace.getst  t2, K0                    # get _State_ field from MH[63:0]
-  li         t3, #ace_state_off        # compare to off state
-  beq        t2, t3, restart           # CR cleared means force restart
-  ace.setst  K0, #provision_close      # possibly reconstructs data
-  ace.getst  t2, K0                    # get _State_ field from MH[63:0]
-  bltu       t3, t2, handle_errors     # handle other errors (> 23, i.e. ≥ 24)
+  ace.setst  K0, t0, #provision_open  # prepare CR for provisioning, load MDH[63:0] in it
+  ace.getst  t2, K0                   # get _State_ field from MDH[63:0]
+  bltu       t3, t2, handle_errors    # errors (larger than 23, i.e. ≥ 24)
+  beqz       t2, handle_errors        # handle error (is _Off_ needed?)
+  ace.load   K0, 8(t6)                # load rest of PI starting with MDH[127:64]
+  ace.getst  t2, K0                   # get _State_ field from MDH[63:0]
+  li         t3, #ace_state_off       # compare to off state
+  beq        t2, t3, restart          # CR cleared means force restart
+  ace.setst  K0, #provision_close     # possibly reconstructs data
+  ace.getst  t2, K0                   # get _State_ field from MDH[63:0]
+  bltu       t3, t2, handle_errors    # handle other errors (> 23, i.e. ≥ 24)
 success:
 ----
 
 
 *Import*
 ----
-  ld         t0, 0(t6)                 # load metadata header bits [63:0] from memory
+  ld         t0, 0(t6)                # load MDH bits [63:0] from memory
   li         t3, #23
 restart:
-  ace.setst  K0, t0, #import_open      # prepare CR for import, load MH[63:0] in it
-  ace.getst  t2, K0                    # get _State_ field from MH[63:0]
-  bltu       t3, t2, handle_errors     # errors (larger than 23, i.e. ≥ 24)
-  ace.load   K0, 8(t6)                 # load all the rest starting with MH[127:64]
-  ace.getst  t2, K0                    # get _State_ field from MH[63:0]
-  li         t3, #ace_state_off        # compare to off state
-  beq        t2, t3, restart           # CR cleared means force restart
-  ace.setst  K0, #import_close         # decrypts/authenticates CR, possibly completes it
-  ace.getst  t2, K0                    # get _State_ field from MH[63:0]
-  bz         t2, handle_errors         # handle _Off_ state (needed ? double check)
-  bltu       t3, t2, handle_errors     # handle other errors (> 23, i.e. ≥ 24)
+  ace.setst  K0, t0, #import_open     # prepare CR for import, load MDH[63:0] in it
+  ace.getst  t2, K0                   # get _State_ field from CR (after checks!)
+  bltu       t3, t2, handle_errors    # errors (larger than 23, i.e., ≥ 24)
+  ace.load   K0, 8(t6)                # load all the rest starting with MDH[127:64]
+  ace.getst  t2, K0                   # get _State_ field from MDH[63:0]
+  li         t3, #ace_state_off       # compare to off state
+  beq        t2, t3, restart          # CR cleared means force restart
+  ace.setst  K0, #import_close        # decrypt/authenticate CR, possibly complete it
+  ace.getst  t2, K0                   # get _State_ field from MDH[63:0]
+  bz         t2, handle_errors        # handle _Off_ state (needed ? double check)
+  bltu       t3, t2, handle_errors    # handle other errors (> 23, i.e., ≥ 24)
 success:
 ----
 
@@ -594,16 +594,16 @@ of a partially decrypted payload.  This is required for both correctness and sec
   ace.setst  K0, #export_open      # If not already done, compute SIVs + encrypt state
   sd  0(t6), t0
 
-  # The next instruction stores all data starting with the 8th byte of the MH.
+  # The next instruction stores all data starting with the 8th byte of the MDH.
   # In case of interrupt/exception, the handler will decide whether
   # to keep `acestart` or clear it to force restart.
-  # the instruction gets the length of the blob to export from the MH
+  # the instruction gets the length of the blob to export from the MDH
   # no special handling from the SW is necessary.
 
   ace.store  8(t6), K0
 
 success:
-  # Reset the first 64 bits of MH to saved value.  If the saved state is _CfgStcomplete_,
+  # Reset the first 64 bits of MDH to saved value.  If the saved state is _CfgStcomplete_,
   # the operation also re-decrypts the state and verifies the SIV/SIV2 tag, then releases
   # 128 or 384 bits for SIV/IMPQUAL/SIV2 storage.
 
@@ -644,7 +644,7 @@ contrast, other algorithm suites are tied to specific primitives, for instance,
 Ascon.
 
 <<ACE-exec-encodings>> defines the encoding of symmetric
-algorithms in the Metadata Header field _Algorithm_.
+algorithms in the MDH field _Algorithm_.
 The encoding uses two sub-fields: _Type_ in bits [5:0] and _Mode_ in bits [10:6].
 Bit 11 is zero.
 Other groups of algorithms may subdivide the _Algorithm_ field differently.
@@ -887,14 +887,14 @@ Data Structures:::
 [%autowidth,cols="^,<,<",options="header"]
 |===
 | Pos. | Size (Bits)   | Field
-|   i  | 128            | Metadata Header
+|   i  | 128            | MDH
 |  ii  | `k` or 64      | Key or System Key Identifier
 |===
 --
 +
 
  * *Internal State*:
- ** Metadata Header: 82 bits.
+ ** MDH: 82 bits.
  ** `key`: `k` bits.
 
 * *Serialized Context*:
@@ -903,7 +903,7 @@ Data Structures:::
 [%autowidth,cols="^,<,<",options="header"]
 |===
 |  Pos. | Size (Bits)   | Field
-|   i   | 128            | Metadata Header
+|   i   | 128            | MDH
 |  ii   | `k` or 64      | Key or System Key Identifier
 |===
 --
@@ -986,14 +986,14 @@ Data Structures:::
 [%autowidth,cols="^,<,<",options="header"]
 |===
 | Pos. | Size (Bits)   | Field
-|   i  | 128           | Metadata Header
+|   i  | 128           | MDH
 |  ii  | `k` or 64     | `key` or System Key Identifier
 |===
 --
 +
 
 * *Internal State*:
- ** Metadata Header: 82 bits.
+ ** MDH: 82 bits.
  ** `key`: `k` bits.
  ** `IV`: `n` bits.
  ** `ctr`: `j` bits.
@@ -1004,7 +1004,7 @@ Data Structures:::
 [%autowidth,cols="^,<,<",options="header"]
 |===
 |  Pos. | Size (Bits)   | Field
-|    i  | 128            | Metadata Header
+|    i  | 128            | MDH
 |   ii  | `k` or 64       | `key` or System Key Identifier
 |  iii  | `n`             | `IV`
 |   iv  | `j`             | `ctr`
@@ -1098,7 +1098,7 @@ Data Structures:::
 [%autowidth,cols="^,<,<",options="header"]
 |===
 |  Pos. | Size (Bits)     | Field
-|   i   | 128            | Metadata Header
+|   i   | 128            | MDH
 |  ii   | `k` or 64       | `key1` or System Key Identifier
 | iii   | `k` or 0        | `key2` or empty if `key1` given
 |===
@@ -1106,7 +1106,7 @@ Data Structures:::
 +
 
 * *Internal State*:
- ** Metadata Header: 82 bits.
+ ** MDH: 82 bits.
  ** `key1`: `k` bits.
  ** `key2`: `k` bits -- omitted if only one key is used or if both keys come from an entry in the SKS.
  ** `mask`: `b` bits.
@@ -1117,7 +1117,7 @@ Data Structures:::
 [%autowidth,cols="^,<,<",options="header"]
 |===
 | Pos. | Size (Bits)   | Field
-|   i  | 128            | Metadata Header
+|   i  | 128            | MDH
 |  ii  | `k` or 64     | `key1` or System Key Identifier
 | iii  | `k` or 0      | `key2` or empty if `key1` given
 |  iv  | `b`           | `mask`
@@ -1205,14 +1205,14 @@ Data Structures:::
 [%autowidth,cols="^,<,<",options="header"]
 |===
 | Pos. | Size (Bits)   | Field
-|   i  | 128            | Metadata Header
+|   i  | 128            | MDH
 |  ii  | `k` or 64       | `key` or System Key Identifier
 |===
 --
 +
 
 * *Internal State*:
- ** Metadata Header: 82 bits.
+ ** MDH: 82 bits.
  ** `key`: `k` bits.
  ** `tweak`: `t` bits.
 
@@ -1222,7 +1222,7 @@ Data Structures:::
 [%autowidth,cols="^,<,<",options="header"]
 |===
 | Pos. | Size (Bits)   | Field
-|   i   | 128            | Metadata Header
+|   i   | 128            | MDH
 |  ii  | `k` or 64     | `key` or System Key Identifier
 | iii  | `t`           | `tweak`
 |===
@@ -1277,14 +1277,14 @@ Data Structures:::
 [%autowidth,cols="^,<,<",options="header"]
 |===
 | Pos. | Size (Bits)   | Field
-|   i   | 128            | Metadata Header
+|   i   | 128            | MDH
 |  ii  | `k` or 64     | `key` or System Key Identifier
 |===
 --
 +
 
 * *Internal State*:
- ** Metadata Header: 82 bits.
+ ** MDH: 82 bits.
  ** `key`: `k` bits.
  ** `ctr`:  ``c`` bits.
  ** `IV`:  `b`-`c` bits.
@@ -1296,7 +1296,7 @@ Data Structures:::
 [%autowidth,cols="^,<,<",options="header"]
 |===
 |  Pos. | Size (Bits)   | Field
-|   i   | 128            | Metadata Header
+|   i   | 128            | MDH
 |  ii   | `k` or 64     | `key` or System Key Identifier
 | iii   | ``c``         | `ctr`
 |  iv   | ``b``-``c``   | `IV`
@@ -1484,7 +1484,7 @@ Provisioning Input:
 [%autowidth,cols="^,<,<",options="header"]
 |===
 |  Pos. | Size (Bits)   | Field
-|   i   | 128           | Metadata Header
+|   i   | 128           | MDH
 |  ii   | `k` or 64     | `key` or System Key Identifier
 |  iii  | ``b``-``c``   | `IV`
 |  iv   | (Padding)     | Zero padding
@@ -1569,14 +1569,14 @@ Data Structures:::
 [%autowidth,cols="^,<,<",options="header"]
 |===
 | Pos. | Size (Bits)   | Field
-|   i  | 128           | Metadata Header
+|   i  | 128           | MDH
 |  ii  | `k` or 64     | `key` or System Key Identifier
 |===
 --
 +
 
 * *Internal State*:
- ** Metadata Header: 82 bits.
+ ** MDH: 82 bits.
  ** `key`, `enc_key`: `k` bits.
  ** `auth_key`: `b` bits.
  ** `nonce`: `3b/4` bits.
@@ -1590,7 +1590,7 @@ Data Structures:::
 [%autowidth,cols="^,<,<",options="header"]
 |===
 |  Pos. | Size (Bits)     | Field
-|    i  | 128             | Metadata Header
+|    i  | 128             | MDH
 |   ii  | `k` or 64       | `key` or System Key Identifier
 |  iii  | 3``b``/4        | `nonce`
 |   iv  | `b`/4           | `ctr`
@@ -1793,14 +1793,14 @@ Data Structures:::
 [%autowidth,cols="^,<,<",options="header"]
 |===
 | Pos. | Size (Bits)   | Field
-|   i  | 128            | Metadata Header
+|   i  | 128            | MDH
 |  ii  | `k` or 64       | `key` or System Key Identifier
 |===
 --
 +
 
 * *Internal State*:
- ** Metadata Header: 82 bits.
+ ** MDH: 82 bits.
  ** `key`: `k` bits.
  ** `N`: `u+1` bits (at most `u` bits are used).
  ** `L`, `offset`, `hash_A`, `hash_P` : `b` bits.
@@ -1812,7 +1812,7 @@ Data Structures:::
 [%autowidth,cols="^,<,<",options="header"]
 |===
 |  Pos. | Size (Bits)            | Field
-|    i  | 128                    | Metadata Header
+|    i  | 128                    | MDH
 |   ii  | `k` or 64              | `key` or System Key Identifier
 |  iii  |  `b`                   | `N`
 |   iv  |  `b`                   | `L` (only `u+1` bits used)
@@ -2084,14 +2084,14 @@ Data Structures:::
 [%autowidth,cols="^,<,<",options="header"]
 |===
 | Pos. | Size (Bits)   | Field
-|   i  | 128           | Metadata Header
+|   i  | 128           | MDH
 |  ii  | `k` or 64     | `key` or System Key Identifier
 |===
 --
 +
 
 * *Internal State*:
- ** Metadata Header: 82 bits.
+ ** MDH: 82 bits.
  ** `key`: `k` bits.
  ** `hash`: `b` bits.
  ** `last_block_len`: 64 bits.
@@ -2102,7 +2102,7 @@ Data Structures:::
 [%autowidth,cols="^,<,<",options="header"]
 |===
 |  Pos. | Size (Bits)   | Field
-|   i   | 128            | Metadata Header
+|   i   | 128            | MDH
 |    i  | `k` or 64     | `key` or System Key Identifier
 |   ii  | `b`           | `hash`
 |  iii  | 64            | `last_block_len`
@@ -2220,14 +2220,14 @@ Data Structures:::
 [%autowidth,cols="^,<,<",options="header"]
 |===
 | Pos. | Size (Bits)             | Field
-|   i  | 128                     | Metadata Header
+|   i  | 128                     | MDH
 |  ii  | If keyed: `k`, else 64  | `key` or System Key Identifier
 |===
 --
 +
 
 * *Internal State*:
- ** Metadata Header: 82 bits.
+ ** MDH: 82 bits.
  ** `key`: `k` bits. Present only if keyed, i.e., a MAC.
  ** `state`: `n` bits.
  ** `last_block_len`: int. Present only if this Hash/MAC provides special
@@ -2248,7 +2248,7 @@ Data Structures:::
 [cols="^6%,<21%,<18%,<55%",options="header"]
 |===
 |  Pos. | Size (Bits)             | Field                        | Notes
-|   i   | 128                     | Metadata Header              | --
+|   i   | 128                     | MDH              | --
 .2+| ii | If keyed: `k` or 64     | `key` or SKID                | --
 <|        If unkeyed: 0           | none                         | --
 |   iii | `n`                     | `state`                      | --
@@ -2415,13 +2415,13 @@ Data Structures:::
 [%autowidth,cols="^,<,<",options="header"]
 |===
 | Pos. | Size (Bits)   | Field
-|   i  | 128           | Metadata Header
+|   i  | 128           | MDH
 |===
 --
 +
 
 * *Internal State*:
- ** Metadata Header: 82 bits.
+ ** MDH: 82 bits.
  ** `state`: `n` bits.
  ** `last_block_len`: int.
  ** `input_base`: int.
@@ -2433,7 +2433,7 @@ Data Structures:::
 [%autowidth,cols="^,<,<",options="header"]
 |===
 | Pos. | Size (Bits)   | Field
-|   i   | 128            | Metadata Header
+|   i   | 128            | MDH
 |  ii  | 1600            | `state`
 | iii  | 16              | `last_block_len`
 |  iv  | 16              | `block_base`
@@ -2514,14 +2514,14 @@ Data Structures:::
 [%autowidth,cols="^,<,<",options="header"]
 |===
 | Pos. | Size (Bits)   | Field
-|   i  | 128           | Metadata Header
+|   i  | 128           | MDH
 |  ii  | 128 or 64     | `key` or System Key Identifier
 |===
 --
 +
 
 * *Internal State*:
- ** Metadata Header: 82 bits.
+ ** MDH: 82 bits.
  ** `key`: 128 bits, or 64 bits if it is a System Key Identifier.
  ** `state[0 .. 4]`: five 64-bit words, i.e., 320 bits.
  ** `tag_len`: 8 bits as int.
@@ -2534,7 +2534,7 @@ Data Structures:::
 [%autowidth,cols="^,<,<",options="header"]
 |===
 | Pos. | Size (Bits)     | Field
-|    i | 128             | Metadata Header
+|    i | 128             | MDH
 |   ii | 128 or 64       | `key` or System Key Identifier
 |  iii | 64              | `state`[0]
 |   iv | 64              | `state`[1]
@@ -2729,7 +2729,7 @@ In this case the State _Set_Aux_Value_ is not present and is thus skipped, and t
 [%autowidth,cols="^,<,<",options="header"]
 |===
 | Pos. | Size (Bits)   | Field
-|   i  | 128           | Metadata Header
+|   i  | 128           | MDH
 |  ii  | 128 or 64     | `key` or System Key Identifier
 | iii  | 128           | `nonce`
 |===
@@ -2759,7 +2759,7 @@ Masking_. This variant is described as follows:
 [%autowidth,cols="^,<,<",options="header"]
 |===
 | Pos. | Size (Bits)   | Field
-|   i  | 128           | Metadata Header
+|   i  | 128           | MDH
 |  ii  | 128 or 64     | `K1` or System Key Identifier
 | iii  | 128 or 0      | `K2` or System Key Identifier in `K1`
 |===
@@ -2767,7 +2767,7 @@ Masking_. This variant is described as follows:
 +
 
 * *Internal State*:
- ** Metadata Header: 82 bits.
+ ** MDH: 82 bits.
  . `K1`: 128 bits, or 64 bits if it is a System Key Identifier.
  . `K2`: 128 bits, omitted if a System Key is used.
  ** `state[0 .. 4]`: five 64-bit words, i.e., 320 bits.
@@ -2779,7 +2779,7 @@ Masking_. This variant is described as follows:
 [%autowidth,cols="^,<,<",options="header"]
 |===
 |  Pos. | Size (Bits)   | Field
-|    i  | 128            | Metadata Header
+|    i  | 128            | MDH
 |   ii  | 128 or 64     | `K1` or System Key Identifier
 |  iii  | 128 or 0      | `K2` or System Key Identifier in `K1`
 |   iv  | 64            | `state`[0]
@@ -2821,13 +2821,13 @@ Data Structures:::
 [%autowidth,cols="^,<,<",options="header"]
 |===
 | Pos. | Size (Bits)   | Field
-|   i  | 128           | Metadata Header
+|   i  | 128           | MDH
 |===
 --
 +
 
 * *Internal State*:
- ** Metadata Header: 82 bits.
+ ** MDH: 82 bits.
  ** `state[0 .. 4]`: five 64-bit words, i.e., 320 bits.
  ** `countdown` : integer going from 3 down to 0.
 
@@ -2837,7 +2837,7 @@ Data Structures:::
 [%autowidth,cols="^,<,<",options="header"]
 |===
 |  Pos. | Size (Bits)   | Field
-|    i  | 128            | Metadata Header
+|    i  | 128            | MDH
 |   ii  | 64              | `state`[0]
 |  iii  | 64              | `state`[1]
 |   iv  | 64              | `state`[2]
@@ -3010,7 +3010,7 @@ Since the all-ones strings do not represent any valid field value, these are use
 //
 
 Data Structures:::
-* *Metadata Header*:
+* *MDH*:
 +
 --
 The elliptic curve algorithm use the _StateExtension_ field as follows:
@@ -3047,13 +3047,13 @@ _AlgorithmPolicy_ enables signature generation (_AlgorithmPolicy_[0]) and verifi
 [%autowidth,cols="^,<,<",options="header"]
 |===
 | Pos. | Size (Bits)   | Field
-|   i  | 128           | Metadata Header
+|   i  | 128           | MDH
 |===
 --
 +
 
 * *Internal State*:
- ** Metadata Header: 86-106 bits.
+ ** MDH: 86-106 bits.
  ** `OutputType`: Bool.
  ** `Progress`: integer (19 bits).
  ** `block_base`: integer.
@@ -3074,7 +3074,7 @@ _AlgorithmPolicy_ enables signature generation (_AlgorithmPolicy_[0]) and verifi
 [cols="^7%,<33%,<60%",width="100%",options="header"]
 |===
 |   Pos.  | Size (Bits)        | Field
-|     i   | 128                | Metadata Header
+|     i   | 128                | MDH
 |    ii   | 32                 | Padding
 |   iii   | `ub`               | `Generator`, X coordinate, followed by Y coordinate if `u=2`.
 |    iv   | `b`                | `Scalar`: `b`-bit string. Can be the Private Key.
@@ -3093,7 +3093,7 @@ not empty.
 |===
 
 `SCC_content_size()` returns the length of the content from Position i to Position viii, and thus the elliptic curve algorithms make use
-of the _StateExtension_ Metadata Header field to determine the length of the SCC.
+of the _StateExtension_ MDH field to determine the length of the SCC.
 
 The `HasRndNum` flag is set and the `RndNum` field is used only during signature generation.
 `RndNum` is exported only if the signature operation is interrupted.

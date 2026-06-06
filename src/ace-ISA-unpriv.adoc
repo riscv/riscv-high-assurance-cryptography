@@ -15,9 +15,9 @@ While this leads to some repetitions, it also brings better clarity to the prese
 
 Cryptographic Context:::
 (((Cryptographic Context)))
-The *Cryptographic Context* (CC) is the foundation of ACE. A CC is an indivisible structure consisting of a *Metadata Header* and *Content*; all cryptographic operations performed by ACE execute within the constraints defined by a CC.
-The Metadata Header has a fixed format and specifies the cryptographic algorithm and various optional policies associated with the CC.
-(((Cryptographic Context, Metadata Header)))
+The *Cryptographic Context* (CC) is the foundation of ACE. A CC is an indivisible structure consisting of a *Metadata Header* (MDH) and *Content*; all cryptographic operations performed by ACE execute within the constraints defined by a CC.
+The MDH has a fixed format and specifies the cryptographic algorithm and various optional policies associated with the CC.
+(((Cryptographic Context, MDH)))
 The Content has an algorithm-specific format and holds sensitive material such as keys and algorithm state.
 (((Cryptographic Context, Content)))
 The Metadata requires integrity; the Content requires both integrity and confidentiality.
@@ -155,22 +155,29 @@ Indirect CR addressing has an important microarchitectural implication: Supporti
 However, CRs are redefined far less frequently than GPRs or FP registers (excluding implicit internal state changes), so omitting CR renaming is not expected to significantly affect performance.
 ====
 
+A CR can be viewed as a register of variable and discoverable length (more details in <<ACE-CR-representation>>).
+While an ACE implementation will work with an internal representation of a CR's content, the ACE unit expects serialized data in a specific format for provisioning–the PI–, as well as import and export–the SCC—, and under certain conditions a CR can also be accessed as if it were a buffer containing a PI or SCC.
+Therefore, ACE provides the following instructions:
+
+* Instructions to load serialized data into CRs from memory, as well as to export a CR's content, suitably serialized, back to memory; and
+* Instructions to make this information available to the ACE unit and to convert the internal representation of CRs to the serialized format used for export, i.e., the SCC.
+
 (((Context Register File)))
 CRs reside in a dedicated, per-hart _CR file_ (CRF) accessible only to the ACE implementation.
 This memory shall guarantee confidentiality and integrity of its contents, including the inability for an attacker to roll-back the latter to a previous state.
 We do not require that accesses to this memory are hardened against physical side-channel attacks at the hardware level.
 However, the implementation of side-channel protected algorithms in the ACE unit shall provide resistance to such attacks as well.
 
-The amount of CRF capacity consumed by each CR depends on the algorithm encoded in the metadata, and it may differ from one CR to another.
+The amount of CRF capacity consumed by each CR depends on the algorithm encoded in the MDH, and it may differ from one CR to another.
 
 Insufficient residual CRF capacity may prevent execution of a configuration instruction (`ace.prov`, `ace.import`, `ace.clone`):
 Capacity is freed by unconfiguring other CRs.
 
 The CRF capacity is implementation-defined. Implementations shall provide sufficient
 capacity for all supported operations. At a minimum, the CRF must hold the
-largest possible single CR, or the largest CR pair used in cloning operations.
-An optional, implementation-specific mechanism for estimating required capacity
-is described in <<ACE-instruction-size>>.
+largest possible single CR, or the largest CR pair used in cloning operations, and a small amount of additional authentication and identification information.
+The storage space for the latter is only used when importing and exporting SCCs, and thus it is not replicated per CR, but it is shared across all CRs, per hart.
+// An optional, implementation-specific mechanism for estimating required capacity is described in <<ACE-instruction-size>>.
 
 Any corruption of the CRF associated with a hart shall cause an unrecoverable error condition.
 The entire architectural state of the ACE unit associated with the hart is reset, and exception `ace_guru_meditation` is raised (cf. <<ACE-exceptions>>).
@@ -246,11 +253,11 @@ The ACE unit itself only needs the product `VL*SEW` (or `aceiobuftop`) for its f
 // ////////////////////////////////////////////////////////////////////
 
 [[ACE-Metadata]]
-==== Metadata Header Format
+==== MDH Format
 
 The ACE architecture recognizes two types of metadata that may be contained in a CC or associated with it.
 
-. A 128-bit _Metadata Header_ that determines the algorithm, the type of key, and various usage policies associated with the key.
+. A 128-bit _MDH_ that determines the algorithm, the type of key, and various usage policies associated with the key.
  This information is always present in a CC.
  The fields are arranged so that the first 64 bits suffice to determine the length of a PI or SCC.
 
@@ -259,7 +266,7 @@ of `mvendorid`, `marchid`, and `mimpid` CSRs for the hart implementation (see <<
  The latter may be only present in an SCC and only if the SCC has been extended by the implementation with an implementation-specific content block.
  This block is used by an implementation to determine whether it can be use the aforementioned implementation-specific content block, even if generated by another implementation.
 
-In this section we only deal with the 128-bit Metadata Header.
+In this section we only deal with the 128-bit MDH.
 Its fields are summarized in <<ACE-metadata-header>>.
 // Of its 128 bits, 106 are currently defined and 22 are reserved for future use.
 // Most algorithms use only 82 bits, as _StateExtension_ and _AlgorithmUse_ are currently used only by the Elliptic Curve Algorithms (<<ACE-ECC>>).
@@ -289,14 +296,14 @@ All Reserved bits, as well as bits unused by a given algorithm, must be zero.
 | [127:122] |   6  | Reserved          | Reserved for future use.
 |===
 
-In the following subsections we describe the fields of the Metadata Header.
+In the following subsections we describe the fields of the MDH.
 
 // ////////////////////////////////////////////////////////////////////
 
 [[ACE-system-format-field]]
 ===== _SystemFormat_ Bit
 
-The use of a system-defined format is signalled by the _SystemFormat_ bit of the (low 64 bits of the) Metadata Header, which in this case may be just 64 bits.
+The use of a system-defined format is signalled by the _SystemFormat_ bit of the (low 64 bits of the) MDH, which in this case may be just 64 bits.
 The format of the other 63 bits is also entirely implementation-dependent.
 
 // ////////////////////////////////////////////////////////////////////
@@ -404,7 +411,7 @@ For algorithms with more than 23 valid states, additional state information resi
 
 The following rules are generic and apply to all algorithms:
 
-. The Metadata Headers's _State_ field must reflect the current state whenever the CC is in _Initial_, _Success_, _Failure_, or any Error State.
+. The MDHs's _State_ field must reflect the current state whenever the CC is in _Initial_, _Success_, _Failure_, or any Error State.
 This ensures that these states can be unambiguously determined from the _State_ field alone, without inspecting the Content.
 
 . In States _Success_ and _Failed_, only the following ACE instructions are permitted: `ace.prov`, `ace.import`, `ace.export`, `ace.clear`, `ace.size`, `ace.setst`, and `ace.getst`.
@@ -415,15 +422,15 @@ This ensures that these states can be unambiguously determined from the _State_ 
 
 . Upon transitioning to an Error State, the Content of a CR is invalidated and emptied.
 Internal resources associated with the Content may also be released. In that case, any additional variable-length data is released as well and the _ImpDataLen_ field is set to 0.
-The CR then retains only the Metadata Header.
+The CR then retains only the MDH.
 
-. Exporting a CR in an Error State exports only the Metadata Header and the authentication tag.
+. Exporting a CR in an Error State exports only the MDH and the authentication tag.
   Requesting the SCC's size (`ace.size` <<ACE-instruction-size>>) will return 32 (bytes).
   The resulting SCC can be reimported, allowing software to take appropriate actions even after a context switch.
 
 . If a CR is in any Error State, it can still be reconfigured, cloned, or cleared. `ace.setst` can only be used to change the Error State (for instance by an exception handler) or transition the CR to _Off_.
 
-. The Metadata Header of a CR in an Error State can be read (using `ace.getmd`: <<ACE-instruction-getmd>>).
+. The MDH of a CR in an Error State can be read (using `ace.getmd`: <<ACE-instruction-getmd>>).
 
 . Attempts to _use_ a CR in any Error State will not perform any operation, and in particular they leave the _State_ field unchanged.
 
@@ -561,7 +568,7 @@ The admissible values of this field are given in the table below.
 [[ACE-extra-content]]
 ===== _ImpDataLen_ Field
 
-The _ImpDataLen_ Metadata Header field records the length of the _Additional Data Section_ of the content, which is a variable-size additional part that depends on the implementation.
+The _ImpDataLen_ MDH field records the length of the _Additional Data Section_ of the content, which is a variable-size additional part that depends on the implementation.
 
 The format of the _Additional Data Section_ is described in <<ACE-data-formats>>.
 
@@ -591,7 +598,7 @@ entries 8–11 form the _SW Filter Group_.
 For each Locality, the table provides: index in the LST; domain (SoC-, device-, VM-wide, or per-process); configurability; bit-field encoding; and value.
 
 [[ACE-locality-indexes]]
-.Architected Localities. Bits refer to the _Locality_ field in the Metadata Header.
+.Architected Localities. Bits refer to the _Locality_ field in the MDH.
 [width="100%",cols="^5%,15%,50%,^9%,^9%,^6%,^6%",options="header"]
 |===
 |  Idx  | Locality                  | Description                                                                            | Domain | Config?|  Bits  | Value
@@ -639,7 +646,7 @@ If non-zero, _ExpirationDate_ specifies the CC expiration time as a number of mi
 The 26-bit field provides for a span of approximately 127 years (2^26^ minutes).
 
 Checking against the _ExpirationDate_ field is the first step performed by any usage operation.
-When a _usage_ instruction executes on a CR whose _ExpirationDate_ has passed, the hardware immediately sets the Metadata Header's _State_ field to `ace_state_expired` and performs all actions prescribed for Error States, including implementation-specific tasks such as releasing the CRF capacity held by the Content.
+When a _usage_ instruction executes on a CR whose _ExpirationDate_ has passed, the hardware immediately sets the MDH's _State_ field to `ace_state_expired` and performs all actions prescribed for Error States, including implementation-specific tasks such as releasing the CRF capacity held by the Content.
 If the ACE privileged architecture is implemented, an `ace_exc_invalid` exception is raised (see <<ACE-exceptions>>).
 
 Exporting, cloning, or configuring an expired CR is always permitted.
@@ -903,35 +910,6 @@ _Included in_::
 
 // ////////////////////////////////////////////////////////////////////
 
-// [[ACE-CSR-aceactivecr]]
-// ===== `aceactivecr`
-//
-// {empty}
-// (((CSR, `aceactivecr`)))
-// `aceactivecr` is an XLEN-bit URW CSR; only the low 5 bits are defined.
-// It binds `ace.input`, `ace.output`, `ace.exec`, and `ace.setst` to a specific CR.
-// The valid values are 0–31, which are used to bind to a CR, or 32, which disables any such binding.
-//
-// When `aceactivecr` is not 32, the CR operand in all single-CR instructions and the source CR in `ace.clone` must equal the selected value, and the
-// _Sequence_ metadata field of that CR must track the operation in an instruction alternative sequence.
-//
-// // At any given moment, only one _Sequence_ field in the Metadata Sections of all CRs may be non-zero, and `aceactivecr` must match the number of that CR.
-//
-// Any deviation from these behaviors raises an illegal instruction exception.
-//
-// _Included in_::
-// +
-// --
-// [%header,cols="4,2,2"]
-// |===
-// |Extension | Minimum version | Lifecycle state
-// | `Zlio`   | v0.0.0          | --
-// |===
-// --
-// +
-
-// ////////////////////////////////////////////////////////////////////
-
 [[ACE-instructions-detailed]]
 === Instructions
 
@@ -968,7 +946,7 @@ Since the architecture decouples instructions like `ace.exec` from the actual op
 
 Broadly speaking, and removing error handling, *Provisioning* is performed by the following three steps:
 
-. Use `ace.setst` (<<ACE-instruction-setst>>) to prepare a CR to be provisioned, store the low 64 bits of the Metadata Header in the CR, check the metadata.
+. Use `ace.setst` (<<ACE-instruction-setst>>) to prepare a CR to be provisioned, store the low 64 bits of the MDH in the CR, check the metadata.
 . Use `ace.load` (<<ACE-instruction-load>>) to load the rest of the provisioning information into the CR.
 . Use `ace.setst` to make the CR available to software.
 
@@ -980,10 +958,10 @@ Broadly speaking, and removing error handling, *Provisioning* is performed by th
 
 *Exporting* a CR as an SCC consists of the following steps:
 
-. Use `ace.getmd` (<<ACE-instruction-getmd>>) to get the low 64 bits of the Metadata Header of the CR to be exported to be able to determine its size and allocate resources.
-. Store the low 64 bits of the Metadata Header into memory.
+. Use `ace.getmd` (<<ACE-instruction-getmd>>) to get the low 64 bits of the MDH of the CR to be exported to be able to determine its size and allocate resources.
+. Store the low 64 bits of the MDH into memory.
 . Use `ace.setst` to prepare a CR to produce a SCC. This includes encrypting its contents and computing the authentication tag.
-. Use `ace.store` (<<ACE-instruction-store>>) to store the high 64 bits of the Metadata Header and the rest of the SCC to memory.
+. Use `ace.store` (<<ACE-instruction-store>>) to store the high 64 bits of the MDH and the rest of the SCC to memory.
 . Use `ace.setst` to restore the CR in a form available to software.
 
 // NOTE: The instruction encoding of `ace.load` includes a single bit to indicate a
@@ -1026,9 +1004,9 @@ _Mnemonics_::
 _Description_::
 +
 --
-`ace.load` imports a PI or a SCC, starting with the 8th byte of the Metadata Header, at memory address `%offset(Xs1)`, into the CR `Kd` or `K(Xd)`.
+`ace.load` imports a PI or a SCC, starting with the 8th byte of the MDH, at memory address `%offset(Xs1)`, into the CR `Kd` or `K(Xd)`.
 
-Ths instruction requires that the CR is ready to import information and that the first 8 bytes of the Metadata Header have already been loaded.
+Ths instruction requires that the CR is ready to import information and that the first 8 bytes of the MDH have already been loaded.
 Therefore, if the _ConfigStatus_ field is equal to _CfgStComplete_, an invalid instruction exception is raised.
 
 The semantics of `ace.load` in case the key is in a system-defined format
@@ -1082,8 +1060,8 @@ _Description_::
 +
 --
 Exports raw data from the CR `Ks2` or `K(Xs2)` to memory at address `%offset(Xs1)`.
-The operation starts with the 8th byte of the Metadata Header.
-The instruction itself determines the length of the output from the Metadata Header.
+The operation starts with the 8th byte of the MDH.
+The instruction itself determines the length of the output from the MDH.
 
 If the _ConfigStatus_ field is equal to _CfgStComplete_, then an invalid instruction exception is raised.
 --
@@ -1230,15 +1208,16 @@ The encodings of the three Forms are:
 _Description_::
 +
 --
-The instruction changes the _State_, _StateExtension_ and _ConfigStatus_ fields of the Metadata Header of `Kd` or `K(Xd)`.
+The instruction changes the _State_, _StateExtension_ and _ConfigStatus_ fields of the MDH of `Kd` or `K(Xd)`.
 
 It is primarily used for three purposes:
 
-* Advance from one stage of an algorithm to another (for instance, from initialization of a hash function to data absorption and then to digest finalization);
-* Set specific state information of an algorithm (such as configure elliptic curve points or private/public keys);
-* Initiate and complete provisioning or export/import operations
+[loweralpha]
+. Advance from one stage of an algorithm to another (for instance, from initialization of a hash function to data absorption and then to digest finalization);
+. Set specific state information of an algorithm (such as configure elliptic curve points or private/public keys);
+. Initiate and complete provisioning or export/import operations
 
-`#immed7` operand is a constant from a set of admissible values.
+`#immed7` is a constant from a set of admissible values.
 These values include both general values, which apply to all Algorithms, as well as values specific to the Algorithm encoded in a CR.
 
 Certain state values may require an auxiliary input, which may be passed in a GPR `Xs` (a GPR pair in RV32)
@@ -1268,91 +1247,86 @@ The special values of `#immed7` to prepare a CR for provisioning, importing, and
 [float="center",align="center",width="100%",cols="^7%,<20,<73%",options="header"]
 |===
 | Value | Mnemonic                  |  Description
-|  96   | `provision_open`          |  Prepare a CR for provisioning keys and metadata into it, set _ConfigStatus_ to _CfgStProvisioning_. Needs an auxiliary input in a GPR (or a GPR pair) with bits [63:0] of Metadata Header.
+|  96   | `provision_open`          |  Prepare a CR for provisioning keys and metadata into it, set _ConfigStatus_ to _CfgStProvisioning_. Needs an auxiliary input in a GPR (or a GPR pair) with bits [63:0] of MDH.
 |  97   | `provision_close`         |  Make the provisioned CR available to software  (“sealing”), set _ConfigStatus_ to _CfgStComplete_. Requires no auxiliary input.
-|  98   | `import_open`             |  Prepare a CR for importing a SCC into it, set _ConfigStatus_ to _CfgStimporting_. Needs an auxiliary input in a GPR (or a GPR pair) with bits [63:0] of Metadata Header.
+|  98   | `import_open`             |  Prepare a CR for importing a SCC into it, set _ConfigStatus_ to _CfgStimporting_. Needs an auxiliary input in a GPR (or a GPR pair) with bits [63:0] of MDH.
 |  99   | `import_close`            |  Decrypt and authenticate the imported SCC, make the CR available to software, set _ConfigStatus_ to a provided value.
 | 100   | `export_open`             |  Prepare a CR for exporting it as a SCC (if not yet in the correct format), set _ConfigStatus_ to _CfgExporting_. Requires no auxiliary input.
-| 101   | `export_close`            |  Restore the exported CR in the internal clear format (only if already complete) and make it available to software, set _ConfigStatus_ to a provided value. Uses an auxiliary input in a GPR (or a GPR pair) with bits [63:0] of Metadata Header to restore _ConfigStatus_ saved by software.
+| 101   | `export_close`            |  Restore the exported CR in the internal clear format (only if already complete) and make it available to software, set _ConfigStatus_ to a provided value. Uses an auxiliary input in a GPR (or a GPR pair) with bits [63:0] of MDH to restore _ConfigStatus_ saved by software.
 If the restored value of _ConfigStatus_ is not _CfgStComplete_, the CR is made available to software.
 |===
 
-If `ace.setst` is used with one of the immediates detailed in <<ACE-management-immeds>>, the operation has special senmantics:
+If `ace.setst` is used with one of the immediates in <<ACE-management-immeds>>, the operation has special senmantics:
 
-* *If `ace.setst` is used to initiate provisioning, resp., import:*
+. *`ace.setst` is used to initiate provisioning, resp., import.*
++
+We assume that software reads Bits [63:0] of the MDH from memory first. Let `ml` be this value.
+The instruction requires that software passes `ml` as the auxiliary input to `ace.setst` in a GPR (or a GPR pair).
 
-** The instruction requires that Bits [63:0] of the Metadata Header are passed as an auxiliary input `ml` in a GPR (or a GPR pair) by the software.
-** If the combination of _Algorithm_, _AlgorithmPolicy_, and _SCProtection_ is not supported,
-the CR transitions to Error State `ace_state_not_impl`, and exception `ace_exc_invalid` is raised as defined in the Privileged Architecture if the latter is implemented. The handler may simply return to the original control flow.
-** In other cases here where the Metadata is invalid, such as, for instance, a nonzero _State_ or reserved field:
-The CR transitions to Error State `ace_state_invalid`, and exception `ace_exc_invalid` is raised as defined in the Privileged Architecture if the latter is implemented. The handler may simply return to the original control flow.
-** Following operations are performed:
+* If the combination of _Algorithm_, _AlgorithmPolicy_, and _SCProtection_ in `ml` is not supported,
+he CR transitions to Error State `ace_state_not_impl`, and exception `ace_exc_invalid` is raised as defined in the Privileged Architecture if the latter is implemented. The handler may simply return to the original control flow.
+* In other cases here where the Metadata is invalid, such as, for instance, a nonzero _State_ or reserved field:
+he CR transitions to Error State `ace_state_invalid`, and exception `ace_exc_invalid` is raised as defined in the Privileged Architecture if the latter is implemented. The handler may simply return to the original control flow.
+* Following operations are performed:
 
- . The target CR is first cleared.
- . The implementations will try to allocate CRF capacity according to the requirements of _Algorithm_, _AlgorithmPolicy_, and _SCProtection_.
-   If this is not possible, the CR is transitioned to Error State `ace_state_out_of_mem`, and exception `ace_exc_out_of_mem` is raised as defined in the Privileged Architecture if the latter is implemented. The handler may simply return to the original control flow, or handle the situation and remove the Error State.
- . Bits [63:0] of the Metadata Header in the CR are set to the passed value `ml`, the internal CRF memory corresponding to the target CR is zeroed.
- . _ConfigStatus_ if set to _CfgStProvisioning_, resp., _CfgStImport_. In the latter case, we assume that software has saved the old value of `ml` in its state.
+.. The target CR is first cleared.
+.. The implementations will try to allocate CRF capacity according to the requirements of _Algorithm_, _AlgorithmPolicy_, and _SCProtection_.
+..  If this is not possible, the CR is transitioned to Error State `ace_state_out_of_mem`, and exception `ace_exc_out_of_mem` is raised as defined in the Privileged Architecture if the latter is implemented. The handler may simply return to the original control flow, or handle the situation and remove the Error State.
+.. Except for Bits [63:0] of the MDH in the CR, which are set to `ml`, the internal CRF memory corresponding to the target CR is zeroed.
+.. _ConfigStatus_ if set to _CfgStProvisioning_, resp., _CfgStImport_. In the latter case, we assume that software has saved the old value of `ml` in its state.
 
-** If the instruction fails for any other reason, the target CR is cleared.
+* If the instruction fails for any other reason, the target CR is cleared.
 
-* *If `ace.setst` is used to terminate a provisioning process:*
+. *`ace.setst` is used to terminate a provisioning process.*
 
- . The ACE unit performs any necessary readjustment of the CR's content to turn it into the format internally consumed by the ACE Unit.
- .  _ConfigStatus_ is set to _CfgStComplete_.
-
-* *If `ace.setst` is used to terminate an import process:*
-
-. The software must use Form B to contextually pass the saved value of `ml`.
-. If `ml`._ConfigStatus_ = _CfgStComplete_ (we are importing the export of a fully configured CR)
-.. The ACE unit decrypts and authenticates the CR's content.
-   If authentication fails, the target CR is transitioned to Error State `ace_state_import_auth`. No exception is raised.
 .. The ACE unit performs any necessary readjustment of the CR's content to turn it into the format internally consumed by the ACE Unit.
 ..  _ConfigStatus_ is set to _CfgStComplete_.
-. If `ml`._ConfigStatus_ {ne} _CfgStComplete_  (we are either importing the export of a not fully configured CR or a nested CR export)
-.  _ConfigStatus_ is set to `ml`._ConfigStatus_.
 
-* *If `ace.setst` is used to initiate an export process:*
+. *`ace.setst` is used to terminate an import process.*
+
+.. The software must use Form B to contextually pass the saved value of `ml`.
+.. If `ml`._ConfigStatus_ = _CfgStComplete_ (we are importing the export of a fully configured CR)
+... The ACE unit decrypts and authenticates the CR's content.
+... If authentication fails, the target CR is transitioned to Error State `ace_state_import_auth`. No exception is raised.
+... The ACE unit performs any necessary readjustment of the CR's content to turn it into the format internally consumed by the ACE Unit.
+...  _ConfigStatus_ is set to _CfgStComplete_.
+.. If `ml`._ConfigStatus_ {ne} _CfgStComplete_  (we are either importing the export of a not fully configured CR or a nested CR export)
+..  _ConfigStatus_ is set to `ml`._ConfigStatus_.
+
+. *`ace.setst` is used to initiate an export process.*
 +
-Let `ml` <- Bits [63:0] of the Metadata header of the CR.
-We assume that software saves this value in its state.
+Let `ml` <- Bits [63:0] of the MDH of the CR.
+Software must save this value in its state to use it when terminating the export process.
 +
 Then:
 
-. If `ml`._ConfigStatus_ = _CfgStComplete_ (we are exporting a fully configured CR)
-.. Prepare a CR to produce a SCC. This includes encrypting its contents and computing the authentication tag.
-. If `ml`._ConfigStatus_ {ne} _CfgStComplete_ (we are exporting a not fully configured CR or we are initiating a nested CR export)
-.. No encryption or authentication occurs, the information in the CR is exported verbatim, in the
-same order as they appear in the PI
-in case the SCC is the export of a partially provisioned CR,
-or the SCC in case the latter is the export of a partially provisioned, resp., imported, CR, or the CR was previously prepared for export and then the export process itself was interrupted.
+.. If `ml`._ConfigStatus_ = _CfgStComplete_ (we are exporting a fully configured CR)
+... Prepare a CR to produce a SCC. This includes encrypting its contents and computing the authentication tag.
+.. If `ml`._ConfigStatus_ {ne} _CfgStComplete_ (we are exporting a not fully configured CR or we are initiating a nested CR export)
+... No encryption or authentication occurs, the information in the CR is exported verbatim, in the same order as they appear in the PI in case the SCC is the export of a partially provisioned CR, or the SCC in case the latter is the export of a partially provisioned, resp., imported, CR, or the CR was previously prepared for export and then the export process itself was interrupted.
 
-* *If `ace.setst` is used to terminate an export process:*
+. *`ace.setst` is used to terminate an export process.*
 +
-Let `ml` be the value of Bits[63:0] of the Metadata Header of the CR saved by the software upon initiation of the export process.
-+
+Let `ml` be the value of Bits[63:0] of the MDH of the CR saved by the software upon initiation of the export process.
 Software must pass this `ml` as the auxiliary parameter to `ace.setst` when terminating the export process.
 +
 Then:
 
-. If `ml`._ConfigStatus_ = _CfgStComplete_
-.. The implementation must restore the state of the CR to the state it was in when the export process was initiated.
+.. If `ml`._ConfigStatus_ = _CfgStComplete_
+... The implementation must restore the state of the CR to the state it was in when the export process was initiated.
 This may involve decrypting its contents or restoring them from an internal backup.
 
-. If `ml`._ConfigStatus_ {ne} _CfgStComplete_
-.. No changes to the CR state are made.
+.. If `ml`._ConfigStatus_ {ne} _CfgStComplete_
+... No changes to the CR state are made.
 
 The full provisioning, export, and import operations are described in detail in <<ACE-provisioning-export-import>>.
 --
 +
 
-
 _Properties_::
 Possibly modifies state: *YES*. +
 Usage-controlled: *YES*, if used to transition states, *NO* if used to initiate and terminate management processes.+
-
 // The state numbers used in this specification are defined in <<ACE-states-valid>> and <<ACE-state-constants-symmetric>>.
-
 
 _Included in_::
 +
@@ -1372,7 +1346,7 @@ _Included in_::
 ==== ace.getmd/ace.getmdh
 
 _Synopsis_::
-Export the Metadata Header of a CR.
+Export the MDH of a CR.
 
 _Mnemonic_::
 `ace.getmdl  Xd, Ks|K(Xs)`
@@ -1407,13 +1381,13 @@ _Description_::
 --
 On RV64:
 
-* `ace.getmdl` copies bits [63:0] of the Metadata Header of a CR `Ks` or `K(Xs)` into GPR `Xd`.
+* `ace.getmdl` copies bits [63:0] of the MDH of a CR `Ks` or `K(Xs)` into GPR `Xd`.
 * `ace.getmdh` bits [127:64] into GPR `Xd`.
 
 On RV32, `d` must be even, and:
 
-* `ace.getmdl` copies bits  [31:0] of the Metadata Header of a CR `Ks` or `K(Xs)` into GPR `Xd` and bits  [63:32] into GPR `X[d+1]`, atomically.
-* `ace.getmdh` copies bits [95:64] of the Metadata Header of a CR `Ks` or `K(Xs)` into GPR `Xd` and bits [127:96] into GPR `X[d+1]`, atomically.
+* `ace.getmdl` copies bits  [31:0] of the MDH of a CR `Ks` or `K(Xs)` into GPR `Xd` and bits  [63:32] into GPR `X[d+1]`, atomically.
+* `ace.getmdh` copies bits [95:64] of the MDH of a CR `Ks` or `K(Xs)` into GPR `Xd` and bits [127:96] into GPR `X[d+1]`, atomically.
 --
 +
 
@@ -1480,9 +1454,9 @@ _Description_::
 `ace.restrictl/ace.restricth` can only be used if the CR's state is _Initial_.
 Using the instruction in any other state raises an invalid instruction exception.
 
-`ace.restrictl` modifies the field _AlgorithmPolicy_ in bits [63:0] of the Metadata Header of the CR.
+`ace.restrictl` modifies the field _AlgorithmPolicy_ in bits [63:0] of the MDH of the CR.
 
-`ace.restricth` modifies fields _Locality_, _UsagePolicy_, _ExpirationDate_, and possibly _AlgorithmUse_ in bits [127:64] of the Metadata Header of the CR.
+`ace.restricth` modifies fields _Locality_, _UsagePolicy_, _ExpirationDate_, and possibly _AlgorithmUse_ in bits [127:64] of the MDH of the CR.
 
 Modifying the _Locality_ field can be used to add a Locality but also to _replace_ a Locality with a stricter one, such as
 
@@ -1496,40 +1470,40 @@ State is not automatically set to _ace_state_invalid_ (the exception handler may
 Once the _Locality_ field has been modified,
 when the CR is exported, it will use the new Locality values to tweak the export algorithm.
 
-Let `mh` be the Metadata Header of the CC in the destination CR.
+Let `MDH` be the MDH of the CC in the destination CR.
 
 On RV64, the semantics of the instructions are:
 
-* For `ace.restrictl`, `Xs` follows the format of bits [63:0] of the Metadata Header,
-and for `ace.restricth`,  `Xs` follows the format of bits [127:64] of the Metadata Header
+* For `ace.restrictl`, `Xs` follows the format of bits [63:0] of the MDH,
+and for `ace.restricth`,  `Xs` follows the format of bits [127:64] of the MDH
 
 Only the fields _AlgorithmPolicy_, _Locality_, _UsagePolicy_, _ExpirationDate_ and _AlgorithmUse_ of `Xs` may be defined.
 All other fields must be 0, else exception `ace_exc_invalid` is raised.
 
-* `Xs`._AlgorithmPolicy_ is used to set the new `mh`._AlgorithmPolicy_ of the
+* `Xs`._AlgorithmPolicy_ is used to set the new `MDH`._AlgorithmPolicy_ of the
   CR, if the CC configured in the latter makes use of this field.
   No currently disabled operation may be (re)enabled, any attempt to do so raises
   exception `ace_exc_invalid`. In some cases, a zero value is not permitted, such as
   disabling both encryption and decryption. +
   If the CR is in a state only allowed while performing an operation currently
-  allowed by `mh`._AlgorithmPolicy_, any change to _AlgorithmPolicy_ that would
+  allowed by `MDH`._AlgorithmPolicy_, any change to _AlgorithmPolicy_ that would
   disable that operation will cause exception `ace_exc_invalid` to be raised at the
   next usage operation on the CR.
 
-* If `Xs`._Locality_ is non-zero, then it is the new value of `mh`._Locality_, subject to the Locality replacement rules above.
+* If `Xs`._Locality_ is non-zero, then it is the new value of `MDH`._Locality_, subject to the Locality replacement rules above.
 
 * A zero in any of bits `Xs`._UsagePolicy_ means that the corresponding policy is _not_ changed.
 
 * A one in any of the bits `Xs`._UsagePolicy_ means that usage by the corresponding mode is not allowed, and the corresponding bit in the Metadata of the destination CC is set to 1.
 
-* If `Xs`._ExpirationDate_ is zero, the corresponding policy in `mh`._ExpirationDate_ is _not_ changed.
+* If `Xs`._ExpirationDate_ is zero, the corresponding policy in `MDH`._ExpirationDate_ is _not_ changed.
 
 * A non-zero value in `Xs`._ExpirationDate_ will be copied to
-  `mh`._ExpirationDate_, but only if that policy was not already programmed before
-  or the original value of `mh`._ExpirationDate_ was equal to the new value or larger.
+  `MDH`._ExpirationDate_, but only if that policy was not already programmed before
+  or the original value of `MDH`._ExpirationDate_ was equal to the new value or larger.
   Otherwise exception `ace_exc_invalid` is raised.
 
-* Any change to `mh`._AlgorithmUse_ is subject to policies set by the Algorithm in the CR.
+* Any change to `MDH`._AlgorithmUse_ is subject to policies set by the Algorithm in the CR.
 --
 +
 On RV32:
@@ -1732,7 +1706,7 @@ There are two Forms of the `ace.size` instruction:
 
 [upperalpha]
 . `ace.size Xd, Ks|K(Xs)` - Size from a context.
-. `ace.size Xd, Xs` - Size from Metadata Header.
+. `ace.size Xd, Xs` - Size from MDH.
 
 // Without this comment, the next part is not properly formatted...
 
@@ -1759,7 +1733,7 @@ The `F` field and the `r` bit may assume the following values:
 
 * `F` = `0b00`, `r` = `0` {implies} Form A: Size from a context given as `Ks`.
 * `F` = `0b00`, `r` = `1` {implies} Form A: Size from a context given indirectly as `K(Xs)`.
-* `F` = `0b01`, `r` = `0` {implies} Form B: Size from Metadata Header.
+* `F` = `0b01`, `r` = `0` {implies} Form B: Size from MDH.
 
 _Description_:: {empty}
 +
@@ -1771,11 +1745,11 @@ _Description_:: {empty}
   instruction returns 0 if the CR is unconfigured.
 
 * On RV64, Form B `ace.size` returns the total size in bytes of an SCC having Bits [63:0]
-  of the Metadata Header given in `Xs` into GPR `Xd` including the additional variable-length data,
+  of the MDH given in `Xs` into GPR `Xd` including the additional variable-length data,
   and `0` if the if the algorithm is not supported or the Metadata is otherwise invalid.
 
 * On RV32, Form B `ace.size` differs from the RV64 version in that `s` must be even, and
-  Bits [63:0] of the Metadata Header are passed in `X[s+1] @ Xs`,
+  Bits [63:0] of the MDH are passed in `X[s+1] @ Xs`,
 --
 +
 
