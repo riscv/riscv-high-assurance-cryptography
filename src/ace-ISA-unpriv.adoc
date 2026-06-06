@@ -182,7 +182,7 @@ We list the most important operations on CRs, so we can refer to them before the
 * Importing (<<ACE-management-operations>>) imports a SCC into a CR.
 * `ace.clear` (<<ACE-instruction-clear>>) unconfigures and clears a CR.
 * `ace.exec` (<<ACE-instruction-exec>>) performs cryptographic operations as specified by the algorithm configured in a CR and according to the state of the CR.
-* `ace.setst` (<<ACE-instruction-setst>>) transitions between states of a cryptographic algorithm or of a CR.
+* `ace.setst` (<<ACE-instruction-setst>>) transitions a CR between states of a cryptographic algorithm or states of CR management lifecycle.
 * `ace.clone` (<<ACE-instruction-clone>>) creates a copy of a CR into a second CR.
 
 // ////////////////////////////////////////////////////////////////////
@@ -1277,14 +1277,16 @@ The special values of `#immed7` to prepare a CR for provisioning, importing, and
 If the restored value of _ConfigStatus_ is not _CfgStComplete_, the CR is made available to software.
 |===
 
-*If `ace.setst` is used to initiate provisioning, resp., import:*
+If `ace.setst` is used with one of the immediates detailed in <<ACE-management-immeds>>, the operation has special senmantics:
 
-* Bits [63:0] of the Metadata Header are passed as an auxiliary input `ml` in a GPR (or a GPR pair) by the software.
-* If the combination of _Algorithm_, _AlgorithmPolicy_, and _SCProtection_ is not supported,
+* *If `ace.setst` is used to initiate provisioning, resp., import:*
+
+** The instruction requires that Bits [63:0] of the Metadata Header are passed as an auxiliary input `ml` in a GPR (or a GPR pair) by the software.
+** If the combination of _Algorithm_, _AlgorithmPolicy_, and _SCProtection_ is not supported,
 the CR transitions to Error State `ace_state_not_impl`, and exception `ace_exc_invalid` is raised as defined in the Privileged Architecture if the latter is implemented. The handler may simply return to the original control flow.
-* In other cases here where the Metadata is invalid, such as, for instance, a nonzero _State_ or reserved field:
+** In other cases here where the Metadata is invalid, such as, for instance, a nonzero _State_ or reserved field:
 The CR transitions to Error State `ace_state_invalid`, and exception `ace_exc_invalid` is raised as defined in the Privileged Architecture if the latter is implemented. The handler may simply return to the original control flow.
-* Following operations are performed:
+** Following operations are performed:
 
  . The target CR is first cleared.
  . The implementations will try to allocate CRF capacity according to the requirements of _Algorithm_, _AlgorithmPolicy_, and _SCProtection_.
@@ -1292,14 +1294,14 @@ The CR transitions to Error State `ace_state_invalid`, and exception `ace_exc_in
  . Bits [63:0] of the Metadata Header in the CR are set to the passed value `ml`, the internal CRF memory corresponding to the target CR is zeroed.
  . _ConfigStatus_ if set to _CfgStProvisioning_, resp., _CfgStImport_. In the latter case, we assume that software has saved the old value of `ml` in its state.
 
-* If the instruction fails for any other reason, the target CR is cleared.
+** If the instruction fails for any other reason, the target CR is cleared.
 
-*If `ace.setst` is used to terminate a provisioning process:*
+* *If `ace.setst` is used to terminate a provisioning process:*
 
  . The ACE unit performs any necessary readjustment of the CR's content to turn it into the format internally consumed by the ACE Unit.
  .  _ConfigStatus_ is set to _CfgStComplete_.
 
-*If `ace.setst` is used to terminate an import process:*
+* *If `ace.setst` is used to terminate an import process:*
 
 . The software must use Form B to contextually pass the saved value of `ml`.
 . If `ml`._ConfigStatus_ = _CfgStComplete_ (we are importing the export of a fully configured CR)
@@ -1307,43 +1309,47 @@ The CR transitions to Error State `ace_state_invalid`, and exception `ace_exc_in
    If authentication fails, the target CR is transitioned to Error State `ace_state_import_auth`. No exception is raised.
 .. The ACE unit performs any necessary readjustment of the CR's content to turn it into the format internally consumed by the ACE Unit.
 ..  _ConfigStatus_ is set to _CfgStComplete_.
-. If `ml`._ConfigStatus_ != _CfgStComplete_  (we are either importing the export of a not fully configured CR or a nested CR export)
+. If `ml`._ConfigStatus_ {ne} _CfgStComplete_  (we are either importing the export of a not fully configured CR or a nested CR export)
 .  _ConfigStatus_ is set to `ml`._ConfigStatus_.
 
-*If `ace.setst` is used to initiate an export process,*
-let `ml` <- Bits [63:0] of the Metadata header of the CR. We assume that the software saves this value.
+* *If `ace.setst` is used to initiate an export process:*
++
+Let `ml` <- Bits [63:0] of the Metadata header of the CR.
+We assume that software saves this value in its state.
++
 Then:
 
 . If `ml`._ConfigStatus_ = _CfgStComplete_ (we are exporting a fully configured CR)
 .. Prepare a CR to produce a SCC. This includes encrypting its contents and computing the authentication tag.
-. If `ml`._ConfigStatus_ != _CfgStComplete_ (we are exporting a not fully configured CR or we are initiating a nested CR export)
+. If `ml`._ConfigStatus_ {ne} _CfgStComplete_ (we are exporting a not fully configured CR or we are initiating a nested CR export)
 .. No encryption or authentication occurs, the information in the CR is exported verbatim, in the
 same order as they appear in the PI
 in case the SCC is the export of a partially provisioned CR,
 or the SCC in case the latter is the export of a partially provisioned, resp., imported, CR, or the CR was previously prepared for export and then the export process itself was interrupted.
 
-*If `ace.setst` is used to terminate an export process,*
-let `ml` be the values saved by the software of Bits[63:0] of the Metadata header of the CR when the export process was initiated.
+* *If `ace.setst` is used to terminate an export process:*
++
+Let `ml` be the value of Bits[63:0] of the Metadata Header of the CR saved by the software upon initiation of the export process.
++
 Software must pass this `ml` as the auxiliary parameter to `ace.setst` when terminating the export process.
++
 Then:
 
 . If `ml`._ConfigStatus_ = _CfgStComplete_
 .. The implementation must restore the state of the CR to the state it was in when the export process was initiated.
 This may involve decrypting its contents or restoring them from an internal backup.
 
-. If `ml`._ConfigStatus_ != _CfgStComplete_
+. If `ml`._ConfigStatus_ {ne} _CfgStComplete_
 .. No changes to the CR state are made.
 
-The provisioning, export, and import operations are described in detail in <<ACE-provisioning-export-import>>.
+The full provisioning, export, and import operations are described in detail in <<ACE-provisioning-export-import>>.
 --
 +
 
 
 _Properties_::
 Possibly modifies state: *YES*. +
-Usage-controlled: *YES*. +
-// Trappable: *NO*. +
-// Interruptible: *NO*. +
+Usage-controlled: *YES*, if used to transition states, *NO* if used to initiate and terminate management processes.+
 
 // The state numbers used in this specification are defined in <<ACE-states-valid>> and <<ACE-state-constants-symmetric>>.
 
