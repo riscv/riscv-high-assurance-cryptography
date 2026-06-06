@@ -432,7 +432,7 @@ This ensures that these states can be unambiguously determined from the _State_ 
 Internal resources associated with the Content may also be released. In that case, any additional variable-length data is released as well and the _ImpDataLen_ field is set to 0.
 The CR then retains only the MDH.
 
-. Exporting a CR in an Error State exports only the MDH and the authentication tag.
+. Exporting a CR in an Error State exports only the MDH and the authentication tag(s).
   Requesting the SCC's size (`ace.size` <<ACE-instruction-size>>) will return 32 (bytes).
   The resulting SCC can be reimported, allowing software to take appropriate actions even after a context switch.
 
@@ -970,7 +970,7 @@ Broadly speaking, and removing error handling, *Provisioning* is performed by th
 
 . Use `ace.getmd` (<<ACE-instruction-getmd>>) to get the low 64 bits of the MDH of the CR to be exported to be able to determine its size and allocate resources.
 . Store the low 64 bits of the MDH into memory.
-. Use `ace.setst` to prepare a CR to produce a SCC. This includes encrypting its contents and computing the authentication tag.
+. Use `ace.setst` to prepare a CR to produce a SCC. This includes encrypting its contents and computing the authentication tag(s).
 . Use `ace.store` (<<ACE-instruction-store>>) to store the high 64 bits of the MDH and the rest of the SCC to memory.
 . Use `ace.setst` to restore the CR in a form available to software.
 
@@ -1072,6 +1072,8 @@ _Description_::
 Exports raw data from the CR `Ks2` or `K(Xs2)` to memory at address `%offset(Xs1)`.
 The operation starts with the 8th byte of the MDH.
 The instruction itself determines the length of the output from the MDH.
+
+The first 8 bytes of the MDH must be read from the CR using `ace.getmdl` and saved to memory by the software.
 
 If the _ConfigStatus_ field is equal to _CfgStComplete_, then an invalid instruction exception is raised.
 --
@@ -1279,8 +1281,7 @@ Software must pass `ml` as the auxiliary input to `ace.setst` in a GPR (or a GPR
 .. The target CR is cleared.
 .. If the combination of _Algorithm_, _AlgorithmPolicy_, and _SCProtection_ in `ml` is not supported, the CR transitions to Error State `ace_state_not_impl`, and exception `ace_exc_invalid` is raised as defined in the Privileged Architecture if the latter is implemented.
 .. In other cases here where the Metadata is invalid, such as, for instance, a nonzero _State_ or reserved field: the CR transitions to Error State `ace_state_invalid`, and exception `ace_exc_invalid` is raised as defined in the Privileged Architecture if the latter is implemented.
-.. The implementations will try to allocate CRF capacity according to the requirements of _Algorithm_, _AlgorithmPolicy_, and _SCProtection_.
-..  If this is not possible, the CR is transitioned to Error State `ace_state_out_of_mem`, and exception `ace_exc_out_of_mem` is raised as defined in the Privileged Architecture if the latter is implemented.
+.. The implementations will try to allocate CRF capacity according to the requirements of _Algorithm_, _AlgorithmPolicy_, and _SCProtection_. If this is not possible, the CR is transitioned to Error State `ace_state_out_of_mem`, and exception `ace_exc_out_of_mem` is raised as defined in the Privileged Architecture if the latter is implemented.
 .. Except for Bits [63:0] of the MDH in the CR, which are set to `ml`, the internal CRF memory corresponding to the target CR is zeroed.
 .. _ConfigStatus_ if set to _CfgStProvisioning_, resp., _CfgStImport_. In the latter case, we assume that software has saved the old value of `ml` in its state.
 
@@ -1298,8 +1299,9 @@ The software must use Form B of `ace.setst` to contextually pass the saved value
 ... If authentication fails, the target CR is transitioned to Error State `ace_state_import_auth`. No exception is raised.
 ... The ACE unit performs any necessary readjustment of the CR's content to turn it into the format internally consumed by the ACE Unit.
 ...  _ConfigStatus_ is set to _CfgStComplete_.
-.. If `ml`._ConfigStatus_ {ne} _CfgStComplete_  (we are either importing the export of a not fully configured CR or a nested CR export)
-..  _ConfigStatus_ is set to `ml`._ConfigStatus_.
+.. If `ml`._ConfigStatus_ {ne} _CfgStComplete_  (we are either importing the export of a not fully configured CR or a nested CR export):
++
+_ConfigStatus_ is set to `ml`._ConfigStatus_.
 
 . *`ace.setst` is used to initiate an export process.*
 +
@@ -1308,10 +1310,12 @@ Software must save this value in its state to use it when terminating the export
 +
 Then:
 
-.. If `ml`._ConfigStatus_ = _CfgStComplete_ (we are exporting a fully configured CR)
-... Prepare a CR to produce a SCC. This includes encrypting its contents and computing the authentication tag.
-.. If `ml`._ConfigStatus_ {ne} _CfgStComplete_ (we are exporting a not fully configured CR or we are initiating a nested CR export)
-... No encryption or authentication occurs, the information in the CR is exported verbatim, in the same order as they appear in the PI in case the SCC is the export of a partially provisioned CR, or the SCC in case the latter is the export of a partially provisioned, resp., imported, CR, or the CR was previously prepared for export and then the export process itself was interrupted.
+.. If `ml`._ConfigStatus_ = _CfgStComplete_:
++
+Prepare a CR to produce a SCC. This includes encrypting its contents and computing the authentication tag(s).
+.. If `ml`._ConfigStatus_ {ne} _CfgStComplete_ (we are exporting a not fully configured CR or we are initiating a nested CR export):
++
+No encryption or authentication occurs, the information in the CR is exported verbatim, in the same order as they appear in the PI in case the SCC is the export of a partially provisioned CR, or the SCC in case the latter is the export of a partially provisioned, resp., imported, CR, or the CR was previously prepared for export and then the export process itself was interrupted.
 
 . *`ace.setst` is used to terminate an export process.*
 +
@@ -1320,12 +1324,14 @@ Software must pass this `ml` as the auxiliary parameter to `ace.setst` when term
 +
 Then:
 
-.. If `ml`._ConfigStatus_ = _CfgStComplete_
-... The implementation must restore the state of the CR to the state it was in when the export process was initiated.
+.. If `ml`._ConfigStatus_ = _CfgStComplete_:
++
+The implementation must restore the state of the CR to the state it was in when the export process was initiated.
 This may involve decrypting its contents or restoring them from an internal backup.
 
-.. If `ml`._ConfigStatus_ {ne} _CfgStComplete_
-... No changes to the CR state are made.
+.. If `ml`._ConfigStatus_ {ne} _CfgStComplete_:
++
+No changes to the CR state are made.
 
 Whenever `ace.setst`, used as a configuration instruction, fails for any other reason, the target CR is cleared.
 
@@ -1612,6 +1618,8 @@ Usage-controlled: *NO*. +
 
 _Description_::
 Clones source CR `Ks` (or the CR indexed by `Xs`) into destination CR `Kd` (or the CR indexed by `Xd`).
++
+A CR whose _ConfigStatus_ is not _CfgStComplete_ cannot be cloned.
 
 _Included in_::
 +
@@ -1749,7 +1757,7 @@ _Description_:: {empty}
 +
 --
 * Form A `ace.size` returns the total size in bytes of the memory buffer that
-  would be necessary to store the exported SCC, including the authentication tag and the additional variable-length data.
+  would be necessary to store the exported SCC, including the authentication tag(s) and the additional variable-length data.
   Knowing this size is necessary
   for any feature that relies on `ace.export`, including context switching. The
   instruction returns 0 if the CR is unconfigured.
@@ -2057,9 +2065,10 @@ NOTE: It is because of these rules that, in the Algorithms, we write that a cert
 === Resumability of ACE instructions
 
 `ace.clear`, `ace.reset`, `ace.setst`, `ace.getst`, `ace.restrict`, `ace.clone`, `ace.size` and `ace.avail` are uninterruptible.
-`ace.prov`, `ace.import`, `ace.export`, `ace.input`, and `ace.output` may be interrupted and resumed under certain conditions.
-For `ace.prov`, `ace.import`, and `ace.export`, see <<ACE-provisioning-export-import>>.
-For `ace.input` and `ace.output`, `acestart` may be used to reflect the amount of data read or written before the interrupt. In this case resumption will start from that point.
+
+`ace.input`, `ace.output`, `ace.load` and `ace.store` may be interrupted and resumed.
+`acestart` may be used to reflect the amount of data read or written before the interrupt.
+In this case resumption will start from that point.
 
 The operation of `ace.exec` on a basic processing unit is uninterruptible, unless explicitly allowed by the algorithm.
 Most cryptographic primitives cannot be interrupted; therefore, state information to encode round number or round key value is not needed.
@@ -2068,5 +2077,41 @@ For certain very long running operations, such as public key primitives, an algo
 When processing multiple blocks iteratively, `ace.exec` handles each block atomically, but it may be interrupted between blocks.
 On an interrupt during block processing, the implementation may either complete the current block before yielding to the handler, or discard the partial computation and restore the state from before its processing.
 `acestart` is updated accordingly to point at the place of resumption.
+
+==== Resumption of Management Operations
+
+The rules defined in `ace.setst` for the initiation and termination of management operations are necessary because any management operation may be interrupted, and there may be multiple nested interrupts or exceptions, with or without context switches.
+Leaving the burden of saving and restoring _ConfigStatus_ to the interrupted software simplifies the logic and supports arbitrarily many levels of nested virtualization.
+
+These rules also imply that an interrupted import operation may be resumed on a hart attached to a different ACE Unit implementation.
+The architecture is designed to ensure interoperability, provided the importing implementation supports the algorithm encoded in the SCC.
+However, the implementation must handle cases where the SCC is too large to fit in a CR due to an optional Implementation VDS—or where that VDS is incompatible—by ignoring the optional data.  A different set of optional data mey be created by the importing implementation.  In these cases, _ImpDataLen_ is accordingly updated.
+
+Software must ensure that an interrupted configuration or export operation can be resumed, to support binary compatibility across implementations that provide this feature and implementations that do not.
+An implementation is not required to support resumption, and even those that do may ignore the `acestart` value and restart the interrupted operation for any reason.
+
+For this reason, we define specific instruction sequences for the management operations, cf <<ACE-management-code-snippets>>.
+The architecture is co-designed with the intended use of the instructions.
+
+Upon returning from an exception, an export may resume only if the CR has not been modified.
+This is enforced by preventing use of a CR whose _ConfigStatus_ is not _CfgStComplete_.
+CR cloning is also disallowed in this case.
+
+A context switch handler can force a restart by clearing partially configured or exported CRs at context save and again at context restore.
+This must also be handled by the software.
+
+==== Resumption and Memory Model
+
+RISC-V implementations may read or write long inputs in an arbitrary order.
+Enforcing a strict access ordering for ACE inputs and outputs could therefore be complex on microarchitectures that are optimized for a particular use case.
+
+This must not require to write different code for different behaviors.
+The ACE unit itself sends commands to the LSU to read and write memory sequentially—analogously to software looping over an array.
+The LSU may then issue those reads and writes in any order it chooses.
+
+An implementation always has the option to restart an operation instead of resuming it, for any reason, and ignore and clear `acestart`.
+The ACE instructions are designed so that the same instruction sequences work correctly in all such cases.
+
+For example, in the split-instruction mode, the instruction that loads or stores a CR's content (except the first 8 bytes) may always fail, signalling that the import, provisioning, or export operation must be restarted. The software then reprograms the CR for that operation and processes the first 8 bytes separately. Consequently, any correct code sequence operates correctly on every ACE implementation.
 
 // ////////////////////////////////////////////////////////////////////

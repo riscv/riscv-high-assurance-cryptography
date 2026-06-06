@@ -132,10 +132,6 @@ This applies to all keys at once in an algorithms, unless otherwise specified.
 
 Conceptually, the information inside a CR comprises at least as many bits as the SCC (see <<ACE-SCC>>), excluding `SIV`, `IMPQUAL`, and `SIV2`.
 Additional storage may be required for information reconstructed only upon successful import.
-Hence, a CR can be viewed as a register of variable, and discoverable, length.
-
-Although a concrete implementation may differ considerably from this model, we use it here to describe the architectural semantics of CR management operations.
-For example, importing an SCC is modeled as: 1) loading the encrypted, authenticated SCC into the CR, 2) decrypting and authenticating it in place, and, if authentication succeeds, 3) reconstructing any derived information or expanding keys into multiple shares.
 
 The _i_-th CR is denoted by ``K(i)``.
 When ``K(i)`` is being provisioned, resp., imported, it behaves like a contiguous structure,
@@ -172,6 +168,8 @@ if the _ImpDataLen_ is non-zero.
 
 We now expand on the brief description of management operations in <<ACE-management-operations>>.
 
+////
+
 [[ACE-provisioning]]
 ==== Provisioning
 
@@ -196,6 +194,8 @@ Check `ml` for consistency and integrity: Failure shall result in an Error State
 . ``K(i)``.``MDH``._ConfigStatus_ <- _CfgStComplete_.
 --
 
+////
+
 // [WARNING]
 // ====
 // The architecture can be extended to export a partially configured CR:
@@ -208,15 +208,15 @@ Check `ml` for consistency and integrity: Failure shall result in an Error State
 
 // ////////////////////////////////////////////////////////////////////
 
-[[ACE-interruption-points]]
-==== Resumability of Configuration and Export Operations
+// [[ACE-interruption-points]]
+// ==== Resumability of Configuration and Export Operations
 
-[WARNING]
-====
-Provisioning, import and export are being rewritten!
-Our goal is to have instructions that are as RISC-y as possible, but without compromising security.
-Also, these should scale unchanged from small cores to high-performance CPUs, and therefore not enforce any specific hardware microarchitecture.
-====
+// [WARNING]
+// ====
+// Provisioning, import and export are being rewritten!
+// Our goal is to have instructions that are as RISC-y as possible, but without compromising security.
+// Also, these should scale unchanged from small cores to high-performance CPUs, and therefore not enforce any specific hardware microarchitecture.
+// ====
 
 ////
 // ===== Current Approach
@@ -243,28 +243,6 @@ During provisioning or import, metadata field _ConfigStatus_ is set accordingly 
 This field is only reset to _CfgStComplete_ upon completion of `ace.prov` and `ace.import`.
 It is updated to the correct value only upon successful completion (see <<ACE-provisioning-export-import>>).
 This transition does not occur during `ace.export`.
-////
-
-Software must ensure that an interrupted configuration or export operation can be resumed, to support binary compatibility across implementations that provide this feature and implementations that do not.
-An implementation is not required to support resumption, and even those that do may ignore the `acestart` value and restart the interrupted operation for any reason.
-
-Upon returning from an exception, an export may resume only if the CR has not been modified.
-This is enforced by preventing use of a CR whose _ConfigStatus_ is not _CfgStComplete_.
-CR cloning is also disallowed in this case.
-
-A context switch handler can force a restart by clearing partially configured or exported CRs at context save and again at context restore.
-
-// This approach ensures that:
-//
-// .. No partially configured or exported CRs remain in a VM's context if a migration occurs;
-// .. The implementation is free to choose any internal representation of a partially configured CR (including the order in which data is read); and
-// .. Any implementation may define its own `acestart` values for resumption, depending on the granularity of interruption points and the semantics of the work between them.
-
-// [NOTE]
-// ====
-// Architecting a management operation as a single instruction would require the implementation to re-read the MDH—even at resumption—to determine the length of the data to be read or written. This adds significant complexity.
-// With split operations, it is up to the software to handle the first 64 bits of the MDH.
-// ====
 
 During provisioning or import, the _ConfigStatus_ metadata field is set to _CfgStProvisioning_ or _CfgStImporting_, respectively.
 This field may only be reset to _CfgStComplete_ upon successful completion of the operation (see <<ACE-provisioning-export-import>>).
@@ -274,28 +252,9 @@ At this point, the operation distinguishes between two cases:
 
 . If _ConfigStatus_ is _CfgStComplete_, the export operation must first prepare the CR to be exported as authenticated ciphertext, and set _ConfigStatus_ to _CfgStExporting_. Upon successful completion, the CR is restored to its usual internal representation and _ConfigStatus_ is set to _CfgStComplete_.
 . If _ConfigStatus_ is not _CfgStComplete_, the CR is viewed as a buffer and already in a directly exportable state.  _ConfigStatus_ is not modified and no preparation or restoration of the CR occurs.  Upon successful completion, _ConfigStatus_ must be set to the value supplied by the software.
-
-These rules are necessary because any management operation may be interrupted, and there may be multiple nested interrupts or exceptions, with or without context switches. Leaving the burden of saving and restoring _ConfigStatus_ to the interrupted software simplifies the logic and supports arbitrarily many levels of nested virtualization.
-
-These rules also imply that an interrupted import operation may be resumed on a hart attached to a different ACE Unit implementation.
-The architecture is designed to ensure interoperability, provided the importing implementation supports the algorithm encoded in the SCC.
-However, the implementation must handle cases where the SCC is too large to fit in a CR due to an optional Implementation VDS—or where that VDS is incompatible—by ignoring the optional data.  A different set of optional data mey be created by the importing implementation.  In these cases, _ImpDataLen_ is accordingly updated.
+////
 
 // ////////////////////////////////////////////////////////////////////
-
-====  Resumption and Memory Model
-
-RISC-V implementations may read or write long inputs in an arbitrary order.
-Enforcing a strict access ordering for ACE inputs and outputs could therefore be complex on microarchitectures that are optimized for a particular use case.
-
-This must not require to write different code for different behaviors.
-The ACE unit itself sends commands to the LSU to read and write memory sequentially—analogously to software looping over an array.
-The LSU may then issue those reads and writes in any order it chooses.
-
-An implementation always has the option to restart an operation instead of resuming it, for any reason, and ignore and clear `acestart`.
-The ACE instructions are designed so that the same instruction sequences work correctly in all such cases.
-
-For example, in the split-instruction mode, the instruction that loads or stores a CR's content (except the first 8 bytes) may always fail, signalling that the import, provisioning, or export operation must be restarted. The software then reprograms the CR for that operation and processes the first 8 bytes separately. Consequently, any correct code sequence operates correctly on every ACE implementation.
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -527,6 +486,7 @@ Explain: This does not increase the attack surface since:
 
 // ///////////////////////////////////////////////////////////////////
 
+[[ACE-management-code-snippets]]
 ==== Use of Split Provisioning, Import and Export Instructions
 
 [WARNING]
