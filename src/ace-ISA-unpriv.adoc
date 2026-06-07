@@ -17,7 +17,7 @@ Cryptographic Context:::
 (((Cryptographic Context)))
 The *Cryptographic Context* (CC) is the foundation of ACE. A CC is an indivisible structure consisting of a *Metadata Header* (MDH) and *Content*; all cryptographic operations performed by ACE execute within the constraints defined by a CC.
 The MDH has a fixed format and specifies the cryptographic algorithm and various optional policies associated with the CC.
-(((Cryptographic Context, MDH)))
+(((Cryptographic Context, Metadata Header)))
 The Content has an algorithm-specific format and holds sensitive material such as keys and algorithm state.
 (((Cryptographic Context, Content)))
 The Metadata requires integrity; the Content requires both integrity and confidentiality.
@@ -29,7 +29,7 @@ To create CCs, ACE uses *Context Registers* (CRs), per-hart architectural contai
 A CR is *provisioned* by writing Metadata and Content into it; this operation binds the latter to form a CC.
 There is no store-like instruction to extract the Content of the CR in a manner that compromises its confidentiality.
 A CC may be used for cryptographic operations only while resident in a CR.
-Only the ACE unit may access or modify a CC residing in a CR, in accordance with architectural rules and the algorithm bound to the CC.
+Only the ACE unit may access or modify a CC residing in a CR, in accordance with the rules set by the architecture and by the algorithm bound to the CC.
 
 Sealed Cryptographic Context:::
 (((Cryptographic Context, sealed)))
@@ -957,37 +957,23 @@ Since the architecture decouples instructions like `ace.exec` from the actual op
 
 Broadly speaking, and removing error handling, *Provisioning* is performed by the following three steps:
 
-. Use `ace.setst` (<<ACE-instruction-setst>>) to prepare a CR to be provisioned, store the low 64 bits of the MDH in the CR, check the metadata.
+. Use `ace.setst` (<<ACE-instruction-setst>>) to prepare a CR to be provisioned, store MDH[63:0] in the CR, check its validity.
 . Use `ace.load` (<<ACE-instruction-load>>) to load the rest of the provisioning information into the CR.
 . Use `ace.setst` to make the CR available to software.
 
 *Importing* a SCC into a CR is similar:
 
-. Use `ace.setst` to prepare a CR to accept a SCC, store the low 64 bits of the metadata field in it, check the metadata.
+. Use `ace.setst` to prepare a CR to accept a SCC, store MDH[63:0] in it, check its validity.
 . Use `ace.load` to load the rest of the SCC information into the CR.
 . Use `ace.setst` to authenticate and decrypt the SCC, and make the CR available to software.
 
 *Exporting* a CR as an SCC consists of the following steps:
 
-. Use `ace.getmd` (<<ACE-instruction-getmd>>) to get the low 64 bits of the MDH of the CR to be exported to be able to determine its size and allocate resources.
-. Store the low 64 bits of the MDH into memory.
+. Use `ace.getmd` (<<ACE-instruction-getmd>>) to get MDH[63:0] of the CR to be exported to be able to determine its size and allocate resources.
+. Store MDH[63:0] into memory.
 . Use `ace.setst` to prepare a CR to produce a SCC. This includes encrypting its contents and computing the authentication tag(s).
-. Use `ace.store` (<<ACE-instruction-store>>) to store the high 64 bits of the MDH and the rest of the SCC to memory.
+. Use `ace.store` (<<ACE-instruction-store>>) to store MDH[127:64] and the rest of the SCC to memory.
 . Use `ace.setst` to restore the CR in a form available to software.
-
-// NOTE: The instruction encoding of `ace.load` includes a single bit to indicate a
-// system-defined format. If multiple system-defined formats are supported, the
-// system is responsible for distinguishing them. These formats do not necessarily
-// include the key value itself, they may contain a “recipe” for an
-// implementation-defined mechanism to generate the key. Such system generated
-// keys are system-specific and the “recipe” is in general not portable. After
-// internal key generation, the actual key value—not the recipe—is stored in the
-// CR and SCC. For all keys provisioned in this way, the _KeyType_ field
-// in the Metadata is 0, denoting a key represented by value.
-//
-// NOTE: The export procedure does not have an export equivalent for system-defined formats.
-// This means that system-specific dynamically generated keys can be imported but not exported
-// in the same form: they must be exported in the format architected here for ACE CCs.
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -1320,7 +1306,7 @@ No encryption or authentication occurs, the information in the CR is exported ve
 
 . *`ace.setst` is used to terminate an export process.*
 +
-Let `ml` be the value of Bits[63:0] of the MDH of the CR saved by the software upon initiation of the export process.
+Let `ml` be the value of MDH[63:0] saved by the software upon initiation of the export process.
 Software must pass this `ml` as the auxiliary parameter to `ace.setst` when terminating the export process.
 +
 Then:
@@ -2200,10 +2186,10 @@ of a partially decrypted payload.  This is required for both correctness and sec
   ace.store  8(t6), K(t0)
 
 success:
-  # Reset the first 64 bits of MDH to saved value. If the saved state is _CfgStcomplete_,
-  # the operation also re-decrypts the state and makes the CR available to software,
-  # otherwise it does nothing and leaves the CR state in the serialized and encrypted
-  # format.
+  # Reset MDH[63:0] to the previously saved value. If the saved _ConfigStatus_ is
+  # _CfgStcomplete_, the operation also re-decrypts the state and makes the CR available
+  # to software, otherwise it does nothing and leaves the CR state in the serialized and
+  # encrypted format.
 
   ace.setst  K(t0), t1, #export_close
 ----
