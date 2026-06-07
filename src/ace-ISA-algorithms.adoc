@@ -144,29 +144,33 @@ In principle, this limits the ability to perform concurrent management operation
 If a second operation is started that may overwrite the storage for `SIV`, `IMPQUAL`, and `SIV2`, the old values of `SIV` and `SIV2` may be irreversibly overwritten.
 However, this does not affect any conceivable use case.
 
-The format of this structure follows <<ACE-PI>> for provisioning and <<ACE-SCC>> for import:
-For provisioning, the structure consists of
-``K(i)``.`MDH`[63:0],
-``K(i)``.`MDH`[127:64] and
-``K(i)``.`Content[]`, in this order.
-For import, the structure consists of
-``K(i)``.`MDH`[63:0],
-``K(i)``.`MDH`[127:64],
-``K(i)``.``MDH``,
-``K(i)``.``SIV``, and
-``K(i)``.``Content1[]``, followed by
-``K(i)``.``IMPQUAL``,
-``K(i)``.``SIV2``,
-and
-``K(i)``.``Content2[]``
-if the _ImpDataLen_ is non-zero.
+The format of this structure follows <<ACE-PI>> for provisioning and <<ACE-SCC>> for export and import.
+// For provisioning, the structure consists of
+// ``K(i)``.`MDH`[63:0],
+// ``K(i)``.`MDH`[127:64] and
+// ``K(i)``.`Content[]`, in this order.
+// For import, the structure consists of
+// ``K(i)``.`MDH`[63:0],
+// ``K(i)``.`MDH`[127:64],
+// ``K(i)``.``MDH``,
+// ``K(i)``.``SIV``, and
+// ``K(i)``.``Content1[]``, followed by
+// ``K(i)``.``IMPQUAL``,
+// ``K(i)``.``SIV2``,
+// and
+// ``K(i)``.``Content2[]``
+// if the _ImpDataLen_ is non-zero.
 
 // ////////////////////////////////////////////////////////////////////
 
 [[ACE-export-import-algorithms]]
-=== Management of Cryptographic Contexts
+=== Management of Sealed Cryptographic Contexts
 
-We now expand on the brief description of management operations in <<ACE-management-operations>>.
+We now present the cryptographic algorithms used to generate SCCs and to authenticate and decrypt them.
+This completes the description of the semantics of the management operations as given in <<ACE-management-operations>>,
+in the description of `ace.setst`
+(<<ACE-instruction-setst>>), and in the code detailing the operations as split by the architecture (<<ACE-management-code-snippets>>).
+See also `ace.load` (<<ACE-instruction-load>>), `ace.store` (<<ACE-instruction-store>>), and `ace.getmd` (<<ACE-instruction-getmd>>).
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -284,12 +288,14 @@ function AES_GCM_SIV_Decrypt(AD[] : array of bits(128), N : bits(96), SIV : bits
 [[ACE-SCC-export]]
 ==== Generation of an SCC from a Fully Configured CR
 
-[WARNING]
-====
-The content and placement of the material in this section is provisional.
-====
+// [WARNING]
+// ====
+// The content and placement of the material in this section is provisional.
+// ====
 
-If the _ConfigStatus_ field is set to _CfgStComplete_, then ``K(i)`` is fully provisioned and `ace.export` works as follows:
+If the _ConfigStatus_ field is set to _CfgStComplete_, then ``K(i)`` is fully provisioned,
+and opening the CR for export (`ace.setst Kd|K(Xd), #export_open`) performs the following steps
+to create the serialized, encrypted and authenticated SCC from the CR.
 
 .Exporting a Fully Configured CR ``K(i)``
 [example]
@@ -308,57 +314,14 @@ If the _ConfigStatus_ field is set to _CfgStComplete_, then ``K(i)`` is fully pr
 . Finally, output `MDH`, `SIV`, `Content1[]`, and, if VarDataLen {ne} 0, `IMPQUAL`, `SIV2`, and `Content2[]`.
 --
 
-////
-==== Export of a Partially Configured CR
-
-[WARNING]
-====
-The content and placement of the material in this section is provisional.
-====
-
-The architecture does not prevent to initiate a CR management process while the same or any other CR is being managed.
-However, software–including interrupt and exception handlers–must take care to avoid situations that may lead to corruption of CRs and SCCs.
-
-Exporting a Partially Configured CR ``K(i)`` needs to distinguish between provisioning and import.
-
-.Exporting a Partially Provisioned CR ``K(i)``
-[example]
---
-. The _ConfigStatus_ field in the exported MDH is not changed.
-. The length of the exported Content is the same as the length of the PI.
-. Any data that has not been transferred to the CR yet is exported as zeros–the scenario of an interrupted and context switched import operation is rare, and therefore there is no point to optimize it by exporting only the data actually provisioned so far.
-. No encryption or authentication occurs, the information in the CR is exported verbatim, in the same order as they appear in the PI. This implies that the provisioned data is exported in the clear. However, this does not increase the attack surface since more privileged modes have access to their children processes's address spaces.
---
-
-.Exporting a Partially Imported CR ``K(i)``
-[example]
---
-. The _ConfigStatus_ field in the exported MDH is not changed.
-. (The handler code notices that _ConfigStatus_ = _CfgStImporting_.)
-. The length of the exported Content is the same as the length of the original SCC that was being imported (including the adjustments made by the import operation).
-. Any data that has not been transferred to the CR yet is exported as zeros–exactly as in the case of a partially provisioned CR, and for the same reasons.
-. No encryption or authentication occurs, the information in the CR is exported verbatim, in the same order as they appear in the SCC, namely:
- `MDH`, `SIV`, `Content1[]`, and, if they are present `IMPQUAL`, `SIV2`, and `Content2[]`.
- `MDH`, `SIV`, `IMPQUAL`, `SIV2` are left unencrypted, `Content1[]` and `Content2[]` are exported in the original encrypted form.
---
-
-In both cases, We call the exported context an _Exported Partial Context_ (EPC).
-
-If an export operation of a partially configured/imported CR is interrupted, the same CR may have to be exported again.
-No matter how rare such event, we must architect the proper behavior of export operations and give the proper guidelines for using them.
-This is luckily conceptually no different from multiply interrupted vector load and store operations.
-The CR will be recognized by the handler in the new mode as a partially configured CR, and the handler code will follow the same semantics as the interrupted handler.
-////
-
 // ////////////////////////////////////////////////////////////////////
 
 [[ACE-SCC-import]]
 ==== Import of a complete SCC into a1 CR
 
-[WARNING]
-====
-The content and placement of the material in this section is provisional.
-====
+When the import of the SCC of a fully configured CR is completed,
+`ace.setst  Kd|K(Xd), #import_close` must decrypt and authenticate the SCC.
+This is performed by the following algorithm.
 
 .Importing a Fully Configured CR ``K(i)``
 [example]
