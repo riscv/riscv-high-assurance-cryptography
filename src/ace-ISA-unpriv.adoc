@@ -644,8 +644,7 @@ _HLocality_ is active only when the H extension is enabled and V=1; otherwise, i
 NOTE: A system key identifier may refer to keys with unrelated purposes on different devices, leading to unspecified behavior.
 Implementations shall assign usage policies at least as restrictive as the key's own native policies, and supply an appropriate _Locality_ during CR provisioning.
 
-Up to five architected Localities may be active concurrently: two from the HW Binding Group, one of either _PhysBootScrt_ or _VirtBootScrt_, one from the SW Filter Group and the _Nonce_.
-In <<ACE-provisioning-export-import>>, it is explained how the associated policies are enforced.
+Up to five architected Localities may be active concurrently: two from the HW Binding Group, one of either _PhysBootScrt_ or _VirtBootScrt_, one from the SW Filter Group and the _Nonce_.  The enforcement of the policies associated to the Localities is a result of the SCC generation and import algorithms described in <<ACE-export-import-algorithms>>.
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -726,7 +725,7 @@ ACE provides a number of unprivileged CSRs.
 |  0xXXX     |    URW    | `aceiobuflen`            | ACE input/output buffer length in bits.
 |  0xXXX     |     RO    | `acemaxiobuflen`         | ACE maximum input/output buffer length in bits. Read only.
 |  0xXXX     |    URW    | `aceiobuftop`            | ACE input/output buffer limit for current transfers in bits.
-|  0xXXX-XXX |    URW    | `acenonce0`, `acenonce1` | Nonce to be used in `ace.import` and `ace.export` (see <<ACE-provisioning-export-import>>).
+|  0xXXX-XXX |    URW    | `acenonce0`, `acenonce1` | Nonce to be used in `ace.import` and `ace.export` (see <<ACE-export-import-algorithms>>).
 |===
 
 // ////////////////////////////////////////////////////////////////////
@@ -772,7 +771,7 @@ _Included in_::
 `acestart` is an alias for `vstart`. Therefore, it is an XLEN-bit RW CSR.
 ACE defines it also when the V extension is not enabled.
 
-`acestart` tracks the progress of resumable ACE instructions, such as `ace.input` and `ace.output`, but also of provisioning and import/export operations if they support resumption (for the latter, see <<ACE-provisioning-export-import>>).
+`acestart` tracks the progress of resumable ACE instructions, such as `ace.input` and `ace.output`, but also of provisioning and import/export operations if they support resumption (for the latter, see <<ACE-export-import-algorithms>>).
 It also applies to `ace.exec` when iteratively processing a multi-block operand, as `ace.exec` may be interrupted between blocks.
 Only these instructions honor a nonzero `acestart`; all other instructions ignore it and are restarted, with `acestart` also being cleared.
 
@@ -900,7 +899,7 @@ _Included in_::
 
 {empty}
 (((CSR, `acenonce`)))
-`acenonce0` and `acenonce1` are XLEN-bit URW CSR that define the nonce to be used in `ace.import` and `ace.export` (see <<ACE-provisioning-export-import>>).
+`acenonce0` and `acenonce1` are XLEN-bit URW CSR that define the nonce to be used in `ace.import` and `ace.export` (see <<ACE-export-import-algorithms>>).
 `acenonce0` contains bits [63:0] of the nonce, and `acenonce1` contains bits [95:64] of the nonce.
 The most significant 32 bits of `acenonce1` are fixed to zero.
 
@@ -1335,7 +1334,7 @@ No changes to the CR state are made.
 
 Whenever `ace.setst`, used as a configuration instruction, fails for any other reason, the target CR is cleared.
 
-The full provisioning, export, and import operations are described in detail in <<ACE-provisioning-export-import>>.
+The full provisioning, export, and import operations are described in detail in <<ACE-export-import-algorithms>>.
 --
 +
 
@@ -2113,5 +2112,107 @@ An implementation always has the option to restart an operation instead of resum
 The ACE instructions are designed so that the same instruction sequences work correctly in all such cases.
 
 For example, in the split-instruction mode, the instruction that loads or stores a CR's content (except the first 8 bytes) may always fail, signalling that the import, provisioning, or export operation must be restarted. The software then reprograms the CR for that operation and processes the first 8 bytes separately. Consequently, any correct code sequence operates correctly on every ACE implementation.
+
+// ///////////////////////////////////////////////////////////////////
+
+[[ACE-management-code-snippets]]
+=== Code for CR Configuration and Export Operations
+
+In this section we show how entire configuration and export operations are effectively coded.
+The code snippets presented here to not fully include the error management part–they only include the main operation logic together with the detection of any error condition. While these code snippets are obviously much longer than monolithic instructions, we observe that these can be made into libraries or OS APIs. The use of indirect CR addressing proves itself very useful in this case.
+
+Register `t6` points to the memory location where a PI or SCC is stored.
+Register `t0` contains the number of the CR to be configured or exported.
+The code also uses `t1`, `t2`, and `t3` for temporary storage.
+
+*Provisioning*
+----
+  ld         t1, 0(t6)                  # load MDH bits [63:0] from memory
+  li         t3, #23
+restart:
+  ace.setst  K(t0), t1, #provision_open # open CR for provisioning, load MDH[63:0] in it
+  ace.getst  t2, K(t0)                  # get _State_ field from MDH[63:0]
+  bltu       t3, t2, handle_errors      # errors (larger than 23, i.e. ≥ 24)
+  beqz       t2, handle_errors          # handle error (is _Off_ needed?)
+  ace.load   K(t0), 8(t6)               # load rest of PI starting with MDH[127:64]
+  ace.getst  t2, K(t0)                  # get _State_ field from MDH[63:0]
+  li         t3, #ace_state_off         # compare to off state
+  beq        t2, t3, restart            # CR cleared means force restart
+  ace.setst  K(t0), #provision_close    # possibly reconstructs data
+  ace.getst  t2, K(t0)                  # get _State_ field from MDH[63:0]
+  bltu       t3, t2, handle_errors      # handle other errors (> 23, i.e. ≥ 24)
+success:
+----
+
+*Import*
+----
+  ld         t1, 0(t6)                  # load MDH bits [63:0] from memory
+  li         t3, #23
+restart:
+  ace.setst  K(t0), t1, #import_open    # prepare CR for import, load MDH[63:0] in it
+  ace.getst  t2, K(t0)                  # get _State_ field from CR (after checks!)
+  bltu       t3, t2, handle_errors      # errors (larger than 23, i.e., ≥ 24)
+  ace.load   K(t0), 8(t6)               # load all the rest starting with MDH[127:64]
+  ace.getst  t2, K(t0)                  # get _State_ field from MDH[63:0]
+  li         t3, #ace_state_off         # compare to off state
+  beq        t2, t3, restart            # CR cleared means force restart
+  ace.setst  K(t0), #import_close       # decrypt/authenticate CR, possibly complete it
+  ace.getst  t2, K(t0)                  # get _State_ field from MDH[63:0]
+  bz         t2, handle_errors          # handle _Off_ state (needed ? double check)
+  bltu       t3, t2, handle_errors      # handle other errors (> 23, i.e., ≥ 24)
+success:
+----
+
+During the provisioning and import procedures, the validity of bits [63:0] of the metadata field is checked immediately.
+The validity of bits [127:64] is deferred to sealing, which in the case of import includes authentication.
+If these bits are invalid, the CR will be invalidated upon executing `ace.setst K(t0), #provision_close/import_close` and so the following `ace.getst` will catch this situation.
+
+NOTE: Implementations may interleave decryption and authentication with the load operation.
+If an import is interrupted and the partial state exported (assuming we allow that),
+the exported data must be the original encrypted data loaded so far, and not a re-encryption
+of a partially decrypted payload.  This is required for both correctness and security.
+
+*Export*
+----
+  ace.size   t2, K(t0)                # get size of the data to export
+  {...}  # here goes the code that allocates the buffer to store the exported data
+
+  ace.getmd  t1, K(t0)
+  ace.setst  K(t0), #export_open      # If not already done, compute SIVs + encrypt state
+  sd  0(t6), t1
+
+  # The next instruction stores all data starting with the 8th byte of the MDH.
+  # In case of interrupt/exception, the handler will decide whether
+  # to keep `acestart` or clear it to force restart.
+  # the instruction gets the length of the blob to export from the MDH
+  # no special handling from the SW is necessary.
+
+  ace.store  8(t6), K(t0)
+
+success:
+  # Reset the first 64 bits of MDH to saved value.  If the saved state is _CfgStcomplete_,
+  # the operation also re-decrypts the state and verifies the SIV/SIV2 tag, then releases
+  # 128 or 384 bits for SIV/IMPQUAL/SIV2 storage.
+
+  ace.setst  K(t0), t1, #export_close
+----
+
+// NOTE: The three instructions are essentially the same as `ace.export`.
+// This first splitting is useful if we want to consider splitting also the entire loading.
+// NOTE: Maybe we can have multiple export operations open, but only one prov/init.
+
+[NOTE]
+====
+If we seal prematurely, then we get an authentication error.
+If we forget to seal, we also get errors because we cannot use the CR.
+====
+
+[NOTE]
+====
+Longer instruction sequences based on XLEN-wide writes from GPRs into a CR's state are also possible.
+However, safely resuming such code after preemption may be more cumbersome.
+This is feasible and minimally impacts code size, since provisioning, import, and export routines can be placed in a shared library, with indirect CR addressing allowing the target CR to be passed as a parameter.
+Storing some state information in the caller's context also reduces the need for dedicated CSRs.
+====
 
 // ////////////////////////////////////////////////////////////////////

@@ -163,98 +163,10 @@ if the _ImpDataLen_ is non-zero.
 
 // ////////////////////////////////////////////////////////////////////
 
-[[ACE-provisioning-export-import]]
+[[ACE-export-import-algorithms]]
 === Management of Cryptographic Contexts
 
 We now expand on the brief description of management operations in <<ACE-management-operations>>.
-
-////
-
-[[ACE-provisioning]]
-==== Provisioning
-
-[WARNING]
-====
-The content and placement of the material in this section is provisional.
-====
-
-Provisioning ``K(i)`` performs the following steps:
-
-.Provisioning
-[example]
---
-. Clear ``K(i)``. In particular, the internal CRF memory corresponding to ``K(i)`` will read as zero.
-. Read the least significant 64 bits of the MDH `ml` = `MDH[63:0]` from memory, i.e., the first 8 bytes of the PI.
-Check `ml` for consistency and integrity: Failure shall result in an Error State.
-. Allocate internal resources for ``K(i)``. Failure raises an exception.
-. Set `ml`._ConfigStatus_ <- _CfgStProvisioning_, store `ml` in ``K(i)``.``MDH[63:0]``.
-. Read the rest of the PI content from memory, store it in ``K(i)``, viewed as a buffer.
-  This read operation starts with the 8th byte of the PI and stores it in ``K(i)``.``Content[]``.
-. Perform any necessary readjustment of the CR's content to turn it into the format internally consumed by the ACE Unit.
-. ``K(i)``.``MDH``._ConfigStatus_ <- _CfgStComplete_.
---
-
-////
-
-// [WARNING]
-// ====
-// The architecture can be extended to export a partially configured CR:
-// This procedure is fully described in <<ACE-SCC-export>>.
-//
-// We call such an exported context an _Exported Partial Context_ (EPC).
-// Importing such an EPC into a CR follows the a similar algorithm as for provisioning above, however the
-// value of the _ConfigStatus_ field in the exported MDH is maintained and not cleared at the end.
-// ====
-
-// ////////////////////////////////////////////////////////////////////
-
-// [[ACE-interruption-points]]
-// ==== Resumability of Configuration and Export Operations
-
-// [WARNING]
-// ====
-// Provisioning, import and export are being rewritten!
-// Our goal is to have instructions that are as RISC-y as possible, but without compromising security.
-// Also, these should scale unchanged from small cores to high-performance CPUs, and therefore not enforce any specific hardware microarchitecture.
-// ====
-
-////
-// ===== Current Approach
-
-The software stack must ensure that an interrupted configuration or export operation may resume only if control returns to the same caller without an intervening context switch and the CR has not been modified. The latter is in general difficult to enforce, and either some internal flag is set to force restart and ignore the value of `acestart`.
-To enforce this, instead, the context switch handler clears partially configured or exported CRs at context save and again at context restore, forcing the instruction to restart the operation from the beginning.
-
-This approach ensures that:
-
-.. No partially configured or exported CRs remain in a VM's context if a migration occurs;
-.. The implementation is free to choose any internal representation of a partially configured CR (including the order in which data is read); and
-.. Any implementation may define its own `acestart` values for resumption, depending on the granularity of interruption points and the semantics of the work between them.
-
-. Also, if the provisioning is a single instruction, the implementation must first re-read the MDH,
-to determine the length of the PI and verify its integrity before proceeding. In this case the data is
-read sequentially and `acestart` is set to the offset of the first non-imported bit.
-
-. If provisioning is performed by split operations, the first 64 bits of the MDH must be stored first into the CR.
-
-. If loading the data in multiple blocks and keeping track of the loaded data is left to the software,
-then the implementation will not update `acestart`.
-
-During provisioning or import, metadata field _ConfigStatus_ is set accordingly to _CfgStProvisioning_ or _CfgStImporting_.
-This field is only reset to _CfgStComplete_ upon completion of `ace.prov` and `ace.import`.
-It is updated to the correct value only upon successful completion (see <<ACE-provisioning-export-import>>).
-This transition does not occur during `ace.export`.
-
-During provisioning or import, the _ConfigStatus_ metadata field is set to _CfgStProvisioning_ or _CfgStImporting_, respectively.
-This field may only be reset to _CfgStComplete_ upon successful completion of the operation (see <<ACE-provisioning-export-import>>).
-
-Exporting requires the software to first save bits [63:0] of the MDH to memory.
-At this point, the operation distinguishes between two cases:
-
-. If _ConfigStatus_ is _CfgStComplete_, the export operation must first prepare the CR to be exported as authenticated ciphertext, and set _ConfigStatus_ to _CfgStExporting_. Upon successful completion, the CR is restored to its usual internal representation and _ConfigStatus_ is set to _CfgStComplete_.
-. If _ConfigStatus_ is not _CfgStComplete_, the CR is viewed as a buffer and already in a directly exportable state.  _ConfigStatus_ is not modified and no preparation or restoration of the CR occurs.  Upon successful completion, _ConfigStatus_ must be set to the value supplied by the software.
-////
-
-// ////////////////////////////////////////////////////////////////////
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -488,110 +400,6 @@ Explain: This does not increase the attack surface since:
 . Encrypted and authenticated data must be complete before it can be authenticated, otherwise authentication will fail with high probability. (1-1^128^).
 ////
 
-// ///////////////////////////////////////////////////////////////////
-
-[[ACE-management-code-snippets]]
-==== Use of Split Provisioning, Import and Export Instructions
-
-[WARNING]
-====
-This section is being actively worked on.
-If we implement this change, we reuse the `ace.import`, resp., `ace.export` encodings for `ace.load`, resp., `ace.store`.
-We free the encoding for `ace.prov`.
-We keep `ace.import.S`.
-====
-
-*Provisioning*
-----
-  ld         t0, 0(t6)                # load MDH bits [63:0] from memory
-  li         t3, #23
-restart:
-  ace.setst  K0, t0, #provision_open  # prepare CR for provisioning, load MDH[63:0] in it
-  ace.getst  t2, K0                   # get _State_ field from MDH[63:0]
-  bltu       t3, t2, handle_errors    # errors (larger than 23, i.e. ≥ 24)
-  beqz       t2, handle_errors        # handle error (is _Off_ needed?)
-  ace.load   K0, 8(t6)                # load rest of PI starting with MDH[127:64]
-  ace.getst  t2, K0                   # get _State_ field from MDH[63:0]
-  li         t3, #ace_state_off       # compare to off state
-  beq        t2, t3, restart          # CR cleared means force restart
-  ace.setst  K0, #provision_close     # possibly reconstructs data
-  ace.getst  t2, K0                   # get _State_ field from MDH[63:0]
-  bltu       t3, t2, handle_errors    # handle other errors (> 23, i.e. ≥ 24)
-success:
-----
-
-
-*Import*
-----
-  ld         t0, 0(t6)                # load MDH bits [63:0] from memory
-  li         t3, #23
-restart:
-  ace.setst  K0, t0, #import_open     # prepare CR for import, load MDH[63:0] in it
-  ace.getst  t2, K0                   # get _State_ field from CR (after checks!)
-  bltu       t3, t2, handle_errors    # errors (larger than 23, i.e., ≥ 24)
-  ace.load   K0, 8(t6)                # load all the rest starting with MDH[127:64]
-  ace.getst  t2, K0                   # get _State_ field from MDH[63:0]
-  li         t3, #ace_state_off       # compare to off state
-  beq        t2, t3, restart          # CR cleared means force restart
-  ace.setst  K0, #import_close        # decrypt/authenticate CR, possibly complete it
-  ace.getst  t2, K0                   # get _State_ field from MDH[63:0]
-  bz         t2, handle_errors        # handle _Off_ state (needed ? double check)
-  bltu       t3, t2, handle_errors    # handle other errors (> 23, i.e., ≥ 24)
-success:
-----
-
-During the provisioning and import procedures, the validity of bits [63:0] of the metadata field is checked immediately.
-The validity of bits [127:64] is deferred to sealing, which in the case of import includes authentication.
-If these bits are invalid, the CR will be invalidated upon executing `ace.setst K0, #provision_close/import_close` and so the following `ace.getst` will catch this situation.
-
-NOTE: Implementations may interleave decryption and authentication with the load operation.
-If an import is interrupted and the partial state exported (assuming we allow that),
-the exported data must be the original encrypted data loaded so far, and not a re-encryption
-of a partially decrypted payload.  This is required for both correctness and security.
-
-*Export*
-----
-  ace.size   t2, K0                # get size of the data to export
-  {...}  # here goes the code that allocates the buffer to store the exported data
-
-  ace.getmd  t0, K0
-  ace.setst  K0, #export_open      # If not already done, compute SIVs + encrypt state
-  sd  0(t6), t0
-
-  # The next instruction stores all data starting with the 8th byte of the MDH.
-  # In case of interrupt/exception, the handler will decide whether
-  # to keep `acestart` or clear it to force restart.
-  # the instruction gets the length of the blob to export from the MDH
-  # no special handling from the SW is necessary.
-
-  ace.store  8(t6), K0
-
-success:
-  # Reset the first 64 bits of MDH to saved value.  If the saved state is _CfgStcomplete_,
-  # the operation also re-decrypts the state and verifies the SIV/SIV2 tag, then releases
-  # 128 or 384 bits for SIV/IMPQUAL/SIV2 storage.
-
-  ace.setst  K0, t0, #export_close
-----
-
-// NOTE: The three instructions are essentially the same as `ace.export`.
-// This first splitting is useful if we want to consider splitting also the entire loading.
-// NOTE: Maybe we can have multiple export operations open, but only one prov/init.
-
-[NOTE]
-====
-If we seal prematurely, then we get an authentication error.
-If we forget to seal, we also get errors because we cannot use the CR.
-====
-
-[NOTE]
-====
-Longer instruction sequences based on XLEN-wide writes from GPRs into a CR's state are also possible.
-However, safely resuming such code after preemption may be more cumbersome.
-This is feasible and minimally impacts code size, since provisioning, import, and export routines can be placed in a shared library, with indirect CR addressing allowing the target CR to be passed as a parameter.
-Storing some state information in the caller's context also reduces the need for dedicated CSRs.
-====
-
 // ////////
 
 [[ACE-algorithms-spec]]
@@ -679,12 +487,6 @@ is not yet complete or contains ambiguities.
 |===
 
 //
-
-==== Padding
-
-As a general rule, inputs shorter than a full vector length must be handled by the caller.
-The caller is responsible for proper padding and for passing the actual input length to the algorithm at the appropriate places using the correct instructions, usually `ace.setst`.
-An exception applies when an algorithm specification defines such handling itself for cryptographic security reasons.
 
 ==== Definition of an Algorithm in ACE
 
@@ -795,6 +597,12 @@ System Keys will change all the algorithms described here in the following way:
   saves space in an SCC and allows for faster export and import operations.
 . For algorithms that require more than one key, such as XEX/XTS, a single
   SKID is used to refer retrieve multiple keys from the SKS.
+
+==== Padding
+
+As a general rule, inputs shorter than a full vector length must be handled by the caller.
+The caller is responsible for proper padding and for passing the actual input length to the algorithm at the appropriate places using the correct instructions, usually `ace.setst`.
+An exception applies when an algorithm specification defines such handling itself for cryptographic security reasons.
 
 // ////////////////////////////////////////////////////////////////////
 
