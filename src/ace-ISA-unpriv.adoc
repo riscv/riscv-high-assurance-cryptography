@@ -591,6 +591,8 @@ The admissible values of this field are given in the table below.
 |   3   | _CfgStExporting_     | The CR has been placed in exporting mode, i.e., its contents have been encrypted and authenticated for export..
 |===
 
+Usage and cloning of a CR whose _ConfigStatus_ is not _CfgStComplete_ are not allowed.
+
 // ////////////////////////////////////////////////////////////////////
 
 [[ACE-extra-content]]
@@ -2096,26 +2098,18 @@ An implementation is not required to support resumption, and even those that do 
 For this reason, we define specific instruction sequences for the management operations, cf <<ACE-management-code-snippets>>.
 The architecture is co-designed with the intended use of the instructions.
 
-Upon returning from an exception, an export may resume only if the CR has not been modified.
-This is enforced by preventing use of a CR whose _ConfigStatus_ is not _CfgStComplete_.
-CR cloning is also disallowed in this case.
-
 A context switch handler can force a restart by clearing partially configured or exported CRs at context save and again at context restore.
 This must also be handled by the software.
 
 ==== Resumption and Memory Model
 
-RISC-V implementations may read or write long inputs in an arbitrary order.
-Enforcing a strict access ordering for ACE inputs and outputs could therefore be complex on microarchitectures that are optimized for a particular use case.
+RISC-V implementations may read or write long inputs in an arbitrary order. Enforcing a strict access ordering for ACE inputs and outputs could therefore be complex on microarchitectures optimized for a particular use case.
 
-This must not require to write different code for different behaviors.
-The ACE unit itself sends commands to the LSU to read and write memory sequentially—analogously to software looping over an array.
-The LSU may then issue those reads and writes in any order it chooses.
+This must not require different code for different behaviors. The ACE unit itself sends commands to the LSU to read and write memory sequentially—analogously to software looping over an array. The LSU may then issue those reads and writes in any order it chooses.
 
-An implementation always has the option to restart an operation instead of resuming it, for any reason, and ignore and clear `acestart`.
-The ACE instructions are designed so that the same instruction sequences work correctly in all such cases.
+An implementation always has the option to restart an operation instead of resuming it, for any reason, and to ignore and clear `acestart`. The ACE instructions are designed so that the same instruction sequences work correctly in all such cases and on every ACE implementation.
 
-For example, in the split-instruction mode, the instruction that loads or stores a CR's content (except the first 8 bytes) may always fail, signalling that the import, provisioning, or export operation must be restarted. The software then reprograms the CR for that operation and processes the first 8 bytes separately. Consequently, any correct code sequence operates correctly on every ACE implementation.
+For example, the instruction that loads or stores a CR's content starting with the 8th byte may always fail, leaving the CR in an _Off_ state. This signals that the import, provisioning, or export operation must be restarted. The software must then prepare the CR for the operation again. For import and provisioning, this entails providing the first 8 bytes of the MDH to the `ace.setst` instruction used to prepare the CR again.
 
 // ///////////////////////////////////////////////////////////////////
 
