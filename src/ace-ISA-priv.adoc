@@ -246,36 +246,34 @@ A `mcrstatus` register may be defined, _mutatis mutandis_, in the same manner as
 // ////////////////////////////////////////////////////////////////////
 
 [[ACE-lazy-loading]]
-==== Use of ``*crstatus``'s “Other” Value for Lazy Context Switching
+==== Use of ``*crstatus``'s “Other” Value for Lazy Context Switching and CR Loading
 
 _This section is non-normative._
 
-VM migration can become an issue when the destination machine has a smaller CRF than the source machine.
-Migration could fail, or the VM may have to let some processes terminate abnormally.
-A lazy-loading mechanism for CRs, besides optimizing the performance of context switching, may be used to load CRs on demand.
-This mechanism can also be used asn an optimization or to emulate a larger CRF, and is described here.
 
-When a context switching handler does not intend to restore ``K(``__i__``)`` at context restore, it sets instead _X_``crstatus``(__i__) to Lazy.
-When _X_``crstatus``(__i__) is set, attempts to use or export ``K(``__i__``)`` causes the hardware to trap to allow the authoritative value of ``K(``__i__``)`` to be restored.
+VM migration can become an issue when the destination machine has a smaller CRF than the source machine.  In such cases, migration may fail, or guest software may be forced to terminate processes.  A lazy-loading mechanism for CRs can mitigate this issue. In addition to reducing context-switch overhead, it enables CRF oversubscription and supports migration to systems with smaller CRFs.
 
-_Lazy Context Switching_ defers the restoration of a CR from its saved SCC at context restore.
-Instead, the CR is marked as “lazy”.
-Any subsequent access to that CR—including export, but not operations that would overwrite it (such as clear, provisioning, or import)—causes a trap to the environment that holds the authoritative SCC: that environment will then import the SCC and return to the initial requester.
-The trap handler checks whether the associated SCC can be imported and, if not, it must select another configured CR first, export it, free it and mark it instead as “lazy”.
-The selection of which CR to free is delegated to software or to an implementation defined mechanism.
+When a context-switch handler chooses not to restore a configured register ``K(``__i__``)``  during context restoration, it sets  _X_``crstatus``(__i__)  to Lazy instead. While a CR is marked Lazy, any operation that requires its current value—including export and cryptographic use—causes a trap. Operations that overwrite the CR, such as clear, provisioning, or import, do not cause a trap.
 
-Processes can be interrupted for the purpose of context switch by any higher-privileged mode:
-// U-mode processes may be interrupted for the purpose of context switching by handles at VS-, H-, or even M-mode, and VS-node processes may be interrupted by H- or M-mode.
-Therefore, when accessing a lazily restored CR, it is important to know _which_ environment has exported the value of the CR last.
+Lazy context switching defers restoration of a CR from its saved SCC.
+The authoritative value remains stored in the SCC, while the CR itself remains unconfigured.
+When software subsequently accesses the CR, the trap handler restores its value by importing the SCC.
 
-Let __B__ be a privilege mode and __A__ its immediate parent.
-When an exception handler in __A__-Mode saves CR ``K(``__i__``)`` for the software running at __B__-Mode, it may choose to set
-__A__``crstatus``(__i__) to Lazy instead, and then unconfigure ``K(``__i__``)``, which causes the hardware to set _X_``crstatus``(__i__) to Dirty for __X__ corresponding to all modes above __A__.
-This means that authoritative SCC for ``K(``__i__``)`` is found in the first mode __C__, starting from M and going down, with __C__``crstatus``(__i__) = Lazy
+If there is no sufficient CRF available when the SCC must be imported, the trap handler selects another configured CR, exports its state to an SCC, marks it Lazy and frees it, and then restores the requested CR. The policy used to select the CR to be evicted is implementation-defined or software-defined.
 
-When, at a later point, the process in Mode __B__ is resumed and accesses ``K(``__i__``)``, the trap handler for lazy reloading starts at _X_ = M, and looks whether _X_``crstatus``(__i__) is Lazy or not. If it is Lazy, this means that __X__ possesses the authoritative value of ``K(``__i__``)`` and can import it from the SCC, otherwise the trap is taken to the immediately higher mode, which performs the same evaluation.
+As execution may be interrupted by any higher-privilege mode, the architecture must be able to determine which privilege mode currently holds the authoritative SCC for a lazily restored CR:
 
-This feature is not only a context switching optimization, but it necessary to provide enhanced support VM migration, where it may happen that a VM is migrated to a target device where the CRF capacity is insufficient to import all the SCCs saved by the hypervisor.
+. Let __B__ be a privilege mode and __A__ a higher privileged mode.
+Suppose an exception handler executing in __A__-Mode has saved CR ``K(``__i__``)`` on behalf of software running in __B__-mode.
+At context restore, the exception handler may choose not to restore the CR, but to set __A__``crstatus``(__i__) to _Lazy_ instead.
+Then, it unconfigures ``K(``__i__``)``, causing the hardware to set __X__``crstatus``(__i__) to Dirty for all privilege modes __X__ above __A__.
+
+. Consequently, the authoritative SCC for ``K(``__i__``)`` resides in the highest privilege mode __C__ such that __C__``crstatus``(__i__) = Lazy.
+
+. If the software in __B__-mode later accesses ``K(``__i__``)``, the lazy-reload trap handlers search privilege modes from M-mode downward. The first mode __X__ for which __X__``crstatus``(__i__) = Lazy holds the authoritative SCC.  That mode thus restores ``K(``__i__``)`` from its saved SCC.
+// If__X__``crstatus``(__i__) is not Lazy, trap handling continues in the next lower privilege mode.
+
+Besides being a context-switching optimization, this feature enables support for VM migration when the destination platform lacks sufficient CRF capacity to restore all SCCs saved by the originating hypervisor.
 
 // ////////////////////////////////////////////////////////////////////
 
