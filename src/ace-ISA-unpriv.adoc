@@ -399,7 +399,7 @@ The architected values of _State_ common to all algorithms are defined in the fo
 |  24    | `ace_state_not_impl`        | _Not_Impl_        | Not implemented algorithm. It is set by the hardware upon an attempt to provision or import a CR that is not supported by the implementation.
 |  25    | `ace_state_invalid`         | _Invalid_         | Invalid/invalidated state, for instance because of the use of an invalid value (argument, state, or metadata).
 |  26    | `ace_state_out_of_mem`      | _Out_of_Memory_   | Insufficient CRF memory for configuration instruction. This may be set by privileged code in case they do not handle the CR allocation.
-|  27    | `ace_state_import_auth`     | _Auth_Failed_     | Authentication failure with `ace.import`.
+|  27    | `ace_state_ace_CR_import_auth`     | _Auth_Failed_     | Authentication failure with `ace.import`.
 |  28    | `ace_state_priv_viol`       | _Priv_Viol_       | Violation of Usage Control policies.
 |  29    | `ace_state_expired`         | _Expired_         | The CR has expired.  This is set by the hardware even if the condition also raises an exception.
 | 30, 31 | (Reserved)                  |                   | Reserved for future use.
@@ -851,10 +851,14 @@ Attempting to execute an operation that expects an input or an output in the ACE
 
 Writing a value larger than `acemaxiobuflen` raises exception `ace_exc_out_of_mem`.
 
+
+[NOTE]
+====
 As per the Privileged Architecture, the dirtiness of the ACEIOBUF is not tracked except as part of the entire ACE state in `*status`.
 Context switching code is expected to save and restore the contents of the ACEIOBUF up to `aceiobuflen`.
 We recommend software to set `aceiobuflen` to zero once the contents of the ACEIOBUF are no longer needed.
 Context switching code can use this information to avoid unnecessary save and restore of ACEIOBUF contents.
+====
 
 _Included in_::
 +
@@ -946,8 +950,11 @@ The notation `K{Xd}` denotes the CR whose index is held in GPR `Xd`.
 // NOTE: Trappability refers solely to the CPU-side implementation—for example, to enable decomposition of certain ACE instructions into smaller custom operations.
 // This is distinct from custom algorithm implementations within the ACE unit itself (e.g., via a secure embedded CPU with updatable firmware), which are outside the scope of this specification.
 
-NOTE: ACE does not have concepts similar to the vector crypto extension's Element Group Width (EGW), Effective Element Width (EEW), and Element Group Size (EGS).
+[NOTE]
+====
+ACE does not have concepts similar to the vector crypto extension's Element Group Width (EGW), Effective Element Width (EEW), and Element Group Size (EGS).
 Since the architecture decouples instructions like `ace.exec` from the actual operations, the high-level design of ACE needs only the total input and output size, denoted `ACELEN`. This is equal to either `VL * SEW` or the `aceiobuftop` length of the ACEIOBUF, as defined in <<ACE-notation>>.
+====
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -1235,25 +1242,25 @@ Certain values of `#immed7`, depending on the Algorithm, may be used to set chan
 
 When used to affect a CR's _ConfigStatus_, `ace.setst` is _not_ considered an usage instruction because it is part of a configuration operation. It is therefore not subject to the limitations on usage instructions, and it will not cause the CR to enter any Error State, including _Expired_.
 
-The special values of `#immed7` to prepare a CR for provisioning, importing, and exporting, and seal it afterwards, are listed in the following table:
+The special values of `#immed7` to initiate a provisioning, importing, and exporting process, and conclude it afterwards, are listed in the following table:
 
 [[ACE-management-immeds]]
 .Values (decimal) of `#immed7` to be used for provisioning, importing, and exporting
-[float="center",align="center",width="100%",cols="^7%,<20,<73%",options="header"]
+[float="center",align="center",width="100%",cols="^7%,<28,<65%",options="header"]
 |===
 | Value | Mnemonic                  |  Description
-|  96   | `provision_open`          |  Prepare a CR for provisioning keys and metadata into it, set _ConfigStatus_ to _CfgStProvisioning_. Needs an auxiliary input in a GPR (or a GPR pair) with bits [63:0] of MDH.
-|  97   | `provision_close`         |  Make the provisioned CR available to software  (“sealing”), set _ConfigStatus_ to _CfgStComplete_. Requires no auxiliary input.
-|  98   | `import_open`             |  Prepare a CR for importing a SCC into it, set _ConfigStatus_ to _CfgStimporting_. Needs an auxiliary input in a GPR (or a GPR pair) with bits [63:0] of MDH.
-|  99   | `import_close`            |  Decrypt and authenticate the imported SCC, make the CR available to software, set _ConfigStatus_ to a provided value.
-| 100   | `export_open`             |  Prepare a CR for exporting it as a SCC (if not yet in the correct format), set _ConfigStatus_ to _CfgExporting_. Requires no auxiliary input.
-| 101   | `export_close`            |  Restore the exported CR in the internal clear format (only if already complete) and make it available to software, set _ConfigStatus_ to a provided value. Uses an auxiliary input in a GPR (or a GPR pair) with bits [63:0] of MDH to restore _ConfigStatus_ saved by software.
+|  96   | `ace_CR_provision_start`  |  Prepare a CR for provisioning keys and metadata into it, set _ConfigStatus_ to _CfgStProvisioning_. Needs an auxiliary input in a GPR (or a GPR pair) with bits [63:0] of MDH.
+|  97   | `ace_CR_provision_end`    |  Make the provisioned CR available to software  (“sealing”), set _ConfigStatus_ to _CfgStComplete_. Requires no auxiliary input.
+|  98   | `ace_CR_import_start`     |  Prepare a CR for importing a SCC into it, set _ConfigStatus_ to _CfgStimporting_. Needs an auxiliary input in a GPR (or a GPR pair) with bits [63:0] of MDH.
+|  99   | `ace_CR_import_end`       |  Decrypt and authenticate the imported SCC, make the CR available to software, set _ConfigStatus_ to a provided value.
+| 100   | `ace_CR_export_start`     |  Prepare a CR for exporting it as a SCC (if not yet in the correct format), set _ConfigStatus_ to _CfgExporting_. Requires no auxiliary input.
+| 101   | `ace_CR_export_end`       |  Restore the exported CR in the internal clear format (only if already complete) and make it available to software, set _ConfigStatus_ to a provided value. Uses an auxiliary input in a GPR (or a GPR pair) with bits [63:0] of MDH to restore _ConfigStatus_ saved by software.
 If the restored value of _ConfigStatus_ is not _CfgStComplete_, the CR is made available to software.
 |===
 
 If `ace.setst` is used with one of the immediates in <<ACE-management-immeds>>, the operation has special semantics:
 
-. *`ace.setst` is used to initiate provisioning, resp., import.*
+. *`ace.setst` is used to start provisioning, resp., import.*
 +
 Before issuing `ace.setst`, software must read Bits [63:0] of the MDH from memory first.
 Let `ml` be this value.
@@ -1266,7 +1273,7 @@ Software must pass `ml` as the auxiliary input to `ace.setst` in a GPR (or a GPR
 .. In other cases here where the Metadata is invalid, such as, for instance, a nonzero _State_ or reserved field: the CR transitions to Error State `ace_state_invalid`, and exception `ace_exc_invalid` is raised as defined in the Privileged Architecture if the latter is implemented.
 .. The implementations will try to allocate CRF capacity according to the requirements of the _Algorithm_, _AlgorithmPolicy_, and _SCProtection_ fields of the MDH. No other field shall affect the amount of capacity required.  If capacity allocation is not possible, the CR is transitioned to Error State `ace_state_out_of_mem`, and exception `ace_exc_out_of_mem` is raised as defined in the Privileged Architecture if the latter is implemented.
 .. Except for Bits [63:0] of the MDH in the CR, which are set to `ml`, the internal CRF memory corresponding to the target CR is zeroed.
-.. _ConfigStatus_ if set to _CfgStProvisioning_, resp., _CfgStImport_. In the latter case, we assume that software has saved the old value of `ml` in its state.
+.. _ConfigStatus_ if set to _CfgStProvisioning_, resp., _CfgStace_CR_import_. In the latter case, we assume that software has saved the old value of `ml` in its state.
 
 . *`ace.setst` is used to terminate a provisioning process.*
 
@@ -1279,14 +1286,14 @@ The software must use Form B of `ace.setst` to contextually pass the saved value
 
 .. If `ml`._ConfigStatus_ = _CfgStComplete_ (we are importing the export of a fully configured CR)
 ... The ACE unit decrypts and authenticates the CR's content.
-... If authentication fails, the target CR is transitioned to Error State `ace_state_import_auth`. No exception is raised.
+... If authentication fails, the target CR is transitioned to Error State `ace_state_ace_CR_import_auth`. No exception is raised.
 ... The ACE unit performs any necessary readjustment of the CR's content to turn it into the format internally consumed by the ACE Unit.
 ...  _ConfigStatus_ is set to _CfgStComplete_.
 .. If `ml`._ConfigStatus_ {ne} _CfgStComplete_  (we are either importing the export of a not fully configured CR or a nested CR export):
 +
 _ConfigStatus_ is set to `ml`._ConfigStatus_.
 
-. *`ace.setst` is used to initiate an export process.*
+. *`ace.setst` is used to start an export process.*
 +
 Let `ml` <- Bits [63:0] of the MDH of the CR.
 Software must save this value in its state to use it when terminating the export process.
@@ -1379,13 +1386,13 @@ _Description_::
 --
 On RV64:
 
-* `ace.getmdl` copies bits [63:0] of the MDH of a CR `Ks` or `K{Xs}` into GPR `Xd`.
+* `ace.getmdl` copies bits [63:0] of the MDH of CR `Ks` or `K{Xs}` into GPR `Xd`.
 * `ace.getmdh` bits [127:64] into GPR `Xd`.
 
 On RV32, `d` must be even, and:
 
-* `ace.getmdl` copies bits  [31:0] of the MDH of a CR `Ks` or `K{Xs}` into GPR `Xd` and bits  [63:32] into GPR `X[d+1]`, atomically.
-* `ace.getmdh` copies bits [95:64] of the MDH of a CR `Ks` or `K{Xs}` into GPR `Xd` and bits [127:96] into GPR `X[d+1]`, atomically.
+* `ace.getmdl` copies bits  [31:0] of the MDH of CR `Ks` or `K{Xs}` into GPR `Xd` and bits  [63:32] of the same CR into GPR `X[d+1]`, atomically.
+* `ace.getmdh` copies bits [95:64] of the MDH of CR `Ks` or `K{Xs}` into GPR `Xd` and bits [127:96] of the same CR into GPR `X[d+1]`, atomically.
 
 The instruction may not modify state, and it is not usage-controlled.
 --
@@ -2016,6 +2023,8 @@ NOTE: It is because of these rules that, in the Algorithms, we write that a cert
 [[ACE-resumability]]
 === Interruptibility and Resumability of ACE instructions
 
+`ace.clear`, `ace.reset`, `ace.setst`, `ace.getst`, `ace.restrict`, `ace.clone`, `ace.size` and `ace.avail` are uninterruptible.
+
 Long-running ACE operations may proceed even if the hart is preempted.
 In this case, when the context‑switch handler accesses an output of the operation register, different behaviors are allowed:
 
@@ -2026,21 +2035,23 @@ or
 
 The architecture permits all these approaches: It only specifies the allowed interruption points for its instructions and algorithms.
 
-`ace.clear`, `ace.reset`, `ace.setst`, `ace.getst`, `ace.restrict`, `ace.clone`, `ace.size` and `ace.avail` are uninterruptible.
-
 `ace.input`, `ace.output`, `ace.load` and `ace.store` may be interrupted and resumed.
 `acestart` may be used to reflect the amount of data read or written before the interrupt.
 In this case resumption will start from that point.
 
 The operation of `ace.exec` on a basic processing unit is uninterruptible, unless explicitly allowed by the algorithm.
-Most cryptographic primitives cannot be interrupted; therefore, state information to encode round number or round key value is not needed.
+Most cryptographic primitives cannot be interrupted; therefore, state information to encode the round number or a round key value is not needed.
 For certain very long running operations, such as public key primitives, an algorithm specific interruptibility and resumability behavior is defined.
 
 When processing multiple blocks iteratively, `ace.exec` handles each block atomically, but it may be interrupted between blocks.
 On an interrupt during block processing, the implementation may either complete the current block before yielding to the handler, or discard the partial computation and restore the state from before its processing.
 `acestart` is updated accordingly to point at the place of resumption.
 
+While handlers can set `acestart` to zero to force a restart of an `ace.exec` operation, this may lead to unpredictable behavior when the input and output overlap.
+
 ==== Management Operations
+
+_This section is informative and non-normative._
 
 The rules defined in `ace.setst` for the initiation and termination of management operations are necessary because any management operation may be interrupted, and there may be multiple nested interrupts or exceptions, with or without context switches.
 Leaving the burden of saving and restoring _ConfigStatus_ to the interrupted software simplifies the logic and supports arbitrarily many levels of nested virtualization.
@@ -2092,7 +2103,7 @@ The code also uses `t1`, `t2`, and `t3` for temporary storage.
   ld         t1, 0(t6)                  # load MDH bits [63:0] from memory
   li         t3, #23
 restart:
-  ace.setst  K{t0}, t1, #provision_open # open CR for provisioning, load MDH[63:0] in it
+  ace.setst  K{t0}, t1, #ace_CR_provision_start # open CR for provisioning, load MDH[63:0] in it
   ace.getst  t2, K{t0}                  # get _State_ field from MDH[63:0]
   bltu       t3, t2, handle_errors      # errors (larger than 23, i.e. ≥ 24)
   beqz       t2, handle_errors          # handle error (is _Off_ needed?)
@@ -2100,7 +2111,7 @@ restart:
   ace.getst  t2, K{t0}                  # get _State_ field from MDH[63:0]
   li         t3, #ace_state_off         # compare to off state
   beq        t2, t3, restart            # CR cleared means force restart
-  ace.setst  K{t0}, #provision_close    # possibly reconstructs data
+  ace.setst  K{t0}, #ace_CR_provision_end    # possibly reconstructs data
   ace.getst  t2, K{t0}                  # get _State_ field from MDH[63:0]
   bltu       t3, t2, handle_errors      # handle other errors (> 23, i.e. ≥ 24)
 success:
@@ -2111,14 +2122,14 @@ success:
   ld         t1, 0(t6)                  # load MDH bits [63:0] from memory
   li         t3, #23
 restart:
-  ace.setst  K{t0}, t1, #import_open    # prepare CR for import, load MDH[63:0] in it
+  ace.setst  K{t0}, t1, #ace_CR_import_start    # prepare CR for import, load MDH[63:0] in it
   ace.getst  t2, K{t0}                  # get _State_ field from CR (after checks!)
   bltu       t3, t2, handle_errors      # errors (larger than 23, i.e., ≥ 24)
   ace.load   K{t0}, 8(t6)               # load all the rest starting with MDH[127:64]
   ace.getst  t2, K{t0}                  # get _State_ field from MDH[63:0]
   li         t3, #ace_state_off         # compare to off state
   beq        t2, t3, restart            # CR cleared means force restart
-  ace.setst  K{t0}, #import_close       # decrypt/authenticate CR, possibly complete it
+  ace.setst  K{t0}, #ace_CR_import_end         # decrypt/authenticate CR, possibly complete it
   ace.getst  t2, K{t0}                  # get _State_ field from MDH[63:0]
   bz         t2, handle_errors          # handle _Off_ state (needed ? double check)
   bltu       t3, t2, handle_errors      # handle other errors (> 23, i.e., ≥ 24)
@@ -2127,7 +2138,7 @@ success:
 
 During the provisioning and import procedures, the validity of bits [63:0] of the metadata field is checked immediately.
 The validity of bits [127:64] is deferred to sealing, which in the case of import includes authentication.
-If these bits are invalid, the CR will be invalidated upon executing `ace.setst K{t0}, #provision_close/import_close` and so the following `ace.getst` will catch this situation.
+If these bits are invalid, the CR will be invalidated upon executing `ace.setst K{t0}, #ace_CR_provision_end/ace_CR_import_end  ` and so the following `ace.getst` will catch this situation.
 
 NOTE: Implementations may interleave decryption and authentication with the load operation.
 If an import is interrupted and the partial state exported (assuming we allow that),
@@ -2146,7 +2157,7 @@ of a partially decrypted payload.  This is required for both correctness and sec
   # export, computes the SIV(s), then changes _ConfigStatus_ to _CfgStExporting_.
   # Otherwise, it does nothing.
 
-  ace.setst  K{t0}, #export_open
+  ace.setst  K{t0}, #ace_CR_export_start
   sd  0(t6), t1                       # Export original _ConfigStatus_ to memory
 
   # The next instruction stores all data starting with the 8th byte of the MDH.
@@ -2163,7 +2174,7 @@ success:
   # to software, otherwise it does nothing and leaves the CR state in the serialized and
   # encrypted format.
 
-  ace.setst  K{t0}, t1, #export_close
+  ace.setst  K{t0}, t1, #ace_CR_export_end
 ----
 
 // NOTE: The three instructions are essentially the same as `ace.export`.
@@ -2454,7 +2465,7 @@ function AES_GCM_SIV_Decrypt(AD[] : array of bits(128), N : bits(96), SIV : bits
 ==== Generation of an SCC from a Fully Configured CR
 
 If the _ConfigStatus_ field is set to _CfgStComplete_, then ``K(i)`` is fully provisioned,
-and opening the CR for export (`ace.setst Kd|K{Xd}, #export_open`) performs the following steps
+and opening the CR for export (`ace.setst Kd|K{Xd}, #ace_CR_export_start`) performs the following steps
 to create the serialized, encrypted and authenticated SCC from the CR.
 
 .Exporting a Fully Configured CR ``K(i)``
@@ -2480,7 +2491,7 @@ to create the serialized, encrypted and authenticated SCC from the CR.
 ==== Import of a complete SCC into a CR
 
 When the import of the SCC of a fully configured CR is completed,
-`ace.setst  Kd|K{Xd}, #import_close` must decrypt and authenticate the SCC.
+`ace.setst  Kd|K{Xd}, #ace_CR_import_end  ` must decrypt and authenticate the SCC.
 This is performed by the following algorithm.
 
 .Importing a Fully Configured CR ``K(i)``
