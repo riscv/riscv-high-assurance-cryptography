@@ -143,26 +143,39 @@ An implementation must wait before performing any operation on a CR that is stil
 
 [NOTE]
 ====
-Indirect CR addressing implies that CR renaming support, while still possible, would significantly increase microarchitectural complexity.
+Indirect CR addressing implies that CR renaming, while still possible, would significantly increase microarchitectural complexity.
 We posit that CR renaming is not expected to be necessary, and may even be detrimental, for ACE, for the reasons outlined below.
 
 . CRs are redefined far less frequently than GPRs or FP registers (excluding implicit internal state changes); and
 . Speculating on the results of cryptographic operations usually leads to security issues.
 ====
 
+We list the most important operations on CRs below, to refer to them before they are fully defined.
+
+* Provisioning (<<ACE-management-operations>>) loads metadata and plaintext Content into a CR, binding them together.
+* Exporting (<<ACE-management-operations>>) exports a CR to memory as an SCC.
+* Importing (<<ACE-management-operations>>) imports a SCC into a CR.
+* `ace.clear` (<<ACE-instruction-clear>>) unconfigures and clears a CR.
+* `ace.exec` (<<ACE-instruction-exec>>) performs cryptographic operations as specified by the algorithm configured in a CR and according to the state of the CR.
+* `ace.setst` (<<ACE-instruction-setst>>) transitions a CR between states of a cryptographic algorithm or states of CR management lifecycle.
+* `ace.clone` (<<ACE-instruction-clone>>) creates a copy of a CR into a second CR.
+
+===== Representation of Cryptographic Registers for Accessing their Contents
+
 A CR can be viewed as a register of variable and discoverable length (more details in <<ACE-CR-representation>>).
 While an ACE implementation may work with an internal representation of a CR's content,
-ACE provides a way to access a CR as if it were a register containing a Provisioning Input (PI) or Sealed Cryptographic Context (SCC), as defined in <<ACE-external-formats>>.
-To this purpose, ACE provides:
+ACE provides a way to access a CR as if it were a register into which a Provisioning Input (PI) or Sealed Cryptographic Context (SCC), as defined in <<ACE-external-formats>> can be loaded.
+To this purpose, ACE defines:
 
-* Instructions to load serialized data into CRs from memory (`ace.load`, see <<ACE-instruction-load>>), and to export a CR's serialized content back to memory (`ace.store`, see <<ACE-instruction-store>>); and
+* Instructions `ace.load`, to load serialized data into CRs from memory (see <<ACE-instruction-load>>), and `ace.store` (see <<ACE-instruction-store>>) to export a CR's serialized content back to memory; and
 * Instructions to make this information available to the ACE unit and to convert the internal representation of CRs to a SCC (by using `ace.setst`, see <<ACE-instruction-setst>>).
 
-==== The Context Register File
+===== The Context Register File
 
 CRs reside in a dedicated, per-hart _CR file_ (CRF), a memory accessible only to the ACE implementation.
 (((Context Register File)))
-This memory shall guarantee confidentiality and integrity of its contents, including the inability for an attacker to roll back the latter to a previous state.
+
+The CRF shall guarantee confidentiality and integrity of its contents, including the inability for an attacker to roll back the latter to a previous state.
 We do not require that accesses to this memory are hardened against physical side-channel attacks at the hardware level.
 However, the implementation of side-channel-protected algorithms in the ACE unit shall provide resistance to such attacks as well.
 
@@ -178,18 +191,6 @@ The storage space for the latter is used only when importing and exporting SCCs,
 
 Any corruption of the CRF associated with a hart shall cause an unrecoverable error condition.
 The entire architectural state of the ACE unit associated with the hart is reset, and exception `ace_guru_meditation` is raised (cf. <<ACE-exceptions>>).
-
-////
-We list the most important operations on CRs below, so that we can refer to them before they are fully defined.
-
-* Provisioning (<<ACE-management-operations>>) loads metadata and plaintext Content into a CR, binding them together.
-* Exporting (<<ACE-management-operations>>) exports a CR to memory as an SCC.
-* Importing (<<ACE-management-operations>>) imports a SCC into a CR.
-* `ace.clear` (<<ACE-instruction-clear>>) unconfigures and clears a CR.
-* `ace.exec` (<<ACE-instruction-exec>>) performs cryptographic operations as specified by the algorithm configured in a CR and according to the state of the CR.
-* `ace.setst` (<<ACE-instruction-setst>>) transitions a CR between states of a cryptographic algorithm or states of CR management lifecycle.
-* `ace.clone` (<<ACE-instruction-clone>>) creates a copy of a CR into a second CR.
-////
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -438,9 +439,19 @@ This ensures that these states can be unambiguously determined from the _State_ 
 
 . Unless an algorithm's specification explicitly states otherwise, a transition from any valid state to _Initial_ using instruction `ace.setst` is always permitted.
 
+. Any transition may be caused by an performing an explicit `ace.setst` operation performed while in a given state, or may be induced by certain conditions specified in the algorithm's specification.
+
+. The State after `ace.setst` is issued may differ from the State specified by the instruction.
+Beside error reporting through an Error State, a common example is given by MAC verification: after `ace.setst` is issued with an `ace_state_hash_verify` immediate as the next state and the value to be verified as the additional parameter, the algorithm transitions to either _Success_ or _Failure_. This is done to prevent the manipulation of a CR's state and to reduce code size.
+An `ace.exec` instruction may also trigger a state change.
+
+. While a transition from _Success_ or _Failure_ to _Initial_ is not in general forbidden, the policies of certain algorithms may forbid them. This may occur if the initial state of a CR is intended to be used only once.
+
 . Upon transitioning to an Error State, the Content of a CR is invalidated and emptied.
 Internal resources associated with the Content may also be released. In that case, any additional variable-length data is released as well and the _ImpDataLen_ field is set to 0.
 The CR then retains only the MDH.
+
+. The transitions from _Off_ to any Error State are a result of configuration instructions, whereas the corresponding transitions from these Error States to _Off_ are a result of explicitly clearing the CR.
 
 . Exporting a CR in an Error State exports only the MDH and the authentication tag(s).
   Requesting the SCC's size (`ace.size` <<ACE-instruction-size>>) will return 32 (bytes).
@@ -450,30 +461,14 @@ The CR then retains only the MDH.
 
 . The MDH of a CR in an Error State can be read (using `ace.getmd`: <<ACE-instruction-getmd>>).
 
+. The MDH of a CR in the _Off_ State can be read (using `ace.getmd`: <<ACE-instruction-getmd>>), returning all zero values.
+
 . Attempts to _use_ a CR in any Error State will not perform any operation, and in particular they leave the _State_ field unchanged.
 
 . Any _usage_ instruction that would violate the Usage Control policies will not perform its operation, and will set _State_ to `ace_state_priv_viol` instead.
 
-We note that the State after `ace.setst` is issued may differ from the State specified by the instruction.
-A common example is MAC verification: after `ace.setst` is issued with an `ace_state_hash_verify` immediate as the next state and the value to be verified as the additional parameter, the algorithm transitions to either _Success_ or _Failure_. This is done to prevent the manipulation of a CR's state and to reduce code size.
-An `ace.exec` instruction may also trigger a state change.
-
 In <<ACE-states-graph>> we display the default possible state transitions.
 
-The legend for the graph is:
-
-* The double circled state is the _Off_ State.
-* Valid States have single rounded rectangular borders.
-* Error States have double rounded rectangular borders.
-* The continuous edges represent state transitions induced by both configuration and usage instructions.
-* However, a transition from _Success_ or _Failure_ to _Initial_ may be forbidden by certain single-use CRs as per the _Algorithm_'s policies.
-* The transitions from _Off_ to any Error State are a result of configuration instructions, whereas the corresponding transitions from these Error States to _Off_ are a result of explicitly clearing the CR.
-* The dashed edges represent state transitions induced by reaching the expiration date.
-* The dotted edges represent state transitions induced by configuration operations.
-  Completing a provisioning operation can only lead to the _Initial_ state.
-  Completing an import can lead to any state.
-* Any transition may be caused by an performing explicit operation performed while in a given state, or be caused implicitly by reaching the latter under conditions specified in the algorithm's specification.
-* The round _Configuration_ “hub” simplifies the graph by expressing that any Error State is always reachable—even from another Error State—through configuration operations (or via `ace.setst`).
 
 // //
 [[ACE-states-graph]]
@@ -561,6 +556,18 @@ image::../../src/statestikz-3.svg[]
 \end{tikzpicture}
 ....
 ////
+
+The legend for the graph is:
+
+* The double circled state is the _Off_ State.
+* Valid States have single rounded rectangular borders.
+* Error States have double rounded rectangular borders.
+* The continuous edges represent state transitions induced by both configuration and usage instructions.
+* The dashed edges represent state transitions induced by reaching the expiration date.
+* The dotted edges represent state transitions induced by configuration operations.
+  Completing a provisioning operation can only lead to the _Initial_ state.
+  Completing an import can lead to any state.
+* The round _Configuration_ “hub” simplifies the graph by expressing that any Error State is always reachable—even from another Error State—through configuration operations (or via `ace.setst`).
 
 The _StateExtension_ field can be used by an Algorithm to store additional state information.
 
@@ -754,9 +761,7 @@ The `acemarchid` CSR is a 32-bit read-only register encoding the base microarchi
 
 The `acemimpid` CSR is a 32-bit read-only register that provides a unique encoding of the version of the ACE unit implementation. This register must be readable in any implementation, but a value of 0 can be returned to indicate that the field is not implemented. The Implementation value should reflect the design of the ACE unit itself and not any surrounding system.
 
-These three CSRs, together, form the _Implementation Qualifier_, i.e., the zero-padded 128-bit value
-
-``{fournbsp}{fournbsp}IMPQUAL := zeros(32) @ aceimpid @ acearchid @ acevendorid``
+These three CSRs, together, form the _Implementation Qualifier_ (see <<ACE-extra-content>>).
 
 _Included in_::
 +
@@ -768,7 +773,6 @@ _Included in_::
 | `Zlio`   | v0.0.0          | --
 |===
 --
-+
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -813,7 +817,6 @@ _Included in_::
 | `Zlio`   | v0.0.0          | --
 |===
 --
-+
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -834,7 +837,6 @@ _Included in_::
 | `Zlio`   | v0.0.0          | --
 |===
 --
-+
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -850,7 +852,6 @@ When `aceiobuflen` is zero, the ACEIOBUF is _unconfigured_.
 Attempting to execute an operation that expects an input or an output in the ACEIOBUF while the latter is unconfigured raises exception `ace_exc_buf_unconf`.
 
 Writing a value larger than `acemaxiobuflen` raises exception `ace_exc_out_of_mem`.
-
 
 [NOTE]
 ====
@@ -869,7 +870,6 @@ _Included in_::
 | `Zlio`   | v0.0.0          | --
 |===
 --
-+
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -904,7 +904,6 @@ _Included in_::
 | `Zlio`   | v0.0.0          | --
 |===
 --
-+
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -929,7 +928,6 @@ _Included in_::
 | `Zlio`   | v0.0.0          | --
 |===
 --
-+
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -1024,6 +1022,14 @@ the load to restart. Software that aims to optimize this case will have to
 inspect `ConfigStatus` in the metadata of each CR and detect if the load hasn't
 completed to impede the restart.
 
+The implementation first determines the size of the input to be loaded from the first 8 bytes of the MDH.
+The type of the input, i.e. whether it is a PI or a SCC, is determined by the _ConfigStatus_ field, and
+its length by _Algorithm_, _AlgorithmPolicy_, and _KeyType_.
+Then, `ace.load` requests the LSU to read the memory contents starting at `%offset(Xs1)`, in XLEN-bit sized loads,
+and copies them into the CR starting with the 8th byte (i.e. bits [127:64] of the MDH).
+The order in which the LSU issues these transactions is implementation dependent.
+See <<ACE-resumability-management>>, <<ACE-resumability-memory-model>> and <<ACE-export-import-algorithms>> for further details.
+
 The semantics of `ace.load` in case the key is in a system-defined format
 are entirely implementation dependent and do not assume that the CR has been readied to import information and
 that some metadata has already been loaded in it.
@@ -1045,7 +1051,6 @@ _Included in_::
 | `Zlio`   | v0.0.0          | --
 |===
 --
-+
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -1074,9 +1079,7 @@ _Mnemonic_::
 _Description_::
 +
 --
-Exports raw data from the CR `Ks2` or `K{Xs2}` to memory at address `%offset(Xs1)`.
-The operation starts with the 8th byte of the MDH.
-The instruction itself determines the length of the output from the MDH.
+Exports raw data from the CR `Ks2` or `K{Xs2}`, starting with the 8th byte of the MDH, to memory at address `%offset(Xs1)`.
 
 The first 8 bytes of the MDH must be read from the CR using `ace.getmdl` and saved to memory by the software.
 
@@ -1091,6 +1094,18 @@ inspect `ConfigStatus` in the the metadata of each CR and detect if the store
 hasn't completed to impede the restart.
 
 If the _ConfigStatus_ field is equal to _CfgStComplete_, then an invalid instruction exception is raised.
+
+If the _ConfigStatus_ field is not equal to _CfgStComplete_
+the implementation first determines the size of the output to be generated from first 8 bytes of the MDH.
+The type of the output, i.e. whether it is a PI or a SCC, is determined by the _ConfigStatus_ field, and
+its length by _Algorithm_, _AlgorithmPolicy_, and _KeyType_.
+Then, `ace.store` requests the LSU to store the CR to memory, beginning with the 8th byte (i.e. bits [127:64] of the MDH),
+in XLEN-bit sized stores, in the memory region starting at address `%offset(Xs1)`.
+The order in which the LSU issues these transactions is implementation dependent.
+See <<ACE-resumability-management>>, <<ACE-resumability-memory-model>> and <<ACE-export-import-algorithms>> for further details.
+
+NOTE: We allow to store a PI because it may be possible that a provisioning operation be interrupted, and this allows
+resuming.
 
 The instruction does not modify state.
 
@@ -1108,7 +1123,6 @@ _Included in_::
 | `Zlio`   | v0.0.0          | --
 |===
 --
-+
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -1149,8 +1163,7 @@ _Encoding_::
 ]}
 ....
 +
-Bit `r` (i.e., bit 26) takes the value 0 if the context is encoded as an
-immediate, and it takes the value 1 if a GPR (scalar integer value) is used to
+Bit `r` (i.e., bit 26) takes the value 0 if the context is encoded as an immediate, and it takes the value 1 if a GPR (scalar integer value) is used to
 reference it.
 For the four Forms A–D above, the encodings are:
 +
@@ -1188,7 +1201,6 @@ _Included in_::
 | `Zlio` (Form D)      | v0.0.0          | --
 |===
 --
-+
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -1369,7 +1381,6 @@ _Included in_::
 | `Zlio`    | v0.0.0          | --
 |===
 --
-+
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -1380,7 +1391,7 @@ _Synopsis_::
 Export the MDH of a CR.
 
 _Mnemonic_::
-`ace.getmdl  Xd, Ks|K{Xs}`
+`ace.getmdl  Xd, Ks|K{Xs}` +
 `ace.getmdh Xd, Ks|K{Xs}`
 (((ACE, instruction, ace.getmd)))
 
@@ -1436,7 +1447,6 @@ _Included in_::
 | `Zlio`   | v0.0.0          | --
 |===
 --
-+
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -1447,7 +1457,8 @@ _Synopsis_::
 Restrict the policies encoded in a CC in a CR.
 
 _Mnemonic_::
-`ace.restrict{nbsp}{nbsp}Kd|K{Xd}, Xs1`
+`ace.restrictl{nbsp}{nbsp}Kd|K{Xd}, Xs1` +
+`ace.restricth{nbsp}{nbsp}Kd|K{Xd}, Xs1`
 (((ACE, instruction, ace.restrict)))
 
 // Without this comment, the next part is not properly formatted...
@@ -1554,7 +1565,6 @@ _Included in_::
 | `Zlio`   | v0.0.0          | --
 |===
 --
-+
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -1640,7 +1650,6 @@ _Included in_::
 | `Zlio`   | v0.0.0          | --
 |===
 --
-+
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -1717,7 +1726,6 @@ _Included in_::
 | `Zlio`   | v0.0.0          | --
 |===
 --
-+
 
 // //
 
@@ -1796,7 +1804,6 @@ _Included in_::
 | `Zlio`   | v0.0.0          | --
 |===
 --
-+
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -1857,7 +1864,6 @@ _Included in_::
 | `Zlio`   | v0.0.0          | --
 |===
 --
-+
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -1913,7 +1919,6 @@ _Included in_::
 | `Zlio`   | v0.0.0          | --
 |===
 --
-+
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -1961,7 +1966,6 @@ _Included in_::
 | `Zlio`   | v0.0.0          | --
 |===
 --
-+
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -2015,7 +2019,6 @@ _Included in_::
 | `Zlio`   | v0.0.0          | --
 |===
 --
-+
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -2097,6 +2100,7 @@ On an interrupt during block processing, the implementation may either complete 
 
 While handlers can set `acestart` to zero to force a restart of an `ace.exec` operation, this may lead to unpredictable behavior when the input and output overlap.
 
+[[ACE-resumability-management]]
 ==== Management Operations
 
 _This section is informative and non-normative._
@@ -2117,6 +2121,7 @@ The architecture is co-designed with the intended use of the instructions.
 A context switch handler can force a restart by clearing partially configured or exported CRs at context save and again at context restore.
 This must also be handled by the software.
 
+[[ACE-resumability-memory-model]]
 ==== Resumption and Memory Model
 
 [WARNING]
