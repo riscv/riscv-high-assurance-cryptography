@@ -109,8 +109,8 @@ The hart stalls when attempting to read them until the ACE operation using those
 | `ZlSM2c`        | -- Chinese 256-bit SM2 curve.                                                                                       | TBD                                            | v0.0.0          | --
 | `Zlkn`        2+| NIST Symmetric Suite. Depends on `Zlaes128`, `Zlaes256`, `Zlesha2`, `Zlgcmm`, `Zlxexm`, and `Zlgcmsivm`.            | v0.0.0                                         | --
 5+| ^1^ Requires V (or a suitable subset thereof). Must support the following CSRs: `acestart` (this is a dependency for Zicsr); must support the following instructions: `ace.prov`, all four forms of `ace.exec`, all Forms of `ace.setst`,
-`ace.clear`, `ace.export`, `ace.import`, `ace.clone`, `ace.size` (and thus `ace.avail`), `ace.getmd`/`ace.getmdh`, and `ace.restrictl`/`ace.restricth`; must support `Zlkn`.
-5+| ^2^ Must support the following CSRs: `acestart` (this is a dependency for Zicsr), `aceiobuflen` and `aceiobuftop`; must support the following instructions: `ace.prov`, Form D of `ace.exec`, Forms A and B of `ace.setst`, `ace.input` and `ace.output`, `ace.clear`, `ace.export`, `ace.import`, `ace.clone`, `ace.size` (and thus `ace.avail`), `ace.getmd`/`ace.getmdh`, and `ace.restrictl`/`ace.restricth`; must support `Zlkn`.
+`ace.clear`, `ace.export`, `ace.import`, `ace.clone`, `ace.size`/`ace.avail`, `ace.getmd{l,h}`, and `ace.restrict{l,h}`; must support `Zlkn`.
+5+| ^2^ Must support the following CSRs: `acestart` (this is a dependency for Zicsr), `aceiobuflen` and `aceiobuftop`; must support the following instructions: `ace.prov`, Form D of `ace.exec`, Forms A and B of `ace.setst`, `ace.input` and `ace.output`, `ace.clear`, `ace.export`, `ace.import`, `ace.clone`, `ace.size`/`ace.avail`, `ace.getmd{l,h}`, and `ace.restrict{l,h}`; must support `Zlkn`.
 5+| ^3^ Beside defining the basic encryption and decryption operations, these extensions also select which ciphers can be used with the various modes of operations that follow.
 5+| ^4^ The mode is applicable to all versions of AES and to SM4.
 5+| ^5^ The mode is applicable to all versions of AES.
@@ -187,7 +187,7 @@ Capacity is freed by unconfiguring other CRs.
 The CRF capacity is implementation-defined.
 Implementations shall provide sufficient capacity for all supported operations.
 At a minimum, the CRF must hold the largest possible single CR, or the largest CR pair used in cloning operations, and a small amount of additional authentication and identification information.
-The storage space for the latter is used only when importing and exporting SCCs, and thus it is not replicated per CR but is shared across all CRs per hart.
+This small amount of additional storage space is not replicated per CR but is shared across all CRs per hart and it is used only when importing and exporting SCCs.
 
 Any corruption of the CRF associated with a hart shall cause an unrecoverable error condition.
 The entire architectural state of the ACE unit associated with the hart is reset, and exception `ace_guru_meditation` is raised (cf. <<ACE-exceptions>>).
@@ -458,9 +458,9 @@ The CR then retains only the MDH.
 
 . If a CR is in any Error State, it can still be reconfigured, cloned, or cleared. `ace.setst` can only be used to change the Error State (for instance by an exception handler) or transition the CR to _Off_.
 
-. The MDH of a CR in an Error State can be read (using `ace.getmd`: <<ACE-instruction-getmd>>).
+. Bits [63:0] of the MDH of a CR in an Error State can be read (using `ace.getmdl`: <<ACE-instruction-getmd>>).
 
-. The MDH of a CR in the _Off_ State can be read (using `ace.getmd`: <<ACE-instruction-getmd>>), returning all zero values.
+. Bits [63:0] of the MDH of a CR in the _Off_ State can be read (using `ace.getmdl`: <<ACE-instruction-getmd>>), returning all zero values.
 
 . Attempts to _use_ a CR in any Error State will not perform any operation, and in particular they leave the _State_ field unchanged.
 
@@ -974,7 +974,7 @@ Broadly speaking, and removing error handling, *Provisioning* is performed by th
 
 *Exporting* a CR as an SCC consists of the following steps:
 
-. Use `ace.getmd` (<<ACE-instruction-getmd>>) to get MDH[63:0] of the CR to be exported to be able to determine its size and allocate resources.
+. Use `ace.getmdl` (<<ACE-instruction-getmd>>) to get MDH[63:0] of the CR to be exported to be able to determine its size and allocate resources.
 . Store MDH[63:0] into memory.
 . Use `ace.setst` to prepare a CR to produce a SCC. This includes encrypting its contents and computing the authentication tag(s).
 . Use `ace.store` (<<ACE-instruction-store>>) to store MDH[127:64] and the rest of the SCC to memory.
@@ -1387,20 +1387,20 @@ _Included in_::
 // ////////////////////////////////////////////////////////////////////
 
 [[ACE-instruction-getmd]]
-==== ace.getmd/ace.getmdh
+==== ace.getmdl/ace.getmdh
 
 _Synopsis_::
 Export the MDH of a CR.
 
 _Mnemonic_::
-`ace.getmdl  Xd, Ks|K{Xs}` +
+`ace.getmdl Xd, Ks|K{Xs}` +
 `ace.getmdh Xd, Ks|K{Xs}`
 (((ACE, instruction, ace.getmd)))
 
 _Encoding_::
 +
 --
-`ace.getmdl`/`ace.getmdh` is an R-type instruction and its encoding shares opcode and `func3` with `ace.exec`, but `func2` is set to `0b11`.
+`ace.getmd{l,h}` is an R-type instruction and its encoding shares opcode and `func3` with `ace.exec`, but `func2` is set to `0b11`.
 
 [wavedrom, , svg]
 ....
@@ -1991,11 +1991,11 @@ _Encoding_::
 The operations is a pseudo-instruction.
 
 _Description_::
-`ace.getst` is implemented as a read of the source CR's metadata using `ace.getmd`
+`ace.getst` is implemented as a read of the source CR's metadata using `ace.getmdl`
 followed by instructions to extract the _State_ field of the latter.
 For instance, on RV64, we can use:
 
- . `ace.getmd Xd, Ks` or `K{Xs}`
+ . `ace.getmdl Xd, Ks` or `K{Xs}`
  . `srli  Xd, Xd, 20`
  . `andi  Xd, Xd, 0x1F`
 
@@ -2413,7 +2413,7 @@ We now present the cryptographic algorithms used to generate and read SCCs.
 This completes the description of the semantics of the management operations given in <<ACE-management-operations>>,
 in the description of `ace.setst`
 (<<ACE-instruction-setst>>), and in the code detailing the operations as split by the architecture (<<ACE-management-code-snippets>>).
-See also `ace.load` (<<ACE-instruction-load>>), `ace.store` (<<ACE-instruction-store>>), and `ace.getmd` (<<ACE-instruction-getmd>>).
+See also `ace.load` (<<ACE-instruction-load>>), `ace.store` (<<ACE-instruction-store>>), and `ace.getmdl` (<<ACE-instruction-getmd>>).
 
 // ////////////////////////////////////////////////////////////////////
 
