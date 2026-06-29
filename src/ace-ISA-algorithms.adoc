@@ -16,6 +16,7 @@ instance Ascon.
 <<ACE-exec-encodings>> defines the encoding of symmetric
 algorithms in the MDH field _Algorithm_.
 The encoding uses two sub-fields: _Type_ in bits [5:0] and _Mode_ in bits [10:6].
+For certain classes of algorithms, _Mode_ is used to specify a subtype.
 Bit 11 is zero.
 Other groups of algorithms may subdivide the _Algorithm_ field differently.
 The suffix "(reserved)" indicates that the algorithm's specification
@@ -82,7 +83,21 @@ is not yet complete or contains ambiguities.
 | 7    | 3    | `Ascon-Hash256`            | `Zlascon`
 | 7    | 4    | `Ascon-XOF128`             | `Zlascon`
 | 7    | 5    | `Ascon-CXOF128`            | `Zlascon`
-//| 8    | 0    | Move vector register to CR at offset `acestart`, and increment `acestart` by `vl`. | `Zlaes128p`
+//
+| 8    | 0    | Elliptic Curves: `secp256r1` (NIST P-256)   | `Zl?`TBD
+| 8    | 1    | Elliptic Curves: `secp384r1` (NIST P-384)   | `Zl?`TBD
+| 8    | 2    | Elliptic Curves: `secp521r1` (NIST P-521)   | `Zl?`TBD
+| 8    | 3    | Elliptic Curves: `ed25519`                  | `Zl?`TBD
+| 8    | 4    | Elliptic Curves: `ed448`                    | `Zl?`TBD
+| 8    | 5    | Elliptic Curves: `brainpoolP256r1`          | `Zl?`TBD
+| 8    | 6    | Elliptic Curves: `brainpoolP384r1`          | `Zl?`TBD
+| 8    | 7    | Elliptic Curves: `brainpoolP512r1`          | `Zl?`TBD
+| 8    | 8    | Elliptic Curves: `SM2`                      | `Zl?`TBD
+//
+| 9    | 0    | Post-Quantum Cryptography: `ML-KEM-512`     | `Zl?`TBD
+| 9    | 1    | Post-Quantum Cryptography: `ML-KEM-768`     | `Zl?`TBD
+| 9    | 2    | Post-Quantum Cryptography: `ML-KEM-1024`    | `Zl?`TBD
+| 9    | 3    | Post-Quantum Cryptography: `ML-DSA`         | `Zl?`TBD
 |===
 
 //
@@ -262,7 +277,7 @@ Data Structures:::
 |===
 --
 
- * *Internal State*:
+* *Internal State*:
  ** Metadata Header: 77 bits.
  ** `key`: `k` bits.
 
@@ -2307,21 +2322,18 @@ This field may be overwritten, and when `ace.setst` is issued on the CR with _In
 All values (integers, coordinates, etc.) are in little-endian format.
 
 Parameters:::
-
-The parameters that are used in this section are:
 +
 --
+The parameters that are used in this section are:
  . The bit length `b` of the main fields, such as coordinates, signature R and S fields, scalars;
  . The bit length `h` of the hash used in the signature scheme;
  . The bit length `j` of the random number used as nonce in signature generation;
  . The number `u` of coordinates used to represent a point (`u` can be 1 or 2); and
  . The number `v` of elements used to represent a signature (`v` can be 1 or 2).
---
-+
+
 The parameters for the defined curves are:
-+
---
- * NIST cite:[NIST-SP-800-186,nist-fips-186-5]:
+
+* NIST cite:[NIST-SP-800-186,nist-fips-186-5]:
   ** secp256r1 (NIST P-256): `b` = `h` = `j` = 256, `u` = `v` = 2.
   ** secp384r1 (NIST P-384): `b` = `h` = `j` = 384, `u` = `v` = 2.
   ** secp521r1 (NIST P-521): `b` = 576 (55 msbs set to zero), `h` = `j` = 512, `u` = `v` = 2.
@@ -2547,5 +2559,143 @@ In this case, if the CR is exported, the Additional Data Section may contain an 
 The importing implementation, after comparing `acevendorid`, `acearchid` and `aceimpid` with the values in `IMPQUAL`, decides whether it can retain the additional data and trust the random number generator of the originating implementation, in which case it can then resume the computation.
 Otherwise, it will discard the additional data at Position x and `RndNum` (Position ix, if present), and restart the operation.
 --
+
+// ////////////////////////////////////////////////////////////////////
+
+[[ACE-PQC]]
+=== Post Quantum Public-Key Cryptography
+
+[[ACE-PQC-ML-KEM]]
+==== ML-KEM
+
+The _Module-Lattice-Based Key-Encapsulation Mechanism Standard_ was announced by NIST in August 2024 cite:[nist-fips-203].
+The standard, defines several procedures, including:
+
+* `ML-KEM.KeyGen`: Generates an encapsulation key `encapsk` and a corresponding decapsulation key `decapsk`.
+* `ML-KEM.Encaps`: Uses the encapsulation key `encapsk` to generate a shared secret key and an associated ciphertext.
+* `ML-KEM.Decaps`: Uses the decapsulation key `decapsk` to produce a shared secret key from a ciphertext.
+
+ML-KEM exists in three different subtypes, called ML-KEM-512, ML-KEM-768, and ML-KEM-1024, each with different cryptographic strength.
+Each subtype is defined by a parameter set.
+The parameter sets are summarized in <<ACE-ML-KEM-parameter-sets>>:
+The last column indicates the required RBG strength in bits for the parameter set.
+The sizes (in bytes) of keys and ciphertexts of the three subtypes of ML-KEM are summarized in <<ACE-ML-KEM-sizes>>.
+
+[[ACE-ML-KEM-parameter-sets]]
+.Parameter Sets for ML-KEM
+[float="center",align="center",cols="^10%,^5%,^5%,^5%,^5%,^5%,^5%,^5%,^10%"options="header"]
+|===
+| Subtype     | _n_ | _q_  | _k_ | _η1_ | _η2_ | _du_ | _dv_ | RBG strength
+| ML-KEM-512  | 256 | 3329 |  2  |   3  |   2  |  10  |   4  |      128
+| ML-KEM-768  | 256 | 3329 |  3  |   2  |   2  |  10  |   4  |      192
+| ML-KEM-1024 | 256 | 3329 |  4  |   2  |   2  |  11  |   5  |      256
+|===
+
+[[ACE-ML-KEM-sizes]]
+.Sizes (in bytes) of keys and ciphertexts of ML-KEM
+[float="center",align="center",cols="^10%,^7%,^7%,^7%,^7%"options="header"]
+|===
+| Subtype     | `encapsk` | `decapsk` | ciphertext | shared secret key
+| ML-KEM-512  |       800 |      1632 |        768 |           32
+| ML-KEM-768  |      1184 |      2400 |       1088 |           32
+| ML-KEM-1024 |      1568 |      3168 |       1568 |           32
+|===
+
+The ML-KEM algorithms also support the `ace.derive` instruction to derive a shared secret key from a ciphertext and the decapsulation key and use it to create a new cryptographic context. The auxiliary input in a GPR (or GPR pair for RV32) is used to provide the symmetric algorithm that will be created with the derived shared secret key.
+
+* *Provisioning Input*:
 +
+--
+[%autowidth,cols="^,<,<",options="header"]
+|===
+| Pos. | Size (Bits)   | Field
+|   i  | 128           | MDH
+|===
+--
+
+* *Internal State*:
++
+--
+** Metadata Header: 97 bits (the _AlgorithmUse_ field is in effect).
+ ** `encapsk`: 3072 _k_ + 256 bits (384 _k_ + 32 bytes). The maximum is 14544 bits.
+ ** `encapsk`: 7144 _k_ + 768 bits (768 _k_ + 96 bytes). The maximum is 29344 bits.
+ ** `ciphertext`: 256 (_k_ _du_ + _dv_) bits (32 (_k_ _du_ + _dv_) bytes). The maximum is 14544 bits.
+ ** `sharedkey` 256 bits.
+
+ML-KEM algorithms use the _AlgorithmUse_ field of the metadata header to indicate how much of the content has been read so far from memory into the internal values of the `encapsk`, resp., `decapsk` in the _Input_encapsk_ or _Input_decapsk_ internal states, or written to memory out of them or the `sharedkey` in the
+ _Output_encapsk_, _Output_decapsk_, or _Output_sharedkey_ states.  This is similar to what is done in the Hashing and Elliptic Curve algorithms.
+
+For the three subtypes, the size of the internal state, without considering the metadata information, is 3232, 4704, and 6336 bytes.
+--
+
+* *Serialized Context*:
++
+--
+[%autowidth,cols="^,<,<",options="header"]
+|===
+|  Pos. | Size (Bits)   | Field
+|   i   | 128            | MDH
+|  ii   | 3072 _k_ + 256 (the maximum is 14544) | `encapsk`
+|  iii  | 7144 _k_ + 768 (the maximum is 29344) | `decapsk`
+|  iv   | 256 (_k_ _du_ + _dv_) (the maximum is 14544) | `ciphertext`
+|  v    | 256             | `sharedkey`
+|===
+
+For the three subtypes, the sizes of the Serialized Context is 3248, 4720, and 6352 bytes.
+--
+
+State Machine::: {empty}
++
+--
+* *States:*
+Beside
+_Initial_ (1),
+_Success_ (21),
+_Failure_ (22), and the Error States,
+ML-KEM algorithms define:
+ ** _Generate_ (2)
+ ** _Encapsulate_ (3)
+ ** _Decapsulate_ (4)
+ ** _Input_encapsk_ (5)
+ ** _Input_decapsk_ (6)
+ ** _Output_encapsk_ (7)
+ ** _Output_decapsk_ (8)
+ ** _Output_ciphertext_ (9)
+ ** _Output_sharedkey_ (10)
+
+* *Allowed State Transitions:*
+ ** State transitions are free between any two states.
+
+* *Behavior:*
+ ** In State _Initial_, no `ace.exec` instruction is allowed.
+     Upon transitioning to _Initial_, the `encapsk`, `decapsk`, `ciphertext` and `sharedkey` values are cleared.
+ ** All uses of `ace.setst` do not require an auxiliary parameter.
+ ** In State _Generate_, a random seed is generated and used to derive the `encapsk` and `decapsk` values using the procedure `ML-KEM.KeyGen` described in the ML-KEM specification.
+    An implementation may use the _AlgorithmUse_ field to store a progress value, in which case the use of a mandatory Additional Data Section is required to store the Implementation Qualifier.
+    If the procedure `ML-KEM.KeyGen` fails, the state machine transitions to state _Failure_.
+ **  ** In particular,  `ML-KEM.KeyGen`–as well as `ML-KEM.Encaps` and `ML-KEM.Decaps`–must perform an examination of their inputs for the purpose of determining whether it conforms to certain requirements, as described in the ML-KEM specification.
+ ** In State _Encapsulate_, a shared key is randomly generated as described in the ML-KEM specification and stored in the `sharedkey` state field.
+    The corresponding ciphertext is generated using the procedure `ML-KEM.Encaps` described in the ML-KEM specification and stored in the `ciphertext` state field.
+    An implementation may use the _AlgorithmUse_ field to store a progress value, in which case the use of a mandatory Additional Data Section is required to store the Implementation Qualifier.
+    If the procedure `ML-KEM.Encaps` fails, the state machine transitions to state _Failure_.
+ ** In State _Decapsulate_, the content of the `ciphertext` state field is decrypted using the procedure `ML-KEM.Decaps` described in the ML-KEM specification and the result is stored in the `sharedkey` state field.
+    An implementation may use the _AlgorithmUse_ field to store a progress value, in which case the use of a mandatory Additional Data Section is required to store the Implementation Qualifier.
+    If the procedure `ML-KEM.Decaps` fails, the state machine transitions to state _Failure_.
+ ** In States _Input_encapsk_, resp., _Input_decapsk_, one or more Form B `ace.exec` instructions are used to load a value of `encapsk`, resp., `decapsk` from memory.
+    The amount of bits loaded into the state fields so far is stored in the _AlgorithmUse_ field.
+ ** In States _Output_encapsk_, _Output_decapsk_, _Output_ciphertext_, resp., _Output_sharedkey_
+    one or more Form C `ace.exec` instructions are used to store values of `encapsk`, `decapsk`, `ciphertext`, resp., `sharedkey` to memory.
+    The amount of bits saved to memory so far is stored in the _AlgorithmUse_ field.
+ ** Upon entering any of the _Input_*_ or _Output_*_ states by using `ace.setst`, the _AlgorithmUse_ field is cleared.
+ ** At any moment, the `ace.derive` instruction can be used to use the shared key from the state into a new CC in a CR.
+    The `ace.derive` instruction must be of Form B, with bits [63:0] of the MDH of the new CC in a GPR (RV64) or a GPR pair (RV32).
+    The MDH must define a suitable supported single-key algorithm, that can accept keys up to 256 bits in length.
+    If the key used by the destination algorithm is `m < 256` bits long, the `m` least significant bits of the shared key are used.
+--
+
+[[ACE-PQC-ML-DSA]]
+==== ML-DSA
+
+TBD
+
 // ////////////////////////////////////////////////////////////////////
