@@ -24,7 +24,7 @@ is not yet complete or contains ambiguities.
 
 [[ACE-exec-encodings]]
 .Algorithm Type and Mode Encodings
-[float="center",align="center",width="82%",cols="^8%,^8%,<38%,<28%",options="header"]
+[float="center",align="center",width="90%",cols="^7%,^7%,<50%,<26%",options="header"]
 |===
 | Type | Mode | Algorithm name             | Extensions Requirement
 | 0    | 0    | `AES128_ECB`               | `Zlaes128p`
@@ -42,13 +42,13 @@ is not yet complete or contains ambiguities.
 | 0    | 12   | `AES128_OCB_IV`            | `Zlaes128p` and `Zlocbm`
 //
 | 1    | 0    | `AES192_ECB`               | `Zlaes192p`
-| 1    | 1--12 2+| Analogues to Modes 1--11 for `AES128`, but with 192 replacing 128.
+| 1    | 1--12 2+| _Analogues to Modes 1--11 for `AES128`, but with 192 replacing 128._
 //
 | 2    | 0    | `AES256_ECB`               | `Zlaes256p`
-| 2    | 1--12 2+| Analogues to Modes 1--11 for `AES128`, but with 256 replacing 128.
+| 2    | 1--12 2+| _Analogues to Modes 1--11 for `AES128`, but with 256 replacing 128._
 //
 | 3    | 0    | `SM4_ECB`                  | `Zlsm4p`
-| 3    | 1--10 2+| Analogues to Modes 1--10 for `AES128`, but with `SM4`, resp., `sm4` replacing `AES128`, resp., `aes128`.
+| 3    | 1--10 2+| Analogues to Modes 1--10 for `AES128`, but with `SM4` and `sm4` replacing `AES128` and `aes128`.
 //
 | 4    | 0    | `SHA2-224`                 | `Zlesha2h`
 | 4    | 1    | `SHA2-256`                 | `Zlesha2h`
@@ -84,7 +84,7 @@ is not yet complete or contains ambiguities.
 | 7    | 4    | `Ascon-XOF128`             | `Zlascon`
 | 7    | 5    | `Ascon-CXOF128`            | `Zlascon`
 //
-| 8    | 0    | Elliptic Curves: `secp256r1` (NIST P-256)   | `Zlsecp256r1c`
+| 8    | 0    | Elliptic Curve Cryptography: `secp256r1` (NIST P-256)   | `Zlsecp256r1c`
 | 8    | 1    | Elliptic Curves: `secp384r1` (NIST P-384)   | `Zlsecp384r1c`
 | 8    | 2    | Elliptic Curves: `secp521r1` (NIST P-521)   | `Zlsecp521r1c`
 | 8    | 3    | Elliptic Curves: `ed25519`                  | `Zled25519c`
@@ -1254,8 +1254,7 @@ Besides _Initial_, _Success_, and _Failure_, the OCB Mode algorithms make use of
 
 ** To move to _Set_Aux_Value_, a Form B `ace.setst` is expected, where the
    auxiliary argument `Xs` sets the nonce length `N_len`. `N_len` must be at
-   least `g-1`. If not, `State <- ace_state_invalid`, that is, the CR is
-   enters an Error State.
+   least `g-1`. If not, the CR transitions to Error State `ace_state_invalid`.
 
 ** In State _Set_Aux_Value_, ``ace.exec`` instructions are expected to be of Form B, namely
    “```ace.exec Kn|K{Xn}, INPUT```”, whereby `N` is set to
@@ -2331,6 +2330,7 @@ Parameters:::
 +
 --
 The parameters that are used in this section are:
+
  . The bit length `b` of the main fields, such as coordinates, signature R and S fields, scalars;
  . The bit length `h` of the hash used in the signature scheme;
  . The bit length `j` of the random number used as nonce in signature generation;
@@ -2404,7 +2404,7 @@ For ECC algorithms, the flags in _AlgorithmPolicy_ enable signature generation (
 --
 
 * *Internal State*:
- ** MDH: 81-97 bits.
+ ** Metadata Header.
  ** `OutputType`: Bool.
  ** `Progress`: integer (16 bits, MDH field _AlgorithmUse_ is used).
  ** `block_base`: integer.
@@ -2731,18 +2731,30 @@ The main reason is that it would not be possible to support all hash functions i
 | Pos. | Size (Bits)   | Field
 |   i  | 128           | MDH
 |===
+
+The _AlgorithmPolicy_ field in the MDH has the following meaning:
+_AlgorithmPolicy_[0] is set to 1 if the Algorithm can generate signatures, and
+_AlgorithmPolicy_[1] is set to 1 if the Algorithm can verify signatures.
+An _AlgorithmPolicy_ of 0 is not valid, and it will cause the CR to immediately transition to State `ace_state_invalid`.
+
+The _AuxInfo_ field specifies the hash function to use in the signature algorithms.
+This parameter has the same format as the _Algorithm_ and _AlgorithmPolicy_ Fields and the next two Reserved bits.
+If the value does not correspond to a hash function supported by the ACE implementation _and_ by ML-DSA, the state machine transitions to Error State `ace_state_not_impl`.
 --
 
 * *Internal State*:
 +
 --
- ** Metadata Header.
- ** `privkey`: 2560/4032/4896 bytes (20480/32256/39168 bits)
- ** `pubkey` : 1312/1952/2592 bytes (10496/15616/20736 bits)
- ** `signature`: 2420/3309/4627  bytes (19360/26472/37016 bits)
+ ** Metadata Header. The field _AlgorithmUse_ is used to keep track of input and output of long fields in an architectural and to track
+  long running operations in an implementation-specific way.
+  The field _AuxInfo_ contains the description of the Hash Function used by the algorithm.
+ ** `privkey`: 2560/4032/4896 bytes (20480/32256/39168 bits) for ML-DSA-44/65/87, resp.
+ ** `pubkey` : 1312/1952/2592 bytes (10496/15616/20736 bits) for ML-DSA-44/65/87, resp.
+ ** `signature`: 2420/3309/4627  bytes (19360/26472/37016 bits) for ML-DSA-44/65/87, resp.
  ** `ctxlen`: 1 byte (8 bits)
  ** `ctx`: 255 bytes (2040 bits)
  ** `mu`: 64 bytes (512 bits), contains the hashed formatted message
+ ** `tr`: 64 bytes (512 bits), contains the hash of the public key
 --
 
 * *Serialized Context*:
@@ -2758,14 +2770,13 @@ The main reason is that it would not be possible to support all hash functions i
 |   v   | 8                                | `ctxlen`
 |  vi   | 2040                             | `ctx`
 |  vii  | 512                              | `mu`
-|  viii | 64                               | `tr`
-|  ix   | 64                               | Padding
+|  viii | 512                              | `tr`
 |===
 --
 
 // For the three subtypes, the sizes of the Serialized Context is TBD bytes.
 
-* State Machine::: {empty}
+State Machine::: {empty}
 +
 --
 * *States:*
@@ -2774,26 +2785,34 @@ _Initial_ (1),
 _Success_ (21),
 _Failure_ (22),
 ML-KEM algorithms define:
- ** _SetHash_ (2)
- ** _Generate_ (3)
- ** _pubkey_Output_ (4)
- ** _ctx_Input_ (5)
- ** _mu_Input_ (6)
- ** _tr_Input_ (7)
- ** _Sign_Generate_ (8)
- ** _Sign_Output_ (9)
- ** _Sign_Verify_ (10)
- ** _Sign_Input_ (11)
+ ** _Generate_ (2)
+ ** _pubkey_Output_ (3)
+ ** _ctx_Input_ (4)
+ ** _mu_Input_ (5)
+ ** _tr_Input_ (6)
+ ** _Sign_Generate_ (7)
+ ** _Sign_Output_ (8)
+ ** _Sign_Verify_ (9)
+ ** _Sign_Input_ (10)
 --
-
-Transitioning to State _SetHash_ `ace.setst` requires a parameter in a GPR specifies the hash function to use.
-This parameter is a 16-bit value that has the same format as the _Algorithm_ and _AlgorithmPolicy_ Fields and the next two Reserved bits.
-If the value does not correspond to a hash function supported by the implementation and by ML-DSA, the state machine transitions to the _Failure_ state.
 
 The ML-DSA Algorithm in ACE does not hash the message itself before signing, but only performs the subsequent hash operations.
 Therefore it is the responsibility of the caller to compute the public-key hash _tr_ and compute the 64-byte message representative _μ_ using the same hash function.
 
-*To be completed.*
+* *Allowed State Transitions:*
+
+ ** *To be completed.*
+
+* *Behavior:*
+ ** Upon provisioning, all fields ii to viii are cleared and the state machine transitions to State _Initial_.
+ ** In State _Initial_, no `ace.exec` instruction is allowed.
+   Upon transitioning to _Initial_, the `signature`, `ctxlen`, `ctx`, `mu` fields are cleared.
+
+  ** _AlgorithmPolicy_ can be modified using `ace.restrictl`.
+    The value 0 is not admissible.
+     An attempt to clear the field using `ace.restrictl` will transition the CR to State `ace_state_invalid`.
+
+ ** *To be completed.*
 
 
 // ////////////////////////////////////////////////////////////////////
