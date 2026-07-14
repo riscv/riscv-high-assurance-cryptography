@@ -2239,7 +2239,37 @@ GPR `t6` points to the memory location where a PI or SCC is stored,
 and GPR `t0` contains the number of the CR to be configured or exported.
 The code also uses `t1`, `t2`, and `t3` for temporary storage.
 
-*Provisioning Code*
+*Provisioning Code (`Zlmv`)*
+----
+  ld         t1, 0(t6)                  # load MDH bits [63:0] from memory
+  li         t3, #23
+restart:
+  ace.setst  K{t0}, t1, #ace_CR_provision_start
+                                        # start provisioning, load MDH[63:0] in CR
+  ace.size   a2, K{t0}                  # Get data length
+
+vloop:
+  vsetvli a3, a2, e8, m1, ta, ma        # load rest of PI starting with MDH[127:64]
+  ace.getst  t2, K{t0}                  # get _State_ field from MDH[63:0]
+  bltu       t3, t2, handle_errors      # errors (larger than 23, i.e. ≥ 24)
+  beqz       t2, handle_errors          # handle error (is _Off_ needed?)
+  vle8.v v4, 8(t6)                      # load data
+  ace.exec K{t0}, v4                    # Move to CR
+  add t6, t6, a3                        # Bump pointer
+  sub a2, a2, a3                        # Decrement number of elements
+  bnez a2, vloop
+
+  ace.getst  t2, K{t0}                  # get _State_ field from MDH[63:0]
+  li         t3, #ace_state_off         # compare to off state
+  beq        t2, t3, restart            # CR cleared means force restart
+  ace.setst  K{t0}, #ace_CR_provision_end   # terminate provisioning
+                                        # and possibly reconstructs data
+  ace.getst  t2, K{t0}                  # get _State_ field from MDH[63:0]
+  bltu       t3, t2, handle_errors      # handle other errors (> 23, i.e. ≥ 24)
+success:
+----
+
+*Provisioning Code (`Zlm`)*
 ----
   ld         t1, 0(t6)                  # load MDH bits [63:0] from memory
   li         t3, #23
