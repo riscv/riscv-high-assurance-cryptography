@@ -1,0 +1,737 @@
+---
+ src/ace-ISA-unpriv.adoc | 592 +++++++++++-----------------------------
+ 1 file changed, 159 insertions(+), 433 deletions(-)
+
+diff --git a/src/ace-ISA-unpriv.adoc b/src/ace-ISA-unpriv.adoc
+index 1c303a7..111bccc 100644
+--- a/src/ace-ISA-unpriv.adoc
++++ b/src/ace-ISA-unpriv.adoc
+@@ -761,191 +761,6 @@ ACE provides a number of unprivileged CSRs.
+
+ // ////////////////////////////////////////////////////////////////////
+
+-[[ACE-CSR-impl-ids]]
+-===== `acevendorid`, `acearchid`, and `aceimpid`
+-
+-{empty}
+-(((CSR, `acemvendorid`)))
+-(((CSR, `acemarchid`)))
+-(((CSR, `acemimpid`)))
+-`acevendorid`, `acearchid`, and `aceimpid` identify the version of the ACE unit, analogously to `mvendorid`, `marchid`, `mimpid` CSRs for the hart.
+-
+-The `acemvendorid` CSR is a 32-bit read-only register providing the JEDEC manufacturer ID of the provider of the ACE unit (or 0 it is not commercial).
+-
+-The `acemarchid` CSR is a 32-bit read-only register encoding the base microarchitecture of the ACE unit. Non-commercial IDs are allocated globally by RVI, while commercial IDs are specific to the acemvendorid`
+-
+-The `acemimpid` CSR is a 32-bit read-only register that provides a unique encoding of the version of the ACE unit implementation. This register must be readable in any implementation, but a value of 0 can be returned to indicate that the field is not implemented. The Implementation value should reflect the design of the ACE unit itself and not any surrounding system.
+-
+-These three CSRs, together, form the _Implementation Qualifier_ (see <<ACE-extra-content>>).
+-
+-_Included in_::
+-+
+---
+-[%header,cols="4,2,2"]
+-|===
+-|Extension | Minimum version | Lifecycle state
+-| `Zlv`    | v0.0.0          | --
+-| `Zlio`   | v0.0.0          | --
+-|===
+---
+-
+-// ////////////////////////////////////////////////////////////////////
+-
+-[[ACE-CSR-acestart]]
+-===== `acestart`
+-
+-{empty}
+-(((CSR, `acestart`)))
+-`acestart` is an alias for `vstart`. Therefore, it is an XLEN-bit RW CSR.
+-ACE defines it also when the V extension is not enabled.
+-
+-`acestart` tracks the progress of resumable ACE instructions, such as `ace.load`, `ace.store`, `ace.input` and `ace.output`.
+-
+-Progress tracking by `acestart` also applies to `ace.exec` when iteratively processing a multi-block operand, as `ace.exec` may be interrupted between blocks.
+-Only these instructions honor a nonzero `acestart`; all other instructions ignore it and are restarted, with `acestart` also being cleared.
+-
+-Since ACE does not have an _intrinsic_ concept of element length, `acestart` counts the number of _bits_ processed so far nu `ace.exec`, not the number of elements, or read/written by `ace.input`/`ace.output` and `ace.prov`/`ace.import`/`ace.export` or `ace.store`/`ace.load`.
+-
+-Hardware writes this register on interruption.
+-Software may save and restore the register across context switches.
+-For certain algorithms, writing zero to `acestart` to force a full restart of `ace.exec` may lead to inconsistent or unpredictable results.
+-Writing an invalid or non-supported nonzero value raises an illegal instruction exception.
+-
+-When a vector instruction is interrupted, the CSR follows `vstart` semantics as expected, i.e., it counts the number of processed elements.
+-When an ACE instruction is interrupted, the CSR follows the `acestart` semantics described here.
+-
+-[NOTE]
+-====
+-The reason `vstart` can be reused as `acestart` comes from the fact that the Risc-V ISA exposes a computation model in which the observable results are the same as if the instructions were executed in order.
+-If an implementation has executed instructions past the PC when an interrupt occurs, those instructions are discarded and must be re‑executed upon return from the handler. Only the instruction at the PC may be interrupted in a way that it saves temporary state that allows it to be resumed later.
+-There is no situation in which the microarchitecture of a hart can simultaneously interrupt multiple instructions allowing them to resume at the same time.
+-Hence, `vstart` can safely be reused by ACE as `acestart`.
+-====
+-
+-_Included in_::
+-+
+---
+-[%header,cols="4,2,2"]
+-|===
+-|Extension | Minimum version | Lifecycle state
+-| `Zlv`    | v0.0.0          | --
+-| `Zlio`   | v0.0.0          | --
+-|===
+---
+-
+-// ////////////////////////////////////////////////////////////////////
+-
+-[[ACE-CSR-acemaxiobuflen]]
+-===== `acemaxiobuflen`
+-
+-{empty}
+-(((CSR, `acemaxiobuflen`)))
+-`acemaxiobuflen` is an XLEN-bit RO CSR that reports the maximum configurable length of the ACEIOBUF.
+-
+-_Included in_::
+-+
+---
+-[%header,cols="4,2,2"]
+-|===
+-|Extension | Minimum version | Lifecycle state
+-| `Zlv`    | v0.0.0          | --
+-| `Zlio`   | v0.0.0          | --
+-|===
+---
+-
+-// ////////////////////////////////////////////////////////////////////
+-
+-[[ACE-CSR-aceiobuflen]]
+-===== `aceiobuflen`
+-
+-{empty}
+-(((CSR, `aceiobuflen`)))
+-`aceiobuflen` is an XLEN-bit URW CSR that programs the ACEIOBUF length in bits for use by `ace.input` and `ace.output`.
+-Writing this register-even when re-writing the current value-also zeroes the buffer and sets `aceiobuftop` to the same length and `acestart` to zero.
+-
+-When `aceiobuflen` is zero, the ACEIOBUF is _unconfigured_.
+-Attempting to execute an operation that expects an input or an output in the ACEIOBUF while the latter is unconfigured raises exception `ace_exc_buf_unconf`.
+-
+-Writing a value larger than `acemaxiobuflen` raises exception `ace_exc_out_of_mem`.
+-
+-[NOTE]
+-====
+-As per the Privileged Architecture, the dirtiness of the ACEIOBUF is not tracked except as part of the entire ACE state in `*status`.
+-Context switching code is expected to save and restore the contents of the ACEIOBUF up to `aceiobuflen`.
+-We recommend software to set `aceiobuflen` to zero once the contents of the ACEIOBUF are no longer needed.
+-Context switching code can use this information to avoid unnecessary save and restore of ACEIOBUF contents.
+-====
+-
+-_Included in_::
+-+
+---
+-[%header,cols="4,2,2"]
+-|===
+-|Extension | Minimum version | Lifecycle state
+-| `Zlio`   | v0.0.0          | --
+-|===
+---
+-
+-// ////////////////////////////////////////////////////////////////////
+-
+-[[ACE-CSR-aceiobuftop]]
+-===== `aceiobuftop`
+-
+-{empty}
+-(((CSR, `aceiobuftop`)))
+-`aceiobuftop` is an XLEN-bit URW CSR that marks the upper bound in bits of the buffer range used by `ace.input` and `ace.output`.
+-Together with `acestart`, it defines the active transfer window.
+-
+-The constraints `acestart` {le} `aceiobuftop` {le} `aceiobuflen` must hold.
+-Violating either bound raises an illegal instruction exception.
+-Modifying `aceiobuftop` does not modify buffer contents.
+-
+-NOTE: `aceiobuftop` enables per-operation length adjustments without the need to reconfigure the ACEIOBUF using `aceiobuflen`, which can be expensive due to the fact that it clears the buffer and may lead to internal garbage collection.
+-This can be used similarly to the reconfiguration of `VL*SEW` to provide an partial “last block” or to supply a short IV/nonce to cryptographic algorithms.
+-
+-Using a alternative sequence for `ace.exec` or `ace.setst` for any Form with an input or output
+-when `aceiobuftop` − `acestart` is zero (and `aceiobuflen` nonzero) will result in no operation being performed.
+-
+-Using ACEIOBUF when `aceiobuftop` − `acestart` is an invalid length raises an illegal instruction exception.
+-
+-Since context switching code saves and restores the contents of the ACEIOBUF up to `aceiobuflen`, the contents between `aceiobuftop` and `aceiobuflen` are preserved.
+-
+-_Included in_::
+-+
+---
+-[%header,cols="4,2,2"]
+-|===
+-|Extension | Minimum version | Lifecycle state
+-| `Zlio`   | v0.0.0          | --
+-|===
+---
+-
+-// ////////////////////////////////////////////////////////////////////
+-
+-[[ACE-CSR-acenonce]]
+-===== `acenonce0` and `acenonce1`
+-
+-{empty}
+-(((CSR, `acenonce`)))
+-`acenonce0` and `acenonce1` are XLEN-bit URW CSR that define the nonce to be used in `ace.import` and `ace.export` (see <<ACE-export-import-algorithms>>).
+-`acenonce0` contains bits [63:0] of the nonce, and `acenonce1` contains bits [95:64] of the nonce.
+-The most significant 32 bits of `acenonce1` are fixed to zero.
+-
+-On RV32, 32-bit CSR `acenonce0h` shadows bits [63:32] of `acenonce0`, allowing these bits to be accessed.
+-
+-_Included in_::
+-+
+---
+-[%header,cols="4,2,2"]
+-|===
+-|Extension | Minimum version | Lifecycle state
+-| `Zlv`    | v0.0.0          | --
+-| `Zlio`   | v0.0.0          | --
+-|===
+---
+-
+-// ////////////////////////////////////////////////////////////////////
+-
+ [[ACE-instructions-detailed]]
+ === Instructions
+
+@@ -998,151 +813,17 @@ Broadly speaking, and removing error handling, *Provisioning* is performed by th
+
+ // ////////////////////////////////////////////////////////////////////
+
+-[[ACE-instruction-load]]
+-==== ace.load
+-
+-_Encoding_::
+-`ace.load` is an I-type instruction.
+-+
+-[wavedrom, , svg]
+-....
+-{reg:[
+-    { bits:  7, name: 0x0b, attr: ['custom-0'] },
+-    { bits:  5, name: 'context', attr: ['Kd','K{Xd}'] },
+-    { bits:  3, name: 'ace.load', attr: ['0    0    0','0    0    1'] },
+-    { bits:  5, name: 'Xs1' },
+-    { bits: 12, name: 'immed12' },
+-]}
+-....
+-
+-_Mnemonics_::
+-`ace.load{fournbsp}{nbsp}{nbsp}{nbsp}Kd|K{Xd}, %offset(Xs1)` +
+-`ace.sysimport{nbsp}Kd|K{Xd}, %offset(Xs1)`
+-
+-_Description_::
+-+
+---
+-`ace.load` imports a PI or a SCC into the CR `Kd` or `K{Xd}`, starting with the 8th byte of the MDH.
+-The memory address of the latter is given in `%offset(Xs1)`.
+-
+-This instruction requires that the CR is ready to import information and that the first 8 bytes of the MDH have already been loaded by passing them as a parameter in a GPR (pair for RV32) to the `ace.setst` instruction used to open the CR for provisioning or import.
+-
+-If the _ConfigStatus_ field equals _CfgStComplete_, an invalid instruction exception is raised.
+-
+-`ace.load` can load data larger than the effective XLEN.
+-`acestart` tracks the number of loaded bytes. If `ace.load` is interrupted,
+-`acestart` contains the offset to the next byte to load upon resumption.
+-
+-// NOTE: Modifying the CR being used by an interrupted `ace.load` always forces
+-// the load to restart. Software that aims to optimize this case must
+-// inspect `ConfigStatus` in each CR's metadata to detect an incomplete load
+-// and prevent the restart.
+-
+-The implementation first determines the size of the input to be loaded from the first 8 bytes of the MDH.
+-The _ConfigStatus_ field determines the input type (PI or SCC), and
+-the fields _Algorithm_, _AlgorithmPolicy_, and _KeyType_ determine its length.
+-`ace.load` then requests the LSU to read the memory contents starting at `%offset(Xs1)`, in XLEN-bit sized loads,
+-and copies them into the CR starting with the 8th byte (i.e., bits [127:64] of the MDH).
+-The order in which the LSU issues these transactions is implementation dependent.
+-See <<ACE-resumability-management>>, <<ACE-resumability-memory-model>> and <<ACE-export-import-algorithms>> for further details.
+-
+-When the key is in a system-defined format, the semantics of `ace.load`
+-are entirely implementation dependent and do not assume that the CR has been readied to import information or
+-that some metadata has already been loaded. System-defined format is signaled by the _SystemFormat_ bit of MDH[63:0], which in this case may have a system-defined length.
+-
+-The instruction may possibly modify state.
+-
+-The instruction is not usage-controlled.
+---
+-+
+-
+-_Included in_::
+-+
+---
+-[%header,cols="4,2,2"]
+-|===
+-|Extension | Minimum version | Lifecycle state
+-| `Zlv`    | v0.0.0          | --
+-| `Zlio`   | v0.0.0          | --
+-|===
+---
+-
+-// ////////////////////////////////////////////////////////////////////
+-
+-[[ACE-instruction-store]]
+-==== ace.store
+-
+-_Encoding_::
+-`ace.store` is an S-type instruction.
+-+
+-[wavedrom, , svg]
+-....
+-{reg:[
+-    { bits:  7, name: 0x27, attr: ['custom-1'] },
+-    { bits:  5, name: 'immed[4:0]' },
+-    { bits:  3, name: 'ace.store', attr: [0x0,0x1] },
+-    { bits:  5, name: 'Xs1' },
+-    { bits:  5, name: 'context', attr: ['Ks2','K{Xs2}'] },
+-    { bits:  7, name: 'immed[11:5]' },
+-]}
+-....
+-
+-_Mnemonic_::
+-`ace.store %offset(Xs1), Ks2|K{Xs2}`
+-(((ACE, instruction, ace.export)))
++=== `Zlv`: ACE with support for vector registers
+
+-_Description_::
+-+
+ --
+-Exports raw data from the CR `Ks2` or `K{Xs2}`, starting with the 8th byte of the MDH, to memory at address `%offset(Xs1)`.
+-
+-The first 8 bytes of the MDH must be read from the CR using `ace.getmdl` and saved to memory by the software.
++The `Zlv` extension is the base extension for ACE when the `V` extension is
++implemented. A hart that claims ACE support and has `V` implemented must
++implement `Zlv`.
+
+-`ace.store` can store data that may be larger than the effective XLEN.
+-`acestart` keeps track of the number of stored bytes. If `ace.store` is
+-interrupted, `acestart` contains the offset to the next byte to store upon
+-resumption.
+-
+-NOTE: Modifying the CR being used by the interrupted `ace.store` always forces
+-the store to restart. Software that aims to optimize this case will have to
+-inspect `ConfigStatus` in the the metadata of each CR and detect if the store
+-hasn't completed to impede the restart.
+-
+-If the _ConfigStatus_ field is equal to _CfgStComplete_, then an invalid instruction exception is raised.
+-
+-If the _ConfigStatus_ field is not equal to _CfgStComplete_
+-the implementation first determines the size of the output to be generated from first 8 bytes of the MDH.
+-The type of the output, i.e. whether it is a PI or a SCC, is determined by the _ConfigStatus_ field, and
+-its length by _Algorithm_, _AlgorithmPolicy_, and _KeyType_.
+-Then, `ace.store` requests the LSU to store the CR to memory, beginning with the 8th byte (i.e. bits [127:64] of the MDH),
+-in XLEN-bit sized stores, in the memory region starting at address `%offset(Xs1)`.
+-The order in which the LSU issues these transactions is implementation dependent.
+-See <<ACE-resumability-management>>, <<ACE-resumability-memory-model>> and <<ACE-export-import-algorithms>> for further details.
+-
+-NOTE: We allow to store a PI because it may be possible that a provisioning operation be interrupted, and this allows
+-resuming.
+-
+-The instruction does not modify state.
+-
+-The instruction is not usage-controlled.
+---
+-+
+-
+-_Included in_::
+-+
+---
+-[%header,cols="4,2,2"]
+-|===
+-|Extension | Minimum version | Lifecycle state
+-| `Zlv`    | v0.0.0          | --
+-| `Zlio`   | v0.0.0          | --
+-|===
+---
+-
+-// ////////////////////////////////////////////////////////////////////
++==== Instructions
+
+ [[ACE-instruction-exec]]
+-==== ace.exec
++===== `ace.exec`
+
+ _Synopsis_::
+ Perform a cryptographic operation in the ACE unit.
+@@ -1199,30 +880,15 @@ _Description_::
+ Performs a cryptographic operation as defined by the algorithm in CR `Ks1` or `K{Xs1}`.
+ The instruction may take an input and produce an output.
+
+-If the V extension register file is not implemented, only Form D `ace.exec`
+-is supported and `ace.input`, `ace.output` are used to provide inputs and
+-extract outputs from `ace.exec`, as described in <<ACE-usage-input-output>>.
+-
+ The instruction may possibly modify state.
+
+ The instruction is usage-controlled.
+ --
+
+-_Included in_::
+-+
+---
+-[%header,cols="4,2,2"]
+-|===
+-|Extension | Minimum version | Lifecycle state
+-| `Zlv` (Forms A-D)    | v0.0.0          | --
+-| `Zlio` (Form D)      | v0.0.0          | --
+-|===
+---
+-
+ // ////////////////////////////////////////////////////////////////////
+
+ [[ACE-instruction-setst]]
+-==== ace.setst
++===== `ace.setst`
+
+ _Synopsis_::
+ Change the state of the algorithm encoded in the CC in a CR.
+@@ -1279,7 +945,7 @@ It is primarily used for three purposes:
+ These values include both general values, which apply to all Algorithms, as well as values specific to the Algorithm encoded in a CR.
+
+ Certain state values may require an auxiliary input, which may be passed in a GPR `Xs` (a GPR pair in RV32)
+-or a vector (group) `Vs`. The vector (group) may be replaced by ACEIOBUF is `Zlio` is implemented.
++or a vector (group) `Vs`.
+
+ Normally, `#immed7` contains the _State_ value to be set. In most cases, after the instruction has been issues, the _State_ field takes the value specified in `#immed7`.  Some states may transition to a different state automatically after completing `ace.setst`.
+
+@@ -1388,23 +1054,11 @@ The instruction may possibly modify state.
+ The instruction is usage-controlled when used to transition states.
+ The instruction is not usage-controlled when used to initiate and terminate management processes.
+ --
+-+
+-
+-_Included in_::
+-+
+---
+-[%header,cols="4,2,2"]
+-|===
+-| Extension | Minimum version | Lifecycle state
+-| `Zlv`     | v0.0.0          | --
+-| `Zlio`    | v0.0.0          | --
+-|===
+---
+
+ // ////////////////////////////////////////////////////////////////////
+
+ [[ACE-instruction-getmd]]
+-==== ace.getmdl/ace.getmdh
++===== `ace.getmdl`/`ace.getmdh`
+
+ _Synopsis_::
+ Export the MDH of a CR.
+@@ -1457,23 +1111,12 @@ The instruction may not modify state.
+
+ The instruction is not usage-controlled.
+ --
+-+
+-
+-_Included in_::
+-+
+---
+-[%header,cols="4,2,2"]
+-|===
+-|Extension | Minimum version | Lifecycle state
+-| `Zlv`    | v0.0.0          | --
+-| `Zlio`   | v0.0.0          | --
+-|===
+ --
+
+ // ////////////////////////////////////////////////////////////////////
+
+ [[ACE-instruction-restrict]]
+-==== ace.restrictl/ace.restricth
++===== `ace.restrictl`/`ace.restricth`
+
+ _Synopsis_::
+ Restrict the policies encoded in a CC in a CR.
+@@ -1586,17 +1229,6 @@ The instruction may possibly modify state.
+ The instruction is usage-controlled.
+ --
+
+-_Included in_::
+-+
+---
+-[%header,cols="4,2,2"]
+-|===
+-|Extension | Minimum version | Lifecycle state
+-| `Zlv`    | v0.0.0          | --
+-| `Zlio`   | v0.0.0          | --
+-|===
+---
+-
+ // ////////////////////////////////////////////////////////////////////
+
+ [NOTE]
+@@ -1620,7 +1252,7 @@ resources by avoiding additional round-trips to trusted environments.
+ // ////////////////////////////////////////////////////////////////////
+
+ [[ACE-instruction-clone]]
+-==== ace.clone
++===== `ace.clone`
+
+ _Synopsis_::
+ Copy a CR into another CR.
+@@ -1671,23 +1303,12 @@ The instruction may possibly modify state.
+ +
+ The instruction is not usage-controlled.
+
+-_Included in_::
+-+
+---
+-[%header,cols="4,2,2"]
+-|===
+-|Extension | Minimum version | Lifecycle state
+-| `Zlv`    | v0.0.0          | --
+-| `Zlio`   | v0.0.0          | --
+-|===
+---
+-
+ // ////////////////////////////////////////////////////////////////////
+
+ // //
+
+ [[ACE-instruction-derive]]
+-==== ace.derive
++===== `ace.derive`
+
+ [NOTE]
+ ====
+@@ -1745,17 +1366,6 @@ The instruction may possibly modify state.
+
+ The instruction is usage-controlled.
+ --
+-+
+-
+-_Included in_::
+-+
+---
+-[%header,cols="4,2,2"]
+-|===
+-|Extension | Minimum version | Lifecycle state
+-| `Zlv`    | v0.0.0          | --
+-| `Zlio`   | v0.0.0          | --
+-|===
+ --
+
+ // //
+@@ -1763,7 +1373,7 @@ _Included in_::
+ // ////////////////////////////////////////////////////////////////////
+
+ [[ACE-instruction-size]]
+-==== ace.size
++===== `ace.size`
+
+ _Synopsis_::
+ Return the size of a PI or SCC in bytes, or zero in case of error.
+@@ -1826,23 +1436,100 @@ The instruction may not modify state.
+
+ The instruction is not usage-controlled.
+ --
+-+
+
+-_Included in_::
+-+
+---
+-[%header,cols="4,2,2"]
+-|===
+-|Extension | Minimum version | Lifecycle state
+-| `Zlv`    | v0.0.0          | --
+-| `Zlio`   | v0.0.0          | --
+-|===
+---
++// ////////////////////////////////////////////////////////////////////
++
++==== CSRs
++
++[[ACE-CSR-impl-ids]]
++===== `acevendorid`, `acearchid`, and `aceimpid`
++
++{empty}
++(((CSR, `acemvendorid`)))
++(((CSR, `acemarchid`)))
++(((CSR, `acemimpid`)))
++`acevendorid`, `acearchid`, and `aceimpid` identify the version of the ACE unit, analogously to `mvendorid`, `marchid`, `mimpid` CSRs for the hart.
++
++The `acemvendorid` CSR is a 32-bit read-only register providing the JEDEC manufacturer ID of the provider of the ACE unit (or 0 it is not commercial).
++
++The `acemarchid` CSR is a 32-bit read-only register encoding the base microarchitecture of the ACE unit. Non-commercial IDs are allocated globally by RVI, while commercial IDs are specific to the acemvendorid`
++
++The `acemimpid` CSR is a 32-bit read-only register that provides a unique encoding of the version of the ACE unit implementation. This register must be readable in any implementation, but a value of 0 can be returned to indicate that the field is not implemented. The Implementation value should reflect the design of the ACE unit itself and not any surrounding system.
++
++These three CSRs, together, form the _Implementation Qualifier_ (see <<ACE-extra-content>>).
++
++// ////////////////////////////////////////////////////////////////////
++
++[[ACE-CSR-acestart]]
++===== `acestart`
++
++{empty}
++(((CSR, `acestart`)))
++`acestart` is an alias for `vstart`. Therefore, it is an XLEN-bit RW CSR.
++ACE defines it also when the V extension is not enabled.
++
++`acestart` tracks the progress of resumable ACE instructions, such as `ace.load`, `ace.store`, `ace.input` and `ace.output`.
++
++Progress tracking by `acestart` also applies to `ace.exec` when iteratively processing a multi-block operand, as `ace.exec` may be interrupted between blocks.
++Only these instructions honor a nonzero `acestart`; all other instructions ignore it and are restarted, with `acestart` also being cleared.
++
++Since ACE does not have an _intrinsic_ concept of element length, `acestart` counts the number of _bits_ processed so far nu `ace.exec`, not the number of elements, or read/written by `ace.input`/`ace.output` and `ace.prov`/`ace.import`/`ace.export` or `ace.store`/`ace.load`.
++
++Hardware writes this register on interruption.
++Software may save and restore the register across context switches.
++For certain algorithms, writing zero to `acestart` to force a full restart of `ace.exec` may lead to inconsistent or unpredictable results.
++Writing an invalid or non-supported nonzero value raises an illegal instruction exception.
++
++When a vector instruction is interrupted, the CSR follows `vstart` semantics as expected, i.e., it counts the number of processed elements.
++When an ACE instruction is interrupted, the CSR follows the `acestart` semantics described here.
++
++[NOTE]
++====
++The reason `vstart` can be reused as `acestart` comes from the fact that the Risc-V ISA exposes a computation model in which the observable results are the same as if the instructions were executed in order.
++If an implementation has executed instructions past the PC when an interrupt occurs, those instructions are discarded and must be re‑executed upon return from the handler. Only the instruction at the PC may be interrupted in a way that it saves temporary state that allows it to be resumed later.
++There is no situation in which the microarchitecture of a hart can simultaneously interrupt multiple instructions allowing them to resume at the same time.
++Hence, `vstart` can safely be reused by ACE as `acestart`.
++====
+
+ // ////////////////////////////////////////////////////////////////////
+
++[[ACE-CSR-acenonce]]
++===== `acenonce0` and `acenonce1`
++
++{empty}
++(((CSR, `acenonce`)))
++`acenonce0` and `acenonce1` are XLEN-bit URW CSR that define the nonce to be used in `ace.import` and `ace.export` (see <<ACE-export-import-algorithms>>).
++`acenonce0` contains bits [63:0] of the nonce, and `acenonce1` contains bits [95:64] of the nonce.
++The most significant 32 bits of `acenonce1` are fixed to zero.
++
++On RV32, 32-bit CSR `acenonce0h` shadows bits [63:32] of `acenonce0`, allowing these bits to be accessed.
++
++=== `Zlio`: ACE with support for `ace.input` and `ace.output`
++
++The `Zlio` base ACE extension contains all instructions in `Zlv` by replacing
++all vector registers with ACEIOBUF. `Zlio` and `Zlv` are mutually exclusive.
++`Zlio` adds two CSRs (`aceiobuftop`, `aceiobuflen`, and `acemaxiobuflen`), and
++two dedicated memory instructions (`ace.input` and `ace.output`).
++
++==== Instructions
++
++===== `ace.exec`
++
++Only Form D `ace.exec` is supported. See <<ACE-instruction-exec>> for the full
++`ace.exec` definition.
++
++===== `ace.setst`
++
++The vector form is replaced by ACEIOBUF. See <<ACE-instruction-setst>> for the
++full `ace.setst` definition.
++
++===== `ace.derive`
++
++The vector form is replaced by ACEIOBUF.  See <<ACE-instruction-derive>> for
++the full `ace.setst` definition.
++
+ [[ACE-instruction-input]]
+-==== ace.input
++===== `ace.input`
+
+ _Synopsis_::
+ Load data into the ACEIOBUF.
+@@ -1887,22 +1574,11 @@ The instruction may possibly modify state.
+
+ The instruction is not usage-controlled.
+ --
+-+
+-
+-_Included in_::
+-+
+---
+-[%header,cols="4,2,2"]
+-|===
+-|Extension | Minimum version | Lifecycle state
+-| `Zlio`   | v0.0.0          | --
+-|===
+---
+
+ // ////////////////////////////////////////////////////////////////////
+
+ [[ACE-instruction-output]]
+-==== ace.output
++===== `ace.output`
+
+ _Synopsis_::
+ Save the contents of the ACEIOBUF to memory.
+@@ -1946,14 +1622,64 @@ The instruction may possibly modify state.
+ The instruction is not usage-controlled.
+ --
+
+-_Included in_::
++==== CSRs
++
++[[ACE-CSR-aceiobuftop]]
++===== `aceiobuftop`
++
++{empty}
++(((CSR, `aceiobuftop`)))
++`aceiobuftop` is an XLEN-bit URW CSR that marks the upper bound in bits of the buffer range used by `ace.input` and `ace.output`.
++Together with `acestart`, it defines the active transfer window.
++
++The constraints `acestart` {le} `aceiobuftop` {le} `aceiobuflen` must hold.
++Violating either bound raises an illegal instruction exception.
++Modifying `aceiobuftop` does not modify buffer contents.
++
++NOTE: `aceiobuftop` enables per-operation length adjustments without the need to reconfigure the ACEIOBUF using `aceiobuflen`, which can be expensive due to the fact that it clears the buffer and may lead to internal garbage collection.
++This can be used similarly to the reconfiguration of `VL*SEW` to provide an partial “last block” or to supply a short IV/nonce to cryptographic algorithms.
++
++Using a alternative sequence for `ace.exec` or `ace.setst` for any Form with an input or output
++when `aceiobuftop` − `acestart` is zero (and `aceiobuflen` nonzero) will result in no operation being performed.
++
++Using ACEIOBUF when `aceiobuftop` − `acestart` is an invalid length raises an illegal instruction exception.
++
++Since context switching code saves and restores the contents of the ACEIOBUF up to `aceiobuflen`, the contents between `aceiobuftop` and `aceiobuflen` are preserved.
++
++// ////////////////////////////////////////////////////////////////////
++
++[[ACE-CSR-aceiobuflen]]
++===== `aceiobuflen`
++
++{empty}
++(((CSR, `aceiobuflen`)))
++`aceiobuflen` is an XLEN-bit URW CSR that programs the ACEIOBUF length in bits for use by `ace.input` and `ace.output`.
++Writing this register-even when re-writing the current value-also zeroes the buffer and sets `aceiobuftop` to the same length and `acestart` to zero.
++
++When `aceiobuflen` is zero, the ACEIOBUF is _unconfigured_.
++Attempting to execute an operation that expects an input or an output in the ACEIOBUF while the latter is unconfigured raises exception `ace_exc_buf_unconf`.
++
++Writing a value larger than `acemaxiobuflen` raises exception `ace_exc_out_of_mem`.
++
++[NOTE]
++====
++As per the Privileged Architecture, the dirtiness of the ACEIOBUF is not tracked except as part of the entire ACE state in `*status`.
++Context switching code is expected to save and restore the contents of the ACEIOBUF up to `aceiobuflen`.
++We recommend software to set `aceiobuflen` to zero once the contents of the ACEIOBUF are no longer needed.
++Context switching code can use this information to avoid unnecessary save and restore of ACEIOBUF contents.
++====
++
++// ////////////////////////////////////////////////////////////////////
++
++[[ACE-CSR-acemaxiobuflen]]
++===== `acemaxiobuflen`
++
++{empty}
++(((CSR, `acemaxiobuflen`)))
++`acemaxiobuflen` is an XLEN-bit RO CSR that reports the maximum configurable length of the ACEIOBUF.
++
+ +
+ --
+-[%header,cols="4,2,2"]
+-|===
+-|Extension | Minimum version | Lifecycle state
+-| `Zlio`   | v0.0.0          | --
+-|===
+ --
+
+ // ////////////////////////////////////////////////////////////////////
+--

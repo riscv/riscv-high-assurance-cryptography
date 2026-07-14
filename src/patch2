@@ -1,0 +1,147 @@
+---
+ src/ace-ISA-unpriv.adoc | 122 ++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 122 insertions(+)
+
+diff --git a/src/ace-ISA-unpriv.adoc b/src/ace-ISA-unpriv.adoc
+index 111bccc..01d02fc 100644
+--- a/src/ace-ISA-unpriv.adoc
++++ b/src/ace-ISA-unpriv.adoc
+@@ -80,6 +80,7 @@ The hart stalls when attempting to read them until the ACE operation using those
+ | Extension       | Features                                                                                                            | Defined in:                                    | Minimum version | Lifecycle state
+ | `Zlv`           | ACE with support for vector registers.^1^                                                                           | <<ACE-instructions-detailed>>                  | v0.0.0          | --
+ | `Zlio`          | ACE with support for `ace.input` and `ace.output`.^2^                                                               | <<ACE-usage-input-output>>                     | v0.0.0          | --
++| `Zlm`           | ACE with dedicated memory instructions.                                                                             | <<ACE-memory>>                                 | v0.0.0          | --
+ | `Zlexpire`      | ACE with support for the _ExpirationDate_ metadata field.                                                           | <<ACE-Metadata-expiration-date>>               | v0.0.0          | --
+ | `Zlaes128p`     | AES-128 encryption/decryption.^3^                                                                                   | <<ACE-ECB-mode>>                               | v0.0.0          | --
+ | `Zlaes192p`     | AES-192 encryption/decryption.^3^                                                                                   | <<ACE-ECB-mode>>                               | v0.0.0          | --
+@@ -1678,8 +1679,129 @@ Context switching code can use this information to avoid unnecessary save and re
+ (((CSR, `acemaxiobuflen`)))
+ `acemaxiobuflen` is an XLEN-bit RO CSR that reports the maximum configurable length of the ACEIOBUF.
+
++
++[[ACE-memory]]
++=== `Zlm`: ACE Dedicated Memory Instructions
++
++The `Zlm` ACE extension requires the `Zlv` extension to be implemented, and
++adds two dedicated memory instructions: `ace.load` and `ace.store`. `Zlm` is
++mutually exclusive with `Zlio` and `Zlmv`.
++
++[[ACE-instruction-load]]
++==== `ace.load`
++
++_Encoding_::
++`ace.load` is an I-type instruction.
+ +
++[wavedrom, , svg]
++....
++{reg:[
++    { bits:  7, name: 0x0b, attr: ['custom-0'] },
++    { bits:  5, name: 'context', attr: ['Kd','K{Xd}'] },
++    { bits:  3, name: 'ace.load', attr: ['0    0    0','0    0    1'] },
++    { bits:  5, name: 'Xs1' },
++    { bits: 12, name: 'immed12' },
++]}
++....
++
++_Mnemonics_::
++`ace.load{fournbsp}{nbsp}{nbsp}{nbsp}Kd|K{Xd}, %offset(Xs1)` +
++`ace.sysimport{nbsp}Kd|K{Xd}, %offset(Xs1)`
++
++_Description_::
+++
++--
++`ace.load` imports a PI or a SCC into the CR `Kd` or `K{Xd}`, starting with the 8th byte of the MDH.
++The memory address of the latter is given in `%offset(Xs1)`.
++
++This instruction requires that the CR is ready to import information and that the first 8 bytes of the MDH have already been loaded by passing them as a parameter in a GPR (pair for RV32) to the `ace.setst` instruction used to open the CR for provisioning or import.
++
++If the _ConfigStatus_ field equals _CfgStComplete_, an invalid instruction exception is raised.
++
++`ace.load` can load data larger than the effective XLEN.
++`acestart` tracks the number of loaded bytes. If `ace.load` is interrupted,
++`acestart` contains the offset to the next byte to load upon resumption.
++
++// NOTE: Modifying the CR being used by an interrupted `ace.load` always forces
++// the load to restart. Software that aims to optimize this case must
++// inspect `ConfigStatus` in each CR's metadata to detect an incomplete load
++// and prevent the restart.
++
++The implementation first determines the size of the input to be loaded from the first 8 bytes of the MDH.
++The _ConfigStatus_ field determines the input type (PI or SCC), and
++the fields _Algorithm_, _AlgorithmPolicy_, and _KeyType_ determine its length.
++`ace.load` then requests the LSU to read the memory contents starting at `%offset(Xs1)`, in XLEN-bit sized loads,
++and copies them into the CR starting with the 8th byte (i.e., bits [127:64] of the MDH).
++The order in which the LSU issues these transactions is implementation dependent.
++See <<ACE-resumability-management>>, <<ACE-resumability-memory-model>> and <<ACE-export-import-algorithms>> for further details.
++
++When the key is in a system-defined format, the semantics of `ace.load`
++are entirely implementation dependent and do not assume that the CR has been readied to import information or
++that some metadata has already been loaded. System-defined format is signaled by the _SystemFormat_ bit of MDH[63:0], which in this case may have a system-defined length.
++
++The instruction may possibly modify state.
++
++The instruction is not usage-controlled.
+ --
++
++// ////////////////////////////////////////////////////////////////////
++
++[[ACE-instruction-store]]
++===== `ace.store`
++
++_Encoding_::
++`ace.store` is an S-type instruction.
+++
++[wavedrom, , svg]
++....
++{reg:[
++    { bits:  7, name: 0x27, attr: ['custom-1'] },
++    { bits:  5, name: 'immed[4:0]' },
++    { bits:  3, name: 'ace.store', attr: [0x0,0x1] },
++    { bits:  5, name: 'Xs1' },
++    { bits:  5, name: 'context', attr: ['Ks2','K{Xs2}'] },
++    { bits:  7, name: 'immed[11:5]' },
++]}
++....
++
++_Mnemonic_::
++`ace.store %offset(Xs1), Ks2|K{Xs2}`
++(((ACE, instruction, ace.export)))
++
++_Description_::
+++
++--
++Exports raw data from the CR `Ks2` or `K{Xs2}`, starting with the 8th byte of the MDH, to memory at address `%offset(Xs1)`.
++
++The first 8 bytes of the MDH must be read from the CR using `ace.getmdl` and saved to memory by the software.
++
++`ace.store` can store data that may be larger than the effective XLEN.
++`acestart` keeps track of the number of stored bytes. If `ace.store` is
++interrupted, `acestart` contains the offset to the next byte to store upon
++resumption.
++
++NOTE: Modifying the CR being used by the interrupted `ace.store` always forces
++the store to restart. Software that aims to optimize this case will have to
++inspect `ConfigStatus` in the the metadata of each CR and detect if the store
++hasn't completed to impede the restart.
++
++If the _ConfigStatus_ field is equal to _CfgStComplete_, then an invalid instruction exception is raised.
++
++If the _ConfigStatus_ field is not equal to _CfgStComplete_
++the implementation first determines the size of the output to be generated from first 8 bytes of the MDH.
++The type of the output, i.e. whether it is a PI or a SCC, is determined by the _ConfigStatus_ field, and
++its length by _Algorithm_, _AlgorithmPolicy_, and _KeyType_.
++Then, `ace.store` requests the LSU to store the CR to memory, beginning with the 8th byte (i.e. bits [127:64] of the MDH),
++in XLEN-bit sized stores, in the memory region starting at address `%offset(Xs1)`.
++The order in which the LSU issues these transactions is implementation dependent.
++See <<ACE-resumability-management>>, <<ACE-resumability-memory-model>> and <<ACE-export-import-algorithms>> for further details.
++
++NOTE: We allow to store a PI because it may be possible that a provisioning operation be interrupted, and this allows
++resuming.
++
++The instruction does not modify state.
++
++The instruction is not usage-controlled.
+ --
+
+ // ////////////////////////////////////////////////////////////////////
+--
