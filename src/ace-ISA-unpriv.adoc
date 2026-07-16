@@ -2349,7 +2349,51 @@ If an import is interrupted and the partial state exported (assuming we allow th
 the exported data must be the original encrypted data loaded so far, and not a re-encryption
 of a partially decrypted payload.  This is required for both correctness and security.
 
-*Export Code*
+*Export Code (`Zlmv`)*
+----
+  ace.size   t2, K{t0}                # get size of the data to export
+                                      # TODO: program `ace.start`
+  {...}  # here goes the code that allocates the buffer to store the exported data
+
+  ace.getmd  t1, K{t0}
+
+  # If _ConfigStatus_ is _CfgStcomplete_, the following ace.setst prepares the
+  # serialized, encrypted and authenticated internal representation of the CR for
+  # export, computes the SIV(s), then changes _ConfigStatus_ to _CfgStExporting_.
+  # Otherwise, it does nothing.
+
+  ace.setst  K{t0}, #ace_CR_export_start
+  sd  0(t6), t1                       # Export original _ConfigStatus_ to memory
+
+  # The next instruction stores all data starting with the 8th byte of the MDH.
+  # In case of interrupt/exception, the handler will decide whether to keep `acestart`
+  # or clear it to force restart.
+  # The instruction gets the length of the blob to export from the MDH
+  # no special handling from the SW is necessary.
+vloop:
+  vsetvli a3, a2, e8, m1, ta, ma        # load rest of PI starting with MDH[127:64]
+  ace.getst  t2, K{t0}                  # get _State_ field from MDH[63:0]
+  bltu       t3, t2, handle_errors      # errors (larger than 23, i.e. ≥ 24)
+  beqz       t2, handle_errors          # handle error (is _Off_ needed?)
+  ace.move   v4, K{t0}                  # Move to CR
+  vse8.v     v4, 8(t6)                  # load data
+  add        t6, t6, a3                 # Bump pointer
+  sub        a2, a2, a3                 # Decrement number of elements
+  bnez       a2, vloop
+  ace.getst  t2, K{t0}                  # get _State_ field from MDH[63:0]
+  li         t3, #ace_state_off         # compare to off state
+  beq        t2, t3, restart            # CR cleared means force restart
+
+success:
+  # Reset MDH[63:0] to the previously saved value. If the saved _ConfigStatus_ is
+  # _CfgStcomplete_, the operation also re-decrypts the state and makes the CR available
+  # to software, otherwise it does nothing and leaves the CR state in the serialized and
+  # encrypted format.
+
+  ace.setst  K{t0}, t1, #ace_CR_export_end
+----
+
+*Export Code (`Zlm`)*
 ----
   ace.size   t2, K{t0}                # get size of the data to export
   {...}  # here goes the code that allocates the buffer to store the exported data
