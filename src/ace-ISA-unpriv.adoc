@@ -80,7 +80,7 @@ The hart stalls when attempting to read them until the ACE operation using those
 | Extension       | Features                                                                                                            | Defined in:                                    | Minimum version | Lifecycle state
 | `Zlv`           | ACE with support for vector registers.^1^                                                                           | <<ACE-instructions-detailed>>                  | v0.0.0          | --
 | `Zlio`          | ACE with support for `ace.input` and `ace.output`.^2^                                                               | <<ACE-usage-input-output>>                     | v0.0.0          | --
-| `Zlm`           | ACE with dedicated memory instructions.                                                                             | // <<ACE-memory>>                                 | v0.0.0          | --
+| `Zlm`           | ACE with dedicated memory instructions.                                                                             |                                                | v0.0.0          | --
 | `Zlmv`          | ACE with dedicated move instructions.                                                                               | <<ACE-move>>                                   | v0.0.0          | --
 | `Zlexpire`      | ACE with support for the _ExpirationDate_ metadata field.                                                           | <<ACE-Metadata-expiration-date>>               | v0.0.0          | --
 | `Zlaes128p`     | AES-128 encryption/decryption.^3^                                                                                   | <<ACE-ECB-mode>>                               | v0.0.0          | --
@@ -167,7 +167,8 @@ We list the most important operations on CRs below, to refer to them before they
 * Importing (<<ACE-management-operations>>) imports a SCC into a CR.
 * `ace.clear` (<<ACE-instruction-clear>>) unconfigures and clears a CR.
 * `ace.exec` (<<ACE-instruction-exec>>) performs cryptographic operations as specified by the algorithm configured in a CR and according to the state of the CR.
-* `ace.setst` (<<ACE-instruction-setst>>) transitions a CR between states of a cryptographic algorithm or states of CR management lifecycle.
+* `ace.setst` (<<ACE-instruction-setst>>) transitions a CC inside a CR between states of a cryptographic algorithm.
+* `ace.mgmt` (<<ACE-instruction-manage>>) transitions a CR between states of its management lifecycle.
 * `ace.clone` (<<ACE-instruction-clone>>) creates a copy of a CR into a second CR.
 
 ===== Representation of Cryptographic Registers for Accessing their Contents
@@ -968,23 +969,23 @@ _This subsection is informative._
 
 Broadly speaking, and removing error handling, *Provisioning* is performed by the following three steps:
 
-. Use `ace.setst` (<<ACE-instruction-setst>>) to prepare a CR to be provisioned, check the validity of MDH[63:0] and load it in the CR.
+. Use `ace.mgmt` (<<ACE-instruction-manage>>) to prepare a CR to be provisioned, check the validity of MDH[63:0] and load it in the CR.
 . Use `ace.load` (<<ACE-instruction-load>>) to load the rest of the provisioning information into the CR.
-. Use `ace.setst` to make the CR available to software.
+. Use `ace.mgmt` to make the CR available to software.
 
 *Importing* a SCC into a CR is similar:
 
-. Use `ace.setst` to prepare a CR to accept a SCC, store MDH[63:0] in it, check its validity.
+. Use `ace.mgmt` to prepare a CR to accept a SCC, store MDH[63:0] in it, check its validity.
 . Use `ace.load` to load the rest of the SCC information into the CR.
-. Use `ace.setst` to authenticate and decrypt the SCC, and make the CR available to software.
+. Use `ace.mgmt` to authenticate and decrypt the SCC, and make the CR available to software.
 
 *Exporting* a CR as an SCC consists of the following steps:
 
 . Use `ace.getmdl` (<<ACE-instruction-getmd>>) to get MDH[63:0] of the CR to be exported to be able to determine its size and allocate resources.
 . Store MDH[63:0] into memory.
-. Use `ace.setst` to prepare a CR to produce a SCC. This includes encrypting its contents and computing the authentication tag(s).
+. Use `ace.mgmt` to prepare a CR to produce a SCC. This includes encrypting its contents and computing the authentication tag(s).
 . Use `ace.store` (<<ACE-instruction-store>>) to store MDH[127:64] and the rest of the SCC to memory.
-. Use `ace.setst` to restore the CR in a form available to software.
+. Use `ace.mgmt` to restore the CR in a form available to software.
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -1015,7 +1016,7 @@ _Description_::
 `ace.load` imports a PI or a SCC into the CR `Kd` or `K{Xd}`, starting with the 8th byte of the MDH.
 The memory address of the latter is given in `%offset(Xs1)`.
 
-This instruction requires that the CR is ready to import information and that the first 8 bytes of the MDH have already been loaded by passing them as a parameter in a GPR (pair for RV32) to the `ace.setst` instruction used to open the CR for provisioning or import.
+This instruction requires that the CR is ready to import information and that the first 8 bytes of the MDH have already been loaded by passing them as a parameter in a GPR (pair for RV32) to the `ace.mgmt` instruction used to open the CR for provisioning or import.
 
 If the _ConfigStatus_ field equals _CfgStComplete_, an invalid instruction exception is raised.
 
@@ -1216,7 +1217,7 @@ _Included in_::
 
 The `Zlmv` subextension adds dedicated move instructions from/to scalar/vector registers to
 a CR. `Zlmv` is mutually exclusive with `Zlio` and `Zlm`. The extension adds
-new forms to `ace.exec` and new behavior to `ace.setst`.
+new forms to `ace.exec` and new behavior to `ace.setst` and `ace.mgmt`.
 
 The hart adds the following encodings to forms B and C of `ace.exec`:
 
@@ -1308,14 +1309,13 @@ The encodings of the three Forms are:
 _Description_::
 +
 --
-The instruction changes the _State_, _StateExtension_ and _ConfigStatus_ fields of the MDH of `Kd` or `K{Xd}`.
+The instruction changes the _State_ and _StateExtension_ fields of the MDH of `Kd` or `K{Xd}`.
 
-It is primarily used for three purposes:
+It is primarily used for two purposes:
 
 [loweralpha]
-. Advance from one stage of an algorithm to another (for instance, from initialization of a hash function to data absorption and then to digest finalization);
-. Set specific state information of an algorithm (such as configure elliptic curve points or private/public keys);
-. Initiate and complete provisioning or export/import operations
+. Advance from one stage of an algorithm to another (for instance, from initialization of a hash function to data absorption and then to digest finalization); and1
+. Set specific state information of an algorithm (such as configure elliptic curve points or private/public keys), which is intended to be orthogonal to the states mentioned in the previous point.
 
 `#immed7` is a constant from a set of admissible values.
 These values include both general values, which apply to all Algorithms, as well as values specific to the Algorithm encoded in a CR.
@@ -1338,7 +1338,74 @@ Further usage of the same CR–for instance, a later `ace.exec` or `ace.state` t
 
 Certain values of `#immed7`, depending on the Algorithm, may be used to set change _StateExtension_ instead, so that it can be used as state information that is somewhat orthogonal to the _State_ field.
 
-When used to affect a CR's _ConfigStatus_, `ace.setst` is _not_ considered an usage instruction because it is part of a configuration operation. It is therefore not subject to the limitations on usage instructions, and it will not cause the CR to enter any Error State, including _Expired_.
+The full provisioning, export, and import operations are described in detail in <<ACE-export-import-algorithms>>.
+
+The instruction may possibly modify state.
+
+The instruction is usage-controlled.
+--
+
+_Included in_::
++
+--
+[%header,cols="4,2,2"]
+|===
+| Extension | Minimum version | Lifecycle state
+| `Zlv`     | v0.0.0          | --
+| `Zlio`    | v0.0.0          | --
+|===
+--
+
+// ////////////////////////////////////////////////////////////////////
+
+[[ACE-instruction-manage]]
+==== ace.mgmt
+
+_Synopsis_::
+Tracks the states of management operations of a CR.
+
+_Mnemonic_::
+The `ace.mgmt` instruction admits three Forms, namely
+(((ACE, instruction, ace.mgmt)))
++
+[upperalpha]
+. `ace.mgmt Kd|K{Xd}, #immed7{fournbsp}{nbsp}{nbsp}{nbsp}` with no auxiliary input.
+. `ace.mgmt Kd|K{Xd}, #immed7, Xs{nbsp}{nbsp}` with an auxiliary input in a GPR.
+. `ace.mgmt Kd|K{Xd}, #immed7, Vs{nbsp}{nbsp}` with an auxiliary input in a vector register.
+
+//
+
+_Encoding_::
+`ace.mgmt` is an R-type instruction.  Its encoding is identical to that of `ace.setst` except for the most significant bit of `funct3`, which is set to `1`.
++
+--
+[wavedrom, ,svg]
+....
+{reg:[
+    { bits:  7, name: 0x5b, attr: ['custom-2'] },
+    { bits:  5, name: 'Kd|K{Xd}' },
+    { bits:  3, name: 'ace.mgmt', attr: ['1    0    1','1    1    0','1    1    1'] },
+    { bits:  5, name: 0x0 },
+    { bits:  5, name: 'rs1', attr: ['—','Xs','Vs'] },
+    { bits:  7, name: 'immed7' },
+]}
+....
+
+The encodings of the three Forms are:
+[upperalpha]
+. `ace.mgmt` = `0b101`.
+. `ace.mgmt` = `0b110`.
+. `ace.mgmt` = `0b111`.
+--
+
+// ////////////////////////////////////////////////////////////////////
+
+_Description_::
++
+--
+The instruction changes the _ConfigStatus_ field of the MDH of `Kd` or `K{Xd}`.
+
+It is used to initiate and complete provisioning or export/import operations.
 
 The special values of `#immed7` to initiate a provisioning, importing, and exporting process, and conclude it afterwards, are listed in the following table:
 
@@ -1347,27 +1414,27 @@ The special values of `#immed7` to initiate a provisioning, importing, and expor
 [float="center",align="center",width="100%",cols="^7%,<28%,<65%",options="header"]
 |===
 | Value | Mnemonic                  |  Description
-|  96   | `ace_CR_provision_start`  |  Prepare a CR for provisioning keys and metadata into it, set _ConfigStatus_ to _CfgStProvisioning_. Needs an auxiliary input in a GPR (or a GPR pair) with bits [63:0] of MDH.
-|  97   | `ace_CR_provision_end`    |  Make the provisioned CR available to software  (“sealing”), set _ConfigStatus_ to _CfgStComplete_. Requires no auxiliary input.
-|  98   | `ace_CR_import_start`     |  Prepare a CR for importing a SCC into it, set _ConfigStatus_ to _CfgStimporting_. Needs an auxiliary input in a GPR (or a GPR pair) with bits [63:0] of MDH.
-|  99   | `ace_CR_import_end`       |  Decrypt and authenticate the imported SCC, make the CR available to software, set _ConfigStatus_ to a provided value.
-| 100   | `ace_CR_export_start`     |  Prepare a CR for exporting it as a SCC (if not yet in the correct format), set _ConfigStatus_ to _CfgExporting_. Requires no auxiliary input.
-| 101   | `ace_CR_export_end`       |  Restore the exported CR in the internal clear format (only if already complete) and make it available to software, set _ConfigStatus_ to a provided value. Uses an auxiliary input in a GPR (or a GPR pair) with bits [63:0] of MDH to restore _ConfigStatus_ saved by software.
+|  0   | `ace_CR_provision_start`  |  Prepare a CR for provisioning keys and metadata into it, set _ConfigStatus_ to _CfgStProvisioning_. Needs an auxiliary input in a GPR (or a GPR pair) with bits [63:0] of MDH, or an auxiliary input into a 128-bit (or longer) vector register to provide the entire MDH.
+|  1   | `ace_CR_provision_end`    |  Make the provisioned CR available to software  (“sealing”), set _ConfigStatus_ to _CfgStComplete_. Requires no auxiliary input.
+|  2   | `ace_CR_import_start`     |  Prepare a CR for importing a SCC into it, set _ConfigStatus_ to _CfgStimporting_. Needs an auxiliary input in a GPR (or a GPR pair) with bits [63:0] of MDH, or an auxiliary input into a 128-bit (or longer) vector register to provide the entire MDH.
+|  3   | `ace_CR_import_end`       |  Decrypt and authenticate the imported SCC, make the CR available to software, set _ConfigStatus_ to a provided value.
+|  4   | `ace_CR_export_start`     |  Prepare a CR for exporting it as a SCC (if not yet in the correct format), set _ConfigStatus_ to _CfgExporting_. Requires no auxiliary input.
+|  5   | `ace_CR_export_end`       |  Restore the exported CR in the internal clear format (only if already complete) and make it available to software, set _ConfigStatus_ to a provided value. Uses an auxiliary input in a GPR (or a GPR pair) with bits [63:0] of MDH to restore _ConfigStatus_ saved by software.
 If the restored value of _ConfigStatus_ is not _CfgStComplete_, the CR is made available to software.
 |===
 
 If `ace.setst` is used with one of the immediates in <<ACE-management-immeds>>, the operation has special semantics:
 
-. *`ace.setst` is used to start provisioning, resp., import.*
+. *`ace.mgmt` is used to start provisioning, resp., import.*
 +
-Before issuing `ace.setst`, software must read Bits [63:0] of the MDH from
+Before issuing `ace.mgmt`, software must read Bits [63:0] of the MDH from
 memory if the GPR variant is used, or [127:0] of the MDH from memory if the
 vector variant is used.
 Let `ml` be this value.
-Software must pass `ml` as the auxiliary input to `ace.setst` in a GPR (or a
+Software must pass `ml` as the auxiliary input to `ace.mgmt` in a GPR (or a
 GPR pair), or a vector register.
 +
-`ace.setst` then performs following operations:
+`ace.mgmt` then performs following operations:
 
 .. The target CR is cleared.
 .. If the combination of _Algorithm_, _AlgorithmPolicy_, and _SCProtection_ in `ml` is not supported, the CR transitions to Error State `ace_state_not_impl`, and exception `ace_exc_invalid` is raised as defined in the Privileged Architecture if the latter is implemented.
@@ -1377,15 +1444,15 @@ GPR pair), or a vector register.
 .. _ConfigStatus_ if set to _CfgStProvisioning_, resp., _CfgStace_CR_import_. In the latter case, we assume that software has saved the old value of `ml` in its state.
 .. `ace.start` is set to 8 if the scalar variant was used, and 16 if the vector variant was used.
 
-. *`ace.setst` is used to terminate a provisioning process.*
+. *`ace.mgmt` is used to terminate a provisioning process.*
 
 .. The ACE unit performs any necessary readjustment of the CR's content to turn it into the format internally consumed by the ACE Unit.
 ..  _ConfigStatus_ is set to _CfgStComplete_.
 .. `ace.start` is set to 0.
 
-. *`ace.setst` is used to terminate an import process.*
+. *`ace.mgmt` is used to terminate an import process.*
 +
-The software must use Form B of `ace.setst` to contextually pass the saved value of `ml`.
+The software must use Form B of `ace.mgmt` to contextually pass the saved value of `ml`.
 
 .. If `ml`._ConfigStatus_ = _CfgStComplete_ (we are importing the export of a fully configured CR)
 ... The ACE unit decrypts and authenticates the CR's content.
@@ -1397,7 +1464,7 @@ The software must use Form B of `ace.setst` to contextually pass the saved value
 +
 _ConfigStatus_ is set to `ml`._ConfigStatus_.
 
-. *`ace.setst` is used to start an export process.*
+. *`ace.mgmt` is used to start an export process.*
 +
 Let `ml` <- Bits [63:0] of the MDH of the CR.
 Software must save this value in its state to use it when terminating the export process.
@@ -1412,10 +1479,10 @@ Prepare a CR to produce a SCC. This includes encrypting its contents and computi
 No encryption or authentication occurs, the information in the CR is exported verbatim, in the same order as they appear in the PI in case the SCC is the export of a partially provisioned CR, or the SCC in case the latter is the export of a partially provisioned, resp., imported, CR, or the CR was previously prepared for export and then the export process itself was interrupted.
 .. `ace.start` is set to 8 if the scalar variant was used, and 16 if the vector variant was used..
 
-. *`ace.setst` is used to terminate an export process.*
+. *`ace.mgmt` is used to terminate an export process.*
 +
 Let `ml` be the value of MDH[63:0] saved by the software upon initiation of the export process.
-Software must pass `ml` as the auxiliary parameter to `ace.setst` for export termination.
+Software must pass `ml` as the auxiliary parameter to `ace.mgmt` for export termination.
 +
 Then:
 
@@ -1429,14 +1496,13 @@ This may involve decrypting its contents or restoring them from an internal back
 No changes to the CR state are made.
 .. `ace.start` is set to 0.
 
-Whenever `ace.setst`, used as a configuration instruction, fails for any other reason, the target CR is cleared.
+Whenever `ace.mgmt`, fails for any other reason, the target CR is cleared.
 
 The full provisioning, export, and import operations are described in detail in <<ACE-export-import-algorithms>>.
 
 The instruction may possibly modify state.
 
-The instruction is usage-controlled when used to transition states.
-The instruction is not usage-controlled when used to initiate and terminate management processes.
+The instruction is not usage-controlled.
 --
 +
 
@@ -2127,7 +2193,7 @@ _Included in_::
 When `Zlio` is available, some instructions that access vector inputs and outputs may be replaced by instruction sequences without vector inputs and outputs as described in <<ACE-replacement-instructions>>.
 
 [[ACE-replacement-instructions]]
-.Alternative sequences for `ace.exec`, `ace.setst`, and ```ace.derive``` using `ace.input` and `ace.output`
+.Alternative sequences for `ace.exec`, `ace.setst`, `ace.mgmt`, and `ace.derive` using `ace.input` and `ace.output`
 [float="center",align="center",width="100%",cols="<20%,<41%,<39%",options="header"]
 |===
 | Instruction and Form | Original Instruction          | Alternative Sequence
@@ -2140,11 +2206,13 @@ When `Zlio` is available, some instructions that access vector inputs and output
 `2: ace.output{nbsp}%offset(Xd),  Xl` +
 | `ace.setst`, Form C  | `ace.setst{nbsp}Kd\|K{Xd}, #immed, Vs` | `1: ace.input{nbsp}{nbsp}%offset(Xs), Xl` +
 `2: ace.setst{nbsp}{nbsp}Kd\|K{Xd}, #immed` +
+| `ace.mgmt`, Form C  | `ace.mgmt{nbsp}Kd\|K{Xd}, #immed, Vs` | `1: ace.input{nbsp}{nbsp}%offset(Xs), Xl` +
+`2: ace.mgmt{nbsp}{nbsp}Kd\|K{Xd}, #immed` +
 | `ace.derive`, Form C | `ace.derive Kd\|K{Xd}, Ks1\|K{Xs1}, Vs2` | `1: ace.input{nbsp}{nbsp}%offset(Xs2), Xl` +
 `2: ace.derive{nbsp}Kd\|K{Xd}, Ks1\|K{Xs1}` +
 |===
 
-The sole functions of `ace.input` and `ace.output` are to supply inputs to cryptographic operations and to read out their outputs. No computation is performed on the data by these instructions. All computations and internal state changes of `ace.exec`, `ace.setst`, and `ace.derive` remain within those operations.
+The sole functions of `ace.input` and `ace.output` are to supply inputs to cryptographic operations and to read out their outputs. No computation is performed on the data by these instructions. All computations and internal state changes of `ace.exec`, `ace.setst`, `ace.mgmt`, and `ace.derive` remain within those operations.
 
 The usage and ordering of the alternative sequences are not enforced architecturally.
 Thus, the caller may omit `ace.input` or `ace.output`, meaning that the contents of the ACEIOBUF are reused, or the output is ignored.
@@ -2161,19 +2229,21 @@ Any attempt to do so raises an invalid instruction exception
 
 . Similarly, for `ace.setst`, if a vector input is expected (Form C `ace.setst`) and it is not provided, the implementation shall automatically use the ACEIOBUF if `Zlio` is available, and raise an invalid instruction exception otherwise. This instruction replacement is not allowed in the case of a Form B `ace.setst`, i.e., when the auxiliary input should come from a GPR, and an invalid instruction exception is raised regardless of whether `Zlio` is available.
 
+. `ace.mgmt`, the same applies as with `ace.setst`, with only `ace.setst` replaced by `ace.mgmt`.
+
 . A Form A `ace.derive` can be used whenever a Form C `ace.derive` is expected. The implementation shall automatically use the ACEIOBUF if `Zlio` is available, and raise an invalid instruction exception otherwise.
 
 . Form D `ace.exec` in place of its Forms A-C, Form A `ace.setst` in place of its Form C, and Form A `ace.derive` in place of its Form C
 may be issued only if the ACEIOBUF is enabled and `aceiobuflen` is non-zero. Else, exception `ace_exc_buf_unconf` is raised. If `aceiobuflen` is non-zero but the range size `aceiobuftop - acestart` is invalid for the algorithm, exception `ace_exc_invalid` is raised and no cryptographic operation is performed.
 
-NOTE: It is because of these rules that, in the Algorithms, we write that a certain Form of `ace.exec` or `ace.setst` is _expected_ instead of _required_ (or _only [...] allowed_). The above substitutions are implicit in all algorithms and are not restated for each occurrence.
+NOTE: It is because of these rules that, in the Algorithms, we write that a certain Form of `ace.exec`, `ace.setst`, `ace.mgmt` is _expected_ instead of _required_ (or _only [...] allowed_). The above substitutions are implicit in all algorithms and are not restated for each occurrence.
 
 // ////////////////////////////////////////////////////////////////////
 
 [[ACE-resumability]]
 === Interruptibility and Resumability of ACE instructions
 
-`ace.clear`, `ace.reset`, `ace.setst`, `ace.getst`, `ace.restrict`, `ace.clone`, `ace.size` and `ace.avail` are uninterruptible.
+`ace.clear`, `ace.reset`, `ace.setst`, `ace.mgmtt`, `ace.getst`, `ace.restrict`, `ace.clone`, `ace.size` and `ace.avail` are uninterruptible.
 
 Long-running ACE operations may proceed even if the hart is preempted.
 In this case, when the context‑switch handler accesses an output of the operation register, different behaviors are allowed:
