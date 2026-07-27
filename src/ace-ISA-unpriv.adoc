@@ -805,7 +805,7 @@ _Included in_::
 Progress tracking by `acestart` also applies to `ace.exec` when iteratively processing a multi-block operand, as `ace.exec` may be interrupted between blocks.
 Only these instructions honor a nonzero `acestart`; all other instructions ignore it and are restarted, with `acestart` also being cleared.
 
-Since ACE does not have an _intrinsic_ concept of element length, `acestart` counts the number of _bits_ processed so far nu `ace.exec`, not the number of elements, or read/written by `ace.input`/`ace.output` and `ace.prov`/`ace.import`/`ace.export` or `ace.store`/`ace.load`.
+Since ACE does not have an _intrinsic_ concept of element length, `acestart` counts the number of _bytes_ processed so far nu `ace.exec`, not the number of elements, or read/written by `ace.input`/`ace.output` and `ace.prov`/`ace.import`/`ace.export` or `ace.store`/`ace.load`.
 
 Hardware writes this register on interruption.
 Software may save and restore the register across context switches.
@@ -1221,29 +1221,29 @@ new forms to `ace.exec` and new behavior to `ace.setst`.
 The hart adds the following encodings to forms B and C of `ace.exec`:
 
 [upperalpha]
-. `Form` = `0b01` and `rs1` = `0b00001` or `0b00002`. (Move to CR.)
-. `Form` = `0b10` and `rs2` = `0b00001` or `0b00002`. (Move from CR.)
+. `Form` = `0b01` and `rs1` = `0b00001` or `0b00010`. (Move to CR.)
+. `Form` = `0b10` and `rs2` = `0b00001` or `0b00010`. (Move from CR.)
 
 In the `Form` = `0b10` and `rs2` = `0b00001`, the contents of `X[s1]` are moved
-to CR starting at offset `acestart`. `acestart` is updated with `XLEN+acestart`
+to CR starting at offset `acestart`. `acestart` is updated with `(XLEN/8)+acestart`
 The instruction is only valid if the `Ks`'s metada has
 `ConfigStatus` set to `CfgStProvisioning` or `CfgStImporting`. Otherwise, an
 illegal instruction exception is raised.
 
-In the `Form` = `0b10` and `rs2` = `0b00002`, `vl` elements in `V[s1]` are moved
+In the `Form` = `0b10` and `rs2` = `0b00010`, `vl` elements in `V[s1]` are moved
 to CR starting at offset `acestart`. `acestart` is updated with `vl * (EEW/8) +
 acestart`. The instruction is only valid if the `Ks`'s metada has
 `ConfigStatus` set to `CfgStProvisioning` or `CfgStImporting`. Otherwise, an
 illegal instruction exception is raised.
 An illegal instruction exception is also raised if V is not enabled.
 
-In the `Form` = `0b01` and `rs1` = `0b0001`, `vl` elements in CR at offset
-`acestart` are moved to `X[s2]`. `acestart` is updated with `XLEN +
+In the `Form` = `0b01` and `rs1` = `0b00001`, `XLEN/8` bytes at offset
+`acestart` are moved to `X[s2]`. `acestart` is updated with `(XLEN/8) +
 acestart`. The instruction is only valid if the `Ks`'s metada has
 `ConfigStatus` set to `CfgStExporting`. Otherwise, an illegal instruction
 exception is raised.
 
-In the `Form` = `0b01` and `rs1` = `0b00002`, `vl` elements in CR at offset
+In the `Form` = `0b01` and `rs1` = `0b00010`, `vl` elements in CR at offset
 `acestart` are moved to `V[s2]`. `acestart` is updated with `vl * (EEW/8) +
 acestart`. The instruction is only valid if the `Ks`'s metada has
 `ConfigStatus` set to `CfgStExporting`. Otherwise, an illegal instruction
@@ -1360,9 +1360,12 @@ If `ace.setst` is used with one of the immediates in <<ACE-management-immeds>>, 
 
 . *`ace.setst` is used to start provisioning, resp., import.*
 +
-Before issuing `ace.setst`, software must read Bits [63:0] of the MDH from memory first.
+Before issuing `ace.setst`, software must read Bits [63:0] of the MDH from
+memory if the GPR variant is used, or [127:0] of the MDH from memory if the
+vector variant is used.
 Let `ml` be this value.
-Software must pass `ml` as the auxiliary input to `ace.setst` in a GPR (or a GPR pair).
+Software must pass `ml` as the auxiliary input to `ace.setst` in a GPR (or a
+GPR pair), or a vector register.
 +
 `ace.setst` then performs following operations:
 
@@ -1372,11 +1375,13 @@ Software must pass `ml` as the auxiliary input to `ace.setst` in a GPR (or a GPR
 .. The implementations will try to allocate CRF capacity according to the requirements of the _Algorithm_, _AlgorithmPolicy_, and _SCProtection_ fields of the MDH. No other field shall affect the amount of capacity required.  If capacity allocation is not possible, the CR is transitioned to Error State `ace_state_out_of_mem`, and exception `ace_exc_out_of_mem` is raised as defined in the Privileged Architecture if the latter is implemented.
 .. Except for Bits [63:0] of the MDH in the CR, which are set to `ml`, the internal CRF memory corresponding to the target CR is zeroed.
 .. _ConfigStatus_ if set to _CfgStProvisioning_, resp., _CfgStace_CR_import_. In the latter case, we assume that software has saved the old value of `ml` in its state.
+.. `ace.start` is set to 8 if the scalar variant was used, and 16 if the vector variant was used.
 
 . *`ace.setst` is used to terminate a provisioning process.*
 
 .. The ACE unit performs any necessary readjustment of the CR's content to turn it into the format internally consumed by the ACE Unit.
 ..  _ConfigStatus_ is set to _CfgStComplete_.
+.. `ace.start` is set to 0.
 
 . *`ace.setst` is used to terminate an import process.*
 +
@@ -1387,6 +1392,7 @@ The software must use Form B of `ace.setst` to contextually pass the saved value
 ... If authentication fails, the target CR is transitioned to Error State `ace_state_ace_CR_import_auth`. No exception is raised.
 ... The ACE unit performs any necessary readjustment of the CR's content to turn it into the format internally consumed by the ACE Unit.
 ...  _ConfigStatus_ is set to _CfgStComplete_.
+.. `ace.start` is set to 0.
 .. If `ml`._ConfigStatus_ {ne} _CfgStComplete_  (we are either importing the export of a not fully configured CR or a nested CR export):
 +
 _ConfigStatus_ is set to `ml`._ConfigStatus_.
@@ -1404,6 +1410,7 @@ Prepare a CR to produce a SCC. This includes encrypting its contents and computi
 .. If `ml`._ConfigStatus_ {ne} _CfgStComplete_ (we are exporting a not fully configured CR or we are initiating a nested CR export):
 +
 No encryption or authentication occurs, the information in the CR is exported verbatim, in the same order as they appear in the PI in case the SCC is the export of a partially provisioned CR, or the SCC in case the latter is the export of a partially provisioned, resp., imported, CR, or the CR was previously prepared for export and then the export process itself was interrupted.
+.. `ace.start` is set to 8 if the scalar variant was used, and 16 if the vector variant was used..
 
 . *`ace.setst` is used to terminate an export process.*
 +
@@ -1420,6 +1427,7 @@ This may involve decrypting its contents or restoring them from an internal back
 .. If `ml`._ConfigStatus_ {ne} _CfgStComplete_:
 +
 No changes to the CR state are made.
+.. `ace.start` is set to 0.
 
 Whenever `ace.setst`, used as a configuration instruction, fails for any other reason, the target CR is cleared.
 
@@ -1820,7 +1828,7 @@ There are two Forms of the `ace.size` instruction:
 
 [upperalpha]
 . `ace.size Xd, Ks|K{Xs}` - Size from a context.
-. `ace.size Xd, Xs` - Size from MDH.
+. `ace.size Xd, Xs|Vs` - Size from MDH.
 
 // Without this comment, the next part is not properly formatted...
 
@@ -1835,7 +1843,7 @@ The encoding shares opcode, `func3`, and `func2` (the two msbs of `func7`) with 
     { bits:  7, name: 0x5b, attr: ['custom-2'] },
     { bits:  5, name: 'Xd' },
     { bits:  3, name: 0x0, attr: ['ace.exec'] },
-    { bits:  5, name: 'Ks/K{Xs}/Xs' },
+    { bits:  5, name: 'Ks/K{Xs}/Xs/Vs' },
     { bits:  5, name: 0x0 },
     { bits:  1, name: 0x0 },
     { bits:  1, name: 'r' },
@@ -1850,6 +1858,7 @@ The `F` field and the `r` bit may assume the following values:
 * `F` = `0b00`, `r` = `0` {implies} Form A: Size from a context given as `Ks`.
 * `F` = `0b00`, `r` = `1` {implies} Form A: Size from a context given indirectly as `K{Xs}`.
 * `F` = `0b01`, `r` = `0` {implies} Form B: Size from MDH.
+* `F` = `0b10`, `r` = `0` {implies} Form C: Size from MDH using vector.
 --
 
 _Description_:: {empty}
@@ -1861,12 +1870,20 @@ _Description_:: {empty}
   for any feature that relies on `ace.export`, including context switching. The
   instruction returns 0 if the CR is unconfigured.
 
-* On RV64, Form B `ace.size` returns the total size in bytes of an SCC having Bits [63:0]
-  of the MDH given in `Xs` into GPR `Xd` including the additional variable-length data,
-  and `0` if the if the algorithm is not supported or the Metadata is otherwise invalid.
+* On RV64, Form B `ace.size` returns the total size in bytes of an SCC having
+  Bits [63:0] of the MDH given in `Xs` into GPR `Xd` including the additional
+  variable-length data. If the algorithm is not supported or the Metadata is
+  invalid, the instruction returns `0`.
 
 * On RV32, Form B `ace.size` differs from the RV64 version in that `s` must be even, and
   Bits [63:0] of the MDH are passed in `X[s+1] @ Xs`,
+
+* On systems that implement `Zvl128b`, `Zvl256b`, `Zvl512b`, or `Zvl1024b`,
+  Form C of `ace.size` returns the total size in bytes of an SCC having Bits
+  [127:0] of the MDH given in `Vs` into GPR `Xd` including the additional
+  variable-length data. If the algorithm is not supported or the Metadata is
+  invalid, the instruction returns `0`. Otherwise, Form C raises an illegal
+  instruction exception.
 
 The instruction may not modify state.
 
@@ -2247,6 +2264,7 @@ restart:
   ace.setst  K{t0}, t1, #ace_CR_provision_start
                                         # start provisioning, load MDH[63:0] in CR
   ace.size   a2, K{t0}                  # Get data length
+  subi a2, a2, 8                        # Subtract 8B because we already loaded 64 bits of MDH
 
 vloop:
   vsetvli a3, a2, e8, m1, ta, ma        # load rest of PI starting with MDH[127:64]
@@ -2289,7 +2307,37 @@ restart:
 success:
 ----
 
-*Import Code*
+*Import Code (`Zlmv`)*
+----
+  ld         t1, 0(t6)                  # load MDH bits [63:0] from memory
+  li         t3, #23
+restart:
+  ace.setst  K{t0}, t1, #ace_CR_import_start
+                                        # start provisioning, load MDH[63:0] in CR
+  ace.size   a2, K{t0}                  # Get data length
+  subi a2, a2, 8                        # Subtract 8B because we already loaded 64 bits of MDH
+
+vloop:
+  vsetvli a3, a2, e8, m1, ta, ma        # load rest of PI starting with MDH[127:64]
+  ace.getst  t2, K{t0}                  # get _State_ field from MDH[63:0]
+  bltu       t3, t2, handle_errors      # errors (larger than 23, i.e. ≥ 24)
+  beqz       t2, handle_errors          # handle error (is _Off_ needed?)
+  vle8.v     v4, 8(t6)                  # load data
+  ace.move   K{t0}, v4                  # Move to CR
+  add        t6, t6, a3                 # Bump pointer
+  sub        a2, a2, a3                 # Decrement number of elements
+  bnez       a2, vloop
+  ace.getst  t2, K{t0}                  # get _State_ field from MDH[63:0]
+  li         t3, #ace_state_off         # compare to off state
+  beq        t2, t3, restart            # CR cleared means force restart
+  ace.setst  K{t0}, #ace_CR_import_end   # terminate importing
+                                        # and possibly reconstructs data
+  ace.getst  t2, K{t0}                  # get _State_ field from MDH[63:0]
+  bltu       t3, t2, handle_errors      # handle other errors (> 23, i.e. ≥ 24)
+success:
+----
+
+*Import Code (`Zlm`)*
 ----
   ld         t1, 0(t6)                  # load MDH bits [63:0] from memory
   li         t3, #23
@@ -2318,7 +2366,50 @@ If an import is interrupted and the partial state exported (assuming we allow th
 the exported data must be the original encrypted data loaded so far, and not a re-encryption
 of a partially decrypted payload.  This is required for both correctness and security.
 
-*Export Code*
+*Export Code (`Zlmv`)*
+----
+  ace.size   t2, K{t0}                # get size of the data to export
+  {...}  # here goes the code that allocates the buffer to store the exported data
+
+  ace.getmd  t1, K{t0}
+
+  # If _ConfigStatus_ is _CfgStcomplete_, the following ace.setst prepares the
+  # serialized, encrypted and authenticated internal representation of the CR for
+  # export, computes the SIV(s), then changes _ConfigStatus_ to _CfgStExporting_.
+  # Otherwise, it does nothing.
+
+  ace.setst  K{t0}, #ace_CR_export_start
+  sd  0(t6), t1                       # Export original _ConfigStatus_ to memory
+
+  # The next instruction stores all data starting with the 8th byte of the MDH.
+  # In case of interrupt/exception, the handler will decide whether to keep `acestart`
+  # or clear it to force restart.
+  # The instruction gets the length of the blob to export from the MDH
+  # no special handling from the SW is necessary.
+vloop:
+  vsetvli a3, a2, e8, m1, ta, ma        # load rest of PI starting with MDH[127:64]
+  ace.getst  t2, K{t0}                  # get _State_ field from MDH[63:0]
+  bltu       t3, t2, handle_errors      # errors (larger than 23, i.e. ≥ 24)
+  beqz       t2, handle_errors          # handle error (is _Off_ needed?)
+  ace.move   v4, K{t0}                  # Move to CR
+  vse8.v     v4, 8(t6)                  # load data
+  add        t6, t6, a3                 # Bump pointer
+  sub        a2, a2, a3                 # Decrement number of elements
+  bnez       a2, vloop
+  ace.getst  t2, K{t0}                  # get _State_ field from MDH[63:0]
+  li         t3, #ace_state_off         # compare to off state
+  beq        t2, t3, restart            # CR cleared means force restart
+
+success:
+  # Reset MDH[63:0] to the previously saved value. If the saved _ConfigStatus_ is
+  # _CfgStcomplete_, the operation also re-decrypts the state and makes the CR available
+  # to software, otherwise it does nothing and leaves the CR state in the serialized and
+  # encrypted format.
+
+  ace.setst  K{t0}, t1, #ace_CR_export_end
+----
+
+*Export Code (`Zlm`)*
 ----
   ace.size   t2, K{t0}                # get size of the data to export
   {...}  # here goes the code that allocates the buffer to store the exported data
