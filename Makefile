@@ -43,8 +43,8 @@ endif
 SRC_DIR := src
 BUILD_DIR := build
 
-DOCS_PDF := $(DOCS:%.adoc=%.pdf)
-DOCS_HTML := $(DOCS:%.adoc=%.html)
+DOCS_PDF := $(DOCS:%.adoc=$(BUILD_DIR)/%.pdf)
+DOCS_HTML := $(DOCS:%.adoc=$(BUILD_DIR)/%.html)
 
 XTRA_ADOC_OPTS :=
 ASCIIDOCTOR_PDF := asciidoctor-pdf
@@ -60,7 +60,7 @@ OPTIONS := --trace \
            -a pdf-fontsdir=docs-resources/fonts \
            -a pdf-theme=src/riscv-pdf.yml \
            $(XTRA_ADOC_OPTS) \
-           -D build \
+           -D $(BUILD_DIR) \
            --failure-level=ERROR
 
 REQUIRES := --require=asciidoctor-bibtex \
@@ -70,7 +70,8 @@ REQUIRES := --require=asciidoctor-bibtex \
             --require=asciidoctor-sail
 
 
-.PHONY: all build clean build-container build-no-container build-docs
+.PHONY: all build clean build-container build-no-container build-docs \
+        docker-pull-latest update-docs-resources
 
 all: build
 
@@ -78,10 +79,11 @@ build-docs: $(DOCS_PDF) $(DOCS_HTML)
 
 vpath %.adoc $(SRC_DIR)
 
-%.pdf: %.adoc
+# asciidoctor creates the output directory itself (see -D in OPTIONS).
+$(BUILD_DIR)/%.pdf: %.adoc
 	$(DOCKER_CMD) $(DOCKER_QUOTE) $(ASCIIDOCTOR_PDF) $(OPTIONS) $(REQUIRES) $< $(DOCKER_QUOTE)
 
-%.html: %.adoc
+$(BUILD_DIR)/%.html: %.adoc
 	$(DOCKER_CMD) $(DOCKER_QUOTE) $(ASCIIDOCTOR_HTML) $(OPTIONS) $(REQUIRES) $< $(DOCKER_QUOTE)
 
 build:
