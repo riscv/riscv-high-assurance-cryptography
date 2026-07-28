@@ -59,16 +59,24 @@ ACE can bind CCs to a *Localities*, i.e., restrict usage to specific devices or 
 [[ACE-architectural-model]]
 ==== Architectural Model
 
-[NOTE]
-====
+This section is informative and non-normative.
+
 ACE is architected as an _attached_ unit, meaning that ACE instructions act as messages across a tightly coupled coprocessor interface.
 The ACE unit receives the operations from the hart, executes them independently of the issuing hart, and returns results.
 
 Beside implementations of ACE within a CPU core, this model also allows a single hardware instance of the ACE unit to be shared by multiple cores, with separate architectural states for each client hart.  The specification mandates only behavior, not implementation.
 
+We do not mandate—and cannot mandate—a pure hardware implementation of ACE.
+Although we generally discourage it, ACE may be implemented wholly or partially via a trap-and-emulate mechanism.
+In certain cases, a partial trap-and-emulate approach may even be beneficial.
+For example, smaller implementations may implement symmetric cipher operations (cf. <<ACE-states-symmetric>>) in hardware while relying on trap-and-emulate for asymmetric cipher operations, such as elliptic curve algorithms (cf. <<ACE-ECC>>).
+This approach is particularly advantageous for post-quantum cryptographic algorithms (cf. <<ACE-PQC>>), which require very large states.
+A trap-and-emulate implementation in M-mode firmware avoids the need to support large states inside the ACE unit, as long as the relevant CRs are stored in a secure SRAM or some other form of secure memory.
+Trap-and-emulate exploits the ``*crstatus``'s “Other” values which can be used also for lazy switching (cf. <<ACE-lazy-loading>>).
+The requirement that CR state be never accessible to any form of user software in clear forbids implementations in S/VS-mode or HV-mode.
+
 The ACE unit may lock certain architectural states—e.g., Vector Registers, CRs, and CSRs.
 The hart stalls when attempting to read them until the ACE operation using those resources completes.
-====
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -2369,7 +2377,7 @@ restart:
   ace.mgmt   K{t0}, t1, #ace_CR_provision_start
                                         # start provisioning, load MDH[63:0] in CR
   ace.size   a2, K{t0}                  # Get data length
-  subi       a2, a2, 8                  # Subtract 8B because we already loaded 64 bits of MDH
+  subi       a2, a2, 8                  # Subtract the 8B already loaded of MDH
 
 vloop:
   vsetvli a3, a2, e8, m1, ta, ma        # load rest of PI starting with MDH[127:64]
@@ -2420,7 +2428,7 @@ restart:
   ace.mgmt   K{t0}, t1, #ace_CR_import_start
                                         # start provisioning, load MDH[63:0] in CR
   ace.size   a2, K{t0}                  # Get data length
-  subi a2, a2, 8                        # Subtract 8B because we already loaded 64 bits of MDH
+  subi a2, a2, 8                        # Subtract the 8B already loaded of MDH
 
 vloop:
   vsetvli a3, a2, e8, m1, ta, ma        # load rest of PI starting with MDH[127:64]
@@ -2496,7 +2504,7 @@ vloop:
   ace.getst  t2, K{t0}                  # get _State_ field from MDH[63:0]
   bltu       t3, t2, handle_errors      # errors (larger than 23, i.e. ≥ 24)
   beqz       t2, handle_errors          # handle error (is _Off_ needed?)
-  ace.mv   v4, K{t0}                  # Move to CR
+  ace.mv     v4, K{t0}                  # Move to CR
   vse8.v     v4, 8(t6)                  # load data
   add        t6, t6, a3                 # Bump pointer
   sub        a2, a2, a3                 # Decrement number of elements
