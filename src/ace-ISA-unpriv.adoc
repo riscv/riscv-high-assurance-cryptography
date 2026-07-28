@@ -126,9 +126,9 @@ The hart stalls when attempting to read them until the ACE operation using those
 | `Zlmldsa65s`    | -- `ML-DSA-65`/`ML-DSA-65-PH`                                                                                       | <<ACE-PQC-ML-DSA>>                             | v0.0.0          | --
 | `Zlmldsa87s`    | -- `ML-DSA-87`/`ML-DSA-87-PH`                                                                                       | <<ACE-PQC-ML-DSA>>                             | v0.0.0          | --
 | `Zlkn`        2+| NIST Symmetric Suite. Depends on `Zlaes128`, `Zlaes256`, `Zlesha2`, `Zlgcmm`, `Zlxexm`, and `Zlgcmsivm`.            | v0.0.0                                         | --
-5+| ^1^ Requires V (or a suitable subset thereof). Must support the following CSRs: `acestart` (this is a dependency for Zicsr); must support the following instructions: `ace.prov`, all four forms of `ace.exec`, all Forms of `ace.setst`,
-`ace.clear`, `ace.export`, `ace.import`, `ace.clone`, `ace.size`/`ace.avail`, `ace.getmd{l,h}`, and `ace.restrict{l,h}`; must support `Zlkn`.
-5+| ^2^ Must support the following CSRs: `acestart` (this is a dependency for Zicsr), `aceiobuflen` and `aceiobuftop`; must support the following instructions: `ace.prov`, Form D of `ace.exec`, Forms A and B of `ace.setst`, `ace.input` and `ace.output`, `ace.clear`, `ace.export`, `ace.import`, `ace.clone`, `ace.size`/`ace.avail`, `ace.getmd{l,h}`, and `ace.restrict{l,h}`; must support `Zlkn`.
+5+| ^1^ Requires V (or a suitable subset thereof). Must support the following CSRs: `acestart` (this is a dependency for Zicsr); must support the following instructions: `ace.prov`, all four forms of `ace.exec`, all Forms of `ace.setst`, all Forms of `ace.mgmt`,
+`ace.clear`, `ace.export`, `ace.import`, `ace.clone`, `ace.size`/`ace.avail`, `ace.getmd{l,h,v}`, and `ace.restrict{l,h,v}`; must support `Zlkn`.
+5+| ^2^ Must support the following CSRs: `acestart` (this is a dependency for Zicsr), `aceiobuflen` and `aceiobuftop`; must support the following instructions: `ace.prov`, Form D of `ace.exec`, Forms A and B of `ace.setst`, Forms A and B of `ace.mgmt`, `ace.input` and `ace.output`, `ace.clear`, `ace.export`, `ace.import`, `ace.clone`, `ace.size`/`ace.avail`, `ace.getmd{l,h}`, and `ace.restrict{l,h}`; must support `Zlkn`.
 5+| At least of `Zlmem` or `Zlmv` must be implemented. If `Zlmem` is not implemented in hardware, a trap-and-emulate implementation using `Zlmv` is required.
 5+| ^3^ Beside defining the basic encryption and decryption operations, these extensions also select which ciphers can be used with the various modes of operations that follow.
 5+| ^4^ The mode is applicable to all versions of AES and to SM4.
@@ -271,7 +271,7 @@ When the ACEIOBUF is used, the length of the input is given in CSR `aceiobuflen`
 [[ACE-Metadata]]
 ==== Metadata Formats
 
-The ACE architecture recognizes two types of metadata that may be contained in a CC or associated with it.
+ACE recognizes two types of metadata that may be contained in a CC or associated with it.
 
 . A 128-bit _MDH_ that determines the algorithm, the type of key, and various usage policies associated with the key.
  This information is always present in a CC.
@@ -290,7 +290,7 @@ All _Reserved_ bits, as well as bits unused by a given algorithm, must be zero.
 
 [[ACE-metadata-header]]
 .Format of the 128-bit Metadata Header
-[width="100%",cols="^9%,^6%,14%,71%",options="header"]
+[width="100%",cols="^9%,^6%,15%,70%",options="header"]
 |===
 |    Field  | Size | Name              | Description
 |    [11:0] |  12  | _Algorithm_       | This field encodes the cryptographic algorithm (primitive, mode, or protocol) that is bound to the key material. See <<ACE-Algorithm-field>>.
@@ -420,7 +420,7 @@ The architected values of _State_ common to all algorithms are defined in the fo
 |  24    | `ace_state_not_impl`        | _Not_Impl_        | Not implemented algorithm. It is set by the hardware upon an attempt to provision or import a CR that is not supported by the implementation.
 |  25    | `ace_state_invalid`         | _Invalid_         | Invalid/invalidated state, for instance because of the use of an invalid value (argument, state, or metadata).
 |  26    | `ace_state_out_of_mem`      | _Out_of_Memory_   | Insufficient CRF memory for configuration instruction. This may be set by privileged code in case they do not handle the CR allocation.
-|  27    | `ace_state_ace_CR_import_auth`     | _Auth_Failed_     | Authentication failure with `ace.import`.
+|  27    | `ace_state_CR_import_auth`  | _Auth_Failed_     | Authentication failure with `ace.import`.
 |  28    | `ace_state_priv_viol`       | _Priv_Viol_       | Violation of Usage Control policies.
 |  29    | `ace_state_expired`         | _Expired_         | The CR has expired.  This is set by the hardware even if the condition also raises an exception.
 | 30, 31 | (Reserved)                  |                   | Reserved for future use.
@@ -446,7 +446,7 @@ Error States 30 and 31, if defined, will not necessarily have a lower priority t
 Error conditions that lead to exceptions are treated in <<ACE-exceptions>>.
 
 If an algorithm defines 23 or fewer valid states (including _Initial_, _Success_, and _Failure_), the current state is stored in the _State_ field.
-For algorithms with more than 23 valid states, additional state information resides in the Content section.
+For algorithms with more than 23 valid states, additional state information may reside in the Content section in an algorithm-specific format.
 
 The following rules are generic and apply to all algorithms:
 
@@ -487,7 +487,17 @@ The CR then retains only the MDH.
 . Any _usage_ instruction that would violate the Usage Control policies will not perform its operation, and will set _State_ to `ace_state_priv_viol` instead.
 
 In <<ACE-states-graph>> we display the default possible state transitions.
+The legend for the graph is:
 
+* The double circled state is the _Off_ State.
+* Valid States have single rounded rectangular borders.
+* Error States have double rounded rectangular borders.
+* The continuous edges represent state transitions induced by both configuration and usage instructions.
+* The dashed edges represent state transitions induced by reaching the expiration date.
+* The dotted edges represent state transitions induced by configuration operations.
+  Completing a provisioning operation can only lead to the _Initial_ state.
+  Completing an import can lead to any state.
+* The round _Configuration_ “hub” simplifies the graph by expressing that any Error State is always reachable—even from another Error State—through configuration operations (or via `ace.setst`).
 
 // //
 [[ACE-states-graph]]
@@ -575,18 +585,6 @@ image::images/statestikz-3.svg[]
 \end{tikzpicture}
 ....
 ////
-
-The legend for the graph is:
-
-* The double circled state is the _Off_ State.
-* Valid States have single rounded rectangular borders.
-* Error States have double rounded rectangular borders.
-* The continuous edges represent state transitions induced by both configuration and usage instructions.
-* The dashed edges represent state transitions induced by reaching the expiration date.
-* The dotted edges represent state transitions induced by configuration operations.
-  Completing a provisioning operation can only lead to the _Initial_ state.
-  Completing an import can lead to any state.
-* The round _Configuration_ “hub” simplifies the graph by expressing that any Error State is always reachable—even from another Error State—through configuration operations (or via `ace.setst`).
 
 The _StateExtension_ field can be used by an Algorithm to store additional state information.
 
@@ -1352,6 +1350,11 @@ It is used for two purposes:
 `#immed7` is a constant from a set of admissible values.
 These values include both general values, which apply to all Algorithms, as well as values specific to the Algorithm encoded in a CR.
 
+[WARNING]
+====
+If it is decided to encode `ace.mgmt` by re-using `ace.setst` with value of `#immed7` at least 96 (so, adding 96 to the values in <<ACE-management-immeds>>), then in the description of `ace.setst` we must add that the valid values of `#immed7` are in the range 0 to 95.
+====
+
 Certain state values may require an auxiliary input, which may be passed in a GPR `Xs` (a GPR pair in RV32)
 or a vector (group) `Vs`. The vector (group) may be replaced by ACEIOBUF is `Zlio` is implemented.
 
@@ -1392,6 +1395,12 @@ _Included in_::
 
 [[ACE-instruction-manage]]
 ==== ace.mgmt
+
+[WARNING]
+====
+We can encode this instruction also by re-using `ace.setst` and with the value of `#immed7` at least 96 (so, add 96 to the values in <<ACE-management-immeds>>).
+====
+
 
 _Synopsis_::
 Tracks the states of management operations of a CR.
@@ -1443,7 +1452,7 @@ The special values of `#immed7` to initiate a provisioning, importing, and expor
 
 [[ACE-management-immeds]]
 .Values (decimal) of `#immed7` to be used for provisioning, importing, and exporting
-[float="center",align="center",width="100%",cols="^7%,<28%,<65%",options="header"]
+[float="center",align="center",width="100%",cols="^7%,<25%,<68%",options="header"]
 |===
 | Value | Mnemonic                  |  Description
 |  0   | `ace_CR_provision_start`  |  Prepare a CR for provisioning keys and metadata into it, set _ConfigStatus_ to _CfgStProvisioning_. Needs an auxiliary input in a GPR (or a GPR pair) with bits [63:0] of MDH, or an auxiliary input into a 128-bit (or longer) vector register to provide the entire MDH.
@@ -1455,7 +1464,7 @@ The special values of `#immed7` to initiate a provisioning, importing, and expor
 If the restored value of _ConfigStatus_ is not _CfgStComplete_, the CR is made available to software.
 |===
 
-If `ace.setst` is used with one of the immediates in <<ACE-management-immeds>>, the operation has special semantics:
+The semantics of `ace.mgmt` are as follows:
 
 . *`ace.mgmt` is used to start provisioning, resp., import.*
 +
@@ -1488,7 +1497,7 @@ The software must use Form B of `ace.mgmt` to contextually pass the saved value 
 
 .. If `ml`._ConfigStatus_ = _CfgStComplete_ (we are importing the export of a fully configured CR)
 ... The ACE unit decrypts and authenticates the CR's content.
-... If authentication fails, the target CR is transitioned to Error State `ace_state_ace_CR_import_auth`. No exception is raised.
+... If authentication fails, the target CR is transitioned to Error State `ace_state_CR_import_auth`. No exception is raised.
 ... The ACE unit performs any necessary readjustment of the CR's content to turn it into the format internally consumed by the ACE Unit.
 ...  _ConfigStatus_ is set to _CfgStComplete_.
 .. `ace.start` is set to 0.
@@ -1556,16 +1565,20 @@ _Included in_::
 // ////////////////////////////////////////////////////////////////////
 
 [[ACE-instruction-getmd]]
-==== ace.getmdl/ace.getmdh
+==== ace.getmdv/ace.getmdl/ace.getmdh
 
 _Synopsis_::
 Export the MDH of a CR.
 
-_Mnemonic_::
-`ace.getmdl Xd, Ks|K{Xs}` +
-`ace.getmdh Xd, Ks|K{Xs}` +
-`ace.getmd  Vd, Ks|K{Xs}`
-(((ACE, instruction, ace.getmd)))
+_Mnemonics_::
++
+--
+[%hardbreaks]
+`ace.getmdl{nbsp}Xd, Ks|K{Xs}`(((ACE, instruction, ace.getmdl)))
+`ace.getmdh{nbsp}Xd, Ks|K{Xs}`(((ACE, instruction, ace.getmdh)))
+`ace.getmdv{nbsp}{nbsp}Vd, Ks|K{Xs}`(((ACE, instruction, ace.getmd)))
+--
+
 
 _Encoding_::
 +
@@ -1595,7 +1608,7 @@ If bit `h` (bit 28) is 0, the instruction is `ace.getmdl`; if `h` is 1, it is `a
 
 If bit `v` (bit 29) is 0, the result is written to a GPR (GPR pair for RV32).
 
-If bit `v` is 1, the entire MDH is written to a vector register.
+If bit `v` is 1, the entire MDH is written to the least significant 128 bits of a vector register (group).
 In this case, bit `h` must be 0.
 --
 
@@ -1606,11 +1619,11 @@ On RV64:
 
 * `ace.getmdl` copies bits [63:0] of the MDH of CR `Ks` or `K{Xs}` into GPR `Xd`.
 * `ace.getmdh` bits [127:64] into GPR `Xd`.
-* `ace.getmd` (vector register output version) bits [127:0] into vector register `XV`.
+* `ace.getmdv` (vector register output version) bits [127:0] into vector register `XV`.
 This version of the instruction only supports vector register (groups) of 128 bits or longer.
 If used with a vector register (group) smaller than 128 bits, an illegal instruction exception is raised.
 
-On RV32, `d` must be even, and:
+On RV32, if the destinations register is a GPR, `d` must be even, and:
 
 * `ace.getmdl` copies bits  [31:0] of the MDH of CR `Ks` or `K{Xs}` into GPR `Xd` and bits  [63:32] of the same CR into GPR `X[d+1]`, atomically.
 * `ace.getmdh` copies bits [95:64] of the MDH of CR `Ks` or `K{Xs}` into GPR `Xd` and bits [127:96] of the same CR into GPR `X[d+1]`, atomically.
@@ -1628,31 +1641,40 @@ _Included in_::
 [%header,cols="4,2,2"]
 |===
 |Extension | Minimum version | Lifecycle state
-| `Zlv`    | v0.0.0          | --
-| `Zlio`   | v0.0.0          | --
+| `Zlv`:  `ace.getmdv`/`ace.getmdl`/`ace.getmdh`    | v0.0.0          | --
+| `Zlio`: `ace.getmdl`/`ace.getmdh`                | v0.0.0          | --
 |===
 --
 
 // ////////////////////////////////////////////////////////////////////
 
 [[ACE-instruction-restrict]]
-==== ace.restrictl/ace.restricth
+==== ace.restrictv/ace.restrictl/ace.restricth
 
 _Synopsis_::
 Restrict the policies encoded in a CC in a CR.
 
 _Mnemonic_::
-`ace.restrictl{nbsp}{nbsp}Kd|K{Xd}, Xs1` +
++
+--
+[%hardbreaks]
+`ace.restrictl{nbsp}{nbsp}Kd|K{Xd}, Xs1`(((ACE, instruction, ace.restrict)))
 `ace.restricth{nbsp}{nbsp}Kd|K{Xd}, Xs1`
-(((ACE, instruction, ace.restrict)))
+`ace.restrictv{nbsp}{nbsp}Kd|K{Xd}, Vs1`
+--
 
 _Encoding_::
 +
 --
 `ace.restrict` is an R-type instruction.
 The encoding shares opcode and `func3` with `ace.exec`, but `func2` (i.e., the two msbs of `func7`) is `0b01`.
-The source register field encodes a GPR and not a vector register.
-If bit `h` (bit 29) is 0, the instruction is `ace.restrictl`; if `h` is 1, it is `ace.restricth`.
+
+If bit `h` (bit 28) is 0, the instruction is `ace.restrictl`; if `h` is 1, it is `ace.restricth`.
+
+If bit `v` (bit 29) is 0, the input is taken from a GPR (GPR pair for RV32), and the instruction is `ace.restrictv`.
+
+If bit `v` is 1, the input is taken from the least significant 128 bits of a vector register (group).
+In this case, bit `h` must be 0.
 
 [wavedrom, , svg]
 ....
@@ -1664,8 +1686,9 @@ If bit `h` (bit 29) is 0, the instruction is `ace.restrictl`; if `h` is 1, it is
     { bits:  5, name: 'Xs1' },
     { bits:  1, name: 0x0 },
     { bits:  1, name: 'r' },
-    { bits:  2, name: 0x0 },
+    { bits:  1, name: 0x0 },
     { bits:  1, name: 'h' },
+    { bits:  1, name: 'v' },
     { bits:  2, name: 0x1, attr: ['func2'] },
 ]}
 ....
@@ -1744,6 +1767,8 @@ On RV32, the only difference is:
 * `s` must be even, the register pair `X[s]` and `X[s+1]` is read atomically, and
   `(X[s+1] @ X[s])` replaces `Xs` in the RV64 description.
 
+On both RV32 and RV64, the vector source register version `ace..restrictv` of the instruction modifies the entire MDH, where the 128-bit input has the same format as the MDH.
+
 The instruction may possibly modify state.
 
 The instruction is usage-controlled.
@@ -1755,8 +1780,8 @@ _Included in_::
 [%header,cols="4,2,2"]
 |===
 |Extension | Minimum version | Lifecycle state
-| `Zlv`    | v0.0.0          | --
-| `Zlio`   | v0.0.0          | --
+| `Zlv`: `ace.restrictv`/`ace.restrictl`/`ace.restricth` | v0.0.0          | --
+| `Zlio` `ace.restrictl`/`ace.restricth` | v0.0.0          | --
 |===
 --
 
@@ -1932,12 +1957,15 @@ _Synopsis_::
 Return the size of a PI or SCC in bytes, or zero in case of error.
 
 _Mnemonics_::
++
+--
 There are two Forms of the `ace.size` instruction:
 (((ACE, instruction, ace.size)))
 
 [upperalpha]
 . `ace.size Xd, Ks|K{Xs}` - Size from a context.
 . `ace.size Xd, Xs|Vs` - Size from MDH.
+--
 
 // Without this comment, the next part is not properly formatted...
 
