@@ -15,7 +15,6 @@
 DOCS := \
 	ace.adoc
 
-MAKE := make -f Makefile.local
 DATE ?= $(shell date +%Y-%m-%d)
 VERSION ?= v0.5.0
 REVMARK ?= Draft
@@ -23,8 +22,8 @@ REVMARK ?= Draft
 SRC_DIR := src
 BUILD_DIR := build
 
-DOCS_PDF := $(DOCS:%.adoc=%.pdf)
-DOCS_HTML := $(DOCS:%.adoc=%.html)
+DOCS_PDF := $(DOCS:%.adoc=$(BUILD_DIR)/%.pdf)
+DOCS_HTML := $(DOCS:%.adoc=$(BUILD_DIR)/%.html)
 
 XTRA_ADOC_OPTS :=
 ASCIIDOCTOR_PDF := asciidoctor-pdf
@@ -40,7 +39,7 @@ OPTIONS := --trace \
            -a pdf-fontsdir=docs-resources/fonts \
            -a pdf-theme=src/riscv-pdf.yml \
             $(XTRA_ADOC_OPTS) \
-           -D build \
+           -D $(BUILD_DIR) \
            --failure-level=ERROR
 
 REQUIRES := --require=asciidoctor-bibtex \
@@ -51,9 +50,10 @@ REQUIRES := --require=asciidoctor-bibtex \
 #            --require=asciidoctor-mathematical \
 #
 
-.PHONY: all build clean build-container build-no-container build-docs
+RUBYOPT ?= --zjit
+export RUBYOPT
 
-all: build
+.PHONY: all build clean build-docs build-html
 
 build-docs: $(DOCS_PDF)
 
@@ -61,23 +61,19 @@ build-html: $(DOCS_HTML)
 
 vpath %.adoc $(SRC_DIR)
 
-%.pdf: %.adoc
-	export RUBYOPT=" --zjit "
+# asciidoctor creates the output directory itself (see -D in OPTIONS).
+$(BUILD_DIR)/%.pdf: %.adoc
 	$(ASCIIDOCTOR_PDF) $(OPTIONS) $(REQUIRES) $<
 
-%.html: %.adoc
-	export RUBYOPT=" --zjit "
+$(BUILD_DIR)/%.html: %.adoc
 	$(ASCIIDOCTOR_HTML) $(OPTIONS) $(REQUIRES) $<
 
-build:
-	$(MAKE) build-no-container;
+build: $(DOCS_PDF)
 
-build-no-container:
-	@echo "Starting build..."
-	$(MAKE) build-docs
-	@echo "Build completed successfully."
+$(DOCS_PDF): $(SRC_DIR)/*.adoc
 
-# Update docker image to latest
+all: build
+
 clean:
 	@echo "Cleaning up generated files..."
 	rm -rf $(BUILD_DIR)
