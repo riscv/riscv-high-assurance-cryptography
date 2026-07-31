@@ -30,7 +30,7 @@ ifneq ($(SKIP_DOCKER),true)
 
 	DOCKER_CMD := \
 		${DOCKER_BIN} run --rm \
-			-v ${PWD}:/build${DOCKER_VOL_SUFFIX} \
+			-v "${PWD}:/build${DOCKER_VOL_SUFFIX}" \
 			-w /build \
 			${DOCKER_IMG} \
 			/bin/sh -c
