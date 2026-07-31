@@ -53,7 +53,7 @@ OPTIONS := --trace \
            -a revremark=${REVMARK} \
            -a revdate=${DATE} \
            -a pdf-fontsdir=docs-resources/fonts \
-           -a pdf-theme=src/riscv-pdf.yml \
+           -a pdf-theme=docs-resources/themes/riscv-pdf.yml \
            $(XTRA_ADOC_OPTS) \
            -D $(BUILD_DIR) \
            --failure-level=ERROR
