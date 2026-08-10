@@ -642,8 +642,8 @@ THe most common cases are hash functions or the generation of internal IVs from 
 This is performed in a special state (for instance _Hash_Absorb_) as defined by the Algorithm.
 
 This functionality is described in the Algorithms as the Subalgorithm
-`process_VLI(algorithm_state, len, input_base, block_base, cumul_len, block, output, inject(), process_block(), finalize())`.
-If `len` is not defined by the caller or by the Algorithm, use `None` as the value for `len` in the decription of the Algorithm.
+`process_VLI(algorithm_state, len, input_base, block_base, cumul_len, block, output, test_whether(), inject(), process_block(), finalize())`.
+If `len` is not defined by the caller or by the Algorithm, use `None` as the value for `len` in the description of the Algorithm.
 
 Certain Algorithms may further restrict the lengths of the inputs that can be processed by this Subalgorithm.
 
@@ -653,8 +653,7 @@ Parameters:::
 Data Structures:::
 
 * *Internal State Variables*:
- ** `len`: the length of the input in bits, if it can be known in advance. This value must be defined to ensire a maximum value that can be absorbed by the system, and it
- is fixed for the duration of the hash computation except for the very end, where it may be re-defined to signal the end of the input.
+ ** `len`: the length of the input in bits, if it can be known in advance. This value must be defined to set a maximum value that can be absorbed by the system, and it is fixed for the duration of the hash computation.
  ** `input_base`: internal offset within input/output to read from/write to. Each time this value reaches `b`, the data in `block` is processed.
  ** `block_base`: internal amount of absorbed data so far for the current block.
     Only if needed by the Algorithm.
@@ -665,6 +664,7 @@ Data Structures:::
  ** Additional variables may be defined by the algorithm and used by `process_block()` and `finalize()`
 
 Algorithm-Specific Functions:::
+ * `test_whether()`: function that tests whether the Algorithm can absorb more data, independently form the maximum data length specified in `len`.
  * `process_block()`: function that processes a `b`-bit `block` into `output`. It may use other state information of the Algorithm, but not modify the state variables used by this Subalgorithm.
  * `inject(data)`: function that either writes `data` into `block` or directly processes it into `output`, in case `block = output`
  * `finalize()`: function that processes the remaining bits (`block` may be incomplete) and produces the final output. It may have to complete the current block according to rules defined in the Algorithm. before finalization.
@@ -682,8 +682,9 @@ Algorithm-Specific Functions:::
  “`ace.exec Kn|K{Xn}, INPUT`”, processes the data block `INPUT` as follows.
 +
 --
+  . If `test_whether()` is defined and returns `false`, an invalid instruction exception is raised.
   . If `len == 0`, an invalid instruction exception is raised.
-  . If `cumul_len >= len`, an invalid instruction exception is raised.
+#  . If `cumul_len >= len`, an invalid instruction exception is raised.
   . `input_base <- 0` or `acestart` upon resumption
   . While `(input_base < ACELEN)` do { // as long as we have input to process
   .. `amount <- min(ACELEN-input_base, b-block_base, len-cumul_len)`
@@ -698,7 +699,7 @@ Algorithm-Specific Functions:::
   .. If (`block_base` == `b`) then { // It is time to process the block
   ... `process_block()`
   ... `block_base <- 0`
-  .. If `cumul_len == len`: // Note, this is not the only way to complete State `algorithm_state`. seeSbelow for the semantics of an explicit transition away from `algorithm_state`.
+  .. If `cumul_len == len`: // Note, this is not the only way to complete State `algorithm_state`. see below for the semantics of an explicit transition away from `algorithm_state`.
   ... if `len == 0`, an invalid instruction exception is raised.
   ... `finalize()`
   ... To prevent a repeat of the above two commands, `len` is set to zero.
@@ -748,6 +749,7 @@ Data Structures:::
  ** Metadata Header.
  ** `key`: `k` bits.
  ** `J0`:  `b` bits.
+ ** `reset_ctr`: `c` bits.
  ** `auth_key`:: `b` bits.
  ** `tag`: `b` bits. This field is used to store the authentication tag, but while absorbing a long IV it also stores the intermediate values which are GHASH-ed.
 --
@@ -758,13 +760,14 @@ The latter may be necessary if the implementation of Subalgorithm _ACE-process-V
 * *Serialized Context*:
 +
 --
-[%autowidth,cols="^1,<2,<3",options="header"]
+[cols="^8%,<15%,<15%,<62%",options="header"]
 |===
-|  Pos. | Size (Bits)   | Field
-|   i   | 128            | MDH
-|  ii   | `k` or 64     | `key` or System Key Identifier
-| iii   | ``b``         | `J0`
-|  iv   | `b`           | `tag`
+|  Pos. | Size (Bits)   | Field      | Description
+|   i   | 128           |  MDH       | {empty}
+|  ii   | `k` or 64     | `key`      | Key value or System Key Identifier
+| iii   | ``b``         | `J0`       |  {empty}
+|  iv   | `b`           | `tag`      | {empty}
+|   v   | `c`           | `reset_at` | The low bits of the initial value of `J0`. If this value is reached again, an error is returned.
 |===
 
 While in state _Set_Aux_Value_, `J0` is replaced by the following fields:
@@ -772,10 +775,10 @@ While in state _Set_Aux_Value_, `J0` is replaced by the following fields:
 [cols="^8%,<15%,<15%,<62%",options="header"]
 |===
 | Pos.  | Size (Bits)     | Field       | Description
-| iv.a  | 16 bits:        | `len`       | Total length of the IV. Maximum supported size is 1024 bits (8192 bytes).
-| iv.b  | 16 bits         | `input_base`| Internal offset within input/output to read from/write to. Each time this value reaches `b`, the data in `block` is prccessed.
+| iv.a  | 16 bits         | `len`       | Total length of the IV. Maximum supported size is 1024 bits (8192 bytes).
+| iv.b  | 16 bits         | `input_base`| Internal offset within input/output to read from/write to. Each time this value reaches `b`, the data in `block` is processed.
 | iv.c  | 16 bits         | `block_base`| Internal amount of absorbed data so far for the current block.
-| iv.d  | 16 bits:        | `cumul_len` | internal cumulative length of data absorbed so far.
+| iv.d  | 16 bits         | `cumul_len` | internal cumulative length of data absorbed so far.
 | iv.e  | `b`-`c`-64 bits | `J0_padding`| Padding.
 |===
 --
@@ -819,38 +822,30 @@ Besides _Initial_, _Success_, and _Failure_, the GCM Mode algorithms make use of
  ** In State _Initial_ :
   *** No ``ace.exec`` operation is allowed.
   *** The following initialization operations are performed:
-   . `hash_key <- enc_blk(key, zeros(b))`,
-   . `tag <- zeros(b)`,
-   . `ctr <- zeros(c-1) @ 1`, and
-   . `J0 <- zeros(b)`.
+   . `hash_key <- enc_blk(key, zeros(b))`, and
+   . `tag <- zeros(b)`
 
   ** To transition to State _Set_Aux_Value_,
      the ``ace.setst`` instruction is of Form B, “```ace.exec Kn|K{Xn}, INPUT```”, the auxiliary parameter sets the IV length, whereby
-      i.e., `len <- INPUT` and   `INPUT` must be at most 8192 bits, OR
+      i.e., `len <- INPUT` and   `INPUT` must be at most 8192 bits. Upon entering the state, ``J0` is cleared: `J0 <- zeros(b)`.
 
   ** In State _Set_Aux_Value_, we enter Subalgorithm _ACE-process-VLI_ (cf. <<ACE-process-VLI>>) as: +
   "```ace.exec Kn|K{Xn}, INPUT```" performs: +
-  `process_VLI(_Set_Aux_Value_, 8192, input_base, block_base, cumul_len, block=J0, outout-J0, inject(), process_block(), finalize())`, where
-   *** `inject(data)`
-   *** `process_block()`
-   *** `finalize()`
+  `process_VLI(_Set_Aux_Value_, 8192, input_base, block_base, cumul_len, block=J0, outout-J0, None, inject(), process_block(), finalize())`, where
+   *** `inject(data)` XORs data in place: +
+   ``output[block_base + amount - 1 : block_base] <-`` +
+   ``{fournbsp}{fournbsp}output[block_base + amount - 1 : block_base] XOR data``, +
+   where `data = INPUT[input_base + amount - 1 : input_base]``.
+   *** if `len != 96`, `process_block()`, performs `J0 <- Galoismul(J0, hash_key)`, otherwise it does nothing.
+   *** `finalize()` is defined as follows:
+    . If `len == 96`, then let `J0 <- J0 @ 0^31^ @ 1`.
+    . If `len != 96`, then let `s <- 128 ⎡len/128⎤-len`, and the computation of `J0 := GHASH(IV||0^s+64^||bin(len(IV),64))` is completed by performing:
+      .. if `block_base != 0`, then `J0 <- Galoismul(J0, hash_key)`
+      .. `J0 <- J0 XOR (0^64^ @ bin(len,64))`
+      .. `J0 <- Galoismul(J0, hash_key)`
+    . Transitions to state _Hash_Absorb_.
 
-   If len(IV)=96, then let J0 = IV || 0^31^ ||1.
-
-   If len(IV) ≠ 96, then let s = 128 ⎡len(IV)/128⎤-len(IV), and let
-
-   J0=GHASH(IV||0s+64||[len(IV)]64).
-
-  ** To transition to State _Hash_Absorb_: the ``ace.setst`` instruction must be
-    a Form C to set the IV, i.e., the fixed part of the counter. Then:
-   . `IV <- INPUT[b-c-1:0]`.
-  *** If the ``ace.setst`` instruction is repeated, it will just update the
-      counter again.
-
- ** If the AD is empty, the transition to State _Hash_Absorb_ is necessary to
-    initialize the counter.
-
- ** In State _Hash_Absorb_, an ``ace.exec`` instruction of Form B is expected, whereby
+ ** In State _Hash_Absorb_, ``ace.exec`` instructions of Form B is expected, whereby
  “```ace.exec Kn|K{Xn}, INPUT```” absorbs a data block in `tag`, i.e.:
 +
 --
@@ -859,18 +854,17 @@ Besides _Initial_, _Success_, and _Failure_, the GCM Mode algorithms make use of
 +
 If `ACELEN` > `b`, the above operation is executed `ACELEN/b` times.
 
+** When entering State _Encrypt_ or _Decrypt_, `reset_at <- lsb~c~(J0)` is executed.
+
 ** In State _Encrypt_, ``ace.exec`` instructions are expected to be of Form A.
    “```ace.exec OUTPUT, Kn|K{Xn}, INPUT```” encrypts `INPUT` into `OUTPUT`, and
    absorbs `OUTPUT` into the `tag`, namely:
 +
 --
-  . If `ctr = ones(c-1)`, then
-  ..  the CR is *invalidated*.
-  . else
-  .. `tmp <- INPUT xor enc_blk(key, IV @ ctr)`.
-  .. `absorb(tmp)`.
-  .. `ctr <- ctr + 1 % 2^c^`.
-  .. `OUTPUT <- tmp`.
+  . `tmp <- INPUT xor enc_blk(key, IV @ ctr)`.
+  . `absorb(tmp)`.
+  . `ctr <- ctr + 1 % 2^c^`.
+  . `OUTPUT <- tmp`.
 --
 +
 If `ACELEN` is a multiple of `b`, the above operations are executed `ACELEN/b` times, encrypting each `b`-bit block of `INPUT` into the corresponding `b`-bit block of `OUTPUT`.
