@@ -762,12 +762,13 @@ The latter may be necessary if the implementation of Subalgorithm _ACE-process-V
 --
 [cols="^8%,<15%,<15%,<62%",options="header"]
 |===
-|  Pos. | Size (Bits)   | Field      | Description
-|   i   | 128           |  MDH       | {empty}
-|  ii   | `k` or 64     | `key`      | Key value or System Key Identifier
-| iii   | ``b``         | `J0`       |  {empty}
-|  iv   | `b`           | `tag`      | {empty}
-|   v   | `c`           | `reset_at` | The low bits of the initial value of `J0`. If this value is reached again, an error is returned.
+|  Pos. | Size (Bits)   | Field       | Description
+|   i   | 128           |  MDH        | {empty}
+|  ii   | `k` or 64     | `key`       | Key value or System Key Identifier
+| iii   | ``b``         | `J0`        |  {empty}
+|  iv   | `b`           | `tag`       | {empty}
+|   v   | `c`           | `start_ctr` | The `c` least significant bits of the initial value of `J0`. If this value is reached again, an error is returned.
+|  vi   | `d`           | Padding     | Put `z <-` (`k` or 64) + 2 `b` + `c`. Then `d` = 128 - (`z` mod 128).
 |===
 
 While in state _Set_Aux_Value_, `J0` is replaced by the following fields:
@@ -779,7 +780,7 @@ While in state _Set_Aux_Value_, `J0` is replaced by the following fields:
 | iv.b  | 16 bits         | `input_base`| Internal offset within input/output to read from/write to. Each time this value reaches `b`, the data in `block` is processed.
 | iv.c  | 16 bits         | `block_base`| Internal amount of absorbed data so far for the current block.
 | iv.d  | 16 bits         | `cumul_len` | internal cumulative length of data absorbed so far.
-| iv.e  | `b`-`c`-64 bits | `J0_padding`| Padding.
+| iv.e  | `b` - `c` - 64 bits | `J0_padding`| Padding.
 |===
 --
 
@@ -826,11 +827,10 @@ Besides _Initial_, _Success_, and _Failure_, the GCM Mode algorithms make use of
    . `tag <- zeros(b)`
 
   ** To transition to State _Set_Aux_Value_,
-     the ``ace.setst`` instruction is of Form B, “```ace.exec Kn|K{Xn}, INPUT```”, the auxiliary parameter sets the IV length, whereby
-      i.e., `len <- INPUT` and   `INPUT` must be at most 8192 bits. Upon entering the state, ``J0` is cleared: `J0 <- zeros(b)`.
+     the ``ace.setst`` instruction is of Form B, “``ace.exec Kn|K{Xn}, INPUT``”, the auxiliary parameter sets the IV length, whereby
+      i.e., `len <- INPUT` and   `INPUT` must be at most 8192 bits. Upon entering the state, `J0` is cleared: `J0 <- zeros(b)`.
 
   ** In State _Set_Aux_Value_, we enter Subalgorithm _ACE-process-VLI_ (cf. <<ACE-process-VLI>>) as: +
-  "```ace.exec Kn|K{Xn}, INPUT```" performs: +
   `process_VLI(_Set_Aux_Value_, 8192, input_base, block_base, cumul_len, block=J0, outout-J0, None, inject(), process_block(), finalize())`, where
    *** `inject(data)` XORs data in place: +
    ``output[block_base + amount - 1 : block_base] <-`` +
@@ -838,15 +838,17 @@ Besides _Initial_, _Success_, and _Failure_, the GCM Mode algorithms make use of
    where `data = INPUT[input_base + amount - 1 : input_base]``.
    *** if `len != 96`, `process_block()`, performs `J0 <- Galoismul(J0, hash_key)`, otherwise it does nothing.
    *** `finalize()` is defined as follows:
-    . If `len == 96`, then let `J0 <- J0 @ 0^31^ @ 1`.
-    . If `len != 96`, then let `s <- 128 ⎡len/128⎤-len`, and the computation of `J0 := GHASH(IV||0^s+64^||bin(len(IV),64))` is completed by performing:
+    . If `len == 96`, then
+      .. `J0 <- J0 @ 0^31^ @ 1`.
+    . If `len != 96`, then let `s <- 128 ⎡len/128⎤-len`, and the computation of `J0 := GHASH(IV || 0^s+64^ || bin(len(IV),64), hash_key)` is completed by performing:
       .. if `block_base != 0`, then `J0 <- Galoismul(J0, hash_key)`
       .. `J0 <- J0 XOR (0^64^ @ bin(len,64))`
       .. `J0 <- Galoismul(J0, hash_key)`
+    . `start_ctr <- J0[c-1:0]`
     . Transitions to state _Hash_Absorb_.
 
  ** In State _Hash_Absorb_, ``ace.exec`` instructions of Form B is expected, whereby
- “```ace.exec Kn|K{Xn}, INPUT```” absorbs a data block in `tag`, i.e.:
+ ``ace.exec Kn|K{Xn}, INPUT`` absorbs a data block in `tag`, i.e.:
 +
 --
  . `absorb(INPUT)`.
@@ -854,17 +856,20 @@ Besides _Initial_, _Success_, and _Failure_, the GCM Mode algorithms make use of
 +
 If `ACELEN` > `b`, the above operation is executed `ACELEN/b` times.
 
-** When entering State _Encrypt_ or _Decrypt_, `reset_at <- lsb~c~(J0)` is executed.
+** Upon entering either State _Encrypt_ or _Decrypt_, `reset_at <- lsb~c~(J0)` is executed.
 
 ** In State _Encrypt_, ``ace.exec`` instructions are expected to be of Form A.
    “```ace.exec OUTPUT, Kn|K{Xn}, INPUT```” encrypts `INPUT` into `OUTPUT`, and
    absorbs `OUTPUT` into the `tag`, namely:
 +
 --
-  . `tmp <- INPUT xor enc_blk(key, IV @ ctr)`.
-  . `absorb(tmp)`.
-  . `ctr <- ctr + 1 % 2^c^`.
-  . `OUTPUT <- tmp`.
+  . `J0[c-1:0] <- J0[c-1:0] + 1 mod 2^c^`.
+  . If `J0[c-1:0] = start_ctr`, then
+   .. the CR is *invalidated*.
+   . else
+  .. `tmp <- INPUT xor enc_blk(key, J0)`.
+  .. `absorb(tmp)`.
+  .. `OUTPUT <- tmp`.
 --
 +
 If `ACELEN` is a multiple of `b`, the above operations are executed `ACELEN/b` times, encrypting each `b`-bit block of `INPUT` into the corresponding `b`-bit block of `OUTPUT`.
@@ -878,7 +883,7 @@ If `ACELEN` is a multiple of `b`, the above operations are executed `ACELEN/b` t
 The authentication tag is then computed as follows:
 
 . `absorb(INPUT)`.
-  . `tag <- tag xor enc_blk(key, IV @ zeros(c))`.
+  . `tag <- tag xor enc_blk(key, J0[b-1,c] @ start_ctr)`.
 
 Finally, `tag` is returned in `OUTPUT`, and the state is changed to _Success_.
 
@@ -896,12 +901,12 @@ In State _Decrypt_, ``ace.exec`` instructions are expected to be of Form A.
 ``ace.exec OUTPUT, Kn|K{Xn}, INPUT`` absorbs the ciphertext `INPUT` into `tag`,
 then decrypts `INPUT` into `OUTPUT`, namely:
 
- . If `ctr = ones(c-1)`, then
+ . J0[c-1:0] <- J0[c-1:0] + 1 mod 2^c^`.
+ . If `J0[c-1:0] = start_ctr`, then
   .. the CR is *invalidated*.
   . else
   .. `absorb(INPUT)`.
-  .. `OUTPUT  <- INPUT xor enc_blk(key, IV @ ctr)`.
-  .. `ctr <- ctr + 1 % 2^c^`.
+  .. `OUTPUT  <- INPUT xor enc_blk(key, J0)`.
 
 If `ACELEN` is a multiple of `b`, the same behavior applies as in State
 _Encrypt_, namely the above operations are executed `ACELEN/b` times, decrypting
@@ -917,7 +922,7 @@ each `b`-bit block of `INPUT` into the corresponding `b`-bit block of `OUTPUT`.
 The authentication tag is computed as follows:
 
 . `absorb(INPUT)`.
-  . `tag <- tag xor enc_blk(key, ctr[b-1,c] @ zeros(c))`.
+  . `tag <- tag xor enc_blk(key, J0[b-1,c] @ start_ctr)`.
 --
 +
 If `ACELEN` > `b`, only the `b` least significant bits of `INPUT` are considered.
