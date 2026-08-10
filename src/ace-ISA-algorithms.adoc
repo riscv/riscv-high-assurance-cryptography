@@ -630,7 +630,86 @@ State Machine:::
      `INPUT` into `OUTPUT`.
   ** This algorithm does not automatically update the tweak value.
 
+
 // ////////////////////////////////////////////////////////////////////
+
+[[ACE-process-VLI]]
+==== Processing Variable Length Inputs into a Fixed Length Output
+
+In several circumstances, an algorithm needs to be able to absorb a variable length input, and process it into a fixed length output.
+THe most common cases are has functions or the generation of internal IVs from external IVs of variable length.
+
+This is performed in a special state (for instance _Hash_Absorb_) as defined by the Algorithm.
+
+This functionality is described in the algorithms as
+`process_VIL(state, len, input_base, block_base, cumul_len, block, output, process_block(), finalize())`.
+If `len` is not defined by the caller or by the Algorithm, use `None` as the value for `len` in the decription of the Algorithm.
+
+Parameters:::
+* `b` is the block size: the absorbed data is processed in `b`-bit blocks.
+
+* *Internal State Variables*:
+ ** `len`: the length of the input in bits, if it can be known in advance. This value must be defined to ensire a maximum value that can be absorbed by the system, and it
+ is fixed for the duration of the hash computation except for the very end, where it may be re-defined to signal the end of the input.
+ ** `input_base`: internal offset within input/output to read from/write to. Each time this value reaches `b`, the data in `block` is processed.
+ ** `block_base`: internal amount of absorbed data so far for the current block.
+    Only if needed by the Algorithm.
+ ** `cumul_len`: internal cumulative length of data absorbed so far.
+     When this reaches zero, additional operations may be performed, as described in the auxiliary function `finalize()` provided by the Algorithm.
+ ** `block`: `b` bits.
+ ** `output`: `b` bits. This is where the final result is stored. It may be the same as `block`, depending on the definitio ofg `inject()`.
+ ** Additional variables may be defined by the algorithm and used by `process_block()` and `finalize()`
+
+* *Auxiliary Function*:
+ ** `process_block()`: function that processes a `b`-bit `block` into `output`. It may use other state information of the Algorithm, but not modify the state variables used by this Subalgorithm.
+ ** `inject(data)`: function that either writes `data` into `block` or directly processes it into `output`, in case `block = output`
+ ** `finalize()`: function that processes the remaining bits (`block` may be incomplete) and produces the final output. It may have to complete the current block according to rules defined in the Algorithm. before finalization.
+
+*Behavior:*
+
+** When entering State `state`:
+ . `cumul_len <- 0`
+ . if `len` is defined:
+ .. if `len` is set by the caller, it is passed as a parameter to a Form B `ace.setst` instruction and 'len` is set to the auxibiliary parameter `INPUT`.
+ .. Otherwise, `len` is set by the Algorithm, and the `ace.setst` instruction used to transition to this state must be of Form A.
+
+** While in State `state`, only ``ace.exec`` instructions of Form B are expected, whereby
+ “`ace.exec Kn|K{Xn}, INPUT`”, processes the data block `INPUT` as follows.
++
+--
+  . If `len == 0`, an invalid instruction exception is raised.
+  . If `cumul_len >= len`, an invalid instruction exception is raised.
+  . `input_base <- 0` or `acestart` upon resumption
+  . While `(input_base < ACELEN)` do { // as long as we have input to process
+  .. `amount <- min(ACELEN-input_base, b-block_base, len-cumul_len)`
+  .. `inject(INPUT[input_base + amount - 1 : input_base], block[block_base + amount - 1 : block_base])`, for instance
+       * ``block[block_base + amount - 1 : block_base] <- INPUT[input_base + amount - 1 : input_base]``, or
+       * In case there is no separate `block` field, i.e. `block = output` (for instance, the state of certain hash functions): +
+        ``output[block_base + amount - 1 : block_base] <-`` +
+        ``{fournbsp}output[block_base + amount - 1 : block_base] XOR INPUT[input_base + amount - 1 : input_base]``
+
+  .. `input_base <- input_base + amount`
+  .. `block_base <- block_base + amount`
+  .. If (`block_base` == `b`) then { // It is time to process the block
+  ... `process_block()`
+  ... `block_base <- 0`
+  .. If `cumul_len == len`, the instruction is terminated in any case and `input_base <- 0.
+  .. *Here* the instruction may be interrupted, with `acestart <- input_base`.
+
+[none]
+  . }``{nbsp}{nbsp}`` }
+--
++
+
+** If the caller transitions to a different state, before transitioning `finalize()` is performed.
+
+** If `cumul_len == len`:
+ . if `len == 0`, an invalid instruction exception is raised.
+ . `finalize()`
+ . To prevent a repeat of the above two commands, `len` is set to zero.
+
+
+ // ////////////////////////////////////////////////////////////////////
 
 [[ACE-GCM-mode]]
 ==== GCM Mode
@@ -654,7 +733,7 @@ Data Structures:::
 [%autowidth,cols="^1,<2,<3",options="header"]
 |===
 | Pos. | Size (Bits)   | Field
-|   i   | 128            | MDH
+|   i  | 128            | MDH
 |  ii  | `k` or 64     | `key` or System Key Identifier
 |===
 --
@@ -662,9 +741,11 @@ Data Structures:::
 * *Internal State*:
  ** Metadata Header.
  ** `key`: `k` bits.
+ ** `J0`:  `b`-`c` bits.
  ** `ctr`:  ``c`` bits.
- ** `IV`:  `b`-`c` bits.
- ** `auth_key`, `tag`: `b` bits.
+ ** `auth_key`:: `b` bits.
+ ** `tag`: `b` bits. This field is used to store the authentication tag, but while absorbing a long IV it also stores the intermediate values which are GHASH-ed.
+ ** `progress`: `c` bits. This field overlaps with `J0` since they are not used simultaneously. We are assuming `b - c > c`.
 
 * *Serialized Context*:
 +
@@ -675,7 +756,7 @@ Data Structures:::
 |   i   | 128            | MDH
 |  ii   | `k` or 64     | `key` or System Key Identifier
 | iii   | ``c``         | `ctr`
-|  iv   | ``b``-``c``   | `IV`
+|  iv   | ``b``-``c``   | `J0` or `progress` (in which case we have `c` bits for `progress` followed by `b-2c` zeros)
 |   v   | `b`           | `tag`
 |===
 --
@@ -700,6 +781,7 @@ State Machine:::
 --
 Besides _Initial_, _Success_, and _Failure_, the GCM Mode algorithms make use of the following states:
 
+ ** _Set_Aux_Value_: Used to set the IV and then compute J0 once left.
  ** _Hash_Absorb_: Process Associated Data (AD) into the tag.
  ** _Encrypt_: Encrypt the plaintext and absorb the ciphertext into the tag.
  ** _Enc_Tag_Finalize_: Finalize the encryption tag, prepare to return its value.
@@ -709,7 +791,7 @@ Besides _Initial_, _Success_, and _Failure_, the GCM Mode algorithms make use of
 --
 
 * *Allowed State Transitions:*
- ** _Initial_ -> _Hash_Absorb_.
+ ** _Initial_ -> _Set_Aux_Value_ -> _Hash_Absorb_.
  ** _Hash_Absorb_ -> _Encrypt_, if encryption is allowed.
  ** _Hash_Absorb_ -> _Decrypt_, if decryption is allowed.
  ** _Encrypt_ -> _Enc_Tag_Finalize_ -> _Success_.
@@ -722,9 +804,21 @@ Besides _Initial_, _Success_, and _Failure_, the GCM Mode algorithms make use of
    . `hash_key <- enc_blk(key, zeros(b))`,
    . `tag <- zeros(b)`,
    . `ctr <- zeros(c-1) @ 1`, and
-   . `IV <- zeros(b)`.
+   . `J0 <- zeros(b)`.
 
- ** To transition to State _Hash_Absorb_: the ``ace.setst`` instruction must be
+  ** To transition to State _Set_Aux_Value_: the ``ace.setst`` instruction must be a Form B to set the IV length. +
+   “```ace.exec Kn|K{Xn}, INPUT```” then performs:
+   . `ctr <- INPUT`
+
+  ** In State _Set_Aux_Value_: one or mode `ace.exec` instructions of type B is expected. +
+  `ACELEN` must be a multiple of `b` or smaller than `b`, otherwise `ace.exec` raises an invalid instruction exception. +
+  "```ace.exec Kn|K{Xn}, INPUT```" performs:
+   . `to_read <- min(b,ctr)`
+   .  if `ACELEN > b`:
+   .. for i from 0 to  `floor(ACELEN/b)`:
+   ...
+
+  ** To transition to State _Hash_Absorb_: the ``ace.setst`` instruction must be
     a Form C to set the IV, i.e., the fixed part of the counter. Then:
    . `IV <- INPUT[b-c-1:0]`.
   *** If the ``ace.setst`` instruction is repeated, it will just update the
