@@ -634,19 +634,23 @@ State Machine:::
 // ////////////////////////////////////////////////////////////////////
 
 [[ACE-process-VLI]]
-==== Processing Variable Length Inputs into a Fixed Length Output
+==== Subalgorithm: Processing Variable Length Inputs into a Fixed Length Output
 
 In several circumstances, an algorithm needs to be able to absorb a variable length input, and process it into a fixed length output.
-THe most common cases are has functions or the generation of internal IVs from external IVs of variable length.
+THe most common cases are hash functions or the generation of internal IVs from external IVs of variable length.
 
 This is performed in a special state (for instance _Hash_Absorb_) as defined by the Algorithm.
 
-This functionality is described in the algorithms as
-`process_VLI(algorithm_state, len, input_base, block_base, cumul_len, block, output, process_block(), finalize())`.
+This functionality is described in the Algorithms as the Subalgorithm
+`process_VLI(algorithm_state, len, input_base, block_base, cumul_len, block, output, inject(), process_block(), finalize())`.
 If `len` is not defined by the caller or by the Algorithm, use `None` as the value for `len` in the decription of the Algorithm.
 
+Certain Algorithms may further restrict the lengths of the inputs that can be processed by this Subalgorithm.
+
 Parameters:::
-* `b` is the block size: the absorbed data is processed in `b`-bit blocks.
+* `b` is the block size: the input is processed in `b`-bit blocks.
+
+Data Structures:::
 
 * *Internal State Variables*:
  ** `len`: the length of the input in bits, if it can be known in advance. This value must be defined to ensire a maximum value that can be absorbed by the system, and it
@@ -657,15 +661,16 @@ Parameters:::
  ** `cumul_len`: internal cumulative length of data absorbed so far.
      When this reaches zero, additional operations may be performed, as described in the auxiliary function `finalize()` provided by the Algorithm.
  ** `block`: `b` bits.
- ** `output`: `b` bits. This is where the final result is stored. It may be the same as `block`, depending on the definitio ofg `inject()`.
+ ** `output`: `b` bits. This is where the final result is stored. It may be the same as `block`, depending on the definition of `inject()`.
  ** Additional variables may be defined by the algorithm and used by `process_block()` and `finalize()`
 
-* *Auxiliary Function*:
- ** `process_block()`: function that processes a `b`-bit `block` into `output`. It may use other state information of the Algorithm, but not modify the state variables used by this Subalgorithm.
- ** `inject(data)`: function that either writes `data` into `block` or directly processes it into `output`, in case `block = output`
- ** `finalize()`: function that processes the remaining bits (`block` may be incomplete) and produces the final output. It may have to complete the current block according to rules defined in the Algorithm. before finalization.
+Algorithm-Specific Functions:::
+ * `process_block()`: function that processes a `b`-bit `block` into `output`. It may use other state information of the Algorithm, but not modify the state variables used by this Subalgorithm.
+ * `inject(data)`: function that either writes `data` into `block` or directly processes it into `output`, in case `block = output`
+ * `finalize()`: function that processes the remaining bits (`block` may be incomplete) and produces the final output. It may have to complete the current block according to rules defined in the Algorithm. before finalization.
 
-*Behavior:*
+
+*State Machine Behavior*:::
 
 ** When entering State `algorithm_state`:
  . `cumul_len <- 0`
@@ -722,7 +727,7 @@ Parameters:::
 
 * `k` = key size (8|`k`).
 * `b` = block size (8|`b`). For this algorithm, `ACELEN` must be an integer multiple of `b`.
-* `c` = counter size (8|`b`). It must be `c < b`.
+* `c` = counter size (8|`b`). It must be `c < b`. Also, `b`-`c` must be at least 64.
 
 Data Structures:::
 
@@ -738,13 +743,17 @@ Data Structures:::
 --
 
 * *Internal State*:
++
+--
  ** Metadata Header.
  ** `key`: `k` bits.
- ** `J0`:  `b`-`c` bits.
- ** `ctr`:  ``c`` bits.
+ ** `J0`:  `b` bits.
  ** `auth_key`:: `b` bits.
  ** `tag`: `b` bits. This field is used to store the authentication tag, but while absorbing a long IV it also stores the intermediate values which are GHASH-ed.
- ** `progress`: `c` bits. This field overlaps with `J0` since they are not used simultaneously. We are assuming `b - c > c`.
+--
++
+In the internal state, variables `len`, `input_base`, `block_base`, `cumul_len`, `J0_padding` may overlap with `J0` or be separate fields.
+The latter may be necessary if the implementation of Subalgorithm _ACE-process-VLI_ (cf. <<ACE-process-VLI>>) works with integers of a different length.
 
 * *Serialized Context*:
 +
@@ -754,15 +763,25 @@ Data Structures:::
 |  Pos. | Size (Bits)   | Field
 |   i   | 128            | MDH
 |  ii   | `k` or 64     | `key` or System Key Identifier
-| iii   | ``c``         | `ctr`
-|  iv   | ``b``-``c``   | `J0` or `progress` (in which case we have `c` bits for `progress` followed by `b-2c` zeros)
-|   v   | `b`           | `tag`
+| iii   | ``b``         | `J0`
+|  iv   | `b`           | `tag`
+|===
+
+While in state _Set_Aux_Value_, `J0` is replaced by the following fields:
+
+[cols="^8%,<15%,<15%,<62%",options="header"]
+|===
+| Pos.  | Size (Bits)     | Field       | Description
+| iv.a  | 16 bits:        | `len`       | Total length of the IV. Maximum supported size is 1024 bits (8192 bytes).
+| iv.b  | 16 bits         | `input_base`| Internal offset within input/output to read from/write to. Each time this value reaches `b`, the data in `block` is prccessed.
+| iv.c  | 16 bits         | `block_base`| Internal amount of absorbed data so far for the current block.
+| iv.d  | 16 bits:        | `cumul_len` | internal cumulative length of data absorbed so far.
+| iv.e  | `b`-`c`-64 bits | `J0_padding`| Padding.
 |===
 --
 
-NOTE: There are no fields for the lengths of the AD and of the plaintext, as
-they are maintained by the calling software. Also, `hash_key` is not
-serialized, and thus it is recomputed upon `ace.import`.
+NOTE: There are no fields for the lengths of the AD and of the plaintext, as they are maintained by the calling software.
+Also, `hash_key` is not serialized, and thus it is recomputed upon `ace.import`.
 
 Algorithm-Specific Functions:::
 
@@ -805,17 +824,22 @@ Besides _Initial_, _Success_, and _Failure_, the GCM Mode algorithms make use of
    . `ctr <- zeros(c-1) @ 1`, and
    . `J0 <- zeros(b)`.
 
-  ** To transition to State _Set_Aux_Value_: the ``ace.setst`` instruction must be a Form B to set the IV length. +
-   “```ace.exec Kn|K{Xn}, INPUT```” then performs:
-   . `ctr <- INPUT`
+  ** To transition to State _Set_Aux_Value_,
+     the ``ace.setst`` instruction is of Form B, “```ace.exec Kn|K{Xn}, INPUT```”, the auxiliary parameter sets the IV length, whereby
+      i.e., `len <- INPUT` and   `INPUT` must be at most 8192 bits, OR
 
-  ** In State _Set_Aux_Value_: one or mode `ace.exec` instructions of type B is expected. +
-  `ACELEN` must be a multiple of `b` or smaller than `b`, otherwise `ace.exec` raises an invalid instruction exception. +
-  "```ace.exec Kn|K{Xn}, INPUT```" performs:
-   . `to_read <- min(b,ctr)`
-   .  if `ACELEN > b`:
-   .. for i from 0 to  `floor(ACELEN/b)`:
-   ...
+  ** In State _Set_Aux_Value_, we enter Subalgorithm _ACE-process-VLI_ (cf. <<ACE-process-VLI>>) as: +
+  "```ace.exec Kn|K{Xn}, INPUT```" performs: +
+  `process_VLI(_Set_Aux_Value_, 8192, input_base, block_base, cumul_len, block=J0, outout-J0, inject(), process_block(), finalize())`, where
+   *** `inject(data)`
+   *** `process_block()`
+   *** `finalize()`
+
+   If len(IV)=96, then let J0 = IV || 0^31^ ||1.
+
+   If len(IV) ≠ 96, then let s = 128 ⎡len(IV)/128⎤-len(IV), and let
+
+   J0=GHASH(IV||0s+64||[len(IV)]64).
 
   ** To transition to State _Hash_Absorb_: the ``ace.setst`` instruction must be
     a Form C to set the IV, i.e., the fixed part of the counter. Then:
