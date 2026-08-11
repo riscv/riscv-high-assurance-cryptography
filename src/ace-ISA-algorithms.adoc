@@ -635,9 +635,12 @@ This state is named _Current_State_ in this section.
 This functionality is used in an Algorithm:
 
 ```
-process_VLI(len, block, state,
+process_VLI(len,
+            block, b,
+            state, n,
             input_base,
-            block_base, b,
+            block_base,
+            state_offset,
             cumul_len,
             process_block(),
             finalize(),
@@ -645,10 +648,11 @@ process_VLI(len, block, state,
 ```
 where:
  * `len` is the total length of the data to be absorbed in bits. If not defined by the caller or by the Algorithm, `len` is zero for the purpose of defining  this procedure.
- * `block` contains the current block being filled internally before processing.
- * `state` is the output buffer. It may be the same as `block`.
+ * `block` contains the current block being filled internally before processing. Its size is `b`.
+ * `state` is the output buffer. It may be the same as `block`. Its size is `n`.
  * `input_base` is the base offset data moved from the `ace.exec`'s input to the `block`. Each time this value reaches `b`, the data in `block` is processed.
- * `block_base` is the base offset of `block`. `b` is its size of `block`.
+ * `block_base` is the base offset of `block`.
+ * `state_offset` is the offset within `state` for XORing with the input data, for instance, for sponge constructions.
  * `cumul_len` is the cumulative length of the data absorbed so far by the procedure.
  * `process_block()` is a function that processes the current block into `state`.
  * `finalize()` is a function that finalizes the processing of the input data. It may have to complete the current block according to rules defined in the Algorithm as part of the finalization.
@@ -683,7 +687,7 @@ Beside `len`, `block`, and `state`, which are fixed for the duration of the hash
 .. if `block != state` then:
  ... ``block[block_base + amount - 1 : block_base] <- INPUT[input_base + amount - 1 : input_base]``.
 .. else:
- ...  XOR ``INPUT[input_base + amount - 1 : input_base]`` to ``state[block_base + amount - 1 : block_base]``.
+ ...  XOR ``INPUT[input_base + amount - 1 : input_base]`` to ``state[block_base + amount - 1 + state_offset : block_base + state_offset]``.
 .. `input_base <- input_base + amount`.
 .. `block_base <- block_base + amount`.
 .. If (`block_base` == `b`) then:
@@ -818,11 +822,7 @@ Besides _Initial_, _Success_, and _Failure_, the GCM Mode algorithms make use of
       i.e., `len <- INPUT` and   `INPUT` must be at most 8192 bits. Upon entering the state, `J0` is cleared: `J0 <- zeros(b)`.
 
   ** In State _Set_Aux_Value_, we enter Subalgorithm _process_VLI_ (cf. <<ACE-process-VLI>>) as: +
-  `process_VLI(_Set_Aux_Value_, 8192, block=J0, outout=J0, input_base, block_base, cumul_len, process_block(), finalize(), granularity=b)`, where
-   *** `inject(data)` XORs data in place: +
-   ``output[block_base + amount - 1 : block_base] <-`` +
-   ``{fournbsp}{fournbsp}output[block_base + amount - 1 : block_base] XOR data``, +
-   where `data = INPUT[input_base + amount - 1 : input_base]``.
+  `process_VLI(8192, block=J0, b, outout=J0, b, input_base, block_base, 0, cumul_len, process_block(), finalize(), granularity=b)`, where
    *** if `len != 96`, `process_block()`, performs `J0 <- Galoismul(J0, hash_key)`, otherwise it does nothing.
    *** `finalize()` is defined as follows:
     . If `len == 96`, then
@@ -1634,16 +1634,12 @@ However, the one given here is sufficiently general to allow describing most com
 
 Parameters:::
 
-* `b` = block size (8|`b`). This is the size of an absorbed block and may be
-  different from the size of the internal state that is kept by the function.
-  For a sponge function, this value is the _rate_.
-* `t` = tag len (8|`t`). This is the size of the digest, or of the block that
-  is output each time in a XOF. The present description assumes `t` {le} `b`.
-* `n` = size of the internal state that is kept by the function (8|`n`).  For a
-  sponge function, `n-b` is the _capacity_ of the function. Either the block
-  size is an integer multiple of the vector length or the vector length is an
-  integer multiple of the block size.
+* `b` = block size (8|`b`). This is the size of an absorbed block and may be different from the size of the internal state that is kept by the function. For a sponge function, this value is the _rate_.
+* `t` = tag len (8|`t`). This is the size of the digest, or of the block that is output each time in a XOF. The present description assumes `t` {le} `b`.
+* `n` = size of the internal state that is kept by the function (8|`n`).  For a sponge function, `n-b` is the _capacity_ of the function. Either the block size is an integer multiple of the vector length or the vector length is an integer multiple of the block size.
 * `k` = key size (8|`k`). Present only if keyed, i.e., a MAC.
+* `state_offset` = offset into the state where the block is to be absorbed.
+* `tag_offset` = offset of the tag into the state (for instance, when squeezing sponges).
 
 Data Structures:::
 
@@ -1662,16 +1658,11 @@ Data Structures:::
  ** Metadata Header.
  ** `key`: `k` bits. Present only if keyed, i.e., a MAC.
  ** `state`: `n` bits.
- ** `last_block_len`: int. Present only if this Hash/MAC provides special
-    treatment for a last block that goes beyond padding and appending the
-    length. The latter must be handled by user software instead.
+ ** `last_block_len`: int. Present only if this Hash/MAC provides special treatment for a last block that goes beyond padding and appending the length. The latter must be handled by user software instead.
  ** `input_base`: int. Offset within input/output to read from/write to.
- ** `block_base`: int. Length of absorbed data so far for the current block.
-    Only if needed by the algorithm.
- ** `cumul_len`: int. Cumulative length of data absorbed so far (if the
-    algorithm must process and incorporate it in the hash on its own).
- ** `block`: `b` bits.  Included only if a partial block must be maintained—for
-    instance when the inputs are not directly absorbed into `state`.
+ ** `block_base`: int. Length of absorbed data so far for the current block. Only if needed by the algorithm.
+ ** `cumul_len`: int. Cumulative length of data absorbed so far (if the algorithm must process and incorporate it in the hash on its own).
+ ** `block`: `b` bits.  Included only if a partial block must be maintained—for instance when the inputs are not directly absorbed into `state`.
 
 * *Serialized Context*:
 +
@@ -1684,10 +1675,10 @@ Data Structures:::
 <|        If unkeyed: 0           | none                         | --
 |   iii | `n`                     | `state`                      | --
 |    iv | 16                      | `last_block_len`             | Present only if this Hash/MAC has special internal treatment for a fractional last block that goes beyond padding and appending the length, which are handled by user software.
-|    v | 16                       | `block_base`                 | Amount of data stored so far into `block`.  Only if used by the algorithm, else zero padding.
+|    v | 16                       | `block_base`                 | Amount of data stored so far into `block` or accumulated (usually XORed) into `state`.  Only if used by the algorithm, else zero padding.
 |   vi | 32                       | `cumul_len`                  | Cumulative length of all data absorbed so far. Only if the algorithm must process and incorporate it in the hash on its own, else zero padding.
-|  vii | 64{interpunct}{lceil}``block_base``/64{rceil} | `block` | Only if `block_base` is defined and != 0 and the block must be stored separately from the `state`.
-| viii | 0 or 64                  | Padding                      | To reach a multiple of 128 bits.
+|  vii | `b`                      | `block`                      | Only if `block_base` is defined and the block must be stored separately from the `state`.
+| viii | Algorithm-dependent      | Padding                      | To reach a multiple of 128 bits.
 |===
 --
 
@@ -1729,33 +1720,9 @@ State Machine:::
   *** Any `ace.exec` will result in the CR being *invalidated*.
 
  ** In State _Hash_Absorb_, we enter Subalgorithm _process_VLI_ (cf. <<ACE-process-VLI>>) as:
-`process_VLI(_Hash_Absorb_, max_length, block, state, input_base, block_base, cumul_len, absorb(), finalize(), SEW)`,
-where `max_length` is the algorithm-defined maximum length of the data to be absorbed.
-// +
-// --
-//   . `input_base <- 0` // or `acestart` upon resumption
-//   . while `(input_base < ACELEN)` do { // as long as we have input to process
-//   .. `amount <- min(ACELEN-input_base, b-block_base)`
-//   .. ``block[block_base + amount - 1 : block_base] <-`` +
-//       ``{fournbsp} <- INPUT[input_base + amount - 1 : input_base]`` +
-//         ``{nbsp}{nbsp}``(If there is no `block` field, could also be something like +
-//         ``{fournbsp}state[block_base + amount - 1 : block_base] <- `` +
-//         ``{fournbsp}{fournbsp}{nbsp}<- state[block_base + amount - 1 : block_base] + `` +
-//         ``{fournbsp}{fournbsp}{nbsp}+ INPUT[input_base + amount - 1 : input_base]`` , +
-//         ``{nbsp}{nbsp}{nbsp}``it could directly replace part of `state`, or some other function.)
-//   .. `input_base <- input_base + amount`
-//   .. `block_base <- block_base + amount`
-//   .. if (`block_base` == `b`) then { // it's time to absorb the block
-//   ... `absorb()`
-//   ... `block_base <- 0`
-//   ... *Here* the instruction may be interrupted, with `acestart <- input_base`.
-//
-// [none]
-//   . }``{nbsp}{nbsp}`` }
-// --
-// +
+`process_VLI(max_length, block, b, state, n, input_base, block_base, state_offset, cumul_len, absorb(), finalize(), SEW)`,
+where `max_length` is the algorithm-defined maximum length of the data to be absorbed, and `state_offset` is algorithm-defined.
 
-//
  ** Upon issuing a Form B “`ace.setst Kn|K{Xn}, #ace_state_hash_last_block,
     Xs`” where `Xs` contains the length of the last block, the following
     happens:
