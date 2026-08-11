@@ -71,30 +71,25 @@ Addressed
 *Resolution:* either specify the keyed constructions inside the context (absorbing ipad/opad internally) or remove the extensions and encodings and reword the HMAC section.
 
 **C13. Book 1 restricts the block-cipher modes to AES; Book 2 defines them for SM4.**
-`src/ace-ISA-unpriv.adoc:98-104` with footnote `^5^` at `:135` ("The mode is applicable to all versions of AES") applied to `Zlctrm`, `Zlxctrm`, `Zlgcmm`, `Zlgcmsivm` and `Zlcmacm`, versus `src/ace-ISA-algorithms.adoc:50-51`, which instantiates "Analogues to Modes 1--10 for `AES128`, but with `SM4`" — including CTR, XCTR, XEX, GCM, GCM-SIV and CMAC. Separately, footnote `^6^`, referenced by `Zlxexm` and `Zlocbm`, is never defined (only `^3^`–`^5^` exist), so XEX/OCB cipher scope is unspecified in Book 1.
-*Resolution:* rewrite footnotes 4–6 to match Book 2's actual Type/Mode matrix.
+FIXED
+
 
 ### Algorithm definitions versus published standards
 
 **C14. GCM counter values are off by one from SP 800-38D.**
-`src/ace-ISA-algorithms.adoc:724`, `:753`, `:770`. ACE initializes `ctr ← zeros(c-1) @ 1` and encrypts the first message block with counter 1, then masks the tag with `enc_blk(key, IV @ zeros(c))` — counter 0. SP 800-38D §7.1 sets `J0 = IV || 0³¹ || 1`, encrypts the first message block with `inc32(J0)` (counter 2) and masks the tag with `E(K, J0)` (counter 1). Every counter is one less than the standard, so all GCM test vectors fail.
-*Resolution:* increment before first use and compute the tag mask with `IV @ (zeros(c-1) @ 1)`.
+FIXED
 
 **C15. GCM decryption's tag finalization uses a malformed counter expression.**
-`src/ace-ISA-algorithms.adoc:809`. `tag <- tag xor enc_blk(key, ctr[b-1,c] @ zeros(c))` — `ctr` is only `c` bits wide, so the slice is undefined, and the encryption path (`:770`) uses `IV @ zeros(c)`. As written the decryption tag cannot equal the encryption tag.
-*Resolution:* use the encryption path's expression, corrected per C14.
+FIXED
 
 **C16. GCM-SIV derives its keys before the nonce is set.**
-`src/ace-ISA-algorithms.adoc:1010`, `:1123-1124`. Derivation runs on entry to `_Initial_` and on import, but the nonce is only supplied afterwards, on the transition to `_Set_Aux_Value_`. RFC 8452 §4 derives both keys from the key-generating key *and the nonce*, so the required derivation is not computable at the point ACE performs it. (The function name is also doubled: `RFC8452_RFC8452_KeyDeriv`.) This is the same defect as C2, independently present in Book 2's mode definition.
-*Resolution:* derive on the transition out of `_Set_Aux_Value_`, per nonce.
+FIXED (in a different way)
 
 **C17. GCM-SIV clears the tag's top bit after encryption, producing wrong tags and one-bit malleability.**
-`src/ace-ISA-algorithms.adoc:1066`, `:1113-1115`. ACE emits `SIV <- 0 @ tmp[b-2:0]`. RFC 8452 clears the most significant bit only on the *input* to the final AES call and on counter blocks; the tag itself is the full AES output. Roughly half of all ACE tags therefore differ from RFC 8452. Decryption compares only `b-1` bits (`tmp <- tmp[n-2:0]`, with `n` undefined), so every ciphertext has two accepted tags.
-*Resolution:* emit and compare the full tag; force the bit only when forming counter blocks.
+FIXED (I think)
 
 **C18. The GCM-SIV counter-exhaustion check invalidates the register on the first block.**
-`src/ace-ISA-algorithms.adoc:1077`, with `:1011`. `ctr` is initialized to 0 and the check "If `ctr == 0`, then the CR is *invalidated*" runs before the first use, so the first `_Encrypt_`/`_Decrypt_` `ace.exec` destroys the context. The mode is unusable as specified.
-*Resolution:* perform the wrap check after incrementing, or track block count separately.
+OOOPS. FIXED
 
 **C19. GCM and GCM-SIV are given the identical length-block formula although the two standards use opposite conventions.**
 `src/ace-ISA-algorithms.adoc:765`, `:804`, `:1057`, `:1106`. Both modes use `INPUT <- bin(bit_length(AD), b/2) @ bin(bit_length(plaintext), b/2)`. SP 800-38D §7.1 specifies `len(A) || len(C)` big-endian; RFC 8452 §4 uses little-endian encodings with the AAD length in the first (least significant) eight bytes. `bin()`'s endianness and the register-to-byte-string mapping are undefined, so under any single fixed convention at least one mode fails its own test vectors.
