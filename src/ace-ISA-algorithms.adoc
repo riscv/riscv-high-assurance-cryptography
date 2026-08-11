@@ -722,13 +722,15 @@ Algorithm-Specific Functions:::
 The GCM mode was designed by David McGrew and John Viega
 cite:[DBLP-conf-indocrypt-McGrewV04] and was made into a NIST Recommendation in
 2007 cite:[nist-SP-800-38D].
+Currently this is defined only for 128-bit wide block ciphers.
+The definition will be updated to support other block sizes if required by SDOs.
 (((ACE, algorithm, GCM)))
 
 Parameters:::
 
-* `k` = key size (8|`k`).
-* `b` = block size (8|`b`). For this algorithm, `ACELEN` must be an integer multiple of `b`.
-* `c` = counter size (8|`b`). It must be `c < b`. Also, `b`-`c` must be at least 64.
+* `k` = key size (128|`k`).
+* `b`= 128 = block size. For this algorithm, `ACELEN` must be an integer multiple of `b`.
+* `c` = 32 - counter size (8|`b`).
 
 Data Structures:::
 
@@ -738,7 +740,7 @@ Data Structures:::
 [%autowidth,cols="^1,<2,<3",options="header"]
 |===
 | Pos. | Size (Bits)   | Field
-|   i  | 128            | MDH
+|   i  | 128           | MDH
 |  ii  | `k` or 64     | `key` or System Key Identifier
 |===
 --
@@ -748,10 +750,10 @@ Data Structures:::
 --
  ** Metadata Header.
  ** `key`: `k` bits.
- ** `J0`:  `b` bits.
- ** `reset_ctr`: `c` bits.
- ** `auth_key`:: `b` bits.
- ** `tag`: `b` bits. This field is used to store the authentication tag, but while absorbing a long IV it also stores the intermediate values which are GHASH-ed.
+ ** `J0`:  `128` bits.
+ ** `reset_ctr`: `32` bits.
+ ** `auth_key`: `128` bits.
+ ** `tag`: `128` bits. This field is used to store the authentication tag, but while absorbing a long IV it also stores the intermediate values which are GHASH-ed.
 --
 +
 In the internal state, variables `len`, `input_base`, `block_base`, `cumul_len`, `J0_padding` may overlap with `J0` or be separate fields.
@@ -765,10 +767,10 @@ The latter may be necessary if the implementation of Subalgorithm _ACE-process-V
 |  Pos. | Size (Bits)   | Field       | Description
 |   i   | 128           |  MDH        | {empty}
 |  ii   | `k` or 64     | `key`       | Key value or System Key Identifier
-| iii   | ``b``         | `J0`        |  {empty}
-|  iv   | `b`           | `tag`       | {empty}
-|   v   | `c`           | `start_ctr` | The `c` least significant bits of the initial value of `J0`. If this value is reached again, an error is returned.
-|  vi   | `d`           | Padding     | Put `z <-` (`k` or 64) + 2 `b` + `c`. Then `d` = 128 - (`z` mod 128).
+| iii   | 128           | `J0`        | {empty}
+|  iv   | 128           | `tag`       | {empty}
+|   v   | 32            | `start_ctr` | The 32 least significant bits of the initial value of `J0`. If this value is reached again, an error is returned.
+|  vi   | 32 or 96`     | Padding     | {empty}
 |===
 
 While in state _Set_Aux_Value_, `J0` is replaced by the following fields:
@@ -780,7 +782,7 @@ While in state _Set_Aux_Value_, `J0` is replaced by the following fields:
 | iv.b  | 16 bits         | `input_base`| Internal offset within input/output to read from/write to. Each time this value reaches `b`, the data in `block` is processed.
 | iv.c  | 16 bits         | `block_base`| Internal amount of absorbed data so far for the current block.
 | iv.d  | 16 bits         | `cumul_len` | internal cumulative length of data absorbed so far.
-| iv.e  | `b` - `c` - 64 bits | `J0_padding`| Padding.
+| iv.e  | 64 bits         | `J0_padding`| Padding.
 |===
 --
 
@@ -839,8 +841,8 @@ Besides _Initial_, _Success_, and _Failure_, the GCM Mode algorithms make use of
    *** if `len != 96`, `process_block()`, performs `J0 <- Galoismul(J0, hash_key)`, otherwise it does nothing.
    *** `finalize()` is defined as follows:
     . If `len == 96`, then
-      .. `J0 <- J0 @ 0^31^ @ 1`.
-    . If `len != 96`, then let `s <- 128 ⎡len/128⎤-len`, and the computation of `J0 := GHASH(IV || 0^s+64^ || bin(len(IV),64), hash_key)` is completed by performing:
+      .. `J0[127:0] <- J0[95:0] @ 0^31^ @ 1`.
+    . If `len != 96`, then let `s <- 128 ⎡len/128⎤-len`, and the computation of `J0 := GHASH(IV || 0^s+64^ || bin(len,64), hash_key)` is completed by performing:
       .. if `block_base != 0`, then `J0 <- Galoismul(J0, hash_key)`
       .. `J0 <- J0 XOR (0^64^ @ bin(len,64))`
       .. `J0 <- Galoismul(J0, hash_key)`
@@ -854,7 +856,7 @@ Besides _Initial_, _Success_, and _Failure_, the GCM Mode algorithms make use of
  . `absorb(INPUT)`.
 --
 +
-If `ACELEN` > `b`, the above operation is executed `ACELEN/b` times.
+If `ACELEN` > `128`, the above operation is executed `ACELEN/128` times.
 
 ** Upon entering either State _Encrypt_ or _Decrypt_, `reset_at <- lsb~c~(J0)` is executed.
 
@@ -863,8 +865,8 @@ If `ACELEN` > `b`, the above operation is executed `ACELEN/b` times.
    absorbs `OUTPUT` into the `tag`, namely:
 +
 --
-  . `J0[c-1:0] <- J0[c-1:0] + 1 mod 2^c^`.
-  . If `J0[c-1:0] = start_ctr`, then
+  . `J0[31:0] <- J0[31:0] + 1 mod 2^32^`.
+  . If `J0[31:0] = start_ctr`, then
    .. the CR is *invalidated*.
    . else
   .. `tmp <- INPUT xor enc_blk(key, J0)`.
@@ -878,16 +880,16 @@ If `ACELEN` is a multiple of `b`, the above operations are executed `ACELEN/b` t
 +
 --
 [none]
-* `INPUT <- bin(bit_length(AD), b/2) @ bin(bit_length(plaintext), b/2){nbsp}` .
+* `INPUT <- bin(bit_length(AD), 64) @ bin(bit_length(plaintext), 64){nbsp}` .
 
 The authentication tag is then computed as follows:
 
 . `absorb(INPUT)`.
-  . `tag <- tag xor enc_blk(key, J0[b-1,c] @ start_ctr)`.
+  . `tag <- tag xor enc_blk(key, J0[127,32] @ start_ctr)`.
 
 Finally, `tag` is returned in `OUTPUT`, and the state is changed to _Success_.
 
-If `ACELEN` > `b`, only the `b` least significant bits of `INPUT` are considered.
+If `ACELEN` > 128, only the 128 least significant bits of `INPUT` are considered.
 --
 
 ** {empty}
@@ -901,31 +903,31 @@ In State _Decrypt_, ``ace.exec`` instructions are expected to be of Form A.
 ``ace.exec OUTPUT, Kn|K{Xn}, INPUT`` absorbs the ciphertext `INPUT` into `tag`,
 then decrypts `INPUT` into `OUTPUT`, namely:
 
- . J0[c-1:0] <- J0[c-1:0] + 1 mod 2^c^`.
- . If `J0[c-1:0] = start_ctr`, then
+ . J0[31:0] <- J0[31:0] + 1 mod 2^32^`.
+ . If `J0[31:0] = start_ctr`, then
   .. the CR is *invalidated*.
   . else
   .. `absorb(INPUT)`.
   .. `OUTPUT  <- INPUT xor enc_blk(key, J0)`.
 
-If `ACELEN` is a multiple of `b`, the same behavior applies as in State
-_Encrypt_, namely the above operations are executed `ACELEN/b` times, decrypting
-each `b`-bit block of `INPUT` into the corresponding `b`-bit block of `OUTPUT`.
+If `ACELEN` is a multiple of 128, the same behavior applies as in State
+_Encrypt_, namely the above operations are executed `ACELEN/128` times, decrypting
+each 128-bit block of `INPUT` into the corresponding `b`-bit block of `OUTPUT`.
 --
 
 ** To transition to State _Dec_Tag_Finalize_, a Form C ``ace.setst`` instruction is expected to provide the following value, which must be set by the software:
 +
 --
 [none]
-* `INPUT <- bin(bit_length(AD), b/2) @ bin(bit_length(plaintext), b/2)`
+* `INPUT <- bin(bit_length(AD), 64) @ bin(bit_length(plaintext), 64)`
 
 The authentication tag is computed as follows:
 
 . `absorb(INPUT)`.
-  . `tag <- tag xor enc_blk(key, J0[b-1,c] @ start_ctr)`.
+  . `tag <- tag xor enc_blk(key, J0[127,32] @ start_ctr)`.
 --
 +
-If `ACELEN` > `b`, only the `b` least significant bits of `INPUT` are considered.
+If `ACELEN` > 128, only the 128 least significant bits of `INPUT` are considered.
 
 ** To transition to State _Hash_Verify_, a Form C ``ace.setst`` instruction
    must be used to provide the value against which the internally computed tag
@@ -933,7 +935,7 @@ If `ACELEN` > `b`, only the `b` least significant bits of `INPUT` are considered
    transitions to _Success_, else it transitions to _Failure_.
 
 ** Upon completion of `ace.import`, the ACE unit recomputes `hash_key`, i.e.:
-  . `hash_key <- enc_blk(key, zeros(b))`.
+  . `hash_key <- enc_blk(key, zeros(128))`.
 
 //
 
@@ -961,26 +963,23 @@ described in the next section.
 [[ACE-GCM-with-IV-mode]]
 ==== GCM with Set IV
 
-The mode of operation “GCM with a Set IV” is a variant of the GCM mode where
-the initialization vector (IV) is predefined and not generated randomly. This
-variant _cannot_ be emulated with an ECB CC because it would reveal the
-internal data.
+The mode of operation “GCM with a Set IV” is a variant of the GCM mode where the initialization vector (IV) is predefined and not generated randomly.
+This variant _cannot_ be emulated with an ECB CC because it would reveal the internal data.
 
-A key difference between GCM and GCM with Set IV is in the format of the
-Provisioning Input:
+A key difference between GCM and GCM with Set IV is in the format of the Provisioning Input:
 
 Data Structures:::
 
 * *Provisioning Input*:
 +
 --
-[%autowidth,cols="^1,<2,<3",options="header"]
+[cols="^8%,<15%,<15%,<62%",options="header"]
 |===
-|  Pos. | Size (Bits)   | Field
-|   i   | 128           | MDH
-|  ii   | `k` or 64     | `key` or System Key Identifier
-|  iii  | ``b``-``c``   | `IV`
-|  iv   | (Padding)     | Zero padding
+|  Pos. | Size (Bits)   | Field       | Description
+|   i   | 128           |  MDH        | {empty}
+|  ii   | `k` or 64     | `key`       | Key value or System Key Identifier
+| iii   | 128           | `J0`        | {empty}
+|  iv   | 0 or 64       | Padding      | {empty}
 |===
 --
 
@@ -988,6 +987,7 @@ Data Structures:::
 +
 --
 Same as for GCM.
+Upon provisioning, the 32 least significant bits of `J0` are saved to `start_ctr`.
 --
 
 * *Serialized Context*: {empty}
@@ -999,7 +999,9 @@ Same as for GCM.
 * *States and Allowed Transitions:* {empty}
 +
 --
-Same as for GCM.
+Same as for GCM, with following exceptions:
+
+** There is no state _Set_Aux_Value_. The transition is from _Initial_ to _Hash_Absorb_.
 --
 
 * *State Machine Behavior:* {empty}
@@ -1007,46 +1009,38 @@ Same as for GCM.
 --
 The differences with respect to GCM are:
 
- ** To transition to State _Hash_Absorb_: The ``ace.setst`` instruction shall
-    be of Form A, i.e., _without any additional inputs_, since the IV is
-    already included in the PI.
- ** When transitioning back to State _hash_Initial_: The CR's `IV` field is
-    _not_ reset to zero.
+ ** To transition to State _Hash_Absorb_: The ``ace.setst`` instruction shall be of Form A, i.e., _without any additional inputs_, since the IV is already included in the PI.
+ ** When transitioning back to State _hash_Initial_: The CR's `IV` field is _not_ reset to zero.
 --
 
-NOTE: For all the following IV- or nonce-based modes, versions with a set IV or
-nonce (such as for GCM-SIV) can also be similarly defined. For instance, for
-GCM-SIV (<<ACE-GCM-SIV-mode>>), `nonce` would be included in the PI exactly as
-`IV` is included in the PI for GCM, and the transition to _Hash_Absorb_ would
-also use a Form A ``ace.setst``. All other semantics would be unchanged.
+// NOTE: For all the following IV- or nonce-based modes, versions with a set IV or
+// nonce (such as for GCM-SIV) can also be similarly defined. For instance, for
+// GCM-SIV (<<ACE-GCM-SIV-mode>>), `nonce` would be included in the PI exactly as
+// `IV` is included in the PI for GCM, and the transition to _Hash_Absorb_ would
+// also use a Form A ``ace.setst``. All other semantics would be unchanged.
 
 // ////////////////////////////////////////////////////////////////////
 
 [[ACE-GCM-SIV-mode]]
 ==== GCM-SIV Mode
 
-The GCM-SIV mode is described in cite:[DBLP-journals-iacr-GueronLL17] and
-cite:[RFC8452]. While GCM-SIV's decryption state machine is similar to the
-GCM's, the encryption state machine is different:
+The GCM-SIV mode is described in cite:[DBLP-journals-iacr-GueronLL17] and cite:[RFC8452].
+Currently this is defined only for 128-bit wide block ciphers.
+The definition will be updated to support other block sizes if required by SDOs.
+(((ACE, algorithm, GCM-SIV)))
 
-* During encryption, the _Hash_Absorb_ state absorbs the entire associated data
-  and plaintext. The _Enc_Tag_Finalize_ state then absorbs the lengths and
-  produces the SIV/tag. Finally, the _Encrypt_ state performs a second pass to
-  encrypt the plaintext using the SIV/tag as the initialization vector.
-* During decryption, the _Hash_Absorb_ state absorbs only the associated data.
-  The _Decrypt_ state decrypts the ciphertext and simultaneously absorbs the
-  plaintext into the hash. Finally, the _Dec_Tag_Finalize_ state absorbs the
-  lengths, produces the SIV/tag, and internally compares it to the provided
-  SIV/tag.
+While GCM-SIV's decryption state machine is similar to the GCM's, the encryption state machine is different:
+
+* During encryption, the _Hash_Absorb_ state absorbs the entire associated data and plaintext. The _Enc_Tag_Finalize_ state then absorbs the lengths and produces the SIV/tag. Finally, the _Encrypt_ state performs a second pass to encrypt the plaintext using the SIV/tag as the initialization vector.
+* During decryption, the _Hash_Absorb_ state absorbs only the associated data. The _Decrypt_ state decrypts the ciphertext and simultaneously absorbs the plaintext into the hash. Finally, the _Dec_Tag_Finalize_ state absorbs the lengths, produces the SIV/tag, and internally compares it to the provided SIV/tag.
 
 //
 
 Parameters:::
 
-* `k` = key size (64|`k`).
-* `b` = block size, (64|`b`). For this algorithm, `ACELEN` must be an integer
-  multiple of `b`.
-* It must be `k = b` or `k = 2b`.
+* `k` = key size (128|`k`).
+* `b`= 128 = block size. For this algorithm, `ACELEN` must be an integer multiple of `b`.
+* `c` = 32 - counter size (8|`b`).
 * The authentication tag is `b` bits long.
 
 Data Structures:::
@@ -1065,11 +1059,11 @@ Data Structures:::
 * *Internal State*:
  ** Metadata Header.
  ** `key`, `enc_key`: `k` bits.
- ** `auth_key`: `b` bits.
- ** `nonce`: `3b/4` bits.
- ** `ctr`: `b/4` bits.
- ** `SIV`: `b` bits.
- ** `tmp`: `b` bits.
+ ** `auth_key`: 128 bits.
+ ** `nonce`: 96 bits.
+ ** `ctr`: 32` bits.
+ ** `SIV`: 128 bits.
+ ** `tmp`: 128 bits.
 
 * *Serialized Context*:
 +
@@ -1077,171 +1071,167 @@ Data Structures:::
 [%autowidth,cols="^1,<2,<3",options="header"]
 |===
 |  Pos. | Size (Bits)     | Field
-|    i  | 128             | MDH
-|   ii  | `k` or 64       | `key` or System Key Identifier
-|  iii  | 3``b``/4        | `nonce`
-|   iv  | `b`/4           | `ctr`
-|    v  | `b`             | `SIV`
-|   vi  | `b`             | `tmp`
+|    i  |  128            | MDH
+|   ii  |  `k` or 64      | `key` or System Key Identifier
+|  iii  |  96             | `nonce`
+|   iv  |  32             | `ctr`
+|    v  |  128            | `SIV`
+|   vi  |  128            | `tmp`
 |===
 --
 
-NOTE: The internal state fields `enc_key` and `auth_key` are not serialized,
-and must be recomputed upon each `ace.import`.
+NOTE: The internal state fields `enc_key` and `auth_key` are not serialized, and must be recomputed upon each `ace.import`.
 
 //
 
 Algorithm-Specific Functions:::
 
-* `enc_blk(key, p) -> c` encrypts block `p` using the key, and returns the
-  result `c`.
+* `enc_blk(key, p) -> c` encrypts block `p` using the key, and returns the result `c`.
 * `absorb(data)` absorbs data into the hash function by performing a step of (a variant of) POLYVAL:
   . `tmp <- tmp xor INPUT`.
   . `tmp <- Montmul(tmp, hash_key)`.
 
-State Machine:::
-* *States:*
-+
---
-Besides _Initial_, _Success_, and _Failure_, the GCM-SIV algorithms make use of the following states:
+  State Machine:::
+  * *States:*
+  +
+  --
+  Besides _Initial_, _Success_, and _Failure_, the GCM-SIV algorithms make use of the following states:
 
- ** _Set_Aux_Value_: Set the value of `nonce`.
- ** _Hash_Absorb_: Set the SIV and process AD and, if encrypting, also the plaintext into the partial tag (this is accumulated in the state variable `tmp`).
- ** _Encrypt_: Encrypt the plaintext.
- ** _Enc_Tag_Finalize_: Finalize the SIV with the AD and PT lengths, prepare to return its value.
- ** _Decrypt_: Absorb the ciphertext into the partial tag and decrypt it.
- ** _Dec_Tag_Finalize_: Finalize the tag with the AD and CT lengths, then compare it against the `SIV`.
---
+   ** _Set_Aux_Value_: Set the value of `nonce`.
+   ** _Hash_Absorb_: Set the SIV and process AD and, if encrypting, also the plaintext into the partial tag (this is accumulated in the state variable `tmp`).
+   ** _Encrypt_: Encrypt the plaintext.
+   ** _Enc_Tag_Finalize_: Finalize the SIV with the AD and PT lengths, prepare to return its value.
+   ** _Decrypt_: Absorb the ciphertext into the partial tag and decrypt it.
+   ** _Dec_Tag_Finalize_: Finalize the tag with the AD and CT lengths, then compare it against the `SIV`.
+  --
 
-* *Allowed State Transitions:*
- ** _Initial_ -> _Set_Aux_Value_ -> _Hash_Absorb_.
- ** For encryption: _Hash_Absorb_ -> _Enc_Tag_Finalize_ -> _Encrypt_.
- ** For decryption: _Hash_Absorb_ -> _Decrypt_ -> _Dec_Tag_Finalize_ -> _Success_ or _Failure_.
- ** Transition to _Encrypt_ possible only if encryption is allowed.
- ** Transition to _Decrypt_ possible only if decryption is allowed.
+  * *Allowed State Transitions:*
+   ** _Initial_ -> _Set_Aux_Value_ -> _Hash_Absorb_.
+   ** For encryption: _Hash_Absorb_ -> _Enc_Tag_Finalize_ -> _Encrypt_.
+   ** For decryption: _Hash_Absorb_ -> _Decrypt_ -> _Dec_Tag_Finalize_ -> _Success_ or _Failure_.
+   ** Transition to _Encrypt_ possible only if encryption is allowed.
+   ** Transition to _Decrypt_ possible only if decryption is allowed.
 
-* *Behavior:*
- ** In State _Initial_ :
-  *** Upon entering the state, the following initialization operations are performed:
-   . (`enc_key`, `auth_key`) `<-` `RFC8452_RFC8452_KeyDeriv(key)`,
-   . `nonce`, `ctr`, `tmp`, `SIV <- 0`.
- *** No ``ace.exec`` operation is allowed.
+  * *Behavior:*
+   ** In State _Initial_ :
+    *** Upon entering the state, the following initialization operations are performed:
+     . (`enc_key`, `auth_key`) `<-` `RFC8452_RFC8452_KeyDeriv(key)`,
+     . `nonce`, `ctr`, `tmp`, `SIV <- 0`.
+   *** No ``ace.exec`` operation is allowed.
 
- *** Upon issuing a Form C ```ace.setst Kn|K{Xn}, #ace_state_set_aux_value, INPUT```,
-  the value of `nonce` is set to `INPUT`.
-  (If the instruction is repeated, there is no harm, since it just overwrites
-  the `nonce` before any other operation is performed.)
+   *** Upon issuing a Form C ```ace.setst Kn|K{Xn}, #ace_state_set_aux_value, INPUT```,
+    the value of `nonce` is set to `INPUT`.
+    (If the instruction is repeated, there is no harm, since it just overwrites
+    the `nonce` before any other operation is performed.)
 
-  ** In State _Set_Aux_Value_:
-   *** Upon issuing a Form C ```ace.setst Kn|K{Xn}, #ace_state_hash_absorb, INPUT```:
-+
---
-**** The value of `SIV` is set to `INPUT`.
+    ** In State _Set_Aux_Value_:
+     *** Upon issuing a Form C ```ace.setst Kn|K{Xn}, #ace_state_hash_absorb, INPUT```:
+  +
+  --
+  **** The value of `SIV` is set to `INPUT`.
 
-NOTE: This version of the instruction is meant to be used during decryption. It
-is harmless to invoke it during encryption, however, as the `SIV` field will be
-overwritten later with the correct synthetic value.
---
-+
+  NOTE: This version of the instruction is meant to be used during decryption.
+  It is harmless to invoke it during encryption, however, as the `SIV` field will be overwritten later with the correct synthetic value.
+  --
+  +
 
-*** Upon issuing a Form A ```ace.setst Kn|K{Xn}, #ace_state_hash_absorb```:
-+
---
-**** The `SIV` is not modified (it is assumed to be already zero).
+  *** Upon issuing a Form A ```ace.setst Kn|K{Xn}, #ace_state_hash_absorb```:
+  +
+  --
+  **** The `SIV` is not modified (it is assumed to be already zero).
 
-NOTE: This version of the instruction is meant to be used during encryption. If
-used during decryption, by leaving the `SIV` to zero it will most likely lead
-to an authentication error.
---
-+
+  NOTE: This version of the instruction is meant to be used during encryption.
+  If used during decryption, by leaving the `SIV` to zero it will most likely lead to an authentication error.
+  --
+  +
 
-** {empty}
-+
---
-In State _Hash_Absorb_, Form B ``ace.exec`` instructions are expected.
+  ** {empty}
+  +
+  --
+  In State _Hash_Absorb_, Form B ``ace.exec`` instructions are expected.
 
-Such an instruction absorbs its `INPUT` in the internal state variable `tmp`, i.e., it performs `absorb(INPUT)`.
+  Such an instruction absorbs its `INPUT` in the internal state variable `tmp`, i.e., it performs `absorb(INPUT)`.
 
-If `ACELEN` is a multiple of `b`, `absorb()` is executed on each of the `ACELEN/b` blocks in `INPUT`.
---
-+
+  If `ACELEN` is a multiple of 128, `absorb()` is executed on each of the `ACELEN/128` blocks in `INPUT`.
+  --
+  +
 
-** In State _Enc_Tag_Finalize_, an ``ace.exec`` instruction of Form A is expected. Its input value
-+
---
-[none]
-  *** `INPUT <- bin(bit_length(AD), b/2) @ bin(bit_length(plaintext), b/2)`,
---
-+
-is set by the user.
-Then, “```ace.exec```” finalizes the SIV computation by performing:
-+
---
-  . `absorb(INPUT)`.
-  . `tmp <- enc_blk(enc_key, 0 @ (tmp xor N)[b-2:0])`
-  . `SIV <- 0 @ tmp[b-2:0]` and `OUTPUT <- SIV`,
---
-+
+  ** In State _Enc_Tag_Finalize_, an ``ace.exec`` instruction of Form A is expected. Its input value
+  +
+  --
+  [none]
+    *** `INPUT <- bin(bit_length(AD), 64) @ bin(bit_length(plaintext), 64)`,
+  --
+  +
+  is set by the user.
+  Then, “```ace.exec```” finalizes the SIV computation by performing:
+  +
+  --
+    . `absorb(INPUT)`.
+    . `tmp <- enc_blk(enc_key, 0 @ (tmp xor N)[126:0])`
+    . `SIV <- 0 @ tmp[126:0]` and `OUTPUT <- SIV`,
+  --
+  +
 
-If `ACELEN` > `b`, only the `b` least significant bits of `INPUT` are considered.
+  If `ACELEN` > 128, only the 128 least significant bits of `INPUT` are considered.
 
- ** In State _Encrypt_, ``ace.exec`` instructions are expected to be of Form A, namely
-    “```ace.exec OUTPUT, Kn|K{Xn}, INPUT```,” to encrypt `INPUT` into `OUTPUT`
-    as follows:
-+
---
-. If `ctr == 0`, then the CR is *invalidated*.
-   . ``OUTPUT <- INPUT `` +
-      ``{fournbsp}{fournbsp}xor enc_blk(enc_key, 1 @ SIV[b-2:b/4] @ (SIV[b/4-1:0] + ctr % 2^b/4^)),``
-   . `ctr <- ctr + 1`.
---
-+
-If `ACELEN` > `b`, the above operations are applied to each of the `ACELEN/b`
-blocks in `INPUT`.
-
- ** In State _Decrypt_, ``ace.exec`` instructions are expected to be of Form A.
- “```ace.exec OUTPUT, Kn|K{Xn}, INPUT```” decrypts `INPUT` into `OUTPUT` and then absorbs the plaintext `OUTPUT` into the `tmp`:
-+
---
-     . If `ctr == 0`, then the CR is *invalidated*.
+   ** In State _Encrypt_, ``ace.exec`` instructions are expected to be of Form A, namely
+      “```ace.exec OUTPUT, Kn|K{Xn}, INPUT```,” to encrypt `INPUT` into `OUTPUT`
+      as follows:
+  +
+  --
+  . If `ctr == 0`, then the CR is *invalidated*.
      . ``OUTPUT <- INPUT `` +
-          ``{fournbsp}{fournbsp}xor enc_blk(enc_key, 1 @ SIV[b-2:b/4] @ (SIV[b/4-1:0] + ctr % 2^b/4^))``,
-     . `absorb(OUTPUT)`.
+        ``{fournbsp}{fournbsp}xor enc_blk(enc_key, 1 @ SIV[126:32] @ (SIV[31:0] + ctr % 2^32^)),``
      . `ctr <- ctr + 1`.
---
-+
-If `ACELEN` > `b`, the above operations are applied to each of the `ACELEN/b`
-blocks in `INPUT`.
+  --
+  +
+  If `ACELEN` > 128, the above operations are applied to each of the `ACELEN/128`
+  blocks in `INPUT`.
 
- ** In State _Dec_Tag_Finalize_,
-   a single ``ace.exec`` instruction of Form B is expected,
-   namely “```ace.exec Kn|K{Xn}, INPUT```,” where it is the responsibility of the user to set
-+
---
-[none]
-  ***  `INPUT <- bin(bit_length(AD), b/2) @ bin(bit_length(plaintext), b/2)`.
---
-+
-``ace.exec`` then performs the following operations:
-+
---
-  . `absorb(INPUT)` (which modifies `tmp`).
-  . `tmp <- enc_blk(enc_key, 0 @ (tmp xor N)[b-2:0])`.
-  . `tmp <- tmp[n-2:0]`,
-   . If `tmp` and `SIV` match, then
-   ..  `State <- ace_state_success`
-   . else
-   ..  `State <- ace_state_failure`
---
-+
-If `ACELEN` > `b`, only the `b` least significant bits of `INPUT` are considered.
+   ** In State _Decrypt_, ``ace.exec`` instructions are expected to be of Form A.
+   “```ace.exec OUTPUT, Kn|K{Xn}, INPUT```” decrypts `INPUT` into `OUTPUT` and then absorbs the plaintext `OUTPUT` into the `tmp`:
+  +
+  --
+       . If `ctr == 0`, then the CR is *invalidated*.
+       . ``OUTPUT <- INPUT `` +
+            ``{fournbsp}{fournbsp}xor enc_blk(enc_key, 1 @ SIV[126:32] @ (SIV[31:0] + ctr % 2^32^))``,
+       . `absorb(OUTPUT)`.
+       . `ctr <- ctr + 1`.
+  --
+  +
+  If `ACELEN` > 128, the above operations are applied to each of the `ACELEN/128`
+  blocks in `INPUT`.
 
- ** Upon completion of `ace.import`, the ACE unit recomputes `enc_key` and `auth_key`, i.e.:
-  . (`enc_key`, `auth_key`) <- `RFC8452_RFC8452_KeyDeriv(key)`.
+   ** In State _Dec_Tag_Finalize_,
+     a single ``ace.exec`` instruction of Form B is expected,
+     namely “```ace.exec Kn|K{Xn}, INPUT```,” where it is the responsibility of the user to set
+  +
+  --
+  [none]
+    ***  `INPUT <- bin(bit_length(AD), 64) @ bin(bit_length(plaintext), 64)`.
+  --
+  +
+  ``ace.exec`` then performs the following operations:
+  +
+  --
+    . `absorb(INPUT)` (which modifies `tmp`).
+    . `tmp <- enc_blk(enc_key, 0 @ (tmp xor N)[126:0])`.
+    . `tmp <- 0 @ tmp[126:0]`,
+     . If `tmp` and `SIV` match, then
+     ..  `State <- ace_state_success`
+     . else
+     ..  `State <- ace_state_failure`
+  --
+  +
+  If `ACELEN` > 128, only the 128 least significant bits of `INPUT` are considered.
 
-//
+   ** Upon completion of `ace.import`, the ACE unit recomputes `enc_key` and `auth_key`, i.e.:
+    . (`enc_key`, `auth_key`) <- `RFC8452_RFC8452_KeyDeriv(key)`.
 
-Encryption and decryption pseudocode is found in <<ACE-GCM-SIV-mode-examples>>.
+  //
+
+  Encryption and decryption pseudocode is found in <<ACE-GCM-SIV-mode-examples>>.
 
 // ////////////////////////////////////////////////////////////////////
 

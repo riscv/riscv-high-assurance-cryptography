@@ -20,45 +20,40 @@ The threat model is currently **excluded from the built document** (`src/ace.ado
 ### Sealed Cryptographic Context construction
 
 **C1. The SCC import authentication check is inoperative.**
-`src/ace-ISA-unpriv.adoc:2853-2857`. The decryption routine computes `s ← POLYVAL(auth_key, AD @ P, ...)` and `tmp[95:0] ← s[95:0] xor N[95:0]`, then immediately overwrites the result: `tmp ← AESE(enc_key, 0 @ SIV[126:0])`. The candidate tag is therefore a function of the received `SIV` alone, not of the decrypted content, the MDH, or the Locality Secrets. The comparison `tmp != SIV` verifies nothing about the payload (and as written would also reject valid SCCs). Since `ace.mgmt #ace_CR_import_end` is defined by reference to this function, the integrity of every imported context rests on it.
-*Resolution:* compute the tag from `s` — `tmp ← AESE(enc_key, 0 @ tmp[126:0])` — and add RFC 8452 known-answer vectors so the defect cannot recur silently.
+DONE
 
 **C2. Key derivation omits the nonce, so the construction is not AES-GCM-SIV and has no applicable security proof.**
-`src/ace-ISA-unpriv.adoc:2776-2784`. RFC 8452 §4 derives the message-authentication and message-encryption keys from the key-generating key **and the nonce**. `RFC8452_KeyDeriv` takes only `key`, hard-wiring the nonce to zero, so a single `auth_key`/`enc_key` pair is used for every SCC sealed under a given CSK. Per-nonce key separation is the entire reason RFC 8452 uses a derived-key construction; without it the POLYVAL key is reused across an unbounded number of attacker-influenceable messages and a single forgery compromises `auth_key`. Compounding this, the nonce defaults to `zeros(96)` when Locality #11 is absent (`:2881`, `:2911`), so sealing is deterministic by default and the SIV becomes a stable public fingerprint of (key material, MDH) across the whole CSK domain — an equality-test oracle on secret contexts.
-*Resolution:* include `N` in the derivation exactly as RFC 8452 specifies, and require a non-repeating nonce for export rather than defaulting to zero.
+DONE, except that since this mode is nonce-misuse resistant, the nonce can be 0. Intel does the same. In our case the nonce is optional.
 
 **C3. POLYVAL is invoked without RFC 8452's length block.**
-`src/ace-ISA-unpriv.adoc:2798-2808`, `:2829`. RFC 8452 appends a final block encoding `len(AD) || len(plaintext)` before the tag computation. ACE concatenates AD and plaintext blocks with no length encoding and no stated padding rule. Because the AD block count varies with `MDH.Locality` and the plaintext length with the algorithm, the tag is not canonical across different (AD, P) splits — a third independent deviation that breaks interoperability and voids the inherited proof.
-*Resolution:* add the length block and state normatively that SCC sealing is bit-exact RFC 8452 AES-GCM-SIV.
+We do not need this, since the metadata field already encodes the AD and plaintext lengths.
 
 **C4. The import and export algorithms contain errors that make them unimplementable as written.**
-`src/ace-ISA-unpriv.adoc:2867-2919`. In the import algorithm, step `:2913` binds `AES_GCM_SIV_Decrypt`'s `{correct, P[]}` return value to `SIV, C[]` and never consumes `correct` or maps it to `ace_state_CR_import_auth`; step `:2917` calls `AES_GCM_SIV_**Encrypt**` on the implementation-VDS path where it must decrypt (with a stray `§` in the argument list); and step `:2918` ends the *import* by "output[ting] MDH, SIV, Content1[]", which is export behavior. In the export algorithm, `:2885` assigns `AD[0]` twice where `AD[1]` is intended, and `:2884` refers to `_VarDataLen_` where the MDH field is `_ImpDataLen_`. Line `:2851` has an unbalanced parenthesis.
-*Resolution:* rewrite both algorithms against corrected signatures, wire authentication failure to the error state, and add an ACE-specific SCC known-answer test.
+DONE
+
 
 ### Security architecture
 
 **C5. Debug mode may use every resident context by default, and nothing is zeroized on debug entry.**
-`src/ace-ISA-unpriv.adoc:308`. `_UsagePolicy_` is deny-on-set, so an all-zero MDH — the default — *permits* Debug-mode usage. The introduction's non-goal (`src/ace-introduction.adoc:91-92`) only promises that the internal representation stays concealed during debug; it says nothing about executing ACE instructions. A halted hart's debug program buffer can therefore run `ace.exec` against every configured CR, turning each live key into an encryption/decryption/signing oracle — for symmetric primitives, equivalent to holding the key. Debug mode is additionally granted write access to the Locality CSRs (`src/ace-ISA-priv.adoc:330`, `:356`, `:382`).
-*Resolution:* make the Debug-mode policy bit default-deny, and require CRF zeroization on entry to Debug mode unless debug is authenticated.
+DONE, also added questions to ARC.
 
 **C6. SCCs have no anti-replay, so re-import rolls algorithm state back and reuses keystream.**
-`src/ace-ISA-unpriv.adoc:2867-2889`, contrast `:198`. The specification requires the CRF to resist rollback ("the inability for an attacker to roll back the latter to a previous state") but imposes no equivalent requirement on SCCs — which are the normal persistence path and live in memory the threat model explicitly concedes to the attacker (`src/ace-annexes.adoc:96`). An SCC carries no counter, version or freshness field, and sealing is deterministic (C2), so anyone holding an old SCC can re-import it at will. For CTR, XCTR, GCM and OCB contexts this resets the counter/IV under an unchanged key, producing a two-time pad and, for GCM, authentication-key recovery. The note at `:461` acknowledges that state transitions cannot be prevented "since a CR can always be restored from a backup SCC" but never analyzes the consequence for keystream modes.
-*Resolution:* add a monotonic per-CSK or per-CR sealing counter to the authenticated MDH with a hardware-checked freshness rule, or normatively forbid export of keystream-mode contexts and state the residual risk.
+THIS IS KNOWN, and by choice, to avoid over complication.
+Addressed any ambiguity in <<ACE-management-operations>>
+
 
 **C7. Registers are shared across privilege modes while management instructions are not usage-controlled, permitting context substitution.**
-`src/ace-ISA-unpriv.adoc:153`, `:1546`, `:1860`, `:2191`. "CRs are not separated by privilege Mode: when a hart changes Mode, it sees the same set of CRs." `_UsagePolicy_` governs *usage* only — `ace.mgmt` (provision/import/export), `ace.clone` and `ace.clear` are each explicitly "not usage-controlled". A U-mode process can therefore clear any register and import an SCC of its own choosing, with a permissive policy, into the index a higher-privileged mode is about to use. There is no owner tag, no provisioning-mode field, and no way for the higher-privileged mode to distinguish its own context from a substituted one, so any code that leaves a context resident across a privilege transition can be induced to sign or decrypt under an attacker-chosen key. This is the substantive core of the open question at `src/ace-introduction.adoc:127-128`, and it runs in the more dangerous direction than the one that TODO poses.
-*Resolution:* add a hardware-maintained per-CR provenance field (provisioning privilege mode plus active Locality set) checked on every usage operation, or make configuration operations usage-controlled with an explicit rule that a lower mode may not overwrite a higher mode's context.
+This is by design, otherwise we cannot perform context switching.
 
 **C8. Verbatim export of a partially configured register can dump generated or system key material in the clear.**
-`src/ace-ISA-unpriv.adoc:1518-1520`, with `:383` and `:2703`. `ace_CR_export_start` on a register in `_CfgStProvisioning_` sets `_CfgStExporting_` and permits raw readout: "No encryption or authentication occurs, the information in the CR is exported verbatim". Meanwhile key material "is generated randomly upon provisioning" (`:383`) and system-key material "may be copied from the SKS into the CR" (`:2703`) — neither pins materialization to `ace_CR_provision_end`. Under the permitted reading, a caller provisions with the all-ones SKID, starts an export before ending provisioning, and reads the generated or system key out in plaintext, contradicting `:30` ("no store-like instruction to extract the Content of the CR in a manner that compromises its confidentiality").
 *Resolution:* require that random generation and SKS materialization occur only at `ace_CR_provision_end`, and forbid verbatim export of any register holding material the exporting context did not supply.
+ADDRESSED for random values, however, this does not affect System Keys because these are never exposed outside the CR by other rules.
+
 
 ### Privileged architecture
 
 **C9. Write-only secret CSRs are writable by the mode below the one that must manage them, making hypervisor save/restore and VM migration impossible.**
-`src/ace-ISA-priv.adoc:339`, `:343`, `:378`, `:382`. `haceVirtBootScrt` is a WARZ CSR writable in **VS-mode**, and `saceLocality` is writable in (V)S-mode; both read as zero and no trap control is defined. Two consequences follow. First, a hypervisor switching between guests cannot read this per-hart state to save or restore it, directly contradicting `:119` ("[ACES] tracks the dirtiness of the entire ACE state, including CRs, ACEIOBUF, and all ACE-specific CSRs") and undermining the migration story. Second, the Locality table (`src/ace-ISA-unpriv.adoc:667-668`) describes `VirtBootScrt` as "Regenerated by H or higher at each virtual boot of a VM", yet the guest can write it — so a guest can restore a previous boot session's secret, which it knows, and unseal SCCs the hypervisor intended to confine to an earlier boot session or pre-snapshot state, defeating the only boot-freshness mechanism available inside a VM.
-*Resolution:* make these CSRs writable only by the managing mode (HS for `haceVirtBootScrt`, consistent with `maceLocality` being M-only), or mandate a trap mechanism so the managing mode can shadow writes.
-
+Addressed
 ### Instruction definitions
 
 **C10. `ace.mv`'s encoding and description specify opposite data directions.**

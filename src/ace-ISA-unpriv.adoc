@@ -196,7 +196,7 @@ To this purpose, ACE defines:
 CRs reside in a dedicated, per-hart _CR file_ (CRF), a memory accessible only to the ACE implementation.
 (((Context Register File)))
 
-The CRF shall guarantee confidentiality and integrity of its contents, including the inability for an attacker to roll back the latter to a previous state.
+The CRF shall guarantee confidentiality and integrity of its contents, including the inability for an attacker to roll back the latter to a previous state via any access that is not explicitly permitted by the specification.
 We do not require that accesses to this memory are hardened against physical side-channel attacks at the hardware level.
 However, the implementation of side-channel-protected algorithms in the ACE unit shall provide resistance to such attacks as well.
 
@@ -312,7 +312,7 @@ All _Reserved_ bits, as well as bits unused by a given algorithm, must be zero.
 |   [61:46] |  16  | _AuxInfo_         | Currently used only by ML-DSA to encode an auxiliary hashing algorithm. This field has the same format as bits [15:0].
 |   [62:62] |   1  | _Reserved_        | Reserved for future use.
 |   [63:63] |   1  | _SystemFormat_    | Value is 0 if an input is in the ACE architected format 1 if it is in a system-defined Format.
-|   [68:64] |   5  | _UsagePolicy_     | Usage (Control) Policy. Bits 0, 1, 2, 4 and 4 of the field, when set, disallow CC usage in U-mode, (V)S-mode, HS-mode, M-Mode, and Debug mode, respectively. Any bit of this field is ignored if the corresponding mode is not supported or not enabled.
+|   [68:64] |   5  | _UsagePolicy_     | Usage (Control) Policy. Bits 0, 1, 2, and 4 of the field, when set, disallow CC usage in U-mode, (V)S-mode, HS-mode, and M-Mode, respectively. Bit 5 allows use in Debug only if set.  Any bit of this field is ignored if the corresponding mode is not supported or not enabled.
 |   [77:69] |   9  | _Locality_        | Zero, or a value determining one or more Locality Secrets, used in the export/import encryption and decryption algorithm to bind the CR to specific environments. See <<ACE-Localities>>.
 |   [79:78] |   2  | Reserved          | Reserved for expansion of the _Locality_ field.
 |   [95:80] |  16  | _AlgorithmUse_    | Reserved for algorithms and implementations to store additional state information.
@@ -947,6 +947,24 @@ _Included in_::
 |===
 --
 
+[[ACE-interaction-with-debug]]
+=== Interaction with Debug Mode
+
+Debug mode by default is _not_ granted access to any ACE-specific CSRs and cannot execute any ACE instruction.
+
+[NOTE]
+====
+Since ACE uses vectors and this also `vstart`, in theory Debug mode could redirect inputs and outputs of certain ACE configuration instructions.
+This should only lead to authentication errors, not to invalid states. This needs to be double checked.
+====
+
+[WARNING]
+====
+Questions for ARC:
+
+. Require CRF zeroization on entry to Debug mode unless debug is authenticated?
+====
+
 // ////////////////////////////////////////////////////////////////////
 
 [[ACE-instructions-detailed]]
@@ -998,6 +1016,14 @@ Broadly speaking, and removing error handling, *Provisioning* is performed by th
 . Use `ace.mgmt` to prepare a CR to produce a SCC. This includes encrypting its contents and computing the authentication tag(s).
 . Use `ace.store` (<<ACE-instruction-store>>) to store MDH[127:64] and the rest of the SCC to memory.
 . Use `ace.mgmt` to restore the CR in a form available to software.
+
+While the present specification requires the CRF to resist rollback, we are not requiring that the individual CRs also resist rollback via export and import instructions.
+Without hardware policed memory accesses for the SCCs, we cannot prevent an attacker to make re-import a previous state of a CC into a CR.
+For instance, for CTR, XCTR, GCM and OCB contexts this allows the reset of the counter/IV under an unchanged key, producing a two-time pad, but exploiting this requires some control on the software using the corresponding CRs to encrypt the messages, and this usually also gives access to the plaintext.
+
+Furthermore, lower privileged modes are allowed to save, restore, and overwrite CRs configured by higher privileged modes.
+It is the responsibility of the software component in the higher privileged mode to save and clear CRs it uses for its own cryptographic operations before relinquishing control to a lower privileged mode.  When switching to a software component in lower privileged mode, only CRs previously saved when the same lower privileged software component was preempted may be restored, and any unconfigured CR must be erased.  This is in line with common context switching hygiene.
+
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -1408,7 +1434,6 @@ _Included in_::
 We can encode this instruction also by re-using `ace.setst` and with the value of `#immed7` at least 96 (so, add 96 to the values in <<ACE-management-immeds>>).
 ====
 
-
 _Synopsis_::
 Tracks the states of management operations of a CR.
 
@@ -1500,6 +1525,7 @@ GPR pair), or a vector register.
 
 . *`ace.mgmt` is used to terminate an import process.*
 +
+--
 The software must use Form B of `ace.mgmt` to contextually pass the saved value of `ml`.
 
 .. If `ml`._ConfigStatus_ = _CfgStComplete_ (we are importing the export of a fully configured CR)
@@ -1509,8 +1535,11 @@ The software must use Form B of `ace.mgmt` to contextually pass the saved value 
 ...  _ConfigStatus_ is set to _CfgStComplete_.
 .. `ace.start` is set to 0.
 .. If `ml`._ConfigStatus_ {ne} _CfgStComplete_  (we are either importing the export of a not fully configured CR or a nested CR export):
-+
+
 _ConfigStatus_ is set to `ml`._ConfigStatus_.
+
+Note that a process may be preempted during the provisioning of a CR. The configuration of the CR may require random generation of some material which is intended to remain secret. This material must be generated only at this stage (i.e., when `ace.mgmt` is used to terminate an import process), and is replaced by zeros in the internal state before this point.
+--
 
 . *`ace.mgmt` is used to start an export process.*
 +
@@ -2783,13 +2812,13 @@ are defined next. Then, we define AES-GCM-SIV encryption and decryption.
 .RFC8452 Key Derivation
 []
 ----
-function RFC8452_KeyDeriv(key : bits(256))
+function RFC8452_KeyDeriv(key : bits(256), nonce : bits(96))
     → struct{enc_key : bits(256), auth_key : bits(128)} =
 {
   return struct {
-    AESE256(key, (zeros(125) @ 0b101))[63:0] @ AESE256(key, (zeros(125) @ 0b100))[63:0] @
-    AESE256(key, (zeros(125) @ 0b011))[63:0] @ AESE256(key, (zeros(125) @ 0b010))[63:0],
-    AESE256(key, (zeros(125) @ 0b001))[63:0] @ AESE256(key, (zeros(125) @ 0b000))[63:0]
+    AESE256(key, nonce @ bin(4,32))[63:0] @ AESE256(key, (nonce @ bin(5,32))[63:0] @
+    AESE256(key, nonce @ bin(2,32))[63:0] @ AESE256(key, (nonce @ bin(3,32))[63:0],
+    AESE256(key, nonce @ bin(0,32))[63:0] @ AESE256(key, (nonce @ bin(1,32))[63:0]
   }
 }
 ----
@@ -2835,9 +2864,9 @@ function AES_GCM_SIV_Encrypt(AD[] : array of bits(128), N : bits(96),
     P[] : array of bits(128), K : bits(256), len_AD : int, len_PC : int)
   → {SIV : bits(128), C[] : array of bits(128)} =
 {
-  enc_key, auth_key ← RFC8452_KeyDeriv(K);
+  enc_key, auth_key ← RFC8452_KeyDeriv(K,N);
   SIV ← POLYVAL(auth_key, AD @ P, len_AD + len_PC);
-  SIV[95:0] <- SIV[95:0] xor N[95:0];
+  SIV[95:0] <- SIV[95:0] xor N;
   SIV ← AESE(enc_key, 0 @ SIV[126:0]);
 
   foreach(i from 0 to len_PC - 1)
@@ -2855,14 +2884,14 @@ function AES_GCM_SIV_Decrypt(AD[] : array of bits(128), N : bits(96), SIV : bits
     C[] : array of bits(128), K : bits(256), len_AD : int, len_PC : int)
   → {correct : bool, P[] : array of bits(128)} =
 {
-  enc_key, auth_key ← RFC8452_KeyDeriv(K);
+  enc_key, auth_key ← RFC8452_KeyDeriv(K,N);
 
   foreach(i from 0 to len_PC - 1)
-    P[i] ← C[i] xor AESE(enc_key, 1 @ SIV[126:32] @ (SIV[31:0]+bin(i,32) % 2**32);
+    P[i] ← C[i] xor AESE(enc_key, 1 @ SIV[126:32] @ (SIV[31:0]+bin(i,32) % 2**32));
 
   s ← POLYVAL(auth_key, AD @ P, len_AD + len_PC);
-  tmp[95:0] ← s[95:0] xor N[95:0];
-  tmp ← AESE(enc_key, 0 @ SIV[126:0]);
+  tmp[95:0] ← s[95:0] xor N;
+  tmp ← AESE(enc_key, 0 @ tmp[126:0]);
 
   if (tmp != SIV) {
     foreach(i from 0 to len_PC - 1)
@@ -2890,12 +2919,12 @@ to create the serialized, encrypted and authenticated SCC from the CR.
 ... If `MDH`.Locality includes Locality #j, then ``AD[len_AD]`` <-  ``LST[``_j_``]``, ``len_AD`` <- ``len_AD`` + 1
 .. If _Nonce_ (Locality #11) is included, then `N` <- `LST[11]`, else `N` <- `zeros(96)`
 .. `len_PC` <- lengths of Sections 3.a and 3.b combined.
-.. `SIV`, `C[]` <- ``AES_GCM_SIV_Encrypt(AD, N, K``__i__.``Content1[], CSK, len_AD, len_PC)``
-. Second, if _VarDataLen_ {ne} 0, the implementation-dependent data is processed:
-.. `len_AD` <- 2, ``AD[0]`` <- ``K(i)``.``IMPQUAL``, ``AD[0]`` <- `SIV`.
+.. `SIV`, `C[]` <- ``AES_GCM_SIV_Encrypt(AD, N, K(i).Content1[], CSK, len_AD, len_PC)``
+. Second, if _ImpDataLen_ {ne} 0, the implementation-dependent data is processed:
+.. `len_AD` <- 2, ``AD[0]`` <- ``K(i)``.``IMPQUAL``, ``AD[1]`` <- `SIV`.
 .. `len_PC` <- length of Section 6.
-.. `SIV2`, `C2[]` <- ``AES_GCM_SIV_Encrypt(AD, N, K``__i__.``Content2[], CSK, len_AD, len_PC)``
-. Finally, output `MDH`, `SIV`, `Content1[]`, and, if VarDataLen {ne} 0, `IMPQUAL`, `SIV2`, and `Content2[]`.
+.. `SIV2`, `C2[]` <- ``AES_GCM_SIV_Encrypt(AD, N, K(i).Content2[], CSK, len_AD, len_PC)``
+. Finally, output `MDH`, `SIV`, `C[]`, and, if ImpDataLen {ne} 0, `IMPQUAL`, `SIV2`, and `C2[]`.
 --
 
 // ////////////////////////////////////////////////////////////////////
@@ -2916,16 +2945,17 @@ When the import of the SCC of a fully configured CR is completed,
  . If the length exceeds the implementation's maximum for the given Algorithm, the SCC contains an Implementation VDS that the importing implementation does not support. The SCC length is therefore adjusted by excluding the Implementation VDS.
  . Load the rest of the SCC, up to the determined length.
  . ``AD[0]`` <- ``K(i)``.``MDH``, ``len_AD`` <- 1
- . foreach(_j_ from 0 to 10) :
- .. If `MDH`.Locality includes Locality #j, then ``AD[len_AD]`` <-  ``LST[``__j__``]``, ``len_AD`` <- ``len_AD`` + 1
+ . foreach (`j` from 0 to 10):
+ .. If `MDH`.Locality includes Locality #j, then ``AD[len_AD]`` <-  ``LST[j]``, ``len_AD`` <- ``len_AD`` + 1
  . If _Nonce_ (Locality #11) is included, then `N` <- `LST[11]`, else `N` <- `zeros(96)`
  . `len_PC` <- lengths of Section 3.
- . `SIV`, `C[]` <- ``AES_GCM_SIV_Decrypt(AD, N, K``__i__.``Content1[], CSK, len_AD, len_PC)``.
- . Second, if _VarDataLen_ {ne} 0, the Implementation-dependent data is processed:
+ . `correct`, `K(i).Content1[]` <- ``AES_GCM_SIV_Decrypt(AD, N, SIV, K(i).Content1[], CSK, len_AD, len_PC)`` (decrypt in place).
+ . If `correct` {ne} `true`, then reject the SCC, clear ``K(i)``, and raise error _ace_state_CR_import_auth_.
+ . Second, if _ImpDataLen_ {ne} 0, the Implementation-dependent data is processed:
 .. `len_AD` <- 2, ``AD[0]`` <- ``K(i)``.``IMPQUAL``, ``AD[1]`` <- `SIV`.
 .. `len_PC` <- length of Section 6.
-.. `SIV2`, `C2[]` <- ``AES_GCM_SIV_Encrypt(AD, N, K``__i__.``Content2[], CSK, len_AD, len_PC)``
- . Finally, output `MDH`, `SIV`, `Content1[]`, and, if VarDataLen {ne} 0, `IMPQUAL`, `SIV2`, and `Content2[]`.
+.. `correct`, `K(i).Content2[]` <- ``AES_GCM_SIV_Decrypt(AD, N, SIV2, K(i).Content2[], CSK, len_AD, len_PC)`` (decrypt in place).
+ . If `correct` {ne} `true`, then reject the SCC, clear ``K(i)``, and raise error _ace_state_CR_import_auth_.
 --
 
 // ////////////////////////////////////////////////////////////////////
