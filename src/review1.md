@@ -92,7 +92,7 @@ FIXED (I think)
 OOOPS. FIXED
 
 **C19. GCM and GCM-SIV are given the identical length-block formula although the two standards use opposite conventions.**
-`src/ace-ISA-algorithms.adoc:765`, `:804`, `:1057`, `:1106`. Both modes use `INPUT <- bin(bit_length(AD), b/2) @ bin(bit_length(plaintext), b/2)`. SP 800-38D §7.1 specifies `len(A) || len(C)` big-endian; RFC 8452 §4 uses little-endian encodings with the AAD length in the first (least significant) eight bytes. `bin()`'s endianness and the register-to-byte-string mapping are undefined, so under any single fixed convention at least one mode fails its own test vectors.
+ADDED BIG ENDIANNESS CONDITIONS TO GCM
 *Resolution:* define `bin()` and the byte-order mapping normatively, with mode-specific layouts.
 
 **C20. OCB's offset schedule is not RFC 7253's.**
