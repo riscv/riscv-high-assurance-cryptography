@@ -675,24 +675,24 @@ Beside `len`, `block`, and `state`, which are fixed for the duration of the hash
  “`ace.exec Kn|K{Xn}, INPUT`”, processes the data block `INPUT` as follows.
 +
 --
-  . If `len != 0` and `cumul_len >= len`, an invalid instruction exception is raised.
-  . If starting an ``ace.exec`` instruction, then `input_base <- 0`
-  . If resuming an ``ace.exec`` instruction, then `input_base <- acestart`.
-  . While `(input_base < ACELEN)` do
-  .. `amount <- min(ACELEN - input_base, b - block_base, len - cumul_len)`.
-  .. if `block != state` then
-     * ``block[block_base + amount - 1 : block_base] <- INPUT[input_base + amount - 1 : input_base]``.
-  .. else
-     *  XOR ``INPUT[input_base + amount - 1 : input_base]`` to ``state[block_base + amount - 1 : block_base]``.
-  .. `input_base <- input_base + amount`.
-  .. `block_base <- block_base + amount`.
-  .. If (`block_base` == `b`) then
-  ... `process_block()`.
-  ... `block_base <- 0`.
-  .. If `len` != 0 and `cumul_len == len` then
-  ... `finalize()`.
-  ... The instruction is terminated in any case and `input_base <- 0`.
-  .. *Here* the instruction may be interrupted, with `acestart <- input_base`.
+. If `len != 0` and `cumul_len >= len`, an invalid instruction exception is raised.
+. If starting an ``ace.exec`` instruction, then `input_base <- 0`
+. If resuming an ``ace.exec`` instruction, then `input_base <- acestart`.
+. While `(input_base < ACELEN)` do
+.. `amount <- min(ACELEN - input_base, b - block_base, len - cumul_len)`.
+.. if `block != state` then:
+ ... ``block[block_base + amount - 1 : block_base] <- INPUT[input_base + amount - 1 : input_base]``.
+.. else:
+ ...  XOR ``INPUT[input_base + amount - 1 : input_base]`` to ``state[block_base + amount - 1 : block_base]``.
+.. `input_base <- input_base + amount`.
+.. `block_base <- block_base + amount`.
+.. If (`block_base` == `b`) then:
+ ... `process_block()`.
+ ... `block_base <- 0`.
+.. If `len` != 0 and `cumul_len == len` then:
+ ... `finalize()`.
+ ... The instruction is terminated, even if `input_base < ACELEN`.
+.. *Here* the instruction may be interrupted, with `acestart <- input_base`.
 --
 +
 
@@ -714,8 +714,8 @@ The definition will be updated to support other block sizes if required by SDOs.
 Parameters:::
 
 * `k` = key size (128|`k`).
-* `b`= 128 = block size. For this algorithm, `ACELEN` must be an integer multiple of `b`.
-* `c` = 32 - counter size (8|`b`).
+* `b` = 128 = block size in bits. For this algorithm, `ACELEN` must be an integer multiple of `b`.
+* `c` = 32 = counter size in bits.
 
 Data Structures:::
 
@@ -752,7 +752,7 @@ The latter may be necessary if the implementation of Subalgorithm _ACE-process-V
 |  Pos. | Size (Bits)   | Field       | Description
 |   i   | 128           |  MDH        | {empty}
 |  ii   | `k` or 64     | `key`       | Key value or System Key Identifier
-| iii   | 128           | `J0`        | NOTE: Big-endian as in the AES-GCM spec.
+| iii   | 128           | `J0`        | Big-endian as in the AES-GCM spec.
 |  iv   | 128           | `tag`       | {empty}
 |   v   | 32            | `start_ctr` | The 32 least significant bits of the initial value of `J0`. If this value is reached again, an error is returned. It is also used to generate the tag mask. Big-endian as in the AES-GCM spec.
 |  vi   | 32 or 96`     | Padding     | {empty}
@@ -818,7 +818,7 @@ Besides _Initial_, _Success_, and _Failure_, the GCM Mode algorithms make use of
       i.e., `len <- INPUT` and   `INPUT` must be at most 8192 bits. Upon entering the state, `J0` is cleared: `J0 <- zeros(b)`.
 
   ** In State _Set_Aux_Value_, we enter Subalgorithm _process_VLI_ (cf. <<ACE-process-VLI>>) as: +
-  `process_VLI(_Set_Aux_Value_, 8192, block=J0, outout=J0, input_base, block_base, cumul_len, None, inject(), process_block(), finalize())`, where
+  `process_VLI(_Set_Aux_Value_, 8192, block=J0, outout=J0, input_base, block_base, cumul_len, process_block(), finalize(), granularity=b)`, where
    *** `inject(data)` XORs data in place: +
    ``output[block_base + amount - 1 : block_base] <-`` +
    ``{fournbsp}{fournbsp}output[block_base + amount - 1 : block_base] XOR data``, +
@@ -834,8 +834,7 @@ Besides _Initial_, _Success_, and _Failure_, the GCM Mode algorithms make use of
     . `start_ctr <- J0[31:0]`
     . Transitions to state _Hash_Absorb_.
 
- ** In State _Hash_Absorb_, ``ace.exec`` instructions of Form B is expected, whereby
- ``ace.exec Kn|K{Xn}, INPUT`` absorbs a data block in `tag`, i.e.:
+ ** In State _Hash_Absorb_, ``ace.exec`` instructions of Form B is expected, whereby ``ace.exec Kn|K{Xn}, INPUT`` absorbs a data block in `tag`, i.e.:
 +
 --
  . `absorb(INPUT)`.
@@ -954,7 +953,7 @@ Data Structures:::
 |   i   | 128           |  MDH        | {empty}
 |  ii   | `k` or 64     | `key`       | Key value or System Key Identifier
 | iii   | 128           | `J0`        | {empty}
-|  iv   | 0 or 64       | Padding      | {empty}
+|  iv   | 0 or 64       | Padding     | {empty}
 |===
 --
 
@@ -1072,30 +1071,30 @@ Algorithm-Specific Functions:::
 --
 Besides _Initial_, _Success_, and _Failure_, the GCM-SIV algorithms make use of the following states:
 
-  ** _Set_Aux_Value_: Set the value of `nonce`.
-  ** _Hash_Absorb_: Set the SIV and process AD and, if encrypting, also the plaintext into the partial tag (this is accumulated in the state variable `tmp`).
-  ** _Encrypt_: Encrypt the plaintext.
-  ** _Enc_Tag_Finalize_: Finalize the SIV with the AD and PT lengths, prepare to return its value.
-  ** _Decrypt_: Absorb the ciphertext into the partial tag and decrypt it.
-  ** _Dec_Tag_Finalize_: Finalize the tag with the AD and CT lengths, then compare it against the `SIV`.
+ ** _Set_Aux_Value_: Set the value of `nonce`.
+ ** _Hash_Absorb_: Set the SIV and process AD and, if encrypting, also the plaintext into the partial tag (this is accumulated in the state variable `tmp`).
+ ** _Encrypt_: Encrypt the plaintext.
+ ** _Enc_Tag_Finalize_: Finalize the SIV with the AD and PT lengths, prepare to return its value.
+ ** _Decrypt_: Absorb the ciphertext into the partial tag and decrypt it.
+ ** _Dec_Tag_Finalize_: Finalize the tag with the AD and CT lengths, then compare it against the `SIV`.
 --
 
 * *Allowed State Transitions:*
-  ** _Initial_ -> _Set_Aux_Value_.
-  ** _Set_Aux_Value_ -> _Set_Aux_Value_2_ or _Hash_Absorb_.
-  ** For encryption: _Hash_Absorb_ -> _Enc_Tag_Finalize_ -> _Encrypt_.
-  ** For decryption: _Hash_Absorb_ -> _Decrypt_ -> _Dec_Tag_Finalize_ -> _Success_ or _Failure_. (Note that after _Hash_Absorb_, the encryption and decryption branches of the state machine do not have common states.)
-  ** Transition to _Encrypt_ possible only if encryption is allowed.
-  ** Transition to _Decrypt_ possible only if decryption is allowed.
+ ** _Initial_ -> _Set_Aux_Value_.
+ ** _Set_Aux_Value_ -> _Set_Aux_Value_2_ or _Hash_Absorb_.
+ ** For encryption: _Hash_Absorb_ -> _Enc_Tag_Finalize_ -> _Encrypt_.
+ ** For decryption: _Hash_Absorb_ -> _Decrypt_ -> _Dec_Tag_Finalize_ -> _Success_ or _Failure_. (Note that after _Hash_Absorb_, the encryption and decryption branches of the state machine do not have common states.)
+ ** Transition to _Encrypt_ possible only if encryption is allowed.
+ ** Transition to _Decrypt_ possible only if decryption is allowed.
 
 * *Behavior:*
-  ** In State _Initial_ :
-   *** Upon entering the state, the following initialization operations are performed:
-    . `nonce`, `ctr`, `tmp`, `SIV <- 0`.
-   *** No ``ace.exec`` operation is allowed.
+ ** In State _Initial_ :
+  *** Upon entering the state, the following initialization operations are performed:
+   . `nonce`, `ctr`, `tmp`, `SIV <- 0`.
+  *** No ``ace.exec`` operation is allowed.
 
-  ** To enter state _Set_Aux_Value_, a Form C `ace.setst Kn|K{Xn}, #ace_state_set_aux_value, INPUT`  must be issued.
-     Then, the following operations are performed:
+ ** To enter state _Set_Aux_Value_, a Form C `ace.setst Kn|K{Xn}, #ace_state_set_aux_value, INPUT`  must be issued.
+    Then, the following operations are performed:
 +
 --
    . `nonce` <- `INPUT[95:0]`
@@ -1104,8 +1103,8 @@ Besides _Initial_, _Success_, and _Failure_, the GCM-SIV algorithms make use of 
 +
 If the instruction is repeated, there is no harm, since it just overwrites the `nonce` and recomputes `enc_key` and `auth_key` before any other operation is performed.
 
-  ** To enter state _Set_Aux_Value_2_, a Form C `ace.setst Kn|K{Xn}, #ace_state_set_aux_value_2, INPUT` must be issued.
-     Then:
+ ** To enter state _Set_Aux_Value_2_, a Form C `ace.setst Kn|K{Xn}, #ace_state_set_aux_value_2, INPUT` must be issued.
+    Then:
 +
 --
    . `SIV` <- `INPUT`
@@ -1164,10 +1163,10 @@ blocks in `INPUT`.
    Issuing “``ace.exec OUTPUT, Kn|K{Xn}, INPUT``” decrypts `INPUT` into `OUTPUT` and then absorbs the plaintext `OUTPUT` into the `tmp`:
 +
 --
-  . If `ctr == ones(32)`, then the CR is *invalidated*.
-  . ``OUTPUT <- INPUT xor enc_blk(enc_key, 1 @ SIV[126:32] @ (SIV[31:0] + ctr % 2^32^))``,
-  . `absorb(OUTPUT)`.
-  . `ctr <- ctr + 1`.
+. If `ctr == ones(32)`, then the CR is *invalidated*.
+. ``OUTPUT <- INPUT xor enc_blk(enc_key, 1 @ SIV[126:32] @ (SIV[31:0] + ctr % 2^32^))``,
+. `absorb(OUTPUT)`.
+. `ctr <- ctr + 1`.
 --
 +
 If `ACELEN` > 128, the above operations are applied to each of the `ACELEN/128`
@@ -1207,20 +1206,12 @@ Encryption and decryption pseudocode is found in <<ACE-GCM-SIV-mode-examples>>.
 [[ACE-OCB-mode]]
 ==== OCB Mode
 
-We only architect the OCB3 variant of OCB as specified in RFC{nbsp}7253
-cite:[RFC7253] and cite:[DBLP-journals-joc-KrovetzR21]. While this algorithm is
-asymptotically more efficient than GCM and GCM-SIV, it has a much heavier setup
-and its exported state requires significantly more memory than the other modes.
-On the other hand, since it uses only a single key and no derived keys, with
-ciphers with an expensive key expansion like the AES it may use fewer internal
-resources.
+We only architect the OCB3 variant of OCB as specified in RFC{nbsp}7253 cite:[RFC7253] and cite:[DBLP-journals-joc-KrovetzR21].
+While this algorithm is asymptotically more efficient than GCM and GCM-SIV, it has a much heavier setup and its exported state requires significantly more memory than the other modes.
+On the other hand, since it uses only a single key and no derived keys, with ciphers with an expensive key expansion like the AES it may use fewer internal resources.
 
-The state machine of this algorithm closely follows RFC{nbsp}7253 (except for
-the numbering of the bit fields, which is big endian in the RFC). The algorithm
-is identical to the RFC for 128-bit-wide block ciphers, with a straightforward
-generalization to other widths according to the security proof of the original
-algorithm and a lower bound on nonce length following
-cite:[cryptoeprint-2023-326].
+The state machine of this algorithm closely follows RFC{nbsp}7253 (except for the numbering of the bit fields, which is big endian in the RFC).
+The algorithm is identical to the RFC for 128-bit-wide block ciphers, with a straightforward generalization to other widths according to the security proof of the original algorithm and a lower bound on nonce length following cite:[cryptoeprint-2023-326].
 
 Parameters:::
 +
@@ -1737,11 +1728,9 @@ State Machine:::
   *** `state`: the initial value is set as specified by the algorithm.
   *** Any `ace.exec` will result in the CR being *invalidated*.
 
- ** In State _Hash_Absorb_, we enter Subalgorithm _process_VLI_ (cf. <<ACE-process-VLI>>) as: +
-`process_VLI(_Hash_Absorb_, max_length, block, state, input_base, block_base, cumul_len, None, inject(), absorb(), finalize())`, +
-where `max_length` is the algorithm-defined maximum length of the data to be absorbed, and possibly call +
-`process_VLI(_Hash_Absorb_, len, block, state, input_base, block_base, cumul_len, None, inject(), absorb_last_block(), finalize())` +
-where `len` is the length of the last block to be absorbed, in case such processing is needed.
+ ** In State _Hash_Absorb_, we enter Subalgorithm _process_VLI_ (cf. <<ACE-process-VLI>>) as:
+`process_VLI(_Hash_Absorb_, max_length, block, state, input_base, block_base, cumul_len, absorb(), finalize(), SEW)`,
+where `max_length` is the algorithm-defined maximum length of the data to be absorbed.
 // +
 // --
 //   . `input_base <- 0` // or `acestart` upon resumption
@@ -1780,20 +1769,20 @@ where `len` is the length of the last block to be absorbed, in case such process
 +
 Then, state transitions to _Hash_Absorb_Last_Block_ as expected.
 
- ** State _Hash_Absorb_Last_Block_ is very similar to _Hash_Absorb_, the differences
-    being:
-  *** `last_block_len` is used in place of `b` throughout.
-  *** `absorb_last_block()` is called instead of `absorb()` in Step 3.d.i.
-  *** The instruction is terminated after `absorb_last_block()`—only one block
-      is absorbed—and the state transitions to _Hash_Output_.
+** State _Hash_Absorb_Last_Block_ is very similar to _Hash_Absorb_, the differences
+   being:
+ *** `last_block_len` is used in place of `b` throughout.
+ *** `absorb_last_block()` is called instead of `absorb()` in Step 3.d.i.
+ *** The instruction is terminated after `absorb_last_block()`—only one block
+     is absorbed—and the state transitions to _Hash_Output_.
 
- ** In State _Hash_Output_, the cases where the current function is a hash
-    function or a XOF behave differently.
-  *** Upon entering the state, the following operations are first performed:
-  . `block[t - 1 : 0] <- finalize()`
-  . `block_base <- 0`
- *** For each Form C `ace.exec` instruction “`ace.exec OUTPUT, Kn|K{Xn}`”, the
-     following operations are performed:
+** In State _Hash_Output_, the cases where the current function is a hash
+   function or a XOF behave differently.
+ *** Upon entering the state, the following operations are first performed:
+ . `block[t - 1 : 0] <- finalize()`
+ . `block_base <- 0`
+*** For each Form C `ace.exec` instruction “`ace.exec OUTPUT, Kn|K{Xn}`”, the
+    following operations are performed:
 +
 --
     * `amount : int`, `{nbsp}` amount of data to copy from `block` to `OUTPUT`
