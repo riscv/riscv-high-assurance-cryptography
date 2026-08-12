@@ -66,7 +66,9 @@ ADDRESSED
 ### Cross-book contradictions
 
 **C12. HMAC and KMAC have extensions and algorithm encodings but no definition, and Book 2 denies they are needed.**
-`src/ace-ISA-unpriv.adoc:108-109` allocates `Zlhmacm`/`Zlkmacm` with "Defined in: TBD"; `src/ace-ISA-algorithms.adoc:59-64`, `:72-77` allocate ten `*_HMAC` and two KMAC algorithm codes gated on those extensions; and the only HMAC section, `:1748-1752`, states "Hash function acceleration is sufficient to compute HMACs, and no dedicated algorithms are needed for either performance or security reasons." The extension name is *HMAC with hidden key* — but computing HMAC in software over a plain hash context requires `K ⊕ ipad`/`K ⊕ opad` in user memory, which defeats the hidden key. KMAC is worse: no cSHAKE domain separation, no `bytepad(encode_string(K), rate)`, no `right_encode(L)`, no state machine (SP 800-185).
+HMAX FIXED
+KMAC, need to think.
+KMAC is worse: no cSHAKE domain separation, no `bytepad(encode_string(K), rate)`, no `right_encode(L)`, no state machine (SP 800-185).
 *Resolution:* either specify the keyed constructions inside the context (absorbing ipad/opad internally) or remove the extensions and encodings and reword the HMAC section.
 
 **C13. Book 1 restricts the block-cipher modes to AES; Book 2 defines them for SM4.**

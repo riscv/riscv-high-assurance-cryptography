@@ -53,10 +53,10 @@ The actual numbers are TBD.
 |Value | Mnemonic/RISC-V type           | Examples (((ACE, error codes)))
 |      | Instruction address misaligned | {empty}
 |      | Instruction access fault       | {empty}
-|      | Load address misaligned        | For `ace.prov`, `ace.import`, and `ace.input`
-|      | Load access fault              | For `ace.prov`, `ace.import`, and `ace.input`
-|      | Store address misaligned       | For `ace.export` and `ace.output`
-|      | Store access fault             | For `ace.export` and `ace.output`
+|      | Load address misaligned        | For `ace.load` and `ace.input`
+|      | Load access fault              | For `ace.load` and `ace.input`
+|      | Store address misaligned       | For `ace.store` and `ace.output`
+|      | Store access fault             | For `ace.store` and `ace.output`
 |      | Instruction page fault         | {empty}
 |      | Load page fault                | {empty}
 |      | Store page fault               | {empty}
@@ -106,6 +106,16 @@ ACE extends `*status` and `misa`, and provides up to 3 direct and up to 28 indir
 Bit `L` (11) of `misa` indicates that the ACE extension is present.
 If ACE is implemented, this bit shall not be read-only zero.
 
+[WARNING]
+====
+This allocation is provisional and has not been agreed with the RISC-V Architecture
+Review Committee. Presence of ACE may instead be discovered by other mechanisms, in
+particular the unified discovery mechanism, which is the direction RISC-V has taken for
+recent extensions and which does not consume a `misa` bit; bit `L` (11) may also be
+allocated to another extension. Implementers should expect this subsection to change, and
+should not treat `misa.L` as a stable interface until the question is settled.
+====
+
 // ////////////////////////////////////////////////////////////////////
 
 [[ACE-ACES-field-in-mstatus]]
@@ -119,6 +129,17 @@ ACES is defined analogously to the floating-point context status field FS and th
 It tracks the dirtiness of the entire ACE state, including CRs, ACEIOBUF, and all ACE-specific CSRs.
 If ACE is implemented, ACES shall not be read-only zero.
 Encodings are given in <<ACE-aces-encoding>>.
+
+[WARNING]
+====
+The choice of `mstatus`[26:25], and of the corresponding bits of `sstatus` and
+`vsstatus`, is provisional and has not been agreed with the RISC-V Architecture Review
+Committee. Those bit positions are contested by other extensions, and ACES may end up at a
+different offset, in a different register, or be carried by a mechanism other than a
+`*status` context-status field. Nothing in this specification depends on the particular
+offset: only on there being a two-bit context-status field with the semantics of
+<<ACE-aces-encoding>>, defined analogously to `FS` and `VS`.
+====
 
 [[ACE-aces-encoding]]
 .Encoding of the ACES field
@@ -229,14 +250,14 @@ NOTE: `sstatus.ACES` is also in effect.
 
 {empty}
 (((CSR, `vscrstatus`)))
-The 64-bit register `scrstatus` tracks per-CR status, including dirtiness, for virtualized contexts.
+The 64-bit register `vscrstatus` tracks per-CR status, including dirtiness, for virtualized contexts.
 
 `vscrstatus` exists only when the H extension is implemented.
 
-`vscrstatus`(__i__) = `scrstatus`[2{interpunct}__i__+1:2{interpunct}__i__] is a two-bit field that
+`vscrstatus`(__i__) = `vscrstatus`[2{interpunct}__i__+1:2{interpunct}__i__] is a two-bit field that
 encodes four statuses for ``K(``__i__``)``, as in <<ACE-crstatus-encoding>>.
 
-On RV32, 32-bit CSRs `scrstatush` shadows bits [63:32] of `scrstatus`, allowing these bits to be accessed.
+On RV32, 32-bit CSR `vscrstatush` shadows bits [63:32] of `vscrstatus`, allowing these bits to be accessed.
 
 When the privilege mode is VS or VU:
 
@@ -308,15 +329,15 @@ A write to the __i__-th CSR sets bits [(_i_+1)·XLEN−1 : _i_·XLEN] of the CSK
 
 Access outside M-mode raises an illegal instruction exception.
 
-A CSK can only become active if all either or four CSRs have been written to.
+A CSK can only become active if all eight, respectively four, CSRs have been written to.
 A mechanism for ensuring this is the following:
 
 * The implementation must maintain a per-hart set of flags indicating which CSRs in the group have been written to.
 * These flags are initially unset.
 * When M-Mode firmware writes to a CSR in the `macecsk` group, the implementation must set the corresponding flag, and keep a copy of the value written so far. Reading the register will still return the old value.
-* Once all flags have been set, the values written by M-mode firmware are activated and replace the old values atomically. The new CSK can now be used for cryptographic operations.
+* Once all flags have been set, the values written by M-mode firmware are activated and replace the old values atomically, and the flags are cleared. The new CSK can now be used for cryptographic operations.
 * Any mode change to M-mode will reset the flags.
-* If any of the flags are set, the ACE unit is not available and any attempt to execute any ACE instruction will raise an illegal instruction exception.
+* While any of the flags is set, that is while a CSK is partially written, the ACE unit is not available and any attempt to execute an ACE instruction raises an illegal instruction exception. Because activation clears the flags, the unit becomes available again as soon as the group has been written in full.
 
 // ////////////////////////////////////////////////////////////////////
 
