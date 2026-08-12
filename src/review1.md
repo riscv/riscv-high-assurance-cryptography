@@ -101,29 +101,23 @@ FIXED
 FIXED
 
 
-**C22. Ascon absorbs associated data with the permutation on the wrong side.**
-`src/ace-ISA-algorithms.adoc:1969-1974`. ACE performs `ASCON(8)` and *then* XORs the AD block into `state[0]`/`state[1]`. SP 800-232 Algorithm 3 (Eqs. 20–21) XORs each AD block — including the padded last one — into the state and *then* applies `p[8]`. ACE therefore inserts a spurious permutation before the first AD block and, critically, provides none between the last AD block and the first plaintext block, so both are XORed into the same unpermuted state. Output is incompatible with SP 800-232 whenever AD is non-empty.
-*Resolution:* absorb as XOR-then-permute, matching the pattern already used correctly in `_Encrypt_`.
+**C22.  absorbs associated data with the permutation on the wrong side.**
+FIXED
 
 **C23. Ascon's domain-separation bit is applied to the wrong bit of the state word.**
-`src/ace-ISA-algorithms.adoc:1980`. ACE specifies `lsb(state[4]) <- lsb(state[4]) xor 1`. SP 800-232 Eq. (22) is `S <- S xor (0³¹⁹ || 1)`, and Appendix A states that bit 319 is `s(4,63)` — the *most* significant bit of the 64-bit word `S4` under the standard's convention. ACE flips state bit 256 instead, giving an incompatible cipher.
-*Resolution:* change to `msb(state[4])`.
+FIXED
 
 **C24. Ascon decryption swaps the halves of its output relative to encryption.**
-`src/ace-ISA-algorithms.adoc:2034`, versus `:1988` and `:2052`. `_Encrypt_` outputs `state[1] @ state[0]` and `_Dec_Last_Block_` follows the same order, but `_Decrypt_` emits `(state[0] xor INPUT[63:0]) @ (state[1] xor INPUT[127:64])`, placing the `state[0]` half in the most significant position. Decrypted plaintext comes out with its 64-bit halves transposed.
-*Resolution:* reorder line 2034 to match.
+FIXED
 
 **C25. Ascon cannot decrypt standard length-preserving ciphertexts.**
-`src/ace-ISA-algorithms.adoc:2045-2057`. `_Dec_Last_Block_` replaces the entire 128-bit rate with caller-supplied input (`state[0] <- INPUT[63:0]`, `state[1] <- INPUT[127:64]`). SP 800-232 Algorithm 4 replaces only the first `|C̃n|` bits for a final partial block and XORs the padding bit at position `|C̃n|`, with `|C| = |P|`. Under ACE's rule the caller must supply a full final block whose remaining bits are secret state it cannot know, so decryption of valid Ascon ciphertext is impossible. The `last_blk_len` field needed to fix this already exists in the internal state but is never used.
-*Resolution:* use `last_blk_len` to replace only that many bits and XOR the `0x01` padding bit internally.
+FIXED
 
 **C26. Ascon-Hash256 applies one permutation too many before the first output block.**
-`src/ace-ISA-algorithms.adoc:2235-2249`. Absorption permutes after every block including the final padded one, and `_Hash_Finalize_` then permutes again before extracting `state[0]` — two `p[12]` between the final XOR and `H0`, where SP 800-232 Algorithm 5 has exactly one. Every digest is shifted by a permutation, and the error propagates to Ascon-XOF128 and CXOF128, which inherit the state machine.
-*Resolution:* extract before permuting in `_Hash_Finalize_`, or omit the permutation on the final absorbed block.
+FIXED
 
 **C27. Ascon-XOF128's IV is Ascon-Hash256's IV.**
-`src/ace-ISA-algorithms.adoc:2278` gives `0x0000080100cc0002`, which SP 800-232 §5.2 assigns to Ascon-Hash256; XOF128's IV is `0x0000080000cc0003`. The CXOF section at `:2292-2293` confirms the copy-paste, since it describes CXOF's IV as replacing "`0x0000080000cc0003`". As written, Ascon-XOF128 computes an unbounded-output Ascon-Hash256.
-*Resolution:* correct the IV to `0x0000080000cc0003`.
+FIXED
 
 **C28. ML-KEM provides no way to input a ciphertext, so peer ciphertexts cannot be decapsulated.**
 `src/ace-ISA-algorithms.adoc:2659-2668`, `:2696`. The state list has `_encapsk_Input_` and `_decapsk_Input_` but only `_ciphertext_Output_` — no `_ciphertext_Input_`. `_Decapsulate_` operates on "the content of the `ciphertext` state field", which can only be populated by a prior `_Encapsulate_` on the same register. The primary KEM use case, decapsulating a ciphertext received from a peer (FIPS 203), is unimplementable.
