@@ -113,12 +113,10 @@ Parameters:::
 --
 These include:
 
-* The _block size_ `b`, which is the bit length of the basic unit of information
-  processed by the algorithm, usually the block size of the main underlying
-  primitive;
+* The _block size_ `b`, which is the bit length of the basic unit of information processed by the algorithm, usually the block size of the main underlying primitive;
 * The _key size_ `k`, also in bits, for keyed algorithms; and
-* Any other parameter needed to instantiate the algorithm with compatible
-  primitives.
+* Any other parameter needed to instantiate the algorithm with compatible primitives.
+* We also include the granularity, which is usually the same as `b`. There may always be an exception for “last blocks”, for instance of AD or plaintext/ciphertext sections, which may be shorter than `b`. If the length of such “last blocks” is set explicitly and the length of the next input is larger than this length, the input will be automatically truncated, i.e., sufficiently many most significant bits are ignored to ensure the passed input is of the expected size.
 --
 +
 
@@ -263,8 +261,9 @@ ECB mode cite:[nist-SP-800-38A-1] is the simplest way to use a block cipher.
 
 Parameters:::
 
-* `b` = bit length of a block (8|`b`). `ACELEN` must be a multiple of `b` (including `b`).
+* `b` = bit length of a block (8|`b`).
 * `k` = bit length of a key (8|`k`).
+* Granularity: `b`.
 
 Data Structures:::
 * *Provisioning Input*:
@@ -335,33 +334,25 @@ encrypt a block of data.
 [[ACE-chaining]]
 ==== Chaining/Feedback Modes
 
-There is no need to explicitly architect the behavior of chaining modes, such
-as Cipher Block Chaining (CBC), Cipher Feedback (CFB) and Output Feedback
-(OFB)–all defined in cite:[nist-SP-800-38A-1]–as they are easily implemented in
-software on top of the ECB, with no intermediate value requiring
-confidentiality.
+There is no need to explicitly architect the behavior of chaining modes, such as Cipher Block Chaining (CBC), Cipher Feedback (CFB) and Output Feedback (OFB)–all defined in cite:[nist-SP-800-38A-1]–as they are easily implemented in software on top of the ECB, with no intermediate value requiring confidentiality.
 
 // ////////////////////////////////////////////////////////////////////
 
 [[ACE-keystream-modes]]
 ==== CTR/LFSR/XCTR/XLFSR Keystream Generation
 
-In the “non-X” modes, i.e., CTR mode and its analog with an LFSR replacing the
-arithmetic counter, the sum of the lengths of IV and counter/LFSR equals the
-block size of the underlying keyed PRP or PRF. IV and counter/LFSR are
-concatenated to form the input to the latter.
+In the “non-X” modes, i.e., CTR mode and its analog with an LFSR replacing the arithmetic counter, the sum of the lengths of IV and counter/LFSR equals the block size of the underlying keyed PRP or PRF. IV and counter/LFSR are concatenated to form the input to the latter.
 (((ACE, algorithm, keystream generation)))
 
-In the “X” modes, both IV and counter/LFSR have the same size as the block size
-of the underlying keyed PRP or PRF. IV and counter/LFSR are ``xor``ed together
-to form the input to the keyed PRP or PRF.
+In the “X” modes, both IV and counter/LFSR have the same size as the block size of the underlying keyed PRP or PRF. IV and counter/LFSR are ``xor``ed together to form the input to the keyed PRP or PRF.
 
 Parameters:::
-* `b` = block size (8|`b`). For this algorithm `ACELEN` must be a multiple of `b`.
+* `b` = block size (8|`b`).
 * `k` = key size (8|`k`).
 * `j` = counter size (8|`j`).
 * `n` = IV size (8|`n`).
 * If the mode is CTR or LFSR, it is `b = n + j`, else it is `b = n = j`.
+* Granularity: `b`.
 
 Data Structures:::
 * *Provisioning Input*:
@@ -441,36 +432,23 @@ Example pseudocode is given in <<ACE-pseudocode-keystream-modes>> (for the case
 [[ACE-XEX-XTS-modes]]
 ==== XEX/XTS modes (one or two keys)
 
-The XTS mode was designed for storage confidentiality
-cite:[DBLP-journals-ieeesp-Martin10] and made into a Recommendation by NIST in
-2010 cite:[nist-SP-800-38E]. XTS is based on the XEX construction, formalized
-by Phillip Rogaway cite:[DBLP-conf-asiacrypt-Rogaway04], to design _Tweakable
-Block Ciphers_ cite:[DBLP-conf-crypto-LiskovRW02]. A Tweakable Block Cipher
-(TBC) is a block cipher which, besides the key and the plaintext or ciphertext,
-also takes a tweak as input. The tweak is used together with the key to select
-the permutation computed by the block cipher.
+The XTS mode was designed for storage confidentiality cite:[DBLP-journals-ieeesp-Martin10] and made into a Recommendation by NIST in 2010 cite:[nist-SP-800-38E]. XTS is based on the XEX construction, formalized by Phillip Rogaway cite:[DBLP-conf-asiacrypt-Rogaway04], to design _Tweakable Block Ciphers_ cite:[DBLP-conf-crypto-LiskovRW02]. A Tweakable Block Cipher (TBC) is a block cipher which, besides the key and the plaintext or ciphertext, also takes a tweak as input. The tweak is used together with the key to select the permutation computed by the block cipher.
 
-The XEX construction builds a TBC `Ẽ` from a block cipher `E`, with key `K`,
-tweak `T`, and plaintext `P`,  as follows: +
+The XEX construction builds a TBC `Ẽ` from a block cipher `E`, with key `K`, tweak `T`, and plaintext `P`,  as follows: +
  +
 `{fournbsp}{fournbsp}`
 `Ẽ(K, T, P) = E(K, P xor M) xor M` `{nbsp}{nbsp}` where `{nbsp}{nbsp}` `M = E(K, T)` `{nbsp}{nbsp}` is called a _mask_. +
  +
-In XEX mode, once a mask is computed, it is then updated by using a Galois
-Multiplication for any successive block instead of updating the tweak and
-encrypting it again.
+In XEX mode, once a mask is computed, it is then updated by using a Galois Multiplication for any successive block instead of updating the tweak and encrypting it again.
 
-The NIST standard uses two different keys, one for the data encryption path and
-one for the encryption of the tweak. The use of a single key or two
-independently sampled keys is determined by the algorithm, and it is not a
-configuration parameter for the algorithm. We first define XEX mode
-functionality.
+The NIST standard uses two different keys, one for the data encryption path and one for the encryption of the tweak. The use of a single key or two independently sampled keys is determined by the algorithm, and it is not a configuration parameter for the algorithm. We first define XEX mode functionality.
 (((ACE, algorithm, XEX)))
 
 Parameters:::
 
-* `b` = block size (8|`b`). For this algorithm, `ACELEN` must be an integer multiple of `b`.
+* `b` = block size (8|`b`).
 * `k` = key size (8|`k`).
+* Granularity: `b`.
 
 Data Structures:::
 
@@ -569,6 +547,7 @@ Parameters:::
 * `b` = block size (8|`b`). For this algorithm, `ACELEN` must be an integer multiple of `b`.
 * `k` = key size (8|`k`).
 * `t` = tweak size (8|`k`).
+* Granularity: `ACELEN` must be a multiple of `b` (including `b`).
 
 Data Structures:::
 
@@ -578,8 +557,8 @@ Data Structures:::
 [%autowidth,cols="^1,<2,<3",options="header"]
 |===
 | Pos. | Size (Bits)   | Field
-|   i  | 128            | MDH
-|  ii  | `k` or 64       | `key` or System Key Identifier
+|   i  | 128           | MDH
+|  ii  | `k` or 64     | `key` or System Key Identifier
 |===
 --
 
@@ -631,6 +610,8 @@ Common examples include hash functions and the generation of internal, fixed-len
 This processing occurs in a specific state—for example, _Hash_Absorb_, as defined by each algorithm.
 We refer to this state as _Current_State_ in this section, and describe the behavior of such states in algorithms that implement them.
 
+The Procedure must follow the granularity of the caller Algorithm. This implies that in some cases the inner loop and the computation of `amount` may be simplified in obvious ways.
+
 This functionality is used in an Algorithm:
 
 ```
@@ -642,8 +623,7 @@ process_VLI(len,
             state_offset,
             cumul_len,
             process_block(),
-            finalize(),
-            granularity=None).
+            finalize()).
 ```
 where:
  * `len` is the total length of the data to be absorbed in bits. If not defined by the caller or by the Algorithm, `len` is zero for the purpose of defining  this procedure.
@@ -655,7 +635,6 @@ where:
  * `cumul_len` is the cumulative length of the data absorbed so far by the procedure.
  * `process_block()` is a function that processes the current block into `state`.
  * `finalize()` is a function that finalizes the processing of the input data. It may have to complete the current block according to rules defined in the Algorithm as part of the finalization.
- * `granularity` is the granularity of inputs: the input must be provided by units of size `granularity` bits.
 
 In case the caller Algorithm needs to process the last block separately, the caller may invoke this procedure twice with the length of the last block as the `len` parameter and a different `process_block()` function.
 
@@ -717,6 +696,7 @@ Parameters:::
 * `k` = key size (128|`k`).
 * `b` = 128 = block size in bits. For this algorithm, `ACELEN` must be an integer multiple of `b`.
 * `c` = 32 = counter size in bits.
+* Granularity: `b`.
 
 Data Structures:::
 
@@ -1518,8 +1498,9 @@ Recommendation in May 2005 cite:[nist-SP-800-38B].
 
 Parameters:::
 
-* `b` = block size (8|`b`).  For this algorithm, `ACELEN` must be an integer multiple of `b`.
+* `b` = block size of the underlying block cipher.
 * `k` = key size (8|`k`).
+* Granularity = `b`.
 
 Data Structures:::
 
@@ -1546,10 +1527,10 @@ Data Structures:::
 [%autowidth,cols="^1,<2,<3",options="header"]
 |===
 |  Pos. | Size (Bits)   | Field
-|   i   | 128            | MDH
-|    i  | `k` or 64     | `key` or System Key Identifier
-|   ii  | `b`           | `hash`
-|  iii  | 64            | `last_block_len`
+|    i  | 128            | MDH
+|   ii  | `k` or 64     | `key` or System Key Identifier
+|  iii  | `b`           | `hash`
+|   iv  | 64            | `last_block_len`
 |===
 --
 
@@ -1648,6 +1629,7 @@ Parameters:::
 * `k` = key size (8|`k`). Present only if keyed, i.e., a MAC.
 * `state_offset` = offset into the state where the block is to be absorbed.
 * `tag_offset` = offset of the tag into the state (for instance, when squeezing sponges).
+* Granularity: can vary depending on the algorithm. This is usually the full length of a vector or vector group.
 
 Data Structures:::
 
@@ -1792,8 +1774,9 @@ The format for such a HMAC is a simple extension of the standard has function fo
 The description in this section depends on <<ACE-hash-functions>>.
 
 Parameters:::
-* `b` = input block size of the underlying hash function
-* `d` = output block size of the underlying hash function
+* `b` = input block size of the underlying hash function.
+* `d` = output block size of the underlying hash function.
+* Granularity: same as the the underlying hash function.
 
 * *Provisioning Input*:
 +
@@ -1852,9 +1835,10 @@ These are instantiations of the algorithm specified in <<ACE-hash-functions>>, a
 
 Parameters:::
 
-* `b` = rate (8|`b`). It is `b` = 1600 - `c`, where `c` = 448, 512, 768, or 1024 is the capacity.
-* `n` = 1600
+* `b` = rate. It is `b` = 1600 - `c`, where `c` = 448, 512, 768, or 1024 is the capacity.
+* `n` = 1600.
 * `t` = `c/2`
+* Granularity: 32 bits.
 
 Data Structures:::
 
@@ -1948,6 +1932,7 @@ Parameters:::
 
 * `b` = 128. For this algorithm, `ACELEN` must be an integer multiple of `b`.
 * `k` = 128.
+* Granularity: 64 bits.
 
 Data Structures:::
 
