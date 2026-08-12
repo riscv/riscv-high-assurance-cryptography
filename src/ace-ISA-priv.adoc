@@ -308,13 +308,15 @@ A write to the __i__-th CSR sets bits [(_i_+1)·XLEN−1 : _i_·XLEN] of the CSK
 
 Access outside M-mode raises an illegal instruction exception.
 
-[NOTE]
-====
-M-mode firmware must be aware of whether the CSK is configurable, ephemeral, or fixed.
-Persistence mechanisms for configurable CSKs are implementation-specific.
-Transferring a CSK to another endpoint—such as the M-mode firmware of another device, a local TPM (for instance to preserve a CSK upon suspension or host hibernation), or a cloud-based HSM—requires an authenticated public-key key-wrapping mechanism.
-Alternative reconfiguration mechanisms (e.g., Caliptra cite:[caliptra]) are permitted.
-====
+A CSK can only become active if all either or four CSRs have been written to.
+A mechanism for ensuring this is the following:
+
+* The implementation must maintain a per-hart set of flags indicating which CSRs in the group have been written to.
+* These flags are initially unset.
+* When M-Mode firmware writes to a CSR in the `macecsk` group, the implementation must set the corresponding flag, and keep a copy of the value written so far. Reading the register will still return the old value.
+* Once all flags have been set, the values written by M-mode firmware are activated and replace the old values atomically. The new CSK can now be used for cryptographic operations.
+* Any mode change to M-mode will reset the flags.
+* If any of the flags are set, the ACE unit is not available and any attempt to execute any ACE instruction will raise an illegal instruction exception.
 
 // ////////////////////////////////////////////////////////////////////
 
