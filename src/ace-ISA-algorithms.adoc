@@ -246,8 +246,8 @@ Start and initialize a hash function of the tag/MAC part of an algorithm and sta
 |  10   |  `ace_state_dec_last_block`       | _Dec_Last_Block_    | For the decryption path of authenticated encryption modes of operation to process the last block separately.
 |  11   |  `ace_state_enc_tag_finalize`     | _Enc_Tag_Finalize_  | Finalize the tag computation for AE mode encryption.
 |  12   |  `ace_state_dec_tag_finalize`     | _Dec_Tag_Finalize_  | Finalize internal tag computation for AE mode decryption, verify the value.
-|  13   |  `ace_state_set_aux_value`        | _Set_Aux_Value_     | Set a public/auxiliary value in an algorithm.
-|  14   |  `ace_state_set_aux_value_2`      | _Set_Aux_Value_2_   | Set a second public/auxiliary value in an algorithm.
+|  13   |  `ace_state_Set_Aux_Value`        | _Set_Aux_Value_     | Set a public/auxiliary value in an algorithm.
+|  14   |  `ace_state_Set_Aux_Value_2`      | _Set_Aux_Value_2_   | Set a second public/auxiliary value in an algorithm.
 |===
 
 // NOTE: The `ace.setst` instruction used to transition to states _Hash_Absorb_, _Encrypt_, or _Decrypt_ often also sets a public value.
@@ -707,9 +707,7 @@ Beside `len`, `block`, and `state`, which are fixed for the duration of the hash
 [[ACE-GCM-mode]]
 ==== GCM Mode
 
-The GCM mode was designed by David McGrew and John Viega
-cite:[DBLP-conf-indocrypt-McGrewV04] and was made into a NIST Recommendation in
-2007 cite:[nist-SP-800-38D].
+The GCM mode was designed by David McGrew and John Viega cite:[DBLP-conf-indocrypt-McGrewV04] and was made into a NIST Recommendation in 2007 cite:[nist-SP-800-38D].
 Currently this is defined only for 128-bit wide block ciphers.
 The definition will be updated to support other block sizes if required by SDOs.
 (((ACE, algorithm, GCM)))
@@ -1092,7 +1090,7 @@ Besides _Initial_, _Success_, and _Failure_, the GCM-SIV algorithms make use of 
    . `nonce`, `ctr`, `tmp`, `SIV <- 0`.
   *** No ``ace.exec`` operation is allowed.
 
- ** To enter state _Set_Aux_Value_, a Form C `ace.setst Kn|K{Xn}, #ace_state_set_aux_value, INPUT`  must be issued.
+ ** To enter state _Set_Aux_Value_, a Form C `ace.setst Kn|K{Xn}, #ace_state_Set_Aux_Value, INPUT`  must be issued.
     Then, the following operations are performed:
 +
 --
@@ -1102,7 +1100,7 @@ Besides _Initial_, _Success_, and _Failure_, the GCM-SIV algorithms make use of 
 +
 If the instruction is repeated, there is no harm, since it just overwrites the `nonce` and recomputes `enc_key` and `auth_key` before any other operation is performed.
 
- ** To enter state _Set_Aux_Value_2_, a Form C `ace.setst Kn|K{Xn}, #ace_state_set_aux_value_2, INPUT` must be issued.
+ ** To enter state _Set_Aux_Value_2_, a Form C `ace.setst Kn|K{Xn}, #ace_state_Set_Aux_Value_2, INPUT` must be issued.
     Then:
 +
 --
@@ -1205,22 +1203,24 @@ Encryption and decryption pseudocode is found in <<ACE-GCM-SIV-mode-examples>>.
 [[ACE-OCB-mode]]
 ==== OCB Mode
 
-We only architect the OCB3 variant of OCB as specified in RFC{nbsp}7253 cite:[RFC7253] and cite:[DBLP-journals-joc-KrovetzR21].
-While this algorithm is asymptotically more efficient than GCM and GCM-SIV, it has a much heavier setup and its exported state requires significantly more memory than the other modes.
-On the other hand, since it uses only a single key and no derived keys, with ciphers with an expensive key expansion like the AES it may use fewer internal resources.
+We architect only the OCB3 variant of OCB, as specified in RFC{nbsp}7253 cite:[RFC7253] and cite:[DBLP-journals-joc-KrovetzR21].
+The state machine closely follows RFC{nbsp}7253, with two differences: we use little-endian bit numbering instead of big-endian, and zero-based indexing instead of one-based.
+This specification defines OCB only for block ciphers with 128-bit blocks.
+Future generalization to other widths is straightforward, supported by the security proof of the original algorithm and a lower bound on nonce length from cite:[cryptoeprint-2023-326].
 
-The state machine of this algorithm closely follows RFC{nbsp}7253 (except for the numbering of the bit fields, which is big endian in the RFC).
-The algorithm is identical to the RFC for 128-bit-wide block ciphers, with a straightforward generalization to other widths according to the security proof of the original algorithm and a lower bound on nonce length following cite:[cryptoeprint-2023-326].
+While OCB is asymptotically more efficient than GCM and GCM-SIV, it requires more complex setup and exports larger state than other modes.
+However, OCB uses a single key and requires no key derivation, which may reduce internal resource usage for ciphers with expensive key expansion, such as AES.
 
 Parameters:::
 +
 --
-* `b` = block size. `b` is a power of two, and {ge} 64. For OCB, `ACELEN` must
-  be an integer multiple of `b`.
-* `k` = key size, `b`|`k`.
+* `b` = 128 = block size, assumed to be a power of 2. `ACELEN` must be an integer multiple of `b`.
+* `k` = key size. Currently, it can only be 128, 192, or 256.
+* `MAX_BLOCKS` = maximum number of blocks in the AD or in the plaintext.
 --
 +
-Also, define `g` = `log_2(b)`.
+Furthermore, we define `g` = `log_2(b)`, i.e., currently, `g` = 7.
+The variable `u` denotes the nonce length. Currently, it must be at most `b - g - 1`, i.e., 120.
 
 Data Structures:::
 
@@ -1231,7 +1231,7 @@ Data Structures:::
 |===
 | Pos. | Size (Bits)   | Field
 |   i  | 128            | MDH
-|  ii  | `k` or 64       | `key` or System Key Identifier
+|  ii  | `k` or 64      | `key` or System Key Identifier
 |===
 --
 
@@ -1239,26 +1239,36 @@ Data Structures:::
  ** Metadata Header.
  ** `key`: `k` bits.
  ** `N`: `u+1` bits (at most `u` bits are used).
- ** `L`, `offset`, `hash_A`, `hash_P` : `b` bits.
- ** `N_len`, `tag_len`, `last_blk_len`: `g` bits.
+ ** `L`, `L~0~`, `offset`, `hash_A`, `checksum_P` : 128 bits.
+ ** `offset_index`: int
+ ** `N_len`: 7 (`g`) bits. Bit length of the nonce.
+ ** `tag_len`: 8 (`g` + 1) bits. Bit length of the tag. Currently, the allowed values ads 64, 96, and 128.
+ ** `last_blk_len`: `g` bits. Length of the last block of AD or plaintext/ciphertext in bits. It is between 0 and 127 (`b` - 1).
+ ** `index`: int, corresponding to `i` in the loops in RFC{nbsp}7253.
+ **  `L~i~`: array of 128 bit values, with `i` up to `floor(log_2(MAX_BLOCKS))`.
+ **  `AD_finalized`: bool. `true` if the AD has been finalized.
+ **  `text_finalized`: bool. `true` if the plaintext/ciphertext has been finalized.
 
 * *Serialized Context*:
 +
 --
 [%autowidth,cols="^1,<2,<3",options="header"]
 |===
-|  Pos. | Size (Bits)            | Field
-|    i  | 128                    | MDH
-|   ii  | `k` or 64              | `key` or System Key Identifier
-|  iii  |  `b`                   | `N`
-|   iv  |  `b`                   | `L` (only `u+1` bits used)
-|    v  |  `b`                   | `offset`
-|   vi  |  `b`                   | `hash_A`
-|  vii  |  `b`                   | `hash_P`
-| viii  |   16                   | `tag_len`
-|   ix  |   16                   | `last_blk_len`
-|    x  |   16                   | `N_len`
-|   xi  |   16 or 80             | Padding
+|  Pos. | Size (Bits) | Field
+|    i  | 128         | MDH
+|   ii  | `k` or 64   | `key` or System Key Identifier
+|  iii  | 128 (`b`)   | `N`
+|   iv  | 128 (`b`)   | `L` (only `u+1` bits used)
+|    v  | 128 (`b`)   | `offset` (current offset)
+|   vi  | 128 (`b`)   | `hash_A`
+|  vii  | 128 (`b`)   | `checksum_P` (used also for the final tag)
+| viii  | 32          | `index`
+|   ix  | 16          | `tag_len`
+|    x  | 16          | `last_blk_len`
+|   xi  | 16          | `N_len`
+|   xii | 1           | `AD_finalized`
+|  xiii | 1           | `text_finalized`
+|  xiv  | (variable)  | Padding to a multiple of 128 bits.
 |===
 --
 
@@ -1268,11 +1278,14 @@ Algorithm-Specific Functions:::
 
 * `enc_blk(K,p) -> c` encrypts block `p` using the key `K` and returns the result `c`.
 * `dec_blk(K,c) -> p` decrypts block `c` using the key `K` and returns the result `p`.
+* `ntz(n)` = The number of trailing zero bits in the base-2 representation of the positive integer n.
+Formally, `ntz(n)` is the largest integer `x` for which `2^x^` divides `n`.
 * `double(S)`:
-Let `C` be  `0x1B` for `b` = 64, `0x87` for `b` = 128, and `0x425` for `b` = 256, then:
 +
 [none]
-** If S[`b`-1] == 0, then { `double(S) <- S << 1` } else { `double(S) <- (S << 1) xor C` } .
+** If S[127] == 0, then { `double(S) <- S << 1` } else { `double(S) <- (S << 1) xor (zeros(120) @  0b10000111)`. }.
+
+//
 
 State Machine:::
 * *States:*
@@ -1280,121 +1293,118 @@ State Machine:::
 --
 Besides _Initial_, _Success_, and _Failure_, the OCB Mode algorithms make use of the following states:
 
- ** _set_aux_value:_ Set the length and the value of the nonce.
+ ** _Set_Aux_Value_: Set the length and the value of the nonce.
  ** _Hash_Absorb_: Set the tag length, and process the AD.
- ** _Hash_Finalize_: Set the length of the final block of the AD and process
-    it.
- ** _Encrypt_: Process the plaintext by absorbing it into the tag and
-    encrypting it.
+ ** _Hash_Absorb_Last_Block_: Set the length of the final block (mandatory, can be zero) of the AD and process it.
+ ** _Encrypt_: Process the plaintext by absorbing it into the tag and encrypting it.
  ** _Enc_Last_Block_: Provide the last block of the plaintext, then process it.
  ** _Enc_Tag_Finalize_: Return the tag.
- ** _Decrypt_: Process the ciphertext by decrypting it and absorbing the
-    plaintext into the tag.
- ** _Dec_Last_Block_: Provide the last block of the ciphertext, then process
-    it.
- ** _Hash_Verify_: Compare a user-provided value with the internally computed
-    tag.
+ ** _Decrypt_: Process the ciphertext by decrypting it and absorbing the plaintext into the tag.
+ ** _Dec_Last_Block_: Provide the last block of the ciphertext, then process it.
+ ** _Hash_Verify_: Compare a user-provided value with the internally computed tag.
 --
 
 * *Allowed State Transitions:*
- ** _Initial_ -> _Set_Aux_Value_ -> _Hash_Absorb_ -> _Hash_Finalize_
- ** _Hash_Finalize_ -> _Encrypt_, if encryption is allowed.
- ** _Hash_Finalize_ -> _Decrypt_, if decryption is allowed.
+ ** _Initial_ -> _Set_Aux_Value_ -> _Hash_Absorb_ -> _Hash_Absorb_Last_Block_
+ ** _Hash_Absorb_Last_Block_ -> _Encrypt_, if encryption is allowed.
+ ** _Hash_Absorb_Last_Block_ -> _Decrypt_, if decryption is allowed.
  ** _Encrypt_ -> _Enc_Last_Block_ -> _Enc_Tag_Finalize_ -> _Success_.
  ** _Decrypt_ -> _Dec_Last_Block_ -> _Hash_Verify_ -> _Success_ or _Failure_.
 
 * *Behavior:*
+** In general, the Algorithm needs to make frequent use of the following values
++
+--
+  . `L* = enc_blk(K, zeros(128))`
+  . `L$ = double(L*)`
+  . `L[0] = double(L$)`
+  . `L[i] = double(L[i-1])`, computed (possibly lazily) for all `i`  with `0 < 1 < floor(log_2(MAX_BLOCKS))`.
+
+These values can be precomputed and stored in the implementation specific data section upon SCC export and retrieved upon SCC import, or recomputed upon SCC import. The latter option is likely to be faster.
+--
+
 ** In State _Initial_ :
   *** No ``ace.exec`` operation is allowed.
   *** The following initialization operations are performed:
-   . `N <- 1 @ zeros(u)`.
-   . `hash_A <- zeros(b)`
-   . `hash_P <- zeros(b)`
+   . `N <- 1 @ zeros(120)`.
+   . `hash_A <- zeros(128)`
+   . `checksum_P <- zeros(128)`
 
-** To move to _Set_Aux_Value_, a Form B `ace.setst` is expected, where the
-   auxiliary argument `Xs` sets the nonce length `N_len`. `N_len` must be at
-   least `g-1`. If not, the CR transitions to Error State `ace_state_invalid`.
+** To move to _Set_Aux_Value_, a Form B `ace.setst` is expected, where the auxiliary argument `Xs` sets the nonce length `N_len`. `N_len` must be at least `g-1`. If not, the CR transitions to Error State `ace_state_invalid`.
 
 ** In State _Set_Aux_Value_, ``ace.exec`` instructions are expected to be of Form B, namely
-   “```ace.exec Kn|K{Xn}, INPUT```”, whereby `N` is set to
+   “``ace.exec Kn|K{Xn}, INPUT``”, whereby `N` is set to
    `INPUT`, namely `N <- zeros(u-N_len) @ INPUT[N_len-1:0]`
   *** If “```ace.exec Kn|K{Xn}, INPUT```,” is repeated, it will rewrite `N`.
   *** If no such `ace.exec` is issued, `N` is not changed, which means that its
       most significant bit is 1. This condition results in an error when
       transitioning to State _Hash_Absorb_.
 
-** To move to _Hash_Absorb_, a Form B `ace.setst` instruction is expected, where the
-   auxiliary argument `Xs` sets the tag length `tag_len`.
-  *** If this argument (interpreted as an unsigned value) is larger than `b` or
-      is equal to `0` (the latter occurs also if `X0` is passed as the
-      auxiliary argument), and the CR is invalidated.
+** To move to _Hash_Absorb_, a Form B `ace.setst` instruction is expected, where the auxiliary argument `Xs` sets the tag length `tag_len`.
+  *** If this argument (interpreted as an unsigned value) is larger than `b` or is equal to `0` (the latter occurs also if `X0` is passed as the auxiliary argument), and the CR is invalidated.
   *** If `N[u] == 1`, this means that `N` was not set in State _Set_Aux_Value_.
-      Nonce setting cannot be skipped, as this mode is not secure under nonce
-      reuse, therefore in this case the CR is invalidated.
+      Nonce setting cannot be skipped, as this mode is not secure under nonce reuse, therefore in this case the CR is invalidated.
   *** Following operations are performed:
+  . `index <- 1`
   . `tag_len <- Xs`.
-  . `offset <- zeros(b)`
-  . `L <- enc_blk(key, zeros(b))`
-  . `L <- double(double(L))`
+  . `offset <- zeros(b)` --- this is `Offset~0~` in the RFC.
+  . `L* <- enc_blk(key, zeros(b))` --- this is `L~*~` in the RFC.
+  . `L$ <- double(L*)`
+  . `L[0] <- double(L$)`
+  . `L[i] <- double(L[i-1])`, performed lazily for all `i`  with `0 < 1 < floor(log_2(MAX_BLOCKS))`.
 
-** In State _Hash_Absorb_, ``ace.exec`` instructions are expected to be of Form B, whereby
-  “```ace.exec Kn|K{Xn}, INPUT```” absorbs a data block in `tag`, i.e.:
+** In State _Hash_Absorb_, `ace.exec` instructions are expected to be of Form B, whereby “``ace.exec Kn|K{Xn}, INPUT``” absorbs a data block in `tag`, i.e.:
 +
 --
-    . `L <- double(L)`
-    . `offset <- offset xor L`
-    . `hash_A <- hash_A xor enc_blk(key, INPUT xor offset)`
+ . `offset = offset xor L~ntz(index)~`.
+ . `hash_A <- hash_A xor enc_blk(key, INPUT xor offset)`.
+ . `index <- index + 1`.
 --
 +
 If `ACELEN` > `b`, the above operation is executed `ACELEN/b` times.
 
-** To move to _Hash_Finalize_, a Form B `ace.setst` operation is expected, to set the length of the final block of the AD in `last_blk_len`.
+** To move to _Hash_Absorb_Last_Block_, a Form B `ace.setst` operation is expected, to set the length of the final block of the AD in `last_blk_len`.
 
-** In State _Hash_Finalize_, only a single `ace.exec` instruction of Form B is
-   expected if `last_blk_len` != `0`. “```ace.exec Kn|K{Xn}, INPUT```” which
-   absorbs the last data block in `tag`, i.e.:
+** In State _Hash_Absorb_Last_Block_, only a single `ace.exec` instruction of Form B may be executed if `last_blk_len` != `0`. “```ace.exec Kn|K{Xn}, INPUT```” which absorbs the last data block in `tag`, i.e.:
 +
 --
   * `tmp : bits(b)`
 
 []
-  . `offset <- offset xor enc_blk(key, zeros(b))`
-  . `tmp <- (zeros(b-last_blk_len-1) @ 1 @ INPUT[last_blk_len-1:0]) xor offset`
-  . `hash_A <- hash_A xor enc_blk(K, tmp)`
+  . if `last_blk_len` != `0`, then:
+  .. `offset <- offset xor L*`
+  .. `tmp <- (zeros(b-last_blk_len-1) @ 1 @ INPUT[last_blk_len-1:0]) xor offset`
+  .. `hash_A <- hash_A xor enc_blk(K, tmp)`
 --
 +
-If `last_blk_len` == 0, however, no `ace.exec` can be executed, and only an
-`ace.setst` instruction is allowed to enter State _Encrypt_ or _Decrypt_.
+If `last_blk_len` == 0, however, no `ace.exec` can be executed, and only an `ace.setst` instruction is allowed to enter State _Encrypt_ or _Decrypt_.
 
-** Upon entering states `_Encrypt_` or `_Decrypt_`, the “setup” and “init”
-   stages of the OCB algorithm are performed:
+** Upon entering states `_Encrypt_` or `_Decrypt_`, the “setup” and “init” stages of the OCB algorithm are performed:
 +
 --
  * `N_ext : bits(b)` (`N_ext` means “N, extended”)
- * `Stretch : bits(3b/2)`
- * `bot : bits(g-1)`
- * `Ktop : bits(b)`
+ * `Stretch : bits(96)`
+ * `bot : bits(6)`
+ * `Ktop : bits(128)`
 
 []
- . `offset <- zeros(b)`
- . `L <- enc_blk(key, zeros(b))`
- . `L <- double(double(L))`
- . `N_ext <- N[N_len-1:0] @ 1 @ zeros(b-g-1-N_len) @ bin(tag_len,g)`
- . `bottom <- int(N_ext[b-1:b-g+1])`  // Rogaway numbers the bits in the opposite order.
- . `Ktop <- enc_blk(key, zeros(g-1) @ N_ext[b-g:0])`
- . `Stretch <- (Ktop[b/2-1:0] xor Ktop[b/2+7:8]) @ Ktop`
+ . `offset`, `L*`, `L$` are defined as when entering State _Hash_Absorb_.
+ . `N_ext <- N[N_len-1:0] @ 1 @ zeros(128-N_len) @ bin(tag_len,7)`
+ . `bottom <- int(N_ext[127:120])`  // Rogaway numbers the bits in the opposite order.
+ . `Ktop <- enc_blk(key, zeros(6) @ N_ext[121:0])`
+ . `Stretch <- (Ktop[63:0] xor Ktop[71:8]) @ Ktop`
+ . `index <- 1`
  . `offset <- Stretch[b+bottom:bottom]`
 --
 +
-** In State _Encrypt_, ``ace.exec`` instructions are expected to be of Form A:
-   “```ace.exec OUTPUT, Kn|K{Xn}, INPUT```” absorbs the plaintext `INPUT` into
-   the `tag` and encrypts `INPUT` into `OUTPUT`, namely:
+** In State _Encrypt_, `ace.exec` instructions are expected to be of Form A:
+“``ace.exec OUTPUT, Kn|K{Xn}, INPUT``” absorbs the plaintext `INPUT` into the `tag` and encrypts `INPUT` into `OUTPUT`, namely:
 +
 --
- . `L <- double(L)`
- . `offset <- offset xor L`
- . `hash_P <- hash_P xor INPUT`
+ . `offset = offset xor L~ntz(index)~`.
+ . `checksum_P <- checksum_P xor INPUT`
  . `OUTPUT <- offset xor enc_blk(key, INPUT xor offset)`
+ . `index <- index + 1`.
 --
 +
 If `ACELEN > b`, the above operation sequence is executed `ACELEN/b` times,
@@ -1411,38 +1421,28 @@ In State _Enc_Last_Block_, if `last_blk_len` is nonzero a single ``ace.exec`` in
    “```ace.exec OUTPUT, Kn|K{Xn}, INPUT``` is expected.
 In this case, following operations are performed:
 
- * `tmp : bits(last_blk_len)`
- * `tmp2 : bits(b)`
- * `aux : bits(b)`
+ * `tmp : bits(b)`
 
 []
- . `aux <- enc_blk(key, zeros(b))`
- . `offset <- offset xor aux`
- . `tmp <- enc_blk(key, offset)[last_blk_len-1:0]`
- . `tmp <- INPUT[last_blk_len-1:0] xor tmp`
- . `OUTPUT <- zeros(b-last_blk_len) @ tmp`
- . `tmp2 <- (zeros(b-last_blk_len-1) @ 1 @ tmp) xor offset`
- . `aux <- double(aux)`
- . `hash_P <- enc_blk(key, hash_P xor tmp2 xor offset xor aux) xor hash_A`
+ . `offset <- offset xor L*`
+ . `tmp[last_blk_len-1:0] <- enc_blk(key, offset)[last_blk_len-1:0]` // PAD in RFC{nbsp}7253
+ . `OUTPUT <- zeros(128-last_blk_len) @ (INPUT[last_blk_len-1:0] xor tmp[last_blk_len-1:0])`
+ . `tmp <- offset xor (zeros(127-last_blk_len) @ 1 @ tmp[last_blk_len-1:0])`
+ . `checksum_P <- enc_blk(key, checksum_P xor tmp xor L$) xor hash_A` // tag
 --
 +
 On the other hand, if `last_blk_len` is zero, only an ``ace.exec`` instruction
 of Form D, “```ace.exec Kn|K{Xn}```,” is expected, which performs:
 +
 --
-* `aux : bits(b)`
-
-[]
-  . `aux <- enc_blk(key, zeros(b))`
-  . `aux <- double(aux)`
-  . `hash_P <- enc_blk(key, hash_P xor offset xor aux) xor hash_A`
+  . `checksum_P <- enc_blk(key, checksum_P xor offset xor L$) xor hash_A`
 --
 +
 In both cases the state then transitions to _Enc_Tag_Finalize_.
 
 ** In State _Enc_Tag_Finalize_, only a single ``ace.exec`` instruction of Form C,
    “```ace.exec OUTPUT,Kn|K{Xn}```,” is expected, which performs `OUTPUT <-
-   zeros(b-tag_len) @ hash_P[tag_len-1:0]`.
+   zeros(b-tag_len) @ checksum_P[tag_len-1:0]`.
 
 ** In State _Decrypt_, ``ace.exec`` instructions are expected to be of Form A.
    Such an ``ace.exec`` decrypts `INPUT` into `OUTPUT`, and absorbs the
@@ -1452,11 +1452,11 @@ In both cases the state then transitions to _Enc_Tag_Finalize_.
   * `tmp : bits(b)`
 
 []
-  . `L <- double(L)`
-  . `offset <- offset xor L`
+  . `offset = offset xor L~ntz(index)~`.
   . `tmp <- offset xor enc_blk(key, INPUT xor offset)`
-  . `hash_P <- hash_P xor tmp`
+  . `checksum_P <- checksum_P xor tmp`
   . `OUTPUT <- tmp`
+  . `index <- index + 1`.
 --
 +
 If `ACELEN` > `b`, the same behavior applies as in State _Encrypt_.
@@ -1465,22 +1465,31 @@ If `ACELEN` > `b`, the same behavior applies as in State _Encrypt_.
    used to also contextually set the bit length of the final block of the
    ciphertext in `last_blk_len`.
 
-** In State _Dec_Last_Block_, only a single ``ace.exec`` instruction of Form A
-   "```ace.exec OUTPUT, Kn|K{Xn}, INPUT```" is expected if `last_blk_len` is
-   nonzero. In this case, the same operations as in State _Enc_Last_Block_ are
-   performed except for Line 6, which is instead
+** {empty}
 +
 --
-[start=6]
-. `tmp2 <- (zeros(b-last_blk_len-1) @ 1 @ INPUT[last_blk_len-1:0]) xor offset`
+In State _Dec_Last_Block_,
+if `last_blk_len` is nonzero.
+only a single ``ace.exec`` instruction of Form A "``ace.exec OUTPUT, Kn|K{Xn}, INPUT``" is expected.
+In this case, following operations are performed:
+
+   * `tmp : bits(b)`
+
+[]
+   . `offset <- offset xor L*`
+   . `tmp[last_blk_len-1:0] <- enc_blk(key, offset)[last_blk_len-1:0]` // PAD in RFC{nbsp}7253
+   . `OUTPUT <- zeros(128-last_blk_len) @ (INPUT[last_blk_len-1:0] xor tmp[last_blk_len-1:0])`
+   . `tmp <- offset xor (zeros(127-last_blk_len) @ 1 @ INPUT[last_blk_len-1:0])`
+   . `checksum_P <- enc_blk(key, checksum_P xor tmp xor L$) xor hash_A` // tag
+   . The state transitions to _Hash_Verify_.
+
+On the other hand, if `last_blk_len` is zero, only an ``ace.exec`` instruction
+of Form D, “```ace.exec Kn|K{Xn}```,” is expected, which performs:
+
+. `checksum_P <- enc_blk(key, checksum_P xor offset xor L$) xor hash_A`
+  . The state transitions to _Hash_Verify_.
 --
 +
-and the state is changed to _Hash_Verify_.
-+
-If `last_blk_len` is zero, only a single ``ace.exec`` instruction of Form D,
-“```ace.exec Kn|K{Xn}```,” is expected, which performs the same operations as in
-State _Enc_Last_Block_, except for the final state transition, which also in
-this case is to _Hash_Verify_.
 
 ** To complete the algorithm in the decryption branch, a Form C ``ace.setst``
    operation is expected, to (confirm the) transition to State _Hash_Verify_

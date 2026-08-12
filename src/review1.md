@@ -41,7 +41,6 @@ DONE, also added questions to ARC.
 THIS IS KNOWN, and by choice, to avoid over complication.
 Addressed any ambiguity in <<ACE-management-operations>>
 
-
 **C7. Registers are shared across privilege modes while management instructions are not usage-controlled, permitting context substitution.**
 This is by design, otherwise we cannot perform context switching.
 
@@ -53,7 +52,7 @@ ADDRESSED for random values, however, this does not affect System Keys because t
 ### Privileged architecture
 
 **C9. Write-only secret CSRs are writable by the mode below the one that must manage them, making hypervisor save/restore and VM migration impossible.**
-Addressed
+ADDRESSED
 ### Instruction definitions
 
 **C10. `ace.mv`'s encoding and description specify opposite data directions.**
@@ -96,12 +95,11 @@ ADDED BIG ENDIANNESS CONDITIONS TO GCM
 *Resolution:* define `bin()` and the byte-order mapping normatively, with mode-specific layouts.
 
 **C20. OCB's offset schedule is not RFC 7253's.**
-`src/ace-ISA-algorithms.adoc:1279-1281`, `:1329-1330`, `:1390-1391`. ACE doubles `L` monotonically per block (`L <- double(L)`, `offset <- offset xor L`). RFC 7253 §4.1–4.2 uses the Gray-code schedule `Offset_i = Offset_{i-1} xor L_{ntz(i)}`. This affects AD hashing and both en/decryption, so ciphertexts and tags are incompatible — despite the claim at `:1145` that the construction is "identical to the RFC for 128-bit-wide block ciphers".
-*Resolution:* implement the `ntz` schedule, or rename the mode as a non-RFC-7253 variant with its own analysis.
+FIXED
 
 **C21. OCB's final-block tag computation deviates from RFC 7253 in two ways.**
-`src/ace-ISA-algorithms.adoc:1356-1361`, `:1410`. The value padded into the checksum is the *ciphertext* `C_*`, not the plaintext RFC 7253 §4.2 requires (`Checksum_* = Checksum_m xor (P_* || 1 || 0*)`), on both the encrypt and decrypt paths. And `tmp2` already includes `xor offset` while the tag line XORs `offset` again, cancelling `Offset_*` out of the final cipher input — contrast the full-block case at `:1371-1373`, where the offset correctly survives.
-*Resolution:* pad the plaintext into the checksum and remove one of the two `xor offset` terms.
+FIXED
+
 
 **C22. Ascon absorbs associated data with the permutation on the wrong side.**
 `src/ace-ISA-algorithms.adoc:1969-1974`. ACE performs `ASCON(8)` and *then* XORs the AD block into `state[0]`/`state[1]`. SP 800-232 Algorithm 3 (Eqs. 20–21) XORs each AD block — including the padded last one — into the state and *then* applies `p[8]`. ACE therefore inserts a spurious permutation before the first AD block and, critically, provides none between the last AD block and the first plaintext block, so both are XORed into the same unpermuted state. Output is incompatible with SP 800-232 whenever AD is non-empty.
