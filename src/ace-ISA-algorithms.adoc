@@ -1709,7 +1709,7 @@ State Machine:::
   *** Any `ace.exec` will result in the CR being *invalidated*.
 
  ** In State _Hash_Absorb_, we enter Subalgorithm _process_VLI_ (cf. <<ACE-process-VLI>>) as:
-`process_VLI(max_length, block, b, state, n, input_base, block_base, state_offset, cumul_len, absorb(), finalize(), SEW)`,
+`process_VLI(max_length, block, b, state, n, input_base, block_base, state_offset, cumul_len, absorb(), finalize())`,
 where `max_length` is the algorithm-defined maximum length of the data to be absorbed, and `state_offset` is algorithm-defined.
 
  ** Upon issuing a Form B “`ace.setst Kn|K{Xn}, #ace_state_hash_last_block,
@@ -1790,9 +1790,15 @@ Parameters:::
 
 * *Internal State*:
  ** Metadata Header.
- ** `hash_fn_state`: this is the entire state of the underlying hash function
+ ** `hash_fn_state`: this is the entire state of the underlying hash function.
+     We assume it has fields corresponding to the following ones:
+  *** `state`: `n` bits.
+  *** `last_block_len`: int. Present only if the underlying hash function provides special treatment for a last block that goes beyond padding and appending the length. The latter must be handled by user software instead.
+  *** `input_base`: int. Offset within input/output to read from/write to.
+  *** `block_base`: int. Length of absorbed data so far for the current block. Only if needed by the algorithm.
+  *** `cumul_len`: int. Cumulative length of data absorbed so far (if the algorithm must process and incorporate it in the hash on its own).
+  *** `block`: `b` bits.  Included only if a partial block must be maintained—for instance when the inputs are not directly absorbed into `state`.
  ** `key`: secret key
- ** `outer_hash`: hash of `key xor opad`
 
 * *Serialized Context*:
 +
@@ -1801,11 +1807,11 @@ Parameters:::
 |===
 | Pos. | Size (Bits)             | Field
 |   i  | 128                     | MDH
-|  ii  | variable                | Serialized Content of the underlying hash function, in its entirety
+|  ii  | variable                | Serialized Content of the underlying hash function, in its entirety.
 | iii  | `b`                     | `key`
-|  iv  | `d`                     | `outer_hash`
 |===
 --
+
 State Machine::: {empty}
 +
 --
@@ -1816,7 +1822,17 @@ This Meta-Algorithm inserts one state between _Initial_ and _Hash_Absorb_, calle
  ** From any valid state to State _Initial_.
 
 * *Behavior:*
- ** In State _Set_Key_
+ ** In State _Set_Key_ we enter Subalgorithm _process_VLI_ (cf. <<ACE-process-VLI>>) as:
+ `process_VLI(max_length, block, b, key, b, input_base, block_base, state_offset, cumul_len, absorb(), finalize())`,
+ where `max_length` is the algorithm-defined maximum length of the data to be absorbed, and `state_offset` is algorithm-defined.
+ Note that `block` is `state` is these are not distinct.
+ ** Upon entering _Hash_Absorb_:
+  . `key xor ipad` is computed and absorbed in the underlying hash function.
+  . Then the semantics of the underlying hash function are executed.
+ ** When entering state _Hash_Output_:
+  . If needed, finalize the inner hash `H((key xor ipad)) || message)`.
+  . Assume its values is in `state[b+state_offset-1,state_offset]`.
+  . Compute `H((key xor opad) || state[b+state_offset-1,state_offset])`.
 --
 
 // ////////////////////////////////////////////////////////////////////
