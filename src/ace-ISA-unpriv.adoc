@@ -472,9 +472,25 @@ While an algorithm may want an initial state to be used only once to avoid certa
 Beside error reporting through an Error State, a common example is given by MAC verification: after `ace.setst` is issued with an `ace_state_hash_verify` immediate as the next state and the value to be verified as the additional parameter, the algorithm transitions to either _Success_ or _Failure_. This is done to prevent the manipulation of a CR's state and to reduce code size.
 An `ace.exec` instruction may also trigger a state change.
 
-. Upon transitioning to an Error State, the Content of a CR is invalidated and emptied.
+. Upon transitioning to an Error State, the Content of a CR is invalidated and cleared:
 Internal resources associated with the Content may also be released. In that case, any additional variable-length data is released as well and the _ImpDataLen_ field is set to 0.
 The CR then retains only the MDH.
++
+[NOTE]
+====
+Destroying the CC on failure is deliberate. It prevents further use of the CC while possibly
+in an inconsistent or undesirable state.
+
+An important case is the a failed side-channel protection upgrade
+(dr. <<ACE-instruction-restrict>>).
+A caller that requests a stronger level of side-channel
+protection is asserting that the current level is inadequate for what it is about to do;
+leaving the CC intact at the weaker level would permit exactly the use the request was
+meant to prevent, and would do so silently if the caller did not check for the error.
+
+Software that cannot afford to lose the CC should export it as an SCC before requesting
+the upgrade, and re-import it if the request fails.
+====
 
 . The transitions from _Off_ to any Error State are a result of configuration instructions, whereas the corresponding transitions from these Error States to _Off_ are a result of explicitly clearing the CR.
 
@@ -493,17 +509,6 @@ The CR then retains only the MDH.
 . Any _usage_ instruction that would violate the Usage Control policies will not perform its operation, and will set _State_ to `ace_state_priv_viol` instead.
 
 In <<ACE-states-graph>> we display the default possible state transitions.
-The legend for the graph is:
-
-* The double circled state is the _Off_ State.
-* Valid States have single rounded rectangular borders.
-* Error States have double rounded rectangular borders.
-* The continuous edges represent state transitions induced by both configuration and usage instructions.
-* The dashed edges represent state transitions induced by reaching the expiration date.
-* The dotted edges represent state transitions induced by configuration operations.
-  Completing a provisioning operation can only lead to the _Initial_ state.
-  Completing an import can lead to any state.
-* The round _Configuration_ “hub” simplifies the graph by expressing that any Error State is always reachable—even from another Error State—through configuration operations (or via `ace.setst`).
 
 // //
 [[ACE-states-graph]]
@@ -591,6 +596,18 @@ image::images/statestikz-3.svg[]
 \end{tikzpicture}
 ....
 ////
+
+The legend for the graph is:
+
+* The double circled state is the _Off_ State.
+* Valid States have single rounded rectangular borders.
+* Error States have double rounded rectangular borders.
+* The continuous edges represent state transitions induced by both configuration and usage instructions.
+* The dashed edges represent state transitions induced by reaching the expiration date.
+* The dotted edges represent state transitions induced by configuration operations.
+  Completing a provisioning operation can only lead to the _Initial_ state.
+  Completing an import can lead to any state.
+* The round _Configuration_ “hub” simplifies the graph by expressing that any Error State is always reachable—even from another Error State—through configuration operations (or via `ace.setst`).
 
 The _StateExtension_ field can be used by an Algorithm to store additional state information.
 
@@ -701,7 +718,7 @@ This field is only in effect of extension _Zlexpire_ is supported.
 
 If _Zlexpire_ is supported, the ACE implementation must have access to a secure clock.
 
-If _Zlexpire_ is not supported, the implementation shall reject PIs and SCCs with a non-zero _ExpirationDate_ field.
+If _Zlexpire_ is not supported, the implementation shall reject PIs and SCCs with a non-zero _ExpirationDate_.
 
 If non-zero, the 20-bit _ExpirationDate_ field specifies the CC's expiration time as hours elapsed since the base date of January 1, 2027. The maximum representable time span is approximately 119 years and 7 months.
 
@@ -994,7 +1011,7 @@ This should only lead to authentication errors, not to invalid states. This need
 
 [WARNING]
 ====
-Questions for ARC:
+Question for ARC:
 
 . Require CRF zeroization on entry to Debug mode unless debug is authenticated?
 ====
@@ -1051,12 +1068,9 @@ Broadly speaking, and removing error handling, *Provisioning* is performed by th
 . Use `ace.store` (<<ACE-instruction-store>>) to store MDH[127:64] and the rest of the SCC to memory.
 . Use `ace.mgmt` to restore the CR in a form available to software.
 
-While the present specification requires the CRF to resist rollback, we are not requiring that the individual CRs also resist rollback via export and import instructions.
-Without hardware policed memory accesses for the SCCs, we cannot prevent an attacker to make re-import a previous state of a CC into a CR.
-For instance, for CTR, XCTR, GCM and OCB contexts this allows the reset of the counter/IV under an unchanged key, producing a two-time pad, but exploiting this requires some control on the software using the corresponding CRs to encrypt the messages, and this usually also gives access to the plaintext.
+While the CRF, as a memory, must resist rollback attacks, individual CRs do not inherently resist rollback via export and import operations. Without hardware-enforced memory access controls for SCCs, an attacker could re-import a previous CC state into a CR. For example, with CTR, XCTR, GCM, and OCB contexts, this would allow resetting the counter or IV under an unchanged key, creating a two-time pad vulnerability. However, exploiting this requires control over the software that uses these CRs for encryption, which typically also implies access to plaintext. Furthermore, the ability to re-import a previous CC state into a CR is also a desirable feature, for instance to restart an operation that may have failed because a payload has been corrupted in transit. Adding control over the resumability and a system of policies to address all possible legitimate cases would add excessive complication to the feature.
 
-Furthermore, lower privileged modes are allowed to save, restore, and overwrite CRs configured by higher privileged modes.
-It is the responsibility of the software component in the higher privileged mode to save and clear CRs it uses for its own cryptographic operations before relinquishing control to a lower privileged mode.  When switching to a software component in lower privileged mode, only CRs previously saved when the same lower privileged software component was preempted may be restored, and any unconfigured CR must be erased.  This is in line with common context switching hygiene.
+Additionally, lower-privileged modes may save, restore, or overwrite CRs configured by higher-privileged modes. Higher-privileged software must save and clear any CRs it uses before relinquishing control to lower-privileged modes. When switching to a lower-privileged software component, only CRs previously saved for that same component may be restored, and any unconfigured CRs must be erased. This practice aligns with standard context-switching hygiene.
 
 
 // ////////////////////////////////////////////////////////////////////
@@ -1101,9 +1115,8 @@ If the _ConfigStatus_ field equals _CfgStComplete_, an illegal instruction excep
 // inspect `ConfigStatus` in each CR's metadata to detect an incomplete load
 // and prevent the restart.
 
-The implementation first determines the size of the input to be loaded from the first 8 bytes of the MDH.
-The _ConfigStatus_ field determines the input type (PI or SCC), and
-the fields listed in <<ACE-length-rule>> determine its length.
+The implementation first determines the size of the input to be loaded from the first 8 bytes of the MDH, which are provided by the software.
+The _ConfigStatus_ field determines the input type (PI or SCC), and the fields listed in <<ACE-length-rule>> determine its length.
 `ace.load` then requests the LSU to read the memory contents starting at `%offset(Xs1)`, in XLEN-bit sized loads,
 and copies them into the CR starting with the 8th byte (i.e., bits [127:64] of the MDH).
 The order in which the LSU issues these transactions is implementation dependent.
@@ -1424,7 +1437,7 @@ The instruction changes the _State_ and _StateExtension_ fields of the MDH of `K
 It is used for two purposes:
 [loweralpha]
 . Advance from one stage of an algorithm to another (for instance, from initialization of a hash function to data absorption and then to digest finalization); and
-. Set specific state information of an algorithm (such as configure elliptic curve points or private/public keys), which is intended to be orthogonal to the states mentioned in the previous point.
+. Set specific state information of an algorithm (such as elliptic curve points or private/public keys), which is intended to be orthogonal to the states mentioned in the previous point, or prerequisites for another state to be entered but that can be set independently.
 
 `#immed7` is a constant from a set of admissible values.
 These values include both general values, which apply to all Algorithms, as well as values specific to the Algorithm encoded in a CR.
@@ -1542,7 +1555,7 @@ The special values of `#immed7` to initiate a provisioning, importing, and expor
 
 [[ACE-management-immeds]]
 .Values (decimal) of `#immed7` to be used for provisioning, importing, and exporting
-[float="center",align="center",width="100%",cols="^7%,<25%,<68%",options="header"]
+[float="center",align="center",width="100%",cols="^7%,<27%,<66%",options="header"]
 |===
 | Value | Mnemonic                  |  Description
 |  0   | `ace_CR_provision_start`  |  Prepare a CR for provisioning keys and metadata into it, set _ConfigStatus_ to _CfgStProvisioning_. Needs an auxiliary input in a GPR (or a GPR pair) with bits [63:0] of MDH, or an auxiliary input into a 128-bit (or longer) vector register to provide the entire MDH.
@@ -1553,18 +1566,20 @@ The special values of `#immed7` to initiate a provisioning, importing, and expor
 |  5   | `ace_CR_export_end`       |  Restore the exported CR in the internal clear format (only if already complete) and make it available to software, set _ConfigStatus_ to a provided value. Uses an auxiliary input in a GPR (or a GPR pair) with bits [63:0] of MDH to restore _ConfigStatus_ saved by software.
 If the restored value of _ConfigStatus_ is not _CfgStComplete_, the CR is made available to software.
 |===
-
+--
++
 The semantics of `ace.mgmt` are as follows:
 
 . *`ace.mgmt` is used to start provisioning, resp., import.*
 +
+--
 Before issuing `ace.mgmt`, software must read Bits [63:0] of the MDH from
 memory if the GPR variant is used, or [127:0] of the MDH from memory if the
 vector variant is used.
 Let `ml` be this value.
 Software must pass `ml` as the auxiliary input to `ace.mgmt` in a GPR (or a
 GPR pair), or a vector register.
-+
+
 `ace.mgmt` then performs following operations:
 
 .. The target CR is cleared.
@@ -1574,6 +1589,7 @@ GPR pair), or a vector register.
 .. Except for Bits [63:0] of the MDH in the CR, which are set to `ml`, the internal CRF memory corresponding to the target CR is zeroed.
 .. _ConfigStatus_ if set to _CfgStProvisioning_, resp., _CfgStace_CR_import_. In the latter case, we assume that software has saved the old value of `ml` in its state.
 .. `acestart` is set to 8 if the scalar variant was used, and 16 if the vector variant was used.
+--
 
 . *`ace.mgmt` is used to terminate a provisioning process.*
 +
@@ -1603,48 +1619,57 @@ _ConfigStatus_ is set to `ml`._ConfigStatus_.
 
 . *`ace.mgmt` is used to start an export process.*
 +
+--
 Let `ml` <- Bits [63:0] of the MDH of the CR.
 Software must save this value in its state to use it when terminating the export process.
-+
 Then:
 
 .. If `ml`._ConfigStatus_ = _CfgStComplete_:
 +
 Prepare a CR to produce a SCC. This includes encrypting its contents and computing the authentication tag(s).
+
 .. If `ml`._ConfigStatus_ {ne} _CfgStComplete_ (we are exporting a not fully configured CR or we are initiating a nested CR export):
 +
 No encryption or authentication occurs, the information in the CR is exported verbatim, in the same order as they appear in the PI in case the SCC is the export of a partially provisioned CR, or the SCC in case the latter is the export of a partially provisioned, resp., imported, CR, or the CR was previously prepared for export and then the export process itself was interrupted.
+
 .. `acestart` is set to 8 if the scalar variant was used, and 16 if the vector variant was used.
+--
 
 . *`ace.mgmt` is used to terminate an export process.*
 +
+--
 Let `ml` be the value of MDH[63:0] saved by the software upon initiation of the export process.
 Software must pass `ml` as the auxiliary parameter to `ace.mgmt` for export termination.
-+
 Then:
 
 .. If `ml`._ConfigStatus_ = _CfgStComplete_:
-+
+
 The implementation must restore the state of the CR to the state it was in when the export process was initiated.
 This may involve decrypting its contents or restoring them from an internal backup.
 
 .. If `ml`._ConfigStatus_ {ne} _CfgStComplete_:
-+
+
 No changes to the CR state are made.
+
 .. `acestart` is set to 0.
-
-Whenever `ace.mgmt`, fails for any other reason, the target CR is cleared.
-
-The full provisioning, export, and import operations are described in detail in <<ACE-export-import-algorithms>>.
-
-The instruction may possibly modify state.
-
-The instruction is not usage-controlled.
 --
 
-(`Zlmv` only) When a CR's metadata `ConfigStatus` field is changed from `CfgStImporting` to `CfgStComplete`, the ACE unit verifies the signature of the CR's contents.
+//
 
+[none]
+. Whenever `ace.mgmt`, fails for any other reason, the target CR is cleared.
++
+The full provisioning, export, and import operations are described in detail in <<ACE-export-import-algorithms>>.
++
+The instruction may possibly modify state.
++
+The instruction is not usage-controlled.
++
+(`Zlmv` only) When a CR's metadata `ConfigStatus` field is changed from `CfgStImporting` to `CfgStComplete`, the ACE unit verifies the signature of the CR's contents.
++
 (`Zlmv` only) When a CR's metadata `ConfigStatus` field is changed from `CfgStComplete` to `CfgStExporting`, the ACE unit generates the SCC.
+
+//
 
 _Included in_::
 +
@@ -1863,22 +1888,6 @@ else exception `ace_exc_invalid` is raised.
    <<ACE-rules-threshold-implementations>> a protected and an unprotected variant of the
    same algorithm export the same number of bits, and by <<ACE-length-rule>>
    _SCProtection_ does not enter the SCC length.
-
-Destroying the CC on failure is deliberate. The transition to an Error State invalidates
-and empties the Content of the CR (<<ACE-State-field>>), so a CC whose protection upgrade
-fails is lost rather than left usable at its previous level.
-
-[NOTE]
-====
-The rationale is to fail closed. A caller that requests a stronger level of side-channel
-protection is asserting that the current level is inadequate for what it is about to do;
-leaving the CC intact at the weaker level would invite exactly the use the request was
-meant to prevent, and would do so silently if the caller did not check for the error.
-
-Software that cannot afford to lose the CC should export it as an SCC before requesting
-the upgrade, and re-import it if the request fails. Note that the exported SCC records the
-original _SCProtection_, so the re-imported CC is the one that existed before the attempt.
-====
 
 * If `Xs`._Locality_ is non-zero, then it is the new value of `MDH`._Locality_, subject to the Locality replacement rules above.
 
