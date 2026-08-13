@@ -158,8 +158,10 @@ text fails the same test - so C8 and C9 were real and the test has power over th
 | M10 | `ace-ISA-algorithms.adoc` | SHAKE128 and SHAKE256 specified: parameter table for all six functions (`c`, `b`, `t`, XOF flag, suffix `D`), `c` = 256 added; `t` = `c`/2 for the fixed-output functions and `t` = `b` for the XOFs; the suffix and padding string `S` = `D` followed by `pad10*1` defined, with the resulting `0x06`/`0x1F` first octet and the `b-1` final bit; XOF behaviour (no _Success_, unbounded squeezing) stated. "Granularity: 32 bits" clarified as the minimum vector element width, not a constraint on message length |
 | M11 (HMAC) | `ace-ISA-algorithms.adoc` | `ipad`/`opad` defined as `0x36`/`0x5c` repeated `b`/8 times; the key is `K0` of FIPS 198-1 with its derivation assigned to the provisioner of the CC; `d` corrected in the inner-digest slice and defined as the digest size; re-initialisation of `state` to the hash IV before the outer compression added; `process_VLI` called with length `b` |
 | M11 (KMAC) | `ace-ISA-algorithms.adoc`, `ace.bib` | New `ACE-KMAC` section specifying KMAC128/KMAC256 against SP 800-185: the CC holds the two prefabricated rate blocks `cshake_block` and `key_block`, keeping every variable-length encoding out of the ACE unit; `L` set on the transition to _Hash_Finalize_; `right_encode(L)` absorbed; cSHAKE suffix `00` (first octet `0x04`) rather than SHAKE's `1111`; key/customization length bounds tabulated. SP 800-185 added to the bibliography |
-| M12, M13, M14 | `ace-ISA-algorithms.adoc` | Marked with WARNING blocks enumerating the open defects in Ascon-AEAD128, ML-KEM and ML-DSA, for later resolution |
-| M15 | `ace-ISA-algorithms.adoc`, `ace.bib` | EdDSA: `v` = 2, since a signature is the pair (`R`,`S`); `b` = 456 for ed448; citation corrected from RFC 7748 to RFC 8032 and FIPS 186-5, and RFC 8032 added to the bibliography. ECDSA hash truncation per FIPS 186-5 6.4 stated as the caller's responsibility. `_Sign_Generate_`/`_Sign_Verify_` removed from the transitions out of _Initial_, resolving the contradiction with their guards. Remaining EdDSA and SM2 scheme gaps marked with a WARNING |
+| M12 | `ace-ISA-algorithms.adoc` | Ascon-AEAD128 state machine repaired: `_Dec_Tag_Finalize_` added to the States and to the decryption chain; "_Success_ or _Success_" corrected to _Failure_; `AD_empty` removed and the empty-AD behaviour stated instead; `tag_len` fixed at 128 per SP 800-232, the truncated-verification path removed; `_Hash_Verify_` corrected from Form D to Form B. Deferral WARNING removed |
+| M13 | `ace-ISA-algorithms.adoc` | `_Encapsulate_` corrected to match FIPS 203; `ace.derive` description corrected and given its design rationale; `_ciphertext_Input_` added, driven by `process_VLI` so the load is resumable, with `len`/`input_base`/`block_base`/`cumul_len` declared in the Internal State and Serialized Context and `process_block`/`finalize` passed as `None`; `_sharedkey_Output_` removed and `_decapsk_Output_` commented out, with a NOTE giving the reason; the `_AlgorithmUse_` paragraph brought in line. WARNING removed |
+| M14 | `ace-ISA-algorithms.adoc` | ML-DSA completed: `_privkey_Input_` and `_compute_pubKey_` states added, with `HasPrivKey`/`HasPubKey` in _StateExtension_ and a guard on every operation that uses a key; importing a private key erases the public key; residual ML-KEM text removed; hedged and deterministic signing both provided, selected by the Form of the `ace.setst` entering `_Sign_Generate_` and recorded in a `Deterministic` flag; _AuxInfo_ restated as an unenforceable declaration of intent, with the reason. WARNING removed |
+| M15 (part 1) | `ace-ISA-algorithms.adoc`, `ace.bib` | EdDSA: `v` = 2, since a signature is the pair (`R`,`S`); `b` = 456 for ed448; citation corrected from RFC 7748 to RFC 8032 and FIPS 186-5, and RFC 8032 added to the bibliography. ECDSA hash truncation per FIPS 186-5 6.4 stated as the caller's responsibility. `_Sign_Generate_`/`_Sign_Verify_` removed from the transitions out of _Initial_, resolving the contradiction with their guards. Remaining EdDSA and SM2 scheme gaps marked with a WARNING |
 | M16 | `ace-ISA-algorithms.adoc` | `_Initial_ -> _Encrypt_`/`_Decrypt_` and `_Encrypt_ <-> _Decrypt_` added, making the machine reachable from a freshly provisioned CC; the dead `_Set_Aux_Value_ -> ...` transitions removed. `_Set_Aux_Value_` recast as an *operation* rather than a state, since with auto-return it never becomes the value of the _State_ field |
 | M17 | `ace-ISA-algorithms.adoc` | The single-key extra `update_mask` explained and attributed to Rogaway, with a warning not to merge the two branches. New `ACE-XTS-from-XEX` procedure showing how SP 800-38E is realized on the XEX CC as specified: the tweak is `bin(i,b)`, encryption needs no reordering, and decryption obtains mask index `m` before `m-1` with one `ace.clone` and one discarded block operation |
 | M18 | `ace-ISA-priv.adoc`, `ace-ISA-unpriv.adoc` | `macecsk` activation clears the flags, so the unit no longer locks itself out permanently; the availability rule restated as "while any flag is set"; "all either or four" corrected. The claim that the CSK is exposed to M-mode replaced: the `macecsk` CSRs are write-only and read as zero for every mode, M-mode included, which is what the `MRW (RZ)` designation already said |
@@ -168,6 +170,9 @@ text fails the same test - so C8 and C9 were real and the test has power over th
 | M22 | `ace-ISA-priv.adoc` | WARNING blocks added to the `misa.L` and `mstatus`/`sstatus` ACES subsections recording that both allocations are provisional, that unified discovery may replace the `misa` bit, and that nothing depends on the particular `*status` offset |
 | M24 | `ace-ISA-unpriv.adoc` | New `ACE-SCC-rationale` subsection: Locality Secrets as associated data argued via POLYVAL's AXU property and its cost advantage over a KDF; the default zero nonce justified by nonce misuse-resistance with the loss of semantic security stated as accepted; RFC 8452 key-usage bounds recorded; a WARNING against manufacture-fixed CSKs |
 | M25 | `ace-ISA-algorithms.adoc` | CMAC's last-block guard now tests `block_base != 0`, and `block_base` added to the internal state and serialized context so the test is well defined |
+| M21 | `ace-ISA-unpriv.adoc`, `ace-ISA-algorithms.adoc` | Every extension name now resolves to one the table defines: `Zlcmac`->`Zlcmacm`; the `Zlkn` dependency list to `Zlaes128p`/`Zlaes256p`/`Zlesha2h`; `Zlm`->`Zlmem` in the three snippet captions and in a commented-out line; `ace.store` moved from `Zlv`/`Zlio` to `Zlmem`, matching `ace.load`; "At least of" -> "At least one of"; the `Zlkn` row's `2+` span removed so its columns line up |
+| M23 | `ace-ISA-unpriv.adoc` | New `ACE-SCC-authenticated-MDH` rule: `AD[0]` is the *initial* MDH in both directions — the `_CfgStComplete_` image software saves before `#ace_CR_export_start`, and the image carried in the SCC and passed to `#ace_CR_import_start` — with no in-flight change reflected, and Section 1 of the SCC carrying that same image |
+| M15 (part 2) | `ace-ISA-algorithms.adoc` | New `ACE-EdDSA` subsection: the seed held in `Scalar` with `s`/`prefix` derived internally, `ctx`/`ctxlen`, `PreHash` and `msg_pass`, a `_Msg_Absorb_` state, and the two-pass signing / one-pass verification structure. Pure mode conditioned on `Zlesha2h`/`Zlesha3h`, pre-hash always available. `h` = 512 and `j` dropped for both curves. SM2's `Hash` documented as `e = SM3(Z_A ‖ M)` with `Z_A` computed by the caller. WARNING removed |
 | m17 | `ace-notation.adoc` | `len_in_bits`/`len_in_bytes` corrected; `bit_length` and `%` eliminated as duplicate spellings; `foreach`, `mod`, `ceil`, `floor`, `min`, `max`, comparison/arithmetic operators and `local` defined; `←` and `<-` stated to be synonymous |
 
 **Document reorganisation.** The front matter was split into three files, included in this
@@ -193,9 +198,9 @@ Summary of state:
 
 * **Fully resolved:** C1-C20, m17. Every Critical finding is now closed.
 * **Partly resolved:** m22, m24.
-* **Also closed:** M1–M3, M5–M8, M10, M11, M16–M20, M22, M24, M25; M15 mostly; and
-  M4, as a by-product of restating `ace.mv` under the uniform encoding.
-* **Deferred, marked with WARNING blocks in the specification:** M12, M13, M14.
+* **Also closed:** M1–M3, M5–M8, M10–M14, M16–M25; M15 mostly; and M4, as a
+  by-product of restating `ace.mv` under the uniform encoding.
+
 * **Retracted (not defects):** M9.
 * **Untouched:** the whole Major list and the remaining minor items.
 
@@ -828,7 +833,22 @@ For HMAC (`1768-1836`):
 * Re-initialisation of `state` to the hash IV before the outer compression is not
   specified.
 
-### M12 — Ascon-AEAD128: state machine inconsistencies and a non-standard tag length — **DEFERRED, MARKED IN SPEC**
+### M12 — Ascon-AEAD128: state machine inconsistencies and a non-standard tag length — **FIXED**
+
+All five items closed. `_Dec_Tag_Finalize_` now appears in the States list and in the
+decryption chain, which it was driving without being declared; the chain ends in
+_Success_ or _Failure_; `_Hash_Verify_` is a Form B, matching the `INPUT` it consumes.
+
+`AD_empty` is removed rather than given a use: it recorded a distinction the caller
+already makes, since the caller pads a non-empty associated data field and issues no
+`ace.exec` at all for an empty one. The empty-AD behaviour — no permutation, not even a
+padding block — is now stated directly.
+
+`tag_len` is fixed at 128, as cite:[nist-SP-800-232] specifies, and the settable
+32-to-128 range on the decryption path is gone. That range both broke interoperability
+with the encryption path, which always emits 128 bits, and reduced forgery resistance by
+the number of bits dropped. The field is retained in the Internal State and Serialized
+Context at the value 128, so a future variant would not change the format.
 `ace-ISA-algorithms.adoc:1992-2012`, `2130-2160`, `1963-1965`, `2024`.
 
 * The declared states and transitions name `_Hash_Verify_`; the behaviour transitions to
@@ -846,7 +866,39 @@ For HMAC (`1768-1836`):
 * `_Hash_Verify_` is said to expect "Form D" `ace.exec` (2162) while supplying `INPUT`
   — Form D has no input; this is Form B.
 
-### M13 — ML-KEM: decapsulation cannot be given a ciphertext; Encaps is misdescribed — **DEFERRED, MARKED IN SPEC**
+### M13 — ML-KEM: decapsulation cannot be given a ciphertext; Encaps is misdescribed — **FIXED**
+
+The `_Encapsulate_` half is fixed: it now applies `ML-KEM.Encaps` to `encapsk` and derives
+both outputs from one internally drawn value, rather than generating a shared key and then
+a ciphertext for it.
+
+The design rationale the author supplied — ML-KEM produces key material for a symmetric
+algorithm, and `ace.derive` moves it straight into a second CR as a CC, so the shared
+secret never reaches process memory — is now recorded in the specification. It also
+corrected a second error: the existing text had `ace.derive` deriving the shared key "from
+a ciphertext and the decapsulation key", which is not what it does and could not work, a
+ciphertext being 768 to 1568 octets and the auxiliary operand a single GPR.
+
+`_ciphertext_Input_` has since been added, taking the state number freed by
+`_decapsk_Output_`. Because the field is 768 to 1568 octets and one `ace.exec` carries at
+most `ACELEN` bits, the three `_*_Input_` states are now specified in terms of
+`process_VLI`, which gives them resumable partial-progress accounting.
+
+My first attempt at that was incomplete, as the author pointed out: it invoked
+`process_VLI` with variables — `len`, `input_base`, `block_base`, `cumul_len` — that ML-KEM
+declared nowhere, and with `process_block()`/`finalize()` described as doing nothing rather
+than being absent. All four are now declared in the Internal State and in the Serialized
+Context, 16 bits each plus 64 bits of padding so the section stays a multiple of 128 bits
+(sizes become 3264/4736/6368 bytes, verified). `process_VLI` itself now accepts `None` for
+`process_block` and `finalize` and skips the corresponding calls, at all three sites where
+they are invoked. The call also had `b` = `ACELEN` and `state` = `block`, which would have
+selected the procedure's *XOR* branch; it is now `b` = `len` with `state` distinct, so the
+copy branch applies and the octets land in the field.
+
+`_sharedkey_Output_` is removed and `_decapsk_Output_` commented out, with a NOTE
+recording why: the shared key reaches its consumer through `ace.derive` and so never
+becomes visible to software, and a decapsulation key leaves a CR only as an SCC. The
+`_AlgorithmUse_` paragraph, which still named the removed states, was brought in line.
 `ace-ISA-algorithms.adoc:2754-2759`, `2783-2788`.
 
 The state list defines `_encapsk_Input_`, `_decapsk_Input_`, and four `*_Output_` states
@@ -860,7 +912,37 @@ FIPS 203: `ML-KEM.Encaps(ek)` samples randomness `m` and *derives* both `K` and 
 it; there is no step that generates a shared key and then finds a ciphertext for it. The
 encapsulation key input is not mentioned either.
 
-### M14 — ML-DSA: private keys cannot be loaded; extensive copy-paste from ML-KEM — **DEFERRED, MARKED IN SPEC**
+### M14 — ML-DSA: private keys cannot be loaded; extensive copy-paste from ML-KEM — **FIXED**
+
+All four items closed.
+
+*Key management.* `_privkey_Input_` (12) and `_compute_pubKey_` (13) added, both loading
+through `process_VLI` as the ML-KEM input states do. `HasPrivKey` and `HasPubKey` live in
+_StateExtension_ bits 0 and 1, following the ECC precedent, so they are readable with
+`ace.getmdl`. Importing a private key erases the public key and clears its flag, since the
+two would otherwise be an unrelated pair and the CC would verify under one key while
+signing under another; importing a public key deliberately leaves the private one alone,
+that being the ordinary verification-only configuration. `_Sign_Generate_` and
+`_compute_pubKey_` require `HasPrivKey`, `_Sign_Verify_` and `_pubkey_Output_` require
+`HasPubKey`.
+
+*Signing mode.* Both modes of cite:[nist-fips-204] {sect}3.4 are now available. The Form of
+the `ace.setst` that enters `_Sign_Generate_` selects them — Form A or Form B with `Xs` = 0
+for hedged, Form B with `Xs` = 1 for deterministic — and the choice is recorded in a
+`Deterministic` flag in _StateExtension_ bit 2 so that an interrupted or exported signing
+operation completes in the mode it began in. Hedged is the default, and a failure of the
+random bit generator produces no signature.
+
+*_AuxInfo_.* Restated as what it can actually be: a declaration of intent that travels with
+the CC, not an enforced binding. Since the caller supplies _tr_ and _μ_, the unit never
+sees the message and never evaluates a hash, so it can neither check the binding nor need
+to support the named function. The requirement that the implementation support it is
+dropped accordingly.
+
+*Copy-paste.* The residual ML-KEM passages are gone. Correcting them exposed a trap worth
+recording: the ML-KEM and ML-DSA state lists open with two identical lines, so a
+replacement keyed on them silently retitled the wrong section. Both are now labelled by
+the state each list actually contains.
 `ace-ISA-algorithms.adoc:2819`, `2905-2921`, `2935`, `2944-2958`.
 
 * The PI contains only the MDH, and the state list has `_pubkey_Input_` but no
@@ -877,7 +959,7 @@ encapsulation key input is not mentioned either.
   drop the field for ML-DSA or state that it is advisory.
 * The trailing "*Anything else?*" at 2971 indicates the section is unfinished.
 
-### M15 — ECC: EdDSA signature field is half the required size; wrong citation; scheme details missing — **MOSTLY FIXED**
+### M15 — ECC: EdDSA signature field is half the required size; wrong citation; scheme details missing — **FIXED**
 `ace-ISA-algorithms.adoc:2426`, `2434-2436`, `2505`, `2529`.
 
 * `v` is "the number of elements used to represent a signature"; ed25519/ed448 are given
@@ -1000,7 +1082,14 @@ must be told how to distinguish them; as written, a U-mode process cannot clear 
 whose `_UsagePolicy_` excludes U-mode, which conflicts with the context-switch model at
 `1054-1055` (which requires lower-privileged code to be able to erase CRs).
 
-### M21 — Undefined and inconsistent extension names
+### M21 — Undefined and inconsistent extension names — **FIXED**
+
+All six items corrected, and checked mechanically: every ``Zl``-prefixed name appearing
+anywhere in the included files now matches one of the 38 defined in the extension table,
+and every defined name is referenced at least once. The `ace.store` correction is the one
+with substance — it was assigned to `Zlv`/`Zlio` while `ace.load`, its counterpart, was in
+`Zlmem`, so an implementation of `Zlmem` alone would have had a load instruction and no
+store.
 * `ace-ISA-algorithms.adoc:40`: AES128_CMAC requires "`Zlcmac`"; the extension is
   `Zlcmacm` (`ace-ISA-unpriv.adoc:105`).
 * `ace-ISA-unpriv.adoc:129`: `Zlkn` depends on "`Zlaes128`, `Zlaes256`, `Zlesha2`" —
@@ -1022,7 +1111,15 @@ region are contested by recent extensions. This needs an explicit ARC/opcode-spa
 request alongside the C12 opcode question; flagging it here because it is a gating item
 for candidacy, not a drafting detail.
 
-### M23 — Which MDH snapshot is authenticated is never pinned
+### M23 — Which MDH snapshot is authenticated is never pinned — **FIXED**
+
+Pinned to the initial image, per the author: the MDH as it stood when the operation began.
+For an export that is the `_CfgStComplete_` image software reads with `ace.getmdl` and
+saves before `#ace_CR_export_start`; for an import it is the image carried in the SCC and
+passed to `#ace_CR_import_start`. Both assignment sites now say so, and the rule records
+why it is forced rather than chosen: a CR is in `_CfgStExporting_` when its `SIV` is
+computed and in `_CfgStImporting_` when that `SIV` is checked, so authenticating the
+in-flight image would make every SCC fail to import.
 `ace-ISA-unpriv.adoc:2950`, `1581-1587`, `1596-1604`.
 
 `AD[0] ← K(i).MDH` — but the export sequence mutates `_ConfigStatus_` (Complete →
@@ -1065,13 +1162,16 @@ CMAC cannot detect a partial pending block at all.
 
 # minor
 
-* **m1** `ace-ISA-unpriv.adoc:329` — "signalled by the _SystemFormat_ bit MDH[63:0]";
+* **m1** — **FIXED** by the author: the bit is `MDH[63]`.
+  _Original finding:_ `ace-ISA-unpriv.adoc:329` — "signalled by the _SystemFormat_ bit MDH[63:0]";
   should be MDH[63].
-* **m2** `ace-ISA-unpriv.adoc:155` — "a CR can be _unconfigured_meaning it does not
+* **m2** — **FIXED.** "_unconfigured_meaning" -> "_unconfigured_, meaning".
+  _Original finding:_ `ace-ISA-unpriv.adoc:155` — "a CR can be _unconfigured_meaning it does not
   contain a CC" (missing space/emphasis terminator).
 * **m3** — **FIXED.** `ace.start` was used five times for the CSR `acestart`; all five
   corrected, together with a doubled full stop on one of them.
-* **m4** `ace-ISA-unpriv.adoc:1547` — "_ConfigStatus_ **if** set to _CfgStProvisioning_,
+* **m4** — **FIXED.** "if set to" -> "is set to"; `_CfgStace_CR_import_` -> `_CfgStImporting_`; and the case-mangled `_CfgStimporting_`, `_CfgExporting_` and `_CfgStcomplete_` normalised throughout, including in the code comments.
+  _Original finding:_ `ace-ISA-unpriv.adoc:1547` — "_ConfigStatus_ **if** set to _CfgStProvisioning_,
   resp., _CfgSt**ace_CR_import**_"; also `_CfgStimporting_` (1522) and `_CfgExporting_`
   (1524) for `_CfgStImporting_` / `_CfgStExporting_`; `_CfgStcomplete_` in the code
   comments (2588, 2618, 2632, 2664).
@@ -1080,7 +1180,8 @@ CMAC cannot detect a partial pending block at all.
   paragraph about **provisioning**; corrected to "a provisioning process". The note is
   moved from the end of the import-termination block to the end of the
   provisioning-termination block, where it belongs.
-* **m6** `ace-ISA-unpriv.adoc:865` — `aceiobuflen` "programs the ACEIOBUF length **in
+* **m6** — **FIXED.** `aceiobuflen`, `acemaxiobuflen` and `aceiobuftop` are now stated in **bits** everywhere, per the author. This is the reading the rest of the specification already required: `ACELEN` is defined as "`VL*SEW` or the length `aceiobuftop` of the ACEIOBUF **in bits**". **See the note below on `acestart`.**
+  _Original finding:_ `ace-ISA-unpriv.adoc:865` — `aceiobuflen` "programs the ACEIOBUF length **in
   bits**"; the CSR table (770) and every other use say bytes.
 * **m7** — **FIXED.** "invalid instruction exception" appeared 15 times where RISC-V
   terminology is "illegal instruction exception"; all replaced. The distinct identifier
@@ -1140,7 +1241,8 @@ CMAC cannot detect a partial pending block at all.
   (`ace-ISA-unpriv.adoc:1019`); `RUP` glossed "Release of *Unencrypted* Plaintext" vs
   "Release of *Unverified* Plaintext" in the Introduction (`ace-introduction.adoc:94`);
   `LF` ("Locker File"), `KMA`, `PCBC`, `ASID`, `VMID`, `EPC` appear unused.
-* **m19** `ace-ISA-algorithms.adoc:44-51` — AES-192/256 rows say "Modes **1--12** …
+* **m19** — **FIXED** by the author, apart from the naming, which is now `ML-DSA-nn`/`HashML-DSA-nn` in the extension table as well, matching FIPS 204 and the algorithm table.
+  _Original finding:_ `ace-ISA-algorithms.adoc:44-51` — AES-192/256 rows say "Modes **1--12** …
   Analogues to Modes **1--11**"; AES-128 defines modes 0–12; SM4 says "1--10 …
   Analogues to Modes 1--10" but AES-128 mode 11/12 (OCB) are omitted without comment.
   ML-DSA occupies Modes 3, 5, 7 with 4, 6, 8 unassigned and unexplained;
@@ -1178,21 +1280,28 @@ CMAC cannot detect a partial pending block at all.
   **C8**; `2080-2096` — the `_Enc_Last_Block_` prose is truncated: "And in the second
   case, the `ace.exec` instruction performs: In state _Enc_Last_Block_ only one 128-bit
   block is processed."
-* **m25** `ace-ISA-algorithms.adoc:2370-2371` — Ascon-XOF128 says "the last 64 bits of the
+* **m25** — **FIXED.** Ascon-XOF128 no longer claims that 64 bits of Ascon-Hash256's Serialized Context are absent; `countdown` lives in _AlgorithmUse_, so the two Serialized Contexts are identical.
+  _Original finding:_ `ace-ISA-algorithms.adoc:2370-2371` — Ascon-XOF128 says "the last 64 bits of the
   Serialized Context of Ascon-Hash256 are not present", but the Ascon-Hash256 serialized
   table (2293-2302) has no such field (`countdown` lives in the MDH's `_AlgorithmUse_`).
-* **m26** `ace-ISA-algorithms.adoc:2541-2547` — "The size in bits of Fields **vii to x**"
+* **m26** — **FIXED.** "Fields vii to x" -> "the optional Fields v to viii"; the dangling "Position x" replaced by a reference to the Implementation VDS of <<ACE-SCC>>; the spurious constant 8 removed from `varlen` and every term stated to be in octets; `RndNum` pinned to `j` bits in both the Internal State and the SCC.
+  _Original finding:_ `ace-ISA-algorithms.adoc:2541-2547` — "The size in bits of Fields **vii to x**"
   and "Position **x**" refer to positions past the end of the table (which stops at
   viii); the `varlen` formula mixes bits and bytes (`ub`/8 added to a constant 8);
   `RndNum` is `h` bits in the internal state (2508) and `j` bits in the SCC (2531).
-* **m27** `ace-ISA-algorithms.adoc:2723`, `2739` — ML-KEM stores both `encapsk` and
+* **m27** — **FIXED** as a documented deliberate choice rather than a format change: a NOTE records that `decapsk` embeds `encapsk` per FIPS 203 7.1, that the duplication is kept because the two fields are configured independently and `ACE-length-rule` requires the SCC length to follow from the MDH alone, and that an implementation may omit `encapsk` from its Implementation VDS and recover it from `decapsk` on import.
+  _Original finding:_ `ace-ISA-algorithms.adoc:2723`, `2739` — ML-KEM stores both `encapsk` and
   `decapsk`, but FIPS 203's `dk` already embeds `ek`, so ~800–1568 bytes per SCC are
   redundant.
-* **m28** `ace-ISA-priv.adoc:47`, `63-69` — all exception codes are TBD, and there is no
+* **m28** — **FIXED** in part, per the author: there is deliberately no `ace_exc_expired`. Expiry is reported through `ace_exc_invalid`, and the handler distinguishes it by reading the CR's _State_, which the hardware has set to `ace_state_expired`; the exception table now says so. The numeric code assignments remain TBD, which is expected at this stage.
+  _Original finding:_ `ace-ISA-priv.adoc:47`, `63-69` — all exception codes are TBD, and there is no
   `ace_exc_expired`, although `_Expired_` has a dedicated CR state and
   `ace-ISA-unpriv.adoc:708` says an exception is raised (mapping it onto
   `ace_exc_invalid` — worth stating in the table).
-* **m29** `ace-ISA-unpriv.adoc:702` — `Zlexpire` "must have access to a secure clock", but
+* **m29** — **FIXED.** The clock question is answered as the author directs: the specification now states that it cannot give requirements for a secure clock, that the difficulty is common to every time-dependent security feature rather than particular to ACE, and gives the rule of thumb — a clock adequate for M-mode-only security features, or for a TPM in the same SoC, is adequate for the ACE unit. I added one consequence that follows from it: the clock must not be settable below the privilege level that manages the CSK, or a CC could be kept alive indefinitely by moving it backwards. The epoch now reads "00:00 UTC on 1 January 2027" at both sites, with the reason stated: a
+  UTC epoch makes a CC exported on one device and imported on another expire at the same
+  instant whatever local time each observes.
+  _Original finding:_ `ace-ISA-unpriv.adoc:702` — `Zlexpire` "must have access to a secure clock", but
   no clock interface, epoch precision, or timezone is architected, and there is no CSR to
   read the current time. The epoch is "00:00, January 1, 2027" (318) — say UTC.
 * **m30** Open items still in the document: the RVV-mini WARNING (`221-225`, `253-257`),

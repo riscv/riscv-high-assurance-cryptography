@@ -123,14 +123,14 @@ The hart stalls when attempting to read them until the ACE operation using those
 | `Zlmlkem512k`   | -- `ML-KEM-512`                                                                                                     | <<ACE-PQC-ML-KEM>>                             | v0.0.0          | --
 | `Zlmlkem768k`   | -- `ML-KEM-768`                                                                                                     | <<ACE-PQC-ML-KEM>>                             | v0.0.0          | --
 | `Zlmlkem1024k`  | -- `ML-KEM-1024`                                                                                                    | <<ACE-PQC-ML-KEM>>                             | v0.0.0          | --
-| `Zlmldsa44s`    | -- `ML-DSA-44`/`ML-DSA-44-PH`                                                                                       | <<ACE-PQC-ML-DSA>>                             | v0.0.0          | --
-| `Zlmldsa65s`    | -- `ML-DSA-65`/`ML-DSA-65-PH`                                                                                       | <<ACE-PQC-ML-DSA>>                             | v0.0.0          | --
-| `Zlmldsa87s`    | -- `ML-DSA-87`/`ML-DSA-87-PH`                                                                                       | <<ACE-PQC-ML-DSA>>                             | v0.0.0          | --
-| `Zlkn`        2+| NIST Symmetric Suite. Depends on `Zlaes128`, `Zlaes256`, `Zlesha2`, `Zlgcmm`, `Zlxexm`, and `Zlgcmsivm`.            | v0.0.0                                         | --
+| `Zlmldsa44s`    | -- `ML-DSA-44`/`HashML-DSA-44`                                                                                       | <<ACE-PQC-ML-DSA>>                             | v0.0.0          | --
+| `Zlmldsa65s`    | -- `ML-DSA-65`/`HashML-DSA-65`                                                                                       | <<ACE-PQC-ML-DSA>>                             | v0.0.0          | --
+| `Zlmldsa87s`    | -- `ML-DSA-87`/`HashML-DSA-87`                                                                                       | <<ACE-PQC-ML-DSA>>                             | v0.0.0          | --
+| `Zlkn`          | NIST Symmetric Suite. Depends on `Zlaes128p`, `Zlaes256p`, `Zlesha2h`, `Zlgcmm`, `Zlxexm`, and `Zlgcmsivm`. | --              | v0.0.0          | --
 5+| ^1^ Requires V (or a suitable subset thereof). Must support the following CSRs: `acestart` (this is a dependency for Zicsr); must support the following instructions: all four forms of `ace.exec`, all Forms of `ace.setst`, all Forms of `ace.mgmt`,
 `ace.load`, `ace.store`, `ace.clear`, `ace.clone`, `ace.size`/`ace.avail`, `ace.getmd{l,h,v}`, and `ace.restrict{l,h,v}`; must support `Zlkn`.
 5+| ^2^ Must support the following CSRs: `acestart` (this is a dependency for Zicsr), `aceiobuflen` and `aceiobuftop`; must support the following instructions: Form D of `ace.exec`, Forms A and B of `ace.setst`, Forms A and B of `ace.mgmt`, `ace.input` and `ace.output`, `ace.clear`, `ace.clone`, `ace.size`/`ace.avail`, `ace.getmd{l,h}`, and `ace.restrict{l,h}`; must support `Zlkn`.
-5+| At least of `Zlmem` or `Zlmv` must be implemented. If `Zlmem` is not implemented in hardware, a trap-and-emulate implementation using `Zlmv` is required.
+5+| At least one of `Zlmem` or `Zlmv` must be implemented. If `Zlmem` is not implemented in hardware, a trap-and-emulate implementation using `Zlmv` is required.
 5+| ^3^ Beside defining the basic encryption and decryption operations, these extensions also select which ciphers can be used with the various modes of operations that follow.
 5+| ^4^ The mode is applicable to all versions of AES, to SM4, and in general to any block cipher with a compatible block size.
 |===
@@ -152,7 +152,7 @@ CRs are per-hart architectural state, like GPRs or vector registers.
 
 CRs are not separated by privilege Mode: when a hart changes Mode, it sees the same set of CRs.
 
-Unlike a conventional register, a CR can be _unconfigured_meaning it does not contain a CC.
+Unlike a conventional register, a CR can be _unconfigured_, meaning it does not contain a CC.
 
 A CR is addressed either directly, via a 5-bit immediate, or indirectly, via a GPR value.
 An additional instruction-encoding bit selects the addressing mode.
@@ -315,7 +315,7 @@ All _Reserved_ bits, as well as bits unused by a given algorithm, must be zero.
 |   [77:69] |   9  | _Locality_        | Zero, or a value determining one or more Locality Secrets, used in the export/import encryption and decryption algorithm to bind the CR to specific environments. See <<ACE-Localities>>.
 |   [79:78] |   2  | Reserved          | Reserved for expansion of the _Locality_ field.
 |   [95:80] |  16  | _AlgorithmUse_    | Reserved for algorithms and implementations to store additional state information.
-|  [115:96] |  20  | _ExpirationDate_  | If non-zero, the expiration date of this CC. See <<ACE-Metadata-expiration-date>>. Expressed in hours since 00:00, January 1, 2027 (about 119 years and 7 months).
+|  [115:96] |  20  | _ExpirationDate_  | If non-zero, the expiration date of this CC. See <<ACE-Metadata-expiration-date>>. Expressed in hours since 00:00 UTC, 1 January 2027 (about 119 years and 7 months).
 | [127:116] |  12  | Reserved          | Reserved for future use.
 |===
 
@@ -326,8 +326,8 @@ The fields as described in detail in the following subsections.
 [[ACE-system-format-field]]
 ===== _SystemFormat_ Bit
 
-The use of a system-defined format is signalled by the _SystemFormat_ bit MDH[63:0].
-The format of the other 63 bits of MDH[63:0], as well as of the part of the input that would otherwise contain MDH[127:64], is entirely system specific, as is the rest of the input.
+The use of a system-defined format is signalled by the _SystemFormat_ bit MDH[63].
+The format of the other 63 bits of the low half of the MDH, i.e., MDH[62:0], as well as of the part of the input that would otherwise contain MDH[127:64], is entirely system specific, as is the rest of the input.
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -718,9 +718,21 @@ This field is only in effect of extension _Zlexpire_ is supported.
 
 If _Zlexpire_ is supported, the ACE implementation must have access to a secure clock.
 
+This specification does not state the requirements such a clock must meet, and cannot:
+what makes a clock trustworthy depends on the threat model, the platform and the
+integration, and no formulation would be both general enough to apply and precise enough
+to be testable. The difficulty is not particular to ACE — every security feature whose
+policy depends on time faces it, and none of the relevant standards resolves it either.
+
+As a rule of thumb: *if a clock is considered adequate for security features implemented in
+M-mode alone, or for a TPM residing in the same SoC, then it is adequate for the ACE unit.*
+ACE requires no more than those do. In particular the clock must not be settable by
+software below the privilege level that manages the CSK, since a CC could otherwise be
+kept alive indefinitely by moving the clock backwards.
+
 If _Zlexpire_ is not supported, the implementation shall reject PIs and SCCs with a non-zero _ExpirationDate_.
 
-If non-zero, the 20-bit _ExpirationDate_ field specifies the CC's expiration time as hours elapsed since the base date of January 1, 2027. The maximum representable time span is approximately 119 years and 7 months.
+If non-zero, the 20-bit _ExpirationDate_ field specifies the CC's expiration time as whole hours elapsed since 00:00 UTC on 1 January 2027. The maximum representable time span is approximately 119 years and 7 months. The epoch is UTC so that a CC exported on one device and imported on another expires at the same instant regardless of the local time each observes.
 
 Checking the _ExpirationDate_ is the first step performed by any _usage_ operation.  When a usage instruction executes on a CR whose _ExpirationDate_ has passed, the hardware immediately sets the MDH's _State_ field to `ace_state_expired` and performs all actions prescribed for Error States, including implementation-specific tasks such as releasing the CRF capacity held by the Content. If the ACE privileged architecture is implemented, an `ace_exc_invalid` exception is raised (see <<ACE-exceptions>>).
 
@@ -780,9 +792,9 @@ ACE provides a number of unprivileged CSRs.
 [float="center",options="header"]
 |===
 |  Address   | Privilege | Field                    | Description
-|  0xXXX     |     RO    | `acemvendorid`            | Manufacturer of the ACE unit. See <<ACE-CSR-impl-ids>>.
-|  0xXXX     |     RO    | `acemarchid`              | Architecture version, per vendor, of the ACE unit. See <<ACE-CSR-impl-ids>>.
-|  0xXXX     |     RO    | `acemimpid`               | Implementation, per vendor, of the ACE unit. See <<ACE-CSR-impl-ids>>.
+|  0xXXX     |     RO    | `acemvendorid`           | Manufacturer of the ACE unit. See <<ACE-CSR-impl-ids>>.
+|  0xXXX     |     RO    | `acemarchid`             | Architecture version, per vendor, of the ACE unit. See <<ACE-CSR-impl-ids>>.
+|  0xXXX     |     RO    | `acemimpid`              | Implementation, per vendor, of the ACE unit. See <<ACE-CSR-impl-ids>>.
 |  0xXXX     |    URW    | `acestart`               | ACE start byte index.
 |  0xXXX     |    URW    | `aceiobuflen`            | ACE input/output buffer length in bytes.
 |  0xXXX     |     RO    | `acemaxiobuflen`         | ACE maximum input/output buffer length in bytes. Read only.
@@ -879,7 +891,7 @@ _Included in_::
 
 {empty}
 (((CSR, `aceiobuflen`)))
-`aceiobuflen` is an XLEN-bit URW CSR that programs the ACEIOBUF length in bits for use by `ace.input` and `ace.output`.
+`aceiobuflen` is an XLEN-bit URW CSR that programs the ACEIOBUF length in bytes for use by `ace.input` and `ace.output`.
 Writing this register-even when re-writing the current value-also zeroes the buffer and sets `aceiobuftop` to the same length and `acestart` to zero.
 
 When `aceiobuflen` is zero, the ACEIOBUF is _unconfigured_.
@@ -1038,7 +1050,7 @@ The notation `K{Xd}` denotes the CR whose index is held in GPR `Xd`.
 [NOTE]
 ====
 ACE does not have concepts similar to the vector crypto extension's Element Group Width (EGW), Effective Element Width (EEW), and Element Group Size (EGS).
-Since the architecture decouples instructions like `ace.exec` from the actual operations, the high-level design of ACE needs only the total input and output size, denoted `ACELEN`. This is equal to either `VL * SEW` or the `aceiobuftop` length of the ACEIOBUF, as defined in <<ACE-notation>>.
+Since the architecture decouples instructions like `ace.exec` from the actual operations, the high-level design of ACE needs only the total input and output size, denoted `ACELEN`. This is equal to either `VL * SEW` or the `aceiobuftop` length of the ACEIOBUF in bits, that is `aceiobuftop` {times} 8, as defined in <<ACE-notation>>.
 ====
 
 // ////////////////////////////////////////////////////////////////////
@@ -1209,8 +1221,7 @@ _Included in_::
 [%header,cols="4,2,2"]
 |===
 |Extension | Minimum version | Lifecycle state
-| `Zlv`    | v0.0.0          | --
-| `Zlio`   | v0.0.0          | --
+| `Zlmem`  | v0.0.0          | --
 |===
 --
 
@@ -1303,7 +1314,7 @@ _Included in_::
 
 The `Zlmv` subextension adds dedicated move instructions from/to scalar/vector registers to a CR.
 The instructions in this extension are encoded as new forms to `ace.exec`.
-// `Zlmv` is mutually exclusive with `Zlio` and `Zlm`.
+// `Zlmv` is mutually exclusive with `Zlio` and `Zlmem`.
 //and new behavior to `ace.setst` and `ace.mgmt`.
 
 _Mnemonics_::
@@ -1560,9 +1571,9 @@ The special values of `#immed7` to initiate a provisioning, importing, and expor
 | Value | Mnemonic                  |  Description
 |  0   | `ace_CR_provision_start`  |  Prepare a CR for provisioning keys and metadata into it, set _ConfigStatus_ to _CfgStProvisioning_. Needs an auxiliary input in a GPR (or a GPR pair) with bits [63:0] of MDH, or an auxiliary input into a 128-bit (or longer) vector register to provide the entire MDH.
 |  1   | `ace_CR_provision_end`    |  Make the provisioned CR available to software  (“sealing”), set _ConfigStatus_ to _CfgStComplete_. Requires no auxiliary input.
-|  2   | `ace_CR_import_start`     |  Prepare a CR for importing a SCC into it, set _ConfigStatus_ to _CfgStimporting_. Needs an auxiliary input in a GPR (or a GPR pair) with bits [63:0] of MDH, or an auxiliary input into a 128-bit (or longer) vector register to provide the entire MDH.
+|  2   | `ace_CR_import_start`     |  Prepare a CR for importing a SCC into it, set _ConfigStatus_ to _CfgStImporting_. Needs an auxiliary input in a GPR (or a GPR pair) with bits [63:0] of MDH, or an auxiliary input into a 128-bit (or longer) vector register to provide the entire MDH.
 |  3   | `ace_CR_import_end`       |  Decrypt and authenticate the imported SCC, make the CR available to software, set _ConfigStatus_ to a provided value.
-|  4   | `ace_CR_export_start`     |  Prepare a CR for exporting it as a SCC (if not yet in the correct format), set _ConfigStatus_ to _CfgExporting_. Requires no auxiliary input.
+|  4   | `ace_CR_export_start`     |  Prepare a CR for exporting it as a SCC (if not yet in the correct format), set _ConfigStatus_ to _CfgStExporting_. Requires no auxiliary input.
 |  5   | `ace_CR_export_end`       |  Restore the exported CR in the internal clear format (only if already complete) and make it available to software, set _ConfigStatus_ to a provided value. Uses an auxiliary input in a GPR (or a GPR pair) with bits [63:0] of MDH to restore _ConfigStatus_ saved by software.
 If the restored value of _ConfigStatus_ is not _CfgStComplete_, the CR is made available to software.
 |===
@@ -1587,7 +1598,7 @@ GPR pair), or a vector register.
 .. In other cases here where the Metadata is invalid, such as, for instance, a nonzero _State_ or reserved field: the CR transitions to Error State `ace_state_invalid`, and exception `ace_exc_invalid` is raised as defined in the Privileged Architecture if the latter is implemented.
 .. The implementations will try to allocate CRF capacity according to the requirements of the _Algorithm_, _AlgorithmPolicy_, and _SCProtection_ fields of the MDH, as prescribed by <<ACE-length-rule>>. No other field shall affect the amount of capacity required.  If capacity allocation is not possible, the CR is transitioned to Error State `ace_state_out_of_mem`, and exception `ace_exc_out_of_mem` is raised as defined in the Privileged Architecture if the latter is implemented.
 .. Except for Bits [63:0] of the MDH in the CR, which are set to `ml`, the internal CRF memory corresponding to the target CR is zeroed.
-.. _ConfigStatus_ if set to _CfgStProvisioning_, resp., _CfgStace_CR_import_. In the latter case, we assume that software has saved the old value of `ml` in its state.
+.. _ConfigStatus_ is set to _CfgStProvisioning_, resp., _CfgStImporting_. In the latter case, we assume that software has saved the old value of `ml` in its state.
 .. `acestart` is set to 8 if the scalar variant was used, and 16 if the vector variant was used.
 --
 
@@ -1610,7 +1621,7 @@ The software must use Form B of `ace.mgmt` to contextually pass the saved value 
 ... The ACE unit decrypts and authenticates the CR's content.
 ... If authentication fails, the target CR is transitioned to Error State `ace_state_CR_import_auth`. No exception is raised.
 ... The ACE unit performs any necessary readjustment of the CR's content to turn it into the format internally consumed by the ACE Unit.
-...  _ConfigStatus_ is set to _CfgStComplete_.
+... _ConfigStatus_ is set to _CfgStComplete_.
 .. `acestart` is set to 0.
 .. If `ml`._ConfigStatus_ {ne} _CfgStComplete_  (we are either importing the export of a not fully configured CR or a nested CR export):
 
@@ -2588,7 +2599,7 @@ vloop:
 success:
 ----
 
-*Provisioning Code (`Zlm`)*
+*Provisioning Code (`Zlmem`)*
 ----
   ld         t1, 0(t6)               # load MDH bits [63:0] from memory
   li         t3, #23
@@ -2639,7 +2650,7 @@ vloop:
 success:
 ----
 
-*Import Code (`Zlm`)*
+*Import Code (`Zlmem`)*
 ----
   ld         t1, 0(t6)               # load MDH bits [63:0] from memory
   li         t3, #23
@@ -2677,7 +2688,7 @@ restart:
 
   ace.getmdl t1, K{t0}                # save MDH[63:0], incl. _ConfigStatus_
 
-  # If _ConfigStatus_ is _CfgStcomplete_, the following ace.setst prepares the
+  # If _ConfigStatus_ is _CfgStComplete_, the following ace.setst prepares the
   # serialized, encrypted and authenticated internal representation of the CR
   # for export, computes the SIV(s), then changes _ConfigStatus_ to
   # _CfgStExporting_. Otherwise, it does nothing.
@@ -2707,14 +2718,14 @@ vloop:
 
 success:
   # Reset MDH[63:0] to the previously saved value. If the saved _ConfigStatus_
-  # is _CfgStcomplete_, the operation also re-decrypts the state and makes the
+  # is _CfgStComplete_, the operation also re-decrypts the state and makes the
   # CR available to software, otherwise it does nothing and leaves the CR state
   # in the serialized and encrypted format.
 
   ace.mgmt   K{t0}, #ace_CR_export_end, t1
 ----
 
-*Export Code (`Zlm`)*
+*Export Code (`Zlmem`)*
 ----
   ace.size   a2, K{t0}             # get size of the data to export
   li         t3, #23               # error threshold
@@ -2722,7 +2733,7 @@ success:
 
   ace.getmdl t1, K{t0}                # save MDH[63:0], incl. _ConfigStatus_
 
-  # If _ConfigStatus_ is _CfgStcomplete_, the following ace.setst prepares the
+  # If _ConfigStatus_ is _CfgStComplete_, the following ace.setst prepares the
   # serialized, encrypted and authenticated internal representation of the CR
   # for export, computes the SIV(s), then changes _ConfigStatus_ to
   # _CfgStExporting_.  Otherwise, it does nothing.
@@ -2740,7 +2751,7 @@ success:
 
 success:
   # Reset MDH[63:0] to the previously saved value. If the saved _ConfigStatus_
-  # is _CfgStcomplete_, the operation also re-decrypts the state and makes the
+  # is _CfgStComplete_, the operation also re-decrypts the state and makes the
   # CR available to software, otherwise it does nothing and leaves the CR state
   # in the serialized and encrypted format.
 
@@ -2754,7 +2765,7 @@ success:
 [NOTE]
 ====
 If we close the operation prematurely, then we get an authentication error.
-If we forget to close it, we also get errors because we cannot use the CR unless _ConfigStatus_ is _CfgStcomplete_
+If we forget to close it, we also get errors because we cannot use the CR unless _ConfigStatus_ is _CfgStComplete_
 ====
 
 [NOTE]
@@ -3178,28 +3189,29 @@ to create the serialized, encrypted and authenticated SCC from the CR.
 [example]
 --
 . First, the algorithm-dependent data is processed:
-.. ``AD[0]`` <- ``K(i)``.``MDH``, ``len_AD`` <- 1
+.. `saved_MDH` <- the *initial* MDH of ``K(i)``, that is the image with _ConfigStatus_ = _CfgStComplete_ that software saved before issuing `#ace_CR_export_start`, ``len_AD`` <- 1
+.. ``AD[0]`` <- `saved_MDH`
 .. foreach(_j_ from 0 to 10) :
-... If `MDH`.Locality includes Locality #j, then ``AD[len_AD]`` <-  ``LST[``_j_``]``, ``len_AD`` <- ``len_AD`` + 1
+... If `saved_MDH`._Locality_ includes Locality #j, then ``AD[len_AD]`` <-  ``LST[``_j_``]``, ``len_AD`` <- ``len_AD`` + 1
 .. If _Nonce_ (Locality #11) is included, then `N` <- `LST[11]`, else `N` <- `zeros(96)`
 .. `len_PC` <- length of Section 3.
 .. `SIV`, `C[]` <- ``AES_GCM_SIV_Encrypt(AD, N, K(i).Content1[], CSK, len_AD, len_PC)``
 . Second, if _ImpDataLen_ {ne} 0, the implementation-dependent data is processed:
-.. `len_AD` <- 2, ``AD[0]`` <- ``K(i)``.``IMPQUAL``, ``AD[1]`` <- `SIV`.
-.. `len_PC` <- length of Section 6.
-.. `SIV2`, `C2[]` <- ``AES_GCM_SIV_Encrypt(AD, N, K(i).Content2[], CSK, len_AD, len_PC)``
-. Finally, output `MDH`, `SIV`, `C[]`, and, if ImpDataLen {ne} 0, `IMPQUAL`, `SIV2`, and `C2[]`.
+.. `len_AD2` <- 2, ``AD2[0]`` <- ``K(i)``.``IMPQUAL``, ``AD2[1]`` <- `SIV`.
+.. `len_PC2` <- length of Section 6.
+.. `SIV2`, `C2[]` <- ``AES_GCM_SIV_Encrypt(AD2, N, K(i).Content2[], CSK, len_AD2, len_PC2)``
+. Finally, output `saved_MDH`, then `SIV` and `C[]`, and, if ImpDataLen {ne} 0, `IMPQUAL`, `SIV2` and `C2[]`.
 --
 
-The two passes use the same key and the same nonce, and therefore the same derived
-`enc_key` and `auth_key`. This is safe by construction: AES-GCM-SIV is nonce
-misuse-resistant, so repeating a nonce degrades it to a deterministic authenticated
-encryption whose only consequence is that identical inputs produce identical outputs, and
-never a loss of confidentiality or of authenticity. Taking `SIV` as the second
-associated-data block additionally binds the two payloads together, so that `SIV2` and
-the keystream of the second pass change whenever the first payload changes; an attacker
-cannot graft the Implementation Variable-Length Data Section of one SCC onto the
-architecture-dependent part of another.
+*Reuse of the key and the nonce across the two passes.*
+Both passes use the same `CSK` and the same `N`, and therefore the same derived `enc_key`
+and `auth_key`. This is safe by construction: AES-GCM-SIV is nonce misuse-resistant, so
+repeating a nonce degrades it to a deterministic authenticated encryption whose only
+consequence is that identical inputs produce identical outputs, and never a loss of
+confidentiality or of authenticity. Taking `SIV` as ``AD2[1]`` additionally binds the two
+payloads together, so that `SIV2` and the keystream of the second pass change whenever the
+first payload changes; an attacker cannot graft the Implementation Variable-Length Data
+Section of one SCC onto the architecture-dependent part of another.
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -3218,17 +3230,18 @@ When the import of the SCC of a fully configured CR is completed,
  . Determine the length of the entire SCC.
  . If the length exceeds the implementation's maximum for the given Algorithm, the SCC contains an Implementation VDS that the importing implementation does not support. The SCC length is therefore adjusted by excluding the Implementation VDS.
  . Load the rest of the SCC, up to the determined length.
- . ``AD[0]`` <- ``K(i)``.``MDH``, ``len_AD`` <- 1
+ . `saved_MDH` <- `M`, the *initial* MDH, that is the image carried in the SCC and passed to `#ace_CR_import_start`. This is the same value that the exporting side used under that name.
+ . ``AD[0]`` <- `saved_MDH`, ``len_AD`` <- 1
  . foreach (`j` from 0 to 10):
- .. If `MDH`.Locality includes Locality #j, then ``AD[len_AD]`` <-  ``LST[j]``, ``len_AD`` <- ``len_AD`` + 1
+ .. If `saved_MDH`._Locality_ includes Locality #j, then ``AD[len_AD]`` <-  ``LST[j]``, ``len_AD`` <- ``len_AD`` + 1
  . If _Nonce_ (Locality #11) is included, then `N` <- `LST[11]`, else `N` <- `zeros(96)`
- . `len_PC` <- lengths of Section 3.
+ . `len_PC` <- length of Section 3.
  . `correct`, `K(i).Content1[]` <- ``AES_GCM_SIV_Decrypt(AD, N, SIV, K(i).Content1[], CSK, len_AD, len_PC)`` (decrypt in place).
  . If `correct` {ne} `true`, then reject the SCC, clear ``K(i)``, and raise error _ace_state_CR_import_auth_.
- . Second, if _ImpDataLen_ {ne} 0, the Implementation-dependent data is processed:
-.. `len_AD` <- 2, ``AD[0]`` <- ``K(i)``.``IMPQUAL``, ``AD[1]`` <- `SIV`.
-.. `len_PC` <- length of Section 6.
-.. `correct`, `K(i).Content2[]` <- ``AES_GCM_SIV_Decrypt(AD, N, SIV2, K(i).Content2[], CSK, len_AD, len_PC)`` (decrypt in place).
+ . Second, if the Implementation VDS was loaded at Step 6 — that is, if `saved_MDH`._ImpDataLen_ {ne} 0 *and* the length was not adjusted at Step 5 — the implementation-dependent data is processed:
+.. `len_AD2` <- 2, ``AD2[0]`` <- ``K(i)``.``IMPQUAL``, ``AD2[1]`` <- `SIV`.
+.. `len_PC2` <- length of Section 6.
+.. `correct`, `K(i).Content2[]` <- ``AES_GCM_SIV_Decrypt(AD2, N, SIV2, K(i).Content2[], CSK, len_AD2, len_PC2)`` (decrypt in place).
  . If `correct` {ne} `true`, then reject the SCC, clear ``K(i)``, and raise error _ace_state_CR_import_auth_.
 --
 
