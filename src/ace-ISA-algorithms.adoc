@@ -975,17 +975,12 @@ plaintext or ciphertext when absorbing into `GHASH`, and it places one obligatio
 caller:
 
 * *For the AD*, the caller shall zero every bit of the final block beyond the actual end
-  of the AD. `GHASH` absorbs that block whole, and cite:[nist-SP-800-38D] specifies the AD
-  as zero-padded to a block boundary, so a caller that leaves other data there computes a
-  tag that does not conform to the standard. No state is provided for a partial AD block,
-  because zero-padding by the caller is exactly what the standard requires and nothing is
-  concealed by doing it outside the ACE unit.
+  of the AD. `GHASH` absorbs that block whole, following cite:[nist-SP-800-38D].
+  No state is required to process a fractional last AD block.
 
 * *For the plaintext and ciphertext*, the caller shall not rely on zero-padding, and shall
   instead use States _Enc_Last_Block_ and _Dec_Last_Block_ for a final block that is
-  shorter than `b`. These states exist precisely because zero-padding is *not* sufficient
-  here: the value absorbed into `GHASH` on the encryption path is the ciphertext, whose
-  tail beyond the end of the message would otherwise be keystream rather than zeros. That
+  shorter than `b`, because zero-padding is *not* sufficient here: it
   would both leak keystream and produce a non-conforming tag.
 --
 
@@ -1010,17 +1005,17 @@ caller:
      `Xs` shall satisfy `1` {le} `Xs` {le} `1024`, that is an IV of 8 to 8192 bits; any other
      value, `0` included, *invalidates* the CR.
      Upon entering the state, `J0` is cleared: `J0 <- zeros(b)`.
-+
---
-The lower bound is a conformance requirement, not a convenience: cite:[nist-SP-800-38D]
-{sect}5.2.1.1 admits only initialization vectors of at least one bit, and {sect}8.2 requires
-every IV used with a given key to be distinct — a constraint an empty IV cannot satisfy for
-more than one message. Were `Xs` = 0 accepted, `process_VLI` would be entered with `len` = 0,
-which by <<ACE-process-VLI>> means "length not defined by the caller", so the state would
-absorb indefinitely and `finalize()` would never run: `J0` would stay zero and no counter
-would ever be derived. The upper bound of 1024 octets is this specification's own limit, set
-by the 16-bit `len` field of the Serialized Context.
---
+// +
+// --
+// The lower bound is a conformance requirement, not a convenience: cite:[nist-SP-800-38D]
+// {sect}5.2.1.1 admits only initialization vectors of at least one bit, and {sect}8.2 requires
+// every IV used with a given key to be distinct — a constraint an empty IV cannot satisfy for
+// more than one message. Were `Xs` = 0 accepted, `process_VLI` would be entered with `len` = 0,
+// which by <<ACE-process-VLI>> means "length not defined by the caller", so the state would
+// absorb indefinitely and `finalize()` would never run: `J0` would stay zero and no counter
+// would ever be derived. The upper bound of 1024 octets is this specification's own limit, set
+// by the 16-bit `len` field of the Serialized Context.
+// --
 
   ** In State _Set_Aux_Value_, we enter Subalgorithm _process_VLI_ (cf. <<ACE-process-VLI>>) as: +
   `process_VLI(len, block=J0, b, state=J0, b, input_base, block_base, 0, cumul_len, process_block(), finalize(), granularity=b)`, where `len` is the IV length in octets, and
@@ -1065,7 +1060,7 @@ If `ACELEN` > `128`, the above operation is executed `ACELEN/128` times.
 []
   . `ctr <- int(bswap(J0[127:96]))`
   . `ctr <- (ctr + 1) mod 2^32^`.
-  . If `ctr` = `start_ctr` or `ctr` = `(start_ctr - 1) mod 2^32^`, then
+  . If `ctr` = `(start_ctr - 1) mod 2^32^`, then: (process at most  2^32^ - 2 blocks)
    .. the CR is *invalidated*.
    . else
   .. `J0[127:96] <- binBE(ctr,32)`
@@ -1075,18 +1070,18 @@ If `ACELEN` > `128`, the above operation is executed `ACELEN/128` times.
 --
 +
 If `ACELEN` is a multiple of `b`, the above operations are executed `ACELEN/b` times, encrypting each `b`-bit block of `INPUT` into the corresponding `b`-bit block of `OUTPUT`.
-+
---
-*The two excluded counter values.* `start_ctr` is excluded because it produces the tag mask,
-and reusing it for data would disclose that mask. `start_ctr - 1` is excluded so that the
-number of data blocks a CC can process matches cite:[nist-SP-800-38D] {sect}5.2.1.1 exactly:
-the admissible counter values are then `start_ctr + 1` through `start_ctr + (2^32^ - 2)`,
-that is 2^32^ - 2 blocks, which at 128 bits each is 2^39^ - 256 bits — the standard's ceiling
-on the length of the plaintext. Excluding only `start_ctr` would admit 2^32^ - 1 blocks, one
-more than the standard permits. The guard is reached only after 64 GiB have passed through a
-single CC; it is a conformance bound, and the security-critical part of it is the exclusion
-of `start_ctr`.
---
+// +
+// --
+// *The two excluded counter values.* `start_ctr` is excluded because it produces the tag mask,
+// and reusing it for data would disclose that mask. `start_ctr - 1` is excluded so that the
+// number of data blocks a CC can process matches cite:[nist-SP-800-38D] {sect}5.2.1.1 exactly:
+// the admissible counter values are then `start_ctr + 1` through `start_ctr + (2^32^ - 2)`,
+// that is 2^32^ - 2 blocks, which at 128 bits each is 2^39^ - 256 bits — the standard's ceiling
+// on the length of the plaintext. Excluding only `start_ctr` would admit 2^32^ - 1 blocks, one
+// more than the standard permits. The guard is reached only after 64 GiB have passed through a
+// single CC; it is a conformance bound, and the security-critical part of it is the exclusion
+// of `start_ctr`.
+// --
 
 ** To transition to State _Enc_Last_Block_, a Form B `ace.setst` instruction is issued, whereby
 `last_blk_len`, the bit length of the last block, is set to the auxiliary argument `Xs`. A value of zero, or larger than 127, *invalidates* the CR, as it does in the other modes that take a final-block length (cf. <<ACE-OCB-mode>>, <<ACE-CMAC-mode>>, <<ACE-Ascon-AEAD128>>).
