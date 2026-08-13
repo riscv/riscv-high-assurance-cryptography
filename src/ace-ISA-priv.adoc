@@ -61,12 +61,38 @@ The actual numbers are TBD.
 |      | Load page fault                | {empty}
 |      | Store page fault               | {empty}
 | TBD  | `ace_guru_meditation`          | Fatal and unrecoverable system failure in the ACE unit.
-| TBD  | `ace_exc_CR_unconf`            | Use of an unconfigured, or partially configured CR as a source in any instruction except `ace.size`.
+| TBD  | `ace_exc_CR_unconf`            | Use of an unconfigured, or partially configured CR as a source in any instruction except those that are defined to operate on a CR in that condition, namely `ace.size`, the `ace.getmd*` group — `ace.getmdl`, `ace.getmdh` and `ace.getmdv`, and hence also the `ace.getst` pseudo-instruction — and the data-movement instructions used during configuration and export, `ace.load`, `ace.store` and `ace.mv`. See the note below the table.
 | TBD  | `ace_exc_CR_other`             | Use of a CR as a source in any instruction (including `ace.size`), when the status of the CR is “Other/Lazy”, as per <<ACE-CSR-scrstatus>>.
 | TBD  | `ace_exc_out_of_mem`           | Insufficient CRF memory for configuration instruction. This may be set by privileged code in case they do not handle the CR allocation themselves.
 | TBD  | `ace_exc_buf_unconf`           | Use of ACEIOBUF as an input or an output while unconfigured.
 | TBD  | `ace_exc_invalid`              | Invalid parameters in metadata, including expired CR state. There is deliberately no separate `ace_exc_expired`: expiry is reported through this code, and the handler distinguishes it by reading the _State_ field of the CR, which the hardware has set to `ace_state_expired`.
 |===
+
+[NOTE]
+====
+The exemptions listed for `ace_exc_CR_unconf` are not optional: without them the
+provisioning, import and export sequences of <<ACE-management-code-snippets>> could not
+execute at all, because each of them deliberately operates on a CR that is unconfigured or
+only partially configured.
+
+* `ace.getmdl` is *defined* to return all zeros for a CR in the _Off_ State, and
+  `ace.getst`, which is built on it, is how those sequences test for an error after every
+  step.
+* `ace.load` and `ace.mv` write a CR precisely while its _ConfigStatus_ is
+  _CfgStProvisioning_ or _CfgStImporting_, and raise an illegal instruction exception if it
+  is _CfgStComplete_ instead; `ace.store` and the CR-reading forms of `ace.mv` read a CR
+  whose _ConfigStatus_ is _CfgStExporting_.
+* `ace.size` is exempt so that a handler can discover how much memory a CR needs before
+  anything has been loaded into it.
+
+Instructions that merely *target* a CR as the destination of a configuration operation,
+`ace.mgmt` above all, likewise never raise this exception: an unconfigured or partially
+configured CR is the only legal operand for them.
+
+`ace_exc_CR_other` carries no such exemptions. A CR marked Lazy has no valid content at
+all — its authoritative value is the SCC held by some privilege mode — so every access,
+including a metadata read, must trap so that the handler can restore it first.
+====
 
 [WARNING]
 ====
@@ -167,6 +193,24 @@ In implementations with a writable `misa.L`, the `mstatus.ACES` field may be pre
 
 When `TSR` is set to 1, all ACE memory instructions cause an illegal-instruction exception in S-mode.
 
+[WARNING]
+====
+This reuse of `TSR`, and the corresponding reuse of `VTSR` below, must be discussed with
+the RISC-V Architecture Review Committee before ratification.
+
+`mstatus.TSR` is currently defined by cite:[RISCV-ISA-Priv] for one purpose only, namely
+to trap `SRET`. Extending it to trap ACE memory instructions changes the meaning of an
+already architected bit: a hypervisor that sets `TSR` today does so to intercept
+supervisor-mode returns, and under this specification it would silently begin trapping
+`ace.load`, `ace.store`, `ace.input` and `ace.output` as well, whether or not it is
+prepared to emulate them.
+
+The alternative is to give the behavior its own enable — for instance a bit in an
+`*envcfg` CSR — which leaves `TSR` untouched and lets the two controls be set
+independently. Which of the two the architecture should adopt is not for this document to
+decide alone.
+====
+
 [NOTE]
 ====
 ACE memory instructions are allowed to trap so that implementations have more
@@ -197,6 +241,14 @@ In implementations with a writable `misa.L`, `vsstatus.ACES` may be present even
 
 When `VTSR` is set to 1, all ACE memory instructions cause a
 virtual-instruction exception in VS-mode.
+
+[WARNING]
+====
+As for `TSR` (<<ACE-ACES-field-in-mstatus>>), this reuse of `VTSR` must be discussed with
+the RISC-V Architecture Review Committee before ratification, and the two must be settled
+together: whatever mechanism is chosen to gate the trapping of ACE memory instructions in
+S-mode should gate it in VS-mode by the same means.
+====
 
 // ////////////////////////////////////////////////////////////////////
 

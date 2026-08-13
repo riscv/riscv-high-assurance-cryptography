@@ -1312,7 +1312,6 @@ CMAC cannot detect a partial pending block at all.
   (`ace-introduction.adoc:96-106`) including the unresolved `kl` vs `ace.` naming.
   `:revdate: 6/2025`, `:revnumber: 0.0` (`ace.adoc:6-7`) should be refreshed before
   submission.
-
 ---
 
 ## Suggested order of work

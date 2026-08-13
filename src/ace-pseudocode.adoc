@@ -9,7 +9,7 @@ octet at the lowest address in its least significant bits.
 === Electronic Codebook Modes (Direct Encryption/Decryption)
 
 The following pseudocode illustrates how to use an ECB CC to encrypt a data using a block cipher.
-In this example, as with most other examples, we assume that the block cipher has a width of 128 bits (`IOLEN` is also 128).
+In this example, as with most other examples, we assume that the block cipher has a width of 128 bits (`ACELEN` is also 128).
 The upper case `IMPORT` instruction is a placeholder for an import code snippet, library or API call.
 
 [[ACE-pseudocode-ECB-encryption]]
@@ -66,7 +66,7 @@ foreach(i from 0 to len_in_bytes(PT)/16-1) {
 === XEX/XTS modes (one or two keys)
 
 We provide only encryption pseudocode, decryption is similar
-(also this example assumes `b` = `IOLEN` = 128).
+(also this example assumes `b` = `ACELEN` = 128).
 
 [[ACE-pseudocode-basic-IV-mode]]
 .Pseudocode for encryption in any IV-based non-authenticated mode without associated data
@@ -81,12 +81,16 @@ IMPORT K0, (X5)
 
 V0 ← IV
 ace.setst K0, #ace_state_encrypt, V0     // Configure CR for encryption, set tweak
-foreach(i from 0 to ceil(len_in_bytes(PT)/16)-1) {
+foreach(i from 0 to floor(len_in_bytes(PT)/16)-1) {
    V0 ← PT[16*i .. 16*i+15]
    ace.exec V0, K0, V0                   // Encrypt one block of plaintext
    CT[16*i .. 16*i+15] ← V0
 }
 ----
+
+The loop covers whole blocks only: XEX has no partial-block state. A data unit whose length
+is not a multiple of `b` is completed by ciphertext stealing, performed in software as
+described in <<ACE-XTS-from-XEX>>.
 
 To implement the XTS mode, the ciphertext stealing part is easy to realize using the XEX algorithm together with vector masking and shifting operations.
 (((ACE, algorithm, XTS)))
@@ -96,8 +100,15 @@ To implement the XTS mode, the ciphertext stealing part is easy to realize using
 [[ACE-GCM-mode-examples]]
 === GCM Mode
 
-In <<ACE-pseudocode-GCM-encryption>> we show pseudocode for GCM encryption, again with `b` = `IOLEN` = 128, and `c` = 32).
-The code assumes that both AD and plaintext (or the ciphertext for the decryption) are zero-padded to a multiple of `b` bits, in this case 128 bits.
+In <<ACE-pseudocode-GCM-encryption>> we show pseudocode for GCM encryption, again with
+`b` = `ACELEN` = 128 and `c` = 32.
+
+The two operands are treated differently, as <<ACE-GCM-mode>> requires. The caller
+zero-fills the final block of the *associated data* beyond its actual end, and `GHASH`
+absorbs that block whole. The *plaintext* and *ciphertext* must **not** be zero-padded:
+a final block shorter than `b` is presented in State _Enc_Last_Block_, respectively
+_Dec_Last_Block_, so that no keystream bit past the end of the message is absorbed into
+`GHASH` or written out.
 
 [[ACE-pseudocode-GCM-encryption]]
 .GCM Encryption
@@ -110,45 +121,81 @@ The code assumes that both AD and plaintext (or the ciphertext for the decryptio
 vsetivli zero, 4, e32, m1, ta, ma         // Use 128-bit vectors
 IMPORT K0, (X5)                      // Import, and compute the derived Auth Key
 
-// The next operations set the nonce
-ace.setst K0, #ace_state_set_aux_value
-V0 ← nonce
+// Set the IV.  The Form B ace.setst carries its length in octets; the IV itself
+// is then absorbed by ace.exec.  One suffices for the usual 96-bit IV; a longer
+// one takes several.  When the last octet has been absorbed the algorithm
+// computes J0 and moves to _Hash_Absorb_ by itself, so no ace.setst is issued
+// for that transition.
+X1 ← len_in_bytes(IV)
+ace.setst K0, #ace_state_set_aux_value, X1
+vsetvli  zero, X1, e8, m1, ta, ma        // ACELEN = 8*len_in_bytes(IV)
+V0 ← IV
 ace.exec K0, V0
+vsetivli zero, 4, e32, m1, ta, ma        // back to 128-bit vectors
 
-// Compute AD contribution to Auth Data
-ace.setst K0, #ace_state_hash_absorb
-foreach(i from 0 to len_in_bytes(AD)/16-1) {
+// Compute the AD contribution to the tag.  The caller has zero-filled the last
+// block beyond the end of the AD.
+foreach(i from 0 to ceil(len_in_bytes(AD)/16)-1) {
    V0 ← AD[16*i .. 16*i+15]
-   ace.exec K0, V0                       // Absorb it into hash
+   ace.exec K0, V0                       // Absorb it into GHASH
 }
 
-// Encrypt plaintext and continue tag computation
+// Encrypt the whole blocks of the plaintext
 ace.setst K0, #ace_state_encrypt
-foreach(i from 0 to len_in_bytes(PT)/16-1) {
+PT_fullblocks ← floor(len_in_bits(PT)/128)
+foreach(i from 0 to PT_fullblocks-1) {
    V0 ← PT[16*i .. 16*i+15]
    ace.exec V1, K0, V0
    CT[16*i .. 16*i+15] ← V1
 }
 
-// Finally, we absorb the lengths into tag, finalize it, and output it
+// Fractional final block, if any.  The plaintext is not zero-padded here.
+X1 ← len_in_bits(PT) mod 128
+if (X1 != 0) then {
+   ace.setst K0, #ace_state_enc_last_block, X1
+   V0 ← PT[16*PT_fullblocks .. 16*PT_fullblocks+ceil(X1/8)-1]
+   ace.exec V1, K0, V0
+   CT[16*PT_fullblocks .. 16*PT_fullblocks+ceil(X1/8)-1] ← V1
+}
+
+// Absorb the lengths, finalize the tag, and read it out
 V1 ← binBE(len_in_bits(PT), 64) @ binBE(len_in_bits(AD), 64)
 ace.setst K0, #ace_state_enc_tag_finalize, V1
-ace.exec V2, K0                          // V2 contains the finalized hash
+ace.exec V2, K0                          // V2 contains the tag
 ----
 
-GCM decryption differs from encryption as follows:
-the roles of `PT` and `CT` are reversed,
-states _encrypt_ and _enc_tag_finalize_ are replaced by states _decrypt_ and _dec_tag_finalize_,
-and the last lines are as follows:
+GCM decryption differs from encryption as follows: the roles of `PT` and `CT` are reversed,
+States _Encrypt_ and _Enc_Last_Block_ are replaced by _Decrypt_ and _Dec_Last_Block_, and
+the tag is finalized and verified instead of being emitted, as shown below. Note that no
+`ace.exec` is issued in State _Dec_Tag_Finalize_: the recomputed tag stays inside the CR and
+is never made available to software on this path.
 
 [[ACE-pseudocode-GCM-decryption]]
 .GCM Decryption
 ----
-// Finally, we absorb the lengths into tag, finalize it, and verify it
-ace.setst K0, #ace_state_dec_tag_finalize
-V1 ← binBE(len_in_bits(CT), 64) @ binBE(len_in_bits(AD), 64)
-ace.exec V2, K0, V1                      // V2 contains the finalized hash
+// Decrypt the whole blocks of the ciphertext
+ace.setst K0, #ace_state_decrypt
+CT_fullblocks ← floor(len_in_bits(CT)/128)
+foreach(i from 0 to CT_fullblocks-1) {
+   V0 ← CT[16*i .. 16*i+15]
+   ace.exec V1, K0, V0
+   PT[16*i .. 16*i+15] ← V1
+}
 
+// Fractional final block, if any.  The ciphertext is not zero-padded here.
+X1 ← len_in_bits(CT) mod 128
+if (X1 != 0) then {
+   ace.setst K0, #ace_state_dec_last_block, X1
+   V0 ← CT[16*CT_fullblocks .. 16*CT_fullblocks+ceil(X1/8)-1]
+   ace.exec V1, K0, V0
+   PT[16*CT_fullblocks .. 16*CT_fullblocks+ceil(X1/8)-1] ← V1
+}
+
+// Absorb the lengths.  The tag is computed and retained inside the CR.
+V1 ← binBE(len_in_bits(CT), 64) @ binBE(len_in_bits(AD), 64)
+ace.setst K0, #ace_state_dec_tag_finalize, V1
+
+// Supply the received tag; the comparison sets _Success_ or _Failure_
 V1 ← tag_from_payload
 ace.setst K0, #ace_state_hash_verify, V1
 ace.getst X1, K0
@@ -182,6 +229,9 @@ foreach(i from 0 to ceil(len_in_bytes(AD)/16)-1) {
 // Using counter 1 here would reuse E(K,J0), which is the tag mask: doing so
 // discloses the mask and destroys both confidentiality and authenticity.
 
+// The final block is truncated to the length of the message remainder before it
+// is stored; the copy absorbed into GHASH is the zero-padded ciphertext, which is
+// what SP 800-38D specifies.
 counter ← 2
 foreach(i from 0 to ceil(len_in_bytes(PT)/16)-1) {
    V5 ← binBE(counter,32) @ V0[95:0]
@@ -204,7 +254,7 @@ tag ← V3 xor V2
 [[ACE-GCM-SIV-mode-examples]]
 === GCM-SIV Mode
 
-We show in <<ACE-pseudocode-GCM-SIV-encryption>> how to perform AEAD encryption with a GCM-SIV CC (with `b` = `IOLEN` = 128).
+We show in <<ACE-pseudocode-GCM-SIV-encryption>> how to perform AEAD encryption with a GCM-SIV CC (with `b` = `ACELEN` = 128).
 <<ACE-pseudocode-GCM-SIV-decryption>> is the corresponding pseudocode for decryption.
 
 [[ACE-pseudocode-GCM-SIV-encryption]]
@@ -220,36 +270,49 @@ We show in <<ACE-pseudocode-GCM-SIV-encryption>> how to perform AEAD encryption 
 vsetivli zero, 4, e32, m1, ta, ma         // Use 128-bit vectors
 IMPORT K0, (X5)
 
-// Set the nonce (and the derived Authentication Key).
-ace.setst K0, #ace_state_set_aux_value
+// Set the nonce, which also derives enc_key and auth_key.  Form C: the nonce is
+// the vector operand of ace.setst, and no ace.exec is issued in this state.
 V0 ← nonce
-ace.exec K0, V0
+ace.setst K0, #ace_state_set_aux_value, V0
 
+// Absorb the AD and then the plaintext into POLYVAL.  The caller has zero-filled
+// the last block of each beyond its actual end.
 ace.setst K0, #ace_state_hash_absorb
-foreach(i from 0 to len_in_bytes(AD)/16-1) {
+foreach(i from 0 to ceil(len_in_bytes(AD)/16)-1) {
    V0 ← AD[16*i .. 16*i+15]              // Load a block of associated data
-   ace.exec K0, V0                       // Absorb it into hash
+   ace.exec K0, V0                       // Absorb it into POLYVAL
 }
 
-foreach(i from 0 to len_in_bytes(PT)/16-1) {
+foreach(i from 0 to ceil(len_in_bytes(PT)/16)-1) {
    V0 ← PT[16*i .. 16*i+15]              // Load a block of plaintext
-   ace.exec K0, V0                       // Absorb it into hash
+   ace.exec K0, V0                       // Absorb it into POLYVAL
 }
 
-V0 ← bin(len_in_bits(PT), 64) @ bin(len_in_bits(AD), 64)
-ace.exec K0, V0                          // Absorb lengths into hash
-
-// Finalize the SIV computation, set and return it
+// Finalize the SIV.  The lengths are the *input* of a Form A ace.exec in State
+// _Enc_Tag_Finalize_, and the SIV is its output; they are not absorbed by a
+// further ace.exec in _Hash_Absorb_.
 ace.setst K0, #ace_state_enc_tag_finalize
-ace.exec V2,K0
+V0 ← bin(len_in_bits(PT), 64) @ bin(len_in_bits(AD), 64)
+ace.exec V2, K0, V0
 tag ← V2
 
-// Encrypt the plaintext
+// Second pass: encrypt the whole blocks of the plaintext, with the SIV as IV
 ace.setst K0, #ace_state_encrypt
-foreach(i from 0 to len_in_bytes(PT)/16-1) {
+PT_fullblocks ← floor(len_in_bits(PT)/128)
+foreach(i from 0 to PT_fullblocks-1) {
    V0 ← PT[16*i .. 16*i+15]              // Load a block of plaintext
    ace.exec V1, K0, V0                   // Encrypt the block
    CT[16*i .. 16*i+15] ← V1              // Store a block of ciphertext
+}
+
+// Fractional final block, if any.  Here the plaintext must not be zero-padded:
+// the state exists so that no keystream bit past its end is written to CT.
+X1 ← len_in_bits(PT) mod 128
+if (X1 != 0) then {
+   ace.setst K0, #ace_state_enc_last_block, X1
+   V0 ← PT[16*PT_fullblocks .. 16*PT_fullblocks+ceil(X1/8)-1]
+   ace.exec V1, K0, V0
+   CT[16*PT_fullblocks .. 16*PT_fullblocks+ceil(X1/8)-1] ← V1
 }
 ----
 
@@ -266,27 +329,42 @@ foreach(i from 0 to len_in_bytes(PT)/16-1) {
 vsetivli zero, 4, e32, m1, ta, ma         // Use 128-bit vectors
 IMPORT K0, (X5)
 
-// The next operations set the nonce and SIV.
+// Set the nonce
 V0 ← nonce
 ace.setst K0, #ace_state_set_aux_value, V0
 
-// Compute AD contribution to Auth Data
+// Set the received SIV, which serves as the IV of the decryption.  This is what
+// State _Set_Aux_Value_2_ is for; the SIV is not passed to _Hash_Absorb_.
 V0 ← SIV
-ace.setst K0, #ace_state_hash_absorb, V0
-foreach(i from 0 to len_in_bytes(AD)/16-1) {
+ace.setst K0, #ace_state_set_aux_value_2, V0
+
+// Absorb the AD.  The caller has zero-filled the last block beyond its end.
+ace.setst K0, #ace_state_hash_absorb
+foreach(i from 0 to ceil(len_in_bytes(AD)/16)-1) {
    V0 ← AD[16*i .. 16*i+15]
-   ace.exec K0, V0                       // Absorb it into hash
+   ace.exec K0, V0                       // Absorb it into POLYVAL
 }
 
-// Decrypt ciphertext and continue computation of tag
+// Decrypt the whole blocks; each recovered block is absorbed into POLYVAL
 ace.setst K0, #ace_state_decrypt
-foreach(i from 0 to len_in_bytes(CT)/16-1) {
+CT_fullblocks ← floor(len_in_bits(CT)/128)
+foreach(i from 0 to CT_fullblocks-1) {
    V0 ← CT[16*i .. 16*i+15]
    ace.exec V1, K0, V0
    PT[16*i .. 16*i+15] ← V1
 }
 
-// Finally, we absorb the lengths of AD and plaintext into tag AND verify
+// Fractional final block, if any
+X1 ← len_in_bits(CT) mod 128
+if (X1 != 0) then {
+   ace.setst K0, #ace_state_dec_last_block, X1
+   V0 ← CT[16*CT_fullblocks .. 16*CT_fullblocks+ceil(X1/8)-1]
+   ace.exec V1, K0, V0
+   PT[16*CT_fullblocks .. 16*CT_fullblocks+ceil(X1/8)-1] ← V1
+}
+
+// Absorb the lengths and verify, with a Form B ace.exec: the recomputed SIV is
+// compared internally against the one supplied above
 ace.setst K0, #ace_state_dec_tag_finalize
 V0 ← bin(len_in_bits(PT), 64) @ bin(len_in_bits(AD), 64)
 ace.exec K0, V0
@@ -299,7 +377,7 @@ if (X1 != ace_state_success) then { handle error } // Do not use the plaintext i
 [[ACE-OCB-mode-examples]]
 === OCB Mode
 
-In this section we show pseudocode for OCB encryption and decryption (`b` = `IOLEN` = 128).
+In this section we show pseudocode for OCB encryption and decryption (`b` = `ACELEN` = 128).
 
 [[ACE-pseudocode-OCB-encryption]]
 .OCB Encryption
@@ -336,10 +414,10 @@ foreach(i from 0 to AD_fullblocks-1) {
    ace.exec K0, V0                       // Absorb it into hash
 }
 X1 ← AD_len mod 128                      // Can be zero
-ace.setst K0, #ace_state_hash_finalize, X1
+ace.setst K0, #ace_state_hash_last_block, X1
 if (X1 != 0) then {
-   V0 ← AD[AD_fullblocks*16 .. AD_fullblocks*16+ceil(X1/8)]
-   ace.exec K0, V0                       // Absorb it into hash and encrypt
+   V0 ← AD[AD_fullblocks*16 .. AD_fullblocks*16+ceil(X1/8)-1]
+   ace.exec K0, V0                       // Absorb the last AD block
 }
 
 // Encrypt plaintext and continue computation of tag
@@ -350,30 +428,34 @@ foreach(i from 0 to PT_fullblocks-1) {
    CT[16*i .. 16*i+15] ← V1
 }
 X1 ← PT_len mod 128                      // Can be zero
-ace.setst K0, #ace_state_last_block, X1
+ace.setst K0, #ace_state_enc_last_block, X1
 if (X1 != 0) then {
-   V0 ← PT[PT_fullblocks*16 .. PT_fullblocks*16+ceil(X1/8)]
-   ace.exec V1, K0, V0                   // Absorb it into hash and encrypt
-   CT[PT_fullblocks*16 .. PT_fullblocks*16+ceil(X1/8)] ← V1
+   V0 ← PT[PT_fullblocks*16 .. PT_fullblocks*16+ceil(X1/8)-1]
+   ace.exec V1, K0, V0                   // Encrypt it and fold it into the tag
+   CT[PT_fullblocks*16 .. PT_fullblocks*16+ceil(X1/8)-1] ← V1
 } else
-   ace.exec K0
+   ace.exec K0                           // Form D: finalize the tag only
 
+// _Enc_Last_Block_ transitions to _Enc_Tag_Finalize_ on its own, so no
+// ace.setst is issued here.
 ace.exec V1, K0                          // output tag
 ----
 
-OCB decryption differs from encryption as follows:
-the roles of `PT` and `CT` are reversed,
-states _encrypt_ and _enc_tag_finalize_ are replaced by states _decrypt_ and _dec_tag_finalize_,
-and the last lines are as follows:
+OCB decryption differs from encryption as follows: the roles of `PT` and `CT` are reversed,
+States _Encrypt_ and _Enc_Last_Block_ are replaced by _Decrypt_ and _Dec_Last_Block_, and the
+tag is verified instead of being emitted. OCB has no _Dec_Tag_Finalize_ state: after the last
+block, _Dec_Last_Block_ transitions to _Hash_Verify_ directly, and the received tag is
+supplied there as shown below.
 
 [[ACE-pseudocode-OCB-decryption-difference]]
 .OCB Decryption
 ----
-V1 ← tag
-ace.setst K0, #ace_state_hash_verify, V1
+V1 ← tag                                 // the tag received with the message
+ace.setst K0, #ace_state_hash_verify, V1 // compares it against checksum_P
 ace.getst X1, K0
-if (X1 !== ace_state_success) then:  // do not use the plaintext if error
+if (X1 != ace_state_success) then {      // do not use the plaintext if error
     handle error
+}
 ----
 
 [[ACE-CMAC-mode-example]]
@@ -389,10 +471,10 @@ vsetivli zero, 4, e32, m1, ta, ma       // Use 128-bit vectors
 IMPORT K0, (X5)
 
 ace.setst K0, #ace_state_hash_absorb
-blocks = floor(M_len/128)
-remainder = M_len % 128
+blocks    ← floor(M_len/128)
+remainder ← M_len mod 128
 if remainder == 0 and blocks > 0 then   // a whole number of full blocks:
-   blocks ← blocks - 1                  // the last one is the "last block"
+   blocks    ← blocks - 1               // the last one is the "last block"
    remainder ← 128                  // M_len = 0 leaves blocks = 0, remainder = 0,
                                     // which CMAC pads to 10* with subkey K2
 
@@ -404,8 +486,7 @@ foreach(i from 0 to blocks-1) {
 X1 ← remainder
 ace.setst K0, #ace_state_hash_last_block, X1
 V0 ← M[16*blocks .. 16*blocks+15]
-ace.exec K0, V0
-
-ace.setst K0, #ace_state_hash_finalize
+ace.exec K0, V0                         // absorbing it moves the CC to
+                                        // _Hash_Output_ by itself
 ace.exec V0, K0  // this is the value of the CMAC
 ----
