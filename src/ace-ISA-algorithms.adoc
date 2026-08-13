@@ -1241,7 +1241,7 @@ Data Structures:::
 |   i   | 128           |  MDH        | {empty}
 |  ii   | `k` or 64     | `key`       | Key value or System Key Identifier
 | iii   | 128           | `J0`        | {empty}
-|  iv   | 32            | `blocks`    | Number of blocks this CC is permitted to process, as `bin(blocks,32)`. See the State Machine Behavior below.
+|  iv   | 32            | `budget`    | Number of blocks this CC is permitted to process, as `bin(budget,32)`. See the State Machine Behavior below.
 |   v   | 32 or 96      | Padding     | {empty}
 |===
 --
@@ -1251,28 +1251,21 @@ Data Structures:::
 --
 Same as for GCM, with the addition of
 
-** `blocks`: an integer in the range 0 to 2^32^-1, the number of blocks that this CC may
+** `budget`: an integer in the range 0 to 2^32^-1, the number of blocks that this CC may
    still process.
 
-Upon provisioning, `start_ctr <- int(bswap(J0[127:96]))`, i.e. the last four octets of `J0` read as a big-endian integer, and `blocks` is set to the value carried in the Provisioning Input.
+Upon provisioning, `start_ctr <- int(bswap(J0[127:96]))`, i.e. the last four octets of `J0` read as a big-endian integer, and `budget` is set to the value carried in the Provisioning Input.
 --
 
 * *Serialized Context*: {empty}
 +
 --
-Same as for GCM, except that the padding of Position vii is reduced by 32 bits to make
-room for `blocks`, which follows `last_blk_len`:
-
 [cols="^8%,<15%,<15%,<62%",options="header"]
 |===
 |  Pos. | Size (Bits)   | Field          | Description
-| vii   | 32            | `blocks`       | Remaining block budget, serialized as `bin(blocks,32)`.
+| vii   | 32            | `budget`       | Remaining block budget, serialized as `bin(budget,32)`.
 | viii  | 16 or 48      | Padding        | {empty}
 |===
-
-`blocks` *shall* be serialized. It is part of the CC's state, and a budget that did not
-survive an export and re-import would be no protection at all: software could refresh it at
-will by cycling the CC through memory.
 --
 
 * *States and Allowed Transitions:* {empty}
@@ -1291,27 +1284,27 @@ The differences with respect to GCM are:
  ** To transition to State _Hash_Absorb_: The ``ace.setst`` instruction shall be of Form A, i.e., _without any additional inputs_, since the IV is already included in the PI.
  ** No transition back to State _Initial_ is allowed. This is one of the algorithm-specific
     prohibitions contemplated by <<ACE-State-field>>.
- ** Every `ace.exec` that *consumes* blocks decreases `blocks` by the number of blocks it
+ ** Every `ace.exec` that *consumes* blocks decreases `budget` by the number of blocks it
     processed, which is `ACELEN`/`b` in States _Hash_Absorb_, _Encrypt_ and _Decrypt_, and
     1 in States _Enc_Last_Block_ and _Dec_Last_Block_. A Form C `ace.exec` does *not*
-    decrease `blocks`: in State _Enc_Tag_Finalize_ it only emits the tag, which consumes no
+    decrease `budget`: in State _Enc_Tag_Finalize_ it only emits the tag, which consumes no
     block.
- ** If an `ace.exec` would decrease `blocks` below zero, it performs no operation, the CR
+ ** If an `ace.exec` would decrease `budget` below zero, it performs no operation, the CR
     is *invalidated* — its _State_ becomes `ace_state_invalid` — and exception
     `ace_exc_invalid` is raised as defined in the Privileged Architecture, if the latter is
     implemented.
-+
-Exhaustion is reported as an invalid state rather than as _Failure_ because _Failure_ means
-an authentication or verification failure (<<ACE-states-valid>>), and a caller checking a
-decryption result must be able to tell a forged ciphertext from a CC that has run out of
-budget.
-+
-Since the budget is charged only to the `ace.exec` instructions that consume blocks, it can
-be sized exactly: `blocks` is the number of AD blocks plus the number of
-plaintext/ciphertext blocks, counting a final partial block as one. The tag-emitting
-`ace.exec` is free, so a CC provisioned with that count completes the message and is left
-with `blocks` = 0, unable to begin a second one.
 --
+// +
+// Exhaustion is reported as an invalid state rather than as _Failure_ because _Failure_ means
+// an authentication or verification failure (<<ACE-states-valid>>), and a caller checking a
+// decryption result must be able to tell a forged ciphertext from a CC that has run out of
+// budget.
+// +
+// Since the budget is charged only to the `ace.exec` instructions that consume blocks, it can
+// be sized exactly: `budget` is the number of AD blocks plus the number of
+// plaintext/ciphertext blocks, counting a final partial block as one. The tag-emitting
+// `ace.exec` is free, so a CC provisioned with that count completes the message and is left
+// with `budget` = 0, unable to begin a second one.
 
 The rules do not forbid keeping an older copy of the SCC in memory to restart the state machine and use many-time pads.
 It is the responsibility of the caller to make sure that the SCC is not abused.
