@@ -82,6 +82,8 @@ is not yet complete or contains ambiguities.
 | 5    | 9    | `SHA3-512_HMAC` (provisionable key) | `Zlesha3h` and `Zlhmacm`
 | 5    | 10   | `KMAC128`                           | `Zlesha3h` and `Zlkmacm`
 | 5    | 11   | `KMAC256`                           | `Zlesha3h` and `Zlkmacm`
+| 5    | 12   | `KMACXOF128`                        | `Zlesha3h` and `Zlkmacm`
+| 5    | 13   | `KMACXOF256`                        | `Zlesha3h` and `Zlkmacm`
 //
 | 6    | 0    | `SM3`                               | `Zlsm3h`
 | 7    | 0    | `Ascon-AEAD128`                     | `Zlascon`
@@ -101,12 +103,12 @@ is not yet complete or contains ambiguities.
 | 8    | 7    | Elliptic Curves: `brainpoolP512r1`                     | `ZlbpP512r1c`
 | 8    | 8    | Elliptic Curves: `SM2`                                 | `ZlSM2c`
 //
-| 9    | 0    | Post-Quantum Cryptography: `ML-KEM-512`                | `Zlmlkem512k`
-| 9    | 1    | Post-Quantum Cryptography: `ML-KEM-768`                | `Zlmlkem768k`
-| 9    | 2    | Post-Quantum Cryptography: `ML-KEM-1024`               | `Zlmlkem1024k`
-| 9    | 3    | Post-Quantum Cryptography: `ML-DSA-44`/`HashML-DSA-44` | `Zlmldsa44s`
-| 9    | 5    | Post-Quantum Cryptography: `ML-DSA-65`/`HashML-DSA-65` | `Zlmldsa65s`
-| 9    | 7    | Post-Quantum Cryptography: `ML-DSA-87`/`HashML-DSA-87` | `Zlmldsa87s`
+| 9    | 0    | Post-Quantum Cryptography (PQC): `ML-KEM-512`          | `Zlmlkem512k`
+| 9    | 1    | PQC: `ML-KEM-768`                                      | `Zlmlkem768k`
+| 9    | 2    | PQC: `ML-KEM-1024`                                     | `Zlmlkem1024k`
+| 9    | 3    | PQC: `ML-DSA-44`/`HashML-DSA-44`                       | `Zlmldsa44s`
+| 9    | 5    | PQC: `ML-DSA-65`/`HashML-DSA-65`                       | `Zlmldsa65s`
+| 9    | 7    | PQC: `ML-DSA-87`/`HashML-DSA-87`                       | `Zlmldsa87s`
 |===
 
 //
@@ -1611,14 +1613,12 @@ If `ACELEN` > `b`, the same behavior applies as in State _Encrypt_.
    used to also contextually set the bit length of the final block of the
    ciphertext in `last_blk_len`.
 
-** {empty}
-+
---
-In State _Dec_Last_Block_,
+** In State _Dec_Last_Block_,
 if `last_blk_len` is nonzero.
 only a single ``ace.exec`` instruction of Form A "``ace.exec OUTPUT, Kn|K{Xn}, INPUT``" is expected.
 In this case, following operations are performed:
-
++
+--
    * `tmp : bits(b)`
 
 []
@@ -1834,16 +1834,16 @@ Data Structures:::
 --
 [cols="^6%,<21%,<18%,<55%",options="header"]
 |===
-|  Pos. | Size (Bits)             | Field                        | Notes
-|   i   | 128                     | MDH              | --
-.2+| ii | If keyed: `k` or 64     | `key` or SKID                | --
-<|        If unkeyed: 0           | none                         | --
-|   iii | `n`                     | `state`                      | --
-|    iv | 16                      | `last_block_len`             | Present only if this Hash/MAC has special internal treatment for a fractional last block that goes beyond padding and appending the length, which are handled by user software.
-|    v | 16                       | `block_base`                 | Amount of data stored so far into `block` or accumulated (usually XORed) into `state`.  Only if used by the algorithm, else zero padding.
-|   vi | 32                       | `cumul_len`                  | Cumulative length of all data absorbed so far. Only if the algorithm must process and incorporate it in the hash on its own, else zero padding.
-|  vii | `b`                      | `block`                      | Only if `block_base` is defined and the block must be stored separately from the `state`.
-| viii | Algorithm-dependent      | Padding                      | To reach a multiple of 128 bits.
+|  Pos. | Size (Bits)          | Field             | Notes
+|   i   | 128                  | MDH               | --
+.2+| ii | If keyed: `k` or 64  | `key` or SKID     | --
+<|        If unkeyed: 0        | none              | --
+|   iii | `n`                  | `state`           | --
+|    iv | 16                   | `last_block_len`  | Present only if this Hash/MAC has special internal treatment for a fractional last block that goes beyond padding and appending the length, which are handled by user software.
+|    v | 16                    | `block_base`      | Amount of data stored so far into `block` or accumulated (usually XORed) into `state`.  Only if used by the algorithm, else zero padding.
+|   vi | 32                    | `cumul_len`       | Cumulative length of all data absorbed so far. Only if the algorithm must process and incorporate it in the hash on its own, else zero padding.
+|  vii | `b`                   | `block`           | Only if `block_base` is defined and the block must be stored separately from the `state`.
+| viii | Algorithm-dependent   | Padding           | To reach a multiple of 128 bits.
 |===
 --
 
@@ -2166,7 +2166,7 @@ The rest of the algorithm follows <<ACE-hash-functions>>.
 // ////////////////////////////////////////////////////////////////////
 
 [[ACE-KMAC]]
-==== KMAC128 and KMAC256
+==== KMAC128, KMAC256, KMACXOF128, and KMACXOF256
 
 {empty}
 (((ACE, algorithm, KMAC)))
@@ -2229,7 +2229,24 @@ does not define how, since cite:[nist-SP-800-185] does not.
  ** `L`: 32 bits, the requested output length in bits.
 
 * *Serialized Context*: as for <<ACE-SHA-3>>, with `cshake_block`, `key_block` and `L`
-  appended, and padding to a multiple of 128 bits.
+  appended, and padding to a multiple of 128 bits. Explicitly:
++
+--
+[%autowidth,cols="^,<,<",options="header"]
+|===
+| Pos. | Size (Bits)   | Field
+|   i  | 128            | MDH
+|  ii  | 1600            | `state`
+| iii  | 16              | `last_block_len`
+|  iv  | 16              | `block_base`
+|   v  | 16              | `input_base`
+|  vi  | 16              | Padding
+| vii  | `b`             | `cshake_block``
+| viii | `b`             | `key_block`
+|  ix  | 32              | `L`
+|   x  | 96              | Padding
+|===
+--
 
 Algorithm-Specific Functions:::
 
@@ -2278,8 +2295,7 @@ implementation that reused the SHAKE suffix would produce a function that is not
 whose outputs collide with nothing in cite:[nist-SP-800-185].
 
 `KMACXOF128` and `KMACXOF256` differ only in absorbing `right_encode(0)` instead of
-`right_encode(L)` and in never transitioning to _Success_. They are not currently
-assigned an _Algorithm_ encoding.
+`right_encode(L)` and in never transitioning to _Success_.
 ====
 
 // ////////////////////////////////////////////////////////////////////
@@ -2867,7 +2883,6 @@ The scheme-level details of two of the curve families are not yet modelled:
 All curves currently used are defined over fields of odd characteristic.
 Since the all-ones strings do not represent any valid field value, these are used as coordinate(s) values of a point to represent the point at infinity.
 --
-+
 
 //
 
