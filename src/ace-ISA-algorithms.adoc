@@ -1693,10 +1693,17 @@ Data Structures:::
 
 The integer fields of the Serialized Context are wider than the internal state fields
 they carry — `tag_len`, `last_blk_len` and `N_len` need 8, 7 and 7 bits respectively but
-are serialized on 16, and `budget` needs 49 but is serialized on 64 — because every field
-of an SCC is zero-padded to a multiple of 8 bits, so that an SCC can be parsed without
-bit-level extraction. The same applies to `AD_finalized` and `text_finalized`, each a
-single bit.
+are serialized on 16, and `budget` needs 49 but is serialized on 64 — because every
+multi-bit field of an SCC is zero-padded to a multiple of 8 bits, so that an SCC can be
+parsed without bit-field manipulation.
+
+`AD_finalized` and `text_finalized` are deliberately left at a single bit each. An
+individual bit at a known offset is easy to extract; what is an annoyance is a field of
+several bits that straddles an octet boundary, and that is what the padding above avoids.
+The distinction is worth drawing because an ACE unit need not be fixed logic, for which
+neither case would matter: it may be implemented as a programmable coprocessor
+(<<ACE-architectural-model>>), where unaligned multi-bit fields cost instructions on every
+import and export.
 
 `budget` *shall* be serialized. It is part of the CC's state, and a bound that did not
 survive an export and re-import would be no bound at all: software could refresh it at will
@@ -2053,7 +2060,12 @@ Data Structures:::
 |  iii  | `b`           | `hash`
 |   iv  | 32            | `last_block_len`
 |    v  | 32            | `block_base`
+|   vi  | 0 or 64       | Padding, to reach a multiple of 128 bits
 |===
+
+The fields preceding the padding total 384, 448, 512 and 576 bits for `k` = 64, 128, 192 and
+256. The two that are not already multiples of 128 take 64 bits of padding, giving 512 and
+640, so the Serialized Context is 3, 4, 4 or 5 blocks of 128 bits.
 --
 
 //
@@ -2335,8 +2347,15 @@ whereas the “key in PI“ (KIP) version has the following format
 | Pos. | Size (Bits)   | Field
 |   i  | 128           | MDH
 |  ii  | `b`           | `K0`, the key already reduced to `b` bits (see below), or 64 bits if a system key or randomly generated.
-| iii  | (variable)    | Padding, to reach a multiple of 128 bits.
+| iii  | 0 or 64       | Padding, to reach a multiple of 128 bits.
 |===
+
+The padding is 64 bits when the rate `b` of the underlying hash function is congruent to 64
+modulo 128, and absent otherwise. Since every rate is a multiple of 64, no other width can
+arise. Concretely the padding is absent for SHA-224, SHA-256 (`b` = 512), SHA-384, SHA-512,
+SHA-512/224, SHA-512/256 (`b` = 1024) and SHA3-224 (`b` = 1152), and 64 bits for SHA3-256
+(`b` = 1088), SHA3-384 (`b` = 832) and SHA3-512 (`b` = 576). It is likewise 64 bits whenever
+Position ii holds a 64-bit System Key Identifier instead of a key by value.
 --
 
 * *Internal State*:
@@ -3226,9 +3245,10 @@ The algorithm is the same as Ascon-Hash256 (<<ACE-Ascon-Hash256>>) with the
 following differences:
 
 . The IV written to `state[0]` in State _Initial_ is `0x0000080000cc0003`.
-. There is no `countdown` field. `countdown` is held in the _AlgorithmUse_ field of the
-  MDH rather than in the Serialized Context, so the Serialized Context of Ascon-XOF128 is
-  identical to that of Ascon-Hash256.
+. `countdown` is not used: output may be squeezed without limit, so there is nothing to count
+  down. The field it would occupy — bits [1:0] of _AlgorithmUse_ in the MDH — is simply left
+  at zero, and since Ascon-Hash256 holds `countdown` there too rather than in the Serialized
+  Context, the Serialized Context of Ascon-XOF128 is identical to that of Ascon-Hash256.
 . As much output as desired can be produced in State _Hash_Finalize_, and the
   algorithm never transitions to State _Success_.
 

@@ -156,7 +156,8 @@ FIXED
 
 **M9. DIEL is claimed as a protection level but never normatively defined.** `src/ace-ISA-unpriv.adoc:357`. The only elaboration anywhere is an informative subsection about IMPQUAL mismatch (`:2924-2930`). Nothing states whether data-independent execution latency covers key material as well as data, forbids key-dependent memory access patterns or branching, applies to `ace.load`/`ace.store` address streams, or relates to `Zkt`/`Zvkt`. Book 2 contains no occurrence of DIEL or latency at all, so no algorithm states its timing obligations. The requirement is untestable as written. *Add a normative DIEL section modelled on `Zkt` and cross-reference it from every algorithm.*
 
-**M10. `_ExpirationDate_` depends on an undefined "secure clock" with no rollback resistance.** `src/ace-ISA-unpriv.adoc:696`. The entire specification of the time source is "the ACE implementation must have access to a secure clock" — no definition of secure, no monotonicity, no anti-rollback, no statement of who may set it, no relation to `time`/`mtime`, no behavior on power loss, and no requirement that it be outside the control of the software whose keys it expires. Since expiration is presented as the substitute for the deliberately omitted revocation mechanism (`src/ace-introduction.adoc:108`), a rollback-able clock nullifies it. Expiration is also checked only at first *usage*, not at import (`:704`), so expired SCCs import successfully. *Add normative clock requirements with fail-closed behavior.*
+**M10. `_ExpirationDate_` depends on an undefined "secure clock" with no rollback resistance.**
+FIXED
 
 **M11. `ace.derive` has no restriction-inheritance rules.** `src/ace-ISA-unpriv.adoc:1925-1934`. The description never says what MDH the destination receives, so nothing prevents deriving from a heavily restricted key into an unrestricted context and exporting it — a laundering primitive. "The behavior of the instruction is not expected to be deterministic" is also incompatible with any key-agreement or KDF use, and no entropy source is specified. The encoding is being frozen now even though the instruction is reserved. *Require that the derived context inherits the source's restrictions, tightenable only.*
 
@@ -172,7 +173,8 @@ FIXED
 
 ### Privileged architecture and state model
 
-**M17. `mstatus.TSR` and `hstatus.VTSR` are overloaded to trap ACE memory instructions.** `src/ace-ISA-priv.adoc:147`, `:177-178`. TSR/VTSR are the existing Trap-SRET controls; repurposing them means firmware that sets TSR to virtualize SRET suddenly traps all ACE memory instructions, and M-mode wanting to emulate `ace.load`/`ace.store` must also trap SRET. *Define a dedicated control in `menvcfg`/`henvcfg` or a stateen bit.*
+**M17. `mstatus.TSR` and `hstatus.VTSR` are overloaded to trap ACE memory instructions.**
+FIXED
 
 **M18. No `Smstateen`/`Ssstateen` integration for the new less-privileged state.** `src/ace-ISA-priv.adoc:78-97`, `src/ace-ISA-unpriv.adoc:754-768`. ACE adds unprivileged CSRs (`acestart`, `aceiobuflen`, `aceiobuftop`, `acenonce*`, the ID registers) and supervisor CSRs with no stateen bits, contrary to the privileged architecture's policy that new state accessible to less-privileged modes must be gateable by an unaware M-mode or hypervisor. *Define stateen bits gating all ACE CSRs and instructions.*
 
@@ -234,23 +236,28 @@ FIXED
 
 ### Book 2 versus the standards
 
-**M46. No normative byte/bit-ordering convention for symmetric data, and conventions are mixed within single algorithms.** `src/ace-ISA-algorithms.adoc:1143-1144`, `:1207-1210`, `:1317-1321`, `:2324`. The mapping from standard-defined byte strings to `INPUT`/`OUTPUT` register bits is never defined (a little-endian statement exists only in the ECC section). OCB's nonce/Ktop/Stretch formulas are written bit-mirrored relative to RFC 7253, while `double()` and CMAC's `gen_subkeys` use the un-mirrored MSB-first form (`S << 1`, `xor 0x87`, `msb(L)`) — these cannot both be RFC-compatible on the same representation. Interoperable implementation requires guessing. *Add a normative mapping section, as SP 800-232 Appendix A does, and rewrite every shifted or sliced formula under it.*
+**M46. No normative byte/bit-ordering convention for symmetric data, and conventions are mixed within single algorithms.**
+FIXED
 
-**M47. Core field-arithmetic functions are named but never defined.** `src/ace-ISA-algorithms.adoc:694` (`Galoismul`), `:984` (`Montmul`), `:511` (`update_mask`). Neither the polynomials, the bit-order conventions, nor the XTS multiplier α appear anywhere; for non-128-bit block sizes no polynomial exists at all. GCM-SIV's absorb is even hedged as "(a variant of) POLYVAL". *Define each with its exact polynomial and ordering, per block size.*
+**M47. Core field-arithmetic functions are named but never defined.**
+FIXED
 
 **M48. GCM/CTR mode parameters are never instantiated, GCM is silently limited to one IV length, and the exhaustion check is ill-typed.** `src/ace-ISA-algorithms.adoc:647`, `:358-363`, `:750`, `:788`. Nothing fixes `c = 32` (or `j`, `n` for CTR), so conforming implementations can disagree. Only `b-c`-bit IVs are supported — no GHASH-based `J0` for other lengths, a restriction never stated (SP 800-38D §5.2.1.1). The check `ctr = ones(c-1)` compares a `c`-bit counter against a `c-1`-bit value and does not match the 2³²−2 block limit. *Fix the parameters, state the 96-bit-IV restriction, and correct the check.*
 
 **M49. XCTR starts its counter at 0 where XCTR starts at 1.** `src/ace-ISA-algorithms.adoc:408-409`, `:421-423`. ACE's first keystream block is `E_K(IV ⊕ 0) = E_K(IV)`; XCTR as defined in HCTR2 is `E_K(S ⊕ bin(1)) || E_K(S ⊕ bin(2)) || ...`. Anything built on this primitive is incompatible. *Initialize `ctr` to 1, as the LFSR modes already do.*
 
-**M50. EdDSA is mis-cited and unimplementable as parameterized.** `src/ace-ISA-algorithms.adoc:2343-2345`. It cites RFC 7748 (X25519/X448 key exchange) rather than RFC 8032; sets `v = 1` although Ed25519 signatures are the pair `(R,S)`; sets `h = 256` although EdDSA uses SHA-512 internally; and the "set Hash, set RndNum, sign" flow cannot express PureEdDSA, which is deterministic with `r = H(prefix || M)` over the full message. *Cite RFC 8032, fix the parameters, and define an EdDSA state machine or drop the curves.*
+**M50. EdDSA is mis-cited and unimplementable as parameterized.**
+FIXED
 
 **M51. ECC signature operations are underspecified.** `src/ace-ISA-algorithms.adoc:2472`, `:2352`, `:2503-2554`. `_Gen_Rnd_Scalar_` is listed but never described; how `RndNum` is generated (RBG strength, hedged versus deterministic, whether user-supplied) is unstated; which signature equation each family uses is unstated, although ECDSA and SM2 differ; and point encoding is left optional ("non-compressed or compressed points may be used"). Two implementations cannot interoperate. *Specify per-family procedures by reference, mandate encodings, and define the RBG requirements.*
 
 **M52. The ML-DSA section is written in ML-KEM's vocabulary.** `src/ace-ISA-algorithms.adoc:2853`, `:2819`, `:2844`, `:2857-2859`, `:2864`. Behavior clauses refer to `encapsk`, `decapsk`, `ciphertext` and `sharedkey` fields and a `_decapsk_Input_` state, none of which exist for ML-DSA, and the state list is headed "ML-KEM algorithms define". The normative behavior is not decidable from the text. *Rewrite in terms of `privkey`/`pubkey`/`signature` and state whether signing is hedged or deterministic per FIPS 204 §3.4.*
 
-**M53. OCB nonce setup has an undefined parameter, no length bound, and an off-by-one slice.** `src/ace-ISA-algorithms.adoc:1176`, `:1249-1251`, `:1321`. `u` is never defined (presumably `b-g-1`); there is no check that `N_len ≤ b-g-1`, without which `zeros(b-g-1-N_len)` has negative width; and `Stretch[b+bottom:bottom]` selects `b+1` bits where RFC 7253 takes 128. *Define `u`, bound `N_len`, and correct the slice.*
+**M53. OCB nonce setup has an undefined parameter, no length bound, and an off-by-one slice.**
+FIXED
 
-**M54. Book 4's pseudocode does not match Book 2's state machines.** `src/ace-pseudocode.adoc:110-112`, `:144-146`, `:216-235`, `:273-282`, `:356-358` versus the corresponding Book 2 sections. The GCM example sets the nonce with `#ace_state_set_aux_value` plus `ace.exec`, but Book 2's GCM machine has no such state and requires a Form C `ace.setst` into `_Hash_Absorb_`; the GCM-SIV examples never transition to `_Hash_Absorb_`, absorb lengths in the wrong state, omit the `_Decrypt_` transition and use the encryption finalize state on the decryption path; the OCB decryption delta references a `_Dec_Tag_Finalize_` state that OCB does not have. Five state mnemonics used in Book 4 (`ace_state_last_block`, `ace_hash_verify`, `ace_hash_absorb`, `ace_hash_last_block`, `ace_hash_hash_finalize`) are defined in no book. *Regenerate the examples from Book 2.*
+**M54. Book 4's pseudocode does not match Book 2's state machines.**
+FIXED
 
 ---
 
