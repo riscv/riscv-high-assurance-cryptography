@@ -223,11 +223,11 @@ System Keys will change all the algorithms described here in the following way:
 [[ACE-truncation-vs-length,the rule on truncation versus input length]]
 As a general rule, inputs shorter than a full vector length must be handled by the caller, who is responsible for proper padding and for passing the actual input length to the algorithm via appropriate instructions, typically `ace.setst`. This rule does not apply when an algorithm specification defines its own handling for cryptographic security reasons.
 
-This specification assumes throughout that messages, plaintexts, ciphertexts, associated data, initialization vectors, and other inputs are provided as whole multiples of 8 bits. This is in accordance with the fact that `ACELEN` is defined in terms of octets.
-Many standards that admit inputs of any bit length.
+This specification assumes throughout that messages, plaintexts, ciphertexts, associated data, initialization vectors, and other cryptographic inputs are provided through GPRs, vector registers, always as whole multiples of 8 bits.
+Many standards however admit inputs of any bit length.
 Algorithms that implement such standards handle this by providing an explicit bit length for the _last_ piece of the data the caller provides to the algorithm or extracts from it. This it length is, as a rule, passed as a parameter to an `ace.setst` instruction. In such cases, inputs are internally truncated to the specified bit length before processing. Outputs are not necessarily truncated, and it is the caller's responsibility to discard any excess bits.
 
-This occurs, for instance, with the `last_blk_len` parameters in <<ACE-GCM-mode>>, <<ACE-GCM-SIV-mode>>, <<ACE-OCB-mode>>, <<ACE-Ascon-AEAD128>>, and <<ACE-hash-functions>>. Such a parameter specifies a truncation of the passed input, not its length, with the only restriction being that `ACELEN` ≥ ⌈`last_blk_len`/8⌉.  Procedure `process_VLI` receives field lengths in bits, but what is received through the `ace.exec` instructions is always at octet granularity, and the last input may be internally truncated.
+This occurs, for instance, with the `last_blk_len` parameters in <<ACE-GCM-mode>>, <<ACE-GCM-SIV-mode>>, <<ACE-OCB-mode>>, <<ACE-Ascon-AEAD128>>, and <<ACE-hash-functions>>. Such a parameter specifies a truncation of the passed input, not its length, with the only restriction being that `ACELEN` ≥ `last_blk_len`.  Procedure `process_VLI` receives field lengths in bits, but what is received through the `ace.exec` instructions is always at octet granularity, and the last input may be internally truncated.
 
 Where a standard's formula requires a bit count, it is obtained by multiplying the octet count by 8, as with the length block of GHASH in <<ACE-GCM-mode>>.
 
@@ -545,9 +545,9 @@ State Machine:::
     It sets the tweak, and the `mask` field is used to store it: `mask <- INPUT`.
   *** If `ACELEN` > `b`, only the `b` least significant bits of `INPUT` are considered.
   *** Then, the following operations are performed:
-  . if two independent keys are used then
+  . if two independent keys are used then:
   .. `mask <- enc_blk(key2, mask)`
-  . else
+  . else:
   ..  `mask <- enc_blk(key1, mask)`
   ..  `mask <- update_mask(mask)`.
 +
@@ -757,10 +757,6 @@ all counted in bits, in order to support values of `len` that is not a multiple 
 However, the routine also only supports values of `b` and `n` that are multiples of 8 bits,
 and all `ace.exec` instructions transfer whole octets and never a fraction of an octet,
 As a consequence, `input_base` and `block_base` are multiples of 8.
-
-// *Octet granularity.* `len`, `b`, `n` and `ACELEN` shall all be multiples of 8, so that
-// every division by 8 above is exact. This follows from the general assumption of
-// <<ACE-octet-granularity>> and holds for every algorithm defined here.
 
 Finally, two parameters are functions of the called Algorithm:
 
@@ -972,7 +968,7 @@ caller:
   `process_VLI(len, block=J0, b, state=J0, b, input_base, block_base, 0, cumul_len, process_block(), finalize(), granularity=b)`, where `len` is the IV length in bits, and
    *** if `len != 96`, `process_block()`, performs `J0 <- Galoismul(J0, auth_key)`, otherwise it does nothing.
    *** `finalize()` is defined as follows:
-    . If `len = 96`, then
+    . If `len = 96`, then:
       .. `J0 <- binBE(1,32) @ J0[95:0]`.
 +
 This is `IV {vvert} 0^31^ {vvert} 1` of cite:[nist-SP-800-38D] {sect}7.1 transcribed
@@ -1006,7 +1002,7 @@ If `ACELEN` > `128`, the above operation is executed `ACELEN/128` times.
   . `ctr <- (ctr + 1) mod 2^32^`.
   . If `ctr` = `(start_ctr - 1) mod 2^32^`, then: (process at most  2^32^ - 2 blocks)
    .. the CR is *invalidated*.
-   . else
+   . else:
   .. `J0[127:96] <- binBE(ctr,32)`
   .. `tmp <- INPUT xor enc_blk(key, J0)`.
   .. `absorb(tmp)`.
@@ -1046,9 +1042,9 @@ Any bits in excess provided by the following Form A ``ace.exec`` is ignored.
   . If `last_blk_len = 0`, then: terminate the instruction.
   . `ctr <- int(bswap(J0[127:96]))`
   . `ctr <- (ctr + 1) mod 2^32^`.
-  . If `ctr` = `(start_ctr - 1) mod 2^32^`, then
+  . If `ctr` = `(start_ctr - 1) mod 2^32^`, then:
    .. the CR is *invalidated*.
-  . else
+  . else:
    .. `J0[127:96] <- binBE(ctr,32)`
    .. `tmp <- (zeros(128-last_blk_len) @ INPUT[last_blk_len-1:0]) xor (zeros(128-last_blk_len) @ enc_blk(key, J0)[last_blk_len-1:0])`.
    .. `absorb(tmp)`.
@@ -1113,9 +1109,9 @@ If `ACELEN` is a multiple of 128, the same behavior applies as in State _Encrypt
   . If `last_blk_len = 0`, then: terminate the instruction.
   . `ctr <- int(bswap(J0[127:96]))`
   . `ctr <- (ctr + 1) mod 2^32^`.
-  . If `ctr` = `(start_ctr - 1) mod 2^32^`, then
+  . If `ctr` = `(start_ctr - 1) mod 2^32^`, then:
    .. the CR is *invalidated*.
-  . else
+  . else:
   .. `tmp <- zeros(128-last_blk_len) @ INPUT[last_blk_len-1:0]`.
   .. `absorb(tmp)`.
   .. `J0[127:96] <- binBE(ctr,32)`.
@@ -1497,9 +1493,9 @@ A value of zero, or larger than 127, *invalidates* the CR, as it does in the oth
 --
   . `absorb(INPUT)` (which modifies `tmp`).
   . `tmp <- enc_blk(enc_key, 0 @ tmp[126:96] @ (tmp[95:0] xor nonce))`.
-    . If `tmp` = `SIV` match, then
+    . If `tmp` = `SIV` match, then:
     ..  `State <- ace_state_success`
-    . else
+    . else:
     ..  `State <- ace_state_failure`
 --
 +
@@ -2135,20 +2131,17 @@ Then, state transitions to _Hash_Absorb_Last_Block_ as expected.
 
 []
    . `output_base <- 0` // or `acestart` upon resumption; both are octet counts
-    . while (`output_base` < `ACELEN`/8) do { // as long as there is room in the OUTPUT
-     .. `amount <- min(ACELEN/8 - output_base, t/8 - block_base)`
-     .. ``OUTPUT[8(output_base + amount) - 1 : 8 output_base] <- `` +
-           ``{fournbsp}{fournbsp}<- block[8(block_base + amount) - 1 : 8 block_base]``
+    . while (`output_base` < `ACELEN`) do: // as long as there is room in the OUTPUT
+     .. `amount <- min(ACELEN - output_base, t - block_base)`
+     .. ``OUTPUT[output_base + amount - 1 : output_base] <- `` +
+           ``{fournbsp}{fournbsp}<- block[block_base + amount - 1 : 8 block_base]``
      .. `output_base <- output_base + amount`
      .. `block_base <- block_base + amount`
-     .. if (`block_base` = `t`/8) then: {
+     .. if (`block_base` = `t`) then:
       ... if we are in a Hash function, transition to State _Success_, and return.
       ... `update()`
       ... `block_base <- 0`
       ... *Here* the instruction can be interrupted, with `acestart <- output_base`.
-
-[none]
-      . }``{nbsp}{nbsp}`` }
 --
 +
 
@@ -2996,7 +2989,7 @@ each `64`-bit block of `INPUT`.
 --
 +
 If `ACELEN` {ge} `128`, these operations are executed `ACELEN/64` times, writing to `OUTPUT`[63:0] the first time, then `OUTPUT`[127:64], `OUTPUT`[191:128] and `OUTPUT`[255:192]. If more than one ``ace.exec`` instructions are required, writing restarts from `OUTPUT`[63:0].
-If `countdown` reaches zero before the entire output registers is written to, the state of the unwritten bits is undefined: for instance this may occur if `ACELEN` = `192` or `ACELEN` > `256`.
+If `countdown` reaches zero before the entire output registers is written to, the state of the unwritten bits is undefined: for instance this may occur if `ACELEN` = `192` or `ACELEN` = `256`.
 This is usually not a problem, since the output vectors will be usually configured for 64-bit, 128-bit, or 256-bit blocks, in which case four, two, or one ``ace.exec`` instructions are required, respectively.
 
 //
@@ -3463,7 +3456,7 @@ The standard, defines several procedures, including:
 
 ML-KEM exists in three different sizes, called ML-KEM-512, ML-KEM-768, and ML-KEM-1024, each with different cryptographic strength.
 These three versions require RBGs (Random Bit Generators) of varying strength, namely, 128, 192, and 256 bits, respectively.
-The sizes (in bytes) of keys and ciphertexts of the three subtypes of ML-KEM are summarized in <<ACE-ML-KEM-sizes>>.
+The sizes of keys and ciphertexts of the three subtypes of ML-KEM are summarized in <<ACE-ML-KEM-sizes>>.
 
 // [[ACE-ML-KEM-parameter-sets]]
 // .Parameter Sets for ML-KEM
