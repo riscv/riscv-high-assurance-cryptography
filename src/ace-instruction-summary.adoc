@@ -3,47 +3,83 @@
 [[ACE-instructions-overview]]
 ==== Instructions Overview
 
-ACE provides a number of unprivileged instructions, some implemented as CSR read/write operations.
-The notation `K[Xd]`, for a GPR `Xd`, refers to the CR whose number is contained in `Xd`,
-and `Kn|K[Xn]` means that there are two different encodings for when the CR number is passed as an immediate (`Kn`) or in `Xn`.
+ACE provides a set of unprivileged instructions for cryptographic operations, state management, configuration, and secure data movement.
+The notation `K[Xd]` or `K{Xd}`, for a GPR `Xd`, refers to the CR whose index is contained in `Xd`,
+and `Kn|K{Xn}` indicates that the CR operand can be encoded either as an immediate index (`Kn`) or via a GPR (`K{Xn}`).
 
-.The ACE instructions
-[width="100%",cols="17%,25%,58%",options="header",subs="+macros"]
+.The ACE Instruction Set
+[width="100%",cols="20%,28%,52%",options="header",subs="+macros"]
 |===
-| Instruction         | Operands                         |  Description
-| `ace.enable` +
-`ace.disable`         |                                  |  Enables/Disables ACE.
-| `ace.reset`         |                                  |  Resets ACE.
-| `ace.init`          | `Kd\|K[Xd],%offset(Xs)`          |  Sets a CR's metadata and content.
-| `ace.clear`         | `Kd\|K[Xd]`                      |  Clears a CR and marks it as no longer in use and clean.
-| `ace.export`        | `%offset(Xn),Ks\|K[Xs]`          |  Securely exports the content of a CR to memory.
-| `ace.import{.S}`    | `Kd\|K[Xd],%offset(Xn)`          |  Authenticates and imports an SCC from memory. +
- `ace.import.S` provides optional support for system-defined formats.
+| Instruction | Operands | Description
 | `ace.exec`
-| A. {nbsp}{nbsp} `Vd,Kn\|K[Xn],Vs` +
-  B. {nbsp}{nbsp} `{nbsp}{nbsp}{nbsp}Kn\|K[Xn],Vs` +
-  C. {nbsp}{nbsp} `Vd,Kn\|K[Xn]` +
-  D. {nbsp}{nbsp} `{nbsp}{nbsp}{nbsp}Kn\|K[Xn]`
-| Performs a cryptographic operation. These instructions may modify CC state. This instruction admits four _Forms_, depending on whether it accepts an input or not, and whether it produces an output or not.
-| `ace.size`
-| `Xd,Ks\|K[Xs]` +
-`Xd,Xs` .2+|  Returns the SCC size in bytes for CR `Ks`/`K[Xs]` or for an algorithm with metadata `Xs`.
-Returns zero if the algorithm is unsupported.
-`ace.available` is an alias for `ace.size`.
-| `ace.available`     | `Xd,Xs`
-| `ace.clone`         | `Kd\|K[Xd],Ks\|K[Xs]`            |  Clones a source CR to a destination CR.
-| `ace.derive`        | `Kd\|K[Xd],Ks\|K[Xs]` +
-`Kd\|K[Xd],Ks\|K[Xs],Vs2` +
-|  Optional. Configures destination CR using source CR (e.g., the source CR could hold a KEM, and derive symmetric keys).
-| `ace.state` +
-`(ace.dir)`
-| `Kd\|K[Xd],#immed` +
-`Kd\|K[Xd],#immed,Xs` |  Modifies algorithm state (e.g., phase transitions). `ace.dir` is an alias for `ace.state`.
-| `ace.restrict` +
-  `(ace.harden)`      | `Kd\|K[Xd],Xs`                   |  Narrows Usage Policies and enables/increases side-channel protection.
-   Weakening Usage Policies and SCA protection is not permitted. `ace.harden` is an alias for `ace.restrict`.
-| `ace.input`         | `Kd\|K[Xd],%offset(Xs)`          |  Optional. Provides input to the algorithm (for long inputs).
-| `ace.output`        | `%offset(Xd),Ks\|K[Xs]`          |  Optional. Writes output from the algorithm (for long outputs).
-| `ace.error`         | `Xd`                             |  Writes the ACE unit error code to GPR `Xd`.
+| A. `Vd, Kn\|K{Xn}, Vs2` +
+  B. `Kn\|K{Xn}, Vs2` +
+  C. `Vd, Kn\|K{Xn}` +
+  D. `Kn\|K{Xn}`
+| Performs a cryptographic operation defined by the algorithm and state of the CR. Supports four Forms based on whether vector input and/or output are used.
+| `ace.setst`
+| A. `Kd\|K{Xd}, #immed7` +
+  B. `Kd\|K{Xd}, #immed7, Xs` +
+  C. `Kd\|K{Xd}, #immed7, Vs`
+| Transitions the cryptographic algorithm state within the CC. Auxiliary input can be passed in a GPR or vector register.
+| `ace.mgmt`
+| A. `Kd\|K{Xd}, #immed7` +
+  B. `Kd\|K{Xd}, #immed7, Xs` +
+  C. `Kd\|K{Xd}, #immed7, Vs`
+| Manages the lifecycle states of a CR (e.g. provisioning, export, import preparation).
+| `ace.load` +
+  (`ace.sysimport`)
+| `Kd\|K{Xd}, %offset(Xs1)`
+| Loads serialized context or provisioning input from memory into a CR. `ace.sysimport` provides support for system formats.
+| `ace.store`
+| `%offset(Xs1), Ks2\|K{Xs2}`
+| Exports serialized context from a CR to memory.
+| `ace.clone`
+| `Kd\|K{Xd}, Ks\|K{Xs}`
+| Clones the complete configured state of a source CR to a destination CR.
+| `ace.derive`
+| A. `Kd\|K{Xd}, Ks1\|K{Xs1}` +
+  B. `Kd\|K{Xd}, Ks1\|K{Xs1}, Xs2` +
+  C. `Kd\|K{Xd}, Ks1\|K{Xs1}, Vs2`
+| Derives a new CC in a destination CR using key material from a source CR (e.g., KEM shared secret).
+| `ace.size` +
+  (`ace.avail`)
+| A. `Xd, Ks\|K{Xs}` +
+  B. `Xd, Xs` +
+  C. `Xd, Vs`
+| Returns the size of an SCC or PI in bytes for a given CR or metadata header. Returns 0 if unsupported. `ace.avail` is an alias for Form B.
+| `ace.getmdl` +
+  `ace.getmdh` +
+  `ace.getmdv`
+| `Xd, Ks\|K{Xs}` (l, h) +
+  `Vd, Ks\|K{Xs}` (v)
+| Reads bits [63:0] (`getmdl`), bits [127:64] (`getmdh`), or all 128 bits (`getmdv`) of the Metadata Header of a CR.
+| `ace.restrictl` +
+  `ace.restricth` +
+  `ace.restrictv`
+| `Kd\|K{Xd}, Xs1` (l, h) +
+  `Kd\|K{Xd}, Vs1` (v)
+| Narrows Usage Policies or hardens security attributes in the Metadata Header. Weakening policies is not permitted.
+| `ace.input`
+| `%offset(Xs), Xl`
+| Loads `Xl` bytes from memory into the ACEIOBUF at `acestart` (for `Zlio`).
+| `ace.output`
+| `%offset(Xs), Xl`
+| Stores `Xl` bytes from the ACEIOBUF at `acestart` to memory (for `Zlio`).
+| `ace.mv`
+| A. `Kd\|K{Xd}, Xs2` +
+  B. `Kd\|K{Xd}, Vs2` +
+  C. `Xd, Ks1\|K{Xs1}` +
+  D. `Vd, Ks1\|K{Xs1}`
+| Dedicated register move instructions transferring scalar/vector register data to/from a CR (for `Zlmv`).
+| `ace.clear`
+| `Kd\|K{Xd}`
+| Pseudo-instruction (`ace.setst` to _Off_). Clears and unconfigures a CR.
+| `ace.reset`
+| _none_
+| Pseudo-instruction (`ace.setst` to _Off_ with indirect CR $X0$). Resets all CRs and the ACEIOBUF.
+| `ace.getst`
+| `Xd, Ks\|K{Xs}`
+| Pseudo-instruction (`ace.getmdl` + shift/mask). Extracts the _State_ field of a CR.
 |===
 --

@@ -65,7 +65,7 @@ The actual numbers are TBD.
 | TBD  | `ace_exc_CR_other`             | Use of a CR as a source in any instruction (including `ace.size`), when the status of the CR is “Other/Lazy”, as per <<ACE-CSR-scrstatus>>.
 | TBD  | `ace_exc_out_of_mem`           | Insufficient CRF memory for configuration instruction. This may be set by privileged code in case they do not handle the CR allocation themselves.
 | TBD  | `ace_exc_buf_unconf`           | Use of ACEIOBUF as an input or an output while unconfigured.
-| TBD  | `ace_exc_invalid`              | Invalid parameters in metadata, including expired CR state. There is deliberately no separate `ace_exc_expired`: expiry is reported through this code, and the handler distinguishes it by reading the _State_ field of the CR, which the hardware has set to `ace_state_expired`.
+| TBD  | `ace_exc_invalid`              | Invalid parameters in metadata, including expired CR state (evaluated upon `ace.setst`, at `ace.exec` dispatch, and upon resumption of interrupted multi-cycle operations). There is deliberately no separate `ace_exc_expired`: expiry is reported through this code, and the handler distinguishes it by reading the _State_ field of the CR, which the hardware has set to `ace_state_expired`.
 |===
 
 [NOTE]
@@ -193,6 +193,21 @@ In implementations with a writable `misa.L`, the `mstatus.ACES` field may be pre
 
 When `TSR` is set to 1, all ACE memory instructions cause an illegal-instruction exception in S-mode.
 
+// Review Finding M1: Architectural conflict with standard RISC-V Privileged Specification.
+// mstatus.TSR (Trap SRET) is normatively allocated by the RISC-V Privileged Architecture
+// exclusively to intercept SRET instructions. Overloading TSR to trap ACE memory instructions
+// (ace.load, ace.store, ace.input, ace.output) alters the semantics of an existing architected
+// bit, breaking backward compatibility with existing hypervisors that enable TSR for SRET
+// interception but are not prepared to handle or emulate ACE memory instructions.
+//
+// Recommended remediation:
+// Replace the reuse of mstatus.TSR and hstatus.VTSR with dedicated enable/trap control bits
+// in the standard RISC-V Environment Configuration registers (menvcfg, henvcfg, and senvcfg)
+// or State Enable registers (mstateen, hstateen):
+// - Define `menvcfg.ACEME` (ACE Memory Enable) to selectively trap S-mode ACE memory instructions.
+// - Define `henvcfg.ACEME` to selectively trap VS-mode ACE memory instructions to HS-mode.
+// This completely decouples ACE trap-and-emulate support from SRET interception.
+
 [WARNING]
 ====
 This reuse of `TSR`, and the corresponding reuse of `VTSR` below, must be discussed with
@@ -205,10 +220,10 @@ supervisor-mode returns, and under this specification it would silently begin tr
 `ace.load`, `ace.store`, `ace.input` and `ace.output` as well, whether or not it is
 prepared to emulate them.
 
-The alternative is to give the behavior its own enable — for instance a bit in an
-`*envcfg` CSR — which leaves `TSR` untouched and lets the two controls be set
-independently. Which of the two the architecture should adopt is not for this document to
-decide alone.
+The recommended architectural remediation is to allocate dedicated trap-control bits in
+`menvcfg` and `henvcfg` (e.g., `menvcfg.ACEME` / `henvcfg.ACEME`), or use the `*stateen`
+framework. This leaves `TSR` and `VTSR` untouched, maintains backward compatibility, and allows
+SRET trapping and ACE memory instruction emulation to be configured independently.
 ====
 
 [NOTE]
@@ -242,12 +257,16 @@ In implementations with a writable `misa.L`, `vsstatus.ACES` may be present even
 When `VTSR` is set to 1, all ACE memory instructions cause a
 virtual-instruction exception in VS-mode.
 
+// Review Finding M1 (VTSR): Mirroring the remediation for mstatus.TSR, hstatus.VTSR must
+// not be overloaded. Dedicated control via henvcfg.ACEME (or hstateen) should gate VS-mode
+// virtual-instruction traps for ACE memory instructions.
+
 [WARNING]
 ====
 As for `TSR` (<<ACE-ACES-field-in-mstatus>>), this reuse of `VTSR` must be discussed with
 the RISC-V Architecture Review Committee before ratification, and the two must be settled
 together: whatever mechanism is chosen to gate the trapping of ACE memory instructions in
-S-mode should gate it in VS-mode by the same means.
+S-mode (such as `menvcfg.ACEME` and `henvcfg.ACEME`) should gate it in VS-mode by the same means.
 ====
 
 // ////////////////////////////////////////////////////////////////////

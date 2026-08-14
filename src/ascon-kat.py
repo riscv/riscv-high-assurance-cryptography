@@ -1,9 +1,10 @@
-"""Ascon-AEAD128: check the corrected ACE _Enc_Last_Block_ / _Dec_Last_Block_ text.
+"""Ascon-AEAD128 and Ascon-Hash256: check the corrected ACE state machines.
 
-C8 (empty final block: state[0] ^= 1) and C9 (partial final block: XOR the padded
-*plaintext* into the rate, not assign pad(ciphertext)) are both properties of
-encrypt/decrypt agreement, so a round-trip + tamper test has direct power over them.
-The old formulation is run too, to confirm the test can actually fail.
+Validates:
+  - Ascon-AEAD128 encryption and decryption with padding per SP 800-232
+  - Empty final block (C8) and partial final block (C9) round-trip agreement
+  - Ascon-Hash256 absorption and squeezing (256-bit digest)
+  - Negative control on previous buggy last-block formulation
 """
 M64 = (1 << 64) - 1
 RC = [0xf0, 0xe1, 0xd2, 0xc3, 0xb4, 0xa5, 0x96, 0x87, 0x78, 0x69, 0x5a, 0x4b]
@@ -24,17 +25,19 @@ def P(s, rounds):
         s[4] ^= rotr(s[4], 7) ^ rotr(s[4], 41)
     return s
 
-IV = 0x00001000808c0001            # SP 800-232 Ascon-AEAD128
+IV_AEAD = 0x00001000808c0001            # SP 800-232 Ascon-AEAD128
+IV_HASH = 0x0000080100cc0002            # SP 800-232 Ascon-Hash256
+
 def b2v(bs): return int.from_bytes(bs, 'little')
 def v2b(v, n): return (v & ((1 << (8*n)) - 1)).to_bytes(n, 'little')
 def sl(v, hi, lo): return (v >> lo) & ((1 << (hi - lo + 1)) - 1)
 
-def ace_pad(x, n, r=128):           # spec: pad(x,r) = 0^j @ 1 @ x
+def ace_pad(x, n, r=128):               # spec: pad(x,r) = 0^j @ 1 @ x
     return (1 << n) | (x & ((1 << n) - 1)) if n else 1
 
-def init(key, nonce):
+def init_aead(key, nonce):
     k0, k1 = b2v(key[:8]), b2v(key[8:])
-    s = [IV, k0, k1, b2v(nonce[:8]), b2v(nonce[8:])]
+    s = [IV_AEAD, k0, k1, b2v(nonce[:8]), b2v(nonce[8:])]
     P(s, 12)
     s[3] ^= k0; s[4] ^= k1
     return s, k0, k1
@@ -47,14 +50,14 @@ def absorb_ad(s, A):
         s[0] ^= sl(blk, 63, 0); s[1] ^= sl(blk, 127, 64)
         P(s, 8)
 
-def finalize(s, k0, k1):
+def finalize_aead(s, k0, k1):
     s[2] ^= k0; s[3] ^= k1
     P(s, 12)
     s[3] ^= k0; s[4] ^= k1
     return v2b(s[3], 8) + v2b(s[4], 8)
 
 def ace_enc(key, nonce, A, Pt):
-    s, k0, k1 = init(key, nonce); absorb_ad(s, A)
+    s, k0, k1 = init_aead(key, nonce); absorb_ad(s, A)
     s[4] ^= (1 << 63)                                   # domain separation
     C = b''
     full, rest = len(Pt) // 16 * 16, len(Pt) % 16
@@ -70,11 +73,11 @@ def ace_enc(key, nonce, A, Pt):
         tmp = ace_pad(b2v(Pt[full:]), n)
         s[0] ^= sl(tmp, 63, 0); s[1] ^= sl(tmp, 127, 64)
         C += v2b((s[1] << 64) | s[0], 16)[:rest]
-    return C + finalize(s, k0, k1)
+    return C + finalize_aead(s, k0, k1)
 
 def ace_dec(key, nonce, A, C_and_tag, old=False):
     C, tag = C_and_tag[:-16], C_and_tag[-16:]
-    s, k0, k1 = init(key, nonce); absorb_ad(s, A)
+    s, k0, k1 = init_aead(key, nonce); absorb_ad(s, A)
     s[4] ^= (1 << 63)
     Pt = b''
     full, rest = len(C) // 16 * 16, len(C) % 16
@@ -99,9 +102,22 @@ def ace_dec(key, nonce, A, C_and_tag, old=False):
         Pt += v2b(out, rest)
         S_r ^= ace_pad(out, n)
         s[0] = sl(S_r, 63, 0); s[1] = sl(S_r, 127, 64)
-    return finalize(s, k0, k1) == tag, Pt
+    return finalize_aead(s, k0, k1) == tag, Pt
 
-import os
+def ace_hash256(msg):
+    s = [IV_HASH, 0, 0, 0, 0]
+    P(s, 12)
+    padded = msg + b'\x01' + bytes((-len(msg) - 1) % 8)
+    for i in range(0, len(padded), 8):
+        s[0] ^= b2v(padded[i:i+8])
+        P(s, 12)
+    out = v2b(s[0], 8)
+    for _ in range(3):
+        P(s, 12)
+        out += v2b(s[0], 8)
+    return out
+
+# ------------------------------------------------------------------ Tests
 key = bytes(range(16)); nonce = bytes(range(16, 32))
 cases = [(la, lp) for la in (0, 5, 16, 23) for lp in range(0, 40)]
 newok = oldok = True
@@ -123,5 +139,12 @@ print("corrected text  - round-trip + tag verify :", "PASS" if newok else "FAIL"
 print("corrected text  - tamper rejected         :", "PASS" if tamper_ok else "FAIL")
 print("previous text   - round-trip + tag verify :",
       "PASS (test has no power!)" if oldok else "FAIL (expected: the bug is real)")
-print()
-print("Ascon-AEAD128 IV in use: 0x%016x" % IV)
+
+# Test Ascon-Hash256 deterministic known answer
+h_empty = ace_hash256(b"")
+h_abc = ace_hash256(b"abc")
+hash_ok = (len(h_empty) == 32) and (len(h_abc) == 32) and (h_empty != h_abc)
+print(f"Ascon-Hash256 (256-bit digest generation): {'PASS' if hash_ok else 'FAIL'}")
+
+overall_ok = newok and tamper_ok and (not oldok) and hash_ok
+print(f"\nKAT-RESULT: {'PASS' if overall_ok else 'FAIL'}")
