@@ -741,8 +741,8 @@ one of the states common to all algorithms.
   ** In State _Initial_:
    *** Upon entering the state, the `tweak` field is cleared.
    *** No ``ace.exec`` operation is allowed.
-  ** In each of the States _Initial_, _Encrypt_ and _Decrypt_, a Form C
-     `ace.setst Kn|K{Xn}, #ace_state_set_aux_value, INPUT` instruction can be issued. It
+  ** In each of States _Initial_, _Encrypt_ and _Decrypt_, a Form C `ace.setst` can be issued.
+     `ace.setst Kn|K{Xn}, #ace_state_set_aux_value, INPUT`
      performs `tweak <- INPUT` and leaves the _State_ field unchanged. If `ACELEN` > `t`,
      only the `t` least significant bits of `INPUT` are considered.
   ** In State _Encrypt_, respectively _Decrypt_, besides the set-tweak operation,
@@ -1032,12 +1032,12 @@ according to <<ACE-conventions-transcription>>: the IV occupies octets 0 to 11, 
       .. if `block_base != 0`, then `J0 <- Galoismul(J0, auth_key)`
       .. `J0 <- J0 xor (binBE(8 len,64) @ zeros(64))`
       .. `J0 <- Galoismul(J0, auth_key)`
-+
-The last GHASH block of cite:[nist-SP-800-38D] {sect}7.1 is `0^64^` followed by the
-64-bit big-endian encoding of `8 len`, with the eight zero octets *first*. Transcribed
-per <<ACE-conventions-transcription>>, the zeros therefore occupy octets 0 to 7, i.e.
-`J0[63:0]`, and the length octets 8 to 15, i.e. `J0[127:64]`, which is why
-`binBE(8 len,64)` is the *left* operand of `@`.
+// +
+// The last GHASH block of cite:[nist-SP-800-38D] {sect}7.1 is `0^64^` followed by the
+// 64-bit big-endian encoding of `8 len`, with the eight zero octets *first*. Transcribed
+// per <<ACE-conventions-transcription>>, the zeros therefore occupy octets 0 to 7, i.e.
+// `J0[63:0]`, and the length octets 8 to 15, i.e. `J0[127:64]`, which is why
+// `binBE(8 len,64)` is the *left* operand of `@`.
 
     . `start_ctr <- int(bswap(J0[127:96]))`,
     . Transitions to state _Hash_Absorb_.
@@ -1086,11 +1086,9 @@ If `ACELEN` is a multiple of `b`, the above operations are executed `ACELEN/b` t
 ** To transition to State _Enc_Last_Block_, a Form B `ace.setst` instruction is issued, whereby
 `last_blk_len`, the bit length of the last block, is set to the auxiliary argument `Xs`. A value of zero, or larger than 127, *invalidates* the CR, as it does in the other modes that take a final-block length (cf. <<ACE-OCB-mode>>, <<ACE-CMAC-mode>>, <<ACE-Ascon-AEAD128>>).
 +
-`last_blk_len` is a truncation of a block that has already been transferred, not the
-length of a transfer, so it is deliberately *not* restricted to multiples of 8; see
-<<ACE-truncation-vs-length>>. Every value from 1 to 127 is conformant here, because
-cite:[nist-SP-800-38D] defines GCTR and GHASH over bit strings of arbitrary length and
-the length block carries the exact bit count.
+`last_blk_len` is not restricted to multiples of 8.
+Every value from 1 to 127 is conformant here per cite:[nist-SP-800-38D].
+Any bits in excess provided by the following Form A ``ace.exec`` is ignored.
 
 ** In State _Enc_Last_Block_, a single Form A ``ace.exec`` instruction can be issued.
    “``ace.exec OUTPUT, Kn|K{Xn}, INPUT``” encrypts `INPUT` into `OUTPUT`, and
@@ -1125,10 +1123,6 @@ The authentication tag is then computed and retained internally, as follows:
 
 . `absorb(INPUT)`.
   . `tag <- tag xor enc_blk(key, binBE(start_ctr,32) @ J0[95:0])`.
-
-The `ace.setst` instruction produces no output and does not by itself terminate the
-algorithm: the State becomes _Enc_Tag_Finalize_ and the computed `tag` is read out by the
-`ace.exec` described next.
 
 If `ACELEN` > 128, only the 128 least significant bits of `INPUT` are considered.
 --
@@ -1215,9 +1209,7 @@ pseudocode for GCM encryption and decryption.
 
 [NOTE]
 ====
-GCM security is not compromised if `H` is revealed. Consequently, an implementation of GCM based on an ECB mode CC would be acceptable, for instance as in <<ACE-pseudocode-GCM-encryption-alternate>>. However, this significantly increases code size and requires support for carry-less multiplication, which may not be available in all hardware.
-
-Furthermore, a GCM implementation is necessary to support the use case where the IV is also set in advance and not modifiable by the user. it must be possible to configure a GCM CC with both secret key and the IV. This is described in the next section.
+GCM security is not compromised if `H` is revealed. Consequently, an implementation of GCM based on an ECB mode CC would be acceptable, for instance as in <<ACE-pseudocode-GCM-encryption-alternate>>. However, this significantly increases code size and requires support for carry-less multiplication, which may not be available in the ISA.
 ====
 
 // ////////////////////////////////////////////////////////////////////
@@ -1421,17 +1413,17 @@ Besides _Initial_, _Success_, and _Failure_, the GCM-SIV algorithms make use of 
  ** For decryption: _Hash_Absorb_ -> _Decrypt_ -> { _Dec_Last_Block_ -> } _Dec_Tag_Finalize_ -> _Success_ or _Failure_. (Note that after _Hash_Absorb_, the encryption and decryption branches of the state machine do not have common states.)
  ** Transition to _Encrypt_ possible only if encryption is allowed.
  ** Transition to _Decrypt_ possible only if decryption is allowed.
-+
---
-The encryption branch has no transition out of _Encrypt_/_Enc_Last_Block_.
-This is deliberate: the CC is
-not told the length of the plaintext and does not count blocks, so it has no way to know
-when the last one has been encrypted. The SIV was already produced in
-_Enc_Tag_Finalize_, so nothing remains to be finalized, and the caller simply stops
-issuing ``ace.exec`` instructions and clears or re-provisions the CR. The decryption
-branch does reach _Success_ or _Failure_ because _Dec_Tag_Finalize_ is an explicit act of
-verification.
---
+// +
+// --
+// The encryption branch has no transition out of _Encrypt_/_Enc_Last_Block_.
+// This is deliberate: the CC is
+// not told the length of the plaintext and does not count blocks, so it has no way to know
+// when the last one has been encrypted. The SIV was already produced in
+// _Enc_Tag_Finalize_, so nothing remains to be finalized, and the caller simply stops
+// issuing ``ace.exec`` instructions and clears or re-provisions the CR. The decryption
+// branch does reach _Success_ or _Failure_ because _Dec_Tag_Finalize_ is an explicit act of
+// verification.
+// --
 
 * *Behavior:*
  ** In State _Initial_ :
@@ -3841,19 +3833,11 @@ _AlgorithmPolicy_[0] is set to 1 if the Algorithm can generate signatures, and
 _AlgorithmPolicy_[1] is set to 1 if the Algorithm can verify signatures.
 An _AlgorithmPolicy_ of 0 is not valid, and it will cause the CR to immediately transition to State `ace_state_invalid`.
 
-The _AuxInfo_ field records the hash function that the caller is expected to use when it
-computes _μ_, and, for the `HashML-DSA` variants, when it pre-hashes the message.
+The _AuxInfo_ field records the hash function that the caller is expected to use when it computes _μ_, and, for the `HashML-DSA` variants, when it pre-hashes the message. It cannot be enforced. It also provides information to the recipients of the CC, since it is in the clear
+in the MDH, but recipients need not support the hash function.
 This parameter has the same format as the _Algorithm_ and _AlgorithmPolicy_ Fields and the next two Reserved bits.
 The value must encode a hash function that cite:[nist-fips-204] admits for that purpose;
 any other value transitions the state machine to Error State `ace_state_invalid`.
-
-[NOTE]
-====
-This field provides information to the recipients of the CC, since it is in the clear
-in the MDH. The caller supplies the values of _tr_ and _μ_, and the Algorithm does
-not have to use the hash function.  This applies also to the recipients, so the CC
-can be consumed also by implementations that do not support the hash function.
-====
 --
 
 * *Internal State*:
