@@ -81,8 +81,8 @@ is not yet complete or contains ambiguities.
 | 5    | 10/11 | `SHA3-384_HMAC` (No Initial Key/Key In PI) | `Zlesha3h` and `Zlhmacm`
 | 5    | 12/13 | `SHA3-512_HMAC` (No Initial Key/Key In PI) | `Zlesha3h` and `Zlhmacm`
 | 5    | 14    | `KMAC128`                                  | `Zlesha3h` and `Zlkmacm`
-| 5    | 15    | `KMAC256`                                  | `Zlesha3h` and `Zlkmacm`
-| 5    | 16    | `KMACXOF128`                               | `Zlesha3h` and `Zlkmacm`
+| 5    | 15    | `KMACXOF128`                               | `Zlesha3h` and `Zlkmacm`
+| 5    | 16    | `KMAC256`                                  | `Zlesha3h` and `Zlkmacm`
 | 5    | 17    | `KMACXOF256`                               | `Zlesha3h` and `Zlkmacm`
 //
 | 6    | 0    | `SM3`                                       | `Zlsm3h`
@@ -283,7 +283,7 @@ defines the states used by the symmetric algorithms in this specification.
 
 [[ACE-state-constants-symmetric]]
 .Constants defining CC states for symmetric algorithms
-[float="center",align="center",width="100%",cols="^6%,<30%,<17%,<47%",options="header"]
+[float="center",align="center",width="100%",cols="^7%,<30%,<17%,<46%",options="header"]
 |===
 | Value | Mnemonic for the Constant         | State Name          | Description
 .2+| 2  |  `ace_state_operate`              |  _Operate_          | Generic operational state.
@@ -2267,7 +2267,7 @@ Then, state transitions to _Hash_Absorb_Last_Block_ as expected.
            ``{fournbsp}{fournbsp}<- block[8(block_base + amount) - 1 : 8 block_base]``
      .. `output_base <- output_base + amount`
      .. `block_base <- block_base + amount`
-     .. if (`block_base` == `t`/8) then {
+     .. if (`block_base` == `t`/8) then: {
       ... if we are in a Hash function, transition to State _Success_, and return.
       ... `update()`
       ... `block_base <- 0`
@@ -2288,6 +2288,8 @@ The format for such a HMAC is a simple extension of the standard hash function f
 The description in this section depends on <<ACE-hash-functions>>.
 
 Parameters:::
++
+--
 * `b` = input block size of the underlying hash function.
 * `d` = digest size of the underlying hash function, i.e. the length of its output.
 * Granularity: same as that of the underlying hash function.
@@ -2299,13 +2301,16 @@ The two padding constants of cite:[nist-fips-198-1] are:
 
 both therefore `b` bits long. Every octet of each constant has the same value, so their
 representation does not depend on the octet order of <<ACE-conventions>>.
+--
+
+Data Structures:::
 
 * *Provisioning Input*:
 +
 --
 All HMAC Algorithms exist in two variants, differentiated by a different encoding in the `mode` field.
 
-The PI of the version that starts with a “No Initial Key“ (NIK) has the following format
+The PI of the version that starts with “No Initial Key“ (NIK) has the following format
 
 [%autowidth,cols="^1,<2,<3",options="header"]
 |===
@@ -2313,22 +2318,18 @@ The PI of the version that starts with a “No Initial Key“ (NIK) has the foll
 |   i  | 128           | MDH
 |===
 
-whereas the “key in PI“ (KIP) version has the following format
+The PI of the version with the “Key in PI“ (KIP) has the following format
 
-[%autowidth,cols="^1,<2,<3",options="header"]
+[cols="^7%,<23%,<70%",options="header"]
 |===
-| Pos. | Size (Bits)   | Field
-|   i  | 128           | MDH
-|  ii  | `b`           | `K0`, the key already reduced to `b` bits (see below), or 64 bits if a system key or randomly generated.
-| iii  | 0 or 64       | Padding, to reach a multiple of 128 bits.
+| Pos. | Size (Bits)               | Field
+|   i  | 128                       | MDH
+|  ii  | `b^*^`                    | `K0`, the key already reduced to `b` bits (see below), or 64 bits if a system key or randomly generated.
+| iii  | `(-b^*^) mod 128`, or 64       | Padding, to reach a multiple of 128 bits.
 |===
 
-// The padding is 64 bits when the rate `b` of the underlying hash function is congruent to 64
-// modulo 128, and absent otherwise. Since every rate is a multiple of 64, no other width can
-// arise. Concretely the padding is absent for SHA-224, SHA-256 (`b` = 512), SHA-384, SHA-512,
-// SHA-512/224, SHA-512/256 (`b` = 1024) and SHA3-224 (`b` = 1152), and 64 bits for SHA3-256
-// (`b` = 1088), SHA3-384 (`b` = 832) and SHA3-512 (`b` = 576). It is likewise 64 bits whenever
-// Position ii holds a 64-bit System Key Identifier instead of a key by value.
+The key provisioned or held in a CC is the value `K0` as defined in cite:[nist-fips-198-1] {sect}3: the key padded with zeros to `b` bits if it is shorter, or hashed and then padded if it is longer.
+Deriving `K0` from the original key is the responsibility of whoever provisions it.
 --
 
 * *Internal State*:
@@ -2341,12 +2342,12 @@ whereas the “key in PI“ (KIP) version has the following format
   *** `block_base`: int. Length of absorbed data so far for the current block. Only if needed by the algorithm.
   *** `cumul_len`: int. Cumulative length of data absorbed so far (if the algorithm must process and incorporate it in the hash on its own).
   *** `block`: `b` bits.  Included only if a partial block must be maintained—for instance when the inputs are not directly absorbed into `state`.
- ** `key`: `b` bits, the value `K0`.
+ ** `K0`: `b` bits, the value `K0` as per cite:[nist-fips-198-1] {sect}3.
 
 * *Serialized Context*:
 +
 --
-[%autowidth,cols="^1,<2,<6",options="header"]
+[cols="^7%,<23%,<70%",options="header"]
 |===
 | Pos. | Size (Bits)              | Field
 |   i  | 128                      | MDH
@@ -2356,27 +2357,25 @@ whereas the “key in PI“ (KIP) version has the following format
 |===
 --
 
+//
+
 State Machine::: {empty}
 +
 --
 This Meta-Algorithm inserts one state between _Initial_ and _Hash_Absorb_, called _Set_Key_.
 
-The key held in a CC is the value `K0` as defined in cite:[nist-fips-198-1] {sect}3: the key
-padded with zeros to `b` bits if it is shorter, or hashed and then padded if it is longer.
-Deriving `K0` from the original key is the responsibility of whoever provisions it.
-
 The two variants differ only in how the key first reaches the CC.
 
-* In the *KIP* variant `K0` is carried in the Provisioning Input.
-  The key may be given by value or, with _KeyType_ = 1, as SKID.
-  A KIP CC *cannot be re-keyed*.
+In the KIP variant `K0` is carried in the Provisioning Input.
+The key may be given by value or, with _KeyType_ = 1, as SKID, which includes a randomly generated value.
+A KIP CC cannot be re-keyed.
 
-* In the *NIK* variant the Provisioning Input carries no key. `K0` is loaded in State
-  _Set_Key_ before _Hash_Absorb_ can be entered.
-
+In the NIK variant, the Provisioning Input carries no key. `K0` must be explicitly loaded in State _Set_Key_ before _Hash_Absorb_ can be entered.
+--
++
 * *Allowed State Transitions:*
- ** For the NIK version:  _Initial_ -> _Set_Key_ -> _Hash_Absorb_ -> and rest as in the underlying hash function
- ** For the KIP version:  _Initial_ -> _Hash_Absorb_ -> and rest as in the underlying hash function
+ ** For the NIK version: _Initial_ -> _Set_Key_ -> _Hash_Absorb_ -> and rest as in the underlying hash function
+ ** For the KIP version: _Initial_ -> _Hash_Absorb_ -> and rest as in the underlying hash function
  ** From any valid state to State _Initial_.
 
 * *Behavior:*
@@ -2392,16 +2391,19 @@ The two variants differ only in how the key first reaches the CC.
   . `state` is set to the initial value of the underlying hash function.
   . `key xor ipad` is computed and absorbed in the underlying hash function.
   . Then the semantics of the underlying hash function are executed, absorbing the message.
- ** When entering state _Hash_Output_:
-  . If needed, finalize the inner hash `H((key xor ipad) || message)`, whose `d`-bit
+** When entering state _Hash_Output_:
++
+--
+   * local `inner : bits(d)`
+
+[]
+   . If needed, finalize the inner hash `H((key xor ipad) || message)`, whose `d`-bit
     value is then in `state[d+state_offset-1 : state_offset]`.
-  . Save that value; call it `inner`.
-  . `state` is re-initialized to the initial value of the underlying hash function.
-    This is required: the outer hash is a fresh invocation of the hash function and must
-    not continue from the internal state left by the inner one.
-  . `key xor opad` is absorbed, followed by `inner`.
-  . The outer hash is finalized, and its `d`-bit value is made available in State
-    _Hash_Output_ exactly as for the underlying hash function.
+  . `inner <- state[d+state_offset-1 : state_offset]`.
+  . Reinitialize `state` to the initial value of the underlying hash function 'H'.
+  . `absorb(key xor opad)` as per `H`.
+  . Finalize `H`. The `d`-bit HMAC value is available in State
+    _Hash_Output_ exactly as for `H`, and is provided to the caller following `H`'s semantics.
 --
 
 // ////////////////////////////////////////////////////////////////////
@@ -2424,10 +2426,11 @@ Parameters:::
   each application of `P()` in the output stage, all as given in
   <<ACE-SHA-3-parameters>>.
 * Granularity: 32 bits. This is the smallest element width that may be used for the
-  vector inputs of `ace.exec`, not a constraint on the length of the hashed message: the
-  progress of the absorption is tracked in `block_base`, which counts octets, so a message whose length
-  is not a multiple of 32 bits is supported. It is, like every other input, a whole number
-  of octets (<<ACE-octet-granularity>>).
+  vector inputs of `ace.exec`, not a constraint on the length of the hashed message.
+//  the
+//  progress of the absorption is tracked in `block_base`, which counts octets, so a message whose length
+//  is not a multiple of 32 bits is supported. It is, like every other input, a whole number
+//  of octets (<<ACE-octet-granularity>>).
 
 [[ACE-SHA-3-parameters]]
 .Parameters of the SHA-3 family
@@ -2479,15 +2482,18 @@ Data Structures:::
 |===
 --
 
-Algorithm-Specific Functions:::
+//
 
- * `P()`: computes `KECCAK-p[1600, 24]` on `state`.
+Algorithm-Specific Functions::: {empty}
+ * `P()`: computes `KECCAK-p[1600, 24]` on `state`, with result in place.
  * `absorb()`: in this case there is no explicit operation to copy data into
    `state`, as the inputs will be directly XORed into it, however `absorb`
    applies `P()` to the state.
  * `update()`: updates the `state` during the digest output stage.  It applies `P()` to the state.
 
-State Machine:::
+//
+
+State Machine::: {empty}
 * *States:* _Initial_, _Hash_Absorb_,
   _Hash_Output_ and _Success_.
 
@@ -2502,52 +2508,35 @@ State Machine:::
  Subalgorithm _process_VLI_ (cf. <<ACE-process-VLI>>) as:
 `process_VLI(max_length, state, b, state, n, input_base, block_base, 0, cumul_len, absorb(), None)`,
 where `max_length` is a system-defined maximum length of the data to be absorbed, in octets.
-+
---
-Three of these arguments are specific to this family. `state` is passed in *both* the `block`
-and the `state` positions, which makes the two equal and so selects the XOR branch of the
-procedure: SHA-3 has no `block` field, its input being exclusive-ored straight into the rate.
-`state_offset` is `0`, the rate beginning at offset 0 of the state. And `finalize` is `None`,
-because the suffix and `pad10*1` are applied on the transition into _Hash_Output_, not at the
-end of absorption; there is no `finalize()` function in this family for the procedure to call.
-`absorb()`, by contrast, is passed as `process_block`, since a full rate block does have to be
-permuted before the next one is absorbed.
---
-
- ** SHAKE128 and SHAKE256 are XOFs. In State _Hash_Output_ they never transition to
-    _Success_ and output may be squeezed indefinitely, `b` bits per application of `P()`.
-    The four SHA3-``n`` functions make a single `t`-bit digest available and then
-    transition to _Success_, as described in <<ACE-hash-functions>>. Accordingly, State
-    _Success_ is present only for the four fixed-output functions.
 
  ** Upon transitioning to State _Hash_Output_:
-  The suffix and padding string `S` = `pad10*1` appended to `D` is generated, where `D`
-   is the domain-separation suffix given in <<ACE-SHA-3-parameters>> and `pad10*1`
-   appends a `1`, then as many `0` bits as required, then a final `1`, so that
-   `block_base` + `|S|` is a positive multiple of `b`. Then, the resulting additional
-   block is absorbed.
-+
-   In this state, a digest or XOF is extracted following the generic Hash function/XOF rules.
-+
---
-Following cite:[nist-fips-202] {sect}B.1, and consistently with <<ACE-conventions>>, bit
-`j` of the appended string occupies bit `block_base + j` of the rate. When `block_base` is
-a multiple of 8 this means that the first appended octet is `0x06` for the four SHA3-``n``
-functions and `0x1F` for the two SHAKE functions, and that the final `1` sets bit `b-1`,
-the most significant bit of the last octet of the rate.
+ The suffix and padding string `S` = `pad10*1` appended to `D` is generated, where `D` is the domain-separation suffix given in <<ACE-SHA-3-parameters>> and `pad10*1` appends a `1`, then as many `0` bits as required, then a final `1`, so that `block_base` + `|S|` is a positive multiple of `b`. Then, the resulting additional block is absorbed:
 
-`D` is what separates the two families: without it SHAKE256 and SHA3-256, which share
-`c` = 512 and hence the same rate, would produce identical output.
---
-+
-  . If the bit length of `S` is `b - block_base`:
-   .. `S` is directly XORed to rate part of the state, and
-   .. `P()` is applied.
-  . If the bit length of `S` is `2 b - block_base`:
-   .. The first `b - block_base` bits are XORed to the rate part of the state,
-   .. `P()` is applied,
-   .. the remaining `b` bits are XORed to the rate part of the state, and
-   .. `P()` is applied again.
+ . If the bit length of `S` is `b - block_base`:
+    .. `S` is directly XORed to rate part of the state, and
+    .. `P()` is applied.
+   . If the bit length of `S` is `2 b - block_base`:
+    .. The first `b - block_base` bits are XORed to the rate part of the state,
+    .. `P()` is applied,
+    .. the remaining `b` bits are XORed to the rate part of the state, and
+    .. `P()` is applied again.
+
+ ** In State _Hash_Output_,  a digest or XOF is extracted following the generic Hash function/XOF rules.
+  The four SHA3-``n`` functions make a single `t`-bit digest available and then transition to _Success_.
+  SHAKE128 and SHAKE256 are XOFs: They never transition to _Success_ and output may be squeezed indefinitely.
+
+// --
+// Following cite:[nist-fips-202] {sect}B.1, and consistently with <<ACE-conventions>>, bit
+// `j` of the appended string occupies bit `block_base + j` of the rate. When `block_base` is
+// a multiple of 8 this means that the first appended octet is `0x06` for the four SHA3-``n``
+// functions and `0x1F` for the two SHAKE functions, and that the final `1` sets bit `b-1`,
+// the most significant bit of the last octet of the rate.
+//
+// `D` is what separates the two families: without it SHAKE256 and SHA3-256, which share
+// `c` = 512 and hence the same rate, would produce identical output.
+// --
+// +
+//
 
 The rest of the algorithm follows <<ACE-hash-functions>>.
 
@@ -2565,8 +2554,8 @@ This section describes the differences with respect to <<ACE-SHA-3>>, on which i
 Parameters:::
 
 * `n` = 1600.
-* KMAC128 uses `c` = 256 and rate `b` = 1344 bits (168 octets);
-  KMAC256 uses `c` = 512 and rate `b` = 1088 bits (136 octets).
+* KMAC128 and KMACXOF128 use `c` = 256 and rate `b` = 1344 bits (168 octets);
+  KMAC256 and KMACXOF256 use `c` = 512 and rate `b` = 1088 bits (136 octets).
 * `t` = `b`, as for the extendable-output functions of <<ACE-SHA-3-parameters>>.
 * `L` = the requested output length in bits, set on the transition to _Hash_Output_.
 * Granularity: 32 bits, with the same meaning as in <<ACE-SHA-3>>.
@@ -2574,29 +2563,21 @@ Parameters:::
 Data Structures:::
 
 A CC does not hold the key `K` and the customization string `S` in their raw form. It
-holds the two rate-sized blocks that cite:[nist-SP-800-185] derives from them, each
-prepared by whoever provisions the CC, exactly as HMAC holds `K0` rather than the
-original key (<<ACE-HMAC>>):
-
-`{fournbsp}{fournbsp}` `cshake_block` = `bytepad(encode_string("KMAC") @@ encode_string(S), b/8)`, and +
-`{fournbsp}{fournbsp}` `key_block` `{nbsp}{nbsp}` = `bytepad(encode_string(K), b/8)`,
-
-where `bytepad`, `encode_string` and `left_encode` are as defined in
-cite:[nist-SP-800-185] {sect}2.3, and `@@` denotes concatenation in the octet order of
-that standard, i.e. left operand first. Keeping these two blocks out of the ACE unit
-removes every variable-length encoding from the hardware, and makes the length of the PI
-depend only on the _Algorithm_ field, as <<ACE-length-rule>> requires.
-
-Each block must occupy exactly one rate block, which bounds the key and the
-customization string:
-
+holds the two rate-sized blocks that cite:[nist-SP-800-185] derives from them,
+prepared by whoever provisions the CC:
++
+`{fournbsp}{fournbsp}` `cshake_block` = `bytepad(encode_string("KMAC") || encode_string(S), b/8)`, and +
+`{fournbsp}{fournbsp}` `key_block{nbsp}{nbsp}{nbsp}` = `bytepad(encode_string(K), b/8)`,
++
+where `bytepad`, `encode_string` and `left_encode` are as defined in cite:[nist-SP-800-185] {sect}2.3:
++
 [%autowidth,float="center",align="center",cols="<,^,^,^",options="header"]
 |===
-| Function | rate `b`/8 | maximum \|`K`\| | maximum \|`S`\|
-| KMAC128 | 168 octets | 163 octets | 157 octets
-| KMAC256 | 136 octets | 131 octets | 125 octets
+| Function           | rate `b`/8 | maximum \|`K`\| | maximum \|`S`\|
+| KMAC128/KMACXOF128 | 168 octets | 163 octets | 157 octets
+| KMAC256/KMACXOF256 | 136 octets | 131 octets | 125 octets
 |===
-
++
 A provisioner presented with a longer key must reduce it beforehand; this specification
 does not define how, since cite:[nist-SP-800-185] does not.
 
@@ -2622,18 +2603,20 @@ does not define how, since cite:[nist-SP-800-185] does not.
 --
 [%autowidth,cols="^,<,<",options="header"]
 |===
-| Pos. | Size (Bits)   | Field
-|   i  | 128            | MDH
-|  ii  | 1600            | `state`
-| iii  | 16              | `block_base`
-|  iv  | 16              | `input_base`
-|   v  | 32              | Padding
-| vii  | `b`             | `cshake_block``
-| viii | `b`             | `key_block`
-|  ix  | 32              | `L`
-|   x  | 96              | Padding
+| Pos. | Size (Bits) | Field
+|   i  | 128         | MDH
+|  ii  | 1600        | `state`
+| iii  | 16          | `block_base`
+|  iv  | 16          | `input_base`
+|   v  | 32          | Padding
+| vii  | `b`         | `cshake_block`
+| viii | `b`         | `key_block`
+|  ix  | 32          | `L`
+|   x  | 96          | Padding
 |===
 --
+
+//
 
 Algorithm-Specific Functions:::
 
@@ -2641,6 +2624,8 @@ Algorithm-Specific Functions:::
  * `right_encode(x)` is as defined in cite:[nist-SP-800-185] {sect}2.3: the value `x`
    written as an unsigned big-endian integer on the smallest possible positive number `m`
    of octets, followed by a single octet holding `m`.
+
+//
 
 State Machine:::
 
@@ -2654,42 +2639,32 @@ State Machine:::
   . `state` is zeroed.
   . `cshake_block` is XORed into the rate and `P()` is applied.
   . `key_block` is XORed into the rate and `P()` is applied.
-+
---
-Both blocks are exactly one rate block long, so the message that follows begins at
-offset 0 of a fresh rate block and `block_base` is 0 on entry to _Hash_Absorb_.
---
+// +
+// --
+// Both blocks are exactly one rate block long, so the message that follows begins at
+// offset 0 of a fresh rate block and `block_base` is 0 on entry to _Hash_Absorb_.
+// --
 
- ** To transition to State _Hash_Output_, a Form B `ace.setst` instruction is expected,
-    whose auxiliary argument sets `L`, the output length in bits. `L` must be non-zero;
-    a zero value *invalidates* the CR. `L` need *not* be a multiple of 8: it is the bit
-    length that cite:[nist-SP-800-185] encodes in `right_encode(L)`, and any positive
-    value is admissible. Output is delivered in whole octets, so when `L` is not a
-    multiple of 8 the final octet is zero-padded above its `L mod 8` significant bits,
-    per <<ACE-truncation-vs-length>>.
+ ** To transition to State _Hash_Output_, a Form B `ace.setst` instruction is expected for `KMAC128` and `KMAC256`,
+    whose auxiliary argument sets `L`, the output length in bits.
+    `L` must be non-zero: a zero value *invalidates* the CR.
+    if `L` is *not* be a multiple of 8, the output is delivered in whole octets, whereby the last octet may
+    be zero padded in the significant bits.
++
+For `KMACXOF128` and `KMACXOF256`, a Form A `ace.setst` instruction is expected, and `L` is assumed to be zero in the following.
 
  ** Upon transitioning to State _Hash_Output_:
   . `right_encode(L)` is absorbed, continuing from the current `block_base`.
   . The suffix and padding string `S` = `pad10*1` appended to `D` is generated and
     absorbed exactly as in <<ACE-SHA-3>>, but with the cSHAKE domain-separation suffix
-    `D` = `00` in place of the `1111` of the raw SHAKE functions. When `block_base` is a
-    multiple of 8 the first appended octet is therefore `0x04`.
+    `D` = `00` in place of the `1111` of the raw SHAKE functions.
 
- ** In State _Hash_Output_, exactly `L` bits are made available — that is
+ ** In State _Hash_Output_, for `KMAC128` and `KMAC256` exactly `L` bits are made available — that is
     {lceil}`L`/8{rceil} octets, the last one zero-padded if `L` is not a multiple of 8 —
     at `b` bits per application of `P()`, after which the state transitions to _Success_.
-    KMAC is not an XOF.
-
-[NOTE]
-====
-The domain-separation suffix is the only thing distinguishing this construction from a
-raw SHAKE over the same input: `00` for cSHAKE and hence for KMAC, `1111` for SHAKE. An
-implementation that reused the SHAKE suffix would produce a function that is not KMAC and
-whose outputs collide with nothing in cite:[nist-SP-800-185].
-
-`KMACXOF128` and `KMACXOF256` differ only in absorbing `right_encode(0)` instead of
-`right_encode(L)` and in never transitioning to _Success_.
-====
++
+For `KMACXOF128` and `KMACXOF256`,  arbitrarily many bits can be squeezed, and these
+Algorithm never transitions to _Success_.
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -2700,18 +2675,18 @@ whose outputs collide with nothing in cite:[nist-SP-800-185].
 (((ACE, algorithm, Ascon)))
 Ascon is a public permutation cite:[DBLP-journals-joc-DobraunigEMS21] standardized by the NIST cite:[nist-SP-800-232] together with various cryptographic algorithms designed around it.
 
-[WARNING]
-====
-In all ASCON algorithms as per cite:[nist-SP-800-232], the bitstrings are written in little endian order, and in particular the concatenation operator is also little endian: `x || y` means that `x` is the least significant bit string, which corresponds to our `y @ x`.
+// [WARNING]
+// ====
+// In all ASCON algorithms as per cite:[nist-SP-800-232], the bitstrings are written in little endian order, and in particular the concatenation operator is also little endian: `x || y` means that `x` is the least significant bit string, which corresponds to our `y @ x`.
+//
+// This is the general transcription rule of <<ACE-conventions-transcription>> and not an
+// exception made for Ascon: it applies to every standard reproduced in this chapter.
+// Ascon is called out here only because cite:[nist-SP-800-232] is itself written in little
+// endian order, so its formulas and this specification's differ *only* in the order of the
+// concatenated terms, with no `bswap` and no big-endian integer encodings anywhere.
+// ====
 
-This is the general transcription rule of <<ACE-conventions-transcription>> and not an
-exception made for Ascon: it applies to every standard reproduced in this chapter.
-Ascon is called out here only because cite:[nist-SP-800-232] is itself written in little
-endian order, so its formulas and this specification's differ *only* in the order of the
-concatenated terms, with no `bswap` and no big-endian integer encodings anywhere.
-====
-
-Ascon-AEAD128 is an AEAD algorithm. In Ascon-AEAD128, it is the responsibility of the user to apply proper padding to the AD and plaintext. The inputs are therefore assumed to be properly padded. Similarly, it is the responsibility of the user to remove the padding from the decryption of the ciphertext to recover the original plaintext.
+In Ascon-AEAD128, it is the responsibility of the user to apply proper padding to the AD and plaintext. The inputs are therefore assumed to be properly padded. Similarly, it is the responsibility of the user to truncate the last plaintext block.
 
 Parameters:::
 
@@ -2820,12 +2795,9 @@ If `ACELEN` > 128, only the 128 least significant bits of `INPUT` are considered
 +
 If `ACELEN` > 128, this sequence of three operations is executed `ACELEN/128`
 times, once for each 128-bit block of `INPUT`.
++
+If the associated data is empty, the caller shall issue no ``ace.exec`` instruction in this state (hence, no permutation is applied).
 
-If the associated data is empty, no ``ace.exec`` instruction is issued in this state and
-no permutation is applied, as cite:[nist-SP-800-232] requires: an empty associated data
-field contributes nothing, not even a padding block. The caller pads a non-empty
-associated data field, so the two cases are distinguished by the caller and the CC needs
-no state of its own to record which one applies.
 ** Upon entering State _Encrypt_ or _Decrypt_, the following domain separation
    operation is performed:
  . `state[4] <- state[4] xor (1 << 63)`
@@ -2847,27 +2819,19 @@ block of `OUTPUT`.
 auxiliary argument `Xs` is the bit length of the final block. It performs:
 +
 --
-. If `Xs` > 127, then: the CR is *invalidated*. A partial final block of 127 bits is legal:
-  `Xs` is a truncation of an already-transferred block, not a transfer length, so
-  <<ACE-truncation-vs-length>> applies and it need not be a multiple of 8. Ascon's
-  `pad` places the terminating `1` at bit position `Xs` for any `Xs`, because
-  cite:[nist-SP-800-232] is written in little-endian bit order.
+. If `Xs` > 127, then: the CR is *invalidated*.
 . If `Xs` is zero, then:
-.. `state[0] <- state[0] xor 1`
+.. `state[0] <- state[0] xor 1` (this is `pad(∅,128)` = `zeros(127) @ 1`)
 ..  The state machine then transitions to State _Hash_Output_.
 . else:
 .. `last_block_len <- Xs`
 --
 +
-The absorbed value in the second case is `pad(∅,128)` = `zeros(127) @ 1`, whose single
-set bit is bit 0 of the 128-bit rate and therefore bit 0 of `state[0]`
-(cf. <<ACE-conventions>>).
-+
 If `last_block_len` is non-zero, the instruction does _not_ cause a transition to State _Hash_Output_ and instead the Algorithm's state machine waits for a Form A `ace.exec`, as described next.
 
 ** State _Enc_Last_Block_ is entered only when `last_block_len` is non-zero. In it,
-exactly one `ace.exec` instruction of Form A is expected, to encrypt the last block. It
-performs:
+exactly one `ace.exec` instruction of Form A is expected, to encrypt the last block.
+It performs:
 +
 --
 * `tmp : bits(b)`
@@ -2876,8 +2840,9 @@ performs:
 . `tmp <- pad(INPUT[last_block_len-1:0], 128)`
 . `state[0] <- state[0] xor tmp[63:0]`
 . `state[1] <- state[1] xor tmp[127:64]`
-. `tmp <- state[1] @ state[0]` // only the 128 lsbs of `OUTPUT` are written to.
+. `tmp <- state[1] @ state[0]`
 . `OUTPUT <- zeros(128-last_block_len) @ tmp[last_block_len-1:0]`
+(Only the 128 lsbs of `OUTPUT` are written to.)
 .  The state machine then transitions to State _Hash_Output_.
 --
 +
@@ -2892,7 +2857,7 @@ In State _Enc_Last_Block_ only one 128-bit block is processed.
  . `ASCON(12)`
  . `state[3] <- state[3] xor key[63:0]`
  . `state[4] <- state[4] xor key[127:64]`
- . `OUTPUT <- state[4] @ state[3]` // only the 128 lsbs of `OUTPUT` are written to.
+ . `OUTPUT <- state[4] @ state[3]` (Only the 128 lsbs of `OUTPUT` are written to.)
  . The state machine then transitions to State _Success_.
 --
 +
@@ -2919,11 +2884,12 @@ If `ACELEN` is a multiple of 128, these operations are executed `ACELEN/128` tim
 auxiliary argument `Xs` is the bit length of the final block. It performs:
 +
 --
-. If `Xs` > 127, then: the CR is *invalidated*. A partial final block of 127 bits is legal:
-  `Xs` is a truncation of an already-transferred block, not a transfer length, so
-  <<ACE-truncation-vs-length>> applies and it need not be a multiple of 8. Ascon's
-  `pad` places the terminating `1` at bit position `Xs` for any `Xs`, because
-  cite:[nist-SP-800-232] is written in little-endian bit order.
+. If `Xs` > 127, then: the CR is *invalidated*.
+//A partial final block of 127 bits is legal:
+//  `Xs` is a truncation of an already-transferred block, not a transfer length, so
+//  <<ACE-truncation-vs-length>> applies and it need not be a multiple of 8. Ascon's
+//  `pad` places the terminating `1` at bit position `Xs` for any `Xs`, because
+//  cite:[nist-SP-800-232] is written in little-endian bit order.
 . If `Xs` is zero, then:
 .. `state[0] <- state[0] xor 1`
 ..  The state machine then transitions to State _Hash_Verify_.
@@ -2951,30 +2917,30 @@ The `ace.exec` instruction performs:
 --
 +
 In State _Dec_Last_Block_, only one 128-bit block is processed.
-+
-The rate is updated by an *exclusive or* with the padded *plaintext*, exactly as on the
-encryption path, so that both paths reach the same state before finalization. Step 4
-replaces the first `last_block_len` bits of `S_r` with the ciphertext, flips the padding
-bit immediately above them, and leaves the remainder of the rate unchanged. It must not
-be written as an assignment of `pad(INPUT)`: that would substitute the ciphertext for
-the plaintext and would additionally clear the part of `S_r` above the padding bit,
-which the encryptor never does.
-
-Ascon-AEAD128 has no _Dec_Tag_Finalize_ state. Both branches of _Dec_Last_Block_ reach
-_Hash_Verify_ on their own — the `ace.setst` does so directly when the final block is empty,
-and the `ace.exec` does so otherwise — mirroring the way the encryption path reaches
-_Hash_Output_. The received tag is supplied with the `ace.exec` of _Hash_Verify_, described
-below, which performs the whole finalization; an intermediate state would have nothing to do.
-
-[NOTE]
-====
-cite:[nist-SP-800-232] specifies a 128-bit tag for Ascon-AEAD128 and defines no truncated
-variant. Verifying against a truncated tag would reduce forgery resistance by exactly the
-number of bits dropped and, since the encryption path emits the full 128 bits, would not
-interoperate with it. The `tag_len` field is retained in the Internal State and in the
-Serialized Context, holding the value 128, so that a variant with a different tag length
-could be added later without changing the format.
-====
+// +
+// The rate is updated by an *exclusive or* with the padded *plaintext*, exactly as on the
+// encryption path, so that both paths reach the same state before finalization. Step 4
+// replaces the first `last_block_len` bits of `S_r` with the ciphertext, flips the padding
+// bit immediately above them, and leaves the remainder of the rate unchanged. It must not
+// be written as an assignment of `pad(INPUT)`: that would substitute the ciphertext for
+// the plaintext and would additionally clear the part of `S_r` above the padding bit,
+// which the encryptor never does.
+//
+// Ascon-AEAD128 has no _Dec_Tag_Finalize_ state. Both branches of _Dec_Last_Block_ reach
+// _Hash_Verify_ on their own — the `ace.setst` does so directly when the final block is empty,
+// and the `ace.exec` does so otherwise — mirroring the way the encryption path reaches
+// _Hash_Output_. The received tag is supplied with the `ace.exec` of _Hash_Verify_, described
+// below, which performs the whole finalization; an intermediate state would have nothing to do.
+//
+// [NOTE]
+// ====
+// cite:[nist-SP-800-232] specifies a 128-bit tag for Ascon-AEAD128 and defines no truncated
+// variant. Verifying against a truncated tag would reduce forgery resistance by exactly the
+// number of bits dropped and, since the encryption path emits the full 128 bits, would not
+// interoperate with it. The `tag_len` field is retained in the Internal State and in the
+// Serialized Context, holding the value 128, so that a variant with a different tag length
+// could be added later without changing the format.
+// ====
 
 ** In State _Hash_Verify_, only one ``ace.exec`` instruction of Form B is expected to be issued, to verify the tag.
 “``ace.exec Kn|K{Xn}, INPUT``” performs
@@ -3246,9 +3212,9 @@ The parameters that are used in this section are:
    cite:[nist-fips-186-5] {sect}6.4, that is, its leftmost `min(N, outlen)` bits, where `N`
    is the bit length of the group order and `outlen` that of the digest. Performing that
    reduction is the caller's responsibility, as is choosing an approved hash function.
-   For SM2 the value placed in `Hash` is `e` = `SM3(Z~A~ @@ M)` of
-   cite:[GMT-0003-2-2012], where `Z~A~` = `SM3(ENTL~A~ @@ ID~A~ @@ a @@ b @@ x~G~ @@ y~G~
-   @@ x~A~ @@ y~A~)`. Both are computed by the caller, which is possible because every
+   For SM2 the value placed in `Hash` is `e` = `SM3(Z~A~ || M)` of
+   cite:[GMT-0003-2-2012], where `Z~A~` = `SM3(ENTL~A~ || ID~A~ || a || b || x~G~ || y~G~
+   || x~A~ || y~A~)`. Both are computed by the caller, which is possible because every
    input to `Z~A~` is public; the ACE unit computes neither.
    For the Edwards curves the field is used differently, and only in pre-hash mode; see
    <<ACE-EdDSA>>;
@@ -3283,7 +3249,7 @@ these curves do not use `RndNum` (cf. <<ACE-EdDSA>>).
 
 Depending on the specifications of the algorithms, non-compressed or compressed points may be used.
 
-All curves currently used are defined over fields of odd characteristic.
+All curves specified here are defined over prime fields.
 Since the all-ones strings do not represent any valid field value, these are used as coordinate(s) values of a point to represent the point at infinity.
 --
 
@@ -3374,8 +3340,8 @@ The following fields are also optionally included in the `Content1[]` field of t
 |  viii   | If `HasRndNum`: `j`, else: 0      | `RndNum`. Its width is `j`, the nonce length, both here and in the Internal State.
 |===
 
-`SCC_content_size()` returns the length of the content from Position i to Position viii, and thus the elliptic curve algorithms make use
-of the _StateExtension_ MDH field to determine the length of the SCC.
+`SCC_content_size()` returns the length of the content from Position i to Position viii.
+The ECC algorithms make use of the _StateExtension_ MDH field to determine the SCC length.
 
 The `HasRndNum` flag is set and the `RndNum` field is used only during signature generation.
 `RndNum` is exported only if the signature operation is interrupted.
@@ -3403,36 +3369,27 @@ _Failure_ (23),
 ECC algorithms define:
  ** _Set_Generator_ (2)
  ** _Set_Scalar_ (3)
- ** _Point_Mul_ (5)
- ** _Sign_Generate_ (6)
- ** _Sign_Verify_ (7)
- ** _Set_Hash_ (8)
- ** _Set_SecondPt_ (9)
- ** _Set_Signature_ (10)
- ** _Output_ (11)
-
-Value 4 is not used by these algorithms and is reserved. A random scalar needs no state of
-its own: it is obtained in State _Set_Scalar_ by issuing the Form B `ace.setst` with a
-non-zero value in the GPR, as described under *Behavior* below. The values of the remaining
-states are left unchanged so that the _State_ field keeps its meaning.
+ ** _Point_Mul_ (4)
+ ** _Sign_Generate_ (5)
+ ** _Sign_Verify_ (6)
+ ** _Set_Hash_ (7)
+ ** _Set_SecondPt_ (8)
+ ** _Set_Signature_ (9)
+ ** _Output_ (10)
 --
 
 * *Allowed State Transitions:*
 +
 --
  ** _Initial_ -> _Set_Generator_, _Set_Scalar_, _Set_Hash_, _Set_SecondPt_, _Set_Signature_.
-+
---
-_Sign_Generate_ and _Sign_Verify_ are not reachable directly from _Initial_: they are
-subject to the conditions stated below, which a freshly provisioned CC does not satisfy.
---
  ** One can freely transition between _Set_Generator_, _Set_Scalar_, _Set_Hash_, and _Set_SecondPt_.
  ** From any of _Initial_, _Set_Generator_, _Set_Scalar_, _Set_Hash_, _Set_SecondPt_ -> one of:
   *** _Point_Mul_;
   *** _Sign_Generate_ only if `HasSecondPt` and `HasHash` hold *and* `Scalar` holds a
       configured private key, that is `1` {le} `int(Scalar)` `<` `n`, where `n` is the order
       of the group. A freshly provisioned CC has `Scalar` = 0 and so does not qualify.
-      Entering _Sign_Generate_ without a configured private key *invalidates* the CR.
+      Attempting to enter State _Sign_Generate_ via `ace.setst` without a configured private key raises an illegal instruction error and
+      *invalidates* the CR.
   *** _Sign_Verify_ only if `HasSecondPt`, `HasHash`, and `HasSignature`.
  ** _Point_Mul_ -> _Output_.
  ** _Sign_Generate_ -> _Output_ -> _Success_.
@@ -3444,12 +3401,11 @@ subject to the conditions stated below, which a freshly provisioned CC does not 
 * For each __Var__ {in} {`SecondPt`, `Signature`, `Hash`, `RndNum`},
 the Boolean variable ``Has``__Var__ is set when all operations required in the corresponding
 _Set_ state have been successfully executed, and is held in the _StateExtension_ field as
-given in <<ACE-ECC-StateExtension>>. There is no such flag for `Generator` or for `Scalar`,
-and none is needed: `Generator` always holds a value, the curve's default one from
+given in <<ACE-ECC-StateExtension>>. There is no such flag for `Generator` or for `Scalar`:
+`Generator` always holds a value, the curve's default one from
 provisioning onwards, and `Scalar` is zero until set, which is not a legal private key and
-is therefore itself the "unset" indication.
+therefore needs no flag.
 --
-+
 
 * *Behavior:*
 
@@ -3473,11 +3429,8 @@ is therefore itself the "unset" indication.
  ** To transition to any of the States _Set_Scalar_, _Set_Hash_, _Set_SecondPt_, or _Set_Signature_ a Form A `ace.setst` is used.
  . If there is a current value in the corresponding field _X_ = `Scalar`, `Hash`, `SecondPt`, or `Signature`,
      it is erased, and the Boolean ``Has``_X_ is set to False.
- . `block_base` <- 0, and a value for Field _X_ is loaded, using one or more Form B `ace.exec` operations (similarly to `Generator`).
- . Once `block_base` has reached the length of field _X_ in octets (excess data in the last `ace.exec` is ignored):
-  *** The corresponding Boolean ``Has``_X_ is set to True.
-  *** No further `ace.exec` instructions may be issued.
-  *** A state change operation can be issued, including to states that require a value for _X_ to be set. This state change also clears `block_base`.
+ . `block_base` <- 0, and a value for Field _X_ is loaded, using one or more Form B `ace.exec` operations, similarly to `Generator`, updating
+   `block_base` accordingly and ignoring excess data in the last `ace.exec`, setting ``Has``_X_ once done.
 
  ** It is allowed to transition to _Set_Scalar_ also using a Form B `ace.setst` with a non-zero value in the GPR.
     In this case, a random value is set: `Scalar` is generated inside the ACE unit, uniformly
@@ -3486,33 +3439,19 @@ is therefore itself the "unset" indication.
     `ace.exec` is issued in this case, and the generated value is never disclosed: it leaves
     the CR only as part of an SCC.
 
- ** *Per-message secret number, and the retry rules.* For signature generation the ACE unit
+ ** *Random numbers and retry rules.*
+  *** For signature generation the ACE unit
     draws the per-message secret `RndNum` itself, by one of the methods of
-    cite:[nist-fips-186-5] Appendix A.2 and with a random bit generator satisfying the
-    requirements stated there; `HasRndNum` is set while it is in use. It is never supplied by
-    software and never leaves the CR except, if a signature operation is interrupted, inside
-    an SCC.
-+
---
-For the ECDSA curves — the NIST and Brainpool parameter sets of this section — the
-signature is recomputed with a *fresh* per-message secret whenever a degenerate value
-arises, as cite:[nist-fips-186-5] {sect}6.4.1 requires:
+    cite:[nist-fips-186-5] Appendix A.2; `HasRndNum` is set while it is in use. It is never supplied by
+    software and never leaves the CR except, when a signature operation is interrupted, in the
+    encrypted part of an SCC.
+  ***
+    For the ECDSA curves — the NIST and Brainpool parameter sets of this section — the signature is recomputed with a fresh secret whenever a degenerate value arises. cite:[nist-fips-186-5] {sect}6.4.1 requires a retry whenever `r` = 0 or `s` = 0.
 
-* if `r` = 0, the candidate is discarded and a new `RndNum` is drawn;
-* if `s` = 0, likewise.
-
-Only a signature with `r` {ne} 0 and `s` {ne} 0 is returned, so the retry is not observable
-in the result. Reusing the same `RndNum` after a degenerate outcome, or returning a
-signature with a zero component, is not permitted: the first leaks the private key across
-the two attempts, and the second is rejected by any conforming verifier.
-
-For SM2 the corresponding conditions of cite:[GMT-0003-2-2012] apply instead, namely a retry
+  *** For SM2 the corresponding conditions of cite:[GMT-0003-2-2012] apply instead, namely a retry
 if `r` = 0, if `r` + `k` = `n`, or if `s` = 0.
 
-The Edwards curves do not draw a per-message secret at all — their nonce is derived
-deterministically from the private key and the message (<<ACE-EdDSA>>) — so no retry rule
-applies to them, and `HasRndNum` is never set.
---
+  *** The Edwards curves do not have retry rules and do not use a random secret.
 
  ** When the operations in states _Point_Mul_ and _Sign_Generate_ are completed:
    . If the output is a point, then `OutputType` <- False, and if the output is a signature, then `OutputType` <- True.
@@ -3549,8 +3488,6 @@ Otherwise, it will discard the additional data at Position x and `RndNum` (Posit
 
 // ////////////////////////////////////////////////////////////////////
 
-// ////////////////////////////////////////////////////////////////////
-
 [[ACE-EdDSA]]
 ==== EdDSA-Specific Rules
 
@@ -3561,8 +3498,8 @@ division of labour used by the other curves of <<ACE-ECC>>, under which the call
 the message and the ACE unit performs only the group arithmetic. Both of its hash
 invocations take material the caller does not hold:
 
-`{fournbsp}{fournbsp}` `r`  = `H(dom @@ prefix @@ M)`, where `prefix` is secret, and +
-`{fournbsp}{fournbsp}` `k'` = `H(dom @@ R @@ A @@ M)`, where `R` = `r` {interpunct} `B` is computed inside.
+`{fournbsp}{fournbsp}` `r{nbsp}`  = `H(dom || prefix || M)`, where `prefix` is secret, and +
+`{fournbsp}{fournbsp}` `k'` = `H(dom || R || A || M)`, where `R` = `r` {interpunct} `B` is computed inside.
 
 The ACE unit therefore performs the hashing itself. This subsection states the
 consequences; everything not restated here follows <<ACE-ECC>>.
@@ -3576,11 +3513,12 @@ Parameters:::
   cite:[RFC8032] {sect}2 and {sect}5.2, with `x` = 0 in pure mode and 1 in pre-hash mode.
   For ed25519 in pure mode with an empty context, `dom` is the empty string.
 
-*Pure and pre-hash modes.*
+Pure and pre-hash modes:::
+
 In *pure* mode the unit hashes the message itself; in *pre-hash* mode the caller supplies
 `PH(M)`, 64 octets for both curves, in the `Hash` field. Which modes an implementation
 offers depends on the hash extensions it provides:
-
++
 [%autowidth,float="center",align="center",cols="<,<,<",options="header"]
 |===
 | Curve extension | Also implements | Modes available
@@ -3589,7 +3527,7 @@ offers depends on the hash extensions it provides:
 | `Zled448c`   | --          | Ed448ph only
 | `Zled448c`   | `Zlesha3h`  | Ed448 and Ed448ph
 |===
-
++
 The curve extension alone must provide enough of `H` to hash the fixed-size inputs above,
 which are a few hundred octets at most. Absorbing a message of arbitrary length is what
 requires the general hashing machinery, and hence `Zlesha2h`, resp. `Zlesha3h`. Requesting
@@ -3597,7 +3535,8 @@ pure mode on an implementation that lacks it transitions the CR to Error State
 `ace_state_not_impl`.
 
 Data Structures:::
-
++
+--
 In addition to the fields of <<ACE-ECC>>:
 
 * `ctx`: 255 octets, and `ctxlen`: 8 bits, the context string of cite:[RFC8032]. It is
@@ -3612,11 +3551,12 @@ The clamped scalar `s` and the 32-octet, resp. 57-octet, `prefix` are derived fr
 by hashing it with `H`, as cite:[RFC8032] {sect}5.1.5 and {sect}5.2.5 prescribe. An
 implementation may recompute them on each use or cache them in the Additional Data Section;
 they are never exported in the Algorithm Data Section.
+--
 
 State Machine:::
 
 * *States:* those of <<ACE-ECC>>, and in addition
- ** _Msg_Absorb_ (12), in which message data is absorbed.
+ ** _Msg_Absorb_ (11), in which message data is absorbed.
 
 * *Behavior:*
 
@@ -3630,12 +3570,12 @@ State Machine:::
    pass has completed. `msg_pass` records how many have been done and is cleared on entry
    to _Sign_Generate_ and to _Sign_Verify_.
 
-*** Pass 1, for signing, computes `r` = `H(dom @@ prefix @@ M)` and then `R` = `r`
+*** Pass 1, for signing, computes `r` = `H(dom || prefix || M)` and then `R` = `r`
     {interpunct} `B`.
-*** Pass 2, for signing, computes `k'` = `H(dom @@ R @@ A @@ M)` and then
+*** Pass 2, for signing, computes `k'` = `H(dom || R || A || M)` and then
     `S` = `(r + k'` {interpunct} `s) mod L`. The signature is the pair (`R`, `S`), which is
     why `v` = 2 for these curves.
-*** The single pass, for verification, computes `k'` = `H(dom @@ R @@ A @@ M)` from the
+*** The single pass, for verification, computes `k'` = `H(dom || R || A || M)` from the
     `R` supplied in `Signature`, and the check is `S` {interpunct} `B` = `R + k'`
     {interpunct} `A`.
 
@@ -3695,12 +3635,10 @@ algorithm it will run.
 
 [NOTE]
 ====
-This is the intended use of ML-KEM in ACE, and it is why the shared key is not treated as
+In ACE's implementation of ML-KEM, the shared key is not treated as
 an output. ML-KEM produces key material for a symmetric algorithm; `ace.derive` moves that
 material directly into a second CR as a Cryptographic Context, so the shared secret is
-established, transferred and consumed entirely inside the ACE unit and never appears in
-the memory of the process using it. The ciphertext and the encapsulation key, which are
-public, do cross the boundary; the shared key need not.
+handled entirely inside the ACE unit and never appears in the memory of the process using it.
 ====
 
 Data Structures:::
@@ -3719,8 +3657,8 @@ Data Structures:::
 +
 --
  ** Metadata Header.
- ** `encapsk`: 6400 / 9472 / 12544 bits (800 / 1184 / 1568 bytes).
  ** `decapsk`: 13056 / 19200 / 25344 bits (1632 / 2400 / 3168 bytes).
+ Note that `decapsk` contains `encapsk` whose size is 6400 / 9472 / 12544 bits (800 / 1184 / 1568 bytes).
  ** `ciphertext`: 6144 / 8704 / 12544 bits (768 / 1088 / 1568 bytes).
  ** `sharedkey` 256 bits.
  ** `len`, `input_base`, `block_base`, `cumul_len`: 16 bits each, the variables of
@@ -3745,35 +3683,23 @@ For the three variants, the size of the internal state, without considering the 
 |  Pos. | Size (Bits) +
 for ML-KEM-512/768/1024 | Field
 |   i   | 128                   | MDH
-|  ii   | 6400 / 9472 / 12544   | `encapsk`
-|  iii  | 13056 / 19200 / 25344 | `decapsk`
-|  iv   | 6144 / 8704 / 12544   | `ciphertext`
-|  v    | 256                   | `sharedkey`
-|  vi   | 16                    | `len`
-|  vii  | 16                    | `input_base`
-| viii  | 16                    | `block_base`
-|  ix   | 16                    | `cumul_len`
-|   x   | 64                    | Padding, to a multiple of 128 bits
+|  ii   | 13056 / 19200 / 25344 | `decapsk` (embeds `encapsk`)
+|  iii  | 6144 / 8704 / 12544   | `ciphertext`
+|  iv   | 256                   | `sharedkey`
+|  v    | 16                    | `len`
+|  vi   | 16                    | `input_base`
+|  vii  | 16                    | `block_base`
+| viii  | 16                    | `cumul_len`
+|  ix   | 64                    | Padding, to a multiple of 128 bits
 |===
 
-For the three subtypes, the sizes of the Serialized Context are 3264, 4736, and 6368 bytes.
-
-[NOTE]
-====
-`decapsk` embeds `encapsk`, per cite:[nist-fips-203] {sect}7.1, so an SCC that holds both
-carries the encapsulation key twice, 800 to 1568 octets of it. The duplication is
-deliberate. The two fields are configured independently — an encapsulating party holds
-only `encapsk`, and never a decapsulation key — and <<ACE-length-rule>> requires the SCC
-length to follow from the MDH alone, which it could not if the presence of one field
-depended on the contents of another. An implementation that wishes to avoid the cost may
-omit `encapsk` from its Implementation VDS and recover it from `decapsk` on import.
-====
+For the three subtypes, the sizes of the Serialized Context are 2464, 3552, and 4800 bytes.
 --
 
 ////
-( 128 + 256 + 128 + 6400 + 13056 + 6144 ) / 8
-( 128 + 256 + 128 + 9472 + 19200 + 8704 ) / 8
-( 128 + 256 + 128 + 12544 + 25344 + 12544 ) / 8
+( 128 + 256 + 128 + 13056 + 6144 ) / 8
+( 128 + 256 + 128 + 19200 + 8704 ) / 8
+( 128 + 256 + 128 + 25344 + 12544 ) / 8
 ////
 
 State Machine:::
@@ -3791,7 +3717,6 @@ ML-KEM algorithms define:
  ** _encapsk_Input_ (5)
  ** _decapsk_Input_ (6)
  ** _encapsk_Output_ (7)
-// ** _decapsk_Output_ (8)
  ** _ciphertext_Input_ (8)
  ** _ciphertext_Output_ (9)
 --
@@ -3828,49 +3753,29 @@ If the procedure `ML-KEM.Encaps` fails, the state machine transitions to state _
 ** In State _Decapsulate_, the content of the `ciphertext` state field is decrypted using the procedure `ML-KEM.Decaps` described in the ML-KEM specification and the result is stored in the `sharedkey` state field.
 If the procedure `ML-KEM.Decaps` fails, the state machine transitions to state _Failure_.
 
-** In States _encapsk_Input_, _decapsk_Input_, resp., _ciphertext_Input_, one or more Form B `ace.exec` instructions are used to load a value of `encapsk`, `decapsk`, resp., `ciphertext` from memory.
-The number of octets loaded into the state fields so far is stored in the _AlgorithmUse_ field.
-When the value of the _AlgorithmUse_ field reaches the size of the corresponding field, further `ace.exec` instructions are not allowed.
-If, as a result of an `ace.exec` instruction, the value of the _AlgorithmUse_ field would become greater the size of the corresponding field, an illegal instruction exception is raised.
+** In States _encapsk_Input_, _decapsk_Input_, resp., _ciphertext_Input_, the state fields
+`encapsk`, `decapsk`, resp., `ciphertext` are loaded from memory using `process_VLI()`.
+The number of octets loaded into the state fields so far is stored in the _AlgorithmUse_ field:
 +
---
-These fields are long — from 768 to 3168 octets — and a single `ace.exec` carries at most
-`ACELEN` bits, so loading one takes many instructions and may be interrupted at any point
-between them. Each of these states therefore runs Subalgorithm _process_VLI_
-(cf. <<ACE-process-VLI>>) as
+Subalgorithm _process_VLI_ (cf. <<ACE-process-VLI>>) is invoked as
 +
-`{fournbsp}` `process_VLI(len, block=F, b=8 len, state=unused, n=0,` +
-`{fournbsp}{fournbsp}{fournbsp}{fournbsp}{fournbsp}` `input_base, block_base, state_offset=0, cumul_len,` +
-`{fournbsp}{fournbsp}{fournbsp}{fournbsp}{fournbsp}` `process_block=None, finalize=None)`,
+`{fournbsp}` `process_VLI(len, block=F, b=8 len, state=F, n=0,` +
+`{fournbsp}{fournbsp}{fournbsp}` `input_base=0, block_base=_AlgorithmUse_, state_offset=0, cumul_len=_AlgorithmUse_,` +
+`{fournbsp}{fournbsp}{fournbsp}` `process_block=None, finalize=None)`,
 +
-where `F` is the state field being loaded — `encapsk`, `decapsk` or `ciphertext` — and
-`len` is its size in octets, taken from <<ACE-ML-KEM-sizes>>. Since `block` and `state` are
-distinct, the copy branch of the procedure applies and the incoming octets are written
-into `F` at offset `block_base`; and since `b`/8 = `len`, no block boundary is reached
-before the field is full. `process_block` and `finalize` are `None`, so the procedure contributes
-only its accounting of partial progress, which is what makes these loads resumable.
-`len`, `input_base`, `block_base` and `cumul_len` are the state variables declared above,
-and `cumul_len` is what the _AlgorithmUse_ field reports.
---
+where `F` is the state field being loaded.
+Since a single `F`-sized value is loaded and no processing occurs, the `INPUT` to Form B `ace.exec` is always absorbed in full except possibly for the last one.
+`len` is the size of the field in octets, taken from <<ACE-ML-KEM-sizes>>.
+The data is loaded directly into the field `F`, there is no separate `state` field.
 
-** In State _ciphertext_Input_, the ciphertext loaded is the one received from the
-   encapsulating party. This state is what makes `_Decapsulate_` usable by a responder
-   that did not itself produce the ciphertext.
+// ** In State _ciphertext_Input_, the ciphertext loaded is the one received from the
+//    encapsulating party. This state is what makes `_Decapsulate_` usable by a responder
+//    that did not itself produce the ciphertext.
 
-** In States _encapsk_Output_, resp., _ciphertext_Output_,
+** In State _encapsk_Output_, resp., _ciphertext_Output_,
 one or more Form C `ace.exec` instructions are used to store values of `encapsk`, resp., `ciphertext` to memory.
 The number of octets saved to memory so far is stored in the _AlgorithmUse_ field.
 Both fields are public, so no restriction applies to where they are written.
-
-[NOTE]
-====
-There is deliberately no output state for `sharedkey`, and none for `decapsk`. The shared
-key reaches its consumer through `ace.derive`, which provisions it directly into a second
-CR, so it never becomes visible to software; and a decapsulation key leaves a CR only as a
-Sealed Cryptographic Context, like the content of any other CC. `_decapsk_Output_` is
-retained, commented out, in the list of States above, pending a decision on whether any
-use case requires it.
-====
 
 ** Upon entering any of the _*_Input_ or _*_Output_ states by using `ace.setst`, the _AlgorithmUse_ field is cleared.
 
@@ -3878,6 +3783,11 @@ use case requires it.
 The `ace.derive` instruction must be of Form B, with bits [63:0] of the MDH of the new CC in a GPR (RV64) or a GPR pair (RV32).
 The MDH must define a suitable supported single-key algorithm, that can accept keys up to 256 bits in length.
 If the key used by the destination algorithm is `m < 256` bits long, the `m` least significant bits of the shared key are used.
++
+[WARNING]
+====
+TBD: The policies of a derived CR may be different from those of the generator one. So we need to add a field in the PI in this case.
+====
 
 ** For certain long-running operations, such as
 _GenerateKeyPair_, _Encapsulate_, and _Decapsulate_,
@@ -3939,17 +3849,10 @@ any other value transitions the state machine to Error State `ace_state_invalid`
 
 [NOTE]
 ====
-This field is a declaration of intent, not an enforced binding, and the specification does
-not claim otherwise. Because the caller supplies _tr_ and _μ_ ready-made, the ACE unit
-never sees the message and never evaluates a hash function, so it cannot check that the
-one named here was the one used; nor does the implementation need to support that hash
-function, since it does not compute it.
-
-What the field does is travel with the CC, including through export and import, so that
-the software and key-management components that provision and consume the CC can agree on
-which hash function it is for, and refuse to hand it to a consumer that would use another.
-Enforcing the binding in hardware would require the ACE unit to hash the message itself,
-which <<ACE-PQC-ML-DSA>> deliberately avoids.
+This field provides information to the recipients of the CC, since it is in the clear
+in the MDH. The caller supplies the values of _tr_ and _μ_, and the Algorithm does
+not have to use the hash function.  This applies also to the recipients, so the CC
+can be consumed also by implementations that do not support the hash function.
 ====
 --
 
