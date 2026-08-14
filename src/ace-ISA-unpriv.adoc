@@ -265,10 +265,7 @@ The CPU instruction-decoding side of ACE uses `VL` and `SEW` to determine how mu
 ACEIOBUF is an optional architectural input/output buffer that may be used in place of vector registers.
 It is not part of the CRF.
 
-The `ace.input` instruction loads data from memory into the ACEIOBUF to supply inputs to other ACE operations, which will write their outputs to the ACEIOBUF.
-The `ace.output` instruction is used to store these outputs to memory.
-When the ACEIOBUF is used in place of vector registers, the `ace.exec`, `ace.setst`, and `ace.derive` instructions that would otherwise use vector registers for their inputs and outputs are replaced by instruction sequences that combine the no-input/no-output versions of the same operations with `ace.input` and `ace.output`.
-These sequences are described in <<ACE-usage-input-output>>.
+The `ace.input` instruction loads data from memory into the ACEIOBUF, which supplies inputs to ACE operations. The `ace.output` instruction stores operation outputs from the ACEIOBUF to memory. When using ACEIOBUF instead of vector registers, the `ace.exec`, `ace.setst`, and `ace.derive` instructions that normally use vector registers for inputs and outputs are replaced by sequences combining the no-input/no-output versions of these operations with `ace.input` and `ace.output`. These sequences are detailed in <<ACE-usage-input-output>>.
 
 When the ACEIOBUF is used, the length of the input is given in CSR `aceiobuflen` (<<ACE-CSR-aceiobuflen>>).
 
@@ -490,9 +487,9 @@ Software that must preserve the CC should export it as an SCC before requesting 
 
 . If a CR is in any Error State, it can still be reconfigured, cloned, or cleared. `ace.setst` can only be used to change the Error State (for instance by an exception handler) or transition the CR to _Off_.
 
-. Bits [63:0] of the MDH of a CR in an Error State can be read (using `ace.getmdl`: <<ACE-instruction-getmd>>).
+. The MDH of a CR in an Error State can be read using `ace.getmd*` (<<ACE-instruction-getmd>>.
 
-. Bits [63:0] of the MDH of a CR in the _Off_ State can be read (using `ace.getmdl`: <<ACE-instruction-getmd>>), returning all zero values.
+. The MDH of a CR in the _Off_ State can be read using `ace.getmd*` (<<ACE-instruction-getmd>>), returning all zero values.
 
 . Attempts to _use_ a CR in any Error State will not perform any operation, and in particular they leave the _State_ field unchanged.
 
@@ -695,15 +692,6 @@ either — the Metadata is invalid: the CR transitions to Error State `ace_state
 exception `ace_exc_invalid` is raised as defined in the Privileged Architecture if the latter
 is implemented.
 
-Substitution always moves *along* a chain, from a broader binding to a narrower one, so a
-substituted Locality is at least as restrictive as the one requested and the binding is never
-weakened. This is why the chain can be walked forwards but never backwards, and why running
-off its end is an error rather than a silent omission: dropping the Locality would produce an
-SCC that opens in environments the caller meant to exclude. Note that the mandatory entries
-make the failure reachable in only one place: _ChipFamScrt_ and _DevScrt_ are always
-configured, so a request for any entry other than _ChipScrt_ always finds a replacement, and
-only _ChipScrt_ — last in its chain and not mandatory — can fail.
-
 _HLocality_ is active only when the H extension is enabled and V=1; otherwise, it mirrors _MLocality_.
 
 NOTE: A system key identifier may refer to keys with unrelated purposes on different devices, leading to unspecified behavior.
@@ -722,7 +710,10 @@ This field is only in effect of extension _Zlexpire_ is supported.
 
 If _Zlexpire_ is supported, the ACE implementation must have access to a secure clock.
 
+[NOTE]
+====
 This specification cannot enumerate requirements for a trustworthy clock, as what constitutes adequacy depends on threat models, platforms, and integration specifics—a challenge common to all time-dependent security features. As a rule of thumb: *if a clock is adequate for M-mode security features or an on-SoC TPM, it is adequate for ACE.* ACE imposes no stricter requirements. Crucially, software below the privilege level managing the CSK must not be able to set the clock, as that would allow indefinite extension of a CC's lifetime by moving time backward.
+====
 
 If _Zlexpire_ is not supported, the implementation shall reject PIs and SCCs with a non-zero _ExpirationDate_.
 
@@ -981,100 +972,62 @@ _Included in_::
 [[ACE-CSK-requirements]]
 === Architectural Requirements on the Context Sealing Key
 
-A CSK must be explicitly set before the ACE Unit is operative.
-If a CSK is not set, then every ACE instruction will raise an illegal instruction exception.
+A Context Sealing Key (CSK) must always be configured before the ACE unit can operate.
+Without a CSK, every ACE instruction raises an illegal instruction exception.
 
-A CSK can be set in one of four ways:
+A CSK can be set in one of four mutually exclusive ways:
 
-. A fixed, hardwired value, which may be randomly generated when the chip hosting the ACE Unit is manufactured, or fixed per product line.
-. A value which is programmed by M-mode by writing in the `macecsk` CSR group (cf. <<ACE-CSR-macecsk>>).
-. A value which is generated by a secure RNG at boot and not accessible by any software.
-. A separate secure HW block (e.g., Caliptra cite:[caliptra]) may be able to configure CSK values and export them using a dedicated interface based on public key encryption (an integrated scheme consisting of a KEM and symmetric encryption).
+. A value programmed by M-mode through the `macecsk` CSR group (see <<ACE-CSR-macecsk>>).
+. A separate secure HW block (e.g., Caliptra cite:[caliptra]), or a port to a secure HW block, which is exclusive to M-mode, is used to configure CSK values and export them using a dedicated interface based on public key encryption.
+. A fixed, hardwired value, generated at manufacturing time (either per die or shared across batches).
+. A value generated by a secure RNG at boot and not accessible to any software.
 
-These four models all have valid use cases and are mutually exclusive. They are not,
-however, equally applicable: the first and the third suit specialised embedded deployments
-rather than general-purpose systems.
+These four models are not equally applicable. The third and fourth suit specialized
+embedded deployments rather than general-purpose systems: a hardwired value cannot be
+reconfigured or revoked; and one randomly set at boot does not survive a power cycle, so
+it cannot supports persistence of SCCs.
 
-* A *hardwired* CSK (first model) cannot be re-keyed or revoked, so the key-usage bounds of
-  <<ACE-SCC-rationale>> apply for the entire service life of the part, and a value fixed per
-  product line rather than per die is shared by every part in that line.
+In the second model, the request to the secure hardware block *shall* also be issued by
+M-mode. Only M-mode may ask that block to configure the CSK of its own hart, and it does so
+using a handle or a wrapped key rather than a clear value, so that no software — M-mode
+included — ever holds the key material. The mechanism by which the block is addressed and
+the wrapped key is conveyed is platform-specific and is not specified here.
 
-* A CSK *generated by an RNG at boot* (third model) is not persistent, so no SCC survives a power cycle.
+In the third model, the ACE unit is immediately available.
+In the remaining models, it becomes so only after a first CSK value has been set.
+A hart reset also resets the ACE state associated with that hart, including the CSK,
+after which the ACE unit stays unavailable until a CSK is set again.
 
-Neither is therefore intended for a general-purpose system running an operating system or a
-hypervisor.
-// , though for different reasons: the first fails the key-management expectations of
-// such a system, since the CSK can be neither re-keyed nor revoked, while the third cannot
-// retain a Sealed Cryptographic Context across a reset. Deployments of that kind use the second
-// or the fourth model, in which the value is chosen by M-mode, or obtained by M-mode from a
-// hardware key-management block, and can therefore be established identically wherever it is
-// needed, and re-established after a reset.
+In all four models, CSK values shall _never_ be readable by software in clear, except for M-mode in the first model.
+The `macecsk` CSRs of <<ACE-CSR-macecsk>> are write-only and read as zero.
 
-Note that a *hardwired* CSK is by construction identical on every hart of the part and
-survives reset, so it raises none of the cross-hart questions discussed next; its
-deficiencies are the ones listed above.
+When a process is migrated from one hart to another, its SCCs must remain importable,
+which requires the destination hart to hold the same CSK. It is the responsibility of the
+OS and hypervisor stacks to ensure this by instructing M-mode to establish that CSK on the
+destination hart. How they do so is outside the scope of this specification: the API
+through which supervisor software requests it is platform-dependent.
 
-In the first model, the ACE Unit is immediately available.
+An implementation that reprograms a CSK must follow the activation rules in
+<<ACE-CSR-macecsk>>: the ACE unit is unavailable while the `macecsk` group is partially
+written. The entire group must be written within a single M-mode episode.
 
-In the other models, the ACE Unit is available only after a first CSK value has been set.
-In these models, a reset of a hart will also reset the ACE state associated with that hart and thus also the CSK, rendering the ACE unit unavailable until a CSK is set.
-
-In all four models, clear values of the CSK shall _never_ be readable by software, M-mode
-included. The `macecsk` CSRs of <<ACE-CSR-macecsk>> are write-only and read as zero. In
-the second model M-mode necessarily knows the value it programs, having chosen it, but it
-cannot read a CSK back — neither one it programmed earlier nor one programmed by another
-hart — so a compromise of M-mode after the fact does not by itself disclose the key.
-
-When a process is migrated from one hart to another, its SCCs must remain importable, which
-requires the destination hart to hold the same CSK. It is the responsibility of the OS and
-hypervisor stacks to ensure this, by instructing M-mode to establish that CSK on the
-destination hart. How they do so is outside the scope of this specification: the API through
-which supervisor software requests it is platform-dependent.
-
-// The expected way to satisfy this is for M-mode to establish the same CSK on every hart on
-// which the operating system or hypervisor may schedule that process, so that no per-migration
-// action is needed at all. Reprogramming an individual hart's CSK at each migration is also
-// possible, but must be done knowing that a CSK is per-hart state shared by everything running
-// on that hart: replacing it invalidates every SCC already sealed under the previous value,
-// including those belonging to unrelated processes.
-
-An implementation that reprograms a CSK must follow the activation rules in <<ACE-CSR-macecsk>>: the ACE unit is unavailable while the `macecsk` group is partially written. Any transition to M-mode clears the write-tracking flags, requiring the entire group to be written within a single M-mode episode.
-
-In all models, a CSK is established on a given hart by M-mode *on that hart*, since
-`macecsk` is per-hart state. Establishing the same CSK on several harts therefore requires a
-platform-specific mechanism for the M-mode instances of different harts to communicate — for
-example an inter-processor interrupt together with a region of M-mode-exclusive on-chip
-memory. This specification does not define that mechanism.
+// Because `macecsk` is per-hart state, a CSK is always established by M-mode on its own
+// hart.  Establishing the same value on several harts therefore requires a platform-specific
+// channel between their M-mode instances. This specification does not define that mechanism.
 
 [WARNING]
 ====
 Question for the ARC: is there, or should there be, an architected mechanism by which
-M-mode on one hart can read or configure the CSRs of another hart? ACE currently assumes
-there is none, and therefore requires a platform-specific channel between the M-mode
-instances of different harts in order to establish a common CSK. If such a mechanism exists
-or is planned, this subsection should use it instead.
+M-mode on one hart can read or configure the CSRs of another hart? If such a mechanism
+exists or is planned, this subsection should use it instead of the platform-specific
+channel described above.
 ====
 
-In the fourth model the request to the secure hardware block *shall* also be issued by
-M-mode. Only M-mode may ask that block to configure the CSK of its own hart, and it does so
-using a handle or a wrapped key rather than a clear value, so that no software—M-mode
-included—ever holds the key material. The mechanism by which the block is addressed and
-the wrapped key conveyed is platform-specific and is not specified here.
-
-Whenever a hart is reset, its CSK is lost along with the rest of its ACE state
-(see above), and every ACE instruction on that hart raises an illegal instruction exception
-until a CSK is set again. In the second, third and fourth models M-mode shall therefore
-re-establish a CSK on a hart after any reset of that hart, and before returning control to
-software that uses ACE.
-// ; in a system that keeps one CSK across several harts, the value
-// re-established must be that same CSK, or the SCCs held by processes scheduled there will no
-// longer import.
-
-When M-mode firmware manages CSKs, it shall never store clear values of the CSK in memory which may be accessible to other software or hardware, in other words, the clear value of the CSK must be handled in M-mode exclusive on-chip SRAM, with hardware-enforced access control policies, or in external RAM protected by encryption, integrity checks, and anti-replay mechanisms.
-
-M-mode firmware must be aware of how the CSK is configured.
-Persistence mechanisms for configurable CSKs are implementation-specific.
-Transferring a CSK to another endpoint—such as the M-mode firmware of another device, a local TPM (for instance to preserve a CSK upon suspension or host hibernation), or a cloud-based HSM—requires an authenticated public-key key-wrapping mechanism.
+M-mode firmware must be aware of how the CSK is configured. Persistence mechanisms for
+configurable CSKs are implementation-specific. Transferring a CSK to another endpoint —
+such as the M-mode firmware of another device, a local TPM (for instance, to preserve a
+CSK across suspension or host hibernation), or a cloud-based HSM — requires an
+authenticated public-key key-wrapping mechanism.
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -1168,10 +1121,12 @@ Broadly speaking, and removing error handling, *Provisioning* is performed by th
 . Use `ace.store` (<<ACE-instruction-store>>) to store MDH[127:64] and the rest of the SCC to memory.
 . Use `ace.mgmt` to restore the CR in a form available to software.
 
-While the CRF, as a memory, must resist rollback attacks, individual CRs do not inherently resist rollback via export and import operations. Without hardware-enforced memory access controls for SCCs, an attacker could re-import a previous CC state into a CR. For example, with CTR, XCTR, GCM, and OCB contexts, this would allow resetting the counter or IV under an unchanged key, creating a two-time pad vulnerability. However, exploiting this requires control over the software that uses these CRs for encryption, which typically also implies access to plaintext. Furthermore, the ability to re-import a previous CC state into a CR is also a desirable feature, for instance to restart an operation that may have failed because a payload has been corrupted in transit. Adding control over the resumability and a system of policies to address all possible legitimate cases would add excessive complication to the feature.
+While the CRF, as a memory device, must resist rollback attacks, individual CRs, do not have to resist rollback via export and import, and can not.
+While re-importing previous CC states may allow multiple-time pad attacks on modes such as CTR, XCTR, GCM, and OCB, exploiting this
+would require a level of control over the target software that typically also implies access to plaintext.
+Re-importing a previous CC state is also desirable, however. For instance, it allows restarting an operation that failed because a payload was corrupted in transit. Adding and enforcing policies to control resumability and cover every legitimate case would overcomplicate the feature.
 
-Additionally, lower-privileged modes may save, restore, or overwrite CRs configured by higher-privileged modes. Higher-privileged software must save and clear any CRs it uses before relinquishing control to lower-privileged modes. When switching to a lower-privileged software component, only CRs previously saved for that same component may be restored, and any unconfigured CRs must be erased. This practice aligns with standard context-switching hygiene.
-
+Additionally, lower-privileged modes may save, restore, or overwrite CRs configured by higher-privileged modes. Higher-privileged software must therefore save and clear any CRs it uses before relinquishing control to lower-privileged modes. When switching to a lower-privileged component, only CRs previously saved for that same component may be restored, and any unconfigured CRs must be erased. This aligns with standard context-switching hygiene.
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -1210,21 +1165,14 @@ If the _ConfigStatus_ field equals _CfgStComplete_, an illegal instruction excep
 `acestart` tracks the number of loaded bytes. If `ace.load` is interrupted,
 `acestart` contains the offset to the next byte to load upon resumption.
 
-// NOTE: Modifying the CR being used by an interrupted `ace.load` always forces
-// the load to restart. Software that aims to optimize this case must
-// inspect `ConfigStatus` in each CR's metadata to detect an incomplete load
-// and prevent the restart.
+The implementation determines the input size from the first 8 bytes of the MDH, which software supplies.
+The _ConfigStatus_ field identifies the input type (PI or SCC); the fields in <<ACE-length-rule>> determine its length.
+`ace.load` then reads memory starting at `%offset(Xs1)` in XLEN-bit loads and copies the data into the CR beginning with byte 8 (MDH bits [127:64]).
+The order of these LSU transactions is implementation-dependent.
+See <<ACE-resumability-management>>, <<ACE-resumability-memory-model>>, and <<ACE-export-import-algorithms>>.
 
-The implementation first determines the size of the input to be loaded from the first 8 bytes of the MDH, which are provided by the software.
-The _ConfigStatus_ field determines the input type (PI or SCC), and the fields listed in <<ACE-length-rule>> determine its length.
-`ace.load` then requests the LSU to read the memory contents starting at `%offset(Xs1)`, in XLEN-bit sized loads,
-and copies them into the CR starting with the 8th byte (i.e., bits [127:64] of the MDH).
-The order in which the LSU issues these transactions is implementation dependent.
-See <<ACE-resumability-management>>, <<ACE-resumability-memory-model>> and <<ACE-export-import-algorithms>> for further details.
-
-When the key is in a system-defined format, the semantics of `ace.load`
-are entirely implementation dependent and do not assume that the CR has been readied to import information or
-that some metadata has already been loaded. System-defined format is signaled by the _SystemFormat_ bit of MDH[63:0], which in this case may have a system-defined length.
+When the key uses a system-defined format (signaled by the _SystemFormat_ bit of MDH[63:0]), the semantics of `ace.load` are implementation-dependent.
+It does not assume that the CR has been prepared for import or that any metadata has been loaded; MDH[63:0] may then have a system-defined length.
 
 The instruction may possibly modify state.
 
@@ -1532,12 +1480,7 @@ Bit `r` (i.e., bit 20) takes the value 0 if the context is encoded as an immedia
 It occupies bit 20 rather than bit 26, where `ace.exec` carries the same selector, because
 bits [31:25] are taken here by `#immed7`.
 
-When `r` = 1 and the CR register is `X0`, the instruction does *not* address the CR whose
-index is the value read from `X0`. This combination is reserved: with `#immed7` = 0 it is
-`ace.reset` (<<ACE-instruction-clear>>), which unconfigures every CR and the ACEIOBUF, and
-with any other `#immed7` it raises an illegal instruction exception, per the general rule on
-`X0` as a CR index register (<<ACE-instructions-detailed>>). CR 0 can still be addressed
-indirectly, through any other GPR holding the value 0.
+When `r` = 1 and the CR register is `X0`, the instruction has reserved semantics.
 
 The encodings of the three Forms are:
 [upperalpha]
@@ -1559,11 +1502,6 @@ It is used for two purposes:
 
 `#immed7` is a constant from a set of admissible values.
 These values include both general values, which apply to all Algorithms, as well as values specific to the Algorithm encoded in a CR.
-
-[WARNING]
-====
-If it is decided to encode `ace.mgmt` by re-using `ace.setst` with value of `#immed7` at least 96 (so, adding 96 to the values in <<ACE-management-immeds>>), then in the description of `ace.setst` we must add that the valid values of `#immed7` are in the range 0 to 95.
-====
 
 Certain state values may require an auxiliary input, which may be passed in a GPR `Xs` (a GPR pair `X(s+1):Xs` in RV32, in which
 case, if `s` is not even, an illegal instruction exception is raised)
@@ -1589,7 +1527,7 @@ The full provisioning, export, and import operations are described in detail in 
 The instruction may possibly modify state.
 
 The instruction is usage-controlled, with one exception: `ace.setst` with `#immed7` equal
-to `ace_state_off`, that is `ace.clear` and `ace.reset` (<<ACE-instruction-clear>>), is
+to `ace_state_off` (0), that is `ace.clear` and `ace.reset` (<<ACE-instruction-clear>>), is
 _not_ usage-controlled and may be issued in any privilege mode regardless of the CC's
 _UsagePolicy_.
 --
@@ -1949,18 +1887,6 @@ Using the instruction in any other state raises an illegal instruction exception
 
 `ace.restricth` modifies fields _Locality_, _UsagePolicy_, _ExpirationDate_, and possibly _AlgorithmUse_ in bits [127:64] of the MDH of the CR.
 
-Modifying the _Locality_ field can be used to add a Locality but also to _replace_ a Locality with a stricter one, such as
-
- * _SiPScrt_ {rightarrow} _ChipFamScrt_, _ChipScrt_; _ChipFamScrt_ {rightarrow} _ChipScrt_;
- * _OEMScrt_ {rightarrow} _ProdScrt_, _DevScrt_; _ProdScrt_ {rightarrow} _DevScrt_.
- * _MLocality_ {rightarrow} _HLocality_, _SLocality_; and _HLocality_ {rightarrow} _SLocality_.
-
-Generalizing Localities is not permitted: Attempting to do so raises exception `ace_exc_invalid`, but the
-State is not automatically set to _ace_state_invalid_ (the exception handler may of course do that).
-
-Once the _Locality_ field has been modified,
-when the CR is exported, it will use the new Locality values to tweak the export algorithm.
-
 Let `MDH` be the MDH of the CC in the destination CR.
 
 On RV64, the semantics of the instructions are:
@@ -1978,9 +1904,9 @@ else exception `ace_exc_invalid` is raised.
 
 ** If `Xs`._AlgorithmPolicy_ is used to encode an extension of `Xs`._Algorithm_, then `Xs`._AlgorithmPolicy_ must be zero, else exception `ace_exc_invalid` is raised.
 
-** No currently disabled operation may be (re)enabled.  Any attempt to do so raises
-  exception `ace_exc_invalid`. In some cases, a zero value is not permitted, such as
-  disabling both encryption and decryption.
+** No disabled operation may be (re)enabled.
+   An attempt to do so raises Exception `ace_exc_invalid`.
+   In some cases, a zero value is not permitted, such as disabling both encryption and decryption.
 
 ** If the CR's current state is _only_ allowed while performing an operation currently
   permitted by `MDH`._AlgorithmPolicy_, a change to _AlgorithmPolicy_ that would
@@ -1992,12 +1918,10 @@ else exception `ace_exc_invalid` is raised.
   `Xs`._SCProtection_ is a _request_ to raise the side-channel protection of the CC to
   that level, and is subject to the following rules.
 
-** The request may only strengthen the protection. Among the architected levels of
-   <<ACE-SC-protection-levels>>, level 2 is stronger than level 1, which is stronger than
-   level 0; a request for a level that is not stronger than the current one raises
-   exception `ace_exc_invalid`. Whether a transition to or from an implementation-custom
-   level (6 or 7) is permitted, and how such levels are ordered with respect to the
-   architected ones, is implementation-defined.
+** The request may only strengthen side-channel protection.
+   In <<ACE-SC-protection-levels>>, level 2 is stronger than level 1, which is stronger than
+   level 0. A request for a weaker level than the current one raises exception `ace_exc_invalid`.
+   Transitions to or from an implementation-custom level (6 or 7) are implementation-defined, as is their ordering relative to the architected levels.
 
 ** The request may fail. A stronger level generally requires more CRF capacity
    (<<ACE-length-rule>>), for instance to hold the additional shares of a threshold
@@ -2010,7 +1934,18 @@ else exception `ace_exc_invalid` is raised.
    same algorithm export the same number of bits, and by <<ACE-length-rule>>
    _SCProtection_ does not enter the SCC length.
 
-* If `Xs`._Locality_ is non-zero, then it is the new value of `MDH`._Locality_, subject to the Locality replacement rules above.
+* If `Xs`._Locality_ is non-zero, it is used to update `MDH`._Locality_, subject
+   to the following rules:
+
+  . If `MDH`._Locality_ was zero, `Xs`._Locality_ is its new value.
+  . If `MDH`._Locality_ was non-zero, a Locality can be replaced with a stricter one, such as
+   ** _SiPScrt_ {rightarrow} _ChipFamScrt_, _ChipScrt_; _ChipFamScrt_ {rightarrow} _ChipScrt_;
+   ** _OEMScrt_ {rightarrow} _ProdScrt_, _DevScrt_; _ProdScrt_ {rightarrow} _DevScrt_.
+   ** _MLocality_ {rightarrow} _HLocality_, _SLocality_; and _HLocality_ {rightarrow} _SLocality_.
+  . Generalizing (i.e. weakening) Localities is not permitted: Attempting to do so raises exception `ace_exc_invalid`, but the
+  State is not automatically set to _ace_state_invalid_ (the exception handler may of course do that).
+  . Once the _Locality_ field has been modified,
+  when the CR is exported, it will use the new Locality values to tweak the export algorithm.
 
 * A zero in any of bits `Xs`._UsagePolicy_ means that the corresponding policy is _not_ changed.
 
@@ -2275,14 +2210,20 @@ _Description_:: {empty}
 +
 --
 * Form A `ace.size` returns the total size in bytes of the memory buffer that
-  would be necessary to store the exported SCC, including the authentication tag(s) and the additional variable-length data.
+  would be necessary to store the exported SCC or (partially configured) PI into GPR `Xd`.
+  In the first case, the size includes
+  the authentication tag(s) and the additional variable-length data.
+  In the second case, the size is the same as the size of the entire PI.
   Knowing this size is necessary
-  for any feature that relies on exporting a CR, including context switching. The
-  instruction returns 0 if the CR is unconfigured.
+  for any feature that relies on exporting a CR, including context switching.
+  The instruction returns 0 if the CR is unconfigured.
 
-* On RV64, Form B `ace.size` returns the total size in bytes of an SCC having
-  Bits [63:0] of the MDH given in `Xs` into GPR `Xd` including the additional
-  variable-length data. If the algorithm is not supported or the Metadata is
+* On RV64, Form B `ace.size` returns the total size in bytes of the memory buffer that
+  would be necessary to store the exported SCC or (partially configured) PI
+  In the first case, the size includes
+  the authentication tag(s) and the additional variable-length data.
+  In the second case, the size is the same as the size of the entire PI.
+  If the algorithm is not supported or the Metadata is
   invalid, the instruction returns `0`.
 
 * On RV32, Form B `ace.size` differs from the RV64 version in that `s` must be even, and
@@ -2301,12 +2242,7 @@ The instruction may not modify state.
 The instruction is not usage-controlled.
 --
 
-[NOTE]
-====
-There is no need for a version of `ace.size` that reports the length of a Provisioning Input:
-Software that provisions a CR is itself constructing the PI, hence it must know
-its length before it issues the first ACE instruction.
-====
+//
 
 _Included in_::
 +
@@ -2661,21 +2597,18 @@ While handlers can set `acestart` to zero to force a restart of an `ace.exec` op
 
 _This section is informative and non-normative._
 
-The rules defined in `ace.setst` for the initiation and termination of management operations are necessary because any management operation may be interrupted, and there may be multiple nested interrupts or exceptions, with or without context switches.
-Leaving the burden of saving and restoring _ConfigStatus_ to the interrupted software simplifies the logic and supports arbitrarily many levels of nested virtualization.
+The rules defined for starting and ending management operations in `ace.setst` exist because any management operation may be interrupted. There may also be multiple nested interrupts or exceptions, with or without context switches. Software is responsible for saving and restoring _ConfigStatus_. This simplifies the logic and supports arbitrarily many levels of nested virtualization.
 
-These rules also imply that an interrupted import operation may be resumed on a hart attached to a different ACE Unit implementation.
-The architecture is designed to ensure interoperability, provided the importing implementation supports the algorithm encoded in the SCC.
-However, the implementation must handle cases where the SCC is too large to fit in a CR due to an optional Implementation VDS—or where that VDS is incompatible—by ignoring the optional data.  A different set of optional data may be created by the importing implementation.  In these cases, _ImpDataLen_ is accordingly updated.
+These rules even allow an interrupted management operation to resume on a different hart attached to a different ACE implementation.
+The architecture ensures interoperability, provided the target implementation supports the algorithm encoded in the SCC.
 
-Software must ensure that an interrupted configuration or export operation can be resumed, to support binary compatibility across implementations that provide this feature and implementations that do not.
-An implementation is not required to support resumption, and even those that do may ignore the `acestart` value and restart the interrupted operation for any reason.
+The implementation must handle cases where the SCC is too large to fit in a CR because of an optional Implementation VDS, or where that VDS is incompatible. In both cases, the optional data is ignored and _ImpDataLen_ is updated. The importing implementation may create different optional data.
 
-For this reason, we define specific instruction sequences for the management operations, cf <<ACE-management-code-snippets>>.
-The architecture is co-designed with the intended use of the instructions.
+Software must ensure an interrupted configuration or export can be resumed. This supports binary compatibility across implementations that provide resumption and those that do not. Resumption is not required. Even where supported, an implementation may ignore `acestart` and restart the interrupted operation for any reason.
 
-A context switch handler can force a restart by clearing partially configured or exported CRs at context save and again at context restore.
-This must also be handled by the software.
+For this reason, the architecture defines specific instruction sequences for management operations, see <<ACE-management-code-snippets>>. The architecture is co-designed with the intended use of the instructions.
+
+A context switch handler can force a restart by clearing partially configured or exported CRs at context save and again at context restore. Software must handle this possibility.
 
 [[ACE-resumability-memory-model]]
 ==== Resumption and Memory Model
@@ -2708,10 +2641,9 @@ We show here how the architecture expects the entire configuration and export pr
 The code fragments presented here only include the main operation logic together with the detection of any error condition, not the actual error management, which would be platform specific.
 While these code fragments are obviously much longer than monolithic instructions, they can be made into libraries or OS APIs, so they do not affect code size in any major way. The use of indirect CR addressing proves itself very useful in this case.
 
-In these examples,
-GPR `t6` points to the memory location where a PI or SCC is stored,
+In these examples, GPR `t6` points to the memory location where a PI or SCC is stored,
 and GPR `t0` contains the number of the CR to be configured or exported.
-The code also uses `t1`, `t2`, `t3`, `t4` and `a1`, `a2`, `a3` for temporary storage.
+The code also uses `t1` to `t5`, `s1`, and `s2` for temporary storage.
 
 Throughout, `t3` holds the constant 23, the highest *valid* _State_ value
 (<<ACE-states-valid>>), so that `bltu t3, t2, handle_errors` branches exactly when the CR
@@ -2731,23 +2663,23 @@ restart:
   bltu       t3, t2, handle_errors   # _State_ >= 24: an Error State
   beqz       t2, handle_errors       # _State_ == 0: the CR was not opened
 
-  # a1 holds the length of the PI in bytes.  The caller constructed the PI and so
-  # knows this length; `ace.size` does not report it (cf. <<ACE-instruction-size>>).
-  # a1 is never modified, so the working count and pointer can be re-derived from
+  # Assume t5 holds the length of the PI in bytes.
+  # The caller constructed the PI and so knows this length.
+  # t5 is never modified, so the working count and pointer can be re-derived from
   # it whenever the operation is restarted.
-  addi       a2, a1, -8              # subtract the 8 B of MDH already loaded
+  addi       s1, t5, -8              # subtract the 8 B of MDH already loaded
   addi       t4, t6, 8               # source pointer: first byte after MDH[63:0]
 
 vloop:
-  vsetvli    a3, a2, e8, m1, ta, ma  # a3 = number of octets moved this iteration
+  vsetvli    s2, s1, e8, m1, ta, ma  # s2 = number of octets moved this iteration
   vle8.v     v4, (t4)                # load a chunk of the PI
   ace.mv     K{t0}, v4               # move it into the CR
-  add        t4, t4, a3              # bump the source pointer
-  sub        a2, a2, a3              # decrement the octets still to load
+  add        t4, t4, s2              # bump the source pointer
+  sub        s1, s1, s2              # decrement the octets still to load
   ace.getst  t2, K{t0}
   beqz       t2, restart             # CR cleared: the operation must be restarted
   bltu       t3, t2, handle_errors
-  bnez       a2, vloop
+  bnez       s1, vloop
 
   ace.mgmt   K{t0}, #ace_CR_provision_end   # terminate provisioning
                                      # and possibly reconstruct data
@@ -2781,9 +2713,9 @@ success:
 ----
   ld         t1, 0(t6)               # load MDH bits [63:0] from memory
   li         t3, 23
-  ace.avail  a1, t1                  # length of the SCC in bytes, 0 if unsupported
-  beqz       a1, handle_errors       # algorithm not supported, or MDH invalid
-restart:                             # a1 is never modified, so a restart re-derives
+  ace.size   t5, t1                  # length of the SCC in bytes, 0 if unsupported
+  beqz       t5, handle_errors       # algorithm not supported, or MDH invalid
+restart:                             # t5 is never modified, so a restart re-derives
                                      # the working count and pointer from it
   ace.mgmt   K{t0}, #ace_CR_import_start, t1
                                      # prepare CR for import, load MDH[63:0]
@@ -2791,19 +2723,19 @@ restart:                             # a1 is never modified, so a restart re-der
   bltu       t3, t2, handle_errors
   beqz       t2, handle_errors
 
-  addi       a2, a1, -8              # subtract the 8 B of MDH already loaded
+  addi       s1, t5, -8              # subtract the 8 B of MDH already loaded
   addi       t4, t6, 8               # source pointer: first byte after MDH[63:0]
 
 vloop:
-  vsetvli    a3, a2, e8, m1, ta, ma
+  vsetvli    s2, s1, e8, m1, ta, ma
   vle8.v     v4, (t4)                # load a chunk of the SCC
   ace.mv     K{t0}, v4               # move it into the CR
-  add        t4, t4, a3
-  sub        a2, a2, a3
+  add        t4, t4, s2
+  sub        s1, s1, s2
   ace.getst  t2, K{t0}
   beqz       t2, restart             # CR cleared means force restart
   bltu       t3, t2, handle_errors
-  bnez       a2, vloop
+  bnez       s1, vloop
 
   ace.mgmt   K{t0}, #ace_CR_import_end   # decrypt and authenticate the SCC
   ace.getst  t2, K{t0}
@@ -2844,8 +2776,8 @@ of a partially decrypted payload.  This is required for both correctness and sec
 ----
   li         t3, 23
 restart:
-  ace.size   a2, K{t0}               # get size of the data to export
-  beqz       a2, handle_errors       # 0 means the CR is unconfigured
+  ace.size   s1, K{t0}               # get size of the data to export
+  beqz       s1, handle_errors       # 0 means the CR is unconfigured
   {...}  # here goes the code that allocates the buffer to store the exported data
 
   ace.getmdl t1, K{t0}               # save MDH[63:0], incl. _ConfigStatus_
@@ -2858,19 +2790,19 @@ restart:
   ace.mgmt   K{t0}, #ace_CR_export_start
   sd         t1, 0(t6)               # export original MDH[63:0] to memory
 
-  addi       a2, a2, -8              # the 8 B of MDH already stored
+  addi       s1, s1, -8              # the 8 B of MDH already stored
   addi       t4, t6, 8               # destination pointer
 
 vloop:
-  vsetvli    a3, a2, e8, m1, ta, ma  # a3 = number of octets moved this iteration
+  vsetvli    s2, s1, e8, m1, ta, ma  # s2 = number of octets moved this iteration
   ace.mv     v4, K{t0}               # move a chunk out of the CR
   vse8.v     v4, (t4)                # store it
-  add        t4, t4, a3              # bump the destination pointer
-  sub        a2, a2, a3              # decrement the octets still to store
+  add        t4, t4, s2              # bump the destination pointer
+  sub        s1, s1, s2              # decrement the octets still to store
   ace.getst  t2, K{t0}
   beqz       t2, restart             # CR cleared: the export must be restarted
   bltu       t3, t2, handle_errors
-  bnez       a2, vloop
+  bnez       s1, vloop
 
 success:
   # Reset MDH[63:0] to the previously saved value. If the saved _ConfigStatus_
@@ -2885,8 +2817,8 @@ success:
 ----
   li         t3, 23
 restart:
-  ace.size   a2, K{t0}             # get size of the data to export
-  beqz       a2, handle_errors     # 0 means the CR is unconfigured
+  ace.size   s1, K{t0}             # get size of the data to export
+  beqz       s1, handle_errors     # 0 means the CR is unconfigured
   {...}            # code that allocates the buffer to store the exported data
 
   ace.getmdl t1, K{t0}               # save MDH[63:0], incl. _ConfigStatus_
@@ -3125,7 +3057,7 @@ The format of this structure follows <<ACE-PI>> for provisioning and <<ACE-SCC>>
 === Management of Sealed Cryptographic Contexts
 
 We now present the cryptographic algorithms used to generate and read SCCs.
-They are to be read under the conventions of <<ACE-conventions>>, which fix the
+They are to be read under the conventions of <<ACE-Notation>>, which fix the
 representation of the values involved, the meaning of `@`, and the POLYVAL field
 arithmetic denoted by `Montmul`.
 This completes the description of the semantics of the management operations given in <<ACE-management-operations>>,
@@ -3141,39 +3073,41 @@ See also `ace.load` (<<ACE-instruction-load>>), `ace.store` (<<ACE-instruction-s
 A slight variation of AES-GCM-SIV cite:[DBLP-journals-iacr-GueronLL17,RFC8452] is used to export and
 import CRs. The most important changes are:
 
-. The POLYVAL length block is intentionally omitted.
+. The block containing the lengths of Associated Data and Plaintext is not included in the evaluation of POLYVAL.
+This is intentional, the rationale being that the information which is necessary to fully determine the lengths of
+all sections is already included in the MDH and thus already included in the POLYVAL.
 . The Nonce is optional and included only if explicitly requested by the caller in the configuration of the Localities.
 
-[[ACE-SCC-no-length-block]]
-*Omission of the length block.*
-cite:[RFC8452] {sect}4 terminates the POLYVAL input with a block carrying the bit lengths
-of the associated data and of the plaintext. Its purpose is to fix the boundary between
-the two, which in the general case is not otherwise determined. In the construction
-defined here that boundary is already fixed, by an authenticated value, and the block
-would therefore be redundant:
-
-* the first associated-data block is the MDH itself, so it is authenticated and is
-  available before any other block is processed;
-* the fields in the low word of the MDH — _Algorithm_, _AlgorithmPolicy_, _KeyType_ and
-  _StateExtension_ — completely determine the length of Section 3, the Algorithm Data
-  Section, and _ImpDataLen_ completely determines the length of the second, optional
-  payload, Section 6 (<<ACE-length-rule>>); and
-* the _Locality_ field determines exactly which Locality Secrets follow the MDH, and
-  hence how many associated-data blocks precede the payload.
-
-Every length entering the computation is thus a deterministic function of the first
-associated-data block, so two inputs that produce the same sequence of POLYVAL blocks
-necessarily agree on the split between associated data and payload. Processing a length
-block — indeed two of them, one per payload — would add no information and cost a
-`Montmul` each.
-
-For the same reason the padding of cite:[RFC8452] {sect}4 does not arise: every section
-processed here is a whole number of 128-bit blocks (<<ACE-data-formats>>).
-
-NOTE: Because of this omission the construction is a variant of AES-GCM-SIV and not
-AES-GCM-SIV itself. An implementation of it cannot be validated against the test vectors
-of cite:[RFC8452] {sect}C, and conformance to this specification has to be demonstrated
-against vectors generated for the variant.
+// [[ACE-SCC-no-length-block]]
+// *Omission of the length block.*
+// cite:[RFC8452] {sect}4 terminates the POLYVAL input with a block carrying the bit lengths
+// of the associated data and of the plaintext. Its purpose is to fix the boundary between
+// the two, which in the general case is not otherwise determined. In the construction
+// defined here that boundary is already fixed, by an authenticated value, and the block
+// would therefore be redundant:
+//
+// * the first associated-data block is the MDH itself, so it is authenticated and is
+//   available before any other block is processed;
+// * the fields in the low word of the MDH — _Algorithm_, _AlgorithmPolicy_, _KeyType_ and
+//   _StateExtension_ — completely determine the length of Section 3, the Algorithm Data
+//   Section, and _ImpDataLen_ completely determines the length of the second, optional
+//   payload, Section 6 (<<ACE-length-rule>>); and
+// * the _Locality_ field determines exactly which Locality Secrets follow the MDH, and
+//   hence how many associated-data blocks precede the payload.
+//
+// Every length entering the computation is thus a deterministic function of the first
+// associated-data block, so two inputs that produce the same sequence of POLYVAL blocks
+// necessarily agree on the split between associated data and payload. Processing a length
+// block — indeed two of them, one per payload — would add no information and cost a
+// `Montmul` each.
+//
+// For the same reason the padding of cite:[RFC8452] {sect}4 does not arise: every section
+// processed here is a whole number of 128-bit blocks (<<ACE-data-formats>>).
+//
+// NOTE: Because of this omission the construction is a variant of AES-GCM-SIV and not
+// AES-GCM-SIV itself. An implementation of it cannot be validated against the test vectors
+// of cite:[RFC8452] {sect}C, and conformance to this specification has to be demonstrated
+// against vectors generated for the variant.
 
 We define the Key Derivation (<<ACE-SCC-RFC8452-derivation>>) and POLYVAL (<<ACE-SCC-POLYVAL>>) functions first. The generation of an SCC from a CR (<<ACE-SCC-export>>) and the import of an SCC into a CR (<<ACE-SCC-import>>) are defined next.
 Then, we define AES-GCM-SIV encryption and decryption.
@@ -3181,7 +3115,7 @@ Then, we define AES-GCM-SIV encryption and decryption.
 In the pseudocode of this section, `AESE256(K, B)` denotes the AES-256 encryption of the
 128-bit block `B` under the 256-bit key `K`, as specified in FIPS 197
 cite:[nist-fips-197], with the octet strings of that standard mapped to values as fixed
-in <<ACE-conventions>>.
+in <<ACE-Notation>>.
 
 [[ACE-SCC-RFC8452-derivation]]
 .RFC8452 Key Derivation
@@ -3206,7 +3140,7 @@ function RFC8452_KeyDeriv(key : bits(256), nonce : bits(96))
 The block passed to `AESE256` is the four-octet little-endian counter followed by the
 twelve-octet nonce of cite:[RFC8452] {sect}4, and `A[i][63:0]` selects the first eight
 octets of each result. Both follow from the transcription rule of
-<<ACE-conventions-transcription>>; in particular, the counter occupies the *least*
+<<ACE-Notation-transcription>>; in particular, the counter occupies the *least*
 significant 32 bits of the block, and the derived key halves are concatenated in
 *decreasing* index order because the octets of `A[0]`, respectively `A[2]`, come first
 in the derived key.
@@ -3236,6 +3170,24 @@ function POLYVAL(auth_key : bits(128), blocks[0..n-1] : bits(128), n : int)
 }
 ----
 
+// We define also `MOntmul`. The field is GF(2)[`x`] modulo
+//
+// `{fournbsp}{fournbsp}` `x^128^ + x^127^ + x^126^ + x^121^ + 1`,
+//
+// and a 128-bit value `V` represents the element whose coefficient of `x^k^` is `V[k]`.
+// Both the octet order and the bit order run forward; this is the representation of
+// cite:[RFC8452] {sect}3, under which `x^0^` is the octet string `0x01` followed by
+// fifteen zero octets, i.e. the value `1`.
+//
+// `Montmul(a, b)` is *not* plain multiplication: following the “dot” operation of
+// cite:[RFC8452] {sect}3 it is
+//
+// `{fournbsp}{fournbsp}` `Montmul(a, b)` = `a` {interpunct} `b` {interpunct}
+// `x^-128^` `{nbsp}{nbsp}` in that field.
+//
+// It is used by POLYVAL, and hence by GCM-SIV (<<ACE-GCM-SIV-mode>>) and by the sealing
+// and unsealing of SCCs (<<ACE-export-import-algorithms>>).
+
 We now give the notation used for the inputs and outputs of the AES-GCM-SIV encryption and decryption functions,
 i.e. <<ACE-SCC-GCM-SIV-enc>> and <<ACE-SCC-GCM-SIV-dec>>:
 
@@ -3250,7 +3202,7 @@ i.e. <<ACE-SCC-GCM-SIV-enc>> and <<ACE-SCC-GCM-SIV-dec>>:
 
 Applied to block arrays, `{vvert}` denotes the sequence consisting of the blocks of its left
 operand followed by those of its right operand, in that order, and `POLYVAL` absorbs the
-blocks of its argument in increasing index order. The operator `@` of <<ACE-conventions>> is
+blocks of its argument in increasing index order. The operator `@` of <<ACE-Notation>> is
 deliberately *not* used for this purpose: `@` composes *values* by significance, placing its
 left operand in the more significant bits, whereas what is required here is an ordered
 sequence of blocks. Writing `AD @ P` would both apply `@` to arrays, for which it is not
@@ -3260,7 +3212,7 @@ defined, and suggest the reverse of the intended absorption order.
 .AES-GCM-SIV Encryption for SCC Generation
 []
 ----
-function AES_GCM_SIV_Encrypt(AD[] : array of bits(128), N : bits(96),
+function SCC_Encrypt(AD[] : array of bits(128), N : bits(96),
     P[] : array of bits(128), K : bits(256), len_AD : int, len_PC : int)
   → {SIV : bits(128), C[] : array of bits(128)} =
 {
@@ -3280,7 +3232,7 @@ function AES_GCM_SIV_Encrypt(AD[] : array of bits(128), N : bits(96),
 .AES-GCM-SIV Decryption for SCC Import
 []
 ----
-function AES_GCM_SIV_Decrypt(AD[] : array of bits(128), N : bits(96), SIV : bits(128),
+function SCC_Decrypt(AD[] : array of bits(128), N : bits(96), SIV : bits(128),
     C[] : array of bits(128), K : bits(256), len_AD : int, len_PC : int)
   → {correct : bool, P[] : array of bits(128)} =
 {
@@ -3373,11 +3325,11 @@ to create the serialized, encrypted and authenticated SCC from the CR.
 ... If `saved_MDH`._Locality_ includes Locality #j, then ``AD[len_AD]`` <-  ``LST[``_j_``]``, ``len_AD`` <- ``len_AD`` + 1
 .. If _Nonce_ (Locality #11) is included, then `N` <- `LST[11]`, else `N` <- `zeros(96)`
 .. `len_PC` <- length of Section 3.
-.. `SIV`, `C[]` <- ``AES_GCM_SIV_Encrypt(AD, N, K(i).Content1[], CSK, len_AD, len_PC)``
+.. `SIV`, `C[]` <- ``SCC_Encrypt(AD, N, K(i).Content1[], CSK, len_AD, len_PC)``
 . Second, if _ImpDataLen_ {ne} 0, the implementation-dependent data is processed:
 .. `len_AD2` <- 2, ``AD2[0]`` <- ``K(i)``.``IMPQUAL``, ``AD2[1]`` <- `SIV`.
 .. `len_PC2` <- length of Section 6.
-.. `SIV2`, `C2[]` <- ``AES_GCM_SIV_Encrypt(AD2, N, K(i).Content2[], CSK, len_AD2, len_PC2)``
+.. `SIV2`, `C2[]` <- ``SCC_Encrypt(AD2, N, K(i).Content2[], CSK, len_AD2, len_PC2)``
 . Finally, output `saved_MDH`, then `SIV` and `C[]`, and, if ImpDataLen {ne} 0, `IMPQUAL`, `SIV2` and `C2[]`.
 --
 
@@ -3414,12 +3366,12 @@ When the import of the SCC of a fully configured CR is completed,
  .. If `saved_MDH`._Locality_ includes Locality #j, then ``AD[len_AD]`` <-  ``LST[j]``, ``len_AD`` <- ``len_AD`` + 1
  . If _Nonce_ (Locality #11) is included, then `N` <- `LST[11]`, else `N` <- `zeros(96)`
  . `len_PC` <- length of Section 3.
- . `correct`, `K(i).Content1[]` <- ``AES_GCM_SIV_Decrypt(AD, N, SIV, K(i).Content1[], CSK, len_AD, len_PC)`` (decrypt in place).
+ . `correct`, `K(i).Content1[]` <- ``SCC_Decrypt(AD, N, SIV, K(i).Content1[], CSK, len_AD, len_PC)`` (decrypt in place).
  . If `correct` {ne} `true`, then reject the SCC, clear ``K(i)``, and raise error _ace_state_cr_import_auth_.
  . Second, if the Implementation VDS was loaded at Step 6 — that is, if `saved_MDH`._ImpDataLen_ {ne} 0 *and* the length was not adjusted at Step 5 — the implementation-dependent data is processed:
 .. `len_AD2` <- 2, ``AD2[0]`` <- ``K(i)``.``IMPQUAL``, ``AD2[1]`` <- `SIV`.
 .. `len_PC2` <- length of Section 6.
-.. `correct`, `K(i).Content2[]` <- ``AES_GCM_SIV_Decrypt(AD2, N, SIV2, K(i).Content2[], CSK, len_AD2, len_PC2)`` (decrypt in place).
+.. `correct`, `K(i).Content2[]` <- ``SCC_Decrypt(AD2, N, SIV2, K(i).Content2[], CSK, len_AD2, len_PC2)`` (decrypt in place).
  . If `correct` {ne} `true`, then reject the SCC, clear ``K(i)``, and raise error _ace_state_cr_import_auth_.
 --
 

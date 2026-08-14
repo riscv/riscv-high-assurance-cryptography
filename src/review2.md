@@ -64,7 +64,7 @@ have made OCB's `double()` correct and essentially everything else wrong.
 * **C17 — the OCB3 partial-block padding was oriented wrongly, at three sites.**
   The spec wrote `zeros(b-n-1) @ 1 @ X[n-1:0]`, placing the terminating `1` at bit `n`.
   RFC 7253 §4.2 appends the `1` immediately after the data *in string order*, and under
-  <<ACE-conventions>> the first bit of an octet is its most significant bit — so for a
+  <<ACE-Notation>> the first bit of an octet is its most significant bit — so for a
   byte-aligned `n` the `1` is the top bit of octet `n/8`, i.e. bit `n+7`. For a one-octet
   partial block the spec set bit 8 where bit 15 is required. This affected the AD last
   block as well as both text last blocks, so it was not covered by C6. Replaced
@@ -98,7 +98,7 @@ correcting the GCM example, both confirmed by test and both fixed:
 
 * **C19 - the GCM and GCM-SIV length blocks were assembled in the wrong order.**
   SP 800-38D 7.1 puts `[len(A)]~64~` in octets 0-7 and `[len(C)]~64~` in octets 8-15;
-  RFC 8452 4 likewise puts the AAD length first. Under <<ACE-conventions>> the first
+  RFC 8452 4 likewise puts the AAD length first. Under <<ACE-Notation>> the first
   octets are the *least* significant, so the AD length must be the **right** operand of
   `@`. All four normative sites had it as the left operand. Corrected to
   `binBE(len_in_bits(plaintext),64) @ binBE(len_in_bits(AD),64)` for GCM and the `bin`
@@ -180,16 +180,16 @@ order between `ace-books.adoc` and Book 1, all as `[preface]` so the Book number
 unaffected:
 
 * `ace-acronyms.adoc` — the acronym table only;
-* `ace-notation.adoc` — `== Pseudocode Notation` (anchor `ACE-pseudocode-notation`),
+* `ace-notation.adoc` — `== Pseudocode Notation` (anchor `ACE-Notation`),
   split into operators/control constructs and functions;
 * `ace-conventions.adoc` — `== Conventions` (anchor `ACE-conventions`).
 
 The Conventions subsections were promoted from `[discrete]` to real headings so they
 appear in the table of contents. Note that `ACE-notation` was already in use for
 “Notation in the Algorithm Descriptions” in Book 2, hence the distinct
-`ACE-pseudocode-notation` anchor.
+`ACE-Notation` anchor.
 
-Cross-references to `<<ACE-conventions>>` were added at the head of Book 2, in
+Cross-references to `<<ACE-Notation>>` were added at the head of Book 2, in
 `ACE-notation`, at the `update_mask` / `Galoismul` / `Montmul` / `double` definitions, at
 the Ascon endianness note, at the head of `ACE-export-import-algorithms`, and at the head
 of Book 4 — 35 links in total across the four sub-anchors.
@@ -227,7 +227,7 @@ specification.
 **Still open from m17:** `bin(n,m)` and `binBE(n,m)` retain their original wording,
 including the "or sign extended" clause, which is meaningless for the unsigned uses these
 functions actually have, and two typos ("ar", "signiicant"). They are now pinned
-precisely by <<ACE-conventions>>, so the entries are redundant rather than wrong.
+precisely by <<ACE-Notation>>, so the entries are redundant rather than wrong.
 
 Everything else in the Critical and Major lists below is unchanged.
 

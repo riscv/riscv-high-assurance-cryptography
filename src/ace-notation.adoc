@@ -1,10 +1,71 @@
-[[ACE-pseudocode-notation]]
-== Pseudocode Notation
+[[ACE-Notation]]
+== Notation and Conventions
 
-The symbols below are used throughout this specification. The representation of the
-values they operate on, the meaning of the concatenation operator `@`, and the
-finite-field operations `Galoismul`, `Montmul`, `update_mask` and `double` are fixed
-normatively in <<ACE-conventions>>.
+// The symbols below are used throughout this specification.
+// The representation of the
+// values they operate on, the meaning of the concatenation operator `@`, and the
+// finite-field operations `Galoismul`, `Montmul`, `update_mask` and `double` are fixed
+// normatively in <<ACE-Notation>>.
+
+_This section is normative.
+Besides some necessary notation.
+it fixes the representation of values, the meaning of the
+concatenation operator, and the finite-field operations used throughout Books 1, 2 and 4.
+Every formula in this specification is to be read under these conventions, and no
+algorithm description may introduce a different one._
+
+// ////////////////////////////////////////////////////////////////////
+
+=== Values, Bits, and Octet Strings
+
+A value is a bit string whose length is fixed by its context.
+For a value `V` of `n` bits, `V[i]` denotes its ``i``-th bit and `V[j:i]`, with
+`0` {le} `i` {le} `j` < `n`, the bit slice from bit `i` to bit `j`, both included.
+Bit `0` is the least significant bit.
+
+Every input, output, key, state field and constant that a referenced standard specifies as an *octet string* `M` = `M~0~`, `M~1~`, {ellipsis}, `M~n-1~`, where `M~0~` is the first (leftmost, lowest-addressed) octet, is represented in this specification by the `8n`-bit value `V` defined by `V[8i+7 : 8i]` = `M~i~` `{nbsp}{nbsp}` for `0` {le} `i` < `n`. This is the only string-to-value mapping used in this specification.
+
+This mapping is, for instance, in accordance with the default little-endian ordering in the Risc-V architecture, and by the vector register interfaces:
+A unit-stride vector load places the octet at the lowest address in the lowest-numbered element.
+
+[NOTE]
+====
+The consequence is that a value, when printed as an integer, reads in the reverse of the octet order used by most cryptographic standards, which usually follow network protocols.
+<<ACE-Notation-transcription>> gives the rule for transcribing formulas safely, and <<ACE-Notation-standards>> records the convention used by each referenced standard.
+====
+
+// ////////////////////////////////////////////////////////////////////
+
+// === Memory, Vector Registers, and the ACEIOBUF
+//
+// The mapping above defines the behavior of every ACE operand that crosses the boundary
+// between the ACE unit and memory or a register:
+//
+// * For `ace.load`, `ace.store`, `ace.input` and `ace.output`, the octet at the lowest
+//   address is octet `0`. The octet at address `A + i` is `V[8i+7 : 8i]`, where `A` is the
+//   effective address of the transfer.
+//
+// * A vector register (group) supplying `INPUT` or receiving `OUTPUT` holds the value `V`
+//   that a unit-stride byte load `vle8.v` of `ACELEN`/8 octets would produce from the
+//   equivalent memory image, and a unit-stride byte store `vse8.v` of that register
+//   reproduces that image. This holds irrespective of the `SEW` and `VL` in effect, since
+//   ACE uses only their product (<<ACE-notation>>).
+//
+// * The ACEIOBUF is octet-addressed: the octet at buffer offset `i` is `V[8i+7 : 8i]`.
+//   `acestart` and `aceiobuftop` are octet offsets into the same image.
+
+// ////////////////////////////////////////////////////////////////////
+
+=== Concatenation
+
+For values `A` of `p` bits and `B` of `q` bits, `A @ B` is the `(p+q)`-bit value `C` with
+
+`{fournbsp}{fournbsp}` `C[q-1:0]` = `B` `{nbsp}{nbsp}` and `{nbsp}{nbsp}`
+`C[p+q-1:q]` = `A`.
+
+That is, *the left operand of `@` occupies the more significant bits*. `@` is
+associative and is written left-to-right without parentheses.
+
 
 === Operators and Control Constructs
 
@@ -16,8 +77,8 @@ normatively in <<ACE-conventions>>.
   `a mod b`, for `b` > 0, denotes the remainder of the division of `a` by `b`, in the
   range `0` to `b-1`.
 * `V xor W`, `V and W`, `V or W` denote bitwise operations on values of equal length,
-  and `V << k`, `V >> k` the shifts defined in <<ACE-conventions>>.
-* `A @ B` denotes concatenation, defined in <<ACE-conventions>>.
+  and `V << k`, `V >> k` the shifts defined in <<ACE-Notation>>.
+* `A @ B` denotes concatenation, defined in <<ACE-Notation>>.
 * `foreach(i from a to b) { {ellipsis} }` executes its body once for each integer `i`
   from `a` to `b`, both included, in increasing order; the body is not executed if
   `a` > `b`. The variant `foreach(i from a to b by s)` advances `i` in steps of `s`.
@@ -31,13 +92,14 @@ normatively in <<ACE-conventions>>.
 * `0` denotes a single bit equal to zero.
 * `1` denotes a single bit equal to one.
 * `bin(n,m)` = binary representation of `n` to `m` bits (`m` least significant bits, or sign extended). The representations is little endian.
-* `binBE(n,m)` = binary representation of `n` to `m` bits (`m` least significant bits, or sign extended). The representations is byte-wise big-endian. In other words, when written to memory starting at byte address `X`, the most significant byte of `binBE(n,m)` is stored at byte address `X`, the second most significant byte is stored at byte address `X+1`, and so on.
-* `bswap(m)` = the octet string `m` with its octet order reversed. See <<ACE-conventions>>.
+* `bswap(m)` = the octet string `m` with its octet order reversed.
+* `binBE(n,m)` = binary representation of `n` to `m` bits (`m` least significant bits, or sign extended). The representations is byte-wise big-endian. In other words, when `binBE(n,m)` is written to memory starting at byte address `X`, the most significant byte of `binBE(n,m)` is stored at byte address `X`, the second most significant byte is stored at byte address `X+1`, and so on. Hence, `binBE(n,m)` = `bswap(bin(n,m))`.
 * `ceil(x)` = the smallest integer not smaller than `x`; also written `{lceil}x{rceil}`.
 * `double(S)` = doubling in the OCB3 field. See <<ACE-conventions-fields>>.
 * `floor(x)` = the largest integer not larger than `x`; also written `{lfloor}x{rfloor}`.
 * `Galoismul(a, b)` = multiplication of `a` and `b` in the GHASH field. See <<ACE-conventions-fields>>.
-* `int(m)` = the unsigned integer represented by `m`. See <<ACE-conventions>>.
+* `int(V)` = the unsigned integer whose binary expansion has bit `V[i]` as the coefficient
+  of 2^i^, i.e. the value read as a little-endian unsigned binary number.
 * `len_in_bits(M)` = the length of the value or string `M` in bits.
 * `len_in_bytes(M)` = the length of the value or string `M` in bytes, i.e.,
   `len_in_bits(M) / 8`. It is defined only when `len_in_bits(M)` is a multiple of 8.
@@ -52,5 +114,179 @@ normatively in <<ACE-conventions>>.
 * `update_mask(M)` = the XEX/XTS mask update. See <<ACE-conventions-fields>>.
 * `zeros(i)` = sequence of `i` zeros.
 
-NOTE: `len_in_bits` is the only name used for the bit length of an operand. Earlier
-drafts also used `bit_length` for the same quantity; that spelling has been removed.
+* `V << k` and `V >> k` shift `int(V)` left, respectively right, by `k` bit positions
+  within the declared width of `V`: bits shifted beyond bit `n-1` or below bit `0` are
+  discarded and zeros are shifted in. A left shift therefore moves data towards the
+  *later* octets of the string.
+* `V xor W`, `V and W`, `V or W` are bitwise and require `|V|` = `|W|`.
+// * `lsb~c~(V)` = `V[c-1:0]` and `msb~c~(V)` = `V[n-1:n-c]`, the `c` least, resp. most,
+//  significant bits of `V`. For conciseness' sake, we also write `lsb(V)` = `lsb~1~(V)` and `msb(V)` = `msb~1~(V)`.
+
+// * `bin(n,m)` is the `m`-bit value with `int(bin(n,m))` = `n mod 2^m^`; equivalently, the
+//   little-endian octet encoding of `n` when `m` is a multiple of 8.
+// * `binBE(n,m)`, defined for `m` a multiple of 8, is the big-endian octet encoding of `n`
+//   on `m/8` octets, mapped per <<ACE-Notation>>. Equivalently
+//   `binBE(n,m)` = `bswap(bin(n,m))`.
+
+[[ACE-conventions-fields]]
+=== Finite-Field Operations
+
+Three distinct finite-field operations occur in this specification.
+They use different representations of GF(2^128^) and are not interchangeable.
+Each is defined below by giving the reduction polynomial and the mapping from a value's bits to the coefficients of the field element it represents.
+
+==== `Galoismul(a, b)` — the GHASH field (SP 800-38D)
+
+The field is GF(2)[x] modulo `x^128^ + x^7^ + x^2^ + x + 1`.
+
+A 128-bit value `V` represents the element whose coefficient of
+`x^8i+j^`, for `0` {le} `i` < `16` and `0` {le} `j` {le} `7`, is `V[8i + (7-j)]`.
+
+In other words, the octet order runs forward
+(the octet at offset 0 contains the coefficients of `x^0^` through `x^7^`,
+the octet at offset 1 contains the coefficients of `x^8^` through `x^15^`,
+and so on) while the bit order is reversed within each octet;
+this is the representation of cite:[nist-SP-800-38D] {sect}6.3.
+
+`Galoismul(a, b)` is multiplication in this field. It is used by GHASH, and hence by
+GCM (<<ACE-GCM-mode>>).
+// both for the tag and for the derivation of `J0` from an IV whose length is not 96 bits.
+
+==== `Montmul(a, b)` — the POLYVAL field (RFC 8452)
+
+The field is GF(2)[`x`] modulo `x^128^ + x^127^ + x^126^ + x^121^ + 1`,
+
+A 128-bit value `V` represents the element whose coefficient of `x^k^` is `V[k]`.
+Both the octet order and the bit order run forward; this is the representation of
+cite:[RFC8452] {sect}3, under which `x^0^` is the octet string `0x01` followed by
+fifteen zero octets, i.e. the value `1`.
+
+`Montmul(a, b)` is not plain multiplication, rather it is Montgomery multiplication:
+following the "dot" operation of cite:[RFC8452] {sect}3 it is
+`Montmul(a, b)` = `a` {interpunct} `b` {interpunct}
+`x^-128^` `{nbsp}{nbsp}` in that field.
+
+It is used by POLYVAL, and hence by GCM-SIV (<<ACE-GCM-SIV-mode>>) and by the sealing
+and unsealing of SCCs (<<ACE-export-import-algorithms>>).
+
+==== `update_mask(M)` — the XEX/XTS mask update (SP 800-38E)
+
+For `b` = 128 the field is GF(2)[`x`] modulo
+`x^128^ + x^7^ + x^2^ + x + 1`,
+
+A 128-bit value `V` represents the element whose coefficient of `x^k^` is `V[k]`,
+as in cite:[nist-SP-800-38E] and IEEE 1619. `update_mask(V)` is multiplication by
+the primitive element `x`, that is
+
+`{fournbsp}{fournbsp}` `update_mask(V)` = `V << 1` `{fournbsp}` if `V[127]` = `0`
+
+and
+
+`{fournbsp}{fournbsp}` `update_mask(V)` = `(V << 1) xor (zeros(120) @ 0b10000111)`
+`{nbsp}{nbsp}` otherwise.
+
+An algorithm instantiating XEX or XTS with a block size `b` {ne} 128 must state its own
+reduction polynomial; this specification defines `update_mask` only for `b` = 128.
+
+==== `double(S)` — the OCB3 doubling (RFC 7253)
+
+`double` acts in the same field as `update_mask`, but cite:[RFC7253] specifies it over a
+big-endian string. Only the order of the octets is reversed, not the bit order within each octet.
+It is therefore
+
+`{fournbsp}{fournbsp}` `double(V)` = `bswap(update_mask(bswap(V)))`,
+
+which expands to
+
+`{fournbsp}{fournbsp}` `double(V)` = `bswap(bswap(V) << 1)` `{fournbsp}` if `V[7]` =
+`0`, and +
+`{fournbsp}{fournbsp}` `double(V)` = `bswap(bswap(V) << 1) xor (0b10000111 @
+zeros(120))` `{nbsp}{nbsp}` otherwise.
+
+Note that the bit tested is `V[7]`, the most significant bit of octet `0`, and that the
+reduction constant lands in octet 15, i.e. in `S[127:120]`.
+
+For 64-bit blocks, we note that cite:[nist-SP-800-38B] also defines CMAC for `b` = 64, with the reduction constant `0x1B` in place of `0x87`.
+
+// ////////////////////////////////////////////////////////////////////
+
+[[ACE-Notation-transcription]]
+=== Transcribing a Formula from a Standard
+
+When a formula is taken from a referenced standard, in most cases the original follows an ordering
+which is natural for certain communication protocols, hence a big-endian notation is used.
+Risc-V specifications tend to follow little-endian notation, so the formula
+shall be transcribed by applying the following two steps, in this order:
+
+. *Reverse the concatenation.* Replace
+  `A~0~ {vvert} A~1~ {vvert} {ellipsis} {vvert} A~m-1~` by
+  `A~m-1~ @ {ellipsis} @ A~1~ @ A~0~`.
+  Failure to follow the proper ordering is the single most common source of error when transcribing a standard.
+  When forming long messages by concatenation, the “{vvert}” notation is still used since also in the original
+  standard it may be used (causing some ambiguity) in little-endian notation.
+
+. *Encode each integer explicitly.* A field that the standard specifies as a big-endian
+  integer becomes `binBE(n, m)`; one specified as a little-endian integer becomes
+  `bin(n, m)`. Neither may be written as a bare numeral.
+
+Two worked out examples:
+
+* cite:[RFC8452] {sect}4 builds each key-derivation input as the four-octet
+  little-endian counter followed by the twelve-octet nonce, `LE32(i) {vvert} N`. Step 1
+  gives `N @ LE32(i)` and step 2 gives `N @ bin(i,32)`.
+
+* cite:[nist-SP-800-38D] {sect}7.1 builds, for a 96-bit IV,
+  `J0` = `IV {vvert} 0^31^ {vvert} 1`, in which the trailing four octets are the
+  big-endian encoding of the integer 1. Step 1 gives `1 {vvert} 0^31^` reversed onto the
+  left of `IV`, and step 2 encodes the counter, yielding
+  `J0` {leftarrow} `binBE(1,32) @ IV`.
+Writing `IV @ zeros(31) @ 1` instead — the form that results from transcribing the
+standard left to right — places the IV in `J0[127:32]` and the counter octets in
+`J0[31:0]`, which is the reverse of what cite:[nist-SP-800-38D] requires.
+
+// ////////////////////////////////////////////////////////////////////
+
+[[ACE-Notation-standards]]
+=== Conventions of the Referenced Standards
+
+The following table records, for each standard whose algorithms this specification
+reproduces, the convention that standard uses and the resulting obligation here. It is
+provided as an aid to review and does not relieve an algorithm description of the
+obligation to be explicit.
+
+[float="center",align="center",width="100%",cols="<26%,<40%,<34%",options="header"]
+|===
+| Standard | Convention used by the standard | Obligation in this specification
+| SP 800-38A/B/E (ECB, CTR, CMAC, XTS)
+| Octet strings; the CTR counter is big-endian in the trailing octets of the counter block;
+  the CMAC subkey shift is over the big-endian string; the XTS tweak and mask are
+  little-endian.
+| Direct mapping for ECB and for the XTS data path, with `update_mask` as defined above.
+  The CTR counter block is assembled big-endian, via `bswap` (<<ACE-keystream-modes>>), and
+  CMAC's subkeys via the big-endian `double` (<<ACE-CMAC-mode>>). Note that this one row
+  covers three different orderings; do not read “direct mapping” as applying to all of them.
+| SP 800-38D (GCM)
+| Octet strings; GHASH field bit-reflected within octets; counters big-endian.
+| `Galoismul` as defined above; every counter and length field via `binBE`.
+| RFC 8452 (AES-GCM-SIV)
+| Octet strings; POLYVAL field fully little-endian; block counter little-endian.
+| `Montmul` as defined above; counters and length blocks via `bin`.
+| RFC 7253 (OCB3)
+| Bit strings, first bit most significant; `double` and the `Stretch` window are
+  big-endian.
+| `double` as defined above; `bswap` written explicitly wherever the algorithm operates
+  on the big-endian view.
+| FIPS 202 (SHA-3, SHAKE)
+| Bit strings mapped to the state by {sect}3.1; lanes little-endian.
+| Direct mapping of the absorbed string; the lane indexing of FIPS 202 {sect}3.1 applies
+  unchanged.
+| FIPS 180-4 (SHA-2)
+| Big-endian words and length encoding.
+| Message schedule words and the appended length via `binBE`.
+| SP 800-232 (Ascon)
+| Little-endian throughout, including `{vvert}`.
+| Direct mapping. See also the note in <<ACE-Ascon-AEAD128>>.
+| FIPS 203 / FIPS 204 (ML-KEM, ML-DSA)
+| Octet strings produced by the standard's own encoding routines.
+| Direct mapping of the encoded octet strings; no re-encoding.
+|===
