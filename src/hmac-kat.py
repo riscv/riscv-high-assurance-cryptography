@@ -69,6 +69,7 @@ VEC = [  # RFC 4231
 ]
 assert sha256(b"abc").hex() == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad", "SHA-256 self-test failed"
 print("SHA-256 self-test (FIPS 180-4): PASS\n")
+print("KAT-EXPECT-FAIL: without re-init")    # negative control
 print(f"{'vector':8} {'as specified':14} {'without re-init'}")
 ok = True
 for i,(k,m,exp) in enumerate(VEC):

@@ -118,6 +118,7 @@ for la, lp in cases:
     tamper_ok &= not okt
 
 print(f"cases tested: {len(cases)}  (AD len 0/5/16/23 x PT len 0..39)")
+print("KAT-EXPECT-FAIL: previous text")      # negative control
 print("corrected text  - round-trip + tag verify :", "PASS" if newok else "FAIL")
 print("corrected text  - tamper rejected         :", "PASS" if tamper_ok else "FAIL")
 print("previous text   - round-trip + tag verify :",

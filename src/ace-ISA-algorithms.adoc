@@ -2323,12 +2323,12 @@ whereas the “key in PI“ (KIP) version has the following format
 | iii  | 0 or 64       | Padding, to reach a multiple of 128 bits.
 |===
 
-The padding is 64 bits when the rate `b` of the underlying hash function is congruent to 64
-modulo 128, and absent otherwise. Since every rate is a multiple of 64, no other width can
-arise. Concretely the padding is absent for SHA-224, SHA-256 (`b` = 512), SHA-384, SHA-512,
-SHA-512/224, SHA-512/256 (`b` = 1024) and SHA3-224 (`b` = 1152), and 64 bits for SHA3-256
-(`b` = 1088), SHA3-384 (`b` = 832) and SHA3-512 (`b` = 576). It is likewise 64 bits whenever
-Position ii holds a 64-bit System Key Identifier instead of a key by value.
+// The padding is 64 bits when the rate `b` of the underlying hash function is congruent to 64
+// modulo 128, and absent otherwise. Since every rate is a multiple of 64, no other width can
+// arise. Concretely the padding is absent for SHA-224, SHA-256 (`b` = 512), SHA-384, SHA-512,
+// SHA-512/224, SHA-512/256 (`b` = 1024) and SHA3-224 (`b` = 1152), and 64 bits for SHA3-256
+// (`b` = 1088), SHA3-384 (`b` = 832) and SHA3-512 (`b` = 576). It is likewise 64 bits whenever
+// Position ii holds a 64-bit System Key Identifier instead of a key by value.
 --
 
 * *Internal State*:
@@ -2361,21 +2361,18 @@ State Machine::: {empty}
 --
 This Meta-Algorithm inserts one state between _Initial_ and _Hash_Absorb_, called _Set_Key_.
 
-The key held in a CC is `K0` as defined in cite:[nist-fips-198-1] {sect}3: the key
+The key held in a CC is the value `K0` as defined in cite:[nist-fips-198-1] {sect}3: the key
 padded with zeros to `b` bits if it is shorter, or hashed and then padded if it is longer.
-Deriving `K0` from the original key is the responsibility of whoever supplies it, which
-keeps that step, and the branch it would require, out of the ACE unit. A CC therefore holds
-`b` bits of key material, or a 64-bit System Key Identifier in their place.
+Deriving `K0` from the original key is the responsibility of whoever provisions it.
 
 The two variants differ only in how the key first reaches the CC.
 
-* In the *KIP* variant `K0` is carried in the Provisioning Input, so the CC is keyed from the
-  moment it is provisioned. The key may be given by value or, with _KeyType_ = 1, as a System
-  Key Identifier, exactly as for any other keyed algorithm. A KIP CC *cannot be re-keyed*.
+* In the *KIP* variant `K0` is carried in the Provisioning Input.
+  The key may be given by value or, with _KeyType_ = 1, as SKID.
+  A KIP CC *cannot be re-keyed*.
 
 * In the *NIK* variant the Provisioning Input carries no key. `K0` is loaded in State
-  _Set_Key_, which the state transition rules below makes mandatory before _Hash_Absorb_ can be
-  entered
+  _Set_Key_ before _Hash_Absorb_ can be entered.
 
 * *Allowed State Transitions:*
  ** For the NIK version:  _Initial_ -> _Set_Key_ -> _Hash_Absorb_ -> and rest as in the underlying hash function
@@ -2387,27 +2384,11 @@ The two variants differ only in how the key first reaches the CC.
     ``ace.exec`` instructions, through Subalgorithm _process_VLI_
     (cf. <<ACE-process-VLI>>) entered as
 +
-`{fournbsp}` `process_VLI(b/8, block=key, b, state=unused, n=0,` +
+`{fournbsp}` `process_VLI(b/8, block=key, b, state=key, n=0,` +
 `{fournbsp}{fournbsp}{fournbsp}{fournbsp}{fournbsp}` `input_base, block_base, state_offset=0, cumul_len,` +
 `{fournbsp}{fournbsp}{fournbsp}{fournbsp}{fournbsp}` `process_block=None, finalize=None)`,
-+
---
-exactly as the ML-KEM input states do (<<ACE-PQC-ML-KEM>>). The field being filled is passed
-as the `block` parameter, so the copy branch of the procedure writes the incoming octets into
-`key` at offset `block_base`; there is no `state`, and both callbacks are `None`, so the
-procedure contributes only its accounting of partial progress across `ace.exec` instructions.
 
-// Three details of this invocation are deliberate.
-// `absorb()` and `finalize()` must *not* be passed: the hash state is initialized only on entry
-// to _Hash_Absorb_, so calling them here would fold raw key material into an uninitialized
-// state. `key`, and not `block`, must be the destination: `block`, where it exists at all,
-// belongs to the underlying hash function, and `key` is a separate field. And `key` must be
-// passed in the *`block`* position rather than the `state` position, so that the copy branch of
-// the procedure applies and *assigns* the incoming octets; the `state` position would select the
-// XOR branch, which would combine the incoming key with whatever the field already holds
-// instead of replacing it — and replacing it is exactly what this state is for.
---
- ** Upon entering _Hash_Absorb_:
+** Upon entering _Hash_Absorb_:
   . `state` is set to the initial value of the underlying hash function.
   . `key xor ipad` is computed and absorbed in the underlying hash function.
   . Then the semantics of the underlying hash function are executed, absorbing the message.
