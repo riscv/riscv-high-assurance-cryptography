@@ -920,7 +920,7 @@ The latter may be necessary if the implementation of Subalgorithm _ACE-process-V
 |  iv   | 128           | `tag`          | {empty}
 |   v   | 32            | `start_ctr`    | The initial counter: `start_ctr` = `int(bswap(J0[127:96]))`, the last four octets of the *initial* `J0` read as a big-endian integer, serialized here as `bin(start_ctr,32)`. If the running counter returns to this value, an error is returned. It is also used to generate the tag mask.
 |  vi   | 16            | `last_blk_len` | {empty}
-|  vii  | 16 or 80      | Padding        | {empty}
+|  vii  | 80 or 16      | Padding        | {empty}
 |===
 
 While in state _Set_Aux_Value_, `J0` is replaced by the following fields:
@@ -1260,11 +1260,13 @@ Upon provisioning, `start_ctr <- int(bswap(J0[127:96]))`, i.e. the last four oct
 * *Serialized Context*: {empty}
 +
 --
+The `budget` is inserted in `GCM` mode's serialized context after `last_blk_len` in place of the original Padding field, and is followed by the remaining padding.
+
 [cols="^8%,<15%,<15%,<62%",options="header"]
 |===
 |  Pos. | Size (Bits)   | Field          | Description
 | vii   | 32            | `budget`       | Remaining block budget, serialized as `bin(budget,32)`.
-| viii  | 16 or 48      | Padding        | {empty}
+| viii  | 48 or 112     | Padding        | {empty}
 |===
 --
 
@@ -1376,7 +1378,7 @@ Data Structures:::
 |    v  |  128            | `SIV`
 |   vi  |  128            | `tmp`
 |  vii  |  16             | `last_blk_len`
-| viii  |  48 or 112      |  Padding
+| viii  |  112 or 48      |  Padding
 |===
 --
 
@@ -1670,32 +1672,15 @@ Data Structures:::
 |   vi  | 128 (`b`)   | `hash_A`
 |  vii  | 128 (`b`)   | `checksum_P` (used also for the final tag)
 | viii  | 32          | `index`
-|   ix  | 16          | `tag_len`
-|    x  | 16          | `last_blk_len`
-|   xi  | 16          | `N_len`
-|   xii | 1           | `AD_finalized`
-|  xiii | 1           | `text_finalized`
-|  xiv  | 64          | `budget`, as `bin(budget,64)`
-|   xv  | (variable)  | Padding to a multiple of 128 bits.
+|   ix  |  8          | `tag_len`
+|    x  |  8          | `last_blk_len`
+|   xi  |  8          | `N_len`
+|   xii |  1          | `AD_finalized`
+|  xiii |  1          | `text_finalized`
+|  xiv  |  6          | Padding
+|   xv  | 64          | `budget`, as `bin(budget,64)`
+|  xvi  | 64 or 0     | Padding to a multiple of 128 bits.
 |===
-
-The integer fields of the Serialized Context are wider than the internal state fields
-they carry — `tag_len`, `last_blk_len` and `N_len` need 8, 7 and 7 bits respectively but
-are serialized on 16, and `budget` needs 49 but is serialized on 64 — because every
-multi-bit field of an SCC is zero-padded to a multiple of 8 bits, so that an SCC can be
-parsed without bit-field manipulation.
-
-`AD_finalized` and `text_finalized` are deliberately left at a single bit each. An
-individual bit at a known offset is easy to extract; what is an annoyance is a field of
-several bits that straddles an octet boundary, and that is what the padding above avoids.
-The distinction is worth drawing because an ACE unit need not be fixed logic, for which
-neither case would matter: it may be implemented as a programmable coprocessor
-(<<ACE-architectural-model>>), where unaligned multi-bit fields cost instructions on every
-import and export.
-
-`budget` *shall* be serialized. It is part of the CC's state, and a bound that did not
-survive an export and re-import would be no bound at all: software could refresh it at will
-by cycling the CC through memory.
 --
 
 //
@@ -2363,11 +2348,11 @@ Position ii holds a 64-bit System Key Identifier instead of a key by value.
 --
 [%autowidth,cols="^1,<2,<6",options="header"]
 |===
-| Pos. | Size (Bits)             | Field
-|   i  | 128                     | MDH
-|  ii  | variable                | Serialized Content of the underlying hash function, in its entirety.
-| iii  | `b` or 64               | `key`
-|  iv  | (variable)              | Padding, to reach a multiple of 128 bits.
+| Pos. | Size (Bits)              | Field
+|   i  | 128                      | MDH
+|  ii  | variable                 | Serialized Content of the underlying hash function, in its entirety, including its own padding to a multiple of 128 bits.
+| iii  | `b^*^` or 64             | `key`, where `b^*^` is the number of bits in the key, padded to a multiple of 8 bits.
+|  iv  | (-`b^*^`) mod 128, or 64 | Padding, to reach a multiple of 128 bits.
 |===
 --
 
@@ -2386,24 +2371,11 @@ The two variants differ only in how the key first reaches the CC.
 
 * In the *KIP* variant `K0` is carried in the Provisioning Input, so the CC is keyed from the
   moment it is provisioned. The key may be given by value or, with _KeyType_ = 1, as a System
-  Key Identifier, exactly as for any other keyed algorithm. A KIP CC *cannot be re-keyed*:
-  State _Set_Key_ is not reachable in this variant, as the transition list below shows, so the
-  key a KIP CC is provisioned with is the only key it will ever use. Changing it means
-  provisioning a new CC. This is deliberate, and it is the same division as between GCM and
-  GCM with Set IV (<<ACE-GCM-with-IV-mode>>): the variant whose key or nonce is fixed at
-  provisioning gives the provisioning entity control that the runtime-configurable variant
-  cannot take away.
+  Key Identifier, exactly as for any other keyed algorithm. A KIP CC *cannot be re-keyed*.
 
 * In the *NIK* variant the Provisioning Input carries no key. `K0` is loaded in State
-  _Set_Key_, which the transition list below makes mandatory before _Hash_Absorb_ can be
-  entered, so a NIK CC cannot be used before it has been keyed. Re-entering _Set_Key_ later
-  replaces the key, which lets a NIK CC be re-keyed without being provisioned again. Since
-  _Set_Key_ transfers `b`/8 octets by value and the Provisioning Input has no field in which
-  an identifier could arrive, a NIK CC requires _KeyType_ = 0; its `key` field is always
-  `b` bits wide.
-
-In both variants `key` is part of the Serialized Context, so whichever value is current
-survives export and import.
+  _Set_Key_, which the state transition rules below makes mandatory before _Hash_Absorb_ can be
+  entered
 
 * *Allowed State Transitions:*
  ** For the NIK version:  _Initial_ -> _Set_Key_ -> _Hash_Absorb_ -> and rest as in the underlying hash function
@@ -2425,15 +2397,15 @@ as the `block` parameter, so the copy branch of the procedure writes the incomin
 `key` at offset `block_base`; there is no `state`, and both callbacks are `None`, so the
 procedure contributes only its accounting of partial progress across `ace.exec` instructions.
 
-Three details of this invocation are deliberate.
-`absorb()` and `finalize()` must *not* be passed: the hash state is initialized only on entry
-to _Hash_Absorb_, so calling them here would fold raw key material into an uninitialized
-state. `key`, and not `block`, must be the destination: `block`, where it exists at all,
-belongs to the underlying hash function, and `key` is a separate field. And `key` must be
-passed in the *`block`* position rather than the `state` position, so that the copy branch of
-the procedure applies and *assigns* the incoming octets; the `state` position would select the
-XOR branch, which would combine the incoming key with whatever the field already holds
-instead of replacing it — and replacing it is exactly what this state is for.
+// Three details of this invocation are deliberate.
+// `absorb()` and `finalize()` must *not* be passed: the hash state is initialized only on entry
+// to _Hash_Absorb_, so calling them here would fold raw key material into an uninitialized
+// state. `key`, and not `block`, must be the destination: `block`, where it exists at all,
+// belongs to the underlying hash function, and `key` is a separate field. And `key` must be
+// passed in the *`block`* position rather than the `state` position, so that the copy branch of
+// the procedure applies and *assigns* the incoming octets; the `state` position would select the
+// XOR branch, which would combine the incoming key with whatever the field already holds
+// instead of replacing it — and replacing it is exactly what this state is for.
 --
  ** Upon entering _Hash_Absorb_:
   . `state` is set to the initial value of the underlying hash function.
