@@ -7,7 +7,7 @@
 This is the most serious area. GCM's counters are off by one against SP 800-38D; GCM-SIV derives its keys before the nonce is known and clears a tag bit that RFC 8452 does not; OCB uses a monotonic doubling schedule rather than RFC 7253's `ntz` schedule; Ascon has five independent defects including a domain-separation bit applied to the wrong end of the state word. None of these modes would pass the standards' own test vectors, and several are not merely non-interoperable but weakened. The authors' own warning at `ace-ISA-algorithms.adoc:1858` that "the ordering of the bits must be verified" was well founded — the verification finds real errors.
 
 2. **The SCC sealing construction is not AES-GCM-SIV, and its authentication check does not work.**
-**FIXED*
+**FIXED**
 
 3. **Several security guarantees the introduction claims are not enforced by the architecture.**
 Debug mode is permitted to *use* every resident context by default;
