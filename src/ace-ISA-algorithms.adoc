@@ -1902,7 +1902,7 @@ Data Structures:::
 [%autowidth,cols="^1,<2,<3",options="header"]
 |===
 |  Pos. | Size (Bits)   | Field
-|    i  | 128            | MDH
+|    i  | 128           | MDH
 |   ii  | `k` or 64     | `key` or System Key Identifier
 |  iii  | `b`           | `hash`
 |   iv  | 32            | `last_blk_len`
@@ -3499,10 +3499,14 @@ Data Structures:::
  Note that `decapsk` contains `encapsk` whose size is 6400 / 9472 / 12544 bits (800 / 1184 / 1568 bytes).
  ** `ciphertext`: 6144 / 8704 / 12544 bits (768 / 1088 / 1568 bytes).
  ** `sharedkey` 256 bits.
- ** `len`, `input_base`, `block_base`, `cumul_len`: 16 bits each, the variables of
-    Subalgorithm _process_VLI_ (cf. <<ACE-process-VLI>>), used by the three `_*_Input_`
-    states. `len` is the bit size of the field currently being loaded and `cumul_len` the
-    number of bits loaded so far; the latter is the value reported in the _AlgorithmUse_ field.
+// ** `len`, `input_base`, `block_base`, `cumul_len`: 16 bits each, the variables of
+//    Subalgorithm _process_VLI_ (cf. <<ACE-process-VLI>>), used by the three `_*_Input_`
+//    states. `len` is the bit size of the field currently being loaded and `cumul_len` the
+//    number of bits loaded so far; the latter is the value reported in the _AlgorithmUse_ field.
+
+`encapsk` corresponds to `ek` in cite:[nist-fips-203],
+`decapsk` corresponds to `dk`, and
+`sharedkey` corresponds to `K`.
 
 ML-KEM algorithms use the _AlgorithmUse_ field of the metadata header to record how many
 bits of a long field have been transferred so far: read from memory in the _encapsk_Input_,
@@ -3516,7 +3520,7 @@ For the three variants, the size of the internal state, without considering the 
 * *Serialized Context*:
 +
 --
-[%autowidth,cols="^1,<4,<3",options="header"]
+[%autowidth,cols="^1,<3,<3",options="header"]
 |===
 |  Pos. | Size (Bits) +
 for ML-KEM-512/768/1024 | Field
@@ -3524,20 +3528,19 @@ for ML-KEM-512/768/1024 | Field
 |  ii   | 13056 / 19200 / 25344 | `decapsk` (embeds `encapsk`)
 |  iii  | 6144 / 8704 / 12544   | `ciphertext`
 |  iv   | 256                   | `sharedkey`
-|  v    | 16                    | `len`
-|  vi   | 16                    | `input_base`
-|  vii  | 16                    | `block_base`
-| viii  | 16                    | `cumul_len`
-|  ix   | 64                    | Padding, to a multiple of 128 bits
 |===
 
-For the three subtypes, the sizes of the Serialized Context are 2464, 3552, and 4800 bytes.
+For the three subtypes, the sizes of the Serialized Context are 2448, 3536, and 4784 bytes, i.e., 153, 221, and 299 128-bit blocks.
 --
 
 ////
-( 128 + 256 + 128 + 13056 + 6144 ) / 8
-( 128 + 256 + 128 + 19200 + 8704 ) / 8
-( 128 + 256 + 128 + 25344 + 12544 ) / 8
+( 128 + 256 +  13056 + 6144 ) / 8
+( 128 + 256 +  19200 + 8704 ) / 8
+( 128 + 256 +  25344 + 12544 ) / 8
+
+( 128 + 256 +  13056 + 6144 )  / 128
+( 128 + 256 +  19200 + 8704 )  / 128
+( 128 + 256 +  25344 + 12544 ) / 128
 ////
 
 Algorithm-Specific Functions:::
@@ -3571,9 +3574,8 @@ ML-KEM algorithms define:
  ** State transitions are allowed between any two valid states.
 
 * *Behavior:*
-+
---
- ** In State _Initial_, no `ace.exec` instruction is allowed.
+
+** In State _Initial_, no `ace.exec` instruction is allowed.
      Upon transitioning to _Initial_, the fields `encapsk`, `decapsk`, `ciphertext` and `sharedkey` are cleared.
 
  ** All uses of `ace.setst` do not require an auxiliary parameter.
@@ -3583,20 +3585,10 @@ ML-KEM algorithms define:
    If the values are not valid, the encapsulation and decapsulation procedures may return unpredictable results or fail with a
    transition to Error State `ace_state_invalid`.
 
- ** In State _GenerateKeyPair_, Form D ``ace.exec Kn|K{Xn}`` generates a new key pair using procedure `ML-KEM.KeyGen` of cite:[nist-fips-203] (Algorithm 19):
-+
---
-* `d : bits(256)`, `z : bits(256)` --- 32-byte random seeds drawn from an approved RBG
-* `encapsk : bits(6400 / 9472 / 12544)` --- corresponds to `ek` in cite:[nist-fips-203]
-* `decapsk : bits(13056 / 19200 / 25344)` --- corresponds to `dk` in cite:[nist-fips-203]
+ ** In State _GenerateKeyPair_, Form D ``ace.exec Kn|K{Xn}`` generates a new key pair using procedure `ML-KEM.KeyGen` of cite:[nist-fips-203] (Algorithm 19).
 
-[]
-. `d <- \text{RBG}(256)`
-. `z <- \text{RBG}(256)`
-. `(encapsk, decapsk) <- ML-KEM.KeyGen(d, z)`
 . If `ML-KEM.KeyGen` fails, the state machine transitions to state _Failure_.
 . Otherwise, the state machine transitions to state _Success_.
---
 
   ** In State _Encapsulate_, the procedure `ML-KEM.Encaps` of cite:[nist-fips-203] is
 applied to the `encapsk` state field. It draws a random value internally and derives from
@@ -3606,38 +3598,19 @@ ciphertext, and `encapsk` must have been set, by `_encapsk_Input_` or by
 `_GenerateKeyPair_`, before this state is entered.
 If the procedure `ML-KEM.Encaps` fails, the state machine transitions to state _Failure_.
 
-  ** In State _Encapsulate_, Form D ``ace.exec Kn|K{Xn}`` executes encapsulation using procedure `ML-KEM.Encaps` of cite:[nist-fips-203] (Algorithm 20):
-+
---
-* `m : bits(256)` --- 32-byte randomness drawn from an approved RBG
-* `encapsk : bits(6400 / 9472 / 12544)` --- corresponds to `ek` in cite:[nist-fips-203]
-* `sharedkey : bits(256)` --- corresponds to `K` in cite:[nist-fips-203]
-* `ciphertext : bits(6144 / 8704 / 12544)` --- corresponds to `c` in cite:[nist-fips-203]
+** In State _Encapsulate_, Form D ``ace.exec Kn|K{Xn}`` executes encapsulation using procedure `ML-KEM.Encaps` of cite:[nist-fips-203] (Algorithm 20).
 
-[]
-. If `encapsk` has not been set (by `_encapsk_Input_` or by `_GenerateKeyPair_`), the CR is *invalidated* and the state machine transitions to Error State `ace_state_invalid`.
-. `m <- \text{RBG}(256)`
-. `(sharedkey, ciphertext) <- ML-KEM.Encaps(encapsk, m)`
-. If `ML-KEM.Encaps` succeeds:
-.. The state machine transitions to state _ciphertext_Output_.
-. else:
-.. The state machine transitions to state _Failure_.
---
+  . If `ML-KEM.Encaps` succeeds:
+  .. The state machine transitions to state _ciphertext_Output_.
+  . else:
+  .. The state machine transitions to state _Failure_.
 
-** In State _Decapsulate_, Form D ``ace.exec Kn|K{Xn}`` decapsulates the ciphertext using procedure `ML-KEM.Decaps` of cite:[nist-fips-203] (Algorithm 21):
-+
---
-* `decapsk : bits(13056 / 19200 / 25344)` --- corresponds to `dk` in cite:[nist-fips-203]
-* `ciphertext : bits(6144 / 8704 / 12544)` --- corresponds to `c` in cite:[nist-fips-203]
-* `sharedkey : bits(256)` --- corresponds to `K` in cite:[nist-fips-203]
+** In State _Decapsulate_, Form D ``ace.exec Kn|K{Xn}`` decapsulates the ciphertext using procedure `ML-KEM.Decaps` of cite:[nist-fips-203] (Algorithm 21).
 
-[]
-. `sharedkey <- ML-KEM.Decaps(decapsk, ciphertext)`
-. If `ML-KEM.Decaps` succeeds:
-.. The state machine transitions to state _Success_.
-. else:
-.. The state machine transitions to state _Failure_.
---
+  . If `ML-KEM.Decaps` succeeds:
+  .. The state machine transitions to state _Success_.
+  . else:
+  .. The state machine transitions to state _Failure_.
 
 ** In States _encapsk_Input_, _decapsk_Input_, resp., _ciphertext_Input_, the state fields
 `encapsk`, `decapsk`, resp., `ciphertext` are loaded from memory using `process_VLI()`.
@@ -3645,18 +3618,16 @@ The number of bits loaded into the state fields so far is stored in the _Algorit
 +
 Subalgorithm _process_VLI_ (cf. <<ACE-process-VLI>>) is invoked as
 +
-`{fournbsp}` `process_VLI(len, block=F, b=len, state=F, n=0,` +
-`{fournbsp}{fournbsp}{fournbsp}` `input_base=0, block_base=_AlgorithmUse_, state_offset=0, cumul_len=_AlgorithmUse_,` +
+`{fournbsp}` `process_VLI(len, block=F, b=len, state=F, n=len,` +
+`{fournbsp}{fournbsp}{fournbsp}` `input_base=None, block_base=_AlgorithmUse_, state_offset=0, cumul_len=_AlgorithmUse_,` +
 `{fournbsp}{fournbsp}{fournbsp}` `process_block=None, finalize=None)`,
 +
 where `F` is the state field being loaded.
 Since a single `F`-sized value is loaded and no processing occurs, the `INPUT` to Form B `ace.exec` is always absorbed in full except possibly for the last one.
 `len` is the size of the field in bits, equal to 8 times the size in bytes taken from <<ACE-ML-KEM-sizes>>.
+Since it is determined by the KEM variant and the state, a variable holding `len` is not necessary.
+Input blocks are assumed do be loaded in full, so no `input_base` is necessary, and this we only need `block_base` = `cumul_len`.
 The data is loaded directly into the field `F`, there is no separate `state` field.
-
-// ** In State _ciphertext_Input_, the ciphertext loaded is the one received from the
-//    encapsulating party. This state is what makes `_Decapsulate_` usable by a responder
-//    that did not itself produce the ciphertext.
 
 ** In State _encapsk_Output_, resp., _ciphertext_Output_,
 one or more Form C `ace.exec` instructions are used to store values of `encapsk`, resp., `ciphertext` to memory.
@@ -3679,7 +3650,6 @@ TBD: The policies of a derived CR may be different from those of the generator o
 _GenerateKeyPair_, _Encapsulate_, and _Decapsulate_,
 an implementation may use the _AlgorithmUse_ field to store a progress value, so that these operations can be interrupted and resumed later.
 In this case the use of a mandatory Additional Data Section is required to store the Implementation Qualifier, as well as any implementation-specific state needed to resume the operation.
---
 
 //
 
@@ -3775,9 +3745,10 @@ In general, key pair generation, signing, and verification operations will resta
 * *Serialized Context*:
 +
 --
-[%autowidth,cols="^1,<6,<2",options="header"]
+[%autowidth,cols="^1,<3,<5",options="header"]
 |===
-|  Pos. | Size (Bits), for ML-DSA-44/65/87 | Field
+|  Pos. | Size (Bits) +
+for ML-DSA-44/65/87 | Field
 |   i   | 128                              | MDH
 |  ii   | 20480 / 32256 / 39168            | `privkey` (contains `tr`)
 |  iii  | 10496 / 15616 / 20736            | `pubkey`
@@ -3864,7 +3835,7 @@ These fields are long, so each of these states runs Subalgorithm _process_VLI_
 (cf. <<ACE-PQC-ML-KEM>>),
 with `block` = `state` equal to the target field,
 `b` = `n` = its size,
-`input_base` and `block_base` references to _AlgorithmUse_, and
+`input_base` and `block_base` are references to _AlgorithmUse_, and
 with `process_block` and `finalize` given as `None`.
 _AlgorithmUse_ is initially set to 0.
 The number of bits loaded into the state fields so far is stored in the _AlgorithmUse_ field.
