@@ -3753,12 +3753,7 @@ any other value transitions the state machine to Error State `ace_state_invalid`
   long running operations in an implementation-specific way.
   The field _AuxInfo_ contains the description of the Hash Function used by the algorithm.
  ** `HasPrivKey`, `HasPubKey`: Booleans recording whether `privkey`, resp. `pubkey`, holds
-    a configured value. They are held in bits 0 and 1 of the _StateExtension_ field of the
-    MDH, as the elliptic curve algorithms do for their own ``Has``__Var__ flags
-    (cf. <<ACE-ECC-StateExtension>>), and are therefore readable with `ace.getmdl`.
- ** `Deterministic`: Boolean, held in bit 2 of _StateExtension_, selecting deterministic
-    rather than hedged signing. It is false on provisioning, so a CC signs in hedged mode
-    unless told otherwise, which is the default of cite:[nist-fips-204].
+    a configured value. They are therefore readable with `ace.getmdl`.
  ** `privkey`: 2560/4032/4896 bytes (20480/32256/39168 bits) for ML-DSA-44/65/87, resp.
  ** `pubkey` : 1312/1952/2592 bytes (10496/15616/20736 bits) for ML-DSA-44/65/87, resp.
  ** `signature`: 2420/3309/4627  bytes (19360/26472/37016 bits) for ML-DSA-44/65/87, resp.
@@ -3784,13 +3779,13 @@ In general, key pair generation, signing, and verification operations will resta
 |===
 |  Pos. | Size (Bits), for ML-DSA-44/65/87 | Field
 |   i   | 128                              | MDH
-|  ii   | 20480 / 32256 / 39168            | `privkey`
+|  ii   | 20480 / 32256 / 39168            | `privkey` (contains `tr`)
 |  iii  | 10496 / 15616 / 20736            | `pubkey`
 |  iv   | 19360 / 26472 / 37016            | `signature`
 |   v   | 8                                | `ctxlen`
 |  vi   | 2040                             | `ctx`
 |  vii  | 512                              | `mu`
-|  viii | 512                              | `tr`
+|  viii | 256                              | `rnd`
 |   ix  | 96 / 24 / 104                    | Padding, to reach a multiple of 128 bits
 |===
 
@@ -3800,6 +3795,12 @@ Serialized Context is 53632 / 77568 / 100224 bits, that is 6704 / 9696 / 12528 o
 419 / 606 / 783 blocks of 128 bits. The unusual padding widths follow from `ctxlen`, which
 is a single octet, and from the signature sizes of cite:[nist-fips-204], which are
 2420 / 3309 / 4627 octets and therefore not multiples of 16.
+
+Apart from `HasPrivKey` and `HasPubKey` (which are stored in _StateExtension_)
+the ML-DSA algorithms do not carry state information as to whether `signature`,
+`ctxlen`, `ctx`, `mu` and `tr` have been assigned values.  If those values are not valid,
+the signing and verification procedures may return unpredictable results or fail with a
+transition to Error State `ace_state_invalid`.
 --
 
 State Machine::: {empty}
@@ -3830,154 +3831,78 @@ ML-DSA algorithms define:
 ** State transitions are allowed between any two valid states.
 
 * *Behavior:*
-+
---
-** Upon provisioning, all fields ii to viii are cleared and the state machine transitions to State _Initial_.
 
-** In State _Initial_, no `ace.exec` instruction is allowed.
-  Upon transitioning to _Initial_, the fields `signature`, `ctxlen`, `ctx`, and `mu` are cleared.
+** Upon provisioning, fields `privkey` and `pubkey` are cleared, both flags `HasPrivKey` and `HasPubKey` are false, and the state machine transitions to State _Initial_.
 
-** To transition to any one of the states _Initial_, _privkey_Input_, _pubkey_Input_, _mu_Input_, _tr_Input_, _Sign_Input_, _pubkey_Output_, _compute_pubKey_, _Sign_Verify_, _Sign_Output_, a Form A `ace.setst` instruction must be used.
+** To transition to any one of the states _Initial_, _GenerateKeyPair_, _privkey_Input_, _pubkey_Input_, _mu_Input_, _tr_Input_, _Sign_Input_, _pubkey_Output_, _compute_pubKey_, _Sign_Verify_, _Sign_Output_, a Form A `ace.setst` instruction must be used.
 
-** To transition to State _Sign_Generate_, either Form A or Form B of `ace.setst` may be
-   used, and the Form selects the signing mode of cite:[nist-fips-204] {sect}3.4:
+** Upon transitioning to _Initial_, the fields `signature`, `ctxlen`, `ctx`, `mu`, and `rnd` are cleared.
+   Note that the fields `privkey` and `pubkey` are not changed, nor the flags `HasPrivKey` and `HasPubKey`.
 
-*** Form A, or Form B with `Xs` = 0, selects *hedged* signing: `Deterministic` is set to
-  false and the value `rnd` passed to `ML-DSA.Sign_internal` is 256 bits drawn from an
-  approved random bit generator. If that generator fails, no signature is produced and
-  the CR is transitioned to Error State `ace_state_invalid`.
-*** Form B with `Xs` = 1 selects *deterministic* signing: `Deterministic` is set to true and
-  `rnd` is `zeros(256)`.
-*** Any other value of `Xs` *invalidates* the CR.
+** In State _GenerateKeyPair_, Form D ``ace.exec Kn|K{Xn}`` generates a new key pair, replacing `privkey`, `pubkey`, and `tr`, and setting both `HasPrivKey` and `HasPubKey` using procedure `ML-DSA.KeyGen` of cite:[nist-fips-204] (Algorithm 1).
 
-*** The choice is recorded in the CC, so that a signing operation interrupted and resumed —
-or exported and re-imported—completes in the mode it began in.
+** Upon entering any of the _*_Input_ or _*_Output_ states by using `ace.setst`, the _AlgorithmUse_ field is initially cleared.
 
-** To transition to state _ctx_Input_, a Form B `ace.setst` instruction must be used where the GPR contains the parameter `ctxlen`. Only values of `ctxlen` from 0 to 255 are valid. Passing an invalid `ctxlen` value will transition the CR to Error State `ace_state_invalid`.
-
-** Apart from `HasPrivKey` and `HasPubKey`, the ML-DSA algorithms do not carry state
-information as to whether `signature`, `ctxlen`, `ctx`, `mu` and `tr` have been assigned
-values.
-  If those values are not valid, the signing and verification procedures may return unpredictable results or fail with a
-  transition to Error State `ace_state_invalid`.
-
-** Key management is governed by `HasPrivKey` and `HasPubKey`:
-
-*** Upon entering State _privkey_Input_, `HasPrivKey` is set to false, and `pubkey` is
+** Upon entering State _privkey_Input_, `HasPrivKey` is set to false, and `pubkey` is
     erased and `HasPubKey` set to false. A private key and a public key held together in a
     CC must be a matching pair, and the incoming private key is in general unrelated to
     the public key that was there before; keeping the latter would leave the CC able to
     verify under one key while signing under another. When the loaded value is complete,
     `HasPrivKey` is set to true.
 
-*** Upon entering State _pubkey_Input_, `HasPubKey` is set to false; when the loaded value
+** Upon entering State _pubkey_Input_, `HasPubKey` is set to false; when the loaded value
     is complete, it is set to true. `privkey` and `HasPrivKey` are not affected: loading a
     public key alone is the normal way to configure a CC for verification only.
 
-*** State _compute_pubKey_ derives `pubkey` from `privkey`, as
-    cite:[nist-fips-204] allows, and sets `HasPubKey` to true. In State _compute_pubKey_, Form D ``ace.exec Kn|K{Xn}`` performs the derivation as specified in cite:[nist-fips-204] {sect}3.6 and Algorithm 1:
-+
---
-* `privkey : bits(20480 / 32256 / 39168)` --- corresponds to `sk = (\rho, K, tr, s_1, s_2, t_0)` in cite:[nist-fips-204]
-* `pubkey : bits(10496 / 15616 / 20736)` --- corresponds to `pk = (\rho, t_1)` in cite:[nist-fips-204]
-* `tr : bits(512)` --- corresponds to `tr = \text{SHAKE256}(pk, 64)` in cite:[nist-fips-204]
-
-[]
-. If `HasPrivKey` is false, the CR is *invalidated* and the state machine transitions to Error State `ace_state_invalid`.
-. Extract `\rho`, `s_1`, `s_2`, `t_0` from `privkey`.
-. Expand matrix `\mathbf{A} \in R_q^{k \times l}` from seed `\rho` via `\text{ExpandA}(\rho)`.
-. Compute `\mathbf{t} <- \mathbf{A} \mathbf{s}_1 + \mathbf{s}_2`.
-. Compute `(t_1, t_0) <- \text{Power2Round}(\mathbf{t}, d)`.
-. `pubkey <- \text{pkEncode}(\rho, t_1)`.
-. `tr <- \text{SHAKE256}(pubkey, 64)`.
-. `HasPubKey <- True`.
-. The state machine transitions to State _Success_.
---
-+
-Entering it while `HasPrivKey` is false *invalidates* the CR. It is the way to obtain the public key of
-an imported private key, and the only operation of this algorithm that writes `pubkey`
-other than _GenerateKeyPair_ and _pubkey_Input_.
-
-*** Upon provisioning, both flags are false, the Provisioning Input carrying no key.
-    Returning to State _Initial_ does *not* clear either key or either flag: _Initial_ is
-    the state a CC returns to between signatures, and clearing the keys there would make
-    it unusable.
-
-** Every operation that uses a key first checks the corresponding flag, and *invalidates*
-   the CR if it is not set: _Sign_Generate_ and _compute_pubKey_ require `HasPrivKey`;
-   _Sign_Verify_ and _pubkey_Output_ require `HasPubKey`. This replaces, for the two key
-   fields, the blanket statement above that the algorithms carry no information about
-   which fields have been assigned.
-
-** In State _GenerateKeyPair_, Form D ``ace.exec Kn|K{Xn}`` generates a new key pair, replacing `privkey` and `pubkey` and setting both `HasPrivKey` and `HasPubKey` using procedure `ML-DSA.KeyGen` of cite:[nist-fips-204] (Algorithm 1):
-+
---
-* `\xi : bits(256)` --- 32-byte random seed drawn from an approved RBG
-* `privkey : bits(20480 / 32256 / 39168)` --- corresponds to `sk` in cite:[nist-fips-204]
-* `pubkey : bits(10496 / 15616 / 20736)` --- corresponds to `pk` in cite:[nist-fips-204]
-* `tr : bits(512)` --- corresponds to `tr` in cite:[nist-fips-204]
-
-[]
-. `\xi <- \text{RBG}(256)`
-. `(pubkey, privkey) <- ML-DSA.KeyGen(\xi)`
-. `tr <- \text{SHAKE256}(pubkey, 64)`
-. `HasPrivKey <- True`
-. `HasPubKey <- True`
-. Clear fields `ctxlen`, `ctx`, `mu`, and `signature`.
-. If `ML-DSA.KeyGen` fails, the state machine transitions to state _Failure_.
-. Otherwise, the state machine transitions to State _Success_.
---
-
-** In State _Sign_Generate_, Form D ``ace.exec Kn|K{Xn}`` generates a digital signature using procedure `ML-DSA.Sign_internal` of cite:[nist-fips-204] (Algorithm 7):
-+
---
-* `privkey : bits(20480 / 32256 / 39168)` --- corresponds to `sk = (\rho, K, tr, s_1, s_2, t_0)` in cite:[nist-fips-204]
-* `mu : bits(512)` --- corresponds to `\mu` in cite:[nist-fips-204]
-* `rnd : bits(256)` --- corresponds to `rnd` in cite:[nist-fips-204]
-* `signature : bits(19360 / 26472 / 37016)` --- corresponds to `\sigma = (\tilde{c}, z, h)` in cite:[nist-fips-204]
-
-[]
-. If `HasPrivKey` is false, the CR is *invalidated* and the state machine transitions to Error State `ace_state_invalid`.
-. `signature <- ML-DSA.Sign_internal(privkey, mu, rnd)`
-. If `ML-DSA.Sign_internal` succeeds:
-.. The state machine transitions to State _Sign_Output_.
-. else:
-.. The state machine transitions to State _Failure_.
---
-
-** In State _Sign_Verify_, Form D ``ace.exec Kn|K{Xn}`` verifies a digital signature using procedure `ML-DSA.Verify_internal` of cite:[nist-fips-204] (Algorithm 8):
-+
---
-* `pubkey : bits(10496 / 15616 / 20736)` --- corresponds to `pk = (\rho, t_1)` in cite:[nist-fips-204]
-* `mu : bits(512)` --- corresponds to `\mu` in cite:[nist-fips-204]
-* `signature : bits(19360 / 26472 / 37016)` --- corresponds to `\sigma = (\tilde{c}, z, h)` in cite:[nist-fips-204]
-* `local result : Boolean`
-
-[]
-. If `HasPubKey` is false, the CR is *invalidated* and the state machine transitions to Error State `ace_state_invalid`.
-. `result <- ML-DSA.Verify_internal(pubkey, mu, signature)`
-. If `result = True`:
-.. The state machine transitions to State _Success_.
-. else:
-.. The state machine transitions to State _Failure_.
---
+** To transition to state _ctx_Input_, a Form B `ace.setst` instruction must be used where the GPR contains the parameter `ctxlen`. Only values of `ctxlen` from 0 to 255 are valid. Passing an invalid `ctxlen` value will transition the CR to Error State `ace_state_invalid`.
 
 ** In States _privkey_Input_, _pubkey_Input_, _ctx_Input_, _mu_Input_, _tr_Input_, and _Sign_Input_,
 one or more Form B `ace.exec` instructions are used to load a value of
 `privkey`, `pubkey`, `ctx`, `mu`, `tr`, and `signature`, respectively.
 These fields are long, so each of these states runs Subalgorithm _process_VLI_
 (cf. <<ACE-process-VLI>>) exactly as the ML-KEM `_*_Input_` states do
-(cf. <<ACE-PQC-ML-KEM>>), with `process_block` and `finalize` given as `None`.
+(cf. <<ACE-PQC-ML-KEM>>),
+with `block` = `state` equal to the target field,
+`b` = `n` = its size,
+`input_base` and `block_base` references to _AlgorithmUse_, and
+with `process_block` and `finalize` given as `None`.
+_AlgorithmUse_ is initially set to 0.
 The number of bits loaded into the state fields so far is stored in the _AlgorithmUse_ field.
 When the value of the _AlgorithmUse_ field reaches the bit size of the corresponding field, further `ace.exec` instructions are not allowed.
-If, as a result of an `ace.exec` instruction, the value of the _AlgorithmUse_ field would become greater than the bit size of the corresponding field, an illegal instruction exception is raised.
+If, as a result of an `ace.exec` instruction, the value of the _AlgorithmUse_ field would become greater than the bit size of the corresponding field (`n`),
+the bits in excess are ignored.
+If `ace.exec` is invoked with the value of the _AlgorithmUse_ {ge} `n`, an illegal instruction exception is raised.
 
-** In States _pubkey_Output_ and _Sign_Output_, one or more Form C `ace.exec` instructions are used to store the values of `pubkey`, resp., `signature`, to memory. Entering _pubkey_Output_ while `HasPubKey` is false *invalidates* the CR.
+** In State _compute_pubKey_ a single Form D `ace.exec` instruction performs the following operations:
+
+. If `HasPrivKey` is false, the CR is *invalidated* and the state machine transitions to Error State `ace_state_invalid`.
+. Derive `pubkey` from `privkey`,  as specified in cite:[nist-fips-204] {sect}3.6 and Algorithm 1.
+. Check whether the public key correctly hashes to `tr` (embedded in `privkey`), and if not, the CR is *invalidated* and the state machine transitions to Error State `ace_state_invalid`.
+. Write the result of cite:[nist-fips-204] {sect}3.6 and Algorithm 1. into `pubkey` and set `HasPubKey`.
+
+** To transition to State _Sign_Generate_, either a B of `ace.setst` may be
+   used, and the auxiliary parameter `Xs` selects the signing mode of cite:[nist-fips-204] {sect}3.4
+
+. If `HasPrivKey` is false, the CR is *invalidated* and the state machine transitions to Error State `ace_state_invalid`.
+. If `Xs` = 0 (for instance, if `Xs = X0`), then *hedged* signing is selected.
+  A 256 bits random value is drawn from an approved random bit generator and stored in `rnd`.
+. If `Xs` is non-zero, then *deterministic* signing is selected. `rnd` is set to `zeros(256)`.
+
+** In State _Sign_Generate_, Form D ``ace.exec Kn|K{Xn}`` generates a digital signature using procedure `ML-DSA.Sign_internal` of cite:[nist-fips-204] (Algorithm 7).
+If `HasPrivKey` is false, the CR is *invalidated* and the state machine transitions to Error State `ace_state_invalid`, else
+the output of `ML-DSA.Sign_internal` is written in `signature`.
+
+** In State _Sign_Verify_, Form D ``ace.exec Kn|K{Xn}`` verifies a digital signature using procedure `ML-DSA.Verify_internal` of cite:[nist-fips-204] (Algorithm 8):
+
+. If `HasPubKey` is false, the CR is *invalidated* and the state machine transitions to Error State `ace_state_invalid`.
+. If `ML-DSA.Verify_internal` returns `true` and a return value, the latter is written to `signature`, and
+the state machine transitions to State _Success_, else the state machine transitions to State _Failure_.
+
+** In States _pubkey_Output_ and _Sign_Output_, one or more Form C `ace.exec` instructions are used to store the values of `pubkey`, resp., `signature`, to memory.
+Entering _pubkey_Output_ while `HasPubKey` is false *invalidates* the CR.
 The number of bits saved to memory so far is stored in the _AlgorithmUse_ field.
 When the value of the _AlgorithmUse_ field reaches the bit size of the corresponding field, further `ace.exec` instructions are not allowed.
 If, as a result of an `ace.exec` instruction, the value of the _AlgorithmUse_ field would become greater than the bit size of the corresponding field, an illegal instruction exception is raised.
-
-** Upon entering any of the _*_Input_ or _*_Output_ states by using `ace.setst`, the _AlgorithmUse_ field is cleared.
 
 ** _AlgorithmPolicy_ can be modified using `ace.restrictl`.
 The value 0 is not admissible.
@@ -3987,6 +3912,5 @@ An attempt to clear the field using `ace.restrictl` will transition the CR to Er
 _GenerateKeyPair_, _Sign_Generate_, and _Sign_Verify_,
 an implementation may use the _AlgorithmUse_ field to store a progress value, so that these operations can be interrupted and resumed later.
 In this case the use of a mandatory Additional Data Section is required to store the Implementation Qualifier, as well as any implementation-specific state needed to resume the operation.
---
 
 // ////////////////////////////////////////////////////////////////////
