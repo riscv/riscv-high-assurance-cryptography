@@ -13,9 +13,10 @@ This is the most serious area. GCM's counters are off by one against SP 800-38D;
 Debug mode is permitted to *use* every resident context by default;
 **FIXED**5.
 SCC have no anti-replay, so re-importing an old SCC rolls counter-mode state back and reuses keystream;
-MUSFBE THIS BY DESIGN
+**THIS IS BY DESIGN**
 
 The threat model is currently **excluded from the built document** (`src/ace.adoc:105` comments out the annex include) and is marked non-normative where it does exist. For a specification whose entire value proposition is a security guarantee, that is a structural gap: there is no baseline against which any conformance claim can be evaluated.
+**MOVED TO REDUCE COMPLAINTS**
 
 **Recommendation:** the specification is not ready to freeze. The Book 2 algorithm definitions should be rewritten against the standards with test vectors added, the SCC construction reworked and analyzed, and the threat model promoted into the normative document, before a public review milestone is declared.
 
@@ -161,17 +162,15 @@ CHOICE
 **M8. `_SCProtection_` levels are unordered, unrestrictable, and contradicted by their own rationale note.**
 I think the LLM here misunderstood what we have written.
 
-**M9. DIEL is claimed as a protection level but never normatively defined.** `src/ace-ISA-unpriv.adoc:357`. The only elaboration anywhere is an informative subsection about IMPQUAL mismatch (`:2924-2930`). Nothing states whether data-independent execution latency covers key material as well as data, forbids key-dependent memory access patterns or branching, applies to `ace.load`/`ace.store` address streams, or relates to `Zkt`/`Zvkt`. Book 2 contains no occurrence of DIEL or latency at all, so no algorithm states its timing obligations. The requirement is untestable as written. *Add a normative DIEL section modelled on `Zkt` and cross-reference it from every algorithm.*
-
-HOW TO DO THIS?
+**M9. DIEL is claimed as a protection level but never normatively defined.**
+REVIEWER ERROR
 
 
 **M10. `_ExpirationDate_` depends on an undefined "secure clock" with no rollback resistance.**
 **FIXED** To the extent tht it is possible.
 
-**M11. `ace.derive` has no restriction-inheritance rules.** `src/ace-ISA-unpriv.adoc:1925-1934`. The description never says what MDH the destination receives, so nothing prevents deriving from a heavily restricted key into an unrestricted context and exporting it — a laundering primitive. "The behavior of the instruction is not expected to be deterministic" is also incompatible with any key-agreement or KDF use, and no entropy source is specified. The encoding is being frozen now even though the instruction is reserved. *Require that the derived context inherits the source's restrictions, tightenable only.*
-
-TBD
+**M11. `ace.derive` has no restriction-inheritance rules.**
+**FIXED**
 
 **M12. `ace.clone` does not state that policy metadata is copied, and is not usage-controlled.**
 **DONE:** Added explicit statement, also "The instruction is not usage-controlled." was already there
@@ -180,15 +179,16 @@ TBD
 **FIXED**
 16.  For an architecture whose purpose is key confidentiality, the on-chip generator is specified in one sentence: no approved entropy source or DRBG, no health tests, no failure behavior, no statement that it is unobservable by untrusted contexts, no relation to `Zkr`. *Require a `Zkr`-conformant source or certified DRBG with defined fail-closed behavior.*
 
-ADDED SOMETHING, but we need to discuss this.
+Need to discuss this.
 
 
 **M14. The `_SystemFormat_` escape hatch is unbounded and ungated.** `src/ace-ISA-unpriv.adoc:320-324`, `:1045-1047`.
-I DO NOT SEE THE ISSUE...
-
 18.  Setting one MDH bit makes the remaining format "entirely system specific" and the semantics of `ace.load` "entirely implementation dependent", voiding metadata validation, sealing, Localities and usage control — with no requirement that a system-defined format preserve confidentiality or integrity, and no privilege gate on setting the bit. A conforming implementation could define a system format whose load/store path moves plaintext keys. *Require system formats to preserve the Content confidentiality/integrity invariant and restrict the bit to a platform-authorized context.*
+**I DO NOT REALLY SEE THIS ISSUE**
 
-**M15. The `ace.mgmt` terminator state machine permits an authentication-bypass path.** `src/ace-ISA-unpriv.adoc:1488-1506`. Nothing states which terminator is legal for which current `_ConfigStatus_`. `ace_CR_provision_end` is not forbidden on a register in `_CfgStImporting_`, so `import_start` → `ace.load` (SCC bytes) → `provision_end` reaches `_CfgStComplete_` with no decryption and no authentication. The value of `ml` at import_end is supplied by software, so software chooses whether authentication happens. *Add a normative table of legal (current status, immediate) pairs and require that a register entering via `import_start` can only complete through an authenticating `import_end`.*
+
+**M15. The `ace.mgmt` terminator state machine permits an authentication-bypass path.**
+**TBD**urrent `_ConfigStatus_`. `ace_CR_provision_end` is not forbidden on a register in `_CfgStImporting_`, so `import_start` → `ace.load` (SCC bytes) → `provision_end` reaches `_CfgStComplete_` with no decryption and no authentication. The value of `ml` at import_end is supplied by software, so software chooses whether authentication happens. *Add a normative table of legal (current status, immediate) pairs and require that a register entering via `import_start` can only complete through an authenticating `import_end`.*
 
 >>>
 
@@ -327,20 +327,11 @@ These are not review findings; they are the specification's own open questions, 
 | `src/ace.adoc:87` | Preamble warning: ISA and non-ISA parts not separated; language may not follow RISC-V guidelines |
 | `src/ace-ISA-unpriv.adoc:247-251` | RVV-mini subset not finalized; `Zvbc` `vclmul*` dependency undecided |
 | `src/ace-ISA-unpriv.adoc:742-746`, `:2367-2370` | Memory model needs formal definition; LSU ordering for resumption to be discussed with the ARC |
-| `src/ace-ISA-unpriv.adoc:948-951` | "The encodings presented here are preliminary" |
-| `src/ace-ISA-unpriv.adoc:1353-1356`, `:1399-1402` | Possible re-encoding of `ace.mgmt` as `ace.setst` with `#immed7 ≥ 96` |
-| `src/ace-ISA-unpriv.adoc:1880-1883` | `ace.derive` unused by any algorithm; encoding reserved |
-| `src/ace-ISA-unpriv.adoc:108-109` | `Zlhmacm`/`Zlkmacm` "Defined in: TBD" |
-| `src/ace-ISA-unpriv.adoc:759-768`, `src/ace-ISA-priv.adoc:88-97` | All CSR addresses are `0xXXX` placeholders |
 | `src/ace-ISA-unpriv.adoc:2414`, `:2439`, `:2496`, `:2505-2508`, `:2586-2587` | Inline open questions in the code examples; whether concurrent exports are permitted |
 | `src/ace-ISA-algorithms.adoc:22`, `:32`, `:34` | "(reserved)" = "specification not yet complete or contains ambiguities", applied to the LFSR modes |
 | `src/ace-ISA-algorithms.adoc:1858-1861` | "In all ASCON algorithms, the ordering of the bits must be verified!" — see C22–C27 |
-| `src/ace-ISA-algorithms.adoc:2809` | ML-DSA serialized-context sizes TBD |
 | `src/ace-ISA-priv.adoc:35` | `Smcsrind`/`Sscsrind` dependency to be decided with the ARC |
-| `src/ace-ISA-priv.adoc:47`, `:63-68`, `:71-74` | Exception cause numbers TBD; proposal to merge `ace_exc_CR_unconf` into `ace_exc_invalid` |
-| `src/ace-ISA-priv.adoc:254-258` | `mcrstatus` "may be defined" |
 | `src/ace-ISA-priv.adoc:386-417` | Emulated Operations section non-normative and commented out |
-| `src/ace-annexes.adoc:33-34`, `:150-151`, `:213-237` | Lazy loading "requires careful consideration"; `Ztac` try/catch and horizontal traps open, whole sections commented out |
 | `src/ace-examples.adoc:8-9` | Context-switching example is "TBD" |
 
 ## Appendix B — Suggested priorities

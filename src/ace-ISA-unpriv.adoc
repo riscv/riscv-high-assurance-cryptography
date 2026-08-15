@@ -106,8 +106,8 @@ The hart stalls when attempting to read them until the ACE operation using those
 | `Zlesha2h`      | SHA-224, SHA-256, SHA-384, SHA-512, SHA-512/224, and SHA-512/256.                                                   | <<ACE-hash-functions>>                         | v0.0.0          | --
 | `Zlesha3h`      | SHA3-224, SHA3-256, SHA3-384, SHA3-512, SHAKE128, and SHAKE256.                                                     | <<ACE-SHA-3>>                                  | v0.0.0          | --
 | `Zlsm3h`        | ShangMi 3 (SM3) hash function.                                                                                      | <<ACE-hash-functions>>                         | v0.0.0          | --
-| `Zlhmacm`       | HMAC function with provisionable key (with SHA2 when `Zlesha2h` is supported, and with SHA3 when `Zlesha3h` is supported). | TBD                                            | v0.0.0          | --
-| `Zlkmacm`       | KMAC function with provisionable key. Depends on `Zlesha3h`, since KMAC is only defined with SHA3.                         | TBD                                            | v0.0.0          | --
+| `Zlhmacm`       | HMAC function with provisionable key (with SHA2 when `Zlesha2h` is supported, and with SHA3 when `Zlesha3h` is supported). | <<ACE-HMAC>>                            | v0.0.0          | --
+| `Zlkmacm`       | KMAC function with provisionable key. Depends on `Zlesha3h`, since KMAC is only defined with SHA3.                         | <<ACE-KMAC>>                            | v0.0.0          | --
 | `Zlascon`       | Ascon-AEAD128 (base, with set Nonce, or with Nonce Masking), Ascon-Hash256, Ascon-XOF128 and Ascon-CXOF128.         | <<ACE-Ascon-AEAD128>> to <<ACE-Ascon-CXOF128>> | v0.0.0          | --
 4+| _Point arithmetic and signature generation and verification algorithms for curves in various standards:_                      | {empty}
 | `Zlsecp256r1c`  | -- NIST curve secp256r1.                                                                                            | <<ACE-ECC>>                                    | v0.0.0          | --
@@ -309,7 +309,7 @@ All _Reserved_ bits, as well as bits unused by a given algorithm, shall be zero.
 |   [29:26] |   4  | _StateExtension_  | May be used by the algorithm to extend the _State_ field with additional information. See <<ACE-State-field>>.
 |   [31:30] |   2  | _ConfigStatus_    | Used to indicate whether the CR is fully configured and ready to operate, or is being provisioned, imported, or exported. See <<ACE-ConfigStatus>>.
 |   [45:32] |  14  | _ImpDataLen_      | If non-zero, indicates that an additional, variable-length, implementation-dependent data section appended to Content. The length of this additional data section is _ImpDataLen_ * 128 bits (up to 256 KiB).
-|   [61:46] |  16  | _AuxInfo_         | Currently used only by ML-DSA to encode an auxiliary hashing algorithm. This field has the same format as bits [15:0].
+|   [61:46] |  16  | _AuxInfo_         | Currently used only by ML_KEM and ML-DSA.
 |   [62:62] |   1  | _Reserved_        | Reserved for future use.
 |   [63:63] |   1  | _SystemFormat_    | Value is 0 if an input is in the ACE architected format 1 if it is in a system-defined Format.
 |   [68:64] |   5  | _UsagePolicy_     | Usage (Control) Policy. Bits 0, 1, 2, and 3 of the field, when set, disallow CC usage in U-mode, VS-mode, HS-mode, and M-Mode, respectively. Bit 4 grants use in Debug only if set.  Any bit of this field is ignored if the corresponding mode is not supported or not enabled.
@@ -1552,11 +1552,6 @@ _Included in_::
 [[ACE-instruction-manage]]
 ==== ace.mgmt
 
-[WARNING]
-====
-We can encode this instruction also by re-using `ace.setst` and with the value of `#immed7` at least 96 (so, add 96 to the values in <<ACE-management-immeds>>).
-====
-
 _Synopsis_::
 Tracks the states of management operations of a CR.
 
@@ -2135,6 +2130,9 @@ _Description_::
 Derive a new context from an existing one, with its own opaque key material, for instance using a key derivation mechanism.
 The behavior of the instruction is not expected to be deterministic.
 It can be used multiple times, to generate multiple derived contexts.
+
+In general, the _UsagePolicy_ and _Locality_ fields of the derived CR are copied from the corresponding fields of the parent CR,
+however Algorithms may implement deviations from this behavior, a notable example being ML-KEM.
 
 The instruction may possibly modify state.
 
@@ -2997,19 +2995,27 @@ The MDH's _ImpDataLen_ field specifies the total size of the Variable-Length Sec
 [[ACE-rules-threshold-implementations]]
 ==== Single-Share Key Export Rule for Threshold implementations
 
-Any CC with its algorithm implemented as a threshold implementation will always
-provision, import and export _all_ its keys and secrets as reconstructed values.
+A CR with the state of a threshold implementation of an algorithm always
+provisions, imports, and
+exports all keys and secrets in an SCC as reconstructed values.
 (((ACE, algorithm, threshold variants)))
-The PI and SCC Formats will be the same for non-threshold and threshold implementation
-variants of the same algorithm, with the only difference being the value of the
-_SCProtection_ in the MDH.
 
-NOTE: These rules assume that reconstructing or re-randomizing a key is an inexpensive operation—for example, XORing with values generated by a PRNG internal to the ACE unit. This approach keeps SCCs compact and guarantees interoperability across architectures that implement side-channel protection differently.
+The PI and SCC formats are the same for threshold and non-threshold variants of
+the same algorithm. Only the _SCProtection_ field of the MDH differs.
 
-To accelerate key share reconstruction in a threshold variant of an algorithm,
-some shares of a system key can be included in the content's Additional Data.
+NOTE: These rules assume that reconstructing or re-randomizing a key is
+inexpensive. For example, the implementation may XOR the values with data from a
+PRNG internal to the ACE unit. This approach keeps SCCs compact and ensures
+interoperability across architectures that implement side-channel protection
+differently.
 
-For the purposes of the architectural specification, all values are represented as a single share. Side-channel analysis (SCA) protected algorithms are defined as implementation variants of the same unprotected algorithm and are not specified separately. The only difference between a protected and an unprotected algorithm is the value of the _SCProtection_ field in the MDH.
+To speed up key share reconstruction in a threshold variant, some shares of a
+system key may be included in the Additional Data of the provisioned content.
+
+Architecturally, all values are represented as a single share. Side-channel
+analysis (SCA) protected algorithms are implementation variants of the same
+unprotected algorithm, not separate specifications. The only difference is the
+_SCProtection_ field of the MDH.
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -3065,9 +3071,9 @@ The format of this structure follows <<ACE-PI>> for provisioning and <<ACE-SCC>>
 === Management of Sealed Cryptographic Contexts
 
 We now present the cryptographic algorithms used to generate and read SCCs.
-They are to be read under the conventions of <<ACE-Notation>>, which fix the
-representation of the values involved, the meaning of `@`, and the POLYVAL field
-arithmetic denoted by `Montmul`.
+// They are to be read under the conventions of <<ACE-Notation>>, which fix the
+// representation of the values involved, the meaning of `@`, and the POLYVAL field
+// arithmetic denoted by `Montmul`.
 This completes the description of the semantics of the management operations given in <<ACE-management-operations>>,
 in the description of `ace.setst`
 (<<ACE-instruction-setst>>), and in the code detailing the operations as split by the architecture (<<ACE-management-code-snippets>>).
@@ -3117,13 +3123,11 @@ all sections is already included in the MDH and thus already included in the POL
 // of cite:[RFC8452] {sect}C, and conformance to this specification has to be demonstrated
 // against vectors generated for the variant.
 
-We define the Key Derivation (<<ACE-SCC-RFC8452-derivation>>) and POLYVAL (<<ACE-SCC-POLYVAL>>) functions first. The generation of an SCC from a CR (<<ACE-SCC-export>>) and the import of an SCC into a CR (<<ACE-SCC-import>>) are defined next.
-Then, we define AES-GCM-SIV encryption and decryption.
+We define the Key Derivation (<<ACE-SCC-RFC8452-derivation>>) and POLYVAL (<<ACE-SCC-POLYVAL>>) functions first.
+The generation of an SCC from a CR (<<ACE-SCC-export>>) and the import of an SCC into a CR (<<ACE-SCC-import>>) are defined next.
 
 In the pseudocode of this section, `AESE256(K, B)` denotes the AES-256 encryption of the
-128-bit block `B` under the 256-bit key `K`, as specified in FIPS 197
-cite:[nist-fips-197], with the octet strings of that standard mapped to values as fixed
-in <<ACE-Notation>>.
+128-bit block `B` under the 256-bit key `K`, as specified in FIPS 197 cite:[nist-fips-197].
 
 [[ACE-SCC-RFC8452-derivation]]
 .RFC8452 Key Derivation
@@ -3145,13 +3149,13 @@ function RFC8452_KeyDeriv(key : bits(256), nonce : bits(96))
 }
 ----
 
-The block passed to `AESE256` is the four-octet little-endian counter followed by the
-twelve-octet nonce of cite:[RFC8452] {sect}4, and `A[i][63:0]` selects the first eight
-octets of each result. Both follow from the transcription rule of
-<<ACE-Notation-transcription>>; in particular, the counter occupies the *least*
-significant 32 bits of the block, and the derived key halves are concatenated in
-*decreasing* index order because the octets of `A[0]`, respectively `A[2]`, come first
-in the derived key.
+// The block passed to `AESE256` is the four-octet little-endian counter followed by the
+// twelve-octet nonce of cite:[RFC8452] {sect}4, and `A[i][63:0]` selects the first eight
+// octets of each result. Both follow from the transcription rule of
+// <<ACE-Notation-transcription>>; in particular, the counter occupies the *least*
+// significant 32 bits of the block, and the derived key halves are concatenated in
+// *decreasing* index order because the octets of `A[0]`, respectively `A[2]`, come first
+// in the derived key.
 
 NOTE: Due to the computational cost of the derivation functions,
 implementations may cache recently used derived keys.
@@ -3209,13 +3213,13 @@ i.e. <<ACE-SCC-GCM-SIV-enc>> and <<ACE-SCC-GCM-SIV-dec>>:
 * `N` is a 96-bit Nonce; and
 * `SIV` is a 128-bit SIV/tag.
 
-Applied to block arrays, `{vvert}` denotes the sequence consisting of the blocks of its left
-operand followed by those of its right operand, in that order, and `POLYVAL` absorbs the
-blocks of its argument in increasing index order. The operator `@` of <<ACE-Notation>> is
-deliberately *not* used for this purpose: `@` composes *values* by significance, placing its
-left operand in the more significant bits, whereas what is required here is an ordered
-sequence of blocks. Writing `AD @ P` would both apply `@` to arrays, for which it is not
-defined, and suggest the reverse of the intended absorption order.
+// Applied to block arrays, `{vvert}` denotes the sequence consisting of the blocks of its left
+// operand followed by those of its right operand, in that order, and `POLYVAL` absorbs the
+// blocks of its argument in increasing index order. The operator `@` of <<ACE-Notation>> is
+// deliberately *not* used for this purpose: `@` composes *values* by significance, placing its
+// left operand in the more significant bits, whereas what is required here is an ordered
+// sequence of blocks. Writing `AD @ P` would both apply `@` to arrays, for which it is not
+// defined, and suggest the reverse of the intended absorption order.
 
 [[ACE-SCC-GCM-SIV-enc]]
 .AES-GCM-SIV Encryption for SCC Generation
@@ -3231,7 +3235,8 @@ function SCC_Encrypt(AD[] : array of bits(128), N : bits(96),
   SIV ← AESE256(enc_key, 0 @ SIV[126:0]);
 
   foreach(i from 0 to len_PC - 1) do:
-    C[i] ← P[i] xor AESE256(enc_key, 1 @ SIV[126:32] @ bin((int(SIV[31:0]) + i) mod 2**32, 32));
+    C[i] ← P[i] xor
+           AESE256(enc_key, 1 @ SIV[126:32] @ bin((int(SIV[31:0]) + i) mod 2**32, 32));
 
   return ( SIV, C[] );
 }
@@ -3248,7 +3253,8 @@ function SCC_Decrypt(AD[] : array of bits(128), N : bits(96), SIV : bits(128),
   enc_key, auth_key ← RFC8452_KeyDeriv(K,N);
 
   foreach(i from 0 to len_PC - 1) do:
-    P[i] ← C[i] xor AESE256(enc_key, 1 @ SIV[126:32] @ bin((int(SIV[31:0]) + i) mod 2**32, 32));
+    P[i] ← C[i] xor
+           AESE256(enc_key, 1 @ SIV[126:32] @ bin((int(SIV[31:0]) + i) mod 2**32, 32));
 
   s ← POLYVAL(auth_key, AD || P, len_AD + len_PC);
   tmp ← s;
@@ -3264,6 +3270,7 @@ function SCC_Decrypt(AD[] : array of bits(128), N : bits(96), SIV : bits(128),
 }
 ----
 
+////
 [[ACE-SCC-rationale]]
 ==== Design Rationale for the Sealing Construction
 
@@ -3315,6 +3322,7 @@ instance every part of a product line whose CSK was fixed per line rather than p
 Deriving the CSK from a per-die secret at boot, or programming it from M-mode or from a
 hardware key-management block, removes all three problems.
 ====
+////
 
 [[ACE-SCC-export]]
 ==== Generation of an SCC from a Fully Configured CR
