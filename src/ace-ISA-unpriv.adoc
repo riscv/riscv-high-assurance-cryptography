@@ -3034,21 +3034,35 @@ Rule 3 of <<ACE-rules-threshold-implementations>> can be applied to system keys 
 [[ACE-CR-representation]]
 ==== Notation and Representation of CR Internals
 
-The information contained in a CR comprises at least as many bits as the SCC (see <<ACE-SCC>>), excluding `SIV`, `IMPQUAL`, and `SIV2`.
-Additional storage may be required for information reconstructed upon successful import.
+The information in a CR comprises at least as many bits as the SCC (see <<ACE-SCC>>), excluding `SIV`, `IMPQUAL`, and `SIV2`.
+Importing an SCC may require additional storage for information reconstructed upon successful import.
 
-The _i_-th CR is denoted by ``K(i)``.
-When ``K(i)`` is being provisioned, resp., imported, it behaves like a contiguous structure,
-whose length equals that of the PI, resp., the SCC plus an additional 128 bits for the `SIV`, or 384 bits if also `IMPQUAL` and `SIV2` are required.
+The _i_-th CR is denoted ``K(i)``.
+During provisioning or import, ``K(i)`` behaves like a contiguous structure.
+Its length equals that of the PI, or of the SCC plus 128 bits for the `SIV` — 384 bits if `IMPQUAL` and `SIV2` are also present.
+The format of this structure follows <<ACE-PI>> for provisioning and <<ACE-SCC>> for export and import.
 
+The extra 128 or 384 bits of capacity are allocated per hart, not per CR.
+Allocating them per CR would be costly: 128 bits per CR, or 384 bits if at least one algorithm supports implementation-specific data.
+The implementation transparently manages this capacity as though it belongs to the CR.
+
+In principle, this limits the ability to perform concurrent management operations within the same piece of code.
+Starting a second operation may overwrite the storage for `SIV`, `IMPQUAL`, and `SIV2`, irreversibly destroying the old `SIV` and `SIV2` values.
+Therefore, interleaved management operations shall be avoided.
+Lightweight threads shall either support CR context switching directly, or the programmer shall serialize access with a mutex.
+Beyond this, the architectural restriction on the additional capacity does not affect any conceivable use case.
+
+////
 The additional capacity of 128 or 384 bits is per hart, not per CR,
 since allocating an additional 128 bits per CR (or 384 bits if at least one algorithm supports implementation-specific data) would be costly.
 The implementation shall transparently manage this capacity as though it belongs to the CR.
 In principle, this limits the ability to perform concurrent management operations within the same piece of code:
 If a second operation is started that may overwrite the storage for `SIV`, `IMPQUAL`, and `SIV2`, the old values of `SIV` and `SIV2` may be irreversibly overwritten.
-However, this does not affect any conceivable use case.
+Therefore, concurrent, in effect interleaved, management operations shall be avoided and, when using lightweight threads, they
+shall either directly support CR context switching or the programmed shall use a mutex to serialize access.
+Beyond this, the architectural restriction on the additional capacity does not affect any conceivable use case.
+////
 
-The format of this structure follows <<ACE-PI>> for provisioning and <<ACE-SCC>> for export and import.
 // For provisioning, the structure consists of
 // ``K(i)``.`MDH`[63:0],
 // ``K(i)``.`MDH`[127:64] and
