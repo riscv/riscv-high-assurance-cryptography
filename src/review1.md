@@ -337,8 +337,9 @@ These are not review findings; they are the specification's own open questions, 
 ## Appendix B — Suggested priorities
 
 1. Rewrite Book 2's mode definitions against the cited standards and add known-answer test vectors for every algorithm (C14–C29, M46–M53). Test vectors would have caught nearly all of these mechanically.
-2. Rework the SCC sealing construction — nonce-bearing key derivation, RFC 8452 length block, a working authentication check, and anti-replay — then have it analyzed independently (C1–C4, C6, M2).
-3. Promote the threat model into the normative document and state the trust boundaries, particularly M-mode's (M1).
-4. Resolve the register-sharing and provenance question, the Debug-mode default, and zeroization (C5, C7, C8, M5, M6).
-5. Fix the hypervisor state-management model so ACE state can actually be saved, restored and migrated (C9, M17–M26).
 6. Do a consistency pass that reconciles instruction names, extension names, CSR units and state machines across all four books (C10–C13, M28–M45, M54).
+
+DONE 2. Rework the SCC sealing construction — nonce-bearing key derivation, RFC 8452 length block, a working authentication check, and anti-replay — then have it analyzed independently (C1–C4, C6, M2).
+DONE 3. Promote the threat model into the normative document and state the trust boundaries, particularly M-mode's (M1).
+DONE 4. Resolve the register-sharing and provenance question, the Debug-mode default, and zeroization (C5, C7, C8, M5, M6).
+DONE 5. Fix the hypervisor state-management model so ACE state can actually be saved, restored and migrated (C9, M17–M26).
