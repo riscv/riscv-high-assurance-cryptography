@@ -1,13 +1,19 @@
 # Public Review — RISC-V Atomic Cryptography Extension (ACE)
 
 
-1. **Book 2's algorithm definitions do not match the standards they cite.** This is the most serious area. GCM's counters are off by one against SP 800-38D; GCM-SIV derives its keys before the nonce is known and clears a tag bit that RFC 8452 does not; OCB uses a monotonic doubling schedule rather than RFC 7253's `ntz` schedule; Ascon has five independent defects including a domain-separation bit applied to the wrong end of the state word. None of these modes would pass the standards' own test vectors, and several are not merely non-interoperable but weakened. The authors' own warning at `ace-ISA-algorithms.adoc:1858` that "the ordering of the bits must be verified" was well founded — the verification finds real errors.
+1. **Book 2's algorithm definitions do not match the standards they cite.**
+**FIXED**
 
-2. **The SCC sealing construction is not AES-GCM-SIV, and its authentication check does not work.** The import algorithm's tag comparison discards the recomputed POLYVAL value, so no imported context is actually authenticated. Key derivation omits the nonce, POLYVAL omits RFC 8452's length block, and the default nonce is zero — so sealing is deterministic and one key pair is reused for every SCC under a given CSK. This is the root of trust for every context that leaves a register.
+This is the most serious area. GCM's counters are off by one against SP 800-38D; GCM-SIV derives its keys before the nonce is known and clears a tag bit that RFC 8452 does not; OCB uses a monotonic doubling schedule rather than RFC 7253's `ntz` schedule; Ascon has five independent defects including a domain-separation bit applied to the wrong end of the state word. None of these modes would pass the standards' own test vectors, and several are not merely non-interoperable but weakened. The authors' own warning at `ace-ISA-algorithms.adoc:1858` that "the ordering of the bits must be verified" was well founded — the verification finds real errors.
 
-3. **Several security guarantees the introduction claims are not enforced by the architecture.** Debug mode is permitted to *use* every resident context by default; SCCs have no anti-replay, so re-importing an old SCC rolls counter-mode state back and reuses keystream; Cryptographic Registers are shared across privilege modes while the management instructions are explicitly *not* usage-controlled, allowing a lower-privileged mode to substitute contexts under a higher one; and zeroization is nowhere actually guaranteed.
+2. **The SCC sealing construction is not AES-GCM-SIV, and its authentication check does not work.**
+**FIXED*
 
-Beyond these, the privileged architecture has a hypervisor state-management hole (write-only secret CSRs that a hypervisor can neither read nor trap, making save/restore and the advertised VM migration impossible), and Books 1–4 disagree with each other on instruction names, extension names, CSR units and algorithm state machines to a degree that a reader cannot reliably determine the intended instruction set.
+3. **Several security guarantees the introduction claims are not enforced by the architecture.**
+Debug mode is permitted to *use* every resident context by default;
+**FIXED**5.
+SCC have no anti-replay, so re-importing an old SCC rolls counter-mode state back and reuses keystream;
+MUSFBE THIS BY DESIGN
 
 The threat model is currently **excluded from the built document** (`src/ace.adoc:105` comments out the annex include) and is marked non-normative where it does exist. For a specification whose entire value proposition is a security guarantee, that is a structural gap: there is no baseline against which any conformance claim can be evaluated.
 
@@ -20,109 +26,107 @@ The threat model is currently **excluded from the built document** (`src/ace.ado
 ### Sealed Cryptographic Context construction
 
 **C1. The SCC import authentication check is inoperative.**
-DONE
+**FIXED**
 
 **C2. Key derivation omits the nonce, so the construction is not AES-GCM-SIV and has no applicable security proof.**
-DONE, except that since this mode is nonce-misuse resistant, the nonce can be 0. Intel does the same. In our case the nonce is optional.
+**FIXED**, except that since this mode is nonce-misuse resistant, the nonce can be 0. Intel does the same. In our case the nonce is optional.
 
 **C3. POLYVAL is invoked without RFC 8452's length block.**
-We do not need this, since the metadata field already encodes the AD and plaintext lengths.
+**BY DESIGN: Length is still encoded, but in the MDH**
 
 **C4. The import and export algorithms contain errors that make them unimplementable as written.**
-DONE
+**FIXED**
 
 
 ### Security architecture
 
 **C5. Debug mode may use every resident context by default, and nothing is zeroized on debug entry.**
-DONE, also added questions to ARC.
+**FIXED**, also added questions to ARC.
 
 **C6. SCCs have no anti-replay, so re-import rolls algorithm state back and reuses keystream.**
+**BY DESIGN**
 THIS IS KNOWN, and by choice, to avoid over complication.
 Addressed any ambiguity in <<ACE-management-operations>>
 
 **C7. Registers are shared across privilege modes while management instructions are not usage-controlled, permitting context substitution.**
-This is by design, otherwise we cannot perform context switching.
+**This is by design, otherwise we cannot perform context switching.**
 
 **C8. Verbatim export of a partially configured register can dump generated or system key material in the clear.**
+**FIXED** for random values, however, this does not affect System Keys because these are never exposed outside the CR by other rules.
 *Resolution:* require that random generation and SKS materialization occur only at `ace_CR_provision_end`, and forbid verbatim export of any register holding material the exporting context did not supply.
-ADDRESSED for random values, however, this does not affect System Keys because these are never exposed outside the CR by other rules.
 
 
 ### Privileged architecture
 
 **C9. Write-only secret CSRs are writable by the mode below the one that must manage them, making hypervisor save/restore and VM migration impossible.**
-ADDRESSED
+**FIXED**
 ### Instruction definitions
 
 **C10. `ace.mv`'s encoding and description specify opposite data directions.**
-I THINK FIXED NOW
+I THINK **FIXED** NOW
 
 **C11. `ace.exec` Forms B and D leave the register index unencodable.**
-I THINK FIXED NOW
+I THINK **FIXED** NOW
 
 ### Cross-book contradictions
 
 **C12. HMAC and KMAC have extensions and algorithm encodings but no definition, and Book 2 denies they are needed.**
-HMAX FIXED
-KMAC FIXED (I think)
-
+HMAX **FIXED**
+KMAC **FIXED**
 
 **C13. Book 1 restricts the block-cipher modes to AES; Book 2 defines them for SM4.**
-FIXED
+**FIXED**
 
 
 ### Algorithm definitions versus published standards
 
 **C14. GCM counter values are off by one from SP 800-38D.**
-FIXED
+**FIXED**
 
 **C15. GCM decryption's tag finalization uses a malformed counter expression.**
-FIXED
+**FIXED**
 
 **C16. GCM-SIV derives its keys before the nonce is set.**
-FIXED (in a different way)
+**FIXED** (in a different way)
 
 **C17. GCM-SIV clears the tag's top bit after encryption, producing wrong tags and one-bit malleability.**
-FIXED (I think)
+**FIXED** (I think)
 
 **C18. The GCM-SIV counter-exhaustion check invalidates the register on the first block.**
-OOOPS. FIXED
+**FIXED** (OOOPS)
 
 **C19. GCM and GCM-SIV are given the identical length-block formula although the two standards use opposite conventions.**
-ADDED BIG ENDIANNESS CONDITIONS TO GCM
-*Resolution:* define `bin()` and the byte-order mapping normatively, with mode-specific layouts.
+**FIXED** ADDED BIG ENDIANNESS CONDITIONS TO GCM
 
 **C20. OCB's offset schedule is not RFC 7253's.**
-FIXED
+**FIXED**
 
 **C21. OCB's final-block tag computation deviates from RFC 7253 in two ways.**
-FIXED
-
+**FIXED**
 
 **C22.  absorbs associated data with the permutation on the wrong side.**
-FIXED
+**FIXED**
 
 **C23. Ascon's domain-separation bit is applied to the wrong bit of the state word.**
-FIXED
+**FIXED**
 
 **C24. Ascon decryption swaps the halves of its output relative to encryption.**
-FIXED
+**FIXED**
 
 **C25. Ascon cannot decrypt standard length-preserving ciphertexts.**
-FIXED
+**FIXED**
 
 **C26. Ascon-Hash256 applies one permutation too many before the first output block.**
-FIXED
+**FIXED**
 
 **C27. Ascon-XOF128's IV is Ascon-Hash256's IV.**
-FIXED
+**FIXED**
 
 **C28. ML-KEM provides no way to input a ciphertext, so peer ciphertexts cannot be decapsulated.**
-FIXED
+**FIXED**
 
 **C29. P-521 ECDSA nonces are specified with 512 bits of randomness for a 521-bit group order.**
-FIXED
+**FIXED**
 ---
 
 ## Major findings
@@ -130,29 +134,29 @@ FIXED
 ### Security architecture
 
 **M1. The threat model is excluded from the built document, non-normative where it exists, and omits major attacker classes.**
+**FIXED**
 BROUGHT back to the main doc (introduction)  but it is not clear what else we can enforce
 
 **M2. The CSK has no architectural requirements.** `src/ace-ISA-priv.adoc:300-317`.
-PARTIALLY ADDRESSED, there is a limit to what we can enforce.
+**FIXED**
 
 **M3. The VM-migration claim requires exporting the CSK — escrow of every sealed context — through an unspecified mechanism.**
-IMPLEMENTATION CHOICE.
+**FIXED** It is an IMPLEMENTATION DEFINED.
 
-**M4. Localities do not isolate resident contexts, and their stated domains contradict their per-hart storage.** `src/ace-ISA-unpriv.adoc:55`, `:637-646`, `:652-674`. Localities are tweaks in SCC encryption only; a context already resident in a register can be used by any domain running on that hart, so the claim that ACE restricts usage to process domains holds only across a seal/unseal boundary and depends on software clearing registers at every context switch. Separately, the Domain column ("Device", "VM", "< M") contradicts per-hart storage: nothing requires an OS or hypervisor to write identical Locality Secrets to every hart, so a thread or vCPU that migrates silently fails to import its own SCCs. No save/restore rules are given for these WARZ registers. *Say explicitly that Localities are a sealing-time control, and add multi-hart consistency and save/restore rules.*
-
+**M4. Localities do not isolate resident contexts, and their stated domains contradict their per-hart storage.** `src/ace-ISA-unpriv.adoc:55`, `:637-646`,
+**DONE:** *Say explicitly that Localities are a sealing-time control, and add multi-hart consistency and save/restore rules.*
 WHILE SOME CARE IS NEEDED AND I ADDED COMMENTS TO THAT EXTENT (ace-unpriv lines 652-653), WE CANNOT ENFORCE CRYPTOGRAPHIC BINDING AT EACH STEP. ULTIMATELY, SW HIERARCHY IS RESPONSIBLE NOT TO LEAK THEIR OWN CRS. I do not see why we should add rules to manage the Locality Secret registers. These are going to be annoying, but not more annoying than many other state values that must be set already.
-
 
 **M5. Zeroization is never actually guaranteed.** `src/ace-ISA-unpriv.adoc:2184-2186`, `:469-471`; `src/ace-ISA-priv.adoc:143`. "Unconfigures", "releases its resources", "invalidated and emptied" are all weaker than zeroization, and none is defined. The specification demonstrates it knows the difference — `:1484` says the CRF memory "is zeroed" on `ace_CR_provision_start` — which makes the omission elsewhere conspicuous. There is no erasure requirement on hart reset, on ACE being disabled (`Setting ACES to Off ... does not clear CRs`), on power-down or resume (hibernation is a claimed feature), or on debug entry; the ACEIOBUF holds plaintext with no clearing rule at all. *Define "zeroize" once and require it at each of these points.*
 
-!!!NEEDS TO BE DONE!!!
+**DONE:**
 
 
 **M6. A usage-policy violation destroys the context, giving any lower-privileged mode a cross-domain kill primitive.**
 CHOICE
 
 **M7. `ace.restrictv` is specified to rewrite the entire MDH with no monotonicity constraint.** `
-FIXED
+**FIXED**
 
 **M8. `_SCProtection_` levels are unordered, unrestrictable, and contradicted by their own rationale note.**
 I think the LLM here misunderstood what we have written.
@@ -163,20 +167,20 @@ HOW TO DO THIS?
 
 
 **M10. `_ExpirationDate_` depends on an undefined "secure clock" with no rollback resistance.**
-FIXED
+**FIXED** To the extent tht it is possible.
 
 **M11. `ace.derive` has no restriction-inheritance rules.** `src/ace-ISA-unpriv.adoc:1925-1934`. The description never says what MDH the destination receives, so nothing prevents deriving from a heavily restricted key into an unrestricted context and exporting it — a laundering primitive. "The behavior of the instruction is not expected to be deterministic" is also incompatible with any key-agreement or KDF use, and no entropy source is specified. The encoding is being frozen now even though the instruction is reserved. *Require that the derived context inherits the source's restrictions, tightenable only.*
 
 TBD
 
 **M12. `ace.clone` does not state that policy metadata is copied, and is not usage-controlled.**
-Added explicit statement, also "The instruction is not usage-controlled." was already there
+**DONE:** Added explicit statement, also "The instruction is not usage-controlled." was already there
 
 **M13. Random key generation has no entropy-source requirement.** `src/ace-ISA-unpriv.adoc:383-384`.
-15.
+**FIXED**
 16.  For an architecture whose purpose is key confidentiality, the on-chip generator is specified in one sentence: no approved entropy source or DRBG, no health tests, no failure behavior, no statement that it is unobservable by untrusted contexts, no relation to `Zkr`. *Require a `Zkr`-conformant source or certified DRBG with defined fail-closed behavior.*
 
-ADDED SOMETHING, but we nee dto discuss this.
+ADDED SOMETHING, but we need to discuss this.
 
 
 **M14. The `_SystemFormat_` escape hatch is unbounded and ungated.** `src/ace-ISA-unpriv.adoc:320-324`, `:1045-1047`.
@@ -189,12 +193,12 @@ I DO NOT SEE THE ISSUE...
 >>>
 
 **M16. CRF security requirements are inconsistent with the declared adversary.**
-FIXED
+**FIXED**
 
 ### Privileged architecture and state model
 
 **M17. `mstatus.TSR` and `hstatus.VTSR` are overloaded to trap ACE memory instructions.**
-FIXED
+**FIXED**
 
 **M18. No `Smstateen`/`Ssstateen` integration for the new less-privileged state.** `src/ace-ISA-priv.adoc:78-97`, `src/ace-ISA-unpriv.adoc:754-768`. ACE adds unprivileged CSRs (`acestart`, `aceiobuflen`, `aceiobuftop`, `acenonce*`, the ID registers) and supervisor CSRs with no stateen bits, contrary to the privileged architecture's policy that new state accessible to less-privileged modes must be gateable by an unaware M-mode or hypervisor. *Define stateen bits gating all ACE CSRs and instructions.*
 
@@ -206,15 +210,18 @@ FIXED
 
 **M22. `mcrstatus`'s normative status is self-contradictory, and lazy loading depends on it.** `src/ace-ISA-priv.adoc:254-258` is a warning saying it "may be defined", while the extension table (`:19`) and CSR table (`:90`) list it as defined by `Smacestatus`; the lazy-SCC ownership search at `:287` ("search privilege modes from M-mode downward") needs it. The proposed remedy — making `sstatus.ACES` "unshadowed and independent" — would violate the rule that `sstatus` is a restricted view of `mstatus`. *Decide it normatively and keep `sstatus.ACES` a view of `mstatus.ACES`.*
 
-**M23. The `vscrstatus` section is a copy-paste of `scrstatus`.** `src/ace-ISA-priv.adoc:232`, `:236`, `:239` all name `scrstatus`/`scrstatush` inside the section defining `vscrstatus` — including "`scrstatush` shadows bits [63:32] of `scrstatus`" — leaving `vscrstatush` and the actual bit layout formally undefined. *Rename the occurrences.*
+**M23. The `vscrstatus` section is a copy-paste of `scrstatus`.**
+**FIXED**
 
 **M24. "Propagation" of `*crstatus` is asserted but never defined, and the V=1 rules omit the HS-level view.** `src/ace-ISA-priv.adoc:294-296`, `:241-245`. There is no propagation concept for FS/VS in the base architecture to be "analogous to", and the V=1 rules set only `vscrstatus`(i) Dirty, leaving unstated whether `scrstatus`(i) is also updated — which breaks hypervisor-level lazy tracking. The ACES rule at `:171` does set both, so the asymmetry looks unintentional. *Give explicit rules.*
+**HOW**
 
 **M25. Trap-and-emulate has no effective-privilege mechanism, and hypervisors are forbidden from emulating.** `src/ace-ISA-unpriv.adoc:76`, `:308`; `src/ace-ISA-priv.adoc:386-417`. When M-mode emulates a trapped instruction for U- or VS-mode, the usage-control check sees privilege M, so a context whose policy disallows M-mode becomes unemulatable — and there is no MPRV analogue to assume the trapped mode's privilege. Meanwhile HS-mode is explicitly forbidden from implementing ACE, and the supporting emulation instructions exist only in a commented-out non-normative block. *Define an MPRV-style effective-ACE-privilege mechanism and normatively specify the emulation support.*
 
 **M26. Trap behavior beyond cause numbers is undefined.** `src/ace-ISA-priv.adoc:44`, `:63`; `src/ace-ISA-unpriv.adoc:212-213`. Nothing states what is written to `mtval`/`stval`/`vstval` for the `ace_exc_*` causes, whether they are delegable via `medeleg`/`hedeleg`, or which xEPC applies; the blanket "the CSR `mcause` will reflect the error condition" ignores delegation to `scause`/`vscause` entirely. `ace_guru_meditation` reports CRF corruption detected asynchronously yet is architected as a synchronous exception with no binding to an instruction. *Specify xtval, delegability, and either bind guru-meditation to the next ACE instruction or make it an interrupt/RAS event.*
 
-**M27. Exceptions `ace_exc_CR_unconf` and `ace_exc_CR_other` are defined in Book 3 but raised by no Book 1 instruction.** `src/ace-ISA-priv.adoc:64-65` versus the Book 1 instruction descriptions, which mention only `ace_exc_invalid`, `ace_exc_buf_unconf`, `ace_exc_out_of_mem` and `ace_guru_meditation`. Book 1 handles unconfigured registers purely through `_Off_` state semantics. *Add the causes to the relevant instruction descriptions or fold them per the authors' own open question.*
+**M27. Exceptions `ace_exc_CR_unconf` and `ace_exc_CR_other` are defined in Book 3 but raised by no Book 1 instruction.**
+**FIXED** they stay. The definitions in Book 3 are fine.
 
 ### Book 1 instruction and CSR definitions
 
@@ -226,7 +233,8 @@ FIXED
 
 **M31. `aceiobuflen` is defined in bytes in one place and bits in another.** `src/ace-ISA-unpriv.adoc:764` ("length in bytes") versus `:859` ("programs the ACEIOBUF length in bits"). Implementations differ by a factor of eight, and comparisons against `acemaxiobuflen` and `aceiobuftop` (both bytes) become ill-defined. Book 2 compounds it: `ACELEN` is defined as `aceiobuftop` "in bits" at `src/ace-ISA-algorithms.adoc:199-201`. *Standardize on bytes and fix `ACELEN` to `8 * aceiobuftop`.*
 
-**M32. The exception model is inconsistent about the privileged architecture and uses a nonexistent exception name.** `src/ace-ISA-unpriv.adoc:1026`, `:1108`, `:1481-1483`, `:1704`, `:2078`, `:2293-2301`. Some sites condition `ace_exc_*` on the privileged architecture being implemented while `ace.input`/`ace.output` raise them unconditionally, and Book 1 never says what happens on a `Zlio`-only implementation without it. "Invalid instruction exception" is not a RISC-V exception, and it is ambiguous whether illegal-instruction or `ace_exc_invalid` is meant. *Define which causes exist without the privileged extension and use exactly two consistent terms.*
+**M32. The exception model is inconsistent about the privileged architecture and uses a nonexistent exception name.**
+Invalid instruction exception -> **FIXED**
 
 **M33. Behavior of suppressed or disallowed operations is unspecified.** `src/ace-ISA-unpriv.adoc:456`, `:485-487`, `:1193-1206`. When an operation is suppressed (error state, usage violation, expiration), nothing says what is written to `Vd`, `Xd` or the ACEIOBUF — unchanged, zeroed or undefined — so implementations diverge and stale contents may leak. Rule 2 says only certain instructions "are permitted" in `_Success_`/`_Failed_` without defining what a non-permitted one does. `ace.exec` on an unconfigured register is covered by no rule, and there is no specification for operand-length mismatch. *Add a normative table of condition → exception, state transition, and destination effect.*
 
@@ -257,27 +265,27 @@ FIXED
 ### Book 2 versus the standards
 
 **M46. No normative byte/bit-ordering convention for symmetric data, and conventions are mixed within single algorithms.**
-FIXED
+**FIXED**
 
 **M47. Core field-arithmetic functions are named but never defined.**
-FIXED
+**FIXED**
 
 **M48. GCM/CTR mode parameters are never instantiated, GCM is silently limited to one IV length, and the exhaustion check is ill-typed.** `src/ace-ISA-algorithms.adoc:647`, `:358-363`, `:750`, `:788`. Nothing fixes `c = 32` (or `j`, `n` for CTR), so conforming implementations can disagree. Only `b-c`-bit IVs are supported — no GHASH-based `J0` for other lengths, a restriction never stated (SP 800-38D §5.2.1.1). The check `ctr = ones(c-1)` compares a `c`-bit counter against a `c-1`-bit value and does not match the 2³²−2 block limit. *Fix the parameters, state the 96-bit-IV restriction, and correct the check.*
 
 **M49. XCTR starts its counter at 0 where XCTR starts at 1.** `src/ace-ISA-algorithms.adoc:408-409`, `:421-423`. ACE's first keystream block is `E_K(IV ⊕ 0) = E_K(IV)`; XCTR as defined in HCTR2 is `E_K(S ⊕ bin(1)) || E_K(S ⊕ bin(2)) || ...`. Anything built on this primitive is incompatible. *Initialize `ctr` to 1, as the LFSR modes already do.*
 
 **M50. EdDSA is mis-cited and unimplementable as parameterized.**
-FIXED
+**FIXED**
 
 **M51. ECC signature operations are underspecified.** `src/ace-ISA-algorithms.adoc:2472`, `:2352`, `:2503-2554`. `_Gen_Rnd_Scalar_` is listed but never described; how `RndNum` is generated (RBG strength, hedged versus deterministic, whether user-supplied) is unstated; which signature equation each family uses is unstated, although ECDSA and SM2 differ; and point encoding is left optional ("non-compressed or compressed points may be used"). Two implementations cannot interoperate. *Specify per-family procedures by reference, mandate encodings, and define the RBG requirements.*
 
 **M52. The ML-DSA section is written in ML-KEM's vocabulary.** `src/ace-ISA-algorithms.adoc:2853`, `:2819`, `:2844`, `:2857-2859`, `:2864`. Behavior clauses refer to `encapsk`, `decapsk`, `ciphertext` and `sharedkey` fields and a `_decapsk_Input_` state, none of which exist for ML-DSA, and the state list is headed "ML-KEM algorithms define". The normative behavior is not decidable from the text. *Rewrite in terms of `privkey`/`pubkey`/`signature` and state whether signing is hedged or deterministic per FIPS 204 §3.4.*
 
 **M53. OCB nonce setup has an undefined parameter, no length bound, and an off-by-one slice.**
-FIXED
+**FIXED**
 
 **M54. Book 4's pseudocode does not match Book 2's state machines.**
-FIXED
+**FIXED** (for now)
 
 ---
 
@@ -291,7 +299,7 @@ The `ace.restrict` `v`-bit description is inverted — v=0 selects the GPR forms
 **Privileged details.** `misa.L` conflicts with current practice of discovering new extensions through unified discovery rather than new `misa` bits, and the effect of clearing a writable `L` is undefined (`src/ace-ISA-priv.adoc:106-107`). No reset or power-management specification exists for ACE state — reset values of ACES, `*crstatus` and the CSRs, and the security-critical question of whether registers are cleared across reset, suspend or non-retentive power states, are all absent. The consequences of the undecided `Smcsrind`/`Sscsrind` dependency are unanalyzed: all secret CSR groups are specified only as "(Indirect)" with no fallback addresses, so without it they are unaddressable and unvirtualizable (`:35`, `:88-97`). The "up to 3 direct" CSR count is wrong on RV32, where the `*crstatush` shadows are needed and appear in no table (`:80`). `scrstatus`'s existence without the S extension is asserted in a note rather than architected (`:221`). VS/VU CSR accesses are specified to raise illegal-instruction where the hypervisor extension requires virtual-instruction exceptions (`:343`, `:369`, `:382`). Debug-mode access and "Indirect" wording are inconsistent across the secret CSR groups (`:305` versus `:309`, `:330`, `:356`). The claim of "arbitrarily many levels of nested virtualization" (`src/ace-ISA-unpriv.adoc:2349`) is unsupported: there is exactly one `vscrstatus`, one `vsstatus.ACES`, one VirtBootScrt and one S/H Locality level.
 
 **Algorithm details.**
-DONE
+**DONE**
 
 **Documentation and repository.** The informative code fragments at `src/ace-ISA-unpriv.adoc:2400-2583` contain nonexistent instructions (`subi`, `bz`), reversed store operand order, immediate offsets on vector loads, an `ace.mgmt` operand order inconsistent with its definition, a register clobbered between two uses, an uninitialized register, and a branch to a nonexistent label — significant because `:2358-2359` claims the architecture is co-designed with these sequences. The stale extension name `Zlm` labels three of them (`:2430`, `:2481`, `:2553`). `readme.adoc:32` links to `src/contributors.adoc`, but the file is `src/ace-contributors.adoc`. The readme promises Kalyna and Kuznyechik GCM-SIV that no book delivers, and in Cyrillic script (`readme.adoc:22`). The introduction lists XTS among modes ACE defines, though the books architect only XEX (`src/ace-introduction.adoc:50-54`). CSR names use camelCase (`macePhysBootScrt`, `haceVirtBootScrt`, `maceLocality`), which is unprecedented in RISC-V, and the extension names mix case (`SmaceCSK`) while `Sm*`-prefixed extensions define S-, HS- and VS-mode CSRs. Book 3's extension table calls the two boot secrets "OS Secret Locality" and "Boot Secret Locality", terms defined nowhere and apparently swapped (`src/ace-ISA-priv.adoc:21-22`). `src/ace-examples.adoc` and `src/ace-instruction-summary.adoc` are dead: neither is included, both are wrapped in comment blocks, the summary lists eight obsolete mnemonics (`ace.init`, `ace.export`, `ace.state`, `ace.harden`, `ace.error`, `ace.enable`…), and the examples reference an undefined CSR `acecrstatus` and an undefined term RCSK. The excluded annex duplicates Book 3's `ACE-lazy-loading` anchor (re-inclusion would collide) and uses superseded CSR names. The acronym list has "HV | Hypervisor" twice, expands ASID as "Application Space Identifier" rather than "Address Space Identifier", breaks alphabetical order, and omits ACES, OCB, HMAC, KMAC, SHAKE and URW. Ten bibliography entries are never cited. There is no revision history or change log, and `.github/` has no issue template to guide public-review feedback. Tracked in the public repository: a 2.7 MB PDF, a scratch PDF, working notes (`instructions.txt`, `multiplication.txt`, `src/short names.txt`), five extra Makefile variants including one hardcoding a Qualcomm-internal registry, and an ungitignored 846 KB `src/ace.html`. Spell-check configurations (`cspell.json`, `codebook.toml`, `.harper-dictionary.txt`) are committed but wired into neither pre-commit nor CI.
 

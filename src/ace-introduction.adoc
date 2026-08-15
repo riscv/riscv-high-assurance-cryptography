@@ -95,11 +95,22 @@ Direct plaintext leakage, memory corruption attacks against the ACE-using proces
 
 === TODOs / Open Discussion Points
 
+
 * Finalize RVV-mini.
 
- * We could use “`kl`” in this document instead of
-   “`ace.`”: `kl` means ACE is a subset of crypto extensions, the “l” is also
-   the initial of “Locker”, and Cryptographic Locker could replace Cryptographic Register.
+* We could use “`kl`” in this document instead of
+  “`ace.`”: `kl` means ACE is a subset of crypto extensions, the “l” is also
+  the initial of “Locker”, and Cryptographic Locker could replace Cryptographic Register.
 
- * Do we want to prevent, by default, an execution environment to prevent
- a Mode to _provision_ a key that could be used by a higher privileged Mode? And how?
+* Do we want to prevent, by default, an execution environment to prevent
+a Mode to _provision_ a key that could be used by a higher privileged Mode? And how?
+
+* No `Smstateen`/`Ssstateen` integration for the new less-privileged state.  ACE adds unprivileged CSRs (`acestart`, `aceiobuflen`, `aceiobuftop`, `acenonce*`, the ID registers) and supervisor CSRs with no stateen bits, contrary to the privileged architecture's policy that new state accessible to less-privileged modes must be gateable by an unaware M-mode or hypervisor. *Define stateen bits gating all ACE CSRs and instructions?*
+
+* Initial/Clean semantics are different from FS/VS/XS rules they incorporate *Define the initial state explicitly and replace the blanket FS/VS/XS reference with an ACE-specific transition table.*
+
+* Trap-and-emulate has no effective-privilege mechanism, and hypervisors are forbidden from emulating. When M-mode emulates a trapped instruction for U- or VS-mode, the usage-control check sees privilege M, so a context whose policy disallows M-mode becomes unemulatable — and there is no MPRV analogue to assume the trapped mode's privilege. Meanwhile HS-mode is explicitly forbidden from implementing ACE, and the supporting emulation instructions exist only in a commented-out non-normative block. *Define an MPRV-style effective-ACE-privilege mechanism and normatively specify the emulation support.*
+
+* Trap behavior beyond cause numbers is undefined. Nothing states what is written to `mtval`/`stval`/`vstval` for the `ace_exc_*` causes, whether they are delegable via `medeleg`/`hedeleg`, or which xEPC applies; the blanket "the CSR `mcause` will reflect the error condition" ignores delegation to `scause`/`vscause` entirely. `ace_guru_meditation` reports CRF corruption detected asynchronously yet is architected as a synchronous exception with no binding to an instruction. *Specify xtval, delegability, and either bind guru-meditation to the next ACE instruction or make it an interrupt/RAS event.*
+
+* `acestart` resume state is bound to no instruction or register. It records only a byte count, so any of `ace.load`/`store`/`input`/`output`/`exec` executed after an unrelated interruption will silently "resume" at a stale offset with no way for hardware to detect the mismatch. It also contradicts `ace.mv`, which reads and increments `acestart` in normal operation despite being among the instructions that clear it, and nothing states the value after a resumable instruction *completes*, which the `Zlio` substitution sequences need. *Define the post-completion value and the cross-instruction case, vstart-style.*
