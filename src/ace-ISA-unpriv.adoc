@@ -1071,28 +1071,10 @@ This section specifies their semantics and encodings.
 The notation `K{Xd}` denotes the CR whose index is held in GPR `Xd`.
 `Kn|K{Xn}` indicates two alternative encodings: a 5-bit immediate CR index (`Kn`) or a CR number supplied by GPR `Xn`. Use of the zero register `X0` as a CR index register raises an illegal instruction exception unless explicitly indicated otherwise.
 
-[[ACE-RV32-register-pairs]]
-On RV32, several ACE instructions pass or return a 64-bit value in an even-odd GPR pair,
-written `X[s+1]:X[s]` or `X[s+1] @ X[s]`, and raise an illegal instruction exception when
-the base register number is odd. The pair `X1:X0` satisfies that constraint and is
-therefore *not* forbidden, and it receives no special treatment: `X0` keeps the behavior
-given to it by cite:[RISCV-ISA-Unpriv] in every ACE instruction. Consequently, when
-`X1:X0` is used as a destination, the low half of the result — bits [31:0], which would be
-written to `X0` — is discarded, and only bits [63:32] are observable, in `X1`; when it is
-used as a source, bits [31:0] read as all zeros whatever the instruction expects there.
-Neither case is an error, and an implementation is not required to diagnose it.
-
-This applies to every ACE instruction that uses a GPR pair on RV32, namely `ace.getmdl`
-and `ace.getmdh` (<<ACE-instruction-getmd>>), Form B of `ace.setst`
-(<<ACE-instruction-setst>>), Form B of `ace.mgmt` (<<ACE-instruction-manage>>),
-`ace.restrictl` and `ace.restricth` (<<ACE-instruction-restrict>>), Form B of `ace.size`
-(<<ACE-instruction-size>>), and Form B of `ace.derive` (<<ACE-instruction-derive>>). It
-does not apply to instructions that use a single XLEN-bit GPR, such as `ace.mv`
-(<<ACE-move>>) and `ace.getst` (<<ACE-instruction-getst>>), where the ordinary rules for
-`X0` already suffice.
-
-// NOTE: Trappability refers solely to the CPU-side implementation—for example, to enable decomposition of certain ACE instructions into smaller custom operations.
-// This is distinct from custom algorithm implementations within the ACE unit itself (e.g., via a secure embedded CPU with updatable firmware), which are outside the scope of this specification.
+If `X0` is used as a destination or source register, but not to index a CR, then
+anything written to it is discarded, and it reads as zero. This applies also to
+the use of the register pair `X1:X0` in the RV32 version of certain ACE instructions,
+there `X1` is still read from or written to.
 
 [NOTE]
 ====
@@ -3133,13 +3115,13 @@ function RFC8452_KeyDeriv(key : bits(256), nonce : bits(96))
   local A : array [0..5] of bits(128);
   local i : int;
 
-  foreach(i from 0 to 5)
+  foreach(i from 0 to 5) do:
     A[i] ← AESE256(key, nonce @ bin(i,32));
 
   return struct {
     enc_key  = A[5][63:0] @ A[4][63:0] @ A[3][63:0] @ A[2][63:0],
     auth_key = A[1][63:0] @ A[0][63:0]
-  };
+  }
 }
 ----
 
@@ -3168,10 +3150,11 @@ function POLYVAL(auth_key : bits(128), blocks[0..n-1] : bits(128), n : int)
 {
   local tmp : bits(128) ← zeros(128);
   local i : int;
-  foreach(i from 0 to n-1) {
+
+  foreach(i from 0 to n-1) do:
     tmp ← tmp xor blocks[i];
     tmp ← Montmul(tmp, auth_key);
-  }
+
   return tmp;
 }
 ----
@@ -3227,10 +3210,10 @@ function SCC_Encrypt(AD[] : array of bits(128), N : bits(96),
   SIV[95:0] ← SIV[95:0] xor N;
   SIV ← AESE256(enc_key, 0 @ SIV[126:0]);
 
-  foreach(i from 0 to len_PC - 1)
+  foreach(i from 0 to len_PC - 1) do:
     C[i] ← P[i] xor AESE256(enc_key, 1 @ SIV[126:32] @ bin((int(SIV[31:0]) + i) mod 2**32, 32));
 
-  return { SIV, C[] };
+  return ( SIV, C[] );
 }
 ----
 
@@ -3244,7 +3227,7 @@ function SCC_Decrypt(AD[] : array of bits(128), N : bits(96), SIV : bits(128),
 {
   enc_key, auth_key ← RFC8452_KeyDeriv(K,N);
 
-  foreach(i from 0 to len_PC - 1)
+  foreach(i from 0 to len_PC - 1) do:
     P[i] ← C[i] xor AESE256(enc_key, 1 @ SIV[126:32] @ bin((int(SIV[31:0]) + i) mod 2**32, 32));
 
   s ← POLYVAL(auth_key, AD || P, len_AD + len_PC);
@@ -3252,13 +3235,12 @@ function SCC_Decrypt(AD[] : array of bits(128), N : bits(96), SIV : bits(128),
   tmp[95:0] ← tmp[95:0] xor N;
   tmp ← AESE256(enc_key, 0 @ tmp[126:0]);
 
-  if (tmp != SIV) {
+  if (tmp != SIV) then:
     foreach(i from 0 to len_PC - 1)
       P[i] ← zeros(128);
-    return { false, P[] };
-  }
+    return ( false, P[] );
 
-  return { true, P[] };
+  return ( true, P[] );
 }
 ----
 
@@ -3327,12 +3309,15 @@ to create the serialized, encrypted and authenticated SCC from the CR.
 . First, the algorithm-dependent data is processed:
 .. `saved_MDH` <- the *initial* MDH of ``K(i)``, that is the image with _ConfigStatus_ = _CfgStComplete_ that software saved before issuing `#ace_CR_export_start`, ``len_AD`` <- 1
 .. ``AD[0]`` <- `saved_MDH`
-.. foreach(_j_ from 0 to 10) :
+.. foreach(_j_ from 0 to 10) do:
 ... If `saved_MDH`._Locality_ includes Locality #j, then ``AD[len_AD]`` <-  ``LST[``_j_``]``, ``len_AD`` <- ``len_AD`` + 1
-.. If _Nonce_ (Locality #11) is included, then `N` <- `LST[11]`, else `N` <- `zeros(96)`
+.. If _Nonce_ (Locality #11) is included, then:
+... `N` <- `LST[11]`
+.. else:
+... `N` <- `zeros(96)`
 .. `len_PC` <- length of Section 3.
 .. `SIV`, `C[]` <- ``SCC_Encrypt(AD, N, K(i).Content1[], CSK, len_AD, len_PC)``
-. Second, if _ImpDataLen_ {ne} 0, the implementation-dependent data is processed:
+. Second, if _ImpDataLen_ {ne} 0, then the implementation-dependent data is processed:
 .. `len_AD2` <- 2, ``AD2[0]`` <- ``K(i)``.``IMPQUAL``, ``AD2[1]`` <- `SIV`.
 .. `len_PC2` <- length of Section 6.
 .. `SIV2`, `C2[]` <- ``SCC_Encrypt(AD2, N, K(i).Content2[], CSK, len_AD2, len_PC2)``
@@ -3368,7 +3353,7 @@ When the import of the SCC of a fully configured CR is completed,
  . Load the rest of the SCC, up to the determined length.
  . `saved_MDH` <- `M`, the *initial* MDH, that is the image carried in the SCC and passed to `#ace_CR_import_start`. This is the same value that the exporting side used under that name.
  . ``AD[0]`` <- `saved_MDH`, ``len_AD`` <- 1
- . foreach (`j` from 0 to 10):
+ . foreach (`j` from 0 to 10) do:
  .. If `saved_MDH`._Locality_ includes Locality #j, then ``AD[len_AD]`` <-  ``LST[j]``, ``len_AD`` <- ``len_AD`` + 1
  . If _Nonce_ (Locality #11) is included, then `N` <- `LST[11]`, else `N` <- `zeros(96)`
  . `len_PC` <- length of Section 3.
