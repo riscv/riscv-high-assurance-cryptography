@@ -4,8 +4,6 @@
 1. **Book 2's algorithm definitions do not match the standards they cite.**
 **FIXED**
 
-This is the most serious area. GCM's counters are off by one against SP 800-38D; GCM-SIV derives its keys before the nonce is known and clears a tag bit that RFC 8452 does not; OCB uses a monotonic doubling schedule rather than RFC 7253's `ntz` schedule; Ascon has five independent defects including a domain-separation bit applied to the wrong end of the state word. None of these modes would pass the standards' own test vectors, and several are not merely non-interoperable but weakened. The authors' own warning at `ace-ISA-algorithms.adoc:1858` that "the ordering of the bits must be verified" was well founded — the verification finds real errors.
-
 2. **The SCC sealing construction is not AES-GCM-SIV, and its authentication check does not work.**
 **FIXED**
 
@@ -326,8 +324,6 @@ These are not review findings; they are the specification's own open questions, 
 | `src/ace-ISA-unpriv.adoc:247-251` | RVV-mini subset not finalized; `Zvbc` `vclmul*` dependency undecided |
 | `src/ace-ISA-unpriv.adoc:742-746`, `:2367-2370` | Memory model needs formal definition; LSU ordering for resumption to be discussed with the ARC |
 | `src/ace-ISA-unpriv.adoc:2414`, `:2439`, `:2496`, `:2505-2508`, `:2586-2587` | Inline open questions in the code examples; whether concurrent exports are permitted |
-| `src/ace-ISA-algorithms.adoc:22`, `:32`, `:34` | "(reserved)" = "specification not yet complete or contains ambiguities", applied to the LFSR modes |
-| `src/ace-ISA-algorithms.adoc:1858-1861` | "In all ASCON algorithms, the ordering of the bits must be verified!" — see C22–C27 |
 | `src/ace-ISA-priv.adoc:35` | `Smcsrind`/`Sscsrind` dependency to be decided with the ARC |
 | `src/ace-ISA-priv.adoc:386-417` | Emulated Operations section non-normative and commented out |
 | `src/ace-examples.adoc:8-9` | Context-switching example is "TBD" |
