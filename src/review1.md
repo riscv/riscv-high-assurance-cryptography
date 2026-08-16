@@ -148,10 +148,8 @@ BROUGHT back to the main doc (introduction)  but it is not clear what else we ca
 **DONE:** *Say explicitly that Localities are a sealing-time control, and add multi-hart consistency and save/restore rules.*
 WHILE SOME CARE IS NEEDED AND I ADDED COMMENTS TO THAT EXTENT (ace-unpriv lines 652-653), WE CANNOT ENFORCE CRYPTOGRAPHIC BINDING AT EACH STEP. ULTIMATELY, SW HIERARCHY IS RESPONSIBLE NOT TO LEAK THEIR OWN CRS. I do not see why we should add rules to manage the Locality Secret registers. These are going to be annoying, but not more annoying than many other state values that must be set already.
 
-**M5. Zeroization is never actually guaranteed.** `src/ace-ISA-unpriv.adoc:2184-2186`, `:469-471`; `src/ace-ISA-priv.adoc:143`. "Unconfigures", "releases its resources", "invalidated and emptied" are all weaker than zeroization, and none is defined. The specification demonstrates it knows the difference — `:1484` says the CRF memory "is zeroed" on `ace_CR_provision_start` — which makes the omission elsewhere conspicuous. There is no erasure requirement on hart reset, on ACE being disabled (`Setting ACES to Off ... does not clear CRs`), on power-down or resume (hibernation is a claimed feature), or on debug entry; the ACEIOBUF holds plaintext with no clearing rule at all. *Define "zeroize" once and require it at each of these points.*
-
+**M5. Zeroization is never actually guaranteed.**  *Define "zeroize" once and require it at each of these points.*
 **DONE:**
-
 
 **M6. A usage-policy violation destroys the context, giving any lower-privileged mode a cross-domain kill primitive.**
 CHOICE
@@ -181,16 +179,13 @@ REVIEWER ERROR
 
 Need to discuss this.
 
-
 **M14. The `_SystemFormat_` escape hatch is unbounded and ungated.** `src/ace-ISA-unpriv.adoc:320-324`, `:1045-1047`.
 18.  Setting one MDH bit makes the remaining format "entirely system specific" and the semantics of `ace.load` "entirely implementation dependent", voiding metadata validation, sealing, Localities and usage control — with no requirement that a system-defined format preserve confidentiality or integrity, and no privilege gate on setting the bit. A conforming implementation could define a system format whose load/store path moves plaintext keys. *Require system formats to preserve the Content confidentiality/integrity invariant and restrict the bit to a platform-authorized context.*
 **I DO NOT REALLY SEE THIS ISSUE**
 
 
 **M15. The `ace.mgmt` terminator state machine permits an authentication-bypass path.**
-**TBD**urrent `_ConfigStatus_`. `ace_CR_provision_end` is not forbidden on a register in `_CfgStImporting_`, so `import_start` → `ace.load` (SCC bytes) → `provision_end` reaches `_CfgStComplete_` with no decryption and no authentication. The value of `ml` at import_end is supplied by software, so software chooses whether authentication happens. *Add a normative table of legal (current status, immediate) pairs and require that a register entering via `import_start` can only complete through an authenticating `import_end`.*
-
->>>
+**FIXED**
 
 **M16. CRF security requirements are inconsistent with the declared adversary.**
 **FIXED**
@@ -232,13 +227,15 @@ Need to discuss this.
 **M30. The CSR chapter lacks reset values and WARL/WLRL discipline, and value-dependent write traps break save/restore.** `src/ace-ISA-unpriv.adoc:748-941`, `:819`, `:865`. No ACE CSR has a defined reset value or WARL/WLRL classification. Trapping on a *value* written to a CSR is unusual for RISC-V, and here `acestart`'s legal set is dynamic, so context-restore or migration code writing back a saved `acestart` on an implementation that does not support resumption (permitted by `:2356`) traps unpredictably. Raising `ace_exc_out_of_mem` from a CSR write is unprecedented. *Assign reset values, classify the fields, and replace value-dependent traps with WARL behavior.*
 
 **M31. `aceiobuflen` is defined in bytes in one place and bits in another.** `src/ace-ISA-unpriv.adoc:764` ("length in bytes") versus `:859` ("programs the ACEIOBUF length in bits"). Implementations differ by a factor of eight, and comparisons against `acemaxiobuflen` and `aceiobuftop` (both bytes) become ill-defined. Book 2 compounds it: `ACELEN` is defined as `aceiobuftop` "in bits" at `src/ace-ISA-algorithms.adoc:199-201`. *Standardize on bytes and fix `ACELEN` to `8 * aceiobuftop`.*
+**DOUBLE CHECK?**
 
 **M32. The exception model is inconsistent about the privileged architecture and uses a nonexistent exception name.**
-Invalid instruction exception -> **FIXED**
+Invalid instruction exception -> Illegal instruction exception **FIXED**
 
 **M33. Behavior of suppressed or disallowed operations is unspecified.** `src/ace-ISA-unpriv.adoc:456`, `:485-487`, `:1193-1206`. When an operation is suppressed (error state, usage violation, expiration), nothing says what is written to `Vd`, `Xd` or the ACEIOBUF — unchanged, zeroed or undefined — so implementations diverge and stale contents may leak. Rule 2 says only certain instructions "are permitted" in `_Success_`/`_Failed_` without defining what a non-permitted one does. `ace.exec` on an unconfigured register is covered by no rule, and there is no specification for operand-length mismatch. *Add a normative table of condition → exception, state transition, and destination effect.*
 
-**M34. Instructions `ace.prov`, `ace.import` and `ace.export` are mandated and referenced across all three books but defined nowhere.** `src/ace-ISA-unpriv.adoc:129-131`, `:456`, `:814`; `src/ace-ISA-algorithms.adoc:819`, `:1123`; `src/ace-ISA-priv.adoc:56-59`. Book 1 says implementations "must support" them and points to the instruction chapter, which defines no such mnemonics — provisioning and import/export are actually `ace.mgmt` plus `ace.load`/`ace.store` sequences. Book 3's fault table attributes load/store faults to these phantom instructions. The SCC sections at `:2867-2918` and the resumability section attribute management immediates to `ace.setst` where `ace.mgmt` is meant (`:1444-1465`). *Define them as pseudo-instructions or purge the references.*
+**M34. Instructions `ace.prov`, `ace.export` and `ace.export` are mandated and referenced across all three books but defined nowhere.**
+**FIXED**
 
 **M35. `ace.mgmt export_start` takes "no auxiliary input" yet its semantics depend on a scalar/vector variant.** `src/ace-ISA-unpriv.adoc:1462` versus `:1521`, where `acestart` "is set to 8 if the scalar variant was used, and 16 if the vector variant was used" — a distinction hardware cannot make with no auxiliary operand, since it cannot know whether software read the MDH with `ace.getmdl` or `ace.getmdv`. *Encode the start offset explicitly or fix it at one value.*
 
@@ -248,7 +245,8 @@ Invalid instruction exception -> **FIXED**
 
 **M38. When the `acestart ≤ aceiobuftop ≤ aceiobuflen` constraint is checked is ambiguous.** `src/ace-ISA-unpriv.adoc:895-896`. It is unspecified whether the illegal-instruction exception comes from the CSR write that creates the violation (and which of the three) or from the next instruction that uses the window. Since legitimate reprogramming sequences transiently violate it, implementations diverge and software has no defined safe write order. *Specify check-at-use with WARL clamping, or mandate a write order.*
 
-**M39. `ace.setst` with an inadmissible immediate has no defined outcome.** `src/ace-ISA-unpriv.adoc:1349-1374`. Illegal instruction, `ace_exc_invalid`, transition to `ace_state_invalid`, and silent no-op are all plausible readings for reserved values (30–31), algorithm-undefined values (2–21), and disallowed transitions. *Define one outcome.*
+**M39. `ace.setst` with an inadmissible immediate has no defined outcome.**
+**FIXED**
 
 **M40. `ace.clear` and `ace.setst` contradict each other on usage control.** `src/ace-ISA-unpriv.adoc:1380` ("The instruction is usage-controlled") versus `:2191` ("The instruction is not usage-controlled") — for `ace.clear`, which *is* an encoding of `ace.setst` with the `ace_state_off` immediate. The same executed instruction is both. *State that usage control applies except for the Off and error-state immediates.*
 
@@ -272,14 +270,16 @@ Invalid instruction exception -> **FIXED**
 
 **M48. GCM/CTR mode parameters are never instantiated, GCM is silently limited to one IV length, and the exhaustion check is ill-typed.** `src/ace-ISA-algorithms.adoc:647`, `:358-363`, `:750`, `:788`. Nothing fixes `c = 32` (or `j`, `n` for CTR), so conforming implementations can disagree. Only `b-c`-bit IVs are supported — no GHASH-based `J0` for other lengths, a restriction never stated (SP 800-38D §5.2.1.1). The check `ctr = ones(c-1)` compares a `c`-bit counter against a `c-1`-bit value and does not match the 2³²−2 block limit. *Fix the parameters, state the 96-bit-IV restriction, and correct the check.*
 
-**M49. XCTR starts its counter at 0 where XCTR starts at 1.** `src/ace-ISA-algorithms.adoc:408-409`, `:421-423`. ACE's first keystream block is `E_K(IV ⊕ 0) = E_K(IV)`; XCTR as defined in HCTR2 is `E_K(S ⊕ bin(1)) || E_K(S ⊕ bin(2)) || ...`. Anything built on this primitive is incompatible. *Initialize `ctr` to 1, as the LFSR modes already do.*
+**M49. XCTR starts its counter at 0 where XCTR starts at 1.**
+**FIXED**
 
 **M50. EdDSA is mis-cited and unimplementable as parameterized.**
 **FIXED**
 
 **M51. ECC signature operations are underspecified.** `src/ace-ISA-algorithms.adoc:2472`, `:2352`, `:2503-2554`. `_Gen_Rnd_Scalar_` is listed but never described; how `RndNum` is generated (RBG strength, hedged versus deterministic, whether user-supplied) is unstated; which signature equation each family uses is unstated, although ECDSA and SM2 differ; and point encoding is left optional ("non-compressed or compressed points may be used"). Two implementations cannot interoperate. *Specify per-family procedures by reference, mandate encodings, and define the RBG requirements.*
 
-**M52. The ML-DSA section is written in ML-KEM's vocabulary.** `src/ace-ISA-algorithms.adoc:2853`, `:2819`, `:2844`, `:2857-2859`, `:2864`. Behavior clauses refer to `encapsk`, `decapsk`, `ciphertext` and `sharedkey` fields and a `_decapsk_Input_` state, none of which exist for ML-DSA, and the state list is headed "ML-KEM algorithms define". The normative behavior is not decidable from the text. *Rewrite in terms of `privkey`/`pubkey`/`signature` and state whether signing is hedged or deterministic per FIPS 204 §3.4.*
+**M52. The ML-DSA section is written in ML-KEM's vocabulary.**
+**FIXED**
 
 **M53. OCB nonce setup has an undefined parameter, no length bound, and an off-by-one slice.**
 **FIXED**
