@@ -1183,6 +1183,8 @@ CMAC cannot detect a partial pending block at all.
 * **m6** — **FIXED.** `aceiobuflen`, `acemaxiobuflen` and `aceiobuftop` are now stated in **bits** everywhere, per the author. This is the reading the rest of the specification already required: `ACELEN` is defined as "`VL*SEW` or the length `aceiobuftop` of the ACEIOBUF **in bits**". **See the note below on `acestart`.**
   _Original finding:_ `ace-ISA-unpriv.adoc:865` — `aceiobuflen` "programs the ACEIOBUF length **in
   bits**"; the CSR table (770) and every other use say bytes.
+**CHANGED TO BYTES**
+
 * **m7** — **FIXED.** "invalid instruction exception" appeared 15 times where RISC-V
   terminology is "illegal instruction exception"; all replaced. The distinct identifier
   `ace_exc_invalid` was deliberately left alone.

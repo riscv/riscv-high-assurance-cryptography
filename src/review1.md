@@ -70,12 +70,11 @@ I THINK **FIXED** NOW
 ### Cross-book contradictions
 
 **C12. HMAC and KMAC have extensions and algorithm encodings but no definition, and Book 2 denies they are needed.**
-HMAX **FIXED**
+HMAC **FIXED**
 KMAC **FIXED**
 
 **C13. Book 1 restricts the block-cipher modes to AES; Book 2 defines them for SM4.**
 **FIXED**
-
 
 ### Algorithm definitions versus published standards
 
@@ -147,10 +146,12 @@ BROUGHT back to the main doc (introduction)  but it is not clear what else we ca
 WHILE SOME CARE IS NEEDED AND I ADDED COMMENTS TO THAT EXTENT (ace-unpriv lines 652-653), WE CANNOT ENFORCE CRYPTOGRAPHIC BINDING AT EACH STEP. ULTIMATELY, SW HIERARCHY IS RESPONSIBLE NOT TO LEAK THEIR OWN CRS. I do not see why we should add rules to manage the Locality Secret registers. These are going to be annoying, but not more annoying than many other state values that must be set already.
 
 **M5. Zeroization is never actually guaranteed.**  *Define "zeroize" once and require it at each of these points.*
-**DONE:**
+**DONE**
 
 **M6. A usage-policy violation destroys the context, giving any lower-privileged mode a cross-domain kill primitive.**
-CHOICE
+**THIS IS BY CHOICE**
+**HIGHER PRIVILEGED MODES MUST SAVE THE CCs THEY CARE ABOUT**
+(They do not expect lower privileged modes to respect their GPRs or FP registers, right?)
 
 **M7. `ace.restrictv` is specified to rewrite the entire MDH with no monotonicity constraint.** `
 **FIXED**
@@ -222,8 +223,8 @@ Need to discuss this.
 
 **M30. The CSR chapter lacks reset values and WARL/WLRL discipline, and value-dependent write traps break save/restore.** `src/ace-ISA-unpriv.adoc:748-941`, `:819`, `:865`. No ACE CSR has a defined reset value or WARL/WLRL classification. Trapping on a *value* written to a CSR is unusual for RISC-V, and here `acestart`'s legal set is dynamic, so context-restore or migration code writing back a saved `acestart` on an implementation that does not support resumption (permitted by `:2356`) traps unpredictably. Raising `ace_exc_out_of_mem` from a CSR write is unprecedented. *Assign reset values, classify the fields, and replace value-dependent traps with WARL behavior.*
 
-**M31. `aceiobuflen` is defined in bytes in one place and bits in another.** `src/ace-ISA-unpriv.adoc:764` ("length in bytes") versus `:859` ("programs the ACEIOBUF length in bits"). Implementations differ by a factor of eight, and comparisons against `acemaxiobuflen` and `aceiobuftop` (both bytes) become ill-defined. Book 2 compounds it: `ACELEN` is defined as `aceiobuftop` "in bits" at `src/ace-ISA-algorithms.adoc:199-201`. *Standardize on bytes and fix `ACELEN` to `8 * aceiobuftop`.*
-**DOUBLE CHECK?**
+**M31. `aceiobuflen` is defined in bytes in one place and bits in another.**
+**FIXED: CHANGED TO BYTES**
 
 **M32. The exception model is inconsistent about the privileged architecture and uses a nonexistent exception name.**
 Invalid instruction exception -> Illegal instruction exception **FIXED**
@@ -292,7 +293,10 @@ Invalid instruction exception -> Illegal instruction exception **FIXED**
 **Instruction and encoding details.** `ace.getst`'s expansion shifts by 20 where `_State_` is MDH[25:21],x so every example built on it extracts the wrong field (`src/ace-ISA-unpriv.adoc:2227-2229`).
 CORRECTED, also added `ace.getstx` for the State_Extension
 
-`ace.sysimport` appears in the `ace.load` encoding with a second funct3 code point but is never defined (`:1016`).  Behavior of `ace.getmdh`/`ace.getmdv` on Off or error-state registers is unspecified, as are odd or zero register numbers for every GPR-pair operand on RV32 (`:481-483`, `:1615-1631`). `ace.reset`'s scope over `acestart`, `aceiobuflen` and `acenonce0/1` is unstated, and "ACEIOBUF is enabled" is used without ever defining an enable distinct from `aceiobuflen != 0` (`:2184-2189`). The interruptibility classification omits `ace.getmd*`, `ace.mv`, `ace.derive` and `ace.exec` entirely (`:2317`). `ace.restrict` requires `_State_` = `_Initial_` (`:1704`), so an imported mid-algorithm context can never be narrowed.
+`ace.sysimport` appears in the `ace.load` encoding with a second funct3 code point but is never defined (`:1016`).  Behavior of `ace.getmdh`/`ace.getmdv` on Off or error-state registers is unspecified, as are odd or zero register numbers for every GPR-pair operand on RV32 (`:481-483`, `:1615-1631`). `ace.reset`'s scope over `acestart`, `aceiobuflen` and `acenonce0/1` is unstated, and "ACEIOBUF is enabled" is used without ever defining an enable distinct from `aceiobuflen != 0` (`:2184-2189`). The interruptibility classification omits `ace.getmd*`, `ace.mv`, `ace.derive` and `ace.exec` entirely (`:2317`).
+
+**`ace.restrict` requires `_State_` = `_Initial_` (`:1704`), so an imported (or derived!) mid-algorithm context can never be narrowed.**
+**FIXED**
 
 **Privileged details.** `misa.L` conflicts with current practice of discovering new extensions through unified discovery rather than new `misa` bits, and the effect of clearing a writable `L` is undefined (`src/ace-ISA-priv.adoc:106-107`). No reset or power-management specification exists for ACE state — reset values of ACES, `*crstatus` and the CSRs, and the security-critical question of whether registers are cleared across reset, suspend or non-retentive power states, are all absent. The consequences of the undecided `Smcsrind`/`Sscsrind` dependency are unanalyzed: all secret CSR groups are specified only as "(Indirect)" with no fallback addresses, so without it they are unaddressable and unvirtualizable (`:35`, `:88-97`). The "up to 3 direct" CSR count is wrong on RV32, where the `*crstatush` shadows are needed and appear in no table (`:80`). `scrstatus`'s existence without the S extension is asserted in a note rather than architected (`:221`). VS/VU CSR accesses are specified to raise illegal-instruction where the hypervisor extension requires virtual-instruction exceptions (`:343`, `:369`, `:382`). Debug-mode access and "Indirect" wording are inconsistent across the secret CSR groups (`:305` versus `:309`, `:330`, `:356`). The claim of "arbitrarily many levels of nested virtualization" (`src/ace-ISA-unpriv.adoc:2349`) is unsupported: there is exactly one `vscrstatus`, one `vsstatus.ACES`, one VirtBootScrt and one S/H Locality level.
 
