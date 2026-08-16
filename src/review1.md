@@ -248,7 +248,8 @@ Invalid instruction exception -> Illegal instruction exception **FIXED**
 **M39. `ace.setst` with an inadmissible immediate has no defined outcome.**
 **FIXED**
 
-**M40. `ace.clear` and `ace.setst` contradict each other on usage control.** `src/ace-ISA-unpriv.adoc:1380` ("The instruction is usage-controlled") versus `:2191` ("The instruction is not usage-controlled") — for `ace.clear`, which *is* an encoding of `ace.setst` with the `ace_state_off` immediate. The same executed instruction is both. *State that usage control applies except for the Off and error-state immediates.*
+**M40. `ace.clear` and `ace.setst` contradict each other on usage control.**
+**FIXED**
 
 **M41. Memory-model gaps beyond the acknowledged TODOs.** `src/ace-ISA-unpriv.adoc:730-746`, `:64-79`, `:2371-2381`. Three things a reviewer should require before freeze: reconciliation of the attached-unit model (operations "execute independently of the issuing hart") with same-hart program-order visibility for ordinary loads and stores to a region an asynchronous `ace.store` is still writing; a normative invariant tying `acestart` to memory visibility on interruption (all bytes below it globally performed, none at or above it performed), without which resumption after migration can skip or double-write; and a forward-progress guarantee for resumable instructions under frequent interrupts.
 
