@@ -1015,11 +1015,14 @@ after which the ACE unit stays unavailable until a CSK is set again.
 In all four models, CSK values shall _never_ be readable by software in clear, except for M-mode in the first model.
 The `macecsk` CSRs of <<ACE-CSR-macecsk>> are write-only and read as zero.
 
+[IMPORTANT]
+====
 When a process is migrated from one hart to another, its SCCs shall remain importable,
 which requires the destination hart to hold the same CSK. It is the responsibility of the
 OS and hypervisor stacks to ensure this by instructing M-mode to establish that CSK on the
 destination hart. How they do so is outside the scope of this specification: the API
 through which supervisor software requests it is platform-dependent.
+====
 
 An implementation that reprograms a CSK shall follow the activation rules in
 <<ACE-CSR-macecsk>>: the ACE unit is unavailable while the `macecsk` group is partially
@@ -1843,13 +1846,6 @@ _Encoding_::
 `ace.restrict` is an R-type instruction.
 The encoding shares opcode and `func3` with `ace.exec`, but `func2` (i.e., the two msbs of `func7`) is `0b01`.
 
-If bit `h` (bit 28) is 0, the instruction is `ace.restrictl`; if `h` is 1, it is `ace.restricth`.
-
-If bit `v` (bit 29) is 0, the input is taken from a GPR (GPR pair for RV32), and the instruction is `ace.restrictl` or `ace.restricth` according to bit `h`.
-
-If bit `v` is 1, the input is taken from the least significant 128 bits of a vector register (group).
-In this case, bit `h` shall be 0.
-
 [wavedrom, , svg]
 ....
 {reg:[
@@ -1866,6 +1862,14 @@ In this case, bit `h` shall be 0.
     { bits:  2, name: 0x1, attr: ['func2'] },
 ]}
 ....
+
+If bit `h` (bit 28) is 0, the instruction is `ace.restrictl`; if `h` is 1, it is `ace.restricth`.
+
+If bit `v` (bit 29) is 0, the input is taken from a GPR (GPR pair for RV32), and the instruction is `ace.restrictl` or `ace.restricth` depending on `h`.
+
+If bit `v` is 1, bit `h` shall be 0, and the input is taken from the least significant 128 bits of a vector register (group).
+
+The combination `v` = `h` = 1 is an illegal instruction.
 
 Bit `r` (i.e., bit 26) takes the value 0 if the context is encoded as an immediate in Bits [11:7], and it takes the value 1 if a GPR (also encoded in [11:7]) is used to reference it.
 --
@@ -2268,24 +2272,13 @@ _Mnemonic_::
 (((ACE, instruction, ace.input)))
 
 _Encoding_::
++
+--
 `ace.input` is an S-type instruction. The base address `Xs` occupies the `rs1` field and the
 length `Xl` the `rs2` field, as in `ace.store` (<<ACE-instruction-store>>) and in every
 RISC-V load and store, so that address generation can take the base from `rs1` without
 special-casing this opcode.
-+
-// --
-// S-type is the right format even though `ace.input` reads memory. The format follows the
-// *register* operands, not the direction of the memory access: an I-type instruction has one
-// source register and one *destination* register, whereas an S-type instruction has two source
-// registers and no destination register. `ace.input` needs two source registers — the base
-// address and the length — and writes no general-purpose register at all, its destination being
-// the ACEIOBUF, which is addressed implicitly. Encoding it as an I-type would leave only `rd`
-// for the length, that is a source operand in the field an I-type instruction writes.
-//
-// By contrast `ace.load` (<<ACE-instruction-load>>) is an I-type instruction, because its
-// destination is a CR, which occupies the `rd` field, and its length comes from the MDH rather
-// than from a register: one source, one destination.
-//
+
 // [IMPORTANT]
 // ====
 // Under opcode `custom-1` the direction of the memory access is given by `funct3`, not by the
@@ -2294,8 +2287,7 @@ special-casing this opcode.
 // `STORE` have distinct opcodes. An implementation that derives the direction of a transfer
 // from the opcode alone will mis-handle these three instructions.
 // ====
-// --
-// +
+
 [wavedrom, , svg]
 ....
 {reg:[
@@ -2307,6 +2299,7 @@ special-casing this opcode.
     { bits:  7, name: 'immed[11:5]' },
 ]}
 ....
+--
 
 _Description_::
 +
