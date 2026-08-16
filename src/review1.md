@@ -277,7 +277,9 @@ Invalid instruction exception -> Illegal instruction exception **FIXED**
 **M50. EdDSA is mis-cited and unimplementable as parameterized.**
 **FIXED**
 
-**M51. ECC signature operations are underspecified.** `src/ace-ISA-algorithms.adoc:2472`, `:2352`, `:2503-2554`. `_Gen_Rnd_Scalar_` is listed but never described; how `RndNum` is generated (RBG strength, hedged versus deterministic, whether user-supplied) is unstated; which signature equation each family uses is unstated, although ECDSA and SM2 differ; and point encoding is left optional ("non-compressed or compressed points may be used"). Two implementations cannot interoperate. *Specify per-family procedures by reference, mandate encodings, and define the RBG requirements.*
+**M51. ECC signature operations are underspecified.**
+**FIXED**
+
 
 **M52. The ML-DSA section is written in ML-KEM's vocabulary.**
 **FIXED**
