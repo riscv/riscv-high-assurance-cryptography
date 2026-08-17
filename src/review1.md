@@ -263,7 +263,8 @@ Invalid instruction exception -> Illegal instruction exception **FIXED**
 
 **M44. `Zlkn` depends on three extensions that do not exist.** `src/ace-ISA-unpriv.adoc:128` names `Zlaes128`, `Zlaes256` and `Zlesha2`; the defined names are `Zlaes128p`, `Zlaes256p` and `Zlesha2h` (`:94`, `:96`, `:105`). The malformed table row also leaves `Zlkn` with no "Defined in" target, and it appears nowhere in Books 2–4 despite being mandated by the `Zlv`/`Zlio` footnotes. *Correct the names and the row.*
 
-**M45. The relationship between `acenonce0/1` and Locality #11 is never stated.** `src/ace-ISA-unpriv.adoc:921-928` says the CSRs "define the nonce to be used in `ace.import` and `ace.export`", while the algorithms take the nonce from `LST[11]` (`:673`, `:2881`, `:2911`). Nothing says the CSRs *are* that entry, and nothing states explicitly that a cleared Nonce Locality bit forces `N` to zero even when the CSRs are programmed. *State the binding and the reset value.*
+**M45. The relationship between `acenonce0/1` and Locality #11 is never stated.**
+**FIXED** by removing the nonce.
 
 ### Book 2 versus the standards
 
@@ -301,7 +302,7 @@ Invalid instruction exception -> Illegal instruction exception **FIXED**
 **Instruction and encoding details.** `ace.getst`'s expansion shifts by 20 where `_State_` is MDH[25:21],x so every example built on it extracts the wrong field (`src/ace-ISA-unpriv.adoc:2227-2229`).
 CORRECTED, also added `ace.getstx` for the State_Extension
 
-`ace.sysimport` appears in the `ace.load` encoding with a second funct3 code point but is never defined (`:1016`).  Behavior of `ace.getmdh`/`ace.getmdv` on Off or error-state registers is unspecified, as are odd or zero register numbers for every GPR-pair operand on RV32 (`:481-483`, `:1615-1631`). `ace.reset`'s scope over `acestart`, `aceiobuflen` and `acenonce0/1` is unstated, and "ACEIOBUF is enabled" is used without ever defining an enable distinct from `aceiobuflen != 0` (`:2184-2189`). The interruptibility classification omits `ace.getmd*`, `ace.mv`, `ace.derive` and `ace.exec` entirely (`:2317`).
+`ace.sysimport` appears in the `ace.load` encoding with a second funct3 code point but is never defined (`:1016`).  Behavior of `ace.getmdh`/`ace.getmdv` on Off or error-state registers is unspecified, as are odd or zero register numbers for every GPR-pair operand on RV32 (`:481-483`, `:1615-1631`). `ace.reset`'s scope over `acestart`, and `aceiobuflen`, and "ACEIOBUF is enabled" is used without ever defining an enable distinct from `aceiobuflen != 0` (`:2184-2189`). The interruptibility classification omits `ace.getmd*`, `ace.mv`, `ace.derive` and `ace.exec` entirely (`:2317`).
 
 **`ace.restrict` requires `_State_` = `_Initial_` (`:1704`), so an imported (or derived!) mid-algorithm context can never be narrowed.**
 **FIXED**
