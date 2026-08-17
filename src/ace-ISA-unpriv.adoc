@@ -426,7 +426,7 @@ The architected values of _State_ common to all algorithms are defined in the fo
 |  24    | `ace_state_not_impl`        | _Not_Impl_        | Not implemented algorithm. It is set by the hardware upon an attempt to provision or import a CR that is not supported by the implementation.
 |  25    | `ace_state_invalid`         | _Invalid_         | Invalid/invalidated state, for instance because of the use of an invalid value (argument, state, or metadata).
 |  26    | `ace_state_out_of_mem`      | _Out_of_Memory_   | Insufficient CRF memory for configuration instruction. This may be set by privileged code in case they do not handle the CR allocation or fail to do so, and instead choose to return an error.
-|  27    | `ace_state_cr_import_auth`  | _Auth_Failed_     | Authentication failure when terminating an SCC import.
+|  27    | `ace_state_cr_import_auth`  | _Auth_Failed_     | Authentication failure when completing an SCC import.
 |  28    | `ace_state_priv_viol`       | _Priv_Viol_       | Violation of Usage Control policies.
 |  29    | `ace_state_expired`         | _Expired_         | The CR has expired.  This is set by the hardware even if the condition also raises an exception.
 | 30, 31 | (Reserved)                  |                   | Reserved for future use.
@@ -435,7 +435,7 @@ The architected values of _State_ common to all algorithms are defined in the fo
 State 0 is the _Off_ state.  It denotes that the CR is unconfigured.
 
 All states in the range 1-23 are termed _valid_. This includes both _Success_ and _Failure_ states, which shall be used for
-normal termination of an algorithm in the cases of its successful completion or failure.
+normal completion of an algorithm in the cases of its successful completion or failure.
 
 The immediate in the `ace.setst` instruction (<<ACE-instruction-setst>>) is a 7-bit value, whereas the _State_ field is only 5 bits long.
 This allows to encode additional operations related to state changes (such as stages of import, export, or provisioning code) as `ace.setst` with the two high bits of the immediate taking non-zero values.
@@ -1638,11 +1638,7 @@ The special values of `#immed7` to initiate a provisioning, importing, and expor
 |  0   | `ace_CR_provision_start`  |  Prepare a CR for provisioning keys and metadata into it.
 |  1   | `ace_CR_import_start`     |  Prepare a CR for importing a SCC into it.
 |  2   | `ace_CR_export_start`     |  Prepare a CR for exporting it as a SCC (if not yet in the correct format).
-|  3   | `ace_CR_management_end`   |  Conclude the current management operation. The semantics depend on _ConfigStatus_.
-// // Make the provisioned CR available to software  (“sealing”), set _ConfigStatus_ to _ace_cfgst_Complete_. Requires no auxiliary input.
-// // |  3   | `ace_CR_import_end`       |  Decrypt and authenticate the imported SCC, make the CR available to software, set _ConfigStatus_ to a provided value.
-// // |  5   | `ace_CR_export_end`       |  Restore the exported CR in the internal clear format (only if already complete) and make it available to software, set _ConfigStatus_ to a provided value. Uses an auxiliary input in a GPR (or a GPR pair) with bits [63:0] of MDH to restore _ConfigStatus_ saved by software.
-// // If the restored value of _ConfigStatus_ is not _ace_cfgst_Complete_, the CR is made available to software.
+|  3   | `ace_CR_management_end`   |  Complete the current management operation. The semantics depend on _ConfigStatus_.
 |===
 --
 +
@@ -1652,7 +1648,7 @@ The semantics of `ace.mgmt` are as follows:
 +
 --
 Before issuing `ace.mgmt`, software shall obtain Bits [63:0] of the MDH if the GPR variant is used, or [127:0] of the MDH if the vector variant is used. Let `ml` be this value.
-Software then passes `ml` as the auxiliary input to `ace.mgmt` in a GPR (or a GPR pair), or a vector register, and keeps it in local state for the termination of the import process.
+Software then passes `ml` as the auxiliary input to `ace.mgmt` in a GPR (or a GPR pair), or a vector register, and keeps it in local state for the completion of the import process.
 
 `ace.mgmt` then performs following operations:
 
@@ -1699,7 +1695,7 @@ _ConfigStatus_ is set to `ml`._ConfigStatus_.
 +
 --
 Let `ml` <- Bits [63:0] of the MDH of the CR.
-Software shall save this value in its state to use it when terminating the export process.
+Software shall save this value in its state to use it when completing the export process.
 Then:
 
 .. If `ml`._ConfigStatus_ = _ace_cfgst_Complete_:
@@ -1720,7 +1716,7 @@ Uses an auxiliary input in a GPR (or a GPR pair) with bits [63:0] of MDH to rest
 If the passed _ConfigStatus_ is _ace_cfgst_Complete_, make the exported CR available to the ACE unit again in the clear format, and allow software to access it.
 
 Let `ml` be the value of MDH[63:0] saved by the software upon initiation of the export process.
-Software passes `ml` as the auxiliary parameter to `ace.mgmt` for export termination.
+Software passes `ml` as the auxiliary parameter to `ace.mgmt` for export completion.
 Then:
 
 .. If `ml`._ConfigStatus_ = _ace_cfgst_Complete_:
