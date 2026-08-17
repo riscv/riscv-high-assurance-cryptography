@@ -173,9 +173,7 @@ REVIEWER ERROR
 
 **M13. Random key generation has no entropy-source requirement.** `src/ace-ISA-unpriv.adoc:383-384`.
 **FIXED**
-16.  For an architecture whose purpose is key confidentiality, the on-chip generator is specified in one sentence: no approved entropy source or DRBG, no health tests, no failure behavior, no statement that it is unobservable by untrusted contexts, no relation to `Zkr`. *Require a `Zkr`-conformant source or certified DRBG with defined fail-closed behavior.*
 
-Need to discuss this.
 
 **M14. The `_SystemFormat_` escape hatch is unbounded and ungated.** `src/ace-ISA-unpriv.adoc:320-324`, `:1045-1047`.
 18.  Setting one MDH bit makes the remaining format "entirely system specific" and the semantics of `ace.load` "entirely implementation dependent", voiding metadata validation, sealing, Localities and usage control — with no requirement that a system-defined format preserve confidentiality or integrity, and no privilege gate on setting the bit. A conforming implementation could define a system format whose load/store path moves plaintext keys. *Require system formats to preserve the Content confidentiality/integrity invariant and restrict the bit to a platform-authorized context.*
