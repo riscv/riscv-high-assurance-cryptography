@@ -1116,7 +1116,7 @@ Pinned to the initial image, per the author: the MDH as it stood when the operat
 For an export that is the `_ace_cfgst_Complete_` image software reads with `ace.getmdl` and
 saves before `#ace_CR_export_start`; for an import it is the image carried in the SCC and
 passed to `#ace_CR_import_start`. Both assignment sites now say so, and the rule records
-why it is forced rather than chosen: a CR is in `_ace_cfgst_Exporting_` when its `SIV` is
+why it is forced rather than chosen: a CR is in ``ace_cfgst_exporting`` when its `SIV` is
 computed and in `_ace_cfgst_Importing_` when that `SIV` is checked, so authenticating the
 in-flight image would make every SCC fail to import.
 `ace-ISA-unpriv.adoc:2950`, `1581-1587`, `1596-1604`.
@@ -1172,7 +1172,7 @@ CMAC cannot detect a partial pending block at all.
 * **m4** — **FIXED.** "if set to" -> "is set to"; `_ace_cfgst_ace_CR_import_` -> `_ace_cfgst_Importing_`; and the case-mangled `_ace_cfgst_importing_`, `_CfgExporting_` and `_ace_cfgst_complete_` normalised throughout, including in the code comments.
   _Original finding:_ `ace-ISA-unpriv.adoc:1547` — "_ConfigStatus_ **if** set to _ace_cfgst_Provisioning_,
   resp., _ace_cfgst_**ace_CR_import**_"; also `_ace_cfgst_importing_` (1522) and `_CfgExporting_`
-  (1524) for `_ace_cfgst_Importing_` / `_ace_cfgst_Exporting_`; `_ace_cfgst_complete_` in the code
+  (1524) for `_ace_cfgst_Importing_` / ``ace_cfgst_exporting``; `_ace_cfgst_complete_` in the code
   comments (2588, 2618, 2632, 2664).
 * **m5** — **FIXED.** The note about random material being generated only at the final
   step said "(i.e., when `ace.mgmt` is used to terminate an **import** process)" inside a

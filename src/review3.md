@@ -372,7 +372,7 @@ export, `ace.load`, `ace.store` and `ace.mv`. A note after the table records *wh
 exemption is necessary — `ace.load`/`ace.mv` write a CR precisely while its _ConfigStatus_
 is _ace_cfgst_Provisioning_ or _ace_cfgst_Importing_ and are illegal when it is _ace_cfgst_Complete_;
 `ace.store` and the CR-reading forms of `ace.mv` read a CR whose _ConfigStatus_ is
-_ace_cfgst_Exporting_ — so the list is not narrowed again by a later editor. The note also
+`ace_cfgst_exporting` — so the list is not narrowed again by a later editor. The note also
 states that instructions which merely *target* a CR as the destination of a configuration
 operation, `ace.mgmt` above all, never raise this exception.
 
