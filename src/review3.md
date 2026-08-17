@@ -1220,7 +1220,7 @@ where the real cause is a platform that lacks the secret.
 
 "(V)S-mode" {rightarrow} "VS-mode" in the _UsagePolicy_ row, so bits 0–3 are an unambiguous
 partition: U, VS, HS, M. Scoped to that row only — the three other uses of "(V)S" in the
-document (the `saceLocality` CSR group and _SLocality_) genuinely mean "S-mode or VS-mode" and
+document (the `sacelocality` CSR group and _SLocality_) genuinely mean "S-mode or VS-mode" and
 are correct as they stand.
 
 ### m13 — [FIXED] `acestart` write-time validity check not implementable
