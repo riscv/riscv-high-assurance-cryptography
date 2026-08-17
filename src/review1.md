@@ -232,9 +232,11 @@ Invalid instruction exception -> Illegal instruction exception **FIXED**
 **M34. Instructions `ace.prov`, `ace.export` and `ace.export` are mandated and referenced across all three books but defined nowhere.**
 **FIXED**
 
-**M35. `ace.mgmt export_start` takes "no auxiliary input" yet its semantics depend on a scalar/vector variant.** `src/ace-ISA-unpriv.adoc:1462` versus `:1521`, where `acestart` "is set to 8 if the scalar variant was used, and 16 if the vector variant was used" — a distinction hardware cannot make with no auxiliary operand, since it cannot know whether software read the MDH with `ace.getmdl` or `ace.getmdv`. *Encode the start offset explicitly or fix it at one value.*
+**M35. `ace.mgmt export_start` takes "no auxiliary input" yet its semantics depend on a scalar/vector variant.**
+**FIXED**
 
-**M36. `ace.size` semantics during provisioning and import are undefined although the canonical code depends on them.** `src/ace-ISA-unpriv.adoc:2004-2013` defines Form A as the exported-SCC size, but the provisioning fragments at `:2407-2408` and `:2458-2459` run `ace.size` on a register in `_CfgStProvisioning_` and use the result as the PI length — and PI and SCC lengths differ (the SCC adds SIV, IMPQUAL, SIV2). *Specify the result per `_ConfigStatus_` value.*
+**M36. `ace.size` semantics during provisioning and import are undefined although the canonical code depends on them.** `src/ace-ISA-unpriv.adoc:2004-2013` defines Form A as the exported-SCC size, but the provisioning fragments at `:2407-2408` and `:2458-2459` run `ace.size` on a register in `_CfgStProvisioning_` and use the result as the PI length — and PI and SCC lengths differ (the SCC adds SIV, IMPQUAL, SIV2). *Specify the result per `_ConfigStatus_` value.
+**NEED TO DOUBLE-CHECK**
 
 **M37. `ace.clone` corner cases are unspecified.** `src/ace-ISA-unpriv.adoc:1853-1860`. "A CR whose `_ConfigStatus_` is not `_CfgStComplete_` cannot be cloned" does not say what the attempt does. Cloning onto an occupied destination, `Kd == Ks`, CRF exhaustion, cloning an error-state register (permitted by `:479`), and an `_Off_` source are all undefined. *Enumerate them with defined outcomes.*
 
