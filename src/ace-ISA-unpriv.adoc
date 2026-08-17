@@ -173,7 +173,7 @@ We list the most important operations on CRs below, to refer to them before they
 
 * Provisioning (<<ACE-management-operations>>) loads metadata and plaintext Content into a CR, binding them together.
 * Exporting (<<ACE-management-operations>>) exports a CR to memory as an SCC.
-* Importing (<<ACE-management-operations>>) imports a SCC into a CR.
+* Importing (<<ACE-management-operations>>) imports an SCC into a CR.
 * `ace.clear` (<<ACE-instruction-clear>>) unconfigures and clears a CR.
 * `ace.exec` (<<ACE-instruction-exec>>) performs cryptographic operations as specified by the algorithm configured in a CR and according to the state of the CR.
 * `ace.setst` (<<ACE-instruction-setst>>) transitions a CC inside a CR between states of a cryptographic algorithm.
@@ -188,7 +188,7 @@ ACE provides a way to access a CR as if it were a register into which a Provisio
 To this purpose, ACE defines:
 
 * Instructions `ace.load`, to load serialized data into CRs from memory (see <<ACE-instruction-load>>), and `ace.store` (see <<ACE-instruction-store>>) to export a CR's serialized content back to memory; and
-* Instructions to make this information available to the ACE unit and to convert the internal representation of CRs to a SCC (by using `ace.setst`, see <<ACE-instruction-setst>>).
+* Instructions to make this information available to the ACE unit and to convert the internal representation of CRs to an SCC (by using `ace.setst`, see <<ACE-instruction-setst>>).
 
 ===== The Context Register File
 
@@ -658,7 +658,7 @@ These are shared across all ACE units within the same SoC.
 Finally, some entries are SW-programmable per-hart architectural state.
 
 The Localities are used in the SCC export and import to bind SCCs to the current environment cryptographically.
-Once a SCC has been imported into a CR, the cryptographic bound is no longer in effect, and if the value of any Locality Secret changes, the exported SCC will be different and bound to the new value. Therefore, it is the responsibility of the software stacks, in particular of context switching handlers, to not directly leak CRs to unauthorized parties.
+Once an SCC has been imported into a CR, the cryptographic bound is no longer in effect, and if the value of any Locality Secret changes, the exported SCC will be different and bound to the new value. Therefore, it is the responsibility of the software stacks, in particular of context switching handlers, to not directly leak CRs to unauthorized parties.
 
 <<ACE-locality-indexes>> lists the architected Localities.
 Twelve LST entries are defined: the first six form the _HW Binding Group_, which binds SCCs to the hardware;
@@ -880,6 +880,9 @@ names, which a write to a CSR cannot see. Software must therefore rely neither o
 faulting nor on its succeeding, and must be prepared for the exception to surface at either
 point.
 
+The constraint `acestart` {le} `aceiobuftop` must hold.
+Violating it by writing a value larger than `aceiobuftop` to `acestart` raises an illegal instruction exception.
+
 _Included in_::
 +
 --
@@ -957,7 +960,7 @@ _Included in_::
 Together with `acestart`, it defines the active transfer window.
 
 The constraints `acestart` {le} `aceiobuftop` {le} `aceiobuflen` must hold.
-Violating either bound raises an illegal instruction exception.
+Violating either bound by writing to `aceiobuftop` raises an illegal instruction exception.
 Modifying `aceiobuftop` does not modify buffer contents.
 
 NOTE: `aceiobuftop` enables per-operation length adjustments without the need to reconfigure the ACEIOBUF using `aceiobuflen`, which can be expensive due to the fact that it clears the buffer and may lead to internal garbage collection.
@@ -1127,9 +1130,9 @@ Broadly speaking, and removing error handling, *Provisioning* is performed by th
 . Use `ace.load` (<<ACE-instruction-load>>) to load the rest of the provisioning information into the CR.
 . Use `ace.mgmt` to complete the provisioning process and make the CR available to software.
 
-*Importing* a SCC into a CR is similar:
+*Importing* an SCC into a CR is similar:
 
-. Use `ace.mgmt` to prepare a CR to accept a SCC, store MDH[63:0] in it, check its validity.
+. Use `ace.mgmt` to prepare a CR to accept an SCC, store MDH[63:0] in it, check its validity.
 . Use `ace.load` to load the rest of the SCC information into the CR.
 . Use `ace.mgmt` to complete the import process by authenticating and decrypting the SCC, and make the CR available to software.
 
@@ -1137,7 +1140,7 @@ Broadly speaking, and removing error handling, *Provisioning* is performed by th
 
 . Use `ace.getmdl` (<<ACE-instruction-getmd>>) to get MDH[63:0] of the CR to be exported to be able to determine its size and allocate resources.
 . Store MDH[63:0] into memory.
-. Use `ace.mgmt` to prepare a CR to produce a SCC. This includes encrypting its contents and computing the authentication tag(s).
+. Use `ace.mgmt` to prepare a CR to produce an SCC. This includes encrypting its contents and computing the authentication tag(s).
 . Use `ace.store` (<<ACE-instruction-store>>) to store MDH[127:64] and the rest of the SCC to memory.
 . Use `ace.mgmt` to complete the export process by restoring the CR in a form available to software.
 
@@ -1176,7 +1179,7 @@ _Mnemonics_::
 _Description_::
 +
 --
-`ace.load` imports a PI or a SCC into the CR `Kd` or `K{Xd}`, starting with the 8th byte of the MDH.
+`ace.load` imports a PI or an SCC into the CR `Kd` or `K{Xd}`, starting with the 8th byte of the MDH.
 The memory address of the latter is given in `%offset(Xs1)`.
 
 This instruction requires that the CR is ready to import information and that the first 8, resp., 16 bytes of the MDH have already been loaded by passing them as a parameter in a GPR (pair for RV32), resp., vector register, to the `ace.mgmt` instruction used to open the CR for provisioning or import.
@@ -1258,7 +1261,7 @@ If the _ConfigStatus_ field is equal to `ace_cfgst_complete`, then an illegal in
 
 If the _ConfigStatus_ field is not equal to `ace_cfgst_complete`
 the implementation first determines the size of the output to be generated from first 8 bytes of the MDH.
-The type of the output, i.e. whether it is a PI or a SCC, is determined by the _ConfigStatus_ field, and
+The type of the output, i.e. whether it is a PI or an SCC, is determined by the _ConfigStatus_ field, and
 its length by the fields listed in <<ACE-length-rule>>.
 Then, `ace.store` stores the CR to memory, beginning with the byte at offset `acestart` in the serialized representations of the CR,
 in XLEN-bit sized stores, in the memory region starting at address `%offset(Xs1)`.
@@ -1633,9 +1636,9 @@ The special values of `#immed7` to initiate a provisioning, importing, and expor
 |===
 | Value | Mnemonic                 |  Description
 |  0   | `ace_CR_provision_start`  |  Prepare a CR for provisioning keys and metadata into it.
-|  1   | `ace_CR_import_start`     |  Prepare a CR for importing a SCC into it.
-|  2   | `ace_CR_export_start`     |  Prepare a CR for exporting it as a SCC (if not yet in the correct format).
-|  3   | `ace_CR_management_end`   |  Complete the current management operation. The semantics depend on _ConfigStatus_.
+|  1   | `ace_CR_import_start`     |  Prepare a CR for importing an SCC into it.
+|  2   | `ace_CR_export_start`     |  Prepare a CR for exporting it as an SCC (if not yet in the correct format).
+|  3   | `ace_CR_management_end`   |  Complete current management operation. Semantics depend on _ConfigStatus_.
 |===
 --
 +
@@ -1699,7 +1702,7 @@ Then:
 
 .. If `ml`._ConfigStatus_ = `ace_cfgst_complete`:
 +
-Prepare a CR to produce a SCC. This includes encrypting its contents and computing the authentication tag(s).
+Prepare a CR to produce an SCC. This includes encrypting its contents and computing the authentication tag(s).
 
 .. If `ml`._ConfigStatus_ {ne} `ace_cfgst_complete` (we are exporting a not fully configured CR or we are initiating a nested CR export):
 +
@@ -2084,7 +2087,7 @@ Clones source CR `Ks` (or the CR indexed by `Xs`) into destination CR `Kd` (or t
 
 The destination CR becomes a perfect copy of the source CR: all internal data, including MDH and internal state, are copied verbatim.
 
-The instruction achieves the same result as exporting the source CR to a SCC and importing the SCC into the destination CR, except that it is not allowed if the source CR's _ConfigStatus_ is not `ace_cfgst_complete`.
+The instruction achieves the same result as exporting the source CR to an SCC and importing the SCC into the destination CR, except that it is not allowed if the source CR's _ConfigStatus_ is not `ace_cfgst_complete`.
 
 The instruction may possibly modify state.
 

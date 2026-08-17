@@ -141,9 +141,8 @@ BROUGHT back to the main doc (introduction)  but it is not clear what else we ca
 **M3. The VM-migration claim requires exporting the CSK — escrow of every sealed context — through an unspecified mechanism.**
 **FIXED** It is an IMPLEMENTATION DEFINED.
 
-**M4. Localities do not isolate resident contexts, and their stated domains contradict their per-hart storage.** `src/ace-ISA-unpriv.adoc:55`, `:637-646`,
-**DONE:** *Say explicitly that Localities are a sealing-time control, and add multi-hart consistency and save/restore rules.*
-WHILE SOME CARE IS NEEDED AND I ADDED COMMENTS TO THAT EXTENT (ace-unpriv lines 652-653), WE CANNOT ENFORCE CRYPTOGRAPHIC BINDING AT EACH STEP. ULTIMATELY, SW HIERARCHY IS RESPONSIBLE NOT TO LEAK THEIR OWN CRS. I do not see why we should add rules to manage the Locality Secret registers. These are going to be annoying, but not more annoying than many other state values that must be set already.
+**M4. Localities do not isolate resident contexts, and their stated domains contradict their per-hart storage.**
+**DONE:**
 
 **M5. Zeroization is never actually guaranteed.**  *Define "zeroize" once and require it at each of these points.*
 **DONE**
@@ -190,11 +189,14 @@ REVIEWER ERROR
 **M17. `mstatus.TSR` and `hstatus.VTSR` are overloaded to trap ACE memory instructions.**
 **FIXED**
 
-**M18. No `Smstateen`/`Ssstateen` integration for the new less-privileged state.** `src/ace-ISA-priv.adoc:78-97`, `src/ace-ISA-unpriv.adoc:754-768`. ACE adds unprivileged CSRs (`acestart`, `aceiobuflen`, `aceiobuftop`, `acenonce*`, the ID registers) and supervisor CSRs with no stateen bits, contrary to the privileged architecture's policy that new state accessible to less-privileged modes must be gateable by an unaware M-mode or hypervisor. *Define stateen bits gating all ACE CSRs and instructions.*
+**M18. No `Smstateen`/`Ssstateen` integration for the new less-privileged state.**
+**FIXED** we do not need these mechanisms, since we have the Off ACES.
 
-**M19. ACES Initial/Clean semantics are underspecified and contradict the FS/VS/XS rules they incorporate.** `src/ace-ISA-priv.adoc:128-135`. "Initial" is defined only as "ACE enabled", but the FS restore protocol requires a defined initial state (all registers unconfigured? CSRs zero?) that is never given. "Clean" requires "At least one CR or ACEIOBUF is configured", making it unreachable for a context restored with none configured. And `:132` (unconfiguring a previously configured register makes ACES Dirty) contradicts `:135`, since the FS/VS/XS rules map unconfiguring to Initial. The same tension recurs at `:283` versus `:196`/`:205`/`:219`, where unconfiguring must produce Dirty although Dirty is defined as "configured" and Off as the unconfigured encoding. *Define the initial state explicitly and replace the blanket FS/VS/XS reference with an ACE-specific transition table.*
+**M19. ACES Initial/Clean semantics are underspecified and contradict the FS/VS/XS rules they incorporate.** `
+**OVERZEALOUS REVIEWER**
 
-**M20. Behavior of ACE CSR accesses when ACES=Off is unspecified.** `src/ace-ISA-priv.adoc:128` says only that "The ACE state is inaccessible" and that ACE *instructions* trap. For FS=Off the privileged specification explicitly makes floating-point CSR accesses trap; ACE says nothing, so implementations will diverge and context-switch ordering is undefined. *Mirror the FS wording.*
+**M20. Behavior of ACE CSR accesses when ACES=Off is unspecified.**
+**FIXED**
 
 **M21. `scrstatus` write semantics are unspecified and its invariants are software-violable.** `src/ace-ISA-priv.adoc:187-219`. The register is SRW, but nothing says what happens when software writes values inconsistent with actual register state (Off or Clean for a configured register, Clean for an unconfigured one) — whether writes are WARL-adjusted, ignored, or take effect and break the invariants that the exception semantics depend on. *Specify per-field WARL legalization.*
 
@@ -244,7 +246,8 @@ Invalid instruction exception -> Illegal instruction exception **FIXED**
 
 **M37. `ace.clone` corner cases are unspecified.** `src/ace-ISA-unpriv.adoc:1853-1860`. "A CR whose `_ConfigStatus_` is not `_ace_cfgst_Complete_` cannot be cloned" does not say what the attempt does. Cloning onto an occupied destination, `Kd == Ks`, CRF exhaustion, cloning an error-state register (permitted by `:479`), and an `_Off_` source are all undefined. *Enumerate them with defined outcomes.*
 
-**M38. When the `acestart ≤ aceiobuftop ≤ aceiobuflen` constraint is checked is ambiguous.** `src/ace-ISA-unpriv.adoc:895-896`. It is unspecified whether the illegal-instruction exception comes from the CSR write that creates the violation (and which of the three) or from the next instruction that uses the window. Since legitimate reprogramming sequences transiently violate it, implementations diverge and software has no defined safe write order. *Specify check-at-use with WARL clamping, or mandate a write order.*
+**M38. When the `acestart ≤ aceiobuftop ≤ aceiobuflen` constraint is checked is ambiguous.**
+**DONE:**
 
 **M39. `ace.setst` with an inadmissible immediate has no defined outcome.**
 **FIXED**
@@ -270,7 +273,7 @@ Invalid instruction exception -> Illegal instruction exception **FIXED**
 **M47. Core field-arithmetic functions are named but never defined.**
 **FIXED**
 
-**M48. GCM/CTR mode parameters are never instantiated, GCM is silently limited to one IV length, and the exhaustion check is ill-typed.** 
+**M48. GCM/CTR mode parameters are never instantiated, GCM is silently limited to one IV length, and the exhaustion check is ill-typed.**
 **FIXED**
 
 **M49. XCTR starts its counter at 0 where XCTR starts at 1.**
@@ -334,7 +337,7 @@ must -> must
 
 Typos that garble normative text: "must be _Off_ or _Other_" (`src/ace-ISA-priv.adoc:197`, in a `must` sentence); "The CR is may be configured" (`:199`); `ace.mgmtt` in the uninterruptible-instruction list (`src/ace-ISA-unpriv.adoc:2317`); "a CR can be _unconfigured_meaning" (`:155`); "can only be used permitted to transition" (`:458`); `ace.start` used for the CSR `acestart` throughout `:1486-1538`; `ace..restrictv` (`:1770`);  `RFC8452_RFC8452_KeyDeriv` (`:1010`, `:1124`); an unfinished sentence "and `block` is clearly also" (`:1636-1637`); "The principal procedures offered by the ML-KEM" heading the ML-DSA section (`:2729`); and a literal author note "**Anything else?**" left in the ML-DSA behavior list (`:2880`). "Risc-V" appears in the document's own disclaimer (`src/ace.adoc:87`, `src/ace-introduction.adoc:64`).
 
-Naming and terminology drift: the readme expands CR as "Cryptographic Register" while the acronym table and body use "Context Register", and a Book 1 heading uses the former (`src/ace-ISA-unpriv.adoc:183`); the whitepaper expands ACE as "Atomic Cryptographic Extension" against the title's "Atomic Cryptography Extension"; the title claims "ZL" (capital) while all sub-extensions use `Zl` and "Z" names take lowercase; Book 2 requires `Zlcmac` where Book 1 defines `Zlcmacm` (`src/ace-ISA-algorithms.adoc:40`); ; Book 4 calls the same in-memory object a "CC" in half its examples and an "SCC" in the other half; and "a SCC" appears ten times against twenty-two of "an SCC".
+Naming and terminology drift: the readme expands CR as "Cryptographic Register" while the acronym table and body use "Context Register", and a Book 1 heading uses the former (`src/ace-ISA-unpriv.adoc:183`); the whitepaper expands ACE as "Atomic Cryptographic Extension" against the title's "Atomic Cryptography Extension"; the title claims "ZL" (capital) while all sub-extensions use `Zl` and "Z" names take lowercase; Book 2 requires `Zlcmac` where Book 1 defines `Zlcmacm` (`src/ace-ISA-algorithms.adoc:40`); ; Book 4 calls the same in-memory object a "CC" in half its examples and an "SCC" in the other half; and "an SCC" appears ten times against twenty-two of "an SCC".
 
 ---
 
