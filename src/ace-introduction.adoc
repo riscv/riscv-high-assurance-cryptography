@@ -52,13 +52,13 @@ ACE intentionally excludes the following:
 
 * **Debugging support:** The internal representation of a CR remains concealed even during debug.
 * **Variable-length complete ciphertext and plaintext inputs:** Plaintext and ciphertexts, as well as messages of which digests are computed, are processed in fixed-size blocks.
-* **Complete key management:** ACE provides only architectural building blocks that can be used for key management, where the key management logic resides in trusted software (e.g., TEE applets). ACE does not support external schemes for directly provisioning keys into a key store. Instead, a local trusted SW or HW component manages the external schemes and uses the resulting keys and policies to configure CCs for the ACE unit.
+* **Full key management:** ACE provides only architectural building blocks that can be used for key management, whose logic resides in trusted software (e.g., TEE applets). ACE does not support external schemes for directly provisioning keys into a key store. Instead, a local trusted SW or HW component manages the external schemes and uses the resulting keys and policies to configure CCs for the ACE unit.
 
 * **Key revocation:**
 This specification does not define a key revocation mechanism. The rationale is:
 
 . A revocation mechanism would add a significant implementation burden and adversely affect performance, conflicting with ACE's emphasis on simplicity and speed.
-. A universal revocation mechanism is impractical: key providers use diverse protocols, and revocation data may grow without bound. Managing revocation within the ACE unit would require dynamic access to secure memory. Such functionality is better suited to isolated software components (e.g., enclaves, realms, or TEE applets) that integrate with the local software stack while maintaining strong security guarantees.
+. A universal revocation mechanism is impractical because of the variety of protocols, and potentially unbounded revocation data. Managing revocation within the ACE unit would require dynamic access to secure memory. Such functionality is better suited to isolated software components that integrate with the local software stack while maintaining strong security guarantees.
 . Revocation typically applies to root keys, not the derived keys (e.g., session keys) used by user software. It can therefore be handled by the trusted entity managing the root keys. The expiration-date mechanism and _Localities_ can be used to limit the lifetime and scope of derived keys.
 . Applications requiring direct software access to root keys (e.g., link or storage encryption) typically execute in protected environments that can handle their own revocation mechanisms.
 
@@ -71,14 +71,13 @@ _This section is informative and non-normative._
 
 The ACE threat model is straightforward.
 
-**Assets** consist of _keys_ and any other information that could aid an adversary in recovering plaintext or forging ciphertext. This includes items such as masks in tweakable XEX modes and derived keys in AES-GCM-SIV. The critical properties of these assets are their _confidentiality_ and _integrity_.
-Protecting the _Availability_ of the keys is not a goal of the architecture.
+**Assets** are _keys_ and any information that could aid an adversary in recovering plaintext or forging ciphertext. This includes, e.g., masks in tweakable XEX modes and derived keys in AES-GCM-SIV. The critical properties of these assets are their _confidentiality_ and _integrity_.
+Protecting the _Availability_ of the keys is not an architectural goal.
 
 **Adversaries** are assumed capable of compromising processes by exploiting software vulnerabilities.
 They are also able to gain access to memory contents, for instance, by abusing hardware interfaces or by SoC/memory interposition.
 The model does not include adversaries capable of sophisticated hardware attacks, such as using
 a Focused Ion Beam/Scanning Electron Microscope (FIB/SEM) to tamper with the hardware's functionality.
-
 Side-channel attacks are addressed optionally. ACE offers interfaces to both SCA-unprotected and SCA-protected implementations of cryptographic algorithms, if these options are provided by the designer.
 
 Threats can be addressed in four ways:
@@ -91,7 +90,7 @@ Threats can be addressed in four ways:
 
 ACE is designed to avoid the “*A*” and “*S*” options (as much as possible). It _controls_ threats through its own mechanisms and _transfers_ residual risk—specifically, the risk of key extraction from the privileged or trusted software and hardware environments that manage keys—to those same environments. For example, trusted software environments may employ control-flow integrity, memory encryption with integrity protection, and anti-replay mechanisms, while hardware key-management blocks can be hardened to protect entrusted keys.
 
-Direct plaintext leakage, memory corruption attacks against the ACE-using process, and Release of Unverified Plaintext (RUP) attacks on the cryptographic algorithms are considered out of scope. These threats cannot be mitigated by ACE because the processed information resides within the user execution context. Consequently, these threats are _accepted_.
+Direct plaintext leakage, memory corruption attacks against the ACE-using process, and Release of Unverified Plaintext (RUP) attacks on the cryptographic algorithms are out of scope. These threats cannot be mitigated by ACE because the processed information resides within the user execution context. Thus, these threats are _accepted_.
 
 === TODOs / Open Discussion Points
 
@@ -108,20 +107,18 @@ We just need a clarification: we have an _Off_ state, so we operate like the F a
 * Any additional inputs for (random) key generation?
 **PONDER** An implementor could define a custom consume-anything/output unlimited KDF and use ace.derive to move data from it to keys in a CR.
 
-* *`scrstatus` write semantics are unspecified and its invariants are software-violable.* `src/ace-ISA-priv.adoc:187-219`. The register is SRW, but nothing says what happens when software writes values inconsistent with actual register state (Off or Clean for a configured register, Clean for an unconfigured one) — whether writes are WARL-adjusted, ignored, or take effect and break the invariants that the exception semantics depend on. *Specify per-field WARL legalization.*
+* PRIV: *`scrstatus` write semantics are unspecified.*  The register is SRW, but nothing says what happens when software writes values inconsistent with actual register state (Off or Clean for a configured register, Clean for an unconfigured one) — whether writes are WARL-adjusted, ignored, or take effect and break the invariants that the exception semantics depend on. *Specify per-field WARL legalization.*
 
-* *`mcrstatus`'s normative status is self-contradictory, and lazy loading depends on it.* `src/ace-ISA-priv.adoc:254-258` is a warning saying it "may be defined", while the extension table (`:19`) and CSR table (`:90`) list it as defined by `Smacestatus`; the lazy-SCC ownership search at `:287` ("search privilege modes from M-mode downward") needs it. The proposed remedy — making `sstatus.ACES` "unshadowed and independent" — would violate the rule that `sstatus` is a restricted view of `mstatus`. *Decide it normatively and keep `sstatus.ACES` a view of `mstatus.ACES`.*
+* PRIV: *`mcrstatus`'s normative status is self-contradictory, and lazy loading depends on it.* There is a warning saying it "may be defined", while the extension table and CSR table list it as defined by `Smacestatus`; the lazy-SCC ownership search ("search privilege modes from M-mode downward") needs it. The proposed remedy — making `sstatus.ACES` "unshadowed and independent" — would violate the rule that `sstatus` is a restricted view of `mstatus`. *Decide it normatively and keep `sstatus.ACES` a view of `mstatus.ACES`.*
 
-* *"Propagation" of `*crstatus` is asserted but never defined, and the V=1 rules omit the HS-level view.* `src/ace-ISA-priv.adoc:294-296`, `:241-245`. There is no propagation concept for FS/VS in the base architecture to be "analogous to", and the V=1 rules set only `vscrstatus`(i) Dirty, leaving unstated whether `scrstatus`(i) is also updated — which breaks hypervisor-level lazy tracking. The ACES rule at `:171` does set both, so the asymmetry looks unintentional. *Give explicit rules.*
+* PRIV: *"Propagation" of `*crstatus` is asserted but never defined, and the V=1 rules omit the HS-level view.* There is no propagation concept for FS/VS in the base architecture to be "analogous to", and the V=1 rules set only `vscrstatus`(i) Dirty, leaving unstated whether `scrstatus`(i) is also updated — which breaks hypervisor-level lazy tracking. The ACES rules do set both, so the asymmetry looks unintentional. *Give explicit rules.*
 **HOW**
 
-* *The CSR chapter lacks reset values and WARL/WLRL discipline, and value-dependent write traps break save/restore.* `src/ace-ISA-unpriv.adoc:748-941`, `:819`, `:865`. No ACE CSR has a defined reset value or WARL/WLRL classification. Trapping on a *value* written to a CSR is unusual for RISC-V, and here `acestart`'s legal set is dynamic, so context-restore or migration code writing back a saved `acestart` on an implementation that does not support resumption (permitted by `:2356`) traps unpredictably. Raising `ace_exc_out_of_mem` from a CSR write is unprecedented. *Assign reset values, classify the fields, and replace value-dependent traps with WARL behavior.*
+* UNPRIV: *The CSR chapter lacks reset values and WARL/WLRL discipline, and value-dependent write traps break save/restore.*  No ACE CSR has a defined reset value or WARL/WLRL classification. Trapping on a *value* written Ωto a CSR is unusual for RISC-V (what about invalid `vstart` values), and here `acestart`'s legal set is dynamic, so context-restore or migration code writing back a saved `acestart` on an implementation that does not support resumption traps unpredictably.  Raising `ace_exc_out_of_mem` from a CSR write is unprecedented. *Assign reset values, classify the fields, and replace value-dependent traps with WARL behavior.*  Support for resumption should be mandatory?
 
-* *Behavior of suppressed or disallowed operations is unspecified.* `src/ace-ISA-unpriv.adoc:456`, `:485-487`, `:1193-1206`. When an operation is suppressed (error state, usage violation, expiration), nothing says what is written to `Vd`, `Xd` or the ACEIOBUF — unchanged, zeroed or undefined — so implementations diverge and stale contents may leak. Rule 2 says only certain instructions "are permitted" in `_Success_`/`_Failed_` without defining what a non-permitted one does. `ace.exec` on an unconfigured register is covered by no rule, and there is no specification for operand-length mismatch. *Add a normative table of condition → exception, state transition, and destination effect.*
+* UNPRIV: *Behavior of suppressed or disallowed operations is unspecified.*  When an operation is suppressed (error state, usage violation, expiration), nothing says what is written to `Vd`, `Xd` or the ACEIOBUF: **suggest: unchanged, for the actual block that is suppressed and forward.**
+Rule 2 says only certain instructions "are permitted" in `_Success_`/`_Failed_`, need more clarity on what a non-permitted one does.  *Add a normative table of condition → exception, state transition, and destination effect.*
 
-* `ace.size` semantics during provisioning and import are undefined although the canonical code depends on them.
-*TBD: Specify the result per `_ConfigStatus_` value.*
+* UNPRIV: *Memory-model gaps beyond the acknowledged TODOs.* Three things a reviewer should require before freeze: reconciliation of the attached-unit model (operations "execute independently of the issuing hart") with same-hart program-order visibility for ordinary loads and stores to a region an asynchronous `ace.store` is still writing; a normative invariant tying `acestart` to memory visibility on interruption (all bytes below it globally performed, none at or above it performed), without which resumption after migration can skip or double-write; and a forward-progress guarantee for resumable instructions under frequent interrupts.
 
-* *Memory-model gaps beyond the acknowledged TODOs.* `src/ace-ISA-unpriv.adoc:730-746`, `:64-79`, `:2371-2381`. Three things a reviewer should require before freeze: reconciliation of the attached-unit model (operations "execute independently of the issuing hart") with same-hart program-order visibility for ordinary loads and stores to a region an asynchronous `ace.store` is still writing; a normative invariant tying `acestart` to memory visibility on interruption (all bytes below it globally performed, none at or above it performed), without which resumption after migration can skip or double-write; and a forward-progress guarantee for resumable instructions under frequent interrupts.
-
-* *`Zlkn` depends on three extensions that do not exist.* `src/ace-ISA-unpriv.adoc:128` names `Zlaes128`, `Zlaes256` and `Zlesha2`; the defined names are `Zlaes128p`, `Zlaes256p` and `Zlesha2h` (`:94`, `:96`, `:105`). The malformed table row also leaves `Zlkn` with no "Defined in" target, and it appears nowhere in Books 2–4 despite being mandated by the `Zlv`/`Zlio` footnotes. *Correct the names and the row.*
+* UNPRIV: *`Zlkn` depends on three extensions that do not exist.* Unpriv spec names `Zlaes128`, `Zlaes256` and `Zlesha2`; the defined names are `Zlaes128p`, `Zlaes256p` and `Zlesha2h` (`:94`, `:96`, `:105`). The malformed table row also leaves `Zlkn` with no "Defined in" target, and it appears nowhere in Books 2–4 despite being mandated by the `Zlv`/`Zlio` footnotes. *Correct the names and the row.*
