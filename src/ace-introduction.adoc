@@ -19,19 +19,19 @@ ACE's main features are:
 
 * To mitigate key misuse, ACE binds cryptographic secrets (such as keys) and metadata into an indivisible structure called a _Cryptographic Context_ (CC). The architecture uses the metadata to restrict each secret to a specific algorithm and, optionally, to enforce usage constraints based on the process, VM, security state, boot cycle, an expiration date, or other policies.
 
-* To implement CCs, ACE introduces _Context Registers_ (CRs)—architectural containers that conceal their secrets from software. A CC is created by _provisioning_ (i.e., writing) secrets and metadata into a CR.  ACE instructions operate on CRs instead of explicit key values. As a result, software can use keys without holding them explicitly in the process's memory, while also benefiting from higher performance and side-channel-protected implementations.
+* To implement CCs, ACE introduces _Context Registers_ (CRs)—architectural containers that conceal their secrets from software. A CC is created by _provisioning_ (i.e., writing) secrets and metadata into a CR. ACE instructions operate on CRs instead of explicit key values. As a result, software can use keys without holding them explicitly in the process's memory, while also benefiting from higher performance and side-channel-protected implementations.
 
 * Operations such as full AES block encryption/decryption or absorption of data blocks into a hash function are performed _atomically_—i.e., in a single step.
 
 * To enable CC reuse and support OS features like context switching, ACE provides a secure mechanism to store a CC to memory via authenticated encryption, producing a _Sealed Cryptographic Context_ (SCC). Once generated, an SCC can later be re-imported into a CR. If an SCC is passed to a process in place of the key value, the key is not exposed in that process's memory.
 
 * ACE provides a unified interface to multiple cryptographic primitives, avoiding the need for separate instructions per primitive.
- ** Supporting only primitives is insufficient for modes like AES-GCM-SIV, XTS, and OCB, because leakage of derived keys or intermediate values can compromise security. Therefore, ACE also defines modes of operation and secure key derivation.
+ ** Exposing only the primitives is insufficient for modes like AES-GCM-SIV, XTS, and OCB, because leakage of derived keys or intermediate values can compromise security. Therefore, ACE also defines modes of operation and secure key derivation.
  ** In addition to GCM-SIV, XTS, and OCB, ACE defines modes such as CTR, GCM, and CMAC. Where applicable, encrypt-only or decrypt-only versions and versions with a preset IV or nonce are also defined to reduce the potential for misuse. These modes can be instantiated not only with AES-128/256 but also with other block ciphers such as SM4.
  ** Support for various hash functions.
  ** The interface supports SCA-resistant implementations of the algorithms.
  ** The interface can also be used to provide access to public-key and post-quantum algorithms.
- ** Not all the algorithms defined in the specification are intended to be supported by an ACE implementation: Following Risc-V practice, we defined several sub-extensions and delegate the choices to RV profiles, which would be defined by a separate process.
+ ** Not all the algorithms defined in the specification are intended to be supported by an ACE implementation: following RISC-V practice, ACE defines several sub-extensions and delegates the choice to RV profiles, which are defined by a separate process.
 
 * ACE scales from embedded to server cores with a unified ISA and ABI.
 * ACE is compatible with sleep, hibernation, and VM migration.
@@ -41,7 +41,7 @@ ACE's main features are:
 //
 
 Rationale for atomic operations:::
-Assuming the primitive is secure, the key cannot be recovered from the input and output of the full cryptographic operation. Typical round-based ISAs, which require keys to be supplied between rounds or MAC stages, allow for easy key recovery from the input and output, even if the key came from a hidden register. In fact, even if an instruction computed 4 or 5 rounds of the AES, an attacker with access to the instruction oracle would be able to efficiently recover the key cite:[Rijndael-revised].
+Assuming the primitive is secure, the key cannot be recovered from the input and output of the full cryptographic operation. Typical round-based ISAs require keys to be supplied between rounds or MAC stages. This allows easy key recovery from the input and output, even if the key came from a hidden register. In fact, even if an instruction computed only 4 or 5 rounds of AES, an attacker with access to the instruction oracle could efficiently recover the key cite:[Rijndael-revised].
 
 //
 
@@ -52,14 +52,14 @@ ACE intentionally excludes the following:
 
 * **Debugging support:** The internal representation of a CR remains concealed even during debug.
 * **Variable-length complete ciphertext and plaintext inputs:** Plaintext and ciphertexts, as well as messages of which digests are computed, are processed in fixed-size blocks.
-* **Complete key management:** ACE provides only architectural building blocks that can be used for key management, where the key management logic resides in trusted software (e.g., TEE applets). ACE does not support external schemes for directly provisioning keys into a key store. Instead, it will be a local trusted SW or HW component that manages external schemes and, with the thus obtained keys and policies, then configures CCs for the ACE unit.
+* **Complete key management:** ACE provides only architectural building blocks that can be used for key management, where the key management logic resides in trusted software (e.g., TEE applets). ACE does not support external schemes for directly provisioning keys into a key store. Instead, a local trusted SW or HW component manages the external schemes and uses the resulting keys and policies to configure CCs for the ACE unit.
 
 * **Key revocation:**
 This specification does not define a key revocation mechanism. The rationale is:
 
 . A revocation mechanism would add a significant implementation burden and adversely affect performance, conflicting with ACE's emphasis on simplicity and speed.
 . A universal revocation mechanism is impractical: key providers use diverse protocols, and revocation data may grow without bound. Managing revocation within the ACE unit would require dynamic access to secure memory. Such functionality is better suited to isolated software components (e.g., enclaves, realms, or TEE applets) that integrate with the local software stack while maintaining strong security guarantees.
-. Revocation typically applies to root keys, not the derived keys (e.g., session keys) used by user software.  It can therefore be handled by the trusted entity managing the root keys. The expiration-date mechanism and _Localities_ can be used to limit the lifetime and scope of derived keys.
+. Revocation typically applies to root keys, not the derived keys (e.g., session keys) used by user software. It can therefore be handled by the trusted entity managing the root keys. The expiration-date mechanism and _Localities_ can be used to limit the lifetime and scope of derived keys.
 . Applications requiring direct software access to root keys (e.g., link or storage encryption) typically execute in protected environments that can handle their own revocation mechanisms.
 
 * **Full prevention of misuse by compromised processes:** ACE cannot fully prevent misuse by compromised processes because they retain access to their own CCs. ACE complements, but does not replace, existing software vulnerability mitigations and process isolation techniques. Additionally, certain modes (e.g., counter mode encryption) use the same operation for both encryption and decryption, which may enable misuse by malicious software. This risk is inherent to such modes, and cannot be mitigated.
@@ -79,7 +79,7 @@ They are also able to gain access to memory contents, for instance, by abusing h
 The model does not include adversaries capable of sophisticated hardware attacks, such as using
 a Focused Ion Beam/Scanning Electron Microscope (FIB/SEM) to tamper with the hardware's functionality.
 
-Side channel attacks are addressed optionally. ACE offers interfaces to both SCA-unprotected and SCA-protected implementations of cryptographic algorithms, if these options are provided by the designer.
+Side-channel attacks are addressed optionally. ACE offers interfaces to both SCA-unprotected and SCA-protected implementations of cryptographic algorithms, if these options are provided by the designer.
 
 Threats can be addressed in four ways:
 
@@ -101,7 +101,7 @@ Direct plaintext leakage, memory corruption attacks against the ACE-using proces
   “`ace.`”: `kl` means ACE is a subset of crypto extensions, the “l” is also
   the initial of “Locker”, and Cryptographic Locker could replace Cryptographic Register.
 
-* Do we want to prevent, by default, an execution environment to prevent
+* Do we want to prevent, by default, an execution environment from allowing
 a Mode to _provision_ a key that could be used by a higher privileged Mode? And how?
 
 * No `Smstateen`/`Ssstateen` integration for the new less-privileged state.
@@ -126,7 +126,7 @@ We just need a clarification: we have an _Off_ state, so we operate like the F a
 
 * *The CSR chapter lacks reset values and WARL/WLRL discipline, and value-dependent write traps break save/restore.* `src/ace-ISA-unpriv.adoc:748-941`, `:819`, `:865`. No ACE CSR has a defined reset value or WARL/WLRL classification. Trapping on a *value* written to a CSR is unusual for RISC-V, and here `acestart`'s legal set is dynamic, so context-restore or migration code writing back a saved `acestart` on an implementation that does not support resumption (permitted by `:2356`) traps unpredictably. Raising `ace_exc_out_of_mem` from a CSR write is unprecedented. *Assign reset values, classify the fields, and replace value-dependent traps with WARL behavior.*
 
-* Behavior of suppressed or disallowed operations is unspecified.* `src/ace-ISA-unpriv.adoc:456`, `:485-487`, `:1193-1206`. When an operation is suppressed (error state, usage violation, expiration), nothing says what is written to `Vd`, `Xd` or the ACEIOBUF — unchanged, zeroed or undefined — so implementations diverge and stale contents may leak. Rule 2 says only certain instructions "are permitted" in `_Success_`/`_Failed_` without defining what a non-permitted one does. `ace.exec` on an unconfigured register is covered by no rule, and there is no specification for operand-length mismatch. *Add a normative table of condition → exception, state transition, and destination effect.*
+* *Behavior of suppressed or disallowed operations is unspecified.* `src/ace-ISA-unpriv.adoc:456`, `:485-487`, `:1193-1206`. When an operation is suppressed (error state, usage violation, expiration), nothing says what is written to `Vd`, `Xd` or the ACEIOBUF — unchanged, zeroed or undefined — so implementations diverge and stale contents may leak. Rule 2 says only certain instructions "are permitted" in `_Success_`/`_Failed_` without defining what a non-permitted one does. `ace.exec` on an unconfigured register is covered by no rule, and there is no specification for operand-length mismatch. *Add a normative table of condition → exception, state transition, and destination effect.*
 
 * `ace.size` semantics during provisioning and import are undefined although the canonical code depends on them.
 *TBD: Specify the result per `_ConfigStatus_` value.*
