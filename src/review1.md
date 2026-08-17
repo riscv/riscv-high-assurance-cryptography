@@ -9,7 +9,7 @@
 
 3. **Several security guarantees the introduction claims are not enforced by the architecture.**
 Debug mode is permitted to *use* every resident context by default;
-**FIXED**5.
+**FIXED**
 SCC have no anti-replay, so re-importing an old SCC rolls counter-mode state back and reuses keystream;
 **THIS IS BY DESIGN**
 
