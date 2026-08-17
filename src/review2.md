@@ -633,7 +633,7 @@ authoritative subsection (`ACE-length-rule`, placed at the head of
 substantive decisions taken:
 
 * the PI length does not depend on _ImpDataLen_ — a PI carries no implementation data,
-  so the field shall be zero in a PI, as shall _SCProtection_ and _StateExtension_;
+  so the field must be zero in a PI, as must _SCProtection_ and _StateExtension_;
 * the SCC length does not depend on _SCProtection_, which resolves the flat contradiction
   with the single-share threshold rule at <<ACE-rules-threshold-implementations>> in
   favour of that rule;
@@ -652,7 +652,7 @@ The original finding follows.
 
 None of the lists mentions `_ImpDataLen_`, although `2746` says it specifies the size of
 the variable-length section, and `1545` requires CRF capacity to be allocated from
-*Algorithm, AlgorithmPolicy and SCProtection* with "No other field shall affect the
+*Algorithm, AlgorithmPolicy and SCProtection* with "No other field must affect the
 amount of capacity required" — contradicting `_KeyType_` and `_StateExtension_` above.
 
 Additionally `ace-ISA-unpriv.adoc:2753-2758` states flatly that "The PI and SCC Formats
@@ -1060,7 +1060,7 @@ silently discards a partially written CSK — with no way for firmware to detect
 either or four CSRs have been written" (garbled).
 
 There is also a contradiction with `ace-ISA-unpriv.adoc:970` ("clear values of the CSK
-shall never be exposed to software, except to M-mode … in the second model") versus the
+must never be exposed to software, except to M-mode … in the second model") versus the
 `MRW (RZ)` (read-as-zero) designation at `ace-ISA-priv.adoc:91`.
 
 ### M19 — Book 3 `vscrstatus` section describes the wrong register throughout — **FIXED**

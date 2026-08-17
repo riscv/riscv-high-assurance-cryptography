@@ -266,7 +266,8 @@ Invalid instruction exception -> Illegal instruction exception **FIXED**
 **M47. Core field-arithmetic functions are named but never defined.**
 **FIXED**
 
-**M48. GCM/CTR mode parameters are never instantiated, GCM is silently limited to one IV length, and the exhaustion check is ill-typed.** `src/ace-ISA-algorithms.adoc:647`, `:358-363`, `:750`, `:788`. Nothing fixes `c = 32` (or `j`, `n` for CTR), so conforming implementations can disagree. Only `b-c`-bit IVs are supported — no GHASH-based `J0` for other lengths, a restriction never stated (SP 800-38D §5.2.1.1). The check `ctr = ones(c-1)` compares a `c`-bit counter against a `c-1`-bit value and does not match the 2³²−2 block limit. *Fix the parameters, state the 96-bit-IV restriction, and correct the check.*
+**M48. GCM/CTR mode parameters are never instantiated, GCM is silently limited to one IV length, and the exhaustion check is ill-typed.** 
+**FIXED**
 
 **M49. XCTR starts its counter at 0 where XCTR starts at 1.**
 **FIXED**
@@ -325,9 +326,9 @@ The readme promises Kalyna and Kuznyechik GCM-SIV that no book delivers, and in 
 
 ## Editorial findings
 
-must -> shall
+must -> must
 
-Typos that garble normative text: "shall be _Off_ or _Other_" (`src/ace-ISA-priv.adoc:197`, in a `shall` sentence); "The CR is may be configured" (`:199`); `ace.mgmtt` in the uninterruptible-instruction list (`src/ace-ISA-unpriv.adoc:2317`); "a CR can be _unconfigured_meaning" (`:155`); "can only be used permitted to transition" (`:458`); `ace.start` used for the CSR `acestart` throughout `:1486-1538`; `ace..restrictv` (`:1770`);  `RFC8452_RFC8452_KeyDeriv` (`:1010`, `:1124`); an unfinished sentence "and `block` is clearly also" (`:1636-1637`); "The principal procedures offered by the ML-KEM" heading the ML-DSA section (`:2729`); and a literal author note "**Anything else?**" left in the ML-DSA behavior list (`:2880`). "Risc-V" appears in the document's own disclaimer (`src/ace.adoc:87`, `src/ace-introduction.adoc:64`).
+Typos that garble normative text: "must be _Off_ or _Other_" (`src/ace-ISA-priv.adoc:197`, in a `must` sentence); "The CR is may be configured" (`:199`); `ace.mgmtt` in the uninterruptible-instruction list (`src/ace-ISA-unpriv.adoc:2317`); "a CR can be _unconfigured_meaning" (`:155`); "can only be used permitted to transition" (`:458`); `ace.start` used for the CSR `acestart` throughout `:1486-1538`; `ace..restrictv` (`:1770`);  `RFC8452_RFC8452_KeyDeriv` (`:1010`, `:1124`); an unfinished sentence "and `block` is clearly also" (`:1636-1637`); "The principal procedures offered by the ML-KEM" heading the ML-DSA section (`:2729`); and a literal author note "**Anything else?**" left in the ML-DSA behavior list (`:2880`). "Risc-V" appears in the document's own disclaimer (`src/ace.adoc:87`, `src/ace-introduction.adoc:64`).
 
 Naming and terminology drift: the readme expands CR as "Cryptographic Register" while the acronym table and body use "Context Register", and a Book 1 heading uses the former (`src/ace-ISA-unpriv.adoc:183`); the whitepaper expands ACE as "Atomic Cryptographic Extension" against the title's "Atomic Cryptography Extension"; the title claims "ZL" (capital) while all sub-extensions use `Zl` and "Z" names take lowercase; Book 2 requires `Zlcmac` where Book 1 defines `Zlcmacm` (`src/ace-ISA-algorithms.adoc:40`); ; Book 4 calls the same in-memory object a "CC" in half its examples and an "SCC" in the other half; and "a SCC" appears ten times against twenty-two of "an SCC".
 

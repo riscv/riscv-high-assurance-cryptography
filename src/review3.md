@@ -271,11 +271,11 @@ detail:
    `ACE-Notation`.
 6. **[FIXED] The caller's zero-padding obligation is now normative, and stated for both
    algorithms.** GCM's descriptive aside ("the user only needs to make sure…") was replaced
-   by a two-bullet normative statement in the States block: the caller *shall* zero the
+   by a two-bullet normative statement in the States block: the caller *must* zero the
    final AD block beyond the end of the AD, with the reason (GHASH absorbs the block whole
    and SP 800-38D specifies the AD zero-padded, so anything else is non-conforming) and the
    reason no state is provided for it (nothing is concealed by padding outside the unit);
-   and the caller *shall not* rely on zero-padding for plaintext or ciphertext, using
+   and the caller *must not* rely on zero-padding for plaintext or ciphertext, using
    _Enc_Last_Block_/_Dec_Last_Block_ instead, because there the absorbed value's tail would
    be keystream. GCM-SIV's _Hash_Absorb_ previously said nothing at all and now carries the
    matching obligation for the AD *and*, on the encryption path, the plaintext — both of
@@ -328,13 +328,13 @@ including those of unrelated processes.
    specification does not define. A [WARNING] asks the ARC whether an architected mechanism
    for M-mode on one hart to read or configure another hart's CSRs exists or should, and
    says ACE currently assumes it does not.
-2. **Model 4 routing.** Per the author: the fourth model *shall* also go through M-mode.
+2. **Model 4 routing.** Per the author: the fourth model *must* also go through M-mode.
    Only M-mode may ask the secure hardware block to configure the CSK of its own hart, and
    it does so with a handle or a wrapped key rather than a clear value, so no software ever
    holds the key material; the addressing and conveyance mechanism is platform-specific.
    The earlier phrasing that let the block act on its own was removed here and in the
    model-scoping paragraph.
-3. **Hart-reset obligation added.** In the second, third and fourth models M-mode shall
+3. **Hart-reset obligation added.** In the second, third and fourth models M-mode must
    re-establish a CSK on a hart after any reset of that hart and before returning control to
    software that uses ACE; where one CSK spans several harts, it must be *that* CSK, or the
    SCCs of processes scheduled there will no longer import.
@@ -675,7 +675,7 @@ was added, mirroring the mechanism already settled for GCM with Set IV under M11
 * **Internal State:** `budget`, an integer in 0…`MAX_BLOCKS`. Since `MAX_BLOCKS` = 2^48^ the
   value needs 49 bits and is held in a 64-bit field.
 * **Serialized Context:** `budget` added at Position xiv as `bin(budget,64)`, ahead of the
-  variable padding row, with an explicit statement that it *shall* be serialized — a bound
+  variable padding row, with an explicit statement that it *must* be serialized — a bound
   that did not survive export and re-import would be no bound, since software could refresh
   it by cycling the CC through memory. Padding arithmetic re-checked: the field total is
   978/1042/1106/1170 bits for `k` = 64/128/192/256, so the variable padding row brings each
@@ -741,7 +741,7 @@ generated, the RBG it requires, or the FIPS 186-5 retry rules.
    default from provisioning onwards) and `Scalar` uses the zero-is-unset convention above.
 4. **RBG and per-message secret specified.** Both the random `Scalar` and the per-message
    secret `RndNum` are generated inside the ACE unit by one of the methods of
-   cite:[nist-fips-186-5] Appendix A.2, with a random bit generator that shall satisfy the
+   cite:[nist-fips-186-5] Appendix A.2, with a random bit generator that must satisfy the
    requirements stated there. Neither is ever supplied by software, and neither leaves the CR
    except inside an SCC — `RndNum` only if a signature operation is interrupted.
 5. **Retry rules added.** For the NIST and Brainpool curves, a candidate with `r` = 0 or
@@ -802,7 +802,7 @@ one-shot, which is a genuine improvement.
    refreshed at will by cycling the CC through memory. `blocks` is now declared in the
    Internal State as an integer in 0…2^32^-1, and the Serialized Context adds it at
    Position vii with the padding reduced by 32 bits to keep the total a multiple of 128.
-   The text states explicitly that it *shall* be serialized, and why.
+   The text states explicitly that it *must* be serialized, and why.
 2. **[FIXED] The budget now counts blocks, not instructions.** An `ace.exec` decreases
    `blocks` by the number of blocks it actually processed — `ACELEN`/`b` in _Hash_Absorb_,
    _Encrypt_ and _Decrypt_, and 1 in _Enc_Last_Block_/_Dec_Last_Block_.
@@ -1187,7 +1187,7 @@ the base ISA treats `X0` everywhere else.
 
 Three defects, all in `ace-ISA-priv.adoc`:
 
-* "shall be _Off_ of _Other_" {rightarrow} "shall be either _Off_ or _Other_". The typo
+* "must be _Off_ of _Other_" {rightarrow} "must be either _Off_ or _Other_". The typo
   inverted the sense of a normative constraint.
 * "The CR is may be configured" {rightarrow} "The CR may be configured".
 * `Smacestatus` claimed `mcrstatus` was *defined* in <<ACE-CSR-mcrstatus>>, which in fact

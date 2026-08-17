@@ -95,7 +95,6 @@ Direct plaintext leakage, memory corruption attacks against the ACE-using proces
 
 === TODOs / Open Discussion Points
 
-
 * Finalize RVV-mini.
 
 * We could use “`kl`” in this document instead of
@@ -105,28 +104,45 @@ Direct plaintext leakage, memory corruption attacks against the ACE-using proces
 * Do we want to prevent, by default, an execution environment to prevent
 a Mode to _provision_ a key that could be used by a higher privileged Mode? And how?
 
-* No `Smstateen`/`Ssstateen` integration for the new less-privileged state.  ACE adds unprivileged CSRs (`acestart`, `aceiobuflen`, `aceiobuftop`, `acenonce*`, the ID registers) and supervisor CSRs with no stateen bits, contrary to the privileged architecture's policy that new state accessible to less-privileged modes must be gateable by an unaware M-mode or hypervisor. *Define stateen bits gating all ACE CSRs and instructions?*
+* No `Smstateen`/`Ssstateen` integration for the new less-privileged state.
+We just need a clarifiation: we have an _Off_ state, so we operate like the F and V extensions.
+(*TBD: possibly adapt some of the F and V extension text.*)
 
-* Initial/Clean semantics are different from FS/VS/XS rules they incorporate *Define the initial state explicitly and replace the blanket FS/VS/XS reference with an ACE-specific transition table.*
-
-* Trap-and-emulate has no effective-privilege mechanism, and hypervisors are forbidden from emulating. When M-mode emulates a trapped instruction for U- or VS-mode, the usage-control check sees privilege M, so a context whose policy disallows M-mode becomes unemulatable — and there is no MPRV analogue to assume the trapped mode's privilege. Meanwhile HS-mode is explicitly forbidden from implementing ACE, and the supporting emulation instructions exist only in a commented-out non-normative block. *Define an MPRV-style effective-ACE-privilege mechanism and normatively specify the emulation support.*
-
-* *Trap behavior beyond cause numbers is undefined.* Nothing states what is written to `mtval`/`stval`/`vstval` for the `ace_exc_*` causes, whether they are delegable via `medeleg`/`hedeleg`, or which xEPC applies; the blanket "the CSR `mcause` will reflect the error condition" ignores delegation to `scause`/`vscause` entirely. `ace_guru_meditation` reports CRF corruption detected asynchronously yet is architected as a synchronous exception with no binding to an instruction. *Specify xtval, delegability, and either bind guru-meditation to the next ACE instruction or make it an interrupt/RAS event.*
-
-* `acestart` resume state is bound to no instruction or register. It records only a byte count, so any of `ace.load`/`store`/`input`/`output`/`exec` executed after an unrelated interruption will silently "resume" at a stale offset with no way for hardware to detect the mismatch. It also contradicts `ace.mv`, which reads and increments `acestart` in normal operation despite being among the instructions that clear it, and nothing states the value after a resumable instruction *completes*, which the `Zlio` substitution sequences need. *Define the post-completion value and the cross-instruction case, vstart-style.*
-
-* Discuss reuse of `TSR`/`VTSR`.
-
-* ACES Initial/Clean semantics are underspecified and contradict the FS/VS/XS rules they incorporate?
-"Initial" is defined only as "ACE enabled", but the FS restore protocol requires a defined initial state (all registers unconfigured? CSRs zero?) that is never given. "Clean" requires "At least one CR or ACEIOBUF is configured", making it unreachable for a context restored with none configured. And `:132` (unconfiguring a previously configured register makes ACES Dirty) contradicts `:135`, since the FS/VS/XS rules map unconfiguring to Initial. The same tension recurs at `:283` versus `:196`/`:205`/`:219`, where unconfiguring must produce Dirty although Dirty is defined as "configured" and Off as the unconfigured encoding. *Define the initial state explicitly and replace the blanket FS/VS/XS reference with an ACE-specific transition table.*
-Better specification of behavior of ACE CSR accesses when ACES=Off?
+* *Trap behavior beyond cause numbers is undefined.*
+**NO NEED SINCE THE TRAP HANDLER ALREADY HAS ALL THE INFORMATION**
 
 * Specify the result of `ace.size` per `_ConfigStatus_`
+**DOUBLE-CHECK IT HAS BEEN CHANGED CORRECTLY**
 
-* When the `acestart ≤ aceiobuftop ≤ aceiobuflen` constraint is checked is ambiguous. It is unspecified whether the illegal-instruction exception comes from the CSR write that creates the violation (and which of the three) or from the next instruction that uses the window. Since legitimate reprogramming sequences transiently violate it, implementations diverge and software has no defined safe write order. *Specify check-at-use with WARL clamping, or mandate a write order.*
-
-* UNPRIV/PRIV: Trap-and-emulate has no effective-privilege mechanism, and hypervisors are forbidden from emulating. When M-mode emulates a trapped instruction for U- or VS-mode, the usage-control check sees privilege M, so a context whose policy disallows M-mode becomes unemulatable — and there is no MPRV analogue to assume the trapped mode's privilege. Meanwhile HS-mode is explicitly forbidden from implementing ACE, and the supporting emulation instructions exist only in a commented-out non-normative block. *TBD: Define an MPRV-style effective-ACE-privilege mechanism and normatively specify the emulation support.*
+* When the `acestart ≤ aceiobuftop ≤ aceiobuflen` constraint is checked is ambiguous.
+*Specify check-at-CSR-write*
 
 * Any additional inputs for (random) key generation?
+**PONDER** An implementor could define a custom consume-anything/output unlimited KDF and use ace.derive to move data from it to keys in a CR.
 
-* ECC (Ruud): Still wondering how "system keys" (private platform signing keys, e.g.) can be used. Can "scalar" be a SKS index instead of value?
+*TBD: We need a version of `ace.derive` that does not completely overwrite the target CR but just provides a derived value as a key.*
+// * ECC (Ruud): Still wondering how "system keys" (private platform signing keys, e.g.) can be used. Can "scalar" be a SKS index instead of value? **It could be, we need a mechanism (or a state)**
+
+
+* `scrstatus` write semantics are unspecified and its invariants are software-violable.* `src/ace-ISA-priv.adoc:187-219`. The register is SRW, but nothing says what happens when software writes values inconsistent with actual register state (Off or Clean for a configured register, Clean for an unconfigured one) — whether writes are WARL-adjusted, ignored, or take effect and break the invariants that the exception semantics depend on. *Specify per-field WARL legalization.*
+
+* `mcrstatus`'s normative status is self-contradictory, and lazy loading depends on it.* `src/ace-ISA-priv.adoc:254-258` is a warning saying it "may be defined", while the extension table (`:19`) and CSR table (`:90`) list it as defined by `Smacestatus`; the lazy-SCC ownership search at `:287` ("search privilege modes from M-mode downward") needs it. The proposed remedy — making `sstatus.ACES` "unshadowed and independent" — would violate the rule that `sstatus` is a restricted view of `mstatus`. *Decide it normatively and keep `sstatus.ACES` a view of `mstatus.ACES`.*
+
+* "Propagation" of `*crstatus` is asserted but never defined, and the V=1 rules omit the HS-level view.* `src/ace-ISA-priv.adoc:294-296`, `:241-245`. There is no propagation concept for FS/VS in the base architecture to be "analogous to", and the V=1 rules set only `vscrstatus`(i) Dirty, leaving unstated whether `scrstatus`(i) is also updated — which breaks hypervisor-level lazy tracking. The ACES rule at `:171` does set both, so the asymmetry looks unintentional. *Give explicit rules.*
+**HOW**
+
+* The CSR chapter lacks reset values and WARL/WLRL discipline, and value-dependent write traps break save/restore.* `src/ace-ISA-unpriv.adoc:748-941`, `:819`, `:865`. No ACE CSR has a defined reset value or WARL/WLRL classification. Trapping on a *value* written to a CSR is unusual for RISC-V, and here `acestart`'s legal set is dynamic, so context-restore or migration code writing back a saved `acestart` on an implementation that does not support resumption (permitted by `:2356`) traps unpredictably. Raising `ace_exc_out_of_mem` from a CSR write is unprecedented. *Assign reset values, classify the fields, and replace value-dependent traps with WARL behavior.*
+
+
+* Behavior of suppressed or disallowed operations is unspecified.* `src/ace-ISA-unpriv.adoc:456`, `:485-487`, `:1193-1206`. When an operation is suppressed (error state, usage violation, expiration), nothing says what is written to `Vd`, `Xd` or the ACEIOBUF — unchanged, zeroed or undefined — so implementations diverge and stale contents may leak. Rule 2 says only certain instructions "are permitted" in `_Success_`/`_Failed_` without defining what a non-permitted one does. `ace.exec` on an unconfigured register is covered by no rule, and there is no specification for operand-length mismatch. *Add a normative table of condition → exception, state transition, and destination effect.*
+
+* `ace.size` semantics during provisioning and import are undefined although the canonical code depends on them.* `src/ace-ISA-unpriv.adoc:2004-2013` defines Form A as the exported-SCC size, but the provisioning fragments at `:2407-2408` and `:2458-2459` run `ace.size` on a register in `_ace_cfgst_Provisioning_` and use the result as the PI length — and PI and SCC lengths differ (the SCC adds SIV, IMPQUAL, SIV2). *Specify the result per `_ConfigStatus_` value.
+**NEED TO DOUBLE-CHECK**
+
+* Memory-model gaps beyond the acknowledged TODOs.* `src/ace-ISA-unpriv.adoc:730-746`, `:64-79`, `:2371-2381`. Three things a reviewer should require before freeze: reconciliation of the attached-unit model (operations "execute independently of the issuing hart") with same-hart program-order visibility for ordinary loads and stores to a region an asynchronous `ace.store` is still writing; a normative invariant tying `acestart` to memory visibility on interruption (all bytes below it globally performed, none at or above it performed), without which resumption after migration can skip or double-write; and a forward-progress guarantee for resumable instructions under frequent interrupts.*
+
+* `ace.store` is listed under the wrong extensions.* `src/ace-ISA-unpriv.adoc:1128-1137` lists `Zlv` and `Zlio`, while `ace.load` is in `Zlmem` and the overview defines `Zlmem` as "ACE with dedicated memory instructions"; the `Zlv`/`Zlio` footnotes at `:129-131` do not list `ace.store`. An implementer cannot tell which extension mandates it. *Change to `Zlmem`.*
+
+* `Zlkn` depends on three extensions that do not exist.* `src/ace-ISA-unpriv.adoc:128` names `Zlaes128`, `Zlaes256` and `Zlesha2`; the defined names are `Zlaes128p`, `Zlaes256p` and `Zlesha2h` (`:94`, `:96`, `:105`). The malformed table row also leaves `Zlkn` with no "Defined in" target, and it appears nowhere in Books 2–4 despite being mandated by the `Zlv`/`Zlio` footnotes. *Correct the names and the row.*
+
+* The relationship between `acenonce0/1` and Locality #11 is never stated.* `src/ace-ISA-unpriv.adoc:921-928` says the CSRs "define the nonce to be used in `ace.import` and `ace.export`", while the algorithms take the nonce from `LST[11]` (`:673`, `:2881`, `:2911`). Nothing says the CSRs *are* that entry, and nothing states explicitly that a cleared Nonce Locality bit forces `N` to zero even when the CSRs are programmed. *State the binding and the reset value.*
