@@ -303,7 +303,12 @@ CORRECTED, also added `ace.getstx` for the State_Extension
 **Algorithm details.**
 **DONE**
 
-**Documentation and repository.** The informative code fragments at `src/ace-ISA-unpriv.adoc:2400-2583` contain nonexistent instructions (`subi`, `bz`), reversed store operand order, immediate offsets on vector loads, a register clobbered between two uses, an uninitialized register, and a branch to a nonexistent label — significant because `:2358-2359` claims the architecture is co-designed with these sequences. The stale extension name `Zlm` labels three of them (`:2430`, `:2481`, `:2553`). `readme.adoc:32` links to `src/contributors.adoc`, but the file is `src/ace-contributors.adoc`. The readme promises Kalyna and Kuznyechik GCM-SIV that no book delivers, and in Cyrillic script (`readme.adoc:22`). The introduction lists XTS among modes ACE defines, though the books architect only XEX (`src/ace-introduction.adoc:50-54`).  Book 3's extension table calls the two boot secrets "OS Secret Locality" and "Boot Secret Locality", terms defined nowhere and apparently swapped (`src/ace-ISA-priv.adoc:21-22`). `src/ace-examples.adoc` Ten bibliography entries are never cited. There is no revision history or change log, and `.github/` has no issue template to guide public-review feedback. Tracked in the public repository: a 2.7 MB PDF, a scratch PDF, working notes (`instructions.txt`, `multiplication.txt`, `src/short names.txt`), five extra Makefile variants including one hardcoding a Qualcomm-internal registry, and an ungitignored 846 KB `src/ace.html`. Spell-check configurations (`cspell.json`, `codebook.toml`, `.harper-dictionary.txt`) are committed but wired into neither pre-commit nor CI.
+**Documentation and repository.** The informative code fragments at `src/ace-ISA-unpriv.adoc:2400-2583` contain nonexistent instructions (`subi`, `bz`), reversed store operand order, immediate offsets on vector loads, a register clobbered between two uses, an uninitialized register, and a branch to a nonexistent label — significant because `:2358-2359` claims the architecture is co-designed with these sequences. The stale extension name `Zlm` labels three of them (`:2430`, `:2481`, `:2553`). `readme.adoc:32` links to `src/contributors.adoc`, but the file is `src/ace-contributors.adoc`.
+
+Book 3's extension table calls the two boot secrets "OS Secret Locality" and "Boot Secret Locality", terms defined nowhere and apparently swapped (`src/ace-ISA-priv.adoc:21-22`). `src/ace-examples.adoc` Ten bibliography entries are never cited. There is no revision history or change log, and `.github/` has no issue template to guide public-review feedback. Tracked in the public repository: a 2.7 MB PDF, a scratch PDF, working notes (`instructions.txt`, `multiplication.txt`, `src/short names.txt`), five extra Makefile variants including one hardcoding a Qualcomm-internal registry, and an ungitignored 846 KB `src/ace.html`. Spell-check configurations (`cspell.json`, `codebook.toml`, `.harper-dictionary.txt`) are committed but wired into neither pre-commit nor CI.
+
+The introduction lists XTS among modes ACE defines, though the books architect only XEX (`src/ace-introduction.adoc:50-54`).
+**KNOWN, NEED TO ADDRESS**
 
 and `src/ace-instruction-summary.adoc` are dead: neither is included, both are wrapped in comment blocks, the summary lists eight obsolete mnemonics (`ace.init`, `ace.export`, `ace.state`, `ace.harden`, `ace.error`, `ace.enable`…),  
 **FIXED** (it is also not included, but may be in the future)
@@ -313,6 +318,9 @@ CSR names use camelCase (`macephysbootscrt`, `hacevirtbootscrt`, `macelocality`)
 
 and the extension names mix case (`SmaceCSK`) while `Sm*`-prefixed extensions define S-, HS- and VS-mode CSRs.
 **TBD**
+
+The readme promises Kalyna and Kuznyechik GCM-SIV that no book delivers, and in Cyrillic script (`readme.adoc:22`).  
+**WE DO NOT STRICTLY PROMISE THEM, BUT WE CAN GIVE THEM ENCODINGS**
 ---
 
 ## Editorial findings
