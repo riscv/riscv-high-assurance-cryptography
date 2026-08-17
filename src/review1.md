@@ -206,16 +206,20 @@ REVIEWER ERROR
 **M24. "Propagation" of `*crstatus` is asserted but never defined, and the V=1 rules omit the HS-level view.** `src/ace-ISA-priv.adoc:294-296`, `:241-245`. There is no propagation concept for FS/VS in the base architecture to be "analogous to", and the V=1 rules set only `vscrstatus`(i) Dirty, leaving unstated whether `scrstatus`(i) is also updated — which breaks hypervisor-level lazy tracking. The ACES rule at `:171` does set both, so the asymmetry looks unintentional. *Give explicit rules.*
 **HOW**
 
-**M25. Trap-and-emulate has no effective-privilege mechanism, and hypervisors are forbidden from emulating.** `src/ace-ISA-unpriv.adoc:76`, `:308`; `src/ace-ISA-priv.adoc:386-417`. When M-mode emulates a trapped instruction for U- or VS-mode, the usage-control check sees privilege M, so a context whose policy disallows M-mode becomes unemulatable — and there is no MPRV analogue to assume the trapped mode's privilege. Meanwhile HS-mode is explicitly forbidden from implementing ACE, and the supporting emulation instructions exist only in a commented-out non-normative block. *Define an MPRV-style effective-ACE-privilege mechanism and normatively specify the emulation support.*
+**M25. Trap-and-emulate has no effective-privilege mechanism, and hypervisors are forbidden from emulating.**
+**REVIEWER ERROR**
 
-**M26. Trap behavior beyond cause numbers is undefined.** `src/ace-ISA-priv.adoc:44`, `:63`; `src/ace-ISA-unpriv.adoc:212-213`. Nothing states what is written to `mtval`/`stval`/`vstval` for the `ace_exc_*` causes, whether they are delegable via `medeleg`/`hedeleg`, or which xEPC applies; the blanket "the CSR `mcause` will reflect the error condition" ignores delegation to `scause`/`vscause` entirely. `ace_guru_meditation` reports CRF corruption detected asynchronously yet is architected as a synchronous exception with no binding to an instruction. *Specify xtval, delegability, and either bind guru-meditation to the next ACE instruction or make it an interrupt/RAS event.*
+**M26. Trap behavior beyond cause numbers is undefined.**
+**NO NEED SINCE THE TRAP HANDLER ALREADY HAS ALL THE INFORMATION**
+(do we want to provide extra information?)
 
 **M27. Exceptions `ace_exc_CR_unconf` and `ace_exc_CR_other` are defined in Book 3 but raised by no Book 1 instruction.**
 **FIXED** they stay. The definitions in Book 3 are fine.
 
 ### Book 1 instruction and CSR definitions
 
-**M28. `acestart` resume state is bound to no instruction or register.** `src/ace-ISA-unpriv.adoc:807-819`, `:1259-1283`, `:1503`. It records only a byte count, so any of `ace.load`/`store`/`input`/`output`/`exec` executed after an unrelated interruption will silently "resume" at a stale offset with no way for hardware to detect the mismatch. It also contradicts `ace.mv`, which reads and increments `acestart` in normal operation despite being among the instructions that clear it, and nothing states the value after a resumable instruction *completes*, which the Zlio substitution sequences at `:2271-2283` need. *Define the post-completion value and the cross-instruction case, vstart-style.*
+**M28. `acestart` resume state is bound to no instruction or register.**
+**REVIEWER ERROR**
 
 **M29. Trap and resume PC behavior for interrupted instructions is never specified.** `src/ace-ISA-unpriv.adoc:2314-2341`. Nothing says that a trap mid-instruction sets xEPC to the ACE instruction so re-execution resumes at `acestart`, what `xtval` reports for a page fault inside a long `ace.load`, or whether partial updates before the fault are architecturally visible. Resumability is not portably implementable without this. *Add normative text modelled on the vector extension's `vstart` rules.*
 
