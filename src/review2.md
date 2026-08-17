@@ -64,7 +64,7 @@ have made OCB's `double()` correct and essentially everything else wrong.
 * **C17 — the OCB3 partial-block padding was oriented wrongly, at three sites.**
   The spec wrote `zeros(b-n-1) @ 1 @ X[n-1:0]`, placing the terminating `1` at bit `n`.
   RFC 7253 §4.2 appends the `1` immediately after the data *in string order*, and under
-  <<ACE-conventions>> the first bit of an octet is its most significant bit — so for a
+  <<ACE-Notation>> the first bit of an octet is its most significant bit — so for a
   byte-aligned `n` the `1` is the top bit of octet `n/8`, i.e. bit `n+7`. For a one-octet
   partial block the spec set bit 8 where bit 15 is required. This affected the AD last
   block as well as both text last blocks, so it was not covered by C6. Replaced
@@ -98,7 +98,7 @@ correcting the GCM example, both confirmed by test and both fixed:
 
 * **C19 - the GCM and GCM-SIV length blocks were assembled in the wrong order.**
   SP 800-38D 7.1 puts `[len(A)]~64~` in octets 0-7 and `[len(C)]~64~` in octets 8-15;
-  RFC 8452 4 likewise puts the AAD length first. Under <<ACE-conventions>> the first
+  RFC 8452 4 likewise puts the AAD length first. Under <<ACE-Notation>> the first
   octets are the *least* significant, so the AD length must be the **right** operand of
   `@`. All four normative sites had it as the left operand. Corrected to
   `binBE(len_in_bits(plaintext),64) @ binBE(len_in_bits(AD),64)` for GCM and the `bin`
@@ -158,7 +158,7 @@ text fails the same test - so C8 and C9 were real and the test has power over th
 | M10 | `ace-ISA-algorithms.adoc` | SHAKE128 and SHAKE256 specified: parameter table for all six functions (`c`, `b`, `t`, XOF flag, suffix `D`), `c` = 256 added; `t` = `c`/2 for the fixed-output functions and `t` = `b` for the XOFs; the suffix and padding string `S` = `D` followed by `pad10*1` defined, with the resulting `0x06`/`0x1F` first octet and the `b-1` final bit; XOF behaviour (no _Success_, unbounded squeezing) stated. "Granularity: 32 bits" clarified as the minimum vector element width, not a constraint on message length |
 | M11 (HMAC) | `ace-ISA-algorithms.adoc` | `ipad`/`opad` defined as `0x36`/`0x5c` repeated `b`/8 times; the key is `K0` of FIPS 198-1 with its derivation assigned to the provisioner of the CC; `d` corrected in the inner-digest slice and defined as the digest size; re-initialisation of `state` to the hash IV before the outer compression added; `process_VLI` called with length `b` |
 | M11 (KMAC) | `ace-ISA-algorithms.adoc`, `ace.bib` | New `ACE-KMAC` section specifying KMAC128/KMAC256 against SP 800-185: the CC holds the two prefabricated rate blocks `cshake_block` and `key_block`, keeping every variable-length encoding out of the ACE unit; `L` set on the transition to _Hash_Finalize_; `right_encode(L)` absorbed; cSHAKE suffix `00` (first octet `0x04`) rather than SHAKE's `1111`; key/customization length bounds tabulated. SP 800-185 added to the bibliography |
-| M12 | `ace-ISA-algorithms.adoc` | Ascon-AEAD128 state machine repaired: `_Dec_Tag_Finalize_` added to the States and to the decryption chain; "_Success_ or _Success_" corrected to _Failure_; `AD_empty` removed and the empty-AD behaviour stated instead; `tag_len` fixed at 128 per SP 800-232, the truncated-verification path removed; `_Hash_Verify_` corrected from Form D to Form B. Deferral WARNING removed |
+| M12 | `ace-ISA-algorithms.adoc` | Ascon-AEAD128 state machine repaired: `_Dec_Tag_Finalize_` added to the States and to the decryption chain; ; `AD_empty` removed and the empty-AD behaviour stated instead; `tag_len` fixed at 128 per SP 800-232, the truncated-verification path removed; `_Hash_Verify_` corrected from Form D to Form B. Deferral WARNING removed |
 | M13 | `ace-ISA-algorithms.adoc` | `_Encapsulate_` corrected to match FIPS 203; `ace.derive` description corrected and given its design rationale; `_ciphertext_Input_` added, driven by `process_VLI` so the load is resumable, with `len`/`input_base`/`block_base`/`cumul_len` declared in the Internal State and Serialized Context and `process_block`/`finalize` passed as `None`; `_sharedkey_Output_` removed and `_decapsk_Output_` commented out, with a NOTE giving the reason; the `_AlgorithmUse_` paragraph brought in line. WARNING removed |
 | M14 | `ace-ISA-algorithms.adoc` | ML-DSA completed: `_privkey_Input_` and `_compute_pubKey_` states added, with `HasPrivKey`/`HasPubKey` in _StateExtension_ and a guard on every operation that uses a key; importing a private key erases the public key; residual ML-KEM text removed; hedged and deterministic signing both provided, selected by the Form of the `ace.setst` entering `_Sign_Generate_` and recorded in a `Deterministic` flag; _AuxInfo_ restated as an unenforceable declaration of intent, with the reason. WARNING removed |
 | M15 (part 1) | `ace-ISA-algorithms.adoc`, `ace.bib` | EdDSA: `v` = 2, since a signature is the pair (`R`,`S`); `b` = 456 for ed448; citation corrected from RFC 7748 to RFC 8032 and FIPS 186-5, and RFC 8032 added to the bibliography. ECDSA hash truncation per FIPS 186-5 6.4 stated as the caller's responsibility. `_Sign_Generate_`/`_Sign_Verify_` removed from the transitions out of _Initial_, resolving the contradiction with their guards. Remaining EdDSA and SM2 scheme gaps marked with a WARNING |
@@ -171,7 +171,7 @@ text fails the same test - so C8 and C9 were real and the test has power over th
 | M24 | `ace-ISA-unpriv.adoc` | New `ACE-SCC-rationale` subsection: Locality Secrets as associated data argued via POLYVAL's AXU property and its cost advantage over a KDF; the default zero nonce justified by nonce misuse-resistance with the loss of semantic security stated as accepted; RFC 8452 key-usage bounds recorded; a WARNING against manufacture-fixed CSKs |
 | M25 | `ace-ISA-algorithms.adoc` | CMAC's last-block guard now tests `block_base != 0`, and `block_base` added to the internal state and serialized context so the test is well defined |
 | M21 | `ace-ISA-unpriv.adoc`, `ace-ISA-algorithms.adoc` | Every extension name now resolves to one the table defines: `Zlcmac`->`Zlcmacm`; the `Zlkn` dependency list to `Zlaes128p`/`Zlaes256p`/`Zlesha2h`; `Zlm`->`Zlmem` in the three snippet captions and in a commented-out line; `ace.store` moved from `Zlv`/`Zlio` to `Zlmem`, matching `ace.load`; "At least of" -> "At least one of"; the `Zlkn` row's `2+` span removed so its columns line up |
-| M23 | `ace-ISA-unpriv.adoc` | New `ACE-SCC-authenticated-MDH` rule: `AD[0]` is the *initial* MDH in both directions — the `_CfgStComplete_` image software saves before `#ace_CR_export_start`, and the image carried in the SCC and passed to `#ace_CR_import_start` — with no in-flight change reflected, and Section 1 of the SCC carrying that same image |
+| M23 | `ace-ISA-unpriv.adoc` | New `ACE-SCC-authenticated-MDH` rule: `AD[0]` is the *initial* MDH in both directions — the `_ace_cfgst_Complete_` image software saves before `#ace_CR_export_start`, and the image carried in the SCC and passed to `#ace_CR_import_start` — with no in-flight change reflected, and Section 1 of the SCC carrying that same image |
 | M15 (part 2) | `ace-ISA-algorithms.adoc` | New `ACE-EdDSA` subsection: the seed held in `Scalar` with `s`/`prefix` derived internally, `ctx`/`ctxlen`, `PreHash` and `msg_pass`, a `_Msg_Absorb_` state, and the two-pass signing / one-pass verification structure. Pure mode conditioned on `Zlesha2h`/`Zlesha3h`, pre-hash always available. `h` = 512 and `j` dropped for both curves. SM2's `Hash` documented as `e = SM3(Z_A ‖ M)` with `Z_A` computed by the caller. WARNING removed |
 | m17 | `ace-notation.adoc` | `len_in_bits`/`len_in_bytes` corrected; `bit_length` and `%` eliminated as duplicate spellings; `foreach`, `mod`, `ceil`, `floor`, `min`, `max`, comparison/arithmetic operators and `local` defined; `←` and `<-` stated to be synonymous |
 
@@ -180,16 +180,16 @@ order between `ace-books.adoc` and Book 1, all as `[preface]` so the Book number
 unaffected:
 
 * `ace-acronyms.adoc` — the acronym table only;
-* `ace-notation.adoc` — `== Pseudocode Notation` (anchor `ACE-pseudocode-notation`),
+* `ace-notation.adoc` — `== Pseudocode Notation` (anchor `ACE-Notation`),
   split into operators/control constructs and functions;
 * `ace-conventions.adoc` — `== Conventions` (anchor `ACE-conventions`).
 
 The Conventions subsections were promoted from `[discrete]` to real headings so they
 appear in the table of contents. Note that `ACE-notation` was already in use for
 “Notation in the Algorithm Descriptions” in Book 2, hence the distinct
-`ACE-pseudocode-notation` anchor.
+`ACE-Notation` anchor.
 
-Cross-references to `<<ACE-conventions>>` were added at the head of Book 2, in
+Cross-references to `<<ACE-Notation>>` were added at the head of Book 2, in
 `ACE-notation`, at the `update_mask` / `Galoismul` / `Montmul` / `double` definitions, at
 the Ascon endianness note, at the head of `ACE-export-import-algorithms`, and at the head
 of Book 4 — 35 links in total across the four sub-anchors.
@@ -227,7 +227,7 @@ specification.
 **Still open from m17:** `bin(n,m)` and `binBE(n,m)` retain their original wording,
 including the "or sign extended" clause, which is meaningless for the unsigned uses these
 functions actually have, and two typos ("ar", "signiicant"). They are now pinned
-precisely by <<ACE-conventions>>, so the entries are redundant rather than wrong.
+precisely by <<ACE-Notation>>, so the entries are redundant rather than wrong.
 
 Everything else in the Critical and Major lists below is unchanged.
 
@@ -669,7 +669,7 @@ Form A "returns the total size in bytes of the memory buffer that would be neces
 store the exported SCC". The normative provisioning sequence
 (`ace-ISA-management-code-snippets`) calls `ace.size a2, K{t0}` immediately after
 `ace_CR_provision_start` to obtain the length of the **PI**. Form A needs a defined
-behaviour when `_ConfigStatus_` is `_CfgStProvisioning_` / `_CfgStImporting_`.
+behaviour when `_ConfigStatus_` is `_ace_cfgst_Provisioning_` / `_ace_cfgst_Importing_`.
 
 ### M4 — `ace.mv`: the Description contradicts the Encoding (directions swapped) — **FIXED**
 `ace-ISA-unpriv.adoc:1305-1315` vs `1322-1346`.
@@ -682,7 +682,7 @@ moved **to the CR**" and "If `Form` = `0b01` and `rs1` = `0b00001`: `XLEN/8` byt
 offset `acestart` are moved **to `X[s2]`**" — both directions inverted relative to the
 encoding, and both using `s1`/`s2` inconsistently with the field they name. The
 `_ConfigStatus_` guards are attached to the wrong directions as a result (a CR→GPR move
-is required to be in `_CfgStProvisioning_`).
+is required to be in `_ace_cfgst_Provisioning_`).
 
 ### M5 — `ace.restrict`: encoding text is wrong, and the NOTE claims a capability the normative text forbids — **FIXED**
 
@@ -853,7 +853,6 @@ Context at the value 128, so a future variant would not change the format.
 
 * The declared states and transitions name `_Hash_Verify_`; the behaviour transitions to
   `_Dec_Tag_Finalize_` (2136, 2141, 2155), which is not in the state list.
-* `_Decrypt_ -> … -> _Hash_Verify_ -> _Success_ or _Success_` (2012).
 * `AD_empty` is declared in the internal state (1965) and set (2024, 2042) but never
   read. Ascon's handling of an absent AD (no `p^8` invocation at all) is therefore
   unspecified.
@@ -1114,11 +1113,11 @@ for candidacy, not a drafting detail.
 ### M23 — Which MDH snapshot is authenticated is never pinned — **FIXED**
 
 Pinned to the initial image, per the author: the MDH as it stood when the operation began.
-For an export that is the `_CfgStComplete_` image software reads with `ace.getmdl` and
+For an export that is the `_ace_cfgst_Complete_` image software reads with `ace.getmdl` and
 saves before `#ace_CR_export_start`; for an import it is the image carried in the SCC and
 passed to `#ace_CR_import_start`. Both assignment sites now say so, and the rule records
-why it is forced rather than chosen: a CR is in `_CfgStExporting_` when its `SIV` is
-computed and in `_CfgStImporting_` when that `SIV` is checked, so authenticating the
+why it is forced rather than chosen: a CR is in `_ace_cfgst_Exporting_` when its `SIV` is
+computed and in `_ace_cfgst_Importing_` when that `SIV` is checked, so authenticating the
 in-flight image would make every SCC fail to import.
 `ace-ISA-unpriv.adoc:2950`, `1581-1587`, `1596-1604`.
 
@@ -1170,10 +1169,10 @@ CMAC cannot detect a partial pending block at all.
   contain a CC" (missing space/emphasis terminator).
 * **m3** — **FIXED.** `ace.start` was used five times for the CSR `acestart`; all five
   corrected, together with a doubled full stop on one of them.
-* **m4** — **FIXED.** "if set to" -> "is set to"; `_CfgStace_CR_import_` -> `_CfgStImporting_`; and the case-mangled `_CfgStimporting_`, `_CfgExporting_` and `_CfgStcomplete_` normalised throughout, including in the code comments.
-  _Original finding:_ `ace-ISA-unpriv.adoc:1547` — "_ConfigStatus_ **if** set to _CfgStProvisioning_,
-  resp., _CfgSt**ace_CR_import**_"; also `_CfgStimporting_` (1522) and `_CfgExporting_`
-  (1524) for `_CfgStImporting_` / `_CfgStExporting_`; `_CfgStcomplete_` in the code
+* **m4** — **FIXED.** "if set to" -> "is set to"; `_ace_cfgst_ace_CR_import_` -> `_ace_cfgst_Importing_`; and the case-mangled `_ace_cfgst_importing_`, `_CfgExporting_` and `_ace_cfgst_complete_` normalised throughout, including in the code comments.
+  _Original finding:_ `ace-ISA-unpriv.adoc:1547` — "_ConfigStatus_ **if** set to _ace_cfgst_Provisioning_,
+  resp., _ace_cfgst_**ace_CR_import**_"; also `_ace_cfgst_importing_` (1522) and `_CfgExporting_`
+  (1524) for `_ace_cfgst_Importing_` / `_ace_cfgst_Exporting_`; `_ace_cfgst_complete_` in the code
   comments (2588, 2618, 2632, 2664).
 * **m5** — **FIXED.** The note about random material being generated only at the final
   step said "(i.e., when `ace.mgmt` is used to terminate an **import** process)" inside a
@@ -1183,6 +1182,8 @@ CMAC cannot detect a partial pending block at all.
 * **m6** — **FIXED.** `aceiobuflen`, `acemaxiobuflen` and `aceiobuftop` are now stated in **bits** everywhere, per the author. This is the reading the rest of the specification already required: `ACELEN` is defined as "`VL*SEW` or the length `aceiobuftop` of the ACEIOBUF **in bits**". **See the note below on `acestart`.**
   _Original finding:_ `ace-ISA-unpriv.adoc:865` — `aceiobuflen` "programs the ACEIOBUF length **in
   bits**"; the CSR table (770) and every other use say bytes.
+**CHANGED TO BYTES**
+
 * **m7** — **FIXED.** "invalid instruction exception" appeared 15 times where RISC-V
   terminology is "illegal instruction exception"; all replaced. The distinct identifier
   `ace_exc_invalid` was deliberately left alone.
@@ -1190,7 +1191,7 @@ CMAC cannot detect a partial pending block at all.
   CSR table and `IMPQUAL` used `acevendorid`/`acearchid`/`aceimpid`. Standardised on the
   `m` forms, which the author confirms are correct: 15 occurrences across
   `ace-ISA-unpriv.adoc` and `ace-ISA-algorithms.adoc`.
-* **m9** — **FIXED.** All eleven typos corrected in the included files: `ace.state`, `ace..restrictv`, `ace.mgmtt`, "mey", "Ths", the stray backtick in "32 or 96", "ads", "keepins", "teh NTT", "ML-KRM", and the stranded "not empty." table cell. (`ace-annexes.adoc` and `ace-instruction-summary.adoc` also contain `ace.state`, but neither is included by `ace.adoc`.)
+* **m9** — **FIXED.** All eleven typos corrected in the included files: `ace.state`, `ace..restrictv`, `ace.mgmtt`, "mey", "Ths", the stray backtick in "32 or 96", "ads", "keepins",, "ML-KRM", and the stranded "not empty." table cell. (`ace-annexes.adoc` and `ace-instruction-summary.adoc` also contain `ace.state`, but neither is included by `ace.adoc`.)
   _Original finding:_ Typos in normative text: `ace.mgmtt` (2388), `ace..restrictv` (1837),
   `ace.state` (1435), `outout=J0` (801), "Currently, the allowed values **ads** 64, 96,
   and 128" (1224), "**Ths** subsection" (2459), "**mey**" (2424), "**teh** NTT" (2879),

@@ -18,21 +18,21 @@ We refer to the ACE Unprivileged Architecture for the definitions of the ACE ins
 |  Extension       | Features                                                                                        | Defined in:                  | Minimum version | Lifecycle state
 | `Smacestatus`    | Defines the ACES per-CR status tracking CSRs. `mcrstatus` is not yet part of this extension: <<ACE-CSR-mcrstatus>> only contemplates it. | <<ACE-CSR-scrstatus>> and <<ACE-CSR-vscrstatus>> | v0.0.0 | --
 | `SmaceCSK`       | Defines the CSRs group to configure the Context Sealing Key.                                    | <<ACE-CSR-macecsk>>          | v0.0.0 | --
-| `Smacepbootscrt` | Defines the CSRs group to configure the OS Secret Locality (cf. <<ACE-Localities>>).            | <<ACE-CSR-macePhysBootScrt>> | v0.0.0 | --
-| `Smacevbootscrt` | Defines the CSRs group to configure the Boot Secret Locality (cf. <<ACE-Localities>>).          | <<ACE-CSR-haceVirtBootScrt>> | v0.0.0 | --
-| `Smacelclt`      | Defines the CSRs group to configure the software binding Localities (cf. <<ACE-Localities>>).   | <<ACE-CSR-maceLocality>>, <<ACE-CSR-haceLocality>>, and <<ACE-CSR-saceLocality>> | v0.0.0 | --
+| `Smacepbootscrt` | Defines the CSRs group to configure the OS Secret Locality (cf. <<ACE-Localities>>).            | <<ACE-CSR-macephysbootscrt>> | v0.0.0 | --
+| `Smacevbootscrt` | Defines the CSRs group to configure the Boot Secret Locality (cf. <<ACE-Localities>>).          | <<ACE-CSR-hacevirtbootscrt>> | v0.0.0 | --
+| `Smacelclt`      | Defines the CSRs group to configure the software binding Localities (cf. <<ACE-Localities>>).   | <<ACE-CSR-macelocality>>, <<ACE-CSR-hacelocality>>, and <<ACE-CSR-sacelocality>> | v0.0.0 | --
 |===
 
 //
 
-If `Zlv` or `Zlio` are implemented: `misa` must implement the `L` bit, `*status` must implement `ACES`.
+If `Zlv` or `Zlio` are implemented: `misa` shall implement the `L` bit, `*status` shall implement `ACES`.
 
 // ////////////////////////////////////////////////////////////////////
 
 [[ACE-dependencies-priv]]
 === Dependencies on Other Extensions
 
-The ACE Privileged Architecture may depend (this must be decided together with the ARC) on the Indirect CSR Access mechanism defined in `Smcsrind`/`Sscsrind`.
+The ACE Privileged Architecture may depend (this shall be decided together with the ARC) on the Indirect CSR Access mechanism defined in `Smcsrind`/`Sscsrind`.
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -61,11 +61,11 @@ The actual numbers are TBD.
 |      | Load page fault                | {empty}
 |      | Store page fault               | {empty}
 | TBD  | `ace_guru_meditation`          | Fatal and unrecoverable system failure in the ACE unit.
-| TBD  | `ace_exc_CR_unconf`            | Use of an unconfigured, or partially configured CR as a source in any instruction except those that are defined to operate on a CR in that condition, namely `ace.size`, the `ace.getmd*` group — `ace.getmdl`, `ace.getmdh` and `ace.getmdv`, and hence also the `ace.getst` pseudo-instruction — and the data-movement instructions used during configuration and export, `ace.load`, `ace.store` and `ace.mv`. See the note below the table.
+| TBD  | `ace_exc_CR_unconf`            | Use of a CR in State _Off_, or of an unconfigured, or partially configured CR as a source in any instruction except those that are defined to operate on a CR in that condition, namely `ace.size`, the `ace.getmd*` group — `ace.getmdl`, `ace.getmdh` and `ace.getmdv`, and hence also the `ace.getst` pseudo-instruction — and the data-movement instructions used during configuration and export, `ace.load`, `ace.store` and `ace.mv`. See the note below the table.
 | TBD  | `ace_exc_CR_other`             | Use of a CR as a source in any instruction (including `ace.size`), when the status of the CR is “Other/Lazy”, as per <<ACE-CSR-scrstatus>>.
 | TBD  | `ace_exc_out_of_mem`           | Insufficient CRF memory for configuration instruction. This may be set by privileged code in case they do not handle the CR allocation themselves.
 | TBD  | `ace_exc_buf_unconf`           | Use of ACEIOBUF as an input or an output while unconfigured.
-| TBD  | `ace_exc_invalid`              | Invalid parameters in metadata, including expired CR state. There is deliberately no separate `ace_exc_expired`: expiry is reported through this code, and the handler distinguishes it by reading the _State_ field of the CR, which the hardware has set to `ace_state_expired`.
+| TBD  | `ace_exc_invalid`              | Invalid parameters in metadata, including expired CR state (evaluated upon `ace.setst`, at `ace.exec` dispatch, and upon resumption of interrupted multi-cycle operations). There is deliberately no separate `ace_exc_expired`: expiry is reported through this code, and the handler distinguishes it by reading the _State_ field of the CR, which the hardware has set to `ace_state_expired`.
 |===
 
 [NOTE]
@@ -79,9 +79,9 @@ only partially configured.
   `ace.getst`, which is built on it, is how those sequences test for an error after every
   step.
 * `ace.load` and `ace.mv` write a CR precisely while its _ConfigStatus_ is
-  _CfgStProvisioning_ or _CfgStImporting_, and raise an illegal instruction exception if it
-  is _CfgStComplete_ instead; `ace.store` and the CR-reading forms of `ace.mv` read a CR
-  whose _ConfigStatus_ is _CfgStExporting_.
+  _ace_cfgst_Provisioning_ or _ace_cfgst_Importing_, and raise an illegal instruction exception if it
+  is _ace_cfgst_Complete_ instead; `ace.store` and the CR-reading forms of `ace.mv` read a CR
+  whose _ConfigStatus_ is _ace_cfgst_Exporting_.
 * `ace.size` is exempt so that a handler can discover how much memory a CR needs before
   anything has been loaded into it.
 
@@ -91,13 +91,9 @@ configured CR is the only legal operand for them.
 
 `ace_exc_CR_other` carries no such exemptions. A CR marked Lazy has no valid content at
 all — its authoritative value is the SCC held by some privilege mode — so every access,
-including a metadata read, must trap so that the handler can restore it first.
+including a metadata read, shall trap so that the handler can restore it first.
 ====
 
-[WARNING]
-====
-Merge `ace_exc_CR_unconf` into `ace_exc_invalid`, so that we save one code?
-====
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -115,11 +111,11 @@ ACE extends `*status` and `misa`, and provides up to 3 direct and up to 28 indir
 | 0xXXX       | HRW        | `vscrstatus`              | Per-CR dirtiness and laziness tracking
 | 0xXXX       | MRW        | `mcrstatus`               | Per-CR dirtiness and laziness tracking
 | (Indirect)  | MRW (RZ)   | `macecsk{0..7}`           | ACE Context Sealing Key
-| (Indirect)  | MRW (RZ)   | `macePhysBootScrt{0..3}`  | Locality: Physical (host) Boot Session Secret
-| (Indirect)  | HRW (RZ)   | `haceVirtBootScrt{0..3}`  | Locality: Virtual (guest) Boot Session Secret
-| (Indirect)  | MRW (RZ)   | `maceLocality{0..3}`      | Locality: Mutually isolate processes below M-mode
-| (Indirect)  | HRW (RZ)   | `haceLocality{0..3}`      | Locality: Mutually isolate processes below HS-mode
-| (Indirect)  | SRW (RZ)   | `saceLocality{0..3}`      | Locality: Mutually isolate U-mode processes
+| (Indirect)  | MRW (RZ)   | `macephysbootscrt{0..3}`  | Locality: Physical (host) Boot Session Secret
+| (Indirect)  | HRW (RZ)   | `hacevirtbootscrt{0..3}`  | Locality: Virtual (guest) Boot Session Secret
+| (Indirect)  | MRW (RZ)   | `macelocality{0..3}`      | Locality: Mutually isolate processes below M-mode
+| (Indirect)  | HRW (RZ)   | `hacelocality{0..3}`      | Locality: Mutually isolate processes below HS-mode
+| (Indirect)  | SRW (RZ)   | `sacelocality{0..3}`      | Locality: Mutually isolate U-mode processes
 |===
 
 // ////////////////////////////////////////////////////////////////////
@@ -173,10 +169,10 @@ offset: only on there being a two-bit context-status field with the semantics of
 |===
 |Value |Name |Meaning
 |   0   | Off     | ACE disabled. The ACE state is inaccessible. Executing any ACE instruction raises an illegal instruction exception.
-|   1   | Initial | ACE enabled.
+|   1   | Initial | ACE enabled. No CR nor the ACEIOBUF is configured. The hart may issue any ACE instruction.
 |   2   | Clean   | ACE enabled. At least one CR or ACEIOBUF is configured; state matches the last context swap.
 |   3   | Dirty   | ACE enabled. At least one CR, ACEIOBUF, or ACE-specific CSR may have changed since the last context swap.
-Unconfigured CRs that were previously configured also cause ACES to become Dirty, since context-switching code must erase any stale saved state.
+Unconfigured CRs that were previously configured also cause ACES to become Dirty, since context-switching code shall erase any stale saved state.
 |===
 
 ACES state transitions follow the same rules as FS, VS, and XS (see cite:[RISCV-ISA-Priv]).
@@ -187,15 +183,30 @@ When `mstatus.ACES` is Initial or Clean, any instruction that modifies ACE state
 
 When `mstatus.ACES` (resp. `sstatus.ACES`) is Dirty, `mstatus.SD` (resp. `sstatus.SD`) is 1; otherwise, `mstatus.SD` is set per existing specifications.
 
-Writes to ACES do not modify any other ACE state. Setting ACES to Off, Initial, or Clean does not clear CRs or ACEIOBUF; any state reset must be explicit and must precede such a write.
+Writes to ACES do not modify any other ACE state. Setting ACES to Off, Initial, or Clean does not clear CRs or ACEIOBUF; any state reset shall be explicit and shall precede such a write.
 
 In implementations with a writable `misa.L`, the `mstatus.ACES` field may be present even when `misa.L` is clear, analogously to `mstatus.FS` and `mstatus.VS`.
 
 When `TSR` is set to 1, all ACE memory instructions cause an illegal-instruction exception in S-mode.
 
+// Review Findin: Architectural conflict with standard RISC-V Privileged Specification.
+// mstatus.TSR (Trap SRET) is normatively allocated by the RISC-V Privileged Architecture
+// exclusively to intercept SRET instructions. Overloading TSR to trap ACE memory instructions
+// (ace.load, ace.store, ace.input, ace.output) alters the semantics of an existing architected
+// bit, breaking backward compatibility with existing hypervisors that enable TSR for SRET
+// interception but are not prepared to handle or emulate ACE memory instructions.
+//
+// Recommended remediation:
+// Replace the reuse of mstatus.TSR and hstatus.VTSR with dedicated enable/trap control bits
+// in the standard RISC-V Environment Configuration registers (menvcfg, henvcfg, and senvcfg)
+// or State Enable registers (mstateen, hstateen):
+// - Define `menvcfg.ACEME` (ACE Memory Enable) to selectively trap S-mode ACE memory instructions.
+// - Define `henvcfg.ACEME` to selectively trap VS-mode ACE memory instructions to HS-mode.
+// This completely decouples ACE trap-and-emulate support from SRET interception.
+
 [WARNING]
 ====
-This reuse of `TSR`, and the corresponding reuse of `VTSR` below, must be discussed with
+This reuse of `TSR`, and the corresponding reuse of `VTSR` below, shall be discussed with
 the RISC-V Architecture Review Committee before ratification.
 
 `mstatus.TSR` is currently defined by cite:[RISCV-ISA-Priv] for one purpose only, namely
@@ -205,10 +216,10 @@ supervisor-mode returns, and under this specification it would silently begin tr
 `ace.load`, `ace.store`, `ace.input` and `ace.output` as well, whether or not it is
 prepared to emulate them.
 
-The alternative is to give the behavior its own enable — for instance a bit in an
-`*envcfg` CSR — which leaves `TSR` untouched and lets the two controls be set
-independently. Which of the two the architecture should adopt is not for this document to
-decide alone.
+The recommended architectural remediation is to allocate dedicated trap-control bits in
+`menvcfg` and `henvcfg` (e.g., `menvcfg.ACEME` / `henvcfg.ACEME`), or use the `*stateen`
+framework. This leaves `TSR` and `VTSR` untouched, maintains backward compatibility, and allows
+SRET trapping and ACE memory instruction emulation to be configured independently.
 ====
 
 [NOTE]
@@ -239,15 +250,18 @@ When V=1:
 
 In implementations with a writable `misa.L`, `vsstatus.ACES` may be present even when `misa.L` is clear.
 
-When `VTSR` is set to 1, all ACE memory instructions cause a
-virtual-instruction exception in VS-mode.
+When `VTSR` is set to 1, all ACE memory instructions cause a virtual-instruction exception in VS-mode.
+
+// Mirroring the remediation for mstatus.TSR, hstatus.VTSR must
+// not be overloaded. Dedicated control via henvcfg.ACEME (or hstateen) should gate VS-mode
+// virtual-instruction traps for ACE memory instructions.
 
 [WARNING]
 ====
 As for `TSR` (<<ACE-ACES-field-in-mstatus>>), this reuse of `VTSR` must be discussed with
 the RISC-V Architecture Review Committee before ratification, and the two must be settled
 together: whatever mechanism is chosen to gate the trapping of ACE memory instructions in
-S-mode should gate it in VS-mode by the same means.
+S-mode (such as `menvcfg.ACEME` and `henvcfg.ACEME`) should gate it in VS-mode by the same means.
 ====
 
 // ////////////////////////////////////////////////////////////////////
@@ -321,7 +335,7 @@ NOTE: `sstatus.ACES`, `vsstatus.ACES`, and `scrstatus` are also in effect when V
 
 // ////////////////////////////////////////////////////////////////////
 
-[#ACE-CSR-mcrstatus,discrete]
+[discrete#ACE-CSR-mcrstatus]
 ==== `mcrstatus` for Dirtiness Tracking
 
 [WARNING]
@@ -346,9 +360,9 @@ Lazy context switching defers restoration of a CR from its saved SCC.
 The authoritative value remains stored in the SCC, while the CR itself remains unconfigured.
 When software subsequently accesses the CR, the trap handler restores its value by importing the SCC.
 
-If there is no sufficient CRF available when the SCC must be imported, the trap handler selects another configured CR, exports its state to an SCC, marks it Lazy and frees it, and then restores the requested CR. The policy used to select the CR to be evicted is implementation-defined or software-defined.
+If there is no sufficient CRF available when the SCC is imported, the trap handler selects another configured CR, exports its state to an SCC, marks it Lazy and frees it, and then restores the requested CR. The policy used to select the CR to be evicted is implementation-defined or software-defined.
 
-As execution may be interrupted by any higher-privilege mode, the architecture must be able to determine which privilege mode currently holds the authoritative SCC for a lazily restored CR:
+As execution may be interrupted by any higher-privilege mode, the architecture needs to be able to determine which privilege mode currently holds the authoritative SCC for a lazily restored CR:
 
 . Let __B__ be a privilege mode and __A__ a higher privileged mode.
 Suppose an exception handler executing in __A__-Mode has saved CR ``K(``__i__``)`` on behalf of software running in __B__-mode.
@@ -384,21 +398,21 @@ Access outside M-mode raises an illegal instruction exception.
 A CSK can only become active if all eight, respectively four, CSRs have been written to.
 A mechanism for ensuring this is the following:
 
-* The implementation must maintain a per-hart set of flags indicating which CSRs in the group have been written to.
+* The implementation maintains a per-hart set of flags indicating which CSRs in the group have been written to.
 * These flags are initially unset.
-* When M-Mode firmware writes to a CSR in the `macecsk` group, the implementation must set the corresponding flag, and keep a copy of the value written so far. Reading the register will still return the old value.
+* When M-Mode firmware writes to a CSR in the `macecsk` group, the implementation sets the corresponding flag, and keep a copy of the value written so far. Reading the register will still return the old value.
 * Once all flags have been set, the values written by M-mode firmware are activated and replace the old values atomically, and the flags are cleared. The new CSK can now be used for cryptographic operations.
 * Any mode change to M-mode will reset the flags.
 * While any of the flags is set, that is while a CSK is partially written, the ACE unit is not available and any attempt to execute an ACE instruction raises an illegal instruction exception. Because activation clears the flags, the unit becomes available again as soon as the group has been written in full.
 
 // ////////////////////////////////////////////////////////////////////
 
-[[ACE-CSR-macePhysBootScrt]]
-==== `macePhysBootScrt` Group
+[[ACE-CSR-macephysbootscrt]]
+==== `macephysbootscrt` Group
 
 {empty}
-(((CSR, `macePhysBootScrt`)))
-The `macePhysBootScrt` group consists of M-mode WARZ XLEN-bit CSRs, accessed via Indirect CSR Access: four in RV32, two in RV64.
+(((CSR, `macephysbootscrt`)))
+The `macephysbootscrt` group consists of M-mode WARZ XLEN-bit CSRs, accessed via Indirect CSR Access: four in RV32, two in RV64.
 
 A write to the __i__-th CSR sets bits [(_i_+1)XLEN−1 : _i_·XLEN] of the Locality Secret PhysBootScrt (<<ACE-locality-indexes>>).
 
@@ -406,12 +420,12 @@ Access outside M-mode or Debug mode raises an illegal instruction exception.
 
 // ////////////////////////////////////////////////////////////////////
 
-[[ACE-CSR-haceVirtBootScrt]]
-==== `haceVirtBootScrt` Group
+[[ACE-CSR-hacevirtbootscrt]]
+==== `hacevirtbootscrt` Group
 
 {empty}
-(((CSR, `haceVirtBootScrt`)))
-The `haceVirtBootScrt` group consists of HS-mode WARZ XLEN-bit CSRs, accessed via Indirect CSR Access: four in RV32, two in RV64.
+(((CSR, `hacevirtbootscrt`)))
+The `hacevirtbootscrt` group consists of HS-mode WARZ XLEN-bit CSRs, accessed via Indirect CSR Access: four in RV32, two in RV64.
 
 A write to the __i__-th CSR sets bits [(_i_+1)XLEN−1 : _i_·XLEN] of the Locality Secret VirtBootScrt (<<ACE-locality-indexes>>).
 
@@ -419,12 +433,12 @@ Access below HS-mode raises an illegal instruction exception.
 
 // ////////////////////////////////////////////////////////////////////
 
-[[ACE-CSR-maceLocality]]
-==== `maceLocality` Group
+[[ACE-CSR-macelocality]]
+==== `macelocality` Group
 
 {empty}
-(((CSR, `maceLocality`)))
-The `maceLocality` group consists of M-mode WARZ XLEN-bit CSRs, accessed via Indirect CSR Access: four in RV32, two in RV64.
+(((CSR, `macelocality`)))
+The `macelocality` group consists of M-mode WARZ XLEN-bit CSRs, accessed via Indirect CSR Access: four in RV32, two in RV64.
 
 A write to the __i__-th CSR sets bits [(_i_+1)XLEN−1 : _i_·XLEN] of the Locality Secret MLocality (<<ACE-locality-indexes>>).
 
@@ -432,12 +446,12 @@ Access outside M-mode and Debug mode raises an illegal instruction exception.
 
 // ////////////////////////////////////////////////////////////////////
 
-[[ACE-CSR-haceLocality]]
-==== `haceLocality` Group
+[[ACE-CSR-hacelocality]]
+==== `hacelocality` Group
 
 {empty}
-(((CSR, `haceLocality`)))
-The `haceLocality` group consists of HS-mode WARZ XLEN-bit CSRs, accessed via Indirect CSR Access: four in RV32, two in RV64.
+(((CSR, `hacelocality`)))
+The `hacelocality` group consists of HS-mode WARZ XLEN-bit CSRs, accessed via Indirect CSR Access: four in RV32, two in RV64.
 
 A write to the __i__-th CSR sets bits [(_i_+1)XLEN−1 : _i_·XLEN] of the Locality Secret HLocality (<<ACE-locality-indexes>>).
 
@@ -445,12 +459,12 @@ This group shall be implemented whenever the H extension is implemented. Access 
 
 // ////////////////////////////////////////////////////////////////////
 
-[[ACE-CSR-saceLocality]]
-==== `saceLocality` Group
+[[ACE-CSR-sacelocality]]
+==== `sacelocality` Group
 
 {empty}
-(((CSR, `saceLocality`)))
-The `saceLocality` group consists of (V)S-mode WARZ XLEN-bit CSRs, accessed via Indirect CSR Access: four in RV32, two in RV64.
+(((CSR, `sacelocality`)))
+The `sacelocality` group consists of (V)S-mode WARZ XLEN-bit CSRs, accessed via Indirect CSR Access: four in RV32, two in RV64.
 
 A write to the __i__-th CSR sets bits [(_i_+1)XLEN−1 : _i_·XLEN] of the Locality Secret SLocality (<<ACE-locality-indexes>>).
 
@@ -492,8 +506,8 @@ All three instructions can be implemented as CSR RW instructions, for instance:
 * `acecontent` (new), XLEN bits wide, to which we write the content of the CR or the ACEIOBUF or from which we read the current content.
    A write to `acecontent` increases `acestart` by XLEN/8.
 
-Interrupting the firmware implementation of `ace.load`, `ace.store`, `ace.input`, or `ace.output` must leave the architectural state indistinguishable from the state expected from interrupting a monolithic implementation of the instructions.
-The supporting instructions themselves must be uninterruptible.
+Interrupting the firmware implementation of `ace.load`, `ace.store`, `ace.input`, or `ace.output` shall leave the architectural state indistinguishable from the state expected from interrupting a monolithic implementation of the instructions.
+The supporting instructions themselves shall be uninterruptible.
 
 ////
 
