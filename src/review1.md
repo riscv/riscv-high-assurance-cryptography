@@ -174,12 +174,12 @@ REVIEWER ERROR
 **M13. Random key generation has no entropy-source requirement.** `src/ace-ISA-unpriv.adoc:383-384`.
 **FIXED**
 
-
 **M14. The `_SystemFormat_` escape hatch is unbounded and ungated.** `src/ace-ISA-unpriv.adoc:320-324`, `:1045-1047`.
 18.  Setting one MDH bit makes the remaining format "entirely system specific" and the semantics of `ace.load` "entirely implementation dependent", voiding metadata validation, sealing, Localities and usage control — with no requirement that a system-defined format preserve confidentiality or integrity, and no privilege gate on setting the bit. A conforming implementation could define a system format whose load/store path moves plaintext keys. *Require system formats to preserve the Content confidentiality/integrity invariant and restrict the bit to a platform-authorized context.*
 **I DO NOT REALLY SEE THIS ISSUE**
 
 **M15. The `ace.mgmt` terminator state machine permits an authentication-bypass path.**
+**NO, it dies not, but I used clearer wording.**
 **FIXED**
 
 **M16. CRF security requirements are inconsistent with the declared adversary.**

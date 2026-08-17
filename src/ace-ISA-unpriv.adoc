@@ -1623,14 +1623,15 @@ The special values of `#immed7` to initiate a provisioning, importing, and expor
 .Values (decimal) of `#immed7` to be used for provisioning, importing, and exporting
 [float="center",align="center",width="100%",cols="^7%,<27%,<66%",options="header"]
 |===
-| Value | Mnemonic                  |  Description
+| Value | Mnemonic                 |  Description
 |  0   | `ace_CR_provision_start`  |  Prepare a CR for provisioning keys and metadata into it, set _ConfigStatus_ to _CfgStProvisioning_. Needs an auxiliary input in a GPR (or a GPR pair) with bits [63:0] of MDH, or an auxiliary input into a 128-bit (or longer) vector register to provide the entire MDH.
-|  1   | `ace_CR_provision_end`    |  Make the provisioned CR available to software  (“sealing”), set _ConfigStatus_ to _CfgStComplete_. Requires no auxiliary input.
-|  2   | `ace_CR_import_start`     |  Prepare a CR for importing a SCC into it, set _ConfigStatus_ to _CfgStImporting_. Needs an auxiliary input in a GPR (or a GPR pair) with bits [63:0] of MDH, or an auxiliary input into a 128-bit (or longer) vector register to provide the entire MDH.
-|  3   | `ace_CR_import_end`       |  Decrypt and authenticate the imported SCC, make the CR available to software, set _ConfigStatus_ to a provided value.
-|  4   | `ace_CR_export_start`     |  Prepare a CR for exporting it as a SCC (if not yet in the correct format), set _ConfigStatus_ to _CfgStExporting_. Requires no auxiliary input.
-|  5   | `ace_CR_export_end`       |  Restore the exported CR in the internal clear format (only if already complete) and make it available to software, set _ConfigStatus_ to a provided value. Uses an auxiliary input in a GPR (or a GPR pair) with bits [63:0] of MDH to restore _ConfigStatus_ saved by software.
-If the restored value of _ConfigStatus_ is not _CfgStComplete_, the CR is made available to software.
+|  1   | `ace_CR_import_start`     |  Prepare a CR for importing a SCC into it, set _ConfigStatus_ to _CfgStImporting_. Needs an auxiliary input in a GPR (or a GPR pair) with bits [63:0] of MDH, or an auxiliary input into a 128-bit (or longer) vector register to provide the entire MDH.
+|  2   | `ace_CR_export_start`     |  Prepare a CR for exporting it as a SCC (if not yet in the correct format), set _ConfigStatus_ to _CfgStExporting_. Requires no auxiliary input.
+|  3   | `ace_CR_management_end`   |  Terminate the current management operation. The semantics depend on _ConfigStatus_.
+// Make the provisioned CR available to software  (“sealing”), set _ConfigStatus_ to _CfgStComplete_. Requires no auxiliary input.
+// |  3   | `ace_CR_import_end`       |  Decrypt and authenticate the imported SCC, make the CR available to software, set _ConfigStatus_ to a provided value.
+// |  5   | `ace_CR_export_end`       |  Restore the exported CR in the internal clear format (only if already complete) and make it available to software, set _ConfigStatus_ to a provided value. Uses an auxiliary input in a GPR (or a GPR pair) with bits [63:0] of MDH to restore _ConfigStatus_ saved by software.
+// If the restored value of _ConfigStatus_ is not _CfgStComplete_, the CR is made available to software.
 |===
 --
 +
@@ -1660,6 +1661,8 @@ GPR pair), or a vector register.
 . *`ace.mgmt` is used to terminate a provisioning process.*
 +
 --
+Makes the provisioned CR available to software  (“sealing”), set _ConfigStatus_ to _CfgStComplete_. Requires no auxiliary input.
+
 .. The ACE unit performs any necessary readjustment of the CR's content to turn it into the format internally consumed by the ACE Unit.
 ..  _ConfigStatus_ is set to _CfgStComplete_.
 .. `acestart` is set to 0.
@@ -1670,6 +1673,7 @@ Note that a process may be preempted during the provisioning of a CR. The config
 . *`ace.mgmt` is used to terminate an import process.*
 +
 --
+Decrypt and authenticate the imported SCC, make the CR available to software, set _ConfigStatus_ to a provided value.
 The software shall use Form B of `ace.mgmt` to contextually pass the saved value of `ml`.
 
 .. If `ml`._ConfigStatus_ = _CfgStComplete_ (we are importing the export of a fully configured CR)
@@ -1704,6 +1708,9 @@ No encryption or authentication occurs, the information in the CR is exported ve
 . *`ace.mgmt` is used to terminate an export process.*
 +
 --
+Uses an auxiliary input in a GPR (or a GPR pair) with bits [63:0] of MDH to restore _ConfigStatus_ saved by software.
+If the passed _ConfigStatus_ is _CfgStComplete_, restore the exported CR in the internal clear format, and make it available to software.
+
 Let `ml` be the value of MDH[63:0] saved by the software upon initiation of the export process.
 Software passes `ml` as the auxiliary parameter to `ace.mgmt` for export termination.
 Then:
@@ -1719,9 +1726,6 @@ No changes to the CR state are made.
 
 .. `acestart` is set to 0.
 --
-
-Note that a provisioning, export, resp., import process can only be terminated passing `ace_CR_provision_end`, `ace_CR_export_end`, resp., `ace_CR_import_end`.
-Passing the wrong immediate parameter to `ace.mgmt` will raise an illegal instruction exception.
 
 //
 
