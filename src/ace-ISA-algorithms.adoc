@@ -435,28 +435,11 @@ State Machine:::
   .. `tmp ← keystream_block(IV xor ctr)`,
   . `tick_ctr()`, and
   . `OUTPUT ← tmp`.
---
-// +
-// --
-// The two branches differ in more than the combining operation, and the difference is not
-// incidental. In the non-X modes the counter occupies the *last* `j`/8 octets of the counter
-// block, as a *big-endian* integer: that is the arrangement of cite:[nist-SP-800-38A-1], and
-// the one GCM itself uses, where the counter block is `binBE(ctr,32) @ J0[95:0]`
-// (<<ACE-GCM-mode>>). Under <<ACE-Notation>> those trailing octets are the *more*
-// significant bits of the value, so the encoded counter is the *left* operand of `@`, and
-// `bswap` supplies the big-endian octet order; equivalently, `bswap(ctr)` is
-// `binBE(int(ctr), j)`. Writing `IV @ ctr` instead would place the counter in the first
-// `j`/8 octets and in little-endian order, which is neither what
-// cite:[nist-SP-800-38A-1] describes nor what any interoperating implementation computes.
-//
-// In the X modes no such reordering arises: the counter is `b` bits wide, is combined with
-// the IV by `xor` rather than by position, and is kept in the ordinary little-endian order
-// of this specification.
-// --
-// +
+
 If `ACELEN` is a multiple of `b`, the above three commands are applied to each
 of the `ACELEN/b` `b`-bit blocks of `INPUT`, producing the corresponding `b`-bit
 block of `OUTPUT` each time.
+--
 
 Note that if `ace.setst` is issued to return to State _Initial_, the CC can be
 reused with a new IV.
@@ -1013,18 +996,6 @@ If `ACELEN` > `128`, the above operation is executed `ACELEN/128` times.
 --
 +
 If `ACELEN` is a multiple of `b`, the above operations are executed `ACELEN/b` times, encrypting each `b`-bit block of `INPUT` into the corresponding `b`-bit block of `OUTPUT`.
-// +
-// --
-// *The two excluded counter values.* `start_ctr` is excluded because it produces the tag mask,
-// and reusing it for data would disclose that mask. `start_ctr - 1` is excluded so that the
-// number of data blocks a CC can process matches cite:[nist-SP-800-38D] {sect}5.2.1.1 exactly:
-// the admissible counter values are then `start_ctr + 1` through `start_ctr + (2^32^ - 2)`,
-// that is 2^32^ - 2 blocks, which at 128 bits each is 2^39^ - 256 bits—the standard's ceiling
-// on the length of the plaintext. Excluding only `start_ctr` would admit 2^32^ - 1 blocks, one
-// more than the standard permits. The guard is reached only after 64 GiB have passed through a
-// single CC; it is a conformance bound, and the security-critical part of it is the exclusion
-// of `start_ctr`.
-// --
 
 ** To transition to State _Enc_Last_Block_, a Form B `ace.setst` instruction is issued, whereby
 `last_blk_len`, the bit length of the last block, is set to the auxiliary argument `Xs`. A value of zero, or larger than 127, *invalidates* the CR, as it does in the other modes that take a final-block length (cf. <<ACE-OCB-mode>>, <<ACE-CMAC-mode>>, <<ACE-Ascon-AEAD128>>).
@@ -1337,17 +1308,6 @@ Besides _Initial_, _Success_, and _Failure_, the GCM-SIV algorithm makes use of 
  ** For decryption: _Hash_Absorb_ -> _Decrypt_ -> { _Dec_Last_Block_ -> } _Dec_Tag_Finalize_ -> _Success_ or _Failure_. (Note that after _Hash_Absorb_, the encryption and decryption branches of the state machine do not have common states.)
  ** Transition to _Encrypt_ possible only if encryption is allowed.
  ** Transition to _Decrypt_ possible only if decryption is allowed.
-// +
-// --
-// The encryption branch has no transition out of _Encrypt_/_Enc_Last_Block_.
-// This is deliberate: the CC is
-// not told the length of the plaintext and does not count blocks, so it has no way to know
-// when the last one has been encrypted. The SIV was already produced in
-// _Enc_Tag_Finalize_, so nothing remains to be finalized, and the caller simply stops
-// issuing ``ace.exec`` instructions and clears or re-provisions the CR. The decryption
-// branch does reach _Success_ or _Failure_ because _Dec_Tag_Finalize_ is an explicit act of
-// verification.
-// --
 
 * *Behavior:*
 ** In State _Initial_ :
@@ -1394,14 +1354,7 @@ If `ACELEN` is a multiple of 128, `absorb()` is executed on each of the `ACELEN/
 The caller must zero every bit of a final partial block beyond the actual
 end of the data being absorbed—the AD, and on the encryption path also the plaintext.
 cite:[RFC8452] {sect}4 specifies both the AD and the plaintext as zero-padded to a multiple of 16 octets.
-// , so a caller that leaves other data
-// there computes a tag that does not conform to the standard. This is the same obligation
-// that <<ACE-GCM-mode>> places on the AD, and for the same reason. It applies only to data
-// absorbed in this state: a final partial block of the *ciphertext* on the decryption path is
-// handled by State _Dec_Last_Block_ instead, because there the value absorbed is derived from
-// the keystream and zero-padding by the caller would not be sufficient.
 --
-+
 
 ** In State _Enc_Tag_Finalize_, an ``ace.exec`` instruction of Form A is expected. Its input value
 +
@@ -1727,22 +1680,8 @@ If `last_blk_len` = 0, however, no `ace.exec` can be executed, and only an `ace.
 [NOTE]
 ====
 cite:[RFC7253] {sect}4.2 specifies these variables over a big-endian bit string, with
-positions numbered from 1. They are therefore computed here in the
-`bswap` view of <<ACE-Notation>>.
+positions numbered from 1. They are therefore computed here in the `bswap` view of <<ACE-Notation>>.
 ====
-// , in which the RFC's bit `k` (one-based, counted from
-// the first bit of an `n`-bit string) is bit `n-k` of the value. Concretely:
-//
-// * `Nonce_be` is `num2str(TAGLEN mod 128, 7) {vvert} zeros(120-|N|) {vvert} 1 {vvert} N`, so the seven tag-length bits are the *most* significant and the nonce the least. The reduction `mod 128` is required: `tag_len` may be 128, which does not fit in 7 bits. `N` is held in the CR in the ordinary octet order of <<ACE-Notation>>, so it must be passed through `bswap` to enter the big-endian view; `N_len` is a multiple of 8, so the reversal is well defined.
-// * `bottom` is the last six bits of `Nonce`, i.e. `Nonce_be[5:0]`, and `Ktop` encrypts
-//   `Nonce` with exactly those six bits cleared in place.
-// * `Stretch_be` is 192 bits: `Ktop` followed by 64 further bits, so `Ktop` occupies the
-//   *high* 128 bits of the big-endian view.
-// * `Offset~0~` is `Stretch[1+bottom .. 128+bottom]`, which in the big-endian view is the
-//   128-bit slice `Stretch_be[191-bottom : 64-bottom]`. Since `bottom` {le} 63, this slice
-//   is always within range.
-// +
-// `N_len` must not exceed 120, so that `zeros(120 - N_len)` is well formed.
 
 ** In State _Encrypt_, `ace.exec` instructions are expected to be of Form A:
 “``ace.exec OUTPUT, Kn|K{Xn}, INPUT``” absorbs the plaintext `INPUT` into the `tag` and encrypts `INPUT` into `OUTPUT`, namely:
@@ -1775,21 +1714,14 @@ In this case, following operations are performed:
  . `OUTPUT <- zeros(128-last_blk_len) @ (INPUT[last_blk_len-1:0] xor tmp[last_blk_len-1:0])`
  . `tmp <- offset xor ocb_pad(INPUT, last_blk_len)`
  . `checksum_P <- enc_blk(key, checksum_P xor tmp xor L$) xor hash_A` // tag
-// +
-// The value folded into the checksum in Step 4 is the *plaintext* `INPUT`, as required by
-// `Checksum~*~` = `Checksum~m~ xor (P~*~ {vvert} 1 {vvert} 0^127-|P*|^)` in
-// cite:[RFC7253] {sect}4.2. It is not the pad computed in Step 2, which `tmp` still holds
-// at that point.
---
-+
+
 On the other hand, if `last_blk_len` is zero, only an ``ace.exec`` instruction
 of Form D, “``ace.exec Kn|K{Xn}```,” is expected, which performs:
-+
---
-  . `checksum_P <- enc_blk(key, checksum_P xor offset xor L$) xor hash_A`
---
-+
+
+. `checksum_P <- enc_blk(key, checksum_P xor offset xor L$) xor hash_A`
+
 In both cases the state then transitions to _Enc_Tag_Finalize_.
+--
 
 ** In State _Enc_Tag_Finalize_, only a single ``ace.exec`` instruction of Form C,
    “``ace.exec OUTPUT,Kn|K{Xn}```,” is expected, which performs `OUTPUT <-
@@ -1830,11 +1762,6 @@ In this case, following operations are performed:
    . `tmp <- offset xor ocb_pad(OUTPUT, last_blk_len)`
    . `checksum_P <- enc_blk(key, checksum_P xor tmp xor L$) xor hash_A` // tag
    . The state transitions to _Hash_Verify_.
-// +
-// As on the encryption path, the value folded into the checksum in Step 4 is the
-// *plaintext*. On this path the plaintext is `OUTPUT`, recovered in Step 3; `INPUT` holds
-// the ciphertext and must not be used. Encryption and decryption therefore fold the same
-// value, which is what makes the two tags agree.
 
 On the other hand, if `last_blk_len` is zero, only an ``ace.exec`` instruction
 of Form D, “``ace.exec Kn|K{Xn}```,” is expected, which performs:
@@ -2297,10 +2224,6 @@ Parameters:::
   <<ACE-SHA-3-parameters>>.
 * Granularity: 32 bits. This is the smallest element width that may be used for the
   vector inputs of `ace.exec`, not a constraint on the length of the hashed message.
-//  the
-//  progress of the absorption is tracked in `block_base`, which counts octets, so a message whose length
-//  is not a multiple of 32 bits is supported. It is, like every other input, a whole number
-//  of octets (<<ACE-octet-granularity>>).
 
 [[ACE-SHA-3-parameters]]
 .Parameters of the SHA-3 family
@@ -2496,11 +2419,6 @@ State Machine:::
   . `state` is zeroed.
   . `cshake_block` is XORed into the rate and `P()` is applied.
   . `key_block` is XORed into the rate and `P()` is applied.
-// +
-// --
-// Both blocks are exactly one rate block long, so the message that follows begins at
-// offset 0 of a fresh rate block and `block_base` is 0 on entry to _Hash_Absorb_.
-// --
 
  ** To transition to State _Hash_Output_, a Form B `ace.setst` instruction is expected for `KMAC128` and `KMAC256`,
     whose auxiliary argument sets `L`, the output length in bits.
@@ -2531,17 +2449,6 @@ algorithms never transition to _Success_.
 {empty}
 (((ACE, algorithm, Ascon)))
 Ascon is a public permutation cite:[DBLP-journals-joc-DobraunigEMS21] standardized by the NIST cite:[nist-SP-800-232] together with various cryptographic algorithms designed around it.
-
-// [WARNING]
-// ====
-// In all ASCON algorithms as per cite:[nist-SP-800-232], the bitstrings are written in little endian order, and in particular the concatenation operator is also little endian: `x {vvert} y` means that `x` is the least significant bit string, which corresponds to our `y @ x`.
-//
-// This is the general transcription rule of <<ACE-Notation-transcription>> and not an
-// exception made for Ascon: it applies to every standard reproduced in this chapter.
-// Ascon is called out here only because cite:[nist-SP-800-232] is itself written in little
-// endian order, so its formulas and this specification's differ *only* in the order of the
-// concatenated terms, with no `bswap` and no big-endian integer encodings anywhere.
-// ====
 
 In Ascon-AEAD128, it is the responsibility of the user to apply proper padding to the AD and plaintext. The inputs are therefore assumed to be properly padded. Similarly, it is the responsibility of the user to truncate the last plaintext block.
 
@@ -2774,30 +2681,6 @@ The `ace.exec` instruction performs:
 --
 +
 In State _Dec_Last_Block_, only one 128-bit block is processed.
-// +
-// The rate is updated by an *exclusive or* with the padded *plaintext*, exactly as on the
-// encryption path, so that both paths reach the same state before finalization. Step 4
-// replaces the first `last_blk_len` bits of `S_r` with the ciphertext, flips the padding
-// bit immediately above them, and leaves the remainder of the rate unchanged. It must not
-// be written as an assignment of `pad(INPUT)`: that would substitute the ciphertext for
-// the plaintext and would additionally clear the part of `S_r` above the padding bit,
-// which the encryptor never does.
-//
-// Ascon-AEAD128 has no _Dec_Tag_Finalize_ state. Both branches of _Dec_Last_Block_ reach
-// _Hash_Verify_ on their own—the `ace.setst` does so directly when the final block is empty,
-// and the `ace.exec` does so otherwise—mirroring the way the encryption path reaches
-// _Hash_Output_. The received tag is supplied with the `ace.exec` of _Hash_Verify_, described
-// below, which performs the whole finalization; an intermediate state would have nothing to do.
-//
-// [NOTE]
-// ====
-// cite:[nist-SP-800-232] specifies a 128-bit tag for Ascon-AEAD128 and defines no truncated
-// variant. Verifying against a truncated tag would reduce forgery resistance by exactly the
-// number of bits dropped and, since the encryption path emits the full 128 bits, would not
-// interoperate with it. The `tag_len` field is retained in the Internal State and in the
-// Serialized Context, holding the value 128, so that a variant with a different tag length
-// could be added later without changing the format.
-// ====
 
 ** In State _Hash_Verify_, only one ``ace.exec`` instruction of Form B is expected to be issued, to verify the tag.
 “``ace.exec Kn|K{Xn}, INPUT``” performs
@@ -3486,10 +3369,6 @@ Data Structures:::
  Note that `decapsk` contains `encapsk` whose size is 6400 / 9472 / 12544 bits (800 / 1184 / 1568 bytes).
  ** `ciphertext`: 6144 / 8704 / 12544 bits (768 / 1088 / 1568 bytes).
  ** `sharedkey` 256 bits.
-// ** `len`, `input_base`, `block_base`, `cumul_len`: 16 bits each, the variables of
-//    Subalgorithm `process_VLI` (cf. <<ACE-process-VLI>>), used by the three `_*_Input_`
-//    states. `len` is the bit size of the field currently being loaded and `cumul_len` the
-//    number of bits loaded so far; the latter is the value reported in the _AlgorithmUse_ field.
 
 `encapsk` corresponds to `ek` in cite:[nist-fips-203],
 `decapsk` corresponds to `dk`, and

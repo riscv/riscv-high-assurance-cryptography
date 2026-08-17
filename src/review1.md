@@ -366,3 +366,10 @@ DONE 2. Rework the SCC sealing construction — nonce-bearing key derivation, RF
 DONE 3. Promote the threat model into the normative document and state the trust boundaries, particularly M-mode's (M1).
 DONE 4. Resolve the register-sharing and provenance question, the Debug-mode default, and zeroization (C5, C7, C8, M5, M6).
 DONE 5. Fix the hypervisor state-management model so ACE state can actually be saved, restored and migrated (C9, M17–M26).
+
+
+* *Trap behavior beyond cause numbers is undefined.*
+**NO NEED SINCE THE TRAP HANDLER ALREADY HAS ALL THE INFORMATION**
+
+* Specify the result of `ace.size` per `_ConfigStatus_`
+**DOUBLE-CHECK IT HAS BEEN CHANGED CORRECTLY**
