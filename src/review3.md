@@ -370,7 +370,7 @@ condition: `ace.size`, the `ace.getmd*` group (`ace.getmdl`, `ace.getmdh`, `ace.
 and hence `ace.getst`), and the data-movement instructions used during configuration and
 export, `ace.load`, `ace.store` and `ace.mv`. A note after the table records *why* each
 exemption is necessary — `ace.load`/`ace.mv` write a CR precisely while its _ConfigStatus_
-is _ace_cfgst_Provisioning_ or _ace_cfgst_Importing_ and are illegal when it is _ace_cfgst_Complete_;
+is _ace_cfgst_Provisioning_ or _ace_cfgst_importing_ and are illegal when it is _ace_cfgst_complete_;
 `ace.store` and the CR-reading forms of `ace.mv` read a CR whose _ConfigStatus_ is
 `ace_cfgst_exporting` — so the list is not narrowed again by a later editor. The note also
 states that instructions which merely *target* a CR as the destination of a configuration

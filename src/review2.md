@@ -171,7 +171,7 @@ text fails the same test - so C8 and C9 were real and the test has power over th
 | M24 | `ace-ISA-unpriv.adoc` | New `ACE-SCC-rationale` subsection: Locality Secrets as associated data argued via POLYVAL's AXU property and its cost advantage over a KDF; the default zero nonce justified by nonce misuse-resistance with the loss of semantic security stated as accepted; RFC 8452 key-usage bounds recorded; a WARNING against manufacture-fixed CSKs |
 | M25 | `ace-ISA-algorithms.adoc` | CMAC's last-block guard now tests `block_base != 0`, and `block_base` added to the internal state and serialized context so the test is well defined |
 | M21 | `ace-ISA-unpriv.adoc`, `ace-ISA-algorithms.adoc` | Every extension name now resolves to one the table defines: `Zklcmac`->`Zklcmacm`; the `Zklkn` dependency list to `Zklaes128p`/`Zklaes256p`/`Zklesha2h`; `Zklm`->`Zklmem` in the three snippet captions and in a commented-out line; `ace.store` moved from `Zklv`/`Zklio` to `Zklmem`, matching `ace.load`; "At least of" -> "At least one of"; the `Zklkn` row's `2+` span removed so its columns line up |
-| M23 | `ace-ISA-unpriv.adoc` | New `ACE-SCC-authenticated-MDH` rule: `AD[0]` is the *initial* MDH in both directions — the `_ace_cfgst_Complete_` image software saves before `#ace_CR_export_start`, and the image carried in the SCC and passed to `#ace_CR_import_start` — with no in-flight change reflected, and Section 1 of the SCC carrying that same image |
+| M23 | `ace-ISA-unpriv.adoc` | New `ACE-SCC-authenticated-MDH` rule: `AD[0]` is the *initial* MDH in both directions — the `_ace_cfgst_complete_` image software saves before `#ace_CR_export_start`, and the image carried in the SCC and passed to `#ace_CR_import_start` — with no in-flight change reflected, and Section 1 of the SCC carrying that same image |
 | M15 (part 2) | `ace-ISA-algorithms.adoc` | New `ACE-EdDSA` subsection: the seed held in `Scalar` with `s`/`prefix` derived internally, `ctx`/`ctxlen`, `PreHash` and `msg_pass`, a `_Msg_Absorb_` state, and the two-pass signing / one-pass verification structure. Pure mode conditioned on `Zklesha2h`/`Zklesha3h`, pre-hash always available. `h` = 512 and `j` dropped for both curves. SM2's `Hash` documented as `e = SM3(Z_A ‖ M)` with `Z_A` computed by the caller. WARNING removed |
 | m17 | `ace-notation.adoc` | `len_in_bits`/`len_in_bytes` corrected; `bit_length` and `%` eliminated as duplicate spellings; `foreach`, `mod`, `ceil`, `floor`, `min`, `max`, comparison/arithmetic operators and `local` defined; `←` and `<-` stated to be synonymous |
 
@@ -669,7 +669,7 @@ Form A "returns the total size in bytes of the memory buffer that would be neces
 store the exported SCC". The normative provisioning sequence
 (`ace-ISA-management-code-snippets`) calls `ace.size a2, K{t0}` immediately after
 `ace_CR_provision_start` to obtain the length of the **PI**. Form A needs a defined
-behaviour when `_ConfigStatus_` is `_ace_cfgst_Provisioning_` / `_ace_cfgst_Importing_`.
+behaviour when `_ConfigStatus_` is `_ace_cfgst_Provisioning_` / `_ace_cfgst_importing_`.
 
 ### M4 — `ace.mv`: the Description contradicts the Encoding (directions swapped) — **FIXED**
 `ace-ISA-unpriv.adoc:1305-1315` vs `1322-1346`.
@@ -1113,11 +1113,11 @@ for candidacy, not a drafting detail.
 ### M23 — Which MDH snapshot is authenticated is never pinned — **FIXED**
 
 Pinned to the initial image, per the author: the MDH as it stood when the operation began.
-For an export that is the `_ace_cfgst_Complete_` image software reads with `ace.getmdl` and
+For an export that is the `_ace_cfgst_complete_` image software reads with `ace.getmdl` and
 saves before `#ace_CR_export_start`; for an import it is the image carried in the SCC and
 passed to `#ace_CR_import_start`. Both assignment sites now say so, and the rule records
 why it is forced rather than chosen: a CR is in ``ace_cfgst_exporting`` when its `SIV` is
-computed and in `_ace_cfgst_Importing_` when that `SIV` is checked, so authenticating the
+computed and in `_ace_cfgst_importing_` when that `SIV` is checked, so authenticating the
 in-flight image would make every SCC fail to import.
 `ace-ISA-unpriv.adoc:2950`, `1581-1587`, `1596-1604`.
 
@@ -1169,10 +1169,10 @@ CMAC cannot detect a partial pending block at all.
   contain a CC" (missing space/emphasis terminator).
 * **m3** — **FIXED.** `ace.start` was used five times for the CSR `acestart`; all five
   corrected, together with a doubled full stop on one of them.
-* **m4** — **FIXED.** "if set to" -> "is set to"; `_ace_cfgst_ace_CR_import_` -> `_ace_cfgst_Importing_`; and the case-mangled `_ace_cfgst_importing_`, `_CfgExporting_` and `_ace_cfgst_complete_` normalised throughout, including in the code comments.
+* **m4** — **FIXED.** "if set to" -> "is set to"; `_ace_cfgst_ace_CR_import_` -> `_ace_cfgst_importing_`; and the case-mangled `_ace_cfgst_importing_`, `_CfgExporting_` and `_ace_cfgst_complete_` normalised throughout, including in the code comments.
   _Original finding:_ `ace-ISA-unpriv.adoc:1547` — "_ConfigStatus_ **if** set to _ace_cfgst_Provisioning_,
   resp., _ace_cfgst_**ace_CR_import**_"; also `_ace_cfgst_importing_` (1522) and `_CfgExporting_`
-  (1524) for `_ace_cfgst_Importing_` / ``ace_cfgst_exporting``; `_ace_cfgst_complete_` in the code
+  (1524) for `_ace_cfgst_importing_` / ``ace_cfgst_exporting``; `_ace_cfgst_complete_` in the code
   comments (2588, 2618, 2632, 2664).
 * **m5** — **FIXED.** The note about random material being generated only at the final
   step said "(i.e., when `ace.mgmt` is used to terminate an **import** process)" inside a
