@@ -261,7 +261,8 @@ Invalid instruction exception -> Illegal instruction exception **FIXED**
 
 **M43. `ace.store` is listed under the wrong extensions.** `src/ace-ISA-unpriv.adoc:1128-1137` lists `Zlv` and `Zlio`, while `ace.load` is in `Zlmem` and the overview defines `Zlmem` as "ACE with dedicated memory instructions"; the `Zlv`/`Zlio` footnotes at `:129-131` do not list `ace.store`. An implementer cannot tell which extension mandates it. *Change to `Zlmem`.*
 
-**M44. `Zlkn` depends on three extensions that do not exist.** `src/ace-ISA-unpriv.adoc:128` names `Zlaes128`, `Zlaes256` and `Zlesha2`; the defined names are `Zlaes128p`, `Zlaes256p` and `Zlesha2h` (`:94`, `:96`, `:105`). The malformed table row also leaves `Zlkn` with no "Defined in" target, and it appears nowhere in Books 2–4 despite being mandated by the `Zlv`/`Zlio` footnotes. *Correct the names and the row.*
+**M44. `Zlkn` depends on three extensions that do not exist.**
+**FIXED**
 
 **M45. The relationship between `acenonce0/1` and Locality #11 is never stated.**
 **FIXED** by removing the nonce.
