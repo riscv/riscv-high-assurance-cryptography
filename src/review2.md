@@ -1,4 +1,4 @@
-# ACE (Zl) Technical Review — Readiness as a RISC-V Extension Candidate
+# ACE (Zkl) Technical Review — Readiness as a RISC-V Extension Candidate
 
 Scope: `src/ace.adoc` and the files it includes only
 (`ace-symbols`, `ace-acronyms`, `ace-contributors`, `ace-introduction`, `ace-books`,
@@ -170,9 +170,9 @@ text fails the same test - so C8 and C9 were real and the test has power over th
 | M22 | `ace-ISA-priv.adoc` | WARNING blocks added to the `misa.L` and `mstatus`/`sstatus` ACES subsections recording that both allocations are provisional, that unified discovery may replace the `misa` bit, and that nothing depends on the particular `*status` offset |
 | M24 | `ace-ISA-unpriv.adoc` | New `ACE-SCC-rationale` subsection: Locality Secrets as associated data argued via POLYVAL's AXU property and its cost advantage over a KDF; the default zero nonce justified by nonce misuse-resistance with the loss of semantic security stated as accepted; RFC 8452 key-usage bounds recorded; a WARNING against manufacture-fixed CSKs |
 | M25 | `ace-ISA-algorithms.adoc` | CMAC's last-block guard now tests `block_base != 0`, and `block_base` added to the internal state and serialized context so the test is well defined |
-| M21 | `ace-ISA-unpriv.adoc`, `ace-ISA-algorithms.adoc` | Every extension name now resolves to one the table defines: `Zlcmac`->`Zlcmacm`; the `Zlkn` dependency list to `Zlaes128p`/`Zlaes256p`/`Zlesha2h`; `Zlm`->`Zlmem` in the three snippet captions and in a commented-out line; `ace.store` moved from `Zlv`/`Zlio` to `Zlmem`, matching `ace.load`; "At least of" -> "At least one of"; the `Zlkn` row's `2+` span removed so its columns line up |
+| M21 | `ace-ISA-unpriv.adoc`, `ace-ISA-algorithms.adoc` | Every extension name now resolves to one the table defines: `Zklcmac`->`Zklcmacm`; the `Zklkn` dependency list to `Zklaes128p`/`Zklaes256p`/`Zklesha2h`; `Zklm`->`Zklmem` in the three snippet captions and in a commented-out line; `ace.store` moved from `Zklv`/`Zklio` to `Zklmem`, matching `ace.load`; "At least of" -> "At least one of"; the `Zklkn` row's `2+` span removed so its columns line up |
 | M23 | `ace-ISA-unpriv.adoc` | New `ACE-SCC-authenticated-MDH` rule: `AD[0]` is the *initial* MDH in both directions — the `_ace_cfgst_Complete_` image software saves before `#ace_CR_export_start`, and the image carried in the SCC and passed to `#ace_CR_import_start` — with no in-flight change reflected, and Section 1 of the SCC carrying that same image |
-| M15 (part 2) | `ace-ISA-algorithms.adoc` | New `ACE-EdDSA` subsection: the seed held in `Scalar` with `s`/`prefix` derived internally, `ctx`/`ctxlen`, `PreHash` and `msg_pass`, a `_Msg_Absorb_` state, and the two-pass signing / one-pass verification structure. Pure mode conditioned on `Zlesha2h`/`Zlesha3h`, pre-hash always available. `h` = 512 and `j` dropped for both curves. SM2's `Hash` documented as `e = SM3(Z_A ‖ M)` with `Z_A` computed by the caller. WARNING removed |
+| M15 (part 2) | `ace-ISA-algorithms.adoc` | New `ACE-EdDSA` subsection: the seed held in `Scalar` with `s`/`prefix` derived internally, `ctx`/`ctxlen`, `PreHash` and `msg_pass`, a `_Msg_Absorb_` state, and the two-pass signing / one-pass verification structure. Pure mode conditioned on `Zklesha2h`/`Zklesha3h`, pre-hash always available. `h` = 512 and `j` dropped for both curves. SM2's `Hash` documented as `e = SM3(Z_A ‖ M)` with `Z_A` computed by the caller. WARNING removed |
 | m17 | `ace-notation.adoc` | `len_in_bits`/`len_in_bytes` corrected; `bit_length` and `%` eliminated as duplicate spellings; `foreach`, `mod`, `ceil`, `floor`, `min`, `max`, comparison/arithmetic operators and `local` defined; `←` and `<-` stated to be synonymous |
 
 **Document reorganisation.** The front matter was split into three files, included in this
@@ -557,7 +557,7 @@ constraint. The two sections cannot both be right.
 ### C14 — Normative conformance lists require instructions that do not exist — **FIXED**
 `ace-ISA-unpriv.adoc:130-132`, `462`, `820`, `932`; `ace-ISA-priv.adoc:56-59`.
 
-The `Zlv` and `Zlio` conformance footnotes require an implementation to support
+The `Zklv` and `Zklio` conformance footnotes require an implementation to support
 `ace.prov`, `ace.export` and `ace.import`. The permitted-instruction rule for
 `_Success_`/`_Failure_` states (line 462) lists the same three. The exception table in
 Book 3 attributes load/store faults to them. **None of these instructions is defined
@@ -783,7 +783,7 @@ The original finding follows.
 `ace-ISA-algorithms.adoc:1845`, `1853`, `1911-1920`.
 
 * `b = 1600 − c` with "`c` = 448, 512, 768, or 1024". SHAKE128 has capacity 256, which
-  is absent from the list, so `Zlesha3h`'s SHAKE128 (algorithm Type 5, Mode 4) has no
+  is absent from the list, so `Zklesha3h`'s SHAKE128 (algorithm Type 5, Mode 4) has no
   parameters.
 * "The suffix and padding string `S` is generated" — `S` is never defined. FIPS 202
   requires `01‖pad10*1` for SHA3-n and `1111‖pad10*1` for SHAKE. Without this the
@@ -814,7 +814,7 @@ the two agree, and both reproduce the four SP 800-185 sample vectors.
 The original finding follows.
 `ace-ISA-unpriv.adoc:109-110`; `ace-ISA-algorithms.adoc:76-77`, `1768-1836`.
 
-`Zlkmacm` (KMAC128/KMAC256) and `Zlhmacm` are listed as extensions with "Defined in:
+`Zklkmacm` (KMAC128/KMAC256) and `Zklhmacm` are listed as extensions with "Defined in:
 **TBD**", and KMAC128/KMAC256 appear as Type 5 Modes 10–11 in the algorithm encoding
 table, but there is no KMAC section anywhere. SP 800-185's `bytepad`/`encode_string`/
 right-encoded output length are entirely absent.
@@ -1034,11 +1034,11 @@ For two keys the mask is `enc_blk(key2, tweak)`; for one key it is
 XEX (where `Δ = α·E_K(N)` is needed precisely because a single key is used) but the
 document neither says so nor cites the reason, so an implementer is likely to "fix" it.
 
-More importantly, `Zlxexm` is named "XEX construction" but the extension table and the
+More importantly, `Zklxexm` is named "XEX construction" but the extension table and the
 prose both invoke SP 800-38E (XTS). XTS additionally requires (a) the tweak to be the
 128-bit **little-endian** representation of the data unit sequence number and (b)
 ciphertext stealing. Both are deferred to software with a single sentence
-(`ace-pseudocode.adoc:87`) and no normative text. As specified, `Zlxexm` cannot be
+(`ace-pseudocode.adoc:87`) and no normative text. As specified, `Zklxexm` cannot be
 claimed to implement SP 800-38E.
 
 ### M18 — `macecsk` activation logic locks the ACE unit out permanently — **FIXED**
@@ -1083,23 +1083,23 @@ whose `_UsagePolicy_` excludes U-mode, which conflicts with the context-switch m
 
 ### M21 — Undefined and inconsistent extension names — **FIXED**
 
-All six items corrected, and checked mechanically: every ``Zl``-prefixed name appearing
+All six items corrected, and checked mechanically: every ``Zkl``-prefixed name appearing
 anywhere in the included files now matches one of the 38 defined in the extension table,
 and every defined name is referenced at least once. The `ace.store` correction is the one
-with substance — it was assigned to `Zlv`/`Zlio` while `ace.load`, its counterpart, was in
-`Zlmem`, so an implementation of `Zlmem` alone would have had a load instruction and no
+with substance — it was assigned to `Zklv`/`Zklio` while `ace.load`, its counterpart, was in
+`Zklmem`, so an implementation of `Zklmem` alone would have had a load instruction and no
 store.
-* `ace-ISA-algorithms.adoc:40`: AES128_CMAC requires "`Zlcmac`"; the extension is
-  `Zlcmacm` (`ace-ISA-unpriv.adoc:105`).
-* `ace-ISA-unpriv.adoc:129`: `Zlkn` depends on "`Zlaes128`, `Zlaes256`, `Zlesha2`" —
-  the defined names are `Zlaes128p`, `Zlaes256p`, `Zlesha2h`.
-* `ace-ISA-unpriv.adoc:1197-1199`: `ace.store` is "Included in" `Zlv`/`Zlio`; the
-  extension table (line 92) places both `ace.load` and `ace.store` in `Zlmem`, and
-  `ace.load`'s own box says `Zlmem`.
-* `ace-ISA-unpriv.adoc:2501`, `2552`, `2625`: code snippets labelled "(`Zlm`)"; the
-  extension is `Zlmem`.
-* `ace-ISA-unpriv.adoc:133`: "At least of `Zlmem` or `Zlmv`" (missing "one").
-* The `Zlkn` row (line 129) uses a `2+` column span that misaligns "Minimum version".
+* `ace-ISA-algorithms.adoc:40`: AES128_CMAC requires "`Zklcmac`"; the extension is
+  `Zklcmacm` (`ace-ISA-unpriv.adoc:105`).
+* `ace-ISA-unpriv.adoc:129`: `Zklkn` depends on "`Zklaes128`, `Zklaes256`, `Zklesha2`" —
+  the defined names are `Zklaes128p`, `Zklaes256p`, `Zklesha2h`.
+* `ace-ISA-unpriv.adoc:1197-1199`: `ace.store` is "Included in" `Zklv`/`Zklio`; the
+  extension table (line 92) places both `ace.load` and `ace.store` in `Zklmem`, and
+  `ace.load`'s own box says `Zklmem`.
+* `ace-ISA-unpriv.adoc:2501`, `2552`, `2625`: code snippets labelled "(`Zklm`)"; the
+  extension is `Zklmem`.
+* `ace-ISA-unpriv.adoc:133`: "At least of `Zklmem` or `Zklmv`" (missing "one").
+* The `Zklkn` row (line 129) uses a `2+` column span that misaligns "Minimum version".
 
 ### M22 — Architectural resource allocation not yet negotiated — **FIXED**
 `ace-ISA-priv.adoc:106`, `117`.
@@ -1302,7 +1302,7 @@ CMAC cannot detect a partial pending block at all.
 * **m29** — **FIXED.** The clock question is answered as the author directs: the specification now states that it cannot give requirements for a secure clock, that the difficulty is common to every time-dependent security feature rather than particular to ACE, and gives the rule of thumb — a clock adequate for M-mode-only security features, or for a TPM in the same SoC, is adequate for the ACE unit. I added one consequence that follows from it: the clock must not be settable below the privilege level that manages the CSK, or a CC could be kept alive indefinitely by moving it backwards. The epoch now reads "00:00 UTC on 1 January 2027" at both sites, with the reason stated: a
   UTC epoch makes a CC exported on one device and imported on another expire at the same
   instant whatever local time each observes.
-  _Original finding:_ `ace-ISA-unpriv.adoc:702` — `Zlexpire` "must have access to a secure clock", but
+  _Original finding:_ `ace-ISA-unpriv.adoc:702` — `Zklexpire` "must have access to a secure clock", but
   no clock interface, epoch precision, or timezone is architected, and there is no CSR to
   read the current time. The epoch is "00:00, January 1, 2027" (318) — say UTC.
 * **m30** Open items still in the document: the RVV-mini WARNING (`221-225`, `253-257`),

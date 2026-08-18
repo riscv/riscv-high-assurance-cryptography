@@ -1,8 +1,8 @@
-# Review 4 — ACE (Zl) Specification (RISC-V Atomic Cryptography Extension)
+# Review 4 — ACE (Zkl) Specification (RISC-V Atomic Cryptography Extension)
 
 ## Overall Verdict
 
-The ACE (`Zl`) extension provides hardware-enforced isolation, opaque Cryptographic Registers (CRs), Sealed Cryptographic Contexts (SCCs), and hardware-accelerated symmetric, asymmetric, hash/MAC, and Post-Quantum Cryptography (PQC) operations.
+The ACE (`Zkl`) extension provides hardware-enforced isolation, opaque Cryptographic Registers (CRs), Sealed Cryptographic Contexts (SCCs), and hardware-accelerated symmetric, asymmetric, hash/MAC, and Post-Quantum Cryptography (PQC) operations.
 
 While previous reviews and revisions successfully resolved major primitive correctness issues (such as GHASH, POLYVAL, and OCB doubling polynomials), **the specification in its current form requires critical technical and architectural corrections before it is ready for ratification as a standard RISC-V extension**.
 
@@ -98,7 +98,7 @@ In particular:
 ### m1 — Outdated and Conflicting Summary Table in `ace-instruction-summary.adoc` — **FIXED**
 * **Affected Files:** `src/ace-instruction-summary.adoc` (Lines 10–48)
 * **Description:** `ace-instruction-summary.adoc` previously listed obsolete instruction names and mnemonics (`ace.init`, `ace.export`, `ace.import`, `ace.state`, `ace.dir`, `ace.restrict`, `ace.harden`, `ace.error`) from early draft revisions.
-* **Resolution:** Rewrote `src/ace-instruction-summary.adoc` to accurately document all 15 normative instructions, subextensions (`Zlv`, `Zlio`, `Zlmem`, `Zlmv`), instruction forms, operands, aliases (`ace.avail`, `ace.sysimport`), and pseudo-instructions (`ace.clear`, `ace.reset`, `ace.getst`) matching `src/ace-ISA-unpriv.adoc`.
+* **Resolution:** Rewrote `src/ace-instruction-summary.adoc` to accurately document all 15 normative instructions, subextensions (`Zklv`, `Zklio`, `Zklmem`, `Zklmv`), instruction forms, operands, aliases (`ace.avail`, `ace.sysimport`), and pseudo-instructions (`ace.clear`, `ace.reset`, `ace.getst`) matching `src/ace-ISA-unpriv.adoc`.
 
 ---
 

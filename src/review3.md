@@ -409,12 +409,12 @@ offset. The export snippet's comments were copy-paste leftovers from the import 
 * **Error checks placed after the transfer**, not before it, so a CR cleared *by* the move is
   detected; and the check after the terminating `ace.mgmt` is now reached with `t3` intact,
   which is what makes the deferred validation of MDH[127:64] observable at all.
-* **`ace.avail` used to obtain the SCC length** in the `Zlmv` import, with a comment that it
+* **`ace.avail` used to obtain the SCC length** in the `Zklmv` import, with a comment that it
   returns 0 for an unsupported algorithm or invalid metadata, replacing a bare assertion that
-  "a2 holds the length … from `ace.size`". The `Zlmem` variants need no length register, since
+  "a2 holds the length … from `ace.size`". The `Zklmem` variants need no length register, since
   `ace.load`/`ace.store` derive it from the MDH themselves.
 * **Export comments rewritten** to describe the export path rather than the import one, and
-  the `Zlmem` export gained the Error-State check it previously lacked entirely.
+  the `Zklmem` export gained the Error-State check it previously lacked entirely.
 * `li t3, #23` corrected to `li t3, 23` — `#` is this document's immediate marker for
   `ace.setst`-family mnemonics, not RISC-V assembly syntax.
 
@@ -949,7 +949,7 @@ and CMAC all do. Ascon uses Form C, and then treats the vector operand as a numb
 found none: the parameter is a single integer {le} 127 and nothing else travels with it.
 Ascon *does* use Form C where it is warranted — the nonce entering _Hash_Absorb_ is a genuine
 128-bit value — which is what makes the last-block case look like an oversight rather than a
-pattern. It also has a cost: an implementation with `Zlio` but no vector registers must route
+pattern. It also has a cost: an implementation with `Zklio` but no vector registers must route
 a 7-bit number through the ACEIOBUF, where Form B would put it in a GPR.
 
 **3. The Form A `ace.setst` into _Dec_Tag_Finalize_ is unreachable — [OPEN].** Both paths
@@ -1352,7 +1352,7 @@ close before this is a credible candidate:
 2. `mcause` values are TBD.
 3. `misa.L` and the ACES bit positions are provisional and contested.
 4. RVV-mini is deferred.
-5. The `Zlhmacm`/`Zlkmacm` "Defined in" cells say TBD.
+5. The `Zklhmacm`/`Zklkmacm` "Defined in" cells say TBD.
 6. The conventions chapter carries a note to relocate normative material before
    ratification.
 7. Since the sealing construction is deliberately a *variant* of AES-GCM-SIV, the spec
