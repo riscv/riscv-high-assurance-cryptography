@@ -16,7 +16,7 @@ We refer to the ACE Unprivileged Architecture for the definitions of ACE instruc
 [%header,cols="18%,45%,17%,10%,10%"]
 |===
 |  Extension       | Features                                                                                        | Defined in:                  | Minimum version | Lifecycle state
-| `Smacestatus`    | Defines the ACES per-CR status tracking CSRs. `mcrstatus` is not yet part of this extension: <<ACE-CSR-mcrstatus>> only contemplates it. | <<ACE-CSR-scrstatus>> and <<ACE-CSR-vscrstatus>> | v0.0.0 | --
+| `Smacestatus`    | Defines the ACES per-CR status tracking CSRs.                                                   | <<ACE-CSR-crstatus>>         | v0.0.0 | --
 | `SmaceCSK`       | Defines the CSRs group to configure the Context Sealing Key.                                    | <<ACE-CSR-macecsk>>          | v0.0.0 | --
 | `Smacepbootscrt` | Defines the CSRs group to configure the Physical Boot Secret Locality (cf. <<ACE-Localities>>). | <<ACE-CSR-macephysbootscrt>> | v0.0.0 | --
 | `Smacevbootscrt` | Defines the CSRs group to configure the Virtual Boot Secret Locality (cf. <<ACE-Localities>>).  | <<ACE-CSR-hacevirtbootscrt>> | v0.0.0 | --
@@ -61,7 +61,7 @@ The actual numbers are TBD.
 |      | Store page fault               | {empty}
 | TBD  | `ace_guru_meditation`          | Fatal and unrecoverable system failure in the ACE unit.
 | TBD  | `ace_exc_CR_unconf`            | Use of a CR in State _Off_, or of an unconfigured, or partially configured CR as a source in any instruction except those that are defined to operate on a CR in that condition, namely `ace.size`, the `ace.getmd*` group — `ace.getmdl`, `ace.getmdh` and `ace.getmdv`, and hence also the `ace.getst` pseudo-instruction — and the data-movement instructions used during configuration and export, `ace.load`, `ace.store` and `ace.mv`. See the note below the table.
-| TBD  | `ace_exc_CR_other`             | Use of a CR as a source in any instruction (including `ace.size`), when the status of the CR is “Other/Lazy”, as per <<ACE-CSR-scrstatus>>.
+| TBD  | `ace_exc_CR_other`             | Use of a CR as a source in any instruction (including `ace.size`), when the status of the CR is “Other/Lazy”, as per <<ACE-CSR-crstatus>>.
 | TBD  | `ace_exc_out_of_mem`           | Insufficient CRF memory for configuration instruction. This may be set by privileged code in case it does not handle the CR allocation itself.
 | TBD  | `ace_exc_buf_unconf`           | Use of ACEIOBUF as an input or an output while unconfigured.
 | TBD  | `ace_exc_invalid`              | Invalid parameters in metadata, including expired CR state (evaluated upon `ace.setst`, at `ace.exec` dispatch, and upon resumption of interrupted multi-cycle operations). There is deliberately no separate `ace_exc_expired`: expiry is reported through this code, and the handler distinguishes it by reading the _State_ field of the CR, which the hardware has set to `ace_state_expired`.
@@ -106,9 +106,9 @@ ACE extends `*status` and `misa`, and provides up to 3 direct and up to 28 indir
 [float="center",align="center",options="header"]
 |===
 | Address     | Privilege  | Field                     | Description
+| 0xXXX       | MRW        | `mcrstatus`               | Per-CR dirtiness and laziness tracking
 | 0xXXX       | SRW        | `scrstatus`               | Per-CR dirtiness and laziness tracking
 | 0xXXX       | HRW        | `vscrstatus`              | Per-CR dirtiness and laziness tracking
-| 0xXXX       | MRW        | `mcrstatus`               | Per-CR dirtiness and laziness tracking
 | (Indirect)  | MRW (RZ)   | `macecsk{0..7}`           | ACE Context Sealing Key
 | (Indirect)  | MRW (RZ)   | `macephysbootscrt{0..3}`  | Locality: Physical (host) Boot Session Secret
 | (Indirect)  | HRW (RZ)   | `hacevirtbootscrt{0..3}`  | Locality: Virtual (guest) Boot Session Secret
@@ -190,10 +190,10 @@ Coming out of state _Off_ does not zeroize or reset the ACE Unit.
 Entering ACES state _Off_ does not affect the state; it only affects access permission to the ISA and its state (CRs and CSRs).
 So writing _Off_ to ACES and then writing back the state it had before should not change the CRs and the ACEIOBUF.
 
-If the status is _Initial_, the context must/should be set to an initial state on context restore to avoid a security hole, but this can be done without accessing memory. The Metadata of all CRs is set to _Off_, and the ACEIOBUF is cleared.
+If the status is _Initial_, the context must be set to an initial state on context restore to avoid a security hole, but this can be done without accessing memory. The Metadata of all CRs is set to _Off_, and the ACEIOBUF is cleared.
 [WARNING]
 ====
-Ask the ARC whether it is must or should.
+Ask the ARC whether it must or should.
 ====
 
 Otherwise, ACES state transitions follow the same rules as FS, VS, and XS (see cite:[RISCV-ISA-Priv]), _mutatis_ _mutandis_.
@@ -240,83 +240,84 @@ In implementations with a writable `misa.L`, `vsstatus.ACES` may be present even
 
 // ////////////////////////////////////////////////////////////////////
 
-[[ACE-CSR-scrstatus]]
-==== `scrstatus` for Dirtiness Tracking
+[[ACE-CSR-crstatus]]
+==== `mcrstatus`, `scrstatus`, and `vscrstatus` for Dirtiness Tracking
 
 {empty}
+(((CSR, `mcrstatus`)))
 (((CSR, `scrstatus`)))
-The 64-bit register `scrstatus` tracks per-CR status, including dirtiness.
+(((CSR, `vscrstatus`)))
+The 64-bit registers `mcrstatus`, `scrstatus`, and `vscrstatus`  track per-CR status, including dirtiness, at all levels below M-mode, S-mode, and VS-mode, respectively.
 
-`scrstatus`(__i__) = `scrstatus`[2{interpunct}__i__+1:2{interpunct}__i__] is a two-bit field that encodes four possible statuses for ``K(``__i__``)``, as described in the following table. Note that there are conditions for the values of the _State_ metadata field in a CR and the corresponding `*crstatus` field.
+For each of these 3 CSRs.
+
+`*crstatus`(__i__) = `*crstatus`[2{interpunct}__i__+1:2{interpunct}__i__] is a two-bit field that encodes four possible status values for ``K(``__i__``)``, as described in the following table. Note that there are conditions for the values of the _State_ metadata field in a CR and the corresponding `*crstatus` field.
 
 [[ACE-crstatus-encoding]]
 .Encoding of the `*crstatus` bits
 [float="center",align="center",width="100%",cols="^8%,<12%,<80%",options="header"]
 |===
 |Value |Name |Meaning
-|   0   | _Off_            | The CR is unconfigured.
-If the metadata record's State field of a CR is _Off_, then this `scrstatus` field must be either _Off_ or _Other_.
-Attempts to use it will raise exception `ace_exc_CR_unconf`. The CR can be configured.
-|   1   | _Other_ (_Lazy_) | The CR may be configured or unconfigured.
-The metadata record's State field of a CR can assume any admissible value.
-Attempts to export or use the CR will raise exception `ace_exc_CR_other`.
-This `scrstatus` can be used for lazy context switching at per-CR granularity.
-It is the responsibility of the exception handler to ensure that the CR is configured before returning to the caller.
+|   0   | _Off_            | The CR is unconfigured. If the metadata record's State field of a CR is _Off_, then this `scrstatus` field must be either _Off_ or _Other_. Attempts to use it will raise exception `ace_exc_CR_unconf`. The CR can be configured.
+|   1   | _Other_ (_Lazy_) | The CR may be configured or unconfigured. The metadata record's State field of a CR can assume any admissible value. Attempts to export or use the CR will raise exception `ace_exc_CR_other`. This `scrstatus` can be used for lazy context switching at per-CR granularity. It is the responsibility of the exception handler to ensure that the CR is configured before returning to the caller.
 |   2   | _Clean_          | The CR is configured and its state matches the last context swap.
 |   3   | _Dirty_          | The CR is configured and its state may have been modified since the last context swap.
 |===
 
-On RV32, 32-bit CSR `scrstatush` shadows bits [63:32] of `scrstatus`, allowing these bits to be accessed.
-
+For `mcrstatus`:::
++
+--
 When the privilege mode is S, VS, or U:
 
-* Any instruction that modifies ``K(``__i__``)`` sets `scrstatus`(__i__) to Dirty.
-* Implementations may set `scrstatus`(__i__) to Dirty from Clean at any time, even without a state change.
+* Any instruction that modifies ``K(``__i__``)`` sets `mcrstatus`(__i__) to Dirty.
+// * Implementations may set `scrstatus`(__i__) to Dirty from Clean at any time, even without a state change.
 
-Status _Off_ is used only when a CR is not configured.
+`mstatus.ACES` is also in effect.
+--
 
-Out of ACE unit reset, all entries of this CSR are _Off_.
-
-NOTE: `scrstatus` is independent of the S extension. In an M-U system, M-mode may use it to optimize U-mode context switches.
-
-NOTE: `sstatus.ACES` is also in effect.
-
-// ////////////////////////////////////////////////////////////////////
-
-[[ACE-CSR-vscrstatus]]
-==== `vscrstatus` for Dirtiness Tracking
-
-{empty}
-(((CSR, `vscrstatus`)))
-The 64-bit register `vscrstatus` tracks per-CR status, including dirtiness, for virtualized contexts.
-
+For `vscrstatus`:::
++
+--
 `vscrstatus` exists only when the H extension is implemented.
 
-`vscrstatus`(__i__) = `vscrstatus`[2{interpunct}__i__+1:2{interpunct}__i__] is a two-bit field that
-encodes four statuses for ``K(``__i__``)``, as in <<ACE-crstatus-encoding>>.
-
-On RV32, 32-bit CSR `vscrstatush` shadows bits [63:32] of `vscrstatus`, allowing these bits to be accessed.
-
-When the privilege mode is VS or VU:
+When V=1 and the privilege mode is U/VU:
 
 * `vscrstatus` shadows `scrstatus`; accesses that would target `scrstatus` instead access `vscrstatus`.
 * Any instruction that modifies ``K(``__i__``)`` sets `vscrstatus`(__i__) to Dirty.
-* Implementations may set `vscrstatus`(__i__) to Dirty from Clean at any time, even without a state change.
+// * Implementations may set `vscrstatus`(__i__) to Dirty from Clean at any time, even without a state change.
 
-Out of ACE unit reset, all entries of this CSR are _Off_.
+`sstatus.ACES`, `vsstatus.ACES`, `mstatus.ACES`, `scrstatus`, and `mcrstatus` are also in effect when V=1.
+--
 
-NOTE: `sstatus.ACES`, `vsstatus.ACES`, and `scrstatus` are also in effect when V=1.
+For `scrstatus`:::
++
+--
+When the privilege mode is VS or U/VU:
+
+* Any instruction that modifies ``K(``__i__``)`` sets `scrstatus`(__i__) to Dirty.
+// * Implementations may set `scrstatus`(__i__) to Dirty from Clean at any time, even without a state change.
+* `scrstatus` is independent of the S extension. In an M-U system, M-mode may use it to optimize U-mode context switches.
+
+`sstatus.ACES`, `mstatus.ACES`, and `mcrstatus` are also in effect.
+--
+
+Status _Off_ is used only when a CR is not configured.
+
+Out of ACE unit reset, all entries of these CSR are _Off_.
+
+On RV32, 32-bit CSRs `mcrstatush`, `scrstatush`, and `vscrstatush` shadow bits [63:32] of `mcrstatus`, `scrstatus`, and `vscrstatus`,
+respectively, allowing these bits to be accessed.
 
 // ////////////////////////////////////////////////////////////////////
 
-[discrete#ACE-CSR-mcrstatus]
-==== `mcrstatus` for Dirtiness Tracking
-
-[WARNING]
-====
-(((CSR, `mcrstatus`)))
-A `mcrstatus` register may be defined, _mutatis mutandis_, in the same manner as `scrstatus` and `vscrstatus`, to allow M-mode to optimize context switches across Supervisor domains. In such a case, the `ACES` field in `sstatus` must be unshadowed and be independent instead.
-====
+// [discrete#ACE-CSR-mcrstatus]
+// ==== `mcrstatus` for Dirtiness Tracking
+//
+// [WARNING]
+// ====
+// (((CSR, `mcrstatus`)))
+// A `mcrstatus` register may be defined, _mutatis mutandis_, in the same manner as `scrstatus` and `vscrstatus`, to allow M-mode to optimize context switches across Supervisor domains. In such a case, the `ACES` field in `sstatus` must be unshadowed and be independent instead.
+// ====
 
 // ////////////////////////////////////////////////////////////////////
 

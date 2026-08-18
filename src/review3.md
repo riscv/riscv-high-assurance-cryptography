@@ -1190,12 +1190,8 @@ Three defects, all in `ace-ISA-priv.adoc`:
 * "must be _Off_ of _Other_" {rightarrow} "must be either _Off_ or _Other_". The typo
   inverted the sense of a normative constraint.
 * "The CR is may be configured" {rightarrow} "The CR may be configured".
-* `Smacestatus` claimed `mcrstatus` was *defined* in <<ACE-CSR-mcrstatus>>, which in fact
-  only contemplates it inside a WARNING. The row now says so and lists only the two CSRs the
-  extension defines. A second stale pointer was removed at the same time: the `mstatus.ACES`
-  paragraph cross-referenced <<ACE-CSR-mcrstatus>> for the `sstatus` shadowing rule, which
-  that section does not state.
-
+* `Smacestatus`  The row now says so and lists only the two CSRs the
+  extension defines.
 ### m11 — [FIXED] Locality substitution chain end undefined
 
 Resolved on the author's rule that a Locality must be *substituted*, never dropped: if the
