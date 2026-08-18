@@ -3138,37 +3138,6 @@ This is intentional: the information needed to fully determine the lengths of
 all sections is already included in the MDH, and thus already included in the POLYVAL.
 . The Nonce is optional and included only if explicitly requested by the caller in the configuration of the Localities.
 
-// [[ACE-SCC-no-length-block]]
-// *Omission of the length block.*
-// cite:[RFC8452] {sect}4 terminates the POLYVAL input with a block carrying the bit lengths
-// of the associated data and of the plaintext. Its purpose is to fix the boundary between
-// the two, which in the general case is not otherwise determined. In the construction
-// defined here that boundary is already fixed, by an authenticated value, and the block
-// would therefore be redundant:
-//
-// * the first associated-data block is the MDH itself, so it is authenticated and is
-//   available before any other block is processed;
-// * the fields in the low word of the MDH — _Algorithm_, _AlgorithmPolicy_, _KeyType_ and
-//   _StateExtension_ — completely determine the length of Section 3, the Algorithm Data
-//   Section, and _ImpDataLen_ completely determines the length of the second, optional
-//   payload, Section 6 (<<ACE-length-rule>>); and
-// * the _Locality_ field determines exactly which Locality Secrets follow the MDH, and
-//   hence how many associated-data blocks precede the payload.
-//
-// Every length entering the computation is thus a deterministic function of the first
-// associated-data block, so two inputs that produce the same sequence of POLYVAL blocks
-// necessarily agree on the split between associated data and payload. Processing a length
-// block — indeed two of them, one per payload — would add no information and cost a
-// `Montmul` each.
-//
-// For the same reason the padding of cite:[RFC8452] {sect}4 does not arise: every section
-// processed here is a whole number of 128-bit blocks (<<ACE-data-formats>>).
-//
-// NOTE: Because of this omission the construction is a variant of AES-GCM-SIV and not
-// AES-GCM-SIV itself. An implementation of it cannot be validated against the test vectors
-// of cite:[RFC8452] {sect}C, and conformance to this specification has to be demonstrated
-// against vectors generated for the variant.
-
 We define the Key Derivation (<<ACE-SCC-RFC8452-derivation>>) and POLYVAL (<<ACE-SCC-POLYVAL>>) functions first.
 The generation of an SCC from a CR (<<ACE-SCC-export>>) and the import of an SCC into a CR (<<ACE-SCC-import>>) are defined next.
 
@@ -3229,23 +3198,18 @@ function POLYVAL(auth_key : bits(128), blocks[0..n-1] : bits(128), n : int)
 }
 ----
 
-// We define also `MOntmul`. The field is GF(2)[`x`] modulo
-//
-// `{fournbsp}{fournbsp}` `x^128^ + x^127^ + x^126^ + x^121^ + 1`,
-//
-// and a 128-bit value `V` represents the element whose coefficient of `x^k^` is `V[k]`.
-// Both the octet order and the bit order run forward; this is the representation of
-// cite:[RFC8452] {sect}3, under which `x^0^` is the octet string `0x01` followed by
-// fifteen zero octets, i.e. the value `1`.
-//
-// `Montmul(a, b)` is *not* plain multiplication: following the “dot” operation of
-// cite:[RFC8452] {sect}3 it is
-//
-// `{fournbsp}{fournbsp}` `Montmul(a, b)` = `a` {interpunct} `b` {interpunct}
-// `x^-128^` `{nbsp}{nbsp}` in that field.
-//
-// It is used by POLYVAL, and hence by GCM-SIV (<<ACE-GCM-SIV-mode>>) and by the sealing
-// and unsealing of SCCs (<<ACE-export-import-algorithms>>).
+We now define `Montmul(a, b)`, the Montgomery multiplication operation used in POLYVAL.
+
+The field F is GF(2)[`x`] modulo `x^128^ + x^127^ + x^126^ + x^121^ + 1`.
+
+A 128-bit value `V` represents the element whose coefficient of `x^k^` is `V[k]`.
+Both the octet order and the bit order run forward; this is the representation of
+cite:[RFC8452] {sect}3, under which `x^0^` is the octet string `0x01` followed by
+fifteen zero octets, i.e. the value `1`.
+
+`Montmul(a, b)` is not plain multiplication but Montgomery multiplication, it is: +
+ +
+`{fournbsp}{fournbsp}` `Montmul(a, b)` = `a` {interpunct} `b` {interpunct} `x^-128^` `{nbsp}{nbsp}` in the field F.
 
 We now give the notation used for the inputs and outputs of the AES-GCM-SIV encryption and decryption functions,
 i.e. <<ACE-SCC-GCM-SIV-enc>> and <<ACE-SCC-GCM-SIV-dec>>:
