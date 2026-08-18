@@ -2541,9 +2541,33 @@ _Included in_::
 // ////////////////////////////////////////////////////////////////////
 
 [[ACE-usage-input-output]]
-=== Using ace.input and ace.output to Replace Vector Inputs and Outputs
+=== Rules for ace.input and ace.output to Replace Vector Inputs and Outputs
 
-When `Zlio` is available, some instructions that access vector inputs and outputs may be replaced by instruction sequences without vector inputs and outputs as described in <<ACE-replacement-instructions>>.
+When `Zlio` is available, some instructions that access vector inputs and outputs may be replaced by instruction sequences without vector inputs and outputs.
+
+The sole functions of `ace.input` and `ace.output` are to supply inputs to cryptographic operations and to read out their outputs. No computation is performed on the data by these instructions. All computations and internal state changes of `ace.exec`, `ace.setst`, `ace.mgmt`, and `ace.derive` remain within those operations.
+
+. A Form D `ace.exec` can be used whenever a Form of `ace.exec` with an input and/or an output is instead expected, i.e., any of the Forms A, B, or C `ace.exec`. The implementation must automatically use the ACEIOBUF if `Zlio` is available, and raise an illegal instruction exception otherwise.
+
+. A Form A `ace.exec` cannot be replaced by a Form B `ace.exec`, where the input is provided by a vector register but an output vector register is not defined, expecting that the output be written to the ACEIOBUF.
+Any attempt to do so raises an illegal instruction exception.
+
+. A Form A `ace.exec` cannot be replaced by a Form C `ace.exec`, where the output is provided by a vector register but an input vector register is not defined, expecting that the input be read from the ACEIOBUF.
+Any attempt to do so raises an illegal instruction exception.
+
+. Similarly, for `ace.setst`, if a vector input is expected (Form C `ace.setst`) and it is not provided, the implementation must automatically use the ACEIOBUF if `Zlio` is available, and raise an illegal instruction exception otherwise. This instruction replacement is not allowed in the case of a Form B `ace.setst`, i.e., when the auxiliary input should come from a GPR, and an illegal instruction exception is raised regardless of whether `Zlio` is available.
+
+. For `ace.mgmt`, the same rules apply as for `ace.setst`, with `ace.setst` replaced by `ace.mgmt`.
+
+. A Form A `ace.derive` can be used whenever a Form C `ace.derive` is expected. The implementation must automatically use the ACEIOBUF if `Zlio` is available, and raise an illegal instruction exception otherwise.
+
+. Form D `ace.exec` in place of its Forms A-C, Form A `ace.setst` in place of its Form C, and Form A `ace.derive` in place of its Form C
+may be issued only if the ACEIOBUF is enabled and `aceiobuflen` is non-zero. Else, exception `ace_exc_buf_unconf` is raised. If `aceiobuflen` is non-zero but the range size `aceiobuftop - acestart` is invalid for the algorithm, exception `ace_exc_invalid` is raised and no cryptographic operation is performed.
+
+NOTE: It is because of these rules that, in the Algorithms, we write that a certain Form of `ace.exec`, `ace.setst`, `ace.mgmt` is _expected_ instead of _required_ (or _only [...] allowed_). The above substitutions are implicit in all algorithms and are not restated for each occurrence.
+
+Examples of alternative sequences for `ace.exec`, `ace.setst`, `ace.mgmt`, and `ace.derive` using `ace.input` and `ace.output`
+are given in <<ACE-replacement-instructions>>.
 
 [[ACE-replacement-instructions]]
 .Alternative sequences for `ace.exec`, `ace.setst`, `ace.mgmt`, and `ace.derive` using `ace.input` and `ace.output`
@@ -2565,31 +2589,10 @@ When `Zlio` is available, some instructions that access vector inputs and output
 `2: ace.derive{nbsp}Kd\|K{Xd}, Ks1\|K{Xs1}` +
 |===
 
-The sole functions of `ace.input` and `ace.output` are to supply inputs to cryptographic operations and to read out their outputs. No computation is performed on the data by these instructions. All computations and internal state changes of `ace.exec`, `ace.setst`, `ace.mgmt`, and `ace.derive` remain within those operations.
-
 The usage and ordering of the alternative sequences are not enforced architecturally.
 Thus, the caller may omit `ace.input` or `ace.output`, meaning that the contents of the ACEIOBUF are reused, or the output is ignored.
 This does not expand the attack surface, since the caller always retains full control over the data passed to ACE instructions and their outputs.
 Instead, the ACE architecture defines the following rules:
-
-. A Form D `ace.exec` can be used whenever a Form of `ace.exec` with an input and/or an output is instead expected, i.e., any of the Forms A, B, or C `ace.exec`. The implementation must automatically use the ACEIOBUF if `Zlio` is available, and raise an illegal instruction exception otherwise.
-
-. A Form A `ace.exec` cannot be replaced by a Form B `ace.exec`, where the input is provided by a vector register but an output vector register is not defined, expecting that the output be written to the ACEIOBUF.
-Any attempt to do so raises an illegal instruction exception.
-
-. A Form A `ace.exec` cannot be replaced by a Form C `ace.exec`, where the output is provided by a vector register but an input vector register is not defined, expecting that the input be read from the ACEIOBUF.
-Any attempt to do so raises an illegal instruction exception.
-
-. Similarly, for `ace.setst`, if a vector input is expected (Form C `ace.setst`) and it is not provided, the implementation must automatically use the ACEIOBUF if `Zlio` is available, and raise an illegal instruction exception otherwise. This instruction replacement is not allowed in the case of a Form B `ace.setst`, i.e., when the auxiliary input should come from a GPR, and an illegal instruction exception is raised regardless of whether `Zlio` is available.
-
-. For `ace.mgmt`, the same rules apply as for `ace.setst`, with `ace.setst` replaced by `ace.mgmt`.
-
-. A Form A `ace.derive` can be used whenever a Form C `ace.derive` is expected. The implementation must automatically use the ACEIOBUF if `Zlio` is available, and raise an illegal instruction exception otherwise.
-
-. Form D `ace.exec` in place of its Forms A-C, Form A `ace.setst` in place of its Form C, and Form A `ace.derive` in place of its Form C
-may be issued only if the ACEIOBUF is enabled and `aceiobuflen` is non-zero. Else, exception `ace_exc_buf_unconf` is raised. If `aceiobuflen` is non-zero but the range size `aceiobuftop - acestart` is invalid for the algorithm, exception `ace_exc_invalid` is raised and no cryptographic operation is performed.
-
-NOTE: It is because of these rules that, in the Algorithms, we write that a certain Form of `ace.exec`, `ace.setst`, `ace.mgmt` is _expected_ instead of _required_ (or _only [...] allowed_). The above substitutions are implicit in all algorithms and are not restated for each occurrence.
 
 // ////////////////////////////////////////////////////////////////////
 
