@@ -3103,6 +3103,12 @@ If the _ConfigStatus_ field is set to `ace_cfgst_complete`, then ``K(i)`` is ful
 and opening the CR for export (`ace.mgmt Kd|K{Xd}, #ace_CR_export_start`) performs the following steps
 to create the serialized, encrypted and authenticated SCC from the CR.
 
+[WARNING]
+====
+Here and in <<ACE-SCC-import>>,
+add the two cases where initially only 64 bits or 128 bits of the MDH are loaded.
+====
+
 .Exporting a Fully Configured CR ``K(i)``
 [example]
 --
@@ -3170,14 +3176,18 @@ _This section is informative and non-normative._
 
 In ACE, Data-Independent Execution Latency (DIEL) applies only to the cryptographic operations it performs, including the decryption and authentication of SCC contents.
 
-Loading an SCC into a CR and decrypting-and-authenticating it are performed by separate instructions: `ace.load` is followed by an `ace.setst` instruction that performs no memory accesses. This second instruction is either continued while the requesting hart is preempted or interrupted, or aborted and then resumed. As a result, its timing is unaffected by the data being verified.
+All CR management instructions are split in three phases: An initial `ace.mgmt`, load/store instructions, and a final `ace.mgmt`.
+The two `ace.mgmt` instructions perform no memory accesses.
 
-There is one dependency, however: an IMPQUAL mismatch. If an SCC contains both architecture-dependent and implementation-dependent parts, whether the latter can be imported on the target machine determines how many AEAD operations are performed, namely, one or two:
+The dependencies of the `ace.mgmt` instruction's timing shall be limited to only very few factors:
 
-. When an import process is started, ACE checks the total SCC length. If that length exceeds what is supported on the target machine for the given algorithm, the implementation-dependent part is necessarily unsupported: the SCC length to load and process is adjusted to include only the architecture-dependent part; `ace.load` does not load the implementation-dependent part; and only the architecture-dependent part is decrypted (if the resulting _ConfigStatus_ is `ace_cfgst_complete`).
+. Actual size of the SCC to export, including the implementation-dependent part.
+. SIV and SIV2 authentication failures on import;
+. IMPQUAL mismatches on import; and
+. Attempts to import SCCs whose total length exceeds what the target machine supports for the given algorithm.
+  In this case, the implementation-dependent part is necessarily unsupported. The implementation-dependent part is skipped or only partially loaded, to be discarded without authenticating it; and only the architecture-dependent part is authenticated and decrypted (if the resulting _ConfigStatus_ is `ace_cfgst_complete`) and used.
 
-. When the import process is concluded, the implementation qualifier is compared. If there is a mismatch, the implementation-dependent part is discarded, the CR length is adjusted, and only the architecture-dependent part is processed (if the resulting _ConfigStatus_ is `ace_cfgst_complete`).
-
-This only allows an attacker to distinguish, in certain cases, between the import of an SCC from a migrated VM and that of a native one. Beyond revealing information that is normally easily obtainable (if not a precondition for other attack types), this is unavoidable and not mitigated by splitting the decryption and authentication of the architecture-dependent and implementation-dependent parts into separate instructions.
+Apart from these factors, only the number of blocks to process may affect the timing of the `ace.mgmt` instructions.
+The timing of the processing of each block is independent of the actual data being processed.
 
 // ////////////////////////////////////////////////////////////////////
