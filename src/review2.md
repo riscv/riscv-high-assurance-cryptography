@@ -351,7 +351,7 @@ above for the argument, which holds. The other defects listed in this finding (`
 separately, as was the reference to the nonexistent "Sections 3.a and 3.b". The nonce
 reuse across the two AEAD passes is now justified in the specification: GCM-SIV is nonce
 misuse-resistant, so a repeated nonce costs only determinism, and taking `SIV` as the
-second pass's associated data binds the two payloads so that an Implementation VDS cannot
+associated data of the second pass binds the two payloads so that an Implementation VDS cannot
 be grafted from one SCC onto another. **C4 is fully closed.**
 
 The original finding follows.

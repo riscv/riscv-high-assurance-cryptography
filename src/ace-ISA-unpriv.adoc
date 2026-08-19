@@ -67,75 +67,93 @@ The ACE unit receives the operations from the hart, executes them independently 
 
 Besides implementations of ACE within a CPU core, this model also allows a single hardware instance of the ACE unit to be shared by multiple cores, with separate architectural states for each client hart. The specification mandates only behavior, not implementation.
 
-We do not mandate—and cannot mandate—a pure hardware implementation of ACE.
-Although we generally discourage it, ACE may be implemented wholly or partially via a trap-and-emulate mechanism.
+The specification does not mandate—and cannot mandate—a pure hardware implementation of ACE.
+Although it is generally discouraged, ACE may be implemented wholly or partially via a trap-and-emulate mechanism.
 In certain cases, a partial trap-and-emulate approach may even be beneficial.
 For example, smaller implementations may implement symmetric cipher operations (cf. <<ACE-states-symmetric>>) in hardware while relying on trap-and-emulate for asymmetric cipher operations, such as elliptic curve algorithms (cf. <<ACE-ECC>>).
 This approach is particularly advantageous for post-quantum cryptographic algorithms (cf. <<ACE-PQC>>), which require very large states.
 A trap-and-emulate implementation in M-mode firmware avoids the need to support large states inside the ACE unit, as long as the relevant CRs are stored in a secure SRAM or some other form of secure memory.
+[WARNING]
+====
+*This may end up be changed. We just removed the Other status.*
 Trap-and-emulate exploits the ``*crstatus``'s “Other” values which can be used also for lazy switching (cf. <<ACE-lazy-loading>>).
-The requirement that CR state never be accessible in clear to any form of user software forbids implementations in S/VS-mode or HV-mode.
+====
 
-The ACE unit may lock certain architectural states—e.g., Vector Registers, CRs, and CSRs.
-The hart stalls when attempting to read them until the ACE operation using those resources completes.
+[WARNING]
+====
+*KEEP?* The requirement that CR state never be accessible in clear to any form of user software forbids implementations in S/VS-mode or HV-mode.
+====
+
+// The ACE unit may lock certain architectural states—e.g., Vector Registers, CRs, and CSRs.
+// The hart stalls when attempting to read them until the ACE operation using those resources completes.
 
 // ////////////////////////////////////////////////////////////////////
 
 [[ACE-extensions-overview-unpriv]]
 === Extensions Overview
 
-[%header,cols="15%,47%,18%,10%,10%"]
+[%header,cols="15%,62%,23%"]
 |===
-| Extension       | Features                                                                                                            | Defined in:                                    | Minimum version | Lifecycle state
-| `Zklv`           | ACE with support for vector registers.^1^                                                                           | <<ACE-instructions-detailed>>                  | v0.0.0          | --
-| `Zklio`          | ACE with support for `ace.input` and `ace.output`.^2^                                                               | <<ACE-usage-input-output>>                     | v0.0.0          | --
-| `Zklmem`         | ACE with dedicated memory instructions.^3^                                                                          | <<ACE-instruction-load>>, <<ACE-instruction-store>>   | v0.0.0          | --
-| `Zklmv`          | ACE with dedicated move instructions.^3^                                                                            | <<ACE-move>>                                   | v0.0.0          | --
-| `Zklexpire`      | ACE with support for the _ExpirationDate_ metadata field.                                                           | <<ACE-Metadata-expiration-date>>               | v0.0.0          | --
-| `Zklaes128p`     | AES-128 encryption/decryption.                                                                                      | <<ACE-ECB-mode>>                               | v0.0.0          | --
-| `Zklaes192p`     | AES-192 encryption/decryption.                                                                                      | <<ACE-ECB-mode>>                               | v0.0.0          | --
-| `Zklaes256p`     | AES-256 encryption/decryption.                                                                                      | <<ACE-ECB-mode>>                               | v0.0.0          | --
-| `Zklsm4p`        | ShangMi 4 encryption/decryption.                                                                                    | <<ACE-ECB-mode>>                               | v0.0.0          | --
-| `Zklctrm`        | CTR and CTR with set initial counter.^4^                                                                            | <<ACE-keystream-modes>>                        | v0.0.0          | --
-| `Zklxctrm`       | XCTR and XCTR with set initial counter.^4^                                                                          | <<ACE-keystream-modes>>                        | v0.0.0          | --
-| `Zklxexm`        | XEX construction.^4^                                                                                                | <<ACE-XEX-XTS-modes>>                          | v0.0.0          | --
-| `Zklgcmm`        | GCM and GCM with set IV.^4^                                                                                         | <<ACE-GCM-mode>>                               | v0.0.0          | --
-| `Zklgcmsivm`     | GCM-SIV.^4^                                                                                                         | <<ACE-GCM-SIV-mode>>                           | v0.0.0          | --
-| `Zklocbm`        | OCB3 and OCB3 with set IV.^4^                                                                                       | <<ACE-OCB-mode>>                               | v0.0.0          | --
-| `Zklcmacm`       | CMAC.^4^                                                                                                            | <<ACE-CMAC-mode>>                              | v0.0.0          | --
-| `Zklesha2h`      | SHA-224, SHA-256, SHA-384, SHA-512, SHA-512/224, and SHA-512/256.                                                   | <<ACE-hash-functions>>                         | v0.0.0          | --
-| `Zklesha3h`      | SHA3-224, SHA3-256, SHA3-384, SHA3-512, SHAKE128, and SHAKE256.                                                     | <<ACE-SHA-3>>                                  | v0.0.0          | --
-| `Zklsm3h`        | ShangMi 3 (SM3) hash function.                                                                                      | <<ACE-hash-functions>>                         | v0.0.0          | --
-| `Zklhmacm`       | HMAC function with provisionable key (with SHA2 when `Zklesha2h` is supported, and with SHA3 when `Zklesha3h` is supported). | <<ACE-HMAC>>                            | v0.0.0          | --
-| `Zklkmacm`       | KMAC function with provisionable key. Depends on `Zklesha3h`, since KMAC is only defined with SHA3.                         | <<ACE-KMAC>>                            | v0.0.0          | --
-| `Zklascon`       | Ascon-AEAD128 (base, with set Nonce, or with Nonce Masking), Ascon-Hash256, Ascon-XOF128 and Ascon-CXOF128.         | <<ACE-Ascon-AEAD128>> to <<ACE-Ascon-CXOF128>> | v0.0.0          | --
-4+| _Point arithmetic and signature generation and verification algorithms for curves in various standards:_                      | {empty}
-| `Zklsecp256r1c`  | -- NIST curve secp256r1.                                                                                            | <<ACE-ECC>>                                    | v0.0.0          | --
-| `Zklsecp384r1c`  | -- NIST curve secp384r1.                                                                                            | <<ACE-ECC>>                                    | v0.0.0          | --
-| `Zklsecp521r1c`  | -- NIST curve secp521r1.                                                                                            | <<ACE-ECC>>                                    | v0.0.0          | --
-| `Zkled25519c`    | -- Edwards curve ed25519.                                                                                           | <<ACE-ECC>>                                    | v0.0.0          | --
-| `Zkled448c`      | -- Edwards curve ed448.                                                                                             | <<ACE-ECC>>                                    | v0.0.0          | --
-| `ZklbpP256r1c`   | -- Brainpool curve brainpoolP256r1.                                                                                 | <<ACE-ECC>>                                    | v0.0.0          | --
-| `ZklbpP384r1c`   | -- Brainpool curve brainpoolP384r1.                                                                                 | <<ACE-ECC>>                                    | v0.0.0          | --
-| `ZklbpP512r1c`   | -- Brainpool curve brainpoolP512r1.                                                                                 | <<ACE-ECC>>                                    | v0.0.0          | --
-| `ZklSM2c`        | -- Chinese 256-bit SM2 curve.                                                                                       | <<ACE-ECC>>                                    | v0.0.0          | --
-4+| _Post-Quantum Cryptography:_                                                                                                        | {empty}
-| `Zklmlkem512k`   | -- `ML-KEM-512`                                                                                                     | <<ACE-PQC-ML-KEM>>                             | v0.0.0          | --
-| `Zklmlkem768k`   | -- `ML-KEM-768`                                                                                                     | <<ACE-PQC-ML-KEM>>                             | v0.0.0          | --
-| `Zklmlkem1024k`  | -- `ML-KEM-1024`                                                                                                    | <<ACE-PQC-ML-KEM>>                             | v0.0.0          | --
-| `Zklmldsa44s`    | -- `ML-DSA-44`/`HashML-DSA-44`                                                                                       | <<ACE-PQC-ML-DSA>>                             | v0.0.0          | --
-| `Zklmldsa65s`    | -- `ML-DSA-65`/`HashML-DSA-65`                                                                                       | <<ACE-PQC-ML-DSA>>                             | v0.0.0          | --
-| `Zklmldsa87s`    | -- `ML-DSA-87`/`HashML-DSA-87`                                                                                       | <<ACE-PQC-ML-DSA>>                             | v0.0.0          | --
-| `Zklkn`          | NIST Symmetric Suite. Depends on `Zklaes128p`, `Zklaes256p`, `Zklesha2h`, `Zklgcmm`, `Zklxexm`, and `Zklgcmsivm`. | --              | v0.0.0          | --
-5+| ^1^ Requires V (or a suitable subset thereof); must support the following CSRs: `acestart` (this is a dependency for Zicsr); must support the following instructions: all four forms of `ace.exec`, all Forms of `ace.setst`, all Forms of `ace.mgmt`,
-`ace.load`, `ace.store`, `ace.clear`, `ace.clone`, `ace.size`/`ace.avail`, `ace.getmd{l,h,v}`, and `ace.restrict{l,h,v}`; must support `Zklkn`.
-5+| ^2^ must support the following CSRs: `acestart` (this is a dependency for Zicsr), `aceiobuflen` and `aceiobuftop`; must support the following instructions: Form D of `ace.exec`, Forms A and B of `ace.setst`, Forms A and B of `ace.mgmt`, `ace.input` and `ace.output`, `ace.clear`, `ace.clone`, `ace.size`/`ace.avail`, `ace.getmd{l,h}`, and `ace.restrict{l,h}`; must support `Zklkn`.
-5+| At least one of `Zklmem` or `Zklmv` must be implemented. If `Zklmem` is not implemented in hardware, a trap-and-emulate implementation using `Zklmv` is required to provide the `Zklmem` instructions.
-5+| ^3^ Besides defining the basic encryption and decryption operations, these extensions also select which ciphers can be used with the various modes of operations that follow.
-5+| ^4^ The mode is applicable to all versions of AES, to SM4, and in general to any block cipher with a compatible block size.
+| Extension       | Features                                                                                                             | Defined in:
+| `Zklv`           | ACE with support for vector registers.                                                                              | <<ACE-instructions-detailed>>
+| `Zklio`          | ACE with support for streaming instructions.                                                                        | <<ACE-usage-input-output>>
+| `Zklmem`         | ACE with dedicated memory instructions.^1^                                                                          | <<ACE-instruction-load>>, <<ACE-instruction-store>
+| `Zklmv`          | ACE with dedicated move instructions.^1^                                                                            | <<ACE-move>>
+| `Zklexpire`      | ACE with support for the _ExpirationDate_ metadata field.                                                           | <<ACE-Metadata-expiration-date>>
+| `Zklaes128p`     | AES-128 encryption/decryption.                                                                                      | <<ACE-ECB-mode>>
+| `Zklaes192p`     | AES-192 encryption/decryption.                                                                                      | <<ACE-ECB-mode>>
+| `Zklaes256p`     | AES-256 encryption/decryption.                                                                                      | <<ACE-ECB-mode>>
+| `Zklsm4p`        | ShangMi 4 encryption/decryption.                                                                                    | <<ACE-ECB-mode>>
+| `Zklctrm`        | CTR and CTR with set initial counter.^2^                                                                            | <<ACE-keystream-modes>>
+| `Zklxctrm`       | XCTR and XCTR with set initial counter.^2^                                                                          | <<ACE-keystream-modes>>
+| `Zklxexm`        | XEX construction.^2^                                                                                                | <<ACE-XEX-XTS-modes>>
+| `Zklgcmm`        | GCM and GCM with set IV.^2^                                                                                         | <<ACE-GCM-mode>>
+| `Zklgcmsivm`     | GCM-SIV.^2^                                                                                                         | <<ACE-GCM-SIV-mode>>
+| `Zklocbm`        | OCB3 and OCB3 with set IV.^2^                                                                                       | <<ACE-OCB-mode>>
+| `Zklcmacm`       | CMAC.^2^                                                                                                            | <<ACE-CMAC-mode>>
+| `Zklesha2h`      | SHA-224, SHA-256, SHA-384, SHA-512, SHA-512/224, and SHA-512/256.                                                   | <<ACE-hash-functions>>
+| `Zklesha3h`      | SHA3-224, SHA3-256, SHA3-384, SHA3-512, SHAKE128, and SHAKE256.                                                     | <<ACE-SHA-3>>
+| `Zklsm3h`        | ShangMi 3 (SM3) hash function.                                                                                      | <<ACE-hash-functions>>
+| `Zklhmacm`       | HMAC function with provisionable key (with SHA2, resp., SHA3, when `Zklesha2h`, resp., `Zklesha3h` is supported).   | <<ACE-HMAC>>
+| `Zklkmacm`       | KMAC function with provisionable key. Depends on `Zklesha3h`, since KMAC is only defined with SHA3.                 | <<ACE-KMAC>>
+| `Zklascon`       | Ascon-AEAD128 (base, with set Nonce, or with Nonce Masking), Ascon-Hash256, Ascon-XOF128 and Ascon-CXOF128.         | <<ACE-Ascon-AEAD128>> to <<ACE-Ascon-CXOF128>>
+2+| _Point arithmetic and signature generation and verification algorithms for curves in various standards:_                             | {empty}
+| `Zklsecp256r1c`  | -- NIST curve secp256r1.                                                                                            | <<ACE-ECC>>
+| `Zklsecp384r1c`  | -- NIST curve secp384r1.                                                                                            | <<ACE-ECC>>
+| `Zklsecp521r1c`  | -- NIST curve secp521r1.                                                                                            | <<ACE-ECC>>
+| `Zkled25519c`    | -- Edwards curve ed25519.                                                                                           | <<ACE-ECC>>
+| `Zkled448c`      | -- Edwards curve ed448.                                                                                             | <<ACE-ECC>>
+| `ZklbpP256r1c`   | -- Brainpool curve brainpoolP256r1.                                                                                 | <<ACE-ECC>>
+| `ZklbpP384r1c`   | -- Brainpool curve brainpoolP384r1.                                                                                 | <<ACE-ECC>>
+| `ZklbpP512r1c`   | -- Brainpool curve brainpoolP512r1.                                                                                 | <<ACE-ECC>>
+| `ZklSM2c`        | -- Chinese 256-bit SM2 curve.                                                                                       | <<ACE-ECC>>
+2+| _Post-Quantum Cryptography:_                                                                                                         | {empty}
+| `Zklmlkem512k`   | -- `ML-KEM-512`                                                                                                     | <<ACE-PQC-ML-KEM>>
+| `Zklmlkem768k`   | -- `ML-KEM-768`                                                                                                     | <<ACE-PQC-ML-KEM>>
+| `Zklmlkem1024k`  | -- `ML-KEM-1024`                                                                                                    | <<ACE-PQC-ML-KEM>>
+| `Zklmldsa44s`    | -- `ML-DSA-44`/`HashML-DSA-44`                                                                                      | <<ACE-PQC-ML-DSA>>
+| `Zklmldsa65s`    | -- `ML-DSA-65`/`HashML-DSA-65`                                                                                      | <<ACE-PQC-ML-DSA>>
+| `Zklmldsa87s`    | -- `ML-DSA-87`/`HashML-DSA-87`                                                                                      | <<ACE-PQC-ML-DSA>>
+| `Zklkn`          | NIST Symmetric Suite. Depends on `Zklaes128p`, `Zklaes256p`, `Zklesha2h`, `Zklgcmm`, `Zklxexm`, and `Zklgcmsivm`.   | --
+3+| ^1^ Besides defining the basic encryption and decryption operations, these extensions also select which ciphers can be used with the various modes of operations that follow.
+3+| ^2^ The mode is applicable to all versions of AES, to SM4, and in general to any block cipher with a compatible block size.
 |===
 
-At least one of `Zklv` or `Zklio` must be implemented.
+To claim `Zkl` conformance, at least one of `Zklv` or `Zklio`, and `Zklkn` are
+required. If `Zklmem` is not implemented in hardware, a trap-and-emulate
+implementation using `Zklmv` is required.
+
+If `Zklv` is implemented, `V` is be implemented. Moreover, `acestart` is
+implemented, and the following instructions are supported: all forms of
+`ace.exec`, all forms of `ace.setst`, all forms of `ace.mgmt`, `ace.load`,
+`ace.store`, `ace.clear`, `ace.clone`, `ace.size`/`ace.avail`,
+`ace.getmd{l,h,v}`, and `ace.restrict{l,h,v}`.
+
+If `Zklio` is implemented, `acestart`, `aceiobuflen` and `aceiobuftop` are
+implemented, as well as the following instructions: Form D of `ace.exec`,
+Forms A and B of `ace.setst`, Forms A and B of `ace.mgmt`, `ace.input` and
+`ace.output`, `ace.clear`, `ace.clone`, `ace.size`/`ace.avail`,
+`ace.getmd{l,h}`, and `ace.restrict{l,h}`
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -158,7 +176,7 @@ A CR is addressed either directly, via a 5-bit immediate, or indirectly, via a G
 An additional instruction-encoding bit selects the addressing mode.
 Accessing a CR with an indirect index outside [0..31] raises an illegal-instruction exception.
 
-An implementation must wait before performing any operation on a CR that is still being written to asynchronously by the ACE unit.
+// An implementation must wait before performing any operation on a CR that is still being written to asynchronously by the ACE unit.
 
 [NOTE]
 ====
@@ -169,7 +187,7 @@ We posit that CR renaming is not expected to be necessary, and may even be detri
 . Speculating on the results of cryptographic operations usually leads to security issues.
 ====
 
-We list the most important operations on CRs below, to refer to them before they are fully defined.
+The most important operations on CRs are described below, to refer to them before they are fully defined.
 
 * Provisioning (<<ACE-management-operations>>) loads metadata and plaintext Content into a CR, binding them together.
 * Exporting (<<ACE-management-operations>>) exports a CR to memory as an SCC.
@@ -196,7 +214,7 @@ CRs reside in a dedicated, per-hart _CR file_ (CRF), a memory accessible only to
 (((Context Register File)))
 
 The CRF must guarantee the confidentiality and integrity of its contents, including preventing an attacker from rolling them back to a previous state via any access not explicitly permitted by the specification.
-We do not require that accesses to this memory are hardened against physical side-channel attacks at the hardware level.
+Accesses to this memory are not required to be hardened against physical side-channel attacks at the hardware level.
 However, the implementation of side-channel-protected algorithms in the ACE unit must provide resistance to such attacks as well.
 
 The amount of CRF capacity consumed by each CR depends on the algorithm encoded in the MDH, and it may differ from one CR to another.
@@ -207,9 +225,15 @@ Capacity is freed by unconfiguring other CRs.
 The CRF capacity is implementation-defined.
 Implementations must provide sufficient capacity for all supported operations.
 At a minimum, the CRF must be able to hold the largest possible single CR, or the largest CR pair used in cloning operations, and a small amount of additional authentication and identification information.
-This small amount of additional storage space is not replicated per CR but is shared across all CRs per hart and it is used only when importing and exporting SCCs.
 
-Any corruption of the CRF associated with a hart must cause an unrecoverable error condition: the entire architectural state of the ACE unit associated with that hart is reset, including zeroization of that state, and exception `ace_guru_meditation` is raised (cf. <<ACE-exceptions>>).
+[NOTE]
+====
+The architecture has been designed under the assumption that this small amount of additional storage space is not replicated per CR.
+Rather, it is shared across all CRs per hart and it is used only when importing and exporting SCCs.
+====
+
+Any corruption of the CRF associated with a hart causes an unrecoverable error condition.
+The entire architectural state of the ACE unit associated with the hart is reset, and exception `ace_guru_meditation` is raised (cf. <<ACE-exceptions>>).
 
 When a hart is reset, the architectural state of its ACE unit is reset in the same way.
 In particular, each hart's ACE state must be exported, then fully zeroized on power down; on resume, the ACE unit must reset and be reconfigured by software again.
@@ -231,7 +255,7 @@ that can be loaded from and stored to external memory. Both mechanisms may be su
 
 When vector registers are used, the full V extension is not required. ACE depends only on a minimal subset, termed _RVV-mini_.
 (((RVV-mini)))
-RVV-mini must be fully opcode-compatible with RVV: code written for RVV-mini must execute with identical behavior under RVV.
+RVV-mini is be fully opcode-compatible with RVV: code written for RVV-mini executes with identical behavior under RVV.
 The current set of features is:
 
 * Vector registers (or groups) wide enough to support the inputs and outputs of the implemented algorithms, that is, currently, 128 bits.
@@ -241,13 +265,14 @@ The current set of features is:
     they view a vector (group) as a bit string of length `VL` * `SEW` with `VL` = min(`AVL`,`VLMAX`),
     processing in each operation `VL` * `SEW` bits.
  ** Support for `LMUL` integer values of 1, 2, 4, and 8;
- ** Unsupported configurations must raise an illegal-instruction exception.
+ ** Unsupported configurations raise an illegal-instruction exception.
 * Unit-strided vector loads and stores; and
 * Vector bitwise logical operations: `vxor`, `vand`, and `vor`.
 
 ACE instructions do not use vector masking and do not define masked versions of `ace.exec`.
 Therefore, RVV-mini does not need support for masked operations.
-However, bit 25 of the instruction encodings is left unused, reserved for potential future adoption of masked operations should a compelling use case arise.
+Bit 25 of the instruction encodings is reserved for potential future adoption of masked operations, should a compelling use case arise.
+
 
 Floating-point, fixed-point, and general arithmetic vector operations are not required.
 Complex operations for certain cryptographic algorithms may be performed in GPRs, with data inserted into vector registers and result extracted from them via `vins`/`vext`.
@@ -288,9 +313,9 @@ of `mvendorid`, `marchid`, and `mimpid` CSRs for the hart implementation (see <<
  The latter may only be present in an SCC, and only if the SCC has been extended by the implementation with an implementation-specific content block.
  This block is used by an implementation to determine whether it can use the implementation-specific content block, even if generated by another implementation.
 
-In this section we only deal with the 128-bit MDH.
+This section deals with the 128-bit MDH.
 Its fields are summarized in <<ACE-metadata-header>>.
-All _Reserved_ bits, as well as bits unused by a given algorithm, must be zero.
+All _Reserved_ bits, as well as bits unused by a given algorithm, are zero.
 
 [[ACE-metadata-header]]
 .Format of the 128-bit Metadata Header
@@ -306,7 +331,7 @@ All _Reserved_ bits, as well as bits unused by a given algorithm, must be zero.
 |   [29:26] |   4  | _StateExtension_  | May be used by the algorithm to extend the _State_ field with additional information. See <<ACE-State-field>>.
 |   [31:30] |   2  | _ConfigStatus_    | Used to indicate whether the CR is fully configured and ready to operate, or is being provisioned, imported, or exported. See <<ACE-ConfigStatus>>.
 |   [45:32] |  14  | _ImpDataLen_      | If non-zero, indicates that an additional, variable-length, implementation-dependent data section appended to Content. The length of this additional data section is _ImpDataLen_ * 128 bits (up to 256 KiB).
-|   [61:46] |  16  | _AuxInfo_         | Currently used only by ML_KEM and ML-DSA. This field must be zero for all algorithms that do not use it.
+|   [61:46] |  16  | _AuxInfo_         | Algorithm specific auxiliary information. Currently used only by ML_KEM and ML-DSA. This field is zero if the algorithm that does not use it.
 |   [62:62] |   1  | _Reserved_        | Reserved for future use.
 |   [63:63] |   1  | _SystemFormat_    | Value is 0 if an input is in the ACE architected format, 1 if it is in a system-defined Format.
 |   [68:64] |   5  | _UsagePolicy_     | Usage (Control) Policy. Bits 0, 1, 2, and 3 of the field, when set, disallow CC usage in U-mode, VS-mode, HS-mode, and M-Mode, respectively. Bit 4 grants use in Debug only if set.  Any bit of this field is ignored if the corresponding mode is not supported or not enabled.
@@ -439,7 +464,7 @@ This allows `ace.setst` to encode additional operations related to state changes
 States 24-31 are termed _Error States_, and are used to report certain specific ACE errors.
 (((ACE, algorithm, invalid state)))
 (((Context Register, invalidation)))
-In particular, if the State is `ace_state_invalid`, we say that the CR is _invalidated_.
+In particular, if the State is `ace_state_invalid`, the CR is _invalidated_.
 
 The Error States are currently listed in decreasing severity order, with Error State 24 being the most severe and Error State 29 the least severe.
 Error States 30 and 31, if defined, will not necessarily have a lower priority than Error State 29, and therefore may not be in order.
@@ -494,7 +519,7 @@ Software that needs to preserve the CC should export it as an SCC before request
 
 . Any _usage_ instruction that would violate the Usage Control policies will not perform its operation, and will set _State_ to `ace_state_priv_viol` instead.
 
-In <<ACE-states-graph>> we display the default possible state transitions.
+<<ACE-states-graph>> displays the default possible state transitions.
 
 // //
 [[ACE-states-graph]]
@@ -718,7 +743,14 @@ If _Zklexpire_ is supported, the ACE implementation must have access to a secure
 
 [NOTE]
 ====
-This specification cannot enumerate requirements for a trustworthy clock, as what constitutes adequacy depends on threat models, platforms, and integration specifics—a challenge common to all time-dependent security features. As a rule of thumb: *if a clock is adequate for M-mode security features or an on-SoC TPM, it is adequate for ACE.* ACE imposes no stricter requirements. Crucially, software below the privilege level managing the CSK must not be able to set the clock, as that would allow indefinite extension of a CC's lifetime by moving time backward.
+This specification cannot enumerate requirements for a trustworthy clock, as
+what constitutes adequacy depends on threat models, platforms, and integration
+specifics—a challenge common to all time-dependent security features. As a rule
+of thumb: *if a clock is adequate for M-mode security features or an on-SoC
+TPM, it is adequate for ACE.* ACE imposes no stricter requirements. Crucially,
+software below the privilege level managing the CSK must not be able to set the
+clock, as that would allow indefinite extension of a CC's lifetime by moving
+time backward.
 ====
 
 If _Zklexpire_ is not supported, the implementation must reject PIs and SCCs with a non-zero _ExpirationDate_.
@@ -1069,6 +1101,15 @@ written. The entire group must be written within a single M-mode episode.
 // hart.  Establishing the same value on several harts therefore requires a platform-specific
 // channel between their M-mode instances. This specification does not define that mechanism.
 
+[NOTE]
+====
+M-mode firmware must be aware of how the CSK is configured. Persistence mechanisms for
+configurable CSKs are implementation-specific. Transferring a CSK to another endpoint —
+such as the M-mode firmware of another device, a local TPM (for instance, to preserve a
+CSK across suspension or host hibernation), or a cloud-based HSM — requires an
+authenticated public-key key-wrapping mechanism.
+====
+
 [WARNING]
 ====
 Question for the ARC: is there, or should there be, an architected mechanism by which
@@ -1076,12 +1117,6 @@ M-mode on one hart can read or configure the CSRs of another hart? If such a mec
 exists or is planned, this subsection should use it instead of the platform-specific
 channel described above.
 ====
-
-M-mode firmware must be aware of how the CSK is configured. Persistence mechanisms for
-configurable CSKs are implementation-specific. Transferring a CSK to another endpoint —
-such as the M-mode firmware of another device, a local TPM (for instance, to preserve a
-CSK across suspension or host hibernation), or a cloud-based HSM — requires an
-authenticated public-key key-wrapping mechanism.
 
 // ////////////////////////////////////////////////////////////////////
 

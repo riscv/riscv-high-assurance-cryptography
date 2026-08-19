@@ -303,7 +303,7 @@ RFC 8452 after these edits, and the spec rebuilds cleanly.
 
 **Original finding:** a hart reset was said to clear the CSK and `macecsk` is per-hart, so
 nothing said whether an SCC sealed on hart A can be imported on hart B — which ordinary OS
-scheduling requires, since a process's saved SCCs must be restorable wherever it next runs.
+scheduling requires, since the saved SCCs of a process must be restorable wherever it next runs.
 
 **Resolution (applied 2026-08-13, in two rounds).**
 

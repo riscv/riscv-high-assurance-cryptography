@@ -1115,13 +1115,17 @@ Its development has been prompted by use cases such as content protection (inclu
 <p>To mitigate key misuse, ACE binds cryptographic secrets (such as keys) and metadata into an indivisible structure called a <em>Cryptographic Context</em> (CC). The architecture uses the metadata to restrict each secret to a specific algorithm and, optionally, to enforce usage constraints based on the process, VM, security state, boot cycle, an expiration date, or other policies.</p>
 </li>
 <li>
-<p>To implement CCs, ACE introduces <em>Context Registers</em> (CRs)—architectural containers that conceal their secrets from software. A CC is created by <em>provisioning</em> (i.e., writing) secrets and metadata into a CR. ACE instructions operate on CRs instead of explicit key values. As a result, software can use keys without holding them explicitly in the process&#8217;s memory, and also benefit from higher performance and side-channel-protected implementations when available.</p>
+<p>To implement CCs, ACE introduces <em>Context Registers</em> (CRs)—architectural containers that conceal their secrets from software. A CC is created by <em>provisioning</em> (i.e., writing) secrets and metadata into a CR. ACE instructions operate on CRs instead of explicit key values. As a result, software can use keys without holding them explicitly in the memory of the process, and also benefit from higher performance and side-channel-protected implementations when available.</p>
 </li>
 <li>
-<p>Operations such as full AES block encryption/decryption or absorption of data blocks into a hash function are performed <em>atomically</em>—i.e., in a single step.</p>
+<p>Cryptographic operations are performed <em>atomically</em> to avoid leaking data through architectural side-channels.
+  Instructions can be interrupted only if they perform multiple cryptographic operations and according to rules defined by the Algorithms they apply to.</p>
 </li>
 <li>
-<p>To enable CC reuse and support OS features like context switching, ACE provides a secure mechanism to store a CC to memory via authenticated encryption, producing a <em>Sealed Cryptographic Context</em> (SCC). Once generated, an SCC can later be re-imported into a CR. If an SCC is passed to a process in place of the key value, the key is not exposed in that process&#8217;s memory.</p>
+<p>ACE provides a secure mechanism to store a CC to memory via authenticated
+  encryption, producing a <em>Sealed Cryptographic Context</em> (SCC). Once generated,
+  an SCC can later be re-imported into a CR. If an SCC is passed to a process
+  in place of the key value, the key is not exposed in that process' memory.</p>
 </li>
 <li>
 <p>ACE provides a unified interface to multiple cryptographic primitives, avoiding the need for separate instructions per primitive.</p>
@@ -1291,10 +1295,6 @@ Side-channel attacks are addressed optionally. ACE offers interfaces to both SCA
 <strong>PONDER</strong> An implementor could define a custom consume-anything/output unlimited KDF and use ace.derive to move data from it to keys in a CR.
 <strong>ADD A COMMENT</strong></p>
 </li>
-</ul>
-</div>
-<div class="ulist">
-<ul>
 <li>
 <p>UNPRIV: <strong>Behavior of suppressed or disallowed operations is unspecified.</strong>  When an operation is suppressed (error state, usage violation, expiration), nothing says what is written to <code>Vd</code>, <code>Xd</code> or the ACEIOBUF: <strong>suggest: unchanged, for the actual block that is suppressed and forward.</strong>
 Rule 2 says only certain instructions "are permitted" in <code><em>Success</em></code>/<code><em>Failed</em></code>, need more clarity on what a non-permitted one does.  <strong>Add a normative table of condition → exception, state transition, and destination effect.</strong></p>
@@ -1681,6 +1681,18 @@ Bit <code>0</code> is the least significant bit.</p>
 <div class="paragraph">
 <p>This mapping agrees with the default little-endian ordering of the RISC-V architecture and with the vector register interfaces: a unit-stride vector load places the octet at the lowest address in the lowest-numbered element.</p>
 </div>
+<div class="paragraph">
+<p>For ACE memory operations, the octet at the lowest address is octet <code>0</code>.
+The octet at address <code>A + i</code> is <code>V[8i+7 : 8i]</code>, where <code>A</code> is the effective
+address of the transfer.</p>
+</div>
+<div class="paragraph">
+<p>A vector register (group) supplying <code>INPUT</code> or receiving <code>OUTPUT</code> holds the value <code>V</code>
+that a unit-stride byte load <code>vle8.v`would produce from the
+equivalent memory image, and a unit-stride byte store `vse8.v</code> of that register
+reproduces that image. This holds irrespective of the <code>SEW</code> and <code>VL</code> in effect, since
+ACE uses only their product (<a href="#ACE-notation">Notation in the Algorithm Descriptions</a>).</p>
+</div>
 <div class="admonitionblock note">
 <table>
 <tr>
@@ -1716,8 +1728,7 @@ associative and is written left-to-right without parentheses.</p>
 <div class="ulist">
 <ul>
 <li>
-<p><code>x ← y</code>, also written <code>x &#8592; y</code>, denotes assignment of <code>y</code> to <code>x</code>. The two
-  spellings are synonymous.</p>
+<p><code>x ← y</code> denotes assignment of <code>y</code> to <code>x</code>.</p>
 </li>
 <li>
 <p><code>x = y</code> and <code>x ≠ y</code> denote equality and inequality; <code>&lt;</code>, <code>≤</code>, <code>&gt;</code>, <code>≥</code> denote
@@ -2222,18 +2233,41 @@ The ACE unit receives the operations from the hart, executes them independently 
 <p>Besides implementations of ACE within a CPU core, this model also allows a single hardware instance of the ACE unit to be shared by multiple cores, with separate architectural states for each client hart. The specification mandates only behavior, not implementation.</p>
 </div>
 <div class="paragraph">
-<p>We do not mandate—and cannot mandate—a pure hardware implementation of ACE.
-Although we generally discourage it, ACE may be implemented wholly or partially via a trap-and-emulate mechanism.
+<p>The specification does not mandate—and cannot mandate—a pure hardware implementation of ACE.
+Although it is generally discouraged, ACE may be implemented wholly or partially via a trap-and-emulate mechanism.
 In certain cases, a partial trap-and-emulate approach may even be beneficial.
 For example, smaller implementations may implement symmetric cipher operations (cf. <a href="#ACE-states-symmetric">States for the Symmetric Algorithms Defined in this Specification</a>) in hardware while relying on trap-and-emulate for asymmetric cipher operations, such as elliptic curve algorithms (cf. <a href="#ACE-ECC">Elliptic Curve Asymmetric Algorithms</a>).
 This approach is particularly advantageous for post-quantum cryptographic algorithms (cf. <a href="#ACE-PQC">Post Quantum Public-Key Cryptography</a>), which require very large states.
-A trap-and-emulate implementation in M-mode firmware avoids the need to support large states inside the ACE unit, as long as the relevant CRs are stored in a secure SRAM or some other form of secure memory.
-Trap-and-emulate exploits the <code>*crstatus</code>'s &#8220;Other&#8221; values which can be used also for lazy switching (cf. <a href="#ACE-lazy-loading">Use of <code>*crstatus</code> for Lazy Context Switching and CR Loading</a>).
-The requirement that CR state never be accessible in clear to any form of user software forbids implementations in S/VS-mode or HV-mode.</p>
+A trap-and-emulate implementation in M-mode firmware avoids the need to support large states inside the ACE unit, as long as the relevant CRs are stored in a secure SRAM or some other form of secure memory.</p>
 </div>
+<div class="admonitionblock warning">
+<table>
+<tr>
+<td class="icon">
+<i class="fa-solid fa-triangle-exclamation" title="Warning"></i>
+</td>
+<td class="content">
 <div class="paragraph">
-<p>The ACE unit may lock certain architectural states—e.g., Vector Registers, CRs, and CSRs.
-The hart stalls when attempting to read them until the ACE operation using those resources completes.</p>
+<p><strong>This may end up be changed. We just removed the Other status.</strong>
+Trap-and-emulate exploits the <code>*crstatus</code>'s &#8220;Other&#8221; values which can be used also for lazy switching (cf. <a href="#ACE-lazy-loading">Use of <code>*crstatus</code> for Lazy Context Switching and CR Loading</a>).</p>
+</div>
+</td>
+</tr>
+</table>
+</div>
+<div class="admonitionblock warning">
+<table>
+<tr>
+<td class="icon">
+<i class="fa-solid fa-triangle-exclamation" title="Warning"></i>
+</td>
+<td class="content">
+<div class="paragraph">
+<p><strong>KEEP?</strong> The requirement that CR state never be accessible in clear to any form of user software forbids implementations in S/VS-mode or HV-mode.</p>
+</div>
+</td>
+</tr>
+</table>
 </div>
 </div>
 </div>
@@ -2242,315 +2276,241 @@ The hart stalls when attempting to read them until the ACE operation using those
 <table class="tableblock frame-all grid-all stretch">
 <colgroup>
 <col style="width: 15%;">
-<col style="width: 47%;">
-<col style="width: 18%;">
-<col style="width: 10%;">
-<col style="width: 10%;">
+<col style="width: 62%;">
+<col style="width: 23%;">
 </colgroup>
 <thead>
 <tr>
 <th class="tableblock halign-left valign-top">Extension</th>
 <th class="tableblock halign-left valign-top">Features</th>
 <th class="tableblock halign-left valign-top">Defined in:</th>
-<th class="tableblock halign-left valign-top">Minimum version</th>
-<th class="tableblock halign-left valign-top">Lifecycle state</th>
 </tr>
 </thead>
 <tbody>
 <tr>
 <td class="tableblock halign-left valign-top"><p class="tableblock"><code>Zklv</code></p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock">ACE with support for vector registers.<sup>1</sup></p></td>
+<td class="tableblock halign-left valign-top"><p class="tableblock">ACE with support for vector registers.</p></td>
 <td class="tableblock halign-left valign-top"><p class="tableblock"><a href="#ACE-instructions-detailed">Instructions</a></p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock">v0.0.0</p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock">&thinsp;&mdash;&thinsp;</p></td>
 </tr>
 <tr>
 <td class="tableblock halign-left valign-top"><p class="tableblock"><code>Zklio</code></p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock">ACE with support for <code>ace.input</code> and <code>ace.output</code>.<sup>2</sup></p></td>
+<td class="tableblock halign-left valign-top"><p class="tableblock">ACE with support for streaming instructions.</p></td>
 <td class="tableblock halign-left valign-top"><p class="tableblock"><a href="#ACE-usage-input-output">Rules for ace.input and ace.output to Replace Vector Inputs and Outputs</a></p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock">v0.0.0</p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock">&thinsp;&mdash;&thinsp;</p></td>
 </tr>
 <tr>
 <td class="tableblock halign-left valign-top"><p class="tableblock"><code>Zklmem</code></p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock">ACE with dedicated memory instructions.<sup>3</sup></p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock"><a href="#ACE-instruction-load">ace.load</a>, <a href="#ACE-instruction-store">ace.store</a></p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock">v0.0.0</p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock">&thinsp;&mdash;&thinsp;</p></td>
+<td class="tableblock halign-left valign-top"><p class="tableblock">ACE with dedicated memory instructions.<sup>1</sup></p></td>
+<td class="tableblock halign-left valign-top"><p class="tableblock"><a href="#ACE-instruction-load">ace.load</a>, &lt;&lt;ACE-instruction-store&gt;</p></td>
 </tr>
 <tr>
 <td class="tableblock halign-left valign-top"><p class="tableblock"><code>Zklmv</code></p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock">ACE with dedicated move instructions.<sup>3</sup></p></td>
+<td class="tableblock halign-left valign-top"><p class="tableblock">ACE with dedicated move instructions.<sup>1</sup></p></td>
 <td class="tableblock halign-left valign-top"><p class="tableblock"><a href="#ACE-move">ace.mv</a></p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock">v0.0.0</p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock">&thinsp;&mdash;&thinsp;</p></td>
 </tr>
 <tr>
 <td class="tableblock halign-left valign-top"><p class="tableblock"><code>Zklexpire</code></p></td>
 <td class="tableblock halign-left valign-top"><p class="tableblock">ACE with support for the <em>ExpirationDate</em> metadata field.</p></td>
 <td class="tableblock halign-left valign-top"><p class="tableblock"><a href="#ACE-Metadata-expiration-date"><em>ExpirationDate</em> Field</a></p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock">v0.0.0</p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock">&thinsp;&mdash;&thinsp;</p></td>
 </tr>
 <tr>
 <td class="tableblock halign-left valign-top"><p class="tableblock"><code>Zklaes128p</code></p></td>
 <td class="tableblock halign-left valign-top"><p class="tableblock">AES-128 encryption/decryption.</p></td>
 <td class="tableblock halign-left valign-top"><p class="tableblock"><a href="#ACE-ECB-mode">Electronic Codebook Modes (Direct Encryption/Decryption)</a></p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock">v0.0.0</p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock">&thinsp;&mdash;&thinsp;</p></td>
 </tr>
 <tr>
 <td class="tableblock halign-left valign-top"><p class="tableblock"><code>Zklaes192p</code></p></td>
 <td class="tableblock halign-left valign-top"><p class="tableblock">AES-192 encryption/decryption.</p></td>
 <td class="tableblock halign-left valign-top"><p class="tableblock"><a href="#ACE-ECB-mode">Electronic Codebook Modes (Direct Encryption/Decryption)</a></p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock">v0.0.0</p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock">&thinsp;&mdash;&thinsp;</p></td>
 </tr>
 <tr>
 <td class="tableblock halign-left valign-top"><p class="tableblock"><code>Zklaes256p</code></p></td>
 <td class="tableblock halign-left valign-top"><p class="tableblock">AES-256 encryption/decryption.</p></td>
 <td class="tableblock halign-left valign-top"><p class="tableblock"><a href="#ACE-ECB-mode">Electronic Codebook Modes (Direct Encryption/Decryption)</a></p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock">v0.0.0</p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock">&thinsp;&mdash;&thinsp;</p></td>
 </tr>
 <tr>
 <td class="tableblock halign-left valign-top"><p class="tableblock"><code>Zklsm4p</code></p></td>
 <td class="tableblock halign-left valign-top"><p class="tableblock">ShangMi 4 encryption/decryption.</p></td>
 <td class="tableblock halign-left valign-top"><p class="tableblock"><a href="#ACE-ECB-mode">Electronic Codebook Modes (Direct Encryption/Decryption)</a></p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock">v0.0.0</p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock">&thinsp;&mdash;&thinsp;</p></td>
 </tr>
 <tr>
 <td class="tableblock halign-left valign-top"><p class="tableblock"><code>Zklctrm</code></p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock">CTR and CTR with set initial counter.<sup>4</sup></p></td>
+<td class="tableblock halign-left valign-top"><p class="tableblock">CTR and CTR with set initial counter.<sup>2</sup></p></td>
 <td class="tableblock halign-left valign-top"><p class="tableblock"><a href="#ACE-keystream-modes">CTR/XCTR Keystream Generation</a></p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock">v0.0.0</p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock">&thinsp;&mdash;&thinsp;</p></td>
 </tr>
 <tr>
 <td class="tableblock halign-left valign-top"><p class="tableblock"><code>Zklxctrm</code></p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock">XCTR and XCTR with set initial counter.<sup>4</sup></p></td>
+<td class="tableblock halign-left valign-top"><p class="tableblock">XCTR and XCTR with set initial counter.<sup>2</sup></p></td>
 <td class="tableblock halign-left valign-top"><p class="tableblock"><a href="#ACE-keystream-modes">CTR/XCTR Keystream Generation</a></p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock">v0.0.0</p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock">&thinsp;&mdash;&thinsp;</p></td>
 </tr>
 <tr>
 <td class="tableblock halign-left valign-top"><p class="tableblock"><code>Zklxexm</code></p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock">XEX construction.<sup>4</sup></p></td>
+<td class="tableblock halign-left valign-top"><p class="tableblock">XEX construction.<sup>2</sup></p></td>
 <td class="tableblock halign-left valign-top"><p class="tableblock"><a href="#ACE-XEX-XTS-modes">XEX/XTS modes (one or two keys)</a></p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock">v0.0.0</p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock">&thinsp;&mdash;&thinsp;</p></td>
 </tr>
 <tr>
 <td class="tableblock halign-left valign-top"><p class="tableblock"><code>Zklgcmm</code></p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock">GCM and GCM with set IV.<sup>4</sup></p></td>
+<td class="tableblock halign-left valign-top"><p class="tableblock">GCM and GCM with set IV.<sup>2</sup></p></td>
 <td class="tableblock halign-left valign-top"><p class="tableblock"><a href="#ACE-GCM-mode">GCM Mode</a></p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock">v0.0.0</p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock">&thinsp;&mdash;&thinsp;</p></td>
 </tr>
 <tr>
 <td class="tableblock halign-left valign-top"><p class="tableblock"><code>Zklgcmsivm</code></p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock">GCM-SIV.<sup>4</sup></p></td>
+<td class="tableblock halign-left valign-top"><p class="tableblock">GCM-SIV.<sup>2</sup></p></td>
 <td class="tableblock halign-left valign-top"><p class="tableblock"><a href="#ACE-GCM-SIV-mode">GCM-SIV Mode</a></p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock">v0.0.0</p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock">&thinsp;&mdash;&thinsp;</p></td>
 </tr>
 <tr>
 <td class="tableblock halign-left valign-top"><p class="tableblock"><code>Zklocbm</code></p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock">OCB3 and OCB3 with set IV.<sup>4</sup></p></td>
+<td class="tableblock halign-left valign-top"><p class="tableblock">OCB3 and OCB3 with set IV.<sup>2</sup></p></td>
 <td class="tableblock halign-left valign-top"><p class="tableblock"><a href="#ACE-OCB-mode">OCB Mode</a></p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock">v0.0.0</p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock">&thinsp;&mdash;&thinsp;</p></td>
 </tr>
 <tr>
 <td class="tableblock halign-left valign-top"><p class="tableblock"><code>Zklcmacm</code></p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock">CMAC.<sup>4</sup></p></td>
+<td class="tableblock halign-left valign-top"><p class="tableblock">CMAC.<sup>2</sup></p></td>
 <td class="tableblock halign-left valign-top"><p class="tableblock"><a href="#ACE-CMAC-mode">CMAC Functions</a></p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock">v0.0.0</p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock">&thinsp;&mdash;&thinsp;</p></td>
 </tr>
 <tr>
 <td class="tableblock halign-left valign-top"><p class="tableblock"><code>Zklesha2h</code></p></td>
 <td class="tableblock halign-left valign-top"><p class="tableblock">SHA-224, SHA-256, SHA-384, SHA-512, SHA-512/224, and SHA-512/256.</p></td>
 <td class="tableblock halign-left valign-top"><p class="tableblock"><a href="#ACE-hash-functions">Hash and MAC Functions, and XOFs</a></p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock">v0.0.0</p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock">&thinsp;&mdash;&thinsp;</p></td>
 </tr>
 <tr>
 <td class="tableblock halign-left valign-top"><p class="tableblock"><code>Zklesha3h</code></p></td>
 <td class="tableblock halign-left valign-top"><p class="tableblock">SHA3-224, SHA3-256, SHA3-384, SHA3-512, SHAKE128, and SHAKE256.</p></td>
 <td class="tableblock halign-left valign-top"><p class="tableblock"><a href="#ACE-SHA-3">SHA-3 Family Specific Rules</a></p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock">v0.0.0</p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock">&thinsp;&mdash;&thinsp;</p></td>
 </tr>
 <tr>
 <td class="tableblock halign-left valign-top"><p class="tableblock"><code>Zklsm3h</code></p></td>
 <td class="tableblock halign-left valign-top"><p class="tableblock">ShangMi 3 (SM3) hash function.</p></td>
 <td class="tableblock halign-left valign-top"><p class="tableblock"><a href="#ACE-hash-functions">Hash and MAC Functions, and XOFs</a></p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock">v0.0.0</p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock">&thinsp;&mdash;&thinsp;</p></td>
 </tr>
 <tr>
 <td class="tableblock halign-left valign-top"><p class="tableblock"><code>Zklhmacm</code></p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock">HMAC function with provisionable key (with SHA2 when <code>Zklesha2h</code> is supported, and with SHA3 when <code>Zklesha3h</code> is supported).</p></td>
+<td class="tableblock halign-left valign-top"><p class="tableblock">HMAC function with provisionable key (with SHA2, resp., SHA3, when <code>Zklesha2h</code>, resp., <code>Zklesha3h</code> is supported).</p></td>
 <td class="tableblock halign-left valign-top"><p class="tableblock"><a href="#ACE-HMAC">HMAC</a></p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock">v0.0.0</p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock">&thinsp;&mdash;&thinsp;</p></td>
 </tr>
 <tr>
 <td class="tableblock halign-left valign-top"><p class="tableblock"><code>Zklkmacm</code></p></td>
 <td class="tableblock halign-left valign-top"><p class="tableblock">KMAC function with provisionable key. Depends on <code>Zklesha3h</code>, since KMAC is only defined with SHA3.</p></td>
 <td class="tableblock halign-left valign-top"><p class="tableblock"><a href="#ACE-KMAC">KMAC128, KMAC256, KMACXOF128, and KMACXOF256</a></p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock">v0.0.0</p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock">&thinsp;&mdash;&thinsp;</p></td>
 </tr>
 <tr>
 <td class="tableblock halign-left valign-top"><p class="tableblock"><code>Zklascon</code></p></td>
 <td class="tableblock halign-left valign-top"><p class="tableblock">Ascon-AEAD128 (base, with set Nonce, or with Nonce Masking), Ascon-Hash256, Ascon-XOF128 and Ascon-CXOF128.</p></td>
 <td class="tableblock halign-left valign-top"><p class="tableblock"><a href="#ACE-Ascon-AEAD128">Ascon-AEAD128</a> to <a href="#ACE-Ascon-CXOF128">Ascon-CXOF128</a></p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock">v0.0.0</p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock">&thinsp;&mdash;&thinsp;</p></td>
 </tr>
 <tr>
-<td class="tableblock halign-left valign-top" colspan="4"><p class="tableblock"><em>Point arithmetic and signature generation and verification algorithms for curves in various standards:</em></p></td>
+<td class="tableblock halign-left valign-top" colspan="2"><p class="tableblock"><em>Point arithmetic and signature generation and verification algorithms for curves in various standards:</em></p></td>
 <td class="tableblock halign-left valign-top"></td>
 </tr>
 <tr>
 <td class="tableblock halign-left valign-top"><p class="tableblock"><code>Zklsecp256r1c</code></p></td>
 <td class="tableblock halign-left valign-top"><p class="tableblock">&thinsp;&mdash;&thinsp;NIST curve secp256r1.</p></td>
 <td class="tableblock halign-left valign-top"><p class="tableblock"><a href="#ACE-ECC">Elliptic Curve Asymmetric Algorithms</a></p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock">v0.0.0</p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock">&thinsp;&mdash;&thinsp;</p></td>
 </tr>
 <tr>
 <td class="tableblock halign-left valign-top"><p class="tableblock"><code>Zklsecp384r1c</code></p></td>
 <td class="tableblock halign-left valign-top"><p class="tableblock">&thinsp;&mdash;&thinsp;NIST curve secp384r1.</p></td>
 <td class="tableblock halign-left valign-top"><p class="tableblock"><a href="#ACE-ECC">Elliptic Curve Asymmetric Algorithms</a></p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock">v0.0.0</p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock">&thinsp;&mdash;&thinsp;</p></td>
 </tr>
 <tr>
 <td class="tableblock halign-left valign-top"><p class="tableblock"><code>Zklsecp521r1c</code></p></td>
 <td class="tableblock halign-left valign-top"><p class="tableblock">&thinsp;&mdash;&thinsp;NIST curve secp521r1.</p></td>
 <td class="tableblock halign-left valign-top"><p class="tableblock"><a href="#ACE-ECC">Elliptic Curve Asymmetric Algorithms</a></p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock">v0.0.0</p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock">&thinsp;&mdash;&thinsp;</p></td>
 </tr>
 <tr>
 <td class="tableblock halign-left valign-top"><p class="tableblock"><code>Zkled25519c</code></p></td>
 <td class="tableblock halign-left valign-top"><p class="tableblock">&thinsp;&mdash;&thinsp;Edwards curve ed25519.</p></td>
 <td class="tableblock halign-left valign-top"><p class="tableblock"><a href="#ACE-ECC">Elliptic Curve Asymmetric Algorithms</a></p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock">v0.0.0</p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock">&thinsp;&mdash;&thinsp;</p></td>
 </tr>
 <tr>
 <td class="tableblock halign-left valign-top"><p class="tableblock"><code>Zkled448c</code></p></td>
 <td class="tableblock halign-left valign-top"><p class="tableblock">&thinsp;&mdash;&thinsp;Edwards curve ed448.</p></td>
 <td class="tableblock halign-left valign-top"><p class="tableblock"><a href="#ACE-ECC">Elliptic Curve Asymmetric Algorithms</a></p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock">v0.0.0</p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock">&thinsp;&mdash;&thinsp;</p></td>
 </tr>
 <tr>
 <td class="tableblock halign-left valign-top"><p class="tableblock"><code>ZklbpP256r1c</code></p></td>
 <td class="tableblock halign-left valign-top"><p class="tableblock">&thinsp;&mdash;&thinsp;Brainpool curve brainpoolP256r1.</p></td>
 <td class="tableblock halign-left valign-top"><p class="tableblock"><a href="#ACE-ECC">Elliptic Curve Asymmetric Algorithms</a></p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock">v0.0.0</p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock">&thinsp;&mdash;&thinsp;</p></td>
 </tr>
 <tr>
 <td class="tableblock halign-left valign-top"><p class="tableblock"><code>ZklbpP384r1c</code></p></td>
 <td class="tableblock halign-left valign-top"><p class="tableblock">&thinsp;&mdash;&thinsp;Brainpool curve brainpoolP384r1.</p></td>
 <td class="tableblock halign-left valign-top"><p class="tableblock"><a href="#ACE-ECC">Elliptic Curve Asymmetric Algorithms</a></p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock">v0.0.0</p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock">&thinsp;&mdash;&thinsp;</p></td>
 </tr>
 <tr>
 <td class="tableblock halign-left valign-top"><p class="tableblock"><code>ZklbpP512r1c</code></p></td>
 <td class="tableblock halign-left valign-top"><p class="tableblock">&thinsp;&mdash;&thinsp;Brainpool curve brainpoolP512r1.</p></td>
 <td class="tableblock halign-left valign-top"><p class="tableblock"><a href="#ACE-ECC">Elliptic Curve Asymmetric Algorithms</a></p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock">v0.0.0</p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock">&thinsp;&mdash;&thinsp;</p></td>
 </tr>
 <tr>
 <td class="tableblock halign-left valign-top"><p class="tableblock"><code>ZklSM2c</code></p></td>
 <td class="tableblock halign-left valign-top"><p class="tableblock">&thinsp;&mdash;&thinsp;Chinese 256-bit SM2 curve.</p></td>
 <td class="tableblock halign-left valign-top"><p class="tableblock"><a href="#ACE-ECC">Elliptic Curve Asymmetric Algorithms</a></p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock">v0.0.0</p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock">&thinsp;&mdash;&thinsp;</p></td>
 </tr>
 <tr>
-<td class="tableblock halign-left valign-top" colspan="4"><p class="tableblock"><em>Post-Quantum Cryptography:</em></p></td>
+<td class="tableblock halign-left valign-top" colspan="2"><p class="tableblock"><em>Post-Quantum Cryptography:</em></p></td>
 <td class="tableblock halign-left valign-top"></td>
 </tr>
 <tr>
 <td class="tableblock halign-left valign-top"><p class="tableblock"><code>Zklmlkem512k</code></p></td>
 <td class="tableblock halign-left valign-top"><p class="tableblock">&thinsp;&mdash;&thinsp;<code>ML-KEM-512</code></p></td>
 <td class="tableblock halign-left valign-top"><p class="tableblock"><a href="#ACE-PQC-ML-KEM">ML-KEM</a></p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock">v0.0.0</p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock">&thinsp;&mdash;&thinsp;</p></td>
 </tr>
 <tr>
 <td class="tableblock halign-left valign-top"><p class="tableblock"><code>Zklmlkem768k</code></p></td>
 <td class="tableblock halign-left valign-top"><p class="tableblock">&thinsp;&mdash;&thinsp;<code>ML-KEM-768</code></p></td>
 <td class="tableblock halign-left valign-top"><p class="tableblock"><a href="#ACE-PQC-ML-KEM">ML-KEM</a></p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock">v0.0.0</p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock">&thinsp;&mdash;&thinsp;</p></td>
 </tr>
 <tr>
 <td class="tableblock halign-left valign-top"><p class="tableblock"><code>Zklmlkem1024k</code></p></td>
 <td class="tableblock halign-left valign-top"><p class="tableblock">&thinsp;&mdash;&thinsp;<code>ML-KEM-1024</code></p></td>
 <td class="tableblock halign-left valign-top"><p class="tableblock"><a href="#ACE-PQC-ML-KEM">ML-KEM</a></p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock">v0.0.0</p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock">&thinsp;&mdash;&thinsp;</p></td>
 </tr>
 <tr>
 <td class="tableblock halign-left valign-top"><p class="tableblock"><code>Zklmldsa44s</code></p></td>
 <td class="tableblock halign-left valign-top"><p class="tableblock">&thinsp;&mdash;&thinsp;<code>ML-DSA-44</code>/<code>HashML-DSA-44</code></p></td>
 <td class="tableblock halign-left valign-top"><p class="tableblock"><a href="#ACE-PQC-ML-DSA">ML-DSA</a></p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock">v0.0.0</p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock">&thinsp;&mdash;&thinsp;</p></td>
 </tr>
 <tr>
 <td class="tableblock halign-left valign-top"><p class="tableblock"><code>Zklmldsa65s</code></p></td>
 <td class="tableblock halign-left valign-top"><p class="tableblock">&thinsp;&mdash;&thinsp;<code>ML-DSA-65</code>/<code>HashML-DSA-65</code></p></td>
 <td class="tableblock halign-left valign-top"><p class="tableblock"><a href="#ACE-PQC-ML-DSA">ML-DSA</a></p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock">v0.0.0</p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock">&thinsp;&mdash;&thinsp;</p></td>
 </tr>
 <tr>
 <td class="tableblock halign-left valign-top"><p class="tableblock"><code>Zklmldsa87s</code></p></td>
 <td class="tableblock halign-left valign-top"><p class="tableblock">&thinsp;&mdash;&thinsp;<code>ML-DSA-87</code>/<code>HashML-DSA-87</code></p></td>
 <td class="tableblock halign-left valign-top"><p class="tableblock"><a href="#ACE-PQC-ML-DSA">ML-DSA</a></p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock">v0.0.0</p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock">&thinsp;&mdash;&thinsp;</p></td>
 </tr>
 <tr>
 <td class="tableblock halign-left valign-top"><p class="tableblock"><code>Zklkn</code></p></td>
 <td class="tableblock halign-left valign-top"><p class="tableblock">NIST Symmetric Suite. Depends on <code>Zklaes128p</code>, <code>Zklaes256p</code>, <code>Zklesha2h</code>, <code>Zklgcmm</code>, <code>Zklxexm</code>, and <code>Zklgcmsivm</code>.</p></td>
 <td class="tableblock halign-left valign-top"><p class="tableblock">&thinsp;&mdash;&thinsp;</p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock">v0.0.0</p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock">&thinsp;&mdash;&thinsp;</p></td>
 </tr>
 <tr>
-<td class="tableblock halign-left valign-top" colspan="5"><p class="tableblock"><sup>1</sup> Requires V (or a suitable subset thereof); must support the following CSRs: <code>acestart</code> (this is a dependency for Zicsr); must support the following instructions: all four forms of <code>ace.exec</code>, all Forms of <code>ace.setst</code>, all Forms of <code>ace.mgmt</code>,
-<code>ace.load</code>, <code>ace.store</code>, <code>ace.clear</code>, <code>ace.clone</code>, <code>ace.size</code>/<code>ace.avail</code>, <code>ace.getmd{l,h,v}</code>, and <code>ace.restrict{l,h,v}</code>; must support <code>Zklkn</code>.</p></td>
+<td class="tableblock halign-left valign-top" colspan="3"><p class="tableblock"><sup>1</sup> Besides defining the basic encryption and decryption operations, these extensions also select which ciphers can be used with the various modes of operations that follow.</p></td>
 </tr>
 <tr>
-<td class="tableblock halign-left valign-top" colspan="5"><p class="tableblock"><sup>2</sup> must support the following CSRs: <code>acestart</code> (this is a dependency for Zicsr), <code>aceiobuflen</code> and <code>aceiobuftop</code>; must support the following instructions: Form D of <code>ace.exec</code>, Forms A and B of <code>ace.setst</code>, Forms A and B of <code>ace.mgmt</code>, <code>ace.input</code> and <code>ace.output</code>, <code>ace.clear</code>, <code>ace.clone</code>, <code>ace.size</code>/<code>ace.avail</code>, <code>ace.getmd{l,h}</code>, and <code>ace.restrict{l,h}</code>; must support <code>Zklkn</code>.</p></td>
-</tr>
-<tr>
-<td class="tableblock halign-left valign-top" colspan="5"><p class="tableblock">At least one of <code>Zklmem</code> or <code>Zklmv</code> must be implemented. If <code>Zklmem</code> is not implemented in hardware, a trap-and-emulate implementation using <code>Zklmv</code> is required to provide the <code>Zklmem</code> instructions.</p></td>
-</tr>
-<tr>
-<td class="tableblock halign-left valign-top" colspan="5"><p class="tableblock"><sup>3</sup> Besides defining the basic encryption and decryption operations, these extensions also select which ciphers can be used with the various modes of operations that follow.</p></td>
-</tr>
-<tr>
-<td class="tableblock halign-left valign-top" colspan="5"><p class="tableblock"><sup>4</sup> The mode is applicable to all versions of AES, to SM4, and in general to any block cipher with a compatible block size.</p></td>
+<td class="tableblock halign-left valign-top" colspan="3"><p class="tableblock"><sup>2</sup> The mode is applicable to all versions of AES, to SM4, and in general to any block cipher with a compatible block size.</p></td>
 </tr>
 </tbody>
 </table>
 <div class="paragraph">
-<p>At least one of <code>Zklv</code> or <code>Zklio</code> must be implemented.</p>
+<p>To claim <code>Zkl</code> conformance, at least one of <code>Zklv</code> or <code>Zklio</code>, and <code>Zklkn</code> are
+required. If <code>Zklmem</code> is not implemented in hardware, a trap-and-emulate
+implementation using <code>Zklmv</code> is required.</p>
+</div>
+<div class="paragraph">
+<p>If <code>Zklv</code> is implemented, <code>V</code> is be implemented. Moreover, <code>acestart</code> is
+implemented, and the following instructions are supported: all forms of
+<code>ace.exec</code>, all forms of <code>ace.setst</code>, all forms of <code>ace.mgmt</code>, <code>ace.load</code>,
+<code>ace.store</code>, <code>ace.clear</code>, <code>ace.clone</code>, <code>ace.size</code>/<code>ace.avail</code>,
+<code>ace.getmd{l,h,v}</code>, and <code>ace.restrict{l,h,v}</code>.</p>
+</div>
+<div class="paragraph">
+<p>If <code>Zklio</code> is implemented, <code>acestart</code>, <code>aceiobuflen</code> and <code>aceiobuftop</code> are
+implemented, as well as the following instructions: Form D of <code>ace.exec</code>,
+Forms A and B of <code>ace.setst</code>, Forms A and B of <code>ace.mgmt</code>, <code>ace.input</code> and
+<code>ace.output</code>, <code>ace.clear</code>, <code>ace.clone</code>, <code>ace.size</code>/<code>ace.avail</code>,
+<code>ace.getmd{l,h}</code>, and <code>ace.restrict{l,h}</code></p>
 </div>
 </div>
 <div class="sect2">
@@ -2575,9 +2535,6 @@ ACE defines 32 Context Registers (CRs), numbered 0 to 31 and denoted <code>K0</c
 <p>A CR is addressed either directly, via a 5-bit immediate, or indirectly, via a GPR value.
 An additional instruction-encoding bit selects the addressing mode.
 Accessing a CR with an indirect index outside [0..31] raises an illegal-instruction exception.</p>
-</div>
-<div class="paragraph">
-<p>An implementation must wait before performing any operation on a CR that is still being written to asynchronously by the ACE unit.</p>
 </div>
 <div class="admonitionblock note">
 <table>
@@ -2605,7 +2562,7 @@ We posit that CR renaming is not expected to be necessary, and may even be detri
 </table>
 </div>
 <div class="paragraph">
-<p>We list the most important operations on CRs below, to refer to them before they are fully defined.</p>
+<p>The most important operations on CRs are described below, to refer to them before they are fully defined.</p>
 </div>
 <div class="ulist">
 <ul>
@@ -2662,7 +2619,7 @@ To this purpose, ACE defines:</p>
 </div>
 <div class="paragraph">
 <p>The CRF must guarantee the confidentiality and integrity of its contents, including preventing an attacker from rolling them back to a previous state via any access not explicitly permitted by the specification.
-We do not require that accesses to this memory are hardened against physical side-channel attacks at the hardware level.
+Accesses to this memory are not required to be hardened against physical side-channel attacks at the hardware level.
 However, the implementation of side-channel-protected algorithms in the ACE unit must provide resistance to such attacks as well.</p>
 </div>
 <div class="paragraph">
@@ -2675,11 +2632,26 @@ Capacity is freed by unconfiguring other CRs.</p>
 <div class="paragraph">
 <p>The CRF capacity is implementation-defined.
 Implementations must provide sufficient capacity for all supported operations.
-At a minimum, the CRF must be able to hold the largest possible single CR, or the largest CR pair used in cloning operations, and a small amount of additional authentication and identification information.
-This small amount of additional storage space is not replicated per CR but is shared across all CRs per hart and it is used only when importing and exporting SCCs.</p>
+At a minimum, the CRF must be able to hold the largest possible single CR, or the largest CR pair used in cloning operations, and a small amount of additional authentication and identification information.</p>
+</div>
+<div class="admonitionblock note">
+<table>
+<tr>
+<td class="icon">
+<i class="fa-solid fa-circle-info" title="Note"></i>
+</td>
+<td class="content">
+<div class="paragraph">
+<p>The architecture has been designed under the assumption that this small amount of additional storage space is not replicated per CR.
+Rather, it is shared across all CRs per hart and it is used only when importing and exporting SCCs.</p>
+</div>
+</td>
+</tr>
+</table>
 </div>
 <div class="paragraph">
-<p>Any corruption of the CRF associated with a hart must cause an unrecoverable error condition: the entire architectural state of the ACE unit associated with that hart is reset, including zeroization of that state, and exception <code>ace_guru_meditation</code> is raised (cf. <a href="#ACE-exceptions">Exceptions Raised by ACE</a>).</p>
+<p>Any corruption of the CRF associated with a hart causes an unrecoverable error condition.
+The entire architectural state of the ACE unit associated with the hart is reset, and exception <code>ace_guru_meditation</code> is raised (cf. <a href="#ACE-exceptions">Exceptions Raised by ACE</a>).</p>
 </div>
 <div class="paragraph">
 <p>When a hart is reset, the architectural state of its ACE unit is reset in the same way.
@@ -2713,7 +2685,7 @@ that can be loaded from and stored to external memory. Both mechanisms may be su
 <div class="paragraph">
 <p>When vector registers are used, the full V extension is not required. ACE depends only on a minimal subset, termed <em>RVV-mini</em>.
 
-RVV-mini must be fully opcode-compatible with RVV: code written for RVV-mini must execute with identical behavior under RVV.
+RVV-mini is be fully opcode-compatible with RVV: code written for RVV-mini executes with identical behavior under RVV.
 The current set of features is:</p>
 </div>
 <div class="ulist">
@@ -2737,7 +2709,7 @@ The current set of features is:</p>
 <p>Support for <code>LMUL</code> integer values of 1, 2, 4, and 8;</p>
 </li>
 <li>
-<p>Unsupported configurations must raise an illegal-instruction exception.</p>
+<p>Unsupported configurations raise an illegal-instruction exception.</p>
 </li>
 </ul>
 </div>
@@ -2753,7 +2725,7 @@ The current set of features is:</p>
 <div class="paragraph">
 <p>ACE instructions do not use vector masking and do not define masked versions of <code>ace.exec</code>.
 Therefore, RVV-mini does not need support for masked operations.
-However, bit 25 of the instruction encodings is left unused, reserved for potential future adoption of masked operations should a compelling use case arise.</p>
+Bit 25 of the instruction encodings is reserved for potential future adoption of masked operations, should a compelling use case arise.</p>
 </div>
 <div class="paragraph">
 <p>Floating-point, fixed-point, and general arithmetic vector operations are not required.
@@ -2808,9 +2780,9 @@ of <code>mvendorid</code>, <code>marchid</code>, and <code>mimpid</code> CSRs fo
 </ol>
 </div>
 <div class="paragraph">
-<p>In this section we only deal with the 128-bit MDH.
+<p>This section deals with the 128-bit MDH.
 Its fields are summarized in <a href="#ACE-metadata-header">Format of the 128-bit Metadata Header</a>.
-All <em>Reserved</em> bits, as well as bits unused by a given algorithm, must be zero.</p>
+All <em>Reserved</em> bits, as well as bits unused by a given algorithm, are zero.</p>
 </div>
 <table id="ACE-metadata-header" class="tableblock frame-all grid-all stretch">
 <caption class="title">Table 1. Format of the 128-bit Metadata Header</caption>
@@ -2887,7 +2859,7 @@ All <em>Reserved</em> bits, as well as bits unused by a given algorithm, must be
 <td class="tableblock halign-center valign-top"><p class="tableblock">[61:46]</p></td>
 <td class="tableblock halign-center valign-top"><p class="tableblock">16</p></td>
 <td class="tableblock halign-left valign-top"><p class="tableblock"><em>AuxInfo</em></p></td>
-<td class="tableblock halign-left valign-top"><p class="tableblock">Currently used only by ML_KEM and ML-DSA. This field must be zero for all algorithms that do not use it.</p></td>
+<td class="tableblock halign-left valign-top"><p class="tableblock">Algorithm specific auxiliary information. Currently used only by ML_KEM and ML-DSA. This field is zero if the algorithm that does not use it.</p></td>
 </tr>
 <tr>
 <td class="tableblock halign-center valign-top"><p class="tableblock">[62:62]</p></td>
@@ -3181,7 +3153,7 @@ This allows <code>ace.setst</code> to encode additional operations related to st
 States 24-31 are termed <em>Error States</em>, and are used to report certain specific ACE errors.
 
 
-In particular, if the State is <code>ace_state_invalid</code>, we say that the CR is <em>invalidated</em>.</p>
+In particular, if the State is <code>ace_state_invalid</code>, the CR is <em>invalidated</em>.</p>
 </div>
 <div class="paragraph">
 <p>The Error States are currently listed in decreasing severity order, with Error State 24 being the most severe and Error State 29 the least severe.
@@ -3269,7 +3241,7 @@ For instance, invalidating the CR after a failed side-channel protection upgrade
 </ol>
 </div>
 <div class="paragraph">
-<p>In <a href="#ACE-states-graph">Default State Transitions</a> we display the default possible state transitions.</p>
+<p><a href="#ACE-states-graph">Default State Transitions</a> displays the default possible state transitions.</p>
 </div>
 <div id="ACE-states-graph" class="imageblock text-center center"><div class="content"><img src="images/statestikz-3.svg" alt="statestikz 3"></div><div class="title">Figure 1. Default State Transitions</div></div><div class="paragraph">
 <p>The legend for the graph is:</p>
@@ -3609,7 +3581,14 @@ Implementations must assign usage policies at least as restrictive as the key&#8
 </td>
 <td class="content">
 <div class="paragraph">
-<p>This specification cannot enumerate requirements for a trustworthy clock, as what constitutes adequacy depends on threat models, platforms, and integration specifics—a challenge common to all time-dependent security features. As a rule of thumb: <strong>if a clock is adequate for M-mode security features or an on-SoC TPM, it is adequate for ACE.</strong> ACE imposes no stricter requirements. Crucially, software below the privilege level managing the CSK must not be able to set the clock, as that would allow indefinite extension of a CC&#8217;s lifetime by moving time backward.</p>
+<p>This specification cannot enumerate requirements for a trustworthy clock, as
+what constitutes adequacy depends on threat models, platforms, and integration
+specifics—a challenge common to all time-dependent security features. As a rule
+of thumb: <strong>if a clock is adequate for M-mode security features or an on-SoC
+TPM, it is adequate for ACE.</strong> ACE imposes no stricter requirements. Crucially,
+software below the privilege level managing the CSK must not be able to set the
+clock, as that would allow indefinite extension of a CC&#8217;s lifetime by moving
+time backward.</p>
 </div>
 </td>
 </tr>
@@ -4206,6 +4185,24 @@ through which supervisor software requests it is platform-dependent.</p>
 <a href="#ACE-CSR-macecsk"><code>macecsk</code> Group</a>: the ACE unit is unavailable while the <code>macecsk</code> group is partially
 written. The entire group must be written within a single M-mode episode.</p>
 </div>
+<div class="admonitionblock note">
+<table>
+<tr>
+<td class="icon">
+<i class="fa-solid fa-circle-info" title="Note"></i>
+</td>
+<td class="content">
+<div class="paragraph">
+<p>M-mode firmware must be aware of how the CSK is configured. Persistence mechanisms for
+configurable CSKs are implementation-specific. Transferring a CSK to another endpoint —
+such as the M-mode firmware of another device, a local TPM (for instance, to preserve a
+CSK across suspension or host hibernation), or a cloud-based HSM — requires an
+authenticated public-key key-wrapping mechanism.</p>
+</div>
+</td>
+</tr>
+</table>
+</div>
 <div class="admonitionblock warning">
 <table>
 <tr>
@@ -4222,13 +4219,6 @@ channel described above.</p>
 </td>
 </tr>
 </table>
-</div>
-<div class="paragraph">
-<p>M-mode firmware must be aware of how the CSK is configured. Persistence mechanisms for
-configurable CSKs are implementation-specific. Transferring a CSK to another endpoint —
-such as the M-mode firmware of another device, a local TPM (for instance, to preserve a
-CSK across suspension or host hibernation), or a cloud-based HSM — requires an
-authenticated public-key key-wrapping mechanism.</p>
 </div>
 </div>
 <div class="sect2">
@@ -18819,7 +18809,7 @@ ace.exec V0, K0  // this is the value of the CMAC</pre>
 <div id="footer">
 <div id="footer-text">
 Version 0.6.0<br>
-Last updated 2026-08-18 15:00:00 UTC
+Last updated 2026-08-19 14:04:43 UTC
 </div>
 </div>
 </body>
