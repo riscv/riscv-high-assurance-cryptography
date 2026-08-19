@@ -33,7 +33,7 @@ In particular:
 * **Resolution:**
   * Explicitly specified Form D `ace.exec Kn|K{Xn}` as the driving instruction for `_Sign_Generate_`, `_Sign_Verify_`, `_compute_pubKey_`, and `_GenerateKeyPair_`.
   * Added `Algorithm-Specific Functions` referencing FIPS 204 Algorithms 1, 7, and 8 (`ML-DSA.KeyGen`, `ML-DSA.Sign_internal`, `ML-DSA.Verify_internal`).
-  * Added complete, standardized pseudocode blocks for each state, documenting the exact variable correspondence to FIPS 204 ($sk, pk, \sigma, tr, \mu, rnd$) and specifying state transitions to `_Sign_Output_`, `_Success_`, or `_Failure_`.
+  * Added complete, standardized pseudocode blocks for each state, documenting the exact variable correspondence to FIPS 204 ($sk, pk, sigma, tr, mu, rnd$) and specifying state transitions to `_Sign_Output_`, `_Success_`, or `_Failure_`.
   * Added corresponding pseudocode and FIPS 203 mappings for ML-KEM `_GenerateKeyPair_`, `_Encapsulate_`, and `_Decapsulate_`.
 
 ---
@@ -57,12 +57,12 @@ In particular:
 
 ### M2 — Ambiguous Division of Responsibility in ML-DSA Pure vs. Pre-Hash Signing — **FIXED**
 * **Affected Files:** `src/ace-ISA-algorithms.adoc` (Lines 3696–3715, 3755–3775)
-* **Description:** FIPS 204 Section 5 specifies signature generation over formatted message strings $M'$ and pre-hashed digests $PH(M)$, bound to context string $ctx$. The division of responsibility between software formatting and ACE hardware execution was previously ambiguous regarding the role of $tr$, $\mu$, $ctx$, and $ctxlen$.
+* **Description:** FIPS 204 Section 5 specifies signature generation over formatted message strings $M'$ and pre-hashed digests $PH(M)$, bound to context string $ctx$. The division of responsibility between software formatting and ACE hardware execution was previously ambiguous regarding the role of $tr$, $mu$, $ctx$, and $ctxlen$.
 * **Resolution:**
   * Explicitly structured the specification around FIPS 204 Section 5:
-    * **Pure ML-DSA:** Specifies how the caller constructs $M' = \text{0x00} \,\|\, |ctx| \,\|\, ctx \,\|\, M$ and derives $\mu = \text{SHAKE256}(tr \,\|\, M', 64)$ to supply to `_mu_Input_`.
-    * **HashML-DSA:** Specifies how the caller pre-hashes $M$ with $PH$ (specified in the MDH _AuxInfo_ field), constructs $M' = \text{0x01} \,\|\, |ctx| \,\|\, ctx \,\|\, \text{OID}(PH) \,\|\, PH(M)$, and computes $\mu = \text{SHAKE256}(tr \,\|\, M', 64)$.
-    * **Public Key Hash ($tr$):** Clarified that $tr = \text{SHAKE256}(pk, 64)$ is generated internally on keygen/pubkey derivation or loaded via `_tr_Input_` for verification-only contexts.
+    * **Pure ML-DSA:** Specifies how the caller constructs $M' = \text{0x00} \,\|\, |ctx| \,\|\, ctx \,\|\, M$ and derives $mu = SHAKE256(tr \,\|\, M', 64)$ to supply to `_mu_Input_`.
+    * **HashML-DSA:** Specifies how the caller pre-hashes $M$ with $PH$ (specified in the MDH _AuxInfo_ field), constructs $M' = \text{0x01} \,\|\, |ctx| \,\|\, ctx \,\|\, \text{OID}(PH) \,\|\, PH(M)$, and computes $mu = SHAKE256(tr \,\|\, M', 64)$.
+    * **Public Key Hash ($tr$):** Clarified that $tr = SHAKE256(pk, 64)$ is generated internally on keygen/pubkey derivation or loaded via `_tr_Input_` for verification-only contexts.
     * **Context String ($ctx$ / $ctxlen$):** Defined the role of $ctx$ in binding application protocol context to the hardware session in the CC / SCC and supporting hardware message-absorption engines.
 
 ---
@@ -88,7 +88,7 @@ In particular:
   1. Updated `src/ascon-kat.py` with deterministic Ascon-Hash256 absorption and 256-bit digest validation per SP 800-232, declaring `KAT-RESULT: PASS`.
   2. Implemented `src/ecc-kat.py` verifying secp256r1 ECDSA deterministic signing and verification against RFC 6979 Section A.2.5, and Ed25519 signing and verification against RFC 8032 Section 7.1 test vectors.
   3. Implemented `src/mlkem-kat.py` verifying ML-KEM-768 keypair generation (Algorithm 19), encapsulation (Algorithm 20), decapsulation (Algorithm 21), implicit rejection on modified ciphertexts, and `ace.derive` flow.
-  4. Implemented `src/mldsa-kat.py` verifying ML-DSA-65 keypair generation (Algorithm 1), public key derivation `_compute_pubKey_`, message formatting $M'$ and $\mu$ for pure and pre-hashed modes (Section 5), signing `ML-DSA.Sign_internal` (Algorithm 7), and verification `ML-DSA.Verify_internal` (Algorithm 8).
+  4. Implemented `src/mldsa-kat.py` verifying ML-DSA-65 keypair generation (Algorithm 1), public key derivation `_compute_pubKey_`, message formatting $M'$ and $mu$ for pure and pre-hashed modes (Section 5), signing `ML-DSA.Sign_internal` (Algorithm 7), and verification `ML-DSA.Verify_internal` (Algorithm 8).
   5. All 13 test harnesses now run and pass cleanly under `python3 run-kats.py`.
 
 ---

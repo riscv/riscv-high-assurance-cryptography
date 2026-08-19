@@ -3,7 +3,7 @@ r"""Known Answer Tests for ACE ML-DSA (FIPS 204).
 Validates:
   - Key generation, signature generation, and verification for ML-DSA-65
   - Public key derivation from private key (_compute_pubKey_)
-  - Pure vs pre-hashed message representative (\mu) computation with context string (ctx)
+  - Pure vs pre-hashed message representative (mu) computation with context string (ctx)
   - Data structure sizing (privkey=4032B, pubkey=1952B, signature=3309B, tr=64B, mu=64B)
 """
 
@@ -54,13 +54,13 @@ class MockMLDSA65:
 
     @classmethod
     def sign_internal(cls, sk, mu, rnd):
-        # Sign internal given sk, \mu, rnd per FIPS 204 Algorithm 7
+        # Sign internal given sk, mu, rnd per FIPS 204 Algorithm 7
         sig = shake256(sk + mu + rnd, cls.SIG_LEN)
         return sig
 
     @classmethod
     def verify_internal(cls, pk, mu, sig):
-        # Verify internal given pk, \mu, sig per FIPS 204 Algorithm 8
+        # Verify internal given pk, mu, sig per FIPS 204 Algorithm 8
         if len(sig) != cls.SIG_LEN or len(pk) != cls.PK_LEN or len(mu) != cls.MU_LEN:
             return False
         # Expected signature check simulation
