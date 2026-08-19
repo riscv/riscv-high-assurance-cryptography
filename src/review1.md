@@ -231,7 +231,7 @@ REVIEWER ERROR
 **FIXED: CHANGED TO BYTES**
 
 **M32. The exception model is inconsistent about the privileged architecture and uses a nonexistent exception name.**
-Invalid instruction exception -> Illegal instruction exception **FIXED**
+Invalid instruction exception -> illegal-instruction exception **FIXED**
 
 **M33. Behavior of suppressed or disallowed operations is unspecified.** `src/ace-ISA-unpriv.adoc:456`, `:485-487`, `:1193-1206`. When an operation is suppressed (error state, usage violation, expiration), nothing says what is written to `Vd`, `Xd` or the ACEIOBUF — unchanged, zeroed or undefined — so implementations diverge and stale contents may leak. Rule 2 says only certain instructions "are permitted" in `_Success_`/`_Failed_` without defining what a non-permitted one does. `ace.exec` on an unconfigured register is covered by no rule, and there is no specification for operand-length mismatch. *Add a normative table of condition → exception, state transition, and destination effect.*
 

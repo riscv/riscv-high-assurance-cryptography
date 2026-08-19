@@ -1048,7 +1048,7 @@ claimed to implement SP 800-38E.
 * Once all flags have been set, the values written by M-mode firmware are activated …
 * Any mode change to M-mode will reset the flags.
 * If any of the flags are set, the ACE unit is not available and any attempt to execute
-  any ACE instruction will raise an illegal instruction exception.
+  any ACE instruction will raise an illegal-instruction exception.
 ```
 
 The flags are never cleared on activation, so after a successful CSK programming *all*
@@ -1185,7 +1185,7 @@ CMAC cannot detect a partial pending block at all.
 **CHANGED TO BYTES**
 
 * **m7** — **FIXED.** "invalid instruction exception" appeared 15 times where RISC-V
-  terminology is "illegal instruction exception"; all replaced. The distinct identifier
+  terminology is "illegal-instruction exception"; all replaced. The distinct identifier
   `ace_exc_invalid` was deliberately left alone.
 * **m8** — **FIXED.** The prose used `acemvendorid`/`acemarchid`/`acemimpid` while the
   CSR table and `IMPQUAL` used `acevendorid`/`acearchid`/`aceimpid`. Standardised on the

@@ -194,7 +194,7 @@ detail:
    `_Hash_Absorb_ -> _Enc_Tag_Finalize_ -> _Encrypt_ { -> _Dec_Last_Block_ }`, naming
    the *decryption* state on the encryption branch, so the transition to
    _Enc_Last_Block_ was never declared; by generic rule 2 (`ACE-generic-rules`) an
-   undeclared transition raises an illegal instruction exception and invalidates the CR,
+   undeclared transition raises an illegal-instruction exception and invalidates the CR,
    so GCM-SIV could not encrypt a non-block-multiple message at all. Corrected to
    `{ -> _Enc_Last_Block_ }` on 2026-08-13. Both algorithms' transition lists were
    re-checked afterwards for further Enc/Dec crossovers; none remain.
@@ -538,7 +538,7 @@ exactly at bit 20 as the accompanying text claims. `ace.reset` is now encodable 
    `#immed7` {ne} 0. Read naively, `r` = 1 with `X0` would address "the CR whose index is
    the value in `X0`", i.e. CR 0, which is not what `ace.reset` means. The encoding now
    states that the combination is reserved: with `#immed7` = 0 it is `ace.reset`, with any
-   other `#immed7` it raises an illegal instruction exception per the general `X0` rule,
+   other `#immed7` it raises an illegal-instruction exception per the general `X0` rule,
    and CR 0 remains addressable indirectly through any other GPR holding 0.
 
 A sentence was also added explaining why `r` sits at bit 20 here but at bit 26 in
@@ -1051,7 +1051,7 @@ information. `last_block_len` was correspondingly dropped from the Serialized Co
 1. **[FIXED] KMAC's transition list was broken.** KMAC declared `_Hash_Finalize_` among
    its States while taking its transitions by reference ("as in <<ACE-SHA-3>>"), and
    SHA-3 no longer declares that state — so the path KMAC needed was declared nowhere,
-   which generic rule 2 turns into an illegal instruction exception plus CR invalidation.
+   which generic rule 2 turns into an illegal-instruction exception plus CR invalidation.
    Resolved by removing the state from KMAC as well: `L` is now passed by the Form B
    `ace.setst` that transitions to _Hash_Output_, so KMAC's states are _Initial_,
    _Hash_Absorb_, _Hash_Output_, _Success_ and the inherited transition list is correct
