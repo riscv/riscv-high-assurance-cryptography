@@ -60,8 +60,8 @@ The actual numbers are TBD.
 |      | Load page fault                | {empty}
 |      | Store page fault               | {empty}
 | TBD  | `ace_guru_meditation`          | Fatal and unrecoverable system failure in the ACE unit.
-| TBD  | `ace_exc_CR_unconf`            | Use of a CR in State _Off_, or of an unconfigured, or partially configured CR as a source in any instruction except those that are defined to operate on a CR in that condition, namely `ace.size`, the `ace.getmd*` group — `ace.getmdl`, `ace.getmdh` and `ace.getmdv`, and hence also the `ace.getst` pseudo-instruction — and the data-movement instructions used during configuration and export, `ace.load`, `ace.store` and `ace.mv`. See the note below the table.
-| TBD  | `ace_exc_CR_other`             | Use of a CR as a source in any instruction (including `ace.size`), when the status of the CR is “Other/Lazy”, as per <<ACE-CSR-crstatus>>.
+| TBD  | `ace_exc_CR_off`               | Use, export, or import of a CR in crstate _Off_.
+| TBD  | `ace_exc_CR_hidden`            | Use or export of a CR in crstate _Hidden_.
 | TBD  | `ace_exc_out_of_mem`           | Insufficient CRF memory for configuration instruction. This may be set by privileged code in case it does not handle the CR allocation itself.
 | TBD  | `ace_exc_buf_unconf`           | Use of ACEIOBUF as an input or an output while unconfigured.
 | TBD  | `ace_exc_invalid`              | Invalid parameters in metadata, including expired CR state (evaluated upon `ace.setst`, at `ace.exec` dispatch, and upon resumption of interrupted multi-cycle operations). There is deliberately no separate `ace_exc_expired`: expiry is reported through this code, and the handler distinguishes it by reading the _State_ field of the CR, which the hardware has set to `ace_state_expired`.
@@ -153,12 +153,10 @@ should not treat `misa.L` as a stable interface until the question is settled.
 {empty}
 (((CSR,ACES field in mstatus)))
 (((CSR,ACES field in sstatus)))
-The ACES field is added to `mstatus`[26:25] and shadowed in `sstatus`[26:25].
-It is a WARL field.
-ACES is defined analogously to the floating-point context status field FS and the vector context status field VS.
-It tracks the dirtiness of the entire ACE state, including CRs, ACEIOBUF, and all ACE-specific CSRs.
-If ACE is implemented, ACES must not be read-only zero.
-Encodings are given in <<ACE-aces-encoding>>.
+An ACE context status field, `ACES`, is added to `mstatus`[26:25] and shadowed
+in `sstatus`[26:25].
+It is defined analogously to the floating-point context status field, `FS`, and
+the vector context status field, `VS`.
 
 [WARNING]
 ====
@@ -171,42 +169,21 @@ offset: only on there being a two-bit context-status field with the semantics of
 <<ACE-aces-encoding>>, defined analogously to `FS` and `VS`.
 ====
 
-[[ACE-aces-encoding]]
-.Encoding of the ACES field
-[float="center",align="center",width="100%",cols="^8%,<8%,<84%",options="header"]
-|===
-|Value |Name |Meaning
-|   0   | Off     | ACE disabled. The ACE state is inaccessible. Executing any ACE instruction or accessing any ACE-specific CSR raises an illegal instruction exception.
-|   1   | Initial | ACE enabled. No CR or the ACEIOBUF is configured. The hart may issue any ACE instruction.
-|   2   | Clean   | ACE enabled. At least one CR or ACEIOBUF is configured; state matches the last context swap.
-|   3   | Dirty   | ACE enabled. At least one CR, ACEIOBUF, or ACE-specific CSR may have changed since the last context swap.
-Unconfigured CRs that were previously configured also cause ACES to become Dirty, since context-switching code must erase any stale saved state.
-|===
-
-When the ACE Unit comes out of reset, it is zeroized _and_ in state _Off_.
-
-Coming out of state _Off_ does not zeroize or reset the ACE Unit.
-
-Entering ACES state _Off_ does not affect the state; it only affects access permission to the ISA and its state (CRs and CSRs).
-So writing _Off_ to ACES and then writing back the state it had before should not change the CRs and the ACEIOBUF.
-
-If the status is _Initial_, the context must be set to an initial state on context restore to avoid a security hole, but this can be done without accessing memory. The Metadata of all CRs is set to _Off_, and the ACEIOBUF is cleared.
-[WARNING]
-====
-Ask the ARC whether it must or should.
-====
-
-Otherwise, ACES state transitions follow the same rules as FS, VS, and XS (see cite:[RISCV-ISA-Priv]), _mutatis_ _mutandis_.
+When `mstatus.ACES` is Initial or Clean, any instruction that modifies ACE state sets `mstatus.ACES` to Dirty.
+Implementations may also set `mstatus.ACES` to Dirty from Initial or Clean at any time, even in the absence of a state change.
 
 NOTE: Precise management of `mstatus.ACES` is an optimization that software may use to reduce context-switch overhead.
 
-When `mstatus.ACES` is Initial or Clean, any instruction that modifies ACE state sets `mstatus.ACES` to Dirty. Implementations may also set `mstatus.ACES` to Dirty from Initial or Clean at any time, even in the absence of a state change.
+When `mstatus.ACES` is Dirty, `mstatus.SD` is 1;
+otherwise, `mstatus.SD` is set in accordance with existing specifications.
 
-When `mstatus.ACES` (resp. `sstatus.ACES`) is Dirty, `mstatus.SD` (resp. `sstatus.SD`) is 1; otherwise, `mstatus.SD` is set per existing specifications.
-
-Writes to ACES do not modify any other ACE state. Setting ACES to Off, Initial, or Clean does not clear CRs or ACEIOBUF; any state reset must be explicit and must precede such a write.
+NOTE: Writes to `mstatus.ACES` do not modify any ACE state.
+Setting ACES to Off, Initial, or Clean does not clear CRs, ACEIOBUF, or ACE CSRs;
+any state changes must be explicit and must precede such a write.
 
 In implementations with a writable `misa.L`, the `mstatus.ACES` field may be present even when `misa.L` is clear, analogously to `mstatus.FS` and `mstatus.VS`.
+
+The value of this field upon a reset is _Off_.
 
 [NOTE]
 ====
@@ -226,17 +203,21 @@ implementations may have dedicated hardware to speed up the instructions.
 (((CSR,ACES field in vsstatus)))
 When the H extension is present, an ACES field is added to `vsstatus`[26:25], defined analogously to `mstatus.FS` and `mstatus.VS`, and tracking the dirtiness of CRs, ACEIOBUF, and all ACE-specific CSRs.
 
-The value of this field out of ACE unit reset is _Off_.
-
 When V=1:
 
 * Both `vsstatus.ACES` and `mstatus.ACES` are in effect.
-* Any ACE instruction raises an illegal instruction exception if either field is Off.
+* Any ACE instruction, including access to ACE CSRs, raises an illegal instruction exception if either field is Off.
 * If neither field is Off, any instruction that modifies ACE state sets both `mstatus.ACES` and `vsstatus.ACES` to Dirty.
 * Implementations may set `ACES` to Dirty from Initial or Clean at any time, even without a state change.
-* When `vsstatus.ACES` is Dirty, `vsstatus.SD` is 1; else, `vsstatus.SD` is set per existing specifications.
+* When `vsstatus.ACES` is Dirty, `vsstatus.SD` is 1; otherwise, `vsstatus.SD` is set in accordance with existing specifications.
 
 In implementations with a writable `misa.L`, `vsstatus.ACES` may be present even when `misa.L` is clear.
+
+NOTE: `mstatus.ACES` and `vsstatus.ACES` are not considered ACE context state
+for the purposes of state tracking and hence `vsstatus.ACES` is a
+
+The value of this field upon a reset is _Off_.
+
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -257,11 +238,11 @@ For each of these 3 CSRs.
 .Encoding of the `*crstatus` bits
 [float="center",align="center",width="100%",cols="^8%,<12%,<80%",options="header"]
 |===
-|Value |Name |Meaning
-|   0   | _Off_            | The CR is unconfigured. If the metadata record's State field of a CR is _Off_, then this `scrstatus` field must be either _Off_ or _Other_. Attempts to use it will raise exception `ace_exc_CR_unconf`. The CR can be configured.
-|   1   | _Other_ (_Lazy_) | The CR may be configured or unconfigured. The metadata record's State field of a CR can assume any admissible value. Attempts to export or use the CR will raise exception `ace_exc_CR_other`. This `scrstatus` can be used for lazy context switching at per-CR granularity. It is the responsibility of the exception handler to ensure that the CR is configured before returning to the caller.
-|   2   | _Clean_          | The CR is configured and its state matches the last context swap.
-|   3   | _Dirty_          | The CR is configured and its state may have been modified since the last context swap.
+|Value |Name | Behavior
+|   0   | _Off_            | The CR is inaccessible. Attempts to use, export, or import it will raise exception `ace_exc_CR_off`.
+|   1   | _Hidden_         | The CR is partially accessible. Attempts to export or use the CR will raise exception `ace_exc_CR_hidden`.  Only configuration for import can be performed.
+|   2   | _Clean_          | The CR is accessible.
+|   3   | _Dirty_          | The CR is accessible.
 |===
 
 For `mcrstatus`:::
@@ -280,9 +261,8 @@ For `vscrstatus`:::
 --
 `vscrstatus` exists only when the H extension is implemented.
 
-When V=1 and the privilege mode is U/VU:
+When V=1 and the privilege mode is VU:
 
-* `vscrstatus` shadows `scrstatus`; accesses that would target `scrstatus` instead access `vscrstatus`.
 * Any instruction that modifies ``K(``__i__``)`` sets `vscrstatus`(__i__) to Dirty.
 // * Implementations may set `vscrstatus`(__i__) to Dirty from Clean at any time, even without a state change.
 
@@ -296,14 +276,9 @@ When the privilege mode is VS or U/VU:
 
 * Any instruction that modifies ``K(``__i__``)`` sets `scrstatus`(__i__) to Dirty.
 // * Implementations may set `scrstatus`(__i__) to Dirty from Clean at any time, even without a state change.
-* `scrstatus` is independent of the S extension. In an M-U system, M-mode may use it to optimize U-mode context switches.
 
 `sstatus.ACES`, `mstatus.ACES`, and `mcrstatus` are also in effect.
 --
-
-Status _Off_ is used only when a CR is not configured.
-
-Out of ACE unit reset, all entries of these CSR are _Off_.
 
 On RV32, 32-bit CSRs `mcrstatush`, `scrstatush`, and `vscrstatush` shadow bits [63:32] of `mcrstatus`, `scrstatus`, and `vscrstatus`,
 respectively, allowing these bits to be accessed.
