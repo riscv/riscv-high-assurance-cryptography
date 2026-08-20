@@ -7,11 +7,8 @@ VERSION   ?= v0.6.0
 PDF_THEME := docs-resources/themes/riscv-pdf.yml
 REQUIRES  := --require=asciidoctor-bibtex \
              --require=asciidoctor-diagram \
-             --require=asciidoctor-mathematical \
-             --require=asciidoctor-kroki \
              --require=asciidoctor-lists \
-             --require=asciidoctor-sail \
-             --require=./src/preprocessor.rb
+             --require=asciidoctor-sail
 
 DOCKER_IMG := ghcr.io/riscv/riscv-docs-base-container-image:latest
 #DOCKER_IMG := ghcr.io/riscv/riscv-docs-base-container-image@sha256:c90f312cef31366106486940fbcafe63baee437df79171d321e8135672d819ae

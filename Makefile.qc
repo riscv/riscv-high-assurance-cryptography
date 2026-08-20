@@ -7,11 +7,8 @@ VERSION   ?= v0.6.0
 PDF_THEME := docs-resources/themes/riscv-pdf.yml
 REQUIRES  := --require=asciidoctor-bibtex \
              --require=asciidoctor-diagram \
-             --require=asciidoctor-mathematical \
-             --require=asciidoctor-kroki \
              --require=asciidoctor-lists \
-             --require=asciidoctor-sail \
-             --require=./src/preprocessor.rb
+             --require=asciidoctor-sail
 
 DOCKER_IMG := docker-registry.qualcomm.com/proxy-cache-qcom/riscvintl/riscv-docs-base-container-image:latest
 
