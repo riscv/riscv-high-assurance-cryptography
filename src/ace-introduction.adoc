@@ -17,20 +17,20 @@ Its development has been prompted by use cases such as content protection (inclu
 
 ACE's main features are:
 
-* To mitigate key misuse, ACE binds cryptographic secrets (such as keys) and metadata into an indivisible structure called a _Cryptographic Context_ (CC). The architecture uses the metadata to restrict each secret to a specific algorithm and, optionally, to enforce usage constraints based on the process, VM, security state, boot cycle, an expiration date, or other policies.
+* To mitigate key misuse, ACE binds cryptographic secrets (such as keys) and metadata into an indivisible structure called a _Cryptographic Context_ (CC). The architecture uses the metadata to restrict each secret to a specific algorithm and, optionally, to enforce usage constraints based on the process, VM, security state, boot cycle, expiration date, or other policies.
 
 * To implement CCs, ACE introduces _Context Registers_ (CRs)—architectural containers that conceal their secrets from software. A CC is created by _provisioning_ (i.e., writing) secrets and metadata into a CR. ACE instructions operate on CRs instead of explicit key values. As a result, software can use keys without holding them explicitly in the memory of the process, and also benefit from higher performance and side-channel-protected implementations when available.
 
 * Cryptographic operations are performed _atomically_ to avoid leaking data through architectural side-channels.
-  Instructions can be interrupted only if they perform multiple cryptographic operations and according to rules defined by the Algorithms they apply to.
+  Instructions can be interrupted only if they perform multiple cryptographic operations, and only according to rules defined by the algorithms they execute.
 
 * ACE provides a unified interface to multiple cryptographic primitives, avoiding the need for separate instructions per primitive.
  ** Exposing only the primitives is insufficient for modes like AES-GCM-SIV, XTS, and OCB, because leakage of derived keys or intermediate values can compromise security. Therefore, ACE also defines modes of operation and secure key derivation.
  ** In addition to GCM-SIV, XTS, and OCB, ACE defines modes such as CTR, GCM, and CMAC. Where applicable, encrypt-only or decrypt-only versions and versions with a preset IV or nonce are also defined to reduce the potential for misuse. These modes can be instantiated not only with AES-128/256 but also with other block ciphers such as SM4.
- ** Support for various hash functions.
+ ** Supports various hash functions.
  ** The interface supports SCA-resistant implementations of the algorithms.
- ** The interface can also be used to provide access to public-key and post-quantum algorithms.
- ** Not all the algorithms defined in the specification are intended to be supported by an ACE implementation: following RISC-V practice, ACE defines several sub-extensions and delegates the choice to RV profiles, which are defined by a separate process.
+ ** The interface provides access to public-key and post-quantum algorithms.
+ ** Not all algorithms defined in this specification are required in every ACE implementation; following RISC-V practice, ACE defines several sub-extensions and delegates profile requirements to the RISC-V profile process.
 
 * ACE provides a secure mechanism to store a CC to memory via authenticated
   encryption, producing a _Sealed Cryptographic Context_ (SCC). Once generated,
@@ -56,7 +56,7 @@ Assuming the primitive is secure, the key cannot be recovered from the input and
 ACE intentionally excludes the following:
 
 * **Debugging support:** The internal representation of a CR remains concealed even during debug.
-* **Variable-length complete ciphertext and plaintext inputs:** Plaintext and ciphertexts, as well as messages of which digests are computed, are processed in fixed-size blocks.
+* **Variable-length complete ciphertext and plaintext inputs:** Plaintexts, ciphertexts, and hash inputs are processed in fixed-size blocks.
 * **Full key management:** ACE provides only architectural building blocks that can be used for key management, whose logic resides in trusted software (e.g., TEE applets). ACE does not support external schemes for directly provisioning keys into a key store. Instead, a local trusted SW or HW component manages the external schemes and uses the resulting keys and policies to configure CCs for the ACE unit.
 
 * **Key revocation:**
@@ -77,7 +77,7 @@ _This section is informative and non-normative._
 The ACE threat model is straightforward.
 
 **Assets** are _keys_ and any information that could aid an adversary in recovering plaintext or forging ciphertext. This includes, e.g., masks in tweakable XEX modes and derived keys in AES-GCM-SIV. The critical properties of these assets are their _confidentiality_ and _integrity_.
-Protecting the _Availability_ of the keys is not an architectural goal.
+Protecting the _availability_ of keys is not an architectural goal.
 
 **Adversaries** are assumed capable of compromising processes by exploiting software vulnerabilities.
 They are also able to gain access to memory contents, for instance, by abusing hardware interfaces or by SoC/memory interposition.
@@ -103,17 +103,18 @@ Direct plaintext leakage, memory corruption attacks against the ACE-using proces
 
  . RVV-mini can be considered finalized. Need detectability, proper coupling to ACE, and a better name.
  . We need a cause/subcause for our traps. We would lie to have a _value_ as well, in order to retrieve the CR number directly (to simplify the handler with respect to direct/indirect CR referencing).
-. We will “`kl`” in this document instead of “`ace.`”: `kl` means ACE is a subset of crypto extensions, the “l” is also the initial of “Locker”, and Cryptographic Locker will replace Cryptographic Register.
+. We would like to have a _value_ as well, in order to retrieve the CR number directly (to simplify the handler with respect to direct/indirect CR referencing).
+. We will use “`kl`” in this document instead of “`ace.`”: `kl` means ACE is a subset of crypto extensions, the “l” is also the initial of “Locker”, and Cryptographic Locker will replace Cryptographic Register.
 . Regarding <<ACE-CSK-requirements>> and <<ACE-CSR-macecsk>>: is there, or should there be, an architected mechanism by which
 M-mode on one hart can read or configure the CSRs of another hart? If such a mechanism
 exists or is planned, then <<ACE-CSK-requirements>> should use it instead of the platform-specific channels.
 . What should be the Debug-mode policy for the Locality CSRs and other ACE CSR groups?  Require CRF zeroization on entry to Debug mode unless debug is authenticated?
 . In general, how do we interact with Debug mode?
-. Assignment of opcodes: The encodings presented in <<ACE-instructions-detailed>> are preliminary. To a minimum, we need three opcodes in place of `custom-0`, `custom-1`, and `custom-2`.
+. Assignment of opcodes: The encodings presented in <<ACE-instructions-detailed>> are preliminary. At a minimum, we need three opcodes in place of `custom-0`, `custom-1`, and `custom-2`.
 
 * **ADD A COMMENT** Any additional inputs for (random) key generation?
-An implementor could define a custom consume-anything/output unlimited KDF and use ace.derive to move data from it to keys in a CR.
-Maybe define KDFs and architect mechnisms to provide an input with the KDF and `ace.derive` in place of an `ace.exec` in states that expect it as an input.
+An implementer could define a custom consume-anything/output unlimited KDF and use `ace.derive` to move data from it to keys in a CR.
+Maybe define KDFs and architect mechanisms to provide an input with the KDF and `ace.derive` in place of an `ace.exec` in states that expect it as an input.
 
 * UNPRIV: *Behavior of suppressed or disallowed operations is unspecified.*  When an operation is suppressed (error state, usage violation, expiration), nothing says what is written to `Vd`, `Xd` or the ACEIOBUF: **suggest: unchanged, for the actual block that is suppressed and forward.**
 Rule 2 says only certain instructions "are permitted" in `_Success_`/`_Failed_`, need more clarity on what a non-permitted one does.  *Add a normative table of condition → exception, state transition, and destination effect.*

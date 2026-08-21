@@ -17,10 +17,10 @@ We refer to the ACE Unprivileged Architecture for the definitions of ACE instruc
 |===
 |  Extension       | Features                                                                                        | Defined in:                  | Minimum version | Lifecycle state
 | `Smacestatus`    | Defines the ACES per-CR status tracking CSRs.                                                   | <<ACE-CSR-lcrstatus>>        | v0.0.0 | --
-| `SmaceCSK`       | Defines the CSRs group to configure the Context Sealing Key.                                    | <<ACE-CSR-macecsk>>          | v0.0.0 | --
-| `Smacepbootscrt` | Defines the CSRs group to configure the Physical Boot Secret Locality (cf. <<ACE-Localities>>). | <<ACE-CSR-macephysbootscrt>> | v0.0.0 | --
-| `Smacevbootscrt` | Defines the CSRs group to configure the Virtual Boot Secret Locality (cf. <<ACE-Localities>>).  | <<ACE-CSR-hacevirtbootscrt>> | v0.0.0 | --
-| `Smacelclt`      | Defines the CSRs group to configure the software binding Localities (cf. <<ACE-Localities>>).   | <<ACE-CSR-macelocality>>, <<ACE-CSR-hacelocality>>, and <<ACE-CSR-sacelocality>> | v0.0.0 | --
+| `SmaceCSK`       | Defines the CSR group to configure the Context Sealing Key.                                     | <<ACE-CSR-macecsk>>          | v0.0.0 | --
+| `Smacepbootscrt` | Defines the CSR group to configure the Physical Boot Secret Locality (cf. <<ACE-Localities>>). | <<ACE-CSR-macephysbootscrt>> | v0.0.0 | --
+| `Smacevbootscrt` | Defines the CSR group to configure the Virtual Boot Secret Locality (cf. <<ACE-Localities>>).  | <<ACE-CSR-hacevirtbootscrt>> | v0.0.0 | --
+| `Smacelclt`      | Defines the CSR group to configure the software binding Localities (cf. <<ACE-Localities>>).   | <<ACE-CSR-macelocality>>, <<ACE-CSR-hacelocality>>, and <<ACE-CSR-sacelocality>> | v0.0.0 | --
 |===
 
 //
@@ -225,7 +225,7 @@ When V=1:
 In implementations with a writable `misa.L`, `vsstatus.ACES` may be present even when `misa.L` is clear.
 
 NOTE: `mstatus.ACES` and `vsstatus.ACES` are not considered ACE context state
-for the purposes of state tracking and hence `vsstatus.ACES` is a
+for the purposes of state tracking, and hence writes to `vsstatus.ACES` do not set `mstatus.ACES` to Dirty.
 
 The value of this field upon a reset is _Off_.
 
@@ -268,7 +268,7 @@ when `mlcrstatus`(__i__) is 0 (Off) raise an `ace_exc_CR_off` exception.
 
 * Any instruction that modifies ``K(``__i__``)`` sets `mlcrstatus`(__i__) to Dirty.
 
-* Any direct write to `mlcrstatus`(__i__) does not change either `slcrstatus`(__i__) nor `vslcrstatus`(__i__) (if defined).
+* Any direct write to `mlcrstatus`(__i__) does not change either `slcrstatus`(__i__) or `vslcrstatus`(__i__) (if defined).
 
 `mstatus.ACES` is also in effect.
 --
@@ -284,7 +284,7 @@ when either `mlcrstatus`(__i__) or `slcrstatus`(__i__) is 0 (Off) raise an `ace_
 
 * Any instruction that modifies ``K(``__i__``)`` sets `slcrstatus`(__i__) and `mlcrstatus`(__i__) to Dirty.
 
-* Any direct write to `slcrstatus`(__i__) does not change either `mlcrstatus`(__i__) nor `vslcrstatus`(__i__) (if defined).
+* Any direct write to `slcrstatus`(__i__) does not change either `mlcrstatus`(__i__) or `vslcrstatus`(__i__) (if defined).
 
 `sstatus.ACES`, `mstatus.ACES`, and `mlcrstatus` are also in effect.
 --
@@ -304,7 +304,7 @@ when any one of `mlcrstatus`(__i__), `vslcrstatus`(__i__), or `slcrstatus`(__i__
 
 * Any instruction that modifies ``K(``__i__``)`` sets `vslcrstatus`(__i__), `slcrstatus`(__i__) and `mlcrstatus`(__i__) to Dirty.
 
-* Any direct write to `vslcrstatus`(__i__) does not change either `mlcrstatus`(__i__) nor `slcrstatus`(__i__) (if defined).
+* Any direct write to `vslcrstatus`(__i__) does not change either `mlcrstatus`(__i__) or `slcrstatus`(__i__) (if defined).
 
 * `sstatus.ACES`, `vsstatus.ACES`, `mstatus.ACES`, `slcrstatus`, and `mlcrstatus` are also in effect.
 --
@@ -325,7 +325,7 @@ Since importing and exporting the CR state is expected to be slow, software migh
 EE manager may do that by keeping keys from other contexts in the ACE unit or
 by postponing import until the key is actually used in the EE.
 
-The design of ACE accelerates that by providing two mechanism:
+The design of ACE accelerates that by providing two mechanisms:
 1. Trap any access to a selected CR by setting `*lcrstatus` field to _Off_.
 2. Trap import failures because of insufficient ACE CR file space.
 
@@ -366,7 +366,7 @@ note over U : U-mode successfully accesses CR0
 
 ....
 
-.Simplest example of insufficient CR file memory where S-mode overcommited
+.Simplest example of insufficient CR file memory where S-mode overcommitted
 [plantuml, ,svg]
 ....
 @startuml
@@ -466,8 +466,8 @@ note over VU : U-mode successfully accesses CR0
 @enduml
 ....
 
-NOTE: The accelerated trap delegation very closely depends on how the traps are structures, since we definitely won't get a cause for each trap, maybe not even for the ACE unit at all, so we'll be subtypes of that cause.
-The delegation can only be done with `medeleg` and `hedeleg` CSRs, which have fairly low granularity.
+NOTE: The accelerated trap delegation closely depends on how traps are structured, since we will not get a separate cause for each trap (they will likely be sub-causes of an ACE unit cause).
+The delegation can only be done with the `medeleg` and `hedeleg` CSRs, which have fairly coarse granularity.
 
 .Nested example without accelerated trap delegation for slcrstatus _Off_
 [plantuml, ,svg]
@@ -548,7 +548,7 @@ rnote over U : Configure CR
 / note over sl : D (auto)
 / note over vsl : D (auto)
 
-U -> HS : Premption
+U -> HS : Preemption
 
 rnote over HS : Saves CR
 / hnote over O : VU
@@ -607,8 +607,7 @@ rnote over U : Resume and\n complete config
 / note over vsl : D (auto)
 
 
-U -> VS : Premption
-least significant bits
+U -> VS : Preemption
 rnote over VS : Saves CR
 / hnote over O : VU
 / note over ml :  D (unchanged)
@@ -756,7 +755,7 @@ The value of the CSK out of ACE unit reset is implementation-defined.
 (((CSR, `macephysbootscrt`)))
 The `macephysbootscrt` group consists of M-mode WARZ XLEN-bit CSRs, accessed via Indirect CSR Access: four in RV32, two in RV64.
 
-A write to the __i__-th CSR sets bits [(_i_+1)XLEN−1 : _i_·XLEN] of the Locality Secret PhysBootScrt (<<ACE-locality-indexes>>).
+A write to the __i__-th CSR sets bits [(_i_+1)·XLEN−1 : _i_·XLEN] of the Locality Secret PhysBootScrt (<<ACE-locality-indexes>>).
 
 Access outside M-mode or Debug mode raises an illegal-instruction exception.
 
@@ -771,7 +770,7 @@ Out of ACE unit reset, the value of PhysBootScrt is zero.
 (((CSR, `hacevirtbootscrt`)))
 The `hacevirtbootscrt` group consists of HS-mode WARZ XLEN-bit CSRs, accessed via Indirect CSR Access: four in RV32, two in RV64.
 
-A write to the __i__-th CSR sets bits [(_i_+1)XLEN−1 : _i_·XLEN] of the Locality Secret VirtBootScrt (<<ACE-locality-indexes>>).
+A write to the __i__-th CSR sets bits [(_i_+1)·XLEN−1 : _i_·XLEN] of the Locality Secret VirtBootScrt (<<ACE-locality-indexes>>).
 
 Access below HS-mode raises an illegal-instruction exception.
 
@@ -786,7 +785,7 @@ Out of ACE unit reset, the value of VirtBootScrt is zero.
 (((CSR, `macelocality`)))
 The `macelocality` group consists of M-mode WARZ XLEN-bit CSRs, accessed via Indirect CSR Access: four in RV32, two in RV64.
 
-A write to the __i__-th CSR sets bits [(_i_+1)XLEN−1 : _i_·XLEN] of the Locality Secret MLocality (<<ACE-locality-indexes>>).
+A write to the __i__-th CSR sets bits [(_i_+1)·XLEN−1 : _i_·XLEN] of the Locality Secret MLocality (<<ACE-locality-indexes>>).
 
 Access outside M-mode and Debug mode raises an illegal-instruction exception.
 
@@ -801,7 +800,7 @@ Out of ACE unit reset, the value of MLocality is zero.
 (((CSR, `hacelocality`)))
 The `hacelocality` group consists of HS-mode WARZ XLEN-bit CSRs, accessed via Indirect CSR Access: four in RV32, two in RV64.
 
-A write to the __i__-th CSR sets bits [(_i_+1)XLEN−1 : _i_·XLEN] of the Locality Secret HLocality (<<ACE-locality-indexes>>).
+A write to the __i__-th CSR sets bits [(_i_+1)·XLEN−1 : _i_·XLEN] of the Locality Secret HLocality (<<ACE-locality-indexes>>).
 
 This group must be implemented whenever the H extension is implemented. Access below HS-mode raises an illegal-instruction exception.
 
@@ -816,7 +815,7 @@ Out of ACE unit reset, the value of HLocality is zero.
 (((CSR, `sacelocality`)))
 The `sacelocality` group consists of (V)S-mode WARZ XLEN-bit CSRs, accessed via Indirect CSR Access: four in RV32, two in RV64.
 
-A write to the __i__-th CSR sets bits [(_i_+1)XLEN−1 : _i_·XLEN] of the Locality Secret SLocality (<<ACE-locality-indexes>>).
+A write to the __i__-th CSR sets bits [(_i_+1)·XLEN−1 : _i_·XLEN] of the Locality Secret SLocality (<<ACE-locality-indexes>>).
 
 The group is accessible in (V)S-mode and above; access from U-mode raises an illegal-instruction exception.
 
