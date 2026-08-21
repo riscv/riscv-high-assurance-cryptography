@@ -384,7 +384,7 @@ restore it first. That asymmetry is deliberate and is now explicit.
 ### M3 — [FIXED] Management code snippets were wrong as given
 
 **Original finding:** in all four provisioning/import sequences `t3` was overwritten with
-`#ace_state_off` (0) before the *final* `bltu t3, t2, handle_errors`, so after a successful
+`#ace_state_unconfigured` (0) before the *final* `bltu t3, t2, handle_errors`, so after a successful
 `provision_end`/`import_end` any valid state — _Initial_ = 1 included — branched to
 `handle_errors`; the in-loop threshold test was equally broken on the restart path.
 `vle8.v v4, 8(t6)` is not valid RVV assembly, unit-stride vector loads taking no immediate
@@ -393,7 +393,7 @@ offset. The export snippet's comments were copy-paste leftovers from the import 
 **Resolution (applied 2026-08-13):** all six snippets rewritten.
 
 * **`t3` is now initialised once to 23 and never reassigned.** The restart test that used to
-  clobber it (`li t3, #ace_state_off` then `beq t2, t3, restart`) is simply
+  clobber it (`li t3, #ace_state_unconfigured` then `beq t2, t3, restart`) is simply
   `beqz t2, restart`, which is what it always meant. A paragraph before the listings states
   the convention — `t3` holds the highest valid _State_, so `bltu t3, t2, handle_errors`
   branches exactly on an Error State — and says why it must survive to the end.

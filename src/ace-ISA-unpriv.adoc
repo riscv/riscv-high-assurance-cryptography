@@ -76,7 +76,7 @@ A trap-and-emulate implementation in M-mode firmware avoids the need to support 
 [WARNING]
 ====
 *This may end up be changed. We just removed the Other status.*
-Trap-and-emulate exploits the ``*crstatus``'s “Other” values which can be used also for lazy switching (cf. <<ACE-lazy-loading>>).
+Trap-and-emulate exploits the ``*crstatus``'s “Other” values which can be used also for lazy import of SCCs.
 ====
 
 [WARNING]
@@ -329,7 +329,7 @@ All _Reserved_ bits, as well as bits unused by a given algorithm, are zero.
 |   [15:14] |   2  | Reserved          | Reserved for future expansion of _AlgorithmPolicy_ field.
 |   [18:16] |   3  | _SCProtection_    | Side-channel protection level. The levels of side-channel protection are defined in <<ACE-SCProtection-field>>.
 |   [20:19] |   2  | _KeyType_         | This field determines whether the key is given by value, is a system-defined key, or randomly generated. See <<ACE-KeyType-field>> for more details.
-|   [25:21] |   5  | _State_           | Current state of the CR/algorithm, encoded as an integer. For instance, whether the CR/algorithm is _Off_ (unconfigured), encrypting or decrypting data, absorbing data in a hash/mac/tag, computing elliptic curve point multiples, generating or verifying signatures, or in an error state. It can be modified by the user to advance through various phases of an algorithm. See <<ACE-State-field>>.
+|   [25:21] |   5  | _State_           | Current state of the CR/algorithm, encoded as an integer. For instance, whether the CR is _Unconfigured_, encrypting or decrypting data, absorbing data in a hash/mac/tag, computing elliptic curve point multiples, generating or verifying signatures, or in an error state. It can be modified by the user to advance through various phases of an algorithm. See <<ACE-State-field>>.
 |   [29:26] |   4  | _StateExtension_  | May be used by the algorithm to extend the _State_ field with additional information. See <<ACE-State-field>>.
 |   [31:30] |   2  | _ConfigStatus_    | Used to indicate whether the CR is fully configured and ready to operate, or is being provisioned, imported, or exported. See <<ACE-ConfigStatus>>.
 |   [45:32] |  14  | _ImpDataLen_      | If non-zero, indicates that an additional, variable-length, implementation-dependent data section appended to Content. The length of this additional data section is _ImpDataLen_ * 128 bits (up to 256 KiB).
@@ -427,7 +427,7 @@ The architected values of _State_ common to all algorithms are defined in the fo
 [float="center",align="center",width="100%",cols="^7%,<27%,<15%,<51%",options="header"]
 |===
 | Value | Mnemonic                  | State Name     | Description
-|   0   | `ace_state_off`           | _Off_          | The CR is not configured.
+|   0   | `ace_state_unconfigured`  | _Unconfigured_ | The CR is not configured.
 |===
 
 [[ACE-states-valid]]
@@ -435,10 +435,10 @@ The architected values of _State_ common to all algorithms are defined in the fo
 [float="center",align="center",width="100%",cols="^7%,<27%,<15%,<51%",options="header"]
 |===
 | Value | Mnemonic                  | State Name     | Description
-|   1   | `ace_state_initial`       | _Initial_      | The state of a just provisioned CC; ready for operation.
+|   1   | `ace_state_ready`         | _Ready_        | The state of a just provisioned CC; ready for operation.
 | 2-21  3+| Defined by the specification of the Algorithm encoded in the _Algorithm_ field.
-|  22   | `ace_state_success`       | _Success_      | Algorithm completed successfully. No further cryptographic operations may be performed until the CR is reconfigured or transitioned to _Initial_.
-|  23   | `ace_state_failure`       | _Failure_      | Failure in an algorithm, usually an authentication failure in AE(AD) algorithms or a signature verification failure. No further cryptographic operations may be performed until the CR is reconfigured or transitioned to _Initial_.
+|  22   | `ace_state_success`       | _Success_      | Algorithm completed successfully. No further cryptographic operations may be performed until the CR is reconfigured or transitioned to _Ready_.
+|  23   | `ace_state_failure`       | _Failure_      | Failure in an algorithm, usually an authentication failure in AE(AD) algorithms or a signature verification failure. No further cryptographic operations may be performed until the CR is reconfigured or transitioned to _Ready_.
 |===
 
 [[ACE-states-error]]
@@ -454,7 +454,7 @@ The architected values of _State_ common to all algorithms are defined in the fo
 | 30, 31 | (Reserved)                  |                   | Reserved for future use.
 |===
 
-State 0 is the _Off_ state.  It denotes that the CR is unconfigured.
+State 0 is the _Unconfigured_ state.  It denotes that the CR is unconfigured.
 
 All states in the range 1-23 are termed _valid_. This includes both _Success_ and _Failure_ states, which must be used for
 normal completion of an algorithm in the cases of its successful completion or failure.
@@ -473,20 +473,20 @@ Error States 30 and 31, if defined, will not necessarily have a lower priority t
 
 Error conditions that lead to exceptions are treated in <<ACE-exceptions>>.
 
-If an algorithm defines 23 or fewer valid states (including _Initial_, _Success_, and _Failure_), the current state is stored in the _State_ field.
+If an algorithm defines 23 or fewer valid states (including _Ready_, _Success_, and _Failure_), the current state is stored in the _State_ field.
 For algorithms with more than 23 valid states, additional state information may reside in the Content section in an algorithm-specific format.
 
 The following rules are generic and apply to all algorithms:
 
-. The MDHs's _State_ field must reflect the current state whenever the CC is in _Initial_, _Success_, _Failure_, or any Error State.
+. The MDHs's _State_ field must reflect the current state whenever the CC is in _Ready_, _Success_, _Failure_, or any Error State.
 This ensures that these states can be unambiguously determined from the _State_ field alone, without inspecting the Content.
 
 . In States _Success_ and _Failure_, only the following ACE instructions are permitted: `ace.mgmt`, `ace.load`, `ace.store`, `ace.clear`, `ace.size`, `ace.setst`, and `ace.getst` (described in <<ACE-instructions-detailed>>).
 
-. In States _Success_ and _Failure_, `ace.setst` is only permitted to transition to _Initial_ or _Off_.
+. In States _Success_ and _Failure_, `ace.setst` is only permitted to transition to _Ready_ or _Unconfigured_.
 
-. A transition from any valid state to _Initial_ using instruction `ace.setst` is always permitted, unless the algorithm explicitly forbids it.
-Note that a CR can always be restored from a backup SCC, so preventing transitions to _Initial_--as "GCM with Set IV" (<<ACE-GCM-with-IV-mode>>) does--is not an effective mitigation against cryptographic attacks enabled by reset to _Initial_.
+. A transition from any valid state to _Ready_ using instruction `ace.setst` is always permitted, unless the algorithm explicitly forbids it.
+Note that a CR can always be restored from a backup SCC, so preventing transitions to _Ready_--as "GCM with Set IV" (<<ACE-GCM-with-IV-mode>>) does--is not an effective mitigation against cryptographic attacks enabled by reset to _Ready_.
 
 . Any transition may be caused by performing an explicit `ace.setst` operation, or may be induced by certain conditions specified in the algorithm's specification.
 
@@ -505,17 +505,17 @@ For instance, invalidating the CR after a failed side-channel protection upgrade
 Software that needs to preserve the CC should export it as an SCC before requesting the upgrade, and re-import it if the upgrade fails.
 ====
 
-. The transitions from _Off_ to any Error State are a result of configuration instructions, whereas the corresponding transitions from these Error States to _Off_ are a result of explicitly clearing the CR.
+. The transitions from _Unconfigured_ to any Error State are a result of configuration instructions, whereas the corresponding transitions from these Error States to _Unconfigured_ are a result of explicitly clearing the CR.
 
 . Exporting a CR in an Error State exports only the MDH (all fields and values) and the authentication tag.
   Requesting the SCC's size (`ace.size` <<ACE-instruction-size>>) will return 32 (bytes).
   The resulting SCC can be reimported, allowing software to take appropriate actions even after a context switch.
 
-. If a CR is in any Error State, it can still be reconfigured, cloned, or cleared. `ace.setst` can only be used to change the Error State (for instance by an exception handler) or transition the CR to _Off_.
+. If a CR is in any Error State, it can still be reconfigured, cloned, or cleared. `ace.setst` can only be used to change the Error State (for instance by an exception handler) or transition the CR to _Unconfigured_.
 
 . The MDH of a CR in an Error State can be read using `ace.getmd*` (<<ACE-instruction-getmd>>).
 
-. The MDH of a CR in the _Off_ State can be read using `ace.getmd*` (<<ACE-instruction-getmd>>), returning all zero values.
+. The MDH of a CR in the _Unconfigured_ State can be read using `ace.getmd*` (<<ACE-instruction-getmd>>), returning all zero values.
 
 . Attempts to _use_ a CR in any Error State will not perform any operation, and in particular they leave the _State_ field unchanged.
 
@@ -612,13 +612,13 @@ image::images/statestikz-3.svg[]
 
 The legend for the graph is:
 
-* The double circled state is the _Off_ State.
+* The double circled state is the _Unconfigured_ State.
 * Valid States have single rounded rectangular borders.
 * Error States have double rounded rectangular borders.
 * The continuous edges represent state transitions induced by both configuration and usage instructions.
 * The dashed edges represent state transitions induced by reaching the expiration date.
 * The dotted edges represent state transitions induced by configuration operations.
-  Completing a provisioning operation can only lead to the _Initial_ state.
+  Completing a provisioning operation can only lead to the _Ready_ state.
   Completing an import can lead to any state.
 * The round _Configuration_ “hub” simplifies the graph by expressing that any Error State is always reachable—even from another Error State—through configuration operations (or via `ace.setst`).
 
@@ -1587,7 +1587,7 @@ Note that:
 
 * It is allowed to issue `ace.setst` instructions to the current state.
 When the algorithm needs to prevent this, it will automatically transition to a different state after completing `ace.setst`.
-* If `#immed7` is zero, i.e., the value corresponding to the _Off_ state, the CR is cleared.
+* If `#immed7` is zero, i.e., the value corresponding to the _Unconfigured_ state, the CR is cleared.
 * It is always allowed to use an Error State (see <<ACE-states-error>>) for `#immed7`.
 This will also invalidate the contents of the CR.  This may trigger a partial or full release of the resources used by the CR.
 * Setting an Error State does _not_ trigger an exception, even if reaching that state implicitly would normally do.
@@ -1607,7 +1607,7 @@ The full provisioning, export, and import operations are described in detail in 
 The instruction may possibly modify state.
 
 The instruction is usage-controlled, with the following exceptions:
- . `ace.setst` with `#immed7` equal to `ace_state_off` (0), that is `ace.clear` and `ace.reset` (<<ACE-instruction-clear>>), is
+ . `ace.setst` with `#immed7` equal to `ace_state_unconfigured` (0), that is `ace.clear` and `ace.reset` (<<ACE-instruction-clear>>), is
 _not_ usage-controlled and may be issued in any privilege mode regardless of the CC's _UsagePolicy_.
  . Explicitly setting Error States is not usage-controlled and may be issued in any privilege mode regardless of the CC's _UsagePolicy_.
 --
@@ -2489,7 +2489,7 @@ _Mnemonic_::
 (((ACE, instruction, ace.reset)))
 
 _Encoding_::
-Pseudo-instructions `ace.clear`/`ace.reset` are implemented as `ace.setst` (see <<ACE-instruction-setst>>) with no auxiliary operands and the immediate for _State_ set to `ace_state_off` (as defined in <<ACE-State-field>>).
+Pseudo-instructions `ace.clear`/`ace.reset` are implemented as `ace.setst` (see <<ACE-instruction-setst>>) with no auxiliary operands and the immediate for _State_ set to `ace_state_unconfigured` (as defined in <<ACE-State-field>>).
 
 _Description_::
 +
@@ -2502,9 +2502,7 @@ It uses the encoding of `ace.setst` described above with indirect CR addressing 
 Although both are encodings of `ace.setst`, which is otherwise usage-controlled, neither
 `ace.clear` nor `ace.reset` is usage-controlled; see <<ACE-instruction-setst>>.
 
-Clearing an _Off_ CR does not change dirtiness flags and does not raise any exception.
-
-Clearing a non-_Off_ CR will change its state to _Dirty_.
+Clearing (i.e., unconfiguring) a non-_Unconfigured_ CR will change its state to _Dirty_.
 --
 
 _Included in_::
@@ -2707,7 +2705,7 @@ However, the same code must work correctly regardless of which order the LSU cho
 
 An implementation always has the option to restart an operation instead of resuming it, for any reason, and may ignore and clear `acestart`. The ACE instructions are designed so that the same instruction sequences work correctly in all such cases and on every ACE implementation.
 
-For example, the instruction that loads or stores a CR's content starting with the 8th byte may always fail, leaving the CR in an _Off_ state. This signals that the import, provisioning, or export operation must be restarted. The software must then prepare the CR for the operation again. For import and provisioning, this entails providing the first 8 bytes of the MDH to the `ace.setst` instruction used to prepare the CR anew.
+For example, the instruction that loads or stores a CR's content starting with the 8th (or 16th) byte may always fail, leaving the CR in an _Unconfigured_ state. This signals that the import, provisioning, or export operation must be restarted. The software must then prepare the CR for the operation again. For import and provisioning, this entails providing the first 8 bytes of the MDH to the `ace.setst` instruction used to prepare the CR anew.
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -2787,7 +2785,7 @@ The length of a PI, and thus of `Content[]`, must be a multiple of 128 bits.
 A CR can contain significantly more information than the Provisioning Content.
 This additional information falls into three categories:
 
-. Information necessary for the algorithm to function that cannot be reconstructed from other information—for example, random values generated in the _Initial_ state.
+. Information necessary for the algorithm to function that cannot be reconstructed from other information—for example, random values generated in the _Ready_ state.
 
 . Information that can be easily reconstructed from other state data. The *algorithm* may choose to omit this from an SCC.
 

@@ -166,7 +166,7 @@ text fails the same test - so C8 and C9 were real and the test has power over th
 | M17 | `ace-ISA-algorithms.adoc` | The single-key extra `update_mask` explained and attributed to Rogaway, with a warning not to merge the two branches. New `ACE-XTS-from-XEX` procedure showing how SP 800-38E is realized on the XEX CC as specified: the tweak is `bin(i,b)`, encryption needs no reordering, and decryption obtains mask index `m` before `m-1` with one `ace.clone` and one discarded block operation |
 | M18 | `ace-ISA-priv.adoc`, `ace-ISA-unpriv.adoc` | `macecsk` activation clears the flags, so the unit no longer locks itself out permanently; the availability rule restated as "while any flag is set"; "all either or four" corrected. The claim that the CSK is exposed to M-mode replaced: the `macecsk` CSRs are write-only and read as zero for every mode, M-mode included, which is what the `MRW (RZ)` designation already said |
 | M19 | `ace-ISA-priv.adoc` | The `vscrstatus` subsection now names `vscrstatus` and `vscrstatush` throughout, instead of describing `scrstatus` |
-| M20 | `ace-ISA-unpriv.adoc` | `ace.setst` is usage-controlled *except* with `#immed7` = `ace_state_off`: `ace.clear` and `ace.reset` are not usage-controlled, with the context-switching reason given |
+| M20 | `ace-ISA-unpriv.adoc` | `ace.setst` is usage-controlled *except* with `#immed7` = `ace_state_unconfigured`: `ace.clear` and `ace.reset` are not usage-controlled, with the context-switching reason given |
 | M22 | `ace-ISA-priv.adoc` | WARNING blocks added to the `misa.L` and `mstatus`/`sstatus` ACES subsections recording that both allocations are provisional, that unified discovery may replace the `misa` bit, and that nothing depends on the particular `*status` offset |
 | M24 | `ace-ISA-unpriv.adoc` | New `ACE-SCC-rationale` subsection: Locality Secrets as associated data argued via POLYVAL's AXU property and its cost advantage over a KDF; the default zero nonce justified by nonce misuse-resistance with the loss of semantic security stated as accepted; RFC 8452 key-usage bounds recorded; a WARNING against manufacture-fixed CSKs |
 | M25 | `ace-ISA-algorithms.adoc` | CMAC's last-block guard now tests `block_base != 0`, and `block_base` added to the internal state and serialized context so the test is well defined |
@@ -1075,7 +1075,7 @@ register; every occurrence needs the `vs` prefix.
 `ace-ISA-unpriv.adoc:1443` vs `2250-2262`.
 
 `ace.setst` is declared "usage-controlled". `ace.clear`/`ace.reset` are defined as
-*encodings of* `ace.setst` with immediate `ace_state_off`, and declared "not
+*encodings of* `ace.setst` with immediate `ace_state_unconfigured`, and declared "not
 usage-controlled". Since they are architecturally the same instruction, the hardware
 must be told how to distinguish them; as written, a U-mode process cannot clear a CR
 whose `_UsagePolicy_` excludes U-mode, which conflicts with the context-switch model at
