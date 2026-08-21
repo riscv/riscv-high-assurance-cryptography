@@ -24,7 +24,7 @@ is not yet complete or contains ambiguities.
 | 0    | 0    | `AES128_ECB`                                | `Zklaes128p`
 | 0    | 1    | `AES128_CTR`                                | `Zklaes128p` and `Zklctrm`
 | 0    | 2    | `AES128_XCTR`                               | `Zklaes128p` and `Zklxctrm`
-| 0    | 3    | `AES128_XEX` (two keys)                     | `Zklaes128p` and `Zklxexm`
+| 0    | 3    | `AES128_XEX`                                | `Zklaes128p` and `Zklxexm`
 | 0    | 4    | `AES128_GCM`                                | `Zklaes128p` and `Zklgcmm`
 | 0    | 5    | `AES128_GCM_IV`                             | `Zklaes128p` and `Zklgcmm`
 | 0    | 6    | `AES128_GCM_SIV`                            | `Zklaes128p` and `Zklgcmsivm`
@@ -349,17 +349,21 @@ There is no need to explicitly architect the behavior of chaining modes, such as
 [[ACE-keystream-modes]]
 ==== CTR/XCTR Keystream Generation
 
-In the “non-X” modes, i.e., CTR mode and its analog with an LFSR replacing the arithmetic counter, the sum of the lengths of IV and counter/LFSR equals the block size of the underlying keyed PRP or PRF. IV and counter/LFSR are concatenated to form the input to the latter.
+In CTR mode, the sum of the lengths of IV and counter equals the block size of the underlying keyed PRP or PRF.
+IV and counter are concatenated to form the input to the latter.
 (((ACE, algorithm, keystream generation)))
 
-In the “X” modes, both IV and counter/LFSR have the same size as the block size of the underlying keyed PRP or PRF. IV and counter/LFSR are ``xor``ed together to form the input to the keyed PRP or PRF. Only the counter modes are defined, since no LFSR-based mode has been standardized yet.
+In the XCTR modes, both IV and counter have the same size as the block size of the underlying keyed PRP or PRF.
+IV and counter are ``xor``ed together to form the input to the keyed PRP or PRF.
+//Only the counter modes are defined, since no LFSR-based mode has been standardized yet.
 
 Parameters:::
 * `b` = block size (8|`b`).
 * `k` = key size (8|`k`).
 * `j` = counter size (8|`j`).
 * `n` = IV size (8|`n`).
-* If the mode is CTR or LFSR, it is `b = n + j`, else it is `b = n = j`.
+* If the mode is CTR, it is `b = n + j`.
+* If the mode is XCTR, it is `b = n = j`.
 * Granularity: `b`.
 
 Data Structures:::
@@ -395,7 +399,7 @@ Data Structures:::
 
 Algorithm-Specific Functions:::
 * `keystream_block(p) -> c` -- usually an encryption function.
-* `tick_ctr()` -- updates the `ctr` (either by a modular increment or a LFSR).
+* `tick_ctr()` -- increases the counter `ctr` by one.
 
 State Machine:::
 * *States:*
@@ -405,8 +409,8 @@ State Machine:::
 * *Allowed State Transitions:* any.
 
 * *Behavior:*
- ** In State _Ready_, the `ctr` and `IV` fields are set to 0 (`ctr` is set to
-    1 if the algorithm is LFSR-based).
+ ** In State _Ready_, the `ctr` and `IV` fields are set to 0.
+// (`ctr` is set to 1 if the algorithm is LFSR-based).
 
  ** To transition to State _Operate_, a Form C ``ace.setst`` instruction must be issued.
   *** This sets the value of `IV` to `INPUT`.
@@ -441,7 +445,7 @@ Example pseudocode is given in <<ACE-pseudocode-keystream-modes>> (for the case
 // ////////////////////////////////////////////////////////////////////
 
 [[ACE-XEX-XTS-modes]]
-==== XEX/XTS modes (one or two keys)
+==== XEX/XTS modes
 
 The XTS mode was designed for storage confidentiality cite:[DBLP-journals-ieeesp-Martin10] and made into a Recommendation by NIST in 2010 cite:[nist-SP-800-38E]. XTS is based on the XEX construction, formalized by Phillip Rogaway cite:[DBLP-conf-asiacrypt-Rogaway04], to design _Tweakable Block Ciphers_ cite:[DBLP-conf-crypto-LiskovRW02]. A Tweakable Block Cipher (TBC) is a block cipher which, besides the key and the plaintext or ciphertext, also takes a tweak as input. The tweak is used together with the key to select the permutation computed by the block cipher.
 
@@ -452,7 +456,7 @@ The XEX construction builds a TBC `Ẽ` from a block cipher `E`, with key `K`, t
  +
 In XEX mode, once a mask is computed, it is then updated by using a Galois Multiplication for any successive block instead of updating the tweak and encrypting it again.
 
-The NIST standard uses two different keys, one for the data encryption path and one for the encryption of the tweak. The use of a single key or two independently sampled keys is determined by the algorithm, and it is not a configuration parameter for the algorithm. XEX mode functionality is defined first.
+The NIST standard uses two different keys, one for the data encryption path and one for the encryption of the tweak. We follow this convention.
 (((ACE, algorithm, XEX)))
 
 Parameters:::
