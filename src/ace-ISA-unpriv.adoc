@@ -1218,7 +1218,8 @@ If `ace.load` is interrupted, `acestart` contains the offset to the next byte to
 The implementation determines the input size from the first 8 bytes of the MDH, which software supplies.
 The _ConfigStatus_ field identifies the input type (PI or SCC); the fields in <<ACE-length-rule>> determine its length.
 `ace.load` then reads memory starting at `%offset(Xs1)` and copies the data into the CR beginning with the current `acestart` byte offset.
-See <<ACE-resumability-management>>, <<ACE-resumability-memory-model>>, and <<ACE-export-import-algorithms>>.
+See the non-normative note at the end of <<ACE-instruction-manage>>,
+<<ACE-resumability-memory-model>>, and <<ACE-export-import-algorithms>>.
 
 When the key uses a system-defined format (signaled by the _SystemFormat_ bit of MDH[63:0]), the semantics of `ace.load` are implementation-dependent.
 It does not assume that the CR has been prepared for import or that any metadata has been loaded; MDH[63:0] may then have a system-defined length.
@@ -1290,7 +1291,8 @@ its length by the fields listed in <<ACE-length-rule>>.
 Then, `ace.store` stores the CR to memory, beginning with the byte at offset `acestart` in the serialized representation of the CR,
 in XLEN-bit sized stores, in the memory region starting at address `%offset(Xs1)`.
 The order in which the LSU issues these transactions is implementation dependent.
-See <<ACE-resumability-management>>, <<ACE-resumability-memory-model>> and <<ACE-export-import-algorithms>> for further details.
+See the non-normative note at the end of <<ACE-instruction-manage>>,
+<<ACE-resumability-memory-model>>, and <<ACE-export-import-algorithms>> for further details.
 
 NOTE: PI can be stored because a provisioning operation may be interrupted, and this allows resuming it.
 
@@ -1766,6 +1768,17 @@ The instruction is not usage-controlled.
 (`Zklmv` only) When a CR's metadata `ConfigStatus` field is changed from `ace_cfgst_complete` to `ace_cfgst_exporting`, the ACE unit generates the SCC.
 
 //
+
+[NOTE]
+====
+The rules governing `ace.mgmt` are necessary because any management operation may be interrupted, possibly by multiple nested interrupts or exceptions, with or without context switches. Saving and restoring _ConfigStatus_ is the interrupted software's responsibility. This keeps the logic simple and supports arbitrarily many levels of nested virtualization.
+
+These rules also allow an interrupted import to resume on a hart attached to a different ACE Unit implementation. The architecture ensures interoperability when the importing implementation supports the algorithm encoded in the SCC. However, if the SCC's optional _Implementation (Specific) Variable-Length Data Section_ (Implementation VDS) makes the SCC too large to fit in a CR, or if that VDS is incompatible, the implementation must ignore the optional data. The importing implementation may create different optional data. In both cases, it updates _ImpDataLen_ accordingly.
+
+Software must ensure that an interrupted configuration or export can resume. This supports binary compatibility with implementations that support resumption and with those that do not. Resumption is not required. Even where supported, an implementation may ignore `acestart` and restart the interrupted operation for any reason. A context switch handler can force a restart by clearing partially configured or exported CRs at context save and again at context restore. Software must handle this possibility.
+
+For this reason, the architecture defines specific instruction sequences for management operations; see <<ACE-management-code-snippets>>. The architecture is co-designed with the intended use of the instructions.
+====
 
 _Included in_::
 +
@@ -2638,26 +2651,8 @@ While handlers can set `acestart` to zero to force a restart of an `ace.exec` op
 
 // ///////////////////////////////////////////////////////////////////
 
-[[ACE-resumability-management]]
-=== Interruptibility and Resumability of Management Operations
-
-_This section is informative and non-normative._
-
-The rules defined in `ace.setst` for the initiation and completion of management operations are necessary because any management operation may be interrupted, and there may be multiple nested interrupts or exceptions, with or without context switches.
-Leaving the burden of saving and restoring _ConfigStatus_ to the interrupted software simplifies the logic and supports arbitrarily many levels of nested virtualization.
-
-These rules also imply that an interrupted import operation may be resumed on a hart attached to a different ACE Unit implementation.
-The architecture is designed to ensure interoperability, provided the importing implementation supports the algorithm encoded in the SCC.
-However, the implementation must handle cases where the SCC is too large to fit in a CR due to an optional _Implementation (Specific) Variable-Length Data Section_ (Implementation VDS), or where that VDS is incompatible, by ignoring the optional data. The importing implementation may create a different set of optional data. In both cases, _ImpDataLen_ is updated accordingly.
-
-Software must ensure that an interrupted configuration or export can be resumed. This supports binary compatibility across implementations that provide resumption and those that do not. Resumption is not required. Even where supported, an implementation may ignore `acestart` and restart the interrupted operation for any reason.
-
-For this reason, the architecture defines specific instruction sequences for management operations; see <<ACE-management-code-snippets>>. The architecture is co-designed with the intended use of the instructions.
-
-A context switch handler can force a restart by clearing partially configured or exported CRs at context save and again at context restore. Software must handle this possibility.
-
 [[ACE-resumability-memory-model]]
-==== Resumption and Memory Model
+=== Resumption and Memory Model
 
 // [WARNING]
 // ====
@@ -2669,7 +2664,7 @@ Enforcing a strict access ordering for ACE inputs and outputs would be complex o
 
 The ACE unit sends commands to the LSU to read and write memory sequentially—analogously to software looping over an array. The LSU may then issue those reads and writes in any order it chooses.
 
-However, the same code must work correctly regardless of which order the LSU chooses.
+However, the same code must work correctly regardless of which order the LSU chooses, because the latter is a microarchitectural aspect.
 
 An implementation always has the option to restart an operation instead of resuming it, for any reason, and may ignore and clear `acestart`. The ACE instructions are designed so that the same instruction sequences work correctly in all such cases and on every ACE implementation.
 
