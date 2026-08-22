@@ -969,15 +969,14 @@ caller:
    *** if `len != 96`, `process_block()`, performs `J0 <- Galoismul(J0, auth_key)`, otherwise it does nothing.
    *** `finalize()` is defined as follows:
     . If `len = 96`, then:
-      .. `J0 <- binBE(1,32) @ J0[95:0]`.
+      .. `J0 <- bswap(bin(1,32)) @ J0[95:0]`.
 +
-This is `IV {vvert} 0^31^ {vvert} 1` of cite:[nist-SP-800-38D] {sect}7.1 transcribed
-according to <<ACE-Notation-transcription>>: the IV occupies octets 0 to 11, i.e.
-`J0[95:0]`, and the trailing counter occupies octets 12 to 15 as a *big-endian* integer.
+The value of `J0` is `IV {vvert} 0^31^ {vvert} 1` of cite:[nist-SP-800-38D] {sect}7.1, where the IV occupies octets 0 to 11, i.e.
+`J0[95:0]`, and the counter occupies octets 12 to 15 as a *big-endian* integer.
 
-    . If `len != 96`, then let `s <- 128 ⎡len/128⎤ - len`, and the computation of `J0 := GHASH(IV {vvert} 0^s+64^ {vvert} binBE(len,64), auth_key)` is completed by performing:
+    . If `len != 96`, then let `s <- 128 ⎡len/128⎤ - len`, and the computation of `J0 := GHASH(IV {vvert} 0^s+64^ {vvert} bswap(bin(len,64)), auth_key)` is completed by performing:
       .. if `block_base != 0`, then `J0 <- Galoismul(J0, auth_key)`
-      .. `J0 <- J0 xor (binBE(len,64) @ zeros(64))`
+      .. `J0 <- J0 xor (bswap(bin(len,64)) @ zeros(64))`
       .. `J0 <- Galoismul(J0, auth_key)`
     . `start_ctr <- int(bswap(J0[127:96]))`,
     . Transitions to state _Hash_Absorb_.
@@ -998,12 +997,12 @@ If `ACELEN` > `128`, the above operation is executed `ACELEN/128` times.
   * `local ctr : int` --- the running counter, as an integer.
 
 []
-  . `ctr <- int(bswap(J0[127:96]))`
+  . `ctr <- int(bswap(J0[127:96]))`   // convert counter from big-endian to little-endian
   . `ctr <- (ctr + 1) mod 2^32^`.
   . If `ctr` = `(start_ctr - 1) mod 2^32^`, then: (process at most  2^32^ - 2 blocks)
    .. the CR is *invalidated*.
    . else:
-  .. `J0[127:96] <- binBE(ctr,32)`
+  .. `J0[127:96] <- bswap(bin(ctr,32))`.  // convert updated counter back to big-endian
   .. `tmp <- INPUT xor enc_blk(key, J0)`.
   .. `absorb(tmp)`.
   .. `OUTPUT <- tmp`.
@@ -1033,7 +1032,7 @@ Any excess bits provided by the following Form A ``ace.exec`` are ignored.
   . If `ctr` = `(start_ctr - 1) mod 2^32^`, then:
    .. the CR is *invalidated*.
   . else:
-   .. `J0[127:96] <- binBE(ctr,32)`
+   .. `J0[127:96] <- bswap(bin(ctr,32))`
    .. `tmp <- (zeros(128-last_blk_len) @ INPUT[last_blk_len-1:0]) xor (zeros(128-last_blk_len) @ enc_blk(key, J0)[last_blk_len-1:0])`.
    .. `absorb(tmp)`.
    .. `OUTPUT <- tmp`.
@@ -1045,12 +1044,12 @@ Any excess bits provided by the following Form A ``ace.exec`` are ignored.
 +
 --
 [none]
-* `INPUT <- binBE(len_in_bits(plaintext), 64) @ binBE(len_in_bits(AD), 64){nbsp}` .
+* `INPUT <- bswap(bin(len_in_bits(plaintext), 64)) @ bswap(bin(len_in_bits(AD), 64)){nbsp}` .
 
 The authentication tag is then computed and retained internally, as follows:
 
 . `absorb(INPUT)`.
-  . `tag <- tag xor enc_blk(key, binBE(start_ctr,32) @ J0[95:0])`.
+  . `tag <- tag xor enc_blk(key, bswap(bin(start_ctr,32)) @ J0[95:0])`.
 
 If `ACELEN` > 128, only the 128 least significant bits of `INPUT` are considered.
 --
@@ -1075,7 +1074,7 @@ In State _Decrypt_, ``ace.exec`` instructions are expected to be of Form A.
   .. the CR is *invalidated*.
  . else:
   .. `absorb(INPUT)`.
-  .. `J0[127:96] <- binBE(ctr,32)`.
+  .. `J0[127:96] <- bswap(bin(ctr,32))`.
   .. `OUTPUT <- INPUT xor enc_blk(key, J0)`.
 
 If `ACELEN` is a multiple of 128, the same behavior applies as in State _Encrypt_: the above operations are executed `ACELEN/128` times, decrypting each 128-bit block of `INPUT` into the corresponding `b`-bit block of `OUTPUT`.
@@ -1102,7 +1101,7 @@ If `ACELEN` is a multiple of 128, the same behavior applies as in State _Encrypt
   . else:
   .. `tmp <- zeros(128-last_blk_len) @ INPUT[last_blk_len-1:0]`.
   .. `absorb(tmp)`.
-  .. `J0[127:96] <- binBE(ctr,32)`.
+  .. `J0[127:96] <- bswap(bin(ctr,32))`.
   .. `OUTPUT <- tmp xor (zeros(128-last_blk_len) @ enc_blk(key, J0)[last_blk_len-1:0])`.
   .. `last_blk_len <- 0`
 --
@@ -1111,12 +1110,12 @@ If `ACELEN` is a multiple of 128, the same behavior applies as in State _Encrypt
 +
 --
 [none]
-* `INPUT <- binBE(len_in_bits(plaintext), 64) @ binBE(len_in_bits(AD), 64)`
+* `INPUT <- bswap(len_in_bits(plaintext), 64) @ bswap(len_in_bits(AD), 64)`
 
 The authentication tag is computed as follows:
 
 . `absorb(INPUT)`.
-  . `tag <- tag xor enc_blk(key, binBE(start_ctr,32) @ J0[95:0])`.
+  . `tag <- tag xor enc_blk(key, bswap(bin(start_ctr,32)) @ J0[95:0])`.
 --
 +
 If `ACELEN` > 128, only the 128 least significant bits of `INPUT` are considered.
