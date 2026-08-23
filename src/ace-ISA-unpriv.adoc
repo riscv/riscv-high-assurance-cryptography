@@ -89,7 +89,7 @@ Trap-and-emulate exploits the ``*lcrstatus`` fields, which can also be used for 
 [[ACE-extensions-overview-unpriv]]
 === Extensions Overview
 
-[,%header,cols="<20%,<60%,<20%"]
+[,%header,cols="<18%,<64%,<18%"]
 |===
 | Extension       | Features                                                                                                           | Defined in:
 | `Zklv`           | ACE with support for vector registers.                                                                            | <<ACE-instructions-detailed>>
@@ -169,10 +169,10 @@ CRs are not separated by privilege Mode: when a hart changes Mode, it sees the s
 
 Unlike a conventional register, a CR can be _unconfigured_, meaning it does not contain a CC.
 
-A CR is addressed either directly, via a 5-bit immediate, or indirectly, via a GPR value.
-An additional instruction-encoding bit selects the addressing mode.
-Use of the zero register `X0` as a CR indirect index raises an illegal-instruction exception, unless explicitly indicated otherwise in the instruction semantics to encode special cases.
-Accessing a CR with an indirect index outside [0..31] raises an illegal-instruction exception.
+A CR is addressed either directly, via a 5-bit immediate, or indirectly, via a GPR value; an additional instruction-encoding bit selects the mode.
+Using `X0` as an indirect CR index raises an illegal-instruction exception, unless this is expressly used to encode an instruction.
+An indirect index outside [0..31] also raises an illegal-instruction exception.
+
 
 // An implementation must wait before performing any operation on a CR that is still being written to asynchronously by the ACE unit.
 
@@ -443,8 +443,8 @@ The architected values of _State_ common to all algorithms are defined in the fo
 .Global CC State Numbers: Error States
 [float="center",align="center",width="100%",cols="^7%,<28%,<16%,<49%"]
 |===
-|  24    | `ace_state_unsupported`     | _Not_Impl_      | Not implemented algorithm. It is set by the hardware upon an attempt to provision or import a CR that is not supported by the implementation.  ACE exception `ace_exc_unsupported` is also raised, whereby an exception handler may set up the CR for trap-on-access to provide emulated support for the algorithm, or leave the Error State unchanged.
-|  25    | `ace_state_invalidated`     | _Invalidated_     | The CR is invalidated.
+|  24    | `ace_state_unsupported`     | _Not_Impl_        | Not implemented algorithm. It is set by the hardware upon an attempt to provision or import a CR that is not supported by the implementation.  ACE exception `ace_exc_unsupported` is also raised, whereby an exception handler may set up the CR for trap-on-access to provide emulated support for the algorithm, or leave the Error State unchanged.
+|  25    | `ace_state_invalid`         | _Invalid_         | The CR transitions to Error State _Invalid.
 |  26    | `ace_state_out_of_memory`   | _Out_of_Memory_   | Insufficient CRF memory for a configuration instruction. This may be set by privileged code if it does not handle CR allocation or fails to do so, returning an error instead.
 |  27    | `ace_state_import_auth`     | _Auth_Failed_     | Authentication failure while completing an SCC import.
 |  28    | `ace_state_priv_viol`       | _Priv_Viol_       | Violation of Usage Control policies.
@@ -464,9 +464,9 @@ This allows `ace.setst` to encode additional operations related to state changes
 
 (((ACE, algorithm, error states)))
 States 24-31 are termed _Error States_, and are used to report certain specific ACE errors.
-(((ACE, algorithm, invalidated state)))
+(((ACE, algorithm, invalid state)))
 (((Context Register, invalidation)))
-We say that a CR has been _invalidated_ when it has been transitioned to Error State `ace_state_invalidated`.
+We say that a CR has been _invalidated_ when it has been transitioned to Error State `ace_state_invalid`.
 
 The Error States are currently listed in decreasing severity order, with Error State 24 being the most severe and Error State 29 the least severe.
 Error States 30 and 31, if defined, will not necessarily have a lower priority than Error State 29, so the ordering may not hold for them.
@@ -516,13 +516,7 @@ The CR then retains only the MDH.
 +
 [NOTE]
 ====
-Destroying the CC on failure prevents its continued use in an inconsistent or undesirable state.
-For instance, invalidating the CR after a failed side-channel protection upgrade request
-(cf. <<ACE-instruction-restrict>>) prevents the CC from being used at a weaker level than
-requested if the caller neglects error checking.
-
-Software that needs to preserve the CC should export it as an SCC before requesting the
-upgrade, and re-import it if the upgrade fails.
+Invalidating the CC on certain failures prevents its continued use in an inconsistent or undesirable state.
 ====
 
 . The transitions from _Unconfigured_ to any Error State result from configuration instructions, whereas the corresponding transitions from these Error States to _Unconfigured_ result from explicitly clearing the CR.
@@ -741,7 +735,7 @@ If an entry is unconfigured, it is transparently replaced by the next defined en
 
 A requested Locality must be *substituted*, never dropped. If no replacement can be found —
 because the requested entry is unconfigured and no later entry of its chain is configured
-either — then the Metadata is invalid, and the CR is invalidated.
+either — then the Metadata is invalid, and the CR transitions to Error State _Invalid_.
 
 _HLocality_ is active only when the H extension is enabled and V=1; otherwise, it mirrors _MLocality_.
 
@@ -868,17 +862,14 @@ Invalid parameters in the MDH at provisioning or import raise ACE exception `ace
 Illegal Instructions:::
 +
 --
-Any instruction with an ACE opcode may raise an illegal-instruction exception for the purpose of emulation.
-However, also instructions with ACE opcodes may raise an illegal-instruction exception if certain fields are have invalid encodings in sub-fields (such as `v` = `h` = 1 in `ace.restrict`).
-Also, `ace.load` and `ace.store` may be emulated by this mechanism.
-
-In other cases, an illegal-instruction exception may be raised by other conditions, for instance:
-
+ . Any instruction with an ACE opcode may raise an illegal-instruction exception for the purpose of emulation, or if certain fields are have invalid encodings in sub-fields (such as `v` = `h` = 1 in `ace.restrict`), or if the instruction belongs to an unimplemented (sub)extension.
+ . if ACE not present or any governing ACES field is Off: issuing any ACE instruction, or accessing an ACE CSR.
+ . Using any ACE instruction when no active CSK is defined, or `macecsk` group partially written (<<ACE-CSK-requirements>>).
  . Use of the zero register `X0` as a CR indirect index unless explicitly allowed to encode special cases.
  . Access to ACE specific CSRs if the ACE extension is not present or if an ACES field is Off, or if a CSK has not been configured.
  . Issuing `ace.load`, `ace.store`, or `ace.mv` on a CR with _ConfigStatus_ equal to `ace_cfgst_complete`.
  . Use an odd register number in RV32 when a register pair is expected.
- . Use of a vector-version of any ACE instruction when the vector extension (or RVV-mini) is not enabled.
+ . Use of a vector-version of any ACE instruction with the vector extension (or RVV-mini) not enabled.
  . Instruction Form not allowed at a certain point in an algorithm, see <<ACE-usage-input-output>> and <<ACE-algorithms>>.
 --
 
@@ -892,8 +883,8 @@ Violations of this policy raise ACE exception `ace_exc_privilege_violation`.
 Invalidating Conditions:::
 +
 --
-Certain error conditions make the CR invalidated, which means that it cannot be used further except by unconfiguring it, re-provisioning or, if the algorithms supports it, by transitioning it to State _Ready_.
-
+Certain error conditions _invalidate_ a CR, namely cause it to transition to Error State _Invalid_, with effects described in <<ACE-State-field>>.
+This means that it cannot be used further except by unconfiguring it, re-provisioning or, if the algorithms supports it, by transitioning it to State _Ready_.
 These are:
 
  . An `ace.setst` or an `ace.exec` instruction is issued on an expired CR, or an `ace.derive` instruction is issued with an expired source or target CR.
@@ -909,7 +900,7 @@ Algorithmic Errors:::
 Algorithmic errors may occur in import processes or in the cryptographic operations performed by algorithms:
 
 . In the first case, the error is Error State _ace_state_import_auth_.
-. Algorithm-specific errors may invalidate the CR, or transition it to some other State (usually an Error State), according to the behaviour specified by the algorithm.
+. Algorithm-specific errors may causes the CR to transition to Error State _Invalid_, or transition it to some other State (usually an Error State), according to the behavior specified by the algorithm.
 
 We note that successful or failed verification of an authentication tag in an AEAD algorithm or of a signature is _not_ an algorithmic error, as the algorithm is performing as expected.
 --
@@ -925,9 +916,8 @@ We note that successful or failed verification of an authentication tag in an AE
 // | `ace_exc_out_of_memory`                    | `ace_state_out_of_memory`
 // | `ace_exc_privilege_violation`           | `ace_state_priv_viol`
 // | `ace_exc_unconfigured_buffer`                    | `ace_state_buf_unconf`
-// | `ace_exc_invalid`                       | {empty}
 // |===
-// The conditions that cause `ace_state_expired`, `ace_state_invalidated`, and `ace_state_import_auth` do not raise ACE exceptions.
+// The conditions that cause `ace_state_expired`, `ace_state_invalid`, and `ace_state_import_auth` do not raise ACE exceptions.
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -1068,8 +1058,7 @@ Therefore, software must always check the value of `aceiobuftop` before using th
 
 Modifying `aceiobuftop` does not alter buffer contents. It allows per-operation length adjustments without reconfiguring the ACEIOBUF via `aceiobuflen`, an expensive operation that clears the buffer and may trigger internal garbage collection. This mirrors the use of `VL*SEW` reconfiguration to supply a partial “last block” or a short IV/nonce to cryptographic algorithms.
 
-Writing a value that is invalid or unsupported for a given Algorithm may still cause a CR to be invalidated
-when an instruction is later issued or restarted.
+Writing a value that is invalid or unsupported for a given Algorithm may still cause the CR to transitions to Error State _Invalid_ when an instruction is later issued or restarted.
 This may occur, for instance, when `aceiobuftop` − `acestart` is a length not supported by the Algorithm.
 
 Using an alternative sequence for `ace.exec` or `ace.setst` for any Form with an input or output
@@ -1112,7 +1101,7 @@ If a value larger than `aceiobuftop` is written to `acestart`, `acestart` will b
 
 For certain algorithms, writing zero to `acestart` to force a full restart of `ace.exec` may lead
 to inconsistent or unpredictable results.
-Also, writing a value that is invalid or unsupported for a given Algorithm may still cause a CR to be invalidated
+Also, writing a value that is invalid or unsupported for a given Algorithm may still cause the CR to transitions to Error State _Invalid_
 when an instruction is later issued or restarted.
 
 The value of `acestart` out of ACE unit reset is 0.
@@ -1670,14 +1659,14 @@ Note that:
 * It is allowed to issue `ace.setst` instructions to the current state.
 When the algorithm needs to prevent this, it will automatically transition to a different state after completing `ace.setst`.
 * If `#immed7` is zero, i.e., the value corresponding to the _Unconfigured_ state, the CR is cleared.
-* It is always allowed to use an Error State (see <<ACE-states-error>>) for `#immed7`.
+* It is always allowed to use the code for an Error State (see <<ACE-states-error>>) as an `#immed7`.
 This will also invalidate the contents of the CR.  This may trigger a partial or full release of the resources used by the CR.
 * Setting an Error State does _not_ trigger an exception, even if reaching that state implicitly would normally raise one.
 Further usage of the same CR—for instance, a later `ace.exec` or `ace.setst` to a valid state—will raise exceptions in that case.
 
 Certain values of `#immed7`, depending on the Algorithm, may be used to change _StateExtension_ instead, so that it can be used as state information that is somewhat orthogonal to the _State_ field.
 
-Using an `#immed7` that is not supported by the architecture or by the current algorithm will invalidate the CR.
+Using an `#immed7` that is not supported by the architecture or by the current algorithm causes the CR to transition to Error State _Invalid_.
 
 The full provisioning, export, and import operations are described in detail in <<ACE-export-import-algorithms>>.
 
@@ -1781,7 +1770,6 @@ Software then passes `ml` as the auxiliary input to `ace.mgmt` in a GPR (or a GP
 .. The target CR is cleared.
 .. If the combination of _Algorithm_, _AlgorithmPolicy_, and _SCProtection_ in `ml` is not supported,
    ACE exception `ace_exc_unsupported` is raised.
-   This is distinct from ACE exception `ace_exc_invalid` in order to allow an exception handler to add trap-and-emulate support for non-supported combinations.
 .. In other cases where the Metadata is invalid, such as, for instance, a nonzero _State_ or reserved field:
    ACE exception `ace_exc_unsupported` is raised.
 .. The implementation attempts to allocate CRF capacity according to the requirements of the _Algorithm_, _AlgorithmPolicy_, and _SCProtection_ fields of the MDH, as prescribed by <<ACE-length-rule>>. No other field must affect the amount of capacity required.
@@ -2060,22 +2048,22 @@ All other fields are ignored.
 * If the algorithm configured in the CR does not make use of the field _AlgorithmPolicy_,
   or, for the encoded value of MDH._Algorithm_, _AlgorithmPolicy_ is used to encode an extension of _Algorithm,
   then `Xs`._AlgorithmPolicy_ must be zero,
-  else the CR is invalidated.
+  else the CR transitions to Error State _Invalid_.
 
 * No operation disabled by _AlgorithmPolicy_ may be (re)enabled.
-   An attempt to do so invalidates the CR.
-   In some cases, a zero value is not permitted, such as disabling both encryption and decryption. In this case, attempting to do so invalidates the CR.
+   An attempt to do so causes the CR to transition to Error State _Invalid_.
+   In some cases, a zero value is not permitted, such as disabling both encryption and decryption. In this case, attempting to do so causes the CR to transition to Error State _Invalid_.
 
 * If the CR's current state is _only_ allowed while performing an operation currently
   permitted by `MDH`._AlgorithmPolicy_, a change to _AlgorithmPolicy_ that would
-  disable that operation invalidates the CR.
+  disable that operation causes the CR to transition to Error State _Invalid_.
 
 * If `Xs`._SCProtection_ is zero, `MDH`._SCProtection_ is _not_ changed. A non-zero
   `Xs`._SCProtection_ is a _request_ to raise the side-channel protection of the CC to
   that level, and is subject to the following rules.
 
 ** The request may only strengthen side-channel protection.
-   Any request for a weaker level than the current one invalidates the CR.
+   Any request for a weaker level than the current one causes the CR to transition to Error State _Invalid_.
    The ordering of the implementation-custom level (6 or 7) relative to the architected levels is implementation-defined.
 
 ** The request may fail because a stronger SCA protection level may requires more CRF capacity.
@@ -2091,7 +2079,7 @@ All other fields are ignored.
    ** _SiPScrt_ {rightarrow} _ChipFamScrt_, _ChipScrt_; _ChipFamScrt_ {rightarrow} _ChipScrt_;
    ** _OEMScrt_ {rightarrow} _ProdScrt_, _DevScrt_; _ProdScrt_ {rightarrow} _DevScrt_.
    ** _MLocality_ {rightarrow} _HLocality_, _SLocality_; and _HLocality_ {rightarrow} _SLocality_.
-  . Generalizing (i.e. weakening) Localities is not permitted: Attempting to do so invalidates the CR.
+  . Generalizing (i.e. weakening) Localities is not permitted: Attempting to do so causes the CR to transition to Error State _Invalid_.
   . Once the _Locality_ field has been modified,
   when the CR is exported, it will use the new Locality values to tweak the export algorithm.
 
@@ -2111,7 +2099,7 @@ one, so `ace.restrict` cannot be used to widen the set of modes that may use a C
 * A non-zero value in `Xs`._ExpirationDate_ will be copied to
   `MDH`._ExpirationDate_, but only if that policy was not already programmed before
   or the original value of `MDH`._ExpirationDate_ was equal to the new value or larger.
-  Otherwise the CR is invalidated.
+  Otherwise the CR transitions to Error State _Invalid_.
 
 * Any change to `MDH`._AlgorithmUse_ is subject to policies set by the Algorithm in the CR.
 
@@ -2122,7 +2110,7 @@ On RV32, the only difference is:
   If `s` is not even, an illegal-instruction exception is raised.
 
 `ace.restrictl/ace.restricth/ace.restrictv` can be used in any state; however, care is required:
-Disabling a currently permitted operation, such as encryption or signature generation, while in a State corresponding to the disabled operation will also cause the CR to be invalidated.
+Disabling a currently permitted operation, such as encryption or signature generation, while in a State corresponding to the disabled operation causes the CR to transitions to Error State _Invalid_.
 
 The instruction may modify state.
 
@@ -2684,7 +2672,7 @@ the ACEIOBUF is used for the input. If `Zklio` is not available, if a Form C ins
 . Any substitution is allowed only if the ACEIOBUF is enabled and `aceiobuflen` is non-zero.
   Otherwise, ACE exception `ace_exc_unconfigured_buffer` is raised.
 +
-If `aceiobuflen` is non-zero but `aceiobuftop - acestart` is invalid for the algorithm, the CR is invalidated if the ACEIOBUF is used as an input, whereas if it is used only as an output, then the result is undefined.
+If `aceiobuflen` is non-zero but `aceiobuftop - acestart` is invalid for the algorithm, the CR transitions to Error State _Invalid_ if the ACEIOBUF is used as an input, whereas if it is used only as an output, then the result is undefined.
 
 NOTE: Because of these rules, the Algorithms sections say that a certain Form of `ace.exec`, `ace.setst`, or `ace.mgmt` is _expected_ rather than _required_ (or _only [...] allowed_). The substitutions are implicit and are not restated for each occurrence.
 

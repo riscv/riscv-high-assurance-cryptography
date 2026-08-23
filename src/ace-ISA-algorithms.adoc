@@ -178,7 +178,7 @@ The examples are non-normative.
 . Opening a CR for export and import, as well as executing `ace.clear`, is always allowed in any State, even if not explicitly mentioned in an algorithm specification.
 For the restrictions on `ace.clone`, cf. <<ACE-instruction-clone>>.
 
-. If a usage instruction that may modify the state of a CR is issued, or a state transition is requested via `ace.setst`, and this is not explicitly allowed by the current state of the algorithm encoded in the CC in the CR, the CR is invalidated.
+. If a usage instruction that may modify the state of a CR is issued, or a state transition is requested via `ace.setst`, and this is not explicitly allowed by the current state of the algorithm encoded in the CC in the CR, then the CR transitions to Error State _Invalid_.
 
 . Issuing any Form of any `ace.exec` or `ace.setst` instruction that it not explicitly allowed by the algorithm description will raise an illegal instruction exception. The same holds for issuing `ace.derive` when the algorithm in the source CR does not allow it or when it cannot be absorbed by the target algorithm.
 
@@ -771,7 +771,7 @@ Beside `len`, `block`, and `state`, which are fixed for the duration of the hash
  “`ace.exec Kn|K{Xn}, INPUT`” processes the data block `INPUT` as follows.
 +
 --
-. If `len != 0` and `cumul_len >= len`, the CR is invalidated.
+. If `len != 0` and `cumul_len >= len`, then the CR transitions to Error State _Invalid_.
 . If starting an ``ace.exec`` instruction, then `input_base <- 0`
 . If resuming an ``ace.exec`` instruction, then `input_base <- acestart`.
 . While `(input_base < ACELEN)` do
@@ -799,7 +799,7 @@ Beside `len`, `block`, and `state`, which are fixed for the duration of the hash
 +
 
 ** If the caller transitions to a different state, `finalize()` is performed before transitioning, unless `finalize` = `None`.
-   Transitioning to the same State `_Current_State_` is not allowed, and any attempt to do so will invalidate the CR.
+   Transitioning to the same State `_Current_State_` is not allowed, and any attempt to do so causes the CR to transition to Error State _Invalid_.
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -952,7 +952,7 @@ caller:
      expected, “``ace.setst Kn|K{Xn}, #ace_state_set_aux_value, Xs``”, whose auxiliary
      parameter sets the length of the IV in octets: `len <- Xs`.
      `Xs` must satisfy `8` {le} `Xs` {le} `8192`;
-     any other value, `0` included, invalidates the CR.
+     any other value, `0` included, the CR transitions to Error State _Invalid_.
      Upon entering the state, `J0` is cleared: `J0 <- zeros(b)`.
 
   ** When entering State _Set_Aux_Value_, `input_base`, `block_base`, `cumul_len` are set to zero.
@@ -994,7 +994,7 @@ If `ACELEN` > `128`, the above operation is executed `ACELEN/128` times.
   . `ctr <- int(bswap(J0[127:96]))`   // convert counter from big-endian to little-endian
   . `ctr <- (ctr + 1) mod 2^32^`.
   . If `ctr` = `(start_ctr - 1) mod 2^32^`, then: (process at most  2^32^ - 2 blocks)
-   .. the CR is invalidated.
+   .. the CR transitions to Error State _Invalid_.
    . else:
   .. `J0[127:96] <- bswap(bin(ctr,32))`.  // convert updated counter back to big-endian
   .. `tmp <- INPUT xor enc_blk(key, J0)`.
@@ -1005,7 +1005,8 @@ If `ACELEN` > `128`, the above operation is executed `ACELEN/128` times.
 If `ACELEN` is a multiple of `b`, the above operations are executed `ACELEN/b` times, encrypting each `b`-bit block of `INPUT` into the corresponding `b`-bit block of `OUTPUT`.
 
 ** To transition to State _Enc_Last_Block_, a Form B `ace.setst` instruction is issued, whereby
-`last_blk_len`, the bit length of the last block, is set to the auxiliary argument `Xs`. A value of zero, or larger than 127, *invalidates* the CR, as it does in the other modes that take a final-block length (cf. <<ACE-OCB-mode>>, <<ACE-CMAC-mode>>, <<ACE-Ascon-AEAD128>>).
+`last_blk_len`, the bit length of the last block, is set to the auxiliary argument `Xs`.
+A value of zero, or larger than 127, causes the CR to transition to Error State _Invalid_, as it does in the other modes that take a final-block length (cf. <<ACE-OCB-mode>>, <<ACE-CMAC-mode>>, <<ACE-Ascon-AEAD128>>).
 Note that `last_blk_len` is not restricted to multiples of 8: Every value from 1 to 127 is conformant here per cite:[nist-SP-800-38D].
 Any excess bits provided by the following Form A ``ace.exec`` are ignored.
 
@@ -1022,7 +1023,7 @@ Any excess bits provided by the following Form A ``ace.exec`` are ignored.
   . `ctr <- int(bswap(J0[127:96]))`
   . `ctr <- (ctr + 1) mod 2^32^`.
   . If `ctr` = `(start_ctr - 1) mod 2^32^`, then:
-   .. the CR is *invalidated*.
+   .. the CR transitions to Error State _Invalid_.
   . else:
    .. `J0[127:96] <- bswap(bin(ctr,32))`
    .. `tmp <- (zeros(128-last_blk_len) @ INPUT[last_blk_len-1:0]) xor (zeros(128-last_blk_len) @ enc_blk(key, J0)[last_blk_len-1:0])`.
@@ -1063,7 +1064,7 @@ In State _Decrypt_, ``ace.exec`` instructions are expected to be of Form A.
  . `ctr <- int(bswap(J0[127:96]))`.
  . `ctr <- (ctr + 1) mod 2^32^`.
  . If `ctr` = `(start_ctr - 1) mod 2^32^`, then:
-  .. the CR is *invalidated*.
+  .. the CR transitions to Error State _Invalid_.
  . else:
   .. `absorb(INPUT)`.
   .. `J0[127:96] <- bswap(bin(ctr,32))`.
@@ -1073,7 +1074,8 @@ If `ACELEN` is a multiple of 128, the same behavior applies as in State _Encrypt
 --
 
 ** To transition to State _Dec_Last_Block_, a Form B `ace.setst` instruction is issued, whereby
-`last_blk_len`, the bit length of the last block, is set to the auxiliary argument `Xs`. A value of zero, or larger than 127, *invalidates* the CR.
+`last_blk_len`, the bit length of the last block, is set to the auxiliary argument `Xs`.
+A value of zero, or larger than 127, causes the CR to transition to Error State _Invalid_.
 // , as it does in the other modes that take a final-block length (cf. <<ACE-OCB-mode>>, <<ACE-CMAC-mode>>, <<ACE-Ascon-AEAD128>>).
 
 ** In State _Dec_Last_Block_, a single Form A ``ace.exec`` instruction can be issued.
@@ -1089,7 +1091,7 @@ If `ACELEN` is a multiple of 128, the same behavior applies as in State _Encrypt
   . `ctr <- int(bswap(J0[127:96]))`
   . `ctr <- (ctr + 1) mod 2^32^`.
   . If `ctr` = `(start_ctr - 1) mod 2^32^`, then:
-   .. the CR is *invalidated*.
+   .. the CR transitions to Error State _Invalid_.
   . else:
   .. `tmp <- zeros(128-last_blk_len) @ INPUT[last_blk_len-1:0]`.
   .. `absorb(tmp)`.
@@ -1203,7 +1205,7 @@ The differences with respect to GCM are:
     1 in States _Enc_Last_Block_ and _Dec_Last_Block_. A Form C `ace.exec` does *not*
     decrease `budget`: in State _Enc_Tag_Finalize_ it only emits the tag, which consumes no
     block.
- ** If an `ace.exec` would decrease `budget` below zero, it performs no operation, and the CR is invalidated.
+ ** If an `ace.exec` would decrease `budget` below zero, it performs no operation, and the CR transitions to Error State _Invalid_.
 --
 
 NOTE: The rules do not forbid keeping an older copy of the SCC in memory to restart the state machine and use many-time pads.
@@ -1380,7 +1382,7 @@ If `ACELEN` > 128, only the 128 least significant bits of `INPUT` are considered
       as follows:
 +
 --
-  . If `ctr` = 2^32^-1, then the CR is *invalidated*.
+  . If `ctr` = 2^32^-1, then the CR transitions to Error State _Invalid_.
   . ``OUTPUT <- INPUT xor enc_blk(enc_key, 1 @ SIV[126:32] @ bin((int(SIV[31:0]) + ctr) mod 2^32^, 32)),``
   . `ctr <- ctr + 1`.
 --
@@ -1391,7 +1393,7 @@ blocks in `INPUT`.
 ** To transition to State _Enc_Last_Block_, a Form B `ace.setst` instruction is issued, whereby
 `last_blk_len`, the bit length of the last block, is set to the auxiliary argument `Xs`.
 Note that cite:[RFC8452] expresses this length in bytes and therefore `last_blk_len` must be a multiple of 8.
-A value of zero, larger than 120, or not a multiple of 8, *invalidates* the CR.
+A value of zero, larger than 120, or not a multiple of 8, causes the CR to transition to Error State _Invalid_.
 
 ** In State _Enc_Last_Block_, a single Form A ``ace.exec`` instruction is expected.
       Issuing “``ace.exec OUTPUT, Kn|K{Xn}, INPUT``,” encrypts `INPUT` into `OUTPUT`
@@ -1399,7 +1401,7 @@ A value of zero, larger than 120, or not a multiple of 8, *invalidates* the CR.
 +
 --
 . If `last_blk_len = 0`, then: terminate the instruction.
-. If `ctr` = 2^32^-1, then the CR is *invalidated*.
+. If `ctr` = 2^32^-1, then the CR transitions to Error State _Invalid_.
     . ``OUTPUT <- zeros(128-last_blk_len) @ (INPUT xor enc_blk(enc_key, 1 @ SIV[126:32] @ bin((int(SIV[31:0]) + ctr) mod 2^32^, 32)))[last_blk_len-1:0],``
     . `ctr <- ctr + 1`.
     . `last_blk_len <- 0`
@@ -1409,7 +1411,7 @@ A value of zero, larger than 120, or not a multiple of 8, *invalidates* the CR.
    Issuing “``ace.exec OUTPUT, Kn|K{Xn}, INPUT``” decrypts `INPUT` into `OUTPUT` and then absorbs the plaintext `OUTPUT` into the `tmp`:
 +
 --
-. If `ctr` = 2^32^-1, then the CR is *invalidated*.
+. If `ctr` = 2^32^-1, then the CR transitions to Error State _Invalid_.
 . ``OUTPUT <- INPUT xor enc_blk(enc_key, 1 @ SIV[126:32] @ bin((int(SIV[31:0]) + ctr) mod 2^32^, 32))``,
 . `absorb(OUTPUT)`.
 . `ctr <- ctr + 1`.
@@ -1421,7 +1423,7 @@ blocks in `INPUT`.
 
 ** To transition to State _Dec_Last_Block_, a Form B `ace.setst` instruction is issued, whereby
 `last_blk_len`, the bit length of the last block, is set to the auxiliary argument `Xs`.
-A value of zero, or larger than 127, *invalidates* the CR, as it does in the other modes that take a final-block length (cf. <<ACE-OCB-mode>>, <<ACE-CMAC-mode>>, <<ACE-Ascon-AEAD128>>).
+A value of zero, or larger than 127, causes the CR to transition to Error State _Invalid_, as it does in the other modes that take a final-block length (cf. <<ACE-OCB-mode>>, <<ACE-CMAC-mode>>, <<ACE-Ascon-AEAD128>>).
 
 ** In State _Dec_Last_Block_, a single Form A ``ace.exec`` instruction is expected.
       Issuing “``ace.exec OUTPUT, Kn|K{Xn}, INPUT``,” decrypts `INPUT` into `OUTPUT` and
@@ -1429,7 +1431,7 @@ A value of zero, or larger than 127, *invalidates* the CR, as it does in the oth
 +
 --
 . If `last_blk_len = 0`, then: terminate the instruction.
-. If `ctr` = 2^32^-1, then the CR is *invalidated*.
+. If `ctr` = 2^32^-1, then the CR transitions to Error State _Invalid_.
     . ``OUTPUT <- zeros(128-last_blk_len) @ (INPUT xor enc_blk(enc_key, 1 @ SIV[126:32] @ bin((int(SIV[31:0]) + ctr) mod 2^32^, 32)))[last_blk_len-1:0],``
     . `absorb(OUTPUT)`.
     . `ctr <- ctr + 1`.
@@ -1504,7 +1506,7 @@ Data Structures:::
  ** `L`, `L~0~`, `offset`, `hash_A`, `checksum_P` : 128 bits.
  ** `offset_index`: int
  ** `tag_len`: 8 bits. Bit length of the tag. Currently, the allowed values are 64, 96, and 128.
- ** `last_blk_len`: `7` bits. Length of the last block of AD or plaintext/ciphertext in bits. It is between 0 and 120 (`b` - 8) and must be a multiple of 8, since cite:[RFC7253] defines OCB over byte strings. A value that is not a multiple of 8, or that exceeds 120, *invalidates* the CR.
+ ** `last_blk_len`: `7` bits. Length of the last block of AD or plaintext/ciphertext in bits. It is between 0 and 120 (`b` - 8) and must be a multiple of 8, since cite:[RFC7253] defines OCB over byte strings. A value that is not a multiple of 8, or that exceeds 120, causes the CR to transition to Error State _Invalid_.
  ** `index`: int, corresponding to `i` in the loops in RFC{nbsp}7253. It cannot exceed `MAX_BLOCKS` = 2^48^-1.
  **  `L~i~`: array of 128 bit values, with `i` up to `floor(log_2(MAX_BLOCKS))`.
  **  `AD_finalized`: bool. `true` if the AD has been finalized.
@@ -1625,21 +1627,21 @@ These values can be precomputed and stored in the implementation specific data s
    . `checksum_P <- zeros(128)`
    . `index <- 0`
 
-** To move to _Set_Aux_Value_, a Form B `ace.setst` is expected, where the auxiliary argument `Xs` sets the nonce length `N_len`. `N_len` must be at least 6 and at most 120; otherwise, the CR is invalidated.
+** To move to _Set_Aux_Value_, a Form B `ace.setst` is expected, where the auxiliary argument `Xs` sets the nonce length `N_len`. `N_len` must be at least 6 and at most 120; otherwise, the CR transitions to Error State _Invalid_.
 
 ** In State _Set_Aux_Value_, ``ace.exec`` instructions are expected to be of Form B, namely
    “``ace.exec Kn|K{Xn}, INPUT``”, which sets `N` to
    `INPUT`, namely `N <- zeros(120-N_len) @ INPUT[N_len-1:0]`
   *** If “``ace.exec Kn|K{Xn}, INPUT```,” is repeated, it rewrites `N`.
   *** If no such `ace.exec` is issued, `N` is not changed, which means that its
-      most significant bit is 1. This condition results in an error state (invalidating the CR) when
+      most significant bit is 1. This condition results in an error state when
       transitioning to State _Hash_Absorb_.
 
 ** To move to _Hash_Absorb_, a Form B `ace.setst` instruction is expected, where the auxiliary argument `Xs` sets the tag length `tag_len`.
    The admissible values for this argument are 64, 96, or 128.
-   Any other value causes the CR to be invalidated.
+   Any other value causes the CR to transitions to Error State _Invalid_.
   *** If `N_len = 0`, then `N` was not set in State _Set_Aux_Value_.
-      In this case the CR is invalidated.
+      In this case the CR transitions to Error State _Invalid_.
   *** The following operations are performed:
   . `index <- 1`
   . `tag_len <- Xs`.
@@ -1652,7 +1654,7 @@ These values can be precomputed and stored in the implementation specific data s
 ** In State _Hash_Absorb_, `ace.exec` instructions are expected to be of Form B, whereby “``ace.exec Kn|K{Xn}, INPUT``” absorbs a data block into `tag`, i.e.:
 +
 --
- . If `index = ones(48)`, then the CR is invalidated, and the instruction terminates.
+ . If `index = ones(48)`, then the CR transitions to Error State _Invalid_, and the instruction terminates.
  . `offset = offset xor L~ntz(index)~`.
  . `hash_A <- hash_A xor enc_blk(key, INPUT xor offset)`.
  . `index <- index + 1`.
@@ -1668,7 +1670,7 @@ If `ACELEN` > `b`, the above operation is executed `ACELEN/b` times.
   * `tmp : bits(b)`
 
 []
-  . If `index = ones(48)`, then the CR is invalidated, and the instruction terminates.
+  . If `index = ones(48)`, then the CR transitions to Error State _Invalid_, and the instruction terminates.
   . if `last_blk_len` != `0`, then:
   .. `offset <- offset xor L*`
   .. `tmp <- ocb_pad(INPUT, last_blk_len) xor offset`
@@ -1706,7 +1708,7 @@ positions numbered from 1. They are therefore computed here in the `bswap` view 
 “``ace.exec OUTPUT, Kn|K{Xn}, INPUT``” absorbs the plaintext `INPUT` into the `tag` and encrypts `INPUT` into `OUTPUT`, namely:
 +
 --
- . If `index = ones(48)`, then the CR is invalidated, and the instruction terminates.
+ . If `index = ones(48)`, then the CR transitions to Error State _Invalid_, and the instruction terminates.
  . `offset = offset xor L~ntz(index)~`.
  . `checksum_P <- checksum_P xor INPUT`
  . `OUTPUT <- offset xor enc_blk(key, INPUT xor offset)`
@@ -1727,7 +1729,7 @@ In this case, the following operations are performed:
  * `tmp : bits(b)`
 
 []
- . If `index = ones(48)`, then the CR is invalidated, and the instruction terminates.
+ . If `index = ones(48)`, then the CR transitions to Error State _Invalid_, and the instruction terminates.
  . `offset <- offset xor L*`
  . `tmp[last_blk_len-1:0] <- enc_blk(key, offset)[last_blk_len-1:0]` // PAD in RFC{nbsp}7253
  . `OUTPUT <- zeros(128-last_blk_len) @ (INPUT[last_blk_len-1:0] xor tmp[last_blk_len-1:0])`
@@ -1901,9 +1903,9 @@ State Machine:::
 If `ACELEN` > `b`, then the above operations are applied to each `b`-bit block of `INPUT`.
 
  ** Upon issuing a Form B “``ace.setst Kn|K{Xn}, #ace_state_hash_last_block, Xs``” where `Xs` contains the bit length of the last block, the following happens:
-   . if `block_base` != 0, then the CR is *invalidated*, because the previous block is
+   . if `block_base` != 0, then the CR transitions to Error State _Invalid_, because the previous block is
      not complete and CMAC has no way to absorb a partial block other than as the last one.
-   . if `Xs > b`, or if `Xs` is not a multiple of 8, then the CR is *invalidated*.
+   . if `Xs > b`, or if `Xs` is not a multiple of 8, then the CR transitions to Error State _Invalid_.
      The multiple-of-8 requirement is what makes the position of the padding bit below
      well-defined; `Xs` = 0 is admissible and is the empty-message case.
    . `last_blk_len <- Xs`.
@@ -2028,7 +2030,7 @@ State Machine:::
  ** In State _Ready_:
   *** `last_blk_len`, `block_base` and `block` are set to zero.
   *** `state`: the initial value is set as specified by the algorithm.
-  *** Any `ace.exec` will result in the CR being *invalidated*.
+  *** Any `ace.exec` will result in the CR transitioning to Error State _Invalid_.
 
  ** In State _Hash_Absorb_, we enter Subalgorithm `process_VLI` (cf. <<ACE-process-VLI>>) as:
 `process_VLI(max_length, block, b, state, n, input_base, block_base, state_offset, cumul_len, absorb(), finalize())`,
@@ -2039,9 +2041,9 @@ where `max_length` is the algorithm-defined maximum length of the data to be abs
     happens:
 +
 --
- . if `block_base` != 0, then the CR is *invalidated*. (The previous block is not complete.)
- . if `Xs > b`, then the CR is *invalidated*.
- . if `Xs = 0`, then the CR is *invalidated*.
+ . if `block_base` != 0, then the CR transitions to Error State _Invalid_. (The previous block is not complete.)
+ . if `Xs > b`, then the CR transitions to Error State _Invalid_.
+ . if `Xs = 0`, then the CR transitions to Error State _Invalid_.
  . `last_blk_len <- Xs`.
 --
 +
@@ -2427,7 +2429,7 @@ State Machine:::
 
  ** To transition to State _Hash_Output_, a Form B `ace.setst` instruction is expected for `KMAC128` and `KMAC256`,
     whose auxiliary argument sets `L`, the output length in bits.
-    `L` must be non-zero: a zero value *invalidates* the CR.
+    `L` must be non-zero: a zero value causes the CR to transition to Error State _Invalid_.
     If `L` is *not* a multiple of 8, the output is delivered in whole octets, and the last octet may
     be zero-padded in its significant bits.
 +
@@ -2588,7 +2590,7 @@ block of `OUTPUT`.
 auxiliary argument `Xs` is the bit length of the final block. It performs:
 +
 --
-. If `Xs` > 127, then: the CR is *invalidated*.
+. If `Xs` > 127, then: the CR transitions to Error State _Invalid_.
 . If `Xs` is zero, then:
 .. `state[0] <- state[0] xor 1` (this is `pad(∅,128)` = `zeros(127) @ 1`)
 ..  The state machine then transitions to State _Hash_Output_.
@@ -2653,7 +2655,7 @@ If `ACELEN` is a multiple of 128, these operations are executed `ACELEN/128` tim
 auxiliary argument `Xs` is the bit length of the final block. It performs:
 +
 --
-. If `Xs` > 127, then: the CR is *invalidated*.
+. If `Xs` > 127, then: the CR transitions to Error State _Invalid_.
 //A partial final block of 127 bits is legal:
 //  `Xs` is a truncation of an already-transferred block, not a transfer length, so
 //  <<ACE-truncation-vs-length>> applies and it need not be a multiple of 8. Ascon's
@@ -3118,7 +3120,7 @@ ECC algorithms define:
       configured private key, that is `1` {le} `int(Scalar)` `<` `n`, where `n` is the order
       of the group. A freshly provisioned CC has `Scalar` = 0 and so does not qualify.
       Attempting to enter State _Sign_Generate_ via `ace.setst` without a configured private key
-      will invalidate the CR.
+      causes the CR to transition to Error State _Invalid_.
   *** _Sign_Verify_ only if `HasSecondPt`, `HasHash`, and `HasSignature`.
  ** _Point_Mul_ -> _Output_.
  ** _Sign_Generate_ -> _Output_ -> _Success_.
@@ -3306,8 +3308,8 @@ State Machine:::
     {interpunct} `A`.
 
 ** Entering _Sign_Generate_ with `msg_pass` {ne} 2 in pure mode, or _Sign_Verify_ with
-   `msg_pass` {ne} 1 in pure mode, *invalidates* the CR. In pre-hash mode `msg_pass` is not
-   consulted, `Hash` standing in for the message in both hash computations.
+   `msg_pass` {ne} 1 in pure mode, causes the CR to transition to Error State _Invalid_.
+   In pre-hash mode `msg_pass` is not consulted, `Hash` standing in for the message in both hash computations.
 
 NOTE: It is the caller's responsibility to present the same message in both signing passes.
 A caller that presents different messages produces a signature that verifies against neither.
@@ -3581,13 +3583,13 @@ The procedures implemented by ML-DSA are taken directly from cite:[nist-fips-204
 The _AlgorithmPolicy_ field in the MDH has the following meaning:
 _AlgorithmPolicy_[0] is set to 1 if the Algorithm can generate signatures, and
 _AlgorithmPolicy_[1] is set to 1 if the Algorithm can verify signatures.
-An _AlgorithmPolicy_ of 0 is not valid, and it will cause the CR to be invalidated.
+An _AlgorithmPolicy_ of 0 is not valid, and it causes the CR to transitions to Error State _Invalid_.
 
 The _AuxInfo_ field records the hash function that the caller is expected to use when it computes _μ_, and, for the `HashML-DSA` variants, when it pre-hashes the message. It cannot be enforced. It also provides information to the recipients of the CC, since it is in the clear
 in the MDH, but recipients need not support the hash function.
 This parameter has the same format as the _Algorithm_ and _AlgorithmPolicy_ Fields and the next two Reserved bits.
 The value must encode a hash function that cite:[nist-fips-204] admits for that purpose;
-any other value will cause the CR to be invalidated.
+any other value causes the CR to transitions to Error State _Invalid_.
 --
 
 * *Internal State*:
@@ -3646,7 +3648,7 @@ Apart from `HasPrivKey` and `HasPubKey` (which are stored in _StateExtension_)
 the ML-DSA algorithms do not carry state information as to whether `signature`,
 `ctxlen`, `ctx`, `mu` and `tr` have been assigned values.  If those values are not valid,
 the signing and verification procedures may return unpredictable results or fail with a
-transition to State `ace_state_failure` or cause the CR to be invalidated.
+transition to State `ace_state_failure` or cause the CR to transitions to Error State _Invalid_.
 --
 
 State Machine::: {empty}
@@ -3700,7 +3702,7 @@ ML-DSA algorithms define:
     is complete, it is set to true. `privkey` and `HasPrivKey` are not affected: loading a
     public key alone is the normal way to configure a CC for verification only.
 
-** To transition to state _ctx_Input_, a Form B `ace.setst` instruction must be used where the GPR contains the parameter `ctxlen`. Only values of `ctxlen` from 0 to 255 are valid. Passing an invalid `ctxlen` value will cause the CR to be invalidated.
+** To transition to state _ctx_Input_, a Form B `ace.setst` instruction must be used where the GPR contains the parameter `ctxlen`. Only values of `ctxlen` from 0 to 255 are valid. Passing an invalid `ctxlen` value causes the CR to transitions to Error State _Invalid_.
 
 ** In States _privkey_Input_, _pubkey_Input_, _ctx_Input_, _mu_Input_, _tr_Input_, and _Sign_Input_,
 one or more Form B `ace.exec` instructions are used to load a value of
@@ -3717,42 +3719,42 @@ The number of bits loaded into the state fields so far is stored in the _Algorit
 When the value of the _AlgorithmUse_ field reaches the bit size of the corresponding field, further `ace.exec` instructions are not allowed.
 If, as a result of an `ace.exec` instruction, the value of the _AlgorithmUse_ field would become greater than the bit size of the corresponding field (`n`),
 the bits in excess are ignored.
-If `ace.exec` is invoked with the value of the _AlgorithmUse_ {ge} `n`, the CR is invalidated.
+If `ace.exec` is invoked with the value of the _AlgorithmUse_ {ge} `n`, the CR transitions to Error State _Invalid_.
 
 ** In State _compute_pubKey_ a single Form D `ace.exec` instruction performs the following operations:
 
-. If `HasPrivKey` is false, the CR is invalidated.
+. If `HasPrivKey` is false, the CR transitions to Error State _Invalid_.
 . Derive `pubkey` from `privkey`,  as specified in cite:[nist-fips-204] {sect}3.6 and Algorithm 1.
-. Check whether the public key correctly hashes to `tr` (embedded in `privkey`), and if not, the CR is invalidated.
+. Check whether the public key correctly hashes to `tr` (embedded in `privkey`), and if not, the CR transitions to Error State _Invalid_.
 . Write the result of cite:[nist-fips-204] {sect}3.6 and Algorithm 1. into `pubkey` and set `HasPubKey`.
 
 ** To transition to State _Sign_Generate_, either a B of `ace.setst` may be
    used, and the auxiliary parameter `Xs` selects the signing mode of cite:[nist-fips-204] {sect}3.4
 
-. If `HasPrivKey` is false, the CR is invalidated.
+. If `HasPrivKey` is false, the CR transitions to Error State _Invalid_.
 . If `Xs` = 0 (for instance, if `Xs = X0`), then _hedged_ signing is selected.
   A 256 bits random value is drawn from an approved random bit generator and stored in `rnd`.
 . If `Xs` is non-zero, then *deterministic* signing is selected. `rnd` is set to `zeros(256)`.
 
 ** In State _Sign_Generate_, Form D ``ace.exec Kn|K{Xn}`` generates a digital signature using procedure `ML-DSA.Sign_internal` of cite:[nist-fips-204] (Algorithm 7).
-If `HasPrivKey` is true, the output of `ML-DSA.Sign_internal` is written in `signature`, otherwise, the CR is invalidated.
+If `HasPrivKey` is true, the output of `ML-DSA.Sign_internal` is written in `signature`, otherwise, the CR transitions to Error State _Invalid_.
 
 ** In State _Sign_Verify_, Form D ``ace.exec Kn|K{Xn}`` verifies a digital signature using procedure `ML-DSA.Verify_internal` of cite:[nist-fips-204] (Algorithm 8):
 
-. If `HasPubKey` is false, the CR is invalidated.
+. If `HasPubKey` is false, the CR transitions to Error State _Invalid_.
 . If `ML-DSA.Verify_internal` returns `true` and a return value, the latter is written to `signature`, and
 the state machine transitions to State _Success_, else the state machine transitions to State _Failure_.
 
 ** In States _pubkey_Output_ and _Sign_Output_, one or more Form C `ace.exec` instructions are used to store the values of `pubkey`, resp., `signature`, to memory.
-Entering _pubkey_Output_ while `HasPubKey` is false *invalidates* the CR.
+Entering _pubkey_Output_ while `HasPubKey` is false causes the CR to transition to Error State _Invalid_.
 The number of bits saved to memory so far is stored in the _AlgorithmUse_ field.
 When the value of the _AlgorithmUse_ field reaches the bit size of the corresponding field, further `ace.exec` instructions are not allowed.
 If, as a result of an `ace.exec` instruction, the value of the _AlgorithmUse_ field would become greater than the bit size of the corresponding field,
-the CR is invalidated.
+the CR transitions to Error State _Invalid_.
 
 ** _AlgorithmPolicy_ can be modified using `ace.restrictl`.
 The value 0 is not admissible.
-An attempt to clear the field using `ace.restrictl` will invalidate the CR.
+An attempt to clear the field using `ace.restrictl` causes the CR to transition to Error State _Invalid_.
 
 ** For certain long-running operations, such as _GenerateKeyPair_, _Sign_Generate_, and _Sign_Verify_,
 an implementation may use the _AlgorithmUse_ field to store a progress value, so that these operations can be interrupted and resumed later.
