@@ -358,13 +358,13 @@ schedule that process".
 
 ### M2 — [FIXED] Exception model contradicted metadata-read rules and the canonical code
 
-**Original finding:** `ace_exc_CR_unconf` fired on "use of an unconfigured, or partially
+**Original finding:** `ace_exc_CR_off` fired on "use of an unconfigured, or partially
 configured CR as a source in any instruction except `ace.size`", yet `ace.getmdl` on an
 *Off* CR is defined to return zeros, and every provisioning/import/export sequence in
 <<ACE-management-code-snippets>> issues `ace.getst` (built on `ace.getmdl`) on a partially
 configured CR. As written, the architecture's own recommended code trapped.
 
-**Resolution (applied 2026-08-13).** The exemption list in the `ace_exc_CR_unconf` row of
+**Resolution (applied 2026-08-13).** The exemption list in the `ace_exc_CR_off` row of
 <<ACE-exception-codes>> now covers every instruction defined to operate on a CR in that
 condition: `ace.size`, the `ace.getmd*` group (`ace.getmdl`, `ace.getmdh`, `ace.getmdv`,
 and hence `ace.getst`), and the data-movement instructions used during configuration and
@@ -502,7 +502,7 @@ mnemonics must be lower-case throughout.
   across `ace-ISA-algorithms.adoc` (7) and `ace-pseudocode.adoc` (5), including the
   definition row in <<ACE-state-constants-symmetric>>.
 * A third mnemonic also violated the rule and was not named in the instruction:
-  `ace_state_CR_import_auth` {rightarrow} `ace_state_cr_import_auth`, 4 occurrences in
+  `ace_state_import_auth` {rightarrow} `ace_state_import_auth`, 4 occurrences in
   `ace-ISA-unpriv.adoc` — the definition row in <<ACE-states-error>>, the `ace.mgmt`
   import-termination text, and the two SCC-import steps. I applied the rule to it since it
   was stated as holding "throughout"; the only argument for the old spelling is that `CR`

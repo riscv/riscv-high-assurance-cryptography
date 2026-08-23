@@ -178,7 +178,7 @@ The examples are non-normative.
 . Opening a CR for export and import, as well as executing `ace.clear`, is always allowed in any State, even if not explicitly mentioned in an algorithm specification.
 For the restrictions on `ace.clone`, cf. <<ACE-instruction-clone>>.
 
-. If a usage instruction that may modify the state of a CR is issued, or a state transition is requested via `ace.setst`, and this is not explicitly allowed by the current state of the algorithm encoded in the CC in the CR, an _illegal-instruction exception_ is raised, and the CR is invalidated.
+. If a usage instruction that may modify the state of a CR is issued, or a state transition is requested via `ace.setst`, and this is not explicitly allowed by the current state of the algorithm encoded in the CC in the CR, the CR is invalidated.
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -777,7 +777,7 @@ Beside `len`, `block`, and `state`, which are fixed for the duration of the hash
  “`ace.exec Kn|K{Xn}, INPUT`” processes the data block `INPUT` as follows.
 +
 --
-. If `len != 0` and `cumul_len >= len`, an illegal-instruction exception is raised.
+. If `len != 0` and `cumul_len >= len`, the CR is invalidated.
 . If starting an ``ace.exec`` instruction, then `input_base <- 0`
 . If resuming an ``ace.exec`` instruction, then `input_base <- acestart`.
 . While `(input_base < ACELEN)` do
@@ -804,8 +804,8 @@ Beside `len`, `block`, and `state`, which are fixed for the duration of the hash
 --
 +
 
-** If the caller transitions to a different state, before transitioning `finalize()` is performed, unless it is `None`.
-   Transitioning to the same State `_Current_State_` is not allowed, and any attempt to do so will raise an illegal-instruction exception.
+** If the caller transitions to a different state, `finalize()` is performed before transitioning, unless `finalize` = `None`.
+   Transitioning to the same State `_Current_State_` is not allowed, and any attempt to do so will invalidate the CR.
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -958,7 +958,7 @@ caller:
      expected, “``ace.setst Kn|K{Xn}, #ace_state_set_aux_value, Xs``”, whose auxiliary
      parameter sets the length of the IV in octets: `len <- Xs`.
      `Xs` must satisfy `8` {le} `Xs` {le} `8192`;
-     any other value, `0` included, *invalidates* the CR.
+     any other value, `0` included, invalidates the CR.
      Upon entering the state, `J0` is cleared: `J0 <- zeros(b)`.
 
   ** When entering State _Set_Aux_Value_, `input_base`, `block_base`, `cumul_len` are set to zero.
@@ -1000,7 +1000,7 @@ If `ACELEN` > `128`, the above operation is executed `ACELEN/128` times.
   . `ctr <- int(bswap(J0[127:96]))`   // convert counter from big-endian to little-endian
   . `ctr <- (ctr + 1) mod 2^32^`.
   . If `ctr` = `(start_ctr - 1) mod 2^32^`, then: (process at most  2^32^ - 2 blocks)
-   .. the CR is *invalidated*.
+   .. the CR is invalidated.
    . else:
   .. `J0[127:96] <- bswap(bin(ctr,32))`.  // convert updated counter back to big-endian
   .. `tmp <- INPUT xor enc_blk(key, J0)`.
@@ -1209,10 +1209,7 @@ The differences with respect to GCM are:
     1 in States _Enc_Last_Block_ and _Dec_Last_Block_. A Form C `ace.exec` does *not*
     decrease `budget`: in State _Enc_Tag_Finalize_ it only emits the tag, which consumes no
     block.
- ** If an `ace.exec` would decrease `budget` below zero, it performs no operation, the CR
-    is *invalidated*—its _State_ becomes `ace_state_invalid`—and exception
-    `ace_exc_invalid` is raised as defined in the Privileged Architecture, if the latter is
-    implemented.
+ ** If an `ace.exec` would decrease `budget` below zero, it performs no operation, and the CR is invalidated.
 --
 
 NOTE: The rules do not forbid keeping an older copy of the SCC in memory to restart the state machine and use many-time pads.
@@ -1634,7 +1631,7 @@ These values can be precomputed and stored in the implementation specific data s
    . `checksum_P <- zeros(128)`
    . `index <- 0`
 
-** To move to _Set_Aux_Value_, a Form B `ace.setst` is expected, where the auxiliary argument `Xs` sets the nonce length `N_len`. `N_len` must be at least 6 and at most 120; otherwise, the CR transitions to Error State `ace_state_invalid`.
+** To move to _Set_Aux_Value_, a Form B `ace.setst` is expected, where the auxiliary argument `Xs` sets the nonce length `N_len`. `N_len` must be at least 6 and at most 120; otherwise, the CR is invalidated.
 
 ** In State _Set_Aux_Value_, ``ace.exec`` instructions are expected to be of Form B, namely
    “``ace.exec Kn|K{Xn}, INPUT``”, which sets `N` to
@@ -1646,9 +1643,9 @@ These values can be precomputed and stored in the implementation specific data s
 
 ** To move to _Hash_Absorb_, a Form B `ace.setst` instruction is expected, where the auxiliary argument `Xs` sets the tag length `tag_len`.
    The admissible values for this argument are 64, 96, or 128.
-   Any other value raises an illegal-instruction exception and invalidates the CR.
+   Any other value causes the CR to be invalidated.
   *** If `N_len = 0`, then `N` was not set in State _Set_Aux_Value_.
-      In this case an illegal-instruction exception is raised and the CR is invalidated.
+      In this case the CR is invalidated.
   *** The following operations are performed:
   . `index <- 1`
   . `tag_len <- Xs`.
@@ -3126,8 +3123,8 @@ ECC algorithms define:
   *** _Sign_Generate_ only if `HasSecondPt` and `HasHash` hold *and* `Scalar` holds a
       configured private key, that is `1` {le} `int(Scalar)` `<` `n`, where `n` is the order
       of the group. A freshly provisioned CC has `Scalar` = 0 and so does not qualify.
-      Attempting to enter State _Sign_Generate_ via `ace.setst` without a configured private key raises an illegal instruction error and
-      *invalidates* the CR.
+      Attempting to enter State _Sign_Generate_ via `ace.setst` without a configured private key
+      will invalidate the CR.
   *** _Sign_Verify_ only if `HasSecondPt`, `HasHash`, and `HasSignature`.
  ** _Point_Mul_ -> _Output_.
  ** _Sign_Generate_ -> _Output_ -> _Success_.
@@ -3266,8 +3263,7 @@ offers depends on the hash extensions it provides:
 The curve extension alone must provide enough of `H` to hash the fixed-size inputs above,
 which are a few hundred octets at most. Absorbing a message of arbitrary length is what
 requires the general hashing machinery, and hence `Zklesha2h` or `Zklesha3h`, respectively. Requesting
-pure mode on an implementation that lacks it transitions the CR to Error State
-`ace_state_not_impl`.
+pure mode on an implementation that lacks it transitions the CR to Error State ``.
 --
 
 Data Structures:::
@@ -3467,7 +3463,7 @@ ML-KEM algorithms define:
  ** The ML-KEM algorithms do not carry state information as to whether
  `encapsk`, `decapsk`, `ciphertext`, and `sharedkey` have been assigned values.
    If the values are not valid, the encapsulation and decapsulation procedures may return unpredictable results or fail with a
-   transition to Error State `ace_state_invalid`.
+   transition to Error State `ace_state_failure`.
 
  ** In State _GenerateKeyPair_, Form D ``ace.exec Kn|K{Xn}`` generates a new key pair using procedure `ML-KEM.KeyGen` of cite:[nist-fips-203] (Algorithm 19).
 
@@ -3591,13 +3587,13 @@ The procedures implemented by ML-DSA are taken directly from cite:[nist-fips-204
 The _AlgorithmPolicy_ field in the MDH has the following meaning:
 _AlgorithmPolicy_[0] is set to 1 if the Algorithm can generate signatures, and
 _AlgorithmPolicy_[1] is set to 1 if the Algorithm can verify signatures.
-An _AlgorithmPolicy_ of 0 is not valid, and it will cause the CR to immediately transition to State `ace_state_invalid`.
+An _AlgorithmPolicy_ of 0 is not valid, and it will cause the CR to be invalidated.
 
 The _AuxInfo_ field records the hash function that the caller is expected to use when it computes _μ_, and, for the `HashML-DSA` variants, when it pre-hashes the message. It cannot be enforced. It also provides information to the recipients of the CC, since it is in the clear
 in the MDH, but recipients need not support the hash function.
 This parameter has the same format as the _Algorithm_ and _AlgorithmPolicy_ Fields and the next two Reserved bits.
 The value must encode a hash function that cite:[nist-fips-204] admits for that purpose;
-any other value transitions the state machine to Error State `ace_state_invalid`.
+any other value will cause the CR to be invalidated.
 --
 
 * *Internal State*:
@@ -3656,7 +3652,7 @@ Apart from `HasPrivKey` and `HasPubKey` (which are stored in _StateExtension_)
 the ML-DSA algorithms do not carry state information as to whether `signature`,
 `ctxlen`, `ctx`, `mu` and `tr` have been assigned values.  If those values are not valid,
 the signing and verification procedures may return unpredictable results or fail with a
-transition to Error State `ace_state_invalid`.
+transition to State `ace_state_failure` or cause the CR to be invalidated.
 --
 
 State Machine::: {empty}
@@ -3710,7 +3706,7 @@ ML-DSA algorithms define:
     is complete, it is set to true. `privkey` and `HasPrivKey` are not affected: loading a
     public key alone is the normal way to configure a CC for verification only.
 
-** To transition to state _ctx_Input_, a Form B `ace.setst` instruction must be used where the GPR contains the parameter `ctxlen`. Only values of `ctxlen` from 0 to 255 are valid. Passing an invalid `ctxlen` value will transition the CR to Error State `ace_state_invalid`.
+** To transition to state _ctx_Input_, a Form B `ace.setst` instruction must be used where the GPR contains the parameter `ctxlen`. Only values of `ctxlen` from 0 to 255 are valid. Passing an invalid `ctxlen` value will cause the CR to be invalidated.
 
 ** In States _privkey_Input_, _pubkey_Input_, _ctx_Input_, _mu_Input_, _tr_Input_, and _Sign_Input_,
 one or more Form B `ace.exec` instructions are used to load a value of
@@ -3727,30 +3723,29 @@ The number of bits loaded into the state fields so far is stored in the _Algorit
 When the value of the _AlgorithmUse_ field reaches the bit size of the corresponding field, further `ace.exec` instructions are not allowed.
 If, as a result of an `ace.exec` instruction, the value of the _AlgorithmUse_ field would become greater than the bit size of the corresponding field (`n`),
 the bits in excess are ignored.
-If `ace.exec` is invoked with the value of the _AlgorithmUse_ {ge} `n`, an illegal-instruction exception is raised.
+If `ace.exec` is invoked with the value of the _AlgorithmUse_ {ge} `n`, the CR is invalidated.
 
 ** In State _compute_pubKey_ a single Form D `ace.exec` instruction performs the following operations:
 
-. If `HasPrivKey` is false, the CR is *invalidated* and the state machine transitions to Error State `ace_state_invalid`.
+. If `HasPrivKey` is false, the CR is invalidated.
 . Derive `pubkey` from `privkey`,  as specified in cite:[nist-fips-204] {sect}3.6 and Algorithm 1.
-. Check whether the public key correctly hashes to `tr` (embedded in `privkey`), and if not, the CR is *invalidated* and the state machine transitions to Error State `ace_state_invalid`.
+. Check whether the public key correctly hashes to `tr` (embedded in `privkey`), and if not, the CR is invalidated.
 . Write the result of cite:[nist-fips-204] {sect}3.6 and Algorithm 1. into `pubkey` and set `HasPubKey`.
 
 ** To transition to State _Sign_Generate_, either a B of `ace.setst` may be
    used, and the auxiliary parameter `Xs` selects the signing mode of cite:[nist-fips-204] {sect}3.4
 
-. If `HasPrivKey` is false, the CR is *invalidated* and the state machine transitions to Error State `ace_state_invalid`.
-. If `Xs` = 0 (for instance, if `Xs = X0`), then *hedged* signing is selected.
+. If `HasPrivKey` is false, the CR is invalidated.
+. If `Xs` = 0 (for instance, if `Xs = X0`), then _hedged_ signing is selected.
   A 256 bits random value is drawn from an approved random bit generator and stored in `rnd`.
 . If `Xs` is non-zero, then *deterministic* signing is selected. `rnd` is set to `zeros(256)`.
 
 ** In State _Sign_Generate_, Form D ``ace.exec Kn|K{Xn}`` generates a digital signature using procedure `ML-DSA.Sign_internal` of cite:[nist-fips-204] (Algorithm 7).
-If `HasPrivKey` is false, the CR is *invalidated* and the state machine transitions to Error State `ace_state_invalid`, else
-the output of `ML-DSA.Sign_internal` is written in `signature`.
+If `HasPrivKey` is true, the output of `ML-DSA.Sign_internal` is written in `signature`, otherwise, the CR is invalidated.
 
 ** In State _Sign_Verify_, Form D ``ace.exec Kn|K{Xn}`` verifies a digital signature using procedure `ML-DSA.Verify_internal` of cite:[nist-fips-204] (Algorithm 8):
 
-. If `HasPubKey` is false, the CR is *invalidated* and the state machine transitions to Error State `ace_state_invalid`.
+. If `HasPubKey` is false, the CR is invalidated.
 . If `ML-DSA.Verify_internal` returns `true` and a return value, the latter is written to `signature`, and
 the state machine transitions to State _Success_, else the state machine transitions to State _Failure_.
 
@@ -3758,11 +3753,12 @@ the state machine transitions to State _Success_, else the state machine transit
 Entering _pubkey_Output_ while `HasPubKey` is false *invalidates* the CR.
 The number of bits saved to memory so far is stored in the _AlgorithmUse_ field.
 When the value of the _AlgorithmUse_ field reaches the bit size of the corresponding field, further `ace.exec` instructions are not allowed.
-If, as a result of an `ace.exec` instruction, the value of the _AlgorithmUse_ field would become greater than the bit size of the corresponding field, an illegal-instruction exception is raised.
+If, as a result of an `ace.exec` instruction, the value of the _AlgorithmUse_ field would become greater than the bit size of the corresponding field,
+the CR is invalidated.
 
 ** _AlgorithmPolicy_ can be modified using `ace.restrictl`.
 The value 0 is not admissible.
-An attempt to clear the field using `ace.restrictl` will transition the CR to Error State `ace_state_invalid`.
+An attempt to clear the field using `ace.restrictl` will invalidate the CR.
 
 ** For certain long-running operations, such as _GenerateKeyPair_, _Sign_Generate_, and _Sign_Verify_,
 an implementation may use the _AlgorithmUse_ field to store a progress value, so that these operations can be interrupted and resumed later.

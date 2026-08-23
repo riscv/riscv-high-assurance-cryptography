@@ -151,7 +151,7 @@ text fails the same test - so C8 and C9 were real and the test has power over th
 | M1 | `ace-ISA-unpriv.adoc` | `_UsagePolicy_` now fits its 5 bits: bits 0-3 disallow U-, (V)S-, HS- and M-mode use; bit 4 grants Debug use when set. `ace.restrict` given bit 4's inverted polarity explicitly: a one in the input *clears* it, so a restrict can still only ever remove a permission |
 | M2 | `ace-ISA-unpriv.adoc` | New authoritative subsection `ACE-length-rule` fixing the three lengths separately: PI = f(_Algorithm_, _AlgorithmPolicy_, _KeyType_) with _ImpDataLen_, _SCProtection_ and _StateExtension_ required to be zero; SCC = the same plus _StateExtension_, plus the VDS sized by _ImpDataLen_, and explicitly *not* _SCProtection_; CRF capacity = f(_Algorithm_, _AlgorithmPolicy_, _SCProtection_). All 13 scattered per-field claims now point at it |
 | M3 | `ace-ISA-unpriv.adoc` | `ace.size` no longer claims to report a PI length; a remark records that the caller constructs the PI and so knows its length, and that no code may assume an SCC is at least as long as the corresponding PI. The two provisioning snippets no longer call `ace.size` for it |
-| M5 | `ace-ISA-unpriv.adoc` | `ace.restrict` bit `v` = 0 now correctly yields `ace.restrictl`/`ace.restricth`. `_SCProtection_` added to the fields `ace.restrictl` may modify: a non-zero input is a *request* to raise the level, only ever strengthening it, and it may fail with `ace_state_out_of_mem` / `ace_exc_out_of_mem` if the CRF cannot supply the extra capacity. Failure destroys the CC by design — fail-closed, since the caller has declared the current level inadequate — and that is stated as deliberate rather than left as an artefact of the Error-State rules |
+| M5 | `ace-ISA-unpriv.adoc` | `ace.restrict` bit `v` = 0 now correctly yields `ace.restrictl`/`ace.restricth`. `_SCProtection_` added to the fields `ace.restrictl` may modify: a non-zero input is a *request* to raise the level, only ever strengthening it, and it may fail with `ace_state_out_of_memory` / `ace_exc_out_of_memory` if the CRF cannot supply the extra capacity. Failure destroys the CC by design — fail-closed, since the caller has declared the current level inadequate — and that is stated as deliberate rather than left as an artefact of the Error-State rules |
 | M6 | `ace-ISA-algorithms.adoc` | Single name for each quantity: `auth_key` throughout GCM and GCM-SIV (10 sites), `start_ctr` and `ctr` for the counter (`reset_ctr` / `reset_at` were already retired under C20) |
 | M7 | `ace-ISA-algorithms.adoc` | `_Enc_Tag_Finalize_`: the `ace.setst` computes and retains the tag but produces no output and does not reach _Success_; the following Form C `ace.exec` reads it out and transitions. The `_Set_Aux_Value_` transition restated as a real Form B `ace.setst` instead of the `ace.exec` mnemonic |
 | M8 | `ace-ISA-algorithms.adoc` | Maximum IV length stated once, as 1024 bytes (8192 bits), matching the other two statements |
@@ -688,7 +688,7 @@ is required to be in `_ace_cfgst_Provisioning_`).
 
 Resolved in favour of the NOTE rather than the normative list: `ace.restrict` *can* raise
 `_SCProtection_`. The capability is worth having, and the failure mode it needed turned
-out to be well defined — insufficient CRF capacity yields `ace_state_out_of_mem`, exactly
+out to be well defined — insufficient CRF capacity yields `ace_state_out_of_memory`, exactly
 as the provisioning path does. Failure destroys the CC, which is the intended fail-closed
 behaviour and is now stated as such.
 `ace-ISA-unpriv.adoc:1738-1743`, `1773-1796`, `1860-1876`.
@@ -1308,7 +1308,7 @@ CMAC cannot detect a partial pending block at all.
 * **m30** Open items still in the document: the RVV-mini WARNING (`221-225`, `253-257`),
   the memory-model WARNING (`748-752`, `2438-2441`), the `ace.mgmt`-vs-`ace.setst`
   encoding question (`1415-1418`, `1462-1465`), the Debug-mode questions (`985-996`,
-  `ace-ISA-priv.adoc:386-389`), the `ace_exc_CR_unconf` merge question
+  `ace-ISA-priv.adoc:386-389`), the `ace_exc_CR_off` merge question
   (`ace-ISA-priv.adoc:71-74`), and the Introduction's TODO list
   (`ace-introduction.adoc:96-106`) including the unresolved `kl` vs `ace.` naming.
   `:revdate: 6/2025`, `:revnumber: 0.0` (`ace.adoc:6-7`) should be refreshed before

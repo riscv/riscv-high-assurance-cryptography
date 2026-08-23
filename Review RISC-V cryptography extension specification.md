@@ -10,7 +10,7 @@ I've read the complete specification — `ace.adoc` and all 13 included files (~
 
 **Not ready for candidacy.** The architectural concept (opaque Cryptographic Contexts, sealed export/import, locality binding) is coherent and in several places carefully engineered (e.g., the endianness discipline, the SCC two-segment binding via `SIV` as AD, the single-share export rule, the deferred generation of random material at provisioning completion). However, the document is not yet a specification that two independent teams could implement interoperably, for four structural reasons:
 
-1. **The error/exception architecture is internally incoherent** — normative text references exception codes and states that do not exist in the document (`ace_exc_CR_unconf`, `ace_exc_CR_other`, `_Hidden_`, `Lazy`), and the behavior of suppressed/disallowed operations is explicitly unspecified (a gap the authors themselves flag in the introduction's TODO list).
+1. **The error/exception architecture is internally incoherent** — normative text references exception codes and states that do not exist in the document (`ace_exc_CR_off`, `ace_exc_CR_other`, `_Hidden_`, `Lazy`), and the behavior of suppressed/disallowed operations is explicitly unspecified (a gap the authors themselves flag in the introduction's TODO list).
 2. **Several core semantic definitions are missing or contradictory** — the ECC point-multiplication operation is never actually defined; the `Zklio` input-window semantics contradict themselves; the GCM IV-length interface disagrees on units between the API and the internal algorithm; the SCC export/import completion protocol is incomplete (author-flagged `WARNING`).
 3. **Known open items block freeze**: opcodes squat on `custom-0/1/2`, cause codes are TBD, `misa.L`/`mstatus[26:25]` allocations are provisional, RVV-mini is unfinalized yet a normative dependency, and the memory-model/forward-progress gaps in §Introduction TODO are real and severe.
 4. **At least one algorithm has an architecturally sanctioned catastrophic misuse path** (Ascon-AEAD128 with set nonce, C5), and the sealing construction's fixed zero nonce is asserted safe without the quantitative analysis the cited RFC requires (M2).
@@ -35,13 +35,13 @@ The document is a strong late-stage draft. With the C findings resolved and the 
 
 ---
 
-**C2 — Dangling exception codes and CR states: `ace_exc_CR_unconf`, `ace_exc_CR_other`, `_Hidden_`, and `Lazy` are referenced normatively but never defined**
+**C2 — Dangling exception codes and CR states: `ace_exc_CR_off`, `ace_exc_CR_other`, `_Hidden_`, and `Lazy` are referenced normatively but never defined**
 
 - **Severity rationale:** Normative dependencies on nonexistent architecture make the trap architecture unimplementable and conceal a security-relevant mechanism (lazy CR virtualization) whose definition exists only in commented-out text.
 - **Location:** `ace-ISA-priv.adoc` exception table (lines 48–68) and the NOTE below it (lines 70–94); `ace-ISA-unpriv.adoc` §_ConfigStatus_ (line 646). The Lazy/`ace_exc_CR_other` machinery appears only inside `////` comment blocks (`ace-ISA-priv.adoc` lines 317–722).
-- **Description:** (a) Book 1 mandates that misuse of a not-fully-configured CR "will raise exception `ace_exc_CR_unconf`", but that code is absent from the Book 3 cause table. (b) The Book 3 NOTE discusses "exemptions listed for `ace_exc_CR_unconf`" that are listed nowhere. (c) The same NOTE normatively describes `ace_exc_CR_other` and a "Lazy" `*lcrstatus` value; the active `*lcrstatus` encoding defines only Off/Initial/Clean/Dirty. (d) The cause table defines `ace_exc_CR_hidden` for "a CR in `*lcrstate` _Hidden_" — a state that exists nowhere (and `*lcrstate` is itself a typo for `*lcrstatus`).
+- **Description:** (a) Book 1 mandates that misuse of a not-fully-configured CR "will raise exception `ace_exc_CR_off`", but that code is absent from the Book 3 cause table. (b) The Book 3 NOTE discusses "exemptions listed for `ace_exc_CR_off`" that are listed nowhere. (c) The same NOTE normatively describes `ace_exc_CR_other` and a "Lazy" `*lcrstatus` value; the active `*lcrstatus` encoding defines only Off/Initial/Clean/Dirty. (d) The cause table defines `ace_exc_CR_hidden` for "a CR in `*lcrstate` _Hidden_" — a state that exists nowhere (and `*lcrstate` is itself a typo for `*lcrstatus`).
 - **Reasoning:** Cross-reference reconciliation across Books 1 and 3 fails; an implementer cannot determine the trap behavior for partially configured or lazily saved CRs.
-- **Proposed resolution:** Either (i) restore the lazy-CR sections as normative text, define a `Lazy` encoding in `*lcrstatus`, and add `ace_exc_CR_unconf` and `ace_exc_CR_other` (or rename) to the cause table with their exemption lists; or (ii) delete `ace_exc_CR_hidden`/`ace_exc_CR_other` and rewrite the `ace_exc_CR_unconf` sentence in §_ConfigStatus_ to name a defined cause.
+- **Proposed resolution:** Either (i) restore the lazy-CR sections as normative text, define a `Lazy` encoding in `*lcrstatus`, and add `ace_exc_CR_off` and `ace_exc_CR_other` (or rename) to the cause table with their exemption lists; or (ii) delete `ace_exc_CR_hidden`/`ace_exc_CR_other` and rewrite the `ace_exc_CR_off` sentence in §_ConfigStatus_ to name a defined cause.
 
 ---
 
@@ -154,7 +154,7 @@ into ACEIOBUF byte `j`; the length check `Xl ≤ aceiobuftop` is evaluated once,
 **M13 — Implementation VDS corruption: import algorithm rejects the whole SCC on `SIV2` failure, but the data-format section says the originating implementation "may silently restart" on corrupted additional data**
 
 - **Location:** `ace-ISA-unpriv.adoc` import step 14 (3098) vs §Formats category 3 (2755); DIEL §3124.
-- **Description:** Two normative statements disagree on whether a bad Implementation VDS is fatal (clear CR, `ace_state_cr_import_auth`) or ignorable (discard, restart the interrupted operation). The difference is security-relevant: fatal turns a one-bit flip in *optional* data into destruction of the context (DoS amplification); ignorable must be specified carefully so that only the VDS, never `Content1`, is droppable.
+- **Description:** Two normative statements disagree on whether a bad Implementation VDS is fatal (clear CR, `ace_state_import_auth`) or ignorable (discard, restart the interrupted operation). The difference is security-relevant: fatal turns a one-bit flip in *optional* data into destruction of the context (DoS amplification); ignorable must be specified carefully so that only the VDS, never `Content1`, is droppable.
 - **Resolution:** Specify: if `SIV2` verification fails, discard the VDS, set _ImpDataLen_ ← 0, and proceed with the (already authenticated) architecture-dependent content; keep hard failure only for `SIV` (Content1) mismatch. Update the DIEL note accordingly.
 
 **M14 — GCM-SIV decryption `last_blk_len` rule contradicts encryption and RFC 8452's byte orientation**

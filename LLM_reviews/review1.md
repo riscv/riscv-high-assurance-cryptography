@@ -215,7 +215,7 @@ REVIEWER ERROR
 **NO NEED SINCE THE TRAP HANDLER ALREADY HAS ALL THE INFORMATION**
 (do we want to provide extra information?)
 
-**M27. Exceptions `ace_exc_CR_unconf` and `ace_exc_CR_other` are defined in Book 3 but raised by no Book 1 instruction.**
+**M27. Exceptions `ace_exc_CR_off` and `ace_exc_CR_other` are defined in Book 3 but raised by no Book 1 instruction.**
 **FIXED** they stay. The definitions in Book 3 are fine.
 
 ### Book 1 instruction and CSR definitions
@@ -225,7 +225,7 @@ REVIEWER ERROR
 
 **M29. Trap and resume PC behavior for interrupted instructions is never specified.** `src/ace-ISA-unpriv.adoc:2314-2341`. Nothing says that a trap mid-instruction sets xEPC to the ACE instruction so re-execution resumes at `acestart`, what `xtval` reports for a page fault inside a long `ace.load`, or whether partial updates before the fault are architecturally visible. Resumability is not portably implementable without this. *Add normative text modelled on the vector extension's `vstart` rules.*
 
-**M30. The CSR chapter lacks reset values and WARL/WLRL discipline, and value-dependent write traps break save/restore.** `src/ace-ISA-unpriv.adoc:748-941`, `:819`, `:865`. No ACE CSR has a defined reset value or WARL/WLRL classification. Trapping on a *value* written to a CSR is unusual for RISC-V, and here `acestart`'s legal set is dynamic, so context-restore or migration code writing back a saved `acestart` on an implementation that does not support resumption (permitted by `:2356`) traps unpredictably. Raising `ace_exc_out_of_mem` from a CSR write is unprecedented. *Assign reset values, classify the fields, and replace value-dependent traps with WARL behavior.*
+**M30. The CSR chapter lacks reset values and WARL/WLRL discipline, and value-dependent write traps break save/restore.** `src/ace-ISA-unpriv.adoc:748-941`, `:819`, `:865`. No ACE CSR has a defined reset value or WARL/WLRL classification. Trapping on a *value* written to a CSR is unusual for RISC-V, and here `acestart`'s legal set is dynamic, so context-restore or migration code writing back a saved `acestart` on an implementation that does not support resumption (permitted by `:2356`) traps unpredictably. Raising `ace_exc_out_of_memory` from a CSR write is unprecedented. *Assign reset values, classify the fields, and replace value-dependent traps with WARL behavior.*
 
 **M31. `aceiobuflen` is defined in bytes in one place and bits in another.**
 **FIXED: CHANGED TO BYTES**

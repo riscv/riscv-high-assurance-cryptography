@@ -15,9 +15,9 @@ We refer to the ACE Unprivileged Architecture for the definitions of ACE instruc
 
 [%header,cols="18%,45%,17%,10%,10%"]
 |===
-|  Extension       | Features                                                                                        | Defined in:                  | Minimum version | Lifecycle state
-| `Smacestatus`    | Defines the ACES per-CR status tracking CSRs.                                                   | <<ACE-CSR-lcrstatus>>        | v0.0.0 | --
-| `SmaceCSK`       | Defines the CSR group to configure the Context Sealing Key.                                     | <<ACE-CSR-macecsk>>          | v0.0.0 | --
+|  Extension       | Features                                                                                       | Defined in:                  | Minimum version | Lifecycle state
+| `Smacestatus`    | Defines the ACES per-CR status tracking CSRs.                                                  | <<ACE-CSR-lcrstatus>>        | v0.0.0 | --
+| `SmaceCSK`       | Defines the CSR group to configure the Context Sealing Key.                                    | <<ACE-CSR-macecsk>>          | v0.0.0 | --
 | `Smacepbootscrt` | Defines the CSR group to configure the Physical Boot Secret Locality (cf. <<ACE-Localities>>). | <<ACE-CSR-macephysbootscrt>> | v0.0.0 | --
 | `Smacevbootscrt` | Defines the CSR group to configure the Virtual Boot Secret Locality (cf. <<ACE-Localities>>).  | <<ACE-CSR-hacevirtbootscrt>> | v0.0.0 | --
 | `Smacelclt`      | Defines the CSR group to configure the software binding Localities (cf. <<ACE-Localities>>).   | <<ACE-CSR-macelocality>>, <<ACE-CSR-hacelocality>>, and <<ACE-CSR-sacelocality>> | v0.0.0 | --
@@ -49,50 +49,24 @@ The actual numbers are TBD.
 .Exception causes and their meanings, in decreasing priority order (also relative to RISC-V exceptions)
 [float="center",align="center",width="100%",cols="^7%,<23%,<70%",options="header"]
 |===
-|Value | Mnemonic/RISC-V type           | Examples (((ACE, error codes)))
+|Value | Mnemonic/RISC-V type           | Examples in ACE (((ACE, error codes)))
 |      | Instruction address misaligned | {empty}
 |      | Instruction access fault       | {empty}
-|      | Load address misaligned        | For `ace.load` and `ace.input`
-|      | Load access fault              | For `ace.load` and `ace.input`
-|      | Store address misaligned       | For `ace.store` and `ace.output`
-|      | Store access fault             | For `ace.store` and `ace.output`
+|      | Illegal instruction            | See <<ACE-error-architecture>> for the uses in ACE.
+|      | Load address misaligned        | Applies also to `ace.load` and `ace.input`.
+|      | Load access fault              | Applies also to `ace.load` and `ace.input`.
+|      | Store address misaligned       | Applies also to `ace.store` and `ace.output`.
+|      | Store access fault             | Applies also to `ace.store` and `ace.output`.
 |      | Instruction page fault         | {empty}
 |      | Load page fault                | {empty}
 |      | Store page fault               | {empty}
 | TBD  | `ace_guru_meditation`          | Fatal and unrecoverable system failure in the ACE unit.
-| TBD  | `ace_exc_CR_off`               | Use, export, or import of a CR in *lcrstate _Off_.
-| TBD  | `ace_exc_CR_hidden`            | Use or export of a CR in *lcrstate _Hidden_.
-| TBD  | `ace_exc_out_of_mem`           | Insufficient CRF memory for configuration instruction. This may be set by privileged code in case it does not handle the CR allocation itself.
-| TBD  | `ace_exc_buf_unconf`           | Use of ACEIOBUF as an input or an output while unconfigured.
-| TBD  | `ace_exc_invalid`              | Invalid parameters in metadata, including expired CR state (evaluated upon `ace.setst`, at `ace.exec` dispatch, and upon resumption of interrupted multi-cycle operations). There is deliberately no separate `ace_exc_expired`: expiry is reported through this code, and the handler distinguishes it by reading the _State_ field of the CR, which the hardware has set to `ace_state_expired`.
+| TBD  | `ace_exc_unsupported`          | Invalid values at provisioning or import.
+| TBD  | `ace_exc_out_of_memory`        | Insufficient CRF memory for configuration instruction. This may be set by privileged code in case it does not handle the CR allocation itself.
+| TBD  | `ace_exc_CR_off`               | Any access to a CR in *lcrstate Off.
+| TBD  | `ace_exc_privilege_violation`  | Attempt to use a CR in a not allowed mode as per <<ACE-Metadata>>.
+| TBD  | `ace_exc_unconfigured_buffer`  | Use of ACEIOBUF as an input or an output while unconfigured.
 |===
-
-[NOTE]
-====
-The exemptions listed for `ace_exc_CR_unconf` are not optional: without them the
-provisioning, import and export sequences of <<ACE-management-code-snippets>> could not
-execute at all, because each of them deliberately operates on a CR that is unconfigured or
-only partially configured.
-
-* `ace.getmd*` are defined to return all zeros for a CR in the _Off_ State, and
-  `ace.getst`, which is built on it, is how those sequences test for an error after every
-  step.
-* `ace.load` and `ace.mv` write a CR precisely while its _ConfigStatus_ is
-  `ace_cfgst_provisioning` or `ace_cfgst_importing`, and raise an illegal-instruction exception if it
-  is `ace_cfgst_complete` instead. `ace.store` and the CR-reading forms of `ace.mv` read a CR
-  whose _ConfigStatus_ is `ace_cfgst_exporting`.
-* `ace.size` is exempt so that a handler can discover how much memory a CR needs before
-  anything has been loaded into it.
-
-Instructions that merely *target* a CR as the destination of a configuration operation,
-`ace.mgmt` above all, likewise never raise this exception: an unconfigured or partially
-configured CR is the only legal operand for them.
-
-`ace_exc_CR_other` carries no such exemptions. A CR marked Lazy has no valid content at
-all — its authoritative value is the SCC held by some privilege mode — so every access,
-including a metadata read, must trap so that the handler can restore it first.
-====
-
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -117,7 +91,7 @@ ACE extends `*status` and `misa`, and provides 3 direct and up to 28 indirect CS
 | (Indirect)  | SRW (RZ)   | `sacelocality{0..3}`      | Locality: Mutually isolate U-mode processes
 |===
 
-These CSRs are not available if the ACE extension is not present or if an ACES field is _Off_
+These CSRs are not available if the ACE extension is not present or if an ACES field is Off
 (see <<ACE-ACE-field-in-misa>>, <<ACE-ACES-field-in-mstatus>>, and <<ACE-ACES-field-VS>>).
 Any attempt to read or write them in these situations will result in an illegal-instruction exception.
 Therefore, ACE does not need integration in `Smstateen`/`Ssstateen`.
@@ -172,7 +146,7 @@ offset: only on there being a two-bit context-status field with the semantics of
 [float="center",align="center",width="100%",cols="^8%,<8%,<84%",options="header"]
 |===
 |Value |Name |Meaning
-|   0   | Off     | ACE disabled. The ACE state is inaccessible. Executing any ACE instruction or accessing any ACE-specific CSR raises an illegal-instruction exception.
+|   0   | Off     | ACE disabled. The ACE state is inaccessible. Executing any ACE instruction or accessing any ACE-specific CSR raises an ACE exception `ace_exc_CR_off`.
 |   1   | Initial | ACE enabled. No CR or the ACEIOBUF is configured. The hart may issue any ACE instruction.
 |   2   | Clean   | ACE enabled. At least one CR or ACEIOBUF is configured; state matches the last context swap.
 |   3   | Dirty   | ACE enabled. At least one CR, ACEIOBUF, or ACE-specific CSR may have changed since the last context swap.
@@ -194,7 +168,7 @@ any state changes must be explicit and must precede such a write.
 
 In implementations with a writable `misa.L`, the `mstatus.ACES` field may be present even when `misa.L` is clear, analogously to `mstatus.FS` and `mstatus.VS`.
 
-The value of this field upon a reset is _Off_.
+The value of this field upon a reset is Off.
 
 [NOTE]
 ====
@@ -227,7 +201,7 @@ In implementations with a writable `misa.L`, `vsstatus.ACES` may be present even
 NOTE: `mstatus.ACES` and `vsstatus.ACES` are not considered ACE context state
 for the purposes of state tracking, and hence writes to `vsstatus.ACES` do not set `mstatus.ACES` to Dirty.
 
-The value of this field upon a reset is _Off_.
+The value of this field upon a reset is Off.
 
 
 // ////////////////////////////////////////////////////////////////////
@@ -249,14 +223,14 @@ For each of these 3 CSRs:
 .Encoding of the `*lcrstatus` bits
 [float="center",align="center",width="100%",cols="^8%,<12%,<80%",options="header"]
 |===
-| Value | Name             | Behavior
-|   0   | _Off_            | The CR is inaccessible.
-|   1   | _Initial_        | The CR is accessible and in an initial state as defined by software.
-|   2   | _Clean_          | The CR is accessible and its state matches the last context swap.
-|   3   | _Dirty_          | The CR is accessible and its state may not match the last context swap.
+| Value | Name           | Behavior
+|   0   | Off            | The CR is inaccessible.
+|   1   | Initial        | The CR is accessible and in an initial state as defined by software.
+|   2   | Clean          | The CR is accessible and its state matches the last context swap.
+|   3   | Dirty          | The CR is accessible and its state may not match the last context swap.
 |===
 
-`*lcrstatus` is evaluated only if the ACE instruction does not trigger an illegal-instruction exception (i.e., both `mstatus.ACES` and `vsstatus.ACES` are not _Off_).
+`*lcrstatus` is evaluated only if the ACE instruction does not trigger an illegal-instruction exception (i.e., both `mstatus.ACES` and `vsstatus.ACES` are not Off).
 
 For `mlcrstatus`:::
 +
@@ -326,7 +300,7 @@ EE manager may do that by keeping keys from other contexts in the ACE unit or
 by postponing import until the key is actually used in the EE.
 
 The design of ACE accelerates that by providing two mechanisms:
-1. Trap any access to a selected CR by setting `*lcrstatus` field to _Off_.
+1. Trap any access to a selected CR by setting `*lcrstatus` field to Off.
 2. Trap import failures because of insufficient ACE CR file space.
 
 There are two additional possible designs that we intentionally did not implement:
@@ -335,7 +309,7 @@ There are two additional possible designs that we intentionally did not implemen
 
 A few examples follow, to give a better idea on how software stack can manage the state.
 
-.Simplest example for slcrstatus _Off_
+.Simplest example for slcrstatus Off
 [plantuml, ,svg]
 ....
 @startuml
@@ -353,11 +327,11 @@ autonumber
 participant "S" as S
 participant "U" as U
 
-note over S,U : slcrstatus.CR0 is _Off_
+note over S,U : slcrstatus.CR0 is Off
 
 U -> S : `ace_exc_CR_off` trap because U-mode accesses CR0
 
-note over S : manipulates `CR0` and sets slcrstatus.CR0 to _Clean_
+note over S : manipulates `CR0` and sets slcrstatus.CR0 to Clean
 
 S -> U : sret
 
@@ -384,9 +358,9 @@ autonumber
 participant "S" as S
 participant "U" as U
 
-note over S,U : slcrstatus.CR0 is _Off_ and belongs to a\ndifferent U-mode context, slcrstatus.CR1 is not _Off_
+note over S,U : slcrstatus.CR0 is Off and belongs to a\ndifferent U-mode context, slcrstatus.CR1 is not Off
 
-U -> S : `ace_exc_out_of_mem` trap because U-mode imports CR1,\nbut there is not enough space for it in the file
+U -> S : `ace_exc_out_of_memory` trap because U-mode imports CR1,\nbut there is not enough space for it in the file
 
 note over S : exports and then clears `CR0`
 
@@ -415,10 +389,10 @@ autonumber
 participant "S" as S
 participant "U" as U
 
-note over S,U : slcrstatus.CR0 and slcrstatus.CR1 are not _Off_
+note over S,U : slcrstatus.CR0 and slcrstatus.CR1 are not Off
 note over U : U-mode imports CR1, but there is not enough space for it in the file
 
-U -> S : `ace_exc_out_of_mem` trap
+U -> S : `ace_exc_out_of_memory` trap
 
 S -> U : inject the trap as U-mode signal
 
@@ -427,7 +401,7 @@ note over U : U-mode signal handler clears CR0 and\nthen successfully imports CR
 ....
 
 
-.Nested example with accelerated trap delegation for slcrstatus _Off_
+.Nested example with accelerated trap delegation for slcrstatus Off
 [plantuml, ,svg]
 ....
 @startuml
@@ -447,18 +421,18 @@ participant "HS-mode" as HS
 participant "VS-mode" as VS
 participant "VU-mode" as VU
 
-note across : "`mlcrstatus.CR0` is _Off_,  slcrstatus.CR0 is _Clean_, `vslcrstatus.CR0` is _Off_"
+note across : "`mlcrstatus.CR0` is Off,  slcrstatus.CR0 is Clean, `vslcrstatus.CR0` is Off"
 
 VU -> M : `ace_exc_CR_off` trap because VU-mode accesses CR0
 
-note over M : manipulates `CR0` and sets `mlcrstatus.CR0` to _Clean_
+note over M : manipulates `CR0` and sets `mlcrstatus.CR0` to Clean
 
 M -> VU : mret
 
 VU -> VS : `ace_exc_CR_off` trap because U-mode accesses CR0
 
-note over VS : manipulates `CR0` and sets `vslcrstatus.CR0` to _Clean_
-note over M, HS : VS manipulation changed `mlcrstatus.CR0` and slcrstatus.CR0 to _Dirty_
+note over VS : manipulates `CR0` and sets `vslcrstatus.CR0` to Clean
+note over M, HS : VS manipulation changed `mlcrstatus.CR0` and slcrstatus.CR0 to Dirty
 
 VS -> VU : sret
 
@@ -469,7 +443,7 @@ note over VU : U-mode successfully accesses CR0
 NOTE: The accelerated trap delegation closely depends on how traps are structured, since we will not get a separate cause for each trap (they will likely be sub-causes of an ACE unit cause).
 The delegation can only be done with the `medeleg` and `hedeleg` CSRs, which have fairly coarse granularity.
 
-.Nested example without accelerated trap delegation for slcrstatus _Off_
+.Nested example without accelerated trap delegation for slcrstatus Off
 [plantuml, ,svg]
 ....
 @startuml
@@ -489,11 +463,11 @@ participant "HS-mode" as HS
 participant "VS-mode" as VS
 participant "VU-mode" as VU
 
-note across : "mlcrstatus.CR0 is _Off_, slcrstatus.CR0 is _Clean_, vslcrstatus.CR0 is _Off_"
+note across : "mlcrstatus.CR0 is Off, slcrstatus.CR0 is Clean, vslcrstatus.CR0 is Off"
 
 VU -> M : `ace_exc_CR_off` because VU-mode accesses CR0
 
-note over M : manipulates `CR0` and sets `mlcrstatus.CR0` to _Clean_
+note over M : manipulates `CR0` and sets `mlcrstatus.CR0` to Clean
 
 M -> VU : mret
 
@@ -501,8 +475,8 @@ VU -> M : `ace_exc_CR_off` because VU-mode accesses CR0
 M -> HS : inject the trap to HS
 HS -> VS : inject the trap to VS
 
-note over VS : manipulates `CR0` and sets `vslcrstatus.CR0` to _Clean_
-note over M, HS : VS manipulation changed `mlcrstatus.CR0` and slcrstatus.CR0 to _Dirty_
+note over VS : manipulates `CR0` and sets `vslcrstatus.CR0` to Clean
+note over M, HS : VS manipulation changed `mlcrstatus.CR0` and slcrstatus.CR0 to Dirty
 
 VS -> VU : sret
 
@@ -688,36 +662,6 @@ rnote over U : Resume and\n complete config
 // ;HS gets cause=croff, sees instruction, does not have state, does not see an off, goes to next;;;VS;⇒;D (unchanged);D (unchanged);Off (unchanged)
 // ;;HS gets cause=croff, sees instruction, has state, sees off in slcrst. Loads SCC (or clear since instruction is config), set vslcrst to clean (or older crstatus?);;VU (old);⇒;D (auto);D (auto);Clean (set at end)
 // ;;;Can now use because Clean ⇒ Authoritative;VU (new=old);⇒;;;
-
-
-==== Use of ``*crstatus`` for Lazy Context Switching and CR Loading
-
-_This section is non-normative._
-
-VM migration can become an issue when the destination machine has a smaller CRF than the source machine.  In such cases, migration may fail, or guest software may be forced to terminate processes.  A lazy-loading mechanism for CRs can mitigate this issue. In addition to reducing context-switch overhead, it enables CRF oversubscription and supports migration to systems with smaller CRFs.
-
-When a context-switch handler chooses not to restore a configured register ``K(``__i__``)``  during context restoration, it sets  _X_``crstatus``(__i__)  to Lazy instead. While a CR is marked Lazy, any operation that requires its current value—including export and cryptographic use—raises exception `ace_exc_CR_other`.
-Operations that overwrite the CR, such as clear, provisioning, or import, do not cause a trap.
-
-Lazy context switching defers restoration of a CR from its saved SCC.
-The authoritative value remains stored in the SCC, while the CR itself remains unconfigured.
-When software subsequently accesses the CR, the trap handler restores its value by importing the SCC.
-
-If there is insufficient CRF available when the SCC is imported, the trap handler selects another configured CR, exports its state to an SCC, marks it Lazy and frees it, and then restores the requested CR. The policy used to select the CR to be evicted is implementation-defined or software-defined.
-
-As execution may be interrupted by any higher-privilege mode, the architecture needs to be able to determine which privilege mode currently holds the authoritative SCC for a lazily restored CR:
-
-. Let __B__ be a privilege mode and __A__ a higher privileged mode.
-Suppose an exception handler executing in __A__-Mode has saved CR ``K(``__i__``)`` on behalf of software running in __B__-mode.
-At context restore, the exception handler may choose not to restore the CR, but to set __A__``crstatus``(__i__) to _Lazy_ instead.
-Then, it unconfigures ``K(``__i__``)``, causing the hardware to set __X__``crstatus``(__i__) to Dirty for all privilege modes __X__ above __A__.
-
-. Consequently, the authoritative SCC for ``K(``__i__``)`` resides in the highest privilege mode __C__ such that __C__``crstatus``(__i__) = Lazy.
-
-. If the software in __B__-mode later accesses ``K(``__i__``)``, the lazy-reload trap handlers search privilege modes from M-mode downward. The first mode __X__ for which __X__``crstatus``(__i__) = Lazy holds the authoritative SCC.  That mode thus restores ``K(``__i__``)`` from its saved SCC.
-// If__X__``crstatus``(__i__) is not Lazy, trap handling continues in the next lower privilege mode.
-
-Besides being a context-switching optimization, this feature enables support for VM migration when the destination platform lacks sufficient CRF capacity to restore all SCCs saved by the originating hypervisor.
 
 ////
 
