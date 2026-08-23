@@ -433,7 +433,7 @@ The architected values of _State_ common to all algorithms are defined in the fo
 [float="center",align="center",width="100%",cols="^7%,<28%,<16%,<49%",options="header"]
 |===
 | Value | Mnemonic                  | State Name     | Description
-|   1   | `ace_state_ready`         | _Ready_        | The state of a just provisioned CC; ready for operation.
+|   1   | `ace_state_ready`         | _Ready_        | The state of a just provisioned CC; ready for operation. No `ace.exec` instruction may be executed in this state.
 | 2-21  3+| Defined by the specification of the Algorithm encoded in the _Algorithm_ field.
 |  22   | `ace_state_success`       | _Success_      | Algorithm completed successfully. No further cryptographic operations may be performed until the CR is reconfigured or transitioned to _Ready_.
 |  23   | `ace_state_failure`       | _Failure_      | Failure in an algorithm, usually an authentication failure in AE(AD) algorithms or a signature verification failure. No further cryptographic operations may be performed until the CR is reconfigured or transitioned to _Ready_.
@@ -453,6 +453,8 @@ The architected values of _State_ common to all algorithms are defined in the fo
 |===
 
 State 0 is the _Unconfigured_ state.  It denotes that the CR is unconfigured.
+
+All algorithms must support State _Ready_.
 
 All states in the range 1-23 are termed _valid_. This includes both _Success_ and _Failure_ states, which must be used for
 normal completion of an algorithm in the cases of its successful completion or failure.
@@ -875,8 +877,8 @@ In other cases, an illegal-instruction exception may be raised by other conditio
  . Use of the zero register `X0` as a CR indirect index unless explicitly allowed to encode special cases.
  . Access to ACE specific CSRs if the ACE extension is not present or if an ACES field is Off, or if a CSK has not been configured.
  . Issuing `ace.load`, `ace.store`, or `ace.mv` on a CR with _ConfigStatus_ equal to `ace_cfgst_complete`.
- . Use an an odd register number in RV32 when a register pair is expected.
- . Use of a vector-version of any ACE instruction when the V extension is not enabled.
+ . Use an odd register number in RV32 when a register pair is expected.
+ . Use of a vector-version of any ACE instruction when the vector extension (or RVV-mini) is not enabled.
  . Instruction Form not allowed at a certain point in an algorithm, see <<ACE-usage-input-output>> and <<ACE-algorithms>>.
 --
 
@@ -2713,6 +2715,19 @@ The usage and ordering of the alternative sequences are not enforced architectur
 Thus, the caller may omit `ace.input` or `ace.output`, meaning that the contents of the ACEIOBUF are reused, or the output is ignored.
 This does not expand the attack surface, since the caller always retains full control over the data passed to ACE instructions and their outputs.
 Instead, the ACE architecture defines the following rules:
+
+// ////////////////////////////////////////////////////////////////////
+
+[[ACE-derive-usage]]
+=== Rules for ace.derive to pipe output of an algorithm into another algorithm
+
+A Form B `ace.exec` can be replaced by an `ace.derive` followed by a Form D `ace.exec` instruction.
+
+A Form A `ace.exec` can be replaced by an `ace.derive` followed by either a Form C `ace.exec` OR a Form D `ace.exec` and an `ace.output` instruction.
+
+If the data derived from the algorithm in the source CR has a fixed size, `ace.derive` may be of Form A, else Form B shall be used with the auxiliary parameter determining the size in bits of the piped data.
+
+If `ace.derive` is used to inject key material into a destination CR, the latter must be in State _Ready_.
 
 // ////////////////////////////////////////////////////////////////////
 
