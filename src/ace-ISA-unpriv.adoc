@@ -441,7 +441,7 @@ The architected values of _State_ common to all algorithms are defined in the fo
 |===
 |  24    | `ace_state_unsupported`         | _Unsupported_     | Not supported (i.e., not implemented) algorithm.
 |  25    | `ace_state_invalid`             | _Invalid_         | The CR transitions to Error State _Invalid_.
-|  26    | `ace_state_out_of_memory`       | _Out_of_Memory_   | Insufficient CRF memory for a configuration instruction. This may be set by privileged code if it does not handle CR allocation or fails to do so, returning an error instead.
+|  26    | `ace_state_out_of_memory`       | _Out of Memory_   | Insufficient CRF memory for a configuration instruction. This may be set by privileged code if it does not handle CR allocation or fails to do so, returning an error instead.
 |  27    | `ace_state_import_auth`         | _Authentication Failed_     | Authentication failure while completing an SCC import.
 |  28    | `ace_state_privilege_violation` | _Privilege Violation_       | Violation of Usage Control policies.
 |  29    | `ace_state_expired`             | _Expired_         | The CR has expired.
@@ -863,11 +863,13 @@ The error conditions in <<ACE-exception-error-correspondence>> are placed in the
 
 Conversely, exception handlers must set a CR's _State_ to Error State
 _Unsupported_,
-_Out_of_Memory_, resp.,
-_privilege_violation_
+_Out of Memory_, resp.,
+_Privilege Violation_
 when the following three conditions are met: they cannot resolve exception
-`ace_exc_unsupported`,`ace_exc_out_of_memory`, resp.,
+`ace_exc_unsupported`,
+`ace_exc_out_of_memory`, resp.,
 `ace_exc_privilege_violation`; cannot forward it to another handler, including an in-process handler; and do not suppress the process that caused it.
+In that case the handler must also resume execution at the instruction following the trapping one, by advancing `xepc`; otherwise the same exception is raised again.
 
 In the following, as well
 as in <<ACE-algorithms>>, <<ACE-priv>>, and <<ACE-pseudocode-examples>>,
@@ -937,16 +939,9 @@ The following conditions cause a transition to Error State _Invalid_:
 The following conditions cause a transition to Error State _Expired_:
 
 [start=4]
- . An `ace.setst` or an `ace.exec` instruction is issued on an expired CR.
- . If, upon resumption of interrupted operations, the CR has expired.
-
-The following conditions cause a transition to Error State _Expired_:
-
-[start=6]
-. Any usage instruction is issued with an expired CR.
-. `ace.derive` instruction is issued with an expired source or target CR:
-   the expiration check is performed on both the source and target CRs and
-   whenever either CR has expired is is transitioned to Error State _Expired_.
+ . An `ace.setst` or an `ace.exec` instruction is issued with an expired CR.
+ . If, upon resumption of interrupted usage operations, the CR has expired.
+ . The same rules apply to `ace.derive`, where the source CR and the destination CR are considered and handled independently.
 --
 
 Algorithmic Errors:::
@@ -972,7 +967,8 @@ The error condition's CR-state effects apply unchanged.
 In case an illegal-instruction exception or an ACE exception is raised,
 the trapped instruction does not retire and `xepc` holds its address.
 
-Unlike ordinary RISC-V exceptions, an ACE exception _does_ commit the specified CR-state effects before the trap is taken; re-execution of the same instruction therefore observes the updated CR state.  This is reflected in the updated `ace.exec` semantics when issued on several blocks.  Therefore, a restart of `ace.exec` should not be forced.
+Unlike ordinary RISC-V exceptions, an ACE exception _does_ commit the specified CR-state effects before the trap is taken; re-execution of the same instruction therefore observes the updated CR state.
+// This is reflected in the updated `ace.exec` semantics when issued on several blocks.  Therefore, a restart of `ace.exec` should not be forced.
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -1154,8 +1150,7 @@ The following policy applies to `acestart`:
 `acestart` cannot be larger than `aceiobuftop`.
 If a value larger than `aceiobuftop` is written to `acestart`, `acestart` will be set to `aceiobuftop`.
 
-For certain algorithms, writing zero to `acestart` to force a full restart of `ace.exec` may lead
-to inconsistent or unpredictable results.
+For certain algorithms, writing zero to `acestart` to force a full restart of `ace.exec` may lead to inconsistent or unpredictable results and is not permitted once per-block state effects have been committed (see <<ACE-resumability-memory-model>>).
 Also, writing a value that is invalid or unsupported for a given Algorithm may still cause the CR to transitions to Error State _Invalid_
 when an instruction is later issued or restarted.
 
@@ -2717,8 +2712,6 @@ All computation and all other state changes remain in `ace.exec`, `ace.setst`, `
 . A Form D `ace.exec` can replace any of Forms A, B, or C.
 Any input and any output will be read from or written to the ACEIOBUF if `Zklio` is available.
 If `Zklio` is not available, an illegal-instruction exception is raised.
-// When an Algorithm expects any of Forms A, B, or C but a Form D `ace.exec` is issued, the
-// ACEIOBUF must be used for both input and output if `Zklio` is available. Otherwise, an illegal-instruction exception is raised.
 
 .. Form A `ace.exec` cannot be replaced by Form B: the input cannot be read from a vector register while the output is written to the ACEIOBUF. Such an attempt raises an illegal-instruction exception.
 
@@ -2825,9 +2818,9 @@ The ACE unit sends commands to the LSU to read and write memory sequentially—a
 
 However, the same code must work correctly regardless of which order the LSU chooses, because the latter is a microarchitectural aspect.
 
-An implementation always has the option to restart a
-`ace.load`, `ace.store`, `ace.input`, `ace.output`, and `ace.exec`
-operation instead of resuming it, for any reason, and may ignore and clear `acestart`, with following exception:
+An implementation always has the option to restart an
+`ace.load`, `ace.store`, `ace.input`, `ace.output`, or `ace.exec`
+operation instead of resuming it, for any reason, and may ignore and clear `acestart`, with the following exception:
 Once the per-block state effects of a multi-block `ace.exec` have been committed, neither the implementation nor software may restart it from the beginning; it must be resumed from `acestart`.
 The ACE instructions are designed so that the same instruction sequences work correctly when this rule is respected and on every ACE implementation.
 
