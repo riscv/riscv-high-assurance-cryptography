@@ -439,7 +439,7 @@ The architected values of _State_ common to all algorithms are defined in the fo
 .Global CC State Numbers: Error States
 [float="center",align="center",width="100%",cols="^7%,<28%,<16%,<49%"]
 |===
-|  24    | `ace_state_unsupported`         | _Not_Impl_        | Not implemented algorithm. It is set by the hardware upon an attempt to provision or import a CR that is not supported by the implementation.  ACE exception `ace_exc_unsupported` is also raised, whereby an exception handler may set up the CR for trap-on-access to provide emulated support for the algorithm, or leave the Error State unchanged.
+|  24    | `ace_state_unsupported`         | _Not_Impl_        | Not implemented algorithm.
 |  25    | `ace_state_invalid`             | _Invalid_         | The CR transitions to Error State _Invalid.
 |  26    | `ace_state_out_of_memory`       | _Out_of_Memory_   | Insufficient CRF memory for a configuration instruction. This may be set by privileged code if it does not handle CR allocation or fails to do so, returning an error instead.
 |  27    | `ace_state_import_auth`         | _Auth_Failed_     | Authentication failure while completing an SCC import.
@@ -655,10 +655,15 @@ The admissible values of this field are given in the table below.
 |   3   | `ace_cfgst_exporting`     | The CR has been placed in exporting mode, i.e., its contents have been encrypted and authenticated for export.
 |===
 
-Usage and cloning of a CR whose _ConfigStatus_ is not `ace_cfgst_complete` are not allowed.
+Usage and cloning of a CR whose _ConfigStatus_ is not `ace_cfgst_complete` are not allowed:
+Any attempt to clone a CR whose _ConfigStatus_ is not `ace_cfgst_complete` will raise ACE exception `ace_exc_privilege_violation`.
 
-Any attempt to use or clone a CR whose _ConfigStatus_ is not `ace_cfgst_complete` will raise ACE exception `ace_exc_CR_off`
-(<ACE-error-architecture>> for the behavior when the Privileged Architecture is not implemented).
+Any attempt to use a CR whose _ConfigStatus_ is not `ace_cfgst_complete` will raise ACE exception `ace_exc_privilege_violation`, where certain instructions in this case are not considered _usage_ and thus can be issued, namely: `ace.mgmt`; `ace.load`,
+  `ace.store`, and `ace.mv` (each gated on the _ConfigStatus_ values named
+  in its own description); `ace.size`; `ace.getmd*` and `ace.getst`;
+  `ace.setst` with `#immed7` equal to `ace_state_unconfigured` or an Error
+  State (hence `ace.clear` and `ace.reset`).
+See <ACE-error-architecture>> for the behavior when the Privileged Architecture is not implemented.
 
 The information contained in this field must _not_ affect any of the lengths of <<ACE-length-rule>>.
 
@@ -775,7 +780,7 @@ The _ExpirationDate_ field is evaluated normatively at the following points:
 * At the dispatch and initiation of every usage instruction (every `ace.exec` instruction); and
 * Upon resumption of an interrupted multi-step operation (such as multi-block hashing, point multiplication, or PQC key generation, signing, and verification after an interrupt or context reload).
 
-If the secure clock indicates that the expiration date has passed at any of these evaluation points, the hardware immediately transitions the CR's _State_ field to `ace_state_expired`, invalidates all intermediate computational state, and performs all Error State actions. These include implementation-specific tasks such as releasing CRF capacity held by the Content.
+If the secure clock indicates that the expiration date has passed at any of these evaluation points, the hardware immediately transitions the CR's _State_ field to Error State `ace_state_expired`, invalidates all intermediate computational state, and performs all Error State actions. These include implementation-specific tasks such as releasing CRF capacity held by the Content.
 
 Management operations, such as exporting (`ace.store`), clearing (`ace.clear`), cloning, or obtaining the size of the exported CR (`ace.size`), do not perform this check. Specifically, the check is skipped when _ConfigStatus_ is not `ace_cfgst_complete`. Consequently, an ACE exception `ace_exc_expired`
 (see <<ACE-error-architecture>> for the behavior when the Privileged Architecture is not implemented.)
@@ -842,15 +847,6 @@ NOTE: `Ztso` only imposes RVTSO at the instruction level; intra-instruction orde
 First of all, we address the behavior of ACE in case of error when the ACE Privileged Architecture is not implemented.
 In this case, ACE exceptions are replaced by direct transitions of the CR to an Error State, per the mapping in <<ACE-exception-error-correspondence>>.
 
-Conversely, exception handlers must set a CR's _State_ to Error State
-`ace_state_unsupported`,
-`ace_state_out_of_memory`, resp.,
-`ace_state_privilege_violation`
-when the following three conditions are met: they cannot resolve exception
-`ace_exc_unsupported`,
-`ace_exc_out_of_memory`, resp.,
-`ace_exc_privilege_violation`; cannot forward it to another handler, including an in-process handler; and do not suppress the process that caused it.
-
 [[ACE-exception-error-correspondence]]
 .Behavior upon exception conditions when the Privileged Architecture is not available.
 [%autowidth,float="center",align="center",options="header"]
@@ -861,10 +857,19 @@ when the following three conditions are met: they cannot resolve exception
 | `ace_exc_CR_off`                        | Does not apply without Privileged Architecture, since the `*lcrstatus` CSRs are not available.
 | `ace_exc_out_of_memory`                 | Transition to Error State `ace_state_out_of_memory`.
 | `ace_exc_privilege_violation`           | Transition to Error State `ace_state_privilege_violation`.
+| `ace_exc_expired`                       | Transition to Error State `ace_state_expired`.
 | `ace_exc_unconfigured_buffer`           | When an ACE instruction is issued that uses the CR with the ACEIOBUF, transition that CR to Error State `ace_state_invalid`.
 |===
-
 The error conditions in <<ACE-exception-error-correspondence>> are placed in their natural priority order.
+
+Conversely, exception handlers must set a CR's _State_ to Error State
+`ace_state_unsupported`,
+`ace_state_out_of_memory`, resp.,
+`ace_state_privilege_violation`
+when the following three conditions are met: they cannot resolve exception
+`ace_exc_unsupported`,
+`ace_exc_out_of_memory`, resp.,
+`ace_exc_privilege_violation`; cannot forward it to another handler, including an in-process handler; and do not suppress the process that caused it.
 
 In the following, as well
 as in <<ACE-algorithms>>, <<ACE-priv>>, and <<ACE-pseudocode-examples>>,
@@ -897,7 +902,7 @@ This category has the second highest priority, and comprises following condition
  . Issuing `ace.load`, `ace.store`, or `ace.mv` on a CR with _ConfigStatus_ equal to `ace_cfgst_complete`.
  . Use an odd register number in RV32 when a register pair is expected.
  . Use of a vector-version of any ACE instruction with the vector extension (or RVV-mini) not enabled.
- . Instruction Form not allowed at a certain point in an algorithm, see <<ACE-usage-input-output>> and <<ACE-algorithms>>.
+ . An instruction Form that the Algorithm bound to the CR does not accept in its current state, see <<ACE-usage-input-output>> and <<ACE-algorithms>>.
 --
 
 Unsupported Algorithms:::
@@ -937,6 +942,22 @@ Algorithmic errors may occur in import processes or in the cryptographic operati
 
 We note that successful or failed verification of an authentication tag in an AEAD algorithm or of a signature is _not_ an algorithmic error, as the algorithm is performing as expected.
 --
+
+In any outcome other than the execution of the instruction,
+the instruction writes no vector register, no GPR, no ACEIOBUF octet, and
+no memory location. The exception to this rule is: when a block-iterated `ace.exec`
+(<<ACE-resumability>>) encounters an error condition after fully
+processing `j` {ge} 1 blocks, the outputs of those `j` blocks remain
+written, the failing block and all later blocks are not written in any
+part, and `acestart` holds the octet count of the `j` completed blocks.
+The row's CR-state effects apply unchanged.
+
+In case an illegal-instruction exception or an ACE exception is raised,
+the trapped instruction does not retire and `xepc` holds its address.
+// Unlike ordinary RISC-V exceptions, an ACE exception ACE outcome _ commit the CR-state effects
+//   listed in its row before the trap is taken; re-execution of the same
+//   instruction therefore observes the updated CR state. This deviation is
+//   deliberate and implementations must not suppress these effects.
 
 // ////////////////////////////////////////////////////////////////////
 
