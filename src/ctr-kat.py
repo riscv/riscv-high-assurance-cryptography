@@ -52,7 +52,7 @@ def ref_xctr(K, iv, ctr0, P):
 
 
 # ----------------------------------------------- ACE: the spec's own formulation
-def ace_keystream(K, IVv, n, j, nblocks, form):
+def ace_keystream(K, IVv, n, j, nblocks, form, ctr0=0):
     """State _Operate_ of <<ACE-keystream-modes>> in the ACE value model.
 
     form 'ctr' : tmp <- keystream_block(bswap(ctr) @ IV)      as now specified
@@ -60,7 +60,7 @@ def ace_keystream(K, IVv, n, j, nblocks, form):
     form 'xctr': tmp <- keystream_block(IV xor ctr)           X modes
     Each iteration then does tick_ctr() and emits tmp.
     """
-    ks, ctr = b'', 0
+    ks, ctr = b'', ctr0
     for _ in range(nblocks):
         if form == 'ctr':
             blk = cat((bswap(ctr, j), j), (IVv, n))
@@ -126,7 +126,20 @@ differ = (ace_keystream(KEY, b2v(nonce), 96, 32, 2, 'ctr')
 print(f'CTR and XCTR produce different keystreams           : '
       f'{"PASS" if differ else "FAIL"}')
 
-ok = anchor_ok and ctr_ok and old_caught and xctr_ok and differ
+# ------------------- set initial counter (`ctr <- lsb_j(Xs)`, <<ACE-keystream-modes>>)
+sic_ok = True
+for n, j in ((96, 32), (64, 64)):
+    nonce = bytes(range(1, n // 8 + 1))
+    for k in (1, 7, (1 << j) - 3):
+        ref = ref_ctr(KEY, nonce, j, k, bytes(16 * 2))
+        ace = ace_keystream(KEY, b2v(nonce), n, j, 2, 'ctr', ctr0=k)
+        sic_ok &= ref == ace
+ref = ref_xctr(KEY, bytes(range(16)), 5, bytes(32))
+sic_ok &= ref == ace_keystream(KEY, b2v(bytes(range(16))), 128, 128, 2, 'xctr', ctr0=5)
+print(f'set initial counter matches REF at that offset      : '
+      f'{"PASS" if sic_ok else "FAIL"}')
+
+ok = anchor_ok and ctr_ok and old_caught and xctr_ok and differ and sic_ok
 print(f'\nREF matches SP 800-38A F.5.1                        : {anchor_ok}')
 print(f'ACE (as specified) matches REF over 4 n/j splits    : {ctr_ok}')
 print(f'OLD (`IV @ ctr`) is caught                          : {old_caught}')
