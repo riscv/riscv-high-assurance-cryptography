@@ -3047,7 +3047,8 @@ these curves do not use `RndNum` (cf. <<ACE-EdDSA>>).
 Depending on the specification of the algorithm, non-compressed or compressed points may be used.
 
 All curves specified here are defined over prime fields.
-Since the all-ones strings do not represent any valid field value, they are used as coordinate value(s) of a point to represent the point at infinity.
+Since the all-ones `b`-bit string does not represent any valid field value, it is used as the coordinate value(s) of a point to represent the point at infinity.
+For secp521r1 this sentinel is exempt from the rule that the 55 most significant bits of a coordinate be zero.
 --
 
 //
@@ -3104,9 +3105,10 @@ Data Structures:::
     operations in octets, cleared on every state change.
  ** `Generator` (X, {Y}): one or two `b`-bit strings representing the X {and Y} coordinate{s}.
  ** `SecondPt` (X, {Y}): one or two `b`-bit strings representing the X {and Y} coordinate{s}.
+    For signature verification and for multiplication by an unknown point, `SecondPt`
+    holds the public key, resp., the peer point.
  ** `Scalar`: `b`-bit string.
  ** If signature generation or verification is allowed:
-  *** `PublicKey` (X, {Y}): one or two `b`-bit strings representing the X {and Y} coordinate{s}}.
   *** `Signature` (R,S): two `b`-bit strings representing the `R` and `S` components.
   *** `Hash`: a `h`-bit string representing the hash.
  ** If signature generation or a public-key encryption mechanism are allowed:
@@ -3182,11 +3184,12 @@ ECC algorithms define:
  ** One can freely transition between _Set_Generator_, _Set_Scalar_, _Set_Hash_, and _Set_SecondPt_.
  ** From any of _Ready_, _Set_Generator_, _Set_Scalar_, _Set_Hash_, _Set_SecondPt_ -> one of:
   *** _Point_Mul_;
-  *** _Sign_Generate_ only if `HasSecondPt` and `HasHash` hold *and* `Scalar` holds a
+  *** _Sign_Generate_ only if `HasHash` holds *and* `Scalar` holds a
       configured private key, that is `1` {le} `int(Scalar)` `<` `n`, where `n` is the order
       of the group. A freshly provisioned CC has `Scalar` = 0 and so does not qualify.
       Attempting to enter State _Sign_Generate_ via `ace.setst` without a configured private key
       causes the CR to transition to Error State _Invalid_.
+    (For the EdDSA curves, <<ACE-EdDSA>>, the behavior is different.)
   *** _Sign_Verify_ only if `HasSecondPt`, `HasHash`, and `HasSignature`.
  ** _Point_Mul_ -> _Output_.
  ** _Sign_Generate_ -> _Output_ -> _Success_.
@@ -3245,6 +3248,43 @@ therefore needs no flag.
 if `r` = 0, if `r` + `k` = `n`, or if `s` = 0.
 
   *** The Edwards curves do not use a random secret and thus do not have retry rules.
+
+ ** In State _Point_Mul_, a single Form D ``ace.exec Kn|K{Xn}`` performs a scalar
+    multiplication:
+
+  . If `Scalar` does not hold a value with `1` {le} `int(Scalar)` < `n`, the CR
+    transitions to Error State _Invalid_.
+  . The base point `P` is `SecondPt` if `HasSecondPt` is set (multiplication by an
+    unknown point, e.g., a Diffie-Hellman peer value), and `Generator` otherwise
+    (multiplication of the known base, e.g., public-key generation).
+  . The implementation must verify that `P` is a point of the curve, and, where the
+    cofactor is not 1, of the prime-order subgroup; if not, the CR transitions to
+    Error State _Invalid_.
+  . `SecondPt` {leftarrow} `int(Scalar)` {interpunct} `P`, encoded as in
+    <<ACE-ECC>> (the point at infinity by its sentinel value), and `HasSecondPt` is
+    set.
+  . `OutputType` {leftarrow} False, and the state transitions to _Output_.
+
+ ** In State _Sign_Generate_, a single Form D ``ace.exec Kn|K{Xn}`` generates a
+    signature over the base point `Generator`, with private key `d` = `int(Scalar)`
+    and message value `e` = `int(Hash)`:
+
+  . For the NIST and Brainpool curves, the signature (`r`, `s`) is computed as
+    specified in cite:[nist-fips-186-5] {sect}6.4.1; for SM2, as specified in
+    cite:[GMT-0003-2-2012]. The per-signature secret `k` is drawn from the RBG
+    (<<ACE-RBG>>) into `RndNum`, with `HasRndNum` set for the duration of the
+    operation, and the retry rules above apply.
+  . On completion, `Signature` {leftarrow} (`r`, `s`) and `HasSignature` is set;
+    `RndNum` is destroyed and `HasRndNum` cleared.
+  . `OutputType` {leftarrow} True, and the state transitions to _Output_.
+
+ ** In State _Sign_Verify_, a single Form D ``ace.exec Kn|K{Xn}`` verifies
+    `Signature` against the public key held in `SecondPt` and the message value
+    `e` = `int(Hash)`, as specified in cite:[nist-fips-186-5] {sect}6.4.2 for the
+    NIST and Brainpool curves and in cite:[GMT-0003-2-2012] for SM2. All checks
+    those specifications require — the ranges of `r` and `s`, and the validity of
+    the public key as a curve point — are performed; if any fails, or the signature
+    equation does not hold, the state transitions to _Failure_, else to _Success_.
 
  ** When the operations in states _Point_Mul_ and _Sign_Generate_ are completed, the state transitions to _Output_ and:
    . If the output is a point, then `OutputType` <- False, and if the output is a signature, then `OutputType` <- True.
@@ -3325,7 +3365,7 @@ offers depends on the hash extensions it provides:
 The curve extension alone must provide enough of `H` to hash the fixed-size inputs above,
 which are a few hundred octets at most. Absorbing a message of arbitrary length is what
 requires the general hashing machinery, and hence `Zklesha2h` or `Zklesha3h`, respectively. Requesting
-pure mode on an implementation that lacks it transitions the CR to Error State ``.
+pure mode on an implementation that lacks it transitions the CR to Error State `ace_state_unsupported`.
 --
 
 Data Structures:::
@@ -3334,9 +3374,15 @@ Data Structures:::
 In addition to the fields of <<ACE-ECC>>:
 
 * `ctx`: 255 octets, and `ctxlen`: 8 bits, the context string of cite:[RFC8032]. It is
-  optional for ed25519 and mandatory, though possibly empty, for ed448.
+  optional for ed25519 and mandatory, though possibly empty, for ed448. Both are zero
+  upon provisioning and upon entering State _Ready_, and are set in State _Set_Ctx_.
 * `msg_pass`: 8 bits, the number of message-absorption passes completed.
-* `PreHash`: Boolean, selecting pre-hash mode.
+* `r`: `b` bits, the secret scalar produced by the first signing pass, reduced modulo the
+  group order `L`. Like `RndNum` for the ECDSA curves, it never leaves the CR except in
+  the encrypted part of an SCC while a signing operation is in progress.
+
+There is no stored pre-hash mode selector: the mode is inferred from the path taken, as
+described below.
 
 `RndNum` is *not* used, and `HasRndNum` is never set: the EdDSA nonce is deterministic by
 construction, being derived from `prefix` and the message. Its absence is deliberate.
@@ -3344,38 +3390,100 @@ construction, being derived from `prefix` and the message. Its absence is delibe
 The clamped scalar `s` and the 32-octet or 57-octet `prefix`, respectively, are derived from the seed
 by hashing it with `H`, as cite:[RFC8032] {sect}5.1.5 and {sect}5.2.5 prescribe. An
 implementation may recompute them on each use or cache them in the Additional Data Section;
-they are never exported in the Algorithm Data Section.
+they are never exported in the Algorithm Data Section. The public key `A` is likewise
+derived from the seed, or cached in the Additional Data Section.
+
+* *Serialized Context*: the Serialized Context of <<ACE-ECC>>, with the following fields
+  appended; `SCC_content_size()` extends past Position xiii.
++
+[%autowidth,cols="^1,<3,<5",options="header"]
+|===
+|  Pos. | Size (Bits)  | Field
+|   ix  | 8            | `ctxlen`
+|    x  | 2040         | `ctx`
+|   xi  | 8            | `msg_pass`
+|  xii  | If a signing operation is in progress (`msg_pass` {ne} 0 and _State_ is _Msg_Absorb_ or _Sign_Generate_): `b`, else 0 | `r`
+| xiii  | Variable     | Padding, to reach a multiple of 128 bits
+|===
 --
 
 State Machine:::
 
 * *States:* those of <<ACE-ECC>>, and in addition
  ** _Msg_Absorb_ (11), in which message data is absorbed.
+ ** _Set_Ctx_ (12), in which the context string is set.
+
+* *Allowed State Transitions:* those of <<ACE-ECC>>, with the following changes:
+ ** _Set_Ctx_ is reachable from, and can transition to, the same states as the _Set_
+    states of <<ACE-ECC>>.
+ ** _Msg_Absorb_ is entered from _Ready_, any _Set_ state, or _Msg_Absorb_ itself, by the
+    Form B `ace.setst` described below; the re-entry from _Msg_Absorb_ into _Msg_Absorb_
+    is an explicitly allowed same-state transition, marking a pass boundary.
+ ** The entry conditions for _Sign_Generate_ and _Sign_Verify_ of <<ACE-ECC>> are
+    replaced by those below; in particular `HasHash` is required only on the pre-hash
+    paths.
 
 * *Behavior:*
 
+** Signature generation requires *two* passes over the message, and verification one.
+   This is inherent to EdDSA, whose second hash takes `R`, which is not known until the
+   first pass has completed. `msg_pass` records the completed passes; it is cleared upon
+   entering State _Ready_.
+
+** To transition to State _Set_Ctx_, a Form B `ace.setst` is used whose auxiliary
+   argument `Xs` sets `ctxlen`. Values greater than 255 cause the CR to transition to
+   Error State _Invalid_. If `ctxlen` {ne} 0, the `ctx` value is then loaded with one or
+   more Form B `ace.exec` instructions, exactly as in the _Set_ states of <<ACE-ECC>>,
+   using `block_base` and ignoring excess data in the last transfer.
+
+** To enter State _Msg_Absorb_ (pure mode only; on an implementation that does not
+   support pure mode, see the table above), a Form B `ace.setst` is used whose auxiliary
+   argument `Xs` selects the pass:
+
+  . `Xs` = 0, *signing pass 1*: requires that signature generation be allowed and that
+    `Scalar` hold a configured seed; `msg_pass` {leftarrow} 0, and `H` is initialized
+    with `dom {vvert} prefix`.
+  . `Xs` = 1, *signing pass 2*: requires `msg_pass` = 1; `H` is initialized with
+    `dom {vvert} R {vvert} A`, with `R` from `Signature` and `A` derived from the seed.
+  . `Xs` = 2, *verification pass*: requires that signature verification be allowed and
+    that `HasSignature` and `HasSecondPt` hold; `msg_pass` {leftarrow} 0, and `H` is
+    initialized with `dom {vvert} R {vvert} A`, with `R` from `Signature` and
+    `A` = `SecondPt`.
+  . Any other value of `Xs`, or an unmet precondition, causes the CR to transition to
+    Error State _Invalid_.
+
 ** In State _Msg_Absorb_, Form B ``ace.exec`` instructions absorb message octets through
    Subalgorithm `process_VLI` (cf. <<ACE-process-VLI>>), with `process_block()` applying
-   the compression function of `H` and `finalize()` completing it. In pre-hash mode this
-   state is not used: the caller has already reduced the message to `Hash`.
+   the compression function of `H`.
 
-** Signature generation requires *two* passes over the message, and verification one. This
-   is inherent to EdDSA, whose second hash takes `R`, which is not known until the first
-   pass has completed. `msg_pass` records how many have been done and is cleared on entry
-   to _Sign_Generate_ and to _Sign_Verify_.
+** Leaving State _Msg_Absorb_ — by the same-state re-entry above or by a transition to
+   another state — finalizes the current pass:
+  . after pass `Xs` = 0: `r` {leftarrow} `H(dom {vvert} prefix {vvert} M) mod L`,
+    `Signature.R` {leftarrow} `r` {interpunct} `B`, and `msg_pass` {leftarrow} 1
+    (`HasSignature` is *not* set: `Signature.R` holds an intermediate value);
+  . after pass `Xs` = 1: `k'` {leftarrow} `H(dom {vvert} R {vvert} A {vvert} M)` and
+    `msg_pass` {leftarrow} 2;
+  . after pass `Xs` = 2: `k'` as above and `msg_pass` {leftarrow} 1.
 
-*** Pass 1, for signing, computes `r` = `H(dom {vvert} prefix {vvert} M)` and then `R` = `r`
-    {interpunct} `B`.
-*** Pass 2, for signing, computes `k'` = `H(dom {vvert} R {vvert} A {vvert} M)` and then
-    `S` = `(r + k'` {interpunct} `s) mod L`. The signature is the pair (`R`, `S`), which is
-    why `v` = 2 for these curves.
-*** The single pass, for verification, computes `k'` = `H(dom {vvert} R {vvert} A {vvert} M)` from the
-    `R` supplied in `Signature`, and the check is `S` {interpunct} `B` = `R + k'`
-    {interpunct} `A`.
+** In State _Sign_Generate_, a single Form D ``ace.exec Kn|K{Xn}`` completes the
+   signature per cite:[RFC8032] {sect}5.1.6, resp., {sect}5.2.6:
+  . In *pure* mode, entered with `msg_pass` = 2:
+    `S` {leftarrow} `(r + k'` {interpunct} `s) mod L`.
+  . In *pre-hash* mode, entered with `msg_pass` = 0 and `HasHash` set: both hashes are
+    computed internally over the fixed-size inputs, with `Hash` (holding `PH(M)`)
+    standing in for the message.
+  . Any other combination causes the CR to transition to Error State _Invalid_.
+  . `Signature` {leftarrow} (`R`, `S`), `HasSignature` is set, `r` is destroyed,
+    `msg_pass` {leftarrow} 0, `OutputType` {leftarrow} True, and the state transitions
+    to _Output_.
 
-** Entering _Sign_Generate_ with `msg_pass` {ne} 2 in pure mode, or _Sign_Verify_ with
-   `msg_pass` {ne} 1 in pure mode, causes the CR to transition to Error State _Invalid_.
-   In pre-hash mode `msg_pass` is not consulted, `Hash` standing in for the message in both hash computations.
+** In State _Sign_Verify_, a single Form D ``ace.exec Kn|K{Xn}`` verifies `Signature`
+   per cite:[RFC8032] {sect}5.1.7, resp., {sect}5.2.7, in *pure* mode when entered with
+   `msg_pass` = 1 and in *pre-hash* mode when entered with `msg_pass` = 0 and `HasHash`
+   set (any other combination causes the CR to transition to Error State _Invalid_).
+   All checks those sections require — the range of `S` and the validity of the
+   encodings of `R` and `A` — are performed; if any fails, or the verification equation
+   does not hold, the state transitions to _Failure_, else to _Success_.
 
 NOTE: It is the caller's responsibility to present the same message in both signing passes.
 A caller that presents different messages produces a signature that verifies against neither.
