@@ -2721,19 +2721,72 @@ Data Structures:::
 * *Provisioning Input*:
 +
 --
-[%autowidth,cols="^1,<2,<3",options="header"]
+[cols="^8%,<15%,<15%,<62%",options="header"]
 |===
-| Pos. | Size (Bits)   | Field
-|   i  | 128           | MDH
-|  ii  | 128 or 64     | `key` or System Key Identifier
-| iii  | 128           | `nonce`
+| Pos. | Size (Bits)   | Field    | Description
+|   i  | 128           | MDH      | {empty}
+|  ii  | 128 or 64     | `key`    | Key value or System Key Identifier
+| iii  | 128           | `nonce`  | {empty}
+|  iv  | 32            | `budget` | Number of blocks this CC is permitted to process, as `bin(budget,32)`. See the State Machine Behavior below.
+|   v  | 96 or 32      | Padding  | {empty}
 |===
 --
+
+* *Internal State*: {empty}
++
+--
+Same as for Ascon-AEAD128, with the addition of
+
+** `budget`: an integer in the range 0 to 2^32^-1, the number of blocks that this CC may
+   still process.
 
 In State _Ready_, words 3 and 4 of `state` are initialized thus:
 
 . `state[3] <- nonce[63:0]`
 . `state[4] <- nonce[127:64]`
+
+Upon provisioning, `budget` is set to the value carried in the Provisioning Input.
+--
+
+* *Serialized Context*: {empty}
++
+--
+The `budget` is inserted in Ascon-AEAD128's serialized context in place of the final 32-bit
+Padding field (Pos. x of <<ACE-Ascon-AEAD128>>), serialized as `bin(budget,32)`; the total
+length is unchanged.
+--
+
+* *States and Allowed Transitions:* {empty}
++
+--
+Same as for Ascon-AEAD128, with the following exception:
+
+** No transition back to State _Ready_ is allowed. This is one of the algorithm-specific
+   prohibitions contemplated by <<ACE-State-field>>: allowing it would reinstall the same
+   nonce and permit keystream reuse, which Ascon-AEAD128, unlike a misuse-resistant mode,
+   does not survive.
+--
+
+* *State Machine Behavior:* {empty}
++
+--
+The differences with respect to Ascon-AEAD128 are:
+
+ ** To transition to State _Hash_Absorb_, the ``ace.setst`` instruction must be of Form A,
+    i.e., _without any additional inputs_, since the nonce is already included in the PI.
+ ** Every `ace.exec` that *consumes* blocks decreases `budget` by the number of blocks it
+    processed, which is `ACELEN`/128 in States _Hash_Absorb_, _Encrypt_ and _Decrypt_, and
+    1 in States _Enc_Last_Block_ and _Dec_Last_Block_. The Form C `ace.exec` of State
+    _Hash_Output_ and the Form B `ace.exec` of State _Hash_Verify_ do *not* decrease
+    `budget`: they only emit, resp., compare the tag, which consumes no block.
+ ** If an `ace.exec` would decrease `budget` below zero, it performs no operation, and the
+    CR transitions to Error State _Invalid_.
+--
+
+NOTE: The rules do not forbid keeping an older copy of the SCC in memory to restart the
+state machine with a restored `budget` and use many-time pads. It is the responsibility of
+the caller to make sure that the SCC is not abused. This Algorithm only protects the
+confidentiality of the nonce, not against its reuse.
 
 Everything else is as for Ascon-AEAD128.
 
@@ -2790,7 +2843,9 @@ replaced throughout by `N xor K2`.
 
 For encryption and decryption with both nonce masking and a set nonce, the
 algorithm described in <<ACE-Ascon-AEAD128-wsn>> is used, giving `K1` as the
-key `key` and providing `N xor K2` as the nonce value.
+key `key` and providing `N xor K2` as the nonce value. All rules of
+<<ACE-Ascon-AEAD128-wsn>> apply to this combination, including the `budget`
+mechanism and the prohibition of transitions back to State _Ready_.
 
 // ////////////////////////////////////////////////////////////////////
 
