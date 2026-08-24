@@ -1113,7 +1113,10 @@ _Included in_::
 {empty}
 (((CSR, `aceiobuftop`)))
 `aceiobuftop` is an XLEN-bit URW CSR that sets the upper bound in bytes of the buffer range used by `ace.input` and `ace.output`.
-Together with `acestart` (cf. <<ACE-CSR-acestart>>), it defines the active transfer window.
+
+`aceiobuftop` plays for the ACEIOBUF the role that `VL` plays in the V extension: it defines the operand length `ACELEN` = `aceiobuftop` {times} 8 and the operand window [0, `aceiobuftop`).
+`acestart` (cf. <<ACE-CSR-acestart>>) is the position within that window at which processing starts or resumes, analogously to `vstart`; when `acestart` {ne} 0, the octets processed are those at offsets [`acestart`, `aceiobuftop`).
+Shortening an operand is done by lowering `aceiobuftop`, never by raising `acestart`.
 
 The following WARL policy applies to `aceiobuftop`:
 `aceiobuftop` cannot be larger than `aceiobuflen`.
@@ -1122,11 +1125,11 @@ Therefore, software must always check the value of `aceiobuftop` before using th
 
 Modifying `aceiobuftop` does not alter buffer contents. It allows per-operation length adjustments without reconfiguring the ACEIOBUF via `aceiobuflen`, an expensive operation that clears the buffer and may trigger internal garbage collection. This mirrors the use of `VL*SEW` reconfiguration to supply a partial “last block” or a short IV/nonce to cryptographic algorithms.
 
-Writing a value that is invalid or unsupported for a given Algorithm may still cause the CR to transitions to Error State _Invalid_ when an instruction is later issued or restarted.
-This may occur, for instance, when `aceiobuftop` − `acestart` is a length not supported by the Algorithm.
+Writing a value that is invalid or unsupported for a given Algorithm may still cause the CR to transition to Error State _Invalid_ when an instruction is later issued or restarted.
+This may occur, for instance, when `aceiobuftop` is a length not supported by the Algorithm, or when `acestart` does not correspond to an interruption point the Algorithm allows.
 
 Using an alternative sequence for `ace.exec` or `ace.setst` for any Form with an input or output
-when `aceiobuftop` − `acestart` is zero (and `aceiobuflen` nonzero) will result in no operation being performed.
+when `acestart` = `aceiobuftop` (and `aceiobuflen` nonzero) will result in no operation being performed.
 
 The value of `aceiobuftop` out of ACE unit reset is 0.
 
@@ -1160,12 +1163,17 @@ Hardware writes this register on interruption.
 A value recorded by a precise interruption is a prefix-complete point of the transfer; see <<ACE-resumability-memory-model>>.
 Software may save and restore the register across context switches.
 
+`acestart` is the position within the operand window at which processing starts or resumes, analogously to `vstart` in the V extension; for ACEIOBUF operands the window itself is always [0, `aceiobuftop`) (see <<ACE-CSR-aceiobuftop>>).
+
+Upon the successful completion of any instruction that honors `acestart`, `acestart` is set to 0.
+The only exception is `ace.mv`, which by design accumulates `acestart` across instructions to support piecewise transfers.
+
 The following policy applies to `acestart`:
 `acestart` cannot be larger than `aceiobuftop`.
 If a value larger than `aceiobuftop` is written to `acestart`, `acestart` will be set to `aceiobuftop`.
 
 For certain algorithms, writing zero to `acestart` to force a full restart of `ace.exec` may lead to inconsistent or unpredictable results and is not permitted once per-block state effects have been committed (see <<ACE-resumability-memory-model>>).
-Also, writing a value that is invalid or unsupported for a given Algorithm may still cause the CR to transitions to Error State _Invalid_
+Also, writing a value that is invalid or unsupported for a given Algorithm may still cause the CR to transition to Error State _Invalid_
 when an instruction is later issued or restarted.
 
 The value of `acestart` out of ACE unit reset is 0.
@@ -2515,11 +2523,13 @@ _Description_::
 --
 If the vector registers are not sufficiently long, or not implemented, inputs can be read directly from memory and outputs written directly to memory.
 For this reason, the architecture defines `ace.input` and `ace.output` (cf. next section).
-`ace.input` loads `Xl` bytes from memory starting at address `%offset(Xs)` and copies them to the ACEIOBUF, starting at offset `acestart`.
+`ace.input` transfers octets of the window: for each `j` from `acestart` to min(`Xl`, `aceiobuftop`) − 1, the octet at memory address `%offset(Xs)` + `j` is copied to octet `j` of the ACEIOBUF.
+Octets below `acestart` and octets at or beyond min(`Xl`, `aceiobuftop`) are not accessed on either side.
+Upon successful completion, `acestart` is set to 0.
 
-If `Xl` = 0, the operation does nothing.
+If `Xl` = 0, or `acestart` {ge} min(`Xl`, `aceiobuftop`), the operation does nothing and `acestart` is unchanged.
 
-If `Xl` is greater than `aceiobuftop` - `acestart`, only `aceiobuftop` - `acestart` are transferred and `acestart` is set to `aceiobuftop`.
+If `Xl` is greater than `aceiobuftop`, only the octets of the window are transferred; software can detect this case by comparing `Xl` with `aceiobuftop`.
 
 
 The intended usage of `ace.input` and `ace.output` is explained in detail in
@@ -2578,11 +2588,13 @@ _Description_:: {empty}
 +
 --
 This is the output operation corresponding to `ace.input`.
-`ace.output` writes the contents of the ACEIOBUF, starting at offset `acestart`, to memory starting at address `%offset(Xs)`.
+`ace.output` transfers octets of the window: for each `j` from `acestart` to min(`Xl`, `aceiobuftop`) − 1, octet `j` of the ACEIOBUF is written to memory address `%offset(Xs)` + `j`.
+Octets below `acestart` and octets at or beyond min(`Xl`, `aceiobuftop`) are not accessed on either side.
+Upon successful completion, `acestart` is set to 0.
 
-If `Xl` = 0, the operation does nothing.
+If `Xl` = 0, or `acestart` {ge} min(`Xl`, `aceiobuftop`), the operation does nothing and `acestart` is unchanged.
 
-If `Xl` is greater than `aceiobuftop` - `acestart`, only `aceiobuftop` - `acestart` are transferred and `acestart` is set to `aceiobuftop`.
+If `Xl` is greater than `aceiobuftop`, only the octets of the window are transferred; software can detect this case by comparing `Xl` with `aceiobuftop`.
 
 `ace.output` may be used only if the ACEIOBUF is enabled and `aceiobuflen` is nonzero.
 Otherwise, ACE exception `ace_exc_unconfigured_buffer` is raised.
@@ -2739,7 +2751,7 @@ the ACEIOBUF is used for the input. If `Zklio` is not available, if a Form C ins
 . Any substitution is allowed only if the ACEIOBUF is enabled and `aceiobuflen` is non-zero.
   Otherwise, ACE exception `ace_exc_unconfigured_buffer` is raised.
 +
-If `aceiobuflen` is non-zero but `aceiobuftop - acestart` is invalid for the algorithm, the CR transitions to Error State _Invalid_ if the ACEIOBUF is used as an input, whereas if it is used only as an output, then the result is undefined.
+If `aceiobuflen` is non-zero but `aceiobuftop` is a length invalid for the algorithm, or `acestart` is not an interruption point the algorithm allows, then: if the ACEIOBUF is used as an input, the CR transitions to Error State _Invalid_; if it is used only as an output, the instruction performs no operation — nothing is written and no state transition occurs.
 
 NOTE: Because of these rules, the Algorithms sections say that a certain Form of `ace.exec`, `ace.setst`, or `ace.mgmt` is _expected_ rather than _required_ (or _only [...] allowed_). The substitutions are implicit and are not restated for each occurrence.
 
