@@ -62,7 +62,7 @@ The actual numbers are TBD.
 |      | Store page fault               | {empty}
 | TBD  | `ace_guru_meditation`          | Fatal system failure in the ACE unit.
 | TBD  | `ace_exc_unsupported`          | Invalid values at provisioning or import.
-| TBD  | `ace_exc_CR_off`               | Any access to a CR in `*lcrstate` Off.
+| TBD  | `ace_exc_CR_off`               | Any access to a CR whose `*lcrstatus` field is _Off_. Enables on-demand (lazy) CR loading and trap-and-emulate (see <<ACE-CSR-lcrstatus>>).
 | TBD  | `ace_exc_out_of_memory`        | Insufficient CRF memory for configuration instruction. This may be set by privileged code in case it does not handle the CR allocation itself.
 | TBD  | `ace_exc_privilege_violation`  | Attempt to execute any _usage_ instruction that would violate the Usage Control policies as per <<ACE-Metadata>>. This includes any attempt to use/clone of a not-fully-configured CR, which is forbidden at all privilege levels.
 | TBD  | `ace_exc_unconfigured_buffer`  | Use of ACEIOBUF as an input or an output while unconfigured.
@@ -80,9 +80,9 @@ ACE extends `*status` and `misa`, and provides 3 direct and up to 28 indirect CS
 [float="center",align="center",options="header"]
 |===
 | Address     | Privilege  | Field                     | Description
-| 0xXXX       | MRW        | `mcrstatus`               | Per-CR dirtiness and laziness tracking below M-mode
-| 0xXXX       | SRW        | `scrstatus`               | Per-CR dirtiness and laziness tracking below S-mode
-| 0xXXX       | HRW        | `vscrstatus`              | Per-CR dirtiness and laziness tracking below VS-mode
+| 0xXXX       | MRW        | `mcrstatus`               | Per-CR dirtiness and accessibility tracking below M-mode; supports on-demand CR loading
+| 0xXXX       | SRW        | `scrstatus`               | Per-CR dirtiness and accessibility tracking below S-mode; supports on-demand CR loading
+| 0xXXX       | HRW        | `vscrstatus`              | Per-CR dirtiness and accessibility tracking below VS-mode; supports on-demand CR loading
 | (Indirect)  | MRW (RZ)   | `macecsk{0..7}`           | ACE Context Sealing Key
 | (Indirect)  | MRW (RZ)   | `macephysbootscrt{0..3}`  | Locality: Physical (host) Boot Session Secret
 | (Indirect)  | HRW (RZ)   | `hacevirtbootscrt{0..3}`  | Locality: Virtual (guest) Boot Session Secret
@@ -285,6 +285,21 @@ when any one of `mlcrstatus`(__i__), `vslcrstatus`(__i__), or `slcrstatus`(__i__
 
 On RV32, 32-bit CSRs `mlcrstatush`, `slcrstatush`, and `vslcrstatush` shadow bits [63:32] of `mlcrstatus`, `slcrstatus`, and `vslcrstatus`,
 respectively, allowing these bits to be accessed.
+
+[NOTE]
+====
+The _Off_ value, together with ACE exception `ace_exc_CR_off`, is the
+architectural hook for on-demand (lazy) CR loading: at context restore, a
+handler may leave a CR unrestored and set the corresponding `*lcrstatus`
+field to _Off_ while keeping the authoritative SCC in its own memory. The
+first subsequent access to the CR from a lower-privileged mode traps with
+`ace_exc_CR_off`, and the handler imports the SCC before resuming
+execution. The same mechanism supports trap-and-emulate of algorithms the
+hardware does not implement (cf. <<ACE-error-architecture>>). There is no
+distinct architectural “lazy” state: tracking which privilege level holds
+the authoritative SCC for a CR marked _Off_ is the responsibility of the
+software that set it.
+====
 
 // ////////////////////////////////////////////////////////////////////
 
