@@ -8,7 +8,7 @@ document — put it in the *trailing* octets as a big-endian integer, which is
 there the counter is a full block, combined by `xor` rather than by position, and stays
 little-endian.
 
-  REF   CTR written directly from SP 800-38A: counter block = nonce || binBE(ctr, j)
+  REF   CTR written directly from SP 800-38A: counter block = nonce || bswap(bin(ctr, j))
   ACE   the formulas as ace-ISA-algorithms.adoc now gives them, in the ACE value model
   OLD   `IV @ ctr`, the formulation the specification used to carry (negative control)
 

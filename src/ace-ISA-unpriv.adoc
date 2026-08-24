@@ -1361,15 +1361,51 @@ authenticated public-key wrapping mechanism.
 [[ACE-interaction-with-debug]]
 === Interaction with Debug Mode
 
-All ACE state inaccessible in Debug unless an implementation-defined authenticated-debug signal is asserted.
+All ACE state is inaccessible in Debug mode, and no ACE instruction may be
+executed in it, unless an implementation-defined _authenticated-debug_ signal
+is asserted.
 
-On unauthenticated Debug entry:
-all CRs must be zeroised and unconfigured;
-the fields of all `*lcrstatus` shall be set to _Clean_;
-all LST entries–and all CSRs setting the SW Localities–shall read as zero; and
-the CSK is zeroised.
+[NOTE]
+====
+The natural source for the authenticated-debug signal is the authentication
+interface of the Debug Module defined by the RISC-V Debug specification
+(`dmstatus.authenticated`); the mapping is implementation-defined.
+====
 
-Therefore, in order to allow resumption of execution after unauthenticated Debug entry, Debug entry shall occur from a M-mode trap handler which also saves the entire ACE state before actually entering Debug mode.
+In authenticated Debug mode:
+
+. ACE instructions and CSRs are accessible with M-mode privilege, with the
+  exceptions below.
+. The `macecsk` group may be neither read nor written. Entering
+  authenticated Debug mode does not zeroize the CSK — nor, in the third CSK
+  model of <<ACE-CSK-requirements>>, substitute it — so the active CSK
+  remains usable by the management instructions.
+. A CC may be _used_ only if bit 4 of its _UsagePolicy_ field
+  (<<ACE-Metadata>>) is set. Debug code can therefore normally only perform
+  management operations — export the current contexts as SCCs, provision and
+  use contexts of its own, then restore the saved state and return — unless
+  a CC is expressly marked as usable by Debug mode.
+
+Upon Debug entry with the authenticated-debug signal deasserted:
+
+. all CRs are zeroized and unconfigured, and the ACEIOBUF is zeroized, with
+  `aceiobuflen`, `aceiobuftop`, and `acestart` reset to zero;
+. all `*lcrstatus` fields and all `*status.ACES` fields in effect are set to
+  _Dirty_;
+. the software-configurable Locality Secrets — _PhysBootScrt_,
+  _VirtBootScrt_, _MLocality_, _HLocality_, and _SLocality_ — are zeroized,
+  and their CSRs subsequently read as zero;
+. the entries of the HW Binding Group, which cannot themselves be zeroized,
+  are _masked_: until the next ACE unit reset, the value provided to the ACE
+  unit for each of them is zero, not the hardwired value; and
+. the CSK is zeroized; in the third CSK model, the all-zero value is
+  provided to the ACE unit in place of the hardwired key, likewise until the
+  next ACE unit reset.
+
+[NOTE]
+====
+Normal execution cannot resume after an unauthenticated Debug entry: the ACE state is destroyed, and debugging that must preserve it requires authenticated Debug mode. Recovery consists of an ACE unit reset—which restores the hardwired HW Binding values and, in the third CSK model, the hardwired key—followed by the privileged software stack re-establishing the CSK and Locality Secrets and re-provisioning contexts. In the first and second CSK models, if M-mode re-establishes the *same* CSK, SCCs exported before the Debug entry become importable again, providing a full recovery path through ordinary context-saving hygiene.
+====
 
 // ////////////////////////////////////////////////////////////////////
 

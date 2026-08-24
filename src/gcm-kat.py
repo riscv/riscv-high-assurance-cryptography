@@ -125,12 +125,12 @@ def ref_gcm2(K, IV, A, P):
 def ace_j0(K, IV, reversed_len_block=False):
     """State _Set_Aux_Value_ of <<ACE-GCM-mode>> in the ACE value model.
 
-    reversed_len_block reinstates `0^64 @ binBE(8 len,64)`, the form the specification
+    reversed_len_block reinstates `0^64 @ bswap(bin(8 len,64))`, the form the specification
     used to carry, as a negative control for finding C2.
     """
     auth_key = b2v(aes_encrypt(K, bytes(16)))
     n = len(IV)
-    if n * 8 == 96:                                  # J0 <- binBE(1,32) @ J0[95:0]
+    if n * 8 == 96:                                  # J0 <- bswap(bin(1,32)) @ J0[95:0]
         return cat((int.from_bytes((1).to_bytes(4, 'big'), 'little'), 32), (b2v(IV), 96))
     J0, block_base = 0, 0
     for i in range(0, n, 16):                        # process_VLI over the IV
