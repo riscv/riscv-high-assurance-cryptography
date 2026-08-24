@@ -494,7 +494,7 @@ The following rules are generic and apply to all algorithms:
 . The MDH's _State_ field must reflect the current state whenever the CC is in _Ready_, _Success_, _Failure_, or any Error State.
 This ensures that these states can be unambiguously determined from the _State_ field alone, without inspecting the Content.
 
-. In States _Success_ and _Failure_, only the following ACE instructions are permitted: `ace.mgmt`, `ace.load`, `ace.store`, `ace.clear`, `ace.size`, `ace.setst`,  `ace.getmd*`, and `ace.getst` (described in <<ACE-instructions-detailed>>).
+. In States _Success_ and _Failure_, only the following ACE instructions are permitted: `ace.mgmt`, `ace.load`, `ace.store`, `ace.clear`, `ace.size`, `ace.setst`, `ace.getmd*`, and `ace.getst` (described in <<ACE-instructions-detailed>>).
 
 . In States _Success_ and _Failure_, `ace.setst` is only permitted to transition to _Ready_ or _Unconfigured_.
 
@@ -530,7 +530,8 @@ Invalidating the CC on certain failures prevents its continued use in an inconsi
 
 . Attempts to _use_ a CR in any Error State will not perform any operation, and in particular they leave the _State_ field unchanged.
 
-. Any _usage_ instruction that would violate the Usage Control policies will not perform its operation, and will set _State_ to `ace_state_privilege_violation` instead.
+. Any _usage_ instruction that would violate the Usage Control policies will not perform its operation, and raises ACE exception `ace_exc_privilege_violation`
+(see <<ACE-error-architecture>> for the behavior if the Privileged Architecture is not implemented).
 
 <<ACE-states-graph>> displays the default possible state transitions.
 
@@ -862,11 +863,10 @@ The error conditions in <<ACE-exception-error-correspondence>> are placed in the
 
 Conversely, exception handlers must set a CR's _State_ to Error State
 _Unsupported_,
-_Out_of_Memory_`, resp.,
-_privilege_violation`
+_Out_of_Memory_, resp.,
+_privilege_violation_
 when the following three conditions are met: they cannot resolve exception
-`ace_exc_unsupported`,
-`ace_exc_out_of_memory`, resp.,
+`ace_exc_unsupported`,`ace_exc_out_of_memory`, resp.,
 `ace_exc_privilege_violation`; cannot forward it to another handler, including an in-process handler; and do not suppress the process that caused it.
 
 In the following, as well
@@ -930,17 +930,23 @@ This means that it cannot be used further except by unconfiguring it, re-provisi
 
 The following conditions cause a transition to Error State _Invalid_:
 
-`ace.derive` instruction is issued with an expired source or target CR.
  . Non-allowed immediate, Form, or auxiliary parameter in an `ace.setst` instruction in the current state.
  . Non-allowed Form of an `ace.exec` instruction in the current state.
  . Non-allowed parameters to `ace.restrict*`.
 
 The following conditions cause a transition to Error State _Expired_:
 
-[start=5].
+[start=4]
+ . An `ace.setst` or an `ace.exec` instruction is issued on an expired CR.
+ . If, upon resumption of interrupted operations, the CR has expired.
 
- . An `ace.setst` or an `ace.exec` instruction is issued on an expired CR, or an
- . if, upon resumption of interrupted operations, the CR has expired.
+The following conditions cause a transition to Error State _Expired_:
+
+[start=6]
+. Any usage instruction is issued with an expired CR.
+. `ace.derive` instruction is issued with an expired source or target CR:
+   the expiration check is performed on both the source and target CRs and
+   whenever either CR has expired is is transitioned to Error State _Expired_.
 --
 
 Algorithmic Errors:::
@@ -949,7 +955,7 @@ Algorithmic Errors:::
 Algorithmic errors may occur in import processes or in the cryptographic operations performed by algorithms:
 
 . In the first case, the error is Error State _ace_state_import_auth_.
-. Algorithm-specific errors may causes the CR to transition to Error State _Invalid_, or transition it to some other State (usually an Error State), according to the behavior specified by the algorithm.
+. Algorithm-specific errors may cause the CR to transition to Error State _Invalid_, or transition it to some other State (usually an Error State), according to the behavior specified by the algorithm.
 
 We note that successful or failed verification of an authentication tag in an AEAD algorithm or of a signature is _not_ an algorithmic error, as the algorithm is performing as expected.
 --
@@ -961,14 +967,12 @@ no memory location. The exception to this rule is: when a block-iterated `ace.ex
 processing `j` {ge} 1 blocks, the outputs of those `j` blocks remain
 written, the failing block and all later blocks are not written in any
 part, and `acestart` holds the octet count of the `j` completed blocks.
-The row's CR-state effects apply unchanged.
+The error condition's CR-state effects apply unchanged.
 
 In case an illegal-instruction exception or an ACE exception is raised,
 the trapped instruction does not retire and `xepc` holds its address.
-// Unlike ordinary RISC-V exceptions, an ACE exception ACE outcome _ commit the CR-state effects
-//   listed in its row before the trap is taken; re-execution of the same
-//   instruction therefore observes the updated CR state. This deviation is
-//   deliberate and implementations must not suppress these effects.
+
+Unlike ordinary RISC-V exceptions, an ACE exception _does_ commit the specified CR-state effects before the trap is taken; re-execution of the same instruction therefore observes the updated CR state.  This is reflected in the updated `ace.exec` semantics when issued on several blocks.  Therefore, a restart of `ace.exec` should not be forced.
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -2821,7 +2825,11 @@ The ACE unit sends commands to the LSU to read and write memory sequentially—a
 
 However, the same code must work correctly regardless of which order the LSU chooses, because the latter is a microarchitectural aspect.
 
-An implementation always has the option to restart an operation instead of resuming it, for any reason, and may ignore and clear `acestart`. The ACE instructions are designed so that the same instruction sequences work correctly in all such cases and on every ACE implementation.
+An implementation always has the option to restart a
+`ace.load`, `ace.store`, `ace.input`, `ace.output`, and `ace.exec`
+operation instead of resuming it, for any reason, and may ignore and clear `acestart`, with following exception:
+Once the per-block state effects of a multi-block `ace.exec` have been committed, neither the implementation nor software may restart it from the beginning; it must be resumed from `acestart`.
+The ACE instructions are designed so that the same instruction sequences work correctly when this rule is respected and on every ACE implementation.
 
 For example, the instruction that loads or stores a CR's content starting with the 8th (or 16th) byte may always fail, leaving the CR in an _Unconfigured_ state. This signals that the import, provisioning, or export operation must be restarted. Software must then prepare the CR for the operation again. For import and provisioning, this entails providing the first 8 bytes of the MDH to the `ace.setst` instruction used to prepare the CR anew.
 
