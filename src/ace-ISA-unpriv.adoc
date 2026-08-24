@@ -172,9 +172,7 @@ Unlike a conventional register, a CR can be _unconfigured_, meaning it does not 
 A CR is addressed either directly, via a 5-bit immediate, or indirectly, via a GPR value; an additional instruction-encoding bit selects the mode.
 Using `X0` as an indirect CR index raises an illegal-instruction exception, unless this is expressly used to encode an instruction.
 An indirect index outside [0..31] also raises an illegal-instruction exception.
-
-
-// An implementation must wait before performing any operation on a CR that is still being written to asynchronously by the ACE unit.
+(For the behavior when the Privileged Architecture is not implemented, see <<ACE-error-architecture>>.)
 
 [NOTE]
 ====
@@ -443,13 +441,13 @@ The architected values of _State_ common to all algorithms are defined in the fo
 .Global CC State Numbers: Error States
 [float="center",align="center",width="100%",cols="^7%,<28%,<16%,<49%"]
 |===
-|  24    | `ace_state_unsupported`     | _Not_Impl_        | Not implemented algorithm. It is set by the hardware upon an attempt to provision or import a CR that is not supported by the implementation.  ACE exception `ace_exc_unsupported` is also raised, whereby an exception handler may set up the CR for trap-on-access to provide emulated support for the algorithm, or leave the Error State unchanged.
-|  25    | `ace_state_invalid`         | _Invalid_         | The CR transitions to Error State _Invalid.
-|  26    | `ace_state_out_of_memory`   | _Out_of_Memory_   | Insufficient CRF memory for a configuration instruction. This may be set by privileged code if it does not handle CR allocation or fails to do so, returning an error instead.
-|  27    | `ace_state_import_auth`     | _Auth_Failed_     | Authentication failure while completing an SCC import.
-|  28    | `ace_state_priv_viol`       | _Priv_Viol_       | Violation of Usage Control policies.
-|  29    | `ace_state_expired`         | _Expired_         | The CR has expired.
-| 30, 31 | (Reserved)                  | {empty}           | Reserved for future use.
+|  24    | `ace_state_unsupported`         | _Not_Impl_        | Not implemented algorithm. It is set by the hardware upon an attempt to provision or import a CR that is not supported by the implementation.  ACE exception `ace_exc_unsupported` is also raised, whereby an exception handler may set up the CR for trap-on-access to provide emulated support for the algorithm, or leave the Error State unchanged.
+|  25    | `ace_state_invalid`             | _Invalid_         | The CR transitions to Error State _Invalid.
+|  26    | `ace_state_out_of_memory`       | _Out_of_Memory_   | Insufficient CRF memory for a configuration instruction. This may be set by privileged code if it does not handle CR allocation or fails to do so, returning an error instead.
+|  27    | `ace_state_import_auth`         | _Auth_Failed_     | Authentication failure while completing an SCC import.
+|  28    | `ace_state_privilege_violation` | _Priv_Viol_       | Violation of Usage Control policies.
+|  29    | `ace_state_expired`             | _Expired_         | The CR has expired.
+| 30, 31 | (Reserved)                      | {empty}           | Reserved for future use.
 |===
 
 State 0 is the _Unconfigured_ state.  It denotes that the CR is unconfigured.
@@ -533,7 +531,7 @@ Invalidating the CC on certain failures prevents its continued use in an inconsi
 
 . Attempts to _use_ a CR in any Error State will not perform any operation, and in particular they leave the _State_ field unchanged.
 
-. Any _usage_ instruction that would violate the Usage Control policies will not perform its operation, and will set _State_ to `ace_state_priv_viol` instead.
+. Any _usage_ instruction that would violate the Usage Control policies will not perform its operation, and will set _State_ to `ace_state_privilege_violation` instead.
 
 <<ACE-states-graph>> displays the default possible state transitions.
 
@@ -839,6 +837,33 @@ NOTE: `Ztso` only imposes RVTSO at the instruction level; intra-instruction orde
 [[ACE-error-architecture]]
 ==== Error Handling Architecture
 
+First of all, we address the behavior of ACE in case of error when the ACE Privileged Architecture is not implemented.
+In this case, ACE exceptions are replaced by direct transitions of the CR to an Error State, per the mapping in <<ACE-exception-error-correspondence>>.
+
+Conversely, exception handlers must set a CR's _State_ to Error State
+`ace_state_unsupported`,
+`ace_state_out_of_memory`, resp.,
+`ace_state_privilege_violation`
+when the following three conditions are met: they cannot resolve exception
+`ace_exc_unsupported`,
+`ace_exc_out_of_memory`, resp.,
+`ace_exc_privilege_violation`; cannot forward it to another handler, including an in-process handler; and do not suppress the process that caused it.
+
+[[ACE-exception-error-correspondence]]
+.Behavior upon exception conditions when the Privileged Architecture is not available.
+[%autowidth,float="center",align="center",options="header"]
+|===
+| ACE Exception                           | Behavior when the Privileged Architecture is not available.
+| `ace_guru_meditation`                   | Implementation and platform defined behavior.
+| `ace_exc_unsupported`                   | Transition to Error State `ace_state_unsupported`.
+| `ace_exc_CR_off`                        | Does not apply without Privileged Architecture, since the `*lcrstatus` CSRs are not available.
+| `ace_exc_out_of_memory`                 | Transition to Error State `ace_state_out_of_memory`.
+| `ace_exc_privilege_violation`           | Transition to Error State `ace_state_privilege_violation`.
+| `ace_exc_unconfigured_buffer`           | When an ACE instruction is issued that uses the CR with the ACEIOBUF, transition that CR to Error State `ace_state_invalid`.
+|===
+
+In the following we shall always describe the behavior when the Privileged Architecture is in effect, with the understanding that raising exceptions will be replaced by the above behaviors when the Privileged Architecture is not implemented.
+
 There are various types of error conditions that may occur during the lifecycle of an ACE unit:
 
 Fatal:::
@@ -904,20 +929,6 @@ Algorithmic errors may occur in import processes or in the cryptographic operati
 
 We note that successful or failed verification of an authentication tag in an AEAD algorithm or of a signature is _not_ an algorithmic error, as the algorithm is performing as expected.
 --
-
-// If the ACE Privileged Architecture is not implemented, ACE exceptions are replaced by transitions of the CR's _State_ field to an Error State, per the mapping in <<ACE-exception-error-correspondence>>. Conversely, exception handlers must set a CR's _State_ to the corresponding Error State when the following three conditions are met: they cannot resolve the exception; cannot forward it to an in-process handler; and do not suppress the process that caused it.
-//
-// [[ACE-exception-error-correspondence]]
-// .Correspondence between ACE Exception and Error States
-// [%autowidth,float="center",align="center",options="header"]
-// |===
-// | `ace_guru_meditation`                   | Implementation and platform defined behavior
-// | `ace_exc_CR_off`                        | Does not apply without privileged architecture
-// | `ace_exc_out_of_memory`                    | `ace_state_out_of_memory`
-// | `ace_exc_privilege_violation`           | `ace_state_priv_viol`
-// | `ace_exc_unconfigured_buffer`                    | `ace_state_buf_unconf`
-// |===
-// The conditions that cause `ace_state_expired`, `ace_state_invalid`, and `ace_state_import_auth` do not raise ACE exceptions.
 
 // ////////////////////////////////////////////////////////////////////
 
