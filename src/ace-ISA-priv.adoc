@@ -80,9 +80,9 @@ ACE extends `*status` and `misa`, and provides 3 direct and up to 28 indirect CS
 [float="center",align="center",options="header"]
 |===
 | Address     | Privilege  | Field                     | Description
-| 0xXXX       | MRW        | `mcrstatus`               | Per-CR dirtiness and accessibility tracking below M-mode; supports on-demand CR loading
-| 0xXXX       | SRW        | `scrstatus`               | Per-CR dirtiness and accessibility tracking below S-mode; supports on-demand CR loading
-| 0xXXX       | HRW        | `vscrstatus`              | Per-CR dirtiness and accessibility tracking below VS-mode; supports on-demand CR loading
+| 0xXXX       | MRW        | `mlcrstatus`              | Per-CR dirtiness and accessibility tracking below M-mode; supports on-demand CR loading
+| 0xXXX       | SRW        | `slcrstatus`              | Per-CR dirtiness and accessibility tracking below S-mode; supports on-demand CR loading
+| 0xXXX       | HRW        | `vslcrstatus`             | Per-CR dirtiness and accessibility tracking below VS-mode; supports on-demand CR loading
 | (Indirect)  | MRW (RZ)   | `macecsk{0..7}`           | ACE Context Sealing Key
 | (Indirect)  | MRW (RZ)   | `macephysbootscrt{0..3}`  | Locality: Physical (host) Boot Session Secret
 | (Indirect)  | HRW (RZ)   | `hacevirtbootscrt{0..3}`  | Locality: Virtual (guest) Boot Session Secret
@@ -217,7 +217,7 @@ The 64-bit registers `mlcrstatus`, `slcrstatus`, and `vslcrstatus` track per-CR 
 
 For each of these 3 CSRs:
 
-* `*lcrstatus`(__i__) = `*lcrstatus`[2{interpunct}__i__+1:2{interpunct}__i__] is a two-bit field that encodes four possible status values for ``K(``__i__``)``, as described in the following table. Note that there are conditions for the values of the _State_ metadata field in a CR and the corresponding `*lcrstatus` field.
+* `*lcrstatus`(__i__) = `*lcrstatus`[2{interpunct}__i__+1:2{interpunct}__i__] is a two-bit field that encodes four possible status values for ``K(``__i__``)``, as described in the following table.
 
 [[ACE-lcrstatus-encoding]]
 .Encoding of the `*lcrstatus` bits
@@ -242,7 +242,7 @@ when `mlcrstatus`(__i__) is 0 (Off) raise an `ace_exc_CR_off` exception.
 
 * Any instruction that modifies ``K(``__i__``)`` sets `mlcrstatus`(__i__) to Dirty.
 
-* Any direct write to `mlcrstatus`(__i__) does not change either `slcrstatus`(__i__) or `vslcrstatus`(__i__) (if defined).
+Any direct write to `mlcrstatus`(__i__) does not change either `slcrstatus`(__i__) or `vslcrstatus`(__i__) (if defined).
 
 `mstatus.ACES` is also in effect.
 --
@@ -258,7 +258,7 @@ when either `mlcrstatus`(__i__) or `slcrstatus`(__i__) is 0 (Off) raise an `ace_
 
 * Any instruction that modifies ``K(``__i__``)`` sets `slcrstatus`(__i__) and `mlcrstatus`(__i__) to Dirty.
 
-* Any direct write to `slcrstatus`(__i__) does not change either `mlcrstatus`(__i__) or `vslcrstatus`(__i__) (if defined).
+Any direct write to `slcrstatus`(__i__) does not change either `mlcrstatus`(__i__) or `vslcrstatus`(__i__) (if defined).
 
 `sstatus.ACES`, `mstatus.ACES`, and `mlcrstatus` are also in effect.
 --
@@ -269,18 +269,18 @@ For `vslcrstatus`:::
 --
 `vslcrstatus` exists only when the H extension is implemented.
 
-When the privilege mode is VU:
+When V=1, `vslcrstatus` substitutes for `slcrstatus`: CSR accesses that would target `slcrstatus` instead access `vslcrstatus`, analogously to `vsstatus` and `sstatus`.
 
-* `vslcrstatus` shadows `slcrstatus`; accesses that would target `slcrstatus` instead access `vslcrstatus`.
+When the privilege mode is VU:
 
 * Attempts to execute an ACE instruction using ``K(``__i__``)``
 when any one of `mlcrstatus`(__i__), `vslcrstatus`(__i__), or `slcrstatus`(__i__) is 0 (Off) raise an `ace_exc_CR_off` exception.
 
 * Any instruction that modifies ``K(``__i__``)`` sets `vslcrstatus`(__i__), `slcrstatus`(__i__) and `mlcrstatus`(__i__) to Dirty.
 
-* Any direct write to `vslcrstatus`(__i__) does not change either `mlcrstatus`(__i__) or `slcrstatus`(__i__) (if defined).
+Any direct write to `vslcrstatus`(__i__) does not change either `mlcrstatus`(__i__) or `slcrstatus`(__i__) (if defined).
 
-* `sstatus.ACES`, `vsstatus.ACES`, `mstatus.ACES`, `slcrstatus`, and `mlcrstatus` are also in effect.
+`sstatus.ACES`, `vsstatus.ACES`, `mstatus.ACES`, `slcrstatus`, and `mlcrstatus` are also in effect.
 --
 
 On RV32, 32-bit CSRs `mlcrstatush`, `slcrstatush`, and `vslcrstatush` shadow bits [63:32] of `mlcrstatus`, `slcrstatus`, and `vslcrstatus`,
@@ -288,17 +288,7 @@ respectively, allowing these bits to be accessed.
 
 [NOTE]
 ====
-The _Off_ value, together with ACE exception `ace_exc_CR_off`, is the
-architectural hook for on-demand (lazy) CR loading: at context restore, a
-handler may leave a CR unrestored and set the corresponding `*lcrstatus`
-field to _Off_ while keeping the authoritative SCC in its own memory. The
-first subsequent access to the CR from a lower-privileged mode traps with
-`ace_exc_CR_off`, and the handler imports the SCC before resuming
-execution. The same mechanism supports trap-and-emulate of algorithms the
-hardware does not implement (cf. <<ACE-error-architecture>>). There is no
-distinct architectural “lazy” state: tracking which privilege level holds
-the authoritative SCC for a CR marked _Off_ is the responsibility of the
-software that set it.
+The _Off_ value, with the `ace_exc_CR_off` exception, provides the architectural hook for on-demand (lazy) CR loading. At context restore, a handler may leave a CR unrestored and set its `*lcrstatus` field to _Off_, keeping the authoritative SCC in its own memory. The next access to the CR from a lower-privileged mode traps with `ace_exc_CR_off`, and the handler imports the SCC before resuming execution. There is no distinct architectural "lazy" state: tracking which privilege level holds the authoritative SCC for a CR marked _Off_ is the responsibility of the software that set it.
 ====
 
 // ////////////////////////////////////////////////////////////////////
