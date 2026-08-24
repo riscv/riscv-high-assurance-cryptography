@@ -106,7 +106,7 @@ Trap-and-emulate exploits the ``*lcrstatus`` fields, which can also be used for 
 | `Zklxexm`        | XEX construction.^2^                                                                                              | <<ACE-XEX-XTS-modes>>
 | `Zklgcmm`        | GCM and GCM with set IV.^2^                                                                                       | <<ACE-GCM-mode>>
 | `Zklgcmsivm`     | GCM-SIV.^2^                                                                                                       | <<ACE-GCM-SIV-mode>>
-| `Zklocbm`        | OCB3 and OCB3 with set IV.^2^                                                                                     | <<ACE-OCB-mode>>
+| `Zklocbm`        | OCB3 with set IV.^2^                                                                                     | <<ACE-OCB-mode>>
 | `Zklcmacm`       | CMAC.^2^                                                                                                          | <<ACE-CMAC-mode>>
 | `Zklesha2h`      | SHA-224, SHA-256, SHA-384, SHA-512, SHA-512/224, and SHA-512/256.                                                 | <<ACE-SHA-2>>
 | `Zklesha3h`      | SHA3-224, SHA3-256, SHA3-384, SHA3-512, SHAKE128, and SHAKE256.                                                   | <<ACE-SHA-3>>
@@ -313,7 +313,7 @@ Rather, it is shared across all CRs per hart and it is used only when importing 
 ====
 
 Any corruption of the CRF associated with a hart causes an unrecoverable error condition.
-The entire architectural state of the ACE unit associated with the hart is reset, and ACE exception `ace_guru_meditation` is raised (cf. <<ACE-exceptions>>, and <<ACE-error-architecture>> for the behavior when the Privileged Architecture is not implemented).
+The entire architectural state of the ACE unit associated with the hart is reset, and ACE exception `ace_exc_fatal` is raised (cf. <<ACE-exceptions>>, and <<ACE-error-architecture>> for the behavior when the Privileged Architecture is not implemented).
 When a hart is reset, the architectural state of its ACE unit is reset as well.
 Each hart's ACE state must be exported and then fully zeroized on power down; on resume, the ACE unit must reset and be reconfigured by software.
 
@@ -415,7 +415,7 @@ All _Reserved_ bits, as well as bits unused by a given algorithm, are zero.
 |   [61:46] |  16  | _AuxInfo_         | Algorithm-specific auxiliary information. Currently used only by ML-KEM and ML-DSA. This field is zero for algorithms that do not use it.
 |   [62:62] |   1  | _Reserved_        | Reserved for future use.
 |   [63:63] |   1  | _SystemFormat_    | Value is 0 if an input is in the ACE architected format, 1 if in a system-defined format.
-|   [68:64] |   5  | _UsagePolicy_     | Usage (Control) Policy. Bits 0, 1, 2, and 3 of the field, when set, disallow CC usage in U-mode, VS-mode, HS-mode, and M-mode, respectively. Bit 4 grants use in Debug mode only if set. Any bit of this field is ignored if the corresponding mode is not supported or not enabled.
+|   [68:64] |   5  | _UsagePolicy_     | Usage (Control) Policy. Bits 0, 1, 2, and 3 of the field, when set, disallow CC usage in U-mode, VS-mode, HS-mode, and M-mode, respectively. Bit 4 grants use in Debug mode only if set. Bit 0 governs both U-mode and VU-mode, and bit 2 governs S-mode whether or not the H extension is implemented. Any bit of this field is ignored if the corresponding mode is not supported or not enabled.
 |   [77:69] |   9  | _Locality_        | Zero, or a value determining one or more Locality Secrets, used in the export/import encryption and decryption algorithm to bind the CR to specific environments. See <<ACE-Localities>>.
 |   [79:78] |   2  | Reserved          | Reserved for expansion of the _Locality_ field.
 |   [95:80] |  16  | _AlgorithmUse_    | Used by algorithms and implementations to store additional state information.
@@ -439,7 +439,7 @@ The format of the other 63 bits of the low half of the MDH, i.e., MDH[62:0], as 
 ===== _Algorithm_ and _AlgorithmPolicy_ Fields
 
 Algorithms are encoded in a 12-bit field.
-Values 0–3071 and 4095 are architecture-defined.
+Values 0–3071 are architecture-defined.
 The list of encodings is maintained by RVI (see <<ACE-algorithms>>).
 The remaining values are available for custom algorithms.
 
@@ -502,7 +502,7 @@ The _State_ field is used to track the current state of an algorithm, including 
 The architected values of _State_ common to all algorithms are defined in the following three tables.
 
 [[ACE-state-off]]
-.Global CC State Numbers: Off State
+.Global CC State Numbers: Unconfigured State
 [float="center",align="center",width="100%",cols="^7%,<28%,<16%,<49%",options="header"]
 |===
 | Value | Mnemonic                  | State Name     | Description
@@ -948,7 +948,7 @@ In this case, ACE exceptions are replaced by direct transitions of the CR to an 
 [%autowidth,float="center",align="center",options="header"]
 |===
 | ACE Exception                           | Behavior when the Privileged Architecture is not available.
-| `ace_guru_meditation`                   | Implementation and platform defined behavior.
+| `ace_exc_fatal`                   | Implementation and platform defined behavior.
 | `ace_exc_unsupported`                   | Transition to Error State _Unsupported_.
 | `ace_exc_CR_off`                        | Does not apply without Privileged Architecture, since the `*lcrstatus` CSRs are not available.
 | `ace_exc_out_of_memory`                 | Transition to Error State `ace_state_out_of_memory`.
@@ -982,7 +982,7 @@ This condition is not maskable by any CPU state.
 The main fatal condition is the integrity failure of the CRF associated with a hart (<<ACE-cryptographic-registers>>), but implementations may define additional fatal conditions.
 
 A fatal condition causes an entire reset of the state associated with the hart
-and raises ACE exception `ace_guru_meditation`.
+and raises ACE exception `ace_exc_fatal`.
 --
 
 Illegal Instructions:::
@@ -1137,6 +1137,7 @@ _Included in_::
 `acemaxiobuflen` is an XLEN-bit RO CSR that reports the maximum configurable length of the ACEIOBUF in bytes.
 
 The value is hardwired and specific to the implementation of the ACE unit.
+It must be at least as large as the largest basic processing unit (granularity) of any implemented Algorithm, so that every implemented Algorithm can be used through the ACEIOBUF.
 
 _Included in_::
 +
@@ -1418,6 +1419,7 @@ Normal execution cannot resume after an unauthenticated Debug entry: the ACE sta
 
 ACE provides a number of unprivileged instructions.
 This section specifies their semantics and encodings.
+Under opcode `custom-2`, the `funct3` value 4 is reserved.
 
 The notation `K{Xd}` denotes the CR whose index is held in GPR `Xd`.
 `Kn|K{Xn}` indicates two alternative encodings: a 5-bit immediate CR index (`Kn`) or a CR number supplied by GPR `Xn`.
@@ -1588,7 +1590,7 @@ See the non-normative note at the end of <<ACE-instruction-manage>>,
 
 NOTE: PI can be stored because a provisioning operation may be interrupted, and this allows resuming it.
 
-The instruction does not modify state.
+The instruction does not modify CR state; it updates `acestart`.
 
 The instruction is not usage-controlled.
 --
@@ -1655,6 +1657,8 @@ For the four Forms A–D above, the encodings are:
 
 The CR operand is always encoded in `rs1`. Each Form sets to zero the register fields it
 does not use: `rd` when there is no output vector, `rs2` when there is no input vector.
+Non-zero values in an unused register field are reserved and raise an illegal-instruction
+exception, except for the encodings that `Zklmv` assigns to them (<<ACE-move>>).
 // To make indent in next line correct
 --
 
@@ -2157,14 +2161,14 @@ On RV64:
 * `ace.getmdl` copies bits [63:0] of the MDH of CR `Ks` or `K{Xs}` into GPR `Xd`.
 * `ace.getmdh` copies bits [127:64] into GPR `Xd`.
 * `ace.getmdv` (vector register output version) copies bits [127:0] into vector register `Vd`.
-This version of the instruction only supports vector register (groups) of 128 bits or longer.
-If used with a vector register (group) smaller than 128 bits, an illegal-instruction exception is raised.
+This version of the instruction only supports vector operands of at least 128 bits, that is, `VL` {times} `SEW` {ge} 128.
+If `VL` {times} `SEW` < 128, an illegal-instruction exception is raised.
 
 On RV32, if the destination register is a GPR, `d` must be even, and:
 
 * `ace.getmdl` copies bits [31:0] of the MDH of CR `Ks` or `K{Xs}` into GPR `Xd` and bits [63:32] of the same CR into GPR `X[d+1]`, atomically.
 * `ace.getmdh` copies bits [95:64] of the MDH of CR `Ks` or `K{Xs}` into GPR `Xd` and bits [127:96] of the same CR into GPR `X[d+1]`, atomically.
-* The semantics of `ace.getmd` are the same as on RV64.
+* The semantics of `ace.getmdv` are the same as on RV64.
 * If `d` is not even, an illegal-instruction exception is raised.
 
 The instruction may not modify state.
@@ -3083,7 +3087,7 @@ management sequence. The ACE instructions are designed so that the same
 instruction sequences work correctly in all these cases and on every ACE
 implementation.
 
-For example, the instruction that loads or stores a CR's content starting with the 8th (or 16th) byte may always fail, leaving the CR in an _Unconfigured_ state. This signals that the import, provisioning, or export operation must be restarted. Software must then prepare the CR for the operation again. For import and provisioning, this entails providing the first 8 bytes of the MDH to the `ace.setst` instruction used to prepare the CR anew.
+For example, the instruction that loads or stores a CR's content starting with the 8th (or 16th) byte may always fail, leaving the CR in an _Unconfigured_ state. This signals that the import, provisioning, or export operation must be restarted. Software must then prepare the CR for the operation again. For import and provisioning, this entails providing the first 8 bytes of the MDH to the `ace.mgmt` instruction used to prepare the CR anew.
 
 // ////////////////////////////////////////////////////////////////////
 

@@ -875,7 +875,7 @@ Data Structures:::
 ** `key`: `k` bits.
 ** `J0`:  `128` bits. Big-endian as in the AES-GCM spec. `J0`[127:96] is the current GCTR counter, and `start_ctr` its initial value; the counter occupies octets 12 to 15 of the counter block, big-endian, as in cite:[nist-SP-800-38D].
 ** `auth_key`: `128` bits.
-** `tag`: `128` bits. This field stores the authentication tag, but while absorbing a long IV it also stores the intermediate values that are GHASH-ed.
+** `tag`: `128` bits. This field stores the authentication tag.
 ** `start_ctr`: an integer in the range 0 to 2^32^-1. The initial value of the GCTR counter. It is serialized as `bin(start_ctr,32)`.
 ** `last_blk_len`: an integer in the range 0 to 127. The length of the last block of a plaintext or ciphertext.
 --
@@ -1142,7 +1142,7 @@ A value of zero, or larger than 127, causes the CR to transition to Error State 
 +
 --
 [none]
-* `INPUT <- bswap(len_in_bits(plaintext), 64) @ bswap(len_in_bits(AD), 64)`
+* `INPUT <- bswap(bin(len_in_bits(plaintext), 64)) @ bswap(bin(len_in_bits(AD), 64))`
 
 The authentication tag is computed as follows:
 
@@ -1541,14 +1541,12 @@ Data Structures:::
  ** `key`: `k` bits.
  ** `N`: `120` bits.
  ** `N_len`: 7 bits. Bit length of the nonce. It cannot exceed 120.
- ** `L`, `L~0~`, `offset`, `hash_A`, `checksum_P` : 128 bits.
+ ** `L*`, `offset`, `hash_A`, `checksum_P` : 128 bits each. The derived values `L$` and `L[0]` (cf. Behavior) may be cached or recomputed.
  ** `offset_index`: int
  ** `tag_len`: 8 bits. Bit length of the tag. Currently, the allowed values are 64, 96, and 128.
  ** `last_blk_len`: `7` bits. Length of the last block of AD or plaintext/ciphertext in bits. It is between 0 and 120 (`b` - 8) and must be a multiple of 8, since cite:[RFC7253] defines OCB over byte strings. A value that is not a multiple of 8, or that exceeds 120, causes the CR to transition to Error State _Invalid_.
  ** `index`: int, corresponding to `i` in the loops in RFC{nbsp}7253. It cannot exceed `MAX_BLOCKS` = 2^48^-1.
  **  `L~i~`: array of 128 bit values, with `i` up to `floor(log_2(MAX_BLOCKS))`.
- **  `AD_finalized`: bool. `true` if the AD has been finalized.
- **  `text_finalized`: bool. `true` if the plaintext/ciphertext has been finalized.
 
 * *Serialized Context*:
 +
@@ -1561,17 +1559,15 @@ Data Structures:::
 |  iii  | 120         | `N`
 |   iv  |   7         | `N_len`. A value of zero signals that `N` is not set
 |    v  |   1         | Padding
-|   vi  | 128         | `L`
+|   vi  | 128         | `L*`; the derived `L$` and `L[i]` are recomputed or re-derived upon import
 |  vii  | 128         | `offset` (current offset)
 | viii  | 128         | `hash_A`
 |   ix  | 128         | `checksum_P` (used also for the final tag)
 |    x  |  48         | `index`
-|   xi  |   2         | `tag_len`, encoded as `tag_len/64`
+|   xi  |   2         | `tag_len`, encoded as `tag_len`/32 − 2
 |  xii  |   7         | `last_blk_len`
-| xiii  |   1         | `AD_finalized`
-|  xiv  |   1         | `text_finalized`
-|   xv  |   5         | Padding
-|  xvi  |  64 or 0    | Padding to a multiple of 128 bits.
+| xiii  |   7         | Padding
+|  xiv  |  64 or 0    | Padding to a multiple of 128 bits.
 |===
 --
 
@@ -1712,7 +1708,7 @@ If `ACELEN` > `b`, the above operation is executed `ACELEN/b` times.
   . if `last_blk_len` != `0`, then:
   .. `offset <- offset xor L*`
   .. `tmp <- ocb_pad(INPUT, last_blk_len) xor offset`
-  .. `hash_A <- hash_A xor enc_blk(K, tmp)`
+  .. `hash_A <- hash_A xor enc_blk(key, tmp)`
 --
 +
 If `last_blk_len` = 0, however, no `ace.exec` can be executed, and only an `ace.setst` instruction is allowed, to enter State _Encrypt_ or _Decrypt_.
@@ -1794,6 +1790,7 @@ In both cases the state then transitions to _Enc_Tag_Finalize_.
   * `tmp : bits(b)`
 
 []
+  . If `index` = `ones(48)`, then the CR is invalidated, and the instruction terminates.
   . `offset = offset xor L~ntz(index)~`.
   . `tmp <- offset xor dec_blk(key, INPUT xor offset)`
   . `checksum_P <- checksum_P xor tmp`
@@ -1921,9 +1918,11 @@ State Machine:::
  ** _Hash_Absorb_Last_Block_: Set the length of the last block to absorb, then absorb it.
  ** _Hash_Output_: Output the CMAC.
  ** _Success_: The CC has completed the CMAC operation.
+ ** _Failure_: A CMAC verification has failed.
 
 * *Allowed State Transitions:*
  ** _Ready_ -> _Hash_Absorb_ -> _Hash_Absorb_Last_Block_ -> _Hash_Output_ -> _Success_.
+ ** _Hash_Output_ -> _Failure_ (via the verification operation below).
  ** From any valid state to State _Ready_.
 * *Behavior:*
  ** In State _Ready_:
@@ -1963,6 +1962,8 @@ If `ACELEN` > `b`, then the above operations are applied to each `b`-bit block o
 ** In State _Hash_Output_, a single ``ace.exec`` instruction of Form C can be issued, i.e., “``ace.exec OUTPUT, Kn|K{Xn}``”, to output the hash into `OUTPUT`.
    If `ACELEN` > `b`, only the bits of `OUTPUT` beyond the `b`-th are cleared.
    Upon issuing that instruction, the CC transitions to State _Success_.
+
+** Alternatively, in State _Hash_Output_ a Form C ``ace.setst Kn|K{Xn}, #ace_state_hash_verify, INPUT`` may be issued to verify the CMAC without disclosing it: the `b` least significant bits of `INPUT` are compared with `hash`, and the state transitions to _Success_ if they match, to _Failure_ otherwise. Verification of a truncated CMAC is instead performed in software, after emitting the tag.
 
 //
 
@@ -2299,7 +2300,7 @@ Deriving `K0` from the original key is the responsibility of whoever provisions 
 | Pos. | Size (Bits)              | Field
 |   i  | 128                      | MDH
 |  ii  | variable                 | Serialized Content of the underlying hash function, in its entirety, including its own padding to a multiple of 128 bits.
-| iii  | `b^*^` or 64             | `key`, where `b^*^` is the number of bits in the key, padded to a multiple of 8 bits.
+| iii  | `b^*^` or 64             | `K0`, where `b^*^` = `b` as in the Provisioning Input; 64 bits for a System Key Identifier.
 |  iv  | (-`b^*^`) mod 128, or 64 | Padding, to reach a multiple of 128 bits.
 |===
 --
@@ -2548,10 +2549,10 @@ does not define how, since cite:[nist-SP-800-185] does not.
 | iii  | 16          | `block_base`
 |  iv  | 16          | `input_base`
 |   v  | 32          | Padding
-| vii  | `b`         | `cshake_block`
-| viii | `b`         | `key_block`
-|  ix  | 32          | `L`
-|   x  | 96          | Padding
+|  vi  | `b`         | `cshake_block`
+| vii  | `b`         | `key_block`
+| viii | 32          | `L`
+|  ix  | 96          | Padding
 |===
 --
 
@@ -2695,6 +2696,12 @@ State Machine:::
    . `state[4] <- zeros(64)`
    . `tag_len <- 128`
 
+** In State _Ready_, a Form B ``ace.setst Kn|K{Xn}, #ace_state_set_aux_value, Xs`` sets
+   `tag_len` {leftarrow} `Xs`. Admissible values satisfy 64 {le} `Xs` {le} 128; any other
+   value causes the CR to transition to Error State _Invalid_ (cite:[nist-SP-800-232]
+   forbids tags shorter than 64 bits). The _State_ field is unchanged: setting the tag
+   length is an _operation_, not a state.
+
 ** To transition to State _Hash_Absorb_, a Form C ``ace.setst`` is expected, whose `INPUT` sets the nonce of the algorithm as follows:
 +
 --
@@ -2780,7 +2787,7 @@ In State _Enc_Last_Block_ only one 128-bit block is processed.
  . `ASCON(12)`
  . `state[3] <- state[3] xor key[63:0]`
  . `state[4] <- state[4] xor key[127:64]`
- . `OUTPUT <- state[4] @ state[3]` (Only the 128 lsbs of `OUTPUT` are written to.)
+ . `OUTPUT <- zeros(128 - tag_len) @ (state[4] @ state[3])[tag_len-1:0]` (Only the 128 lsbs of `OUTPUT` are written to.)
  . The state machine then transitions to State _Success_.
 --
 +
@@ -3085,7 +3092,8 @@ each `64`-bit block of `INPUT`.
 . `OUTPUT[63:0] <- state[0]`
 . If `countdown` = 0 then:
 .. Transition to State _Success_.
-. `countdown <- countdown - 1`
+. else:
+.. `countdown <- countdown - 1`
 --
 +
 If `ACELEN` {ge} `128`, these operations are executed `ACELEN/64` times, writing to `OUTPUT`[63:0] the first time, then to `OUTPUT`[127:64], `OUTPUT`[191:128], and `OUTPUT`[255:192]. If more than one ``ace.exec`` instruction is required, writing restarts from `OUTPUT`[63:0].
