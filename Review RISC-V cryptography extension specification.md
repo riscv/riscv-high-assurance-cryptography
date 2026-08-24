@@ -154,7 +154,7 @@ into ACEIOBUF byte `j`; the length check `Xl ≤ aceiobuftop` is evaluated once,
 **M13 — Implementation VDS corruption: import algorithm rejects the whole SCC on `SIV2` failure, but the data-format section says the originating implementation "may silently restart" on corrupted additional data**
 
 - **Location:** `ace-ISA-unpriv.adoc` import step 14 (3098) vs §Formats category 3 (2755); DIEL §3124.
-- **Description:** Two normative statements disagree on whether a bad Implementation VDS is fatal (clear CR, `ace_state_import_auth`) or ignorable (discard, restart the interrupted operation). The difference is security-relevant: fatal turns a one-bit flip in *optional* data into destruction of the context (DoS amplification); ignorable must be specified carefully so that only the VDS, never `Content1`, is droppable.
+- **Description:** Two normative statements disagree on whether a bad Implementation VDS is fatal (clear CR, _Authentication Failed_) or ignorable (discard, restart the interrupted operation). The difference is security-relevant: fatal turns a one-bit flip in *optional* data into destruction of the context (DoS amplification); ignorable must be specified carefully so that only the VDS, never `Content1`, is droppable.
 - **Resolution:** Specify: if `SIV2` verification fails, discard the VDS, set _ImpDataLen_ ← 0, and proceed with the (already authenticated) architecture-dependent content; keep hard failure only for `SIV` (Content1) mismatch. Update the DIEL note accordingly.
 
 **M14 — GCM-SIV decryption `last_blk_len` rule contradicts encryption and RFC 8452's byte orientation**

@@ -439,11 +439,11 @@ The architected values of _State_ common to all algorithms are defined in the fo
 .Global CC State Numbers: Error States
 [float="center",align="center",width="100%",cols="^7%,<28%,<16%,<49%"]
 |===
-|  24    | `ace_state_unsupported`         | _Not_Impl_        | Not implemented algorithm.
-|  25    | `ace_state_invalid`             | _Invalid_         | The CR transitions to Error State _Invalid.
+|  24    | `ace_state_unsupported`         | _Unsupported_     | Not supported (i.e., not implemented) algorithm.
+|  25    | `ace_state_invalid`             | _Invalid_         | The CR transitions to Error State _Invalid_.
 |  26    | `ace_state_out_of_memory`       | _Out_of_Memory_   | Insufficient CRF memory for a configuration instruction. This may be set by privileged code if it does not handle CR allocation or fails to do so, returning an error instead.
-|  27    | `ace_state_import_auth`         | _Auth_Failed_     | Authentication failure while completing an SCC import.
-|  28    | `ace_state_privilege_violation` | _Priv_Viol_       | Violation of Usage Control policies.
+|  27    | `ace_state_import_auth`         | _Authentication Failed_     | Authentication failure while completing an SCC import.
+|  28    | `ace_state_privilege_violation` | _Privilege Violation_       | Violation of Usage Control policies.
 |  29    | `ace_state_expired`             | _Expired_         | The CR has expired.
 | 30, 31 | (Reserved)                      | {empty}           | Reserved for future use.
 |===
@@ -494,7 +494,7 @@ The following rules are generic and apply to all algorithms:
 . The MDH's _State_ field must reflect the current state whenever the CC is in _Ready_, _Success_, _Failure_, or any Error State.
 This ensures that these states can be unambiguously determined from the _State_ field alone, without inspecting the Content.
 
-. In States _Success_ and _Failure_, only the following ACE instructions are permitted: `ace.mgmt`, `ace.load`, `ace.store`, `ace.clear`, `ace.size`, `ace.setst`, and `ace.getst` (described in <<ACE-instructions-detailed>>).
+. In States _Success_ and _Failure_, only the following ACE instructions are permitted: `ace.mgmt`, `ace.load`, `ace.store`, `ace.clear`, `ace.size`, `ace.setst`,  `ace.getmd*`, and `ace.getst` (described in <<ACE-instructions-detailed>>).
 
 . In States _Success_ and _Failure_, `ace.setst` is only permitted to transition to _Ready_ or _Unconfigured_.
 
@@ -663,7 +663,7 @@ Any attempt to use a CR whose _ConfigStatus_ is not `ace_cfgst_complete` will ra
   in its own description); `ace.size`; `ace.getmd*` and `ace.getst`;
   `ace.setst` with `#immed7` equal to `ace_state_unconfigured` or an Error
   State (hence `ace.clear` and `ace.reset`).
-See <ACE-error-architecture>> for the behavior when the Privileged Architecture is not implemented.
+See <<ACE-error-architecture>> for the behavior when the Privileged Architecture is not implemented.
 
 The information contained in this field must _not_ affect any of the lengths of <<ACE-length-rule>>.
 
@@ -782,9 +782,8 @@ The _ExpirationDate_ field is evaluated normatively at the following points:
 
 If the secure clock indicates that the expiration date has passed at any of these evaluation points, the hardware immediately transitions the CR's _State_ field to Error State `ace_state_expired`, invalidates all intermediate computational state, and performs all Error State actions. These include implementation-specific tasks such as releasing CRF capacity held by the Content.
 
-Management operations, such as exporting (`ace.store`), clearing (`ace.clear`), cloning, or obtaining the size of the exported CR (`ace.size`), do not perform this check. Specifically, the check is skipped when _ConfigStatus_ is not `ace_cfgst_complete`. Consequently, an ACE exception `ace_exc_expired`
-(see <<ACE-error-architecture>> for the behavior when the Privileged Architecture is not implemented.)
-is raised only when an expired CR is actively used or resumed, while still permitting expired contexts to be cleanly evicted, saved, or unconfigured.
+Management operations, such as exporting (`ace.store`), clearing (`ace.clear`), cloning, or obtaining the size of the exported CR (`ace.size`), do not perform this check. Specifically, the check is skipped when _ConfigStatus_ is not `ace_cfgst_complete`. Consequently, the transition to Error State `ace_state_expired`
+is only triggered when an expired CR is actively used or resumed, while still permitting expired contexts to be cleanly evicted, saved, or unconfigured.
 
 The _ExpirationDate_ field does not affect any lengths specified in <<ACE-length-rule>>.
 
@@ -853,19 +852,18 @@ In this case, ACE exceptions are replaced by direct transitions of the CR to an 
 |===
 | ACE Exception                           | Behavior when the Privileged Architecture is not available.
 | `ace_guru_meditation`                   | Implementation and platform defined behavior.
-| `ace_exc_unsupported`                   | Transition to Error State `ace_state_unsupported`.
+| `ace_exc_unsupported`                   | Transition to Error State _Unsupported_.
 | `ace_exc_CR_off`                        | Does not apply without Privileged Architecture, since the `*lcrstatus` CSRs are not available.
 | `ace_exc_out_of_memory`                 | Transition to Error State `ace_state_out_of_memory`.
 | `ace_exc_privilege_violation`           | Transition to Error State `ace_state_privilege_violation`.
-| `ace_exc_expired`                       | Transition to Error State `ace_state_expired`.
-| `ace_exc_unconfigured_buffer`           | When an ACE instruction is issued that uses the CR with the ACEIOBUF, transition that CR to Error State `ace_state_invalid`.
+| `ace_exc_unconfigured_buffer`           | When an ACE instruction is issued that uses the CR with the ACEIOBUF, and the latter is unconfigured or absent, the semantics of the ACE instruction are the same as if the input and/or output had an `ACELEN` of 0.
 |===
 The error conditions in <<ACE-exception-error-correspondence>> are placed in their natural priority order.
 
 Conversely, exception handlers must set a CR's _State_ to Error State
-`ace_state_unsupported`,
-`ace_state_out_of_memory`, resp.,
-`ace_state_privilege_violation`
+_Unsupported_,
+_Out_of_Memory_`, resp.,
+_privilege_violation`
 when the following three conditions are met: they cannot resolve exception
 `ace_exc_unsupported`,
 `ace_exc_out_of_memory`, resp.,
@@ -894,15 +892,21 @@ Illegal Instructions:::
 --
 This category has the second highest priority, and comprises following conditions:
 
-. Any instruction with an ACE opcode may raise an illegal-instruction exception for the purpose of emulation, or if certain fields are have invalid encodings in sub-fields (such as `v` = `h` = 1 in `ace.restrict`), or if the instruction belongs to an unimplemented (sub)extension.
- . if ACE not present or any governing ACES field is Off: issuing any ACE instruction, or accessing an ACE CSR.
+. Any instruction with an ACE opcode may raise an illegal-instruction exception for the purpose of emulation, or if certain fields have invalid encodings in sub-fields (such as `v` = `h` = 1 in `ace.restrict`), or if the instruction belongs to an unimplemented (sub)extension.
+ . if ACE not present or any governing ACES field is Off: issuing any ACE instruction, or accessing an ACE CSR. Note that this does _not_ refer to the `*lcrstatus` CSRs fields of a CR being Off.
  . Using any ACE instruction when no active CSK is defined, or `macecsk` group partially written (<<ACE-CSK-requirements>>).
  . Use of the zero register `X0` as a CR indirect index unless explicitly allowed to encode special cases.
  . Access to ACE specific CSRs if the ACE extension is not present or if an ACES field is Off, or if a CSK has not been configured.
  . Issuing `ace.load`, `ace.store`, or `ace.mv` on a CR with _ConfigStatus_ equal to `ace_cfgst_complete`.
  . Use an odd register number in RV32 when a register pair is expected.
  . Use of a vector-version of any ACE instruction with the vector extension (or RVV-mini) not enabled.
- . An instruction Form that the Algorithm bound to the CR does not accept in its current state, see <<ACE-usage-input-output>> and <<ACE-algorithms>>.
+--
+
+LCRstatus OFF:::
++
+--
+Accessing CR #__i__ while one of the `*lcrstatus`[__i__] fields for a higher-privileged mode is Off raises ACE exception `ace_exc_CR_off`.
+This allows the emulation of an Algorithm.
 --
 
 Unsupported Algorithms:::
@@ -921,15 +925,22 @@ Violations of this policy raise ACE exception `ace_exc_privilege_violation`.
 Invalidating Conditions:::
 +
 --
-Certain error conditions _invalidate_ a CR, namely cause it to transition to Error State _Invalid_, with effects described in <<ACE-State-field>>.
+Certain error conditions _invalidate_ a CR, namely cause it to transition to some Error State with effects described in <<ACE-State-field>>.
 This means that it cannot be used further except by unconfiguring it, re-provisioning or, if the algorithms supports it, by transitioning it to State _Ready_.
-These are:
 
- . An `ace.setst` or an `ace.exec` instruction is issued on an expired CR, or an `ace.derive` instruction is issued with an expired source or target CR.
- . If, upon resumption of interrupted operations, the CR has expired.
+The following conditions cause a transition to Error State _Invalid_:
+
+`ace.derive` instruction is issued with an expired source or target CR.
  . Non-allowed immediate, Form, or auxiliary parameter in an `ace.setst` instruction in the current state.
  . Non-allowed Form of an `ace.exec` instruction in the current state.
  . Non-allowed parameters to `ace.restrict*`.
+
+The following conditions cause a transition to Error State _Expired_:
+
+[start=5].
+
+ . An `ace.setst` or an `ace.exec` instruction is issued on an expired CR, or an
+ . if, upon resumption of interrupted operations, the CR has expired.
 --
 
 Algorithmic Errors:::
@@ -1846,7 +1857,7 @@ The software must use Form B of `ace.mgmt` to pass along the value of `ml` saved
 
 .. If `ml`._ConfigStatus_ = `ace_cfgst_complete` (we are importing the export of a fully configured CR)
 ... The ACE unit decrypts and authenticates the CR's content.
-... If authentication fails, the target CR is transitioned to Error State `ace_state_import_auth`. No exception is raised.
+... If authentication fails, the target CR is transitioned to Error State _Authentication Failed_. No exception is raised.
 ... The ACE unit performs any necessary readjustment of the CR's content to turn it into the format internally consumed by the ACE Unit.
 ... _ConfigStatus_ is set to `ace_cfgst_complete`.
 .. `acestart` is set to 0.
@@ -2112,8 +2123,8 @@ All other fields are ignored.
    The ordering of the implementation-custom level (6 or 7) relative to the architected levels is implementation-defined.
 
 ** The request may fail because a stronger SCA protection level may requires more CRF capacity.
-   If the implementation cannot allocate that capacity, the CR is
-   transitioned ACE exception `ace_exc_out_of_memory` is raised. If the handler fails to free
+   If the implementation cannot allocate that capacity,
+   ACE exception `ace_exc_out_of_memory` is raised. If the handler fails to free
    sufficient capacity or does not perform this operation, then it must set Error State `ace_state_out_of_memory` before returning control.
 
 * If `Xs`._Locality_ is non-zero, it is used to update `MDH`._Locality_, subject

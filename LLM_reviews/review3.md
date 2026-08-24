@@ -502,7 +502,7 @@ mnemonics must be lower-case throughout.
   across `ace-ISA-algorithms.adoc` (7) and `ace-pseudocode.adoc` (5), including the
   definition row in <<ACE-state-constants-symmetric>>.
 * A third mnemonic also violated the rule and was not named in the instruction:
-  `ace_state_import_auth` {rightarrow} `ace_state_import_auth`, 4 occurrences in
+  _Authentication Failed_ {rightarrow} _Authentication Failed_, 4 occurrences in
   `ace-ISA-unpriv.adoc` — the definition row in <<ACE-states-error>>, the `ace.mgmt`
   import-termination text, and the two SCC-import steps. I applied the rule to it since it
   was stated as holding "throughout"; the only argument for the old spelling is that `CR`
