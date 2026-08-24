@@ -180,6 +180,8 @@ For the restrictions on `ace.clone`, cf. <<ACE-instruction-clone>>.
 
 . If a usage instruction that may modify the state of a CR is issued, or a state transition is requested via `ace.setst`, and this is not explicitly allowed by the current state of the algorithm encoded in the CC in the CR, then the CR transitions to Error State _Invalid_.
 
+. If `ACELEN` does not satisfy the granularity constraints of the Algorithm in its current state — for instance, it is not a whole multiple of the block size where the Algorithm requires one — the instruction performs no operation and the CR transitions to Error State _Invalid_.
+
 // ////////////////////////////////////////////////////////////////////
 
 [[ACE-notation]]
@@ -438,6 +440,11 @@ of the `ACELEN/b` `b`-bit blocks of `INPUT`, producing the corresponding `b`-bit
 block of `OUTPUT` each time.
 --
 
+ ** If a `tick_ctr()` would wrap `ctr` around to its initial value, the `ace.exec`
+    performs no operation for that block and any later ones, and the CR transitions to
+    Error State _Invalid_: continuing would repeat the keystream. The partial-progress
+    rule of <<ACE-error-architecture>> applies to the blocks already produced.
+
 Note that if `ace.setst` is issued to return to State _Ready_, the CC can be reused with a new IV.
 
 Example pseudocode is given in <<ACE-pseudocode-keystream-modes>> (for the case `b` = `ACELEN` = 128).
@@ -475,14 +482,14 @@ Data Structures:::
 |  Pos. | Size (Bits)     | Field
 |   i   | 128            | MDH
 |  ii   | `k` or 64       | `key1` or System Key Identifier
-| iii   | `k` or 0        | `key2` or empty if `key1` given
+| iii   | `k` or 0        | `key2` if _KeyType_ = 0, else empty (a single SKID retrieves both keys)
 |===
 --
 
 * *Internal State*:
  ** Metadata Header.
  ** `key1`: `k` bits.
- ** `key2`: `k` bits -- omitted if only one key is used or if both keys come from an entry in the SKS.
+ ** `key2`: `k` bits -- omitted if both keys come from an entry in the SKS.
  ** `mask`: `b` bits.
 
 * *Serialized Context*:
@@ -493,7 +500,7 @@ Data Structures:::
 | Pos. | Size (Bits)   | Field
 |   i  | 128            | MDH
 |  ii  | `k` or 64     | `key1` or System Key Identifier
-| iii  | `k` or 0      | `key2` or empty if `key1` given
+| iii  | `k` or 0      | `key2` if _KeyType_ = 0, else empty (a single SKID retrieves both keys)
 |  iv  | `b`           | `mask`
 |===
 --
@@ -542,21 +549,25 @@ State Machine:::
     It sets the tweak, and the `mask` field is used to store it: `mask <- INPUT`.
   *** If `ACELEN` > `b`, only the `b` least significant bits of `INPUT` are considered.
   *** Then, the following operations are performed:
-  . if two independent keys are used then:
-  .. `mask <- enc_blk(key2, mask)`
-  . else:
-  ..  `mask <- enc_blk(key1, mask)`
-  ..  `mask <- update_mask(mask)`.
+  . `mask <- enc_blk(key2, mask)`
 +
 --
-The extra `update_mask` in the single-key case is required, not incidental. With one key
-the raw value `enc_blk(key1, T)` is both a mask and a value the same key can be asked to
-encrypt, which cite:[DBLP-conf-asiacrypt-Rogaway04] shows to be attackable; the
-construction therefore starts from `{alpha}` {interpunct} `enc_blk(key1, T)`. With two
-independent keys the data path never evaluates `key2`, so the raw value is safe to use and
-no multiplication is needed. An implementation must not "simplify" the two branches into
-one.
+ACE architects only the two-key construction of cite:[nist-SP-800-38E]: the tweak is
+always encrypted under `key2`, which the data path never evaluates, so the raw value is
+safe to use as the initial mask. The single-key XEX construction, in which the mask is
+`{alpha}` {interpunct} `enc_blk(key1, T)`, is *not* architected: provisioning `key2`
+equal to `key1` re-creates it *without* the required multiplication by `{alpha}`, which
+cite:[DBLP-conf-asiacrypt-Rogaway04] shows to be attackable. Provisioners must therefore
+supply two independent keys, and a System Key Identifier must resolve to two independent
+keys in the SKS.
 --
+// The extra `update_mask` in the single-key case is required, not incidental. With one key
+// the raw value `enc_blk(key1, T)` is both a mask and a value the same key can be asked to
+// encrypt, which cite:[DBLP-conf-asiacrypt-Rogaway04] shows to be attackable; the
+// construction therefore starts from `{alpha}` {interpunct} `enc_blk(key1, T)`. With two
+// independent keys the data path never evaluates `key2`, so the raw value is safe to use and
+// no multiplication is needed. An implementation must not "simplify" the two branches into
+// one.
 
   ** In States _Encrypt_ and _Decrypt_, ``ace.exec`` instructions are expected to be of Form A.
     “``ace.exec OUTPUT, Kn|K{Xn}, INPUT``” performs the following operations:
@@ -1434,7 +1445,7 @@ blocks in `INPUT`.
 
 ** To transition to State _Dec_Last_Block_, a Form B `ace.setst` instruction is issued, whereby
 `last_blk_len`, the bit length of the last block, is set to the auxiliary argument `Xs`.
-A value of zero, or larger than 127, causes the CR to transition to Error State _Invalid_, as it does in the other modes that take a final-block length (cf. <<ACE-OCB-mode>>, <<ACE-CMAC-mode>>, <<ACE-Ascon-AEAD128>>).
+A value of zero, larger than 120, or not a multiple of 8, causes the CR to transition to Error State _Invalid_: cite:[RFC8452] defines the mode over byte strings, so the same rule applies on both the encryption and the decryption path.
 
 ** In State _Dec_Last_Block_, a single Form A ``ace.exec`` instruction is expected.
       Issuing “``ace.exec OUTPUT, Kn|K{Xn}, INPUT``,” decrypts `INPUT` into `OUTPUT` and
@@ -1999,9 +2010,10 @@ Data Structures:::
 |   iii | `n`                  | `state`           | --
 |    iv | 16                   | `last_blk_len`  | Present only if this Hash/MAC has special internal treatment for a fractional last block that goes beyond padding and appending the length, which are handled by user software.
 |    v | 16                    | `block_base`      | Amount of data stored so far into `block` or accumulated (usually XORed) into `state`.  Only if used by the algorithm, else zero padding.
-|   vi | 32                    | `cumul_len`       | Cumulative length of all data absorbed so far. Only if the algorithm processes and incorporates it in the hash on its own, else zero padding.
-|  vii | `b`                   | `block`           | Only if `block_base` is defined and the block is stored separately from the `state`.
-| viii | Algorithm-dependent   | Padding           | To reach a multiple of 128 bits.
+|    vi|  32                   | Padding           |--
+|   vii | 64                   | `cumul_len`       | Cumulative length of all data absorbed so far. Only if the algorithm processes and incorporates it in the hash on its own, or when operating under HMAC (<<ACE-HMAC>>), else absent.
+|  viii | `b`                  | `block`           | Only if `block_base` is defined and the block is stored separately from the `state`.
+| ix | Algorithm-dependent     | Padding           | To reach a multiple of 128 bits.
 |===
 --
 
@@ -2009,8 +2021,8 @@ Data Structures:::
 
 NOTE: Regarding the `last_blk_len`/`block_base`/`cumul_len` group: if any of
 these fields is not used, it is replaced by a corresponding padding block. If
-all three are unused by the hashing algorithm, the 64-bit block is
-omitted, and `block` is then omitted as well.
+all three are unused by the hashing algorithm, the block of these three fields is
+omitted as a whole, and `block` is then omitted as well.
 
 Algorithm-Specific Functions:::
 
@@ -2079,19 +2091,123 @@ Then, state transitions to _Hash_Absorb_Last_Block_ as expected.
     * `#define output_base input_base`
 
 []
-   . `output_base <- 0` // or `acestart` upon resumption; both are octet counts
+   . `output_base <- 0` // upon resumption, `output_base <- 8 {interpunct} acestart`
     . while (`output_base` < `ACELEN`) do: // as long as there is room in the OUTPUT
      .. `amount <- min(ACELEN - output_base, t - block_base)`
      .. ``OUTPUT[output_base + amount - 1 : output_base] <- `` +
-           ``{fournbsp}{fournbsp}<- block[block_base + amount - 1 : 8 block_base]``
+           ``{fournbsp}{fournbsp}<- block[block_base + amount - 1 : block_base]``
      .. `output_base <- output_base + amount`
      .. `block_base <- block_base + amount`
      .. if (`block_base` = `t`) then:
       ... if we are in a Hash function, transition to State _Success_, and return.
       ... `update()`
       ... `block_base <- 0`
-      ... *Here* the instruction can be interrupted, with `acestart <- output_base`.
+      ... *Here* the instruction can be interrupted, with `acestart <- output_base / 8`.
 --
+
+// ////////////////////////////////////////////////////////////////////
+
+[[ACE-SHA-2]]
+==== SHA-2 Family Specific Rules
+
+[WARNING]
+====
+Section generated by Fable, need to be double checked.
+====
+
+{empty}
+(((ACE, algorithm, SHA-2)))
+The primitives of the SHA-2 family cite:[nist-fips-180-4] — SHA-224, SHA-256, SHA-384,
+SHA-512, SHA-512/224, and SHA-512/256 — are instantiations of the algorithm specified in
+<<ACE-hash-functions>>, and only the differences with respect to the behavior described
+there are given here.
+
+Parameters:::
+
+* The word size `w`, and `b`, `n`, and `t`, as given in <<ACE-SHA-2-parameters>>; the
+  internal state consists of the eight `w`-bit chaining variables of
+  cite:[nist-fips-180-4].
+* Granularity: 32 bits, with the same meaning as in <<ACE-SHA-3>>.
+
+[[ACE-SHA-2-parameters]]
+.Parameters of the SHA-2 family
+[%autowidth,float="center",align="center",cols="<,^,^,^,^",options="header"]
+|===
+| Function    | `w` | `b`  | `n`  | `t`
+| SHA-224     |  32 |  512 |  256 | 224
+| SHA-256     |  32 |  512 |  256 | 256
+| SHA-384     |  64 | 1024 |  512 | 384
+| SHA-512     |  64 | 1024 |  512 | 512
+| SHA-512/224 |  64 | 1024 |  512 | 224
+| SHA-512/256 |  64 | 1024 |  512 | 256
+|===
+
+*Endianness.* cite:[nist-fips-180-4] is written with big-endian `w`-bit words. Under the
+conventions of <<ACE-Notation>>, the `j`-th message word of a block, for `0` {le} `j` <
+`b`/`w`, is the big-endian interpretation of octets `j` {interpunct} `w`/8 to
+(`j`+1) {interpunct} `w`/8 − 1 of the absorbed string, that is,
+`int(bswap(block[(j+1) {interpunct} w − 1 : j {interpunct} w]))`. The digest is emitted
+symmetrically: the `i`-th chaining variable occupies octets `i` {interpunct} `w`/8
+onward as its big-endian encoding `bswap(bin(H~i~, w))`, truncated to `t` bits overall
+for the truncated variants, as cite:[nist-fips-180-4] prescribes.
+
+Data Structures:::
+
+* *Provisioning Input*: as for <<ACE-SHA-3>>, the MDH only.
+* *Internal State*: Metadata Header; `state` (`n` bits); `block` (`b` bits);
+  `block_base`; and `cumul_len`, the latter maintained only when operating under HMAC
+  (<<ACE-HMAC>>).
+* *Serialized Context*: as prescribed by <<ACE-hash-functions>>, with `last_blk_len`
+  unused (replaced by padding) and `block` present.
+
+Algorithm-Specific Functions:::
+
+* `absorb()`: applies the compression function of cite:[nist-fips-180-4] {sect}6 for the
+  selected function to `block` and `state`.
+* `finalize()`: `None` for stand-alone hashing — padding and length encoding are the
+  caller's responsibility. When operating under HMAC, `finalize()` applies the padding of
+  cite:[nist-fips-180-4] {sect}5.1 internally; see <<ACE-HMAC>>.
+
+State Machine:::
+
+* *States:* _Ready_, _Hash_Absorb_, _Hash_Output_, and _Success_. There is no
+  _Hash_Absorb_Last_Block_ state: the caller supplies the padded message as whole blocks.
+
+* *Allowed State Transitions:*
+ ** _Ready_ -> _Hash_Absorb_ -> _Hash_Output_ -> _Success_.
+ ** From any valid state to State _Ready_.
+
+* *Behavior:*
+ ** In State _Ready_, `state` is set to the initial hash value of the selected function
+    per cite:[nist-fips-180-4] {sect}5.3, and `block_base` and `cumul_len` are zeroed.
+ ** In State _Hash_Absorb_, Subalgorithm `process_VLI` (cf. <<ACE-process-VLI>>) is
+    entered as
+    `process_VLI(max_length, block, b, state, n, input_base, block_base, 0, cumul_len, absorb(), None)`,
+    where `max_length` is a system-defined maximum length in bits, or zero if none is
+    enforced.
+ ** Upon transitioning to State _Hash_Output_ in stand-alone hashing, `block_base` must
+    be zero — the padded message is a whole number of blocks — otherwise the CR
+    transitions to Error State _Invalid_.
+ ** In State _Hash_Output_, the `t`-bit digest is made available as described in
+    <<ACE-hash-functions>>, and the state then transitions to _Success_.
+
+// ////////////////////////////////////////////////////////////////////
+
+[[ACE-SM3]]
+==== SM3 Specific Rules
+
+[WARNING]
+====
+Section generated by Fable, need to be double checked.
+====
+
+{empty}
+(((ACE, algorithm, SM3)))
+The ShangMi 3 hash function, standardized as GB/T 32905-2016, follows exactly the rules
+of the SHA-2 family (<<ACE-SHA-2>>) with `w` = 32, `b` = 512, `n` = 256, and `t` = 256:
+it is a big-endian Merkle-Damgård function with the same padding rule and word mapping
+as SHA-256, and the same state machine. The initial hash value and the compression
+function are those of the SM3 standard.
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -2219,6 +2335,15 @@ In the NIK variant, the Provisioning Input carries no key. `K0` must be explicit
   . `absorb(key xor opad)` as per `H`.
   . Finalize `H`. The `d`-bit HMAC value is available in State
     _Hash_Output_ exactly as for `H`, and is provided to the caller following `H`'s semantics.
+
+When operating under HMAC, the padding and length encoding of the underlying hash
+function are performed internally by these finalization steps: for the SHA-2 functions
+(<<ACE-SHA-2>>) and SM3 (<<ACE-SM3>>), the padding of the underlying standard is applied
+over the total absorbed length — `b` + `cumul_len` bits for the inner hash, `b` + `d`
+bits for the outer hash — using the `cumul_len` field, which is therefore maintained
+when operating under HMAC; for the SHA-3 functions, the internal suffix-and-padding of
+<<ACE-SHA-3>> applies. Consequently, the caller does *not* pad the message when computing
+an HMAC, in contrast to stand-alone hashing.
 --
 
 // ////////////////////////////////////////////////////////////////////
@@ -2318,7 +2443,7 @@ State Machine::: {empty}
  This is done in
  Subalgorithm `process_VLI` (cf. <<ACE-process-VLI>>) as:
 `process_VLI(max_length, state, b, state, n, input_base, block_base, 0, cumul_len, absorb(), None)`,
-where `max_length` is a system-defined maximum length of the data to be absorbed, in bits.
+where `max_length` is a system-defined maximum length of the data to be absorbed, in bits, or zero if none is enforced; if zero, `cumul_len` is not tracked and is not serialized.
 
  ** Upon transitioning to State _Hash_Output_:
  The suffix-and-padding string `S` = `pad10*1`, appended to `D`, is generated, where `D` is the domain-separation suffix given in <<ACE-SHA-3-parameters>> and `pad10*1` appends a `1`, then as many `0` bits as required, then a final `1`, so that `block_base` + `|S|` is a positive multiple of `b`. Then, the resulting additional block is absorbed:
@@ -3517,7 +3642,7 @@ The sizes of keys and ciphertexts of the three subtypes of ML-KEM are summarized
 | ML-KEM-1024 |      1568 |      3168 |         1568 |        32
 |===
 
-The ML-KEM algorithms also support the Form A `ace.derive` instruction, which takes the
+The ML-KEM algorithms also support the Form B `ace.derive` instruction, which takes the
 `sharedkey` already held in the CC—produced by `_Encapsulate_` or by `_Decapsulate_`—
 and provisions a new CC with it in a second CR. The auxiliary input in a GPR (or GPR pair
 for RV32) carries bits [63:0] of the MDH of that new CC, and so selects the symmetric
@@ -3640,15 +3765,7 @@ ML-KEM algorithms define:
 . If `ML-KEM.KeyGen` fails, the state machine transitions to state _Failure_.
 . Otherwise, the state machine transitions to state _Success_.
 
-  ** In State _Encapsulate_, the procedure `ML-KEM.Encaps` of cite:[nist-fips-203] is
-applied to the `encapsk` state field. It draws a random value internally and derives from
-it *both* the shared key and the ciphertext, which are stored in the `sharedkey` and
-`ciphertext` state fields, respectively. The shared key is not drawn independently of the
-ciphertext, and `encapsk` must have been set—by `_encapsk_Input_` or by
-`_GenerateKeyPair_`—before this state is entered.
-If the procedure `ML-KEM.Encaps` fails, the state machine transitions to state _Failure_.
-
-** In State _Encapsulate_, Form D ``ace.exec Kn|K{Xn}`` executes encapsulation using procedure `ML-KEM.Encaps` of cite:[nist-fips-203] (Algorithm 20).
+** In State _Encapsulate_, Form D ``ace.exec Kn|K{Xn}`` executes encapsulation using procedure `ML-KEM.Encaps` of cite:[nist-fips-203] (Algorithm 20), applied to the `encapsk` state field, which must have been set—by `_encapsk_Input_` or by `_GenerateKeyPair_`—before this state is entered. The procedure draws a random value internally and derives from it *both* the shared key and the ciphertext, which are stored in the `sharedkey` and `ciphertext` state fields, respectively; the shared key is not drawn independently of the ciphertext.
 
   . If `ML-KEM.Encaps` succeeds:
   .. The state machine transitions to state _ciphertext_Output_.

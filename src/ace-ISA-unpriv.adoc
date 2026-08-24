@@ -108,9 +108,9 @@ Trap-and-emulate exploits the ``*lcrstatus`` fields, which can also be used for 
 | `Zklgcmsivm`     | GCM-SIV.^2^                                                                                                       | <<ACE-GCM-SIV-mode>>
 | `Zklocbm`        | OCB3 and OCB3 with set IV.^2^                                                                                     | <<ACE-OCB-mode>>
 | `Zklcmacm`       | CMAC.^2^                                                                                                          | <<ACE-CMAC-mode>>
-| `Zklesha2h`      | SHA-224, SHA-256, SHA-384, SHA-512, SHA-512/224, and SHA-512/256.                                                 | <<ACE-hash-functions>>
+| `Zklesha2h`      | SHA-224, SHA-256, SHA-384, SHA-512, SHA-512/224, and SHA-512/256.                                                 | <<ACE-SHA-2>>
 | `Zklesha3h`      | SHA3-224, SHA3-256, SHA3-384, SHA3-512, SHAKE128, and SHAKE256.                                                   | <<ACE-SHA-3>>
-| `Zklsm3h`        | ShangMi 3 (SM3) hash function.                                                                                    | <<ACE-hash-functions>>
+| `Zklsm3h`        | ShangMi 3 (SM3) hash function.                                                                                    | <<ACE-SM3>>
 | `Zklhmacm`       | HMAC function with provisionable key (with SHA2, resp., SHA3, when `Zklesha2h`, resp., `Zklesha3h` is supported). | <<ACE-HMAC>>
 | `Zklkmacm`       | KMAC function with provisionable key. Depends on `Zklesha3h`, since KMAC is only defined with SHA3.               | <<ACE-KMAC>>
 | `Zklascon`       | Ascon-AEAD128 (base, with set Nonce, or with Nonce Masking), Ascon-Hash256, Ascon-XOF128 and Ascon-CXOF128.       | <<ACE-Ascon-AEAD128>> to <<ACE-Ascon-CXOF128>>
@@ -261,8 +261,8 @@ The current set of features is:
  ** Support for `LMUL` integer values of 1, 2, 4, and 8;
  ** Attempting to configure RVVmini for unsupported configurations raise an illegal-instruction exception.
 * Unit-strided vector loads and stores;
-* `vins`/`vext`;
-* Vector logical operations: `vand`, `vor` and `vxor` (including immediate variants, for instance, to obtain `vnot`); and
+* `vmv.x.s` and `vmv.s.x` (`vins`/`vext`?), and the slide instructions `vslideup.v[xi]`, `vslidedown.v[xi]`, `vslide1up.vx`, and `vslide1down.vx`, to insert data into and extract data from vector registers;
+* Vector logical operations: `vand.v[vxi]`, `vor.v[vxi]`, and `vxor.v[vxi]` (the immediate variants allow obtaining, for instance, a bitwise NOT); and
 * `vclmul.v[vx]` and `vclmulh.v[vx]` from `Zvbc`. They may be implemented as trap-and-emulate.
 
 ACE instructions do not use vector masking and do not define masked versions of `ace.exec`.
@@ -270,7 +270,7 @@ Therefore, RVV-mini does not need support for masked operations.
 Bit 25 of the instruction encodings is reserved for potential future adoption of masked operations, should a compelling use case arise.
 
 Floating-point, fixed-point, and general arithmetic vector operations are not required.
-Complex operations for certain cryptographic algorithms may be performed in GPRs, with data inserted into vector registers and results extracted from them via `vins`/`vext`.
+Complex operations for certain cryptographic algorithms may be performed in GPRs, with data inserted into vector registers and results extracted from them via `vmv.s.x`/`vmv.x.s` and the slide instructions (`vins`/`vext`?).
 
 [WARNING]
 ====
@@ -1694,7 +1694,7 @@ Bit `r` (i.e., bit 20) is 0 if the context is encoded as an immediate, and 1 if 
 It occupies bit 20 rather than bit 26, where `ace.exec` carries the same selector, because
 bits [31:25] are taken here by `#immed7`.
 
-When `r` = 1 and the CR register is `X0`, the instruction has reserved semantics.
+When `r` = 1 and the CR register is `X0`: if `#immed7` = 0, the instruction is `ace.reset` (<<ACE-instruction-clear>>); all other values of `#immed7` are reserved and raise an illegal-instruction exception.
 
 The encodings of the three Forms are:
 [upperalpha]
@@ -1954,7 +1954,7 @@ The instruction is not usage-controlled.
 
 [NOTE]
 ====
-The rules governing `ace.mgmt exist because any management operation may be interrupted and resumed. System software is responsible for saving and restoring _ConfigStatus_, which keeps the CPU logic simple and supports arbitrarily many levels of nested virtualization.
+The rules governing `ace.mgmt` exist because any management operation may be interrupted and resumed. System software is responsible for saving and restoring _ConfigStatus_, which keeps the CPU logic simple and supports arbitrarily many levels of nested virtualization.
 They also allow an interrupted import to resume on a different hart, even one attached to a different ACE Unit implementation. The architecture ensures interoperability as long as the importing implementation supports the algorithm encoded in the SCC.
 
 Software must permit interrupted configuration and export operations to resume, while remaining binary compatible across implementations with and without resumption support. Resumption of the transfer instructions is not required: even where supported, an implementation may ignore `acestart` and restart an `ace.load`, `ace.store`, `ace.input`, or `ace.output`, subject to the completion guarantee of <<ACE-forward-progress>>. A context switch handler can force a restart by clearing partially configured or exported CRs at context save and again at restore.
@@ -2824,6 +2824,7 @@ If `ace.derive` is used to inject key material into a destination CR, the latter
 === Interruptibility and Resumability of ACE instructions
 
 `ace.clear`, `ace.reset`, `ace.setst`, `ace.mgmt`, `ace.getst`, `ace.restrict`, `ace.clone`, `ace.size`, and `ace.avail` are uninterruptible.
+`ace.mgmt` is uninterruptible as a single instruction; the management _processes_ it delimits are interruptible between their constituent instructions (<<ACE-instruction-manage>>). To bound the latency of the final `ace.mgmt` of an import, whose decryption and authentication work grows with the size of the SCC, implementations may interleave that work with the preceding load phase, as noted in <<ACE-management-code-snippets>>.
 
 Long-running ACE operations may proceed even if the hart is preempted.
 In this case, when the context‑switch handler accesses an output of the operation, different behaviors are allowed:
@@ -3388,7 +3389,7 @@ When the import of the SCC of a fully configured CR is completed,
 .. `len_AD2` <- 2, ``AD2[0]`` <- ``K(i)``.``IMPQUAL``, ``AD2[1]`` <- `SIV`.
 .. `len_PC2` <- length of Section 6.
 .. `correct`, `K(i).Content2[]` <- ``SCC_Decrypt(AD2, zeros(96), SIV2, K(i).Content2[], CSK, len_AD2, len_PC2)`` (decrypt in place).
- . If `correct` {ne} `true`, then reject the SCC, clear ``K(i)``, and set Error State _ace_state_import_auth_.
+ . If `correct` {ne} `true`, the Implementation VDS is discarded: `Content2[]` is dropped, _ImpDataLen_ is set to 0, and the import completes using only the architecture-dependent content. Only a failure of the first authentication (`SIV`) rejects the entire SCC.
 --
 
 [NOTE]
