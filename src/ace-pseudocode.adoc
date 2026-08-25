@@ -32,7 +32,7 @@ restarted.
 ----
   li         s2, 16
   vsetvli    s2, s1, e8, m1, ta, ma # ready to load 16 bytes
-  vle8.v     v2, 0(t6)       # load from memory
+  vle8.v     v4, 0(t6)       # load from memory
   li         t3, 23          # highest valid _State_; keep for every test below
 
 restart:
@@ -72,11 +72,11 @@ success:
 ----
   li         s2, 16
   vsetvli    s2, s1, e8, m1, ta, ma # ready to load 16 bytes
-  vle8.v     v2, 0(t6)       # load from memory
+  vle8.v     v4, 0(t6)       # load from memory
   li         t3, 23          # highest valid _State_; keep for every test below
 
 restart:
-  ace.mgmt   K{t0}, #ace_CR_provision_start, v2  # start provisioning, load MDH
+  ace.mgmt   K{t0}, #ace_CR_provision_start, v4  # start provisioning, load MDH
   ace.getst  t2, K{t0}
   bltu       t3, t2, handle_errors
   beqz       t2, handle_errors
@@ -98,11 +98,12 @@ success:
   vsetvli    s2, s1, e8, m1, ta, ma # ready to load 16 bytes
   vle8.v     v2, 0(t6)          # load from memory
   li         t3, 23
-  ace.size   t5, t1             # length of SCC in bytes, 0 if unsupported
+  ace.size   t5, v2             # length of SCC in bytes, 0 if unsupported
   beqz       t5, handle_errors  # algorithm not supported, or MDH invalid
 
-restart:                        # t5 is never modified, so a restart re-derives
-                                # the working count and pointer from it
+  # t5 is saved in local state and not modified by this code, so jumping
+  # to restart will re-derive the working count and pointer from it
+restart:
   ace.mgmt   K{t0}, #ace_CR_import_start, v2  # prepare CR for import, load MDH
   ace.getst  t2, K{t0}
   bltu       t3, t2, handle_errors
@@ -114,7 +115,7 @@ restart:                        # t5 is never modified, so a restart re-derives
 vloop:
   vsetvli    s2, s1, e8, m1, ta, ma
   vle8.v     v4, (t4)                 # load a chunk of the SCC
-  ace.mv     K{t0}, v4                # move it into the CR
+  ace.mv     K{t0}, v4                # move it into the CR, advance acestart
   add        t4, t4, s2
   sub        s1, s1, s2
   ace.getst  t2, K{t0}
@@ -138,12 +139,11 @@ success:
   li         t3, 23
 
 restart:
-  ace.mgmt   K{t0}, #ace_CR_import_start, v4 # prepare CR for import, load MDH
-                                     # prepare CR for import, load MDH[63:0]
+  ace.mgmt   K{t0}, #ace_CR_import_start, v2 # prepare CR for import, load MDH
   ace.getst  t2, K{t0}
   bltu       t3, t2, handle_errors
   beqz       t2, handle_errors
-  ace.load   K{t0}, 8(t6)            # load the rest starting with MDH[127:64]
+  ace.load   K{t0}, 8(t6)            # load the rest starting with SIV
   ace.getst  t2, K{t0}
   beqz       t2, restart             # CR cleared means force restart
   bltu       t3, t2, handle_errors
@@ -183,14 +183,14 @@ restart:
   # `ace_cfgst_exporting`. Otherwise, it does nothing.
 
   ace.mgmt   K{t0}, #ace_CR_export_start
-  vse8.v     v2, 0(t6)               # export original MDH[63:0] to memory
+  vse8.v     v2, 0(t6)               # export original MDH to memory
 
   addi       s1, s1, -16             # the 16 B of MDH already stored
   addi       t4, t6, 16              # destination pointer
 
 vloop:
   vsetvli    s2, s1, e8, m1, ta, ma  # s2 = no. of octets moved this iteration
-  ace.mv     v4, K{t0}               # move a chunk out of the CR
+  ace.mv     v4, K{t0}               # move chunk out of CR, advance acestart
   vse8.v     v4, (t4)                # store it
   add        t4, t4, s2              # bump the destination pointer
   sub        s1, s1, s2              # decrement the octets still to store
@@ -226,7 +226,7 @@ restart:
   # `ace_cfgst_exporting`.  Otherwise, it does nothing.
 
   ace.mgmt   K{t0}, #ace_CR_export_start
-  sd         t1, 0(t6)             # export original MDH[63:0] to memory
+  vse8.v     v2, 0(t6)               # export original MDH to memory
 
   # The next instruction stores all data starting with the SIV
   # In case of interrupt/exception, the handler will decide whether to keep
@@ -240,12 +240,12 @@ restart:
   bltu       t3, t2, handle_errors
 
 success:
-  # Reset MDH[63:0] to the previously saved value. If the saved _ConfigStatus_
+  # Reset MDH to the previously saved value. If the saved _ConfigStatus_
   # is `ace_cfgst_complete`, the operation also re-decrypts the state and makes
   # the CR available to software, otherwise it does nothing and leaves the CR
   # state in the serialized and encrypted format.
 
-  ace.mgmt   K{t0}, #ace_CR_management_end, t1
+  ace.mgmt   K{t0}, #ace_CR_management_end, v2
 ----
 
 // NOTE: The three instructions are essentially the same as `ace.export`.
