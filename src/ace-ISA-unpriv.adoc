@@ -70,7 +70,7 @@ Besides implementations of ACE within a CPU core, this model also allows a singl
 The specification does not mandate—and cannot mandate—a pure hardware implementation of ACE.
 Although it is generally discouraged, ACE may be implemented wholly or partially via a trap-and-emulate mechanism.
 In certain cases, a partial trap-and-emulate approach may even be beneficial.
-For example, smaller implementations may implement symmetric cipher operations (cf. <<ACE-states-symmetric>>) in hardware while relying on trap-and-emulate for asymmetric cipher operations, such as elliptic curve algorithms (cf. <<ACE-ECC>>).
+For instance, smaller implementations may implement symmetric cipher operations (cf. <<ACE-states-symmetric>>) in hardware while relying on trap-and-emulate for asymmetric cipher operations, such as elliptic curve algorithms (cf. <<ACE-ECC>>).
 This approach is particularly advantageous for post-quantum cryptographic algorithms (cf. <<ACE-PQC>>), which require very large states.
 A trap-and-emulate implementation in M-mode firmware avoids the need to support large states inside the ACE unit, as long as the relevant CRs are stored in a secure SRAM or some other form of secure memory.
 
@@ -3493,7 +3493,6 @@ and opening the CR for export (`ace.mgmt Kd|K{Xd}, #ace_CR_export_start`) perfor
 to create the serialized, encrypted and authenticated SCC from the CR.
 
 .Exporting a Fully Configured CR ``K(i)``
-[example]
 --
 . First, the algorithm-dependent data is processed:
 .. `saved_MDH` <- the *initial* MDH of ``K(i)``, that is the image with _ConfigStatus_ = `ace_cfgst_complete` that software saved before issuing `#ace_CR_export_start`, ``len_AD`` <- 1
@@ -3526,7 +3525,6 @@ When the import of the SCC of a fully configured CR is completed,
 `ace.mgmt Kd|K{Xd}, #ace_CR_management_end` decrypts and authenticates the SCC by the following algorithm.
 
 .Importing a Fully Configured CR ``K(i)``
-[example]
 --
  . Clear ``K(i)``.
  . Load `M`, the MDH, from the SCC, into ``K(i)``.``MDH``.
@@ -3579,13 +3577,13 @@ The timing of the processing of each block is independent of the actual data bei
 // ////////////////////////////////////////////////////////////////////
 
 [[ACE-interruptible-mgmt]]
-== Considering an interruptible `ace.mgmt`
+=== Considering an interruptible ace.mgmt
 
 _This section is informative and non-normative.
 It documents a set of changes to the rest of this document that would be required to make the management processes (provisioning, import, and export) fully resumable across both preemption and hart migration, while preserving the confidentiality of the CC and the unforgeability of the SCC.
 None of the changes below are part of the current specification; they are described here as a self-contained proposal that can be lifted into normative text in a future revision._
 
-=== Threat model and security goals
+==== Threat model and security goals
 
 The proposal considers an adversary `A` that is a malicious unprivileged process, possibly assisted by a cooperating but not colluding operating system.
 `A` can:
@@ -3606,7 +3604,7 @@ The security goals are:
 . *Forgery resistance.* `A` must not be able to cause any CR to reach `_ConfigStatus = ace_cfgst_complete` with a plaintext of `A`'s choosing, except by legitimately producing a fresh SCC that authenticates under the active CSK.
 . *Availability* is explicitly out of scope: `A` is allowed to make a CR unavailable by tampering with the MDH or the SCC contents in memory.
 
-=== How `A` can break confidentiality by interrupting a management process
+==== How `A` can break confidentiality by interrupting a management process
 
 A management process is interruptible between its constituent instructions.
 At each interrupt point, the architectural state visible to `A` is:
@@ -3638,7 +3636,7 @@ The attack does not give `A` the plaintext of `S`, and it does not allow `A` to 
 The proposal therefore concludes that *the current spec is incomplete but not unsafe*.
 What is missing is a *save/restore contract* for the per-hart auxiliary sealing state, a *thermometer* in the MDH to track progress, and an *integrity tag* over the MDH-plus-thermometer for cross-hart migration of a partial CR.
 
-=== Information to save and restore at context switch
+==== Information to save and restore at context switch
 
 For every CR in any non-`_Unconfigured` `_ConfigStatus`, and for the per-hart auxiliary sealing state, the context-switch handler must save and restore the following.
 The list is exhaustive given the architecture.
@@ -3663,12 +3661,12 @@ Answers to the specific questions in the prompt:
   The thermometer must be in the MDH (so it travels with the CR on migration) and it must be authenticated.
   The 16-bit `_AuxInfo` field is the right place; moving ML-KEM and ML-DSA's use of `_AuxInfo` into the content is straightforward and is the change proposed in the prompt.
 
-=== Proposed changes to the rest of the specification
+==== Proposed changes to the rest of the specification
 
 The following changes are required.
 Each item names the normative section that would have to be modified, and the kind of modification.
 
-==== Changes to the MDH layout (<<ACE-metadata-header>>)
+===== Changes to the MDH layout (<<ACE-metadata-header>>)
 
 * *Repurpose the `_AuxInfo` field (bits [61:46], 16 bits) as the management thermometer during a management process.* When `_ConfigStatus` is `ace_cfgst_provisioning`, `ace_cfgst_importing`, or `ace_cfgst_exporting`, the `_AuxInfo` field holds the number of 16-byte blocks of the in-flight management process that have been processed (loaded into the CR for provisioning/import, written to memory for export).
   When `_ConfigStatus` is `ace_cfgst_complete`, the field is zero.
@@ -3676,13 +3674,13 @@ Each item names the normative section that would have to be modified, and the ki
   The bits are moved to a fixed offset in the algorithm's Content section.
   The content length is unchanged, so `<<ACE-length-rule>>` is preserved.
 
-==== Changes to the per-hart auxiliary sealing state (<<ACE-CR-representation>>)
+===== Changes to the per-hart auxiliary sealing state (<<ACE-CR-representation>>)
 
 * *Introduce a per-hart `SIV1_owner` field.* This field is set by `ace.mgmt #ace_CR_*_start` and cleared by `ace.mgmt #ace_CR_management_end`.
   If `ace.mgmt #ace_CR_*_start` is issued while `SIV1_owner` is non-None, the per-hart `SIV*` storage is zeroed and the previous management operation is forced to fail at its next `ace.mgmt #ace_CR_management_end`.
   This is the architectural enforcement of the "do not interleave" rule currently stated as a software convention in <<ACE-CR-representation>>.
 
-==== Changes to `ace.mgmt` (<<ACE-instruction-manage>>)
+===== Changes to `ace.mgmt` (<<ACE-instruction-manage>>)
 
 * *Make the management-end `ace.mgmt` verify a per-hart MAC_MDH before performing the AES-GCM-SIV decryption.* The MAC is computed over the MDH (with the thermometer) using a key derived from the CSK, e.g. `CSK_MAC = KDF(CSK, "ace-mgmt-mac")`, and is stored in a new per-hart CSR `acemgmtmac` (see below).
   If the MAC does not match, the CR transitions to `ace_state_invalid` and the management process is rejected.
@@ -3690,7 +3688,7 @@ Each item names the normative section that would have to be modified, and the ki
   The current spec already requires this for import (see <<ACE-instruction-manage>>) but not for export, where `saved_MDH` is the MDH read by `ace.getmdv` before `ace.mgmt #ace_CR_export_start`.
   The contract is restated normatively.
 
-==== Changes to the unprivileged CSRs (<<ACE-CSRs-unpriv>>)
+===== Changes to the unprivileged CSRs (<<ACE-CSRs-unpriv>>)
 
 * *Add a new URW CSR `acemgmtmac` (128 bits).* It holds `MAC_MDH = M_ENC(CSK_MAC, MDH)` where `M_ENC` is a single-block MAC (e.g., `AES-256(CSK_MAC, MDH)`).
   It is set by `ace.mgmt #ace_CR_*_start` and `ace.load`/`ace.store`/`ace.mv`, and is verified and cleared by `ace.mgmt #ace_CR_management_end`.
@@ -3699,13 +3697,13 @@ Each item names the normative section that would have to be modified, and the ki
   Exposing them as CSRs is one way to make the save/restore contract explicit; the alternative is to keep them in the ACE unit and require the OS to call a new `ace.mgmt` sub-immediate to save/restore them, but the CSR approach is simpler and follows the precedent of `acestart`.
   Each is cleared to zero on ACE-unit reset.
 
-==== Changes to the interruptibility rules (<<ACE-resumability>>)
+===== Changes to the interruptibility rules (<<ACE-resumability>>)
 
 * *Add a normative save/restore contract to <<ACE-resumability>>.* The list in §"Information to save and restore at context switch" above becomes normative.
   The current text (which allows the OS to "force a restart by clearing partially configured or exported CRs at context save and again at restore", see the note at the end of <<ACE-instruction-manage>>) is rewritten as an alternative: the OS may either (a) clear the partially-configured CRs and the per-hart `SIV*` storage, abandoning the in-flight management process, or (b) save and restore all the items in the list and resume the process.
   Mixing the two — saving some but not all — is forbidden.
 
-==== Changes to the export procedure (<<ACE-SCC-export>>)
+===== Changes to the export procedure (<<ACE-SCC-export>>)
 
 * *Add the per-hart MAC_MDH computation to the export-start `ace.mgmt`.* When `ml._ConfigStatus = ace_cfgst_complete`, the implementation computes `MAC_MDH = M_ENC(CSK_MAC, K(i).MDH)` and stores it in the new `acemgmtmac` CSR.
   When `ml._ConfigStatus != ace_cfgst_complete` (a partially-provisioned, partially-imported, or previously-exported CR), the same computation is performed.
@@ -3713,23 +3711,23 @@ Each item names the normative section that would have to be modified, and the ki
 * *Add the thermometer to the MDH at each block boundary.* The implementation updates `K(i).MDH._AuxInfo = therm` after each block of `ace.load`/`ace.store`/`ace.mv` is processed, and recomputes `MAC_MDH`.
   The thermometer is reset to 0 at the management-end `ace.mgmt`.
 
-==== Changes to the import procedure (<<ACE-SCC-import>>)
+===== Changes to the import procedure (<<ACE-SCC-import>>)
 
 * *Same as export:* compute and verify `MAC_MDH`, update the thermometer at each block boundary.
 * *Document the migration protocol.* When a partially-imported CR is migrated to a different hart, the migration code must save `K(i)`, the per-hart `SIV*` storage, the `saved_MDH` (in software state), the `acemgmtmac` CSR, and the `acestart` CSR; on the new hart, restore all of the above; verify `MAC_MDH` against the MDH; then resume the import from the thermometer.
 
-==== Changes to the management code snippets (<<ACE-management-code-snippets>> — currently a reference; the snippets are in `ace-pseudocode.adoc`)
+===== Changes to the management code snippets (<<ACE-management-code-snippets>> — currently a reference; the snippets are in `ace-pseudocode.adoc`)
 
 * *Add the per-hart state save/restore to the snippets.* The snippets currently show the management-end `ace.mgmt` as `ace.mgmt K{t0}, #ace_CR_management_end[, v2]`.
   The snippets must be updated to also save and restore `acesiv1` (and `acesiv2`/`aceimpqual` if applicable), `acemgmtmac`, and `acestart` around the management process.
 * *Add the migration protocol.* A new snippet shows how to export a partial CR for migration and how to resume on the new hart.
 
-==== Changes to the error handling (<<ACE-error-architecture>>)
+===== Changes to the error handling (<<ACE-error-architecture>>)
 
 * *Add a new error condition for MAC_MDH failure.* If the management-end `ace.mgmt` finds that `MAC_MDH` does not match the MDH, the CR transitions to `ace_state_invalid` and the management process is rejected.
   No exception is raised (the same convention as for `ace_state_import_auth`).
 
-=== Procedures
+==== Procedures
 
 The procedures below are written as pseudocode in the style of the spec (<<ACE-pseudocode-examples>>).
 They use:
@@ -3743,13 +3741,12 @@ They use:
 * `CSK_MAC = KDF(CSK, "ace-mgmt-mac")` for the MAC key.
 * `M_ENC(K, B)` for a single-block MAC, e.g. `AES-256(K, B)`.
 
-==== Provisioning
+===== Provisioning
 
 Provisioning carries no `SIV*` and no MAC; the PI is plaintext; the thermometer tracks how many blocks have been loaded.
 
-[example]
 .Provisioning with thermometer (changes to <<ACE-management-operations>> highlighted)
-====
+----
 // -- Step 1: start --
 ml = first 16 bytes of PI
 ace.mgmt K(i), #ace_CR_provision_start, ml
@@ -3781,17 +3778,16 @@ ace.mgmt K(i), #ace_CR_management_end
 //   Set K(i).MDH._ConfigStatus = ace_cfgst_complete.
 //   Set K(i).MDH._AuxInfo (therm) = 0.
 check_state(K(i), #ace_cfgst_complete, ace_state_invalid)
-====
+----
 
 The only state that needs to be saved at an interrupt during provisioning is `K(i)` (which already contains the thermometer in its MDH) and `acestart`.
 The PI is plaintext in memory, so the resume can be done by re-reading the PI from memory; if the OS has tampered with the PI, the algorithm's sealing step will detect a malformed CR and transition to `ace_state_invalid`.
 No `MAC_MDH` is needed during provisioning because the MDH is never exported to memory in the middle of provisioning, and the thermometer in the MDH can be reconstructed from the count of blocks already written.
 
-==== Import
+===== Import
 
-[example]
 .Import with thermometer and per-hart MAC (changes to <<ACE-SCC-import>> highlighted)
-====
+----
 // -- Step 0: read the MDH and the parameters --
 ml = first 16 bytes of SCC
 n  = number of 16-byte blocks of Content1 in this SCC   (from MDH)
@@ -3838,13 +3834,12 @@ ace.mgmt K(i), #ace_CR_management_end, saved_ml
 //                                release per-hart SIV1/SIV2/IMPQUAL storage
 //                                set per-hart SIV1_owner = None
 check_state(K(i), #ace_cfgst_complete or ace_state_import_auth, ace_state_invalid)
-====
+----
 
-==== Export
+===== Export
 
-[example]
 .Export with thermometer and per-hart MAC (changes to <<ACE-SCC-export>> highlighted)
-====
+----
 // -- Step 0: read MDH and parameters --
 ace.getmdv ml_vec, K(i)        // or ace.getmdl + ace.getmd for GPR-only code
 ml = ml_vec
@@ -3899,9 +3894,9 @@ ace.mgmt K(i), #ace_CR_management_end, ml
 //                    release per-hart SIV1/SIV2/IMPQUAL storage
 //                    set per-hart SIV1_owner = None
 check_state(K(i), #ace_cfgst_complete, ace_state_invalid)
-====
+----
 
-==== The two cases the prompt asks about
+===== The two cases the prompt asks about
 
 *Case 1: An export is interrupted and the context switch handler needs to export the already-partially-exported CR.*
 
@@ -3941,7 +3936,7 @@ The per-hart `SIV1` is integrity-protected by the AES-GCM-SIV authentication (wh
 *Important restriction:* the exported partial SCC is *not* a valid SCC and cannot be re-imported as a normal SCC.
 It is a migration artifact; the receiver must know that it is a partial state and must use the migration-aware import path, which verifies `MAC_MDH` first and resumes from the thermometer.
 
-=== Security proofs
+==== Security proofs
 
 The three theorems below are stated informally; the formal reductions are the same as for AES-GCM-SIV (RFC 8452) and for a single-block MAC.
 
@@ -3968,7 +3963,7 @@ The three theorems below are stated informally; the formal reductions are the sa
   In the absence of an interrupt or a migration, all three differences reduce to the current spec's behavior.
   In the presence of an interrupt or a migration, the differences are exactly the additional behaviors needed to preserve confidentiality and unforgeability.
 
-=== Findings and recommendations
+==== Findings and recommendations
 
 Findings (severity in parentheses):
 
@@ -3985,7 +3980,7 @@ Findings (severity in parentheses):
 * *m3: The `acestart` value during a management process is not stated normatively.* The procedures set `acestart = 0` at the start and update it during `ace.load`/`ace.store`/`ace.mv`; the final `ace.mgmt` resets it to 0.
   This should be stated normatively.
 
-=== Remaining questions and assumptions
+==== Remaining questions and assumptions
 
 * *Q1:* Is `ace.mgmt` to be made interruptible in a future version? The proposal assumes it is *not* (the current spec), but the prompt asks about the case where it is.
   If it is to be made interruptible, the procedures of §"Procedures" need an additional step to make the per-hart `SIV*` storage consistent at the interrupt point.
