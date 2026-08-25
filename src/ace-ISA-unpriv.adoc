@@ -255,7 +255,7 @@ CRs are not separated by privilege Mode: when a hart changes Mode, it sees the s
 Unlike a conventional register, a CR can be _unconfigured_, meaning it does not contain a CC.
 
 A CR is addressed either directly, via a 5-bit immediate, or indirectly, via a GPR value; an additional instruction-encoding bit selects the mode.
-Using `X0` as an indirect CR index raises an illegal-instruction exception, unless this is expressly used to encode an instruction.
+Using `X0` as an indirect CR index raises an illegal-instruction exception, unless this is expressly used to encode an instruction: Currently, the only such exception is the encoding of `ace.reset`.
 An indirect index outside [0..31] also raises an illegal-instruction exception.
 
 [NOTE]
@@ -592,9 +592,10 @@ Note that a CR can always be restored from a backup SCC, so preventing transitio
 Besides error reporting through Error States, a typical example occurs during MAC verification: when `ace.setst` is issued with an `ace_state_hash_verify` immediate and the verification value as an additional parameter, the algorithm transitions to either _Success_ or _Failure_. `ace.exec` instructions may also cause state changes.
 
 . Upon transitioning to an Error State, the Content of a CR beyond the MDH is cleared:
-Internal resources associated with the Content may also be released.
-In that case, any additional variable-length data is released as well and the _ImpDataLen_ field is set to 0.
+Internal resources associated with the Content shall also be released,
+including any additional variable-length data and the _ImpDataLen_ field is set to 0.
 The CR then retains only the MDH.
+Accordingly, `_ConfigStatus_` is always set to `ace_cfgst_complete`.
 +
 [NOTE]
 ====
@@ -1158,7 +1159,7 @@ _Included in_::
 {empty}
 (((CSR, `aceiobuflen`)))
 `aceiobuflen` is an XLEN-bit URW CSR that programs the ACEIOBUF length in bytes for use by `ace.input` and `ace.output`.
-Writing this register—even when re-writing the current value—also zeroes the buffer and sets `aceiobuftop` to the same length and `acestart` to zero.
+Writing this register—even when re-writing the current value—also zeroes the buffer and sets `aceiobuftop` to the same length.
 
 When `aceiobuflen` is zero, the ACEIOBUF is _unconfigured_.
 Attempting to execute an operation that expects an input or an output in the ACEIOBUF while the latter is unconfigured raises exception `ace_exc_unconfigured_buffer`.
@@ -1198,7 +1199,8 @@ _Included in_::
 `aceiobuftop` is an XLEN-bit URW CSR that sets the upper bound in bytes of the buffer range used by `ace.input` and `ace.output`.
 
 `aceiobuftop` plays for the ACEIOBUF the role that `VL` plays in the V extension: it defines the operand length `ACELEN` = `aceiobuftop` {times} 8 and the operand window [0, `aceiobuftop`).
-`acestart` (cf. <<ACE-CSR-acestart>>) is the position within that window at which processing starts or resumes, analogously to `vstart`; when `acestart` {ne} 0, the octets processed are those at offsets [`acestart`, `aceiobuftop`).
+
+For operations involving the ACEIOBUF, `acestart` (cf. <<ACE-CSR-acestart>>) is the position within that window at which processing starts or resumes, analogously to `vstart`; when `acestart` {ne} 0, the octets processed are those at offsets [`acestart`, `aceiobuftop`).
 Shortening an operand is done by lowering `aceiobuftop`, never by raising `acestart`.
 
 The following WARL policy applies to `aceiobuftop`:
@@ -1208,7 +1210,7 @@ Therefore, software must always check the value of `aceiobuftop` before using th
 
 Modifying `aceiobuftop` does not alter buffer contents. It allows per-operation length adjustments without reconfiguring the ACEIOBUF via `aceiobuflen`, an expensive operation that clears the buffer and may trigger internal garbage collection. This mirrors the use of `VL*SEW` reconfiguration to supply a partial “last block” or a short IV/nonce to cryptographic algorithms.
 
-Writing a value that is invalid or unsupported for a given Algorithm may still cause the CR to transition to Error State _Invalid_ when an instruction is later issued or restarted.
+Writing a value that is invalid or unsupported for a given Algorithm may still cause the CR to transition to Error State _Invalid_ when an instruction expecting an input from or an output to the ACEIOBUF is later issued or restarted.
 This may occur, for instance, when `aceiobuftop` is a length not supported by the Algorithm, or when `acestart` does not correspond to an interruption point the Algorithm allows.
 
 Using an alternative sequence for `ace.exec` or `ace.setst` for any Form with an input or output
@@ -1251,9 +1253,10 @@ Software may save and restore the register across context switches.
 Upon the successful completion of any instruction that honors `acestart`, `acestart` is set to 0.
 The only exception is `ace.mv`, which by design accumulates `acestart` across instructions to support piecewise transfers.
 
-The following policy applies to `acestart`:
-`acestart` cannot be larger than `aceiobuftop`.
-If a value larger than `aceiobuftop` is written to `acestart`, `acestart` will be set to `aceiobuftop`.
+With instructions that take their input from the ACEIOBUF or write their outputs to it, `acestart` cannot be larger than `aceiobuftop`. When such an instruction is issued,
+`acestart` will be set to `aceiobuftop` first.
+
+For CR-directed transfers (`ace.load`, `ace.store`, `ace.mv`), `acestart` is bounded above by the size in bytes of the PI/SCC being transferred, as determined from the first 8 bytes of the MDH. A value larger than the applicable bound replaces `acestart` with that bound when these instructions are issued.
 
 For certain algorithms, writing zero to `acestart` to force a full restart of `ace.exec` may lead to inconsistent or unpredictable results and is not permitted once per-block state effects have been committed (see <<ACE-resumability-memory-model>>).
 Also, writing a value that is invalid or unsupported for a given Algorithm may still cause the CR to transition to Error State _Invalid_
@@ -1480,7 +1483,8 @@ This instruction requires that the CR be ready to import information and that th
 If the _ConfigStatus_ field equals `ace_cfgst_complete`, an illegal-instruction exception is raised.
 
 `ace.load` can load data larger than the effective XLEN.
-`acestart` tracks the number of loaded bytes. `acestart` is also a multiple of 16.
+`acestart` tracks the number of loaded bytes.
+`acestart` is also a multiple of 16.
 `ace.load` starts loading data into the CR with an offset equal to the current value of `acestart` in the serialized representations of the CR.
 If `ace.load` is interrupted, `acestart` contains the offset to the next byte to load upon resumption.
 
@@ -1749,9 +1753,11 @@ For RV32 the differences in the semantics are:
 
 * If `Form` = `0b01` and `rd` = `0b00001`:
 the contents of `X[rs2+3] @ X[rs2+2] @ X[rs2+1] @ X[rs2]` are moved into the CR starting at offset `acestart`.
+`rs2` must be a multiple of four, else an illegal-instruction exception is raised.
 
 * If `Form` = `0b10` and `rs2` = `0b00001`:
 16 bytes of the CR at offset `acestart` are moved to `X[rd+3] @ X[rd+2] @ X[rd+1] @ X[rd]`.
+`rs2` must be a multiple of four, else an illegal-instruction exception is raised.
 
 * If `Form` = `0b01` and `rd` = `0b00010`:
 No changes.
@@ -2333,10 +2339,10 @@ one, so `ace.restrict` cannot be used to widen the set of modes that may use a C
 
 * If `Xs`._ExpirationDate_ is zero, the corresponding policy in `MDH`._ExpirationDate_ is _not_ changed.
 
-* A non-zero value in `Xs`._ExpirationDate_ will be copied to
-  `MDH`._ExpirationDate_, but only if that policy was not already programmed before
-  or the original value of `MDH`._ExpirationDate_ was equal to the new value or larger.
-  Otherwise the CR transitions to Error State _Invalid_.
+* If `MDH._ExpirationDate_ ≠ 0`, a non-zero `Xs._ExpirationDate_` is copied to `MDH._ExpirationDate_`
+only if it is less than or equal to `MDH._ExpirationDate_`.
+
+* If `MDH._ExpirationDate_ = 0`, then `Xs._ExpirationDate_` is copied to `MDH._ExpirationDate_` unconditionally.
 
 * Any change to `MDH`._AlgorithmUse_ is subject to policies set by the Algorithm in the CR.
 
@@ -2551,12 +2557,13 @@ Return the size of an SCC in bytes, or zero in case of error.
 _Mnemonic_::
 +
 --
-There are two Forms of the `ace.size` instruction:
+There are three Forms of the `ace.size` instruction:
 (((ACE, instruction, ace.size)))
 
 [upperalpha]
 . `ace.size Xd, Ks|K{Xs}` - Size from a context.
-. `ace.size Xd, Xs|Vs` - Size from MDH.
+. `ace.size Xd, Xs` - Size from MDH[63:0] in one (RV64) or two (RV32) GPRs.
+. `ace.size Xd, Vs` - Size from MDH in one vector register of at least 128 bits.
 --
 
 // Without this comment, the next part is not properly formatted...
@@ -2586,7 +2593,7 @@ The `F` field and the `r` bit may assume the following values:
 
 * `F` = `0b00`, `r` = `0` {implies} Form A: Size from a context given as `Ks`.
 * `F` = `0b00`, `r` = `1` {implies} Form A: Size from a context given indirectly as `K{Xs}`.
-* `F` = `0b01`, `r` = `0` {implies} Form B: Size from MDH.
+* `F` = `0b01`, `r` = `0` {implies} Form B: Size from MDH in one (RV64) or two (RV32) GPRs.
 * `F` = `0b10`, `r` = `0` {implies} Form C: Size from MDH using vector.
 --
 
@@ -2602,13 +2609,13 @@ _Description_:: {empty}
   for any feature that relies on exporting a CR, including context switching.
   The instruction returns 0 if the CR is unconfigured.
 
-* On RV64, Form B `ace.size` returns the total size in bytes of the memory buffer that
+* On RV64, Forms B and C `ace.size` return the total size in bytes of the memory buffer that
   would be necessary to store the exported SCC or (partially configured) PI.
   In the first case, the size includes
   the authentication tag(s) and the additional variable-length data.
   In the second case, the size is the same as the size of the entire PI.
   If the algorithm is not supported or the Metadata is
-  invalid, the instruction returns `0`.
+  invalid leading a potential CR to an Error State, the instruction returns `32`.
 
 * On RV32, Form B `ace.size` differs from the RV64 version in that `s` must be even, and
   Bits [63:0] of the MDH are passed in `X[s+1] @ Xs`.
@@ -2618,7 +2625,7 @@ _Description_:: {empty}
   Form C of `ace.size` returns in GPR `Xd` the total size in bytes of an SCC whose Bits
   [127:0] of the MDH are given in `Vs`, including the additional
   variable-length data. If the algorithm is not supported or the Metadata is
-  invalid, the instruction returns `0`.
+  invalid leading a potential CR to an Error State, the instruction returns `32`.
 
 The instruction may not modify state.
 
