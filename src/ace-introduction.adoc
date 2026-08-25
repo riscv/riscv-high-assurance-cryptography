@@ -97,22 +97,45 @@ Direct plaintext leakage, memory-corruption attacks against the ACE-using proces
 * *To be discussed with ARC/ARC track work:*
 
 . NAMING: We will use “`kl`” in this document instead of “`ace.`”: `kl` indicates that ACE is a subset of the crypto extensions; the “l” is also the initial of “Locker”, and Cryptographic Locker will replace Cryptographic Register.
-. *`misa.L` and `mstatus[26:25]` (ACES) allocations are provisional.
-. *Assignment of opcodes.* The encodings presented in <<ACE-instructions-detailed>> are preliminary. At a minimum, we need three opcodes in place of `custom-0`, `custom-1`, and `custom-2`.
+. *Assignment of opcodes.* The encodings in <<ACE-instructions-detailed>> are preliminary.
 . RVV-mini can be considered finalized. It needs detectability, proper coupling to ACE, a better name.
-. *All ACE exception cause codes are `TBD`; no `mcause` values, no subcause mechanism.* +
+. *`misa.L` and `mstatus[26:25]` (ACES) allocations are provisional and contested.*
+. *All ACE CSR addresses are 0xXXX / (Indirect) placeholders.*
+. *Exception cause codes are all TBD (no mcause values assigned).* +
 Resolution: Allocate cause values (or a single ACE cause + subcause register) with ARC; state
-the priority order normatively; define which causes are delegable. This is acknowledged ARC
-track work — commit it to the ratification plan. We would like to have a _value_ as well, to retrieve the CR number directly (to simplify the handler with respect to direct/indirect CR referencing).
+the priority order normatively; define which causes are delegable.
+We would like to have a _value_ as well, to retrieve the CR number directly (to simplify the handler with respect to direct/indirect CR referencing).
 . Regarding <<ACE-CSK-requirements>> and <<ACE-CSR-macecsk>>: is there, or should there be, an architected mechanism by which
  M-mode on one hart can read or configure the CSRs of another hart? If such a mechanism
  exists or is planned, then <<ACE-CSK-requirements>> should use it instead of the platform-specific channels.
 . Resolved, but ask for a second opinion: Debug-mode interaction is specified in <<ACE-interaction-with-debug>>: ACE is inaccessible unless an authenticated-debug signal is asserted, and unauthenticated Debug entry zeroizes or masks all ACE secrets until the next ACE unit reset.
-. RVWMO axiomatic integration of ACE component memory operations to be discussed.
+. RVWMO axiomatic integration of ACE component memory operations deferred.
 . `ace.exec` element-width / EGW question left open for non-power-of-two input sizes
-   (`ace-ISA-unpriv.adoc` §"RVV/RVV-mini).
-- Resolution: Open ARC discussion or should it be resolved before freeze?
+(`ace-ISA-unpriv.adoc` §"RVV/RVV-mini). +
+Resolution: Open ARC discussion or should it be resolved before freeze?
 
+
+* **M1 — `acestart` clamping policy ("`acestart` cannot be larger than `aceiobuftop`") is
+inconsistent with CR-directed transfers (`ace.load`/`ace.store`/`ace.mv`).**
+- *Severity rationale:* A literal implementation of the clamp breaks transfers larger than
+  `aceiobuftop` — including every large CR (ML-KEM-1024 ≈ 4.8 KB, ML-DSA-87 ≈ 12.5 KB) — which
+  can livelock a resume handler. Material correctness/implementability defect.
+- *Location:* `ace-ISA-unpriv.adoc` §`acestart`: "The following policy applies to
+  `acestart`: `acestart` cannot be larger than `aceiobuftop`. If a value larger than
+  `aceiobuftop` is written to `acestart`, `acestart` will be set to `aceiobuftop`." Contrast
+  L1238–1241 (`acestart` also tracks `ace.load`, `ace.store`, `ace.mv`, and multi-block
+  `ace.exec`) and L1249 ("for ACEIOBUF operands the window itself is always [0, `aceiobuftop`)").
+- *Description:* `aceiobuftop` is, by its own definition, the ACEIOBUF operand
+  window bound (the `VL` analogue) for `ace.input`/`ace.output`. But `acestart` is *also* the
+  progress counter for CR-directed transfers (`ace.load`/`ace.store`/`ace.mv`), whose transfer
+  size is the PI/SCC size — unrelated to, and typically far larger than, `aceiobuftop`. As
+  written, the clamp either (a) applies only to ACEIOBUF operands and is mis-scoped/mis-worded,
+  or (b) applies generally and makes any transfer larger than `aceiobuftop` unable to advance
+  `acestart` past `aceiobuftop`, so it can never complete. Either reading yields a different
+  implementation.
+- *Resolution:* Scope the clamp explicitly: "`acestart` is bounded above by the current operand
+  window bound: `aceiobuftop` for ACEIOBUF operands, and the PI/SCC length (in bytes) for
+  CR-directed transfers." State the bound for `ace.load`/`ace.store`/`ace.mv` normatively.
 
 * ML-KEM/ML-DSA underspecified behavior on invalid inputs; ML-KEM.Decaps modeled with a Failure branch it cannot take. +
 *Suggested resolution:* Replace "may return unpredictable results" with defined behavior: on invalid
