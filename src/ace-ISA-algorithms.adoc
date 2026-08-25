@@ -664,9 +664,9 @@ If `s` = 0 no stealing takes place and both directions are the plain XEX sequenc
 [[ACE-tweakable]]
 ==== Generic Tweakable Block Ciphers
 
-The specification of a generic tweakable block cipher is similar to that of a non-tweakable block cipher in ECB mode.
-Since `ace.exec` does not admit variants with two inputs and there is a single input buffer, the tweak is set with a separate instruction.
-If the block and tweak sizes differ, a reconfiguration of the vector length may be required between operations, unless the tweak is shorter than the block size, in which case the instruction setting the tweak only considers the necessary bits.
+The specification of a generic tweakable block cipher resembles that of a block cipher in ECB mode.
+Because `ace.exec` lacks two-input variants and uses a single input buffer, the tweak is set with a separate instruction.
+If block and tweak sizes differ, vector length reconfiguration may be needed between operations, unless the tweak is shorter than the block size, in which case the tweak-setting instruction can truncate the auxiliary input accordingly to consider only the necessary bits.
 
 Some commonly used TBCs are `Deoxys` cite:[Deoxys-141], `Skinny` cite:[DBLP-conf-crypto-BeierleJKL0PSSS16], `QARMA` cite:[DBLP-journals-tosc-Avanzi17], and ```QARMA```{empty}```v2``` cite:[DBLP-journals-tosc-AvanziBDEGNR23].
 
@@ -735,10 +735,7 @@ one of the states common to all algorithms.
 [[ACE-process-VLI]]
 ==== Procedure: Processing Variable Length Inputs into a Fixed Length Output
 
-Many algorithms need to process variable-length inputs into fixed-length outputs.
-Common examples include hash functions and the generation of internal, fixed-length initialization vectors (IVs) from external IVs of variable length.
-This processing occurs in a specific state—for example, _Hash_Absorb_—as defined by each algorithm.
-This section calls that state _Current_State_ and describes the corresponding semantics.
+Many algorithms need to process variable-length inputs into fixed-length outputs, such as hash functions or deriving internal fixed-length IVs from variable-length external ones. This occurs in specific states of the algorithms (e.g., _Hash_Absorb_), referred to here as _Current_State_, whose semantics are described below.
 
 The Procedure must follow the granularity of the caller Algorithm, which implies that in some cases the inner loop and the computation of `amount` may be simplified in obvious ways.
 
@@ -781,6 +778,11 @@ field from memory and has no per-block processing to perform.
 
 If the caller Algorithm needs to process the last block separately, it may invoke this procedure twice with the length of the last block as the `len` parameter and a different `process_block()` function.
 
+The optional parameter `granularity` specifies the transfer unit for inputs: every transfer in a sequence (`INPUT` of `ace.exec` or the auxiliary vector input of `ace.setst`) — except possibly the last — must have an `ACELEN` that is a whole multiple of `granularity`.
+The final transfer may be shorter or internally truncated to `len` − `cumul_len` (cf. <<ACE-truncation-vs-length>>); consequently, `len` need not be a multiple of `granularity`.
+For example, with `granularity` = 128, a 96-bit IV is supplied in a single transfer, either as a 96-bit vector or as a 128-bit vector with excess bits truncated.
+
+////
 The optional parameter `granularity` specifies the unit in which the inputs of a sequence
 are transferred to this procedure: every transfer of the sequence — the `INPUT` of an
 `ace.exec`, or the auxiliary vector input of an `ace.setst` — *except the last one* must
@@ -791,6 +793,7 @@ states of the algorithms that define them; consequently, the total length `len` 
 be a multiple of `granularity`. For example, with `granularity` = 128 a 96-bit IV is
 supplied in a single — hence last — transfer, either as a 96-bit vector or as a 128-bit
 vector whose excess bits are internally truncated.
+////
 
 //
 
@@ -1939,11 +1942,13 @@ If `ACELEN` > `b`, then the above operations are applied to each `b`-bit block o
   . The state is changed to _Hash_Output_.
 --
 
-** In State _Hash_Output_, a single ``ace.exec`` instruction of Form C can be issued, i.e., “``ace.exec OUTPUT, Kn|K{Xn}``”, to output the hash into `OUTPUT`.
+** In State _Hash_Output_, there are two options:
+
+. A single ``ace.exec`` instruction of Form C can be issued, i.e., “``ace.exec OUTPUT, Kn|K{Xn}``”, to output the hash into `OUTPUT`.
    If `ACELEN` > `b`, only the bits of `OUTPUT` beyond the `b`-th are cleared.
    Upon issuing that instruction, the CC transitions to State _Success_.
 
-** Alternatively, in State _Hash_Output_ a Form C ``ace.setst Kn|K{Xn}, #ace_state_hash_verify, INPUT`` may be issued to verify the CMAC without disclosing it: the `b` least significant bits of `INPUT` are compared with `hash`, and the state transitions to _Success_ if they match, to _Failure_ otherwise. Verification of a truncated CMAC is instead performed in software, after emitting the tag.
+ . Alternatively, a Form C ``ace.setst Kn|K{Xn}, #ace_state_hash_verify, INPUT`` may be issued to verify the CMAC without disclosing it: the `b` least significant bits of `INPUT` are compared with `hash`, and the state transitions to _Success_ if they match, to _Failure_ otherwise. Verification of a truncated CMAC is instead performed in software, after emitting the tag.
 
 //
 
@@ -1989,7 +1994,7 @@ Data Structures:::
  ** Metadata Header.
  ** `key`: `k` bits. Present only if keyed, i.e., a MAC.
  ** `state`: `n` bits.
- ** `last_blk_len`: int. Present only if this Hash/MAC provides special treatment for a last block that goes beyond padding and appending the length. The latter is the caller's responsibility.
+ ** `last_blk_len`: int. Present only if the Hash/MAC needs to provide special handling of a final block beyond caller-managed padding and appending the length.
  ** `input_base`: int. Offset within input/output to read from/write to.
  ** `block_base`: int. Length of absorbed data so far for the current block. Only if needed by the algorithm.
  ** `cumul_len`: int. Cumulative length of data absorbed so far.
@@ -2005,10 +2010,10 @@ Data Structures:::
 .2+| ii | If keyed: `k` or 64  | `key` or SKID     | --
 <|        If unkeyed: 0        | none              | --
 |   iii | `n`                  | `state`           | --
-|    iv | 16                   | `last_blk_len`  | Present only if this Hash/MAC has special internal treatment for a fractional last block that goes beyond padding and appending the length, which are handled by user software.
+|    iv | 16                   | `last_blk_len`    | Present only if the Hash/MAC needs to provide special handling of a final block beyond caller-managed padding and appending the length.
 |    v | 16                    | `block_base`      | Amount of data stored so far into `block` or accumulated (usually XORed) into `state`.  Only if used by the algorithm, else zero padding.
 |    vi|  32                   | Padding           |--
-|   vii | 64                   | `cumul_len`       | Cumulative length of all data absorbed so far. Only if the algorithm processes and incorporates it in the hash on its own, or when operating under HMAC (<<ACE-HMAC>>), else absent.
+|   vii | 64                   | `cumul_len`       | Cumulative length of the data absorbed so far. Present only if incorporated into the hash by the algorithm, or under HMAC (<<ACE-HMAC>>), else absent.
 |  viii | `b`                  | `block`           | Only if `block_base` is defined and the block is stored separately from the `state`.
 | ix | Algorithm-dependent     | Padding           | To reach a multiple of 128 bits.
 |===
@@ -2016,10 +2021,8 @@ Data Structures:::
 
 //
 
-NOTE: Regarding the `last_blk_len`/`block_base`/`cumul_len` group: if any of
-these fields is not used, it is replaced by a corresponding padding block. If
-all three are unused by the hashing algorithm, the block of these three fields is
-omitted as a whole, and `block` is then omitted as well.
+NOTE: If any of the fields `last_blk_len`/`block_base`/`cumul_len` is not used, it is replaced by a corresponding padding block.
+If all three are unused by the hashing algorithm, the entire group is omitted, as well as `block`.
 
 Algorithm-Specific Functions:::
 

@@ -3241,11 +3241,9 @@ The extra 128 or 384 bits of capacity are allocated per hart, not per CR.
 Allocating them per CR would be costly: 128 bits per CR, or 384 bits if at least one algorithm supports implementation-specific data.
 The implementation transparently manages this capacity as though it belongs to the CR.
 
-This limits the ability to perform concurrent management operations within the same piece of code:
-Starting a second operation may overwrite the storage for `SIV`, `IMPQUAL`, and `SIV2`, irreversibly destroying the old `SIV` and `SIV2` values.
-Therefore, interleaved management operations must be avoided.
-Lightweight threads must either support CR context switching directly, or the programmer must serialize access with a mutex.
-Beyond this, the architectural restriction on the additional capacity does not affect any conceivable use case.
+This prevents concurrent management operations in the same code: starting a second operation can overwrite `SIV`, `IMPQUAL`, and `SIV2` storage, destroying in-flight values.
+Interleaved management operations must therefore be avoided; lightweight threads must either support CR context switching directly or serialize access with a mutex.
+Beyond this, this restriction does not affect other use cases.
 
 The format of a PI that has been just imported in a CR is the same as the external format, and this representation is finalized into the CR's internal state upon using `ace.mgmt` to complete the import which may include the computation of certain information such as derived keys, multiple shares.
 
@@ -3358,17 +3356,13 @@ function RFC8452_KeyDeriv(key : bits(256), nonce : bits(96))
 NOTE: Due to the computational cost of the derivation functions,
 implementations may cache the derived keys.
 
-NOTE: In order to reduce payload size, the AES-GCM-SIV-derived algorithm used for SCC
-import and export does not use a nonce.
-The construction is sound since
-the SCC encryption algorithm inherits nonce misuse-resistance from AES-GCM-SIV.
-However, note that it is secure up to the encryption
-of 2^64^ 128-bit blocks, against an attacker being able to collect those 2^64^ 128-bit blocks.
-This should be sufficient for client applications, and, on cloud servers, it is strongly
-suggested that every virtual machine and each supervisor domain be assigned a unique CSK.
-For the purpose of transferring CCs from one domain to another, M-Mode firmware is able
-to import a SCC with the CSK used by the generator of the key and export it with the
-CSK of the target domain.
+NOTE: To reduce payload size, the AES-GCM-SIV-derived algorithm for SCC import and export
+omits a nonce, relying on AES-GCM-SIV's nonce misuse-resistance.
+The construction is secure up to 2^64^ 128-bit blocks collected by an adversary.
+This is sufficient to practically deter attacks on client applications; on cloud servers, each virtual machine and
+supervisor domain should be assigned a unique CSK.
+To transfer CCs between domains, M-mode firmware can import an SCC with the source domain's
+CSK and re-export it under the target domain's CSK.
 
 The SIV (“Synthetic IV”), which also serves as the authentication tag in GCM-SIV,
 is computed by encrypting the `POLYVAL` hash of the concatenation of the Locality Secrets, the MDH, and the Content of the CR.
