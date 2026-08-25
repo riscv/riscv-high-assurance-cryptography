@@ -192,7 +192,7 @@ instruction and CSR descriptions are subordinate to it.
 | Forms A–C
 | Forms A and B
 
-| `ace.getmdl`, `ace.getmdh` (and the pseudo-instructions `ace.getst`, `ace.getstx`)
+| `ace.getmdl`, `ace.getmd` (and the pseudo-instructions `ace.getst`, `ace.getstx`)
 | `Zkl` common
 2+<| Available
 
@@ -282,7 +282,7 @@ The most important operations on CRs are briefly described below, ahead of their
 
 A CR can be viewed as a register of variable and discoverable length (more details in <<ACE-CR-representation>>).
 While an ACE implementation works with an internal representation of a CR's content,
-ACE provides a way to access a CR as if it were a register into which a Provisioning Input (PI) or Sealed Cryptographic Context (SCC), as defined in <<ACE-external-formats>>, can be loaded.
+ACE provides a way to access a CR as if it were a register into which a Provisioning Input (PI) or Sealed Cryptographic Context (SCC), as defined in <<ACE-CC-formats>>, can be loaded.
 To this purpose, ACE defines:
 
 * Instructions `ace.load`, to load serialized data into CRs from memory (see <<ACE-instruction-load>>), and `ace.store` (see <<ACE-instruction-store>>) to export a CR's serialized content back to memory; and
@@ -1472,26 +1472,25 @@ _Mnemonics_::
 _Description_::
 +
 --
-`ace.load` imports a PI or an SCC into the CR `Kd` or `K{Xd}`, starting with the 8th byte of the MDH.
+`ace.load` imports a PI or an SCC into the CR `Kd` or `K{Xd}`, starting with the 16th byte of the MDH.
 The memory address of the latter is given in `%offset(Xs1)`.
 
-This instruction requires that the CR be ready to import information and that the first 8, resp., 16 bytes of the MDH have already been loaded by passing them as a parameter in a GPR (pair for RV32), resp., vector register, to the `ace.mgmt` instruction used to open the CR for provisioning or import.
+This instruction requires that the CR be ready to import information and that the MDH has already been loaded by passing them as a parameter in a GPR pair (quartet for RV32), resp., vector register, to the `ace.mgmt` instruction used to open the CR for provisioning or import.
 
 If the _ConfigStatus_ field equals `ace_cfgst_complete`, an illegal-instruction exception is raised.
 
 `ace.load` can load data larger than the effective XLEN.
-`acestart` tracks the number of loaded bytes.
+`acestart` tracks the number of loaded bytes. `acestart` is also a multiple of 16.
 `ace.load` starts loading data into the CR with an offset equal to the current value of `acestart` in the serialized representations of the CR.
 If `ace.load` is interrupted, `acestart` contains the offset to the next byte to load upon resumption.
 
-The implementation determines the input size from the first 8 bytes of the MDH, which software supplies.
+The implementation determines the input size from the first 8 bytes of the MDH, which software supplies as part of the entire MDH block.
 The _ConfigStatus_ field identifies the input type (PI or SCC); the fields in <<ACE-length-rule>> determine its length.
 `ace.load` then reads memory starting at `%offset(Xs1)` and copies the data into the CR beginning with the current `acestart` byte offset.
 See the non-normative note at the end of <<ACE-instruction-manage>>,
 <<ACE-resumability-memory-model>>, and <<ACE-export-import-algorithms>>.
 
-When a system-defined format is used (signaled by the _SystemFormat_ bit of MDH[63:0]), the semantics of `ace.load` are implementation-dependent.
-It does not assume that the CR has been prepared for import or that any metadata has been loaded; MDH[63:0] may then have a system-defined length.
+When a system-defined format is used (signaled by the _SystemFormat_ bit of the MDH), the semantics of `ace.load` are implementation-dependent.
 
 The instruction may modify state.
 
@@ -1678,10 +1677,10 @@ The `ace.mv` instruction admits the following variants:
 (((ACE, instruction, ace.exec)))
 
 [upperalpha]
-. `ace.mv  Kd|K{Xd}, Xs2` {nbsp}{nbsp} copy the contents of a GPR into a CR.
-. `ace.mv  Kd|K{Xd}, Vs2` {nbsp}{nbsp} copy the contents of a  vector register into a CR.
-. `ace.mv  Xd,  Ks1|K{Xs1}` {nbsp} extract contents from a CR into a GPR.
-. `ace.mv  Vd,  Ks1|K{Xs1}` {nbsp} extract contents from a CR into a vector register.
+. `ace.mv  Kd|K{Xd}, Xs2` {nbsp}{nbsp} copies 128 bits worth of content from two or four GPRs into a CR.
+. `ace.mv  Kd|K{Xd}, Vs2` {nbsp}{nbsp} copies one or more 128-bit blocks of content from a vector register into a CR.
+. `ace.mv  Xd,  Ks1|K{Xs1}` {nbsp} extracts 128 bits worth of content from a CR into two or four GPRs.
+. `ace.mv  Vd,  Ks1|K{Xs1}` {nbsp} extracts one or more 128-bit blocks of content from a CR into a vector register.
 --
 
 _Encodings_::
@@ -1714,31 +1713,51 @@ _Description_::
 In each variant the CR is the one named by `rs1`, directly or, if bit `r` is 1, through
 the GPR it names.
 
+For RV64 the semantics are:
+
 * If `Form` = `0b01` and `rd` = `0b00001`:
-the contents of `X[rs2]` are moved into the CR starting at offset `acestart`.
-`acestart` is updated to `(XLEN/8) + acestart`.
+the contents of `X[rs2+1] @ X[rs2]` are moved into the CR starting at offset `acestart`.
+`acestart` is updated to `16 + acestart`.
 The instruction is only valid if the `ConfigStatus` field of the metadata of the CR is set to `ace_cfgst_provisioning` or `ace_cfgst_importing`.
 Otherwise, an illegal-instruction exception is raised.
+`rs2` must be even, else an illegal-instruction exception is raised.
 
 * If `Form` = `0b01` and `rd` = `0b00010`:
 `vl` elements of `V[rs2]` are moved into the CR starting at offset `acestart`.
+`vl * (SEW/8)` must be a multiple of 16, otherwise the CR is transitioned to Error State _Invalid_.
 `acestart` is updated to `vl * (SEW/8) + acestart`.
 The instruction is only valid if the `ConfigStatus` field of the metadata of the CR is set to `ace_cfgst_provisioning` or `ace_cfgst_importing`.
 Otherwise, an illegal-instruction exception is raised.
 An illegal-instruction exception is also raised if V is not enabled.
 
 * If `Form` = `0b10` and `rs2` = `0b00001`:
-`XLEN/8` bytes of the CR at offset `acestart` are moved to `X[rd]`.
-`acestart` is updated to `(XLEN/8) + acestart`.
+`XLEN/8` bytes of the CR at offset `acestart` are moved to `X[rd+1] @ X[rd]`.
+`acestart` is updated to `(XLEN/4) + acestart`.
 The instruction is only valid if the `ConfigStatus` field of the metadata of the CR is set to `ace_cfgst_exporting`.
 Otherwise, an illegal-instruction exception is raised.
+`rs2` must be even, else an illegal-instruction exception is raised.
 
 * If `Form` = `0b10` and `rs2` = `0b00010`:
 `vl` elements of the CR at offset `acestart` are moved to `V[rd]`.
+`vl * (SEW/8)` must be a multiple of 16, otherwise the CR is transitioned to Error State _Invalid_.
 `acestart` is updated to `vl * (SEW/8) + acestart`.
 The instruction is only valid if the `ConfigStatus` field of the metadata of the CR is set to `ace_cfgst_exporting`.
 Otherwise, an illegal-instruction exception is raised.
 An illegal-instruction exception is also raised if V is not enabled.
+
+For RV32 the differences in the semantics are:
+
+* If `Form` = `0b01` and `rd` = `0b00001`:
+the contents of `X[rs2+3] @ X[rs2+2] @ X[rs2+1] @ X[rs2]` are moved into the CR starting at offset `acestart`.
+
+* If `Form` = `0b10` and `rs2` = `0b00001`:
+16 bytes of the CR at offset `acestart` are moved to `X[rd+3] @ X[rd+2] @ X[rd+1] @ X[rd]`.
+
+* If `Form` = `0b01` and `rd` = `0b00010`:
+No changes.
+
+* If `Form` = `0b10` and `rs2` = `0b00010`:
+No changes.
 --
 
 // [NOTE]
@@ -1876,7 +1895,7 @@ The `ace.mgmt` instruction admits three Forms, namely
 +
 [upperalpha]
 . `ace.mgmt Kd|K{Xd}, #immed7{fournbsp}{nbsp}{nbsp}{nbsp}` with no auxiliary input.
-. `ace.mgmt Kd|K{Xd}, #immed7, Xs{nbsp}{nbsp}` with an auxiliary input in a GPR.
+. `ace.mgmt Kd|K{Xd}, #immed7, Xs{nbsp}{nbsp}` with an auxiliary input in two or four GPRs.
 . `ace.mgmt Kd|K{Xd}, #immed7, Vs{nbsp}{nbsp}` with an auxiliary input in a vector register.
 
 //
@@ -1912,9 +1931,14 @@ The encodings of the three Forms are:
 _Description_::
 +
 --
-The instruction changes the _ConfigStatus_ field of the MDH of `Kd` or `K{Xd}`.
+The instruction is used to initiate and complete provisioning or export/import operations, also setting  _ConfigStatus_ field accordingly.
+The instruction may also receive the MDH of `Kd` or `K{Xd}` beforehand. In this case the change to _ConfigStatus_ is performed after the import of the MDH.
 
-It is used to initiate and complete provisioning or export/import operations.
+The semantics of the three Forms are:
+[upperalpha]
+. Only sets the _ConfigStatus_ field of the MDH according to the value of `#immed7`.
+. On RV64, the MDH is `X[s+1] @ X[s]`. On RV32, the MDH is `X[s+3] @ X[s+2] @ X[s+1] @ X[s]`.
+. The MDH is in the 128 lowest bits of `Vs`.
 
 The special values of `#immed7` used to initiate a provisioning, import, or export process, and to complete it afterwards, are listed in the following table:
 
@@ -1935,7 +1959,7 @@ The semantics of `ace.mgmt` are as follows:
 . *`ace.mgmt` is used to start a provisioning, resp., import process.*
 +
 --
-Before issuing `ace.mgmt`, software must obtain Bits [63:0] of the MDH if the GPR variant is used, or [127:0] of the MDH if the vector variant is used. Let `ml` be this value.
+Before issuing `ace.mgmt`, software must obtain the MDH. Let `ml` be this value.
 
 NOTE: In the case we are starting an import process, `ml` is kept by software it in local state.
 It is provided as the auxiliary input to the `ace.mgmt` operation used to complete the process
@@ -1957,7 +1981,7 @@ ACE exception `ace_exc_unsupported` is _not_ raised when accessing or using a CR
 .. The implementation attempts to allocate CRF capacity according to the requirements of the _Algorithm_, _AlgorithmPolicy_, and _SCProtection_ fields of the MDH, as prescribed by <<ACE-length-rule>>. No other field must affect the amount of capacity required.
     If capacity allocation is not possible, ACE exception `ace_exc_out_of_memory` is raised.
 .. _ConfigStatus_ is set to `ace_cfgst_provisioning`, resp., `ace_cfgst_importing`.
-.. `acestart` is set to 8 if the scalar variant was used, and 16 if the vector variant was used.
+.. `acestart` is set to 16 if the vector variant was used.
 --
 
 . *`ace.mgmt` is used to complete a provisioning process.*
@@ -1978,10 +2002,7 @@ The configuration of the CR may require random generation of some material which
 . *`ace.mgmt` is used to complete an import process.*
 +
 --
-The software must use Form B, resp. Form C, of `ace.mgmt` to pass along the value of `ml` saved when the import process was started, according to whether it is a 64-bit or a 128-bit value.
-Only the _ConfigStatus_ subfield of `ml` is consumed; its remaining bits are
-ignored. The MDH image authenticated as ``AD[0]`` is the one carried in the
-SCC and already loaded into the CR, not the software-supplied `ml`.
+The software must use Form B, resp. Form C, of `ace.mgmt` to pass along the value of `ml` saved when the import process was started. This is the MDH image to be authenticated as ``AD[0]``.
 
 If `ml`._ConfigStatus_ is `ace_cfgst_complete`, the operation decrypts and authenticates the imported SCC, and makes the CR available to software, also restoring the CR's _ConfigStatus_ to `ace_cfgst_complete`.
 Otherwise, it just restores the CR's _ConfigStatus_ to the saved `ml`._ConfigStatus_.
@@ -1993,13 +2014,13 @@ Otherwise, it just restores the CR's _ConfigStatus_ to the saved `ml`._ConfigSta
 ... _ConfigStatus_ is set to `ace_cfgst_complete`.
 .. `acestart` is set to 0.
 .. If `ml`._ConfigStatus_ {ne} `ace_cfgst_complete`  (we are either importing the export of a not fully configured CR or a nested CR export):
-... _ConfigStatus_ is set to `ml`._ConfigStatus_.
+... _ConfigStatus_ is left to `ml`._ConfigStatus_.
 --
 
 . *`ace.mgmt` is used to start an export process.*
 +
 --
-Let `ml` <- Bits [63:0] of the MDH of the CR.
+Let `ml` <- the MDH of the CR.
 Software must save this value in its state to use it when completing the export process.
 Then:
 
@@ -2013,31 +2034,27 @@ The architecturally observable behavior is described in <<ACE-CR-representation>
 +
 No encryption or authentication occurs; the contents of the CR are exported verbatim, in the same order in which they appear in the PI (for a partially provisioned CR) or in the SCC (for a partially imported CR, or a CR previously prepared for export whose export process was itself interrupted).
 
-.. `acestart` is set to 8 if the scalar variant was used, and 16 if the vector variant was used.
+.. `acestart` is set to 16.
 --
 
 . *`ace.mgmt` is used to complete an export process.*
 +
 --
-Uses Form B with an auxiliary input in a GPR (or a GPR pair) carrying bits [63:0] of the MDH, or
-Form C with an auxiliary input in a vector register carrying bits [127:0] of the MDH,
-to restore the _ConfigStatus_ value saved by software.
-If the passed _ConfigStatus_ is `ace_cfgst_complete`, make the exported CR available to the ACE unit again in the clear format, and allow software to access it.
+Let `ml` be the value of the MDH saved by the software in its own state upon initiation of the export process.
+Software uses Form B or Form C `ace.mgmt` with `ml` as the auxiliary parameter to `ace.mgmt` for export completion.
 
-Let `ml` be the value of MDH[63:0] saved by the software upon initiation of the export process.
-Software passes `ml` as the auxiliary parameter to `ace.mgmt` for export completion.
 Then:
 
 .. If `ml`._ConfigStatus_ = `ace_cfgst_complete`:
 
+... If the _ConfigStatus_ in `ml` is `ace_cfgst_complete`, the instruction makes the exported CR available to the ACE unit again in the clear format, and allows software to access it.
 The implementation must restore the state of the CR to the state it was in when the export process was initiated.
 This may involve decrypting its contents or restoring them from an internal backup:
 The architecturally observable behavior is described in <<ACE-CR-representation>>.
 
+... If `ml`._ConfigStatus_ {ne} `ace_cfgst_complete`:
 
-.. If `ml`._ConfigStatus_ {ne} `ace_cfgst_complete`:
-
-No changes to the CR state are made.
+* No changes to the CR state are made.
 
 .. `acestart` is set to 0.
 --
@@ -2061,12 +2078,17 @@ The instruction is not usage-controlled.
 
 [NOTE]
 ====
-The rules governing `ace.mgmt` exist because any management procedure may be interrupted and resumed. System software is responsible for saving and restoring _ConfigStatus_, which keeps the CPU logic simple and supports arbitrarily many levels of nested virtualization.
+The rules governing `ace.mgmt` exist because any management _procedure_ may be interrupted and resumed.
+Note that, currently, `ace.mgmt` is not itself preemptible.
+System software is responsible for saving and restoring _ConfigStatus_, which keeps the CPU logic simple and supports arbitrarily many levels of nested virtualization.
 They also allow an interrupted import to resume on a different hart, even one attached to a different ACE Unit implementation. The architecture ensures interoperability as long as the importing implementation supports the algorithm encoded in the SCC.
 
 Software must permit interrupted configuration and export procedures to resume, while remaining binary compatible across implementations with and without resumption support. Resumption of the transfer instructions is not required: even where supported, an implementation may ignore `acestart` and restart an `ace.load`, `ace.store`, `ace.input`, or `ace.output`, subject to the completion guarantee of <<ACE-forward-progress>>. A context switch handler can force a restart by clearing partially configured or exported CRs at context save and again at restore.
 
 For these reasons, the architecture co-designs the instructions with the optional instruction sequences for CR management processes; see <<ACE-management-code-snippets>>. These properly support context switching and on-demand (lazy) SCC loading.
+
+Regarding the non-interruptibility of `ace.mgmt`, in the longer-running cases such as start and completion of an export or completion of an import,
+implementers have the options of letting interrupts wait, or to keep a copy of the state before `ace.mgmt` had been issued, replay it in the CR before yielding to the handler, and restart the execution of the `ace.mgmt` instruction. The latter uses internal resources, so both approaches can be implemented depending on their availability.
 ====
 
 _Included in_::
@@ -2093,7 +2115,7 @@ _Mnemonics_::
 --
 [%hardbreaks]
 `ace.getmdl{nbsp}Xd, Ks|K{Xs}`(((ACE, instruction, ace.getmdl)))
-`ace.getmdh{nbsp}Xd, Ks|K{Xs}`(((ACE, instruction, ace.getmdh)))
+`ace.getmd{nbsp}Xd, Ks|K{Xs}`(((ACE, instruction, ace.getmdh)))
 `ace.getmdv{nbsp}{nbsp}Vd, Ks|K{Xs}`(((ACE, instruction, ace.getmd)))
 --
 
@@ -2122,7 +2144,7 @@ _Encoding_::
 
 Bit `r` (bit 26) is 0 when the context is an immediate and 1 when it is held in a GPR (scalar integer).
 
-If bit `h` (bit 28) is 0, the instruction is `ace.getmdl`; if `h` is 1, it is `ace.getmdh`.
+If bit `h` (bit 28) is 0, the instruction is `ace.getmdl`; if `h` is 1, it is `ace.getmd`.
 
 If bit `v` (bit 29) is 0, the result is written to a GPR (GPR pair for RV32).
 
@@ -2133,20 +2155,29 @@ In this case, bit `h` must be 0.
 _Description_::
 +
 --
-On RV64:
+On RV64, if the destination register is a GPR, `d` must be even, and:
 
 * `ace.getmdl` copies bits [63:0] of the MDH of CR `Ks` or `K{Xs}` into GPR `Xd`.
-* `ace.getmdh` copies bits [127:64] into GPR `Xd`.
+  If `d` is not even, an illegal-instruction exception is raised.
+
+* `ace.getmd` copies bits [63:0] of the MDH of CR `Ks` or `K{Xs}` into GPR `Xd`.
+and bits [127:64] into GPR `X[d+1]`.
+  If `d` is not even, an illegal-instruction exception is raised.
+
 * `ace.getmdv` (vector register output version) copies bits [127:0] into vector register `Vd`.
 This version of the instruction only supports vector operands of at least 128 bits, that is, `VL` {times} `SEW` {ge} 128.
 If `VL` {times} `SEW` < 128, an illegal-instruction exception is raised.
 
-On RV32, if the destination register is a GPR, `d` must be even, and:
+On RV32, if the destination register is a GPR, `d` must be a multiple of four, and:
 
-* `ace.getmdl` copies bits [31:0] of the MDH of CR `Ks` or `K{Xs}` into GPR `Xd` and bits [63:32] of the same CR into GPR `X[d+1]`, atomically.
-* `ace.getmdh` copies bits [95:64] of the MDH of CR `Ks` or `K{Xs}` into GPR `Xd` and bits [127:96] of the same CR into GPR `X[d+1]`, atomically.
+* `ace.getmdl` copies bits [63:32] of the MDH of CR `Ks` or `K{Xs}` into GPR `X[d+1]` and bits [31:0] into GPR `Xd`, atomically.
+  If `d` is not multiple of four, an illegal-instruction exception is raised.
+
+* `ace.getmd` copies bits [127:96] of the MDH of CR `Ks` or `K{Xs}` into GPR `X[d+3]`, bits [95:64] into GPR `X[d+2]`,
+bits [63:32] into GPR `X[d+1]`, and bits [31:0] into GPR `Xd`, atomically.
+  If `d` is not multiple of four, an illegal-instruction exception is raised.
+
 * The semantics of `ace.getmdv` are the same as on RV64.
-* If `d` is not even, an illegal-instruction exception is raised.
 
 The instruction may not modify state.
 
@@ -2159,8 +2190,8 @@ _Included in_::
 [%header,cols="4,2,2"]
 |===
 |Extension | Minimum version | Lifecycle state
-| `Zklv`:  `ace.getmdv`/`ace.getmdl`/`ace.getmdh`    | v0.0.0          | --
-| `Zklio`: `ace.getmdl`/`ace.getmdh`                 | v0.0.0          | --
+| `Zklv`:  `ace.getmdv`/`ace.getmdl`/`ace.getmd`    | v0.0.0          | --
+| `Zklio`: `ace.getmdl`/`ace.getmd`                 | v0.0.0          | --
 |===
 --
 
@@ -2931,7 +2962,7 @@ If `ace.derive` is used to inject key material into a destination CR, the latter
 === Interruptibility and Resumability of ACE instructions
 
 `ace.clear`, `ace.reset`, `ace.setst`, `ace.mgmt`, `ace.getst`, `ace.restrict`, `ace.clone`, `ace.size`, and `ace.avail` are uninterruptible.
-`ace.mgmt` is uninterruptible as a single instruction; the management _processes_ it delimits are interruptible between their constituent instructions (<<ACE-instruction-manage>>). To bound the latency of the final `ace.mgmt` of an import, whose decryption and authentication work grows with the size of the SCC, implementations may interleave that work with the preceding load phase, as noted in <<ACE-management-code-snippets>>.
+In the current version of the specification, `ace.mgmt` is uninterruptible as a single instruction; the management _processes_ it delimits are interruptible between their constituent instructions (<<ACE-instruction-manage>>). To bound the latency of the final `ace.mgmt` of an import, whose decryption and authentication work grows with the size of the SCC, implementations may interleave that work with the preceding load phase, as noted in <<ACE-management-code-snippets>>.
 
 Long-running ACE operations may proceed even if the hart is preempted.
 In this case, when the context‑switch handler accesses an output of the operation, different behaviors are allowed:
@@ -3068,8 +3099,8 @@ For example, the instruction that loads or stores a CR's content starting with t
 
 // ////////////////////////////////////////////////////////////////////
 
-[[ACE-external-formats]]
-=== External Cryptographic Context Formats
+[[ACE-CC-formats]]
+=== Cryptographic Context Formats
 
 ACE defines two external CC formats:
 
@@ -3125,6 +3156,8 @@ SCC length to be computed from the first eight octets alone, as required by `ace
 No other MDH field must affect any of these three lengths.
 // In particular, _ConfigStatus_, _Locality_, _UsagePolicy_, _ExpirationDate_ and _AlgorithmUse_ must not.
 
+// ////////////////////////////////////////////////////////////////////
+
 [[ACE-data-formats]]
 ==== Formats of Provisioning Input and Sealed Cryptographic Context
 
@@ -3140,15 +3173,6 @@ The format of a Provisioning Input (PI) is shown in <<ACE-PI>>.
 |===
 
 The length of a PI, and thus of `Content[]`, must be a multiple of 128 bits.
-
-A CR can contain significantly more information than the Provisioning Content.
-This additional information falls into three categories:
-
-. Information necessary for the algorithm to function that cannot be reconstructed from other information—for example, random values generated in the _Ready_ state.
-
-. Information that can be easily reconstructed from other state data. The *algorithm* may choose to omit this from an SCC.
-
-. Data that optimizes performance on a specific *implementation* and is more expensive to recompute than to encrypt and save to external memory. The implementation may export such data in a custom format within an SCC for efficient reuse. A different receiving implementation may safely ignore this data during import after checking the `IMPQUAL` value. The originating implementation may silently restart a cryptographic operation if the additional data is corrupted.
 
 The format of a Sealed Cryptographic Context (SCC) is shown in <<ACE-SCC>>.
 
@@ -3181,86 +3205,48 @@ If the context is exported while in an Error State, Sections 3–6 are empty; th
 
 The MDH's _ImpDataLen_ field specifies the total size of the Variable-Length Section (`SIV2`, `IMPQUAL`, and `Content2[]`).
 
-// ////////////////////////////////////////////////////////////////////
+The information in a CR comprises at least as many bits as the SCC (see <<ACE-SCC>>), excluding `SIV`, `IMPQUAL`, and `SIV2`.
 
-[[ACE-rules-masked-implementations]]
-==== Single-Share Key Export Rule for Masked Implementations
+A CR can contain significantly more information than the Provisioning Content.
+This additional information falls into three categories:
 
-Any CC with its algorithm implemented as a multi-share implementation will always
-provision, import and export _all_ its keys and secrets as reconstructed values.
-(((ACE, algorithm, side-channel protection variants)))
-The PI and SCC formats are the same for non-protected and protected implementation
-variants of the same algorithm, the only difference being the value of the
-_SCProtection_ field in the MDH.
+. Information necessary for the algorithm to function that cannot be reconstructed from other information—for example, random values generated in the _Ready_ state.
 
-NOTE: These rules assume that reconstructing or re-randomizing a key is
-inexpensive. For example, the implementation may XOR the values with data from a
-PRNG (according to <<ACE-RBG>>) internal to the ACE unit. This approach keeps SCCs compact and ensures
-interoperability across architectures that implement side-channel protection
-differently.
+. Information that can be easily reconstructed from other state data. The *algorithm* may choose to omit this from an SCC.
 
-To accelerate key share reconstruction in a multi-share variant of an algorithm,
-some shares of a system key can be included in the content's Additional Data.
+. Data that optimizes performance on a specific *implementation* and is more expensive to recompute than to encrypt and save to external memory. The implementation may export such data in a custom format within an SCC for efficient reuse. A different receiving implementation may safely ignore this data during import after checking the `IMPQUAL` value. The originating implementation may silently restart a cryptographic operation if the additional data is corrupted.
 
-Architecturally, all values are represented as a single share. Side-channel
-analysis (SCA)-protected algorithms are implementation variants of the same
-unprotected algorithm, not separate specifications. The only difference is the
-_SCProtection_ field of the MDH.
+Despite the fact that the internal state of a CR may contain more data than in a SCC, it is still possible that
+importing an SCC requires more storage because `SIV`, `IMPQUAL`, and `SIV2` are not part of the information stored in a CR.
+
+This is addressed in the <<ACE-CR-representation>>.
 
 // ////////////////////////////////////////////////////////////////////
-
-[[ACE-system-keys]]
-==== System Keys and Randomly Generated Key Values
-
-In a PI or SCC, System Keys are encoded as a 64-bit SKID used to retrieve the key from a system-specific SKS.
-This replaces the key value itself with a usually smaller field, and may reduce the size of the PI or SCC.
-
-For threshold implementations of system keys, ACE may copy key material from the SKS into the CR and expand it into multiple shares.
-The key must still be exported as a SKID.
-Rule 3 of <<ACE-rules-masked-implementations>> can be applied to system keys as well, as long as the key's value cannot be recovered from the included shares.
-
-// //////////////////////////////////////////////////////////////////
 
 [[ACE-CR-representation]]
 ==== Notation and Representation of CR Internals
 
-The information in a CR comprises at least as many bits as the SCC (see <<ACE-SCC>>), excluding `SIV`, `IMPQUAL`, and `SIV2`.
-Importing an SCC may require additional storage for information reconstructed upon import.
-
-The _i_-th CR is denoted ``K(i)``.
-During provisioning or import, ``K(i)`` behaves like a contiguous structure.
+The _i_-th CR is denoted ``K(i)``. During provisioning or import, ``K(i)`` behaves like a contiguous structure.
 Its length equals that of the PI, or of the SCC plus 128 bits for the `SIV` — 384 bits if `IMPQUAL` and `SIV2` are also present.
-The format of this structure follows <<ACE-PI>> for provisioning and <<ACE-SCC>> for export and import.
+The format of this structure follows <<ACE-PI>> for provisioning and <<ACE-SCC>> for export and import, and in the specification the first 16 octets include the MDH.
 
 The extra 128 or 384 bits of capacity are allocated per hart, not per CR.
 Allocating them per CR would be costly: 128 bits per CR, or 384 bits if at least one algorithm supports implementation-specific data.
 The implementation transparently manages this capacity as though it belongs to the CR.
 
-In principle, this limits the ability to perform concurrent management operations within the same piece of code.
+This limits the ability to perform concurrent management operations within the same piece of code:
 Starting a second operation may overwrite the storage for `SIV`, `IMPQUAL`, and `SIV2`, irreversibly destroying the old `SIV` and `SIV2` values.
 Therefore, interleaved management operations must be avoided.
 Lightweight threads must either support CR context switching directly, or the programmer must serialize access with a mutex.
 Beyond this, the architectural restriction on the additional capacity does not affect any conceivable use case.
 
-The external format of a PI is:
+The format of a PI that has been just imported in a CR is the same as the external format, and this representation is finalized into the CR's internal state upon using `ace.mgmt` to complete the import which may include the computation of certain information such as derived keys, multiple shares.
 
-{fournbsp}{fournbsp} `MDH` {vvert} `Content[]`.
-
-While it is being loaded into a CR, the loaded information is the same:
-
-{fournbsp}{fournbsp} `MDH` {vvert} `Content[]`.
-
-The external SCC format is:
-
-{fournbsp}{fournbsp} `MDH` {vvert} `SIV` {vvert} `Content1~CT~[]` { {vvert} `IMPQUAL` {vvert} `SIV2` {vvert} `Content2~CT~[]` }.
-
-where `CT` stands for `Ciphertext`.
-
-While it is being loaded into a CR, the loaded information is shorter.
+The external format of a SCC is given in <<ACE-SCC>>, but while it is being loaded into a CR, the information in the CR follows this format:
 
 {fournbsp}{fournbsp} `MDH` {vvert} `Content1~CT~[]` { {vvert} `Content2~CT~[]` }
 
-and `SIV`, `SIV2`, `IMPQUAL` are stored separately.
+(`CT` stands for `Ciphertext`) and `SIV`, `SIV2`, `IMPQUAL` are stored separately.
 
 ////
 The behavior with architecturally observable consequences of the conversion from an encrypted format fully loaded in a CR's content and
@@ -3279,23 +3265,45 @@ is:
 
 This described the semantics of `acestart` when `ace.mgmt` it is used complete the import of a SCC (and the SCC's _ConfigStatus_ is _ace_cfgst_complete_), after which a conversion from the external format to the internal format is performed.
 
-The conversion of from an internally decrypted format back to the internal encrypted format is performed
-
-and when `ace.mgmt` is used to initiate the import of a SCC.
-
-In order to avoid leakage unencrypted data, when an `ace.mgmt` operation is preempted, following happens:
-
-. if the exception or interrupt handler does not perform any ACE operation or access any ACE state, then the instruction will be resumed from the point of interruption.
-. else, the pre-`ace.mgmt` content of the CR is restored from an internal backup and the instruction will be restarted.
-
 ////
 
 // ////////////////////////////////////////////////////////////////////
 
-[[ACE-export-import-algorithms]]
-=== Management of Sealed Cryptographic Contexts
+[[ACE-rules-masked-implementations]]
+==== Single-Share Key Export Rule for Masked Implementations
 
-We now present the cryptographic algorithms used to generate and read SCCs.
+Any CC with its algorithm implemented as a multi-share implementation will always provision, import and export _all_ its keys and secrets as reconstructed values.
+(((ACE, algorithm, side-channel protection variants)))
+The PI and SCC formats are the same for non-protected and protected implementation variants of the same algorithm, the only difference being the value of the _SCProtection_ field in the MDH.
+
+NOTE: These rules assume that reconstructing or re-randomizing a key is inexpensive.
+For example, the implementation may XOR the values with data from a PRNG (according to <<ACE-RBG>>) internal to the ACE unit.
+This approach keeps SCCs compact and ensures interoperability across architectures that implement side-channel protection differently.
+
+To accelerate key share reconstruction in a multi-share variant of an algorithm, some shares of a system key can be included in the content's Additional Data.
+
+Architecturally, all values are represented as a single share.
+Side-channel analysis (SCA)-protected algorithms are implementation variants of the same unprotected algorithm, not separate specifications.
+The only difference is the _SCProtection_ field of the MDH.
+
+// ////////////////////////////////////////////////////////////////////
+
+[[ACE-system-keys]]
+==== System Keys and Randomly Generated Key Values
+
+In a PI or SCC, System Keys are encoded as a 64-bit SKID used to retrieve the key from a system-specific SKS.
+This replaces the key value itself with a usually smaller field, and may reduce the size of the PI or SCC.
+
+For threshold implementations of system keys, ACE may copy key material from the SKS into the CR and expand it into multiple shares.
+The key must still be exported as a SKID.
+Rule 3 of <<ACE-rules-masked-implementations>> can be applied to system keys as well, as long as the key's value cannot be recovered from the included shares.
+
+// ////////////////////////////////////////////////////////////////////
+
+[[ACE-export-import-algorithms]]
+=== Management of Cryptographic Contexts
+
+We now present the cryptographic algorithms used in the export and import of SCCs.
 This completes the description of the semantics of the management operations given in <<ACE-management-operations>>,
 in the description of `ace.setst`
 (<<ACE-instruction-setst>>), and in the code detailing the operations as split by the architecture (<<ACE-management-code-snippets>>).
@@ -3341,7 +3349,19 @@ function RFC8452_KeyDeriv(key : bits(256), nonce : bits(96))
 ----
 
 NOTE: Due to the computational cost of the derivation functions,
-implementations may cache recently used derived keys.
+implementations may cache the derived keys.
+
+NOTE: In order to reduce payload size, the AES-GCM-SIV-derived algorithm used for SCC
+import and export does not use a nonce.
+The construction is sound since
+the SCC encryption algorithm inherits nonce misuse-resistance from AES-GCM-SIV.
+However, note that it is secure up to the encryption
+of 2^64^ 128-bit blocks, against an attacker being able to collect those 2^64^ 128-bit blocks.
+This should be sufficient for client applications, and, on cloud servers, it is strongly
+suggested that every virtual machine and each supervisor domain be assigned a unique CSK.
+For the purpose of transferring CCs from one domain to another, M-Mode firmware is able
+to import a SCC with the CSK used by the generator of the key and export it with the
+CSK of the target domain.
 
 The SIV (“Synthetic IV”), which also serves as the authentication tag in GCM-SIV,
 is computed by encrypting the `POLYVAL` hash of the concatenation of the Locality Secrets, the MDH, and the Content of the CR.
@@ -3390,14 +3410,6 @@ i.e., <<ACE-SCC-GCM-SIV-enc>> and <<ACE-SCC-GCM-SIV-dec>>:
 * `K` is a 256-bit Key;
 * `N` is a 96-bit Nonce; and
 * `SIV` is a 128-bit SIV/tag.
-
-// Applied to block arrays, `{vvert}` denotes the sequence consisting of the blocks of its left
-// operand followed by those of its right operand, in that order, and `POLYVAL` absorbs the
-// blocks of its argument in increasing index order. The operator `@` of <<ACE-Notation>> is
-// deliberately *not* used for this purpose: `@` composes *values* by significance, placing its
-// left operand in the more significant bits, whereas what is required here is an ordered
-// sequence of blocks. Writing `AD @ P` would both apply `@` to arrays, for which it is not
-// defined, and suggest the reverse of the intended absorption order.
 
 [[ACE-SCC-GCM-SIV-enc]]
 .AES-GCM-SIV Encryption for SCC Generation
@@ -3448,28 +3460,30 @@ function SCC_Decrypt(AD[] : array of bits(128), N : bits(96), SIV : bits(128),
 }
 ----
 
-////
-[[ACE-SCC-rationale]]
-==== Design Rationale for the Sealing Construction
+// [[ACE-SCC-rationale]]
+// ==== Design Rationale for the Sealing Construction
+//
+// _This subsection is informative._
+//
+// *Locality Secrets as associated data.*
+// The Locality Secrets are fed to the AEAD as associated data rather than mixed into the
+// Context Sealing Key through a key derivation function. The two achieve the same binding:
+// an SCC sealed under one set of Localities cannot be opened under another.
+//
+// Using the
+// associated-data path is preferred because it is cheaper. POLYVAL costs one `Montmul` per
+// 128-bit block, which on any implementation that has the carry-less multiplier is faster
+// than a KDF invocation, and it avoids re-deriving `enc_key` and `auth_key` whenever the
+// Locality set changes.
+//
+// The security argument is that POLYVAL is an almost-XOR-universal (AXU) hash. Hashing the
+// Locality Secrets with an AXU keyed by `auth_key` and encrypting the result is exactly the
+// standard construction for binding a value into a tag, and the tag is the only thing an
+// adversary observes: the Locality Secrets themselves never leave the ACE unit, and a
+// distinct set of Localities yields a distinct POLYVAL output except with the AXU collision
+// probability, which for POLYVAL is at most _l_/2^128^ for inputs of _l_ blocks.
 
-_This subsection is informative._
-
-*Locality Secrets as associated data.*
-The Locality Secrets are fed to the AEAD as associated data rather than mixed into the
-Context Sealing Key through a key derivation function. The two achieve the same binding:
-an SCC sealed under one set of Localities cannot be opened under another. Using the
-associated-data path is preferred because it is cheaper. POLYVAL costs one `Montmul` per
-128-bit block, which on any implementation that has the carry-less multiplier is faster
-than a KDF invocation, and it avoids re-deriving `enc_key` and `auth_key` whenever the
-Locality set changes.
-
-The security argument is that POLYVAL is an almost-XOR-universal (AXU) hash. Hashing the
-Locality Secrets with an AXU keyed by `auth_key` and encrypting the result is exactly the
-standard construction for binding a value into a tag, and the tag is the only thing an
-adversary observes: the Locality Secrets themselves never leave the ACE unit, and a
-distinct set of Localities yields a distinct POLYVAL output except with the AXU collision
-probability, which for POLYVAL is at most _l_/2^128^ for inputs of _l_ blocks.
-////
+// //////////////////////////////////////////////////////////////////
 
 [[ACE-SCC-export]]
 ==== Generation of an SCC from a Fully Configured CR
@@ -3477,17 +3491,6 @@ probability, which for POLYVAL is at most _l_/2^128^ for inputs of _l_ blocks.
 If the _ConfigStatus_ field is set to `ace_cfgst_complete`, then ``K(i)`` is fully provisioned,
 and opening the CR for export (`ace.mgmt Kd|K{Xd}, #ace_CR_export_start`) performs the following steps
 to create the serialized, encrypted and authenticated SCC from the CR.
-
-NOTE: The algorithms of this section and of <<ACE-SCC-import>> are
-independent of how the MDH crosses between software and the CR. The scalar
-and vector variants of the management instructions differ only in transport:
-with the scalar variant, MDH[127:64] travels as the first eight octets of the
-`ace.load`/`ace.store` (or `ace.mv`) stream, with the vector variant it
-travels in the auxiliary vector register — which is exactly what the
-`acestart` values of 8, resp., 16 set at the start of the operation encode
-(<<ACE-instruction-manage>>). In the import algorithm of <<ACE-SCC-import>>,
-steps 1 to 6 summarize the effects of the import-start and load phases;
-`#ace_CR_management_end` performs the remaining steps.
 
 .Exporting a Fully Configured CR ``K(i)``
 [example]
@@ -3508,8 +3511,6 @@ steps 1 to 6 summarize the effects of the import-start and load phases;
 
 [IMPORTANT]
 ====
-Using the same `CSK` and a zero nonce in both segments is safe by construction since
-the SCC encryption algorithm inherits nonce misuse-resistance from AES-GCM-SIV.
 Taking `SIV` as ``AD2[1]`` binds the two payloads together, so that `SIV2` and
 the keystream of the second segment change whenever the
 first payload changes; an attacker cannot graft the Implementation Variable-Length Data
