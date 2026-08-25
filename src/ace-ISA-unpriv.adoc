@@ -281,12 +281,12 @@ The most important operations on CRs are briefly described below, ahead of their
 ===== Representation of Cryptographic Registers for Accessing their Contents
 
 A CR can be viewed as a register of variable and discoverable length (more details in <<ACE-CR-representation>>).
-While an ACE implementation may work with an internal representation of a CR's content,
+While an ACE implementation works with an internal representation of a CR's content,
 ACE provides a way to access a CR as if it were a register into which a Provisioning Input (PI) or Sealed Cryptographic Context (SCC), as defined in <<ACE-external-formats>>, can be loaded.
 To this purpose, ACE defines:
 
 * Instructions `ace.load`, to load serialized data into CRs from memory (see <<ACE-instruction-load>>), and `ace.store` (see <<ACE-instruction-store>>) to export a CR's serialized content back to memory; and
-* Instructions to make this information available to the ACE unit and to convert the internal representation of CRs to an SCC (by using `ace.setst`, see <<ACE-instruction-setst>>).
+* An instruction, `ace.mgmt`, to make this information available to the ACE unit and to convert the internal representation of CRs to an SCC (cf. <<ACE-instruction-setst>>).
 
 ===== The Context Register File
 
@@ -304,7 +304,7 @@ Capacity is freed by unconfiguring other CRs.
 
 The CRF capacity is implementation-defined.
 Implementations must provide sufficient capacity for all supported operations.
-At a minimum, the CRF must be able to hold the largest possible single CR, or the largest CR pair used in cloning operations, and a small amount of additional authentication and identification information.
+// At a minimum, the CRF must be able to hold the largest possible single CR, or the largest CR pair used in cloning operations, and a small amount of additional authentication and identification information.
 
 [NOTE]
 ====
@@ -947,13 +947,13 @@ In this case, ACE exceptions are replaced by direct transitions of the CR to an 
 .Behavior upon exception conditions when the Privileged Architecture is not available.
 [%autowidth,float="center",align="center",options="header"]
 |===
-| ACE Exception                           | Behavior when the Privileged Architecture is not available.
-| `ace_exc_fatal`                   | Implementation and platform defined behavior.
-| `ace_exc_unsupported`                   | Transition to Error State _Unsupported_.
-| `ace_exc_CR_off`                        | Does not apply without Privileged Architecture, since the `*lcrstatus` CSRs are not available.
-| `ace_exc_out_of_memory`                 | Transition to Error State `ace_state_out_of_memory`.
-| `ace_exc_privilege_violation`           | Transition to Error State `ace_state_privilege_violation`.
-| `ace_exc_unconfigured_buffer`           | When an ACE instruction is issued that uses the CR with the ACEIOBUF, and the latter is unconfigured or absent, the semantics of the ACE instruction are the same as if the input and/or output had an `ACELEN` of 0.
+| ACE Exception                  | Behavior when the Privileged Architecture is not available.
+| `ace_exc_fatal`                | Implementation and platform defined behavior.
+| `ace_exc_unsupported`          | Transition to Error State _Unsupported_.
+| `ace_exc_CR_off`               | Does not apply without Privileged Architecture, since the `*lcrstatus` CSRs are not available.
+| `ace_exc_out_of_memory`        | Transition to Error State `ace_state_out_of_memory`.
+| `ace_exc_privilege_violation`  | Transition to Error State `ace_state_privilege_violation`.
+| `ace_exc_unconfigured_buffer`  | When an ACE instruction is issued that uses the CR with the ACEIOBUF, and the latter is unconfigured or absent, the semantics of the ACE instruction are the same as if the input and/or output had an `ACELEN` of 0.
 |===
 The error conditions in <<ACE-exception-error-correspondence>> are placed in their natural priority order.
 
@@ -1273,31 +1273,6 @@ _Included in_::
 --
 
 // ////////////////////////////////////////////////////////////////////
-
-// [[ACE-CSR-acenonce]]
-// ===== `acenonce0` and `acenonce1`
-//
-// {empty}
-// (((CSR, `acenonce`)))
-// `acenonce0` and `acenonce1` are 64-bit URW CSRs that define the nonce to be used when importing and exporting SCCs, i.e. by the `ace.mgmt` operations that complete an import and initiate an export (see <<ACE-export-import-algorithms>>).
-// `acenonce0` contains bits [63:0] of the nonce, and `acenonce1` contains bits [95:64] of the nonce.
-// The most significant 32 bits of `acenonce1` are fixed to zero.
-//
-// On RV32, 32-bit CSR `acenonce0h` shadows bits [63:32] of `acenonce0`, allowing these bits to be accessed.
-//
-// _Included in_::
-// +
-// --
-// [%header,cols="4,2,2"]
-// |===
-// |Extension | Minimum version | Lifecycle state
-// | `Zklv`    | v0.0.0          | --
-// | `Zklio`   | v0.0.0          | --
-// |===
-// --
-
-// ////////////////////////////////////////////////////////////////////
-
 
 [[ACE-CSK-requirements]]
 === Architectural Requirements on the Context Sealing Key
@@ -1695,8 +1670,6 @@ _Included in_::
 
 The `Zklmv` subextension adds dedicated move instructions between scalar/vector registers and a CR.
 The instructions in this extension are encoded as new forms of `ace.exec`.
-// `Zklmv` is mutually exclusive with `Zklio` and `Zklmem`.
-//and new behavior to `ace.setst` and `ace.mgmt`.
 
 _Mnemonics_::
 +
@@ -2032,7 +2005,9 @@ Then:
 
 .. If `ml`._ConfigStatus_ = `ace_cfgst_complete`:
 +
-Prepare a CR to produce an SCC. This includes encrypting its contents and computing the authentication tag(s).
+Prepare a CR to produce an SCC.
+This includes encrypting its contents and computing the authentication tag(s):
+The architecturally observable behavior is described in <<ACE-CR-representation>>.
 
 .. If `ml`._ConfigStatus_ {ne} `ace_cfgst_complete` (we are exporting a not fully configured CR or we are initiating a nested CR export):
 +
@@ -2056,7 +2031,9 @@ Then:
 .. If `ml`._ConfigStatus_ = `ace_cfgst_complete`:
 
 The implementation must restore the state of the CR to the state it was in when the export process was initiated.
-This may involve decrypting its contents or restoring them from an internal backup.
+This may involve decrypting its contents or restoring them from an internal backup:
+The architecturally observable behavior is described in <<ACE-CR-representation>>.
+
 
 .. If `ml`._ConfigStatus_ {ne} `ace_cfgst_complete`:
 
@@ -3110,8 +3087,8 @@ Both formats begin with the 128-bit MDH described in <<ACE-Metadata>>.
 ==== Fields Determining the Length of a PI, of an SCC, and of a CR
 
 This subsection is the single authoritative statement of which MDH fields determine each
-of these lengths. Every other statement in this specification, including those attached
-to the individual field descriptions in <<ACE-Metadata>>, is subordinate to it.
+of these lengths.
+// Every other statement in this specification, including those attached to the individual field descriptions in <<ACE-Metadata>>, is subordinate to it.
 
 . The length of a *Provisioning Input* is determined by, and only by, the fields
   _Algorithm_, _AlgorithmPolicy_ and _KeyType_.
@@ -3141,12 +3118,12 @@ nor on _StateExtension_, because a CR is allocated with room for every field the
 algorithm may come to use.
 
 All five fields named above lie in bits [63:0] of the MDH, which is what allows a PI or
-SCC length to be computed from the first eight octets alone, as `ace.load`
+SCC length to be computed from the first eight octets alone, as required by `ace.load`
 (<<ACE-instruction-load>>), `ace.store` (<<ACE-instruction-store>>) and Form B of
-`ace.size` (<<ACE-instruction-size>>) require.
+`ace.size` (<<ACE-instruction-size>>).
 
-No other MDH field must affect any of these three lengths. In particular, _ConfigStatus_,
-_Locality_, _UsagePolicy_, _ExpirationDate_ and _AlgorithmUse_ must not.
+No other MDH field must affect any of these three lengths.
+// In particular, _ConfigStatus_, _Locality_, _UsagePolicy_, _ExpirationDate_ and _AlgorithmUse_ must not.
 
 [[ACE-data-formats]]
 ==== Formats of Provisioning Input and Sealed Cryptographic Context
@@ -3179,18 +3156,18 @@ The format of a Sealed Cryptographic Context (SCC) is shown in <<ACE-SCC>>.
 .Plaintext of the Sealed Cryptographic Context (SCC) Format, all Sections in Order
 [width="100%",cols="^8%,25%,32%,35%",options="header"]
 |===
-| Section | Section Name                            | Size                 | Description
-| 1       | `MDH`, MDH                   | 128 bits             | See <<ACE-Metadata>>.
-| 2       | `SIV`                                   | 128 bits             | Authentication tag for section 3.
+| Section | Section Name                          | Size                 | Description
+| 1       | `MDH`, MDH                            | 128 bits             | See <<ACE-Metadata>>.
+| 2       | `SIV`                                 | 128 bits             | Authentication tag for section 3.
 //
 | 3
 | `Content1`: _Algorithm Data Section_
-| If the CR is not in an Error State, the length of the SCC is determined by the _Algorithm_, _AlgorithmPolicy_, _KeyType_ and _StateExtension_ fields of the MDH; see <<ACE-length-rule>>.
+| See <<ACE-length-rule>>.
 | Contains keys and other algorithm-specific information. Encrypted in memory and during partial import.
  The data in this section is necessary for the correct functioning of the algorithm.
 //
-| 4       | `IMPQUAL`, Implementation Qualifier     | 128 bits, if present | Used to identify the implementation of the ACE Unit
-| 5       | `SIV2`                                  | 128 bits, if present | Authentication tag for sections 4 and 6.
+| 4       | `IMPQUAL`, Implementation Qualifier   | 128 bits, if present | Used to identify the implementation of the ACE Unit
+| 5       | `SIV2`                                | 128 bits, if present | Authentication tag for sections 4 and 6.
 | 6
 | `Content2`: _Implementation (Specific) Variable-Length Data Section_ (Implementation VDS)
 | Implementation-Specific
@@ -3265,6 +3242,45 @@ Therefore, interleaved management operations must be avoided.
 Lightweight threads must either support CR context switching directly, or the programmer must serialize access with a mutex.
 Beyond this, the architectural restriction on the additional capacity does not affect any conceivable use case.
 
+The external format of a PI is:
+
+{fournbsp}{fournbsp} `MDH` {vvert} `Content[]`.
+
+While it is being loaded into a CR, the loaded information is the same:
+
+{fournbsp}{fournbsp} `MDH` {vvert} `Content[]`.
+
+The external SCC format is:
+
+{fournbsp}{fournbsp} `MDH` {vvert} `SIV` {vvert} `Content1~CT~[]` { {vvert} `IMPQUAL` {vvert} `SIV2` {vvert} `Content2~CT~[]` }.
+
+where `CT` stands for `Ciphertext`.
+
+While it is being loaded into a CR, the loaded information is shorter.
+
+{fournbsp}{fournbsp} `MDH` {vvert} `Content1~CT~[]` { {vvert} `Content2~CT~[]` }
+
+and `SIV`, `SIV2`, `IMPQUAL` are stored separately.
+
+The architecturally observable behavior of the conversion between the encrypted format and
+
+{fournbsp}{fournbsp} `MDH` {vvert} `Content1~PT~[]` { {vvert} `Content2~PT~[]` }
+
+where `PT` stands for `Plaintext` is the following:
+
+. If `acestart = 0`, it means that nothing has been converted.
+. Then `acestart` counts the number of blocks converted. So, assuming `Content1[]` has `n` blocks and `Content2[]` has `m` block
+`acestart` will be `n` after the conversion of `Content1[]` is complete,
+`n + 1` after the conversion of the first block of `Content2[]` is complete,
+and `n + m` after the conversion of `Content2[]` is complete.
+
+This described the semantics of `acestart` when `ace.mgmt` it is used initiate the export of a SCC (i.e., the CR's _ConfigStatus_ is _ace_cfgst_complete_) after a conversion from internal formats to the external format (minus `SIV1`, `SIV2`, and `IMPQUAL`), and when `ace.mgmt` is used to initiate the import of a SCC.
+
+In order to avoid leakage unencrypted data, when an `ace.mgmt` operation is preempted, following happens:
+
+. if the exception or interrupt handler does not perform any ACE operation or access any ACE state, then the instruction will be resumed from the point of interruption.
+. else, the pre-`ace.mgmt` content of the CR is restored from an internal backup and the instruction will be restarted.
+
 // ////////////////////////////////////////////////////////////////////
 
 [[ACE-export-import-algorithms]]
@@ -3275,6 +3291,8 @@ This completes the description of the semantics of the management operations giv
 in the description of `ace.setst`
 (<<ACE-instruction-setst>>), and in the code detailing the operations as split by the architecture (<<ACE-management-code-snippets>>).
 See also `ace.load` (<<ACE-instruction-load>>), `ace.store` (<<ACE-instruction-store>>), and `ace.getmdl` (<<ACE-instruction-getmd>>).
+
+// ////////////////////////////////////////////////////////////////////
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -3473,12 +3491,12 @@ steps 1 to 6 summarize the effects of the import-start and load phases;
 .. foreach(_j_ from 0 to 10) do:
 ... If `saved_MDH`._Locality_ includes Locality #j, then ``AD[len_AD]`` <-  ``LST[``_j_``]``, ``len_AD`` <- ``len_AD`` + 1
 .. `len_PC` <- length of Section 3.
-.. `SIV`, `C[]` <- ``SCC_Encrypt(AD, zeros(96), K(i).Content1[], CSK, len_AD, len_PC)``
+.. `SIV`, `Content1~CT~[]` <- ``SCC_Encrypt(AD, zeros(96), K(i).Content1~PT~[], CSK, len_AD, len_PC)``
 . Second, if _ImpDataLen_ {ne} 0, then the implementation-dependent data is processed:
 .. `len_AD2` <- 2, ``AD2[0]`` <- ``K(i)``.``IMPQUAL``, ``AD2[1]`` <- `SIV`.
 .. `len_PC2` <- length of Section 6.
-.. `SIV2`, `C2[]` <- ``SCC_Encrypt(AD2, zeros(96), K(i).Content2[], CSK, len_AD2, len_PC2)``
-. Finally, output `saved_MDH`, then `SIV` and `C[]`, and, if ImpDataLen {ne} 0, `IMPQUAL`, `SIV2` and `C2[]`.
+.. `SIV2`, `Content2~CT~[]` <- ``SCC_Encrypt(AD2, zeros(96), K(i).Content2~Plaintext[], CSK, len_AD2, len_PC2)``
+. Finally, output `saved_MDH`, then `SIV` and `Content1~CT~[]`, and, if ImpDataLen {ne} 0, `IMPQUAL`, `SIV2` and `Content2~CT~[]`.
 --
 
 [IMPORTANT]
@@ -3513,12 +3531,12 @@ When the import of the SCC of a fully configured CR is completed,
  . foreach (`j` from 0 to 10) do:
  .. If `saved_MDH`._Locality_ includes Locality #j, then ``AD[len_AD]`` <-  ``LST[j]``, ``len_AD`` <- ``len_AD`` + 1
  . `len_PC` <- length of Section 3.
- . `correct`, `K(i).Content1[]` <- ``SCC_Decrypt(AD, zeros(96), SIV, K(i).Content1[], CSK, len_AD, len_PC)`` (decrypt in place).
+ . `correct`, `K(i).Content1[]` <- ``SCC_Decrypt(AD, zeros(96), SIV, K(i).Content1[], CSK, len_AD, len_PC)``.
  . If `correct` {ne} `true`, then reject the SCC, clear ``K(i)``, and set Error State _ace_state_import_auth_.
  . Second, if the Implementation VDS was loaded at Step 6 — that is, if `saved_MDH`._ImpDataLen_ {ne} 0 *and* the length was not adjusted at Step 5 — the implementation-dependent data is processed:
 .. `len_AD2` <- 2, ``AD2[0]`` <- ``K(i)``.``IMPQUAL``, ``AD2[1]`` <- `SIV`.
 .. `len_PC2` <- length of Section 6.
-.. `correct`, `K(i).Content2[]` <- ``SCC_Decrypt(AD2, zeros(96), SIV2, K(i).Content2[], CSK, len_AD2, len_PC2)`` (decrypt in place).
+.. `correct`, `K(i).Content2[]` <- ``SCC_Decrypt(AD2, zeros(96), SIV2, K(i).Content2[], CSK, len_AD2, len_PC2)``.
  . If `correct` {ne} `true`, the Implementation VDS is discarded: `Content2[]` is dropped, _ImpDataLen_ is set to 0, and the import completes using only the architecture-dependent content. Only a failure of the first authentication (`SIV`) rejects the entire SCC.
 --
 
