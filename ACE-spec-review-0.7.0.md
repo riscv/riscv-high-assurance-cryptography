@@ -108,6 +108,14 @@ to defer but collectively preclude candidacy until at least provisionally resolv
 ---
 
 **M10 — ECC state machine: _Set_Signature_ is a dead end; verification is unreachable as written**
+FIXED — the "Allowed State Transitions" block of `<<ACE-ECC>>` now names the five _Set_ states
+collectively, lets any two of them transition freely (and to themselves), admits all of them as
+sources for _Point_Mul_/_Sign_Generate_/_Sign_Verify_, and completes
+_Point_Mul_ -> _Output_ -> _Success_. This also supplies the definition of "the _Set_ states"
+that `<<ACE-EdDSA>>` already referred to. `kat/ecc-kat.py` retains the pre-fix relation as a
+regression check. See also K13, which closes the remaining reachability gap — signing and then
+verifying within one CC — by making the `Xs` field-disposal bits uniform, so that `Signature`
+survives the mandatory return to _Ready_ unless it is explicitly discarded.
 
 - **Rationale:** By Generic Rule 2 (`src/ace-ISA-algorithms.adoc:182`), any transition not
   explicitly allowed invalidates the CR. The transition list omits _Set_Signature_ from both the
@@ -293,7 +301,7 @@ Beyond the findings above (C1's snippet mismatch, C2 vs. Book 4's validity note,
 | FIPS 198-1 HMAC | `ACE-HMAC` | **Compliant** | K0 derivation assigned to provisioner; ipad/opad and internal finalization padding correct. |
 | FIPS 202 / SP 800-185 | `ACE-SHA-3`, `ACE-KMAC` | **Compliant** | Suffix `01`/`1111`/`00` + pad10*1 handling incl. the two-block spill case; KMAC `bytepad` blocks precomputed by provisioner (declared interface choice); `right_encode(L)`, XOF non-terminating semantics correct. |
 | SP 800-232 Ascon | `ACE-Ascon-*` | **Compliant** (wording bug m5) | IV constants, round counts (12/8/12), key XOR positions, domain-separation bit, ≥64-bit tag floor all match. |
-| FIPS 186-5 / SM2 (GM/T 0003) | `ACE-ECC` | **Compliant with gap (M10)** | Retry rules (r=0/s=0; SM2 r+k=n) present; k from Zkr-quality RBG; point/subgroup validation required. Deterministic ECDSA (RFC 6979) not offered — note as deliberate. |
+| FIPS 186-5 / SM2 (GM/T 0003) | `ACE-ECC` | **Compliant** (M10 fixed) | Retry rules (r=0/s=0; SM2 r+k=n) present; k from Zkr-quality RBG; point/subgroup validation required. Deterministic ECDSA (RFC 6979) not offered — note as deliberate. |
 | RFC 8032 EdDSA | `ACE-EdDSA` | **Compliant** | Two-pass structure, dom2/dom4, ctx, pure/pre-hash gating by hash extensions; deterministic nonce (no RndNum) correct. |
 | FIPS 203 ML-KEM | `ACE-PQC-ML-KEM` | **Noncompliant as written (M12)** | §7.2/§7.3 input checks not required. Decaps implicit rejection correctly reflected (caller cannot distinguish). |
 | FIPS 204 ML-DSA | `ACE-PQC-ML-DSA` | **Needs clarification** | Sign_internal/Verify_internal with externally computed μ: consistent with NIST's external-μ usage, but the draft should cite the exact FIPS 204 provision it relies on. Hedged/deterministic selection present. |
@@ -742,9 +750,30 @@ and _AlgorithmPolicy_ fields — but that table is RVI-maintained and not reprod
 requirement is untestable and unimplementable from the document alone. The `ace.derive` destination
 key length has the same dependency.
 
-**K13 — ECC `Xs` bit 3 is a duplicate.** The Ready-return text maps "Bit 0, 1, 2, resp., 3" onto
-"`Generator` reset, `SecondPt`, `Scalar`, resp., `SecondPt` erased" — `SecondPt` appears twice, so
-bit 3 carries no distinct meaning. One entry presumably meant another field.
+**K13 — ECC `Xs` bit 3 is a duplicate.** The Ready-return text mapped "Bit 0, 1, 2, resp., 3" onto
+"`Generator` reset, `SecondPt`, `Scalar`, resp., `SecondPt` erased" — `SecondPt` appeared twice, so
+bit 3 carried no distinct meaning; the fate of `Hash` on a return to _Ready_ was meanwhile not
+stated at all.
+FIXED — the bullet now assigns one field per bit with **uniform polarity throughout**: a set bit
+discards the field it names (Bit 0 `Generator`, Bit 1 `SecondPt`, Bit 2 `Scalar`, Bit 3 `Hash`,
+Bit 6 `Signature`), a clear bit retains it, and a Form A `ace.setst` — which sets no bit —
+therefore retains everything. The previous unconditional reset of `Signature`/`HasSignature` is
+gone; Bit 6 now exists to drop a *stale* signature rather than to preserve a fresh one.
+
+Retaining the signature by default is what lets a single CC sign and then verify: a CR in
+_Success_ may only move to _Ready_ or _Unconfigured_ (`<<ACE-State-field>>`), so the two operations
+must be separated by a pass through _Ready_, which previously destroyed the signature. It is also
+the consistent choice — `Scalar` holds the *private key* and was already retained by default, so
+auto-erasing the public `(r,s)` made the least sensitive field the only special case. A worked
+five-step sequence is given in a NOTE, and `kat/ecc-kat.py::test_sign_then_verify_one_cc` walks it
+end to end, additionally checking that setting Bit 6 does discard the signature and that
+`_Sign_Verify_` is then refused.
+
+This also settles the question of whether to drop `_Ready_ -> _Sign_Verify_` from the transition
+list: **keep it.** It was vacuous only because `HasSignature` was unconditionally cleared on entry
+to _Ready_; with Bit 6 it is exactly the edge the sign-then-verify flow traverses. Ordinary
+verification never needed that edge — it enters `_Sign_Verify_` from a `_Set_` state after loading
+`SecondPt`, `Hash` and `Signature`.
 
 **K14 — point-at-infinity as a `_Point_Mul_` input is unspecified.** The state must verify the base
 point is on the curve, but the text never says whether the all-ones sentinel is an acceptable
@@ -815,8 +844,9 @@ Demonstrated, not merely asserted:
   eight times too early and the message tail is never absorbed — wrong digests, not a cosmetic
   defect. Confirmed by `shake-kat.py`, `sha2-kat.py`, `kmac-kat.py`, `gcm-kat.py`.
 - **M10** (ECC `_Set_Signature_` dead end): a breadth-first search over the transition relation as
-  literally written finds no state reachable from `_Set_Signature_`; verification is unreachable.
-  **Still present in the current text.**
+  it was written found no state reachable from `_Set_Signature_`; verification was unreachable.
+  **Since fixed** (see M10 above); `ecc-kat.py` keeps the pre-fix relation as a regression check
+  and now asserts that `_Set_Signature_` -> `_Sign_Verify_` is reachable in the current text.
 - **M12** (FIPS 203/204 validation): `mlkem-kat.py` shows the literal behaviour — a malformed `ek`
   with a coefficient ≡ q is accepted and `_Encapsulate_` proceeds — beside the conforming
   behaviour, anchored on NIST's own malformed-key test cases.

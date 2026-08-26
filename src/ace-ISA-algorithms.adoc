@@ -3298,9 +3298,14 @@ ECC algorithms define:
 * *Allowed State Transitions:*
 +
 --
- ** _Ready_ -> _Set_Generator_, _Set_Scalar_, _Set_Hash_, _Set_SecondPt_, _Set_Signature_.
- ** One can freely transition between _Set_Generator_, _Set_Scalar_, _Set_Hash_, and _Set_SecondPt_.
- ** From any of _Ready_, _Set_Generator_, _Set_Scalar_, _Set_Hash_, _Set_SecondPt_ -> one of:
+The five states _Set_Generator_, _Set_Scalar_, _Set_Hash_, _Set_SecondPt_, and
+_Set_Signature_ are collectively termed the _Set_ states.
+
+ ** _Ready_ -> any _Set_ state.
+ ** One can freely transition between any two _Set_ states, and from a _Set_ state to
+    itself. Re-entering a _Set_ state erases the field it sets and clears the
+    corresponding ``Has``__Var__ flag, so a value may be replaced by loading it again.
+ ** From _Ready_ or from any _Set_ state -> one of:
   *** _Point_Mul_;
   *** _Sign_Generate_ only if `HasHash` holds *and* `Scalar` holds a
       configured private key, that is `1` {le} `int(Scalar)` `<` `n`, where `n` is the order
@@ -3309,7 +3314,7 @@ ECC algorithms define:
       causes the CR to transition to Error State _Invalid_.
     (For the EdDSA curves, <<ACE-EdDSA>>, the behavior is different.)
   *** _Sign_Verify_ only if `HasSecondPt`, `HasHash`, and `HasSignature`.
- ** _Point_Mul_ -> _Output_.
+ ** _Point_Mul_ -> _Output_ -> _Success_.
  ** _Sign_Generate_ -> _Output_ -> _Success_.
  ** _Sign_Verify_ -> _Success_ or _Failure_.
 
@@ -3417,14 +3422,44 @@ if `r` = 0, if `r` + `k` = `n`, or if `s` = 0.
  ** If, after any computation, either `Generator` or `SecondPt` is the point at infinity, the corresponding field is set to the special value that encodes it.
 
  ** Upon returning to State _Ready_:
-  *** If a Form B `ace.setst` is used, the parameter `Xs` will determine whether the fields
- `Generator`, `Scalar`, and `SecondPt` are reset/erased or kept for further operations.
- This is determined by Bits 0, 1, 2, and 3 of `Xs` as follows:
-   **** If Bit 0, 1, 2, resp., 3 is set, then `Generator` is reset to the default value, `SecondPt`, `Scalar`, resp., `SecondPt` is erased, and in the second case flag `HasSecondPt` is unset as well.
+  *** If a Form B `ace.setst` is used, the parameter `Xs` determines which of the fields
+ `Generator`, `Scalar`, `SecondPt`, `Hash`, and `Signature` are reset, erased, or kept for
+ further operations. This is determined by Bits 0 to 6 of `Xs` as follows:
+   **** If Bit 0 is set, then `Generator` is reset to the default value.
+   **** If Bit 1 is set, then `SecondPt` is erased and flag `HasSecondPt` is unset.
+   **** If Bit 2 is set, then `Scalar` is erased.
+   **** If Bit 3 is set, then `Hash` is erased and flag `HasHash` is unset.
    **** If Bit 4 is set, then `Generator` is copied onto `SecondPt`. If Bit 0 is set, then `Generator` is set to the default value.
    **** If Bit 5 is set, then `SecondPt` is copied onto `Generator`. If Bit 1 is set, then `SecondPt` is erased afterwards and `HasSecondPt` is set to False.
-  *** A Form A `ace.setst` does not modify these states.
-  *** `Signature` and the corresponding Boolean `HasSignature` are always reset.
+   **** If Bit 6 is set, then `Signature` is erased and flag `HasSignature` is unset.
+  *** Every field whose bit is clear is retained. A Form A `ace.setst` sets no bit and
+      therefore leaves `Generator`, `Scalar`, `SecondPt`, `Hash`, and `Signature`
+      unmodified.
++
+[NOTE]
+====
+All seven bits have the same polarity: a bit that is set discards the field it names, and a field
+whose bit is clear survives the return to _Ready_. Bit 6 therefore exists to drop a stale
+signature, not to preserve a fresh one.
+
+Retaining `Signature` by default is what allows one CC whose _AlgorithmPolicy_ permits both
+operations to generate a signature and then verify it, since a CR in State _Success_ may only
+transition to _Ready_ or _Unconfigured_ (<<ACE-State-field>>) and must therefore pass through
+_Ready_ between the two operations. The sequence is:
+
+. _Ready_ {rightarrow} _Set_Scalar_ (load the private key) {rightarrow} _Point_Mul_ {rightarrow}
+  _Output_ {rightarrow} _Success_, leaving the public key in `SecondPt`;
+. _Success_ {rightarrow} _Ready_, retaining `Generator`, `SecondPt`, and `Scalar`;
+. _Ready_ {rightarrow} _Set_Hash_ (load the message value) {rightarrow} _Sign_Generate_
+  {rightarrow} _Output_ {rightarrow} _Success_;
+. _Success_ {rightarrow} _Ready_, retaining `SecondPt`, `Hash`, and `Signature`;
+. _Ready_ {rightarrow} _Sign_Verify_, whose preconditions `HasSecondPt`, `HasHash`, and
+  `HasSignature` are all met.
+
+Steps 2 and 4 may use a Form A `ace.setst`, or a Form B one with the bits of the fields to be
+discarded set. The ordinary verification flow, in which `SecondPt`, `Hash`, and `Signature` are
+loaded through their respective _Set_ states, is unaffected.
+====
 
   ** {empty}
 +

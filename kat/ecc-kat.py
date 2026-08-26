@@ -128,10 +128,16 @@ class ACEInvalid(Exception):
 def transition_targets(state, eddsa, literal):
     """The set of states reachable from `state` by a single `ace.setst`.
 
-    `literal=True` transcribes the bullet list of <<ACE-ECC>> exactly as written;
-    `literal=False` applies the obviously intended fix of review finding M10,
-    adding _Set_Signature_ to the free-transition group and to the "From any of
-    ..." list.  <<ACE-EdDSA>> already grants _Set_Ctx_ that membership in words.
+    `literal=False` transcribes the bullet list of <<ACE-ECC>> as it now reads:
+    the five _Set_ states are named collectively, any two of them may transition
+    freely, and all of them are sources for _Point_Mul_/_Sign_Generate_/
+    _Sign_Verify_.  <<ACE-EdDSA>> grants _Set_Ctx_ that same membership in words.
+
+    `literal=True` reproduces the pre-fix bullet list, in which _Set_Signature_
+    had no exit at all (review finding M10, since resolved).  It is kept so that
+    test_sign_then_verify_one_cc()
+    test_m10_dead_end() can demonstrate what the defect was and detect a
+    regression.
     """
     free = {SET_GEN, SET_SCALAR, SET_HASH, SET_SECONDPT}
     if not literal:
@@ -337,9 +343,11 @@ class CR:
             raise ACEInvalid('Sign_Verify requires HasSecondPt, HasHash, HasSignature')
 
     def _return_to_ready(self, form, xs):
-        """The `Xs` field-retention bits of the "Upon returning to State _Ready_"
-        bullet, transcribed literally -- including the fact that Bit 3 repeats
-        Bit 1 (see the SPEC-NOTE in the output)."""
+        """The `Xs` field bits of the "Upon returning to State _Ready_" bullet.
+        Uniform polarity: a set bit discards the field it names, a clear bit
+        retains it. Bit 0 Generator, Bit 1 SecondPt, Bit 2 Scalar, Bit 3 Hash,
+        Bit 4/5 the copies, Bit 6 Signature. Form A sets no bit, so it retains
+        everything."""
         if form == 'B':
             if xs & (1 << 4):                             # Generator -> SecondPt
                 self.sec = self.gen
@@ -349,13 +357,17 @@ class CR:
                     self.gen = self.sec
             if xs & 1:
                 self.gen = self.default_gen
-            if xs & 2 or xs & 8:
+            if xs & 2:
                 self.sec = None
                 self.has_sec = False
             if xs & 4:
                 self.scalar = bytes(self.fw)
-        self.sig = None                                   # always reset
-        self.has_sig = False
+            if xs & 8:
+                self.hash = None
+                self.has_hash = False
+            if xs & (1 << 6):
+                self.sig = None
+                self.has_sig = False
         self.msg_pass = 0
         self.ctx = b''
         self._r = self._kprime = None
@@ -1104,8 +1116,8 @@ def test_state_machine():
     cc.setst(READY, form='A')
     chk('MODEL', 'Xs: Form A ace.setst leaves Generator/Scalar/SecondPt untouched',
         cc.gen != cc.default_gen and cc.has_sec and b2v(cc.scalar) == 7)
-    chk('MODEL', 'Signature and HasSignature are always reset on return to Ready',
-        cc.sig is None and not cc.has_sig)
+    chk('MODEL', 'Form A: Signature and HasSignature retained on return to Ready',
+        cc.sig is not None and cc.has_sig)
     cc = loaded()
     cc.setst(READY, form='B', xs=1)
     chk('MODEL', 'Xs bit 0: Generator reset to the default value',
@@ -1118,9 +1130,32 @@ def test_state_machine():
     cc.setst(READY, form='B', xs=4)
     chk('MODEL', 'Xs bit 2: Scalar erased', b2v(cc.scalar) == 0 and cc.has_sec)
     cc = loaded()
+    cc.hash = bytes(cc.hashlen)
+    cc.has_hash = True
     cc.setst(READY, form='B', xs=8)
-    chk('MODEL', 'Xs bit 3: erases SecondPt (literal reading -- see SPEC-NOTE)',
-        cc.sec is None and not cc.has_sec)
+    chk('MODEL', 'Xs bit 3: Hash erased and HasHash unset, SecondPt kept',
+        cc.hash is None and not cc.has_hash and cc.has_sec)
+    cc = loaded()
+    cc.hash = bytes(cc.hashlen)
+    cc.has_hash = True
+    cc.setst(READY, form='B', xs=0)
+    chk('MODEL', 'Xs bit 3 clear: Hash and HasHash retained',
+        cc.hash is not None and cc.has_hash)
+    cc = loaded()
+    cc.setst(READY, form='B', xs=1 << 6)
+    chk('MODEL', 'Xs bit 6: Signature erased and HasSignature unset',
+        cc.sig is None and not cc.has_sig)
+    cc = loaded()
+    cc.setst(READY, form='B', xs=0)
+    chk('MODEL', 'Xs bit 6 clear: Signature and HasSignature retained',
+        cc.sig is not None and cc.has_sig)
+    cc = loaded()
+    cc.hash = bytes(cc.hashlen)
+    cc.has_hash = True
+    cc.setst(READY, form='B', xs=0)
+    chk('MODEL', 'uniform polarity: Xs = 0 retains every field',
+        cc.gen != cc.default_gen and cc.has_sec and b2v(cc.scalar) == 7
+        and cc.has_hash and cc.has_sig)
     cc = loaded()
     g = cc.gen
     cc.setst(READY, form='B', xs=1 << 4)
@@ -1139,16 +1174,82 @@ def test_state_machine():
     cc.setst(READY, form='B', xs=(1 << 5) | 2)
     chk('MODEL', 'Xs bits 5+1: copy, then SecondPt erased and HasSecondPt False',
         cc.gen == sec0 and cc.sec is None and not cc.has_sec)
-    note('"Upon returning to State _Ready_": the list "Bit 0, 1, 2, resp., 3 -> Generator'
-         ' reset, SecondPt, Scalar, resp., SecondPt erased" assigns *SecondPt* to both'
-         ' Bit 1 and Bit 3. Bit 3 has no distinct meaning; one of the four entries is'
-         ' almost certainly meant to be another field. NEW FINDING.')
+    note('"Upon returning to State _Ready_" previously assigned *SecondPt* to both Bit 1'
+         ' and Bit 3, leaving Bit 3 with no distinct meaning, said nothing about the fate'
+         ' of `Hash`, and reset `Signature` unconditionally. All three are now fixed, with'
+         ' uniform polarity throughout: a set bit discards the field it names (Bit 3'
+         ' `Hash`, Bit 6 `Signature`) and a clear bit retains it, so Form A and Xs = 0'
+         ' retain everything and one CC can sign and then verify.')
+
+
+# an arbitrary valid per-signature secret; this flow checks reachability, not a KAT
+K_FIXED = 0xA6E3C57DD01ABE90086538398355DD4C3B17AA873382B0F24D6129493D8AAD60
+
+
+def test_sign_then_verify_one_cc():
+    head('Sign AND verify within a single CC (fields survive the return to Ready)')
+    c = EC.P256
+    d = 0x519b423d715f8b581f4fa8ee59f4771a5b44c8130b4e3eacca54a56dda72b464
+    cr = fresh(c)
+    cr.policy_sign = cr.policy_verify = True
+
+    # 1. private key -> Point_Mul -> Output -> Success, leaving the public key in SecondPt
+    load_field(cr, SET_SCALAR, v2b(d, cr.fw))
+    cr.setst(POINT_MUL)
+    cr.exec_run()
+    cr.output_all(chunk=16)
+    chk('MODEL', 'step 1: Point_Mul leaves the public key in SecondPt, state Success',
+        cr.state == SUCCESS and cr.has_sec)
+    pub = cr.sec
+
+    # 2. Success -> Ready with Xs = 0 keeps Generator, SecondPt, Scalar
+    cr.setst(READY, form='B', xs=0)
+    chk('MODEL', 'step 2: Success -> Ready (Xs=0) retains SecondPt and Scalar',
+        cr.has_sec and cr.sec == pub and b2v(cr.scalar) == d)
+
+    # 3. load the message value, sign
+    e = 0xa41a41a12a799548211c410c65d8133afde34d28bdd542e4b680cf2899c8a8c4
+    load_field(cr, SET_HASH, v2b(e, cr.hashlen))
+    cr.setst(SIGN_GEN)
+    cr.exec_run(rbg=[K_FIXED, K_FIXED + 1, K_FIXED + 2])
+    cr.output_all(chunk=16)
+    chk('MODEL', 'step 3: Sign_Generate -> Output -> Success with HasSignature set',
+        cr.state == SUCCESS and cr.has_sig)
+    sig = cr.sig
+
+    # 4. Success -> Ready: with no bit set, every field survives
+    cr.setst(READY, form='B', xs=0)
+    chk('MODEL', 'step 4: Signature, Hash and SecondPt survive the return to Ready',
+        cr.has_sig and cr.sig == sig and cr.has_hash and cr.has_sec)
+
+    # 5. Ready -> Sign_Verify: all three preconditions now hold
+    cr.setst(SIGN_VER)
+    good = cr.exec_run()
+    chk('MODEL', 'step 5: the CC verifies its own signature -> Success',
+        good and cr.state == SUCCESS)
+
+    # Bit 6 is the way to drop a stale signature, and then verification is refused
+    cr2 = fresh(c)
+    cr2.policy_sign = cr2.policy_verify = True
+    load_field(cr2, SET_SCALAR, v2b(d, cr2.fw))
+    load_field(cr2, SET_SECONDPT, pub)
+    load_field(cr2, SET_HASH, v2b(e, cr2.hashlen))
+    cr2.setst(SIGN_GEN)
+    cr2.exec_run(rbg=[K_FIXED, K_FIXED + 1, K_FIXED + 2])
+    cr2.output_all(chunk=16)
+    cr2.setst(READY, form='B', xs=1 << 6)
+    try:
+        cr2.setst(SIGN_VER)
+        ok = False
+    except ACEInvalid:
+        ok = True
+    chk('MODEL', 'with Bit 6 the signature is discarded and Sign_Verify is refused', ok)
 
 
 def test_m10_dead_end():
-    head('Spec-bug demonstration: review finding M10 (Set_Signature dead end)')
-    # breadth-first search over the transition relation exactly as written
-    for literal, label in ((True, 'as written'), (False, 'with the M10 fix')):
+    head('Regression check: review finding M10 (Set_Signature dead end), now FIXED')
+    # breadth-first search over the transition relation, pre-fix and current
+    for literal, label in ((True, 'pre-fix'), (False, 'current text')):
         seen = {SET_SIG}
         frontier = [SET_SIG]
         while frontier:
@@ -1163,17 +1264,19 @@ def test_m10_dead_end():
         if literal:
             info(f'transition list {label}: states reachable from Set_Signature = '
                  f'{sorted(SNAME[s] for s in seen - {SET_SIG}) or "(none)"}')
-            chk('MODEL', 'M10 demonstrated: literally, no legal path Set_Signature ->'
-                ' Sign_Verify exists (this PASS records the SPEC BUG)', not reachable)
+            chk('MODEL', 'pre-fix relation had no legal path Set_Signature ->'
+                ' Sign_Verify (this PASS records what the defect was)', not reachable)
         else:
             chk('MODEL', f'transition list {label}: Set_Signature -> Sign_Verify is reachable',
                 reachable)
-    note('M10: _Set_Signature_ appears neither in the free-transition group nor in the'
-         ' "From any of Ready, Set_Generator, Set_Scalar, Set_Hash, Set_SecondPt ->"'
-         ' list, so by Generic Rule 2 a CR that has just loaded a signature can make no'
-         ' legal move. Every verification test above uses the intended fix'
-         ' (Set_Signature joins the free-transition group). STILL PRESENT in the'
-         ' current text of <<ACE-ECC>> "Allowed State Transitions".')
+    note('M10 is RESOLVED in the current text. <<ACE-ECC>> "Allowed State Transitions"'
+         ' now defines the five _Set_ states collectively, lets any two of them'
+         ' transition freely, and admits all of them as sources for _Point_Mul_,'
+         ' _Sign_Generate_ and _Sign_Verify_; _Point_Mul_ -> _Output_ -> _Success_ is'
+         ' also completed. Previously _Set_Signature_ appeared in neither exit rule, so'
+         ' by Generic Rule 2 a CR that had just loaded a signature could make no legal'
+         ' move and verification was unreachable. The pre-fix relation is retained above'
+         ' as a regression check.')
     # the strictness of the rest of the list is still enforced
     cr = fresh(EC.P256, literal=True)
     load_field(cr, SET_SIG, bytes(cr.siglen))
@@ -1531,6 +1634,7 @@ def main():
     test_point_mul_validation()
     test_retry_rules()
     test_state_machine()
+    test_sign_then_verify_one_cc()
     test_m10_dead_end()
     test_ed25519()
     test_ed448()
