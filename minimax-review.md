@@ -372,7 +372,7 @@ It's a standard. ENd of story.
 
 **Location.** N/A (omission).
 
-**Issue.** The spec mentions `[Zvbc]` (`vclmul.v[vx]`) for RVV-mini (`ace-ISA-unpriv.adoc` L351). But the spec does not require `[Zfbfmin]` or state which subset of vector instructions is required for which algorithm. For instance, `Galoismul` (GCM) requires carry-less multiplication.
+**Issue.** The spec mentions `[Zvbc]` (`vclmul.v[vx]`) for ACEV (`ace-ISA-unpriv.adoc` L351). But the spec does not require `[Zfbfmin]` or state which subset of vector instructions is required for which algorithm. For instance, `Galoismul` (GCM) requires carry-less multiplication.
 
 **Proposed resolution.** For each algorithm that requires additional vector instructions, state the requirement explicitly.
 
