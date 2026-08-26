@@ -171,21 +171,6 @@ to defer but collectively preclude candidacy until at least provisionally resolv
 
 ---
 
-**M13 — Conformance/optionality of the Privileged Architecture is undefined**
-
-- **Rationale:** Book 1 defines a complete alternate error model "when the Privileged Architecture
-  is not implemented" (`src/ace-ISA-unpriv.adoc:938-970`), but Book 3 states "If `Zklv` or `Zklio`
-  is implemented: `misa` must implement the `L` bit, `*status` must implement `ACES`"
-  (`src/ace-ISA-priv.adoc:28`) — and Zkl conformance requires one of the two. So the priv-less
-  configuration is simultaneously specified and impossible; and which of
-  `Smacestatus`/`SmaceCSK`/`Smacepbootscrt`/`Smacevbootscrt`/`Smacelclt` a conforming system must
-  implement is never stated (e.g., without `Smacestatus` there is no `ace_exc_CR_off`, no lazy
-  loading, and no trap-and-emulate — yet trap-and-emulate is how `Zklmem` may be satisfied per
-  `src/ace-ISA-unpriv.adoc:138`).
-- **Resolution:** Add a conformance clause to Book 3: enumerate which CSR extensions are mandatory
-  for (a) M-mode-only systems, (b) M+U, (c) M+S+U, (d) +H; state precisely which profile
-  corresponds to "Privileged Architecture not implemented" (presumably M-mode-only without a CSR
-  file), and note that trap-and-emulate of `Zklmem` requires `Smacestatus`.
 
 ---
 
@@ -405,8 +390,8 @@ Beyond the findings above (C1's snippet mismatch, C2 vs. Book 4's validity note,
 #########################################################################################################
 
 
-**C1 — `ace.load`/`ace.store` memory-address ↔ serialized-offset mapping is undefined under nonzero `acestart`**
-FIXED
+**FIXED C1 — `ace.load`/`ace.store` memory-address ↔ serialized-offset mapping is undefined under nonzero `acestart`**
+
 - **Severity rationale:** These are the context-switch workhorse instructions. Two conforming
   implementations (or an implementation and the software written against another) can disagree on
   which memory byte corresponds to which serialized-CR byte whenever `acestart ≠ 0`, i.e., on
@@ -439,8 +424,8 @@ FIXED
 
 ---
 
-**C2 — Import-start metadata validation rejects every mid-operation SCC, breaking context save/restore**
-FIXED
+**FIXED C2 — Import-start metadata validation rejects every mid-operation SCC, breaking context save/restore**
+
 - **Severity rationale:** As written, the normative import path contradicts the equally normative
   statement that "Completing an import can lead to any state" (`src/ace-ISA-unpriv.adoc:717`). An
   implementation following the letter rejects all SCCs of CRs captured mid-algorithm — the primary
@@ -465,15 +450,12 @@ FIXED
 
 ---
 
-**C3 — CSK gating rule forbids configuring the CSK: bootstrap deadlock**
+**FIXED C3 — CSK gating rule forbids configuring the CSK: bootstrap deadlock**
  NO CSK-> cannot configure CSK. FIXED
 
+---
 
-
-
-**M1 — The forward-progress guarantee is normatively void (inside a draft WARNING block)**
-
-FIXED
+**FIXED M1 — The forward-progress guarantee is normatively void (inside a draft WARNING block)**
 
 - **Rationale:** Termination/liveness of resumable instructions is a headline algorithmic
   property; the text establishing it is not currently part of the normative specification.
@@ -491,9 +473,7 @@ FIXED
 
 ---
 
-**M2 — `ace.size` error-return contradiction (0 vs 32), and 32 is ambiguous**
-
-FIXED (I think)
+**FIXED (I think) M2 — `ace.size` error-return contradiction (0 vs 32), and 32 is ambiguous**
 
 - **Rationale:** Directly contradictory normative statements about an architecturally visible
   result; software written per `ace.avail`'s definition misbehaves on an implementation following
@@ -512,9 +492,7 @@ FIXED (I think)
 
 ---
 
-**M3 — `ace.mv` extraction variants: wrong byte count and wrong register-constraint field**
-
-FIXED
+**FIXED M3 — `ace.mv` extraction variants: wrong byte count and wrong register-constraint field**
 
 - **Rationale:** The normative semantics are internally inconsistent; a literal implementation
   moves half the data it claims, or faults on the fixed sub-opcode.
@@ -531,9 +509,7 @@ FIXED
 
 ---
 
-**M6 — Background completion vs. faulting component accesses is unresolved**
-
-FIXED
+**FIXED M6 — Background completion vs. faulting component accesses is unresolved**
 
 - **Rationale:** Exception/trap architecture gap. If a hart takes an asynchronous interrupt and
   the ACE unit continues an `ace.store` in the background (strategy 1 of
@@ -551,9 +527,51 @@ FIXED
   must not fault."*
 
 ---
-**M14 — `macecsk` activation protocol: wrong/ambiguous flag-reset trigger; reserved `ace.mgmt` immediates unspecified**
 
-FIXED
+**FIXED M7 — `ace_exc_fatal` delivery model undefined and priority statements conflict**
+
+- **Resolution:** Specify: *"A fatal condition is recorded in the ACE unit. The first ACE
+  instruction or ACE CSR access issued (or in flight) after detection does not perform its
+  operation and raises `ace_exc_fatal`; `xepc` holds that instruction's address. The cause is not
+  delegable below M-mode [or: delegable — decide]. The ACE state reset occurs before the trap is
+  taken."* Reconcile the two priority statements.
+
+---
+
+**FIXED M8 — Reset architecture incomplete (`*lcrstatus`, `aceiobuflen`, CR contents)**
+
+- **Rationale:** Reset values determine boot behavior. If `mlcrstatus` resets to all-Off, every
+  sub-M access traps `ace_exc_CR_off` until firmware writes it; if all-Dirty, none do. Two
+  implementations choosing differently are incompatible with the same OS.
+- **Location:** `src/ace-ISA-priv.adoc:211-296` (no reset value for
+  `mlcrstatus`/`slcrstatus`/`vslcrstatus`); `src/ace-ISA-unpriv.adoc:1153-1176` (no reset value
+  for `aceiobuflen`); `src/ace-ISA-unpriv.adoc:309-310` (hart reset resets "the architectural
+  state of its ACE unit" without enumerating post-reset values).
+- **Resolution:** Add a consolidated reset table: all CRs _Unconfigured_ with zeroized contents;
+  `aceiobuflen` = 0 (ACEIOBUF unconfigured), `aceiobuftop` = 0, `acestart` = 0;
+  `mlcrstatus`/`slcrstatus`/`vslcrstatus` = recommended all-fields Dirty (3) or Initial (1) — pick
+  one; ACES = Off; CSK unconfigured (except model 3); Locality secrets zero.
+
+---
+
+**FIXED M13 — Conformance/optionality of the Privileged Architecture is undefined**
+
+- **Rationale:** Book 1 defines a complete alternate error model "when the Privileged Architecture
+  is not implemented" (`src/ace-ISA-unpriv.adoc:938-970`), but Book 3 states "If `Zklv` or `Zklio`
+  is implemented: `misa` must implement the `L` bit, `*status` must implement `ACES`"
+  (`src/ace-ISA-priv.adoc:28`) — and Zkl conformance requires one of the two. So the priv-less
+  configuration is simultaneously specified and impossible; and which of
+  `Smacecrstatus`/`SmaceCSK`/`Smacepbootscrt`/`Smacevbootscrt`/`Smacelclt` a conforming system must
+  implement is never stated (e.g., without `Smacecrstatus` there is no `ace_exc_CR_off`, no lazy
+  loading, and no trap-and-emulate — yet trap-and-emulate is how `Zklmem` may be satisfied per
+  `src/ace-ISA-unpriv.adoc:138`).
+- **Resolution:** Add a conformance clause to Book 3: enumerate which CSR extensions are mandatory
+  for (a) M-mode-only systems, (b) M+U, (c) M+S+U, (d) +H; state precisely which profile
+  corresponds to "Privileged Architecture not implemented" (presumably M-mode-only without a CSR
+  file), and note that trap-and-emulate of `Zklmem` requires `Smacecrstatus`.
+
+---
+**FIXED M14 — `macecsk` activation protocol: wrong/ambiguous flag-reset trigger; reserved `ace.mgmt` immediates unspecified**
 
 - **Rationale:** The CSK write protocol is a security-critical atomicity mechanism; its edge rules
   must be exact.
@@ -572,46 +590,16 @@ FIXED
 
 ---
 
-**M8 — Reset architecture incomplete (`*lcrstatus`, `aceiobuflen`, CR contents)**
-
-FIXED
-
-- **Rationale:** Reset values determine boot behavior. If `mlcrstatus` resets to all-Off, every
-  sub-M access traps `ace_exc_CR_off` until firmware writes it; if all-Dirty, none do. Two
-  implementations choosing differently are incompatible with the same OS.
-- **Location:** `src/ace-ISA-priv.adoc:211-296` (no reset value for
-  `mlcrstatus`/`slcrstatus`/`vslcrstatus`); `src/ace-ISA-unpriv.adoc:1153-1176` (no reset value
-  for `aceiobuflen`); `src/ace-ISA-unpriv.adoc:309-310` (hart reset resets "the architectural
-  state of its ACE unit" without enumerating post-reset values).
-- **Resolution:** Add a consolidated reset table: all CRs _Unconfigured_ with zeroized contents;
-  `aceiobuflen` = 0 (ACEIOBUF unconfigured), `aceiobuftop` = 0, `acestart` = 0;
-  `mlcrstatus`/`slcrstatus`/`vslcrstatus` = recommended all-fields Dirty (3) or Initial (1) — pick
-  one; ACES = Off; CSK unconfigured (except model 3); Locality secrets zero.
-
----
-
-FIXED. 1. **`ace.load` "16th byte" vs. `ace.store` "8th byte"** (`src/ace-ISA-unpriv.adoc:1475` vs
-`:1538`): the asymmetry is intended (store may begin after `ace.getmdl` of the low half) but is
-   nowhere explained; C1's resolution should state both entry points and their `acestart` values
-   in one table.
-
-
-
-**M7 — `ace_exc_fatal` delivery model undefined and priority statements conflict**
-
-FIXED
-
-- **Resolution:** Specify: *"A fatal condition is recorded in the ACE unit. The first ACE
-  instruction or ACE CSR access issued (or in flight) after detection does not perform its
-  operation and raises `ace_exc_fatal`; `xepc` holds that instruction's address. The cause is not
-  delegable below M-mode [or: delegable — decide]. The ACE state reset occurs before the trap is
-  taken."* Reconcile the two priority statements.
-
----
-
-FIXED **m2 — Transfer granularity contradictions.** `ace.load`: "`acestart` is also a multiple of 16"
+**FIXED m2 — Transfer granularity contradictions.** `ace.load`: "`acestart` is also a multiple of 16"
 (`src/ace-ISA-unpriv.adoc:1484`) conflicts with the 1-byte granule in `<<ACE-forward-progress>>`
 (`src/ace-ISA-unpriv.adoc:3015`) and byte-granular prefix-completeness; `ace.store` may start at 8,
 which is not a multiple of 16. State one rule: `acestart` for CR transfers is a byte count;
 implementations may halt only at 16-byte boundaries (if that is the intent), and the
 forward-progress granule for these instructions is then 16 bytes.
+
+---
+
+**FIXED** 1. **`ace.load` "16th byte" vs. `ace.store` "8th byte"** (`src/ace-ISA-unpriv.adoc:1475` vs
+`:1538`): the asymmetry is intended (store may begin after `ace.getmdl` of the low half) but is
+   nowhere explained; C1's resolution should state both entry points and their `acestart` values
+   in one table.
