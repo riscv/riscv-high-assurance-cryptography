@@ -1478,19 +1478,28 @@ _Description_::
 `ace.load` imports a PI or an SCC into the CR `Kd` or `K{Xd}`, starting with the 16th byte of the MDH.
 The memory address of the latter is given in `%offset(Xs1)`.
 
-This instruction requires that the CR be ready to import information and that the MDH has already been loaded by passing them as a parameter in a GPR pair (quartet for RV32), resp., vector register, to the `ace.mgmt` instruction used to open the CR for provisioning or import.
+This instruction requires that the CR be ready to import information and that the MDH has already been loaded by passing it as a parameter in a GPR pair (quartet for RV32), resp., vector register, to the `ace.mgmt` instruction used to open the CR for provisioning or import.
+Besides checking the soundness of the MDH, `ace.mgmt` also set `acestart` to zero.
 
 If the _ConfigStatus_ field equals `ace_cfgst_complete`, an illegal-instruction exception is raised.
 
 `ace.load` can load data larger than the effective XLEN.
-`acestart` tracks the number of loaded bytes.
-`acestart` is also a multiple of 16.
-`ace.load` starts loading data into the CR with an offset equal to the current value of `acestart` in the serialized representations of the CR.
-If `ace.load` is interrupted, `acestart` contains the offset to the next byte to load upon resumption.
 
-The implementation determines the input size from the first 8 bytes of the MDH, which software supplies as part of the entire MDH block.
+The implementation determines the input size `size`
+from the first 8 bytes of the MDH, which software supplies as part of the entire MDH block.
 The _ConfigStatus_ field identifies the input type (PI or SCC); the fields in <<ACE-length-rule>> determine its length.
-`ace.load` then reads memory starting at `%offset(Xs1)` and copies the data into the CR beginning with the current `acestart` byte offset.
+`size` excludes the MDH, but in case of a SCC, includes SIV1, and possibly SIV2 and IMPQUAL.
+
+`acestart` tracks the number of loaded bytes and is a multiple of 16. In other words, `ace.load` loads data in 16-byte chunks.
+
+`ace.load` loads data into the CR after the MDH in the serialized representations of the CR, beginning with the current `acestart` byte offset for both the memory address and the serialized representations of the CR after the MDH.
+`ace.load` loads memory starting at address `Xs1 + %offset + acestart` and copies the data into the serialized representations of the CR after the MDH, beginning with the current `acestart` byte offset.
+More precisely, the _j_-th byte after the MDH (i.e., the (_j_+16)-th byte of the serialized payload) is loaded to memory address `Xs1 + %offset + j`.
+
+`ace.store` copies the data from the serialized representations of the CR after the MDH, beginning with the current `acestart` byte offset for both the
+serialized representations of the CR after the MDH and for the memory address.
+the _j_-th byte after the MDH (i.e., the (_j_+16)-th byte of the serialized payload) is saved to  memory address `Xs1 + %offset + j`.
+
 See the non-normative note at the end of <<ACE-instruction-manage>>,
 <<ACE-resumability-memory-model>>, and <<ACE-export-import-algorithms>>.
 
@@ -1540,14 +1549,31 @@ _Description_::
 --
 Exports raw data from the CR `Ks2` or `K{Xs2}`, starting with the 8th byte of the MDH, to memory at address `%offset(Xs1)`.
 
-The first 8, resp., all 16 bytes of the MDH must be read from the CR using `ace.getmdl` into a GPR (pair for RV32), resp., into a vector register,
+The MDH must be read from the CR using `ace.getmd` into a a pair of GPRs (quartet for RV32) or `ace.getmdv` into a vector register of length at least 128 bits,
 and saved to memory by the software.
+Note that the `ace.mgmt` used to start the export also sets `acestart` to zero at the end.
 
 `ace.store` can store data that may be larger than the effective XLEN.
+
 `acestart` keeps track of the number of stored bytes, starting from 8 or 16 depending on the use of `ace.getmdl`.
 If `ace.store` is
 interrupted, `acestart` contains the offset to the next byte to store upon
 resumption.
+
+The implementation determines the input size `size` from the first 8 bytes of the MDH.
+The _ConfigStatus_ field identifies the input type (PI or SCC); the fields in <<ACE-length-rule>> determine its length.
+`size` excludes the MDH, but in case of a SCC, includes SIV1, and possibly SIV2 and IMPQUAL.
+
+`acestart` tracks the number of bytes stored to memory and is a multiple of 16.
+In other words, `ace.store` stores data in 16-byte chunks.
+
+`ace.store` store the serialized representations of the CR after the MDH to external memory.
+`ace.store` copies the data from the serialized representations of the CR after the MDH, beginning with the current `acestart` byte offset for both the
+serialized representations of the CR after the MDH and for the memory address.
+More precisely, the _j_-th byte after the MDH (i.e., the (_j_+16)-th byte of the serialized payload) is saved to  memory address `Xs1 + %offset + j`.
+
+See the non-normative note at the end of <<ACE-instruction-manage>>,
+<<ACE-resumability-memory-model>>, and <<ACE-export-import-algorithms>>.
 
 // NOTE: Modifying the CR being used by the interrupted `ace.store` always forces
 // the store to restart. Software that aims to optimize this case will have to
@@ -1720,7 +1746,7 @@ the GPR it names.
 For RV64 the semantics are:
 
 * If `Form` = `0b01` and `rd` = `0b00001`:
-the contents of `X[rs2+1] @ X[rs2]` are moved into the CR starting at offset `acestart`.
+the contents of `X[rs2+1] @ X[rs2]` are copied into the CR starting at offset `acestart`.
 `acestart` is updated to `16 + acestart`.
 The instruction is only valid if the `ConfigStatus` field of the metadata of the CR is set to `ace_cfgst_provisioning` or `ace_cfgst_importing`.
 Otherwise, an illegal-instruction exception is raised.
@@ -1735,11 +1761,11 @@ Otherwise, an illegal-instruction exception is raised.
 An illegal-instruction exception is also raised if V is not enabled.
 
 * If `Form` = `0b10` and `rs2` = `0b00001`:
-`XLEN/8` bytes of the CR at offset `acestart` are moved to `X[rd+1] @ X[rd]`.
-`acestart` is updated to `(XLEN/4) + acestart`.
+16 bytes of the CR at offset `acestart` are copied to `X[rd+1] @ X[rd]`.
+`acestart` is updated to `16 + acestart`.
 The instruction is only valid if the `ConfigStatus` field of the metadata of the CR is set to `ace_cfgst_exporting`.
 Otherwise, an illegal-instruction exception is raised.
-`rs2` must be even, else an illegal-instruction exception is raised.
+`rd` must be even, else an illegal-instruction exception is raised.
 
 * If `Form` = `0b10` and `rs2` = `0b00010`:
 `vl` elements of the CR at offset `acestart` are moved to `V[rd]`.
@@ -1757,7 +1783,7 @@ the contents of `X[rs2+3] @ X[rs2+2] @ X[rs2+1] @ X[rs2]` are moved into the CR 
 
 * If `Form` = `0b10` and `rs2` = `0b00001`:
 16 bytes of the CR at offset `acestart` are moved to `X[rd+3] @ X[rd+2] @ X[rd+1] @ X[rd]`.
-`rs2` must be a multiple of four, else an illegal-instruction exception is raised.
+`rd` must be a multiple of four, else an illegal-instruction exception is raised.
 
 * If `Form` = `0b01` and `rd` = `0b00010`:
 No changes.
