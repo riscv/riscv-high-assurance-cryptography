@@ -106,21 +106,6 @@ to defer but collectively preclude candidacy until at least provisionally resolv
 
 ---
 
-**M8 — Reset architecture incomplete (`*lcrstatus`, `aceiobuflen`, CR contents)**
-
-- **Rationale:** Reset values determine boot behavior. If `mlcrstatus` resets to all-Off, every
-  sub-M access traps `ace_exc_CR_off` until firmware writes it; if all-Dirty, none do. Two
-  implementations choosing differently are incompatible with the same OS.
-- **Location:** `src/ace-ISA-priv.adoc:211-296` (no reset value for
-  `mlcrstatus`/`slcrstatus`/`vslcrstatus`); `src/ace-ISA-unpriv.adoc:1153-1176` (no reset value
-  for `aceiobuflen`); `src/ace-ISA-unpriv.adoc:309-310` (hart reset resets "the architectural
-  state of its ACE unit" without enumerating post-reset values).
-- **Resolution:** Add a consolidated reset table: all CRs _Unconfigured_ with zeroized contents;
-  `aceiobuflen` = 0 (ACEIOBUF unconfigured), `aceiobuftop` = 0, `acestart` = 0;
-  `mlcrstatus`/`slcrstatus`/`vslcrstatus` = recommended all-fields Dirty (3) or Initial (1) — pick
-  one; ACES = Off; CSK unconfigured (except model 3); Locality secrets zero.
-
----
 
 **M9 — Unbounded "unpredictable results/behavior" in a secrecy-bearing ISA**
 
@@ -616,5 +601,23 @@ FIXED
   `ace.mgmt`: *"Values of `#immed7` other than 0–3 are reserved; issuing `ace.mgmt` with a
   reserved value causes the target CR to transition to Error State _Invalid_ [or: raises an
   illegal-instruction exception — choose one]."*
+
+---
+
+**M8 — Reset architecture incomplete (`*lcrstatus`, `aceiobuflen`, CR contents)**
+
+FIXED
+
+- **Rationale:** Reset values determine boot behavior. If `mlcrstatus` resets to all-Off, every
+  sub-M access traps `ace_exc_CR_off` until firmware writes it; if all-Dirty, none do. Two
+  implementations choosing differently are incompatible with the same OS.
+- **Location:** `src/ace-ISA-priv.adoc:211-296` (no reset value for
+  `mlcrstatus`/`slcrstatus`/`vslcrstatus`); `src/ace-ISA-unpriv.adoc:1153-1176` (no reset value
+  for `aceiobuflen`); `src/ace-ISA-unpriv.adoc:309-310` (hart reset resets "the architectural
+  state of its ACE unit" without enumerating post-reset values).
+- **Resolution:** Add a consolidated reset table: all CRs _Unconfigured_ with zeroized contents;
+  `aceiobuflen` = 0 (ACEIOBUF unconfigured), `aceiobuftop` = 0, `acestart` = 0;
+  `mlcrstatus`/`slcrstatus`/`vslcrstatus` = recommended all-fields Dirty (3) or Initial (1) — pick
+  one; ACES = Off; CSK unconfigured (except model 3); Locality secrets zero.
 
 ---
