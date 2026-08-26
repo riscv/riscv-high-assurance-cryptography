@@ -11,7 +11,7 @@ with contextlib.redirect_stdout(io.StringIO()):          # ocb-kat.py prints its
     exec(open(os.path.join(d, 'ocb-kat.py')).read())
 
 M128 = (1 << 128) - 1
-def mul_alpha(v):                      # XTS: little-endian octet order, poly x^128+x^7+x^2+x+1
+def mul_alpha(v):                      # XTS: little-endian byte order, poly x^128+x^7+x^2+x+1
     return ((v << 1) & M128) ^ (0x87 if (v >> 127) & 1 else 0)
 
 # ---------- REF: IEEE 1619 ----------
@@ -29,7 +29,7 @@ def ref_xts(key1, key2, i, data, encrypt=True):
         for q in range(n):
             out += be(int.from_bytes(blk(q),'little'), T).to_bytes(16,'little'); T = mul_alpha(T)
         return out
-    m = n                              # m full blocks, then s octets
+    m = n                              # m full blocks, then s bytes
     for q in range(m-1):
         out += be(int.from_bytes(blk(q),'little'), T).to_bytes(16,'little'); T = mul_alpha(T)
     Tm1, Tm = T, mul_alpha(T)

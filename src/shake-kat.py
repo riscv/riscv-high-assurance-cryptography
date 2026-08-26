@@ -60,7 +60,7 @@ KAT={"SHA3-224":"6b4e03423667dbb73b6e15454f0eb1abd4597f9a1b078e3f5b5a6bc7",
      "SHA3-512":"a69f73cca23a9ac5c8b567dc185a756e97c982164fe25859e0d1dcc1475c80a615b2123af1f5f94c11e3e9402c3ac558f500199d95b6d3e301758586281dcd26",
      "SHAKE128":"7f9c2ba4e88f827d616045507605853ed73b8093f6efbc88eb1a6eacfa66ef26",
      "SHAKE256":"46b9dd2b0ba88d13233b3feb743eeb243fcd52ea62b81b82b50c27646ed5762f"}
-print(f"{'function':10} {'c':>5} {'b':>5} {'t':>5} {'XOF':>4} {'suffix octet':>13}  KAT")
+print(f"{'function':10} {'c':>5} {'b':>5} {'t':>5} {'XOF':>4} {'suffix byte':>13}  KAT")
 ok=True
 for name,c,b,t,xof,D in TBL:
     assert b==1600-c, name

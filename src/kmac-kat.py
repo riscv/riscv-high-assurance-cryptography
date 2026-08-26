@@ -12,11 +12,11 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 exec(open(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'shake-kat.py'))
      .read().split('# spec table')[0])          # keccak_f, sponge helpers
 
-RATE = {128: 168, 256: 136}                      # octets; c = 256 / 512
+RATE = {128: 168, 256: 136}                      # bytes; c = 256 / 512
 
-def keccak(rate_octets, data, suffix_bits, outlen):
+def keccak(rate_bytes, data, suffix_bits, outlen):
     """Sponge over a byte string; suffix_bits is the domain suffix, LSB-first."""
-    rb = rate_octets
+    rb = rate_bytes
     suf = 0
     for j, bit in enumerate(suffix_bits): suf |= bit << j
     suf |= 1 << len(suffix_bits)                 # pad10*1 leading 1

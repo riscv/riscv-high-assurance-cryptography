@@ -3,7 +3,7 @@
 Two independent implementations:
   REF  - RFC 7253 written directly on byte strings (big-endian semantics)
   ACE  - the formulas as now written in ace-ISA-algorithms.adoc, evaluated in the
-         ACE value model (octet i of a string lives at bits [8i+7:8i] of an integer)
+         ACE value model (byte i of a string lives at bits [8i+7:8i] of an integer)
 
 Both are checked against RFC 7253 Appendix A vectors.
 """
@@ -128,9 +128,9 @@ def ref_ocb_encrypt(K, N, A, P, taglen=16):
 
 # ------------------------------------------------------- ACE model helpers
 M128 = (1 << 128) - 1
-def b2v(bs):                      # octet string -> ACE value
+def b2v(bs):                      # byte string -> ACE value
     return int.from_bytes(bs, 'little')
-def v2b(v, n):                    # ACE value -> octet string of n octets
+def v2b(v, n):                    # ACE value -> byte string of n bytes
     return (v & ((1 << (8*n)) - 1)).to_bytes(n, 'little')
 def sl(v, hi, lo):                # v[hi:lo]
     return (v >> lo) & ((1 << (hi - lo + 1)) - 1)

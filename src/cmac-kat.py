@@ -1,7 +1,7 @@
 """CMAC per SP 800-38B, and the ACE formulation of it.
 
 This is the test that finding C3 needed.  The specification originally generated the
-subkeys with `msb(L)`, the value-level `<<` and `C` xored into octet 0 — that is, the
+subkeys with `msb(L)`, the value-level `<<` and `C` xored into byte 0 — that is, the
 little-endian XTS-style doubling — where SP 800-38B doubles over the *big-endian*
 string.  It now uses `double`, which is the big-endian doubling already defined in
 <<ACE-conventions-fields>>.
@@ -10,7 +10,7 @@ Three implementations are run:
 
   REF   SP 800-38B written directly on byte strings (big-endian semantics)
   ACE   the formulas as ace-ISA-algorithms.adoc now gives them, evaluated in the ACE
-        value model (octet i of a string lives at bits [8i+7:8i] of an integer)
+        value model (byte i of a string lives at bits [8i+7:8i] of an integer)
   OLD   the formulation the specification used to carry, as a negative control
 
 A key whose L needs the reduction is what discriminates ACE from OLD, and a key for
@@ -76,7 +76,7 @@ def ace_subkeys_old(Kv, K):
     """The formulation the specification used to carry (negative control).
 
     if msb(L) == 0 then K1 <- L << 1 else K1 <- (L << 1) xor C, with msb = bit 127,
-    the value-level shift, and C the bare numeral 0x87 — hence octet 0.
+    the value-level shift, and C the bare numeral 0x87 — hence byte 0.
     """
     def step(v):
         v2 = (v << 1) & M128
@@ -138,11 +138,11 @@ for K, M, t in ANCHORS:
     got = ref_cmac(K, M).hex()
     ok = got == t
     anchor_ok &= ok
-    print(f'  |M| = {len(M):3d} octets : {"PASS" if ok else "FAIL (vector or REF suspect)"}')
+    print(f'  |M| = {len(M):3d} bytes : {"PASS" if ok else "FAIL (vector or REF suspect)"}')
 
 # ------------------------------------------------------------------ discrimination
-# The correct doubling branches on bit 7 of octet 0 of L; the old one branched on bit
-# 127, the top bit of octet 15.  Keys for which those two bits differ are the ones that
+# The correct doubling branches on bit 7 of byte 0 of L; the old one branched on bit
+# 127, the top bit of byte 15.  Keys for which those two bits differ are the ones that
 # expose the defect.
 disc, same = [], []
 for i in range(4096):
@@ -154,7 +154,7 @@ for i in range(4096):
         same.append(K)
     if len(disc) >= 8 and len(same) >= 8:
         break
-print(f'\nsearched keys for discriminating L: found {len(disc)} where bit 7 of octet 0 '
+print(f'\nsearched keys for discriminating L: found {len(disc)} where bit 7 of byte 0 '
       f'and bit 127 differ')
 
 print('\nKAT-EXPECT-FAIL: OLD')

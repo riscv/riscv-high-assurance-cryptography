@@ -148,7 +148,7 @@ print(f"Ascon-Hash256 (256-bit digest generation): {'PASS' if hash_ok else 'FAIL
 
 # Truncated tags: the tag_len setter of <<ACE-Ascon-AEAD128>> emits
 # zeros(128-tag_len) @ (state[4] @ state[3])[tag_len-1:0]; under the ACE value model
-# the low tag_len bits are the *first* tag_len/8 octets of the standard 128-bit tag,
+# the low tag_len bits are the *first* tag_len/8 bytes of the standard 128-bit tag,
 # which is the truncation SP 800-232 defines. Verification compares the same slice.
 trunc_ok = True
 ct_full = ace_enc(key, nonce, b"ad", b"some plaintext!!")
@@ -156,7 +156,7 @@ full_tag = ct_full[-16:]
 for L in (64, 96, 128):
     emitted = v2b(sl(b2v(full_tag), L - 1, 0), L // 8)
     trunc_ok &= emitted == full_tag[:L // 8]
-print(f"tag_len truncation (64/96/128) = first tag_len/8 octets of the tag: "
+print(f"tag_len truncation (64/96/128) = first tag_len/8 bytes of the tag: "
       f"{'PASS' if trunc_ok else 'FAIL'}")
 
 overall_ok = newok and tamper_ok and (not oldok) and hash_ok and trunc_ok

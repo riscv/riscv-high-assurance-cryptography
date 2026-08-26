@@ -2,8 +2,8 @@
 
 This is the test that finding M6 needed.  The specification originally built the counter
 block as `keystream_block(IV @ ctr)`, which under <<ACE-conventions>> places the counter
-in the *first* octets and in little-endian order.  SP 800-38A — and GCM, in this same
-document — put it in the *trailing* octets as a big-endian integer, which is
+in the *first* bytes and in little-endian order.  SP 800-38A — and GCM, in this same
+document — put it in the *trailing* bytes as a big-endian integer, which is
 `keystream_block(bswap(ctr) @ IV)`.  The X modes are different and were always right:
 there the counter is a full block, combined by `xor` rather than by position, and stays
 little-endian.
@@ -97,7 +97,7 @@ ctr_ok, old_caught = True, False
 for n, j in ((96, 32), (64, 64), (120, 8), (32, 96)):
     for nblocks in (1, 2, 5):
         nonce = bytes(range(1, n // 8 + 1))
-        IVv = b2v(nonce)                       # the IV occupies the first n/8 octets
+        IVv = b2v(nonce)                       # the IV occupies the first n/8 bytes
         ref = ref_ctr(KEY, nonce, j, 0, bytes(16 * nblocks))
         ace = ace_keystream(KEY, IVv, n, j, nblocks, 'ctr')
         old = ace_keystream(KEY, IVv, n, j, nblocks, 'old')

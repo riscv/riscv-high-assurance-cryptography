@@ -28,11 +28,11 @@ def ref_gcm(K, IV, A, P):             # reference, byte-string / big-endian
     T = bytes(a ^ b for a, b in zip(S, E(J0)))
     return C, T
 
-# --- ACE model: convention = octet i at bits [8i+7:8i]; @ puts left operand high
+# --- ACE model: convention = byte i at bits [8i+7:8i]; @ puts left operand high
 def ace_galoismul(a, b):              # Galoismul per ACE conventions (bswap into 38D view)
     return b2v(gmul(v2b(a, 16), v2b(b, 16)))
 
-def ace_gcm(K, IV, A, P, len_block_ad_first_octets=True, ctr_high=True):
+def ace_gcm(K, IV, A, P, len_block_ad_first_bytes=True, ctr_high=True):
     hash_key = b2v(aes_encrypt(K, bytes(16)))
     tag = 0
     def absorb(x):
@@ -59,7 +59,7 @@ def ace_gcm(K, IV, A, P, len_block_ad_first_octets=True, ctr_high=True):
     la, lc = len(A)*8, len(P)*8
     lb = cat((int.from_bytes((lc).to_bytes(8, 'big'), 'little'), 64),
              (int.from_bytes((la).to_bytes(8, 'big'), 'little'), 64)) \
-         if len_block_ad_first_octets else \
+         if len_block_ad_first_bytes else \
          cat((int.from_bytes((la).to_bytes(8, 'big'), 'little'), 64),
              (int.from_bytes((lc).to_bytes(8, 'big'), 'little'), 64))
     absorb(lb)
@@ -182,7 +182,7 @@ K = bytes.fromhex('feffe9928665731c6d6a8f9467308308')
 BIG = bytes(range(256)) * 2
 
 print('\nKAT-EXPECT-FAIL: reversed len block')
-print(f"\n{'|IV| octets':13} {'|A|':5} {'|P|':5} {'REF vs ACE':12} {'reversed len block'}")
+print(f"\n{'|IV| bytes':13} {'|A|':5} {'|P|':5} {'REF vs ACE':12} {'reversed len block'}")
 iv_ok, c2_caught = True, False
 for ivlen in (1, 8, 12, 15, 16, 17, 60, 64, 128):
     for alen, plen in ((0, 0), (20, 60), (16, 16), (5, 1), (32, 47), (17, 33)):

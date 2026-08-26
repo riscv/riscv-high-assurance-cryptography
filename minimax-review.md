@@ -384,7 +384,7 @@ It's a standard. ENd of story.
 
 **Location.** `ace-ISA-algorithms.adoc` L1582–1593.
 
-**Issue.** "`ocb_pad` is defined for `n` a multiple of 8 with `0 ≤ n ≤ 120`; for `n = 0` it is `zeros(120) @ 0b10000000`." The constant bit `0b10000000` for `n=0` corresponds to placing the terminating `1` bit at octet 0's MSB, but the position is then octet 0, bit 7 — confusing because the bit was described as "after `X[n-1:0]`."
+**Issue.** "`ocb_pad` is defined for `n` a multiple of 8 with `0 ≤ n ≤ 120`; for `n = 0` it is `zeros(120) @ 0b10000000`." The constant bit `0b10000000` for `n=0` corresponds to placing the terminating `1` bit at byte 0's MSB, but the position is then byte 0, bit 7 — confusing because the bit was described as "after `X[n-1:0]`."
 
 **Proposed resolution.** Re-express with a clear example.
 

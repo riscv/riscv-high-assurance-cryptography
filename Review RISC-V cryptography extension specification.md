@@ -79,10 +79,10 @@ into ACEIOBUF byte `j`; the length check `Xl ≤ aceiobuftop` is evaluated once,
 
 ---
 
-**M1 — GCM IV-length parameter: units contradict between API (octets), constraint range, internal use (bits), and Book 4 example**
+**M1 — GCM IV-length parameter: units contradict between API (bytes), constraint range, internal use (bits), and Book 4 example**
 
 - **Location:** `ace-ISA-algorithms.adoc` GCM §Behavior (957–981); Book 4 `ace-pseudocode.adoc` 371–377.
-- **Description:** The Form B `ace.setst` "sets the length of the IV *in octets*: `len ← Xs`", constraint `8 ≤ Xs ≤ 8192`; but `process_VLI` is invoked "where `len` is the IV length *in bits*", the special-case test is `len ≠ 96` (96 *bits* is the standard IV), and the serialized `len` field says "Maximum 1024 bytes (8192 bits)". If `Xs` is octets, a standard 12-octet IV gives `len = 12`, the `len = 96` fast path never triggers, and `J0` is computed by GHASH instead of `IV ∥ 0³¹ ∥ 1` — silently producing non-interoperable, non-conformant GCM. Book 4 passes `len_in_bytes(IV)`.
+- **Description:** The Form B `ace.setst` "sets the length of the IV *in bytes*: `len ← Xs`", constraint `8 ≤ Xs ≤ 8192`; but `process_VLI` is invoked "where `len` is the IV length *in bits*", the special-case test is `len ≠ 96` (96 *bits* is the standard IV), and the serialized `len` field says "Maximum 1024 bytes (8192 bits)". If `Xs` is bytes, a standard 12-byte IV gives `len = 12`, the `len = 96` fast path never triggers, and `J0` is computed by GHASH instead of `IV ∥ 0³¹ ∥ 1` — silently producing non-interoperable, non-conformant GCM. Book 4 passes `len_in_bytes(IV)`.
 - **Resolution:** Make `Xs` the IV length in bits (matching the range 8…8192 and the `len ≠ 96` test), with the constraint "a multiple of 8"; fix the Book 4 example to pass `8·len_in_bytes(IV)`; or convert internally with `len ← 8·Xs` and rewrite the range as `1 ≤ Xs ≤ 1024`.
 
 **M2 — SCC sealing uses AES-GCM-SIV with a permanently zero nonce; safety is asserted, not established, and the cited RFC's repeated-nonce limits are exceeded by design**
@@ -190,8 +190,8 @@ into ACEIOBUF byte `j`; the length check `Xl ≤ aceiobuftop` is evaluated once,
 **M19 — Big-endian harts: "behavior … is undefined"**
 
 - **Location:** `ace-notation.adoc` 10–14.
-- **Description:** Undefined behavior in a security extension is a vulnerability class (an attacker able to flip `mstatush.MBE`/`sstatus.UBE` gets unspecified crypto-unit behavior). RISC-V practice for endianness-sensitive features is to define behavior in terms of memory octets independent of hart endianness, or to trap.
-- **Resolution:** Replace with either "ACE memory instructions access memory as octet sequences and are endianness-invariant" (preferred — the octet-string model already supports this) or "any ACE instruction executed while the effective data endianness is big raises an illegal-instruction exception."
+- **Description:** Undefined behavior in a security extension is a vulnerability class (an attacker able to flip `mstatush.MBE`/`sstatus.UBE` gets unspecified crypto-unit behavior). RISC-V practice for endianness-sensitive features is to define behavior in terms of memory bytes independent of hart endianness, or to trap.
+- **Resolution:** Replace with either "ACE memory instructions access memory as byte sequences and are endianness-invariant" (preferred — the byte-string model already supports this) or "any ACE instruction executed while the effective data endianness is big raises an illegal-instruction exception."
 
 **M20 — Faulting ACE instructions have architectural side effects (invalidation, _State_ writes) with no stated retirement/re-execution model**
 
@@ -201,7 +201,7 @@ into ACEIOBUF byte `j`; the length check `Xl ≤ aceiobuftop` is evaluated once,
 
 **M21 — Generic Hash _Hash_Output_ loop mixes units and contains an indexing error; 32-bit `cumul_len` caps message length; SHA-3 omits `cumul_len` from its Serialized Context**
 
-- **Location:** `ace-ISA-algorithms.adoc` 2066–2090 (`output_base … octet counts` compared against `ACELEN` in bits; `block[block_base + amount − 1 : 8 block_base]`), 1998 (32-bit `cumul_len` ⇒ 2^32-bit ≈ 512 MiB absorption cap, unstated), 2278–2289 (SHA-3 SC lacks `cumul_len` though `process_VLI` is invoked with it).
+- **Location:** `ace-ISA-algorithms.adoc` 2066–2090 (`output_base … byte counts` compared against `ACELEN` in bits; `block[block_base + amount − 1 : 8 block_base]`), 1998 (32-bit `cumul_len` ⇒ 2^32-bit ≈ 512 MiB absorption cap, unstated), 2278–2289 (SHA-3 SC lacks `cumul_len` though `process_VLI` is invoked with it).
 - **Resolution:** Rewrite the output loop entirely in bits (as `process_VLI` is), fix `8 block_base` → `block_base`; either widen `cumul_len` or state the cap normatively; reconcile SHA-3's serialized fields with its `process_VLI` invocation.
 
 **M22 — RVV-mini depends on nonexistent instructions and is itself unfinalized while normatively load-bearing**
