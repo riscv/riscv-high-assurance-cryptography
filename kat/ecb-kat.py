@@ -45,14 +45,12 @@ Vectors and provenance
   0123456789abcdeffedcba9876543210 -> 681edf34d206965e86b3e94f536e4246).  Also
   reproduced in the Linux kernel crypto/testmgr.h sm4_tv_template as
   "GB/T 32907-2016 Example 1".
-* GB/T 32907-2016 Example 2 is the 1,000,000-round iteration vector
-  (-> 595298c7c6fd271f0402f804c33d3f66).  Running it in pure Python exceeds this
-  file's time budget, so it is *truncated*: the value after 1000 rounds is embedded
-  below as SM4_ITER_1000.  Provenance of that intermediate: it was produced by
-  this same implementation in an offline run that carried on to round 1,000,000
-  and did reproduce the published Example 2 result, so the round-1000 value lies on
-  the standard's own iteration chain.  It is a reference-implementation anchor,
-  not a published constant, and is labelled as such in the output.
+* GB/T 32907-2016 Example 2, the full 1,000,000-round iteration vector
+  (-> 595298c7c6fd271f0402f804c33d3f66).  This runs in about 30 s in pure Python,
+  which fits the time budget, so the vector is used whole rather than truncated.
+  The intermediate values at rounds 100/1000/10000 are recorded alongside it as
+  reference-implementation checkpoints (they are not published constants, and are
+  labelled as such); they exist only so that a failure can be localized.
 * SM4 multi-block ECB: GB/T 32907-2016 A.2.1.1 and A.2.1.2, as reproduced in the
   Linux kernel crypto/testmgr.h sm4_tv_template.
 
@@ -136,23 +134,43 @@ def ref_ecb(enc, key, data, bsz=16):
     return b''.join(enc(key, data[i:i + bsz]) for i in range(0, len(data), bsz))
 
 
-def ace_ecb(enc, key, inp, acelen, b=128, order='spec'):
+def ace_ecb(enc, key, inp, acelen, b=128):
     """State _Encrypt_/_Decrypt_ of <<ACE-ECB-mode>>, on ACE values.
 
-    order 'spec' : foreach(i from 0 to ACELEN-b by b), i.e. least significant
-                   block position first, exactly as the specification writes it.
-    order 'msb'  : the same set of blocks taken most significant first --- the
-                   negative control.  It differs from 'spec' only by writing each
-                   result to the mirrored position, which reverses the byte string.
+    Literally the specification's loop:
+
+        foreach(i from 0 to ACELEN-b by b) {
+          OUTPUT[i+b-1:i] <- enc_blk(key, INPUT[i+b-1:i]) }
+
+    Each block is taken from, and returned to, the same bit position, so the
+    result is independent of the order in which the loop visits them.  What the
+    loop does fix is *which* bits form a block, and that is what the byte-string
+    comparison in this file exercises.
+    """
+    out = 0
+    for i in range(0, acelen, b):
+        blk = sl(inp, i + b - 1, i)
+        out |= b2v(enc(key, v2b(blk, b // 8))) << i
+    return out
+
+
+def ace_ecb_bigendian_misread(enc, key, inp, acelen, b=128):
+    """Negative control: the big-endian misreading of <<ACE-Notation>>.
+
+    ECB treats every block independently, so getting the *order of the loop*
+    wrong is unobservable --- the specification's "least significant positions
+    first" phrasing has no effect on the result by itself.  What is observable,
+    and what that phrasing exists to pin down, is the correspondence between block
+    positions in the ACE value and block offsets in the byte string.  This control
+    takes the opposite correspondence, mapping the most significant block of the
+    value to the first block of the string, and must disagree with the vector.
     """
     nblk = acelen // b
-    idx = range(0, acelen, b) if order == 'spec' else range(acelen - b, -1, -b)
     out = 0
-    for pos, i in enumerate(idx):
+    for i in range(0, acelen, b):
         blk = sl(inp, i + b - 1, i)
         res = b2v(enc(key, v2b(blk, b // 8)))
-        dest = i if order == 'spec' else (nblk - 1 - pos) * b
-        out |= res << dest
+        out |= res << ((nblk - 1) * b - i)
     return out
 
 
@@ -194,8 +212,15 @@ SP38A_F1 = [
 # GB/T 32907-2016.
 SM4_KEY1 = "0123456789abcdeffedcba9876543210"
 SM4_EX1_CT = "681edf34d206965e86b3e94f536e4246"
-SM4_ITER_ROUNDS = 1000
-SM4_ITER_1000 = "1a75dbf4e29d1f01b3c5b26377a7e69f"   # see the module docstring
+# GB/T 32907-2016 Example 2: encrypt the plaintext under its own key 1e6 times.
+SM4_EX2_ROUNDS = 1000000
+SM4_EX2_CT = "595298c7c6fd271f0402f804c33d3f66"
+# Reference-implementation checkpoints, for localizing a failure only.
+SM4_EX2_CHECKPOINTS = {
+    100: "8da24cb1008bd3271aa3b60105a7d5fd",
+    1000: "d735e91cc5689cf312bcc1efb740e813",
+    10000: "2d8bfc27381c68ecb316320ee72ba074",
+}
 SM4_MULTI = [
     ("A.2.1.1 SM4-ECB", SM4_KEY1,
      "aaaaaaaabbbbbbbbccccccccddddddddeeeeeeeeffffffffaaaaaaaabbbbbbbb",
@@ -240,15 +265,15 @@ for name, k, c in SP38A_F1:
 print("\n== ACE multi-block rule: ACELEN = 4b, least significant block position first")
 print("   (the 4-block operand is built with cat(); its LEFT part is the most")
 print("    significant, i.e. the LAST block of the byte string)")
-print("\nKAT-EXPECT-FAIL: NEG most-significant-first")
-print(f"\n   {'vector':<32} {'ACE spec order':<16} {'NEG most-significant-first'}")
+print("\nKAT-EXPECT-FAIL: NEG big-endian misread")
+print(f"\n   {'vector':<32} {'ACE spec order':<16} {'NEG big-endian misread'}")
 for name, k, c in SP38A_F1:
     key = bytes.fromhex(k)
     blocks = [pt[i:i + 16] for i in range(0, 64, 16)]
     # cat() takes the most significant part first: reverse the address order.
     inp = cat(*[(b2v(b), 128) for b in reversed(blocks)])
     spec = v2b(ace_ecb(aes_encrypt, key, inp, 512), 64).hex()
-    neg = v2b(ace_ecb(aes_encrypt, key, inp, 512, order='msb'), 64).hex()
+    neg = v2b(ace_ecb_bigendian_misread(aes_encrypt, key, inp, 512), 64).hex()
     good_spec = spec == c
     good_neg = neg != c                      # the control must NOT reproduce the vector
     ok = ok and good_spec
@@ -267,10 +292,12 @@ chk("Example 1 single block", sm4_encrypt(k1, k1).hex(), SM4_EX1_CT)
 chk("Example 1 decrypt", sm4_decrypt(k1, bytes.fromhex(SM4_EX1_CT)).hex(), SM4_KEY1)
 rks = sm4_key_schedule(k1)
 x = k1
-for _ in range(SM4_ITER_ROUNDS):
+for r in range(1, SM4_EX2_ROUNDS + 1):
     x = _sm4_block(rks, x)
-chk(f"Example 2 truncated to {SM4_ITER_ROUNDS} rounds [ref-impl anchor]",
-    x.hex(), SM4_ITER_1000)
+    if r in SM4_EX2_CHECKPOINTS:
+        chk(f"Example 2 round {r} [ref-impl checkpoint]", x.hex(),
+            SM4_EX2_CHECKPOINTS[r])
+chk(f"Example 2 full {SM4_EX2_ROUNDS} rounds", x.hex(), SM4_EX2_CT)
 for name, k, p, c in SM4_MULTI:
     key = bytes.fromhex(k)
     chk(name + " REF", ref_ecb(sm4_encrypt, key, bytes.fromhex(p)).hex(), c)

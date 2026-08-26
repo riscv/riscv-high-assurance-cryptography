@@ -33,8 +33,10 @@ input_base` and reads `input_base <- acestart` although `input_base` is in bits
 and `acestart` is architecturally a byte count.  The resumption model below uses
 the corrected /8 and *8 conversions, as M4 resolves.
 
-Conclusion (see the summary printed at the end): the spec text as written
-reproduces every vector; no discrepancy with SP 800-38D was found.
+Conclusion: the spec text as written reproduces every vector; no *functional*
+discrepancy with SP 800-38D was found in either mode.  Three editorial defects
+noticed while transcribing are printed as OBSERVATIONs at the end; none of them
+changes a computed value, so none is a test failure.
 """
 
 import sys, os
@@ -803,8 +805,21 @@ check(f"both negative controls are observable on several vectors "
 print("\n".join(lines))
 print()
 print("summary: REF and the ACE model both reproduce SP 800-38D / McGrew-Viega")
-print("         test cases 1-6 and 13-18; no discrepancy between the literal")
-print("         spec text and the standard was found for GCM or GCM-with-Set-IV.")
+print("         test cases 1-6 and 13-18; no functional discrepancy between the")
+print("         literal spec text and the standard was found for GCM or")
+print("         GCM-with-Set-IV.")
+print()
+print("OBSERVATIONs (editorial; no computed value changes, hence not failures):")
+print("  1. <<ACE-GCM-mode>> Parameters says \"ACELEN must be an integer multiple")
+print("     of b\", but _Set_Aux_Value_ is process_VLI with granularity = b, whose")
+print("     final transfer may be shorter -- and must be, for a 96-bit IV or for")
+print("     the trailing 12 bytes of the 60-byte IV of test cases 6 and 18.  The")
+print("     blanket ACELEN rule should be scoped to the block-consuming states.")
+print("  2. In the _Set_Aux_Value_ overlay of the Serialized Context, the second")
+print("     sentence of the `input_base` row (\"Each time this value reaches b, the")
+print("     data in block is processed\") describes `block_base`, not `input_base`.")
+print("  3. The Form C ace.setst INPUT for _Enc_Tag_Finalize_ is typeset with a")
+print("     doubled `@` across the line break (`... 64)) @` / `@ bswap(...)`).")
 print()
 print(f"KAT-RESULT: {'PASS' if ok else 'FAIL'}")
 sys.exit(0 if ok else 1)

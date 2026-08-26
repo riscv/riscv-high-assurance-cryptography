@@ -60,6 +60,18 @@ the correct reading and is what this harness models: the caller pads the AD
 only; the final PT/CT block goes through _*_Last_Block_ with the internal
 pad().  This is reported as a wording bug, not patched here.
 
+SECOND SPEC DISCREPANCY FOUND BY THIS HARNESS
+---------------------------------------------
+<<ACE-Ascon-CXOF128>> says only that "the message is prepended with the
+customization string" and that "the management and padding of the
+customization string are left to the caller".  SP 800-232 Sec. 5.3 in fact
+requires the absorbed prefix to be  bin(8*len(Z), 64) @ pad(Z, 64) -- a
+mandatory 64-bit little-endian *bit-length* field ahead of Z.  The ACE text
+never mentions that field, so a caller following it literally produces output
+that does not match the official CXOF128 vectors.  The harness models the
+SP 800-232 prefix (function `cxof_prefix`) and additionally demonstrates, as
+labelled PASSing checks, that the literal ACE reading fails the vectors.
+
 Run directly; prints per-case PASS/FAIL and a final `KAT-RESULT:` line.
 """
 
@@ -965,6 +977,22 @@ def main():
             ace_cxof128(h(msg), h(z), 64).hex(), md)
     chk("CXOF128 with an empty Z differs from XOF128 on the same message (IV differs)",
         ace_cxof128(b"abc", b"", 32) != ace_xof128(b"abc", 32), True)
+    # SPEC GAP (reported, not patched): <<ACE-Ascon-CXOF128>> says only that "the
+    # message is prepended with the customization string" and leaves "the
+    # management and padding of the customization string ... to the caller".  It
+    # never states that SP 800-232 Sec. 5.3 requires the prefix to be
+    #     bin(8*len(Z), 64) @ pad(Z, 64)
+    # i.e. a MANDATORY 64-bit little-endian bit-length field ahead of Z.  A
+    # caller following the ACE text literally -- prepending only pad(Z,64) --
+    # produces output that does NOT match the official vectors.  Demonstrated:
+    def cxof_literal_reading(msg, z, outlen=64):
+        pre = z + b'\x01' + bytes((-len(z) - 1) % 8)      # no bin(8|Z|,64) field
+        return ace_xof(IV_CXOF, msg, outlen, prefix=pre)
+    for count, msg, z, md in CXOF_KAT:
+        if not h(z):
+            continue      # with Z empty the two readings still differ (length field = 0)
+        chk(f"CXOF128  Count={count:<4} literal ACE reading (no bin(8|Z|,64) field) "
+            f"does NOT match the KAT -- spec gap", cxof_literal_reading(h(msg), h(z)).hex() != md, True)
 
     # ---------------------------------------------------------- negative control
     print("\nNegative control: domain separation applied to the WRONG word")
