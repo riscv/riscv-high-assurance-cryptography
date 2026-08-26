@@ -588,8 +588,10 @@ Note that a CR can always be restored from a backup SCC, so preventing transitio
 
 . Any transition may be caused by performing an explicit `ace.setst` operation, or may be induced by certain conditions specified in the algorithm's specification.
 
-. The actual State after `ace.setst` completes may not be the one specified in the instruction's immediate.
-Besides error reporting through Error States, a typical example occurs during MAC verification: when `ace.setst` is issued with an `ace_state_hash_verify` immediate and the verification value as an additional parameter, the algorithm transitions to either _Success_ or _Failure_. `ace.exec` instructions may also cause state changes.
+. The CR state after `ace.setst` completes does not always match the instruction's immediate operand.
+Beyond Error State transitions, some operations determine the next state dynamically.
+For example, issuing `ace.setst` with an `ace_state_hash_verify` immediate and a verification parameter transitions the CR to either _Success_ or _Failure_.
+Instructions such as `ace.exec` may also cause state changes.
 
 . Upon transitioning to an Error State, the Content of a CR beyond the MDH is cleared:
 Internal resources associated with the Content shall also be released,
@@ -602,7 +604,8 @@ Accordingly, `_ConfigStatus_` is always set to `ace_cfgst_complete`.
 Invalidating the CC on certain failures prevents its continued use in an inconsistent or undesirable state.
 ====
 
-. The transitions from _Unconfigured_ to any Error State result from configuration instructions, whereas the corresponding transitions from these Error States to _Unconfigured_ result from explicitly clearing the CR.
+. The transitions from _Unconfigured_ to any Error State result from configuration instructions.
+  The transitions from these Error States to _Unconfigured_ result from explicitly clearing the CR.
 
 . Exporting a CR in an Error State exports only the MDH (all fields and values) and the authentication tag.
   Requesting the SCC's size (`ace.size` <<ACE-instruction-size>>) will return 32 (bytes).
@@ -933,7 +936,7 @@ the same synchronization as sharing it with an ordinary software loop.
 ====
 A full axiomatic integration of the ACE component memory operations
 into the RVWMO formalism remains to be produced together with the
-Architecture Review Committee during ratification.
+ARC during ratification.
 ====
 
 // ////////////////////////////////////////////////////////////////////
@@ -946,7 +949,7 @@ In this case, ACE exceptions are replaced by direct transitions of the CR to an 
 
 [[ACE-exception-error-correspondence]]
 .Behavior upon exception conditions when the Privileged Architecture is not available.
-[%autowidth,float="center",align="center",options="header"]
+[float="center",align="center",cols="<1,<3",options="header"]
 |===
 | ACE Exception                  | Behavior when the Privileged Architecture is not available.
 | `ace_exc_fatal`                | Implementation and platform defined behavior.
@@ -1857,8 +1860,8 @@ Note that:
 * It is allowed to issue `ace.setst` instructions to the current state.
 When the algorithm needs to prevent this, it will automatically transition to a different state after completing `ace.setst`.
 * If `#immed7` is zero, i.e., the value corresponding to the _Unconfigured_ state, the CR is cleared.
-* It is always allowed to use the code for an Error State (see <<ACE-states-error>>) as an `#immed7`.
-This will also invalidate the contents of the CR.  This may trigger a partial or full release of the resources used by the CR.
+* An Error State code (see <<ACE-states-error>>) is always permitted for `#immed7`.
+This invalidates the CR contents and may partially or fully release its resources.
 * Setting an Error State does _not_ trigger an exception, even if reaching that state implicitly would normally raise one.
 Further usage of the same CR—for instance, a later `ace.exec` or `ace.setst` to a valid state—will raise exceptions in that case.
 
@@ -1871,9 +1874,10 @@ The full provisioning, export, and import operations are described in detail in 
 The instruction may modify state.
 
 The instruction is usage-controlled, with the following exceptions:
- . `ace.setst` with `#immed7` equal to `ace_state_unconfigured` (0), that is `ace.clear` and `ace.reset` (<<ACE-instruction-clear>>), is
+
+. `ace.setst` with `#immed7` equal to `ace_state_unconfigured` (0), that is `ace.clear` and `ace.reset` (<<ACE-instruction-clear>>), is
 _not_ usage-controlled and may be issued in any privilege mode regardless of the CC's _UsagePolicy_.
- . Explicitly setting Error States is not usage-controlled and may be issued in any privilege mode regardless of the CC's _UsagePolicy_.
+. Explicitly setting Error States is not usage-controlled and may be issued in any privilege mode regardless of the CC's _UsagePolicy_.
 --
 
 _Included in_::
@@ -2092,7 +2096,6 @@ Software must allow interrupted configuration and export procedures to resume wh
 Resuming transfer instructions is optional.
 Even when supported, an implementation may ignore `acestart` and restart an `ace.load`, `ace.store`, `ace.input`, or `ace.output`, subject to the completion guarantee of <<ACE-forward-progress>>.
 A context-switch handler can force a restart by clearing partially configured or exported CRs at context save and restore.
-
 Consequently, the ACE ISA is co-designed with the CR management sequences in <<ACE-management-code-snippets>> to support context switching and lazy SCC loading.
 
 For longer-running `ace.mgmt` operations—such as starting or completing an export, or completing an import—implementations can either defer interrupts until the instruction completes, or preserve the prior CR state, restore it before taking the trap, and re-execute `ace.mgmt` upon return.
@@ -2896,7 +2899,7 @@ _Included in_::
 // ////////////////////////////////////////////////////////////////////
 
 [[ACE-usage-input-output]]
-=== Rules for ace.input and ace.output to Replace Vector Inputs and Outputs
+=== Replacing Vector Inputs and Outputs with ace.input and ace.output
 
 When `Zklio` is available, some instructions with vector inputs and outputs may be replaced by instruction sequences without vector inputs and outputs.
 

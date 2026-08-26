@@ -362,7 +362,6 @@ In CTR mode, the sum of the lengths of IV and counter equals the block size of t
 (((ACE, algorithm, keystream generation)))
 
 In XCTR modes, both IV and counter have the same size as the block size of the underlying keyed PRP or PRF, and are ``xor``ed together to form its input.
-//Only the counter modes are defined, since no LFSR-based mode has been standardized yet.
 
 Parameters:::
 * `b` = block size (8|`b`).
@@ -451,20 +450,13 @@ block of `OUTPUT` each time.
     is unchanged: setting the counter is an _operation_, not a state, exactly
     as setting the tweak is in <<ACE-tweakable>>.
 
- ** If a `tick_ctr()` would wrap `ctr` around to its initial value, the `ace.exec`
-    performs no operation for that block and any later ones, and the CR transitions to
-    Error State _Invalid_: continuing would repeat the keystream. The partial-progress
-    rule of <<ACE-error-architecture>> applies to the blocks already produced.
-    The initial value is the one most recently established: the value set by the
-    set-initial-counter operation above, or zero upon the transition to State
-    _Operate_ if that operation has not been used since.
+NOTE: There is no check on `ctr` wrapping around to its initial value, since a
+malicious user could always save the initial CR and reuse it to simulate
+a wraparound of the `ctr` even if this were prevented by the algorithm.
+Keystream-reuse discipline for CTR and XCTR remains thus the caller's
+responsibility, as in cite:[nist-SP-800-38A-1].
 
-NOTE: The set-initial-counter operation adds no misuse power beyond what the mode
-already entrusts to the caller: a caller can equally return to State _Ready_ and
-reuse the same IV. Keystream-reuse discipline for CTR and XCTR remains the
-caller's responsibility, as in cite:[nist-SP-800-38A-1].
-
-Note that if `ace.setst` is issued to return to State _Ready_, the CC can be reused with a new IV.
+If `ace.setst` is issued to return to State _Ready_, the CC can be reused with a new IV.
 
 Example pseudocode is given in <<ACE-pseudocode-keystream-modes>> (for the case `b` = `ACELEN` = 128).
 
@@ -475,11 +467,10 @@ Example pseudocode is given in <<ACE-pseudocode-keystream-modes>> (for the case 
 
 The XTS mode was designed for storage confidentiality cite:[DBLP-journals-ieeesp-Martin10] and made into a Recommendation by NIST in 2010 cite:[nist-SP-800-38E]. XTS is based on the XEX construction, formalized by Phillip Rogaway cite:[DBLP-conf-asiacrypt-Rogaway04], to design _Tweakable Block Ciphers_ cite:[DBLP-conf-crypto-LiskovRW02]. A Tweakable Block Cipher (TBC) is a block cipher which, besides the key and the plaintext or ciphertext, also takes a tweak as input. The tweak is used together with the key to select the permutation computed by the block cipher.
 
-The XEX construction builds a TBC `Ẽ` from a block cipher `E`, with key `K`, tweak `T`, and plaintext `P`, as follows: +
- +
-`{fournbsp}{fournbsp}`
-`Ẽ(K, T, P) = E(K, P xor M) xor M` `{nbsp}{nbsp}` where `{nbsp}{nbsp}` `M = E(K, T)` `{nbsp}{nbsp}` is called a _mask_. +
- +
+The XEX construction builds a TBC `Ẽ` from a block cipher `E`, with key `K`, tweak `T`, and plaintext `P`, as follows:
+
+`{fournbsp}{fournbsp}` `Ẽ(K, T, P) = E(K, P xor M) xor M` `{nbsp}{nbsp}` where `{nbsp}{nbsp}` `M = E(K, T)` `{nbsp}{nbsp}` is called a _mask_.
+
 In XEX mode, once a mask is computed, it is then updated by using a Galois Multiplication for any successive block instead of updating the tweak and encrypting it again.
 
 The NIST standard uses two different keys, one for the data encryption path and one for the encryption of the tweak. We follow this convention.
@@ -529,17 +520,17 @@ Algorithm-Specific Functions:::
 * `enc_blk(K, p) -> c` encrypts block `p` using the key `K`, and returns the result `c`.
 * `dec_blk(K, c) -> p` decrypts block `c` using the key `K`, and returns the result `p`.
 * `update_mask(mask) -> mask` updates the mask by multiplication with a generator
-  of GF(2^b^). For `b` = 128 this is the operation defined in
-  <<ACE-XEX-XTS-modes>>, i.e. multiplication by `x` modulo
-  `x^128^ + x^7^ + x^2^ + x + 1` in little-endian octet order.  That is, +
- +
-`{fournbsp}{fournbsp}` `update_mask(V)` = `V << 1` `{fournbsp}` if `V[127]` = `0` +
- +
-and +
- +
+of GF(2^b^). For `b` = 128 this is the operation defined in
+<<ACE-XEX-XTS-modes>>, i.e. multiplication by `x` modulo
+`x^128^ + x^7^ + x^2^ + x + 1` in little-endian octet order.  That is,
++
+`{fournbsp}{fournbsp}` `update_mask(V)` = `V << 1` `{fournbsp}` if `V[127]` = `0`
++
+and
++
 `{fournbsp}{fournbsp}` `update_mask(V)` = `(V << 1) xor (zeros(120) @ 0b10000111)`
-`{nbsp}{nbsp}` otherwise. +
- +
+`{nbsp}{nbsp}` otherwise.
++
 An instantiation with `b` {ne} 128 must state its own reduction polynomial.
 
 //  For `b` = 128 the field is GF(2)[`x`] modulo
@@ -1447,7 +1438,7 @@ A value of zero, larger than 120, or not a multiple of 8, causes the CR to trans
 --
 
 ** In State _Decrypt_, Form A ``ace.exec`` instructions are expected.
-   Issuing “``ace.exec OUTPUT, Kn|K{Xn}, INPUT``” decrypts `INPUT` into `OUTPUT` and then absorbs the plaintext `OUTPUT` into the `tmp`:
+   “``ace.exec OUTPUT, Kn|K{Xn}, INPUT``” decrypts `INPUT` into `OUTPUT` and then absorbs the plaintext `OUTPUT` into `tmp`:
 +
 --
 . If `ctr` = 2^32^-1, then the CR transitions to Error State _Invalid_.
