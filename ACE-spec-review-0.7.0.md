@@ -118,6 +118,8 @@ FIXED
 
 **M1 — The forward-progress guarantee is normatively void (inside a draft WARNING block)**
 
+FIXED
+
 - **Rationale:** Termination/liveness of resumable instructions is a headline algorithmic
   property; the text establishing it is not currently part of the normative specification.
 - **Location:** `src/ace-ISA-unpriv.adoc:2997-3028`: the `[WARNING]` block opens with "Do we need
@@ -135,6 +137,8 @@ FIXED
 ---
 
 **M2 — `ace.size` error-return contradiction (0 vs 32), and 32 is ambiguous**
+
+FIXED (I think)
 
 - **Rationale:** Directly contradictory normative statements about an architecturally visible
   result; software written per `ace.avail`'s definition misbehaves on an implementation following
@@ -213,6 +217,8 @@ FIXED
 ---
 
 **M6 — Background completion vs. faulting component accesses is unresolved**
+
+FIXED
 
 - **Rationale:** Exception/trap architecture gap. If a hart takes an asynchronous interrupt and
   the ACE unit continues an `ace.store` in the background (strategy 1 of
