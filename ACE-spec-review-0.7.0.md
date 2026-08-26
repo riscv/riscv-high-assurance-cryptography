@@ -194,9 +194,9 @@ state it reads 0 when `Zklio` is not implemented.
 
 **m12 — Editorial/encoding debris.** Stray "x" line breaking the paragraph before the
 `ace.restrict` wavedrom (`src/ace-ISA-unpriv.adoc:2225`); `Content2~Plaintext[]` vs
-`Content2~PT~[]` (`src/ace-ISA-unpriv.adoc:3507`); residual "an byte" from the octet→byte rename
+`Content2~PT~[]` (`src/ace-ISA-unpriv.adoc:3507`); residual "a byte" from the octet→byte rename
 (`src/ace-ISA-algorithms.adoc:757,827,1582`; also `src/ace-notation.adoc:25` "an *byte string*");
-recurring "causes the CR to transitions to" (`src/ace-ISA-algorithms.adoc:1650,3854,3860,3973`,
+recurring "causes the CR to transition to" (`src/ace-ISA-algorithms.adoc:1650,3854,3860,3973`,
 `src/ace-pseudocode.adoc:160`); `ace.setst`/`ace.mgmt` Form B RV32 quartet alignment (multiple of
 four?) unstated (`src/ace-ISA-unpriv.adoc:1944`); "either a B of `ace.setst`"
 (`src/ace-ISA-algorithms.adoc:3999`).
@@ -218,11 +218,6 @@ survive (`src/ace-ISA-algorithms.adoc:3863-3920`).
 
 **m16 — Offset immediates.** Whether `%offset` in `ace.load`/`ace.store`/`ace.input`/`ace.output`
 is the standard sign-extended 12-bit I/S-type immediate is never stated.
-
-**m17 — Opcode space and naming.** `custom-0/1/2` cannot host a standard extension (RISC-V unpriv
-ISA: "custom" opcodes are permanently reserved for non-standard use); acknowledged as placeholder
-but must be resolved before candidacy. Extension names with internal capitals (`ZklbpP256r1c`,
-`ZklSM2c`) deviate from ISA-string naming practice (all-lowercase after the initial letter).
 
 **m18 — Sealing domain separation is incidental (hardening).** Segment-1 (`AD` = MDH ‖ Localities)
 and segment-2 (`AD2` = IMPQUAL ‖ SIV) authentications share the same derived keys, separated only
@@ -299,7 +294,8 @@ Beyond the findings above (C1's snippet mismatch, C2 vs. Book 4's validity note,
 4. **Conformance and ARC-track items:** M13 (priv conformance matrix), M15 (freeze ACEV or
    re-scope), m17 (opcodes/naming), cause-code allocation, `misa`/ACES placement, Smstateen
    argument, RVWMO axiomatization plan.
-5. **Editorial sweep:** m1–m3, m7, m9–m12, m14, m16, m18; grep-driven fixes for "an byte", "to
+5. **Editorial sweep:** m1–m3, m7, m9–m12, m14, m16, m18;
+### grep-driven fixes for "an byte", "to
    transitions", anchor rename.
 
 ---
@@ -494,7 +490,7 @@ Beyond the findings above (C1's snippet mismatch, C2 vs. Book 4's validity note,
   raised." Similarly `src/ace-ISA-unpriv.adoc:1755-1757` (RV32: "`rs2` must be a multiple of
   four").
 - **Issue:** (a) A GPR pair holds XLEN/4 bytes, and `acestart` advances by XLEN/4, so "XLEN/8
-  bytes" is wrong. (b) In Form `0b10`, `rs2` is the *sub-opcode* (fixed at `0b00001`, odd); the
+  bytes" is wrong. (b) In Form `0b10`, `rs§2` is the *sub-opcode* (fixed at `0b00001`, odd); the
   alignment constraint must bind `rd`, the destination GPR.
 - **Resolution:** "`XLEN/4` bytes of the CR at offset `acestart` are moved to `X[rd+1] @ X[rd]`;
   `acestart ← acestart + XLEN/4`; `rd` must be even [RV32: a multiple of four]…". Mirror for RV32.
@@ -635,6 +631,13 @@ no numbered rules.
 (Book 2 subsection) differ only in case; `src/ace-ISA-unpriv.adoc:361,1410` reference
 `<<ACE-algo-notation>>` where the notation chapter appears intended. Rename the Book 2 anchor (e.g.,
 `ACE-alg-notation`).
+
+---
+
+**FIXED m17 — Opcode space and naming.** `custom-0/1/2` cannot host a standard extension (RISC-V unpriv
+ISA: "custom" opcodes are permanently reserved for non-standard use); acknowledged as placeholder
+but must be resolved before candidacy. Extension names with internal capitals (`ZklbpP256r1c`,
+`ZklSM2c`) deviate from ISA-string naming practice (all-lowercase after the initial letter).
 
 ---
 
