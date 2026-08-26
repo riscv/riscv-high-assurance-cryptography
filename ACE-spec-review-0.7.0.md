@@ -43,137 +43,6 @@ to defer but collectively preclude candidacy until at least provisionally resolv
 
 ---
 
-## 2. Findings
-
-### Critical
-
----
-
-**C1 — `ace.load`/`ace.store` memory-address ↔ serialized-offset mapping is undefined under nonzero `acestart`**
-FIXED
-- **Severity rationale:** These are the context-switch workhorse instructions. Two conforming
-  implementations (or an implementation and the software written against another) can disagree on
-  which memory byte corresponds to which serialized-CR byte whenever `acestart ≠ 0`, i.e., on
-  every resumption and on every store that begins past the MDH. This prevents safe
-  interoperability.
-- **Location:** `src/ace-ISA-unpriv.adoc:1485-1491` (`ace.load`), `src/ace-ISA-unpriv.adoc:1543-1562`
-  (`ace.store`); contradicting examples in `src/ace-pseudocode.adoc:83` (`ace.load K{t0}, 16(t6)`
-  for provisioning) vs `src/ace-pseudocode.adoc:146` (`ace.load K{t0}, 8(t6)  # load the rest
-  starting with SIV` for import).
-- **Issue:** `ace.load` "reads memory starting at `%offset(Xs1)` and copies the data into the CR
-  beginning with the current `acestart` byte offset." Unlike `ace.input`/`ace.output`, which
-  define the mapping precisely (memory `base+j` ↔ buffer byte `j`), no formula relates memory
-  address to serialized offset. Under the reading "memory `base+i` ↔ CR byte
-  `acestart_at_issue + i`", the provisioning snippet (`16(t6)`, `acestart` = 16) is correct but
-  the import snippet (`8(t6)`) reads MDH bytes 8–15 into the SIV slot; under the reading "memory
-  `base + acestart`", both are wrong. Resumption is worse: if a re-executed `ace.load` again
-  "reads memory starting at `%offset(Xs1)`" but writes at the advanced `acestart`, the transfer is
-  silently sheared. For `ace.store`, "`acestart` keeps track of the number of stored bytes,
-  starting from 8 or 16 *depending on the use of `ace.getmdl`*" is not implementable: hardware
-  cannot observe which instruction software used earlier, and `ace.mgmt` export-start
-  unconditionally sets `acestart` to 16 (`src/ace-ISA-unpriv.adoc:2041`), never 8.
-- **Proposed resolution:** Define once, normatively, for both instructions: *"Let `j` range over
-  serialized-CR byte offsets. The byte at serialized offset `j` corresponds to memory address
-  `%offset(Xs1) + (j − j₀)`, where `j₀` = 16 (the serialized offset of the first byte after the
-  MDH). The instruction transfers bytes `j` = `acestart` … `size−1`. On resumption, the same base
-  address is passed and the correspondence is unchanged."* If starting a store at offset 8 is to
-  remain possible, make `j₀` an explicit function of the `acestart` value that `ace.mgmt`
-  establishes (and allow software to write `acestart` = 8 before the first `ace.store`), and say
-  so. Fix the Book 4 import snippet to `16(t6)` (or whatever the chosen rule requires).
-
----
-
-**C2 — Import-start metadata validation rejects every mid-operation SCC, breaking context save/restore**
-FIXED
-- **Severity rationale:** As written, the normative import path contradicts the equally normative
-  statement that "Completing an import can lead to any state" (`src/ace-ISA-unpriv.adoc:717`). An
-  implementation following the letter rejects all SCCs of CRs captured mid-algorithm — the primary
-  use case of export/import. Divergent implementer interpretations are guaranteed; internal
-  unsoundness of the core mechanism.
-- **Location:** `src/ace-ISA-unpriv.adoc:1963-1989`, specifically the step: "In other cases where
-  the Metadata is invalid, such as, for instance, a nonzero _State_ or reserved field: The CR is
-  transitioned to Error State _Invalid_" — which applies to "a provisioning, resp., *import*
-  process" jointly. Reinforced by `src/ace-pseudocode.adoc:158-160` ("the validity of bits [63:0]
-  of the metadata field is checked immediately"; _State_ is MDH[25:21], inside the low half).
-- **Issue:** An SCC exported from a CR in, e.g., State _Encrypt_ (7) or an Error State (24–29) —
-  both explicitly legal exports — carries a nonzero _State_. `ace.mgmt #ace_CR_import_start` with
-  that MDH transitions the target CR to _Invalid_ per the quoted rule. Context restore, migration,
-  and the Error-State re-import path of `src/ace-ISA-unpriv.adoc:604-607` all fail.
-- **Proposed resolution:** Split the validity rules by operation: *"For provisioning: _State_ must
-  be 0 or `ace_state_ready`, _ConfigStatus_ 0, _ImpDataLen_ 0, _SCProtection_/_StateExtension_ 0,
-  reserved fields 0; otherwise the CR transitions to Error State _Invalid_. For import: reserved
-  fields must be 0 and (_Algorithm_, _AlgorithmPolicy_, _KeyType_, _StateExtension_) must be
-  supported and self-consistent; _State_ and _StateExtension_ may hold any value legal for the
-  algorithm, deferred to authentication at `#ace_CR_management_end`."* Update the Book 4 note
-  accordingly.
-
----
-
-**C3 — CSK gating rule forbids configuring the CSK: bootstrap deadlock**
- NO CSK-> cannot configure CSK. FIXED
-
-### Major
-
----
-
-**M1 — The forward-progress guarantee is normatively void (inside a draft WARNING block)**
-
-FIXED
-
-- **Rationale:** Termination/liveness of resumable instructions is a headline algorithmic
-  property; the text establishing it is not currently part of the normative specification.
-- **Location:** `src/ace-ISA-unpriv.adoc:2997-3028`: the `[WARNING]` block opens with "Do we need
-  to specify this? I have a draft here. There is some redundancy." and contains
-  `[[ACE-forward-progress]]` and the three completion strategies. It is referenced as binding from
-  `src/ace-ISA-unpriv.adoc:2091` ("subject to the completion guarantee of
-  <<ACE-forward-progress>>") and `src/ace-ISA-unpriv.adoc:3093`.
-- **Issue/resolution:** Yes, it needs to be specified (the answer to the block's own question):
-  without it, restart-on-interrupt implementations may livelock transfer instructions under
-  periodic interrupts. Promote lines 3001–3027 to normative body text, delete the question, and
-  de-duplicate against `src/ace-ISA-unpriv.adoc:3057-3065` (the second draft WARNING in
-  "Resumption and Memory Model", which restates the same restart rule and should be folded into
-  the prefix-completeness subsection).
-
----
-
-**M2 — `ace.size` error-return contradiction (0 vs 32), and 32 is ambiguous**
-
-FIXED (I think)
-
-- **Rationale:** Directly contradictory normative statements about an architecturally visible
-  result; software written per `ace.avail`'s definition misbehaves on an implementation following
-  `ace.size`'s.
-- **Location:** `src/ace-ISA-unpriv.adoc:2611-2627` (Forms B/C: "the instruction returns `32`" on
-  unsupported/invalid) vs `src/ace-ISA-unpriv.adoc:2880` (`ace.avail` "is an alias for Form B of
-  `ace.size`, as the latter *returns 0* in case of error") vs `src/ace-pseudocode.adoc:101-102`
-  (`ace.size t5, v2` / `beqz t5, handle_errors # algorithm not supported, or MDH invalid`). The
-  intro flags this open (`src/ace-introduction.adoc:123`).
-- **Issue:** Additionally, 32 is the *legitimate* size of an Error-State SCC
-  (`src/ace-ISA-unpriv.adoc:604-606`), so "returns 32" cannot signal "unsupported" unambiguously.
-- **Resolution:** Make Forms B/C return **0** for unsupported _Algorithm_/_AlgorithmPolicy_/
-  _SCProtection_ or malformed MDH[63:0], and the true size (including the 32-byte Error-State
-  case, distinguishable because the input MDH's _State_ field is inspectable by software)
-  otherwise. Align Form A, `ace.avail`, and the snippets.
-
----
-
-**M3 — `ace.mv` extraction variants: wrong byte count and wrong register-constraint field**
-
-FIXED
-
-- **Rationale:** The normative semantics are internally inconsistent; a literal implementation
-  moves half the data it claims, or faults on the fixed sub-opcode.
-- **Location:** `src/ace-ISA-unpriv.adoc:1734-1739` (RV64 Form `0b10`/`rs2`=1): "**XLEN/8 bytes**
-  of the CR at offset `acestart` are moved to `X[rd+1] @ X[rd]`. `acestart` is updated to
-  **(XLEN/4)** + `acestart`. … **`rs2` must be even**, else an illegal-instruction exception is
-  raised." Similarly `src/ace-ISA-unpriv.adoc:1755-1757` (RV32: "`rs2` must be a multiple of
-  four").
-- **Issue:** (a) A GPR pair holds XLEN/4 bytes, and `acestart` advances by XLEN/4, so "XLEN/8
-  bytes" is wrong. (b) In Form `0b10`, `rs2` is the *sub-opcode* (fixed at `0b00001`, odd); the
-  alignment constraint must bind `rd`, the destination GPR.
-- **Resolution:** "`XLEN/4` bytes of the CR at offset `acestart` are moved to `X[rd+1] @ X[rd]`;
-  `acestart ← acestart + XLEN/4`; `rd` must be even [RV32: a multiple of four]…". Mirror for RV32.
-
 ---
 
 **M4 — `process_VLI` conflates bits and bytes when reading/writing `acestart`**
@@ -216,26 +85,6 @@ FIXED
 
 ---
 
-**M6 — Background completion vs. faulting component accesses is unresolved**
-
-FIXED
-
-- **Rationale:** Exception/trap architecture gap. If a hart takes an asynchronous interrupt and
-  the ACE unit continues an `ace.store` in the background (strategy 1 of
-  `<<ACE-forward-progress>>`), a later component access can page-fault with no instruction to bind
-  the trap to — an imprecise, unbindable exception, contrary to the priv architecture's
-  synchronous-exception model.
-- **Location:** `src/ace-ISA-unpriv.adoc:3007-3009` (background completion),
-  `src/ace-ISA-priv.adoc:56-62` (misaligned/access/page-fault causes apply to ACE memory
-  instructions); no text connects them.
-- **Resolution:** Add: *"An implementation may treat an ACE memory instruction as complete
-  (retiring it, or taking an interrupt with `xepc` past it) only after all address translation and
-  permission checks for every byte of the transfer have succeeded, or it must use the precise-halt
-  strategy so that any fault is reported synchronously on re-execution with `acestart` at a
-  prefix-complete point. Component accesses performed after the instruction is treated as complete
-  must not fault."*
-
----
 
 **M7 — `ace_exc_fatal` delivery model undefined and priority statements conflict**
 
@@ -374,25 +223,6 @@ FIXED
   for (a) M-mode-only systems, (b) M+U, (c) M+S+U, (d) +H; state precisely which profile
   corresponds to "Privileged Architecture not implemented" (presumably M-mode-only without a CSR
   file), and note that trap-and-emulate of `Zklmem` requires `Smacestatus`.
-
----
-
-**M14 — `macecsk` activation protocol: wrong/ambiguous flag-reset trigger; reserved `ace.mgmt` immediates unspecified**
-
-- **Rationale:** The CSK write protocol is a security-critical atomicity mechanism; its edge rules
-  must be exact.
-- **Location:** `src/ace-ISA-priv.adoc:697`: "Any mode change **to** M-mode will reset the flags."
-  Taken literally, a trap to M-mode (e.g., an interrupt hitting M-mode firmware between two
-  `macecsk` writes, re-entering M via a nested trap) silently discards a partial write; more
-  importantly the plainly intended trigger — leaving M-mode with a partial write outstanding — is
-  not what the text says. Also `src/ace-ISA-unpriv.adoc:1947-1958`: `#immed7` values 0–3 are
-  defined for `ace.mgmt`; values 4–127 have no specified behavior (contrast `ace.setst`, where
-  unsupported immediates → Error State _Invalid_).
-- **Resolution:** Replace with: *"Any transition of the hart out of M-mode, and any ACE unit
-  reset, clears the write-tracking flags and discards the partially written value."* For
-  `ace.mgmt`: *"Values of `#immed7` other than 0–3 are reserved; issuing `ace.mgmt` with a
-  reserved value causes the target CR to transition to Error State _Invalid_ [or: raises an
-  illegal-instruction exception — choose one]."*
 
 ---
 
@@ -615,3 +445,176 @@ Beyond the findings above (C1's snippet mismatch, C2 vs. Book 4's validity note,
 - **Assumption:** `ace-whitepaper.adoc`, `ace-old-error-architecture.adoc`, and files outside the
   `ace.adoc` include graph were not reviewed; the commented-out interruptible-`ace.mgmt` section
   was excluded as directed.
+
+
+
+
+#########################################################################################################
+
+
+**C1 — `ace.load`/`ace.store` memory-address ↔ serialized-offset mapping is undefined under nonzero `acestart`**
+FIXED
+- **Severity rationale:** These are the context-switch workhorse instructions. Two conforming
+  implementations (or an implementation and the software written against another) can disagree on
+  which memory byte corresponds to which serialized-CR byte whenever `acestart ≠ 0`, i.e., on
+  every resumption and on every store that begins past the MDH. This prevents safe
+  interoperability.
+- **Location:** `src/ace-ISA-unpriv.adoc:1485-1491` (`ace.load`), `src/ace-ISA-unpriv.adoc:1543-1562`
+  (`ace.store`); contradicting examples in `src/ace-pseudocode.adoc:83` (`ace.load K{t0}, 16(t6)`
+  for provisioning) vs `src/ace-pseudocode.adoc:146` (`ace.load K{t0}, 8(t6)  # load the rest
+  starting with SIV` for import).
+- **Issue:** `ace.load` "reads memory starting at `%offset(Xs1)` and copies the data into the CR
+  beginning with the current `acestart` byte offset." Unlike `ace.input`/`ace.output`, which
+  define the mapping precisely (memory `base+j` ↔ buffer byte `j`), no formula relates memory
+  address to serialized offset. Under the reading "memory `base+i` ↔ CR byte
+  `acestart_at_issue + i`", the provisioning snippet (`16(t6)`, `acestart` = 16) is correct but
+  the import snippet (`8(t6)`) reads MDH bytes 8–15 into the SIV slot; under the reading "memory
+  `base + acestart`", both are wrong. Resumption is worse: if a re-executed `ace.load` again
+  "reads memory starting at `%offset(Xs1)`" but writes at the advanced `acestart`, the transfer is
+  silently sheared. For `ace.store`, "`acestart` keeps track of the number of stored bytes,
+  starting from 8 or 16 *depending on the use of `ace.getmdl`*" is not implementable: hardware
+  cannot observe which instruction software used earlier, and `ace.mgmt` export-start
+  unconditionally sets `acestart` to 16 (`src/ace-ISA-unpriv.adoc:2041`), never 8.
+- **Proposed resolution:** Define once, normatively, for both instructions: *"Let `j` range over
+  serialized-CR byte offsets. The byte at serialized offset `j` corresponds to memory address
+  `%offset(Xs1) + (j − j₀)`, where `j₀` = 16 (the serialized offset of the first byte after the
+  MDH). The instruction transfers bytes `j` = `acestart` … `size−1`. On resumption, the same base
+  address is passed and the correspondence is unchanged."* If starting a store at offset 8 is to
+  remain possible, make `j₀` an explicit function of the `acestart` value that `ace.mgmt`
+  establishes (and allow software to write `acestart` = 8 before the first `ace.store`), and say
+  so. Fix the Book 4 import snippet to `16(t6)` (or whatever the chosen rule requires).
+
+---
+
+**C2 — Import-start metadata validation rejects every mid-operation SCC, breaking context save/restore**
+FIXED
+- **Severity rationale:** As written, the normative import path contradicts the equally normative
+  statement that "Completing an import can lead to any state" (`src/ace-ISA-unpriv.adoc:717`). An
+  implementation following the letter rejects all SCCs of CRs captured mid-algorithm — the primary
+  use case of export/import. Divergent implementer interpretations are guaranteed; internal
+  unsoundness of the core mechanism.
+- **Location:** `src/ace-ISA-unpriv.adoc:1963-1989`, specifically the step: "In other cases where
+  the Metadata is invalid, such as, for instance, a nonzero _State_ or reserved field: The CR is
+  transitioned to Error State _Invalid_" — which applies to "a provisioning, resp., *import*
+  process" jointly. Reinforced by `src/ace-pseudocode.adoc:158-160` ("the validity of bits [63:0]
+  of the metadata field is checked immediately"; _State_ is MDH[25:21], inside the low half).
+- **Issue:** An SCC exported from a CR in, e.g., State _Encrypt_ (7) or an Error State (24–29) —
+  both explicitly legal exports — carries a nonzero _State_. `ace.mgmt #ace_CR_import_start` with
+  that MDH transitions the target CR to _Invalid_ per the quoted rule. Context restore, migration,
+  and the Error-State re-import path of `src/ace-ISA-unpriv.adoc:604-607` all fail.
+- **Proposed resolution:** Split the validity rules by operation: *"For provisioning: _State_ must
+  be 0 or `ace_state_ready`, _ConfigStatus_ 0, _ImpDataLen_ 0, _SCProtection_/_StateExtension_ 0,
+  reserved fields 0; otherwise the CR transitions to Error State _Invalid_. For import: reserved
+  fields must be 0 and (_Algorithm_, _AlgorithmPolicy_, _KeyType_, _StateExtension_) must be
+  supported and self-consistent; _State_ and _StateExtension_ may hold any value legal for the
+  algorithm, deferred to authentication at `#ace_CR_management_end`."* Update the Book 4 note
+  accordingly.
+
+---
+
+**C3 — CSK gating rule forbids configuring the CSK: bootstrap deadlock**
+ NO CSK-> cannot configure CSK. FIXED
+
+
+
+
+**M1 — The forward-progress guarantee is normatively void (inside a draft WARNING block)**
+
+FIXED
+
+- **Rationale:** Termination/liveness of resumable instructions is a headline algorithmic
+  property; the text establishing it is not currently part of the normative specification.
+- **Location:** `src/ace-ISA-unpriv.adoc:2997-3028`: the `[WARNING]` block opens with "Do we need
+  to specify this? I have a draft here. There is some redundancy." and contains
+  `[[ACE-forward-progress]]` and the three completion strategies. It is referenced as binding from
+  `src/ace-ISA-unpriv.adoc:2091` ("subject to the completion guarantee of
+  <<ACE-forward-progress>>") and `src/ace-ISA-unpriv.adoc:3093`.
+- **Issue/resolution:** Yes, it needs to be specified (the answer to the block's own question):
+  without it, restart-on-interrupt implementations may livelock transfer instructions under
+  periodic interrupts. Promote lines 3001–3027 to normative body text, delete the question, and
+  de-duplicate against `src/ace-ISA-unpriv.adoc:3057-3065` (the second draft WARNING in
+  "Resumption and Memory Model", which restates the same restart rule and should be folded into
+  the prefix-completeness subsection).
+
+---
+
+**M2 — `ace.size` error-return contradiction (0 vs 32), and 32 is ambiguous**
+
+FIXED (I think)
+
+- **Rationale:** Directly contradictory normative statements about an architecturally visible
+  result; software written per `ace.avail`'s definition misbehaves on an implementation following
+  `ace.size`'s.
+- **Location:** `src/ace-ISA-unpriv.adoc:2611-2627` (Forms B/C: "the instruction returns `32`" on
+  unsupported/invalid) vs `src/ace-ISA-unpriv.adoc:2880` (`ace.avail` "is an alias for Form B of
+  `ace.size`, as the latter *returns 0* in case of error") vs `src/ace-pseudocode.adoc:101-102`
+  (`ace.size t5, v2` / `beqz t5, handle_errors # algorithm not supported, or MDH invalid`). The
+  intro flags this open (`src/ace-introduction.adoc:123`).
+- **Issue:** Additionally, 32 is the *legitimate* size of an Error-State SCC
+  (`src/ace-ISA-unpriv.adoc:604-606`), so "returns 32" cannot signal "unsupported" unambiguously.
+- **Resolution:** Make Forms B/C return **0** for unsupported _Algorithm_/_AlgorithmPolicy_/
+  _SCProtection_ or malformed MDH[63:0], and the true size (including the 32-byte Error-State
+  case, distinguishable because the input MDH's _State_ field is inspectable by software)
+  otherwise. Align Form A, `ace.avail`, and the snippets.
+
+---
+
+**M3 — `ace.mv` extraction variants: wrong byte count and wrong register-constraint field**
+
+FIXED
+
+- **Rationale:** The normative semantics are internally inconsistent; a literal implementation
+  moves half the data it claims, or faults on the fixed sub-opcode.
+- **Location:** `src/ace-ISA-unpriv.adoc:1734-1739` (RV64 Form `0b10`/`rs2`=1): "**XLEN/8 bytes**
+  of the CR at offset `acestart` are moved to `X[rd+1] @ X[rd]`. `acestart` is updated to
+  **(XLEN/4)** + `acestart`. … **`rs2` must be even**, else an illegal-instruction exception is
+  raised." Similarly `src/ace-ISA-unpriv.adoc:1755-1757` (RV32: "`rs2` must be a multiple of
+  four").
+- **Issue:** (a) A GPR pair holds XLEN/4 bytes, and `acestart` advances by XLEN/4, so "XLEN/8
+  bytes" is wrong. (b) In Form `0b10`, `rs2` is the *sub-opcode* (fixed at `0b00001`, odd); the
+  alignment constraint must bind `rd`, the destination GPR.
+- **Resolution:** "`XLEN/4` bytes of the CR at offset `acestart` are moved to `X[rd+1] @ X[rd]`;
+  `acestart ← acestart + XLEN/4`; `rd` must be even [RV32: a multiple of four]…". Mirror for RV32.
+
+---
+
+**M6 — Background completion vs. faulting component accesses is unresolved**
+
+FIXED
+
+- **Rationale:** Exception/trap architecture gap. If a hart takes an asynchronous interrupt and
+  the ACE unit continues an `ace.store` in the background (strategy 1 of
+  `<<ACE-forward-progress>>`), a later component access can page-fault with no instruction to bind
+  the trap to — an imprecise, unbindable exception, contrary to the priv architecture's
+  synchronous-exception model.
+- **Location:** `src/ace-ISA-unpriv.adoc:3007-3009` (background completion),
+  `src/ace-ISA-priv.adoc:56-62` (misaligned/access/page-fault causes apply to ACE memory
+  instructions); no text connects them.
+- **Resolution:** Add: *"An implementation may treat an ACE memory instruction as complete
+  (retiring it, or taking an interrupt with `xepc` past it) only after all address translation and
+  permission checks for every byte of the transfer have succeeded, or it must use the precise-halt
+  strategy so that any fault is reported synchronously on re-execution with `acestart` at a
+  prefix-complete point. Component accesses performed after the instruction is treated as complete
+  must not fault."*
+
+---
+**M14 — `macecsk` activation protocol: wrong/ambiguous flag-reset trigger; reserved `ace.mgmt` immediates unspecified**
+
+FIXED
+
+- **Rationale:** The CSK write protocol is a security-critical atomicity mechanism; its edge rules
+  must be exact.
+- **Location:** `src/ace-ISA-priv.adoc:697`: "Any mode change **to** M-mode will reset the flags."
+  Taken literally, a trap to M-mode (e.g., an interrupt hitting M-mode firmware between two
+  `macecsk` writes, re-entering M via a nested trap) silently discards a partial write; more
+  importantly the plainly intended trigger — leaving M-mode with a partial write outstanding — is
+  not what the text says. Also `src/ace-ISA-unpriv.adoc:1947-1958`: `#immed7` values 0–3 are
+  defined for `ace.mgmt`; values 4–127 have no specified behavior (contrast `ace.setst`, where
+  unsupported immediates → Error State _Invalid_).
+- **Resolution:** Replace with: *"Any transition of the hart out of M-mode, and any ACE unit
+  reset, clears the write-tracking flags and discards the partially written value."* For
+  `ace.mgmt`: *"Values of `#immed7` other than 0–3 are reserved; issuing `ace.mgmt` with a
+  reserved value causes the target CR to transition to Error State _Invalid_ [or: raises an
+  illegal-instruction exception — choose one]."*
+
+---
