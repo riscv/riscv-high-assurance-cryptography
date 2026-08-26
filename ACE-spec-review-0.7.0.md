@@ -171,39 +171,12 @@ to defer but collectively preclude candidacy until at least provisionally resolv
 
 ---
 
-
----
-
-**M15 — ACEV is normatively load-bearing but undefined; vector-side interactions unspecified**
-
-- **Rationale:** `Zklv` conformance depends on "at least the ACEV subset"
-  (`src/ace-ISA-unpriv.adoc:144`), which the spec itself marks as not to be finalized before
-  ratification begins (`src/ace-ISA-unpriv.adoc:352-357`). Separately, for ACE instructions with
-  vector operands, the interaction with `vstart` (must it be zero? is nonzero illegal?),
-  tail-element policy for `Vd` beyond `ACELEN`, and `vtype.vill` are unstated; RVV requires each
-  instruction to define these.
-- **Location:** as cited; also `src/ace-ISA-unpriv.adoc:316-361`.
-- **Resolution:** Before candidacy, either freeze ACEV's normative content (the bullet list at
-  `src/ace-ISA-unpriv.adoc:330-343` is nearly there — remove the "(`vins`/`vext`?)" placeholders)
-  or re-scope `Zklv` onto full V. Add: *"ACE instructions with vector operands require `vstart` = 0
-  and raise an illegal-instruction exception otherwise [they use `acestart`, not `vstart`, for
-  resumption]; elements of `Vd` past `ACELEN`/`SEW` follow the tail-agnostic policy; if
-  `vtype.vill` is set, the instruction raises an illegal-instruction exception."*
-
 ### Minor
 
 **m1 — `acestart` clamping vs. no-op contradiction.** `src/ace-ISA-unpriv.adoc:1253-1254` says that
 when an ACEIOBUF instruction is issued with `acestart` > `aceiobuftop`, "`acestart` will be set to
 `aceiobuftop` first"; `src/ace-ISA-unpriv.adoc:2696,2761` say the operation "does nothing and
 `acestart` is unchanged". Pick one (recommend: no-op, `acestart` unchanged) and delete the other.
-
-
-**m3 — `ace.getmd*` register constraints.** RV64 `ace.getmdl` writes one GPR yet requires even `d`
-(`src/ace-ISA-unpriv.adoc:2165-2166`); RV32 `ace.getmdl` writes a pair yet requires `d` multiple of
-four (`src/ace-ISA-unpriv.adoc:2178`), contradicting the general "odd register number … when a
-register pair is expected" rule (`src/ace-ISA-unpriv.adoc:996`). Also typo "into GPR `Xd`. and bits
-[127:64]" (`src/ace-ISA-unpriv.adoc:2168`). Relax to: no constraint for single-register writes;
-even for pairs; multiple-of-four for quartets — or state that uniform alignment is deliberate.
 
 **m4 — OCB nonce handling.** `N_len` is only constrained to 6…120
 (`src/ace-ISA-algorithms.adoc:1638`), but `bswap(N[N_len-1:0])` (`src/ace-ISA-algorithms.adoc:1700`)
@@ -224,10 +197,6 @@ slice; the Book 4 example feeds a dummy zero block (`src/ace-pseudocode.adoc:751
 explicitly: "if `last_blk_len` = 0, `INPUT` is ignored and the padded block is
 `zeros(b−8) @ 0b10000000`".
 
-**m7 — Dangling "Rule 3".** `src/ace-ISA-unpriv.adoc:3303` cites "Rule 3 of
-<<ACE-rules-masked-implementations>>", but that section (`src/ace-ISA-unpriv.adoc:3276-3292`) has
-no numbered rules.
-
 **m8 — GCM-SIV missing transition instructions.** The instruction/Form used to *enter*
 `_Enc_Tag_Finalize_`, `_Encrypt_`, `_Decrypt_`, and `_Dec_Tag_Finalize_` is never stated (only the
 `ace.exec` expected *inside* each state); Book 4 implies Form A `ace.setst`. Add the transition
@@ -242,11 +211,6 @@ to swap it; unlike ordinary CSR state these are *secrets*, so add a normative wa
 **m10 — `acemaxiobuflen` without `Zklio`.** The CSR is "always present"
 (`src/ace-ISA-unpriv.adoc:222-224`) but its value when the ACEIOBUF is absent is unspecified;
 state it reads 0 when `Zklio` is not implemented.
-
-**m11 — Anchor case-collision.** `[[ACE-Notation]]` (notation chapter) vs `[[ACE-notation]]`
-(Book 2 subsection) differ only in case; `src/ace-ISA-unpriv.adoc:361,1410` reference
-`<<ACE-notation>>` where the notation chapter appears intended. Rename the Book 2 anchor (e.g.,
-`ACE-alg-notation`).
 
 **m12 — Editorial/encoding debris.** Stray "x" line breaking the paragraph before the
 `ace.restrict` wavedrom (`src/ace-ISA-unpriv.adoc:2225`); `Content2~Plaintext[]` vs
@@ -590,7 +554,25 @@ Beyond the findings above (C1's snippet mismatch, C2 vs. Book 4's validity note,
 
 ---
 
-**FIXED m2 — Transfer granularity contradictions.** `ace.load`: "`acestart` is also a multiple of 16"
+**FIXED as a non-issue M15 — ACEV is normatively load-bearing but undefined; vector-side interactions unspecified**
+
+- **Rationale:** `Zklv` conformance depends on "at least the ACEV subset"
+  (`src/ace-ISA-unpriv.adoc:144`), which the spec itself marks as not to be finalized before
+  ratification begins (`src/ace-ISA-unpriv.adoc:352-357`). Separately, for ACE instructions with
+  vector operands, the interaction with `vstart` (must it be zero? is nonzero illegal?),
+  tail-element policy for `Vd` beyond `ACELEN`, and `vtype.vill` are unstated; RVV requires each
+  instruction to define these.
+- **Location:** as cited; also `src/ace-ISA-unpriv.adoc:316-361`.
+- **Resolution:** Before candidacy, either freeze ACEV's normative content (the bullet list at
+  `src/ace-ISA-unpriv.adoc:330-343` is nearly there — remove the "(`vins`/`vext`?)" placeholders)
+  or re-scope `Zklv` onto full V. Add: *"ACE instructions with vector operands require `vstart` = 0
+  and raise an illegal-instruction exception otherwise [they use `acestart`, not `vstart`, for
+  resumption]; elements of `Vd` past `ACELEN`/`SEW` follow the tail-agnostic policy; if
+  `vtype.vill` is set, the instruction raises an illegal-instruction exception."*
+
+---
+
+m2 — Transfer granularity contradictions.** `ace.load`: "`acestart` is also a multiple of 16"
 (`src/ace-ISA-unpriv.adoc:1484`) conflicts with the 1-byte granule in `<<ACE-forward-progress>>`
 (`src/ace-ISA-unpriv.adoc:3015`) and byte-granular prefix-completeness; `ace.store` may start at 8,
 which is not a multiple of 16. State one rule: `acestart` for CR transfers is a byte count;
@@ -603,3 +585,27 @@ forward-progress granule for these instructions is then 16 bytes.
 `:1538`): the asymmetry is intended (store may begin after `ace.getmdl` of the low half) but is
    nowhere explained; C1's resolution should state both entry points and their `acestart` values
    in one table.
+
+---
+
+**FIXED m3 — `ace.getmd*` register constraints.** RV64 `ace.getmdl` writes one GPR yet requires even `d`
+(`src/ace-ISA-unpriv.adoc:2165-2166`); RV32 `ace.getmdl` writes a pair yet requires `d` multiple of
+four (`src/ace-ISA-unpriv.adoc:2178`), contradicting the general "odd register number … when a
+register pair is expected" rule (`src/ace-ISA-unpriv.adoc:996`). Also typo "into GPR `Xd`. and bits
+[127:64]" (`src/ace-ISA-unpriv.adoc:2168`). Relax to: no constraint for single-register writes;
+even for pairs; multiple-of-four for quartets — or state that uniform alignment is deliberate.
+
+---
+
+**FIXED m7 — Dangling "Rule 3".** `src/ace-ISA-unpriv.adoc:3303` cites "Rule 3 of
+<<ACE-rules-masked-implementations>>", but that section (`src/ace-ISA-unpriv.adoc:3276-3292`) has
+no numbered rules.
+
+---
+
+**FIXED m11 — Anchor case-collision.** `[[ACE-Notation]]` (notation chapter) vs `[[ACE-algo-notation]]`
+(Book 2 subsection) differ only in case; `src/ace-ISA-unpriv.adoc:361,1410` reference
+`<<ACE-algo-notation>>` where the notation chapter appears intended. Rename the Book 2 anchor (e.g.,
+`ACE-alg-notation`).
+
+---
