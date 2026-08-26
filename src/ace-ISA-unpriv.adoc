@@ -827,6 +827,10 @@ A requested Locality may be substituted, but never dropped. If no replacement ca
 because the requested entry is unconfigured and no later entry of its chain is configured
 either — then the Metadata is invalid, and the CR transitions to Error State _Invalid_.
 
+The value `3` of bits [5:4] of the _Locality_ field is reserved: the Boot Session Group defines
+only _No Boot Binding_ (0), _PhysBootScrt_ (1), and _VirtBootScrt_ (2). A PI or SCC whose
+_Locality_ field carries it is invalid Metadata, and the CR transitions to Error State _Invalid_.
+
 _HLocality_ is active only when the H extension is enabled and V=1; otherwise, it mirrors _MLocality_.
 
 NOTE: A system key identifier may refer to keys with unrelated purposes on different devices, leading to unspecified behavior.
@@ -1116,6 +1120,8 @@ The value is hardwired and specific to the implementation of the ACE unit.
 
 NOTE: `acemaxiobuflen` must be at least as large as the largest basic processing unit (granularity) of any implemented Algorithm, so that every implemented Algorithm can be used through the ACEIOBUF.
 
+If `Zklio` is not implemented, the ACEIOBUF does not exist: `acemaxiobuflen` reads as zero, and the CSRs `aceiobuflen` and `aceiobuftop` are not present.
+
 _Included in_::
 +
 --
@@ -1395,6 +1401,13 @@ Under opcode `custom-2`, the `funct3` value 4 is reserved.
 
 The notation `K{Xd}` denotes the CR whose index is held in GPR `Xd`.
 `Kn|K{Xn}` indicates two alternative encodings: a 5-bit immediate CR index (`Kn`) or a CR number supplied by GPR `Xn`.
+
+`%offset` denotes the immediate of the corresponding base-ISA instruction format, sign-extended to
+XLEN and added to the base register: the I-type `immed12` for `ace.load`, and the S-type pair
+`immed[11:5]`/`immed[4:0]` for `ace.store`, `ace.input`, and `ace.output`. The effective address of
+a transfer is `X[rs1] + sext(%offset)`. For a multi-byte or resumed transfer that value is the
+address corresponding to the *first* byte of the transfer, not to the byte at which the transfer
+resumes; the correspondence between addresses and transfer offsets is given by each instruction.
 
 If `X0` is used as a destination or source register, but not to index a CR, then
 anything written to it is discarded, and it reads as zero. This applies also to
@@ -2397,11 +2410,14 @@ On RV32, the only difference is:
   If `s` is not even, an illegal-instruction exception is raised.
 
 `ace.restrictl/ace.restricth/ace.restrictv` can be used in any state; however, care is required:
-Disabling a currently permitted operation, such as encryption or signature generation, while in a State corresponding to the disabled operation causes the CR to transitions to Error State _Invalid_.
+Disabling a currently permitted operation, such as encryption or signature generation, while in a State corresponding to the disabled operation causes the CR to transition to Error State _Invalid_.
 
 The instruction may modify state.
 
-The instruction is usage-controlled.
+The instruction is _not_ usage-controlled.
+Every change it can make narrows the CC: policies are only removed, side-channel protection only strengthened, Localities only tightened, and an expiration date only brought forward.
+Permitting it in a mode that the CC's _UsagePolicy_ excludes therefore cannot grant that mode any capability it did not already have.
+This mirrors `ace.clear` (<<ACE-instruction-clear>>), which is likewise not usage-controlled and is a strictly stronger denial primitive.
 --
 
 _Included in_::

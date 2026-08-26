@@ -1352,6 +1352,10 @@ Besides _Ready_, _Success_, and _Failure_, the GCM-SIV algorithm makes use of th
   *** Transition to _Enc_Tag_Finalize_ possible only if encryption is allowed.
  ** For decryption: _Hash_Absorb_ -> _Decrypt_ -> { _Dec_Last_Block_ -> } _Dec_Tag_Finalize_ -> _Success_ or _Failure_.
   *** Transition to _Decrypt_ possible only if decryption is allowed.
+ ** Each of the transitions to _Enc_Tag_Finalize_, _Encrypt_, _Decrypt_, and _Dec_Tag_Finalize_ is
+    performed with a Form A `ace.setst`, i.e. without an auxiliary input. The value each of those
+    states consumes is the `INPUT` of the `ace.exec` issued *in* the state, not an argument of the
+    transition into it.
 
 * *Behavior:*
 ** In State _Ready_ :
@@ -1598,6 +1602,18 @@ first bit of the string is that byte's most significant bit. `ocb_pad` is define
 Note that cite:[RFC7253] specifies this operation over a big-endian string, hence:
 +
 `{fournbsp}{fournbsp}` `double(S) <- bswap(update_mask(bswap(S)))`.
+* `nonce_be(N, n)` = the big-endian view of the `n`-bit nonce bit string held in `N`.
+  cite:[RFC7253] treats the nonce as a bit string whose first bit is the most significant, so
+  when it is serialized into bytes the final, possibly partial byte is *left-aligned*: its
+  `r` = `n` mod 8 most significant bits carry nonce and its remaining bits are padding. With
+  `q` = {lceil}`n`/8{rceil} the number of bytes so occupied,
++
+`{fournbsp}{fournbsp}` `nonce_be(N, n)` = `bswap(N[8q-1:0], q) >> ((8 - r) mod 8)`.
++
+The first bit of the nonce string is `nonce_be(N, n)[n-1]` and the last is bit `0`.
+For `r` = 0 this reduces to `bswap(N[n-1:0])`, so a nonce occupying a whole number of bytes is
+unaffected. `bswap` alone cannot express the general case, since it is defined only over byte
+strings.
 
 //
 
@@ -1646,11 +1662,23 @@ These values can be precomputed and stored in the implementation specific data s
    . `checksum_P <- zeros(128)`
    . `index <- 0`
 
-** To move to _Set_Aux_Value_, a Form B `ace.setst` is expected, where the auxiliary argument `Xs` sets the nonce length `N_len`. `N_len` must be at least 6 and at most 120; otherwise, the CR transitions to Error State _Invalid_.
+** To move to _Set_Aux_Value_, a Form B `ace.setst` is expected, where the auxiliary argument `Xs` sets the nonce length `N_len`. `N_len` must satisfy `6` {le} `N_len` {le} `120`; any other value causes the CR to transition to Error State _Invalid_.
+Every bit length in that range is admissible: the nonce is a bit string and need not occupy a whole number of bytes.
++
+[NOTE]
+====
+cite:[RFC7253] itself places no lower bound on the nonce length. ACE requires at least 6 bits
+because a shorter nonce leaves the `bottom` and `Stretch` derivation of cite:[RFC7253] {sect}4.2
+without enough entropy to remain sound, as analyzed in cite:[cryptoeprint-2023-326]. An
+implementation of this specification is therefore not a general RFC{nbsp}7253 implementation for
+nonces shorter than 6 bits.
+====
 
 ** In State _Set_Aux_Value_, ``ace.exec`` instructions are expected to be of Form B, namely
-   “``ace.exec Kn|K{Xn}, INPUT``”, which sets `N` to
-   `INPUT`, namely `N <- zeros(120-N_len) @ INPUT[N_len-1:0]`
+   “``ace.exec Kn|K{Xn}, INPUT``”, which sets `N` to the `q` = {lceil}`N_len`/8{rceil} bytes of
+   `INPUT` that carry the nonce, namely `N <- zeros(120 - 8q) @ INPUT[8q-1:0]`, with the
+   `(8 - N_len) mod 8` least significant bits of byte `q-1` cleared. Those bits are the padding
+   of the final, partial byte of the nonce string; they are not part of the nonce and are ignored.
   *** If “``ace.exec Kn|K{Xn}, INPUT```,” is repeated, it rewrites `N`.
   *** If no such `ace.exec` is issued, `N` is not changed, which means that its
       most significant bit is 1. This condition results in an error state when
@@ -1708,7 +1736,7 @@ If `last_blk_len` = 0, however, no `ace.exec` can be executed, and only an `ace.
 
 []
  . `offset`, `L*`, `L$` are defined as when entering State _Hash_Absorb_.
- . `Nonce_be <- bin(tag_len mod 128, 7) @ zeros(120 - N_len) @ 1 @ bswap(N[N_len-1:0])`
+ . `Nonce_be <- bin(tag_len mod 128, 7) @ zeros(120 - N_len) @ 1 @ nonce_be(N, N_len)`
  . `bottom <- int(Nonce_be[5:0])`
  . `Ktop <- enc_blk(key, bswap(Nonce_be[127:6] @ zeros(6)))`
  . `Ktop_be <- bswap(Ktop)`
@@ -1797,6 +1825,7 @@ In this case, the following operations are performed:
    * `tmp : bits(b)`
 
 []
+   . If `index = ones(48)`, then the CR transitions to Error State _Invalid_, and the instruction terminates.
    . `offset <- offset xor L*`
    . `tmp[last_blk_len-1:0] <- enc_blk(key, offset)[last_blk_len-1:0]` // PAD in RFC{nbsp}7253
    . `OUTPUT <- zeros(128-last_blk_len) @ (INPUT[last_blk_len-1:0] xor tmp[last_blk_len-1:0])`
@@ -1938,8 +1967,9 @@ If `ACELEN` > `b`, then the above operations are applied to each `b`-bit block o
   . `(K1, K2) <- gen_subkeys(key)`.
   . if `last_blk_len` = `b`, then:
     .. `tmp <- hash xor INPUT xor K1`
-  . else:
+  . else, that is if `0` {le} `last_blk_len` < `b`:
     .. `tmp <- hash xor (zeros(b - 8 - last_blk_len) @ 0b10000000 @ INPUT[last_blk_len-1:0]) xor K2`
+    .. If `last_blk_len` = 0, `INPUT` is not read and the padded value is `zeros(b-8) @ 0b10000000`.
   . `hash <- enc_blk(key, tmp)`
   . The state is changed to _Hash_Output_.
 --
@@ -2577,7 +2607,9 @@ algorithms never transition to _Success_.
 (((ACE, algorithm, Ascon)))
 Ascon is a public permutation cite:[DBLP-journals-joc-DobraunigEMS21] standardized by NIST cite:[nist-SP-800-232] together with various cryptographic algorithms designed around it.
 
-In Ascon-AEAD128, the caller is responsible for applying proper padding to the AD and the plaintext; the inputs are therefore assumed to be properly padded. Similarly, the caller is responsible for truncating the last plaintext block.
+In Ascon-AEAD128, the caller is responsible for applying `pad(`{nbsp}{interpunct}`, 128)` to the associated data, so that what State _Hash_Absorb_ absorbs is a whole number of 128-bit blocks.
+The final block of the plaintext or ciphertext must *not* be padded by the caller: it is supplied through State _Enc_Last_Block_, resp. _Dec_Last_Block_, whose `last_blk_len` argument gives its length in bits, and the algorithm applies `pad(`{nbsp}{interpunct}`, 128)` to it internally.
+Padding it in software as well corrupts both the ciphertext and the tag.
 
 Parameters:::
 
@@ -3415,7 +3447,7 @@ if `r` = 0, if `r` + `k` = `n`, or if `s` = 0.
      *** If `OutputType` = False, the output is in `SecondPt`.
      *** If `OutputType` = True,  the output is in `Signature`.
    . `block_base` <- 0.
-   . In State _Output_, one or more Form C `ace.exec` instructions may be issued to export sections of the result to memory, each time increasing `block_base` by the number of bytes output by `ace.exec`.
+   . In State _Output_, one or more Form C `ace.exec` instructions may be issued to read out successive sections of the result, each time increasing `block_base` by the number of bytes written to `OUTPUT`.
      . Data beyond the length of the output is replaced with zeros in the last exported part.
      . Once `block_base` has reached the length of the output in bytes, the state transitions to _Success_.
 
@@ -4015,6 +4047,13 @@ ML-DSA algorithms define:
 ** Upon entering State _pubkey_Input_, `HasPubKey` is set to false; when the loaded value
     is complete, it is set to true. `privkey` and `HasPrivKey` are not affected: loading a
     public key alone is the normal way to configure a CC for verification only.
+
+** Upon completion of an import (`ace.mgmt` with `#ace_CR_management_end`), if `HasPrivKey` is
+    false, the ACE unit recomputes `tr` {leftarrow} `SHAKE256(pubkey, 64)`.
+    `tr` is therefore never serialized on its own: in a CC that holds a private key it is embedded
+    in `privkey`, and in a verification-only CC it is derivable from `pubkey`. This costs nothing
+    architecturally, because `ML-DSA.Verify_internal` does not consume `tr` — the caller uses it to
+    form _μ_ — so a verification-only CC is fully functional immediately after import.
 
 ** To transition to state _ctx_Input_, a Form B `ace.setst` instruction must be used where the GPR contains the parameter `ctxlen`. Only values of `ctxlen` from 0 to 255 are valid. Passing an invalid `ctxlen` value causes the CR to transitions to Error State _Invalid_.
 
