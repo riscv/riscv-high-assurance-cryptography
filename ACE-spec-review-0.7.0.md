@@ -337,10 +337,6 @@ segment) would make the separation deliberate and provable rather than accidenta
 Beyond the findings above (C1's snippet mismatch, C2 vs. Book 4's validity note, C3 vs. Book 3's
 `macecsk`, M1's void anchor, M2's three-way contradiction, m11's anchor collision):
 
-1. **`ace.load` "16th byte" vs. `ace.store` "8th byte"** (`src/ace-ISA-unpriv.adoc:1475` vs
-   `:1538`): the asymmetry is intended (store may begin after `ace.getmdl` of the low half) but is
-   nowhere explained; C1's resolution should state both entry points and their `acestart` values
-   in one table.
 2. **Exception table vs. error architecture**: Book 3's table (`src/ace-ISA-priv.adoc:49-69`)
    omits the illegal-instruction conditions' priority relative to `ace_exc_*` for one instruction
    exhibiting several conditions; Book 1's "natural priority order"
@@ -621,3 +617,8 @@ FIXED
   one; ACES = Off; CSK unconfigured (except model 3); Locality secrets zero.
 
 ---
+
+FIXED. 1. **`ace.load` "16th byte" vs. `ace.store` "8th byte"** (`src/ace-ISA-unpriv.adoc:1475` vs
+`:1538`): the asymmetry is intended (store may begin after `ace.getmdl` of the low half) but is
+   nowhere explained; C1's resolution should state both entry points and their `acestart` values
+   in one table.
