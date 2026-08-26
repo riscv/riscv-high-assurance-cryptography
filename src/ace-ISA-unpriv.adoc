@@ -902,39 +902,6 @@ There are no atomicity requirements for any ACE memory instruction.
 
 // ////////////////////////////////////////////////////////////////////
 
-[[ACE-Memory-Model]]
-==== Memory Model
-
-ACE memory instructions appear to execute in program order on the local hart.
-
-ACE memory instructions follow RVWMO at the instruction level. If the `Ztso` extension is implemented, ACE memory instructions additionally follow RVTSO at the instruction level.
-
-ACE memory instructions may be decomposed into a set of component memory operations of any granularity.
-The ordering of these memory operations within the instructions is not specified, and it depends on the chosen memory model and implementation of the issuing hart, as long as the semantics of the configuration and export instruction and `ace.exec` are respected.
-
-NOTE: `Ztso` only imposes RVTSO at the instruction level; intra-instruction ordering follows RVWMO regardless of whether `Ztso` is implemented.
-
-The order in which the component memory operations of an ACE memory
-instruction are issued is not architecturally constrained, and no such
-constraint is needed for resumption: the only requirement, stated in
-<<ACE-resumability-memory-model>>, is that the value recorded in `acestart`
-upon a precise interruption be a _prefix-complete_ point of the transfer.
-
-Harts other than the issuing hart observe the component memory operations of
-an ACE memory instruction as ordinary memory operations under RVWMO: no
-ordering among them is guaranteed before the instruction completes, and
-sharing a memory buffer being read or written by an ACE memory instruction requires
-the same synchronization as sharing it with an ordinary software loop.
-
-[WARNING]
-====
-A full axiomatic integration of the ACE component memory operations
-into the RVWMO formalism remains to be produced together with the
-ARC during ratification.
-====
-
-// ////////////////////////////////////////////////////////////////////
-
 [[ACE-error-architecture]]
 ==== Error Handling Architecture
 
@@ -1242,7 +1209,7 @@ Only these instructions honor a nonzero `acestart`; all other instructions ignor
 ACE does not have an _intrinsic_ concept of element length, hence `acestart` counts the number of _bytes_ processed so far by `ace.exec`, or read/written by `ace.input`/`ace.output` or `ace.store`/`ace.load`.
 
 Hardware writes this register on interruption.
-A value recorded by a precise interruption is a prefix-complete point of the transfer; see <<ACE-resumability-memory-model>>.
+A value recorded by a precise interruption is a prefix-complete point of the transfer; see <<ACE-Memory-Model>>.
 Software may save and restore the register across context switches.
 
 `acestart` is the position within the operand window at which processing starts or resumes, analogously to `vstart` in the V extension; for ACEIOBUF operands the window itself is always [0, `aceiobuftop`) (see <<ACE-CSR-aceiobuftop>>).
@@ -1255,7 +1222,7 @@ With instructions that take their input from the ACEIOBUF or write their outputs
 
 For CR-directed transfers (`ace.load`, `ace.store`, `ace.mv`), `acestart` is bounded above by the size in bytes of the PI/SCC being transferred, as determined from the first 8 bytes of the MDH. A value larger than the applicable bound replaces `acestart` with that bound when these instructions are issued.
 
-For certain algorithms, writing zero to `acestart` to force a full restart of `ace.exec` may lead to inconsistent or unpredictable results and is not permitted once per-block state effects have been committed (see <<ACE-resumability-memory-model>>).
+For certain algorithms, writing zero to `acestart` to force a full restart of `ace.exec` may lead to inconsistent or unpredictable results. Hence, it should be avoided once per-block state effects have been committed (see <<ACE-Memory-Model>>).
 Also, writing a value that is invalid or unsupported for a given Algorithm may still cause the CR to transition to Error State _Invalid_
 when an instruction is later issued or restarted.
 
@@ -1498,7 +1465,7 @@ serialized representations of the CR after the MDH and for the memory address.
 the _j_-th byte after the MDH (i.e., the (_j_+16)-th byte of the serialized payload) is saved to  memory address `Xs1 + %offset + j`.
 
 See the non-normative note at the end of <<ACE-instruction-manage>>,
-<<ACE-resumability-memory-model>>, and <<ACE-export-import-algorithms>>.
+<<ACE-Memory-Model>>, and <<ACE-export-import-algorithms>>.
 
 When a system-defined format is used (signaled by the _SystemFormat_ bit of the MDH), the semantics of `ace.load` are implementation-dependent.
 
@@ -1570,7 +1537,7 @@ serialized representations of the CR after the MDH and for the memory address.
 More precisely, the _j_-th byte after the MDH (i.e., the (_j_+16)-th byte of the serialized payload) is saved to  memory address `Xs1 + %offset + j`.
 
 See the non-normative note at the end of <<ACE-instruction-manage>>,
-<<ACE-resumability-memory-model>>, and <<ACE-export-import-algorithms>>.
+<<ACE-Memory-Model>>, and <<ACE-export-import-algorithms>>.
 
 // NOTE: Modifying the CR being used by the interrupted `ace.store` always forces
 // the store to restart. Software that aims to optimize this case will have to
@@ -1587,7 +1554,7 @@ Then, `ace.store` stores the CR to memory, beginning with the byte at offset `ac
 in XLEN-bit sized stores, in the memory region starting at address `%offset(Xs1)`.
 The order in which the LSU issues these transactions is implementation dependent.
 See the non-normative note at the end of <<ACE-instruction-manage>>,
-<<ACE-resumability-memory-model>>, and <<ACE-export-import-algorithms>> for further details.
+<<ACE-Memory-Model>>, and <<ACE-export-import-algorithms>> for further details.
 
 NOTE: PI can be stored because a provisioning operation may be interrupted, and this allows resuming it.
 
@@ -2125,18 +2092,17 @@ The instruction is not usage-controlled.
 
 [NOTE]
 ====
-Management procedures may be interrupted and resumed, although `ace.mgmt` itself is non-preemptible.
-System software saves and restores _ConfigStatus_, simplifying CPU hardware and supporting arbitrary levels of nested virtualization.
+Management procedures may be interrupted and resumed, although `ace.mgmt` itself is non-preemptible, despite being potentially a long-running operation.
+
+For longer-running `ace.mgmt` operations—such as starting or completing an export, or completing an import—implementations can either defer interrupts until the instruction completes, or preserve the prior CR state, restore it before taking the trap, and re-execute `ace.mgmt` upon return.
+Because state restoration requires internal buffering, implementers may choose either strategy based on available CRF capacity.
+
 The above rules also allow an interrupted import to resume on another hart or on a different ACE unit implementation, provided the target unit supports the algorithm encoded in the SCC.
 
 Software must allow interrupted configuration and export procedures to resume while maintaining binary compatibility across implementations with and without resumption support.
 Resuming transfer instructions is optional.
-Even when supported, an implementation may ignore `acestart` and restart an `ace.load`, `ace.store`, `ace.input`, or `ace.output`, subject to the completion guarantee of <<ACE-forward-progress>>.
 A context-switch handler can force a restart by clearing partially configured or exported CRs at context save and restore.
 Consequently, the ACE ISA is co-designed with the CR management sequences in <<ACE-management-code-snippets>> to support context switching and lazy SCC loading.
-
-For longer-running `ace.mgmt` operations—such as starting or completing an export, or completing an import—implementations can either defer interrupts until the instruction completes, or preserve the prior CR state, restore it before taking the trap, and re-execute `ace.mgmt` upon return.
-Because state restoration requires internal buffering, implementers may choose either strategy based on available CRF capacity.
 ====
 
 _Included in_::
@@ -3010,16 +2976,31 @@ If `ace.derive` is used to inject key material into a destination CR, the latter
 [[ACE-resumability]]
 === Interruptibility and Resumability of ACE instructions
 
-`ace.clear`, `ace.reset`, `ace.setst`, `ace.mgmt`, `ace.getst`, `ace.restrict`, `ace.clone`, `ace.size`, and `ace.avail` are uninterruptible.
-In the current version of the specification, `ace.mgmt` is uninterruptible as a single instruction; the management _processes_ it delimits are interruptible between their constituent instructions (<<ACE-instruction-manage>>). To bound the latency of the final `ace.mgmt` of an import, whose decryption and authentication work grows with the size of the SCC, implementations may interleave that work with the preceding load phase, as noted in <<ACE-management-code-snippets>>.
+Instructions `ace.setst`, `ace.mgmt`, `ace.getmd*`, `ace.restrict*`, `ace.clone`, `ace.mv`, and `ace.size` are uninterruptible.
 
-Long-running ACE operations may proceed even if the hart is preempted.
+// To bound the latency of the final `ace.mgmt` of an import, whose decryption and authentication work grows with the size of the SCC, implementations may interleave that work with the preceding load phase.
+
+For ACE memory instructions, the usual rule applies:
+An implementation may treat a memory instruction as complete
+(retiring it, or taking an interrupt with `xepc` past it) only after all address translation and
+permission checks for every byte of the transfer have succeeded, or it must use the precise-halt
+strategy so that any fault is reported synchronously on re-execution/resumption with `acestart` at a
+prefix-complete point. Component accesses performed after the instruction is treated as complete
+must not fault. This applies to `ace.load`, `ace.store`, `ace.input`, and `ace.output`.
+
+Other long-running ACE operations, which do not access external memory, may proceed even if the hart is preempted.
 In this case, when the context‑switch handler accesses an output of the operation, different behaviors are allowed:
 
-. The hart may wait for the operation to finish;
-. the implementation may adopt a precise exception model, whereby the ACE unit is halted and sets a value in the `acestart` CSR to allow later resumption;
-or
-. the system may impose a timeout before halting.
+. Background completion: The hart may have to wait for the operation to finish when the privileged handler accesses the state affected by these instructions;
+. Atomic completion: the operation is completed before any asynchronous interrupt is taken;
+. Precise halt and resumption: the operation is halted with `acestart`
+  recording a prefix-complete point (<<ACE-Memory-Model>>),
+  and re-execution resumes from `acestart`, advancing by at least one
+  granule per execution attempt — sixteen bytes for `ace.load`, `ace.store`,
+  one byte for `ace.input`, and `ace.output`; for `ace.exec`, one basic processing unit
+  or the smallest interruption point defined by the algorithm (cf. <<ACE-process-VLI>>).
+. The system may impose a timeout before halting as in the previous point.
+. Precise halt and restart.
 
 The architecture permits all these approaches, subject to the following
 rule: before the hart performs any _conflicting access_ — an ordinary load
@@ -3027,114 +3008,110 @@ or store overlapping the memory region of an in-flight ACE operation, an
 access to the CR it uses, a read or write of `acestart` or of an ACEIOBUF
 CSR, or the issue of another ACE instruction — the in-flight operation must
 either have completed or have been precisely halted with `acestart` set per
-<<ACE-resumability-memory-model>>. This makes the asynchronous execution of
+<<ACE-Memory-Model>>. This makes the asynchronous execution of
 the attached ACE unit invisible to same-hart program order, as
 <<ACE-Memory-Model>> requires. Beyond this rule, the architecture only
 specifies the allowed interruption points for its instructions and
 algorithms.
 
-`ace.input`, `ace.output`, `ace.load`, and `ace.store` may be interrupted and resumed.
-`acestart` reflects the amount of data read or written before the interrupt.
-In this case, resumption will start from that point.
+Note that for multi-block `ace.exec`, resumption from `acestart` is mandatory once
+per-block state effects have been committed (<<ACE-Memory-Model>>). The interruption points are defined by block boundaries
+as well as by algorithm-specific interrupt points  (for instance
+the long-running computations of <<ACE-ECC>> and <<ACE-PQC>>).
+While handlers can set `acestart` to zero to force a restart of an `ace.exec` operation, this may lead to unpredictable behavior when the input and output overlap (i.e., they are actually the same vector register, vector register group, or the ACEIOBUF).
 
-[WARNING]
-====
-Do we need to specify this? I have a draft here. There is some redundancy.
+In the current version of the specification, `ace.mgmt` is uninterruptible as a single instruction.
+The first approach above is suitable in this case.
+The management _processes_ bracketed by `ace.mgmt` instructions are of course interruptible between their constituent instructions (<<ACE-instruction-manage>>).
 
-[[ACE-forward-progress]]
-Implementations must guarantee that every resumable instruction eventually
-completes under any pattern of asynchronous interrupts. Each of the
-following strategies is sufficient, and an implementation may use different
-strategies for different instructions or occasions:
-
-. *Background completion*: the ACE unit continues the operation to
-  completion even though the hart has taken the interrupt, subject to the
-  conflicting-access rule above;
-. *Atomic completion*: the transfer is completed before any asynchronous
-  interrupt is taken;
-. *Precise halt and resume*: the operation is halted with `acestart`
-  recording a prefix-complete point (<<ACE-resumability-memory-model>>),
-  and re-execution resumes from `acestart`, advancing by at least one
-  granule per execution attempt — one byte for `ace.load`, `ace.store`,
-  `ace.input`, and `ace.output`; for `ace.exec`, one basic processing unit
-  or the smallest interruption point the algorithm defines
-  (cf. <<ACE-process-VLI>>).
-
-An implementation may abandon an interrupted `ace.load`, `ace.store`,
-`ace.input`, or `ace.output` and clear `acestart`, forcing a restart, for
-events that do not recur on every re-execution attempt; abandoning a
-transfer must not be the implementation's unconditional response to
-asynchronous interrupts, as no strategy above would then apply. For
-multi-block `ace.exec`, resumption from `acestart` is mandatory once
-per-block state effects have been committed
-(<<ACE-resumability-memory-model>>).
-====
-
-Algorithm-specific resumable operations that transfer no data (for instance
-the long-running computations of <<ACE-ECC>> and <<ACE-PQC>>) must satisfy
+Algorithm-specific resumable operations that transfer no data must satisfy
 the same completion guarantee: each execution attempt either completes the
 operation or advances its recorded progress.
 
-The operation of `ace.exec` on a basic processing unit, as defined by the algorithm it performs, is uninterruptible unless the algorithm explicitly allows it.
-Most cryptographic primitives cannot be interrupted; therefore, state information to encode the round number or a round key value is not needed.
-For certain very-long-running operations, such as public key primitives, an algorithm-specific interruptibility and resumability behavior is defined.
+Cross-implementation resumption, such as after migration, is supported only when both implementations honor `acestart`. Otherwise, the portable recovery path is the visible restart described below: the CR is left in the _Unconfigured_ state, and software reruns the management sequence. The ACE instructions are designed to work correctly with either approach on every ACE implementation.
 
-When processing multiple basic processing units iteratively, `ace.exec` handles each block atomically, but it may be interrupted between blocks.
-On an interrupt during block processing, the implementation may either complete the current block before yielding to the handler, or discard the partial computation and restore the state from before its processing.
-`acestart` is updated accordingly to point at the place of resumption. Valid values are multiples of the length of the basic processing unit, with any exceptions defined by the algorithm.
+For instance, `ace.load`, `ace.store` may always fail, or caused to fail, leaving the CR in an _Unconfigured_ state.  This signals that the import, provisioning, or export operation must be restarted. Software must then prepare the CR for the operation again. For import and provisioning, this entails providing the first 8 bytes of the MDH to the `ace.mgmt` instruction used to prepare the CR anew.
 
-While handlers can set `acestart` to zero to force a restart of an `ace.exec` operation, this may lead to unpredictable behavior when the input and output overlap (i.e., they are actually the same vector register, vector register group, or the ACEIOBUF).
+// ////////////////////////////////////////////////////////////////////
 
-// ///////////////////////////////////////////////////////////////////
+[[ACE-Memory-Model]]
+=== Memory Model
 
-[[ACE-resumability-memory-model]]
-=== Resumption and Memory Model
+ACE memory instructions appear to execute in program order on the local hart.
 
-RISC-V implementations may read or write long inputs in an arbitrary order.
-Enforcing a strict access ordering for ACE inputs and outputs would be complex on certain microarchitectures.
+ACE memory instructions follow RVWMO at the instruction level.
+If the `Ztso` extension is implemented and enabled, ACE memory instructions additionally follow RVTSO at the instruction level.
 
-The ACE unit sends commands to the LSU to read and write memory sequentially—analogously to software looping over an array. The LSU may then issue those reads and writes in any order it chooses.
+ACE memory instructions may be decomposed into a set of component memory operations of any granularity.
+The ordering of these memory operations within the instructions is not specified, and it depends on the chosen memory model and implementation of the issuing hart, as long as the semantics of the configuration and export instruction and `ace.exec` are respected.
 
-However, the same code must work correctly regardless of which order the LSU chooses, because the latter is a microarchitectural aspect.
+NOTE: `Ztso` only imposes RVTSO at the instruction level; intra-instruction ordering follows RVWMO regardless of whether `Ztso` is implemented.
+
+The order in which the component memory operations of an ACE memory
+instruction are issued is not architecturally constrained, and no such
+constraint is needed for resumption: the only requirement, stated in
+<<ACE-Memory-Model>>, is that the value recorded in `acestart`
+upon a precise interruption be a _prefix-complete_ point of the transfer.
+
+Harts other than the issuing hart observe the component memory operations of
+an ACE memory instruction as ordinary memory operations under RVWMO: no
+ordering among them is guaranteed before the instruction completes, and
+sharing a memory buffer being read or written by an ACE memory instruction requires
+the same synchronization as sharing it with an ordinary software loop.
 
 [WARNING]
 ====
-The following two paragraphs are an attempt to be more precise on the previous test:
-_An implementation always has the option to restart an
-`ace.load`, `ace.store`, `ace.input`, `ace.output`, or `ace.exec`
-operation instead of resuming it, for any reason, and may ignore and clear `acestart`, with the following exception:
-Once the per-block state effects of a multi-block `ace.exec` have been committed, neither the implementation nor software may restart it from the beginning; it must be resumed from `acestart`.
-The ACE instructions are designed so that the same instruction sequences work correctly when this rule is respected and on every ACE implementation._
+A full axiomatic integration of the ACE component memory operations
+into the RVWMO formalism remains to be produced together with the
+ARC during ratification.
 ====
 
-*Prefix-completeness invariant.* When an implementation halts a resumable
-instruction precisely and records `acestart` = _k_ (rather than abandoning
-the transfer), the update of `acestart` is committed as part of trap entry
-(<<ACE-error-architecture>>), and:
+// ///////////////////////////////////////////////////////////////////
 
-. for `ace.load` and `ace.input`, exactly the bytes at offsets [0, _k_)
-  have been consumed into the CR, resp., the ACEIOBUF; component reads at
-  offsets {ge} _k_ have had no architecturally visible effect;
-. for `ace.store` and `ace.output`, the destination memory holds the
-  transfer results for offsets [0, _k_); a component store at an offset
-  {ge} _k_ may already have been performed only if resumption will perform
-  it again with an identical value — which is guaranteed, because the
-  source (a CR in `ace_cfgst_exporting`, resp., the ACEIOBUF) cannot change
-  between interruption and resumption;
-. for a multi-block `ace.exec`, _k_ is a multiple of the basic processing
-  unit, or an interruption point defined by the algorithm, and the rules of
-  <<ACE-resumability>> apply.
+// [[ACE-resumability-memory-model]]
+// === Resumption and Memory Model
+//
+// RISC-V implementations may read or write long inputs in an arbitrary order.
+// Enforcing a strict access ordering for ACE inputs and outputs would be complex on certain microarchitectures.
+//
+// The ACE unit sends commands to the LSU to read and write memory sequentially—analogously to software looping over an array. The LSU may then issue those reads and writes in any order it chooses.
+//
+// However, the same code must work correctly regardless of which order the LSU chooses, because the latter is a microarchitectural aspect.
 
-The component stores below _k_ are ordinary stores of the issuing hart
-under RVWMO; their visibility to a hart that resumes the operation after a
-migration is established by the synchronization the migrating software
-already performs for ordinary memory.
-
-*Abandoning an operation.* An implementation may abandon an interrupted transfer—`ace.load`, `ace.store`, `ace.input`, or `ace.output`—by clearing `acestart` and forcing a restart, subject to the completion guarantee of <<ACE-forward-progress>>. Once the per-block state effects of a multi-block `ace.exec` have been committed, neither the implementation nor software may restart the operation; it _must_ resume from `acestart`.
-+
-Cross-implementation resumption, such as after migration, is supported only when both implementations honor `acestart`. Otherwise, the portable recovery path is the visible restart described below: the CR is left in the _Unconfigured_ state, and software reruns the management sequence. The ACE instructions are designed to work correctly with either approach on every ACE implementation.
-+
-For instance, `ace.load`, `ace.store` may always fail, or caused to fail, leaving the CR in an _Unconfigured_ state.  This signals that the import, provisioning, or export operation must be restarted. Software must then prepare the CR for the operation again. For import and provisioning, this entails providing the first 8 bytes of the MDH to the `ace.mgmt` instruction used to prepare the CR anew.
+// [WARNING]
+// ====
+// The following two paragraphs are an attempt to be more precise on the previous test:
+// _An implementation always has the option to restart an
+// `ace.load`, `ace.store`, `ace.input`, `ace.output`, or `ace.exec`
+// operation instead of resuming it, for any reason, and may ignore and clear `acestart`, with the following exception:
+// Once the per-block state effects of a multi-block `ace.exec` have been committed, neither the implementation nor software may restart it from the beginning; it must be resumed from `acestart`.
+// The ACE instructions are designed so that the same instruction sequences work correctly when this rule is respected and on every ACE implementation._
+// ====
+//
+// *Prefix-completeness invariant.* When an implementation halts a resumable
+// instruction precisely and records `acestart` = _k_ (rather than abandoning
+// the transfer), the update of `acestart` is committed as part of trap entry
+// (<<ACE-error-architecture>>), and:
+//
+// . for `ace.load` and `ace.input`, exactly the bytes at offsets [0, _k_)
+//   have been consumed into the CR, resp., the ACEIOBUF; component reads at
+//   offsets {ge} _k_ have had no architecturally visible effect;
+// . for `ace.store` and `ace.output`, the destination memory holds the
+//   transfer results for offsets [0, _k_); a component store at an offset
+//   {ge} _k_ may already have been performed only if resumption will perform
+//   it again with an identical value — which is guaranteed, because the
+//   source (a CR in `ace_cfgst_exporting`, resp., the ACEIOBUF) cannot change
+//   between interruption and resumption;
+// . for a multi-block `ace.exec`, _k_ is a multiple of the basic processing
+//   unit, or an interruption point defined by the algorithm, and the rules of
+//   <<ACE-resumability>> apply.
+//
+// The component stores below _k_ are ordinary stores of the issuing hart
+// under RVWMO; their visibility to a hart that resumes the operation after a
+// migration is established by the synchronization the migrating software
+// already performs for ordinary memory.
+//
+// *Abandoning an operation.* An implementation may abandon an interrupted transfer—`ace.load`, `ace.store`, `ace.input`, or `ace.output`—by clearing `acestart` and forcing a restart. Once the per-block state effects of a multi-block `ace.exec` have been committed, neither the implementation nor software may restart the operation; it _must_ resume from `acestart`.
 
 // ////////////////////////////////////////////////////////////////////
 
