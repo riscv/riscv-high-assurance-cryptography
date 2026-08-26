@@ -142,9 +142,10 @@ def byte_encode(d, f):
 def byte_decode(d, b):
     """ByteDecode_d: 32*d bytes -> 256 ints (mod q when d = 12)."""
     v = int.from_bytes(b, 'little')
-    m = Q if d == 12 else (1 << d)
-    return [(v >> (d * i)) & ((1 << d) - 1) if d != 12 else
-            ((v >> (12 * i)) & 0xFFF) % Q for i in range(256)]
+    mask = (1 << d) - 1
+    if d == 12:
+        return [((v >> (12 * i)) & mask) % Q for i in range(256)]
+    return [(v >> (d * i)) & mask for i in range(256)]
 
 def compress(d, x):
     return (((x << d) + Q // 2) // Q) % (1 << d)

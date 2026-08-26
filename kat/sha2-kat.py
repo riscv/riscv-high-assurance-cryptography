@@ -89,7 +89,9 @@ H512 = [_frac_sqrt(p, 64) for p in _P80[:8]]
 H384 = [_frac_sqrt(p, 64) for p in _P80[8:16]]                # 1st 64 bits (5.3.4)
 assert K256[0] == 0x428a2f98 and K256[63] == 0xc67178f2       # FIPS 180-4 4.2.2
 assert K512[0] == 0x428a2f98d728ae22 and K512[79] == 0x6c44198c4a475817
-assert H256[0] == 0x6a09e667 and H512[7] == 0x5be0cd19        # FIPS 180-4 5.3
+assert H256[0] == 0x6a09e667 and H256[7] == 0x5be0cd19        # FIPS 180-4 5.3.3
+assert H224[0] == 0xc1059ed8 and H384[0] == 0xcbbb9d5dc1059ed8  # 5.3.2 / 5.3.4
+assert H512[0] == 0x6a09e667f3bcc908 and H512[7] == 0x5be0cd19137e2179  # 5.3.5
 
 # ------------------------------------------------------- compression (FIPS 180-4 sect. 6)
 
@@ -299,7 +301,7 @@ VEC = {
         M_ABC:   'cb00753f45a35e8bb5a03d699ac65007272c32ab0eded1631a8b605a43ff5bed'
                  '8086072ba1e7cc2358baeca134c825a7',
         M2_64:   '09330c33f71147e83d192fc782cd1b4753111b173b3b05d22fa08086e3b0f712'
-                 'fccc7c71a557e2db966c3e9fa91746039',
+                 'fcc7c71a557e2db966c3e9fa91746039',
     },
     'SHA-512': {
         M_EMPTY: 'cf83e1357eefb8bdf1542850d66d8007d620e4050b5715dc83f4a921d36ce9ce'

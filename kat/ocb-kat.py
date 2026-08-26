@@ -293,7 +293,17 @@ def ace_ocb_encrypt(K, N, A, P, taglen_bits, double_fn=double_ocb, ktop_bswap=Tr
         m.exec_hash_absorb_last(b2v(rest))
     m.enter_crypt()
     if machine_out is not None:
-        machine_out.append(m)                     # snapshot point for anchors
+        # snapshot the setup values *before* the encrypt loop mutates offset
+        machine_out.append({
+            'L_*': v2b(m.Lstar, 16).hex().upper(),
+            'L_$': v2b(m.Ldollar, 16).hex().upper(),
+            'L_0': v2b(m.L[0], 16).hex().upper(),
+            'L_1': v2b(m._Li(1), 16).hex().upper(),
+            'bottom': m.bottom,
+            'Ktop': v2b(m.Ktop, 16).hex().upper(),
+            'Stretch': m.Stretch_be.to_bytes(24, 'big').hex().upper(),
+            'Offset_0': v2b(m.offset, 16).hex().upper(),
+        })
     C = b''
     nP = len(P) // 16
     for i in range(nP):
@@ -430,15 +440,7 @@ def main():
           "(vector 0F, taglen 128):")
     ms = []
     ace_ocb_encrypt(K128, nonce(0xF), b'', S40, 128, machine_out=ms)
-    m = ms[0]
-    for name, got in [('L_*', v2b(m.Lstar, 16).hex().upper()),
-                      ('L_$', v2b(m.Ldollar, 16).hex().upper()),
-                      ('L_0', v2b(m.L[0], 16).hex().upper()),
-                      ('L_1', v2b(m._Li(1), 16).hex().upper()),
-                      ('bottom', m.bottom),
-                      ('Ktop', v2b(m.Ktop, 16).hex().upper()),
-                      ('Stretch', m.Stretch_be.to_bytes(24, 'big').hex().upper()),
-                      ('Offset_0', v2b(m.offset, 16).hex().upper())]:
+    for name, got in ms[0].items():
         print(f"  {name:9} {chk(got == INTER[name])}")
 
     print("\nRFC 7253 Appendix A, AEAD_AES_128_OCB_TAGLEN96 sample:")
@@ -456,7 +458,7 @@ def main():
     Kit = bytes(15) + bytes([128])                # zeros(KEYLEN-8) || num2str(TAGLEN,8)
     C = b''
     for i in range(128):
-        S = bytes(8 * i)
+        S = bytes(i)                              # zeros(8i) = 8i bits = i bytes
         C += ace_ocb_encrypt(Kit, (3 * i + 1).to_bytes(12, 'big'), S, S, 128)
         C += ace_ocb_encrypt(Kit, (3 * i + 2).to_bytes(12, 'big'), b'', S, 128)
         C += ace_ocb_encrypt(Kit, (3 * i + 3).to_bytes(12, 'big'), S, b'', 128)

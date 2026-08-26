@@ -182,7 +182,9 @@ def oracle(name, msg, out_bytes=None):
     """Python hashlib -- LABELED REFERENCE ORACLE (not part of the model)."""
     c, b, t, xof, D = PARAMS[name]
     n = out_bytes if out_bytes is not None else t // 8
-    return _ORACLE[name](msg, n)
+    # For the fixed-output functions hashlib always returns the whole digest;
+    # a shorter request is a prefix of it (the ACE model emits a prefix too).
+    return _ORACLE[name](msg, n)[:n]
 
 
 # ------------------------------------------------------------ embedded vectors
