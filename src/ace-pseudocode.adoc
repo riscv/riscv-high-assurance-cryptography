@@ -19,24 +19,24 @@ These sequences can be packaged into libraries or OS APIs to avoid increasing ap
 
 In these examples, GPR `t6` points to the memory location where a PI or SCC is stored,
 and GPR `t0` contains the number of the CR to be configured or exported.
-The code also uses `t1` to `t5`, `s1`, and `s2` for temporary storage.
+The code also uses `t2` to `t5`, `s1`, `s2`, `v1` and `v2`.
 
 Throughout, `t3` holds the constant 23, the highest *valid* _State_ value
 (<<ACE-states-valid>>), so that `bltu t3, t2, handle_errors` branches exactly when the CR
 has entered an Error State. `t3` is therefore never reused for anything else: the test is
 needed again after the final `ace.mgmt`. A _State_ of `0`, that is _Unconfigured_, is tested
-separately with `beqz`, since it means the CR was cleared and the whole operation has to be
+separately with `beqz`, since it means the CR was cleared and the whole operation must be
 restarted.
 
 *Provisioning Code (`Zklmv`)*
 ----
   li         s2, 16
   vsetvli    s2, s1, e8, m1, ta, ma # ready to load 16 bytes
-  vle8.v     v4, 0(t6)       # load from memory
+  vle8.v     v1, 0(t6)       # load from memory
   li         t3, 23          # highest valid _State_; keep for every test below
 
 restart:
-  ace.mgmt   K{t0}, #ace_CR_provision_start, v4  # start provisioning, load MDH
+  ace.mgmt   K{t0}, #ace_CR_provision_start, v1  # start provisioning, load MDH
   ace.getst  t2, K{t0}               # get _State_ field from MDH
   bltu       t3, t2, handle_errors   # _State_ >= 24: an Error State
   beqz       t2, handle_errors       # _State_ == 0: the CR was not opened
@@ -51,8 +51,8 @@ restart:
 vloop:
   vsetvli    s2, s1, e8, m1, ta, ma
                                 # s2 = number of bytes moved this iteration
-  vle8.v     v4, (t4)           # load a chunk of the PI
-  ace.mv     K{t0}, v4          # move it into the CR
+  vle8.v     v1, (t4)           # load a chunk of the PI
+  ace.mv     K{t0}, v1          # move it into the CR
   add        t4, t4, s2         # bump the source pointer
   sub        s1, s1, s2         # decrement the bytes still to load
   ace.getst  t2, K{t0}
@@ -72,11 +72,11 @@ success:
 ----
   li         s2, 16
   vsetvli    s2, s1, e8, m1, ta, ma # ready to load 16 bytes
-  vle8.v     v4, 0(t6)       # load from memory
+  vle8.v     v1, 0(t6)       # load from memory
   li         t3, 23          # highest valid _State_; keep for every test below
 
 restart:
-  ace.mgmt   K{t0}, #ace_CR_provision_start, v4  # start provisioning, load MDH
+  ace.mgmt   K{t0}, #ace_CR_provision_start, v1  # start provisioning, load MDH
   ace.getst  t2, K{t0}
   bltu       t3, t2, handle_errors
   beqz       t2, handle_errors
@@ -96,15 +96,15 @@ success:
 ----
   li         s2, 16
   vsetvli    s2, s1, e8, m1, ta, ma # ready to load 16 bytes
-  vle8.v     v2, 0(t6)          # load from memory
+  vle8.v     v1, 0(t6)          # load from memory
   li         t3, 23
-  ace.size   t5, v2             # length of SCC in bytes, 0 if unsupported
+  ace.size   t5, v1             # length of SCC in bytes, 0 if unsupported
   beqz       t5, handle_errors  # algorithm not supported, or MDH invalid
 
   # t5 is saved in local state and not modified by this code, so jumping
   # to restart will re-derive the working count and pointer from it
 restart:
-  ace.mgmt   K{t0}, #ace_CR_import_start, v2  # prepare CR for import, load MDH
+  ace.mgmt   K{t0}, #ace_CR_import_start, v1  # prepare CR for import, load MDH
   ace.getst  t2, K{t0}
   bltu       t3, t2, handle_errors
   beqz       t2, handle_errors
@@ -114,8 +114,8 @@ restart:
 
 vloop:
   vsetvli    s2, s1, e8, m1, ta, ma
-  vle8.v     v4, (t4)                 # load a chunk of the SCC
-  ace.mv     K{t0}, v4                # move it into the CR, advance acestart
+  vle8.v     v2, (t4)                 # load a chunk of the SCC
+  ace.mv     K{t0}, v2                # move it into the CR, advance acestart
   add        t4, t4, s2
   sub        s1, s1, s2
   ace.getst  t2, K{t0}
@@ -123,7 +123,7 @@ vloop:
   bltu       t3, t2, handle_errors
   bnez       s1, vloop
 
-  ace.mgmt   K{t0}, #ace_CR_management_end, v2  # decrypt and authenticate SCC
+  ace.mgmt   K{t0}, #ace_CR_management_end, v1  # decrypt and authenticate SCC
                                      # and restore original MDH
   ace.getst  t2, K{t0}
   bltu       t3, t2, handle_errors   # catches "Authentication Failed"
@@ -135,11 +135,11 @@ success:
 ----
   li         s2, 16
   vsetvli    s2, s1, e8, m1, ta, ma # ready to load 16 bytes
-  vle8.v     v2, 0(t6)            # load from memory
+  vle8.v     v1, 0(t6)            # load from memory
   li         t3, 23
 
 restart:
-  ace.mgmt   K{t0}, #ace_CR_import_start, v2 # prepare CR for import, load MDH
+  ace.mgmt   K{t0}, #ace_CR_import_start, v1 # prepare CR for import, load MDH
   ace.getst  t2, K{t0}
   bltu       t3, t2, handle_errors
   beqz       t2, handle_errors
@@ -147,7 +147,7 @@ restart:
   ace.getst  t2, K{t0}
   beqz       t2, restart             # CR cleared means force restart
   bltu       t3, t2, handle_errors
-  ace.mgmt   K{t0}, #ace_CR_management_end, v2  # decrypt and authenticate CR,
+  ace.mgmt   K{t0}, #ace_CR_management_end, v1  # decrypt and authenticate CR,
                                      # if necessary complete it
   ace.getst  t2, K{t0}
   bltu       t3, t2, handle_errors   # catches `ace_state_import_auth`
@@ -175,7 +175,7 @@ restart:
 
   li         s2, 16
   vsetvli    s2, s1, e8, m1, ta, ma  # ready to save 16 bytes
-  ace.getmdv v2, K{t0}               # save MDH, including= _ConfigStatus_
+  ace.getmdv v1, K{t0}               # save MDH, including= _ConfigStatus_
 
   # If _ConfigStatus_ is `ace_cfgst_complete`, the following ace.mgmt prepares
   # the serialized, encrypted and authenticated internal representation of the
@@ -183,15 +183,15 @@ restart:
   # `ace_cfgst_exporting`. Otherwise, it does nothing.
 
   ace.mgmt   K{t0}, #ace_CR_export_start
-  vse8.v     v2, 0(t6)               # export original MDH to memory
+  vse8.v     v1, 0(t6)               # export original MDH to memory
 
   addi       s1, s1, -16             # the 16 B of MDH already stored
   addi       t4, t6, 16              # destination pointer
 
 vloop:
   vsetvli    s2, s1, e8, m1, ta, ma  # s2 = no. of bytes moved this iteration
-  ace.mv     v4, K{t0}               # move chunk out of CR, advance acestart
-  vse8.v     v4, (t4)                # store it
+  ace.mv     v2, K{t0}               # move chunk out of CR, advance acestart
+  vse8.v     v2, (t4)                # store it
   add        t4, t4, s2              # bump the destination pointer
   sub        s1, s1, s2              # decrement the bytes still to store
   ace.getst  t2, K{t0}
@@ -205,7 +205,7 @@ success:
   # the CR available to software, otherwise it does nothing and leaves the CR
   # state in the serialized and encrypted format.
 
-  ace.mgmt   K{t0}, #ace_CR_management_end, v2
+  ace.mgmt   K{t0}, #ace_CR_management_end, v1
 ----
 
 *Export Code (`Zkmem`)*
@@ -226,7 +226,7 @@ restart:
   # `ace_cfgst_exporting`.  Otherwise, it does nothing.
 
   ace.mgmt   K{t0}, #ace_CR_export_start
-  vse8.v     v2, 0(t6)               # export original MDH to memory
+  vse8.v     v1, 0(t6)               # export original MDH to memory
 
   # The next instruction stores all data starting with the SIV
   # In case of interrupt/exception, the handler will decide whether to keep
@@ -245,7 +245,7 @@ success:
   # the CR available to software, otherwise it does nothing and leaves the CR
   # state in the serialized and encrypted format.
 
-  ace.mgmt   K{t0}, #ace_CR_management_end, v2
+  ace.mgmt   K{t0}, #ace_CR_management_end, v1
 ----
 
 // NOTE: The three instructions are essentially the same as `ace.export`.

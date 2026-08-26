@@ -85,28 +85,6 @@ to defer but collectively preclude candidacy until at least provisionally resolv
 
 ---
 
-
-**M7 — `ace_exc_fatal` delivery model undefined and priority statements conflict**
-
-- **Rationale:** The highest-severity error in the architecture has no defined delivery semantics;
-  handlers cannot be written portably.
-- **Location:** `src/ace-ISA-unpriv.adoc:974-984` ("This category has the highest priority. This
-  condition is not maskable by any CPU state… raises ACE exception `ace_exc_fatal`") vs
-  `src/ace-ISA-priv.adoc:49-69` (the cause table, "in decreasing priority order (also relative to
-  RISC-V exceptions)", places `ace_exc_fatal` *below* page faults).
-- **Issue:** CRF corruption is detected asynchronously; the spec does not say whether
-  `ace_exc_fatal` is raised on the next ACE instruction (synchronous), as an interrupt, which
-  `xepc` it reports, or whether it is delegable. "Not maskable" is not meaningful for a
-  synchronous exception.
-- **Resolution:** Specify: *"A fatal condition is recorded in the ACE unit. The first ACE
-  instruction or ACE CSR access issued (or in flight) after detection does not perform its
-  operation and raises `ace_exc_fatal`; `xepc` holds that instruction's address. The cause is not
-  delegable below M-mode [or: delegable — decide]. The ACE state reset occurs before the trap is
-  taken."* Reconcile the two priority statements.
-
----
-
-
 **M9 — Unbounded "unpredictable results/behavior" in a secrecy-bearing ISA**
 
 - **Rationale:** In an extension whose entire purpose is that CR internals never reach software,
@@ -234,12 +212,6 @@ when an ACEIOBUF instruction is issued with `acestart` > `aceiobuftop`, "`acesta
 `aceiobuftop` first"; `src/ace-ISA-unpriv.adoc:2696,2761` say the operation "does nothing and
 `acestart` is unchanged". Pick one (recommend: no-op, `acestart` unchanged) and delete the other.
 
-**m2 — Transfer granularity contradictions.** `ace.load`: "`acestart` is also a multiple of 16"
-(`src/ace-ISA-unpriv.adoc:1484`) conflicts with the 1-byte granule in `<<ACE-forward-progress>>`
-(`src/ace-ISA-unpriv.adoc:3015`) and byte-granular prefix-completeness; `ace.store` may start at 8,
-which is not a multiple of 16. State one rule: `acestart` for CR transfers is a byte count;
-implementations may halt only at 16-byte boundaries (if that is the intent), and the
-forward-progress granule for these instructions is then 16 bytes.
 
 **m3 — `ace.getmd*` register constraints.** RV64 `ace.getmdl` writes one GPR yet requires even `d`
 (`src/ace-ISA-unpriv.adoc:2165-2166`); RV32 `ace.getmdl` writes a pair yet requires `d` multiple of
@@ -622,3 +594,24 @@ FIXED. 1. **`ace.load` "16th byte" vs. `ace.store` "8th byte"** (`src/ace-ISA-un
 `:1538`): the asymmetry is intended (store may begin after `ace.getmdl` of the low half) but is
    nowhere explained; C1's resolution should state both entry points and their `acestart` values
    in one table.
+
+
+
+**M7 — `ace_exc_fatal` delivery model undefined and priority statements conflict**
+
+FIXED
+
+- **Resolution:** Specify: *"A fatal condition is recorded in the ACE unit. The first ACE
+  instruction or ACE CSR access issued (or in flight) after detection does not perform its
+  operation and raises `ace_exc_fatal`; `xepc` holds that instruction's address. The cause is not
+  delegable below M-mode [or: delegable — decide]. The ACE state reset occurs before the trap is
+  taken."* Reconcile the two priority statements.
+
+---
+
+FIXED **m2 — Transfer granularity contradictions.** `ace.load`: "`acestart` is also a multiple of 16"
+(`src/ace-ISA-unpriv.adoc:1484`) conflicts with the 1-byte granule in `<<ACE-forward-progress>>`
+(`src/ace-ISA-unpriv.adoc:3015`) and byte-granular prefix-completeness; `ace.store` may start at 8,
+which is not a multiple of 16. State one rule: `acestart` for CR transfers is a byte count;
+implementations may halt only at 16-byte boundaries (if that is the intent), and the
+forward-progress granule for these instructions is then 16 bytes.
