@@ -1941,11 +1941,24 @@ def test_aceiobuf():
     r = u.output(bytearray(64), 0, 64)
     check("ace.output with acestart > aceiobuftop is a no-op with acestart unchanged",
           (r, u.acestart), ("noop", 100))
+    # acestart is never clamped: both the equal and the strictly-greater case are
+    # no-ops that leave it alone. The pre-fix text covered only acestart = aceiobuftop
+    # in one place and clamped to aceiobuftop in another.
+    for start, label in ((64, "acestart = aceiobuftop"),
+                         (65, "acestart > aceiobuftop"),
+                         (4096, "acestart far above aceiobuftop")):
+        u.acestart = start
+        r = u.input_(mem, 0, 64)
+        check(f"{label}: no-op, and acestart is not clamped to aceiobuftop",
+              (r, u.acestart), ("noop", start))
 
-    info("m1: the contradiction is still present in the text. aceiobuftop's description "
-         "says a too-large acestart 'will be set to aceiobuftop first', while ace.input "
-         "and ace.output say the operation 'does nothing and acestart is unchanged'. "
-         "Modelled as the no-op reading, as the review recommends.")
+    info("m1 is RESOLVED in the current text, in favour of the no-op reading modelled "
+         "here: acestart is no longer clamped for ACEIOBUF operands. If acestart >= "
+         "aceiobuftop the operand window is empty, so the instruction performs no "
+         "operation, causes no state transition, and leaves acestart unchanged -- the "
+         "rule ace.input and ace.output already stated for their own transfers. The "
+         "clamp for CR-directed transfers (ace.load/ace.store/ace.mv, bounded by the "
+         "PI/SCC length) is a separate rule and is unaffected.")
 
     # shortening is done by lowering aceiobuftop, never by raising acestart
     u.write_aceiobuflen(64)
@@ -2212,8 +2225,8 @@ def test_notes():
          "list now exempts 'the macecsk group (if present)'. Still unstated: whether "
          "ace.reset and the read-only identification CSRs are CSK-gated.")
     info("M2 (ace.size 0 vs 32) is UNRESOLVED -- see the ace.size section above.")
-    info("m1 (acestart clamp vs no-op for ACEIOBUF instructions) is UNRESOLVED -- see the "
-         "ACEIOBUF section above.")
+    info("m1 (acestart clamp vs no-op for ACEIOBUF instructions) is RESOLVED as the "
+         "no-op reading -- see the ACEIOBUF section above.")
     info("m2 (transfer granularity) is now partly settled for CR transfers: ace.load and "
          "ace.store both say 'acestart ... is a multiple of 16 ... loads/stores data in "
          "16-byte chunks'. This model halts CR transfers only at 16-byte boundaries and "

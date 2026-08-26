@@ -107,30 +107,6 @@ to defer but collectively preclude candidacy until at least provisionally resolv
 
 ---
 
-**M10 — ECC state machine: _Set_Signature_ is a dead end; verification is unreachable as written**
-FIXED — the "Allowed State Transitions" block of `<<ACE-ECC>>` now names the five _Set_ states
-collectively, lets any two of them transition freely (and to themselves), admits all of them as
-sources for _Point_Mul_/_Sign_Generate_/_Sign_Verify_, and completes
-_Point_Mul_ -> _Output_ -> _Success_. This also supplies the definition of "the _Set_ states"
-that `<<ACE-EdDSA>>` already referred to. `kat/ecc-kat.py` retains the pre-fix relation as a
-regression check. See also K13, which closes the remaining reachability gap — signing and then
-verifying within one CC — by making the `Xs` field-disposal bits uniform, so that `Signature`
-survives the mandatory return to _Ready_ unless it is explicitly discarded.
-
-- **Rationale:** By Generic Rule 2 (`src/ace-ISA-algorithms.adoc:182`), any transition not
-  explicitly allowed invalidates the CR. The transition list omits _Set_Signature_ from both the
-  free-transition group and the "From any of …" list, so after loading a signature no legal exit
-  exists — ECDSA verification cannot be performed following the letter of the spec.
-- **Location:** `src/ace-ISA-algorithms.adoc:3287-3303`: free transitions are "between
-  _Set_Generator_, _Set_Scalar_, _Set_Hash_, and _Set_SecondPt_"; departures to
-  _Point_Mul_/_Sign_Generate_/_Sign_Verify_ are "From any of _Ready_, _Set_Generator_,
-  _Set_Scalar_, _Set_Hash_, _Set_SecondPt_" — _Set_Signature_ appears in neither, although
-  _Sign_Verify_ requires `HasSignature`.
-- **Resolution:** Add _Set_Signature_ (and, for EdDSA, _Set_Ctx_ — the EdDSA subsection partially
-  patches this only for its own states) to both lists.
-
----
-
 **M11 — No liveness or state-contract for multi-instruction management processes**
 
 - **Rationale:** Forward progress is guaranteed per instruction, but the
@@ -181,10 +157,6 @@ survives the mandatory return to _Ready_ unless it is explicitly discarded.
 
 ### Minor
 
-**m1 — `acestart` clamping vs. no-op contradiction.** `src/ace-ISA-unpriv.adoc:1253-1254` says that
-when an ACEIOBUF instruction is issued with `acestart` > `aceiobuftop`, "`acestart` will be set to
-`aceiobuftop` first"; `src/ace-ISA-unpriv.adoc:2696,2761` say the operation "does nothing and
-`acestart` is unchanged". Pick one (recommend: no-op, `acestart` unchanged) and delete the other.
 
 **m4 — OCB nonce handling.** `N_len` is only constrained to 6…120
 (`src/ace-ISA-algorithms.adoc:1638`), but `bswap(N[N_len-1:0])` (`src/ace-ISA-algorithms.adoc:1700`)
@@ -322,8 +294,8 @@ Beyond the findings above (C1's snippet mismatch, C2 vs. Book 4's validity note,
 2. **Normative-status and trap-model repairs:** M1 (promote forward-progress text), M6/M7 (fault
    binding for background completion; `ace_exc_fatal` delivery), M8 (reset table), M14 (`macecsk`
    flag rule, reserved `ace.mgmt` immediates), M9 (bounded-UNPREDICTABLE clause).
-3. **Algorithm-book completeness:** M10 (ECC transitions), M12 (FIPS 203/204 validation), M5
-   (scope or specify `ace.derive`), m4–m6, m8, m15.
+3. **Algorithm-book completeness:** ~~M10 (ECC transitions)~~ *(done)*, M12 (FIPS 203/204
+   validation), M5 (scope or specify `ace.derive`), m4–m6, m8, m15.
 4. **Conformance and ARC-track items:** M13 (priv conformance matrix), M15 (freeze ACEV or
    re-scope), m17 (opcodes/naming), cause-code allocation, `misa`/ACES placement, Smstateen
    argument, RVWMO axiomatization plan.
@@ -361,6 +333,54 @@ Beyond the findings above (C1's snippet mismatch, C2 vs. Book 4's validity note,
 
 #########################################################################################################
 
+
+**FIXED m1 — `acestart` clamping vs. no-op contradiction.**
+
+- **Issue:** The `acestart` CSR description said that when an ACEIOBUF instruction is issued with
+  `acestart` > `aceiobuftop`, "`acestart` will be set to `aceiobuftop` first", while `ace.input`
+  and `ace.output` said the operation "does nothing and `acestart` is unchanged". `aceiobuftop`'s
+  own description stated the no-op only for the exact-equality case `acestart` = `aceiobuftop`,
+  leaving the strictly-greater case to the clamp.
+- **Resolved as the no-op reading.** For ACEIOBUF operands `acestart` is now explicitly *not*
+  clamped: if `acestart` {ge} `aceiobuftop` the operand window [`acestart`, `aceiobuftop`) is
+  empty, so the instruction performs no operation, writes nothing, causes no state transition, and
+  leaves `acestart` unchanged. The `aceiobuftop` description was widened from `=` to {ge} and now
+  says the clamp does not happen; the `acestart` description states the same rule and
+  cross-references `ace.input`/`ace.output`; the resolved-TODO note in the introduction was
+  corrected, since it had recorded the clamp as the resolution.
+- **Not affected:** the clamp for CR-directed transfers (`ace.load`/`ace.store`/`ace.mv`, bounded
+  by the PI/SCC length in bytes) is a separate rule that nothing contradicts, and is unchanged.
+- **Verification:** `kat/mgmt-kat.py` already modelled the no-op reading; it now additionally
+  asserts that `acestart` survives unclamped at `aceiobuftop`, at `aceiobuftop` + 1, and far above
+  it — the strictly-greater cases the old wording left ambiguous.
+
+---
+
+**FIXED M10 — ECC state machine: _Set_Signature_ is a dead end; verification is unreachable as written**
+
+- **Rationale:** By Generic Rule 2 (`src/ace-ISA-algorithms.adoc:182`), any transition not
+  explicitly allowed invalidates the CR. The transition list omitted _Set_Signature_ from both the
+  free-transition group and the "From any of …" list, so after loading a signature no legal exit
+  existed — ECDSA verification could not be performed following the letter of the spec.
+- **Location:** `src/ace-ISA-algorithms.adoc`, `<<ACE-ECC>>` "Allowed State Transitions": free
+  transitions were "between _Set_Generator_, _Set_Scalar_, _Set_Hash_, and _Set_SecondPt_";
+  departures to _Point_Mul_/_Sign_Generate_/_Sign_Verify_ were "From any of _Ready_,
+  _Set_Generator_, _Set_Scalar_, _Set_Hash_, _Set_SecondPt_" — _Set_Signature_ appeared in neither,
+  although _Sign_Verify_ requires `HasSignature`.
+- **How it was fixed:** The block now names the five _Set_ states collectively, lets any two of
+  them transition freely (and to themselves), admits all of them as sources for
+  _Point_Mul_/_Sign_Generate_/_Sign_Verify_, and completes _Point_Mul_ -> _Output_ -> _Success_,
+  which previously stopped at _Output_ with no legal exit. Defining "the _Set_ states" also
+  supplies the term that `<<ACE-EdDSA>>` already referred to without a definition.
+- **Related:** K13 closes the remaining reachability gap — signing and then verifying within one
+  CC — by making the `Xs` field-disposal bits uniform, so that `Signature` survives the mandatory
+  return to _Ready_ unless Bit 6 explicitly discards it.
+- **Verification:** `kat/ecc-kat.py::test_m10_dead_end` keeps the pre-fix transition relation as a
+  regression check: it re-runs the breadth-first search, records that the old relation reached no
+  state from _Set_Signature_, and asserts that the current one reaches _Sign_Verify_.
+  `test_sign_then_verify_one_cc` walks the full sign→verify sequence end to end.
+
+---
 
 **FIXED C1 — `ace.load`/`ace.store` memory-address ↔ serialized-offset mapping is undefined under nonzero `acestart`**
 
@@ -821,9 +841,9 @@ the *j*-th-byte-after-MDH rule; `ace.mgmt` clears `acestart`; the Book 4 import 
 `16(t6)`), **C2 resolved** (validity split by operation; import accepts any _State_), **C3
 resolved** for the deadlock (the illegal-instruction list now exempts the `macecsk` group).
 **M2 remains unresolved** (Forms B/C still return `32`, against the synopsis, `ace.avail` and Book
-4's `beqz`), **m1 remains unresolved** (the `aceiobuftop` clamp still coexists with the
-`ace.input`/`ace.output` no-op), and **m2 is only partly settled** (the transfer instructions now
-say 16-byte chunks, but `<<ACE-forward-progress>>` still states a 1-byte granule). Three residues:
+4's `beqz`), **m1 has since been resolved** in favour of the no-op reading modelled here (see
+FIXED m1), and **m2 is only partly settled** (the transfer instructions now say 16-byte chunks,
+but `<<ACE-forward-progress>>` still states a 1-byte granule). Three residues:
 
 **K23 —** `ace.store` still opens with "starting with the 8th byte of the MDH" and "`acestart` …
 starting from 8 or 16 depending on the use of `ace.getmdl`". Both contradict the new rule and the
