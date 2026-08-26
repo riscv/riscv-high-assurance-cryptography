@@ -609,3 +609,241 @@ no numbered rules.
 `ACE-alg-notation`).
 
 ---
+
+# Part II — Findings from the Machine-Checked KAT Suite
+
+_Added after the narrative review above. A companion suite of 18 known-answer-test harnesses in
+`kat/` models the specification's algorithms and state machines directly from the normative text
+and checks them against published standard vectors. `python3 kat/run-kats.py` runs all 18 in ~33 s;
+all pass. The findings below were produced or confirmed by that exercise; several could not have
+been found by reading alone._
+
+## 7. Suite Structure and Anchor Levels
+
+`kat/common.py` provides the ACE notation layer (little-endian values, `@`/`cat`, `bswap`, `bin`)
+and self-tested primitives: AES-128/192/256 with an algorithmically generated S-box (FIPS 197
+C.1–C.3), GHASH multiplication (SP 800-38D §6.3), POLYVAL `Montmul` (RFC 8452 App. A), and the
+XTS/OCB doublings (SP 800-38B D.1 subkey). Each harness additionally implements an independent
+byte-string *reference* straight from the source standard, so that "ACE model vs. standard" and
+"ACE model vs. reference" are separate signals.
+
+Anchor levels are stated honestly per harness and are **not** uniform:
+
+| Harness | Vectors / provenance | Anchor level |
+|---|---|---|
+| `ecb-kat.py` | FIPS 197 C.1–C.3; SP 800-38A F.1.1–F.1.6; GB/T 32907 Ex.1, Ex.2 (full 10⁶-round iteration), A.2.1 | standard-vector (no published SM4 *decrypt* vector: inversion only) |
+| `ctr-kat.py` | SP 800-38A F.5.1/F.5.3/F.5.5; XCTR from `google/hctr2` test vectors | standard-vector (CTR); reference-impl (XCTR); reference-consistency (nonce/counter splits) |
+| `xts-kat.py` | IEEE 1619 / SP 800-38E vectors incl. ciphertext stealing (via Botan `xts.vec`) | standard-vector, both directions incl. CTS |
+| `gcm-kat.py` | McGrew–Viega / SP 800-38D cases 1–6, 13–18 | standard-vector |
+| `gcmsiv-kat.py` | RFC 8452 App. C — 14 vectors incl. counter-wrap, with published intermediates | standard-vector incl. intermediates |
+| `scc-kat.py` | RFC 8452 App. A/C for the shared functions | `AESE256`/`POLYVAL`/`RFC8452_KeyDeriv` standard-anchored; the nonce-less sealing construction **self-consistent only** (no vector can exist), with printed regression vectors |
+| `ocb-kat.py` | RFC 7253 App. A — all 16 TAGLEN128 samples, TAGLEN96, the long iterated vector, and the published `L_*`/`Ktop`/`Stretch`/`Offset_0` intermediates | standard-vector, formula-by-formula |
+| `cmac-kat.py` | RFC 4493 / SP 800-38B D.1–D.3 incl. published L/K1/K2 | standard-vector |
+| `sha2-kat.py` | FIPS 180-4 test strings, six functions | standard-vector; constants *derived* from prime roots, not transcribed |
+| `sm3-kat.py` | GB/T 32905-2016 App. A (both vectors) + 270 lengths vs. reference | standard-vector |
+| `hmac-kat.py` | RFC 4231 cases 1–4, 6–7 × SHA-224/256/384/512; SHA3-256/512 vs. oracle | standard-vector (SHA-2); oracle (SHA-3, whose `H` the spec delegates) |
+| `shake-kat.py` | FIPS 202 / CSRC example values; Keccak-f[1600] from scratch | standard-vector |
+| `kmac-kat.py` | SP 800-185 `KMAC_samples.pdf` and `KMACXOF_samples.pdf` — all 12 samples | standard-vector |
+| `ascon-kat.py` | `ascon/ascon-c` NIST-final genkat; reference validated against the **complete** files (1089 AEAD + 1025 Hash + 1025 XOF + 1089 CXOF records) | standard-vector |
+| `ecc-kat.py` | RFC 6979 A.2.5–A.2.7; RFC 8032 7.1/7.3/7.4; GM/T 0003.5 App. A | standard-vector; **Brainpool parameter-validation + round-trip only** (no published ECDSA KATs) |
+| `mlkem-kat.py` | NIST ACVP-Server `internalProjection.json`, with `tcId`s, incl. `encapsulationKeyCheck`/`decapsulationKeyCheck` | standard-vector; full FIPS 203 implementation |
+| `mldsa-kat.py` | NIST ACVP-Server, incl. `externalMu` groups matching the ACE interface | standard-vector incl. hedged `Sign_internal`; full FIPS 204 implementation |
+| `mgmt-kat.py` | none applicable | models Book 1 state machines; toy seal clearly labelled; 403 checks |
+
+Every harness carries at least one declared negative control, and the runner fails a harness whose
+negative control stops firing — so a test that has lost its power to discriminate is reported
+rather than silently passing. `gcm-kat.py` further asserts a minimum number of *observable*
+vectors per control (with empty AAD and empty plaintext, the swapped-length-block and
+little-endian-counter models coincide with the correct one).
+
+## 8. New Findings
+
+### Major
+
+**K1 — `RFC8452_KeyDeriv` is undefined for AES-128-GCM-SIV.**
+`<<ACE-SCC-RFC8452-derivation>>` types the function `key : bits(256)`, builds it from `AESE256`
+over counter blocks 0–5, and returns `enc_key : bits(256)`. But `<<ACE-GCM-SIV-mode>>` declares
+`k` = 128|`k` and its _Set_Aux_Value_ calls that same function, and `AES128_GCM_SIV` is an
+architected encoding (Type 0, Mode 6). For AES-128 the derivation must use AES-128 over counter
+blocks 0–3 with a 128-bit `enc_key`; nothing in the document says so, so a conforming
+AES-128-GCM-SIV cannot be built from the text. *Resolution:* generalize the signature to
+`bits(k)`/`AESE(k)` with the block count `4 + k/128`, or state the `k` = 128 case explicitly.
+(Confirmed against RFC 8452 C.1 intermediates by `gcmsiv-kat.py`.)
+
+**K2 — `<<ACE-Ascon-CXOF128>>` omits the mandatory 64-bit customization-length field.**
+The section says only that "the message is prepended with the customization string" and delegates
+padding to the caller. SP 800-232 §5.3 requires the absorbed prefix to be
+`bin(8·len(Z), 64) @ pad(Z, 64)` — a 64-bit little-endian *bit-length* field ahead of `Z`.
+Following the ACE text literally produces output that does not match the official CXOF128 vectors,
+and because the field is not mentioned at all, a caller cannot construct a conformant input. This
+is a conformance break, not an ambiguity. *Resolution:* state the length-field prefix explicitly.
+
+**K3 — `<<ACE-HMAC>>` does not say which rendering of `state` the inner-hash slice applies to.**
+The step `inner <- state[d+state_offset-1 : state_offset]` is well-defined only once one knows
+whether `state` denotes the raw chaining variables or the digest-emission form of
+`<<ACE-SHA-2>>` (`bswap(bin(H~i~,w))` at byte `i·w/8`). Only the latter reproduces RFC 4231 for the
+truncated variants: under the naive reading, HMAC-SHA-224 and HMAC-SHA-384 truncate the wrong end
+of each word and produce wrong tags. *Resolution:* make the rendering explicit at that step.
+
+**K4 — the `ace.mv` extraction gate makes the Book 4 `Zklmv` partial-export loop an illegal
+instruction.** The extraction forms of `ace.mv` require _ConfigStatus_ = `ace_cfgst_exporting`, but
+export-start of a *not-complete* CR leaves _ConfigStatus_ at `ace_cfgst_provisioning`/`importing`
+(<<ACE-instruction-manage>>). The Book 4 `Zklmv` export sequence is therefore illegal in exactly
+the partial-CR case it exists to serve. The same gap affects `ace.store`: for a partial CR nothing
+distinguishes "prepared for export" from "mid-provisioning", so a stray `ace.store` can read a CR
+that was never prepared for export. *Resolution:* either have export-start set a distinguishing
+_ConfigStatus_ (or flag) for partial CRs, or widen the `ace.mv`/`ace.store` gates to admit the
+partial statuses when an export has been opened.
+
+**K5 — XCTR's counter origin is unspecified and defaults to a non-interoperable value.**
+State _Ready_ sets `ctr` = 0, so the first keystream block is `keystream_block(IV xor 0)` =
+`E_K(IV)`. HCTR2 — the construction XCTR exists to serve — numbers its counter from 1, so the two
+streams differ (asserted by `ctr-kat.py`). ACE can express HCTR2 only if software first issues the
+Form B "set initial counter" with `Xs` = 1, which the section never says. The commented-out line
+`// (ctr is set to 1 if the algorithm is LFSR-based)` suggests the question was raised and left
+open. *Resolution:* name the expected counter origin for each X-mode instantiation.
+
+### Minor
+
+**K6 — `<<ACE-HMAC>>`'s `b` is undefined for SHA-3.** It is "the input block size of the underlying
+hash function", but `<<ACE-SHA-3>>` never defines a block size; its table names `b` the *rate*. The
+rate reading (1088/576) is confirmed correct against the oracle. Add a clause.
+
+**K7 — the two-block padding clause of `<<ACE-SHA-3>>` is unreachable at the architectural
+interface.** `|S| = 2b − block_base` requires `b − block_base < |D| + 2 ≤ 6`, but `ace.exec`
+transfers whole bytes, so `block_base` is always a multiple of 8 and `b − block_base ≥ 8`. The
+clause is dead code for any legal instruction sequence, reachable only through `process_VLI`'s
+bit-level generality. Either scope it explicitly to bit-granular callers or drop it for SHA-3.
+
+**K8 — `<<ACE-KMAC>>` output-padding wording.** "the last byte may be zero-padded in its
+significant bits" should read *non-significant* bits; moreover the spec's own _Hash_Output_ loop
+copies raw state bits, so the excess bits are squeeze output rather than zeros. Both readings agree
+on the `L` significant bits; the text should say which applies.
+
+**K9 — GCM's blanket granularity rule contradicts its own _Set_Aux_Value_ state.** "`ACELEN` must
+be an integer multiple of `b`" is contradicted by _Set_Aux_Value_, which is `process_VLI` with
+`granularity` = `b` and therefore *requires* a short final transfer for a 96-bit IV (and for the
+trailing 12 bytes of the 60-byte IVs of test cases 6/18). Scope the rule to the block-consuming
+states.
+
+**K10 — `<<ACE-keystream-modes>>` Form C refers to a nonexistent operand.** The paragraph says the
+operations apply to "each of the `ACELEN/b` `b`-bit blocks of `INPUT`", but Form C
+`ace.exec OUTPUT, Kn|K{Xn}` has no `INPUT` — a keystream generator consumes nothing. Should read
+`OUTPUT`. ("the above *three* commands" is also off by one.)
+
+**K11 — over-run rules are inconsistent across the PQC states.** ML-DSA ignores excess bits in
+`_*_Input_` states but transitions to _Invalid_ on an over-long `_pubkey_Output_`/`_Sign_Output_`
+transfer; ML-KEM states no over-run rule for its `_*_Output_` states at all. Three treatments of
+one situation.
+
+**K12 — the `_AuxInfo_` hash-function encoding is not defined in the document.** ML-DSA requires
+`_AuxInfo_` to "encode a hash function that FIPS 204 admits", with the format of the _Algorithm_
+and _AlgorithmPolicy_ fields — but that table is RVI-maintained and not reproduced here, so the
+requirement is untestable and unimplementable from the document alone. The `ace.derive` destination
+key length has the same dependency.
+
+**K13 — ECC `Xs` bit 3 is a duplicate.** The Ready-return text maps "Bit 0, 1, 2, resp., 3" onto
+"`Generator` reset, `SecondPt`, `Scalar`, resp., `SecondPt` erased" — `SecondPt` appears twice, so
+bit 3 carries no distinct meaning. One entry presumably meant another field.
+
+**K14 — point-at-infinity as a `_Point_Mul_` input is unspecified.** The state must verify the base
+point is on the curve, but the text never says whether the all-ones sentinel is an acceptable
+`SecondPt`. Explicit rejection is the safer rule.
+
+**K15 — the enforcement point of secp521r1's 55-zero-msb rule is unstated.** The constraint is
+given but not where a violating value is caught; `ecc-kat.py` rejects at field-load time.
+
+**K16 — the new `managedcr` CSR is unspecified** as to reset value, WARL behaviour on a software
+write, and interaction with `ace.clear` of the managed CR.
+
+**K17 — after export-start of a not-complete CR, the architectural state does not say which process
+the closing `ace.mgmt` completes.** _ConfigStatus_ remains `provisioning`/`importing`, so the same
+state means both "resume loading" and "finish exporting"; a model needs one non-architectural bit
+to disambiguate.
+
+**K18 — `ace.restricth` treats an over-large `_ExpirationDate_` asymmetrically:** it is silently
+ignored, whereas every other illegal widening invalidates the CR.
+
+**K19 — the ordering of the UsagePolicy check against the expiration check at dispatch is
+unstated.** `mgmt-kat.py` checks UsagePolicy first, so that an unauthorised caller cannot destroy
+CC content by triggering expiration.
+
+**K20 — CMAC's K2 branch is undefined at `last_blk_len` = `b`** (the padding width
+`zeros(b − 8 − last_blk_len)` goes negative). Harmless as written because the K1 branch splits that
+case off first, but it means the branch split is load-bearing rather than an optimization; state
+the `0 ≤ last_blk_len < b` precondition if m6's wording is revisited.
+
+**K21 — ECB's "least significant positions first" rule is unobservable for ECB itself.** Each block
+is read from and written to the same bit position, so loop order cannot affect the result; what the
+sentence actually fixes is the value↔string block correspondence (which is what `ecb-kat.py`
+tests). Since it is declared to hold "here, and in the rest of this document" it does carry weight
+for chaining modes, but as placed it reads like a constraint where none is observable. Also, ECB
+says "If `ACELEN` > `b`" where the keystream and XEX sections say "If `ACELEN` is a multiple of
+`b`"; the latter is more precise.
+
+**K22 — GCM editorial:** in the _Set_Aux_Value_ overlay the `input_base` row's second sentence
+describes `block_base`; the _Enc_Tag_Finalize_ INPUT expression is typeset with a doubled `@`
+across the line break.
+
+### Residues of the fixes applied during this review
+
+Confirmed by `mgmt-kat.py` against the current text: **C1 resolved** (both instructions now state
+the *j*-th-byte-after-MDH rule; `ace.mgmt` clears `acestart`; the Book 4 import snippet reads
+`16(t6)`), **C2 resolved** (validity split by operation; import accepts any _State_), **C3
+resolved** for the deadlock (the illegal-instruction list now exempts the `macecsk` group).
+**M2 remains unresolved** (Forms B/C still return `32`, against the synopsis, `ace.avail` and Book
+4's `beqz`), **m1 remains unresolved** (the `aceiobuftop` clamp still coexists with the
+`ace.input`/`ace.output` no-op), and **m2 is only partly settled** (the transfer instructions now
+say 16-byte chunks, but `<<ACE-forward-progress>>` still states a 1-byte granule). Three residues:
+
+**K23 —** `ace.store` still opens with "starting with the 8th byte of the MDH" and "`acestart` …
+starting from 8 or 16 depending on the use of `ace.getmdl`". Both contradict the new rule and the
+new "`ace.mgmt` … sets `acestart` to zero", and the `getmdl`-dependence is unimplementable:
+hardware cannot observe which `getmd*` software executed earlier.
+
+**K24 —** the `ace.load` _Description_ now contains a paragraph describing `ace.store` — copy-paste
+debris in the wrong instruction.
+
+**K25 —** "*State* and *StateExtension* must be zero, i.e., upon provisioning, *State* is always
+*Ready*" conflates the MDH input value 0 with the resulting state _Ready_ (1).
+
+## 9. Confirmations of Part I Findings
+
+Demonstrated, not merely asserted:
+
+- **M4** (`process_VLI` bit/byte clash): under the literal reading a resumed absorption restarts
+  eight times too early and the message tail is never absorbed — wrong digests, not a cosmetic
+  defect. Confirmed by `shake-kat.py`, `sha2-kat.py`, `kmac-kat.py`, `gcm-kat.py`.
+- **M10** (ECC `_Set_Signature_` dead end): a breadth-first search over the transition relation as
+  literally written finds no state reachable from `_Set_Signature_`; verification is unreachable.
+  **Still present in the current text.**
+- **M12** (FIPS 203/204 validation): `mlkem-kat.py` shows the literal behaviour — a malformed `ek`
+  with a coefficient ≡ q is accepted and `_Encapsulate_` proceeds — beside the conforming
+  behaviour, anchored on NIST's own malformed-key test cases.
+- **m4** (OCB): `bswap(N[N_len-1:0])` undefined for non-byte-multiple `N_len`; and the
+  `index = ones(48)` guard present in `_Enc_Last_Block_` is absent from `_Dec_Last_Block_`.
+- **m5** (Ascon padding): a caller obeying the prose double-pads and produces wrong ciphertext.
+- **m6** (CMAC empty message): with `last_blk_len` = 0, feeding `INPUT` = 0 and `INPUT` = `ones(128)`
+  both yield the published empty-message tag for all three key sizes — confirming the proposed
+  wording "INPUT is ignored".
+- **m8** (GCM-SIV transitions): the missing state-entry Forms forced the model to transition
+  implicitly, and on the decrypt path to invent a zero-length call purely to enter _Decrypt_.
+- **m18** (sealing domain separation): segment binding rests entirely on `AD2[1]` = `SIV`; both
+  segments use the same derived keys with no domain-separation constant.
+
+## 10. Ambiguities Left Unmodelled
+
+Reported by `mgmt-kat.py` as too under-determined to model, and therefore review input in their own
+right: the behaviour of non-listed instructions in _Success_/_Failure_ (rule 2 names only the
+permitted set); the effect of `ace.exec` in _Ready_ ("no `ace.exec` may be executed", with no stated
+consequence); Error-State severity ordering when two conditions coincide; `ace.derive`'s effect on
+the two CRs (cf. M5); CRF-capacity discovery (no mechanism exists); and the CR state left behind
+when `ace.restrict*` raises `ace_exc_out_of_memory` and the handler frees nothing.
+
+## 11. Correction to Part I
+
+The SM3("abc") digest quoted when commissioning the harnesses was wrong. The GB/T 32905-2016
+Appendix A value is
+`66c7f0f462eeedd9d1f2d46bdc10e4e24167c4875cf2f7a2297da02b8f4ba8e0`, which both the from-scratch ACE
+model and an independent reference reproduce. No specification text was affected; recorded here
+because `sm3-kat.py` documents the discrepancy in its header.
