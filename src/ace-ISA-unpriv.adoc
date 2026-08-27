@@ -827,9 +827,9 @@ A requested Locality may be substituted, but never dropped. If no replacement ca
 because the requested entry is unconfigured and no later entry of its chain is configured
 either — then the Metadata is invalid, and the CR transitions to Error State _Invalid_.
 
-The value `3` of bits [5:4] of the _Locality_ field is reserved: the Boot Session Group defines
-only _No Boot Binding_ (0), _PhysBootScrt_ (1), and _VirtBootScrt_ (2). A PI or SCC whose
-_Locality_ field carries it is invalid Metadata, and the CR transitions to Error State _Invalid_.
+The value `3` of bits [5:4] of the _Locality_ field is reserved:
+A PI or SCC whose _Locality_ field carries it is invalid Metadata,
+and the CR transitions to Error State _Invalid_.
 
 _HLocality_ is active only when the H extension is enabled and V=1; otherwise, it mirrors _MLocality_.
 
@@ -1397,7 +1397,16 @@ Normal execution cannot resume after an unauthenticated Debug entry: the ACE sta
 
 ACE provides a number of unprivileged instructions.
 This section specifies their semantics and encodings.
-Under opcode `custom-2`, the `funct3` value 4 is reserved.
+// Under opcode `custom-2`, the `funct3` value 4 is reserved.
+
+[IMPORTANT]
+====
+The `custom-0`, `custom-1`, and `custom-2` opcodes used throughout this section are placeholders
+for development and prototyping only. The RISC-V unprivileged ISA reserves the `custom-`__n__
+opcodes permanently for non-standard extensions, so they cannot carry a ratified extension. Final
+encodings will be allocated from standard opcode space by RVI during ratification; implementers
+must not treat the encodings in this document as a stable interface.
+====
 
 The notation `K{Xd}` denotes the CR whose index is held in GPR `Xd`.
 `Kn|K{Xn}` indicates two alternative encodings: a 5-bit immediate CR index (`Kn`) or a CR number supplied by GPR `Xn`.
@@ -2280,7 +2289,6 @@ _Encoding_::
 --
 `ace.restrict` is an R-type instruction.
 The encoding shares opcode and `func3` with `ace.exec`, but `func2` (i.e., the two msbs of `func7`) is `0b01`.
-x
 [wavedrom, , svg]
 ....
 {reg:[
@@ -3437,14 +3445,27 @@ i.e., <<ACE-SCC-GCM-SIV-enc>> and <<ACE-SCC-GCM-SIV-dec>>:
 * `N` is a 96-bit Nonce; and
 * `SIV` is a 128-bit SIV/tag.
 
+[NOTE]
+====
+Another difference with respect to AES-GCM-SIV is that we add a further domain separation bit
+to generate the encryption keystream. Since we are encrypting two segments (the fixed architecture-defined content and the optional implementation-dependent content) we replace bit 126 of SIV, resp. SIV2, with 0 and 1 in the input to keysteam generation to distinguish them.
+The two content segments are keyed identically. No attack follows from this, since a SIV=SIV2 collision
+happens with negligible probability; but the separation is then a property of the values rather than of the
+construction. Forcing these bits to be different
+makes the separation unconditional, which is what a security proof requires.
+====
+
 [[ACE-SCC-GCM-SIV-enc]]
 .AES-GCM-SIV Encryption for SCC Generation
 []
 ----
-function SCC_Encrypt(AD[] : array of bits(128), N : bits(96),
+function SCC_Encrypt(AD[] : array of bits(128), N : bits(96), sep: bits(1),
     P[] : array of bits(128), K : bits(256), len_AD : int, len_PC : int)
   → {SIV : bits(128), C[] : array of bits(128)} =
 {
+  if len_AD > 0x0010_0000 || len_PC > 0x0010_0000 then
+    error;
+
   enc_key, auth_key ← RFC8452_KeyDeriv(K,N);
   SIV ← POLYVAL(auth_key, AD || P, len_AD + len_PC);
   SIV[95:0] ← SIV[95:0] xor N;
@@ -3452,7 +3473,7 @@ function SCC_Encrypt(AD[] : array of bits(128), N : bits(96),
 
   foreach(i from 0 to len_PC - 1) do:
     C[i] ← P[i] xor AESE256(enc_key,
-                   1 @ SIV[126:32] @ bin((int(SIV[31:0]) + i) mod 2**32, 32));
+             1 @ sep @ SIV[125:32] @ bin((int(SIV[31:0]) + i) mod 2**32, 32));
 
   return ( SIV, C[] );
 }
@@ -3463,14 +3484,18 @@ function SCC_Encrypt(AD[] : array of bits(128), N : bits(96),
 []
 ----
 function SCC_Decrypt(AD[] : array of bits(128), N : bits(96), SIV : bits(128),
-    C[] : array of bits(128), K : bits(256), len_AD : int, len_PC : int)
+    sep: bits(1), C[] : array of bits(128), K : bits(256),
+    len_AD : int, len_PC : int)
   → {correct : bool, P[] : array of bits(128)} =
 {
+  if len_AD > 0x0010_0000 || len_PC > 0x0010_0000 then
+    error;
+
   enc_key, auth_key ← RFC8452_KeyDeriv(K,N);
 
   foreach(i from 0 to len_PC - 1) do:
     P[i] ← C[i] xor AESE256(enc_key,
-                   1 @ SIV[126:32] @ bin((int(SIV[31:0]) + i) mod 2**32, 32));
+             1 @ sep @ SIV[125:32] @ bin((int(SIV[31:0]) + i) mod 2**32, 32));
 
   s ← POLYVAL(auth_key, AD || P, len_AD + len_PC);
   tmp ← s;
@@ -3526,11 +3551,11 @@ to create the serialized, encrypted and authenticated SCC from the CR.
 .. foreach(_j_ from 0 to 10) do:
 ... If `saved_MDH`._Locality_ includes Locality #j, then ``AD[len_AD]`` <-  ``LST[``_j_``]``, ``len_AD`` <- ``len_AD`` + 1
 .. `len_PC` <- length of Section 3.
-.. `SIV`, `Content1~CT~[]` <- ``SCC_Encrypt(AD, zeros(96), K(i).Content1~PT~[], CSK, len_AD, len_PC)``
+.. `SIV`, `Content1~CT~[]` <- ``SCC_Encrypt(AD, zeros(96), 0, K(i).Content1~PT~[], CSK, len_AD, len_PC)``
 . Second, if _ImpDataLen_ {ne} 0, then the implementation-dependent data is processed:
 .. `len_AD2` <- 2, ``AD2[0]`` <- ``K(i)``.``IMPQUAL``, ``AD2[1]`` <- `SIV`.
 .. `len_PC2` <- length of Section 6.
-.. `SIV2`, `Content2~CT~[]` <- ``SCC_Encrypt(AD2, zeros(96), K(i).Content2~Plaintext[], CSK, len_AD2, len_PC2)``
+.. `SIV2`, `Content2~CT~[]` <- ``SCC_Encrypt(AD2, zeros(96), 1, K(i).Content2~PT~[], CSK, len_AD2, len_PC2)``
 . Finally, output `saved_MDH`, then `SIV` and `Content1~CT~[]`, and, if ImpDataLen {ne} 0, `IMPQUAL`, `SIV2` and `Content2~CT~[]`.
 --
 
@@ -3563,12 +3588,12 @@ When the import of the SCC of a fully configured CR is completed,
  . foreach (`j` from 0 to 10) do:
  .. If `saved_MDH`._Locality_ includes Locality #j, then ``AD[len_AD]`` <-  ``LST[j]``, ``len_AD`` <- ``len_AD`` + 1
  . `len_PC` <- length of Section 3.
- . `correct`, `K(i).Content1[]` <- ``SCC_Decrypt(AD, zeros(96), SIV, K(i).Content1[], CSK, len_AD, len_PC)``.
+ . `correct`, `K(i).Content1[]` <- ``SCC_Decrypt(AD, zeros(96), SIV, 0, K(i).Content1[], CSK, len_AD, len_PC)``.
  . If `correct` {ne} `true`, then reject the SCC, clear ``K(i)``, and set Error State _ace_state_import_auth_.
  . Second, if the Implementation VDS was loaded at Step 6 — that is, if `saved_MDH`._ImpDataLen_ {ne} 0 *and* the length was not adjusted at Step 5 — the implementation-dependent data is processed:
 .. `len_AD2` <- 2, ``AD2[0]`` <- ``K(i)``.``IMPQUAL``, ``AD2[1]`` <- `SIV`.
 .. `len_PC2` <- length of Section 6.
-.. `correct`, `K(i).Content2[]` <- ``SCC_Decrypt(AD2, zeros(96), SIV2, K(i).Content2[], CSK, len_AD2, len_PC2)``.
+.. `correct`, `K(i).Content2[]` <- ``SCC_Decrypt(AD2, zeros(96), SIV2, 1, K(i).Content2[], CSK, len_AD2, len_PC2)``.
  . If `correct` {ne} `true`, the Implementation VDS is discarded: `Content2[]` is dropped, _ImpDataLen_ is set to 0, and the import completes using only the architecture-dependent content. Only a failure of the first authentication (`SIV`) rejects the entire SCC.
 --
 
