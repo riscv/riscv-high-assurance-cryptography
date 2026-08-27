@@ -15,16 +15,18 @@ What this harness validates
     state machine (Ready / GenerateKeyPair / Encapsulate / Decapsulate /
     *_Input / *_Output), the `process_VLI`-based field loading with the transfer
     counter kept in the MDH _AlgorithmUse_ field, the unconditional Decaps with
-    implicit rejection indistinguishable to the caller, and the Form B
-    `ace.derive` flow that moves `sharedkey` into a new CC whose _UsagePolicy_ /
-    _Locality_ / Reserved bits come from the parent's _AuxInfo_.
+    implicit rejection indistinguishable to the caller, and the `ace.derive`
+    Form 01 flow that moves `sharedkey` into a secret field of a separately
+    provisioned CC, whose _UsagePolicy_ / _Locality_ must satisfy the
+    requirement recorded in this CC's _AuxInfo_ (review finding M5).
 
-3.  *Spec gap M12* (ACE-spec-review-0.7.0.md): the draft does not require the
-    FIPS 203 section 7.2 / 7.3 input validation, and it calls `ace_state_failure`
-    an "Error State" although state 23 is a valid state (src/ace-ISA-unpriv.adoc
-    <<ACE-states-valid>>).  This harness implements the checks per FIPS 203 and
-    labels them "per FIPS 203 (spec gap M12)"; the literal spec behaviour (no
-    check at all) is kept visible as a separate, labelled case.
+3.  *Review finding M12, since FIXED*: <<ACE-PQC-ML-KEM>> now requires the
+    FIPS 203 section 7.2 / 7.3 input checks and splits their outcome by kind --
+    a KEY check failure is a configuration error (Error State Invalid), a
+    CIPHERTEXT check failure is a data error (State Failure, a valid state).
+    The misnaming of `ace_state_failure` as an "Error State" is also gone.
+    The pre-fix behaviour (no checks at all) is retained as a labelled
+    regression case.
 
 Vector provenance
 -----------------
@@ -106,7 +108,7 @@ class MLKEMContext:
         # Provisioning Input is the 128-bit MDH alone (no key material).
         self.mdh = mdh_set(0, F_AUXINFO, auxinfo)
         self.mdh = mdh_set(self.mdh, F_STATE, S_READY)
-        # `validate` selects the FIPS 203 7.2/7.3 checks that the spec omits (M12).
+        # `validate` selects the FIPS 203 7.2/7.3 checks that <<ACE-PQC-ML-KEM>> now requires.
         self.validate = validate
         self._clear_all()
 
@@ -203,8 +205,9 @@ class MLKEMContext:
 
         if st == S_ENCAPSULATE:
             if self.validate and not K.check_encaps_input(self.encapsk, self.pset):
-                # per FIPS 203 7.2 (spec gap M12): the draft requires no such check.
-                self.mdh = mdh_set(self.mdh, F_STATE, S_FAILURE)
+                # FIPS 203 7.2 encapsulation key check.  A key check failure is a
+                # CONFIGURATION error -> Error State Invalid (<<ACE-PQC-ML-KEM>>).
+                self.mdh = mdh_set(self.mdh, F_STATE, S_INVALID)
                 return
             self.sharedkey, self.ciphertext = K.encaps_internal(
                 self.encapsk, rng_m, self.pset)
@@ -213,9 +216,13 @@ class MLKEMContext:
             return
 
         if st == S_DECAPSULATE:
-            if self.validate and not K.check_decaps_input(
-                    self.decapsk, self.ciphertext, self.pset):
-                # per FIPS 203 7.3 (spec gap M12)
+            if self.validate and not K.check_decaps_key(self.decapsk, self.pset):
+                # FIPS 203 7.3 decapsulation KEY check: configuration error.
+                self.mdh = mdh_set(self.mdh, F_STATE, S_INVALID)
+                return
+            if self.validate and not K.check_ciphertext(self.ciphertext, self.pset):
+                # FIPS 203 7.3 CIPHERTEXT type check: data error -> State Failure,
+                # a valid state; the caller may supply another ciphertext.
                 self.mdh = mdh_set(self.mdh, F_STATE, S_FAILURE)
                 return
             # "ML-KEM.Decaps is executed unconditionally. ... The caller cannot
@@ -228,26 +235,41 @@ class MLKEMContext:
 
         raise AssertionError(f'no Form D ace.exec defined in state {st}')
 
-    def derive(self, child_mdh_lo64, keybits):
-        """Form B `ace.derive`: bits [63:0] of the child MDH come from a GPR
-        (RV64) or GPR pair (RV32); the m least significant bits of `sharedkey`
-        become the child's key; the child's [79:64] are copied from the parent's
-        _AuxInfo_.
+    def derive(self, dest_mdh, length_bytes):
+        """`ace.derive` Form 01 (<<ACE-instruction-derive>>): the output of this
+        CC's ace.exec -- the shared key -- into a secret field of a second CR.
 
-        `keybits` (= m) is a property of the algorithm named in the child MDH's
-        _Algorithm_ field; that encoding table is maintained by RVI and is not in
-        the document, so the harness supplies m explicitly.
+        The destination CC is provisioned separately, so this models only the
+        transfer and the _AuxInfo_ policy requirement.  Returns the bytes written
+        into the destination secret field.
+
+        `length_bytes` is the `length` operand: a number of BYTES.  It is
+        ceil(m/8) for a destination algorithm whose key is m bits.
         """
-        if keybits > 256:
-            raise Invalidated('destination algorithm key longer than sharedkey')
-        child = child_mdh_lo64 & ((1 << 64) - 1)
-        aux = mdh_get(self.mdh, F_AUXINFO)          # 16 bits = [79:64] of the child
-        child |= aux << 64
-        key = int.from_bytes(self.sharedkey, 'little') & ((1 << keybits) - 1)
-        return child, key.to_bytes(keybits // 8, 'little')
-
+        if length_bytes > len(self.sharedkey):
+            raise Invalidated('length exceeds the shared key')
+        # <<ACE-PQC-ML-KEM>>: _AuxInfo_ is a REQUIREMENT on the destination CC,
+        # not a value copied into it.  Bits [79:64]: UsagePolicy [4:0],
+        # Locality [13:5], Reserved [15:14].
+        aux = mdh_get(self.mdh, F_AUXINFO)
+        req_usage, req_loc = aux & 0x1F, (aux >> 5) & 0x1FF
+        got_usage = mdh_get(dest_mdh, F_USAGEPOLICY)
+        got_loc = mdh_get(dest_mdh, F_LOCALITY)
+        # "at least as restrictive": every UsagePolicy bit required must be set,
+        # and the required Locality bits must all be present.
+        if (got_usage & req_usage) != req_usage or (got_loc & req_loc) != req_loc:
+            raise Invalidated('destination policies less restrictive than _AuxInfo_')
+        return self.sharedkey[:length_bytes]
 
 # ================================================================ tests
+
+def _raises(fn):
+    try:
+        fn()
+        return False
+    except Invalidated:
+        return True
+
 
 def t_sizes():
     print('\n-- Size table <<ACE-ML-KEM-sizes>> vs FIPS 203 --')
@@ -307,15 +329,15 @@ def t_decaps():
 
 
 def t_input_validation():
-    print('\n-- FIPS 203 7.2/7.3 input validation (spec gap M12) --')
+    print('\n-- FIPS 203 7.2/7.3 input validation (<<ACE-PQC-ML-KEM>>; M12 fixed) --')
     for v in VECTORS['ekCheck']:
         got = K.check_encaps_input(bytes.fromhex(v['ek']), v['pset'])
-        chk(f"encapsk check per FIPS 203 7.2 (spec gap M12)  {v['src']}  ({v['reason']})",
+        chk(f"encapsk check per FIPS 203 7.2 (<<ACE-PQC-ML-KEM>>)  {v['src']}  ({v['reason']})",
             got == v['pass'], 'accepted' if got else 'REJECTED')
     for v in VECTORS['dkCheck']:
         ct = bytes(K.sizes(v['pset'])[2])
         got = K.check_decaps_input(bytes.fromhex(v['dk']), ct, v['pset'])
-        chk(f"decapsk check per FIPS 203 7.3 (spec gap M12)  {v['src']}  ({v['reason']})",
+        chk(f"decapsk check per FIPS 203 7.3 (<<ACE-PQC-ML-KEM>>)  {v['src']}  ({v['reason']})",
             got == v['pass'], 'accepted' if got else 'REJECTED')
 
     # A hand-made malformed encapsk: one coefficient re-encoded as q (>= q).
@@ -324,25 +346,39 @@ def t_input_validation():
     t0 = K.byte_decode(12, ek[:384])
     bad = bytearray(ek)
     bad[:384] = K.byte_encode(12, [K.Q] + t0[1:])          # coefficient == q
-    chk('malformed encapsk (coefficient == q) rejected per FIPS 203 7.2 (spec gap M12)',
+    chk('malformed encapsk (coefficient == q) rejected per FIPS 203 7.2',
         K.check_encaps_input(bytes(bad), ps) is False)
     chk('the same encapsk is well-formed once the coefficient is reduced',
         K.check_encaps_input(ek, ps) is True)
 
-    # The literal spec text: no check is required, so Encaps just runs.  Kept
-    # visible as a labelled case (philosophy: do not silently patch the spec).
-    cc = MLKEMContext(ps, validate=False)
-    cc.setst(S_EK_IN); cc.exec_input(bytes(bad))
-    cc.setst(S_ENCAPSULATE); cc.exec_d(rng_m=bytes(32))
-    chk('literal spec text: malformed encapsk is NOT rejected, Encaps proceeds '
-        '(M12 -- FIPS 203 7.2 says it shall be checked)',
-        cc.state == S_CT_OUT and len(cc.ciphertext) == K.sizes(ps)[2])
+    # M12, now FIXED: the key check is required, and a KEY failure is a
+    # configuration error -> Error State Invalid.
     cc = MLKEMContext(ps, validate=True)
     cc.setst(S_EK_IN); cc.exec_input(bytes(bad))
     cc.setst(S_ENCAPSULATE); cc.exec_d(rng_m=bytes(32))
-    chk('with the FIPS 203 7.2 check added, Encaps goes to State Failure (23, a '
-        'VALID state -- the spec calls it an "Error State", M12)',
+    chk('malformed encapsk -> Error State Invalid (25), a key check being a '
+        'configuration error', cc.state == S_INVALID)
+    # A CIPHERTEXT of the wrong length is a data error -> State Failure (23),
+    # a VALID state, and the caller may retry with another ciphertext.
+    ek, dk = K.keygen_internal(bytes(32), bytes(32), ps)
+    cc = MLKEMContext(ps, validate=True)
+    cc.setst(S_DK_IN); cc.exec_input(dk)
+    cc.setst(S_CT_IN); cc.exec_input(bytes(K.sizes(ps)[2]))
+    # An _*_Input_ state zero-pads to the field width, so a wrong-length
+    # ciphertext cannot arrive through it; set the field directly to model one
+    # that reached the CC by import of a malformed SCC.
+    cc.ciphertext = cc.ciphertext[:-1]
+    cc.setst(S_DECAPSULATE); cc.exec_d()
+    chk('short ciphertext -> State Failure (23, a VALID state), not Invalid',
         cc.state == S_FAILURE)
+    # The pre-fix behaviour, kept as a regression check: with no checks at all a
+    # malformed encapsk was simply used and Encaps ran to completion.
+    cc = MLKEMContext(ps, validate=False)
+    cc.setst(S_EK_IN); cc.exec_input(bytes(bad))
+    cc.setst(S_ENCAPSULATE); cc.exec_d(rng_m=bytes(32))
+    chk('pre-fix behaviour (no checks): malformed encapsk was accepted and '
+        'Encaps proceeded -- what M12 reported',
+        cc.state == S_CT_OUT and len(cc.ciphertext) == K.sizes(ps)[2])
 
 
 def t_state_machine():
@@ -444,11 +480,11 @@ def t_state_machine():
 
 
 def t_derive():
-    print('\n-- Form B ace.derive: sharedkey -> child CC --')
+    print('\n-- ace.derive Form 01: sharedkey -> secret field of a provisioned CC --')
     ps = 768
     v = VECTORS['encaps'][1]
-    # AuxInfo carries the policies the child must have, in the format of MDH[79:64]:
-    #   UsagePolicy [4:0], Locality [13:5], Reserved [15:14].
+    # _AuxInfo_ states the policies the destination CC is REQUIRED to carry, in
+    # the format of MDH[79:64]: UsagePolicy [4:0], Locality [13:5], Reserved [15:14].
     usage, locality, reserved = 0b01011, 0b000101010, 0b10
     aux = usage | (locality << 5) | (reserved << 14)
     cc = MLKEMContext(ps, auxinfo=aux)
@@ -457,30 +493,39 @@ def t_derive():
     chk('sharedkey held in the CC equals the ACVP shared secret',
         cc.sharedkey.hex() == v['k'], v['src'])
 
-    child_lo = 0x0000_0000_0000_0000 | 0x123          # some symmetric algorithm
+    # A destination CC provisioned separately, carrying the required policies.
+    dest = mdh_set(mdh_set(0, F_USAGEPOLICY, usage), F_LOCALITY, locality)
     for m in (128, 192, 256):
-        child, key = cc.derive(child_lo, m)
-        exp = int.from_bytes(cc.sharedkey, 'little') & ((1 << m) - 1)
-        chk(f'ace.derive: child key = {m} least significant bits of sharedkey',
-            int.from_bytes(key, 'little') == exp and len(key) == m // 8)
-        chk(f'ace.derive (m={m}): child MDH[63:0] taken from the GPR operand',
-            sl(child, 63, 0) == child_lo)
-        chk(f'ace.derive (m={m}): child _UsagePolicy_/_Locality_/Reserved copied '
-            'from the parent _AuxInfo_',
-            mdh_get(child, F_USAGEPOLICY) == usage and
-            mdh_get(child, F_LOCALITY) == locality and
-            mdh_get(child, F_RES7978) == reserved)
-    chk('ace.derive: 256-bit child key is the whole sharedkey',
-        cc.derive(child_lo, 256)[1] == cc.sharedkey)
-    # the same sharedkey obtained by Decapsulate derives the same child
+        key = cc.derive(dest, m // 8)
+        chk(f'ace.derive: length = {m // 8} B transfers the {m} least significant '
+            'bits of sharedkey',
+            key == cc.sharedkey[:m // 8] and len(key) == m // 8)
+    chk('ace.derive: a 256-bit key is the whole sharedkey',
+        cc.derive(dest, 32) == cc.sharedkey)
+    chk('ace.derive: length beyond the shared key is rejected',
+        _raises(lambda: cc.derive(dest, 33)))
+
+    # _AuxInfo_ is a requirement on the destination, not a value copied into it.
+    weak = mdh_set(mdh_set(0, F_USAGEPOLICY, usage & ~1), F_LOCALITY, locality)
+    chk('ace.derive: destination whose _UsagePolicy_ is less restrictive than '
+        '_AuxInfo_ -> Error State Invalid, no key transferred',
+        _raises(lambda: cc.derive(weak, 16)))
+    weak2 = mdh_set(mdh_set(0, F_USAGEPOLICY, usage), F_LOCALITY, locality & ~2)
+    chk('ace.derive: destination whose _Locality_ is less restrictive than '
+        '_AuxInfo_ -> Error State Invalid',
+        _raises(lambda: cc.derive(weak2, 16)))
+    stricter = mdh_set(mdh_set(0, F_USAGEPOLICY, usage | 0b10000), F_LOCALITY, locality)
+    chk('ace.derive: a destination stricter than _AuxInfo_ is accepted',
+        cc.derive(stricter, 16) == cc.sharedkey[:16])
+
+    # the same sharedkey obtained by Decapsulate transfers the same bytes
     dv = [x for x in VECTORS['decaps'] if x['reason'].startswith('valid')][0]
     cd = MLKEMContext(dv['pset'], auxinfo=aux)
     cd.setst(S_DK_IN); cd.exec_input(bytes.fromhex(dv['dk']))
     cd.setst(S_CT_IN); cd.exec_input(bytes.fromhex(dv['c']))
     cd.setst(S_DECAPSULATE); cd.exec_d()
     chk('ace.derive after _Decapsulate_ uses the decapsulated sharedkey',
-        cd.derive(child_lo, 128)[1] ==
-        bytes.fromhex(dv['k'])[:16], dv['src'])
+        cd.derive(dest, 16) == bytes.fromhex(dv['k'])[:16], dv['src'])
 
 
 def t_negative_control():

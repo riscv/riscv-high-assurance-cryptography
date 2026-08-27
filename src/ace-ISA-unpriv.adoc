@@ -185,8 +185,7 @@ instruction and CSR descriptions are subordinate to it.
 
 | `ace.derive`
 | `Zkl` common
-| Forms A–C
-| Forms A and B; Form C via substitution
+2+<| All four `Form` values; the auxiliary input is always a GPR
 
 | `ace.clone`
 | `Zkl` common
@@ -377,7 +376,7 @@ ACEIOBUF is not part of the CRF.
 
 The `ace.input` instruction loads data from memory into the ACEIOBUF to supply inputs to ACE operations.
 The `ace.output` instruction stores outputs of ACE operations from the ACEIOBUF to memory.
-When the ACEIOBUF is used instead of vector registers, `ace.exec`, `ace.setst`, and `ace.derive` use their forms with no inputs and no outputs. These forms are combined with `ace.input` and `ace.output` as described in <<ACE-usage-input-output>>.
+When the ACEIOBUF is used instead of vector registers, `ace.exec` and `ace.setst` use their forms with no inputs and no outputs. These forms are combined with `ace.input` and `ace.output` as described in <<ACE-usage-input-output>>. `ace.derive` is unaffected: it moves data between two CRs and never reads a vector register or the ACEIOBUF.
 
 When the ACEIOBUF is used, the length of the inputs and outputs is given in CSR `aceiobuflen` (<<ACE-CSR-aceiobuflen>>).
 
@@ -1039,6 +1038,15 @@ We note that successful or failed verification of an authentication tag in an AE
 
 In any outcome other than the complete execution of the instruction, the latter writes no vector register, GPR, ACEIOBUF byte, or memory location. The sole exception is a block-iterated `ace.exec` (<<ACE-resumability>>) that encounters an error after fully processing `j` {ge} 1 blocks. In that case, the outputs of those `j` blocks remain written; no part of the failing block or any later block is written; and `acestart` contains the byte count of the completed blocks. The error condition's effects on the CR state are unchanged.
 
+[[ACE-unpredictable]]
+Wherever this specification declares a result UNPREDICTABLE, the values written to
+software-visible destinations are UNSPECIFIED, but they must be a function only of architectural
+state that the executing context is otherwise permitted to observe.
+In particular, the Content of a CC, the CSK, and the Locality Secrets must not be disclosed, in
+whole or in part, beyond what a permitted instruction sequence could already produce.
+The CR is left either in a state reachable by some legal instruction sequence, or in Error State
+_Invalid_.
+
 In case an illegal-instruction exception or an ACE exception is raised,
 the trapped instruction does not retire and `xepc` holds its address.
 
@@ -1243,9 +1251,13 @@ This is the same rule that `ace.input` and `ace.output` state for their own tran
 
 For CR-directed transfers (`ace.load`, `ace.store`, `ace.mv`), `acestart` is bounded above by the size in bytes of the PI/SCC being transferred, as determined from the first 8 bytes of the MDH. A value larger than the applicable bound replaces `acestart` with that bound when these instructions are issued.
 
-For certain algorithms, writing zero to `acestart` to force a full restart of `ace.exec` may lead to inconsistent or unpredictable results. Hence, it should be avoided once per-block state effects have been committed (see <<ACE-Memory-Model>>).
-Also, writing a value that is invalid or unsupported for a given Algorithm may still cause the CR to transition to Error State _Invalid_
-when an instruction is later issued or restarted.
+For certain algorithms, writing zero to `acestart` to force a full restart of `ace.exec` would
+produce an inconsistent result, and it is not permitted once per-block state effects have been
+committed (see <<ACE-Memory-Model>>).
+More generally, writing a value that is invalid or unsupported for a given Algorithm — including a
+value that is not an interruption point the Algorithm allows — causes the CR to transition to Error
+State _Invalid_ when an instruction is later issued or restarted.
+The outcome is therefore deterministic rather than UNPREDICTABLE.
 
 The value of `acestart` out of ACE unit reset is 0.
 
@@ -2162,6 +2174,20 @@ The above rules also allow an interrupted import to resume on another hart or on
 Software must allow interrupted configuration and export procedures to resume while maintaining binary compatibility across implementations with and without resumption support.
 Resuming transfer instructions is optional.
 A context-switch handler can force a restart by clearing partially configured or exported CRs at context save and restore.
+
+[IMPORTANT]
+====
+Completing a management _process_ under preemption is a responsibility of the software stack, not of
+the architecture: the architecture guarantees forward progress for each individual instruction, but
+a management process spans several of them and any of its constituent CRs may legally be cleared
+between them.
+A handler that unconditionally clears partially configured or exported CRs at every context switch
+will therefore prevent a long management process from ever completing.
+An SCC can be several kilobytes — an ML-DSA-87 Serialized Context is 12496 bytes — plus up to
+256 KiB of implementation-specific data, so this is reachable under ordinary preemption rates.
+System software must either let such a process make progress across context switches, or bound the
+size of the contexts it admits.
+====
 Consequently, the ACE ISA is co-designed with the CR management sequences in <<ACE-management-code-snippets>> to support context switching and lazy SCC loading.
 ====
 
@@ -2531,21 +2557,38 @@ _Included in_::
 
 // ////////////////////////////////////////////////////////////////////
 
-// //
+////
+
+I suggest something similar to "Architect a generic KDF" where the output of one algorithm, say in CR1, that would be produced by the output of an ace.exec, can be piped directly to the input of a second CR2.
+So, instead of, say,  ace.exec V1, CR1, {optional INPUT1} followed by ace.exec {optional OUTPUT2}, CR2, {INPUT1}, we would just have ace.derive CR2, CR1, length.
+We more flexibility for the other cases. For instance if we are piping a secret value indexed by  index i   from CR1 into a secret value indexed by index j into CR2, we would have ace.derive CR2, CR1, (length, i, j) and we have to encode the tuple somehow in the aux input, like length << 32 | i << 16 | j.
+Finally, we need the case where we pipe the output of an ace.exec on CR1 into a secret in CR2 and the case of a secret in CR1 into an input of CR2. These are four cases, and sadly there is no encoding space left in ace.derive. We reduce ace.derive to one form only, with an aux input in a GPR only.
+Summarizing:
+* Form = 0 => pipe secret into secret, encode GPR as length << 32 | i << 16 | j on RV64 (on RV32 it would be s2 even, X[s2] contains  i << 16 | j X[s2+1] contains length).
+* Form = 1 => pipe ace.exec CR1 output into secret. Encode GPRs in the same way, but i is now zero.
+* Form = 2 => pipe CR1 secret into ace.exec CR2 input. Encode GPRs in the same way, but j is now zero.
+* Form = 3 => pipe ace.exec CR1 output into ace.exec CR2 input. Encode GPRs as above.
+
+In all cases, the length determines the amount of data that is transferred.
+
+A fixed size output from CR1 (such as a secret) is transferred in full, or truncated, or zero padded, depending on the length.
+A variable size size output from CR1 (such as output from ace.exec in case it can be repeated, such as squeezing a XOF,) may be truncated at the end if length is between multiples of the output sizes).
+
+A fixed size input to CR2 (such as a secret) is received in full, or truncated by ignoring it after a certain point, or zero padded, depending on the length.
+A variable size size input to CR2 (such as multiple inputs to ace.exec in case it can be repeated, such as absorbing data) may be truncated at the end if length is between multiples of the output sizes, but it can also be left open if, for instance, it is provided to a process_VLI state, in which case the called can complete it by adding their own padding with additional ace.exec calls.
+
+
+////
 
 [[ACE-instruction-derive]]
 ==== ace.derive
 
 _Synopsis_::
-Derive a CR from a source CR, or inject key material from a source CR into a destination CR.
+Pipe data from one CR into another without exposing it to software.
 
 _Mnemonic_::
-The `ace.derive` instruction admits three Forms, namely
+`ace.derive Kd|K{Xd}, Ks1|K{Xs1}, Xs2`
 (((ACE, instruction, ace.derive)))
-[upperalpha]
-. `ace.derive Kd|K{Xd}, Ks1|K{Xs1} {fournbsp}{nbsp}{nbsp}{nbsp}` with no auxiliary input.
-. `ace.derive Kd|K{Xd}, Ks1|K{Xs1}, Xs2{nbsp}{nbsp}` with an auxiliary input in a GPR.
-. `ace.derive Kd|K{Xd}, Ks1|K{Xs1}, Vs2{nbsp}{nbsp}` with an auxiliary input in a vector register.
 
 _Encoding_::
 The encoding is almost identical to `ace.clone`, with bit 27 set to 1 instead of 0.
@@ -2558,7 +2601,7 @@ The instruction is an R-type instruction.
     { bits:  5, name: 'Kd|K{Xd}' },
     { bits:  3, name: 0x0, attr: ['ace.exec'] },
     { bits:  5, name: 'Ks1|K{Xs1}' },
-    { bits:  5, name: 'Xs2|Vs2' },
+    { bits:  5, name: 'Xs2' },
     { bits:  2, name: 'R' },
     { bits:  1, name: 0x1 },
     { bits:  2, name: 'Form' },
@@ -2568,33 +2611,70 @@ The instruction is an R-type instruction.
 +
 Bits [26:25], i.e., field `R`, are encoded exactly as for `ace.clone` (<<ACE-instruction-clone>>).
 +
-Bits [29:28], i.e., field `Form`, encode the optional auxiliary input:
+The auxiliary input is always a GPR: `ace.derive` has no form without one and no vector form.
 +
-[upperalpha]
-. `00`{nbsp}{nbsp} the instruction admits no auxiliary input.
-. `01`{nbsp}{nbsp} the instruction accepts an auxiliary input in a GPR.
-. `10`{nbsp}{nbsp} the instruction accepts an auxiliary input in a vector register.
-. `11`{nbsp}{nbsp} is reserved for future use.
+Bits [29:28], i.e., field `Form`, select which endpoint is used on each side:
++
+[[ACE-derive-forms]]
+.Endpoints selected by the `Form` field of `ace.derive`
+[float="center",align="center",width="100%",cols="^10%,<40%,<40%",options="header"]
+|===
+| `Form` | Source, in CR `Ks1`{nbsp}\|{nbsp}`K{Xs1}` | Destination, in CR `Kd`{nbsp}\|{nbsp}`K{Xd}`
+| `00`   | secret field `i`          | secret field `j`
+| `01`   | output of an `ace.exec`   | secret field `j` (`i` is zero)
+| `10`   | secret field `i`          | input of an `ace.exec` (`j` is zero)
+| `11`   | output of an `ace.exec`   | input of an `ace.exec`
+|===
 
 _Description_::
 +
 --
-The instruction has two different semantics depending on whether the target CR is already configured or not.
+`ace.derive` moves `length` bytes from an endpoint of the source CR to an endpoint of the
+destination CR. The data never becomes visible to software: it is the mechanism by which the output
+of one algorithm becomes the input, or the key, of another.
 
-. If the target CR is not already configured, the instruction derives a new context from the existing one, with its own opaque key material, for instance using a key derivation mechanism.
-In this situation, the _UsagePolicy_ and _Locality_ fields of the derived CR are copied from the corresponding fields of the parent CR;
-however, Algorithms may implement deviations from this behavior, a notable example being ML-KEM.
+The auxiliary GPR carries the transfer length and the two field indices:
 
-. If the target CR is already configured, the instruction provides secret material derived by the source CR to the target CR.
+* On RV64, `Xs2` = `length << 32 {vvert} i << 16 {vvert} j`.
+* On RV32, `s2` must be even, `X[s2]` = `i << 16 {vvert} j` and `X[s2+1]` = `length`;
+  if `s2` is odd, an illegal-instruction exception is raised.
 
-.. If the target CR contains more than one configurable secret field, a Form B instruction must be used, with the auxiliary input specifying which field to update, in the order the fields appear in the SCC of the Algorithm defined in the CR.
-... Fields that are configured by SKIDs cannot be modified; however, they are still counted for the purpose of this parameter.
-.. For each field in the target CR, the source CR will provide sufficiently many bits to fill the field entirely.
-.. This version of the instruction _restricts_ the _UsagePolicy_ and _Locality_ fields of the target CR to the intersection of the fields of both CRs (i.e., any _UsagePolicy_ restriction in the source is added to the target, as is any _Locality_ restriction in the source).
+`length` is a number of *bytes*. The indices `i` and `j` select a configurable secret field of the
+source, resp. destination, CC, numbered in the order the fields appear in the SCC of the Algorithm
+in that CR. Fields configured by a System Key Identifier cannot be written, but they are still
+counted for the purpose of these indices. An index that names no field of the corresponding
+Algorithm causes that CR to transition to Error State _Invalid_.
 
-The behavior of the instruction is not expected to be deterministic, as it can use the output of an RBG to generate the derived key material.
-It can be used multiple times to generate multiple derived contexts. However, whether the output is deterministic or not depends on the
-algorithm in the source CR. For instance, ML-KEM exports a value deterministically.
+The two `ace.exec` endpoints behave exactly as the corresponding `ace.exec` instruction would:
+for `Form` `01` and `11` the source CR advances as if the `ace.exec` producing that output had been
+issued on it, and for `Form` `10` and `11` the destination CR advances as if the `ace.exec`
+consuming that input had been issued on it. A single `ace.derive` with `Form` `11` therefore
+replaces the pair of instructions it collapses, with the same state effects on both CRs.
+
+How `length` relates to the size of each endpoint depends on whether that endpoint is of fixed or
+variable size:
+
+* A *fixed-size source*, such as a secret field, is transferred in full, truncated, or zero-padded
+  to `length`.
+* A *variable-size source*, such as the repeatable output of an `ace.exec` — squeezing a XOF, for
+  instance — is produced until `length` bytes have been delivered, and is truncated inside a unit
+  of output if `length` is not a whole multiple of that unit.
+* A *fixed-size destination*, such as a secret field, is filled in full, or truncated by ignoring
+  the data beyond its end, or zero-padded, according to `length`.
+* A *variable-size destination*, such as the repeatable input of an `ace.exec` — absorbing data,
+  for instance — consumes up to `length` bytes and is truncated inside a unit in the same way. Such
+  a destination may also be left *open*: if it is a state implemented by Subalgorithm `process_VLI`
+  (<<ACE-process-VLI>>), the caller may continue supplying data to it with ordinary `ace.exec`
+  instructions after the `ace.derive`, and complete it in the usual way.
+
+Whether the transferred data is deterministic depends entirely on the Algorithm in the source CR:
+`ace.derive` itself performs no key derivation and draws no random material.
+
+If `ace.derive` writes a secret field of the destination CR, that CR must be in State _Ready_.
+
+Both CRs are endpoints of a usage operation. The _UsagePolicy_ of each is evaluated independently
+against the current privilege mode, as is its expiration, and the rules of <<ACE-State-field>> for
+a CR in an Error State apply to each of them separately.
 
 The instruction may modify state.
 
@@ -2683,7 +2763,7 @@ _Description_:: {empty}
   the authentication tag(s) and the additional variable-length data.
   In the second case, the size is the same as the size of the entire PI.
   If the algorithm is not supported or the Metadata is
-  invalid leading a potential CR to an Error State, the instruction returns `32`.
+  invalid, the instruction returns `0`.
 
 * On RV32, Form B `ace.size` differs from the RV64 version in that `s` must be even, and
   Bits [63:0] of the MDH are passed in `X[s+1] @ Xs`.
@@ -2693,7 +2773,13 @@ _Description_:: {empty}
   Form C of `ace.size` returns in GPR `Xd` the total size in bytes of an SCC whose Bits
   [127:0] of the MDH are given in `Vs`, including the additional
   variable-length data. If the algorithm is not supported or the Metadata is
-  invalid leading a potential CR to an Error State, the instruction returns `32`.
+  invalid, the instruction returns `0`.
+
+A return of `0` from Form B or Form C means that the _Algorithm_, _AlgorithmPolicy_ or
+_SCProtection_ encoded in the supplied MDH is unsupported, or that the MDH is otherwise malformed.
+A return of `32` is *not* an error indication: it is the size of the SCC of a CC whose _State_ is an
+Error State (<<ACE-length-rule>>), and the caller can tell the two apart by inspecting the _State_
+field of the MDH it supplied.
 
 The instruction may not modify state.
 
@@ -2992,7 +3078,6 @@ If `Zklio` is not available, an illegal-instruction exception is raised.
 . `ace.setst` and `ace.mgmt` follow the same rule: if `Zklio` is available, instruction form with a vector input (Form C) can be replaced by a Form A, and the
 the ACEIOBUF is used for the input. If `Zklio` is not available, if a Form C instruction is expected, but a Form A instruction is issued, an illegal-instruction exception is raised.
 
-. A Form A `ace.derive` can replace a Form C `ace.derive` if `Zklio` is available. Otherwise, an illegal-instruction exception is raised.
 
 . Any substitution is allowed only if the ACEIOBUF is enabled and `aceiobuflen` is non-zero.
   Otherwise, ACE exception `ace_exc_unconfigured_buffer` is raised.
@@ -3001,7 +3086,7 @@ If `aceiobuflen` is non-zero but `aceiobuftop` is a length invalid for the algor
 
 NOTE: Because of these rules, the Algorithms sections say that a certain Form of `ace.exec`, `ace.setst`, or `ace.mgmt` is _expected_ rather than _required_ (or _only [...] allowed_). The substitutions are implicit and are not restated for each occurrence.
 
-Examples of alternative sequences for `ace.exec`, `ace.setst`, `ace.mgmt`, and `ace.derive` using `ace.input` and `ace.output`
+Examples of alternative sequences for `ace.exec`, `ace.setst`, and `ace.mgmt` using `ace.input` and `ace.output`
 are given in <<ACE-replacement-instructions>>.
 
 [[ACE-replacement-instructions]]
@@ -3020,8 +3105,6 @@ are given in <<ACE-replacement-instructions>>.
 `2: ace.setst{nbsp}{nbsp}Kd\|K{Xd}, #immed` +
 | `ace.mgmt`, Form C  | `ace.mgmt{nbsp}Kd\|K{Xd}, #immed, Vs` | `1: ace.input{nbsp}{nbsp}%offset(Xs), Xl` +
 `2: ace.mgmt{nbsp}{nbsp}Kd\|K{Xd}, #immed` +
-| `ace.derive`, Form C | `ace.derive Kd\|K{Xd}, Ks1\|K{Xs1}, Vs2` | `1: ace.input{nbsp}{nbsp}%offset(Xs2), Xl` +
-`2: ace.derive{nbsp}Kd\|K{Xd}, Ks1\|K{Xs1}` +
 |===
 
 The usage and ordering of the alternative sequences are not enforced architecturally.
@@ -3032,15 +3115,43 @@ Instead, the ACE architecture defines the following rules:
 // ////////////////////////////////////////////////////////////////////
 
 [[ACE-derive-usage]]
-=== Rules for ace.derive to pipe output of an algorithm into another algorithm
+=== Examples of piping between Cryptographic Contexts with ace.derive
 
-A Form B `ace.exec` can be replaced by an `ace.derive` followed by a Form D `ace.exec` instruction.
+_This section is informative._
 
-A Form A `ace.exec` can be replaced by an `ace.derive` followed by either a Form C `ace.exec` OR a Form D `ace.exec` and an `ace.output` instruction.
+`ace.derive` (<<ACE-instruction-derive>>) exists so that the output of one algorithm can become the
+input, or the key, of another without ever being visible to software. The four `Form` values of
+<<ACE-derive-forms>> cover the four combinations of endpoint; the examples below show what each one
+replaces.
 
-If the data derived from the algorithm in the source CR has a fixed size, `ace.derive` may be of Form A, else Form B shall be used with the auxiliary parameter determining the size in bits of the piped data.
+*Form `11` — output of one `ace.exec` into the input of another.* The pair
 
-If `ace.derive` is used to inject key material into a destination CR, the latter must be in State _Ready_.
+`{fournbsp}{fournbsp}` `ace.exec V1, K1, {INPUT}` +
+`{fournbsp}{fournbsp}` `ace.exec {OUTPUT}, K2, V1`
+
+leaks the intermediate value `V1` to software. The single instruction
+
+`{fournbsp}{fournbsp}` `ace.derive K2, K1, Xs2` `{nbsp}{nbsp}` with `Form` = `11`
+
+performs the same two operations, advancing both state machines exactly as the two `ace.exec`
+instructions would, and the intermediate value never leaves the ACE unit.
+
+*Form `01` — output of an `ace.exec` into a secret.* A key agreed or derived by the algorithm in
+`K1` becomes a key of the CC in `K2`. `K2` is provisioned beforehand in the ordinary way — a CC
+whose _KeyType_ selects a randomly generated key serves as a placeholder — and must be in State
+_Ready_; the `ace.derive` then overwrites its secret field `j`. This is the shape used by
+<<ACE-PQC-ML-KEM>>.
+
+*Form `00` — secret into secret.* A secret field of one CC is copied into a secret field of
+another, for instance to give two CCs with different _UsagePolicy_ or _Locality_ the same
+underlying key. Both indices are significant here.
+
+*Form `10` — secret into the input of an `ace.exec`.* A stored secret is absorbed by the algorithm
+in `K2`, for instance as the key of a MAC or as a customization string, without being materialized
+in a register.
+
+In every case `length` gives the number of bytes transferred, and the truncation, zero-padding and
+open-destination rules of <<ACE-instruction-derive>> apply.
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -3089,7 +3200,10 @@ For multi-block `ace.exec`, resumption from `acestart` is mandatory once
 per-block state effects have been committed. The interruption points are defined by block boundaries
 as well as by algorithm-specific interrupt points  (for instance
 the long-running computations of <<ACE-ECC>> and <<ACE-PQC>>).
-While handlers can set `acestart` to zero to force a restart of an `ace.exec` operation, this may lead to unpredictable behavior when the input and output overlap (i.e., they are actually the same vector register, vector register group, or the ACEIOBUF).
+While handlers can set `acestart` to zero to force a restart of an `ace.exec` operation, the
+result is UNPREDICTABLE, in the bounded sense of <<ACE-unpredictable>>, when the input and output
+overlap (i.e., they are actually the same vector register, vector register group, or the ACEIOBUF),
+since the restarted operation would re-read data it has already overwritten.
 
 In the current version of the specification, `ace.mgmt` is uninterruptible as a single instruction.
 The first approach above is suitable in this case.
@@ -3276,6 +3390,12 @@ The implementation transparently manages this capacity as though it belongs to t
 
 This prevents concurrent management operations in the same code: starting a second operation can overwrite `SIV`, `IMPQUAL`, and `SIV2` storage, destroying in-flight values.
 Interleaved management operations must therefore be avoided; lightweight threads must either support CR context switching directly or serialize access with a mutex.
+A context-switch handler that itself issues management operations — to save or restore CRs — is such
+an interleaving: the per-hart `SIV`, `SIV2` and `IMPQUAL` storage belonging to an interrupted
+management process does not survive the next `ace.mgmt` with `#ace_CR_provision_start`,
+`#ace_CR_import_start` or `#ace_CR_export_start` on that hart.
+A handler that has to run a management operation of its own must therefore either complete or
+abandon the interrupted process first, rather than expect to resume it afterwards.
 Beyond this, this restriction does not affect other use cases.
 
 The format of a PI that has been just imported in a CR is the same as the external format, and this representation is finalized into the CR's internal state upon using `ace.mgmt` to complete the import which may include the computation of certain information such as derived keys, multiple shares.

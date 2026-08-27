@@ -23,12 +23,12 @@ What this harness validates
     tr-consistency check, and the _AlgorithmUse_ transfer-counter rules
     (excess bits ignored on input, past-the-end -> Error State _Invalid_).
 
-3.  *Spec gap M12* (ACE-spec-review-0.7.0.md): the draft does not require FIPS
-    204's input checks, calls `ace_state_failure` an "Error State" although
-    state 23 is a valid state, and the _Sign_Verify_ clause ("If
-    `ML-DSA.Verify_internal` returns `true` and a return value, the latter is
-    written to `signature`") is not parseable -- FIPS 204 Algorithm 8 returns
-    only a Boolean.  The harness models the parseable reading and labels it.
+3.  *Review finding M12, since FIXED*: <<ACE-PQC-ML-DSA>> now splits a malformed
+    `privkey`/`pubkey` (a configuration error -> Error State Invalid) from a
+    well-formed value that does not verify (a data error -> State Failure, a
+    valid state), no longer calls state 23 an "Error State", and states the
+    _Sign_Verify_ outcome in terms of the Boolean that FIPS 204 Algorithm 8
+    actually returns.  This harness had already modelled that reading.
 
 Vector provenance
 -----------------
@@ -283,9 +283,8 @@ class MLDSAContext:
         if st == S_SIGN_VERIFY:
             if not self.has_pubkey:
                 self._invalidate('Sign_Verify with HasPubKey false')
-            # M12: the spec's "returns true and a return value, the latter is
-            # written to signature" is not parseable -- FIPS 204 Algorithm 8
-            # returns a Boolean only.  Parseable reading modelled here.
+            # <<ACE-PQC-ML-DSA>>: Verify_internal returns a Boolean only, and
+            # nothing is written to `signature` on this path (M12, fixed).
             ok = D.verify_internal_mu(self.pubkey, self.mu, self.signature, self.ps)
             self.mdh = mdh_set(self.mdh, F_STATE,
                                S_SUCCESS if ok else S_FAILURE)
@@ -688,8 +687,8 @@ def t_sign_verify_flow():
     cc.setst(S_MU_IN); cc.exec_input(bytes([mu[0] ^ 1]) + mu[1:])
     cc.setst(S_SIGN_IN); cc.exec_input(sig)
     cc.setst(S_SIGN_VERIFY); cc.exec_d()
-    chk('verification under a different mu -> State _Failure_ (23, a VALID state; '
-        'the spec calls Failure an "Error State", M12)', cc.state == S_FAILURE)
+    chk('verification under a different mu -> State _Failure_ (23, a VALID state)',
+        cc.state == S_FAILURE)
     # determinism of the rejection loop
     cc2 = MLDSAContext(ps)
     cc2.setst(S_GENKEYPAIR); cc2.exec_d(xi=bytes([7] * 32))

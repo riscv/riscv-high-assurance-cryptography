@@ -272,14 +272,32 @@ def check_encaps_input(ek, pset):
             return False                               # modulus check
     return True
 
-def check_decaps_input(dk, c, pset):
-    """FIPS 203 7.3: decapsulation input check (types + hash check).  True = valid."""
+def check_ciphertext(c, pset):
+    """FIPS 203 7.3: ciphertext type check.  True = valid.
+
+    <<ACE-PQC-ML-KEM>> treats a failure here as a DATA error (State Failure),
+    separately from the key checks below.
+    """
     k, _, _, du, dv = PARAMS[pset]
-    if len(c) != 32 * (du * k + dv):
-        return False                                   # ciphertext type check
+    return len(c) == 32 * (du * k + dv)
+
+def check_decaps_key(dk, pset):
+    """FIPS 203 7.3: decapsulation key checks (type + hash).  True = valid.
+
+    <<ACE-PQC-ML-KEM>> treats a failure here as a CONFIGURATION error
+    (Error State Invalid).
+    """
+    k = PARAMS[pset][0]
     if len(dk) != 768 * k + 96:
         return False                                   # dk type check
     ek = dk[384 * k:768 * k + 32]
     if H(ek) != dk[768 * k + 32:768 * k + 64]:
         return False                                   # hash check
     return True
+
+def check_decaps_input(dk, c, pset):
+    """FIPS 203 7.3: both decapsulation input checks together.  True = valid.
+
+    Retained because the ACVP `decapsulationKeyCheck` vectors exercise the pair.
+    """
+    return check_ciphertext(c, pset) and check_decaps_key(dk, pset)
