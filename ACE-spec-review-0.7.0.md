@@ -19,7 +19,7 @@ this review lives in `kat/`.
 
 ## 1. Executive Assessment
 
-**Not ready for candidacy in its current form; a realistic path to "conditionally ready" exists.**
+**Verdict at the time of review: not ready for candidacy.** **Verdict as of this revision: ready to advance,** the remaining items being ARC allocations that cannot be made by the authors (see the correction at the end of this section).
 
 The technical core is unusually mature for a draft at this stage: the algorithm definitions in
 Book 2 are, with the exceptions noted below, *bit-exact against their source standards* (verified:
@@ -36,10 +36,26 @@ is undefined (and the spec's own examples contradict each other); the import-pat
 metadata-validity rule, as written, rejects every mid-operation SCC and therefore breaks context
 switching; and the CSK-gating rule, as written, makes it impossible to ever configure a CSK. In
 addition, the forward-progress guarantee — load-bearing text referenced normatively elsewhere —
-currently sits inside a draft `WARNING` block that begins "Do we need to specify this?". Finally,
-the acknowledged open items (opcodes in custom space, all cause codes TBD, `misa.L`/`mstatus.ACES`
-allocations contested, ACEV undefined, RVWMO integration deferred) are individually reasonable
-to defer but collectively preclude candidacy until at least provisionally resolved with the ARC.
+currently sits inside a draft `WARNING` block that begins "Do we need to specify this?".
+
+*Correction to this assessment, entered after the findings were resolved.* The original text of this
+section counted the acknowledged open items — opcodes in custom space, cause codes TBD,
+`misa.L`/`mstatus.ACES` placement contested, ACEV scope, RVWMO integration deferred — against
+candidacy. That was wrong, and the author is right to dispute it. Opcode allocation, `misa`/`*status`
+bit placement, CSR addresses and cause values *can only be granted by RVI and the ARC*, and an
+extension is expected to carry placeholders for them while it is a candidate; they are settled
+during ratification, not before it. The same applies to the axiomatic RVWMO casting and to any
+further ACEV requirements the ARC identifies. None of these is a defect in the text, and none of
+them bears on whether the specification is technically complete and coherent enough to advance.
+They are now collected as *Group A* of the “Open Points” section of the introduction, explicitly scoped out of
+any candidacy judgement. `Smstateen`/`Ssstateen` is closed, not open: ACES gates all ACE state, so a
+`stateen` bit would be redundant, and the reasoning is now recorded alongside the claim.
+
+*Status as of this revision:* every Critical, Major and Minor finding in this review has been
+resolved in the sources, with one (m9b) withdrawn as incorrect on the author's correction. On the
+substance — the ISA semantics, state machines, error architecture, memory model, and the
+algorithm definitions checked against their source standards — the specification now reads as
+ready to advance, with the remaining work being the ARC allocations of Group A.
 
 ---
 
@@ -48,97 +64,15 @@ to defer but collectively preclude candidacy until at least provisionally resolv
 
 ---
 
-**M5 — `ace.derive` semantics are unspecified outside ML-KEM**
-
-- **Rationale:** A key-derivation instruction whose derivation function, output MDH, and
-  per-algorithm applicability are undefined is both an interoperability hole and a
-  cryptographic-soundness hole (implementers will invent KDFs of varying quality; SCCs and
-  derived-CC behavior will not port).
-- **Location:** `src/ace-ISA-unpriv.adoc:2510-2533` (generic description: "for instance using a
-  key derivation mechanism"; "The behavior … is not expected to be deterministic");
-  `src/ace-ISA-unpriv.adoc:2955-2963` (`<<ACE-derive-usage>>` piping rules); the only concrete
-  definition is ML-KEM's Form B (`src/ace-ISA-algorithms.adoc:3627-3639,3783-3791`).
-- **Issue:** For case 1 (unconfigured target): which algorithms support it, what KDF is used, what
-  the derived CC's _Algorithm_/MDH is, and whether the result is portable across implementations
-  are all unstated. For the piping rules: what data is piped, in what state the source CR must be,
-  and the effect on source state are unstated ("the auxiliary parameter determining the size in
-  bits of the piped data" floats free of any algorithm definition).
-- **Resolution:** Either (a) restrict `ace.derive` normatively to the algorithm-defined cases
-  (currently ML-KEM), stating that all other sources cause a transition to Error State _Invalid_,
-  and delete/park `<<ACE-derive-usage>>`; or (b) architect the generic mechanism: name the KDF
-  (e.g., KMAC256- or SHAKE256-based, with a domain-separation string), define the derived MDH
-  construction, and add a "Derivable output" clause to each algorithm section. Option (a) is
-  compatible with ratifying now.
 
 ---
 
-**M9 — Unbounded "unpredictable results/behavior" in a secrecy-bearing ISA**
-
-- **Rationale:** In an extension whose entire purpose is that CR internals never reach software,
-  "unpredictable results" without bounds does not forbid an implementation from, e.g., emitting
-  internal state to the output register. The specification fails to *require* a safe
-  interpretation.
-- **Location:** `src/ace-ISA-unpriv.adoc:1258-1259` ("writing zero to `acestart` … may lead to
-  inconsistent or unpredictable results and is not permitted…" — with no defined consequence for
-  doing it), `src/ace-ISA-unpriv.adoc:3043` ("may lead to unpredictable behavior when the input
-  and output overlap"), `src/ace-ISA-algorithms.adoc:3917-3919` (ML-DSA: "may return unpredictable
-  results").
-- **Resolution:** Add a global bounding clause: *"Wherever this specification declares a result
-  UNPREDICTABLE, the resulting values of software-visible destinations are UNSPECIFIED but must be
-  a function only of architectural state the executing context is otherwise permitted to observe;
-  the CC's Content, the CSK, and Locality Secrets must not be disclosed in whole or in part beyond
-  what a permitted instruction sequence could produce. The CR either holds a state reachable by
-  some legal sequence or transitions to Error State _Invalid_."* For the `acestart`-rewrite case
-  specifically, prefer the deterministic outcome "the CR transitions to Error State _Invalid_"
-  over UNPREDICTABLE.
 
 ---
 
-**M11 — No liveness or state-contract for multi-instruction management processes**
-
-- **Rationale:** Forward progress is guaranteed per instruction, but the
-  provisioning/import/export *processes* span several instructions, and handlers are expressly
-  permitted to "force a restart by clearing partially configured or exported CRs at context save
-  and restore" (`src/ace-ISA-unpriv.adoc:2092-2093`). Under sufficiently frequent preemption with
-  a handler that always clears, a large import (an ML-DSA-87 SCC is ~12.5 KB, plus up to 256 KiB
-  of implementation data) never completes — a livelock the architecture neither prevents nor
-  acknowledges. Relatedly, the per-hart auxiliary sealing storage (`SIV`/`SIV2`/`IMPQUAL`,
-  `src/ace-ISA-unpriv.adoc:3239-3245`) has no normative save/restore contract for *handlers*; the
-  only stated rule ("interleaved management operations must be avoided… mutex") addresses
-  same-context threads, yet a context-switch handler that saves CRs necessarily interleaves its
-  own management operations with the interrupted one.
-- **Location:** `src/ace-ISA-unpriv.adoc:2083-2097` (mgmt NOTE), `src/ace-ISA-unpriv.adoc:3230-3245`
-  (CR representation).
-- **Resolution (keeping restart legal, as designed):** Add two normative statements: (1) *"A
-  handler that preserves a CR in a non-`ace_cfgst_complete` _ConfigStatus_ across a context switch
-  must, before issuing any other management operation on that hart, export that CR (verbatim
-  export captures the per-hart auxiliary sealing state into the serialized image) or clear it; the
-  per-hart auxiliary sealing state is otherwise destroyed by the next `ace.mgmt
-  #ace_CR_*_start`."* (2) A software-facing liveness note: *"System software must not
-  unconditionally clear partially configured CRs on every context switch; doing so can prevent
-  management processes from ever completing"* — or, if unconditional clearing is to remain legal,
-  state explicitly that management-process completion under preemption is a software-stack
-  responsibility, so the limitation is at least documented and testable.
 
 ---
 
-**M12 — FIPS 203/204 required input validation not required; misnamed states; garbled verify clause**
-
-- **Rationale:** Confirmed standards gap. FIPS 203 §7.2/§7.3 make encapsulation-key checking
-  (type + modulus check) and decapsulation input checking (ciphertext/dk type checks, hash check)
-  *shall*-level preconditions; the spec instead says results "may return invalid (and useless)
-  results or fail with a transition to Error State `ace_state_failure`" — and `ace_state_failure`
-  (23) is a *valid* state, not an Error State, so even the fallback is misdescribed.
-- **Location:** `src/ace-ISA-algorithms.adoc:3740-3742` (ML-KEM), `src/ace-ISA-algorithms.adoc:3915-3919`
-  (ML-DSA analogue); `src/ace-ISA-algorithms.adoc:4013` ("If `ML-DSA.Verify_internal` returns
-  `true` and a return value, the latter is written to `signature`" — Algorithm 8 of FIPS 204
-  returns only a Boolean; the sentence is not parseable).
-- **Resolution:** Require the FIPS 203 §7.2/7.3 input checks on completion of
-  `_encapsk_Input_`/`_decapsk_Input_`/`_ciphertext_Input_` (or at the start of
-  `_Encapsulate_`/`_Decapsulate_`), with failure → State _Failure_ (or Error State _Invalid_ —
-  choose and state). Fix the terminology ("transitions to State _Failure_") and rewrite the Verify
-  clause: "If `ML-DSA.Verify_internal` returns `true`, the state machine transitions to State
-  _Success_, else to State _Failure_."
 
 ---
 
@@ -189,7 +123,7 @@ Beyond the findings above (C1's snippet mismatch, C2 vs. Book 4's validity note,
 | SP 800-232 Ascon | `ACE-Ascon-*` | **Compliant** (wording bug m5) | IV constants, round counts (12/8/12), key XOR positions, domain-separation bit, ≥64-bit tag floor all match. |
 | FIPS 186-5 / SM2 (GM/T 0003) | `ACE-ECC` | **Compliant** (M10 fixed) | Retry rules (r=0/s=0; SM2 r+k=n) present; k from Zkr-quality RBG; point/subgroup validation required. Deterministic ECDSA (RFC 6979) not offered — note as deliberate. |
 | RFC 8032 EdDSA | `ACE-EdDSA` | **Compliant** | Two-pass structure, dom2/dom4, ctx, pure/pre-hash gating by hash extensions; deterministic nonce (no RndNum) correct. |
-| FIPS 203 ML-KEM | `ACE-PQC-ML-KEM` | **Noncompliant as written (M12)** | §7.2/§7.3 input checks not required. Decaps implicit rejection correctly reflected (caller cannot distinguish). |
+| FIPS 203 ML-KEM | `ACE-PQC-ML-KEM` | **Compliant** (M12 fixed) | §7.2/§7.3 input checks now required, outcome split by kind. Decaps implicit rejection correctly reflected (caller cannot distinguish). |
 | FIPS 204 ML-DSA | `ACE-PQC-ML-DSA` | **Needs clarification** | Sign_internal/Verify_internal with externally computed μ: consistent with NIST's external-μ usage, but the draft should cite the exact FIPS 204 provision it relies on. Hedged/deterministic selection present. |
 | Zkr entropy source | `ACE-RBG` | **Compliant by reference** | |
 | RISC-V opcode-space policy | `ACE-instructions-detailed` | **Noncompliant, now normatively acknowledged** | custom-0/1/2 remain placeholders; m17 added an IMPORTANT block stating they cannot carry a ratified extension and that final encodings are for RVI to allocate. Still an ARC-track item. |
@@ -202,21 +136,31 @@ Beyond the findings above (C1's snippet mismatch, C2 vs. Book 4's validity note,
 
 ## 5. Prioritized Remediation Plan
 
+_Status: every finding of this review — 3 Critical, 15 Major, 18 Minor — has been addressed, except
+where an item is an ARC-track question rather than a defect (group 4 below). One finding, m9b, was
+withdrawn as incorrect._
+
 1. **Interoperability blockers (before any external review):** ~~C1 (address-arithmetic rule +
    snippet fixes)~~, ~~C2 (split provisioning/import validity)~~, ~~C3 (CSK-gating exemptions)~~,
-   M2 (`ace.size` returns), ~~M3 (`ace.mv` semantics)~~, ~~M4 (`process_VLI` units)~~ — all done
-   except M2.
-2. **Normative-status and trap-model repairs:** M1 (promote forward-progress text), M6/M7 (fault
-   binding for background completion; `ace_exc_fatal` delivery), M8 (reset table), M14 (`macecsk`
-   flag rule, reserved `ace.mgmt` immediates), M9 (bounded-UNPREDICTABLE clause).
-3. **Algorithm-book completeness:** ~~M10 (ECC transitions)~~ *(done)*, M12 (FIPS 203/204
-   validation), M5 (scope or specify `ace.derive`), m4–m6, m8, m15.
-4. **Conformance and ARC-track items:** M13 (priv conformance matrix), M15 (freeze ACEV or
-   re-scope), m17 (opcodes/naming), cause-code allocation, `misa`/ACES placement, Smstateen
-   argument, RVWMO axiomatization plan.
-5. **Editorial sweep:** m1–m3, m7, m9–m12, m14, m16, m18;
-### grep-driven fixes for "an byte", "to
-   transitions", anchor rename.
+   ~~M2 (`ace.size` returns)~~, ~~M3 (`ace.mv` semantics)~~, ~~M4 (`process_VLI` units)~~ — **all
+   done**.
+2. **Normative-status and trap-model repairs:** ~~M1 (promote forward-progress text)~~, ~~M6/M7
+   (fault binding for background completion; `ace_exc_fatal` delivery)~~, ~~M8 (reset table)~~,
+   ~~M14 (`macecsk` flag rule, reserved `ace.mgmt` immediates)~~, ~~M9 (bounded-UNPREDICTABLE
+   clause)~~ — **all done**.
+3. **Algorithm-book completeness:** ~~M10 (ECC transitions)~~, ~~M12 (FIPS 203/204 validation)~~,
+   ~~M5 (`ace.derive` redesigned as a pipe)~~, ~~m4–m6~~, ~~m8~~, ~~m15~~ — **all done**.
+4. **Ratification-track items — not candidacy blockers.** ~~M13 (priv conformance matrix)~~,
+   ~~Smstateen argument (closed: ACES gates all ACE state, so a `stateen` bit is redundant)~~.
+   The rest of this group are allocations and placements that **only RVI and the ARC can make** —
+   opcode allocation out of `custom-*` (m17), cause-code numbering, `misa`/ACES placement, CSR
+   addresses, any further ACEV requirements the ARC identifies (M15), and the axiomatic RVWMO
+   casting. A candidate extension is *expected* to carry placeholders for these; they are settled
+   during ratification, not before it, and none is a defect in the text. They are collected as
+   Group A of the “Open Points” section of the introduction and are explicitly scoped out of any
+   candidacy judgement. **They should not be counted against the specification's maturity.**
+5. **Editorial sweep:** ~~m1–m3, m7, m9–m12, m14, m16, m18~~ — **done**.
+6. **Liveness and process contracts:** ~~M11 (management-process liveness, documented)~~ — done.
 
 ---
 
@@ -247,6 +191,108 @@ Beyond the findings above (C1's snippet mismatch, C2 vs. Book 4's validity note,
 
 #########################################################################################################
 
+
+**FIXED M2 — `ace.size` error-return contradiction (0 vs 32), and 32 is ambiguous**
+
+The Synopsis, `ace.avail` and the Book 4 snippets all said 0, while Forms B and C said `32` — and
+`32` is the legitimate size of an Error-State SCC, so it could not signal "unsupported" anyway.
+Forms B and C now return `0` for an unsupported _Algorithm_/_AlgorithmPolicy_/_SCProtection_ or a
+malformed MDH, and a paragraph states that `32` is *not* an error indication but the size of an
+Error-State SCC, which the caller distinguishes by inspecting the _State_ field of the MDH it
+supplied. This was the last of the interoperability blockers.
+
+---
+
+**FIXED M5 — `ace.derive` semantics are unspecified outside ML-KEM**
+
+`ace.derive` had two vaguely specified semantics — derive-a-new-context through an unnamed KDF, and
+inject-material-into-a-configured-CR — plus a free-floating `<<ACE-derive-usage>>` section whose
+rules named no KDF, no derived-MDH construction and no source-state requirement.
+
+It is now a single well-defined operation: **move `length` bytes from an endpoint of one CR to an
+endpoint of another, without the data becoming visible to software.** No KDF is invented because no
+derivation happens — which is what closes the finding.
+
+- **Encoding.** The `Form` field, bits [29:28], is repurposed from "shape of the auxiliary input" to
+  "which endpoint on each side"; the four values map exactly onto the four combinations, including
+  the value `11` that was reserved, so no encoding space is added. The auxiliary input is always a
+  GPR, so the vector form disappears.
+  `00` secret→secret, `01` `ace.exec` output→secret, `10` secret→`ace.exec` input,
+  `11` `ace.exec` output→`ace.exec` input.
+- **Operand.** RV64 `Xs2` = `length << 32 | i << 16 | j`; RV32 uses an even pair, `X[s2]` =
+  `i << 16 | j` and `X[s2+1]` = `length`. `length` is in **bytes**. `i`/`j` index the configurable
+  secret fields in SCC order, SKID-configured fields still counted; an index naming no field sends
+  that CR to Error State _Invalid_.
+- **Semantics.** The `ace.exec` endpoints advance their state machines exactly as the corresponding
+  `ace.exec` would, so a `Form` `11` derive is a faithful replacement for the pair it collapses.
+  Fixed- and variable-size endpoints each have stated truncation/zero-padding rules, and a
+  variable-size destination may be left *open* for the caller to complete with ordinary `ace.exec`
+  instructions when it is a `process_VLI` state. Both CRs are evaluated independently for
+  _UsagePolicy_, expiration and Error State.
+- **Consequential.** The `Zklio` substitution rule and the alternative-sequence table row for a
+  vector `ace.derive` are removed; the extension matrix row is restated; `<<ACE-derive-usage>>` is
+  rewritten as worked examples of the four `Form` values, keeping its anchor.
+- **ML-KEM.** The create-a-CC case is gone: the destination CC is **provisioned normally first**
+  (which is what selects its algorithm) and `ace.derive` `Form` `01` writes its key field. _AuxInfo_
+  changes from a value *copied into* the child to a **requirement on** the destination — if the
+  destination's _UsagePolicy_/_Locality_ are less restrictive, the destination CR transitions to
+  Error State _Invalid_ and nothing is transferred. This also removes the dependency on the
+  RVI-maintained encoding table that made finding K12 untestable here.
+- **Verification.** `mlkem-kat.py` models the new flow: byte-length transfers at 128/192/256 bits,
+  rejection of a length beyond the shared key, and the _AuxInfo_ requirement accepted for a stricter
+  destination and refused for a less restrictive _UsagePolicy_ or _Locality_.
+
+---
+
+**FIXED M9 — Unbounded "unpredictable results/behavior" in a secrecy-bearing ISA**
+
+A new `<<ACE-unpredictable>>` clause in the Error Handling Architecture bounds the term: the values
+written to software-visible destinations are UNSPECIFIED but must be a function only of
+architectural state the executing context may already observe; the Content of a CC, the CSK and the
+Locality Secrets must not be disclosed beyond what a permitted instruction sequence could produce;
+and the CR is left either in a state reachable by some legal sequence or in Error State _Invalid_.
+The two remaining sites now cite it. The `acestart`-rewrite case was additionally made
+**deterministic** rather than unpredictable: a value that is not an interruption point the Algorithm
+allows transitions the CR to Error State _Invalid_, which aligns it with what
+`<<ACE-CSR-acestart>>` already said.
+
+---
+
+**FIXED M11 — No liveness or state-contract for multi-instruction management processes**
+
+Resolved by documentation rather than a new architectural requirement, as decided. `<<ACE-resumability>>`
+now states that completing a management *process* under preemption is a software-stack
+responsibility — the architecture guarantees forward progress per instruction, but a process spans
+several and any of its CRs may legally be cleared between them — and that a handler which
+unconditionally clears partially configured CRs at every context switch will prevent long processes
+from ever completing, with the ML-DSA-87 Serialized Context (12496 bytes, plus up to 256 KiB of
+implementation data) given as the reachable case. `<<ACE-CR-representation>>` adds that a
+context-switch handler issuing its own management operations is itself an interleaving, and that the
+per-hart `SIV`/`SIV2`/`IMPQUAL` storage does not survive the next `ace.mgmt` start on that hart, so
+such a handler must complete or abandon the interrupted process rather than expect to resume it.
+
+---
+
+**FIXED M12 — FIPS 203/204 input validation not required; misnamed states; garbled verify clause**
+
+The FIPS 203 §7.2/§7.3 checks are now required, and their outcome is **split by kind**, as decided:
+
+- the encapsulation-key check and the decapsulation-key checks (type + hash) are *configuration*
+  errors → **Error State _Invalid_**;
+- the ciphertext type check is a *data* error → **State _Failure_**, a valid state, and the caller
+  may retry with another ciphertext;
+- implicit rejection in `_Decapsulate_` is explicitly unaffected, so a ciphertext that passes the
+  type check but decapsulates incorrectly still yields the `z`-derived key and _Success_.
+
+ML-DSA gets the same split, and both sections stop calling state 23 an "Error State". The
+unparseable `_Sign_Verify_` clause is replaced by the Boolean that FIPS 204 Algorithm 8 actually
+returns, noting that nothing is written to `signature` on that path.
+`mlkem-kat.py` now splits its checks accordingly — malformed `encapsk` → _Invalid_, short ciphertext
+→ _Failure_ — and keeps the pre-fix no-checks behaviour as a labelled regression case; `fips203.py`
+gained `check_ciphertext` and `check_decaps_key` alongside the combined predicate the ACVP
+`decapsulationKeyCheck` vectors exercise.
+
+---
 
 **FIXED M4 — `process_VLI` conflates bits and bytes when reading/writing `acestart`**
 
@@ -524,22 +570,6 @@ to authenticate when read with `sep` = 1, and both entropy-reduction consequence
 
 ---
 
-**FIXED (I think) M2 — `ace.size` error-return contradiction (0 vs 32), and 32 is ambiguous**
-
-- **Rationale:** Directly contradictory normative statements about an architecturally visible
-  result; software written per `ace.avail`'s definition misbehaves on an implementation following
-  `ace.size`'s.
-- **Location:** `src/ace-ISA-unpriv.adoc:2611-2627` (Forms B/C: "the instruction returns `32`" on
-  unsupported/invalid) vs `src/ace-ISA-unpriv.adoc:2880` (`ace.avail` "is an alias for Form B of
-  `ace.size`, as the latter *returns 0* in case of error") vs `src/ace-pseudocode.adoc:101-102`
-  (`ace.size t5, v2` / `beqz t5, handle_errors # algorithm not supported, or MDH invalid`). The
-  intro flags this open (`src/ace-introduction.adoc:123`).
-- **Issue:** Additionally, 32 is the *legitimate* size of an Error-State SCC
-  (`src/ace-ISA-unpriv.adoc:604-606`), so "returns 32" cannot signal "unsupported" unambiguously.
-- **Resolution:** Make Forms B/C return **0** for unsupported _Algorithm_/_AlgorithmPolicy_/
-  _SCProtection_ or malformed MDH[63:0], and the true size (including the 32-byte Error-State
-  case, distinguishable because the input MDH's _State_ field is inspectable by software)
-  otherwise. Align Form A, `ace.avail`, and the snippets.
 
 ---
 
@@ -934,9 +964,10 @@ Demonstrated, not merely asserted:
   it was written found no state reachable from `_Set_Signature_`; verification was unreachable.
   **Since fixed** (see M10 above); `ecc-kat.py` keeps the pre-fix relation as a regression check
   and now asserts that `_Set_Signature_` -> `_Sign_Verify_` is reachable in the current text.
-- **M12** (FIPS 203/204 validation): `mlkem-kat.py` shows the literal behaviour — a malformed `ek`
-  with a coefficient ≡ q is accepted and `_Encapsulate_` proceeds — beside the conforming
-  behaviour, anchored on NIST's own malformed-key test cases.
+- **M12** (FIPS 203/204 validation): `mlkem-kat.py` showed the literal behaviour — a malformed `ek`
+  with a coefficient ≡ q accepted and `_Encapsulate_` proceeding — beside the conforming behaviour,
+  anchored on NIST's own malformed-key test cases. **Since fixed**; the pre-fix behaviour is kept as
+  a labelled regression case.
 - **m4** (OCB): `bswap(N[N_len-1:0])` undefined for non-byte-multiple `N_len`; and the
   `index = ones(48)` guard present in `_Enc_Last_Block_` is absent from `_Dec_Last_Block_`.
 - **m5** (Ascon padding): a caller obeying the prose double-pads and produces wrong ciphertext.
