@@ -194,7 +194,7 @@ class AceSha2:
                 self.block_base = 0
             iters += 1
             # the (only) interruption point of process_VLI.
-            # M4: spec literally `acestart <- input_base`; corrected: / 8.
+            # M4 (fixed): the spec now writes `acestart <- input_base / 8`.
             if interrupt_after is not None and iters >= interrupt_after \
                     and input_base < ACELEN:
                 self.acestart = input_base // 8

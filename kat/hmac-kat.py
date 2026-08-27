@@ -178,8 +178,8 @@ class Sha2Core:
             iters += 1
             if interrupt_after is not None and iters >= interrupt_after \
                     and input_base < ACELEN:
-                # M4: spec writes `acestart <- input_base` (a bit count) into the
-                # byte-counting CSR; corrected interpretation is /8.
+                # M4 (fixed): the spec now writes `acestart <- input_base / 8`;
+                # it used to store the bit count into the byte-counting CSR.
                 return input_base // 8
         return None
 

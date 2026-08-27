@@ -38,12 +38,13 @@ Embedded vector provenance:
   * Pattern-message cases carry no embedded constant and are anchored at runtime
     against the hashlib oracle (labeled [oracle]).
 
-Known spec issue exercised (ACE-spec-review-0.7.0.md, finding M4):
-  process_VLI stores `acestart <- input_base` (a BIT count) at its interruption
-  point although acestart is architecturally a BYTE count (cf. Hash_Output, which
-  correctly writes `acestart <- output_base / 8`).  This harness models the
-  corrected byte interpretation (acestart = input_base/8, resume at 8*acestart)
-  and demonstrates the unit clash as a negative control.
+Review finding M4 (ACE-spec-review-0.7.0.md), since FIXED:
+  process_VLI used to store `acestart <- input_base` (a BIT count) at its
+  interruption point although acestart is architecturally a BYTE count (cf.
+  Hash_Output, which always converted correctly).  The spec now writes
+  `acestart <- input_base / 8` and resumes at `input_base <- 8 * acestart`,
+  which is what this harness models; the pre-fix unit clash is retained as a
+  negative control, so a regression would be caught.
 
 Negative controls (must mismatch, declared via KAT-EXPECT-FAIL):
   * suffix bit order  -- the domain suffix byte (0x06 / 0x1F) applied MSB-aligned
@@ -662,9 +663,9 @@ def main():
                               wrong_suffix=True)
     negative_control('suffix bit order (SHAKE128 suffix byte 0x1F MSB-aligned)',
                      got != bytes.fromhex(VECTORS[('SHAKE128', 'empty')]))
-    # M4: acestart stored as a bit count (literal process_VLI text) and consumed
-    # under the architectural byte convention on resumption -> the tail of the
-    # message is never absorbed.
+    # M4 (fixed): under the PRE-FIX text acestart was stored as a bit count and
+    # consumed under the architectural byte convention on resumption, so the tail
+    # of the message was never absorbed.  Kept as a regression check.
     got, _ = ace_hash_oneshot('SHA3-256', MSG_A3, chunks=[MSG_A3],
                               interrupt=(0, 100), literal_units=True)
     negative_control('M4 literal units (acestart bit count consumed as bytes)',

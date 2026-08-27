@@ -48,10 +48,11 @@ Embedded vector provenance:
     BouncyCastle's doFinalTest() (31a44527...b16c).
   * FIPS 202 anchors for the Keccak core: SHA3-256/SHAKE128/SHAKE256 of "".
 
-Known spec issue exercised (ACE-spec-review-0.7.0.md, finding M4):
-  process_VLI stores `acestart <- input_base` (a BIT count) although acestart is
-  architecturally a BYTE count.  This harness models the corrected byte
-  interpretation (acestart = input_base/8, resume at 8*acestart).
+Review finding M4 (ACE-spec-review-0.7.0.md), since FIXED:
+  process_VLI used to store `acestart <- input_base` (a BIT count) although
+  acestart is architecturally a BYTE count.  The spec now converts explicitly
+  (`acestart <- input_base / 8`, resume at `input_base <- 8 * acestart`), which
+  is what this harness models.
 
 Negative controls (must mismatch, declared via KAT-EXPECT-FAIL):
   * left_encode  -- left_encode(L) absorbed in place of right_encode(L).

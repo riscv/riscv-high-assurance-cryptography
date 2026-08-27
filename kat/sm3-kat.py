@@ -119,7 +119,7 @@ class AceSm3:
         """Form B ace.exec in _Hash_Absorb_ = process_VLI (<<ACE-process-VLI>>), len=0."""
         assert self.state_name == 'Hash_Absorb'
         INPUT, ACELEN = b2v(data), 8 * len(data)
-        # M4: spec writes `input_base <- acestart` (bits from a byte CSR); corrected *8.
+        # M4 (fixed): the spec now writes `input_base <- 8 * acestart` explicitly.
         input_base = 8 * self.acestart if resume else 0
         iters = 0
         while input_base < ACELEN:
@@ -134,7 +134,7 @@ class AceSm3:
                 self._absorb()
                 self.block_base = 0
             iters += 1
-            # M4: spec writes `acestart <- input_base` (bits); corrected /8.
+            # M4 (fixed): the spec now writes `acestart <- input_base / 8`.
             if interrupt_after is not None and iters >= interrupt_after \
                     and input_base < ACELEN:
                 self.acestart = input_base // 8

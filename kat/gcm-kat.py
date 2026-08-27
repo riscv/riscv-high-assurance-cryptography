@@ -28,10 +28,11 @@ Negative controls (declared with KAT-EXPECT-FAIL) re-run the ACE model with the
 two halves of the length block swapped, and with a little-endian counter
 increment; both must fail against the vectors.
 
-Note on M4 of ACE-spec-review-0.7.0.md: process_VLI writes `acestart <-
-input_base` and reads `input_base <- acestart` although `input_base` is in bits
-and `acestart` is architecturally a byte count.  The resumption model below uses
-the corrected /8 and *8 conversions, as M4 resolves.
+Note on M4 of ACE-spec-review-0.7.0.md, since FIXED: process_VLI used to write
+`acestart <- input_base` and read `input_base <- acestart` although `input_base`
+is in bits and `acestart` is architecturally a byte count.  The spec now performs
+the /8 and *8 conversions explicitly, which is what the resumption model below
+implements.
 
 Conclusion: the spec text as written reproduces every vector; no *functional*
 discrepancy with SP 800-38D was found in either mode.  Three editorial defects
@@ -213,9 +214,8 @@ class GcmCC:
         if self.len != 0 and self.cumul_len >= self.len:
             self.state = "Invalid"
             raise Invalid("process_VLI: cumul_len >= len")
-        # M4 (ACE-spec-review-0.7.0.md): the text writes `input_base <- acestart`
-        # although input_base is in bits and acestart counts bytes; the corrected
-        # conversion is used here.
+        # M4 (fixed): the text now writes `input_base <- 8 * acestart`, converting
+        # from the byte-counting CSR to the bit-counting local.
         self.input_base = 8 * self.acestart if resume else 0
         iters = 0
         while self.input_base < ACELEN:
@@ -239,7 +239,7 @@ class GcmCC:
                 return True
             iters += 1
             if interrupt_after is not None and iters == interrupt_after:
-                self.acestart = self.input_base // 8      # M4-corrected
+                self.acestart = self.input_base // 8      # M4: acestart <- input_base / 8
                 return False
         self.acestart = 0
         return True

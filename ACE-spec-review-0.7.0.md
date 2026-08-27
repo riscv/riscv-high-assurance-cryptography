@@ -45,19 +45,6 @@ to defer but collectively preclude candidacy until at least provisionally resolv
 
 ---
 
-**M4 — `process_VLI` conflates bits and bytes when reading/writing `acestart`**
-
-- **Rationale:** `acestart` is architecturally a byte count (`src/ace-ISA-unpriv.adoc:1242`); the
-  central shared procedure of Book 2 stores a bit count into it and reads it back as a bit offset.
-  Every algorithm built on `process_VLI` (hashes, HMAC, KMAC, GCM IV absorption, EdDSA,
-  ML-KEM/ML-DSA field loading) inherits the off-by-×8.
-- **Location:** `src/ace-ISA-algorithms.adoc:806` ("If resuming … `input_base <- acestart`") and
-  `src/ace-ISA-algorithms.adoc:824-827` ("interrupted, with `acestart <- input_base`"), where
-  "Units" (`src/ace-ISA-algorithms.adoc:754-758`) declares `input_base` to be in bits. Contrast
-  the correct conversion in _Hash_Output_ (`src/ace-ISA-algorithms.adoc:2085,2096`:
-  `output_base <- 8·acestart`, `acestart <- output_base / 8`).
-- **Resolution:** `input_base ← 8 · acestart` on resumption and `acestart ← input_base / 8` at the
-  interruption point (guaranteed integral, as the text already argues).
 
 ---
 
@@ -215,9 +202,10 @@ Beyond the findings above (C1's snippet mismatch, C2 vs. Book 4's validity note,
 
 ## 5. Prioritized Remediation Plan
 
-1. **Interoperability blockers (before any external review):** C1 (address-arithmetic rule +
-   snippet fixes), C2 (split provisioning/import validity), C3 (CSK-gating exemptions), M2
-   (`ace.size` returns), M3 (`ace.mv` semantics), M4 (`process_VLI` units).
+1. **Interoperability blockers (before any external review):** ~~C1 (address-arithmetic rule +
+   snippet fixes)~~, ~~C2 (split provisioning/import validity)~~, ~~C3 (CSK-gating exemptions)~~,
+   M2 (`ace.size` returns), ~~M3 (`ace.mv` semantics)~~, ~~M4 (`process_VLI` units)~~ — all done
+   except M2.
 2. **Normative-status and trap-model repairs:** M1 (promote forward-progress text), M6/M7 (fault
    binding for background completion; `ace_exc_fatal` delivery), M8 (reset table), M14 (`macecsk`
    flag rule, reserved `ace.mgmt` immediates), M9 (bounded-UNPREDICTABLE clause).
@@ -259,6 +247,30 @@ Beyond the findings above (C1's snippet mismatch, C2 vs. Book 4's validity note,
 
 #########################################################################################################
 
+
+**FIXED M4 — `process_VLI` conflates bits and bytes when reading/writing `acestart`**
+
+- **Rationale:** `acestart` is architecturally a byte count, but the central shared procedure of
+  Book 2 stored a bit count into it and read it back as a bit offset. Every algorithm built on
+  `process_VLI` — hashes, HMAC, KMAC, GCM IV absorption, EdDSA, ML-KEM/ML-DSA field loading —
+  inherited the off-by-×8. This was not cosmetic: under the literal text a resumed absorption
+  restarts eight times too early, so the tail of the message is never absorbed and the digest is
+  wrong.
+- **Location:** `<<ACE-process-VLI>>`, the resumption step and the interruption point, against the
+  *Units* paragraph declaring `input_base` to be in bits. `_Hash_Output_` in the same chapter
+  always converted correctly (`output_base <- 8·acestart`, `acestart <- output_base / 8`), which
+  is what made the omission visible.
+- **How it was fixed:** the two sites now convert explicitly —
+  `input_base <- 8 · acestart` on resumption and `acestart <- input_base / 8` at the interruption
+  point — each with a clause naming the reason (the local is in bits, the CSR counts bytes) and
+  noting that the division is exact because the procedure defines no sub-byte interruption point.
+  The interruption point also cross-references the matching conversion in `_Hash_Output_`.
+- **Verification:** `shake-kat.py`, `sha2-kat.py`, `sm3-kat.py`, `kmac-kat.py`, `hmac-kat.py` and
+  `gcm-kat.py` had all been modelling the corrected reading; their comments now cite the normative
+  text instead of the finding. `shake-kat.py` keeps the pre-fix unit clash as a declared negative
+  control, so a regression would be caught rather than silently producing wrong digests.
+
+---
 
 **FIXED m9 — Locality: encoding [5:4] = 3 unassigned.** The Boot Session Group defines only
 _No Boot Binding_ (0), _PhysBootScrt_ (1) and _VirtBootScrt_ (2); the value 3 had no stated
@@ -914,9 +926,10 @@ debris in the wrong instruction.
 
 Demonstrated, not merely asserted:
 
-- **M4** (`process_VLI` bit/byte clash): under the literal reading a resumed absorption restarts
-  eight times too early and the message tail is never absorbed — wrong digests, not a cosmetic
-  defect. Confirmed by `shake-kat.py`, `sha2-kat.py`, `kmac-kat.py`, `gcm-kat.py`.
+- **M4** (`process_VLI` bit/byte clash): under the literal reading a resumed absorption restarted
+  eight times too early and the message tail was never absorbed — wrong digests, not a cosmetic
+  defect. Confirmed by `shake-kat.py`, `sha2-kat.py`, `kmac-kat.py`, `gcm-kat.py`. **Since fixed**
+  (see FIXED M4); `shake-kat.py` keeps the pre-fix behaviour as a negative control.
 - **M10** (ECC `_Set_Signature_` dead end): a breadth-first search over the transition relation as
   it was written found no state reachable from `_Set_Signature_`; verification was unreachable.
   **Since fixed** (see M10 above); `ecc-kat.py` keeps the pre-fix relation as a regression check
