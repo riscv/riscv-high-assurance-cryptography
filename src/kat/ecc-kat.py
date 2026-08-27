@@ -333,9 +333,9 @@ class CR:
         if not self.policy_verify:
             raise ACEInvalid('verification not permitted by AlgorithmPolicy')
         if self.mode == 'eddsa':
-            if self.msg_pass == 1:
+            if self.msg_pass == 3:                        # verification pass complete
                 return
-            if self.msg_pass == 0 and self.has_hash:
+            if self.msg_pass == 0 and self.has_hash:      # pre-hash
                 return
             raise ACEInvalid('Sign_Verify entered with msg_pass='
                              f'{self.msg_pass}, HasHash={self.has_hash}')
@@ -579,9 +579,12 @@ class CR:
         elif self._pass_xs == 1:
             self._kprime = val
             self.msg_pass = 2
-        else:
+        else:                                             # pass Xs = 2: verification
             self._kprime = val
-            self.msg_pass = 1
+            # 3, not 1: signing pass 1 also records a completed pass, and were both
+            # to use 1 a caller could run signing pass 1 and then enter _Sign_Verify_,
+            # which would verify against a k' that was never computed (<<ACE-EdDSA>>).
+            self.msg_pass = 3
         self._absorb = None
         self._pass_xs = None
 
@@ -617,7 +620,7 @@ class CR:
         A = c.decode(self.sec)
         if R is None or A is None:
             return False
-        if self.msg_pass == 1:
+        if self.msg_pass == 3:                            # pure: k' from the verification pass
             kp = self._kprime
         else:
             kp = int.from_bytes(self._H(self._dom(1) + R_enc + self.sec + self.hash),
