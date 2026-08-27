@@ -88,7 +88,28 @@ def POLYVAL(auth_key: int, blocks) -> int:
     return tmp
 
 
-def SCC_Encrypt(AD, N: int, P, K: int, length_block=None):
+def _tag_block(S: int, sep: int) -> int:
+    """0 @ sep @ S[125:0]: the AES input of the tag computation.
+
+    Bit 127 = 0 marks the tag domain (RFC 8452); bit 126 carries the segment
+    selector, so the same AD and plaintext give different tags in the two
+    segments.  Widths: 1 + 1 + 126 = 128.
+    """
+    return cat((0, 1), (sep & 1, 1), (sl(S, 125, 0), 126))
+
+
+def _ctr_block(SIV: int, sep: int, i: int) -> int:
+    """1 @ sep @ SIV[125:32] @ bin((int(SIV[31:0]) + i) mod 2**32, 32).
+
+    <<ACE-SCC-AEAD>> replaces RFC 8452's SIV[126] with an explicit segment
+    selector, so the two segments' keystream inputs are disjoint by
+    construction.  Widths: 1 + 1 + 94 + 32 = 128.
+    """
+    return cat((1, 1), (sep & 1, 1), (sl(SIV, 125, 32), 94),
+               ((sl(SIV, 31, 0) + i) & M32, 32))
+
+
+def SCC_Encrypt(AD, N: int, sep: int, P, K: int, length_block=None):
     """<<ACE-SCC-GCM-SIV-enc>>.
 
     length_block is not part of the spec: passing one restores the RFC 8452
@@ -99,25 +120,19 @@ def SCC_Encrypt(AD, N: int, P, K: int, length_block=None):
     blocks = list(AD) + list(P) + ([] if length_block is None else [length_block])
     SIV = POLYVAL(auth_key, blocks)
     SIV = (SIV & ~((1 << 96) - 1)) | (sl(SIV, 95, 0) ^ N)   # SIV[95:0] ^= N
-    SIV = AESE256(enc_key, cat((0, 1), (sl(SIV, 126, 0), 127)))
-    C = [P[i] ^ AESE256(enc_key,
-                        cat((1, 1), (sl(SIV, 126, 32), 95),
-                            ((sl(SIV, 31, 0) + i) & M32, 32)))
-         for i in range(len(P))]
+    SIV = AESE256(enc_key, _tag_block(SIV, sep))
+    C = [P[i] ^ AESE256(enc_key, _ctr_block(SIV, sep, i)) for i in range(len(P))]
     return SIV, C
 
 
-def SCC_Decrypt(AD, N: int, SIV: int, C, K: int, length_block=None):
+def SCC_Decrypt(AD, N: int, sep: int, SIV: int, C, K: int, length_block=None):
     """<<ACE-SCC-GCM-SIV-dec>>."""
     enc_key, auth_key = RFC8452_KeyDeriv(K, N)
-    P = [C[i] ^ AESE256(enc_key,
-                        cat((1, 1), (sl(SIV, 126, 32), 95),
-                            ((sl(SIV, 31, 0) + i) & M32, 32)))
-         for i in range(len(C))]
+    P = [C[i] ^ AESE256(enc_key, _ctr_block(SIV, sep, i)) for i in range(len(C))]
     blocks = list(AD) + list(P) + ([] if length_block is None else [length_block])
     tmp = POLYVAL(auth_key, blocks)
     tmp = (tmp & ~((1 << 96) - 1)) | (sl(tmp, 95, 0) ^ N)
-    tmp = AESE256(enc_key, cat((0, 1), (sl(tmp, 126, 0), 127)))
+    tmp = AESE256(enc_key, _tag_block(tmp, sep))
     if tmp != SIV:
         return False, [0] * len(C)
     return True, P
@@ -193,13 +208,14 @@ def scc_export(saved_MDH: int, content1, CSK: int, LST: dict,
     saved_MDH is authenticated as AD[0] exactly as it appears in the SCC.
     """
     AD = _ad_segment1(saved_MDH, LST)
-    SIV, C1 = SCC_Encrypt(AD, 0, list(content1), CSK, length_block)
+    SIV, C1 = SCC_Encrypt(AD, 0, 0, list(content1), CSK, length_block=length_block)
     out = v2b(saved_MDH, 16) + v2b(SIV, 16)
     out += b''.join(v2b(c, 16) for c in C1)
     if sl(saved_MDH, 45, 32) != 0:
         assert IMPQUAL is not None
         AD2 = [IMPQUAL, SIV]                       # len_AD2 = 2
-        SIV2, C2 = SCC_Encrypt(AD2, 0, list(content2), CSK, length_block)
+        SIV2, C2 = SCC_Encrypt(AD2, 0, 1, list(content2), CSK,
+                               length_block=length_block)
         out += v2b(IMPQUAL, 16) + v2b(SIV2, 16)
         out += b''.join(v2b(c, 16) for c in C2)
     return out
@@ -211,7 +227,7 @@ def scc_export_error_state(mdh: int, CSK: int, LST: dict) -> bytes:
     _ImpDataLen_ has been set to 0 on entering the Error State."""
     assert sl(mdh, 45, 32) == 0, 'ImpDataLen is cleared on entering an Error State'
     AD = _ad_segment1(mdh, LST)
-    SIV, C = SCC_Encrypt(AD, 0, [], CSK)
+    SIV, C = SCC_Encrypt(AD, 0, 0, [], CSK)
     assert C == []
     return v2b(mdh, 16) + v2b(SIV, 16)
 
@@ -245,7 +261,7 @@ def scc_import(scc: bytes, CSK: int, LST: dict, len_PC=None,
 
     saved_MDH = M                                        # step 7
     AD = _ad_segment1(saved_MDH, LST)                    # steps 8-9
-    correct, P1 = SCC_Decrypt(AD, 0, SIV, C1, CSK, length_block)
+    correct, P1 = SCC_Decrypt(AD, 0, 0, SIV, C1, CSK, length_block=length_block)
     if not correct:                                      # step 12
         return {'status': 'ace_state_import_auth', 'mdh': None,
                 'content1': None, 'imp_data_len': 0, 'content2': None,
@@ -265,7 +281,8 @@ def scc_import(scc: bytes, CSK: int, LST: dict, len_PC=None,
     len_PC2 = imp - 2                                    # IMPQUAL + SIV2 + C2
     C2 = [b2v(rest[32 + 16 * i:48 + 16 * i]) for i in range(len_PC2)]
     AD2 = [IMPQUAL, SIV]
-    correct2, P2 = SCC_Decrypt(AD2, 0, SIV2, C2, CSK, length_block)
+    correct2, P2 = SCC_Decrypt(AD2, 0, 1, SIV2, C2, CSK,
+                               length_block=length_block)
     if not correct2:                                     # step 14
         res['imp_data_len'] = 0
         res['vds_discarded'] = True
@@ -414,7 +431,7 @@ def main():
 
     # Cleared plaintext on failure, per <<ACE-SCC-GCM-SIV-dec>>.
     AD = _ad_segment1(mdh, LST)
-    corr, P = SCC_Decrypt(AD, 0, b2v(scc[16:32]) ^ 1,
+    corr, P = SCC_Decrypt(AD, 0, 0, b2v(scc[16:32]) ^ 1,
                           [b2v(scc[32 + 16 * i:48 + 16 * i]) for i in range(n)],
                           CSK)
     chk(not corr and P == [0] * n,
@@ -479,6 +496,52 @@ def main():
         "SIV2 changes when SIV changes (segment binding)")
     chk(scc_i[off + 32:] != scc_b[off + 32:],
         "the segment-2 keystream changes when SIV changes")
+    # m18: the segment separator is load-bearing, not decorative.  The spec
+    # replaces RFC 8452's SIV[126] with an explicit `sep` bit in the keystream
+    # input, so the two segments' counter-block spaces are disjoint *by
+    # construction* rather than because their SIVs happen to differ.
+    chk(_ctr_block(0, 0, 0) != _ctr_block(0, 1, 0),
+        "sep separates the counter blocks even when the two SIVs are identical")
+    widths_ok = all(_ctr_block(siv, sp, i).bit_length() <= 128
+                    for siv in (0, MASK128, 0x5A5A << 32) for sp in (0, 1)
+                    for i in (0, 1, M32))
+    chk(widths_ok, "counter block is 128 bits wide (1 + 1 + 94 + 32)")
+    chk(sl(_ctr_block(MASK128, 0, 0), 127, 126) == 0b10
+        and sl(_ctr_block(MASK128, 1, 0), 127, 126) == 0b11,
+        "bit 127 = 1 (RFC 8452) and bit 126 = sep, overriding SIV[126]")
+    # The worst case the separator is there to kill: identical SIVs.  With the
+    # same key, nonce and counter origin, the two segments must still produce
+    # different keystreams.
+    ks0 = [AESE256(RFC8452_KeyDeriv(CSK, 0)[0], _ctr_block(0x1234, 0, i)) for i in range(4)]
+    ks1 = [AESE256(RFC8452_KeyDeriv(CSK, 0)[0], _ctr_block(0x1234, 1, i)) for i in range(4)]
+    chk(all(a != b for a, b in zip(ks0, ks1)),
+        "identical SIVs yield disjoint keystreams for the two segments")
+    # Conversely, SIV[126] no longer reaches the keystream at all: two SIVs
+    # differing only in that bit now give the SAME keystream.  Harmless here
+    # (the segments are separated by sep instead) but it is a real consequence.
+    chk(_ctr_block(0, 0, 0) == _ctr_block(1 << 126, 0, 0),
+        "SIV[126] no longer reaches the keystream input (94-bit SIV-derived IV)")
+    # The TAG carries the same separator, so authentication is separated by
+    # construction too: identical AD and plaintext give different tags, and a
+    # segment-1 tag does not verify when read as a segment-2 tag.
+    chk(sl(_tag_block(MASK128, 0), 127, 126) == 0b00
+        and sl(_tag_block(MASK128, 1), 127, 126) == 0b01,
+        "tag input: bit 127 = 0 (RFC 8452 tag domain) and bit 126 = sep")
+    chk(_tag_block(MASK128, 0).bit_length() <= 128
+        and _tag_block(0, 1) == (1 << 126),
+        "tag input is 128 bits wide (1 + 1 + 126)")
+    ad1 = _ad_segment1(mdh_i, LST)
+    t1, c1 = SCC_Encrypt(ad1, 0, 0, list(CONTENT1), CSK)
+    t2, c2 = SCC_Encrypt(ad1, 0, 1, list(CONTENT1), CSK)
+    chk(t1 != t2, "sep enters the tag: same AD and P give different SIVs")
+    chk(c1 != c2, "sep enters the keystream: same AD and P give different C")
+    ok1, _ = SCC_Decrypt(ad1, 0, 0, t1, c1, CSK)
+    cross, _ = SCC_Decrypt(ad1, 0, 1, t1, c1, CSK)
+    chk(ok1 and not cross,
+        "a segment-1 payload does not authenticate when read with sep = 1")
+    # POLYVAL bit 126 no longer reaches the tag input, the price of the separator.
+    chk(_tag_block(0, 0) == _tag_block(1 << 126, 0),
+        "POLYVAL bit 126 no longer reaches the tag input (126-bit tag input)")
     # Tampering inside segment 2 discards the VDS but keeps segment 1.
     bad_vds = 0
     for bit in flips(off, len(scc_i), 23):
@@ -549,9 +612,15 @@ def main():
     print("\nSPEC-NOTE: the sealing construction has no external vectors by "
           "design (<<ACE-SCC-AEAD>> omits both the nonce and the length "
           "block); only its component functions are standard-anchored.")
-    print("SPEC-NOTE: segment 1 and segment 2 are authenticated under the same "
-          "derived keys, separated only by the shape of their AD "
-          "(review finding m18); no domain-separation constant is present.")
+    print("SPEC-NOTE: review finding m18 is fixed on BOTH sides. <<ACE-SCC-AEAD>> "
+          "puts the segment selector in bit 126 of each AES input the construction "
+          "forms: 0 @ sep @ POLYVAL(...)[125:0] for the tag and 1 @ sep @ "
+          "SIV[125:32] @ counter for the keystream, with bit 127 still separating "
+          "tag from keystream as in RFC 8452. Neither the tags nor the keystreams "
+          "of the two segments can coincide, whatever the values. The price, "
+          "checked above, is one bit on each side: the tag input carries 126 bits "
+          "of the POLYVAL result rather than 127, and the counter block 94 bits of "
+          "the SIV rather than 95.")
 
     print(f"\nKAT-RESULT: {'PASS' if ok else 'FAIL'}")
     return 0 if ok else 1

@@ -3359,6 +3359,7 @@ The changes are:
 This is intentional: the information needed to fully determine the lengths of
 all sections is already included in the MDH, and thus in the POLYVAL.
 . The optional Nonce is omitted.
+. A domain separation bit, `sep`, has been added to distinguish the two segments of the content that are sealed in a SCC: the fixed architecture-defined content (`sep` = 0) and the optional implementation-dependent content (`sep` = 1).
 
 We define the Key Derivation (<<ACE-SCC-RFC8452-derivation>>) and POLYVAL (<<ACE-SCC-POLYVAL>>) functions first.
 The generation of an SCC from a CR (<<ACE-SCC-export>>) and the import of an SCC into a CR (<<ACE-SCC-import>>) are defined next.
@@ -3445,15 +3446,29 @@ i.e., <<ACE-SCC-GCM-SIV-enc>> and <<ACE-SCC-GCM-SIV-dec>>:
 * `N` is a 96-bit Nonce; and
 * `SIV` is a 128-bit SIV/tag.
 
-[NOTE]
-====
-Another difference with respect to AES-GCM-SIV is that we add a further domain separation bit
-to generate the encryption keystream. Since we are encrypting two segments (the fixed architecture-defined content and the optional implementation-dependent content) we replace bit 126 of SIV, resp. SIV2, with 0 and 1 in the input to keysteam generation to distinguish them.
-The two content segments are keyed identically. No attack follows from this, since a SIV=SIV2 collision
-happens with negligible probability; but the separation is then a property of the values rather than of the
-construction. Forcing these bits to be different
-makes the separation unconditional, which is what a security proof requires.
-====
+// [NOTE]
+// ====
+// Another difference with respect to AES-GCM-SIV is that we add a domain separation bit, `sep`, to
+// distinguish the two segments we seal: the fixed architecture-defined content (`sep` = 0) and the
+// optional implementation-dependent content (`sep` = 1). The two segments are keyed identically,
+// since both derive their keys from the same CSK under the same all-zero nonce, so without a
+// separator they would be told apart only by the values that happen to occupy their Associated Data
+// and their SIVs. No attack follows from that — a `SIV` = `SIV2` collision has negligible
+// probability — but the separation is then a property of the values rather than of the construction.
+//
+// `sep` is placed in bit 126 of *both* AES inputs that the construction forms, so that the
+// separation is unconditional on both sides:
+//
+// * in the *tag* computation, `0 @ sep @ POLYVAL(`{ellipsis}`)[125:0]`, so that the same
+//   Associated Data and plaintext yield different tags in the two segments; and
+// * in the *keystream* counter block, `1 @ sep @ SIV[125:32] @` counter, so that the two segments
+//   cannot share a keystream even if their SIVs were to collide.
+//
+// Bit 127 continues to distinguish the tag input (0) from the keystream input (1), as in
+// cite:[RFC8452]. The cost is one bit in each case: the tag input carries 126 bits of the `POLYVAL`
+// result rather than 127, and the keystream counter block carries 94 bits of the `SIV` rather than
+// 95. Both reductions leave the corresponding collision terms of the same order as the almost-XOR-universal bound of `POLYVAL` itself, and so do not affect the security claim stated above.
+// ====
 
 [[ACE-SCC-GCM-SIV-enc]]
 .AES-GCM-SIV Encryption for SCC Generation
@@ -3469,7 +3484,7 @@ function SCC_Encrypt(AD[] : array of bits(128), N : bits(96), sep: bits(1),
   enc_key, auth_key ← RFC8452_KeyDeriv(K,N);
   SIV ← POLYVAL(auth_key, AD || P, len_AD + len_PC);
   SIV[95:0] ← SIV[95:0] xor N;
-  SIV ← AESE256(enc_key, 0 @ SIV[126:0]);
+  SIV ← AESE256(enc_key, 0 @ sep @ SIV[125:0]);
 
   foreach(i from 0 to len_PC - 1) do:
     C[i] ← P[i] xor AESE256(enc_key,
@@ -3483,8 +3498,8 @@ function SCC_Encrypt(AD[] : array of bits(128), N : bits(96), sep: bits(1),
 .AES-GCM-SIV Decryption for SCC Import
 []
 ----
-function SCC_Decrypt(AD[] : array of bits(128), N : bits(96), SIV : bits(128),
-    sep: bits(1), C[] : array of bits(128), K : bits(256),
+function SCC_Decrypt(AD[] : array of bits(128), N : bits(96), sep: bits(1),
+    SIV : bits(128), C[] : array of bits(128), K : bits(256),
     len_AD : int, len_PC : int)
   → {correct : bool, P[] : array of bits(128)} =
 {
@@ -3500,7 +3515,7 @@ function SCC_Decrypt(AD[] : array of bits(128), N : bits(96), SIV : bits(128),
   s ← POLYVAL(auth_key, AD || P, len_AD + len_PC);
   tmp ← s;
   tmp[95:0] ← tmp[95:0] xor N;
-  tmp ← AESE256(enc_key, 0 @ tmp[126:0]);
+  tmp ← AESE256(enc_key, 0 @ sep @ tmp[125:0]);
 
   if (tmp != SIV) then:
     foreach(i from 0 to len_PC - 1)
@@ -3588,12 +3603,12 @@ When the import of the SCC of a fully configured CR is completed,
  . foreach (`j` from 0 to 10) do:
  .. If `saved_MDH`._Locality_ includes Locality #j, then ``AD[len_AD]`` <-  ``LST[j]``, ``len_AD`` <- ``len_AD`` + 1
  . `len_PC` <- length of Section 3.
- . `correct`, `K(i).Content1[]` <- ``SCC_Decrypt(AD, zeros(96), SIV, 0, K(i).Content1[], CSK, len_AD, len_PC)``.
+ . `correct`, `K(i).Content1[]` <- ``SCC_Decrypt(AD, zeros(96), 0, SIV, K(i).Content1[], CSK, len_AD, len_PC)``.
  . If `correct` {ne} `true`, then reject the SCC, clear ``K(i)``, and set Error State _ace_state_import_auth_.
  . Second, if the Implementation VDS was loaded at Step 6 — that is, if `saved_MDH`._ImpDataLen_ {ne} 0 *and* the length was not adjusted at Step 5 — the implementation-dependent data is processed:
 .. `len_AD2` <- 2, ``AD2[0]`` <- ``K(i)``.``IMPQUAL``, ``AD2[1]`` <- `SIV`.
 .. `len_PC2` <- length of Section 6.
-.. `correct`, `K(i).Content2[]` <- ``SCC_Decrypt(AD2, zeros(96), SIV2, 1, K(i).Content2[], CSK, len_AD2, len_PC2)``.
+.. `correct`, `K(i).Content2[]` <- ``SCC_Decrypt(AD2, zeros(96), 1, SIV2, K(i).Content2[], CSK, len_AD2, len_PC2)``.
  . If `correct` {ne} `true`, the Implementation VDS is discarded: `Content2[]` is dropped, _ImpDataLen_ is set to 0, and the import completes using only the architecture-dependent content. Only a failure of the first authentication (`SIV`) rejects the entire SCC.
 --
 
