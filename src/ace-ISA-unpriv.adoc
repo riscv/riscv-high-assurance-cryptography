@@ -946,7 +946,7 @@ In this case, ACE exceptions are replaced by direct transitions of the CR to an 
 |===
 | ACE Exception                  | Behavior when the Privileged Architecture is not available.
 | `ace_exc_fatal`                | Implementation and platform defined behavior.
-| `ace_exc_csk_incomplete`       | Does not apply: the condition can only be observed from a mode below M, and the flags are reset on every entry to M-mode.
+| `ace_exc_no_csk`               | The exception is raised as described; on an M-mode-only hart M-mode is both the only mode that can observe it and the only one that can establish a CSK.
 | `ace_exc_unsupported`          | Transition to Error State _Unsupported_.
 | `ace_exc_CR_off`               | Does not apply without Privileged Architecture, since the `*lcrstatus` CSRs are not available.
 | `ace_exc_out_of_memory`        | Transition to Error State `ace_state_out_of_memory`.
@@ -995,6 +995,17 @@ The ACE state reset completes before the trap is taken.
 Other conditions may be detected synchronously, i.e., at issue of an ACE instruction or ACE CSR access.
 --
 
+No CSK:::
++
+--
+Using any ACE instruction, or accessing an ACE CSR, while no CSK is active raises ACE exception
+`ace_exc_no_csk` (<<ACE-CSK-requirements>>). This covers both a CSK that has never been
+established and a `macecsk` group that is only partially written. Two groups are exempt: the
+`macecsk` group (if present), and the read-only identification CSRs `acemvendorid`, `acemarchid`,
+`acemimpid` and `acemaxiobuflen`, which remain readable so that firmware can identify the ACE unit
+before establishing a CSK.
+--
+
 Illegal Instructions:::
 +
 --
@@ -1003,10 +1014,6 @@ Any of the following conditions raises an illegal-instruction exception.
 
  . If ACE not present (`misa.L` clear) or any governing ACES field is Off, then issuing any ACE instruction, or accessing any ACE CSR.
   (Note that this does _not_ refer to the `*lcrstatus` CSRs fields of a CR being Off.)
- . Using any ACE instruction, or accessing an ACE CSR, if a CSK has not been configured
-   (<<ACE-CSK-requirements>>). Two groups are exempt: the `macecsk` group (if present), and the
-   read-only identification CSRs `acemvendorid`, `acemarchid`, `acemimpid` and `acemaxiobuflen`,
-   which remain readable so that firmware can identify the ACE unit before establishing a CSK.
  . Use of the zero register `X0` as a CR indirect index unless explicitly allowed to encode special cases.
  . Issuing `ace.load`, `ace.store`, or `ace.mv` on a CR with _ConfigStatus_ equal to `ace_cfgst_complete`.
  . Use an odd register number, resp., a register number not divisible by four, when a register pair, resp., quartet, is expected in an instruction.
@@ -1075,7 +1082,19 @@ Algorithmic errors may occur in import processes or in the Algorithms themselves
 We note that successful or failed verification of an authentication tag in an AEAD Algorithm or of a signature is _not_ an algorithmic error, as the Algorithm is performing as expected.
 --
 
-In any outcome other than the complete execution of the instruction, the latter writes no vector register, GPR, ACEIOBUF byte, or memory location. The sole exception is a block-iterated `ace.exec` (<<ACE-resumability>>) that encounters an error after fully processing `j` {ge} 1 blocks. In that case, the outputs of those `j` blocks remain written; no part of the failing block or any later block is written; and `acestart` contains the byte count of the completed blocks. The error condition's effects on the CR state are unchanged.
+In any outcome other than the complete execution of the instruction, the latter writes no vector
+register, GPR, CR byte, ACEIOBUF byte, or memory location. The exceptions are the instructions
+that honor `acestart` (<<ACE-CSR-acestart>>) — `ace.exec`, `ace.derive`, `ace.load`, `ace.store`,
+`ace.input` and `ace.output` — when they are precisely halted, or encounter an error, after making
+partial progress. In that case the results of the completed prefix remain written, nothing of the
+failing unit or of any later one is written, and `acestart` records the prefix-complete point:
+
+* for a block-iterated `ace.exec` or `ace.derive`, the outputs of the `j` {ge} 1 fully processed
+  blocks remain written and `acestart` holds their byte count;
+* for `ace.load`, `ace.store`, `ace.input` and `ace.output`, the bytes at offsets below the new
+  `acestart` remain transferred on both sides.
+
+The error condition's effects on the CR state are unchanged.
 
 In case an illegal-instruction exception or an ACE exception is raised,
 the trapped instruction does not retire and `xepc` holds its address.
@@ -1279,7 +1298,15 @@ Progress tracking by `acestart` also applies to `ace.exec` when iteratively proc
 
 ACE does not have an _intrinsic_ concept of element length, hence `acestart` counts the number of _bytes_ processed so far by `ace.exec`, or read/written by `ace.input`/`ace.output` or `ace.store`/`ace.load`.
 
-In some Algorithm-specific cases, `ace.exec` and `ace.setst` may be interrupted with a different semantic that does not necessarily correspond to a byte-granular progress, and which is given explicitly in the specifications of the corresponding Algorithm.
+`acestart` is always a byte count. Where an Algorithm defines a long-running operation whose
+progress is not byte-structured — the point multiplications and signature operations of
+<<ACE-ECC>> and <<ACE-PQC>>, for instance — that progress is recorded in the _AlgorithmUse_ field
+in an implementation-defined way, not in `acestart`.
+
+`ace.setst` is not interruptible under any condition defined by this specification. Where an
+Algorithm gives it a long-running operation, an implementation may nonetheless interrupt and
+resume it, but the manner in which it records progress is implementation-defined and portable
+software must not depend on it (<<ACE-resumability>>).
 
 Only these instructions honor a nonzero `acestart`; all other instructions ignore it and are restarted.
 
@@ -1348,6 +1375,17 @@ the loss is confined to the interleaved operations, which fail authentication or
 
 The value of `acemanagedcr` out of ACE unit reset is 32.
 
+_Included in_::
++
+--
+[%header,cols="4,2,2"]
+|===
+|Extension | Minimum version | Lifecycle state
+| `Zklv`    | v0.0.0          | --
+| `Zklio`   | v0.0.0          | --
+|===
+--
+
 // ////////////////////////////////////////////////////////////////////
 
 [[ACE-CSR-acesiv]]
@@ -1362,6 +1400,17 @@ On RV32,
 CSR `acesivlh` shadows bits [63:32] of `acesivl`, and
 CSR `acesivhh` shadows bits [63:32] of `acesivh`,
 to allow access to those bits.
+
+_Included in_::
++
+--
+[%header,cols="4,2,2"]
+|===
+|Extension | Minimum version | Lifecycle state
+| `Zklv`    | v0.0.0          | --
+| `Zklio`   | v0.0.0          | --
+|===
+--
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -1378,6 +1427,17 @@ CSR `acesiv2lh` shadows bits [63:32] of `acesiv2l`, and
 CSR `acesiv2hh` shadows bits [63:32] of `acesiv2h`,
 to allow access to those bits.
 
+_Included in_::
++
+--
+[%header,cols="4,2,2"]
+|===
+|Extension | Minimum version | Lifecycle state
+| `Zklv`    | v0.0.0          | --
+| `Zklio`   | v0.0.0          | --
+|===
+--
+
 // ////////////////////////////////////////////////////////////////////
 
 [[ACE-CSR-aceiq]]
@@ -1393,13 +1453,24 @@ CSR `aceiqlh` shadows bits [63:32] of `aceiql`, and
 CSR `aceiqhh` shadows bits [63:32] of `aceiqh`,
 to allow access to those bits.
 
+_Included in_::
++
+--
+[%header,cols="4,2,2"]
+|===
+|Extension | Minimum version | Lifecycle state
+| `Zklv`    | v0.0.0          | --
+| `Zklio`   | v0.0.0          | --
+|===
+--
+
 // ////////////////////////////////////////////////////////////////////
 
 [[ACE-CSK-requirements]]
 === Architectural Requirements on the Context Sealing Key
 
 A Context Sealing Key (CSK) must always be configured before the ACE unit can operate.
-Without a configured CSK, every ACE instruction raises an illegal-instruction exception, as does
+Without an active CSK, every ACE instruction raises ACE exception `ace_exc_no_csk`, as does
 every ACE CSR access other than the `macecsk` group and the read-only identification CSRs
 `acemvendorid`, `acemarchid`, `acemimpid` and `acemaxiobuflen` (<<ACE-CSR-impl-ids>>,
 <<ACE-CSR-acemaxiobuflen>>). Those four are always readable: in the second and fourth CSK models
@@ -1434,7 +1505,8 @@ The `macecsk` CSRs of <<ACE-CSR-macecsk>> are readable and writable by M-mode on
 
 An implementation that reprograms a CSK must follow the activation rules in
 <<ACE-CSR-macecsk>>: the ACE unit is unavailable while the `macecsk` group is partially
-written, and use of it in that condition raises ACE exception `ace_exc_csk_incomplete`.
+written, and use of it in that condition raises ACE exception `ace_exc_no_csk` — the same cause as
+when no CSK has been established at all, the two being indistinguishable to the user of the unit.
 A partial write survives a transition out of M-mode, so the condition is reported rather than
 lost; entering M-mode discards it, so a handler can restart the sequence.
 
@@ -1633,8 +1705,11 @@ MDH, advancing both the memory address and the offset within that representation
 beginning at the current `acestart`.
 Precisely, for each _j_ from `acestart` to `size` − 1, the byte at memory address
 `Xs1 + %offset + `_j_ is loaded into the _j_-th byte after the MDH of the serialized
-representation of the CR, that is the (_j_+16)-th byte of the serialized payload.
-Both the memory address and the CR offset carry the same _j_, so the two are always in step.
+representation of the CR.
+A resumed `ace.load` therefore transfers `size` − `acestart` bytes, not `size`, and the first
+byte it moves is the one at memory address `Xs1 + %offset + acestart`: the index _j_ advances the
+memory address and the CR offset together, so a resumption never re-reads a byte already loaded
+and never displaces the remainder of the payload.
 
 While `acestart` for CR transfers is a byte count, implementations may halt only at 16-byte multiples.
 
@@ -1710,10 +1785,12 @@ In other words, `ace.store` stores data in 16-byte chunks.
 `ace.store` copies data from the serialized representation of the CR that follows the MDH to
 external memory, advancing both the offset within that representation and the memory address
 together, and beginning at the current `acestart`.
-Precisely, for each _j_ from `acestart` to `size` − 1, the _j_-th byte after the MDH of the
-serialized representation of the CR, that is the (_j_+16)-th byte of the serialized payload, is
-stored to memory address `Xs1 + %offset + `_j_.
-Both the memory address and the CR offset carry the same _j_, so the two are always in step.
+
+*Bound.* Let `imglen` be the serialized CR image length in bytes, excluding the MDH, and let `end` = min(`size`, `imglen`). For each _j_ from `acestart` to `end` − 1, `ace.store` writes the byte at offset _j_ after the MDH to memory address `Xs1 + %offset + `_j_. It never reads beyond the CR image.
+
+A resumed transfer writes `end` − `acestart` bytes, beginning at memory offset `acestart`; thus it neither rewrites stored bytes nor displaces the remaining payload.
+
+NOTE: `size` may exceed `imglen` because `ace_cfgst_exporting` does not distinguish a PI-shaped payload from an SCC-shaped one and therefore may specify the longer SCC length (<<ACE-length-rule>>). The bound prevents reads past the CR image into the CRF (<<ACE-cryptographic-registers>>). `ace.load` needs no equivalent bound because its _ConfigStatus_ identifies the payload type.
 
 While `acestart` for CR transfers is a byte count, implementations may halt only at 16-byte multiples.
 
@@ -1727,15 +1804,8 @@ See the non-normative note at the end of <<ACE-instruction-manage>>,
 
 If the _ConfigStatus_ field is equal to `ace_cfgst_complete`, then an illegal-instruction exception is raised.
 
-If the _ConfigStatus_ field is not equal to `ace_cfgst_complete`,
-the implementation first determines the size of the output to be generated from the first 8 bytes of the MDH.
-The type of the output, i.e. whether it is a PI or an SCC, is determined by the _ConfigStatus_ field, and
-its length by the fields listed in <<ACE-length-rule>>.
-Then, `ace.store` stores the CR to memory, beginning with the byte at offset `acestart` in the serialized representation of the CR,
-in XLEN-bit sized stores, in the memory region starting at address `%offset(Xs1)`.
-The order in which the LSU issues these transactions is implementation dependent.
-See the non-normative note at the end of <<ACE-instruction-manage>>,
-<<ACE-Memory-Model>>, and <<ACE-export-import-algorithms>> for further details.
+The order in which the LSU issues the component memory operations of the transfer is
+implementation dependent, subject to <<ACE-Memory-Model>>.
 
 NOTE: PI can be stored because a provisioning operation may be interrupted, and this allows resuming it.
 
@@ -2507,8 +2577,11 @@ On RV64, the semantics of the instructions are:
 * For `ace.restrictl`, `Xs` follows the format of bits [63:0] of the MDH,
 and for `ace.restricth`,  `Xs` follows the format of bits [127:64] of the MDH.
 
-* The fields _AlgorithmPolicy_, _SCProtection_, _Locality_, _UsagePolicy_, _ExpirationDate_ and _AlgorithmUse_ of MDH are replaced with the corresponding fields of `Xs`, if the latter are non-zero.
-All other fields are ignored.
+* Only the fields _AlgorithmPolicy_, _SCProtection_, _Locality_, _UsagePolicy_, _ExpirationDate_
+and _AlgorithmUse_ of `MDH` can be modified, and only where the corresponding field of `Xs` is
+non-zero. How each one is modified is given by the rules below, which in most cases narrow the
+field rather than overwrite it. A zero field of `Xs` leaves its counterpart in `MDH` unchanged,
+and every other field of `Xs` is ignored.
 
 * If the Algorithm configured in the CR does not make use of the field _AlgorithmPolicy_,
   or, for the encoded value of MDH._Algorithm_, _AlgorithmPolicy_ is used to encode an extension of _Algorithm,
@@ -3350,7 +3423,15 @@ This does not expand the attack surface, since the caller always retains full co
 [[ACE-resumability]]
 === Interruptibility and Resumability of ACE instructions
 
-Instructions `ace.setst`, `ace.mgmt`, `ace.getmd*`, `ace.restrict*`, `ace.clone`, `ace.mv`, and `ace.size` are uninterruptible.
+Instructions `ace.mgmt`, `ace.getmd*`, `ace.restrict*`, `ace.clone`, `ace.mv`, and `ace.size` are
+uninterruptible.
+
+`ace.setst` is uninterruptible under every condition this specification defines: there is no
+generic ground on which it may be interrupted. Where an Algorithm makes it perform a long-running
+operation, an implementation may interrupt and resume it, and how it records progress is then
+implementation-defined — the _AlgorithmUse_ field, as in <<ACE-ECC>> and <<ACE-PQC>>, rather than
+`acestart`. Such an interruption must still satisfy the completion guarantee below: each execution
+attempt either completes the operation or advances its recorded progress.
 
 // To bound the latency of the final `ace.mgmt` of an import, whose decryption and authentication work grows with the size of the SCC, implementations may interleave that work with the preceding load phase.
 

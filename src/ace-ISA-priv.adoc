@@ -91,8 +91,8 @@ The actual numbers are TBD.
 |      | Instruction page fault         | {empty}
 |      | Load page fault                | {empty}
 |      | Store page fault               | {empty}
-| TBD  | `ace_exc_fatal`          | Fatal system failure in the ACE unit.
-| TBD  | `ace_exc_csk_incomplete`       | Use of the ACE unit while the `macecsk` group is partially written, so that no CSK is active (see <<ACE-CSR-macecsk>>). Not delegable below M-mode: only M-mode can complete the CSK.
+| TBD  | `ace_exc_fatal`          | Fatal system failure in the ACE unit. Not delegable below M-mode.
+| TBD  | `ace_exc_no_csk`               | Use of the ACE unit while no CSK is active: either none has been established, or the `macecsk` group is only partially written (see <<ACE-CSK-requirements>>, <<ACE-CSR-macecsk>>). Not delegable below M-mode: only M-mode can establish a CSK.
 | TBD  | `ace_exc_unsupported`          | Invalid values at provisioning or import.
 | TBD  | `ace_exc_CR_off`               | Any access to a CR whose `*lcrstatus` field is _Off_. Enables on-demand (lazy) CR loading and trap-and-emulate (see <<ACE-CSR-lcrstatus>>).
 | TBD  | `ace_exc_out_of_memory`        | Insufficient CRF memory for configuration instruction. This may be set by privileged code in case it does not handle the CR allocation itself.
@@ -104,7 +104,8 @@ The actual numbers are TBD.
 
 === CSRs
 
-ACE extends `*status` and `misa`, and provides 3 direct and up to 28 indirect CSRs.
+ACE extends `*status` and `misa`, and provides three direct CSRs — six on RV32, counting the
+high shadows — and up to 28 indirect CSRs on RV32, 14 on RV64.
 
 [[ACE-CSRs-priv]]
 .ACE Privileged CSRs.
@@ -269,7 +270,8 @@ For each of these 3 CSRs:
 |===
 --
 
-`*lcrstatus` is evaluated only if the ACE instruction does not trigger an illegal-instruction exception (i.e., both `mstatus.ACES` and `vsstatus.ACES` are not Off).
+`*lcrstatus` is evaluated only if the ACE instruction raises neither an illegal-instruction
+exception, on any of the grounds listed in <<ACE-error-architecture>>, nor `ace_exc_no_csk`.
 
 For `mlcrstatus`:::
 +
@@ -733,13 +735,13 @@ A mechanism for ensuring this is the following:
 * Any mode change to M-mode resets the flags and discards the partially written value, so that M-mode always begins a configuration attempt from a clean state and a partial key is never activated.
 * A transition of the hart out of M-mode does *not* clear the flags: a partially written CSK persists, and the ACE unit stays unavailable, until M-mode is next entered.
 * Any ACE unit reset clears the write-tracking flags and discards the partially written value.
-* While any of the flags is set, that is while a CSK is partially written, the ACE unit is not available: any attempt to execute an ACE instruction, or to access an ACE CSR other than those named in <<ACE-CSK-requirements>>, raises ACE exception `ace_exc_csk_incomplete`. Because activation clears the flags, the unit becomes available again as soon as the group has been written in full.
+* While any of the flags is set, that is while a CSK is partially written, the ACE unit is not available: any attempt to execute an ACE instruction, or to access an ACE CSR other than those named in <<ACE-CSK-requirements>>, raises ACE exception `ace_exc_no_csk`. Because activation clears the flags, the unit becomes available again as soon as the group has been written in full.
 
 [NOTE]
 ====
 The two rules above work together. Because the flags survive leaving M-mode, a CSK write sequence
 that was interrupted before completion is not silently lost: the next ACE access from any mode
-traps with `ace_exc_csk_incomplete` and M-mode learns of it. Because entering M-mode then resets
+traps with `ace_exc_no_csk` and M-mode learns of it. Because entering M-mode then resets
 the flags, the handler is free to restart the sequence from the first CSR, and no combination of a
 stale partial write and a fresh one can activate a key that M-mode did not intend.
 ====
