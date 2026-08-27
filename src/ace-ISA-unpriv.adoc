@@ -1959,15 +1959,22 @@ In each variant the CR is the one named by `rs1`, directly or, if bit `r` is 1, 
 the GPR it names.
 
 *Bound.* Let `size` be the length in bytes of the PI or SCC being transferred, determined from
-the first 8 bytes of the MDH exactly as `ace.load` determines it (<<ACE-instruction-load>>). In
-every variant below:
+the first 8 bytes of the MDH exactly as `ace.load` determines it (<<ACE-instruction-load>>), let
+`imglen` be the serialized CR image length in bytes excluding the MDH, and let `end` =
+min(`size`, `imglen`). In every variant below:
 
-* If `acestart` {ge} `size`, the instruction performs no operation — no CR byte, GPR, or vector
+* If `acestart` {ge} `end`, the instruction performs no operation — no CR byte, GPR, or vector
   register is written and `acestart` is unchanged — and an illegal-instruction exception is
   raised.
-* If `acestart` + `n` > `size`, where `n` is the number of bytes the variant would otherwise
-  transfer, only the bytes at offsets [`acestart`, `size`) are transferred, and `acestart` is
-  set to `size`.
+* If `acestart` + `n` > `end`, where `n` is the number of bytes the variant would otherwise
+  transfer, only the bytes at offsets [`acestart`, `end`) are transferred, and `acestart` is
+  set to `end`.
+
+NOTE: `end` is bounded by `imglen` for the same reason as in `ace.store`
+(<<ACE-instruction-store>>): `size` may exceed the image a CR actually holds, so a bound on
+`size` alone would still permit a read past it into the CRF. Note that `size`, and hence the
+value `ace.size` reports, may then overstate the payload; this is accepted, as removing the
+overstatement would complicate the management protocol for no gain in safety.
 
 [NOTE]
 ====
@@ -2325,6 +2332,19 @@ No encryption or authentication occurs; the contents of the CR are exported verb
 .. The CR's _ConfigStatus_ is set to `ace_cfgst_exporting`. This is the value on which
    `ace.store` (<<ACE-instruction-store>>) and the CR-reading variants of `ace.mv`
    (<<ACE-move>>) are gated, so no export can proceed until it is set.
+
+// Open point — the assignment above is unconditional, so a CR opened for export while only
+// partially provisioned or partially imported loses the distinction its previous _ConfigStatus_
+// carried: `ace_cfgst_provisioning` identifies a PI-shaped payload and `ace_cfgst_exporting` an
+// SCC-shaped one, and the SCC length is the longer. `ace.store` and `ace.mv` are therefore
+// bounded by the real image length, and `size` and `ace.size` may overstate the payload.
+//
+// The root fix, should it be judged worthwhile, is to make this step conditional: set
+// `ace_cfgst_exporting` only when `ml`._ConfigStatus_ = `ace_cfgst_complete`, and otherwise leave
+// the field at its current value. `size` would then equal the image length in every case and
+// `ace.size` would report correctly, making both bounds redundant. It requires relaxing the gate
+// of the CR-reading variants of `ace.mv`, which presently demand exactly `ace_cfgst_exporting`,
+// to accept `ace_cfgst_provisioning` and `ace_cfgst_importing` as well.
 .. Write the CR's number to `acemanagedcr`.
 .. `acestart` is cleared.
 --
