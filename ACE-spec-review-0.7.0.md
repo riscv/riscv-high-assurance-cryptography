@@ -158,74 +158,6 @@ to defer but collectively preclude candidacy until at least provisionally resolv
 ### Minor
 
 
-**m4 — OCB nonce handling.** `N_len` is only constrained to 6…120
-(`src/ace-ISA-algorithms.adoc:1638`), but `bswap(N[N_len-1:0])` (`src/ace-ISA-algorithms.adoc:1700`)
-is undefined for non-byte-multiple lengths (`bswap` is byte-string reversal); either require
-8 | `N_len` or define the bit-level view. The ≥6 floor is also a silent deviation from RFC 7253
-(which allows any length ≤ 120, including empty); if deliberate (cf. the cited eprint 2023/326),
-say so in a note. `_Dec_Last_Block_` (`src/ace-ISA-algorithms.adoc:1781-1800`) omits the
-`index = ones(48)` guard present in `_Enc_Last_Block_`.
-
-**m5 — Ascon-AEAD128 padding-responsibility contradiction.** `src/ace-ISA-algorithms.adoc:2569`
-says the caller pads "the AD and the plaintext", but `_Enc_Last_Block_`/`_Dec_Last_Block_` apply
-`pad()` internally — a caller following the sentence double-pads. Reword: the caller pads the *AD*
-only; the final plaintext/ciphertext block is padded internally via `last_blk_len`.
-
-**m6 — CMAC empty-message notation.** With `last_blk_len` = 0 the formula uses
-`INPUT[last_blk_len-1:0]` = `INPUT[-1:0]` (`src/ace-ISA-algorithms.adoc:1931`), an undefined
-slice; the Book 4 example feeds a dummy zero block (`src/ace-pseudocode.adoc:751`). State
-explicitly: "if `last_blk_len` = 0, `INPUT` is ignored and the padded block is
-`zeros(b−8) @ 0b10000000`".
-
-**m8 — GCM-SIV missing transition instructions.** The instruction/Form used to *enter*
-`_Enc_Tag_Finalize_`, `_Encrypt_`, `_Decrypt_`, and `_Dec_Tag_Finalize_` is never stated (only the
-`ace.exec` expected *inside* each state); Book 4 implies Form A `ace.setst`. Add the transition
-clauses as GCM has them.
-
-**m9 — Locality gaps.** Encoding [5:4] = 3 in the _Locality_ field is unassigned with no stated
-behavior (`src/ace-ISA-unpriv.adoc:791-816`) — declare it invalid metadata. `sacelocality` has no
-VS shadow: with V=1, a guest (V)S can read the host S-mode Locality Secret if the hypervisor fails
-to swap it; unlike ordinary CSR state these are *secrets*, so add a normative warning (or a
-`vsacelocality` shadow) (`src/ace-ISA-priv.adoc:765-782`).
-
-**m10 — `acemaxiobuflen` without `Zklio`.** The CSR is "always present"
-(`src/ace-ISA-unpriv.adoc:222-224`) but its value when the ACEIOBUF is absent is unspecified;
-state it reads 0 when `Zklio` is not implemented.
-
-**m12 — Editorial/encoding debris.** Stray "x" line breaking the paragraph before the
-`ace.restrict` wavedrom (`src/ace-ISA-unpriv.adoc:2225`); `Content2~Plaintext[]` vs
-`Content2~PT~[]` (`src/ace-ISA-unpriv.adoc:3507`); residual "a byte" from the octet→byte rename
-(`src/ace-ISA-algorithms.adoc:757,827,1582`; also `src/ace-notation.adoc:25` "an *byte string*");
-recurring "causes the CR to transition to" (`src/ace-ISA-algorithms.adoc:1650,3854,3860,3973`,
-`src/ace-pseudocode.adoc:160`); `ace.setst`/`ace.mgmt` Form B RV32 quartet alignment (multiple of
-four?) unstated (`src/ace-ISA-unpriv.adoc:1944`); "either a B of `ace.setst`"
-(`src/ace-ISA-algorithms.adoc:3999`).
-
-**m13 — `ace.restrict*` usage control blocks the manager pattern.** A privileged manager without
-usage rights on a CC cannot restrict-then-delegate it (restrict is usage-controlled,
-`src/ace-ISA-unpriv.adoc:2359`), even though `ace.clear` — a strictly stronger denial primitive —
-is not. Either exempt `ace.restrict*` from usage control (it can only tighten) or add a rationale
-note.
-
-**m14 — ECC _Output_ wording.** "export sections of the result to memory"
-(`src/ace-ISA-algorithms.adoc:3402`) — Form C `ace.exec` writes `OUTPUT` (vector/ACEIOBUF), not
-memory.
-
-**m15 — ML-DSA `tr` for verify-only CCs.** `tr` is listed as internal state but serialized only
-inside `privkey`; a verification-only CC (pubkey + `tr` via `_tr_Input_`) loses `tr` across
-export/import. State where `tr` is serialized in that configuration, or state that it need not
-survive (`src/ace-ISA-algorithms.adoc:3863-3920`).
-
-**m16 — Offset immediates.** Whether `%offset` in `ace.load`/`ace.store`/`ace.input`/`ace.output`
-is the standard sign-extended 12-bit I/S-type immediate is never stated.
-
-**m18 — Sealing domain separation is incidental (hardening).** Segment-1 (`AD` = MDH ‖ Localities)
-and segment-2 (`AD2` = IMPQUAL ‖ SIV) authentications share the same derived keys, separated only
-by AD structure; the cross-interpretation attack requires `LST[j]` = `SIV`, which is negligible,
-but an explicit domain-separation constant as `AD[0]`'s companion (e.g., a fixed tag block per
-segment) would make the separation deliberate and provable rather than accidental
-(`src/ace-ISA-unpriv.adoc:3495-3517`).
-
 ---
 
 ## 3. Cross-Document Inconsistencies and Missing Requirements
@@ -273,7 +205,7 @@ Beyond the findings above (C1's snippet mismatch, C2 vs. Book 4's validity note,
 | FIPS 203 ML-KEM | `ACE-PQC-ML-KEM` | **Noncompliant as written (M12)** | §7.2/§7.3 input checks not required. Decaps implicit rejection correctly reflected (caller cannot distinguish). |
 | FIPS 204 ML-DSA | `ACE-PQC-ML-DSA` | **Needs clarification** | Sign_internal/Verify_internal with externally computed μ: consistent with NIST's external-μ usage, but the draft should cite the exact FIPS 204 provision it relies on. Hedged/deterministic selection present. |
 | Zkr entropy source | `ACE-RBG` | **Compliant by reference** | |
-| RISC-V opcode-space policy | `ACE-instructions-detailed` | **Noncompliant, acknowledged** | custom-0/1/2 placeholders (m17). |
+| RISC-V opcode-space policy | `ACE-instructions-detailed` | **Noncompliant, now normatively acknowledged** | custom-0/1/2 remain placeholders; m17 added an IMPORTANT block stating they cannot carry a ratified extension and that final encodings are for RVI to allocate. Still an ARC-track item. |
 | `misa`/`mstatus` allocations | Book 3 | **Open, acknowledged** | `misa.L`, `mstatus[26:25]` flagged provisional in-document. |
 | Smstateen non-integration claim | `src/ace-ISA-unpriv.adoc:1093`, `src/ace-ISA-priv.adoc:97` | **Plausible, verify with ARC** | Holds only if ACES gating covers *all* new user-visible state in all V/priv combinations; the claim should be argued, not asserted. |
 | RVWMO integration | `ACE-Memory-Model` | **Deferred, acknowledged** | Informal model is coherent (prefix-completeness + conflicting-access rule); axiomatic work deferred to ARC — acceptable for candidacy only with ARC agreement. |
@@ -325,10 +257,129 @@ Beyond the findings above (C1's snippet mismatch, C2 vs. Book 4's validity note,
   was excluded as directed.
 
 
-
-
 #########################################################################################################
 
+
+**FIXED m9 — Locality: encoding [5:4] = 3 unassigned.** The Boot Session Group defines only
+_No Boot Binding_ (0), _PhysBootScrt_ (1) and _VirtBootScrt_ (2); the value 3 had no stated
+behavior. `<<ACE-Localities>>` now declares it reserved, and a PI or SCC carrying it is invalid
+Metadata that sends the CR to Error State _Invalid_. `mgmt-kat.py` had already had to invent this
+rule to model the field; it now cites the normative text.
+
+**WITHDRAWN m9b — `sacelocality` has no VS shadow.** *This finding was wrong and is retracted.* I
+assumed `sacelocality` held a host S-mode secret that a guest could read with V=1 if the hypervisor
+had not swapped it. It does not: `sacelocality` is the *operating system's* Locality, used by
+S-mode on an M+S+U system and by VS-mode when H is implemented, because in that case the operating
+system runs at VS. A hypervisor isolates its guests with `hacelocality` and saves and restores
+`sacelocality` as ordinary guest context. No host secret is ever resident in `sacelocality` while a
+guest runs, so a `vsacelocality` shadow would protect nothing. The ownership model is now stated in
+the NOTE at `<<ACE-CSR-sacelocality>>` so the same mistake is not made again.
+
+**FIXED m4 — OCB nonce handling.**
+Three defects. (a) `bswap(N[N_len-1:0])` is byte-string reversal and was undefined for a nonce
+whose bit length is not a multiple of 8, yet `N_len` ranges over 6…120. The fix does *not* forbid
+sub-byte nonces — every bit length in the range is admissible — but defines the missing mapping:
+a new `nonce_be(N, n)` = `bswap(N[8q-1:0], q) >> ((8-r) mod 8)`, with `q` = ⌈`n`/8⌉ and `r` =
+`n` mod 8, expressing RFC 7253's MSB-first bit-string convention in which a partial final byte is
+left-aligned. It reduces to `bswap(N[n-1:0])` when 8 | `n`, so the RFC vectors are untouched;
+_Set_Aux_Value_ now stores the `q`-byte image with the padding bits of the last byte cleared.
+(b) The 6-bit floor is a deliberate deviation from RFC 7253, which sets no lower bound; a NOTE now
+records it and attributes it to the short-nonce analysis of cite:[cryptoeprint-2023-326].
+(c) `_Dec_Last_Block_` now carries the same `index = ones(48)` guard as `_Enc_Last_Block_`.
+*Verification:* `ocb-kat.py` confirms the reduction at `r` = 0 (so all 16 RFC vectors still pass),
+round-trips `N_len` ∈ {6,7,8,13,60,61,119,120}, checks the padding bits are ignored and that
+distinct 6-bit nonces give distinct ciphertexts, and rejects 0/5/121/128/255. Sub-byte nonces have
+no published vectors, so that path is labelled self-consistency only.
+
+**FIXED m5 — Ascon-AEAD128 padding responsibility.** The intro told the caller to pad "the AD and
+the plaintext", but `_Enc_Last_Block_`/`_Dec_Last_Block_` apply `pad()` internally, so a caller
+obeying the prose double-padded and produced wrong ciphertext *and* a wrong tag. The intro now says
+the caller applies `pad(·, 128)` to the associated data only, and that the final PT/CT block is
+supplied through the last-block states with `last_blk_len` and padded internally.
+
+**FIXED m6 — CMAC empty message.** With `last_blk_len` = 0 the K2 branch evaluated
+`INPUT[-1:0]`. The branch is now guarded by `0 ≤ last_blk_len < b` — which also documents that the
+K1/K2 split is load-bearing, since the padding width goes negative at `last_blk_len` = `b`
+(finding K20) — and states that at 0 the input is not read and the padded value is
+`zeros(b-8) @ 0b10000000`. `cmac-kat.py` had already shown this reproduces the published
+empty-message tag for any `INPUT`.
+
+**FIXED m8 — GCM-SIV transition Forms.** The instruction entering `_Enc_Tag_Finalize_`,
+`_Encrypt_`, `_Decrypt_` and `_Dec_Tag_Finalize_` was never stated. Each is now specified as a
+Form A `ace.setst`, with the added clause that the value each state consumes is the `INPUT` of the
+`ace.exec` issued *in* the state, not an argument of the transition — the natural misreading would
+have made the length-block transition a Form C. `gcmsiv-kat.py` no longer has to infer the Form.
+
+**FIXED m10 — `acemaxiobuflen` without `Zklio`.** It is "always present" but its value with no
+ACEIOBUF was unspecified; it now reads zero, and `aceiobuflen`/`aceiobuftop` are stated not to be
+present at all. Checked by `mgmt-kat.py`.
+
+**FIXED m12 — Editorial debris.** Removed the stray `x` splitting the `ace.restrict` paragraph;
+`Content2~Plaintext[]` → `Content2~PT~[]`; "an *byte string*" → "a *byte string*"; "either a B of
+`ace.setst`" → "a Form B `ace.setst`". The `ace.setst`/`ace.mgmt` Form B register-alignment rule is
+now stated (`s` even on RV64, a multiple of four on RV32, illegal-instruction otherwise). The
+"an byte" and "to transitions to" occurrences had already been cleared in the interim.
+
+**FIXED m13 — `ace.restrict*` usage control.** It was usage-controlled, which blocked the
+manager pattern the instruction's own NOTE advertises: a privileged agent could not narrow a CC it
+was not itself permitted to use, even though `ace.clear` — strictly stronger — was exempt. It is
+now **not** usage-controlled, with the justification stated: every change it can make narrows the
+CC, so permitting it in an excluded mode grants that mode nothing. `mgmt-kat.py` checks that a
+barred mode may narrow but still cannot widen, and that ConfigStatus gating and the Error-State
+no-op still apply.
+
+**FIXED m14 — ECC `_Output_` wording.** "export sections of the result to memory" → "read out
+successive sections of the result, each time increasing `block_base` by the number of bytes written
+to `OUTPUT`". Form C `ace.exec` writes `OUTPUT`, not memory.
+
+**FIXED m15 — ML-DSA `tr` for verification-only CCs.** `tr` is serialized only inside `privkey`,
+so a CC holding a public key alone lost it across export/import. Rather than widen the format, the
+spec now states that on completing an import with `HasPrivKey` false the unit recomputes
+`tr` ← `SHAKE256(pubkey, 64)`, noting that `Verify_internal` does not consume `tr` — the caller
+uses it to form _μ_. `mldsa-kat.py` shows the value is genuinely absent from the image and is
+recovered by the rule.
+
+**FIXED m16 — Offset immediates.** `%offset` is now defined in the instruction-section preamble as
+the corresponding base-ISA immediate (I-type for `ace.load`, S-type for `ace.store`/`ace.input`/
+`ace.output`), sign-extended, with effective address `X[rs1] + sext(%offset)` and an explicit
+statement that this is the address of the *first* byte of the transfer, not of the byte at which a
+resumed transfer restarts — which ties it to the C1 rule so the two cannot drift apart again.
+
+**FIXED m18 — Sealing domain separation.** Both segments were authenticated and encrypted under
+the same derived keys — both derive from the same CSK under the same all-zero nonce — and were
+distinguished only by the values that happened to occupy their Associated Data and their SIVs. No
+attack followed (a cross-segment confusion needed a Locality Secret to equal a `SIV`, or a
+`SIV` = `SIV2` collision), but the separation was a property of the values rather than of the
+construction.
+
+The fix is a segment selector `sep` (0 for the architecture-defined content, 1 for the
+implementation-dependent content) placed in **bit 126 of each of the two AES inputs the
+construction forms**:
+
+* the tag input becomes `0 @ sep @ POLYVAL(`…`)[125:0]`, and
+* the keystream counter block becomes `1 @ sep @ SIV[125:32] @` counter.
+
+Bit 127 continues to separate the tag domain (0) from the keystream domain (1) as in RFC 8452, so
+the two selectors are orthogonal: bit 127 says *which construction*, bit 126 says *which segment*.
+Neither the tags nor the keystreams of the two segments can now coincide, whatever the values.
+
+*An earlier iteration of this fix used two 128-bit constants `DS1`/`DS2` prepended to the
+Associated Data; it was superseded. A second iteration placed `sep` only in the keystream, which
+left tag-side separation value-dependent — `scc-kat.py` caught that by showing identical AD and
+plaintext still produced identical tags under both selectors.*
+
+The price is one bit on each side: the tag input carries 126 bits of the `POLYVAL` result rather
+than 127, and the counter block 94 bits of the `SIV` rather than 95. Both roughly double
+already-negligible collision terms and stay the same order as `POLYVAL`'s own
+almost-XOR-universal bound, so the 2^64^-block claim is unaffected. Both consequences are stated
+in the specification's NOTE rather than left for a reader to discover by diffing against RFC 8452.
+
+*Verification:* `scc-kat.py` checks the width arithmetic of both inputs (1+1+126 and 1+1+94+32),
+the bit-127/126 assignment in each, that identical SIVs yield disjoint keystreams, that identical
+AD and plaintext yield different tags *and* different ciphertexts, that a segment-1 payload fails
+to authenticate when read with `sep` = 1, and both entropy-reduction consequences.
+
+---
 
 **FIXED m1 — `acestart` clamping vs. no-op contradiction.**
 
@@ -820,7 +871,7 @@ ignored, whereas every other illegal widening invalidates the CR.
 unstated.** `mgmt-kat.py` checks UsagePolicy first, so that an unauthorised caller cannot destroy
 CC content by triggering expiration.
 
-**K20 — CMAC's K2 branch is undefined at `last_blk_len` = `b`** (the padding width
+**FIXED K20 — CMAC's K2 branch is undefined at `last_blk_len` = `b`** (the padding width
 `zeros(b − 8 − last_blk_len)` goes negative). Harmless as written because the K1 branch splits that
 case off first, but it means the branch split is load-bearing rather than an optimization; state
 the `0 ≤ last_blk_len < b` precondition if m6's wording is revisited.
@@ -882,7 +933,7 @@ Demonstrated, not merely asserted:
 - **m8** (GCM-SIV transitions): the missing state-entry Forms forced the model to transition
   implicitly, and on the decrypt path to invent a zero-length call purely to enter _Decrypt_.
 - **m18** (sealing domain separation): segment binding rests entirely on `AD2[1]` = `SIV`; both
-  segments use the same derived keys with no domain-separation constant.
+  segments used the same derived keys with no domain separator. Fixed: see FIXED m18.
 
 ## 10. Ambiguities Left Unmodelled
 
