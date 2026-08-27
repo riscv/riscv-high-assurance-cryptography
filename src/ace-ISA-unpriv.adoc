@@ -1046,15 +1046,6 @@ We note that successful or failed verification of an authentication tag in an AE
 
 In any outcome other than the complete execution of the instruction, the latter writes no vector register, GPR, ACEIOBUF byte, or memory location. The sole exception is a block-iterated `ace.exec` (<<ACE-resumability>>) that encounters an error after fully processing `j` {ge} 1 blocks. In that case, the outputs of those `j` blocks remain written; no part of the failing block or any later block is written; and `acestart` contains the byte count of the completed blocks. The error condition's effects on the CR state are unchanged.
 
-[[ACE-unpredictable]]
-Wherever this specification declares a result UNPREDICTABLE, the values written to
-software-visible destinations are UNSPECIFIED, but they must be a function only of architectural
-state that the executing context is otherwise permitted to observe.
-In particular, the Content of a CC, the CSK, and the Locality Secrets must not be disclosed, in
-whole or in part, beyond what a permitted instruction sequence could already produce.
-The CR is left either in a state reachable by some legal instruction sequence, or in Error State
-_Invalid_.
-
 In case an illegal-instruction exception or an ACE exception is raised,
 the trapped instruction does not retire and `xepc` holds its address.
 
@@ -1074,15 +1065,24 @@ ACE provides a number of unprivileged CSRs.
 [cols="^10%,^10%,<18%,<62%"]
 [float="center",options="header"]
 |===
-|  Address   | Privilege | Field                    | Description
-|  0xXXX     |     RO    | `acemvendorid`           | Manufacturer of the ACE unit. See <<ACE-CSR-impl-ids>>.
-|  0xXXX     |     RO    | `acemarchid`             | Architecture version, per vendor, of the ACE unit. See <<ACE-CSR-impl-ids>>.
-|  0xXXX     |     RO    | `acemimpid`              | Implementation, per vendor, of the ACE unit. See <<ACE-CSR-impl-ids>>.
-|  0xXXX     |     RO    | `acemaxiobuflen`         | ACE maximum input/output buffer length in bytes. Read only.
-|  0xXXX     |    URW    | `aceiobuflen`            | ACE input/output buffer length in bytes.
-|  0xXXX     |    URW    | `acestart`               | ACE start byte index.
-|  0xXXX     |    URW    | `aceiobuftop`            | ACE input/output buffer limit for current transfers in bytes.
-|  0xXXX     |    URW    | `managedcr`              | Number of the currently managed CR, or 32 if all are either unconfigured or fully configured. Internal values of SIV, SIV2, IMPQUAL are associated with this CR.
+|  Address         | Privilege | Field                       | Description
+|  0xXXX           |     RO    | `acemvendorid`              | Manufacturer of the ACE unit. See <<ACE-CSR-impl-ids>>.
+|  0xXXX           |     RO    | `acemarchid`                | Architecture version, per vendor, of the ACE unit. See <<ACE-CSR-impl-ids>>.
+|  0xXXX           |     RO    | `acemimpid`                 | Implementation, per vendor, of the ACE unit. See <<ACE-CSR-impl-ids>>.
+|  0xXXX           |     RO    | `acemaxiobuflen`            | ACE maximum input/output buffer length in bytes. Read only.
+|  0xXXX           |    URW    | `aceiobuflen`               | ACE input/output buffer length in bytes.
+|  0xXXX           |    URW    | `acestart`                  | ACE start byte index.
+|  0xXXX           |    URW    | `aceiobuftop`               | ACE input/output buffer limit for current transfers in bytes.
+|  0xXXX           |    URW    | `acemanagedcr`              | Number of the currently managed CR, or 32 if all are either unconfigured or fully configured.
+|  0xXXX-0xXXX+1   |    URW    | `acesivl`/`acesivh`         | SIV of the SCC currently being managed for import or export
+|  0xXXX-0xXXX+1   |    URW    | `acesiv2l`/`acesiv2h`       | SIV2 of the SCC currently being managed for import or export
+|  0xXXX-0xXXX+1   |    URW    | `aceiql`/`aceiqh`           | IMPQUAL of the SCC currently being managed for import or export
+
+|  0xXXX-0xXXX+1   |    URW    | `acesivlh`/`acesivhh`       | RV32 only: Shadows of bits [63:31] of `acesivl`/`acesivh`
+|  0xXXX-0xXXX+1   |    URW    | `acesiv2lh`/`acesiv2hh`     | RV32 only: Shadows of bits [63:31] of `acesiv2l`/`acesiv2h`
+|  0xXXX-0xXXX+1   |    URW    | `aceiqlh`/`aceiqhh`         | RV32 only: Shadows of bits [63:31] of `aceiql`/`aceiqh`
+
+
 |===
 
 These CSRs are not available if the ACE extension is not present or if an ACES field is Off
@@ -1260,7 +1260,6 @@ committed (see <<ACE-Memory-Model>>).
 More generally, writing a value that is invalid or unsupported for a given Algorithm — including a
 value that is not an interruption point the Algorithm allows — causes the CR to transition to Error
 State _Invalid_ when an instruction is later issued or restarted.
-The outcome is therefore deterministic rather than UNPREDICTABLE.
 
 The value of `acestart` out of ACE unit reset is 0.
 
@@ -1277,18 +1276,63 @@ _Included in_::
 
 // ////////////////////////////////////////////////////////////////////
 
-[[ACE-CSR-managedcr]]
-===== `managedcr`
+[[ACE-CSR-acemanagedcr]]
+===== `acemanagedcr`
 
 {empty}
-(((CSR, `managedcr`)))
-`managedcr` is an XLEN-bit RW CSR, but currently only 6 bits are used.
+(((CSR, `acemanagedcr`)))
+`acemanagedcr` is an XLEN-bit RW CSR, but currently only 6 bits are used.
 
 It contains the number of the currently managed CR, or 32 if all are either unconfigured or fully configured.
 
 Internal values of SIV, SIV2, IMPQUAL are associated with this CR.
 
-The value of `managedcr` out of ACE unit reset is 32.
+The value of `acemanagedcr` out of ACE unit reset is 32.
+
+// ////////////////////////////////////////////////////////////////////
+
+[[ACE-CSR-acesiv]]
+===== `acesivl`/`acesivh`
+
+{empty}
+(((CSR, `acesiv`)))
+`acesivl`/`acesivh` are two 64-bit RW CSRs which contain
+bits [0:63] and [64:127] of the SIV value, respectively.
+
+On RV32,
+CSR `acesivlh` shadows bits [62:32] of `acesivl`, and
+CSR `acesivhh` shadows bits [62:32] of `acesivh`,
+to allow access to those bits.
+
+// ////////////////////////////////////////////////////////////////////
+
+[[ACE-CSR-acesiv2]]
+===== `acesiv2l`/`acesiv2h`
+
+{empty}
+(((CSR, `acesiv2`)))
+`acesiv2l`/`acesiv2h` are two 64-bit RW CSRs which contain
+bits [0:63] and [64:127] of the SIV2 value, respectively.
+
+On RV32,
+CSR `acesiv2lh` shadows bits [62:32] of `acesiv2l`, and
+CSR `acesiv2hh` shadows bits [62:32] of `acesiv2h`,
+to allow access to those bits.
+
+// ////////////////////////////////////////////////////////////////////
+
+[[ACE-CSR-aceiq]]
+===== `aceiql`/`aceiqh`
+
+{empty}
+(((CSR, `aceiq`)))
+`aceiqh`/`aceiql` are two 64-bit RW CSRs which contain
+bits [0:63] and [64:127] of the IMPQUAL value, respectively.
+
+On RV32,
+CSR `aceiqlh` shadows bits [62:32] of `aceiql`, and
+CSR `aceiqhh` shadows bits [62:32] of `aceiqh`,
+to allow access to those bits.
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -1408,15 +1452,14 @@ Normal execution cannot resume after an unauthenticated Debug entry: the ACE sta
 
 ACE provides a number of unprivileged instructions.
 This section specifies their semantics and encodings.
-// Under opcode `custom-2`, the `funct3` value 4 is reserved.
 
 [IMPORTANT]
 ====
-The `custom-0`, `custom-1`, and `custom-2` opcodes used throughout this section are placeholders
-for development and prototyping only. The RISC-V unprivileged ISA reserves the `custom-`__n__
-opcodes permanently for non-standard extensions, so they cannot carry a ratified extension. Final
-encodings will be allocated from standard opcode space by RVI during ratification; implementers
-must not treat the encodings in this document as a stable interface.
+We recall that the `custom-0`, `custom-1`, and `custom-2` opcodes used throughout this section are placeholders.
+// for development and prototyping only. The RISC-V unprivileged ISA reserves the `custom-`__n__
+// opcodes permanently for non-standard extensions, so they cannot carry a ratified extension. Final
+// encodings will be allocated from standard opcode space by RVI during ratification; implementers
+// must not treat the encodings in this document as a stable interface.
 ====
 
 The notation `K{Xd}` denotes the CR whose index is held in GPR `Xd`.
@@ -1515,7 +1558,7 @@ If the _ConfigStatus_ field equals `ace_cfgst_complete`, an illegal-instruction 
 The implementation determines the input size `size`
 from the first 8 bytes of the MDH, which software supplies as part of the entire MDH block.
 The _ConfigStatus_ field identifies the input type (PI or SCC); the fields in <<ACE-length-rule>> determine its length.
-`size` excludes the MDH, but in case of a SCC, includes SIV1, and possibly SIV2 and IMPQUAL.
+`size` excludes the MDH, but in case of a SCC, includes SIV, and possibly SIV2 and IMPQUAL.
 
 `acestart` tracks the number of loaded bytes and is a multiple of 16. In other words, `ace.load` loads data in 16-byte chunks.
 
@@ -1591,7 +1634,7 @@ resumption.
 
 The implementation determines the input size `size` from the first 8 bytes of the MDH.
 The _ConfigStatus_ field identifies the input type (PI or SCC); the fields in <<ACE-length-rule>> determine its length.
-`size` excludes the MDH, but in case of a SCC, includes SIV1, and possibly SIV2 and IMPQUAL.
+`size` excludes the MDH, but in case of a SCC, includes SIV, and possibly SIV2 and IMPQUAL.
 
 `acestart` tracks the number of bytes stored to memory and is a multiple of 16.
 In other words, `ace.store` stores data in 16-byte chunks.
@@ -2037,7 +2080,7 @@ to restore the _ConfigStatus_ value saved by software.
 The `ace.mgmt` operation used to start a provisioning, resp., import process
 performs following operations:
 
-.. Check whether `managedcr` is equal to the CR's number or is equal to 32.
+.. Check whether `acemanagedcr` is equal to the CR's number or is equal to 32.
    If not, an illegal-instruction exception is raised.
 .. The target CR is cleared.
 .. If the combination of _Algorithm_, _AlgorithmPolicy_, and _SCProtection_ in `ml` is not supported,
@@ -2055,7 +2098,7 @@ ACE exception `ace_exc_unsupported` is _not_ raised when accessing or using a CR
 .. The implementation attempts to allocate CRF capacity according to the requirements of the _Algorithm_, _AlgorithmPolicy_, and _SCProtection_ fields of the MDH, as prescribed by <<ACE-length-rule>>. No other field must affect the amount of capacity required.
     If capacity allocation is not possible, ACE exception `ace_exc_out_of_memory` is raised.
 .. _ConfigStatus_ is set to `ace_cfgst_provisioning`, resp., `ace_cfgst_importing`.
-.. Write the CR's number to `managedcr`.
+.. Write the CR's number to `acemanagedcr`.
 .. `acestart` is cleared.
 --
 
@@ -2065,10 +2108,10 @@ ACE exception `ace_exc_unsupported` is _not_ raised when accessing or using a CR
 The operation makes the provisioned CR available to software (“sealing”) and sets _ConfigStatus_ to `ace_cfgst_complete`. Requires no auxiliary input.
 If an auxiliary input is passed, it is ignored.
 
-.. Check whether `managedcr` is equal to the CR's number or is equal to 32.
+.. Check whether `acemanagedcr` is equal to the CR's number or is equal to 32.
    If not, an illegal-instruction exception is raised.
 .. The ACE unit performs any necessary readjustment of the CR's content to turn it into the format internally consumed by the ACE Unit.
-.. Write 32 to `managedcr`.
+.. Write 32 to `acemanagedcr`.
 .. `acestart` is set to 0.
 
 A process may be preempted during a CR's provisioning.
@@ -2084,7 +2127,7 @@ The software must use Form B, resp. Form C, of `ace.mgmt` to pass along the valu
 If `ml`._ConfigStatus_ is `ace_cfgst_complete`, the operation decrypts and authenticates the imported SCC, and makes the CR available to software, also restoring the CR's _ConfigStatus_ to `ace_cfgst_complete`.
 Otherwise, it just restores the CR's _ConfigStatus_ to the saved `ml`._ConfigStatus_:
 
-.. Check whether `managedcr` is equal to the CR's number or is equal to 32.
+.. Check whether `acemanagedcr` is equal to the CR's number or is equal to 32.
    If not, an illegal-instruction exception is raised.
 .. If `ml`._ConfigStatus_ = `ace_cfgst_complete` (we are importing the export of a fully configured CR)
 ... The ACE unit decrypts and authenticates the CR's content.
@@ -2094,7 +2137,7 @@ Otherwise, it just restores the CR's _ConfigStatus_ to the saved `ml`._ConfigSta
 .. `acestart` is set to 0.
 .. If `ml`._ConfigStatus_ {ne} `ace_cfgst_complete`  (we are either importing the export of a not fully configured CR or a nested CR export):
 ... _ConfigStatus_ is left to `ml`._ConfigStatus_.
-.. Write 32 to `managedcr`.
+.. Write 32 to `acemanagedcr`.
 .. `acestart` is cleared.
 --
 
@@ -2104,7 +2147,7 @@ Otherwise, it just restores the CR's _ConfigStatus_ to the saved `ml`._ConfigSta
 Let `ml` <- the MDH of the CR.
 Software must save this value in its state to use it when completing the export process.
 Then:
-.. Check whether `managedcr` is equal to the CR's number or is equal to 32.
+.. Check whether `acemanagedcr` is equal to the CR's number or is equal to 32.
    If not, an illegal-instruction exception is raised.
 .. If `ml`._ConfigStatus_ = `ace_cfgst_complete`:
 
@@ -2116,7 +2159,7 @@ The architecturally observable behavior is described in <<ACE-CR-representation>
 
 No encryption or authentication occurs; the contents of the CR are exported verbatim, in the same order in which they appear in the PI (for a partially provisioned CR) or in the SCC (for a partially imported CR, or a CR previously prepared for export whose export process was itself interrupted).
 
-.. Write the CR's number to `managedcr`.
+.. Write the CR's number to `acemanagedcr`.
 .. `acestart` is cleared.
 --
 
@@ -2128,7 +2171,7 @@ Software uses Form B or Form C `ace.mgmt` with `ml` as the auxiliary parameter t
 
 Then:
 
-.. Check whether `managedcr` is equal to the CR's number or is equal to 32.
+.. Check whether `acemanagedcr` is equal to the CR's number or is equal to 32.
    If not, an illegal-instruction exception is raised.
 
 .. If `ml`._ConfigStatus_ = `ace_cfgst_complete`:
@@ -2142,7 +2185,7 @@ The architecturally observable behavior is described in <<ACE-CR-representation>
 
 * No changes to the CR state are made.
 
-.. Write 32 to `managedcr`.
+.. Write 32 to `acemanagedcr`.
 .. `acestart` is cleared.
 --
 
@@ -3088,7 +3131,7 @@ Out of ACE unit reset:
 
 . All CRs are in State _Unconfigured_ with zeroized contents.
 . If `Zklio` is available,:`aceiobuflen` = 0 (i.e., the ACEIOBUF unconfigured), `aceiobuftop` = 0, `acestart` = 0;
-. The value of `managedcr` is 32.
+. The value of `acemanagedcr` is 32.
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -3194,9 +3237,10 @@ per-block state effects have been committed. The interruption points are defined
 as well as by Algorithm-specific interrupt points  (for instance
 the long-running computations of <<ACE-ECC>> and <<ACE-PQC>>).
 While handlers can set `acestart` to zero to force a restart of an `ace.exec` operation, the
-result is UNPREDICTABLE, in the bounded sense of <<ACE-unpredictable>>, when the input and output
-overlap (i.e., they are actually the same vector register, vector register group, or the ACEIOBUF),
-since the restarted operation would re-read data it has already overwritten.
+result may be unpredictable (but still a function only of architectural
+state that the executing context is otherwise permitted to observe)
+when the input and output overlap,
+since the restarted operation may re-process data it has already read or overwritten.
 
 In the current version of the specification, `ace.mgmt` is uninterruptible as a single instruction.
 The first approach above is suitable in this case.
@@ -3379,13 +3423,11 @@ Allocating them per CR would be costly: 128 bits per CR, or 384 bits if at least
 The implementation transparently manages this capacity as though it belongs to the CR.
 
 This prevents concurrent management operations in the same code: starting a second operation can overwrite `SIV`, `IMPQUAL`, and `SIV2` storage, destroying in-flight values.
-Interleaved management operations must therefore be avoided; lightweight threads must either support CR context switching directly or serialize access with a mutex.
-A context-switch handler that itself issues management operations — to save or restore CRs — is such
-an interleaving: the per-hart `SIV`, `SIV2` and `IMPQUAL` storage belonging to an interrupted
-management process does not survive the next `ace.mgmt` with `#ace_CR_provision_start`,
-`#ace_CR_import_start` or `#ace_CR_export_start` on that hart.
-A handler that has to run a management operation of its own must therefore either complete or
-abandon the interrupted process first, rather than expect to resume it afterwards.
+Therefore, the CSRs `acesivl` and `acesivh`, and possibly also `acesiv2l`, `acesiv2h`, `aceiql` and `aceiqh`
+must also be saved upon context save and restored upon context restore.
+
+Interleaved management operations within a single thread should therefore be avoided, unless lightweight threads support CR context switching directly.
+In most cases, these should be serializes with a mutex.
 Beyond this, this restriction does not affect other use cases.
 
 The format of a PI that has been just imported in a CR is the same as the external format, and this representation is finalized into the CR's internal state upon using `ace.mgmt` to complete the import which may include the computation of certain information such as derived keys, multiple shares.
@@ -3394,7 +3436,7 @@ The external format of a SCC is given in <<ACE-SCC>>, but while it is being load
 
 {fournbsp}{fournbsp} `MDH` {vvert} `Content1~CT~[]` { {vvert} `Content2~CT~[]` }
 
-(`CT` stands for `Ciphertext`) and `SIV`, `SIV2`, `IMPQUAL` are stored separately.
+(`CT` stands for `Ciphertext`) and `SIV`, `SIV2`, `IMPQUAL` are stored separately in their CSRs.
 
 ////
 The behavior with architecturally observable consequences of the conversion from an encrypted format fully loaded in a CR's content and
@@ -3469,7 +3511,8 @@ The changes are:
 This is intentional: the information needed to fully determine the lengths of
 all sections is already included in the MDH, and thus in the POLYVAL.
 . The optional Nonce is omitted.
-. A domain separation bit, `sep`, has been added to distinguish the two segments of the content that are sealed in a SCC: the fixed architecture-defined content (`sep` = 0) and the optional implementation-dependent content (`sep` = 1). This reduces SIV strength by 1 bit with respect to RFC 8452.
+. A domain separation bit, `sep`, has been added to distinguish the two segments of the content that are sealed in a SCC: the fixed architecture-defined content (`sep` = 0) and the optional implementation-dependent content (`sep` = 1).
+// This reduces SIV strength by 1 bit with respect to RFC 8452.
 
 We define the Key Derivation (<<ACE-SCC-RFC8452-derivation>>) and POLYVAL (<<ACE-SCC-POLYVAL>>) functions first.
 The generation of an SCC from a CR (<<ACE-SCC-export>>) and the import of an SCC into a CR (<<ACE-SCC-import>>) are defined next.
@@ -3604,7 +3647,7 @@ function SCC_Encrypt(AD[] : array of bits(128), N : bits(96), sep: bits(1),
 }
 ----
 
-The lengths of AD and plaintext/ciphertext must be replaced with implementation-specific values.
+The maximal lengths of AD and plaintext/ciphertext must be replaced with implementation-specific values.
 
 [[ACE-SCC-GCM-SIV-dec]]
 .AES-GCM-SIV Decryption for SCC Import

@@ -426,8 +426,8 @@ class Unit:
                  lst=None, clock=0, crf_capacity_total=1 << 20):
         self.crs = [CR() for _ in range(ncrs)]
         self.acestart = 0
-        self.managedcr = MANAGEDCR_NONE
-        self.open_op = None      # which management process is open on managedcr
+        self.acemanagedcr = MANAGEDCR_NONE
+        self.open_op = None      # which management process is open on acemanagedcr
         self.acemaxiobuflen = maxiobuflen
         self.aceiobuflen = 0
         self.aceiobuftop = 0
@@ -518,8 +518,8 @@ class Unit:
     def clear(self, k):
         """ace.clear / ace.setst #0."""
         self.crs[k].clear()
-        if self.managedcr == k:
-            self.managedcr = MANAGEDCR_NONE
+        if self.acemanagedcr == k:
+            self.acemanagedcr = MANAGEDCR_NONE
             self.open_op = None
         self.acestart = 0
 
@@ -541,8 +541,8 @@ class Unit:
 
     # -- management --------------------------------------------------
     def _mgmt_gate(self, k):
-        if self.managedcr not in (k, MANAGEDCR_NONE):
-            raise IllegalInstruction("managedcr busy with another CR")
+        if self.acemanagedcr not in (k, MANAGEDCR_NONE):
+            raise IllegalInstruction("acemanagedcr busy with another CR")
 
     def mgmt_provision_start(self, k, ml):
         self._mgmt_gate(k)
@@ -569,7 +569,7 @@ class Unit:
         cr.mdh["State"] = ST_READY          # provisioning always yields Ready
         cr.mdh["ConfigStatus"] = CFG_PROVISIONING
         cr.xfer = bytearray(pi_len(m) - 16)
-        self.managedcr = k
+        self.acemanagedcr = k
         self.open_op = "provision"
         self.acestart = 0
         return
@@ -595,7 +595,7 @@ class Unit:
         cr.mdh = m
         cr.mdh["ConfigStatus"] = CFG_IMPORTING
         cr.xfer = bytearray(serialized_len(m) - 16)
-        self.managedcr = k
+        self.acemanagedcr = k
         self.open_op = "import"
         self.acestart = 0
         return
@@ -615,7 +615,7 @@ class Unit:
         else:
             # verbatim export of a partially configured CR: no encryption, no tag
             cr.export = bytearray(cr.xfer if cr.xfer is not None else cr.content)
-        self.managedcr = k
+        self.acemanagedcr = k
         self.open_op = "export"
         self.acestart = 0
         return ml
@@ -668,7 +668,7 @@ class Unit:
             # completing an export of a not-complete CR: nothing to do
             if ml is not None and ml["ConfigStatus"] != CFG_COMPLETE:
                 cr.export = None
-        self.managedcr = MANAGEDCR_NONE
+        self.acemanagedcr = MANAGEDCR_NONE
         self.open_op = None
         self.acestart = 0
 
@@ -1584,7 +1584,7 @@ def test_management_flows():
     u.mgmt_provision_start(0, ml)
     check("provision start: ConfigStatus = provisioning", u.crs[0].cfg, CFG_PROVISIONING)
     check("provision start: acestart cleared", u.acestart, 0)
-    check("provision start: managedcr holds the CR number", u.managedcr, 0)
+    check("provision start: acemanagedcr holds the CR number", u.acemanagedcr, 0)
     check("provision start: State is Ready", u.getst(0), ST_READY)
     pi = bytearray(mdh_bytes(u.crs[0].mdh) + content)
     check("ace.size Form A while provisioning is the PI length", u.size_A(0), pi_len(ml))
@@ -1593,7 +1593,7 @@ def test_management_flows():
     u.mgmt_end(0)
     check("provision end: ConfigStatus = complete", u.crs[0].cfg, CFG_COMPLETE)
     check("provision end: acestart cleared", u.acestart, 0)
-    check("provision end: managedcr released", u.managedcr, MANAGEDCR_NONE)
+    check("provision end: acemanagedcr released", u.acemanagedcr, MANAGEDCR_NONE)
     check("provision end: content is what the PI carried", u.crs[0].content, content)
     check("ace.size Form A when complete is the SCC length", u.size_A(0), scc_len(ml))
 
@@ -1629,7 +1629,7 @@ def test_management_flows():
     u.mgmt_end(0, saved_ml)
     check("export end: the CR is usable again", u.crs[0].cfg, CFG_COMPLETE)
     check("export end: the content was restored", u.crs[0].content, content)
-    check("export end: managedcr released", u.managedcr, MANAGEDCR_NONE)
+    check("export end: acemanagedcr released", u.acemanagedcr, MANAGEDCR_NONE)
 
     # re-import into a different CR, Zklmem
     v = fresh_unit()
@@ -1711,7 +1711,7 @@ def test_management_flows():
     except AceException as e:
         check("insufficient CRF capacity raises ace_exc_out_of_memory", e.which, "out_of_memory")
 
-    # managedcr interlock
+    # acemanagedcr interlock
     p = fresh_unit()
     p.mgmt_provision_start(0, ml)
     try:
@@ -2260,7 +2260,7 @@ def test_notes():
          "ACEIOBUF transfers at 1-byte boundaries. The forward-progress granule is still "
          "stated as 1 byte in <<ACE-forward-progress>>, so the two should be reconciled "
          "explicitly.")
-    info("NEW (managedcr): the new CSR is introduced in the CSR table and used by every "
+    info("NEW (acemanagedcr): the new CSR is introduced in the CSR table and used by every "
          "ace.mgmt step, but its reset value, its WARL behaviour on a software write, "
          "and its interaction with ace.clear of the managed CR are unspecified. This "
          "model assumes reset = 32, and that clearing the managed CR releases it.")
