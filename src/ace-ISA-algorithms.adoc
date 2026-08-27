@@ -427,7 +427,9 @@ State Machine:::
   ** _Ready_: The CC is ready.
   ** _Operate_: In this state the CC will produce a keystream.
 
-* *Allowed State Transitions:* any.
+* *Allowed State Transitions:*
+ ** _Ready_ -> _Operate_.
+ ** _Operate_ -> _Ready_.
 
 * *Behavior:*
  ** In State _Ready_, the `ctr` and `IV` fields are set to 0.
@@ -452,9 +454,9 @@ State Machine:::
   . `tick_ctr()`, and
   . `OUTPUT ← tmp`.
 
-If `ACELEN` is a multiple of `b`, the above three commands are applied to each
-of the `ACELEN/b` `b`-bit blocks of `INPUT`, producing the corresponding `b`-bit
-block of `OUTPUT` each time.
+If `ACELEN` is a multiple of `b`, the above commands are executed `ACELEN/b` times, producing the
+successive `b`-bit blocks of `OUTPUT` from the least significant upwards. There is no `INPUT`:
+this state uses Form C, and the keystream depends only on `IV` and `ctr`.
 --
 
  ** In States _Ready_ and _Operate_, a Form B
@@ -748,27 +750,28 @@ The Procedure must follow the granularity of the caller Algorithm, which implies
 The use of this functionality in an Algorithm is written in the following way:
 
 ```
-process_VLI(len,
+process_VLI(max_len,
             block, b,        state, n,
             input_base,      block_base,      state_offset,      cumul_len,
             process_block(), finalize(),      mode).
 ```
 where the parameters are all _references_ to certain variables of the caller Algorithm:
 
- * `len` is the total length of the data to be absorbed, *in bits*. If not defined by the caller or by the Algorithm, `len` is zero for the purpose of defining this procedure.
+ * `max_len` is the total length of the data to be absorbed, *in bits*. If not defined by the caller or by the Algorithm, `max_len` is zero for the purpose of defining this procedure.
  * `block` contains the current block being filled internally before processing. Its size is `b` bits.
  * `state` is the output buffer. It may be the same as `block`. Its size is `n` bits.
  * `input_base` is the base offset of the data moved from the `ace.exec`'s input into `block`.
  * `block_base` is the base bit-offset within `block`. Each time this value reaches `b`, the data in `block` is processed.
  * `state_offset` is the offset within `state` for XORing with the input data, for instance, for sponge constructions.
- * `cumul_len` is the cumulative length of the data absorbed so far by the procedure.
+ * `cumul_len` is the cumulative length of the data absorbed so far by the procedure, or `None` if not tracked.
  * `mode` is either `assign` or `xor_accumulate`, and selects how incoming data is combined with
    the destination, as specified in Step 4.b below. It is *not* inferred from whether `block` and
    `state` denote the same variable.
 
 [IMPORTANT]
 ====
-`input_base`, `block_base` and `cumul_len` shall denote three *distinct* storage locations. They
+`input_base`, `block_base` and `cumul_len` — the last whenever it is tracked — shall denote
+distinct storage locations. They
 advance independently — `input_base` is reset at the start of every `ace.exec`, whereas
 `block_base` and `cumul_len` persist across instructions — so binding any two of them to the same
 location makes the procedure advance that location several times per iteration and is a malformed
@@ -791,15 +794,16 @@ It is the caller's responsibility to ensure that any necessary variable is initi
 An Algorithm that enters a state with `mode` = `assign`, and whose destination field must hold a
 defined value once loading completes, shall zero that field on entry to the state.
 
-*Units.* `len`, `b`, `n`, `input_base`, `block_base`, `state_offset`, `cumul_len`, and `amount` are
-all counted in bits, to support values of `len` that are not multiples of 8 bits.
+*Units.* `max_len`, `b`, `n`, `input_base`, `block_base`, `state_offset`, `cumul_len`, and `amount` are
+all counted in bits, to support values of `max_len` that are not multiples of 8 bits.
 However, the routine only supports values of `b` and `n` that are multiples of 8 bits,
 and all `ace.exec` instructions transfer whole bytes and never a fraction of a byte.
 As a consequence, `input_base` and `block_base` are always multiples of 8.
 
 Finally, two parameters are functions of the called Algorithm:
 
-* `process_block()` is a function that processes the current block into `state`. It may
+* `process_block()=process_block(block, state)` is a function that processes the current block into `state`.
+It may
    be given as `None`, in which case no such call is made and `state` is not used.
 * `finalize()` is a function that finalizes the processing of the input data. It may have to complete the current block according to rules defined in the Algorithm as part of the finalization. It may also be given as `None`, in which case no such call is made.
 
@@ -807,10 +811,10 @@ Passing `None` for both reduces the procedure to its accounting of partial progr
 `ace.exec` instructions, which is what an Algorithm needs when it merely has to fill a long
 field from memory and has no per-block processing to perform.
 
-If the caller Algorithm needs to process the last block separately, it may invoke this procedure twice with the length of the last block as the `len` parameter and a different `process_block()` function.
+If the caller Algorithm needs to process the last block separately, it may invoke this procedure twice with the length of the last block as the `max_len` parameter and a different `process_block()` function.
 
 The optional parameter `granularity` specifies the transfer unit for inputs: every transfer in a sequence (`INPUT` of `ace.exec` or the auxiliary vector input of `ace.setst`) — except possibly the last — must have an `ACELEN` that is a whole multiple of `granularity`.
-The final transfer may be shorter or internally truncated to `len` − `cumul_len` (cf. <<ACE-truncation-vs-length>>); consequently, `len` need not be a multiple of `granularity`.
+The final transfer may be shorter or internally truncated to `max_len` − `cumul_len` (cf. <<ACE-truncation-vs-length>>); consequently, `max_len` need not be a multiple of `granularity`.
 For example, with `granularity` = 128, a 96-bit IV is supplied in a single transfer, either as a 96-bit vector or as a 128-bit vector with excess bits truncated.
 
 ////
@@ -819,8 +823,8 @@ are transferred to this procedure: every transfer of the sequence — the `INPUT
 `ace.exec`, or the auxiliary vector input of an `ace.setst` — *except the last one* must
 have an `ACELEN` that is a whole multiple of `granularity`. The last transfer of the
 sequence may be shorter, or may be internally truncated to the remaining length
-`len` − `cumul_len` (cf. <<ACE-truncation-vs-length>>), exactly as with the last-block
-states of the Algorithms that define them; consequently, the total length `len` need not
+`max_len` − `cumul_len` (cf. <<ACE-truncation-vs-length>>), exactly as with the last-block
+states of the Algorithms that define them; consequently, the total length `max_len` need not
 be a multiple of `granularity`. For example, with `granularity` = 128 a 96-bit IV is
 supplied in a single — hence last — transfer, either as a 96-bit vector or as a 128-bit
 vector whose excess bits are internally truncated.
@@ -829,13 +833,13 @@ vector whose excess bits are internally truncated.
 //
 
 *Internal State Variables*:::
-Beside `len`, `block`, and `state`, which are fixed for the duration of the hash computation, and `input_base`, `block_base`, and `cumul_len`, additional variables may be defined by the Algorithm and used by `process_block()` and `finalize()`.
+Beside `max_len`, `block`, and `state`, which are fixed for the duration of the hash computation, and `input_base`, `block_base`, and `cumul_len`, additional variables may be defined by the Algorithm and used by `process_block()` and `finalize()`.
 
 *State Machine Behavior*:::
 
 ** When entering State _Current_State_:
- . If `len` is set by the caller, it is passed as a parameter to a Form B `ace.setst` instruction and `len` is set to the auxiliary argument `Xs`.
- . Otherwise, `len` is set by the Algorithm, and the `ace.setst` instruction used to transition to this state must be of Form A.
+ . If `max_len` is set by the caller, it is passed as a parameter to a Form B `ace.setst` instruction and `max_len` is set to the auxiliary argument `Xs`.
+ . Otherwise, `max_len` is set by the Algorithm, and the `ace.setst` instruction used to transition to this state must be of Form A.
 
 ** While in State _Current_State_, only ``ace.exec`` instructions of Form B are expected, whereby
  “`ace.exec Kn|K{Xn}, INPUT`” processes the data block `INPUT` as follows.
@@ -847,7 +851,7 @@ Beside `len`, `block`, and `state`, which are fixed for the duration of the hash
   `input_base` is counted in bits (see *Units* above) while `acestart` is a number of bytes
   (<<ACE-CSR-acestart>>), hence the conversion.
 . While `(input_base < ACELEN)` do
-.. If `len` != 0 then `amount <- min(ACELEN - input_base, b - block_base, len - cumul_len)`,
+.. If `max_len` != 0 then `amount <- min(ACELEN - input_base, b - block_base, len - cumul_len)`,
    else `amount <- min(ACELEN - input_base, b - block_base)`.
    `amount` is always strictly positive, so the loop terminates.
 .. if `mode` = `assign` then:
@@ -856,11 +860,11 @@ Beside `len`, `block`, and `state`, which are fixed for the duration of the hash
  ...  XOR ``INPUT[input_base + amount - 1 : input_base]`` to ``state[block_base + amount + state_offset - 1 : block_base + state_offset]``.
 .. `input_base <- input_base + amount`.
 .. `block_base <- block_base + amount`.
-.. `cumul_len <- cumul_len + amount`.
+.. If `len != 0` then `cumul_len <- cumul_len + amount`.
 .. If (`block_base` = `b`) then:
- ... `process_block()`, if it is not `None`.
+ ... `process_block(block, state)`, if it is not `None`.
  ... `block_base <- 0`.
-.. If `len` != 0 and `cumul_len = len` then:
+.. If `max_len` != 0 and `cumul_len = len` then:
  ... `finalize()`, if it is not `None`.
  ... The instruction is terminated, even if `input_base < ACELEN`.
 .. *Here*, and only here, the instruction may be interrupted, with
@@ -886,7 +890,7 @@ It is currently defined only for 128-bit block ciphers, but the definition will 
 
 Parameters:::
 
-* `k` = key size (128|`k`).
+* `k` = key size (64|`k`).
 * `b` = 128 = block size in bits. For this Algorithm, `ACELEN` must be an integer multiple of `b`.
 * `c` = 32 = counter size in bits.
 * Granularity: `b`.
@@ -931,8 +935,12 @@ The latter may be necessary if the implementation of Subalgorithm _ACE-process-V
 |  iv   | 128           | `tag`          | {empty}
 |   v   | 32            | `start_ctr`    | The initial counter: `start_ctr` = `int(bswap(J0[127:96]))`, the last four bytes of the *initial* `J0` read as a big-endian integer, serialized here as `bin(start_ctr,32)`. If the running counter returns to this value, an error is returned. It is also used to generate the tag mask.
 |  vi   | 16            | `last_blk_len` | {empty}
-|  vii  | 80 or 16      | Padding        | {empty}
+|  vii  | 80 or 16      | Padding        | See below.
 |===
+
+The fields preceding the padding total 496, 560, 624 and 688 bits for a 64-bit System Key
+Identifier and for `k` = 128, 192 and 256. The padding is therefore 16, 80, 16 and 80 bits, and
+the Serialized Context is 4, 5, 5 and 6 blocks of 128 bits.
 
 While in state _Set_Aux_Value_, `J0` is replaced by the following fields:
 
@@ -942,8 +950,7 @@ While in state _Set_Aux_Value_, `J0` is replaced by the following fields:
 | iv.a  | 16 bits         | `len`       | Total length of the IV, in bits. Maximum supported size is 1024 bytes (8192 bits).
 | iv.b  | 16 bits         | `input_base`| Internal offset within input/output to read from/write to. Each time this value reaches `b`, the data in `block` is processed.
 | iv.c  | 16 bits         | `block_base`| Internal amount of absorbed data so far for the current block.
-| iv.d  | 16 bits         | `cumul_len` | Internal cumulative length of data absorbed so far.
-| iv.e  | 64 bits         | `J0_padding`| Padding.
+| iv.d  | 48 bits         | `cumul_len` | Internal cumulative length of data absorbed so far.
 |===
 --
 
@@ -1027,29 +1034,42 @@ caller:
      parameter sets the length of the IV in bits: `len <- Xs`.
      `Xs` must satisfy `8` {le} `Xs` {le} `8192`;
      for any other value, `0` included, the CR transitions to Error State _Invalid_.
-     Upon entering the state, `J0` is cleared: `J0 <- zeros(b)`.
+     Upon entering the state, `tag` is cleared: `tag <- zeros(b)`.
 
   ** When entering State _Set_Aux_Value_, `input_base`, `block_base`, `cumul_len` are set to zero.
 
   ** State _Set_Aux_Value_ is implemented as
   Subalgorithm `process_VLI` (cf. <<ACE-process-VLI>>) as: +
-  `process_VLI(len, block=J0, b, state=J0, b, input_base, block_base, 0, cumul_len, process_block(), finalize(), mode=xor_accumulate, granularity=b)`, where `len` is the IV length in bits, and
+  `process_VLI(len, block=tag, b, state=tag, b, input_base, block_base, 0, cumul_len, process_block(), finalize(), mode=xor_accumulate, granularity=b)`, where `len` is the IV length in bits, and
   `mode` is `xor_accumulate` because `GHASH` absorbs each block by XORing it into the accumulator
   before multiplying, and
-   *** if `len != 96`, `process_block()`, performs `J0 <- Galoismul(J0, auth_key)`, otherwise it does nothing.
+   *** if `len != 96`, `process_block()`, performs `tag <- Galoismul(tag, auth_key)`, otherwise it does nothing.
    *** `finalize()` is defined as follows:
     . If `len = 96`, then:
-      .. `J0 <- bswap(bin(1,32)) @ J0[95:0]`.
+      .. `J0 <- bswap(bin(1,32)) @ tag[95:0]`.
 +
 The value of `J0` is `IV {vvert} 0^31^ {vvert} 1` of cite:[nist-SP-800-38D] {sect}7.1, where the IV occupies bytes 0 to 11, i.e.
 `J0[95:0]`, and the counter occupies bytes 12 to 15 as a *big-endian* integer.
 
     . If `len != 96`, then let `s <- 128 ⎡len/128⎤ - len`, and the computation of `J0 := GHASH(IV {vvert} 0^s+64^ {vvert} bswap(bin(len,64)), auth_key)` is completed by performing:
-      .. if `block_base != 0`, then `J0 <- Galoismul(J0, auth_key)`
-      .. `J0 <- J0 xor (bswap(bin(len,64)) @ zeros(64))`
-      .. `J0 <- Galoismul(J0, auth_key)`
+      .. if `block_base != 0`, then `tag <- Galoismul(tag, auth_key)`
+      .. `tag <- tag xor (bswap(bin(len,64)) @ zeros(64))`
+      .. `tag <- Galoismul(tag, auth_key)`
+      .. `J0 <- tag`
     . `start_ctr <- int(bswap(J0[127:96]))`,
+    . `tag <- zeros(b)`, so that State _Hash_Absorb_ starts the Associated Data hash from the
+      value `GHASH` requires and does not inherit the hash of the IV.
     . Transitions to state _Hash_Absorb_.
+
+[NOTE]
+====
+The IV is absorbed into `tag`, not into `J0`, and only the finished value is copied to `J0`.
+`tag` is free for this because `_Set_Aux_Value_` is reachable only from _Ready_, which clears it,
+and zero is GHASH's initial value in any case — whereas `J0`'s slot in the Serialized Context
+carries `len`, `input_base`, `block_base` and `cumul_len` while this state is active. Accumulating
+into `J0` would place the running hash and those counters in the same 128 bits, so a CC exported
+part-way through a non-96-bit IV could not resume.
+====
 
  ** In State _Hash_Absorb_, ``ace.exec`` instructions of Form B are expected, whereby ``ace.exec Kn|K{Xn}, INPUT`` absorbs a data block into `tag`, i.e.:
 +
@@ -1257,8 +1277,13 @@ The `budget` is inserted in `GCM` mode's serialized context after `last_blk_len`
 |===
 |  Pos. | Size (Bits)   | Field          | Description
 | vii   | 32            | `budget`       | Remaining block budget, serialized as `bin(budget,32)`.
-| viii  | 48 or 112     | Padding        | {empty}
+| viii  | 48 or 112     | Padding        | See below.
 |===
+
+The `budget` field lengthens each case by 32 bits, so the fields preceding the padding total 528,
+592, 656 and 720 bits for a System Key Identifier and for `k` = 128, 192 and 256. The padding is
+therefore 112, 48, 112 and 48 bits, and the Serialized Context is 5, 5, 6 and 6 blocks of 128
+bits.
 --
 
 * *States and Allowed Transitions:* {empty}
@@ -1306,7 +1331,7 @@ While the decryption state machine of GCM-SIV is similar to that of GCM, the enc
 
 Parameters:::
 
-* `k` = key size (128|`k`).
+* `k` = key size (64|`k`).
 * `b` = 128 = block size. For this Algorithm, `ACELEN` must be an integer multiple of `b`.
 * `c` = 32 = counter size.
 * The authentication tag is `b` = 128 bits long.
@@ -1347,8 +1372,12 @@ Data Structures:::
 |    v  |  128            | `SIV`
 |   vi  |  128            | `tmp`
 |  vii  |  16             | `last_blk_len`
-| viii  |  112 or 48      |  Padding
+| viii  |  112 or 48      |  Padding, see below
 |===
+
+The fields preceding the padding total 592, 656, 720 and 784 bits for a 64-bit System Key
+Identifier and for `k` = 128, 192 and 256. The padding is therefore 48, 112, 48 and 112 bits, and
+the Serialized Context is 5, 6, 6 and 7 blocks of 128 bits.
 --
 
 NOTE: The internal state fields `enc_key` and `auth_key` are not serialized, and must be recomputed at the successful termination of an import process.
@@ -1580,7 +1609,6 @@ Data Structures:::
  ** `N`: `120` bits.
  ** `N_len`: 7 bits. Bit length of the nonce. It cannot exceed 120.
  ** `L*`, `offset`, `hash_A`, `checksum_P` : 128 bits each. The derived values `L$` and `L[0]` (cf. Behavior) may be cached or recomputed.
- ** `offset_index`: int
  ** `tag_len`: 8 bits. Bit length of the tag. Currently, the allowed values are 64, 96, and 128.
  ** `last_blk_len`: `7` bits. Length of the last block of AD or plaintext/ciphertext in bits. It is between 0 and 120 (`b` - 8) and must be a multiple of 8, since cite:[RFC7253] defines OCB over byte strings. A value that is not a multiple of 8, or that exceeds 120, causes the CR to transition to Error State _Invalid_.
  ** `index`: int, corresponding to `i` in the loops in RFC{nbsp}7253. It cannot exceed `MAX_BLOCKS` = 2^48^-1.
@@ -1595,7 +1623,7 @@ Data Structures:::
 |    i  | 128         | MDH
 |   ii  | `k` or 64   | `key` or System Key Identifier
 |  iii  | 120         | `N`
-|   iv  |   7         | `N_len`. A value of zero signals that `N` is not set
+|   iv  |   7         | `N_len`, the bit length of the nonce
 |    v  |   1         | Padding
 |   vi  | 128         | `L*`; the derived `L$` and `L[i]` are recomputed or re-derived upon import
 |  vii  | 128         | `offset` (current offset)
@@ -1605,8 +1633,12 @@ Data Structures:::
 |   xi  |   2         | `tag_len`, encoded as `tag_len`/32 − 2
 |  xii  |   7         | `last_blk_len`
 | xiii  |   7         | Padding
-|  xiv  |  64 or 0    | Padding to a multiple of 128 bits.
+|  xiv  |  64 or 0    | Padding to a multiple of 128 bits; see below.
 |===
+
+The fields preceding the padding total 896, 960, 1024 and 1088 bits for a 64-bit System Key
+Identifier and for `k` = 128, 192 and 256. The padding is therefore 0, 64, 0 and 64 bits, and the
+Serialized Context is 7, 8, 8 and 9 blocks of 128 bits.
 --
 
 //
@@ -1687,7 +1719,7 @@ These values can be precomputed and stored in the implementation specific data s
 ** In State _Ready_ :
   *** No ``ace.exec`` operation is allowed.
   *** The following initialization operations are performed:
-   . `N <- 1 @ zeros(120)`.
+   . `N <- zeros(120)`.
    . `N_len <- 0`.
    . `hash_A <- zeros(128)`
    . `checksum_P <- zeros(128)`
@@ -1711,15 +1743,10 @@ nonces shorter than 6 bits.
    `(8 - N_len) mod 8` least significant bits of byte `q-1` cleared. Those bits are the padding
    of the final, partial byte of the nonce string; they are not part of the nonce and are ignored.
   *** If “``ace.exec Kn|K{Xn}, INPUT```,” is repeated, it rewrites `N`.
-  *** If no such `ace.exec` is issued, `N` is not changed, which means that its
-      most significant bit is 1. This condition results in an error state when
-      transitioning to State _Hash_Absorb_.
 
 ** To move to _Hash_Absorb_, a Form B `ace.setst` instruction is expected, where the auxiliary argument `Xs` sets the tag length `tag_len`.
    The admissible values for this argument are 64, 96, or 128.
    Any other value causes the CR to transition to Error State _Invalid_.
-  *** If `N_len = 0`, then `N` was not set in State _Set_Aux_Value_.
-      In this case the CR transitions to Error State _Invalid_.
   *** The following operations are performed:
   . `index <- 1`
   . `tag_len <- Xs`.
@@ -1824,7 +1851,7 @@ In both cases the state then transitions to _Enc_Tag_Finalize_.
 
 ** In State _Enc_Tag_Finalize_, only a single ``ace.exec`` instruction of Form C,
    “``ace.exec OUTPUT,Kn|K{Xn}```,” is expected, which performs `OUTPUT <-
-   zeros(b-tag_len) @ checksum_P[tag_len-1:0]`.
+   zeros(b-tag_len) @ checksum_P[tag_len-1:0]`. The state then transitions to _Success_.
 
 ** In State _Decrypt_, ``ace.exec`` instructions are expected to be of Form A.
    Such an ``ace.exec`` decrypts `INPUT` into `OUTPUT`, and absorbs the
@@ -1972,6 +1999,7 @@ State Machine:::
 * *Behavior:*
  ** In State _Ready_:
   *** `last_blk_len <- 0`
+  *** `block_base <- 0`
   *** `hash <- zeros(b)`
   *** No {nbsp}```ace.exec```{nbsp} operation is allowed.
 
@@ -2008,7 +2036,7 @@ If `ACELEN` > `b`, then the above operations are applied to each `b`-bit block o
 ** In State _Hash_Output_, there are two options:
 
 . A single ``ace.exec`` instruction of Form C can be issued, i.e., “``ace.exec OUTPUT, Kn|K{Xn}``”, to output the hash into `OUTPUT`.
-   If `ACELEN` > `b`, only the bits of `OUTPUT` beyond the `b`-th are cleared.
+   If `ACELEN` > `b`, the bits of `OUTPUT` beyond the `b`-th are cleared.
    Upon issuing that instruction, the CC transitions to State _Success_.
 
  . Alternatively, a Form C ``ace.setst Kn|K{Xn}, #ace_state_hash_verify, INPUT`` may be issued to verify the CMAC without disclosing it: the `b` least significant bits of `INPUT` are compared with `hash`, and the state transitions to _Success_ if they match, to _Failure_ otherwise. Verification of a truncated CMAC is instead performed in software, after emitting the tag.
@@ -2089,8 +2117,8 @@ If all three are unused by the hashing Algorithm, the entire group is omitted, a
 
 Algorithm-Specific Functions:::
 
-* `absorb()`: Process `block` into the hash or MAC.
-* `absorb_last_block()`: Process `block` into the hash or MAC, using a function
+* `process_block()`: Process `block` into the hash or MAC.
+* `process_last_block()`: Process `block` into the hash or MAC, using a function
   for the last block.
 * `finalize()`: Process the `state` into the digest value. We assume this
   either re-uses `block` (the entire digest, or a unit of XOF output should not
@@ -2114,15 +2142,15 @@ State Machine:::
 
 * *Behavior:*
  ** In State _Ready_:
-  *** `last_blk_len`, `block_base` and `block` are set to zero.
+  *** `last_blk_len`, `block_base`, `cumul_len` and `block` are set to zero.
   *** `state`: the initial value is set as specified by the Algorithm.
   *** Any `ace.exec` will result in the CR transitioning to Error State _Invalid_.
 
  ** In State _Hash_Absorb_, we enter Subalgorithm `process_VLI` (cf. <<ACE-process-VLI>>) as:
-`process_VLI(max_length, block, b, state, n, input_base, block_base, state_offset, cumul_len, absorb(), finalize(), mode)`,
-where `max_length` is the Algorithm-defined maximum length of the data to be absorbed, in bits, and `state_offset` is Algorithm-defined.
+`process_VLI(max_len, block, b, state, n, input_base, block_base, state_offset, cumul_len, process_block(), finalize(), mode)`,
+where `max_len` is the Algorithm-defined maximum length of the data to be absorbed, in bits, and `state_offset` is Algorithm-defined.
 `mode` is `assign` for a construction that fills a separate `block` and then processes it into
-`state` through `absorb()`, and `xor_accumulate` for one that absorbs the input directly into
+`state` through `process_block()`, and `xor_accumulate` for one that absorbs the input directly into
 `state`, as a sponge does; each instantiation states which it uses.
 
  ** Upon issuing a Form B “`ace.setst Kn|K{Xn}, \#ace_state_hash_last_block,
@@ -2140,9 +2168,9 @@ Then, state transitions to _Hash_Absorb_Last_Block_ as expected.
 
 ** State _Hash_Absorb_Last_Block_ is very similar to _Hash_Absorb_; the differences
    are:
- *** `last_blk_len` is used in place of `b` throughout.
- *** `absorb_last_block()` is called instead of `absorb()` in Step 3.d.i.
- *** The instruction is terminated after `absorb_last_block()`—only one block
+ *** `last_blk_len` is used in place of `b` for the amount of data to be absorbed.
+ *** `process_last_block()` is called instead of `process_block()` in Step 4.g.
+ *** The instruction is terminated after `process_last_block()`—only one block
      is absorbed—and the state transitions to _Hash_Output_.
 
 ** In State _Hash_Output_, hash functions and XOFs behave differently.
@@ -2205,28 +2233,36 @@ Parameters:::
 | SHA-512/256 |  64 | 1024 |  512 | 256
 |===
 
-*Endianness.* cite:[nist-fips-180-4] is written with big-endian `w`-bit words. Under the
-conventions of <<ACE-Notation>>, the `j`-th message word of a block, for `0` {le} `j` <
-`b`/`w`, is the big-endian interpretation of bytes `j` {interpunct} `w`/8 to
-(`j`+1) {interpunct} `w`/8 − 1 of the absorbed string, that is,
-`int(bswap(block[(j+1) {interpunct} w − 1 : j {interpunct} w]))`. The digest is emitted
-symmetrically: the `i`-th chaining variable occupies bytes `i` {interpunct} `w`/8
-onward as its big-endian encoding `bswap(bin(H~i~, w))`, truncated to `t` bits overall
-for the truncated variants, as cite:[nist-fips-180-4] prescribes.
+// *Endianness.* cite:[nist-fips-180-4] is written with big-endian `w`-bit words. Under the
+// conventions of <<ACE-Notation>>, the `j`-th message word of a block, for `0` {le} `j` <
+// `b`/`w`, is the big-endian interpretation of bytes `j` {interpunct} `w`/8 to
+// (`j`+1) {interpunct} `w`/8 − 1 of the absorbed string, that is,
+// `int(bswap(block[(j+1) {interpunct} w − 1 : j {interpunct} w]))`. The digest is emitted
+// symmetrically: the `i`-th chaining variable occupies bytes `i` {interpunct} `w`/8
+// onward as its big-endian encoding `bswap(bin(H~i~, w))`, truncated to `t` bits overall
+// for the truncated variants, as cite:[nist-fips-180-4] prescribes.
 
 Data Structures:::
 
 * *Provisioning Input*: as for <<ACE-SHA-3>>, the MDH only.
-* *Internal State*: Metadata Header; `state` (`n` bits); `block` (`b` bits);
-  `block_base`; and `cumul_len`, the latter maintained only when operating under HMAC
-  (<<ACE-HMAC>>).
+
+* *Internal State*: Metadata Header; `state` (`n` bits);
+
+* *Internal State*:
+
+   ** Metadata Header.
+   ** `state`: `n` bits.
+   ** `block` (`b` bits).
+   ** `block_base`.
+   ** `cumul_len` only when operating under HMAC (<<ACE-HMAC>>).
+
 * *Serialized Context*: as prescribed by <<ACE-hash-functions>>, with `last_blk_len`
   unused (replaced by padding) and `block` present.
 
 Algorithm-Specific Functions:::
 
-* `absorb()`: applies the compression function of cite:[nist-fips-180-4] {sect}6 for the
-  selected function to `block` and `state`.
+* `process_block()`: applies the compression function of cite:[nist-fips-180-4] {sect}6 for the
+  selected function to absorb the current `block` into `state`.
 * `finalize()`: `None` for stand-alone hashing — padding and length encoding are the
   caller's responsibility. When operating under HMAC, `finalize()` applies the padding of
   cite:[nist-fips-180-4] {sect}5.1 internally; see <<ACE-HMAC>>.
@@ -2245,15 +2281,21 @@ State Machine:::
     per cite:[nist-fips-180-4] {sect}5.3, and `block_base` and `cumul_len` are zeroed.
  ** In State _Hash_Absorb_, Subalgorithm `process_VLI` (cf. <<ACE-process-VLI>>) is
     entered as
-    `process_VLI(max_length, block, b, state, n, input_base, block_base, 0, cumul_len, absorb(), None, mode=assign)`,
-    where `max_length` is a system-defined maximum length in bits, or zero if none is
+    `process_VLI(max_len, block, b, state, n, input_base, block_base, 0, cumul_len, process_block(), None, mode=assign)`,
+    where `max_len` is a system-defined maximum length in bits, or zero if none is
     enforced. `mode` is `assign`: the SHA-2 family fills a separate `block` and then applies
-    the compression function to it.
+    the compression function to it and `state` with a result in `state`.
  ** Upon transitioning to State _Hash_Output_ in stand-alone hashing, `block_base` must
     be zero — the padded message is a whole number of blocks — otherwise the CR
     transitions to Error State _Invalid_.
- ** In State _Hash_Output_, the `t`-bit digest is made available as described in
-    <<ACE-hash-functions>>, and the state then transitions to _Success_.
+ ** In State _Hash_Output_, the `t`-bit digest is taken from `state`, not from `block`. The
+    output loop of <<ACE-hash-functions>> therefore reads
+    `state[block_base + amount - 1 : block_base]` in place of
+    `block[block_base + amount - 1 : block_base]`, and the entry step
+    `block[t - 1 : 0] <- finalize()` is not performed, `finalize()` being `None` here. The bytes
+    so emitted are the chaining variables in the big-endian encoding given under *Endianness*
+    above, truncated to `t` bits. Once `t` bits have been made available the state transitions to
+    _Success_.
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -2316,7 +2358,7 @@ The PI of the variant with the “Key in PI” (KIP) has the following format:
 | Pos. | Size (Bits)               | Field
 |   i  | 128                       | MDH
 |  ii  | `b^*^`                    | `K0`, the key already reduced to `b` bits (see below), or 64 bits if a system key or randomly generated.
-| iii  | `(-b^*^) mod 128`, or 64       | Padding, to reach a multiple of 128 bits.
+| iii  | `(-b^*^) mod 128`, or 64  | Padding, to reach a multiple of 128 bits.
 |===
 
 The key provisioned or held in a CC is the value `K0` as defined in cite:[nist-fips-198-1] {sect}3: the key padded with zeros to `b` bits if it is shorter, or hashed and then padded if it is longer.
@@ -2370,23 +2412,23 @@ In the NIK variant, the Provisioning Input carries no key. `K0` must be explicit
  ** From any valid state to State _Ready_.
 
 * *Behavior:*
- ** Upon entering State _Set_Key_, `key` is zeroed and `input_base`, `block_base` and
+ ** Upon entering State _Set_Key_, `K0` is zeroed and `input_base`, `block_base` and
     `cumul_len` are set to zero. Re-entering _Set_Key_ therefore replaces the key rather than
     combining the new value with the old one.
 
- ** In State _Set_Key_ the `b`-bit value `K0` is loaded into `key` by one or more Form B
+ ** In State _Set_Key_ the `b`-bit value `K0` is loaded by one or more Form B
     ``ace.exec`` instructions, through Subalgorithm `process_VLI`
     (cf. <<ACE-process-VLI>>) entered as
 +
-`{fournbsp}` `process_VLI(b, block=key, b, state=key, n=b,` +
+`{fournbsp}` `process_VLI(b, block=K0, b, state=K0, n=b,` +
 `{fournbsp}{fournbsp}{fournbsp}{fournbsp}{fournbsp}` `input_base, block_base, state_offset=0, cumul_len,` +
 `{fournbsp}{fournbsp}{fournbsp}{fournbsp}{fournbsp}` `process_block=None, finalize=None, mode=assign)`,
 +
-where `mode` is `assign` because `K0` is *loaded* into `key`, not absorbed into it.
+where `mode` is `assign` because `K0` is *loaded* into its field, not absorbed into it.
 
 ** Upon entering _Hash_Absorb_:
   . `state` is set to the initial value of the underlying hash function.
-  . `key xor ipad` is computed and absorbed in the underlying hash function.
+  . `K0 xor ipad` is computed and absorbed in the underlying hash function.
   . Then the semantics of the underlying hash function are executed, absorbing the message.
 ** When entering state _Hash_Output_:
 +
@@ -2394,11 +2436,14 @@ where `mode` is `assign` because `K0` is *loaded* into `key`, not absorbed into 
    * local `inner : bits(d)`
 
 []
-   . If needed, finalize the inner hash `H((key xor ipad) {vvert} message)`, whose `d`-bit
-    value is then in `state[d+state_offset-1 : state_offset]`.
-  . `inner <- state[d+state_offset-1 : state_offset]`.
+   . If needed, finalize the inner hash `H((K0 xor ipad) {vvert} message)`, whose `d`-bit
+    value is then in `state[d+tag_offset-1 : tag_offset]`.
+  . `inner <- state[d+tag_offset-1 : tag_offset]`.
   . Reinitialize `state` to the initial value of the underlying hash function `H`.
-  . `absorb(key xor opad)` as per `H`.
+  . `absorb(K0 xor opad)` as per `H`.
+  . `absorb(inner)` as per `H`, so that the outer hash digests
+    `(K0 xor opad) {vvert} H((K0 xor ipad) {vvert} message)`, as
+    cite:[nist-fips-198-1] {sect}4 requires.
   . Finalize `H`. The `d`-bit HMAC value is available in State
     _Hash_Output_ exactly as for `H`, and is provided to the caller following `H`'s semantics.
 --
@@ -2470,17 +2515,22 @@ Data Structures:::
 |   i   | 128            | MDH
 |  ii  | 1600            | `state`
 | iii  | 16              | `block_base`
-|  iv  | 16              | `input_base`
-|   v  | 32              | Padding
+|  iv  | 48              | Padding
 |===
+
+`input_base` is not serialized: it is reset at the start of every `ace.exec` and restored from
+`acestart` on resumption (<<ACE-process-VLI>>), so it carries no state across a context switch.
+`last_blk_len` and `cumul_len` are absent because SHA-3 uses neither, and are replaced by padding
+as <<ACE-hash-functions>> prescribes. The Serialized Context is 1792 bits, that is 14 blocks of
+128 bits.
 --
 
 //
 
 Algorithm-Specific Functions::: {empty}
  * `P()`: computes `KECCAK-p[1600, 24]` on `state`, with result in place.
- * `absorb()`: there is no explicit operation to copy data into
-   `state`, as the inputs are directly XORed into it; instead, `absorb`
+ * `process_block()`: there is no explicit operation to copy data into
+   `state`, as the inputs are directly XORed into it; instead, `process_block`
    applies `P()` to the state.
  * `update()`: updates the `state` during the digest output stage.  It applies `P()` to the state.
 
@@ -2499,11 +2549,7 @@ State Machine::: {empty}
  ** In State _Hash_Absorb_, the input data is directly XORed to `state`.
  This is done in
  Subalgorithm `process_VLI` (cf. <<ACE-process-VLI>>) as:
-`process_VLI(max_length, state, b, state, n, input_base, block_base, 0, cumul_len, absorb(), None, mode=xor_accumulate)`,
-where `max_length` is a system-defined maximum length of the data to be absorbed, in bits, or zero if none is enforced; if zero, `cumul_len` is not tracked and is not serialized.
-`mode` is `xor_accumulate`, which is what makes the input land directly in the rate portion of
-the sponge state, as cite:[nist-fips-202] {sect}4 requires.
-
+`process_VLI(max_len=0, state, b, state, n, input_base, block_base, 0, None, process_block(), None, mode=xor_accumulate)`,
  ** Upon transitioning to State _Hash_Output_:
  The suffix-and-padding string `S` = `pad10*1`, appended to `D`, is generated, where `D` is the domain-separation suffix given in <<ACE-SHA-3-parameters>> and `pad10*1` appends a `1`, then as many `0` bits as required, then a final `1`, so that `block_base` + `|S|` is a positive multiple of `b`. Then, the resulting additional block is absorbed:
 
@@ -2589,20 +2635,22 @@ does not define how, since cite:[nist-SP-800-185] does not.
 |   i  | 128         | MDH
 |  ii  | 1600        | `state`
 | iii  | 16          | `block_base`
-|  iv  | 16          | `input_base`
-|   v  | 32          | Padding
-|  vi  | `b`         | `cshake_block`
-| vii  | `b`         | `key_block`
-| viii | 32          | `L`
-|  ix  | 96          | Padding
+|  iv  | 48          | Padding
+|   v  | `b`         | `cshake_block`
+|  vi  | `b`         | `key_block`
+| vii  | 32          | `L`
+| viii | 96          | Padding
 |===
+
+The Serialized Context totals 1920 + 2`b` bits: 4608 bits, that is 36 blocks of 128 bits, for
+KMAC128 and KMACXOF128, and 4096 bits, that is 32 blocks, for KMAC256 and KMACXOF256.
 --
 
 //
 
 Algorithm-Specific Functions:::
 
- * `P()`, `absorb()` and `update()` are as in <<ACE-SHA-3>>.
+ * `P()`, `process_block()` and `update()` are as in <<ACE-SHA-3>>.
  * `right_encode(x)` is as defined in cite:[nist-SP-800-185] {sect}2.3: the value `x`
    written as an unsigned big-endian integer on the smallest possible positive number `m`
    of bytes, followed by a single byte holding `m`.
@@ -3015,10 +3063,12 @@ Data Structures:::
 
 * *Internal State*:
  ** Metadata Header.
- . `K1`: 128 bits, or 64 bits if it is a System Key Identifier.
- . `K2`: 128 bits, omitted if a System Key is used.
+ ** `K1`: 128 bits, or 64 bits if it is a System Key Identifier.
+ ** `K2`: 128 bits, omitted if a System Key is used.
  ** `state[0 .. 4]`: five 64-bit words, i.e., 320 bits.
  ** `tag_len`: 8 bits.
+ ** `last_blk_len`: 9 bits as int, as in <<ACE-Ascon-AEAD128>>, whose
+    _Enc_Last_Block_ and _Dec_Last_Block_ states this Algorithm inherits.
 
 * *Serialized Context*:
 +
@@ -3034,9 +3084,14 @@ Data Structures:::
 |   vi  | 64            | `state`[2]
 |  vii  | 64            | `state`[3]
 | viii  | 64            | `state`[4]
-|   ix  | 16            | `tag_len`
-|    x  | 48 or 112     | Padding
+|   ix  | 16            | `last_blk_len`
+|    x  | 16            | `tag_len`
+|   xi  | 32 or 96      | Padding, see below
 |===
+
+The fields preceding the padding total 736 bits when `K1` and `K2` are both given by value, and
+544 bits when a System Key Identifier replaces them. The padding is therefore 32 and 96 bits, and
+the Serialized Context is 6 and 5 blocks of 128 bits.
 --
 
 The Algorithm has the same states as Ascon-AEAD128, as described in
@@ -3142,7 +3197,7 @@ each `64`-bit block of `INPUT`.
 --
 +
 If `ACELEN` {ge} `128`, these operations are executed `ACELEN/64` times, writing to `OUTPUT`[63:0] the first time, then to `OUTPUT`[127:64], `OUTPUT`[191:128], and `OUTPUT`[255:192]. If more than one ``ace.exec`` instruction is required, writing restarts from `OUTPUT`[63:0].
-If `countdown` reaches zero before the entire output register is written, the state of the unwritten bits is undefined: this may occur, for instance, if `ACELEN` = `192` or `ACELEN` = `256`.
+If `countdown` reaches zero before the entire output register is written, the unwritten bits are cleared, as in <<ACE-CMAC-mode>> and <<ACE-hash-functions>>: this may occur, for instance, if `ACELEN` = `192` or `ACELEN` = `256`.
 This is usually not a problem, since the output vectors will usually be configured for 64-bit, 128-bit, or 256-bit blocks, in which case four, two, or one ``ace.exec`` instructions are required, respectively.
 
 //
@@ -3348,6 +3403,32 @@ The size in bytes of the optional Fields v to viii is:
 Every term is in bytes. If _ImpDataLen_ is non-zero, the Implementation Variable-Length
 Data Section follows these fields, beginning with the Implementation Qualifier `IMPQUAL`,
 as in <<ACE-SCC>>.
+
+A final padding field of `(-SCC_content_size()) mod 128` bits is appended, so that the section
+reaches a multiple of 128 bits as <<ACE-data-formats>> requires; since `SCC_content_size()` is
+never itself a multiple of 128 for any curve architected here, this equals
+`128 - (SCC_content_size() mod 128)`. The formula is less direct than for the symmetric
+Algorithms because four of the fields are optional, but the length remains derivable from the MDH
+alone: their presence is given by `HasSecondPt`, `HasSignature`, `HasHash` and `HasRndNum`, which
+are the four bits of _StateExtension_ (<<ACE-ECC-StateExtension>>), and _StateExtension_ is one of
+the fields <<ACE-length-rule>> admits.
+
+`SCC_content_size()` ranges as follows, in bits, from the minimum with no optional field present
+to the maximum with all of them:
+
+[%autowidth,float="center",align="center",cols="<,^,^",options="header"]
+|===
+| Curve | Minimum | Maximum
+| secp256r1, brainpoolP256r1, SM2 |  800 | 2336
+| secp384r1, brainpoolP384r1      | 1184 | 3488
+| secp521r1                       | 1760 | 5216
+| brainpoolP512r1                 | 1568 | 4640
+| ed25519                         |  544 | 1824
+| ed448                           |  944 | 2824
+|===
+
+For ed25519 and ed448 the fields of <<ACE-EdDSA>> are appended before the padding, so their
+totals exceed the values shown here.
 --
 
 //
@@ -3427,10 +3508,13 @@ therefore needs no flag.
    **** A state change operation can be issued, including to states that require a set `Generator`. This state change also clears `block_base`.
 
  ** To transition to any of the States _Set_Scalar_, _Set_Hash_, _Set_SecondPt_, or _Set_Signature_ a Form A `ace.setst` is used.
- . If there is a current value in the corresponding field _X_ = `Scalar`, `Hash`, `SecondPt`, or `Signature`,
-     it is erased, and the Boolean ``Has``_X_ is set to False.
- . `block_base` <- 0, and a value for Field _X_ is loaded, using one or more Form B `ace.exec` operations, similarly to `Generator`, updating
-   `block_base` accordingly and ignoring excess data in the last `ace.exec`, setting ``Has``_X_ once done.
+  *** If there is a current value in the corresponding field _X_ = `Scalar`, `Hash`, `SecondPt`, or
+      `Signature`, it is erased, and, for the three fields that have one, the Boolean ``Has``_X_ is
+      set to False. `Scalar` has no such flag: it is simply set to zero, which is not a legal
+      private key.
+  *** `block_base` <- 0, and a value for Field _X_ is loaded, using one or more Form B `ace.exec`
+      operations, similarly to `Generator`, updating `block_base` accordingly and ignoring excess
+      data in the last `ace.exec`, setting ``Has``_X_ once done where that flag exists.
 
  ** It is also allowed to transition to _Set_Scalar_ using a Form B `ace.setst` with a non-zero value in the GPR.
     In this case, a random value is set, no further
@@ -3922,23 +4006,26 @@ The number of bits loaded into the state fields so far is stored in the _Algorit
 +
 Subalgorithm `process_VLI` (cf. <<ACE-process-VLI>>) is invoked as
 +
-`{fournbsp}` `process_VLI(len, block=F, b=len, state=F, n=len,` +
-`{fournbsp}{fournbsp}{fournbsp}` `input_base, block_base=_AlgorithmUse_,` +
-`{fournbsp}{fournbsp}{fournbsp}` `state_offset=0, cumul_len,` +
+`{fournbsp}` `process_VLI(max_len=len, block=F, b=len, state=F, n=len,` +
+`{fournbsp}{fournbsp}{fournbsp}` `input_base, block_base,` +
+`{fournbsp}{fournbsp}{fournbsp}` `state_offset=0, cumul_len=_AlgorithmUse_,` +
 `{fournbsp}{fournbsp}{fournbsp}` `process_block=None, finalize=None, mode=assign)`,
 +
-where `F` is the state field being loaded.
+where `F` is the state field being loaded and `len` is its size in bits, equal to 8 times the size
+in bytes taken from <<ACE-ML-KEM-sizes>>. Since `len` is determined by the KEM variant and the
+state, no variable need hold it.
 `mode` is `assign`: the field is loaded, not absorbed.
-Only `block_base` is held in _AlgorithmUse_, since it is the value that must persist across
-`ace.exec` instructions and be serialized. `input_base` is an internal variable of the procedure,
-reset at the start of every `ace.exec` as <<ACE-process-VLI>> prescribes, and `cumul_len` is a
-separate internal variable; neither may be aliased to _AlgorithmUse_ or to the other.
+
+`cumul_len` — and not `block_base` — is the counter held in _AlgorithmUse_. It rises
+monotonically to `len` and records how many bits have been loaded so far, which is what the
+completion test of Step 4.h uses. `block_base` cannot serve this purpose: with `b` = `len` the
+whole field is one block, so Step 4.g resets `block_base` to zero at the very moment the field
+becomes complete, leaving it indistinguishable from an empty field. `input_base` and `block_base`
+are therefore internal variables of the procedure, aliased neither to _AlgorithmUse_ nor to each
+other, as <<ACE-process-VLI>> requires.
+
 Upon entering the state, `F` is zeroed together with _AlgorithmUse_, so that reloading a field
 replaces it rather than combining it with its previous contents.
-Since a single `F`-sized value is loaded and no processing occurs, the `INPUT` to a Form B `ace.exec` is always absorbed in full, except possibly for the last one.
-`len` is the size of the field in bits, equal to 8 times the size in bytes taken from <<ACE-ML-KEM-sizes>>.
-Since it is determined by the KEM variant and the state, a variable holding `len` is not necessary.
-Input blocks are assumed to be loaded in full, so no `input_base` is necessary, and only `block_base` = `cumul_len` is needed.
 The data is loaded directly into the field `F`; there is no separate `state` field.
 
 ** In State _encapsk_Output_, resp., _ciphertext_Output_, one or more Form C `ace.exec` instructions are used to store values of `encapsk`, resp., `ciphertext` to memory.
@@ -4155,12 +4242,14 @@ These fields are long, so each of these states runs Subalgorithm `process_VLI`
 (cf. <<ACE-process-VLI>>) exactly as the ML-KEM `_*_Input_` states do
 (cf. <<ACE-PQC-ML-KEM>>),
 with `block` = `state` equal to the target field,
-`b` = `n` = its size,
+`max_len` = `b` = `n` = its size,
 `mode` = `assign`,
-`block_base` a reference to _AlgorithmUse_, and
+`cumul_len` a reference to _AlgorithmUse_, and
 with `process_block` and `finalize` given as `None`.
-`input_base` and `cumul_len` are separate internal variables of the procedure and are *not*
-aliased to _AlgorithmUse_ or to each other, as <<ACE-process-VLI>> requires.
+`input_base` and `block_base` are separate internal variables of the procedure and are *not*
+aliased to _AlgorithmUse_ or to each other, as <<ACE-process-VLI>> requires. `cumul_len` is the
+counter that carries the progress, since with `b` equal to the whole field Step 4.g resets
+`block_base` to zero exactly when the field completes.
 Upon entering the state, the target field is zeroed and _AlgorithmUse_ is set to 0.
 The number of bits loaded into the state fields so far is stored in the _AlgorithmUse_ field.
 When the value of the _AlgorithmUse_ field reaches the bit size of the corresponding field, further `ace.exec` instructions are not allowed.
