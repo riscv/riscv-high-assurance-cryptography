@@ -39,8 +39,9 @@ Spec notes (reported, not patched):
     implements the natural RFC 8452 derivation (AES-128, counter blocks
     0..3), which the C.1 intermediates confirm.
   * The instruction/Form used to enter Enc_Tag_Finalize, Encrypt, Decrypt
-    and Dec_Tag_Finalize is not stated (review finding m8); the model
-    transitions directly.
+    and Dec_Tag_Finalize is now stated (review finding m8, fixed): each is a
+    Form A ace.setst, and the value the state consumes is the INPUT of the
+    ace.exec issued *in* the state, not an argument of the transition.
 """
 import sys, os
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -649,9 +650,11 @@ def main():
           "derivation is underspecified.  This harness uses the natural "
           "RFC 8452 rule (AES-128, counter blocks 0..3), confirmed by the "
           "C.1 intermediates.")
-    print("SPEC-NOTE: the instruction/Form entering Enc_Tag_Finalize, "
-          "Encrypt, Decrypt and Dec_Tag_Finalize is not stated "
-          "(review finding m8); the model transitions directly.")
+    print("SPEC-NOTE: review m8 is fixed. Each transition into "
+          "Enc_Tag_Finalize, Encrypt, Decrypt and Dec_Tag_Finalize is now "
+          "stated to be a Form A ace.setst, with the value the state consumes "
+          "supplied as the INPUT of the ace.exec issued in the state; the "
+          "model no longer has to infer the Form.")
 
     print(f"\nKAT-RESULT: {'PASS' if ok else 'FAIL'}")
     return 0 if ok else 1

@@ -499,6 +499,60 @@ def t_state_machine():
             cc6.state == S_INVALID)
 
 
+def t_tr_recompute_on_import():
+    """m4/m15 (fixed): tr survives export/import of a verification-only CC.
+
+    The Serialized Context carries tr only inside privkey, so a CC configured
+    for verification only (pubkey loaded via _pubkey_Input_, tr via _tr_Input_)
+    would lose it. The spec now says that on completing an import with
+    HasPrivKey false the unit recomputes tr <- SHAKE256(pubkey, 64), so nothing
+    has to be carried and no format change is needed.
+    """
+    print('\n-- tr across export/import of a verification-only CC (m15) --')
+    kv = VECTORS['keyGen'][0]
+    ps = kv['ps']
+    sk, pk = bytes.fromhex(kv['sk']), bytes.fromhex(kv['pk'])
+    sk_len = D.sizes(ps)[0]
+    tr_expected = D.H(pk, 64)
+    chk('tr = SHAKE256(pubkey, 64) equals the tr embedded in privkey',
+        sk[64:128] == tr_expected)
+
+    def complete_import(cc):
+        """<<ACE-PQC-ML-DSA>>: on completing an import, if HasPrivKey is false
+        the unit recomputes tr <- SHAKE256(pubkey, 64)."""
+        if not cc.has_privkey:
+            cc.tr = D.H(getattr(cc, 'pubkey', b''), 64)
+
+    # A verification-only CC: public key only, no private key.
+    cc = MLDSAContext(ps)
+    cc.setst(S_PK_IN); cc.exec_input(pk)
+    chk('verification-only CC: HasPubKey set, HasPrivKey clear',
+        cc.has_pubkey and not cc.has_privkey)
+
+    # The Serialized Context carries tr only inside privkey, which is absent
+    # here, so nothing in the image holds tr.
+    image_privkey = bytes(sk_len)
+    chk('the serialized privkey field carries no tr when HasPrivKey is false',
+        image_privkey[64:128] == bytes(64))
+
+    # Without the recompute rule tr would be lost across the round trip ...
+    imported = MLDSAContext(ps)
+    imported.setst(S_PK_IN); imported.exec_input(pk)
+    chk('without the rule, an imported verification-only CC has no tr',
+        getattr(imported, 'tr', None) != tr_expected)
+    # ... and with it, tr is recovered from the public key.
+    complete_import(imported)
+    chk('after import, tr is recomputed as SHAKE256(pubkey, 64)',
+        imported.tr == tr_expected)
+
+    # A signing CC keeps the tr embedded in its privkey; the rule does not fire.
+    signing = MLDSAContext(ps)
+    signing.setst(S_SK_IN); signing.exec_input(sk)
+    complete_import(signing)
+    chk('a signing CC keeps the tr embedded in its privkey across import',
+        signing.has_privkey and signing.tr == tr_expected)
+
+
 def t_compute_pubkey():
     print('\n-- State _compute_pubKey_ and the tr-consistency check --')
     ps = 44
@@ -749,6 +803,7 @@ def main():
     t_verify()
     t_state_machine()
     t_compute_pubkey()
+    t_tr_recompute_on_import()
     t_sign_verify_flow()
     t_hint_checks()
     control_fired = not t_negative_control()

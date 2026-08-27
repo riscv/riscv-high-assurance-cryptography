@@ -47,18 +47,18 @@ reference implementation, github.com/ascon/ascon-c @ main:
 
 Each embedded case carries its `Count` from the corresponding file.
 
-SPEC DISCREPANCY MODELLED HERE (review finding m5)
---------------------------------------------------
-The intro of <<ACE-Ascon-AEAD128>> says "the caller is responsible for applying
-proper padding to the AD and the plaintext ... and for truncating the last
-plaintext block".  That contradicts the state machine directly below it:
+REVIEW FINDING m5, SINCE FIXED
+-----------------------------
+The intro of <<ACE-Ascon-AEAD128>> used to say "the caller is responsible for
+applying proper padding to the AD and the plaintext ... and for truncating the
+last plaintext block".  That contradicted the state machine directly below it:
 _Enc_Last_Block_ computes `tmp <- pad(INPUT[last_blk_len-1:0], 128)` and
 _Dec_Last_Block_ computes `S_r <- S_r xor pad(P[last_blk_len-1:0], 128)`, i.e.
 the final plaintext/ciphertext block is padded *internally*.  A caller obeying
 the prose would double-pad and produce wrong ciphertext.  The state machine is
 the correct reading and is what this harness models: the caller pads the AD
 only; the final PT/CT block goes through _*_Last_Block_ with the internal
-pad().  This is reported as a wording bug, not patched here.
+pad().  The intro now says exactly that, so the spec and this model agree.
 
 SECOND SPEC DISCREPANCY FOUND BY THIS HARNESS
 ---------------------------------------------

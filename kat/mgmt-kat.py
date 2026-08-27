@@ -476,17 +476,26 @@ class Unit:
         ed = m["ExpirationDate"]
         return ed != 0 and self.clock >= ed
 
-    def _check_usage_gates(self, cr, *, is_resumption=False):
+    def _check_usage_gates(self, cr, *, is_resumption=False, usage_controlled=True):
         """Common dispatch checks for a *usage* instruction.
 
         Returns "noop" if the instruction must do nothing (Error-State CR),
         otherwise None.  Raises AceException on a gate violation.
+
+        usage_controlled=False is for ace.restrict*, which is not
+        usage-controlled (review m4/m13, since fixed): it can only narrow a CC,
+        so permitting it in a mode the _UsagePolicy_ excludes grants that mode
+        nothing.  ConfigStatus gating and the Error-State no-op still apply; the
+        expiration check does not, since ace.restrict* is not one of the
+        evaluation points of <<ACE-Metadata-expiration-date>>.
         """
         if cr.cfg != CFG_COMPLETE:
             # ConfigStatus gating: usage of a not-complete CR
             raise AceException("privilege_violation")
         if cr.in_error():
             return "noop"                    # State rule 13
+        if not usage_controlled:
+            return None
         if not self.usage_allowed(cr.mdh):   # State rule 14
             raise AceException("privilege_violation")
         if self.expired(cr.mdh):
@@ -816,9 +825,9 @@ class Unit:
 
     # -- ace.restrict* -----------------------------------------------
     def restrictl(self, k, xs):
-        """AlgorithmPolicy and SCProtection, in MDH[63:0]."""
+        """AlgorithmPolicy and SCProtection, in MDH[63:0].  Not usage-controlled."""
         cr = self.crs[k]
-        if self._check_usage_gates(cr) == "noop":
+        if self._check_usage_gates(cr, usage_controlled=False) == "noop":
             return "noop"
         m = cr.mdh
         if xs["AlgorithmPolicy"] != 0:
@@ -846,9 +855,10 @@ class Unit:
         return "ok"
 
     def restricth(self, k, xs):
-        """Locality, UsagePolicy, ExpirationDate, AlgorithmUse, in MDH[127:64]."""
+        """Locality, UsagePolicy, ExpirationDate, AlgorithmUse, in MDH[127:64].
+        Not usage-controlled."""
         cr = self.crs[k]
-        if self._check_usage_gates(cr) == "noop":
+        if self._check_usage_gates(cr, usage_controlled=False) == "noop":
             return "noop"
         m = cr.mdh
         if xs["Locality"] != 0:
@@ -918,7 +928,7 @@ def loc_resolve(unit, locality):
         if req == 0:
             continue
         if sub is LOC_BOOT and req == 3:
-            return None                    # [5:4] = 3 is unassigned (review m9)
+            return None                    # [5:4] = 3 is reserved (m9, now normative)
         if sub in (LOC_HW1, LOC_HW2):
             cand = None
             for v in range(req, 4):        # substitute forward along the chain
@@ -1293,15 +1303,23 @@ def test_restrict():
     check("restrictv: both halves applied when the first succeeds",
           (r, u.crs[0].mdh["SCProtection"], u.crs[0].mdh["UsagePolicy"]), ("ok", 2, 1))
 
-    # -- restrict is usage-controlled, and a no-op on an Error-State CR
+    # -- restrict is NOT usage-controlled (m13, fixed), but still narrows only,
+    #    and is still a no-op on an Error-State CR
     u = fresh_unit()
     provision(u, 0, ctr_mdh(UsagePolicy=0b0001), b"\x11" * clen)
-    u.mode = "U"
+    u.mode = "U"                       # bit 0 set: U-mode may not *use* this CC
     try:
-        u.restricth(0, mdh_new(UsagePolicy=0b0010))
-        check("ace.restrict is usage-controlled", "no exception", "privilege_violation")
+        r = u.restricth(0, mdh_new(UsagePolicy=0b0010))
+        check("ace.restrict is not usage-controlled: a mode barred from using "
+              "the CC may still narrow it",
+              (r, u.crs[0].mdh["UsagePolicy"]), ("ok", 0b0011))
     except AceException as e:
-        check("ace.restrict is usage-controlled", e.which, "privilege_violation")
+        check("ace.restrict is not usage-controlled", f"raised {e.which}", "ok")
+    # ... and it still cannot widen, from any mode
+    before = u.crs[0].mdh["UsagePolicy"]
+    u.restricth(0, mdh_new(UsagePolicy=0))
+    check("ace.restrict from a barred mode still cannot widen",
+          u.crs[0].mdh["UsagePolicy"], before)
     u.mode = "M"
     u.setst(0, ST_INVALID)
     check("ace.restrict on an Error-State CR is a no-op",
@@ -1366,8 +1384,10 @@ def test_localities():
     check("unresolvable Locality invalidates the CR at provisioning completion",
           u.getst(0), ST_INVALID)
 
-    info("Locality encoding [5:4] = 3 is unassigned (review m9); modelled as invalid "
-         "Metadata. The spec states no behaviour for it.")
+    info("Locality encoding [5:4] = 3 is now declared reserved by <<ACE-Localities>> "
+         "(review m9, fixed): a PI or SCC carrying it is invalid Metadata and the CR "
+         "transitions to Error State Invalid. Previously the spec stated no behaviour "
+         "for it and the model had to choose one.")
 
 
 def test_state_machine():
@@ -1895,6 +1915,13 @@ def test_aceiobuf():
     u.write_aceiobuflen(64)                 # re-writing the same value
     check("re-writing aceiobuflen zeroes the buffer", bytes(u.aceiobuf), bytes(64))
     check("re-writing aceiobuflen re-sets aceiobuftop", u.aceiobuftop, 64)
+
+    # m10 (fixed): without Zklio the ACEIOBUF does not exist, acemaxiobuflen
+    # reads as zero, and aceiobuflen / aceiobuftop are not present at all.
+    u_nolio = fresh_unit(maxiobuflen=0)
+    check("without Zklio: acemaxiobuflen reads 0", u_nolio.acemaxiobuflen, 0)
+    check("without Zklio: aceiobuflen cannot be made nonzero",
+          (u_nolio.write_aceiobuflen(64), u_nolio.aceiobuflen), (0, 0))
 
     # WARL clamps
     got = u.write_aceiobuflen(1000)

@@ -35,11 +35,13 @@ Checks performed
       NC-ktop   : the bswap dropped from Ktop's input,
                   enc_blk(key, Nonce_be[127:6] @ zeros(6)).
 
-Known spec restrictions honoured (review ACE-spec-review-0.7.0.md, m4)
-  * bswap(N[N_len-1:0]) is undefined for non-byte-multiple N_len, so the
-    KAT uses byte-multiple nonces only (the RFC vectors are 96-bit).
-  * _Dec_Last_Block_ omits the index = ones(48) guard that
-    _Enc_Last_Block_ has; the model below is literal and omits it too.
+Review finding m4 (ACE-spec-review-0.7.0.md), since FIXED, is covered here:
+  * N_len may be any bit length 6..120. The spec defines nonce_be(N, n) for
+    the general case; it reduces to bswap(N[n-1:0]) when 8 | n, so the RFC
+    7253 vectors are unaffected. Sub-byte nonces have no published vectors,
+    so that path is anchored by self-consistency only.
+  * _Dec_Last_Block_ now carries the same index = ones(48) guard as
+    _Enc_Last_Block_; the model enforces it.
 """
 import sys, os
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -52,6 +54,26 @@ ONES48 = (1 << 48) - 1
 def ntz(n):
     assert n > 0
     return (n & -n).bit_length() - 1
+
+
+def nonce_be(N, n):
+    """<<ACE-OCB-mode>> `nonce_be(N, n)`: the big-endian view of the n-bit nonce
+    bit string held in N.
+
+    RFC 7253 treats the nonce as a bit string whose first bit is the most
+    significant, so serialized into bytes the final partial byte is LEFT-ALIGNED:
+    its r = n mod 8 most significant bits are nonce, the rest is padding.  With
+    q = ceil(n/8),
+
+        nonce_be(N, n) = bswap(N[8q-1:0], q) >> ((8 - r) mod 8)
+
+    For r = 0 this reduces to bswap(N[n-1:0]), so byte-multiple nonces -- which
+    is all the RFC 7253 vectors use -- are unaffected.  bswap alone cannot
+    express the general case, being defined only over byte strings.
+    """
+    q = (n + 7) // 8
+    r = n % 8
+    return bswap(sl(N, 8 * q - 1, 0), q) >> ((8 - r) % 8)
 
 # ====================================================================== REF
 # RFC 7253 sections 4.1-4.3, directly on byte strings.  All shifts and
@@ -163,8 +185,15 @@ class AceOcb:
         self.N_len = Xs
 
     def exec_set_nonce(self, INPUT):              # Form B in Set_Aux_Value
-        # N <- zeros(120-N_len) @ INPUT[N_len-1:0]
-        self.N = cat((0, 120 - self.N_len), (sl(INPUT, self.N_len - 1, 0), self.N_len))
+        # N <- zeros(120 - 8q) @ INPUT[8q-1:0], q = ceil(N_len/8), with the
+        # (8 - N_len) mod 8 least significant bits of byte q-1 cleared: they are
+        # the padding of the final partial byte of the nonce string, not nonce.
+        q = (self.N_len + 7) // 8
+        pad_bits = (-self.N_len) % 8
+        img = sl(INPUT, 8 * q - 1, 0)
+        if pad_bits:
+            img &= ~((1 << pad_bits) - 1) & ((1 << (8 * q)) - 1)
+        self.N = cat((0, 120 - 8 * q), (img, 8 * q))
 
     def setst_tag_len(self, Xs):                  # Set_Aux_Value -> Hash_Absorb
         if Xs not in (64, 96, 128):
@@ -206,12 +235,10 @@ class AceOcb:
 
     def enter_crypt(self):                        # entering _Encrypt_ / _Decrypt_
         n = self.N_len
-        # bswap(N[N_len-1:0]) is undefined for non-byte-multiple N_len (m4):
-        assert n % 8 == 0, 'KAT restriction: byte-multiple nonces only'
         self.Nonce_be = cat((bin_(self.tag_len % 128, 7), 7),
                             (0, 120 - n),
                             (1, 1),
-                            (bswap(sl(self.N, n - 1, 0), n // 8), n))
+                            (nonce_be(self.N, n), n))
         self.bottom = sl(self.Nonce_be, 5, 0)     # int(Nonce_be[5:0])
         ktop_in = cat((sl(self.Nonce_be, 127, 6), 122), (0, 6))
         if self.ktop_bswap:                       # spec: bswap(Nonce_be[127:6] @ zeros(6))
@@ -262,8 +289,10 @@ class AceOcb:
         return tmp                                # OUTPUT
 
     def exec_dec_last(self, INPUT):               # Form A in _Dec_Last_Block_
-        # NOTE: the spec omits the index = ones(48) guard here (review m4);
-        # this model is literal and omits it too.
+        # The index = ones(48) guard is now present here as well as in
+        # _Enc_Last_Block_ (review m4, since fixed).
+        if self.index == ONES48:
+            raise Invalid('index overflow')
         n = self.last_blk_len
         self.offset ^= self.Lstar
         tmp = sl(self.enc(self.offset), n - 1, 0)
@@ -278,10 +307,15 @@ class AceOcb:
 
 
 def ace_ocb_encrypt(K, N, A, P, taglen_bits, double_fn=double_ocb, ktop_bswap=True,
-                    machine_out=None):
-    """Drive the state machine the way software would; return C || truncated tag."""
+                    machine_out=None, n_len_bits=None):
+    """Drive the state machine the way software would; return C || truncated tag.
+
+    n_len_bits defaults to 8*len(N); pass it explicitly for a nonce whose bit
+    length is not a multiple of 8, in which case N carries the bit string
+    left-aligned in ceil(n/8) bytes.
+    """
     m = AceOcb(K, double_fn, ktop_bswap)
-    m.setst_nonce_len(len(N) * 8)
+    m.setst_nonce_len(len(N) * 8 if n_len_bits is None else n_len_bits)
     m.exec_set_nonce(b2v(N))
     m.setst_tag_len(taglen_bits)
     nA = len(A) // 16
@@ -318,12 +352,12 @@ def ace_ocb_encrypt(K, N, A, P, taglen_bits, double_fn=double_ocb, ktop_bswap=Tr
     return C + v2b(tag, 16)[:taglen_bits // 8]
 
 
-def ace_ocb_decrypt(K, N, A, CT, taglen_bits):
+def ace_ocb_decrypt(K, N, A, CT, taglen_bits, n_len_bits=None):
     """Return (recovered plaintext, Hash_Verify Success?)."""
     tlb = taglen_bits // 8
     C, tag = CT[:-tlb], CT[-tlb:]
     m = AceOcb(K)
-    m.setst_nonce_len(len(N) * 8)
+    m.setst_nonce_len(len(N) * 8 if n_len_bits is None else n_len_bits)
     m.exec_set_nonce(b2v(N))
     m.setst_tag_len(taglen_bits)
     nA = len(A) // 16
@@ -482,10 +516,54 @@ def main():
           f"{'FAIL as expected' if fired2 else 'MATCHED (control did not fire)'}")
     ok = ok and fired1 and fired2
 
-    print("\nNOTE: per review m4, the KAT restricts itself to byte-multiple "
-          "nonce lengths; bswap(N[N_len-1:0]) is undefined otherwise.")
-    print("NOTE: per review m4, _Dec_Last_Block_ omits the index = ones(48) "
-          "guard; the model above follows the literal text.")
+    # ---- m4, now fixed: nonces of any bit length 6..120 -------------------
+    # ANCHOR: self-consistency only.  Every RFC 7253 vector uses a byte-string
+    # nonce, so the sub-byte path has no published answer to check against;
+    # what is checked is that nonce_be reduces to bswap at r = 0 (hence the
+    # vectors above are unaffected), that the round trip closes for every
+    # admissible bit length, and that the padding bits are genuinely ignored.
+    print("\nm4: nonces of any bit length 6..120 "
+          "(ANCHOR: self-consistency -- every RFC 7253 vector is byte-string)")
+    print(f"{'N_len':>6}  {'reduces':8} {'roundtrip':10} {'pad ignored':12}")
+    Am, Pm = bytes(range(24)), bytes(range(40))
+    red = all(nonce_be(b2v(x), 8 * len(x)) == bswap(b2v(x), len(x))
+              for x in (bytes.fromhex('BBAA99887766554433221100'),
+                        bytes.fromhex('0F1E2D3C4B5A69788796A5B4C3D2E1')))
+    print(f"{'8|n':>6}  {chk(red):8} {'--':10} {'--':12}"
+          "   nonce_be == bswap(N[n-1:0])")
+    for n_len in (6, 7, 8, 13, 60, 61, 119, 120):
+        q = (n_len + 7) // 8
+        keep = (-n_len) % 8
+        raw = bytes((0xA5 ^ i) for i in range(q))
+        N = (raw[:-1] + bytes([raw[-1] & ((0xFF << keep) & 0xFF)])) if keep else raw
+        ct = ace_ocb_encrypt(K128, N, Am, Pm, 128, n_len_bits=n_len)
+        pt, good = ace_ocb_decrypt(K128, N, Am, ct, 128, n_len_bits=n_len)
+        if keep:
+            dirty = N[:-1] + bytes([N[-1] | ((1 << keep) - 1)])
+            ct2 = ace_ocb_encrypt(K128, dirty, Am, Pm, 128, n_len_bits=n_len)
+            padres = chk(ct2 == ct)
+        else:
+            padres = '--'
+        print(f"{n_len:>6}  {'--':8} {chk(pt == Pm and good):10} {padres:12}")
+    c6a = ace_ocb_encrypt(K128, bytes([0b10110100]), Am, Pm, 128, n_len_bits=6)
+    c6b = ace_ocb_encrypt(K128, bytes([0b10110000]), Am, Pm, 128, n_len_bits=6)
+    print(f"  N_len = 6, distinct nonces -> distinct ciphertexts : {chk(c6a != c6b)}")
+    rej = []
+    for bad in (0, 5, 121, 128, 255):
+        try:
+            ace_ocb_encrypt(K128, bytes(16), Am, Pm, 128, n_len_bits=bad)
+            rej.append(False)
+        except Invalid:
+            rej.append(True)
+    print(f"  N_len in {{0,5,121,128,255}} -> Error State Invalid  : {chk(all(rej))}")
+
+    print("\nNOTE: review m4 is fixed. N_len may be any bit length 6..120; the "
+          "spec now defines nonce_be(N, n) for the general case, which reduces "
+          "to bswap(N[n-1:0]) when 8 | n, so the RFC 7253 vectors are unaffected. "
+          "Sub-byte nonces have no published vectors and are covered by "
+          "self-consistency only.")
+    print("NOTE: review m4 is fixed. _Dec_Last_Block_ now carries the same "
+          "index = ones(48) guard as _Enc_Last_Block_; the model enforces it.")
     print(f"\nKAT-RESULT: {'PASS' if ok else 'FAIL'}")
     return 0 if ok else 1
 
