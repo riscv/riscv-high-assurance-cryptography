@@ -206,23 +206,26 @@ class AceSha2:
         # <<ACE-SHA-2>>: stand-alone hashing requires block_base = 0 here.
         if self.block_base != 0:
             raise Invalid('block_base != 0 on entry to _Hash_Output_')
-        # <<ACE-hash-functions>>: block[t-1:0] <- finalize(); block_base <- 0.
-        # For SHA-2, the digest value has chaining variable i at bytes i*w/8
-        # as bswap(bin(H_i, w)), truncated to t bits ("Endianness" paragraph).
-        dig = 0
+        # <<ACE-SHA-2>>: in stand-alone hashing the digest is taken from `state`,
+        # not from `block`; the entry step block[t-1:0] <- finalize() of
+        # <<ACE-hash-functions>> is NOT performed, finalize() being None here.
+        # `state_img` is `state` in the emission form of the "Endianness"
+        # paragraph: chaining variable i at bytes i*w/8 as bswap(bin(H_i, w)).
+        # `block` is left holding the last message block, untouched.
+        self.state_img = 0
         for i, hi in enumerate(self.state):
-            dig |= bswap(bin_(hi, self.w), self.w // 8) << (i * self.w)
-        self.block = sl(dig, self.t - 1, 0)
+            self.state_img |= bswap(bin_(hi, self.w), self.w // 8) << (i * self.w)
         self.block_base = 0
         self.state_name = 'Hash_Output'
 
     def exec_output(self, nbytes):
-        """Form C ace.exec squeeze loop of <<ACE-hash-functions>> _Hash_Output_."""
+        """Form C ace.exec squeeze loop of <<ACE-hash-functions>> _Hash_Output_,
+        reading `state` in place of `block` as <<ACE-SHA-2>> prescribes."""
         assert self.state_name == 'Hash_Output'
         ACELEN, OUTPUT, output_base = 8 * nbytes, 0, 0
         while output_base < ACELEN:
             amount = min(ACELEN - output_base, self.t - self.block_base)
-            OUTPUT |= sl(self.block, self.block_base + amount - 1,
+            OUTPUT |= sl(self.state_img, self.block_base + amount - 1,
                          self.block_base) << output_base
             output_base += amount
             self.block_base += amount
