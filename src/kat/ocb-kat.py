@@ -35,7 +35,7 @@ Checks performed
       NC-ktop   : the bswap dropped from Ktop's input,
                   enc_blk(key, Nonce_be[127:6] @ zeros(6)).
 
-Review finding m4 (ACE-spec-review-0.7.0.md), since FIXED, is covered here:
+Review finding m4, since FIXED, is covered here:
   * N_len may be any bit length 6..120. The spec defines nonce_be(N, n) for
     the general case; it reduces to bswap(N[n-1:0]) when 8 | n, so the RFC
     7253 vectors are unaffected. Sub-byte nonces have no published vectors,

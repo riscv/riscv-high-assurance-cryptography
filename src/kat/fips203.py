@@ -8,7 +8,7 @@ for all three parameter sets (ML-KEM-512/768/1024), plus the FIPS 203 section
 decapsulation input checks) as separate, callable predicates.
 
 The checks are separate because the ACE draft specification does NOT require
-them (spec gap M12 in ACE-spec-review-0.7.0.md); the KAT harness exercises them
+them (spec gap M12 of an earlier review, since closed); the KAT harness exercises them
 explicitly, labelled "per FIPS 203 (spec gap M12)".
 
 Anchored by kat/mlkem-kat.py against official vectors (NIST ACVP-Server sample

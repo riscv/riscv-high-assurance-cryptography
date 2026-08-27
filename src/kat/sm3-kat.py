@@ -15,7 +15,7 @@ Checks performed:
   * both GB/T 32905-2016 appendix A vectors, each absorbed two ways: a multi-chunk
     plan whose ace.exec cuts fall inside blocks (granularity 32 bits respected), and
     a single transfer interrupted and resumed at every process_VLI interruption
-    point.  M4 (ACE-spec-review-0.7.0.md): the spec literally assigns the bit count
+    point.  M4 (earlier review, since fixed): the spec literally assigns the bit count
     input_base to/from the byte-counting acestart CSR; the corrected interpretation
     acestart = input_base/8 is used here, matching the explicit /8 of _Hash_Output_.
   * the digest is read out over two Form C ace.exec instructions in the multi-chunk

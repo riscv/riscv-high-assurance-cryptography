@@ -48,7 +48,7 @@ Embedded vector provenance:
     BouncyCastle's doFinalTest() (31a44527...b16c).
   * FIPS 202 anchors for the Keccak core: SHA3-256/SHAKE128/SHAKE256 of "".
 
-Review finding M4 (ACE-spec-review-0.7.0.md), since FIXED:
+Review finding M4, since FIXED:
   process_VLI used to store `acestart <- input_base` (a BIT count) although
   acestart is architecturally a BYTE count.  The spec now converts explicitly
   (`acestart <- input_base / 8`, resume at `input_base <- 8 * acestart`), which
@@ -275,7 +275,7 @@ class AceKmacCC:
                 self.block_base = 0
             # process_VLI interruption point.  The literal text says
             # "acestart <- input_base" with input_base in BITS, while acestart is
-            # architecturally a byte count (M4, ACE-spec-review-0.7.0.md); the
+            # architecturally a byte count (<<ACE-CSR-acestart>>); the
             # corrected reading acestart <- input_base/8 is used here.
             if (interrupt_at_byte is not None and input_base < acelen_bits
                     and input_base // 8 >= interrupt_at_byte):
@@ -686,7 +686,7 @@ def main():
                       interrupt=(0, 100), literal_units=True)
     negative_control('M4 literal units (acestart bit count consumed as bytes)',
                      got != bytes.fromhex(SAMPLES[2][7]))
-    print('NOTE: spec discrepancy M4 (ACE-spec-review-0.7.0.md) -- '
+    print('NOTE: former spec discrepancy M4, since fixed -- '
           '[[ACE-process-VLI]] writes "acestart <- input_base" with input_base')
     print('      in bits, while acestart is architecturally a byte count and '
           '_Hash_Output_ correctly uses acestart <- output_base/8.')

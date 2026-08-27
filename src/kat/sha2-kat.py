@@ -12,12 +12,13 @@ WHAT IS MODELED (from the spec text, not from FIPS directly):
   * Padding and length encoding are performed by the CALLER (finalize = None for
     stand-alone hashing); on the transition to _Hash_Output_ the model enforces
     block_base = 0 and otherwise raises Error State _Invalid_.
-  * _Hash_Output_ implements the generic squeeze loop of <<ACE-hash-functions>>
-    (block[t-1:0] <- digest, then per-instruction copy with amount =
-    min(ACELEN - output_base, t - block_base), Success at block_base = t); the
-    digest is read out across two Form C ace.exec instructions in one plan.
+  * _Hash_Output_ implements the squeeze loop of <<ACE-hash-functions>> but reads
+    `state`, not `block`: <<ACE-SHA-2>> takes the stand-alone digest from `state`
+    and does not perform block[t-1:0] <- finalize().  Per-instruction copy with
+    amount = min(ACELEN - output_base, t - block_base), Success at block_base = t;
+    the digest is read out across two Form C ace.exec instructions in one plan.
   * Interruption/resumption of a Form B ace.exec is exercised at every
-    interruption point of process_VLI.  M4 (ACE-spec-review-0.7.0.md): the spec
+    interruption point of process_VLI.  M4 (earlier review, since fixed): the spec
     literally writes `acestart <- input_base` and `input_base <- acestart`, a bit
     count in the byte-counting acestart CSR; this model uses the CORRECTED
     interpretation acestart <- input_base/8 and input_base <- 8*acestart, mirroring
@@ -173,7 +174,7 @@ class AceSha2:
         assert self.state_name == 'Hash_Absorb'
         INPUT, ACELEN = b2v(data), 8 * len(data)
         if resume:
-            # M4 (ACE-spec-review-0.7.0.md): spec literally `input_base <- acestart`
+            # M4 (earlier review, since fixed): spec literally `input_base <- acestart`
             # (bit count read from the byte-counting CSR); corrected: * 8.
             input_base = 8 * self.acestart
         else:
@@ -334,7 +335,7 @@ MNAME = {id(M_EMPTY): 'empty', id(M_ABC): '"abc"',
 ok = True
 print('SHA-2 family per <<ACE-SHA-2>> / <<ACE-hash-functions>> / <<ACE-process-VLI>>')
 print('NOTE (spec, M4): process_VLI resumption modeled with acestart = input_base/8,')
-print('  the corrected byte-count interpretation of ACE-spec-review-0.7.0.md M4.\n')
+print('  the byte-count interpretation now stated in <<ACE-CSR-acestart>>.\n')
 print(f'{"function":13} {"message":18} {"multi-chunk":12} {"interrupted":12} {"oracle"}')
 for name in FN:
     for msg, exp_hex in VEC[name].items():

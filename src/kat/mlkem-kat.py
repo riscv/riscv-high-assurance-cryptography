@@ -154,7 +154,8 @@ class MLKEMContext:
 
     def exec_input(self, data):
         """Form B `ace.exec ..., INPUT` in an _*_Input_ state: process_VLI with
-        block = state = F, b = n = len, block_base = cumul_len = AlgorithmUse,
+        block = state = F, b = n = len, cumul_len = AlgorithmUse (block_base and
+        input_base internal and unaliased, per <<ACE-process-VLI>>),
         process_block = finalize = None."""
         name = IN_STATES[self.state]
         n = self.field_bits(name)

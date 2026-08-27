@@ -28,7 +28,7 @@ Negative controls (declared with KAT-EXPECT-FAIL) re-run the ACE model with the
 two halves of the length block swapped, and with a little-endian counter
 increment; both must fail against the vectors.
 
-Note on M4 of ACE-spec-review-0.7.0.md, since FIXED: process_VLI used to write
+Note on review finding M4, since FIXED: process_VLI used to write
 `acestart <- input_base` and read `input_base <- acestart` although `input_base`
 is in bits and `acestart` is architecturally a byte count.  The spec now performs
 the /8 and *8 conversions explicitly, which is what the resumption model below

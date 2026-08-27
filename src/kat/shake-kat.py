@@ -38,7 +38,7 @@ Embedded vector provenance:
   * Pattern-message cases carry no embedded constant and are anchored at runtime
     against the hashlib oracle (labeled [oracle]).
 
-Review finding M4 (ACE-spec-review-0.7.0.md), since FIXED:
+Review finding M4, since FIXED:
   process_VLI used to store `acestart <- input_base` (a BIT count) at its
   interruption point although acestart is architecturally a BYTE count (cf.
   Hash_Output, which always converted correctly).  The spec now writes
@@ -271,7 +271,7 @@ class AceSha3CC:
                 self.block_base = 0
             # process_VLI interruption point.  The spec literally says
             # "acestart <- input_base" although input_base is a BIT offset and
-            # acestart is architecturally a BYTE count (M4, ACE-spec-review-0.7.0.md);
+            # acestart is architecturally a BYTE count (<<ACE-CSR-acestart>>);
             # the corrected reading acestart <- input_base/8 is used (always
             # integral here, as the spec itself argues).
             if (interrupt_at_byte is not None and input_base < acelen_bits
@@ -670,7 +670,7 @@ def main():
                               interrupt=(0, 100), literal_units=True)
     negative_control('M4 literal units (acestart bit count consumed as bytes)',
                      got != bytes.fromhex(VECTORS[('SHA3-256', 'a3_200')]))
-    print('NOTE: spec discrepancy M4 (ACE-spec-review-0.7.0.md) -- '
+    print('NOTE: former spec discrepancy M4, since fixed -- '
           '[[ACE-process-VLI]] writes "acestart <- input_base" with input_base')
     print('      in bits, while acestart is architecturally a byte count and '
           '_Hash_Output_ correctly uses acestart <- output_base/8.')

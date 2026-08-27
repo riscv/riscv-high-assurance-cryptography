@@ -5,9 +5,9 @@ WHAT IS MODELED (from the spec text):
   * Both PI variants of <<ACE-HMAC>>.
     - NIK ("No Initial Key"): _Ready_ -> _Set_Key_ -> _Hash_Absorb_ -> ... ; in
       _Set_Key_ the b-bit K0 is loaded by one or more Form B ace.exec through
-      process_VLI entered as process_VLI(b, block=key, b, state=key, n=0,
-      input_base, block_base, 0, cumul_len, None, None).  The harness loads K0 in
-      several transfers and interrupts/resumes one of them.
+      process_VLI entered as process_VLI(b, block=K0, b, state=K0, n=b,
+      input_base, block_base, 0, cumul_len, None, None, mode=assign).  The harness
+      loads K0 in several transfers and interrupts/resumes one of them.
     - KIP ("Key in PI"): K0 arrives in the Provisioning Input; _Set_Key_ is absent
       and any attempt to re-key is refused (a KIP CC cannot be re-keyed).
   * K0 itself is FIPS 198-1 sect. 3: the key zero-padded to b bits, or hashed by H
@@ -22,7 +22,7 @@ WHAT IS MODELED (from the spec text):
     cumul_len (which is maintained only under HMAC) -- <<ACE-HMAC>> and the
     finalize() clause of <<ACE-SHA-2>>.  The tag is then squeezed by the generic
     _Hash_Output_ loop of <<ACE-hash-functions>>.
-  * M4 (ACE-spec-review-0.7.0.md): process_VLI stores the bit count input_base into
+  * M4 (earlier review, since fixed): process_VLI stores the bit count input_base into
     the byte-counting acestart CSR.  The corrected interpretation
     (acestart = input_base/8, input_base = 8*acestart) is used throughout, and is
     exercised by the interrupted _Set_Key_ and _Hash_Absorb_ transfers.
@@ -458,7 +458,7 @@ HL = {'SHA-224': 'sha224', 'SHA-256': 'sha256', 'SHA-384': 'sha384',
 ok = True
 print('HMAC per <<ACE-HMAC>> over <<ACE-SHA-2>> / <<ACE-SHA-3>>')
 print('NOTE (spec, M4): process_VLI resumption uses acestart = input_base/8,')
-print('  the corrected byte-count reading of ACE-spec-review-0.7.0.md M4.')
+print('  the byte-count reading now stated in <<ACE-CSR-acestart>>.')
 print('NOTE: for HMAC-SHA3, b = the sponge RATE (1088 / 576 bits), the reading of')
 print('  "input block size" of <<ACE-HMAC>> that matches NIST HMAC-SHA3 practice.\n')
 

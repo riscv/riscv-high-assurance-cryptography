@@ -41,7 +41,7 @@ Checks performed
       NC-lemask  : derive the subkeys with the little-endian update_mask
                    instead of double() = bswap(update_mask(bswap(S))).
 
-Known spec issue exercised (review ACE-spec-review-0.7.0.md, m6)
+Known spec issue exercised (review finding m6, since fixed)
   With last_blk_len = 0 the spec's padding formula reads INPUT[-1:0], an
   undefined slice.  This harness adopts the recommended reading — INPUT is
   ignored and the padded block is zeros(b-8) @ 0b10000000 — and *proves*
