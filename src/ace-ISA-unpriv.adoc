@@ -14,15 +14,23 @@ While this leads to some repetition, it improves the clarity of the presentation
 [[ACE-concepts]]
 ==== Fundamental Concepts and Definitions
 
+Algorithm:::
+(((Algorithms)))
+An *Algorithm* (written with an upper-case "A") is a state machine that performs cryptographic operations through an interface formalized in this specification.
+ACE's interface to interact with these state machines consists of a small number of instructions.
+Together with the usual inputs and output offered by the RISC-V architecture (GPRs, vector registers, memory),
+these instructions consume identifiers associated to the various implemented Algorithms, and their
+semantics varies accordingly.
+
 Cryptographic Context:::
 (((Cryptographic Context)))
 The *Cryptographic Context* (CC) is the foundation of ACE. A CC is an indivisible structure consisting of a *Metadata Header* (MDH) and *Content*; all cryptographic operations performed by ACE execute within the constraints defined by a CC.
-The MDH has a fixed format and specifies the cryptographic algorithm and various optional policies associated with the CC.
+The MDH has a fixed format and specifies the Algorithm and various optional policies associated with the CC.
 (((Cryptographic Context, Metadata Header)))
-The Content has an algorithm-specific format and holds sensitive material such as keys and algorithm state.
+The Content has an Algorithm-specific format and holds sensitive material such as keys and the Algorithm's state.
 (((Cryptographic Context, Content)))
 The Metadata requires integrity; the Content requires both integrity and confidentiality.
-These requirements are architecturally enforced by ACE and by the cryptographic algorithms it implements.
+These requirements are architecturally enforced by ACE and by the Algorithms it implements.
 
 Context Register:::
 (((Context Register)))
@@ -30,7 +38,7 @@ To create CCs, ACE uses *Context Registers* (CRs), per-hart architectural contai
 A CR is *provisioned* by writing Metadata and Content into it; this operation binds the latter to form a CC.
 There is no store-like instruction to extract the Content of the CR in a manner that compromises its confidentiality.
 A CC may be used for cryptographic operations only while resident in a CR.
-Only the ACE unit may access or modify a CC residing in a CR, in accordance with the rules set by the architecture and by the algorithm bound to the CC.
+Only the ACE unit may access or modify a CC residing in a CR, in accordance with the rules set by the architecture and by the Algorithm bound to the CC.
 
 Sealed Cryptographic Context:::
 (((Cryptographic Context, sealed)))
@@ -38,8 +46,8 @@ To support context switching while protecting CCs outside architectural state, a
 
 Object-Orientation:::
 (((Cryptographic Context, object-oriented)))
-CCs act as *objects* exposing a uniform interface across algorithms.
-A CC encapsulates algorithm-specific behavior, enabling interchangeable use of different primitives (e.g., AES-128, AES-256, SM4) in identical modes (e.g., ECB, GCM-SIV, XTS) without requiring changes to compiled code.
+CCs act as *objects* exposing a uniform interface across Algorithms.
+A CC encapsulates Algorithm-specific behavior, enabling interchangeable use of different primitives (e.g., AES-128, AES-256, SM4) in identical modes (e.g., ECB, GCM-SIV, XTS) without requiring changes to compiled code.
 Side-channel attack (SCA) resistant variants are supported transparently.
 
 Usage Control Policy:::
@@ -67,14 +75,14 @@ The ACE unit receives the operations from the hart, executes them independently 
 
 Besides implementations of ACE within a CPU core, this model also allows a single hardware instance of the ACE unit to be shared by multiple cores, with separate architectural states for each client hart. The specification mandates only behavior, not implementation.
 
-The specification does not require ACE to be implemented (entirely) in hardware. ACE may be implemented wholly or partly using trap-and-emulate. For example, a smaller implementation may perform symmetric cipher operations (cf. <<ACE-states-symmetric>>) in hardware and emulate asymmetric operations, such as elliptic-curve algorithms (cf. <<ACE-ECC>>). This approach is especially useful for post-quantum cryptographic algorithms (cf. <<ACE-PQC>>), whose states can be very large. Emulating these operations in M-mode firmware avoids storing those large states in the ACE unit, provided that the relevant CRs reside in secure SRAM or other secure memory.
+The specification does not require ACE to be implemented (entirely) in hardware. ACE may be implemented wholly or partly using trap-and-emulate. For example, a smaller implementation may perform symmetric cipher operations (cf. <<ACE-states-symmetric>>) in hardware and emulate asymmetric operations, such as Elliptic Curve Algorithms (cf. <<ACE-ECC>>). This approach is especially useful for Post-Quantum Cryptographic Algorithms (cf. <<ACE-PQC>>), whose states can be very large. Emulating these operations in M-mode firmware avoids storing those large states in the ACE unit, provided that the relevant CRs reside in secure SRAM or other secure memory.
 
 Trap-and-emulate exploits the ``*lcrstatus`` fields, which can also be used for on-demand (lazy) import of SCCs (cf. <<ACE-CSR-lcrstatus>>).
 
 [WARNING]
 ====
 The requirement that CR state never be accessible in clear to any form of user software forbids implementations of ACE in S/VS-mode or HV-mode.
-Emulation of instructions and of algorithms is only allowed in M-mode.
+Emulation of instructions and of Algorithms is only allowed in M-mode.
 ====
 
 // The ACE unit may lock certain architectural states—e.g., Vector Registers, CRs, and CSRs.
@@ -110,7 +118,7 @@ Emulation of instructions and of algorithms is only allowed in M-mode.
 | `Zklhmacm`       | HMAC function with provisionable key (with SHA2, resp., SHA3, when `Zklesha2h`, resp., `Zklesha3h` is supported). | <<ACE-HMAC>>
 | `Zklkmacm`       | KMAC function with provisionable key. Depends on `Zklesha3h`, since KMAC is only defined with SHA3.               | <<ACE-KMAC>>
 | `Zklascon`       | Ascon-AEAD128 (base, with set Nonce, or with Nonce Masking), Ascon-Hash256, Ascon-XOF128 and Ascon-CXOF128.       | <<ACE-Ascon-AEAD128>> to <<ACE-Ascon-CXOF128>>
-3+| _Point arithmetic and signature generation and verification algorithms for curves in various standards:_
+3+| _Point arithmetic and signature generation and verification Algorithms for curves in various standards:_
 | `Zklsecp256r1c`  | -- NIST curve secp256r1.                                                                                          | <<ACE-ECC>>
 | `Zklsecp384r1c`  | -- NIST curve secp384r1.                                                                                          | <<ACE-ECC>>
 | `Zklsecp521r1c`  | -- NIST curve secp521r1.                                                                                          | <<ACE-ECC>>
@@ -152,8 +160,8 @@ If `Zklio` is implemented, the ACEIOBUF is implemented.
 //  * Exporting (<<ACE-management-operations>>) exports a CR to memory as an SCC.
 //  * Importing (<<ACE-management-operations>>) imports an SCC into a CR.
 //  * `ace.clear` (<<ACE-instruction-clear>>) unconfigures and clears a CR.
-//  * `ace.exec` (<<ACE-instruction-exec>>) performs cryptographic operations as specified by the algorithm configured in a CR and according to the state of the CR.
-//  * `ace.setst` (<<ACE-instruction-setst>>) transitions a CC inside a CR between states of a cryptographic algorithm.
+//  * `ace.exec` (<<ACE-instruction-exec>>) performs cryptographic operations as specified by the Algorithm configured in a CR and according to the state of the CR.
+//  * `ace.setst` (<<ACE-instruction-setst>>) transitions a CC inside a CR between states of an Algorithm.
 //  * `ace.mgmt` (<<ACE-instruction-manage>>) transitions a CR between states of its management lifecycle.
 //  * `ace.clone` (<<ACE-instruction-clone>>) creates a copy of a CR into a second CR.
 
@@ -288,9 +296,9 @@ CRs reside in a dedicated, per-hart _CR file_ (CRF), a memory accessible only to
 
 The CRF must guarantee the confidentiality and integrity of its contents, including preventing an attacker from rolling them back to a previous state via any access not explicitly permitted by the specification.
 Accesses to this memory are not required to be hardened against physical side-channel attacks at the hardware level.
-However, the implementation of side-channel-protected algorithms in the ACE unit must provide resistance to such attacks as well.
+However, side-channel-protected implementation variants of Algorithms in the ACE unit must provide resistance to such attacks as well.
 
-The amount of CRF capacity consumed by each CR depends on the algorithm encoded in the MDH, and it may differ from one CR to another.
+The amount of CRF capacity consumed by each CR depends on the Algorithm encoded in the MDH, and it may differ from one CR to another.
 
 Insufficient residual CRF capacity may prevent execution of a configuration instruction.
 Capacity is freed by unconfiguring other CRs.
@@ -319,7 +327,7 @@ Each hart's ACE state must be exported and then fully zeroized on power down; on
 
 [WARNING]
 ====
-To discuss with ARC: We need to define the element widths for the indivisible operations performed by `ace.exec`, esp. when some ciphers or hash functions have inputs whose size is not a power of two. This would make using `EGW` not possible. A solution could be to add to each algorithm a suggested `EGW` which divides the size of the basic input, and the increment of `vstart` for each such iteration. We also need input on whether `vtype.vill` is useful/needed/can be omitted.
+To discuss with ARC: We need to define the element widths for the indivisible operations performed by `ace.exec`, esp. when some ciphers or hash functions have inputs whose size is not a power of two. This would make using `EGW` not possible. A solution could be to add to each Algorithm a suggested `EGW` which divides the size of the basic input, and the increment of `vstart` for each such iteration. We also need input on whether `vtype.vill` is useful/needed/can be omitted.
 See discussion at https://github.com/riscv/riscv-high-assurance-cryptography/issues/96
 ====
 
@@ -331,7 +339,7 @@ When vector registers are used, the full V extension is not required. ACE depend
 ACEV must be fully opcode-compatible with RVV: code written for ACEV executes with identical behavior under RVV.
 The current set of features is:
 
-* Vector registers (or groups) wide enough to support the inputs and outputs of the implemented algorithms, that is, currently, 128 bits.
+* Vector registers (or groups) wide enough to support the inputs and outputs of the implemented Algorithms, that is, currently, 128 bits.
 * Configuration-setting instructions (`vsetvli`/`vsetivli`/`vsetvl`):
  ** Since all ACE operations ignore masks while accessing vector registers, ACEV use needs tail and mask agnostic configurations exclusively, and
      ACE operations on vector registers always follow a tail-agnostic policy;
@@ -350,7 +358,7 @@ Therefore, ACEV does not need support for masked operations.
 Bit 25 of the instruction encodings is reserved for potential future adoption of masked operations, should a compelling use case arise.
 
 Floating-point, fixed-point, and general arithmetic vector operations are not required.
-Complex operations for certain cryptographic algorithms may be performed in GPRs, with data inserted into vector registers and results extracted from them via `vmv.s.x`/`vmv.x.s` and the slide instructions.
+Complex operations for certain protocols may be performed in GPRs, with data inserted into vector registers and results extracted from them via `vmv.s.x`/`vmv.x.s` and the slide instructions.
 
 `Zklv` implies ACEV.
 
@@ -387,7 +395,7 @@ When the ACEIOBUF is used, the length of the inputs and outputs is given in CSR 
 
 ACE recognizes two types of metadata that may be contained in a CC or associated with it.
 
-. A 128-bit _MDH_ that determines the algorithm, the type of key, and various usage policies associated with the key.
+. A 128-bit _MDH_ that determines the Algorithm, the type of key, and various usage policies associated with the key.
  This information is always present in a CC.
  The fields are arranged so that the first 64 bits suffice to determine the length of a PI or SCC.
 
@@ -398,29 +406,29 @@ ACE recognizes two types of metadata that may be contained in a CC or associated
 
 This section deals with the 128-bit MDH.
 Its fields are summarized in <<ACE-metadata-header>>.
-All _Reserved_ bits, as well as bits unused by a given algorithm, are zero.
+All _Reserved_ bits, as well as bits unused by a given Algorithm, are zero.
 
 [[ACE-metadata-header]]
 .Format of the 128-bit Metadata Header
 [width="100%",cols="^9%,^6%,15%,70%",options="header"]
 |===
 |    Field  | Size | Name              | Description
-|    [11:0] |  12  | _Algorithm_       | This field encodes the cryptographic algorithm (primitive, mode, or protocol) that is bound to the key material. See <<ACE-Algorithm-field>>.
-|   [13:12] |   2  | _AlgorithmPolicy_ | Allowed algorithm variant(s), such as, for a symmetric cipher, whether it can be used for encryption, decryption, or both. See <<ACE-Algorithm-field>>.
+|    [11:0] |  12  | _Algorithm_       | This field encodes the Algorithm (primitive, mode, or protocol) that is bound to the key material. See <<ACE-Algorithm-field>>.
+|   [13:12] |   2  | _AlgorithmPolicy_ | Allowed Algorithm variant(s), such as, for a symmetric cipher, whether it can be used for encryption, decryption, or both. See <<ACE-Algorithm-field>>.
 |   [15:14] |   2  | Reserved          | Reserved for future expansion of _AlgorithmPolicy_ field.
 |   [18:16] |   3  | _SCProtection_    | Side-channel protection level. The levels of side-channel protection are defined in <<ACE-SCProtection-field>>.
 |   [20:19] |   2  | _KeyType_         | This field determines whether the key is given by value, is a system-defined key, or randomly generated. See <<ACE-KeyType-field>> for more details.
-|   [25:21] |   5  | _State_           | Current state of the CR/algorithm, encoded as an integer. For instance, whether the CR is _Unconfigured_, encrypting or decrypting data, absorbing data in a hash/mac/tag, computing elliptic curve point multiples, generating or verifying signatures, or in an error state. It can be modified by the user to advance through various phases of an algorithm. See <<ACE-State-field>>.
-|   [29:26] |   4  | _StateExtension_  | May be used by the algorithm to extend the _State_ field with additional information. See <<ACE-State-field>>.
+|   [25:21] |   5  | _State_           | Current state of the CR/Algorithm, encoded as an integer. For instance, whether the CR is _Unconfigured_, encrypting or decrypting data, absorbing data in a hash/mac/tag, computing elliptic curve point multiples, generating or verifying signatures, or in an error state. It can be modified by the user to advance through various phases of an Algorithm. See <<ACE-State-field>>.
+|   [29:26] |   4  | _StateExtension_  | May be used by the Algorithm to extend the _State_ field with additional information. See <<ACE-State-field>>.
 |   [31:30] |   2  | _ConfigStatus_    | Used to indicate whether the CR is fully configured and ready to operate, or is being provisioned, imported, or exported. See <<ACE-ConfigStatus>>.
 |   [45:32] |  14  | _ImpDataLen_      | If non-zero, indicates that an additional, variable-length, implementation-dependent data section is appended to the Content. The length of this additional data section is _ImpDataLen_ * 128 bits (up to 256 KiB).
-|   [61:46] |  16  | _AuxInfo_         | Algorithm-specific auxiliary information. Currently used only by ML-KEM and ML-DSA. This field is zero for algorithms that do not use it.
+|   [61:46] |  16  | _AuxInfo_         | Algorithm-specific auxiliary information. Currently used only by ML-KEM and ML-DSA. This field is zero for Algorithms that do not use it.
 |   [62:62] |   1  | _Reserved_        | Reserved for future use.
 |   [63:63] |   1  | _SystemFormat_    | Value is 0 if an input is in the ACE architected format, 1 if in a system-defined format.
 |   [68:64] |   5  | _UsagePolicy_     | Usage (Control) Policy. Bits 0, 1, 2, and 3 of the field, when set, disallow CC usage in U-mode, VS-mode, HS-mode, and M-mode, respectively. Bit 4 grants use in Debug mode only if set. Bit 0 governs both U-mode and VU-mode, and bit 2 governs S-mode whether or not the H extension is implemented. Any bit of this field is ignored if the corresponding mode is not supported or not enabled.
-|   [77:69] |   9  | _Locality_        | Zero, or a value determining one or more Locality Secrets, used in the export/import encryption and decryption algorithm to bind the CR to specific environments. See <<ACE-Localities>>.
+|   [77:69] |   9  | _Locality_        | Zero, or a value determining one or more Locality Secrets, used in the export/import encryption and decryption Algorithm to bind the CR to specific environments. See <<ACE-Localities>>.
 |   [79:78] |   2  | Reserved          | Reserved for expansion of the _Locality_ field.
-|   [95:80] |  16  | _AlgorithmUse_    | Used by algorithms and implementations to store additional state information.
+|   [95:80] |  16  | _AlgorithmUse_    | Used by Algorithms and implementations to store additional state information.
 |  [115:96] |  20  | _ExpirationDate_  | If non-zero, the expiration date of this CC. See <<ACE-Metadata-expiration-date>>. Expressed in hours since 00:00, January 1, 2027 (about 119 years and 7 months).
 | [127:116] |  12  | Reserved          | Reserved for future use.
 |===
@@ -442,15 +450,15 @@ The format of the other 63 bits of the low half of the MDH, i.e., MDH[62:0], as 
 
 Algorithms are encoded in a 12-bit field.
 Values 0–3071 are architecture-defined.
-The list of encodings is maintained by RVI (see <<ACE-algorithms>>).
-The remaining values are available for custom algorithms.
+The list of encodings is maintained by RVI (see <<ACE-Algorithms>>).
+The remaining values are available for custom Algorithms.
 
 For encryption/decryption primitives and modes, the _AlgorithmPolicy_ field indicates whether the CC may be used for encryption (lower bit set), decryption (upper bit set), or both. At least one of the bits must be set.
 
 For asymmetric primitives supporting signatures, the lower bit permits signature generation and the upper bit permits verification.
 Such an asymmetric primitive can instead be configured for operations such as key agreement or key encapsulation, but _not_ signatures; in this case both bits are zero.
 
-For other primitives, the _AlgorithmPolicy_ field may encode additional algorithm identifiers to expand the effective encoding space of the _Algorithm_ field.
+For other primitives, the _AlgorithmPolicy_ field may encode additional Algorithm identifiers to expand the effective encoding space of the _Algorithm_ field.
 
 The information contained in the _Algorithm_ field affects the length of a PI and of an SCC (<<ACE-length-rule>>).
 
@@ -490,7 +498,7 @@ If the value is 0, keys are provisioned, exported, and imported by value.
 If the value is 1, keys are provisioned, exported, and imported as a System Key Identifier (SKID), except for the all-ones (i.e., `ones(64)`) SKID value.
 
 If the SKID is the all-ones value, the key material is generated randomly upon provisioning, and then exported by value with _KeyType_ set to 0.
-Random generation applies to all keys at once in an algorithm, unless otherwise specified.
+Random generation applies to all keys at once in an Algorithm, unless otherwise specified.
 
 The information contained in this field affects the length of a PI and of an SCC, but not the CRF capacity occupied by a CR (<<ACE-length-rule>>).
 
@@ -499,9 +507,9 @@ The information contained in this field affects the length of a PI and of an SCC
 [[ACE-State-field]]
 ===== _State_ and _StateExtension_ Fields
 
-The _State_ field is used to track the current state of an algorithm, including certain types of errors.
+The _State_ field is used to track the current state of an Algorithm, including certain types of errors.
 
-The architected values of _State_ common to all algorithms are defined in the following three tables.
+The architected values of _State_ common to all Algorithms are defined in the following three tables.
 
 [[ACE-state-off]]
 .Global CC State Numbers: Unconfigured State
@@ -519,14 +527,14 @@ The architected values of _State_ common to all algorithms are defined in the fo
 |   1   | `ace_state_ready`         | _Ready_        | The state of a just provisioned CC; ready for operation. No `ace.exec` instruction may be executed in this state.
 | 2-21  3+| Defined by the specification of the Algorithm encoded in the _Algorithm_ field.
 |  22   | `ace_state_success`       | _Success_      | Algorithm completed successfully. No further cryptographic operations may be performed until the CR is reconfigured or transitioned to _Ready_.
-|  23   | `ace_state_failure`       | _Failure_      | Failure in an algorithm, usually an authentication failure in AE(AD) algorithms or a signature verification failure. No further cryptographic operations may be performed until the CR is reconfigured or transitioned to _Ready_.
+|  23   | `ace_state_failure`       | _Failure_      | Failure in an Algorithm, usually an authentication failure in AE(AD) Algorithms or a signature verification failure. No further cryptographic operations may be performed until the CR is reconfigured or transitioned to _Ready_.
 |===
 
 [[ACE-states-error]]
 .Global CC State Numbers: Error States
 [float="center",align="center",width="100%",cols="^7%,<28%,<16%,<49%"]
 |===
-|  24    | `ace_state_unsupported`         | _Unsupported_     | Not supported (i.e., not implemented) algorithm.
+|  24    | `ace_state_unsupported`         | _Unsupported_     | Not supported (i.e., not implemented) Algorithm.
 |  25    | `ace_state_invalid`             | _Invalid_         | The CR transitions to Error State _Invalid_.
 |  26    | `ace_state_out_of_memory`       | _Out of Memory_   | Insufficient CRF memory for a configuration instruction. This may be set by privileged code if it does not handle CR allocation or fails to do so, returning an error instead.
 |  27    | `ace_state_import_auth`         | _Authentication Failed_     | Authentication failure while completing an SCC import.
@@ -537,17 +545,17 @@ The architected values of _State_ common to all algorithms are defined in the fo
 
 State 0 is the _Unconfigured_ state.  It denotes that the CR is unconfigured.
 
-All algorithms must support State _Ready_.
+All Algorithms must support State _Ready_.
 
 All states in the range 1-23 are termed _valid_. This includes both _Success_ and _Failure_ states, which must be used for
-normal completion of an algorithm in the cases of its successful completion or failure.
+normal completion of an Algorithm in the cases of its successful completion or failure.
 
 The immediate in the `ace.setst` instruction (<<ACE-instruction-setst>>) is a 7-bit value, whereas the _State_ field is only 5 bits long.
 This allows `ace.setst` to encode additional operations related to state changes (such as stages of import, export, or provisioning code) by setting the two high bits of the immediate to non-zero values.
 
-(((ACE, algorithm, error states)))
+(((ACE, Algorithm, error states)))
 States 24-31 are termed _Error States_, and are used to report certain specific ACE errors.
-(((ACE, algorithm, invalid state)))
+(((ACE, Algorithm, invalid state)))
 (((Context Register, invalidation)))
 We say that a CR has been _invalidated_ when it has been transitioned to Error State `ace_state_invalid`.
 
@@ -557,8 +565,8 @@ Error States 30 and 31, if defined, will not necessarily have a lower priority t
 Error conditions that lead to exceptions are treated in <<ACE-exceptions>>
 (see <<ACE-error-architecture>> for the behavior when the Privileged Architecture is not implemented).
 
-If an algorithm defines 23 or fewer valid states (including _Ready_, _Success_, and _Failure_), the current state is stored in the _State_ field.
-For algorithms with more than 23 valid states, additional state information may reside in the Content section in an algorithm-specific format.
+If an Algorithm defines 23 or fewer valid states (including _Ready_, _Success_, and _Failure_), the current state is stored in the _State_ field.
+For Algorithms with more than 23 valid states, additional state information may reside in the Content section in an Algorithm-specific format.
 
 // * `ace.getmd*` are defined to return all zeros for a CR in the Off State, and
 //   `ace.getst`, which is built on it, is how those sequences test for an error after every
@@ -576,7 +584,7 @@ For algorithms with more than 23 valid states, additional state information may 
 // `ace.mgmt` above all, likewise never raise this exception: an unconfigured or partially
 // configured CR is the only legal operand for them.
 
-The following rules are generic and apply to all algorithms:
+The following rules are generic and apply to all Algorithms:
 
 . The MDH's _State_ field must reflect the current state whenever the CC is in _Ready_, _Success_, _Failure_, or any Error State.
 This ensures that these states can be unambiguously determined from the _State_ field alone, without inspecting the Content.
@@ -585,10 +593,10 @@ This ensures that these states can be unambiguously determined from the _State_ 
 
 . In States _Success_ and _Failure_, `ace.setst` is only permitted to transition to _Ready_ or _Unconfigured_.
 
-. A transition from any valid state to _Ready_ using instruction `ace.setst` is always permitted, unless the algorithm explicitly forbids it.
+. A transition from any valid state to _Ready_ using instruction `ace.setst` is always permitted, unless the Algorithm explicitly forbids it.
 Note that a CR can always be restored from a backup SCC, so preventing transitions to _Ready_--as "GCM with Set IV" (<<ACE-GCM-with-IV-mode>>) does--is not an effective mitigation against cryptographic attacks enabled by transitioning to _Ready_.
 
-. Any transition may be caused by performing an explicit `ace.setst` operation, or may be induced by certain conditions specified in the algorithm's specification.
+. Any transition may be caused by performing an explicit `ace.setst` operation, or may be induced by certain conditions specified in the Algorithm's specification.
 
 . The CR state after `ace.setst` completes does not always match the instruction's immediate operand.
 Beyond Error State transitions, some operations determine the next state dynamically.
@@ -941,7 +949,7 @@ when the following three conditions are met: they cannot resolve exception
 In that case the handler must also resume execution at the instruction following the trapping one, by advancing `xepc`; otherwise the same exception is raised again.
 
 In the following, as well
-as in <<ACE-algorithms>>, <<ACE-priv>>, and <<ACE-pseudocode-examples>>,
+as in <<ACE-Algorithms>>, <<ACE-priv>>, and <<ACE-pseudocode-examples>>,
 we shall always describe the behavior when the Privileged Architecture is in effect, with the understanding that raising exceptions will be replaced by the above behaviors when the Privileged Architecture is not implemented.
 
 There are various types of error conditions that may occur during the lifecycle of an ACE unit:
@@ -1004,7 +1012,7 @@ Invalidating Conditions:::
 +
 --
 Certain error conditions _invalidate_ a CR, namely cause it to transition to some Error State with effects described in <<ACE-State-field>>.
-This means that it cannot be used further except by unconfiguring it, re-provisioning or, if the algorithms supports it, by transitioning it to State _Ready_.
+This means that it cannot be used further except by unconfiguring it, re-provisioning or, if the Algorithms supports it, by transitioning it to State _Ready_.
 
 The following conditions cause a transition to Error State _Invalid_:
 
@@ -1028,12 +1036,12 @@ Invalidating the CC on certain failure modes prevents its continued use in an in
 Algorithmic Errors:::
 +
 --
-Algorithmic errors may occur in import processes or in the algorithms themselves:
+Algorithmic errors may occur in import processes or in the Algorithms themselves:
 
 . In the first case, the error is Error State _ace_state_import_auth_.
-. Algorithm-specific errors may cause the CR to transition to Error State _Invalid_, or transition it to some other State (usually an Error State), according to the behavior specified by the algorithm.
+. Algorithm-specific errors may cause the CR to transition to Error State _Invalid_, or transition it to some other State (usually an Error State), according to the behavior specified by the Algorithm.
 
-We note that successful or failed verification of an authentication tag in an AEAD algorithm or of a signature is _not_ an algorithmic error, as the algorithm is performing as expected.
+We note that successful or failed verification of an authentication tag in an AEAD Algorithm or of a signature is _not_ an algorithmic error, as the Algorithm is performing as expected.
 --
 
 In any outcome other than the complete execution of the instruction, the latter writes no vector register, GPR, ACEIOBUF byte, or memory location. The sole exception is a block-iterated `ace.exec` (<<ACE-resumability>>) that encounters an error after fully processing `j` {ge} 1 blocks. In that case, the outputs of those `j` blocks remain written; no part of the failing block or any later block is written; and `acestart` contains the byte count of the completed blocks. The error condition's effects on the CR state are unchanged.
@@ -1198,15 +1206,10 @@ The following WARL policy applies to `aceiobuftop`:
 If a value larger than `aceiobuflen` is written to `aceiobuftop`, `aceiobuftop` will be set to `aceiobuflen`.
 Therefore, software must always check the value of `aceiobuftop` before using the ACEIOBUF.
 
-Modifying `aceiobuftop` does not alter buffer contents. It allows per-operation length adjustments without reconfiguring the ACEIOBUF via `aceiobuflen`, an expensive operation that clears the buffer and may trigger internal garbage collection. This mirrors the use of `VL*SEW` reconfiguration to supply a partial “last block” or a short IV/nonce to cryptographic algorithms.
+Modifying `aceiobuftop` does not alter buffer contents. It allows per-operation length adjustments without reconfiguring the ACEIOBUF via `aceiobuflen`, an expensive operation that clears the buffer and may trigger internal garbage collection. This mirrors the use of `VL*SEW` reconfiguration to supply a partial “last block” or a short IV/nonce to Algorithms.
 
 Writing a value that is invalid or unsupported for a given Algorithm may still cause the CR to transition to Error State _Invalid_ when an instruction expecting an input from or an output to the ACEIOBUF is later issued or restarted.
 This may occur, for instance, when `aceiobuftop` is a length not supported by the Algorithm, or when `acestart` does not correspond to an interruption point the Algorithm allows.
-
-Using an alternative sequence for `ace.exec` or `ace.setst` for any Form with an input or output
-when `acestart` {ge} `aceiobuftop` (and `aceiobuflen` nonzero) will result in no operation being
-performed, and `acestart` is left unchanged: the operand window [`acestart`, `aceiobuftop`) is
-empty. `acestart` is never clamped to `aceiobuftop` (<<ACE-CSR-acestart>>).
 
 The value of `aceiobuftop` out of ACE unit reset is 0.
 
@@ -1245,13 +1248,13 @@ Software may save and restore the register across context switches.
 Upon successful completion of any instruction that honors `acestart`, `acestart` is set to 0.
 The only exception is `ace.mv`, which by design accumulates `acestart` across instructions to support piecewise transfers.
 
-With instructions that take their input from the ACEIOBUF or write their outputs to it, `acestart` is *not* clamped when the instruction is issued.
-If `acestart` {ge} `aceiobuftop`, the operand window [`acestart`, `aceiobuftop`) is empty: the instruction performs no operation, writes nothing, causes no state transition, and leaves `acestart` unchanged.
-This is the same rule that `ace.input` and `ace.output` state for their own transfers (<<ACE-instruction-input>>, <<ACE-instruction-output>>).
+Using `ace.input`, `ace.output`, or an alternative sequence for `ace.exec` or `ace.setst` for any Form with an input or output
+when `acestart` {ge} `aceiobuftop` (and `aceiobuflen` nonzero), the operand window [`acestart`, `aceiobuftop`) is empty.
+This will result in no operation being performed, and `acestart` is then set to zero as the operation would do if it had been performed to the end.
 
 For CR-directed transfers (`ace.load`, `ace.store`, `ace.mv`), `acestart` is bounded above by the size in bytes of the PI/SCC being transferred, as determined from the first 8 bytes of the MDH. A value larger than the applicable bound replaces `acestart` with that bound when these instructions are issued.
 
-For certain algorithms, writing zero to `acestart` to force a full restart of `ace.exec` would
+For certain Algorithms, writing zero to `acestart` to force a full restart of `ace.exec` would
 produce an inconsistent result, and it is not permitted once per-block state effects have been
 committed (see <<ACE-Memory-Model>>).
 More generally, writing a value that is invalid or unsupported for a given Algorithm — including a
@@ -1321,6 +1324,10 @@ after which the ACE unit stays unavailable until a CSK is set again.
 In all four models, CSK values must _never_ be readable by software in clear, except for M-mode in the first model.
 The `macecsk` CSRs of <<ACE-CSR-macecsk>> are readable and writable by M-mode only; a newly written value takes effect only once every CSR of the group has been written, and only a CSK value that M-mode itself established through the group is ever readable back (<<ACE-CSR-macecsk>>).
 
+An implementation that reprograms a CSK must follow the activation rules in
+<<ACE-CSR-macecsk>>: the ACE unit is unavailable while the `macecsk` group is partially
+written.
+
 [IMPORTANT]
 ====
 When a process is migrated from one hart to another, its SCCs must remain importable,
@@ -1329,14 +1336,6 @@ OS and hypervisor stacks to ensure this by instructing M-mode to establish that 
 destination hart. How they do so is outside the scope of this specification: the API
 through which supervisor software requests it is platform-dependent.
 ====
-
-An implementation that reprograms a CSK must follow the activation rules in
-<<ACE-CSR-macecsk>>: the ACE unit is unavailable while the `macecsk` group is partially
-written.
-
-// Because `macecsk` is per-hart state, a CSK is always established by M-mode on its own
-// hart.  Establishing the same value on several harts therefore requires a platform-specific
-// channel between their M-mode instances. This specification does not define that mechanism.
 
 [NOTE]
 ====
@@ -1701,7 +1700,7 @@ exception, except for the encodings that `Zklmv` assigns to them (<<ACE-move>>).
 _Description_::
 +
 --
-Performs a cryptographic operation as defined by the algorithm in CR `Ks1` or `K{Xs1}`.
+Performs a cryptographic operation as defined by the Algorithm in CR `Ks1` or `K{Xs1}`.
 The instruction may take an input and produce an output.
 
 If the V extension register file is not implemented, only Form D `ace.exec`
@@ -1846,7 +1845,7 @@ _Included in_::
 ==== ace.setst
 
 _Synopsis_::
-Change the state of the algorithm encoded in the CC in a CR.
+Change the state of the Algorithm encoded in the CC in a CR.
 
 _Mnemonic_::
 The `ace.setst` instruction admits three Forms, namely
@@ -1897,8 +1896,8 @@ _Description_::
 The instruction changes the _State_ and _StateExtension_ fields of the MDH of `Kd` or `K{Xd}`.
 It is used for two purposes:
 [loweralpha]
-. Advance from one stage of an algorithm to another (for instance, from initialization of a hash function to data absorption and then to digest finalization); and
-. Set specific state information of an algorithm (such as elliptic curve points or private/public keys), which is intended to be orthogonal to the states mentioned in the previous point, or to provide prerequisites for entering another state that can be set independently.
+. Advance from one stage of an Algorithm to another (for instance, from initialization of a hash function to data absorption and then to digest finalization); and
+. Set specific state information of an Algorithm (such as elliptic curve points or private/public keys), which is intended to be orthogonal to the states mentioned in the previous point, or to provide prerequisites for entering another state that can be set independently.
 
 `#immed7` is a constant from a set of admissible values.
 These values include both general values, which apply to all Algorithms, as well as values specific to the Algorithm encoded in a CR.
@@ -1909,11 +1908,11 @@ or a vector (group) `Vs`. The vector (group) may be replaced by ACEIOBUF if `Zkl
 
 Normally, `#immed7` contains the _State_ value to be set. In most cases, after the instruction completes, the _State_ field takes the value specified in `#immed7`.  Some states may transition to a different state automatically after completing `ace.setst`.
 
-The allowed state transitions are described in <<ACE-State-field>> and in the algorithms.
+The allowed state transitions are described in <<ACE-State-field>> and in the specifications of each Algorithm.
 Note that:
 
 * It is allowed to issue `ace.setst` instructions to the current state.
-When the algorithm needs to prevent this, it will automatically transition to a different state after completing `ace.setst`.
+When the Algorithm needs to prevent this, it will automatically transition to a different state after completing `ace.setst`.
 * If `#immed7` is zero, i.e., the value corresponding to the _Unconfigured_ state, the CR is cleared.
 * An Error State code (see <<ACE-states-error>>) is always permitted for `#immed7`.
 This invalidates the CR contents and may partially or fully release its resources.
@@ -1922,7 +1921,7 @@ Further usage of the same CR—for instance, a later `ace.exec` or `ace.setst` t
 
 Certain values of `#immed7`, depending on the Algorithm, may be used to change _StateExtension_ instead, so that it can be used as state information that is somewhat orthogonal to the _State_ field.
 
-Using an `#immed7` that is not supported by the architecture or by the current algorithm causes the CR to transition to Error State _Invalid_.
+Using an `#immed7` that is not supported by the architecture or by the current Algorithm causes the CR to transition to Error State _Invalid_.
 
 The full provisioning, export, and import operations are described in detail in <<ACE-export-import-algorithms>>.
 
@@ -2128,6 +2127,7 @@ Let `ml` be the value of the MDH saved by the software in its own state upon ini
 Software uses Form B or Form C `ace.mgmt` with `ml` as the auxiliary parameter to `ace.mgmt` for export completion.
 
 Then:
+
 .. Check whether `managedcr` is equal to the CR's number or is equal to 32.
    If not, an illegal-instruction exception is raised.
 
@@ -2169,26 +2169,19 @@ Management procedures may be interrupted and resumed, although `ace.mgmt` itself
 For longer-running `ace.mgmt` operations—such as starting or completing an export, or completing an import—implementations can either defer interrupts until the instruction completes, or preserve the prior CR state, restore it before taking the trap, and re-execute `ace.mgmt` upon return.
 Because state restoration requires internal buffering, implementers may choose either strategy based on available CRF capacity.
 
-The above rules also allow an interrupted import to resume on another hart or on a different ACE unit implementation, provided the target unit supports the algorithm encoded in the SCC.
+The above rules also allow an interrupted import to resume on another hart or on a different ACE unit implementation, provided the target unit supports the Algorithm encoded in the SCC.
 
 Software must allow interrupted configuration and export procedures to resume while maintaining binary compatibility across implementations with and without resumption support.
 Resuming transfer instructions is optional.
 A context-switch handler can force a restart by clearing partially configured or exported CRs at context save and restore.
-
-[IMPORTANT]
-====
-Completing a management _process_ under preemption is a responsibility of the software stack, not of
-the architecture: the architecture guarantees forward progress for each individual instruction, but
-a management process spans several of them and any of its constituent CRs may legally be cleared
-between them.
-A handler that unconditionally clears partially configured or exported CRs at every context switch
-will therefore prevent a long management process from ever completing.
-An SCC can be several kilobytes — an ML-DSA-87 Serialized Context is 12496 bytes — plus up to
-256 KiB of implementation-specific data, so this is reachable under ordinary preemption rates.
+However, This should be an exceptional case:
+An SCC can be several kilobytes, so is not unrealistic to expect that
+a handler that unconditionally clears partially configured or exported CRs at every context switch
+may prevent a long management process from ever completing.
 System software must either let such a process make progress across context switches, or bound the
 size of the contexts it admits.
-====
-Consequently, the ACE ISA is co-designed with the CR management sequences in <<ACE-management-code-snippets>> to support context switching and lazy SCC loading.
+
+Consequently, the ACE ISA is co-designed with the CR management sequences in <<ACE-management-code-snippets>> to support both nested context switching and lazy SCC loading.
 ====
 
 _Included in_::
@@ -2365,14 +2358,15 @@ and for `ace.restricth`,  `Xs` follows the format of bits [127:64] of the MDH.
 * The fields _AlgorithmPolicy_, _SCProtection_, _Locality_, _UsagePolicy_, _ExpirationDate_ and _AlgorithmUse_ of MDH are replaced with the corresponding fields of `Xs`, if the latter are non-zero.
 All other fields are ignored.
 
-* If the algorithm configured in the CR does not make use of the field _AlgorithmPolicy_,
+* If the Algorithm configured in the CR does not make use of the field _AlgorithmPolicy_,
   or, for the encoded value of MDH._Algorithm_, _AlgorithmPolicy_ is used to encode an extension of _Algorithm,
   then `Xs`._AlgorithmPolicy_ must be zero,
   else the CR transitions to Error State _Invalid_.
 
-* No operation disabled by _AlgorithmPolicy_ may be (re)enabled.
-   An attempt to do so causes the CR to transition to Error State _Invalid_.
-   In some cases, a zero value is not permitted, such as disabling both encryption and decryption. In this case, attempting to do so causes the CR to transition to Error State _Invalid_.
+* No operation disabled by _AlgorithmPolicy_ may be (re)enabled:
+   Any such attempt causes the CR to transition to Error State _Invalid_.
+   In some Algorithms, a zero value is not permitted, as in disabling both encryption and decryption:
+   In this case, attempting to do so causes the CR to transition to Error State _Invalid_.
 
 * If the CR's current state is _only_ allowed while performing an operation currently
   permitted by `MDH`._AlgorithmPolicy_, a change to _AlgorithmPolicy_ that would
@@ -2559,7 +2553,7 @@ _Included in_::
 
 ////
 
-I suggest something similar to "Architect a generic KDF" where the output of one algorithm, say in CR1, that would be produced by the output of an ace.exec, can be piped directly to the input of a second CR2.
+I suggest something similar to "Architect a generic KDF" where the output of one Algorithm, say in CR1, that would be produced by the output of an ace.exec, can be piped directly to the input of a second CR2.
 So, instead of, say,  ace.exec V1, CR1, {optional INPUT1} followed by ace.exec {optional OUTPUT2}, CR2, {INPUT1}, we would just have ace.derive CR2, CR1, length.
 We more flexibility for the other cases. For instance if we are piping a secret value indexed by  index i   from CR1 into a secret value indexed by index j into CR2, we would have ace.derive CR2, CR1, (length, i, j) and we have to encode the tuple somehow in the aux input, like length << 32 | i << 16 | j.
 Finally, we need the case where we pipe the output of an ace.exec on CR1 into a secret in CR2 and the case of a secret in CR1 into an input of CR2. These are four cases, and sadly there is no encoding space left in ace.derive. We reduce ace.derive to one form only, with an aux input in a GPR only.
@@ -2631,7 +2625,7 @@ _Description_::
 --
 `ace.derive` moves `length` bytes from an endpoint of the source CR to an endpoint of the
 destination CR. The data never becomes visible to software: it is the mechanism by which the output
-of one algorithm becomes the input, or the key, of another.
+of one Algorithm becomes the input, or the key, of another.
 
 The auxiliary GPR carries the transfer length and the two field indices:
 
@@ -2699,7 +2693,7 @@ _Included in_::
 
 _This section is informative._
 
-`ace.derive` (<<ACE-instruction-derive>>) exists so that the output of one algorithm can become the
+`ace.derive` (<<ACE-instruction-derive>>) exists so that the output of one Algorithm can become the
 input, or the key, of another without ever being visible to software. The four `Form` values of
 <<ACE-derive-forms>> cover the four combinations of endpoint; the examples below show what each one
 replaces.
@@ -2716,7 +2710,7 @@ leaks the intermediate value `V1` to software. The single instruction
 performs the same two operations, advancing both state machines exactly as the two `ace.exec`
 instructions would, and the intermediate value never leaves the ACE unit.
 
-*Form `01` — output of an `ace.exec` into a secret.* A key agreed or derived by the algorithm in
+*Form `01` — output of an `ace.exec` into a secret.* A key agreed or derived by the Algorithm in
 `K1` becomes a key of the CC in `K2`. `K2` is provisioned beforehand in the ordinary way — a CC
 whose _KeyType_ selects a randomly generated key serves as a placeholder — and must be in State
 _Ready_; the `ace.derive` then overwrites its secret field `j`. This is the shape used by
@@ -2726,7 +2720,7 @@ _Ready_; the `ace.derive` then overwrites its secret field `j`. This is the shap
 another, for instance to give two CCs with different _UsagePolicy_ or _Locality_ the same
 underlying key. Both indices are significant here.
 
-*Form `10` — secret into the input of an `ace.exec`.* A stored secret is absorbed by the algorithm
+*Form `10` — secret into the input of an `ace.exec`.* A stored secret is absorbed by the Algorithm
 in `K2`, for instance as the key of a MAC or as a customization string, without being materialized
 in a register.
 
@@ -2802,7 +2796,7 @@ _Description_:: {empty}
   In the first case, the size includes
   the authentication tag(s) and the additional variable-length data.
   In the second case, the size is the same as the size of the entire PI.
-  If the algorithm is not supported or the Metadata is
+  If the Algorithm is not supported or the Metadata is
   invalid, the instruction returns `0`.
 
 * On RV32, Form B `ace.size` differs from the RV64 version in that `s` must be even, and
@@ -2812,7 +2806,7 @@ _Description_:: {empty}
 * On systems that implement `Zvl128b`, `Zvl256b`, `Zvl512b`, or `Zvl1024b`,
   Form C of `ace.size` returns in GPR `Xd` the total size in bytes of an SCC whose Bits
   [127:0] of the MDH are given in `Vs`, including the additional
-  variable-length data. If the algorithm is not supported or the Metadata is
+  variable-length data. If the Algorithm is not supported or the Metadata is
   invalid, the instruction returns `0`.
 
 A return of `0` from Form B or Form C means that the _Algorithm_, _AlgorithmPolicy_ or
@@ -3065,7 +3059,7 @@ and `ace.getstx` as:
 ==== ace.avail
 
 _Synopsis_::
-Verify whether an algorithm is supported, or the first 64 bits of a metadata block are valid.
+Verify whether an Algorithm is supported, or the first 64 bits of a metadata block are valid.
 
 _Mnemonic_::
 `ace.avail Xd, Xs`
@@ -3122,7 +3116,7 @@ the ACEIOBUF is used for the input. If `Zklio` is not available, if a Form C ins
 . Any substitution is allowed only if the ACEIOBUF is enabled and `aceiobuflen` is non-zero.
   Otherwise, ACE exception `ace_exc_unconfigured_buffer` is raised.
 +
-If `aceiobuflen` is non-zero but `aceiobuftop` is a length invalid for the algorithm, or `acestart` is not an interruption point the algorithm allows, then: if the ACEIOBUF is used as an input, the CR transitions to Error State _Invalid_; if it is used only as an output, the instruction performs no operation — nothing is written and no state transition occurs.
+If `aceiobuflen` is non-zero but `aceiobuftop` is a length invalid for the Algorithm, or `acestart` is not an interruption point the Algorithm allows, then: if the ACEIOBUF is used as an input, the CR transitions to Error State _Invalid_; if it is used only as an output, the instruction performs no operation — nothing is written and no state transition occurs.
 
 NOTE: Because of these rules, the Algorithms sections say that a certain Form of `ace.exec`, `ace.setst`, or `ace.mgmt` is _expected_ rather than _required_ (or _only [...] allowed_). The substitutions are implicit and are not restated for each occurrence.
 
@@ -3179,7 +3173,7 @@ In this case, when the context‑switch handler accesses an output of the operat
   and re-execution resumes from `acestart`, advancing by at least one
   granule per execution attempt — sixteen bytes for `ace.load`, `ace.store`,
   one byte for `ace.input`, and `ace.output`; for `ace.exec`, one basic processing unit
-  or the smallest interruption point defined by the algorithm (cf. <<ACE-process-VLI>>).
+  or the smallest interruption point defined by the Algorithm (cf. <<ACE-process-VLI>>).
 . The system may impose a timeout before halting as in the previous point.
 . Precise halt and restart.
 
@@ -3193,11 +3187,11 @@ either have completed or have been precisely halted with `acestart` set per
 the attached ACE unit invisible to same-hart program order, as
 <<ACE-Memory-Model>> requires. Beyond this rule, the architecture only
 specifies the allowed interruption points for its instructions and
-algorithms.
+Algorithms.
 
 For multi-block `ace.exec`, resumption from `acestart` is mandatory once
 per-block state effects have been committed. The interruption points are defined by block boundaries
-as well as by algorithm-specific interrupt points  (for instance
+as well as by Algorithm-specific interrupt points  (for instance
 the long-running computations of <<ACE-ECC>> and <<ACE-PQC>>).
 While handlers can set `acestart` to zero to force a restart of an `ace.exec` operation, the
 result is UNPREDICTABLE, in the bounded sense of <<ACE-unpredictable>>, when the input and output
@@ -3299,7 +3293,7 @@ is 32 bytes irrespective of every field above.
 It does not depend on _KeyType_, because a CR holds the expanded key material whether the
 key was provisioned by value or retrieved from the SKS through a System Key Identifier,
 nor on _StateExtension_, because a CR is allocated with room for every field the
-algorithm may come to use.
+Algorithm may come to use.
 
 All five fields named above lie in bits [63:0] of the MDH, which is what allows a PI or
 SCC length to be computed from the first eight bytes alone, as required by `ace.load`
@@ -3322,7 +3316,7 @@ The format of a Provisioning Input (PI) is shown in <<ACE-PI>>.
 |===
 | Section | Section Name                      | Size     | Description
 | 1       | `MDH`, Metadata Header            | 128 bits | See <<ACE-Metadata>>.
-| 2       | `Content[]`, Provisioning Content | Determined by the _Algorithm_, _AlgorithmPolicy_ and _KeyType_ fields of the MDH; see <<ACE-length-rule>>. | Contains keys and other algorithm-specific information.
+| 2       | `Content[]`, Provisioning Content | Determined by the _Algorithm_, _AlgorithmPolicy_ and _KeyType_ fields of the MDH; see <<ACE-length-rule>>. | Contains keys and other Algorithm-specific information.
 |===
 
 The length of a PI, and thus of `Content[]`, must be a multiple of 128 bits.
@@ -3340,15 +3334,15 @@ The format of a Sealed Cryptographic Context (SCC) is shown in <<ACE-SCC>>.
 | 3
 | `Content1`: _Algorithm Data Section_
 | See <<ACE-length-rule>>.
-| Contains keys and other algorithm-specific information. Encrypted in memory and during partial import.
- The data in this section is necessary for the correct functioning of the algorithm.
+| Contains keys and other Algorithm-specific information. Encrypted in memory and during partial import.
+ The data in this section is necessary for the correct functioning of the Algorithm.
 //
 | 4       | `IMPQUAL`, Implementation Qualifier   | 128 bits, if present | Used to identify the implementation of the ACE Unit
 | 5       | `SIV2`                                | 128 bits, if present | Authentication tag for sections 4 and 6.
 | 6
 | `Content2`: _Implementation (Specific) Variable-Length Data Section_ (Implementation VDS)
 | Implementation-Specific
-| The data in this section is _not_ necessary for the correct functioning of the algorithm.
+| The data in this section is _not_ necessary for the correct functioning of the Algorithm.
   Encrypted in memory and during partial import.
 |===
 
@@ -3360,17 +3354,14 @@ The MDH's _ImpDataLen_ field specifies the total size of the Variable-Length Sec
 
 The information in a CR comprises at least as many bits as the SCC (see <<ACE-SCC>>), excluding `SIV`, `IMPQUAL`, and `SIV2`.
 
-A CR can contain significantly more information than the Provisioning Content.
-This additional information falls into three categories:
+A CR can contain significantly more information than a SCC,
+which in turn can contain more information than the PI.
+This occurs because some information may not be serialized and instead be (re)computed at provisioning or import.
+Also, A CR may contain some additional implementation-specific information to optimize performance, which can be exported in the VDS in full or partial format.
+A different receiving implementation may safely ignore the latter during import after checking the `IMPQUAL` value
 
-. Information necessary for the algorithm to function that cannot be reconstructed from other information—for example, random values generated in the _Ready_ state.
-
-. Information that can be easily reconstructed from other state data. The *algorithm* may choose to omit this from an SCC.
-
-. Data that optimizes performance on a specific *implementation* and is more expensive to recompute than to encrypt and save to external memory. The implementation may export such data in a custom format within an SCC for efficient reuse. A different receiving implementation may safely ignore this data during import after checking the `IMPQUAL` value. The originating implementation may silently restart a cryptographic operation if the additional data is corrupted.
-
-Despite the fact that the internal state of a CR may contain more data than in a SCC, it is still possible that
-importing an SCC requires more storage because `SIV`, `IMPQUAL`, and `SIV2` are not part of the information stored in a CR.
+Despite the fact that the internal state of a CR may contain more information than in a SCC, it is still possible that
+importing an SCC requires more _storage_ because `SIV`, `IMPQUAL`, and `SIV2` are not part of the information stored in a CR.
 
 This is addressed in the <<ACE-CR-representation>>.
 
@@ -3384,7 +3375,7 @@ Its length equals that of the PI, or of the SCC plus 128 bits for the `SIV` — 
 The format of this structure follows <<ACE-PI>> for provisioning and <<ACE-SCC>> for export and import, and in the specification the first 16 bytes include the MDH.
 
 The extra 128 or 384 bits of capacity are allocated per hart, not per CR.
-Allocating them per CR would be costly: 128 bits per CR, or 384 bits if at least one algorithm supports implementation-specific data.
+Allocating them per CR would be costly: 128 bits per CR, or 384 bits if at least one Algorithm supports implementation-specific data.
 The implementation transparently manages this capacity as though it belongs to the CR.
 
 This prevents concurrent management operations in the same code: starting a second operation can overwrite `SIV`, `IMPQUAL`, and `SIV2` storage, destroying in-flight values.
@@ -3429,18 +3420,18 @@ This described the semantics of `acestart` when `ace.mgmt` it is used complete t
 [[ACE-rules-masked-implementations]]
 ==== Single-Share Key Export Rule for Masked Implementations
 
-Any CC with its algorithm implemented as a multi-share implementation will always provision, import and export _all_ its keys and secrets as reconstructed values.
-(((ACE, algorithm, side-channel protection variants)))
-The PI and SCC formats are the same for non-protected and protected implementation variants of the same algorithm, the only difference being the value of the _SCProtection_ field in the MDH.
+Any CC with its Algorithm implemented as a multi-share implementation will always provision, import and export _all_ its keys and secrets as reconstructed values.
+(((ACE, Algorithm, side-channel protection variants)))
+The PI and SCC formats are the same for non-protected and protected implementation variants of the same Algorithm, the only difference being the value of the _SCProtection_ field in the MDH.
 
 NOTE: These rules assume that reconstructing or re-randomizing a key is inexpensive.
 For example, the implementation may XOR the values with data from a PRNG (according to <<ACE-RBG>>) internal to the ACE unit.
 This approach keeps SCCs compact and ensures interoperability across architectures that implement side-channel protection differently.
 
-To accelerate key share reconstruction in a multi-share variant of an algorithm, some shares of a key can be included in the content's Additional Data.
+To accelerate key share reconstruction in a multi-share variant of an Algorithm, some shares of a key can be included in the content's Additional Data.
 
 Architecturally, all values are represented as a single share.
-Side-channel analysis (SCA)-protected algorithms are implementation variants of the same unprotected algorithm, not separate specifications.
+Side-channel analysis (SCA)-protected Algorithms are implementation variants of the same unprotected Algorithm, not separate specifications.
 The only difference is the _SCProtection_ field of the MDH.
 
 // ////////////////////////////////////////////////////////////////////
@@ -3510,7 +3501,7 @@ NOTE: Due to the computational cost of the derivation functions,
 implementations may cache the derived keys.
 
 NOTE: To reduce payload size, the AES-GCM-SIV-derived algorithm for SCC import and export
-omits a nonce, relying on AES-GCM-SIV's nonce misuse-resistance.
+omits a nonce, relying on AES-GCM-SIV's nonce-reuse/nonce misuse-resistance:
 The construction is secure up to 2^64^ 128-bit blocks collected by an adversary.
 This is sufficient to practically deter attacks on client applications; on cloud servers, each virtual machine and
 supervisor domain should be assigned a unique CSK.
@@ -3681,7 +3672,7 @@ to create the serialized, encrypted and authenticated SCC from the CR.
 
 .Exporting a Fully Configured CR ``K(i)``
 --
-. First, the algorithm-dependent data is processed:
+. First, the Algorithm-dependent data is processed:
 .. `saved_MDH` <- the *initial* MDH of ``K(i)``, that is the image with _ConfigStatus_ = `ace_cfgst_complete` that software saved before issuing `#ace_CR_export_start`, ``len_AD`` <- 1
 .. ``AD[0]`` <- `saved_MDH`
 .. foreach(_j_ from 0 to 10) do:
@@ -3755,7 +3746,7 @@ The dependencies of the `ace.mgmt` instructions' timing are limited to very few 
 . Actual size of the SCC to export, including the implementation-dependent part.
 . SIV and SIV2 authentication failures on import;
 . IMPQUAL mismatches on import; and
-. Attempts to import SCCs whose total length exceeds what the target machine supports for the given algorithm.
+. Attempts to import SCCs whose total length exceeds what the target machine supports for the given Algorithm.
   In this case, the implementation-dependent part is necessarily unsupported; it is skipped or only partially loaded, to be discarded without authenticating it; and only the architecture-dependent part is authenticated and decrypted (if the resulting _ConfigStatus_ is `ace_cfgst_complete`) and used.
 
 Apart from these factors, only the number of blocks to process may affect the timing of the `ace.mgmt` instructions.
