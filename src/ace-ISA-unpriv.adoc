@@ -583,7 +583,17 @@ The following rules are generic and apply to all Algorithms:
 . The MDH's _State_ field must reflect the current state whenever the CC is in _Ready_, _Success_, _Failure_, or any Error State.
 This ensures that these states can be unambiguously determined from the _State_ field alone, without inspecting the Content.
 
-. In States _Success_ and _Failure_, only the following ACE instructions are permitted: `ace.mgmt`, `ace.load`, `ace.store`, `ace.clear`, `ace.size`, `ace.setst`, `ace.getmd*`, and `ace.getst` (described in <<ACE-instructions-detailed>>).
+. In States _Success_ and _Failure_, only the following ACE instructions are permitted: `ace.mgmt`, `ace.load`, `ace.store`, `ace.clear`, `ace.size`, `ace.setst`, `ace.getmd*`, `ace.getst`, and `ace.derive` where the CR in State _Success_ or _Failure_ is the *source* of the transfer (described in <<ACE-instructions-detailed>>).
+A CR in State _Success_ or _Failure_ may not be the *destination* of an `ace.derive`.
++
+--
+Permitting `ace.derive` to read such a CR is what allows an Algorithm that deposits its result in
+a state field and then completes to hand that result on without exposing it. `ML-KEM.Decaps`
+(<<ACE-PQC-ML-KEM>>) is the motivating case: it leaves the shared secret in `sharedkey` and
+transitions to _Success_, from which the only other exit is _Ready_, and _Ready_ clears
+`sharedkey`. Without this provision the shared secret would be unreachable and ML-KEM could not
+be used for its stated purpose.
+--
 
 . In States _Success_ and _Failure_, `ace.setst` is only permitted to transition to _Ready_ or _Unconfigured_.
 
@@ -992,7 +1002,13 @@ This allows the emulation of an Algorithm, and the on-demand (lazy) loading of C
 Unsupported Algorithms:::
 +
 --
-Invalid parameters in the MDH at provisioning or import will set the CR to Error State _Unsupported_, raise ACE exception `ace_exc_unsupported`.
+Invalid parameters in the MDH at provisioning or import set the CR to Error State
+`ace_state_unsupported` and raise ACE exception `ace_exc_unsupported`.
+The hardware sets the Error State itself so that a handler which cannot resolve the condition has
+nothing left to do: it may simply return, and the caller then observes an unusable CR through
+`ace.getst`. A handler that instead intends to emulate the Algorithm overrides this by setting the
+CR's `*lcrstatus` field to _Off_ (<<ACE-CSR-lcrstatus>>), after which every access to that CR
+traps and is serviced by the emulator.
 --
 
 Privilege Violations:::
@@ -1072,9 +1088,9 @@ ACE provides a number of unprivileged CSRs.
 |  0xXXX-0xXXX+1   |    URW    | `acesiv2l`/`acesiv2h`       | SIV2 of the SCC currently being managed for import or export
 |  0xXXX-0xXXX+1   |    URW    | `aceiql`/`aceiqh`           | IMPQUAL of the SCC currently being managed for import or export
 
-|  0xXXX-0xXXX+1   |    URW    | `acesivlh`/`acesivhh`       | RV32 only: Shadows of bits [63:31] of `acesivl`/`acesivh`
-|  0xXXX-0xXXX+1   |    URW    | `acesiv2lh`/`acesiv2hh`     | RV32 only: Shadows of bits [63:31] of `acesiv2l`/`acesiv2h`
-|  0xXXX-0xXXX+1   |    URW    | `aceiqlh`/`aceiqhh`         | RV32 only: Shadows of bits [63:31] of `aceiql`/`aceiqh`
+|  0xXXX-0xXXX+1   |    URW    | `acesivlh`/`acesivhh`       | RV32 only: Shadows of bits [63:32] of `acesivl`/`acesivh`
+|  0xXXX-0xXXX+1   |    URW    | `acesiv2lh`/`acesiv2hh`     | RV32 only: Shadows of bits [63:32] of `acesiv2l`/`acesiv2h`
+|  0xXXX-0xXXX+1   |    URW    | `aceiqlh`/`aceiqhh`         | RV32 only: Shadows of bits [63:32] of `aceiql`/`aceiqh`
 
 
 |===
@@ -1281,6 +1297,15 @@ It contains the number of the currently managed CR, or 32 if all are either unco
 
 Internal values of SIV, SIV2, IMPQUAL are associated with this CR.
 
+Values from 33 to 63 are reserved; writing one leaves `acemanagedcr` unchanged.
+
+NOTE: Because the register is writable at any privilege level, the `acemanagedcr` check that `ace.mgmt`
+performs (<<ACE-instruction-manage>>) detects an accidentally interleaved management operation but
+does not prevent a deliberate one: software that writes 32 can open a second operation and destroy
+the in-flight SIV, SIV2 and IMPQUAL values. Serializing management operations is therefore a
+software obligation (<<ACE-CR-representation>>). No confidentiality property depends on the check;
+the loss is confined to the interleaved operations, which fail authentication or must be restarted.
+
 The value of `acemanagedcr` out of ACE unit reset is 32.
 
 // ////////////////////////////////////////////////////////////////////
@@ -1291,11 +1316,11 @@ The value of `acemanagedcr` out of ACE unit reset is 32.
 {empty}
 (((CSR, `acesiv`)))
 `acesivl`/`acesivh` are two 64-bit RW CSRs which contain
-bits [0:63] and [64:127] of the SIV value, respectively.
+bits [63:0] and [127:64] of the SIV value, respectively.
 
 On RV32,
-CSR `acesivlh` shadows bits [62:32] of `acesivl`, and
-CSR `acesivhh` shadows bits [62:32] of `acesivh`,
+CSR `acesivlh` shadows bits [63:32] of `acesivl`, and
+CSR `acesivhh` shadows bits [63:32] of `acesivh`,
 to allow access to those bits.
 
 // ////////////////////////////////////////////////////////////////////
@@ -1306,11 +1331,11 @@ to allow access to those bits.
 {empty}
 (((CSR, `acesiv2`)))
 `acesiv2l`/`acesiv2h` are two 64-bit RW CSRs which contain
-bits [0:63] and [64:127] of the SIV2 value, respectively.
+bits [63:0] and [127:64] of the SIV2 value, respectively.
 
 On RV32,
-CSR `acesiv2lh` shadows bits [62:32] of `acesiv2l`, and
-CSR `acesiv2hh` shadows bits [62:32] of `acesiv2h`,
+CSR `acesiv2lh` shadows bits [63:32] of `acesiv2l`, and
+CSR `acesiv2hh` shadows bits [63:32] of `acesiv2h`,
 to allow access to those bits.
 
 // ////////////////////////////////////////////////////////////////////
@@ -1321,11 +1346,11 @@ to allow access to those bits.
 {empty}
 (((CSR, `aceiq`)))
 `aceiqh`/`aceiql` are two 64-bit RW CSRs which contain
-bits [0:63] and [64:127] of the IMPQUAL value, respectively.
+bits [63:0] and [127:64] of the IMPQUAL value, respectively.
 
 On RV32,
-CSR `aceiqlh` shadows bits [62:32] of `aceiql`, and
-CSR `aceiqhh` shadows bits [62:32] of `aceiqh`,
+CSR `aceiqlh` shadows bits [63:32] of `aceiql`, and
+CSR `aceiqhh` shadows bits [63:32] of `aceiqh`,
 to allow access to those bits.
 
 // ////////////////////////////////////////////////////////////////////
@@ -1539,7 +1564,7 @@ _Mnemonics_::
 _Description_::
 +
 --
-`ace.load` imports a PI or an SCC into the CR `Kd` or `K{Xd}`, starting with the 16th byte of the MDH.
+`ace.load` imports a PI or an SCC into the CR `Kd` or `K{Xd}`, starting with the first byte after the 16-byte MDH.
 The memory address of the latter is given in `%offset(Xs1)`.
 
 This instruction requires that the CR be ready to import information and that the MDH has already been loaded by passing it as a parameter in a GPR pair (quartet for RV32), resp., vector register, to the `ace.mgmt` instruction used to open the CR for provisioning or import.
@@ -1556,13 +1581,13 @@ The _ConfigStatus_ field identifies the input type (PI or SCC); the fields in <<
 
 `acestart` tracks the number of loaded bytes and is a multiple of 16. In other words, `ace.load` loads data in 16-byte chunks.
 
-`ace.load` loads data into the CR after the MDH in the serialized representations of the CR, beginning with the current `acestart` byte offset for both the memory address and the serialized representations of the CR after the MDH.
-`ace.load` loads memory starting at address `Xs1 + %offset + acestart` and copies the data into the serialized representations of the CR after the MDH, beginning with the current `acestart` byte offset.
-More precisely, the _j_-th byte after the MDH (i.e., the (_j_+16)-th byte of the serialized payload) is loaded to memory address `Xs1 + %offset + j`.
-
-`ace.store` copies the data from the serialized representations of the CR after the MDH, beginning with the current `acestart` byte offset for both the
-serialized representations of the CR after the MDH and for the memory address.
-the _j_-th byte after the MDH (i.e., the (_j_+16)-th byte of the serialized payload) is saved to  memory address `Xs1 + %offset + j`.
+`ace.load` copies data from memory into the serialized representation of the CR that follows the
+MDH, advancing both the memory address and the offset within that representation together, and
+beginning at the current `acestart`.
+Precisely, for each _j_ from `acestart` to `size` − 1, the byte at memory address
+`Xs1 + %offset + `_j_ is loaded into the _j_-th byte after the MDH of the serialized
+representation of the CR, that is the (_j_+16)-th byte of the serialized payload.
+Both the memory address and the CR offset carry the same _j_, so the two are always in step.
 
 While `acestart` for CR transfers is a byte count, implementations may halt only at 16-byte multiples.
 
@@ -1613,7 +1638,7 @@ _Mnemonic_::
 _Description_::
 +
 --
-Exports raw data from the CR `Ks2` or `K{Xs2}`, starting with the 8th byte of the MDH, to memory at address `%offset(Xs1)`.
+Exports raw data from the CR `Ks2` or `K{Xs2}`, starting with the first byte after the 16-byte MDH, to memory at address `%offset(Xs1)`.
 
 The MDH must be read from the CR using `ace.getmd` into a a pair of GPRs (quartet for RV32) or `ace.getmdv` into a vector register of length at least 128 bits,
 and saved to memory by the software.
@@ -1621,8 +1646,10 @@ Note that the `ace.mgmt` used to start the export also sets `acestart` to zero a
 
 `ace.store` can store data that may be larger than the effective XLEN.
 
-`acestart` keeps track of the number of stored bytes, starting from 8 or 16 depending on the use of `ace.getmdl`.
-If `ace.store` is
+`acestart` keeps track of the number of stored bytes. It starts from 0, the value the
+`ace.mgmt` that opened the export left it at: the count is an offset into the payload that
+*follows* the MDH, so the MDH bytes that software has already saved on its own are not included
+in it. If `ace.store` is
 interrupted, `acestart` contains the offset to the next byte to store upon
 resumption.
 
@@ -1633,10 +1660,13 @@ The _ConfigStatus_ field identifies the input type (PI or SCC); the fields in <<
 `acestart` tracks the number of bytes stored to memory and is a multiple of 16.
 In other words, `ace.store` stores data in 16-byte chunks.
 
-`ace.store` store the serialized representations of the CR after the MDH to external memory.
-`ace.store` copies the data from the serialized representations of the CR after the MDH, beginning with the current `acestart` byte offset for both the
-serialized representations of the CR after the MDH and for the memory address.
-More precisely, the _j_-th byte after the MDH (i.e., the (_j_+16)-th byte of the serialized payload) is saved to  memory address `Xs1 + %offset + j`.
+`ace.store` copies data from the serialized representation of the CR that follows the MDH to
+external memory, advancing both the offset within that representation and the memory address
+together, and beginning at the current `acestart`.
+Precisely, for each _j_ from `acestart` to `size` − 1, the _j_-th byte after the MDH of the
+serialized representation of the CR, that is the (_j_+16)-th byte of the serialized payload, is
+stored to memory address `Xs1 + %offset + `_j_.
+Both the memory address and the CR offset carry the same _j_, so the two are always in step.
 
 While `acestart` for CR transfers is a byte count, implementations may halt only at 16-byte multiples.
 
@@ -1810,6 +1840,27 @@ _Description_::
 --
 In each variant the CR is the one named by `rs1`, directly or, if bit `r` is 1, through
 the GPR it names.
+
+*Bound.* Let `size` be the length in bytes of the PI or SCC being transferred, determined from
+the first 8 bytes of the MDH exactly as `ace.load` determines it (<<ACE-instruction-load>>). In
+every variant below:
+
+* If `acestart` {ge} `size`, the instruction performs no operation — no CR byte, GPR, or vector
+  register is written and `acestart` is unchanged — and an illegal-instruction exception is
+  raised.
+* If `acestart` + `n` > `size`, where `n` is the number of bytes the variant would otherwise
+  transfer, only the bytes at offsets [`acestart`, `size`) are transferred, and `acestart` is
+  set to `size`.
+
+[NOTE]
+====
+`ace.mv` takes its transfer length from the instruction rather than from the MDH, so unlike
+`ace.load` and `ace.store` it is not self-limiting. Without this bound a loop that issues one
+`ace.mv` too many — the loop is driven by a software-maintained counter, as in
+<<ACE-management-code-snippets>> — would write past the end of the CR's serialized image and
+into whatever the CRF holds beyond it. The clamp on `acestart` in <<ACE-CSR-acestart>> is not
+sufficient on its own: it limits the recorded offset but does not suppress the transfer.
+====
 
 For RV64 the semantics are:
 
@@ -2086,7 +2137,7 @@ performs following operations:
    The CR is transitioned to Error State _Invalid_.
 +
 NOTE: ACE exception `ace_exc_unsupported` is raised only at provisioning or import time for an invalid or unsupported Algorithm or SCA protection level.
-The exception handler must either set the CR's `*lcrstatus` field to _Off_ so that any access can be trapped for emulation (see <<ACE-CSR-lcrstatus>>), or set the CR MDH's _State_ field to Error State `ace_state_unsupported` so that the CR cannot be used and the caller can detect this.
+The CR's _State_ field is already set to Error State `ace_state_unsupported` by the hardware that raised the exception, so that the CR cannot be used and the caller can detect this. A handler that cannot resolve the condition therefore needs to do nothing further. A handler that intends to emulate the Algorithm instead sets the CR's `*lcrstatus` field to _Off_, so that any access is trapped for emulation (see <<ACE-CSR-lcrstatus>>); the emulator then holds the CR in its own protected memory and services every operation on it, including SCC import and export.
 ACE exception `ace_exc_unsupported` is _not_ raised when accessing or using a CR in State `ace_state_unsupported`.
 
 .. The implementation attempts to allocate CRF capacity according to the requirements of the _Algorithm_, _AlgorithmPolicy_, and _SCProtection_ fields of the MDH, as prescribed by <<ACE-length-rule>>. No other field must affect the amount of capacity required.
@@ -2128,9 +2179,10 @@ Otherwise, it just restores the CR's _ConfigStatus_ to the saved `ml`._ConfigSta
 ... If authentication fails, the target CR is transitioned to Error State _Authentication Failed_. No exception is raised.
 ... The ACE unit performs any necessary readjustment of the CR's content to turn it into the format internally consumed by the ACE Unit.
 ... _ConfigStatus_ is set to `ace_cfgst_complete`.
-.. `acestart` is set to 0.
 .. If `ml`._ConfigStatus_ {ne} `ace_cfgst_complete`  (we are either importing the export of a not fully configured CR or a nested CR export):
-... _ConfigStatus_ is left to `ml`._ConfigStatus_.
+... _ConfigStatus_ is set to `ml`._ConfigStatus_.
+No other field of the MDH is written from `ml`; see the note under
+*`ace.mgmt` is used to complete an export process* below.
 .. Write 32 to `acemanagedcr`.
 .. `acestart` is cleared.
 --
@@ -2153,6 +2205,9 @@ The architecturally observable behavior is described in <<ACE-CR-representation>
 
 No encryption or authentication occurs; the contents of the CR are exported verbatim, in the same order in which they appear in the PI (for a partially provisioned CR) or in the SCC (for a partially imported CR, or a CR previously prepared for export whose export process was itself interrupted).
 
+.. The CR's _ConfigStatus_ is set to `ace_cfgst_exporting`. This is the value on which
+   `ace.store` (<<ACE-instruction-store>>) and the CR-reading variants of `ace.mv`
+   (<<ACE-move>>) are gated, so no export can proceed until it is set.
 .. Write the CR's number to `acemanagedcr`.
 .. `acestart` is cleared.
 --
@@ -2163,21 +2218,33 @@ No encryption or authentication occurs; the contents of the CR are exported verb
 Let `ml` be the value of the MDH saved by the software in its own state upon initiation of the export process.
 Software uses Form B or Form C `ace.mgmt` with `ml` as the auxiliary parameter to `ace.mgmt` for export completion.
 
+[IMPORTANT]
+====
+The auxiliary operand of a completing `ace.mgmt` is consumed for *one* purpose only: its
+_ConfigStatus_ field restores the CR's _ConfigStatus_ to the value that field held when the
+management operation was started, which may have been modified in the interim, for instance by
+an exception taken during the operation. *No other field of the MDH is written from `ml`*, and
+the operand has no other effect on the CR. In particular `ace.mgmt` is not a means of
+substituting metadata into a CR: _Algorithm_, _AlgorithmPolicy_, _KeyType_, _SCProtection_,
+_UsagePolicy_, _Locality_, _ExpirationDate_ and every other field retain the values the CR
+already held. Narrowing an existing CC's policies is the exclusive province of `ace.restrict*`
+(<<ACE-instruction-restrict>>), which can only remove permissions, never grant them.
+====
+
 Then:
 
 .. Check whether `acemanagedcr` is equal to the CR's number or is equal to 32.
    If not, an illegal-instruction exception is raised.
 
-.. If `ml`._ConfigStatus_ = `ace_cfgst_complete`:
-
-... If the _ConfigStatus_ in `ml` is `ace_cfgst_complete`, the instruction makes the exported CR available to the ACE unit again in the clear format, and allows software to access it.
+.. If `ml`._ConfigStatus_ = `ace_cfgst_complete`, the instruction makes the exported CR available
+to the ACE unit again in the clear format, and allows software to access it.
 The implementation must restore the state of the CR to the state it was in when the export process was initiated.
 This may involve decrypting its contents or restoring them from an internal backup:
 The architecturally observable behavior is described in <<ACE-CR-representation>>.
 
-... If `ml`._ConfigStatus_ {ne} `ace_cfgst_complete`:
+.. If `ml`._ConfigStatus_ {ne} `ace_cfgst_complete`, no changes to the CR's contents are made.
 
-* No changes to the CR state are made.
+.. The CR's _ConfigStatus_ is set to `ml`._ConfigStatus_.
 
 .. Write 32 to `acemanagedcr`.
 .. `acestart` is cleared.
@@ -2296,7 +2363,8 @@ On RV64, if the destination register is a GPR, `d` must be even, and:
 This version of the instruction only supports vector operands of at least 128 bits, that is, `VL` {times} `SEW` {ge} 128.
 If `VL` {times} `SEW` < 128, an illegal-instruction exception is raised.
 
-On RV32, if the destination register is a GPR, `d` must be a multiple of four, and:
+On RV32, if the destination register is a GPR, `d` must be even for `ace.getmdl`, which writes a
+register pair, and a multiple of four for `ace.getmd`, which writes a quartet. Specifically:
 
 * `ace.getmdl` copies bits [63:32] of the MDH of CR `Ks` or `K{Xs}` into GPR `X[d+1]` and bits [31:0] of the MDH of the CR into GPR `Xd`, atomically.
 If `d` is not even, an illegal-instruction exception is raised.
@@ -2919,7 +2987,10 @@ For this reason, the architecture defines `ace.input` and `ace.output` (cf. next
 bytes below `acestart` and bytes at or beyond min(`Xl`, `aceiobuftop`) are not accessed on either side.
 Upon successful completion, `acestart` is set to 0.
 
-If `Xl` = 0, or `acestart` {ge} min(`Xl`, `aceiobuftop`), the operation does nothing and `acestart` is unchanged.
+If `Xl` = 0, or `acestart` {ge} min(`Xl`, `aceiobuftop`), the operand window is empty: the
+operation transfers nothing, and `acestart` is set to 0 exactly as it would be had the transfer
+run to the end of the window (<<ACE-CSR-acestart>>). Leaving `acestart` unchanged instead would
+make a resumption loop that retries on an empty window fail to terminate.
 
 If `Xl` is greater than `aceiobuftop`, only the bytes of the window are transferred; software can detect this case by comparing `Xl` with `aceiobuftop`.
 
@@ -2984,7 +3055,10 @@ This is the output operation corresponding to `ace.input`.
 bytes below `acestart` and bytes at or beyond min(`Xl`, `aceiobuftop`) are not accessed on either side.
 Upon successful completion, `acestart` is set to 0.
 
-If `Xl` = 0, or `acestart` {ge} min(`Xl`, `aceiobuftop`), the operation does nothing and `acestart` is unchanged.
+If `Xl` = 0, or `acestart` {ge} min(`Xl`, `aceiobuftop`), the operand window is empty: the
+operation transfers nothing, and `acestart` is set to 0 exactly as it would be had the transfer
+run to the end of the window (<<ACE-CSR-acestart>>). Leaving `acestart` unchanged instead would
+make a resumption loop that retries on an empty window fail to terminate.
 
 If `Xl` is greater than `aceiobuftop`, only the bytes of the window are transferred; software can detect this case by comparing `Xl` with `aceiobuftop`.
 
@@ -3146,8 +3220,13 @@ If `Zklio` is not available, an illegal-instruction exception is raised.
 
 .. Form A `ace.exec` cannot be replaced by Form C: the input cannot be read from the ACEIOBUF while the output is written to a vector register. Such an attempt raises an illegal-instruction exception.
 
-. `ace.setst` and `ace.mgmt` follow the same rule: if `Zklio` is available, instruction form with a vector input (Form C) can be replaced by a Form A, and the
-the ACEIOBUF is used for the input. If `Zklio` is not available, if a Form C instruction is expected, but a Form A instruction is issued, an illegal-instruction exception is raised.
+. `ace.setst` and `ace.mgmt` follow the same rule: if `Zklio` is available, the form with a vector
+input (Form C) can be replaced by a Form A, and the ACEIOBUF is used for the input. If `Zklio` is
+not available and a Form A is issued where a Form C is expected, an illegal-instruction exception
+is raised.
+
+NOTE: These exceptions signal that the substitution is unavailable, not that the Form is wrong for
+the Algorithm's current state. The latter invalidates the CR instead (<<ACE-generic-rules>>).
 
 
 . Any substitution is allowed only if the ACEIOBUF is enabled and `aceiobuflen` is non-zero.
@@ -3181,7 +3260,25 @@ are given in <<ACE-replacement-instructions>>.
 The usage and ordering of the alternative sequences are not enforced architecturally.
 Thus, the caller may omit `ace.input` or `ace.output`, meaning that the contents of the ACEIOBUF are reused, or the output is ignored.
 This does not expand the attack surface, since the caller always retains full control over the data passed to ACE instructions and their outputs.
-Instead, the ACE architecture defines the following rules:
+
+// What the architecture does define, in place of any ordering requirement, are the rules already
+// stated in this section — the permitted substitutions and the exceptions raised by the ones that
+// are not permitted — together with the following, which govern what a caller observes when it
+// departs from the sequences above:
+//
+// . The ACEIOBUF retains its contents until they are overwritten by an `ace.input`, until the
+//   buffer is reconfigured by a write to `aceiobuflen` (<<ACE-CSR-aceiobuflen>>), or until an
+//   `ace.exec` writes its output into it. Omitting an `ace.input` therefore presents the previous
+//   contents to the Algorithm; omitting an `ace.output` leaves the result in place, where a later
+//   `ace.output` can still retrieve it.
+//
+// . The length of the operand an Algorithm sees is `ACELEN` = `aceiobuftop` {times} 8, and is
+//   *not* affected by how many bytes the preceding `ace.input` actually transferred. A caller that
+//   supplies `Xl` < `aceiobuftop` leaves the bytes at offsets [`Xl`, `aceiobuftop`) at their
+//   previous values, and those bytes are consumed as part of the operand.
+//
+// . The granularity rule of <<ACE-generic-rules>> applies to `ACELEN` as computed above, whatever
+//   sequence produced the buffer contents.
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -3315,9 +3412,15 @@ it depend on _SCProtection_ or on _StateExtension_, which must likewise be zero 
 MDH of a PI.
 
 . The length of a *Sealed Cryptographic Context* is determined by, and only by, the
-  fields _Algorithm_, _AlgorithmPolicy_, _KeyType_ and _StateExtension_, plus the
+  fields _Algorithm_, _AlgorithmPolicy_, _KeyType_, _StateExtension_ and _State_, plus the
   Implementation Variable-Length Data Section, whose total size in 128-bit units is given
   by _ImpDataLen_ (<<ACE-extra-content>>).
++
+NOTE: _State_ appears in this list for two reasons: an SCC exported from a CR in an Error State is
+32 bytes irrespective of every other field, as stated below, and an Algorithm may serialize a
+field only while a multi-step operation is in progress. An Algorithm that does the latter must
+make the condition depend on _State_ and _StateExtension_ alone, never on a value carried in
+the Content, since the Content is what is being measured.
 +
 It does *not* depend on _SCProtection_. A masked implementation exports the same
 number of bits as an unprotected one, as required by <<ACE-rules-masked-implementations>>.
@@ -3333,7 +3436,7 @@ key was provisioned by value or retrieved from the SKS through a System Key Iden
 nor on _StateExtension_, because a CR is allocated with room for every field the
 Algorithm may come to use.
 
-All five fields named above lie in bits [63:0] of the MDH, which is what allows a PI or
+All six fields named above lie in bits [63:0] of the MDH, which is what allows a PI or
 SCC length to be computed from the first eight bytes alone, as required by `ace.load`
 (<<ACE-instruction-load>>), `ace.store` (<<ACE-instruction-store>>) and Form B of
 `ace.size` (<<ACE-instruction-size>>).
