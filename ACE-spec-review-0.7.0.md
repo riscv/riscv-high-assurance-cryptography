@@ -13,7 +13,7 @@ treated as accepted design and not re-litigated.
 All algorithm definitions in Book 2 were checked in detail against their source standards
 (SP 800-38A/B/D/E, RFC 7253, RFC 8452, FIPS 180-4/197/202/203/204, SP 800-185, SP 800-232,
 FIPS 186-5, RFC 8032, GB/T 32905/32907, GM/T 0003). A machine-checkable KAT suite accompanying
-this review lives in `kat/`.
+this review lives in `src/kat/`, driven by `src/run-kats.py`.
 
 ---
 
@@ -455,7 +455,7 @@ to authenticate when read with `sep` = 1, and both entropy-reduction consequence
   corrected, since it had recorded the clamp as the resolution.
 - **Not affected:** the clamp for CR-directed transfers (`ace.load`/`ace.store`/`ace.mv`, bounded
   by the PI/SCC length in bytes) is a separate rule that nothing contradicts, and is unchanged.
-- **Verification:** `kat/mgmt-kat.py` already modelled the no-op reading; it now additionally
+- **Verification:** `src/kat/mgmt-kat.py` already modelled the no-op reading; it now additionally
   asserts that `acestart` survives unclamped at `aceiobuftop`, at `aceiobuftop` + 1, and far above
   it — the strictly-greater cases the old wording left ambiguous.
 
@@ -480,7 +480,7 @@ to authenticate when read with `sep` = 1, and both entropy-reduction consequence
 - **Related:** K13 closes the remaining reachability gap — signing and then verifying within one
   CC — by making the `Xs` field-disposal bits uniform, so that `Signature` survives the mandatory
   return to _Ready_ unless Bit 6 explicitly discards it.
-- **Verification:** `kat/ecc-kat.py::test_m10_dead_end` keeps the pre-fix transition relation as a
+- **Verification:** `src/kat/ecc-kat.py::test_m10_dead_end` keeps the pre-fix transition relation as a
   regression check: it re-runs the breadth-first search, records that the old relation reached no
   state from _Set_Signature_, and asserts that the current one reaches _Sign_Verify_.
   `test_sign_then_verify_one_cc` walks the full sign→verify sequence end to end.
@@ -737,14 +737,14 @@ but must be resolved before candidacy. Extension names with internal capitals (`
 # Part II — Findings from the Machine-Checked KAT Suite
 
 _Added after the narrative review above. A companion suite of 18 known-answer-test harnesses in
-`kat/` models the specification's algorithms and state machines directly from the normative text
-and checks them against published standard vectors. `python3 kat/run-kats.py` runs all 18 in ~33 s;
+`src/kat/` models the specification's algorithms and state machines directly from the normative text
+and checks them against published standard vectors. `python3 src/run-kats.py` runs all 18 in ~33 s;
 all pass. The findings below were produced or confirmed by that exercise; several could not have
 been found by reading alone._
 
 ## 7. Suite Structure and Anchor Levels
 
-`kat/common.py` provides the ACE notation layer (little-endian values, `@`/`cat`, `bswap`, `bin`)
+`src/kat/common.py` provides the ACE notation layer (little-endian values, `@`/`cat`, `bswap`, `bin`)
 and self-tested primitives: AES-128/192/256 with an algorithmically generated S-box (FIPS 197
 C.1–C.3), GHASH multiplication (SP 800-38D §6.3), POLYVAL `Montmul` (RFC 8452 App. A), and the
 XTS/OCB doublings (SP 800-38B D.1 subkey). Each harness additionally implements an independent
@@ -881,7 +881,7 @@ _Success_ may only move to _Ready_ or _Unconfigured_ (`<<ACE-State-field>>`), so
 must be separated by a pass through _Ready_, which previously destroyed the signature. It is also
 the consistent choice — `Scalar` holds the *private key* and was already retained by default, so
 auto-erasing the public `(r,s)` made the least sensitive field the only special case. A worked
-five-step sequence is given in a NOTE, and `kat/ecc-kat.py::test_sign_then_verify_one_cc` walks it
+five-step sequence is given in a NOTE, and `src/kat/ecc-kat.py::test_sign_then_verify_one_cc` walks it
 end to end, additionally checking that setting Bit 6 does discard the signature and that
 `_Sign_Verify_` is then refused.
 

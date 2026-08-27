@@ -24,7 +24,7 @@ labelled stand-in (SHA-256 keystream XOR plus a SHA-256 tag).  The real sealing
 construction is covered by scc-kat.py; what is tested here is *when* sealing
 happens and what it does to the architectural state, not *how* it is computed.
 
-Reporting follows kat/run-kats.py: one PASS/FAIL line per case, a final
+Reporting follows ../run-kats.py: one PASS/FAIL line per case, a final
 `KAT-RESULT: PASS|FAIL`, and `KAT-EXPECT-FAIL:` declarations for the two
 negative controls.  Lines starting with `INFO` record places where the
 specification contradicts itself or is silent, and where this model therefore

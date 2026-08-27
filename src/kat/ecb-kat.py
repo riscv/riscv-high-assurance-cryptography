@@ -32,10 +32,10 @@ written big-endian.
 Vectors and provenance
 ----------------------
 * FIPS 197 Appendix C.1/C.2/C.3 -- single-block AES-128/192/256.  (Also re-checked
-  inside kat/common.py's self-test; repeated here so this file stands alone.)
+  inside common.py's self-test; repeated here so this file stands alone.)
 * SP 800-38A Appendix F.1.1/F.1.2 (ECB-AES128), F.1.3/F.1.4 (ECB-AES192),
   F.1.5/F.1.6 (ECB-AES256) -- the four-block message.  These twelve output blocks
-  were additionally recomputed with the independent AES in kat/common.py, whose
+  were additionally recomputed with the independent AES in common.py, whose
   own anchor is FIPS 197.
 * SM4 S-box: transcribed from the OpenSSL SM4 reference implementation,
   crypto/sm4/sm4.c, SM4_S[256] (raw.githubusercontent.com/openssl/openssl,

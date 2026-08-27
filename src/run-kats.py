@@ -28,12 +28,17 @@ Two reporting conventions are honoured, in this order of preference.
 import os, re, subprocess, sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-SCRIPTS = sorted(f for f in os.listdir(HERE) if f.endswith('-kat.py'))
+# The harnesses live in the kat/ subdirectory next to this runner; the shared
+# modules they import (common.py, fips203.py, fips204.py, ecc_curves.py) sit
+# beside them, which is what lets each one add its own directory to sys.path.
+KATDIR = os.path.join(HERE, 'kat')
+SCRIPTS = (sorted(f for f in os.listdir(KATDIR) if f.endswith('-kat.py'))
+           if os.path.isdir(KATDIR) else [])
 TIMEOUT = 900
 
 
 def run(script):
-    p = subprocess.run([sys.executable, os.path.join(HERE, script)],
+    p = subprocess.run([sys.executable, os.path.join(KATDIR, script)],
                        capture_output=True, text=True, timeout=TIMEOUT)
     return p.returncode, p.stdout + p.stderr
 
@@ -104,11 +109,11 @@ def verdict(script):
 
 def main():
     if not SCRIPTS:
-        print('no *-kat.py found in ' + HERE, file=sys.stderr)
+        print('no *-kat.py found in ' + KATDIR, file=sys.stderr)
         return 1
     w = max(len(s) for s in SCRIPTS)
     bad, logs = [], {}
-    print(f'running {len(SCRIPTS)} known-answer tests from {HERE}\n')
+    print(f'running {len(SCRIPTS)} known-answer tests from {KATDIR}\n')
     for s in SCRIPTS:
         ok, note, out = verdict(s)
         logs[s] = out
