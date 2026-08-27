@@ -92,6 +92,7 @@ The actual numbers are TBD.
 |      | Load page fault                | {empty}
 |      | Store page fault               | {empty}
 | TBD  | `ace_exc_fatal`          | Fatal system failure in the ACE unit.
+| TBD  | `ace_exc_csk_incomplete`       | Use of the ACE unit while the `macecsk` group is partially written, so that no CSK is active (see <<ACE-CSR-macecsk>>). Not delegable below M-mode: only M-mode can complete the CSK.
 | TBD  | `ace_exc_unsupported`          | Invalid values at provisioning or import.
 | TBD  | `ace_exc_CR_off`               | Any access to a CR whose `*lcrstatus` field is _Off_. Enables on-demand (lazy) CR loading and trap-and-emulate (see <<ACE-CSR-lcrstatus>>).
 | TBD  | `ace_exc_out_of_memory`        | Insufficient CRF memory for configuration instruction. This may be set by privileged code in case it does not handle the CR allocation itself.
@@ -729,9 +730,19 @@ A mechanism for ensuring this is the following:
 * These flags are initially unset.
 * When M-Mode firmware writes to a CSR in the `macecsk` group, the implementation sets the corresponding flag, and keeps a copy of the value written so far. While any of the flags is set, reading any of the registers in this group will return the old value.
 * Once all flags have been set, the values written by M-mode firmware are activated and replace the old values atomically, and the flags are cleared. The new CSK can now be used for cryptographic operations, and reading any of the registers in this group will return the new value.
-* Any mode change to M-mode will reset the flags.
-* Any transition of the hart out of M-mode, and any ACE unit reset, clears the write-tracking flags and discards the partially written value.
-* While any of the flags is set, that is while a CSK is partially written, the ACE unit is not available and any attempt to execute an ACE instruction raises an illegal-instruction exception. Because activation clears the flags, the unit becomes available again as soon as the group has been written in full.
+* Any mode change to M-mode resets the flags and discards the partially written value, so that M-mode always begins a configuration attempt from a clean state and a partial key is never activated.
+* A transition of the hart out of M-mode does *not* clear the flags: a partially written CSK persists, and the ACE unit stays unavailable, until M-mode is next entered.
+* Any ACE unit reset clears the write-tracking flags and discards the partially written value.
+* While any of the flags is set, that is while a CSK is partially written, the ACE unit is not available: any attempt to execute an ACE instruction, or to access an ACE CSR other than those named in <<ACE-CSK-requirements>>, raises ACE exception `ace_exc_csk_incomplete`. Because activation clears the flags, the unit becomes available again as soon as the group has been written in full.
+
+[NOTE]
+====
+The two rules above work together. Because the flags survive leaving M-mode, a CSK write sequence
+that was interrupted before completion is not silently lost: the next ACE access from any mode
+traps with `ace_exc_csk_incomplete` and M-mode learns of it. Because entering M-mode then resets
+the flags, the handler is free to restart the sequence from the first CSR, and no combination of a
+stale partial write and a fresh one can activate a key that M-mode did not intend.
+====
 
 Out of ACE unit reset the CSK is unconfigured, unless it is hardwired or randomly regenerated.
 The ACE unit is unavailable until a CSK is established as described in <<ACE-CSK-requirements>> (immediately, in the case of a fixed or randomly regenerated hardwired CSK).
