@@ -135,8 +135,8 @@ These include:
 . *Provisioning Input*:
 The fields are listed in the order they appear in the PI,
 each with its length.
-The length of the Provisioning Input is understood to be padded at the end to a
-multiple of 128 bits, even when not explicitly mentioned.
+The Provisioning Input is implicitly zero-padded at the end, if necessary, so that its length is a multiple of
+128 bits.
 
 . *Internal State*:
 Information maintained in the internal state of a CC.
@@ -146,8 +146,8 @@ This information is necessary to define the Algorithms and their semantics, and 
 . *Serialized Context*:
 The plaintext of the SCC.
 The fields are listed in the order they appear in an SCC, each with its length.
-The length of the Serialized Context is understood to be padded at the end to a
-multiple of 128 bits, even when not explicitly mentioned.
+The Serialized Context is implicitly zero-padded at the end, if necessary, so that its length is a multiple of
+128 bits.
 --
 
 Algorithm-Specific Functions:::
@@ -172,13 +172,9 @@ The state machine is defined by the following information:
   For `ace.exec`, only one of its Forms (see <<ACE-instruction-exec>>) is _expected_ per state.
   By this it is understood that either the specified Form must be issued, or Form D `ace.exec`
   or Form C `ace.setst` instead, with appropriate setup instructions for the ACEIOBUF.
-  The use of other forms is not allowed, for instance, in OCB's State _Hash_Absorb_Last_Block_
-  a Form B `ace.exec` is expected: if the caller issues Form A in that state, the CR transitions
-  to Error State _Invalid_, as <<ACE-general-rules-for-algorithms>> prescribes for any Form that the current state
-  does not allow. An illegal-instruction exception is raised only where the Form is unavailable to
-  the implementation at all rather than merely wrong for the state — for instance a Form that
-  requires the ACEIOBUF on an implementation without `Zklio`, or a vector Form with the vector
-  extension disabled (<<ACE-usage-input-output>>).
+  The use of other Forms is not allowed, and AGR1 of <<ACE-general-rules-for-algorithms>> gives the
+  consequence. For instance, in OCB's State _Hash_Absorb_Last_Block_ a Form B `ace.exec` is
+  expected; a Form A issued there transitions the CR to Error State _Invalid_.
   Issuing the `ace.input`/`ace.output` instructions is not enforced, as proper
   handling of the ACEIOBUF for inputs and outputs is the responsibility of the caller.
 --
@@ -249,7 +245,14 @@ The following rules apply to all ACE-supported Algorithms, except when explicitl
 
 AGR1: Unallowed instructions in Algorithm States.:::
 
-If a usage instruction that may modify the state of a CR is issued, or a state transition is requested via `ace.setst`, and this is not explicitly allowed by the current state of the Algorithm encoded in the CC in the CR, then the CR transitions to Error State _Invalid_.
+If a usage instruction that may modify the state of a CR is issued, or a state transition is
+requested via `ace.setst`, and this is not explicitly allowed by the current state of the Algorithm
+encoded in the CC in the CR, then the CR transitions to Error State _Invalid_.
+// This covers a
+// `ace.exec` or `ace.setst` issued in a Form that the current state does not allow: issuing it is
+// literally an attempt to manipulate the state of the CR, so the CR shuts down.
+An illegal-instruction exception is raised instead only where the Form is unavailable to the
+implementation at all, rather than merely wrong for the state (<<ACE-usage-input-output>>).
 
 AGR2: Granularity constraints.:::
 If `ACELEN` does not satisfy the granularity constraints of the Algorithm in its current state — for instance, it is not a whole multiple of the block size where the Algorithm requires one — the instruction performs no operation and the CR transitions to Error State _Invalid_.
@@ -991,12 +994,7 @@ The latter may be necessary if the implementation of Subalgorithm _ACE-process-V
 |  iv   | 128           | `tag`          | {empty}
 |   v   | 32            | `start_ctr`    | The initial counter: `start_ctr` = `int(bswap(J0[127:96]))`, the last four bytes of the *initial* `J0` read as a big-endian integer, serialized here as `bin(start_ctr,32)`. If the running counter returns to this value, an error is returned. It is also used to generate the tag mask.
 |  vi   | 16            | `last_blk_len` | {empty}
-|  vii  | 80 or 16      | Padding        | See below.
 |===
-
-The fields preceding the padding total 496, 560, 624 and 688 bits for a 64-bit System Key
-Identifier and for `k` = 128, 192 and 256. The padding is therefore 16, 80, 16 and 80 bits, and
-the Serialized Context is 4, 5, 5 and 6 blocks of 128 bits.
 
 While in state _Set_Aux_Value_, `J0` is replaced by the following fields:
 
@@ -1297,7 +1295,6 @@ Data Structures:::
 |  ii   | `k` or 64     | `key`       | Key value or System Key Identifier
 | iii   | 128           | `J0`        | {empty}
 |  iv   | 32            | `budget`    | Number of blocks this CC is permitted to process, as `bin(budget,32)`. See the State Machine Behavior below.
-|   v   | 32 or 96      | Padding     | {empty}
 |===
 --
 
@@ -1321,13 +1318,7 @@ The `budget` is inserted in `GCM` mode's serialized context after `last_blk_len`
 |===
 |  Pos. | Size (Bits)   | Field          | Description
 | vii   | 32            | `budget`       | Remaining block budget, serialized as `bin(budget,32)`.
-| viii  | 48 or 112     | Padding        | See below.
 |===
-
-The `budget` field lengthens each case by 32 bits, so the fields preceding the padding total 528,
-592, 656 and 720 bits for a System Key Identifier and for `k` = 128, 192 and 256. The padding is
-therefore 112, 48, 112 and 48 bits, and the Serialized Context is 5, 5, 6 and 6 blocks of 128
-bits.
 --
 
 * *States and Allowed Transitions:* {empty}
@@ -1414,12 +1405,7 @@ Data Structures:::
 |    v  |  128            | `SIV`
 |   vi  |  128            | `tmp`
 |  vii  |  16             | `last_blk_len`
-| viii  |  112 or 48      |  Padding, see below
 |===
-
-The fields preceding the padding total 592, 656, 720 and 784 bits for a 64-bit System Key
-Identifier and for `k` = 128, 192 and 256. The padding is therefore 48, 112, 48 and 112 bits, and
-the Serialized Context is 5, 6, 6 and 7 blocks of 128 bits.
 --
 
 //
@@ -1683,13 +1669,7 @@ Data Structures:::
 |    x  |  48         | `index`
 |   xi  |   2         | `tag_len`, encoded as `tag_len`/32 − 2
 |  xii  |   7         | `last_blk_len`
-| xiii  |   7         | Padding
-|  xiv  |  64 or 0    | Padding to a multiple of 128 bits; see below.
 |===
-
-The fields preceding the padding total 896, 960, 1024 and 1088 bits for a 64-bit System Key
-Identifier and for `k` = 128, 192 and 256. The padding is therefore 0, 64, 0 and 64 bits, and the
-Serialized Context is 7, 8, 8 and 9 blocks of 128 bits.
 --
 
 //
@@ -1998,12 +1978,7 @@ Data Structures:::
 |  iii  | `b`           | `hash`
 |   iv  | 32            | `last_blk_len`
 |    v  | 32            | `block_base`
-|   vi  | 0 or 64       | Padding, to reach a multiple of 128 bits
 |===
-
-The fields preceding the padding total 384, 448, 512, and 576 bits for `k` = 64, 128, 192, and
-256. The second and fourth cases need 64 bits of padding, so the Serialized Context is
-3, 4, 4, and 5 blocks of 128 bits, respectively.
 --
 
 //
@@ -2137,7 +2112,6 @@ Data Structures:::
 |    vi|  32                   | Padding           |--
 |   vii | 64                   | `cumul_len`       | Cumulative length of the data absorbed so far. Present only if incorporated into the hash by the Algorithm, or under HMAC (<<ACE-HMAC>>), else absent.
 |  viii | `b`                  | `block`           | Only if `block_base` is defined and the block is stored separately from the `state`.
-| ix | Algorithm-dependent     | Padding           | To reach a multiple of 128 bits.
 |===
 --
 
@@ -2376,7 +2350,6 @@ The PI of the variant with the “Key in PI” (KIP) has the following format:
 |===
 | Pos. | Size (Bits)               | Field
 |  ii  | `b^*^`                    | `K0`, the key already reduced to `b` bits (see below), or 64 bits if a system key or randomly generated.
-| iii  | `(-b^*^) mod 128`, or 64  | Padding, to reach a multiple of 128 bits.
 |===
 
 The key provisioned or held in a CC is the value `K0` as defined in cite:[nist-fips-198-1] {sect}3: the key padded with zeros to `b` bits if it is shorter, or hashed and then padded if it is longer.
@@ -2402,7 +2375,6 @@ Deriving `K0` from the original key is the responsibility of whoever provisions 
 | Pos. | Size (Bits)              | Field
 |  ii  | variable                 | Serialized Content of the underlying hash function, in its entirety, including its own padding to a multiple of 128 bits.
 | iii  | `b^*^` or 64             | `K0`, where `b^*^` = `b` as in the Provisioning Input; 64 bits for a System Key Identifier.
-|  iv  | (-`b^*^`) mod 128, or 64 | Padding, to reach a multiple of 128 bits.
 |===
 --
 
@@ -2521,14 +2493,11 @@ The *Provisioning Input* contains only the MDH.
 | Pos. | Size (Bits)   | Field
 |  ii  | 1600            | `state`
 | iii  | 16              | `block_base`
-|  iv  | 48              | Padding
 |===
 
 `input_base` is not serialized: it is reset at the start of every `ace.exec` and restored from
 `acestart` on resumption (<<ACE-process-VLI>>), so it carries no state across a context switch.
-`last_blk_len` and `cumul_len` are absent because SHA-3 uses neither, and are replaced by padding
-as <<ACE-hash-functions>> prescribes. The Serialized Context is 1792 bits, that is 14 blocks of
-128 bits.
+`last_blk_len` and `cumul_len` are absent because SHA-3 uses neither.
 --
 
 //
@@ -2643,11 +2612,7 @@ does not define how, since cite:[nist-SP-800-185] does not.
 |   v  | `b`         | `cshake_block`
 |  vi  | `b`         | `key_block`
 | vii  | 32          | `L`
-| viii | 96          | Padding
 |===
-
-The Serialized Context totals 1920 + 2`b` bits: 4608 bits, that is 36 blocks of 128 bits, for
-KMAC128 and KMACXOF128, and 4096 bits, that is 32 blocks, for KMAC256 and KMACXOF256.
 --
 
 //
@@ -2746,7 +2711,6 @@ Data Structures:::
 |  vii | 64              | `state`[4]
 | viii | 16              | `last_blk_len`
 |   ix | 16              | `tag_len`
-|    x | 32              | Padding
 |===
 --
 
@@ -2966,7 +2930,6 @@ Data Structures:::
 |  ii  | 128 or 64     | `key`    | Key value or System Key Identifier
 | iii  | 128           | `nonce`  | {empty}
 |  iv  | 32            | `budget` | Number of blocks this CC is permitted to process, as `bin(budget,32)`. See the State Machine Behavior below.
-|   v  | 96 or 32      | Padding  | {empty}
 |===
 --
 
@@ -2989,9 +2952,8 @@ Upon provisioning, `budget` is set to the value carried in the Provisioning Inpu
 * *Serialized Context*: {empty}
 +
 --
-The `budget` is inserted in Ascon-AEAD128's serialized context in place of the final 32-bit
-Padding field (Pos. x of <<ACE-Ascon-AEAD128>>), serialized as `bin(budget,32)`; the total
-length is unchanged.
+The `budget` is appended to Ascon-AEAD128's serialized context, serialized as `bin(budget,32)`.
+It occupies exactly what the implicit padding would have, so the total length is unchanged.
 --
 
 * *States and Allowed Transitions:* {empty}
@@ -3071,12 +3033,7 @@ Data Structures:::
 | viii  | 64            | `state`[4]
 |   ix  | 16            | `last_blk_len`
 |    x  | 16            | `tag_len`
-|   xi  | 32 or 96      | Padding, see below
 |===
-
-The fields preceding the padding total 736 bits when `K1` and `K2` are both given by value, and
-544 bits when a System Key Identifier replaces them. The padding is therefore 32 and 96 bits, and
-the Serialized Context is 6 and 5 blocks of 128 bits.
 --
 
 The Algorithm has the same states as Ascon-AEAD128, as described in
@@ -3365,12 +3322,9 @@ Every term is in bytes. If _ImpDataLen_ is non-zero, the Implementation Variable
 Data Section follows these fields, beginning with the Implementation Qualifier `IMPQUAL`,
 as in <<ACE-SCC>>.
 
-A final padding field of `(-SCC_content_size()) mod 128` bits is appended, so that the section
-reaches a multiple of 128 bits as <<ACE-data-formats>> requires; since `SCC_content_size()` is
-never itself a multiple of 128 for any curve architected here, this equals
-`128 - (SCC_content_size() mod 128)`. The formula is less direct than for the symmetric
-Algorithms because four of the fields are optional, but the length remains derivable from the MDH
-alone: their presence is given by `HasSecondPt`, `HasSignature`, `HasHash` and `HasRndNum`, which
+The implicit padding is `(-SCC_content_size()) mod 128` bits, and is never zero for any curve
+architected here. Determining it is less direct than for the symmetric Algorithms because four of
+the fields are optional, but the length remains derivable from the MDH alone: their presence is given by `HasSecondPt`, `HasSignature`, `HasHash` and `HasRndNum`, which
 are the four bits of _StateExtension_ (<<ACE-ECC-StateExtension>>), and _StateExtension_ is one of
 the fields <<ACE-length-rule>> admits.
 
@@ -3675,7 +3629,6 @@ derived from the seed, or cached in the Additional Data Section.
 |    x  | 2040         | `ctx`
 |   xi  | 8            | `msg_pass`
 |  xii  | `b`          | `r`
-| xiii  | Variable     | Padding, to reach a multiple of 128 bits
 |===
 
 `r` is present unconditionally, and holds zero whenever no signing operation is in progress.
@@ -3863,7 +3816,8 @@ for ML-KEM-512/768/1024 | Field
 |  iv   | 256                   | `sharedkey`
 |===
 
-For the three subtypes, the sizes of the Serialized Context are 2448, 3536, and 4784 bytes, i.e., 153, 221, and 299 128-bit blocks.
+These contexts are large: for ML-KEM-512, ML-KEM-768 and ML-KEM-1024 the Serialized Context is
+2448, 3536 and 4784 bytes, that is 153, 221 and 299 blocks of 128 bits, the MDH included.
 --
 
 ////
@@ -4077,15 +4031,11 @@ for ML-DSA-44/65/87 | Field
 |  vi   | 2040                             | `ctx`
 |  vii  | 512                              | `mu`
 |  viii | 256                              | `rnd`
-|   ix  | 96 / 24 / 104                    | Padding, to reach a multiple of 128 bits
 |===
 
-The fields preceding the padding total 53280 / 77288 / 99864 bits, none of which is a
-multiple of 128, so the padding row is required by <<ACE-data-formats>>. With it the
-Serialized Context is 53376 / 77312 / 99968 bits, that is 6672 / 9664 / 12496 bytes, or
-417 / 604 / 781 blocks of 128 bits. The unusual padding widths follow from `ctxlen`, which
-is a single byte, and from the signature sizes of cite:[nist-fips-204], which are
-2420 / 3309 / 4627 bytes and therefore not multiples of 16.
+These contexts are large: for ML-DSA-44, ML-DSA-65 and ML-DSA-87 the Serialized Context is
+6672, 9664 and 12496 bytes, that is 417, 604 and 781 blocks of 128 bits, the MDH and the implicit
+padding included.
 
 Apart from `HasPrivKey` and `HasPubKey` (which are stored in _StateExtension_)
 the ML-DSA Algorithms do not carry state information as to whether `signature`,
