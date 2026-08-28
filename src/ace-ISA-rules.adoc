@@ -46,6 +46,14 @@ their consolidated wording is worth consulting. Their landing places are:
 R2 is complete. Where an operand's width made the pair or quartet implicit, the description now
 names it — “the GPR pair `X[s+1] @ Xs`” — so that `GR2` applies without being restated.
 
+*A second pass.* R23 and above were distilled from the text as it stood after R1–R22 had been
+applied, and are mostly of a different kind. R1–R22 gathered one sentence repeated across many
+Algorithms. These gather a *block* repeated between two descriptions that are duals of one
+another — `ace.load` and `ace.store`, `ace.input` and `ace.output`, `ace.getmd*` and
+`ace.restrict*`, the three `*lcrstatus` registers, the three `ACES` fields. Each such pair was
+written by copying one description and editing the direction, and that is how several of the
+divergences recorded below came about.
+
 // ////////////////////////////////////////////////////////////////////
 
 [[ACE-rules-instructions]]
@@ -100,6 +108,192 @@ management operation then writes the CR's number to `acemanagedcr`; one that *co
 <<ACE-instruction-manage>>. Applying it also resolved a divergence: four lists ended with
 “`acestart` is cleared” and the fifth with “`acestart` is set to 0”. The complete-provisioning
 list, left with one step, became a sentence.
+
+[[ACE-rule-cr-transfer]]
+==== R23. The CR transfer model, once for `ace.load` and `ace.store`
+
+`ace.load` and `ace.store` move the serialized image of a CR that follows the MDH, in the two
+directions. The implementation obtains the payload length `size` from the first 8 bytes of the MDH:
+_ConfigStatus_ identifies the payload as a PI or an SCC, and the fields of <<ACE-length-rule>> give
+its length. `size` excludes the MDH but, for an SCC, includes the SIV and, where present, SIV2 and
+IMPQUAL. Either instruction may move more than XLEN bits. `acestart` is a byte offset into that
+payload — the MDH bytes software transfers on its own are not counted in it — it is always a
+multiple of 16, and an implementation may halt a transfer only at a 16-byte boundary. The transfer
+index advances the memory address and the offset within the image together, beginning at the current
+`acestart`, so a resumption re-transfers no byte and displaces no part of the remainder.
+
+*Replaces:* in `ace.load` and in `ace.store` alike, the three sentences that determine `size`, the
+“larger than the effective XLEN” sentence, the sentences on 16-byte chunking, the sentence on
+16-byte halting, the paragraph on advancing both offsets together, and the remark that the opening
+`ace.mgmt` left `acestart` at zero — which the lead-in of <<ACE-instruction-manage>> already states
+under R5.
+
+Each instruction keeps what is its own: for `ace.load`, that `%offset(Xs1)` addresses the first byte
+*after* the MDH and that a system-defined format makes its semantics implementation-dependent; for
+`ace.store`, the *Bound.* paragraph, its NOTE, and the requirement to read the MDH out with
+`ace.getmd*` beforehand.
+
+Two things to settle when it is applied. Each of the two instructions states the 16-byte fact twice,
+once as “`acestart` … is a multiple of 16, in other words … in 16-byte chunks” and once as
+“implementations may halt only at 16-byte multiples”; the rule states it once, as a property of
+`acestart` and a constraint on halting. And the sentence raising `ace_exc_complete_cr_data_access`,
+which `ace.load`, `ace.store` and `ace.mv` each carry, is already stated with its full instruction
+list in <<ACE-error-architecture>> and again in the footnote of <<ACE-instruction-properties>>;
+whether the three local copies go is a judgement call, since each is a complete
+condition-and-consequence pair rather than a dangling condition.
+
+The rule needs a normative home. <<ACE-management-operations>>, which precedes the two instructions
+and would be the natural place, is marked informative, so either it grows a normative subsection or
+the rule goes into <<ACE-length-rule>>, which already owns the length half of it.
+
+[[ACE-rule-iobuf-window]]
+==== R24. The ACEIOBUF window transfer, once for `ace.input` and `ace.output`
+
+`ace.input` and `ace.output` transfer the bytes of the ACEIOBUF window in the two directions: for
+each `j` from `acestart` to min(`Xl`, `aceiobuftop`) − 1, byte `j` of the ACEIOBUF is exchanged with
+the byte at memory address `%offset(Xs)` + `j`. Bytes below `acestart`, and bytes at or beyond
+min(`Xl`, `aceiobuftop`), are not accessed on either side. Upon successful completion `acestart` is
+set to 0. If `Xl` = 0, or `acestart` {ge} min(`Xl`, `aceiobuftop`), the window is empty: nothing is
+transferred, and `acestart` is still set to 0, exactly as it would be had the transfer run to the
+end of the window (<<ACE-CSR-acestart>>). If `Xl` is greater than `aceiobuftop`, only the bytes of
+the window are transferred, which software can detect by comparing `Xl` with `aceiobuftop`. Either
+instruction may be used only while the ACEIOBUF is enabled and `aceiobuflen` is nonzero; otherwise
+ACE exception `ace_exc_unconfigured_buffer` is raised.
+
+*Replaces:* nine consecutive lines of `ace.input` and the same nine lines of `ace.output`, which
+differ only in the direction of the copy and in the name of the instruction. This is the largest
+verbatim duplication left in Book 1.
+
+Each description then keeps one sentence: `ace.input` its opening, that inputs may be read from
+memory when the vector registers are too short or absent, and `ace.output` that it is the
+corresponding output operation. The non-normative reason for setting `acestart` to 0 on an empty
+window — that leaving it unchanged would make a resumption loop retrying on an empty window fail to
+terminate — is worth keeping, and is currently given twice.
+
+The rule belongs with the window model that <<ACE-CSR-aceiobuftop>> already defines, or in a lead-in
+shared by the two instructions.
+
+[[ACE-rule-mv-variants]]
+==== R25. The four `ace.mv` variants in one table
+
+The four variants of `ace.mv` differ in four values — the `Form` field, the sub-opcode in the
+register field that Form leaves unused, the direction of the copy, and the admissible
+_ConfigStatus_ — and in nothing else. They become a table with those four columns, preceded by the
+three statements they share: a variant is valid only when _ConfigStatus_ has the value its row
+gives, and raises an illegal-instruction exception otherwise; a vector variant requires
+`vl` {times} (`SEW`/8) to be a multiple of 16, and transitions the CR to Error State _Invalid_ if it
+is not; and a vector variant raises an illegal-instruction exception when V is not enabled.
+`acestart` advances by the number of bytes transferred, 16 in a scalar variant and
+`vl` {times} (`SEW`/8) in a vector one.
+
+*Replaces:* the four RV64 bullets and the four RV32 bullets of <<ACE-move>>. Two of the RV32 bullets
+say only “No changes”, and the other two write out the quartet layout that `GR2` and R26 supply.
+
+This is the R4 pattern rather than the R14 one: the table sits in the section whose text it
+replaces, so nothing sends the reader elsewhere. A reader of `ace.mv` must currently compare four
+nearly identical bullets to see what distinguishes the variants, which is what a table shows at a
+glance.
+
+[[ACE-rule-pair-layout]]
+==== R26. The layout of a GPR pair or quartet operand
+
+`GR2` gains a second sentence: a 64-bit operand held in a GPR pair `Xs` is `X[s+1] @ X[s]`, and a
+128-bit operand held in a GPR quartet is `X[s+3] @ X[s+2] @ X[s+1] @ X[s]`; the same layout applies
+whether the operand is a source or a destination.
+
+*Replaces:* the RV32 bullets of `ace.mv`, the two RV32 bullets of `ace.getmd*`, the Form B item of
+`ace.mgmt`, the RV32 Form B bullet of `ace.size`, and the corresponding clause of `ace.setst`, each
+of which writes the concatenation out in full.
+
+One clause must survive the deletion: the RV32 bullets of `ace.getmd*` also require the copies to be
+*atomic*, which `GR2` does not say and which is a property of that instruction rather than of the
+layout.
+
+[[ACE-rule-h-v-bits]]
+==== R27. The `h` and `v` selector bits
+
+`ace.getmd*` and `ace.restrict*` share an encoding shape and are distinguished only by `func2`.
+Bit 28, `h`, selects between the two GPR variants: `h` = 0 is the variant whose mnemonic ends in
+`l`, which names bits [63:0] of the MDH, and `h` = 1 the other one. Bit 29, `v`, selects the operand
+class: `v` = 0 a GPR, a GPR pair on RV32, and `v` = 1 the lowest 128 bits of a vector register or
+group, which carries the whole MDH. A vector operand therefore requires `h` = 0, and the combination
+`v` = `h` = 1 is an illegal instruction.
+
+*Replaces:* four sentences in the _Encoding_ of <<ACE-instruction-getmd>> and four in the _Encoding_
+of <<ACE-instruction-restrict>>.
+
+The rule cannot say that `h` = 1 selects bits [127:64], although both encodings read as though it
+did: `ace.restricth` writes bits [127:64] only, while `ace.getmd` reads the *whole* 128-bit MDH into
+a GPR pair, `ace.getmdl` being the one that reads bits [63:0]. Each instruction therefore keeps one
+line saying what its `h` = 1 variant names. The asymmetry follows from the direction — `ace.restrictv`
+already writes the whole MDH at once, so no wide GPR write is needed — and is not a defect, but it
+is why the shared rule has to be phrased in terms of the mnemonics.
+
+[[ACE-rule-resumability-pointer]]
+==== R28. “Note that the rules in <<ACE-resumability>> apply.”
+
+Delete the sentence. <<ACE-resumability>> already opens its *Resumable instructions* item with the
+list of the instructions it governs — `ace.exec`, `ace.derive`, `ace.load`, `ace.store`,
+`ace.input`, `ace.output` — and that list is exactly the set of six descriptions that carry the
+pointer.
+
+*Replaces:* six occurrences, one each in `ace.load`, `ace.store`, `ace.exec`, `ace.derive`,
+`ace.input` and `ace.output`.
+
+Nothing is left in their place and nothing is lost that was not already stated elsewhere, so this is
+the one rule in the chapter that is a pure deletion. It also removes a maintenance hazard: the
+pointer and the list are two records of the same membership, and a seventh resumable instruction
+would have to be entered in both.
+
+[[ACE-rule-size-return]]
+==== R29. What `ace.size` returns, stated once
+
+`ace.size` returns in `Xd` the size in bytes of the memory buffer needed to hold the exported SCC or
+the partially configured PI: for an SCC the figure includes the authentication tag or tags and the
+additional variable-length data, and for a PI it is the size of the whole PI. It returns 0 when the
+CC is unconfigured, when the _Algorithm_, _AlgorithmPolicy_ or _SCProtection_ of the supplied MDH is
+unsupported, or when the MDH is otherwise malformed. The three Forms then differ only in where the
+MDH comes from: the CR named by `Ks` or `K{Xs}`, bits [63:0] of the MDH in a GPR, or the whole MDH
+in a vector register.
+
+*Replaces:* the repetition inside <<ACE-instruction-size>> itself, where the “size of the memory
+buffer … in the first case … in the second case” passage appears three times and the zero return
+twice, and once more in the closing paragraph.
+
+This one is contained in a single section, so it costs the reader nothing at all: four bullets
+become one statement and a three-line list of where each Form takes its MDH. The closing paragraph
+on the return of 32, which is not an error indication, stays as it is.
+
+[[ACE-rule-mgmt-forms]]
+==== R30. The Form encodings of `ace.mgmt` follow from those of `ace.setst`
+
+`ace.mgmt` already states that its encoding “is identical to that of `ace.setst` except for the most
+significant bit of `funct3`, which is set to `1`”. Its own three-item list of Form encodings
+therefore follows from `ace.setst`'s and can go.
+
+*Replaces:* the “The encodings of the three Forms are” list of <<ACE-instruction-manage>>.
+
+The Form *meanings* are not shared and stay where they are: `ace.setst`'s three Forms differ in how
+the auxiliary input is passed, `ace.mgmt`'s in how the MDH is passed. Only the `funct3` values are
+mechanical.
+
+[[ACE-rule-vector-mdh]]
+==== R31. A 128-bit MDH carried in a vector operand
+
+Where a Form of an ACE instruction carries the whole 128-bit MDH in a vector register or group, that
+operand must satisfy `VL` {times} `SEW` {ge} 128; otherwise an illegal-instruction exception is
+raised. This is the requirement that <<ACE-extensions-overview-unpriv>> records as one of `Zvl128b`,
+`Zvl256b`, `Zvl512b` or `Zvl1024b`.
+
+*Replaces:* the requirement as stated at `ace.getmdv`, at Form C of `ace.size`, and in the mnemonic
+list of `ace.size`; and it supplies the requirement where it is missing, at Form C of `ace.mgmt`, at
+`ace.restrictv`, and at the vector variants of `ace.mv`.
+
+This is a divergence rather than plain repetition. `ace.getmdv` states the bound and the exception;
+`ace.size` states the bound in its mnemonic list and names the four `Zvl` extensions in its
+description; Form C of `ace.mgmt` says only that “the MDH is in the 128 lowest bits of `Vs`” and
+says nothing about a short vector. Stating it once decides the open case rather than restating the
+settled ones.
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -192,6 +386,91 @@ One sentence was kept although it matched the search: “Their values out of ACE
 the version of the ACE unit. Software cannot modify these values”, in <<ACE-CSR-impl-ids>>. It
 states what those values *mean* and that they are read-only, not what they are, so the reset
 sections do not cover it.
+
+[[ACE-rule-warl-clamp]]
+==== R32. Clamping WARL CSRs
+
+Writing to an ACE CSR that has an upper bound a value larger than that bound sets the CSR to the
+bound. Software must therefore read such a CSR back after writing it.
+
+*Replaces:* the three-sentence WARL paragraph of <<ACE-CSR-aceiobuflen>>, whose bound is
+`acemaxiobuflen`, and the three-sentence WARL paragraph of <<ACE-CSR-aceiobuftop>>, whose bound is
+`aceiobuflen`. Each description keeps one clause naming its own bound.
+
+`aceiobuflen` also states twice, once in its own text and once in the NOTE that follows it, that
+context-switching code must save and restore the ACEIOBUF up to `aceiobuflen`. The normative
+sentence stays; the NOTE keeps only its recommendation, that software set `aceiobuflen` to zero once
+the buffer is no longer needed.
+
+[[ACE-rule-aces-fields]]
+==== R33. The `ACES` field, once for the `*status` registers
+
+An `ACES` field occupies bits [26:25] of `mstatus` and, where the H extension is implemented, of
+`vsstatus`, and is defined analogously to `FS` and `VS`. It tracks the dirtiness of the CRs, of the
+ACEIOBUF and of every ACE-specific CSR. For each of them: any ACE instruction, including an access
+to an ACE CSR, raises an illegal-instruction exception if a field in effect at the current privilege
+mode is Off; where none is Off, an instruction that modifies ACE state sets every field in effect to
+Dirty; an implementation may set a field to Dirty from Initial or Clean at any time, even with no
+state change; while a field is Dirty the `SD` bit of its own register is 1, and otherwise `SD` is
+set in accordance with the existing specifications; and where `misa.L` is writable the field may be
+present even when `misa.L` is clear. A write to an `ACES` field modifies no ACE state.
+
+The fields in effect at each privilege mode are then given by one table.
+
+*Replaces:* the shared half of <<ACE-ACES-field-in-mstatus>> and <<ACE-ACES-field-VS>>, which state
+the Dirty-setting rule, the may-set-Dirty-at-any-time rule, the `SD` rule and the writable-`misa.L`
+rule twice each.
+
+This is the R8 pattern applied to a second family, and each register keeps what is peculiar to it:
+that `vsstatus.ACES` is not itself ACE context state, so writing it does not set `mstatus.ACES` to
+Dirty; and that when V=1 both `vsstatus.ACES` and `mstatus.ACES` are in effect.
+
+One divergence has to be resolved first, and it is a substantive one rather than a wording
+difference. <<ACE-ACES-field-in-mstatus>> says flatly that an instruction modifying ACE state sets
+`mstatus.ACES` to Dirty when the field is Initial or Clean; <<ACE-ACES-field-VS>> guards the same
+statement with “If neither field is Off”. The wording above follows the second, since an instruction
+issued while a field is Off raises an exception and modifies nothing, but the two texts should be
+compared before the rule is adopted.
+
+[[ACE-rule-lcrstatus]]
+==== R34. The three `*lcrstatus` registers, described once
+
+`mlcrstatus`, `slcrstatus` and `vslcrstatus` have the same two-bit-per-CR layout and the same
+encoding. For each of them, at the privilege modes at which it is in effect: an ACE instruction that
+uses ``K(``__i__``)`` raises `ace_exc_CR_off` when the __i__-th field of *any* register in effect is
+Off; an instruction that modifies ``K(``__i__``)`` sets the __i__-th field of every register in
+effect to Dirty; and a direct write to one register's field changes neither of the other two. The
+privilege modes at which each register is in effect, the registers in effect with it, and the
+`*status` fields in effect with it, are given by one table.
+
+*Replaces:* the three `For` items of <<ACE-CSR-lcrstatus>>, which state the same three rules with
+only the register lists varying, including the sentence “Any direct write to … does not change
+either … or … (if defined)”, which appears three times.
+
+`vslcrstatus` keeps its two peculiar sentences: that it exists only when the H extension is
+implemented, and that when V=1 it substitutes for `slcrstatus` in CSR accesses, analogously to
+`vsstatus` and `sstatus`.
+
+The register sets are nested — `mlcrstatus` alone, then with `slcrstatus`, then with `vslcrstatus` —
+so the table has one row per register and one column per set, which is how the three subsections
+already read; nothing is moved away from the reader of any one of them.
+
+[[ACE-rule-priv-config-table]]
+==== R35. The privilege-configuration requirements in one table
+
+The four bullet lists of <<ACE-priv-extensions>> — for an M-mode-only hart, an M+U system, an M+S+U
+system, and an M+S+U system with the H extension — state the same requirements with different
+values. They become one table with a row per system configuration and a column per extension:
+`Smacecrstatus`, `Smacecsk`, `Smacelclt`, `Smacepbootscrt` and `Smacevbootscrt`.
+
+*Replaces:* the four lists, seventeen bullets in all, of which “`Smacecsk` is allowed” appears four
+times verbatim and “If `Smacepbootscrt` is implemented, the `macephysbootscrt` CSR group is
+implemented to set the Physical Boot Secret Locality” four times verbatim.
+
+A reader of this section is choosing a configuration and asking what it requires, which is what a
+row gives; the comparison across configurations, which the bullet lists make the reader assemble by
+hand, is what the table adds. This is therefore not the case R14 warns against, where a value
+belonging to one Algorithm would have to be looked up in a section about all of them.
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -327,9 +606,22 @@ A state whose purpose is to verify a tag, a MAC or a signature transitions to _S
 value matches and to _Failure_ when it does not. Neither outcome is an error: no exception is
 raised, the CR is not invalidated, and the Algorithm has performed as specified.
 
-*Replaces:* eight restatements, in GCM, GCM-SIV, OCB, CMAC, Ascon-AEAD128, <<ACE-ECC>>,
-<<ACE-EdDSA>> and <<ACE-PQC-ML-DSA>>. The final sentence is already stated once, under *Algorithmic
-Errors* in <<ACE-error-architecture>>.
+It would have replaced eight restatements, in GCM, GCM-SIV, OCB, CMAC, Ascon-AEAD128, <<ACE-ECC>>,
+<<ACE-EdDSA>> and <<ACE-PQC-ML-DSA>>; the final sentence is in any case already stated once, under
+*Algorithmic Errors* in <<ACE-error-architecture>>.
+
+*Discarded.* Two reasons, and the second is the one that decides it.
+
+The eight sites are each a clause in the middle of a state description, giving a *consequence*
+alongside the condition that produces it. Replacing them with a pointer is the R11 case, and each
+Algorithm keeps its outcomes where a reader of that Algorithm will read them.
+
+More fundamentally, this is a rule about how an Algorithm is *designed* — that verification is
+modelled as a transition to _Success_ or _Failure_ rather than as an error — and the behaviour
+follows from the design. It is not a rule about what the architecture does when an Algorithm runs,
+which is what the `AGR` set states. The distinction is the same one that disqualified R19, seen from
+the other side: R19 bound the caller instead of the architecture, and this binds the specification of
+the Algorithms instead of their execution.
 
 [[ACE-rule-derived-fields]]
 ==== R16. Derived fields are recomputed on import
@@ -525,6 +817,47 @@ the three ML-DSA ones. ML-DSA's figures had gone with its padding paragraph and 
 other Algorithm states its size, since for the rest the field table is short enough to add up and
 `ace.size` answers the question at run time.
 
+[[ACE-rule-granularity-once]]
+==== R36. The granularity constraint is stated once per Algorithm
+
+An Algorithm states its granularity constraint in the `Granularity:` item of its *Parameters* list
+and nowhere else. `AGR2` gives the consequence of violating it.
+
+*Replaces:* the clause “For this Algorithm, `ACELEN` must be an integer multiple of `b`” appended to
+the block-size item of six Algorithms — <<ACE-tweakable>>, <<ACE-GCM-mode>>, <<ACE-GCM-SIV-mode>>,
+<<ACE-OCB-mode>>, <<ACE-Ascon-AEAD128>> and <<ACE-Ascon-Hash256>>.
+
+Three of the six say the same thing twice within the same list, in the block-size item and again in
+the `Granularity:` item two lines below. The other three — GCM-SIV, OCB and Ascon-Hash256 — have no
+`Granularity:` item at all, so applying the rule means adding one to each. That is the point of the
+rule rather than a cost of it: the granularity of an Algorithm is then always in the same place, and
+`AGR2`, which speaks of “the granularity constraints of the Algorithm in its current state”, has
+something to point at in every Algorithm.
+
+Two smaller divergences go with it. <<ACE-tweakable>> writes its `Granularity:` item as a sentence,
+“`ACELEN` must be a multiple of `b` (including `b`)”, where the others give a value; and
+<<ACE-CMAC-mode>> writes “Granularity = `b`.” where every other Algorithm writes “Granularity: …”.
+
+[[ACE-rule-shared-functions]]
+==== R37. Functions shared by several Algorithms are defined once
+
+The functions used by more than one Algorithm — the block-cipher primitives `enc_blk` and `dec_blk`
+above all — are defined once, with the other material common to the Algorithm descriptions. An
+*Algorithm-Specific Functions* list then holds only what is specific to its Algorithm, which is what
+its title promises.
+
+*Replaces:* six definitions of `enc_blk`, in <<ACE-ECB-mode>>, <<ACE-XEX-XTS-modes>>,
+<<ACE-GCM-mode>>, <<ACE-GCM-SIV-mode>>, <<ACE-OCB-mode>> and <<ACE-CMAC-mode>>, and three of
+`dec_blk`, in the first, second and fifth of those.
+
+The nine differ only in wording — “encrypts plaintext block `p`” against “encrypts block `p`”, `K`
+against `key` for the parameter — which is the argument for single-sourcing them: they carry no
+information that the name does not, and a reader who has reached the third Algorithm has read the
+definition twice already. `double` shows the shape the rest should take. It is defined in
+<<ACE-OCB-mode>> and <<ACE-CMAC-mode>> merely refers to it, which is right for a function that two
+Algorithms share but would be the R11 mistake for one that six use, since there the definition can
+simply move rather than leave a pointer behind.
+
 [[ACE-rules-unverified]]
 === Candidate Rules Requiring Per-Site Verification
 
@@ -560,11 +893,43 @@ site that may not conform, so none may be adopted before the sites are checked.
 +
 The author's ruling is that a Form the current state does not allow transitions the CR to Error
 State _Invalid_, because issuing it is literally an attempt to manipulate the state of the CR, so
-the CR shuts down. All three said that already. `AGR1` now says it in those terms and names the
-availability exception, and the statement in the definition of an Algorithm, which had restated
-both, keeps only its OCB example and defers to `AGR1` for the consequence. The note in
+the CR shuts down. All three said that already. `AGR1` was given a sentence saying it in those terms
+together with the availability exception, and the statement in the definition of an Algorithm, which
+had restated both, keeps only its OCB example and defers to `AGR1` for the consequence. The note in
 <<ACE-usage-input-output>> is unchanged: it sits where the exceptions are described, and a
 consequence belongs with its condition.
+
+What `AGR1` states of the Form case is the rule and not the reason for it: “This covers a `ace.exec`
+or `ace.setst` issued in a Form that the current state does not allow”, with the clause explaining
+why — that issuing it is literally an attempt to manipulate the state of the CR, so the CR shuts
+down — commented out. The three sites therefore stand as intended: the consequence is in the general
+rule, the definition of an Algorithm defers to it and keeps its OCB example, and the note in
+<<ACE-usage-input-output>> keeps the availability case beside the exceptions it belongs with.
+
+[[ACE-rules-not-proposed]]
+=== Patterns Considered and Not Proposed
+
+The second pass also turned up repetitions that should be left alone. They are recorded so that a
+later pass need not re-derive the reasons.
+
+. *The instruction-format sentence.* “`ace.load` is an I-type instruction”, and its seven
+  counterparts, could become a column of <<ACE-instruction-properties>>. They should not: each sits
+  immediately above the encoding diagram it describes, which is where a reader looking for the
+  format already is, and the table is in another subsection. This is R14's case.
+
+. *“The *Provisioning Input* contains only the MDH.”* Five occurrences, one clause each, and
+  <<ACE-MDH-in-all-algorithms>> arguably implies it. Deleting it would leave the *Provisioning
+  Input* item of those five Algorithms empty, and the reader would have to infer the emptiness from
+  a rule elsewhere instead of reading it. This is R11's case.
+
+. *`SCC_Encrypt` and `SCC_Decrypt`.* The two pseudocode functions of <<ACE-SCC-AEAD>> share their
+  length check, their key derivation and their keystream loop. They are inverse operations, and
+  pseudocode that a reader checks line by line against cite:[RFC8452] must be readable end to end;
+  neither should be written as a delta on the other.
+
+. *“In State _X_, (multi-block) `ace.exec` instructions are expected to be of Form A.”* Nine
+  occurrences, with the state and the Form varying. This is per-state data, not a repeated rule, and
+  `AGR4` already governs the part of it that is general.
 
 [[ACE-rules-effect]]
 === Estimated Effect
@@ -576,3 +941,14 @@ class of divergence rather than an instance of it.
 
 The largest single item is R1, at about 216 lines, and it is also the safest: the blocks it removes
 are already declared subordinate to the matrix that would replace them.
+
+R23–R37 remove on the order of 150 further lines and add three tables — the `ace.mv` variants, the
+three `*lcrstatus` registers, and the privilege configurations of Book 3 — each of them in the
+section whose text it replaces. Their largest single items are R24, nine lines duplicated exactly
+between `ace.input` and `ace.output`, and R35, seventeen bullets in four lists. R28 is the cheapest
+to apply and the only pure deletion in the chapter. Four of them close a divergence rather than a
+repetition and are worth applying for that alone: R31, where three descriptions state a vector
+length bound and three others that need it do not; R33, where the `mstatus` and `vsstatus` texts
+disagree on whether an Off field suppresses the transition to Dirty; R36, where three Algorithms
+constrain `ACELEN` in a place no general rule points at; and R23, where each of two instructions
+states the same 16-byte property twice in different words.
