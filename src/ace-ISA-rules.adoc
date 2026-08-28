@@ -17,7 +17,7 @@ A rule is listed under <<ACE-rules-unverified>> instead of below when the sites 
 adopting one of them silently changes behaviour wherever a site differs.
 
 *Rules already applied.* R1, R2 and R4 are no longer listed in this chapter, which is why the
-numbering has gaps. R3, R5, R7, R8, R9, R10, R13, R18 and R20 are kept below, each with a *Status* paragraph, because
+numbering has gaps. R3, R5, R7, R8, R9, R10, R13, R16, R17, R18 and R20 are kept below, each with a *Status* paragraph, because
 their consolidated wording is worth consulting. Their landing places are:
 
 [%autowidth,float="center",align="center",cols="^,<,<",options="header"]
@@ -32,9 +32,11 @@ their consolidated wording is worth consulting. Their landing places are:
 | R7 | RV32 high shadows | one sentence after each CSR table, in <<ACE-CSR-unpriv>> and in Book 3
 | R8 | Locality Secret CSR groups | <<ACE-CSR-locality-groups>> and <<ACE-locality-csr-groups>>
 | R9 | Reset values | <<ACE-out-of-reset-unpriv>> and <<ACE-out-of-reset-priv>>
-| R10 | Block iteration | `AGR3` in the general rules for Algorithms
-| R13 | `ace.exec` in State _Ready_ | `AGR4` in the general rules for Algorithms
-| R18 | Progress of a long-running operation | `AGR5` in the general rules for Algorithms
+| R10 | Block iteration | `AGR4` in the general rules for Algorithms
+| R13 | `ace.exec` in State _Ready_ | `AGR3` in the general rules for Algorithms
+| R16 | Derived fields recomputed on import | `AGR5` in the general rules for Algorithms
+| R17 | Loading and emitting a long field | `AGR8` in the general rules for Algorithms
+| R18 | Progress of a long-running operation | `AGR7` in the general rules for Algorithms
 | R20 | The MDH is not listed | the section on data structures common to all Algorithms
 |===
 
@@ -217,13 +219,13 @@ giving the count as `ACELEN`/`b`. GCM's _Decrypt_ sentence also mixed the two no
 “each 128-bit block of `INPUT` into the corresponding `b`-bit block of `OUTPUT`”.
 
 Each of the states that lost the sentence now carries the marker “(multi-block)” before the Form it
-expects, so that `AGR3` is visibly the thing that governs it. There are 18 such states: the 17 from
+expects, so that `AGR4` is visibly the thing that governs it. There are 18 such states: the 17 from
 which text was removed, plus State _Encrypt_/_Decrypt_ of the generic tweakable block cipher, which
 iterates by its Parameters but never carried the sentence.
 
 The states left unmarked divide cleanly: either they process exactly one block, or they iterate by a
 different mechanism — Subalgorithm `process_VLI`, the output-squeeze loop of the generic hash and
-MAC section, or the long-field transfer counter of R17. `AGR3` governs none of those.
+MAC section, or the long-field transfer counter of R17. `AGR4` governs none of those.
 
 One sentence of the same shape was kept: <<ACE-Ascon-Hash256>>'s _Hash_Finalize_ writes successive
 64-bit fields of `OUTPUT` and restarts at `OUTPUT`[63:0] when a further `ace.exec` is issued. That
@@ -270,7 +272,7 @@ _Invalid_, as <<ACE-general-rules-for-algorithms>> prescribes for any instructio
 
 *Replaces:* the per-Algorithm restatements.
 
-*Status: applied.* Eleven restatements removed, not the nine first counted, and the rule is `AGR4`.
+*Status: applied.* Eleven restatements removed, not the nine first counted, and the rule is `AGR3`.
 It is worded “unless the Algorithm explicitly allows it”, so it is a default rather than an
 absolute; the _Ready_ row of the valid-states table in Book 1 was softened to match, since it
 previously said flatly that no `ace.exec` may be executed in that state.
@@ -329,8 +331,27 @@ A field that an Algorithm derives from other fields of the same CC is not carrie
 Context. It is recomputed when the import completes, that is by the `ace.mgmt` with
 `#ace_CR_management_end`, and likewise when the value it derives from is set or replaced.
 
-*Replaces:* five restatements — GCM's `auth_key`, GCM-SIV's `enc_key` and `auth_key`, OCB's `L$` and
-`L[i]`, ML-DSA's `tr`, and the clamped scalar, `prefix` and public key of <<ACE-EdDSA>>.
+*Replaces:* the intra-Algorithm duplication of the statement, and the timing clause in the
+behaviour bullets that state each derivation.
+
+*Status: applied.* The rule is `AGR5`. The case for it was not the number of sites but that three
+Algorithms stated it *twice each*, hundreds of lines apart: GCM and GCM-SIV in a Data Structures
+NOTE and again in a behaviour bullet, OCB in a table cell and again in a behaviour paragraph. The
+two NOTEs are gone — GCM's keeps its unrelated first sentence, about the AD and plaintext lengths
+being the caller's business — and the two behaviour bullets shed the timing that `AGR5` now supplies,
+keeping the formula, which is the part worth having in place:
+
+`{fournbsp}` `** \`auth_key\` is a derived field (AGR5): \`auth_key <- enc_blk(key, zeros(128))\`.`
+
+Four sites were deliberately left alone, because each says something `AGR5` does not. OCB's
+paragraph gives an implementation trade-off — cache the `L` values in the Additional Data Section or
+recompute them, the latter likely faster. ML-DSA's derivation of `tr` is conditional on `HasPrivKey`
+and comes with the argument that a verification-only CC is functional immediately after import.
+EdDSA's says the clamped scalar, `prefix` and public key may be cached rather than recomputed, and
+are never exported. OCB's table cell is a one-clause annotation in a field table.
+
+This is the pattern the R11 episode established: delete where the local text adds nothing, keep it
+where it does, and state the rule once either way.
 
 [[ACE-rule-long-field-transfer]]
 ==== R17. Loading and emitting a long field
@@ -345,10 +366,44 @@ field size in the last transfer are ignored.
 `ace.restrict*` may not write _AlgorithmUse_ while an Algorithm uses it in this way
 (<<ACE-instruction-restrict>>).
 
-*Replaces:* the counter description in <<ACE-PQC-ML-KEM>> and <<ACE-PQC-ML-DSA>>, and the
-`block_base` description in <<ACE-ECC>>, which is the same mechanism counting bytes into a different
-field. Unifying them is also the opportunity to decide whether ECC should use _AlgorithmUse_ like
-the other two.
+*Replaces:* the counter descriptions in the ML-KEM and ML-DSA `_*_Input_` and `_*_Output_` states.
+
+*Status: applied.* The rule is `AGR8`, and Book 2 lost about forty lines — the largest single
+reduction of any rule so far, because here the local text really was bulk: ML-KEM spent a
+`process_VLI` invocation plus a nine-line paragraph justifying why `cumul_len` and not `block_base`
+carries the count, and ML-DSA repeated the same argument in different words. Each site is now one
+sentence of the form asked for: “the fields `encapsk`, `decapsk` and `ciphertext` are loaded using
+(multi-block) `ace.exec` instructions of Form B, following rule AGR8”.
+
+Three divergences had to be settled, and two of them resolved themselves.
+
+ML-DSA stated the overflow behaviour on both sides — excess bits of a final input transfer ignored,
+an `ace.exec` issued past the end invalidating the CR — and ML-KEM stated neither. `AGR8` adopts
+ML-DSA's, which is the complete pair and matches `AGR6`'s treatment of an over-long input, so ML-KEM
+gains rules it was missing rather than losing any.
+
+ECC was at first left out of scope, then brought in at the author's suggestion by widening _W_ from
+“a field of the MDH” to “a state field _W_, usually _AlgorithmUse_ of the MDH”. Subsuming it took
+three further generalisations, each of which the rule now carries: the unit is bits *or* bytes, as
+the state says, since ECC counts bytes in `block_base`; the `process_VLI` invocation applies only
+“where the loading is performed by `process_VLI`”, since ECC's set states do not use it; and
+completion admits an exception — “unless the state defines a transition of its own” — because ECC's
+_Output_ transitions to _Success_ where the other states forbid a further `ace.exec`.
+
+That brought in four more sites: ECC's set/output lead-in, its _Set_Generator_, its _Set_ states for
+`Scalar`, `Hash`, `SecondPt` and `Signature`, and EdDSA's _Set_Ctx_, which had described itself by
+reference to ECC's. Two now-redundant “`block_base` <- 0” steps went with them, since `AGR8` zeroes
+_W_ on entry.
+
+The widened rule is worth watching. Three “unless” clauses is close to the point at which a general
+rule states less than the sites it replaces; if a fourth exception appears, splitting `AGR8` into an
+MDH-counter rule and a byte-counter rule would be better than adding it.
+
+Two smaller things fell out. ML-DSA carried the “entering an _*_Input_ or _*_Output_ state zeroes
+_AlgorithmUse_” bullet twice, once in the shared statement and once in its own; `AGR8` absorbs both.
+And each site's surviving sentence keeps what is genuinely local: for ML-KEM that its field sizes
+come from the size table, for ML-DSA that entering _pubkey_Output_ without `HasPubKey` invalidates
+the CR.
 
 [[ACE-rule-progress]]
 ==== R18. Progress of a long-running operation
@@ -365,17 +420,17 @@ Book 1.
 
 *Status: applied.* Six statements, not the three first counted: three paragraphs in the ECC section,
 one trailing bullet each in ML-KEM and ML-DSA, two sentences in ML-DSA's Internal State, and four
-lines in the `acestart` CSR description. The rule is `AGR5`.
+lines in the `acestart` CSR description. The rule is `AGR7`.
 
 The sites did not agree. ECC required the exporting implementation to provide the Additional Data
 Section and told the *importer* to compare `acemvendorid`, `acemarchid` and `acemimpid` against
 `IMPQUAL`; ML-KEM and ML-DSA required the Section but said nothing about the comparison. That
-comparison is now performed by the import procedure itself, so `AGR5` states the consequence — an
+comparison is now performed by the import procedure itself, so `AGR7` states the consequence — an
 operation interrupted on one implementation and imported on another always restarts — instead of
 telling the importer to do the work again.
 
 ECC also gave the importer discretion to discard even on a match, which the PQC sections did not.
-`AGR5` resolves this in ECC's favour: an importing implementation may always discard the Section and
+`AGR7` resolves this in ECC's favour: an importing implementation may always discard the Section and
 restart. Discarding is never unsafe, and ECC has a reason for it that survives as the only text left
 in that section — that keeping the Section also means trusting the random number generator of the
 originating implementation, and that an importer unwilling to do so discards `RndNum` with it.
