@@ -3776,7 +3776,7 @@ handled entirely inside the ACE unit and never appears in the memory of the proc
 
 Data Structures:::
 
-The *Provisioning Input* contains only the MDH.
+* The *Provisioning Input* contains only the MDH.
 
 * *Internal State*:
 +
@@ -3834,12 +3834,14 @@ These contexts are large: for ML-KEM-512, ML-KEM-768 and ML-KEM-1024 the Seriali
 ////
 
 Algorithm-Specific Functions:::
-
++
+--
 The procedures implemented by ML-KEM are taken directly from cite:[nist-fips-203]:
 
 * `ML-KEM.KeyGen(d, z)` generates encapsulation key `encapsk` and decapsulation key `decapsk` from random seeds `d, z` (cite:[nist-fips-203] Algorithm 19).
 * `ML-KEM.Encaps(encapsk, m)` generates ciphertext `ciphertext` and shared key `sharedkey` from encapsulation key `encapsk` and randomness `m` (cite:[nist-fips-203] Algorithm 20).
 * `ML-KEM.Decaps(decapsk, ciphertext)` computes shared key `sharedkey` from decapsulation key `decapsk` and ciphertext `ciphertext` (cite:[nist-fips-203] Algorithm 21).
+--
 
 State Machine:::
 +
@@ -3942,9 +3944,19 @@ long, `length` = {lceil}`m`/8{rceil} and the `m` least significant bits of the s
 [[ACE-PQC-ML-DSA]]
 ==== ML-DSA
 
-The _Module-Lattice-Based Digital Signature Standard_ was announced by NIST in August 2024 cite:[nist-fips-204].
-It exists in three subtypes: ML-DSA-44, ML-DSA-65, and ML-DSA-87.
-The principal procedures offered by ML-DSA are:
+The _Module-Lattice-Based Digital Signature Standard_ was announced by NIST in August 2024 cite:[nist-fips-204], in three variants: ML-DSA-44, ML-DSA-65, and ML-DSA-87.
+
+[[ACE-ML-DSA-sizes]]
+.Sizes (in bytes) of keys and signatures of ML-DSA
+[%autowidth,float="center",align="center",cols="^1,^1,^1,^1",options="header"]
+|===
+| Subtype   | Private Key | Public Key | Signature Size
+| ML-DSA-44 |     2560    |    1312    |     2420
+| ML-DSA-65 |     4032    |    1952    |     3309
+| ML-DSA-87 |     4896    |    2592    |     4627
+|===
+
+The principal functions offered by ML-DSA are:
 
 * `ML-DSA.KeyGen`: Generates a public-private key pair.
 * `ML-DSA.Sign`:   Generates a digital signature for a given message.
@@ -3959,27 +3971,22 @@ Message hashing and domain formatting (cite:[nist-fips-204] {sect}5) are structu
 * *Pure ML-DSA:* The caller formats the domain-separated message string `M' = 0x00 @ bin(|ctx|, 8) @ ctx @ M` and computes the 64-byte message representative `mu = SHAKE256(tr @ M', 64)`, which is supplied to the ACE unit via State _mu_Input_.
 * *HashML-DSA (Pre-Hash):* The caller pre-hashes message `M` with the hash function `PH` specified in the _AuxInfo_ field of the MDH, constructs `M' = 0x01 @ bin(|ctx|, 8) @ ctx @ OID(PH) @ PH(M)`, and computes `mu = SHAKE256(tr @ M', 64)` to be loaded into State _mu_Input_.
 * *Public Key Hash (`tr`):* `tr = SHAKE256(pubkey, 64)` is computed inside the ACE unit upon key generation (`_GenerateKeyPair_`) or public key derivation (`_compute_pubKey_`), or loaded via State _tr_Input_ when configuring a CC for verification only.
-* *Context String (`ctx`):* The context string `ctx` (up to 255 bytes) and its length `ctxlen` are maintained in the CC to bind the application protocol context to the hardware session, ensuring domain separation key usage. In implementations supporting internal message absorption, `ctx` and `tr` are used internally to derive `mu`; when `mu` is supplied directly by the caller, `ctx` and `ctxlen` attest that bound in the serialized SCC.
+* *Context String (`ctx`):* The context string `ctx` (up to 255 bytes) and its length `ctxlen` are maintained in the CC to bind the context of the protocol to the hardware session. In implementations supporting internal message absorption, `ctx` and `tr` are used internally to derive `mu`; when `mu` is supplied directly by the caller, `ctx` and `ctxlen` attest that bound in the serialized SCC.
 
-[[ACE-ML-DSA-sizes]]
-.Sizes (in bytes) of keys and signatures of ML-DSA
-[%autowidth,float="center",align="center",cols="^1,^1,^1,^1",options="header"]
-|===
-| Subtype   | Private Key | Public Key | Signature Size
-| ML-DSA-44 |     2560    |    1312    |     2420
-| ML-DSA-65 |     4032    |    1952    |     3309
-| ML-DSA-87 |     4896    |    2592    |     4627
-|===
 
 Algorithm-Specific Functions:::
-
++
+--
 The procedures implemented by ML-DSA are taken directly from cite:[nist-fips-204]:
 
 * `ML-DSA.KeyGen(xi)` generates public key `pubkey` and private key `privkey` from random seed `xi` (cite:[nist-fips-204] Algorithm 1).
 * `ML-DSA.Sign_internal(privkey, mu, rnd)` generates digital signature `signature` from private key `privkey`, message representative `mu`, and randomness `rnd` (cite:[nist-fips-204] Algorithm 7).
 * `ML-DSA.Verify_internal(pubkey, mu, signature)` verifies signature `signature` against public key `pubkey` and message representative `mu` (cite:[nist-fips-204] Algorithm 8).
+--
 
-The *Provisioning Input* contains only the MDH.
+Data Structures:::
+
+* The *Provisioning Input* contains only the MDH.
 +
 --
 The _AlgorithmPolicy_ field in the MDH has the following meaning:
@@ -4037,8 +4044,7 @@ for ML-DSA-44/65/87 | Field
 |===
 
 These contexts are large: for ML-DSA-44, ML-DSA-65 and ML-DSA-87 the Serialized Context is
-6672, 9664 and 12496 bytes, that is 417, 604 and 781 blocks of 128 bits, the MDH and the implicit
-padding included.
+6672, 9664 and 12496 bytes, that is 417, 604 and 781 blocks of 128 bits, including the MDH and padding.
 
 Apart from `HasPrivKey` and `HasPubKey` (which are stored in _StateExtension_)
 the ML-DSA Algorithms do not carry state information as to whether `signature`,
@@ -4047,6 +4053,8 @@ a malformed `privkey` or `pubkey` is a configuration error and causes the CR to 
 State _Invalid_, while a `signature`, `mu`, `ctx` or `ctxlen` that is well formed but does not
 verify is a data error and transitions the state machine to State _Failure_, which is a valid state.
 --
+
+//
 
 State Machine::: {empty}
 +
@@ -4069,7 +4077,6 @@ ML-DSA Algorithms define:
  ** _Sign_Input_ (11)
  ** _privkey_Input_ (12)
  ** _compute_pubKey_ (13)
---
 
 * *Allowed State Transitions:*
 
@@ -4144,6 +4151,6 @@ Entering _pubkey_Output_ while `HasPubKey` is false causes the CR to transition 
 ** _AlgorithmPolicy_ can be modified using `ace.restrictl`.
 The value 0 is not admissible.
 An attempt to clear the field using `ace.restrictl` causes the CR to transition to Error State _Invalid_.
-
+--
 
 // ////////////////////////////////////////////////////////////////////
