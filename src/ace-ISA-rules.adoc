@@ -1,0 +1,351 @@
+[[ACE-common-rules]]
+== Common Rules
+
+_This chapter is normative. It is not yet included by `ace.adoc`._
+
+This chapter collects statements that the specification currently repeats at many sites. Each rule
+is written so that it can be stated once here and deleted from the places listed under *Replaces*.
+The counts are occurrences in the current text of Books 1, 2 and 3.
+
+Three of the defects found in review — a GCM footnote that described a `last_blk_len` range
+belonging to other modes, an `Smstateen` paragraph duplicated in two Books, and a transfer-counter
+description given twice with different wording — arose from copies of one statement drifting apart.
+Single-sourcing them is the point of this chapter; the reduction in length is secondary.
+
+A rule is listed under <<ACE-rules-unverified>> instead of below when the sites it would replace are
+*not* known to agree. Those must be checked site by site before the rule is adopted, because
+adopting one of them silently changes behaviour wherever a site differs.
+
+// ////////////////////////////////////////////////////////////////////
+
+[[ACE-rules-instructions]]
+=== Rules for the Instruction Descriptions
+
+[[ACE-rule-extension-matrix]]
+==== R1. Extension membership is stated only in the matrix
+
+<<ACE-instruction-extension-matrix>> is the authoritative statement of which extension defines each
+instruction and each CSR. No instruction or CSR description restates it.
+
+*Replaces:* the 24 `_Included in_` blocks in Book 1, about 216 lines. <<ACE-instructions-detailed>>
+already declares them subordinate to the matrix, so they carry no information of their own; two of
+them disagree with it on which forms `Zklio` provides.
+
+[[ACE-rule-register-groups]]
+==== R2. Register pairs and quartets
+
+Wherever an instruction operand is a GPR pair, its register number must be even; wherever it is a
+GPR quartet, a multiple of four. Otherwise an illegal-instruction exception is raised. On RV64 a
+128-bit operand is a pair, on RV32 a quartet.
+
+*Replaces:* 10 restatements, in `ace.mv` (four), `ace.setst`, `ace.getmd*` (three), `ace.restrict*`,
+`ace.derive`, and Form B of `ace.size`. The rule is already stated once, as item 3 of the
+*Illegal Instructions* list in <<ACE-error-architecture>>; the local copies exist only because that
+list is easy to miss.
+
+[[ACE-rule-cr-operand]]
+==== R3. How a CR operand is encoded
+
+An instruction that names one CR carries a selector bit `r` at the position shown in its encoding
+diagram: `r` = 0 when the CR index is a 5-bit immediate, `r` = 1 when it is held in the GPR named by
+the same field. An instruction that names two CRs carries a two-bit field `R` instead, encoded as in
+<<ACE-instruction-clone>>. Using `X0` as an indirect CR index raises an illegal-instruction
+exception except where an encoding assigns it a meaning, and an indirect index outside [0..31] does
+likewise.
+
+*Replaces:* the `Bit `r`{empty}` sentence in `ace.exec`, `ace.setst`, `ace.mgmt`, `ace.getmd*` and
+`ace.restrict*`; the `R` sentence in `ace.clone` and `ace.derive`. The bit *position* differs
+between instructions — 26 for `ace.exec`, 20 for `ace.setst` and `ace.mgmt` — so each encoding
+diagram keeps its own label and only the prose goes.
+
+[[ACE-rule-instruction-properties]]
+==== R4. State modification and usage control, in one table
+
+Whether an instruction may modify architectural state, and whether it is usage-controlled, is given
+by a single table indexed by instruction rather than by two sentences at the end of each
+description.
+
+*Replaces:* 24 sentences of the form “The instruction may (not) modify state.” and “The instruction
+is (not) usage-controlled.” These are per-instruction *facts*, not repetitions of one rule, so the
+saving comes from tabulating them; the gain is that the exceptions — `ace.setst` is usage-controlled
+except when its immediate is `ace_state_unconfigured` or an Error State, `ace.restrict*` is not
+usage-controlled at all — become visible side by side instead of being buried at the end of two
+descriptions.
+
+[[ACE-rule-mgmt-bookkeeping]]
+==== R5. Bookkeeping common to every `ace.mgmt`
+
+Every `ace.mgmt` first checks that `acemanagedcr` holds either the target CR's number or 32, and
+raises an illegal-instruction exception if it holds anything else. An `ace.mgmt` that *opens* a
+management operation then writes the CR's number to `acemanagedcr`; one that *completes* one writes
+32. Both clear `acestart`.
+
+*Replaces:* the first, second-to-last and last step of each of the five step lists in
+<<ACE-instruction-manage>>, about 15 lines. Each list keeps only the steps peculiar to its
+operation.
+
+// ////////////////////////////////////////////////////////////////////
+
+[[ACE-rules-csrs]]
+=== Rules for the CSR Descriptions
+
+[[ACE-rule-csr-gating]]
+==== R6. Availability of ACE CSRs
+
+No ACE CSR is accessible if ACE is not present, or if any `ACES` field in effect is Off; an attempt
+to read or write one then raises an illegal-instruction exception. Because `ACES` covers all ACE
+state without exception, ACE needs no `Smstateen`/`Ssstateen` bit.
+
+*Replaces:* the identical paragraph in <<ACE-CSR-unpriv>> and <<ACE-CSRs-priv>>. Stating it twice is
+what allows the two copies to diverge; they are currently identical.
+
+[[ACE-rule-rv32-shadows]]
+==== R7. RV32 high shadows
+
+On RV32, a 64-bit ACE CSR `X` is accompanied by a 32-bit CSR `Xh` that shadows bits [63:32] of `X`,
+so that those bits can be accessed. The shadow has the same privilege as the register it shadows.
+
+*Replaces:* the shadow sentence in `acesivl`/`acesivh`, `acesiv2l`/`acesiv2h`, `aceiql`/`aceiqh` and,
+in Book 3, `mlcrstatus`, `slcrstatus` and `vslcrstatus` — six sites. The names are formed
+mechanically, so the table in <<ACE-CSRs-unpriv>> needs no separate rows for them either.
+
+[[ACE-rule-secret-csr-groups]]
+==== R8. Secret-bearing CSR groups
+
+A *secret CSR group* is a set of XLEN-bit RW CSRs, accessed through Indirect CSR Access, that
+together hold one 128-bit or 256-bit secret: four CSRs on RV32 and two on RV64 for a 128-bit secret,
+eight and four for a 256-bit one. A write to the __i__-th CSR of a group sets bits
+[(_i_+1){middot}XLEN−1 : _i_{middot}XLEN] of the secret. Access from a mode lower than the group's,
+or in non-authenticated Debug mode, raises an illegal-instruction exception. Out of ACE unit reset
+every such secret is zero, unless it is hardwired or regenerated by hardware.
+
+The groups are then given by one table with columns: group name, secret, privilege, and any rule
+peculiar to it.
+
+*Replaces:* five near-identical subsections in Book 3 — `macephysbootscrt`, `hacevirtbootscrt`,
+`macelocality`, `hacelocality`, `sacelocality` — about 60 lines. `macecsk` keeps a subsection of its
+own, because its activation rules and its readback behaviour are not shared with the others.
+
+[[ACE-rule-reset-values]]
+==== R9. Reset values are stated only in the reset sections
+
+<<ACE-out-of-reset-unpriv>> and <<ACE-out-of-reset-priv>> are the authoritative statements of ACE
+state out of reset. No CSR description restates its own reset value.
+
+*Replaces:* five “Out of ACE unit reset, the value of {ellipsis} is zero” sentences in Book 3 and
+four in Book 1.
+
+// ////////////////////////////////////////////////////////////////////
+
+[[ACE-rules-algorithms]]
+=== Rules for the Algorithm Descriptions
+
+[[ACE-rule-block-iteration]]
+==== R10. Block iteration
+
+In a state that processes whole blocks, an `ace.exec` whose `ACELEN` is a whole multiple of the
+block size `b` performs the state's per-block operation `ACELEN`/`b` times, taking the blocks of
+`INPUT`, and producing the blocks of `OUTPUT`, from the least significant position upwards. A state
+that this specification describes as processing a single block — every last-block, finalize, verify
+and output state — is excluded and processes exactly one.
+
+*Replaces:* 14 restatements across ECB, CTR/XCTR, XEX, GCM, GCM-SIV, OCB, CMAC and Ascon-AEAD128.
+The least-significant-first convention is already declared once, in <<ACE-ECB-mode>>, “here, and in
+the rest of this document”.
+
+[[ACE-rule-input-truncation]]
+==== R11. An over-long input is truncated
+
+Where a state consumes a single value of `X` bits, an `ACELEN` greater than `X` is truncated: only
+the `X` least significant bits of `INPUT` are considered, and the rest are ignored. `X` is the width
+of the field being set, which is not necessarily `b`.
+
+*Replaces:* seven restatements. The parenthetical warning in <<ACE-keystream-modes>> — that the
+bound is the IV width `n` and not the block size `b` — stays, since it is the one place where the
+two differ and a reader is likely to assume otherwise.
+
+[[ACE-rule-output-clearing]]
+==== R12. Unwritten output bits are cleared
+
+When a state writes fewer than `ACELEN` bits to `OUTPUT`, the remaining bits of `OUTPUT` are
+cleared.
+
+*Replaces:* six restatements, in CMAC, <<ACE-hash-functions>>, Ascon-AEAD128 (twice) and
+Ascon-Hash256. This concerns bits *within* the operand; the tail-agnostic policy of <<ACE-ACEV>>
+concerns the elements beyond `VL` and is unaffected.
+
+[[ACE-rule-ready]]
+==== R13. State _Ready_ accepts no `ace.exec`
+
+No `ace.exec` may be issued in State _Ready_; issuing one transitions the CR to Error State
+_Invalid_, as <<ACE-generic-rules>> prescribes for any instruction a state does not allow.
+
+*Replaces:* nine restatements. <<ACE-states-valid>> already says it for _Ready_, and
+<<ACE-generic-rules>> already supplies the consequence; only <<ACE-hash-functions>> currently states
+the consequence locally, and the other eight are silent about it.
+
+[[ACE-rule-last-block-length]]
+==== R14. Entering a last-block state
+
+The transition into a last-block state is made with a Form B `ace.setst` whose auxiliary argument
+`Xs` is the length, *in bits*, of the final block. A value outside the range the Algorithm admits
+transitions the CR to Error State _Invalid_. The value is a truncation of a block already
+transferred, not a transfer length (<<ACE-truncation-vs-length>>).
+
+Each Algorithm states only its own admissible range, since these genuinely differ:
+
+[%autowidth,float="center",align="center",cols="<,^,<",options="header"]
+|===
+| Algorithm | Admissible `Xs` | Note
+| GCM               | 1 {ldots} 127                   | any bit length; cite:[nist-SP-800-38D] is defined over bit strings
+| GCM-SIV           | 8 {ldots} 120, multiple of 8    | cite:[RFC8452] is defined over byte strings
+| OCB               | 0 {ldots} 120, multiple of 8    | cite:[RFC7253] is defined over byte strings; 0 is the empty case
+| CMAC              | 0 {ldots} `b`, multiple of 8    | 0 is the empty-message case
+| Ascon-AEAD128     | 0 {ldots} 127                   | 0 transitions directly, with `pad(∅,128)` applied
+|===
+
+*Replaces:* five restatements of the shape, and removes the footnote in <<ACE-GCM-mode>> that
+currently points at “the other modes that take a final-block length” as though their ranges agreed
+with GCM's, which they do not.
+
+[[ACE-rule-verification]]
+==== R15. Verification outcomes
+
+A state whose purpose is to verify a tag, a MAC or a signature transitions to _Success_ when the
+value matches and to _Failure_ when it does not. Neither outcome is an error: no exception is
+raised, the CR is not invalidated, and the Algorithm has performed as specified.
+
+*Replaces:* eight restatements, in GCM, GCM-SIV, OCB, CMAC, Ascon-AEAD128, <<ACE-ECC>>,
+<<ACE-EdDSA>> and <<ACE-PQC-ML-DSA>>. The final sentence is already stated once, under *Algorithmic
+Errors* in <<ACE-error-architecture>>.
+
+[[ACE-rule-derived-fields]]
+==== R16. Derived fields are recomputed on import
+
+A field that an Algorithm derives from other fields of the same CC is not carried in the Serialized
+Context. It is recomputed when the import completes, that is by the `ace.mgmt` with
+`#ace_CR_management_end`, and likewise when the value it derives from is set or replaced.
+
+*Replaces:* five restatements — GCM's `auth_key`, GCM-SIV's `enc_key` and `auth_key`, OCB's `L$` and
+`L[i]`, ML-DSA's `tr`, and the clamped scalar, `prefix` and public key of <<ACE-EdDSA>>.
+
+[[ACE-rule-long-field-transfer]]
+==== R17. Loading and emitting a long field
+
+A state that loads a long field from `INPUT`, or emits one to `OUTPUT`, over several `ace.exec`
+instructions records its progress in the _AlgorithmUse_ field of the MDH, as a count of bits. The
+count is zeroed on entry to the state, rises monotonically, and is never reset by the completion of
+the field. When it reaches the size of the field, no further `ace.exec` is allowed in that state;
+issuing one transitions the CR to Error State _Invalid_. On the input side, bits in excess of the
+field size in the last transfer are ignored.
+
+`ace.restrict*` may not write _AlgorithmUse_ while an Algorithm uses it in this way
+(<<ACE-instruction-restrict>>).
+
+*Replaces:* the counter description in <<ACE-PQC-ML-KEM>> and <<ACE-PQC-ML-DSA>>, and the
+`block_base` description in <<ACE-ECC>>, which is the same mechanism counting bytes into a different
+field. Unifying them is also the opportunity to decide whether ECC should use _AlgorithmUse_ like
+the other two.
+
+[[ACE-rule-progress]]
+==== R18. Progress of a long-running operation
+
+Where an implementation interrupts and resumes a long-running operation that transfers no data —
+a scalar multiplication, a signature operation, a key generation — it records progress in the
+_AlgorithmUse_ field in an implementation-defined way, not in `acestart` (<<ACE-CSR-acestart>>). It
+must then export a mandatory Additional Data Section holding the Implementation Qualifier and
+whatever else resumption needs, and an importing implementation that does not recognise the
+Implementation Qualifier restarts the operation instead of resuming it.
+
+*Replaces:* three restatements, in <<ACE-ECC>>, <<ACE-PQC-ML-KEM>> and <<ACE-PQC-ML-DSA>>.
+
+[[ACE-rule-zero-padding-caller]]
+==== R19. Zero-filling a final partial block is the caller's obligation
+
+Where an Algorithm absorbs associated data, or any input for which it defines no last-block state,
+the caller zero-fills the final block beyond the end of the data and the Algorithm absorbs that
+block whole. Where an Algorithm *does* define a last-block state, the caller must not pad: padding
+in software as well corrupts the result.
+
+*Replaces:* the paragraph in <<ACE-GCM-mode>>, the one in <<ACE-GCM-SIV-mode>> and the one in
+<<ACE-Ascon-AEAD128>>, which say the same thing at different lengths.
+
+// ////////////////////////////////////////////////////////////////////
+
+[[ACE-rules-data-structures]]
+=== Rules for the Data-Structure Tables
+
+[[ACE-rule-mdh-row]]
+==== R20. The MDH is not listed
+
+Every Provisioning Input and every Serialized Context begins with the 128-bit MDH, and every
+Internal State contains it. The field tables do not list it.
+
+*Replaces:* the leading `| i | 128 | MDH` row of 28 tables and the leading “Metadata Header.” bullet
+of 17 Internal State lists. Positions are then numbered from the first Algorithm-specific field,
+which also removes the ambiguity that made `SCC_content_size()` in <<ACE-ECC>> disagree with its own
+table by 128 bits.
+
+[[ACE-rule-skid-row]]
+==== R21. The System Key Identifier alternative is not listed
+
+<<ACE-rules-system-keys>> already states that a key field carries a 64-bit SKID in place of the key
+value when _KeyType_ = 1, and that one SKID may resolve to several keys. A field table therefore
+gives the key width alone.
+
+*Replaces:* the “`k` or 64 {vbar} `key` or System Key Identifier” form in 25 table rows.
+
+[[ACE-rule-padding-row]]
+==== R22. Padding is implicit
+
+The length of a Provisioning Input and of a Serialized Context is understood to be padded at the end
+to a multiple of 128 bits, whether or not the Algorithm's table shows a padding row
+(<<ACE-Algorithms>>).
+
+*Replaces:* the padding rows of the tables that have them, and the accompanying paragraphs that
+enumerate the padding width and the block count for each key size — five such paragraphs. This rule
+is already in force; what remains is to remove the rows it makes redundant.
+
+// ////////////////////////////////////////////////////////////////////
+
+[[ACE-rules-unverified]]
+=== Candidate Rules Requiring Per-Site Verification
+
+The following are patterns rather than established rules. Each looks uniform but has at least one
+site that may not conform, so none may be adopted before the sites are checked.
+
+. *Entry to State _Ready_ clears the Algorithm's working state and retains its key material.* True
+  of the symmetric Algorithms, but <<ACE-PQC-ML-DSA>> deliberately retains `privkey`, `pubkey` and
+  their flags, <<ACE-ECC>> makes retention selectable bit by bit through the auxiliary argument of a
+  Form B `ace.setst`, and the symmetric Algorithms differ in which working fields they name. Any
+  rule here must be a default with explicit overrides.
+
+. *A transition to a state that sets an auxiliary value uses a Form B `ace.setst` when the value
+  fits in a GPR and a Form C one when it does not.* Holds at most sites, but GCM uses Form B for a
+  length and then Form B `ace.exec` for the value itself, and Ascon-AEAD128 uses Form B for
+  `tag_len` without changing the _State_ field at all.
+
+. *An out-of-range auxiliary argument transitions the CR to Error State _Invalid_.* This is the
+  single most repeated statement in Book 2, 36 occurrences, and <<ACE-generic-rules>> arguably
+  already covers it. Before collapsing them, each site must be checked for whether the consequence
+  really is _Invalid_ and not a no-operation: <<ACE-usage-input-output>> already distinguishes the
+  two for the ACEIOBUF, and `ace_exc_unconfigured_buffer` is explicitly exempt.
+
+. *`ace.exec` in a state that does not allow the Form issued transitions the CR to Error State
+  _Invalid_.* Stated once in <<ACE-Algorithms>> under *State Machine* and again in
+  <<ACE-generic-rules>>; the two wordings differ on whether an unavailable Form raises an
+  illegal-instruction exception instead, which <<ACE-usage-input-output>> settles. Consolidate the
+  three into one statement rather than deleting two of them.
+
+// ////////////////////////////////////////////////////////////////////
+
+[[ACE-rules-effect]]
+=== Estimated Effect
+
+Books 1, 2 and 3 are about 9300 lines. Applying R1–R22 removes on the order of 400 lines outright
+and replaces perhaps as many again with four tables — the extension matrix already exists, and R4,
+R8 and R14 add one each. The proportion is modest; the reason to do it is that each rule closes a
+class of divergence rather than an instance of it.
+
+The largest single item is R1, at about 216 lines, and it is also the safest: the blocks it removes
+are already declared subordinate to the matrix that would replace them.
