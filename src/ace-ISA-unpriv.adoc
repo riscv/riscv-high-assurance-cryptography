@@ -151,7 +151,7 @@ conforming implementation, in hardware or emulated. `Zklmv` and `Zklexpire`
 are otherwise optional.
 
 If `Zklv` is implemented, the ACEV subset of the vector extension must be implemented, with a
-vector register (group) of at least 128 bits, that is one of `Zvl128b`, `Zvl256b`, `Zvl512b` or
+vector register of at least 128 bits, that is one of `Zvl128b`, `Zvl256b`, `Zvl512b` or
 `Zvl1024b`. Form C of `ace.size` and `ace.getmdv` depend on this.
 
 If `Zklio` is implemented, the ACEIOBUF is implemented.
@@ -626,7 +626,9 @@ including any additional variable-length data and the _ImpDataLen_ field is set 
 The CR then retains only the MDH.
 Accordingly, `_ConfigStatus_` is always set to `ace_cfgst_complete`.
 
-. The transitions from _Unconfigured_ to any Error State result from configuration instructions.
+. The transitions from _Unconfigured_ to any Error State result from configuration instructions, or
+  from a usage instruction: no Algorithm allows one in State _Unconfigured_, so issuing one
+  transitions the CR to Error State _Invalid_ under <<ACE-generic-rules>>.
   The transitions from these Error States to _Unconfigured_ result from explicitly clearing the CR.
 
 . Exporting a CR in an Error State exports only the MDH (all fields and values) and the authentication tag.
@@ -896,7 +898,7 @@ The _ExpirationDate_ field is evaluated normatively at the following points:
 
 If the secure clock indicates that the expiration date has passed at any of these evaluation points, the hardware immediately transitions the CR's _State_ field to Error State `ace_state_expired`, invalidates all intermediate computational state, and performs all Error State actions. These include implementation-specific tasks such as releasing CRF capacity held by the Content.
 
-Management operations, such as exporting (`ace.store`), clearing (`ace.clear`), cloning, or obtaining the size of the exported CR (`ace.size`), do not perform this check. Specifically, the check is skipped when _ConfigStatus_ is not `ace_cfgst_complete`. Consequently, the transition to Error State `ace_state_expired`
+Management operations, such as exporting (`ace.store`), clearing (`ace.clear`), cloning, or obtaining the size of the exported CR (`ace.size`), do not perform this check: none of them is one of the evaluation points listed above. Consequently, the transition to Error State `ace_state_expired`
 is only triggered when an expired CR is actively used or resumed, while still permitting expired contexts to be cleanly evicted, saved, or unconfigured.
 
 The _ExpirationDate_ field does not affect any lengths specified in <<ACE-length-rule>>.
@@ -1700,7 +1702,7 @@ _Description_::
 +
 --
 `ace.load` imports a PI or an SCC into the CR `Kd` or `K{Xd}`, starting with the first byte after the 16-byte MDH.
-The memory address of the latter is given in `%offset(Xs1)`.
+`%offset(Xs1)` is the address of *that* byte, not of the MDH: software passes the MDH separately, to the `ace.mgmt` that opened the CR, and so does not transfer it here.
 
 This instruction requires that the CR be ready to import information and that the MDH has already been loaded by passing it as a parameter in a GPR pair (quartet for RV32), resp., vector register, to the `ace.mgmt` instruction used to open the CR for provisioning or import.
 Besides checking the soundness of the MDH, `ace.mgmt` also sets `acestart` to zero.
@@ -2337,18 +2339,17 @@ No other field of the MDH is written from `ml`; see the note under
 Let `ml` <- the MDH of the CR.
 Software must save this value in its state to use it when completing the export process.
 Then:
+
 .. Check whether `acemanagedcr` is equal to the CR's number or is equal to 32.
    If not, an illegal-instruction exception is raised.
 .. If `ml`._ConfigStatus_ = `ace_cfgst_complete`:
-
++
 Prepare a CR to produce an SCC.
 This includes encrypting its contents and computing the authentication tag(s):
 The architecturally observable behavior is described in <<ACE-CR-representation>>.
-
 .. If `ml`._ConfigStatus_ {ne} `ace_cfgst_complete` (we are exporting a not fully configured CR or we are initiating a nested CR export):
-
++
 No encryption or authentication occurs; the contents of the CR are exported verbatim, in the same order in which they appear in the PI (for a partially provisioned CR) or in the SCC (for a partially imported CR, or a CR previously prepared for export whose export process was itself interrupted).
-
 .. The CR's _ConfigStatus_ is set to `ace_cfgst_exporting`. This is the value on which
    `ace.store` (<<ACE-instruction-store>>) and the CR-reading variants of `ace.mv`
    (<<ACE-move>>) are gated, so no export can proceed until it is set.
@@ -3626,7 +3627,7 @@ key was provisioned by value or retrieved from the SKS through a System Key Iden
 nor on _StateExtension_, because a CR is allocated with room for every field the
 Algorithm may come to use.
 
-All six fields named above lie in bits [63:0] of the MDH, which is what allows a PI or
+All seven fields named above lie in bits [63:0] of the MDH, which is what allows a PI or
 SCC length to be computed from the first eight bytes alone, as required by `ace.load`
 (<<ACE-instruction-load>>), `ace.store` (<<ACE-instruction-store>>) and Form B of
 `ace.size` (<<ACE-instruction-size>>).
