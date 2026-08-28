@@ -17,7 +17,7 @@ A rule is listed under <<ACE-rules-unverified>> instead of below when the sites 
 adopting one of them silently changes behaviour wherever a site differs.
 
 *Rules already applied.* R1, R2 and R4 are no longer listed in this chapter, which is why the
-numbering has gaps. R5, R8, R9 and R10 are kept below, each with a *Status* paragraph, because
+numbering has gaps. R5, R8, R9, R10, R13 and R18 are kept below, each with a *Status* paragraph, because
 their consolidated wording is worth consulting. Their landing places are:
 
 [%autowidth,float="center",align="center",cols="^,<,<",options="header"]
@@ -29,7 +29,9 @@ their consolidated wording is worth consulting. Their landing places are:
 | R5 | `ace.mgmt` bookkeeping | the lead-in of <<ACE-instruction-manage>>
 | R8 | Locality Secret CSR groups | <<ACE-CSR-locality-groups>> and <<ACE-locality-csr-groups>>
 | R9 | Reset values | <<ACE-out-of-reset-unpriv>> and <<ACE-out-of-reset-priv>>
-| R10 | Block iteration | the block-iteration rule of <<ACE-general-rules-for-algorithms>>
+| R10 | Block iteration | `AGR3` in the general rules for Algorithms
+| R13 | `ace.exec` in State _Ready_ | `AGR4` in the general rules for Algorithms
+| R18 | Progress of a long-running operation | `AGR5` in the general rules for Algorithms
 |===
 
 R2 is complete. Where an operand's width made the pair or quartet implicit, the description now
@@ -173,6 +175,15 @@ excludes `ACELEN` = `b`, the ordinary single-block case — and the rule now cov
 giving the count as `ACELEN`/`b`. GCM's _Decrypt_ sentence also mixed the two notations, decrypting
 “each 128-bit block of `INPUT` into the corresponding `b`-bit block of `OUTPUT`”.
 
+Each of the states that lost the sentence now carries the marker “(multi-block)” before the Form it
+expects, so that `AGR3` is visibly the thing that governs it. There are 18 such states: the 17 from
+which text was removed, plus State _Encrypt_/_Decrypt_ of the generic tweakable block cipher, which
+iterates by its Parameters but never carried the sentence.
+
+The states left unmarked divide cleanly: either they process exactly one block, or they iterate by a
+different mechanism — Subalgorithm `process_VLI`, the output-squeeze loop of the generic hash and
+MAC section, or the long-field transfer counter of R17. `AGR3` governs none of those.
+
 One sentence of the same shape was kept: <<ACE-Ascon-Hash256>>'s _Hash_Finalize_ writes successive
 64-bit fields of `OUTPUT` and restarts at `OUTPUT`[63:0] when a further `ace.exec` is issued. That
 is a different rule, not block iteration over an input.
@@ -204,9 +215,24 @@ concerns the elements beyond `VL` and is unaffected.
 No `ace.exec` may be issued in State _Ready_; issuing one transitions the CR to Error State
 _Invalid_, as <<ACE-general-rules-for-algorithms>> prescribes for any instruction a state does not allow.
 
-*Replaces:* nine restatements. <<ACE-states-valid>> already says it for _Ready_, and
-<<ACE-general-rules-for-algorithms>> already supplies the consequence; only <<ACE-hash-functions>> currently states
-the consequence locally, and the other eight are silent about it.
+*Replaces:* the per-Algorithm restatements.
+
+*Status: applied.* Eleven restatements removed, not the nine first counted, and the rule is `AGR4`.
+It is worded “unless the Algorithm explicitly allows it”, so it is a default rather than an
+absolute; the _Ready_ row of the valid-states table in Book 1 was softened to match, since it
+previously said flatly that no `ace.exec` may be executed in that state.
+
+The eleven sites stated it in four different ways, and only one of them — the generic hash and MAC
+section — gave the consequence, that the CR transitions to Error State _Invalid_. The rule states it
+once and derives it from `AGR1`.
+
+Applying the rule also supplies the statement where it was *missing*: CTR/XCTR, SHA-2, SHA-3, KMAC,
+HMAC, ECC and ML-DSA never said anything about `ace.exec` in _Ready_, so eleven copies covered ten
+Algorithms and left seven uncovered.
+
+Two sites needed more than a deletion. In ECB the sentence was the whole of the _Ready_ behaviour
+item, which therefore went with it. In ML-KEM it was the first line of an item whose second line
+clears the state fields, so the item was rewritten to keep that clause.
 
 [[ACE-rule-last-block-length]]
 ==== R14. Entering a last-block state
@@ -281,7 +307,25 @@ must then export a mandatory Additional Data Section holding the Implementation 
 whatever else resumption needs, and an importing implementation that does not recognise the
 Implementation Qualifier restarts the operation instead of resuming it.
 
-*Replaces:* three restatements, in <<ACE-ECC>>, <<ACE-PQC-ML-KEM>> and <<ACE-PQC-ML-DSA>>.
+*Replaces:* the restatements in the ECC and PQC sections and the general half of the statement in
+Book 1.
+
+*Status: applied.* Six statements, not the three first counted: three paragraphs in the ECC section,
+one trailing bullet each in ML-KEM and ML-DSA, two sentences in ML-DSA's Internal State, and four
+lines in the `acestart` CSR description. The rule is `AGR5`.
+
+The sites did not agree. ECC required the exporting implementation to provide the Additional Data
+Section and told the *importer* to compare `acemvendorid`, `acemarchid` and `acemimpid` against
+`IMPQUAL`; ML-KEM and ML-DSA required the Section but said nothing about the comparison. That
+comparison is now performed by the import procedure itself, so `AGR5` states the consequence — an
+operation interrupted on one implementation and imported on another always restarts — instead of
+telling the importer to do the work again.
+
+ECC also gave the importer discretion to discard even on a match, which the PQC sections did not.
+`AGR5` resolves this in ECC's favour: an importing implementation may always discard the Section and
+restart. Discarding is never unsafe, and ECC has a reason for it that survives as the only text left
+in that section — that keeping the Section also means trusting the random number generator of the
+originating implementation, and that an importer unwilling to do so discards `RndNum` with it.
 
 [[ACE-rule-zero-padding-caller]]
 ==== R19. Zero-filling a final partial block is the caller's obligation
