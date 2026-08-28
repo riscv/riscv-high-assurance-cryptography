@@ -1111,6 +1111,10 @@ named _X_`h` giving access to bits [63:32] of _X_; a read or write of _X_ itself
 [31:0]. The shadow has the same privilege as the register it shadows. The six such registers are
 `acesivl`, `acesivh`, `acesiv2l`, `acesiv2h`, `aceiql`, `aceiqh`.
 
+The WARL policy of an ACE CSR that has a maximum is uniform: writing a value larger than the maximum
+sets the register to the maximum, so software must read the register back after writing it. Each
+such register is given its maximum in its own description below.
+
 If the ACE extension is not present or if an ACES field is Off,
 these CSRs, with the exception of
 the read-only identification CSRs `acemvendorid`, `acemarchid`,
@@ -1167,16 +1171,13 @@ Writing this register—even when re-writing the current value—also zeroes the
 When `aceiobuflen` is zero, the ACEIOBUF is _unconfigured_.
 Attempting to execute an operation that expects an input or an output in the ACEIOBUF while the latter is unconfigured raises exception `ace_exc_unconfigured_buffer`.
 
-The following WARL policy applies to `aceiobuflen`:
-If a value larger than `acemaxiobuflen` is written to `aceiobuflen`, `aceiobuflen` will be set to `acemaxiobuflen`.
-Therefore, software must always check the value of `aceiobuflen` before using the ACEIOBUF.
+The maximum of `aceiobuflen` is `acemaxiobuflen`.
 
 Context switching code must save and restore the contents of the ACEIOBUF up to `aceiobuflen`.
 
 [NOTE]
 ====
 As per the Privileged Architecture, the dirtiness of the ACEIOBUF is not tracked except as part of the entire ACE state in `*status`.
-Context switching code is expected to save and restore the contents of the ACEIOBUF up to `aceiobuflen`.
 We recommend that software set `aceiobuflen` to zero once the contents of the ACEIOBUF are no longer needed.
 Context switching code can use this information to avoid unnecessary save and restore of ACEIOBUF contents.
 ====
@@ -1195,10 +1196,7 @@ Context switching code can use this information to avoid unnecessary save and re
 For operations involving the ACEIOBUF, `acestart` (cf. <<ACE-CSR-acestart>>) is the position within that window at which processing starts or resumes, analogously to `vstart`; when `acestart` {ne} 0, the bytes processed are those at offsets [`acestart`, `aceiobuftop`).
 Shortening an operand is done by lowering `aceiobuftop`, never by raising `acestart`.
 
-The following WARL policy applies to `aceiobuftop`:
-`aceiobuftop` cannot be larger than `aceiobuflen`.
-If a value larger than `aceiobuflen` is written to `aceiobuftop`, `aceiobuftop` will be set to `aceiobuflen`.
-Therefore, software must always check the value of `aceiobuftop` before using the ACEIOBUF.
+The maximum of `aceiobuftop` is `aceiobuflen`.
 
 Modifying `aceiobuftop` does not alter buffer contents. It allows per-operation length adjustments without reconfiguring the ACEIOBUF via `aceiobuflen`, an expensive operation that clears the buffer and may trigger internal garbage collection. This mirrors the use of `VL*SEW` reconfiguration to supply a partial “last block” or a short IV/nonce to Algorithms.
 
@@ -3069,9 +3067,9 @@ Algorithm-specific resumable operations that transfer no data are subject to the
 
 [NOTE]
 ====
-For the transfer instructions, whose resumption is optional, cross-implementation resumption after migration works only when both implementations honour `acestart`; otherwise the portable recovery path is the visible restart described below, in which the CR is left in the _Unconfigured_ state and software reruns the management sequence. This caveat does not extend to `ace.exec` and `ace.derive`, for which honouring `acestart` is mandatory everywhere. Software must in either case be written to tolerate a restart of a transfer instruction, and the ACE instructions are designed to work correctly with either approach on every ACE implementation.
+For the transfer instructions, whose resumption is optional, cross-implementation resumption after migration works only when both implementations honour `acestart`; otherwise the portable recovery path is the visible restart described below, in which the CR is left in the _Unconfigured_ state and software reruns the management sequence. This does not extend to `ace.exec` and `ace.derive`, for which honouring `acestart` is mandatory everywhere. Software must support both resumption and restart of a transfer instruction, and the ACE instructions are designed to work correctly with either approach on every ACE implementation.
 
-For instance, `ace.load`, `ace.store` may always fail, or caused to fail, leaving the CR in an _Unconfigured_ state.  This signals that the import, provisioning, or export operation must be restarted. Software must then prepare the CR for the operation again. For import and provisioning, this entails providing the first 8 bytes of the MDH to the `ace.mgmt` instruction used to prepare the CR anew.
+For instance, `ace.load`, `ace.store` may always fail, or caused to fail, leaving the CR in an _Unconfigured_ state.  This signals that the import, provisioning, or export operation must be restarted. Software must then prepare the CR for the operation again. For import and provisioning, this entails providing the MDH to the `ace.mgmt` instruction used to prepare the CR anew.
 ====
 
 // In this case, when the interrupt/exception handler accesses an input or an output of the operation, different behaviors are allowed:
@@ -3097,8 +3095,6 @@ For instance, `ace.load`, `ace.store` may always fail, or caused to fail, leavin
 // <<ACE-Memory-Model>> requires. Beyond this rule, the architecture only
 // specifies the allowed interruption points for its instructions and
 // Algorithms.
-
-
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -3170,29 +3166,22 @@ MDH of a PI.
   fields _Algorithm_, _AlgorithmPolicy_, _KeyType_, _StateExtension_ and _State_, plus the
   Implementation Variable-Length Data Section, whose total size in 128-bit units is given
   by _ImpDataLen_ (<<ACE-extra-content>>).
-+
-NOTE: _State_ appears in this list for two reasons: an SCC exported from a CR in an Error State is
-32 bytes irrespective of every other field, as stated below, and an Algorithm may serialize a
-field only while a multi-step operation is in progress. An Algorithm that does the latter must
-make the condition depend on _State_ and _StateExtension_ alone, never on a value carried in
-the Content, since the Content is what is being measured.
-+
 It does *not* depend on _SCProtection_. A masked implementation exports the same
 number of bits as an unprotected one, as required by <<ACE-rules-masked-implementations>>.
 +
 If the CR is in an Error State, the SCC consists of the MDH and `SIV` only, and its length
-is 32 bytes irrespective of every field above.
+is 32 bytes irrespective of every other field.
 
 . The *CRF capacity* occupied by a CR is determined by, and only by, the fields
   _Algorithm_, _AlgorithmPolicy_ and _SCProtection_.
-+
 It does not depend on _KeyType_, because a CR holds the expanded key material whether the
-key was provisioned by value or retrieved from the SKS through a System Key Identifier,
+key was provisioned by value or retrieved through a System Key Identifier,
 nor on _StateExtension_, because a CR is allocated with room for every field the
 Algorithm may come to use.
 
-All seven fields named above lie in bits [63:0] of the MDH, which is what allows a PI or
-SCC length to be computed from the first eight bytes alone, as required by `ace.load`
+All seven fields above
+lie in bits [63:0] of the MDH, which is what allows a PI or
+SCC length to be computed from their first eight bytes alone, as required by `ace.load`
 (<<ACE-instruction-load>>), `ace.store` (<<ACE-instruction-store>>) and Form B of
 `ace.size` (<<ACE-instruction-size>>).
 
@@ -3255,11 +3244,9 @@ which in turn can contain more information than the PI.
 This occurs because some information may not be serialized and instead be (re)computed at provisioning or import.
 Also, A CR may contain some additional implementation-specific information to optimize performance, which can be exported in the VDS in full or partial format.
 A different receiving implementation may safely ignore the latter during import after checking the `IMPQUAL` value
-
 Despite the fact that the internal state of a CR may contain more information than in a SCC, it is still possible that
 importing an SCC requires more _storage_ because `SIV`, `IMPQUAL`, and `SIV2` are not part of the information stored in a CR.
-
-This is addressed in the <<ACE-CR-representation>>.
+This is addressed in <<ACE-CR-representation>>.
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -3588,8 +3575,7 @@ to create the serialized, encrypted and authenticated SCC from the CR.
 ====
 Taking `SIV` as ``AD2[1]`` binds the two payloads together, so that `SIV2` and
 the keystream of the second segment change whenever the
-first payload changes; an attacker cannot graft the Implementation Variable-Length Data
-Section of one SCC onto the architecture-dependent part of another.
+first payload changes; an attacker cannot graft the Implementation VDS of one SCC onto the architecture-dependent part of another.
 ====
 
 // ////////////////////////////////////////////////////////////////////
@@ -3629,7 +3615,7 @@ When the import of the SCC of a fully configured CR is completed,
 
 [NOTE]
 ====
-This procedure ensures that if the SCC's optional _Implementation (Specific) Variable-Length Data Section_ (Implementation VDS) makes the SCC too large to fit in a CR, or if that VDS is incompatible, the implementation ignores the optional data, but keeps the architecture-dependent content: Only a failure of the first authentication (`SIV`) rejects the entire SCC. The importing implementation may then create different optional data. In both cases, it updates _ImpDataLen_ accordingly.
+This procedure ensures that if the SCC's optional implementation-specific VDS makes the SCC too large to fit in a CR, or if that VDS is incompatible, the implementation ignores the optional data, but keeps the architecture-dependent content: Only a failure of the first authentication (`SIV`) rejects the entire SCC.
 ====
 
 // ////////////////////////////////////////////////////////////////////
