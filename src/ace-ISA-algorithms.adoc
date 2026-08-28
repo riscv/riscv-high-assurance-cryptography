@@ -195,9 +195,24 @@ The examples are non-normative.
 [[ACE-general-rules-for-algorithms]]
 === General Rules for Algorithms
 
-. If a usage instruction that may modify the state of a CR is issued, or a state transition is requested via `ace.setst`, and this is not explicitly allowed by the current state of the Algorithm encoded in the CC in the CR, then the CR transitions to Error State _Invalid_.
+AGR1: Unallowed instructions in Algorithm States.::::
 
-. If `ACELEN` does not satisfy the granularity constraints of the Algorithm in its current state — for instance, it is not a whole multiple of the block size where the Algorithm requires one — the instruction performs no operation and the CR transitions to Error State _Invalid_.
+If a usage instruction that may modify the state of a CR is issued, or a state transition is requested via `ace.setst`, and this is not explicitly allowed by the current state of the Algorithm encoded in the CC in the CR, then the CR transitions to Error State _Invalid_.
+
+AGR2: Granularity Constraints of the Algorithm.:::
+If `ACELEN` does not satisfy the granularity constraints of the Algorithm in its current state — for instance, it is not a whole multiple of the block size where the Algorithm requires one — the instruction performs no operation and the CR transitions to Error State _Invalid_.
+
+AGR3: `ace.exec` iteration over blocks.:::
+
+In a state that processes whole blocks, one `ace.exec` performs the state's per-block operation
+`ACELEN`/`b` times, where `b` is the block size: for `i` = 0, `b`, 2`b`, {ellipsis}, `ACELEN` − `b`,
+in that order, it consumes `INPUT[i+b-1:i]` and produces `OUTPUT[i+b-1:i]`. Blocks are therefore
+taken and produced from the least significant position upwards, here and throughout this
+specification, and `ACELEN` = `b` is the single-block case. The states that an Algorithm describes
+as processing one block — its last-block, finalize, verify and output states — are excluded, and
+process exactly one block whatever `ACELEN` is.
++
+This rule applies to all places where `ace.exec` is used in Algorithm descriptions, unless it is explicitly mentioned that `ace.exec` consumes only one block.
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -352,12 +367,6 @@ State Machine:::
 
   *** If the state is _Encrypt_, then `OUTPUT <- enc_blk(key, INPUT)`.
   *** If the state is _Decrypt_, then `OUTPUT <- dec_blk(key, INPUT)`.
-  *** If `ACELEN` > `b`, then “`ace.exec OUTPUT, Kn|K{Xn}, INPUT`”
-      encrypts/decrypts block-by-block. Here, and in the rest of this document,
-      this means from the blocks in the least significant positions to the most
-      significant positions:
-      . `foreach(i from 0 to ACELEN-b by b)` {
-      ..   `OUTPUT[i+b-1:i] <- enc_blk(key, INPUT[i+b-1:i])` }
 
 //
 
@@ -457,9 +466,7 @@ State Machine:::
   . `tick_ctr()`, and
   . `OUTPUT ← tmp`.
 
-If `ACELEN` is a multiple of `b`, the above commands are executed `ACELEN/b` times, producing the
-successive `b`-bit blocks of `OUTPUT` from the least significant upwards. There is no `INPUT`:
-this state uses Form C, and the keystream depends only on `IV` and `ctr`.
+
 --
 
  ** In States _Ready_ and _Operate_, a Form B
@@ -608,9 +615,6 @@ keys in the SKS.
   .. In State _Decrypt_, `OUTPUT <- mask xor dec_blk(key1, INPUT xor mask)`.
   . `mask <- update_mask(mask)`.
 --
-+
-If `ACELEN` is a multiple of `b`, the above commands are executed `ACELEN/b` times, processing each `b`-bit block of `INPUT` into a `b`-bit block of `OUTPUT`.
-
 //
 
 Note that if `ace.setst` is issued to return to State _Ready_, the CC can be reused with a new tweak.
@@ -1066,9 +1070,6 @@ part-way through a non-96-bit IV could not resume.
 --
  . `absorb(INPUT)`.
 --
-+
-If `ACELEN` > `128`, the above operation is executed `ACELEN/128` times.
-
 ** In State _Encrypt_, ``ace.exec`` instructions are expected to be of Form A.
    “``ace.exec OUTPUT, Kn|K{Xn}, INPUT``” encrypts `INPUT` into `OUTPUT`, and
    absorbs `OUTPUT` into the `tag`, namely:
@@ -1087,9 +1088,6 @@ If `ACELEN` > `128`, the above operation is executed `ACELEN/128` times.
   .. `absorb(tmp)`.
   .. `OUTPUT <- tmp`.
 --
-+
-If `ACELEN` is a multiple of `b`, the above operations are executed `ACELEN/b` times, encrypting each `b`-bit block of `INPUT` into the corresponding `b`-bit block of `OUTPUT`.
-
 ** To transition to State _Enc_Last_Block_, a Form B `ace.setst` instruction is issued, whereby
 `last_blk_len`, the bit length of the last block, is set to the auxiliary argument `Xs`.
 A value of zero, or larger than 127, causes the CR to transition to Error State _Invalid_, as it does in the other modes that take a final-block length (cf. <<ACE-OCB-mode>>, <<ACE-CMAC-mode>>, <<ACE-Ascon-AEAD128>>).
@@ -1156,8 +1154,6 @@ In State _Decrypt_, ``ace.exec`` instructions are expected to be of Form A.
   .. `absorb(INPUT)`.
   .. `J0[127:96] <- bswap(bin(ctr,32))`.
   .. `OUTPUT <- INPUT xor enc_blk(key, J0)`.
-
-If `ACELEN` is a multiple of 128, the same behavior applies as in State _Encrypt_: the above operations are executed `ACELEN/128` times, decrypting each 128-bit block of `INPUT` into the corresponding `b`-bit block of `OUTPUT`.
 --
 
 ** To transition to State _Dec_Last_Block_, a Form B `ace.setst` instruction is issued, whereby
@@ -1473,8 +1469,6 @@ In State _Hash_Absorb_, Form B ``ace.exec`` instructions are expected.
 
 Such an instruction absorbs its `INPUT` into the internal state variable `tmp`, i.e., it performs `absorb(INPUT)`.
 
-If `ACELEN` is a multiple of 128, `absorb()` is executed on each of the `ACELEN/128` blocks in `INPUT`.
-
 The caller must zero every bit of a final partial block beyond the actual
 end of the data being absorbed—the AD, and on the encryption path also the plaintext.
 cite:[RFC8452] {sect}4 specifies both the AD and the plaintext as zero-padded to a multiple of 16 bytes.
@@ -1507,10 +1501,6 @@ If `ACELEN` > 128, only the 128 least significant bits of `INPUT` are considered
   . ``OUTPUT <- INPUT xor enc_blk(enc_key, 1 @ SIV[126:32] @ bin((int(SIV[31:0]) + ctr) mod 2^32^, 32)),``
   . `ctr <- ctr + 1`.
 --
-+
-If `ACELEN` > 128, the above operations are applied to each of the `ACELEN/128`
-blocks in `INPUT`.
-
 ** To transition to State _Enc_Last_Block_, a Form B `ace.setst` instruction is issued, whereby
 `last_blk_len`, the bit length of the last block, is set to the auxiliary argument `Xs`.
 Note that cite:[RFC8452] expresses this length in bytes and therefore `last_blk_len` must be a multiple of 8.
@@ -1537,10 +1527,6 @@ A value of zero, larger than 120, or not a multiple of 8, causes the CR to trans
 . `absorb(OUTPUT)`.
 . `ctr <- ctr + 1`.
 --
-+
-If `ACELEN` > 128, the above operations are applied to each of the `ACELEN/128`
-blocks in `INPUT`.
-
 ** To transition to State _Dec_Last_Block_, a Form B `ace.setst` instruction is issued, whereby
 `last_blk_len`, the bit length of the last block, is set to the auxiliary argument `Xs`.
 A value of zero, larger than 120, or not a multiple of 8, causes the CR to transition to Error State _Invalid_: cite:[RFC8452] defines the mode over byte strings, so the same rule applies on both the encryption and the decryption path.
@@ -1779,9 +1765,6 @@ nonces shorter than 6 bits.
  . `hash_A <- hash_A xor enc_blk(key, INPUT xor offset)`.
  . `index <- index + 1`.
 --
-+
-If `ACELEN` > `b`, the above operation is executed `ACELEN/b` times.
-
 ** To move to _Hash_Absorb_Last_Block_, a Form B `ace.setst` operation is expected, to set the length of the final block of the AD in `last_blk_len`.
 
 ** In State _Hash_Absorb_Last_Block_, only a single `ace.exec` instruction of Form B may be executed if `last_blk_len` != `0`. “``ace.exec Kn|K{Xn}, INPUT``” which absorbs the last data block in `tag`, i.e.:
@@ -1834,9 +1817,6 @@ positions numbered from 1. They are therefore computed here in the `bswap` view 
  . `OUTPUT <- offset xor enc_blk(key, INPUT xor offset)`
  . `index <- index + 1`.
 --
-+
-If `ACELEN > b`, the above operation sequence is executed `ACELEN/b` times, encrypting each `b`-bit block of `INPUT` into the corresponding `b`-bit block of `OUTPUT`.
-
 ** To move to _Enc_Last_Block_, a Form B `ace.setst` instruction is expected to be issued to set the bit length of the final block of the plaintext in `last_blk_len`.
 
 ** {empty}
@@ -1883,9 +1863,6 @@ In both cases the state then transitions to _Enc_Tag_Finalize_.
   . `OUTPUT <- tmp`
   . `index <- index + 1`.
 --
-+
-If `ACELEN` > `b`, the same behavior applies as in State _Encrypt_.
-
 ** To move to State _Dec_Last_Block_, a Form B `ace.setst` operation must be
    used to also contextually set the bit length of the final block of the
    ciphertext in `last_blk_len`.
@@ -2024,9 +2001,6 @@ State Machine:::
 --
    . `hash <- enc_blk(key, hash xor INPUT)`.
 --
-+
-If `ACELEN` > `b`, then the above operations are applied to each `b`-bit block of `INPUT`.
-
  ** Upon issuing a Form B “``ace.setst Kn|K{Xn}, #ace_state_hash_last_block, Xs``” where `Xs` contains the bit length of the last block, the following happens:
    . if `block_base` != 0, then the CR transitions to Error State _Invalid_, because the previous block is
      not complete and CMAC has no way to absorb a partial block other than as the last one.
@@ -2830,9 +2804,6 @@ If `ACELEN` > 128, only the 128 least significant bits of `INPUT` are considered
  . `ASCON(8)`
 --
 +
-If `ACELEN` > 128, this sequence of three operations is executed `ACELEN/128`
-times, once for each 128-bit block of `INPUT`.
-+
 If the associated data is empty, the caller must issue no ``ace.exec`` instruction in this state (hence, no permutation is applied).
 
 ** Upon entering State _Encrypt_ or _Decrypt_, the following domain separation
@@ -2847,11 +2818,6 @@ If the associated data is empty, the caller must issue no ``ace.exec`` instructi
  . `OUTPUT <- state[1] @ state[0]`
  . `ASCON(8)`
 --
-+
-If `ACELEN` is a multiple of 128, these operations are executed `ACELEN/128`
-times, encrypting each 128-bit block of `INPUT` into the corresponding 128-bit
-block of `OUTPUT`.
-
 ** To transition to State _Enc_Last_Block_, a Form B ``ace.setst`` instruction must be issued, whose
 auxiliary argument `Xs` is the bit length of the final block. It performs:
 +
@@ -2913,9 +2879,6 @@ In this state only one 128-bit block is processed.
 . `ASCON(8)`
 . `OUTPUT <- tmp`
 --
-+
-If `ACELEN` is a multiple of 128, these operations are executed `ACELEN/128` times, decrypting each 128-bit block of `INPUT` into the corresponding 128-bit block of `OUTPUT`.
-
 
 ** To transition to State _Dec_Last_Block_, a Form B ``ace.setst`` instruction must be issued, whose
 auxiliary argument `Xs` is the bit length of the final block. It performs:
@@ -3191,10 +3154,6 @@ State Machine:::
  . `state[0] <- state[0] xor INPUT`
  . `ASCON(12)`
 --
-+
-If `ACELEN` > `64`, these operations are executed `ACELEN/64` times, once for
-each `64`-bit block of `INPUT`.
-
 ** Upon entering _Hash_Finalize_, `countdown` is set to 3.
 
 ** In State _Hash_Finalize_, at most four ``ace.exec`` instructions of Form C
