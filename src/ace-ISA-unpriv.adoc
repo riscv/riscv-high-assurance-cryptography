@@ -1001,20 +1001,6 @@ The ACE state reset completes before the trap is taken.
 Other conditions may be detected synchronously, i.e., at issue of an ACE instruction or ACE CSR access.
 --
 
-//Illegal Instructions:::
-//+
-//--
-// Any of the following conditions raises an illegal-instruction exception. All are defects in the
-// *encoding* of the instruction, so none of them can arise together with `ace_exc_no_csk`, which
-// requires a well-formed instruction; the relative priority of the two is therefore immaterial.
-//
-//  . If ACE not present (`misa.L` clear) or any governing ACES field is Off, then issuing any ACE instruction, or accessing any ACE CSR.
-//   (Note that this does _not_ refer to the `*lcrstatus` CSRs fields of a CR being Off.)
-//  . Use of the zero register `X0` as a CR indirect index unless explicitly allowed to encode special cases.
-//  . Use an odd register number, resp., a register number not divisible by four, when a register pair, resp., quartet, is expected in an instruction.
-//  . Use of a vector-version of any ACE instruction with the vector extension (or ACEV) not enabled.
-// --
-
 Data Access to a Fully Configured CR:::
 +
 --
@@ -1491,10 +1477,13 @@ Since the architecture decouples instructions like `ace.exec` from the actual op
 
 The following rules apply to all ACE instructions, unless expressly stated otherwise.
 
-GR1. Indirect CR index:::
+GR1. Direct and indirect CR addressing:::
 
 Using `X0` as an indirect CR index raises an illegal-instruction exception, unless this is expressly used to encode an instruction: Currently, the only such exception is the encoding of `ace.reset`.
 An indirect index outside [0..31] also raises an illegal-instruction exception.
+
+Regarding the encoding itself: An instruction that names one CR carries a selector bit `r`, at the position shown in its encoding diagram. Namely, `r` = 0 when the CR index is the 5-bit immediate held in that field, and `r` = 1 when it is the value held in the GPR that field names.
+An instruction that names two CRs carries the two-bit field `R` instead, encoded as in <<ACE-instruction-clone>>.
 
 GR2. Register pairs and quartet:::
 
@@ -1764,7 +1753,6 @@ _Encoding_::
 ]}
 ....
 
-Bit `r` (i.e., bit 26) is 0 if the context is encoded as an immediate, and 1 if a GPR (scalar integer value) is used to reference it.
 For the four Forms A–D above, the encodings are:
 
 [upperalpha]
@@ -1817,8 +1805,7 @@ _Encodings_::
 +
 --
 The hart adds the following encodings to Forms B and C of `ace.exec`. As throughout
-`ace.exec`, the CR operand is encoded in `rs1`, and bit `r` selects between an immediate
-CR index and one held in a GPR. The sub-opcode occupies the register field that the
+`ace.exec`, the CR operand is encoded in `rs1`. The sub-opcode occupies the register field that the
 corresponding Form of `ace.exec` leaves unused: `rd` in Form B, `rs2` in Form C.
 
 [upperalpha]
@@ -1840,8 +1827,7 @@ destination of the move; it is nonetheless encoded in `rs1`, not in `rd`.
 _Description_::
 +
 --
-In each variant the CR is the one named by `rs1`, directly or, if bit `r` is 1, through
-the GPR it names.
+In each variant the CR is the one named by `rs1`.
 
 *Bound.* Let `size` be the length in bytes of the PI or SCC being transferred, determined from
 the first 8 bytes of the MDH exactly as `ace.load` determines it (<<ACE-instruction-load>>), let
@@ -1962,9 +1948,8 @@ _Encoding_::
 ]}
 ....
 
-Bit `r` (i.e., bit 20) is 0 if the context is encoded as an immediate, and 1 if a GPR (scalar integer value) is used to reference it.
-It occupies bit 20 rather than bit 26, where `ace.exec` carries the same selector, because
-bits [31:25] are taken here by `#immed7`.
+The selector occupies bit 20 here rather than bit 26, as in `ace.exec`, because bits [31:25] are
+taken by `#immed7`.
 
 When `r` = 1 and the CR register is `X0`: if `#immed7` = 0, the instruction is `ace.reset` (<<ACE-instruction-clear>>); all other values of `#immed7` are reserved and raise an illegal-instruction exception.
 
@@ -2049,8 +2034,6 @@ _Encoding_::
     { bits:  7, name: 'immed7' },
 ]}
 ....
-
-Bit `r` (i.e., bit 20) is 0 if the context is encoded as an immediate, and 1 if a GPR (scalar integer value) is used to reference it.
 
 The encodings of the three Forms are:
 [upperalpha]
@@ -2301,8 +2284,6 @@ _Encoding_::
 ]}
 ....
 
-Bit `r` (bit 26) is 0 when the context is an immediate and 1 when it is held in a GPR (scalar integer).
-
 If bit `h` (bit 28) is 0, the instruction is `ace.getmdl`; if `h` is 1, it is `ace.getmd`.
 
 If bit `v` (bit 29) is 0, the result is written to a GPR (GPR pair for RV32).
@@ -2380,7 +2361,6 @@ If bit `v` is 1, bit `h` must be 0, and the input is taken from the lowest 128 b
 
 The combination `v` = `h` = 1 is an illegal instruction.
 
-Bit `r` (i.e., bit 26) takes the value 0 if the context is encoded as an immediate in Bits [11:7], and it takes the value 1 if a GPR (also encoded in [11:7]) is used to reference it.
 --
 
 // comment
