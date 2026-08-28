@@ -179,7 +179,10 @@ should not treat `misa.L` as a stable interface until the question is settled.
 (((CSR,ACES field in mstatus)))
 (((CSR,ACES field in sstatus)))
 An ACE context status field, `ACES`, is added to `mstatus`[26:25] and shadowed in `sstatus`[26:25].
-It is defined analogously to the floating-point context status field, `FS`, and the vector context status field, `VS`.
+It is defined analogously to the floating-point context status field, `FS`, and the vector context status field, `VS`,
+and tracks the dirtiness of the CRs, of the ACEIOBUF and of every ACE-specific CSR.
+`mstatus.ACES` is always in effect; when V=1 the `vsstatus.ACES` field of <<ACE-ACES-field-VS>> is
+in effect as well.
 
 [WARNING]
 ====
@@ -205,19 +208,20 @@ Unconfigured CRs that were previously configured also cause ACES to become Dirty
 |===
 
 
-When `mstatus.ACES` is Initial or Clean, any instruction that modifies ACE state sets `mstatus.ACES` to Dirty.
-Implementations may also set `mstatus.ACES` to Dirty from Initial or Clean at any time, even in the absence of a state change.
+The following holds for every `ACES` field, at the privilege modes at which it is in effect.
+Any ACE instruction, including an access to an ACE CSR, raises an illegal-instruction exception if a
+field in effect is Off. Where none is Off, an instruction that modifies ACE state sets every field
+in effect to Dirty, and an implementation may set a field to Dirty from Initial or Clean at any
+time, even in the absence of a state change. While a field is Dirty, the `SD` bit of the register
+holding it is 1; otherwise that `SD` is set in accordance with the existing specifications. In
+implementations with a writable `misa.L`, an `ACES` field may be present even when `misa.L` is
+clear, analogously to `FS` and `VS`.
 
 NOTE: Precise management of `mstatus.ACES` is an optimization that software may use to reduce context-switch overhead.
 
-When `mstatus.ACES` is Dirty, `mstatus.SD` is 1;
-otherwise, `mstatus.SD` is set in accordance with existing specifications.
-
-NOTE: Writes to `mstatus.ACES` do not modify any ACE state.
-Setting ACES to Off, Initial, or Clean does not clear CRs, ACEIOBUF, or ACE CSRs;
+NOTE: Writes to an `ACES` field do not modify any ACE state.
+Setting a field to Off, Initial, or Clean does not clear CRs, ACEIOBUF, or ACE CSRs;
 any state changes must be explicit and must precede such a write.
-
-In implementations with a writable `misa.L`, the `mstatus.ACES` field may be present even when `misa.L` is clear, analogously to `mstatus.FS` and `mstatus.VS`.
 
 [NOTE]
 ====
@@ -235,17 +239,8 @@ implementations may have dedicated hardware to speed up the instructions.
 
 {empty}
 (((CSR,ACES field in vsstatus)))
-When the H extension is present, an ACES field is added to `vsstatus`[26:25], defined analogously to `mstatus.FS` and `mstatus.VS`, and tracking the dirtiness of CRs, ACEIOBUF, and all ACE-specific CSRs.
-
-When V=1:
-
-* Both `vsstatus.ACES` and `mstatus.ACES` are in effect.
-* Any ACE instruction, including access to ACE CSRs, raises an illegal-instruction exception if either field is Off.
-* If neither field is Off, any instruction that modifies ACE state sets both `mstatus.ACES` and `vsstatus.ACES` to Dirty.
-* Implementations may set `ACES` to Dirty from Initial or Clean at any time, even without a state change.
-* When `vsstatus.ACES` is Dirty, `vsstatus.SD` is 1; otherwise, `vsstatus.SD` is set in accordance with existing specifications.
-
-In implementations with a writable `misa.L`, `vsstatus.ACES` may be present even when `misa.L` is clear.
+When the H extension is present, an ACES field is added to `vsstatus`[26:25]. When V=1 it is in
+effect together with `mstatus.ACES`, and <<ACE-ACES-field-in-mstatus>> governs both.
 
 NOTE: `mstatus.ACES` and `vsstatus.ACES` are not considered ACE context state
 for the purposes of state tracking, and hence writes to `vsstatus.ACES` do not set `mstatus.ACES` to Dirty.
