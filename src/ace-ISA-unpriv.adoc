@@ -1591,33 +1591,29 @@ _Description_::
 `%offset(Xs1)` is the address of *that* byte, not of the MDH: software passes the MDH separately, to the `ace.mgmt` that opened the CR, and so does not transfer it here.
 
 This instruction requires that the CR be ready to import information and that the MDH has already been loaded by passing it as a parameter in a GPR pair (quartet for RV32), resp., vector register, to the `ace.mgmt` instruction used to open the CR for provisioning or import.
-Besides checking the soundness of the MDH, `ace.mgmt` also sets `acestart` to zero.
 
 If the _ConfigStatus_ field equals `ace_cfgst_complete`, ACE exception `ace_exc_complete_cr_data_access` is raised.
 
-`ace.load` can load data larger than the effective XLEN.
+[[ACE-cr-transfer-model,The CR transfer model]]
+*The CR transfer model.* The following holds for `ace.load` and for `ace.store`, and is stated here
+once. The implementation obtains the payload length `size` from the first 8 bytes of the MDH, which
+software supplies as part of the entire MDH block: the _ConfigStatus_ field identifies the payload
+as a PI or an SCC, and the fields in <<ACE-length-rule>> determine its length. `size` excludes the
+MDH but, in the case of an SCC, includes SIV and, where present, SIV2 and IMPQUAL. Either
+instruction may transfer more than the effective XLEN. `acestart` is a byte offset into that
+payload, so the MDH bytes that software transfers on its own are not counted in it; it is always a
+multiple of 16, and an implementation may halt a transfer only at a 16-byte boundary. Let `end` be
+the offset at which the instruction stops, which each instruction gives below. The transfer index
+advances the memory address and the offset within the serialized representation of the CR together,
+beginning at the current `acestart`, so a resumed transfer moves the bytes at offsets [`acestart`,
+`end`) — that is `end` − `acestart` bytes, not `end` — the first of them being the one at memory
+address `Xs1 + %offset + acestart`. A resumption therefore never re-transfers a byte and never
+displaces the remainder of the payload.
 
-The implementation determines the input size `size`
-from the first 8 bytes of the MDH, which software supplies as part of the entire MDH block.
-The _ConfigStatus_ field identifies the input type (PI or SCC); the fields in <<ACE-length-rule>> determine its length.
-`size` excludes the MDH, but in case of a SCC, includes SIV, and possibly SIV2 and IMPQUAL.
-
-`acestart` tracks the number of loaded bytes and is a multiple of 16. In other words, `ace.load` loads data in 16-byte chunks.
-
-`ace.load` copies data from memory into the serialized representation of the CR that follows the
-MDH, advancing both the memory address and the offset within that representation together, and
-beginning at the current `acestart`.
-Precisely, for each _j_ from `acestart` to `size` − 1, the byte at memory address
-`Xs1 + %offset + `_j_ is loaded into the _j_-th byte after the MDH of the serialized
+For `ace.load`, `end` = `size`: for each _j_ from `acestart` to `size` − 1, the byte at memory
+address `Xs1 + %offset + `_j_ is loaded into the _j_-th byte after the MDH of the serialized
 representation of the CR.
-A resumed `ace.load` therefore transfers `size` − `acestart` bytes, not `size`, and the first
-byte it moves is the one at memory address `Xs1 + %offset + acestart`: the index _j_ advances the
-memory address and the CR offset together, so a resumption never re-reads a byte already loaded
-and never displaces the remainder of the payload.
 
-While `acestart` for CR transfers is a byte count, implementations may halt only at 16-byte multiples.
-
-Note that the rules in <<ACE-resumability>> apply.
 // See the non-normative note at the end of <<ACE-instruction-manage>>,
 // <<ACE-Memory-Model>>, and <<ACE-export-import-algorithms>>.
 
@@ -1653,39 +1649,14 @@ _Description_::
 --
 Exports raw data from the CR `Ks2` or `K{Xs2}`, starting with the first byte after the 16-byte MDH, to memory at address `%offset(Xs1)`.
 
-The MDH must be read from the CR using `ace.getmd` into a a pair of GPRs (quartet for RV32) or `ace.getmdv` into a vector register of length at least 128 bits,
+The MDH must be read from the CR using `ace.getmd` into a pair of GPRs (quartet for RV32) or `ace.getmdv` into a vector register of length at least 128 bits,
 and saved to memory by the software.
-Note that the `ace.mgmt` used to start the export also sets `acestart` to zero at the end.
 
-`ace.store` can store data that may be larger than the effective XLEN.
-
-`acestart` keeps track of the number of stored bytes. It starts from 0, the value the
-`ace.mgmt` that opened the export left it at: the count is an offset into the payload that
-*follows* the MDH, so the MDH bytes that software has already saved on its own are not included
-in it. If `ace.store` is
-interrupted, `acestart` contains the offset to the next byte to store upon
-resumption.
-
-The implementation determines the input size `size` from the first 8 bytes of the MDH.
-The _ConfigStatus_ field identifies the input type (PI or SCC); the fields in <<ACE-length-rule>> determine its length.
-`size` excludes the MDH, but in case of a SCC, includes SIV, and possibly SIV2 and IMPQUAL.
-
-`acestart` tracks the number of bytes stored to memory and is a multiple of 16.
-In other words, `ace.store` stores data in 16-byte chunks.
-
-`ace.store` copies data from the serialized representation of the CR that follows the MDH to
-external memory, advancing both the offset within that representation and the memory address
-together, and beginning at the current `acestart`.
+<<ACE-cr-transfer-model>> of <<ACE-instruction-load>> applies, in the direction from the CR to memory.
 
 *Bound.* Let `imglen` be the serialized CR image length in bytes, excluding the MDH, and let `end` = min(`size`, `imglen`). For each _j_ from `acestart` to `end` − 1, `ace.store` writes the byte at offset _j_ after the MDH to memory address `Xs1 + %offset + `_j_. It never reads beyond the CR image.
 
-A resumed transfer writes `end` − `acestart` bytes, beginning at memory offset `acestart`; thus it neither rewrites stored bytes nor displaces the remaining payload.
-
 NOTE: `size` may exceed `imglen` because `ace_cfgst_exporting` does not distinguish a PI-shaped payload from an SCC-shaped one and therefore may specify the longer SCC length (<<ACE-length-rule>>). The bound prevents reads past the CR image into the CRF (<<ACE-cryptographic-registers>>). `ace.load` needs no equivalent bound because its _ConfigStatus_ identifies the payload type.
-
-While `acestart` for CR transfers is a byte count, implementations may halt only at 16-byte multiples.
-
-Note that the rules in <<ACE-resumability>> apply.
 
 // See the non-normative note at the end of <<ACE-instruction-manage>>,
 // <<ACE-Memory-Model>>, and <<ACE-export-import-algorithms>>.
@@ -1767,8 +1738,6 @@ The instruction may take an input and produce an output.
 If the V extension register file is not implemented, only Form D `ace.exec`
 is supported and `ace.input`, `ace.output` are used to provide inputs and
 extract outputs from `ace.exec`, as described in <<ACE-usage-input-output>>.
-
-Note that the rules in <<ACE-resumability>> apply.
 --
 
 // ////////////////////////////////////////////////////////////////////
@@ -1821,7 +1790,7 @@ _Description_::
 In each variant the CR is the one named by `rs1`.
 
 *Bound.* Let `size` be the length in bytes of the PI or SCC being transferred, determined from
-the first 8 bytes of the MDH exactly as `ace.load` determines it (<<ACE-instruction-load>>), let
+the first 8 bytes of the MDH as <<ACE-cr-transfer-model>> of <<ACE-instruction-load>> prescribes, let
 `imglen` be the serialized CR image length in bytes excluding the MDH, and let `end` =
 min(`size`, `imglen`). In every variant below:
 
@@ -2678,8 +2647,6 @@ which cannot be written.
 Both CRs are endpoints of a usage operation. The _UsagePolicy_ of each is evaluated independently
 against the current privilege mode, as is its expiration, and the rules of <<ACE-State-field>> for
 a CR in an Error State apply to each of them separately.
-
-Note that the rules in <<ACE-resumability>> apply.
 --
 
 ////
@@ -2864,8 +2831,6 @@ If `Xl` is greater than `aceiobuftop`, only the bytes of the window are transfer
 The intended usage of `ace.input` and `ace.output` is explained in detail in
 <<ACE-usage-input-output>>.
 
-Note that the rules in <<ACE-resumability>> apply.
-
 `ace.input` may be used only if the ACEIOBUF is enabled and `aceiobuflen` is nonzero.
 Otherwise, ACE exception `ace_exc_unconfigured_buffer` is raised.
 --
@@ -2915,8 +2880,6 @@ run to the end of the window (<<ACE-CSR-acestart>>). Leaving `acestart` unchange
 make a resumption loop that retries on an empty window fail to terminate.
 
 If `Xl` is greater than `aceiobuftop`, only the bytes of the window are transferred; software can detect this case by comparing `Xl` with `aceiobuftop`.
-
-Note that the rules in <<ACE-resumability>> apply.
 
 `ace.output` may be used only if the ACEIOBUF is enabled and `aceiobuflen` is nonzero.
 Otherwise, ACE exception `ace_exc_unconfigured_buffer` is raised.
