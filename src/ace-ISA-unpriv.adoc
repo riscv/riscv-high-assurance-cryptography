@@ -1527,6 +1527,12 @@ GR5. Management of CRs.:::
 Opening a CR for export and import, as well as executing `ace.clear`, is always allowed in any State, even if not explicitly mentioned in an Algorithm specification.
 For the restrictions on `ace.clone`, cf. <<ACE-instruction-clone>>.
 
+GR6. A 128-bit MDH in a vector operand:::
+
+Where a Form of an ACE instruction carries the whole 128-bit MDH in a vector register or group, that
+operand must satisfy `VL` {times} `SEW` {ge} 128; otherwise an illegal-instruction exception is
+raised. <<ACE-extensions-overview-unpriv>> records which vector extensions provide such a register.
+
 // ////////////////////////////////////////////////////////////////////
 
 [[ACE-management-operations]]
@@ -1651,7 +1657,7 @@ _Description_::
 --
 Exports raw data from the CR `Ks2` or `K{Xs2}`, starting with the first byte after the 16-byte MDH, to memory at address `%offset(Xs1)`.
 
-The MDH must be read from the CR using `ace.getmd` into a pair of GPRs (quartet for RV32) or `ace.getmdv` into a vector register of length at least 128 bits,
+The MDH must be read from the CR using `ace.getmd` into a pair of GPRs (quartet for RV32) or `ace.getmdv` into a vector register,
 and saved to memory by the software.
 
 <<ACE-cr-transfer-model>> of <<ACE-instruction-load>> applies, in the direction from the CR to memory.
@@ -2249,8 +2255,6 @@ On RV64:
 * For `ace.getmd` the destination is a GPR pair. The instruction copies bits [63:0] of the MDH of CR `Ks` or `K{Xs}` into GPR `Xd` and bits [127:64] of the MDH of the CR into GPR `X[d+1]`.
 
 * `ace.getmdv` (vector register output version) copies bits [127:0] into vector register `Vd`.
-This version of the instruction only supports vector operands of at least 128 bits, that is, `VL` {times} `SEW` {ge} 128.
-If `VL` {times} `SEW` < 128, an illegal-instruction exception is raised.
 
 On RV32:
 
@@ -2683,7 +2687,7 @@ There are three Forms of the `ace.size` instruction:
 [upperalpha]
 . `ace.size Xd, Ks|K{Xs}` - Size from a context.
 . `ace.size Xd, Xs` - Size from MDH[63:0] in one (RV64) or two (RV32) GPRs.
-. `ace.size Xd, Vs` - Size from MDH in one vector register of at least 128 bits.
+. `ace.size Xd, Vs` - Size from MDH in one vector register.
 --
 
 // Without this comment, the next part is not properly formatted...
@@ -2720,34 +2724,20 @@ The `F` field and the `r` bit may assume the following values:
 _Description_:: {empty}
 +
 --
-* Form A `ace.size` returns in GPR `Xd` the total size in bytes of the memory buffer that
-  would be necessary to store the exported SCC or (partially configured) PI.
-  In the first case, the size includes
-  the authentication tag(s) and the additional variable-length data.
-  In the second case, the size is the same as the size of the entire PI.
-  Knowing this size is necessary
-  for any feature that relies on exporting a CR, including context switching.
-  The instruction returns 0 if the CR is unconfigured.
+`ace.size` returns in GPR `Xd` the total size in bytes of the memory buffer that would be necessary
+to store the exported SCC or the (partially configured) PI. For an SCC the size includes the
+authentication tag(s) and the additional variable-length data; for a PI it is the size of the entire
+PI. Knowing this size is necessary for any feature that relies on exporting a CR, including context
+switching.
 
-* On RV64, Forms B and C `ace.size` return the total size in bytes of the memory buffer that
-  would be necessary to store the exported SCC or (partially configured) PI.
-  In the first case, the size includes
-  the authentication tag(s) and the additional variable-length data.
-  In the second case, the size is the same as the size of the entire PI.
-  If the Algorithm is not supported or the Metadata is
-  invalid, the instruction returns `0`.
+The three Forms differ only in where the MDH is taken from, as the mnemonics above give: from the CR
+itself for Form A, from Bits [63:0] supplied in `Xs` (in `X[s+1] @ Xs` on RV32) for Form B, and from Bits [127:0] supplied in `Vs` for Form C.
 
-* On systems that implement `Zvl128b`, `Zvl256b`, `Zvl512b`, or `Zvl1024b`,
-  Form C of `ace.size` returns in GPR `Xd` the total size in bytes of an SCC whose Bits
-  [127:0] of the MDH are given in `Vs`, including the additional
-  variable-length data. If the Algorithm is not supported or the Metadata is
-  invalid, the instruction returns `0`.
-
-A return of `0` from Form B or Form C means that the _Algorithm_, _AlgorithmPolicy_ or
-_SCProtection_ encoded in the supplied MDH is unsupported, or that the MDH is otherwise malformed.
-A return of `32` is *not* an error indication: it is the size of the SCC of a CC whose _State_ is an
-Error State (<<ACE-length-rule>>), and the caller can tell the two apart by inspecting the _State_
-field of the MDH it supplied.
+The instruction returns `0` on error: for Form A when the CR is unconfigured, and for Forms B and C
+when the _Algorithm_, _AlgorithmPolicy_ or _SCProtection_ encoded in the supplied MDH is
+unsupported, or the MDH is otherwise malformed. A return of `32` is *not* an error indication: it is
+the size of the SCC of a CC whose _State_ is an Error State (<<ACE-length-rule>>), and the caller can
+tell the two apart by inspecting the _State_ field of the MDH it supplied.
 --
 
 //
