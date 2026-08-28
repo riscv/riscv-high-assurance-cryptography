@@ -287,7 +287,13 @@ operand it is defined over — an `ACELEN` greater than that width is truncated:
 significant bits of `INPUT` are considered, and the rest are ignored. The width is not necessarily
 the block size `b`.
 
-AGR7: Progress of a long-running operation.:::
+AGR7: Unwritten output bits are cleared.:::
+
+When a state writes fewer than `ACELEN` bits to `OUTPUT`, the remaining bits of `OUTPUT` are
+cleared. This concerns the bits *within* the operand; the elements beyond `VL`, governed by the
+tail-agnostic policy of <<ACE-ACEV>>, are a separate matter.
+
+AGR8: Progress of a long-running operation.:::
 
 An Algorithm may define an operation that transfers no data and runs long enough for an
 implementation to interrupt and resume it — a scalar multiplication, a key generation, a signature
@@ -300,7 +306,7 @@ restarts the operation when it does. Since <<ACE-SCC-import>> discards it whenev
 Implementation Qualifier does not match, an operation interrupted on one implementation and
 imported on another always restarts.
 
-AGR8: Loading and emitting a long field.:::
+AGR9: Loading and emitting a long field.:::
 
 A state that loads a long field from `INPUT`, or emits one to `OUTPUT`, over several `ace.exec`
 instructions records the amount transferred so far in a state field _W_, usually _AlgorithmUse_ of
@@ -2064,7 +2070,7 @@ State Machine:::
 ** In State _Hash_Output_, there are two options:
 
 . A single ``ace.exec`` instruction of Form C can be issued, i.e., “``ace.exec OUTPUT, Kn|K{Xn}``”, to output the hash into `OUTPUT`.
-   If `ACELEN` > `b`, the bits of `OUTPUT` beyond the `b`-th are cleared.
+   Bits of `OUTPUT` beyond the `b`-th are cleared.
    Upon issuing that instruction, the CC transitions to State _Success_.
 
  . Alternatively, a Form C ``ace.setst Kn|K{Xn}, #ace_state_hash_verify, INPUT`` may be issued to verify the CMAC without disclosing it: the `b` least significant bits of `INPUT` are compared with `hash`, and the state transitions to _Success_ if they match, to _Failure_ otherwise. Verification of a truncated CMAC is instead performed in software, after emitting the tag.
@@ -2218,8 +2224,7 @@ Then, state transitions to _Hash_Absorb_Last_Block_ as expected.
      .. `block_base <- block_base + amount`
      .. if (`block_base` = `t`) then:
       ... if we are in a Hash function, any bits of `OUTPUT` beyond `output_base` are cleared,
-          the state transitions to _Success_, and the instruction returns. This matches the rule
-          stated for CMAC in <<ACE-CMAC-mode>>.
+          the state transitions to _Success_, and the instruction returns.
       ... `update()`
       ... `block_base <- 0`
       ... *Here* the instruction can be interrupted, with `acestart <- output_base / 8`.
@@ -3162,7 +3167,7 @@ State Machine:::
 --
 +
 If `ACELEN` {ge} `128`, these operations are executed `ACELEN/64` times, writing to `OUTPUT`[63:0] the first time, then to `OUTPUT`[127:64], `OUTPUT`[191:128], and `OUTPUT`[255:192]. If more than one ``ace.exec`` instruction is required, writing restarts from `OUTPUT`[63:0].
-If `countdown` reaches zero before the entire output register is written, the unwritten bits are cleared, as in <<ACE-CMAC-mode>> and <<ACE-hash-functions>>: this may occur, for instance, if `ACELEN` = `192` or `ACELEN` = `256`.
+If `countdown` reaches zero before the entire output register is written, the unwritten bits are cleared: this may occur, for instance, if `ACELEN` = `192` or `ACELEN` = `256`.
 This is usually not a problem, since the output vectors will usually be configured for 64-bit, 128-bit, or 256-bit blocks, in which case four, two, or one ``ace.exec`` instructions are required, respectively.
 
 //
@@ -3448,7 +3453,7 @@ therefore needs no flag.
 
  ** When the CC is created, i.e., provisioned, the `Generator` is set to the default parameter, and `Scalar` is set to zero.
 
- ** All the “set” and “output” operations follow rule AGR8 of
+ ** All the “set” and “output” operations follow rule AGR9 of
 <<ACE-general-rules-for-algorithms>>, with the progress recorded in `block_base`, in bytes.
 
  ** To transition to State _Set_Generator_, a Form A or B `ace.setst` is used.
@@ -3458,7 +3463,7 @@ therefore needs no flag.
   . A state change operation can be issued, including to states that require a set `Generator`.
 
  *** Otherwise:
-  . `Generator`, of length `ub`/8 bytes, is loaded using (multi-block) `ace.exec` instructions of Form B, following AGR8.
+  . `Generator`, of length `ub`/8 bytes, is loaded using (multi-block) `ace.exec` instructions of Form B, following AGR9.
   . Once it is complete, a state change operation can be issued, including to states that require a set `Generator`.
 
  ** To transition to any of the States _Set_Scalar_, _Set_Hash_, _Set_SecondPt_, or _Set_Signature_ a Form A `ace.setst` is used.
@@ -3467,7 +3472,7 @@ therefore needs no flag.
       set to False. `Scalar` has no such flag: it is simply set to zero, which is not a legal
       private key.
   *** Field _X_ is then loaded using (multi-block) `ace.exec` instructions of Form B, following
-      AGR8, and ``Has``_X_ is set once the field is complete, where that flag exists.
+      AGR9, and ``Has``_X_ is set once the field is complete, where that flag exists.
 
  ** It is also allowed to transition to _Set_Scalar_ using a Form B `ace.setst` with a non-zero value in the GPR.
     In this case, a random value is set, no further
@@ -3528,9 +3533,9 @@ if `r` = 0, if `r` + `k` = `n`, or if `s` = 0.
      This allows the ACE implementation to determine not only which output must be written out, but also its length.
      *** If `OutputType` = False, the output is in `SecondPt`.
      *** If `OutputType` = True,  the output is in `Signature`.
-   . In State _Output_, the result is emitted using (multi-block) `ace.exec` instructions of Form C, following AGR8.
+   . In State _Output_, the result is emitted using (multi-block) `ace.exec` instructions of Form C, following AGR9.
      . Data beyond the length of the output is replaced with zeros in the last exported part.
-     . Once the output is complete the state transitions to _Success_; this is the transition of its own that AGR8 admits.
+     . Once the output is complete the state transitions to _Success_; this is the transition of its own that AGR9 admits.
 
  ** If, after any computation, either `Generator` or `SecondPt` is the point at infinity, the corresponding field is set to the special value that encodes it.
 
@@ -3577,7 +3582,7 @@ loaded through their respective _Set_ states, is unaffected.
   ** {empty}
 +
 --
-`Progress`, bits [15:1] of _AlgorithmUse_, is the field used following rule AGR7 for Point Multiplication,
+`Progress`, bits [15:1] of _AlgorithmUse_, is the field used following rule AGR8 for Point Multiplication,
 Signature Generation and Signature Verification; what an implementation exports to allow resumption
 typically includes precomputed multiples of the base point.
 
@@ -3708,7 +3713,7 @@ State Machine:::
 ** To transition to State _Set_Ctx_, a Form B `ace.setst` is used whose auxiliary
    argument `Xs` sets `ctxlen`. Values greater than 255 cause the CR to transition to
    Error State _Invalid_. If `ctxlen` {ne} 0, the `ctx` value is then loaded with
-   (multi-block) Form B `ace.exec` instructions, following AGR8 as the _Set_ states of
+   (multi-block) Form B `ace.exec` instructions, following AGR9 as the _Set_ states of
    <<ACE-ECC>> do, with the progress recorded in `block_base`.
 
 ** To enter State _Msg_Absorb_ (pure mode only; on an implementation that does not
@@ -3949,13 +3954,13 @@ machine still transitions to _Success_, and the two cases remain indistinguishab
 
 ** In States _encapsk_Input_, _decapsk_Input_ and _ciphertext_Input_, the fields `encapsk`,
 `decapsk` and `ciphertext` are loaded using (multi-block) `ace.exec` instructions of Form B,
-following rule AGR8 of <<ACE-general-rules-for-algorithms>>, with the progress recorded in
+following rule AGR9 of <<ACE-general-rules-for-algorithms>>, with the progress recorded in
 _AlgorithmUse_. The size of each field in bits is 8
 times the size in bytes given in <<ACE-ML-KEM-sizes>>, so it is determined by the KEM variant and
 the state and no variable need hold it.
 
 ** In States _encapsk_Output_ and _ciphertext_Output_, the fields `encapsk` and `ciphertext` are
-emitted using (multi-block) `ace.exec` instructions of Form C, following rule AGR8, with the
+emitted using (multi-block) `ace.exec` instructions of Form C, following rule AGR9, with the
 progress recorded in _AlgorithmUse_. Both fields are public, so no restriction applies to where they
 are written.
 
@@ -4055,7 +4060,7 @@ Therefore it is the responsibility of the caller to compute the public-key hash 
 
 Besides `rnd`, the internal state may contain several additional variables, for instance intermediate values of the computation of the NTT.
 The definition of all these values is implementation dependent, as is their occupancy.
-They must be saved in an SCC in the Additional Data Section, allowing resumption of an interrupted operation on the same implementation, as AGR7 prescribes.
+They must be saved in an SCC in the Additional Data Section, allowing resumption of an interrupted operation on the same implementation, as AGR8 prescribes.
 --
 
 * *Serialized Context*:
@@ -4150,7 +4155,7 @@ ML-DSA Algorithms define:
 
 ** In States _privkey_Input_, _pubkey_Input_, _ctx_Input_, _mu_Input_, _tr_Input_, and _Sign_Input_,
 the fields `privkey`, `pubkey`, `ctx`, `mu`, `tr` and `signature`, respectively, are loaded using
-(multi-block) `ace.exec` instructions of Form B, following rule AGR8 of
+(multi-block) `ace.exec` instructions of Form B, following rule AGR9 of
 <<ACE-general-rules-for-algorithms>>, with the progress recorded in _AlgorithmUse_.
 
 ** In State _compute_pubKey_ a single Form D `ace.exec` instruction performs the following operations:
@@ -4179,7 +4184,7 @@ otherwise it transitions to State _Failure_. cite:[nist-fips-204] Algorithm 8 re
 only, so nothing is written to `signature` on this path.
 
 ** In States _pubkey_Output_ and _Sign_Output_, the fields `pubkey` and `signature` are emitted
-using (multi-block) `ace.exec` instructions of Form C, following rule AGR8, with the progress
+using (multi-block) `ace.exec` instructions of Form C, following rule AGR9, with the progress
 recorded in _AlgorithmUse_.
 Entering _pubkey_Output_ while `HasPubKey` is false causes the CR to transition to Error State _Invalid_.
 
