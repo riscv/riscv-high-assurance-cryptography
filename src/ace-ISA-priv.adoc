@@ -3,7 +3,7 @@
 
 The ACE Privileged Architecture consists of CSRs and optional custom instructions to implement parts of the unprivileged ISA.
 
-We refer to the ACE Unprivileged Architecture for the definitions of ACE instructions and the categories of _configuration_ and _usage_ instructions, including the meaning of “to use a CR”.
+We refer to the ACE Unprivileged Architecture for the definitions of ACE instructions and the categories of _configuration_ and _usage_ instructions.
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -28,35 +28,43 @@ We refer to the ACE Unprivileged Architecture for the definitions of ACE instruc
 
 If `Zklv` or `Zklio` is implemented and the hart is not an M-mode-only hart: `misa` must implement the `L` bit, `*status` must implement `ACES`.
 
-On M-mode-only systems:::
+On an M-mode-only hart none of the extensions in the above table is mandatory.
+`Smacecsk` is allowed in every configuration.
+If `Smacepbootscrt` is implemented, in any configuration, the `macephysbootscrt`
+CSR group is implemented to set the Physical Boot Secret Locality.
+The rest are:
 
-* None of the extensions in <<ACE-priv-extensions>> are mandatory.
-* `Smacecrstatus` implies `mlcrstatus` is implemented and shadowed in `slcrstatus`.
-* `Smacecsk` is allowed.
-* If `Smacelclt` is implemented, the `macelocality` CSR group is implemented to set the Locality MLocality (see <<ACE-Localities>>).
-* If `Smacepbootscrt` is implemented, the `macephysbootscrt` CSR group is implemented to set the Physical Boot Secret Locality.
+[[ACE-priv-config-requirements]]
+.Privileged requirements, per system configuration
+[float="center",align="center",cols="<19%,<27%,<27%,<27%",options="header"]
+|===
+| Extension {rightarrow} +
+Configuration {downarrow}  | `Smacecrstatus` | `Smacelclt` | `Smacevbootscrt`
 
-On an M+U system:::
+| M-mode only
+| Optional: If implemented, `mlcrstatus` is implemented and shadowed in `slcrstatus`.
+| Optional: If implemented, `macelocality` configures MLocality
+| {empty}
 
-* `Smacecrstatus` is mandatory: `mlcrstatus` is implemented and shadowed in `slcrstatus`.
-* `Smacecsk` is allowed.
-* If `Smacelclt` is implemented, the `macelocality` CSR group is implemented to set the Locality MLocality (see <<ACE-Localities>>).
-* If `Smacepbootscrt` is implemented, the `macephysbootscrt` CSR group is implemented to set the Physical Boot Secret Locality.
+| M+U
+| Mandatory: `mlcrstatus` is implemented and shadowed in `slcrstatus`.
+| Optional: If implemented, `macelocality` configures MLocality
+| {empty}
 
-On an M+S+U system:::
+| M+S+U
+| Mandatory: `mlcrstatus` and `slcrstatus` are implemented and are distinct.
+| Optional: If implemented, `macelocality` and `sacelocality` configure MLocality and SLocality
+| {empty}
 
-* `Smacecrstatus` is mandatory: `mlcrstatus` and `slcrstatus` are implemented and are distinct.
-* `Smacecsk` is allowed.
-* If `Smacelclt` is implemented, both `macelocality` and `sacelocality` CSR groups are implemented to set the Localities MLocality and SLocality, respectively. (see <<ACE-Localities>>).
-* If `Smacepbootscrt` is implemented, the `macephysbootscrt` CSR group is implemented to set the Physical Boot Secret Locality.
+| M+S+U with H
+| Mandatory: `mlcrstatus`, `slcrstatus` and `vslcrstatus` are implemented and are distinct.
+| Optional: If implemented, `macelocality`, `hacelocality` and `sacelocality`, configure MLocality, HLocality and SLocality
+| Optional: If implemented, `hacevirtbootscrt` configures the Virtual Boot Secret Locality
+|===
 
-On an M+S+U system with the H extension:::
-
-* `Smacecrstatus` is mandatory: `mlcrstatus`, `slcrstatus`, and `vslcrstatus` are implemented and are distinct.
-* `Smacecsk` is allowed.
-* If `Smacelclt` is implemented, the `macelocality`, `hacelocality`, and `sacelocality` CSR groups are implemented to set the Localities MLocality, HLocality, and SLocality, respectively. (see <<ACE-Localities>>).
-* If `Smacepbootscrt` is implemented, the `macephysbootscrt` CSR group is implemented to set the Physical Boot Secret Locality.
-* If `Smacevbootscrt` is implemented, the `hacevirtbootscrt` CSR group is implemented to set the Virtual Boot Secret Locality.
+The last two columns give the CSR groups that are implemented where the extension is implemented,
+and the Localities they set (<<ACE-Localities>>); an empty cell means the extension has no effect in
+that configuration.
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -78,7 +86,7 @@ The actual numbers are TBD.
 
 [[ACE-exception-codes]]
 .Exception causes and their meanings, in decreasing priority order (also relative to RISC-V exceptions)
-[float="center",align="center",width="100%",cols="^7%,<23%,<70%",options="header"]
+[float="center",align="center",width="100%",cols="^7%,<25%,<68%",options="header"]
 |===
 |Value | Mnemonic/RISC-V type           | Examples in ACE (((ACE, error codes)))
 |      | Instruction address misaligned | {empty}
@@ -327,7 +335,7 @@ Any direct write to `vslcrstatus`(__i__) does not change either `mlcrstatus`(__i
 
 [NOTE]
 ====
-The _Off_ value, with the `ace_exc_CR_off` exception, provides the architectural hook for on-demand (lazy) CR loading. At context restore, a handler may leave a CR unrestored and set its `*lcrstatus` field to _Off_, keeping the authoritative SCC in its own memory. The next access to the CR from a lower-privileged mode traps with `ace_exc_CR_off`, and the handler imports the SCC before resuming execution. There is no distinct architectural "lazy" state: tracking which privilege level holds the authoritative SCC for a CR marked _Off_ is the responsibility of the software that set it.
+The _Off_ value and the `ace_exc_CR_off` exception provide an architectural hook for on-demand (lazy) CR loading. At context restore, a handler may leave a CR unrestored, set its `*lcrstatus` field to _Off_, and retain the authoritative SCC in memory. A subsequent access from a lower-privileged mode traps with `ace_exc_CR_off`; the handler then imports the SCC before resuming execution. The architecture defines no separate "lazy" state: Software that marks a CR _Off_ is responsible for ensuring that the authoritative SCC is restored.
 ====
 
 // ////////////////////////////////////////////////////////////////////

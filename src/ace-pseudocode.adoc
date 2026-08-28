@@ -155,11 +155,6 @@ During the provisioning and import procedures, the validity of bits [63:0] of th
 The validity of bits [127:64] is deferred to sealing, which in the case of import includes authentication.
 If these bits are invalid, the CR will transitions to Error State _Invalid_ upon executing `ace.mgmt K{t0}, #ace_CR_management_end`, which is why the `ace.getst` after that instruction repeats the Error-State test.
 
-NOTE: Implementations may interleave decryption and authentication with the load operation.
-If an import is interrupted and the partial state exported,
-the exported data must be the original encrypted data loaded so far, and not a re-encryption
-of a partially decrypted payload.  This is required for both correctness and security.
-
 *Export Code (`Zklmv`)*
 ----
   li         t3, 23
@@ -246,24 +241,6 @@ success:
 
   ace.mgmt   K{t0}, #ace_CR_management_end, v1
 ----
-
-// NOTE: The three instructions are essentially the same as `ace.export`.
-// This first splitting is useful if we want to consider splitting also the entire loading.
-// NOTE: Maybe we can have multiple export operations open, but only one prov/init.
-
-[NOTE]
-====
-If we close the operation prematurely, then we get an authentication error.
-If we forget to close it, we also get errors because we cannot use the CR unless _ConfigStatus_ is `ace_cfgst_complete`.
-====
-
-[NOTE]
-====
-Longer instruction sequences based on XLEN-wide writes from GPRs into a CR's state are also possible.
-However, safely resuming such code after preemption may be more cumbersome.
-This approach remains feasible with minimal impact on code size, since provisioning, import, and export routines can be placed in a shared library, with indirect CR addressing allowing the target CR to be passed as a parameter.
-Storing some state information in the caller's context also reduces the need for dedicated CSRs.
-====
 
 // ////////////////////////////////////////////////////////////////////////////
 
@@ -352,9 +329,6 @@ The loop covers whole blocks only: XEX has no partial-block state. A data unit w
 is not a multiple of `b` is completed by ciphertext stealing, performed in software as
 described in <<ACE-XTS-from-XEX>>.
 
-Implementing XTS mode's ciphertext stealing is straightforward using the XEX Algorithm together with vector masking and shifting operations.
-(((ACE, Algorithm, XTS)))
-
 //
 
 [[ACE-GCM-mode-examples]]
@@ -363,11 +337,10 @@ Implementing XTS mode's ciphertext stealing is straightforward using the XEX Alg
 In <<ACE-pseudocode-GCM-encryption>> we show pseudocode for GCM encryption, again with
 `b` = `ACELEN` = 128 and `c` = 32.
 
-The two operands are treated differently, as <<ACE-GCM-mode>> requires. The caller
-zero-fills the final block of the *associated data* beyond its actual end, and `GHASH`
-absorbs that block whole. The *plaintext* and *ciphertext* must **not** be zero-padded:
-a final block shorter than `b` is presented in State _Enc_Last_Block_ (or _Dec_Last_Block_
-for decryption), so that no keystream bit past the end of the message is absorbed into
+Associated data and plaintext/ciphertext are treated differently, as <<ACE-GCM-mode>> requires.
+The caller zero-fills the final block of the AD beyond its actual end, and `GHASH`
+absorbs that block whole. The PT and CT must not be zero-padded if their lengths are not
+a multiple of `b`; a final block length shorter than `b` is presented in State _Enc_Last_Block_ (or _Dec_Last_Block_ for decryption), so that no keystream bit past the end of the message is absorbed into
 `GHASH` or written out.
 
 [[ACE-pseudocode-GCM-encryption]]
