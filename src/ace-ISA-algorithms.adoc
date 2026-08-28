@@ -32,7 +32,7 @@ Other groups of Algorithms may subdivide the _Algorithm_ field differently.
 | 0    | 9    | `AES128_OCB_IV`                             | `Zklaes128p` and `Zklocbm`
 //
 | 1    | 0    | `AES192_ECB`                                | `Zklaes192p`
-| 1    | 1--9 2+| _Analogues to Modes 1--9 for `AES128`, but with 192 replacing 128._
+| 1    | 1--5, 7--9 2+| _Analogues to the corresponding Modes for `AES128`, but with 192 replacing 128. There is no Mode 6: cite:[RFC8452] defines AES-GCM-SIV only for 128-bit and 256-bit keys._
 //
 | 2    | 0    | `AES256_ECB`                                | `Zklaes256p`
 | 2    | 1--9 2+| _Analogues to Modes 1--9 for `AES128`, but with 256 replacing 128._
@@ -135,6 +135,8 @@ These include:
 . *Provisioning Input*:
 The fields are listed in the order they appear in the PI,
 each with its length.
+The length of the Provisioning Input is understood to be padded at the end to a
+multiple of 128 bits, even when not explicitly mentioned.
 
 . *Internal State*:
 Information maintained in the internal state of a CC.
@@ -144,6 +146,8 @@ This information is necessary to define the Algorithms and their semantics, and 
 . *Serialized Context*:
 The plaintext of the SCC.
 The fields are listed in the order they appear in an SCC, each with its length.
+The length of the Serialized Context is understood to be padded at the end to a
+multiple of 128 bits, even when not explicitly mentioned.
 --
 
 Algorithm-Specific Functions:::
@@ -845,13 +849,13 @@ Beside `max_len`, `block`, and `state`, which are fixed for the duration of the 
  “`ace.exec Kn|K{Xn}, INPUT`” processes the data block `INPUT` as follows.
 +
 --
-. If `len != 0` and `cumul_len >= len`, then the CR transitions to Error State _Invalid_.
+. If `max_len != 0` and `cumul_len >= max_len`, then the CR transitions to Error State _Invalid_.
 . If starting an ``ace.exec`` instruction, then `input_base <- 0`
 . If resuming an ``ace.exec`` instruction, then `input_base <- 8` {interpunct} `acestart`.
   `input_base` is counted in bits (see *Units* above) while `acestart` is a number of bytes
   (<<ACE-CSR-acestart>>), hence the conversion.
 . While `(input_base < ACELEN)` do
-.. If `max_len` != 0 then `amount <- min(ACELEN - input_base, b - block_base, len - cumul_len)`,
+.. If `max_len` != 0 then `amount <- min(ACELEN - input_base, b - block_base, max_len - cumul_len)`,
    else `amount <- min(ACELEN - input_base, b - block_base)`.
    `amount` is always strictly positive, so the loop terminates.
 .. if `mode` = `assign` then:
@@ -860,11 +864,11 @@ Beside `max_len`, `block`, and `state`, which are fixed for the duration of the 
  ...  XOR ``INPUT[input_base + amount - 1 : input_base]`` to ``state[block_base + amount + state_offset - 1 : block_base + state_offset]``.
 .. `input_base <- input_base + amount`.
 .. `block_base <- block_base + amount`.
-.. If `len != 0` then `cumul_len <- cumul_len + amount`.
+.. If `max_len != 0` then `cumul_len <- cumul_len + amount`.
 .. If (`block_base` = `b`) then:
  ... `process_block(block, state)`, if it is not `None`.
  ... `block_base <- 0`.
-.. If `max_len` != 0 and `cumul_len = len` then:
+.. If `max_len` != 0 and `cumul_len = max_len` then:
  ... `finalize()`, if it is not `None`.
  ... The instruction is terminated, even if `input_base < ACELEN`.
 .. *Here*, and only here, the instruction may be interrupted, with
@@ -1331,7 +1335,7 @@ While the decryption state machine of GCM-SIV is similar to that of GCM, the enc
 
 Parameters:::
 
-* `k` = key size (64|`k`).
+* `k` = key size, either 128 or 256: cite:[RFC8452] defines AES-GCM-SIV only for these two.
 * `b` = 128 = block size. For this Algorithm, `ACELEN` must be an integer multiple of `b`.
 * `c` = 32 = counter size.
 * The authentication tag is `b` = 128 bits long.
@@ -1387,6 +1391,31 @@ NOTE: The internal state fields `enc_key` and `auth_key` are not serialized, and
 Algorithm-Specific Functions:::
 
 * `enc_blk(key, p) -> c` encrypts block `p` using the key, and returns the result `c`.
+* `RFC8452_KeyDeriv(k, key, nonce)` derives the per-nonce message-encryption and
+  message-authentication keys of cite:[RFC8452] {sect}4:
++
+[[ACE-GCM-SIV-KeyDeriv]]
+.AES-GCM-SIV Key Derivation
+[]
+----
+function RFC8452_KeyDeriv(k : int, key : bits(k), nonce : bits(96))
+    → struct{enc_key : bits(k), auth_key : bits(128)} =
+{
+  local A : array [0..5] of bits(128);
+  local E : bits(k);
+  local i : int;
+
+  foreach(i from 0 to k/64 + 1) do:
+    A[i] ← enc_blk(key, nonce @ bin(i,32));
+  foreach(i from 2 to k/64 + 1) do:
+    E[64*i-65 : 64*i-128] ← A[i][63:0];
+
+  return struct { enc_key = E, auth_key = A[1][63:0] @ A[0][63:0] };
+}
+----
++
+The loop makes `k`/64 + 2 calls, four for `k` = 128 and six for `k` = 256, and keeps the low
+64 bits of each: these are the “first eight bytes” of cite:[RFC8452] under <<ACE-Notation>>.
 * `absorb(data)` absorbs data into the hash function by performing a step of POLYVAL:
   . `tmp <- tmp xor data`.
   . `tmp <- Montmul(tmp, auth_key)`
@@ -1428,7 +1457,7 @@ Besides _Ready_, _Success_, and _Failure_, the GCM-SIV Algorithm makes use of th
 +
 --
    . `nonce` <- `INPUT[95:0]`
-   .  (`enc_key`, `auth_key`) `<-` `RFC8452_KeyDeriv(key,nonce)`
+   .  (`enc_key`, `auth_key`) `<-` `RFC8452_KeyDeriv(k, key, nonce)`
 --
 +
 If the instruction is repeated, there is no harm: it just overwrites the `nonce` and recomputes `enc_key` and `auth_key` before any other operation is performed.
@@ -1566,7 +1595,7 @@ A value of zero, larger than 120, or not a multiple of 8, causes the CR to trans
 If `ACELEN` > 128, only the 128 least significant bits of `INPUT` are considered.
 
 ** Upon completion of an import (`ace.mgmt` with `#ace_CR_management_end`), the ACE unit recomputes `enc_key` and `auth_key`, i.e.:
-. (`enc_key`, `auth_key`) <- `RFC8452_KeyDeriv(key,nonce)`.
+. (`enc_key`, `auth_key`) <- `RFC8452_KeyDeriv(k, key, nonce)`.
 
 //
 
@@ -2293,9 +2322,8 @@ State Machine:::
     `state[block_base + amount - 1 : block_base]` in place of
     `block[block_base + amount - 1 : block_base]`, and the entry step
     `block[t - 1 : 0] <- finalize()` is not performed, `finalize()` being `None` here. The bytes
-    so emitted are the chaining variables in the big-endian encoding given under *Endianness*
-    above, truncated to `t` bits. Once `t` bits have been made available the state transitions to
-    _Success_.
+    so emitted are the chaining variables in the big-endian encoding, truncated to `t` bits.
+    Once `t` bits have been made available the state transitions to _Success_.
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -4041,8 +4069,10 @@ Both fields are public, so no restriction applies to where they are written.
 
 ** The `ace.derive` instruction (<<ACE-instruction-derive>>) is used to move the shared key from
 this CC into a secret field of a second CR, without it becoming visible to software.
-The instruction is of `Form` `01` — the output of the ML-KEM `ace.exec` into a secret field — with
-the source index `i` zero and the destination index `j` naming the key field of the destination CC.
+`sharedkey` is the only exportable field of an ML-KEM CC, and its index is 1.
+The instruction is of `Form` `00` — an exportable field of the source into a secret field of the
+destination — with the source index `i` = 1 and the destination index `j` naming the key field of
+the destination CC.
 The destination CC must have been provisioned beforehand with a supported single-key Algorithm that
 accepts a key of at most 256 bits, and must be in State _Ready_.
 `length` gives the number of bytes transferred: if the key of the destination Algorithm is `m` bits

@@ -527,8 +527,8 @@ The architected values of _State_ common to all Algorithms are defined in the fo
 | Value | Mnemonic                  | State Name     | Description
 |   1   | `ace_state_ready`         | _Ready_        | The state of a just provisioned CC; ready for operation. No `ace.exec` instruction may be executed in this state.
 | 2-21  3+| Defined by the specification of the Algorithm encoded in the _Algorithm_ field.
-|  22   | `ace_state_success`       | _Success_      | Algorithm completed successfully. No further cryptographic operations may be performed until the CR is reconfigured or transitioned to _Ready_.
-|  23   | `ace_state_failure`       | _Failure_      | Failure in an Algorithm, usually an authentication failure in AE(AD) Algorithms or a signature verification failure. No further cryptographic operations may be performed until the CR is reconfigured or transitioned to _Ready_.
+|  22   | `ace_state_success`       | _Success_      | Algorithm completed successfully. No further cryptographic operations may be performed until the CR is reconfigured or transitioned to _Ready_, with the two exceptions given in <<ACE-State-field>>.
+|  23   | `ace_state_failure`       | _Failure_      | Failure in an Algorithm, usually an authentication failure in AE(AD) Algorithms or a signature verification failure. No further cryptographic operations may be performed until the CR is reconfigured or transitioned to _Ready_, with the two exceptions given in <<ACE-State-field>>.
 |===
 
 [[ACE-states-error]]
@@ -590,7 +590,13 @@ The following rules are generic and apply to all Algorithms:
 . The MDH's _State_ field must reflect the current state whenever the CC is in _Ready_, _Success_, _Failure_, or any Error State.
 This ensures that these states can be unambiguously determined from the _State_ field alone, without inspecting the Content.
 
-. In States _Success_ and _Failure_, only the following ACE instructions are permitted: `ace.mgmt`, `ace.load`, `ace.store`, `ace.clear`, `ace.size`, `ace.setst`, `ace.getmd*`, `ace.getst`, and `ace.derive` where the CR in State _Success_ or _Failure_ is the *source* of the transfer (described in <<ACE-instructions-detailed>>).
+. In States _Success_ and _Failure_, only the following ACE instructions are permitted: `ace.mgmt`, `ace.load`, `ace.store`, `ace.clear`, `ace.size`, `ace.setst`, `ace.getmd*`, `ace.getst`, `ace.clone`, `ace.restrict*`, and `ace.derive` where the CR in State _Success_ or _Failure_ is the *source* of the transfer and the source endpoint is one of its fields that can be exported, that is one that appears in its Serialized Context (described in <<ACE-instructions-detailed>>).
+Reading such a field is not a cryptographic operation, so it is compatible with the rule that no
+further cryptographic operation may be performed in these states, and it leaves the source CR in
+its state: such an `ace.derive` cannot invalidate the source, only the destination.
+Also permitted is an `ace.exec` whose sole purpose is to squeeze further output from an Algorithm
+that produces an arbitrarily long one, such as a XOF, whether issued directly or as the source
+endpoint of an `ace.derive`.
 A CR in State _Success_ or _Failure_ may not be the *destination* of an `ace.derive`.
 +
 --
@@ -947,8 +953,9 @@ In this case, ACE exceptions are replaced by direct transitions of the CR to an 
 | ACE Exception                  | Behavior when the Privileged Architecture is not available.
 | `ace_exc_fatal`                | Implementation and platform defined behavior.
 | `ace_exc_no_csk`               | The exception is raised as described; on an M-mode-only hart M-mode is both the only mode that can observe it and the only one that can establish a CSK.
-| `ace_exc_unsupported`          | Transition to Error State _Unsupported_.
+| `ace_exc_complete_cr_data_access` | The instruction performs no operation: nothing is read, nothing is written, and the CR undergoes no state transition.
 | `ace_exc_CR_off`               | Does not apply without Privileged Architecture, since the `*lcrstatus` CSRs are not available.
+| `ace_exc_unsupported`          | Transition to Error State _Unsupported_.
 | `ace_exc_out_of_memory`        | Transition to Error State `ace_state_out_of_memory`.
 | `ace_exc_privilege_violation`  | Transition to Error State `ace_state_privilege_violation`.
 | `ace_exc_unconfigured_buffer`  | When an ACE instruction is issued that uses the CR with the ACEIOBUF, and the latter is unconfigured or absent, the instruction performs no operation: nothing is read, nothing is written, and the CR undergoes no state transition. This case is exempt from the `ACELEN` granularity rule of <<ACE-generic-rules>>, which would otherwise invalidate the CR.
@@ -1009,15 +1016,24 @@ before establishing a CSK.
 Illegal Instructions:::
 +
 --
-This category has the second highest priority.
-Any of the following conditions raises an illegal-instruction exception.
+Any of the following conditions raises an illegal-instruction exception. All are defects in the
+*encoding* of the instruction, so none of them can arise together with `ace_exc_no_csk`, which
+requires a well-formed instruction; the relative priority of the two is therefore immaterial.
 
  . If ACE not present (`misa.L` clear) or any governing ACES field is Off, then issuing any ACE instruction, or accessing any ACE CSR.
   (Note that this does _not_ refer to the `*lcrstatus` CSRs fields of a CR being Off.)
  . Use of the zero register `X0` as a CR indirect index unless explicitly allowed to encode special cases.
- . Issuing `ace.load`, `ace.store`, or `ace.mv` on a CR with _ConfigStatus_ equal to `ace_cfgst_complete`.
  . Use an odd register number, resp., a register number not divisible by four, when a register pair, resp., quartet, is expected in an instruction.
  . Use of a vector-version of any ACE instruction with the vector extension (or ACEV) not enabled.
+--
+
+Data Access to a Fully Configured CR:::
++
+--
+Issuing `ace.load`, `ace.store`, or `ace.mv` on a CR whose _ConfigStatus_ is `ace_cfgst_complete`
+raises ACE exception `ace_exc_complete_cr_data_access`. The instruction is well formed and the CR
+is valid; the CR is simply not open for a management operation, so this is a misuse rather than an
+encoding defect.
 --
 
 LCRstatus OFF:::
@@ -1689,7 +1705,7 @@ The memory address of the latter is given in `%offset(Xs1)`.
 This instruction requires that the CR be ready to import information and that the MDH has already been loaded by passing it as a parameter in a GPR pair (quartet for RV32), resp., vector register, to the `ace.mgmt` instruction used to open the CR for provisioning or import.
 Besides checking the soundness of the MDH, `ace.mgmt` also sets `acestart` to zero.
 
-If the _ConfigStatus_ field equals `ace_cfgst_complete`, an illegal-instruction exception is raised.
+If the _ConfigStatus_ field equals `ace_cfgst_complete`, ACE exception `ace_exc_complete_cr_data_access` is raised.
 
 `ace.load` can load data larger than the effective XLEN.
 
@@ -1802,7 +1818,7 @@ See the non-normative note at the end of <<ACE-instruction-manage>>,
 // inspect `ConfigStatus` in the metadata of each CR and detect if the store
 // hasn't completed to impede the restart.
 
-If the _ConfigStatus_ field is equal to `ace_cfgst_complete`, then an illegal-instruction exception is raised.
+If the _ConfigStatus_ field is equal to `ace_cfgst_complete`, then ACE exception `ace_exc_complete_cr_data_access` is raised.
 
 The order in which the LSU issues the component memory operations of the transfer is
 implementation dependent, subject to <<ACE-Memory-Model>>.
@@ -1985,6 +2001,10 @@ overstatement would complicate the management protocol for no gain in safety.
 into whatever the CRF holds beyond it. The clamp on `acestart` in <<ACE-CSR-acestart>> is not
 sufficient on its own: it limits the recorded offset but does not suppress the transfer.
 ====
+
+In every variant, if the CR's `ConfigStatus` field is `ace_cfgst_complete`, ACE exception
+`ace_exc_complete_cr_data_access` is raised in place of the illegal-instruction exception named
+below (<<ACE-error-architecture>>).
 
 For RV64 the semantics are:
 
@@ -2871,9 +2891,9 @@ Bits [29:28], i.e., field `Form`, select which endpoint is used on each side:
 [float="center",align="center",width="100%",cols="^10%,<40%,<40%",options="header"]
 |===
 | `Form` | Source, in CR `Ks1`{nbsp}\|{nbsp}`K{Xs1}` | Destination, in CR `Kd`{nbsp}\|{nbsp}`K{Xd}`
-| `00`   | secret field `i`          | secret field `j`
+| `00`   | exportable field `i`      | secret field `j`
 | `01`   | output of an `ace.exec`   | secret field `j` (`i` is zero)
-| `10`   | secret field `i`          | input of an `ace.exec` (`j` is zero)
+| `10`   | exportable field `i`      | input of an `ace.exec` (`j` is zero)
 | `11`   | output of an `ace.exec`   | input of an `ace.exec`
 |===
 
@@ -2890,11 +2910,12 @@ The auxiliary GPR carries the transfer length and the two field indices:
 * On RV32, `s2` must be even, `X[s2]` = `i << 16 {vvert} j` and `X[s2+1]` = `length`;
   if `s2` is odd, an illegal-instruction exception is raised.
 
-`length` is a number of *bytes*. The indices `i` and `j` select a configurable secret field of the
-source, resp. destination, CC, numbered in the order the fields appear in the SCC of the Algorithm
-in that CR. Fields configured by a System Key Identifier cannot be written, but they are still
-counted for the purpose of these indices. An index that names no field of the corresponding
-Algorithm causes that CR to transition to Error State _Invalid_.
+`length` is a number of *bytes*. The indices `i` and `j` select an exportable field of the source,
+resp. destination, CC. Each Algorithm defines the indices of its own exportable fields; they start
+at 1, so that the value 0 — used on whichever side carries an `ace.exec` endpoint instead — never
+names a field. Fields configured by a System Key Identifier are assigned an index but cannot be
+written. An index that names no field of the corresponding Algorithm causes that CR to transition
+to Error State _Invalid_.
 
 The two `ace.exec` endpoints behave exactly as the corresponding `ace.exec` instruction would:
 for `Form` `01` and `11` the source CR advances as if the `ace.exec` producing that output had been
@@ -2973,12 +2994,11 @@ instructions would, and the intermediate value never leaves the ACE unit.
 *Form `01` — output of an `ace.exec` into a secret.* A key agreed or derived by the Algorithm in
 `K1` becomes a key of the CC in `K2`. `K2` is provisioned beforehand in the ordinary way — a CC
 whose _KeyType_ selects a randomly generated key serves as a placeholder — and must be in State
-_Ready_; the `ace.derive` then overwrites its secret field `j`. This is the shape used by
-<<ACE-PQC-ML-KEM>>.
+_Ready_; the `ace.derive` then overwrites its secret field `j`.
 
-*Form `00` — secret into secret.* A secret field of one CC is copied into a secret field of
+*Form `00` — field into secret.* An exportable field of one CC is copied into a secret field of
 another, for instance to give two CCs with different _UsagePolicy_ or _Locality_ the same
-underlying key. Both indices are significant here.
+underlying key. Both indices are significant here. This is the shape used by <<ACE-PQC-ML-KEM>>.
 
 *Form `10` — secret into the input of an `ace.exec`.* A stored secret is absorbed by the Algorithm
 in `K2`, for instance as the key of a MAC or as a customization string, without being materialized
@@ -3791,7 +3811,7 @@ In the pseudocode of this section, `AESE256(K, B)` denotes the AES-256 encryptio
 .RFC8452 Key Derivation
 []
 ----
-function RFC8452_KeyDeriv(key : bits(256), nonce : bits(96))
+function SCC_KeyDeriv(key : bits(256), nonce : bits(96))
     → struct{enc_key : bits(256), auth_key : bits(128)} =
 {
   local A : array [0..5] of bits(128);
@@ -3901,7 +3921,7 @@ function SCC_Encrypt(AD[] : array of bits(128), N : bits(96), sep: bits(1),
   if len_AD > 0x0010_0000 || len_PC > 0x0010_0000 then
     error _ace_state_invalid_;
 
-  enc_key, auth_key ← RFC8452_KeyDeriv(K,N);
+  enc_key, auth_key ← SCC_KeyDeriv(K,N);
   SIV ← POLYVAL(auth_key, AD || P, len_AD + len_PC);
   SIV[95:0] ← SIV[95:0] xor N;
   SIV ← AESE256(enc_key, 0 @ sep @ SIV[125:0]);
@@ -3931,7 +3951,7 @@ function SCC_Decrypt(AD[] : array of bits(128), N : bits(96), sep: bits(1),
   if len_AD > 0x0010_0000 || len_PC > 0x0010_0000 then
     error _ace_state_invalid_;
 
-  enc_key, auth_key ← RFC8452_KeyDeriv(K,N);
+  enc_key, auth_key ← SCC_KeyDeriv(K,N);
 
   foreach(i from 0 to len_PC - 1) do:
     P[i] ← C[i] xor AESE256(enc_key,
@@ -4021,7 +4041,8 @@ When the import of the SCC of a fully configured CR is completed,
  . Load `M`, the MDH, from the SCC, into ``K(i)``.``MDH``.
  . Check correctness of `M`, and whether the Algorithm is supported.
  . Determine the length of the entire SCC.
- . If the length exceeds the implementation's maximum for the given Algorithm, the SCC contains an Implementation VDS that the importing implementation does not support. The SCC length is therefore adjusted by excluding the Implementation VDS.
+ . `actual_impdatalen` <- `M`._ImpDataLen_.
+ . If the length exceeds the implementation's maximum for the given Algorithm, the SCC contains an Implementation VDS that the importing implementation does not support. The SCC length is therefore adjusted by excluding the Implementation VDS, and `actual_impdatalen` <- 0.
  . Load the rest of the SCC, up to the determined length.
  . `saved_MDH` <- `M`, the *initial* MDH, that is the image carried in the SCC and passed to `#ace_CR_import_start`. This is the same value that the exporting side used under that name.
  . ``AD[0]`` <- `saved_MDH`, ``len_AD`` <- 1
@@ -4030,16 +4051,20 @@ When the import of the SCC of a fully configured CR is completed,
  . `len_PC` <- length of Section 3.
  . `correct`, `K(i).Content1[]` <- ``SCC_Decrypt(AD, zeros(96), 0, SIV, K(i).Content1[], CSK, len_AD, len_PC)``.
  . If `correct` {ne} `true`, then reject the SCC, clear ``K(i)``, and set Error State _ace_state_import_auth_.
- . Second, if the Implementation VDS was loaded at Step 6 — that is, if `saved_MDH`._ImpDataLen_ {ne} 0 *and* the length was not adjusted at Step 5 — the implementation-dependent data is processed:
+ . Second, if `actual_impdatalen` {ne} 0, the implementation-dependent data is processed:
 .. `len_AD2` <- 2, ``AD2[0]`` <- ``K(i)``.``IMPQUAL``, ``AD2[1]`` <- `SIV`.
-.. `len_PC2` <- length of Section 6.
-.. `correct`, `K(i).Content2[]` <- ``SCC_Decrypt(AD2, zeros(96), 1, SIV2, K(i).Content2[], CSK, len_AD2, len_PC2)``.
- . If `correct` {ne} `true`, the Implementation VDS is discarded: `Content2[]` is dropped, _ImpDataLen_ is set to 0, and the import completes using only the architecture-dependent content. Only a failure of the first authentication (`SIV`) rejects the entire SCC.
+.. If ``K(i)``.``IMPQUAL`` = `zeros(32) @ acemimpid @ acemarchid @ acemvendorid` then:
+... `len_PC2` <- length of Section 6.
+... `correct`, `K(i).Content2[]` <- ``SCC_Decrypt(AD2, zeros(96), 1, SIV2, K(i).Content2[], CSK, len_AD2, len_PC2)``.
+.. else:
+... `correct` <- `false`.
+ . If `correct` {ne} `true`, then `Content2[]` is dropped and `actual_impdatalen` <- 0.
+ . ``K(i)``.``MDH``._ImpDataLen_ <- `actual_impdatalen`. Where this is zero the import completes using only the architecture-dependent content. `saved_MDH` retains the original value, so the authentication of Section 3 is unaffected.
 --
 
 [NOTE]
 ====
-This procedure ensures that if the SCC's optional _Implementation (Specific) Variable-Length Data Section_ (Implementation VDS) makes the SCC too large to fit in a CR, or if that VDS is incompatible, the implementation ignores the optional data. The importing implementation may then create different optional data. In both cases, it updates _ImpDataLen_ accordingly.
+This procedure ensures that if the SCC's optional _Implementation (Specific) Variable-Length Data Section_ (Implementation VDS) makes the SCC too large to fit in a CR, or if that VDS is incompatible, the implementation ignores the optional data, but keeps the architecture-dependent content: Only a failure of the first authentication (`SIV`) rejects the entire SCC. The importing implementation may then create different optional data. In both cases, it updates _ImpDataLen_ accordingly.
 ====
 
 // ////////////////////////////////////////////////////////////////////
