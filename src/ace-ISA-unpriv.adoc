@@ -420,7 +420,7 @@ All _Reserved_ bits, as well as bits unused by a given Algorithm, are zero.
 |   [18:16] |   3  | _SCProtection_    | Side-channel protection level. The levels of side-channel protection are defined in <<ACE-SCProtection-field>>.
 |   [20:19] |   2  | _KeyType_         | This field determines whether the key is given by value, is a system-defined key, or randomly generated. See <<ACE-KeyType-field>> for more details.
 |   [25:21] |   5  | _State_           | Current state of the CR/Algorithm, encoded as an integer. For instance, whether the CR is _Unconfigured_, encrypting or decrypting data, absorbing data in a hash/mac/tag, computing elliptic curve point multiples, generating or verifying signatures, or in an error state. It can be modified by the user to advance through various phases of an Algorithm. See <<ACE-State-field>>.
-|   [29:26] |   4  | _StateExtension_  | May be used by the Algorithm to extend the _State_ field with additional information. See <<ACE-State-field>>.
+|   [29:26] |   4  | _StateExtension_  | Available to Algorithms to extend the _State_ field with additional information. See <<ACE-State-field>>.
 |   [31:30] |   2  | _ConfigStatus_    | Used to indicate whether the CR is fully configured and ready to operate, or is being provisioned, imported, or exported. See <<ACE-ConfigStatus>>.
 |   [45:32] |  14  | _ImpDataLen_      | If non-zero, indicates that an additional, variable-length, implementation-dependent data section is appended to the Content. The length of this additional data section is _ImpDataLen_ * 128 bits (up to 256 KiB).
 |   [61:46] |  16  | _AuxInfo_         | Algorithm-specific auxiliary information. Currently used only by ML-KEM and ML-DSA. This field is zero for Algorithms that do not use it.
@@ -791,6 +791,8 @@ The information contained in this field must _not_ affect any of the lengths of 
 The _ImpDataLen_ MDH field records the length of the _Additional Data Section_ of the content, a variable-size, implementation-dependent part.
 
 The format of the _Additional Data Section_ is described in <<ACE-data-formats>>.
+
+If _ImpDataLen_ is nonzero, the first 128-bit block of this additional section contains
 
 If _ImpDataLen_ is nonzero, the first 128-bit block of this additional section contains
 a copy of the implementation qualifier
@@ -3113,7 +3115,7 @@ MDH of a PI.
 
 . The length of a *Sealed Cryptographic Context* is determined by, and only by, the
   fields _Algorithm_, _AlgorithmPolicy_, _KeyType_, _StateExtension_ and _State_, plus the
-  Implementation Variable-Length Data Section, whose total size in 128-bit units is given
+  Implementation-Specific ADS, whose total size in 128-bit units is given
   by _ImpDataLen_ (<<ACE-extra-content>>).
 It does *not* depend on _SCProtection_. A masked implementation exports the same
 number of bits as an unprotected one, as required by <<ACE-rules-masked-implementations>>.
@@ -3174,7 +3176,7 @@ The format of a Sealed Cryptographic Context (SCC) is shown in <<ACE-SCC>>.
 | 4       | `IMPQUAL`, Implementation Qualifier   | 128 bits, if present | Used to identify the implementation of the ACE Unit
 | 5       | `SIV2`                                | 128 bits, if present | Authentication tag for sections 4 and 6.
 | 6
-| `Content2`: _Implementation (Specific) Variable-Length Data Section_ (Implementation VDS)
+| `Content2`: Implementation-Specific _Additional Data Section_
 | Implementation-Specific
 | The data in this section is _not_ necessary for the correct functioning of the Algorithm.
   Encrypted in memory and during partial import.
@@ -3184,14 +3186,14 @@ The length of each section must be a multiple of 128 bits.
 
 If the context is exported while in an Error State, Sections 3–6 are empty; that is, the SCC consists only of a plaintext MDH and `SIV`.
 
-The MDH's _ImpDataLen_ field specifies the total size of the Variable-Length Section (`SIV2`, `IMPQUAL`, and `Content2[]`).
+The MDH's _ImpDataLen_ field specifies the total size of the Implementation-Specific ADS (`SIV2`, `IMPQUAL`, and `Content2[]`).
 
 The information in a CR comprises at least as many bits as the SCC (see <<ACE-SCC>>), excluding `SIV`, `IMPQUAL`, and `SIV2`.
 
 A CR can contain significantly more information than a SCC,
 which in turn can contain more information than the PI.
 This occurs because some information may not be serialized and instead be (re)computed at provisioning or import.
-Also, A CR may contain some additional implementation-specific information to optimize performance, which can be exported in the VDS in full or partial format.
+Also, A CR may contain some additional implementation-specific information to optimize performance, which can be exported in the ADS in full or partial format.
 A different receiving implementation may safely ignore the latter during import after checking the `IMPQUAL` value
 Despite the fact that the internal state of a CR may contain more information than in a SCC, it is still possible that
 importing an SCC requires more _storage_ because `SIV`, `IMPQUAL`, and `SIV2` are not part of the information stored in a CR.
@@ -3522,7 +3524,7 @@ to create the serialized, encrypted and authenticated SCC from the CR.
 ====
 Taking `SIV` as ``AD2[1]`` binds the two payloads together, so that `SIV2` and
 the keystream of the second segment change whenever the
-first payload changes; an attacker cannot graft the Implementation VDS of one SCC onto the architecture-dependent part of another.
+first payload changes; an attacker cannot graft the Implementation-Specific ADS of one SCC onto the architecture-dependent part of another.
 ====
 
 [NOTE]
@@ -3548,7 +3550,7 @@ When the import of the SCC of a fully configured CR is completed,
  . Check correctness of `M`, and whether the Algorithm is supported.
  . Determine the length of the entire SCC.
  . `actual_impdatalen` <- `M`._ImpDataLen_.
- . If the length exceeds the implementation's maximum for the given Algorithm, the SCC contains an Implementation VDS that the importing implementation does not support. The SCC length is therefore adjusted by excluding the Implementation VDS, and `actual_impdatalen` <- 0.
+ . If the length exceeds the implementation's maximum for the given Algorithm, the SCC contains an Implementation=Specific ADS that the importing implementation does not support. The SCC length is therefore adjusted by excluding the Implementation=Specific ADS, and `actual_impdatalen` <- 0.
  . Load the rest of the SCC, up to the determined length.
  . `saved_MDH` <- `M`, the *initial* MDH, that is the image carried in the SCC and passed to `#ace_CR_import_start`. This is the same value that the exporting side used under that name.
  . ``AD[0]`` <- `saved_MDH`, ``len_AD`` <- 1
