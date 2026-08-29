@@ -405,7 +405,7 @@ All _Reserved_ bits, as well as bits unused by a given Algorithm, are zero.
 |   [25:21] |   5  | _State_           | Current state of the CR/Algorithm, encoded as an integer. For instance, whether the CR is _Unconfigured_, encrypting or decrypting data, absorbing data in a hash/mac/tag, computing elliptic curve point multiples, generating or verifying signatures, or in an error state. It can be modified by the user to advance through various phases of an Algorithm. See <<ACE-State-field>>.
 |   [29:26] |   4  | _StateExtension_  | Available to Algorithms to extend the _State_ field with additional information. See <<ACE-State-field>>.
 |   [31:30] |   2  | _ConfigStatus_    | Used to indicate whether the CR is fully configured and ready to operate, or is being provisioned, imported, or exported. See <<ACE-ConfigStatus>>.
-|   [45:32] |  14  | _ImpDataLen_      | If non-zero, indicates that an additional, variable-length, implementation-dependent data section is appended to the Content. The length of this additional data section is _ImpDataLen_ * 128 bits.
+|   [45:32] |  14  | _AddDataLen_      | If non-zero, indicates that an additional, variable-length, implementation-dependent data section is appended to the Content. The length of this additional data section is _AddDataLen_ * 128 bits.
 |   [61:46] |  16  | _AuxInfo_         | Algorithm-specific auxiliary information. Currently used only by ML-KEM and ML-DSA. This field is zero for Algorithms that do not use it.
 |   [62:62] |   1  | _Reserved_        | Reserved for future use.
 |   [63:63] |   1  | _SystemFormat_    | Value is 0 if an input is in the ACE architected format, 1 if in a system-defined format.
@@ -707,21 +707,23 @@ The information contained in this field must _not_ affect any of the lengths of 
 // ////////////////////////////////////////////////////////////////////
 
 [[ACE-extra-content]]
-===== _ImpDataLen_ Field
+===== _AddDataLen_ Field
 
-The _ImpDataLen_ MDH field records the length of the _Additional Data Section_ (ADS) of the content, a variable-size, implementation-dependent part, as a number of 128-bit blocks. The maximum value is 2^14^-2, corresponding to 262112 bytes.
+The _AddDataLen_ MDH field records the length of the _Additional Data Section_ (ADS) of the content, a variable-size, implementation-dependent part, as a number of 128-bit blocks. The maximum value is 2^14^-1, corresponding to 262128 bytes.
 
-If _ImpDataLen_ is zero, there is no ADS.
+If _AddDataLen_ is zero, there is no ADS.
 
-The all ones value is used to signal the state machine in the CR that ADS was present and then discarded.
+The value one is used to signal the state machine in the CR that ADS was present and then discarded.
 
-If _ImpDataLen_ is nonzero and _not_ the all ones value, the first 128-bit block of this additional section contains
-a copy of the implementation qualifier.
+If _AddDataLen_ is not zero or one, the first 128-bit block of this additional section contains
+a copy of the originating implementation qualifier.
 
 ``{fournbsp}{fournbsp}IMPQUAL := zeros(32) @ acemimpid @ acemarchid @ acemvendorid``
 
-(cf. <<ACE-CSR-impl-ids>>) from the originating machine. These 16 bytes are counted within the length recorded by the _ImpDataLen_ field.
+(cf. <<ACE-CSR-impl-ids>>) from the originating machine. These 16 bytes are counted within the length recorded by the _AddDataLen_ field.
 The importing implementation uses this value to determine whether the information in the ADS can be used.
+
+Since an ADS contains at least an authentication tag (16 bytes) and the originating implementation qualifier (also 16 bytes), the minumum length is 32 bytes, corresponding to an _AddDataLen_ value of 2.
 
 The format of the ADS is described in <<ACE-data-formats>>.
 
@@ -1914,7 +1916,7 @@ performs following operations:
    ACE exception `ace_exc_unsupported` is raised.
 .. In case of provisioning:
 ... _State_ and _StateExtension_ must be zero, i.e., upon provisioning, _State_ is always _Ready_.
-... `ImpDataLen` must be 0.
+... `AddDataLen` must be 0.
 .. In other cases where the Metadata is invalid, such as, for instance, a nonzero reserved field:
    The CR is transitioned to Error State _Invalid_.
 +
@@ -2938,7 +2940,7 @@ Algorithm-specific resumable operations that transfer no data are subject to the
 ====
 For the transfer instructions, whose resumption is optional, cross-implementation resumption after migration works only when both implementations honour `acestart`; otherwise the portable recovery path is the visible restart described below, in which the CR is left in the _Unconfigured_ state and software reruns the management sequence. This does not extend to `ace.exec` and `ace.derive`, for which honouring `acestart` is mandatory everywhere. Software must support both resumption and restart of a transfer instruction, and the ACE instructions are designed to work correctly with either approach on every ACE implementation.
 
-For instance, `ace.load`, `ace.store` may always fail, or caused to fail, leaving the CR in an _Unconfigured_ state.  This signals that the import, provisioning, or export operation must be restarted. Software must then prepare the CR for the operation again. For import and provisioning, this entails providing the MDH to the `ace.mgmt` instruction used to prepare the CR anew.
+For instance, `ace.load`, `ace.store` may always (be caused to) fail, leaving the CR in an _Unconfigured_ state.  This signals that the configuration operation must be restarted. Software must then prepare the CR for the operation again. For import and provisioning, this entails providing the MDH to the `ace.mgmt` instruction used to prepare the CR anew.
 ====
 
 // In this case, when the interrupt/exception handler accesses an input or an output of the operation, different behaviors are allowed:
@@ -3026,16 +3028,15 @@ of these lengths.
 . The length of a *Provisioning Input* is determined by, and only by, the fields
   _Algorithm_, _AlgorithmPolicy_ and _KeyType_.
 +
-In particular, it does *not* depend on _ImpDataLen_: a PI carries no
-implementation-specific data, and _ImpDataLen_ must be zero in the MDH of a PI. Nor does
+In particular, it does *not* depend on _AddDataLen_: a PI carries no
+implementation-specific data, and _AddDataLen_ must be zero in the MDH of a PI. Nor does
 it depend on _SCProtection_ or on _StateExtension_, which must likewise be zero in the
 MDH of a PI.
 
 . The length of a *Sealed Cryptographic Context* is determined by, and only by, the
-  fields _Algorithm_, _AlgorithmPolicy_, _KeyType_, _StateExtension_ and _State_, plus the
-  Implementation-Specific ADS, whose total size in 128-bit units is given
-  by _ImpDataLen_ (<<ACE-extra-content>>).
-It does *not* depend on _SCProtection_. A masked implementation exports the same
+  fields _Algorithm_, _AlgorithmPolicy_, _KeyType_, _StateExtension_, _State_, and
+  _AddDataLen_ (see <<ACE-extra-content>>).
+It does *not* depend on _SCProtection_. A SCA-protected implementation exports the same
 number of bits as an unprotected one, as required by <<ACE-rules-masked-implementations>>.
 +
 If the CR is in an Error State, the SCC consists of the MDH and `SIV` only, and its length
@@ -3104,12 +3105,12 @@ The length of each section must be a multiple of 128 bits.
 
 If the context is exported while in an Error State, Sections 3–6 are empty; that is, the SCC consists only of a plaintext MDH and `SIV`.
 
-The MDH's _ImpDataLen_ field specifies the total size of the Implementation-Specific ADS (`SIV2`, `IMPQUAL`, and `Content2[]`).
+The MDH's _AddDataLen_ field specifies the total size of the Implementation-Specific ADS (`SIV2`, `IMPQUAL`, and `Content2[]`).
 
 The information in a CR comprises at least as many bits as the SCC (see <<ACE-SCC>>), excluding `SIV`, `IMPQUAL`, and `SIV2`.
 
-A CR can contain significantly more information than a SCC,
-which in turn can contain more information than the PI.
+A CR may contain significantly more information than a SCC,
+which in turn may contain more information than the PI.
 This occurs because some information may not be serialized and instead be (re)computed at provisioning or import.
 Also, A CR may contain some additional implementation-specific information to optimize performance, which can be exported in the ADS in full or partial format.
 A different receiving implementation may safely ignore the latter during import after checking the `IMPQUAL` value
@@ -3246,21 +3247,14 @@ function SCC_KeyDeriv(key : bits(256), nonce : bits(96))
 }
 ----
 
-NOTE: Due to the computational cost of the derivation functions,
-implementations may cache the derived keys.
+// NOTE: Due to the computational cost of the derivation functions,
+// implementations may cache the derived keys.
 
-NOTE: To reduce payload size, the AES-GCM-SIV-derived algorithm for SCC import and export
-omits a nonce, relying on AES-GCM-SIV's nonce-reuse/nonce misuse-resistance:
-The construction is secure up to 2^64^ 128-bit blocks collected by an adversary.
-This is sufficient to practically deter attacks on client applications; on cloud servers, each virtual machine and
-supervisor domain should be assigned a unique CSK.
-To transfer CCs between domains, M-mode firmware can import an SCC with the source domain's
-CSK and re-export it under the target domain's CSK.
+NOTE: To reduce payload size, the AES-GCM-SIV-derived construction used for SCC import and export omits the nonce. It relies instead on AES-GCM-SIV's resistance to nonce reuse and misuse. The construction remains secure for up to 2^64^ 128-bit blocks observed by an adversary.
 
-The SIV (“Synthetic IV”), which also serves as the authentication tag in GCM-SIV,
-is computed by encrypting the `POLYVAL` hash of the concatenation of the Locality Secrets, the MDH, and the Content of the CR.
-In the `POLYVAL` pseudocode below, the digested data is represented as an array of
-128-bit blocks, absorbed in increasing index order.
+This provides practical protection for client applications. On cloud servers, each virtual machine and supervisor domain should use a unique CSK. To transfer CCs between domains, M-mode firmware can import an SCC using the source domain's CSK and re-export it using the target domain's CSK.
+
+The SIV (Synthetic IV), which is also the GCM-SIV authentication tag, is computed by encrypting the `POLYVAL` hash of the Locality Secrets, MDH, and CR Content, concatenated in that order. In the `POLYVAL` pseudocode below, the input is represented as an array of 128-bit blocks, which are absorbed in increasing index order.
 
 [[ACE-SCC-POLYVAL]]
 .Polyval Hashing Function
@@ -3431,11 +3425,11 @@ to create the serialized, encrypted and authenticated SCC from the CR.
 ... If `saved_MDH`._Locality_ includes Locality #j, then ``AD[len_AD]`` <-  ``LST[``_j_``]``, ``len_AD`` <- ``len_AD`` + 1
 .. `len_PC` <- length of Section 3.
 .. `SIV`, `Content1~CT~[]` <- ``SCC_Encrypt(AD, zeros(96), 0, K(i).Content1~PT~[], CSK, len_AD, len_PC)``
-. Second, if _ImpDataLen_ {ne} 0, then the implementation-dependent data is processed:
+. Second, if _AddDataLen_ {ne} 0, then the implementation-dependent data is processed:
 .. `len_AD2` <- 2, ``AD2[0]`` <- ``K(i)``.``IMPQUAL``, ``AD2[1]`` <- `SIV`.
 .. `len_PC2` <- length of Section 6.
 .. `SIV2`, `Content2~CT~[]` <- ``SCC_Encrypt(AD2, zeros(96), 1, K(i).Content2~PT~[], CSK, len_AD2, len_PC2)``
-. Finally, output `saved_MDH`, then `SIV` and `Content1~CT~[]`, and, if ImpDataLen {ne} 0, `IMPQUAL`, `SIV2` and `Content2~CT~[]`.
+. Finally, output `saved_MDH`, then `SIV` and `Content1~CT~[]`, and, if AddDataLen {ne} 0, `IMPQUAL`, `SIV2` and `Content2~CT~[]`.
 --
 
 [IMPORTANT]
@@ -3447,10 +3441,10 @@ first payload changes; an attacker cannot graft the Implementation-Specific ADS 
 
 [NOTE]
 ====
-If we close an export operation prematurely, then we get an authentication error upon import (see next section).
-If we close an import operation prematurely, then we get an authentication error.
+If an export operation is completed prematurely, an authentication error results upon import (see next section).
+If an import operation is completed prematurely, an authentication error results.
 
-If we forget to close any of the two operations, we also get errors because we cannot use the CR unless _ConfigStatus_ is `ace_cfgst_complete`.
+If any of the two operations is not completed, various types of error conditions will occur because _ConfigStatus_ is `ace_cfgst_complete`.
 ====
 
 // ////////////////////////////////////////////////////////////////////
@@ -3467,8 +3461,8 @@ When the import of the SCC of a fully configured CR is completed,
  . Load `M`, the MDH, from the SCC, into ``K(i)``.``MDH``.
  . Check correctness of `M`, and whether the Algorithm is supported.
  . Determine the length of the entire SCC.
- . `actual_impdatalen` <- `M`._ImpDataLen_.
- . If the length exceeds the implementation's maximum for the given Algorithm, the SCC contains an Implementation=Specific ADS that the importing implementation does not support. The SCC length is therefore adjusted by excluding the Implementation=Specific ADS, and `actual_impdatalen` <- ones(14).
+ . `actual_impdatalen` <- `M`._AddDataLen_.
+ . If the length exceeds the implementation's maximum for the given Algorithm, the SCC contains an Implementation=Specific ADS that the importing implementation does not support. The SCC length is therefore adjusted by excluding the Implementation=Specific ADS, and `actual_impdatalen` <- 1.
  . Load the rest of the SCC, up to the determined length.
  . `saved_MDH` <- `M`, the *initial* MDH, that is the image carried in the SCC and passed to `#ace_CR_import_start`. This is the same value that the exporting side used under that name.
  . ``AD[0]`` <- `saved_MDH`, ``len_AD`` <- 1
@@ -3484,8 +3478,8 @@ When the import of the SCC of a fully configured CR is completed,
 ... `correct`, `K(i).Content2[]` <- ``SCC_Decrypt(AD2, zeros(96), 1, SIV2, K(i).Content2[], CSK, len_AD2, len_PC2)``.
 .. else:
 ... `correct` <- `false`.
- . If `correct` {ne} `true`, then `Content2[]` is dropped and `actual_impdatalen` <- ones(14).
- . ``K(i)``.``MDH``._ImpDataLen_ <- `actual_impdatalen`. Where this is zero or `ones(14)`,the import completes using only the architecture-dependent content.   `ones(14)` signals the state machine of the imported CR that the ADS was dropped. The state machine then establishes an internal consistent state and sets _ImpDataLen_ to zero, and then to a suitable value upon export, if necessary.
+ . If `correct` {ne} `true`, then `Content2[]` is dropped and `actual_impdatalen` <- 1.
+ . ``K(i)``.``MDH``._AddDataLen_ <- `actual_impdatalen`. Where this is zero or one, the import completes using only the architecture-dependent content. The value 1 signals the state machine of the imported CR that the ADS was dropped. The state machine then establishes an internal consistent state and sets _AddDataLen_ to zero, and then to a suitable value upon export, if necessary.
 --
 
 [NOTE]

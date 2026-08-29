@@ -105,7 +105,7 @@ MDH_FIELDS = [
     ("State",           25,  21, False),
     ("StateExtension",  29,  26, False),
     ("ConfigStatus",    31,  30, False),
-    ("ImpDataLen",      45,  32, False),
+    ("AddDataLen",      45,  32, False),
     ("AuxInfo",         61,  46, False),
     ("Reserved1",       62,  62, True),
     ("SystemFormat",    63,  63, False),
@@ -213,7 +213,7 @@ class AceException(Exception):
 
 # A minimal, self-consistent algorithm table.  Only the *shape* matters: the
 # length rule says PI length depends on (Algorithm, AlgorithmPolicy, KeyType)
-# only, SCC length on those plus StateExtension and ImpDataLen, and CRF capacity
+# only, SCC length on those plus StateExtension and AddDataLen, and CRF capacity
 # on (Algorithm, AlgorithmPolicy, SCProtection) only.
 ALG_CTR = 0x011      # a symmetric cipher mode: AlgorithmPolicy = enc/dec bits
 ALG_HASH = 0x021     # a hash: AlgorithmPolicy unused (must be zero on restrict)
@@ -273,7 +273,7 @@ def scc_len(m):
     n = 16 + content_len(m) + 16        # MDH + content + SIV
     if m["StateExtension"]:
         n += 16                         # algorithm state carried across the export
-    n += 16 * m["ImpDataLen"]           # variable-length implementation data
+    n += 16 * m["AddDataLen"]           # variable-length implementation data
     return n
 
 
@@ -408,10 +408,10 @@ class CR:
         return self.state in ERROR_STATES
 
     def enter_error(self, st):
-        """State rule 7: content cleared, ImpDataLen zeroed, ConfigStatus complete."""
+        """State rule 7: content cleared, AddDataLen zeroed, ConfigStatus complete."""
         self.mdh["State"] = st
         self.mdh["StateExtension"] = 0
-        self.mdh["ImpDataLen"] = 0
+        self.mdh["AddDataLen"] = 0
         self.mdh["ConfigStatus"] = CFG_COMPLETE
         self.content = b""
         self.xfer = None
@@ -551,8 +551,8 @@ class Unit:
         if not alg_supported(ml):
             raise AceException("unsupported")
         m = dict(ml)
-        # provisioning-specific validity: State/StateExtension and ImpDataLen zero
-        bad = (m["State"] != 0 or m["StateExtension"] != 0 or m["ImpDataLen"] != 0
+        # provisioning-specific validity: State/StateExtension and AddDataLen zero
+        bad = (m["State"] != 0 or m["StateExtension"] != 0 or m["AddDataLen"] != 0
                or not mdh_reserved_zero(m) or m["ConfigStatus"] != CFG_COMPLETE)
         if bad:
             cr.mdh = mdh_new(Algorithm=m["Algorithm"], AlgorithmPolicy=m["AlgorithmPolicy"],
@@ -1017,14 +1017,14 @@ def test_mdh_format():
     # a realistic MDH, checked field by field against hand-computed bit positions
     m = mdh_new(Algorithm=ALG_CTR, AlgorithmPolicy=0b01, SCProtection=2, KeyType=1,
                 State=ST_ENCRYPT, StateExtension=0b0101, ConfigStatus=CFG_EXPORTING,
-                ImpDataLen=3, AuxInfo=0x1234, SystemFormat=1, UsagePolicy=0b10011,
+                AddDataLen=3, AuxInfo=0x1234, SystemFormat=1, UsagePolicy=0b10011,
                 Locality=0b101_10_11_10, AlgorithmUse=0xBEEF, ExpirationDate=0xABCDE)
     v = mdh_pack(m)
     check("sample MDH: Algorithm at [11:0]", sl(v, 11, 0), ALG_CTR)
     check("sample MDH: SCProtection at [18:16]", sl(v, 18, 16), 2)
     check("sample MDH: State at [25:21]", sl(v, 25, 21), ST_ENCRYPT)
     check("sample MDH: ConfigStatus at [31:30]", sl(v, 31, 30), CFG_EXPORTING)
-    check("sample MDH: ImpDataLen at [45:32]", sl(v, 45, 32), 3)
+    check("sample MDH: AddDataLen at [45:32]", sl(v, 45, 32), 3)
     check("sample MDH: SystemFormat at [63]", sl(v, 63, 63), 1)
     check("sample MDH: UsagePolicy at [68:64]", sl(v, 68, 64), 0b10011)
     check("sample MDH: Locality at [77:69]", sl(v, 77, 69), 0b101_10_11_10)
@@ -1041,7 +1041,7 @@ def test_mdh_format():
 
     # MDH[63:0] carries every field the length rule names
     lo_fields = ("Algorithm", "AlgorithmPolicy", "KeyType", "StateExtension",
-                 "ImpDataLen", "SCProtection")
+                 "AddDataLen", "SCProtection")
     check_true("every length-determining field lies in MDH[63:0]",
                all(FIELD[f][1] <= 63 for f in lo_fields))
 
@@ -1064,7 +1064,7 @@ def test_length_rule():
         m = ctr_mdh(**{fld: val})
         check(f"PI length independent of {fld}", pi_len(m), pi_len(base))
 
-    # SCC length depends on Algorithm/AlgorithmPolicy/KeyType/StateExtension/ImpDataLen
+    # SCC length depends on Algorithm/AlgorithmPolicy/KeyType/StateExtension/AddDataLen
     for fld, val in (("SCProtection", 2), ("UsagePolicy", 0b1111), ("Locality", 0b010),
                      ("ExpirationDate", 0x1234), ("AlgorithmUse", 0xFFFF),
                      ("ConfigStatus", CFG_EXPORTING)):
@@ -1072,11 +1072,11 @@ def test_length_rule():
         check(f"SCC length independent of {fld}", scc_len(m), scc_len(base))
     check("SCC length grows with StateExtension",
           scc_len(ctr_mdh(StateExtension=1)), scc_len(base) + 16)
-    check("SCC length grows by 16 per ImpDataLen unit",
-          scc_len(ctr_mdh(ImpDataLen=4)), scc_len(base) + 64)
+    check("SCC length grows by 16 per AddDataLen unit",
+          scc_len(ctr_mdh(AddDataLen=4)), scc_len(base) + 64)
 
     # CRF capacity depends only on Algorithm, AlgorithmPolicy, SCProtection
-    for fld, val in (("KeyType", 1), ("StateExtension", 3), ("ImpDataLen", 7),
+    for fld, val in (("KeyType", 1), ("StateExtension", 3), ("AddDataLen", 7),
                      ("UsagePolicy", 0b1111), ("ExpirationDate", 9)):
         m = ctr_mdh(**{fld: val})
         check(f"CRF capacity independent of {fld}", crf_capacity(m), crf_capacity(base))
@@ -1085,12 +1085,12 @@ def test_length_rule():
 
     # the Error-State override
     for st in ERROR_STATES:
-        m = ctr_mdh(State=st, ImpDataLen=9, StateExtension=3)
+        m = ctr_mdh(State=st, AddDataLen=9, StateExtension=3)
         check(f"Error State {st}: SCC length is 32 regardless of every field",
               scc_len(m), 32)
 
     # every length is computable from the first 8 bytes alone
-    m = ctr_mdh(KeyType=1, StateExtension=2, ImpDataLen=2, UsagePolicy=0b1010,
+    m = ctr_mdh(KeyType=1, StateExtension=2, AddDataLen=2, UsagePolicy=0b1010,
                 ExpirationDate=77)
     lo = mdh_lo64(m)
     m2 = mdh_unpack(lo)      # top half discarded
@@ -1434,9 +1434,9 @@ def test_state_machine():
     # rule 7: Error-State entry effects
     for st in ERROR_STATES:
         u = fresh_unit()
-        # a CR as restored from an SCC: nonzero ImpDataLen and StateExtension
+        # a CR as restored from an SCC: nonzero AddDataLen and StateExtension
         # (a PI may carry neither, so this state is reached through import)
-        m = ctr_mdh(ImpDataLen=2, StateExtension=3, ConfigStatus=CFG_COMPLETE)
+        m = ctr_mdh(AddDataLen=2, StateExtension=3, ConfigStatus=CFG_COMPLETE)
         u.mgmt_import_start(0, m)
         payload = toy_seal(b"\x11" * (content_len(m) + 48), mdh_bytes(m))
         mem = bytearray(16 + len(payload))
@@ -1444,12 +1444,12 @@ def test_state_machine():
         u.load(0, mem, 16)
         u.mgmt_end(0, m)
         check_true(f"rule 7 (State {st}): the CR is set up and complete",
-                   u.crs[0].cfg == CFG_COMPLETE and u.crs[0].mdh["ImpDataLen"] == 2)
+                   u.crs[0].cfg == CFG_COMPLETE and u.crs[0].mdh["AddDataLen"] == 2)
         before = mdh_pack(u.crs[0].mdh)
         u.setst(0, st)
         cr = u.crs[0]
         check(f"rule 7 (State {st}): content beyond the MDH is cleared", cr.content, b"")
-        check(f"rule 7 (State {st}): ImpDataLen is zeroed", cr.mdh["ImpDataLen"], 0)
+        check(f"rule 7 (State {st}): AddDataLen is zeroed", cr.mdh["AddDataLen"], 0)
         check(f"rule 7 (State {st}): ConfigStatus is set to complete",
               cr.mdh["ConfigStatus"], CFG_COMPLETE)
         check(f"rule 7 (State {st}): State field reflects the Error State",
@@ -1677,8 +1677,8 @@ def test_management_flows():
     p.mgmt_provision_start(0, ctr_mdh(State=ST_ENCRYPT))
     check("provision start rejects a nonzero State", p.getst(0), ST_INVALID)
     p = fresh_unit()
-    p.mgmt_provision_start(0, ctr_mdh(ImpDataLen=1))
-    check("provision start rejects a nonzero ImpDataLen", p.getst(0), ST_INVALID)
+    p.mgmt_provision_start(0, ctr_mdh(AddDataLen=1))
+    check("provision start rejects a nonzero AddDataLen", p.getst(0), ST_INVALID)
     p = fresh_unit()
     p.mgmt_provision_start(0, ctr_mdh(StateExtension=1))
     check("provision start rejects a nonzero StateExtension", p.getst(0), ST_INVALID)
@@ -1791,7 +1791,7 @@ def test_management_flows():
 def test_resumption():
     section("9.  Interrupted transfers and resumption")
 
-    ml = ctr_mdh(ImpDataLen=2)             # a longer payload, to halt in the middle
+    ml = ctr_mdh(AddDataLen=2)             # a longer payload, to halt in the middle
     clen = content_len(ml) + 32
     content = bytes((0x90 + i) & 0xFF for i in range(clen))
 
@@ -2017,8 +2017,8 @@ def test_expiration():
         check("ace.exec on an expired CR raises ace_state_expired", e.which, "expired")
     check("the expired CR is in Error State Expired", u.getst(0), ST_EXPIRED)
     check("expiry performs the Error-State actions: content cleared", u.crs[0].content, b"")
-    check("expiry performs the Error-State actions: ImpDataLen zeroed",
-          u.crs[0].mdh["ImpDataLen"], 0)
+    check("expiry performs the Error-State actions: AddDataLen zeroed",
+          u.crs[0].mdh["AddDataLen"], 0)
     check("expiry performs the Error-State actions: ConfigStatus complete",
           u.crs[0].cfg, CFG_COMPLETE)
 
@@ -2122,8 +2122,8 @@ def test_size():
         u2.setst(0, st)
         check(f"Form A: Error State {st} returns 32", u2.size_A(0), 32)
 
-    # a CR being imported reports the SCC length; ImpDataLen and StateExtension count
-    m = ctr_mdh(ImpDataLen=3, StateExtension=2, ConfigStatus=CFG_COMPLETE)
+    # a CR being imported reports the SCC length; AddDataLen and StateExtension count
+    m = ctr_mdh(AddDataLen=3, StateExtension=2, ConfigStatus=CFG_COMPLETE)
     u3 = fresh_unit()
     u3.mgmt_import_start(0, m)
     check("Form A: while importing, the SCC length including the variable-length data",
@@ -2241,7 +2241,7 @@ def test_notes():
          "ace.store ('ace.store copies the data from the serialized representations ...') "
          "-- copy-paste debris in the wrong instruction's Description block.")
     info("C2 (import-start metadata validation) reads as RESOLVED: the validity step is "
-         "now split, with 'State and StateExtension must be zero' and 'ImpDataLen must "
+         "now split, with 'State and StateExtension must be zero' and 'AddDataLen must "
          "be 0' listed only 'In case of provisioning', and the generic clause reduced to "
          "'a nonzero reserved field'. Modelled accordingly: import accepts any State.")
     info("C2 residue (NEW): the provisioning clause reads 'State and StateExtension must "
