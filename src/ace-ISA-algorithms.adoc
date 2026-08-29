@@ -157,25 +157,17 @@ State Machine:::
 --
 The state machine is defined by the following information:
 
-. A list of *States* in which the internal state machine of the logic is
-  executed, together with their representation according to the rules set in
-  <<ACE-State-field>>.
-. A complete list of the *allowed state transitions*, including the precise
-  conditions under which each transition is allowed, the Form of `ace.setst`
-  used for each of these transitions and the meaning of any additional
-  parameter;
-. The enumeration of the *allowed/expected instructions* at each state and their
-  *behavior*.
-  Besides configuration and export instructions,
-  the instructions permitted in each Algorithm state are typically `ace.exec` and `ace.setst`.
-  For `ace.exec`, only one of its Forms (see <<ACE-instruction-exec>>) is _expected_ per state.
-  By this it is understood that either the specified Form must be issued, or Form D `ace.exec`
-  or Form C `ace.setst` instead, with appropriate setup instructions for the ACEIOBUF.
-  The use of other Forms is not allowed, and AGR1 of <<ACE-general-rules-for-algorithms>> gives the
-  consequence. For instance, in OCB's State _Hash_Absorb_Last_Block_ a Form B `ace.exec` is
-  expected; a Form A issued there transitions the CR to Error State _Invalid_.
-  Issuing the `ace.input`/`ace.output` instructions is not enforced, as proper
-  handling of the ACEIOBUF for inputs and outputs is the responsibility of the caller.
+. A list of the *States* which the Algorithm may assume, including each state's representation as specified in <<ACE-State-field>>.
+. A complete list of *allowed state transitions*, including the prerequisites for each transition, the required `ace.setst` Form, and the meaning of any auxiliary parameter, and any other condition that may trigger a transition even without an `ace.setst` instruction.
+. The *allowed or expected instructions* and their *semantics* in each state.
++
+In addition to configuration and export instruction sequences, an Algorithm state typically permits `ace.exec` and `ace.setst`.
++
+For `ace.exec` and `ace.setst`, only one Form (see <<ACE-instruction-exec>>) may be defined as expected in each state. The operation may instead use Form D `ace.exec` or Form C `ace.setst`, with the required ACEIOBUF setup. Other Forms are prohibited; under *AGR1* of <<ACE-algorithms-other-rules>>, their use transitions the CR to Error State _Invalid_.
+Use of `ace.input` and `ace.output` is allowed because these operations do not access a CR, and thus are not directly related to its state machine.
++
+Issuing any other instruction raises an ACE exception.
+The precise statement of the behavior is subsumed in Rule AGR1 in <<ACE-algorithms-other-rules>>.
 --
 
 //
@@ -237,13 +229,80 @@ The *Serialized Context*: also always places the MDH in the first position:
 
 // ////////////////////////////////////////////////////////////////////
 
-[[ACE-general-rules-for-algorithms]]
+[[ACE-algorithm-rules]]
 === General Rules for Algorithms
 
-The following rules apply to all ACE-supported Algorithms, except when explicitly stated otherwise.
+[[ACE-algorithm-state-rules]]
+==== State-Specific General Rules
 
-AGR1: Unallowed instructions in Algorithm States.:::
+The following rules are generic and apply to all Algorithms (*SGR* means "State General Rules"):
 
+[horizontal]
+SGR1:: The MDH's _State_ field reflects the current state whenever the CC is in _Ready_, _Success_, _Failure_, or any Error State.
+This ensures that these states can be unambiguously determined from the _State_ field alone, without inspecting other fields or the Content.
+
+SGR2:: Any transition listed in an Algorithm's specification may be triggered by performing an explicit `ace.setst` operation, or may be induced by certain conditions specified in the Algorithm's specification.
+
+SGR3:: In States _Success_ and _Failure_, only the following ACE instructions are permitted: `ace.mgmt`, `ace.load`, `ace.store`, `ace.clear`, `ace.size`, `ace.setst`, `ace.getmd*`, `ace.getst`, `ace.clone`, `ace.restrict*`, and `ace.derive` where the source CR is in State _Success_ or _Failure_and the source endpoint is one of its fields that can be exported, as described in the specification of the Algorithm.
+Reading such a field is not a cryptographic operation, so it is compatible with the rule that no
+further cryptographic operation may be performed in these states, and it leaves the source CR in
+its state: such an `ace.derive` cannot invalidate the source, only the destination.
+Also permitted is an `ace.exec` whose sole purpose is to squeeze further output from an Algorithm
+that produces an arbitrarily long one, such as a XOF, whether issued directly or as the source
+endpoint of an `ace.derive` (even if squeezing is per se a cryptographic operation).
+A CR in State _Success_ or _Failure_ may not be the *destination* of an `ace.derive`.
++
+NOTE: `ML-KEM.Decaps` (<<ACE-PQC-ML-KEM>>) is the motivating case for this `ace.derive` behavior:
+it leaves the shared secret in `sharedkey` and
+transitions to _Success_, from which the only other exit is _Ready_, and _Ready_ clears
+`sharedkey`. Without this provision the shared secret would be unreachable and ML-KEM could not
+be used for its stated purpose.
+
+SGR4:: In States _Success_ and _Failure_, `ace.setst` is only permitted to transition to _Ready_ or _Unconfigured_.
+
+SGR5:: A transition from any valid state to _Ready_ using instruction `ace.setst` is always permitted, unless the Algorithm explicitly forbids it.
++
+NOTE: Note that a CR can always be restored from a backup SCC, so preventing transitions to _Ready_--as "GCM with Set IV" (<<ACE-GCM-with-IV-mode>>) does--is not an effective mitigation against cryptographic attacks enabled by transitioning to _Ready_.
+
+SGR6:: The CR state after `ace.setst` completes does not always match the instruction's immediate operand.
+Beyond Error State transitions, some operations determine the next state dynamically.
+For example, issuing `ace.setst` with an `ace_state_hash_verify` immediate and a verification parameter transitions the CR to either _Success_ or _Failure_.
+Instructions such as `ace.exec` may also cause state changes.
+
+SGR7:: Upon transitioning to an Error State, the Content of a CR beyond the MDH is cleared:
+Internal resources associated with the Content shall also be released,
+including any additional variable-length data and the _ImpDataLen_ field is set to 0.
+The CR then retains only the MDH.
+Accordingly, `_ConfigStatus_` is always set to `ace_cfgst_complete`.
+
+SGR8:: The transitions from _Unconfigured_ to any Error State result from configuration instructions, or
+from a usage instruction: no Algorithm allows one in State _Unconfigured_, so issuing one
+transitions the CR to Error State _Invalid_ under <<ACE-algorithms-other-rules>>.
+The transitions from these Error States to _Unconfigured_ result from explicitly clearing the CR.
+
+SGR9:: The MDH of a CR in the _Unconfigured_ State can be read using `ace.getmd*` (<<ACE-instruction-getmd>>), returning all zero values.
+
+SGR10:: Exporting a CR in an Error State exports only the MDH (all fields and values) and the authentication tag.
+Requesting the SCC's size (`ace.size` <<ACE-instruction-size>>) will return 32 (bytes).
+The resulting SCC can be reimported, allowing software to take appropriate actions even after a context switch.
+
+SGR11:: If a CR is in any Error State, it can still be reconfigured, cloned, or cleared. `ace.setst` can only be used to change the Error State (for instance by an exception handler) or transition the CR to _Unconfigured_.
+
+SGR12:: The MDH of a CR in an Error State can be read using `ace.getmd*` (<<ACE-instruction-getmd>>).
+
+SGR13:: Attempts to _use_ a CR in any Error State will not perform any operation, and in particular they leave the _State_ field unchanged.
+Such an attempt can be considered an operation that would cause a transition to  Error State `ace_state_invalid`, so the _State_ field is left unchanged to allow software to address the original error condition. No history of Error States is maintained by the architecture.
+
+SGR14:: Any _usage_ instruction that would violate the Usage Control policies will not perform its operation, and raises ACE exception `ace_exc_privilege_violation`
+(see <<ACE-error-architecture>> for the behavior if the Privileged Architecture is not implemented).
+
+[[ACE-algorithms-other-rules]]
+==== Other General Rules
+
+Besides the SGR (State-Specific General Rules) the following rules apply to all ACE-supported Algorithms, except when explicitly stated otherwise.
+
+[horizontal]
+AGR1:: (Unallowed instructions in Algorithm States.)
 If a usage instruction that may modify the state of a CR is issued, or a state transition is
 requested via `ace.setst`, and this is not explicitly allowed by the current state of the Algorithm
 encoded in the CC in the CR, then the CR transitions to Error State _Invalid_. This covers a
@@ -252,16 +311,14 @@ encoded in the CC in the CR, then the CR transitions to Error State _Invalid_. T
 An illegal-instruction exception is raised instead only where the Form is unavailable to the
 implementation at all, rather than merely wrong for the state (<<ACE-usage-input-output>>).
 
-AGR2: Granularity constraints.:::
+AGR2:: (Granularity constraints.)
 If `ACELEN` does not satisfy the granularity constraints of the Algorithm in its current state — for instance, it is not a whole multiple of the block size where the Algorithm requires one — the instruction performs no operation and the CR transitions to Error State _Invalid_.
 
-AGR3: `ace.exec` in State _Ready_.:::
-
+AGR3:: (``ace.exec`` in State _Ready.)
 No `ace.exec` instruction may be issued in State _Ready_ unless the Algorithm explicitly allows it;
 issuing one otherwise transitions the CR to Error State _Invalid_, by AGR1.
 
-AGR4: `ace.exec` iteration over blocks.:::
-
+AGR4:: (``ace.exec`` iteration over blocks.)
 In a state that processes whole blocks, one `ace.exec` performs the state's per-block operation
 `ACELEN`/`b` times, where `b` is the block size: for `i` = 0, `b`, `2b`, {ellipsis}, `ACELEN` − `b`,
 in that order, it consumes `INPUT[i+b-1:i]` (if it consumes inputs) and produces `OUTPUT[i+b-1:i]`
@@ -273,45 +330,31 @@ process exactly one block whatever `ACELEN` is.
 +
 This rule applies to all places where `ace.exec` is used in Algorithm descriptions, unless it is explicitly mentioned that `ace.exec` consumes only one block.
 
-AGR5: Derived fields are recomputed, not serialized.:::
-
+AGR5:: (Derived fields are recomputed, not serialized.)
 A field that an Algorithm derives from other fields of the same CC is not carried in the Serialized
 Context. It is recomputed when an import completes, that is by the `ace.mgmt` with
 `#ace_CR_management_end`, and again whenever a field it is derived from is set or replaced. An
 Algorithm states only the derivation itself, and marks such a field “(derived)” where it lists it in
 its *Internal State*.
 
-AGR6: An over-long input is truncated.:::
-
+AGR6:: (An over-long input is truncated.)
 Where a state consumes from `INPUT` a single value of fixed width — the field it assigns, or the
 operand it is defined over — an `ACELEN` greater than that width is truncated: only that many least
 significant bits of `INPUT` are considered, and the rest are ignored. The width is not necessarily
 the block size `b`.
 
-AGR7: Unwritten output bits are cleared.:::
-
+AGR7:: (Unwritten output bits are cleared.)
 When a state writes fewer than `ACELEN` bits to `OUTPUT`, the remaining bits of `OUTPUT` are
 cleared. This concerns the bits *within* the operand; the elements beyond `VL`, governed by the
 tail-agnostic policy of <<ACE-ACEV>>, are a separate matter.
 
-AGR8: Progress of a long-running operation.:::
+AGR8:: (Progress of a long-running operation.)
+An Algorithm may define a long-running operation that transfers no data to or from vector registers or the ACEIOBUF. Examples include: scalar multiplication, key generation, or signature generation or verification. The progress is recorded in the _AlgorithmUse_ field, in an implementation-defined format; `acestart` remains reserved for byte counts (<<ACE-CSR-acestart>>). If progress is recorded, the implementation exports the data necessary to support resumption in the ADS. Any importing implementation may discard this Section and restart the operation. In case of an Implementation Qualifier mismatch, the operation must be restarted. Hence, no internal algorithm-dependent state may be committed until the operation completed, and intermediate results must be
 
-An Algorithm may define an operation that transfers no data and runs long enough for an
-implementation to interrupt and resume it — a scalar multiplication, a key generation, a signature
-generation or verification. Progress of such an operation is recorded in the _AlgorithmUse_ field,
-in an implementation-defined format, and never in `acestart`, which is always a byte count
-(<<ACE-CSR-acestart>>). An implementation that does so must export, in the Additional Data Section,
-everything resumption needs; that Section is then mandatory and begins with the Implementation
-Qualifier (<<ACE-extra-content>>). An importing implementation may always discard that Section, and
-restarts the operation when it does. Since <<ACE-SCC-import>> discards it whenever the
-Implementation Qualifier does not match, an operation interrupted on one implementation and
-imported on another always restarts.
-
-AGR9: Loading and emitting a long field.:::
-
-A state that loads a long field from `INPUT`, or emits one to `OUTPUT`, over several `ace.exec`
-instructions records the amount transferred so far in a state field _W_, usually _AlgorithmUse_ of
-the MDH. Each such state names _W_ and its unit, bits or bytes. _W_ is zeroed on entry, rises
+AGR9:: (Loading and emitting a long field.)
+A state that loads a long field from `INPUT`, or emits one to `OUTPUT`, using multiple `ace.exec`
+instructions records the amount transferred so far in a state field _W_ (e.g., _AlgorithmUse_ of
+the MDH). Each such state names _W_ and its unit, bits or bytes. _W_ is zeroed on entry, rises
 monotonically, and is not reset when the field completes; entering a loading state also zeroes the
 field, so that reloading replaces it. Where the loading is performed by `process_VLI`
 (<<ACE-process-VLI>>), it is invoked with `block` = `state` = the field, `max_len` = `b` = `n` = its
@@ -322,6 +365,11 @@ transition of its own at that point, no further `ace.exec` is allowed in it and 
 transitions the CR to Error State _Invalid_. Excess data in a final loading transfer is ignored; an
 emitting `ace.exec` that would carry _W_ past the field size invalidates the CR. Where _W_ is a
 field of the MDH, `ace.restrict*` may not write it (<<ACE-instruction-restrict>>).
+
+[WARNING]
+====
+Add a rule for the case of AGR9 and a “last block”.
+====
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -3409,7 +3457,7 @@ therefore needs no flag.
  ** When the CC is created, i.e., provisioned, the `Generator` is set to the default parameter, and `Scalar` is set to zero.
 
  ** All the “set” and “output” operations follow rule AGR9 of
-<<ACE-general-rules-for-algorithms>>, with the progress recorded in `block_base`, in bytes.
+<<ACE-algorithms-other-rules>>, with the progress recorded in `block_base`, in bytes.
 
  ** To transition to State _Set_Generator_, a Form A or B `ace.setst` is used.
 
@@ -3911,7 +3959,7 @@ machine still transitions to _Success_, and the two cases remain indistinguishab
 
 ** In States _encapsk_Input_, _decapsk_Input_ and _ciphertext_Input_, the fields `encapsk`,
 `decapsk` and `ciphertext` are loaded using (multi-block) `ace.exec` instructions of Form B,
-following rule AGR9 of <<ACE-general-rules-for-algorithms>>, with the progress recorded in
+following rule AGR9 of <<ACE-algorithms-other-rules>>, with the progress recorded in
 _AlgorithmUse_. The size of each field in bits is 8
 times the size in bytes given in <<ACE-ML-KEM-sizes>>, so it is determined by the KEM variant and
 the state and no variable need hold it.
@@ -4114,7 +4162,7 @@ ML-DSA Algorithms define:
 ** In States _privkey_Input_, _pubkey_Input_, _ctx_Input_, _mu_Input_, _tr_Input_, and _Sign_Input_,
 the fields `privkey`, `pubkey`, `ctx`, `mu`, `tr` and `signature`, respectively, are loaded using
 (multi-block) `ace.exec` instructions of Form B, following rule AGR9 of
-<<ACE-general-rules-for-algorithms>>, with the progress recorded in _AlgorithmUse_.
+<<ACE-algorithms-other-rules>>, with the progress recorded in _AlgorithmUse_.
 
 ** In State _compute_pubKey_ a single Form D `ace.exec` instruction performs the following operations:
 

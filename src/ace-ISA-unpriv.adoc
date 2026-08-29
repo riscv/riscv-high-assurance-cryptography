@@ -585,70 +585,8 @@ For Algorithms with more than 23 valid states, additional state information may 
 // `ace.mgmt` above all, likewise never raise this exception: an unconfigured or partially
 // configured CR is the only legal operand for them.
 
-The following rules are generic and apply to all Algorithms:
+<<ACE-states-graph>> displays the default state transitions.
 
-. The MDH's _State_ field must reflect the current state whenever the CC is in _Ready_, _Success_, _Failure_, or any Error State.
-This ensures that these states can be unambiguously determined from the _State_ field alone, without inspecting the Content.
-
-. In States _Success_ and _Failure_, only the following ACE instructions are permitted: `ace.mgmt`, `ace.load`, `ace.store`, `ace.clear`, `ace.size`, `ace.setst`, `ace.getmd*`, `ace.getst`, `ace.clone`, `ace.restrict*`, and `ace.derive` where the CR in State _Success_ or _Failure_ is the *source* of the transfer and the source endpoint is one of its fields that can be exported, that is one that appears in its Serialized Context (described in <<ACE-instructions-detailed>>).
-Reading such a field is not a cryptographic operation, so it is compatible with the rule that no
-further cryptographic operation may be performed in these states, and it leaves the source CR in
-its state: such an `ace.derive` cannot invalidate the source, only the destination.
-Also permitted is an `ace.exec` whose sole purpose is to squeeze further output from an Algorithm
-that produces an arbitrarily long one, such as a XOF, whether issued directly or as the source
-endpoint of an `ace.derive`.
-A CR in State _Success_ or _Failure_ may not be the *destination* of an `ace.derive`.
-+
---
-Permitting `ace.derive` to read such a CR is what allows an Algorithm that deposits its result in
-a state field and then completes to hand that result on without exposing it. `ML-KEM.Decaps`
-(<<ACE-PQC-ML-KEM>>) is the motivating case: it leaves the shared secret in `sharedkey` and
-transitions to _Success_, from which the only other exit is _Ready_, and _Ready_ clears
-`sharedkey`. Without this provision the shared secret would be unreachable and ML-KEM could not
-be used for its stated purpose.
---
-
-. In States _Success_ and _Failure_, `ace.setst` is only permitted to transition to _Ready_ or _Unconfigured_.
-
-. A transition from any valid state to _Ready_ using instruction `ace.setst` is always permitted, unless the Algorithm explicitly forbids it.
-Note that a CR can always be restored from a backup SCC, so preventing transitions to _Ready_--as "GCM with Set IV" (<<ACE-GCM-with-IV-mode>>) does--is not an effective mitigation against cryptographic attacks enabled by transitioning to _Ready_.
-
-. Any transition may be caused by performing an explicit `ace.setst` operation, or may be induced by certain conditions specified in the Algorithm's specification.
-
-. The CR state after `ace.setst` completes does not always match the instruction's immediate operand.
-Beyond Error State transitions, some operations determine the next state dynamically.
-For example, issuing `ace.setst` with an `ace_state_hash_verify` immediate and a verification parameter transitions the CR to either _Success_ or _Failure_.
-Instructions such as `ace.exec` may also cause state changes.
-
-. Upon transitioning to an Error State, the Content of a CR beyond the MDH is cleared:
-Internal resources associated with the Content shall also be released,
-including any additional variable-length data and the _ImpDataLen_ field is set to 0.
-The CR then retains only the MDH.
-Accordingly, `_ConfigStatus_` is always set to `ace_cfgst_complete`.
-
-. The transitions from _Unconfigured_ to any Error State result from configuration instructions, or
-  from a usage instruction: no Algorithm allows one in State _Unconfigured_, so issuing one
-  transitions the CR to Error State _Invalid_ under <<ACE-general-rules-for-algorithms>>.
-  The transitions from these Error States to _Unconfigured_ result from explicitly clearing the CR.
-
-. Exporting a CR in an Error State exports only the MDH (all fields and values) and the authentication tag.
-  Requesting the SCC's size (`ace.size` <<ACE-instruction-size>>) will return 32 (bytes).
-  The resulting SCC can be reimported, allowing software to take appropriate actions even after a context switch.
-
-. If a CR is in any Error State, it can still be reconfigured, cloned, or cleared. `ace.setst` can only be used to change the Error State (for instance by an exception handler) or transition the CR to _Unconfigured_.
-
-. The MDH of a CR in an Error State can be read using `ace.getmd*` (<<ACE-instruction-getmd>>).
-
-. The MDH of a CR in the _Unconfigured_ State can be read using `ace.getmd*` (<<ACE-instruction-getmd>>), returning all zero values.
-
-. Attempts to _use_ a CR in any Error State will not perform any operation, and in particular they leave the _State_ field unchanged.
-
-. Any _usage_ instruction that would violate the Usage Control policies will not perform its operation, and raises ACE exception `ace_exc_privilege_violation`
-(see <<ACE-error-architecture>> for the behavior if the Privileged Architecture is not implemented).
-
-<<ACE-states-graph>> displays the default possible state transitions.
-
-// //
 [[ACE-states-graph]]
 .Default State Transitions
 [float="center",align="center"]
@@ -748,6 +686,7 @@ The legend for the state transition graph is:
   Completing an import can result in any admissible value of the _State_ and _StateExtension_ fields, since these are restored to the values that the CR had when it was exported.
   (Completing an import can result in non-complete CR if the SCC results from a CR exported mid-provisioning, mid-import, or mid-export.)
 * The round _Configuration_ “hub” simplifies the graph by expressing that any Error State is always reachable—even from another Error State—through configuration operations (or via `ace.setst`).
+
 
 The _StateExtension_ field can be used by an Algorithm to store additional state information.
 
@@ -963,7 +902,7 @@ In this case, ACE exceptions are replaced by direct transitions of the CR to an 
 | `ace_exc_unsupported`          | Transition to Error State _Unsupported_.
 | `ace_exc_out_of_memory`        | Transition to Error State `ace_state_out_of_memory`.
 | `ace_exc_privilege_violation`  | Transition to Error State `ace_state_privilege_violation`.
-| `ace_exc_unconfigured_buffer`  | When an ACE instruction is issued that uses the CR with the ACEIOBUF, and the latter is unconfigured or absent, the instruction performs no operation: nothing is read, nothing is written, and the CR undergoes no state transition. This case is exempt from the `ACELEN` granularity rule of <<ACE-general-rules-for-algorithms>>, which would otherwise invalidate the CR.
+| `ace_exc_unconfigured_buffer`  | When an ACE instruction is issued that uses the CR with the ACEIOBUF, and the latter is unconfigured or absent, the instruction performs no operation: nothing is read, nothing is written, and the CR undergoes no state transition. This case is exempt from the `ACELEN` granularity rule of <<ACE-algorithms-other-rules>>, which would otherwise invalidate the CR.
 |===
 The error conditions in <<ACE-exception-error-correspondence>> are placed in their natural priority order.
 
@@ -1224,7 +1163,7 @@ ACE does not have an _intrinsic_ concept of element length, hence `acestart` cou
 
 `acestart` is always a byte count. Progress that is not byte-structured — that of the point
 multiplications and signature operations of <<ACE-ECC>> and <<ACE-PQC>>, for instance — is recorded
-in the _AlgorithmUse_ field instead, as rule AGR8 of <<ACE-general-rules-for-algorithms>>
+in the _AlgorithmUse_ field instead, as rule AGR8 of <<ACE-algorithms-other-rules>>
 prescribes.
 
 `ace.setst` is not interruptible under any condition defined by this specification. Where an
@@ -1415,8 +1354,8 @@ ACE has no counterparts to the vector crypto extension's Element Group Width (EG
 
 The following rules apply to all ACE instructions, unless expressly stated otherwise.
 
-GR1. Direct and indirect CR addressing:::
-
+[horizontal]
+GR1:: _Direct and indirect CR addressing._
 Using `X0` as an indirect CR index raises an illegal-instruction exception, unless this is expressly used to encode an instruction: Currently, the only such exception is the encoding of `ace.reset`.
 +
 An indirect index outside [0..31] also raises an illegal-instruction exception.
@@ -1424,28 +1363,25 @@ An indirect index outside [0..31] also raises an illegal-instruction exception.
 Regarding the encoding itself: An instruction that names one CR carries a selector bit `r`, at the position shown in its encoding diagram. Namely, `r` = 0 when the CR index is the 5-bit immediate held in that field, and `r` = 1 when it is the value held in the GPR that field names.
 An instruction that names two CRs carries the two-bit field `R` instead, encoded as in <<ACE-instruction-clone>>.
 
-GR2. Register pairs and quartets:::
-
-An operand wider than a single GPR occupies consecutive GPRs, from the least significant upwards: a
+GR2:: _Register pairs and quartets._
 64-bit operand is one GPR on RV64 and the pair `X[s+1] @ X[s]` on RV32, and a 128-bit operand is the
 pair `X[s+1] @ X[s]` on RV64 and the quartet `X[s+3] @ X[s+2] @ X[s+1] @ X[s]` on RV32. This holds
 whether the operand is a source or a destination. The register number of a pair must be even and
 that of a quartet a multiple of four; otherwise an illegal-instruction exception is raised.
 
-GR3: Use of `X0`:::
+GR3:: _Use of `X0`._
 If `X0` is used as a destination or source register, but not to index a CR, then
 anything written to it is discarded, and it reads as zero. This applies also to
 the use of the register pair `X1:X0` in certain ACE instructions,
 where `X1` is still read from or written to, and to register quartets.
 
-GR4: Usage Control and State Modifications:::
-
+GR4:: _Usage Control and State Modifications._
 The _UsagePolicy_ of the MDH determines whether certain instruction can be
 issued or not, and sometimes when, in a given privilege mode.
 Furthermore, certain instructions may modify the state of the CR.
 For all instructions, the authoritative table for these two properties is
 <<ACE-instruction-properties>>. No instruction description restates them.
-
++
 [[ACE-instruction-properties]]
 .State modification and usage control, per instruction
 [width="100%",cols="<21%,^15%,^15%,^15%,<34%",options="header"]
@@ -1470,13 +1406,11 @@ For all instructions, the authoritative table for these two properties is
 5+| ^*^ means that the instruction is useable only if the ConfigStatus field is not `ace_cfgst_complete`.
 |===
 
-GR5. Management of CRs.:::
-
+GR5:: _Management of CRs._
 Opening a CR for export and import, as well as executing `ace.clear`, is always allowed in any State, even if not explicitly mentioned in an Algorithm specification.
 For the restrictions on `ace.clone`, cf. <<ACE-instruction-clone>>.
 
-GR6. A 128-bit MDH in a vector operand:::
-
+GR6:: _A 128-bit MDH in a vector operand._
 Where a Form of an ACE instruction carries the whole 128-bit MDH in a vector register or group, that
 operand must satisfy `VL` {times} `SEW` {ge} 128; otherwise an illegal-instruction exception is
 raised. <<ACE-extensions-overview-unpriv>> records which vector extensions provide such a register.
@@ -2927,7 +2861,7 @@ not available and a Form A is issued where a Form C is expected, an illegal-inst
 is raised.
 
 NOTE: These exceptions signal that the substitution is unavailable, not that the Form is wrong for
-the Algorithm's current state. The latter invalidates the CR instead (<<ACE-general-rules-for-algorithms>>).
+the Algorithm's current state. The latter invalidates the CR instead (<<ACE-algorithms-other-rules>>).
 
 
 . Any substitution is allowed only if the ACEIOBUF is enabled and `aceiobuflen` is non-zero.
@@ -2978,7 +2912,7 @@ This does not expand the attack surface, since the caller always retains full co
 //   supplies `Xl` < `aceiobuftop` leaves the bytes at offsets [`Xl`, `aceiobuftop`) at their
 //   previous values, and those bytes are consumed as part of the operand.
 //
-// . The granularity rule of <<ACE-general-rules-for-algorithms>> applies to `ACELEN` as computed above, whatever
+// . The granularity rule of <<ACE-algorithms-other-rules>> applies to `ACELEN` as computed above, whatever
 //   sequence produced the buffer contents.
 
 // ////////////////////////////////////////////////////////////////////
