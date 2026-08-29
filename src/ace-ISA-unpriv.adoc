@@ -716,12 +716,12 @@ If _AddDataLen_ is zero, there is no ADS.
 The value one is used to signal the state machine in the CR that ADS was present and then discarded.
 
 If _AddDataLen_ is not zero or one, the first 128-bit block of this additional section contains
-a copy of the originating implementation qualifier.
+a copy of the originating implementation qualifier from the originating machine
 
 ``{fournbsp}{fournbsp}IMPQUAL := zeros(32) @ acemimpid @ acemarchid @ acemvendorid``
 
-(cf. <<ACE-CSR-impl-ids>>) from the originating machine. These 16 bytes are counted within the length recorded by the _AddDataLen_ field.
-The importing implementation uses this value to determine whether the information in the ADS can be used.
+(cf. <<ACE-CSR-impl-ids>>). These 16 bytes are counted within the length recorded by the _AddDataLen_ field.
+The importing implementation uses this value to determine whether the ADS can be used.
 
 Since an ADS contains at least an authentication tag (16 bytes) and the originating implementation qualifier (also 16 bytes), the minumum length is 32 bytes, corresponding to an _AddDataLen_ value of 2.
 
@@ -738,8 +738,8 @@ Some entries are fixed or configurable only through an implementation-specific a
 Other entries are software-programmable per-hart architectural state.
 
 Localities can be used at SCC export and import to cryptographically bind an SCC to the current hardware and software environments.
-After an SCC is imported into a CR, this binding no longer applies; if a Locality Secret later changes, a newly exported SCC will differ and be bound to the new value.
-Software stacks—particularly context-switching handlers—are responsible for not leaking CRs directly to unauthorized parties.
+After an SCC is imported into a CR, this binding no longer applies; if a Locality Secret later changes, a newly exported SCC will be bound to the new value.
+Software is responsible for not leaking CRs directly to unauthorized parties.
 
 <<ACE-locality-indexes>> lists the architected Localities.
 Eleven LST entries are defined: the first six form the _HW Binding Group_, which binds SCCs to the hardware;
@@ -1343,36 +1343,32 @@ ACE has no counterparts to the vector crypto extension's Element Group Width (EG
 The following rules apply to all ACE instructions, unless expressly stated otherwise.
 
 [horizontal]
-GR1:: _Direct and indirect CR addressing._
-Using `X0` as an indirect CR index raises an illegal-instruction exception, unless this is expressly used to encode an instruction: Currently, the only such exception is the encoding of `ace.reset`.
+GR1:: Using `X0` as an indirect CR index raises an illegal-instruction exception, unless this is expressly used to encode an instruction.
+Currently, the only encoding is `ace.reset`.
 +
 An indirect index outside [0..31] also raises an illegal-instruction exception.
 +
-Regarding the encoding itself: An instruction that names one CR carries a selector bit `r`, at the position shown in its encoding diagram. Namely, `r` = 0 when the CR index is the 5-bit immediate held in that field, and `r` = 1 when it is the value held in the GPR that field names.
+An instruction that names one CR carries a selector bit `r`, at the position shown in its encoding diagram. Namely, `r` = 0 when the CR index is the 5-bit immediate held in that field, and `r` = 1 when it is the value held in the GPR that field names.
 An instruction that names two CRs carries the two-bit field `R` instead, encoded as in <<ACE-instruction-clone>>.
 
-GR2:: _Register pairs and quartets._
-64-bit operand is one GPR on RV64 and the pair `X[s+1] @ X[s]` on RV32, and a 128-bit operand is the
-pair `X[s+1] @ X[s]` on RV64 and the quartet `X[s+3] @ X[s+2] @ X[s+1] @ X[s]` on RV32. This holds
-whether the operand is a source or a destination. The register number of a pair must be even and
-that of a quartet a multiple of four; otherwise an illegal-instruction exception is raised.
+GR2:: A 64-bit operand is one GPR on RV64 and encoded in a pair `(X[s+1],X[s]) as `X[s+1] @ X[s]` on RV32,
+and a 128-bit operand is encoded as `X[s+1] @ X[s]` on RV64 and using a GPR quartet on RV32
+as `X[s+3] @ X[s+2] @ X[s+1] @ X[s]`. This holds whether the operand is a source or a destination.
+The lowest register number of a pair must be even and that of a quartet a multiple of four;
+otherwise an illegal-instruction exception is raised.
 
-GR3:: _Use of `X0`._
-If `X0` is used as a destination or source register, but not to index a CR, then
+GR3:: If `X0` is used as a destination or source register, but not to index a CR, then
 anything written to it is discarded, and it reads as zero. This applies also to
-the use of the register pair `X1:X0` in certain ACE instructions,
-where `X1` is still read from or written to, and to register quartets.
+the use of a register pair `(X1,X0)` or quartet `(X3,X2,X1,X0)` in certain ACE instructions.
 
-GR4:: _Usage Control and State Modifications._
-The _UsagePolicy_ of the MDH determines whether certain instruction can be
-issued or not, and sometimes when, in a given privilege mode.
+GR4:: The _UsagePolicy_ of the MDH determines whether certain instruction can be issued, and sometimes when, in a given privilege mode.
 Furthermore, certain instructions may modify the state of the CR.
-For all instructions, the authoritative table for these two properties is
-<<ACE-instruction-properties>>. No instruction description restates them.
+For all instructions, the authoritative table for these two properties is <<ACE-instruction-properties>>.
+No instruction description restates them.
 +
 [[ACE-instruction-properties]]
 .State modification and usage control, per instruction
-[width="100%",cols="<21%,^15%,^15%,^15%,<34%",options="header"]
+[width="100%",cols="<18%,^14%,^14%,^14%,<40%",options="header"]
 |===
 | Instruction(s)   | May modify ACE state | May modify other state | Usage-controlled | Notes
 
@@ -2847,10 +2843,9 @@ If `Zklio` is not available, an illegal-instruction exception is raised.
 input (Form C) can be replaced by a Form A, and the ACEIOBUF is used for the input. If `Zklio` is
 not available and a Form A is issued where a Form C is expected, an illegal-instruction exception
 is raised.
-
++
 NOTE: These exceptions signal that the substitution is unavailable, not that the Form is wrong for
 the Algorithm's current state. The latter invalidates the CR instead (<<ACE-algorithms-other-rules>>).
-
 
 . Any substitution is allowed only if the ACEIOBUF is enabled and `aceiobuflen` is non-zero.
   Otherwise, ACE exception `ace_exc_unconfigured_buffer` is raised.
@@ -2864,7 +2859,7 @@ are given in <<ACE-replacement-instructions>>.
 
 [[ACE-replacement-instructions]]
 .Alternative Sequences for Various Instructions
-[float="center",align="center",width="100%",cols="<20%,<41%,<39%",options="header"]
+[float="center",align="center",width="100%",cols="<22%,<39%,<39%",options="header"]
 |===
 | Instruction and Form | Original Instruction          | Alternative Sequence
 | `ace.exec`, Form A   | `ace.exec{nbsp}{nbsp}Vd, Kn\|K{Xn}, Vs` | `1: ace.input{nbsp}{nbsp}%offset(Xs), Xl` +
@@ -2908,30 +2903,35 @@ This does not expand the attack surface, since the caller always retains full co
 [[ACE-resumability]]
 === Interruptibility and Resumability of ACE instructions
 
+We define IRR = Interruptibility and Resumability Rule.
 
-Uninterruptible Instructions:::
+Uninterruptible Instructions::: {empty}
 +
 --
-* Instructions `ace.mgmt`, `ace.getmd*`, `ace.restrict*`, `ace.clone`, `ace.mv`, and `ace.size` are uninterruptible. If one does not complete, it writes no destination vector register, GPR, CR byte, ACEIOBUF byte, or memory location.
+[horizontal]
+IRR1:: Instructions `ace.mgmt`, `ace.getmd*`, `ace.restrict*`, `ace.clone`, `ace.mv`, and `ace.size` are uninterruptible. If one does not complete, it writes no destination vector register, GPR, CR byte, ACEIOBUF byte, or memory location.
 
-* `ace.setst` is uninterruptible under every condition defined by this specification.
+IRR2:: `ace.setst` is uninterruptible under every condition defined by this specification.
 If an Algorithm uses it for a long-running operation, the implementation may interrupt and resume the operation, recording progress in an implementation-defined manner—typically in _AlgorithmUse_, as in <<ACE-ECC>> and <<ACE-PQC>>, rather than in `acestart`. Each execution attempt must either complete the operation or advance its recorded progress.
 
-* Long-running ACE operations that access no external memory—including `ace.setst`, `ace.mgmt`, and `ace.exec` or `ace.derive` forms that do not access GPRs, vector registers, or the ACEIOBUF—continue while the hart is preempted. If an interrupted operation is still running when a handler accesses its CR, the hart waits for completion before resuming. Should another interrupt occur while instruction continues to execute, the second handler must to wait as well.
+IRR3:: Long-running ACE operations that access no external memory—including `ace.setst`, `ace.mgmt`, and `ace.exec` or `ace.derive` forms that do not access GPRs, vector registers, or the ACEIOBUF—continue while the hart is preempted. If an interrupted operation is still running when a handler accesses its CR, the hart waits for completion before resuming. Should another interrupt occur while instruction continues to execute, the second handler must to wait as well.
 
 NOTE: Although `ace.mgmt` is uninterruptible, the management processes bracketed by its instructions remain interruptible between constituent instructions (<<ACE-instruction-manage>>).
 --
 
-Resumable instructions:::
+//
+
+Resumable instructions::: {empty}
 +
 --
-* Resumable instructions are `ace.exec`, `ace.derive`, `ace.load`, `ace.store`, `ace.input`, and `ace.output`. They process multiple units serially from an architectural point of view. If an instruction is precisely halted or encounters an error after partial progress, the completed prefix is committed, the failing and subsequent units have no effect, and `acestart` records the prefix-complete point. The instruction is not retired; `xepc` contains its address.
+[horizontal]
+IRR4:: Resumable instructions are `ace.exec`, `ace.derive`, `ace.load`, `ace.store`, `ace.input`, and `ace.output`. They process multiple units serially from an architectural point of view. If an instruction is precisely halted or encounters an error after partial progress, the completed prefix is committed, the failing and subsequent units have no effect, and `acestart` records the prefix-complete point. The instruction is not retired; `xepc` contains its address.
 
-* For ACE memory instructions `ace.load`, `ace.store`, `ace.input`, and `ace.output`, the usual rule applies:
+IRR5:: For ACE memory instructions `ace.load`, `ace.store`, `ace.input`, and `ace.output`, the usual rule applies:
 An implementation may treat a memory instruction as complete
 (retiring it, or taking an interrupt with `xepc` past it) only after address translation and permission checks for every byte have succeeded. Otherwise it must precisely halt the instruction and report any fault synchronously on re-execution or resumption, with `acestart` at a prefix-complete point. Component accesses after the instruction is treated as complete must not fault. Transfer instructions may be restarted or resumed.
 
-* For block-iterated `ace.exec` and `ace.derive`, fully processed blocks remain written and `acestart` records their total byte count. For transfer instructions, bytes below `acestart` remain transferred at both endpoints. A partially executed instruction therefore commits exactly the state that a shorter instruction performing only the completed operations would have committed, including the CR, `acestart`, `acemanagedcr`, `SIV`, `SIV2`, `IMPQUAL`, `*lcrstatus`, and effective `ACES` fields. This guarantees consistent context save, restore, and resumption. Implementations must honor `acestart` for `ace.exec` and `ace.derive`; handlers must not set it to zero to force a restart, since doing so could reapply state changes or corrupt data.
+IRR6:: For block-iterated `ace.exec` and `ace.derive`, fully processed blocks remain written and `acestart` records their total byte count. For transfer instructions, bytes below `acestart` remain transferred at both endpoints. A partially executed instruction therefore commits exactly the state that a shorter instruction performing only the completed operations would have committed, including the CR, `acestart`, `acemanagedcr`, `SIV`, `SIV2`, `IMPQUAL`, `*lcrstatus`, and effective `ACES` fields. This guarantees consistent context save, restore, and resumption. Implementations must honor `acestart` for `ace.exec` and `ace.derive`; handlers must not set it to zero to force a restart, since doing so could reapply state changes or corrupt data.
 +
 `ace.derive` is included because it may need to modify the source CRs state, for example while squeezing a sponge, and may destructively modify the destination. Re-execution from the beginning could therefore advance a state machine twice or overwrite data already consumed. Its interruption points are block boundaries and Algorithm-specific points, including the long-running computations in <<ACE-ECC>> and <<ACE-PQC>>. If input and output overlap, the result may be unpredictable, but remains a function only of architectural state that the executing context is otherwise permitted to observe.
 +
@@ -3137,8 +3137,8 @@ This prevents concurrent management operations in the same code: starting a seco
 Therefore, the CSRs `acesivl` and `acesivh`, and possibly also `acesiv2l`, `acesiv2h`, `aceiql` and `aceiqh`
 must also be saved upon context save and restored upon context restore.
 
-Interleaved management operations within a single thread should therefore be avoided, unless lightweight threads support CR context switching directly.
-In most cases, these should be serializes with a mutex.
+Interleaved management operations within a single process should therefore be avoided, unless lightweight threads are used with support for CR context switching .
+Otherwise, these should be serialized using a mutex.
 Beyond this, this restriction does not affect other use cases.
 
 The format of a PI that has been just imported in a CR is the same as the external format, and this representation is finalized into the CR's internal state upon using `ace.mgmt` to complete the import which may include the computation of certain information such as derived keys, multiple shares.
@@ -3256,7 +3256,7 @@ NOTE: To reduce payload size, the AES-GCM-SIV-derived construction used for SCC 
 
 This provides practical protection for client applications. On cloud servers, each virtual machine and supervisor domain should use a unique CSK. To transfer CCs between domains, M-mode firmware can import an SCC using the source domain's CSK and re-export it using the target domain's CSK.
 
-The SIV (Synthetic IV), which is also the GCM-SIV authentication tag, is computed by encrypting the `POLYVAL` hash of the Locality Secrets, MDH, and CR Content, concatenated in that order. In the `POLYVAL` pseudocode below, the input is represented as an array of 128-bit blocks, which are absorbed in increasing index order.
+The SIV (Synthetic IV), which is also the GCM-SIV authentication tag, is the encryption of the `POLYVAL` hash of the Locality Secrets, MDH, and CR Content, concatenated in that order. In the `POLYVAL` pseudocode below, the input is represented as an array of 128-bit blocks, which are absorbed in increasing index order.
 
 [[ACE-SCC-POLYVAL]]
 .Polyval Hashing Function
@@ -3445,7 +3445,6 @@ first payload changes; an attacker cannot graft the Implementation-Specific ADS 
 ====
 If an export operation is completed prematurely, an authentication error results upon import (see next section).
 If an import operation is completed prematurely, an authentication error results.
-
 If any of the two operations is not completed, various types of error conditions will occur because _ConfigStatus_ is `ace_cfgst_complete`.
 ====
 
