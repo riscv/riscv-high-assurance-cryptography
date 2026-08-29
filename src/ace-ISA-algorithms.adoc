@@ -3651,33 +3651,29 @@ if `r` = 0, if `r` + `k` = `n`, or if `s` = 0.
   *** Every field whose bit is clear is retained. A Form A `ace.setst` sets no bit and
       therefore leaves `Generator`, `Scalar`, `SecondPt`, `Hash`, and `Signature`
       unmodified.
-+
-[NOTE]
-====
-All seven bits have the same polarity: a bit that is set discards the field it names, and a field
-whose bit is clear survives the return to _Ready_. Bit 6 therefore exists to drop a stale
-signature, not to preserve a fresh one.
+//
+// [NOTE]
+// ====
+// Retaining `Signature` by default is what allows one CC whose _AlgorithmPolicy_ permits both
+// operations to generate a signature and then verify it, since a CR in State _Success_ may only
+// transition to _Ready_ or _Unconfigured_ (<<ACE-State-field>>) and must therefore pass through
+// _Ready_ between the two operations. The sequence is:
+//
+// . _Ready_ {rightarrow} _Set_Scalar_ (load the private key) {rightarrow} _Point_Mul_ {rightarrow}
+//   _Output_ {rightarrow} _Success_, leaving the public key in `SecondPt`;
+// . _Success_ {rightarrow} _Ready_, retaining `Generator`, `SecondPt`, and `Scalar`;
+// . _Ready_ {rightarrow} _Set_Hash_ (load the message value) {rightarrow} _Sign_Generate_
+//   {rightarrow} _Output_ {rightarrow} _Success_;
+// . _Success_ {rightarrow} _Ready_, retaining `SecondPt`, `Hash`, and `Signature`;
+// . _Ready_ {rightarrow} _Sign_Verify_, whose preconditions `HasSecondPt`, `HasHash`, and
+//   `HasSignature` are all met.
+//
+// Steps 2 and 4 may use a Form A `ace.setst`, or a Form B one with the bits of the fields to be
+// discarded set. The ordinary verification flow, in which `SecondPt`, `Hash`, and `Signature` are
+// loaded through their respective _Set_ states, is unaffected.
+// ====
 
-Retaining `Signature` by default is what allows one CC whose _AlgorithmPolicy_ permits both
-operations to generate a signature and then verify it, since a CR in State _Success_ may only
-transition to _Ready_ or _Unconfigured_ (<<ACE-State-field>>) and must therefore pass through
-_Ready_ between the two operations. The sequence is:
-
-. _Ready_ {rightarrow} _Set_Scalar_ (load the private key) {rightarrow} _Point_Mul_ {rightarrow}
-  _Output_ {rightarrow} _Success_, leaving the public key in `SecondPt`;
-. _Success_ {rightarrow} _Ready_, retaining `Generator`, `SecondPt`, and `Scalar`;
-. _Ready_ {rightarrow} _Set_Hash_ (load the message value) {rightarrow} _Sign_Generate_
-  {rightarrow} _Output_ {rightarrow} _Success_;
-. _Success_ {rightarrow} _Ready_, retaining `SecondPt`, `Hash`, and `Signature`;
-. _Ready_ {rightarrow} _Sign_Verify_, whose preconditions `HasSecondPt`, `HasHash`, and
-  `HasSignature` are all met.
-
-Steps 2 and 4 may use a Form A `ace.setst`, or a Form B one with the bits of the fields to be
-discarded set. The ordinary verification flow, in which `SecondPt`, `Hash`, and `Signature` are
-loaded through their respective _Set_ states, is unaffected.
-====
-
-  ** {empty}
+** {empty}
 +
 --
 `Progress`, bits [15:1] of _AlgorithmUse_, is the field used following rule AGR8 for Point Multiplication,
@@ -3935,17 +3931,18 @@ _decapsk_Input_, and _ciphertext_Input_ states, or written to memory in the
 _encapsk_Output_ and _ciphertext_Output_ states. This is similar to what is done in the
 hashing and Elliptic Curve Algorithms.
 
-// The _AuxInfo_ field records the policies that a CC receiving the `sharedkey` through `ace.derive`
-// is required to carry: the format is the same as bits [79:64] of the MDH, that is the _UsagePolicy_
-// and _Locality_ fields together with the two Reserved bits that follow them. The destination CC is
-// provisioned independently, so the _UsagePolicy_ and _Locality_ of the destination will be set
-// to the union of its current policies, the policies of the source CR, and the ones encoded in
-// _AuxInfo_ value.
-// Alternatively: these bits are a *requirement on it*, not a value copied into it: if
-// bits [79:64] of the destination CC's MDH are not at least as restrictive as _AuxInfo_, the
-// destination CR transitions to Error State _Invalid_ and no key material is transferred.
-
 The size of the internal state of the three variants is 3232, 4704, and 6336 bytes, excluding metadata
+////
+The _AuxInfo_ field records the policies that a CC receiving the `sharedkey` through `ace.derive`
+is required to carry: the format is the same as bits [79:64] of the MDH, that is the _UsagePolicy_
+and _Locality_ fields together with the two Reserved bits that follow them. The destination CC is
+provisioned independently, so the _UsagePolicy_ and _Locality_ of the destination will be set
+to the union of its current policies, the policies of the source CR, and the ones encoded in
+_AuxInfo_ value.
+Alternatively: these bits are a *requirement on it*, not a value copied into it: if
+bits [79:64] of the destination CC's MDH are not at least as restrictive as _AuxInfo_, the
+destination CR transitions to Error State _Invalid_ and no key material is transferred.
+////
 --
 
 * *Serialized Context*:
