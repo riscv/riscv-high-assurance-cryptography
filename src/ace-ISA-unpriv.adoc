@@ -40,18 +40,12 @@ To support context switching while protecting CCs outside architectural state, a
 
 Algorithm:::
 (((Algorithms)))
-An *Algorithm* (written with an upper-case "A"), as referred to in the metadata of a CC,
-is a state machine that performs cryptographic operations through an interface formalized in this specification.
-ACE's interface to interact with these state machines consists of a small number of instructions.
-Together with the usual inputs and output offered by the RISC-V architecture (GPRs, vector registers, memory),
-these instructions consume identifiers associated to the various implemented Algorithms, and their
-semantics varies accordingly.
-
-Object-Orientation:::
 (((Cryptographic Context, object-oriented)))
-CCs act as *objects* exposing a uniform interface across Algorithms.
-A CC encapsulates Algorithm-specific behavior, enabling interchangeable use of different primitives (e.g., AES-128, AES-256, SM4) in identical modes (e.g., ECB, GCM-SIV, XTS) without requiring changes to compiled code.
-Side-channel attack (SCA) resistant variants are supported transparently.
+An *Algorithm* (written with an upper-case "A")
+//that is encoded in the metadata of a CR,
+is a state machine that performs cryptographic operations through the interface defined in this specification.
+ACE provides a small set of instructions for interacting with these state machines.
+The instructions take the identifiers for the implemented Algorithms from the CR's metadata, along with standard RISC-V inputs and outputs such as GPRs, vector registers, and memory; their semantics depend on the selected Algorithm. Consequently, a CC in a CR encapsulates Algorithm-specific behavior, allowing different primitives (e.g., AES-128, AES-256, and SM4) to be used interchangeably in the same modes (e.g., ECB, GCM-SIV, and XTS) without changes to the compiled code. Side-channel-attack-resistant variants are supported transparently.
 
 Usage Control Policy:::
 (((Cryptographic Context, usage control)))
@@ -73,18 +67,18 @@ ACE can bind CCs to *Localities*, i.e., restrict usage to specific devices or de
 
 This section is informative and non-normative.
 
-ACE is architected as an _attached_ unit, meaning that ACE instructions act as messages across a tightly coupled coprocessor interface.
-The ACE unit receives the operations from the hart, executes them independently of the issuing hart, and returns results.
+ACE is architected as an _attached_ unit: the behavior of ACE instructions model messages sent over a tightly coupled coprocessor interface to the actual implementation. The ACE unit receives operations from the hart, executes them independently, and returns the results.
 
-Besides implementations of ACE within a CPU core, this model also allows a single hardware instance of the ACE unit to be shared by multiple cores, with separate architectural states for each client hart. The specification mandates only behavior, not implementation.
+ACE may be implemented within a CPU core or as a hardware unit shared by multiple cores, with separate architectural state for each client hart. This specification defines behavior, not implementation.
 
-The specification does not require ACE to be implemented (entirely) in hardware. ACE may be implemented wholly or partly using trap-and-emulate. For example, a smaller implementation may perform symmetric cipher operations (cf. <<ACE-states-symmetric>>) in hardware and emulate asymmetric operations, such as Elliptic Curve Algorithms (cf. <<ACE-ECC>>). This approach is especially useful for Post-Quantum Cryptographic Algorithms (cf. <<ACE-PQC>>), whose states can be very large. Emulating these operations in M-mode firmware avoids storing those large states in the ACE unit, provided that the relevant CRs reside in secure SRAM or other secure memory.
+ACE need not be implemented entirely in hardware. It may be implemented wholly or partly using trap-and-emulate. For example, an implementation may perform symmetric cipher operations (cf. <<ACE-states-symmetric>>) in hardware while emulating asymmetric operations, such as Elliptic Curve Algorithms (cf. <<ACE-ECC>>). This approach is particularly useful for Post-Quantum Cryptographic Algorithms (cf. <<ACE-PQC>>), whose states may be very large. Emulating these operations in M-mode firmware avoids storing those states in the ACE unit, provided that the relevant CRs reside in secure SRAM or other secure memory.
 
-Trap-and-emulate exploits the ``*lcrstatus`` fields, which can also be used for on-demand (lazy) import of SCCs (cf. <<ACE-CSR-lcrstatus>>).
+Trap-and-emulate and on-demand (lazy) SCC import rely on the ``*lcrstatus`` CSRs (cf. <<ACE-CSR-lcrstatus>>).
 
 [WARNING]
 ====
 The requirement that CR state never be accessible in clear to any form of user software forbids implementations of ACE in S/VS-mode or HV-mode.
+Only M-mode is allowed to access the ACE state attached to the hart it is running on.
 Emulation of instructions and of Algorithms is only allowed in M-mode.
 ====
 
@@ -146,13 +140,12 @@ Emulation of instructions and of Algorithms is only allowed in M-mode.
 
 To claim `Zkl` conformance, the following are required:
 
-. at least one of `Zklv` or `Zklio`;
+. At least one of `Zklv` or `Zklio`.
 . Support for AES128, AES192, and AES256, in ECB, CBC, CFB, GCM, and GCM-SIV modes, as well as SHA2, as defined in <<ACE-Algorithms>>.
 . `Zklmem`, which may be implemented by trap-and-emulate (cf. <<ACE-error-architecture>>); in that case `Zklmv` must be implemented in hardware, since the emulating code uses it to move data between memory and the CR.
 
-`ace.load` and `ace.store` are therefore architecturally present on every
-conforming implementation, in hardware or emulated. `Zklmv` and `Zklexpire`
-are otherwise optional.
+`ace.load` and `ace.store` are present on every conforming implementation, either in hardware or emulated.
+`Zklmv` and `Zklexpire` are otherwise optional.
 
 If `Zklv` is implemented, the ACEV subset of the vector extension must be implemented, with a
 vector register of at least 128 bits, that is one of `Zvl128b`, `Zvl256b`, `Zvl512b` or
@@ -313,16 +306,9 @@ Capacity is freed by unconfiguring other CRs.
 
 The CRF capacity is implementation-defined.
 Implementations must provide sufficient capacity for all supported operations.
-// At a minimum, the CRF must be able to hold the largest possible single CR, or the largest CR pair used in cloning operations, and a small amount of additional authentication and identification information.
-
-[NOTE]
-====
-The architecture has been designed under the assumption that this small amount of additional storage space is not replicated per CR.
-Rather, it is shared across all CRs per hart and it is used only when importing and exporting SCCs.
-====
 
 Any corruption of the CRF associated with a hart is an unrecoverable error condition.
-The ACE architectural state associated with the hart is reset, and ACE exception `ace_exc_fatal` is raised (see <<ACE-exceptions>>; see <<ACE-error-architecture>> for the behavior when the Privileged Architecture is not implemented).
+The ACE architectural state associated with the hart is reset, and ACE exception `ace_exc_fatal` is raised (see <<ACE-exceptions>> and <<ACE-error-architecture>> for the behavior when the Privileged Architecture is not implemented).
 When a hart is reset, the architectural state of its ACE unit is reset as well.
 Each hart's ACE state must be exported and then fully zeroized on power down; on resume, the ACE unit must reset and be reconfigured by software.
 
@@ -332,6 +318,13 @@ Each hart's ACE state must be exported and then fully zeroized on power down; on
 
 [[ACE-ACEV]]
 ===== RVV/ACEV
+
+[WARNING]
+====
+[.red]#ACEV need not be finalized before ACE ratification begins; it
+may be defined later, and the ACE specification amended accordingly.
+This allows additional requirements to be collected.#
+====
 
 ACE inputs and outputs may use vector registers or an architectural input/output buffer (ACEIOBUF)
 that can be loaded from and stored to external memory. Both mechanisms may be supported simultaneously.
@@ -343,36 +336,25 @@ The current set of features is:
 
 * Vector registers (or groups) wide enough to support the inputs and outputs of the implemented Algorithms, that is, currently, 128 bits.
 * Configuration-setting instructions (`vsetvli`/`vsetivli`/`vsetvl`):
- ** Since all ACE operations ignore masks while accessing vector registers, ACEV use needs tail and mask agnostic configurations exclusively, and
-     ACE operations on vector registers always follow a tail-agnostic policy;
- ** Since ACE operations do not depend on a concept of element (from a logical point of view, they are not performed in the vector unit),
-    they view a vector (group) as a bit string of length `VL` * `SEW` with `VL` = min(`AVL`,`VLMAX`),
-    processing `VL` * `SEW` bits in each operation.
- ** Support for `LMUL` integer values of 1, 2, 4, and 8;
- ** Configuring ACEV with an unsupported configuration raises an illegal-instruction exception.
+** ACE does not use vector masking and does not define masked versions of its instructions.
+Therefore, ACEV only requires tail-agnostic and mask-agnostic configurations, and ACE operations on vector registers always use a tail-agnostic policy;
+Bit 25 of the instruction encodings is reserved for potential future adoption of masked operations, should a compelling use case arise.
+** Support for `LMUL` integer values of 1, 2, 4, and 8;
+** Configuring ACEV with an unsupported configuration raises an illegal-instruction exception.
 * Unit-strided vector loads and stores;
 * `vmv.x.s` and `vmv.s.x` and the slide instructions `vslideup.v[xi]`, `vslidedown.v[xi]`, `vslide1up.vx`, and `vslide1down.vx`, to insert data into and extract data from vector registers;
 * Vector logical operations: `vand.v[vxi]`, `vor.v[vxi]`, and `vxor.v[vxi]` (the immediate variants allow obtaining, for instance, a bitwise NOT); and
 * `vclmul.v[vx]` and `vclmulh.v[vx]` from `Zvbc`. They may be implemented as trap-and-emulate.
 
-ACE instructions do not use vector masking and do not define masked versions of `ace.exec`.
-Therefore, ACEV does not need support for masked operations.
-Bit 25 of the instruction encodings is reserved for potential future adoption of masked operations, should a compelling use case arise.
+NOTE: ACE does not depend on a concept of element.
+From a logical point of view, the operations are not performed in the vector unit.
+A vector register (groups) is as a bit string of length `VL` * `SEW` with `VL` = min(`AVL`,`VLMAX`), processing a certain number `b` of bits in each operation.
 
 Floating-point, fixed-point, and general arithmetic vector operations are not required.
 Complex operations for certain protocols may be performed in GPRs, with data inserted into vector registers and results extracted from them via `vmv.s.x`/`vmv.x.s` and the slide instructions.
 
-`Zklv` implies ACEV.
-
 ACE instructions with vector operands that use `acestart` for resumption update `acestart` and `vstart` simultaneously and independently, each according to its own semantics: both denote the same point of progress, `acestart` counting it in bytes and `vstart` in elements of the width in effect. Neither is derived from the other.
 This allows the ACE unit and the vector unit to work in sync while accessing local information more efficiently, but also to explicitly “desync” the two values in certain contexts (such as in the implementation of nested CR management operations).
-
-[WARNING]
-====
-[.red]#ACEV need not be finalized before ACE ratification begins; it
-may be defined later, and the ACE specification amended accordingly.
-This allows additional requirements to be collected.#
-====
 
 When vector registers are used, ACE determines the lengths of its operands from `VL*SEW`.
 The specific choice of `VL` and `SEW` is irrelevant; for example, `VL` = 2, `SEW` = 64 and `VL` = 4, `SEW` = 32 both define a 128-bit input.
@@ -384,8 +366,8 @@ ACEIOBUF is an optional architectural input/output buffer that may be used in pl
 
 ACEIOBUF is not part of the CRF.
 
-The `ace.input` instruction loads data from memory into the ACEIOBUF to supply inputs to ACE operations.
-The `ace.output` instruction stores outputs of ACE operations from the ACEIOBUF to memory.
+`ace.input` loads data from memory into the ACEIOBUF to supply inputs to ACE operations.
+`ace.output` stores outputs of ACE operations from the ACEIOBUF to memory.
 When the ACEIOBUF is used instead of vector registers, `ace.exec` and `ace.setst` use their forms with no inputs and no outputs. These forms are combined with `ace.input` and `ace.output` as described in <<ACE-usage-input-output>>. `ace.derive` is unaffected: it moves data between two CRs and never reads a vector register or the ACEIOBUF.
 
 When the ACEIOBUF is used, the length of the inputs and outputs is given in CSR `aceiobuflen` (<<ACE-CSR-aceiobuflen>>).
@@ -423,7 +405,7 @@ All _Reserved_ bits, as well as bits unused by a given Algorithm, are zero.
 |   [25:21] |   5  | _State_           | Current state of the CR/Algorithm, encoded as an integer. For instance, whether the CR is _Unconfigured_, encrypting or decrypting data, absorbing data in a hash/mac/tag, computing elliptic curve point multiples, generating or verifying signatures, or in an error state. It can be modified by the user to advance through various phases of an Algorithm. See <<ACE-State-field>>.
 |   [29:26] |   4  | _StateExtension_  | Available to Algorithms to extend the _State_ field with additional information. See <<ACE-State-field>>.
 |   [31:30] |   2  | _ConfigStatus_    | Used to indicate whether the CR is fully configured and ready to operate, or is being provisioned, imported, or exported. See <<ACE-ConfigStatus>>.
-|   [45:32] |  14  | _ImpDataLen_      | If non-zero, indicates that an additional, variable-length, implementation-dependent data section is appended to the Content. The length of this additional data section is _ImpDataLen_ * 128 bits (up to 256 KiB).
+|   [45:32] |  14  | _ImpDataLen_      | If non-zero, indicates that an additional, variable-length, implementation-dependent data section is appended to the Content. The length of this additional data section is _ImpDataLen_ * 128 bits.
 |   [61:46] |  16  | _AuxInfo_         | Algorithm-specific auxiliary information. Currently used only by ML-KEM and ML-DSA. This field is zero for Algorithms that do not use it.
 |   [62:62] |   1  | _Reserved_        | Reserved for future use.
 |   [63:63] |   1  | _SystemFormat_    | Value is 0 if an input is in the ACE architected format, 1 if in a system-defined format.
@@ -432,7 +414,7 @@ All _Reserved_ bits, as well as bits unused by a given Algorithm, are zero.
 |   [79:78] |   2  | Reserved          | Reserved for expansion of the _Locality_ field.
 |   [95:80] |  16  | _AlgorithmUse_    | Used by Algorithms and implementations to store additional state information.
 |  [115:96] |  20  | _ExpirationDate_  | If non-zero, the expiration date of this CC. See <<ACE-Metadata-expiration-date>>. Expressed in hours since 00:00, January 1, 2027 (about 119 years and 7 months).
-| [127:116] |  12  | Reserved          | Reserved for future use.
+| [126:116] |  12  | Reserved          | Reserved for future use.
 |===
 
 The fields are described in detail in the following subsections.
@@ -457,8 +439,7 @@ The remaining values are available for custom Algorithms.
 
 For encryption/decryption primitives and modes, the _AlgorithmPolicy_ field indicates whether the CC may be used for encryption (lower bit set), decryption (upper bit set), or both. At least one of the bits must be set.
 
-For asymmetric primitives supporting signatures, the lower bit permits signature generation and the upper bit permits verification.
-Such an asymmetric primitive can instead be configured for operations such as key agreement or key encapsulation, but _not_ signatures; in this case both bits are zero.
+For asymmetric primitives supporting signatures, the lower bit permits signature generation and the upper bit permits verification. In this case, both bits mau be zero.
 
 For other primitives, the _AlgorithmPolicy_ field may encode additional Algorithm identifiers to expand the effective encoding space of the _Algorithm_ field.
 
@@ -728,19 +709,21 @@ The information contained in this field must _not_ affect any of the lengths of 
 [[ACE-extra-content]]
 ===== _ImpDataLen_ Field
 
-The _ImpDataLen_ MDH field records the length of the _Additional Data Section_ of the content, a variable-size, implementation-dependent part.
+The _ImpDataLen_ MDH field records the length of the _Additional Data Section_ (ADS) of the content, a variable-size, implementation-dependent part, as a number of 128-bit blocks. The maximum value is 2^14^-2, corresponding to 262112 bytes.
 
-The format of the _Additional Data Section_ is described in <<ACE-data-formats>>.
+If _ImpDataLen_ is zero, there is no ADS.
 
-If _ImpDataLen_ is nonzero, the first 128-bit block of this additional section contains
+The all ones value is used to signal the state machine in the CR that ADS was present and then discarded.
 
-If _ImpDataLen_ is nonzero, the first 128-bit block of this additional section contains
-a copy of the implementation qualifier
+If _ImpDataLen_ is nonzero and _not_ the all ones value, the first 128-bit block of this additional section contains
+a copy of the implementation qualifier.
 
 ``{fournbsp}{fournbsp}IMPQUAL := zeros(32) @ acemimpid @ acemarchid @ acemvendorid``
 
-(cf. <<ACE-CSR-impl-ids>>) from the originating machine. Its 16 bytes are counted within the length recorded by the _ImpDataLen_ field.
-The importing implementation uses this value to determine whether any information in the Implementation-Specific Data Section can be used.
+(cf. <<ACE-CSR-impl-ids>>) from the originating machine. These 16 bytes are counted within the length recorded by the _ImpDataLen_ field.
+The importing implementation uses this value to determine whether the information in the ADS can be used.
+
+The format of the ADS is described in <<ACE-data-formats>>.
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -3485,7 +3468,7 @@ When the import of the SCC of a fully configured CR is completed,
  . Check correctness of `M`, and whether the Algorithm is supported.
  . Determine the length of the entire SCC.
  . `actual_impdatalen` <- `M`._ImpDataLen_.
- . If the length exceeds the implementation's maximum for the given Algorithm, the SCC contains an Implementation=Specific ADS that the importing implementation does not support. The SCC length is therefore adjusted by excluding the Implementation=Specific ADS, and `actual_impdatalen` <- 0.
+ . If the length exceeds the implementation's maximum for the given Algorithm, the SCC contains an Implementation=Specific ADS that the importing implementation does not support. The SCC length is therefore adjusted by excluding the Implementation=Specific ADS, and `actual_impdatalen` <- ones(14).
  . Load the rest of the SCC, up to the determined length.
  . `saved_MDH` <- `M`, the *initial* MDH, that is the image carried in the SCC and passed to `#ace_CR_import_start`. This is the same value that the exporting side used under that name.
  . ``AD[0]`` <- `saved_MDH`, ``len_AD`` <- 1
@@ -3501,13 +3484,13 @@ When the import of the SCC of a fully configured CR is completed,
 ... `correct`, `K(i).Content2[]` <- ``SCC_Decrypt(AD2, zeros(96), 1, SIV2, K(i).Content2[], CSK, len_AD2, len_PC2)``.
 .. else:
 ... `correct` <- `false`.
- . If `correct` {ne} `true`, then `Content2[]` is dropped and `actual_impdatalen` <- 0.
- . ``K(i)``.``MDH``._ImpDataLen_ <- `actual_impdatalen`. Where this is zero the import completes using only the architecture-dependent content. `saved_MDH` retains the original value, so the authentication of Section 3 is unaffected.
+ . If `correct` {ne} `true`, then `Content2[]` is dropped and `actual_impdatalen` <- ones(14).
+ . ``K(i)``.``MDH``._ImpDataLen_ <- `actual_impdatalen`. Where this is zero or `ones(14)`,the import completes using only the architecture-dependent content.   `ones(14)` signals the state machine of the imported CR that the ADS was dropped. The state machine then establishes an internal consistent state and sets _ImpDataLen_ to zero, and then to a suitable value upon export, if necessary.
 --
 
 [NOTE]
 ====
-This procedure ensures that if the SCC's optional implementation-specific VDS makes the SCC too large to fit in a CR, or if that VDS is incompatible, the implementation ignores the optional data, but keeps the architecture-dependent content: Only a failure of the first authentication (`SIV`) rejects the entire SCC.
+This procedure ensures that if the SCC's optional implementation-specific ADS makes the SCC too large to fit in a CR, or if that ADS is incompatible, the implementation ignores the optional data, but keeps the architecture-dependent content: Only a failure of the first authentication (`SIV`) rejects the entire SCC.
 ====
 
 // ////////////////////////////////////////////////////////////////////

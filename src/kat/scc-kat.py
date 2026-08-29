@@ -233,18 +233,18 @@ def scc_export_error_state(mdh: int, CSK: int, LST: dict) -> bytes:
 
 
 def scc_import(scc: bytes, CSK: int, LST: dict, len_PC=None,
-               support_vds=True, length_block=None) -> dict:
+               support_ads=True, length_block=None) -> dict:
     """<<ACE-SCC-import>>.
 
     Returns a dict describing the resulting CR:
       {'status': 'ok' | 'ace_state_import_auth',
-       'mdh', 'content1', 'imp_data_len', 'content2', 'vds_discarded'}
+       'mdh', 'content1', 'imp_data_len', 'content2', 'ads_discarded'}
 
     len_PC is the length of Section 3 in blocks, which the real importer
     derives from _Algorithm_/_AlgorithmPolicy_/_KeyType_/_StateExtension_
     (<<ACE-length-rule>> 2); this harness is passed it directly.
-    support_vds=False models step 5: the importer's maximum length for the
-    Algorithm is exceeded, so the SCC length is adjusted to exclude the VDS.
+    support_ads=False models step 5: the importer's maximum length for the
+    Algorithm is exceeded, so the SCC length is adjusted to exclude the ADS.
     """
     M = b2v(scc[0:16])
     imp = sl(M, 45, 32)
@@ -265,15 +265,15 @@ def scc_import(scc: bytes, CSK: int, LST: dict, len_PC=None,
     if not correct:                                      # step 12
         return {'status': 'ace_state_import_auth', 'mdh': None,
                 'content1': None, 'imp_data_len': 0, 'content2': None,
-                'vds_discarded': False}
+                'ads_discarded': False}
 
     res = {'status': 'ok', 'mdh': M, 'content1': P1,
-           'imp_data_len': imp, 'content2': None, 'vds_discarded': False}
+           'imp_data_len': imp, 'content2': None, 'ads_discarded': False}
     if imp == 0:
         return res
-    if not support_vds:                                  # step 5 adjustment
+    if not support_ads:                                  # step 5 adjustment
         res['imp_data_len'] = 0
-        res['vds_discarded'] = True
+        res['ads_discarded'] = True
         return res
 
     IMPQUAL = b2v(rest[0:16])
@@ -285,7 +285,7 @@ def scc_import(scc: bytes, CSK: int, LST: dict, len_PC=None,
                                length_block=length_block)
     if not correct2:                                     # step 14
         res['imp_data_len'] = 0
-        res['vds_discarded'] = True
+        res['ads_discarded'] = True
         return res
     res['content2'] = P2
     res['impqual'] = IMPQUAL
@@ -466,18 +466,18 @@ def main():
         "SCC with ImpDataLen != 0 has the length of <<ACE-data-formats>>")
     r = scc_import(scc_i, CSK, LST, len_PC=n)
     chk(r['status'] == 'ok' and r['content1'] == CONTENT1
-        and r['content2'] == CONTENT2 and not r['vds_discarded'],
+        and r['content2'] == CONTENT2 and not r['ads_discarded'],
         "both segments import and authenticate")
 
-    # An unsupported/oversized VDS is excluded at step 5: segment 1 still
+    # An unsupported/oversized ADS is excluded at step 5: segment 1 still
     # imports, ImpDataLen becomes 0.
-    r = scc_import(scc_i, CSK, LST, len_PC=n, support_vds=False)
+    r = scc_import(scc_i, CSK, LST, len_PC=n, support_ads=False)
     chk(r['status'] == 'ok' and r['content1'] == CONTENT1
-        and r['imp_data_len'] == 0 and r['vds_discarded'],
-        "an unsupported VDS is excluded; segment 1 still imports")
+        and r['imp_data_len'] == 0 and r['ads_discarded'],
+        "an unsupported ADS is excluded; segment 1 still imports")
 
     # Grafting: take segment 2 of SCC B onto SCC A.  AD2[1] = SIV differs,
-    # so segment 2 must fail; per import step 14 the VDS is discarded but
+    # so segment 2 must fail; per import step 14 the ADS is discarded but
     # segment 1 is still imported and ImpDataLen set to 0.
     CONTENT1_B = [c ^ 0xFF for c in CONTENT1]
     scc_b = scc_export(mdh_i, CONTENT1_B, CSK, LST,
@@ -486,7 +486,7 @@ def main():
     graft = scc_i[:32 + 16 * n] + scc_b[32 + 16 * n:]
     r = scc_import(graft, CSK, LST, len_PC=n)
     chk(r['status'] == 'ok' and r['content1'] == CONTENT1
-        and r['vds_discarded'] and r['imp_data_len'] == 0
+        and r['ads_discarded'] and r['imp_data_len'] == 0
         and r['content2'] is None,
         "a grafted segment 2 is rejected; segment 1 imports, ImpDataLen -> 0")
     # And SIV2 itself differs between the two, which is what makes the
@@ -542,18 +542,18 @@ def main():
     # POLYVAL bit 126 no longer reaches the tag input, the price of the separator.
     chk(_tag_block(0, 0) == _tag_block(1 << 126, 0),
         "POLYVAL bit 126 no longer reaches the tag input (126-bit tag input)")
-    # Tampering inside segment 2 discards the VDS but keeps segment 1.
-    bad_vds = 0
+    # Tampering inside segment 2 discards the ADS but keeps segment 1.
+    bad_ads = 0
     for bit in flips(off, len(scc_i), 23):
         r = scc_import(tampered(scc_i, bit), CSK, LST, len_PC=n)
         if not (r['status'] == 'ok' and r['content1'] == CONTENT1
-                and (r['vds_discarded'] or r['content2'] == CONTENT2)):
-            bad_vds += 1
+                and (r['ads_discarded'] or r['content2'] == CONTENT2)):
+            bad_ads += 1
         if r['status'] == 'ok' and r['content2'] == CONTENT2 \
            and bit >= 8 * (off + 16):
-            bad_vds += 1              # a change in SIV2/Content2 went unnoticed
-    chk(bad_vds == 0,
-        "tampering in segment 2 discards the VDS and keeps segment 1")
+            bad_ads += 1              # a change in SIV2/Content2 went unnoticed
+    chk(bad_ads == 0,
+        "tampering in segment 2 discards the ADS and keeps segment 1")
 
     # -- (f) Error-State SCC -------------------------------------------
     # On entering an Error State the Content is cleared and ImpDataLen set
