@@ -56,15 +56,15 @@ Assuming the primitive is secure, the key cannot be recovered from the input and
 ACE intentionally excludes the following:
 
 * **Variable-length complete ciphertext and plaintext inputs:** Plaintexts, ciphertexts, and hash inputs are processed in fixed-size blocks.
-* **Full key management:** ACE provides only architectural building blocks for key management; the key-management logic resides in trusted software (e.g., TEE applets). ACE does not support external schemes for directly provisioning keys into a key store. Instead, a local trusted SW or HW component manages the external schemes and uses the resulting keys and policies to configure CCs for the ACE unit.
+* **Full key management:** ACE provides only architectural building blocks for key management; the key-management logic resides in trusted software (e.g., TEE applets). ACE does not support external schemes for directly provisioning keys into a key store. Instead, a local trusted SW or HW component obtains keys and policies from external components and configure CCs for the ACE unit.
 
 * **Key revocation:**
 This specification does not define a key revocation mechanism. The rationale is:
 
-. A revocation mechanism would add a significant implementation burden and adversely affect performance, conflicting with ACE's emphasis on simplicity and speed.
-. A universal revocation mechanism is impractical because of the variety of protocols and the potentially unbounded revocation data. Managing revocation within the ACE unit would require dynamic access to secure memory. Such functionality is better suited to isolated software components that integrate with the local software stack while maintaining strong security guarantees.
-. Revocation typically applies to root keys, not the derived keys (e.g., session keys) used by user software. It can therefore be handled by the trusted entity managing the root keys. The expiration-date mechanism and _Localities_ can be used to limit the lifetime and scope of derived keys.
-. Applications requiring direct software access to root keys (e.g., link or storage encryption) typically execute in protected environments that can handle their own revocation mechanisms.
+. A revocation mechanism would impose significant implementation and performance costs, contrary to ACE’s goals of simplicity and speed.
+. A universal revocation mechanism would be impractical to implement because of the numerous protocols, and revocation data may be unbounded. Implementing it in the ACE unit would require dynamic access to secure memory. Isolated software components integrated with the local software stack can provide this functionality while maintaining strong security guarantees.
+. Revocation generally applies to root keys, not derived keys such as session keys. The trusted entity that manages the root keys can therefore manage revocation. The expiration-date mechanism and _Localities_ can limit the lifetime and scope of derived keys.
+. Applications that require direct software access to root keys, such as link or storage encryption, typically run in protected environments that can implement their own revocation mechanisms.
 
 * **Full prevention of misuse by compromised processes:** ACE cannot fully prevent misuse by compromised processes, as they retain access to their own CCs. ACE complements but does not replace existing software vulnerability mitigations and process isolation. Additionally, some modes, such as counter mode encryption, use the same operation for both encryption and decryption, which can be abused by malicious software; this risk is inherent and cannot be mitigated.
 
@@ -75,7 +75,8 @@ _This section is informative and non-normative._
 
 The ACE threat model is straightforward.
 
-**Assets** are _keys_ and any information that could aid an adversary in recovering plaintext or forging ciphertext. This includes, e.g., masks in tweakable XEX modes and derived keys in AES-GCM-SIV. The critical properties of these assets are their _confidentiality_ and _integrity_.
+**Assets** are _keys_ and any information that may assist an adversary recover plaintext or forge ciphertexts of MACs.
+This includes, e.g., masks in tweakable XEX modes and derived keys in AES-GCM-SIV. The critical properties of these assets are their _confidentiality_ and _integrity_.
 Protecting the _availability_ of keys is not an architectural goal.
 
 **Adversaries** are assumed capable of compromising processes by exploiting software vulnerabilities. They may also access memory contents, for instance by abusing hardware interfaces or by SoC/memory interposition. The model excludes adversaries capable of sophisticated hardware attacks, such as tampering with the hardware using a Focused Ion Beam/Scanning Electron Microscope (FIB/SEM). Side-channel attacks are addressed optionally: ACE offers interfaces to both SCA-unprotected and SCA-protected implementations of cryptographic algorithms, if the implementer provides these options.
@@ -90,7 +91,7 @@ Threats can be addressed in four ways:
 
 ACE is designed to avoid the “*A*” and “*S*” options as much as possible. It _controls_ threats through its own mechanisms and _transfers_ residual risk—specifically, the risk of key extraction—to the privileged or trusted software and hardware environments that manage keys. For example, trusted software can employ control-flow integrity, memory encryption with integrity protection, and anti-replay mechanisms, while hardware key-management blocks can be hardened to protect entrusted keys.
 
-Direct plaintext leakage, memory-corruption attacks against the ACE-using process, and Release of Unverified Plaintext (RUP) attacks on the cryptographic algorithms are out of scope. ACE cannot mitigate these threats because the processed information resides within the user's execution context; they are therefore _accepted_.
+Direct plaintext leakage, memory-corruption attacks against the ACE-using process, and Release of Unverified Plaintext (RUP) attacks are out of scope. ACE cannot mitigate these threats because the processed information resides within the user's execution context; they are therefore _accepted_.
 
 === Open Points
 
@@ -102,17 +103,12 @@ maturity. They fall into two groups, and the distinction matters when the docume
 Group A — items that can only be closed by the RISC-V Architecture Review Committee.:::
 
 . *Opcode allocation.* The instruction encodings use the `custom-0`, `custom-1` and `custom-2`
-  opcodes as placeholders (see the note in <<ACE-instructions-detailed>>). Standard opcode space can
-  only be allocated by the ARC. The instruction formats, field positions and `funct3`/`funct2`
-  subdivisions are settled; only the opcode values are open.
-  We are also aware that of the 28 opcodes for 32-bit instructions, 4 are custom and 1 remains as reserved.
-  Since we need 3 opcodes, there may not be encoding space. However, this is an extension that, while
-  very useful, it is also used only in very specific types of code and libraries. Therefore, a mechanism
-  Composable Extensions could be used, whereby we make the ACE instructions and CSR visible and then
-  again invisible (allowing the reuse of the opcodes at least) via CSR writes or operations.
-  In the latter case we could continue to use `custom-0`, `custom-1` and `custom-2`, and perhaps
-  even `custom-3` in future revisions of the specification.  However, the extension per se would
-  remain a non-custom one. Our goal is ratification.
+  opcodes as placeholders. Standard opcode space can only be allocated by the ARC.
+  The instruction formats, field positions and `funct3`/`funct2` subdivisions are settled.
+  We are also aware that the opcode space for 32-bit instructions is essentially exhausted–and we
+  need 3 opcodes. However, this an extension, while very useful, would be used only in very
+  specific places in the code and libraries. A mechanism like Composable Extensions would be
+  beneficial. However, the extension per se would remain a *non-custom one*: Our goal is ratification.
 
 . *`misa.L` and `mstatus`[26:25] (ACES) placement.* Provisional and contested, and resolvable only
   by the ARC. Nothing in this specification depends on the particular offset.
@@ -122,18 +118,20 @@ Group A — items that can only be closed by the RISC-V Architecture Review Comm
 
 . *Exception cause codes.* No `mcause` values are assigned. To be allocated with the ARC, either as
   individual cause values or as a single ACE cause with a subcause register.
-  The priority order in <<ACE-exception-codes>> is stated normatively and is independent of the numbering.
-  We would also like a _value_ accompanying the cause, to retrieve the CR number directly and simplify handlers
-  so that they do not have to parse direct and indirect CR referencing.
+  We would also like a “``mvalue`” accompanying the `mcause`, to retrieve the CR number directly
+  and simplify handlers so that they do not have to parse direct and indirect CR referencing.
 
 . *ACEV scope.* <<ACE-ACEV>> defines the vector subset required by ACE, which we currently consider complete.
-  The element widths for the indivisible operations performed by `ace.exec` still need to be defined. This is particularly important for ciphers and hash functions whose input sizes are not powers of two, because `EGW` cannot represent those sizes directly. One option is to specify, for each algorithm, a suggested `EGW` or `SEW` that divides its basic input size and the corresponding increment to `vstart` for each iteration. We also need to determine whether `vtype.vill` is useful or necessary, or whether it can be omitted.
+  The element widths for the operations performed by `ace.exec` must be defined.
+  This is important for primitives whose input/output sizes are not powers-of-two, as `EGW`/`SEW` cannot represent those sizes.
+  Or just allow any value that divides that size.
+  Thus, we may define a `EGW`/`SEW` and the corresponding increment to `vstart` for each iteration.
   See the discussion at link:https://github.com/riscv/riscv-high-assurance-cryptography/issues/96[].
-  The ARC may identify additional requirements when it reviews the interaction with the V extension. We expect that feedback, but do not consider it a barrier to candidacy.
+  We do not consider this issues a barrier to candidacy, but we ask feedback from the ARC to address it properly.
 
 . *RVWMO axiomatic integration.* The memory-ordering behaviour of ACE's component memory operations
-  is specified informally and completely in <<ACE-Memory-Model>> — prefix-completeness and the
-  conflicting-access rule. Casting it in the axiomatic formalism of RVWMO is work to be done with
+  is specified informally in <<ACE-Memory-Model>> with prefix-completeness, but
+  a conflicting-access rule is missing. Casting ACE in the axiomatic formalism of RVWMO is work to be done with
   the ARC during ratification.
 
 . *Naming.* This document uses “`ace.`”; the ratified names will use “`kl`”, as proposed in
@@ -167,16 +165,16 @@ and resumable, as this may open a potential attack vector which we haven't fully
 It can be relatively long-running, though not on
 the scale of an ECC scalar multiplication or a signature verification. If the asymmetry is judged
 inelegant, an alternative could follow a model in which a preempted import or export may be resumed only
-immediately, and not across a context switch — that is, management operations cannot nest.
+immediately, and not across a context switch — that is, management _instructions_ cannot nest.
 +
-We have defined a compliant behavior in case of preemption.
+We need an assessment from the ARC to determine whether the current behavior is suitable for the RISC-V architecture.
 
 . Whether to keep the `budget` mechanism of “GCM with Set IV” (<<ACE-GCM-with-IV-mode>>) and
 “Ascon-AEAD128 with set Nonce” (<<ACE-Ascon-AEAD128-wsn>>), or remove it.
 
-. Adding a nonce to the SCC export and import algorithms would be straightforward, but would require six AES-256 encryptions for each import and export operation, whereas the current design recomputes derived keys only when the CSK changes. A competing architecture also omits nonces from its key export and import mechanisms, likely for the same reason. We welcome input on this design choice.
+. Adding a nonce to the SCC export and import algorithms following RFC8452 requires six AES-256 encryptions for each such operation, whereas the current design recomputes derived keys only when the CSK changes. A competing architecture also omits nonces from its key export and import mechanisms, likely for the same reason. We welcome input on this design choice.
 +
-One alternative is to encrypt `nonce @ constant1` and `nonce @ constant2` under the derived encryption key, producing `A` and `B`. The algorithms could then use `enc_key xor (B @ A)` and `auth_key xor B xor A` instead of `enc_key` and `auth_key`. This construction is non-standard, but it is secure and faster: it requires only two additional AES-256 encryptions.
+One alternative is to encrypt `nonce @ constant1` and `nonce @ constant2` under the _derived encryption key_, producing `A` and `B`. The algorithms could then use `enc_key xor (B @ A)` and `auth_key xor B xor A` instead of `enc_key` and `auth_key`. This construction is non-standard, but it is secure and faster: it requires only two additional AES-256 encryptions.
 
 . Additional inputs for random key generation. An implementer can define a custom
 consume-anything / output-unlimited KDF as an Algorithm and use `ace.derive`
