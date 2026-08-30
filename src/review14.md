@@ -1,5 +1,4 @@
 ### **M3 — `ace.derive` aliasing, validation order, and partial-error behavior are undefined**
-### **M10 — Expiration evaluation is inconsistent and the boundary is undefined**
 ### **M11 — Memory-fault and restart semantics are unsafe for side-effecting regions**
 
 # 1. Executive assessment
@@ -82,36 +81,6 @@ T[k] = source[k] if k < source_size else 0, for 0 <= k < length
 ```
 
 and destination write behavior, including untouched bytes. Define per-unit commit order and both CR postconditions on every error.
-
----
-
-### **M10 — Expiration evaluation is inconsistent and the boundary is undefined**
-
-**Severity rationale:** A key may remain usable for an extra hour or `ace.derive` may bypass expiration on some implementations.
-
-**Locations:**
-
-- `ace-ISA-unpriv.adoc:819-830` — normative evaluation points list only `ace.setst`, `ace.exec`, and resumption.
-- `ace-ISA-unpriv.adoc:2496-2498` — `ace.derive` evaluates both expirations.
-- `ace-ISA-unpriv.adoc:827` — “has passed” is not defined as `>` or `>=`.
-
-**Issue:**
-
-`ace.derive` is a usage instruction and can expose or overwrite secret fields, but it is absent from the supposedly exhaustive evaluation list. The phrase “expiration date has passed” is also ambiguous for a field expressed in whole hours.
-
-**Proposed resolution:**
-
-Define:
-
-```text
-expired(MDH) :=
-    MDH.ExpirationDate != 0 &&
-    secure_clock_hours_since_epoch >= MDH.ExpirationDate
-```
-
-Then state:
-
-> Expiration is evaluated before any state or output effect of `ace.exec`, usage-controlled `ace.setst`, or `ace.derive`, and at every architectural resumption point. For `ace.derive`, both endpoints are checked before either endpoint changes.
 
 ---
 
@@ -720,3 +689,34 @@ DONE
 - `ace-ISA-unpriv.adoc:3197-3200` says management semantics are detailed in code snippets outside the reviewed chapter, making this chapter’s completeness unclear.
 
 **Resolution:** Run an anchor and semantic-link audit and require every normative instruction to have one authoritative section.
+
+FIXED
+### **M10 — Expiration evaluation is inconsistent and the boundary is undefined**
+
+**Severity rationale:** A key may remain usable for an extra hour or `ace.derive` may bypass expiration on some implementations.
+
+**Locations:**
+
+- `ace-ISA-unpriv.adoc:819-830` — normative evaluation points list only `ace.setst`, `ace.exec`, and resumption.
+- `ace-ISA-unpriv.adoc:2496-2498` — `ace.derive` evaluates both expirations.
+- `ace-ISA-unpriv.adoc:827` — “has passed” is not defined as `>` or `>=`.
+
+**Issue:**
+
+`ace.derive` is a usage instruction and can expose or overwrite secret fields, but it is absent from the supposedly exhaustive evaluation list. The phrase “expiration date has passed” is also ambiguous for a field expressed in whole hours.
+
+**Proposed resolution:**
+
+Define:
+
+```text
+expired(MDH) :=
+    MDH.ExpirationDate != 0 &&
+    secure_clock_hours_since_epoch >= MDH.ExpirationDate
+```
+
+Then state:
+
+> Expiration is evaluated before any state or output effect of `ace.exec`, usage-controlled `ace.setst`, or `ace.derive`, and at every architectural resumption point. For `ace.derive`, both endpoints are checked before either endpoint changes.
+
+---

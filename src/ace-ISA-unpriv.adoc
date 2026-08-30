@@ -821,9 +821,9 @@ If non-zero, the 20-bit _ExpirationDate_ field specifies the CC's expiration tim
 
 The _ExpirationDate_ field is evaluated normatively at the following points:
 
-* Upon any state transition attempting to use or advance the CC (every `ace.setst` instruction targeting a valid non-management state);
-* At the dispatch and initiation of every usage instruction (every `ace.exec` and `ace.derive` instruction); and
-* Upon resumption of an interrupted multi-step operation (such as multi-block hashing, point multiplication, or PQC key generation, signing, and verification after an interrupt or context reload).
+* At issue of any `ace.exec`, usage-controlled `ace.setst`, or `ace.derive`.
+* For `ace.derive`, both endpoints are checked.
+* At every architectural resumption point.
 
 If the secure clock indicates that the expiration date has passed at any of these evaluation points, the hardware immediately transitions the CR's _State_ field to Error State `ace_state_expired`, invalidates all intermediate computational state, and performs all Error State actions. These include implementation-specific tasks such as releasing CRF capacity held by the Content.
 
@@ -1159,11 +1159,6 @@ ACE does not have an _intrinsic_ concept of element length, hence `acestart` cou
 multiplications and signature operations of <<ACE-ECC>> and <<ACE-PQC>>, for instance — is recorded
 in the _AlgorithmUse_ field instead, as rule AGR8 of <<ACE-algorithms-other-rules>>
 prescribes.
-
-`ace.setst` is not interruptible under any condition defined by this specification. Where an
-Algorithm gives it a long-running operation, an implementation may nonetheless interrupt and
-resume it, but the manner in which it records progress is implementation-defined and portable
-software must not depend on it (<<ACE-resumability>>).
 
 Only these instructions honor a nonzero `acestart`; all other instructions ignore it and are restarted.
 
@@ -1821,9 +1816,6 @@ Further usage of the same CR—for instance, a later `ace.exec` or `ace.setst` t
 Certain values of `#immed7`, depending on the Algorithm, may be used to change _StateExtension_ instead, so that it can be used as state information that is somewhat orthogonal to the _State_ field.
 
 Using an `#immed7` that is not supported by the architecture or by the current Algorithm causes the CR to transition to Error State _Invalid_.
-
-The full provisioning, export, and import operations are described in detail in <<ACE-export-import-algorithms>>.
-
 --
 
 // ////////////////////////////////////////////////////////////////////
@@ -2028,7 +2020,6 @@ already held. Narrowing an existing CC's policies is the exclusive province of `
 ====
 
 Then:
-
 
 .. If `ml`._ConfigStatus_ = `ace_cfgst_complete`, the instruction makes the exported CR available
 to the ACE unit again in the clear format, and allows software to access it.
@@ -2931,7 +2922,6 @@ We define IRR = Interruptibility and Resumability Rule.
 IRR1:: Instructions `ace.mgmt`, `ace.getmd*`, `ace.restrict*`, `ace.clone`, non-vector `ace.mv`, and `ace.size` are uninterruptible. If one does not complete, it writes no destination vector register, GPR, CR byte, ACEIOBUF byte, or memory location.
 
 IRR2:: `ace.setst` is uninterruptible under every condition defined by this specification.
-If an Algorithm uses it for a long-running operation, the implementation may interrupt and resume the operation, recording progress in an implementation-defined manner—typically in _AlgorithmUse_, as in <<ACE-ECC>> and <<ACE-PQC>>, rather than in `acestart`. Each execution attempt must either complete the operation or advance its recorded progress.
 
 IRR3:: Long-running ACE operations that access no external memory—including `ace.setst`, `ace.mgmt`, and `ace.exec` or `ace.derive` forms that do not access GPRs, vector registers, or the ACEIOBUF—continue while the hart is preempted. If an interrupted operation is still running when a handler accesses its CR, the hart waits for completion before resuming. Should another interrupt occur while instruction continues to execute, the second handler must to wait as well.
 
@@ -2953,6 +2943,15 @@ IRR6:: For block-iterated `ace.exec`, `ace.mv`, and `ace.derive`, fully processe
 `ace.derive` is included because it may need to modify the source CRs state, for example while squeezing a sponge, and may destructively modify the destination. Re-execution from the beginning could therefore advance a state machine twice or overwrite data already consumed. Its interruption points are block boundaries and Algorithm-specific points, including the long-running computations in <<ACE-ECC>> and <<ACE-PQC>>. If input and output overlap, the result may be unpredictable, but remains a function only of architectural state that the executing context is otherwise permitted to observe.
 +
 Algorithm-specific resumable operations that transfer no data are subject to the same guarantee: each execution attempt must either complete the operation or advance its recorded progress.
+
+IRR7:: If an Algorithm performs a a long-running operation in `ace.setst` or in a (block-processing step of) `ace.exec` operation,
+the implementation may interrupt and resume the operation, but the manner in which it records progress is implementation-defined and it cannot be `acestart`
+(for instance, it can use _AlgorithmUse_, as in <<ACE-ECC>> and <<ACE-PQC>>).
+The use of Additional Data for any information that is not architectural is mandatory.
+All implementations must be capable of restart must and save the internal state so that restart
+is always possible in place of resumption.
++
+We exclude `ace.derive` because this could happen at both the source and destination endpoints, which would make resumption of, essentially, asynchronous flows of information, untreatable.
 
 [NOTE]
 ====

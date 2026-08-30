@@ -126,12 +126,10 @@ Group A — items that can only be closed by the RISC-V Architecture Review Comm
   We would also like a _value_ accompanying the cause, to retrieve the CR number directly and simplify handlers
   so that they do not have to parse direct and indirect CR referencing.
 
-. *ACEV scope.* <<ACE-ACEV>> states the vector subset ACE relies on, and we consider it complete for
-  ACE's needs.
-  To discuss with ARC: We need to define the element widths for the indivisible operations performed by `ace.exec`, esp. when some ciphers or hash functions have inputs whose size is not a power of two. This would make using `EGW` not possible. A solution could be to add to each Algorithm a suggested `EGW` which divides the size of the basic input, and the increment of `vstart` for each such iteration. We also need input on whether `vtype.vill` is useful/needed/can be omitted.
-  See discussion at link:https://github.com/riscv/riscv-high-assurance-cryptography/issues/96
-  The ARC may identify further requirements once it reviews the coupling to the V
-  extension; that feedback is expected and we do not feel it should block candidacy.
+. *ACEV scope.* <<ACE-ACEV>> defines the vector subset required by ACE, which we currently consider complete.
+  The element widths for the indivisible operations performed by `ace.exec` still need to be defined. This is particularly important for ciphers and hash functions whose input sizes are not powers of two, because `EGW` cannot represent those sizes directly. One option is to specify, for each algorithm, a suggested `EGW` or `SEW` that divides its basic input size and the corresponding increment to `vstart` for each iteration. We also need to determine whether `vtype.vill` is useful or necessary, or whether it can be omitted.
+  See the discussion at link:https://github.com/riscv/riscv-high-assurance-cryptography/issues/96[].
+  The ARC may identify additional requirements when it reviews the interaction with the V extension. We expect that feedback, but do not consider it a barrier to candidacy.
 
 . *RVWMO axiomatic integration.* The memory-ordering behaviour of ACE's component memory operations
   is specified informally and completely in <<ACE-Memory-Model>> — prefix-completeness and the
@@ -163,40 +161,29 @@ Group B — open design questions owned by this task group.:::
 . Keep the per-algorithm subextensions, or rely only on `ace.avail`? The ACE unit is not itself a
   RISC-V hart, which weakens the usual argument for subextensions.
 
-. `ace.mgmt` is currently uninterruptible, to prevent potential plaintext leaks, and we have not yet
-decided to make it preemptable and resumable, as this opens a potential attack vector which we
-haven't fully studied.
+. `ace.mgmt` is currently uninterruptible. We have not yet decided whether to make it preemptable
+and resumable, as this may open a potential attack vector which we haven't fully studied.
 +
 It can be relatively long-running, though not on
 the scale of an ECC scalar multiplication or a signature verification. If the asymmetry is judged
 inelegant, an alternative could follow a model in which a preempted import or export may be resumed only
 immediately, and not across a context switch — that is, management operations cannot nest.
 +
-These considerations should not, in our opinion, block candidacy, as the changes can be added
-incrementally in revisions of the specification.
+We have defined a compliant behavior in case of preemption.
 
 . Whether to keep the `budget` mechanism of “GCM with Set IV” (<<ACE-GCM-with-IV-mode>>) and
-  “Ascon-AEAD128 with set Nonce” (<<ACE-Ascon-AEAD128-wsn>>), or remove it.
+“Ascon-AEAD128 with set Nonce” (<<ACE-Ascon-AEAD128-wsn>>), or remove it.
 
-. Adding a nonce to the SCC export/import algorithms would be straightforward, but would
-  add 6 AES256 encryptions to each export and import operation. A competing architecture has
-  also opted to omit the nonce in their key export/import mechanisms, probably for the same
-  reason. We welcome input on this topic. The main problem is that adding a nonce causes the
-  entire key derivation to depend on it, and this implies six AES256 encryptions per nonce,
-  whereas in the current design the derived keys are recomputed only when the CSK is modified.
-  One option is to compute the encryption `A` and `B` of `nonce @ constant1`, and `nonce @ constant2`
-  under the derived encryption key `, and then use
-  `enc_key xor (B @ A)` and  `auth_key xor B xor A` in place of
-  `enc_key` and `auth_key`. It is non-standard, but 1) secure and 2) faster (only two extra
-  AES256 encryptions are required, and in fact AES128 could be used where the encryprions of
-  `A` and `B` use the two halves of the 256 bit `enc_key`).
+. Adding a nonce to the SCC export and import algorithms would be straightforward, but would require six AES-256 encryptions for each import and export operation, whereas the current design recomputes derived keys only when the CSK changes. A competing architecture also omits nonces from its key export and import mechanisms, likely for the same reason. We welcome input on this design choice.
++
+One alternative is to encrypt `nonce @ constant1` and `nonce @ constant2` under the derived encryption key, producing `A` and `B`. The algorithms could then use `enc_key xor (B @ A)` and `auth_key xor B xor A` instead of `enc_key` and `auth_key`. This construction is non-standard, but it is secure and faster: it requires only two additional AES-256 encryptions.
 
 . Additional inputs for random key generation. An implementer can define a custom
-  consume-anything / output-unlimited KDF as an Algorithm and use `ace.derive`
-  (<<ACE-instruction-derive>>) to move its output into a key field of another CR — the `Form` `01`
-  case. Whether the architecture should instead define such KDFs and the mechanism explicitly is
-  open.  It would be relatively straightforward to add them to the Algorithms Book, and these
-  could be fruitfully integrated with other Algorithms using `ace.derive`.
+consume-anything / output-unlimited KDF as an Algorithm and use `ace.derive`
+(<<ACE-instruction-derive>>) to move its output into a key field of another CR — the `Form` `01`
+case. Whether the architecture should instead define such KDFs and the mechanism explicitly is
+open.  It would be relatively straightforward to add them to the Algorithms Book, and these
+could be fruitfully integrated with other Algorithms using `ace.derive`.
 
 // Have a look at "Both the memory address and the CR offset carry the same _j_, so the two are always in step." in unpriv.
 // Need to define how the serialized representation of the CR is laid out, it has some gaps and SIV, SIV1, IQ are inserted there.
