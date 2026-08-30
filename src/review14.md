@@ -714,7 +714,7 @@ DONE
 
 **Examples:**
 
-- `ace-ISA-unpriv.adoc:291` says `ace.mgmt` is described by `<<ACE-instruction-setst>>` rather than `<<ACE-instruction-manage>>`.
+- `ace-ISA-unpriv.adoc:291` says `ace.mgmt` is described by `<<ACE-instruction-setst>>` rather than `<<ACE-instruction-mgmt>>`.
 - `ace-ISA-unpriv.adoc:1626` indexes `ace.mv` as `ace.exec`.
 - `ace-ISA-unpriv.adoc:2071-2072` index labels for `ace.getmd`/`ace.getmdv` are reversed or stale.
 - `ace-ISA-unpriv.adoc:3197-3200` says management semantics are detailed in code snippets outside the reviewed chapter, making this chapter’s completeness unclear.
