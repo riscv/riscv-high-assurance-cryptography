@@ -2250,7 +2250,7 @@ def test_notes():
          "should be stated as two separate sentences.")
     info("C3 (CSK gating) reads as RESOLVED for the CSR deadlock: the illegal-instruction "
          "list now exempts 'the macecsk group (if present)'. Still unstated: whether "
-         "ace.reset and the read-only identification CSRs are CSK-gated.")
+         "ace.clearall and the read-only identification CSRs are CSK-gated.")
     info("M2 (ace.size 0 vs 32) is UNRESOLVED -- see the ace.size section above.")
     info("m1 (acestart clamp vs no-op for ACEIOBUF instructions) is RESOLVED as the "
          "no-op reading -- see the ACEIOBUF section above.")
