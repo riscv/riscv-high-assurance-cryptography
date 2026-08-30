@@ -44,7 +44,8 @@ No Critical findings remain after incorporating the reviewed corrections.
 
 **Issue:**
 
-The encoding permits source and destination to name the same CR. The specification does not define:
+FIXED: The encoding permits source and destination to name the same CR.
+The specification does not define:
 
 - whether same-CR use is legal,
 - whether the source or destination transition happens first,
