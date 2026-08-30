@@ -353,9 +353,6 @@ A vector register (groups) is as a bit string of length `VL` * `SEW` with `VL` =
 Floating-point, fixed-point, and general arithmetic vector operations are not required.
 Complex operations for certain protocols may be performed in GPRs, with data inserted into vector registers and results extracted from them via `vmv.s.x`/`vmv.x.s` and the slide instructions.
 
-ACE instructions with vector operands that use `acestart` for resumption update `acestart` and `vstart` simultaneously and independently, each according to its own semantics: both denote the same point of progress, `acestart` counting it in bytes and `vstart` in elements of the width in effect. Neither is derived from the other.
-This allows the ACE unit and the vector unit to work in sync while accessing local information more efficiently, but also to explicitly “desync” the two values in certain contexts (such as in the implementation of nested CR management operations).
-
 When vector registers are used, ACE determines the lengths of its operands from `VL*SEW`.
 The specific choice of `VL` and `SEW` is irrelevant; for example, `VL` = 2, `SEW` = 64 and `VL` = 4, `SEW` = 32 both define a 128-bit input.
 The CPU instruction-decoding side of ACE uses `VL` and `SEW` to determine how much data to send to the ACE unit proper, but the ACE unit itself requires only the product `VL*SEW` (or `aceiobuftop`).
@@ -1368,7 +1365,10 @@ GR3:: If `X0` is used as a destination or source register, but not to index a CR
 anything written to it is discarded, and it reads as zero. This applies also to
 the use of a register pair `(X1,X0)` or quartet `(X3,X2,X1,X0)` in certain ACE instructions.
 
-GR4:: The _UsagePolicy_ of the MDH determines whether certain instruction can be issued, and sometimes when, in a given privilege mode.
+GR4:: ACE instructions with vector operands that use `acestart` for resumption update `acestart` and `vstart` simultaneously and independently, each according to its own semantics: both denote the same point of progress, `acestart` counting it in bytes and `vstart` in elements of the width in effect. Neither is derived from the other.
+This allows the ACE unit and the vector unit to work in sync while accessing local information more efficiently, but also to explicitly “desync” the two values in certain contexts (such as in the implementation of nested CR management operations).
+
+GR5:: The _UsagePolicy_ of the MDH determines whether certain instruction can be issued, and sometimes when, in a given privilege mode.
 Furthermore, certain instructions may modify the state of the CR.
 For all instructions, the authoritative table for these two properties is <<ACE-instruction-properties>>.
 No instruction description restates them.
@@ -1397,11 +1397,11 @@ No instruction description restates them.
 5+| ^*^ means that the instruction is useable only if the ConfigStatus field is not `ace_cfgst_complete`.
 |===
 
-GR5:: _Management of CRs._
+GR6:: _Management of CRs._
 Opening a CR for export and import, as well as executing `ace.clear`, is always allowed in any State, even if not explicitly mentioned in an Algorithm specification.
 For the restrictions on `ace.clone`, cf. <<ACE-instruction-clone>>.
 
-GR6:: _A 128-bit MDH in a vector operand._
+GR7:: _A 128-bit MDH in a vector operand._
 Where a Form of an ACE instruction carries the whole 128-bit MDH in a vector register or group, that
 operand must satisfy `VL` {times} `SEW` {ge} 128; otherwise an illegal-instruction exception is
 raised. <<ACE-extensions-overview-unpriv>> records which vector extensions provide such a register.
@@ -1699,11 +1699,12 @@ Any write, resp., read, past the serialized CR's length is ignored, resp., reads
 In every variant, if the CR's `ConfigStatus` field is `ace_cfgst_complete`, ACE exception
 `ace_exc_complete_cr_data_access` is raised.
 
-The four variants are given by the following table. In each of them `acestart` advances by the
-number of bytes transferred: 16 in a scalar variant; and `vl * (SEW/8)` in a vector one. A variant is
-valid only if the `ConfigStatus` field of the metadata of the CR holds one of the values in the fourth column in its row, and raises an illegal-instruction exception otherwise. A vector variant requires
-`vl * (SEW/8)` to be a multiple of 16, transitioning the CR to Error State _Invalid_ if not,
-and raises an illegal-instruction exception if V is not enabled.
+The four variants are given by the following table. In each of them `acestart` advances by
+the number of bytes transferred: 16 in a scalar variant; and `vl * (SEW/8)` in a vector one.
+A variant is valid only if the `ConfigStatus` field of the metadata of the CR holds one of the
+values in the fourth column in its row, and raises an illegal-instruction exception otherwise.
+A vector variant requires `vl * (SEW/8)` to be a multiple of 16, transitioning the CR to
+Error State _Invalid_ if not, and raises an illegal-instruction exception if V is not enabled.
 
 [[ACE-mv-variants]]
 .Variants of `ace.mv`
@@ -1728,12 +1729,6 @@ and raises an illegal-instruction exception if V is not enabled.
 | `ace_cfgst_exporting`
 |===
 --
-
-// [NOTE]
-// ====
-// The vector variants of `ace.mv` move `vl` {times} `SEW`/8 bytes, i.e., `ACELEN`/8:
-// `ace.mv` therefore needs no element concept of its own.
-// ====
 
 // ////////////////////////////////////////////////////////////////////
 
