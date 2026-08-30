@@ -105,6 +105,14 @@ Group A — items that can only be closed by the RISC-V Architecture Review Comm
   opcodes as placeholders (see the note in <<ACE-instructions-detailed>>). Standard opcode space can
   only be allocated by the ARC. The instruction formats, field positions and `funct3`/`funct2`
   subdivisions are settled; only the opcode values are open.
+  We are also aware that of the 28 opcodes for 32-bit instructions, 4 are custom and 1 remains as reserved.
+  Since we need 3 opcodes, there may not be encoding space. However, this is an extension that, while
+  very useful, it is also used only in very specific types of code and libraries. Therefore, a mechanism
+  Composable Extensions could be used, whereby we make the ACE instructions and CSR visible and then
+  again invisible (allowing the reuse of the opcodes at least) via CSR writes or operations.
+  In the latter case we could continue to use `custom-0`, `custom-1` and `custom-2`, and perhaps
+  even `custom-3` in future revisions of the specification.  However, the extension per se would
+  remain a non-custom one. Our goal is ratification.
 
 . *`misa.L` and `mstatus`[26:25] (ACES) placement.* Provisional and contested, and resolvable only
   by the ARC. Nothing in this specification depends on the particular offset.
@@ -137,17 +145,16 @@ Group A — items that can only be closed by the RISC-V Architecture Review Comm
 the introduction to <<ACE-Algorithms>>. Currently, discoverability is done via `ace.avail`.
 We are open to migrate to Unified Discovery once this is finalized.
 
+. *Debug-mode interaction* is specified in <<ACE-interaction-with-debug>>.
+  We consider this resolved, but would welcome a second opinion from the Debug task group and/or the ARC.
+
+
 Group B — open design questions owned by this task group.:::
 
 . Regarding <<ACE-CSK-requirements>> and <<ACE-CSR-macecsk>>: is there, or should there be, an
   architected mechanism by which M-mode on one hart can read or configure the CSRs of another hart?
   If such a mechanism exists or is planned, then <<ACE-CSK-requirements>> should use it instead of
   the platform-specific channels.
-
-. Debug-mode interaction is specified in <<ACE-interaction-with-debug>>: ACE is inaccessible unless
-  an authenticated-debug signal is asserted, and unauthenticated Debug entry zeroizes or masks all
-  ACE secrets until the next ACE unit reset. We consider this resolved, but would welcome a second
-  opinion from the Debug task group and/or the ARC.
 
 . `ace.exec` element-width / EGW for algorithms whose basic input size is not a power of two
   (<<ACE-ACEV>>). A possible resolution is to give each algorithm a suggested `EGW` dividing its
@@ -174,7 +181,15 @@ incrementally in revisions of the specification.
 . Adding a nonce to the SCC export/import algorithms would be straightforward, but would
   add 6 AES256 encryptions to each export and import operation. A competing architecture has
   also opted to omit the nonce in their key export/import mechanisms, probably for the same
-  reason. We welcome input on this topic.
+  reason. We welcome input on this topic. The main problem is that adding a nonce causes the
+  entire key derivation to depend on it, and this implies six AES256 encryptions per nonce,
+  whereas in the current design the derived keys are recomputed only when the CSK is modified.
+  One option is to compute the encryption `A` and `B` of `nonce @ constant1`, and `nonce @ constant2`
+  under the derived encryption key `, and then use
+  `enc_key xor (B @ A)` and  `auth_key xor B xor A` in place of
+  `enc_key` and `auth_key`. It is non-standard, but 1) secure and 2) faster (only two extra
+  AES256 encryptions are required, and in fact AES128 could be used where the encryprions of
+  `A` and `B` use the two halves of the 256 bit `enc_key`).
 
 . Additional inputs for random key generation. An implementer can define a custom
   consume-anything / output-unlimited KDF as an Algorithm and use `ace.derive`

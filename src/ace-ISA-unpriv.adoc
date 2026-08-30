@@ -334,7 +334,7 @@ When vector registers are used, the full V extension is not required. ACE depend
 ACEV must be fully opcode-compatible with RVV: code written for ACEV executes with identical behavior under RVV.
 The current set of features is:
 
-* Vector registers (or groups) wide enough to support the inputs and outputs of the implemented Algorithms, that is, currently, 128 bits.
+* Vector registers of at least 128 bits.
 * Configuration-setting instructions (`vsetvli`/`vsetivli`/`vsetvl`):
 ** ACE does not use vector masking and does not define masked versions of its instructions.
 Therefore, ACEV only requires tail-agnostic and mask-agnostic configurations, and ACE operations on vector registers always use a tail-agnostic policy;
@@ -1082,7 +1082,7 @@ These three CSRs, together, form the _Implementation Qualifier_ (see <<ACE-extra
 `acemaxiobuflen` is an XLEN-bit RO CSR that reports the maximum configurable length of the ACEIOBUF in bytes.
 The value is hardwired and specific to the implementation of the ACE unit.
 
-NOTE: `acemaxiobuflen` must be at least as large as the largest basic processing unit (granularity) of any implemented Algorithm, so that every implemented Algorithm can be used through the ACEIOBUF.
+`acemaxiobuflen` must be at least as large as the largest basic processing unit (granularity) of any implemented Algorithm.
 
 If `Zklio` is not implemented, the ACEIOBUF does not exist: `acemaxiobuflen` reads as zero, and the CSRs `aceiobuflen` and `aceiobuftop` are not present.
 
@@ -1106,8 +1106,8 @@ Context switching code must save and restore the contents of the ACEIOBUF up to 
 [NOTE]
 ====
 As per the Privileged Architecture, the dirtiness of the ACEIOBUF is not tracked except as part of the entire ACE state in `*status`.
-We recommend that software set `aceiobuflen` to zero once the contents of the ACEIOBUF are no longer needed.
-Context switching code can use this information to avoid unnecessary save and restore of ACEIOBUF contents.
+Software should set `aceiobuflen` to zero once the contents of the ACEIOBUF are no longer needed.
+Context switching code would then not save and restore the contents of the ACEIOBUF.
 ====
 
 // ////////////////////////////////////////////////////////////////////
@@ -1143,7 +1143,7 @@ This may occur, for instance, when `aceiobuftop` is a length not supported by th
 `acestart` tracks the progress of resumable ACE instructions, e.g., `ace.load`, `ace.store`, `ace.input` and `ace.output`.
 The `ace.mv` instructions used in CR management code honor `acestart` as well.
 
-Progress tracking by `acestart` also applies to `ace.exec` when iteratively processing a multi-block operand, as `ace.exec` may be interrupted between blocks, and to `ace.derive`, whose `ace.exec` endpoints advance the state machines of the source and destination CRs in the same way.
+Progress tracking by `acestart` also applies to `ace.exec` when iteratively processing a multi-block operand, as `ace.exec` may be interrupted between blocks, asd well as to `ace.derive`, whose `ace.exec` endpoints advance the state machines of the source and destination CRs in the same way, and the vector input and output Forms of `ace.mv`.
 
 ACE does not have an _intrinsic_ concept of element length, hence `acestart` counts the number of _bytes_ processed so far by `ace.exec`, or read/written by `ace.input`/`ace.output` or `ace.store`/`ace.load`.
 
@@ -1372,8 +1372,8 @@ No instruction description restates them.
 |===
 | Instruction(s)   | May modify ACE state | May modify other state | Usage-controlled | Notes
 
-| `ace.load`                | Yes             | No  | No^*^                | It updates `acestart`.
-| `ace.store`               | Only `acestart` | Yes | No^*^                | {empty}
+| `ace.load`                | Yes             | No  | No^*^                | Updates `acestart`.
+| `ace.store`               | Only `acestart` | Yes | No^*^                | Updates `acestart`.
 | `ace.exec`                | Yes             | Yes | Yes                  | {empty}
 | `ace.mv`                  | Yes             | Yes | No^*^                | ACE/other state change depends on direction. It always advances `acestart`.
 | `ace.setst`               | Yes             | No  | Yes, except as noted | Not usage-controlled when `#immed7` is `ace_state_unconfigured` — that is `ace.clear` and `ace.reset` (<<ACE-instruction-clear>>) — or an Error State. Either may be issued in any privilege mode regardless of the CC's _UsagePolicy_.
@@ -1383,8 +1383,8 @@ No instruction description restates them.
 | `ace.clone`               | Yes             | No  | No                   | {empty}
 | `ace.derive`              | Yes             | No  | Yes                  | The _UsagePolicy_ of the source CR and that of the destination CR are evaluated independently (<<ACE-instruction-derive>>).
 | `ace.size`, `ace.avail`   | No              | Yes | No                   | {empty}
-| `ace.input`               | Yes             | No  | No                   | It modifies the ACEIOBUF and `acestart`, and no CR.
-| `ace.output`              | Only `acestart` | Yes | No                   | It modifies `acestart`, and no CR.
+| `ace.input`               | Yes             | No  | No                   | Modifies the ACEIOBUF and `acestart`, but no CR.
+| `ace.output`              | Only `acestart` | Yes | No                   | Modifies `acestart`, but no CR.
 | `ace.clear`, `ace.reset`  | Yes             | No  | No                   | Encodings of `ace.setst`; see its row above.
 | `ace.getst`, `ace.getstx` | No              | Yes | No                   | Built on `ace.getmdl`.
 5+| ^*^ means that the instruction is useable only if the ConfigStatus field is not `ace_cfgst_complete`.
@@ -1597,10 +1597,7 @@ For the four Forms A–D above, the encodings are:
 . `Form` = `0b10` and `rs2` = `0b00000`.
 . `Form` = `0b11` and `rd` = `rs2` = `0b00000`.
 
-The CR operand is always encoded in `rs1`. Each Form sets to zero the register fields it
-does not use: `rd` when there is no output vector, `rs2` when there is no input vector.
-Non-zero values in an unused register field are reserved and raise an illegal-instruction
-exception, except for the encodings that `Zklmv` assigns to them (<<ACE-move>>).
+The CR operand is always encoded in `rs1`. In each Form, unused register fields must be zero: `rd` when there is no output vector, and `rs2` when there is no input vector. Non-zero values in an unused field are reserved and raise an illegal-instruction exception, except for encodings assigned to those fields by `Zklmv` (<<ACE-move>>).
 --
 
 _Description_::
@@ -1609,7 +1606,7 @@ _Description_::
 Performs a cryptographic operation as defined by the Algorithm in CR `Kn` or `K{Xn}`.
 The instruction may take an input and produce an output.
 
-If the V extension register file is not implemented, only Form D `ace.exec`
+If `Zklv` is not implemented, only Form D `ace.exec`
 is supported and `ace.input`, `ace.output` are used to provide inputs and
 extract outputs from `ace.exec`, as described in <<ACE-usage-input-output>>.
 --
@@ -1629,10 +1626,10 @@ The `ace.mv` instruction admits the following variants:
 (((ACE, instruction, ace.exec)))
 
 [upperalpha]
-. `ace.mv  Kd|K{Xd}, Xs2` {nbsp}{nbsp} copies 128 bits worth of content from two or four GPRs into a CR.
-. `ace.mv  Kd|K{Xd}, Vs2` {nbsp}{nbsp} copies one or more 128-bit blocks of content from a vector register into a CR.
-. `ace.mv  Xd,  Ks1|K{Xs1}` {nbsp} extracts 128 bits worth of content from a CR into two or four GPRs.
-. `ace.mv  Vd,  Ks1|K{Xs1}` {nbsp} extracts one or more 128-bit blocks of content from a CR into a vector register.
+. `ace.mv  Kd|K{Xd}, Xs2` copies 128 bits of content from two or four GPRs into a CR.
+. `ace.mv  Kd|K{Xd}, Vs2` copies one or more 128-bit blocks of content from a vector register into a CR.
+. `ace.mv  Xd,  Ks1|K{Xs1}` extracts 128 bits of content from a CR into two or four GPRs.
+. `ace.mv  Vd,  Ks1|K{Xs1}` extracts one or more 128-bit blocks of content from a CR into a vector register.
 --
 
 _Encodings_::
@@ -1643,14 +1640,13 @@ The hart adds the following encodings to Forms B and C of `ace.exec`. As through
 corresponding Form of `ace.exec` leaves unused: `rd` in Form B, `rs2` in Form C.
 
 [upperalpha]
-. `ace.mv  Kd|K{Xd}, Xs2`. +
-`Form` = `0b01` and `rd` = `0b00001`. `rs1` specifies the destination CR, and `rs2` the source GPR.
-. `ace.mv  Kd|K{Xd}, Vs2`. +
-`Form` = `0b01` and `rd` = `0b00010`. `rs1` specifies the destination CR, and `rs2` the source vector register.
-. `ace.mv  Xd,  Ks1|K{Xs1}`. +
-`Form` = `0b10` and `rs2` = `0b00001`. `rs1` specifies the source CR, and `rd` the destination GPR.
-. `ace.mv  Vd,  Ks1|K{Xs1}`. +
-`Form` = `0b10` and `rs2` = `0b00010`. `rs1` specifies the source CR, and `rd` the destination vector register.
+. `ace.mv  Kd|K{Xd}, Xs2`   is encoded as `Form` = `0b01` and `rd` = `0b00001`.
+. `ace.mv  Kd|K{Xd}, Vs2`   is encoded as `Form` = `0b01` and `rd` = `0b00010`.
+. `ace.mv  Xd,  Ks1|K{Xs1}` is encoded as `Form` = `0b10` and `rs2` = `0b00001`.
+. `ace.mv  Vd,  Ks1|K{Xs1}` is encoded as `Form` = `0b10` and `rs2` = `0b00010`.
+
+`rs1` always specifies the source or destination CR. In Forms A and B, `rs2` specifies the source GPR or vector register.
+In Forms C and D, `rs2` specifies the destination GPR or vector register.
 --
 //
 // In the mnemonics of variants A and B the CR is written first because it is the
@@ -2653,7 +2649,7 @@ length `Xl` the `rs2` field, as in `ace.store` (<<ACE-instruction-store>>).
 _Description_::
 +
 --
-If the vector registers are not sufficiently long, or not implemented, inputs can be read directly from memory and outputs written directly to memory.
+If `Zklv` is not implemented, inputs can be read directly from memory and outputs written directly to memory.
 For this reason, the architecture defines `ace.input` and `ace.output` (cf. next section).
 
 [[ACE-iobuf-transfer-window,the ACEIOBUF transfer window]]
@@ -2925,13 +2921,13 @@ Resumable instructions::: {empty}
 +
 --
 [horizontal]
-IRR4:: Resumable instructions are `ace.exec`, `ace.derive`, `ace.load`, `ace.store`, `ace.input`, and `ace.output`. They process multiple units serially from an architectural point of view. If an instruction is precisely halted or encounters an error after partial progress, the completed prefix is committed, the failing and subsequent units have no effect, and `acestart` records the prefix-complete point. The instruction is not retired; `xepc` contains its address.
+IRR4:: Resumable instructions are `ace.exec`, the vector versions of `ace.mv`, `ace.derive`, `ace.load`, `ace.store`, `ace.input`, and `ace.output`. They process multiple units serially from an architectural point of view. If an instruction is precisely halted or encounters an error after partial progress, the completed prefix is committed, the failing and subsequent units have no effect, and `acestart` records the prefix-complete point. The instruction is not retired; `xepc` contains its address.
 
 IRR5:: For ACE memory instructions `ace.load`, `ace.store`, `ace.input`, and `ace.output`, the usual rule applies:
 An implementation may treat a memory instruction as complete
 (retiring it, or taking an interrupt with `xepc` past it) only after address translation and permission checks for every byte have succeeded. Otherwise it must precisely halt the instruction and report any fault synchronously on re-execution or resumption, with `acestart` at a prefix-complete point. Component accesses after the instruction is treated as complete must not fault. Transfer instructions may be restarted or resumed.
 
-IRR6:: For block-iterated `ace.exec` and `ace.derive`, fully processed blocks remain written and `acestart` records their total byte count. For transfer instructions, bytes below `acestart` remain transferred at both endpoints. A partially executed instruction therefore commits exactly the state that a shorter instruction performing only the completed operations would have committed, including the CR, `acestart`, `acemanagedcr`, `SIV`, `SIV2`, `IMPQUAL`, `*lcrstatus`, and effective `ACES` fields. This guarantees consistent context save, restore, and resumption. Implementations must honor `acestart` for `ace.exec` and `ace.derive`; handlers must not set it to zero to force a restart, since doing so could reapply state changes or corrupt data.
+IRR6:: For block-iterated `ace.exec`, `ace.mv`, and `ace.derive`, fully processed blocks remain written and `acestart` records their total byte count. For transfer instructions, bytes below `acestart` remain transferred at both endpoints. A partially executed instruction therefore commits exactly the state that a shorter instruction performing only the completed operations would have committed, including the CR, `acestart`, `acemanagedcr`, `SIV`, `SIV2`, `IMPQUAL`, `*lcrstatus`, and effective `ACES` fields. This guarantees consistent context save, restore, and resumption. Implementations must honor `acestart` for `ace.exec` and `ace.derive`; handlers must not set it to zero to force a restart, since doing so could reapply state changes or corrupt data.
 +
 `ace.derive` is included because it may need to modify the source CRs state, for example while squeezing a sponge, and may destructively modify the destination. Re-execution from the beginning could therefore advance a state machine twice or overwrite data already consumed. Its interruption points are block boundaries and Algorithm-specific points, including the long-running computations in <<ACE-ECC>> and <<ACE-PQC>>. If input and output overlap, the result may be unpredictable, but remains a function only of architectural state that the executing context is otherwise permitted to observe.
 +
@@ -3193,7 +3189,7 @@ To accelerate key share reconstruction in a multi-share variant of an Algorithm,
 In a PI or SCC, System Keys are encoded as a 64-bit SKID used to retrieve the key from a system-specific SKS.
 This replaces the key value itself with a usually smaller field, and may reduce the size of the PI or SCC.
 
-For threshold implementations of system keys, ACE may copy key material from the SKS into the CR and expand it into multiple shares.
+For multi-share implementations of system keys, ACE may copy key material from the SKS into the CR and expand it into multiple shares.
 The key must still be exported as a SKID.
 The rule of <<ACE-rules-masked-implementations>> about the inclusion of shares in the content's Additional Data applies to system keys as well, as long as the key's value cannot be recovered from the included shares.
 
@@ -3211,7 +3207,7 @@ See also `ace.load` (<<ACE-instruction-load>>), `ace.store` (<<ACE-instruction-s
 // ////////////////////////////////////////////////////////////////////
 
 [[ACE-SCC-AEAD]]
-==== AES-GCM-SIV Key Derivation and POLYVAL
+==== SCC Key Derivation and POLYVAL
 
 A variant of AES-GCM-SIV cite:[DBLP-journals-iacr-GueronLL17,RFC8452] is used to export and import CRs.
 The changes are:
