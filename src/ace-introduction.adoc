@@ -187,3 +187,87 @@ could be fruitfully integrated with other Algorithms using `ace.derive`.
 
 // Have a look at "Both the memory address and the CR offset carry the same _j_, so the two are always in step." in unpriv.
 // Need to define how the serialized representation of the CR is laid out, it has some gaps and SIV, SIV1, IQ are inserted there.
+
+////
+### **M3 — `ace.derive` aliasing, validation order, and partial-error behavior are undefined**
+
+**Severity rationale:** Implementations can produce different keys and state transitions, or advance a stateful source before discovering an invalid destination.
+
+**Locations:**
+
+- `ace-ISA-unpriv.adoc:2393-2499`.
+- `ace-ISA-unpriv.adoc:2462-2470` — both state machines advance.
+- `ace-ISA-unpriv.adoc:2472-2486` — truncation, padding, and open destinations.
+- `ace-ISA-unpriv.adoc:2491-2498` — destination preconditions and independent policy checks.
+- `ace-ISA-unpriv.adoc:2921-2929` — partial progress and “unpredictable” overlap.
+
+**Issue:**
+
+FIXED: The encoding permits source and destination to name the same CR.
+The specification does not define:
+
+- whether same-CR use is legal,
+- whether the source or destination transition happens first,
+- whether all policy, expiration, index, state, length, and capacity checks precede either transition,
+- what happens to the source if the destination is invalid,
+- or the post-error state after partial progress.
+
+“Unpredictable” results are unacceptable for an architectural cryptographic operation, even if constrained to architectural state.
+
+The fixed-source/fixed-destination padding rules are also not compositional. For example, where a 16-byte source, 32-byte destination, and `length = 24` are used, it is unclear whether the destination receives 16 data bytes plus 16 zeros, 16 data bytes plus 8 zeros while retaining its final 8 bytes, or another result.
+
+**Proposed resolution:**
+
+Prefer:
+
+> `ace.derive` with identical source and destination CRs is reserved and raises an illegal-instruction exception without changing state.
+
+Require a preflight stage:
+
+```text
+validate both CR indices and non-aliasing
+validate ConfigStatus and State
+validate both UsagePolicies
+validate both expirations
+validate i, j, Form, length, and endpoint sizes
+validate required capacity
+only then begin transfer
+```
+
+Define the exact produced byte string:
+
+```text
+T[k] = source[k] if k < source_size else 0, for 0 <= k < length
+```
+
+and destination write behavior, including untouched bytes. Define per-unit commit order and both CR postconditions on every error.
+////
+
+////
+### **M11 — Memory-fault and restart semantics are unsafe for side-effecting regions**
+
+**Severity rationale:** Out-of-order component accesses followed by restart can duplicate or reorder MMIO effects. Prefix completion alone cannot roll back externally visible non-prefix accesses.
+
+**Locations:**
+
+- `ace-ISA-unpriv.adoc:855-869` — no atomicity.
+- `ace-ISA-unpriv.adoc:2921-2927` — prefix commit and memory-fault rules.
+- `ace-ISA-unpriv.adoc:2966-2989` — component order unconstrained.
+- Commented-out conflicting-access requirement at `2952-2962`.
+
+**Issue:**
+
+Component memory operations may execute in any order. On fault, the architectural state commits only a prefix and resumption reissues later bytes. If a non-prefix access has already reached MMIO or another side-effecting region, its effect cannot be undone and may be repeated.
+
+The text also fails to define the faulting address reported for a decomposed transfer or whether translation and PMA checks are performed before side effects.
+
+This is distinct from the excluded Open Point about expressing already-settled behavior in the formal RVWMO axiomatic model; the necessary informal behavior is itself absent for side-effecting memory.
+
+**Proposed resolution:**
+
+Either prohibit such accesses:
+
+> ACE multi-byte memory instructions are supported only for idempotent, cacheable main memory. If any byte maps to a non-idempotent or side-effecting PMA region, the instruction raises an access-fault exception before any component access occurs.
+
+Or require all translation, permission, PMP/PMA, and side-effect checks before issuing any component operation, plus prefix issue order for non-idempotent regions. Define `xtval` as the lowest-address failing byte, or another precise rule.
+////
