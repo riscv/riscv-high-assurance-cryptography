@@ -2,7 +2,7 @@
 """Sealed Cryptographic Context (SCC) known-answer tests.
 
 Validates the sealing construction of the draft ACE specification —
-<<ACE-SCC-AEAD>>, <<ACE-SCC-RFC8452-derivation>>, <<ACE-SCC-POLYVAL>>,
+<<ACE-SCC-AEAD>>, <<ACE-SCC-key-derivation>>, <<ACE-SCC-POLYVAL>>,
 <<ACE-SCC-GCM-SIV-enc>>, <<ACE-SCC-GCM-SIV-dec>>, <<ACE-SCC-export>>,
 <<ACE-SCC-import>> and the format tables of <<ACE-data-formats>> /
 <<ACE-length-rule>> (src/ace-ISA-unpriv.adoc) — transcribed literally onto
@@ -66,7 +66,7 @@ def AESE256(K: int, B: int) -> int:
 
 
 def RFC8452_KeyDeriv(key: int, nonce: int):
-    """<<ACE-SCC-RFC8452-derivation>>.
+    """<<ACE-SCC-key-derivation>>.
 
     A[i] <- AESE256(key, nonce @ bin(i,32))
     enc_key  = A[5][63:0] @ A[4][63:0] @ A[3][63:0] @ A[2][63:0]

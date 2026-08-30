@@ -414,7 +414,7 @@ All _Reserved_ bits, as well as bits unused by a given Algorithm, are zero.
 |   [79:78] |   2  | Reserved          | Reserved for expansion of the _Locality_ field.
 |   [95:80] |  16  | _AlgorithmUse_    | Used by Algorithms and implementations to store additional state information.
 |  [115:96] |  20  | _ExpirationDate_  | If non-zero, the expiration date of this CC. See <<ACE-Metadata-expiration-date>>. Expressed in hours since 00:00, January 1, 2027 (about 119 years and 7 months).
-| [126:116] |  12  | Reserved          | Reserved for future use.
+| [127:116] |  12  | Reserved          | Reserved for future use.
 |===
 
 The fields are described in detail in the following subsections.
@@ -541,6 +541,7 @@ States 24-31 are termed _Error States_, and are used to report certain specific 
 (((ACE, Algorithm, invalid state)))
 (((Context Register, invalidation)))
 We say that a CR has been _invalidated_ when it has been transitioned to Error State `ace_state_invalid`.
+Upon entering an Error State, the CR's contents are cleared as per Rule *SGR7* in <<ACE-algorithm-state-rules>>.
 
 The Error States are currently listed in decreasing severity order, with Error State 24 being the most severe and Error State 29 the least severe.
 Error States 30 and 31, if defined, will not necessarily have a lower priority than Error State 29, so the ordering may not hold for them.
@@ -713,7 +714,7 @@ The _AddDataLen_ MDH field records the length of the _Additional Data Section_ (
 
 If _AddDataLen_ is zero, there is no ADS.
 
-The value one is used to signal the state machine in the CR that ADS was present and then discarded.
+The value one is used by the SCC import procedure to signal the state machine in the CR that ADS was present in the SCC, but it was discarded (see <<ACE-SCC-import>>).
 
 If _AddDataLen_ is not zero or one, the first 128-bit block of this additional section contains
 a copy of the originating implementation qualifier from the originating machine
@@ -1141,9 +1142,10 @@ This may occur, for instance, when `aceiobuftop` is a length not supported by th
 `acestart` is an XLEN-bit RW CSR.
 
 `acestart` tracks the progress of resumable ACE instructions, e.g., `ace.load`, `ace.store`, `ace.input` and `ace.output`.
-The `ace.mv` instructions used in CR management code honor `acestart` as well.
+The vector register forms of the `ace.mv` instruction used in CR management code honor `acestart` as well.
 
-Progress tracking by `acestart` also applies to `ace.exec` when iteratively processing a multi-block operand, as `ace.exec` may be interrupted between blocks, asd well as to `ace.derive`, whose `ace.exec` endpoints advance the state machines of the source and destination CRs in the same way, and the vector input and output Forms of `ace.mv`.
+Progress tracking by `acestart` also applies to `ace.exec` when iteratively processing a multi-block operand, as `ace.exec` may be interrupted between blocks, asd well as to `ace.derive`, whose `ace.exec` endpoints advance the state machines of the source and destination CRs in the same way.
+The vector input and output Forms of `ace.mv` honor acestart, like the non-vector versions, to track the CR transfer point, and also use `vstart` to track the position in the vector register corresponding to the CR transfer point in case the input/output is multi-block.
 
 ACE does not have an _intrinsic_ concept of element length, hence `acestart` counts the number of _bytes_ processed so far by `ace.exec`, or read/written by `ace.input`/`ace.output` or `ace.store`/`ace.load`.
 
@@ -1166,7 +1168,7 @@ Software may save and restore the register across context switches.
 `acestart` is the position within the operand window at which processing starts or resumes, analogously to `vstart` in the V extension; for ACEIOBUF operands the window itself is always [0, `aceiobuftop`) (see <<ACE-CSR-aceiobuftop>>).
 
 Upon successful completion of any instruction that honors `acestart`, `acestart` is set to 0.
-The only exception is `ace.mv`, which by design accumulates `acestart` across instructions to support piecewise transfers.
+The only exception is `ace.mv`, which by design accumulates `acestart` across instructions to support piecewise transfers and, if used in the vector version, uses `vstart` to track progress within the vector register. The `vstart` value depends on the chosen vector element size.
 
 Using `ace.input`, `ace.output`, or an alternative sequence for `ace.exec` or `ace.setst` for any Form with an input or output
 when `acestart` {ge} `aceiobuftop` (and `aceiobuflen` nonzero), the operand window [`acestart`, `aceiobuftop`) is empty.
@@ -1304,7 +1306,11 @@ Upon entering Debug mode while the authenticated-debug signal is _deasserted_:
 
 [NOTE]
 ====
-Normal execution cannot resume after entry into unauthenticated Debug mode because the ACE state has been destroyed. Debugging that preserves ACE state therefore requires authenticated Debug mode. Recovery requires an ACE unit reset, which restores the hardwired HW Binding values and, under the third CSK model, the hardwired CSK, followed by re-establishment of the CSK and Locality Secrets by the privileged software stack and re-provisioning of the contexts. Under the programmable CSK models, if M-mode re-establishes the same CSK, SCCs exported before entry into Debug mode become importable again, providing a complete recovery path through the ordinary context-saving mechanisms.
+Normal execution cannot resume after entry into unauthenticated Debug mode because the ACE state has been destroyed.
+
+Debugging that preserves ACE state therefore requires authenticated Debug mode. Recovery requires an ACE unit reset, which restored access to the hardwired HW Binding values and, under the third CSK model, the hardwired CSK, followed by re-establishment of the CSK and Locality Secrets by the privileged software stack and re-provisioning of the contexts.
+
+Under the programmable CSK models, if M-mode re-establishes the same CSK, SCCs exported before entry into Debug mode become importable again, providing a complete recovery path through the ordinary context-saving mechanisms.
 ====
 
 // ////////////////////////////////////////////////////////////////////
@@ -1647,6 +1653,7 @@ corresponding Form of `ace.exec` leaves unused: `rd` in Form B, `rs2` in Form C.
 
 `rs1` always specifies the source or destination CR. In Forms A and B, `rs2` specifies the source GPR or vector register.
 In Forms C and D, `rs2` specifies the destination GPR or vector register.
+For forms B and D, the vector length must be a multiple of 16 bytes.
 --
 //
 // In the mnemonics of variants A and B the CR is written first because it is the
@@ -1678,11 +1685,12 @@ overstatement would complicate the management protocol for no gain in safety.
 [NOTE]
 ====
 `ace.mv` takes its transfer length from the instruction rather than from the MDH, so unlike
-`ace.load` and `ace.store` it is not self-limiting. Without this bound a loop that issues one
-`ace.mv` too many — the loop is driven by a software-maintained counter, as in
-<<ACE-management-code-snippets>> — would write past the end of the CR's serialized image and
-into whatever the CRF holds beyond it. The clamp on `acestart` in <<ACE-CSR-acestart>> is not
-sufficient on its own: it limits the recorded offset but does not suppress the transfer.
+`ace.load` and `ace.store` it is not self-limiting.
+However, `ace.mv` always transfers one or more 16-byte blocks.
+For each transferred block, `acestart` is advanced by 16 bytes.
+For the vector version of `ace.mv`, `vstart` contains the number or elements transferred.
+For instance, if the current vector element width is 32 bits, each transferred 16-byte blocks advances `vstart` by 4, and if the current vector element width is 64 bits, each transferred 16-byte blocks advances `vstart` by 2. If this form of `ace.mv` is interrupted, then `acestart` will report the total number of bytes transferred, and `vstart` allows to resume the transfer from the first non-transferred vector element.
+Any write, resp., read, past the serialized CR's length is ignored, resp., reads as zero.
 ====
 
 In every variant, if the CR's `ConfigStatus` field is `ace_cfgst_complete`, ACE exception
@@ -1909,10 +1917,12 @@ performs following operations:
 .. If the combination of _Algorithm_, _AlgorithmPolicy_, and _SCProtection_ in `ml` is not supported,
    ACE exception `ace_exc_unsupported` is raised.
 .. In case of provisioning:
-... _State_ and _StateExtension_ must be zero, i.e., upon provisioning, _State_ is always _Ready_.
-... `AddDataLen` must be 0.
+... _State_ is set to _Unconfigured_ and _StateExtension_ to 0, i.e., during provisioning, _State_ is _Unconfigured_.
+... `AddDataLen` must be 0. If `AddDataLen` is not zero in the MDH of a PI, provisioning must stop,
+_ConfigStatus_ is set to `ace_cfgst_complete`,
+and the CR is transitioned to Error State _Invalid_.
 .. In other cases where the Metadata is invalid, such as, for instance, a nonzero reserved field:
-   The CR is transitioned to Error State _Invalid_.
+_ConfigStatus_ is set to `ace_cfgst_complete`, and the CR is transitioned to Error State _Invalid_.
 +
 NOTE: ACE exception `ace_exc_unsupported` is raised only at provisioning or import time for an invalid or unsupported Algorithm or SCA protection level.
 The CR's _State_ field is already set to Error State `ace_state_unsupported` by the hardware that raised the exception, so that the CR cannot be used and the caller can detect this. A handler that cannot resolve the condition therefore needs to do nothing further. A handler that intends to emulate the Algorithm instead sets the CR's `*lcrstatus` field to _Off_, so that any access is trapped for emulation (see <<ACE-CSR-lcrstatus>>); the emulator then holds the CR in its own protected memory and services every operation on it, including SCC import and export.
@@ -1926,8 +1936,11 @@ ACE exception `ace_exc_unsupported` is _not_ raised when accessing or using a CR
 * *`ace.mgmt` is used to complete a provisioning process.*
 +
 --
-The operation makes the provisioned CR available to software (“sealing”) and sets _ConfigStatus_ to `ace_cfgst_complete`. Requires no auxiliary input.
-If an auxiliary input is passed, it is ignored.
+The operation makes the provisioned CR available to software (“sealing”) and sets
+_State_ to _Ready_, _StateExtension_ to 0, and _ConfigStatus_ to `ace_cfgst_complete`.
+
+This `ace.mgmt` requires no auxiliary input: If an auxiliary input is passed, it is ignored.
+
 The ACE unit performs any necessary readjustment of the CR's content to turn it into the format internally consumed by the ACE Unit.
 
 A process may be preempted during a CR's provisioning.
@@ -2027,9 +2040,9 @@ The architecturally observable behavior is described in <<ACE-CR-representation>
 
 ** The full provisioning, export, and import operations are described in detail in <<ACE-export-import-algorithms>>.
 
-** (`Zklmv` only) When a CR's metadata `ConfigStatus` field is changed from `ace_cfgst_importing` to `ace_cfgst_complete`, the ACE unit verifies the authentication tag of the CR's contents.
+** Whenever `_ConfigStatus_` transitions from `ace_cfgst_importing` to `ace_cfgst_complete`, the implementation must authenticate the architecture-defined SCC segment before any decrypted Content becomes usable, regardless of whether the serialized bytes were supplied by `ace.load`, `ace.mv`, trap-and-emulation, or another architecturally permitted transfer mechanism. On authentication failure, the CR must be cryptographically erased and transitioned to Error State `ace_state_import_auth`; it must not transiently or architecturally enter a usable state.
 
-** (`Zklmv` only) When a CR's metadata `ConfigStatus` field is changed from `ace_cfgst_complete` to `ace_cfgst_exporting`, the ACE unit generates the SCC.
+** Whenever `_ConfigStatus_` transitions from `ace_cfgst_complete` to `ace_cfgst_exporting`, the implementation must generate the SCC as specified in <<ACE-export-import-algorithms>>.
 
 //
 
@@ -2738,7 +2751,7 @@ The pseudo-instructions `ace.clear`/`ace.reset` are implemented as `ace.setst` (
 _Description_::
 +
 --
-`ace.clear` unconfigures the state of the CR `Kd` or `K{Xd}` and releases its resources in the CRF.
+`ace.clear` unconfigures the state of the CR `Kd` or `K{Xd}`, clears its contents, marks it as _Unconfigured_ in ts metadata, and releases the resources in the CRF.
 
 `ace.reset` unconfigures all the CRs and the ACEIOBUF, zeroing the buffer and setting
 `aceiobuflen`, `aceiobuftop` and `acestart` to 0, and writes 32 to `acemanagedcr`.
@@ -2904,7 +2917,7 @@ We define IRR = Interruptibility and Resumability Rule.
 ==== Uninterruptible Instructions
 
 [horizontal]
-IRR1:: Instructions `ace.mgmt`, `ace.getmd*`, `ace.restrict*`, `ace.clone`, `ace.mv`, and `ace.size` are uninterruptible. If one does not complete, it writes no destination vector register, GPR, CR byte, ACEIOBUF byte, or memory location.
+IRR1:: Instructions `ace.mgmt`, `ace.getmd*`, `ace.restrict*`, `ace.clone`, non-vector `ace.mv`, and `ace.size` are uninterruptible. If one does not complete, it writes no destination vector register, GPR, CR byte, ACEIOBUF byte, or memory location.
 
 IRR2:: `ace.setst` is uninterruptible under every condition defined by this specification.
 If an Algorithm uses it for a long-running operation, the implementation may interrupt and resume the operation, recording progress in an implementation-defined manner—typically in _AlgorithmUse_, as in <<ACE-ECC>> and <<ACE-PQC>>, rather than in `acestart`. Each execution attempt must either complete the operation or advance its recorded progress.
@@ -3099,7 +3112,7 @@ The length of each section must be a multiple of 128 bits.
 
 If the context is exported while in an Error State, Sections 3–6 are empty; that is, the SCC consists only of a plaintext MDH and `SIV`.
 
-The MDH's _AddDataLen_ field specifies the total size of the Implementation-Specific ADS (`SIV2`, `IMPQUAL`, and `Content2[]`).
+The MDH's _AddDataLen_ field specifies the total size of the Implementation-Specific ADS (`SIV2`, `IMPQUAL`, and `Content2[]`), except for the special value 1 (see <<ACE-SCC-import>>).
 
 The information in a CR comprises at least as many bits as the SCC (see <<ACE-SCC>>), excluding `SIV`, `IMPQUAL`, and `SIV2`.
 
@@ -3213,15 +3226,14 @@ This is intentional: the information needed to fully determine the lengths of
 all sections is already included in the MDH, and thus in the POLYVAL.
 . The optional Nonce is omitted.
 . A domain separation bit, `sep`, has been added to distinguish the two segments of the content that are sealed in a SCC: the fixed architecture-defined content (`sep` = 0) and the optional implementation-dependent content (`sep` = 1).
-// This reduces SIV strength by 1 bit with respect to RFC 8452.
 
-We define the Key Derivation (<<ACE-SCC-RFC8452-derivation>>) and POLYVAL (<<ACE-SCC-POLYVAL>>) functions first.
+We define the Key Derivation (<<ACE-SCC-key-derivation>>) and POLYVAL (<<ACE-SCC-POLYVAL>>) functions first.
 The generation of an SCC from a CR (<<ACE-SCC-export>>) and the import of an SCC into a CR (<<ACE-SCC-import>>) are defined next.
 
 In the pseudocode of this section, `AESE256(K, B)` denotes the AES-256 encryption of the
 128-bit block `B` under the 256-bit key `K`, as specified in FIPS 197 cite:[nist-fips-197].
 
-[[ACE-SCC-RFC8452-derivation]]
+[[ACE-SCC-key-derivation]]
 .RFC8452 Key Derivation
 []
 ----
@@ -3419,7 +3431,7 @@ to create the serialized, encrypted and authenticated SCC from the CR.
 ... If `saved_MDH`._Locality_ includes Locality #j, then ``AD[len_AD]`` <-  ``LST[``_j_``]``, ``len_AD`` <- ``len_AD`` + 1
 .. `len_PC` <- length of Section 3.
 .. `SIV`, `Content1~CT~[]` <- ``SCC_Encrypt(AD, zeros(96), 0, K(i).Content1~PT~[], CSK, len_AD, len_PC)``
-. Second, if _AddDataLen_ {ne} 0, then the implementation-dependent data is processed:
+. Second, if _AddDataLen_ {ne} 0 (export cannot produce a value of 1), then the implementation-dependent data is processed:
 .. `len_AD2` <- 2, ``AD2[0]`` <- ``K(i)``.``IMPQUAL``, ``AD2[1]`` <- `SIV`.
 .. `len_PC2` <- length of Section 6.
 .. `SIV2`, `Content2~CT~[]` <- ``SCC_Encrypt(AD2, zeros(96), 1, K(i).Content2~PT~[], CSK, len_AD2, len_PC2)``
@@ -3455,7 +3467,9 @@ When the import of the SCC of a fully configured CR is completed,
  . Check correctness of `M`, and whether the Algorithm is supported.
  . Determine the length of the entire SCC.
  . `actual_impdatalen` <- `M`._AddDataLen_.
- . If the length exceeds the implementation's maximum for the given Algorithm, the SCC contains an Implementation=Specific ADS that the importing implementation does not support. The SCC length is therefore adjusted by excluding the Implementation=Specific ADS, and `actual_impdatalen` <- 1.
+ . If `actual_impdatalen` exceeds the implementation's maximum for the given Algorithm, the SCC contains an Implementation=Specific ADS that the importing implementation does not support.
+ . If `actual_impdatalen` is 1, then we are importing a partially exported SCC that results from an interrupted import with discarded ADS. We keep the value 1 so that the state machine in the CR is notified that ADS was present but discarded when this import is finally completed.
+ . In the last two cases, the SCC length is adjusted by excluding the Implementation-Specific ADS, and `actual_impdatalen` <- 1.
  . Load the rest of the SCC, up to the determined length.
  . `saved_MDH` <- `M`, the *initial* MDH, that is the image carried in the SCC and passed to `#ace_CR_import_start`. This is the same value that the exporting side used under that name.
  . ``AD[0]`` <- `saved_MDH`, ``len_AD`` <- 1

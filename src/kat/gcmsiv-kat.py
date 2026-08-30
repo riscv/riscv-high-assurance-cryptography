@@ -33,7 +33,7 @@ big-endian (GCM-style, bswap) length encodings instead of the spec's
 little-endian bin() must change the tag.
 
 Spec notes (reported, not patched):
-  * RFC8452_KeyDeriv is defined (<<ACE-SCC-RFC8452-derivation>>) only for
+  * RFC8452_KeyDeriv is defined (<<ACE-SCC-key-derivation>>) only for
     256-bit keys via AESE256, yet <<ACE-GCM-SIV-mode>> admits k = 128 and
     invokes RFC8452_KeyDeriv(key, nonce) for it.  For k = 128 this harness
     implements the natural RFC 8452 derivation (AES-128, counter blocks
@@ -289,7 +289,7 @@ class AceGcmSiv:
 
 
 def rfc8452_keyderiv(key: bytes, nonce_v: int):
-    """<<ACE-SCC-RFC8452-derivation>>: A[i] = AESE(key, nonce @ bin(i,32)),
+    """<<ACE-SCC-key-derivation>>: A[i] = AESE(key, nonce @ bin(i,32)),
     enc_key = A[5][63:0] @ ... @ A[2][63:0], auth_key = A[1][63:0] @ A[0][63:0].
 
     The spec defines the function for 256-bit keys only (AESE256); for
@@ -644,7 +644,7 @@ def main():
           f"BE-lengths GCM-style length block vs {v['src']}")
     chk(fired, "negative control fired: BE length block changes the tag")
 
-    print("\nSPEC-NOTE: RFC8452_KeyDeriv (<<ACE-SCC-RFC8452-derivation>>) is "
+    print("\nSPEC-NOTE: RFC8452_KeyDeriv (<<ACE-SCC-key-derivation>>) is "
           "defined for 256-bit keys only (AESE256), but <<ACE-GCM-SIV-mode>> "
           "admits k = 128 and calls RFC8452_KeyDeriv(key, nonce); the k = 128 "
           "derivation is underspecified.  This harness uses the natural "
