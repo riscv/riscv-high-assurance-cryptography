@@ -202,7 +202,7 @@ def scc_export(saved_MDH: int, content1, CSK: int, LST: dict,
     <<ACE-data-formats>>: MDH || SIV || Content1_CT
     [ || IMPQUAL || SIV2 || Content2_CT ].
 
-    _AddDataLen_ counts the whole variable-length section (IMPQUAL, SIV2 and
+    _AuxDataLen_ counts the whole variable-length section (IMPQUAL, SIV2 and
     Content2) in 128-bit units, so it is 2 + len(content2) when present.
     The caller is responsible for having set it in saved_MDH, since
     saved_MDH is authenticated as AD[0] exactly as it appears in the SCC.
@@ -224,8 +224,8 @@ def scc_export(saved_MDH: int, content1, CSK: int, LST: dict,
 def scc_export_error_state(mdh: int, CSK: int, LST: dict) -> bytes:
     """<<ACE-length-rule>> 2 and <<ACE-data-formats>>: a CR in an Error State
     exports the MDH and SIV only — Sections 3-6 empty, len_PC = 0, 32 bytes.
-    _AddDataLen_ has been set to 0 on entering the Error State."""
-    assert sl(mdh, 45, 32) == 0, 'AddDataLen is cleared on entering an Error State'
+    _AuxDataLen_ has been set to 0 on entering the Error State."""
+    assert sl(mdh, 45, 32) == 0, 'AuxDataLen is cleared on entering an Error State'
     AD = _ad_segment1(mdh, LST)
     SIV, C = SCC_Encrypt(AD, 0, 0, [], CSK)
     assert C == []
@@ -463,14 +463,14 @@ def main():
     scc_i = scc_export(mdh_i, CONTENT1, CSK, LST,
                        IMPQUAL=IMPQUAL, content2=CONTENT2)
     chk(len(scc_i) == 32 + 16 * n + 16 * imp_len,
-        "SCC with AddDataLen != 0 has the length of <<ACE-data-formats>>")
+        "SCC with AuxDataLen != 0 has the length of <<ACE-data-formats>>")
     r = scc_import(scc_i, CSK, LST, len_PC=n)
     chk(r['status'] == 'ok' and r['content1'] == CONTENT1
         and r['content2'] == CONTENT2 and not r['ads_discarded'],
         "both segments import and authenticate")
 
     # An unsupported/oversized ADS is excluded at step 5: segment 1 still
-    # imports, AddDataLen becomes 0.
+    # imports, AuxDataLen becomes 0.
     r = scc_import(scc_i, CSK, LST, len_PC=n, support_ads=False)
     chk(r['status'] == 'ok' and r['content1'] == CONTENT1
         and r['imp_data_len'] == 0 and r['ads_discarded'],
@@ -478,7 +478,7 @@ def main():
 
     # Grafting: take segment 2 of SCC B onto SCC A.  AD2[1] = SIV differs,
     # so segment 2 must fail; per import step 14 the ADS is discarded but
-    # segment 1 is still imported and AddDataLen set to 0.
+    # segment 1 is still imported and AuxDataLen set to 0.
     CONTENT1_B = [c ^ 0xFF for c in CONTENT1]
     scc_b = scc_export(mdh_i, CONTENT1_B, CSK, LST,
                        IMPQUAL=IMPQUAL, content2=CONTENT2)
@@ -488,7 +488,7 @@ def main():
     chk(r['status'] == 'ok' and r['content1'] == CONTENT1
         and r['ads_discarded'] and r['imp_data_len'] == 0
         and r['content2'] is None,
-        "a grafted segment 2 is rejected; segment 1 imports, AddDataLen -> 0")
+        "a grafted segment 2 is rejected; segment 1 imports, AuxDataLen -> 0")
     # And SIV2 itself differs between the two, which is what makes the
     # graft detectable (the <<ACE-SCC-export>> IMPORTANT note).
     off = 32 + 16 * n
@@ -556,7 +556,7 @@ def main():
         "tampering in segment 2 discards the ADS and keeps segment 1")
 
     # -- (f) Error-State SCC -------------------------------------------
-    # On entering an Error State the Content is cleared and AddDataLen set
+    # On entering an Error State the Content is cleared and AuxDataLen set
     # to 0; ConfigStatus is ace_cfgst_complete.  State 24 stands for an
     # Error State here; only its presence in the MDH matters.
     for locs_e in LOC_SETS:
@@ -602,7 +602,7 @@ def main():
         print(f"  Localities {str(tuple(locs_v)):<18} MDH  = {v2b(mdh_v,16).hex()}")
         print(f"  {'':29} SIV  = {scc_v[16:32].hex()}")
         print(f"  {'':29} C1[0]= {scc_v[32:48].hex()}")
-    print(f"  AddDataLen={imp_len}, Localities {tuple(locs)}:")
+    print(f"  AuxDataLen={imp_len}, Localities {tuple(locs)}:")
     print(f"  {'':29} SIV2 = {scc_i[off+16:off+32].hex()}")
     print(f"  {'':29} C2[0]= {scc_i[off+32:off+48].hex()}")
     mdh_e = make_mdh(state=24, localities=LOC_SETS[2])
