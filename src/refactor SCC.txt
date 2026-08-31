@@ -1,0 +1,66 @@
+Hello
+
+my brain cannot stop thinking 😊
+
+I promise that I will not propose to make a major change in the architecture in this email, but rather a rationalization of formats.
+
+There are two types of data in the SCC, data in clear, and data that is not in the clear (d’uh).
+They are interleaved as
+MDH SIV1 Content1 IMPQUAL SIV2 Content2
+where 
+MDH is stored in an array with 32 entries, that contains the MDH and perhaps a pointer inside the CRF memory
+SIV1 SIV2 IMPQUAL in internal registers, that can be exposed using CSRs (or instructions, like expanding on ace.mv)
+Content1 and Content2 can be easily imagined to be contiguous: they are definitely contiguous when loaded or after ace.export prepares the CR for export.
+
+So let m be the length of Content1 in 16-byte blocks, and n the length of Content2 in 16-byte blocks.
+When we load stuff in a CR we do the following
+
+Load mem block 0: The MDH from memory, store in the special place for all MDHs
+Load mem block 1: The SIV1, place it in a special register 
+Load mem blocks 2..m+1: this is Content1 and  we store it in blocks 0..m-1 of the CR
+Load mem block m+2: this is the IMPQUAL
+Load mem block m+3: this is the SIV2
+Load mem block m+4..m+n+3 this is Content2 and we store it in blocks m..m+n-1 of the CR
+
+WHY THIS COMPLICATION?!?
+
+So we consider separately MDH,SIV1, SIV1,IMPQUAL
+and Content1 + Content2 are just m+n consecutive blocks
+
+the new, reorganized format is
+
+MDH
+SIV1
+if MDH._AuxDataLen_ > 1, then we know we have an Auxiliary Data Section and so
+      IMPQUAL
+      SIV2
+Content1
+Content2
+
+(Note, _AuxDataLen_ = 1 is a flag that means that there was some ADS, but we discarded it either because longer than the max on the current implementation for that algorithm, or IMPQUAL mismatch. However we cannot pass a zero to the ace.mgmt, because  we need to signal the algorithm that at the first instruction it needs to know that it must restart the operation or do something else to replace the ADS)
+
+which means that in an IMPORT of a fully configured and completely exported SCC we read the MDH and compute immediately an offset for Content1 || Content2.
+If MDH._AuxDataLen_ <  2, then: there is only Content1 at base + 32 (base = address of the MDH), we read it
+If MDH._AuxDataLen_ ≥  2, then: there is also Content2, and Content1||Content2 starts at base+64
+
+then we start reading. SIV1, goes into the CSR. 
+If we are in the second case, we next read IMPQUAL, goes into a CSR, read SIV2, goes into a CSR.
+Now we have the loop that loads either m, or m+n blocks. This is ace.load or a series of ace.mv.
+
+The HW would be simplified. The SW gets marginally more complicated, but it is ok.
+
+We can have ace.load and ace.store do everything, i.e. look at the MDH, decide whether it must set one or three internal registers, and then load everything progressively. Same for ace.mv. But everything would be still simpler.
+
+And also simpler to write in the specification.
+
+Now, when we are exporting incomplete stuff, we can still do exactly the same, but we skip the encryption.
+When we are reimporting an export of something exported that was incomplete before, we skip the decryption.
+And, since these cases are relatively rare, the SIV1/IMPQUAL/SIV2/ can be exported and reimported again which helps in these rare cases, but overall does not cost much. Because if we do this AND also save them (through CSRs) at context switch (we have a register that has values 0–31 if a CR is being reconfigured and 32 if none is) we can easily interrupt and resume whatever we want. So we even increase flexibility a bit.
+
+So, a lot of words for describing a format change. Apparently just a reshuffle of fields, but very​ important,
+
+Also, this tells me that we should rethink the semantics of ace.size.  ace.size just does a lookup and finds the size of Content1. Then we get the size of Content2 from the MDH.
+
+Why am I writing everything and a lot of words? Because I am then also copying it in a file and will work on it when I am back.
+
+ Roberto
