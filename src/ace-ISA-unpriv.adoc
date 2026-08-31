@@ -92,7 +92,7 @@ Trap-and-emulate and on-demand (lazy) SCC import rely on the ``*lcrstatus`` CSRs
 | `Zklv`          | ACE with support for vector registers.                      | <<ACE-instructions-detailed>>
 | `Zklio`         | ACE with support for streaming instructions.                | <<ACE-usage-input-output>>
 | `Zklmem`        | ACE with dedicated memory instructions.^1^                  | <<ACE-instruction-load>>, <<ACE-instruction-store>>
-| `Zklmv`         | ACE with dedicated move instructions.^1^                    | <<ACE-move>>
+| `Zklmv`         | ACE with dedicated move instructions.^1^                    | <<ACE-instruction-mv>>
 | `Zklexpire`     | ACE with support for the _ExpirationDate_ metadata field.   | <<ACE-Metadata-expiration-date>>
 |===
 
@@ -137,7 +137,7 @@ Trap-and-emulate and on-demand (lazy) SCC import rely on the ``*lcrstatus`` CSRs
 To claim `Zkl` conformance, the following are required:
 
 . At least one of `Zklv` or `Zklio`.
-. Support for AES128, AES192, and AES256, in ECB, CBC, CFB, GCM, and GCM-SIV modes, as well as SHA2, as defined in <<ACE-Algorithms>>.
+. Support for AES128, AES192, and AES256, in ECB, GCM, and GCM-SIV modes, as well as SHA2, as defined in <<ACE-Algorithms>>.
 . `Zklmem`, which may be implemented by trap-and-emulate (cf. <<ACE-error-architecture>>); in that case `Zklmv` must be implemented in hardware, since the emulating code uses it to move data between memory and the CR.
 
 `ace.load` and `ace.store` are present on every conforming implementation, either in hardware or emulated.
@@ -149,18 +149,18 @@ vector register of at least 128 bits, that is one of `Zvl128b`, `Zvl256b`, `Zvl5
 
 If `Zklio` is implemented, the ACEIOBUF is implemented.
 
-The most important instructions are briefly described below, ahead of their full definitions.
+A brief summary of the the principal instructions offered by ACE is given below, ahead of their full definitions.
 
 * `ace.mgmt` (<<ACE-instruction-mgmt>>) transitions a CR between stages of its management lifecycle, and,
-together with the ACE memory operations `ace.load` (<<ACE-instruction-load>>) and `ace.store` (<<ACE-instruction-store>>), enables the following operations:
+together with the ACE memory operations `ace.load` (<<ACE-instruction-load>>), `ace.store` (<<ACE-instruction-store>>), and `ace.mv` (<<ACE-instruction-mv>>),
+enables the following operations:
 ** Provisioning (<<ACE-management-operations>>) loads metadata and clear Content into a CR, binding them.
 ** Exporting (<<ACE-management-operations>>) exports a CR to memory as an SCC.
 ** Importing (<<ACE-management-operations>>) imports an SCC into a CR.
 * `ace.clear` (<<ACE-instruction-clear>>) unconfigures and clears a CR.
 * `ace.exec` (<<ACE-instruction-exec>>) performs cryptographic operations as specified by the Algorithm configured in a CR and according to the state of the CR.
 * `ace.setst` (<<ACE-instruction-setst>>) transitions a CC inside a CR between states of an Algorithm.
-* `ace.getst` (<<ACE-instruction-getst>>) reads the state (from the MDH) of a CR, which is also used for error reporting.
-// * `ace.clone` (<<ACE-instruction-clone>>) creates a copy of a CR into a second CR.
+* `ace.getmd` (<<ACE-instruction-getmd>>) reads the metadata of a CR, and it is used to implement the pseudoinstruction `ace.getst` (<<ACE-instruction-getst>>), which extracts the state of a CR from the MDH of a CR. `ace.getst` is also provides error reporting.
 
 <<ACE-instruction-extension-matrix>> is the authoritative statement of which
 extension defines each instruction and CSR, and of what is available under
@@ -490,7 +490,8 @@ Random generation applies to all keys at once in an Algorithm, unless otherwise 
 ===== _State_ and _StateExtension_ Fields
 
 The _State_ field is used to track the current state of a CR and of the Algorithm encoded in its MDH.
-Examples include whether the CR is _Unconfigured_, encrypting or decrypting data, absorbing data in a hash/mac/tag, computing elliptic curve point multiples, generating or verifying signatures, or in an error state.
+Examples include whether the CR is _Unconfigured_, encrypting or decrypting data, initializing a hash function, absorbing data in it, and finalizing the digest,
+computing elliptic curve point multiples, generating or verifying signatures, or is in an error state.
 
 The _StateExtension_ field can be used by an Algorithm to store additional state information, usually orthogonal to the _State_ field, such as whether certain values have been provisioned or computed.
 
@@ -557,19 +558,6 @@ If an Algorithm defines 23 or fewer valid states (including _Ready_, _Success_, 
 For Algorithms with more than 23 valid states, additional state information may reside in the Content section in an Algorithm-specific format.
 
 <<ACE-states-graph>> displays the default state transitions.
-
-The legend for the state transition graph is:
-
-* The double circled state is the _Unconfigured_ State.
-* Valid States have single rounded rectangular borders.
-* Error States have double rounded rectangular borders.
-* Continuous edges denote state transitions induced by both configuration and usage instructions.
-* Dashed edges denote state transitions induced by reaching the expiration date.
-* Dotted edges denote state transitions induced by configuration operations.
-  Completing a provisioning operation leads only to State _Ready_.
-  Completing an import may result in any admissible value of the _State_ and _StateExtension_ fields, since these are restored to the values at export.
-  (Completing an import can result in non-complete CR if the SCC results from a CR exported mid-provisioning, mid-import, or mid-export.)
-* The round _Configuration_ “hub” simplifies the graph by expressing that any Error State is always reachable—even from another Error State—through configuration operations (or via `ace.setst`).
 
 [[ACE-states-graph]]
 .Default State Transitions
@@ -660,8 +648,21 @@ image::images/statestikz-3.svg[]
 
 // The information contained in this field affects the length of an SCC, but neither the length of a PI nor the CRF capacity occupied by a CR (<<ACE-length-rule>>).
 
+The legend for the state transition graph is:
+
+* The double circled state is the _Unconfigured_ State.
+* Valid States have single rounded rectangular borders.
+* Error States have double rounded rectangular borders.
+* Continuous edges denote state transitions induced by both configuration and usage instructions.
+* Dashed edges denote state transitions induced by reaching the expiration date.
+* Dotted edges denote state transitions induced by configuration operations.
+  Completing a provisioning operation leads only to State _Ready_.
+  Completing an import may result in any admissible value of the _State_ and _StateExtension_ fields, since these are restored to the values at export.
+  (Completing an import can result in non-complete CR if the SCC results from a CR exported mid-provisioning, mid-import, or mid-export.)
+* The round _Configuration_ “hub” simplifies the graph by expressing that any Error State is always reachable—even from another Error State—through configuration operations (or via `ace.setst`).
+
 [[ACE-algorithm-state-rules]]
-===== State-Specific General Rules
+====== State-Specific General Rules
 
 The following rules are generic and apply to all Algorithms (*SGR* means "State General Rules"):
 
@@ -1653,7 +1654,7 @@ For the four Forms A–D above, the encodings are:
 . `Form` = `0b10` and `rs2` = `0b00000`.
 . `Form` = `0b11` and `rd` = `rs2` = `0b00000`.
 
-The CR operand is always encoded in `rs1`. In each Form, unused register fields must be zero: `rd` when there is no output vector, and `rs2` when there is no input vector. Non-zero values in an unused field are reserved and raise an illegal-instruction exception, except for encodings assigned to those fields by `Zklmv` (<<ACE-move>>).
+The CR operand is always encoded in `rs1`. In each Form, unused register fields must be zero: `rd` when there is no output vector, and `rs2` when there is no input vector. Non-zero values in an unused field are reserved and raise an illegal-instruction exception, except for encodings assigned to those fields by `Zklmv` (<<ACE-instruction-mv>>).
 --
 
 _Description_::
@@ -1669,7 +1670,7 @@ extract outputs from `ace.exec`, as described in <<ACE-usage-input-output>>.
 
 // ////////////////////////////////////////////////////////////////////
 
-[[ACE-move]]
+[[ACE-instruction-mv]]
 ==== ace.mv
 
 The `Zklmv` subextension adds dedicated move instructions between scalar/vector registers and a CR.
@@ -2026,7 +2027,7 @@ The architecturally observable behavior is described in <<ACE-CR-representation>
 No encryption or authentication occurs; the contents of the CR are exported verbatim, in the same order in which they appear in the PI (for a partially provisioned CR) or in the SCC (for a partially imported CR, or a CR previously prepared for export whose export process was itself interrupted).
 .. The CR's _ConfigStatus_ is set to `ace_cfgst_exporting`. This is the value on which
    `ace.store` (<<ACE-instruction-store>>) and the CR-reading variants of `ace.mv`
-   (<<ACE-move>>) are gated, so no export can proceed until it is set.
+   (<<ACE-instruction-mv>>) are gated, so no export can proceed until it is set.
 
 // Open point — the assignment above is unconditional, so a CR opened for export while only
 // partially provisioned or partially imported loses the distinction its previous _ConfigStatus_
