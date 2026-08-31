@@ -74,7 +74,8 @@ The present specification defines only the behavior, not implementation:
 
 . ACE may be implemented within a CPU core or as a hardware unit shared by multiple cores, with separate architectural state for each client hart.
 
-. ACE need not be implemented entirely in hardware. It may be implemented wholly or partly using trap-and-emulate. For example, an implementation may perform symmetric cipher operations (cf. <<ACE-states-symmetric>>) in hardware while emulating asymmetric operations, such as Elliptic Curve Algorithms (cf. <<ACE-ECC>>). This approach is particularly useful for Post-Quantum Cryptographic Algorithms (cf. <<ACE-PQC>>), whose states may be very large. Emulating these operations in M-mode firmware avoids storing those states in the ACE unit, provided that the relevant CRs reside in secure SRAM or other secure memory.
+. ACE need not be implemented entirely in hardware. Partial or complete trap-and-emulate implementations are permitted.
+For example, an implementation may perform symmetric cipher operations (cf. <<ACE-states-symmetric>>) in the ACE unit while emulating public-key cryptography (cf. <<ACE-ECC>> and <<ACE-PQC>>), whose primitives may require very large states. Emulating these operations in M-mode firmware avoids storing their states in the ACE unit, provided that the relevant CRs reside in secure SRAM or other secure memory.
 
 It is required that CR state never be accessible in clear to any privileged mode except for M-mode and, possibly, authenticated Debug mode.
 This forbids implementations of ACE in S/VS-mode or HV-mode.
@@ -670,7 +671,7 @@ The following rules are generic and apply to all Algorithms (*SGR* means "State 
 SGR1:: The MDH's _State_ field reflects the current state whenever the CC is in _Ready_, _Success_, _Failure_, or any Error State.
 This ensures that these states can be unambiguously determined from the _State_ field alone, without inspecting other fields or the Content.
 
-SGR2:: Any transition listed in an Algorithm's specification may be triggered by performing an explicit `ace.setst` operation, or may be induced by certain conditions specified in the Algorithm's specification.
+SGR2:: Any transition listed in an Algorithm's specification may be triggered by performing an explicit `ace.setst` operation (<<ACE-instruction-setst>>), or may be induced by certain conditions specified in the Algorithm's specification.
 
 SGR3:: In States _Success_ and _Failure_, only the following ACE instructions are permitted: `ace.mgmt`, `ace.load`, `ace.store`, `ace.clear`, `ace.size`, `ace.setst`, `ace.getmd*`, `ace.getst`, `ace.clone`, `ace.restrict*`, and `ace.derive` where the source CR is in State _Success_ or _Failure_and the source endpoint is one of its fields that can be exported, as described in the specification of the Algorithm.
 Reading such a field is not a cryptographic operation, so it is compatible with the rule that no
@@ -2322,10 +2323,8 @@ one, so `ace.restrict` cannot be used to widen the set of modes that may use a C
 
 * If `Xs`._ExpirationDate_ is zero, the corresponding policy in `MDH`._ExpirationDate_ is _not_ changed.
 
-* If `MDH._ExpirationDate_ ≠ 0`, a non-zero `Xs._ExpirationDate_` is copied to `MDH._ExpirationDate_`
-only if it is less than or equal to `MDH._ExpirationDate_`.
-
-* If `MDH._ExpirationDate_ = 0`, then `Xs._ExpirationDate_` is copied to `MDH._ExpirationDate_` unconditionally.
+* If `Xs._ExpirationDate_` < `MDH._ExpirationDate_`, then `MDH._ExpirationDate_` <- `Xs._ExpirationDate_`, else
+`MDH._ExpirationDate_` is unchanged.
 
 * `MDH`._AlgorithmUse_ is changed only if the Algorithm in the CR defines it as writable by
   `ace.restrict*`, and then only as that Algorithm prescribes. Where the Algorithm uses the field
