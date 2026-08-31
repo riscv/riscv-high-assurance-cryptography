@@ -1408,7 +1408,7 @@ Currently, the only encoding is `ace.clearall`.
 +
 An indirect index outside [0..31] also raises an illegal-instruction exception.
 +
-An instruction that names one CR carries a selector bit `r`, at the position shown in its encoding diagram. Namely, `r` = 0 when the CR index is the 5-bit immediate held in that field, and `r` = 1 when it is the value held in the GPR that field names.
+An instruction that names one CR carries a selector bit `r`, at the position shown in its encoding diagram. Namely, `r` = 0 when the CR index is the 5-bit immediate held in that field, and `r` = 1 when it is the value held in the GPR that field names. The only exceptions to this encoding rule are `ace.load` and `ace.store`, which use a different value in `func3` for this purpose, since all other bits are used by immediates and register encodings.
 An instruction that names two CRs carries the two-bit field `R` instead, encoded as in `ace.clone` (<<ACE-instruction-clone>>).
 
 GR2:: A 64-bit operand is one GPR on RV64 and encoded in a pair `(X[s+1],X[s])` as `X[s+1] @ X[s]` on RV32,
@@ -1517,6 +1517,8 @@ _Encoding_::
     { bits: 12, name: 'immed12' },
 ]}
 ....
++
+`func3` = `0b000` selects the immediate CR index in the `context` field and `func3` = `0b001` selects the CR indexed by the GPR named by that field.
 
 _Mnemonics_::
 `ace.load{fournbsp}{nbsp}{nbsp}{nbsp}Kd|K{Xd}, %offset(Xs1)`
@@ -1644,7 +1646,7 @@ _Encoding_::
     { bits:  1, name: 'r' },
     { bits:  1, name: 0x0 },
     { bits:  2, name: 'Form', attr: ['0    0','0    1','1    0','1    1'] },
-    { bits:  2, name: 0x0, attr: ['func2'] },
+    { bits:  2, name: 0x0, attr: ['funct2'] },
 ]}
 ....
 
@@ -1746,15 +1748,16 @@ For instance, if the current vector element width is 32 bits, each transferred 1
 Any write, resp., read, past the serialized CR's length is ignored, resp., reads as zero.
 ====
 
-In every variant, if the CR's `ConfigStatus` field is `ace_cfgst_complete`, ACE exception
-`ace_exc_complete_cr_data_access` is raised.
+The four variants are given by the following table.
+For all variants, if the CR's _ConfigStatus_ is `ace_cfgst_complete`, ACE exception `ace_exc_complete_cr_data_access` is raised.
+If the CR's _ConfigStatus_ is not one of the values in the fourth column of its row, an illegal-instruction exception is raised without state change. A vector variant for which `vl * (SEW/8)` is not a multiple of 16 raises an illegal-instruction exception without state change; the V-enabled check is performed first.
 
-The four variants are given by the following table. In each of them `acestart` advances by
-the number of bytes transferred: 16 in a scalar variant; and `vl * (SEW/8)` in a vector one.
-A variant is valid only if the `ConfigStatus` field of the metadata of the CR holds one of the
-values in the fourth column in its row, and raises an illegal-instruction exception otherwise.
-A vector variant requires `vl * (SEW/8)` to be a multiple of 16, transitioning the CR to
-Error State _Invalid_ if not, and raises an illegal-instruction exception if V is not enabled.
+// In each of them `acestart` advances by
+// the number of bytes transferred: 16 in a scalar variant; and `vl * (SEW/8)` in a vector one.
+// A variant is valid only if the `ConfigStatus` field of the metadata of the CR holds one of the
+// values in the fourth column in its row, and raises an illegal-instruction exception otherwise.
+// A vector variant requires `vl * (SEW/8)` to be a multiple of 16, transitioning the CR to
+// Error State _Invalid_ if not, and raises an illegal-instruction exception if V is not enabled.
 
 [[ACE-mv-variants]]
 .Variants of `ace.mv`
@@ -1876,7 +1879,7 @@ The `ace.mgmt` instruction admits three Forms, namely
 (((ACE, instruction, ace.mgmt)))
 +
 [upperalpha]
-. `ace.mgmt Kd|K{Xd}, #immed7{fournbsp}{nbsp}{nbsp}{nbsp}` with no auxiliary input.
+. `ace.mgmt Kd|K{Xd}, #immed7{fournbsp}{nbsp}{nbsp}{nbsp}` with no auxiliary input (implicit zero 128-bit string).
 . `ace.mgmt Kd|K{Xd}, #immed7, Xs{nbsp}{nbsp}` with an auxiliary input in two or four GPRs.
 . `ace.mgmt Kd|K{Xd}, #immed7, Vs{nbsp}{nbsp}` with an auxiliary input in a vector register.
 
@@ -1918,7 +1921,7 @@ The three Forms distinguish from each other as follows:
 [upperalpha]
 . Only sets the _ConfigStatus_ field of the MDH according to the value of `#immed7`.
 . The MDH is the 128-bit GPR operand at `Xs` (`GR2`).
-. The MDH is in the 128 lowest bits of `Vs`.
+. The MDH is in the 128 lowest bits of `Vs`. The vector itself must be at least 128 bits long.
 
 The special values of `#immed7` used to initiate a provisioning, import, or export process, and to complete it afterwards, are listed in the following table:
 
@@ -1936,7 +1939,7 @@ The special values of `#immed7` used to initiate a provisioning, import, or expo
 +
 Values of `#immed7` other than 0–3 are reserved; issuing `ace.mgmt` with a
 reserved value raises an illegal-instruction exception. This allows future functionality to be
-emulated. A handler that does not recognise the value transitions the target CR to Error State
+emulated. A handler that does not recognize the value transitions the target CR to Error State
 _Invalid_.
 +
 The semantics of `ace.mgmt` are as follows.
@@ -1951,12 +1954,13 @@ one; and in either case it clears `acestart`.
 --
 Before issuing `ace.mgmt`, software must obtain the MDH. Let `ml` be this value.
 
-NOTE: In the case we are starting an import process, `ml` is kept by software it in local state.
+NOTE: In the case we are starting an import process, `ml` is saved by software it in its local state.
 It is provided as the auxiliary input to the `ace.mgmt` operation used to complete the process
 to restore the _ConfigStatus_ value saved by software.
 
-The `ace.mgmt` operation used to start a provisioning, resp., import process
-performs following operations:
+The `ace.mgmt` operation used to start a provisioning, resp., import process must be Form B or C in order to provide `ml`.
+Form A with `ace_CR_provision_start` or `ace_CR_import_start` is equivalent to passing a 128-bit zero string as the auxiliary input.
+`ace.mgmt` then performs following operations:
 
 .. The target CR is cleared.
 .. If the combination of _Algorithm_, _AlgorithmPolicy_, and _SCProtection_ in `ml` is not supported,
@@ -1978,78 +1982,92 @@ ACE exception `ace_exc_unsupported` is _not_ raised when accessing or using a CR
 .. _ConfigStatus_ is set to `ace_cfgst_provisioning`, resp., `ace_cfgst_importing`.
 --
 
+* *`ace.mgmt` is issued with `ace_CR_management_end`*:
+`ace.mgmt` with immediate `ace_CR_management_end` reads first the MDH of the target CR.
+Depending on whether MDH._ConfigStatus_ is
+`ace_cfgst_provisioning`,
+`ace_cfgst_importing`, resp.
+`ace_cfgst_exporting`, the instruction will proceed to complete a
+provisioning, importing, resp., exporting process, which are described next.
+
 * *`ace.mgmt` is used to complete a provisioning process.*
 +
 --
+In this case, `ace.mgmt` does not need a saved metadata header from the start of the provisioning process, hence if a Form B or C was used in place of Form A, the auxiliary input is simply ignored.
+
 The operation makes the provisioned CR available to software (“sealing”) and sets
 _State_ to _Ready_, _StateExtension_ to 0, and _ConfigStatus_ to `ace_cfgst_complete`.
-
-This `ace.mgmt` requires no auxiliary input: If an auxiliary input is passed, it is ignored.
 
 The ACE unit performs any necessary readjustment of the CR's content to turn it into the format internally consumed by the ACE Unit.
 
 A process may be preempted during a CR's provisioning.
 Only the information in the original PI is exported, and it remains unencrypted.
-The configuration of the CR may require random generation of some material which is intended to remain secret. This material must be generated only at this stage (i.e., when `ace.mgmt` is used to complete a provisioning process). This guarantees that the random material is not leaked.
+The configuration of the CR may require random generation of some material which is intended to remain secret. This material must be generated only at this stage (i.e., when `ace.mgmt` is used to complete a provisioning process). The same applies to key material retrieved from a System Key Store, and any value derived, expanded, or re-shared from it.
+This guarantees that such material is not leaked.
 --
 
 * *`ace.mgmt` is used to complete an import process.*
 +
 --
-The software must use Form B, resp. Form C, of `ace.mgmt` to pass along the value of `ml` saved when the import process was started. This is the MDH image to be authenticated as ``AD[0]``.
+The software uses Form B, resp. Form C, of `ace.mgmt` to pass along the value of `ml` saved when the import process was started. This is the MDH image to be authenticated as ``AD[0]``. If a Form A is used, the effect is as if the instruction received a zero auxiliary input.
 
-If `ml`._ConfigStatus_ is `ace_cfgst_complete`, the operation decrypts and authenticates the imported SCC, and makes the CR available to software, also restoring the CR's _ConfigStatus_ to `ace_cfgst_complete`.
+If `ml`._ConfigStatus_ is `ace_cfgst_complete`, the operation
+restores the CR's _ConfigStatus_ to `ace_cfgst_complete`, and then
+decrypts and authenticates the imported SCC, and makes the CR available to software.
 Otherwise, it just restores the CR's _ConfigStatus_ to the saved `ml`._ConfigStatus_:
 
 .. If `ml`._ConfigStatus_ = `ace_cfgst_complete` (we are importing the export of a fully configured CR)
+... _ConfigStatus_ is set to `ace_cfgst_complete`.
 ... The ACE unit decrypts and authenticates the CR's content.
 ... If authentication fails, the target CR is transitioned to Error State _Authentication Failed_. No exception is raised.
 ... The ACE unit performs any necessary readjustment of the CR's content to turn it into the format internally consumed by the ACE Unit.
-... _ConfigStatus_ is set to `ace_cfgst_complete`.
 .. If `ml`._ConfigStatus_ {ne} `ace_cfgst_complete`  (we are either importing the export of a not fully configured CR or a nested CR export):
 ... _ConfigStatus_ is set to `ml`._ConfigStatus_.
-No other field of the MDH is written from `ml`; see the note under
-*`ace.mgmt` is used to complete an export process* below.
+No other field of the MDH is written from `ml`.
 --
 
 * *`ace.mgmt` is used to start an export process.*
 +
 --
 Let `ml` <- the MDH of the CR.
-Software must save this value in its state to use it when completing the export process.
-Then:
+Software must first save this value in its local state to restore its _ConfigStatus_ when completing the export process.
+`ace.mgmt` can be of any form, but any auxiliary input provided through Form B or C is ignored.
+`ace.mgmt` performs following operations:
 
 .. If `ml`._ConfigStatus_ = `ace_cfgst_complete`:
 +
-Prepare a CR to produce an SCC.
+Prepare the CR to produce an SCC.
 This includes encrypting its contents and computing the authentication tag(s):
 The architecturally observable behavior is described in <<ACE-CR-representation>>.
+
 .. If `ml`._ConfigStatus_ {ne} `ace_cfgst_complete` (we are exporting a not fully configured CR or we are initiating a nested CR export):
 +
 No encryption or authentication occurs; the contents of the CR are exported verbatim, in the same order in which they appear in the PI (for a partially provisioned CR) or in the SCC (for a partially imported CR, or a CR previously prepared for export whose export process was itself interrupted).
 .. The CR's _ConfigStatus_ is set to `ace_cfgst_exporting`. This is the value on which
    `ace.store` (<<ACE-instruction-store>>) and the CR-reading variants of `ace.mv`
    (<<ACE-instruction-mv>>) are gated, so no export can proceed until it is set.
-
-// Open point — the assignment above is unconditional, so a CR opened for export while only
-// partially provisioned or partially imported loses the distinction its previous _ConfigStatus_
-// carried: `ace_cfgst_provisioning` identifies a PI-shaped payload and `ace_cfgst_exporting` an
-// SCC-shaped one, and the SCC length is the longer. `ace.store` and `ace.mv` are therefore
-// bounded by the real image length, and `size` and `ace.size` may overstate the payload.
-//
-// The root fix, should it be judged worthwhile, is to make this step conditional: set
-// `ace_cfgst_exporting` only when `ml`._ConfigStatus_ = `ace_cfgst_complete`, and otherwise leave
-// the field at its current value. `size` would then equal the image length in every case and
-// `ace.size` would report correctly, making both bounds redundant. It requires relaxing the gate
-// of the CR-reading variants of `ace.mv`, which presently demand exactly `ace_cfgst_exporting`,
-// to accept `ace_cfgst_provisioning` and `ace_cfgst_importing` as well.
 --
 
 * *`ace.mgmt` is used to complete an export process.*
 +
 --
-Let `ml` be the value of the MDH saved by the software in its own state upon initiation of the export process.
-Software uses Form B or Form C `ace.mgmt` with `ml` as the auxiliary parameter to `ace.mgmt` for export completion.
+The software uses Form B, resp. Form C, of `ace.mgmt` to pass along the value of `ml` saved by the software in its own state upon initiation of the export process. If a Form A is used, the effect is as if the instruction received a zero auxiliary input.
+Let `ml` be this auxiliary input.
+
+Then:
+
+.. If `ml`._ConfigStatus_ = `ace_cfgst_complete`, the instruction makes the exported CR available
+to the ACE unit again in the clear format, and allows software to access it.
+The implementation must restore the state of the CR to the state it was in when the export process was initiated.
+This may involve decrypting its contents or restoring them from an internal backup:
+The architecturally observable behavior is described in <<ACE-CR-representation>>.
+
+.. If `ml`._ConfigStatus_ {ne} `ace_cfgst_complete`, no changes to the CR's contents are made.
+
+.. The CR's _ConfigStatus_ is set to `ml`._ConfigStatus_.
+--
+
+* *If `ace_CR_management_end` is issued when the target CR's _ConfigStatus_ is `ace_cfgst_complete`* (i.e., no management operation open on he target CR), the instruction does not perform any state change and raises an illegal-instruction exception.
 
 [IMPORTANT]
 ====
@@ -2063,20 +2081,6 @@ _UsagePolicy_, _Locality_, _ExpirationDate_ and every other field retain the val
 already held. Narrowing an existing CC's policies is the exclusive province of `ace.restrict*`
 (<<ACE-instruction-restrict>>), which can only remove permissions, never grant them.
 ====
-
-Then:
-
-.. If `ml`._ConfigStatus_ = `ace_cfgst_complete`, the instruction makes the exported CR available
-to the ACE unit again in the clear format, and allows software to access it.
-The implementation must restore the state of the CR to the state it was in when the export process was initiated.
-This may involve decrypting its contents or restoring them from an internal backup:
-The architecturally observable behavior is described in <<ACE-CR-representation>>.
-
-.. If `ml`._ConfigStatus_ {ne} `ace_cfgst_complete`, no changes to the CR's contents are made.
-
-.. The CR's _ConfigStatus_ is set to `ml`._ConfigStatus_.
-
---
 
 * General rules:
 
@@ -2133,7 +2137,7 @@ _Mnemonics_::
 _Encoding_::
 +
 --
-`ace.getmd{l,h}` is an R-type instruction and its encoding shares opcode and `func3` with `ace.exec`, but `func2` is set to `0b11`.
+`ace.getmd{l,h}` is an R-type instruction and its encoding shares opcode and `func3` with `ace.exec`, but `funct2` is set to `0b11`.
 
 [wavedrom, , svg]
 ....
@@ -2148,7 +2152,7 @@ _Encoding_::
     { bits:  1, name: 0x0 },
     { bits:  1, name: 'h' },
     { bits:  1, name: 'v' },
-    { bits:  2, name: 0x3, attr: ['func2'] },
+    { bits:  2, name: 0x3, attr: ['funct2'] },
 ]}
 ....
 
@@ -2201,7 +2205,7 @@ _Encoding_::
 +
 --
 `ace.restrict` is an R-type instruction.
-The encoding shares opcode and `func3` with `ace.exec`, but `func2` (i.e., the two msbs of `func7`) is `0b01`.
+The encoding shares opcode and `func3` with `ace.exec`, but `funct2` (i.e., the two msbs of `funct7`) is `0b01`.
 [wavedrom, , svg]
 ....
 {reg:[
@@ -2215,7 +2219,7 @@ The encoding shares opcode and `func3` with `ace.exec`, but `func2` (i.e., the t
     { bits:  1, name: 0x0 },
     { bits:  1, name: 'h' },
     { bits:  1, name: 'v' },
-    { bits:  2, name: 0x1, attr: ['func2'] },
+    { bits:  2, name: 0x1, attr: ['funct2'] },
 ]}
 ....
 
@@ -2379,7 +2383,7 @@ _Mnemonic_::
 (((ACE, instruction, ace.clone)))
 
 _Encoding_::
-The encoding shares opcode and `func3` with `ace.exec`, however `func2` is 2.
+The encoding shares opcode and `func3` with `ace.exec`, however `funct2` is 2.
 The instruction is an R-type instruction.
 +
 [wavedrom, , svg]
@@ -2392,7 +2396,7 @@ The instruction is an R-type instruction.
     { bits:  5, name: 0x0 },
     { bits:  2, name: 'R' },
     { bits:  3, name: 0x0 },
-    { bits:  2, name: 0x2, attr: ['func2'] },
+    { bits:  2, name: 0x2, attr: ['funct2'] },
 ]}
 ....
 +
@@ -2474,7 +2478,7 @@ The instruction is an R-type instruction.
     { bits:  2, name: 'R' },
     { bits:  1, name: 0x1 },
     { bits:  2, name: 'Form' },
-    { bits:  2, name: 0x2, attr: ['func2'] },
+    { bits:  2, name: 0x2, attr: ['funct2'] },
 ]}
 ....
 
@@ -2544,6 +2548,27 @@ variable:
   a destination may also be left *open*: if it is a state implemented by Subalgorithm `process_VLI`
   (<<ACE-process-VLI>>), the caller may continue supplying data to it with ordinary `ace.exec`
   instructions after the `ace.derive`, and complete it in the usual way.
+
+Preflight checks: `ace.derive` performs the following checks, in order before any data movement or state change.
+
+. Decode both CR indices; illegal-instruction if either is invalid (GR1).
+. Raise illegal-instruction if the resolved indices are equal.
+. Evaluate _UsagePolicy_ and _ExpirationDate_ of BOTH CRs; on any violation,
+raise the corresponding exception/transition with NO state change to either CR.
+. Validate _State_, _StateExtension_, and _ConfigStatus_ of both CRs against the endpoints
+selected by Form; the source CR must be in a state that allows it to output values
+(this can be either that it contains information that can be transferred or that it
+accepts Form C `ace.exec` instructions), and the destination CR be in a state that allows it to receive values
+(this means that it contains provisionable fields, or that it
+accepts Form B `ace.exec` instructions); on failure, transition only the offending CR to _Invalid_
+and leave the other CR untouched, or both if both offend.
+. Validate i, j against the Algorithms' field tables; length against the
+  block-size rule; on violation, transition the offending CR to _Invalid,
+  leave the other CR untouched, or both if both offend.
+
+Only then begin the transfer; on a mid-transfer fault, commit the prefix per IRR6.
+
+Violation of the block-size restriction raises an illegal-instruction exception without state change.
 
 Whether the transferred data is deterministic depends entirely on the Algorithm in the source CR:
 `ace.derive` itself performs no key derivation and draws no random material.
@@ -2619,7 +2644,7 @@ There are three Forms of the `ace.size` instruction:
 _Encoding_::
 +
 --
-The encoding shares opcode, `func3`, and `func2` (the two msbs of `func7`) with `ace.exec`, but with bit 27 equal to 1.
+The encoding shares opcode, `func3`, and `funct2` (the two msbs of `funct7`) with `ace.exec`, but with bit 27 equal to 1.
 
 [wavedrom, , svg]
 ....
@@ -2633,7 +2658,7 @@ The encoding shares opcode, `func3`, and `func2` (the two msbs of `func7`) with 
     { bits:  1, name: 'r' },
     { bits:  1, name: 0x1 },
     { bits:  2, name: 'F' },
-    { bits:  2, name: 0x0, attr: ['func2'] },
+    { bits:  2, name: 0x0, attr: ['funct2'] },
 ]}
 ....
 
