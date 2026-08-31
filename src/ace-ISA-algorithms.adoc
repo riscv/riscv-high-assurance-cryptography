@@ -324,74 +324,11 @@ The *Serialized Context*: also always places the MDH in the first position:
 [[ACE-algorithm-rules]]
 === General Rules for Algorithms
 
-[[ACE-algorithm-state-rules]]
-==== State-Specific General Rules
-
-The following rules are generic and apply to all Algorithms (*SGR* means "State General Rules"):
-
-[horizontal]
-SGR1:: The MDH's _State_ field reflects the current state whenever the CC is in _Ready_, _Success_, _Failure_, or any Error State.
-This ensures that these states can be unambiguously determined from the _State_ field alone, without inspecting other fields or the Content.
-
-SGR2:: Any transition listed in an Algorithm's specification may be triggered by performing an explicit `ace.setst` operation, or may be induced by certain conditions specified in the Algorithm's specification.
-
-SGR3:: In States _Success_ and _Failure_, only the following ACE instructions are permitted: `ace.mgmt`, `ace.load`, `ace.store`, `ace.clear`, `ace.size`, `ace.setst`, `ace.getmd*`, `ace.getst`, `ace.clone`, `ace.restrict*`, and `ace.derive` where the source CR is in State _Success_ or _Failure_and the source endpoint is one of its fields that can be exported, as described in the specification of the Algorithm.
-Reading such a field is not a cryptographic operation, so it is compatible with the rule that no
-further cryptographic operation may be performed in these states, and it leaves the source CR in
-its state: such an `ace.derive` cannot invalidate the source, only the destination.
-Also permitted is an `ace.exec` whose sole purpose is to squeeze further output from an Algorithm
-that produces an arbitrarily long one, such as a XOF, whether issued directly or as the source
-endpoint of an `ace.derive` (even if squeezing is per se a cryptographic operation).
-A CR in State _Success_ or _Failure_ may not be the *destination* of an `ace.derive`.
-+
-NOTE: `ML-KEM.Decaps` (<<ACE-PQC-ML-KEM>>) is the motivating case for this `ace.derive` behavior:
-it leaves the shared secret in `sharedkey` and
-transitions to _Success_, from which the only other exit is _Ready_, and _Ready_ clears
-`sharedkey`. Without this provision the shared secret would be unreachable and ML-KEM could not
-be used for its stated purpose.
-
-SGR4:: In States _Success_ and _Failure_, `ace.setst` is only permitted to transition to _Ready_ or _Unconfigured_.
-
-SGR5:: A transition from any valid state to _Ready_ using instruction `ace.setst` is always permitted, unless the Algorithm explicitly forbids it.
-+
-NOTE: Note that a CR can always be restored from a backup SCC, so preventing transitions to _Ready_--as "GCM with Set IV" (<<ACE-GCM-with-IV-mode>>) does--is not an effective mitigation against cryptographic attacks enabled by transitioning to _Ready_.
-
-SGR6:: The CR state after `ace.setst` completes does not always match the instruction's immediate operand.
-Beyond Error State transitions, some operations determine the next state dynamically.
-For example, issuing `ace.setst` with an `ace_state_hash_verify` immediate and a verification parameter transitions the CR to either _Success_ or _Failure_.
-Instructions such as `ace.exec` may also cause state changes.
-
-SGR7:: Upon transitioning to an Error State, the Content of a CR beyond the MDH is cleared:
-Internal resources associated with the Content shall also be released,
-including any additional variable-length data and the _AddDataLen_ field is set to 0.
-The CR then retains only the MDH.
-Accordingly, `_ConfigStatus_` is always set to `ace_cfgst_complete`.
-
-SGR8:: The transitions from _Unconfigured_ to any Error State result from configuration instructions, or
-from a usage instruction: no Algorithm allows one in State _Unconfigured_, so issuing one
-transitions the CR to Error State _Invalid_ under <<ACE-algorithms-other-rules>>.
-The transitions from these Error States to _Unconfigured_ result from explicitly clearing the CR.
-
-SGR9:: The MDH of a CR in the _Unconfigured_ State can be read using `ace.getmd*` (<<ACE-instruction-getmd>>), returning all zero values.
-
-SGR10:: Exporting a CR in an Error State exports only the MDH (all fields and values) and the authentication tag.
-Requesting the SCC's size (`ace.size` <<ACE-instruction-size>>) will return 32 (bytes).
-The resulting SCC can be reimported, allowing software to take appropriate actions even after a context switch.
-
-SGR11:: If a CR is in any Error State, it can still be reconfigured, cloned, or cleared. `ace.setst` can only be used to change the Error State (for instance by an exception handler) or transition the CR to _Unconfigured_.
-
-SGR12:: The MDH of a CR in an Error State can be read using `ace.getmd*` (<<ACE-instruction-getmd>>).
-
-SGR13:: Attempts to _use_ a CR in any Error State will not perform any operation, and in particular they leave the _State_ field unchanged.
-Such an attempt can be considered an operation that would cause a transition to  Error State `ace_state_invalid`, so the _State_ field is left unchanged to allow software to address the original error condition. No history of Error States is maintained by the architecture.
-
-SGR14:: Any _usage_ instruction that would violate the Usage Control policies will not perform its operation, and raises ACE exception `ace_exc_privilege_violation`
-(see <<ACE-error-architecture>> for the behavior if the Privileged Architecture is not implemented).
-
 [[ACE-algorithms-other-rules]]
 ==== Other General Rules
 
-Besides the SGR (State-Specific General Rules) the following rules apply to all ACE-supported Algorithms, except when explicitly stated otherwise.
+Besides the SGR (State-Specific General Rules) defined in <<ACE-State-field>>,
+the following rules apply to all ACE-supported Algorithms, except when explicitly stated otherwise.
 
 [horizontal]
 AGR1:: (Unallowed instructions in Algorithm States.)

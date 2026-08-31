@@ -402,7 +402,7 @@ All _Reserved_ bits, as well as bits unused by a given Algorithm, are zero.
 |   [15:14] |   2  | _AlgorithmExtension_ | Reserved for future expansion of _Algorithm_ and _AlgorithmPolicy_ fields. Currently zero.
 |   [18:16] |   3  | _SCProtection_    | Side-channel protection level. The levels of side-channel protection are defined in <<ACE-SCProtection-field>>.
 |   [20:19] |   2  | _KeyType_         | This field determines whether the key is given by value, is a system-defined key, or randomly generated. See <<ACE-KeyType-field>> for more details.
-|   [25:21] |   5  | _State_           | Current state of the CR/Algorithm, encoded as an integer. For instance, whether the CR is _Unconfigured_, encrypting or decrypting data, absorbing data in a hash/mac/tag, computing elliptic curve point multiples, generating or verifying signatures, or in an error state.  See <<ACE-State-field>>.
+|   [25:21] |   5  | _State_           | Current state of the CR/Algorithm, encoded as an integer.  See <<ACE-State-field>>.
 |   [29:26] |   4  | _StateExtension_  | Available to Algorithms to extend the _State_ field with additional information. See <<ACE-State-field>>.
 |   [31:30] |   2  | _ConfigStatus_    | Used to indicate whether the CR is fully configured and ready to operate, or is being provisioned, imported, or exported. See <<ACE-ConfigStatus>>.
 |   [45:32] |  14  | _AddDataLen_      | If non-zero, indicates that an additional, variable-length, implementation-dependent data section is appended to the Content. The length of this additional data section is _AddDataLen_ * 128 bits.
@@ -494,7 +494,12 @@ Random generation applies to all keys at once in an Algorithm, unless otherwise 
 [[ACE-State-field]]
 ===== _State_ and _StateExtension_ Fields
 
-The _State_ field is used to track the current state of an Algorithm, including certain types of errors.
+The _State_ field is used to track the current state of a CR and of the Algorithm encoded in its MDH.
+Examples include whether the CR is _Unconfigured_, encrypting or decrypting data, absorbing data in a hash/mac/tag, computing elliptic curve point multiples, generating or verifying signatures, or in an error state.
+
+The _StateExtension_ field can be used by an Algorithm to store additional state information, usually orthogonal to the _State_ field, such as whether certain values have been provisioned or computed.
+
+===== Definition of Architected Algorithm States
 
 The architected values of _State_ common to all Algorithms are defined in the following three tables.
 
@@ -555,22 +560,6 @@ Error conditions that lead to exceptions are treated in <<ACE-exceptions>>
 
 If an Algorithm defines 23 or fewer valid states (including _Ready_, _Success_, and _Failure_), the current state is stored in the _State_ field.
 For Algorithms with more than 23 valid states, additional state information may reside in the Content section in an Algorithm-specific format.
-
-// * `ace.getmd*` are defined to return all zeros for a CR in the Off State, and
-//   `ace.getst`, which is built on it, is how those sequences test for an error after every
-//   step.
-//
-// * `ace.load` and `ace.mv` write a CR precisely while its _ConfigStatus_ is
-//   `ace_cfgst_provisioning` or `ace_cfgst_importing`, and raise an illegal-instruction exception
-//   if _ConfigStatus_ is `ace_cfgst_complete` instead. `ace.store` and the CR-reading forms of
-//   `ace.mv` read a CR whose ConfigStatus is `ace_cfgst_exporting`.
-//
-// * `ace.size` is exempt so that a handler can discover how much memory a CR needs before
-//   anything has been loaded into it.
-//
-// Instructions that merely *target* a CR as the destination of a configuration operation,
-// `ace.mgmt` above all, likewise never raise this exception: an unconfigured or partially
-// configured CR is the only legal operand for them.
 
 <<ACE-states-graph>> displays the default state transitions.
 
@@ -674,9 +663,72 @@ image::images/statestikz-3.svg[]
 ....
 ////
 
-The _StateExtension_ field can be used by an Algorithm to store additional state information.
-
 // The information contained in this field affects the length of an SCC, but neither the length of a PI nor the CRF capacity occupied by a CR (<<ACE-length-rule>>).
+
+[[ACE-algorithm-state-rules]]
+===== State-Specific General Rules
+
+The following rules are generic and apply to all Algorithms (*SGR* means "State General Rules"):
+
+[horizontal]
+SGR1:: The MDH's _State_ field reflects the current state whenever the CC is in _Ready_, _Success_, _Failure_, or any Error State.
+This ensures that these states can be unambiguously determined from the _State_ field alone, without inspecting other fields or the Content.
+
+SGR2:: Any transition listed in an Algorithm's specification may be triggered by performing an explicit `ace.setst` operation, or may be induced by certain conditions specified in the Algorithm's specification.
+
+SGR3:: In States _Success_ and _Failure_, only the following ACE instructions are permitted: `ace.mgmt`, `ace.load`, `ace.store`, `ace.clear`, `ace.size`, `ace.setst`, `ace.getmd*`, `ace.getst`, `ace.clone`, `ace.restrict*`, and `ace.derive` where the source CR is in State _Success_ or _Failure_and the source endpoint is one of its fields that can be exported, as described in the specification of the Algorithm.
+Reading such a field is not a cryptographic operation, so it is compatible with the rule that no
+further cryptographic operation may be performed in these states, and it leaves the source CR in
+its state: such an `ace.derive` cannot invalidate the source, only the destination.
+Also permitted is an `ace.exec` whose sole purpose is to squeeze further output from an Algorithm
+that produces an arbitrarily long one, such as a XOF, whether issued directly or as the source
+endpoint of an `ace.derive` (even if squeezing is per se a cryptographic operation).
+A CR in State _Success_ or _Failure_ may not be the *destination* of an `ace.derive`.
++
+NOTE: `ML-KEM.Decaps` (<<ACE-PQC-ML-KEM>>) is the motivating case for this `ace.derive` behavior:
+it leaves the shared secret in `sharedkey` and
+transitions to _Success_, from which the only other exit is _Ready_, and _Ready_ clears
+`sharedkey`. Without this provision the shared secret would be unreachable and ML-KEM could not
+be used for its stated purpose.
+
+SGR4:: In States _Success_ and _Failure_, `ace.setst` is only permitted to transition to _Ready_ or _Unconfigured_.
+
+SGR5:: A transition from any valid state to _Ready_ using instruction `ace.setst` is always permitted, unless the Algorithm explicitly forbids it.
++
+NOTE: Note that a CR can always be restored from a backup SCC, so preventing transitions to _Ready_--as "GCM with Set IV" (<<ACE-GCM-with-IV-mode>>) does--is not an effective mitigation against cryptographic attacks enabled by transitioning to _Ready_.
+
+SGR6:: The CR state after `ace.setst` completes does not always match the instruction's immediate operand.
+Beyond Error State transitions, some operations determine the next state dynamically.
+For example, issuing `ace.setst` with an `ace_state_hash_verify` immediate and a verification parameter transitions the CR to either _Success_ or _Failure_.
+Instructions such as `ace.exec` may also cause state changes.
+
+SGR7:: Upon transitioning to an Error State, the Content of a CR beyond the MDH is cleared:
+Internal resources associated with the Content shall also be released,
+including any additional variable-length data and the _AddDataLen_ field is set to 0.
+The CR then retains only the MDH.
+Accordingly, `_ConfigStatus_` is always set to `ace_cfgst_complete`.
+
+SGR8:: The transitions from _Unconfigured_ to any Error State result from configuration instructions, or
+from a usage instruction: no Algorithm allows one in State _Unconfigured_, so issuing one
+transitions the CR to Error State _Invalid_ under <<ACE-algorithms-other-rules>>.
+The transitions from these Error States to _Unconfigured_ result from explicitly clearing the CR.
+
+SGR9:: The MDH of a CR in the _Unconfigured_ State can be read using `ace.getmd*` (<<ACE-instruction-getmd>>), returning all zero values.
+
+SGR10:: Exporting a CR in an Error State exports only the MDH (all fields and values) and the authentication tag.
+Requesting the SCC's size (`ace.size` <<ACE-instruction-size>>) will return 32 (bytes).
+The resulting SCC can be reimported, allowing software to take appropriate actions even after a context switch.
+
+SGR11:: If a CR is in any Error State, it can still be reconfigured, cloned, or cleared. `ace.setst` can only be used to change the Error State (for instance by an exception handler) or transition the CR to _Unconfigured_.
+
+SGR12:: The MDH of a CR in an Error State can be read using `ace.getmd*` (<<ACE-instruction-getmd>>).
+
+SGR13:: Attempts to _use_ a CR in any Error State will not perform any operation, and in particular they leave the _State_ field unchanged.
+Such an attempt can be considered an operation that would cause a transition to  Error State `ace_state_invalid`, so the _State_ field is left unchanged to allow software to address the original error condition. No history of Error States is maintained by the architecture.
+
+SGR14:: Any _usage_ instruction that would violate the Usage Control policies will not perform its operation, and raises ACE exception `ace_exc_privilege_violation`
+(see <<ACE-error-architecture>> for the behavior if the Privileged Architecture is not implemented).
+
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -1503,9 +1555,6 @@ representation of the CR.
 
 If _AddDataLen_ > 0 (hence, for import only), `ace.load` will _not_ load data beyond the maximal admissible size allowed for the Algorithm encoded in the MDH. In case an ADS is provided, an implementation may decide to stop the transfer once, upon transferring the IMPQUAL block. In these two cases, SIV2 and, if _AddDataLen_ {ge} 2, the IMPQUAL are loaded in the hart-local ACE state.  This is necessary to allow the `ace.mgmt` instruction to properly process and finalize these conditions.
 
-// See the non-normative note at the end of <<ACE-instruction-mgmt>>,
-// <<ACE-Memory-Model>>, and <<ACE-export-import-algorithms>>.
-
 When a system-defined format is used (signaled by the _SystemFormat_ bit of the MDH), the semantics of `ace.load` are implementation-dependent.
 --
 
@@ -1549,9 +1598,6 @@ NOTE: `size` may exceed `imglen` because `ace_cfgst_exporting` does not distingu
 
 If the _ConfigStatus_ field is equal to `ace_cfgst_complete`, then ACE exception `ace_exc_complete_cr_data_access` is raised.
 --
-
-// See the non-normative note at the end of <<ACE-instruction-mgmt>>,
-// <<ACE-Memory-Model>>, and <<ACE-export-import-algorithms>>.
 
 // NOTE: Modifying the CR being used by the interrupted `ace.store` always forces
 // the store to restart. Software that aims to optimize this case will have to
