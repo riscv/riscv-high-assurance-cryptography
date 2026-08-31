@@ -764,7 +764,7 @@ when the _ConfigStatus_ is not `ace_cfgst_complete`, together with `ace.mv`.
 
 The _AuxDataLen_ MDH field records the length of the _Auxiliary Data Section_ (ADS) of the content, a variable-size, implementation-dependent part, as a number of 128-bit blocks. The maximum value is 2^14^-1, corresponding to 262128 bytes.
 
-If _AuxDataLen_ is zero, there is no ADS.
+If _AuxDataLen_ is zero or one, there is no ADS.
 
 The value one is used by the SCC import procedure to signal the state machine in the CR that ADS was present in the SCC, but it was discarded (see <<ACE-SCC-import>>).
 
@@ -1553,7 +1553,21 @@ For `ace.load`, `end` = `size`: for each _j_ from `acestart` to `size` − 1, th
 address `Xs1 + %offset + `_j_ is loaded into the _j_-th byte after the MDH of the serialized
 representation of the CR.
 
-If _AuxDataLen_ > 0 (hence, for import only), `ace.load` will _not_ load data beyond the maximal admissible size allowed for the Algorithm encoded in the MDH. In case an ADS is provided, an implementation may decide to stop the transfer once, upon transferring the IMPQUAL block. In these two cases, SIV2 and, if _AuxDataLen_ {ge} 2, the IMPQUAL are loaded in the hart-local ACE state.  This is necessary to allow the `ace.mgmt` instruction to properly process and finalize these conditions.
+// If _AuxDataLen_ > 0 (hence, for import only), `ace.load` will _not_ load data beyond the maximal admissible size allowed for the Algorithm encoded in the MDH. In case an ADS is provided, an implementation may decide to stop the transfer once, upon transferring the IMPQUAL block. In these two cases, SIV2 and, if _AuxDataLen_ {ge} 2, the IMPQUAL are loaded in the hart-local ACE state.  This is necessary to allow the `ace.mgmt` instruction to properly process and finalize these conditions.
+
+Let `max_admissible` = the implementation's maximum SCC payload length for the Algorithm,
+which is a multiple of 16 bytes.
+`ace.load` transfers offsets `[acestart, end)` where
+
+{fournbsp}{fournbsp}`end` = `min(size, max_admissible)`.
+
+Offsets are assigned per <<ACE-SCC>>: `SIV` at [0,16), `Content1` next,
+then, if `AuxDataLen` {ge} 2
+`IMPQUAL` and `SIV2`, and `Content2` (which may be empty).
+Bytes of `SIV`, `SIV2`, `IMPQUAL` that fall within [acestart, end) are routed to the
+hart-local CSRs, not to the CR image; Content bytes go to the CR image.
+If `end` < `size`, the ADS is discarded: the completing `ace.mgmt` sets
+`actual_impdatalen` = 1 per <<ACE-SCC-import>>.
 
 When a system-defined format is used (signaled by the _SystemFormat_ bit of the MDH), the semantics of `ace.load` are implementation-dependent.
 --
@@ -2508,7 +2522,6 @@ destination CR. The data never becomes visible to software: it is the mechanism 
 of one Algorithm becomes the input, or the key, of another.
 
 The source and the destination CRs must be different.
-If they are the same, the CR transitions to Error State `ace_state_invalid`.
 
 The auxiliary GPR carries the transfer length and the two field indices:
 
@@ -2529,7 +2542,7 @@ issued on it; and for `Form` `10` and `11` the destination CR advances as if the
 consuming that input had been issued on it. A single `ace.derive` with `Form` `11` therefore
 replaces the pair of instructions it collapses, with the same state effects on both CRs, but without
 exposing the transferred data to software. The main restriction is that `ace.derive` must replace
-`ace.exec` instructions that do not set `acestart` or do it in a synchronised way,
+`ace.exec` instructions that do not set `acestart` or do it in a synchronized way,
 i.e., the block size of the destination must divide the block size `b` of the source, and `length`
 must be a multiple of `b`, or the destination uses `ace.exec` to absorb the input into a state.
 
@@ -2537,10 +2550,13 @@ How `length` relates to the size of each endpoint depends on whether that endpoi
 variable:
 
 * A *fixed-size source*, such as a secret field, is transferred in full, truncated, or zero-padded
-  to `length`.
+  to `length`. There is no mechanism to transfer only a partial segment of the source.
 * A *variable-size source*, such as the repeatable output of an `ace.exec` — squeezing a XOF, for
   instance — is produced until `length` bytes have been delivered, and is truncated inside a unit
-  of output if `length` is not a whole multiple of that unit.
+  of output if `length` is not a whole multiple of that unit. The transfer respects the granularity
+  offered by the source algorithm in the following way: if the length of the transfer is not a multiple
+  of that granularity, the last output of what would be an `ace.exec` is truncated and the unused
+  part of the output of discarded.
 * A *fixed-size destination*, such as a secret field, is filled in full, or truncated by ignoring
   the data beyond its end, or zero-padded, according to `length`.
 * A *variable-size destination*, such as the repeatable input of an `ace.exec` — absorbing data,
@@ -3115,9 +3131,9 @@ Both formats begin with the 128-bit MDH described in <<ACE-Metadata>>.
   _Algorithm_, _AlgorithmPolicy_ and _KeyType_.
 +
 In particular, it does *not* depend on _AuxDataLen_: a PI carries no
-implementation-specific data, and _AuxDataLen_ must be zero in the MDH of a PI. Nor does
-it depend on _SCProtection_ or on _StateExtension_, which must likewise be zero in the
-MDH of a PI.
+implementation-specific data, and _AuxDataLen_ must be zero in the MDH of a PI.
+It also does not depend on _StateExtension_, which must likewise be zero in the
+MDH of a PI, nor on _SCProtection_.
 
 . The length of a *Sealed Cryptographic Context* is determined by, and only by, the
   fields _Algorithm_, _AlgorithmPolicy_, _KeyType_, _StateExtension_, _State_, and
@@ -3494,12 +3510,65 @@ function SCC_Decrypt(AD[] : array of bits(128), N : bits(96), sep: bits(1),
 
 // //////////////////////////////////////////////////////////////////
 
+[[ACE-export-fully-not-fully]]
+==== Fully and Not-Fully Configured CRs
+
+*Add this?*
+
+A rule that export of *partially configured* CRs does NOT contain SIV, SIV2, IMPQUAL, but only the `Content/`Content1`/`Content2`. not even the MDH is needed, since it is saved by the caller. Only export of a Fully configured CR contains MDH, SIV, SIV2, IMPQUAL. This implies a change in `ace.load`/`ace.store` in that they only manage content, not SIV, SIV2, IMPQUAL (the MDH they do not manage anyway).
+So the places where I state that the data is loaded and stored in the same order as they appear in the SCC is superseded and must be modified.
+
+This also means that the software must manage SIV, SIV2, IMPQUAL independently, which is fine, since only the exception and context switch handlers need to.
+
+The MDH determines how much we have of `Content1` and `Content2`. Anything that has not been loaded before is zeroed internally, so if some software exports a CR that is only partially provisioned or configured will just export zeros in the not yet filled parts.
+
+The good news is: the size reported for the export of the non-fully configured CR is the size of `Content1[]` for the PI and the combined size of `Content1[]` and `Content2[]` for a SCC.  This is what `ace.size` returns in these cases.
+
+
+////
+### M20 — The CSR-vs-CR-image split lacks its export-side mirror: SCC assembly on export is unspecified, the verbatim export of a partially imported CR omits the SIV, and `<<ACE-CR-representation>>`'s length sentence contradicts the new routing rule — **resolution proposed by the author and endorsed; pending application**
+
+*(Exposed — and made acute — by the draft edit that resolved M8. The author's proposed resolution — content-only transfers with SIV/SIV2/IMPQUAL exclusively in the management CSRs — has been verified end-to-end and endorsed; the entry below records the assessment and the complete sweep of locations to amend.)*
+
+**Severity rationale.** With SIV/SIV2/IMPQUAL routed to the management CSRs and excluded from the CR image, the export direction has no defined way to place those bytes into the SCC byte stream in memory, and the documented interrupted-import migration flow ("an interrupted import to resume on another hart", `ace.mgmt` NOTE) silently breaks: the resumed import reads the wrong bytes as the SIV and fails authentication. Fails closed, but the feature is dead and two conforming implementations can assemble different SCC byte streams.
+
+**Locations.** `ace-ISA-unpriv.adoc` §ace.load new block (L1568–1569: "Bytes of `SIV`, `SIV2`, `IMPQUAL` … are routed to the hart-local CSRs, not to the CR image"); §ace.store Bound (L1610: `end` = min(`size`, `imglen`) over "the serialized CR image"); §ace.mgmt export steps ("Finally, output `saved_MDH`, then `SIV` and `Content1_CT[]` …") and the verbatim-export rule ("the contents of the CR are exported verbatim, in the same order in which they appear in … the SCC"); §`<<ACE-CR-representation>>` (L3228–3229: "Its length equals that of the PI, or of the SCC plus 128 bits for the `SIV` — 384 bits if `IMPQUAL` and `SIV2` are also present" vs. L3249–3250: "MDH | Content1_CT[] { | Content2_CT[] } … and `SIV`, `SIV2`, `IMPQUAL` are stored separately in their CSRs").
+
+**Resolution (author's proposal, verified and endorsed).** Adopt the **CSRs-only layout with content-only transfers**:
+
+- `ace.load`, `ace.store`, and `ace.mv` transfer **Content only** (Content for a PI; Content1/Content2 for an SCC). They never transfer the MDH (already the case) nor SIV/SIV2/IMPQUAL.
+- SIV/SIV2/IMPQUAL live exclusively in the management CSRs. At **import**, software writes them from the SCC image into the `acesiv*`/`aceiq*` CSRs before the completing `ace.mgmt` (which authenticates using them). At **export** of a fully configured CR, the unit computes SIV/SIV2 into the CSRs and software stores them — together with the MDH from `ace.getmd` — at their SCC positions in memory.
+- **Export of a partially configured CR contains only Content** — no MDH (the caller saved it when supplying `ml`), no SIV/SIV2/IMPQUAL. The migration round trip for a partially imported CR therefore works: the SIV travels via the saved CSRs (the context-switch rule already mandates saving them when `acemanagedcr` ≠ 32), the MDH via the caller's saved `ml`.
+
+**Security assessment (verified).** SIV/SIV2/IMPQUAL are non-confidential — they appear in the clear in the SCC memory format — so software handling via URW CSRs is sound. Assembly freedom (mixing SIV/Content/ADS across SCCs) is caught by the two-level authentication (AD[0] = MDH binds segment 1; AD2 = IMPQUAL ∥ SIV binds segment 2 to segment 1); all failures are fail-closed (`ace_state_import_auth`, or the ADS dropped with `_AuxDataLen_` ← 1 → normalized to 0). Edge cases work out: re-importing an interrupted-then-exported CR with non-empty Content2 reads garbage Content2_CT, but IMPQUAL/SIV2 come from the saved CSRs (correct), so the segment-2 tag check fails and the ADS is dropped; the `max_admissible` clamp effectively bounds Content2 (Content1 always fits by construction — the CR was sized for the Algorithm); `_AuxDataLen_` = 2 → Content2 empty.
+
+**Required sweep** — locations whose "same order as the SCC" / SCC-length language is superseded:
+
+1. `<<ACE-cr-transfer-model>>` (L1536–1554): the transfer length becomes the **Content** length — for a PI, `size`; for an SCC, `size − 16 − 16×_AuxDataLen_` (SIV + ADS excluded). `acestart` is an offset into the Content. L1552's "For `ace.load`, `end` = `size`" becomes the Content length with the `max_admissible` clamp (this also fixes M8's residual duplicate definition).
+2. The M8 block (L1558–1571): rewrite — Content-only offsets (Content1, then Content2), **delete** the SIV/SIV2/IMPQUAL routing sentence (they are not transferred at all), redefine `max_admissible` on Content, keep the discard rule in Content terms.
+3. `ace.store` Bound (L1610): `imglen` is automatically the Content length once the CR image is Content-only — state it.
+4. `ace.mv` Bound + note (L1720–1748): same `size`/`imglen` → Content-length adjustment.
+5. `<<ACE-CR-representation>>` (L3228–3229): the length sentence flips sign — "the SCC **minus** the `SIV`, `SIV2`, and `IMPQUAL`, which are held in the management CSRs"; the "extra 128 or 384 bits of capacity" sentence becomes "this capacity is the management CSRs, which are per-hart."
+6. mgmt export-start verbatim rule (L2043–2045): "in the same order in which they appear in the PI/SCC" → "only the Content bytes; the caller supplies the MDH and holds SIV/SIV2/IMPQUAL in the CSRs."
+7. Import algorithm (L3557–3582): "Load the rest of the SCC" → "Load the Content sections"; **add a new normative step**: software writes SIV (and IMPQUAL/SIV2, if present) from the SCC image into the `acesiv*`/`aceiq*` CSRs before the completing `ace.mgmt`.
+8. Export algorithm (L3512–3524): keep the output list as the SCC *format* definition, but add the division-of-labor note — software writes `saved_MDH` (from `ace.getmd`) and SIV/SIV2/IMPQUAL (from the CSRs); `ace.store` transfers Content1_CT/Content2_CT. Also state who writes the IMPQUAL CSR when the *unit* originates new auxiliary data at export (its own `zeros(32) @ acemimpid @ acemarchid @ acemvendorid`).
+9. Provisioning overview (informative, L1472–1490): "store the rest of the SCC" → Content, with the MDH/SIV noted as software-stored.
+10. `acestart` CSR section: "bounded above by the size in bytes of the PI/SCC" → the Content length.
+11. `ace.size`: state that it keeps reporting the full PI/SCC format size (the Content-only export of a partial CR is a sub-range; over-reporting is harmless).
+12. `<<ACE-SCC-import>>`'s ADS-exclusion sentence (L3564): restate against the Content2 load bound.
+13. Cross-book: `<<ACE-management-code-snippets>>` (excluded from this review) must be updated consistently. The SCC *memory format* is unchanged, so the KATs are unaffected.
+////
+
 [[ACE-SCC-export]]
 ==== Generation of an SCC from a Fully Configured CR
 
 If the _ConfigStatus_ field is set to `ace_cfgst_complete`, then ``K(i)`` is fully provisioned,
 and opening the CR for export (`ace.mgmt Kd|K{Xd}, #ace_CR_export_start`) performs the following steps
 to create the serialized, encrypted and authenticated SCC from the CR.
+
+Export cannot produce an _AuxDataLen_ value of 1 from a fully configured CR, because if a CR is fully configured and, upon previous import, it had an _AuxDataLen_ = 1, then the Algorithm would have handled that situation by adjusting its internal state: for instance, by resetting some progress indicator and either not generating any auxiliary data, so it would export with _AuxDataLen_ = 0, or generating auxiliary data and thus it would export with _AuxDataLen_ {ge} 2.
+
+However, exporting a non-fully configured CR may produce an _AuxDataLen_ value of 1.
 
 .Exporting a Fully Configured CR ``K(i)``
 --
@@ -3510,11 +3579,12 @@ to create the serialized, encrypted and authenticated SCC from the CR.
 ... If `saved_MDH`._Locality_ includes Locality #j, then ``AD[len_AD]`` <-  ``LST[``_j_``]``, ``len_AD`` <- ``len_AD`` + 1
 .. `len_PC` <- length of Section 3.
 .. `SIV`, `Content1~CT~[]` <- ``SCC_Encrypt(AD, zeros(96), 0, K(i).Content1~PT~[], CSK, len_AD, len_PC)``
-. Second, if _AuxDataLen_ {ne} 0 (export cannot produce a value of 1), then the implementation-dependent data is processed:
+. Second, if _AuxDataLen_ {ge} 2 then: the implementation-dependent data is processed:
 .. `len_AD2` <- 2, ``AD2[0]`` <- ``K(i)``.``IMPQUAL``, ``AD2[1]`` <- `SIV`.
 .. `len_PC2` <- length of Section 6.
 .. `SIV2`, `Content2~CT~[]` <- ``SCC_Encrypt(AD2, zeros(96), 1, K(i).Content2~PT~[], CSK, len_AD2, len_PC2)``
-. Finally, output `saved_MDH`, then `SIV` and `Content1~CT~[]`, and, if AuxDataLen {ne} 0, `IMPQUAL`, `SIV2` and `Content2~CT~[]`.
+. Finally, output `saved_MDH`, then `SIV` and `Content1~CT~[]`, and:
+.. if _AuxDataLen_ {ge} 2, then: output also `IMPQUAL`, `SIV2` and `Content2~CT~[]` (the latter may be empty).
 --
 
 [NOTE]
@@ -3551,7 +3621,7 @@ When the import of the SCC of a fully configured CR is completed,
  . Check correctness of `M`, and whether the Algorithm is supported.
  . Determine the length of the entire SCC.
  . `actual_impdatalen` <- `M`._AuxDataLen_.
- . If `actual_impdatalen` exceeds the implementation's maximum for the given Algorithm, the SCC contains an Implementation=Specific ADS that the importing implementation does not support.
+ . If `actual_impdatalen` exceeds the implementation's maximum for the given Algorithm, the SCC contains an Implementation-Specific ADS that the importing implementation does not support.
  . If `actual_impdatalen` is 1, then we are importing a partially exported SCC that results from an interrupted import with discarded ADS. We keep the value 1 so that the state machine in the CR is notified that ADS was present but discarded when this import is finally completed.
  . In the last two cases, the SCC length is adjusted by excluding the Implementation-Specific ADS, and `actual_impdatalen` <- 1.
  . Load the rest of the SCC, up to the determined length.
@@ -3570,7 +3640,7 @@ When the import of the SCC of a fully configured CR is completed,
 .. else:
 ... `correct` <- `false`.
  . If `correct` {ne} `true`, then `Content2[]` is dropped and `actual_impdatalen` <- 1.
- . ``K(i)``.``MDH``._AuxDataLen_ <- `actual_impdatalen`. Where this is zero or one, the import completes using only the architecture-dependent content. The value 1 signals the state machine of the imported CR that the ADS was dropped. The state machine then establishes an internal consistent state and sets _AuxDataLen_ to zero, and then to a suitable value upon export, if necessary.
+ . ``K(i)``.``MDH``._AuxDataLen_ <- `actual_impdatalen`. Where this is zero or one, the import completes using only the architecture-dependent content. The value 1 signals the state machine of the imported CR that the ADS was dropped: in this case, the state machine then establishes an internal consistent state and must set _AuxDataLen_ to zero–and then to a suitable value upon export, in case it created new auxiliary data.
 --
 
 [NOTE]
