@@ -1,30 +1,7 @@
 Hello
 
-my brain cannot stop thinking 😊
 
-I promise that I will not propose to make a major change in the architecture in this email, but rather a rationalization of formats.
-
-There are two types of data in the SCC, data in clear, and data that is not in the clear (d’uh).
-They are interleaved as
-MDH SIV1 Content1 IMPQUAL SIV2 Content2
-where 
-MDH is stored in an array with 32 entries, that contains the MDH and perhaps a pointer inside the CRF memory
-SIV1 SIV2 IMPQUAL in internal registers, that can be exposed using CSRs (or instructions, like expanding on ace.mv)
-Content1 and Content2 can be easily imagined to be contiguous: they are definitely contiguous when loaded or after ace.export prepares the CR for export.
-
-So let m be the length of Content1 in 16-byte blocks, and n the length of Content2 in 16-byte blocks.
-When we load stuff in a CR we do the following
-
-Load mem block 0: The MDH from memory, store in the special place for all MDHs
-Load mem block 1: The SIV1, place it in a special register 
-Load mem blocks 2..m+1: this is Content1 and  we store it in blocks 0..m-1 of the CR
-Load mem block m+2: this is the IMPQUAL
-Load mem block m+3: this is the SIV2
-Load mem block m+4..m+n+3 this is Content2 and we store it in blocks m..m+n-1 of the CR
-
-WHY THIS COMPLICATION?!?
-
-So we consider separately MDH,SIV1, SIV1,IMPQUAL
+We consider separately MDH,SIV1, SIV1,IMPQUAL
 and Content1 + Content2 are just m+n consecutive blocks
 
 the new, reorganized format is
@@ -59,8 +36,32 @@ And, since these cases are relatively rare, the SIV1/IMPQUAL/SIV2/ can be export
 
 So, a lot of words for describing a format change. Apparently just a reshuffle of fields, but very​ important,
 
-Also, this tells me that we should rethink the semantics of ace.size.  ace.size just does a lookup and finds the size of Content1. Then we get the size of Content2 from the MDH.
+Rethink the semantics of ace.size.
+ace.size just does a lookup and finds the size of Content1.
+Then we get the size of Content2, _AuxDataLen_, directly from the MDH.
 
-Why am I writing everything and a lot of words? Because I am then also copying it in a file and will work on it when I am back.
+if _ConfigStatus_ = `ace_cfgst_complete`, then:
+   size_SCC_content1(MDH) = Length of MDH || SIV1 || Content1[]
+   ace.size(MDH) = size_SCC_content1(MDH) + (0 if _AuxDataLen_ {le} 2 else 16 * _AuxDataLen_) // SIV2 || IMPQUAL || Content2[]
+else if _ConfigStatus_ = `ace_cfgst_provisioning`, then:
+   size_SCC_content1(MDH) = Length of MDH || PI_Content[]
+   ace.size(MDH) = size_SCC_content1(MDH)
+else if _ConfigStatus_ = `ace_cfgst_importing` or `ace_cfgst_exporting` then:
+   size_SCC_content1(MDH) = Length of MDH || Content1[]
+   ace.size(MDH) = size_SCC_content1(MDH) + (0 if _AuxDataLen_ {le} 2 else 16 * _AuxDataLen_-32) // Content2[]
 
- Roberto
+ace.size has an entire five bit field (s2) set to zero.
+hence we can use it to extract the sizes of the various parts without having to do shifts and masking
+
+if the ARC does no like it, we can have pseudo instructions
+ace.size.tot = returns the total length, i.e., the memory to allocate
+ace.size.c1  = returns the length of the PI or of the Content1[]
+ace.size.c2  = returns the length of Content2[]
+ace.size.pre = returns 0 for a PI, 1 if there is only Content1[] (i.e. only SIV1), or if we have also Content2[] (i.e.,SIV, SIV2 and IMPQUAL)
+
+therefore ace.size.tot = 1 + ace.size.pre + ace.size.c1 + ace.size.c2
+
+
+
+
+Roberto
