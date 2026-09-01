@@ -401,7 +401,7 @@ All _Reserved_ bits, as well as bits unused by a given Algorithm, are zero.
 |   [25:21] |   5  | _State_           | Current state of the CR/Algorithm, encoded as an integer.  See <<ACE-State-field>>.
 |   [29:26] |   4  | _StateExtension_  | Available to Algorithms to extend the _State_ field with additional information. See <<ACE-State-field>>.
 |   [31:30] |   2  | _ConfigStatus_    | Used to indicate whether the CR is fully configured and ready to operate, or is being provisioned, imported, or exported. See <<ACE-ConfigStatus>>.
-|   [45:32] |  14  | _AuxDataLen_      | If non-zero, indicates that an additional, variable-length, implementation-dependent data section is appended to the Content. The length of this _Auxiliary Data Section_ (ADS) is _AuxDataLen_ * 128 bits.
+|   [45:32] |  14  | _AuxDataLen_      | If different from 0 or 1, indicates that an additional, variable-length, implementation-dependent data section is added to the Content. The length of this _Auxiliary Data Section_ (ADS) is _AuxDataLen_ * 128 bits.
 |   [61:46] |  16  | _AuxInfo_         | Algorithm-specific auxiliary information. Currently used only by ML-KEM and ML-DSA. This field is zero for Algorithms that do not use it.
 |   [62:62] |   1  | _Reserved_        | Reserved for future use.
 |   [63:63] |   1  | _SystemFormat_    | Value is 0 if an input is in the ACE architected format, 1 if in a system-defined format.
@@ -768,15 +768,15 @@ If _AuxDataLen_ is zero or one, there is no ADS.
 
 The value one is used by the SCC import procedure to signal the state machine in the CR that ADS was present in the SCC, but it was discarded (see <<ACE-SCC-import>>).
 
-If _AuxDataLen_ is not zero or one, the first 128-bit block of this additional section contains
+If _AuxDataLen_ is not zero or one,
 a copy of the originating implementation qualifier from the originating machine
 
 ``{fournbsp}{fournbsp}IMPQUAL := zeros(32) @ acemimpid @ acemarchid @ acemvendorid``
 
-(cf. <<ACE-CSR-impl-ids>>). These 16 bytes are counted within the length recorded by the _AuxDataLen_ field.
-The importing implementation uses this value to determine whether the ADS can be used.
+(cf. <<ACE-CSR-impl-ids>>) is included in the SCC.
+These 16 bytes, as well as a separate authentication tag for the ADS are counted within the length recorded by the _AuxDataLen_ field. The importing implementation uses this value to determine whether the ADS can be used.
 
-Since an ADS contains at least an authentication tag (16 bytes) and the originating implementation qualifier (also 16 bytes), the minumum length is 32 bytes, corresponding to an _AuxDataLen_ value of 2.
+Since an ADS contains at least an authentication tag (16 bytes) and the originating implementation qualifier (also 16 bytes), the minimum length is 32 bytes, corresponding to an _AuxDataLen_ value of 2.
 
 // The format of the ADS is described in <<ACE-data-formats>>.
 
@@ -1553,15 +1553,15 @@ For `ace.load`, `end` = `size`: for each _j_ from `acestart` to `size` − 1, th
 address `Xs1 + %offset + `_j_ is loaded into the _j_-th byte after the MDH of the serialized
 representation of the CR.
 
-// If _AuxDataLen_ > 0 (hence, for import only), `ace.load` will _not_ load data beyond the maximal admissible size allowed for the Algorithm encoded in the MDH. In case an ADS is provided, an implementation may decide to stop the transfer once, upon transferring the IMPQUAL block. In these two cases, SIV2 and, if _AuxDataLen_ {ge} 2, the IMPQUAL are loaded in the hart-local ACE state.  This is necessary to allow the `ace.mgmt` instruction to properly process and finalize these conditions.
-
 Let `max_admissible` = the implementation's maximum SCC payload length for the Algorithm,
 which is a multiple of 16 bytes.
 `ace.load` transfers offsets `[acestart, end)` where
 
 {fournbsp}{fournbsp}`end` = `min(size, max_admissible)`.
 
-Offsets are assigned per <<ACE-SCC>>: `SIV` at [0,16), `Content1` next,
+An SCC is composed by two parts, a preamble and the content.
+After the MDH, Offsets are assigned per <<ACE-SCC>>:
+. `SIV` at [0,16), `Content1` next,
 then, if `AuxDataLen` {ge} 2
 `IMPQUAL` and `SIV2`, and `Content2` (which may be empty).
 Bytes of `SIV`, `SIV2`, `IMPQUAL` that fall within [acestart, end) are routed to the
@@ -3184,16 +3184,16 @@ The format of a Sealed Cryptographic Context (SCC) is shown in <<ACE-SCC>>.
 |===
 | Section | Section Name                          | Size                 | Description
 | 1       | `MDH`, MDH                            | 128 bits             | See <<ACE-Metadata>>.
-| 2       | `SIV`                                 | 128 bits             | Authentication tag for section 3.
+| 2       | `SIV`                                 | 128 bits             | Authentication tag for MDH and `Content1[]`.
+| 3       | `IMPQUAL`, Implementation Qualifier   | 128 bits, if present | Used to identify the implementation of the ACE Unit
+| 4       | `SIV2`                                | 128 bits, if present | Authentication tag for IMPQUAL and `Content2[]`.
 //
-| 3
+| 5
 | `Content1`: _Algorithm Data Section_
 | See <<ACE-length-rule>>.
 | Contains keys and other Algorithm-specific information. Encrypted in memory and during partial import.
  The data in this section is necessary for the correct functioning of the Algorithm.
 //
-| 4       | `IMPQUAL`, Implementation Qualifier   | 128 bits, if present | Used to identify the implementation of the ACE Unit
-| 5       | `SIV2`                                | 128 bits, if present | Authentication tag for sections 4 and 6.
 | 6
 | `Content2`: Implementation-Specific _Auxiliary Data Section_
 | Implementation-Specific
@@ -3206,6 +3206,8 @@ The length of each section must be a multiple of 128 bits.
 If the context is exported while in an Error State, Sections 3–6 are empty; that is, the SCC consists only of a plaintext MDH and `SIV`.
 
 The MDH's _AuxDataLen_ field specifies the total size of the Implementation-Specific ADS (`SIV2`, `IMPQUAL`, and `Content2[]`), except for the special value 1 (see <<ACE-SCC-import>>).
+If _AuxDataLen_ 2, then the ADS is empty.
+If _AuxDataLen_ {ge} 2 then the ADS contains _AuxDataLen_ blocks.
 
 The information in a CR comprises at least as many bits as the SCC (see <<ACE-SCC>>), excluding `SIV`, `IMPQUAL`, and `SIV2`.
 
