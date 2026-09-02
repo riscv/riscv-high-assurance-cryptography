@@ -515,7 +515,7 @@ The architected values of _State_ common to all Algorithms are defined in the fo
 |===
 | Value | Mnemonic                  | State Name     | Description
 |   1   | `ace_state_ready`         | _Ready_        | The state of a just provisioned CC; ready for operation. No `ace.exec` instruction may be executed in this state unless the Algorithm explicitly allows it.
-| 2-21  3+| Defined by the specification of the Algorithm encoded in the _Algorithm_ field.
+| 2-45  3+| Defined by the specification of the Algorithm encoded in the _Algorithm_ field.
 |  46   | `ace_state_success`       | _Success_      | Algorithm completed successfully. No further cryptographic operations may be performed until the CR is reconfigured or transitioned to _Ready_, with the two exceptions given in <<ACE-State-field>>.
 |  47   | `ace_state_failure`       | _Failure_      | Failure in an Algorithm, usually an authentication failure in AE(AD) Algorithms or a signature verification failure. No further cryptographic operations may be performed until the CR is reconfigured or transitioned to _Ready_, with the two exceptions given in <<ACE-State-field>>.
 |===
@@ -530,25 +530,7 @@ The architected values of _State_ common to all Algorithms are defined in the fo
 |  51    | `ace_state_import_auth`         | _Authentication Failed_     | Authentication failure while completing an SCC import.
 |  52    | `ace_state_privilege_violation` | _Privilege Violation_       | Violation of Usage Control policies.
 |  53    | `ace_state_expired`             | _Expired_         | The CR has expired.
-| 55, 54 | (Reserved)                      | {empty}           | Reserved for future use.
-|===
-
-
-When a CR is being provisioned, exported, or imported, it is in one of the following states:
-
-[[ACE-SC-sealing-status]]
-.Global CC State Numbers: Configuration States
-[float="center",align="center",cols="^7%,<27%,<66%",options="header"]
-|===
-| Value | Mnemonic                  | Description
-|   56   | `ace_cfgst_provisioning` | The CR is being configured.
-|   57   | `ace_cfgst_exporting`    | The CR has been placed in exporting mode, i.e., its contents have been encrypted and authenticated for export.
-|   58   | `ace_cfgst_importing`    | The CR is partially configured as a result of an interrupted import operation.
-|   59   | `ace_cfgst_pp_exporting` | A partially provisioned CR has been placed in exporting mode.
-|   60   | `ace_cfgst_pp_importing` | A partially provisioned CR which has been exported is being reimported.
-|   61   | `ace_cfgst_es_exporting` | A CR in an Error State has been placed in exporting mode.
-|   62   | `ace_cfgst_es_importing` | A CR in an Error State which has been exported is being reimported.
-|   63   | (Reserved)               | Reserved.
+| 54, 55 | (Reserved)                      | {empty}           | Reserved for future use.
 |===
 
 State 0 is the _Unconfigured_ state.  It denotes that the CR is unconfigured.
@@ -561,7 +543,22 @@ States 48–55, which are termed _Error States_, and are used to report certain 
 State 1 is the _Ready_ state. All Algorithms must support State _Ready_ as their initial State.
 The Valid States include both _Success_ (46) and _Failure_ (47) states, which must be used for normal completion of an Algorithm in the cases of its successful completion or failure.
 
-States 56–63 are called _Incomplete_ States.
+When a CR is being provisioned, exported, or imported, it is in one of the following states, which are called _Configuration_ States:
+
+[[ACE-SC-sealing-status]]
+.Global CC State Numbers: Configuration States
+[float="center",align="center",cols="^7%,<27%,<66%",options="header"]
+|===
+| Value | Mnemonic                  | Description
+|   56   | `ace_cfgst_provisioning` | The CR is being configured.
+|   57   | `ace_cfgst_exporting`    | The CR, which was in a _Valid_ state, has been placed in exporting mode, i.e., its contents have been encrypted and authenticated for export.
+|   58   | `ace_cfgst_importing`    | The CR, which was in a _Valid_ state, has been placed in importing mode.
+|   59   | `ace_cfgst_pp_exporting` | A partially provisioned CR has been placed in exporting mode.
+|   60   | `ace_cfgst_pp_importing` | A partially provisioned CR which has been exported is being reimported.
+|   61   | `ace_cfgst_es_exporting` | A CR in an Error State has been placed in exporting mode.
+|   62   | `ace_cfgst_es_importing` | A CR in an Error State which has been exported is being reimported.
+|   63   | (Reserved)               | Reserved.
+|===
 
 // States _Success_ and _Failure_ cannot be set directly by the caller.
 
@@ -694,7 +691,7 @@ The following rules are generic and apply to all Algorithms (*SGR* means "State 
 SGR1:: The MDH's _State_ field reflects the current state whenever the CC is in _Ready_, _Success_, _Failure_, or any Error State.
 This ensures that these states can be unambiguously determined from the _State_ field alone, without inspecting other fields or the Content.
 
-SGR2:: Any transition listed in an Algorithm's specification may be triggered by performing an explicit `ace.setst` operation (<<ACE-instruction-setst>>), or may be induced by certain conditions specified in the Algorithm's specification. Transitions to and from _Incomplete_ states use the `ace.mgmt` instruction.
+SGR2:: Any transition listed in an Algorithm's specification may be triggered by performing an explicit `ace.setst` operation (<<ACE-instruction-setst>>), or may be induced by certain conditions specified in the Algorithm's specification. Transitions to, from, and between _Configuration_ States use the `ace.mgmt` instruction.
 
 SGR3:: In States _Success_ and _Failure_, only the following ACE instructions are permitted: `ace.mgmt`, `ace.load`, `ace.store`, `ace.clear`, `ace.size`, `ace.setst`, `ace.getmd*`, `ace.getst`, `ace.clone`, `ace.restrict*`, and `ace.derive` where the source CR is in State _Success_ or _Failure_and the source endpoint is one of its fields that can be exported, as described in the specification of the Algorithm.
 Reading such a field is not a cryptographic operation, so it is compatible with the rule that no
@@ -749,12 +746,12 @@ Such an attempt can be considered an operation that would cause a transition to 
 SGR14:: Any _usage_ instruction that would violate the Usage Control policies will not perform its operation, and raises ACE exception `ace_exc_privilege_violation`
 (see <<ACE-error-architecture>> for the behavior if the Privileged Architecture is not implemented).
 
-SGR15:: Usage and cloning of an _Incomplete_ CR is not allowed:
+SGR15:: Usage and cloning of a CR in a Configuration State is not allowed:
 Any attempt to do so raises ACE exception `ace_exc_privilege_violation`.
 
 SGR16:: Instructions `ace.size`, `ace.getmd*`, `ace.getst`, `ace.setst` with `#immed7` equal to `ace_state_unconfigured` or an
 Error State, `ace.clear`, and `ace.clearall`, which are normally considered usage instructions, are also allowed
-when the CR is _Incomplete_.
+when the CR is in a _Configuration_ State.
 
 SGR17:: `ace.load` and `ace.mv` with a CR as destination
 are allowed in States _ace_cfgst_provisioning_, _ace_cfgst_importing_, _ace_cfgst_pp_importing_, and _ace_cfgst_es_exporting_,
