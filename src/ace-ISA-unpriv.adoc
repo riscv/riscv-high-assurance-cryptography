@@ -152,7 +152,7 @@ If `Zklio` is implemented, the ACEIOBUF is implemented.
 
 A brief summary of the the principal instructions offered by ACE is given below, ahead of their full definitions.
 
-* `ace.mgmt` (<<ACE-instruction-mgmt>>) transitions a CR between stages of its management lifecycle, and,
+* `ace.mgmt` (<<ACE-instruction-setst>>) transitions a CR between stages of its management lifecycle, and,
 together with the ACE memory operations `ace.load` (<<ACE-instruction-load>>), `ace.store` (<<ACE-instruction-store>>), and `ace.mv` (<<ACE-instruction-mv>>),
 enables the following operations:
 ** Provisioning (<<ACE-management-operations>>) loads metadata and clear Content into a CR, binding them.
@@ -287,7 +287,7 @@ ACE provides a way to access a CR as if it were a register into which a Provisio
 To this purpose, ACE defines:
 
 * Instructions `ace.load`, to load serialized data into CRs from memory (see <<ACE-instruction-load>>), and `ace.store` (see <<ACE-instruction-store>>) to export a CR's serialized content back to memory; and
-* An instruction, `ace.mgmt`, to make this information available to the ACE unit and to convert the internal representation of CRs to an SCC (cf. <<ACE-instruction-mgmt>>).
+* An instruction, `ace.mgmt`, to make this information available to the ACE unit and to convert the internal representation of CRs to an SCC (cf. <<ACE-instruction-setst>>).
 
 ===== The Context Register File
 
@@ -383,7 +383,6 @@ ACE recognizes two types of metadata that may be contained in a CC or associated
   This qualifier appears only in an SCC which carries an implementation-specific content segment.
   An implementation uses it to decide whether it can use the implementation-specific content segment.
 
-
 This section deals with the 128-bit MDH.
 Its fields are summarized in <<ACE-metadata-header>>.
 All _Reserved_ bits, as well as bits unused by a given Algorithm, are zero.
@@ -397,17 +396,17 @@ All _Reserved_ bits, as well as bits unused by a given Algorithm, are zero.
 |   [13:12] |   2  | _AlgorithmPolicy_ | Allowed Algorithm variant(s), such as, for a symmetric cipher, whether it can be used for encryption, decryption, or both. See <<ACE-Algorithm-field>>.
 |   [15:14] |   2  | _AlgorithmExtension_ | Reserved for future expansion of _Algorithm_ and _AlgorithmPolicy_ fields. Currently zero.
 |   [18:16] |   3  | _SCProtection_    | Side-channel protection level. The levels of side-channel protection are defined in <<ACE-SCProtection-field>>.
-|   [20:19] |   2  | _KeyType_         | This field determines whether the key is given by value, is a system-defined key, or randomly generated. See <<ACE-KeyType-field>> for more details.
-|   [25:21] |   5  | _State_           | Current state of the CR/Algorithm, encoded as an integer.  See <<ACE-State-field>>.
-|   [29:26] |   4  | _StateExtension_  | Available to Algorithms to extend the _State_ field with additional information. See <<ACE-State-field>>.
-|   [31:30] |   2  | _ConfigStatus_    | Used to indicate whether the CR is fully configured and ready to operate, or is being provisioned, imported, or exported. See <<ACE-ConfigStatus>>.
+|   [24:19] |   6  | _State_           | Current state of the CR/Algorithm, encoded as an integer.  See <<ACE-State-field>>.
+|   [28:25] |   4  | _StateExtension_  | Available to Algorithms to extend the _State_ field with additional information. See <<ACE-State-field>>.
+|   [31:29] |   3  | Reserved          | Reserved for future use.
 |   [45:32] |  14  | _AuxDataLen_      | If different from 0 or 1, indicates that an additional, variable-length, implementation-dependent data section is added to the Content. The length of this _Auxiliary Data Section_ (ADS) is _AuxDataLen_ * 128 bits.
-|   [61:46] |  16  | _AuxInfo_         | Algorithm-specific auxiliary information. Currently used only by ML-KEM and ML-DSA. This field is zero for Algorithms that do not use it.
-|   [62:62] |   1  | _Reserved_        | Reserved for future use.
-|   [63:63] |   1  | _SystemFormat_    | Value is 0 if an input is in the ACE architected format, 1 if in a system-defined format.
+|   [47:46] |   2  | _KeyType_         | This field determines whether the key is given by value, is a system-defined key, or randomly generated. See <<ACE-KeyType-field>> for more details.
+|   [61:48] |  14  | _AuxInfo_         | Algorithm-specific auxiliary information. Currently used only by ML-KEM and ML-DSA. This field is zero for Algorithms that do not use it.
+|   [63:62] |   2  | Reserved          | Reserved for future use.
+// Value is 0 if an input is in the ACE architected format, 1 if in a system-defined format.
 |   [68:64] |   5  | _UsagePolicy_     | Usage (Control) Policy. Determines which modes are allowed to use the CR.
 |   [77:69] |   9  | _Locality_        | Zero, or a value determining one or more Locality Secrets. See <<ACE-Localities>>.
-|   [79:78] |   2  | Reserved          | Reserved for expansion of the _Locality_ field.
+|   [79:78] |   2  | Reserved          | Reserved for future use.
 |   [95:80] |  16  | _AlgorithmUse_    | Used by Algorithms and implementations to store additional state information.
 |  [115:96] |  20  | _ExpirationDate_  | If non-zero, the expiration date of this CC. See <<ACE-Metadata-expiration-date>>. Expressed in hours since 00:00, January 1, 2027 (about 119 years and 7 months).
 | [127:116] |  12  | Reserved          | Reserved for future use.
@@ -417,15 +416,16 @@ The fields are described in detail in the following subsections.
 
 <<ACE-length-rule>> is the sole authoritative source for determining which MDH fields specify the sizes of provisioning inputs and Sealed Cryptographic Contexts, and the maximum internal memory required by the Algorithm encoded in the CR.
 
+
 // ////////////////////////////////////////////////////////////////////
 
-[[ACE-system-format-field]]
-===== _SystemFormat_ Bit
-
-The use of a system-defined format is signaled by the _SystemFormat_ bit MDH[63].
-The format of the other 63 bits of the low half of the MDH, i.e., MDH[62:0], as well as of the part of the input that would otherwise contain MDH[127:64], is entirely system specific, as is the rest of the input.
-Once imported, the CR must be internally represented in a format that follows the architecture, with an implementation-defined mapping of policies, and can only be exported as a SCC.
-The architecture intentionally does not provide a way to export a CR in any format different from the SCC.
+// [[ACE-system-format-field]]
+// ===== _SystemFormat_ Bit
+//
+// The use of a system-defined format is signaled by the _SystemFormat_ bit MDH[31].
+// If this bit is set, the format of the other 63 bits of the low half of the MDH, xsas well as of the part of the input that would otherwise contain MDH[127:64], is entirely system specific, as is the rest of the input.
+// Once imported, the CR must be internally represented in a format that follows the architecture, with an implementation-defined mapping of policies, and can only be exported as a SCC.
+// The architecture intentionally does not provide a way to export a CR in any format different from the SCC.
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -516,48 +516,70 @@ The architected values of _State_ common to all Algorithms are defined in the fo
 | Value | Mnemonic                  | State Name     | Description
 |   1   | `ace_state_ready`         | _Ready_        | The state of a just provisioned CC; ready for operation. No `ace.exec` instruction may be executed in this state unless the Algorithm explicitly allows it.
 | 2-21  3+| Defined by the specification of the Algorithm encoded in the _Algorithm_ field.
-|  22   | `ace_state_success`       | _Success_      | Algorithm completed successfully. No further cryptographic operations may be performed until the CR is reconfigured or transitioned to _Ready_, with the two exceptions given in <<ACE-State-field>>.
-|  23   | `ace_state_failure`       | _Failure_      | Failure in an Algorithm, usually an authentication failure in AE(AD) Algorithms or a signature verification failure. No further cryptographic operations may be performed until the CR is reconfigured or transitioned to _Ready_, with the two exceptions given in <<ACE-State-field>>.
+|  46   | `ace_state_success`       | _Success_      | Algorithm completed successfully. No further cryptographic operations may be performed until the CR is reconfigured or transitioned to _Ready_, with the two exceptions given in <<ACE-State-field>>.
+|  47   | `ace_state_failure`       | _Failure_      | Failure in an Algorithm, usually an authentication failure in AE(AD) Algorithms or a signature verification failure. No further cryptographic operations may be performed until the CR is reconfigured or transitioned to _Ready_, with the two exceptions given in <<ACE-State-field>>.
 |===
 
 [[ACE-states-error]]
 .Global CC State Numbers: Error States
 [float="center",align="center",width="100%",cols="^7%,<28%,<16%,<49%"]
 |===
-|  24    | `ace_state_unsupported`         | _Unsupported_     | Not supported (i.e., not implemented) Algorithm.
-|  25    | `ace_state_invalid`             | _Invalid_         | The CR transitions to Error State _Invalid_.
-|  26    | `ace_state_out_of_memory`       | _Out of Memory_   | Insufficient CRF memory for a configuration instruction. This may be set by privileged code if it does not handle CR allocation or fails to do so, returning an error instead.
-|  27    | `ace_state_import_auth`         | _Authentication Failed_     | Authentication failure while completing an SCC import.
-|  28    | `ace_state_privilege_violation` | _Privilege Violation_       | Violation of Usage Control policies.
-|  29    | `ace_state_expired`             | _Expired_         | The CR has expired.
-| 30, 31 | (Reserved)                      | {empty}           | Reserved for future use.
+|  48    | `ace_state_unsupported`         | _Unsupported_     | Not supported (i.e., not implemented) Algorithm.
+|  49    | `ace_state_invalid`             | _Invalid_         | The CR transitions to Error State _Invalid_.
+|  50    | `ace_state_out_of_memory`       | _Out of Memory_   | Insufficient CRF memory for a configuration instruction. This may be set by privileged code if it does not handle CR allocation or fails to do so, returning an error instead.
+|  51    | `ace_state_import_auth`         | _Authentication Failed_     | Authentication failure while completing an SCC import.
+|  52    | `ace_state_privilege_violation` | _Privilege Violation_       | Violation of Usage Control policies.
+|  53    | `ace_state_expired`             | _Expired_         | The CR has expired.
+| 55, 54 | (Reserved)                      | {empty}           | Reserved for future use.
+|===
+
+
+When a CR is being provisioned, exported, or imported, it is in one of the following states:
+
+[[ACE-SC-sealing-status]]
+.Global CC State Numbers: Configuration States
+[float="center",align="center",cols="^7%,<25%,<68%",options="header"]
+|===
+| Value | Mnemonic                  | Description
+|   56   | `ace_cfgst_provisioning` | The CR is being configured.
+|   57   | `ace_cfgst_exporting`    | The CR has been placed in exporting mode, i.e., its contents have been encrypted and authenticated for export.
+|   58   | `ace_cfgst_importing`    | The CR is partially configured as a result of an interrupted import operation.
+|   59   | `ace_cfgst_pp_exporting` | A partially provisioned CR has been placed in exporting mode.
+|   60   | `ace_cfgst_pp_importing` | A partially provisioned CR which has been exported is being reimported.
+|   61   | `ace_cfgst_es_exporting` | A CR in an Error State has been placed in exporting mode.
+|   62   | `ace_cfgst_es_importing` | A CR in an Error State which has been exported is being reimported.
+|   63   | (Reserved)               | Reserved.
 |===
 
 State 0 is the _Unconfigured_ state.  It denotes that the CR is unconfigured.
 
-All Algorithms must support State _Ready_.
+If a CR in in a State with number from 1 to 55, we say it is _Complete_.
 
-All states in the range 1-23 are termed _valid_. This includes both _Success_ and _Failure_ states, which must be used for
-normal completion of an Algorithm in the cases of its successful completion or failure.
+If a CR in in a State with number from 56 to 63, we say it is _Incomplete_.
+
+State 1 is the _Ready_ state. All Algorithms must support State _Ready_ as their initial State.
+
+All states in the range 1-47 are called _Valid_.
+This includes both _Success_ and _Failure_ states, which must be used for normal completion of an Algorithm in the cases of its successful completion or failure.
 
 The immediate in the `ace.setst` instruction (<<ACE-instruction-setst>>) is a 7-bit value, whereas the _State_ field is only 5 bits long.
-This allows `ace.setst` to encode additional operations related to state changes (such as stages of import, export, or provisioning code) by setting the two high bits of the immediate to non-zero values.
+This allows `ace.setst` to encode additional operations related to state changes.
 
 (((ACE, Algorithm, error states)))
-States 24-31 are termed _Error States_, and are used to report certain specific ACE errors.
+States 48-55 are termed _Error States_, and are used to report certain specific ACE errors.
+
 (((ACE, Algorithm, invalid state)))
 (((Context Register, invalidation)))
 We say that a CR has been _invalidated_ when it has been transitioned to Error State `ace_state_invalid`.
 Upon entering an Error State, the CR's contents are cleared as per Rule *SGR7* in <<ACE-algorithm-state-rules>>.
 
-The currently defined Error States are listed in decreasing severity order, with Error State 24 being the most severe and Error State 29 the least severe.
-Error States 30 and 31, if defined, will not necessarily have a lower priority than Error State 29, so the ordering may not hold for them.
+The currently defined Error States are listed in decreasing severity order, with Error State 48 being the most severe and Error State 53 the least severe.
+Error States 54 and 55, if defined, will not necessarily have a lower priority than Error State 53, so the ordering may not hold for them.
 
-Error conditions that lead to exceptions are treated in <<ACE-exceptions>>
-(see <<ACE-error-architecture>> for the behavior when the Privileged Architecture is not implemented).
+Error conditions that lead to exceptions are treated in <<ACE-exceptions>>. See <<ACE-error-architecture>> for the behavior when the Privileged Architecture is not implemented.
 
-If an Algorithm defines 23 or fewer valid states (including _Ready_, _Success_, and _Failure_), the current state is stored in the _State_ field.
-For Algorithms with more than 23 valid states, additional state information may reside in the Content section in an Algorithm-specific format.
+If an Algorithm defines 47 or fewer valid states (including _Ready_, _Success_, and _Failure_), the current state is stored in the _State_ field.
+For Algorithms with more than 47 valid states, additional state information may reside in the Content section in an Algorithm-specific format.
 
 <<ACE-states-graph>> displays the default state transitions.
 
@@ -672,7 +694,7 @@ The following rules are generic and apply to all Algorithms (*SGR* means "State 
 SGR1:: The MDH's _State_ field reflects the current state whenever the CC is in _Ready_, _Success_, _Failure_, or any Error State.
 This ensures that these states can be unambiguously determined from the _State_ field alone, without inspecting other fields or the Content.
 
-SGR2:: Any transition listed in an Algorithm's specification may be triggered by performing an explicit `ace.setst` operation (<<ACE-instruction-setst>>), or may be induced by certain conditions specified in the Algorithm's specification.
+SGR2:: Any transition listed in an Algorithm's specification may be triggered by performing an explicit `ace.setst` operation (<<ACE-instruction-setst>>), or may be induced by certain conditions specified in the Algorithm's specification. Transitions to and from _Incomplete_ states use the `ace.mgmt` instruction.
 
 SGR3:: In States _Success_ and _Failure_, only the following ACE instructions are permitted: `ace.mgmt`, `ace.load`, `ace.store`, `ace.clear`, `ace.size`, `ace.setst`, `ace.getmd*`, `ace.getst`, `ace.clone`, `ace.restrict*`, and `ace.derive` where the source CR is in State _Success_ or _Failure_and the source endpoint is one of its fields that can be exported, as described in the specification of the Algorithm.
 Reading such a field is not a cryptographic operation, so it is compatible with the rule that no
@@ -704,7 +726,7 @@ SGR7:: Upon transitioning to an Error State, the Content of a CR beyond the MDH 
 Internal resources associated with the Content shall also be released,
 including any ADS, and the _AuxDataLen_ field is set to 0.
 The CR then retains only the MDH.
-Accordingly, `_ConfigStatus_` is always set to `ace_cfgst_complete`.
+Since the CR is in an Error State, it is in a Complete State.
 
 SGR8:: The transitions from _Unconfigured_ to any Error State result from configuration instructions, or
 from a usage instruction: no Algorithm allows one in State _Unconfigured_, so issuing one
@@ -727,35 +749,18 @@ Such an attempt can be considered an operation that would cause a transition to 
 SGR14:: Any _usage_ instruction that would violate the Usage Control policies will not perform its operation, and raises ACE exception `ace_exc_privilege_violation`
 (see <<ACE-error-architecture>> for the behavior if the Privileged Architecture is not implemented).
 
-
-// ////////////////////////////////////////////////////////////////////
-
-[[ACE-ConfigStatus]]
-===== _ConfigStatus_ Field
-
-The admissible values of this field are given in the table below.
-
-[[ACE-SC-sealing-status]]
-.Encoding of _ConfigStatus_ field
-[float="center",align="center",cols="^7%,<25%,<68%",options="header"]
-|===
-| Value | Mnemonic                  | Description
-|   0   | `ace_cfgst_complete`      | The CR is fully configured and ready to operate.
-|   1   | `ace_cfgst_provisioning`  | The CR is partially configured as a result of an interrupted provisioning operation.
-|   2   | `ace_cfgst_importing`     | The CR is partially configured as a result of an interrupted import operation.
-|   3   | `ace_cfgst_exporting`     | The CR has been placed in exporting mode, i.e., its contents have been encrypted and authenticated for export.
-|===
-
-Usage and cloning of a CR whose _ConfigStatus_ is not `ace_cfgst_complete` are not allowed:
+SGR15:: Usage and cloning of an _Incomplete_ CR is not allowed:
 Any attempt to do so raises ACE exception `ace_exc_privilege_violation`.
 
-Instructions `ace.size`, `ace.getmd*`, `ace.getst`, `ace.setst` with `#immed7` equal to `ace_state_unconfigured` or an
+SGR16:: Instructions `ace.size`, `ace.getmd*`, `ace.getst`, `ace.setst` with `#immed7` equal to `ace_state_unconfigured` or an
 Error State, `ace.clear`, and `ace.clearall`, which are normally considered usage instructions, are also allowed
-when the _ConfigStatus_ is not `ace_cfgst_complete`, together with `ace.mv`.
-`ace.load` is allowed in States _ace_cfgst_provisioning_ and _ace_cfgst_importing_,
-`ace.store` is allowed in State _ace_cfgst_exporting_.
+when the CR is _Incomplete_.
 
-// The information contained in this field must _not_ affect any of the lengths of <<ACE-length-rule>>.
+SGR17:: `ace.load` and `ace.mv` with a CR as destination
+are allowed in States _ace_cfgst_provisioning_, _ace_cfgst_importing_, _ace_cfgst_pp_importing_, and _ace_cfgst_es_exporting_,
+
+SGR18:: `ace.store` and `ace.mv` with a CR as source
+are allowed in States _ace_cfgst_exporting_, _ace_cfgst_pp_exporting_, and _ace_cfgst_es_exporting_.
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -989,7 +994,7 @@ Other conditions may be detected synchronously, i.e., at issue of an ACE instruc
 Data Access to a Fully Configured CR:::
 +
 --
-Issuing `ace.load`, `ace.store`, or `ace.mv` on a CR whose _ConfigStatus_ is `ace_cfgst_complete`
+Issuing `ace.load`, `ace.store`, or `ace.mv` on a CR in a Complete State
 raises ACE exception `ace_exc_complete_cr_data_access`. The instruction is well formed and the CR
 is valid; the CR is simply not open for a management operation, so this is a misuse rather than an
 encoding defect.
@@ -1259,7 +1264,7 @@ Internal values of SIV, SIV2, IMPQUAL are associated with this CR.
 Values from 33 to 63 are reserved; writing one leaves `acemanagedcr` unchanged.
 
 NOTE: Because the register is writable at any privilege level, the `acemanagedcr` check that `ace.mgmt`
-performs (<<ACE-instruction-mgmt>>) detects an accidentally interleaved management operation but
+performs (<<ACE-instruction-setst>>) detects an accidentally interleaved management operation but
 does not prevent a deliberate one: software that writes 32 can open a second operation and destroy
 the in-flight SIV, SIV2 and IMPQUAL values. Serializing management operations is therefore a
 software obligation (<<ACE-CR-representation>>). No confidentiality property depends on the check;
@@ -1471,7 +1476,7 @@ _This subsection is informative._
 
 Broadly speaking, and setting aside error handling, *Provisioning* consists of the following three steps:
 
-. Use `ace.mgmt` (<<ACE-instruction-mgmt>>) to prepare a CR to be provisioned, check the validity of MDH[63:0], and load the entire MDH in the CR.
+. Use `ace.mgmt` (<<ACE-instruction-setst>>) to prepare a CR to be provisioned, check the validity of MDH[63:0], and load the entire MDH in the CR.
 . Use `ace.load` (<<ACE-instruction-load>>) to load the rest of the provisioning information into the CR.
 . Use `ace.mgmt` to complete the provisioning process and make the CR available to software.
 
@@ -1531,12 +1536,12 @@ _Description_::
 
 This instruction requires that the CR be ready to import information and that the MDH has already been loaded by passing it as a parameter in a GPR pair (quartet for RV32), resp., vector register, to the `ace.mgmt` instruction used to open the CR for provisioning or import.
 
-If the _ConfigStatus_ field equals `ace_cfgst_complete`, ACE exception `ace_exc_complete_cr_data_access` is raised.
+If the CR is in a Complete State, ACE exception `ace_exc_complete_cr_data_access` is raised.
 
 [[ACE-cr-transfer-model,The CR transfer model]]
 *The CR transfer model.* The following holds for `ace.load` and for `ace.store`, and is stated here
 once. The implementation obtains the payload length `size` from the first 8 bytes of the MDH, which
-software supplies as part of the entire MDH block: the _ConfigStatus_ field identifies the payload
+software supplies as part of the entire MDH block: using the _State_ field the payload is identified as
 as a PI or an SCC, and the fields in <<ACE-length-rule>> determine its length. `size` excludes the
 MDH but, in the case of an SCC, includes SIV and, where present, SIV2 and IMPQUAL. Either
 instruction may transfer more than the effective XLEN. `acestart` is a byte offset into that
@@ -1608,9 +1613,9 @@ and saved to memory by the software.
 
 *Bound.* Let `imglen` be the serialized CR image length in bytes, excluding the MDH, and let `end` = min(`size`, `imglen`). For each _j_ from `acestart` to `end` − 1, `ace.store` writes the byte at offset _j_ after the MDH to memory address `Xs1 + %offset + `_j_. It never reads beyond the CR image.
 
-NOTE: `size` may exceed `imglen` because `ace_cfgst_exporting` does not distinguish a PI-shaped payload from an SCC-shaped one and therefore may specify the longer SCC length (<<ACE-length-rule>>). The bound prevents reads past the CR image into the CRF (<<ACE-cryptographic-registers>>). `ace.load` needs no equivalent bound because its _ConfigStatus_ identifies the payload type.
+NOTE: `size` may exceed `imglen` because `ace_cfgst_exporting` does not distinguish a PI-shaped payload from an SCC-shaped one and therefore may specify the longer SCC length (<<ACE-length-rule>>). The bound prevents reads past the CR image into the CRF (<<ACE-cryptographic-registers>>). `ace.load` needs no equivalent bound because its payload type is determined by the _State_ field.
 
-If the _ConfigStatus_ field is equal to `ace_cfgst_complete`, then ACE exception `ace_exc_complete_cr_data_access` is raised.
+If the CR is in a Complete State, then ACE exception `ace_exc_complete_cr_data_access` is raised.
 --
 
 // NOTE: Modifying the CR being used by the interrupted `ace.store` always forces
@@ -1763,8 +1768,8 @@ Any write, resp., read, past the serialized CR's length is ignored, resp., reads
 ====
 
 The four variants are given by the following table.
-For all variants, if the CR's _ConfigStatus_ is `ace_cfgst_complete`, ACE exception `ace_exc_complete_cr_data_access` is raised.
-If the CR's _ConfigStatus_ is not one of the values in the fourth column of its row, an illegal-instruction exception is raised without state change. A vector variant for which `vl * (SEW/8)` is not a multiple of 16 raises an illegal-instruction exception without state change; the V-enabled check is performed first.
+For all variants, if the CR is in a Complete State, ACE exception `ace_exc_complete_cr_data_access` is raised.
+If the CR's _State_ is not one of the values in the fourth column of its row, an illegal-instruction exception is raised without state change. A vector variant for which `vl * (SEW/8)` is not a multiple of 16 raises an illegal-instruction exception without state change; the V-enabled check is performed first.
 
 // In each of them `acestart` advances by
 // the number of bytes transferred: 16 in a scalar variant; and `vl * (SEW/8)` in a vector one.
@@ -1777,42 +1782,44 @@ If the CR's _ConfigStatus_ is not one of the values in the fourth column of its 
 .Variants of `ace.mv`
 [float="center",align="center",width="100%",cols="^10%,^18%,<44%,<28%",options="header"]
 |===
-| `Form` | Sub-opcode | Transfer | Admissible _ConfigStatus_
+| `Form` | Sub-opcode | Transfer | Admissible _State_
 
 | `0b01` | `rd` = `0b00001`
 | The 128-bit GPR operand at `rs2` is copied into the CR at offset `acestart`.
-| `ace_cfgst_provisioning`, `ace_cfgst_importing`
+| `ace_cfgst_provisioning`, `ace_cfgst_importing`, `ace_cfgst_pp_importing`, `ace_cfgst_es_importing`
 
 | `0b01` | `rd` = `0b00010`
 | `vl` elements of `V[rs2]` are moved into the CR at offset `acestart`.
-| `ace_cfgst_provisioning`, `ace_cfgst_importing`
+| `ace_cfgst_provisioning`, `ace_cfgst_importing`, `ace_cfgst_pp_importing`, `ace_cfgst_es_importing`
 
 | `0b10` | `rs2` = `0b00001`
 | 16 bytes of the CR at offset `acestart` are copied to the 128-bit GPR operand at `rd`.
-| `ace_cfgst_exporting`
+| `ace_cfgst_exporting`, `ace_cfgst_pp_exporting`, `ace_cfgst_es_exporting`
 
 | `0b10` | `rs2` = `0b00010`
 | `vl` elements of the CR at offset `acestart` are moved to `V[rd]`.
-| `ace_cfgst_exporting`
+| `ace_cfgst_exporting`, `ace_cfgst_pp_exporting`, `ace_cfgst_es_exporting`
 |===
 --
 
 // ////////////////////////////////////////////////////////////////////
 
 [[ACE-instruction-setst]]
-==== ace.setst
+==== ace.setst/ace.mgmt
 
 _Synopsis_::
 Change the state of the Algorithm encoded in the CC in a CR.
 
 _Mnemonic_::
-The `ace.setst` instruction admits three Forms, namely
+The `ace.sets/ace.mgmt` instruction admits four Forms, namely
 (((ACE, instruction, ace.setst)))
+(((ACE, instruction, ace.mgmt)))
 +
 [upperalpha]
-. `ace.setst Kd|K{Xd}, #immed7{fournbsp}{nbsp}{nbsp}{nbsp}` with no auxiliary input.
-. `ace.setst Kd|K{Xd}, #immed7, Xs{nbsp}{nbsp}` with an auxiliary input in a GPR.
-. `ace.setst Kd|K{Xd}, #immed7, Vs{nbsp}{nbsp}` with an auxiliary input in a vector register.
+. `ace.setst/ace.mgmt Kd|K{Xd}, #immed7{fournbsp}{nbsp}{nbsp}{nbsp}` with no auxiliary input.
+. `ace.setst/ace.mgmt Kd|K{Xd}, #immed7, Xs{nbsp}{nbsp}` with an auxiliary input in a GPR (RV64) or in a register pair (RV32).
+. `ace.setst/ace.mgmt Kd|K{Xd}, #immed7, Vs{nbsp}{nbsp}` with an auxiliary input in a vector register.
+. `ace.setst/ace.mgmt Kd|K{Xd}, #immed7, Xs{nbsp}{nbsp}` with an auxiliary input in two GPRs (RV64) or four GPRs (RV32).
 
 //
 
@@ -1825,8 +1832,8 @@ _Encoding_::
 {reg:[
     { bits:  7, name: 0x5b, attr: ['custom-2'] },
     { bits:  5, name: 'Kd|K{Xd}' },
-    { bits:  3, name: 'ace.setst', attr: ['0    0    1','0    1    0','0    1    1'] },
-    { bits:  5, name: 'rs1', attr: ["no aux input (0)",'Xs','Vs'] },
+    { bits:  3, name: ['ace.setst', 'ace.mgmt'], attr: ['0    0    1','0    1    0','0    1    1','1    1    0'] },
+    { bits:  5, name: 'rs1', attr: ["no aux input (0)",'Xs','Vs','Xs'] },
     { bits:  1, name: 'r' },
     { bits:  4, name: 0x0 },
     { bits:  7, name: 'immed7' },
@@ -1843,6 +1850,7 @@ The encodings of the three Forms are:
 . `ace.setst` = `0b001`. `rs1` = `0b00000`.
 . `ace.setst` = `0b010`.
 . `ace.setst` = `0b011`.
+. `ace.setst` = `0b110`.
 --
 
 // ////////////////////////////////////////////////////////////////////
@@ -1851,10 +1859,11 @@ _Description_::
 +
 --
 The instruction changes the _State_ and _StateExtension_ fields of the MDH of `Kd` or `K{Xd}`.
-It is used for two purposes:
+It is used for three purposes:
 [loweralpha]
 . Advance from one stage of an Algorithm to another (for instance, from initialization of a hash function to data absorption and then to digest finalization); and
 . Set specific state information of an Algorithm (such as elliptic curve points or private/public keys), which is intended to be orthogonal to the states mentioned in the previous point, or to provide prerequisites for entering another state that can be set independently.
+. Set up a management operation and complete it.
 
 `#immed7` is a constant from a set of admissible values.
 These values include both general values, which apply to all Algorithms, as well as values specific to the Algorithm encoded in a CR.
@@ -1875,67 +1884,14 @@ This invalidates the CR contents and may partially or fully release its resource
 * Setting an Error State does _not_ trigger an exception, even if reaching that state implicitly would normally raise one.
 Further usage of the same CR—for instance, a later `ace.exec` or `ace.setst` to a valid state—will raise exceptions in that case.
 
-Certain values of `#immed7`, depending on the Algorithm, may be used to change _StateExtension_ instead, so that it can be used as state information that is somewhat orthogonal to the _State_ field.
+Values of `#immed7` {ge} 64, depending on the Algorithm, may be used to change _StateExtension_ instead, so that it can be used as state information that is somewhat orthogonal to the _State_ field.
 
 Using an `#immed7` that is not supported by the architecture or by the current Algorithm causes the CR to transition to Error State _Invalid_.
 --
 
-// ////////////////////////////////////////////////////////////////////
-
-[[ACE-instruction-mgmt]]
-==== ace.mgmt
-
-_Synopsis_::
-Tracks the states of management operations of a CR.
-
-_Mnemonic_::
-The `ace.mgmt` instruction admits three Forms, namely
-(((ACE, instruction, ace.mgmt)))
-+
-[upperalpha]
-. `ace.mgmt Kd|K{Xd}, #immed7{fournbsp}{nbsp}{nbsp}{nbsp}` with no auxiliary input (implicit zero 128-bit string).
-. `ace.mgmt Kd|K{Xd}, #immed7, Xs{nbsp}{nbsp}` with an auxiliary input in two or four GPRs.
-. `ace.mgmt Kd|K{Xd}, #immed7, Vs{nbsp}{nbsp}` with an auxiliary input in a vector register.
-
-//
-
-_Encoding_::
-`ace.mgmt` is an R-type instruction.  Its encoding is identical to that of `ace.setst` except for the most significant bit of `funct3`, which is set to `1`.
-+
---
-[wavedrom, ,svg]
-....
-{reg:[
-    { bits:  7, name: 0x5b, attr: ['custom-2'] },
-    { bits:  5, name: 'Kd|K{Xd}' },
-    { bits:  3, name: 'ace.mgmt', attr: ['1    0    1','1    1    0','1    1    1'] },
-    { bits:  5, name: 'rs1', attr: ["no aux input",'Xs','Vs'] },
-    { bits:  1, name: 'r' },
-    { bits:  4, name: 0x0 },
-    { bits:  7, name: 'immed7' },
-]}
-....
-
-The encodings of the three Forms are:
-[upperalpha]
-. `ace.mgmt` = `0b101`. `rs1` = `0b00000`.
-. `ace.mgmt` = `0b110`.
-. `ace.mgmt` = `0b111`.
---
-
-// ////////////////////////////////////////////////////////////////////
-
-_Description_::
-+
---
-The instruction is used to initiate and complete provisioning or export/import operations, also setting  _ConfigStatus_ field accordingly.
-The instruction may also receive the MDH of `Kd` or `K{Xd}` beforehand. In this case the change to _ConfigStatus_ is performed after the import of the MDH.
-
-The three Forms distinguish from each other as follows:
-[upperalpha]
-. Only sets the _ConfigStatus_ field of the MDH according to the value of `#immed7`.
-. The MDH is the 128-bit GPR operand at `Xs` (`GR2`).
-. The MDH is in the 128 lowest bits of `Vs`. The vector itself must be at least 128 bits long.
+When the `#immed7` value is onw of 56, 57, or 58, , the instruction is used to initiate provisioning or export/import operations.
+The instruction may also receive the MDH of `Kd` or `K{Xd}` beforehand in one of Forms C or D.
+In this case the change to _State_ is performed after the import of the MDH.
 
 The special values of `#immed7` used to initiate a provisioning, import, or export process, and to complete it afterwards, are listed in the following table:
 
@@ -1943,19 +1899,33 @@ The special values of `#immed7` used to initiate a provisioning, import, or expo
 .Values (decimal) of `#immed7` to be used for provisioning, importing, and exporting
 [float="center",align="center",width="100%",cols="^7%,<27%,<66%",options="header"]
 |===
-| Value | Mnemonic                 |  Description
-|  0   | `ace_CR_provision_start`  |  Prepare a CR for provisioning keys and metadata into it.
-|  1   | `ace_CR_import_start`     |  Prepare a CR for importing an SCC into it.
-|  2   | `ace_CR_export_start`     |  Prepare a CR for exporting it as an SCC (if not yet in the correct format).
-|  3   | `ace_CR_management_end`   |  Complete current management operation. Semantics depend on _ConfigStatus_.
+| Value | Mnemonic                  |  Description
+|  56   | `ace_cfgst_provisioning`  |  Prepare a CR for provisioning keys and metadata into it.
+|  57   | `ace_cfgst_exporting`     |  Prepare a CR for exporting it as an SCC (if not yet in the correct format).
+|  58   | `ace_cfgst_importing`     |  Prepare a CR for importing an SCC into it.
+|  63   | `ace_management_end`      |  Complete current management operation. Semantics depend on _State_.
 |===
---
-+
-Values of `#immed7` other than 0–3 are reserved; issuing `ace.mgmt` with a
-reserved value raises an illegal-instruction exception. This allows future functionality to be
-emulated. A handler that does not recognize the value transitions the target CR to Error State
-_Invalid_.
-+
+
+These values of `#immed7` can be used in all Forms, whereby
+[upperalpha]
+. Only sets the _State_ field of the MDH according to the value of `#immed7` and the current _State_ of the CR.
+. The lower 64 bits of the MDH are in the 64-bit GPR operand at `Xs` (`GR2`).
+. The MDH is in the 128 lowest bits of `Vs`. The vector itself must be at least 128 bits long.
+. The MDH is the 128-bit GPR operand at `Xs` (`GR2`).
+
+Depending on the previous state of the CR, the actual _State_ after `ace.mgmt` may be different:
+
+. After `ace.mgmt`, with #immed7 = `ace_cfgst_importing`, the CR's _State_ becomes `ace_cfgst_pp_importing` if the data to import correpond to a partially provisioned CR, and `ace_cfgst_es_importing` if the data being imported corresponds to an CR that was in an Error State.
+. After `ace.mgmt`, with #immed7 = `ace_cfgst_exporting`, the CR's _State_ becomes `ace_cfgst_pp_exporting` if the CR being exported was a partially provisioned one, and `ace_cfgst_es_exporting` if CR begin exported was in an Error State.
+
+// 56  `ace_cfgst_provisioning`
+// 57  `ace_cfgst_exporting`
+// 58  `ace_cfgst_importing`
+// 59  `ace_cfgst_pp_exporting`
+// 60  `ace_cfgst_pp_importing`
+// 61  `ace_cfgst_es_exporting`
+// 62  `ace_cfgst_es_importing`
+
 The semantics of `ace.mgmt` are as follows.
 Three steps are common to every operation below and are not repeated in each of them:
 `ace.mgmt` first checks that `acemanagedcr` holds either the target CR's number or 32, and
@@ -1968,12 +1938,15 @@ one; and in either case it clears `acestart`.
 --
 Before issuing `ace.mgmt`, software must obtain the MDH. Let `ml` be this value.
 
-NOTE: In the case we are starting an import process, `ml` is saved by software it in its local state.
+NOTE: In the case we are starting an import process, `ml` must be first saved by software it in its local state.
 It is provided as the auxiliary input to the `ace.mgmt` operation used to complete the process
-to restore the _ConfigStatus_ value saved by software.
+to restore the _State_ value saved by software.
 
-The `ace.mgmt` operation used to start a provisioning, resp., import process must be Form B or C in order to provide `ml`.
+The `ace.mgmt` operation used to start a provisioning, resp., import process must be Form C or D in order to provide `ml`.
 Form A with `ace_CR_provision_start` or `ace_CR_import_start` is equivalent to passing a 128-bit zero string as the auxiliary input.
+Form B with `ace_CR_provision_start` or `ace_CR_import_start` is equivalent to passing the auxiliary input as the 64 lower bits of the MDH
+and setting the upper 64 bits to 0.
+
 `ace.mgmt` then performs following operations:
 
 .. The target CR is cleared.
@@ -1982,10 +1955,9 @@ Form A with `ace_CR_provision_start` or `ace_CR_import_start` is equivalent to p
 .. In case of provisioning:
 ... _State_ is set to _Unconfigured_ and _StateExtension_ to 0, i.e., during provisioning, _State_ is _Unconfigured_.
 ... `AuxDataLen` must be 0. If `AuxDataLen` is not zero in the MDH of a PI, provisioning must stop,
-_ConfigStatus_ is set to `ace_cfgst_complete`,
-and the CR is transitioned to Error State _Invalid_.
+and the CR is transitioned to Error State _Invalid_ (which is a Complete State).
 .. In other cases where the Metadata is invalid, such as, for instance, a nonzero reserved field:
-_ConfigStatus_ is set to `ace_cfgst_complete`, and the CR is transitioned to Error State _Invalid_.
+the CR is transitioned to Error State _Invalid_.
 +
 NOTE: ACE exception `ace_exc_unsupported` is raised only at provisioning or import time for an invalid or unsupported Algorithm or SCA protection level.
 The CR's _State_ field is already set to Error State `ace_state_unsupported` by the hardware that raised the exception, so that the CR cannot be used and the caller can detect this. A handler that cannot resolve the condition therefore needs to do nothing further. A handler that intends to emulate the Algorithm instead sets the CR's `*lcrstatus` field to _Off_, so that any access is trapped for emulation (see <<ACE-CSR-lcrstatus>>); the emulator then holds the CR in its own protected memory and services every operation on it, including SCC import and export.
@@ -1993,24 +1965,30 @@ ACE exception `ace_exc_unsupported` is _not_ raised when accessing or using a CR
 
 .. The implementation attempts to allocate CRF capacity according to the requirements of the _Algorithm_, _AlgorithmPolicy_, and _SCProtection_ fields of the MDH, as prescribed by <<ACE-length-rule>>. No other field must affect the amount of capacity required.
     If capacity allocation is not possible, ACE exception `ace_exc_out_of_memory` is raised.
-.. _ConfigStatus_ is set to `ace_cfgst_provisioning`, resp., `ace_cfgst_importing`.
+.. If provisioning: CR._State_ is set to `ace_cfgst_provisioning`;
+.. If importing: CR._State_ depending on `ml`._State_:
+... If `ml`._State_ is an Error State, then CR._State_ is set to `ace_cfgst_es_importing`;
+... If `ml`._State_ is a Valid State (i.e. Complete, but not Error), then CR._State_ is set to `ace_cfgst_importing`;
+... If `ml`._State_ = `ace_cfgst_pp_exporting`, then CR._State_ is set to `ace_cfgst_pp_importing`;
+... else CR._State_ is set to `ace_cfgst_importing`.
 --
 
 * *`ace.mgmt` is issued with `ace_CR_management_end`*:
-`ace.mgmt` with immediate `ace_CR_management_end` reads first the MDH of the target CR.
-Depending on whether MDH._ConfigStatus_ is
-`ace_cfgst_provisioning`,
-`ace_cfgst_importing`, resp.
-`ace_cfgst_exporting`, the instruction will proceed to complete a
+`ace.mgmt` with immediate `ace_cfgst_provisioning` reads first the MDH of the target CR.
+Depending on whether MDH._State_ is
+(a) `ace_cfgst_provisioning`,
+(b) `ace_cfgst_importing`, `ace_cfgst_pp_importing`, or `ace_cfgst_es_importing` resp.
+(c) `ace_cfgst_exporting`, `ace_cfgst_pp_exporting`, or `ace_cfgst_es_exporting`,
+the instruction will proceed to complete a
 provisioning, importing, resp., exporting process, which are described next.
 
 * *`ace.mgmt` is used to complete a provisioning process.*
 +
 --
-In this case, `ace.mgmt` does not need a saved metadata header from the start of the provisioning process, hence if a Form B or C was used in place of Form A, the auxiliary input is simply ignored.
+In this case, `ace.mgmt` does not need a saved metadata header from the start of the provisioning process, hence if a Form B, C, or D, was used in place of Form A, the auxiliary input is simply ignored.
 
 The operation makes the provisioned CR available to software (“sealing”) and sets
-_State_ to _Ready_, _StateExtension_ to 0, and _ConfigStatus_ to `ace_cfgst_complete`.
+_State_ to _Ready_ and _StateExtension_ to 0.
 
 The ACE unit performs any necessary readjustment of the CR's content to turn it into the format internally consumed by the ACE Unit.
 
@@ -2023,88 +2001,94 @@ This guarantees that such material is not leaked.
 * *`ace.mgmt` is used to complete an import process.*
 +
 --
-The software uses Form B, resp. Form C, of `ace.mgmt` to pass along the value of `ml` saved when the import process was started. This is the MDH image to be authenticated as ``AD[0]``. If a Form A is used, the effect is as if the instruction received a zero auxiliary input.
+The software uses Form B, resp. Form C, of `ace.mgmt` to pass along the value of `ml` saved when the import process was started.
+This is the MDH image to be authenticated as ``AD[0]``.
+If a Form A is used, the effect is as if the instruction received a zero auxiliary input, i.e., in what follows it is as if `ml` is zero.
+If a Form B is used, the effect is as if the instruction received an input with the lower 64 bits set to the passed auxiliary value `ml`, and the upper 64 bits set to 0, i.e., in what follows it is as if the 64 upper bits of `ml` are set to zero.
 
-If `ml`._ConfigStatus_ is `ace_cfgst_complete`, the operation
-restores the CR's _ConfigStatus_ to `ace_cfgst_complete`, and then
+If `ml`._State_ is a Complete State, the operation
+restores the saved CR's _State_ from `ml`, and then
 decrypts and authenticates the imported SCC, and makes the CR available to software.
-Otherwise, it just restores the CR's _ConfigStatus_ to the saved `ml`._ConfigStatus_:
+Otherwise:
 
-.. If `ml`._ConfigStatus_ = `ace_cfgst_complete` (we are importing the export of a fully configured CR)
-... _ConfigStatus_ is set to `ace_cfgst_complete`.
+.. If `ml`._State_ is a Complete State (we are importing the export of a fully configured CR)
+... CR.MDH._State_ is set to `ml`._State_.
 ... The ACE unit decrypts and authenticates the CR's content.
 ... If authentication fails, the target CR is transitioned to Error State _Authentication Failed_. No exception is raised.
 ... The ACE unit performs any necessary readjustment of the CR's content to turn it into the format internally consumed by the ACE Unit.
-.. If `ml`._ConfigStatus_ {ne} `ace_cfgst_complete`  (we are either importing the export of a not fully configured CR or a nested CR export):
-... _ConfigStatus_ is set to `ml`._ConfigStatus_.
-No other field of the MDH is written from `ml`.
+.. If `ml`._State_ is not a Complete State (we are either importing the export of a not fully configured CR or a nested CR export):
+... CR.MDH._State_ is set to `ml`._State_.
 --
 
 * *`ace.mgmt` is used to start an export process.*
 +
 --
 Let `ml` <- the MDH of the CR.
-Software must first save this value in its local state to restore its _ConfigStatus_ when completing the export process.
-`ace.mgmt` can be of any form, but any auxiliary input provided through Form B or C is ignored.
+Software must first save this value in its local state to restore its _State_ when completing the export process.
+`ace.mgmt` can be of any form, but any auxiliary input provided through Forms B, C, or D is ignored.
 `ace.mgmt` performs following operations:
 
-.. If `ml`._ConfigStatus_ = `ace_cfgst_complete`:
+.. If `ml`._State_ is a Complete or Error State:
 +
 Prepare the CR to produce an SCC.
-This includes encrypting its contents and computing the authentication tag(s):
+This includes encrypting its contents (empty in the case of an Error State) and computing the authentication tag(s):
 The architecturally observable behavior is described in <<ACE-CR-representation>>.
 
-.. If `ml`._ConfigStatus_ {ne} `ace_cfgst_complete` (we are exporting a not fully configured CR or we are initiating a nested CR export):
+... if `ml`._State_ is an Error State, CR's _State_ is set to `ace_cfgst_es_exporting`.
+
+.. if `ml`._State_ is in a Valid State, CR's _State_ is set to `ace_cfgst_exporting`.
+
+... If `ml`._State_ is not a Complete State: (we are exporting a not fully configured CR or we are initiating a nested CR export):
 +
 No encryption or authentication occurs; the contents of the CR are exported verbatim, in the same order in which they appear in the PI (for a partially provisioned CR) or in the SCC (for a partially imported CR, or a CR previously prepared for export whose export process was itself interrupted).
-.. The CR's _ConfigStatus_ is set to `ace_cfgst_exporting`. This is the value on which
-   `ace.store` (<<ACE-instruction-store>>) and the CR-reading variants of `ace.mv`
-   (<<ACE-instruction-mv>>) are gated, so no export can proceed until it is set.
+... The CR's _State_ is set to `ace_cfgst_pp_exporting`.
+
+These values of CR._State_  are the value on which `ace.store` (<<ACE-instruction-store>>) and the CR-reading variants of `ace.mv` (<<ACE-instruction-mv>>) are gated, so no export can proceed until CR._State_ is set.
 --
 
 * *`ace.mgmt` is used to complete an export process.*
 +
 --
-The software uses Form B, resp. Form C, of `ace.mgmt` to pass along the value of `ml` saved by the software in its own state upon initiation of the export process. If a Form A is used, the effect is as if the instruction received a zero auxiliary input.
+The software uses Form B, C, or D, of `ace.mgmt` to pass along the value of `ml` saved by the software in its own state upon initiation of the export process. If a Form A is used, the effect is as if the instruction received a zero auxiliary input.
+Form B with is equivalent to passing a 128-bit input here the 64 lower bits of the MDH are set to the passed value and the upper 64 bits are set to 0.
+
 Let `ml` be this auxiliary input.
 
 Then:
 
-.. If `ml`._ConfigStatus_ = `ace_cfgst_complete`, the instruction makes the exported CR available
-to the ACE unit again in the clear format, and allows software to access it.
-The implementation must restore the state of the CR to the state it was in when the export process was initiated.
-This may involve decrypting its contents or restoring them from an internal backup:
-The architecturally observable behavior is described in <<ACE-CR-representation>>.
+.. If `ml`._State_ is a Complete State (i.e., including Error States), the instruction makes the exported CR available
+to the ACE unit again in the clear format, and allows software to access it:
+... The implementation must restore the state of the CR to the state it was in when the export process was initiated:
+  This can be done by decrypting its contents or, alternatively, restoring them from an internal backup.
+// The architecturally observable behavior is described in <<ACE-CR-representation>>.
 
-.. If `ml`._ConfigStatus_ {ne} `ace_cfgst_complete`, no changes to the CR's contents are made.
+.. If `ml`._State_ is not a Complete State, no changes to the CR's contents are made.
 
-.. The CR's _ConfigStatus_ is set to `ml`._ConfigStatus_.
+.. The CR's _State_ is set to `ml`._State_.
 --
 
-* *If `ace_CR_management_end` is issued when the target CR's _ConfigStatus_ is `ace_cfgst_complete`* (i.e., no management operation open on he target CR), the instruction does not perform any state change and raises an illegal-instruction exception.
+* *If `ace_CR_management_end` is issued when the target CR's _State_ is a Complete State* (i.e., no management operation open on the target CR), the instruction does not perform any state change and raises an illegal-instruction exception.
 
 [IMPORTANT]
 ====
-The auxiliary operand of a completing `ace.mgmt` is consumed for *one* purpose only: its
-_ConfigStatus_ field restores the CR's _ConfigStatus_ to the value that field held when the
+The auxiliary operand of a completing `ace.mgmt` is consumed for *one* purpose only:
+its _State_ field restores the CR's _State_ to the value that field held when the
 management operation was started, which may have been modified in the interim, for instance by
-an exception taken during the operation. *No other field of the MDH is written from `ml`*, and
+an exception taken during the operation. No other field of the MDH is written from `ml`, and
 the operand has no other effect on the CR. In particular `ace.mgmt` is not a means of
-substituting metadata into a CR: _Algorithm_, _AlgorithmPolicy_, _KeyType_, _SCProtection_,
-_UsagePolicy_, _Locality_, _ExpirationDate_ and every other field retain the values the CR
-already held. Narrowing an existing CC's policies is the exclusive province of `ace.restrict*`
-(<<ACE-instruction-restrict>>), which can only remove permissions, never grant them.
+substituting any other metadata into a CR.
 ====
 
 * General rules:
 
-** Whenever `ace.mgmt` fails for any other reason, the target CR is cleared.
+** Whenever `ace.mgmt` fails for any other reason, the target CR transitions to Error State `ace_state_invalid`.
 
 ** The full provisioning, export, and import operations are described in detail in <<ACE-export-import-algorithms>>.
 
-** Whenever `_ConfigStatus_` transitions from `ace_cfgst_importing` to `ace_cfgst_complete`, the implementation must authenticate the architecture-defined SCC segment before any decrypted Content becomes usable, regardless of whether the serialized bytes were supplied by `ace.load`, `ace.mv`, trap-and-emulation, or another architecturally permitted transfer mechanism. On authentication failure, the CR must be cryptographically erased and transitioned to Error State `ace_state_import_auth`; it must not transiently or architecturally enter a usable state.
+** Whenever _State_ transitions from `ace_cfgst_importing` to a Complete State, the implementation must authenticate the architecture-defined SCC segment before any decrypted Content becomes usable, regardless of whether the serialized bytes were supplied by `ace.load`, `ace.mv`, trap-and-emulation, or another architecturally permitted transfer mechanism. On authentication failure, the CR must be cryptographically erased and transitioned to Error State `ace_state_import_auth`; it must not transiently or architecturally enter a usable state.
 
-** Whenever `_ConfigStatus_` transitions from `ace_cfgst_complete` to `ace_cfgst_exporting`, the implementation must generate the SCC as specified in <<ACE-export-import-algorithms>>.
+** Whenever _State_ transitions a Complete State to `ace_cfgst_exporting`, the implementation must generate the SCC, including SIV, SIV2, and IMPQUAL,
+as specified in <<ACE-export-import-algorithms>>.
 
 //
 
@@ -2181,7 +2165,7 @@ In this case, bit `h` must be 0; the combination `v` = `h` = 1 is an illegal ins
 _Description_::
 +
 --
-If the CR has _ConfigStatus_ = _Unconfigured_, these instructions return zero (which includes the value of the field _ConfigStatus_ = _Unconfigured_).
+If the CR has _State_ = _Unconfigured_, these instructions return zero (which includes the value of the field _State_ = _Unconfigured_).
 
 On RV64:
 
@@ -2436,9 +2420,9 @@ Clones the source CR `Ks` (or the CR indexed by `Xs`) into the destination CR `K
 
 The destination CR becomes a perfect copy of the source CR: all internal data, including MDH and internal state, are copied verbatim.
 
-The instruction achieves the same result as exporting the source CR to an SCC and importing the SCC into the destination CR, except that it is not allowed if the source CR's _ConfigStatus_ is not `ace_cfgst_complete`.
+The instruction achieves the same result as exporting the source CR to an SCC and importing the SCC into the destination CR, except that it is not allowed if the source CR's _State_ is not a Complete State.
 
-If the destination CR's _ConfigStatus_ is not `ace_cfgst_complete`, the instruction performs no operation and raises ACE exception `ace_exc_privilege_violation`. Overwriting a CR whose management operation is still open would discard that operation and leave `acemanagedcr` and the `SIV`, `SIV2` and `IMPQUAL` storage inconsistent with it.
+If the destination CR's _State_ is not a Complete State, the instruction performs no operation and raises ACE exception `ace_exc_privilege_violation`. Overwriting a CR whose management operation is still open would discard that operation and leave `acemanagedcr` and the `SIV`, `SIV2` and `IMPQUAL` storage inconsistent with it.
 --
 
 // ////////////////////////////////////////////////////////////////////
@@ -2571,7 +2555,7 @@ Preflight checks: `ace.derive` performs the following checks, in order before an
 . Raise illegal-instruction if the resolved indices are equal.
 . Evaluate _UsagePolicy_ and _ExpirationDate_ of BOTH CRs; on any violation,
 raise the corresponding exception/transition with NO state change to either CR.
-. Validate _State_, _StateExtension_, and _ConfigStatus_ of both CRs against the endpoints
+. Validate _State_, _StateExtension_, and _State_ of both CRs against the endpoints
 selected by Form; the source CR must be in a state that allows it to output values
 (this can be either that it contains information that can be transferred or that it
 accepts Form C `ace.exec` instructions), and the destination CR be in a state that allows it to receive values
@@ -3012,7 +2996,7 @@ IRR2:: `ace.setst` is uninterruptible under every condition defined by this spec
 
 IRR3:: Long-running ACE operations that access no external memory—including `ace.setst`, `ace.mgmt`, and `ace.exec` or `ace.derive` forms that do not access GPRs, vector registers, or the ACEIOBUF—continue while the hart is preempted. If an interrupted operation is still running when a handler accesses its CR, the hart waits for completion before resuming. Should another interrupt occur while instruction continues to execute, the second handler must to wait as well.
 
-NOTE: Although `ace.mgmt` is uninterruptible, the management processes bracketed by its instructions remain interruptible between constituent instructions (<<ACE-instruction-mgmt>>).
+NOTE: Although `ace.mgmt` is uninterruptible, the management processes bracketed by its instructions remain interruptible between constituent instructions (<<ACE-instruction-setst>>).
 
 //
 
@@ -3265,7 +3249,7 @@ is:
   `n + 1` after the decryption of the first block of `Content2[]` is complete,
   and `n + m` after the decryption of `Content2[]` is complete.
 
-This described the semantics of `acestart` when `ace.mgmt` it is used complete the import of a SCC (and the SCC's _ConfigStatus_ is _ace_cfgst_complete_), after which a conversion from the external format to the internal format is performed.
+This described the semantics of `acestart` when `ace.mgmt` it is used complete the import of a SCC (and the SCC's _State_ is a Complete State), after which a conversion from the external format to the internal format is performed.
 
 ////
 
@@ -3564,7 +3548,7 @@ function SCC_Decrypt(AD[] : array of bits(128), N : bits(96), sep: bits(1),
 [[ACE-SCC-export]]
 ==== Generation of an SCC from a Fully Configured CR
 
-If the _ConfigStatus_ field is set to `ace_cfgst_complete`, then ``K(i)`` is fully provisioned,
+If the _State_ field is set to a Complete State (which, we recall, includes also Error States), then ``K(i)`` is fully provisioned,
 and opening the CR for export (`ace.mgmt Kd|K{Xd}, #ace_CR_export_start`) performs the following steps
 to create the serialized, encrypted and authenticated SCC from the CR.
 
@@ -3575,7 +3559,7 @@ However, exporting a non-fully configured CR may produce an _AuxDataLen_ value o
 .Exporting a Fully Configured CR ``K(i)``
 --
 . First, the Algorithm-dependent data is processed:
-.. `saved_MDH` <- the *initial* MDH of ``K(i)``, that is the image with _ConfigStatus_ = `ace_cfgst_complete` that software saved before issuing `#ace_CR_export_start`, ``len_AD`` <- 1
+.. `saved_MDH` <- the *initial* MDH of ``K(i)``, that is the image with _State_ being a Complete State that software saved before issuing `#ace_CR_export_start`, ``len_AD`` <- 1
 .. ``AD[0]`` <- `saved_MDH`
 .. foreach(_j_ from 0 to 10) do:
 ... If `saved_MDH`._Locality_ includes Locality #j, then ``AD[len_AD]`` <-  ``LST[``_j_``]``, ``len_AD`` <- ``len_AD`` + 1
@@ -3605,7 +3589,7 @@ first payload changes; an attacker cannot graft the Implementation-Specific ADS 
 ====
 If an export operation is completed prematurely, an authentication error results upon import (see next section).
 If an import operation is completed prematurely, an authentication error results.
-If any of the two operations is not completed, various types of error conditions will occur because _ConfigStatus_ is `ace_cfgst_complete`.
+If any of the two operations is not completed, various types of error conditions will occur because _State_ is a Complete State.
 ====
 
 // ////////////////////////////////////////////////////////////////////
@@ -3668,7 +3652,7 @@ The dependencies of the `ace.mgmt` instructions' timing are limited to very few 
 . SIV and SIV2 authentication failures on import;
 . IMPQUAL mismatches on import; and
 . Attempts to import SCCs whose total length exceeds what the target machine supports for the given Algorithm.
-  In this case, the implementation-dependent part is necessarily unsupported; it is skipped or only partially loaded, to be discarded without authenticating it; and only the architecture-dependent part is authenticated and decrypted (if the resulting _ConfigStatus_ is `ace_cfgst_complete`) and used.
+  In this case, the implementation-dependent part is necessarily unsupported; it is skipped or only partially loaded, to be discarded without authenticating it; and only the architecture-dependent part is authenticated and decrypted (if the resulting _State_ is a Complete State) and used.
 
 Apart from these factors, only the number of blocks to process may affect the timing of the `ace.mgmt` instructions.
 The timing of the processing of each block is independent of the actual data being processed.

@@ -11,7 +11,7 @@ specification and checks the spec's own invariants and worked examples:
   * the generic _State_ rules 1-14 of <<ACE-State-field>>, including the
     Error-State entry effects and the 32-byte Error-State export;
   * _ConfigStatus_ gating and its instruction exemption list;
-  * the provisioning / import / export flows of <<ACE-instruction-mgmt>>
+  * the provisioning / import / export flows of <<ACE-instruction-setst>>
     against the Book 4 sequences (<<ACE-management-code-snippets>>), in both the
     `Zklmv` (ace.mv) and `Zklmem` (ace.load / ace.store) variants, with
     interrupted-transfer resumption;
