@@ -398,9 +398,10 @@ All _Reserved_ bits, as well as bits unused by a given Algorithm, are zero.
 |   [18:16] |   3  | _SCProtection_    | Side-channel protection level. The levels of side-channel protection are defined in <<ACE-SCProtection-field>>.
 |   [24:19] |   6  | _State_           | Current state of the CR/Algorithm, encoded as an integer.  See <<ACE-State-field>>.
 |   [28:25] |   4  | _StateExtension_  | Available to Algorithms to extend the _State_ field with additional information. See <<ACE-State-field>>.
-|   [31:29] |   3  | Reserved          | Reserved for future use.
-|   [45:32] |  14  | _AuxDataLen_      | If different from 0 or 1, indicates that an additional, variable-length, implementation-dependent data section is added to the Content. The length of this _Auxiliary Data Section_ (ADS) is _AuxDataLen_ * 128 bits.
-|   [47:46] |   2  | _KeyType_         | This field determines whether the key is given by value, is a system-defined key, or randomly generated. See <<ACE-KeyType-field>> for more details.
+|   [30:29] |   2  | _KeyType_         | This field determines whether the key is given by value, is a system-defined key, or randomly generated. See <<ACE-KeyType-field>>.
+|   [31:31] |   1  | Reserved          | Reserved for future use.
+|   [45:32] |  14  | _AuxDataLen_      | If different from 0 or 1, indicates that an additional, variable-length, implementation-dependent data section is added to the Content.
+|   [47:46] |   2  | Reserved          | Reserved for future use.
 |   [61:48] |  14  | _AuxInfo_         | Algorithm-specific auxiliary information. Currently used only by ML-KEM and ML-DSA. This field is zero for Algorithms that do not use it.
 |   [63:62] |   2  | Reserved          | Reserved for future use.
 |   [68:64] |   5  | _UsagePolicy_     | Usage (Control) Policy. Determines which modes are allowed to use the CR.
@@ -1569,7 +1570,7 @@ hart-local CSRs, not to the CR image; Content bytes go to the CR image.
 If `end` < `size`, the ADS is discarded: the completing `ace.mgmt` sets
 `actual_impdatalen` = 1 per <<ACE-SCC-import>>.
 
-When a system-defined format is used (signaled by the _SystemFormat_ bit of the MDH), the semantics of `ace.load` are implementation-dependent.
+When a system-defined format is used, the semantics of `ace.load` are implementation-dependent.
 --
 
 // ////////////////////////////////////////////////////////////////////
@@ -1867,7 +1868,8 @@ These values include both general values, which apply to all Algorithms, as well
 Certain state values may require an auxiliary input, which may be passed as a 64-bit GPR operand
 `Xs` on RV64, a GPR pair `X[s+1] @ Xs` in RV32, or a vector (group) `Vs`. The vector (group) may be replaced by ACEIOBUF if `Zklio` is implemented.
 
-Normally, `#immed7` contains the _State_ value to be set. In most cases, after the instruction completes, the _State_ field takes the value specified in `#immed7`.  Some states may transition to a different state automatically after completing `ace.setst`.
+Normally, `#immed7` contains the _State_ value to be set. In most cases, after the instruction completes, the _State_ field takes the value specified in `#immed7`.
+Some states may transition to a different state automatically after completing `ace.setst`, and it is the norm in the case of nested CR management operations.
 
 The allowed state transitions are described in <<ACE-State-field>> and in the specifications of each Algorithm.
 Note that:
@@ -1880,12 +1882,12 @@ This invalidates the CR contents and may partially or fully release its resource
 * Setting an Error State does _not_ trigger an exception, even if reaching that state implicitly would normally raise one.
 Further usage of the same CR—for instance, a later `ace.exec` or `ace.setst` to a valid state—will raise exceptions in that case.
 
-Values of `#immed7` {ge} 64, depending on the Algorithm, may be used to change _StateExtension_ instead, so that it can be used as state information that is somewhat orthogonal to the _State_ field.
+Values of `#immed7` {ge} 64, depending on the Algorithm, may be used to change other state information in the CR, such as _StateExtension_.
 
 Using an `#immed7` that is not supported by the architecture or by the current Algorithm causes the CR to transition to Error State _Invalid_.
 --
 
-When the `#immed7` value is onw of 56, 57, or 58, the instruction is used to initiate provisioning or export/import operations, as described in <<ACE-management-immeds>>.
+When the `#immed7` value is one of 56, 57, or 58, the instruction is used to initiate provisioning, export, or import operations, as described in <<ACE-management-immeds>>.
 The values in the range 60-62 cannot be used directly as the `#immed7` of an `ace.mgmt` instruction: any attempt to do so will cause the CR to transition to Error State _Invalid_.
 The instruction may also receive the MDH of `Kd` or `K{Xd}` beforehand in one of Forms C or D.
 In this case the change to _State_ is performed after the import of the MDH.
@@ -2059,7 +2061,6 @@ Then:
 to the ACE unit again in the clear format, and allows software to access it:
 ... The implementation must restore the state of the CR to the state it was in when the export process was initiated:
   This can be done by decrypting its contents or, alternatively, restoring them from an internal backup.
-// The architecturally observable behavior is described in <<ACE-CR-representation>>.
 
 .. If `ml`._State_ is not a Complete State, no changes to the CR's contents are made.
 
@@ -2072,10 +2073,10 @@ to the ACE unit again in the clear format, and allows software to access it:
 ====
 The auxiliary operand of a completing `ace.mgmt` is consumed for *one* purpose only:
 its _State_ field restores the CR's _State_ to the value that field held when the
-management operation was started, which may have been modified in the interim, for instance by
-an exception taken during the operation. No other field of the MDH is written from `ml`, and
-the operand has no other effect on the CR. In particular `ace.mgmt` is not a means of
-substituting any other metadata into a CR.
+management operation was started, since it may have been modified in the interim,
+for instance by an exception taken during the operation. No other field of the MDH
+is written from `ml`, and the operand has no other effect on the CR. In particular,
+`ace.mgmt` is not a means of substituting any other metadata into a CR.
 ====
 
 * General rules:
@@ -2100,17 +2101,12 @@ Because state restoration requires internal buffering, implementers may choose e
 
 The above rules also allow an interrupted import to resume on another hart or on a different ACE unit implementation, provided the target unit supports the Algorithm encoded in the SCC.
 
-Software must allow interrupted configuration and export procedures to resume while maintaining binary compatibility across implementations with and without resumption support.
-Resuming transfer instructions is optional.
-A context-switch handler can force a restart by clearing partially configured or exported CRs at context save and restore.
-However, This should be an exceptional case:
-An SCC can be several kilobytes, so is not unrealistic to expect that
-a handler that unconditionally clears partially configured or exported CRs at every context switch
-may prevent a long management process from ever completing.
-System software must either let such a process make progress across context switches, or bound the
-size of the contexts it admits.
+Software must allow resumption of interrupted configuration or export procedures while remaining binary-compatible across implementations that may or may not support it.
+A context-switch handler can always force a restart by clearing partially configured or exported CRs at context save and restore time.
+Such clearing must be the exception, however:
+Since an SCC can span several kilobytes, a handler that unconditionally clears partially configured or exported CRs at every context switch may prevent a long management process from ever completing. System software must therefore either let such processes make progress across context switches or bound the sizes of the contexts it admits.
 
-Consequently, the ACE ISA is co-designed with the CR management sequences in <<ACE-management-code-snippets>> to support both nested context switching and lazy SCC loading.
+The ACE ISA has been co-designed with the CR management sequences in <<ACE-management-code-snippets>> to support resumption, nested context switching and lazy SCC loading,
 ====
 
 // ////////////////////////////////////////////////////////////////////
@@ -2126,8 +2122,8 @@ _Mnemonics_::
 --
 [%hardbreaks]
 `ace.getmdl{nbsp}Xd, Ks|K{Xs}`(((ACE, instruction, ace.getmdl)))
-`ace.getmd{nbsp}Xd, Ks|K{Xs}`(((ACE, instruction, ace.getmd)))
-`ace.getmdv{nbsp}{nbsp}Vd, Ks|K{Xs}`(((ACE, instruction, ace.getmdv)))
+`ace.getmd{nbsp}{nbsp}Xd, Ks|K{Xs}`(((ACE, instruction, ace.getmd)))
+`ace.getmdv{nbsp}Vd, Ks|K{Xs}`(((ACE, instruction, ace.getmdv)))
 --
 
 
@@ -2164,7 +2160,7 @@ In this case, bit `h` must be 0; the combination `v` = `h` = 1 is an illegal ins
 _Description_::
 +
 --
-If the CR has _State_ = _Unconfigured_, these instructions return zero (which includes the value of the field _State_ = _Unconfigured_).
+If the CR has _State_ = _Unconfigured_, these instructions return zero (which includes _State_ = _Unconfigured_).
 
 On RV64:
 
@@ -2273,8 +2269,8 @@ and every other field of `Xs` is ignored.
   `Xs`._SCProtection_ is a _request_ to raise the side-channel protection of the CC to
   that level, and is subject to the following rules.
 
-** The request may only strengthen side-channel protection.
-   Any request for a weaker level than the current one causes the CR to transition to Error State _Invalid_.
+** Side-channel protection may not be downgraded.
+   Any such request causes the CR to transition to Error State _Invalid_.
    The ordering of the implementation-custom level (6 or 7) relative to the architected levels is implementation-defined.
 
 ** The request may fail because a stronger SCA protection level may requires more CRF capacity.
@@ -3112,7 +3108,6 @@ Both formats begin with the 128-bit MDH described in <<ACE-Metadata>>.
 
 . The length of a *Provisioning Input* is determined by, and only by, the fields
   _Algorithm_, _AlgorithmPolicy_ and _KeyType_.
-+
 In particular, it does *not* depend on _AuxDataLen_: a PI carries no
 implementation-specific data, and _AuxDataLen_ must be zero in the MDH of a PI.
 It also does not depend on _StateExtension_, which must likewise be zero in the
@@ -3139,7 +3134,7 @@ SCC length to be computed from their first eight bytes alone, as required by `ac
 (<<ACE-instruction-load>>), `ace.store` (<<ACE-instruction-store>>) and Form B of
 `ace.size` (<<ACE-instruction-size>>).
 
-No other MDH field must affect any of these three lengths.
+No other MDH field may affect any of these three lengths.
 
 // ////////////////////////////////////////////////////////////////////
 
