@@ -553,10 +553,10 @@ When a CR is being provisioned, exported, or imported, it is in one of the follo
 |   56   | `ace_cfgst_provisioning` | The CR is being configured.
 |   57   | `ace_cfgst_exporting`    | The CR, which was in a _Valid_ state, has been placed in exporting mode, i.e., its contents have been encrypted and authenticated for export.
 |   58   | `ace_cfgst_importing`    | The CR, which was in a _Valid_ state, has been placed in importing mode.
-|   59   | `ace_cfgst_pp_exporting` | A partially provisioned CR has been placed in exporting mode.
-|   60   | `ace_cfgst_pp_importing` | A partially provisioned CR which has been exported is being reimported.
-|   61   | `ace_cfgst_es_exporting` | A CR in an Error State has been placed in exporting mode.
-|   62   | `ace_cfgst_es_importing` | A CR in an Error State which has been exported is being reimported.
+|   59   | `ace_cfgst_exporting_pp` | A partially provisioned CR has been placed in exporting mode.
+|   60   | `ace_cfgst_importing_pp` | A partially provisioned CR which has been exported is being reimported.
+|   61   | `ace_cfgst_exporting_es` | A CR in an Error State has been placed in exporting mode.
+|   62   | `ace_cfgst_importing_es` | A CR in an Error State which has been exported is being reimported.
 |   63   | (Reserved)               | Reserved.
 |===
 
@@ -754,10 +754,10 @@ Error State, `ace.clear`, and `ace.clearall`, which are normally considered usag
 when the CR is in a _Configuration_ State.
 
 SGR17:: `ace.load` and `ace.mv` with a CR as destination
-are allowed in States _ace_cfgst_provisioning_, _ace_cfgst_importing_, _ace_cfgst_pp_importing_, and _ace_cfgst_es_exporting_,
+are allowed in States _ace_cfgst_provisioning_, _ace_cfgst_importing_, _ace_cfgst_importing_pp_, and _ace_cfgst_exporting_es_,
 
 SGR18:: `ace.store` and `ace.mv` with a CR as source
-are allowed in States _ace_cfgst_exporting_, _ace_cfgst_pp_exporting_, and _ace_cfgst_es_exporting_.
+are allowed in States _ace_cfgst_exporting_, _ace_cfgst_exporting_pp_, and _ace_cfgst_exporting_es_.
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -1783,19 +1783,19 @@ If the CR's _State_ is not one of the values in the fourth column of its row, an
 
 | `0b01` | `rd` = `0b00001`
 | The 128-bit GPR operand at `rs2` is copied into the CR at offset `acestart`.
-| `ace_cfgst_provisioning`, `ace_cfgst_importing`, `ace_cfgst_pp_importing`, `ace_cfgst_es_importing`
+| `ace_cfgst_provisioning`, `ace_cfgst_importing`, `ace_cfgst_importing_pp`, `ace_cfgst_importing_es`
 
 | `0b01` | `rd` = `0b00010`
 | `vl` elements of `V[rs2]` are moved into the CR at offset `acestart`.
-| `ace_cfgst_provisioning`, `ace_cfgst_importing`, `ace_cfgst_pp_importing`, `ace_cfgst_es_importing`
+| `ace_cfgst_provisioning`, `ace_cfgst_importing`, `ace_cfgst_importing_pp`, `ace_cfgst_importing_es`
 
 | `0b10` | `rs2` = `0b00001`
 | 16 bytes of the CR at offset `acestart` are copied to the 128-bit GPR operand at `rd`.
-| `ace_cfgst_exporting`, `ace_cfgst_pp_exporting`, `ace_cfgst_es_exporting`
+| `ace_cfgst_exporting`, `ace_cfgst_exporting_pp`, `ace_cfgst_exporting_es`
 
 | `0b10` | `rs2` = `0b00010`
 | `vl` elements of the CR at offset `acestart` are moved to `V[rd]`.
-| `ace_cfgst_exporting`, `ace_cfgst_pp_exporting`, `ace_cfgst_es_exporting`
+| `ace_cfgst_exporting`, `ace_cfgst_exporting_pp`, `ace_cfgst_exporting_es`
 |===
 --
 
@@ -1913,16 +1913,16 @@ The values of `#immed7` in in <<ACE-management-immeds>> can be used in all Forms
 
 Depending on the previous state of the CR, the actual _State_ after `ace.mgmt` may be different:
 
-. After `ace.mgmt`, with #immed7 = `ace_cfgst_importing`, the CR's _State_ becomes `ace_cfgst_pp_importing` if the data to import correspond to a partially provisioned CR, and `ace_cfgst_es_importing` if the data being imported corresponds to an CR that was in an Error State.
-. After `ace.mgmt`, with #immed7 = `ace_cfgst_exporting`, the CR's _State_ becomes `ace_cfgst_pp_exporting` if the CR being exported was a partially provisioned one, and `ace_cfgst_es_exporting` if CR begin exported was in an Error State.
+. After `ace.mgmt`, with #immed7 = `ace_cfgst_importing`, the CR's _State_ becomes `ace_cfgst_importing_pp` if the data to import correspond to a partially provisioned CR, and `ace_cfgst_importing_es` if the data being imported corresponds to an CR that was in an Error State.
+. After `ace.mgmt`, with #immed7 = `ace_cfgst_exporting`, the CR's _State_ becomes `ace_cfgst_exporting_pp` if the CR being exported was a partially provisioned one, and `ace_cfgst_exporting_es` if CR begin exported was in an Error State.
 
 // 56  `ace_cfgst_provisioning`
 // 57  `ace_cfgst_exporting`
 // 58  `ace_cfgst_importing`
-// 59  `ace_cfgst_pp_exporting`
-// 60  `ace_cfgst_pp_importing`
-// 61  `ace_cfgst_es_exporting`
-// 62  `ace_cfgst_es_importing`
+// 59  `ace_cfgst_exporting_pp`
+// 60  `ace_cfgst_importing_pp`
+// 61  `ace_cfgst_exporting_es`
+// 62  `ace_cfgst_importing_es`
 
 The semantics of `ace.mgmt` are as follows.
 Three steps are common to every operation below and are not repeated in each of them:
@@ -1965,9 +1965,9 @@ ACE exception `ace_exc_unsupported` is _not_ raised when accessing or using a CR
     If capacity allocation is not possible, ACE exception `ace_exc_out_of_memory` is raised.
 .. If provisioning: CR._State_ is set to `ace_cfgst_provisioning`;
 .. If importing: CR._State_ depending on `ml`._State_:
-... If `ml`._State_ is an Error State, then CR._State_ is set to `ace_cfgst_es_importing`;
+... If `ml`._State_ is an Error State, then CR._State_ is set to `ace_cfgst_importing_es`;
 ... If `ml`._State_ is a Valid State (i.e. Complete, but not Error), then CR._State_ is set to `ace_cfgst_importing`;
-... If `ml`._State_ = `ace_cfgst_pp_exporting`, then CR._State_ is set to `ace_cfgst_pp_importing`;
+... If `ml`._State_ = `ace_cfgst_exporting_pp`, then CR._State_ is set to `ace_cfgst_importing_pp`;
 ... else CR._State_ is set to `ace_cfgst_importing`.
 --
 
@@ -1978,8 +1978,8 @@ Depending on whether MDH._State_ is
 --
 [loweralpha]
 . `ace_cfgst_provisioning`,
-. `ace_cfgst_importing`, `ace_cfgst_pp_importing`, or `ace_cfgst_es_importing`, resp.
-. `ace_cfgst_exporting`, `ace_cfgst_pp_exporting`, or `ace_cfgst_es_exporting`,
+. `ace_cfgst_importing`, `ace_cfgst_importing_pp`, or `ace_cfgst_importing_es`, resp.
+. `ace_cfgst_exporting`, `ace_cfgst_exporting_pp`, or `ace_cfgst_exporting_es`,
 
 the instruction will proceed to complete a provisioning, importing, resp., exporting process, as are described next.
 --
@@ -2036,14 +2036,14 @@ Prepare the CR to produce an SCC.
 This includes encrypting its contents (empty in the case of an Error State) and computing the authentication tag(s):
 The architecturally observable behavior is described in <<ACE-CR-representation>>.
 
-... if `ml`._State_ is an Error State, CR's _State_ is set to `ace_cfgst_es_exporting`.
+... if `ml`._State_ is an Error State, CR's _State_ is set to `ace_cfgst_exporting_es`.
 
 ... if `ml`._State_ is in a Valid State, CR's _State_ is set to `ace_cfgst_exporting`.
 
 .. If `ml`._State_ is not a Complete State: (we are exporting a not fully configured CR or we are initiating a nested CR export):
 +
 No encryption or authentication occurs; the contents of the CR are exported verbatim, in the same order in which they appear in the PI (for a partially provisioned CR) or in the SCC (for a partially imported CR, or a CR previously prepared for export whose export process was itself interrupted).
-... The CR's _State_ is set to `ace_cfgst_pp_exporting`.
+... The CR's _State_ is set to `ace_cfgst_exporting_pp`.
 
 These values of CR._State_  are the value on which `ace.store` (<<ACE-instruction-store>>) and the CR-reading variants of `ace.mv` (<<ACE-instruction-mv>>) are gated, so no export can proceed until CR._State_ is set.
 --
