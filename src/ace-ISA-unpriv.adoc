@@ -1866,11 +1866,11 @@ It is used for three purposes:
 `#immed7` is a constant from a set of admissible values.
 These values include both general values, which apply to all Algorithms, as well as values specific to the Algorithm encoded in a CR.
 
-Certain state values may require an auxiliary input, which may be passed as a 64-bit GPR operand
-`Xs` on RV64, a GPR pair `X[s+1] @ Xs` in RV32, or a vector (group) `Vs`. The vector (group) may be replaced by ACEIOBUF if `Zklio` is implemented.
+Issuing `ace.state` or `ace.mgmt` with certain state values may require passing an auxiliary input to the operation, which may be a 64-bit or 128-bit operand passed in one or more GPRs or a vector (group) `Vs`. The vector (group) may be replaced by ACEIOBUF if `Zklio` is implemented.
 
 Normally, `#immed7` contains the _State_ value to be set. In most cases, after the instruction completes, the _State_ field takes the value specified in `#immed7`.
-Some states may transition to a different state automatically after completing `ace.setst`, and it is the norm in the case of nested CR management operations.
+Some states may transition to a different state automatically after completing `ace.setst`.
+The latter behavior is the norm in the case of nested CR management operations.
 
 The allowed state transitions are described in <<ACE-State-field>> and in the specifications of each Algorithm.
 Note that:
@@ -1886,7 +1886,6 @@ Further usage of the same CR—for instance, a later `ace.exec` or `ace.setst` t
 Values of `#immed7` {ge} 64, depending on the Algorithm, may be used to change other state information in the CR, such as _StateExtension_.
 
 Using an `#immed7` that is not supported by the architecture or by the current Algorithm causes the CR to transition to Error State _Invalid_.
---
 
 When the `#immed7` value is one of 56, 57, or 58, the instruction is used to initiate provisioning, export, or import operations, as described in <<ACE-management-immeds>>.
 The values in the range 60-62 cannot be used directly as the `#immed7` of an `ace.mgmt` instruction: any attempt to do so will cause the CR to transition to Error State _Invalid_.
@@ -1936,7 +1935,8 @@ Three steps are common to every operation below and are not repeated in each of 
 raises an illegal-instruction exception if it holds anything else; on completion it writes the
 target CR's number to `acemanagedcr` if it opened a management operation and 32 if it completed
 one; and in either case it clears `acestart`.
-
+--
++
 * *`ace.mgmt` is used to start a provisioning, resp., import process.*
 +
 --
@@ -1950,7 +1950,6 @@ The `ace.mgmt` operation used to start a provisioning, resp., import process mus
 Form A with `ace_CR_provision_start` or `ace_CR_import_start` is equivalent to passing a 128-bit zero string as the auxiliary input.
 Form B with `ace_CR_provision_start` or `ace_CR_import_start` is equivalent to passing the auxiliary input as the 64 lower bits of the MDH
 and setting the upper 64 bits to 0.
-
 `ace.mgmt` then performs following operations:
 
 .. The target CR is cleared.
@@ -1972,11 +1971,11 @@ ACE exception `ace_exc_unsupported` is _not_ raised when accessing or using a CR
 .. If provisioning: CR._State_ is set to `ace_cfgst_provisioning`;
 .. If importing: CR._State_ depending on `ml`._State_:
 ... If `ml`._State_ is an Error State, then CR._State_ is set to `ace_cfgst_importing_es`;
-... If `ml`._State_ is a Valid State (i.e. Complete, but not Error), then CR._State_ is set to `ace_cfgst_importing`;
+... If `ml`._State_ is a Valid State, then CR._State_ is set to `ace_cfgst_importing`;
 ... If `ml`._State_ = `ace_cfgst_exporting_pp`, then CR._State_ is set to `ace_cfgst_importing_pp`;
 ... else CR._State_ is set to `ace_cfgst_importing`.
 --
-
++
 * *`ace.mgmt` is issued with `ace_CR_management_end`*:
 `ace.mgmt` with immediate `ace_cfgst_provisioning` reads first the MDH of the target CR.
 Depending on whether MDH._State_ is
@@ -1989,7 +1988,7 @@ Depending on whether MDH._State_ is
 
 the instruction will proceed to complete a provisioning, importing, resp., exporting process, as are described next.
 --
-
++
 * *`ace.mgmt` is used to complete a provisioning process.*
 +
 --
@@ -2005,11 +2004,11 @@ Only the information in the original PI is exported, and it remains unencrypted.
 The configuration of the CR may require random generation of some material which is intended to remain secret. This material must be generated only at this stage (i.e., when `ace.mgmt` is used to complete a provisioning process). The same applies to key material retrieved from a System Key Store, and any value derived, expanded, or re-shared from it.
 This guarantees that such material is not leaked.
 --
-
++
 * *`ace.mgmt` is used to complete an import process.*
 +
 --
-The software uses Form B, resp. Form C, of `ace.mgmt` to pass along the value of `ml` saved when the import process was started.
+The software uses Form B, C, or D of `ace.mgmt` to pass along the value of `ml` saved when the import process was started.
 This is the MDH image to be authenticated as ``AD[0]``.
 If a Form A is used, the effect is as if the instruction received a zero auxiliary input, i.e., in what follows it is as if `ml` is zero.
 If a Form B is used, the effect is as if the instruction received an input with the lower 64 bits set to the passed auxiliary value `ml`, and the upper 64 bits set to 0, i.e., in what follows it is as if the 64 upper bits of `ml` are set to zero.
@@ -2027,7 +2026,7 @@ Otherwise:
 .. If `ml`._State_ is not a Complete State (we are either importing the export of a not fully configured CR or a nested CR export):
 ... CR.MDH._State_ is set to `ml`._State_.
 --
-
++
 * *`ace.mgmt` is used to start an export process.*
 +
 --
@@ -2053,7 +2052,7 @@ No encryption or authentication occurs; the contents of the CR are exported verb
 
 These values of CR._State_  are the value on which `ace.store` (<<ACE-instruction-store>>) and the CR-reading variants of `ace.mv` (<<ACE-instruction-mv>>) are gated, so no export can proceed until CR._State_ is set.
 --
-
++
 * *`ace.mgmt` is used to complete an export process.*
 +
 --
@@ -2073,9 +2072,9 @@ to the ACE unit again in the clear format, and allows software to access it:
 
 .. The CR's _State_ is set to `ml`._State_.
 --
-
++
 * *If `ace_CR_management_end` is issued when the target CR's _State_ is a Complete State* (i.e., no management operation open on the target CR), the instruction does not perform any state change and raises an illegal-instruction exception.
-
++
 [IMPORTANT]
 ====
 The auxiliary operand of a completing `ace.mgmt` is consumed for *one* purpose only:
@@ -2085,7 +2084,8 @@ for instance by an exception taken during the operation. No other field of the M
 is written from `ml`, and the operand has no other effect on the CR. In particular,
 `ace.mgmt` is not a means of substituting any other metadata into a CR.
 ====
-
++
+--
 * General rules:
 
 ** Whenever `ace.mgmt` fails for any other reason, the target CR transitions to Error State `ace_state_invalid`.
@@ -2096,6 +2096,7 @@ is written from `ml`, and the operand has no other effect on the CR. In particul
 
 ** Whenever _State_ transitions a Complete State to `ace_cfgst_exporting`, the implementation must generate the SCC, including SIV, SIV2, and IMPQUAL,
 as specified in <<ACE-export-import-algorithms>>.
+--
 
 //
 
@@ -3145,7 +3146,7 @@ No other MDH field may affect any of these three lengths.
 // ////////////////////////////////////////////////////////////////////
 
 [[ACE-data-formats]]
-==== Formats of Provisioning Input and Sealed Cryptographic Context
+==== Formats of Provisioning Input, Sealed Cryptographic Context, and Partially Configured Cryptographic Context
 
 The format of a Provisioning Input (PI) is shown in <<ACE-PI>>.
 
@@ -3179,8 +3180,8 @@ The format of a Sealed Cryptographic Context (SCC) is shown in <<ACE-SCC>>.
  The data in this section is necessary for the correct functioning of the Algorithm.
 //
 | 6
-| `Content2`: Implementation-Specific _Auxiliary Data Section_
-| Implementation-Specific
+| `Content2`: Implementation-Specific _Auxiliary Data Section_ (ADS)
+| Implementation-Specific. Given in _AuxDataLen_.
 | The data in this section is _not_ necessary for the correct functioning of the Algorithm.
   Encrypted in memory and during partial import.
 |===
@@ -3188,6 +3189,25 @@ The format of a Sealed Cryptographic Context (SCC) is shown in <<ACE-SCC>>.
 The length of each section must be a multiple of 128 bits.
 
 If the context is exported while in an Error State, Sections 3–6 are empty; that is, the SCC consists only of a plaintext MDH and `SIV`.
+
+During import of an encrypted and authenticated SCC, `Content1[]` and `Content2[]` are kept encrypted in the CR until
+the `ace.mgmt` operation to complete the import is issued. These instruction then decrypts and authenticates `Content1[]` and `Content2[]`.
+
+If a partially imported SCC is exported, the data is exported as-is, i.e., encrypted.
+
+If the context is exported while partially configured, i.e., provisioning or import has not completed, then no encryption and authentication of the data is performed. The data is exported as is: unencrypted if the original interrupted operation was a provisioning operation, and encrypted if it was an import operation.
+In the latter case, SIV, SIV2 and IMPQUAL are not included in the export, but only saved and restored with the process's state at context save and restore if a context switch occurs.
+The format of the exported data is therefore the following:
+
+[[ACE-PCCC]]
+.Format of a Partially Configured Cryptographic Context
+[width="100%",cols="^8%,25%,67%",options="header"]
+|===
+| Section | Section Name | Size
+| 1       | `MDH`, MDH   | 128 bits
+| 2       | `Content1`   | See <<ACE-length-rule>>.
+| 3       | `Content2`   | Implementation-Specific. Given in _AuxDataLen_.
+|===
 
 The MDH's _AuxDataLen_ field specifies the total size of the Implementation-Specific ADS (`SIV2`, `IMPQUAL`, and `Content2[]`), except for the special value 1 (see <<ACE-SCC-import>>).
 If _AuxDataLen_ 2, then the ADS is empty.
@@ -3294,6 +3314,90 @@ in the description of `ace.setst`
 The code detailing the operations as split by the architecture (<<ACE-management-code-snippets>>) illustrates how these management operations are actually realized by the caller.
 See also `ace.load` (<<ACE-instruction-load>>), `ace.store` (<<ACE-instruction-store>>), and `ace.getmdl` (<<ACE-instruction-getmd>>).
 
+In <<cc-nested>> we see an exemplificative workflow of nested management operations.
+
+The management operations at the base level (i.e., the outermost nesting level) are the only ones that may perform cryptographic operations:
+
+* If the management operation at the base level is an import, `ace.load` and `ace.mv` load SIV at `acestart` = 16 and, if _AuxDataLen_ {ne} 0, then load SIV2, resp., IMPQUAL at `acestart` = 32, resp. 48. Then, they load `Context1[]` and `Context2[]` block-wise.
+The cryptographic verification is only performed at the management completion operation.
+
+* If the management operation is an export, then the `ace.mgmt` to start the operation prepares the CR by encrypting it and generating SIV and, if _AuxDataLen_, also SIV2 and IMPQUAL.  Then,
+`ace.load` and `ace.mv` store the SIV to memory if `acestart` = 16 and, if _AuxDataLen_ {ne} 0, they store SIV2, resp., IMPQUAL to memory when `acestart` = 32, resp. 48. After this, they store `Context1[]` and `Context2[]` block-wise.
+
+The software, by saving metadata headers in its own state, maintains an implicit stack of the _State_ values, with the top value corresponding to the previous nesting level. The `ace.mgmt` completion operation restores the previous nesting level from the stack. This way, cryptographic operations can be performed only at the outermost level.  Concluding a base-level import or an export early will not authenticate, and therefore they cannot be used to leak plaintext at an outer nesting level. The only way plaintext is allowed to be exported is if the outermost operation itself was a provisioning operation, in which case the plaintext was already available to software.  In order to properly track `ace.load`, `ace.store`, and `ace.mv`, the CSR `acestart` must be saved and restored at interruption and before control return. This holds also for SIV, SIV2 and IMPQUAL. Since software may load and set up these values before issuing `ace.mgmt`, these CSRs must be saved and restored unconditionally.
+
+[[cc-nested]]
+.Nested CR Management Operations
+[plantuml, ,svg,float="center",align="center"]
+....
+@startuml
+' skinparam DefaultMonospacedFontName "Fira Mono"
+<style>
+sequenceDiagram {
+  root {
+    FontName: "Petrona-Light"
+  }
+  element {
+    LineThickness: 1.0
+    FontColor: black
+    BackgroundColor: transparent
+  }
+  participant {
+    LineThickness: 1.5
+    BorderColor: black
+    BackGroundColor: #f7f7f7
+    FontStyle: bold
+  }
+  arrow {
+    LineColor: black
+  }
+}
+</style>
+
+autonumber
+
+participant "Base" as B
+participant "Nested 1" as N1
+participant "Nested 2" as N2
+
+B -> B: Start management: <i>State</i> changes to one of ""ace_cfgst_X""\nwith X = ""provisioning"", ""importing"", or ""exporting"".
+B -> N1: Preemption.
+  N1 -> N1: Save acestart.
+  N1 -> N1: Start export: Save current <i>State;</i> <i>State</i> → ""ace_cfgst_exporting_pp"".
+  N1 -> N2: Preemption.
+    N2 -> N2: Save acestart.
+    N2 -> N2: Start export: Save current <i>State;</i> <i>State</i> → ""ace_cfgst_exporting_pp"".
+    N2 -> N2: Complete export: Restore saved <i>State</i> (""ace_cfgst_exporting_pp"").
+    N2 -> N2: Context Save, including SIV, SIV2, IMPQUAL.
+    N2 -> N2: Yield control to other processes.
+    N2 -> N2: Context restore, including SIV, SIV2, IMPQUAL.
+    N2 -> N2: Start import: Previous <i>State</i> same as in Step 8,\nhence, <i>State</i> → ""ace_cfgst_importing_pp"".
+    N2 -> N2: Complete import: <i>State</i> restored to ""ace_cfgst_exporting_pp"".
+    N2 -> N2: Restore acestart.
+    N2 -> N1: Return.
+  N1 -> N1: Complete export: <i>State</i> restored to value saved in Step 4.
+  N1 -> N1: Context save, including SIV, SIV2, IMPQUAL.
+  N1 -> N1: Yield control to other processes.
+  N1 -> N1: Context restore, including SIV, SIV2, IMPQUAL.
+  N1 -> N1: Start import: Current state same as <i>State</i> saved in Step 4;\n Save this <i>State;</i> then, <i>State</i> → ""ace_cfgst_importing_pp"".
+  N1 -> N2: Preemption.
+    N2 -> N2: Save acestart.
+    N2 -> N2: Start export: Save current <i>State;</i> <i>State</i> → ""ace_cfgst_exporting_pp"".
+    N2 -> N2: Complete export: <i>State</i> restored to value saved in Step 23.
+    N2 -> N2: Start import: Save current <i>State;</i> <i>State</i> → ""ace_cfgst_importing_pp"".
+    N2 -> N2: Context save, including SIV, SIV2, IMPQUAL.
+    N2 -> N2: Yield control to other processes.
+    N2 -> N2: Context restore, including SIV, SIV2, IMPQUAL.
+    N2 -> N2: Complete import: <i>State</i> restored to value saved in Step 25\n(same as value saved in Step 23).
+    N2 -> N2: Restore acestart.
+    N2 -> N1: Return.
+  N1 -> N1: Complete import: <i>State</i> restored to value saved in Step 20.
+  N1 -> N1: Restore acestart.
+  N1 -> B: Return.
+B -> B: Complete management: <i>State</i> is now a Complete <i>State</i>.
+@enduml
+....
+
 // ////////////////////////////////////////////////////////////////////
 
 [[ACE-SCC-AEAD]]
@@ -3334,14 +3438,16 @@ function SCC_KeyDeriv(key : bits(256), nonce : bits(96))
 }
 ----
 
-// NOTE: Due to the computational cost of the derivation functions,
-// implementations may cache the derived keys.
+NOTE: Due to the computational cost of the derivation functions, implementations may cache the derived keys.
 
-NOTE: To reduce payload size, the AES-GCM-SIV-derived construction used for SCC import and export omits the nonce. It relies instead on AES-GCM-SIV's resistance to nonce reuse and misuse. The construction remains secure for up to 2^64^ 128-bit blocks observed by an adversary.
+[NOTE]
+====
+To reduce payload size, the AES-GCM-SIV-derived construction used for SCC import and export omits the nonce. It relies instead on AES-GCM-SIV's resistance to nonce reuse and misuse. The construction remains secure for up to 2^64^ 128-bit blocks observed by an adversary.
 
 This provides practical protection for client applications. On cloud servers, each virtual machine and supervisor domain should use a unique CSK. To transfer CCs between domains, M-mode firmware can import an SCC using the source domain's CSK and re-export it using the target domain's CSK.
 
 The SIV (Synthetic IV), which is also the GCM-SIV authentication tag, is the encryption of the `POLYVAL` hash of the Locality Secrets, MDH, and CR Content, concatenated in that order. In the `POLYVAL` pseudocode below, the input is represented as an array of 128-bit blocks, which are absorbed in increasing index order.
+====
 
 [[ACE-SCC-POLYVAL]]
 .Polyval Hashing Function
