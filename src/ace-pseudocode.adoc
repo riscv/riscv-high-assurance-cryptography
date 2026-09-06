@@ -23,34 +23,38 @@ These sequences can be packaged into libraries or OS APIs to avoid increasing ap
 In these examples, GPR `t6` points to the memory location where a PI or SCC is stored,
 and GPR `t0` contains the number of the CR to be configured or exported.
 The code also uses `t2` to `t5`, `s1`, `s2`, `v1` and `v2`.
-Throughout, `t3` holds the constant 23, the highest *valid* _State_ value
-(<<ACE-states-valid>>), so that `bltu t3, t2, handle_errors` branches exactly when the CR
-has entered an Error State. `t3` is therefore never reused for anything else: the test is
-needed again after the final `ace.mgmt`. A _State_ of `0`, that is _Unconfigured_, is tested
-separately with `beqz`, since it means the CR was cleared and the whole operation must be
-restarted.
+// Throughout, `t3` holds the constant 23, the highest *valid* _State_ value
+// (<<ACE-states-valid>>), so that `bltu t3, t2, handle_errors` branches exactly when the CR
+// has entered an Error State. `t3` is therefore never reused for anything else: the test is
+// needed again after the final `ace.mgmt`. A _State_ of `0`, that is _Unconfigured_, is tested
+// separately with `beqz`, since it means the CR was cleared and the whole operation must be
+// restarted.
+
+To check whether `ace.size` returned an error, we use the `beqi` instruction from the
+Qualcomm Code Size Reduction Instructions, however, this can be easily replaced with a
+regular `beq` using, say, the constant 1 loaded into a different GPR, such as `s3`.
 
 The provisioning code assumes that the Content[] immediately follows the MDH in memory.
 
 *Provisioning Code (`Zklmv`)*
 ----
-  vsetivli   s2, 16, e8, m1, ta, ma # vl = 16: ready to load 16 bytes
-  li         t3, 0x30               # const useful to determine Error States
-  vle8.v     v1, 0(t6)              # load MDH from memory
+  ld         s4, 0(t6)             # load MDH[63:0] from memory
+  ld         s5, 8(t6)             # load MDH[127:64] from memory
+  li         t3, 0x30              # const useful to determine Error States
 
 restart:
-  ace.mgmt   K{t0}, #ace_CR_provision_start, v1 # start provisioning, load MDH
-  ace.getst  t2, K{t0}              # get _State_ field from MDH
-  beqz       t2, handle_errors      # State = 0: the CR was not opened => error
-  andi       t2, t2, 0x38           # Check the three top bits of State
-  beq        t3, t2, handle_errors  # If the three top bits = 110, then Error
+  ace.mgmt   K{t0}, #ace_CR_provision_start, s5:s4 # start provisioning, load MDH
+  ace.getst  t2, K{t0}             # get _State_ field from MDH
+  beqz       t2, handle_errors     # State = 0: the CR was not opened => error
+  andi       t2, t2, 0x38          # Check the three top bits of State
+  beq        t3, t2, handle_errors # If the three top bits = 110, then Error
 
-  # Assume t5 holds the length of the PI in bytes.
+  # Assume t5 holds the length of the PI's Content[] in bytes.
   # The caller constructed the PI and so knows this length.
   # t5 is never modified, so the working count and pointer can be re-derived
   # from it whenever the operation is restarted.
-  addi       s1, t5, -16            # subtract the 16B (of MDH) already loaded
-  addi       t4, t6, 16             # source pointer: first byte after MDH
+  # Assume also that the Content[] directly follows the MDH in memory.
+  addi       t4, t6, 16            # source pointer: first byte after MDH
 
 vloop:
   vsetvli    s2, s1, e8, m1, ta, ma
@@ -75,22 +79,24 @@ success:
 
 *Provisioning Code (`Zklmem`)*
 ----
-  vsetivli   s2, 16, e8, m1, ta, ma # vl = 16: ready to load 16 bytes
-  li         t3, 0x30               # const useful to determine Error States
-  vle8.v     v1, 0(t6)              # load MDH from memory
+  ld         s4, 0(t6)             # load MDH[63:0] from memory
+  ld         s5, 8(t6)             # load MDH[127:64] from memory
+  li         t3, 0x30              # const useful to determine Error States
 
 restart:
   ace.mgmt   K{t0}, #ace_CR_provision_start, v1  # start provisioning, load MDH
   ace.getst  t2, K{t0}
   beqz       t2, handle_errors
-  andi       t2, t2, 0x38           # Check the three top bits of State
-  beq        t3, t2, handle_errors  # Error State?
-  ace.load   K{t0}, 16(t6)          # load rest of PI
+  andi       t2, t2, 0x38          # Check the three top bits of State
+  beq        t3, t2, handle_errors # Error State?
+
+  # Assume that the Content[] directly follows the MDH in memory.
+  ace.load   K{t0}, 16(t6)         # load rest of PI
   ace.getst  t2, K{t0}
-  beqz       t2, restart            # CR cleared means force restart
+  beqz       t2, restart           # CR cleared means force restart
   bltu       t3, t2, handle_errors
   ace.mgmt   K{t0}, #ace_CR_management_end   # complete provisioning
-                                    # and possibly reconstruct data
+                                   # and possibly reconstruct data
   ace.getst  t2, K{t0}
   andi       t2, t2, 0x38
   beq        t3, t2, handle_errors
@@ -100,22 +106,21 @@ success:
 
 *Import Code (`Zklmv`)*
 ----
-  vsetivli   s2, 16, e8, m1, ta, ma # vl = 16: ready to load 16 bytes
-  vle8.v     v1, 0(t6)          # load from memory
-  li         t3, 0x30               # to determine Error States
-  ace.size   t5, v1             # length of SCC in bytes, 0 if unsupported
-  beqz       t5, handle_errors  # Algorithm not supported, or MDH invalid
+  ld         s4, 0(t6)         # load MDH[63:0] from memory
+  ld         s5, 8(t6)         # load MDH[127:64] from memory
+  li         t3, 0x30          # to determine Error States
+  ace.size   t5, s5:s4         # length of Content[] in bytes, 1 if unsupported
+  beqi       t5, 1, handle_errors  # Algorithm not supported, or MDH invalid
 
   # t5 is saved in local state and not modified by this code, so jumping
   # to restart will re-derive the working count and pointer from it
 restart:
-  ace.mgmt   K{t0}, #ace_CR_import_start, v1  # prepare CR for import, load MDH
+  ace.mgmt   K{t0}, #ace_CR_import_start, s5:s4  # open CR for import, load MDH
   ace.getst  t2, K{t0}
   beqz       t2, handle_errors
   andi       t2, t2, 0x38
   beq        t3, t2, handle_errors
 
-  addi       s1, t5, -16             # subtract the 16 B of MDH already loaded
   addi       t4, t6, 16              # source pointer: first byte after MDH
 
 vloop:
@@ -140,25 +145,25 @@ success:
 
 *Import Code (`Zklmem`)*
 ----
-  vsetivli   s2, 16, e8, m1, ta, ma # vl = 16: ready to load 16 bytes
-  vle8.v     v1, 0(t6)            # load from memory
-  li         t3, 0x30               # to determine Error States
+  ld         s4, 0(t6)             # load MDH[63:0] from memory
+  ld         s5, 8(t6)             # load MDH[127:64] from memory
+  li         t3, 0x30              # to determine Error States
 
 restart:
-  ace.mgmt   K{t0}, #ace_CR_import_start, v1 # prepare CR for import, load MDH
+  ace.mgmt   K{t0}, #ace_CR_import_start, s5:s4 # open CR for import, load MDH
   ace.getst  t2, K{t0}
   beqz       t2, handle_errors
   andi       t2, t2, 0x38
   beq        t3, t2, handle_errors
-  ace.load   K{t0}, 16(t6)            # load the rest starting with SIV
+  ace.load   K{t0}, 16(t6)          # load the rest starting with SIV
   ace.getst  t2, K{t0}
-  beqz       t2, restart             # CR cleared means force restart
+  beqz       t2, restart            # CR cleared means force restart
   bltu       t3, t2, handle_errors
   ace.mgmt   K{t0}, #ace_CR_management_end, v1  # decrypt and authenticate CR,
-                                     # if necessary complete it
+                                    # if necessary complete it
   ace.getst  t2, K{t0}
   andi       t2, t2, 0x38
-  beq        t3, t2, handle_errors   # catches `ace_state_import_auth`
+  beq        t3, t2, handle_errors  # catches `ace_state_import_auth`
 
 success:
 ----
@@ -167,23 +172,42 @@ During the provisioning and import procedures, the validity of bits [63:0] of th
 The validity of bits [127:64] is deferred to sealing.
 If these bits are invalid, the CR will transitions to Error State _Invalid_ upon executing `ace.mgmt K{t0}, #ace_CR_management_end`, which is why the `ace.getst` after that instruction repeats the Error-State test.
 
+We assume that the order in memory is `MDH`, `SIV`, if AuxDataLen {ge} 2 also `IMPQUAL` and `SIV2`, and finally `Content[]` for a Complete CR,
+and for an incomplete CR, it is just then `MDH` followed by `Content[]`.
+
+[WARNING]
+====
+Incomplete procedure, like all the others in management.
+====
+
 *Export Code (`Zklmv`)*
 ----
   li         t3, 0x30                # to determine Error States
 
 restart:
   ace.size   s1, K{t0}               # get size of the data to export
-  beqz       s1, handle_errors       # 0 means the CR is unconfigured
+  beqi       s1, 1, handle_errors    # 1 means the CR is unconfigured
   {...}  # here code that allocates the buffer to store the exported data
-
-  vsetivli   s2, 16, e8, m1, ta, ma  # vl = 16: ready to save 16 bytes
-  ace.getmdv v1, K{t0}               # save MDH, including its _State_
 
   # If _State_ is a Complete State, the following ace.mgmt converts the CR in
   # the serialized, encrypted and authenticated internal representation.
 
   ace.mgmt   K{t0}, #ace_CR_export_start
-  vse8.v     v1, 0(t6)               # export original MDH to memory
+
+  ace.getmd  s5:s4, K{t0}            # get MDH, including its _State_
+  sd         0(t6), s4               # store MDH[63:0] to memory
+  sd         8(t6), s5               # store MDH[127:64] to memory
+
+  slli       s4, s4, 18
+  srli       s4, s4, 50              # extract AuxDataLen from MDH
+
+  check if complete, if not skip
+  SAVE SIV
+  beqz       s4, no_aux_data
+  SAVE IMPQUAL
+  SAVE SIV2
+
+no_aux_data:
 
   addi       s1, s1, -16             # the 16 B of MDH already stored
   addi       t4, t6, 16              # destination pointer
@@ -216,7 +240,7 @@ success:
 
 restart:
   ace.size   s1, K{t0}               # get size of the data to export
-  beqz       s1, handle_errors       # 0 means the CR is unconfigured
+  beqi       s1, 1, handle_errors    # 1 means the CR is unconfigured
   {...}   # put here to allocate the buffer to store the exported data
 
   vsetivli   s2, 16, e8, m1, ta, ma  # vl = 16: ready to save 16 bytes
