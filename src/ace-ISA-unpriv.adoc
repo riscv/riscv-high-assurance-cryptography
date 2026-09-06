@@ -279,17 +279,15 @@ We posit that CR renaming is not expected to be necessary, and may even be detri
 . Speculating on the results of cryptographic operations usually leads to security issues.
 ====
 
-===== Representation of Cryptographic Registers for Accessing their Contents
+As mentioned in <<ACE-concepts>>, (the CC in) each CR contains two types of information: the Metadata and the Content.
+The latter can be viewed as a structure containing the cryptographic secrets and other information needed by the algorithm encoded in the CR.
 
-A CR can be viewed as a register of variable and discoverable length (more details in <<ACE-CR-representation>>).
-While an ACE implementation works with an internal representation of a CR's content,
-ACE provides a way to access a CR as if it were a register into which a Provisioning Input (PI) or Sealed Cryptographic Context (SCC), as defined in <<ACE-CC-formats>>, can be loaded.
-To this purpose, ACE defines:
+The _i_-th CR is denoted `K(i)`.
+Its Metadata Header is referred to as `K(i)`.MDH, and the content as `K(i)`.Content[].
+The Content[] is further partitioned into two parts: Content1[] contains the architecturally defined content of the CR, and Content2[] contains the any implementation-defined content. The structure of Content1[] is given in <<ACE-Algorithms>> for each Algorithm defined in this specification.
+We do not make any assumption on the structure of Content2[].
 
-* Instructions `ace.load`, to load serialized data into CRs from memory (see <<ACE-instruction-load>>), and `ace.store` (see <<ACE-instruction-store>>) to export a CR's serialized content back to memory; and
-* An instruction, `ace.mgmt`, to make this information available to the ACE unit and to convert the internal representation of CRs to an SCC (cf. <<ACE-instruction-setst>>).
-
-===== The Context Register File
+==== The Context Register File
 
 CRs reside in a dedicated, per-hart _CR file_ (CRF), a memory accessible only to the ACE implementation.
 (((Context Register File)))
@@ -298,18 +296,39 @@ The CRF must guarantee the confidentiality and integrity of its contents, includ
 Accesses to this memory are not required to be hardened against physical side-channel attacks at the hardware level.
 However, side-channel-protected implementation variants of Algorithms in the ACE unit must provide resistance to such attacks as well.
 
+Architecturally, the CRF contains the following information:
+
+. An array of 32 128-bit blocks, contains the MDH of each CR.
+. An implementation-defined amount of memory that can be dynamically allocated to the various registers, corresponding to Content[] while provisioning and
+   Content[] := Content1[] @ Content2[] during other management operations.
+
 The amount of CRF capacity consumed by each CR depends on the Algorithm encoded in the MDH, and it may differ from one CR to another.
 
 Insufficient residual CRF capacity may prevent execution of a configuration instruction.
 Capacity is freed by unconfiguring other CRs.
 
-The CRF capacity is implementation-defined.
-Implementations must provide sufficient capacity for all supported operations.
-
 Any corruption of the CRF associated with a hart is an unrecoverable error condition.
 The ACE architectural state associated with the hart is reset, and ACE exception `ace_exc_fatal` is raised (see <<ACE-exceptions>> and <<ACE-error-architecture>> for the behavior when the Privileged Architecture is not implemented).
 When a hart is reset, the architectural state of its ACE unit is reset as well.
 Each hart's ACE state must be exported and then fully zeroized on power down; on resume, the ACE unit must reset and be reconfigured by software.
+
+The ACE unit also contains the following per-hart information:
+
+. An integer register (CSR `acemanagedcr`, cf. <<ACE-CSR-acemanagedcr>>), which holds the index of the CR being currently managed, or 32 if no CR is currently managed.
+. Three 128-bit registers (CSR pairs `acesivl` and `acesivh`,
+`acesiv2l` and `acesiv2h`, and `aceiql` and `aceiqh`), which hold authentication data (the SIV, IMPQUAL, and SIV2) of the CR being currently managed.
+
+[NOTE]
+====
+The 128 or 384 bits of capacity to hold the SIV, IMPQUAL, and SIV2 values are allocated per hart, not per CR, because
+allocating them per CR would be costly: 128 bits per CR, or 384 bits if at least one Algorithm supports implementation-specific data.
+
+This prevents concurrent management operations in the same code: starting a second operation can overwrite SIV, IMPQUAL, and SIV2 storage, destroying in-flight values. Therefore, the CSRs holding these values must also be saved upon context save and restored upon context restore.
+
+Interleaved management operations within a single process should therefore be avoided, unless lightweight threads are used with support for CR context switching .
+Otherwise, these should be serialized using a mutex.
+Beyond this, this restriction does not affect other use cases.
+====
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -1263,7 +1282,7 @@ NOTE: Because the register is writable at any privilege level, the `acemanagedcr
 performs (<<ACE-instruction-setst>>) detects an accidentally interleaved management operation but
 does not prevent a deliberate one: software that writes 32 can open a second operation and destroy
 the in-flight SIV, SIV2 and IMPQUAL values. Serializing management operations is therefore a
-software obligation (<<ACE-CR-representation>>). No confidentiality property depends on the check;
+software obligation (<<ACE-CC-formats>>). No confidentiality property depends on the check;
 the loss is confined to the interleaved operations, which fail authentication or must be restarted.
 
 // ////////////////////////////////////////////////////////////////////
@@ -1530,29 +1549,15 @@ _Mnemonics_::
 _Description_::
 +
 --
-`ace.load` imports the Content of a PI or an SCC into the CR `Kd` or `K{Xd}`, not the MDH, SIV, SIV2 or IMPQUAL values.
-The latter are loaded by software separately.
-// `%offset(Xs1)` is the address of *that* byte, not of the MDH: software passes the MDH separately, to the `ace.mgmt` that opened the CR, and so does not transfer it here.
+`ace.load` imports the Content of a PI or an SCC into the CR `Kd` or `K{Xd}`.
+It it not used to import metadata or authentication information, such as the MDH, SIV, SIV2, and IMPQUAL.
+The latter values are loaded by software separately.
 
 This instruction also requires that the CR be ready to import information and that the MDH has already been loaded by passing it as a parameter in a GPR pair (quartet for RV32), resp., vector register, to the `ace.mgmt` instruction used to open the CR for provisioning or import.
 
 If the CR is in a Complete State, ACE exception `ace_exc_complete_cr_data_access` is raised.
 
-// [[ACE-cr-transfer-model,The CR transfer model]]
-// *The CR transfer model.* The following holds for `ace.load` and for `ace.store`, and is stated here
-// once. The implementation obtains the payload length `size` from the first 8 bytes of the MDH, which
-// software supplies as part of the entire MDH block: using the _State_ field the payload is identified as
-// as a PI or an SCC, and the fields in <<ACE-length-rule>> determine its length. `size` excludes the
-// MDH but, in the case of an SCC, includes SIV and, where present, SIV2 and IMPQUAL. Either
-// instruction may transfer more than the effective XLEN. `acestart` is a byte offset into that
-// payload, so the MDH bytes that software transfers on its own are not counted in it; it is always a
-// multiple of 16, and an implementation may halt a transfer only at a 16-byte boundary. Let `end` be
-// the offset at which the instruction stops, which each instruction gives below. The transfer index
-// advances the memory address and the offset within the serialized representation of the CR together,
-// beginning at the current `acestart`, so a resumed transfer moves the bytes at offsets [`acestart`,
-// `end`) — that is `end` − `acestart` bytes, not `end` — the first of them being the one at memory
-// address `Xs1 + %offset + acestart`. A resumption therefore never re-transfers a byte and never
-// displaces the remainder of the payload.
+Let `size` be the size of Content[] in a PI or of Content1[] @ Content2[] in an SCC.
 
 For `ace.load`, `end` = `size`: for each _j_ from `acestart` to `size` − 1, the byte at memory
 address `Xs1 + %offset + `_j_ is loaded into the _j_-th byte after the MDH of the serialized
@@ -1739,8 +1744,8 @@ _Description_::
 In each variant the CR is the one named by `rs1`.
 
 *Bound.* Let `size` be the length in bytes of the PI or SCC being transferred, determined from
-the first 8 bytes of the MDH as <<ACE-cr-transfer-model>> of <<ACE-instruction-load>> prescribes, let
-`imglen` be the serialized CR image length in bytes excluding the MDH, and let `end` =
+the first 8 bytes of the MDH.
+Let `imglen` be the serialized CR image length in bytes excluding the MDH, and let `end` =
 min(`size`, `imglen`). In every variant below:
 
 * If `acestart` {ge} `end`, the instruction performs no operation — no CR byte, GPR, or vector
@@ -2022,12 +2027,12 @@ decrypts and authenticates the imported SCC, and makes the CR available to softw
 Otherwise:
 
 .. If `ml`._State_ is a Complete State (we are importing the export of a fully configured CR)
-... CR.``MDH``._State_ is set to `ml`._State_.
+... CR.MDH._State_ is set to `ml`._State_.
 ... The ACE unit decrypts and authenticates the CR's content.
 ... If authentication fails, the target CR is transitioned to Error State _Authentication Failed_. No exception is raised.
 ... The ACE unit performs any necessary readjustment of the CR's content to turn it into the format internally consumed by the ACE Unit.
 .. If `ml`._State_ is not a Complete State (we are either importing the export of a not fully configured CR or a nested CR export):
-... CR.``MDH``._State_ is set to `ml`._State_.
+... CR.MDH._State_ is set to `ml`._State_.
 --
 +
 * *`ace.mgmt` is used to start an export process.*
@@ -2042,7 +2047,7 @@ Software must first save this value in its local state to restore its _State_ wh
 +
 Prepare the CR to produce an SCC.
 This includes encrypting its contents (empty in the case of an Error State) and computing the authentication tag(s):
-The architecturally observable behavior is described in <<ACE-CR-representation>>.
+The architecturally observable behavior is described in <<ACE-CC-formats>>.
 
 ... if `ml`._State_ is an Error State, CR's _State_ is set to `ace_cfgst_exporting_es`.
 
@@ -3097,6 +3102,38 @@ the same synchronization as sharing it with an ordinary software loop.
 
 // ///////////////////////////////////////////////////////////////////
 
+[[ACE-rules-formats]]
+==== Rules for Provisioning and Import Formats
+
+[[ACE-rules-masked-implementations]]
+==== Single-Share Key Export Rule for Masked Implementations
+
+Any multi-share implementation of an Algorithm  will always provision, import and export _all_ its keys and secrets as reconstructed values.
+(((ACE, Algorithm, side-channel protection variants)))
+Architecturally, all values are represented as a single share.
+Side-channel analysis (SCA)-protected Algorithms are implementation variants of the same unprotected Algorithm, not separate specifications.
+The only difference is the _SCProtection_ field of the MDH.
+
+NOTE: These rules assume that reconstructing or re-randomizing a key is inexpensive.
+For example, the implementation may XOR the values with data from a PRNG (according to <<ACE-RBG>>) internal to the ACE unit.
+This approach keeps SCCs compact and ensures interoperability across architectures that implement side-channel protection differently.
+
+To accelerate key share reconstruction in a multi-share variant of an Algorithm, some shares of a key can be included in the content's Auxiliary Data.
+
+// ////////////////////////////////////////////////////////////////////
+
+[[ACE-system-keys]]
+==== System Keys and Randomly Generated Key Values
+
+In a PI or SCC, System Keys are encoded as a 64-bit SKID used to retrieve the key from a system-specific SKS.
+This replaces the key value itself with a usually smaller field, and may reduce the size of the PI or SCC.
+
+For multi-share implementations of system keys, ACE may copy key material from the SKS into the CR and expand it into multiple shares.
+The key must still be exported as a SKID.
+The rule of <<ACE-rules-masked-implementations>> about the inclusion of shares in the content's Auxiliary Data applies to system keys as well, as long as the key's value cannot be recovered from the included shares.
+
+// ////////////////////////////////////////////////////////////////////
+
 [[ACE-CC-formats]]
 === Cryptographic Context Formats
 
@@ -3115,14 +3152,13 @@ Both formats begin with the 128-bit MDH described in <<ACE-Metadata>>.
 [[ACE-length-rule]]
 ==== Fields Determining the Length of a PI, of an SCC, and of a CR
 
-// Every other statement in this specification, including those attached to the individual field descriptions in <<ACE-Metadata>>, is subordinate to it.
-
 . The length of a *Provisioning Input* is determined by, and only by, the fields
   _Algorithm_, _AlgorithmPolicy_ and _KeyType_.
 In particular, it does *not* depend on _AuxDataLen_: a PI carries no
 implementation-specific data, and _AuxDataLen_ must be zero in the MDH of a PI.
 It also does not depend on _StateExtension_, which must likewise be zero in the
 MDH of a PI, nor on _SCProtection_.
+The format of a PI that has been just imported in a CR is the same as the external format, and this representation is finalized into the CR's internal state upon using `ace.mgmt` to complete the import which may include the computation of certain information such as derived keys, multiple shares.
 
 . The length of a *Sealed Cryptographic Context* is determined by, and only by, the
   fields _Algorithm_, _AlgorithmPolicy_, _KeyType_, _StateExtension_, _State_, and
@@ -3152,15 +3188,6 @@ No other MDH field may affect any of these three lengths.
 ==== Formats of Provisioning Input, Sealed Cryptographic Context, and Partially Configured Cryptographic Context
 
 The Provisioning Input (PI) consists of two sections of data, MDH and Content[], which do not have to be contiguous in memory.
-
-// [[ACE-PI]]
-// .Format of the Provisioning Input (PI), all Sections in Order
-// [width="100%",cols="^8%,25%,42%,25%",options="header"]
-// |===
-// | Section | Section Name                      | Size     | Description
-// | 1       | MDH, Metadata Header            | 128 bits | See <<ACE-Metadata>>.
-// | 2       | Content[], Provisioning Content | Determined by the _Algorithm_, _AlgorithmPolicy_ and _KeyType_ fields of the MDH; see <<ACE-length-rule>>. | Contains keys and other Algorithm-specific information.
-// |===
 
 The length of Content[], must be a multiple of 128 bits.
 
@@ -3224,68 +3251,7 @@ which can be exported in the ADS in full or partial format.
 A different receiving implementation may safely ignore the latter during import after checking the IMPQUAL value
 Despite the fact that the internal state of a CR may contain more information than in a SCC, it is still possible that
 importing an SCC requires more _storage_ because SIV, IMPQUAL, and SIV2 are not part of the information stored in a CR.
-This is addressed in <<ACE-CR-representation>>.
-
-// ////////////////////////////////////////////////////////////////////
-
-[[ACE-CR-representation]]
-==== Notation and Representation of CR Internals
-
-Architecturally, the CRF is represented in the following way:
-
-. There is an array of 32 128-bit blocks, one for each CR, containing the MDH.
-. There are three 128-bit registers, which hold the SIV, IMPQUAL, and SIV2 values of the CR being currently managed.
-. There is an integer register, which holds the index of the CR being currently managed, or 32 if no CR is currently managed.
-. There is some amount of memory that can be dynamically allocated to the various registers, corresponding to Content[] while provisioning and
-   `Content[] := Content1[] @ Content2[]` during other management operations.
-
-The _i_-th CR is denoted `K(i)`.
-Its MDH is referred to as `K(i)`.``MDH``, and the content as `K(i)`.Content[].
-
-[NOTE]
-====
-The 128 or 384 bits of capacity to hold the SIV, IMPQUAL, and SIV2 values are allocated per hart, not per CR, because
-allocating them per CR would be costly: 128 bits per CR, or 384 bits if at least one Algorithm supports implementation-specific data.
-
-This prevents concurrent management operations in the same code: starting a second operation can overwrite SIV, IMPQUAL, and SIV2 storage, destroying in-flight values.
-Therefore, the CSRs `acesivl` and `acesivh`, and possibly also `acesiv2l`, `acesiv2h`, `aceiql` and `aceiqh`
-must also be saved upon context save and restored upon context restore.
-
-Interleaved management operations within a single process should therefore be avoided, unless lightweight threads are used with support for CR context switching .
-Otherwise, these should be serialized using a mutex.
-Beyond this, this restriction does not affect other use cases.
-====
-
-The format of a PI that has been just imported in a CR is the same as the external format, and this representation is finalized into the CR's internal state upon using `ace.mgmt` to complete the import which may include the computation of certain information such as derived keys, multiple shares.
-
-// ////////////////////////////////////////////////////////////////////
-
-[[ACE-rules-masked-implementations]]
-==== Single-Share Key Export Rule for Masked Implementations
-
-Any multi-share implementation of an Algorithm  will always provision, import and export _all_ its keys and secrets as reconstructed values.
-(((ACE, Algorithm, side-channel protection variants)))
-Architecturally, all values are represented as a single share.
-Side-channel analysis (SCA)-protected Algorithms are implementation variants of the same unprotected Algorithm, not separate specifications.
-The only difference is the _SCProtection_ field of the MDH.
-
-NOTE: These rules assume that reconstructing or re-randomizing a key is inexpensive.
-For example, the implementation may XOR the values with data from a PRNG (according to <<ACE-RBG>>) internal to the ACE unit.
-This approach keeps SCCs compact and ensures interoperability across architectures that implement side-channel protection differently.
-
-To accelerate key share reconstruction in a multi-share variant of an Algorithm, some shares of a key can be included in the content's Auxiliary Data.
-
-// ////////////////////////////////////////////////////////////////////
-
-[[ACE-system-keys]]
-==== System Keys and Randomly Generated Key Values
-
-In a PI or SCC, System Keys are encoded as a 64-bit SKID used to retrieve the key from a system-specific SKS.
-This replaces the key value itself with a usually smaller field, and may reduce the size of the PI or SCC.
-
-For multi-share implementations of system keys, ACE may copy key material from the SKS into the CR and expand it into multiple shares.
-The key must still be exported as a SKID.
-The rule of <<ACE-rules-masked-implementations>> about the inclusion of shares in the content's Auxiliary Data applies to system keys as well, as long as the key's value cannot be recovered from the included shares.
+This is addressed in <<ACE-CC-formats>>.
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -3635,7 +3601,7 @@ When the import of the SCC of a fully configured CR is completed,
 .Importing a Fully Configured CR ``K(i)``
 --
  . Clear ``K(i)``.
- . Load `M`, the MDH from the SCC, into ``K(i)``.``MDH``.
+ . Load `M`, the MDH from the SCC, into ``K(i)``.MDH.
  . Check correctness of `M`, and whether the Algorithm is supported.
  . Determine the length of the entire SCC.
  . `actual_impdatalen` <- `M`._AuxDataLen_.
