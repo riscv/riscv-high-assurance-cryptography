@@ -2777,20 +2777,18 @@ For this reason, the architecture defines `ace.input` and `ace.output` (cf. next
 [[ACE-iobuf-transfer-window,the ACEIOBUF transfer window]]
 *The ACEIOBUF transfer window.* The following holds for `ace.input` and for `ace.output`, and is
 stated here once. Both transfer the bytes of the operand window: for each `j` from `acestart` to
-min(`Xl`, `aceiobuftop`) − 1, byte `j` of the ACEIOBUF and the byte at memory address
-`%offset(Xs)` + `j` are exchanged, in the direction the instruction gives. Bytes below `acestart`,
+min(`Xl`, `aceiobuftop`) − 1,
+`ace.input` copies the byte at memory address `%offset(Xs)` + `j` to byte `j` of the ACEIOBUF,
+whereas
+`ace.output` copies byte `j` of the ACEIOBUF to the byte at memory address `%offset(Xs)` + `j`.
+Bytes below `acestart`,
 and bytes at or beyond min(`Xl`, `aceiobuftop`), are not accessed on either side. Upon successful
 completion, `acestart` is set to 0. If `Xl` = 0, or `acestart` {ge} min(`Xl`, `aceiobuftop`), the
-operand window is empty: the operation transfers nothing, and `acestart` is set to 0 exactly as it
-would be had the transfer run to the end of the window (<<ACE-CSR-acestart>>); leaving `acestart`
-unchanged instead would make a resumption loop that retries on an empty window fail to terminate.
+operation transfers nothing, and `acestart` is set to 0.
 If `Xl` is greater than `aceiobuftop`, only the bytes of the window are transferred; software can
 detect this case by comparing `Xl` with `aceiobuftop`. Either instruction may be used only if the
 ACEIOBUF is enabled and `aceiobuflen` is nonzero; otherwise ACE exception
 `ace_exc_unconfigured_buffer` is raised.
-
-For `ace.input` the direction is from memory: the byte at memory address `%offset(Xs)` + `j` is
-copied to byte `j` of the ACEIOBUF.
 
 The intended usage of `ace.input` and `ace.output` is explained in detail in
 <<ACE-usage-input-output>>.
@@ -2811,8 +2809,7 @@ _Mnemonic_::
 _Encoding_::
 +
 --
-`ace.output` is an S-type instruction, encoded exactly as `ace.input` and `ace.store`, with
-which it shares the opcode.
+`ace.output` is an S-type instruction, encoded similarly to `ace.input`.
 
 [wavedrom, , svg]
 ....
@@ -2831,8 +2828,7 @@ _Description_:: {empty}
 +
 --
 This is the output operation corresponding to `ace.input`.
-<<ACE-iobuf-transfer-window>> of <<ACE-instruction-input>> applies, with the direction reversed:
-byte `j` of the ACEIOBUF is written to memory address `%offset(Xs)` + `j`.
+<<ACE-iobuf-transfer-window>> of <<ACE-instruction-input>> applies.
 --
 
 // ////////////////////////////////////////////////////////////////////
@@ -3043,9 +3039,9 @@ An implementation may treat a memory instruction as complete
 
 IRR6:: For block-iterated `ace.exec`, `ace.mv`, and `ace.derive`, fully processed blocks remain written and `acestart` records their total byte count. For transfer instructions, bytes below `acestart` remain transferred at both endpoints. A partially executed instruction therefore commits exactly the state that a shorter instruction performing only the completed operations would have committed, including the CR, `acestart`, `acemanagedcr`, `SIV`, `SIV2`, `IMPQUAL`, `*lcrstatus`, and effective `ACES` fields. This guarantees consistent context save, restore, and resumption. Implementations must honor `acestart` for `ace.exec` and `ace.derive`; handlers must not set it to zero to force a restart, since doing so could reapply state changes or corrupt data.
 +
-`ace.derive` is included because it may need to modify the source CRs state, for example while squeezing a sponge, and may destructively modify the destination. Re-execution from the beginning could therefore advance a state machine twice or overwrite data already consumed. Its interruption points are block boundaries and Algorithm-specific points, including the long-running computations in <<ACE-ECC>> and <<ACE-PQC>>. If input and output overlap, the result may be unpredictable, but remains a function only of architectural state that the executing context is otherwise permitted to observe.
-+
 Algorithm-specific resumable operations that transfer no data are subject to the same guarantee: each execution attempt must either complete the operation or advance its recorded progress.
++
+NOTE: `ace.derive` is included because it may need to modify the source CRs state, for example while squeezing a sponge, and may destructively modify the destination. Re-execution from the beginning could therefore advance a state machine twice or overwrite data already consumed. Its interruption points are block boundaries and Algorithm-specific points, including the long-running computations in <<ACE-ECC>> and <<ACE-PQC>>. If input and output overlap, the result may be unpredictable, but remains a function only of architectural state that the executing context is otherwise permitted to observe.
 
 IRR7:: If an Algorithm performs a a long-running operation in `ace.setst` or in a (block-processing step of) `ace.exec` operation,
 the implementation may interrupt and resume the operation, but the manner in which it records progress is implementation-defined and it cannot be `acestart`
@@ -3182,12 +3178,12 @@ Both formats begin with the 128-bit MDH described in <<ACE-Metadata>>.
  The format of a PI that has been just imported in a CR is the same as the external format, and this representation is finalized into the CR's internal state upon using `ace.mgmt` to complete the import which may include the computation of certain information such as derived keys, multiple shares.
 
 . The length of a *Sealed Cryptographic Context* is determined by, and only by, the
- fields _Algorithm_, _AlgorithmPolicy_, _KeyType_, _StateExtension_, _State_, and
+ fields _Algorithm_, _AlgorithmPolicy_, _KeyType_, _State_, _StateExtension_, and
  _AuxDataLen_ (see <<ACE-extra-content>>).
  It does *not* depend on _SCProtection_. A SCA-protected implementation exports the same
  number of bits as an unprotected one, as required by <<ACE-rules-masked-implementations>>.
- If the CR is in an Error State, the SCC consists of the MDH and `SIV` only, and its length
- is 32 bytes irrespective of every other field.
+ If the CR is in an Error State, the SCC consists only of the MDH, and its length
+ is 16 bytes irrespective of every other field.
 
 . The *CRF capacity* occupied by a CR is determined by, and only by, the fields
  _Algorithm_, _AlgorithmPolicy_ and _SCProtection_.
@@ -3262,17 +3258,17 @@ The MDH's _AuxDataLen_ field specifies the total size of the Implementation-Spec
 If _AuxDataLen_ 2, then the ADS is empty.
 If _AuxDataLen_ {ge} 2 then the ADS contains _AuxDataLen_ blocks.
 
-The information in a CR comprises at least as many bits as the SCC (see <<ACE-SCC>>), excluding `SIV`, `IMPQUAL`, and `SIV2`.
+// The information in a CR comprises at least as many bits as the SCC (see <<ACE-SCC>>), excluding `SIV`, `IMPQUAL`, and `SIV2`.
 
-A CR may contain significantly more information than a SCC,
-which in turn may contain more information than the PI.
+A CR may contain significantly more information than an SCC, which may contain more than a PI.
 This occurs because some information may not be serialized and instead be (re)computed at provisioning or import.
-Also, A CR may contain some optional auxiliary implementation-specific information to optimize performance,
-which can be exported in the ADS in full or partial format.
-A different receiving implementation may safely ignore the latter during import after checking the `IMPQUAL` value
-Despite the fact that the internal state of a CR may contain more information than in a SCC, it is still possible that
-importing an SCC requires more _storage_ because `SIV`, `IMPQUAL`, and `SIV2` are not part of the information stored in a CR.
-This is addressed in <<ACE-CC-formats>>.
+A CR may also contain optional, implementation-specific auxiliary data to improve performance.
+This data may be exported in whole or in part in the ADS.
+An importing implementation must be able to safely ignore it after checking `IMPQUAL`.
+
+// Despite the fact that the internal state of a CR may contain more information than in a SCC, it is still possible that
+// importing an SCC requires more _storage_ because `SIV`, `IMPQUAL`, and `SIV2` are not part of the information stored in a CR.
+// This is addressed in <<ACE-CC-formats>>.
 
 // ////////////////////////////////////////////////////////////////////
 
