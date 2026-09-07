@@ -301,7 +301,7 @@ Architecturally, the CRF contains the following information:
 . An array of 32 128-bit blocks, where the _i_-th entry contains the MDH of `K(i)`.
 . An implementation-defined amount of memory that can be dynamically allocated to the various registers.
   The region of this memory allocated to a CR contains `Content[]` while provisioning and
-   `Content[] := Content1[] @ Content2[]` during other management operations.
+   `Content[] := Content1[] || Content2[]` during other management operations.
 
 The amount of CRF capacity consumed by each CR depends on the Algorithm encoded in the MDH, and it may differ from one CR to another.
 
@@ -755,7 +755,7 @@ The transitions from these Error States to _Unconfigured_ result from explicitly
 
 SGR9:: The MDH of a CR in the _Unconfigured_ State can be read using `ace.getmd*` (<<ACE-instruction-getmd>>), returning all zero values.
 
-SGR10:: Exporting a CR in an Error State exports only the MDH (all fields and values) and the authentication tag.
+SGR10:: Exporting a CR in an Error State exports only the MDH (all fields and values).
 Requesting the SCC's size (`ace.size` <<ACE-instruction-size>>) will return zero (bytes).
 The resulting SCC can be reimported, allowing software to take appropriate actions even after a context switch.
 
@@ -1588,7 +1588,7 @@ This instruction also requires that the CR be ready to import information and th
 
 If the CR is in a Complete State, ACE exception `ace_exc_complete_cr_data_access` is raised.
 
-Let `size` be the size of `Content[]` in a PI or of `Content[] = Content1[] @ Content2[]` in an SCC.
+Let `size` be the size of `Content[]` in a PI or of `Content[] = Content1[] || Content2[]` in an SCC.
 `size` is zero for a CR in an Error State.
 Since `size` must be determined by `ace.load` itself, the caller must have transferred at least the `MDH` into the CR beforehand.
 
@@ -1599,7 +1599,7 @@ Let `max_admissible` = the implementation's maximum SCC payload length for the A
 
 More precisely: For each _j_ from `acestart` to `end` − 1, the byte at memory
 address ``Xs1 + %offset + ``_j_ is loaded into the _j_-th byte of the
-serialized `Content[]` of the CR.  `acestart` tracks the number of bytes loaded.
+serialized `Content[]` of the CR.  `acestart` tracks the prefix-complete number of bytes loaded.
 
 When a system-defined format is used, the semantics of `ace.load` are implementation-dependent.
 --
@@ -1632,7 +1632,7 @@ _Description_::
 +
 --
 Exports raw data from the `Content[]` of the CR `Ks2` or `K{Xs2}`, starting with the first byte of `Content[]`, to memory at address `%offset(Xs1)`.
-`acestart` tracks the number of bytes stored.
+`acestart` tracks the prefix-complete number of bytes stored.
 
 Let `size` = the exported SCC's length, as determined by the CR's MDH, which is a multiple of 16 bytes.
 `ace.load` transfers offsets `[acestart, size)` where
@@ -2317,19 +2317,6 @@ and every other field of `Xs` is ignored.
   . Once the _Locality_ field has been modified,
   when the CR is exported, it will use the new Locality values to tweak the export algorithm.
 
-// [NOTE]
-// ====
-// Replacements are confined to the HW Binding chains because their entries are
-// configured by hardware mechanisms of equal or higher trust as a chain narrows.
-// The entries of the SW Filter Group are instead configured by software at
-// _decreasing_ privilege (M, HS, (V)S): allowing, for example, _MLocality_
-// {rightarrow} _SLocality_ would re-bind a CC away from a secret that only
-// M-mode can rotate, to one controlled by less privileged software, removing
-// the revocation and confinement the original binding provided. A different
-// binding in the Boot Session and SW Filter Groups can only be established by
-// provisioning a new CC.
-// ====
-
 * A zero in any of the bits `Xs`._UsagePolicy_ means that the corresponding policy is _not_ changed.
 
 * A one in any of the bits `Xs`._UsagePolicy_ makes the corresponding policy stricter.
@@ -2643,10 +2630,13 @@ open-destination rules of <<ACE-instruction-derive>> apply.
 // ////////////////////////////////////////////////////////////////////
 
 [[ACE-instruction-size]]
-==== ace.size/ace.avail
+==== ace.size.ex/ace.size.im/ace.avail
+
+WARNING: complete description.
 
 _Synopsis_::
-Return the size of the `Content[]` of a PI, CR, or SCC in bytes, or 1 in case of error (unsupported Algorithm or invalid MDH).
+Return the total size of a memory buffer that would be needed to store the data of a PI, CR, or SCC in bytes.
+`ace.size.ex` returns 0 in case of error (such as unsupported Algorithm or invalid MDH).
 
 _Mnemonic_::
 +
@@ -2655,9 +2645,9 @@ There are three Forms of the `ace.size` instruction:
 (((ACE, instruction, ace.size)))
 
 [upperalpha]
-. `ace.size Xd, Ks|K{Xs}` - Size from a context.
-. `ace.size Xd, Xs` - Size from MDH[63:0] in one (RV64) or two (RV32) GPRs.
-. `ace.size Xd, Vs` - Size from MDH in one vector register.
+. `ace.size.ex/ace.size.im Xd, Ks|K{Xs}` - Size from a context.
+. `ace.size.ex/ace.size.im Xd, Xs` - Size from MDH[63:0] in one (RV64) or two (RV32) GPRs.
+. `ace.size.ex/ace.size.im Xd, Vs` - Size from MDH in one vector register.
 --
 
 // Without this comment, the next part is not properly formatted...
@@ -2675,7 +2665,7 @@ The encoding shares opcode, `func3`, and `funct2` (the two msbs of `funct7`) wit
     { bits:  3, name: 0x0, attr: ['ace.exec'] },
     { bits:  5, name: 'Ks/K{Xs}/Xs/Vs' },
     { bits:  5, name: 0x0 },
-    { bits:  1, name: 0x0 },
+    { bits:  1, name: 'q' },
     { bits:  1, name: 'r' },
     { bits:  1, name: 0x1 },
     { bits:  2, name: 'F' },
@@ -2689,6 +2679,9 @@ The `F` field and the `r` bit may assume the following values:
 * `F` = `0b00`, `r` = `1` {implies} Form A: Size/availability from a context given indirectly as `K{Xs}`.
 * `F` = `0b01`, `r` = `0` {implies} Form B: Size/availability from MDH in one (RV64) or two (RV32) GPRs.
 * `F` = `0b10`, `r` = `0` {implies} Form C: Size/availability from MDH in a 128-bit vector register.
+
+For `ace.size.ex`, `q` is `0`, and for `ace.size.im`, `q` is `1`.
+Bit `q` is `0` if we are evaluating the size for export (i.e, total memory size), or `1` for import (only the `Content[]` size).
 --
 
 _Description_:: {empty}
@@ -2703,12 +2696,48 @@ switching.
 The three Forms differ only in where the MDH is taken from, as the mnemonics above give: from the CR
 itself for Form A, from Bits [63:0] supplied in `Xs` (in `X[s+1] @ Xs` on RV32) for Form B, and from Bits [127:0] supplied in `Vs` for Form C.
 
-The instruction returns `1` on error: for Form A when the CR is unconfigured, and for Forms B–D
-when the _Algorithm_, _AlgorithmPolicy_ or _SCProtection_ encoded in the supplied MDH is
+`ace.size.ex` is computed as follows:
+
+. If the MDH._State_ is a Valid State, then:
+  ..  If _AuxDataLen_ < 2, then: 32 + size of a PI's `Content[]`.
+  ..  If _AuxDataLen_ {ge} 2, then: 32 + size of a PI's `Content[]` + 16 * _AuxDataLen_.
+. If the MDH._State_ is an Error State, then: 16 (only MDH).
+. If the MDH._State_ is an Incomplete State, then:
+  .. If the MDH._State_ is `ace_cfgst_{importing|exporting}_pp`, then: 32 + size of a PI's `Content[]`.
+  .. If the MDH._State_ is `ace_cfgst_{importing|exporting}_es`, then: 16.
+  .. If the MDH._State_ is `ace_cfgst_{importing|exporting}`, then:
+    ...  If _AuxDataLen_ < 2, then: 32 + size of a SCC's `Content1[]`.
+    ...  If _AuxDataLen_ {ge} 2, then: 32 + size of a SCC's `Content1[]` + 16 * _AuxDataLen_.
+
+`ace.size.im` is computed as follows:
+
+. If the MDH._State_ is a Valid State, then:
+  ..  If _AuxDataLen_ < 2, then: size of a PI's `Content[]`.
+  ..  If _AuxDataLen_ {ge} 2, then: size of a PI's `Content[]` + 16 * (_AuxDataLen_-2).
+. If the MDH._State_ is an Error State, then: 0.
+. If the MDH._State_ is an Incomplete State, then:
+  .. If the MDH._State_ is `ace_cfgst_{importing|exporting}_pp`, then: size of a PI's `Content[]`.
+  .. If the MDH._State_ is `ace_cfgst_{importing|exporting}_es`, then: 0.
+  .. If the MDH._State_ is `ace_cfgst_{importing|exporting}`, then:
+    ...  If _AuxDataLen_ < 2, then: size of a SCC's `Content1[]`.
+    ...  If _AuxDataLen_ {ge} 2, then: size of a SCC's `Content1[]` + 16 * (_AuxDataLen_-2).
+
+In other words:
+
+. If the MDH._State_ is a Valid State, then:
+  ..  If _AuxDataLen_ < 2, then: 32 * (1-`q`) + size of a PI's `Content[]`.
+  ..  If _AuxDataLen_ {ge} 2, then: 32 * (1-`q`) + size of a PI's `Content[]` + 16 * (_AuxDataLen_ - 2*`q`).
+. If the MDH._State_ is an Error State, then: 16 (only MDH).
+. If the MDH._State_ is an Incomplete State, then:
+  .. If the MDH._State_ is `ace_cfgst_{importing|exporting}_pp`, then: 32 * (1-`q`) + size of a PI's `Content[]`.
+  .. If the MDH._State_ is `ace_cfgst_{importing|exporting}_es`, then: 16 * (1-`q`) .
+  .. If the MDH._State_ is `ace_cfgst_{importing|exporting}`, then:
+    ...  If _AuxDataLen_ < 2, then: 32 * (1-`q`)  + size of a SCC's `Content1[]`.
+    ...  If _AuxDataLen_ {ge} 2, then: 32 * (1-`q`)  + size of a SCC's `Content1[]` + 16 * (_AuxDataLen_ - 2*`q`).
+
+The instruction also returns `0`: for Form A when the CR is unconfigured,
+and for Forms B–D when the _Algorithm_, _AlgorithmPolicy_ or _SCProtection_ encoded in the supplied MDH is
 unsupported, or the MDH is otherwise malformed. Form B will only check the format of bits [63:0] of `Xs`.
-A return of `0` is *not* an error indication: it is the size of the SCC of a CC in an Error State
-(<<ACE-length-rule>>), and the caller can tell the two apart by inspecting the _State_ field of the
-MDH it supplied.
 --
 
 //
