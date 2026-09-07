@@ -1938,8 +1938,9 @@ Depending on the previous state of the CR, the actual _State_ after `ace.mgmt` m
 
 If a CR is in an Error State, it is exported by simply exporting the copying the MDH to memory.
 
-The semantics of `ace.mgmt` are as follows.
-Three steps are common to every operation below and are not repeated in the description of each of them:
+We now proceed to describe the semantics of `ace.mgmt`.
+
+First, Three steps are common to every operation below and are not repeated in the description of each of them:
 
 . `ace.mgmt` first checks that `acemanagedcr` holds either the target CR's number or 32, and raises an illegal-instruction exception if it holds any other value;
 . It may affect `acemanagedcr` as follows:
@@ -1947,9 +1948,11 @@ Three steps are common to every operation below and are not repeated in the desc
 .. if it completed a management operation resulting in a CR in a Complete State, it writes 32 to `acemanagedcr`; and
 .. if it completed a management operation resulting in a CR in Incomplete State, `acemanagedcr` is left unchanged.
 . `ace.mgmt` also clears `acestart` (it is the duty of software to restore `acestart` to allow interrupted management operations to be resumed).
+
+Now we consider the specific semantics of `ace.mgmt` for each of the four operations it supports:
 --
 +
-* *`ace.mgmt` is used to start a provisioning, resp., import process.*
+. *`ace.mgmt` is used to start a provisioning, resp., import process.*
 +
 --
 Before issuing `ace.mgmt`, software must obtain the MDH. Let `ml` be this value.
@@ -1991,20 +1994,48 @@ ACE exception `ace_exc_unsupported` is _not_ raised when accessing or using a CR
 ... else CR._State_ is set to `ace_cfgst_importing`.
 --
 +
-* *`ace.mgmt` is issued with `ace_CR_management_end`*:
-`ace.mgmt` with immediate `ace_cfgst_provisioning` reads first the MDH of the target CR.
-Depending on whether MDH._State_ is
+. *`ace.mgmt` is used to start an export process.*
 +
 --
-[loweralpha]
-. `ace_cfgst_provisioning`,
-. `ace_cfgst_importing`, `ace_cfgst_importing_pp`, resp.
-. `ace_cfgst_exporting`, `ace_cfgst_exporting_pp`,
+Let `ml` <- the MDH of the CR.
+Software must first save this value in its local state to restore its _State_ when completing the export process.
+`ace.mgmt` can be of any form, but any auxiliary input provided through Forms B, C, or D is ignored.
+`ace.mgmt` performs following operations:
+
+.. If `ml`._State_ is a Complete State:
++
+Prepare the CR to produce an SCC.
+This includes encrypting its contents (empty in the case of an Error State) and computing the authentication tag(s)
+as specified in <<ACE-export-import-algorithms>>:
++
+The architecturally observable behavior is described in <<ACE-CC-formats>>.
+
+... if `ml`._State_ is an Error State, the CR is invalidated. Export of a CR in an Error State is performed by simply extracting its MDH.
+
+... if `ml`._State_ is in a Valid State, CR's _State_ is set to `ace_cfgst_exporting`.
+
+.. If `ml`._State_ is in an Incomplete State: (we are exporting a not fully configured CR or we are initiating a nested CR export):
+
+No encryption or authentication occurs; the contents of the CR are exported verbatim, in the same order in which they appear in the PI (for a partially provisioned CR) or in the SCC (for a partially imported CR, or a CR previously prepared for export whose export process was itself interrupted).
+... The CR's _State_ is set to `ace_cfgst_exporting_pp`.
+
+These values of CR._State_  are the value on which `ace.store` (<<ACE-instruction-store>>) and the CR-reading variants of `ace.mv` (<<ACE-instruction-mv>>) are gated, so no export can proceed until CR._State_ is set.
+--
++
+. *`ace.mgmt` is issued with `ace_CR_management_end`*:
++
+--
+`ace.mgmt` with immediate `ace_CR_management_end` reads first the MDH of the target CR.
+Depending on whether MDH._State_ is
+
+* `ace_cfgst_provisioning`,
+* `ace_cfgst_importing`, `ace_cfgst_importing_pp`, resp.
+* `ace_cfgst_exporting`, `ace_cfgst_exporting_pp`,
 
 the instruction will proceed to complete a provisioning, importing, resp., exporting process, as are described next.
 --
 +
-* *`ace.mgmt` is used to complete a provisioning process.*
+.. *`ace.mgmt` is used to complete a provisioning process.*
 +
 --
 In this case, `ace.mgmt` does not need a saved metadata header from the start of the provisioning process, hence if a Form B, C, or D, was used in place of Form A, the auxiliary input is simply ignored.
@@ -2020,7 +2051,7 @@ The configuration of the CR may require random generation of some material which
 This guarantees that such material is not leaked.
 --
 +
-* *`ace.mgmt` is used to complete an import process.*
+.. *`ace.mgmt` is used to complete an import process.*
 +
 --
 The software uses Form B, C, or D of `ace.mgmt` to pass along the value of `ml` saved when the import process was started.
@@ -2033,46 +2064,21 @@ restores the saved CR's _State_ from `ml`, and then
 decrypts and authenticates the imported SCC, and makes the CR available to software.
 Otherwise:
 
-.. If `ml`._State_ is a Complete State (we are importing the export of a fully configured CR)
-... CR.MDH._State_ is set to `ml`._State_.
-... The ACE unit decrypts and authenticates the CR's content.
-... If authentication fails, the target CR is transitioned to Error State _Authentication Failed_. No exception is raised.
-... The ACE unit performs any necessary readjustment of the CR's content to turn it into the format internally consumed by the ACE Unit.
-.. If `ml`._State_ is not a Complete State (we are either importing the export of a not fully configured CR or a nested CR export):
-... CR.MDH._State_ is set to `ml`._State_.
+... If `ml`._State_ is a Complete State (we are importing the export of a fully configured CR)
+.... CR.MDH._State_ is set to `ml`._State_.
+.... The ACE unit decrypts and authenticates the CR's content.
+.... If authentication fails, the target CR is transitioned to Error State _Authentication Failed_. No exception is raised.
+.... The ACE unit performs any necessary readjustment of the CR's content to turn it into the format internally consumed by the ACE Unit.
+... If `ml`._State_ is not a Complete State (we are either importing the export of a not fully configured CR or a nested CR export):
+.... CR.MDH._State_ is set to `ml`._State_.
 --
 +
-* *`ace.mgmt` is used to start an export process.*
+.. *`ace.mgmt` is used to complete an export process.*
 +
 --
-Let `ml` <- the MDH of the CR.
-Software must first save this value in its local state to restore its _State_ when completing the export process.
-`ace.mgmt` can be of any form, but any auxiliary input provided through Forms B, C, or D is ignored.
-`ace.mgmt` performs following operations:
-
-.. If `ml`._State_ is a Complete State:
-+
-Prepare the CR to produce an SCC.
-This includes encrypting its contents (empty in the case of an Error State) and computing the authentication tag(s):
-The architecturally observable behavior is described in <<ACE-CC-formats>>.
-
-... if `ml`._State_ is an Error State, the CR is invalidated. Export of a CR in an Error State is performed by simply extracting its MDH.
-
-... if `ml`._State_ is in a Valid State, CR's _State_ is set to `ace_cfgst_exporting`.
-
-.. If `ml`._State_ is in an Incomplete State: (we are exporting a not fully configured CR or we are initiating a nested CR export):
-+
-No encryption or authentication occurs; the contents of the CR are exported verbatim, in the same order in which they appear in the PI (for a partially provisioned CR) or in the SCC (for a partially imported CR, or a CR previously prepared for export whose export process was itself interrupted).
-... The CR's _State_ is set to `ace_cfgst_exporting_pp`.
-
-These values of CR._State_  are the value on which `ace.store` (<<ACE-instruction-store>>) and the CR-reading variants of `ace.mv` (<<ACE-instruction-mv>>) are gated, so no export can proceed until CR._State_ is set.
---
-+
-* *`ace.mgmt` is used to complete an export process.*
-+
---
-The software uses Form B, C, or D, of `ace.mgmt` to pass along the value of `ml` saved by the software in its own state upon initiation of the export process. If a Form A is used, the effect is as if the instruction received a zero auxiliary input.
-Form B with is equivalent to passing a 128-bit input here the 64 lower bits of the MDH are set to the passed value and the upper 64 bits are set to 0.
+Software uses Form B, C, or D of `ace.mgmt` to supply the MDH value saved when the export process began.
+Form A supplies a zero auxiliary input.
+Form B supplies a 128-bit auxiliary input with the lower 64 bits set to the supplied value and the upper 64 bits set to zero.
 
 Let `ml` be this auxiliary input.
 Then:
@@ -2080,14 +2086,14 @@ Then:
 .. If `ml`._State_ is a Complete State (i.e., including Error States), the instruction makes the exported CR available
 to the ACE unit again in the clear format, and allows software to access it:
 ... The implementation must restore the state of the CR to the state it was in when the export process was initiated:
-  This can be done by decrypting its contents or, alternatively, restoring them from an internal backup.
+  This can be done by decrypting and authenticating its contents or, alternatively, restoring them from an internal backup.
 
 .. If `ml`._State_ is not a Complete State, no changes to the CR's contents are made.
 
 .. The CR's _State_ is set to `ml`._State_.
 --
 +
-* *If `ace_CR_management_end` is issued when the target CR's _State_ is a Complete State* (i.e., no management operation open on the target CR), the instruction does not perform any state change and raises an illegal-instruction exception.
+. *If `ace_CR_management_end` is issued when the target CR's _State_ is a Complete State* (i.e., no management operation open on the target CR), the instruction does not perform any state change and raises an illegal-instruction exception.
 +
 [IMPORTANT]
 ====
@@ -2098,19 +2104,6 @@ for instance by an exception taken during the operation. No other field of the M
 is written from `ml`, and the operand has no other effect on the CR. In particular,
 `ace.mgmt` is not a means of substituting any other metadata into a CR.
 ====
-+
---
-* General rules:
-
-** Whenever `ace.mgmt` fails for any other reason, the target CR transitions to Error State `ace_state_invalid`.
-
-** The full provisioning, export, and import operations are described in detail in <<ACE-export-import-algorithms>>.
-
-** Whenever _State_ transitions from `ace_cfgst_importing` to a Complete State, the implementation must authenticate the architecture-defined SCC segment before any decrypted Content becomes usable, regardless of whether the serialized bytes were supplied by `ace.load`, `ace.mv`, trap-and-emulation, or another architecturally permitted transfer mechanism. On authentication failure, the CR must be cryptographically erased and transitioned to Error State `ace_state_import_auth`; it must not transiently or architecturally enter a usable state.
-
-** Whenever _State_ transitions a Complete State to `ace_cfgst_exporting`, the implementation must generate the SCC, including `SIV`, `SIV2`, and `IMPQUAL`,
-as specified in <<ACE-export-import-algorithms>>.
---
 
 //
 
