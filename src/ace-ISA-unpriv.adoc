@@ -8,8 +8,7 @@
 [[ACE-unpriv-intro]]
 === Introduction
 
-ACE relies on certain fundamental concepts, which are introduced here.
-While this leads to some repetition, it improves the clarity of the presentation.
+We introduce here the fundamental concepts around which ACE is designed.
 
 [[ACE-concepts]]
 ==== Fundamental Concepts and Definitions
@@ -66,15 +65,18 @@ ACE can bind CCs to *Localities*, i.e., restrict usage to specific devices or de
 [[ACE-architectural-model]]
 ==== Architectural Model
 
-This section is informative and non-normative.
+_This section is informative and non-normative._
 
-ACE is architected as an _attached_ unit: the behavior of ACE instructions model messages sent over a tightly coupled coprocessor interface to the actual implementation. The ACE unit receives operations from the hart, executes them independently, and returns the results.
+ACE is architected as an _attached_ unit: the behavior of ACE instructions is modeled like messages sent over a tightly coupled coprocessor interface to the actual implementation. The ACE unit receives operations from the hart, executes them independently, and returns the results.
+ACE has been designed to require the hart-side part of the implementation to be as simple as possible.
+Hence, as much as possible of the logic implementing CR management instructions is implemented by software, and
+all the logic implementing cryptographic operations is implemented in the ACE unit.
+This allows several small cores to share the same ACE unit, each with its own per-hard state, while minimizing the hardware footprint.
 
-The present specification defines only the behavior, not implementation:
+The present specification only defines the behavior of the architecture, it does not define implementation:
+ACE may be implemented as part of a CPU core or as a distinct hardware unit, with separate architectural state for each client hart.
 
-. ACE may be implemented within a CPU core or as a hardware unit shared by multiple cores, with separate architectural state for each client hart.
-
-. ACE need not be implemented entirely in hardware. Partial or complete trap-and-emulate implementations are permitted.
+ACE need not be implemented entirely in hardware. Partially or completely emulated implementations are possible.
 For example, an implementation may perform symmetric cipher operations (cf. <<ACE-states-symmetric>>) in the ACE unit while emulating public-key cryptography (cf. <<ACE-ECC>> and <<ACE-PQC>>), whose primitives may require very large states. Emulating these operations in M-mode firmware avoids storing their states in the ACE unit, provided that the relevant CRs reside in secure SRAM or other secure memory.
 
 It is required that CR state never be accessible in clear to any privileged mode except for M-mode and, possibly, authenticated Debug mode.
@@ -246,9 +248,8 @@ extension defines each instruction and CSR, and of what is available under
 2+<| Always present
 
 | `acemanagedcr`, `acesivl`/`acesivh`, `acesiv2l`/`acesiv2h`, `aceiql`/`aceiqh`
-(and, on RV32, their `*h` shadows)
 | `Zkl` common
-2+<| Always present
+2+<| Always present. On RV32, their `*h` shadows as well.
 |===
 
 // ////////////////////////////////////////////////////////////////////
@@ -1310,9 +1311,8 @@ Values from 33 to 63 are reserved; writing one leaves `acemanagedcr` unchanged.
 NOTE: Because the register is writable at any privilege level, the `acemanagedcr` check that `ace.mgmt`
 performs (<<ACE-instruction-setst>>) detects an accidentally interleaved management operation but
 does not prevent a deliberate one: software that writes 32 can open a second operation and destroy
-the in-flight `SIV`, `SIV2` and `IMPQUAL` values. Serializing management operations is therefore a
-software obligation (<<ACE-CC-formats>>). No confidentiality property depends on the check;
-the loss is confined to the interleaved operations, which fail authentication or must be restarted.
+the in-flight `SIV`, `SIV2` and `IMPQUAL` values.  These values can be saved and restored.
+CR management operations require particular attention, as described in <<ACE-CC-management>>.
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -2008,7 +2008,7 @@ Prepare the CR to produce an SCC.
 This includes encrypting its contents (empty in the case of an Error State) and computing the authentication tag(s)
 as specified in <<ACE-export-import-algorithms>>:
 +
-The architecturally observable behavior is described in <<ACE-CC-formats>>.
+The architecturally observable behavior is described in <<ACE-CC-management>>.
 
 ... if `ml`._State_ is an Error State, the CR is invalidated. Export of a CR in an Error State is performed by simply extracting its MDH.
 
@@ -2419,7 +2419,7 @@ The destination CR becomes a perfect copy of the source CR: all internal data, i
 
 The instruction achieves the same result as exporting the source CR to an SCC and importing the SCC into the destination CR, except that it is not allowed if the source CR's _State_ is not a Complete State.
 
-If the destination CR's _State_ is not a Complete State, the instruction performs no operation and raises ACE exception `ace_exc_privilege_violation`. Overwriting a CR whose management operation is still open would discard that operation and leave `acemanagedcr` and the `SIV`, `SIV2` and `IMPQUAL` storage inconsistent with it.
+If either the source or destination CR are not in a Complete State (Valid or Error), the instruction performs no operation and raises ACE exception `ace_exc_privilege_violation`.
 --
 
 // ////////////////////////////////////////////////////////////////////
@@ -3151,8 +3151,8 @@ The rule of <<ACE-rules-masked-implementations>> about the inclusion of shares i
 
 // ////////////////////////////////////////////////////////////////////
 
-[[ACE-CC-formats]]
-=== Cryptographic Context Formats
+[[ACE-CC-management]]
+=== Management of Cryptographic Contexts
 
 ACE defines two external CC formats:
 
@@ -3170,39 +3170,47 @@ Both formats begin with the 128-bit MDH described in <<ACE-Metadata>>.
 ==== Fields Determining the Length of a PI, of an SCC, and of a CR
 
 . The length of a *Provisioning Input* is determined by, and only by, the fields
- _Algorithm_, _AlgorithmPolicy_ and _KeyType_.
- In particular, it does *not* depend on _AuxDataLen_: a PI carries no
- implementation-specific data, and _AuxDataLen_ must be zero in the MDH of a PI.
- It also does not depend on _StateExtension_, which must likewise be zero in the
- MDH of a PI, nor on _SCProtection_.
- The format of a PI that has been just imported in a CR is the same as the external format, and this representation is finalized into the CR's internal state upon using `ace.mgmt` to complete the import which may include the computation of certain information such as derived keys, multiple shares.
+_Algorithm_, _AlgorithmPolicy_ and _KeyType_.
+In particular, it does *not* depend on _AuxDataLen_: a PI carries no
+implementation-specific data, and _AuxDataLen_ must be zero in the MDH of a PI.
+It also does not depend on _StateExtension_, which must likewise be zero in the
+MDH of a PI, nor on _SCProtection_.
+During provisioning, the information of a CR reflects the external format of a PI.
+The internal representation is finalized into the CR's internal state upon using
+`ace.mgmt` to complete the import which may include the computation of certain
+information such as derived keys, or multiple shares.
 
 . The length of a *Sealed Cryptographic Context* is determined by, and only by, the
- fields _Algorithm_, _AlgorithmPolicy_, _KeyType_, _State_, _StateExtension_, and
- _AuxDataLen_ (see <<ACE-extra-content>>).
- It does *not* depend on _SCProtection_. A SCA-protected implementation exports the same
- number of bits as an unprotected one, as required by <<ACE-rules-masked-implementations>>.
- If the CR is in an Error State, the SCC consists only of the MDH, and its length
- is 16 bytes irrespective of every other field.
+fields _Algorithm_, _AlgorithmPolicy_, _KeyType_, _State_, _StateExtension_, and
+_AuxDataLen_ (see <<ACE-extra-content>>).
+It does *not* depend on _SCProtection_ (see <<ACE-rules-masked-implementations>>).
+If the CR is in an Error State, the SCC consists only of the MDH, and its length
+is 16 bytes irrespective of every other field.
 
 . The *CRF capacity* occupied by a CR is determined by, and only by, the fields
- _Algorithm_, _AlgorithmPolicy_ and _SCProtection_.
- It does not depend on _KeyType_, because a CR holds the expanded key material whether the
- key was provisioned by value or retrieved through a System Key Identifier,
- nor on _StateExtension_, because a CR is allocated with room for every field the
- Algorithm may come to use.
+_Algorithm_, _AlgorithmPolicy_ and _SCProtection_.
+It does not depend on _KeyType_, because a CR holds the expanded key material whether the
+key was provisioned by value or retrieved through a System Key Identifier,
+nor on _StateExtension_, because a CR is allocated with room for every field the
+Algorithm may come to use.
 
-All seven fields above lie in bits [63:0] of the MDH, which is what allows a PI or
-SCC length to be computed from their first eight bytes alone, as required by `ace.load`
-(<<ACE-instruction-load>>), `ace.store` (<<ACE-instruction-store>>) and Form B of
-`ace.size` (<<ACE-instruction-size>>).
+// All six fields
+// _Algorithm_, _AlgorithmPolicy_, _KeyType_,
+// _State_, _StateExtension_, and _AuxDataLen_,
+// lie in bits [63:0] of the MDH, which is what allows a PI or
+// SCC length to be computed from these 64 bits, as required by `ace.load`
+// (<<ACE-instruction-load>>), `ace.store` (<<ACE-instruction-store>>) and Form B of
+// `ace.size` (<<ACE-instruction-size>>).
+// The same applies to _SCProtection_, allowing the ACE unit to allocate
+// the requires internal resources upon issuing `ace.mgmt` using only
+// the first eight bytes of the MDH.
 
 No other MDH field may affect any of these three lengths.
 
 // ////////////////////////////////////////////////////////////////////
 
 [[ACE-data-formats]]
-==== Formats of Provisioning Input, Sealed Cryptographic Context, and Partially Configured Cryptographic Context
+==== Formats of PIs, SCCs, and Partially Configured Cryptographic Contexts
 
 The Provisioning Input (PI) consists of two sections of data, MDH and `Content[]`, which do not have to be contiguous in memory.
 
@@ -3233,16 +3241,48 @@ A Sealed Cryptographic Context (SCC) consists of (up to) five sections of data, 
   Encrypted in memory and during partial import.
 |===
 
-If the context is exported while in an Error State, Sections 3–5 are empty; that is, the SCC consists only of a plaintext `MDH` and `SIV`.
+The MDH's _AuxDataLen_ field specifies the total size of the Implementation-Specific ADS (`SIV2`, `IMPQUAL`, and `Content2[]`), except for the special value 1 (see <<ACE-extra-content>> and <<ACE-SCC-import>>).
+If _AuxDataLen_ 2, then the ADS is empty.
+If _AuxDataLen_ {ge} 2 then the ADS contains _AuxDataLen_ blocks.
 
-During import of an encrypted and authenticated SCC, `Content1[]` and `Content2[]` are kept encrypted in the CR until
-the `ace.mgmt` operation to complete the import is issued. These instruction then decrypts and authenticates `Content1[]` and `Content2[]`.
+// A CR may contain more information than an SCC (excluding `SIV`, `IMPQUAL`, and `SIV2`), which in turn may contain more information than a PI.
+// This occurs because some information may not be serialized and instead be (re)computed at provisioning or import.
+// A CR may also contain optional, implementation-specific auxiliary data to improve performance.
+// This data may be exported in whole or in part in the ADS.
+// An importing implementation must be able to safely ignore it after checking `IMPQUAL`.
 
-If a partially imported SCC is exported, the data is exported as-is, i.e., encrypted.
+When exporting a CR in an Error State, Sections 2–5 are empty; that is, the SCC consists only of the `MDH`.
 
-If the context is exported while partially configured, i.e., provisioning or import has not completed, then no encryption and authentication of the data is performed. The data is exported as is: unencrypted if the original interrupted operation was a provisioning operation, and encrypted if it was an import operation.
-In the latter case, `SIV`, `SIV2` and `IMPQUAL` are not included in the export, but only saved and restored with the process's state at context save and restore if a context switch occurs.
-The format of the exported data is therefore the following:
+A third format is the Partially Configured Cryptographic Context (PCCC), which is used when a partially configured or exported SCC is exported and reimported upon preemption of the management procedures.
+
+During import of an (encrypted and authenticated) SCC, or during export of a CR to a SCC, the `Content[]` is kept encrypted in the CR until
+the `ace.mgmt` operation to complete the management operation is issued, which decrypts and authenticates the `Content[]`.
+This requires that the MDH and `Content[]` have been loaded, and that
+the corresponding `SIV`, and if _AuxDataLen_ {ge}, also `SIV2` and `IMPQUAL`, are configured.
+
+During export of a CR to a SCC, the initial `ace.mgmt` operation encrypts the contents and generates `SIV` and, if _AuxDataLen_, also `SIV2` and `IMPQUAL`. The contents remain encrypted in the CR until the completion operation either restores the clear contents from an internal copy or re-decrypts and authenticates them. The requirements for the latter are the same as for completing an import.
+
+At nested levels, no additional encryption or authentication is performed. Data is exported as-is:
+
+* If a partially provisioned SCC is exported, the data is in the clear. This is not a security issue, as the plaintext was already available to software and thus to its more privileged modes.
+
+* If a partially imported SCC is exported, the data is already encrypted.
+
+* If the partial export of a CR into a SCC is preempted and the CR must be exported again, the data is already encrypted.
+
+In these cases, it is not necessary to include `SIV`, `SIV2` and `IMPQUAL` in the export.
+It suffices to save, resp., restore them at context save, resp., restore, and only when `acemanagedcr` is in the range [0..31].
+
+By saving metadata headers in its own state, software implicitly maintains a stack of _State_ values.
+The top value corresponds to the previous nesting level, which the `ace.mgmt` completion operation restores.
+
+To track progress of `ace.load`, `ace.store`, and `ace.mv`, software must save and restore `acestart` at context save and restore.
+The same requirement applies to `SIV`, `SIV2`, and `IMPQUAL`.
+These CSRs must be saved and restored unconditionally, because software may set them before issuing `ace.mgmt`.
+
+NOTE: If the outermost operation is not a provisioning operation, an attempt to close a nested management operation by providing the wrong _State_ value will cause authentication to fail either immediately (for instance, during import, because not all data has been imported) or at the outermost level, because SIV verification will use the ciphertext rather than the plaintext.
+
+The format of the exported data for _partially configured_ SCCs is therefore the following:
 
 [[ACE-PCCC]]
 .Format of a Partially Configured Cryptographic Context
@@ -3254,33 +3294,9 @@ The format of the exported data is therefore the following:
 | 2.b     | `Content2`   | Cf. Section 5.b in <<ACE-SCC>>.
 |===
 
-The MDH's _AuxDataLen_ field specifies the total size of the Implementation-Specific ADS (`SIV2`, `IMPQUAL`, and `Content2[]`), except for the special value 1 (see <<ACE-SCC-import>>).
-If _AuxDataLen_ 2, then the ADS is empty.
-If _AuxDataLen_ {ge} 2 then the ADS contains _AuxDataLen_ blocks.
-
-// The information in a CR comprises at least as many bits as the SCC (see <<ACE-SCC>>), excluding `SIV`, `IMPQUAL`, and `SIV2`.
-
-A CR may contain more information than an SCC (excluding `SIV`, `IMPQUAL`, and `SIV2`), which in turn may contain more information than a PI.
-This occurs because some information may not be serialized and instead be (re)computed at provisioning or import.
-A CR may also contain optional, implementation-specific auxiliary data to improve performance.
-This data may be exported in whole or in part in the ADS.
-An importing implementation must be able to safely ignore it after checking `IMPQUAL`.
-
-// Despite the fact that the internal state of a CR may contain more information than in a SCC, it is still possible that
-// importing an SCC requires more _storage_ because `SIV`, `IMPQUAL`, and `SIV2` are not part of the information stored in a CR.
-// This is addressed in <<ACE-CC-formats>>.
-
 // ////////////////////////////////////////////////////////////////////
 
-[[ACE-export-import-algorithms]]
-=== Management of Cryptographic Contexts
-
-We now present the cryptographic algorithms used in the export and import of SCCs.
-This completes the description of the semantics of the management operations given in <<ACE-management-operations>>,
-in the description of `ace.setst`
-(<<ACE-instruction-setst>>).
-The code detailing the operations as split by the architecture (<<ACE-management-code-snippets>>) illustrates how these management operations are actually realized by the caller.
-See also `ace.load` (<<ACE-instruction-load>>), `ace.store` (<<ACE-instruction-store>>), and `ace.getmdl` (<<ACE-instruction-getmd>>).
+==== Nested Management Operations
 
 In <<cc-nested>> we see an exemplificative workflow of nested management operations.
 
@@ -3356,19 +3372,17 @@ B -> B: Complete management: <i>State</i> is now a Complete <i>State</i>.
 @enduml
 ....
 
-The management operations at the base level (i.e., the outermost nesting level) are the only ones that may perform cryptographic operations:
-
-* If the management operation at the base level is an import,
-cryptographic verification is only performed at the management completion operation,
-after MDH, `SIV`, \{ if _AuxDataLen_, also `SIV2` and `IMPQUAL`, \}, `Content1[]` \{ and `Content2[]` \} have been loaded.
-
-* If the management operation is an export, then the `ace.mgmt` to start the operation prepares the CR by encrypting it and generating `SIV` and, if _AuxDataLen_, also `SIV2` and `IMPQUAL`.  The management operation to complete the export will either restore the clear contents from an internal copy or re-decrypt it and authenticate it.
-
-The software, by saving metadata headers in its own state, maintains an implicit stack of the _State_ values, with the top value corresponding to the previous nesting level.
-The `ace.mgmt` completion operation restores the previous nesting level from the stack. This way, cryptographic operations need to be performed only at the outermost level.  Concluding a base-level import or an export early will not authenticate, and therefore they cannot be used to leak plaintext at an outer nesting level. The only way plaintext is allowed to be exported is if the outermost operation itself was a provisioning operation, in which case the plaintext was already available to software.  In order to properly track `ace.load`, `ace.store`, and `ace.mv`, the CSR `acestart` must be saved and restored at interruption and before control return. This holds also for `SIV`, `SIV2` and `IMPQUAL`. Since software may load and set up these values before issuing `ace.mgmt`, these CSRs must be saved and restored unconditionally.
-
-
 // ////////////////////////////////////////////////////////////////////
+
+[[ACE-export-import-algorithms]]
+=== SCC Export and Import Algorithms
+
+We now present the cryptographic algorithms used in the export and import of SCCs.
+This completes the description of the semantics of the management operations given in <<ACE-management-operations>>,
+in the description of `ace.setst`
+(<<ACE-instruction-setst>>).
+The code detailing the operations as split by the architecture (<<ACE-management-code-snippets>>) illustrates how these management operations are actually realized by the caller.
+See also `ace.load` (<<ACE-instruction-load>>), `ace.store` (<<ACE-instruction-store>>), and `ace.getmdl` (<<ACE-instruction-getmd>>).
 
 [[ACE-SCC-AEAD]]
 ==== SCC Key Derivation and POLYVAL
