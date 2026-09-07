@@ -432,13 +432,13 @@ All _Reserved_ bits, as well as bits unused by a given Algorithm, are zero.
 |   [79:78] |   2  | Reserved          | Reserved for future use.
 |   [95:80] |  16  | _AlgorithmUse_    | Used by Algorithms and implementations to store additional state information.
 |  [115:96] |  20  | _ExpirationDate_  | If non-zero, the expiration date of this CC. See <<ACE-Metadata-expiration-date>>. Expressed in hours since 00:00, January 1, 2027 (about 119 years and 7 months).
-| [127:116] |  12  | Reserved          | Reserved for future use.
+| [125:116] |  10  | Reserved          | Reserved for future use.
+| [127:126] |   2  | _Version_         | MDH format version.
 |===
 
 The fields are described in detail in the following subsections.
 
 <<ACE-length-rule>> is the sole authoritative source for determining which MDH fields specify the sizes of provisioning inputs and Sealed Cryptographic Contexts, and the maximum internal memory required by the Algorithm encoded in the CR.
-
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -920,6 +920,32 @@ The _AlgorithmUse_ field can be used by an Algorithm to store additional informa
 If not used by the Algorithm, the implementation may use this field.
 
 // The information contained in this field must _not_ affect any of the lengths of <<ACE-length-rule>>.
+
+// ////////////////////////////////////////////////////////////////////
+
+[[ACE-Algorithm-version]]
+===== _Version_ Field
+
+This two-bit field denotes the version of the MDH format.
+
+If _Version_ = 0, then the format is the current version.
+
+The value _Version_ = 1 is used to denote newer revisions of the MDH format.
+Additional version information must be encoded in other fields of the MDH.
+
+If _Version_ = 3, the format is system-specific.
+Any such format must be preceded by an MDH in the ACE format in order to allow provisioning or import operations to be initiated.
+The system-specific format may contain its own usage and access policies or locality bindings:
+Such information must be converted to an ACE-compatible representation without weakening any usage policy or locality:
+At the completion of provisioning or import via `ace.mgmt`, the MDH policies may be accordingly replaced, and _Version_ is set to 0 (or 1 in a future version of this specification).
+
+Support for loading system-specific formats is optional.
+However, the resulting CRs can be exported only in the ACE-specified format to avoid interoperability issues with other implementations.
+To prevent loading on different implementations, specific localities may be set, or all information may be stored in the ADS to gate it using IMPQUAL.
+
+A system may support multiple system-specific formats; ACE does not specify how to distinguish between them.
+
+The value _Version_ = 2 is reserved.
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -3371,7 +3397,7 @@ function SCC_KeyDeriv(key : bits(256), nonce : bits(96))
 }
 ----
 
-NOTE: Due to the computational cost of the derivation functions, implementations may cache the derived keys.
+NOTE: Due to the computational cost of the key derivation function, implementations may cache the derived keys.
 
 [NOTE]
 ====
@@ -3428,23 +3454,24 @@ i.e., <<ACE-SCC-GCM-SIV-enc>> and <<ACE-SCC-GCM-SIV-dec>>:
 
 [NOTE]
 ====
-Another difference with respect to AES-GCM-SIV is that we add a domain separation bit, `sep`, to
-distinguish the two segments we seal: the fixed architecture-defined content (`sep` = 0) and the
-optional implementation-dependent content (`sep` = 1). The two segments are keyed identically,
-since both derive their keys from the same CSK under the same all-zero nonce, so without a
-separator they would be told apart only by the values that happen to occupy their Associated Data
-and their SIVs. No attack follows from that — a `SIV` = `SIV2` collision has negligible
-probability — but the separation is then a property of the values rather than of the construction.
-`sep` is placed in bit 126 of *both* AES inputs that the construction forms, so that the
-separation is unconditional on both sides:
+As in AES-GCM-SIV, we use bit 127 to distinguish tag inputs (bit 127 takes the value 0) from
+keystream inputs (1). This construction adds a second domain separation bit, `sep`, in bit
+126 to distinguish architecture-defined content (`sep` = 0) from the ADS (`sep` = 1).
+Both segments derive their keys from the same CSK and all-zero nonce. Without `sep`,
+only their Associated Data and SIV values would distinguish them. This does not imply an
+attack: a collision between `SIV` and `SIV2` has negligible probability. However, separation
+would then depend on those values rather than on the construction itself.
+Placing `sep` in bit 126 of both AES inputs makes the separation unconditional:
+
 * in the *tag* computation, `0 @ sep @ POLYVAL(`{ellipsis}`)[125:0]`, so that the same
   Associated Data and plaintext yield different tags in the two segments; and
 * in the *keystream* counter block, `1 @ sep @ SIV[125:32] @` counter, so that the two segments
   cannot share a keystream even if their SIVs were to collide.
-Bit 127 continues to distinguish the tag input (0) from the keystream input (1), as in
-cite:[RFC8452]. The cost is one bit in each case: the tag input carries 126 bits of the `POLYVAL`
+
+The cost is one bit in each case: the tag input carries 126 bits of the `POLYVAL`
 result rather than 127, and the keystream counter block carries 94 bits of the `SIV` rather than
-95. Both reductions leave the corresponding collision terms of the same order as the almost-XOR-universal bound of `POLYVAL` itself, and so do not affect the security claim stated above.
+95. Both reductions leave the corresponding collision terms of the same order as the
+almost-XOR-universal bound of `POLYVAL` itself, and so they do not affect the security claims.
 ====
 
 [[ACE-SCC-GCM-SIV-enc]]
