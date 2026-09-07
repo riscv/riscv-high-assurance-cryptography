@@ -3485,22 +3485,22 @@ i.e., <<ACE-SCC-GCM-SIV-enc>> and <<ACE-SCC-GCM-SIV-dec>>:
 As in AES-GCM-SIV, we use bit 127 to distinguish tag inputs (bit 127 takes the value 0) from
 keystream inputs (1). This construction adds a second domain separation bit, `sep`, in bit
 126 to distinguish architecture-defined content (`sep` = 0) from the ADS (`sep` = 1).
-Both segments derive their keys from the same CSK and all-zero nonce. Without `sep`,
-only their Associated Data and SIV values would distinguish them. This does not imply an
-attack: a collision between `SIV` and `SIV2` has negligible probability. However, separation
-would then depend on those values rather than on the construction itself.
-Placing `sep` in bit 126 of both AES inputs makes the separation unconditional:
-
-* in the *tag* computation, `0 @ sep @ POLYVAL(`{ellipsis}`)[125:0]`, so that the same
-  Associated Data and plaintext yield different tags in the two segments; and
-* in the *keystream* counter block, `1 @ sep @ SIV[125:32] @` counter, so that the two segments
-  cannot share a keystream even if their SIVs were to collide.
-
-The cost is one bit in each case: the tag input carries 126 bits of the `POLYVAL`
+The security reduction is just one bit: the tag input carries 126 bits of the `POLYVAL`
 result rather than 127, and the keystream counter block carries 94 bits of the `SIV` rather than
-95. Both reductions leave the corresponding collision terms of the same order as the
-almost-XOR-universal bound of `POLYVAL` itself, and so they do not affect the security claims.
+95.
 ====
+
+// Both segments derive their keys from the same CSK and all-zero nonce.
+// Without `sep`,
+// only their Associated Data and SIV values would distinguish them. This does not imply an
+// attack: a collision between `SIV` and `SIV2` has negligible probability. However, separation
+// would then depend on those values rather than on the construction itself.
+// Placing `sep` in bit 126 of both AES inputs makes the separation unconditional.
+//
+// * in the *tag* computation, `0 @ sep @ POLYVAL({ellipsis})[125:0]`, so that the same
+//   Associated Data and plaintext yield different tags in the two segments; and
+// * in the *keystream* counter block, `1 @ sep @ SIV[125:32] @` counter, so that the two segments
+//   cannot share a keystream even if their SIVs were to collide.
 
 [[ACE-SCC-GCM-SIV-enc]]
 .AES-GCM-SIV Encryption for SCC Generation
@@ -3526,10 +3526,10 @@ function SCC_Encrypt(AD[] : array of bits(128), N : bits(96), sep: bits(1),
 }
 ----
 
-The maximal lengths of AD and plaintext/ciphertext are implementation-specific. An implementation
-shall accept at least the largest values that arise from the Algorithms it implements, so that
-every CR it can hold can also be exported and re-imported; the bound of `0x0010_0000` blocks above
-is an upper limit on what any implementation need support, not a required capacity.
+The maximum lengths of AD and plaintext/ciphertext are implementation-specific.
+The bound of `0x0010_0000` blocks above shall be replaced with the implementation-specific bound
+sufficient to export and re-import a CR that holds any Algorithm
+provided by the implementation.
 
 [[ACE-SCC-GCM-SIV-dec]]
 .AES-GCM-SIV Decryption for SCC Import
@@ -3564,18 +3564,22 @@ function SCC_Decrypt(AD[] : array of bits(128), N : bits(96), sep: bits(1),
 ----
 
 NOTE:  *Design Rationale for the Sealing Construction.*
-The Locality Secrets are fed to the AEAD as _associated data_ rather than mixed into the
-Context Sealing Key via a KDF. Both bind the SCC to the Locality set, but the
-associated-data path is cheaper: POLYVAL, which is an almost-XOR-universal (AXU) hash,
-costs one `Montmul` per 128-bit block. This is significantly faster than most KDFs, and
+The Locality Secrets are supplied to the AEAD as _associated data_ rather than mixed into the
+Context Sealing Key through a KDF. Both approaches bind the SCC to the Locality set, but
+using associated data is computationally less expensive. POLYVAL, requires one `Montmul`
+per 128-bit block and is thus significantly faster than most KDFs. This approach also
 avoids re-deriving `enc_key` and `auth_key` when the Locality set changes.
-A distinct Locality set yields a distinct output except with collision probability at most
-_l_/2^128^ for inputs of _l_ blocks.
+Distinct Locality sets lead to the same SIV with collision probability 2^-128^.
 
 // ///////////////////////////////////////////////////////////////////////////
 
 [[ACE-SCC-export]]
 ==== Generation of an SCC from a Fully Configured CR
+
+[WARNING]
+====
+Rewrite this and next section, associating instructions to the various steps.
+====
 
 If the _State_ field is set to a Complete State (which, we recall, includes also Error States), then ``K(i)`` is fully provisioned,
 and opening the CR for export (`ace.mgmt Kd|K{Xd}, #ace_CR_export_start`) performs the following steps
