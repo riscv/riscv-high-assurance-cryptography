@@ -111,65 +111,65 @@ success:
 We assume that the order in memory is `MDH`, `SIV`, if AuxDataLen {ge} 2 also `IMPQUAL` and `SIV2`, and finally `Content[]` for a Complete CR,
 and for an incomplete CR, it is just then `MDH` followed by `Content[]`.
 
-[WARNING]
-====
-Incomplete procedure, like all the others in management.
-Need to add support for PP and ES export.
-====
-
 *Export Code (`Zklmv`)*
 ----
-  li         t3, 0x30                # to determine Error States
-
 restart:
-  ace.size   s1, K{t0}               # get TOTAL size to export?
-  beqi       s1, 1, handle_errors    # 1 means the CR is unconfigured
+  ace.size.ex s1, K{t0}              # get TOTAL size to export?
+  beqi        s1, 0, handle_errors   # 0 means the CR is unconfigured
+
   {...}  # here code that allocates the buffer to store the exported data
 
-  # If _State_ is a Complete State, the following ace.mgmt converts the CR in
+  ace.getmd   s5:s4, K{t0}           # get MDH, including its _State_
+  sd          0(t6), s4              # store MDH[63:0] to memory
+  sd          8(t6), s5              # store MDH[127:64] to memory
+  add         t6, t6, 16             # point to next memory region
+  beqi        s1, 16, success        # in Error State we are done
+
+  # If _State_ is a Valid State, the following ace.mgmt converts the CR in
   # the serialized, encrypted and authenticated internal representation.
+  # If _State_ is an Incomplete State, the CR is not converted.
+  # ace.mgmt will also change the _State_ to `ace_cfgst_exporting`
+  # or to `ace_cfgst_exporting_pp`
 
   ace.mgmt   K{t0}, #ace_CR_export_start
 
-ERROR STATE? this changes nothing, just have a zero size
+  # Determine from s4 whether the original state was Incomplete
+  slri        t2, s4, 22             # extract State>>3 from MDH
+  andi        t2, t2, 0x07           # Are the three top bits of State = 111 ?
+  beqi        t2, 0x07, store_loop   # if Incomplete skip SIV, IMPQUAL and SIV2
 
-INCOMPLETE STATE? skip SIV, IMPQUAL and SIV2
+  csrr        s7, acesivl            # save SIV
+  csrr        s8, acesivh
+  sd          0(t6), s7
+  sd          8(t6), s8
+  add         t6, t6, 16             # point to next memory region
 
-  ace.getmd  s5:s4, K{t0}            # get MDH, including its _State_
-  sd         0(t6), s4               # store MDH[63:0] to memory
-  sd         8(t6), s5               # store MDH[127:64] to memory
-  add        t6, t6, 16              # point to next memory region
-  slli       s4, s4, 18
-  srli       s4, s4, 50              # extract AuxDataLen from MDH
+  slli        s6, s4, 18             # extract AuxDataLen from MDH
+  srli        s6, s6, 50
+  blei        s6, 2, store_loop      # if AuxDataLen <= 2, skip IMPQUAL & SIV2
 
-  csrr       s7, acesivl             # save SIV
-  csrr       s8, acesivh
-  sd         0(t6), s7
-  sd         8(t6), s8
-  add        t6, t6, 16              # point to next memory region
-  blei       s4, 2, vloop            # if AuxDataLen <= 2, skip IMPQUAL & SIV2
+  csrr        s7, aceiql             # save IMPQUAL
+  csrr        s8, aceiqh
+  sd          0(t6), s7
+  sd          8(t6), s8
+  csrr        s7, acesiv2l           # save SIV2
+  csrr        s8, acesiv2h
+  sd          16(t6), s7
+  sd          24(t6), s8
+  add         t6, t6, 32             # point to next memory region
 
-  csrr       s7, aceiql              # save IMPQUAL
-  csrr       s8, aceiqh
-  sd         0(t6), s7
-  sd         8(t6), s8
-  csrr       s7, acesiv2l            # save SIV2
-  csrr       s8, acesiv2h
-  sd         16(t6), s7
-  sd         24(t6), s8
-  add        t6, t6, 32              # point to next memory region
-
-vloop:
-  vsetvli    s2, s1, e8, m1, ta, ma  # s2 = no. of bytes moved this iteration
-  ace.mv     v2, K{t0}               # move chunk out of CR, advance acestart
-  vse8.v     v2, (t4)                # store it
-  add        t4, t4, s2              # bump the destination pointer
-  sub        s1, s1, s2              # decrement the bytes still to store
-  ace.getst  t2, K{t0}
-  beqz       t2, restart             # CR cleared: the export must be restarted
-  andi       t2, t2, 0x38
-  beq        t3, t2, handle_errors
-  bnez       s1, vloop
+store_loop:
+  vsetvli     s2, s1, e8, m1, ta, ma # s2 = no. of bytes moved this iteration
+  ace.mv      v2, K{t0}              # move chunk out of CR, advance acestart
+  vse8.v      v2, (t4)               # store it
+  add         t4, t4, s2             # bump the destination pointer
+  sub         s1, s1, s2             # decrement the bytes still to store
+  ace.getst   t2, K{t0}
+  beqz        t2, restart            # CR cleared: export must be restarted
+  andi        t2, t2, 0x38
+  li          t3, 0x30               # to determine Error States
+  beq         t2, t3, handle_errors
+  bnez        s1, store_loop
 
 success:
   # Restore _State_ from the saved MDH: the auxiliary operand supplies only
@@ -178,71 +178,28 @@ success:
   # makes the CR available to software, otherwise it leaves the CR's
   # internal representation in the serialized and encrypted format.
 
-  ace.mgmt   K{t0}, #ace_CR_management_end, v1
+  ace.mgmt   K{t0}, #ace_CR_management_end, s5:s4
 ----
+
+[WARNING]
+====
+Incomplete procedure, like all the others in management.
+Need to add support for PP and ES export.
+====
 
 *Export Code (`Zkmem`)*
 ----
-  li         t3, 0x30               # to determine Error States
+Until storeloop: the code is the same as in the `Zklmv` version.
 
-restart:
-  ace.size   s1, K{t0}               # get size of the data to export
-  beqi       s1, 1, handle_errors    # 1 means the CR is unconfigured
-  {...}   # put here to allocate the buffer to store the exported data
-
-  vsetivli   s2, 16, e8, m1, ta, ma  # vl = 16: ready to save 16 bytes
-  ace.getmdv v1, K{t0}               # save MDH, including its _State_
-
-  # If _State_ is a Complete State, the following ace.mgmt prepares the
-  # serialized, encrypted and authenticated internal representation of the
-  # CR for export.
-
-  ace.mgmt   K{t0}, #ace_CR_export_start
-
-  ace.getmd  s5:s4, K{t0}            # get MDH, including its _State_
-  sd         0(t6), s4               # store MDH[63:0] to memory
-  sd         8(t6), s5               # store MDH[127:64] to memory
-  slli       s4, s4, 18
-  srli       s4, s4, 50              # extract AuxDataLen from MDH
-
-  csrr       s7, acesivl             # save SIV
-  csrr       s8, acesivh
-  sd         16(t6), s7
-  sd         24(t6), s8
-  add        t6, t6, 32              # point to next memory region
-  blei       s4, 2, load_rest        # if AuxDataLen <= 2, skip IMPQUAL & SIV2
-
-  csrr       s7, aceiql              # save IMPQUAL
-  csrr       s8, aceiqh
-  sd         0(t6), s7
-  sd         8(t6), s8
-  csrr       s7, acesiv2l            # save SIV2
-  csrr       s8, acesiv2h
-  sd         16(t6), s7
-  sd         24(t6), s8
-  add        t6, t6, 32              # point to next memory region
-
-  # The next instruction stores all Content[]
-  # In case of interrupt/exception, the handler will decide whether to keep
-  # `acestart` or clear it to force restart.
-  # The instruction gets the length of the blob to export from the MDH,
-  # so no special handling from the SW is necessary.
-
-load_rest:
-  ace.store  0(t6), K{t0}
+storeloop:
+  ace.store  0(t6), K{t0}          # store Content[] of PI
   ace.getst  t2, K{t0}
-  beqz       t2, restart            # CR cleared: the export must be restarted
-  andi       t2, t2, 0x38
-  beq        t3, t2, handle_errors
+  beqz       t2, restart           # CR cleared means force restart
+  bltu       t3, t2, handle_errors
 
 success:
-  # Restore _State_ from the saved MDH: the auxiliary operand supplies only
-  # that field, and no other part of the MDH is written from it. If the saved
-  # _State_ is `ace_cfgst_complete`, the operation also re-decrypts the state
-  # and makes the CR available to software, otherwise it leaves the CR's
-  # internal representation serialized and encrypted.
-
-  ace.mgmt   K{t0}, #ace_CR_management_end, v1
+# complete export and possibly re-decrypt and reconstruct data
+  ace.mgmt   K{t0}, #ace_CR_management_end, s5:s4
 ----
 
 ==== Import
