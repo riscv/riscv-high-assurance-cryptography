@@ -75,11 +75,11 @@ _This section is informative and non-normative._
 
 The ACE threat model is straightforward.
 
-**Assets** are _keys_ and any information that may assist an adversary recover plaintext or forge ciphertexts of MACs.
-This includes, e.g., masks in tweakable XEX modes and derived keys in AES-GCM-SIV. The critical properties of these assets are their _confidentiality_ and _integrity_.
-Protecting the _availability_ of keys is not an architectural goal.
+**Assets** are _keys_ and any information that may help an adversary recover plaintext or forge ciphertexts or MACs.
+Examples include masks in tweakable XEX modes and derived keys in AES-GCM-SIV. The critical properties of these assets are _confidentiality_ and _integrity_.
+Protecting key _availability_ is not an architectural goal.
 
-**Adversaries** are assumed capable of compromising processes by exploiting software vulnerabilities. They may also access memory contents, for instance by abusing hardware interfaces or by SoC/memory interposition. The model excludes adversaries capable of sophisticated hardware attacks, such as tampering with the hardware using a Focused Ion Beam/Scanning Electron Microscope (FIB/SEM). Side-channel attacks are addressed optionally: ACE offers interfaces to both SCA-unprotected and SCA-protected implementations of cryptographic algorithms, if the implementer provides these options.
+**Adversaries** are assumed capable of compromising processes by exploiting software vulnerabilities. They may also access memory contents by, for example, abusing hardware interfaces or interposing between the SoC and memory. The model excludes adversaries capable of sophisticated hardware attacks, such as tampering using a focused ion beam or scanning electron microscope (FIB/SEM). Side-channel attack (SCA) protection is optional. ACE provides interfaces to both SCA-unprotected and SCA-protected implementations of cryptographic algorithms, where these options are implemented.
 
 Threats can be addressed in four ways:
 
@@ -123,12 +123,16 @@ Group A — items that can only be closed by the RISC-V Architecture Review Comm
   and simplify handlers so that they do not have to parse direct and indirect CR referencing.
 
 . *ACEV scope.* <<ACE-ACEV>> defines the vector subset required by ACE, which we currently consider complete.
-  The element widths for the operations performed by `ace.exec` must be defined.
-  This is important for primitives whose input/output sizes are not powers-of-two, as `EGW`/`SEW` cannot represent those sizes.
-  Or just allow any value that divides that size.
-  Thus, we may define a `EGW`/`SEW` and the corresponding increment to `vstart` for each iteration.
-  See the discussion at link:https://github.com/riscv/riscv-high-assurance-cryptography/issues/96[].
-  We do not consider this issues a barrier to candidacy, but we ask feedback from the ARC to address it properly.
+  There are a few opens, which we do not consider a barrier to candidacy, but they must be resolved and
+  we ask feedback from the ARC to address them properly.
+
+  .. Are ACEV vector instructions gated by `*status.VS` or some other mechanism?
+  .. How to discover ACEV?
+  .. The element widths for the operations performed by `ace.exec` must be defined.
+      This is important for primitives whose input/output sizes are not powers-of-two, as `EGW`/`SEW` cannot represent those sizes.
+     Alternatively: just allow any value that divides that size.
+    Thus, we may define a `EGW`/`SEW` and the corresponding increment to `vstart` for each iteration.
+    See the discussion at link:https://github.com/riscv/riscv-high-assurance-cryptography/issues/96[].
 
 . *RVWMO axiomatic integration.* The memory-ordering behaviour of ACE's component memory operations
   is specified informally in <<ACE-Memory-Model>> with prefix-completeness, but
@@ -147,6 +151,8 @@ We are open to migrate to Unified Discovery once this is finalized.
 
 
 Group B — open design questions owned by this task group.:::
+
+. _Effective data endianness of the current privilege mode_ in <<ACE-Notation>>: Discuss UBE and its interaction with MPRV/MPP.
 
 . Regarding <<ACE-CSK-requirements>> and <<ACE-CSR-macecsk>>: is there, or should there be, an
   architected mechanism by which M-mode on one hart can read or configure the CSRs of another hart?
@@ -171,8 +177,8 @@ We would appreciate an assessment from the ARC to determine whether the current 
 . Whether to keep the `budget` mechanism of “GCM with Set IV” (<<ACE-GCM-with-IV-mode>>) and
 “Ascon-AEAD128 with set Nonce” (<<ACE-Ascon-AEAD128-wsn>>), or remove it.
 
-. Adding a nonce to the SCC export and import algorithms following RFC8452 requires six AES-256 encryptions for each such operation, whereas the current design recomputes derived keys only when the CSK changes. A competing architecture also omits nonces from its key export and import mechanisms, likely for the same reason. We welcome input on this design choice. +
-One alternative is to encrypt `nonce @ constant1` and `nonce @ constant2` under the _derived encryption key_, producing `A` and `B`. The algorithms could then use `enc_key xor (B @ A)` and `auth_key xor B xor A` instead of `enc_key` and `auth_key`. This construction is non-standard, but it is secure and faster: it requires only two additional AES-256 encryptions.
+. Adding a nonce to the SCC export and import algorithms following RFC8452 requires six AES-256 encryptions for each such operation, whereas the current design recomputes derived keys only when the CSK changes. A competing architecture also omits nonces from its key export and import mechanisms, likely for the same reason. We welcome input on this design choice.
+// One alternative is to encrypt `nonce @ constant1` and `nonce @ constant2` under the _derived encryption key_, producing `A` and `B`. The algorithms could then use `enc_key xor (B @ A)` and `auth_key xor B xor A` instead of `enc_key` and `auth_key`. This construction is non-standard, but it is secure and faster: it requires only two additional AES-256 encryptions.
 
 . Additional inputs for random key generation. An implementer can define a custom
 consume-anything / output-unlimited KDF as an Algorithm and use `ace.derive`
@@ -180,6 +186,11 @@ consume-anything / output-unlimited KDF as an Algorithm and use `ace.derive`
 case. Whether the architecture should instead define such KDFs and the mechanism explicitly is
 open.  It would be relatively straightforward to add them to the Algorithms Book, and these
 could be fruitfully integrated with other Algorithms using `ace.derive`.
+. Make sure the Privileged book properly defines exception priority between `ace_exc_no_csk` and illegal-instruction, `xtval` for ACE faults, the ACE-unit-reset trigger, and the "V-enabled" gate for ACEV-only harts (m14)?
+. Is the `ace.mv` piecewise-transfer idiom in `<<ACE-management-code-snippets>>` consistent with the illegal-instruction-on-completion rule, and with the content-only transfer model once C1 is applied?
+. Should `ace.size` on a partially *imported* CR report the SCC-shaped or content-only size (only the PI case is stated)?
+. Double check Zkr's exact scope and DBRG requirements.
+. Add reference to the `SCC_Encrypt` security claim "secure for up to 2^64 128-bit blocks."
 
 // Have a look at "Both the memory address and the CR offset carry the same _j_, so the two are always in step." in unpriv.
 // Need to define how the serialized representation of the CR is laid out, it has some gaps and SIV, SIV1, IQ are inserted there.

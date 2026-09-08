@@ -178,7 +178,7 @@ def make_mdh(algorithm=0x101, key_type=0, state=1, config_status=3,
             | (1 << 12)                                  # AlgorithmPolicy: enc
             | (bin_(key_type, 2) << 19)
             | (bin_(state, 5) << 21)
-            | (bin_(config_status, 2) << 30)             # ace_cfgst_complete
+            | (bin_(config_status, 2) << 30)             # ace_cfg_complete
             | (bin_(imp_data_len, 14) << 32)
             | (bin_(usage_policy, 5) << 64)
             | (locality_field(localities) << 69))
@@ -557,7 +557,7 @@ def main():
 
     # -- (f) Error-State SCC -------------------------------------------
     # On entering an Error State the Content is cleared and AuxDataLen set
-    # to 0; ConfigStatus is ace_cfgst_complete.  State 24 stands for an
+    # to 0; ConfigStatus is ace_cfg_complete.  State 24 stands for an
     # Error State here; only its presence in the MDH matters.
     for locs_e in LOC_SETS:
         mdh_e = make_mdh(state=24, localities=locs_e)

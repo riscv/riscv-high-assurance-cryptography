@@ -45,7 +45,7 @@ The provisioning code assumes that the Content[] immediately follows the MDH in 
   li         t3, 0x30              # const useful to determine Error States
 
 restart:
-  ace.mgmt   K{t0}, #ace_CR_provision_start, s5:s4 # start provisioning, load MDH
+  ace.mgmt   K{t0}, #ace_cfg_provisioning, s5:s4 # start provisioning, load MDH
   ace.getst  t2, K{t0}             # get _State_ field from MDH
   beqz       t2, handle_errors     # State = 0: the CR was not opened => error
   andi       t2, t2, 0x38          # Check the three top bits of State
@@ -71,7 +71,7 @@ vloop:
   beq        t3, t2, handle_errors # Error State?
   bnez       s1, vloop
 
-  ace.mgmt   K{t0}, #ace_CR_management_end   # complete provisioning
+  ace.mgmt   K{t0}, #ace_cfg_management_end   # complete provisioning
                                    # and possibly reconstruct data
   ace.getst  t2, K{t0}
   bltu       t3, t2, handle_errors # catches invalid metadata in MDH[127:64]
@@ -86,7 +86,7 @@ success:
   li         t3, 0x30              # const useful to determine Error States
 
 restart:
-  ace.mgmt   K{t0}, #ace_CR_provision_start, v1  # start provisioning, load MDH
+  ace.mgmt   K{t0}, #ace_cfg_provisioning, v1  # start provisioning, load MDH
   ace.getst  t2, K{t0}
   beqz       t2, handle_errors
   andi       t2, t2, 0x38          # Check the three top bits of State
@@ -97,7 +97,7 @@ restart:
   ace.getst  t2, K{t0}
   beqz       t2, restart           # CR cleared means force restart
   bltu       t3, t2, handle_errors
-  ace.mgmt   K{t0}, #ace_CR_management_end   # complete provisioning
+  ace.mgmt   K{t0}, #ace_cfg_management_end   # complete provisioning
                                    # and possibly reconstruct data
   ace.getst  t2, K{t0}
   andi       t2, t2, 0x38
@@ -128,10 +128,10 @@ restart:
   # If _State_ is a Valid State, the following ace.mgmt converts the CR in
   # the serialized, encrypted and authenticated internal representation.
   # If _State_ is an Incomplete State, the CR is not converted.
-  # ace.mgmt will also change the _State_ to `ace_cfgst_exporting`
-  # or to `ace_cfgst_exporting_pp`
+  # ace.mgmt will also change the _State_ to `ace_cfg_exporting`
+  # or to `ace_cfg_exporting_pp`
 
-  ace.mgmt   K{t0}, #ace_CR_export_start
+  ace.mgmt   K{t0}, #ace_cfg_exporting
 
   # Determine from s4 whether the original state was Incomplete
   slri        t2, s4, 22             # extract State>>3 from MDH
@@ -178,7 +178,7 @@ success:
   # makes the CR available to software, otherwise it leaves the CR's
   # internal representation in the serialized and encrypted format.
 
-  ace.mgmt   K{t0}, #ace_CR_management_end, s5:s4
+  ace.mgmt   K{t0}, #ace_cfg_management_end, s5:s4
 ----
 
 [WARNING]
@@ -199,7 +199,7 @@ storeloop:
 
 success:
 # complete export and possibly re-decrypt and reconstruct data
-  ace.mgmt   K{t0}, #ace_CR_management_end, s5:s4
+  ace.mgmt   K{t0}, #ace_cfg_management_end, s5:s4
 ----
 
 ==== Import
@@ -220,7 +220,7 @@ To be rewritten according to new semantics and format.
   # t5 is saved in local state and not modified by this code, so jumping
   # to restart will re-derive the working count and pointer from it
 restart:
-  ace.mgmt   K{t0}, #ace_CR_import_start, s5:s4  # open CR for import, load MDH
+  ace.mgmt   K{t0}, #ace_cfg_importing, s5:s4  # open CR for import, load MDH
   ace.getst  t2, K{t0}
   beqz       t2, handle_errors
   andi       t2, t2, 0x38
@@ -240,7 +240,7 @@ vloop:
   beq        t3, t2, handle_errors
   bnez       s1, vloop
 
-  ace.mgmt   K{t0}, #ace_CR_management_end, v1  # decrypt and authenticate SCC
+  ace.mgmt   K{t0}, #ace_cfg_management_end, v1  # decrypt and authenticate SCC
                                      # and restore original MDH
   ace.getst  t2, K{t0}
   bltu       t3, t2, handle_errors   # catches "Authentication Failed"
@@ -255,7 +255,7 @@ success:
   li         t3, 0x30              # to determine Error States
 
 restart:
-  ace.mgmt   K{t0}, #ace_CR_import_start, s5:s4 # open CR for import, load MDH
+  ace.mgmt   K{t0}, #ace_cfg_importing, s5:s4 # open CR for import, load MDH
   ace.getst  t2, K{t0}
   beqz       t2, handle_errors
   andi       t2, t2, 0x38
@@ -264,7 +264,7 @@ restart:
   ace.getst  t2, K{t0}
   beqz       t2, restart            # CR cleared means force restart
   bltu       t3, t2, handle_errors
-  ace.mgmt   K{t0}, #ace_CR_management_end, v1  # decrypt and authenticate CR,
+  ace.mgmt   K{t0}, #ace_cfg_management_end, v1  # decrypt and authenticate CR,
                                     # if necessary complete it
   ace.getst  t2, K{t0}
   andi       t2, t2, 0x38
@@ -275,7 +275,7 @@ success:
 
 During the provisioning and import procedures, the validity of bits [63:0] of the metadata field is checked immediately.
 The validity of bits [127:64] is deferred to sealing.
-If these bits are invalid, the CR will transitions to Error State _Invalid_ upon executing `ace.mgmt K{t0}, #ace_CR_management_end`, which is why the `ace.getst` after that instruction repeats the Error-State test.
+If these bits are invalid, the CR will transitions to Error State _Invalid_ upon executing `ace.mgmt K{t0}, #ace_cfg_management_end`, which is why the `ace.getst` after that instruction repeats the Error-State test.
 
 // ////////////////////////////////////////////////////////////////////////////
 

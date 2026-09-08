@@ -621,7 +621,7 @@ class Unit:
         return ml
 
     def mgmt_end(self, k, ml=None):
-        """ace.mgmt #ace_CR_management_end, completing whatever is open on this CR."""
+        """ace.mgmt #ace_cfg_management_end, completing whatever is open on this CR."""
         self._mgmt_gate(k)
         cr = self.crs[k]
         # Which process is being completed is normally implied by _ConfigStatus_;
@@ -2267,12 +2267,12 @@ def test_notes():
     info("NEW (partial export vs ace.mv): ace.mgmt export-start of a *not-complete* CR is "
          "specified to leave ConfigStatus alone (it stays provisioning/importing), yet "
          "the extraction forms of ace.mv are 'only valid if ConfigStatus is "
-         "ace_cfgst_exporting'. Under the literal reading the Zklmv export loop of Book 4 "
+         "ace_cfg_exporting'. Under the literal reading the Zklmv export loop of Book 4 "
          "raises an illegal instruction for exactly the partial-export case it exists to "
          "support. Either export-start must set ConfigStatus = exporting unconditionally, "
          "or ace.mv must also accept provisioning/importing.")
     info("NEW (which process does ace.mgmt end complete?): the single "
-         "#ace_CR_management_end immediate has to complete whichever process is "
+         "#ace_cfg_management_end immediate has to complete whichever process is "
          "open. _ConfigStatus_ identifies it in three of the four cases, but not "
          "after the export-start of a not-complete CR, which leaves _ConfigStatus_ "
          "at provisioning/importing: the same CR state then means both 'resume "
