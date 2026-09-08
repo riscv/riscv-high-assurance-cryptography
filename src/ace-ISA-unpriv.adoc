@@ -2867,18 +2867,18 @@ _Description_::
 +
 --
 `ace.getst` is implemented as a read of the source CR's metadata using `ace.getmdl`,
-followed by instructions to extract the _State_ field.
-For instance, on RV64, `ace.getst` can be implemented as:
-
-. `ace.getmdl Xd, Ks` or `K{Xs}`
-. `srli  Xd, Xd, 19`
-. `andi  Xd, Xd, 0x3F
-
-and `ace.getstx` as:
-
-. `ace.getmdl Xd, Ks` or `K{Xs}`
-. `srli  Xd, Xd, 25`
-. `andi  Xd, Xd, 0x0F`
+followed by suitable shifting and masking instructions to extract the _State_ field.
+// For instance, on RV64, `ace.getst` can be implemented as:
+//
+// . `ace.getmdl Xd, Ks` or `K{Xs}`
+// . `srli  Xd, Xd, 19`
+// . `andi  Xd, Xd, 0x3F`
+//
+// and `ace.getstx` as:
+//
+// . `ace.getmdl Xd, Ks` or `K{Xs}`
+// . `srli  Xd, Xd, 25`
+// . `andi  Xd, Xd, 0x0F`
 --
 
 //
@@ -2965,40 +2965,23 @@ are given in <<ACE-replacement-instructions>>.
 `2: ace.mgmt{nbsp}{nbsp}Kd\|K{Xd}, #immed` +
 |===
 
-The usage and ordering of the alternative sequences are not enforced architecturally.
-Thus, the caller may omit `ace.input` or `ace.output`, meaning that the contents of the ACEIOBUF are reused, or the output is ignored.
-This does not expand the attack surface, since the caller always retains full control over the data passed to ACE instructions and their outputs.
-
-// What the architecture does define, in place of any ordering requirement, are the rules already
-// stated in this section — the permitted substitutions and the exceptions raised by the ones that
-// are not permitted — together with the following, which govern what a caller observes when it
-// departs from the sequences above:
-//
-// . The ACEIOBUF retains its contents until they are overwritten by an `ace.input`, until the
-//   buffer is reconfigured by a write to `aceiobuflen` (<<ACE-CSR-aceiobuflen>>), or until an
-//   `ace.exec` writes its output into it. Omitting an `ace.input` therefore presents the previous
-//   contents to the Algorithm; omitting an `ace.output` leaves the result in place, where a later
-//   `ace.output` can still retrieve it.
-//
-// . The length of the operand an Algorithm sees is `ACELEN` = `aceiobuftop` {times} 8, and is
-//   *not* affected by how many bytes the preceding `ace.input` actually transferred. A caller that
-//   supplies `Xl` < `aceiobuftop` leaves the bytes at offsets [`Xl`, `aceiobuftop`) at their
-//   previous values, and those bytes are consumed as part of the operand.
-//
-// . The granularity rule of <<ACE-algorithms-other-rules>> applies to `ACELEN` as computed above, whatever
-//   sequence produced the buffer contents.
+The architecture does not enforce the use or ordering of these alternative sequences.
+The caller may omit `ace.input` to reuse the ACEIOBUF contents or `ace.output` to ignore the output.
+This does not expand the attack surface: the caller already has full control over the inputs and outputs.
 
 // ////////////////////////////////////////////////////////////////////
 
 [[ACE-Memory-Model]]
 === Memory Model
 
-[WARNING]
-====
-A full axiomatic integration of the ACE component memory operations
-into the RVWMO formalism remains to be produced together with the
-ARC during ratification.
-====
+// [WARNING]
+// ====
+// A full axiomatic integration of the ACE component memory operations
+// into the RVWMO formalism remains to be produced together with the
+// ARC during ratification.
+// ====
+
+MMR means “Memory Model Rule.”
 
 [horizontal]
 MMR1:: ACE memory instructions appear to execute in program order on the local hart.
@@ -3025,7 +3008,7 @@ Sharing a buffer accessed by an ACE memory instruction requires the same synchro
 [[ACE-resumability]]
 === Interruptibility and Resumability of ACE instructions
 
-We define IRR = Interruptibility and Resumability Rule.
+IRR means “Interruptibility and Resumability Rule.”
 
 ==== Uninterruptible Instructions
 
@@ -3036,7 +3019,7 @@ IRR2:: `ace.setst` is uninterruptible under every architectural condition define
 
 IRR3:: Long-running ACE operations that access no external memory—including `ace.setst`, `ace.mgmt`, and `ace.exec` or `ace.derive` forms that do not access GPRs, vector registers, or the ACEIOBUF—continue while the hart is preempted. If an interrupted operation is still running when a handler accesses its CR, the hart waits for completion before resuming. Should another interrupt occur while instruction continues to execute, the second handler must to wait as well.
 
-NOTE: Although `ace.mgmt` is uninterruptible, the management processes bracketed by its instructions remain interruptible between constituent instructions (<<ACE-instruction-setst>>).
+// NOTE: Although `ace.mgmt` is uninterruptible, the management processes bracketed by its instructions remain interruptible between constituent instructions (<<ACE-instruction-setst>>).
 
 //
 
@@ -3063,17 +3046,17 @@ IRR4 and IRR5 make asynchronous execution by the attached ACE unit invisible to 
 
 IRR6:: The resumable instructions are `ace.exec`, vector `ace.mv`, `ace.derive`, `ace.load`, `ace.store`, `ace.input`, and `ace.output`. Architecturally, they process units serially. If an instruction halts precisely or encounters an error after partial progress, the completed prefix is committed. The failing and subsequent units have no effect, and `acestart` records the prefix-complete point. The instruction does not retire; `xepc` contains its address.
 
-IRR7:: For block-iterated `ace.exec`, `ace.mv`, and `ace.derive`, fully processed blocks remain written, and `acestart` records their total byte count. For transfer instructions, bytes below `acestart` remain transferred at both endpoints. A partially executed instruction commits exactly the state that a shorter instruction performing only the completed operations would have committed. This includes the CR, `acestart`, `acemanagedcr`, `acesivl`/`acesivh`, `acesiv2l`/`acesiv2h`, and `aceiql`/`aceiqh`, `*lcrstatus`, and effective `ACES` fields, ensuring consistent context save, restore, and resumption. Implementations must honor `acestart` for `ace.exec` and `ace.derive`. Handlers must not reset it to zero to force a restart, as this could reapply state changes or corrupt data.
-+
-NOTE: `ace.derive` is included because it may modify the source CR's state, for example when squeezing a sponge, and may destructively modify the destination. Restarting could process state twice and overwrite data already consumed. Its interruption points are block boundaries and Algorithm-specific points, including long-running computations in <<ACE-ECC>> and <<ACE-PQC>>. If input and output overlap, the result may be unpredictable. However, it remains a function only of architectural state that the executing context is otherwise permitted to observe.
+IRR7:: For block-iterated `ace.exec`, `ace.mv`, and `ace.derive`, fully processed blocks remain written or transferred, and `acestart` records their total byte count. For transfer instructions, bytes below `acestart` remain transferred at both endpoints. A partially executed instruction commits exactly the state that a shorter instruction performing only the completed operations would have committed. This includes the CR, `acestart`, `acemanagedcr`, `acesivl`/`acesivh`, `acesiv2l`/`acesiv2h`, and `aceiql`/`aceiqh`, `*lcrstatus`, and effective `ACES` fields, ensuring consistent context save, restore, and resumption. Implementations must honor `acestart` for `ace.exec` and `ace.derive`. Handlers must not reset it to zero to force a restart, as this could reapply state changes or corrupt data.
+// +
+// NOTE: `ace.derive` is included because it may modify the source CR's state (for example, when squeezing a sponge) and destructively modify the destination. Restarting could process state twice and overwrite data already consumed. Interruption points include block boundaries and Algorithm-specific points, as well as implementation specific ones within long-running computations (for instance in <<ACE-ECC>> and <<ACE-PQC>>). If input and output overlap, the result may be unpredictable, but it remains a function only of architectural state that the executing context is otherwise permitted to observe.
+
+IRR8:: For ACE memory instructions `ace.load`, `ace.store`, `ace.input`, and `ace.output`, the usual rule applies:
+An implementation may treat such an instruction as complete (by retiring it or taking an interrupt with `xepc` past it) only after address translation and permission checks succeed for every byte. Otherwise, it must halt the instruction precisely, with `acestart` at a prefix-complete point allowed by the instruction, and report any fault synchronously on re-execution or resumption.
+// For `ace.load` and `ace.store`, this point must be a multiple of sixteen bytes.
+Component accesses after the instruction is treated as complete must not fault.
 +
 NOTE: `ace.load` and `ace.store` may always (be caused to) fail, leaving the CR in State _Unconfigured_.
 The configuration operation must then be restarted. Software must prepare the CR again.
-
-IRR8:: For ACE memory instructions `ace.load`, `ace.store`, `ace.input`, and `ace.output`, the usual rule applies:
-An implementation may treat such an instruction as complete (by retiring it or taking an interrupt with `xepc` past it) only after address translation and permission checks succeed for every byte. Otherwise, it must halt the instruction precisely, with `acestart` at a prefix-complete point, and report any fault synchronously on re-execution or resumption.
-For `ace.load` and `ace.store`, this point must be a multiple of sixteen bytes.
-Component accesses after the instruction is treated as complete must not fault.
 
 IRR9:: Algorithm-specific resumable long-running operations that transfer no data
 in an `ace.setst`, in a (block-processing step of) `ace.exec` operation,
@@ -3081,7 +3064,7 @@ or in an `ace.derive` operation,
 must either advance its recorded progress towards completion of the operation, or restart.
 The manner in which progress is recorded is implementation-defined, but it cannot use `acestart`
 (for instance, it can use _AlgorithmUse_, as in <<ACE-ECC>> and <<ACE-PQC>>).
-All implementations capable of resumption of these operation must also support their restart.
+Implementations capable resuming these operation also support their restart.
 // +
 // `ace.derive` is excluded from this rule because interruton could happen at both the source and destination endpoints, which would make restart of, essentially, asynchronous flows of information, in general untreatable. Therefore, any implicit `ace.exec` operation performed by `ace.derive` between two Algorithms must be non-interruptible.
 
