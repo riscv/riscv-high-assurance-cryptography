@@ -1156,9 +1156,10 @@ such register is given its maximum in its own description below.
 
 The RW CSRs constitute state that must be saved before nested use and restore it before resuming the interrupted instruction, following the same software convention as `vstart`:
 
-. `acestart`, `aceiobuftop`, and `acemanagedcr` must always be saved and restored.
-. If `aceiobuflen` is non-zero, then also `aceiobuftop` must be saved and restored.
+. `acestart`, `aceiobuflen`, and `acemanagedcr` must always be saved and restored.
+. If `aceiobuflen` is non-zero, then `aceiobuflen`, `aceiobuftop`, and the ACEIOBUF contents up to `aceiobuflen` must be saved and restored.
 . If `acemanagedcr` {ne} 32, then also `acesivl`, `acesivh`, `acesiv2l`, `acesiv2h`, `aceiql`, `aceiqh` must be saved and restored.
+
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -1760,8 +1761,7 @@ In each variant the CR is the one named by `rs1`.
 *Bound.* Let `size` be the length in bytes of the `Content[]`, determined from the MDH.
 
 * If `acestart` {ge} `size`, the instruction performs no operation — no CR byte, GPR, or vector
-  register is written and `acestart` is unchanged — and an illegal-instruction exception is
-  raised.
+  register is written and `acestart` is unchanged.
 * If `acestart` + `n` > `size`, where `n` is the number of bytes the variant would otherwise
   transfer, only the bytes at offsets [`acestart`, `end`) are transferred, and `acestart` is
   set to `size`.
@@ -1856,7 +1856,7 @@ The encodings of the three Forms are:
 . `ace.setst` = `0b001`. `rs1` = `0b00000`.
 . `ace.setst` = `0b010`.
 . `ace.setst` = `0b011`.
-. `ace.setst` = `0b110`.
+. `ace.setst` = `0b100`.
 --
 
 // ////////////////////////////////////////////////////////////////////
@@ -2050,16 +2050,13 @@ This is the MDH image to be authenticated as ``AD[0]``.
 If a Form A is used, the effect is as if the instruction received a zero auxiliary input, i.e., in what follows it is as if `ml` is zero.
 If a Form B is used, the effect is as if the instruction received an input with the lower 64 bits set to the passed auxiliary value `ml`, and the upper 64 bits set to 0, i.e., in what follows it is as if the 64 upper bits of `ml` are set to zero.
 
-If `ml`._State_ is a Complete State, the operation
-restores the saved CR's _State_ from `ml`, and then
-decrypts and authenticates the imported SCC, and makes the CR available to software.
-Otherwise:
+The semantics are:
 
 ... If `ml`._State_ is a Complete State (we are importing the export of a fully configured CR)
 .... CR.MDH._State_ is set to `ml`._State_.
 .... The ACE unit decrypts and authenticates the CR's content.
 .... If authentication fails, the target CR is transitioned to Error State _Authentication Failed_. No exception is raised.
-.... The ACE unit performs any necessary readjustment of the CR's content to turn it into the format internally consumed by the ACE Unit.
+.... The ACE unit performs any necessary readjustment of the CR's content to turn it into the format internally consumed by the ACE Unit. This makes the CR available to software
 ... If `ml`._State_ is not a Complete State (we are either importing the export of a not fully configured CR or a nested CR export):
 .... CR.MDH._State_ is set to `ml`._State_.
 --
@@ -2542,7 +2539,7 @@ Preflight checks: `ace.derive` performs the following checks, in order before an
 . Decode both CR indices; illegal-instruction if either is invalid (GR1).
 . Raise illegal-instruction if the resolved indices are equal.
 . Evaluate _UsagePolicy_ and _ExpirationDate_ of BOTH CRs; on any violation,
-raise the corresponding exception/transition with NO state change to either CR.
+raise the corresponding exception or perform the corresponding transition (for expiration, transition the expired CR to `ace_state_expired`), with no other state change to either CR.
 . Validate _State_, _StateExtension_, and _State_ of both CRs against the endpoints
 selected by Form; the source CR must be in a state that allows it to output values
 (this can be either that it contains information that can be transferred or that it
@@ -2555,8 +2552,6 @@ and leave the other CR untouched, or both if both offend.
   leave the other CR untouched, or both if both offend.
 
 Only then begin the transfer; on a mid-transfer fault, commit the prefix per IRR6.
-
-Violation of the block-size restriction raises an illegal-instruction exception without state change.
 
 Whether the transferred data is deterministic depends entirely on the Algorithm in the source CR:
 `ace.derive` itself performs no key derivation and draws no random material.
@@ -2881,13 +2876,13 @@ followed by instructions to extract the _State_ field.
 For instance, on RV64, `ace.getst` can be implemented as:
 
 . `ace.getmdl Xd, Ks` or `K{Xs}`
-. `srli  Xd, Xd, 21`
-. `andi  Xd, Xd, 0x1F`
+. `srli  Xd, Xd, 19`
+. `andi  Xd, Xd, 0x3F
 
 and `ace.getstx` as:
 
 . `ace.getmdl Xd, Ks` or `K{Xs}`
-. `srli  Xd, Xd, 26`
+. `srli  Xd, Xd, 25`
 . `andi  Xd, Xd, 0x0F`
 --
 
@@ -3016,13 +3011,17 @@ MMR1:: ACE memory instructions appear to execute in program order on the local h
 MMR2:: ACE memory instructions follow RVWMO at the instruction level.
 If `Ztso` is implemented, they additionally follow RVTSO at the instruction level.
 
-MMR3:: ACE memory instructions may be decomposed into component memory operations of any granularity.
+MMR3:: ACE memory instructions are supported only for idempotent memory.
+If any byte of the transfer maps to a non-idempotent or side-effecting PMA region,
+the instruction raises a load/store access-fault exception before any component access occurs.
+
+MMR4:: ACE memory instructions may be decomposed into component memory operations of any granularity.
 Their issue order is not architecturally constrained beyond the applicable memory model and the semantics of
 `ace.exec`, `ace.load`, `ace.store`, `ace.input`, and `ace.output`.
 Intra-instruction ordering follows RVWMO, even when `Ztso` is implemented.
 Upon precise interruption, `acestart` must record a _prefix-complete_ point of the transfer.
 
-MMR4:: Other harts observe these component memory operations as ordinary memory operations under RVWMO.
+MMR5:: Other harts observe these component memory operations as ordinary memory operations under RVWMO.
 No ordering among them is guaranteed before the instruction completes.
 Sharing a buffer accessed by an ACE memory instruction requires the same synchronization as sharing it with an ordinary software loop.
 
@@ -3038,7 +3037,7 @@ We define IRR = Interruptibility and Resumability Rule.
 [horizontal]
 IRR1:: Instructions `ace.mgmt`, `ace.getmd*`, `ace.restrict*`, `ace.clone`, non-vector `ace.mv`, and `ace.size` are uninterruptible. If one does not complete, it writes no destination vector register, GPR, CR byte, ACEIOBUF byte, or memory location.
 
-IRR2:: `ace.setst` is uninterruptible under every condition defined by this specification.
+IRR2:: `ace.setst` is uninterruptible under every architectural condition defined by this specification. There may be implementation-specific overrides to this rule (see Rule IRR9 below).
 
 IRR3:: Long-running ACE operations that access no external memory—including `ace.setst`, `ace.mgmt`, and `ace.exec` or `ace.derive` forms that do not access GPRs, vector registers, or the ACEIOBUF—continue while the hart is preempted. If an interrupted operation is still running when a handler accesses its CR, the hart waits for completion before resuming. Should another interrupt occur while instruction continues to execute, the second handler must to wait as well.
 
@@ -3406,7 +3405,7 @@ It relies instead on AES-GCM-SIV's resistance to nonce reuse and misuse. The con
 
 This provides practical protection for client applications. On cloud servers, each virtual machine and supervisor domain should use a unique CSK. To transfer CCs between domains, M-mode firmware can import an SCC using the source domain's CSK and re-export it using the target domain's CSK.
 
-The `SIV` (Synthetic IV), which is also the GCM-SIV authentication tag, is the encryption of the `POLYVAL` hash of the Locality Secrets, MDH, and CR Content, concatenated in that order. In the `POLYVAL` pseudocode below, the input is represented as an array of 128-bit blocks, which are absorbed in increasing index order.
+The `SIV` (Synthetic IV), which is also the GCM-SIV authentication tag, is the encryption of the `POLYVAL` hash of the MDH, Locality Secrets, and Content, concatenated in that order. In the `POLYVAL` pseudocode below, the input is represented as an array of 128-bit blocks, which are absorbed in increasing index order.
 ====
 
 [[ACE-SCC-POLYVAL]]
