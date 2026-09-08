@@ -564,13 +564,13 @@ When a CR is being provisioned, exported, or imported, it is in one of the follo
 |   57     | `ace_cfg_exporting`    | The CR, which was in a _Valid_ state, has been placed in exporting mode, i.e., its contents have been encrypted and authenticated for export.
 |   58     | `ace_cfg_importing`    | The CR, which was in a _Valid_ state, has been placed in importing mode.
 |  59,60   | (Reserved)               | Reserved.
-|   61     | `ace_cfg_exporting_partial` | The CR, which was in an Incomplete State, has been placed in exporting mode.
-|   62     | `ace_cfg_importing_partial` | A CR exported while in an Incomplete State is being reimported.
+|   61     | `ace_cfg_exporting_partial` | The CR, which was in a Partial State, has been placed in exporting mode.
+|   62     | `ace_cfg_importing_partial` | A CR exported while in a Partial State is being reimported.
 |   63     | (Reserved)               | Reserved.
 |===
 
-(((ACE, Algorithm, incomplete states)))
-States 56–63, i.e., the Configuration States, are also called _Incomplete_:
+(((ACE, Algorithm, partial states)))
+States 56–63, i.e., the Configuration States, are also called _Partial_:
 they are exactly the States that are neither _Unconfigured_ nor Complete.
 
 The immediate in the `ace.setst` instruction (<<ACE-instruction-setst>>) is a 7-bit value, whereas the _State_ field is only 6 bits long.
@@ -764,7 +764,7 @@ For a CR in a Configuration State used as the destination of an `ace.clone`, see
 
 SGR17:: Instructions `ace.size`, `ace.getmd*`, `ace.getst`, `ace.setst` with `#immed7` equal to `ace_state_unconfigured` or an
 Error State, `ace.clear`, and `ace.clear.all`, which normally are treated as usage instructions, are also allowed
-when the CR is in an _Incomplete_ State.
+when the CR is in a _Partial_ State.
 
 SGR18:: `ace.load` and `ace.mv` with a CR as destination
 are allowed in States _ace_cfg_provisioning_, _ace_cfg_importing_, and _ace_cfg_importing_partial_.
@@ -1929,10 +1929,10 @@ Depending on the previous state of the CR, the actual _State_ after `ace.mgmt` m
 
 . After `ace.mgmt`, with #immed7 = `ace_cfg_importing`, the CR's _State_ becomes
 .. `ace_cfg_importing` if the data to import corresponds to a CR in a Valid State,
-.. `ace_cfg_importing_partial` if the data to import corresponds to a CR in an Incomplete State.
+.. `ace_cfg_importing_partial` if the data to import corresponds to a CR in a Partial State.
 . After `ace.mgmt`, with #immed7 = `ace_cfg_exporting`, the CR's _State_ becomes
 .. `ace_cfg_exporting` if the CR is in a Valid State,
-.. `ace_cfg_exporting_partial` if the CR being exported is in an Incomplete State.
+.. `ace_cfg_exporting_partial` if the CR being exported is in a Partial State.
 
 If a CR is in an Error State, it is exported by simply copying the MDH to memory.
 
@@ -1944,7 +1944,7 @@ First, three steps are common to every operation below and are not repeated in t
 . It may affect `acemanagedcr` as follows:
 .. if it opened a management operation, it writes the target CR's number to `acemanagedcr`;
 .. if it completed a management operation resulting in a CR in a Complete State, it writes 32 to `acemanagedcr`; and
-.. if it completed a management operation resulting in a CR in Incomplete State, `acemanagedcr` is left unchanged.
+.. if it completed a management operation resulting in a CR in Partial State, `acemanagedcr` is left unchanged.
 . `ace.mgmt` also clears `acestart` (it is the duty of software to restore `acestart` to allow interrupted management operations to be resumed).
 
 Now we consider the specific semantics of `ace.mgmt` for each of the four operations it supports:
@@ -1987,7 +1987,7 @@ ACE exception `ace_exc_unsupported` is _not_ raised when accessing or using a CR
 .. If provisioning: CR._State_ is set to `ace_cfg_provisioning`;
 .. If importing: CR._State_ depending on `ml`._State_:
 ... If `ml`._State_ is a Valid State, then CR._State_ is set to `ace_cfg_importing`;
-... If `ml`._State_ is an Incomplete State, then CR._State_ is set to `ace_cfg_importing_partial`;
+... If `ml`._State_ is a Partial State, then CR._State_ is set to `ace_cfg_importing_partial`;
 ... If `ml`._State_ is _Unconfigured_, the Metadata is invalid and the CR is transitioned to Error State _Invalid_.
 --
 +
@@ -2012,7 +2012,7 @@ The architecturally observable behavior is described in <<ACE-CC-management>>.
 
 ... CR's _State_ is set to `ace_cfg_exporting`.
 
-.. If `ml`._State_ is in an Incomplete State (we are exporting a not fully configured CR or we are initiating a nested CR export):
+.. If `ml`._State_ is in a Partial State (we are exporting a not fully configured CR or we are initiating a nested CR export):
 +
 No encryption or authentication occurs; the contents of the CR are exported verbatim, in the same order in which they appear in the PI (for a partially provisioned CR) or in the SCC (for a partially imported CR, or a CR previously prepared for export whose export process was itself interrupted).
 
@@ -2685,7 +2685,7 @@ and from Bits [127:0] supplied in `Vs` for Form C.
 //   ..  If _AuxDataLen_ < 2, then: 32 + size of a PI's `Content[]`.
 //   ..  If _AuxDataLen_ {ge} 2, then: 32 + size of a PI's `Content[]` + 16 * _AuxDataLen_.
 // . If the MDH._State_ is an Error State, then: 16 (only MDH).
-// . If the MDH._State_ is an Incomplete State, then:
+// . If the MDH._State_ is a Partial State, then:
 //   .. If the MDH._State_ is `ace_cfg_{importing|exporting}_partial`, then: 32 + size of a PI's `Content[]`.
 //   .. If the MDH._State_ is `ace_cfg_{importing|exporting}`, then:
 //     ...  If _AuxDataLen_ < 2, then: 32 + size of a SCC's `Content1[]`.
@@ -2697,7 +2697,7 @@ and from Bits [127:0] supplied in `Vs` for Form C.
 //   ..  If _AuxDataLen_ < 2, then: size of a PI's `Content[]`.
 //   ..  If _AuxDataLen_ {ge} 2, then: size of a PI's `Content[]` + 16 * (_AuxDataLen_ - 2).
 // . If the MDH._State_ is an Error State, then: 0.
-// . If the MDH._State_ is an Incomplete State, then:
+// . If the MDH._State_ is a Partial State, then:
 //   .. If the MDH._State_ is `ace_cfg_{importing|exporting}_partial`, then: size of a PI's `Content[]`.
 //   .. If the MDH._State_ is `ace_cfg_{importing|exporting}`, then:
 //     ...  If _AuxDataLen_ < 2, then: size of a SCC's `Content1[]`.
@@ -2711,7 +2711,7 @@ and from Bits [127:0] supplied in `Vs` for Form C.
 . If the MDH._State_ is a Valid State, then:
   ..  If _AuxDataLen_ < 2, then: 32 * (1 - `q`) + size of a PI's `Content[]`.
   ..  If _AuxDataLen_ {ge} 2, then: 32 * (1 - `q`) + size of a PI's `Content[]` + 16 * (_AuxDataLen_ - 2 * `q`).
-. If the MDH._State_ is an Incomplete State, then:
+. If the MDH._State_ is a Partial State, then:
   .. If the MDH._State_ is `ace_cfg_provisioning`, then: 16 * (1 - `q`) + size of a PI's `Content[]`.
   .. If the MDH._State_ is `ace_cfg_{importing|exporting}_partial`, then: 16 * (1 - `q`) + size of a PI's `Content[]`.
   .. If the MDH._State_ is `ace_cfg_{importing|exporting}`, then:
