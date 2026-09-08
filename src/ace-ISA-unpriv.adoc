@@ -171,7 +171,7 @@ extension defines each instruction and CSR, and of what is available under
 
 [[ACE-instruction-extension-matrix]]
 .Instruction/CSR–extension matrix
-[width="100%",cols="<26%,^12%,<31%,<31%",options="header"]
+[width="100%",cols="<30%,^16%,<27%,<27%",options="header"]
 |===
 | Instruction / CSR | Defined by | With `Zklv` | With `Zklio`
 
@@ -188,7 +188,7 @@ extension defines each instruction and CSR, and of what is available under
 | `Zklmv`
 2+<| When `Zklmv` is implemented; mandatory in hardware if `Zklmem` is emulated
 
-| `ace.setst` (and the pseudo-instructions `ace.clear`, `ace.clearall`)
+| `ace.setst` (and the pseudo-instructions `ace.clear`, `ace.clearall`, `ace.clearads`)
 | `Zkl` common
 | Forms A–C
 | Forms A and B; Form C via substitution
@@ -276,7 +276,7 @@ A CR is addressed either directly, via a 5-bit immediate, or indirectly, via a G
 Indirect CR addressing implies that CR renaming, while still possible, would significantly increase microarchitectural complexity.
 We posit that CR renaming is not expected to be necessary, and may even be detrimental, for ACE, for the reasons outlined below.
 
-. CRs are redefined far less frequently than GPRs or FP registers (excluding implicit internal state changes); and
+. Excluding implicit internal state changes, CRs are redefined far less frequently than GPRs or FP registers; and
 . Speculating on the results of cryptographic operations usually leads to security issues.
 ====
 
@@ -293,9 +293,10 @@ We do not make any assumption on the structure of `Content2[]`.
 CRs reside in a dedicated, per-hart _CR file_ (CRF), a memory accessible only to the ACE implementation.
 (((Context Register File)))
 
-The CRF must guarantee the confidentiality and integrity of its contents, including preventing an attacker from rolling them back to a previous state via any access not explicitly permitted by the specification.
-Accesses to this memory are not required to be hardened against physical side-channel attacks at the hardware level.
-However, side-channel-protected implementation variants of Algorithms in the ACE unit must provide resistance to such attacks as well.
+The CRF must guarantee the confidentiality and integrity of its contents.
+This includes preventing rollback to a previous state through any access not explicitly permitted by this specification.
+CRF accesses do not require hardware-level hardening against physical side-channel attacks.
+However, side-channel-protected implementations of Algorithms in the ACE unit must also resist such attacks.
 
 Architecturally, the CRF contains the following information:
 
@@ -328,9 +329,7 @@ These registers are accessed via three CSR pairs:
 ====
 The 128 or 384 bits of capacity to hold the `SIV`, `IMPQUAL`, and `SIV2` values are allocated per hart, not per CR, because
 allocating them per CR would be costly: 128 bits per CR, or 384 bits if at least one Algorithm supports implementation-specific data.
-
 This choice prevents concurrent management operations in the same code: starting a second operation may overwrite `SIV`, `IMPQUAL`, and `SIV2`, destroying in-flight values of the first operation. Hence, the CSRs holding these values must be saved and restored at context switch.
-
 Interleaved management operations within a single process should therefore be avoided, unless a lightweight threads library is used providing support for ACE context switching. Otherwise, management operations must be serialized using a mutex.
 ====
 
@@ -373,7 +372,7 @@ From a logical point of view, the operations are not performed in the vector uni
 A vector register (groups) is as a bit string of length `VL` * `SEW` with `VL` = min(`AVL`,`VLMAX`), processing a certain number `b` of bits in each operation.
 
 Floating-point, fixed-point, and general arithmetic vector operations are not required.
-Complex operations for certain protocols may be performed in GPRs, with data inserted into vector registers and results extracted from them via `vmv.s.x`/`vmv.x.s` and the slide instructions.
+// Complex operations for certain protocols may be performed in GPRs, with data inserted into vector registers and results extracted from them via `vmv.s.x`/`vmv.x.s` and the slide instructions.
 
 When vector registers are used, ACE determines the lengths of its operands from `VL*SEW`.
 The specific choice of `VL` and `SEW` is irrelevant; for example, `VL` = 2, `SEW` = 64 and `VL` = 4, `SEW` = 32 both define a 128-bit input.
@@ -418,7 +417,7 @@ All _Reserved_ bits, as well as bits unused by a given Algorithm, are zero.
 |    Field  | Size | Name              | Description
 |    [11:0] |  12  | _Algorithm_       | This field encodes the Algorithm (primitive, mode, or protocol) that is bound to the key material. See <<ACE-Algorithm-field>>.
 |   [13:12] |   2  | _AlgorithmPolicy_ | Allowed Algorithm variant(s), such as, for a symmetric cipher, whether it can be used for encryption, decryption, or both. See <<ACE-Algorithm-field>>.
-|   [15:14] |   2  | _AlgorithmExtension_ | Reserved for future expansion of _Algorithm_ and _AlgorithmPolicy_ fields. Currently zero.
+|   [15:14] |   2  | _AlgorithmExtension_ | Reserved for future expansion of _Algorithm_ and _AlgorithmPolicy_ fields.
 |   [18:16] |   3  | _SCProtection_    | Side-channel protection level. The levels of side-channel protection are defined in <<ACE-SCProtection-field>>.
 |   [24:19] |   6  | _State_           | Current state of the CR/Algorithm, encoded as an integer.  See <<ACE-State-field>>.
 |   [28:25] |   4  | _StateExtension_  | Available to Algorithms to extend the _State_ field with additional information. See <<ACE-State-field>>.
@@ -431,7 +430,7 @@ All _Reserved_ bits, as well as bits unused by a given Algorithm, are zero.
 |   [68:64] |   5  | _UsagePolicy_     | Usage (Control) Policy. Determines which modes are allowed to use the CR.
 |   [77:69] |   9  | _Locality_        | Zero, or a value determining one or more Locality Secrets. See <<ACE-Localities>>.
 |   [79:78] |   2  | Reserved          | Reserved for future use.
-|   [95:80] |  16  | _AlgorithmUse_    | Used by Algorithms and implementations to store additional state information.
+|   [95:80] |  16  | _AlgorithmUse_    | May be used by Algorithms, and when not by their and implementations.
 |  [115:96] |  20  | _ExpirationDate_  | If non-zero, the expiration date of this CC. See <<ACE-Metadata-expiration-date>>. Expressed in hours since 00:00, January 1, 2027 (about 119 years and 7 months).
 | [125:116] |  10  | Reserved          | Reserved for future use.
 | [127:126] |   2  | _Version_         | MDH format version.
@@ -439,7 +438,7 @@ All _Reserved_ bits, as well as bits unused by a given Algorithm, are zero.
 
 The fields are described in detail in the following subsections.
 
-<<ACE-length-rule>> is the sole authoritative source for determining which MDH fields specify the sizes of provisioning inputs and Sealed Cryptographic Contexts, and the maximum internal memory required by the Algorithm encoded in the CR.
+<<ACE-length-rule>> is the sole authoritative source for determining which MDH fields specify the sizes of provisioning inputs and Sealed Cryptographic Contexts.
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -494,8 +493,9 @@ If the value is 0, keys are provisioned, exported, and imported by value.
 
 If the value is 1, keys are provisioned, exported, and imported as a System Key Identifier (SKID), except for the all-ones (i.e., `ones(64)`) SKID value.
 
-If the SKID is the all-ones value, the key material is generated randomly upon provisioning, and then exported by value with _KeyType_ set to 0.
-Random generation applies to all keys at once in an Algorithm, unless otherwise specified.
+If the SKID is the all-ones value, the key material is randomly generated when provisioning completes. It is then exported by value with _KeyType_ set to 0.
+Unless otherwise specified, random generation applies to all keys in an Algorithm at once.
+
 
 // The information contained in this field affects the length of a PI and of an SCC, but not the CRF capacity occupied by a CR (<<ACE-length-rule>>).
 
@@ -509,9 +509,6 @@ Examples include whether the CR is _Unconfigured_, encrypting or decrypting data
 computing elliptic curve point multiples, generating or verifying signatures, or is in an error state.
 
 The _StateExtension_ field can be used by an Algorithm to store additional state information, usually orthogonal to the _State_ field, such as whether certain values have been provisioned or computed.
-
-[[ACE-state-rules]]
-====== Architected CR States
 
 The architected values of _State_ common to all Algorithms are defined in the following three tables.
 
@@ -576,10 +573,12 @@ When a CR is being provisioned, exported, or imported, it is in one of the follo
 The immediate in the `ace.setst` instruction (<<ACE-instruction-setst>>) is a 7-bit value, whereas the _State_ field is only 5 bits long.
 This allows `ace.setst` to encode additional operations related to state changes.
 
+Currently, the only such operation is encoded with the value 64, meaning `ace_cfg_clear_ads`, which clears any ADS so that the CR can be exported without it.
+
 (((ACE, Algorithm, invalid state)))
 (((Context Register, invalidation)))
 We say that a CR has been _invalidated_ when it has been transitioned to Error State `ace_state_invalid`.
-Upon entering an Error State, the CR's contents are cleared as per Rule *SGR8* in <<ACE-algorithm-state-rules>>.
+Upon entering an Error State, the CR's contents are cleared as per Rule *SGR8* in <<ACE-State-field>>.
 
 The currently defined Error States are listed in decreasing severity order, with Error State 48 being the most severe and Error State 53 the least severe.
 Error States 54 and 55, if defined, will not necessarily have a lower priority than Error State 53, so the ordering may not hold for them.
@@ -590,18 +589,6 @@ If an Algorithm defines 47 or fewer valid states (including _Ready_, _Success_, 
 For Algorithms with more than 47 valid states, additional state information may reside in the Content section in an Algorithm-specific format.
 
 <<ACE-states-graph>> displays the default state transitions.
-The legend for the state transition graph is:
-
-* The double circled state is the _Unconfigured_ State.
-* Valid States have single rounded rectangular borders.
-* Error States have double rounded rectangular borders.
-* Continuous edges denote state transitions induced by both configuration and usage instructions.
-* Dashed edges denote state transitions induced by reaching the expiration date.
-* Dotted edges denote state transitions induced by configuration operations.
-  Completing a provisioning operation leads only to State _Ready_.
-  Completing an import may result in any admissible value of the _State_ and _StateExtension_ fields, since these are restored to the values at export.
-  (Completing an import can result in non-complete CR if the SCC results from a CR exported mid-provisioning, mid-import, or mid-export.)
-* The round _Configuration_ “hub” simplifies the graph by expressing that any Error State is always reachable—even from another Error State—through configuration operations (or via `ace.setst`).
 
 [[ACE-states-graph]]
 .Default State Transitions
@@ -692,11 +679,20 @@ image::images/statestikz-3.svg[]
 
 // The information contained in this field affects the length of an SCC, but neither the length of a PI nor the CRF capacity occupied by a CR (<<ACE-length-rule>>).
 
+The legend for the state transition graph is:
 
-[[ACE-algorithm-state-rules]]
-====== State-Specific General Rules
+* The double circled state is the _Unconfigured_ State.
+* Valid States have single rounded rectangular borders.
+* Error States have double rounded rectangular borders.
+* Continuous edges denote state transitions induced by both configuration and usage instructions.
+* Dashed edges denote state transitions induced by reaching the expiration date.
+* Dotted edges denote state transitions induced by configuration operations.
+  Completing a provisioning operation leads only to State _Ready_.
+  Completing an import may result in any admissible value of the _State_ and _StateExtension_ fields, since these are restored to the values at export.
+  (Completing an import can result in non-complete CR if the SCC results from a CR exported mid-provisioning, mid-import, or mid-export.)
+* The round _Configuration_ “hub” simplifies the graph by expressing that any Error State is always reachable—even from another Error State—through configuration operations (or via `ace.setst`).
 
-The following rules are generic and apply to all Algorithms (*SGR* means "State General Rules"):
+The following rules are generic and apply to all Algorithms (*SGR* means "State-Specific General Rules"):
 
 [horizontal]
 SGR1:: The MDH's _State_ field reflects the current state whenever the CC is in _Ready_, _Success_, _Failure_, or any Error State.
@@ -725,8 +721,8 @@ SGR5:: States _Success_ and _Failure_ cannot be set directly by the caller.
 
 
 SGR6:: A transition from any valid state to _Ready_ using instruction `ace.setst` is always permitted, unless the Algorithm explicitly forbids it.
-+
-NOTE: Note that a CR can always be restored from a backup SCC, so preventing transitions to _Ready_--as "GCM with Set IV" (<<ACE-GCM-with-IV-mode>>) does--is not an effective mitigation against cryptographic attacks enabled by transitioning to _Ready_.
+// +
+// NOTE: Since a CR can always be restored from a backup SCC, preventing transitions to _Ready_--as "GCM with Set IV" (<<ACE-GCM-with-IV-mode>>) does--is not an effective mitigation against the attacks that would be enabled by transitioning to _Ready_.
 
 SGR7:: The CR state after `ace.setst` completes does not always match the instruction's immediate operand.
 Beyond Error State transitions, some operations determine the next state dynamically.
@@ -1903,10 +1899,10 @@ In this case the change to _State_ is performed after the import of the MDH.
 [float="center",align="center",width="100%",cols="^7%,<27%,<66%",options="header"]
 |===
 | Value | Mnemonic                  |  Description
-|  56   | `ace_cfg_provisioning`  |  Prepare a CR for provisioning.
-|  57   | `ace_cfg_exporting`     |  Prepare a CR for export.
-|  58   | `ace_cfg_importing`     |  Prepare a CR for import.
-|  63   | `ace_cfg_management_end`   |  Complete current management operation.
+|  56   | `ace_cfg_provisioning`    |  Prepare a CR for provisioning.
+|  57   | `ace_cfg_exporting`       |  Prepare a CR for export.
+|  58   | `ace_cfg_importing`       |  Prepare a CR for import.
+|  63   | `ace_cfg_management_end`  |  Complete current management operation.
 |===
 
 The values of `#immed7` in in <<ACE-management-immeds>> can be used in all Forms, whereby
@@ -2606,13 +2602,11 @@ open-destination rules of <<ACE-instruction-derive>> apply.
 // ////////////////////////////////////////////////////////////////////
 
 [[ACE-instruction-size]]
-==== ace.size.ex/ace.size.im/ace.avail
-
-WARNING: complete description.
+==== ace.size/ace.csize/ace.avail
 
 _Synopsis_::
 Return the total size of a memory buffer that would be needed to store the data of a PI, CR, or SCC in bytes.
-`ace.size.ex` returns 0 in case of error (such as unsupported Algorithm or invalid MDH).
+`ace.size` returns 0 in case of error (such as unsupported Algorithm or invalid MDH).
 
 _Mnemonic_::
 +
@@ -2621,12 +2615,10 @@ There are three Forms of the `ace.size` instruction:
 (((ACE, instruction, ace.size)))
 
 [upperalpha]
-. `ace.size.ex/ace.size.im Xd, Ks|K{Xs}` - Size from a context.
-. `ace.size.ex/ace.size.im Xd, Xs` - Size from MDH[63:0] in one (RV64) or two (RV32) GPRs.
-. `ace.size.ex/ace.size.im Xd, Vs` - Size from MDH in one vector register.
+. `ace.size/ace.csize  Xd, Ks|K{Xs}` - Size from a context.
+. `ace.size/ace.csize  Xd, Xs` - Size from MDH[63:0] in one (RV64) or two (RV32) GPRs.
+. `ace.size/ace.csize  Xd, Vs` - Size from MDH in one vector register.
 --
-
-// Without this comment, the next part is not properly formatted...
 
 _Encoding_::
 +
@@ -2656,8 +2648,8 @@ The `F` field and the `r` bit may assume the following values:
 * `F` = `0b01`, `r` = `0` {implies} Form B: Size/availability from MDH in one (RV64) or two (RV32) GPRs.
 * `F` = `0b10`, `r` = `0` {implies} Form C: Size/availability from MDH in a 128-bit vector register.
 
-For `ace.size.ex`, `q` is `0`, and for `ace.size.im`, `q` is `1`.
-Bit `q` is `0` if we are evaluating the size for export (i.e, total memory size), or `1` for import (only the `Content[]` size).
+For `ace.size`, `q` is `0`, and for `ace.csize`, `q` is `1`.
+Bit `q` is `0` if we are evaluating the total size of an SCC, or `1` for only the `Content[]` size.
 --
 
 _Description_:: {empty}
@@ -2669,8 +2661,14 @@ authentication tag(s) and the ADS; for a PI it is the size of the entire
 PI. Knowing this size is necessary for any feature that relies on exporting a CR, including context
 switching.
 
-The three Forms differ only in where the MDH is taken from, as the mnemonics above give: from the CR
-itself for Form A, from Bits [63:0] supplied in `Xs` (in `X[s+1] @ Xs` on RV32) for Form B, and from Bits [127:0] supplied in `Vs` for Form C.
+`ace.avail` is an alias for `ace.size`.
+
+`ace.csize` is the analogous instruction to `ace.size` that returns only the `Content[]` size.
+
+The three Forms for the two instructions differ only in where the MDH is taken from,
+as the mnemonics above give:
+from the CR itself for Form A, from Bits [63:0] supplied in `Xs` (in `X[s+1] @ Xs` on RV32) for Form B,
+and from Bits [127:0] supplied in `Vs` for Form C.
 
 // `ace.size.ex` is computed as follows:
 //
@@ -2696,8 +2694,10 @@ itself for Form A, from Bits [63:0] supplied in `Xs` (in `X[s+1] @ Xs` on RV32) 
 //     ...  If _AuxDataLen_ < 2, then: size of a SCC's `Content1[]`.
 //     ...  If _AuxDataLen_ {ge} 2, then: size of a SCC's `Content1[]` + 16 * (_AuxDataLen_ - 2).
 
-`ace.size` is computed as follows:
+`ace.size/ace.csize` is computed as follows:
 
+. If the CR is _Unconfigured_, then: 0.
+. If Algorithm_, _AlgorithmPolicy_ or _SCProtection_ encoded in the supplied MDH (Forms B-D) is unsupported, then : 0.
 . If the MDH._State_ is an Error State, then: 16 * (1 - `q`).
 . If the MDH._State_ is a Valid State, then:
   ..  If _AuxDataLen_ < 2, then: 32 * (1 - `q`) + size of a PI's `Content[]`.
@@ -2707,10 +2707,6 @@ itself for Form A, from Bits [63:0] supplied in `Xs` (in `X[s+1] @ Xs` on RV32) 
   .. If the MDH._State_ is `ace_cfg_{importing|exporting}`, then:
     ...  If _AuxDataLen_ < 2, then: 32 * (1 - `q`) + size of a SCC's `Content1[]`.
     ...  If _AuxDataLen_ {ge} 2, then: 32 * (1 - `q`) + size of a SCC's `Content1[]` + 16 * (_AuxDataLen_ - 2 * `q`).
-
-The instruction also returns `0`: for Form A when the CR is unconfigured,
-and for Forms B–D when the _Algorithm_, _AlgorithmPolicy_ or _SCProtection_ encoded in the supplied MDH is
-unsupported, or the MDH is otherwise malformed. Form B will only check the format of bits [63:0] of `Xs`.
 --
 
 //
@@ -2850,6 +2846,32 @@ _Description_::
 It uses the encoding of `ace.setst` described above with indirect CR addressing and `Xd` = `X0`.
 
 Clearing (i.e., unconfiguring) a CR that was not already _Unconfigured_ sets its `*lcrstatus` field, and the `ACES` fields in effect, to _Dirty_. The CR's own _State_ field becomes _Unconfigured_.
+--
+
+// ////////////////////////////////////////////////////////////////////
+
+[[ACE-instruction-clearads]]
+==== ace.clearads
+
+_Synopsis_::
+Clears any ADS from the target CR
+
+_Mnemonic_::
+`ace.clear.ads Kd|K{Xd}` +
+(((ACE, instruction, ace.clear.ads)))
+
+_Encoding_::
+This pseudo-instruction is implemented as `ace.setst` (see <<ACE-instruction-setst>>) with no auxiliary operands and the immediate for _State_ set to `ace_cfg_clear_ads`, i.e., the value 64.
+
+_Description_::
++
+--
+`ace.clearads` deletes any ADS from the target CR.
+This instruction is used when exporting a CR for use by some other target, possibly some different implementation.
+If no ADS was present, the _AuxDataLen_ remains 0, otherwise it is set to 1.
+Exporting a CR into a SCC in this state will result in an ADS-free SCC being generated.
+
+The first usage instruction that needs to access the ADS will then need to regenerate it.
 --
 
 // ////////////////////////////////////////////////////////////////////
