@@ -564,8 +564,8 @@ When a CR is being provisioned, exported, or imported, it is in one of the follo
 |   57     | `ace_cfg_exporting`    | The CR, which was in a _Valid_ state, has been placed in exporting mode, i.e., its contents have been encrypted and authenticated for export.
 |   58     | `ace_cfg_importing`    | The CR, which was in a _Valid_ state, has been placed in importing mode.
 |  59,60   | (Reserved)               | Reserved.
-|   61     | `ace_cfg_exporting_pp` | The CR, which was in an Incomplete State, has been placed in exporting mode.
-|   62     | `ace_cfg_importing_pp` | A CR exported while in an Incomplete State is being reimported.
+|   61     | `ace_cfg_exporting_partial` | The CR, which was in an Incomplete State, has been placed in exporting mode.
+|   62     | `ace_cfg_importing_partial` | A CR exported while in an Incomplete State is being reimported.
 |   63     | (Reserved)               | Reserved.
 |===
 
@@ -767,10 +767,10 @@ Error State, `ace.clear`, and `ace.clear.all`, which normally are treated as usa
 when the CR is in an _Incomplete_ State.
 
 SGR18:: `ace.load` and `ace.mv` with a CR as destination
-are allowed in States _ace_cfg_provisioning_, _ace_cfg_importing_, and _ace_cfg_importing_pp_.
+are allowed in States _ace_cfg_provisioning_, _ace_cfg_importing_, and _ace_cfg_importing_partial_.
 
 SGR19:: `ace.store` and `ace.mv` with a CR as source
-are allowed in States _ace_cfg_exporting_, and _ace_cfg_exporting_pp_.
+are allowed in States _ace_cfg_exporting_, and _ace_cfg_exporting_partial_.
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -1798,19 +1798,19 @@ only of the bytes supplied by that operation. A CR so written may fail to authen
 
 | `0b01` | `rd` = `0b00001`
 | The 128-bit GPR operand at `rs2` is copied into the CR at offset `acestart`.
-| `ace_cfg_provisioning`, `ace_cfg_importing`, `ace_cfg_importing_pp`
+| `ace_cfg_provisioning`, `ace_cfg_importing`, `ace_cfg_importing_partial`
 
 | `0b01` | `rd` = `0b00010`
 | `vl` elements of `V[rs2]` are moved into the CR at offset `acestart`.
-| `ace_cfg_provisioning`, `ace_cfg_importing`, `ace_cfg_importing_pp`
+| `ace_cfg_provisioning`, `ace_cfg_importing`, `ace_cfg_importing_partial`
 
 | `0b10` | `rs2` = `0b00001`
 | 16 bytes of the CR at offset `acestart` are copied to the 128-bit GPR operand at `rd`.
-| `ace_cfg_exporting`, `ace_cfg_exporting_pp`
+| `ace_cfg_exporting`, `ace_cfg_exporting_partial`
 
 | `0b10` | `rs2` = `0b00010`
 | `vl` elements of the CR at offset `acestart` are moved to `V[rd]`.
-| `ace_cfg_exporting`, `ace_cfg_exporting_pp`
+| `ace_cfg_exporting`, `ace_cfg_exporting_partial`
 |===
 --
 
@@ -1929,10 +1929,10 @@ Depending on the previous state of the CR, the actual _State_ after `ace.mgmt` m
 
 . After `ace.mgmt`, with #immed7 = `ace_cfg_importing`, the CR's _State_ becomes
 .. `ace_cfg_importing` if the data to import corresponds to a CR in a Valid State,
-.. `ace_cfg_importing_pp` if the data to import corresponds to a CR in an Incomplete State.
+.. `ace_cfg_importing_partial` if the data to import corresponds to a CR in an Incomplete State.
 . After `ace.mgmt`, with #immed7 = `ace_cfg_exporting`, the CR's _State_ becomes
 .. `ace_cfg_exporting` if the CR is in a Valid State,
-.. `ace_cfg_exporting_pp` if the CR being exported is in an Incomplete State.
+.. `ace_cfg_exporting_partial` if the CR being exported is in an Incomplete State.
 
 If a CR is in an Error State, it is exported by simply copying the MDH to memory.
 
@@ -1987,7 +1987,7 @@ ACE exception `ace_exc_unsupported` is _not_ raised when accessing or using a CR
 .. If provisioning: CR._State_ is set to `ace_cfg_provisioning`;
 .. If importing: CR._State_ depending on `ml`._State_:
 ... If `ml`._State_ is a Valid State, then CR._State_ is set to `ace_cfg_importing`;
-... If `ml`._State_ is an Incomplete State, then CR._State_ is set to `ace_cfg_importing_pp`;
+... If `ml`._State_ is an Incomplete State, then CR._State_ is set to `ace_cfg_importing_partial`;
 ... If `ml`._State_ is _Unconfigured_, the Metadata is invalid and the CR is transitioned to Error State _Invalid_.
 --
 +
@@ -2016,7 +2016,7 @@ The architecturally observable behavior is described in <<ACE-CC-management>>.
 +
 No encryption or authentication occurs; the contents of the CR are exported verbatim, in the same order in which they appear in the PI (for a partially provisioned CR) or in the SCC (for a partially imported CR, or a CR previously prepared for export whose export process was itself interrupted).
 
-... The CR's _State_ is set to `ace_cfg_exporting_pp`.
+... The CR's _State_ is set to `ace_cfg_exporting_partial`.
 
 These values of CR._State_  are the value on which `ace.store` (<<ACE-instruction-store>>) and the CR-reading variants of `ace.mv` (<<ACE-instruction-mv>>) are gated, so no export can proceed until CR._State_ is set.
 --
@@ -2028,8 +2028,8 @@ These values of CR._State_  are the value on which `ace.store` (<<ACE-instructio
 Depending on whether MDH._State_ is
 
 * `ace_cfg_provisioning`,
-* `ace_cfg_importing`, `ace_cfg_importing_pp`, resp.
-* `ace_cfg_exporting`, `ace_cfg_exporting_pp`,
+* `ace_cfg_importing`, `ace_cfg_importing_partial`, resp.
+* `ace_cfg_exporting`, `ace_cfg_exporting_partial`,
 
 the instruction will proceed to complete a provisioning, importing, resp., exporting process, as are described next.
 
@@ -2686,7 +2686,7 @@ and from Bits [127:0] supplied in `Vs` for Form C.
 //   ..  If _AuxDataLen_ {ge} 2, then: 32 + size of a PI's `Content[]` + 16 * _AuxDataLen_.
 // . If the MDH._State_ is an Error State, then: 16 (only MDH).
 // . If the MDH._State_ is an Incomplete State, then:
-//   .. If the MDH._State_ is `ace_cfg_{importing|exporting}_pp`, then: 32 + size of a PI's `Content[]`.
+//   .. If the MDH._State_ is `ace_cfg_{importing|exporting}_partial`, then: 32 + size of a PI's `Content[]`.
 //   .. If the MDH._State_ is `ace_cfg_{importing|exporting}`, then:
 //     ...  If _AuxDataLen_ < 2, then: 32 + size of a SCC's `Content1[]`.
 //     ...  If _AuxDataLen_ {ge} 2, then: 32 + size of a SCC's `Content1[]` + 16 * _AuxDataLen_.
@@ -2698,7 +2698,7 @@ and from Bits [127:0] supplied in `Vs` for Form C.
 //   ..  If _AuxDataLen_ {ge} 2, then: size of a PI's `Content[]` + 16 * (_AuxDataLen_ - 2).
 // . If the MDH._State_ is an Error State, then: 0.
 // . If the MDH._State_ is an Incomplete State, then:
-//   .. If the MDH._State_ is `ace_cfg_{importing|exporting}_pp`, then: size of a PI's `Content[]`.
+//   .. If the MDH._State_ is `ace_cfg_{importing|exporting}_partial`, then: size of a PI's `Content[]`.
 //   .. If the MDH._State_ is `ace_cfg_{importing|exporting}`, then:
 //     ...  If _AuxDataLen_ < 2, then: size of a SCC's `Content1[]`.
 //     ...  If _AuxDataLen_ {ge} 2, then: size of a SCC's `Content1[]` + 16 * (_AuxDataLen_ - 2).
@@ -2713,7 +2713,7 @@ and from Bits [127:0] supplied in `Vs` for Form C.
   ..  If _AuxDataLen_ {ge} 2, then: 32 * (1 - `q`) + size of a PI's `Content[]` + 16 * (_AuxDataLen_ - 2 * `q`).
 . If the MDH._State_ is an Incomplete State, then:
   .. If the MDH._State_ is `ace_cfg_provisioning`, then: 16 * (1 - `q`) + size of a PI's `Content[]`.
-  .. If the MDH._State_ is `ace_cfg_{importing|exporting}_pp`, then: 32 * (1 - `q`) + size of a PI's `Content[]`.
+  .. If the MDH._State_ is `ace_cfg_{importing|exporting}_partial`, then: 16 * (1 - `q`) + size of a PI's `Content[]`.
   .. If the MDH._State_ is `ace_cfg_{importing|exporting}`, then:
     ...  If _AuxDataLen_ < 2, then: 32 * (1 - `q`) + size of a SCC's `Content1[]`.
     ...  If _AuxDataLen_ {ge} 2, then: 32 * (1 - `q`) + size of a SCC's `Content1[]` + 16 * (_AuxDataLen_ - 2 * `q`).
@@ -3328,28 +3328,28 @@ participant "Nested 2" as N2
 B -> B: Start management: <i>State</i> changes to one of ""ace_cfg_X""\nwith X = ""provisioning"", ""importing"", or ""exporting"".
 B -> N1: Preemption.
   N1 -> N1: Save acestart.
-  N1 -> N1: Start export: Save current <i>State;</i> <i>State</i> → ""ace_cfg_exporting_pp"".
+  N1 -> N1: Start export: Save current <i>State;</i> <i>State</i> → ""ace_cfg_exporting_partial"".
   N1 -> N2: Preemption.
     N2 -> N2: Save acestart.
-    N2 -> N2: Start export: Save current <i>State;</i> <i>State</i> → ""ace_cfg_exporting_pp"".
-    N2 -> N2: Complete export: Restore saved <i>State</i> (""ace_cfg_exporting_pp"").
+    N2 -> N2: Start export: Save current <i>State;</i> <i>State</i> → ""ace_cfg_exporting_partial"".
+    N2 -> N2: Complete export: Restore saved <i>State</i> (""ace_cfg_exporting_partial"").
     N2 -> N2: Context Save, including ""SIV"", ""SIV2"", ""IMPQUAL"".
     N2 -> N2: Yield control to other processes.
     N2 -> N2: Context restore, including ""SIV"", ""SIV2"", ""IMPQUAL"".
-    N2 -> N2: Start import: Previous <i>State</i> same as in Step 8,\nhence, <i>State</i> → ""ace_cfg_importing_pp"".
-    N2 -> N2: Complete import: <i>State</i> restored to ""ace_cfg_exporting_pp"".
+    N2 -> N2: Start import: Previous <i>State</i> same as in Step 8,\nhence, <i>State</i> → ""ace_cfg_importing_partial"".
+    N2 -> N2: Complete import: <i>State</i> restored to ""ace_cfg_exporting_partial"".
     N2 -> N2: Restore acestart.
     N2 -> N1: Return.
   N1 -> N1: Complete export: <i>State</i> restored to value saved in Step 4.
   N1 -> N1: Context save, including ""SIV"", ""SIV2"", ""IMPQUAL"".
   N1 -> N1: Yield control to other processes.
   N1 -> N1: Context restore, including ""SIV"", ""SIV2"", ""IMPQUAL"".
-  N1 -> N1: Start import: Current state same as <i>State</i> saved in Step 4;\n Save this <i>State;</i> then, <i>State</i> → ""ace_cfg_importing_pp"".
+  N1 -> N1: Start import: Current state same as <i>State</i> saved in Step 4;\n Save this <i>State;</i> then, <i>State</i> → ""ace_cfg_importing_partial"".
   N1 -> N2: Preemption.
     N2 -> N2: Save acestart.
-    N2 -> N2: Start export: Save current <i>State;</i> <i>State</i> → ""ace_cfg_exporting_pp"".
+    N2 -> N2: Start export: Save current <i>State;</i> <i>State</i> → ""ace_cfg_exporting_partial"".
     N2 -> N2: Complete export: <i>State</i> restored to value saved in Step 23.
-    N2 -> N2: Start import: Save current <i>State;</i> <i>State</i> → ""ace_cfg_importing_pp"".
+    N2 -> N2: Start import: Save current <i>State;</i> <i>State</i> → ""ace_cfg_importing_partial"".
     N2 -> N2: Context save, including ""SIV"", ""SIV2"", ""IMPQUAL"".
     N2 -> N2: Yield control to other processes.
     N2 -> N2: Context restore, including ""SIV"", ""SIV2"", ""IMPQUAL"".
