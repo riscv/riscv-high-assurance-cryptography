@@ -1596,9 +1596,9 @@ Let `max_admissible` = the implementation's maximum SCC payload length for the A
 
 {fournbsp}{fournbsp}``end`` = `min(size, max_admissible)`.
 
-More precisely: For each _j_ from `acestart` to `end` − 1, the byte at memory
-address ``Xs1 + %offset + ``_j_ is loaded into the _j_-th byte of the
-serialized `Content[]` of the CR.  `acestart` tracks the prefix-complete number of bytes loaded.
+More precisely: For each _j_ from `acestart` to `end` − 1, the byte at memory address ``Xs1 + %offset + ``_j_ is loaded into the _j_-th byte of the
+serialized `Content[]` of the CR.  `acestart` tracks a prefix-complete number of bytes loaded, which must be a multiple of 16.
+All `ace.load` transfers must be 16-byte aligned.
 
 When a system-defined format is used, the semantics of `ace.load` are implementation-dependent.
 --
@@ -1631,7 +1631,8 @@ _Description_::
 +
 --
 Exports raw data from the `Content[]` of the CR `Ks2` or `K{Xs2}`, starting with the first byte of `Content[]`, to memory at address `%offset(Xs1)`.
-`acestart` tracks the prefix-complete number of bytes stored.
+`acestart` tracks the prefix-complete number of bytes stored, which must be a multiple of 16.
+All `ace.store` transfers must be 16-byte aligned.
 
 Let `size` = the exported SCC's length, as determined by the CR's MDH, which is a multiple of 16 bytes.
 `ace.load` transfers offsets `[acestart, size)` where
@@ -1645,16 +1646,6 @@ and saved to memory by the caller.  The authentication information (`SIV`, `IMPQ
 
 If the CR is in a Complete State, then ACE exception `ace_exc_complete_cr_data_access` is raised.
 --
-
-// NOTE: Modifying the CR being used by the interrupted `ace.store` always forces
-// the store to restart. Software that aims to optimize this case will have to
-// inspect `ConfigStatus` in the metadata of each CR and detect if the store
-// hasn't completed to impede the restart.
-
-// The order in which the LSU issues the component memory operations of the transfer is
-// implementation dependent, subject to <<ACE-Memory-Model>>.
-//
-// NOTE: PI can be stored because a provisioning operation may be interrupted, and this allows resuming it.
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -2920,8 +2911,7 @@ and `ace.getstx` as:
 === ACE Unprivileged State out of Reset
 
 This section and <<ACE-out-of-reset-priv>> are the authoritative statement of ACE state out of
-reset; no CSR description restates its own reset value.
-
+reset.
 Out of ACE unit reset:
 
 . All CRs are in State _Unconfigured_ with zeroized contents.
@@ -2945,17 +2935,17 @@ All computation and all other state changes remain in `ace.exec`, `ace.setst`, `
 Any input and any output will be read from or written to the ACEIOBUF if `Zklio` is available.
 If `Zklio` is not available, an illegal-instruction exception is raised.
 
-.. Form A `ace.exec` cannot be replaced by Form B: the input cannot be read from a vector register while the output is written to the ACEIOBUF. Such an attempt raises an illegal-instruction exception.
-
-.. Form A `ace.exec` cannot be replaced by Form C: the input cannot be read from the ACEIOBUF while the output is written to a vector register. Such an attempt raises an illegal-instruction exception.
+. Mixing vector and ACEIOBUF inputs and output is not allowed:
+A Form A `ace.exec` cannot be replaced by a Form B or C `ace.exec`.
+Attempts to do so raise an illegal-instruction exception.
 
 . `ace.setst` and `ace.mgmt` follow the same rule: if `Zklio` is available, the form with a vector
 input (Form C) can be replaced by a Form A, and the ACEIOBUF is used for the input. If `Zklio` is
 not available and a Form A is issued where a Form C is expected, an illegal-instruction exception
 is raised.
-+
-NOTE: These exceptions signal that the substitution is unavailable, not that the Form is wrong for
-the Algorithm's current state. The latter invalidates the CR instead (<<ACE-algorithms-other-rules>>).
+// +
+// NOTE: These exceptions signal that the substitution is unavailable, not that the Form is wrong for
+// the Algorithm's current state. The latter invalidates the CR instead (<<ACE-algorithms-other-rules>>).
 
 . Any substitution is allowed only if the ACEIOBUF is enabled and `aceiobuflen` is non-zero.
   Otherwise, ACE exception `ace_exc_unconfigured_buffer` is raised.
@@ -3010,6 +3000,34 @@ This does not expand the attack surface, since the caller always retains full co
 
 // ////////////////////////////////////////////////////////////////////
 
+[[ACE-Memory-Model]]
+=== Memory Model
+
+[WARNING]
+====
+A full axiomatic integration of the ACE component memory operations
+into the RVWMO formalism remains to be produced together with the
+ARC during ratification.
+====
+
+[horizontal]
+MMR1:: ACE memory instructions appear to execute in program order on the local hart.
+
+MMR2:: ACE memory instructions follow RVWMO at the instruction level.
+If `Ztso` is implemented, they additionally follow RVTSO at the instruction level.
+
+MMR3:: ACE memory instructions may be decomposed into component memory operations of any granularity.
+Their issue order is not architecturally constrained beyond the applicable memory model and the semantics of
+`ace.exec`, `ace.load`, `ace.store`, `ace.input`, and `ace.output`.
+Intra-instruction ordering follows RVWMO, even when `Ztso` is implemented.
+Upon precise interruption, `acestart` must record a _prefix-complete_ point of the transfer.
+
+MMR4:: Other harts observe these component memory operations as ordinary memory operations under RVWMO.
+No ordering among them is guaranteed before the instruction completes.
+Sharing a buffer accessed by an ACE memory instruction requires the same synchronization as sharing it with an ordinary software loop.
+
+// ////////////////////////////////////////////////////////////////////
+
 [[ACE-resumability]]
 === Interruptibility and Resumability of ACE instructions
 
@@ -3031,123 +3049,47 @@ NOTE: Although `ace.mgmt` is uninterruptible, the management processes bracketed
 ==== Resumable instructions
 
 [horizontal]
-IRR4:: Resumable instructions are `ace.exec`, the vector versions of `ace.mv`, `ace.derive`, `ace.load`, `ace.store`, `ace.input`, and `ace.output`. They process multiple units serially from an architectural point of view. If an instruction is precisely halted or encounters an error after partial progress, the completed prefix is committed, the failing and subsequent units have no effect, and `acestart` records the prefix-complete point. The instruction is not retired; `xepc` contains its address.
+IRR4:: In general, the following behaviors are allowed when an interrupt or exception handler accesses an input or output of a preempted operation, the associated CR, or any ACE state that may be affected by the operation:
 
-IRR5:: For ACE memory instructions `ace.load`, `ace.store`, `ace.input`, and `ace.output`, the usual rule applies:
-An implementation may treat a memory instruction as complete
-(retiring it, or taking an interrupt with `xepc` past it) only after address translation and permission checks for every byte have succeeded. Otherwise it must precisely halt the instruction and report any fault synchronously on re-execution or resumption, with `acestart` at a prefix-complete point. Component accesses after the instruction is treated as complete must not fault. Transfer instructions may be restarted or resumed.
+. Background completion: The hart waits for the operation to complete when the privileged handler accesses affected state.
+. Atomic completion: The operation completes before any asynchronous interrupt is taken.
+. Precise halt and resumption: The operation halts with `acestart` recording a prefix-complete point (<<ACE-Memory-Model>>), and resumes from `acestart`, advancing by at least one granule per execution attempt.
+. Timeout followed by precise halt and resumption: The system may impose a timeout before halting as described above.
+. Precise halt and restart.
 
-IRR6:: For block-iterated `ace.exec`, `ace.mv`, and `ace.derive`, fully processed blocks remain written and `acestart` records their total byte count. For transfer instructions, bytes below `acestart` remain transferred at both endpoints. A partially executed instruction therefore commits exactly the state that a shorter instruction performing only the completed operations would have committed, including the CR, `acestart`, `acemanagedcr`, `SIV`, `SIV2`, `IMPQUAL`, `*lcrstatus`, and effective `ACES` fields. This guarantees consistent context save, restore, and resumption. Implementations must honor `acestart` for `ace.exec` and `ace.derive`; handlers must not set it to zero to force a restart, since doing so could reapply state changes or corrupt data.
+IRR5:: All the approaches in Rule IRR4 are subject to one rule: Before the hart performs a _conflicting access_, the in-flight operation must either have completed or have been precisely halted with `acestart` set per <<ACE-Memory-Model>>. A conflicting access is any of the following:
 +
-Algorithm-specific resumable operations that transfer no data are subject to the same guarantee: each execution attempt must either complete the operation or advance its recorded progress.
-+
-NOTE: `ace.derive` is included because it may need to modify the source CRs state, for example while squeezing a sponge, and may destructively modify the destination. Re-execution from the beginning could therefore advance a state machine twice or overwrite data already consumed. Its interruption points are block boundaries and Algorithm-specific points, including the long-running computations in <<ACE-ECC>> and <<ACE-PQC>>. If input and output overlap, the result may be unpredictable, but remains a function only of architectural state that the executing context is otherwise permitted to observe.
+--
+* An ordinary load or store overlapping the memory region of the in-flight ACE operation.
+* An access to a CR used by the operation, including the the issue of another ACE instruction involving a CR used by the operation.
+* A read or write of `acestart` or an ACEIOBUF CSR. In case of management instructions, also a read or write to the following CSRs: `acemanagedcr`, `acesivl`/`acesivh`, `acesiv2l`/`acesiv2h`, and `aceiql`/`aceiqh`.
 
-IRR7:: If an Algorithm performs a a long-running operation in `ace.setst` or in a (block-processing step of) `ace.exec` operation,
-the implementation may interrupt and resume the operation, but the manner in which it records progress is implementation-defined and it cannot be `acestart`
+IRR4 and IRR5 make asynchronous execution by the attached ACE unit invisible to same-hart program order, as <<ACE-Memory-Model>> requires. Beyond this rule, the architecture specifies only the allowed interruption points for its instructions and Algorithms.
+--
+
+IRR6:: The resumable instructions are `ace.exec`, vector `ace.mv`, `ace.derive`, `ace.load`, `ace.store`, `ace.input`, and `ace.output`. Architecturally, they process units serially. If an instruction halts precisely or encounters an error after partial progress, the completed prefix is committed. The failing and subsequent units have no effect, and `acestart` records the prefix-complete point. The instruction does not retire; `xepc` contains its address.
+
+IRR7:: For block-iterated `ace.exec`, `ace.mv`, and `ace.derive`, fully processed blocks remain written, and `acestart` records their total byte count. For transfer instructions, bytes below `acestart` remain transferred at both endpoints. A partially executed instruction commits exactly the state that a shorter instruction performing only the completed operations would have committed. This includes the CR, `acestart`, `acemanagedcr`, `acesivl`/`acesivh`, `acesiv2l`/`acesiv2h`, and `aceiql`/`aceiqh`, `*lcrstatus`, and effective `ACES` fields, ensuring consistent context save, restore, and resumption. Implementations must honor `acestart` for `ace.exec` and `ace.derive`. Handlers must not reset it to zero to force a restart, as this could reapply state changes or corrupt data.
++
+NOTE: `ace.derive` is included because it may modify the source CR's state, for example when squeezing a sponge, and may destructively modify the destination. Restarting could process state twice and overwrite data already consumed. Its interruption points are block boundaries and Algorithm-specific points, including long-running computations in <<ACE-ECC>> and <<ACE-PQC>>. If input and output overlap, the result may be unpredictable. However, it remains a function only of architectural state that the executing context is otherwise permitted to observe.
++
+NOTE: `ace.load` and `ace.store` may always (be caused to) fail, leaving the CR in State _Unconfigured_.
+The configuration operation must then be restarted. Software must prepare the CR again.
+
+IRR8:: For ACE memory instructions `ace.load`, `ace.store`, `ace.input`, and `ace.output`, the usual rule applies:
+An implementation may treat such an instruction as complete (by retiring it or taking an interrupt with `xepc` past it) only after address translation and permission checks succeed for every byte. Otherwise, it must halt the instruction precisely, with `acestart` at a prefix-complete point, and report any fault synchronously on re-execution or resumption.
+For `ace.load` and `ace.store`, this point must be a multiple of sixteen bytes.
+Component accesses after the instruction is treated as complete must not fault.
+
+IRR9:: Algorithm-specific resumable long-running operations that transfer no data
+in an `ace.setst`, in a (block-processing step of) `ace.exec` operation,
+or in an `ace.derive` operation,
+must either advance its recorded progress towards completion of the operation, or restart.
+The manner in which progress is recorded is implementation-defined, but it cannot use `acestart`
 (for instance, it can use _AlgorithmUse_, as in <<ACE-ECC>> and <<ACE-PQC>>).
-The use of Auxiliary Data for any information that is not architectural is mandatory.
-All implementations must be capable of restart must and save the internal state so that restart
-is always possible in place of resumption.
-+
-We exclude `ace.derive` because this could happen at both the source and destination endpoints, which would make resumption of, essentially, asynchronous flows of information, untreatable.
-
-[NOTE]
-====
-For the transfer instructions, whose resumption is optional, cross-implementation resumption after migration works only when both implementations honour `acestart`; otherwise the portable recovery path is the visible restart described below, in which the CR is left in the _Unconfigured_ state and software reruns the management sequence. This does not extend to `ace.exec` and `ace.derive`, for which honouring `acestart` is mandatory everywhere. Software must support both resumption and restart of a transfer instruction, and the ACE instructions are designed to work correctly with either approach on every ACE implementation.
-
-For instance, `ace.load`, `ace.store` may always (be caused to) fail, leaving the CR in an _Unconfigured_ state.  This signals that the configuration operation must be restarted. Software must then prepare the CR for the operation again. For import and provisioning, this entails providing the MDH to the `ace.mgmt` instruction used to prepare the CR anew.
-====
-
-// In this case, when the interrupt/exception handler accesses an input or an output of the operation, different behaviors are allowed:
-// . Background completion: The hart may have to wait for the operation to finish when the privileged handler accesses the state affected by these instructions;
-// . Atomic completion: the operation is completed before any asynchronous interrupt is taken;
-// . Precise halt and resumption: the operation is halted with `acestart`
-//   recording a prefix-complete point (<<ACE-Memory-Model>>),
-//   and re-execution resumes from `acestart`, advancing by at least one
-//   granule per execution attempt — sixteen bytes for `ace.load`, `ace.store`,
-//   one byte for `ace.input`, and `ace.output`; for `ace.exec`, one basic processing unit
-//   or the smallest interruption point defined by the Algorithm (cf. <<ACE-process-VLI>>).
-// . The system may impose a timeout before halting as in the previous point.
-// . Precise halt and restart.
-//
-// The architecture permits all these approaches, subject to the following
-// rule: before the hart performs any _conflicting access_ — an ordinary load
-// or store overlapping the memory region of an in-flight ACE operation, an
-// access to the CR it uses, a read or write of `acestart` or of an ACEIOBUF
-// CSR, or the issue of another ACE instruction — the in-flight operation must
-// either have completed or have been precisely halted with `acestart` set per
-// <<ACE-Memory-Model>>. This makes the asynchronous execution of
-// the attached ACE unit invisible to same-hart program order, as
-// <<ACE-Memory-Model>> requires. Beyond this rule, the architecture only
-// specifies the allowed interruption points for its instructions and
-// Algorithms.
-
-// ////////////////////////////////////////////////////////////////////
-
-[[ACE-Memory-Model]]
-=== Memory Model
-
-ACE memory instructions appear to execute in program order on the local hart.
-
-ACE memory instructions follow RVWMO at the instruction level.
-If the `Ztso` extension is implemented, ACE memory instructions additionally follow RVTSO at the instruction level.
-
-ACE memory instructions may be decomposed into a set of component memory operations of any granularity.
-The ordering of these memory operations within the instructions is not specified, and it depends on the chosen memory model and implementation of the issuing hart, as long as the semantics of the configuration and export instruction and `ace.exec` are respected.
-
-NOTE: `Ztso` only imposes RVTSO at the instruction level; intra-instruction ordering follows RVWMO regardless of whether `Ztso` is implemented.
-
-The order in which the component memory operations of an ACE memory
-instruction are issued is not architecturally constrained, and no such
-constraint is needed for resumption: the only requirement
-is that the value recorded in `acestart`
-upon a precise interruption be a _prefix-complete_ point of the transfer.
-
-Harts other than the issuing hart observe the component memory operations of
-an ACE memory instruction as ordinary memory operations under RVWMO: no
-ordering among them is guaranteed before the instruction completes, and
-sharing a memory buffer being read or written by an ACE memory instruction requires
-the same synchronization as sharing it with an ordinary software loop.
-
-// [WARNING]
-// ====
-// A full axiomatic integration of the ACE component memory operations
-// into the RVWMO formalism remains to be produced together with the
-// ARC during ratification.
-// ====
-
-// ///////////////////////////////////////////////////////////////////
-
-[[ACE-rules-formats]]
-==== Rules for Provisioning and Import Formats
-
-[[ACE-rules-masked-implementations]]
-==== Single-Share Key Export Rule for Masked Implementations
-
-Any multi-share implementation of an Algorithm  will always provision, import and export _all_ its keys and secrets as reconstructed values.
-(((ACE, Algorithm, side-channel protection variants)))
-Architecturally, all values are represented as a single share.
-Side-channel analysis (SCA)-protected Algorithms are implementation variants of the same unprotected Algorithm, not separate specifications.
-The only difference is the _SCProtection_ field of the MDH.
-
-NOTE: These rules assume that reconstructing or re-randomizing a key is inexpensive.
-For example, the implementation may XOR the values with data from a PRNG (according to <<ACE-RBG>>) internal to the ACE unit.
-This approach keeps SCCs compact and ensures interoperability across architectures that implement side-channel protection differently.
-
-To accelerate key share reconstruction in a multi-share variant of an Algorithm, some shares of a key can be included in the content's Auxiliary Data.
-
-// ////////////////////////////////////////////////////////////////////
-
-[[ACE-system-keys]]
-==== System Keys and Randomly Generated Key Values
-
-In a PI or SCC, System Keys are encoded as a 64-bit SKID used to retrieve the key from a system-specific SKS.
-This replaces the key value itself with a usually smaller field, and may reduce the size of the PI or SCC.
-
-For multi-share implementations of system keys, ACE may copy key material from the SKS into the CR and expand it into multiple shares.
-The key must still be exported as a SKID.
-The rule of <<ACE-rules-masked-implementations>> about the inclusion of shares in the content's Auxiliary Data applies to system keys as well, as long as the key's value cannot be recovered from the included shares.
+All implementations capable of resumption of these operation must also support their restart.
+// +
+// `ace.derive` is excluded from this rule because interruton could happen at both the source and destination endpoints, which would make restart of, essentially, asynchronous flows of information, in general untreatable. Therefore, any implicit `ace.exec` operation performed by `ace.derive` between two Algorithms must be non-interruptible.
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -3168,6 +3110,8 @@ Both formats begin with the 128-bit MDH described in <<ACE-Metadata>>.
 
 [[ACE-length-rule]]
 ==== Fields Determining the Length of a PI, of an SCC, and of a CR
+
+// The following three rules apply to all Algorithms implemented by an ACE unit.
 
 . The length of a *Provisioning Input* is determined by, and only by, the fields
 _Algorithm_, _AlgorithmPolicy_ and _KeyType_.
@@ -3209,11 +3153,38 @@ No other MDH field may affect any of these three lengths.
 
 // ////////////////////////////////////////////////////////////////////
 
+[[ACE-rules-masked-implementations]]
+==== Single-Share Key Export Rule for Masked Implementations
+
+Any multi-share implementation of an Algorithm will always provision, import and export _all_ its keys and secrets as reconstructed values.
+(((ACE, Algorithm, side-channel protection variants)))
+Architecturally, all values are represented as a single share.
+Side-channel analysis (SCA)-protected Algorithms are implementation variants of the same unprotected Algorithm, not separate specifications.
+The only difference is the _SCProtection_ field of the MDH.
+
+NOTE: This rule assume that reconstructing or re-randomizing a key is inexpensive.
+For example, the ACE unit may XOR the values with data from a PRNG (according to <<ACE-RBG>>).
+This approach keeps SCCs compact and ensures interoperability across architectures with different implementations.
+To accelerate multiple-share reconstruction of a key, some shares or masks can be included in the SCC's ADS.
+
+// ////////////////////////////////////////////////////////////////////
+
+[[ACE-system-keys]]
+==== System Keys and Randomly Generated Key Values
+
+In a PI or SCC, System Keys are encoded as a 64-bit SKID used to retrieve the key from a system-specific SKS.
+This replaces the key value itself with a usually smaller field, and may reduce the size of the PI or SCC.
+
+For multi-share implementations of system keys, ACE may copy key material from the SKS into the CR and expand it into multiple shares.
+The key must still be exported as a SKID.
+If shares or masks are included in the ADS as in the remark of <<ACE-rules-masked-implementations>>, it must not be possible to recover the key's value from the included values.
+
+// ////////////////////////////////////////////////////////////////////
+
 [[ACE-data-formats]]
 ==== Formats of PIs, SCCs, and Partially Configured Cryptographic Contexts
 
 The Provisioning Input (PI) consists of two sections of data, MDH and `Content[]`, which do not have to be contiguous in memory.
-
 The length of `Content[]` must be a multiple of 128 bits.
 
 A Sealed Cryptographic Context (SCC) consists of (up to) five sections of data, which also do not have to be contiguous in memory, as in the following table:
@@ -3296,7 +3267,8 @@ The format of the exported data for _partially configured_ SCCs is therefore the
 
 // ////////////////////////////////////////////////////////////////////
 
-==== Nested Management Operations
+[[ACE-nested-CR-management]]
+==== Nested CR Management Operations
 
 In <<cc-nested>> we see an exemplificative workflow of nested management operations.
 
@@ -3661,7 +3633,7 @@ When the import of the SCC of a fully configured CR is completed,
 .. else:
 ... `correct` <- `false`.
  . If `correct` {ne} `true`, then `Content2[]` is dropped and `actual_impdatalen` <- 1.
- . ``K(i)``.MDH._AuxDataLen_ <- `actual_impdatalen`. Where this is zero or one, the import completes using only the architecture-dependent content. The value 1 signals the state machine of the imported CR that the ADS was dropped: in this case, the state machine then establishes an internal consistent state and must set _AuxDataLen_ to zero–and then to a suitable value upon export, in case it created new auxiliary data.
+ . ``K(i)``.MDH._AuxDataLen_ <- `actual_impdatalen`. If this value is 0 or 1, import completes using only the architecture-dependent content. The value 1 signals to the imported CR's state machine that the ADS was dropped. The state machine must then establish a consistent internal state and set _AuxDataLen_ to 0. If new auxiliary data is created, _AuxDataLen_ must be set to the appropriate value upon export.
 --
 
 [NOTE]
