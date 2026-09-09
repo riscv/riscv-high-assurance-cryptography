@@ -306,6 +306,12 @@ Architecturally, the CRF contains the following information:
   The region of this memory allocated to a CR contains `Content[]` while provisioning and
    `Content[] := Content1[] || Content2[]` during other management operations.
 
+Regardless of how they are implemented, these two types of information are conceptually distinct:
+the array of MDHs is always present and is never subject to allocation, so
+every CR can always hold its MDH. Only the second part is dynamically allocated and effectively a
+restricted resource: “CRF capacity” below refers to it alone. A CR that holds only its MDH — one in an Error State,
+by Rule SGR8 in <<ACE-State-field>> — therefore consumes no CRF capacity and can always be configured.
+
 The amount of CRF capacity consumed by each CR depends on the Algorithm encoded in the MDH, and it may differ from one CR to another.
 
 Insufficient residual CRF capacity may prevent execution of a configuration instruction.
@@ -575,9 +581,15 @@ When a CR is being provisioned, exported, or imported, it is in one of the follo
 States 56–63, i.e., the Configuration States, are also called _Partial_:
 they are exactly the States that are neither _Unconfigured_ nor Complete.
 
-The `_pi` and `_scc` flavours of the four nested States record whether the image the CR holds is
-PI-shaped or SCC-shaped. They determine its length (<<ACE-instruction-size>>), which could not
-otherwise be recovered once the base _State_ has been overwritten by the nesting.
+The four Configuration States whose mnemonics contain `_partial_` are the _nested_ States: a CR
+enters one of them when a management operation is opened on a CR that is already under management
+(<<ACE-nested-CR-management>>). The _base operation_ of such a group is its outermost management
+process.
+
+The `_pi` and `_scc` flavours of the nested States record whether the image the CR holds is
+PI-shaped or SCC-shaped, which follows from the base operation. They determine its length
+(<<ACE-instruction-size>>), which could not otherwise be recovered once the nesting has overwritten
+the _State_ that the base operation set.
 
 The immediate in the `ace.setst` instruction (<<ACE-instruction-setst>>) is a 7-bit value, whereas the _State_ field is only 6 bits long.
 This allows `ace.setst` to encode additional operations related to state changes.
@@ -750,9 +762,10 @@ The transitions from these Error States to _Unconfigured_ result from explicitly
 
 SGR10:: The MDH of a CR in the _Unconfigured_ State can be read using `ace.getmd*` (<<ACE-instruction-getmd>>), returning all zero values.
 
-SGR11:: Exporting a CR in an Error State exports only the MDH (all fields and values).
-Requesting the SCC's size (<<ACE-instruction-size>>) returns 16 bytes for `ace.size` and zero for `ace.csize`.
-The resulting SCC can be reimported, allowing software to take appropriate actions even after a context switch.
+SGR11:: Exporting a CR in an Error State exports only the MDH (all fields and values), and requires no
+`ace.mgmt`: software reads the MDH and stores it (<<ACE-instruction-setst>>).
+Requesting its size (<<ACE-instruction-size>>) returns 16 bytes for `ace.size` and zero for `ace.csize`.
+The image can be reimported with a single `ace.mgmt`, allowing software to take appropriate actions even after a context switch.
 
 SGR12:: If a CR is in any Error State, it can still be reconfigured, cloned, or cleared. `ace.setst` can only be used to change the Error State (for instance by an exception handler) or transition the CR to _Unconfigured_.
 
@@ -1530,7 +1543,13 @@ No instruction description restates them.
 |===
 
 GR6:: _Management of CRs._
-Opening a CR for export and import, as well as executing `ace.clear`, is always allowed in any State, even if not explicitly mentioned in an Algorithm specification.
+Opening a CR for import, as well as executing `ace.clear`, is always allowed in any State, since the
+target CR is zeroized first; opening it for export is always allowed in any Complete or Configuration
+State. Explicitly opening a CR in an Error State for exporting is not allowed: exporting such a CR is
+performed by simply saving the MDH.
++
+No Algorithm-specific rule may restrict whether a CR can be opened for export or for import, or cleared.
++
 For the restrictions on `ace.clone`, cf. <<ACE-instruction-clone>>.
 
 GR7:: _A 128-bit MDH in a vector operand._
@@ -1570,6 +1589,9 @@ Broadly speaking, and setting aside error handling, *Provisioning* consists of t
 . Move authentication data from CSRs to memory.
 . Use `ace.store` (<<ACE-instruction-store>>) to store the rest of the SCC to memory.
 . Use `ace.mgmt` to complete the export process by restoring the CR in a form available to software.
+
+A CR in an Error State takes shorter paths in both directions, since it is an MDH and nothing else
+(<<ACE-error-state-transfer>>): its export uses no `ace.mgmt` at all, and its import is a single one.
 
 While the CRF, as a memory device, must resist rollback attacks, individual CRs do not have to resist rollback via export and import, and cannot.
 While re-importing previous CC states may allow multi-time pad attacks on modes such as CTR, XCTR, and GCM, exploiting this would require a level of control over the target software that typically also implies access to plaintext.
@@ -1612,12 +1634,19 @@ _Description_::
 It is not used to import metadata or authentication information, such as the MDH, `SIV`, `SIV2`, and `IMPQUAL`.
 The latter values are loaded by software separately.
 
-This instruction also requires that the CR be ready to import information and that the MDH has already been loaded by passing it as a parameter in a GPR pair (quartet for RV32), resp., vector register, to the `ace.mgmt` instruction used to open the CR for provisioning or import.
+This instruction also requires that the CR be ready to accept information (being either provisioned or imported) and that the MDH has already been loaded by passing it as a parameter in a GPR pair (quartet for RV32), resp., vector register, to the `ace.mgmt` instruction used to open the CR for provisioning or import.
 
 If the CR's _State_ is not one of the States admitted by Rule SGR18 (<<ACE-State-field>>) — which excludes every Complete State and the _Unconfigured_ State — or `acestart` is not a multiple of 16, an illegal-instruction exception is raised without state change.
 
-Let `size` be the size of `Content[]` in a PI or of `Content[] = Content1[] || Content2[]` in an SCC.
-`size` is zero for a CR in an Error State.
+Neither `ace.load` nor `ace.store` nor `ace.mv` is ever used on a CR in an Error State: such a CR
+holds only its MDH, and both directions of its transfer take the short paths of
+<<ACE-error-state-transfer>>, which issue no data-transfer instruction. Their descriptions therefore
+say nothing about Error States.
+
+Let `size` be the length in bytes of the serialized `Content[]` of the CR, that is the value that
+`ace.csize` (<<ACE-instruction-size>>) reports for it: the `Content[]` of a PI, or `Content1[]`
+together with `Content2[]` of an SCC, according to the image the CR holds (<<ACE-length-rule>>).
+It is a multiple of 16 bytes.
 Since `size` must be determined by `ace.load` itself, the caller must have transferred at least the `MDH` into the CR beforehand.
 
 Let `max_admissible` = the implementation's maximum SCC payload length for the Algorithm, which is a multiple of 16 bytes.
@@ -1664,8 +1693,7 @@ Exports raw data from the `Content[]` of the CR `Ks2` or `K{Xs2}`, starting with
 `acestart` tracks the prefix-complete number of bytes stored, which must be a multiple of 16.
 All `ace.store` transfers must be 16-byte aligned.
 
-Let `size` be the length in bytes of the serialized `Content[]` of the CR, as determined by its MDH,
-which is a multiple of 16 bytes.
+Let `size` be defined as for `ace.load` (<<ACE-instruction-load>>).
 `ace.store` transfers offsets `[acestart, size)`.
 
 More precisely: For each _j_ from `acestart` to `size` − 1, the _j_-th byte of the serialized `Content[]` of the CR is stored  at memory address ``Xs1 + %offset + ``_j_.
@@ -1787,13 +1815,16 @@ _Description_::
 --
 In each variant the CR is the one named by `rs1`.
 
-*Bound.* Let `size` be the length in bytes of the `Content[]`, determined from the MDH.
+*Bound.* `ace.mv` transfers whole 16-byte blocks, and never a part of one.
+Let `end` = `min(size, max_admissible)`, with `size` and `max_admissible` as defined for `ace.load`
+(<<ACE-instruction-load>>). `acestart`, `size` and `max_admissible` are all multiples of 16 bytes,
+so each block the variant would transfer lies either wholly below `end` or wholly at or beyond it.
 
-* If `acestart` {ge} `size`, the instruction performs no operation — no CR byte, GPR, or vector
-  register is written and `acestart` is unchanged.
-* If `acestart` + `n` > `size`, where `n` is the number of bytes the variant would otherwise
-  transfer, only the bytes at offsets [`acestart`, `size`) are transferred, and `acestart` is
-  set to `size`.
+* A block at an offset below `end` is transferred.
+* A block at an offset at or beyond `end` is not: no CR byte, GPR, or vector register is written
+  for it, and `acestart` does not advance past `end`.
+* If `acestart` {ge} `end`, the instruction performs no operation — nothing is written and
+  `acestart` is unchanged.
 
 // (<<ACE-instruction-store>>): `size` may exceed the image a CR actually holds, so a bound on
 // `size` alone would still permit a read past it into the CRF. Note that `size`, and hence the
@@ -1803,7 +1834,7 @@ In each variant the CR is the one named by `rs1`.
 For each 16-byte block transferred by `ace.mv`, `acestart` advances by 16 bytes.
 In vector variants, `vstart` is also used, to track progress in vector elements: for instance each 16-byte block advances `vstart` by 4 for 32-bit elements or by 2 for 64-bit elements.
 If a vector transfer is interrupted, `acestart` records the total number of bytes transferred, and `vstart` identifies the first untransferred vector element for resumption.
-Writes, resp., reads past the serialized length of `Content[]` are ignored, resp., read as zero.
+Writes to, resp., reads of, an offset at or beyond `end` are ignored, resp., read as zero.
 
 The four variants are given by the following table.
 For all variants, if the CR's _State_ is not one of the values in the fourth column of its row — which excludes every Complete State and the _Unconfigured_ State — an illegal-instruction exception is raised without state change. A vector variant for which `vl * (SEW/8)` is not a multiple of 16 raises an illegal-instruction exception without state change; the V-enabled check is performed first. As for `ace.load` (<<ACE-instruction-load>>), an `acestart` that is not a multiple of 16 also raises an illegal-instruction exception without state change.
@@ -1956,7 +1987,7 @@ Depending on the previous state of the CR, the actual _State_ after a non-faulti
 .. `ace_cfg_exporting` if the CR is in a Valid State,
 .. `ace_cfg_exporting_partial_pi` or `ace_cfg_exporting_partial_scc` if the CR being exported is in a Partial State, according to the shape of its image.
 
-If a CR is in an Error State, it is exported by simply copying the MDH to memory.
+If a CR is in an Error State, it is exported by simply copying the MDH to memory and imported by a single atomic `ace.mgmt` instruction as detailed in <<ACE-error-state-transfer>>.
 
 We now proceed to describe the semantics of `ace.mgmt`.
 
@@ -2006,7 +2037,12 @@ ACE exception `ace_exc_unsupported` is _not_ raised when accessing or using a CR
 .. If `ml`._State_ is an Error State, then the CR is immediately fully configured in the Error State, with
     the entire MDH given by the auxiliary input.
     This works with both `#immed7` = `ace_cfg_provisioning` and `#immed7` = `ace_cfg_importing`.
-    No `ace.mgmt` with `#immed7` = `ace_cfg_management_end` is needed, and in fact it will be an illegal instruction.
+    The whole configuration is performed by this one instruction, which is uninterruptible (Rule IRR1):
+    no management operation is opened, no `ace.mgmt` with `#immed7` = `ace_cfg_management_end` is needed,
+    and in fact it will be an illegal instruction.
+    No CRF capacity is allocated, since the CR holds only its MDH (<<ACE-cryptographic-registers>>),
+    so this configuration cannot fail for want of it.
+    This is the short import path of <<ACE-error-state-transfer>>.
 .. If *provisioning*: CR._State_ is set to `ace_cfg_provisioning`;
 .. If *importing*: CR._State_ depending on `ml`._State_:
 ... If `ml`._State_ is a Valid State, then CR._State_ is set to `ace_cfg_importing`;
@@ -2031,8 +2067,11 @@ Software must first save this value in its local state to restore its _State_ wh
 
 .. If `ml`._State_ is _Unconfigured_, the instruction performs no operation and raises an illegal-instruction exception.
 
-.. If `ml`._State_ is an Error State, the CR is left unchanged: the export of a CR in an Error State
-consists solely of reading its MDH with `ace.getmd*` (<<ACE-instruction-getmd>>) and storing it to memory.
+.. If `ml`._State_ is an Error State, the CR is left unchanged and no management operation is opened.
+Exporting a CR in an Error State is not a management operation and does not require `ace.mgmt` at all:
+software detects the Error State with `ace.getst` (<<ACE-instruction-getst>>), reads the MDH with
+`ace.getmd*` (<<ACE-instruction-getmd>>) and stores those 16 bytes to memory.
+This is the short export path of <<ACE-error-state-transfer>>.
 
 .. If `ml`._State_ is a Valid State:
 +
@@ -2143,7 +2182,7 @@ NOTE: An implementation may instead restore the clear contents from an internal 
 .. If `ml`._State_ is not a Complete State, no further changes to the CR's contents are made.
 --
 +
-. *If `ace_cfg_management_end` is issued when the target CR's _State_ is a Complete State* (i.e., no management operation open on the target CR), the instruction does not perform any state change and raises an illegal-instruction exception.
+. *If `ace_cfg_management_end` is issued when the target CR's _State_ is _Unconfigured_ or a Complete State* (i.e., no management operation open on the target CR), the instruction does not perform any state change and raises an illegal-instruction exception.
 
 //
 
@@ -2157,7 +2196,7 @@ The above rules also allow an interrupted import to resume on another hart or on
 
 Software must allow resumption of interrupted configuration or export procedures while remaining binary-compatible across implementations that may or may not support it.
 A context-switch handler can always force a restart by clearing partially provisioned or imported CRs at context save and restore time.
-A CR must not be cleared while being exported, unless the handler has first exported it completely (<<ACE-nested-CR-management>>) and restores it before returning control, since until the export completes the ciphertext it holds is the only copy of the CC.
+A CR in an exporting State may be cleared as well, with the care described in <<ACE-resumability>>.
 Such clearing must be the exception, however:
 Since an SCC can span several kilobytes, a handler that unconditionally clears partially provisioned or imported CRs at every context switch may prevent a long management process from ever completing. System software must therefore either let such processes make progress across context switches or bound the sizes of the contexts it admits.
 
@@ -2758,7 +2797,7 @@ and from Bits [127:0] supplied in `Vs` for Form C.
 Let `content1_size` be the length in bytes of the `Content1[]` of an SCC for the _Algorithm_,
 _AlgorithmPolicy_, _KeyType_ and _StateExtension_ of the MDH, and `pi_content_size` the length in bytes
 of the `Content[]` of a PI for its _Algorithm_, _AlgorithmPolicy_ and _KeyType_ (<<ACE-length-rule>>).
-These are different quantities: `pi_content_size` {le} `content1_size`, and the two need not be equal.
+These are two distinct quantities and are not interchangeable.
 Let `content2_size` = 16 * (_AuxDataLen_ - 2) if _AuxDataLen_ {ge} 2, and 0 otherwise.
 
 `ace.size/ace.csize` is computed as follows:
@@ -3145,7 +3184,8 @@ IRR5:: All the approaches in Rule IRR4 are subject to one rule: Before the hart 
 * An ordinary load or store overlapping the memory region of the in-flight ACE operation.
 * An access to a CR used by the operation, including the issue of another ACE instruction involving a CR used by the operation.
 * A read or write of `acestart` or an ACEIOBUF CSR. In case of management instructions, also a read or write to the following CSRs: `acemanagedcr`, `acesivl`/`acesivh`, `acesiv2l`/`acesiv2h`, and `aceiql`/`aceiqh`.
-* A read or write of a GPR or vector register that the operation writes as its destination, or reads as an operand.
+* A read or write of a GPR or vector register that the operation writes as its destination.
+* A write to a vector register or to the ACEIOBUF that the operation reads as an operand, including the issue of an `ace.input` targeting it. Scalar operands held in GPRs are captured when the instruction issues, so accessing one is not a conflicting access.
 
 IRR4 and IRR5 make asynchronous execution by the attached ACE unit invisible to same-hart program order, as <<ACE-Memory-Model>> requires. Beyond this rule, the architecture specifies only the allowed interruption points for its instructions and Algorithms.
 --
@@ -3162,9 +3202,15 @@ An implementation may treat such an instruction as complete (by retiring it or t
 Component accesses after the instruction is treated as complete must not fault.
 +
 NOTE: After each `ace.load` the caller must check whether the CR is _Unconfigured_, in which case the entire configuration operation (not just the `ace.load` instruction, but the software using it) must be restarted: an exception handler may have cleared the CR and advanced `xepc` to force this behavior.
-A handler must not clear a CR being exported (<<ACE-instruction-setst>>), unless it has first exported it completely and restores it before returning control.
-Should it nevertheless do so, by mistake or on an unrecoverable error, the caller detects it by the same check after `ace.store`; the CC is then lost, and the caller must treat the error as unrecoverable. This allows the error to propagate to the outermost caller.
-A further `ace.store` on the cleared CR raises an illegal-instruction exception (<<ACE-instruction-store>>).
++
+NOTE: Clearing a CR in an exporting State (<<ACE-instruction-setst>>) calls for particular care from an
+exception handler, because until the export completes, the ciphertext the CR holds may be the only copy of
+the CC. A handler that intends to clear such a CR must first see the export through to completion — if
+necessary across preemptions of its own by a more privileged mode — and store the resulting image.
+If it clears the CR earlier, by mistake or on an unrecoverable error, the CC is lost: the caller detects
+this by the same check after `ace.store`, must treat the error as unrecoverable, and a further
+`ace.store` on the cleared CR raises an illegal-instruction exception (<<ACE-instruction-store>>).
+This allows the error to propagate to the outermost caller.
 
 IRR9:: Algorithm-specific resumable long-running operations that transfer no data
 in an `ace.setst`, in a (block-processing step of) `ace.exec` operation,
@@ -3173,8 +3219,6 @@ must either advance its recorded progress towards completion of the operation, o
 The manner in which progress is recorded is implementation-defined, but it cannot use `acestart`
 (for instance, it can use _AlgorithmUse_, as in <<ACE-ECC>> and <<ACE-PQC>>).
 Implementations capable of resuming these operations also support their restart.
-// +
-// `ace.derive` is excluded from this rule because interruton could happen at both the source and destination endpoints, which would make restart of, essentially, asynchronous flows of information, in general untreatable. Therefore, any implicit `ace.exec` operation performed by `ace.derive` between two Algorithms must be non-interruptible.
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -3194,10 +3238,10 @@ Both formats begin with the 128-bit MDH described in <<ACE-Metadata>>.
 // ////////////////////////////////////////////////////////////////////
 
 [[ACE-length-rule]]
-==== Fields Determining the Length of a PI, of an SCC, and of a CR
+==== Fields Determining the Length of a PI, of an SCC, of a PCCC, and of a CR
 
 Except when the CR is in an Error State, the MDH fields that determine the length
-of a PI and of an SCC, as well as the CRF capacity occupied by a CR, are all
+of a PI, of an SCC and of a PCCC, as well as the CRF capacity occupied by a CR, are all
 contained in the lower 64 bits of the MDH:
 
 . The length of a *Provisioning Input* is determined by, and only by, the fields
@@ -3217,6 +3261,11 @@ fields _Algorithm_, _AlgorithmPolicy_, _KeyType_, _StateExtension_, and _AuxData
 (see <<ACE-extra-content>>).  Note that this length does not depend on _State_.
 It also does *not* depend on _SCProtection_ (see <<ACE-rules-masked-implementations>>).
 
+. The length of a *Partially Configured Cryptographic Context* is that of the MDH plus the image
+the CR holds, which the flavour of its Configuration State identifies: the `Content[]` of a PI for a
+`_pi` State, and `Content1[]` together with `Content2[]` for an `_scc` State. Once the image is
+identified, its length is given by the rule above for that format, and depends on no further field.
+
 . The *CRF capacity* occupied by a CR is determined by, and only by, the fields
 _Algorithm_, _AlgorithmPolicy_ and _SCProtection_.
 It does not depend on _KeyType_, because a CR holds the expanded key material whether the
@@ -3224,12 +3273,14 @@ key was provisioned by value or retrieved through a System Key Identifier,
 nor on _StateExtension_, because a CR is allocated with room for every field the
 Algorithm may come to use.
 
-No other MDH field may affect any of these three quantities.
+No other MDH field may affect any of these four quantities.
+These rules bind every Algorithm, custom ones included.
 
-If the CR is in an Error State, the three rules above do not apply: the SCC consists
-of the MDH alone and its length is always 16 bytes, irrespective of every other field,
+A CR in an Error State has no PI, no SCC and no PCCC: it is an MDH and nothing else.
+Its exported image is therefore always the 16 bytes of that MDH, irrespective of every other field,
 and the CR occupies only the capacity of its MDH (Rule SGR8 in <<ACE-State-field>>).
-A PI cannot be in an Error State.
+A PI cannot be in an Error State; an MDH whose _State_ is an Error State configures a CR directly
+(<<ACE-instruction-setst>>) and carries no `Content[]`.
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -3302,7 +3353,7 @@ If _AuxDataLen_ {ge} 2 then the ADS contains _AuxDataLen_ blocks.
 // This data may be exported in whole or in part in the ADS.
 // An importing implementation must be able to safely ignore it after checking `IMPQUAL`.
 
-When exporting a CR in an Error State, Sections 2–5 are empty; that is, the SCC consists only of the `MDH`.
+A CR in an Error State produces no SCC: its exported image is the `MDH` alone, and Sections 2 to 5 do not exist for it.
 
 A third format is the Partially Configured Cryptographic Context (PCCC), which is used when a partially configured or exported SCC is exported and reimported upon preemption of the management procedures.
 
@@ -3623,6 +3674,35 @@ avoids re-deriving `enc_key` and `auth_key` when the Locality set changes.
 Distinct Locality sets lead to the same SIV with collision probability 2^-128^.
 
 // ///////////////////////////////////////////////////////////////////////////
+
+[[ACE-error-state-transfer]]
+==== Export and Import of a CR in an Error State
+
+A CR in an Error State holds only its MDH (Rule SGR8 in <<ACE-State-field>>), so there is nothing to
+encrypt and nothing to authenticate. No SCC and no PCCC is produced, and neither direction opens a
+management operation. Both paths are therefore shorter than those of <<ACE-management-operations>>,
+and both are exempt from the resumption machinery, since no `ace.load` or `ace.store` is issued.
+
+*Exporting* a CR in an Error State consists of two steps and uses no `ace.mgmt`:
+
+. Read the _State_ field with `ace.getst` (<<ACE-instruction-getst>>) and find it to be an Error State.
+. Read the MDH with `ace.getmd` or `ace.getmdv` (<<ACE-instruction-getmd>>) and store those 16 bytes
+  to memory. `ace.size` reports 16 and `ace.csize` reports 0 for such a CR.
+
+Issuing `ace.mgmt` with `#immed7` = `ace_cfg_exporting` on a CR in an Error State is permitted but
+useless: it leaves the CR unchanged and opens no management operation
+(<<ACE-instruction-setst>>).
+
+*Importing* such an image consists of one step:
+
+. Issue `ace.mgmt` with `#immed7` = `ace_cfg_importing` and the 16-byte MDH
+  as the auxiliary operand. The instruction configures the CR into the Error State the MDH names,
+  installing the entire MDH, and completes the configuration by itself; it is uninterruptible
+  (Rule IRR1 in <<ACE-resumability>>), so the CR is never observed part-configured.
+
+No `ace.mgmt` with `#immed7` = `ace_cfg_management_end` follows, and issuing one is an illegal
+instruction. The `SIV`, `SIV2` and `IMPQUAL` CSRs take no part in either path and need not be saved
+for it.
 
 [[ACE-SCC-export]]
 ==== Generation of an SCC from a Fully Configured CR
