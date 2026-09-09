@@ -315,7 +315,7 @@ Capacity is freed by unconfiguring other CRs.
 Any corruption of the CRF associated with a hart is an unrecoverable error condition.
 The ACE architectural state associated with the hart is reset, and ACE exception `ace_exc_fatal` is raised (see <<ACE-exceptions>> and <<ACE-error-architecture>> for the behavior when the Privileged Architecture is not implemented).
 When a hart is reset, the architectural state of its ACE unit is reset as well.
-Each hart's ACE state must be exported and then fully zeroized on power down; on resume, the ACE unit must reset and be reconfigured by software.
+On power down, each hart's ACE state is zeroized; software must first export any state it needs to preserve. On resume, the ACE unit resets and must be reconfigured by software.
 
 The ACE unit also contains the following per-hart information:
 
@@ -370,7 +370,7 @@ Bit 25 of the `ace.exec` instruction encoding is reserved for potential future a
 
 NOTE: ACE does not depend on a concept of element.
 From a logical point of view, the operations are not performed in the vector unit.
-A vector register (group) is seen as a bit string of length `VL` * `SEW` with `VL` = min(`AVL`,`VLMAX`).
+A vector register (group) is seen as a bit string of length `VL` * `SEW`, where `VL` is the vector length in effect (`vl`).
 
 Floating-point, fixed-point, and general arithmetic vector operations are not required.
 
@@ -487,13 +487,13 @@ If custom implementation-defined protection levels 6 or 7 are used, the generati
 ===== _KeyType_ Field
 
 This field takes the value 0 if the key is given by an explicit value, and 1 if the key is given by a system-specific, 64-bit System Key Identifier (SKID).
-Values 2 and 3 are currently reserved. See <<ACE-system-keys>>.
+Values 2 and 3 are currently reserved: a PI or SCC whose _KeyType_ carries one of them is invalid Metadata, and the CR transitions to Error State _Invalid_. See <<ACE-system-keys>>.
 
 If the value is 0, keys are provisioned, exported, and imported by value.
 
 If the value is 1, keys are provisioned, exported, and imported as a System Key Identifier (SKID), except for the all-ones (i.e., `ones(64)`) SKID value.
 
-If the SKID is the all-ones value, the key material is randomly generated when provisioning completes. It is then exported by value with _KeyType_ set to 0.
+If the SKID is the all-ones value, the key material is randomly generated when provisioning completes, and the CR's _KeyType_ field is then set to 0, so that the key is thereafter exported by value.
 Unless otherwise specified, random generation applies to all keys in an Algorithm at once.
 
 
@@ -536,7 +536,7 @@ The architected values of _State_ common to all Algorithms are defined in the fo
 [float="center",align="center",width="100%",cols="^7%,<30%,<16%,<47%"]
 |===
 |  48    | `ace_state_unsupported`         | _Unsupported_     | Not supported (i.e., not implemented) Algorithm.
-|  49    | `ace_state_invalid`             | _Invalid_         | The CR transitions to Error State _Invalid_.
+|  49    | `ace_state_invalid`             | _Invalid_         | The CR has been invalidated by invalid Metadata or by an operation not permitted in its current State.
 |  50    | `ace_state_out_of_memory`       | _Out of Memory_   | Insufficient CRF memory for a configuration instruction. This may be set by privileged code if it does not handle CR allocation or fails to do so, returning an error instead.
 |  51    | `ace_state_import_auth`         | _Authentication Failed_     | Authentication failure while completing an SCC import.
 |  52    | `ace_state_privilege_viol`      | _Privilege Violation_       | Violation of Usage Control policies.
@@ -884,7 +884,7 @@ clock, as that would allow indefinite extension of a CC's lifetime by moving
 time backward.
 ====
 
-If _Zklexpire_ is not supported, the implementation rejects PIs and SCCs with a non-zero _ExpirationDate_.
+If _Zklexpire_ is not supported, a PI or SCC with a non-zero _ExpirationDate_ is invalid Metadata: the CR transitions to Error State _Invalid_.
 
 If non-zero, the 20-bit _ExpirationDate_ field specifies the CC's expiration time as whole hours elapsed since 00:00 UTC on 1 January 2027. The maximum representable time span is approximately 119 years and 7 months. The epoch is UTC so that a CC exported on one device and imported on another expires at the same instant regardless of the local time each observes.
 
@@ -984,7 +984,7 @@ In this case, ACE exceptions are replaced by direct transitions of the CR to an 
 |===
 | ACE Exception                      | Behavior when the Privileged Architecture is not available.
 | `ace_exc_fatal`                    | Implementation and platform defined behavior.
-| `ace_exc_no_csk` (See <<ACE-CSK-requirements>> and <<ACE-CSR-macecsk>>.) | The exception is raised as described; on an M-mode-only hart M-mode is both the only mode that can observe it and the only one that can establish a CSK.
+| `ace_exc_no_csk` (See <<ACE-CSK-requirements>> and <<ACE-CSR-macecsk>>.) | The instruction raises an illegal-instruction exception; on an M-mode-only hart M-mode is both the only mode that can observe it and the only one that can establish a CSK.
 | `ace_exc_complete_cr_data_access`  | The instruction performs no operation: nothing is read, nothing is written, and the CR undergoes no state transition.
 | `ace_exc_CR_off` (See <<ACE-CSR-lcrstatus>>.)| Does not apply without Privileged Architecture, since the `*lcrstatus` CSRs are not available.
 | `ace_exc_unsupported`              | Transition to Error State _Unsupported_.
@@ -1250,7 +1250,6 @@ This may occur, for instance, when `aceiobuftop` is a length not supported by th
 `acestart` is an XLEN-bit RW CSR.
 
 `acestart` tracks the progress of resumable ACE instructions, e.g., `ace.load`, `ace.store`, `ace.input` and `ace.output`.
-The vector register forms of the `ace.mv` instruction used in CR management code honor `acestart` as well.
 
 Progress tracking by `acestart` also applies to `ace.exec` when iteratively processing a multi-block operand, as `ace.exec` may be interrupted between blocks, as well as to `ace.derive`, whose `ace.exec` endpoints advance the state machines of the source and destination CRs in the same way.
 The vector input and output Forms of `ace.mv` honor acestart, like the non-vector versions, to track the CR transfer point, and also use `vstart` to track the position in the vector register corresponding to the CR transfer point in case the input/output is multi-block.
@@ -1592,7 +1591,7 @@ _Description_::
 +
 --
 `ace.load` imports the Content of a PI or an SCC into the CR `Kd` or `K{Xd}`.
-It it not used to import metadata or authentication information, such as the MDH, `SIV`, `SIV2`, and `IMPQUAL`.
+It is not used to import metadata or authentication information, such as the MDH, `SIV`, `SIV2`, and `IMPQUAL`.
 The latter values are loaded by software separately.
 
 This instruction also requires that the CR be ready to import information and that the MDH has already been loaded by passing it as a parameter in a GPR pair (quartet for RV32), resp., vector register, to the `ace.mgmt` instruction used to open the CR for provisioning or import.
@@ -1721,7 +1720,7 @@ Performs a cryptographic operation as defined by the Algorithm in CR `Kn` or `K{
 The instruction may take an input and produce an output.
 
 If `Zklv` is not implemented, only Form D `ace.exec`
-is supported and `ace.input`, `ace.output` are used to provide inputs and
+is supported, Forms A–C raise an illegal-instruction exception, and `ace.input`, `ace.output` are used to provide inputs and
 extract outputs from `ace.exec`, as described in <<ACE-usage-input-output>>.
 --
 
@@ -2733,22 +2732,24 @@ and from Bits [127:0] supplied in `Vs` for Form C.
 //     ...  If _AuxDataLen_ < 2, then: size of a SCC's `Content1[]`.
 //     ...  If _AuxDataLen_ {ge} 2, then: size of a SCC's `Content1[]` + 16 * (_AuxDataLen_ - 2).
 
+Let `content1_size` be the length in bytes of the `Content1[]` of an SCC — equivalently, of the `Content[]` of a PI — for the _Algorithm_, _AlgorithmPolicy_, _KeyType_ and _StateExtension_ of the MDH (<<ACE-length-rule>>),
+and `content2_size` = 16 * (_AuxDataLen_ - 2) if _AuxDataLen_ {ge} 2, and 0 otherwise.
+
 `ace.size/ace.csize` is computed as follows:
 
 . If the CR is _Unconfigured_, then: 0.
 . If _Algorithm_, _AlgorithmPolicy_ or _SCProtection_ encoded in the supplied MDH (Forms B and C) is unsupported, then: 0.
 . If the MDH._State_ is an Error State, then: 16 * (1 - `q`).
 . If the MDH._State_ is a Valid State, then:
-  ..  If _AuxDataLen_ < 2, then: 32 * (1 - `q`) + size of a PI's `Content[]`.
-  ..  If _AuxDataLen_ {ge} 2, then: 32 * (1 - `q`) + size of a PI's `Content[]` + 16 * (_AuxDataLen_ - 2 * `q`).
+  ..  If _AuxDataLen_ < 2, then: 32 * (1 - `q`) + `content1_size`.
+  ..  If _AuxDataLen_ {ge} 2, then: 64 * (1 - `q`) + `content1_size` + `content2_size`.
 . If the MDH._State_ is a Partial State, then:
-  .. If the MDH._State_ is `ace_cfg_provisioning`, then: 16 * (1 - `q`) + size of a PI's `Content[]`.
-  .. If the MDH._State_ is `ace_cfg_{importing|exporting}_partial`, then:
-    ...  If _AuxDataLen_ < 2, then: 16 * (1 - `q`) + size of a PI's `Content[]`.
-    ...  If _AuxDataLen_ {ge} 2, then: 16 * (1 - `q`) + size of a PI's `Content[]` + 16 * (_AuxDataLen_ - 2), since `IMPQUAL` and `SIV2` are held in the CSRs and not in the PCCC (<<ACE-PCCC>>).
+  .. If the MDH._State_ is `ace_cfg_provisioning`, then: 16 * (1 - `q`) + `content1_size`.
+  .. If the MDH._State_ is `ace_cfg_{importing|exporting}_partial`, then: 16 * (1 - `q`) + `content1_size` + `content2_size`,
+     since `IMPQUAL` and `SIV2` are held in the CSRs and not in the PCCC (<<ACE-PCCC>>).
   .. If the MDH._State_ is `ace_cfg_{importing|exporting}`, then:
-    ...  If _AuxDataLen_ < 2, then: 32 * (1 - `q`) + size of a SCC's `Content1[]`.
-    ...  If _AuxDataLen_ {ge} 2, then: 32 * (1 - `q`) + size of a SCC's `Content1[]` + 16 * (_AuxDataLen_ - 2 * `q`).
+    ...  If _AuxDataLen_ < 2, then: 32 * (1 - `q`) + `content1_size`.
+    ...  If _AuxDataLen_ {ge} 2, then: 64 * (1 - `q`) + `content1_size` + `content2_size`.
 --
 
 //
@@ -3172,11 +3173,11 @@ _Algorithm_, _AlgorithmPolicy_ and _KeyType_.
 In particular, it does *not* depend on _AuxDataLen_: a PI carries no
 implementation-specific data, and _AuxDataLen_ must be zero in the MDH of a PI.
 It also does not depend on _StateExtension_, whose value is ignored in the
-MDH of a PI and it replaced with zero by `ace.mgmt` upon provisioning,
+MDH of a PI and is replaced with zero by `ace.mgmt` upon provisioning,
 nor on _SCProtection_.
 During provisioning, the information of a CR reflects the external format of a PI.
 The internal representation is finalized into the CR's internal state upon using
-`ace.mgmt` to complete the import which may include the computation of certain
+`ace.mgmt` to complete the provisioning, which may include the computation of certain
 information such as derived keys, or multiple shares.
 
 . The length of a *Sealed Cryptographic Context* is determined by, and only by, the
