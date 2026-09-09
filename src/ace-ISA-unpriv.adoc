@@ -2128,8 +2128,7 @@ NOTE: An implementation may instead restore the clear contents from an internal 
 ====
 Management procedures may be interrupted and resumed, although `ace.mgmt` itself is non-preemptible, despite being potentially a long-running operation.
 
-For longer-running `ace.mgmt` operations—such as starting or completing an export, or completing an import—implementations can either defer interrupts until the instruction completes, or preserve the prior CR state, restore it before taking the trap, and re-execute `ace.mgmt` upon return.
-Because state restoration requires internal buffering, implementers may choose either strategy based on available CRF capacity.
+For longer-running `ace.mgmt` operations—such as starting or completing an export, or completing an import—an implementation uses one of the strategies of Rule IRR1 (<<ACE-resumability>>); discarding partial work requires internal buffering, so the choice may depend on available CRF capacity.
 
 The above rules also allow an interrupted import to resume on another hart or on a different ACE unit implementation, provided the target unit supports the Algorithm encoded in the SCC.
 
@@ -3063,9 +3062,9 @@ MMR1:: ACE memory instructions appear to execute in program order on the local h
 MMR2:: ACE memory instructions follow RVWMO at the instruction level.
 If `Ztso` is implemented, they additionally follow RVTSO at the instruction level.
 
-MMR3:: ACE memory instructions are supported only for idempotent memory.
-If any byte of the transfer maps to a non-idempotent or side-effecting PMA region,
-the instruction raises a load/store access-fault exception before any component access occurs.
+MMR3:: ACE memory instructions are supported only for idempotent memory: no component access is made to a non-idempotent or side-effecting PMA region.
+If any byte of the transfer maps to such a region, the instruction raises a load/store access-fault exception at the point at which this is discovered,
+before any component access of the current execution attempt, with the completed prefix committed and `acestart` recording it as in Rule IRR6.
 
 MMR4:: ACE memory instructions may be decomposed into component memory operations of any granularity.
 Their issue order is not architecturally constrained beyond the applicable memory model and the semantics of
@@ -3087,11 +3086,13 @@ IRR means “Interruptibility and Resumability Rule.”
 ==== Uninterruptible Instructions
 
 [horizontal]
-IRR1:: Instructions `ace.mgmt`, `ace.getmd*`, `ace.restrict*`, `ace.clone`, non-vector `ace.mv`, and `ace.size` are uninterruptible. If one does not complete, it writes no destination vector register, GPR, CR byte, ACEIOBUF byte, or memory location.
+IRR1:: Instructions `ace.mgmt`, `ace.getmd*`, `ace.restrict*`, `ace.clone`, non-vector `ace.mv`, and `ace.size` are _uninterruptible_: each either completes or has no architecturally visible effect, writing no destination vector register, GPR, CR byte, ACEIOBUF byte, or memory location.
+An implementation realizes this in one of three ways: by completing the instruction before taking an asynchronous interrupt; by letting it complete in the background, subject to Rule IRR5 below; or by discarding its partial work before taking the trap and re-executing it upon return.
+Software must not rely on whether an uninterruptible instruction has retired when a handler runs, and interacts with it only as Rule IRR5 prescribes.
 
 IRR2:: `ace.setst` is uninterruptible under every architectural condition defined by this specification. This rule may have implementation-specific overrides (see Rule IRR9 below).
 
-IRR3:: Long-running ACE operations that access no external memory—including `ace.setst`, `ace.mgmt`, and `ace.exec` or `ace.derive` forms that do not access GPRs, vector registers, or the ACEIOBUF—continue while the hart is preempted. If an interrupted operation is still running when a handler accesses its CR, the hart waits for completion before resuming. Should another interrupt occur while instruction continues to execute, the second handler must wait as well.
+IRR3:: Long-running ACE operations that access no external memory—including `ace.setst`, `ace.mgmt`, and `ace.exec` or `ace.derive` forms that do not access GPRs, vector registers, or the ACEIOBUF—may continue while the hart is preempted. If an interrupted operation is still running when a handler accesses its CR, the hart waits for completion before resuming. Should another interrupt occur while instruction continues to execute, the second handler must wait as well.
 
 // NOTE: Although `ace.mgmt` is uninterruptible, the management processes bracketed by its instructions remain interruptible between constituent instructions (<<ACE-instruction-setst>>).
 
@@ -3108,6 +3109,7 @@ IRR4:: In general, the following behaviors are allowed when an interrupt or exce
 . Timeout followed by precise halt and resumption: The system may impose a timeout before halting as described above.
 . Precise halt and restart, provided that restart is not the unconditional response to asynchronous
 interrupts: repeated interruption of the same instruction must not prevent its eventual completion. For this reason, this option is discouraged.
+It is available only for `ace.load`, `ace.store`, `ace.input`, and `ace.output`, whose transfers are idempotent; `ace.exec`, `ace.derive`, and `ace.mv` use option 3 or 4 (Rule IRR7).
 
 IRR5:: All the approaches in Rule IRR4 are subject to one rule: Before the hart performs a _conflicting access_, the in-flight operation must either have completed or have been precisely halted with `acestart` set per <<ACE-Memory-Model>>. A conflicting access is any of the following:
 +
