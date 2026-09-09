@@ -291,6 +291,7 @@ We do not make any assumption on the structure of `Content2[]`.
 ==== The Context Register File and Authentication Information
 
 CRs reside in a dedicated, per-hart _CR file_ (CRF), a memory accessible only to the ACE implementation.
+If the implementation is (partially) emulated, only M-mode firmware can access the CRF and an implementation-defined mechanism to access the CRF must be provided.
 (((Context Register File)))
 
 The CRF must guarantee the confidentiality and integrity of its contents.
@@ -702,7 +703,7 @@ This ensures that these states can be unambiguously determined from the _State_ 
 
 SGR2:: Any transition listed in an Algorithm's specification may be triggered by performing an explicit `ace.setst` operation (<<ACE-instruction-setst>>), or may be induced by certain conditions specified in the Algorithm's specification. Transitions to, from, and between _Configuration_ States use the `ace.mgmt` instruction.
 
-SGR3:: In States _Success_ and _Failure_, only the following ACE instructions are permitted: `ace.mgmt`, `ace.load`, `ace.store`, `ace.clear`, `ace.size`, `ace.setst`, `ace.getmd*`, `ace.getst`, `ace.clone`, `ace.restrict*`, and `ace.derive` where the source CR is in State _Success_ or _Failure_ and the source endpoint is one of its fields that can be exported, as described in the specification of the Algorithm.
+SGR3:: In States _Success_ and _Failure_, only the following ACE instructions are permitted: `ace.mgmt`, `ace.clear`, `ace.size`, `ace.setst`, `ace.getmd*`, `ace.getst`, `ace.clone`, `ace.restrict*`, and `ace.derive` where the source CR is in State _Success_ or _Failure_ and the source endpoint is one of its fields that can be exported, as described in the specification of the Algorithm.
 Reading such a field is not a cryptographic operation, so it is compatible with the rule that no
 further cryptographic operation may be performed in these states, and it leaves the source CR in
 its state: such an `ace.derive` cannot invalidate the source, only the destination.
@@ -1126,7 +1127,7 @@ ACE provides a number of unprivileged CSRs.
 |  0xXXX           |    URW    | `aceiobuflen`               | ACE input/output buffer length in bytes.
 |  0xXXX           |    URW    | `aceiobuftop`               | ACE input/output buffer limit for current transfers in bytes.
 |  0xXXX           |    URW    | `acestart`                  | ACE start byte index.
-|  0xXXX           |    URW    | `acemanagedcr`              | Number of the currently managed CR, or 32 if all are either unconfigured or fully configured.
+|  0xXXX           |    URW    | `acemanagedcr`              | Number of the currently managed CR, or 32 if no CR is being currently managed.
 |  0xXXX-0xXXX+1   |    URW    | `acesivl`/`acesivh`         | `SIV` of the SCC currently being managed for import or export
 |  0xXXX-0xXXX+1   |    URW    | `acesiv2l`/`acesiv2h`       | `SIV2` of the SCC currently being managed for import or export
 |  0xXXX-0xXXX+1   |    URW    | `aceiql`/`aceiqh`           | `IMPQUAL` of the SCC currently being managed for import or export
@@ -1300,14 +1301,14 @@ State _Invalid_ when an instruction is later issued or restarted.
 (((CSR, `acemanagedcr`)))
 `acemanagedcr` is an XLEN-bit RW CSR, but currently only 6 bits are used.
 
-It contains the number of the currently managed CR, or 32 if all are either unconfigured or fully configured.
+It contains the number of the currently managed CR, or 32 if no CR is currently being managed.
 If the CR it names ceases to be in a Configuration State otherwise than through a completing `ace.mgmt` — because it is
 cleared, because it is the destination of an `ace.clone`, or because it transitions to an Error State — `acemanagedcr` is set to 32.
 An ACE exception raised during a management operation that does not transition the CR to an Error State leaves `acemanagedcr` unchanged: the handler either resolves the condition or sets `acemanagedcr` to 32 itself.
 
 Internal values of `SIV`, `SIV2`, `IMPQUAL` are associated with this CR.
 
-Values from 33 to 63 are reserved; writing one leaves `acemanagedcr` unchanged.
+Values 33 and above are reserved; writing one leaves `acemanagedcr` unchanged.
 
 NOTE: Because the register is writable at any privilege level, the `acemanagedcr` check that `ace.mgmt`
 performs (<<ACE-instruction-setst>>) detects an accidentally interleaved management operation but
@@ -1363,7 +1364,7 @@ The four models have different applicability. The third and fourth are primarily
 
 In the second model, only M-mode may request the secure hardware block configure the CSK for its hart. The request must use a handle or wrapped key.
 In this model the clear key must not be exposed to software, including M-mode.
-Addressing and key transport are platform-specific and outside the scope of this specification. Furthermore, if M-mode needs to access CR contents for the purpose of emulation, an implementation-defined mechanism to access the CRF must be provided.
+Addressing and key transport are platform-specific and outside the scope of this specification.
 
 The ACE unit is immediately available under the third model. Under the other models, it becomes available only after a CSK has been established. A hart reset resets the associated ACE state, including the CSK, and leaves the unit unavailable until the CSK is re-established.
 
@@ -1972,7 +1973,8 @@ and setting the upper 64 bits to 0.
 .. If the combination of _Algorithm_, _AlgorithmPolicy_, and _SCProtection_ in `ml` is not supported,
    ACE exception `ace_exc_unsupported` is raised.
 .. In case of *provisioning*:
-... _State_ is set to _Unconfigured_ and _StateExtension_ to 0, i.e., while these checks are performed, _State_ is _Unconfigured_.
+... _State_ is initially set to _Unconfigured_. This means that during the pre-flight checks described below, _State_ is _Unconfigured_ until it is successfully configured.
+... _StateExtension_ is set to 0.
 ... `AuxDataLen` must be 0. If `AuxDataLen` is not zero in the MDH of a PI,
 the CR is transitioned to Error State _Invalid_ (which is a Complete State) and the instruction terminates.
 .. In other cases where the Metadata is invalid, such as, for instance, a nonzero reserved field:
@@ -2424,17 +2426,18 @@ CRs are given:
 _Description_::
 +
 --
-Clones the source CR `Ks` (or the CR indexed by `Xs`) into the destination CR `Kd` (or the CR indexed by `Xd`).
+Clones the source CR `Ks` (or the CR indexed by `Xs`) into the destination CR `Kd` (or the CR indexed by `Xd`):
 
-The destination CR becomes a perfect copy of the source CR: all internal data, including MDH and internal state, are copied verbatim.
+* If source and destination are the same CR the instruction performs no operation, even if the CR is _Unconfigured_.
 
+* If the source is not in a Complete State (Valid or Error), the instruction performs no operation and raises ACE exception `ace_exc_privilege_violation`.
+
+* If there is no sufficient CRF capacity to create a clone of the source CR, the instruction performs no operation and raises ACE exception `ace_exc_out_of_memory`.
+
+* If the destination CR is not in a Complete State (Valid or Error), it is first cleared.
+
+* The destination CR becomes a perfect copy of the source CR: all internal data, including MDH and internal state, are copied verbatim:
 The instruction achieves the same result as exporting the source CR to an SCC and importing the SCC into the destination CR, except that it is not allowed if the source CR's _State_ is not a Complete State.
-
-If there is no sufficient CRF capacity to create a clone of the source CR, the instruction performs no operation and raises ACE exception `ace_exc_out_of_memory`.
-
-If the source is not in a Complete State (Valid or Error), the instruction performs no operation and raises ACE exception `ace_exc_privilege_violation`.
-
-If the destination CR is not in a Complete State (Valid or Error), it is first cleared.
 --
 
 // ////////////////////////////////////////////////////////////////////
@@ -3161,8 +3164,9 @@ CRF capacity occupied by a CR, are all contained in the lower 64 bits of the MDH
 _Algorithm_, _AlgorithmPolicy_ and _KeyType_.
 In particular, it does *not* depend on _AuxDataLen_: a PI carries no
 implementation-specific data, and _AuxDataLen_ must be zero in the MDH of a PI.
-It also does not depend on _StateExtension_, which must likewise be zero in the
-MDH of a PI, nor on _SCProtection_.
+It also does not depend on _StateExtension_, whose value is ignored in the
+MDH of a PI and it replaced with zero by `ace.mgmt` upon provisioning,
+nor on _SCProtection_.
 During provisioning, the information of a CR reflects the external format of a PI.
 The internal representation is finalized into the CR's internal state upon using
 `ace.mgmt` to complete the import which may include the computation of certain
@@ -3584,14 +3588,12 @@ If the _State_ field is set to a Valid State, then ``K(i)`` is fully provisioned
 and opening the CR for export (`ace.mgmt Kd|K{Xd}, #ace_cfg_exporting`) performs the following steps
 to create the serialized, encrypted and authenticated SCC from the CR.
 
-Export cannot produce an _AuxDataLen_ value of 1 from a fully configured CR, because if a CR is fully configured and, upon previous import, it had an _AuxDataLen_ = 1, then the Algorithm would have handled that situation by adjusting its internal state: for instance, by resetting some progress indicator and either not generating any auxiliary data, so it would export with _AuxDataLen_ = 0, or generating auxiliary data and thus it would export with _AuxDataLen_ {ge} 2.
-
 Regarding the Localities, the substitution rules in <<ACE-Localities>> and <<ACE-interaction-with-debug>> apply.
 We define `LST_eff[j]` as the value of `LST` entry j after applying these substitution rules;
 a non-implemented entry with no configured replacement contributes `zeros(128)` and makes the Metadata invalid at provisioning/import.
 In the export and import algorithms we then replace `LST[j]` with `LST_eff[j]`.
 
-However, exporting a non-fully configured CR may produce an _AuxDataLen_ value of 1.
+Exporting a CR may produce an _AuxDataLen_ value of 1, both for fully configured (cf. <<ACE-instruction-clearads>>) and non-fully configured CRs.
 
 .Exporting a Fully Configured CR ``K(i)``
 --
@@ -3616,6 +3618,10 @@ Of the returned values, `SIV`, `SIV2` and `IMPQUAL` are placed in the CSRs `aces
 `acesiv2l`/`acesiv2h` and `aceiql`/`aceiqh`, from which software stores them to memory; the ciphertext
 remains in the CR, whence `ace.store` (<<ACE-instruction-store>>) transfers it; and `saved_MDH` is the
 image software already holds, which `ace.getmd*` (<<ACE-instruction-getmd>>) also returns.
+
+If _AuxDataLen_ < 2, then `SIV2` and `IMPQUAL` are not generated, and therefore
+`acesiv2l`/`acesiv2h` and `aceiql`/`aceiqh` are not written to.
+They may contain stale values, but this is not an issue as they are not exported to memory in this case.
 
 [NOTE]
 ====
