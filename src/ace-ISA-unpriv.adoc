@@ -779,7 +779,7 @@ SGR15:: Any _usage_ instruction that would violate the Usage Control policies wi
 
 SGR16:: Usage of a CR in a Configuration State, and cloning from it, are not allowed:
 Any attempt to do so raises ACE exception `ace_exc_privilege_violation`.
-For a CR in a Configuration State used as the destination of an `ace.clone`, see <<ACE-instruction-clone>>.
+For a CR in a Configuration State used as the destination of an `ace.clone`, or named as both its source and its destination, see <<ACE-instruction-clone>>.
 
 SGR17:: Instructions `ace.size`, `ace.getmd*`, `ace.getst`, `ace.setst` with the 7-bit immediate equal to `ace_state_unconfigured` or an
 Error State, `ace.clear`, and `ace.clear.all`, which normally are treated as usage instructions, are also allowed
@@ -1190,6 +1190,10 @@ provisioning produces no `SIV`.
 Software writes these six CSRs only while `acemanagedcr` names a CR in one of those States;
 a value written to them at any other time is not preserved across a context switch.
 
+`acemanagedcr` is restored after the CRs, or held at 32 for the duration of the restore: `ace.mgmt`
+requires it to hold either its target CR's number or 32 (<<ACE-instruction-setst>>), so a restore
+that writes it first cannot then use `ace.mgmt` on any other CR.
+
 // ////////////////////////////////////////////////////////////////////
 
 [[ACE-CSR-impl-ids]]
@@ -1545,8 +1549,7 @@ No instruction description restates them.
 GR6:: _Management of CRs._
 Opening a CR for import, as well as executing `ace.clear`, is always allowed in any State, since the
 target CR is zeroized first; opening it for export is always allowed in any Complete or Configuration
-State. Explicitly opening a CR in an Error State for exporting is not allowed: exporting such a CR is
-performed by simply saving the MDH.
+State.
 +
 No Algorithm-specific rule may restrict whether a CR can be opened for export or for import, or cleared.
 +
@@ -2034,9 +2037,10 @@ ACE exception `ace_exc_unsupported` is _not_ raised when accessing or using a CR
 
 .. The implementation attempts to allocate CRF capacity according to the requirements of the _Algorithm_, _AlgorithmPolicy_, and _SCProtection_ fields of the MDH, as prescribed by <<ACE-length-rule>>. No other field must affect the amount of capacity required.
     If capacity allocation is not possible, ACE exception `ace_exc_out_of_memory` is raised.
-.. If `ml`._State_ is an Error State, then the CR is immediately fully configured in the Error State, with
-    the entire MDH given by the auxiliary input.
-    This works with both `#immed7` = `ace_cfg_provisioning` and `#immed7` = `ace_cfg_importing`.
+.. If `#immed7` = `ace_cfg_importing` and `ml`._State_ is an Error State, then the CR is immediately
+    fully configured in the Error State, with the entire MDH given by the auxiliary input.
+    Provisioning is not a way to do this: with `#immed7` = `ace_cfg_provisioning` the _State_ field of
+    `ml` is ignored, as the provisioning branch above prescribes.
     The whole configuration is performed by this one instruction, which is uninterruptible (Rule IRR1):
     no management operation is opened, no `ace.mgmt` with `#immed7` = `ace_cfg_management_end` is needed,
     and in fact it will be an illegal instruction.
@@ -2755,8 +2759,9 @@ Bit `q` is `0` if we are evaluating the total size of an SCC, or `1` for only th
 _Description_:: {empty}
 +
 --
-`ace.size` returns in GPR `Xd` the total size in bytes of the memory buffer that would be necessary
-to store the exported SCC or the (partially configured) PI. For an SCC the size includes the
+`ace.size` returns in GPR `Xd` the total size in bytes of the memory buffer needed to hold the
+external image that the MDH describes: a PI, an SCC, a PCCC, or, for a CR in an Error State, the MDH
+alone (<<ACE-data-formats>>, <<ACE-length-rule>>). For an SCC the size includes the
 authentication tag(s) and the ADS; for a PI it is the size of the entire
 PI. Knowing this size is necessary for any feature that relies on exporting a CR, including context
 switching.
@@ -3476,6 +3481,40 @@ B -> B: Complete management: <i>State</i> is now a Complete <i>State</i>.
 
 // ////////////////////////////////////////////////////////////////////
 
+[[ACE-error-state-transfer]]
+==== Export and Import of a CR in an Error State
+
+A CR in an Error State holds only its MDH (Rule SGR8 in <<ACE-State-field>>), so there is nothing to
+encrypt and nothing to authenticate. No SCC and no PCCC are produced, and neither direction opens a
+management operation. Both paths are therefore shorter than those of <<ACE-management-operations>>,
+and both are exempt from the resumption machinery, since no `ace.load` or `ace.store` is issued.
+
+*Exporting* a CR in an Error State consists of two steps and uses no `ace.mgmt`:
+
+. Read the _State_ field with `ace.getst` (<<ACE-instruction-getst>>) and find it to be an Error State.
+. Read the MDH with `ace.getmd` or `ace.getmdv` (<<ACE-instruction-getmd>>) and store those 16 bytes
+  to memory. `ace.size` reports 16 and `ace.csize` reports 0 for such a CR.
+
+Issuing `ace.mgmt` with `#immed7` = `ace_cfg_exporting` on a CR in an Error State is permitted but
+useless: it leaves the CR unchanged and opens no management operation
+(<<ACE-instruction-setst>>).
+
+*Importing* such an image consists of one step:
+
+. Issue `ace.mgmt` with `#immed7` = `ace_cfg_importing` and the 16-byte MDH
+  as the auxiliary operand. The instruction configures the CR into the Error State the MDH names,
+  installing the entire MDH, and completes the configuration by itself; it is uninterruptible
+  (Rule IRR1 in <<ACE-resumability>>), so the CR is never observed part-configured.
+  Form C or D carries the whole MDH, as does a Form A taking it from the ACEIOBUF. Form B is not
+  forbidden, but it supplies only bits [63:0] and zeroes the upper half, so _UsagePolicy_, _Locality_,
+  _AlgorithmUse_, _ExpirationDate_ and _Version_ are lost; that is rarely what the caller intends.
+
+No `ace.mgmt` with `#immed7` = `ace_cfg_management_end` follows, and issuing one is an illegal
+instruction. The `SIV`, `SIV2` and `IMPQUAL` CSRs take no part in either path and need not be saved
+for it.
+
+// ///////////////////////////////////////////////////////////////////////////
+
 ==== SCC Export and Import Algorithms
 
 The next few sections,
@@ -3674,35 +3713,6 @@ avoids re-deriving `enc_key` and `auth_key` when the Locality set changes.
 Distinct Locality sets lead to the same SIV with collision probability 2^-128^.
 
 // ///////////////////////////////////////////////////////////////////////////
-
-[[ACE-error-state-transfer]]
-==== Export and Import of a CR in an Error State
-
-A CR in an Error State holds only its MDH (Rule SGR8 in <<ACE-State-field>>), so there is nothing to
-encrypt and nothing to authenticate. No SCC and no PCCC is produced, and neither direction opens a
-management operation. Both paths are therefore shorter than those of <<ACE-management-operations>>,
-and both are exempt from the resumption machinery, since no `ace.load` or `ace.store` is issued.
-
-*Exporting* a CR in an Error State consists of two steps and uses no `ace.mgmt`:
-
-. Read the _State_ field with `ace.getst` (<<ACE-instruction-getst>>) and find it to be an Error State.
-. Read the MDH with `ace.getmd` or `ace.getmdv` (<<ACE-instruction-getmd>>) and store those 16 bytes
-  to memory. `ace.size` reports 16 and `ace.csize` reports 0 for such a CR.
-
-Issuing `ace.mgmt` with `#immed7` = `ace_cfg_exporting` on a CR in an Error State is permitted but
-useless: it leaves the CR unchanged and opens no management operation
-(<<ACE-instruction-setst>>).
-
-*Importing* such an image consists of one step:
-
-. Issue `ace.mgmt` with `#immed7` = `ace_cfg_importing` and the 16-byte MDH
-  as the auxiliary operand. The instruction configures the CR into the Error State the MDH names,
-  installing the entire MDH, and completes the configuration by itself; it is uninterruptible
-  (Rule IRR1 in <<ACE-resumability>>), so the CR is never observed part-configured.
-
-No `ace.mgmt` with `#immed7` = `ace_cfg_management_end` follows, and issuing one is an illegal
-instruction. The `SIV`, `SIV2` and `IMPQUAL` CSRs take no part in either path and need not be saved
-for it.
 
 [[ACE-SCC-export]]
 ==== Generation of an SCC from a Fully Configured CR
