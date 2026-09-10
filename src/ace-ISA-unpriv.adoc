@@ -592,7 +592,7 @@ When a CR is being provisioned, exported, or imported, it is in one of the follo
 |===
 
 (((ACE, Algorithm, partial states)))
-States 56–63, i.e., the Configuration States, are exactly the States that are neither _Unconfigured_ nor Complete.
+States 56–63, i.e., the states used in management operations, are called the _Partial States_, and are exactly the States that are neither _Unconfigured_ nor Complete.
 
 The four Configuration States whose mnemonics contain `_partial_` are the _nested_ States: a CR
 enters one of them when a management operation is opened on a CR that is already under management
@@ -1544,8 +1544,7 @@ No instruction description restates them.
 5+| ^*^ means that the instruction is useable only if the _State_ field is not one of the Complete States (cf. <<ACE-State-field>>).
 |===
 
-GR6:: _Management of CRs._
-Opening a CR for import, as well as executing `ace.clear`, is always allowed in any State, since the
+GR6:: Opening a CR for import, as well as executing `ace.clear`, is always allowed in any State, since the
 target CR is zeroized first; opening it for export is always allowed in any Complete or Configuration
 State.
 +
@@ -1553,13 +1552,15 @@ No Algorithm-specific rule may restrict whether a CR can be opened for export or
 +
 For the restrictions on `ace.clone`, cf. <<ACE-instruction-clone>>.
 
-GR7:: _A 128-bit MDH in a vector operand._
-Where a Form of an ACE instruction carries the whole 128-bit MDH in a vector register or group, that
+GR7::  Where a Form of an ACE instruction carries the whole 128-bit MDH in a vector register or group, that
 operand must satisfy `VL` {times} `SEW` {ge} 128; otherwise an illegal-instruction exception is
 raised. <<ACE-extensions-overview-unpriv>> records which vector extensions provide such a register.
 
-GR8:: _Reserved encodings._
-All encoding points under the ACE opcodes that this chapter does not assign are reserved, and raise an
+GR8:: Instruction that access the ACEIOBUF, such as `ace.input` and `ace.output`, may be used only if the
+ACEIOBUF is enabled and `aceiobuflen` is nonzero; otherwise ACE exception
+`ace_exc_unconfigured_buffer` is raised.
+
+GR9:: All encoding points under the ACE opcodes that this chapter does not assign are reserved, and raise an
 illegal-instruction exception without changing any architectural state.
 
 // ////////////////////////////////////////////////////////////////////
@@ -2067,32 +2068,29 @@ Software must first save this value in its local state to restore its _State_ wh
 `ace.mgmt` can be of any form, but any auxiliary input provided through Forms B, C, or D is ignored.
 `ace.mgmt` performs following operations:
 
-.. If `ml`._State_ is _Unconfigured_, the instruction performs no operation and raises an illegal-instruction exception.
+.. If `ml`._State_ is _Unconfigured_, then: the instruction performs no operation and raises an illegal-instruction exception.
 
-.. If `ml`._State_ is an Error State, the CR is left unchanged and no management operation is opened.
+.. If `ml`._State_ is an Error State, then: the CR is left unchanged and no management operation is opened.
 Exporting a CR in an Error State is not a management operation and does not require `ace.mgmt` at all:
 software detects the Error State with `ace.getst` (<<ACE-instruction-getst>>), reads the MDH with
 `ace.getmd*` (<<ACE-instruction-getmd>>) and stores those 16 bytes to memory.
 This is the short export path of <<ACE-error-state-transfer>>.
 
-.. If `ml`._State_ is a Valid State:
-+
-Prepare the CR to produce an SCC.
+.. If `ml`._State_ is a Valid State, then:
+The instruction prepares the CR to produce an SCC.
 This includes encrypting its contents and computing the authentication tag(s)
 as specified in <<ACE-CC-management>>:
-+
-The architecturally observable behavior is described in <<ACE-CC-management>>.
 
 ... CR's _State_ is set to `ace_cfg_exporting`.
 
-.. If `ml`._State_ is in a Partial State (we are exporting a not fully configured CR or we are initiating a nested CR export):
-+
-No encryption or authentication occurs; the contents of the CR are exported verbatim, in the same order in which they appear in the PI (for a partially provisioned CR) or in the SCC (for a partially imported CR, or a CR previously prepared for export whose export process was itself interrupted).
+.. If `ml`._State_ is in a Partial State (we are exporting a not fully configured CR or we are initiating a nested CR export), then:
+
+... No encryption or authentication occurs; the contents of the CR are exported verbatim, in the same order in which they appear in the PI (for a partially provisioned CR) or in the SCC (for a partially imported CR, or a CR previously prepared for export whose export process was itself interrupted).
 
 ... The CR's _State_ is set to `ace_cfg_exporting_partial_pi` when its _State_ was
 `ace_cfg_provisioning`, `ace_cfg_exporting_partial_pi` or `ace_cfg_importing_partial_pi`,
 and to `ace_cfg_exporting_partial_scc` otherwise.
-
++
 These values of CR._State_  are the value on which `ace.store` (<<ACE-instruction-store>>) and the CR-reading variants of `ace.mv` (<<ACE-instruction-mv>>) are gated, so no export can proceed until CR._State_ is set.
 --
 +
@@ -2127,7 +2125,7 @@ This check is therefore a defense-in-depth measure, and we add it because the co
 .. *`ace.mgmt` is used to complete a provisioning process.*
 +
 --
-In this case, `ace.mgmt` does not need a saved metadata header from the start of the provisioning process, hence if a Form B, C, or D, was used in place of Form A, the auxiliary input is simply ignored.
+`ace.mgmt` does not need a saved MDH from the start of the provisioning process, hence if a Form B, C, or D, was used in place of Form A, the auxiliary input is simply ignored.
 
 Completing a provisioning requires _AuxDataLen_ = 0; if CR.MDH._State_ is `ace_cfg_provisioning` and _AuxDataLen_ {ne} 0, the CR transitions to Error State _Invalid_ and the instruction terminates.
 
@@ -2881,11 +2879,9 @@ and bytes at or beyond min(`Xl`, `aceiobuftop`), are not accessed on either side
 completion, `acestart` is set to 0. If `Xl` = 0, or `acestart` {ge} min(`Xl`, `aceiobuftop`), the
 operation transfers nothing, and `acestart` is set to 0.
 If `Xl` is greater than `aceiobuftop`, only the bytes of the window are transferred; software can
-detect this case by comparing `Xl` with `aceiobuftop`. Either instruction may be used only if the
-ACEIOBUF is enabled and `aceiobuflen` is nonzero; otherwise ACE exception
-`ace_exc_unconfigured_buffer` is raised.
+detect this case by comparing `Xl` with `aceiobuftop`.
 
-The intended usage of `ace.input` and `ace.output` is explained in detail in
+The usage of `ace.input` and `ace.output` is explained in detail in
 <<ACE-usage-input-output>>.
 --
 
@@ -3012,11 +3008,12 @@ For instance, on RV64, `ace.getst` can be implemented as
 . `ace.getmdl Xd, Ks` or `K{Xs}`
 . `srli  Xd, Xd, 19`
 . `andi  Xd, Xd, 0x3F`
-and `ace.getstx` as
-
-. `ace.getmdl Xd, Ks` or `K{Xs}`
-. `srli  Xd, Xd, 25`
-. `andi  Xd, Xd, 0x0F`
+//
+//and `ace.getstx` as
+//
+//. `ace.getmdl Xd, Ks` or `K{Xs}`
+//. `srli  Xd, Xd, 25`
+//. `andi  Xd, Xd, 0x0F`
 --
 
 //
