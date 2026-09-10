@@ -545,7 +545,7 @@ The architected values of _State_ common to all Algorithms are defined in the fo
 |  49    | `ace_state_invalid`             | _Invalid_         | The CR has been invalidated by invalid Metadata or by an operation not permitted in its current State.
 |  50    | `ace_state_out_of_memory`       | _Out of Memory_   | Insufficient CRF memory for a configuration instruction. This may be set by privileged code if it does not handle CR allocation or fails to do so, returning an error instead.
 |  51    | `ace_state_import_auth`         | _Authentication Failed_     | Authentication failure while completing an SCC import.
-|  52    | `ace_state_privilege_violation` | _Privilege Violation_       | Violation of Usage Control policies.
+|  52    | `ace_state_priv_violation`      | _Privilege Violation_       | Violation of Usage Control policies.
 |  53    | `ace_state_expired`             | _Expired_         | The CR has expired.
 | 54, 55 | (Reserved)                      | {empty}           | Reserved for future use.
 |===
@@ -557,44 +557,9 @@ They include States from 1–47, which are called _Valid_, and
 (((ACE, Algorithm, error states)))
 States 48–55, which are termed _Error States_, and are used to report certain specific ACE errors.
 
-State 1 is the _Ready_ state. All Algorithms must support State _Ready_ as their initial State.
+State 1 is the _Ready_ state.
+All Algorithms must support State _Ready_ as their initial State.
 The Valid States include both _Success_ (46) and _Failure_ (47) states, which must be used for normal completion of an Algorithm in the cases of its successful completion or failure.
-
-When a CR is being provisioned, exported, or imported, it is in one of the following states, which are called _Configuration_ States:
-
-[[ACE-SC-sealing-status]]
-.Global CC State Numbers: Configuration States
-[float="center",align="center",cols="^7%,<30%,<63%",options="header"]
-|===
-| Value    | Mnemonic                  | Description
-|   56     | `ace_cfg_provisioning` | The CR is being configured.
-|   57     | `ace_cfg_exporting`    | The CR, which was in a _Valid_ state, has been placed in exporting mode, i.e., its contents have been encrypted and authenticated for export.
-|   58     | `ace_cfg_importing`    | The CR, which was in a _Valid_ state, has been placed in importing mode.
-|   59     | `ace_cfg_exporting_partial_pi` | The CR, whose base operation is a provisioning, has been placed in exporting mode; its image is PI-shaped.
-|   60     | `ace_cfg_importing_partial_pi` | Such an image is being reimported.
-|   61     | `ace_cfg_exporting_partial_scc` | The CR, whose base operation is the import or the export of an SCC, has been placed in exporting mode; its image is SCC-shaped.
-|   62     | `ace_cfg_importing_partial_scc` | Such an image is being reimported.
-|   63     | (Reserved)               | Reserved.
-|===
-
-(((ACE, Algorithm, partial states)))
-States 56–63, i.e., the Configuration States, are also called _Partial_:
-they are exactly the States that are neither _Unconfigured_ nor Complete.
-
-The four Configuration States whose mnemonics contain `_partial_` are the _nested_ States: a CR
-enters one of them when a management operation is opened on a CR that is already under management
-(<<ACE-nested-CR-management>>). The _base operation_ of such a group is its outermost management
-process.
-
-The `_pi` and `_scc` flavours of the nested States record whether the image the CR holds is
-PI-shaped or SCC-shaped, which follows from the base operation. They determine its length
-(<<ACE-instruction-size>>), which could not otherwise be recovered once the nesting has overwritten
-the _State_ that the base operation set.
-
-The immediate in the `ace.setst` instruction (<<ACE-instruction-setst>>) is a 7-bit value, whereas the _State_ field is only 6 bits long.
-This allows `ace.setst` to encode additional operations related to state changes.
-
-Currently, the only such operation is encoded with the value 64, meaning `ace_cfg_clear_ads`, which clears any ADS so that the CR can be exported without it.
 
 (((ACE, Algorithm, invalid state)))
 (((Context Register, invalidation)))
@@ -608,6 +573,41 @@ Error conditions that lead to exceptions are treated in <<ACE-exceptions>>. See 
 
 If an Algorithm defines 47 or fewer valid states (including _Ready_, _Success_, and _Failure_), the current state is stored in the _State_ field.
 For Algorithms with more than 47 valid states, additional state information may reside in the Content section in an Algorithm-specific format.
+
+When a CR is being provisioned, exported, or imported, it is in one of the following states, which are called _Configuration_ States:
+
+[[ACE-SC-sealing-status]]
+.Global CC State Numbers: Configuration States
+[float="center",align="center",cols="^7%,<33%,<60%",options="header"]
+|===
+| Value    | Mnemonic                  | Description
+|   56     | `ace_cfg_provisioning` | The CR is being configured.
+|   57     | `ace_cfg_exporting`    | The CR, which was in a _Valid_ state, has been placed in exporting mode, i.e., its contents have been encrypted and authenticated for export.
+|   58     | `ace_cfg_importing`    | The CR, which was in a _Valid_ state, has been placed in importing mode.
+|   59     | `ace_cfg_exporting_partial_pi` | The CR, whose base operation is a provisioning, has been placed in exporting mode; its image follows the format of a PI.
+|   60     | `ace_cfg_importing_partial_pi` | Such an image is being reimported.
+|   61     | `ace_cfg_exporting_partial_scc` | The CR, whose base operation is the import or the export of an SCC, has been placed in exporting mode; its image follows the format of an SCC, but without authentication fields.
+|   62     | `ace_cfg_importing_partial_scc` | Such an image is being reimported.
+|   63     | (Reserved)               | Reserved.
+|===
+
+(((ACE, Algorithm, partial states)))
+States 56–63, i.e., the Configuration States, are exactly the States that are neither _Unconfigured_ nor Complete.
+
+The four Configuration States whose mnemonics contain `_partial_` are the _nested_ States: a CR
+enters one of them when a management operation is opened on a CR that is already under management
+(<<ACE-nested-CR-management>>). The _base operation_ of such a group is its outermost management
+process.
+
+The `pi` and `scc` flavours of the nested States record whether the image the CR holds originates
+from a PI or an SCC, following from the base operation. They determine its length
+(<<ACE-instruction-size>>), which could not otherwise be recovered once the nested management
+operations have overwritten the original _State_.
+
+The immediate in the `ace.setst` instruction (<<ACE-instruction-setst>>) is a 7-bit value, whereas the _State_ field is only 6 bits long.
+This allows `ace.setst` to encode additional operations related to state changes.
+Currently, the only such operation is encoded with the value 64 (`ace_cfg_clear_ads`) which clears any ADS so that the CR can be exported without it
+(see <<ACE-instruction-clearads>>).
 
 <<ACE-states-graph>> displays the default state transitions.
 The legend for the state transition graph is:
@@ -801,11 +801,9 @@ and _ace_cfg_exporting_partial_scc_.
 The _AuxDataLen_ MDH field records the length of the _Auxiliary Data Section_ (ADS) of the content, a variable-size, implementation-dependent part, as a number of 128-bit blocks. The maximum value is 2^14^-1, corresponding to 262128 bytes.
 
 If _AuxDataLen_ is zero or one, there is no ADS.
-
 The value one is used by the SCC import procedure to signal the state machine in the CR that ADS was present in the SCC, but it was discarded (see <<ACE-SCC-import>>).
 
-If _AuxDataLen_ is not zero or one,
-a copy of the originating implementation qualifier from the originating machine
+If _AuxDataLen_ {ge} 2 a copy of the implementation qualifier from the originating machine
 
 ``{fournbsp}{fournbsp}IMPQUAL := zeros(32) @ acemimpid @ acemarchid @ acemvendorid``
 
@@ -1016,7 +1014,7 @@ In this case, ACE exceptions are replaced by direct transitions of the CR to an 
 | `ace_exc_CR_off` (See <<ACE-CSR-lcrstatus>>.)| Does not apply without Privileged Architecture, since the `*lcrstatus` CSRs are not available.
 | `ace_exc_unsupported`              | Transition to Error State _Unsupported_.
 | `ace_exc_out_of_memory`            | Transition to Error State `ace_state_out_of_memory`.
-| `ace_exc_privilege_violation`      | Transition to Error State `ace_state_privilege_violation`.
+| `ace_exc_privilege_violation`      | Transition to Error State `ace_state_priv_violation`.
 | `ace_exc_unconfigured_buffer`      | When an ACE instruction is issued that uses the CR with the ACEIOBUF, and the latter is unconfigured or absent, the instruction performs no operation: nothing is read, nothing is written, and the CR undergoes no state transition. This case is exempt from the `ACELEN` granularity rule of <<ACE-algorithms-other-rules>>, which would otherwise invalidate the CR.
 |===
 The error conditions in <<ACE-exception-error-correspondence>> are placed in their natural priority order.
@@ -1985,10 +1983,10 @@ Depending on the previous state of the CR, the actual _State_ after a non-faulti
 
 . After `ace.mgmt`, with #immed7 = `ace_cfg_importing`, the CR's _State_ becomes
 .. `ace_cfg_importing` if the data to import corresponds to a CR in a Valid State,
-.. `ace_cfg_importing_partial_pi` or `ace_cfg_importing_partial_scc` if the data to import corresponds to a CR in a Partial State, according to the shape of the image.
+.. `ace_cfg_importing_partial_pi` or `ace_cfg_importing_partial_scc` if the data to import corresponds to a CR whose management operation had not been completed.
 . After `ace.mgmt`, with #immed7 = `ace_cfg_exporting`, the CR's _State_ becomes
 .. `ace_cfg_exporting` if the CR is in a Valid State,
-.. `ace_cfg_exporting_partial_pi` or `ace_cfg_exporting_partial_scc` if the CR being exported is in a Partial State, according to the shape of its image.
+.. `ace_cfg_exporting_partial_pi` or `ace_cfg_exporting_partial_scc` if the CR being exported is a CR whose management operation had not been completed.
 
 If a CR is in an Error State, it is exported by simply copying the MDH to memory and imported by a single atomic `ace.mgmt` instruction as detailed in <<ACE-error-state-transfer>>.
 
@@ -2971,7 +2969,7 @@ _Synopsis_::
 Clears any ADS from the target CR
 
 _Mnemonic_::
-`ace.clear.ads Kd|K{Xd}` +
+`ace.clear.ads Kd|K{Xd}`
 (((ACE, instruction, ace.clear.ads)))
 
 _Encoding_::
@@ -2984,8 +2982,7 @@ _Description_::
 This instruction is used when exporting a CR for use by some other target, possibly some different implementation.
 If no ADS was present, the _AuxDataLen_ remains 0, otherwise it is set to 1.
 Exporting a CR into a SCC in this state will result in an ADS-free SCC being generated.
-
-The first usage instruction that needs to access the ADS will then need to regenerate it.
+The first usage instruction that needs to access the ADS regenerates it.
 --
 
 // ////////////////////////////////////////////////////////////////////
@@ -3251,14 +3248,13 @@ contained in the lower 64 bits of the MDH:
 
 . The length of a *Provisioning Input* is determined by, and only by, the fields
 _Algorithm_, _AlgorithmPolicy_ and _KeyType_.
-In particular, it does *not* depend on _AuxDataLen_: a PI carries no
-implementation-specific data, and _AuxDataLen_ must be zero in the MDH of a PI.
-It also does not depend on _StateExtension_, whose value is ignored in the
-MDH of a PI and is replaced with zero by `ace.mgmt` upon provisioning,
-nor on _SCProtection_.
+It does *not* depend on _AuxDataLen_: a PI carries no ADS, and _AuxDataLen_
+must be zero in the MDH of a PI.
+It also does not depend on _StateExtension_, whose value is ignored and is
+replaced with zero by `ace.mgmt` upon provisioning, nor on _SCProtection_.
 During provisioning, the information of a CR reflects the external format of a PI.
 The internal representation is finalized into the CR's internal state upon using
-`ace.mgmt` to complete the provisioning, which may include the computation of certain
+`ace.mgmt` to complete the provisioning, which may include the computation of
 information such as derived keys, or multiple shares.
 
 . The length of a *Sealed Cryptographic Context* is determined by, and only by, the
@@ -3358,7 +3354,7 @@ If _AuxDataLen_ {ge} 2 then the ADS contains _AuxDataLen_ blocks.
 // This data may be exported in whole or in part in the ADS.
 // An importing implementation must be able to safely ignore it after checking `IMPQUAL`.
 
-A CR in an Error State produces no SCC: its exported image is the `MDH` alone, and Sections 2 to 5 do not exist for it.
+A CR in an Error State is exported as its `MDH` alone.
 
 A third format is the Partially Configured Cryptographic Context (PCCC), which is used when a partially configured or exported SCC is exported and reimported upon preemption of the management procedures.
 
@@ -3392,12 +3388,12 @@ The format of the exported data for _partially configured_ SCCs is therefore the
 
 [[ACE-PCCC]]
 .Format of a Partially Configured Cryptographic Context
-[width="100%",cols="^8%,25%,67%",options="header"]
+[width="100%",cols="^8%,22%,70%",options="header"]
 |===
 | Section | Section Name | Size
-| 1       | MDH, MDH   | 128 bits
+| 1       | MDH          | 128 bits
 | 2.a     | `Content1`   | Cf. Section 5.a in <<ACE-SCC>>, or the `Content[]` of the PI for a `_pi` State.
-| 2.b     | `Content2`   | Cf. Section 5.b in <<ACE-SCC>>. Absent for a `_pi` State, whose _AuxDataLen_ is zero.
+| 2.b     | `Content2`   | Cf. Section 5.b in <<ACE-SCC>>. Absent for a `\_pi` State, whose _AuxDataLen_ is zero.
 |===
 
 // ////////////////////////////////////////////////////////////////////
