@@ -610,13 +610,14 @@ Issuing one otherwise transitions the CR to Error State _Invalid_ (cf. Rule <<AC
 
 SGR3:: Any transition listed in an Algorithm's specification may be triggered by performing an explicit `ace.setst` operation (<<ACE-instruction-setst>>), or may be induced by certain conditions specified in the Algorithm's specification. Transitions to, from, and between _Configuration_ States use the `ace.mgmt` instruction.
 
-SGR4:: In States _Success_ and _Failure_, only the following ACE instructions are permitted: `ace.mgmt`, `ace.clear`, `ace.size`, `ace.setst`, `ace.getmd*`, `ace.getst`, `ace.clone`, `ace.restrict*`, and `ace.derive` where the source CR is in State _Success_ or _Failure_ and the source endpoint is one of its fields that can be exported, as described in the specification of the Algorithm.
-Reading such a field is not a cryptographic operation, so it is compatible with the rule that no
-further cryptographic operation may be performed in these states, and it leaves the source CR in
-its state: such an `ace.derive` cannot invalidate the source, only the destination.
-Also permitted is an `ace.exec` whose sole purpose is to squeeze further output from an Algorithm
+SGR4:: In States _Success_ and _Failure_, only the following ACE instructions are permitted: `ace.mgmt`, `ace.size`, `ace.setst` (subject to Rule <<ACE-SGR-setst-in-success-failure>> below), `ace.getmd*`, `ace.getst`, `ace.clone`, `ace.restrict*`, and `ace.derive`.
++
+Also permitted, in State _Success_ only, is an `ace.exec` whose sole purpose is to squeeze further output from an Algorithm
 that produces an arbitrarily long one, such as a XOF, whether issued directly or as the source
 endpoint of an `ace.derive` (even if squeezing is per se a cryptographic operation).
++
+`ace.derive` is also permitted in State _Success_ only, and is limited to the following two cases: where the source endpoint is one of its fields that can be exported, as described in the specification of the Algorithm; and under the conditions of use of `ace.exec`.
++
 A CR in State _Success_ or _Failure_ may not be the *destination* of an `ace.derive`.
 +
 NOTE: `ML-KEM.Decaps` (<<ACE-PQC-ML-KEM>>) is the motivating case for this `ace.derive` behavior:
@@ -625,8 +626,8 @@ transitions to _Success_, from which the only other exit is _Ready_, and _Ready_
 `sharedkey`. Without this provision the shared secret would be unreachable and ML-KEM could not
 be used for its stated purpose.
 
-SGR5:: In States _Success_ and _Failure_, `ace.setst` is only permitted to transition to _Ready_, to _Unconfigured_, or to an explicitly given Error State except _Expired_.
-It is also permitted with `#immed7` = `ace_cfg_clear_ads` (<<ACE-instruction-clearads>>), which clears any ADS and leaves the _State_ unchanged.
+[[ACE-SGR-setst-in-success-failure,SGR5]] SGR5:: In States _Success_ and _Failure_, `ace.setst` is only permitted to transition to _Ready_ if the Algorithm does not forbid it, to _Unconfigured_ using `#immed7` = `ace_state_unconfigured`, or to an explicitly given Error State.
+It is also permitted with `#immed7` = `ace_cfg_clear_ads` (<<ACE-instruction-clearads>>), which clears any ADS and leaves the _State_ unchanged, when this does not violate usage-control policy.
 
 SGR6:: States _Success_ and _Failure_ cannot be set directly using `ace.setst`.
 
@@ -658,7 +659,7 @@ Requesting its size (<<ACE-instruction-size>>) returns 16 bytes for `ace.size` a
 The image can be reimported with a single `ace.mgmt`, allowing software to take appropriate actions even after a context switch.
 
 SGR13:: If a CR is in any Error State, it can still be reconfigured, cloned, or cleared;
-besides for clearing, `ace.setst` can only be used to change the Error State.
+apart from clearing, `ace.setst` can only be used to change the Error State.
 
 [[ACE-SGR-usage-cr-error-state,SGR14]] SGR14:: Attempts to _use_ a CR in any Error State will not perform any operation, and in particular they leave the _State_ field unchanged.
 Such an attempt can be considered an operation that would cause a transition to  Error State `ace_state_invalid`, so the _State_ field is left unchanged to allow software to address the original error condition. No history of Error States is maintained by the architecture.
@@ -919,6 +920,32 @@ we shall always describe the behavior when the Privileged Architecture is in eff
 
 We now give additional explanation of some of the types of error conditions that may occur during the lifecycle of an ACE unit:
 
+[[ACE-illegal-instruction-grounds]]
+Illegal-Instruction Exceptions:::
++
+--
+An illegal-instruction exception is raised, without any change to ACE state, on the grounds below.
+The grounds of the first group are decided from the instruction encoding, the GPRs and the vector configuration alone, without accessing the state of the ACE unit; they therefore take precedence over `ace_exc_fatal` (<<ACE-exception-codes>>).
+The grounds of the second group require the state of the ACE unit and are raised only once no fatal condition is pending.
+
+Decided without accessing the ACE unit:
+
+. A reserved encoding point (Rule <<ACE-GR-reserved-encodings>>), including a reserved `#immed7` of `ace.setst` with `r` = 1 and CR register `X0` (<<ACE-instruction-setst>>), and an unsupported ACEV configuration (<<ACE-ACEV>>).
+. An indirect CR index outside [0..31], or `X0` used as one where not expressly encoded (Rule <<ACE-GR-GPR-indirect>>), and `ace.derive` with equal CR indices (<<ACE-instruction-derive>>).
+. A misaligned GPR pair on RV32 (Rule <<ACE-GR-multiple-GPRs>>).
+. A vector operand carrying an MDH with `VL` {times} `SEW` < 128 (Rule <<ACE-GR-vector-MDH-operand>>), or a vector `ace.mv` whose `vl * (SEW/8)` is not a multiple of 16 (<<ACE-instruction-mv>>).
+. Forms A–C of `ace.exec` without `Zklv` (<<ACE-instruction-exec>>).
+. An ACE instruction issued while `ACES` is Off (see _Fatal_ below) and, when the Privileged Architecture is not implemented, an access to a CSR that <<ACE-CSRs-unpriv>> declares unavailable.
+
+Requiring the state of the ACE unit:
+
+. A usage-controlled instruction issued on a CR in State _Unconfigured_ (Rule <<ACE-SGR-transition-to-from-unconfigured>>), including `ace.derive` with an _Unconfigured_ endpoint.
+. `ace.load`, `ace.store` or `ace.mv` on a CR whose _State_ does not admit the transfer, or with an inconsistent `acestart` (Rules <<ACE-SGR-ace-load-mv-allowed>> and <<ACE-SGR-ace-store-mv-allowed>>).
+. `ace.mgmt` when `acemanagedcr` names another CR, when opening an export on an _Unconfigured_ CR, when completing with an `ml`._State_ inconsistent with the CR's Configuration State, or when `ace_cfg_management_end` is issued with no management operation open (<<ACE-instruction-setst>>).
+. An ACEIOBUF substitution that <<ACE-usage-input-output>> forbids, including any substitution without `Zklio`, since whether a Form is a substitution depends on the operation the CR's State defines.
+. When the Privileged Architecture is not implemented, an instruction issued without a CSK (<<ACE-exception-error-correspondence>>).
+--
+
 Fatal:::
 +
 --
@@ -942,13 +969,16 @@ The ACE state reset completes before the trap is taken, and the latter is not de
 Unsupported Algorithms:::
 +
 --
-Invalid parameters in the MDH at provisioning or import set the CR to Error State
+Invalid parameters in the MDH at provisioning or import only set the CR to Error State
 `ace_state_unsupported` and raise ACE exception `ace_exc_unsupported`.
 The hardware sets the Error State itself so that a handler which cannot resolve the condition has
 nothing left to do: it may simply return, and the caller then observes an unusable CR through
 `ace.getst`. A handler that instead intends to emulate the Algorithm overrides this by setting the
 CR's `*lcrstatus` field to _Off_ (<<ACE-CSR-lcrstatus>>), after which every access to that CR
-traps and is serviced by the emulator.
+traps and is serviced by the emulator; the emulator then holds the CR in its own protected memory
+and services every operation on it, including SCC import and export.
+
+ACE exception `ace_exc_unsupported` is _not_ raised when accessing or using a CR in State `ace_state_unsupported`.
 --
 
 Algorithmic Errors:::
@@ -1378,15 +1408,15 @@ No Algorithm-specific rule may restrict whether a CR can be opened for export or
 +
 For the restrictions on `ace.clone`, cf. <<ACE-instruction-clone>>.
 
-GR7::  Where a Form of an ACE instruction carries the whole 128-bit MDH in a vector register or group, that
+[[ACE-GR-vector-MDH-operand,GR7]] GR7:: Where a Form of an ACE instruction carries the whole 128-bit MDH in a vector register or group, that
 operand must satisfy `VL` {times} `SEW` {ge} 128; otherwise an illegal-instruction exception is
 raised. <<ACE-extensions-overview-unpriv>> records which vector extensions provide such a register.
 
-GR8:: Instruction that access the ACEIOBUF, such as `ace.input` and `ace.output`, may be used only if the
+GR8:: Instructions that access the ACEIOBUF, such as `ace.input` and `ace.output`, may be used only if the
 ACEIOBUF is enabled and `aceiobuflen` is nonzero; otherwise ACE exception
 `ace_exc_unconfigured_buffer` is raised.
 
-GR9:: All encoding points under the ACE opcodes that this chapter does not assign are reserved, and raise an
+[[ACE-GR-reserved-encodings,GR9]] GR9:: All encoding points under the ACE opcodes that this chapter does not assign are reserved, and raise an
 illegal-instruction exception without changing any architectural state.
 
 // ////////////////////////////////////////////////////////////////////
@@ -1603,7 +1633,7 @@ extract outputs from `ace.exec`, as described in <<ACE-usage-input-output>>.
 
 The `Zklmv` subextension adds dedicated move instructions between scalar/vector registers and a CR.
 The instructions in this extension are encoded as new forms of `ace.exec`:
-In particular, bit 'r' has the same meaning as in `ace.exec`.
+In particular, bit `r` has the same meaning as in `ace.exec`.
 
 _Mnemonics_::
 +
@@ -1763,7 +1793,7 @@ It is used for three purposes:
 `#immed7` is a constant from a set of admissible values.
 These values include both general values, which apply to all Algorithms, as well as values specific to the Algorithm encoded in a CR.
 
-Issuing `ace.state` or `ace.mgmt` with certain state values may require passing an auxiliary input to the operation, which may be a 64-bit or 128-bit operand passed in one or more GPRs or a vector (group) `Vs`. The vector (group) may be replaced by ACEIOBUF if `Zklio` is implemented.
+Issuing `ace.setst` or `ace.mgmt` with certain state values may require passing an auxiliary input to the operation, which may be a 64-bit or 128-bit operand passed in one or more GPRs or a vector (group) `Vs`. The vector (group) may be replaced by ACEIOBUF if `Zklio` is implemented.
 
 Normally, `#immed7` contains the _State_ value to be set. In most cases, after the instruction is retired, the _State_ field takes the value specified in `#immed7`.
 Some states may transition to a different state automatically after completing `ace.setst`.
@@ -1856,10 +1886,6 @@ and setting the upper 64 bits to 0.
 the CR is transitioned to Error State _Invalid_ (which is a Complete State) and the instruction terminates.
 .. In other cases where the Metadata is invalid, such as, for instance, a nonzero reserved field:
 the CR is transitioned to Error State _Invalid_.
-+
-NOTE: ACE exception `ace_exc_unsupported` is raised only at provisioning or import time for an invalid or unsupported Algorithm or SCA protection level.
-The CR's _State_ field is already set to Error State `ace_state_unsupported` by the hardware that raised the exception, so that the CR cannot be used and the caller can detect this. A handler that cannot resolve the condition therefore needs to do nothing further. A handler that intends to emulate the Algorithm instead sets the CR's `*lcrstatus` field to _Off_, so that any access is trapped for emulation (see <<ACE-CSR-lcrstatus>>); the emulator then holds the CR in its own protected memory and services every operation on it, including SCC import and export.
-ACE exception `ace_exc_unsupported` is _not_ raised when accessing or using a CR in State `ace_state_unsupported`.
 
 .. The implementation attempts to allocate CRF capacity according to the requirements of the _Algorithm_, _AlgorithmPolicy_, and _SCProtection_ fields of the MDH, as prescribed by <<ACE-length-rule>>. No other field must affect the amount of capacity required.
     If capacity allocation is not possible, ACE exception `ace_exc_out_of_memory` is raised.
@@ -2015,10 +2041,10 @@ NOTE: An implementation may instead restore the clear contents from an internal 
 ====
 The definition of `ace.mgmt` allows an interrupted import to resume on another hart and even on a different implementation of the ACE unit, provided the target supports the Algorithm encoded in the SCC.
 Software must allow resumption of interrupted configuration or export procedures while remaining binary-compatible across implementations that may or may not support it.
-A context-switch handler can always force a restart by clearing partially provisioned or imported CRs at context save and restore time.
+A context-switch handler can always force a restart by clearing partially provisioned or imported CRs at context save and restore time, and, with the care described in <<ACE-resumability>>, partially exported ones.
 Such clearing must be the exception, however:
 Since an SCC can span several kilobytes, a handler that unconditionally clears partially provisioned or imported CRs at every context switch may prevent a long management process from ever completing.
-The ACE ISA has been co-designed with the CR management sequences in <<ACE-management-code-snippets>> to support resumption, nested context switching and lazy SCC loading,
+The ACE ISA has been co-designed with the CR management sequences in <<ACE-management-code-snippets>> to support resumption, nested context switching and lazy SCC loading.
 ====
 
 // ////////////////////////////////////////////////////////////////////
@@ -2524,8 +2550,7 @@ open-destination rules of <<ACE-instruction-derive>> apply.
 ==== ace.size/ace.csize/ace.avail
 
 _Synopsis_::
-Return the total size of a memory buffer that would be needed to store the data of a PI, CR, or SCC in bytes.
-`ace.size` returns 0 in case of error (such as unsupported Algorithm or invalid MDH).
+Return the total size of a memory buffer that would be needed to store the data of a PI, SCC, or PCCC (the equivalent of a SCC for incompletely managed CRs) in bytes. `ace.size` returns 0 in case of error (such as unsupported Algorithm or invalid MDH).
 
 _Mnemonic_::
 +
@@ -2827,12 +2852,12 @@ For instance, on RV64, `ace.getst` can be implemented as
 . `ace.getmdl Xd, Ks` or `K{Xs}`
 . `srli  Xd, Xd, 19`
 . `andi  Xd, Xd, 0x3F`
-//
-//and `ace.getstx` as
-//
-//. `ace.getmdl Xd, Ks` or `K{Xs}`
-//. `srli  Xd, Xd, 25`
-//. `andi  Xd, Xd, 0x0F`
+
+and `ace.getstx` as
+
+. `ace.getmdl Xd, Ks` or `K{Xs}`
+. `srli  Xd, Xd, 25`
+. `andi  Xd, Xd, 0x0F`
 --
 
 //
