@@ -341,7 +341,7 @@ The state machine is defined by the following information:
 The operation may instead use Form D `ace.exec` or Form C `ace.setst`, with the required ACEIOBUF setup, with other forms being prohibited.
 Issuing any other instruction that accesses a CR raises an ACE exception.
 `ace.input` and `ace.output` are allowed because these operations do not access a CR, and thus are not directly related to a state machine.
-The precise statement of the behavior is given by Rule AGR1 in <<ACE-algorithms-other-rules>>.
+The precise statement of the behavior is given by Rule <<ACE-AGR-not-allowed-instructions>> in <<ACE-algorithms-other-rules>>.
 --
 
 //
@@ -388,7 +388,7 @@ Besides the SGR (State-Specific General Rules) defined in <<ACE-State-field>>,
 the following rules apply to all ACE-supported Algorithms, except when explicitly stated otherwise.
 
 [horizontal]
-AGR1:: If any usage instruction, or Form thereof, that may modify the state of a CR is
+[[ACE-AGR-not-allowed-instructions,AGR1]] AGR1:: If any usage instruction, or Form thereof, that may modify the state of a CR is
 issued, which is not explicitly allowed by the current state of the Algorithm
 encoded in the same CR, then the CR transitions to Error State _Invalid_.
 +
@@ -397,10 +397,7 @@ implementation at all, rather than merely wrong for the state (<<ACE-usage-input
 
 AGR2:: If `ACELEN` does not satisfy the granularity constraints of the Algorithm in its current state — for instance, it is not a whole multiple of the block size where the Algorithm requires one — the instruction performs no operation and the CR transitions to Error State _Invalid_.
 
-AGR3::  No `ace.exec` instruction may be issued in State _Ready_ unless the Algorithm explicitly allows it;
-issuing one otherwise transitions the CR to Error State _Invalid_, by AGR1.
-
-AGR4::  In a state that processes whole blocks, one `ace.exec` performs the state's per-block operation
+AGR3::  In a state that processes whole blocks, one `ace.exec` performs the state's per-block operation
 `ACELEN`/`b` times, where `b` is the block size: for `i` = 0, `b`, `2b`, {ellipsis}, `ACELEN` − `b`,
 in that order, it consumes `INPUT[i+b-1:i]` (if it consumes inputs) and produces `OUTPUT[i+b-1:i]`
 (if it produces outputs). Blocks are therefore
@@ -411,24 +408,24 @@ process exactly one block whatever `ACELEN` is.
 +
 This rule applies to all places where `ace.exec` is used in Algorithm descriptions, unless it is explicitly mentioned that `ace.exec` consumes only one block.
 
-AGR5:: A field that an Algorithm derives from other fields of the same CC is not carried in the Serialized
-Context. It is recomputed when an import completes, that is by the `ace.mgmt` with
-`#ace_cfg_management_end`, and again whenever a field it is derived from is set or replaced. An
-Algorithm states only the derivation itself, and marks such a field “(derived)” where it lists it in
+[[ACE-AGR-recomputed-fields,AGR4]] AGR4:: A field that an Algorithm can derive in an inexpensive manner
+from other fields of the same CC may not be carried in the Serialized Content, and be recomputed when an import
+completes, that is by the `ace.mgmt` with `#ace_cfg_management_end`, and again whenever a field it depends upon
+is modified. An Algorithm states only the derivation itself, and marks such a field “(derived)” where it lists it in
 its *Internal State*.
 
-AGR6:: Where a state consumes from `INPUT` a single value of fixed width — the field it assigns, or the
+AGR5:: Where a state consumes from `INPUT` a single value of fixed width — the field it assigns, or the
 operand it is defined over — an `ACELEN` greater than that width is truncated: only that many least
 significant bits of `INPUT` are considered, and the rest are ignored. The width is not necessarily
 the block size `b`.
 
-AGR7:: When a state writes fewer than `ACELEN` bits to `OUTPUT`, the remaining bits of `OUTPUT` are
+AGR6:: When a state writes fewer than `ACELEN` bits to `OUTPUT`, the remaining bits of `OUTPUT` are
 cleared. This concerns the bits *within* the operand; the elements beyond `VL`, governed by the
 tail-agnostic policy of <<ACE-ACEV>>, are a separate matter.
 
-AGR8:: An Algorithm may define a long-running operation that transfers no data to or from vector registers or the ACEIOBUF. Examples include: scalar multiplication, key generation, or signature generation or verification. The progress is recorded in the _AlgorithmUse_ field, in an implementation-defined format; `acestart` remains reserved for byte counts (<<ACE-CSR-acestart>>). If progress is recorded, the implementation exports the data necessary to support resumption in the ADS. Any importing implementation may discard this Section and restart the operation. In case of an Implementation Qualifier mismatch, the operation must be restarted. Hence, no internal algorithm-dependent state may be committed until the operation completed, and intermediate results must be
+[[ACE-AGR-long-running-no-data,AGR7]] AGR7:: An Algorithm may define a long-running operation that transfers no data to or from vector registers or the ACEIOBUF. Examples include: scalar multiplication, key generation, or signature generation or verification. The progress is recorded in the _AlgorithmUse_ field, in an implementation-defined format; `acestart` remains reserved for byte counts (<<ACE-CSR-acestart>>). If progress is recorded, the implementation exports the data necessary to support resumption in the ADS. Any importing implementation may discard this Section and restart the operation. In case of an Implementation Qualifier mismatch, the operation must be restarted. Hence, no internal algorithm-dependent state may be committed until the operation completed, and intermediate results must be
 
-AGR9:: A state that loads a long field from `INPUT`, or emits one to `OUTPUT`, using multiple `ace.exec`
+[[ACE-AGR-load-long-field,AGR8]] AGR8:: A state that loads a long field from `INPUT`, or emits one to `OUTPUT`, using multiple `ace.exec`
 instructions records the amount transferred so far in a state field _W_ (e.g., _AlgorithmUse_ of
 the MDH). Each such state names _W_ and its unit, bits or bytes. _W_ is zeroed on entry, rises
 monotonically, and is not reset when the field completes; entering a loading state also zeroes the
@@ -444,7 +441,7 @@ field of the MDH, `ace.restrict*` may not write it (<<ACE-instruction-restrict>>
 
 [WARNING]
 ====
-Add a rule for the case of AGR9 and a “last block”.
+Add the handling of a “last block” to Rule <<ACE-AGR-load-long-field>>.
 ====
 
 // ////////////////////////////////////////////////////////////////////
@@ -455,11 +452,11 @@ Add a rule for the case of AGR9 and a “last block”.
 System Keys modify all the Algorithms and their data structures in the following way:
 
 [horizontal]
-AGR10:: In a PI and in an SCC, the key field will contain the SKID of the system key in place of the value.
+AGR9:: In a PI and in an SCC, the key field will contain the SKID of the system key in place of the value.
 This field is reduced from the original key size to a 64-bit value.
 //This saves space in an SCC and allows faster export and import operations.
 
-AGR11:: For Algorithms that require more than one key, such as XEX/XTS, a single
+AGR10:: For Algorithms that require more than one key, such as XEX/XTS, a single
 SKID is used to refer to and retrieve multiple keys from the SKS.
 
 // ////////////////////////////////////////////////////////////////////
@@ -1385,7 +1382,7 @@ If `ACELEN` > 128, only the 128 least significant bits of `INPUT` are considered
    must be compared. If the values match, the state
    transitions to _Success_; otherwise, it transitions to _Failure_.
 
-** `auth_key` is a derived field (AGR5): `auth_key <- enc_blk(key, zeros(128))`.
+** `auth_key` is a derived field (Rule <<ACE-AGR-recomputed-fields>>): `auth_key <- enc_blk(key, zeros(128))`.
 
 //
 
@@ -1731,7 +1728,7 @@ A value of zero, larger than 120, or not a multiple of 8, causes the CR to trans
 +
 If `ACELEN` > 128, only the 128 least significant bits of `INPUT` are considered.
 
-** `enc_key` and `auth_key` are derived fields (AGR5):
+** `enc_key` and `auth_key` are derived fields (Rule <<ACE-AGR-recomputed-fields>>):
 (`enc_key`, `auth_key`) <- `RFC8452_KeyDeriv(k, key, nonce)`.
 
 //
@@ -3536,7 +3533,7 @@ therefore needs no flag.
 
  ** When the CC is created, i.e., provisioned, the `Generator` is set to the default parameter, and `Scalar` is set to zero.
 
- ** All the “set” and “output” operations follow rule AGR9 of
+ ** All the “set” and “output” operations follow Rule <<ACE-AGR-load-long-field>> of
 <<ACE-algorithms-other-rules>>, with the progress recorded in `block_base`, in bytes.
 
  ** To transition to State _Set_Generator_, a Form A or B `ace.setst` is used.
@@ -3546,7 +3543,7 @@ therefore needs no flag.
   . A state change operation can be issued, including to states that require a set `Generator`.
 
  *** Otherwise:
-  . `Generator`, of length `ub`/8 bytes, is loaded using (multi-block) `ace.exec` instructions of Form B, following AGR9.
+  . `Generator`, of length `ub`/8 bytes, is loaded using (multi-block) `ace.exec` instructions of Form B, following Rule <<ACE-AGR-load-long-field>>.
   . Once it is complete, a state change operation can be issued, including to states that require a set `Generator`.
 
  ** To transition to any of the States _Set_Scalar_, _Set_Hash_, _Set_SecondPt_, or _Set_Signature_ a Form A `ace.setst` is used.
@@ -3555,7 +3552,7 @@ therefore needs no flag.
       set to False. `Scalar` has no such flag: it is simply set to zero, which is not a legal
       private key.
   *** Field _X_ is then loaded using (multi-block) `ace.exec` instructions of Form B, following
-      AGR9, and ``Has``_X_ is set once the field is complete, where that flag exists.
+      Rule <<ACE-AGR-load-long-field>>, and ``Has``_X_ is set once the field is complete, where that flag exists.
 
  ** It is also allowed to transition to _Set_Scalar_ using a Form B `ace.setst` with a non-zero value in the GPR.
     In this case, a random value is set, no further
@@ -3616,9 +3613,9 @@ if `r` = 0, if `r` + `k` = `n`, or if `s` = 0.
      This allows the ACE implementation to determine not only which output must be written out, but also its length.
      *** If `OutputType` = False, the output is in `SecondPt`.
      *** If `OutputType` = True,  the output is in `Signature`.
-   . In State _Output_, the result is emitted using (multi-block) `ace.exec` instructions of Form C, following AGR9.
+   . In State _Output_, the result is emitted using (multi-block) `ace.exec` instructions of Form C, respecting Rule <<ACE-AGR-load-long-field>>.
      . Data beyond the length of the output is replaced with zeros in the last exported part.
-     . Once the output is complete the state transitions to _Success_; this is the transition of its own that AGR9 admits.
+     . Once the output is complete the state transitions to _Success_; this is the transition of its own that Rule <<ACE-AGR-load-long-field>> admits.
 
  ** If, after any computation, either `Generator` or `SecondPt` is the point at infinity, the corresponding field is set to the special value that encodes it.
 
@@ -3661,7 +3658,7 @@ if `r` = 0, if `r` + `k` = `n`, or if `s` = 0.
 ** {empty}
 +
 --
-`Progress`, bits [15:1] of _AlgorithmUse_, is the field used following rule AGR8 for Point Multiplication,
+`Progress`, bits [15:1] of _AlgorithmUse_, is the field used following rule <<ACE-AGR-long-running-no-data>> for Point Multiplication,
 Signature Generation and Signature Verification; what an implementation exports to allow resumption
 typically includes precomputed multiples of the base point.
 
@@ -3791,7 +3788,8 @@ State Machine:::
 ** To transition to State _Set_Ctx_, a Form B `ace.setst` is used whose auxiliary
    argument `Xs` sets `ctxlen`. Values greater than 255 cause the CR to transition to
    Error State _Invalid_. If `ctxlen` {ne} 0, the `ctx` value is then loaded with
-   (multi-block) Form B `ace.exec` instructions, following AGR9 as the _Set_ states of
+   (multi-block) Form B `ace.exec` instructions, following Rule <<ACE-AGR-load-long-field>>
+   as the _Set_ states of
    <<ACE-ECC>> do, with the progress recorded in `block_base`.
 
 ** To enter State _Msg_Absorb_ (pure mode only; on an implementation that does not
@@ -4036,13 +4034,13 @@ machine still transitions to _Success_, and the two cases remain indistinguishab
 
 ** In States _encapsk_Input_, _decapsk_Input_ and _ciphertext_Input_, the fields `encapsk`,
 `decapsk` and `ciphertext` are loaded using (multi-block) `ace.exec` instructions of Form B,
-following rule AGR9 of <<ACE-algorithms-other-rules>>, with the progress recorded in
+following Rule <<ACE-AGR-load-long-field>> of <<ACE-algorithms-other-rules>>, with the progress recorded in
 _AlgorithmUse_. The size of each field in bits is 8
 times the size in bytes given in <<ACE-ML-KEM-sizes>>, so it is determined by the KEM variant and
 the state and no variable need hold it.
 
 ** In States _encapsk_Output_ and _ciphertext_Output_, the fields `encapsk` and `ciphertext` are
-emitted using (multi-block) `ace.exec` instructions of Form C, following rule AGR9, with the
+emitted using (multi-block) `ace.exec` instructions of Form C, following Rule <<ACE-AGR-load-long-field>>, with the
 progress recorded in _AlgorithmUse_. Both fields are public, so no restriction applies to where they
 are written.
 
@@ -4145,7 +4143,7 @@ Therefore it is the responsibility of the caller to compute the public-key hash 
 
 * Besides `rnd`, the internal state may contain several additional variables, for instance intermediate values of the computation of the NTT.
 The definition of all these values is implementation dependent, as is their occupancy.
-They must be saved in an SCC in the Auxiliary Data Section, allowing resumption of an interrupted operation on the same implementation, as AGR8 prescribes.
+They must be saved in an SCC in the Auxiliary Data Section, allowing resumption of an interrupted operation on the same implementation, as Rule <<ACE-AGR-long-running-no-data>> prescribes.
 --
 +
 * *Serialized Content*:
@@ -4236,8 +4234,8 @@ When the loaded value is complete, `HasPrivKey` is set to true.
 
 ** In States _privkey_Input_, _pubkey_Input_, _ctx_Input_, _mu_Input_, _tr_Input_, and _Sign_Input_,
 the fields `privkey`, `pubkey`, `ctx`, `mu`, `tr` and `signature`, respectively, are loaded using
-(multi-block) `ace.exec` instructions of Form B, following rule AGR9 of
-<<ACE-algorithms-other-rules>>, with the progress recorded in _AlgorithmUse_.
+(multi-block) `ace.exec` instructions of Form B, following Rule <<ACE-AGR-load-long-field>>,
+with the progress recorded in _AlgorithmUse_.
 
 ** In State _compute_pubKey_ a single D `ace.exec` instruction performs the following operations:
 
@@ -4265,8 +4263,8 @@ otherwise it transitions to State _Failure_. cite:[nist-fips-204] Algorithm 8 re
 only, so nothing is written to `signature` on this path.
 
 ** In States _pubkey_Output_ and _Sign_Output_, the fields `pubkey` and `signature` are emitted
-using (multi-block) `ace.exec` instructions of Form C, following rule AGR9, with the progress
-recorded in _AlgorithmUse_.
+using (multi-block) `ace.exec` instructions of Form C, following Rule <<ACE-AGR-load-long-field>>,
+with the progress recorded in _AlgorithmUse_.
 Entering _pubkey_Output_ while `HasPubKey` is false causes the CR to transition to Error State _Invalid_.
 
 ** _AlgorithmPolicy_ can be modified using `ace.restrictl`.

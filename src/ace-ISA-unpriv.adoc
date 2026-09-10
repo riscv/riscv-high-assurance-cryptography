@@ -518,7 +518,7 @@ The architected values of _State_ common to all Algorithms are defined in the fo
 [float="center",align="center",width="100%",cols="^7%,<30%,<16%,<47%",options="header"]
 |===
 | Value | Mnemonic                  | State Name     | Description
-|   1   | `ace_state_ready`         | _Ready_        | The state of a just provisioned CC; ready for operation. No `ace.exec` instruction may be executed in this state unless the Algorithm explicitly allows it.
+|   1   | `ace_state_ready`         | _Ready_        | The state of a new (i.e., just provisioned) CC; ready for operation.
 | 2-45  3+| Defined by the specification of the Algorithm encoded in the _Algorithm_ field.
 |  46   | `ace_state_success`       | _Success_      | Algorithm completed successfully. No further cryptographic operations may be performed until the CR is reconfigured or transitioned to _Ready_, with the two exceptions given in <<ACE-State-field>>.
 |  47   | `ace_state_failure`       | _Failure_      | Failure in an Algorithm, usually an authentication failure in AE(AD) Algorithms or a signature verification failure. No further cryptographic operations may be performed until the CR is reconfigured or transitioned to _Ready_, with the two exceptions given in <<ACE-State-field>>.
@@ -704,9 +704,12 @@ The following rules are generic and apply to all Algorithms (*SGR* means "State-
 SGR1:: The MDH's _State_ field reflects the current state whenever the CC is in _Ready_, _Success_, _Failure_, or any Error State.
 This ensures that these states can be unambiguously determined from the _State_ field alone, without inspecting other fields or the Content.
 
-SGR2:: Any transition listed in an Algorithm's specification may be triggered by performing an explicit `ace.setst` operation (<<ACE-instruction-setst>>), or may be induced by certain conditions specified in the Algorithm's specification. Transitions to, from, and between _Configuration_ States use the `ace.mgmt` instruction.
+[[ACE-SGR-no-exec-in-ready,SGR2]] SGR2:: No `ace.exec` instruction may be executed in State _Ready_ unless the Algorithm explicitly allows it.
+Issuing one otherwise transitions the CR to Error State _Invalid_ (cf. Rule <<ACE-AGR-not-allowed-instructions>> in Book 2).
 
-SGR3:: In States _Success_ and _Failure_, only the following ACE instructions are permitted: `ace.mgmt`, `ace.clear`, `ace.size`, `ace.setst`, `ace.getmd*`, `ace.getst`, `ace.clone`, `ace.restrict*`, and `ace.derive` where the source CR is in State _Success_ or _Failure_ and the source endpoint is one of its fields that can be exported, as described in the specification of the Algorithm.
+SGR3:: Any transition listed in an Algorithm's specification may be triggered by performing an explicit `ace.setst` operation (<<ACE-instruction-setst>>), or may be induced by certain conditions specified in the Algorithm's specification. Transitions to, from, and between _Configuration_ States use the `ace.mgmt` instruction.
+
+SGR4:: In States _Success_ and _Failure_, only the following ACE instructions are permitted: `ace.mgmt`, `ace.clear`, `ace.size`, `ace.setst`, `ace.getmd*`, `ace.getst`, `ace.clone`, `ace.restrict*`, and `ace.derive` where the source CR is in State _Success_ or _Failure_ and the source endpoint is one of its fields that can be exported, as described in the specification of the Algorithm.
 Reading such a field is not a cryptographic operation, so it is compatible with the rule that no
 further cryptographic operation may be performed in these states, and it leaves the source CR in
 its state: such an `ace.derive` cannot invalidate the source, only the destination.
@@ -721,60 +724,60 @@ transitions to _Success_, from which the only other exit is _Ready_, and _Ready_
 `sharedkey`. Without this provision the shared secret would be unreachable and ML-KEM could not
 be used for its stated purpose.
 
-SGR4:: In States _Success_ and _Failure_, `ace.setst` is only permitted to transition to _Ready_, to _Unconfigured_, or to an explicitly given Error State.
+SGR5:: In States _Success_ and _Failure_, `ace.setst` is only permitted to transition to _Ready_, to _Unconfigured_, or to an explicitly given Error State.
 It is also permitted with `#immed7` = `ace_cfg_clear_ads` (<<ACE-instruction-clearads>>), which clears any ADS and leaves the _State_ unchanged.
 
-SGR5:: States _Success_ and _Failure_ cannot be set directly using `ace.setst`.
+SGR6:: States _Success_ and _Failure_ cannot be set directly using `ace.setst`.
 
-SGR6:: A transition from any valid state to _Ready_ using instruction `ace.setst` is always permitted, unless the Algorithm explicitly forbids it.
+SGR7:: A transition from any valid state to _Ready_ using instruction `ace.setst` is always permitted, unless the Algorithm explicitly forbids it.
 // +
 // NOTE: Since a CR can always be restored from a backup SCC, preventing transitions to _Ready_--as "GCM with Set IV" (<<ACE-GCM-with-IV-mode>>) does--is not an effective mitigation against the attacks that would be enabled by transitioning to _Ready_.
 
-SGR7:: The CR state after `ace.setst` completes does not always match the instruction's immediate operand.
+SGR8:: The CR state after `ace.setst` completes does not always match the instruction's immediate operand.
 Beyond Error State transitions, some operations determine the next state dynamically.
 For example, issuing `ace.setst` with an `ace_state_hash_verify` immediate and a verification parameter transitions the CR to either _Success_ or _Failure_.
 Instructions such as `ace.exec` may also cause state changes.
 
-[[ACE-SGR-clear-cr-content-error-state,SGR8]] SGR8:: Upon transitioning to an Error State, the Content of a CR beyond the MDH is cleared:
+[[ACE-SGR-clear-cr-content-error-state,SGR9]] SGR9:: Upon transitioning to an Error State, the Content of a CR beyond the MDH is cleared:
 Internal resources associated with the Content shall also be released,
 including any ADS, and the _AuxDataLen_ field is set to 0.
 The CR then retains only the MDH.
 Since the CR is in an Error State, it is in a Complete State.
 
-[[ACE-SGR-transition-to-from-unconfigured,SGR9]] SGR9:: Transitions from _Unconfigured_ to an Error State result may only result from a configuration instructions.
-A usage instruction in State _Unconfigured_ raises an illegal-instruction exception.
+[[ACE-SGR-transition-to-from-unconfigured,SGR10]] SGR10:: Transitions from _Unconfigured_ to any Complete State (Error or Valid) may only result from a configuration instruction.
+Any usage instruction in State _Unconfigured_ raises an illegal-instruction exception.
 Transitions from an Error State to _Unconfigured_ result from explicitly clearing the CR.
 
-SGR10:: The MDH of a CR in the _Unconfigured_ State can be read using `ace.getmd*` (<<ACE-instruction-getmd>>), returning all zero values.
+SGR11:: The MDH of a CR in the _Unconfigured_ State can be read using `ace.getmd*` (<<ACE-instruction-getmd>>), returning all zero values.
 
-SGR11:: Exporting a CR in an Error State exports only the MDH (all fields and values), and requires no
+SGR12:: Exporting a CR in an Error State exports only the MDH (all fields and values), and requires no
 `ace.mgmt`:
 The MDH of a CR in an Error State is read by software using `ace.getmd*` (<<ACE-instruction-getmd>>) and stored to memory.
 Requesting its size (<<ACE-instruction-size>>) returns 16 bytes for `ace.size` and zero for `ace.csize`.
 The image can be reimported with a single `ace.mgmt`, allowing software to take appropriate actions even after a context switch.
 
-SGR12:: If a CR is in any Error State, it can still be reconfigured, cloned, or cleared;
+SGR13:: If a CR is in any Error State, it can still be reconfigured, cloned, or cleared;
 besides for clearing, `ace.setst` can only be used to change the Error State.
 
-[[ACE-SGR-usage-cr-error-state,SGR13]] SGR13:: Attempts to _use_ a CR in any Error State will not perform any operation, and in particular they leave the _State_ field unchanged.
+[[ACE-SGR-usage-cr-error-state,SGR14]] SGR14:: Attempts to _use_ a CR in any Error State will not perform any operation, and in particular they leave the _State_ field unchanged.
 Such an attempt can be considered an operation that would cause a transition to  Error State `ace_state_invalid`, so the _State_ field is left unchanged to allow software to address the original error condition. No history of Error States is maintained by the architecture.
 
-SGR14:: Any _usage_ instruction that would violate the Usage Control policies will not perform its operation, and raises ACE exception `ace_exc_privilege_violation`
+SGR15:: Any _usage_ instruction that would violate the Usage Control policies will not perform its operation, and raises ACE exception `ace_exc_privilege_violation`
 (see <<ACE-error-architecture>> for the behavior if the Privileged Architecture is not implemented).
 
-[[ACE-SGR-usage-cr-config-state,SGR15]] SGR15:: Usage of a CR in a Configuration State, and cloning from it, are not allowed:
+[[ACE-SGR-usage-cr-config-state,SGR16]] SGR16:: Usage of a CR in a Configuration State, and cloning from it, are not allowed:
 Any attempt to do so raises ACE exception `ace_exc_privilege_violation`.
 For a CR in a Configuration State used as the destination of an `ace.clone`, or named as both its source and its destination, see <<ACE-instruction-clone>>.
 
-SGR16:: Instructions `ace.size`, `ace.getmd*`, `ace.getst`, `ace.setst` with the 7-bit immediate equal to `ace_state_unconfigured` or an
+SGR17:: Instructions `ace.size`, `ace.getmd*`, `ace.getst`, `ace.setst` with the 7-bit immediate equal to `ace_state_unconfigured` or an
 Error State, `ace.clear`, and `ace.clear.all`, which normally are treated as usage instructions, are also allowed
 when the CR is in a _Partial_ State.
 
-[[ACE-SGR-ace-load-mv-allowed,SGR17]] SGR17:: `ace.load` and `ace.mv` with a CR as destination
+[[ACE-SGR-ace-load-mv-allowed,SGR18]] SGR18:: `ace.load` and `ace.mv` with a CR as destination
 are allowed in States _ace_cfg_provisioning_, _ace_cfg_importing_, _ace_cfg_importing_partial_pi_,
 and _ace_cfg_importing_partial_scc_.
 
-[[ACE-SGR-ace-store-mv-allowed,SGR18]] SGR18:: `ace.store` and `ace.mv` with a CR as source
+[[ACE-SGR-ace-store-mv-allowed,SGR19]] SGR19:: `ace.store` and `ace.mv` with a CR as source
 are allowed in States _ace_cfg_exporting_, _ace_cfg_exporting_partial_pi_,
 and _ace_cfg_exporting_partial_scc_.
 
@@ -1219,7 +1222,7 @@ ACE does not have an _intrinsic_ concept of element length, hence `acestart` cou
 
 `acestart` is always a byte count. Progress that is not byte-structured — that of the point
 multiplications and signature operations of <<ACE-ECC>> and <<ACE-PQC>>, for instance — is recorded
-in the _AlgorithmUse_ field instead, as rule AGR8 of <<ACE-algorithms-other-rules>>
+in the _AlgorithmUse_ field instead, as rule <<ACE-AGR-long-running-no-data>> of <<ACE-algorithms-other-rules>>
 prescribes.
 
 Only these instructions honor a nonzero `acestart`; all other instructions ignore it and are restarted.
