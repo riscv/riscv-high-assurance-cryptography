@@ -1222,7 +1222,7 @@ ACE does not have an _intrinsic_ concept of element length, hence `acestart` cou
 
 `acestart` is always a byte count. Progress that is not byte-structured — that of the point
 multiplications and signature operations of <<ACE-ECC>> and <<ACE-PQC>>, for instance — is recorded
-in the _AlgorithmUse_ field instead, as rule <<ACE-AGR-long-running-no-data>> of <<ACE-algorithms-other-rules>>
+in the _AlgorithmUse_ field instead, as Rule <<ACE-IRR-long-running-no-data>>
 prescribes.
 
 Only these instructions honor a nonzero `acestart`; all other instructions ignore it and are restarted.
@@ -3065,22 +3065,20 @@ Sharing a buffer accessed by an ACE memory instruction requires the same synchro
 
 IRR means “Interruptibility and Resumability Rule.”
 
-==== Uninterruptible Instructions
-
 [horizontal]
 [[ACE-IRR-uninterruptible-instructions,IRR1]] IRR1:: Instructions `ace.mgmt`, `ace.getmd*`, `ace.restrict*`, `ace.clone`, non-vector `ace.mv`, and `ace.size` are _uninterruptible_: each either completes or has no architecturally visible effect, writing no destination vector register, GPR, CR byte, ACEIOBUF byte, or memory location.
 An implementation realizes this in one of three ways: by completing the instruction before taking an asynchronous interrupt; where Rule IRR3 permits, by letting it complete in the background, subject to Rule <<ACE-IRR-conflicting-access-rule>> below; or by discarding its partial work before taking the trap and re-executing it upon return.
 Software must not rely on whether an uninterruptible instruction has retired when a handler runs, and interacts with it only as Rule <<ACE-IRR-conflicting-access-rule>> prescribes.
 
-IRR2:: `ace.setst` is uninterruptible under every architectural condition defined by this specification. This rule may have implementation-specific overrides (see Rule <<ACE-IRR-algorithms-specific>> below).
+IRR2:: `ace.setst` is uninterruptible under every architectural condition defined by this specification. This rule may have implementation-specific overrides (see Rule <<ACE-IRR-long-running-no-data>> below).
 
-IRR3:: Long-running ACE operations that access no external memory—including `ace.setst`, `ace.mgmt`, and `ace.exec` or `ace.derive` forms that do not access GPRs, vector registers, or the ACEIOBUF—may continue while the hart is preempted. If an interrupted operation is still running when a handler accesses its CR, the hart waits for completion before resuming. Should another interrupt occur while instruction continues to execute, the second handler must wait as well.
+[[ACE-IRR-long-running-no-data,IRR3]] IRR3:: Long-running ACE operations that access no external memory—including `ace.setst`, `ace.mgmt`, and `ace.exec` or `ace.derive` forms that do not access GPRs, vector registers, or the ACEIOBUF—may continue while the hart is preempted. If an interrupted operation is still running when a handler accesses its CR, the hart waits for completion before resuming. Should another interrupt occur while instruction continues to execute, the second handler must wait as well.
++
+An Algorithm may define such operations; examples include scalar multiplication, key generation, and signature generation or verification. Their progress is recorded in the _AlgorithmUse_ field, in an implementation-defined format; `acestart` remains reserved for byte counts (<<ACE-CSR-acestart>>). If progress is recorded, the implementation exports the data necessary to support resumption in the ADS. Any importing implementation may discard this Section and restart the operation, and must restart it on an Implementation Qualifier mismatch. Hence, no internal algorithm-dependent state may be committed until the operation completes, and intermediate results must be discarded. Each resumption either advances the recorded progress or restarts the operation; an implementation capable of resuming also supports restart.
 
 // NOTE: Although `ace.mgmt` is uninterruptible, the management processes bracketed by its instructions remain interruptible between constituent instructions (<<ACE-instruction-setst>>).
 
 //
-
-==== Resumable instructions
 
 [horizontal]
 [[ACE-IRR-resumability-options,IRR4]] IRR4:: In general, the following behaviors are allowed when an interrupt or exception handler accesses an input or output of a preempted operation, the associated CR, or any ACE state that may be affected by the operation:
@@ -3127,13 +3125,13 @@ this by the same check after `ace.store`, must treat the error as unrecoverable,
 `ace.store` on the cleared CR raises an illegal-instruction exception (<<ACE-instruction-store>>).
 This allows the error to propagate to the outermost caller.
 
-[[ACE-IRR-algorithms-specific,IRR9]] IRR9:: Algorithm-specific resumable long-running operations that transfer no data
-in an `ace.setst`, in a (block-processing step of) `ace.exec` operation,
-or in an `ace.derive` operation,
-must either advance its recorded progress towards completion of the operation, or restart.
-The manner in which progress is recorded is implementation-defined, but it cannot use `acestart`
-(for instance, it can use _AlgorithmUse_, as in <<ACE-ECC>> and <<ACE-PQC>>).
-Implementations capable of resuming these operations also support their restart.
+// [[ACE-IRR-algorithms-specific,IRR9]] IRR9:: Algorithm-specific resumable long-running operations that transfer no data
+// in an `ace.setst`, in a (block-processing step of) `ace.exec` operation,
+// or in an `ace.derive` operation,
+// must either advance its recorded progress towards completion of the operation, or restart.
+// The manner in which progress is recorded is implementation-defined, but it cannot use `acestart`
+// (for instance, it can use _AlgorithmUse_, as in <<ACE-ECC>> and <<ACE-PQC>>).
+// Implementations capable of resuming these operations also support their restart.
 
 // ////////////////////////////////////////////////////////////////////
 
