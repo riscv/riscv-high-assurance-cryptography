@@ -26,7 +26,7 @@ The Content has an Algorithm-specific format and holds the secrets and other sen
 The Metadata requires integrity; the Content requires both integrity and confidentiality.
 These requirements are architecturally enforced by ACE and by the algorithms it implements.
 
-Context Register:::
+Cryptographic Register:::
 (((Context Register)))
 To create CCs, ACE uses *Cryptographic Registers* (CRs), per-hart architectural containers that safeguard their contents.
 A CR is *provisioned* by writing Metadata and Content into it; this operation binds the latter to form a CC.
@@ -387,7 +387,7 @@ All _Reserved_ bits, as well as bits unused by a given Algorithm, are zero.
 |   [77:69] |   9  | _Locality_        | Zero, or a value determining one or more Locality Secrets. See <<ACE-Localities>>.
 |   [79:78] |   2  | Reserved          | Reserved for future use.
 |   [95:80] |  16  | _AlgorithmUse_    | May be used by Algorithms, and, when not used by them, by implementations.
-|  [115:96] |  20  | _ExpirationDate_  | If non-zero, the expiration date of this CC. See <<ACE-Metadata-expiration-date>>. Expressed in hours since 00:00, January 1, 2027 (about 119 years and 7 months).
+|  [115:96] |  20  | _ExpirationDate_  | If non-zero, the expiration date of this CC. See <<ACE-Metadata-expiration-date>>. Expressed in hours since 00:00 UTC, January 1, 2027 (about 119 years and 7 months).
 | [125:116] |  10  | Reserved          | Reserved for future use.
 | [127:126] |   2  | _Version_         | MDH format version.
 |===
@@ -823,7 +823,7 @@ A transition to Error State `ace_state_expired` is only triggered when an expire
 The evaluation of _ExpirationDate_ is performed as follows:
 
 . If _ExpirationDate_ is zero, the instruction may proceed.
-. The date from the secure clock is converted to the format of the _ExpirationDate_ field.
+. The date from the secure clock is converted to the format of the _ExpirationDate_ field; a reading earlier than 00:00 UTC, 1 January 2027 converts to 0.
 . The converted date is then compared to the _ExpirationDate_ itself.
 . If the converted value is not smaller than the _ExpirationDate_, the ACE implementation transitions the CR's _State_ field to Error State `ace_state_expired`.
 . Otherwise, the instruction may proceed.
@@ -1431,7 +1431,7 @@ No instruction description restates them.
 | `ace.output`                 | Only `acestart` | Yes | No                   | Modifies `acestart`, but no CR.
 | `ace.clear`, `ace.clear.all` | Yes             | No  | No                   .2+| Encodings of `ace.setst`; see its row above.
 | `ace.clear.ads`              | Yes             | No  | Yes
-5+| ^*^ means that the instruction is useable only if the _State_ field is not one of the Complete States (cf. <<ACE-State-field>>).
+5+| ^*^ means that the instruction is useable only in the States admitted by Rule <<ACE-SGR-ace-load-mv-allowed>>, resp. Rule <<ACE-SGR-ace-store-mv-allowed>>.
 |===
 
 [[ACE-GR-opening-cr-when,GR6]] GR6:: _When a CR can be opened for import or export:_
@@ -1770,9 +1770,8 @@ an illegal-instruction exception is raised without state change. A vector varian
 | `ace_cfg_exporting`, `ace_cfg_exporting_partial_pi`, `ace_cfg_exporting_partial_scc`
 |===
 
-If `ace.mv` and `ace.load` or `ace.store` are combined within one management operation, the resulting
-`Content[]` value is unspecified; no other architectural state is affected, and the value is a function
-only of the bytes supplied by that operation. A CR so written may fail to authenticate on export or import.
+If `ace.mv` and `ace.load` or `ace.store` are combined within one management operation, the value of each byte of
+`Content[]` is the value last written to that offset, by whichever instruction wrote it.
 --
 
 // ////////////////////////////////////////////////////////////////////
@@ -1860,10 +1859,8 @@ Values of `#immed7` from 65 to 127, depending on the Algorithm, may be used to c
 
 Using an `#immed7` that is not supported by the architecture or by the current Algorithm causes the CR to transition to Error State _Invalid_.
 
-When the `#immed7` value is one of 56, 57, or 58, the instruction is used to initiate provisioning, export, or import operations, as described in <<ACE-management-immeds>>.
+When the `#immed7` value is one of 56, 57, or 58, the instruction is used to initiate provisioning, export, or import operations, as described in <<ACE-management-immeds>>; for these values it receives the MDH of `Kd` or `K{Xd}` in Form C or D, and the change to _State_ is performed after the MDH has been loaded.
 The values 46, 47 and 59–62 are reserved as `#immed7`: an `ace.setst` carrying one raises an illegal-instruction exception (<<ACE-illegal-instruction-grounds>>).
-The instruction may also receive the MDH of `Kd` or `K{Xd}` beforehand in one of Forms C or D.
-In this case the change to _State_ is performed after the import of the MDH.
 
 [[ACE-management-immeds]]
 .Values (decimal) of `#immed7` to be used for provisioning, importing, and exporting
@@ -2484,7 +2481,7 @@ The source and the destination CRs must be different.
 The auxiliary GPR carries the transfer length and the two field indices:
 
 * On RV64, `Xs2` = `length << 32 {vvert} i << 16 {vvert} j`.
-* On RV32, the auxiliary operand is the GPR pair ``X[s2+1]``:``X[s2]``, with
+* On RV32, the auxiliary operand is the GPR pair `X[s2+1] @ X[s2]`, subject to Rule <<ACE-GR-multiple-GPRs>>, with
   `X[s2]` = `i << 16 {vvert} j` and `X[s2+1]` = `length`;
 
 `length` is a number of bytes. The index `i` selects an _exportable_ field of the source CC and the
@@ -2549,7 +2546,7 @@ Preflight checks: `ace.derive` performs the following checks, in order before an
 . If either CR is in a Configuration State, raise ACE exception `ace_exc_privilege_violation`
 (Rule <<ACE-SGR-usage-cr-config-state>>), with no state change to either CR.
 . Evaluate _UsagePolicy_, then _ExpirationDate_, of both CRs (Rule <<ACE-SGR-gate-order>>); on any violation,
-raise the corresponding exception or perform the corresponding transition (for expiration, transition the expired CR to `ace_state_expired`), with no other state change to either CR.
+raise the corresponding exception or perform the corresponding transition (for expiration, transition each expired CR to `ace_state_expired`), with no other state change to either CR.
 . Validate _State_ and _StateExtension_ of both CRs against the endpoints
 selected by Form; the source CR must be in a state that allows it to output values
 (this can be either that it contains information that can be transferred or that it
@@ -2617,7 +2614,7 @@ open-destination rules of <<ACE-instruction-derive>> apply.
 ==== ace.size/ace.csize/ace.avail
 
 _Synopsis_::
-Return the total size of a memory buffer that would be needed to store the data of a PI, SCC, or PCCC (the equivalent of a SCC for incompletely managed CRs) in bytes. `ace.size` returns 0 in case of error (such as unsupported Algorithm or invalid MDH).
+Return the total size of a memory buffer that would be needed to store the data of a PI, SCC, or Partially Configured Cryptographic Context (PCCC, <<ACE-data-formats>>, the equivalent of an SCC for incompletely managed CRs) in bytes. `ace.size` returns 0 in case of error (such as unsupported Algorithm or invalid MDH).
 
 _Mnemonic_::
 +
@@ -2861,7 +2858,7 @@ _Description_::
 `ace.clear` clears and unconfigures the CR `Kd` or `K{Xd}`–and any internal copies thereof–, marks it as _Unconfigured_ in its metadata, and releases the resources in the CRF.
 
 `ace.clear.all` unconfigures all the CRs and the ACEIOBUF, zeroing the buffer and setting
-`aceiobuflen`, `aceiobuftop` and `acestart` to 0, and writes 32 to `acemanagedcr`.
+`aceiobuflen`, `aceiobuftop` and `acestart` to 0, sets the six authentication CSRs to zero, and writes 32 to `acemanagedcr`.
 It uses the encoding of `ace.setst` described above with indirect CR addressing and `Xd` = `X0`.
 
 Clearing (i.e., unconfiguring) a CR that was not already _Unconfigured_ sets its `*lcrstatus` field, and the `ACES` fields in effect, to _Dirty_. The CR's own _State_ field becomes _Unconfigured_.
@@ -3070,7 +3067,7 @@ IRR means “Interruptibility and Resumability Rule.”
 An implementation realizes this in one of three ways: by completing the instruction before taking an asynchronous interrupt; where Rule <<ACE-IRR-long-running-no-data>> permits, by letting it complete in the background, subject to Rule <<ACE-IRR-conflicting-access-rule>> below; or by discarding its partial work before taking the trap and restarting upon return.
 Software must not rely on whether an uninterruptible instruction has retired when a handler runs, and interacts with it only as Rule <<ACE-IRR-conflicting-access-rule>> prescribes.
 
-IRR2:: `ace.setst` is uninterruptible under every architectural condition defined by this specification. This rule may have implementation-specific overrides (see Rule <<ACE-IRR-long-running-no-data>> below).
+IRR2:: `ace.setst` is uninterruptible under every architectural condition defined by this specification. Rule <<ACE-IRR-long-running-no-data>> gives the ways an implementation may realize this.
 
 [[ACE-IRR-resumability-options,IRR3]] IRR3:: In general, the following behaviors are allowed when an interrupt or exception handler accesses an input or output of a preempted operation, the associated CR, or any ACE state that may be affected by the operation:
 
@@ -3089,7 +3086,7 @@ Such operations must either advance their recorded progress towards completion o
 +
 The progress is recorded in the _AlgorithmUse_ field, in an implementation-defined format; `acestart` remains reserved for byte counts (<<ACE-CSR-acestart>>). If progress is recorded, the implementation exports the data necessary to support resumption in the ADS. Any importing implementation may discard this Section and restart the operation, and must restart it on an Implementation Qualifier mismatch, or if the ADS is removed from the CR (using `ace.clear.ads`, cf. <<ACE-instruction-clearads>>).
 +
-Hence, no internal algorithm-dependent state may be committed until the operation completes, and intermediate results must be discarded.
+Hence the architected Content of the CR must not depend on the progress of the operation: an implementation that records progress keeps every intermediate result in the ADS, and the operation restarts correctly from the architected Content alone.
 
 [[ACE-IRR-conflicting-access-rule,IRR5]] IRR5:: All the approaches in Rule <<ACE-IRR-resumability-options>> are subject to one rule: Before the hart performs a _conflicting access_, the in-flight operation must either have completed or have been precisely halted with `acestart` set per <<ACE-Memory-Model>>. A conflicting access is any of the following:
 +
