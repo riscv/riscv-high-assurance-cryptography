@@ -246,6 +246,7 @@ The CRF must guarantee the confidentiality and integrity of its contents.
 This includes preventing rollback to a previous state through any access not explicitly permitted by this specification.
 CRF accesses do not require hardware-level hardening against physical side-channel attacks.
 However, side-channel-protected implementations of Algorithms in the ACE unit must also resist such attacks.
+It is highly recommended that `SCC_KeyDeriv`, `SCC_Encrypt`, `SCC_Decrypt`, and every use of the CSK and of the keys derived from it, be implemented by the ACE implementation with side-channel protection not weaker than the highest _SCProtection_ level, under the implementation's ordering, that it supports for any Algorithm.
 
 Architecturally, the CRF contains the following information:
 
@@ -308,7 +309,7 @@ that can be loaded from and stored to external memory. Both mechanisms may be su
 
 When vector registers are used, the full V extension is not required. ACE depends only on a minimal subset, termed _ACEV_.
 (((ACEV)))
-ACEV must be fully opcode-compatible with RVV: code written for ACEV executes with identical behavior under RVV.
+ACEV must be fully opcode-compatible with RVV: code written for ACEV executes with identical behavior under V together with Zvbc.
 The current set of features is:
 
 * Vector registers of at least 128 bits.
@@ -428,7 +429,7 @@ The architecture defines the following side-channel protection levels.
 |  6-7   | Reserved for custom implementation-defined protection levels.
 |===
 
-If custom implementation-defined protection levels 6 or 7 are used, the generating environment must use localities that prevent the use of the SCC on different architectures.
+Levels 6 and 7 are custom values and are subject to Rule <<ACE-GR-custom-locality>>.
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -749,7 +750,7 @@ At SCC export and import, any Locality defined by the _Locality_ field cryptogra
 |  Idx  | Locality                  | Description                                                                            | Domain | Config?|  Bits  | Value
 2+|    No HW Binding                | Independent of Chip, OEM, Device                                                      ^|  --   ^|   --   | [3:0]  |  0
 |   0   | _SiPScrt_                 | Identifies the designer of the SoC. Permanent.                                         |  SoC   |   No   | [1:0]  |  1
-|   1   | _ChipFamScrt_             | Identifies specific chip/SoC model/family. Permanent.                                  |  SoC   |   No   | [1:0]  |  2
+|   1   | _ChipFamScrt_             | Identifies specific chip (SoC) model. Must be different also when the ACE unit is different, unless the difference is only a minor revision with the same custom algorithms (if any) and custom side-channel protection levels (if any). Permanent.                                  |  SoC   |   No   | [1:0]  |  2
 |   2   | _ChipScrt_                | Unique for each SoC. Permanent.                                                        |  SoC   |   No   | [1:0]  |  3
 |   3   | _OEMScrt_                 | Provisioned by OEM to differentiate their products from the competition.
 {empty}                               Permanent, or reconfigurable via a custom hardware authenticated mechanism.            | Device |   HW   | [3:2]  |  1
@@ -873,7 +874,7 @@ is invalid Metadata: the CR transitions to Error State `ace_state_invalid`.
 ===== Validity of Metadata
 
 Metadata is _unsupported_ when the combination of _Algorithm_, _AlgorithmPolicy_ and _SCProtection_, or a non-zero _AlgorithmExtension_, is not implemented.
-Metadata is _invalid_ when a Reserved bit is non-zero; _AlgorithmPolicy_ is zero for an Algorithm that requires a bit; _KeyType_ is 2 or 3; _Locality_[5:4] is 3, or _Locality_ names an unconfigured Locality Secret (<<ACE-Localities>>); _AuxInfo_ is non-zero for an Algorithm that does not use it; _ExpirationDate_ is non-zero and `Zklexpire` is not implemented; _Version_ is unsupported; or, in a supplied MDH, _State_ is 63.
+Metadata is _invalid_ when a Reserved bit is non-zero; _AlgorithmPolicy_ is zero for an Algorithm that requires a bit; _KeyType_ is 2 or 3; _Locality_[5:4] is 3, or _Locality_ names an unconfigured Locality Secret (<<ACE-Localities>>); _AuxInfo_ is non-zero for an Algorithm that does not use it; _ExpirationDate_ is non-zero and `Zklexpire` is not implemented; _Version_ is unsupported; the MDH carries a custom value without _ChipFamScrt_ or _ChipScrt_ in _Locality_ (Rule <<ACE-GR-custom-locality>>); or, in a supplied MDH, _State_ is 63.
 
 An `ace.mgmt` that opens a provisioning or import on unsupported Metadata raises ACE exception `ace_exc_unsupported`; on invalid Metadata it transitions the CR to Error State _Invalid_.
 These checks are not applied to the short import of an Error-State MDH (<<ACE-error-state-transfer>>).
@@ -964,7 +965,7 @@ Decided without accessing the ACE unit:
 . An indirect CR index outside [0..31], or `X0` used as one where not expressly encoded (Rule <<ACE-GR-GPR-indirect>>), and `ace.derive` with equal CR indices (<<ACE-instruction-derive>>).
 . A GPR pair or quartet not meeting Rule <<ACE-GR-multiple-GPRs>>.
 . A vector operand carrying an MDH with `VL` {times} `SEW` < 128 (Rule <<ACE-GR-vector-MDH-operand>>), or a vector `ace.mv` whose `vl * (SEW/8)` is not a multiple of 16 (<<ACE-instruction-mv>>).
-. Forms A–C of `ace.exec` without `Zklv` (<<ACE-instruction-exec>>).
+. An encoding assigned to an extension that is not implemented, such as Forms A–C of `ace.exec` without `Zklv` (Rule <<ACE-GR-vector-legality>>).
 . An ACE instruction issued while `ACES` is Off (see _Fatal_ below), an ACE instruction issued under big-endian effective data endianness (<<ACE-Notation>>), and an access to a CSR that <<ACE-CSRs-unpriv>> declares unavailable.
 
 Requiring the state of the ACE unit:
@@ -987,7 +988,7 @@ This category has the highest priority amongst the ACE specific error categories
 The detection of the errors in this category can not be disabled by any CPU state.
 
 A fatal condition causes an entire reset of the state associated with the hart
-including all CSRs and the CSK, if configurable. If the CSK is randomly generated by the hardware, in this case it is re-generated.
+including all CSRs and the CSK, if configurable. A CSK generated at boot under the fourth model of <<ACE-CSK-requirements>> is shared by the harts of its subsystem and is not re-generated.
 Then, the condition raises ACE exception `ace_exc_fatal`.
 
 The main fatal condition is an integrity failure of the CRF associated with a hart (<<ACE-cryptographic-registers>>), but implementations may define additional fatal conditions.
@@ -1200,6 +1201,7 @@ The only exception is `ace.mv`, which by design advances `acestart` by the bytes
 
 The transfer window is empty when `acestart` {ge} `aceiobuftop` for an ACEIOBUF operand (with `aceiobuflen` nonzero), or `acestart` {ge} `VL` {times} `SEW` / 8 for a vector operand.
 An instruction with an empty window performs no operation, and `acestart` is set to zero.
+This rule does not apply to `ace.mv`, whose vector window is [`vstart`, `vl`) in elements and whose `acestart` is a CR offset (<<ACE-instruction-mv>>).
 
 For Forms A–C of `ace.exec`, `acestart` {ne} `vstart` {times} `SEW` / 8 at issue raises an illegal-instruction exception without state change; this check precedes the empty-window rule.
 
@@ -1287,12 +1289,13 @@ A CSK can be set in one of four mutually exclusive ways:
 . A value generated by a secure RBG (see <<ACE-RBG>>) at boot and not accessible to any software.
 
 The four models have different applicability. The third and fourth are primarily suited to specialized embedded deployments: a hardwired CSK cannot be reconfigured or revoked, while a boot-generated CSK does not survive power loss and therefore cannot preserve SCCs.
+Under the fourth model the CSK is shared by all harts of a well-documented subsystem of the SoC, which therefore cannot exchange SCCs with other subsystems; it survives the reset, and the fatal condition, of a single hart, and is regenerated only at power-on reset of the subsystem.
 
 In the second model, only M-mode may request the secure hardware block configure the CSK for its hart. The request must use a handle or wrapped key.
 In this model the clear key must not be exposed to software, including M-mode.
 Addressing and key transport are platform-specific and outside the scope of this specification.
 
-The ACE unit is immediately available under the third model. Under the other models, it becomes available only after a CSK has been established. A hart reset resets the associated ACE state, including a configurable CSK, and leaves the unit unavailable until the CSK is re-established (<<ACE-reset-and-m-mode-only>>).
+The ACE unit is immediately available under the third model. Under the other models, it becomes available only after a CSK has been established. A hart reset resets the associated ACE state, including a configurable CSK, and leaves the unit unavailable until the CSK is re-established (<<ACE-reset-and-m-mode-only>>); a boot-generated CSK, being shared by its subsystem, survives the reset of one of its harts.
 
 NOTE: When the CSK is shared across devices, CCs intended to be device-bound must set `_Locality_` to include `ChipScrt` or `DevScrt`.
 
@@ -1302,6 +1305,8 @@ Except for M-mode and in first model, CSK values must _never_ be readable by sof
 [IMPORTANT]
 ====
 When a process is migrated between harts, its SCCs must remain importable. This requires the destination hart to use the same CSK as the source hart. The OS and hypervisor are responsible for ensuring that M-mode establishes the required CSK on the destination hart. The mechanism by which supervisor software requests this operation is platform-dependent and outside the scope of this specification.
+Under the fourth model this holds within the subsystem sharing the CSK and is impossible across subsystems.
+Software may migrate a process only between harts whose ACE units have equal `acemvendorid`, `acemarchid`, `acemimpid` and `acemaxiobuflen` and implement the same extensions and Algorithms, or must itself handle the differences.
 ====
 
 M-mode firmware must account for the configuration model used for the CSK. Persistence mechanisms for configurable CSKs are implementation-specific. Transferring a CSK to another endpoint—such as the M-mode firmware of another device, a local TPM (for example, to preserve the CSK across suspension or host hibernation), or a cloud-based HSM—*requires* an authenticated public-key wrapping mechanism. Such a mechanism is outside the scope of this specification.
@@ -1392,7 +1397,7 @@ GR3:: _If `X0` is used as a destination or source register, but not to index a C
 anything written to it is discarded, and it reads as zero. When the lowest register of a
 pair or quartet is `X0`, no register of the group is written and the group reads as zero.
 
-GR4:: ACE instructions with vector operands that use `acestart` for resumption update `acestart` and `vstart` simultaneously and independently, each according to its own semantics: both denote the same point of progress, `acestart` counting it in bytes and `vstart` in elements of the width in effect. Neither is derived from the other.
+[[ACE-GR-acestart-vstart,GR4]] GR4:: ACE instructions with vector operands that use `acestart` for resumption update `acestart` and `vstart` simultaneously and independently, each according to its own semantics: both denote the same point of progress, `acestart` counting it in bytes and `vstart` in elements of the width in effect. Neither is derived from the other.
 This allows the ACE unit and the vector unit to work in sync while accessing local information more efficiently, but also to explicitly “desync” the two values in certain contexts (such as in the implementation of nested CR management operations).
 +
 NOTE: For Forms A–C of `ace.exec` the hardware raises an illegal-instruction exception if `acestart` and `vstart` denote different points (<<ACE-CSR-acestart>>). `ace.mv` keeps the two independent by design, since its `acestart` is a CR offset that accumulates across instructions while `vstart` tracks the vector register.
@@ -1449,6 +1454,14 @@ ACEIOBUF is enabled and `aceiobuflen` is nonzero; otherwise ACE exception
 
 [[ACE-GR-reserved-encodings,GR9]] GR9:: All encoding points under the ACE opcodes that this chapter does not assign are reserved, and raise an
 illegal-instruction exception without changing any architectural state.
+
+[[ACE-GR-vector-legality,GR10]] GR10:: A vector register (group) operand of an ACE instruction whose register number, when the LMUL in effect is greater than 1, is not a multiple of that LMUL is a reserved encoding and raises an illegal-instruction exception without state change (similarly to RVV 1.0).
+An encoding that <<ACE-instruction-extension-matrix>> assigns to an extension that is not implemented likewise raises an illegal-instruction exception without state change; `Zklmem` counts as implemented whether `ace.load` and `ace.store` are provided in hardware or by trap-and-emulate (<<ACE-extensions-overview-unpriv>>).
+Every ACE instruction with a vector operand sets `vstart` to 0 when it retires; on a precise halt it sets `vstart` as <<ACE-CSR-acestart>> and Rule <<ACE-GR-acestart-vstart>> prescribe.
+
+[[ACE-GR-custom-locality,GR11]] GR11:: A CC whose MDH carries any custom, implementation-defined value — a custom _Algorithm_ (<<ACE-Algorithm-field>>), a custom _SCProtection_ level (<<ACE-SCProtection-field>>), a system-specific _Version_ (<<ACE-Algorithm-version>>), or any other custom value — must name _ChipFamScrt_, or the stricter _ChipScrt_, in its _Locality_; otherwise the Metadata is invalid (<<ACE-Metadata-validity>>).
++
+NOTE: This mitigation is not sufficient: if the ACE unit is implemented in emulation, different versions of the firmware may have different features while running on the same hardware. It is, however, a first line of defense against accidental abuse.
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -1716,25 +1729,23 @@ Let `end` = `min(size, max_admissible)`, with `size` and `max_admissible` as def
 so each block the variant would transfer lies either wholly below `end` or wholly at or beyond it.
 
 * A block at an offset below `end` is transferred.
-* A block at an offset at or beyond `end` is not: no CR byte or GPR is written for it, the
-  corresponding elements of `Vd` are written with zero, and `acestart` does not advance past `end`.
-* If `acestart` {ge} `end`, the instruction performs no operation — nothing is written and
+* A block at an offset at or beyond `end` is not: no CR byte is written for it; the destination
+  GPR operand, resp. the corresponding elements of `Vd`, are written with zero; and `acestart` does not advance past `end`.
+* If `acestart` {ge} `end`, the CR-writing variants write nothing; the CR-reading variants write their
+  destination GPR operand, resp. every element of `Vd` from `vstart` to `vl` − 1, with zero; in all variants
   `acestart` is unchanged.
-
-// (<<ACE-instruction-store>>): `size` may exceed the image a CR actually holds, so a bound on
-// `size` alone would still permit a read past it into the CRF. Note that `size`, and hence the
-// value `ace.size` reports, may then overstate the payload; this is accepted, as removing the
-// overstatement would complicate the management protocol for no gain in safety.
 
 For each 16-byte block transferred by `ace.mv`, `acestart` advances by 16 bytes.
 In vector variants, `vstart` is also used, to track progress in vector elements: for instance each 16-byte block advances `vstart` by 4 for 32-bit elements or by 2 for 64-bit elements.
 If a vector transfer is interrupted, `acestart` records the total number of bytes transferred, and `vstart` identifies the first untransferred vector element for resumption.
+Element _k_ of the vector operand, for _k_ from `vstart` to `vl` − 1, corresponds to byte offset `acestart` + (_k_ − `vstart`) × `SEW`/8 of the serialized `Content[]`.
+If `vstart` {ge} `vl`, the instruction performs no operation and leaves `acestart` unchanged.
 Writes to, resp., reads of, an offset at or beyond `end` are ignored, resp., read as zero.
 
 The four variants are given by the following table.
 For all variants, if the CR's _State_ is not one of the values in the fourth column of its row,
 // — which excludes every Complete State and the _Unconfigured_ State —
-an illegal-instruction exception is raised without state change. A vector variant for which `vl * (SEW/8)` is not a multiple of 16 raises an illegal-instruction exception without state change; the V-enabled check is performed first. As for `ace.load` (<<ACE-instruction-load>>), an `acestart` that is not a multiple of 16 also raises an illegal-instruction exception without state change.
+an illegal-instruction exception is raised without state change. A vector variant for which `vl * (SEW/8)` is not a multiple of 16 raises an illegal-instruction exception without state change; the V-enabled check is performed first. `vstart` must likewise point to a multiple of 16 bytes: a vector variant for which `vstart * (SEW/8)` is not a multiple of 16 raises an illegal-instruction exception without state change. As for `ace.load` (<<ACE-instruction-load>>), an `acestart` that is not a multiple of 16 also raises an illegal-instruction exception without state change.
 
 [[ACE-mv-variants]]
 .Variants of `ace.mv`
@@ -1925,7 +1936,7 @@ and setting the upper 64 bits to 0.
 .. If `ml` is unsupported Metadata (<<ACE-Metadata-validity>>), ACE exception `ace_exc_unsupported` is raised.
 .. In case of *provisioning*:
 ... _State_ is initially set to _Unconfigured_. This means that during the pre-flight checks described below, _State_ is _Unconfigured_ until it is successfully configured.
-... _StateExtension_ is set to 0.
+... _StateExtension_ and _AlgorithmUse_ are set to 0; the values in the PI are ignored.
 ... `AuxDataLen` must be 0. If `AuxDataLen` is not zero in the MDH of a PI,
 the CR is transitioned to Error State _Invalid_ (which is a Complete State) and the instruction terminates.
 .. If `ml` is invalid Metadata (<<ACE-Metadata-validity>>), the CR is transitioned to Error State _Invalid_.
@@ -2018,7 +2029,7 @@ The operation makes the provisioned CR available to software by
 
 ... For _KeyType_ = 1, applying the SKS narrowing of <<ACE-system-keys>>;
 ... Performing any necessary readjustment of the CR's content to turn it into the format internally consumed by the ACE Unit; and
-... Setting _State_ to _Ready_ and _StateExtension_ to 0.
+... Setting _State_ to _Ready_, and _StateExtension_ and _AlgorithmUse_ to 0.
 
 A process may be preempted during a CR's provisioning.
 Only the information in the original PI is exported, and it remains unencrypted.
@@ -2930,6 +2941,11 @@ All computation and all other state changes remain in `ace.exec`, `ace.setst`, `
 . A Form D `ace.exec` can replace any of Forms A, B, or C.
 Any input and any output will be read from or written to the ACEIOBUF if `Zklio` is available.
 If `Zklio` is not available, an illegal-instruction exception is raised.
++
+A substituted Form A behaves as a Form A with `Vd` = `Vs2` (<<ACE-instruction-exec>>): each block's output replaces its input at the same offset of the window.
+An operation whose output blocks do not have the length of its input blocks may be substituted only if its Algorithm states where its output is written in the ACEIOBUF; otherwise the substitution raises an illegal-instruction exception without state change.
+A substituted Form C writes its output to [`acestart`, `aceiobuftop`); bytes of the window it does not write are unchanged, and no byte at or beyond `aceiobuftop` is written.
+`ace.exec` never modifies `aceiobuftop`.
 
 . A Form D `ace.exec`, resp. a Form A `ace.setst` or `ace.mgmt`, is a substitution when the operation
 it performs defines an input or an output, and is native otherwise.
@@ -3145,7 +3161,7 @@ contained in the lower 64 bits of the MDH:
 _Algorithm_, _AlgorithmPolicy_ and _KeyType_.
 It does *not* depend on _AuxDataLen_: a PI carries no ADS, and _AuxDataLen_
 must be zero in the MDH of a PI.
-It also does not depend on _StateExtension_, whose value is ignored and is
+It also does not depend on _StateExtension_ or _AlgorithmUse_, whose values are ignored and are
 replaced with zero by `ace.mgmt` upon provisioning, nor on _SCProtection_.
 During provisioning, the information of a CR reflects the external format of a PI.
 The internal representation is finalized into the CR's internal state upon using
