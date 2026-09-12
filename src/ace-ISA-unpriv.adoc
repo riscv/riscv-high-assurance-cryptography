@@ -66,23 +66,20 @@ ACE can bind CCs to *Localities*, i.e., restrict usage to specific devices or de
 [[ACE-architectural-model]]
 ==== Architectural Model
 
-_This section is informative and non-normative._
+ACE is architected as an interface to an _attached_ unit. ACE instructions are modeled as messages sent over a tightly coupled coprocessor interface. The ACE unit receives operations from the hart, executes them independently, and returns results.
+This model minimizes hart-side implementation complexity: for instance, software implements the logic for CR configuration instructions, while the ACE unit implements cryptographic operations.
+This allows multiple cores to share an ACE unit, with separate architectural state for each hart, while minimizing the hardware footprint.
 
-ACE is architected as an _attached_ unit: the behavior of ACE instructions is modeled like messages sent over a tightly coupled coprocessor interface to the actual implementation. The ACE unit receives operations from the hart, executes them independently, and returns the results.
-ACE has been designed to require the hart-side part of the implementation to be as simple as possible.
-Hence, as much as possible of the logic implementing CR configuration instructions is implemented by software, and
-all the logic implementing cryptographic operations is implemented in the ACE unit.
-This allows several small cores to share the same ACE unit, each with its own per-hart state, while minimizing the hardware footprint.
+The specification only defines the architectural behavior, not implementation.
+ACE may be integrated into a CPU core or implemented as a distinct hardware unit, with separate architectural state for each client hart, and both approaches will be supported by the same code.
 
-The present specification only defines the behavior of the architecture, it does not define implementation:
-ACE may be implemented as part of a CPU core or as a distinct hardware unit, with separate architectural state for each client hart.
+ACE may be partially or completely emulated in M-mode firmware.
+For example, an implementation may perform symmetric cipher operations (cf. <<ACE-states-symmetric>>) in the ACE unit while emulating public-key cryptography (cf. <<ACE-ECC>> and <<ACE-PQC>>).
+Public-key primitives may require very large states. Emulating them in M-mode firmware avoids storing those states in the ACE unit, provided that the relevant CRs reside in secure memory such as on-chip SRAM reserved to M-mode (see <<ACE-CRF>> for the requirements of this memory).
 
-ACE need not be implemented entirely in hardware. Partially or completely emulated implementations are possible.
-For example, an implementation may perform symmetric cipher operations (cf. <<ACE-states-symmetric>>) in the ACE unit while emulating public-key cryptography (cf. <<ACE-ECC>> and <<ACE-PQC>>), whose primitives may require very large states. Emulating these operations in M-mode firmware avoids storing their states in the ACE unit, provided that the relevant CRs reside in secure SRAM or other secure memory.
-
-It is required that CR state never be accessible in clear to any privileged mode except for M-mode and, possibly, authenticated Debug mode.
-This forbids implementations of ACE in S/VS-mode or HV-mode.
-Emulation of instructions and of Algorithms is only allowed in M-mode.
+CR state must never be accessible in the clear to any privileged mode except M-mode and authenticated Debug mode.
+This forbids ACE implementations in S/VS-mode or HV-mode.
+Instructions and Algorithms may be emulated only in M-mode.
 Trap-and-emulate and on-demand (lazy) SCC import rely on the ``*lcrstatus`` CSRs (cf. <<ACE-CSR-lcrstatus>>).
 
 // ////////////////////////////////////////////////////////////////////
@@ -167,8 +164,7 @@ enables the following operations:
 * `ace.getmd` (<<ACE-instruction-getmd>>) reads the metadata of a CR, and it is used to implement the pseudo-instruction `ace.getst` (<<ACE-instruction-getst>>), which extracts the state of a CR from the MDH of a CR. `ace.getst` also provides error reporting.
 
 <<ACE-instruction-extension-matrix>> is the authoritative statement of which
-extension defines each instruction and CSR, and of what is available under
-`Zklv` and `Zklio`.
+extension defines each instruction and CSR.
 
 [[ACE-instruction-extension-matrix]]
 .Instruction/CSR–extension matrix
@@ -229,11 +225,10 @@ We posit that CR renaming is not expected to be necessary, and may even be detri
 ====
 
 As mentioned in <<ACE-concepts>>, (the CC in) each CR contains two types of information: the Metadata and the Content.
-The latter can be viewed as a structure containing the cryptographic secrets and other information needed by the algorithm encoded in the CR.
+The latter is a structure containing the cryptographic secrets and other information needed by the algorithm encoded in the CR.
 Let the _i_-th CR be denoted `K(i)`.
 Its Metadata Header is referred to as `K(i)`.MDH, and the content as `K(i)`.`Content[]`.
-`Content[]` is further partitioned into two parts: `Content1[]` contains the architecturally defined content of the CR, and `Content2[]` contains any implementation-defined content. The structure of `Content1[]` is given in <<ACE-Algorithms>> for each Algorithm defined in this specification.
-The structure of `Content2[]` is entirely implementation dependent.
+`Content[]` is further partitioned into `Content1[]`, the architecturally defined content of the CR, and `Content2[]`, any implementation-defined content. The structure of `Content1[]` is given in <<ACE-Algorithms>> for each Algorithm defined in this specification. The structure of `Content2[]` is implementation dependent.
 
 [[ACE-CRF]]
 ==== The Cryptographic Register File and Authentication Information
@@ -242,24 +237,22 @@ CRs reside in a dedicated, per-hart _CR file_ (CRF), a memory accessible only to
 If the implementation is (partially) emulated, only M-mode firmware can access the CRF and an implementation-defined mechanism to access the CRF must be provided.
 (((Cryptographic Register File)))
 
-The CRF must guarantee the confidentiality and integrity of its contents.
-This includes preventing rollback to a previous state through any access not explicitly permitted by this specification.
+The CRF guarantees the confidentiality and integrity of its contents, including protection against rollback through any access not explicitly permitted by this specification.
 CRF accesses do not require hardware-level hardening against physical side-channel attacks.
-However, side-channel-protected implementations of Algorithms in the ACE unit must also resist such attacks.
-It is highly recommended that `SCC_KeyDeriv`, `SCC_Encrypt`, `SCC_Decrypt`, and every use of the CSK and of the keys derived from it, be implemented by the ACE implementation with side-channel protection not weaker than the highest _SCProtection_ level, under the implementation's ordering, that it supports for any Algorithm.
+However, side-channel-protected implementations of Algorithms in the ACE unit must protect also the CRF accesses.
+It is recommended that `SCC_KeyDeriv`, `SCC_Encrypt`, `SCC_Decrypt`, and every use of the CSK and of the keys derived from it, be implemented by the ACE implementation with side-channel protection not weaker than the highest _SCProtection_ level, under the implementation's ordering, that it supports for any Algorithm.
 
-Architecturally, the CRF contains the following information:
+Architecturally, the CRF contains:
 
 . An array of 32 128-bit blocks, where the _i_-th entry contains the MDH of `K(i)`.
 . An implementation-defined amount of memory that can be dynamically allocated to the various registers.
   The region of this memory allocated to a CR contains `Content[]` while provisioning and
    `Content[] := Content1[] || Content2[]` during other configuration and export operations.
 
-Regardless of how they are implemented, these two types of information are conceptually distinct:
-the array of MDHs is always present and is never subject to allocation, so
-every CR can always hold its MDH. Only the second part is dynamically allocated and effectively a
-restricted resource: “CRF capacity” below refers to it alone. A CR that holds only its MDH
-therefore consumes no CRF capacity and can always be configured.
+These two types of information are conceptually distinct, regardless of implementation.
+The MDH array is always present and is not subject to allocation, so every CR always holds its MDH, even if only to signal that the CR is not configured.
+Only the second part is dynamically allocated and capacity-limited; “CRF capacity” refers only to this part.
+A CR that holds only its MDH therefore consumes no CRF capacity.
 
 The amount of CRF capacity consumed by each CR depends on the Algorithm encoded in the MDH, and it may differ from one CR to another.
 
@@ -276,17 +269,17 @@ The ACE unit also contains the following per-hart information:
 . An integer register (accessed via CSR `acemanagedcr`, cf. <<ACE-CSR-acemanagedcr>>), which holds the index of the CR being currently managed, or 32 if no CR is currently managed.
 . Three 128-bit registers which hold authentication data (the `SIV`, `IMPQUAL`, and SIV2) of the CR being currently managed.
 These registers are accessed via three CSR pairs:
-`acesivl` and `acesivh` (cf. <<ACE-CSR-acesiv>>),
-`acesiv2l` and `acesiv2h` (cf. <<ACE-CSR-acesiv2>>), and
-`aceiql` and `aceiqh` (cf. <<ACE-CSR-aceiq>>).
+`acesivl`/`acesivh`
+`acesiv2l`/`acesiv2h`
+`aceiql`/`aceiqh` (cf. <<ACE-CSR-six-auth-CSRs>>).
 
 [NOTE]
 ====
-The 128 or 384 bits of capacity to hold the `SIV`, `IMPQUAL`, and `SIV2` values are allocated per hart, not per CR, because
-allocating them per CR would be costly: 128 bits per CR, or 384 bits if at least one Algorithm supports implementation-specific data.
-This choice prevents concurrent (non-clearing) management operations in the same code: starting a second operation may overwrite `SIV`, `IMPQUAL`, and `SIV2`, destroying in-flight values of the first operation. Hence, the CSRs holding these values must be saved and restored at context switch.
-Interleaved such management operations within a single process should therefore be avoided, unless a lightweight threads library is used providing support for ACE context switching. Otherwise, they must be serialized using a mutex.
-In these considerations, clearing a CR, whether it is the currently managed one or another one, is always possible.
+The 128 or 384 bits used to hold `SIV`, `IMPQUAL`, and `SIV2` are allocated per hart and not per CR to reduce their hardware cost.
+This prevents concurrent non-clearing management operations in the same code: starting a second operation may overwrite the first operation's in-flight values.
+The CSRs holding these values must therefore be saved and restored on a context switch.
+Within a single process, multiple such operations require careful coordination through a lightweight threads library with ACE context-switching support or serialization using a mutex.
+Clearing a CR is always possible, whether or not it is the currently managed CR.
 ====
 
 // ////////////////////////////////////////////////////////////////////
@@ -339,11 +332,10 @@ ACEIOBUF is an optional architectural input/output buffer that may be used in pl
 
 ACEIOBUF is not part of the CRF.
 
-`ace.input` loads data from memory into the ACEIOBUF to supply inputs to ACE operations.
-`ace.output` stores outputs of ACE operations from the ACEIOBUF to memory.
-When the ACEIOBUF is used instead of vector registers, `ace.exec` and `ace.setst` use their forms with no inputs and no outputs. These forms are combined with `ace.input` and `ace.output` as described in <<ACE-usage-input-output>>. `ace.derive` is unaffected: it moves data between two CRs and never reads a vector register or the ACEIOBUF.
-
-// When the ACEIOBUF is used, the length of the inputs and outputs is given in CSR `aceiobuflen` (<<ACE-CSR-aceiobuflen>>).
+Two instructions, `ace.input` and `ace.output`, load and store data from/to the ACEIOBUF to/from the external memory.
+When the ACEIOBUF is used, `ace.exec` and `ace.setst` are used in forms with implicit input and output provided by the ACEIOBUF,
+as described in <<ACE-usage-input-output>>.
+// `ace.derive` is unaffected: it moves data between two CRs and never reads a vector register or the ACEIOBUF.
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -375,7 +367,7 @@ All _Reserved_ bits, as well as bits unused by a given Algorithm, are zero.
 |   [15:14] |   2  | _AlgorithmExtension_ | Reserved for future expansion of _Algorithm_ and _AlgorithmPolicy_ fields.
 |   [18:16] |   3  | _SCProtection_    | Side-channel protection level. The levels of side-channel protection are defined in <<ACE-SCProtection-field>>.
 |   [24:19] |   6  | _State_           | Current state of the CR/Algorithm, encoded as an integer.  See <<ACE-State-field>>.
-|   [28:25] |   4  | _StateExtension_  | Available to Algorithms to extend the _State_ field with additional information. See <<ACE-State-field>>.
+|   [28:25] |   4  | _StateExtension_  | Used to extend the _State_ field with additional information. See <<ACE-State-field>>.
 |   [30:29] |   2  | _KeyType_         | This field determines whether the key is given by value, is a system-defined key, or randomly generated. See <<ACE-KeyType-field>>.
 |   [31:31] |   1  | Reserved          | Reserved for future use.
 |   [45:32] |  14  | _AuxDataLen_      | If different from 0 or 1, indicates that an additional, variable-length, implementation-dependent data section is added to the Content.
@@ -386,7 +378,7 @@ All _Reserved_ bits, as well as bits unused by a given Algorithm, are zero.
 |   [77:69] |   9  | _Locality_        | Zero, or a value determining one or more Locality Secrets. See <<ACE-Localities>>.
 |   [79:78] |   2  | Reserved          | Reserved for future use.
 |   [95:80] |  16  | _AlgorithmUse_    | May be used by Algorithms, and, when not used by them, by implementations.
-|  [115:96] |  20  | _ExpirationDate_  | If non-zero, the expiration date of this CC. See <<ACE-Metadata-expiration-date>>. Expressed in hours since 00:00 UTC, January 1, 2027 (about 119 years and 7 months).
+|  [115:96] |  20  | _ExpirationDate_  | If non-zero, the expiration date of this CC. See <<ACE-Metadata-expiration-date>>.
 | [125:116] |  10  | Reserved          | Reserved for future use.
 | [127:126] |   2  | _Version_         | MDH format version.
 |===
@@ -425,10 +417,9 @@ The architecture defines the following side-channel protection levels.
 |   1    | DIEL; first-order SCA protection implementation.
 |   2    | DIEL; first-order SCA protection, fault-tolerant implementation.
 |  3-5   | Reserved for future use by the architecture.
-|  6-7   | Reserved for custom implementation-defined protection levels.
+|  6-7   | Reserved for implementation-defined protection levels. Being custom values, these are subject to Rule <<ACE-GR-custom-locality>>.
 |===
 
-Levels 6 and 7 are custom values and are subject to Rule <<ACE-GR-custom-locality>>.
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -612,7 +603,7 @@ SGR1:: The MDH's _State_ field reflects the current state whenever the CC is in 
 This ensures that these states can be unambiguously determined from the _State_ field alone, without inspecting other fields or the Content.
 
 [[ACE-SGR-no-exec-in-ready,SGR2]] SGR2:: No `ace.exec` instruction may be executed in State _Ready_ unless the Algorithm explicitly allows it.
-Issuing one otherwise transitions the CR to Error State _Invalid_ (cf. Rule <<ACE-AGR-not-allowed-instructions>> in Book 2).
+Issuing one otherwise transitions the CR to Error State _Invalid_ (Rule <<ACE-AGR-not-allowed-instructions>> in Book 2).
 
 SGR3:: Any transition listed in an Algorithm's specification may be triggered by performing an explicit `ace.setst` operation (<<ACE-instruction-setst>>), or may be induced by certain conditions specified in the Algorithm's specification. Transitions to and between _Configuration_ States use `ace.mgmt`; transitions from a Configuration State use `ace.mgmt`, `ace.clear`, an Error State-setting `ace.setst`, or an `ace.clone` naming the CR as destination.
 
@@ -645,12 +636,12 @@ SGR7:: A transition from any valid state to _Ready_ using instruction `ace.setst
 SGR8:: The CR state after `ace.setst` completes does not always match the instruction's immediate operand.
 Beyond Error State transitions, some operations determine the next state dynamically.
 For example, issuing `ace.setst` with an `ace_state_hash_verify` immediate and a verification parameter transitions the CR to either _Success_ or _Failure_.
-Instructions such as `ace.exec` may also cause state changes.
+Instructions such as `ace.exec` may also cause _State_ changes.
 
 [[ACE-SGR-clear-cr-content-error-state,SGR9]] SGR9:: Upon transitioning to an Error State, the Content of a CR beyond the MDH is cleared:
 Internal resources associated with the Content shall also be released,
 including any ADS, and the _AuxDataLen_ field is set to 0.
-Since the CR is in an Error State, it is in a Complete State.
+// Since the CR is in an Error State, it is in a Complete State.
 
 [[ACE-SGR-error-state-CR-is-only-MDH,SGR10]] SGR10::
 A CR in an Error State then retains only the MDH.
@@ -670,10 +661,10 @@ The image can be reimported with a single `ace.mgmt`, allowing software to take 
 SGR14:: If a CR is in any Error State, it can still be reconfigured, cloned, or cleared;
 apart from clearing, `ace.setst` can only be used to change the Error State.
 
-[[ACE-SGR-usage-cr-error-state,SGR15]] SGR15:: Attempts to _use_ a CR in any Error State will not perform any operation, and in particular they leave the _State_ field unchanged.
+[[ACE-SGR-usage-cr-error-state,SGR15]] SGR15:: Attempts to _use_ a CR in any Error State will not perform any operation, and in particular leave the _State_ field unchanged.
 Such an attempt can be considered an operation that would cause a transition to  Error State `ace_state_invalid`, so the _State_ field is left unchanged to allow software to address the original error condition. No history of Error States is maintained by the architecture.
 
-[[ACE-SGR-usage-policy,SGR16]] SGR16:: Any _usage_ instruction that would violate the Usage Control policies will not perform its operation, and raises ACE exception `ace_exc_privilege_violation`. See <<ACE-error-architecture>> for the exact behavior, including the behavior if the Privileged Architecture is not implemented.
+[[ACE-SGR-usage-policy,SGR16]] SGR16:: Any _usage_ instruction that would violate the Usage Control policies will not perform its operation, and raises ACE exception `ace_exc_privilege_violation`. See <<ACE-error-architecture>> for the exact behavior, including when the Privileged Architecture is not implemented.
 
 [[ACE-SGR-usage-cr-config-state,SGR17]] SGR17:: Usage of a CR in a Configuration State, cloning from it, and restricting it, are not allowed:
 Any attempt to do so raises ACE exception `ace_exc_privilege_violation`.
@@ -697,13 +688,11 @@ For `ace.derive`, each condition is evaluated for both endpoints before the next
 Error State, `ace.clear`, and `ace.clear.all`, which are configuration instructions and are not gated by Usage Control policies, are also allowed
 when the CR is in a _Partial_ State.
 
-[[ACE-SGR-ace-load-mv-allowed,SGR20]] SGR20:: `ace.load` and `ace.mv` with a CR as destination
-are allowed in States _ace_cfg_provisioning_, _ace_cfg_importing_, _ace_cfg_importing_partial_pi_,
-and _ace_cfg_importing_partial_scc_.
+[[ACE-SGR-ace-load-mv-allowed,SGR20]] SGR20:: `ace.load` and `ace.mv` with a destination CR
+are allowed in States `ace_cfg_provisioning`, `ace_cfg_importing` and `ace_cfg_importing_partial_{pi, scc}`.
 
-[[ACE-SGR-ace-store-mv-allowed,SGR21]] SGR21:: `ace.store` and `ace.mv` with a CR as source
-are allowed in States _ace_cfg_exporting_, _ace_cfg_exporting_partial_pi_,
-and _ace_cfg_exporting_partial_scc_.
+[[ACE-SGR-ace-store-mv-allowed,SGR21]] SGR21:: `ace.store` and `ace.mv` with a source CR
+are allowed in States `ace_cfg_exporting`, and `ace_cfg_exporting_partial_{pi, scc}`.
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -798,6 +787,10 @@ This field is only in effect if extension _Zklexpire_ is supported.
 
 If _Zklexpire_ is supported, the ACE implementation must have access to a secure clock.
 
+If _Zklexpire_ is not supported, a non-zero _ExpirationDate_ in a PI or SCC is invalid Metadata (see <<ACE-Metadata-validity>>).
+
+If non-zero, the 20-bit _ExpirationDate_ field specifies the CC's expiration time as whole hours elapsed since 00:00 UTC on 1 January 2027. The maximum representable time span is approximately 119 years and 7 months. The epoch is UTC so that a CC exported on one device and imported on another expires at the same instant regardless of the local time each observes.
+
 [NOTE]
 ====
 This specification cannot enumerate requirements for a trustworthy clock, as
@@ -808,10 +801,6 @@ ACE imposes no stricter requirements. Crucially, software below M-mode must not 
 clock, as that would allow indefinite extension of a CC's lifetime by moving
 time backward.
 ====
-
-If _Zklexpire_ is not supported, a PI or SCC with a non-zero _ExpirationDate_ is invalid Metadata (see <<ACE-Metadata-validity>>).
-
-If non-zero, the 20-bit _ExpirationDate_ field specifies the CC's expiration time as whole hours elapsed since 00:00 UTC on 1 January 2027. The maximum representable time span is approximately 119 years and 7 months. The epoch is UTC so that a CC exported on one device and imported on another expires at the same instant regardless of the local time each observes.
 
 This section is the only authoritative statement in this specification of when the _ExpirationDate_ field is evaluated.
 
@@ -854,13 +843,15 @@ The value _Version_ = 1 is used to denote newer revisions of the MDH format.
 Additional version information must be encoded in other fields of the MDH.
 
 If _Version_ = 3, the format is system-specific.
-Any such format must be preceded by an MDH in the ACE format in order to allow provisioning or import operations to be initiated.
-The system-specific format may contain its own usage and access policies or locality bindings:
-Such information must be converted to an ACE-compatible representation without weakening any usage policy or locality:
-At the completion of provisioning or import via `ace.mgmt`, the MDH policies may be accordingly replaced, and _Version_ is set to 0 (or 1 in a future version of this specification).
+System-specific formats are allowed only for import operations.
+Any such format must be preceded by an ACE-format MDH to allow import to begin.
+The system-specific format may contain its own usage and access policies or locality bindings.
+This information must be converted to an ACE-compatible representation without weakening any usage policy or locality binding.
+When `ace.mgmt` completes import, the MDH policies may be replaced accordingly.
+_Version_ is then set to 0 (or 1 in a future version of this specification).
 
 Support for loading system-specific formats is optional.
-However, the resulting CRs can be exported only in the ACE-specified format to avoid interoperability issues with other implementations.
+The resulting CRs can be exported only in the ACE-specified format.
 To prevent loading on different implementations, specific localities may be set, or all information may be stored in the ADS to gate it using IMPQUAL.
 
 An implementation may support multiple system-specific formats;
@@ -868,9 +859,8 @@ The ACE specification does not specify how to distinguish between them: this is 
 
 The value _Version_ = 2 is reserved.
 
-A PI or SCC whose _Version_ value the implementation does not support
-// — for implementations of this version, any value other than 0, and 3 where system-specific formats are unsupported —
-is invalid Metadata (see <<ACE-MVR-open>>).
+A PI or SCC with a _Version_ not supported by the implementation
+is invalid Metadata (cf. <<ACE-Metadata-validity>>).
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -878,12 +868,12 @@ is invalid Metadata (see <<ACE-MVR-open>>).
 ===== Validity of Metadata
 
 Metadata is _unsupported_ when the combination of _Algorithm_, _AlgorithmPolicy_ and _SCProtection_, or a non-zero _AlgorithmExtension_, is not implemented.
-Metadata is _invalid_ when a Reserved bit is non-zero; _AlgorithmPolicy_ is zero for an Algorithm that requires a bit; _KeyType_ is 2 or 3; _Locality_[5:4] is 3, or _Locality_ names an unconfigured Locality Secret (<<ACE-Localities>>); _AuxInfo_ is non-zero for an Algorithm that does not use it; _ExpirationDate_ is non-zero and `Zklexpire` is not implemented; _Version_ is unsupported; the MDH carries a custom value without _ChipFamScrt_ or _ChipScrt_ in _Locality_ (Rule <<ACE-GR-custom-locality>>); _AuxDataLen_ is non-zero in the MDH of a PI; or, in a supplied MDH, _State_ is 63 or, at import, _Unconfigured_.
+
+Metadata is _invalid_ when a Reserved bit is non-zero; _AlgorithmPolicy_ is zero for an Algorithm that requires a bit; _KeyType_ is 2 or 3; _Locality_[5:4] is 3, or _Locality_ names an unconfigured Locality Secret (<<ACE-Localities>>); _AuxInfo_ is non-zero for an Algorithm that does not use it; _ExpirationDate_ is non-zero and `Zklexpire` is not implemented; _Version_ is unsupported; the MDH carries a custom value without _ChipFamScrt_ or _ChipScrt_ in _Locality_ (Rule <<ACE-GR-custom-locality>>); _AuxDataLen_ is non-zero in the MDH of a PI; or, in a supplied MDH, _State_ is 63 or, at import, _Unconfigured_, the _Version_ number is not supported by the implementation.
 
 [horizontal]
-[[ACE-MVR-open, Metadata Validity Rule 1]] Metadata Validity Rule 1:: An `ace.mgmt` that opens a provisioning or import on unsupported Metadata raises ACE exception `ace_exc_unsupported`; on invalid Metadata it transitions the CR to Error State _Invalid_.
+[[ACE-MVR-open, Metadata Validity Rule]] Metadata Validity Rule:: An `ace.mgmt` that opens a provisioning or import on unsupported Metadata raises ACE exception `ace_exc_unsupported`; on invalid Metadata it transitions the CR to Error State _Invalid_.
 These checks are not applied to the short import of an Error-State MDH (<<ACE-error-state-transfer>>).
-
 The CR also transitions to Error State _Invalid_ when, at completion of provisioning, import or export, the System Key Store does not resolve a SKID, or the `Content1[]` of an SCC whose restored _State_ is a Complete State carries the all-ones SKID.
 
 // ////////////////////////////////////////////////////////////////////
@@ -924,7 +914,7 @@ In this case, ACE exceptions are replaced by direct transitions of the CR to an 
 
 [[ACE-exception-error-correspondence]]
 .Behavior upon exception conditions when the Privileged Architecture is not available.
-[float="center",align="center",cols="<1,<3",options="header"]
+[float="center",align="center",cols="<1,<2",options="header"]
 |===
 | ACE Exception                      | Behavior when the Privileged Architecture is not available.
 | `ace_exc_fatal`                    | Implementation and platform defined behavior.
@@ -953,45 +943,11 @@ as in <<ACE-Algorithms>>, <<ACE-priv>>, and <<ACE-pseudocode-examples>>,
 we shall always describe the behavior when the Privileged Architecture is in effect, with the understanding that raising exceptions will be replaced by the above behaviors when the Privileged Architecture is not implemented.
 
 [horizontal]
-State change rule for ACE exceptions:: Whenever an ACE exception other than `ace_exc_fatal` is raised, no change to ACE state is made, except the zeroizing of the target CR by an opening `ace.mgmt` (<<ACE-instruction-setst>>). `ace_exc_fatal` resets the ACE state (see _Fatal_ below).
+State change rule for exceptions:: Whenever an an illegal-instruction exception or an ACE exception other than `ace_exc_fatal` is raised, no change to ACE state is made, except for the initial zeroizing of the target CR by an opening `ace.mgmt`, which is performed even if the instructions raises an exception later (<<ACE-instruction-setst>>). `ace_exc_fatal` resets the ACE state (see _Fatal_ below).
 
 We now give additional explanation of some of the types of error conditions that may occur during the lifecycle of an ACE unit:
 
-[[ACE-illegal-instruction-grounds]]
-Illegal-Instruction Exceptions:::
-+
---
-[horizontal]
-State change rule:: Whenever an illegal-instruction exception is raised, no change to ACE state is made.
-
-There are two groups of conditions upon which an illegal-instruction exception is raised:
-
-. In the first group, the grounds for raising the exception come from the instruction encoding, the GPRs and the vector configuration alone, without accessing the state of the ACE unit; they therefore take precedence over `ace_exc_fatal` (<<ACE-exception-codes>>):
-
-.. A reserved encoding point (Rule <<ACE-GR-reserved-encodings>>), including `ace.setst` with `#immed7` in 59–62 or 46–47, a reserved `#immed7` of `ace.setst` with `r` = 1 and CR register `X0` (<<ACE-instruction-setst>>), and an ACE instruction with a vector operand issued while `vtype.vill` is set (<<ACE-ACEV>>).
-.. An indirect CR index outside [0..31], or `X0` used as one where not expressly encoded (Rule <<ACE-GR-GPR-indirect>>), and `ace.derive` with equal CR indices (<<ACE-instruction-derive>>).
-.. A GPR pair or quartet not meeting Rule <<ACE-GR-multiple-GPRs>>.
-.. A vector operand carrying an MDH with `VL` {times} `SEW` < 128 (Rule <<ACE-GR-vector-MDH-operand>>), or a vector `ace.mv` whose `vl * (SEW/8)` is not a multiple of 16 (<<ACE-instruction-mv>>).
-.. An encoding assigned to an extension that is not implemented, such as Forms A–C of `ace.exec` without `Zklv` (Rule <<ACE-GR-vector-legality>>).
-.. An ACE instruction issued while `ACES` is Off (see _Fatal_ below), an ACE instruction issued under big-endian effective data endianness (<<ACE-Notation>>), and an access to a CSR that <<ACE-CSRs-unpriv>> declares unavailable.
-
-. For the second group, the grounds for raising the exception require the state of the ACE unit and are raised only if no fatal condition is pending, otherwise `ace_exc_fatal` is raised:
-
-.. A usage-controlled instruction issued on a CR in State _Unconfigured_ (Rule <<ACE-SGR-transition-to-from-unconfigured>>), including `ace.derive` with an _Unconfigured_ endpoint.
-.. `ace.load`, `ace.store` or `ace.mv` on a CR whose _State_ does not admit the transfer, or with an inconsistent `acestart` (Rules <<ACE-SGR-ace-load-mv-allowed>> and <<ACE-SGR-ace-store-mv-allowed>>).
-.. `ace.mgmt` when `acemanagedcr` names another CR, when opening an export on an _Unconfigured_ CR, when completing with an `ml`._State_ inconsistent with the CR's Configuration State, or when `ace_cfg_management_end` is issued with no management operation open (<<ACE-instruction-setst>>).
-.. An ACEIOBUF substitution that <<ACE-usage-input-output>> forbids, including any substitution without `Zklio`, since whether a Form is a substitution depends on the operation the CR's State defines.
-.. A Form A `ace.mgmt` that must take the MDH from the ACEIOBUF with `aceiobuftop` < 16 (Rule <<ACE-GR-vector-MDH-operand>>).
-.. An `ace.clone` whose source is _Unconfigured_ and differs from its destination (<<ACE-instruction-clone>>).
-.. A Form A–C `ace.exec` with `acestart` {ne} `vstart` {times} `SEW` / 8 (<<ACE-CSR-acestart>>).
-.. A Form A `ace.exec` with `Vd` = `Vs2` for an operation whose output blocks do not have the length of its input blocks (<<ACE-instruction-exec>>).
-.. If the Privileged Architecture is not implemented, an instruction issued without a CSK, or one that requires the ACEIOBUF while it is unconfigured or absent (<<ACE-exception-error-correspondence>>).
---
-
-// Exceptions and State Changes::: [[ACE-exceptions-and-state-changes,Exceptions and State Changes]]
-// When an ACE instruction raises `ace_exc_no_csk`, `ace_exc_CR_off`, `ace_exc_unsupported`, `ace_exc_out_of_memory`, `ace_exc_privilege_violation` or `ace_exc_unconfigured_buffer`, it has changed no ACE state, unless its description states a change that precedes the exception. `ace.mgmt` is the one instruction that does: it zeroizes the target CR before its checks.
-
-Fatal:::
+Fatal Conditions:::
 +
 --
 This category has the highest priority amongst the ACE specific error categories.
@@ -1010,6 +966,37 @@ Detection is therefore never disabled; only its reporting is deferred.
 An instruction issued while `ACES` is Off raises an illegal-instruction exception, which <<ACE-exception-codes>> ranks above `ace_exc_fatal`.
 The ACE state reset completes before the trap is taken, and the latter is not delegable below M-mode.
 --
+
+[[ACE-illegal-instruction-grounds]]
+Illegal-Instruction Exceptions:::
++
+--
+There are two groups of conditions upon which an illegal-instruction exception is raised:
+
+* In the first group, the grounds for raising the exception come from the instruction encoding, the GPRs and the vector configuration alone, without accessing the state of the ACE unit; they therefore take precedence over `ace_exc_fatal` (<<ACE-exception-codes>>):
+
+. A reserved encoding point (Rule <<ACE-GR-reserved-encodings>>), including `ace.setst` with `#immed7` in 59–62 or 46–47, a reserved `#immed7` of `ace.setst` with `r` = 1 and CR register `X0` (<<ACE-instruction-setst>>), and an ACE instruction with a vector operand issued while `vtype.vill` is set (<<ACE-ACEV>>).
+. An indirect CR index outside [0..31], or `X0` used as one where not expressly encoded (Rule <<ACE-GR-GPR-indirect>>), and `ace.derive` with equal CR indices (<<ACE-instruction-derive>>).
+. A GPR pair or quartet not meeting Rule <<ACE-GR-multiple-GPRs>>.
+. A vector operand carrying an MDH with `VL` {times} `SEW` < 128 (Rule <<ACE-GR-vector-MDH-operand>>), or a vector `ace.mv` whose `vl * (SEW/8)` is not a multiple of 16 (<<ACE-instruction-mv>>).
+. An encoding assigned to an extension that is not implemented, such as Forms A–C of `ace.exec` without `Zklv` (Rule <<ACE-GR-vector-legality>>).
+. An ACE instruction issued while `ACES` is Off (see _Fatal_ below), an ACE instruction issued under big-endian effective data endianness (<<ACE-Notation>>), and an access to a CSR that <<ACE-CSRs-unpriv>> declares unavailable.
+
+* For the second group, the grounds for raising the exception require the state of the ACE unit and are raised only if no fatal condition is pending, otherwise `ace_exc_fatal` is raised:
+
+. A usage-controlled instruction issued on a CR in State _Unconfigured_ (Rule <<ACE-SGR-transition-to-from-unconfigured>>), including `ace.derive` with an _Unconfigured_ endpoint.
+. `ace.load`, `ace.store` or `ace.mv` on a CR whose _State_ does not admit the transfer, or with an inconsistent `acestart` (Rules <<ACE-SGR-ace-load-mv-allowed>> and <<ACE-SGR-ace-store-mv-allowed>>).
+. `ace.mgmt` when `acemanagedcr` names another CR, when opening an export on an _Unconfigured_ CR, when completing with an `ml`._State_ inconsistent with the CR's Configuration State, or when `ace_cfg_management_end` is issued with no management operation open (<<ACE-instruction-setst>>).
+. An ACEIOBUF substitution that <<ACE-usage-input-output>> forbids, including any substitution without `Zklio`, since whether a Form is a substitution depends on the operation the CR's State defines.
+. A Form A `ace.mgmt` that must take the MDH from the ACEIOBUF with `aceiobuftop` < 16 (Rule <<ACE-GR-vector-MDH-operand>>).
+. An `ace.clone` whose source is _Unconfigured_ and differs from its destination (<<ACE-instruction-clone>>).
+. A Form A–C `ace.exec` with `acestart` {ne} `vstart` {times} `SEW` / 8 (<<ACE-CSR-acestart>>).
+. A Form A `ace.exec` with `Vd` = `Vs2` for an operation whose output blocks do not have the length of its input blocks (<<ACE-instruction-exec>>).
+. If the Privileged Architecture is not implemented, an instruction issued without a CSK, or one that requires the ACEIOBUF while it is unconfigured or absent (<<ACE-exception-error-correspondence>>).
+--
+
+// Exceptions and State Changes::: [[ACE-exceptions-and-state-changes,Exceptions and State Changes]]
+// When an ACE instruction raises `ace_exc_no_csk`, `ace_exc_CR_off`, `ace_exc_unsupported`, `ace_exc_out_of_memory`, `ace_exc_privilege_violation` or `ace_exc_unconfigured_buffer`, it has changed no ACE state, unless its description states a change that precedes the exception. `ace.mgmt` is the one instruction that does: it zeroizes the target CR before its checks.
 
 Unsupported Algorithms:::
 +
@@ -1253,33 +1240,23 @@ and restores the saved values (<<ACE-state-save-and-restore-order>>). Writing 32
 
 // ////////////////////////////////////////////////////////////////////
 
-[[ACE-CSR-acesiv]]
-===== `acesivl`/`acesivh`
+[[ACE-CSR-six-auth-CSRs]]
+===== The six authentication CSRs
 
 {empty}
 (((CSR, `acesiv`)))
-`acesivl`/`acesivh` are two 64-bit RW CSRs which contain
-bits [63:0] and [127:64] of the `SIV` value, respectively.
-
-// ////////////////////////////////////////////////////////////////////
-
-[[ACE-CSR-acesiv2]]
-===== `acesiv2l`/`acesiv2h`
+`acesivl`/`acesivh` are two 64-bit RW CSRs containing
+bits [63:0], resp., [127:64] of `SIV`.
 
 {empty}
 (((CSR, `acesiv2`)))
-`acesiv2l`/`acesiv2h` are two 64-bit RW CSRs which contain
-bits [63:0] and [127:64] of the `SIV2` value, respectively.
-
-// ////////////////////////////////////////////////////////////////////
-
-[[ACE-CSR-aceiq]]
-===== `aceiql`/`aceiqh`
+`acesiv2l`/`acesiv2h` are two 64-bit RW CSRs containing
+bits [63:0], resp., [127:64] of `SIV2`.
 
 {empty}
 (((CSR, `aceiq`)))
-`aceiql`/`aceiqh` are two 64-bit RW CSRs which contain
-bits [63:0] and [127:64] of the `IMPQUAL` value, respectively.
+`aceiql`/`aceiqh` are two 64-bit RW CSRs containing
+bits [63:0], resp., [127:64] of `IMPQUAL`.
 
 // ////////////////////////////////////////////////////////////////////
 
