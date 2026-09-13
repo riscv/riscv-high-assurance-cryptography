@@ -21,7 +21,7 @@ We refer to the ACE Unprivileged Architecture for the definitions of ACE instruc
 | `Smacecsk`       | Defines the CSR group to configure the Context Sealing Key.                                    | <<ACE-CSR-macecsk>>          | v0.0.0 | --
 | `Smacepbootscrt` | Defines the CSR group to configure the Physical Boot Secret Locality (cf. <<ACE-Localities>>). | <<ACE-CSR-macephysbootscrt>> | v0.0.0 | --
 | `Smacevbootscrt` | Defines the CSR group to configure the Virtual Boot Secret Locality (cf. <<ACE-Localities>>).  | <<ACE-CSR-hacevirtbootscrt>> | v0.0.0 | --
-| `Smacelclt`      | Defines the CSR group to configure the software binding Localities (cf. <<ACE-Localities>>).   | <<ACE-CSR-macelocality>>, <<ACE-CSR-hacelocality>>, and <<ACE-CSR-sacelocality>> | v0.0.0 | --
+| `Smacelclt`      | Defines the CSR group to configure the software binding Localities (cf. <<ACE-Localities>>).   | <<ACE-CSR-macelocality>>, <<ACE-CSR-hacelocality>>, <<ACE-CSR-sacelocality>>, and <<ACE-CSR-vsacelocality>> | v0.0.0 | --
 |===
 
 //
@@ -58,7 +58,7 @@ Configuration {downarrow}  | `Smacecrstatus` | `Smacelclt` | `Smacevbootscrt`
 
 | M+S+U with H
 | Mandatory: `mlcrstatus`, `slcrstatus` and `vslcrstatus` are implemented and are distinct.
-| Optional: If implemented, `macelocality`, `hacelocality` and `sacelocality`, configure MLocality, HLocality and SLocality
+| Optional: If implemented, `macelocality`, `hacelocality`, `sacelocality` and `vsacelocality` configure MLocality, HLocality and SLocality
 | Optional: If implemented, `hacevirtbootscrt` configures the Virtual Boot Secret Locality
 |===
 
@@ -92,7 +92,7 @@ The actual numbers are TBD.
 |Value | Mnemonic/RISC-V type           | Examples in ACE (((ACE, error codes)))
 |      | Instruction address breakpoint | {empty}
 |      | Instruction page fault, instruction access fault | As ordered by the Privileged Specification: first during instruction address translation, then on the physical address.
-|      | Illegal instruction, or virtual instruction | The ACE grounds decided without accessing the state of the ACE unit, listed first in <<ACE-illegal-instruction-grounds>>. They are defects in the encoding or the operands of the instruction, and none can arise together with `ace_exc_no_csk`, so the order of the two is immaterial. A virtual-instruction exception is raised in place of the illegal-instruction exception where `Smstateen` or the CSR access rules of the hypervisor extension so prescribe (<<ACE-CSRs-priv>>); the `Smstateen` check precedes the `ACES`-Off check, which precedes the CSR privilege check.
+|      | Illegal instruction, or virtual instruction | The ACE grounds decided without accessing the state of the ACE unit, listed first in <<ACE-illegal-instruction-grounds>>. They are defects in the encoding or the operands of the instruction. A virtual-instruction exception is raised in place of the illegal-instruction exception where `Smstateen` or the CSR access rules of the hypervisor extension so prescribe (<<ACE-CSRs-priv>>); the `Smstateen` check precedes the `ACES`-Off check, which precedes the CSR privilege check.
 | TBD  | `ace_exc_fatal`                | Fatal system failure in the ACE unit. Not delegable below M-mode.
 | TBD  | `ace_exc_no_csk`               | Use of the ACE unit while no CSK is active: either none has been established, or the `macecsk` group is only partially written (see <<ACE-CSK-requirements>>, <<ACE-CSR-macecsk>>). Not delegable below M-mode: only M-mode can establish a CSK.
 // | TBD  | `ace_exc_complete_cr_data_access` | Issuing `ace.load`, `ace.store` or `ace.mv` on a _Complete_ CR, that is a CR not open for a management operation (see <<ACE-State-field>> and <<ACE-error-architecture>>).
@@ -114,7 +114,7 @@ The relative order of the standard exceptions is that of the Privileged Specific
 === CSRs
 
 ACE extends `*status` and `misa`, and provides three direct CSRs — six on RV32, counting the
-high shadows — and up to 28 indirect CSRs on RV32, 14 on RV64.
+high shadows — and up to 32 indirect CSRs on RV32, 16 on RV64.
 
 [[ACE-CSRs-priv]]
 .ACE Privileged CSRs.
@@ -132,8 +132,9 @@ high shadows — and up to 28 indirect CSRs on RV32, 14 on RV64.
 | (Indirect)  | MRW        | `macephysbootscrt{0..3}`  | Locality: Physical (host) Boot Session Secret. CSRs "2" and "3" are RV32 only.
 | (Indirect)  | HRW        | `hacevirtbootscrt{0..3}`  | Locality: Virtual (guest) Boot Session Secret. CSRs "2" and "3" are RV32 only.
 | (Indirect)  | MRW        | `macelocality{0..3}`      | Locality: Mutually isolate processes below M-mode. CSRs "2" and "3" are RV32 only.
-| (Indirect)  | HRW        | `hacelocality{0..3}`      | Locality: Mutually isolate processes below HS-mode. CSRs "2" and "3" are RV32 only.
-| (Indirect)  | SRW        | `sacelocality{0..3}`      | Locality: Mutually isolate U-mode processes. CSRs "2" and "3" are RV32 only.
+| (Indirect)  | HRW        | `hacelocality{0..3}`      | Locality: the hypervisor's tag on its virtual machines, separating them from each other. CSRs "2" and "3" are RV32 only.
+| (Indirect)  | SRW        | `sacelocality{0..3}`      | Locality: Mutually isolate the OS's processes; `vsacelocality` substitutes for it when V=1. CSRs "2" and "3" are RV32 only.
+| (Indirect)  | HRW        | `vsacelocality{0..3}`     | Locality: the guest OS's `sacelocality`. CSRs "2" and "3" are RV32 only.
 |===
 
 Similarly to <<ACE-CSR-unpriv>>,
@@ -380,8 +381,8 @@ The ACE unit is unavailable until a CSK is established as described in <<ACE-CSK
 (((CSR, `macephysbootscrt`)))
 (((CSR, `hacevirtbootscrt`)))
 (((CSR, `macelocality`)))
-(((CSR, `hacelocality`)))
-(((CSR, `sacelocality`)))
+(((CSR, `hacelocality`)))(((CSR, `sacelocality`)))
+(((CSR, `vsacelocality`)))
 Each group listed in <<ACE-locality-csr-groups>> holds one 128-bit Locality Secret
 (<<ACE-locality-indexes>>) in XLEN-bit RW CSRs accessed via Indirect CSR Access: four in RV32 and
 two in RV64, the CSRs numbered "2" and "3" existing only on RV32.
@@ -399,22 +400,23 @@ illegal-instruction or, as <<ACE-CSRs-priv>> prescribes, a virtual-instruction e
 | [[ACE-CSR-hacevirtbootscrt,hacevirtbootscrt]]`hacevirtbootscrt{0..3}` | _VirtBootScrt_ |  HS  | `Smacevbootscrt` is implemented.
 | [[ACE-CSR-macelocality,macelocality]]`macelocality{0..3}`             | _MLocality_    |  M   | `Smacelclt` is implemented.
 | [[ACE-CSR-hacelocality,hacelocality]]`hacelocality{0..3}`             | _HLocality_    |  HS  | `Smacelclt` and the H extension are both implemented.
-| [[ACE-CSR-sacelocality,sacelocality]]`sacelocality{0..3}`             | _SLocality_    | (V)S | `Smacelclt` is implemented. The group is accessible in (V)S-mode and above.
+| [[ACE-CSR-sacelocality,sacelocality]]`sacelocality{0..3}`             | _SLocality_    |  S   | `Smacelclt` and S-mode are both implemented.
+| [[ACE-CSR-vsacelocality,vsacelocality]]`vsacelocality{0..3}`          | _SLocality_ (guest) |  VS  | `Smacelclt` and the H extension are both implemented.
 |===
 
-// When the H extension is implemented, a `vsacelocality` group exists alongside it, holding a
-// separate Locality Secret for the guest. When V=1, `vsacelocality` substitutes for `sacelocality`:
-// CSR accesses that would target `sacelocality` instead access `vsacelocality`, analogously to
-// `vsstatus` and `sstatus` and to `vslcrstatus` (<<ACE-CSR-lcrstatus>>). Out of ACE unit reset the
-// value of the guest SLocality is zero.
+When the H extension is implemented, `vsacelocality` substitutes for `sacelocality` when V=1:
+CSR accesses that would target `sacelocality` instead access `vsacelocality`, analogously to
+`vsstatus` and `sstatus` and to `vslcrstatus` (<<ACE-CSR-lcrstatus>>), and _SLocality_ then
+denotes its value (<<ACE-Localities>>). Like the other VS CSRs, `vsacelocality` is accessible
+from HS-mode and M-mode, and a hypervisor saves and restores it with them.
 
 The Locality CSR groups are readable at their respective privilege levels.
 Context-switching software saves and restores them like any other CSR.
 
 [NOTE]
 ====
-`sacelocality` is the operating system's Locality, used by S-mode and, with H, by VS-mode.
-A hypervisor isolates guests with `hacelocality` and saves and restores `sacelocality` with the other supervisor CSRs.
+`sacelocality` is the OS's Locality, separating its processes whether the OS runs at S-mode or, through `vsacelocality`, at VS-mode; a hypervisor uses its own `sacelocality` for its host processes and configures it before it saves guest ACE state (<<ACE-Localities>>).
+`hacelocality` is the hypervisor's tag on its virtual machines: it enters the bindings of every export and import a guest performs, and the hypervisor carries it with the virtual machine.
 ====
 
 // ////////////////////////////////////////////////////////////////////
@@ -432,7 +434,7 @@ Out of ACE unit reset:
 . The `ACES` field of `mstatus`, of `sstatus` and, where implemented, of `vsstatus` is Off.
 . The CSK is unconfigured, unless it is hardwired or randomly regenerated.
 . `macephysbootscrt` and `hacevirtbootscrt` are zero.
-. `macelocality`, `hacelocality`, and `sacelocality` are zero.
+. `macelocality`, `hacelocality`, `sacelocality`, and `vsacelocality` are zero.
 . All fields of `mlcrstatus`, `slcrstatus`, and `vslcrstatus` are set to _Initial_.
 
 // ////////////////////////////////////////////////////////////////////
