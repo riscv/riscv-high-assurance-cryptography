@@ -1,7 +1,7 @@
 [[ACE-priv]]
 == Book 3. Privileged Architecture
 
-The ACE Privileged Architecture consists of CSRs and optional custom instructions to implement parts of the unprivileged ISA.
+The ACE Privileged Architecture consists of CSRs and exception causes.
 
 We refer to the ACE Unprivileged Architecture for the definitions of ACE instructions and the categories of _configuration_ and _usage_ instructions.
 
@@ -17,7 +17,7 @@ We refer to the ACE Unprivileged Architecture for the definitions of ACE instruc
 [%header,cols="18%,45%,17%,10%,10%"]
 |===
 |  Extension       | Features                                                                                       | Defined in:                  | Minimum version | Lifecycle state
-| `Smacecrstatus`  | Defines the ACES per-CR status tracking CSRs.                                                  | <<ACE-CSR-lcrstatus>>        | v0.0.0 | --
+| `Smacecrstatus`  | Defines the `*lcrstatus` per-CR status-tracking CSRs.                                          | <<ACE-CSR-lcrstatus>>        | v0.0.0 | --
 | `Smacecsk`       | Defines the CSR group to configure the Context Sealing Key.                                    | <<ACE-CSR-macecsk>>          | v0.0.0 | --
 | `Smacepbootscrt` | Defines the CSR group to configure the Physical Boot Secret Locality (cf. <<ACE-Localities>>). | <<ACE-CSR-macephysbootscrt>> | v0.0.0 | --
 | `Smacevbootscrt` | Defines the CSR group to configure the Virtual Boot Secret Locality (cf. <<ACE-Localities>>).  | <<ACE-CSR-hacevirtbootscrt>> | v0.0.0 | --
@@ -71,7 +71,7 @@ that configuration.
 [[ACE-dependencies-priv]]
 === Dependencies on Other Extensions
 
-The ACE Privileged Architecture may depend (this must be decided together with the ARC) on the Indirect CSR Access mechanism defined in `Smcsrind`/`Sscsrind`.
+The ACE Privileged Architecture depends on the Indirect CSR Access mechanism of `Smcsrind`/`Sscsrind` for the CSR groups marked (Indirect) in <<ACE-CSRs-priv>>, unless the ARC prefers direct access for these CSRs; the `*iselect` values are to be assigned by the ARC.
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -96,11 +96,11 @@ The actual numbers are TBD.
 | TBD  | `ace_exc_fatal`                | Fatal system failure in the ACE unit. Not delegable below M-mode.
 | TBD  | `ace_exc_no_csk`               | Use of the ACE unit while no CSK is active: either none has been established, or the `macecsk` group is only partially written (see <<ACE-CSK-requirements>>, <<ACE-CSR-macecsk>>). Not delegable below M-mode: only M-mode can establish a CSK.
 // | TBD  | `ace_exc_complete_cr_data_access` | Issuing `ace.load`, `ace.store` or `ace.mv` on a _Complete_ CR, that is a CR not open for a management operation (see <<ACE-State-field>> and <<ACE-error-architecture>>).
-| TBD  | `ace_exc_CR_off`               | Any access, as defined in <<ACE-CSR-lcrstatus>>, to a CR whose `*lcrstatus` field is _Off_: three cause values, `ace_exc_CR_off_m`, `ace_exc_CR_off_hs` and `ace_exc_CR_off_s`, one per owning level, the first two not delegable below M-mode, resp. HS-mode (see <<ACE-CSR-lcrstatus>>). Evaluated before every condition that requires the state of the ACE unit. Enables on-demand (lazy) CR loading and trap-and-emulate. It precedes `ace_exc_unsupported` so that a handler that has marked a CR _Off_ in order to emulate its Algorithm is reached before the hardware reports the Algorithm as unsupported.
+| TBD  | `ace_exc_CR_off`               | Any access, as defined in <<ACE-CSR-lcrstatus>>, to a CR whose `*lcrstatus` field is _Off_. Not delegable below M-mode, whichever field is _Off_: the hardware does not know which mode holds the authoritative copy of the CR, so M-mode receives the exception and forwards it to the mode that owns the _Off_ field (see <<ACE-CSR-lcrstatus>>). Evaluated before every condition that requires the state of the ACE unit. Enables on-demand (lazy) CR loading and trap-and-emulate. `ace_exc_unsupported` arises only from an opening `ace.mgmt`, which <<ACE-CSR-lcrstatus>> exempts from this gate: an unsupported Algorithm provisioned or imported into an _Off_ CR is reported to the emulator by `ace_exc_unsupported`, and every later access to the CR that is not exempted by `ace_exc_CR_off` (<<ACE-error-architecture>>).
 |      | Illegal instruction            | The ACE grounds that require the state of the ACE unit, listed second in <<ACE-illegal-instruction-grounds>>. They are raised only once no fatal condition is pending, and after `ace_exc_no_csk` and `ace_exc_CR_off`.
-| TBD  | `ace_exc_unsupported`          | Invalid values at provisioning or import.
-| TBD  | `ace_exc_privilege_violation`  | Attempt to execute any _usage_ instruction that would violate the Usage Control policies as per <<ACE-Metadata>>. This includes any attempt to use/clone of a not-fully-configured CR, which is forbidden at all privilege levels.
-| TBD  | `ace_exc_out_of_memory`        | Insufficient CRF memory for configuration instruction. This may be set by privileged code in case it does not handle the CR allocation itself.
+| TBD  | `ace_exc_unsupported`          | Unsupported Metadata (<<ACE-Metadata-validity>>) when opening a provisioning or import.
+| TBD  | `ace_exc_privilege_violation`  | Attempt to execute any _usage_ instruction that would violate the Usage Control policies as per <<ACE-Metadata>>. This includes any attempt to use, clone or restrict a CR in a Configuration State (Rule <<ACE-SGR-usage-cr-config-state>>), which is forbidden at all privilege levels.
+| TBD  | `ace_exc_out_of_memory`        | Insufficient CRF capacity when opening a provisioning or import, cloning, or raising _SCProtection_ with `ace.restrict*`.
 | TBD  | `ace_exc_unconfigured_buffer`  | Use of ACEIOBUF as an input or an output while unconfigured.
 |      | Load/store address breakpoint  | On the address of a component access of `ace.load`, `ace.store`, `ace.input` or `ace.output`, when that access is about to be performed; for the first component access, before the address-misaligned check.
 |      | Load/store address misaligned  | On the effective address of `ace.load`, resp. `ace.store`, before any component access (<<ACE-Memory-Alignment>>); for `ace.input` and `ace.output`, as for an ordinary access on the implementation.
@@ -108,6 +108,18 @@ The actual numbers are TBD.
 |===
 
 The relative order of the standard exceptions is that of the Privileged Specification and is reproduced for reference only; the load/store address breakpoint and the load/store faults are evaluated per component access because the component addresses of an ACE memory instruction are determined from the state of the ACE unit.
+
+The `medeleg` and `hedeleg` bits corresponding to `ace_exc_fatal`, `ace_exc_no_csk` and `ace_exc_CR_off` are read-only zero: these three causes are never delegated below M-mode. Those corresponding to `ace_exc_unsupported`, `ace_exc_out_of_memory`, `ace_exc_privilege_violation` and `ace_exc_unconfigured_buffer` are writable wherever `medeleg`, resp. `hedeleg`, is implemented, so that these causes can be delegated to S-mode and, with the H extension, to VS-mode.
+
+[NOTE]
+====
+ACE memory instructions are allowed to trap so that implementations have more
+flexibility when loading/storing large ACE contexts. Simpler implementations
+may defer the load/store process to software using scalar or vector
+loads/stores followed/preceded by an `ace.mv` instruction, whereas more performant
+implementations may have dedicated hardware to speed up the instructions.
+The hardware then raises an illegal-instruction exception for the emulated instruction, before any condition of this table is evaluated (<<ACE-extensions-overview-unpriv>>). An M-mode emulator of an ACE instruction reproduces this table in full: it evaluates the `Smstateen` bits, the `ACES` fields, the CSK state and the `*lcrstatus` gates, then the second-group grounds and the remaining conditions, in this order, sets the `*lcrstatus` and `ACES` fields the instruction would set, and raises or forwards the resulting exception as the hardware and the M-mode handler would.
+====
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -138,9 +150,9 @@ high shadows — and up to 32 indirect CSRs on RV32, 16 on RV64.
 |===
 
 Similarly to <<ACE-CSR-unpriv>>,
-on RV32 the 64-bit ACE CSRs `mlcrstatus`, `slcrstatus` and `vslcrstatus`, whenever implemented,
-are accompanied by a 32-bit CSR with `h` appended to the same name
-giving access to bits [63:32] of the original CSR which, when accessed, gives access only to bits [31:0].
+on RV32 each of the 64-bit CSRs `mlcrstatus`, `slcrstatus` and `vslcrstatus`, whenever implemented,
+is accompanied by a 32-bit CSR named `mlcrstatush`, resp. `slcrstatush`, `vslcrstatush`,
+giving access to bits [63:32]; a read or write of the CSR itself then accesses bits [31:0].
 
 These CSRs, including the `macecsk` group (if present),
 are not available if the ACE extension is not present or if an ACES field is Off
@@ -159,7 +171,7 @@ Bit `L` (11) of `misa` indicates that the ACE extension is present.
 If ACE is implemented, this bit must not be read-only zero.
 
 If an emulated ACE unit is provided by M-mode firmware, this bit can be set to 1 by the latter.
-`misa.L` cannot be cleared by M-mode firmware without first zeroizing all (emulated) ACE state.
+M-mode firmware must not clear `misa.L` without first zeroizing all (emulated) ACE state.
 
 [WARNING]
 ====
@@ -181,7 +193,7 @@ should not treat `misa.L` as a stable interface until the question is settled.
 (((CSR,ACES field in sstatus)))
 An ACE context status field, `ACES`, is added to `mstatus`[26:25] and shadowed in `sstatus`[26:25].
 It is defined analogously to the floating-point context status field, `FS`, and the vector context status field, `VS`,
-and tracks the dirtiness of the CRs, of the ACEIOBUF and of every ACE-specific CSR.
+and tracks the dirtiness of the CRs, of the ACEIOBUF and of every writable ACE-specific CSR other than the `macecsk` group.
 `mstatus.ACES` is always in effect; when V=1 the `vsstatus.ACES` field of <<ACE-ACES-field-VS>> is
 in effect as well.
 
@@ -201,7 +213,7 @@ offset: only on there being a two-bit context-status field with the semantics of
 [float="center",align="center",width="100%",cols="^8%,<8%,<84%",options="header"]
 |===
 |Value |Name |Meaning
-|   0   | Off     | ACE disabled. The ACE state is inaccessible. Executing any ACE instruction or accessing any ACE-specific CSR raises an illegal-instruction exception.
+|   0   | Off     | ACE disabled. The ACE state is inaccessible. Executing any ACE instruction, or accessing any ACE-specific CSR other than the read-only identification CSRs of <<ACE-CSRs-unpriv>>, raises an illegal-instruction exception.
 |   1   | Initial | ACE enabled. No CR or the ACEIOBUF is configured. The hart may issue any ACE instruction.
 |   2   | Clean   | ACE enabled. At least one CR or ACEIOBUF is configured; state matches the last context swap.
 |   3   | Dirty   | ACE enabled. At least one CR, ACEIOBUF, or ACE-specific CSR may have changed since the last context swap.
@@ -210,28 +222,20 @@ Unconfigured CRs that were previously configured also cause ACES to become Dirty
 
 
 The following holds for every `ACES` field, at the privilege modes at which it is in effect.
-Any ACE instruction, including an access to an ACE CSR, raises an illegal-instruction exception if a
+Any ACE instruction, including an access to an ACE CSR other than the read-only identification CSRs (<<ACE-CSRs-unpriv>>), raises an illegal-instruction exception if a
 field in effect is Off. Where none is Off, an instruction that modifies ACE state sets every field
 in effect to Dirty, and an implementation may set a field to Dirty from Initial or Clean at any
 time, even in the absence of a state change. While a field is Dirty, the `SD` bit of the register
-holding it is 1; otherwise that `SD` is set in accordance with the existing specifications. In
-implementations with a writable `misa.L`, an `ACES` field may be present even when `misa.L` is
-clear, analogously to `FS` and `VS`. The `*lcrstatus` fields and `ACES` fields that an instruction sets to Dirty are set before any trap is taken on or after that instruction and before any later instruction executes, including when the instruction continues in the background (Rule <<ACE-IRR-long-running-no-data>>) or is discarded and restarted (Rule <<ACE-IRR-uninterruptible-instructions>>). An implementation may set a `*lcrstatus` field to Dirty from Initial or Clean at any time, as it may an `ACES` field; setting a field to Dirty is not a change of ACE state for the purposes of the state change rule for exceptions of <<ACE-error-architecture>>.
+holding it is 1; otherwise that `SD` is set in accordance with the existing specifications. A hart
+whose `misa.L` is writable implements the `ACES` field in every `*status` register it implements, and
+the field is present and writable while `misa.L` is clear, analogously to `FS` and `VS`; an emulated
+ACE unit relies on it. The `*lcrstatus` fields and `ACES` fields that an instruction sets to Dirty are set before any trap is taken on or after that instruction and before any later instruction executes, including when the instruction continues in the background (Rule <<ACE-IRR-long-running-no-data>>) or is discarded and restarted (Rule <<ACE-IRR-uninterruptible-instructions>>). An implementation may set a `*lcrstatus` field to Dirty from Initial or Clean at any time, as it may an `ACES` field; setting a field to Dirty is not a change of ACE state for the purposes of the state change rule for exceptions of <<ACE-error-architecture>>. A software write to a `*lcrstatus` CSR or to a Locality CSR sets the `ACES` fields in effect to Dirty; context-restoring software therefore writes `ACES` after those CSRs.
 
 NOTE: Precise management of `mstatus.ACES` is an optimization that software may use to reduce context-switch overhead.
 
 NOTE: Writes to an `ACES` field do not modify any ACE state.
 Setting a field to Off, Initial, or Clean does not clear CRs, ACEIOBUF, or ACE CSRs;
 any state changes must be explicit and must precede such a write.
-
-[NOTE]
-====
-ACE memory instructions are allowed to trap so that implementations have more
-flexibility when loading/storing large ACE contexts. Simpler implementations
-may defer the load/store process to software using scalar or vector
-loads/stores followed/preceded by an `ace.mv` instruction, whereas more performant
-implementations may have dedicated hardware to speed up the instructions.
-====
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -304,7 +308,7 @@ when either `mlcrstatus`(__i__) or `slcrstatus`(__i__) is 0 (Off) raise an `ace_
 
 Any direct write to `slcrstatus`(__i__) does not change either `mlcrstatus`(__i__) or `vslcrstatus`(__i__) (if defined).
 
-`sstatus.ACES`, `mstatus.ACES`, and `mlcrstatus` are also in effect.
+`mstatus.ACES`, `vsstatus.ACES` when V=1, and `mlcrstatus` are also in effect.
 --
 
 
@@ -324,17 +328,17 @@ when any one of `mlcrstatus`(__i__), `vslcrstatus`(__i__), or `slcrstatus`(__i__
 
 Any direct write to `vslcrstatus`(__i__) does not change either `mlcrstatus`(__i__) or `slcrstatus`(__i__) (if defined).
 
-`sstatus.ACES`, `vsstatus.ACES`, `mstatus.ACES`, `slcrstatus`, and `mlcrstatus` are also in effect.
+`mstatus.ACES`, `vsstatus.ACES`, `slcrstatus`, and `mlcrstatus` are also in effect.
 --
 
-`ace_exc_CR_off` comprises three exception causes, one per owning level: `ace_exc_CR_off_m` for `mlcrstatus`, `ace_exc_CR_off_hs` for the HS-level `slcrstatus` while V=1, and `ace_exc_CR_off_s` for `slcrstatus` while V=0 and for `vslcrstatus`.
-The fields in effect are examined in the order `mlcrstatus`, `slcrstatus`, `vslcrstatus`, and the first found _Off_ selects the cause, so that the exception is taken by the most privileged mode whose field is _Off_:
-`ace_exc_CR_off_m` is not delegable below M-mode and `ace_exc_CR_off_hs` is not delegable below HS-mode, whereas `ace_exc_CR_off_s` may be delegated to the mode that owns the register.
-A handler therefore never receives `ace_exc_CR_off` for a field it cannot write, and an instruction it issues to resolve the condition is not gated by a higher level's field.
+The `*lcrstatus` fields that an instruction sets to Dirty are those in effect, that is those owned by the privilege modes above the one in which it executes; an instruction never writes the field owned by its own mode.
+
+`ace_exc_CR_off` is a single exception cause and is not delegable below M-mode, whichever `*lcrstatus` field is _Off_: raising it, the hardware does not know which mode holds the authoritative copy of the CR. The M-mode handler examines the fields in effect in the order `mlcrstatus`, `slcrstatus`, `vslcrstatus`, resolves the condition itself if `mlcrstatus`(__i__) is _Off_, and otherwise forwards the exception to the most privileged mode whose field is _Off_, which owns that field and can write it.
+A handler therefore never services `ace_exc_CR_off` for a field it cannot write, and an instruction it issues to resolve the condition is not gated by a higher level's field.
 
 [NOTE]
 ====
-The _Off_ value and the `ace_exc_CR_off` exception provide an architectural hook for on-demand (lazy) CR loading. At context restore, a handler may leave a CR unrestored, set its `*lcrstatus` field to _Off_, and retain the authoritative SCC in memory. A subsequent access from a lower-privileged mode traps with `ace_exc_CR_off` to the mode that owns the _Off_ field; the handler then imports the SCC before resuming execution. The architecture defines no separate "lazy" state: Software that marks a CR _Off_ is responsible for ensuring that the authoritative SCC is restored.
+The _Off_ value and the `ace_exc_CR_off` exception provide an architectural hook for on-demand (lazy) CR loading. At context restore, a handler may leave a CR unrestored, set its `*lcrstatus` field to _Off_, and retain the authoritative SCC in memory. A subsequent access from a lower-privileged mode traps with `ace_exc_CR_off` to M-mode, which forwards it to the mode that owns the _Off_ field; that handler then imports the SCC before resuming execution. The architecture defines no separate "lazy" state: Software that marks a CR _Off_ is responsible for ensuring that the authoritative SCC is restored.
 ====
 
 // ////////////////////////////////////////////////////////////////////
@@ -346,22 +350,28 @@ The _Off_ value and the `ace_exc_CR_off` exception provide an architectural hook
 (((CSR, `macecsk`)))
 The optional `macecsk` group consists of XLEN-bit M-mode RW CSRs: eight in RV32, four in RV64.
 
-A write to the __i__-th CSR sets bits [(_i_+1)·XLEN−1 : _i_·XLEN] of the CSK.
+A write to the __i__-th CSR supplies bits [(_i_+1)·XLEN−1 : _i_·XLEN] of the value that becomes the CSK once the group has been written in full.
 
 This CSR group is accessible in M-mode whenever `ACES` is not Off and `misa.L` is set, and not in Debug mode (<<ACE-interaction-with-debug>>); any other access raises an illegal-instruction exception.
 Out of reset `ACES` is Off (<<ACE-out-of-reset-priv>>), so M-mode firmware enables `ACES` before it establishes the CSK, and until then the ACE unit is not usable.
 
 A CSK can only become active if all eight (respectively, four) CSRs have been written to.
-A mechanism for ensuring this is the following:
+A new CSK becomes active only once every CSR of the group has been written since the previous activation; from the first such write until then the CSK is _partially written_ and the ACE unit is unavailable (`ace_exc_no_csk`, <<ACE-CSK-requirements>>).
+Entering M-mode discards a partial write, so that a CSK is never assembled from the writes of two sequences.
+One mechanism that ensures this is the following (informative):
 
 * The implementation maintains a per-hart set of flags indicating which CSRs in the group have been written to.
 * These flags are initially unset.
-* When M-Mode firmware writes to a CSR in the `macecsk` group, the implementation sets the corresponding flag, and keeps a copy of the value written so far. While any of the flags is set, reading any of the registers in this group will return the old value.
-* Once all flags have been set, the values written by M-mode firmware are activated and replace the old values atomically, and the flags are cleared. The new CSK can now be used for cryptographic operations, and reading any of the registers in this group will return the new value.
+* When M-Mode firmware writes to a CSR in the `macecsk` group, the implementation sets the corresponding flag, and keeps a copy of the value written so far.
+* Once all flags have been set, the values written by M-mode firmware are activated and replace the old values atomically, and the flags are cleared. The new CSK can now be used for cryptographic operations.
 * Any mode change to M-mode resets the flags and discards the partially written value, so that M-mode always begins a configuration attempt from a clean state and a partial key is never activated.
 * A transition of the hart out of M-mode does *not* clear the flags: a partially written CSK persists, and the ACE unit stays unavailable, until M-mode is next entered.
 * Any ACE unit reset clears the write-tracking flags and discards the partially written value.
 * While any of the flags is set, that is while a CSK is partially written, the ACE unit is not available: any attempt to execute an ACE instruction, or to access an ACE CSR other than those named in <<ACE-CSK-requirements>>, raises ACE exception `ace_exc_no_csk`. Because activation clears the flags, the unit becomes available again as soon as the group has been written in full.
+
+Reading a register of the group returns either the corresponding part of the active CSK, or zero if none is established, or always zero, at the implementation's choice; the choice is fixed per implementation and does not depend on whether a write sequence is in progress.
+
+A CSK whose value is `zeros(256)` is unconfigured under every model of <<ACE-CSK-requirements>>: writing that value in full through the `macecsk` group discards any established CSK and leaves the unit without a CSK; an established CSK that is zeroized (<<ACE-interaction-with-debug>>) becomes unconfigured; under the fourth model an all-zero output of the RBG is discarded and regenerated.
 
 [NOTE]
 ====
@@ -370,7 +380,7 @@ silently lost. The next ACE access from any mode traps with `ace_exc_no_csk`, no
 Entering M-mode resets the flags, allowing the handler to restart CSK provisioning.
 ====
 
-The ACE unit is unavailable until a CSK is established as described in <<ACE-CSK-requirements>> (immediately, in the case of a fixed or randomly regenerated hardwired CSK).
+The ACE unit is unavailable until a CSK is established as described in <<ACE-CSK-requirements>> (immediately in the case of a hardwired CSK; as soon as it has been generated in the case of a boot-generated one).
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -397,7 +407,7 @@ illegal-instruction or, as <<ACE-CSRs-priv>> prescribes, a virtual-instruction e
 | Group | Locality Secret | Privilege | Present when
 
 | [[ACE-CSR-macephysbootscrt,macephysbootscrt]]`macephysbootscrt{0..3}` | _PhysBootScrt_ |  M   | `Smacepbootscrt` is implemented.
-| [[ACE-CSR-hacevirtbootscrt,hacevirtbootscrt]]`hacevirtbootscrt{0..3}` | _VirtBootScrt_ |  HS  | `Smacevbootscrt` is implemented.
+| [[ACE-CSR-hacevirtbootscrt,hacevirtbootscrt]]`hacevirtbootscrt{0..3}` | _VirtBootScrt_ |  HS  | `Smacevbootscrt` and the H extension are both implemented.
 | [[ACE-CSR-macelocality,macelocality]]`macelocality{0..3}`             | _MLocality_    |  M   | `Smacelclt` is implemented.
 | [[ACE-CSR-hacelocality,hacelocality]]`hacelocality{0..3}`             | _HLocality_    |  HS  | `Smacelclt` and the H extension are both implemented.
 | [[ACE-CSR-sacelocality,sacelocality]]`sacelocality{0..3}`             | _SLocality_    |  S   | `Smacelclt` and S-mode are both implemented.
@@ -431,10 +441,12 @@ Out of ACE unit reset:
 
 . The value of the bit `L` of `misa` is 1 if the ACE unit and the ACE ISA are at least partially implemented in hardware.
    In the case of an emulated ACE unit, `L` is 0.
-. The `ACES` field of `mstatus`, of `sstatus` and, where implemented, of `vsstatus` is Off.
+. The `ACES` field of `mstatus` (visible in `sstatus`) and, where implemented, of `vsstatus` is Off.
 . The CSK is unconfigured, unless it is hardwired or randomly regenerated.
 . `macephysbootscrt` and `hacevirtbootscrt` are zero.
 . `macelocality`, `hacelocality`, `sacelocality`, and `vsacelocality` are zero.
 . All fields of `mlcrstatus`, `slcrstatus`, and `vslcrstatus` are set to _Initial_.
+
+An ACE unit reset caused by a fatal condition (<<ACE-error-architecture>>) differs in items 1, 2 and 6: `misa.L` is unchanged, an `ACES` field that is Off stays Off and every other `ACES` field becomes Dirty, and every `*lcrstatus` field is set to _Dirty_.
 
 // ////////////////////////////////////////////////////////////////////
