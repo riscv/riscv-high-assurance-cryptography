@@ -83,32 +83,31 @@ With reference to <<ACE-State-field>>, we discuss here error conditions that rai
 When an exception is raised, the CSR `*cause` will reflect the error condition, as described in <<ACE-exception-codes>>.
 The error codes are listed in decreasing priority order.
 The actual numbers are TBD.
+`ace_exc_fatal` precedes every exception that depends on the state of the ACE unit, including the address-misaligned, access-fault and page-fault exceptions of ACE memory instructions, whose transfer bounds are computed from that state (<<ACE-instruction-load>>); among the ACE-specific conditions it is preceded only by the illegal-instruction grounds decided without accessing the ACE unit.
 
 [[ACE-exception-codes]]
 .Exception causes in decreasing priority order
 [float="center",align="center",width="100%",cols="^7%,<25%,<68%",options="header"]
 |===
 |Value | Mnemonic/RISC-V type           | Examples in ACE (((ACE, error codes)))
-|      | Instruction address misaligned | {empty}
-|      | Instruction access fault       | {empty}
+|      | Instruction address breakpoint | {empty}
+|      | Instruction page fault, instruction access fault | As ordered by the Privileged Specification: first during instruction address translation, then on the physical address.
 |      | Illegal instruction            | The ACE grounds decided without accessing the state of the ACE unit, listed first in <<ACE-illegal-instruction-grounds>>. They are defects in the encoding or the operands of the instruction, and none can arise together with `ace_exc_no_csk`, so the order of the two is immaterial.
-|      | Load address misaligned        | Applies also to `ace.load` and `ace.input`.
-|      | Load access fault              | Applies also to `ace.load` and `ace.input`.
-|      | Store address misaligned       | Applies also to `ace.store` and `ace.output`.
-|      | Store access fault             | Applies also to `ace.store` and `ace.output`.
-|      | Instruction page fault         | {empty}
-|      | Load page fault                | {empty}
-|      | Store page fault               | {empty}
 | TBD  | `ace_exc_fatal`                | Fatal system failure in the ACE unit. Not delegable below M-mode.
 |      | Illegal instruction            | The ACE grounds that require the state of the ACE unit, listed second in <<ACE-illegal-instruction-grounds>>. They are raised only once no fatal condition is pending.
 | TBD  | `ace_exc_no_csk`               | Use of the ACE unit while no CSK is active: either none has been established, or the `macecsk` group is only partially written (see <<ACE-CSK-requirements>>, <<ACE-CSR-macecsk>>). Not delegable below M-mode: only M-mode can establish a CSK.
 // | TBD  | `ace_exc_complete_cr_data_access` | Issuing `ace.load`, `ace.store` or `ace.mv` on a _Complete_ CR, that is a CR not open for a management operation (see <<ACE-State-field>> and <<ACE-error-architecture>>).
-| TBD  | `ace_exc_CR_off`               | Any access to a CR whose `*lcrstatus` field is _Off_. Enables on-demand (lazy) CR loading and trap-and-emulate (see <<ACE-CSR-lcrstatus>>). It precedes `ace_exc_unsupported` so that a handler that has marked a CR _Off_ in order to emulate its Algorithm is reached before the hardware reports the Algorithm as unsupported.
+| TBD  | `ace_exc_CR_off`               | Any access to a CR whose `*lcrstatus` field is _Off_: three cause values, `ace_exc_CR_off_m`, `ace_exc_CR_off_hs` and `ace_exc_CR_off_s`, one per owning level, the first two not delegable below M-mode, resp. HS-mode (see <<ACE-CSR-lcrstatus>>). Enables on-demand (lazy) CR loading and trap-and-emulate. It precedes `ace_exc_unsupported` so that a handler that has marked a CR _Off_ in order to emulate its Algorithm is reached before the hardware reports the Algorithm as unsupported.
 | TBD  | `ace_exc_unsupported`          | Invalid values at provisioning or import.
-| TBD  | `ace_exc_out_of_memory`        | Insufficient CRF memory for configuration instruction. This may be set by privileged code in case it does not handle the CR allocation itself.
 | TBD  | `ace_exc_privilege_violation`  | Attempt to execute any _usage_ instruction that would violate the Usage Control policies as per <<ACE-Metadata>>. This includes any attempt to use/clone of a not-fully-configured CR, which is forbidden at all privilege levels.
+| TBD  | `ace_exc_out_of_memory`        | Insufficient CRF memory for configuration instruction. This may be set by privileged code in case it does not handle the CR allocation itself.
 | TBD  | `ace_exc_unconfigured_buffer`  | Use of ACEIOBUF as an input or an output while unconfigured.
+|      | Load/store address breakpoint  | On the address of a component access of `ace.load`, `ace.store`, `ace.input` or `ace.output`, when that access is about to be performed; for the first component access, before the address-misaligned check.
+|      | Load/store address misaligned  | On the effective address of `ace.load`, resp. `ace.store`, before any component access (<<ACE-Memory-Alignment>>); for `ace.input` and `ace.output`, as for an ordinary access on the implementation.
+|      | Load/store page fault, load/store access fault | Per component access, in offset order, as ordered by the Privileged Specification.
 |===
+
+The relative order of the standard exceptions is that of the Privileged Specification and is reproduced for reference only; the load/store address breakpoint and the load/store faults are evaluated per component access because the component addresses of an ACE memory instruction are determined from the state of the ACE unit.
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -327,9 +326,14 @@ Any direct write to `vslcrstatus`(__i__) does not change either `mlcrstatus`(__i
 `sstatus.ACES`, `vsstatus.ACES`, `mstatus.ACES`, `slcrstatus`, and `mlcrstatus` are also in effect.
 --
 
+`ace_exc_CR_off` comprises three exception causes, one per owning level: `ace_exc_CR_off_m` for `mlcrstatus`, `ace_exc_CR_off_hs` for the HS-level `slcrstatus` while V=1, and `ace_exc_CR_off_s` for `slcrstatus` while V=0 and for `vslcrstatus`.
+The fields in effect are examined in the order `mlcrstatus`, `slcrstatus`, `vslcrstatus`, and the first found _Off_ selects the cause, so that the exception is taken by the most privileged mode whose field is _Off_:
+`ace_exc_CR_off_m` is not delegable below M-mode and `ace_exc_CR_off_hs` is not delegable below HS-mode, whereas `ace_exc_CR_off_s` may be delegated to the mode that owns the register.
+A handler therefore never receives `ace_exc_CR_off` for a field it cannot write, and an instruction it issues to resolve the condition is not gated by a higher level's field.
+
 [NOTE]
 ====
-The _Off_ value and the `ace_exc_CR_off` exception provide an architectural hook for on-demand (lazy) CR loading. At context restore, a handler may leave a CR unrestored, set its `*lcrstatus` field to _Off_, and retain the authoritative SCC in memory. A subsequent access from a lower-privileged mode traps with `ace_exc_CR_off`; the handler then imports the SCC before resuming execution. The architecture defines no separate "lazy" state: Software that marks a CR _Off_ is responsible for ensuring that the authoritative SCC is restored.
+The _Off_ value and the `ace_exc_CR_off` exception provide an architectural hook for on-demand (lazy) CR loading. At context restore, a handler may leave a CR unrestored, set its `*lcrstatus` field to _Off_, and retain the authoritative SCC in memory. A subsequent access from a lower-privileged mode traps with `ace_exc_CR_off` to the mode that owns the _Off_ field; the handler then imports the SCC before resuming execution. The architecture defines no separate "lazy" state: Software that marks a CR _Off_ is responsible for ensuring that the authoritative SCC is restored.
 ====
 
 // ////////////////////////////////////////////////////////////////////

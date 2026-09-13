@@ -225,7 +225,7 @@ We posit that CR renaming is not expected to be necessary, and may even be detri
 ====
 
 As mentioned in <<ACE-concepts>>, (the CC in) each CR contains two types of information: the Metadata and the Content.
-The latter is a structure containing the cryptographic secrets and other information needed by the algorithm encoded in the CR.
+The latter contains the cryptographic secrets and other information needed by the algorithm encoded in the Metadata.
 Let the _i_-th CR be denoted `K(i)`.
 Its Metadata Header is referred to as `K(i)`.MDH, and the content as `K(i)`.`Content[]`.
 `Content[]` is further partitioned into `Content1[]`, the architecturally defined content of the CR, and `Content2[]`, any implementation-defined content. The structure of `Content1[]` is given in <<ACE-Algorithms>> for each Algorithm defined in this specification. The structure of `Content2[]` is implementation dependent.
@@ -269,8 +269,8 @@ The ACE unit also contains the following per-hart information:
 . An integer register (accessed via CSR `acemanagedcr`, cf. <<ACE-CSR-acemanagedcr>>), which holds the index of the CR being currently managed, or 32 if no CR is currently managed.
 . Three 128-bit registers which hold authentication data (the `SIV`, `IMPQUAL`, and SIV2) of the CR being currently managed.
 These registers are accessed via three CSR pairs:
-`acesivl`/`acesivh`
-`acesiv2l`/`acesiv2h`
+`acesivl`/`acesivh`,
+`acesiv2l`/`acesiv2h`, and
 `aceiql`/`aceiqh` (cf. <<ACE-CSR-six-auth-CSRs>>).
 
 [NOTE]
@@ -898,7 +898,7 @@ The effective address of an `ace.load` or an `ace.store` must be a multiple of 1
 If it is not, no data is transferred and a load, resp. store, address-misaligned exception is
 raised on that address.
 A PI or an SCC must therefore be held at a 16-byte aligned address.
-For `ace.load` and `ace.store` the conditions are evaluated in this order: the illegal-instruction grounds of both groups (<<ACE-illegal-instruction-grounds>>); address-misaligned on the effective address; then, per component access in offset order, access and page faults.
+For `ace.load` and `ace.store` the conditions are evaluated in this order: the illegal-instruction grounds of both groups and the ACE exceptions, in the order of <<ACE-exception-codes>>; the address breakpoint of the first component access; address-misaligned on the effective address; then, per component access in offset order, address breakpoint, access and page faults.
 
 `ace.input` and `ace.output` are byte-granular and impose no alignment constraint of their own:
 a misaligned effective address behaves as it does for an ordinary load or store on the
@@ -991,7 +991,7 @@ There are two groups of conditions upon which an illegal-instruction exception i
 . `ace.load`, `ace.store` or `ace.mv` on a CR whose _State_ does not admit the transfer, or with an inconsistent `acestart` (Rules <<ACE-SGR-ace-load-mv-allowed>> and <<ACE-SGR-ace-store-mv-allowed>>).
 . `ace.mgmt` when `acemanagedcr` names another CR, when opening an export on an _Unconfigured_ CR, when completing with an `ml`._State_ inconsistent with the CR's Configuration State, or when `ace_cfg_management_end` is issued with no management operation open (<<ACE-instruction-setst>>).
 . An ACEIOBUF substitution that <<ACE-usage-input-output>> forbids, including any substitution without `Zklio`, since whether a Form is a substitution depends on the operation the CR's State defines.
-. A Form A `ace.mgmt` that must take the MDH from the ACEIOBUF with `aceiobuftop` < 16 (Rule <<ACE-GR-vector-MDH-operand>>).
+. A Form A `ace.mgmt` that must take the MDH from a configured ACEIOBUF with `aceiobuftop` < 16 (Rule <<ACE-GR-vector-MDH-operand>>).
 . An `ace.clone` whose source is _Unconfigured_ and differs from its destination (<<ACE-instruction-clone>>).
 . A Form A–C `ace.exec` with `acestart` {ne} `vstart` {times} `SEW` / 8 (<<ACE-CSR-acestart>>).
 . A Form A `ace.exec` with `Vd` = `Vs2` for an operation whose output blocks do not have the length of its input blocks (<<ACE-instruction-exec>>).
@@ -1851,7 +1851,7 @@ The values 46, 47 and 59–62 are reserved as `#immed7` (Rule <<ACE-GR-reserved-
 
 The values of `#immed7` in <<ACE-management-immeds>> can be used in all Forms, whereby
 [upperalpha]
-. Form A carries no auxiliary input. Where the operation requires the MDH, Form A is a substitution (<<ACE-usage-input-output>>) and reads it from bytes [0, 16) of the ACEIOBUF, ignoring `acestart`; after the `acemanagedcr` check, Rule <<ACE-GR-iobuf-configured>> is applied, then `aceiobuftop` < 16 raises an illegal-instruction exception (Rule <<ACE-GR-vector-MDH-operand>>), both before any change to the target CR.
+. Form A carries no auxiliary input. Where the operation requires the MDH, Form A is a substitution (<<ACE-usage-input-output>>) and reads it from bytes [0, 16) of the ACEIOBUF, ignoring `acestart`; after the `acemanagedcr` check, Rule <<ACE-GR-iobuf-configured>> is applied; with the ACEIOBUF configured, `aceiobuftop` < 16 then raises an illegal-instruction exception (Rule <<ACE-GR-vector-MDH-operand>>), both before any change to the target CR.
 . In Form B, the lower 64 bits of the MDH are in the 64-bit GPR operand at `Xs` or in a GPR pair. Rule <<ACE-GR-multiple-GPRs>> applies. The instruction receives the upper 64 bits of the MDH as zero.
 . In Form C, the MDH is in the 128 lowest bits of `Vs`.
 . In Form D, the MDH is the 128-bit operand in two or four GPRs starting at `Xs`. Rule <<ACE-GR-multiple-GPRs>> applies.
