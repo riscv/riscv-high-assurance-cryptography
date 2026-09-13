@@ -533,7 +533,7 @@ The four Configuration States whose mnemonics contain `_partial_` are the _Neste
 enters one of them when a management operation is opened on a CR that is already under management
 (<<ACE-nested-CR-management>>). The _base operation_ of such a group is its outermost management
 process.  Clearing a CR is an atomic operation that resets the CR to the _Unconfigured_ state, and
-as such it is not part of nested management operations.
+as such it is not a nested management operation.
 
 [[ACE-nested-state-base-types,Nested State Base Types]]
 Nested State Base Types:::
@@ -613,11 +613,8 @@ When the Algorithm needs to prevent this, it transitions to a different State up
 SGR5:: In States _Success_ and _Failure_, only the following ACE instructions are permitted: `ace.mgmt`, `ace.size`, `ace.setst` (subject to Rule <<ACE-SGR-setst-in-success-failure>> below), `ace.getmd*`, `ace.getst`, `ace.clone`, `ace.restrict*`, and `ace.derive`.
 An `ace.exec` other than those permitted below, or an `ace.setst` not allowed by the architecture or by the Algorithm in its current _State_ and _StateExtension_, transitions the CR to Error State _Invalid_ (cf. Rule <<ACE-AGR-not-allowed-instructions>> in Book 2).
 +
-Also permitted, in State _Success_ only, is an `ace.exec` whose sole purpose is to squeeze further output from an Algorithm
-that produces an arbitrarily long one, such as a XOF, whether issued directly or as the source
-endpoint of an `ace.derive` (even if squeezing is per se a cryptographic operation).
-+
-`ace.derive` is also permitted in State _Success_ only, and is limited to the following two cases: where the source endpoint is one of its exportable fields (<<ACE-instruction-derive>>); and under the conditions of use of `ace.exec`.
+In State _Success_ `ace.exec` is also permitted solely to extract further output from an Algorithm that produces arbitrarily long output, such as a XOF.
+Also permitted is `ace.derive` in the following two cases: where the source endpoint is one of its exportable fields (<<ACE-instruction-derive>>); and under the conditions of use of `ace.exec`.
 +
 A CR in State _Success_ or _Failure_ may not be the *destination* of an `ace.derive`.
 +
@@ -650,7 +647,7 @@ including any ADS, and the _AuxDataLen_ field is set to 0.
 A CR in an Error State then retains only the MDH.
 Requesting its size (<<ACE-instruction-size>>) returns 16 bytes for `ace.size` and zero for `ace.csize`.
 
-[[ACE-SGR-transition-to-from-unconfigured,SGR12]] SGR12:: Transitions from _Unconfigured_ to any Complete State (Error or Valid) may only result from a configuration instruction.
+[[ACE-SGR-transition-to-from-unconfigured,SGR12]] SGR12:: Transitions from _Unconfigured_ to any Complete State may only result from a configuration instruction.
 Any usage-controlled instruction (<<ACE-instruction-properties>>) in State _Unconfigured_ raises an illegal-instruction exception.
 Transitions from an Error State to _Unconfigured_ result from explicitly clearing the CR, or from re-opening it for provisioning or import.
 
@@ -1006,11 +1003,11 @@ There are two groups of conditions upon which an illegal-instruction or virtual-
 
 * In the first group, the grounds for raising the exception come from the instruction encoding, the GPRs and the vector configuration alone, without accessing the state of the ACE unit; they therefore take precedence over `ace_exc_fatal` (<<ACE-exception-codes>>):
 
-. A reserved encoding point (Rule <<ACE-GR-reserved-encodings>>), including `ace.setst` with `#immed7` in 59–62 or 46–47, a reserved `#immed7` of `ace.setst` with `r` = 1 and CR register `X0` (<<ACE-instruction-setst>>), and an ACE instruction with a vector operand issued while `vtype.vill` is set (<<ACE-ACEV>>).
+. A reserved encoding, including `ace.setst` with `#immed7` in 59–62 or 46–47, a reserved `#immed7` of `ace.setst` with `r` = 1 and CR register `X0` (<<ACE-instruction-setst>>), and an ACE instruction with a vector operand issued while `vtype.vill` is set (<<ACE-ACEV>>).
 . An indirect CR index outside [0..31], or `X0` used as one where not expressly encoded (Rule <<ACE-GR-GPR-indirect>>), and `ace.derive` with equal CR indices (<<ACE-instruction-derive>>).
 . A GPR pair or quartet not meeting Rule <<ACE-GR-multiple-GPRs>>.
 . A vector operand carrying an MDH with `VL` {times} `SEW` < 128 (Rule <<ACE-GR-vector-MDH-operand>>), or a vector `ace.mv` whose `vl * (SEW/8)` is not a multiple of 16 (<<ACE-instruction-mv>>).
-. An encoding assigned to an extension that is not implemented, such as Forms A–C of `ace.exec` without `Zklv` (Rule <<ACE-GR-vector-legality>>).
+. An encoding assigned to an extension that is not implemented, for instance as Forms A–C of `ace.exec` without `Zklv`.
 . An ACE instruction or ACE CSR access gated by a clear `Smstateen` bit (<<ACE-CSRs-priv>>), which raises an illegal-instruction or a virtual-instruction exception as that extension prescribes; an ACE instruction issued while `ACES` is Off (see _Fatal_ above), an ACE instruction issued under big-endian effective data endianness (<<ACE-Notation>>), and an access to a CSR that <<ACE-CSRs-unpriv>> declares unavailable or that <<ACE-CSRs-priv>> makes inaccessible from the current mode (an illegal-instruction or a virtual-instruction exception, as stated there).
 
 * For the second group, the grounds for raising the exception require the state of the ACE unit — for most of them the contents of the CR, which exist only once a CR marked _Off_ (<<ACE-CSR-lcrstatus>>) has been lazily loaded, or in the M-mode code that emulates it. They are therefore evaluated only after `ace_exc_no_csk` and the _Off_ gate, by the hardware once the CR is loaded or by the emulator, and only if no fatal condition is pending, otherwise `ace_exc_fatal` is raised:
@@ -1470,14 +1467,10 @@ The same requirement applies to an MDH taken from the ACEIOBUF: `aceiobuftop` {g
 ACEIOBUF is enabled and `aceiobuflen` is nonzero; otherwise ACE exception
 `ace_exc_unconfigured_buffer` is raised.
 
-[[ACE-GR-reserved-encodings,GR9]] GR9:: All encoding points under the ACE opcodes that this chapter does not assign are reserved, and raise an
-illegal-instruction exception.
-
-[[ACE-GR-vector-legality,GR10]] GR10:: A vector register (group) operand of an ACE instruction whose register number, when the LMUL in effect is greater than 1, is not a multiple of that LMUL is a reserved encoding and raises an illegal-instruction exception (similarly to RVV 1.0).
-An encoding that <<ACE-instruction-extension-matrix>> assigns to an extension that is not implemented likewise raises an illegal-instruction exception; `Zklmem` counts as implemented whether `ace.load` and `ace.store` are provided in hardware or by trap-and-emulate (<<ACE-extensions-overview-unpriv>>).
+[[ACE-GR-vector-legality,GR9]] GR9:: A vector register (group) operand of an ACE instruction whose register number, when the LMUL in effect is greater than 1, is not a multiple of that LMUL is a reserved encoding and raises an illegal-instruction exception (similarly to RVV 1.0).
 Every ACE instruction with a vector operand sets `vstart` to 0 when it retires; on a precise halt it sets `vstart` as <<ACE-CSR-acestart>> and Rule <<ACE-GR-acestart-vstart>> prescribe.
 
-[[ACE-GR-custom-locality,GR11]] GR11:: A CC whose MDH carries any custom, implementation-defined value — a custom _Algorithm_ (<<ACE-Algorithm-field>>), a custom _SCProtection_ level (<<ACE-SCProtection-field>>), a system-specific _Version_ (<<ACE-Algorithm-version>>), or any other custom value — must name _ChipFamScrt_, or the stricter _ChipScrt_, in its _Locality_; otherwise the Metadata is invalid (see <<ACE-Metadata-validity>>).
+[[ACE-GR-custom-locality,GR10]] GR10:: A CC whose MDH carries any custom, implementation-defined value — a custom _Algorithm_ (<<ACE-Algorithm-field>>), a custom _SCProtection_ level (<<ACE-SCProtection-field>>), a system-specific _Version_ (<<ACE-Algorithm-version>>), or any other custom value — must name _ChipFamScrt_, or the stricter _ChipScrt_, in its _Locality_; otherwise the Metadata is invalid (see <<ACE-Metadata-validity>>).
 +
 NOTE: This mitigation is not sufficient: if the ACE unit is implemented in emulation, different versions of the firmware may have different features while running on the same hardware. It is, however, a first line of defense against accidental abuse.
 
@@ -1665,7 +1658,7 @@ For the four Forms A–D above, the encodings are:
 . `Form` = `0b10` and `rs2` = `0b00000`.
 . `Form` = `0b11` and `rd` = `rs2` = `0b00000`.
 
-The CR operand is always encoded in `rs1`. In each Form, unused register fields must be zero: `rd` when there is no output vector, and `rs2` when there is no input vector. Non-zero values in an unused field are reserved (Rule <<ACE-GR-reserved-encodings>>), except for encodings assigned to those fields by `Zklmv` (<<ACE-instruction-mv>>).
+The CR operand is always encoded in `rs1`. In each Form, unused register fields must be zero: `rd` when there is no output vector, and `rs2` when there is no input vector. Non-zero values in an unused field are reserved, except for encodings assigned to those fields by `Zklmv` (<<ACE-instruction-mv>>).
 
 `r` is the CR indexing mode selector.
 --
@@ -1676,7 +1669,7 @@ _Description_::
 Performs a cryptographic operation as defined by the Algorithm in CR `Kn` or `K{Xn}`.
 The instruction may take an input and produce an output.
 
-In Form A, `Vd` and `Vs2` may be the same register group; any other overlap is reserved (Rule <<ACE-GR-reserved-encodings>>).
+In Form A, `Vd` and `Vs2` may be the same register group; any other overlap is reserved (Rule <<ACE-GR-vector-legality>>).
 With `Vd` = `Vs2`, for an operation whose output blocks have the length of its input blocks, each block's output replaces its input at the same offset; for any other operation `Vd` = `Vs2` raises an illegal-instruction exception (<<ACE-illegal-instruction-grounds>>).
 
 If `Zklv` is not implemented, only Form D `ace.exec`
@@ -1820,7 +1813,7 @@ _Encoding_::
 ....
 
 `r` is the CR indexing mode selector.
-When `r` = 1 and the CR register is `X0`: Form A with `#immed7` = 0 is `ace.clear.all` (<<ACE-instruction-clear>>); every other combination of Form and `#immed7` is reserved (Rule <<ACE-GR-reserved-encodings>>).
+When `r` = 1 and the CR register is `X0`: Form A with `#immed7` = 0 is `ace.clear.all` (<<ACE-instruction-clear>>); every other combination of Form and `#immed7` is reserved.
 
 The encodings of the four Forms are:
 [upperalpha]
@@ -1864,7 +1857,7 @@ Values of `#immed7` from 65 to 127, depending on the Algorithm, may be used to c
 Using an `#immed7` not supported by the architecture or by the current Algorithm causes the CR to transition to Error State _Invalid_.
 
 When the `#immed7` value is one of 56, 57, or 58, the instruction is used to initiate provisioning, export, or import operations, as described in <<ACE-management-immeds>>; for 56 and 58 it receives the MDH of `Kd` or `K{Xd}` in Form C or D, and the change to _State_ is performed after the MDH has been loaded.
-The values 46, 47 and 59–62 are reserved as `#immed7` (Rule <<ACE-GR-reserved-encodings>>).
+The values 46, 47 and 59–62 are reserved as `#immed7`.
 
 [[ACE-management-immeds]]
 .Values (decimal) of `#immed7` to be used for provisioning, importing, and exporting
@@ -2125,7 +2118,7 @@ If bit `h` (bit 28) is 0, the instruction is `ace.getmdl`; if `h` is 1, it is `a
 
 If bit `v` (bit 29) is 0, the result is written to a GPR (GPR pair for RV32).
 If `v` is 1, the entire MDH is written to the lowest 128 bits of a vector register (group).
-In this case, bit `h` must be 0; the combination `v` = `h` = 1 is reserved (Rule <<ACE-GR-reserved-encodings>>).
+In this case, bit `h` must be 0; the combination `v` = `h` = 1 is reserved.
 --
 
 _Description_::
@@ -2193,7 +2186,7 @@ If bit `h` (bit 28) is 0, the instruction is `ace.restrictl`; if `h` is 1, it is
 
 If bit `v` (bit 29) is 0, the input is taken from a GPR (GPR pair for RV32), and the instruction is `ace.restrictl` or `ace.restricth` depending on `h`.
 If bit `v` is 1, bit `h` must be 0, and the input is taken from the lowest 128 bits of a vector register (group).
-The combination `v` = `h` = 1 is reserved (Rule <<ACE-GR-reserved-encodings>>).
+The combination `v` = `h` = 1 is reserved.
 --
 
 // comment
@@ -2306,14 +2299,13 @@ This mirrors `ace.clear` (<<ACE-instruction-clear>>), which is likewise not usag
 
 [NOTE]
 ====
-This instruction enables several practical use cases:
+Two practical use cases enabled by this instruction are:
 
-*   Enabling side-channel protection when supported by the microarchitecture,
-    even if the original CC was not configured with it.
 *   Allowing privileged code to give a CC to several processes in a
-    fine-grained manner. This can be achieved by cloning the CR and customizing
+    fine-grained manner, as opposed to all processes.
+    This can be achieved by cloning the CR and customizing
     the Localities for each clone.
-*   Similarly, enabling privileged code to split a CC capable of both
+*   Enabling privileged code to split a CC capable of both
     encryption and decryption into two CCs, one only capable of encryption and
     the other only capable of decryption, thereby creating a one-way channel
     between processes.
@@ -2808,7 +2800,7 @@ _Description_::
 
 `ace.clear.all` unconfigures all the CRs and the ACEIOBUF, zeroing the buffer and setting
 `aceiobuflen`, `aceiobuftop` and `acestart` to 0, sets the six authentication CSRs to zero, and writes 32 to `acemanagedcr`.
-It uses the encoding of `ace.setst` described above with indirect CR addressing and `Xd` = `X0`.
+It is encoded as `ace.clear` with indirect CR addressing and `Xd` = `X0`.
 
 Clearing (i.e., unconfiguring) a CR that was not already _Unconfigured_, or whose `*lcrstatus` field in effect is _Off_ (<<ACE-CSR-lcrstatus>>), sets the `*lcrstatus` fields in effect for the current privilege mode, and the `ACES` fields in effect, to _Dirty_. The CR's own _State_ field becomes _Unconfigured_.
 --
@@ -2866,11 +2858,12 @@ For instance, on RV64, `ace.getst` can be implemented as
 . `srli  Xd, Xd, 19`
 . `andi  Xd, Xd, 0x3F`
 
-and `ace.getstx` as
-
-. `ace.getmdl Xd, Ks` or `K{Xs}`
-. `srli  Xd, Xd, 25`
-. `andi  Xd, Xd, 0x0F`
+// For a reviewer: these are just examples and there is no need to write down both.
+// and `ace.getstx` as
+//
+// . `ace.getmdl Xd, Ks` or `K{Xs}`
+// . `srli  Xd, Xd, 25`
+// . `andi  Xd, Xd, 0x0F`
 --
 
 // ////////////////////////////////////////////////////////////////////
@@ -2912,7 +2905,7 @@ is raised.
 . Any substitution is allowed only if the ACEIOBUF is enabled and `aceiobuflen` is non-zero.
   Otherwise, ACE exception `ace_exc_unconfigured_buffer` is raised.
 +
-If `aceiobuflen` is non-zero but `aceiobuftop` is a length invalid for the Algorithm, or, for `ace.exec`, `acestart` is not an interruption point the Algorithm allows, then: if the ACEIOBUF is used as an input, the CR transitions to Error State _Invalid_; if it is used only as an output, the instruction performs no operation — nothing is written and no state transition occurs.
+If `aceiobuflen` is non-zero but `aceiobuftop` is a length invalid for the Algorithm, or, for `ace.exec`, `acestart` is not an interruption point the Algorithm allows, then: if the ACEIOBUF is used as an input, the CR transitions to Error State _Invalid_; if it is used only as an output, the instruction performs no operation–nothing is written and no state transition occurs.
 
 NOTE: Because of these rules, the Algorithms sections say that a certain Form of `ace.exec`, `ace.setst`, or `ace.mgmt` is _expected_ rather than _required_ (or _only [...] allowed_). The substitutions are implicit and are not restated for each occurrence.
 
@@ -3012,11 +3005,11 @@ MMR6:: For the purposes of `FENCE`, `FENCE.I`, `SFENCE.VMA` and the `.aq`/`.rl` 
 IRR means “Interruptibility and Resumability Rule.”
 
 [horizontal]
-[[ACE-IRR-uninterruptible-instructions,IRR1]] IRR1:: Instructions `ace.mgmt`, `ace.getmd*`, `ace.restrict*`, `ace.clone`, non-vector `ace.mv`, and `ace.size` are _uninterruptible_: each either completes or has no architecturally visible effect, writing no destination vector register, GPR, CR byte, ACEIOBUF byte, or memory location.
-An implementation realizes this in one of three ways: by completing the instruction before taking an asynchronous interrupt; where Rule <<ACE-IRR-long-running-no-data>> permits, by letting it complete in the background, subject to Rule <<ACE-IRR-conflicting-access-rule>> below; or by discarding its partial work before taking the trap and restarting upon return.
-Software must not rely on whether an uninterruptible instruction has retired when a handler runs, and interacts with it only as Rule <<ACE-IRR-conflicting-access-rule>> prescribes.
+[[ACE-IRR-uninterruptible-instructions,IRR1]] IRR1:: Instructions `ace.mgmt`, `ace.getmd*`, `ace.restrict*`, `ace.clone`, non-vector `ace.mv`, and `ace.size` are _uninterruptible_: each either completes or has no architecturally visible effect, including no writes to destination vector registers, GPRs, CR bytes, ACEIOBUF bytes, or memory.
+An implementation realizes this in one of three ways: completing the instruction before taking an asynchronous interrupt; completing it in the background where Rule <<ACE-IRR-long-running-no-data>> permits, subject to Rule <<ACE-IRR-conflicting-access-rule>>; or discarding partial work before taking the trap and restarting upon return.
+Software must not rely on whether an uninterruptible instruction has retired when a handler runs and must interact with it only as Rule <<ACE-IRR-conflicting-access-rule>> prescribes.
 
-IRR2:: `ace.setst` is uninterruptible under every architectural condition defined by this specification. Rule <<ACE-IRR-long-running-no-data>> gives the ways an implementation may realize this.
+IRR2:: `ace.setst` is uninterruptible under every architectural condition defined by this specification. Rule <<ACE-IRR-long-running-no-data>> gives the ways an implementation may realize interruptibility in an implementation-dependent way.
 
 [[ACE-IRR-resumability-options,IRR3]] IRR3:: In general, the following behaviors are allowed when an interrupt or exception handler accesses an input or output of a preempted operation, the associated CR, or any ACE state that may be affected by the operation:
 
@@ -3025,17 +3018,18 @@ IRR2:: `ace.setst` is uninterruptible under every architectural condition define
 . Precise halt and resumption: The operation halts with `acestart` recording a prefix-complete point (<<ACE-Memory-Model>>), and resumes from `acestart`, advancing by at least one granule per execution attempt.
 . Timeout followed by precise halt and resumption: The system may impose a timeout before halting as described above.
 . Precise halt and restart, provided that restart is not the unconditional response to asynchronous
-interrupts: repeated interruption of the same instruction must not prevent its eventual completion. For this reason, this option is discouraged.
-It is available only for `ace.load`, `ace.store`, `ace.input`, and `ace.output`, whose transfers are idempotent; `ace.exec`, `ace.derive`, and vector `ace.mv` use option 3 or 4 (Rule <<ACE-IRR-block-iterated-instructions>> below).
+interrupts: repeated interruption of the same instruction must not prevent its eventual completion. This option is available only for `ace.load`, `ace.store`, `ace.input`, and `ace.output`, whose transfers are idempotent; `ace.exec`, `ace.derive`, and vector `ace.mv` use option 3 or 4 (Rule <<ACE-IRR-block-iterated-instructions>> below).
 
-[[ACE-IRR-long-running-no-data,IRR4]] IRR4:: Long-running ACE operations that access no external memory—including `ace.setst`, `ace.mgmt`, and `ace.exec` or `ace.derive` forms that do not access GPRs, vector registers, or the ACEIOBUF—may continue while the hart is preempted. If such an instruction is still running when a handler accesses its CR, the hart waits for completion before resuming. Should another interrupt occur while the instruction continues to execute, the second handler must wait as well.
+[[ACE-IRR-long-running-no-data,IRR4]] IRR4:: An Algorithm's semantics for `ace.exec` or `ace.derive` forms that do not access GPRs, vector registers, or the ACEIOBUF may perform long-running operations that access no external memory.
+Examples of such long-running operations include scalar multiplication, key generation, and signature generation or verification.
 +
-An Algorithm may define such operations; examples include scalar multiplication, key generation, and signature generation or verification.
-Such operations must either advance their recorded progress towards completion of the operation, restart, or allow resumption using the recorded progress.
+Upon preemption, they may follow any of the behaviors described in <<ACE-IRR-resumability-options>>, compatibly with the requirements of the interrupt or exception.
+The implementation must at least support the restart of these operations.
+If an operation continues while the hart is preempted and the hart waits for completion before accessing the affected state, any nested interrupt handler must also wait before accessing that state.
 +
-The progress is recorded in the _AlgorithmUse_ field, in an implementation-defined format; `acestart` remains reserved for byte counts (<<ACE-CSR-acestart>>). If progress is recorded, the implementation exports the data necessary to support resumption in the ADS. Any importing implementation may discard this Section and restart the operation, and must restart it on an Implementation Qualifier mismatch, or if the ADS is removed from the CR (using `ace.clear.ads`, cf. <<ACE-instruction-clearads>>).
+If such an operation can advance its recorded progress towards completion of the operation, interrupt at well defined points, and resume from the recorded progress point, the progress must be recorded in the _AlgorithmUse_ field, in an implementation-defined format; `acestart` remains reserved for byte counts (<<ACE-CSR-acestart>>). If progress is recorded, the implementation exports the data necessary to support resumption in the ADS. Any importing implementation may discard this Section and restart the operation, and must restart it on an Implementation Qualifier mismatch, or if the ADS is removed from the CR (using `ace.clear.ads`, cf. <<ACE-instruction-clearads>>).
 +
-Hence the architected Content of the CR must not depend on the progress of the operation: an implementation that records progress keeps every intermediate result in the ADS, and the operation restarts correctly from the architected Content alone.
+The architected Content of the CR does not depend on the progress of the operation: an implementation that records progress keeps every intermediate result in the ADS, and if the operation restarts, it does so from the architected Content alone.
 
 [[ACE-IRR-conflicting-access-rule,IRR5]] IRR5:: All the approaches in Rule <<ACE-IRR-resumability-options>> are subject to one rule: Before the hart performs a _conflicting access_, the in-flight operation must either have completed or have been precisely halted with `acestart` set per <<ACE-Memory-Model>>. A conflicting access is any of the following:
 +
@@ -3049,27 +3043,26 @@ Hence the architected Content of the CR must not depend on the progress of the o
 Rules <<ACE-IRR-resumability-options>> and <<ACE-IRR-conflicting-access-rule>> make asynchronous execution by the attached ACE unit invisible to same-hart program order, as <<ACE-Memory-Model>> requires. Beyond this rule, the architecture specifies only the allowed interruption points for its instructions and Algorithms.
 --
 
-[[ACE-IRR-which-resumable-instructions,IRR6]] IRR6:: The resumable instructions are `ace.exec`, vector `ace.mv`, `ace.derive`, `ace.load`, `ace.store`, `ace.input`, and `ace.output`. Architecturally, they process units serially. If an instruction halts precisely, the completed prefix is committed, the failing and subsequent units have no effect, `acestart` records a prefix-complete point, the instruction does not retire, and `xepc` contains its address. If an instruction transitions its CR to an Error State after partial progress, the completed prefix remains committed and the instruction retires (<<ACE-CSR-acestart>>).
+[[ACE-IRR-which-resumable-instructions,IRR6]] IRR6:: The resumable instructions are `ace.exec`, vector `ace.mv`, `ace.derive`, `ace.load`, `ace.store`, `ace.input`, and `ace.output`. Architecturally, they process input units serially. If an instruction halts precisely, the completed prefix is committed, the failing and subsequent units have no effect, `acestart` records a prefix-complete point, the instruction does not retire, and `xepc` contains its address. If an instruction transitions its CR to an Error State after partial progress, the completed prefix remains committed and the instruction retires (<<ACE-CSR-acestart>>).
 
 [[ACE-IRR-block-iterated-instructions,IRR7]] IRR7:: For block-iterated `ace.exec`, `ace.mv`, and `ace.derive`, fully processed blocks remain written or transferred, and `acestart` records their total byte count. For transfer instructions, bytes below `acestart` remain transferred at both endpoints. A partially executed instruction commits exactly the state that a shorter instruction performing only the completed operations would have committed. This includes the CR, `acestart`, `acemanagedcr`, `acesivl`/`acesivh`, `acesiv2l`/`acesiv2h`, and `aceiql`/`aceiqh`, `*lcrstatus`, and effective `ACES` fields, ensuring consistent context save, restore, and resumption. Implementations must honor `acestart` for `ace.exec` and `ace.derive`. Handlers must not reset it to zero to force a restart, as this could reapply state changes or corrupt data.
 // +
 // NOTE: `ace.derive` is included because it may modify the source CR's state (for example, when squeezing a sponge) and destructively modify the destination. Restarting could process state twice and overwrite data already consumed. Interruption points include block boundaries and Algorithm-specific points, as well as implementation specific ones within long-running computations (for instance in <<ACE-ECC>> and <<ACE-PQC>>). If input and output overlap, the result may be unpredictable, but it remains a function only of architectural state that the executing context is otherwise permitted to observe.
 
-IRR8:: For ACE memory instructions `ace.load`, `ace.store`, `ace.input`, and `ace.output`, the usual rule applies:
-An implementation may treat such an instruction as complete (by retiring it or taking an interrupt with `xepc` past it) only after address translation and permission checks succeed for every byte. Otherwise, it must halt the instruction precisely, with `acestart` at a prefix-complete point allowed by the instruction, and report any fault synchronously on re-execution or resumption.
-// For `ace.load` and `ace.store`, this point must be a multiple of sixteen bytes.
-Component accesses after the instruction is treated as complete must not fault.
+IRR8:: An implementation may treat an ACE memory instruction (`ace.load`, `ace.store`, `ace.input`, or `ace.output`) as complete—by retiring it or taking an interrupt with `xepc` past it—only after address translation and permission checks succeed for every byte.
+Otherwise, it must halt the instruction precisely, with `acestart` at a prefix-complete point allowed by the instruction, and report any fault synchronously on re-execution or resumption.
+Component accesses performed after the instruction is treated as complete must not fault.
 +
 NOTE: After each `ace.load` the caller must check whether the CR is _Unconfigured_, in which case the entire configuration operation (not just the `ace.load` instruction, but the software using it) must be restarted: an exception handler may have cleared the CR and advanced `xepc` to force this behavior.
-+
-NOTE: Clearing a CR in an exporting State (<<ACE-instruction-setst>>) calls for particular care from an
-exception handler, because until the export completes, the ciphertext the CR holds may be the only copy of
-the CC. A handler that intends to clear such a CR must first see the export through to completion — if
-necessary across preemptions of its own by a more privileged mode — and store the resulting image.
-If it clears the CR earlier, by mistake or on an unrecoverable error, the CC is lost: the caller detects
-this by the same check after `ace.store`, must treat the error as unrecoverable, and a further
-`ace.store` on the cleared CR raises an illegal-instruction exception (<<ACE-instruction-store>>).
-This allows the error to propagate to the outermost caller.
+// +
+// NOTE: Clearing a CR in an exporting State (<<ACE-instruction-setst>>) calls for particular care from an
+// exception handler, because until the export completes, the ciphertext the CR holds may be the only copy of
+// the CC. A handler that intends to clear such a CR must first see the export through to completion — if
+// necessary across preemptions of its own by a more privileged mode — and store the resulting image.
+// If it clears the CR earlier, by mistake or on an unrecoverable error, the CC is lost: the caller detects
+// this by the same check after `ace.store`, must treat the error as unrecoverable, and a further
+// `ace.store` on the cleared CR raises an illegal-instruction exception (<<ACE-instruction-store>>).
+// This allows the error to propagate to the outermost caller.
 
 // [[ACE-IRR-algorithms-specific,IRR9]] IRR9:: Algorithm-specific resumable long-running operations that transfer no data
 // in an `ace.setst`, in a (block-processing step of) `ace.exec` operation,
@@ -3223,7 +3216,7 @@ the `ace.mgmt` operation to complete the management operation is issued, which d
 This requires that the MDH and `Content[]` have been loaded, and that
 the corresponding `SIV`, and if _AuxDataLen_ {ge} 2, also `SIV2` and `IMPQUAL`, are configured.
 
-During export of a CR to a SCC, the initial `ace.mgmt` operation encrypts the contents and generates `SIV` and, if _AuxDataLen_ {ge} 2, also `SIV2` and `IMPQUAL`. The contents remain encrypted in the CR until the completion operation re-decrypts and authenticates them, with the same requirements as for completing an import—or restores the clear contents from an internal copy, as described in <<ace-mgmt-completes-export>>.
+During export of a CR to a SCC, the initial `ace.mgmt` operation encrypts the contents and generates `SIV` and, if _AuxDataLen_ {ge} 2, also `SIV2` and `IMPQUAL`. The contents remain encrypted in the CR until the completion `ace.mgmt` re-decrypts and authenticates them, with the same requirements as for completing an import—or restores the clear contents from an internal copy, as described in <<ace-mgmt-completes-export>>.
 
 At nested levels, no additional encryption or authentication is performed. Data is exported as-is:
 
