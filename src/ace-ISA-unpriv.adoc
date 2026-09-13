@@ -220,17 +220,17 @@ A CR is addressed either directly, via a 5-bit immediate, or indirectly, via a G
 [NOTE]
 ====
 Indirect CR addressing implies that CR renaming, while still possible, would significantly increase microarchitectural complexity.
-We posit that CR renaming is not expected to be necessary, and may even be detrimental, for ACE, for the reasons outlined below.
-
-. Excluding implicit internal state changes, CRs are redefined far less frequently than GPRs or FP registers; and
-. Speculating on the results of cryptographic operations usually leads to security issues.
+We posit that CR renaming is not expected to be necessary, and may even be detrimental, for ACE.
+First, excluding internal state changes, CRs are redefined far less frequently than GPRs or FP registers, and
+conditional situations where a CR may take one key or a different one are uncommon.
+Second, speculating on the results of cryptographic operations usually leads to security issues.
 ====
 
 As mentioned in <<ACE-concepts>>, (the CC in) each CR contains two types of information: the Metadata and the Content.
-The latter contains the cryptographic secrets and other information needed by the algorithm encoded in the Metadata.
+// The latter contains the cryptographic secrets and other information needed by the algorithm encoded in the Metadata.
 Let the _i_-th CR be denoted `K(i)`.
 Its Metadata Header is referred to as `K(i)`.MDH, and the content as `K(i)`.`Content[]`.
-`Content[]` is further partitioned into `Content1[]`, the architecturally defined content of the CR, and `Content2[]`, any implementation-defined content. The structure of `Content1[]` is given in <<ACE-Algorithms>> for each Algorithm defined in this specification. The structure of `Content2[]` is implementation dependent.
+`Content[]` is further partitioned into `Content1[]`, the architecturally defined content of the CR (defined) in <<ACE-Algorithms>> for each Algorithm defined in this specification), and `Content2[]`, any implementation-defined content.
 
 [[ACE-CRF]]
 ==== The Cryptographic Register File and Authentication Information
@@ -247,9 +247,8 @@ It is recommended that `SCC_KeyDeriv`, `SCC_Encrypt`, `SCC_Decrypt`, and every u
 Architecturally, the CRF contains:
 
 . An array of 32 128-bit blocks, where the _i_-th entry contains the MDH of `K(i)`.
-. An implementation-defined amount of memory that can be dynamically allocated to the various registers.
-  The region of this memory allocated to a CR contains `Content[]` while provisioning and
-   `Content[] := Content1[] || Content2[]` during other configuration and export operations.
+. An implementation-defined amount of memory that can be dynamically allocated to the various registers. This region contains the
+   `Content[]` sections of all configured CRs.
 
 These two types of information are conceptually distinct, regardless of implementation.
 The MDH array is always present and is not subject to allocation, so every CR always holds its MDH, even if only to signal that the CR is not configured.
@@ -262,11 +261,12 @@ Insufficient residual CRF capacity may prevent execution of a configuration inst
 
 Capacity is freed by unconfiguring other CRs.
 
-Any corruption of the CRF associated with a hart is an unrecoverable error condition.
-The ACE architectural state associated with the hart is reset, and ACE exception `ace_exc_fatal` is raised (see <<ACE-exceptions>> and <<ACE-error-architecture>> for the behavior when the Privileged Architecture is not implemented).
-A hart reset resets the ACE state of the hart (<<ACE-reset-and-m-mode-only>>); on power down, that state is zeroized.
+The corruption of a hart's CRF is an unrecoverable error condition.
+The ACE architectural state associated with the hart is then reset (<<ACE-reset-and-m-mode-only>>), and ACE exception `ace_exc_fatal` is raised (see <<ACE-exceptions>> and <<ACE-error-architecture>> for the behavior when the Privileged Architecture is not implemented).
 
-The ACE unit also contains the following per-hart information:
+A hart reset resets the ACE state of the hart; on power down, that state is zeroized.
+
+Amongst the other information held by the ACE unit, the following is related to the management of CRs:
 
 . An integer register (accessed via CSR `acemanagedcr`, cf. <<ACE-CSR-acemanagedcr>>), which holds the index of the CR being currently managed, or 32 if no CR is currently managed.
 . Three 128-bit registers which hold authentication data (the `SIV`, `IMPQUAL`, and SIV2) of the CR being currently managed.
@@ -278,10 +278,10 @@ These registers are accessed via three CSR pairs:
 [NOTE]
 ====
 The 128 or 384 bits used to hold `SIV`, `IMPQUAL`, and `SIV2` are allocated per hart and not per CR to reduce their hardware cost.
-This prevents concurrent non-clearing management operations in the same code: starting a second operation may overwrite the first operation's in-flight values.
-The CSRs holding these values must therefore be saved and restored on a context switch.
-Within a single process, multiple such operations require careful coordination through a lightweight threads library with ACE context-switching support or serialization using a mutex.
-Clearing a CR is always possible, whether or not it is the currently managed CR.
+This prevents concurrent non-clearing management operations in the same code: starting a second operation may overwrite the first operation's in-flight `SIV`, `IMPQUAL`, and `SIV2` values.
+Hence, the CSRs holding these values must be saved and restored on a context switch.
+In a single process space, multiple such operations require careful coordination such as lightweight threads with ACE context-switching support or serialization using a mutex.
+Clearing and provisioning a CR do not touch `SIV`, `IMPQUAL`, and `SIV2` and are thus not subject to these restrictions.
 ====
 
 // ////////////////////////////////////////////////////////////////////
@@ -290,13 +290,6 @@ Clearing a CR is always possible, whether or not it is the currently managed CR.
 
 [[ACE-ACEV]]
 ===== RVV/ACEV
-
-// [WARNING]
-// ====
-// [.red]#ACEV need not be finalized before ACE ratification begins; it
-// may be defined later, and the ACE specification amended accordingly.
-// This allows additional requirements to be collected.#
-// ====
 
 ACE inputs and outputs may use vector registers or an architectural input/output buffer (ACEIOBUF)
 that can be loaded from and stored to external memory. Both mechanisms may be supported simultaneously.
