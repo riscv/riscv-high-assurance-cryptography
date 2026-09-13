@@ -673,7 +673,7 @@ Such an attempt can be considered an operation that would cause a transition to 
 Any attempt to do so raises ACE exception `ace_exc_privilege_violation`.
 For a CR in a Configuration State used as the destination of an `ace.clone`, or named as both its source and its destination, see <<ACE-instruction-clone>>.
 
-[[ACE-SGR-gate-order,SGR19]] SGR19:: For a usage-controlled instruction (<<ACE-instruction-properties>>), after the illegal-instruction grounds decided without reference to the CR (the first group of <<ACE-illegal-instruction-grounds>> and the `acestart`/`vstart` check of <<ACE-CSR-acestart>>), the conditions on a CR are evaluated in this order, and the first that applies decides the outcome:
+[[ACE-SGR-gate-order,SGR19]] SGR19:: For a usage-controlled instruction (<<ACE-instruction-properties>>), after the illegal-instruction grounds decided without accessing the state of the ACE unit (the first group of <<ACE-illegal-instruction-grounds>>), `ace_exc_fatal`, `ace_exc_no_csk` and `ace_exc_CR_off` (<<ACE-CSR-lcrstatus>>), and then the `acestart`/`vstart` check of <<ACE-CSR-acestart>>, the conditions on a CR are evaluated in this order, and the first that applies decides the outcome:
 +
 --
 . _Unconfigured_: illegal-instruction exception (Rule <<ACE-SGR-transition-to-from-unconfigured>>);
@@ -946,7 +946,7 @@ as in <<ACE-Algorithms>>, <<ACE-priv>>, and <<ACE-pseudocode-examples>>,
 we shall always describe the behavior when the Privileged Architecture is in effect, with the understanding that raising exceptions will be replaced by the above behaviors when the Privileged Architecture is not implemented.
 
 [horizontal]
-State change rule for exceptions:: Whenever an an illegal-instruction exception or an ACE exception other than `ace_exc_fatal` is raised, no change to ACE state is made, except for the initial zeroizing of the target CR by an opening `ace.mgmt`, which is performed even if the instructions raises an exception later (<<ACE-instruction-setst>>). `ace_exc_fatal` resets the ACE state (see _Fatal_ below).
+State change rule for exceptions:: Whenever an illegal-instruction or virtual-instruction exception or an ACE exception other than `ace_exc_fatal` is raised, no change to ACE state is made, except for the initial zeroizing of the target CR by an opening `ace.mgmt`, which is performed even if the instructions raises an exception later (<<ACE-instruction-setst>>). `ace_exc_fatal` resets the ACE state (see _Fatal_ below).
 
 We now give additional explanation of some of the types of error conditions that may occur during the lifecycle of an ACE unit:
 
@@ -983,9 +983,9 @@ There are two groups of conditions upon which an illegal-instruction exception i
 . A GPR pair or quartet not meeting Rule <<ACE-GR-multiple-GPRs>>.
 . A vector operand carrying an MDH with `VL` {times} `SEW` < 128 (Rule <<ACE-GR-vector-MDH-operand>>), or a vector `ace.mv` whose `vl * (SEW/8)` is not a multiple of 16 (<<ACE-instruction-mv>>).
 . An encoding assigned to an extension that is not implemented, such as Forms A–C of `ace.exec` without `Zklv` (Rule <<ACE-GR-vector-legality>>).
-. An ACE instruction issued while `ACES` is Off (see _Fatal_ below), an ACE instruction issued under big-endian effective data endianness (<<ACE-Notation>>), and an access to a CSR that <<ACE-CSRs-unpriv>> declares unavailable.
+. An ACE instruction or ACE CSR access gated by a clear `Smstateen` bit (<<ACE-CSRs-priv>>), which raises an illegal-instruction or a virtual-instruction exception as that extension prescribes; an ACE instruction issued while `ACES` is Off (see _Fatal_ below), an ACE instruction issued under big-endian effective data endianness (<<ACE-Notation>>), and an access to a CSR that <<ACE-CSRs-unpriv>> declares unavailable or that <<ACE-CSRs-priv>> makes inaccessible from the current mode (an illegal-instruction or a virtual-instruction exception, as stated there).
 
-* For the second group, the grounds for raising the exception require the state of the ACE unit and are raised only if no fatal condition is pending, otherwise `ace_exc_fatal` is raised:
+* For the second group, the grounds for raising the exception require the contents of the CR, which exist only once a CR marked _Off_ (<<ACE-CSR-lcrstatus>>) has been lazily loaded, or in the M-mode code that emulates it. They are therefore evaluated only after `ace_exc_no_csk` and the _Off_ gate, by the hardware once the CR is loaded or by the emulator, and only if no fatal condition is pending, otherwise `ace_exc_fatal` is raised:
 
 . A usage-controlled instruction issued on a CR in State _Unconfigured_ (Rule <<ACE-SGR-transition-to-from-unconfigured>>), including `ace.derive` with an _Unconfigured_ endpoint.
 . `ace.load`, `ace.store` or `ace.mv` on a CR whose _State_ does not admit the transfer, or with an inconsistent `acestart` (Rules <<ACE-SGR-ace-load-mv-allowed>> and <<ACE-SGR-ace-store-mv-allowed>>).
@@ -1006,8 +1006,8 @@ Unsupported Algorithms:::
 --
 Unsupported Metadata at provisioning or import raises ACE exception `ace_exc_unsupported` and leaves the CR _Unconfigured_.
 A handler that instead intends to emulate the Algorithm sets the
-CR's `*lcrstatus` field to _Off_ (<<ACE-CSR-lcrstatus>>), after which every access to that CR
-traps and is serviced by the emulator; the emulator then holds the CR in its own protected memory
+CR's `*lcrstatus` field to _Off_ (<<ACE-CSR-lcrstatus>>), after which every access to that CR,
+other than those that <<ACE-CSR-lcrstatus>> exempts, traps and is serviced by the emulator; the emulator then holds the CR in its own protected memory
 and services every operation on it, including SCC import and export.
 
 ACE exception `ace_exc_unsupported` is _not_ raised when accessing or using a CR in State `ace_state_unsupported`.
@@ -1066,7 +1066,7 @@ these CSRs, with the exception of
 the read-only identification CSRs `acemvendorid`, `acemarchid`,
 `acemimpid` and `acemaxiobuflen`,
 are not available. Accessing them will raise an illegal-instruction exception.
-Therefore, ACE does not need integration in `Smstateen`/`Ssstateen`.
+Where `Smstateen` is implemented, the ACE bit of the `*stateen0` CSRs (<<ACE-CSRs-priv>>) gates these CSRs and the ACE instructions as well.
 
 The WARL policy of an ACE CSR that has a maximum is uniform: writing a value larger than the maximum
 sets the register to the maximum, so software must read the register back after writing it. Each
@@ -1266,7 +1266,7 @@ bits [63:0], resp., [127:64] of `IMPQUAL`.
 [[ACE-CSK-requirements]]
 === Architectural Requirements on the Context Sealing Key
 
-The ACE unit must have a configured Context Sealing Key (CSK) before it can operate. Without an active CSK, every ACE instruction and every ACE CSR access raises `ace_exc_no_csk`, except access to the `macecsk` CSR group and the read-only identification CSRs `acemvendorid`, `acemarchid`, `acemimpid`, and `acemaxiobuflen` (<<ACE-CSR-impl-ids>>, <<ACE-CSR-acemaxiobuflen>>).  The latter CSRs remain readable to allow firmware to identify the ACE unit without having to configure it.
+The ACE unit must have a configured Context Sealing Key (CSK) before it can operate. Without an active CSK, every ACE instruction and every ACE CSR access raises `ace_exc_no_csk`, except access to the `macecsk` CSR group, to the Locality Secret CSR groups (<<ACE-CSR-locality-groups>>), which are configured independently of the CSK, and to the read-only identification CSRs `acemvendorid`, `acemarchid`, `acemimpid`, and `acemaxiobuflen` (<<ACE-CSR-impl-ids>>, <<ACE-CSR-acemaxiobuflen>>).  The latter CSRs remain readable to allow firmware to identify the ACE unit without having to configure it.
 
 A CSK can be set in one of four mutually exclusive ways:
 
@@ -2820,7 +2820,7 @@ _Description_::
 `aceiobuflen`, `aceiobuftop` and `acestart` to 0, sets the six authentication CSRs to zero, and writes 32 to `acemanagedcr`.
 It uses the encoding of `ace.setst` described above with indirect CR addressing and `Xd` = `X0`.
 
-Clearing (i.e., unconfiguring) a CR that was not already _Unconfigured_ sets its `*lcrstatus` field, and the `ACES` fields in effect, to _Dirty_. The CR's own _State_ field becomes _Unconfigured_.
+Clearing (i.e., unconfiguring) a CR that was not already _Unconfigured_, or whose `*lcrstatus` field in effect is _Off_ (<<ACE-CSR-lcrstatus>>), sets the `*lcrstatus` fields in effect for the current privilege mode, and the `ACES` fields in effect, to _Dirty_. The CR's own _State_ field becomes _Unconfigured_.
 --
 
 // ////////////////////////////////////////////////////////////////////
@@ -2962,7 +2962,7 @@ in an ACE unit shared by several harts it affects only that hart's state, any sh
 A hart reset implies an ACE unit reset of that hart.
 A hardwired CSK is not affected by reset.
 
-On a hart without the ACE Privileged Architecture (<<ACE-error-architecture>>), the CSK is established by M-mode through a model of <<ACE-CSK-requirements>>, every software-programmable Locality Secret is unconfigured (<<ACE-Localities>>), and `ACES` is treated as On; which CSRs of <<ACE-priv>> exist on such a hart is stated there.
+On a hart without the ACE Privileged Architecture (<<ACE-error-architecture>>), the CSK is established by M-mode through a model of <<ACE-CSK-requirements>>, every software-programmable Locality Secret whose CSR group is not implemented is unconfigured (<<ACE-Localities>>), and `ACES` is treated as Initial; which CSRs of <<ACE-priv>> may exist on such a hart is stated there.
 
 // ////////////////////////////////////////////////////////////////////
 
