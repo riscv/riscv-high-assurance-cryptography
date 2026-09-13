@@ -607,8 +607,8 @@ Issuing one otherwise transitions the CR to Error State _Invalid_ (Rule <<ACE-AG
 
 SGR3:: Any transition listed in an Algorithm's specification may be triggered by performing an explicit `ace.setst` operation (<<ACE-instruction-setst>>), or may be induced by certain conditions specified in the Algorithm's specification. Transitions to and between _Configuration_ States use `ace.mgmt`; transitions from a Configuration State use `ace.mgmt`, `ace.clear`, an Error State-setting `ace.setst`, or an `ace.clone` naming the CR as destination.
 
-SGR4::  It is allowed to issue `ace.setst` instructions to transition to the current state.
-When the Algorithm needs to prevent this, it will automatically transition to a different state.
+SGR4:: In a Valid State, `ace.setst` may be issued with the immediate of the current State.
+When the Algorithm needs to prevent this, it transitions to a different State upon completing the instruction.
 
 SGR5:: In States _Success_ and _Failure_, only the following ACE instructions are permitted: `ace.mgmt`, `ace.size`, `ace.setst` (subject to Rule <<ACE-SGR-setst-in-success-failure>> below), `ace.getmd*`, `ace.getst`, `ace.clone`, `ace.restrict*`, and `ace.derive`.
 An `ace.exec` other than those permitted below, or an `ace.setst` not allowed by the architecture or by the Algorithm in its current _State_ and _StateExtension_, transitions the CR to Error State _Invalid_ (cf. Rule <<ACE-AGR-not-allowed-instructions>> in Book 2).
@@ -777,7 +777,7 @@ either — then the Metadata is invalid (see <<ACE-Metadata-validity>>).
 A Locality Secret of the Boot Session Group or of the SW Filter Group whose value is `zeros(128)` is _unconfigured_ (its CSR is defined in <<ACE-priv>>).
 A PI or SCC whose _Locality_ field names an unconfigured entry, or carries the reserved value `3` in bits [5:4], is invalid Metadata (see <<ACE-Metadata-validity>>).
 
-Entry 9 is `hacelocality`, unconfigured when the H extension is not implemented. Entry 10 is the register that `sacelocality` designates in the current mode: `sacelocality` at V=0 and, when V=1, `vsacelocality`, which then substitutes for it (<<ACE-CSR-locality-groups>>). The three entries of the SW Filter Group denote three distinct registers in every mode.
+Entry 9 is `hacelocality`, unconfigured where that register is not implemented or holds `zeros(128)` (<<ACE-locality-csr-groups>>). Entry 10 is the register that `sacelocality` designates in the current mode: `sacelocality` at V=0 and, when V=1, `vsacelocality`, which then substitutes for it (<<ACE-CSR-locality-groups>>). The three entries of the SW Filter Group denote three distinct registers in every mode.
 
 Up to six architected Localities may be active concurrently: up to two from the HW Binding Group; at most one of _PhysBootScrt_ or _VirtBootScrt_; and up to three from the SW Filter Group.  The SCC generation and import algorithms described in <<ACE-CC-management>> enforce the policies associated with these Localities.
 
@@ -806,7 +806,7 @@ A hypervisor saves and restores guest CRs, or hands a CC to a guest.::: At V=0, 
 
 Migration between hosts with the H extension.::: The guest's `vsacelocality` travels with its VS CSRs, and its `hacelocality` with the identity of the machine, for the destination hypervisor to install before the guest runs; each hypervisor keeps its own `sacelocality`. The SCCs of the machine then import on any host with the same CSK.
 
-In every mode the three entries denote three different registers; no ordering or exclusivity among `macelocality`, `hacelocality`, `sacelocality` and `vsacelocality` is required.
+In every mode the three entries denote three different registers; no ordering or exclusivity among `macelocality`, `hacelocality`, `sacelocality` and `vsacelocality` is required. Host software running under a hypervisor does not name _HLocality_, whose value follows the virtual machine loaded.
 
 
 // ////////////////////////////////////////////////////////////////////
@@ -926,7 +926,7 @@ The effective address of an `ace.load` or an `ace.store` must be a multiple of 1
 If it is not, no data is transferred and a load, resp. store, address-misaligned exception is
 raised on that address.
 A PI or an SCC must therefore be held at a 16-byte aligned address.
-For `ace.load` and `ace.store` the conditions are evaluated in this order: the illegal-instruction grounds of both groups and the ACE exceptions, in the order of <<ACE-exception-codes>>; the address breakpoint of the first component access; address-misaligned on the effective address; then, per component access in offset order, address breakpoint, access and page faults.
+For `ace.load` and `ace.store` the conditions are evaluated in this order: the illegal-instruction grounds of both groups and the ACE exceptions, in the order of <<ACE-exception-codes>>; the address breakpoint of the first component access, if any; address-misaligned on the effective address; then, per component access in offset order, address breakpoint, access and page faults.
 
 `ace.input` and `ace.output` are byte-granular and impose no alignment constraint of their own:
 a misaligned effective address behaves as it does for an ordinary load or store on the
@@ -991,10 +991,10 @@ Then, the condition raises ACE exception `ace_exc_fatal`.
 The main fatal condition is an integrity failure of the CRF associated with a hart (<<ACE-cryptographic-registers>>), but implementations may define additional fatal conditions.
 CRF corruption may be detected synchronously or asynchronously, recorded in the ACE unit, and the ACE state reset may also occur asynchronously.
 The first ACE instruction or ACE CSR access issued (or in flight) after detection performs no operation and raises `ace_exc_fatal`; `xepc` holds that instruction's address.
-If every `ACES` field in effect is Off at the time of detection, the condition is retained rather than discarded.
-It is reported on the first ACE instruction or ACE CSR access issued once `ACES` ceases to be Off.
+If every `ACES` field in effect is Off, or the ACE bit of an `*stateen0` CSR in effect is clear, at the time of detection, the condition is retained rather than discarded.
+It is reported on the first ACE instruction or ACE CSR access that is not illegal or virtual on those grounds.
 Detection is therefore never disabled; only its reporting is deferred.
-An instruction issued while `ACES` is Off raises an illegal-instruction exception, which <<ACE-exception-codes>> ranks above `ace_exc_fatal`.
+An instruction issued while `ACES` is Off, or gated by a clear `Smstateen` bit, raises an illegal-instruction or virtual-instruction exception, which <<ACE-exception-codes>> ranks above `ace_exc_fatal`.
 The ACE state reset completes before the trap is taken, and the latter is not delegable below M-mode.
 --
 
@@ -1002,7 +1002,7 @@ The ACE state reset completes before the trap is taken, and the latter is not de
 Illegal-Instruction Exceptions:::
 +
 --
-There are two groups of conditions upon which an illegal-instruction exception is raised:
+There are two groups of conditions upon which an illegal-instruction or virtual-instruction exception is raised:
 
 * In the first group, the grounds for raising the exception come from the instruction encoding, the GPRs and the vector configuration alone, without accessing the state of the ACE unit; they therefore take precedence over `ace_exc_fatal` (<<ACE-exception-codes>>):
 
@@ -1013,7 +1013,7 @@ There are two groups of conditions upon which an illegal-instruction exception i
 . An encoding assigned to an extension that is not implemented, such as Forms A–C of `ace.exec` without `Zklv` (Rule <<ACE-GR-vector-legality>>).
 . An ACE instruction or ACE CSR access gated by a clear `Smstateen` bit (<<ACE-CSRs-priv>>), which raises an illegal-instruction or a virtual-instruction exception as that extension prescribes; an ACE instruction issued while `ACES` is Off (see _Fatal_ below), an ACE instruction issued under big-endian effective data endianness (<<ACE-Notation>>), and an access to a CSR that <<ACE-CSRs-unpriv>> declares unavailable or that <<ACE-CSRs-priv>> makes inaccessible from the current mode (an illegal-instruction or a virtual-instruction exception, as stated there).
 
-* For the second group, the grounds for raising the exception require the contents of the CR, which exist only once a CR marked _Off_ (<<ACE-CSR-lcrstatus>>) has been lazily loaded, or in the M-mode code that emulates it. They are therefore evaluated only after `ace_exc_no_csk` and the _Off_ gate, by the hardware once the CR is loaded or by the emulator, and only if no fatal condition is pending, otherwise `ace_exc_fatal` is raised:
+* For the second group, the grounds for raising the exception require the state of the ACE unit — for most of them the contents of the CR, which exist only once a CR marked _Off_ (<<ACE-CSR-lcrstatus>>) has been lazily loaded, or in the M-mode code that emulates it. They are therefore evaluated only after `ace_exc_no_csk` and the _Off_ gate, by the hardware once the CR is loaded or by the emulator, and only if no fatal condition is pending, otherwise `ace_exc_fatal` is raised:
 
 . A usage-controlled instruction issued on a CR in State _Unconfigured_ (Rule <<ACE-SGR-transition-to-from-unconfigured>>), including `ace.derive` with an _Unconfigured_ endpoint.
 . `ace.load`, `ace.store` or `ace.mv` on a CR whose _State_ does not admit the transfer, or with an inconsistent `acestart` (Rules <<ACE-SGR-ace-load-mv-allowed>> and <<ACE-SGR-ace-store-mv-allowed>>).
@@ -1036,7 +1036,7 @@ Unsupported Metadata at provisioning or import raises ACE exception `ace_exc_uns
 A handler that instead intends to emulate the Algorithm sets the
 CR's `*lcrstatus` field to _Off_ (<<ACE-CSR-lcrstatus>>), after which every access to that CR,
 other than those that <<ACE-CSR-lcrstatus>> exempts, traps and is serviced by the emulator; the emulator then holds the CR in its own protected memory
-and services every operation on it, including SCC import and export.
+and services every operation on it, including SCC import and export. An emulator keeps one copy per CR slot and replaces it at the next `ace_exc_unsupported` on that slot; a copy orphaned by an instruction that <<ACE-CSR-lcrstatus>> exempts is never used again but lingers until replaced, so an emulator that must not retain key material longer than necessary checks `mlcrstatus` whenever it runs and zeroizes the copies whose _Off_ mark is gone.
 
 ACE exception `ace_exc_unsupported` is _not_ raised when accessing or using a CR in State `ace_state_unsupported`.
 --
@@ -1094,7 +1094,7 @@ these CSRs, with the exception of
 the read-only identification CSRs `acemvendorid`, `acemarchid`,
 `acemimpid` and `acemaxiobuflen`,
 are not available. Accessing them will raise an illegal-instruction exception.
-Where `Smstateen` is implemented, the ACE bit of the `*stateen0` CSRs (<<ACE-CSRs-priv>>) gates these CSRs and the ACE instructions as well.
+Where `Smstateen` is implemented, the ACE bit of the `*stateen0` CSRs (<<ACE-CSRs-priv>>) gates all of these CSRs, the identification CSRs included, and the ACE instructions.
 
 The WARL policy of an ACE CSR that has a maximum is uniform: writing a value larger than the maximum
 sets the register to the maximum, so software must read the register back after writing it. Each
@@ -3201,7 +3201,7 @@ In a PI or SCC, System Keys are encoded as a 64-bit SKID used to retrieve the ke
 This replaces the key value itself with a usually smaller field, and may reduce the size of the PI or SCC.
 
 The SKS resolves a SKID different from the all-ones value as a function of the SKID, _Algorithm_ and _AlgorithmPolicy_, never of the current privilege mode; a SKID it does not resolve transitions the CR to Error State _Invalid_ (see <<ACE-Metadata-validity>>).
-Whenever a SKID is resolved, the _UsagePolicy_ of the CR becomes the intersection of the permissions in the PI or SCC and those of the key (bits 0–3 or-ed, bit 4 and-ed), and its _Locality_ the union of the Localities in the PI or SCC and those of the key (the stricter entry in each HW Binding chain, bits 6–8 or-ed); if the two Boot Session entries are non-zero and differ, the CR transitions to Error State _Invalid_.
+Whenever a SKID is resolved, the _UsagePolicy_ of the CR becomes the intersection of the permissions in the PI or SCC and those of the key (bits 0–3 or-ed, bit 4 and-ed), and its _Locality_ the union of the Localities in the PI or SCC and those of the key (the stricter entry in each HW Binding chain, bits 6–8 or-ed); if the two Boot Session entries are non-zero and differ, or the resulting _Locality_ names an unconfigured entry (<<ACE-Localities>>), the CR transitions to Error State _Invalid_, as it does for a supplied MDH at provisioning.
 
 The all-ones SKID (<<ACE-KeyType-field>>) is not resolved by the SKS.
 
@@ -3609,7 +3609,7 @@ to create the serialized, encrypted and authenticated SCC from the CR.
 
 Regarding the Localities, the substitution rules in <<ACE-Localities>> and <<ACE-interaction-with-debug>> apply.
 We define `LST_eff[j]` as the value of `LST` entry j after applying these substitution rules;
-a non-implemented entry with no configured replacement contributes `zeros(128)` and makes the Metadata invalid at provisioning/import. Entry 9 of `LST` is `hacelocality`, and entry 10 the effective register of <<ACE-Localities>>: `sacelocality`, or `vsacelocality` when V=1.
+a non-implemented entry with no configured replacement contributes `zeros(128)` and makes the Metadata invalid at provisioning/import; an export is not refused on this ground, the resulting SCC being rejected at import. Entry 9 of `LST` is `hacelocality`, and entry 10 the effective register of <<ACE-Localities>>: `sacelocality`, or `vsacelocality` when V=1.
 In the export and import algorithms we then replace `LST[j]` with `LST_eff[j]`.
 
 Exporting a CR may produce an _AuxDataLen_ value of 1, both for fully configured (cf. <<ACE-instruction-clearads>>) and non-fully configured CRs.
