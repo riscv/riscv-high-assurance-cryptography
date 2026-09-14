@@ -577,6 +577,17 @@ class CR:
             self.sig = R + bytes(self.fw)                 # R only; HasSignature NOT set
             self.msg_pass = 1
         elif self._pass_xs == 1:
+            # C1 fix (<<ACE-EdDSA>>): a second instance H' recomputes r from the pass-2
+            # message and must match the value stored in pass 1, binding the two passes;
+            # otherwise the CR is invalidated and msg_pass stays at 1.
+            dom = self._dom(0)
+            msg = self._absorb[len(dom) + 2 * self.fw:]       # dom @ R @ A @ M
+            _, prefix, _ = self._keys()
+            r2 = int.from_bytes(self._H(dom + prefix + msg), 'little') % self.c.L
+            if r2 != self._r:
+                self._absorb = None
+                self._pass_xs = None
+                raise ACEInvalid('pass-2 message differs from pass-1 message')
             self._kprime = val
             self.msg_pass = 2
         else:                                             # pass Xs = 2: verification
@@ -1394,27 +1405,35 @@ def test_ed25519():
     chk('MODEL', 'Sign_Generate after only one pass (msg_pass = 1) -> Invalid', ok)
     chk('MODEL', 'HasRndNum is never set on the EdDSA path',
         cr.has_rnd is False and CURVE_PARAMS['ed25519']['j'] == 0)
-    # different message in the two passes must not verify
-    seed, pk, msg = (bytes.fromhex(RFC8032_ED25519[2][1]),
-                     bytes.fromhex(RFC8032_ED25519[2][2]),
-                     bytes.fromhex(RFC8032_ED25519[2][3]))
+    # C1: differing messages in the two signing passes are bound-checked; pass 2
+    # recomputes r and, on mismatch, invalidates the CR, so no signature is produced
+    # and the shared-R key-recovery attack cannot be mounted.
+    seed, msg = (bytes.fromhex(RFC8032_ED25519[2][1]),
+                 bytes.fromhex(RFC8032_ED25519[2][3]))
     cr = fresh(c)
     load_field(cr, SET_SCALAR, seed)
     cr.setst(MSG_ABSORB, form='B', xs=0)
     cr.exec_in(msg)
     cr.setst(MSG_ABSORB, form='B', xs=1)
     cr.exec_in(msg + b'\x00')                             # different message!
-    cr.setst(SIGN_GEN)
-    cr.exec_run()
-    sig = cr.output_all()
+    try:
+        cr.setst(SIGN_GEN)                               # pass-2 finalize rebinds r
+        ok = False
+    except ACEInvalid:
+        ok = True
+    chk('MODEL', 'C1: different messages in the two signing passes -> Invalid at pass 2 '
+        '(no signature emitted)', ok and cr.msg_pass == 1)
+    # identical messages in both passes still sign correctly (the r-rebinding matches)
     cr = fresh(c)
-    load_field(cr, SET_SECONDPT, pk)
-    load_field(cr, SET_SIG, sig)
-    cr.setst(MSG_ABSORB, form='B', xs=2)
+    load_field(cr, SET_SCALAR, seed)
+    cr.setst(MSG_ABSORB, form='B', xs=0)
     cr.exec_in(msg)
-    cr.setst(SIGN_VER)
-    chk('MODEL', 'different messages in the two signing passes -> Failure (the spec NOTE)',
-        not cr.exec_run() and cr.state == FAILURE)
+    cr.setst(MSG_ABSORB, form='B', xs=1)
+    cr.exec_in(msg)                                      # same message
+    cr.setst(SIGN_GEN)
+    sig = cr.exec_run()
+    chk('MODEL', 'C1: identical messages in both passes still sign',
+        sig is not None and cr.state == OUTPUT and cr.msg_pass == 0)
 
 
 def test_ed448():

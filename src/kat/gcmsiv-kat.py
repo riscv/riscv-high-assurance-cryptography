@@ -202,12 +202,13 @@ class AceGcmSiv:
         self.tmp = self._enc_blk(cat((0, 1), (sl(self.tmp, 126, 96), 31),
                                      (sl(self.tmp, 95, 0) ^ self.nonce, 96)))
         self.SIV = self.tmp
+        self._goto('Encrypt')                # M2: the finalize ace.exec enters Encrypt
         return self.SIV                      # OUTPUT
 
     def exec_encrypt(self, INPUT: int, acelen: int) -> int:
         """ace.exec Form A in Encrypt; ACELEN/128 full blocks."""
-        if self.state != 'Encrypt':
-            self._goto('Encrypt')
+        # M2: Encrypt is reachable only via exec_enc_tag_finalize, which synthesized SIV.
+        assert self.state == 'Encrypt', self.state
         assert acelen % 128 == 0
         OUTPUT = 0
         for j in range(acelen // 128):
@@ -345,9 +346,7 @@ def ace_encrypt(key, nonce, aad, pt, acelen=128, length_block=None):
         out = m.exec_encrypt(b2v(chunk), 8 * len(chunk))
         ct += v2b(out, len(chunk))
     if rem:
-        if not body:
-            m.exec_encrypt(0, 0)             # enter Encrypt with no blocks
-        m.setst_enc_last_block(8 * rem)
+        m.setst_enc_last_block(8 * rem)      # already in Encrypt (entered by the finalize exec)
         out = m.exec_enc_last_block(b2v(pt[16 * full:]))
         ct += v2b(out, 16)[:rem]
     return bytes(ct) + v2b(tag_v, 16), m
@@ -618,6 +617,30 @@ def main():
     m.exec_encrypt(0, 128)
     chk(m.state == 'Invalid', "ctr = 2^32-1 in Encrypt puts the CR in Invalid")
 
+    # -- M2: a caller-chosen SIV cannot survive onto the encryption path -----
+    victim_tag = bytes.fromhex(VECTORS[1]['ct_tag'])[-16:]
+    m = AceGcmSiv(key)
+    m.setst_set_aux_value(b2v(nonce))
+    m.setst_set_aux_value_2(b2v(victim_tag))     # inject a chosen SIV
+    m.setst_hash_absorb()
+    injected = m.SIV
+    m.exec_enc_tag_finalize(_length_block(b'', b''))   # mandatory before Encrypt
+    chk(m.state == 'Encrypt' and m.SIV != injected,
+        "M2: the Enc_Tag_Finalize ace.exec is mandatory before Encrypt and overwrites the injected SIV")
+    chk('Encrypt' not in AceGcmSiv.TRANSITIONS['Hash_Absorb']
+        and 'Encrypt' not in AceGcmSiv.TRANSITIONS.get('Set_Aux_Value_2', ()),
+        "M2: Encrypt is not reachable by ace.setst; only the finalize ace.exec enters it")
+    m2 = AceGcmSiv(key)
+    m2.setst_set_aux_value(b2v(nonce))
+    m2.setst_set_aux_value_2(b2v(victim_tag))
+    m2.setst_hash_absorb()
+    try:
+        m2._goto('Encrypt')                      # skip the finalize exec
+        blocked = False
+    except AssertionError:
+        blocked = True
+    chk(blocked, "M2: ace.setst Hash_Absorb -> Encrypt (skipping the finalize exec) is not allowed")
+
     for bad_lbl in (0, 4, 121, 128):
         m = AceGcmSiv(key)
         m.setst_set_aux_value(b2v(nonce))
@@ -651,10 +674,15 @@ def main():
           "RFC 8452 rule (AES-128, counter blocks 0..3), confirmed by the "
           "C.1 intermediates.")
     print("SPEC-NOTE: review m8 is fixed. Each transition into "
-          "Enc_Tag_Finalize, Encrypt, Decrypt and Dec_Tag_Finalize is now "
-          "stated to be a Form A ace.setst, with the value the state consumes "
-          "supplied as the INPUT of the ace.exec issued in the state; the "
-          "model no longer has to infer the Form.")
+          "Enc_Tag_Finalize, Decrypt and Dec_Tag_Finalize is stated to be a "
+          "Form A ace.setst, with the value the state consumes supplied as the "
+          "INPUT of the ace.exec issued in the state; the model no longer has "
+          "to infer the Form.")
+    print("SPEC-NOTE: M2 is fixed. State Encrypt is no longer entered by "
+          "ace.setst; it is reached only from the Enc_Tag_Finalize ace.exec, "
+          "which synthesizes SIV first, so a caller-chosen SIV cannot be used "
+          "as the encryption keystream (an ace.setst naming Encrypt invalidates "
+          "the CR).")
 
     print(f"\nKAT-RESULT: {'PASS' if ok else 'FAIL'}")
     return 0 if ok else 1

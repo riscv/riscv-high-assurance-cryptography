@@ -422,7 +422,6 @@ the block size `b`.
 AGR6:: When a state writes fewer than `ACELEN` bits to `OUTPUT`, the remaining bits of `OUTPUT` are
 cleared. This concerns the bits *within* the operand; the elements beyond `VL`, governed by the
 tail-agnostic policy of <<ACE-ACEV>>, are a separate matter.
-// [[ACE-AGR-long-running-no-data,AGR7]] AGR7:: An Algorithm may define a long-running operation that transfers no data to or from vector registers or the ACEIOBUF. Examples include: scalar multiplication, key generation, or signature generation or verification. The progress is recorded in the _AlgorithmUse_ field, in an implementation-defined format; `acestart` remains reserved for byte counts (<<ACE-CSR-acestart>>). If progress is recorded, the implementation exports the data necessary to support resumption in the ADS. Any importing implementation may discard this Section and restart the operation. In case of an Implementation Qualifier mismatch, the operation must be restarted. Hence, no internal algorithm-dependent state may be committed until the operation completed, and intermediate results must be
 
 [[ACE-AGR-load-long-field,AGR7]] AGR7:: A state that loads a long field from `INPUT`, or emits one to `OUTPUT`, using multiple `ace.exec`
 instructions records the amount transferred so far in a state field _W_ (e.g., _AlgorithmUse_ of
@@ -437,11 +436,6 @@ transition of its own at that point, no further `ace.exec` is allowed in it and 
 transitions the CR to Error State _Invalid_. Excess data in a final loading transfer is ignored; an
 emitting `ace.exec` that would carry _W_ past the field size invalidates the CR. Where _W_ is a
 field of the MDH, `ace.restrict*` may not write it (<<ACE-instruction-restrict>>).
-
-[WARNING]
-====
-Add the handling of a “last block” to Rule <<ACE-AGR-load-long-field>>.
-====
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -474,7 +468,7 @@ Where a standard's formula requires a bit count, it is obtained by multiplying t
 // ////////////////////////////////////////////////////////////////////
 
 [[ACE-states-symmetric]]
-=== State Machines of the Symmetric Cryptography Algorithms
+=== Symmetric Cryptography Algorithms
 
 The following table, together with
 <<ACE-state-off>>, <<ACE-states-valid>>, and <<ACE-states-error>>,
@@ -1615,13 +1609,17 @@ If the instruction is repeated, there is no harm: it just overwrites the `nonce`
 [NOTE]
 ====
 This state is used during decryption.
-It is harmless to invoke it during encryption, as the SIV field will be overwritten later with the correct synthetic value.
+Invoking it during encryption is harmless: the encryption path reaches _Encrypt_ only through the _Enc_Tag_Finalize_ `ace.exec`, which overwrites `SIV` with the synthetic value, so an externally set `SIV` is never used as the encryption keystream.
 It is also harmless to skip it during decryption, as this is equivalent to setting SIV to zero.
 If the instruction is repeated, there is no harm either: it simply overwrites the SIV field, and no other state depends on it.
 ====
 
-** The transitions to States _Hash_Absorb_, _Enc_Tag_Finalize_, _Encrypt_, _Decrypt_, and _Dec_Tag_Finalize_ are
-   performed with Form A `ace.setst` instructions.
+** The transitions to States _Hash_Absorb_, _Enc_Tag_Finalize_, _Decrypt_, and _Dec_Tag_Finalize_ are
+   performed with Form A `ace.setst` instructions. State _Encrypt_ is *not* entered by `ace.setst`:
+   it is reached only from the _Enc_Tag_Finalize_ `ace.exec` above, which synthesizes `SIV` first, so
+   an `ace.setst` naming _Encrypt_ is a not-allowed transition and invalidates the CR
+   (Rule <<ACE-AGR-not-allowed-instructions>>). This prevents an externally supplied `SIV` from being
+   used as the encryption keystream input.
 
 ** {empty}
 +
@@ -1648,7 +1646,8 @@ Then, “``ace.exec``” finalizes the SIV computation by performing:
 --
   . `absorb(INPUT)`.
   . `tmp <- enc_blk(enc_key, 0 @ tmp[126:96] @ (tmp[95:0] xor nonce))`.
-  . `SIV <- tmp` and `OUTPUT <- SIV`,
+  . `SIV <- tmp` and `OUTPUT <- SIV`.
+  . The state transitions to _Encrypt_.
 --
 +
 If `ACELEN` > 128, only the 128 least significant bits of `INPUT` are considered.
@@ -3266,7 +3265,24 @@ A trusted entity can achieve the same effect by providing a CC after first absor
 The Algorithm is the same as Ascon-Hash256 (<<ACE-Ascon-Hash256>>) with the following differences:
 
 . The IV written to `state[0]` in State _Ready_ is `0x0000080000cc0003`.
-. `countdown` is not used: output may be squeezed without limit, so there is nothing to count down. The field it would occupy—bits [1:0] of _AlgorithmUse_ in the MDH—is simply left at zero, and since Ascon-Hash256 holds `countdown` there too rather than in the serialized content, the serialized content of Ascon-XOF128 is identical to that of Ascon-Hash256.
+. The `countdown` is used in a different way:
+
+** Upon entering _Hash_Finalize_, `countdown` is set to 1.
+
+** In State _Hash_Finalize_, any number of ``ace.exec`` instructions of Form C
+   can be issued. "```ace.exec OUTPUT, Kn|K{Xn}```"  performs
++
+--
+. If `countdown` = 0, then:
+.. `ASCON(12)`
+. `OUTPUT[63:0] <- state[0]`
+. If `countdown` {ne} 0 then:
+.. `countdown <- 0`
+--
++
+This way, in State _Hash_Output_/_Hash_Finalize_, the permutation `ASCON(12)` is applied before
+every output word **except the first**.
+
 . As much output as desired can be produced in State _Hash_Finalize_, and the Algorithm never transitions to State _Success_.
 
 // ////////////////////////////////////////////////////////////////////
@@ -3280,7 +3296,7 @@ the IV is `0x0000080000cc0004`, and the message is prepended with the customizat
 // ////////////////////////////////////////////////////////////////////
 
 [[ACE-ECC]]
-=== State Machines of the Elliptic Curve Asymmetric Algorithms
+=== Elliptic Curve Asymmetric Algorithms
 
 Elliptic curve asymmetric Algorithms provide the following functionality:
 
@@ -3726,7 +3742,9 @@ In addition to the fields of <<ACE-ECC>>:
 * `msg_pass`: 8 bits, the number of message-absorption passes completed.
 * `r`: `b` bits, the secret scalar produced by the first signing pass, reduced modulo the
   group order `L`. Like `RndNum` for the ECDSA curves, it never leaves the CR except in
-  the encrypted part of an SCC while a signing operation is in progress.
+  the encrypted part of an SCC while a signing operation is in progress. It also binds the two
+  signing passes: pass 2 recomputes it from its own message and requires the value to match
+  (see the State Machine).
 
 There is no stored pre-hash mode selector: the mode is inferred from the path taken, as
 described below.
@@ -3799,6 +3817,9 @@ State Machine:::
     with `dom {vvert} prefix`.
   . `Xs` = 1, *signing pass 2*: requires `msg_pass` = 1; `H` is initialized with
     `dom {vvert} R {vvert} A`, with `R` from `Signature` and `A` derived from the seed.
+    A second instance `H'`, initialized with `dom {vvert} prefix` as in pass 1, absorbs the
+    same message bytes and recomputes `r`, against which the pass is rebound to pass 1 at
+    finalization.
   . `Xs` = 2, *verification pass*: requires that signature verification be allowed and
     that `HasSignature` and `HasSecondPt` hold; `msg_pass` {leftarrow} 0, and `H` is
     initialized with `dom {vvert} R {vvert} A`, with `R` from `Signature` and
@@ -3806,19 +3827,26 @@ State Machine:::
   . Any other value of `Xs`, or an unmet precondition for the three values above,
     causes the CR to transition to Error State _Invalid_.
 
-** In State _Msg_Absorb_, Form B ``ace.exec`` instructions absorb message bytes through
-   Subalgorithm `process_VLI` (cf. <<ACE-process-VLI>>), with `process_block()` applying
-   the compression function of `H`, and with the `mode` of the underlying hash function:
-   `assign` for ed25519, whose `H` is `SHA-512` (<<ACE-SHA-2>>), and `xor_accumulate` for
-   ed448, whose `H` is `SHAKE256` (<<ACE-SHA-3>>).
+** In State _Msg_Absorb_, Form B ``ace.exec`` instructions absorb message bytes into `H` — and,
+   in signing pass 2, into `H'` as well — through Subalgorithm `process_VLI`
+   (cf. <<ACE-process-VLI>>), invoked as +
+   `{fournbsp}` `process_VLI(max_len=0, block, b, state, n, input_base, block_base, 0, cumul_len, process_block(), None, mode)`, +
+   where `block`, `b`, `state`, `n`, `block_base` and `cumul_len` are the buffer, block size,
+   state, state size, and partial-block and cumulative-length counters of the hash instance;
+   `process_block()` applies its compression function; `cumul_len` is tracked because the unit
+   finalizes the hash itself, appending the padding and length at pass finalization; and `mode` is
+   `assign` for ed25519, whose `H` is `SHA-512` (<<ACE-SHA-2>>), and `xor_accumulate` for ed448,
+   whose `H` is `SHAKE256` (<<ACE-SHA-3>>).
 
 ** Leaving State _Msg_Absorb_ — by the same-state re-entry above or by a transition to
    another state — finalizes the current pass:
   . after pass `Xs` = 0: `r` {leftarrow} `H(dom {vvert} prefix {vvert} M) mod L`,
     `Signature.R` {leftarrow} `r` {interpunct} `B`, and `msg_pass` {leftarrow} 1
     (`HasSignature` is *not* set: `Signature.R` holds an intermediate value);
-  . after pass `Xs` = 1: `k'` {leftarrow} `H(dom {vvert} R {vvert} A {vvert} M)` and
-    `msg_pass` {leftarrow} 2;
+  . after pass `Xs` = 1: if `H'(dom {vvert} prefix {vvert} M) mod L` {ne} `r`, the pass-2
+    message differs from that of pass 1, and the CR transitions to Error State _Invalid_ with
+    `msg_pass` left at 1; otherwise `k'` {leftarrow} `H(dom {vvert} R {vvert} A {vvert} M)`
+    and `msg_pass` {leftarrow} 2;
   . after pass `Xs` = 2: `k'` as above and `msg_pass` {leftarrow} 3.
 +
 The verification pass records 3 rather than 1 so that it cannot be confused with the completion of
@@ -3846,13 +3874,17 @@ never computed.
    encodings of `R` and `A` — are performed; if any fails, or the verification equation
    does not hold, the state transitions to _Failure_, else to _Success_.
 
-NOTE: It is the caller's responsibility to present the same message in both signing passes.
-A caller that presents different messages produces a signature that verifies against neither.
+NOTE: Pass 2 recomputes `r` from its own message and requires it to equal the value stored in
+pass 1; a mismatch invalidates the CR. This binding prevents manipulation from the caller,
+whereby two signatures that share `R` but commit to different messages reveal the private scalar `s`.
+// `r` is a
+// keyed function of the message (`prefix` is secret), so the check cannot be forced off-line.
+Pre-hash mode is unaffected: `PH(M)` in the `Hash` field feeds both hashes.
 
 // ////////////////////////////////////////////////////////////////////
 
 [[ACE-PQC]]
-=== State Machines of the Post Quantum Public-Key Cryptography Algorithms
+=== Post Quantum Public-Key Cryptography Algorithms
 
 [[ACE-PQC-ML-KEM]]
 ==== ML-KEM
@@ -4089,6 +4121,7 @@ Message hashing and domain formatting (cite:[nist-fips-204] {sect}5) are structu
 
 * *Pure ML-DSA:* The caller formats the domain-separated message string `M' = 0x00 @ bin(|ctx|, 8) @ ctx @ M` and computes the 64-byte message representative `mu = SHAKE256(tr @ M', 64)`, which is supplied to the ACE unit via State _mu_Input_.
 * *HashML-DSA (Pre-Hash):* The caller pre-hashes message `M` with the hash function `PH` specified in the _AuxInfo_ field of the MDH, constructs `M' = 0x01 @ bin(|ctx|, 8) @ ctx @ OID(PH) @ PH(M)`, and computes `mu = SHAKE256(tr @ M', 64)` to be loaded into State _mu_Input_.
+For FIPS conformance, cite:[nist-fips-204] requires `PH(M)` to be computed within a FIPS-140-validated cryptographic module, which may be the ACE unit itself if it is required to be FIPS-140-validated.
 * *Public Key Hash (`tr`):* `tr = SHAKE256(pubkey, 64)` is computed inside the ACE unit upon key generation (`_GenerateKeyPair_`) or public key derivation (`_compute_pubKey_`), or loaded via State _tr_Input_ when configuring a CC for verification only.
 * *Context String (`ctx`):* The context string `ctx` (up to 255 bytes) and its length `ctxlen` are maintained in the CC to bind the context of the protocol to the hardware session. In implementations supporting internal message absorption, `ctx` and `tr` are used internally to derive `mu`; when `mu` is supplied directly by the caller, `ctx` and `ctxlen` attest that bound in the serialized SCC.
 
@@ -4269,5 +4302,43 @@ Entering _pubkey_Output_ while `HasPubKey` is false causes the CR to transition 
 The value 0 is not admissible.
 An attempt to clear the field using `ace.restrictl` causes the CR to transition to Error State _Invalid_.
 --
+
+// ////////////////////////////////////////////////////////////////////
+
+[[ACE-derive-endpoints]]
+=== Derivation Endpoints of the Algorithms
+
+[WARNING]
+====
+This section is *work in progress*. The endpoint indices and the per-Algorithm
+constraints below are provisional and may change.
+====
+
+Each Algorithm that participates in `ace.derive` (<<ACE-instruction-derive>>) defines its
+_exportable_ fields (the sources, index `i`) and its _importable_ fields (the destinations,
+index `j`); field indices start at 1, and the value 0 denotes an `ace.exec` endpoint. Unless an
+Algorithm states otherwise, no constraint applies to the destination CC's policies.
+
+A secret **key is never an exportable source.** Key material is moved between CRs only by
+`ace.clone` (<<ACE-instruction-clone>>), which copies the CR verbatim — the same _Algorithm_,
+parameters, _SCProtection_, _Locality_, _UsagePolicy_ and restrictions — after which the copy may be
+narrowed, never widened, with `ace.restrict*` (<<ACE-instruction-restrict>>). A key field is,
+however, a valid *destination*, filled with the destination CR in State _Ready_.
+
+[float="center",align="center",width="100%",cols="<40%,<30%,<30%",options="header"]
+|===
+| Algorithm(s) | Exportable (source `i`) | Importable (destination `j`)
+| <<ACE-PQC-ML-KEM>> | `sharedkey` (1) | —
+| <<ACE-ECB-mode>>, <<ACE-keystream-modes>>, <<ACE-GCM-mode>>, <<ACE-GCM-SIV-mode>>, <<ACE-CMAC-mode>>, <<ACE-OCB-mode>>, <<ACE-Ascon-AEAD128>>, <<ACE-tweakable>> | — | `key` (1)
+| <<ACE-XEX-XTS-modes>> | — | `key1` (1), `key2` (2)
+| <<ACE-HMAC>> (NIK variant) | — | `K0` (1)
+| <<ACE-HMAC>> (KIP variant), <<ACE-KMAC>> | — | — (key supplied in the PI only)
+| <<ACE-hash-functions>> (SHA-2, SHA-3, SM3, SHAKE, Ascon-XOF128/CXOF128) | `ace.exec` output (0) | `ace.exec` input into _Hash_Absorb_ (0)
+| <<ACE-ECC>>, <<ACE-PQC-ML-DSA>> | — | —
+|===
+
+For a variable-size `ace.exec` endpoint (index 0), the source is a repeatable output such as a XOF
+squeeze and the destination a `process_VLI` absorb state that the caller may leave open and continue
+with ordinary `ace.exec` instructions, as described in <<ACE-instruction-derive>>.
 
 // ////////////////////////////////////////////////////////////////////
