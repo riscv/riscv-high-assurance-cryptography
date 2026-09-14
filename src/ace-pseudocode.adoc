@@ -50,6 +50,7 @@ restart:
   # from it whenever the operation is restarted.
   # Assume also that the Content[] directly follows the MDH in memory.
   addi       t4, t6, 16            # source pointer: first byte after MDH
+  mv         s1, t5                # working byte count, re-derived from t5 on restart
 
 vloop:
   vsetvli    s2, s1, e8, m1, ta, ma
@@ -79,7 +80,7 @@ success:
   li         t3, 0x30              # const useful to determine Error States
 
 restart:
-  ace.mgmt   K{t0}, #ace_cfg_provisioning, v1  # start provisioning, load MDH
+  ace.mgmt   K{t0}, #ace_cfg_provisioning, s5:s4  # start provisioning, load MDH
   ace.getst  t2, K{t0}
   beqz       t2, handle_errors
   andi       t2, t2, 0x38          # Check the three top bits of State
@@ -107,14 +108,14 @@ and for a Partial CR, it is just then `MDH` followed by `Content[]`.
 *Export Code (`Zklmv`)*
 ----
 restart:
-  ace.size    s1, K{t0}              # get TOTAL size to export?
+  ace.size    s1, K{t0}              # TOTAL size to export (for the buffer and the checks below)
   beqi        s1, 0, handle_errors   # 0 means the CR is unconfigured
 
   {...}  # here code that allocates the buffer to store the exported data
 
   ace.getmd   s5:s4, K{t0}           # get MDH, including its _State_
-  sd          0(t6), s4              # store MDH[63:0] to memory
-  sd          8(t6), s5              # store MDH[127:64] to memory
+  sd          s4, 0(t6)              # store MDH[63:0] to memory
+  sd          s5, 8(t6)              # store MDH[127:64] to memory
   add         t6, t6, 16             # point to next memory region
   beqi        s1, 16, success        # in Error State we are done
 
@@ -128,30 +129,33 @@ restart:
   ace.mgmt   K{t0}, #ace_cfg_exporting
 
   # Determine from s4 whether the original state was Partial
-  slri        t2, s4, 22             # extract State>>3 from MDH
+  srli        t2, s4, 22             # extract State>>3 from MDH
   andi        t2, t2, 0x07           # Are the three top bits of State = 111 ?
-  beqi        t2, 0x07, store_loop   # if Partial skip SIV, IMPQUAL and SIV2
+  beqi        t2, 0x07, content      # if Partial skip SIV, IMPQUAL and SIV2
 
   csrr        s7, acesivl            # save SIV
   csrr        s8, acesivh
-  sd          0(t6), s7
-  sd          8(t6), s8
+  sd          s7, 0(t6)
+  sd          s8, 8(t6)
   add         t6, t6, 16             # point to next memory region
 
   slli        s6, s4, 18             # extract AuxDataLen from MDH
   srli        s6, s6, 50
-  blei        s6, 2, store_loop      # if AuxDataLen <= 2, skip IMPQUAL & SIV2
+  blei        s6, 1, content         # if AuxDataLen < 2, skip IMPQUAL & SIV2
 
   csrr        s7, aceiql             # save IMPQUAL
   csrr        s8, aceiqh
-  sd          0(t6), s7
-  sd          8(t6), s8
+  sd          s7, 0(t6)
+  sd          s8, 8(t6)
   csrr        s7, acesiv2l           # save SIV2
   csrr        s8, acesiv2h
-  sd          16(t6), s7
-  sd          24(t6), s8
+  sd          s7, 16(t6)
+  sd          s8, 24(t6)
   add         t6, t6, 32             # point to next memory region
 
+content:
+  ace.csize   s1, K{t0}              # Content[] size (not the total), for the store loop
+  mv          t4, t6                 # destination: first byte after the stored headers
 store_loop:
   vsetvli     s2, s1, e8, m1, ta, ma # s2 = no. of bytes moved this iteration
   ace.mv      v2, K{t0}              # move chunk out of CR, advance acestart
@@ -195,7 +199,11 @@ success:
 
 [WARNING]
 ====
-To be rewritten according to new semantics and format.
+Shows the import of a complete SCC under the current format: `SIV`, and if
+_AuxDataLen_ {ge} 2 also `IMPQUAL` and `SIV2`, are restored to their CSRs from the
+image, and only `Content[]` is loaded into the CR. Still to add: import of a
+Partially Configured CR (whose CSRs are restored by the context-switch code, not
+from the image) and the short import of an Error-State MDH (<<ACE-error-state-transfer>>).
 ====
 
 *Import Code (`Zklmv`)*
@@ -206,8 +214,9 @@ To be rewritten according to new semantics and format.
   ace.size    t5, s5:s4         # length of SCC
   beqz        t5, handle_errors # Algorithm not supported, or MDH invalid
 
-  # t5 is saved in local state and not modified by this code, so jumping
-  # to restart will re-derive the working count and pointer from it
+  # t5 (the SCC length) is used above only as the support/validity gate.
+  # t6 is the immutable buffer base, so a jump to restart re-derives the
+  # walking pointer t4 and the content count (via ace.csize) from it.
 restart:
   ace.mgmt   K{t0}, #ace_cfg_importing, s5:s4  # open CR for import, load MDH
   ace.getst  t2, K{t0}
@@ -215,11 +224,39 @@ restart:
   andi       t2, t2, 0x38
   beq        t3, t2, handle_errors
 
-  addi       t4, t6, 16              # source pointer: first byte after MDH
+  addi       t4, t6, 16              # walking pointer: first byte after the MDH
+
+  # Determine from s4 whether the exported CR was in a Partial State
+  srli       t2, s4, 22             # extract State>>3 from MDH
+  andi       t2, t2, 0x07           # three top bits of _State_ = 111 ?
+  beqi       t2, 0x07, content      # if Partial, the image carries no SIV/IMPQUAL/SIV2
+
+  ld         s7, 0(t4)              # restore SIV to its CSRs
+  ld         s8, 8(t4)
+  csrw       acesivl, s7
+  csrw       acesivh, s8
+  addi       t4, t4, 16
+
+  slli       s6, s4, 18             # extract AuxDataLen from MDH
+  srli       s6, s6, 50
+  blei       s6, 1, content         # if AuxDataLen < 2, no IMPQUAL/SIV2
+
+  ld         s7, 0(t4)              # restore IMPQUAL
+  ld         s8, 8(t4)
+  csrw       aceiql, s7
+  csrw       aceiqh, s8
+  ld         s7, 16(t4)             # restore SIV2
+  ld         s8, 24(t4)
+  csrw       acesiv2l, s7
+  csrw       acesiv2h, s8
+  addi       t4, t4, 32
+
+content:
+  ace.csize  s1, K{t0}             # Content[] size to load; t4 points at Content[]
 
 vloop:
   vsetvli    s2, s1, e8, m1, ta, ma
-  vle8.v     v2, (t4)                # load a chunk of the SCC
+  vle8.v     v2, (t4)                # load a chunk of the SCC Content[]
   ace.mv     K{t0}, v2               # move it into the CR, advance acestart
   add        t4, t4, s2
   sub        s1, s1, s2
@@ -229,7 +266,7 @@ vloop:
   beq        t3, t2, handle_errors
   bnez       s1, vloop
 
-  ace.mgmt   K{t0}, #ace_cfg_management_end, v1  # decrypt and authenticate SCC
+  ace.mgmt   K{t0}, #ace_cfg_management_end, s5:s4  # decrypt and authenticate SCC
                                      # and restore original MDH
   ace.getst  t2, K{t0}
   bltu       t3, t2, handle_errors   # catches "Authentication Failed"
@@ -249,11 +286,40 @@ restart:
   beqz       t2, handle_errors
   andi       t2, t2, 0x38
   beq        t3, t2, handle_errors
-  ace.load   K{t0}, 16(t6)          # load the rest starting with SIV
+
+  addi       t4, t6, 16             # walking pointer: first byte after the MDH
+
+  # Determine from s4 whether the exported CR was in a Partial State
+  srli       t2, s4, 22
+  andi       t2, t2, 0x07           # three top bits of _State_ = 111 ?
+  beqi       t2, 0x07, content      # if Partial, the image carries no SIV/IMPQUAL/SIV2
+
+  ld         s7, 0(t4)              # restore SIV to its CSRs
+  ld         s8, 8(t4)
+  csrw       acesivl, s7
+  csrw       acesivh, s8
+  addi       t4, t4, 16
+
+  slli       s6, s4, 18             # extract AuxDataLen from MDH
+  srli       s6, s6, 50
+  blei       s6, 1, content         # if AuxDataLen < 2, no IMPQUAL/SIV2
+
+  ld         s7, 0(t4)              # restore IMPQUAL
+  ld         s8, 8(t4)
+  csrw       aceiql, s7
+  csrw       aceiqh, s8
+  ld         s7, 16(t4)             # restore SIV2
+  ld         s8, 24(t4)
+  csrw       acesiv2l, s7
+  csrw       acesiv2h, s8
+  addi       t4, t4, 32
+
+content:
+  ace.load   K{t0}, 0(t4)           # load Content[] into the CR
   ace.getst  t2, K{t0}
   beqz       t2, restart            # CR cleared means force restart
   bltu       t3, t2, handle_errors
-  ace.mgmt   K{t0}, #ace_cfg_management_end, v1  # decrypt and authenticate CR,
+  ace.mgmt   K{t0}, #ace_cfg_management_end, s5:s4  # decrypt and authenticate CR,
                                     # if necessary complete it
   ace.getst  t2, K{t0}
   andi       t2, t2, 0x38
