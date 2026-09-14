@@ -686,7 +686,7 @@ The effective address of an `ace.load` or an `ace.store` must be a multiple of 1
 If it is not, no data is transferred and a load, resp. store, address-misaligned exception is
 raised on that address.
 A PI or an SCC must therefore be held at a 16-byte aligned address.
-For `ace.load` and `ace.store` the conditions are evaluated in this order: the illegal-instruction grounds of both groups and the ACE exceptions, in the order of <<ACE-exception-codes>>; the address breakpoint of the first component access, if any; address-misaligned on the effective address; then, per component access in offset order, address breakpoint, access and page faults.
+For `ace.load` and `ace.store` the conditions are evaluated in this order: the illegal-instruction grounds of both groups and the ACE exceptions, in the order of <<ACE-exception-codes>>; the address breakpoint of the first component access, if any; address-misaligned on the effective address; then, per component access in offset order, address breakpoint, access and page faults. The address-misaligned check is performed also when the transfer window is empty.
 
 `ace.input` and `ace.output` are byte-granular and impose no alignment constraint of their own:
 a misaligned effective address behaves as it does for an ordinary load or store on the
@@ -768,7 +768,7 @@ There are two sets of conditions upon which an illegal- or virtual-instruction e
 . A reserved encoding, including `ace.setst` with `#immed7` in 59–62 or 46–47, a reserved `#immed7` of `ace.setst` with `r` = 1 and CR register `X0` (<<ACE-instruction-setst>>), and an ACE instruction with a vector operand issued while `vtype.vill` is set (<<ACE-ACEV>>).
 . An indirect CR index outside [0..31], or `X0` used as one where not expressly encoded (Rule <<ACE-GR-GPR-indirect>>), and `ace.derive` with equal CR indices (<<ACE-instruction-derive>>).
 . A GPR pair or quartet not meeting Rule <<ACE-GR-multiple-GPRs>>.
-. A vector operand carrying an MDH with `VL` {times} `SEW` < 128 (Rule <<ACE-GR-vector-MDH-operand>>), or a vector `ace.mv` whose `vl * (SEW/8)` is not a multiple of 16 (<<ACE-instruction-mv>>).
+. A vector operand carrying an MDH with `VL` {times} `SEW` < 128 (Rule <<ACE-GR-vector-MDH-operand>>), or a vector `ace.mv` whose `vl * (SEW/8)` or `vstart * (SEW/8)` is not a multiple of 16 (<<ACE-instruction-mv>>).
 . An encoding assigned to an extension that is not implemented, for instance as Forms A–C of `ace.exec` without `Zklv`.
 . An ACE instruction or ACE CSR access gated by a clear `Smstateen` bit (<<ACE-CSRs-priv>>), which raises an illegal-instruction or a virtual-instruction exception as that extension prescribes; an ACE instruction issued while `ACES` is Off (see _Fatal_ above), an ACE instruction issued under big-endian effective data endianness (<<ACE-Notation>>), and an access to a CSR that <<ACE-CSRs-unpriv>> declares unavailable or that <<ACE-CSRs-priv>> makes inaccessible from the current mode (an illegal-instruction or a virtual-instruction exception, as stated there).
 
@@ -791,8 +791,8 @@ There are two sets of conditions upon which an illegal- or virtual-instruction e
 Unsupported Algorithms:::
 +
 --
-Unsupported Metadata at provisioning or import raises ACE exception `ace_exc_unsupported` and leaves the CR _Unconfigured_.
-A handler that instead intends to emulate the Algorithm sets the
+Unsupported Metadata at provisioning or import raises ACE exception `ace_exc_unsupported` and leaves the CR _Unconfigured_; a handler below M-mode that receives the delegated exception cannot emulate and treats it as unresolvable.
+An M-mode handler that instead intends to emulate the Algorithm sets the
 CR's `*lcrstatus` field to _Off_ (<<ACE-CSR-lcrstatus>>), after which every access to that CR,
 other than those that <<ACE-CSR-lcrstatus>> exempts, traps and is serviced by the emulator; the emulator then holds the CR in its own protected memory
 and services every operation on it, including SCC import and export. To do so it needs either the inputs of `SCC_Encrypt` and `SCC_Decrypt` (<<ACE-SCC-AEAD>>) that it cannot otherwise obtain, that is the CSK and the Locality Secrets of the HW Binding Group, or access to primitives that compute these functions on its behalf; how this access is provided is implementation-specific. An implementation that provides neither cannot emulate Algorithms and reports `ace_exc_unsupported` to software instead. An emulator keeps one copy per CR slot and replaces it at the next `ace_exc_unsupported` on that slot, or at an emulated `ace.clone` naming the slot as destination, which also clears the hardware CR of that slot and marks it _Off_, since the clone of an emulated CR is emulated too; a copy orphaned by an instruction that <<ACE-CSR-lcrstatus>> exempts is never used again but lingers until replaced, so an emulator that must not retain key material longer than necessary checks `mlcrstatus` whenever it runs and zeroizes the copies whose _Off_ mark is gone.
@@ -1017,7 +1017,7 @@ NOTE: The `acemanagedcr` check that `ace.mgmt` performs (<<ACE-instruction-setst
 interleaved management operation. A handler that must manage another CR while one is under management
 must first save the currently managed CR, write 32 to `acemanagedcr`, perform its operations,
 and then restore the exported CR (<<ACE-state-save-and-restore-order>>).
-Writing 32 without completing an export loses the in-flight `SIV`, `SIV2` and `IMPQUAL` values, which the next `ace.mgmt` overwrites.
+Writing 32 without completing an export loses the in-flight `SIV`, `SIV2` and `IMPQUAL` values, which the next `ace.mgmt` that opens an import or an export overwrites.
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -1137,7 +1137,7 @@ For the restrictions on `ace.clone`, cf. <<ACE-instruction-clone>>.
 [[ACE-GR-vector-MDH-operand,GR7]] GR7:: Where a Form of an ACE instruction carries the whole 128-bit MDH in a vector register or group, that
 operand must satisfy `VL` {times} `SEW` {ge} 128; otherwise an illegal-instruction exception is
 raised. <<ACE-extensions-overview-unpriv>> records which vector extensions provide such a register.
-The same requirement applies to an MDH taken from the ACEIOBUF: `aceiobuftop` {ge} 16.
+The same requirement applies to an MDH taken from the ACEIOBUF: `aceiobuftop` {ge} 16. This includes the MDH-formatted operand of `ace.restrictv` and the destination of `ace.getmdv`.
 
 [[ACE-GR-iobuf-configured,GR8]] GR8:: Instructions that access the ACEIOBUF, such as `ace.input` and `ace.output`, may be used only if the
 ACEIOBUF is enabled and `aceiobuflen` is nonzero; otherwise ACE exception
@@ -2153,6 +2153,7 @@ and leave the other CR untouched, or both if both offend.
 
 Only then begin the transfer; on a mid-transfer fault, commit the prefix per Rule <<ACE-IRR-which-resumable-instructions>>.
 The interruption points of an `ace.derive` (<<ACE-CSR-acestart>>) are the `acestart` values that are interruption points for both the source endpoint and the destination endpoint, each in its current State.
+`ace.derive` is resumable (Rules <<ACE-IRR-which-resumable-instructions>> and <<ACE-IRR-block-iterated-instructions>>), so `length` is bounded only by the endpoints.
 
 Whether the transferred data is deterministic depends entirely on the Algorithm in the source CR:
 `ace.derive` itself performs no key derivation and draws no random material.
@@ -3089,6 +3090,7 @@ the CR is transitioned to Error State _Invalid_ (which is a Complete State) and 
     If capacity allocation is not possible, ACE exception `ace_exc_out_of_memory` is raised.
 .. If *provisioning*: CR._State_ is set to `ace_cfg_provisioning`;
 .. If *importing*: CR._State_ depending on `ml`._State_:
+... In every case the opening applies steps 1–8 of <<ACE-SCC-import>>, recomputing `actual_impdatalen` from the MDH it loads.
 ... If `ml`._State_ is a Valid State, then CR._State_ is set to `ace_cfg_importing`;
 ... If `ml`._State_ is `ace_cfg_importing` or `ace_cfg_exporting` (the image of an interrupted import or export of a CR in a Complete State), then CR._State_ is set to `ace_cfg_importing`;
 ... If the base type of `ml`._State_ is `pi`, then CR._State_ is set to `ace_cfg_ppi_importing` (<<ACE-nested-state-base-types>>);
@@ -3762,7 +3764,7 @@ Upon entering Debug mode while the authenticated-debug signal is _deasserted_:
 . The ACEIOBUF is zeroized, and `aceiobuflen`, `aceiobuftop`, and `acestart` are set to zero.
 . All applicable `*lcrstatus` fields are set to _Dirty_; every `ACES` field that is not Off is set to _Dirty_.
 . The software-configurable Locality Secrets — _PhysBootScrt_, _VirtBootScrt_, _MLocality_, _HLocality_, and _SLocality_ (`macephysbootscrt`, `hacevirtbootscrt`, `macelocality`, `hacelocality`, `sacelocality`, `vsacelocality`) — are zeroized. Their CSRs subsequently read as zero.
-. The HW Binding Group entries cannot be zeroized and are therefore _masked_. Until the next hart reset, the ACE unit receives zero for each such entry instead of its hardwired value.
+. The HW Binding Group entries cannot be zeroized and are therefore _masked_. Until the next hart reset, the ACE unit receives zero for each such entry, for this hart, instead of its hardwired value.
 . The CSK is zeroized. If the CSK is hardwired, or shared under the fourth model of <<ACE-CSK-requirements>>, the ACE unit of the hart receives the all-zero value in its place until the next hart reset; a shared CSK itself is not modified.
 
 [NOTE]
