@@ -84,6 +84,14 @@ Trap-and-emulate and on-demand (lazy) SCC import rely on the ``*lcrstatus`` CSRs
 
 // ////////////////////////////////////////////////////////////////////
 
+[[ACE-RBG]]
+==== Requirements on Random Bit Generators
+
+In certain cases either the ACE Unit or the Algorithms implemented in it require an RBG.
+The RBG must use an entropy source and a DRBG satisfying the requirements described in the `Zkr` specification.
+
+// ////////////////////////////////////////////////////////////////////
+
 [[ACE-extensions-overview-unpriv]]
 === Extensions Overview
 
@@ -668,14 +676,6 @@ The CR also transitions to Error State _Invalid_ when, at completion of provisio
 
 // ////////////////////////////////////////////////////////////////////
 
-[[ACE-RBG]]
-==== Requirements on Random Bit Generators
-
-In certain cases either the ACE Unit or the Algorithms implemented in it require an RBG.
-The RBG must use an entropy source and a DRBG satisfying the requirements described in the `Zkr` specification.
-
-// ////////////////////////////////////////////////////////////////////
-
 [[ACE-Memory-Alignment]]
 ==== Memory Alignment Constraints
 
@@ -834,12 +834,6 @@ ACE provides a number of unprivileged CSRs.
 |  0xXXX           |    URW    | `aceiobuftop`               | ACE input/output buffer limit for current transfers in bytes.
 |  0xXXX           |    URW    | `acestart`                  | ACE start byte index.
 |  0xXXX           |    URW    | `acemanagedcr`              | Number of the currently managed CR, or 32 if no CR is being currently managed.
-// |  0xXXX-0xXXX+1   |    URW    | `acesivl`/`acesivh`         | `SIV` of the SCC currently being managed for import or export
-// |  0xXXX-0xXXX+1   |    URW    | `acesiv2l`/`acesiv2h`       | `SIV2` of the SCC currently being managed for import or export
-// |  0xXXX-0xXXX+1   |    URW    | `aceiql`/`aceiqh`           | `IMPQUAL` of the SCC currently being managed for import or export
-// |  0xXXX-0xXXX+1   |    URW    | `acesivlh`/`acesivhh`       | RV32 only: Shadows of bits [63:32] of `acesivl`/`acesivh`
-// |  0xXXX-0xXXX+1   |    URW    | `acesiv2lh`/`acesiv2hh`     | RV32 only: Shadows of bits [63:32] of `acesiv2l`/`acesiv2h`
-// |  0xXXX-0xXXX+1   |    URW    | `aceiqlh`/`aceiqhh`         | RV32 only: Shadows of bits [63:32] of `aceiql`/`aceiqh`
 |===
 
 // On RV32 every 64-bit ACE CSR _X_, in this Book, is accompanied by a 32-bit CSR
@@ -864,7 +858,7 @@ The RW CSRs constitute state that must be saved and restored at context switches
 
 . `acestart`, `aceiobuflen`, and `acemanagedcr` must always be saved and restored.
 . If `aceiobuflen` is non-zero, then `aceiobuflen`, `aceiobuftop`, and the ACEIOBUF contents up to `aceiobuflen` must be saved and restored.
-. If `acemanagedcr` {ne} 32 and the CR it names is importing or exporting an SCC, i.e., its _State_ is one of `ace_cfg_importing`, `ace_cfg_exporting`, `ace_cfg_importing_partial_scc`, or `ace_cfg_exporting_partial_scc`.
+. If `acemanagedcr` {ne} 32 and the CR it names is importing or exporting an SCC, i.e., its _State_ is one of `ace_cfg_importing` and `ace_cfg_exporting`
 The `_scc` States are included because their outermost operation is an import or an export of an SCC,
 whose authentication data must survive the nesting; the `_pi` States are excluded because a
 provisioning produces no `SIV`.
@@ -1283,18 +1277,18 @@ We also anticipate how the _State_ of a configured CR changes while it is being 
 
 . If it is being provisioned, then its _State_ is `ace_cfg_provisioning`.
 .. If this provisioning is preempted before it completed, its _State_ is saved by software.
-   and upon export the _State_ becomes `ace_cfg_exporting_partial_pi`.
+   and upon export the _State_ becomes `ace_cfg_ppi_exporting`. “`ppi`” means “partial provisioning input”.
 .. Upon further preemptions and exports, the current _State_ is saved by software and
-   the state remains `ace_cfg_exporting_partial_pi`.
+   the state remains `ace_cfg_ppi_exporting`.
 .. When the export terminates, the value of the _State_ before the export started is restored by software by passing it to the `ace.mgmt` that completes the export operation.
-.. If the CR is re-imported again, the value of _State_ is first saved and CR's _State_ becomes `ace_cfg_importing_partial_pi`.
+.. If the CR is re-imported again, the value of _State_ is first saved and CR's _State_ becomes `ace_cfg_ppi_importing`.
 .. When such a nested management operation is completed, the previous state is restored.
 .. Hence, when the last nested management operation is completed, the _State_ is restored to `ace_cfg_provisioning`.
 
 . If an export operation is started on a CR in a Valid State, that _State_ is saved by software, and the _State_ becomes `ace_cfg_exporting`.
-.. Nested management operations work similarly to the Provisioning case, except that the nested States are called `ace_cfg_exporting_partial_scc` and `ace_cfg_importing_partial_scc`.
+.. Nested management operations lead to States `ace_cfg_exporting` and `ace_cfg_importing`.
 
-. Entirely similar is the flow op operations if an import operation is started on a CR in a Valid State: the _State_ becomes `ace_cfg_importing`, and the nested management states are `ace_cfg_exporting_partial_scc` and `ace_cfg_importing_partial_scc`.
+. If an import operation is started on a CR: the _State_ becomes `ace_cfg_importing`, and the nested management states are `ace_cfg_exporting` and `ace_cfg_importing`.
 
 The values of these States are given in <<ACE-SC-sealing-status>>.
 
@@ -1377,14 +1371,10 @@ Let `content2_size` = 16 * (_AuxDataLen_ - 2) if _AuxDataLen_ {ge} 2, and 0 othe
 . If the CR is _Unconfigured_, then: 0.
 . If the supplied MDH (Forms B and C) is unsupported or invalid Metadata (see <<ACE-Metadata-validity>>), or its _State_ is _Unconfigured_, then: 0.
 . If the MDH._State_ is an Error State, then: 16.
-. If the MDH._State_ is a Valid State, then:
+. If the MDH._State_ is a Valid State or `ace_cfg_{importing|exporting}`, then:
   ..  If _AuxDataLen_ < 2, then: 32 + `content1_size`.
   ..  If _AuxDataLen_ {ge} 2, then: 64 + `content1_size` + `content2_size`.
-. If the MDH._State_ is a Partial State, then:
-  .. If it is `ace_cfg_provisioning` or `ace_cfg_{importing|exporting}_partial_pi`, then: 16 + `pi_content_size`.
-  .. If it is `ace_cfg_{importing|exporting}` or `ace_cfg_{importing|exporting}_partial_scc`, then:
-    ...  If _AuxDataLen_ < 2, then: 32 + `content1_size`.
-    ...  If _AuxDataLen_ {ge} 2, then: 64 + `content1_size` + `content2_size`.
+. If the MDH._State_ is `ace_cfg_provisioning` or `ace_cfg_ppi_{importing|exporting}`, then: 16 + `pi_content_size`.
 --
 
 // ////////////////////////////////////////////////////////////////////
@@ -1423,25 +1413,20 @@ If the CR's _State_ is not one of the States admitted by Rule <<ACE-SGR-ace-load
 
 Neither `ace.load` nor `ace.store` nor `ace.mv` is ever used on a CR in an Error State (Rule <<ACE-SGR-error-state-CR-is-only-MDH>>, <<ACE-error-state-transfer>>).
 
-Let `size` be the length in bytes of the serialized `Content` of the CR, that is the value that
-`ace.csize` (<<ACE-instruction-size>>) reports for it: the `Content` of a PI or an SCC,
+Let `size` be the length in bytes of the serialized `Content` of the CR, namely the `Content` of a PI or an SCC,
 according to the base type of the image the CR holds (<<ACE-length-rule>>).
 Since `size` must be determined by `ace.load` itself, the caller must have transferred at least the `MDH` into the CR beforehand.
 
-We also need a _ContentOffset_ value of 0, 16, or 48, to signal the start of the `Content` in the external formats depending on the MDH, the current operation, and base type of the image the CR holds (<<ACE-length-rule>>).
+The instruction needs to know a _ContentOffset_ value of 0, 16, or 48, to signal the start of the `Content` in the external formats depending on the MDH, the current operation, and base type of the image the CR holds (<<ACE-length-rule>>).
 Let `content2_size` = 16 * (_AuxDataLen_ - 2) if _AuxDataLen_ {ge} 2, and 0 otherwise.
 
 `_ContentOffset_` is computed using the same case distinction of `ace.size` (<<ACE-instruction-size>>) but excluding the `Content` and the MDH.
 
-. If the MDH._State_ is an Error State, then: 0.
-. If the MDH._State_ is a Valid State, then:
+. If the MDH._State_ is an Error State, then: 10.
+. If the MDH._State_ is a Valid State or `ace_cfg_{importing|exporting}`, then:
   ..  If _AuxDataLen_ < 2, then: 16.
   ..  If _AuxDataLen_ {ge} 2, then: 48.
-. If the MDH._State_ is a Partial State, then:
-  .. If it is `ace_cfg_provisioning` or `ace_cfg_{importing|exporting}_partial_pi`, then: 0.
-  .. If it is `ace_cfg_{importing|exporting}` or `ace_cfg_{importing|exporting}_partial_scc`, then:
-    ...  If _AuxDataLen_ < 2, then: 16.
-    ...  If _AuxDataLen_ {ge} 2, then: 48.
+. If the MDH._State_ is `ace_cfg_provisioning` or `ace_cfg_ppi_{importing|exporting}`, then: 0.
 
 Let `max_admissible` be the length of the longest image of the CR's current base type that the implementation can hold for the Algorithm: for an image with a SCC base type, `content1_size` + `content2_size` (<<ACE-instruction-size>>) at the largest _AuxDataLen_ the implementation supports; for a image with a PI base type, `pi_content_size`. Bytes of an SCC beyond it belong to an ADS that is discarded (<<ACE-SCC-import>>) and are neither read from memory nor written to the CR.
 Offsets of the serialized `Content` at or beyond `max_admissible` hold no CR data; they read as zero through every architectural access.
@@ -1656,19 +1641,19 @@ an illegal-instruction exception is raised. A vector variant for which `vl * (SE
 
 | `0b01` | `rd` = `0b00001`
 | The 128-bit GPR operand at `rs2` is copied into the CR at offset `acestart`.
-| `ace_cfg_provisioning`, `ace_cfg_importing`, `ace_cfg_importing_partial_pi`, `ace_cfg_importing_partial_scc`
+| `ace_cfg_provisioning`, `ace_cfg_importing`, `ace_cfg_ppi_importing`
 
 | `0b01` | `rd` = `0b00010`
 | `vl` elements of `V[rs2]` are moved into the CR at offset `acestart`.
-| `ace_cfg_provisioning`, `ace_cfg_importing`, `ace_cfg_importing_partial_pi`, `ace_cfg_importing_partial_scc`
+| `ace_cfg_provisioning`, `ace_cfg_importing`, `ace_cfg_ppi_importing`
 
 | `0b10` | `rs2` = `0b00001`
 | 16 bytes of the CR at offset `acestart` are copied to the 128-bit GPR operand at `rd`.
-| `ace_cfg_exporting`, `ace_cfg_exporting_partial_pi`, `ace_cfg_exporting_partial_scc`
+| `ace_cfg_exporting`, `ace_cfg_ppi_exporting`
 
 | `0b10` | `rs2` = `0b00010`
 | `vl` elements of the CR at offset `acestart` are moved to `V[rd]`.
-| `ace_cfg_exporting`, `ace_cfg_exporting_partial_pi`, `ace_cfg_exporting_partial_scc`
+| `ace_cfg_exporting`, `ace_cfg_ppi_exporting`
 |===
 
 If `ace.mv` and `ace.load` or `ace.store` are combined within one management operation, the value of each byte of
@@ -2575,8 +2560,8 @@ When a CR is being provisioned, exported, or imported, it is in one of the follo
 |   56     | `ace_cfg_provisioning`          | The CR is being configured.
 |   57     | `ace_cfg_exporting`             | The CR, which was in a _Valid_ state, has been placed in exporting mode, i.e., its contents have been encrypted and authenticated for export.
 |   58     | `ace_cfg_importing`             | The CR, which was in a _Valid_ state, has been placed in importing mode.
-|   59     | `ace_cfg_exporting_partial_pi`  | The CR, whose base operation is a provisioning, has been placed in exporting mode; its image follows the format of a PI.
-|   60     | `ace_cfg_importing_partial_pi`  | Such an image is being reimported.
+|   59     | `ace_cfg_ppi_exporting`  | The CR, whose base operation is a provisioning, has been placed in exporting mode; its image follows the format of a PI.
+|   60     | `ace_cfg_ppi_importing`  | Such an image is being reimported.
 |   61     | `ace_cfg_exporting_partial_scc` | The CR, whose base operation is the import or the export of an SCC, has been placed in exporting mode; its image follows the format of an SCC, but without authentication fields.
 |   62     | `ace_cfg_importing_partial_scc` | Such an image is being reimported.
 |   63     | (Reserved)                      | Reserved.
@@ -2592,7 +2577,7 @@ as such it is not a nested management operation.
 Nested State Base Types:::
 The `pi` and `scc` base types of the nested States record whether the image the CR holds originates
 from a PI or an SCC, following from the base operation: the base type of a Configuration State is `pi` for
-`ace_cfg_provisioning`, `ace_cfg_exporting_partial_pi` and `ace_cfg_importing_partial_pi`, and `scc` for
+`ace_cfg_provisioning`, `ace_cfg_ppi_exporting` and `ace_cfg_ppi_importing`, and `scc` for
 `ace_cfg_exporting`, `ace_cfg_importing`, `ace_cfg_exporting_partial_scc` and `ace_cfg_importing_partial_scc`.
 They determine its length
 (<<ACE-instruction-size>>), which could not otherwise be recovered once the nested management
@@ -3059,7 +3044,7 @@ During export of a CR to a SCC, the initial `ace.mgmt` operation encrypts the co
 
 At nested levels, no additional encryption or authentication is performed. Data is exported as-is:
 
-* If a partially provisioned CR is exported, the data is in the clear and its image is _PI-shaped_, i.e., its format consists of the MDH followed by the `Content` of a PI (State `ace_cfg_exporting_partial_pi`). This is not a security issue, as the plaintext was already available to software and thus to its more privileged modes.
+* If a partially provisioned CR is exported, the data is in the clear and its image is _PI-shaped_, i.e., its format consists of the MDH followed by the `Content` of a PI (State `ace_cfg_ppi_exporting`). This is not a security issue, as the plaintext was already available to software and thus to its more privileged modes.
 
 * If a partially imported SCC is exported, the data is already encrypted and its image is _SCC-shaped_, i.e., its format consists of the MDH followed by the `Content` of a SCC (State `ace_cfg_exporting_partial_scc`).
 
@@ -3143,10 +3128,10 @@ Depending on the previous state of the CR, the actual _State_ after a non-faulti
 
 . After `ace.mgmt`, with #immed7 = `ace_cfg_importing`, the CR's _State_ becomes
 .. `ace_cfg_importing` if the data to import corresponds to a CR in a Valid State,
-.. `ace_cfg_importing_partial_pi` or `ace_cfg_importing_partial_scc` if the data to import corresponds to a CR whose management operation had not been completed.
+.. `ace_cfg_ppi_importing` or `ace_cfg_importing_partial_scc` if the data to import corresponds to a CR whose management operation had not been completed.
 . After `ace.mgmt`, with #immed7 = `ace_cfg_exporting`, the CR's _State_ becomes
 .. `ace_cfg_exporting` if the CR is in a Valid State,
-.. `ace_cfg_exporting_partial_pi` or `ace_cfg_exporting_partial_scc` if the CR being exported is a CR whose management operation had not been completed.
+.. `ace_cfg_ppi_exporting` or `ace_cfg_exporting_partial_scc` if the CR being exported is a CR whose management operation had not been completed.
 
 If a CR is in an Error State, it is exported by simply copying the MDH to memory and imported by a single atomic `ace.mgmt` instruction as detailed in <<ACE-error-state-transfer>>.
 
@@ -3198,7 +3183,7 @@ the CR is transitioned to Error State _Invalid_ (which is a Complete State) and 
 .. If *provisioning*: CR._State_ is set to `ace_cfg_provisioning`;
 .. If *importing*: CR._State_ depending on `ml`._State_:
 ... If `ml`._State_ is a Valid State, then CR._State_ is set to `ace_cfg_importing`;
-... If `ml`._State_ is a Partial State, then CR._State_ is set to `ace_cfg_importing_partial_pi` or
+... If `ml`._State_ is a Partial State, then CR._State_ is set to `ace_cfg_ppi_importing` or
     `ace_cfg_importing_partial_scc` according to the base type of `ml`._State_ (<<ACE-nested-state-base-types>>);
 ... If `ml`._State_ is _Unconfigured_, the Metadata is invalid (see <<ACE-MVR-open>>).
 .. In every case above in which a check fails, that is in which an ACE exception is raised or the CR
@@ -3230,7 +3215,7 @@ The opening `ace.mgmt` causes no changes to any field of the MDH other than _Sta
 
 ... No encryption or authentication occurs; the contents of the CR are exported verbatim, in the same order in which they appear in the PI (for a partially provisioned CR) or in the SCC (for a partially imported CR, or a CR previously prepared for export whose export process was itself interrupted).
 
-... The CR's _State_ is set to `ace_cfg_exporting_partial_pi` or `ace_cfg_exporting_partial_scc`
+... The CR's _State_ is set to `ace_cfg_ppi_exporting` or `ace_cfg_exporting_partial_scc`
 according to its base type (<<ACE-nested-state-base-types>>).
 +
 These values of CR._State_  are the value on which `ace.store` (<<ACE-instruction-store>>) and the CR-reading variants of `ace.mv` (<<ACE-instruction-mv>>) are gated, so no export can proceed until CR._State_ is set.
@@ -3243,8 +3228,8 @@ These values of CR._State_  are the value on which `ace.store` (<<ACE-instructio
 Depending on whether MDH._State_ is
 
 * `ace_cfg_provisioning`,
-* `ace_cfg_importing`, `ace_cfg_importing_partial_pi`, `ace_cfg_importing_partial_scc`, resp.
-* `ace_cfg_exporting`, `ace_cfg_exporting_partial_pi`, `ace_cfg_exporting_partial_scc`,
+* `ace_cfg_importing`, `ace_cfg_ppi_importing`, `ace_cfg_importing_partial_scc`, resp.
+* `ace_cfg_exporting`, `ace_cfg_ppi_exporting`, `ace_cfg_exporting_partial_scc`,
 
 the instruction will proceed to complete a provisioning, importing, resp., exporting process, as are described next.
 
