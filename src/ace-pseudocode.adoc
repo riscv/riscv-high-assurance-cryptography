@@ -30,6 +30,7 @@ regular `beq` using, say, the constant 1 loaded into a different GPR, such as `s
 ==== Provisioning
 
 The provisioning code assumes that the Content immediately follows the MDH in memory.
+The MDH of the PI carries _State_ = _Unconfigured_ (0); the completing `ace.mgmt` sets _Ready_.
 
 *Provisioning Code (`Zklmv`)*
 ----
@@ -69,7 +70,7 @@ vloop:
   ace.mgmt   K{t0}, #ace_cfg_management_end   # complete provisioning
                                    # and possibly reconstruct data
   ace.getst  t2, K{t0}
-  bltu       t3, t2, handle_errors # catches invalid metadata in MDH[127:64]
+  bltu       t3, t2, handle_errors # catches errors at completion (e.g., SKS)
 
 success:
 ----
@@ -123,18 +124,14 @@ restart:
   # the serialized, encrypted and authenticated internal representation.
   # If _State_ is a Partial State, the CR is not converted.
   # ace.mgmt will also change the _State_ to `ace_cfg_exporting`, or to
-  # `ace_cfg_exporting_partial_pi` or `ace_cfg_exporting_partial_scc`
-  # according to the shape of the image (cf. <<ACE-State-field>>)
+  # `ace_cfg_ppi_exporting` for a partially provisioned CR
+  # (cf. <<ACE-State-field>>). The image moved below is `S` of
+  # <<ACE-instruction-load>>: for an SCC-shaped image it begins with SIV
+  # and, if present, IMPQUAL and SIV2; its length is ace.size minus 16.
 
   ace.mgmt   K{t0}, #ace_cfg_exporting
 
-  # Determine from s4 whether the original state was Partial
-  srli        t2, s4, 22             # extract State>>3 from MDH
-  andi        t2, t2, 0x07           # Are the three top bits of State = 111 ?
-  beqi        t2, 0x07, content      # if Partial skip SIV, IMPQUAL and SIV2
-
-content:
-  mv          t4, t6                 # destination: first byte after the stored headers
+  mv          t4, t6                 # destination: first byte after the stored MDH
 store_loop:
   vsetvli     s2, s1, e8, m1, ta, ma # s2 = no. of bytes moved this iteration
   ace.mv      v2, K{t0}              # move chunk out of CR, advance acestart
@@ -159,7 +156,7 @@ Incomplete procedure, like all the others in management.
 Need to add support for PP and ES export.
 ====
 
-*Export Code (`Zkmem`)*
+*Export Code (`Zklmem`)*
 ----
 Until storeloop: the code is the same as in the `Zklmv` version.
 
@@ -186,7 +183,7 @@ success:
 
   # s1 (the SCC length) is used above only as the support/validity gate.
   # t6 is the immutable buffer base, so a jump to restart re-derives the
-  # walking pointer t4 and the content count (via ace.csize) from it.
+  # walking pointer t4 and the content count (via ace.size) from it.
 
 restart:
   ace.mgmt   K{t0}, #ace_cfg_importing, s5:s4  # open CR for import, load MDH
@@ -247,9 +244,8 @@ content:
 success:
 ----
 
-During the provisioning and import procedures, the validity of bits [63:0] of the metadata field is checked immediately.
-The validity of bits [127:64] is deferred to sealing.
-If these bits are invalid, the CR will transitions to Error State _Invalid_ upon executing `ace.mgmt K{t0}, #ace_cfg_management_end`, which is why the `ace.getst` after that instruction repeats the Error-State test.
+During the provisioning and import procedures, the validity of the whole MDH is checked by the opening `ace.mgmt`, which receives it in Form D (<<ACE-MVR-open>>).
+The conditions evaluated at completion — SKS resolution at provisioning, authentication at import — can still transition the CR to an Error State upon executing `ace.mgmt K{t0}, #ace_cfg_management_end`, which is why the `ace.getst` after that instruction repeats the Error-State test.
 
 // ////////////////////////////////////////////////////////////////////////////
 

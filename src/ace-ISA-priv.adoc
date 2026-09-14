@@ -18,15 +18,19 @@ We refer to the ACE Unprivileged Architecture for the definitions of ACE instruc
 |===
 |  Extension       | Features                                                                                       | Defined in:                  | Minimum version | Lifecycle state
 | `Smacecrstatus`  | Defines the `*lcrstatus` per-CR status-tracking CSRs.                                          | <<ACE-CSR-lcrstatus>>        | v0.0.0 | --
+| `Ssacecrstatus`  | The supervisor-visible part of `Smacecrstatus`: `slcrstatus` and, with the H extension, `vslcrstatus`. | <<ACE-CSR-lcrstatus>>   | v0.0.0 | --
 | `Smacecsk`       | Defines the CSR group to configure the Context Sealing Key.                                    | <<ACE-CSR-macecsk>>          | v0.0.0 | --
 | `Smacepbootscrt` | Defines the CSR group to configure the Physical Boot Secret Locality (cf. <<ACE-Localities>>). | <<ACE-CSR-macephysbootscrt>> | v0.0.0 | --
-| `Smacevbootscrt` | Defines the CSR group to configure the Virtual Boot Secret Locality (cf. <<ACE-Localities>>).  | <<ACE-CSR-hacevirtbootscrt>> | v0.0.0 | --
+| `Ssacevbootscrt` | Defines the CSR group to configure the Virtual Boot Secret Locality (cf. <<ACE-Localities>>).  | <<ACE-CSR-hacevirtbootscrt>> | v0.0.0 | --
 | `Smacelclt`      | Defines the CSR group to configure the software binding Localities (cf. <<ACE-Localities>>).   | <<ACE-CSR-macelocality>>, <<ACE-CSR-hacelocality>>, <<ACE-CSR-sacelocality>>, and <<ACE-CSR-vsacelocality>> | v0.0.0 | --
+| `Ssacelclt`      | The supervisor-visible part of `Smacelclt`: `hacelocality`, `sacelocality` and `vsacelocality`. | <<ACE-CSR-hacelocality>>, <<ACE-CSR-sacelocality>>, and <<ACE-CSR-vsacelocality>> | v0.0.0 | --
 |===
+
+`Smacecrstatus` implies `Ssacecrstatus`, and `Smacelclt` implies `Ssacelclt`, on every hart that implements S-mode; an OS or hypervisor depends only on the `Ss` extensions.
 
 //
 
-The ACE Privileged Architecture is _implemented_ on a hart when the hart implements the `ACES` field and those exception causes of <<ACE-exceptions>> that apply to its configuration. It is mandatory on every hart that is not M-mode-only. On an M-mode-only hart it is optional; where it is not implemented: `ACES` is not present and is treated as Initial; no ACE exception cause exists and the behaviors of <<ACE-exception-error-correspondence>> apply; `Smacecrstatus` and `Smacevbootscrt` are not implemented; and the `macecsk`, `macephysbootscrt` and `macelocality` groups may exist, each where its extension is implemented, with the accessibility that <<ACE-CSR-macecsk>> and <<ACE-CSR-locality-groups>> prescribe.
+The ACE Privileged Architecture is _implemented_ on a hart when the hart implements the `ACES` field and those exception causes of <<ACE-exceptions>> that apply to its configuration. It is mandatory on every hart that is not M-mode-only. On an M-mode-only hart it is optional; where it is not implemented: `ACES` is not present and is treated as Initial; no ACE exception cause exists and the behaviors of <<ACE-exception-error-correspondence>> apply; `Smacecrstatus` and `Ssacevbootscrt` are not implemented; and the `macecsk`, `macephysbootscrt` and `macelocality` groups may exist, each where its extension is implemented, with the accessibility that <<ACE-CSR-macecsk>> and <<ACE-CSR-locality-groups>> prescribe.
 
 On an M-mode-only hart none of the extensions in the above table is mandatory.
 `Smacecsk` is allowed in every configuration.
@@ -39,7 +43,7 @@ The rest are:
 [float="center",align="center",cols="<19%,<27%,<27%,<27%",options="header"]
 |===
 | Extension {rightarrow} +
-Configuration {downarrow}  | `Smacecrstatus` | `Smacelclt` | `Smacevbootscrt`
+Configuration {downarrow}  | `Smacecrstatus` | `Smacelclt` | `Ssacevbootscrt`
 
 | M-mode only
 | Optional: If implemented, `mlcrstatus` is implemented and shadowed in `slcrstatus`.
@@ -52,13 +56,13 @@ Configuration {downarrow}  | `Smacecrstatus` | `Smacelclt` | `Smacevbootscrt`
 | {empty}
 
 | M+S+U
-| Mandatory: `mlcrstatus` and `slcrstatus` are implemented and are distinct.
-| Optional: If implemented, `macelocality` and `sacelocality` configure MLocality and SLocality
+| Mandatory: `mlcrstatus` and `slcrstatus` (`Ssacecrstatus`) are implemented and are distinct.
+| Optional: If implemented, `macelocality` and `sacelocality` (`Ssacelclt`) configure MLocality and SLocality
 | {empty}
 
 | M+S+U with H
-| Mandatory: `mlcrstatus`, `slcrstatus` and `vslcrstatus` are implemented and are distinct.
-| Optional: If implemented, `macelocality`, `hacelocality`, `sacelocality` and `vsacelocality` configure MLocality, HLocality and SLocality
+| Mandatory: `mlcrstatus`, `slcrstatus` and `vslcrstatus` (the latter two `Ssacecrstatus`) are implemented and are distinct.
+| Optional: If implemented, `macelocality`, `hacelocality`, `sacelocality` and `vsacelocality` (the latter three `Ssacelclt`) configure MLocality, HLocality and SLocality
 | Optional: If implemented, `hacevirtbootscrt` configures the Virtual Boot Secret Locality
 |===
 
@@ -276,8 +280,15 @@ For each of these 3 CSRs:::
 |===
 --
 +
-`*lcrstatus` is evaluated after the illegal-instruction grounds decided without accessing the state of the ACE unit (the first group of <<ACE-illegal-instruction-grounds>>), `ace_exc_fatal` and `ace_exc_no_csk`,
-and before every other condition, including the second group of <<ACE-illegal-instruction-grounds>> and the conditions of Rule <<ACE-SGR-gate-order>>: the hardware state of a CR whose field in effect is _Off_ is never consulted, since its contents are available only once it has been lazily loaded, or to the M-mode code that emulates it, and those conditions are evaluated there. An ACE instruction _accesses_ ``K(``__i__``)`` when ``K(``__i__``)`` is one of its CR operands, named directly or through a GPR, or when it is `ace.clear.all`; an access to a CR whose field in effect is _Off_ raises `ace_exc_CR_off`, except that an `ace.mgmt` opening a provisioning or import of ``K(``__i__``)``, `ace.clear`, `ace.clear.all`, and an `ace.clone` naming ``K(``__i__``)`` as destination, whose results do not depend on the contents of ``K(``__i__``)``, execute and set every field in effect to _Dirty_ even if ``K(``__i__``)`` was already _Unconfigured_. A mode whose _Off_ mark on ``K(``__i__``)`` has been replaced by _Dirty_ treats the hardware CR as authoritative and discards the image or emulated copy it held for it. `ace.getmd*` on such a CR traps like any other access; an implementation may return the MDH without trapping only where the result is the one the trap and the ensuing restore would have produced. A mode marks ``K(``__i__``)`` _Off_ only while it holds the authoritative image of ``K(``__i__``)``, or emulates it: the hardware contents of an _Off_ CR are never the sole copy of a CC. A handler that has not yet saved a CR leaves its field Clean or Dirty.
+`*lcrstatus` is evaluated after the illegal-instruction grounds that do not require ACE unit state (the first group of <<ACE-illegal-instruction-grounds>>), `ace_exc_fatal`, and `ace_exc_no_csk`, but before all other conditions, including the second group of <<ACE-illegal-instruction-grounds>> and Rule <<ACE-SGR-gate-order>>. The hardware state of a CR with an _Off_ field in effect is never consulted: conditions that depend on its contents are evaluated only after lazy loading or by the M-mode code that emulates the CR.
++
+An ACE instruction _accesses_ ``K(``__i__``)`` if it names the CR as an operand, directly or through a GPR, or if the instruction is `ace.clear.all`. An access to a CR with an _Off_ field in effect raises `ace_exc_CR_off`, with the following exceptions: an `ace.mgmt` opening a provisioning or import, `ace.clear`, `ace.clear.all`, and `ace.clone` as a destination access. These operations do not depend on the CR's contents and set every field in effect for that CR to _Dirty_, even if the CR was already _Unconfigured_. However, an `ace.clone` with identical source and destination executes without setting any field to _Dirty_ (<<ACE-instruction-clone>>). An exempted instruction that raises an exception before its zeroizing step likewise sets no field: an instruction replaces _Off_ with _Dirty_ only if it has zeroized the CR.
++
+A mode whose _Off_ mark has been replaced by _Dirty_ treats the hardware CR as authoritative: a mode that held the authoritative image of the CR for lazy loading discards it, and M-mode, which alone emulates a CR, discards the emulated copy it held for it (<<ACE-error-architecture>>).
++
+`ace.getmd*` on a CR with an _Off_ field in effect traps like any other access. An implementation may return the MDH without trapping only if the result matches what the trap and subsequent restore would have produced.
++
+A mode marks a CR _Off_ only while it holds the authoritative image or emulates the CR; the hardware contents of an _Off_ CR are never the sole copy of a CC. A handler that has not yet saved a CR leaves its field _Clean_ or _Dirty_.
 
 For `mlcrstatus`:::
 +
@@ -406,11 +417,11 @@ illegal-instruction or, as <<ACE-CSRs-priv>> prescribes, a virtual-instruction e
 | Group | Locality Secret | Privilege | Present when
 
 | [[ACE-CSR-macephysbootscrt,macephysbootscrt]]`macephysbootscrt{0..3}` | _PhysBootScrt_ |  M   | `Smacepbootscrt` is implemented.
-| [[ACE-CSR-hacevirtbootscrt,hacevirtbootscrt]]`hacevirtbootscrt{0..3}` | _VirtBootScrt_ |  HS  | `Smacevbootscrt` and the H extension are both implemented.
+| [[ACE-CSR-hacevirtbootscrt,hacevirtbootscrt]]`hacevirtbootscrt{0..3}` | _VirtBootScrt_ |  HS  | `Ssacevbootscrt` and the H extension are both implemented.
 | [[ACE-CSR-macelocality,macelocality]]`macelocality{0..3}`             | _MLocality_    |  M   | `Smacelclt` is implemented.
-| [[ACE-CSR-hacelocality,hacelocality]]`hacelocality{0..3}`             | _HLocality_    |  HS  | `Smacelclt` and the H extension are both implemented.
-| [[ACE-CSR-sacelocality,sacelocality]]`sacelocality{0..3}`             | _SLocality_    |  S   | `Smacelclt` and S-mode are both implemented.
-| [[ACE-CSR-vsacelocality,vsacelocality]]`vsacelocality{0..3}`          | _SLocality_ (guest) |  VS  | `Smacelclt` and the H extension are both implemented.
+| [[ACE-CSR-hacelocality,hacelocality]]`hacelocality{0..3}`             | _HLocality_    |  HS  | `Ssacelclt` and the H extension are both implemented.
+| [[ACE-CSR-sacelocality,sacelocality]]`sacelocality{0..3}`             | _SLocality_    |  S   | `Ssacelclt` and S-mode are both implemented.
+| [[ACE-CSR-vsacelocality,vsacelocality]]`vsacelocality{0..3}`          | _SLocality_ (guest) |  HS, and VS through `sacelocality`  | `Ssacelclt` and the H extension are both implemented.
 |===
 
 When the H extension is implemented, `vsacelocality` substitutes for `sacelocality` when V=1:

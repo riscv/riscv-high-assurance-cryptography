@@ -437,6 +437,13 @@ transitions the CR to Error State _Invalid_. Excess data in a final loading tran
 emitting `ace.exec` that would carry _W_ past the field size invalidates the CR. Where _W_ is a
 field of the MDH, `ace.restrict*` may not write it (<<ACE-instruction-restrict>>).
 
+[[ACE-AGR-progress-discard,AGR10]] AGR10:: _Interrupted long-running operations._
+A State in which an `ace.exec` or `ace.derive` may be interrupted under Rule <<ACE-IRR-long-running-no-data>> admits, besides `ace.setst`, only that one instruction Form.
+Each Algorithm designates one field _P_ that is zero whenever no such operation is interrupted and non-zero from the first precise halt of one until its completion; the encoding of the progress within _P_ is implementation-defined, and the value recorded at a halt is never zero.
+Every random value and every intermediate value kept for the operation, in a state field or in the ADS, is meaningful only while _P_ is non-zero.
+_P_ is zeroed, and that material destroyed, on every transition of the CR's _State_, including a same-State `ace.setst`, a transition to _Ready_ or to an Error State, on completion of the operation, and by an import that discards the ADS; it is not changed by an interrupt, by export, import or `ace.clone`, or by re-execution of the instruction.
+The instruction issued in such a State resumes the interrupted operation if _P_ is non-zero and starts a new one, drawing fresh random values, if it is zero.
+
 // ////////////////////////////////////////////////////////////////////
 
 [[ACE-rules-system-keys]]
@@ -3385,7 +3392,8 @@ The *Provisioning Input* contains only the MDH.
 * *Internal State*:
   ** `OutputType`: Bool.
  ** `Progress`: integer, held in bits [15:1] of the MDH field _AlgorithmUse_. Used only
-    for the implementation-defined tracking of long-running operations described above.
+    for the implementation-defined tracking of long-running operations described above; it is
+    the field _P_ of Rule <<ACE-AGR-progress-discard>>, and `RndNum` is material of the operation under that Rule.
  ** `block_base`: integer. The transfer counter of the “set” and “output”
     operations in bytes, cleared on every state change.
  ** `Generator` (X, {Y}): one or two `b`-bit strings representing the X {and Y} coordinate{s}.
@@ -3583,9 +3591,9 @@ if `r` = 0, if `r` + `k` = `n`, or if `s` = 0.
 
   . For the NIST and Brainpool curves, the signature (`r`, `s`) is computed as
     specified in cite:[nist-fips-186-5] {sect}6.4.1; for SM2, as specified in
-    cite:[GMT-0003-2-2012]. The per-signature secret `k` is drawn from the RBG
+    cite:[GMT-0003-2-2012]. If `Progress` is zero, the per-signature secret `k` is drawn from the RBG
     (<<ACE-RBG>>) into `RndNum`, with `HasRndNum` set for the duration of the
-    operation, and the retry rules above apply.
+    operation; otherwise the interrupted operation is resumed with the `RndNum` held (Rule <<ACE-AGR-progress-discard>>). The retry rules above apply.
   . On completion, `Signature` {leftarrow} (`r`, `s`) and `HasSignature` is set;
     `RndNum` is destroyed and `HasRndNum` cleared.
   . `OutputType` {leftarrow} True, and the state transitions to _Output_.
@@ -3651,6 +3659,7 @@ if `r` = 0, if `r` + `k` = `n`, or if `s` = 0.
 `Progress`, bits [15:1] of _AlgorithmUse_, is the field used following rule <<ACE-IRR-long-running-no-data>> for Point Multiplication,
 Signature Generation and Signature Verification; what an implementation exports to allow resumption
 typically includes precomputed multiples of the base point.
+Rule <<ACE-AGR-progress-discard>> applies: any state transition out of these States zeroes `Progress`, destroys `RndNum` and clears `HasRndNum`, and the operation restarts.
 
 An importing implementation that keeps the Auxiliary Data Section must also be willing to trust the
 random number generator of the originating implementation. If it is not, it discards that Section
@@ -3774,8 +3783,8 @@ State Machine:::
 
 ** Signature generation requires *two* passes over the message, and verification one.
    This is inherent to EdDSA, whose second hash takes `R`, which is not known until the
-   first pass has completed. `msg_pass` records the completed passes; it is cleared upon
-   entering State _Ready_.
+   first pass has completed. `msg_pass` records the completed passes; `msg_pass` and `r` are
+   cleared upon entering State _Ready_.
 
 ** To transition to State _Set_Ctx_, a Form B `ace.setst` is used whose auxiliary
    argument `Xs` sets `ctxlen`. Values greater than 255 cause the CR to transition to
@@ -4022,6 +4031,8 @@ These checks do not affect the implicit rejection of `ML-KEM.Decaps`: a cipherte
 type check but does not decapsulate correctly still yields the `z`-derived shared key, the state
 machine still transitions to _Success_, and the two cases remain indistinguishable to the caller.
 
+ ** In States _GenerateKeyPair_, _Encapsulate_ and _Decapsulate_ the operation is long-running: _AlgorithmUse_ is the field _P_ of Rule <<ACE-AGR-progress-discard>>, and the `ace.exec` resumes an interrupted operation when it is non-zero.
+
  ** In State _GenerateKeyPair_, Form D ``ace.exec Kn|K{Xn}`` generates a new key pair using procedure `ML-KEM.KeyGen` of cite:[nist-fips-203] (Algorithm 19).
 
 . If `ML-KEM.KeyGen` fails, the state machine transitions to state _Failure_.
@@ -4134,6 +4145,7 @@ any other value causes the CR to transition to Error State _Invalid_.
   The field _AuxInfo_ contains the description of the Hash Function used by the Algorithm.
  ** `HasPrivKey`, `HasPubKey`: Booleans recording whether `privkey`, resp. `pubkey`, holds
     a configured value. They are therefore readable with `ace.getmdl`.
+ ** `Hedged`: Boolean, bit 2 of _StateExtension_, recording the signing mode selected on entering _Sign_Generate_.
  ** `privkey`: 2560/4032/4896 bytes (20480/32256/39168 bits) for ML-DSA-44/65/87, resp.
  ** `pubkey` : 1312/1952/2592 bytes (10496/15616/20736 bits) for ML-DSA-44/65/87, resp.
  ** `signature`: 2420/3309/4627  bytes (19360/26472/37016 bits) for ML-DSA-44/65/87, resp.
@@ -4141,7 +4153,7 @@ any other value causes the CR to transition to Error State _Invalid_.
  ** `ctx`: 255 bytes (2040 bits)
  ** `mu`: 64 bytes (512 bits), contains the hashed formatted message
  ** `tr` (derived): 64 bytes (512 bits), contains the hash of the public key
- ** `rnd`: 32 bytes (256 bits), contains a random number which is used in hedged signing, or is zero for deterministic signing.
+ ** `rnd`: 32 bytes (256 bits), the random value of hedged signing; it is non-zero only while a hedged signing operation is interrupted (Rule <<ACE-AGR-progress-discard>>), and zero otherwise, including for deterministic signing.
 
 [none]
 * The ML-DSA Algorithm in ACE does not hash the message itself before signing, but only performs the subsequent hash operations.
@@ -4171,7 +4183,7 @@ for ML-DSA-44/65/87 | Field
 These contexts are large: for ML-DSA-44, ML-DSA-65 and ML-DSA-87 the serialized content is
 6672, 9664 and 12496 bytes, that is 417, 604 and 781 blocks of 128 bits, including the MDH and padding.
 
-Apart from `HasPrivKey` and `HasPubKey` (which are stored in _StateExtension_)
+Apart from `HasPrivKey`, `HasPubKey` and `Hedged` (which are stored in _StateExtension_)
 the ML-DSA Algorithms do not carry state information as to whether `signature`,
 `ctxlen`, `ctx`, `mu` and `tr` have been assigned values.  If those values are not valid,
 a malformed `privkey` or `pubkey` is a configuration error and causes the CR to transition to Error
@@ -4254,11 +4266,11 @@ with the progress recorded in _AlgorithmUse_.
    used, and the auxiliary parameter `Xs` selects the signing mode of cite:[nist-fips-204] {sect}3.4
 
 . If `HasPrivKey` is false, the CR transitions to Error State _Invalid_.
-. If `Xs` = 0 (for instance, if `Xs = X0`), then _hedged_ signing is selected.
-  A 256 bits random value is drawn from an approved random bit generator and stored in `rnd`.
-. If `Xs` is non-zero, then *deterministic* signing is selected. `rnd` is set to `zeros(256)`.
+. If `Xs` = 0 (for instance, if `Xs = X0`), then _hedged_ signing is selected and `Hedged` is set.
+. If `Xs` is non-zero, then *deterministic* signing is selected and `Hedged` is cleared.
 
 ** In State _Sign_Generate_, Form D ``ace.exec Kn|K{Xn}`` generates a digital signature using procedure `ML-DSA.Sign_internal` of cite:[nist-fips-204] (Algorithm 7).
+The operation is long-running: _AlgorithmUse_ is the field _P_ of Rule <<ACE-AGR-progress-discard>>. If it is zero, `rnd` is drawn from an approved random bit generator when `Hedged` is set and is `zeros(256)` otherwise; if it is non-zero, the interrupted operation is resumed with the `rnd` held. On completion `rnd` is destroyed.
 If `HasPrivKey` is true, the output of `ML-DSA.Sign_internal` is written in `signature`, otherwise, the CR transitions to Error State _Invalid_.
 
 ** In State _Sign_Verify_, Form D ``ace.exec Kn|K{Xn}`` verifies a digital signature using procedure `ML-DSA.Verify_internal` of cite:[nist-fips-204] (Algorithm 8):
