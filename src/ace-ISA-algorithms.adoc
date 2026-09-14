@@ -319,7 +319,7 @@ This information is necessary to define the Algorithms and their semantics, and 
 The Internal State always contains the MDH.
 
 . *Serialized Content*:
-The plaintext of the `Content1[]` of the SCC.
+The plaintext of the `Content1` of the SCC.
 The fields are listed in the order they appear in an SCC, each with its length.
 The serialized content is implicitly zero-padded at the end, if necessary, so that its length is a multiple of
 128 bits.
@@ -497,6 +497,11 @@ Start and initialize a hash function of the tag/MAC part of an Algorithm and sta
 |  13   |  `ace_state_set_aux_value`        | _Set_Aux_Value_     | Set a public/auxiliary value in an Algorithm.
 |  14   |  `ace_state_set_aux_value_2`      | _Set_Aux_Value_2_   | Set a second public/auxiliary value in an Algorithm.
 |===
+
+We deliberately choose to not limit the number of blocks the CC can process in the various modes supported by ACE.
+The main reasons are: the limits are very large and un practical to reach in normal software usage, they are hygiene for
+the caller in order to limit the number of times a key is used, and enforcing them would complicate the state machines.
+The exception is OCB (<<ACE-OCB-mode>>), since a hard limit is necessary to limit the memory usage for the internal array of values `L~i~`.
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -1409,31 +1414,21 @@ Data Structures:::
 |  Pos. | Size (Bits)   | Field       | Description
 |  ii   | `k` or 64     | `key`       | Key value or System Key Identifier
 | iii   | 128           | `J0`        | {empty}
-|  iv   | 32            | `budget`    | Number of blocks this CC is permitted to process, as `bin(budget,32)`. See the State Machine Behavior below.
 |===
 --
 
 * *Internal State*: {empty}
 +
 --
-Same as for GCM, with the addition of
+Same as for GCM.
 
-** `budget`: an integer in the range 0 to 2^32^-1, the number of blocks that this CC may
-   still process.
-
-Upon provisioning, `start_ctr <- int(bswap(J0[127:96]))`, i.e. the last four bytes of `J0` read as a big-endian integer, and `budget` is set to the value carried in the Provisioning Input.
+Upon provisioning, `start_ctr <- int(bswap(J0[127:96]))`, i.e. the last four bytes of `J0` read as a big-endian integer.
 --
 
 * *Serialized Content*: {empty}
 +
 --
-The `budget` is inserted in `GCM` mode's serialized content after `last_blk_len` in place of the original Padding field, and is followed by the remaining padding.
-
-[cols="^8%,<15%,<15%,<62%",options="header"]
-|===
-|  Pos. | Size (Bits)   | Field          | Description
-|  vi   | 32            | `budget`       | Remaining block budget, serialized as `bin(budget,32)`.
-|===
+Same as for GCM.
 --
 
 * *States and Allowed Transitions:* {empty}
@@ -1452,12 +1447,6 @@ The differences with respect to GCM are:
  ** To transition to State _Hash_Absorb_: The ``ace.setst`` instruction must be of Form A, i.e., _without any additional inputs_, since the IV is already included in the PI.
  ** No transition back to State _Ready_ is allowed. This is one of the Algorithm-specific
     prohibitions contemplated by <<ACE-State-field>>.
- ** Every `ace.exec` that *consumes* blocks decreases `budget` by the number of blocks it
-    processed, which is `ACELEN`/`b` in States _Hash_Absorb_, _Encrypt_ and _Decrypt_, and
-    1 in States _Enc_Last_Block_ and _Dec_Last_Block_. A Form C `ace.exec` does *not*
-    decrease `budget`: in State _Enc_Tag_Finalize_ it only emits the tag, which consumes no
-    block.
- ** If an `ace.exec` would decrease `budget` below zero, it performs no operation, and the CR transitions to Error State _Invalid_.
 --
 
 NOTE: This Algorithm protects IV confidentiality, not against reuse.
@@ -3053,31 +3042,24 @@ Data Structures:::
 | Pos. | Size (Bits)   | Field    | Description
 |  ii  | 128 or 64     | `key`    | Key value or System Key Identifier
 | iii  | 128           | `nonce`  | {empty}
-|  iv  | 32            | `budget` | Number of blocks this CC is permitted to process, as `bin(budget,32)`. See the State Machine Behavior below.
 |===
 --
 
 * *Internal State*: {empty}
 +
 --
-Same as for Ascon-AEAD128, with the addition of
-
-** `budget`: an integer in the range 0 to 2^32^-1, the number of blocks that this CC may
-   still process.
+Same as for Ascon-AEAD128.
 
 In State _Ready_, words 3 and 4 of `state` are initialized thus:
 
-. `state[3] <- nonce[63:0]`
-. `state[4] <- nonce[127:64]`
-
-Upon provisioning, `budget` is set to the value carried in the Provisioning Input.
+. `state[3] <- nonce[63:0]` and
+. `state[4] <- nonce[127:64]`.
 --
 
 * *Serialized Content*: {empty}
 +
 --
-The `budget` is appended to Ascon-AEAD128's serialized content, serialized as `bin(budget,32)`.
-It occupies exactly what the implicit padding would have, so the total length is unchanged.
+Same as for Ascon-AEAD128.
 --
 
 * *States and Allowed Transitions:* {empty}
@@ -3094,21 +3076,14 @@ Same as for Ascon-AEAD128, with the following exception:
 * *State Machine Behavior:* {empty}
 +
 --
-The differences with respect to Ascon-AEAD128 are:
+The difference with respect to Ascon-AEAD128 is
 
  ** To transition to State _Hash_Absorb_, the ``ace.setst`` instruction must be of Form A,
     i.e., _without any additional inputs_, since the nonce is already included in the PI.
- ** Every `ace.exec` that *consumes* blocks decreases `budget` by the number of blocks it
-    processed, which is `ACELEN`/128 in States _Hash_Absorb_, _Encrypt_ and _Decrypt_, and
-    1 in States _Enc_Last_Block_ and _Dec_Last_Block_. The Form C `ace.exec` of State
-    _Hash_Output_ and the Form B `ace.exec` of State _Hash_Verify_ do *not* decrease
-    `budget`: they only emit, resp., compare the tag, which consumes no block.
- ** If an `ace.exec` would decrease `budget` below zero, it performs no operation, and the
-    CR transitions to Error State _Invalid_.
 --
 
 NOTE: The rules do not forbid keeping an older copy of the SCC in memory to restart the
-state machine with a restored `budget` and use many-time pads. It is the responsibility of
+state machine and thus create many-time pads. It is the responsibility of
 the caller to make sure that the SCC is not abused. This Algorithm only protects the
 confidentiality of the nonce, not against its reuse.
 
@@ -3167,8 +3142,8 @@ replaced throughout by `N xor K2`.
 For encryption and decryption with both nonce masking and a set nonce, the
 Algorithm described in <<ACE-Ascon-AEAD128-wsn>> is used, giving `K1` as the
 key `key` and providing `N xor K2` as the nonce value. All rules of
-<<ACE-Ascon-AEAD128-wsn>> apply to this combination, including the `budget`
-mechanism and the prohibition of transitions back to State _Ready_.
+<<ACE-Ascon-AEAD128-wsn>> apply to this combination, including
+the prohibition of transitions back to State _Ready_.
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -3437,7 +3412,7 @@ The *Provisioning Input* contains only the MDH.
 |   iii   | `b`           | `Scalar`: `b`-bit string. Can be the Private Key.
 |===
 
-The following fields are also optionally included in the `Content1[]` field of the SCC
+The following fields are also optionally included in the `Content1` field of the SCC
 
 [cols="^7%,<33%,<60%",width="100%",options="header"]
 |===
@@ -3463,7 +3438,7 @@ Every term is in bytes. If _AuxDataLen_ is non-zero, the Implementation-Specific
 ADS follows these fields, beginning with the Implementation Qualifier IMPQUAL,
 as in <<ACE-SCC>>.
 
-// The implicit padding is `(-size of Content[]]) mod 128` bits, and is never zero for any curve
+// The implicit padding is `(-size of Content) mod 128` bits, and is never zero for any curve
 // architected here. Determining it is less direct than for the symmetric Algorithms because four of
 // the fields are optional, but the length remains derivable from the MDH alone: their presence is given by `HasSecondPt`, `HasSignature`, `HasHash` and `HasRndNum`, which
 // are the four bits of _StateExtension_ (<<ACE-ECC-StateExtension>>), and _StateExtension_ is one of
