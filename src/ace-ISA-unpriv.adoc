@@ -201,7 +201,6 @@ extension defines each instruction and CSR.
 | `aceiobuflen`,
 `aceiobuftop`               | `Zklio`          | —           | Available
 | `acestart`                | `Zkl` common  2+<| Always present
-| `acemanagedcr`            | `Zkl` common  2+<| Always present
 |===
 
 // ////////////////////////////////////////////////////////////////////
@@ -856,7 +855,7 @@ such register is given its maximum in its own description below.
 
 The RW CSRs constitute state that must be saved and restored at context switches, following the same software convention as `vstart`:
 
-. `acestart`, `aceiobuflen`, and `acemanagedcr` must always be saved and restored.
+. `acestart` and `aceiobuflen` must always be saved and restored.
 . If `aceiobuflen` is non-zero, then `aceiobuflen`, `aceiobuftop`, and the ACEIOBUF contents up to `aceiobuflen` must be saved and restored.
 . If `acemanagedcr` {ne} 32 and the CR it names is importing or exporting an SCC, i.e., its _State_ is one of `ace_cfg_importing` and `ace_cfg_exporting`
 The `_scc` States are included because their outermost operation is an import or an export of an SCC,
@@ -1019,9 +1018,9 @@ Values 33 and above are reserved; writing one leaves `acemanagedcr` unchanged.
 
 NOTE: The `acemanagedcr` check that `ace.mgmt` performs (<<ACE-instruction-setst>>) detects an accidentally
 interleaved management operation. A handler that must manage another CR while one is under management
-saves `acemanagedcr` and the six authentication CSRs, writes 32 to `acemanagedcr`, performs its operations,
-and restores the saved values (<<ACE-state-save-and-restore-order>>). Writing 32 without saving loses the in-flight `SIV`,
-`SIV2` and `IMPQUAL` values, which the next `ace.mgmt` overwrites.
+must first save the currently managed CR, write 32 to `acemanagedcr`, perform its operations,
+and then restore the exported CR (<<ACE-state-save-and-restore-order>>).
+Writing 32 without completing an export loses the in-flight `SIV`, `SIV2` and `IMPQUAL` values, which the next `ace.mgmt` overwrites.
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -2740,8 +2739,7 @@ reset. Out of ACE unit reset:
 . All CRs are in State _Unconfigured_ with zeroized contents.
 . If `Zklio` is available, `aceiobuflen` = 0 (i.e., the ACEIOBUF unconfigured), `aceiobuftop` = 0, and the ACEIOBUF is zeroized;
 . `acestart` = 0;
-// . The value of `acemanagedcr` is 32.
-// . `acesivl`/`acesivh`, `acesiv2l`/`acesiv2h` and `aceiql`/`aceiqh`, together with their RV32 shadows, are zero.
+. The value of `acemanagedcr` is 32.
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -3102,8 +3100,7 @@ the CR is transitioned to Error State _Invalid_ (which is a Complete State) and 
 .. If *provisioning*: CR._State_ is set to `ace_cfg_provisioning`;
 .. If *importing*: CR._State_ depending on `ml`._State_:
 ... If `ml`._State_ is a Valid State, then CR._State_ is set to `ace_cfg_importing`;
-... If `ml`._State_ is a Partial State, then CR._State_ is set to `ace_cfg_ppi_importing` or
-    `ace_cfg_importing_partial_scc` according to the base type of `ml`._State_ (<<ACE-nested-state-base-types>>);
+... If the base type of `ml`._State_ is provisioning, then CR._State_ is set to `ace_cfg_ppi_importing` (<<ACE-nested-state-base-types>>);
 ... If `ml`._State_ is _Unconfigured_, the Metadata is invalid (see <<ACE-MVR-open>>).
 .. In every case above in which a check fails, that is in which an ACE exception is raised or the CR
 transitions to Error State _Unsupported_ or _Invalid_, all fields of the MDH other than _State_ remain
@@ -3130,14 +3127,13 @@ This includes encrypting its contents and computing the authentication tag(s)
 as specified in <<ACE-CC-management>>. Then, CR's _State_ is set to `ace_cfg_exporting`.
 The opening `ace.mgmt` causes no changes to any field of the MDH other than _State_: an implementation that creates or changes an ADS, or uses _AlgorithmUse_, keeps _AuxDataLen_ and _AlgorithmUse_ current at all times, so that the MDH software reads before opening the export is the MDH the export authenticates.
 
-.. If `ml`._State_ is in a Partial State (we are exporting a not fully configured CR or we are initiating a nested CR export), then:
+.. If `ml`._State_ is a Partial State (we are exporting a not fully configured CR or we are initiating a nested CR export), then:
 
 ... No encryption or authentication occurs; the contents of the CR are exported verbatim, in the same order in which they appear in the PI (for a partially provisioned CR) or in the SCC (for a partially imported CR, or a CR previously prepared for export whose export process was itself interrupted).
 
-... The CR's _State_ is set to `ace_cfg_ppi_exporting` or `ace_cfg_exporting_partial_scc`
-according to its base type (<<ACE-nested-state-base-types>>).
+... The CR's _State_ is set to `ace_cfg_ppi_exporting` or `ace_cfg_exporting` according to its base type (<<ACE-nested-state-base-types>>).
 +
-These values of CR._State_  are the value on which `ace.store` (<<ACE-instruction-store>>) and the CR-reading variants of `ace.mv` (<<ACE-instruction-mv>>) are gated, so no export can proceed until CR._State_ is set.
+These values of CR._State_ are the value on which `ace.store` (<<ACE-instruction-store>>) and the CR-reading variants of `ace.mv` (<<ACE-instruction-mv>>) are gated, so no export can proceed until CR._State_ is set.
 --
 +
 . *`ace.mgmt` is issued with `ace_cfg_management_end`*:
@@ -3147,8 +3143,8 @@ These values of CR._State_  are the value on which `ace.store` (<<ACE-instructio
 Depending on whether MDH._State_ is
 
 * `ace_cfg_provisioning`,
-* `ace_cfg_importing`, `ace_cfg_ppi_importing`, `ace_cfg_importing_partial_scc`, resp.
-* `ace_cfg_exporting`, `ace_cfg_ppi_exporting`, `ace_cfg_exporting_partial_scc`,
+* `ace_cfg_importing`, `ace_cfg_ppi_importing`, resp.
+* `ace_cfg_exporting`, `ace_cfg_ppi_exporting`,
 
 the instruction will proceed to complete a provisioning, importing, resp., exporting process, as are described next.
 
@@ -3691,7 +3687,7 @@ This is the recommended order for saving and restoring the ACE state.
 * Save order:
 
 . `acestart` first, since every later step may clear it.
-. `acemanagedcr` and, if it is not 32, the six authentication CSRs, before any `ace.mgmt`, which writes them.
+. `acemanagedcr` and, if it is not 32, fully export the CR it indexes, before any other `ace.mgmt` which may overwrite the authentication values.
 . `aceiobuflen` and `aceiobuftop`.
 . If `aceiobuflen` is nonzero, the buffer contents by `ace.output` with `acestart` = 0 and `aceiobuftop` raised to `aceiobuflen`; this precedes any CR export, whose `ace.mgmt` may take `ml` from the ACEIOBUF (<<ACE-usage-input-output>>).
 . If the saved `acemanagedcr` is not 32, export the CR it indexes; its export leaves `acemanagedcr` naming it.
@@ -3701,13 +3697,12 @@ This is the recommended order for saving and restoring the ACE state.
 * Restore order:
 
 . The CRs not indexed by the saved `acemanagedcr` first, with `acemanagedcr` set at 32 before and after the import.
-. If `acemanagedcr` {ne} 32, then:
-.. restore the CR indexed by the saved `acemanagedcr`, with `acemanagedcr` set at the saved value before the import; and then
-.. the saved six authentication CSRs;
 . `aceiobuflen`, which zeroes the buffer and sets `aceiobuftop`;
 . The buffer contents, if saved, by `ace.input`, with `acestart` = 0 and `aceiobuftop` = `aceiobuflen`;
 . then, `aceiobuftop`, and
 . `acemanagedcr`.
+. If `acemanagedcr` {ne} 32, then:
+.. restore the CR indexed by the saved `acemanagedcr`, with `acemanagedcr` set at the saved value before the import; and then
 . Last, `acestart`, since every earlier step may clear it.
 
 // ////////////////////////////////////////////////////////////////////
