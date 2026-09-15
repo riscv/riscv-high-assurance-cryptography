@@ -91,7 +91,7 @@ The actual numbers are TBD.
 |      | Instruction page fault, instruction access fault | As ordered by the Privileged Specification: first during instruction address translation, then on the physical address.
 |      | Illegal instruction, or virtual instruction | The KLEE grounds decided without accessing the state of the KLEE unit, listed first in <<KLEE-illegal-instruction-grounds>>. They are defects in the encoding or the operands of the instruction. A virtual-instruction exception is raised in place of the illegal-instruction exception where `Smstateen` or the CSR access rules of the hypervisor extension so prescribe (<<KLEE-CSRs-priv>>); the `Smstateen` check precedes the `KLS`-Off check, which precedes the CSR privilege check.
 | TBD  | `kl_exc_fatal`                | Fatal system failure in the KLEE unit. Not delegable below M-mode.
-| TBD  | `kl_exc_no_csk`               | Use of the KLEE unit while no CSK is active: either none has been established, or the `mklcsk` group is only partially written (see <<KLEE-CSK-requirements>>, <<KLEE-CSR-mklcsk>>). Not delegable below M-mode: only M-mode can establish a CSK.
+| TBD  | `kl_exc_no_csk`               | Use of the KLEE unit while no CSK is active: none has been established, or the CSK has been zeroized (see <<KLEE-CSK-requirements>>, <<KLEE-CSR-mklcsk>>). Not delegable below M-mode: only M-mode can establish a CSK.
 | TBD  | `kl_exc_CL_off`               | Any access, as defined in <<KLEE-CSR-lclstatus>>, to a CL whose `*lclstatus` field is _Off_. Not delegable below M-mode, whichever field is _Off_: the hardware does not know which mode holds the authoritative copy of the CL, so M-mode receives the exception and forwards it to the mode that owns the _Off_ field (see <<KLEE-CSR-lclstatus>>). Evaluated before every condition that requires the state of the KLEE unit. Enables on-demand (lazy) CL loading and trap-and-emulate. `kl_exc_unsupported` arises only from an opening `kl.mgmt`, which <<KLEE-CSR-lclstatus>> exempts from this gate: an unsupported Machine provisioned or imported into an _Off_ CL is reported to the emulator by `kl_exc_unsupported`, and every later access to the CL that <<KLEE-CSR-lclstatus>> does not exempt is reported by `kl_exc_CL_off` (<<KLEE-error-architecture>>).
 |      | Illegal instruction            | The KLEE grounds that require the state of the KLEE unit, listed second in <<KLEE-illegal-instruction-grounds>>. They are raised only once no fatal condition is pending, and after `kl_exc_no_csk` and `kl_exc_CL_off`.
 | TBD  | `kl_exc_unsupported`          | Unsupported Metadata (<<KLEE-Metadata-validity>>) when opening a provisioning or import.
@@ -351,36 +351,14 @@ The _Off_ value and the `kl_exc_CL_off` exception provide an architectural hook 
 (((CSR, `mklcsk`)))
 The optional `mklcsk` group consists of XLEN-bit M-mode RW CSRs: eight in RV32, four in RV64.
 
-A write to the __i__-th CSR supplies bits [(_i_+1)·XLEN−1 : _i_·XLEN] of the value that becomes the CSK once the group has been written in full.
+A write to the __i__-th CSR sets bits [(_i_+1)·XLEN−1 : _i_·XLEN] of the CSK.
 
 This CSR group is accessible in M-mode whenever `KLS` is not Off and `misa.L` is set, and not in Debug mode (<<KLEE-interaction-with-debug>>); any other access raises an illegal-instruction exception.
 Out of reset `KLS` is Off (<<KLEE-out-of-reset-priv>>), so M-mode firmware enables `KLS` before it establishes the CSK, and until then the KLEE unit is not usable.
 
-A CSK can only become active if all eight (respectively, four) CSRs have been written to.
-A new CSK becomes active only once every CSR of the group has been written since the previous activation; from the first such write until then the CSK is _partially written_ and the KLEE unit is unavailable (`kl_exc_no_csk`, <<KLEE-CSK-requirements>>).
-A trap or return that changes the privilege mode to M-mode discards a partial write, so that a CSK is never assembled from the writes of two sequences; a trap taken from M-mode to M-mode does not.
-After a discard, the CSK active before the discarded sequence, if any, is active again.
-One mechanism that ensures this is the following (informative):
+Reading a register of the group returns either the corresponding part of the active CSK, or zero if none is established, or always zero, at the implementation's choice; the choice is fixed per implementation.
 
-* The implementation maintains a per-hart set of flags indicating which CSRs in the group have been written to.
-* These flags are initially unset.
-* When M-mode firmware writes to a CSR in the `mklcsk` group, the implementation sets the corresponding flag, and keeps a copy of the value written so far.
-* Once all flags have been set, the values written by M-mode firmware are activated and replace the old values atomically, and the flags are cleared. The new CSK can now be used for cryptographic operations.
-* Any mode change to M-mode resets the flags and discards the partially written value, so that M-mode always begins a configuration attempt from a clean state and a partial key is never activated.
-* A transition of the hart out of M-mode does *not* clear the flags: a partially written CSK persists, and the KLEE unit stays unavailable, until M-mode is next entered.
-* Any KLEE unit reset clears the write-tracking flags and discards the partially written value.
-* While any of the flags is set, that is while a CSK is partially written, the KLEE unit is not available: any attempt to execute a KLEE instruction, or to access a KLEE CSR other than those named in <<KLEE-CSK-requirements>>, raises KLEE exception `kl_exc_no_csk`. Because activation clears the flags, the unit becomes available again as soon as the group has been written in full.
-
-Reading a register of the group returns either the corresponding part of the active CSK, or zero if none is established, or always zero, at the implementation's choice; the choice is fixed per implementation and does not depend on whether a write sequence is in progress.
-
-A CSK whose value is `zeros(256)` is unconfigured under every model of <<KLEE-CSK-requirements>>: writing that value in full through the `mklcsk` group discards any established CSK and leaves the unit without a CSK; an established CSK that is zeroized (<<KLEE-interaction-with-debug>>) becomes unconfigured; under the fourth model an all-zero output of the RBG is discarded and regenerated.
-
-[NOTE]
-====
-The flags survive a transition out of M-mode, so an incomplete CSK write sequence is not
-silently lost. The next KLEE access from any mode traps with `kl_exc_no_csk`, notifying M-mode.
-Entering M-mode resets the flags, allowing the handler to restart CSK provisioning.
-====
+A CSK whose value is `zeros(256)` is unconfigured under every model of <<KLEE-CSK-requirements>>: setting the CSK to that value through the `mklcsk` group leaves the unit without a CSK; an established CSK that is zeroized (<<KLEE-interaction-with-debug>>) becomes unconfigured; under the fourth model an all-zero output of the RBG is discarded and regenerated.
 
 The KLEE unit is unavailable until a CSK is established as described in <<KLEE-CSK-requirements>> (immediately in the case of a hardwired CSK; as soon as it has been generated in the case of a boot-generated one).
 
