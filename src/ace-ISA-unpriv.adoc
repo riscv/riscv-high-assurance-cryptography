@@ -700,9 +700,9 @@ There are no atomicity requirements for any ACE memory instruction.
 [[ACE-error-architecture]]
 ==== Error Handling Architecture
 
-First of all, we address the behavior of ACE in case of error when the ACE Privileged Architecture is not implemented.
-For ACE, this may only occur in an M-mode-only hart.
-In this case, ACE exceptions are replaced by direct transitions of the CR to an Error State, per the mapping in <<ACE-exception-error-correspondence>>.
+Without the ACE Privileged Architecture, which only an M-mode-only hart may omit, the ACE
+exceptions are replaced by the behaviors of <<ACE-exception-error-correspondence>>, listed in their
+natural priority order.
 
 [[ACE-exception-error-correspondence]]
 .Behavior upon exception conditions when the Privileged Architecture is not available.
@@ -717,64 +717,93 @@ In this case, ACE exceptions are replaced by direct transitions of the CR to an 
 | `ace_exc_privilege_violation`      | Transition to Error State `ace_state_priv_violation`.
 | `ace_exc_unconfigured_buffer`      | The instruction raises an illegal-instruction exception.
 |===
-The error conditions in <<ACE-exception-error-correspondence>> are placed in their natural priority order.
-For `ace.clone` and `ace.derive`, which name two CRs, the CR on which an exception of this table is raised, and to which the behavior above and the handler's duty below apply, is: for `ace.clone`, the source for `ace_exc_privilege_violation` and the destination for `ace_exc_out_of_memory`; for `ace.derive`, the endpoint on which the failing check is detected, each check being applied to the source before the destination (Rule <<ACE-SGR-gate-order>>).
 
-Conversely, when the Privileged Architecture is implemented, the transition is the duty of the exception handler: it must set the _State_ of the CR on which the exception was raised to Error State
-_Unsupported_,
-_Out of Memory_, resp.,
-_Privilege Violation_
-when the following three conditions are met: it cannot resolve exception
-`ace_exc_unsupported`,
-`ace_exc_out_of_memory`, resp.,
-`ace_exc_privilege_violation`; cannot forward it to another handler, including an in-process handler; and does not suppress the process that caused it.
-In that case the handler must also resume execution at the instruction following the trapping one, by advancing `xepc`; otherwise the same exception is raised again. A handler that advances `xepc` past a usage instruction should write zeros to that instruction's output operand, as the instruction itself would have done had it performed no operation (Rule <<ACE-SGR-usage-cr-error-state>>).
-Where the trapping instruction left the CR _Unconfigured_, the handler performs the transition with the short import of <<ACE-error-state-transfer>>, as Rule <<ACE-SGR-transition-to-from-unconfigured>> requires.
+For `ace.clone` and `ace.derive`, which name two CRs, the behavior above and the handler's duty
+below concern the CR on which the exception is raised: for `ace.clone`, the source for
+`ace_exc_privilege_violation` and the destination for `ace_exc_out_of_memory`; for `ace.derive`,
+the endpoint on which the failing check is detected, each check being applied to the source before
+the destination (Rule <<ACE-SGR-gate-order>>).
 
-In the following, as well
-as in <<ACE-Algorithms>>, <<ACE-priv>>, and <<ACE-pseudocode-examples>>,
-we shall always describe the behavior when the Privileged Architecture is in effect, with the understanding that raising exceptions will be replaced by the above behaviors when the Privileged Architecture is not implemented.
+With the Privileged Architecture, the transition is the duty of the exception handler. A handler
+that cannot resolve `ace_exc_unsupported`, `ace_exc_out_of_memory` or
+`ace_exc_privilege_violation`, cannot forward it to another handler, including an in-process
+handler, and does not suppress the process that caused it, must:
+
+. set the _State_ of the CR on which the exception was raised to the corresponding Error State of
+  <<ACE-exception-error-correspondence>>, using the short import of <<ACE-error-state-transfer>>
+  where the instruction left the CR _Unconfigured_, as Rule
+  <<ACE-SGR-transition-to-from-unconfigured>> requires; and
+. resume execution at the instruction following the trapping one by advancing `xepc`, since
+  otherwise the same exception is raised again. A handler that advances `xepc` past a usage
+  instruction should write zeros to its output operand, as the instruction would have done had it
+  performed no operation (Rule <<ACE-SGR-usage-cr-error-state>>).
+
+Elsewhere, including <<ACE-Algorithms>>, <<ACE-priv>> and <<ACE-pseudocode-examples>>, behavior is
+described with the Privileged Architecture in effect; without it, the behaviors above replace the
+exceptions.
 
 [horizontal]
-State change rule for exceptions:: Whenever an illegal- or virtual-instruction exception or an ACE exception other than `ace_exc_fatal` is raised, no change to ACE state is made, except for the initial zeroizing of the target CR by an opening `ace.mgmt`, which is performed even if the instruction raises an exception later (<<ACE-instruction-setst>>). `ace_exc_fatal` resets the ACE state (see _Fatal_ below).
+State change rule for exceptions:: An illegal- or virtual-instruction exception, or an ACE
+exception other than `ace_exc_fatal`, makes no change to ACE state, except the zeroizing of the
+target CR by an opening `ace.mgmt`, which is performed even if the instruction later raises an
+exception (<<ACE-CR-management>>). `ace_exc_fatal` resets the ACE state (_Fatal Conditions_ below).
 
-We now give additional explanation of some of the types of error conditions that may occur during the lifecycle of an ACE unit:
+The categories of error conditions are:
 
 Fatal Conditions:::
 +
 --
-This category has the highest priority amongst the ACE specific error categories.
-The detection of the errors in this category can not be disabled by any CPU state.
+Fatal conditions have the highest priority among the ACE-specific error categories, and no CPU
+state disables their detection. The main one is an integrity failure of the CRF of a hart
+(<<ACE-cryptographic-registers>>); implementations may define others.
 
-A fatal condition causes an ACE unit reset of the hart (<<ACE-reset-and-m-mode-only>>), with three differences: `misa.L` keeps its value and every `ACES` field that is not Off is set to Dirty rather than Off, so that `ace_exc_fatal` can be reported, the modes below M-mode are not silently disabled, and context-switching code discards its stale saved state; every `*lcrstatus` field is set to _Dirty_ rather than _Initial_, as on entry into unauthenticated Debug mode (<<ACE-interaction-with-debug>>); and the masks that unauthenticated Debug mode installs are not lifted. A CSK generated at boot under the fourth model of <<ACE-CSK-requirements>> is shared by the harts of its subsystem and is not re-generated.
-Then, the condition raises ACE exception `ace_exc_fatal`.
+A fatal condition causes an the reset of the corresponding hart-side of the ACE unit
+(<<ACE-reset-and-m-mode-only>>) and then
+raises ACE exception `ace_exc_fatal`, whose trap is taken only after the reset completes
+and is not delegable below M-mode. The reset differs from an ordinary one in three ways:
 
-The main fatal condition is an integrity failure of the CRF associated with a hart (<<ACE-cryptographic-registers>>), but implementations may define additional fatal conditions.
-CRF corruption may be detected synchronously or asynchronously, recorded in the ACE unit, and the ACE state reset may also occur asynchronously.
-The first ACE instruction or ACE CSR access issued (or in flight) after detection performs no operation and raises `ace_exc_fatal`; `xepc` holds that instruction's address.
-If any `ACES` field in effect is Off, or the ACE bit of an `*stateen0` CSR in effect is clear, at the time of detection, the condition is retained rather than discarded.
-It is reported on the first ACE instruction or ACE CSR access that is not illegal or virtual on those grounds.
-Detection is therefore never disabled; only its reporting is deferred.
-An instruction issued while `ACES` is Off, or gated by a clear `Smstateen` bit, raises an illegal- or virtual-instruction exception, which <<ACE-exception-codes>> ranks above `ace_exc_fatal`.
-The ACE state reset completes before the trap is taken, and the latter is not delegable below M-mode.
+. `misa.L` keeps its value, and every `ACES` field that is not Off becomes Dirty rather than Off,
+  so that `ace_exc_fatal` can be reported, the modes below M-mode are not silently disabled, and
+  context-switching code discards its stale saved state;
+. every `*lcrstatus` field becomes _Dirty_ rather than _Initial_, as on entry into unauthenticated
+  Debug mode (<<ACE-interaction-with-debug>>);
+. the masks that unauthenticated Debug mode installs are not lifted.
+
+A CSK generated at boot under the fourth model of <<ACE-CSK-requirements>> is shared by the harts of
+its subsystem and is not regenerated.
+
+Detection and reset may be synchronous or asynchronous, the condition being recorded in the ACE
+unit. The first ACE instruction or ACE CSR access issued, or in flight, after detection performs no
+operation and raises `ace_exc_fatal`, with `xepc` holding its address. If, at detection, an `ACES`
+field in effect is Off or the ACE bit of an `*stateen0` CSR in effect is clear, the condition is
+retained and reported on the first ACE instruction or ACE CSR access that is not illegal or virtual
+on those grounds; until then such instructions raise an illegal- or virtual-instruction exception,
+which <<ACE-exception-codes>> ranks above `ace_exc_fatal`. Detection is thus never disabled; only
+its reporting is deferred.
 --
 
 [[ACE-illegal-instruction-grounds]]
 Illegal-Instruction Exceptions:::
 +
 --
-There are two sets of conditions upon which an illegal- or virtual-instruction exception is raised:
+The grounds for an illegal- or virtual-instruction exception form two groups:
 
-* In the first set, the grounds for raising the exception come from the instruction encoding, the GPRs and the vector configuration alone, without accessing the state of the ACE unit; they therefore take precedence over `ace_exc_fatal` (<<ACE-exception-codes>>):
+* In the first group, the grounds come from the instruction encoding, the GPRs and the vector
+  configuration alone, without accessing the state of the ACE unit, and therefore take precedence
+  over `ace_exc_fatal` (<<ACE-exception-codes>>):
 
 . A reserved encoding, including `ace.setst` with `#immed7` 46 or 47, `ace.mgmt` with `#immed7` in 59–62, a reserved `#immed7` of `ace.setst` with `r` = 1 and CR register `X0` (<<ACE-instruction-setst>>), and an ACE instruction with a vector operand issued while `vtype.vill` is set (<<ACE-ACEV>>).
 . An indirect CR index outside [0..31], or `X0` used as one where not expressly encoded (Rule <<ACE-GR-GPR-indirect>>), and `ace.derive` with equal CR indices (<<ACE-instruction-derive>>).
 . A GPR pair or quartet not meeting Rule <<ACE-GR-multiple-GPRs>>.
 . A vector operand carrying an MDH with `VL` {times} `SEW` < 128 (Rule <<ACE-GR-vector-MDH-operand>>), or a vector `ace.mv` whose `vl * (SEW/8)` or `vstart * (SEW/8)` is not a multiple of 16 (<<ACE-instruction-mv>>).
 . An encoding assigned to an extension that is not implemented, for instance as Forms A–C of `ace.exec` without `Zklv`.
-. An ACE instruction or ACE CSR access gated by a clear `Smstateen` bit (<<ACE-CSRs-priv>>), which raises an illegal-instruction or a virtual-instruction exception as that extension prescribes; an ACE instruction issued while `ACES` is Off (see _Fatal_ above), an ACE instruction issued under big-endian effective data endianness (<<ACE-Notation>>), and an access to a CSR that <<ACE-CSRs-unpriv>> declares unavailable or that <<ACE-CSRs-priv>> makes inaccessible from the current mode (an illegal-instruction or a virtual-instruction exception, as stated there).
+. An ACE instruction or ACE CSR access gated by a clear `Smstateen` bit (<<ACE-CSRs-priv>>), which raises an illegal- or virtual-instruction exception as that extension prescribes; an ACE instruction issued while `ACES` is Off (see _Fatal_ above), an ACE instruction issued under big-endian effective data endianness (<<ACE-Notation>>), and an access to a CSR that <<ACE-CSRs-unpriv>> declares unavailable or that <<ACE-CSRs-priv>> makes inaccessible from the current mode (an illegal- or virtual-instruction exception, as stated there).
 
-* For the second set, the grounds for raising the exception require the state of the ACE unit — for most of them the contents of the CR, which exist only once a CR marked _Off_ (<<ACE-CSR-lcrstatus>>) has been lazily loaded, or in the M-mode code that emulates it. They are therefore evaluated only after `ace_exc_no_csk` and the _Off_ gate, by the hardware once the CR is loaded or by the emulator, and only if no fatal condition is pending, otherwise `ace_exc_fatal` is raised:
+* In the second group, the grounds require the state of the ACE unit: for most of them the
+  contents of a CR, which for a CR marked _Off_ (<<ACE-CSR-lcrstatus>>) exist only once it has been
+  lazily loaded, or in the M-mode code that emulates it. They are evaluated only after
+  `ace_exc_no_csk` and the _Off_ gate, once the CR is loaded or by the emulator, and only if no
+  fatal condition is pending, `ace_exc_fatal` being raised otherwise:
 
 . A usage-controlled instruction issued on a CR in State _Unconfigured_ (Rule <<ACE-SGR-transition-to-from-unconfigured>>), including `ace.derive` with an _Unconfigured_ endpoint.
 . `ace.load`, `ace.store` or `ace.mv` on a CR whose _State_ does not admit the transfer, or with an inconsistent `acestart` (Rules <<ACE-SGR-ace-load-mv-allowed>> and <<ACE-SGR-ace-store-mv-allowed>>).
@@ -793,26 +822,44 @@ There are two sets of conditions upon which an illegal- or virtual-instruction e
 Unsupported Algorithms:::
 +
 --
-Unsupported Metadata at provisioning or import raises ACE exception `ace_exc_unsupported` and leaves the CR _Unconfigured_; a handler below M-mode that receives the delegated exception cannot emulate and treats it as unresolvable.
-An M-mode handler that instead intends to emulate the Algorithm sets the
-CR's `*lcrstatus` field to _Off_ (<<ACE-CSR-lcrstatus>>), after which every access to that CR,
-other than those that <<ACE-CSR-lcrstatus>> exempts, traps and is serviced by the emulator; the emulator then holds the CR in its own protected memory
-and services every operation on it, including SCC import and export. To do so it needs either the inputs of `SCC_Encrypt` and `SCC_Decrypt` (<<ACE-SCC-AEAD>>) that it cannot otherwise obtain, that is the CSK and the Locality Secrets of the HW Binding Group, or access to primitives that compute these functions on its behalf; how this access is provided is implementation-specific. An implementation that provides neither cannot emulate Algorithms and reports `ace_exc_unsupported` to software instead. An emulator keeps one copy per CR slot and replaces it at the next `ace_exc_unsupported` on that slot, or at an emulated `ace.clone` naming the slot as destination, which also clears the hardware CR of that slot and marks it _Off_, since the clone of an emulated CR is emulated too; a copy orphaned by an instruction that <<ACE-CSR-lcrstatus>> exempts is never used again but lingers until replaced, so an emulator that must not retain key material longer than necessary checks `mlcrstatus` whenever it runs and zeroizes the copies whose _Off_ mark is gone.
+Unsupported Metadata at provisioning or import raises `ace_exc_unsupported` and leaves the CR
+_Unconfigured_. A handler below M-mode that receives the delegated exception cannot emulate the
+Algorithm and treats the exception as unresolvable.
 
-ACE exception `ace_exc_unsupported` is _not_ raised when accessing or using a CR in State `ace_state_unsupported`.
+An M-mode handler that emulates the Algorithm instead sets the CR's `*lcrstatus` field to _Off_
+(<<ACE-CSR-lcrstatus>>): every later access to the CR that <<ACE-CSR-lcrstatus>> does not exempt
+then traps, and the emulator, holding the CR in its own protected memory, services every operation
+on it, including SCC import and export. For this it needs either the inputs of `SCC_Encrypt` and
+`SCC_Decrypt` (<<ACE-SCC-AEAD>>) that it cannot otherwise obtain, namely the CSK and the Locality
+Secrets of the HW Binding Group, or access to primitives that compute these functions on its
+behalf, provided in an implementation-specific way. An implementation that provides neither cannot
+emulate Algorithms, and reports `ace_exc_unsupported` to software instead.
+
+An emulator keeps one copy per CR slot, and replaces it:
+
+. at the next `ace_exc_unsupported` on that slot; or
+. at an emulated `ace.clone` naming the slot as destination, which also clears the hardware CR of
+  that slot and marks it _Off_, since the clone of an emulated CR is emulated too.
+
+A copy orphaned by an instruction that <<ACE-CSR-lcrstatus>> exempts is never used again but lingers
+until replaced, so an emulator that must not retain key material longer than necessary checks
+`mlcrstatus` whenever it runs and zeroizes the copies whose _Off_ mark is gone.
+
+`ace_exc_unsupported` is _not_ raised when accessing or using a CR in State `ace_state_unsupported`.
 --
 
 Algorithmic Errors:::
 +
 --
-Algorithmic errors may occur in import processes or in the Algorithms themselves:
+Algorithmic errors may occur:
 
-. In the first case, the error is Error State _ace_state_import_auth_.
-. Algorithm-specific errors may cause the CR to transition to Error State _Invalid_, or transition it to some other Error State, according to the behavior specified by the Algorithm.
+. in import processes, as Error State `ace_state_import_auth`;
+. in the Algorithms themselves, which may transition the CR to Error State _Invalid_ or to another
+  Error State, as the Algorithm specifies.
 
-Successful or failed verification of an authentication tag in an AEAD Algorithm
-(_not_ the SCC export and import procedures)
-or of a signature is _not_ an algorithmic error, as in this case the Algorithm has performed as expected.
+The verification of an authentication tag by an AEAD Algorithm (_not_ by the SCC export and import
+procedures), or of a signature, is _not_ an algorithmic error, whether it succeeds or fails: the
+Algorithm has performed as expected.
 --
 
 // ////////////////////////////////////////////////////////////////////
@@ -934,7 +981,7 @@ Context switching code would then not save and restore the contents of the ACEIO
 
 `aceiobuftop` plays for the ACEIOBUF the role that `VL` plays in the V extension: it defines the operand length `ACELEN` = `aceiobuftop` {times} 8 and the transfer window [0, `aceiobuftop`).
 
-For operations involving the ACEIOBUF, `acestart` (cf. <<ACE-CSR-acestart>>) is the position within that window at which processing starts or resumes, analogously to `vstart`; when `acestart` {ne} 0, the bytes processed are those at offsets [`acestart`, `aceiobuftop`).
+// For operations involving the ACEIOBUF, `acestart` (cf. <<ACE-CSR-acestart>>) is the position within that window at which processing starts or resumes, analogously to `vstart`; when `acestart` {ne} 0, the bytes processed are those at offsets [`acestart`, `aceiobuftop`).
 // Shortening an operand is done by lowering `aceiobuftop`, never by raising `acestart`.
 
 The maximum of `aceiobuftop` is `aceiobuflen`.
@@ -942,7 +989,7 @@ The maximum of `aceiobuftop` is `aceiobuflen`.
 Modifying `aceiobuftop` does not alter buffer contents. It allows per-operation length adjustments without reconfiguring the ACEIOBUF via `aceiobuflen`, an expensive operation that clears the buffer and may trigger internal garbage collection. This mirrors the use of `VL*SEW` reconfiguration to supply a partial “last block” or a short IV/nonce to Algorithms.
 
 Writing a value that is invalid or unsupported for a given Algorithm may still cause the CR to transition to Error State _Invalid_ when an instruction expecting an input from or an output to the ACEIOBUF is later issued or restarted.
-This may occur, for instance, when `aceiobuftop` is a length not supported by the Algorithm, or when `acestart` does not correspond to an interruption point the Algorithm allows.
+This may occur, for instance, when `aceiobuftop` is a length not supported by the Algorithm.
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -951,51 +998,63 @@ This may occur, for instance, when `aceiobuftop` is a length not supported by th
 
 {empty}
 (((CSR, `acestart`)))
-`acestart` is an XLEN-bit RW CSR.
+`acestart` is an XLEN-bit RW CSR that records, as a number of bytes, the progress of the
+instructions that _honor_ it:
 
-`acestart` tracks the progress of resumable ACE instructions, e.g., `ace.load`, `ace.store`, `ace.input` and `ace.output`.
+* `ace.load`, `ace.store`, `ace.input` and `ace.output`: the bytes read or written;
+* `ace.exec` processing a multi-block operand, which may be interrupted between blocks: the bytes
+  processed;
+* `ace.derive`, whose `ace.exec` endpoints advance the source and destination CRs in the same way;
+* `ace.mv`, vector and non-vector: the CR transfer point. A vector `ace.mv` also tracks, in
+  `vstart`, the corresponding position in the vector register when its operand is multi-block.
 
-Progress tracking by `acestart` also applies to `ace.exec` when iteratively processing a multi-block operand, as `ace.exec` may be interrupted between blocks, as well as to `ace.derive`, whose `ace.exec` endpoints advance the state machines of the source and destination CRs in the same way.
-The vector input and output Forms of `ace.mv` honor acestart, like the non-vector versions, to track the CR transfer point, and also use `vstart` to track the position in the vector register corresponding to the CR transfer point in case the input/output is multi-block.
+ACE has no intrinsic element length, so `acestart` is always a byte count: progress that is not
+byte-structured, such as that of the point multiplications and signature operations of <<ACE-ECC>>
+and <<ACE-PQC>>, is recorded in the _AlgorithmUse_ field instead, as Rule
+<<ACE-IRR-long-running-no-data>> prescribes. Every other instruction leaves `acestart` unchanged,
+except `ace.mgmt` and `ace.clear.all`, which clear it.
 
-ACE does not have an _intrinsic_ concept of element length, hence `acestart` counts the number of _bytes_ processed so far by `ace.exec`, or read/written by `ace.input`/`ace.output` or `ace.store`/`ace.load`.
+`acestart` is the position within the transfer window at which processing starts or resumes,
+like `vstart` in the V extension; for an ACEIOBUF operand the window is always
+[0, `aceiobuftop`) (<<ACE-CSR-aceiobuftop>>). Software may save and restore `acestart` across
+context switches. The ACE implementation writes it:
 
-`acestart` is always a byte count. Progress that is not byte-structured — that of the point
-multiplications and signature operations of <<ACE-ECC>> and <<ACE-PQC>>, for instance — is recorded
-in the _AlgorithmUse_ field instead, as Rule <<ACE-IRR-long-running-no-data>>
-prescribes.
+. on a precise halt, with a prefix-complete point of the transfer (<<ACE-Memory-Model>>): the point
+  of progress, or 0 in an implementation that selects the restart option of Rule
+  <<ACE-IRR-resumability-options>> for `ace.load`, `ace.store`, `ace.input` and `ace.output`, which
+  then transfer the prefix again on re-execution;
+. with 0 when an instruction that honors it retires, except for `ace.mv`, which by design advances
+  `acestart` by the bytes transferred and keeps the result across instructions, to support
+  piecewise transfers (<<ACE-instruction-mv>>); a vector `ace.mv` tracks its progress within the
+  vector register in `vstart`, whose value depends on the chosen element size.
 
-Only these instructions honor a nonzero `acestart`; every other instruction leaves it unchanged, except `ace.mgmt` and `ace.clear.all`, which clear it.
+The transfer window is empty when `acestart` {ge} `aceiobuftop` for an ACEIOBUF operand (with
+`aceiobuflen` non-zero), or `acestart` {ge} `VL` {times} `SEW` / 8 for a vector operand; an
+instruction with an empty window performs no operation. This rule does not apply to `ace.mv`, whose
+vector window is [`vstart`, `vl`) in elements and whose `acestart` is a CR offset. Two checks
+precede it:
 
-The ACE implementation writes this register on a precise halt, recording a prefix-complete point of the transfer (see <<ACE-Memory-Model>>): the point of progress, or 0 in an implementation that selects the restart option of Rule <<ACE-IRR-resumability-options>> for `ace.load`, `ace.store`, `ace.input` and `ace.output`, which then re-transfer the prefix on re-execution.
-Software may save and restore the register across context switches.
+. For Forms A–C of `ace.exec`, `acestart` {ne} `vstart` {times} `SEW` / 8 at issue raises an
+  illegal-instruction exception.
+. For an operand used as input, an `acestart` that is not an interruption point the Algorithm
+  allows transitions the CR to Error State _Invalid_; for an operand used only as output, both this
+  check and the empty-window rule yield no operation.
 
-`acestart` is the position within the transfer window at which processing starts or resumes, analogously to `vstart` in the V extension; for ACEIOBUF operands the window itself is always [0, `aceiobuftop`) (see <<ACE-CSR-aceiobuftop>>).
+For the CR-directed transfers `ace.load`, `ace.store` and `ace.mv`, `acestart` is bounded above by
+the length in bytes of the serialized image `S` (<<ACE-instruction-load>>), determined from the
+first 8 bytes of the MDH; each of these instructions states the bound it applies.
 
-An instruction that honors `acestart` sets it to 0 when it retires, unless the specification of the instruction explicitly states otherwise (<<ACE-instruction-mv>>, <<ACE-usage-input-output>>).
-The only exception is `ace.mv`, which by design advances `acestart` by the bytes transferred and retains the result across instructions to support piecewise transfers and, if used in the vector version, uses `vstart` to track progress within the vector register. The `vstart` value depends on the chosen vector element size.
+An _interruption point_ of an Algorithm in a given State is an `acestart` value that the Algorithm
+can itself produce on a precise halt in that State: unless the Algorithm states a coarser or a
+different set, the whole multiples of its granularity within the transfer window, and 0; Subalgorithm
+`process_VLI` (<<ACE-process-VLI>>) defines its own, at the boundaries at which its inner loop
+yields. Writing an `acestart` value that is invalid or unsupported for the Algorithm, including one
+that is not an interruption point it allows, transitions the CR to Error State _Invalid_ when an
+instruction that relies on `acestart` is later issued or restarted.
 
-The transfer window is empty when `acestart` {ge} `aceiobuftop` for an ACEIOBUF operand (with `aceiobuflen` nonzero), or `acestart` {ge} `VL` {times} `SEW` / 8 for a vector operand.
-An instruction with an empty window performs no operation.
-This rule does not apply to `ace.mv`, whose vector window is [`vstart`, `vl`) in elements and whose `acestart` is a CR offset (<<ACE-instruction-mv>>).
-
-For Forms A–C of `ace.exec`, `acestart` {ne} `vstart` {times} `SEW` / 8 at issue raises an illegal-instruction exception; this check precedes the empty-window rule.
-For an operand used as input, the interruption-point check below, which transitions the CR to Error State _Invalid_, also precedes the empty-window rule; for an operand used only as output, both yield no operation.
-
-For CR-directed transfers (`ace.load`, `ace.store`, `ace.mv`), `acestart` is bounded above by the length in bytes of the serialized image `S` being transferred (<<ACE-instruction-load>>), as determined from the first 8 bytes of the MDH; each of these instructions states the bound it applies.
-
-For certain Algorithms, writing zero to `acestart` to force a full restart of `ace.exec` would
-produce an inconsistent result, and it is not permitted once per-block state effects have been
-committed (see <<ACE-Memory-Model>>).
-An *interruption point* of an Algorithm in a given state is an `acestart` value that the Algorithm
-can itself produce on a precise halt in that state. Unless the Algorithm defines a coarser set,
-these are the whole multiples of its granularity within the transfer window, together with the
-value 0; Subalgorithm `process_VLI` (<<ACE-process-VLI>>) defines its own, at the boundaries
-at which its inner loop yields. An Algorithm that admits a different set states it.
-
-More generally, writing an `acestart` value that is invalid or unsupported for a given Algorithm — including a
-value that is not an interruption point the Algorithm allows — causes the CR to transition to Error
-State _Invalid_ when an instruction that relies on `acestart` is later issued or restarted.
+Writing 0 to `acestart` to force a full restart of `ace.exec` should be avoided once per-block state
+effects have been committed (<<ACE-Memory-Model>>): for certain Algorithms the result would be
+inconsistent.
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -3155,6 +3214,8 @@ restores the internal state of the CR to the clear format it was in when the exp
 
 // ////////////////////////////////////////////////////////////////////
 
+////
+
 [[ACE-nested-CR-management]]
 ==== Nested CR Management Operations
 
@@ -3231,6 +3292,7 @@ B -> N1: Preemption.
 B -> B: Complete management: <i>State</i> is now a Complete <i>State</i>.
 @enduml
 ....
+////
 
 // ////////////////////////////////////////////////////////////////////
 
