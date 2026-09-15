@@ -22,8 +22,8 @@ We refer to the KLEE Unprivileged Architecture for the definitions of KLEE instr
 | `Smklcsk`       | Defines the CSR group to configure the Context Sealing Key.                                    | <<KLEE-CSR-mklcsk>>          | v0.0.0 | --
 | `Smklpbootscrt` | Defines the CSR group to configure the Physical Boot Secret Locality (cf. <<KLEE-Localities>>). | <<KLEE-CSR-mklphysbootscrt>> | v0.0.0 | --
 | `Ssklvbootscrt` | Defines the CSR group to configure the Virtual Boot Secret Locality (cf. <<KLEE-Localities>>).  | <<KLEE-CSR-hklvirtbootscrt>> | v0.0.0 | --
-| `Smkllclt`      | Defines the CSR group to configure the software binding Localities (cf. <<KLEE-Localities>>).   | <<KLEE-CSR-mkllocality>>, <<KLEE-CSR-hkllocality>>, <<KLEE-CSR-skllocality>>, and <<KLEE-CSR-vskllocality>> | v0.0.0 | --
-| `Sskllclt`      | The supervisor-visible part of `Smkllclt`: `hkllocality`, `skllocality` and `vskllocality`. | <<KLEE-CSR-hkllocality>>, <<KLEE-CSR-skllocality>>, and <<KLEE-CSR-vskllocality>> | v0.0.0 | --
+| `Smkllclt`      | Defines the CSR group to configure the software binding Localities (cf. <<KLEE-Localities>>).   | <<KLEE-CSR-mkllocality>>, <<KLEE-CSR-hkllocality>>, <<KLEE-CSR-skllocality>> | v0.0.0 | --
+| `Sskllclt`      | The supervisor-visible part of `Smkllclt`: `hkllocality`, `skllocality`. | <<KLEE-CSR-hkllocality>>, <<KLEE-CSR-skllocality>> | v0.0.0 | --
 |===
 
 `Smklstatus` implies `Ssklstatus`, and `Smkllclt` implies `Sskllclt`, on every hart that implements S-mode; an OS or hypervisor depends only on the `Ss` extensions.
@@ -62,7 +62,7 @@ Configuration {downarrow}  | `Smklstatus` | `Smkllclt` | `Ssklvbootscrt`
 
 | M+S+U with H
 | Mandatory: `mlclstatus`, `slclstatus` and `vslclstatus` (the latter two `Ssklstatus`) are implemented and are distinct.
-| Optional: If implemented, `mkllocality`, `hkllocality`, `skllocality` and `vskllocality` (the latter three `Sskllclt`) configure MLocality, HLocality and SLocality
+| Optional: If implemented, `mkllocality`, `hkllocality`, `skllocality` (the latter two `Sskllclt`) configure MLocality, HLocality and SLocality
 | Optional: If implemented, `hklvirtbootscrt` configures the Virtual Boot Secret Locality
 |===
 
@@ -139,8 +139,7 @@ high shadows — and up to 32 indirect CSRs on RV32, 16 on RV64.
 | (Indirect)  | HRW        | `hklvirtbootscrt{0..3}`  | Locality: Virtual (guest) Boot Session Secret. CSRs "2" and "3" are RV32 only.
 | (Indirect)  | MRW        | `mkllocality{0..3}`      | Locality: Mutually isolate processes below M-mode. CSRs "2" and "3" are RV32 only.
 | (Indirect)  | HRW        | `hkllocality{0..3}`     | Locality: the hypervisor's tag on its virtual machines, separating them from each other. CSRs "2" and "3" are RV32 only.
-| (Indirect)  | SRW        | `skllocality{0..3}`      | Locality: Mutually isolate the OS's processes; `vskllocality` substitutes for it when V=1. CSRs "2" and "3" are RV32 only.
-| (Indirect)  | HRW        | `vskllocality{0..3}`     | Locality: the guest OS's `skllocality`. CSRs "2" and "3" are RV32 only.
+| (Indirect)  | SRW        | `skllocality{0..3}`      | Locality: Mutually isolate the OS's processes. CSRs "2" and "3" are RV32 only.
 |===
 
 Similarly to <<KLEE-CSR-unpriv>>,
@@ -395,7 +394,6 @@ The KLEE unit is unavailable until a CSK is established as described in <<KLEE-C
 (((CSR, `hklvirtbootscrt`)))
 (((CSR, `mkllocality`)))
 (((CSR, `hkllocality`)))(((CSR, `skllocality`)))
-(((CSR, `vskllocality`)))
 Each group listed in <<KLEE-locality-csr-groups>> holds one 128-bit Locality Secret
 (<<KLEE-locality-indexes>>) in XLEN-bit RW CSRs accessed via Indirect CSR Access: four in RV32 and
 two in RV64, the CSRs numbered "2" and "3" existing only on RV32.
@@ -414,22 +412,16 @@ illegal-instruction or, as <<KLEE-CSRs-priv>> prescribes, a virtual-instruction 
 | [[KLEE-CSR-mkllocality,mkllocality]]`mkllocality{0..3}`             | _MLocality_           |  M   | `Smkllclt` is implemented.
 | [[KLEE-CSR-hkllocality,hkllocality]]`hkllocality{0..3}`             | _HLocality_           |  HS  | `Sskllclt` and the H extension are both implemented.
 | [[KLEE-CSR-skllocality,skllocality]]`skllocality{0..3}`             | _SLocality_           |  S   | `Sskllclt` and S-mode are both implemented.
-.2+| [[KLEE-CSR-vskllocality,vskllocality]]`vskllocality{0..3}`    .2+| _SLocality_ (guest) 2+<|  HS, and VS through `skllocality`
-| {empty} | `Sskllclt` and the H extension are both implemented.
 |===
 
-When the H extension is implemented, `vskllocality` substitutes for `skllocality` when V=1:
-CSR accesses that would target `skllocality` instead access `vskllocality`, analogously to
-`vsstatus` and `sstatus` and to `vslclstatus` (<<KLEE-CSR-lclstatus>>), and _SLocality_ then
-denotes its value (<<KLEE-Localities>>). Like the other VS CSRs, `vskllocality` is accessible
-from HS-mode and M-mode, and a hypervisor saves and restores it with them. Software that exports CLs on behalf of a lower privilege level configures every SW Filter Group register it owns before doing so: an export whose CC names an unconfigured entry yields an SCC that no import accepts (<<KLEE-Localities>>). Before running software not entrusted with the CCs of the virtual machine loaded, a hypervisor writes `zeros(128)`, or a value that no virtual machine uses, to `hkllocality` and `hklvirtbootscrt`.
+Before running software not entrusted with the CCs of the virtual machine loaded, a hypervisor writes `zeros(128)`, or a value that no virtual machine uses, to `hkllocality` and `hklvirtbootscrt`.
 
 The Locality CSR groups are readable at their respective privilege levels.
 Context-switching software saves and restores them like any other CSR.
 
 [NOTE]
 ====
-`skllocality` is the OS's Locality, separating its processes whether the OS runs at S-mode or, through `vskllocality`, at VS-mode; a hypervisor uses its own `skllocality` for its host processes and configures it before it saves guest KLEE state (<<KLEE-Localities>>).
+`skllocality` is the OS's Locality, separating its processes whether the OS runs at S-mode or at VS-mode; a hypervisor uses its own `skllocality` for its host processes.
 `hkllocality` is the hypervisor's tag on its virtual machines: it enters the bindings of every export and import a guest performs, and the hypervisor carries it with the virtual machine.
 ====
 
@@ -448,7 +440,7 @@ Out of KLEE unit reset:
 . The `KLS` field of `mstatus` (visible in `sstatus`) and, where implemented, of `vsstatus` is Off.
 . The CSK is unconfigured, unless it is hardwired or shared under the fourth model of <<KLEE-CSK-requirements>>, which the reset of one hart neither clears nor regenerates.
 . `mklphysbootscrt` and `hklvirtbootscrt` are zero.
-. `mkllocality`, `hkllocality`, `skllocality`, and `vskllocality` are zero.
+. `mkllocality`, `hkllocality` and `skllocality` are zero.
 . All fields of `mlclstatus`, `slclstatus`, and `vslclstatus` are set to _Initial_.
 
 A KLEE unit reset caused by a fatal condition (<<KLEE-error-architecture>>) differs in items 1, 2 and 6: `misa.L` is unchanged, a `KLS` field that is Off stays Off and every other `KLS` field becomes Dirty, and every `*lclstatus` field is set to _Dirty_.
