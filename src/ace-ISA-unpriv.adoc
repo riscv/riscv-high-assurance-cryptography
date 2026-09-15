@@ -318,7 +318,7 @@ Bit 25 of the `ace.exec` instruction encoding is reserved for potential future a
 
 NOTE: ACE does not depend on a concept of element.
 From a logical point of view, the operations are not performed in the vector unit.
-A vector register (group) is seen as a bit string of length `VL` * `SEW`, where `VL` is the vector length in effect (`vl`).
+A vector register (group) is seen as a bit string of length `ACELEN` = `VL` * `SEW`, where `VL` is the vector length in effect (`vl`).
 
 Floating-point, fixed-point, and general arithmetic vector operations are not required.
 
@@ -333,9 +333,9 @@ ACEIOBUF is an optional architectural input/output buffer that may be used in pl
 ACEIOBUF is not part of the CRF.
 
 Two instructions, `ace.input` and `ace.output`, load and store data from/to the ACEIOBUF to/from the external memory.
-When the ACEIOBUF is used, `ace.exec` and `ace.setst` are used in forms with implicit input and output provided by the ACEIOBUF,
-as described in <<ACE-usage-input-output>>.
-// `ace.derive` is unaffected: it moves data between two CRs and never reads a vector register or the ACEIOBUF.
+When the ACEIOBUF is used, `ace.exec` and `ace.setst` are used in forms with implicit input and output provided by the ACEIOBUF, as described in <<ACE-usage-input-output>>.
+
+The definition of `ACELEN` for ACEIOBUF inputs is given in <<ACE-CSR-aceiobuftop>>.
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -782,8 +782,8 @@ which <<ACE-exception-codes>> ranks above `ace_exc_fatal`. Detection is thus nev
 its reporting is deferred.
 --
 
-[[ACE-illegal-instruction-grounds]]
-Illegal-Instruction Exceptions:::
+[[ACE-illegal-instruction-grounds,Grounds for Illegal-Instruction Exceptions]]
+Grounds for Illegal-Instruction Exceptions:::
 +
 --
 The grounds for an illegal- or virtual-instruction exception form two groups:
@@ -979,7 +979,7 @@ Context switching code would then not save and restore the contents of the ACEIO
 (((CSR, `aceiobuftop`)))
 `aceiobuftop` is an XLEN-bit URW CSR that sets the upper bound in bytes of the buffer range used by `ace.input` and `ace.output`.
 
-`aceiobuftop` plays for the ACEIOBUF the role that `VL` plays in the V extension: it defines the operand length `ACELEN` = `aceiobuftop` {times} 8 and the transfer window [0, `aceiobuftop`).
+`aceiobuftop` plays for the ACEIOBUF the role that `VL` plays in the V extension: it defines the operand length `ACELEN` as `aceiobuftop` {times} 8 and the transfer window [0, `aceiobuftop`).
 
 // For operations involving the ACEIOBUF, `acestart` (cf. <<ACE-CSR-acestart>>) is the position within that window at which processing starts or resumes, analogously to `vstart`; when `acestart` {ne} 0, the bytes processed are those at offsets [`acestart`, `aceiobuftop`).
 // Shortening an operand is done by lowering `aceiobuftop`, never by raising `acestart`.
@@ -989,7 +989,6 @@ The maximum of `aceiobuftop` is `aceiobuflen`.
 Modifying `aceiobuftop` does not alter buffer contents. It allows per-operation length adjustments without reconfiguring the ACEIOBUF via `aceiobuflen`, an expensive operation that clears the buffer and may trigger internal garbage collection. This mirrors the use of `VL*SEW` reconfiguration to supply a partial “last block” or a short IV/nonce to Algorithms.
 
 Writing a value that is invalid or unsupported for a given Algorithm may still cause the CR to transition to Error State _Invalid_ when an instruction expecting an input from or an output to the ACEIOBUF is later issued or restarted.
-This may occur, for instance, when `aceiobuftop` is a length not supported by the Algorithm.
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -1008,11 +1007,15 @@ instructions that _honor_ it:
 * `ace.mv`, vector and non-vector: the CR transfer point. A vector `ace.mv` also tracks, in
   `vstart`, the corresponding position in the vector register when its operand is multi-block.
 
-ACE has no intrinsic element length, so `acestart` is always a byte count: progress that is not
+ACE has no intrinsic element length,
+no counterparts to the vector crypto extension's Element Group Width (EGW), Effective Element Width (EEW), or Element Group Size (EGS).
+ACE instructions such as `ace.exec` are architecturally decoupled from the operations the ACE unit performs when they are issued.
+Therefore `acestart` is defined a byte count: progress that is not
 byte-structured, such as that of the point multiplications and signature operations of <<ACE-ECC>>
 and <<ACE-PQC>>, is recorded in the _AlgorithmUse_ field instead, as Rule
 <<ACE-IRR-long-running-no-data>> prescribes. Every other instruction leaves `acestart` unchanged,
 except `ace.mgmt` and `ace.clear.all`, which clear it.
+
 
 `acestart` is the position within the transfer window at which processing starts or resumes,
 like `vstart` in the V extension; for an ACEIOBUF operand the window is always
@@ -1105,10 +1108,9 @@ Writing 32 without completing an export loses the in-flight `SIV`, `SIV2` and `I
 [[ACE-instructions-detailed]]
 === Instructions
 
-ACE provides a number of unprivileged instructions.
-This section specifies their semantics and encodings.
-The `custom-1` and `custom-2` opcodes are placeholders, all other fields are specified.
-In every encoding, a field shown with a fixed value must hold that value; any other value, and every combination of field values not listed, is a reserved encoding and raises an illegal-instruction exception (first group of <<ACE-illegal-instruction-grounds>>).
+This section specifies the semantics and encodings of ACE's unprivileged instructions.
+The `custom-1` and `custom-2` opcodes are placeholders; all other fields are specified.
+In every encoding, fields shown with fixed values must hold those values. Any deviation from a fixed value or any unlisted combination of field values is a reserved encoding and raises an illegal-instruction exception (first group of <<ACE-illegal-instruction-grounds>>).
 
 The notation `K{Xd}` denotes the CR whose index is held in GPR `Xd`.
 `Kn|K{Xn}` indicates two alternative encodings: a 5-bit immediate CR index (`Kn`) or a CR number supplied by GPR `Xn`.
@@ -1122,11 +1124,6 @@ address corresponding to the *first* byte of the transfer, not to the byte at wh
 resumes: a byte offset of `acestart` is added to `X[rs1] + sext(%offset)` to form the restart
 address.
 The correspondence between addresses and transfer offsets is given by each instruction.
-
-[NOTE]
-====
-ACE has no counterparts to the vector crypto extension's Element Group Width (EGW), Effective Element Width (EEW), or Element Group Size (EGS). Because ACE instructions such as `ace.exec` are decoupled from the operations they perform, ACE specifies only the total input or output size, `ACELEN`, in bytes. For vector operands, `ACELEN` is `VL * SEW` bits; for ACEIOBUF operands, it is `aceiobuftop * 8` bits (see <<ACE-algo-notation>>).
-====
 
 [[ACE-general-rules-instructions]]
 ==== General Rules
@@ -1703,7 +1700,7 @@ The following categories of values for `#immed7` apply to all Algorithms:
    raise one, and later usage of the CR performs no operation (Rule <<ACE-SGR-usage-cr-error-state>>).
    On a CR in the _Unconfigured_ State the instruction performs no operation: only the short import
    of <<ACE-error-state-transfer>> configures a CR directly into an Error State.
-* 56–63, i.e., when the top four bits of `#immed7` are `0b0111`, encode the instruction `ace.mgmt` (<<ACE-instruction-mgmt>>).
+* 56–63, i.e., when the top four bits of `#immed7` are `0b0111`, encode `ace.mgmt` (<<ACE-instruction-mgmt>>).
 * 64 encodes `ace_cfg_clear_ads` (<<ACE-instruction-clearads>>).
 * 65–127 are Algorithm-defined and may change other state information, such as _StateExtension_.
 
@@ -1719,14 +1716,8 @@ _Synopsis_::
 Change the state of the Algorithm encoded in the CC in a CR.
 
 _Mnemonic_::
-The `ace.mgmt` instruction is a separate instruction and admits the same four Forms as `ace.setst`, namely
+The `ace.mgmt` instruction is a separate instruction and admits only Forms A, C, and D of `ace.setst`.
 (((ACE, instruction, ace.mgmt)))
-+
-[upperalpha]
-. `ace.mgmt Kd|K{Xd}, #immed7{fournbsp}{nbsp}{nbsp}` with no auxiliary input.
-. `ace.mgmt Kd|K{Xd}, #immed7, Xs{nbsp}` with auxiliary input in one or two GPRs (RV64/RV32).
-. `ace.mgmt Kd|K{Xd}, #immed7, Vs{nbsp}` — in a vector register.
-. `ace.mgmt Kd|K{Xd}, #immed7, Xs{nbsp}` — in two or four GPRs (RV64/RV32).
 
 //
 
@@ -1764,11 +1755,11 @@ The MDH is supplied as follows:
   ignoring `acestart`. After the `acemanagedcr` check and before any change to the CR, Rule
   <<ACE-GR-iobuf-configured>> applies and, with the ACEIOBUF configured, `aceiobuftop` < 16 raises
   an illegal-instruction exception (Rule <<ACE-GR-vector-MDH-operand>>).
-. Form B carries bits [63:0] of the MDH in one GPR or in a GPR pair (Rule
-  <<ACE-GR-multiple-GPRs>>); bits [127:64] are received as zero.
 . Form C carries the MDH in the lowest 128 bits of `Vs`.
 . Form D carries the MDH as a 128-bit operand in two or four GPRs starting at `Xs` (Rule
   <<ACE-GR-multiple-GPRs>>).
+
+Using `ace.setst` Form B with an `ace.mgmt` `#immed7` is an illegal instruction.
 
 The precise semantics of each operation are given in <<ACE-CR-management>>.
 --
@@ -2384,9 +2375,9 @@ and `ace.getstx` as
 // ////////////////////////////////////////////////////////////////////
 
 [[ACE-State-management]]
-=== Management of the State of an Algorithm
+=== State Management
 
-The following three tables define the architected values of _State_ common to all Algorithms.
+The following four tables define the architected values of _State_ common to all Algorithms we well as the _State_ when a CR defines no Algorithm, and the values used when managing the CCs in the CRs.
 
 [[ACE-state-off]]
 .Global CC State Numbers: Unconfigured State
@@ -2407,6 +2398,9 @@ The following three tables define the architected values of _State_ common to al
 |  47   | `ace_state_failure`       | _Failure_      | Failure in an Algorithm, usually an authentication failure in AE(AD) Algorithms or a signature verification failure. No further cryptographic operations may be performed until the CR is reconfigured or transitioned to _Ready_, with the two exceptions given in <<ACE-State-field>>.
 |===
 
+The currently defined Error States are listed below in decreasing severity order, with Error State 48 being the most severe and Error State 53 the least severe.
+Error States 54 and 55, if defined, will not necessarily have a lower priority than Error State 53, so the ordering may not hold for them.
+
 [[ACE-states-error]]
 .Global CC State Numbers: Error States
 [float="center",align="center",width="100%",cols="^7%,<30%,<16%,<47%"]
@@ -2424,9 +2418,6 @@ The following three tables define the architected values of _State_ common to al
 (((Cryptographic Register, invalidation)))
 We say that a CR has been _invalidated_ when it has been transitioned to Error State `ace_state_invalid`.
 Upon entering an Error State, the CR retains only its MDH (Rule <<ACE-SGR-error-state-CR-is-only-MDH>>).
-
-The currently defined Error States are listed in decreasing severity order, with Error State 48 being the most severe and Error State 53 the least severe.
-Error States 54 and 55, if defined, will not necessarily have a lower priority than Error State 53, so the ordering may not hold for them.
 
 Error conditions that lead to exceptions are treated in <<ACE-exceptions>>. See <<ACE-error-architecture>> for the behavior when the Privileged Architecture is not implemented.
 
@@ -2781,11 +2772,11 @@ A substitution fails as follows:
   `ace.exec`, `acestart` is not an interruption point the Algorithm allows:
 ** if the ACEIOBUF is used as an input, the CR transitions to Error State _Invalid_;
 ** if it is used only as an output, the instruction performs no operation: nothing is written and
-   no state transition occurs.
+   state changes.
 
-NOTE: Because of these rules, the Algorithms sections say that a Form of `ace.exec`, `ace.setst` or
-`ace.mgmt` is _expected_ rather than _required_ (or _only [...] allowed_); the substitutions are
-implicit and are not restated for each occurrence.
+In <<ACE-Algorithms>>>>, when a Form of `ace.exec`, `ace.setst`, or `ace.mgmt` is
+_expected_ (rather than _required_ or _the only Form allowed_), the substitutions above apply
+implicitly and are not repeated for each occurrence.
 
 <<ACE-replacement-instructions>> gives examples of alternative sequences using `ace.input` and
 `ace.output`.
@@ -2817,11 +2808,11 @@ expand the attack surface, since the caller already controls the inputs and outp
 [[ACE-CC-management]]
 === Management of Cryptographic Contexts
 
-In keeping with RISC-V philosophy, ACE splits complex CR management operations into sequences of simpler instructions rather than implementing each operation as a single instruction driving a very large state machine or triggering microcode. Even a trap-and-emulate implementation must support such a splitting by definition.
+In keeping with RISC-V philosophy, ACE splits complex CR management operations into sequences of simpler instructions rather than implementing them as single instructions driving very large state machines or triggering microcode. Even a trap-and-emulate implementation of complex monolithic instructions would have to support such a splitting by definition.
 
 This has several effects:
 
-. The state machine for managing keys and algorithms, hidden from software in key-protection solutions on other CISC architectures, is exposed to software.
+. The state machine for managing keys and algorithms, hidden from software in key-protection solutions on other CISC architectures (cf cite:[IBM-z-arch] “Protection of Cryptographic Keys” or cite:[intel-keylocker]), is exposed to software.
 Moving its sequencing out of hardware nevertheless significantly simplifies the hardware. However, the exposure may make the state machine managed by software more complex, and increase the set of rules the hardware must enforce, since management operations must withstand malicious attempts to temper with them.
 . Management sequences can be interrupted between instructions by interrupts and exceptions.
 Explicit support is therefore required for context switching, process and virtual machine migration, hibernation, and interoperability between ACE implementations.
@@ -2929,7 +2920,7 @@ must save and restore `acestart`.
 // ////////////////////////////////////////////////////////////////////
 
 [[ACE-length-rule]]
-==== Determining the Length of a PI, of an SCC, and of a PCCC, and the CRF capacity usage of a CR
+==== Determination of the Length of a PI/SCC/PCCC and the CRF capacity usage of a CR
 
 Except when the CR is in an Error State, the MDH fields that determine the length
 of a PI, of an SCC and of a PCCC, as well as the CRF capacity occupied by a CR, are all
@@ -3016,7 +3007,7 @@ Any shares or masks included in the ADS (see <<ACE-rules-masked-implementations>
 // ////////////////////////////////////////////////////////////////////
 
 [[ACE-CR-management]]
-==== Operations for the Management of a CR
+==== CR Management Operations
 
 Here we give the values of the `#immed7` field for `ace.mgmt`, and the semantics of the operations that they perform.
 
@@ -3061,9 +3052,8 @@ Before issuing `ace.mgmt`, software must obtain the MDH. Let `ml` be this value.
 NOTE: In the case we are starting an import process, `ml` must be first saved by software in its local state.
 `ml` is then provided to the `ace.mgmt` operation used to complete the process in order to restore the _State_ the CR was in before the import process started.
 
-The `ace.mgmt` operation used to start a provisioning, resp., import process must provide `ml`, and should be
-Form C or D in order to provide it in full.
-`ace.mgmt` then performs following operations:
+A Form C or D `ace.mgmt` operation is used to start a provisioning, resp., import process and provide `ml`.
+It performs following operations:
 
 .. The target CR is zeroized. Bytes of the serialized `Content` that a management operation has not yet written read as zero through every architectural access (`ace.store`, `ace.mv`, verbatim export).
 .. If `#immed7` = `ace_cfg_importing` and `ml`._State_ is an Error State, the CR is immediately
@@ -3104,7 +3094,7 @@ the entire MDH.
 --
 Let `ml` <- the MDH of the CR.
 Software must first save this value in its local state to restore its _State_ when completing the export process.
-`ace.mgmt` can be of any form, but any auxiliary input provided through Forms B, C, or D is ignored.
+`ace.mgmt` can be of any Form, but any auxiliary input provided through Forms C or D is ignored.
 `ace.mgmt` performs following operations:
 
 .. If `ml`._State_ is _Unconfigured_, then: an illegal-instruction exception is raised.
@@ -3147,34 +3137,35 @@ if it is `ace_cfg_ppi_importing` or `ace_cfg_ppi_exporting`, `ml`._State_ must b
 Any other `ml`._State_, including a Complete State for a CR of base type `pi` and the values 61–63, raises an illegal-instruction exception.
 A Complete `ml`._State_ is accepted only for a CR of base type `scc`, so that the clear `Content` of a partially provisioned CR can become usable only through the completion of its provisioning.
 
-NOTE: When completing the import, resp., export of a SCC, resp, CR in a Complete State, the authenticity
-of the CR will be checked anyway after replacing CR.MDH._State_ with ml._State_, and so the likelihood that a wrong _State_ will be accepted is vanishingly small.
-For a nested completion no authentication occurs and the base-type rule is the only check.
+NOTE: When an SCC import or CR export restores a Complete State, authentication is checked after
+setting CR.MDH._State_ to `ml`._State_, so the probability of accepting an incorrect _State_ is negligible.
+For a nested completion, no authentication occurs; the base-type rule is the only check.
 --
 +
 .. *`ace.mgmt` is used to complete a provisioning process.*
 +
 --
-`ace.mgmt` does not need a saved MDH from the start of the provisioning process, hence if a Form B, C, or D, was used in place of Form A, the auxiliary input is simply ignored.
+`ace.mgmt` does not need a saved MDH from the start of the provisioning process, hence if a Form C, or D, was used in place of Form A, the auxiliary input is simply ignored.
 
 Completing a provisioning requires _AuxDataLen_ = 0; if CR.MDH._State_ is `ace_cfg_provisioning` and _AuxDataLen_ {ne} 0, the CR transitions to Error State _Invalid_ and the instruction terminates.
 
 The operation makes the provisioned CR available to software by
 
-... For _KeyType_ = 1, applying the SKS narrowing of <<ACE-system-keys>>;
+... For _KeyType_ = 1, applying the SKID resolution of <<ACE-system-keys>>;
 ... Performing any necessary readjustment of the CR's content to turn it into the format internally consumed by the ACE Unit; and
 ... Setting _State_ to _Ready_, and _StateExtension_ and _AlgorithmUse_ to 0.
 
 A process may be preempted during a CR's provisioning.
-Only the information in the original PI is exported, and it remains unencrypted.
-The configuration of the CR may require random generation of some material which is intended to remain secret. This material must be generated only at this stage (i.e., when `ace.mgmt` is used to complete a provisioning process). The same applies, within a provisioning, to key material retrieved from a System Key Store, and any value derived, expanded, or re-shared from it.
-This guarantees that such material is not leaked.
+Only the information in the original PI is exported by `ace.store` or `ace.mv`,
+and it remains unencrypted.
+During provisioning, any secret random material required to configure the CR must be generated only by the `ace.mgmt` instruction that completes provisioning. The same restriction applies to retrieving key material from a System Key Store and to deriving, expanding, or re-sharing that material.
+This prevents such material from being exposed in an unencrypted export of a partially provisioned CR.
 --
 +
 .. *`ace.mgmt` is used to complete an import process.*
 +
 --
-The software uses Form B, C, or D of `ace.mgmt` to pass along the value of `ml` saved when the import process was started.
+The software uses Form C or D of `ace.mgmt` to pass along the value of `ml` saved when the import process was started.
 The image authenticated as ``AD[0]`` is the MDH held in the target CR — the image carried in the SCC and
 loaded when the import was started — with its _State_ field restored from `ml` (<<ACE-SCC-import>>).
 
@@ -3193,7 +3184,7 @@ This makes the CR available to software.
 .. [[ace-mgmt-completes-export,Use of ace.mgmt to complete an export process]]*`ace.mgmt` is used to complete an export process.*
 +
 --
-Software uses Form B, C, or D of `ace.mgmt` to supply the MDH value saved when the export process began.
+Software uses Form C, or D of `ace.mgmt` to supply the MDH value saved when the export process began.
 
 Let `ml` be this auxiliary input.
 Then:
@@ -3209,7 +3200,7 @@ restores the internal state of the CR to the clear format it was in when the exp
 .. If `ml`._State_ is not a Complete State, no further changes to the CR's contents are made.
 --
 +
-. *If `ace_cfg_management_end` is issued when the target CR's _State_ is _Unconfigured_ or a Complete State* (i.e., no management operation open on the target CR), the instruction raises an illegal-instruction exception.
+. *If `ace_cfg_management_end` is issued when the target CR's _State_ is _Unconfigured_ or a Complete State* (i.e., no management operation open on the target CR), the instruction is an illegal instruction.
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -3320,9 +3311,7 @@ useless: it leaves the CR unchanged and opens no management operation
   (54 and 55 as _Invalid_), installing the entire MDH, and completes the configuration by itself,
   without applying the checks of <<ACE-Metadata-validity>>; it is uninterruptible
   (Rule <<ACE-IRR-uninterruptible-instructions>>), so the CR is never observed part-configured.
-  Form C or D carries the whole MDH, as does a Form A taking it from the ACEIOBUF. Form B is not
-  forbidden, but it supplies only bits [63:0] and zeroes the upper half, so _UsagePolicy_, _Locality_,
-  _AlgorithmUse_, _ExpirationDate_ and _Version_ are lost; that is rarely what the caller intends.
+  Form C or D carries the whole MDH, as does a Form A taking it from the ACEIOBUF.
 
 No `ace.mgmt` with `#immed7` = `ace_cfg_management_end` follows, and issuing one is an illegal
 instruction. The `SIV`, `SIV2` and `IMPQUAL` registers take no part in either path and need not be saved
