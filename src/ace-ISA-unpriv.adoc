@@ -906,8 +906,8 @@ such register is given its maximum in its own description below.
 
 The RW CSRs constitute state that must be saved and restored at context switches, following the same software convention as `vstart`:
 
-. `acestart`, `acemanagedcr` and `aceiobuflen` must always be saved and restored.
-. If `aceiobuflen` is non-zero, then `aceiobuftop` and the ACEIOBUF contents up to `aceiobuflen` must also be saved and restored.
+. `acestart` and `acemanagedcr` must always be saved and restored.
+. If `Zklio` is implemented, `aceiobuflen` must also be saved and restored. If its saved value is non-zero, `aceiobuftop` and the ACEIOBUF contents up to `aceiobuflen` must also be saved and restored.
 . No separate save of `SIV`, `IMPQUAL` or `SIV2` is needed: when `acemanagedcr` names a CR in State `ace_cfg_importing` or `ace_cfg_exporting`, the nested export of that CR (<<ACE-state-save-and-restore-order>>) carries them in its image, and its nested import restores them.
 
 // ////////////////////////////////////////////////////////////////////
@@ -3658,25 +3658,32 @@ This is the recommended order for saving and restoring the ACE state.
 
 * Save order:
 
-. `acestart` first, since every later step may clear it.
-. `acemanagedcr`.
-. `aceiobuflen` and `aceiobuftop`.
-. If `aceiobuflen` is nonzero, the buffer contents by `ace.output` with `acestart` = 0 and `aceiobuftop` raised to `aceiobuflen`, since the `ace.mgmt` of a CR export may take `ml` from the ACEIOBUF (<<ACE-usage-input-output>>).
-. If the saved `acemanagedcr` is not 32, export the CR it indexes, before any other `ace.mgmt`, which may overwrite the authentication registers.
+. Save `acestart` first, since every later step may clear it.
+. Save the raw value of `acemanagedcr`.
+. If `Zklio` is present:
+.. Save `aceiobuflen` and `aceiobuftop`.
+.. If `aceiobuflen` is nonzero, save the buffer contents using `ace.output` with `acestart` = 0 and `aceiobuftop` raised to `aceiobuflen`, since the `ace.mgmt` of a CR export may take `ml` from the ACEIOBUF (<<ACE-usage-input-output>>).
+. If the saved `acemanagedcr` is in [0..31], read the MDH of the CR it indexes using `ace.getmd*` and select the State-appropriate save path:
+.. If the CR is _Unconfigured_, save no CR image.
+.. If the CR is in an Error State, save its MDH using the short Error-State path (<<ACE-error-state-transfer>>).
+.. Otherwise, export the CR using the applicable Complete- or Configuration-State path. This export precedes every other `ace.mgmt` that could overwrite the authentication registers.
 . Set `acemanagedcr` to 32, since `ace.mgmt` requires it to hold its target's number or 32.
-. Export all other configured CRs.
+. Save every other non-Unconfigured CR using the path appropriate to its State.
 
 * Restore order:
 
-. The CRs not indexed by the saved `acemanagedcr` first, with `acemanagedcr` set at 32 before and after each import.
-. `acemanagedcr`.
-. If it is not 32, the CR it indexes, with `acemanagedcr` set at the saved value before the import.
-. `aceiobuflen`, which zeroes the buffer and sets `aceiobuftop`.
-. The buffer contents, if saved, by `ace.input`, with `acestart` = 0 and `aceiobuftop` = `aceiobuflen`.
-. `aceiobuftop`.
-. Last, `acestart`, since every earlier step may clear it.
+. Restore the CRs other than the CR indexed by the saved `acemanagedcr`, with the working value of `acemanagedcr` set to 32 before and after each import.
+. If the saved `acemanagedcr` is in [0..31] and an image was saved for the CR it indexes, restore that CR using the path appropriate to its saved State, with the working value of `acemanagedcr` set to 32 before opening its import.
+. If `Zklio` is present:
+.. Restore `aceiobuflen`, which zeroes the buffer and sets `aceiobuftop`.
+.. Restore the buffer contents, if saved, using `ace.input` with `acestart` = 0 and `aceiobuftop` = `aceiobuflen`.
+.. Restore `aceiobuftop`.
+. Restore the raw saved value of `acemanagedcr`.
+. Restore `acestart` last, since every earlier step may clear it.
 
 A handler that passes `ml` through the ACEIOBUF configures `aceiobuflen` {ge} 16 for the CR exports and imports and restores the saved value afterwards.
+
+A handler must treat `acemanagedcr` as a hint and check the MDH of the CR it names before selecting a save path. For example, user software may clear `K0`, write `acemanagedcr` = 0, and then enter a handler. Reading the all-zero MDH identifies `K0` as _Unconfigured_, so the handler saves no image for it and does not attempt an export that would raise an illegal-instruction exception.
 
 // ////////////////////////////////////////////////////////////////////
 
