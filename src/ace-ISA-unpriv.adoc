@@ -23,7 +23,7 @@ The MDH has a fixed format and specifies the algorithm that can be used with the
 (((Cryptographic Context, Metadata Header)))
 The Content has an Algorithm-specific format and holds the secrets and other sensitive material, as well as a representation of the Algorithm's state.
 (((Cryptographic Context, Content)))
-The Metadata requires integrity; the Content requires both integrity and confidentiality.
+The Metadata requires integrity, except for explicitly identified non-authoritative format hints such as _ADSDropped_ and layout-preserving fields that the hint makes semantically inactive; the Content requires both integrity and confidentiality.
 These requirements are architecturally enforced by ACE and by the algorithms it implements.
 
 Cryptographic Register:::
@@ -350,8 +350,8 @@ The fields are arranged so that the first 64 bits suffice to determine the lengt
 
 . An optional 128-bit _Implementation Qualifier_ block, denoted by `IMPQUAL`.
 It holds copies of three architectural registers that are the ACE analogues of the hart's `mvendorid`, `marchid`, and `mimpid` CSRs (see <<ACE-CSR-impl-ids>>).
-This qualifier appears only in an SCC which carries an implementation-specific content segment.
-An implementation uses it to decide whether it can use the latter.
+This qualifier appears when an SCC has _AuxDataLen_ {ge} 2, including when its implementation-specific content segment has been dropped but its header layout is retained.
+An implementation uses it to decide whether it can use the implementation-specific content segment when that segment is present. When _ADSDropped_ = 1, the retained `IMPQUAL` and `SIV2` blocks are non-authoritative layout-preserving values and are ignored.
 
 This section deals with the 128-bit MDH.
 Its fields are summarized in <<ACE-metadata-header>>.
@@ -370,8 +370,9 @@ All _Reserved_ bits, as well as bits unused by a given Algorithm, are zero.
 |   [28:25] |   4  | _StateExtension_  | Used to extend the _State_ field with additional information. See <<ACE-State-field>>.
 |   [30:29] |   2  | _KeyType_         | This field determines whether the key is given by value, is a system-defined key, or randomly generated. See <<ACE-KeyType-field>>.
 |   [31:31] |   1  | Reserved          | Reserved for future use.
-|   [45:32] |  14  | _AuxDataLen_      | If different from 0 or 1, indicates that an additional, variable-length, implementation-dependent data section is added to the Content.
-|   [47:46] |   2  | Reserved          | Reserved for future use.
+|   [45:32] |  14  | _AuxDataLen_      | Zero if no ADS is present; otherwise, its length as a number of 128-bit blocks. When _ADSDropped_ = 1, this is the length before `Content2` was dropped. The value 1 is invalid.
+|   [46:46] |   1  | Reserved          | Reserved for future use.
+|   [47:47] |   1  | _ADSDropped_      | If set, `Content2` has been dropped while the SCC header layout is retained. This bit is excluded from first-segment authentication. See <<ACE-ADSDropped-field>>.
 |   [61:48] |  14  | _AuxInfo_         | Algorithm-specific auxiliary information. Currently used only by ML-KEM and ML-DSA. This field is zero for Algorithms that do not use it.
 |   [63:62] |   2  | Reserved          | Reserved for future use.
 |   [68:64] |   5  | _UsagePolicy_     | Usage (Control) Policy. Determines which modes are allowed to use the CR.
@@ -470,12 +471,9 @@ The architected values of _State_ common to all Algorithms are defined in <<ACE-
 [[ACE-extra-content]]
 ===== _AuxDataLen_ Field
 
-The _AuxDataLen_ MDH field records the length of the _Auxiliary Data Section_ (ADS) of the content, a variable-size, implementation-dependent part, as a number of 128-bit blocks. The maximum value is 2^14^-1, corresponding to 262128 bytes.
+The _AuxDataLen_ MDH field records the length of the _Auxiliary Data Section_ (ADS) of the content, a variable-size, implementation-dependent part, as a number of 128-bit blocks. When _ADSDropped_ = 1, it retains the length of the ADS before `Content2` was dropped. Zero means that no ADS is present. The value 1 is invalid. The maximum value is 2^14^-1, corresponding to 262128 bytes.
 
-If _AuxDataLen_ is zero or one, there is no ADS.
-The value one is used by the SCC import procedure to signal the state machine in the CR that ADS was present in the SCC, but it was discarded (see <<ACE-SCC-import>>).
-
-If _AuxDataLen_ {ge} 2 a copy of the implementation qualifier from the originating machine
+If _AuxDataLen_ {ge} 2, a copy of the implementation qualifier from the originating machine
 
 ``{fournbsp}{fournbsp}IMPQUAL := zeros(32) @ acemimpid @ acemarchid @ acemvendorid``
 
@@ -483,6 +481,13 @@ If _AuxDataLen_ {ge} 2 a copy of the implementation qualifier from the originati
 These 16 bytes, as well as a separate authentication tag for the ADS are counted within the length recorded by the _AuxDataLen_ field. The importing implementation uses this value to determine whether the ADS can be used.
 
 Since an ADS contains at least an authentication tag (16 bytes) and the originating implementation qualifier (also 16 bytes), the minimum length is 32 bytes, corresponding to an _AuxDataLen_ value of 2.
+
+[[ACE-ADSDropped-field]]
+===== _ADSDropped_ Field
+
+_ADSDropped_ is an unauthenticated format hint, ignored when _AuxDataLen_ = 0. When _AuxDataLen_ {ge} 2 and _ADSDropped_ = 1, `Content2` is absent, while `IMPQUAL` and `SIV2` remain as non-authoritative padding so that the `Content1` offset does not change. First-segment authentication clears bit 47 only in its local MDH copy.
++
+Toggling _ADSDropped_ cannot affect `Content1` or any policy. Setting it drops optional `Content2`; clearing it requests second-segment processing, whose failure drops `Content2` without rejecting authenticated `Content1` (<<ACE-SCC-import>>). Manipulation can therefore cause optional ADS loss or an unsuccessful second-segment attempt, but cannot make unauthenticated `Content2` usable or bypass first-segment authentication.
 
 // The format of the ADS is described in <<ACE-data-formats>>.
 
@@ -669,7 +674,7 @@ is invalid Metadata (cf. <<ACE-Metadata-validity>>).
 
 Metadata is _unsupported_ when the combination of _Algorithm_, _AlgorithmPolicy_ and _SCProtection_, or a non-zero _AlgorithmExtension_, is not implemented.
 
-Metadata is _invalid_ when a Reserved bit is non-zero; _AlgorithmPolicy_ is zero for an Algorithm that requires a bit; _KeyType_ is 2 or 3; _Locality_[5:4] is 3, or _Locality_ names an unconfigured Locality Secret (<<ACE-Localities>>); _AuxInfo_ is non-zero for an Algorithm that does not use it; _ExpirationDate_ is non-zero and `Zklexpire` is not implemented; _Version_ is unsupported; the MDH carries a custom value without _ChipFamScrt_ or _ChipScrt_ in _Locality_ (Rule <<ACE-GR-custom-locality>>); _AuxDataLen_ is non-zero in the MDH of a PI; or, in a supplied MDH, _State_ is not _Unconfigured_ at provisioning, or is _Unconfigured_ or 61–63 at import (cf. <<ACE-State-management>>).
+Metadata is _invalid_ when a Reserved bit is non-zero; _AuxDataLen_ is 1; _ADSDropped_ is non-zero in a PI or in a PCCC whose Configuration State has base type `pi`; _AlgorithmPolicy_ is zero for an Algorithm that requires a bit; _KeyType_ is 2 or 3; _Locality_[5:4] is 3, or _Locality_ names an unconfigured Locality Secret (<<ACE-Localities>>); _AuxInfo_ is non-zero for an Algorithm that does not use it; _ExpirationDate_ is non-zero and `Zklexpire` is not implemented; _Version_ is unsupported; the MDH carries a custom value without _ChipFamScrt_ or _ChipScrt_ in _Locality_ (Rule <<ACE-GR-custom-locality>>); _AuxDataLen_ is non-zero in the MDH of a PI or in a PCCC whose Configuration State has base type `pi`; or, in a supplied MDH, _State_ is not _Unconfigured_ at provisioning, or is _Unconfigured_ or 61–63 at import (cf. <<ACE-State-management>>).
 
 [horizontal]
 [[ACE-MVR-open, Metadata Validity Rule]] Metadata Validity Rule:: An `ace.mgmt` that opens a provisioning or import on unsupported Metadata raises ACE exception `ace_exc_unsupported`; on invalid Metadata it transitions the CR to Error State _Invalid_.
@@ -1337,7 +1342,7 @@ Let `content1_size` be the length in bytes of the `Content1` of an SCC for the _
 _AlgorithmPolicy_, _KeyType_ and _StateExtension_ of the MDH, and `pi_content_size` the length in bytes
 of the `Content` of a PI for its _Algorithm_, _AlgorithmPolicy_ and _KeyType_ (<<ACE-length-rule>>).
 These are two distinct quantities and are not interchangeable.
-Let `content2_size` = 16 * (_AuxDataLen_ - 2) if _AuxDataLen_ {ge} 2, and 0 otherwise.
+Let `content2_size` = 16 * (_AuxDataLen_ - 2) if _AuxDataLen_ {ge} 2 and _ADSDropped_ = 0, and 0 otherwise.
 
 `ace.size` is computed as follows:
 
@@ -1346,8 +1351,8 @@ Let `content2_size` = 16 * (_AuxDataLen_ - 2) if _AuxDataLen_ {ge} 2, and 0 othe
   Form B applies only to bits [63:0]: the fields in bits [127:64] are not examined, since none of them affects the size of any structure (<<ACE-length-rule>>), and the invalidity conditions on them, including Rule <<ACE-GR-custom-locality>>, are not applied.
 . If the MDH._State_ is an Error State, then: 16.
 . If the MDH._State_ is a Valid State or `ace_cfg_{importing|exporting}`, then:
-  ..  If _AuxDataLen_ < 2, then: 32 + `content1_size`.
-  ..  If _AuxDataLen_ {ge} 2, then: 64 + `content1_size` + `content2_size`.
+  ..  If _AuxDataLen_ = 0, then: 32 + `content1_size`.
+  ..  If _AuxDataLen_ {ge} 2, then: 64 + `content1_size` + `content2_size`. The 64-byte fixed part includes `IMPQUAL` and `SIV2` even when _ADSDropped_ = 1.
 . If the MDH._State_ is `ace_cfg_provisioning` or `ace_cfg_ppi_{importing|exporting}`, or, for a supplied MDH, _Unconfigured_ (the MDH of a PI), then: 16 + `pi_content_size`.
 --
 
@@ -1392,19 +1397,19 @@ according to the base type of the image the CR holds (<<ACE-length-rule>>).
 Since `content_size` must be determined by `ace.load` itself, the caller must have transferred at least the `MDH` into the CR beforehand.
 
 The instruction needs to know a _ContentOffset_ value of 0, 16, or 48, to signal the start of the `Content` in the external formats depending on the MDH, the current operation, and base type of the image the CR holds (<<ACE-length-rule>>).
-Let `content2_size` = 16 * (_AuxDataLen_ - 2) if _AuxDataLen_ {ge} 2, and 0 otherwise.
+Let `content2_size` = 16 * (_AuxDataLen_ - 2) if _AuxDataLen_ {ge} 2 and _ADSDropped_ = 0, and 0 otherwise.
 
-`_ContentOffset_` is computed using the same case distinction of `ace.size` (<<ACE-instruction-size>>) but excluding the `Content` and the MDH.
+`_ContentOffset_` is computed using the same case distinction of `ace.size` (<<ACE-instruction-size>>) but excluding the `Content` and the MDH._ADSDropped_ never affects _ContentOffset_.
 
 . If the MDH._State_ is a Valid State or `ace_cfg_{importing|exporting}`, then:
-  ..  If _AuxDataLen_ < 2, then: 16.
+  ..  If _AuxDataLen_ = 0, then: 16.
   ..  If _AuxDataLen_ {ge} 2, then: 48.
 . If the MDH._State_ is `ace_cfg_provisioning` or `ace_cfg_ppi_{importing|exporting}`, then: 0.
 
 The _serialized image_ `S` of the CR is `Content`, `SIV {vvert} Content`, or `SIV {vvert} IMPQUAL {vvert} SIV2 {vvert} Content` for _ContentOffset_ = 0, 16, or 48, respectively, and
 `image_size` = _ContentOffset_ + `content_size`, which is the value `ace.size` reports minus 16.
 
-Let `max_admissible` be the length of the longest image of the CR's current base type that the implementation can hold for the Algorithm: for an image with a SCC base type, `content1_size` + `content2_size` (<<ACE-instruction-size>>) at the largest _AuxDataLen_ the implementation supports; for an image with a PI base type, `pi_content_size`. Bytes of an SCC beyond it belong to an ADS that is discarded (<<ACE-SCC-import>>) and are neither read from memory nor written to the CR.
+Let `max_admissible` be the length of the longest image of the CR's current base type that the implementation can hold for the Algorithm: for an image with a SCC base type, `content1_size` plus the largest `content2_size` the implementation supports (<<ACE-instruction-size>>); for an image with a PI base type, `pi_content_size`. When _ADSDropped_ = 1, `content2_size` is zero, so no `Content2` byte is part of the image. Bytes of an SCC beyond `max_admissible` belong to an ADS that is discarded (<<ACE-SCC-import>>) and are neither read from memory nor written to the CR.
 Let
 
 {fournbsp}{fournbsp}``image_end`` = _ContentOffset_ + `min(content_size, max_admissible)`.
@@ -2330,7 +2335,7 @@ _Description_::
 --
 `ace.clear.ads` deletes any ADS from the target CR.
 This instruction is used when exporting a CR for use by some other target, possibly some different implementation.
-If no ADS was present, the _AuxDataLen_ remains 0, otherwise it is set to 1.
+_AuxDataLen_ and _ADSDropped_ are set to 0. The operation therefore produces a more compact layout without ADS that a destination with a different ACE Unit may have to drop anyway.
 Exporting a CR into a SCC in this state will result in an ADS-free SCC being generated.
 The first usage instruction that needs to access the ADS regenerates it.
 --
@@ -2554,7 +2559,7 @@ Instructions such as `ace.exec` may also cause _State_ changes.
 
 [[ACE-SGR-clear-cr-content-error-state,SGR10]] SGR10:: Upon transitioning to an Error State, the Content of a CR beyond the MDH is cleared:
 Internal resources associated with the Content shall also be released,
-including any ADS, and the _AuxDataLen_ field is set to 0.
+including any ADS, and the _AuxDataLen_ and _ADSDropped_ fields are set to 0.
 
 [[ACE-SGR-error-state-CR-is-only-MDH,SGR11]] SGR11::
 A CR in an Error State then retains only the MDH.
@@ -2863,8 +2868,8 @@ Up to five sections, in this order:
 | Section | Section Name | Size                 | Description
 | 1       | `MDH`        | 128 bits             | See <<ACE-Metadata>>.
 | 2       | `SIV`        | 128 bits             | Authentication tag for `MDH`, the Locality Secrets its _Locality_ names, and `Content1` (<<ACE-SCC-export>>).
-| 3       | `IMPQUAL`    | 128 bits, if present | Identifies the implementation of the ACE Unit.
-| 4       | `SIV2`       | 128 bits, if present | Authentication tag for `IMPQUAL`, `SIV` and `Content2`.
+| 3       | `IMPQUAL`    | 128 bits, if present | Identifies the implementation of the ACE Unit. Non-authoritative and ignored when _ADSDropped_ = 1.
+| 4       | `SIV2`       | 128 bits, if present | Authentication tag for `IMPQUAL`, `SIV` and `Content2`. Non-authoritative and not verified when _ADSDropped_ = 1.
 //
 | 5.a
 | `Content1`
@@ -2879,9 +2884,7 @@ Up to five sections, in this order:
   Encrypted in memory and during partial import.
 |===
 
-The _AuxDataLen_ field of the MDH gives the size, in 128-bit blocks, of the Implementation-Specific
-ADS (`IMPQUAL`, `SIV2` and `Content2`); the ADS is empty if _AuxDataLen_ < 2, and the value 1 has
-the special meaning given in <<ACE-extra-content>> and <<ACE-SCC-import>>.
+The _AuxDataLen_ field of the MDH gives the size, in 128-bit blocks, of the Implementation-Specific ADS (`IMPQUAL`, `SIV2` and `Content2`), or its size before `Content2` was dropped when _ADSDropped_ = 1. The ADS is empty if _AuxDataLen_ = 0; the value 1 is invalid. ACE generates an image with _ADSDropped_ = 1 only as an SCC-shaped PCCC: a nested export preserves an interrupted import after `Content2` was dropped. In that image, `IMPQUAL` and `SIV2` remain, `Content2` is absent, and the `Content1` offset is unchanged (<<ACE-ADSDropped-field>>). Because _ADSDropped_ is unauthenticated, import also accepts the same layout when the bit was set by modifying an SCC.
 A CR in an Error State is its MDH alone (Rule <<ACE-SGR-error-state-CR-is-only-MDH>>).
 --
 
@@ -2893,7 +2896,7 @@ While an SCC is imported, or a CR is exported as an SCC, the
   `IMPQUAL` and `SIV2`.
 . The `ace.mgmt` that completes an import or an export decrypts and authenticates it. This requires
   the MDH and `Content` to have been loaded, and `SIV`, and if _AuxDataLen_ {ge} 2 also `IMPQUAL`
-  and `SIV2`, to be in place. An export completion may instead restore the clear contents from an
+  and `SIV2`, to be in place. When _ADSDropped_ = 1, no `Content2` is loaded or authenticated. An export completion may instead restore the clear contents from an
   internal copy (<<ace-mgmt-completes-export>>).
 
 Partially Configured Cryptographic Context (PCCC).:::
@@ -2928,8 +2931,7 @@ contained in the lower 64 bits of the MDH:
 
 . The length of a *Provisioning Input* is determined by, and only by, the fields
 _Algorithm_, _AlgorithmPolicy_ and _KeyType_.
-It does *not* depend on _AuxDataLen_: a PI carries no ADS, and _AuxDataLen_
-must be zero in the MDH of a PI.
+It does *not* depend on _AuxDataLen_ or _ADSDropped_: a PI and a PCCC whose Configuration State has base type `pi` carry no ADS, and _AuxDataLen_ and _ADSDropped_ must be zero in their MDH.
 It also does not depend on _StateExtension_ or _AlgorithmUse_, whose values are ignored and are
 replaced with zero by `ace.mgmt` upon provisioning, nor on _SCProtection_.
 During provisioning, the information of a CR reflects the external format of a PI.
@@ -2939,8 +2941,7 @@ information such as derived keys, or multiple shares.
 
 . The length of a *Sealed Cryptographic Context*
 is determined by, and only by, the
-fields _Algorithm_, _AlgorithmPolicy_, _KeyType_, _StateExtension_, and _AuxDataLen_
-(see <<ACE-extra-content>>).  Note that this length does not depend on _State_.
+fields _Algorithm_, _AlgorithmPolicy_, _KeyType_, _StateExtension_, _AuxDataLen_, and _ADSDropped_ (see <<ACE-extra-content>>). _ADSDropped_ can remove only `Content2`; it never changes the presence of `IMPQUAL` or `SIV2`, or the offset or length of `Content1`. Note that this length does not depend on _State_.
 It also does *not* depend on _SCProtection_ (see <<ACE-rules-masked-implementations>>).
 
 . The length of a *Partially Configured Cryptographic Context* is that of a
@@ -2957,7 +2958,7 @@ key was provisioned by value or retrieved through a System Key Identifier,
 nor on _StateExtension_, because a CR is allocated with room for every field the
 Algorithm may come to use.
 
-No other MDH field and no information in the `Content` may affect any of these four quantities.
+No other MDH field and no information in the `Content` may affect any of these four quantities. _ADSDropped_ affects the lengths of SCCs and SCC-shaped PCCCs, but does not affect CRF capacity.
 
 A CR in an Error State is its MDH alone (Rule <<ACE-SGR-error-state-CR-is-only-MDH>>, <<ACE-error-state-transfer>>).
 A PI cannot be in an Error State.
@@ -3057,7 +3058,7 @@ It performs following operations:
 
 .. The target CR is zeroized. Bytes of the serialized `Content` that a management operation has not yet written read as zero through every architectural access (`ace.store`, `ace.mv`, verbatim export).
 .. If `#immed7` = `ace_cfg_importing` and `ml`._State_ is an Error State, the CR is immediately
-    fully configured in that Error State, with the entire MDH given by the auxiliary input except that _AuxDataLen_ is set to 0 (Rule <<ACE-SGR-clear-cr-content-error-state>>).
+    fully configured in that Error State, with the entire MDH given by the auxiliary input except that _AuxDataLen_ and _ADSDropped_ are set to 0 (Rule <<ACE-SGR-clear-cr-content-error-state>>).
     The steps below are not applied: the CR holds only its MDH (<<ACE-cryptographic-registers>>), no Algorithm is selected for execution,
     and no CRF capacity is allocated, so this configuration cannot fail.
 //    Provisioning is not a way to do this: with `#immed7` = `ace_cfg_provisioning` the _State_ field of
@@ -3070,14 +3071,14 @@ It performs following operations:
 .. In case of *provisioning*:
 ... `ml`._State_ must be _Unconfigured_, else the Metadata is invalid (<<ACE-MVR-open>>). _State_ is initially set to _Unconfigured_. This means that during the pre-flight checks described below, _State_ is _Unconfigured_ until it is successfully configured.
 ... _StateExtension_ and _AlgorithmUse_ are set to 0; the values in the PI are ignored.
-... `AuxDataLen` must be 0. If `AuxDataLen` is not zero in the MDH of a PI,
+... `_AuxDataLen_` and `_ADSDropped_` must be 0. If either is non-zero in the MDH of a PI,
 the CR is transitioned to Error State _Invalid_ (which is a Complete State) and the instruction terminates.
 .. If `ml` is invalid Metadata (see <<ACE-MVR-open>>), the CR is transitioned to Error State _Invalid_.
 .. The implementation attempts to allocate CRF capacity according to the requirements of the _Algorithm_, _AlgorithmPolicy_, and _SCProtection_ fields of the MDH, as prescribed by <<ACE-length-rule>>. No other field must affect the amount of capacity required.
     If capacity allocation is not possible, ACE exception `ace_exc_out_of_memory` is raised.
 .. If *provisioning*: CR._State_ is set to `ace_cfg_provisioning`;
 .. If *importing*: CR._State_ depending on `ml`._State_:
-... In every case the opening applies steps 1–8 of <<ACE-SCC-import>>, recomputing `actual_impdatalen` from the MDH it loads.
+... In every case the opening applies steps 1–5 of <<ACE-SCC-import>>, determining whether the ADS is retained from the MDH it loads and the implementation's supported maximum.
 ... If `ml`._State_ is a Valid State, then CR._State_ is set to `ace_cfg_importing`;
 ... If `ml`._State_ is `ace_cfg_importing` or `ace_cfg_exporting` (the image of an interrupted import or export of a CR in a Complete State), then CR._State_ is set to `ace_cfg_importing`;
 ... If the base type of `ml`._State_ is `pi`, then CR._State_ is set to `ace_cfg_ppi_importing` (<<ACE-nested-state-base-types>>);
@@ -3147,7 +3148,7 @@ For a nested completion, no authentication occurs; the base-type rule is the onl
 --
 `ace.mgmt` does not need a saved MDH from the start of the provisioning process, hence if a Form C or D was used in place of Form A, the auxiliary input is simply ignored.
 
-Completing a provisioning requires _AuxDataLen_ = 0; if CR.MDH._State_ is `ace_cfg_provisioning` and _AuxDataLen_ {ne} 0, the CR transitions to Error State _Invalid_ and the instruction terminates.
+Completing a provisioning requires _AuxDataLen_ = 0 and _ADSDropped_ = 0; if CR.MDH._State_ is `ace_cfg_provisioning` and either field is non-zero, the CR transitions to Error State _Invalid_ and the instruction terminates.
 
 The operation makes the provisioned CR available to software by
 
@@ -3166,8 +3167,7 @@ This prevents such material from being exposed in an unencrypted export of a par
 +
 --
 The software uses Form A, C or D of `ace.mgmt` to pass along the value of `ml` saved when the import process was started.
-The image authenticated as ``AD[0]`` is the MDH held in the target CR — the image carried in the SCC and
-loaded when the import was started — with its _State_ field restored from `ml` (<<ACE-SCC-import>>).
+The image authenticated as ``AD[0]`` is the MDH held in the target CR — the image carried in the SCC and loaded when the import was started — with its _State_ field restored from `ml` and _ADSDropped_ cleared in the copy used for authentication (<<ACE-SCC-import>>). The actual MDH field is not cleared by this computation.
 
 The semantics are:
 
@@ -3192,7 +3192,7 @@ Then:
 .. The CR's _State_ is set to `ml`._State_.
 .. If `ml`._State_ is a Complete State (i.e., including Error States), the instruction
 restores the internal state of the CR to the clear format it was in when the export process was initiated and allows software to access it:
-... The contents are decrypted and authenticated as when completing an import, with the MDH held in the CR as `AD[0]`.
+... The contents are decrypted and authenticated as when completing an import, with the MDH held in the CR as `AD[0]` and _ADSDropped_ cleared in the copy consumed by first-segment authentication.
 ... If the `SIV` check fails, the CR transitions to Error State _Authentication Failed_ and the instruction terminates; no exception is raised. Otherwise, if _KeyType_ = 1, the SKID is resolved and the narrowing of <<ACE-system-keys>> is applied.
 +
 NOTE: An implementation may instead restore the clear contents from an internal copy only if the outcome is identical: the copy is usable only while the CR, its MDH, `SIV` and, when _AuxDataLen_ ≥ 2, `IMPQUAL` and `SIV2` still hold the values written by the opening `ace.mgmt`, and `ml`._State_ equals the _State_ at that time.  The specification does not define any internal mechanisms by which an implementation can achieve this.
@@ -3308,7 +3308,7 @@ useless: it leaves the CR unchanged and opens no management operation
 
 . Issue `ace.mgmt` with `#immed7` = `ace_cfg_importing` and the 16-byte MDH
   as the auxiliary operand. The instruction configures the CR into the Error State the MDH names
-  (54 and 55 as _Invalid_), installing the entire MDH, and completes the configuration by itself,
+  (54 and 55 as _Invalid_), installing the entire MDH except that _AuxDataLen_ and _ADSDropped_ are set to 0, and completes the configuration by itself,
   without applying the checks of <<ACE-Metadata-validity>>; it is uninterruptible
   (Rule <<ACE-IRR-uninterruptible-instructions>>), so the CR is never observed part-configured.
   Form C or D carries the whole MDH, as does a Form A taking it from the ACEIOBUF.
@@ -3379,7 +3379,7 @@ It relies instead on AES-GCM-SIV's resistance to nonce reuse and misuse. The con
 
 This provides practical protection for client applications. On cloud servers, each virtual machine and supervisor domain should use a unique CSK. To transfer CCs between domains, M-mode firmware can import an SCC using the source domain's CSK and re-export it using the target domain's CSK.
 
-The `SIV` (Synthetic IV), which is also the GCM-SIV authentication tag, is the encryption of the `POLYVAL` hash of the MDH, Locality Secrets, and Content, concatenated in that order. In the `POLYVAL` pseudocode below, the input is represented as an array of 128-bit blocks, which are absorbed in increasing index order.
+The `SIV` (Synthetic IV), which is also the GCM-SIV authentication tag, is the encryption of the `POLYVAL` hash of the MDH with _ADSDropped_ cleared in the authentication copy, the Locality Secrets, and Content, concatenated in that order. In the `POLYVAL` pseudocode below, the input is represented as an array of 128-bit blocks, which are absorbed in increasing index order.
 ====
 
 [[ACE-SCC-POLYVAL]]
@@ -3455,8 +3455,12 @@ function SCC_Encrypt(AD[] : array of bits(128), N : bits(96), sep: bits(1),
     P[] : array of bits(128), K : bits(256), len_AD : int, len_PC : int)
   → {SIV : bits(128), C[] : array of bits(128)} =
 {
+  local AD_auth : array [0..len_AD-1] of bits(128) ← AD[];
+
   enc_key, auth_key ← SCC_KeyDeriv(K,N);
-  SIV ← POLYVAL(auth_key, AD || P, len_AD + len_PC);
+  if (sep = 0) then:
+    AD_auth[0][47] ← 0;
+  SIV ← POLYVAL(auth_key, AD_auth || P, len_AD + len_PC);
   SIV[95:0] ← SIV[95:0] xor N;
   SIV ← AESE256(enc_key, 0 @ sep @ SIV[125:0]);
 
@@ -3479,13 +3483,17 @@ function SCC_Decrypt(AD[] : array of bits(128), N : bits(96), sep: bits(1),
     len_AD : int, len_PC : int)
   → {correct : bool, P[] : array of bits(128)} =
 {
+  local AD_auth : array [0..len_AD-1] of bits(128) ← AD[];
+
   enc_key, auth_key ← SCC_KeyDeriv(K,N);
+  if (sep = 0) then:
+    AD_auth[0][47] ← 0;
 
   foreach(i from 0 to len_PC - 1) do:
     P[i] ← C[i] xor AESE256(enc_key,
              1 @ sep @ SIV[125:32] @ bin((int(SIV[31:0]) + i) mod 2**32, 32));
 
-  s ← POLYVAL(auth_key, AD || P, len_AD + len_PC);
+  s ← POLYVAL(auth_key, AD_auth || P, len_AD + len_PC);
   tmp ← s;
   tmp[95:0] ← tmp[95:0] xor N;
   tmp ← AESE256(enc_key, 0 @ sep @ tmp[125:0]);
@@ -3521,13 +3529,13 @@ We define `LST_eff[j]` as the value of `LST` entry j after applying these substi
 a non-implemented entry with no configured replacement contributes `zeros(128)` and makes the Metadata invalid at provisioning/import; an export is not refused on this ground, the resulting SCC being rejected at import. Entry 9 of `LST` is `hacelocality`, and entry 10 the effective register of <<ACE-Localities>>: `sacelocality`, or `vsacelocality` when V=1.
 In the export and import algorithms we then replace `LST[j]` with `LST_eff[j]`.
 
-Exporting a CR may produce an _AuxDataLen_ value of 1, both for fully configured (cf. <<ACE-instruction-clearads>>) and non-fully configured CRs.
+After `ace.clear.ads`, a fully configured CR has _AuxDataLen_ = 0 and _ADSDropped_ = 0 (<<ACE-instruction-clearads>>). An SCC-shaped PCCC may instead carry _ADSDropped_ = 1 to preserve an interrupted import after `Content2` was dropped.
 
 .Exporting a Fully Configured CR ``K(i)``
 --
 . First, the Algorithm-dependent data is processed:
 .. `saved_MDH` <- the MDH of ``K(i)`` immediately before its _State_ is set to `ace_cfg_exporting` (the image software saved beforehand), ``len_AD`` <- 1
-.. ``AD[0]`` <- `saved_MDH`
+.. ``AD[0]`` <- `saved_MDH`. `SCC_Encrypt` clears _ADSDropped_ in its local copy of this block before computing `SIV`; the `saved_MDH` returned in the SCC is unchanged.
 .. foreach(_j_ from 0 to 10) do:
 ... If `saved_MDH`._Locality_ includes Locality #j, then ``AD[len_AD]`` <-  ``LST_eff[``_j_``]``, ``len_AD`` <- ``len_AD`` + 1
 .. `len_PC` <- the number of 128-bit blocks of `Content1` (Section 5.a of <<ACE-SCC>>).
@@ -3536,7 +3544,7 @@ Exporting a CR may produce an _AuxDataLen_ value of 1, both for fully configured
 .. `len_AD2` <- 2, ``AD2[0]`` <- ``K(i)``.`IMPQUAL`, ``AD2[1]`` <- `SIV`.
 .. `len_PC2` <- the number of 128-bit blocks of `Content2` (Section 5.b of <<ACE-SCC>>), that is _AuxDataLen_ − 2.
 .. `SIV2`, `Content2~CT~[]` <- `SCC_Encrypt(AD2, zeros(96), 1, K(i).Content2~PT~[], CSK, len_AD2, len_PC2)`
-. Finally, if _AuxDataLen_ < 2, then:
+. Finally, if _AuxDataLen_ = 0, then:
 .. return(`saved_MDH`, `SIV`, `Content1~CT~[]`)
 . else:
 .. return(`saved_MDH`, `SIV`, `IMPQUAL`, `SIV2`, `Content1~CT~[]` and `Content2~CT~[]`) (note that `Content2~CT~[]` may be empty)
@@ -3547,7 +3555,7 @@ Exporting a CR may produce an _AuxDataLen_ value of 1, both for fully configured
 // remains in the CR, whence `ace.store` (<<ACE-instruction-store>>) transfers it; and `saved_MDH` is the
 // image software already holds, which `ace.getmd*` (<<ACE-instruction-getmd>>) also returns.
 //
-// If _AuxDataLen_ < 2, then `SIV2` and `IMPQUAL` are not generated, and therefore
+// If _AuxDataLen_ = 0, then `SIV2` and `IMPQUAL` are not generated, and therefore
 // `acesiv2l`/`acesiv2h` and `aceiql`/`aceiqh` are not written to.
 // They may contain stale values, but this is not an issue as they are not exported to memory in this case.
 
@@ -3576,9 +3584,9 @@ If any of the two operations is not completed, various types of error conditions
 ==== Decryption and Authentication of a complete SCC into a CR
 
 The following algorithm describes the import of the SCC of a fully configured CR as a whole.
-Steps 1 to 8 are performed by the `ace.mgmt Kd|K{Xd}, #ace_cfg_importing` that opens the import
-(<<ACE-CR-management>>), step 9 by the `ace.load` instructions that follow it
-(<<ACE-instruction-load>>), and the remaining steps by
+Steps 1 to 5 are performed by the `ace.mgmt Kd|K{Xd}, #ace_cfg_importing` that opens the import
+(<<ACE-CR-management>>), step 6 by the `ace.load` or CR-writing `ace.mv` instructions that follow it
+(<<ACE-instruction-load>>, <<ACE-instruction-mv>>), and the remaining steps by
 `ace.mgmt Kd|K{Xd}, #ace_cfg_management_end`, which decrypts and authenticates the SCC.
 
 .Importing a Fully Configured CR ``K(i)``
@@ -3586,28 +3594,25 @@ Steps 1 to 8 are performed by the `ace.mgmt Kd|K{Xd}, #ace_cfg_importing` that o
  . Clear ``K(i)``.
  . Load `M`, the MDH from the SCC, into ``K(i)``.MDH.
  . Check correctness of `M`, and whether the Algorithm is supported.
- . Determine the length of the entire SCC.
- . `actual_impdatalen` <- `M`._AuxDataLen_.
- . If `actual_impdatalen` exceeds the implementation's maximum for the given Algorithm, the SCC contains an Implementation-Specific ADS that the importing implementation does not support.
- . If `actual_impdatalen` is 1, then we are importing a partially exported SCC that results from an interrupted import with discarded ADS. We keep the value 1 so that the state machine in the CR is notified that ADS was present but discarded when this import is finally completed.
- . In the last two cases, the SCC length is adjusted by excluding the Implementation-Specific ADS, and `actual_impdatalen` <- 1.
- . Load the rest of the SCC, up to the determined length.
- . `saved_MDH` <- the MDH image held in ``K(i)``, that is `M`, the image carried in the SCC and loaded at `#ace_cfg_importing`, with its _State_ field restored from the auxiliary operand of the completing `ace.mgmt`. This is the same value that the exporting side used under that name.
- . ``AD[0]`` <- `saved_MDH`, ``len_AD`` <- 1
+ . Determine the SCC layout from `M`.
+ . If `M`._AuxDataLen_ {ge} 2 and either `M`._ADSDropped_ = 1 or `M`._AuxDataLen_ exceeds the implementation's maximum for the given Algorithm, set ``K(i)``.MDH._ADSDropped_ to 1. Otherwise set it to 0. This changes only the length of `Content2`: when _AuxDataLen_ {ge} 2, `IMPQUAL` and `SIV2` remain present and _ContentOffset_ remains 48.
+ . Load the rest of the SCC up to the length described by the resulting working MDH. If _ADSDropped_ = 1, this includes `SIV`, `IMPQUAL`, `SIV2`, and `Content1`, but no `Content2`.
+ . `saved_MDH` <- the MDH image held in ``K(i)``, that is `M` with the working value of _ADSDropped_ and with its _State_ field restored from the auxiliary operand of the completing `ace.mgmt`.
+ . ``AD[0]`` <- `saved_MDH`, ``len_AD`` <- 1. `SCC_Decrypt` clears _ADSDropped_ in its local copy of `AD[0]` before authenticating it; the MDH held in ``K(i)`` is unchanged by that computation.
  . foreach (`j` from 0 to 10) do:
  .. If `saved_MDH`._Locality_ includes Locality #j, then ``AD[len_AD]`` <-  ``LST_eff[j]``, ``len_AD`` <- ``len_AD`` + 1
  . `len_PC` <- the number of 128-bit blocks of `Content1` (Section 5.a of <<ACE-SCC>>).
  . `correct`, ``K(i)``.`Content1` <- `SCC_Decrypt(AD, zeros(96), 0, SIV, K(i).Content1, CSK, len_AD, len_PC)`.
  . If `correct` {ne} `true`, the SCC is rejected: ``K(i)`` transitions to Error State `ace_state_import_auth` (Rule <<ACE-SGR-clear-cr-content-error-state>>).
- . Second, if `actual_impdatalen` {ge} 2, the implementation-dependent data is processed:
+ . Second, if ``K(i)``.MDH._AuxDataLen_ {ge} 2 and ``K(i)``.MDH._ADSDropped_ = 0, the implementation-dependent data is processed:
 .. `len_AD2` <- 2, ``AD2[0]`` <- ``K(i)``.`IMPQUAL`, ``AD2[1]`` <- `SIV`.
 .. If ``K(i)``.`IMPQUAL` = `zeros(32) @ acemimpid @ acemarchid @ acemvendorid` then:
-... `len_PC2` <- the number of 128-bit blocks of `Content2` (Section 5.b of <<ACE-SCC>>), that is `actual_impdatalen` − 2.
+... `len_PC2` <- the number of 128-bit blocks of `Content2` (Section 5.b of <<ACE-SCC>>), that is ``K(i)``.MDH._AuxDataLen_ − 2.
 ... `correct`, `K(i).Content2` <- `SCC_Decrypt(AD2, zeros(96), 1, `SIV2`, K(i).Content2, CSK, len_AD2, len_PC2)`.
 .. else:
 ... `correct` <- `false`.
- . If `correct` {ne} `true`, then `Content2` is dropped and `actual_impdatalen` <- 1.
- . ``K(i)``.MDH._AuxDataLen_ <- `actual_impdatalen`. If this value is 0 or 1, import completes using only the architecture-dependent content. The value 1 signals to the imported CR's state machine that the ADS was dropped. The state machine must then establish a consistent internal state and set _AuxDataLen_ to 0. If new auxiliary data is created, _AuxDataLen_ must be set to the appropriate value when the auxiliary data is created.
+ . If second-segment processing was attempted and `correct` {ne} `true`, drop `Content2` and set ``K(i)``.MDH._ADSDropped_ to 1.
+ . If ``K(i)``.MDH._AuxDataLen_ = 0 or ``K(i)``.MDH._ADSDropped_ = 1, import completes using only the architecture-dependent content. The state machine must establish a consistent internal state and set _ADSDropped_ to 0. If no replacement ADS is generated, it sets _AuxDataLen_ to 0; if it generates replacement ADS, during completion or later, it sets _AuxDataLen_ to the appropriate value, which is at least 2. Otherwise the successfully imported ADS is retained, _AuxDataLen_ is preserved, and _ADSDropped_ is set to 0. A later export uses these current values: it emits no ADS when _AuxDataLen_ = 0, or emits the newly generated or retained ADS when _AuxDataLen_ {ge} 2.
 --
 
 [NOTE]
