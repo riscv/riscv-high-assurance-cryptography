@@ -498,7 +498,7 @@ Error States 54 and 55, if defined, will not necessarily have a lower priority t
 |  48    | `ace_state_unsupported`         | _Unsupported_           | Not supported (i.e., not implemented) Algorithm.
 |  49    | `ace_state_invalid`             | _Invalid_               | The CR has been invalidated by invalid Metadata or by an operation not permitted in its current State.
 |  50    | `ace_state_out_of_memory`       | _Out of Memory_         | Insufficient CRF memory for a configuration instruction. This may be set by privileged code if it does not handle CR allocation or fails to do so, returning an error instead.
-|  51    | `ace_state_import_auth`         | _Authentication Failed_ | Authentication failure while completing an SCC import.
+|  51    | `ace_state_import_auth`         | _Authentication Failed_ | Authentication failure while completing an SCC import or a CR export.
 |  52    | `ace_state_priv_violation`      | _Privilege Violation_   | Violation of Usage Control policies.
 |  53    | `ace_state_expired`             | _Expired_               | The CR has expired.
 | 54, 55 | (Reserved)                      | {empty}                 | Reserved for future use.
@@ -736,173 +736,6 @@ a misaligned effective address behaves as it does for an ordinary load or store 
 implementation.
 
 There are no atomicity requirements for any ACE memory instruction.
-
-// ////////////////////////////////////////////////////////////////////
-
-[[ACE-error-architecture]]
-==== Error Handling Architecture
-
-Without the ACE Privileged Architecture, which only an M-mode-only hart may omit, the ACE
-exceptions are replaced by the behaviors of <<ACE-exception-error-correspondence>>, listed in their
-natural priority order.
-
-[[ACE-exception-error-correspondence]]
-.Behavior upon exception conditions when the Privileged Architecture is not available.
-[float="center",align="center",cols="<1,<2",options="header"]
-|===
-| ACE Exception                      | Behavior when the Privileged Architecture is not available.
-| `ace_exc_fatal`                    | Implementation and platform defined behavior.
-| `ace_exc_no_csk` (See <<ACE-CSK-requirements>> and <<ACE-CSR-macecsk>>.) | The instruction raises an illegal-instruction exception; on an M-mode-only hart M-mode is both the only mode that can observe it and the only one that can establish a CSK.
-| `ace_exc_CR_off` (See <<ACE-CSR-lcrstatus>>.)| Does not apply without Privileged Architecture, since the `*lcrstatus` CSRs are not available.
-| `ace_exc_unsupported`              | Transition to Error State _Unsupported_.
-| `ace_exc_out_of_memory`            | Transition to Error State `ace_state_out_of_memory`.
-| `ace_exc_privilege_violation`      | Transition to Error State `ace_state_priv_violation`.
-| `ace_exc_unconfigured_buffer`      | The instruction raises an illegal-instruction exception.
-|===
-
-For `ace.clone` and `ace.derive`, which name two CRs, the behavior above and the handler's duty
-below concern the CR on which the exception is raised: for `ace.clone`, the source for
-`ace_exc_privilege_violation` and the destination for `ace_exc_out_of_memory`; for `ace.derive`,
-the endpoint on which the failing check is detected, each check being applied to the source before
-the destination (Rule <<ACE-SGR-gate-order>>).
-
-With the Privileged Architecture, the transition is the duty of the exception handler. A handler
-that cannot resolve `ace_exc_unsupported`, `ace_exc_out_of_memory` or
-`ace_exc_privilege_violation`, cannot forward it to another handler, including an in-process
-handler, and does not suppress the process that caused it, must:
-
-. set the _State_ of the CR on which the exception was raised to the corresponding Error State of
-  <<ACE-exception-error-correspondence>>, using the short import of <<ACE-error-state-transfer>>
-  where the instruction left the CR _Unconfigured_, as Rule
-  <<ACE-SGR-transition-to-from-unconfigured>> requires; and
-. resume execution at the instruction following the trapping one by advancing `xepc`, since
-  otherwise the same exception is raised again. A handler that advances `xepc` past a usage
-  instruction should write zeros to its output operand, as the instruction would have done had it
-  performed no operation (Rule <<ACE-SGR-usage-cr-error-state>>).
-
-Elsewhere, including <<ACE-Algorithms>>, <<ACE-priv>> and <<ACE-pseudocode-examples>>, behavior is
-described with the Privileged Architecture in effect; without it, the behaviors above replace the
-exceptions.
-
-[horizontal]
-State change rule for exceptions:: An illegal- or virtual-instruction exception, or an ACE
-exception other than `ace_exc_fatal`, makes no change to ACE state, except the zeroizing of the
-target CR by an opening `ace.mgmt`, which is performed even if the instruction later raises an
-exception (<<ACE-CR-management>>). `ace_exc_fatal` resets the ACE state (_Fatal Conditions_ below).
-
-The categories of error conditions are:
-
-Fatal Conditions:::
-+
---
-Fatal conditions have the highest priority among the ACE-specific error categories, and no CPU
-state disables their detection. The main one is an integrity failure of the CRF of a hart
-(<<ACE-cryptographic-registers>>); implementations may define others.
-
-A fatal condition causes an ACE unit reset of the hart
-(<<ACE-reset-and-m-mode-only>>) and then
-raises ACE exception `ace_exc_fatal`, whose trap is taken only after the reset completes
-and is not delegable below M-mode. The reset differs from an ordinary one in three ways:
-
-. `misa.L` keeps its value, and every `ACES` field that is not Off becomes Dirty rather than Off,
-  so that `ace_exc_fatal` can be reported, the modes below M-mode are not silently disabled, and
-  context-switching code discards its stale saved state;
-. every `*lcrstatus` field becomes _Dirty_ rather than _Initial_, as on entry into unauthenticated
-  Debug mode (<<ACE-interaction-with-debug>>);
-. the masks that unauthenticated Debug mode installs are not lifted.
-
-A CSK generated at boot under the fourth model of <<ACE-CSK-requirements>> is shared by the harts of
-its subsystem and is not regenerated.
-
-Detection and reset may be synchronous or asynchronous, the condition being recorded in the ACE
-unit. The first ACE instruction or ACE CSR access issued, or in flight, after detection performs no
-operation and raises `ace_exc_fatal`, with `xepc` holding its address. If, at detection, an `ACES`
-field in effect is Off or the ACE bit of an `*stateen0` CSR in effect is clear, the condition is
-retained and reported on the first ACE instruction or ACE CSR access that is not illegal or virtual
-on those grounds; until then such instructions raise an illegal- or virtual-instruction exception,
-which <<ACE-exception-codes>> ranks above `ace_exc_fatal`. Detection is thus never disabled; only
-its reporting is deferred.
---
-
-[[ACE-illegal-instruction-grounds,Grounds for Illegal-Instruction Exceptions]]
-Grounds for Illegal-Instruction Exceptions:::
-+
---
-The grounds for an illegal- or virtual-instruction exception form two groups:
-
-* In the first group, the grounds come from the instruction encoding, the GPRs and the vector
-  configuration alone, without accessing the state of the ACE unit, and therefore take precedence
-  over `ace_exc_fatal` (<<ACE-exception-codes>>):
-
-. A reserved encoding, including `ace.setst` with `#immed7` 46 or 47, `ace.mgmt` with `#immed7` in 59–62 or in Form B, a reserved `#immed7` of `ace.setst` with `r` = 1 and CR register `X0` (<<ACE-instruction-setst>>), and an ACE instruction with a vector operand issued while `vtype.vill` is set (<<ACE-ACEV>>).
-. An indirect CR index outside [0..31], or `X0` used as one where not expressly encoded (Rule <<ACE-GR-GPR-indirect>>), and `ace.derive` with equal CR indices (<<ACE-instruction-derive>>).
-. A GPR pair or quartet not meeting Rule <<ACE-GR-multiple-GPRs>>.
-. A vector operand carrying an MDH with `VL` {times} `SEW` < 128 (Rule <<ACE-GR-vector-MDH-operand>>), or a vector `ace.mv` whose `vl * (SEW/8)` or `vstart * (SEW/8)` is not a multiple of 16 (<<ACE-instruction-mv>>).
-. An encoding assigned to an extension that is not implemented, for instance as Forms A–C of `ace.exec` without `Zklv`.
-. An ACE instruction or ACE CSR access gated by a clear `Smstateen` bit (<<ACE-CSRs-priv>>), which raises an illegal- or virtual-instruction exception as that extension prescribes; an ACE instruction issued while `ACES` is Off (see _Fatal_ above), an ACE instruction issued under big-endian effective data endianness (<<ACE-Notation>>), and an access to a CSR that <<ACE-CSRs-unpriv>> declares unavailable or that <<ACE-CSRs-priv>> makes inaccessible from the current mode (an illegal- or virtual-instruction exception, as stated there).
-
-* In the second group, the grounds require the state of the ACE unit: for most of them the
-  contents of a CR, which for a CR marked _Off_ (<<ACE-CSR-lcrstatus>>) exist only once it has been
-  lazily loaded, or in the M-mode code that emulates it. They are evaluated only after
-  `ace_exc_no_csk` and the _Off_ gate, once the CR is loaded or by the emulator, and only if no
-  fatal condition is pending, `ace_exc_fatal` being raised otherwise:
-
-. A usage-controlled instruction issued on a CR in State _Unconfigured_ (Rule <<ACE-SGR-transition-to-from-unconfigured>>), including `ace.derive` with an _Unconfigured_ endpoint.
-. `ace.load`, `ace.store` or `ace.mv` on a CR whose _State_ does not admit the transfer, or with an inconsistent `acestart` (Rules <<ACE-SGR-ace-load-mv-allowed>> and <<ACE-SGR-ace-store-mv-allowed>>).
-. `ace.mgmt` when `acemanagedcr` names another CR, when opening an export on an _Unconfigured_ CR, when completing with an `ml`._State_ inconsistent with the CR's Configuration State, or when `ace_cfg_management_end` is issued with no management operation open (<<ACE-CR-management>>).
-. An ACEIOBUF substitution that <<ACE-usage-input-output>> forbids, including any substitution without `Zklio`, since whether a Form is a substitution depends on the operation the CR's State defines.
-. A Form A `ace.mgmt` that must take the MDH from a configured ACEIOBUF with `aceiobuftop` < 16 (Rule <<ACE-GR-vector-MDH-operand>>).
-. An `ace.clone` whose source is _Unconfigured_ and differs from its destination (<<ACE-instruction-clone>>).
-. A Form A–C `ace.exec` with `acestart` {ne} `vstart` {times} `SEW` / 8 (<<ACE-CSR-acestart>>).
-. A Form A `ace.exec` with `Vd` = `Vs2` for an operation whose output blocks do not have the length of its input blocks (<<ACE-instruction-exec>>).
-. If the Privileged Architecture is not implemented, an instruction issued without a CSK, or one that requires the ACEIOBUF while it is unconfigured or absent (<<ACE-exception-error-correspondence>>).
---
-
-// Exceptions and State Changes::: [[ACE-exceptions-and-state-changes,Exceptions and State Changes]]
-// When an ACE instruction raises `ace_exc_no_csk`, `ace_exc_CR_off`, `ace_exc_unsupported`, `ace_exc_out_of_memory`, `ace_exc_privilege_violation` or `ace_exc_unconfigured_buffer`, it has changed no ACE state, unless its description states a change that precedes the exception. `ace.mgmt` is the one instruction that does: it zeroizes the target CR before its checks.
-
-Unsupported Algorithms:::
-+
---
-Unsupported Metadata at provisioning or import raises `ace_exc_unsupported` and leaves the CR
-_Unconfigured_. A handler below M-mode that receives the delegated exception cannot emulate the
-Algorithm and treats the exception as unresolvable.
-
-An M-mode handler that emulates the Algorithm instead sets the CR's `*lcrstatus` field to _Off_
-(<<ACE-CSR-lcrstatus>>): every later access to the CR that <<ACE-CSR-lcrstatus>> does not exempt
-then traps, and the emulator, holding the CR in its own protected memory, services every operation
-on it, including SCC import and export. For this it needs either the inputs of `SCC_Encrypt` and
-`SCC_Decrypt` (<<ACE-SCC-AEAD>>) that it cannot otherwise obtain, namely the CSK and the Locality
-Secrets of the HW Binding Group, or access to primitives that compute these functions on its
-behalf, provided in an implementation-specific way. An implementation that provides neither cannot
-emulate Algorithms, and reports `ace_exc_unsupported` to software instead.
-
-An emulator keeps one copy per CR slot, and replaces it:
-
-. at the next `ace_exc_unsupported` on that slot; or
-. at an emulated `ace.clone` naming the slot as destination, which also clears the hardware CR of
-  that slot and marks it _Off_, since the clone of an emulated CR is emulated too.
-
-A copy orphaned by an instruction that <<ACE-CSR-lcrstatus>> exempts is never used again but lingers
-until replaced, so an emulator that must not retain key material longer than necessary checks
-`mlcrstatus` whenever it runs and zeroizes the copies whose _Off_ mark is gone.
-
-`ace_exc_unsupported` is _not_ raised when accessing or using a CR in State `ace_state_unsupported`.
---
-
-Algorithmic Errors:::
-+
---
-Algorithmic errors may occur:
-
-. in import processes, as Error State `ace_state_import_auth`;
-. in the Algorithms themselves, which may transition the CR to Error State _Invalid_ or to another
-  Error State, as the Algorithm specifies.
-
-The verification of an authentication tag by an AEAD Algorithm (_not_ by the SCC export and import
-procedures), or of a signature, is _not_ an algorithmic error, whether it succeeds or fails: the
-Algorithm has performed as expected.
---
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -2625,9 +2458,266 @@ are allowed in States `ace_cfg_provisioning`, `ace_cfg_importing` and `ace_cfg_p
 [[ACE-SGR-ace-store-mv-allowed,SGR22]] SGR22:: `ace.store` and `ace.mv` with a source CR
 are allowed in States `ace_cfg_exporting` and `ace_cfg_ppi_exporting`.
 
-
 // ////////////////////////////////////////////////////////////////////
 
+[[ACE-error-architecture]]
+=== Error Handling Architecture
+
+Without the ACE Privileged Architecture, which only an M-mode-only hart may omit, the ACE
+exceptions are replaced by the behaviors of <<ACE-exception-error-correspondence>>, listed in their
+natural priority order.
+
+[[ACE-exception-error-correspondence]]
+.Behavior upon exception conditions when the Privileged Architecture is not available.
+[float="center",align="center",cols="<1,<2",options="header"]
+|===
+| ACE Exception                      | Behavior when the Privileged Architecture is not available.
+| `ace_exc_fatal`                    | Implementation and platform defined behavior.
+| `ace_exc_no_csk` (See <<ACE-CSK-requirements>> and <<ACE-CSR-macecsk>>.) | The instruction raises an illegal-instruction exception; on an M-mode-only hart M-mode is both the only mode that can observe it and the only one that can establish a CSK.
+| `ace_exc_CR_off` (See <<ACE-CSR-lcrstatus>>.)| Does not apply without Privileged Architecture, since the `*lcrstatus` CSRs are not available.
+| `ace_exc_unsupported`              | Transition to Error State _Unsupported_.
+| `ace_exc_out_of_memory`            | Transition to Error State `ace_state_out_of_memory`.
+| `ace_exc_privilege_violation`      | Transition to Error State `ace_state_priv_violation`.
+| `ace_exc_unconfigured_buffer`      | The instruction raises an illegal-instruction exception.
+|===
+
+For `ace.clone` and `ace.derive`, which name two CRs, the behavior above and the handler's duty
+below concern the CR on which the exception is raised: for `ace.clone`, the source for
+`ace_exc_privilege_violation` and the destination for `ace_exc_out_of_memory`; for `ace.derive`,
+the endpoint on which the failing check is detected, each check being applied to the source before
+the destination (Rule <<ACE-SGR-gate-order>>).
+
+With the Privileged Architecture, the transition is the duty of the exception handler. A handler
+that cannot resolve `ace_exc_unsupported`, `ace_exc_out_of_memory` or
+`ace_exc_privilege_violation`, cannot forward it to another handler, including an in-process
+handler, and does not suppress the process that caused it, must:
+
+. set the _State_ of the CR on which the exception was raised to the corresponding Error State of
+  <<ACE-exception-error-correspondence>>, using the short import of <<ACE-error-state-transfer>>
+  where the instruction left the CR _Unconfigured_, as Rule
+  <<ACE-SGR-transition-to-from-unconfigured>> requires; and
+. resume execution at the instruction following the trapping one by advancing `xepc`, since
+  otherwise the same exception is raised again. A handler that advances `xepc` past a usage
+  instruction should write zeros to its output operand, as the instruction would have done had it
+  performed no operation (Rule <<ACE-SGR-usage-cr-error-state>>).
+
+Elsewhere, including <<ACE-Algorithms>>, <<ACE-priv>> and <<ACE-pseudocode-examples>>, behavior is
+described with the Privileged Architecture in effect; without it, the behaviors above replace the
+exceptions.
+
+[horizontal]
+State change rule for exceptions:: An illegal- or virtual-instruction exception, or an ACE
+exception other than `ace_exc_fatal`, makes no change to ACE state, except the zeroizing of the
+target CR by an opening `ace.mgmt`, which is performed even if the instruction later raises an
+exception (<<ACE-CR-management>>). `ace_exc_fatal` resets the ACE state (_Fatal Conditions_ below).
+
+==== Categories of Error Conditions
+
+The various categories of error conditions are summarized here for the reader's convenience, since
+these are otherwise scattered throughout the specification.
+
+Fatal Conditions:::
++
+--
+Fatal conditions have the highest priority among the ACE-specific error categories, and no CPU
+state disables their detection. The main one is an integrity failure of the CRF of a hart
+(<<ACE-cryptographic-registers>>); implementations may define others.
+
+A fatal condition causes an ACE unit reset of the hart
+(<<ACE-reset-and-m-mode-only>>) and then
+raises ACE exception `ace_exc_fatal`, whose trap is taken only after the reset completes
+and is not delegable below M-mode. The reset differs from an ordinary one in three ways:
+
+. `misa.L` keeps its value, and every `ACES` field that is not Off becomes Dirty rather than Off,
+  so that `ace_exc_fatal` can be reported, the modes below M-mode are not silently disabled, and
+  context-switching code discards its stale saved state;
+. every `*lcrstatus` field becomes _Dirty_ rather than _Initial_, as on entry into unauthenticated
+  Debug mode (<<ACE-interaction-with-debug>>);
+. the masks that unauthenticated Debug mode installs are not lifted.
+
+A CSK generated at boot under the fourth model of <<ACE-CSK-requirements>> is shared by the harts of
+its subsystem and is not regenerated.
+
+Detection and reset may be synchronous or asynchronous, the condition being recorded in the ACE
+unit. The first ACE instruction or ACE CSR access issued, or in flight, after detection performs no
+operation and raises `ace_exc_fatal`, with `xepc` holding its address. If, at detection, an `ACES`
+field in effect is Off or the ACE bit of an `*stateen0` CSR in effect is clear, the condition is
+retained and reported on the first ACE instruction or ACE CSR access that is not illegal or virtual
+on those grounds; until then such instructions raise an illegal- or virtual-instruction exception,
+which <<ACE-exception-codes>> ranks above `ace_exc_fatal`. Detection is thus never disabled; only
+its reporting is deferred.
+--
+
+[[ACE-illegal-instruction-grounds,Grounds for Illegal-Instruction Exceptions]]
+Illegal-Instruction Exceptions:::
++
+--
+The grounds for an illegal- or virtual-instruction exception form two groups:
+
+* In the first group, the grounds come from the instruction encoding, the GPRs and the vector
+  configuration alone, without accessing the state of the ACE unit, and therefore take precedence
+  over `ace_exc_fatal` (<<ACE-exception-codes>>):
+
+. A reserved encoding, including `ace.setst` with `#immed7` 46 or 47, `ace.mgmt` with `#immed7` in 59–62 or in Form B, a reserved `#immed7` of `ace.setst` with `r` = 1 and CR register `X0` (<<ACE-instruction-setst>>), and an ACE instruction with a vector operand issued while `vtype.vill` is set (<<ACE-ACEV>>).
+. An indirect CR index outside [0..31], or `X0` used as one where not expressly encoded (Rule <<ACE-GR-GPR-indirect>>), and `ace.derive` with equal CR indices (<<ACE-instruction-derive>>).
+. A GPR pair or quartet not meeting Rule <<ACE-GR-multiple-GPRs>>.
+. A vector operand carrying an MDH with `VL` {times} `SEW` < 128 (Rule <<ACE-GR-vector-MDH-operand>>), or a vector `ace.mv` whose `vl * (SEW/8)` or `vstart * (SEW/8)` is not a multiple of 16 (<<ACE-instruction-mv>>).
+. An encoding assigned to an extension that is not implemented, for instance as Forms A–C of `ace.exec` without `Zklv`.
+. An ACE instruction or ACE CSR access gated by a clear `Smstateen` bit (<<ACE-CSRs-priv>>), which raises an illegal- or virtual-instruction exception as that extension prescribes; an ACE instruction issued while `ACES` is Off (see _Fatal_ above), an ACE instruction issued under big-endian effective data endianness (<<ACE-Notation>>), and an access to a CSR that <<ACE-CSRs-unpriv>> declares unavailable or that <<ACE-CSRs-priv>> makes inaccessible from the current mode (an illegal- or virtual-instruction exception, as stated there).
+
+* In the second group, the grounds require the state of the ACE unit: for most of them the
+  contents of a CR, which for a CR marked _Off_ (<<ACE-CSR-lcrstatus>>) exist only once it has been
+  lazily loaded, or in the M-mode code that emulates it. They are evaluated only after
+  `ace_exc_no_csk` and the _Off_ gate, once the CR is loaded or by the emulator, and only if no
+  fatal condition is pending, `ace_exc_fatal` being raised otherwise:
+
+. A usage-controlled instruction issued on a CR in State _Unconfigured_ (Rule <<ACE-SGR-transition-to-from-unconfigured>>), including `ace.derive` with an _Unconfigured_ endpoint.
+. `ace.load`, `ace.store` or `ace.mv` on a CR whose _State_ does not admit the transfer, or with an inconsistent `acestart` (Rules <<ACE-SGR-ace-load-mv-allowed>> and <<ACE-SGR-ace-store-mv-allowed>>).
+. `ace.mgmt` when `acemanagedcr` names another CR, when opening an export on an _Unconfigured_ CR, when completing with an `ml`._State_ inconsistent with the CR's Configuration State, or when `ace_cfg_management_end` is issued with no management operation open (<<ACE-CR-management>>).
+. An ACEIOBUF substitution that <<ACE-usage-input-output>> forbids, including any substitution without `Zklio`, since whether a Form is a substitution depends on the operation the CR's State defines.
+. A Form A `ace.mgmt` that must take the MDH from a configured ACEIOBUF with `aceiobuftop` < 16 (Rule <<ACE-GR-vector-MDH-operand>>).
+. An `ace.clone` whose source is _Unconfigured_ and differs from its destination (<<ACE-instruction-clone>>).
+. A Form A–C `ace.exec` with `acestart` {ne} `vstart` {times} `SEW` / 8 (<<ACE-CSR-acestart>>).
+. A Form A `ace.exec` with `Vd` = `Vs2` for an operation whose output blocks do not have the length of its input blocks (<<ACE-instruction-exec>>).
+. If the Privileged Architecture is not implemented, an instruction issued without a CSK, or one that requires the ACEIOBUF while it is unconfigured or absent (<<ACE-exception-error-correspondence>>).
+--
+
+// Exceptions and State Changes::: [[ACE-exceptions-and-state-changes,Exceptions and State Changes]]
+// When an ACE instruction raises `ace_exc_no_csk`, `ace_exc_CR_off`, `ace_exc_unsupported`, `ace_exc_out_of_memory`, `ace_exc_privilege_violation` or `ace_exc_unconfigured_buffer`, it has changed no ACE state, unless its description states a change that precedes the exception. `ace.mgmt` is the one instruction that does: it zeroizes the target CR before its checks.
+
+Unsupported Algorithms:::
++
+--
+Unsupported Metadata at provisioning or import raises `ace_exc_unsupported` and leaves the CR
+_Unconfigured_. A handler below M-mode that receives the delegated exception cannot emulate the
+Algorithm and treats the exception as unresolvable.
+
+An M-mode handler that emulates the Algorithm instead sets the CR's `*lcrstatus` field to _Off_
+(<<ACE-CSR-lcrstatus>>): every later access to the CR that <<ACE-CSR-lcrstatus>> does not exempt
+then traps, and the emulator, holding the CR in its own protected memory, services every operation
+on it, including SCC import and export. For this it needs either the inputs of `SCC_Encrypt` and
+`SCC_Decrypt` (<<ACE-SCC-AEAD>>) that it cannot otherwise obtain, namely the CSK and the Locality
+Secrets of the HW Binding Group, or access to primitives that compute these functions on its
+behalf, provided in an implementation-specific way. An implementation that provides neither cannot
+emulate Algorithms, and reports `ace_exc_unsupported` to software instead.
+
+An emulator keeps one copy per CR slot, and replaces it:
+
+. at the next `ace_exc_unsupported` on that slot; or
+. at an emulated `ace.clone` naming the slot as destination, which also clears the hardware CR of
+  that slot and marks it _Off_, since the clone of an emulated CR is emulated too.
+
+A copy orphaned by an instruction that <<ACE-CSR-lcrstatus>> exempts is never used again but lingers
+until replaced, so an emulator that must not retain key material longer than necessary checks
+`mlcrstatus` whenever it runs and zeroizes the copies whose _Off_ mark is gone.
+
+`ace_exc_unsupported` is _not_ raised when accessing or using a CR in State `ace_state_unsupported`.
+--
+
+Other Exception Conditions:::
++
+--
+The remaining exceptions, in the order of <<ACE-exception-codes>>, are listed below. Without the
+Privileged Architecture, the ACE exceptions among them are replaced as
+<<ACE-exception-error-correspondence>> prescribes.
+
+. *No active CSK.* `ace_exc_no_csk`, on any ACE instruction or ACE CSR access that
+  <<ACE-CSK-requirements>> does not exempt, while no CSK is established or the `macecsk` group is
+  only partially written (<<ACE-CSR-macecsk>>).
+. *CR marked _Off_.* `ace_exc_CR_off`, on any access to the CR that <<ACE-CSR-lcrstatus>> does not
+  exempt, before any condition that depends on its contents.  M-mode resolves it or forwards it to
+  the mode that owns the _Off_ field.
+. *Usage Control.* `ace_exc_privilege_violation`, for a usage-controlled instruction in a mode that
+  the _UsagePolicy_ excludes (Rule <<ACE-SGR-usage-policy>>), and for any use, cloning or
+  restriction of a CR in a Configuration State (Rule <<ACE-SGR-usage-cr-config-state>>).
+. *Insufficient CRF capacity.* `ace_exc_out_of_memory`, for an `ace.mgmt` opening a provisioning or
+  an import (<<ACE-CR-management>>), an `ace.clone` (<<ACE-instruction-clone>>), or an
+  `ace.restrict*` raising _SCProtection_ (<<ACE-instruction-restrict>>).
+. *Unconfigured ACEIOBUF.* `ace_exc_unconfigured_buffer` (Rule <<ACE-GR-iobuf-configured>>).
+. *Memory exceptions.* The load/store address-breakpoint, address-misaligned, page-fault,
+  guest-page-fault and access-fault exceptions of the component accesses of `ace.load`,
+  `ace.store`, `ace.input` and `ace.output`, ordered as in <<ACE-Memory-Alignment>>, with a precise
+  halt (<<ACE-resumability>>); an access to a non-idempotent region is an access fault
+  (<<ACE-Memory-Model>>).
+--
+
+Errors Not Raising Exceptions:::
++
+--
+The following conditions set an Error State, or make the instruction perform no operation, without
+an exception; the algorithmic errors below are further cases. Without the Privileged Architecture,
+so are the conditions that <<ACE-exception-error-correspondence>> maps to an Error State.
+
+. *Invalid Metadata or SKID.* _Invalid_, for an `ace.mgmt` opening a provisioning or an import on
+  invalid Metadata (<<ACE-MVR-open>>), for a SKID other than the all-ones value that the System Key
+  Store does not or may not resolve (<<ACE-system-keys>>), and for an `ace.restrict*` request that
+  would widen the CC or yield invalid Metadata (<<ACE-instruction-restrict>>).
+. *Instruction not allowed in the current State.* _Invalid_, for an `ace.exec` or `ace.setst` not
+  allowed in the current _State_ and _StateExtension_, including an unsupported `#immed7` (Rules
+  <<ACE-SGR-no-exec-in-ready>> and <<ACE-SGR-success-failure>>, <<ACE-instruction-setst>>), and for
+  an `ace.derive` that fails its checks (<<ACE-instruction-derive>>).
+. *Invalid length or resumption point.* _Invalid_, for an input whose `aceiobuftop` or `acestart`
+  the Algorithm does not accept; no operation for an operand used only as output, and for an empty
+  transfer window (<<ACE-CSR-acestart>>, <<ACE-usage-input-output>>).
+. *Expiration.* _Expired_, for a usage-controlled instruction on an expired CR, which then performs
+  no operation (<<ACE-Metadata-expiration-date>>).
+. *Use of a CR in an Error State.* No operation, and the _State_ is unchanged (Rule
+  <<ACE-SGR-usage-cr-error-state>>, <<ACE-error-state-instructions>>).
+. *Explicit Error State.* The Error State that an `ace.setst` immediate names
+  (<<ACE-instruction-setst>>).
+. *Unusable ADS.* Dropped at import, without rejecting the SCC (<<ACE-SCC-import>>).
+--
+
+Algorithmic Errors:::
++
+--
+Algorithmic errors may occur:
+
+. in SCC management, as Error State `ace_state_import_auth` (_Authentication Failed_), when the
+  `SIV` check fails at the completion of an import (<<ACE-SCC-import>>) or of an export
+  (<<ace-mgmt-completes-export>>); software therefore checks the _State_ after completing an export
+  as well as after completing an import;
+. in the Algorithms themselves, which may transition the CR to Error State _Invalid_ or to another
+  Error State, as the Algorithm specifies.
+
+The verification of an authentication tag by an AEAD Algorithm (_not_ by the SCC export and import
+procedures), or of a signature, is _not_ an algorithmic error, whether it succeeds or fails: the
+Algorithm has performed as expected.
+--
+
+==== Summary of Behavior of ACE Instructions in Error States
+
+A CR in an Error State holds only its MDH (Rules <<ACE-SGR-clear-cr-content-error-state>> and <<ACE-SGR-error-state-CR-is-only-MDH>>). What an instruction does with it depends on whether the instruction uses the CR or manages it.
+
+The illegal-instruction grounds of the first group (<<ACE-illegal-instruction-grounds>>), `ace_exc_fatal`, `ace_exc_no_csk`, `ace_exc_CR_off` if a `*lcrstatus` field in effect for the CR is _Off_ (<<ACE-CSR-lcrstatus>>), and, for Forms A–C of `ace.exec`, the `acestart`/`vstart` check of <<ACE-CSR-acestart>> are evaluated before the _State_ of the CR is considered (Rule <<ACE-SGR-gate-order>>).
+
+An instruction that uses the CR, that is `ace.exec`, `ace.derive`, or a usage-controlled `ace.setst`, performs no operation and raises no exception.
+The Error State is the second condition that Rule <<ACE-SGR-gate-order>> evaluates, right after _Unconfigured_, so the _UsagePolicy_ is not evaluated, and neither is the _ExpirationDate_, which is evaluated only in a Valid State (<<ACE-Metadata-expiration-date>>).
+The _State_ is unchanged: Rule <<ACE-SGR-usage-cr-error-state>> treats the attempt as one that would cause Error State _Invalid_, and leaves the original Error State visible to software.
+
+<<ACE-error-state-instructions>> summarizes the outcome of every instruction on a CR in an Error State.
+
+[[ACE-error-state-instructions]]
+.Instructions on a CR in an Error State
+[float="center",align="center",width="100%",cols="<38%,<62%",options="header"]
+|===
+| Instruction | Outcome
+| `ace.size` | Returns 16 (<<ACE-instruction-size>>).
+| `ace.avail`, Form A | Evaluates the MDH fields that identify the Algorithm (<<ACE-instruction-size>>).
+| `ace.load`, `ace.store`, `ace.mv` | Illegal-instruction exception (Rules <<ACE-SGR-ace-load-mv-allowed>> and <<ACE-SGR-ace-store-mv-allowed>>).
+| Usage-controlled instructions: `ace.exec`, `ace.derive`, and `ace.setst` with an immediate other than `ace_state_unconfigured` or an Error State, including `ace.clear.ads` | No operation and no exception; the _State_ is unchanged and the unwritten part of the output window is zeroed (Rules <<ACE-SGR-usage-cr-error-state>> and <<ACE-SGR-gate-order>>). For `ace.derive`, an Error State on either endpoint suffices.
+| `ace.setst` with an Error-State immediate | The CR transitions to that Error State without an exception, 54 and 55 to _Invalid_ (<<ACE-instruction-setst>>).
+| `ace.mgmt` opening a provisioning or an import | The CR is zeroized and reconfigured (Rule <<ACE-GR-opening-cr-when>>, <<ACE-CR-management>>).
+| `ace.mgmt` opening an export | The CR is left unchanged and no management operation is opened (<<ACE-CR-management>>).
+| `ace.mgmt` with `ace_cfg_management_end` | Illegal-instruction exception, since no management operation is open (<<ACE-CR-management>>).
+| `ace.getmd*`, `ace.getst` | Return the retained MDH (<<ACE-instruction-getmd>>).
+| `ace.restrict*` | Narrows the MDH, as in any Complete State (<<ACE-instruction-restrict>>).
+| `ace.clone`, with the CR as source | The destination receives the MDH alone (<<ACE-instruction-clone>>).
+| `ace.clone`, with the CR as destination | The CR is cleared and receives the clone of the source (<<ACE-instruction-clone>>).
+| `ace.clear`, `ace.clear.all` | The CR becomes _Unconfigured_ (<<ACE-instruction-clear>>).
+|===
+
+// ////////////////////////////////////////////////////////////////////
 
 [[ACE-Memory-Model]]
 === Memory Model
