@@ -372,7 +372,7 @@ All _Reserved_ bits, as well as bits unused by a given Algorithm, are zero.
 |   [31:31] |   1  | Reserved          | Reserved for future use.
 |   [45:32] |  14  | _AuxDataLen_      | Zero if no ADS is present; otherwise, its length as a number of 128-bit blocks. When _ADSDropped_ = 1, this is the length before `Content2` was dropped. The value 1 is invalid.
 |   [46:46] |   1  | Reserved          | Reserved for future use.
-|   [47:47] |   1  | _ADSDropped_      | If set, `Content2` has been dropped while the SCC header layout is retained. This bit is excluded from first-segment authentication. See <<ACE-ADSDropped-field>>.
+|   [47:47] |   1  | _ADSDropped_      | If set, `Content2` has been dropped while the SCC header layout is retained. This bit is excluded from first-segment authentication. See <<ACE-Auxiliary-Data-Section>>.
 |   [61:48] |  14  | _AuxInfo_         | Algorithm-specific auxiliary information. Currently used only by ML-KEM and ML-DSA. This field is zero for Algorithms that do not use it.
 |   [63:62] |   2  | Reserved          | Reserved for future use.
 |   [68:64] |   5  | _UsagePolicy_     | Usage (Control) Policy. Determines which modes are allowed to use the CR.
@@ -468,8 +468,8 @@ The architected values of _State_ common to all Algorithms are defined in <<ACE-
 
 // ////////////////////////////////////////////////////////////////////
 
-[[ACE-extra-content]]
-===== _AuxDataLen_ Field
+[[ACE-Auxiliary-Data-Section]]
+===== _AuxDataLen_ and _ADSDropped_ Fields
 
 The _AuxDataLen_ MDH field records the length of the _Auxiliary Data Section_ (ADS) of the content, a variable-size, implementation-dependent part, as a number of 128-bit blocks. When _ADSDropped_ = 1, it retains the length of the ADS before `Content2` was dropped. Zero means that no ADS is present. The value 1 is invalid. The maximum value is 2^14^-1, corresponding to 262128 bytes.
 
@@ -482,11 +482,8 @@ These 16 bytes, as well as a separate authentication tag for the ADS are counted
 
 Since an ADS contains at least an authentication tag (16 bytes) and the originating implementation qualifier (also 16 bytes), the minimum length is 32 bytes, corresponding to an _AuxDataLen_ value of 2.
 
-[[ACE-ADSDropped-field]]
-===== _ADSDropped_ Field
-
 _ADSDropped_ is an unauthenticated format hint, ignored when _AuxDataLen_ = 0. When _AuxDataLen_ {ge} 2 and _ADSDropped_ = 1, `Content2` is absent, while `IMPQUAL` and `SIV2` remain as non-authoritative padding so that the `Content1` offset does not change. First-segment authentication clears bit 47 only in its local MDH copy.
-+
+
 Toggling _ADSDropped_ cannot affect `Content1` or any policy. Setting it drops optional `Content2`; clearing it requests second-segment processing, whose failure drops `Content2` without rejecting authenticated `Content1` (<<ACE-SCC-import>>). Manipulation can therefore cause optional ADS loss or an unsuccessful second-segment attempt, but cannot make unauthenticated `Content2` usable or bypass first-segment authentication.
 
 // The format of the ADS is described in <<ACE-data-formats>>.
@@ -935,7 +932,7 @@ Non-commercial IDs are allocated globally by RVI exactly as for the `marchid` va
 
 . The `acemimpid` CSR is a 32-bit read-only register that provides a unique encoding of the version of the ACE unit implementation. This register must be readable in any implementation, but a value of 0 can be returned to indicate that the field is not implemented. The implementation value should reflect the design of the ACE unit itself and not any surrounding system. An implementation that produces an ADS must report a non-zero `acemimpid`.
 
-These three CSRs, together, form the _Implementation Qualifier_ (see <<ACE-extra-content>>).
+These three CSRs, together, form the _Implementation Qualifier_ (see <<ACE-Auxiliary-Data-Section>>).
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -2884,7 +2881,7 @@ Up to five sections, in this order:
   Encrypted in memory and during partial import.
 |===
 
-The _AuxDataLen_ field of the MDH gives the size, in 128-bit blocks, of the Implementation-Specific ADS (`IMPQUAL`, `SIV2` and `Content2`), or its size before `Content2` was dropped when _ADSDropped_ = 1. The ADS is empty if _AuxDataLen_ = 0; the value 1 is invalid. ACE generates an image with _ADSDropped_ = 1 only as an SCC-shaped PCCC: a nested export preserves an interrupted import after `Content2` was dropped. In that image, `IMPQUAL` and `SIV2` remain, `Content2` is absent, and the `Content1` offset is unchanged (<<ACE-ADSDropped-field>>). Because _ADSDropped_ is unauthenticated, import also accepts the same layout when the bit was set by modifying an SCC.
+The _AuxDataLen_ field of the MDH gives the size, in 128-bit blocks, of the Implementation-Specific ADS (`IMPQUAL`, `SIV2` and `Content2`), or its size before `Content2` was dropped when _ADSDropped_ = 1. The ADS is empty if _AuxDataLen_ = 0; the value 1 is invalid. ACE generates an image with _ADSDropped_ = 1 only as an SCC-shaped PCCC: a nested export preserves an interrupted import after `Content2` was dropped. In that image, `IMPQUAL` and `SIV2` remain, `Content2` is absent, and the `Content1` offset is unchanged (<<ACE-Auxiliary-Data-Section>>). Because _ADSDropped_ is unauthenticated, import also accepts the same layout when the bit was set by modifying an SCC.
 A CR in an Error State is its MDH alone (Rule <<ACE-SGR-error-state-CR-is-only-MDH>>).
 --
 
@@ -2941,7 +2938,7 @@ information such as derived keys, or multiple shares.
 
 . The length of a *Sealed Cryptographic Context*
 is determined by, and only by, the
-fields _Algorithm_, _AlgorithmPolicy_, _KeyType_, _StateExtension_, _AuxDataLen_, and _ADSDropped_ (see <<ACE-extra-content>>). _ADSDropped_ can remove only `Content2`; it never changes the presence of `IMPQUAL` or `SIV2`, or the offset or length of `Content1`. Note that this length does not depend on _State_.
+fields _Algorithm_, _AlgorithmPolicy_, _KeyType_, _StateExtension_, _AuxDataLen_, and _ADSDropped_ (see <<ACE-Auxiliary-Data-Section>>). _ADSDropped_ can remove only `Content2`; it never changes the presence of `IMPQUAL` or `SIV2`, or the offset or length of `Content1`. Note that this length does not depend on _State_.
 It also does *not* depend on _SCProtection_ (see <<ACE-rules-masked-implementations>>).
 
 . The length of a *Partially Configured Cryptographic Context* is that of a
