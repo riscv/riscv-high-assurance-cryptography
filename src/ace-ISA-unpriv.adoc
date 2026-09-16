@@ -276,7 +276,9 @@ Capacity is freed by unconfiguring other CRs.
 The corruption of a hart's CRF is an unrecoverable error condition.
 The ACE architectural state associated with the hart is then reset (<<ACE-reset-and-m-mode-only>>), and ACE exception `ace_exc_fatal` is raised (see <<ACE-exceptions>> and <<ACE-error-architecture>> for the behavior when the Privileged Architecture is not implemented).
 
-A hart reset resets the ACE state of the hart; on power down, that state is zeroized.
+A hart reset resets the ACE state of the hart.
+The ACE implementation must zeroize the ACE state on power up.
+The software stack should also explicitly clear all ACE state at power down, to cause the implementation to zeroize the contents of all CRs.
 
 The ACE unit holds three 128-bit registers which hold authentication data (the `SIV`, `IMPQUAL`, and `SIV2`) of the CR being currently managed. These registers are accessed using the `ace.load`, `ace.store` and `ace.mv` instructions, as the leading bytes of the image they transfer (<<ACE-instruction-load>>).
 They are zeroized by an ACE unit reset, by `ace.clear.all`, and by an `ace.mgmt` that opens an import; the `ace.mgmt` that opens an export of a CR in a Valid State writes `SIV` and, when _AuxDataLen_ {ge} 2, `IMPQUAL` and `SIV2`.
@@ -355,7 +357,7 @@ An implementation uses it to decide whether it can use the implementation-specif
 
 This section deals with the 128-bit MDH.
 Its fields are summarized in <<ACE-metadata-header>>.
-All _Reserved_ bits, as well as bits unused by a given Algorithm, are zero.
+All _reserved_ bits, as well as bits unused by a given Algorithm, are zero.
 
 [[ACE-metadata-header]]
 .Format of the 128-bit Metadata Header
@@ -464,14 +466,52 @@ State 1 is the _Ready_ state.
 (((ACE, Algorithm, partial states)))
 States 56–63, i.e., the states used during management operations, are called the _Partial States_, and are exactly the States that are neither _Unconfigured_ nor Complete.
 
-The architected values of _State_ common to all Algorithms are defined in <<ACE-State-management>>.
+The following four tables define the architected values of _State_ common to all Algorithms we well as the _State_ when a CR defines no Algorithm, and the values used when managing the CCs in the CRs.
+
+[[ACE-state-off]]
+.Global CC State Numbers: Unconfigured State
+[float="center",align="center",width="100%",cols="^7%,<30%,<16%,<47%",options="header"]
+|===
+| Value | Mnemonic                  | State Name     | Description
+|   0   | `ace_state_unconfigured`  | _Unconfigured_ | The CR is not configured, i.e., it does not contain a valid CC.
+|===
+
+[[ACE-states-valid]]
+.Global CC State Numbers: Valid States
+[float="center",align="center",width="100%",cols="^7%,<30%,<16%,<47%",options="header"]
+|===
+| Value | Mnemonic                  | State Name     | Description
+|   1   | `ace_state_ready`         | _Ready_        | The state of a new (i.e., just provisioned) CC; ready for operation.
+| 2-45  3+| Defined by the specification of the Algorithm encoded in the _Algorithm_ field.
+|  46   | `ace_state_success`       | _Success_      | Algorithm completed successfully. No further cryptographic operations may be performed until the CR is reconfigured or transitioned to _Ready_, with the two exceptions given in Rule <<ACE-SGR-success-failure>>.
+|  47   | `ace_state_failure`       | _Failure_      | Failure in an Algorithm, usually an authentication failure in AE(AD) Algorithms or a signature verification failure. No further cryptographic operations may be performed until the CR is reconfigured or transitioned to _Ready_, with the two exceptions given in Rule <<ACE-SGR-success-failure>>.
+|===
+
+The currently defined Error States are listed below in decreasing severity order, with Error State 48 being the most severe and Error State 53 the least severe.
+Error States 54 and 55, if defined, will not necessarily have a lower priority than Error State 53, so the ordering may not hold for them.
+
+[[ACE-states-error]]
+.Global CC State Numbers: Error States
+[float="center",align="center",width="100%",cols="^7%,<30%,<16%,<47%",options="header"]]
+|===
+| Value  | Mnemonic                        | State Name              | Description
+|  48    | `ace_state_unsupported`         | _Unsupported_           | Not supported (i.e., not implemented) Algorithm.
+|  49    | `ace_state_invalid`             | _Invalid_               | The CR has been invalidated by invalid Metadata or by an operation not permitted in its current State.
+|  50    | `ace_state_out_of_memory`       | _Out of Memory_         | Insufficient CRF memory for a configuration instruction. This may be set by privileged code if it does not handle CR allocation or fails to do so, returning an error instead.
+|  51    | `ace_state_import_auth`         | _Authentication Failed_ | Authentication failure while completing an SCC import.
+|  52    | `ace_state_priv_violation`      | _Privilege Violation_   | Violation of Usage Control policies.
+|  53    | `ace_state_expired`             | _Expired_               | The CR has expired.
+| 54, 55 | (Reserved)                      | {empty}                 | Reserved for future use.
+|===
+
+The rules governing the behavior of the ACE architecure when interacting with CRs or SCCs in these states are defined in <<ACE-State-management>>.
 
 // ////////////////////////////////////////////////////////////////////
 
 [[ACE-Auxiliary-Data-Section]]
 ===== _AuxDataLen_ and _ADSDropped_ Fields
 
-The _AuxDataLen_ MDH field records the length of the _Auxiliary Data Section_ (ADS) of the content, a variable-size, implementation-dependent part, as a number of 128-bit blocks. When _ADSDropped_ = 1, it retains the length of the ADS before `Content2` was dropped. Zero means that no ADS is present. The value 1 is invalid. The maximum value is 2^14^-1, corresponding to 262128 bytes.
+The _AuxDataLen_ MDH field records the length of the _Auxiliary Data Section_ (ADS) of the content, a variable-size, implementation-dependent part, as a number of 128-bit blocks. When _ADSDropped_ = 1, it retains the length of the ADS before `Content2` was dropped. Zero means that no ADS is present. The value 1 is invalid. The maximum value is 2^14^-1, corresponding to 262,128 bytes.
 
 If _AuxDataLen_ {ge} 2, a copy of the implementation qualifier from the originating machine
 
@@ -506,7 +546,7 @@ Any bit of this field is ignored if the corresponding mode is not supported or n
 
 The _Locality_ field identifies 128-bit Locality Secrets (LSs) listed in <<ACE-locality-indexes>>. The LSs are stored in a (possibly virtual) Locality Secrets Table (LST). Some entries are fixed or configurable only through an implementation-specific, authenticated hardware process. These entries are shared by all ACE units in the same SoC. The remaining entries are software-programmable, per-hart architectural state.
 
-At SCC export and import, any Locality defined by the _Locality_ field cryptographically binds an SCC to the corresponding _current_ hardware and software environments. This binding ends when the SCC is imported into a CR. If a Locality Secret later changes, a subsequent export binds the SCC to the new value. Software is responsible to prevent unauthorized parties from directly accessing CRs.
+At SCC export and import, any Locality defined by the _Locality_ field cryptographically binds an SCC to the corresponding _current_ hardware and software environments. This binding ends when the SCC is imported into a CR. If a Locality Secret later changes, a subsequent export binds the SCC to the new value. Software is responsible for preventing unauthorized parties from directly accessing CRs.
 
 <<ACE-locality-indexes>> lists the architected Localities. Eleven LST entries are defined. Entries 0–5 form the _HW Binding Group_, which binds SCCs to the hardware; entries 6–7 form the _Boot Session Group_; and entries 8–10 form the _SW Filter Group_. For each Locality, the table specifies its LST index, domain (SoC-wide, device-wide, VM-wide, or per-process), configurability, bit-field encoding, and value.
 
@@ -595,7 +635,7 @@ If non-zero, the 20-bit _ExpirationDate_ field specifies the CC's expiration tim
 
 [NOTE]
 ====
-This specification cannot enumerate requirements for a trustworthy clock, as
+This specification cannot enumerate requirements for a secure clock, as
 what constitutes adequacy depends on threat models, platforms, and integration
 specifics — a challenge common to all time-dependent security features. As a rule
 of thumb: *if a clock is adequate for M-mode security features or an on-SoC TPM, it is adequate for ACE.*
@@ -1081,8 +1121,8 @@ Values 33 and above are reserved; writing one leaves `acemanagedcr` unchanged.
 
 NOTE: The `acemanagedcr` check that `ace.mgmt` performs (<<ACE-CR-management>>) detects an accidentally
 interleaved management operation. A handler that must manage another CR while one is under management
-must first save the currently managed CR, write 32 to `acemanagedcr`, perform its operations,
-and then restore the exported CR (<<ACE-state-save-and-restore-order>>).
+first saves the currently managed CR, writes 32 to `acemanagedcr`, performs its operations,
+and then restores the exported CR (<<ACE-state-save-and-restore-order>>).
 Writing 32 without completing an export loses the in-flight `SIV`, `SIV2` and `IMPQUAL` values, which the next `ace.mgmt` that opens an import or an export overwrites.
 
 // ////////////////////////////////////////////////////////////////////
@@ -1111,7 +1151,12 @@ Writing 32 without completing an export loses the in-flight `SIV`, `SIV2` and `I
 === Instructions
 
 This section specifies the semantics and encodings of ACE's unprivileged instructions.
+
+[WARNING]
+====
 The `custom-1` and `custom-2` opcodes are placeholders; all other fields are specified.
+====
+
 In every encoding, fields shown with fixed values must hold those values. Any deviation from a fixed value or any unlisted combination of field values is a reserved encoding and raises an illegal-instruction exception (first group of <<ACE-illegal-instruction-grounds>>).
 
 The notation `K{Xd}` denotes the CR whose index is held in GPR `Xd`.
@@ -1156,7 +1201,7 @@ NOTE: For Forms A–C of `ace.exec` the hardware raises an illegal-instruction e
 +
 NOTE: The uninterruptible vector-form instructions (`ace.getmdv`, `ace.restrictv`, Form C of `ace.size` and `ace.avail`, `ace.setst`, and `ace.mgmt`) do not produce `vstart` values and therefore do not consume one (Rule <<ACE-GR-vector-legality>>).
 
-GR5:: The _UsagePolicy_ of the MDH determines whether certain instruction can be issued, and sometimes when, in a given privilege mode.
+GR5:: The _UsagePolicy_ of the MDH determines whether a certain instruction can be issued, and sometimes when, in a given privilege mode.
 Furthermore, certain instructions may modify the state of the CR.
 For all instructions, the authoritative table for these two properties is <<ACE-instruction-properties>>.
 No instruction description restates them.
@@ -1183,7 +1228,7 @@ No instruction description restates them.
 | `ace.output`                 | Only `acestart` | Yes | No                   | Modifies `acestart`, but no CR.
 | `ace.clear`, `ace.clear.all` | Yes             | No  | No                   .2+| Encodings of `ace.setst`; see its row above.
 | `ace.clear.ads`              | Yes             | No  | Yes
-5+| ^*^ means that the instruction is useable only in the States admitted by Rule <<ACE-SGR-ace-load-mv-allowed>>, resp. Rule <<ACE-SGR-ace-store-mv-allowed>>.
+5+| ^*^ means that the instruction is usable only in the States admitted by Rule <<ACE-SGR-ace-load-mv-allowed>>, resp. Rule <<ACE-SGR-ace-store-mv-allowed>>.
 |===
 
 [[ACE-GR-opening-cr-when,GR6]] GR6:: _When a CR can be opened for import or export:_
@@ -2127,12 +2172,12 @@ the source before the destination, and with nothing transferred on any failure:
 . The _State_ and _StateExtension_ of each CR must admit its endpoint, and a destination whose
   key is written must be in State _Ready_; otherwise the offending CR, or both, transition to
   Error State _Invalid_.
-. An index that names no allowed endpoint transitions its CR to _Invalid_; a transfer that is
+. An index that names no allowed endpoint transitions its CR to Error State _Invalid_; a transfer that is
   not allowed, including one that the field rules above exclude, transitions both CRs to
-  _Invalid_.
+  Error State _Invalid_.
 . A destination that violates the constraints of the pair or of the source Algorithm
-  transitions to _Invalid_.
-. A transfer whose effective length (see <<ACE-derive-rule-both-fixed-size>>) is below the pair's minimum, or violates its upper limit or granularity, transitions the destination CR to _Invalid_.
+  transitions to Error State _Invalid_.
+. A transfer whose effective length (see <<ACE-derive-rule-both-fixed-size>>) is below the pair's minimum, or violates its upper limit or granularity, transitions the destination CR to Error State _Invalid_.
 
 [[ACE-derive-rule-both-fixed-size,Transfer Size Rules]]
 Transfer:::
@@ -2378,49 +2423,15 @@ and `ace.getstx` as
 [[ACE-State-management]]
 === State Management
 
-The following four tables define the architected values of _State_ common to all Algorithms we well as the _State_ when a CR defines no Algorithm, and the values used when managing the CCs in the CRs.
-
-[[ACE-state-off]]
-.Global CC State Numbers: Unconfigured State
-[float="center",align="center",width="100%",cols="^7%,<30%,<16%,<47%",options="header"]
-|===
-| Value | Mnemonic                  | State Name     | Description
-|   0   | `ace_state_unconfigured`  | _Unconfigured_ | The CR is not configured, i.e., it does not contain a valid CC.
-|===
-
-[[ACE-states-valid]]
-.Global CC State Numbers: Valid States
-[float="center",align="center",width="100%",cols="^7%,<30%,<16%,<47%",options="header"]
-|===
-| Value | Mnemonic                  | State Name     | Description
-|   1   | `ace_state_ready`         | _Ready_        | The state of a new (i.e., just provisioned) CC; ready for operation.
-| 2-45  3+| Defined by the specification of the Algorithm encoded in the _Algorithm_ field.
-|  46   | `ace_state_success`       | _Success_      | Algorithm completed successfully. No further cryptographic operations may be performed until the CR is reconfigured or transitioned to _Ready_, with the two exceptions given in Rule <<ACE-SGR-success-failure>>.
-|  47   | `ace_state_failure`       | _Failure_      | Failure in an Algorithm, usually an authentication failure in AE(AD) Algorithms or a signature verification failure. No further cryptographic operations may be performed until the CR is reconfigured or transitioned to _Ready_, with the two exceptions given in Rule <<ACE-SGR-success-failure>>.
-|===
-
-The currently defined Error States are listed below in decreasing severity order, with Error State 48 being the most severe and Error State 53 the least severe.
-Error States 54 and 55, if defined, will not necessarily have a lower priority than Error State 53, so the ordering may not hold for them.
-
-[[ACE-states-error]]
-.Global CC State Numbers: Error States
-[float="center",align="center",width="100%",cols="^7%,<30%,<16%,<47%"]
-|===
-|  48    | `ace_state_unsupported`         | _Unsupported_     | Not supported (i.e., not implemented) Algorithm.
-|  49    | `ace_state_invalid`             | _Invalid_         | The CR has been invalidated by invalid Metadata or by an operation not permitted in its current State.
-|  50    | `ace_state_out_of_memory`       | _Out of Memory_   | Insufficient CRF memory for a configuration instruction. This may be set by privileged code if it does not handle CR allocation or fails to do so, returning an error instead.
-|  51    | `ace_state_import_auth`         | _Authentication Failed_     | Authentication failure while completing an SCC import.
-|  52    | `ace_state_priv_violation`      | _Privilege Violation_       | Violation of Usage Control policies.
-|  53    | `ace_state_expired`             | _Expired_         | The CR has expired.
-| 54, 55 | (Reserved)                      | {empty}           | Reserved for future use.
-|===
+For the architected value of the _State_ field, refer to <<ACE-State-field>>.
 
 (((ACE, Algorithm, invalid state)))
 (((Cryptographic Register, invalidation)))
-We say that a CR has been _invalidated_ when it has been transitioned to Error State `ace_state_invalid`.
+A CR is said to have been _invalidated_ when it has been transitioned to Error State `ace_state_invalid`.
 Upon entering an Error State, the CR retains only its MDH (Rule <<ACE-SGR-error-state-CR-is-only-MDH>>).
 
-Error conditions that lead to exceptions are treated in <<ACE-exceptions>>. See <<ACE-error-architecture>> for the behavior when the Privileged Architecture is not implemented.
+Error conditions that lead to exceptions are treated in <<ACE-exceptions>>.
+See <<ACE-error-architecture>> for the behavior when the Privileged Architecture is not implemented.
 
 If an Algorithm defines 47 or fewer valid states (including _Ready_, _Success_, and _Failure_), the current state is stored in the _State_ field.
 For Algorithms with more than 47 valid states, additional state information may reside in the Content section in an Algorithm-specific format.
@@ -2475,9 +2486,9 @@ The legend for the state transition graph is:
 * Dashed edges denote state transitions induced by reaching the expiration date.
 * Dotted edges denote state transitions induced by configuration operations.
 
+Completing a provisioning operation leads only to State _Ready_.
 
-// Completing a provisioning operation leads only to State _Ready_.
-// Completing an import may result in any admissible value of the _State_ and _StateExtension_ fields, since these are restored to the values at export.
+Completing an import may result in any admissible value of the _State_ and _StateExtension_ fields, since these are restored to the values at export.
 
 [[ACE-states-graph]]
 .Default State Transitions
@@ -2540,8 +2551,10 @@ transitions to _Success_, from which the only other exit is _Ready_, and _Ready_
 `sharedkey`. Without this provision the shared secret would be unreachable and ML-KEM could not
 be used for its stated purpose.
 
-[[ACE-SGR-setst-in-success-failure,SGR6]] SGR6:: In States _Success_ and _Failure_, `ace.setst` is only permitted to transition to _Ready_ if the Algorithm does not forbid it, to _Unconfigured_ using `#immed7` = `ace_state_unconfigured`, or to an explicitly given Error State.
+[[ACE-SGR-setst-in-success-failure,SGR6]] SGR6:: In States _Success_ and _Failure_, `ace.setst` is permitted to transition to _Ready_, to _Unconfigured_ using `#immed7` = `ace_state_unconfigured`, or to an explicitly given Error State.
 It is also permitted with `#immed7` = `ace_cfg_clear_ads` (<<ACE-instruction-clearads>>), which clears any ADS and leaves the _State_ unchanged, when this does not violate usage-control policy.
++
+NOTE: Algorithms such as GCM with a set IV (not GCM-SIV) and Ascon-AEAD128 with a set Nonce could forbid transitions back to _Ready_ to prevent nonce misuse. However, software could bypass this restriction by reloading a saved copy of the original SCC. The architecture therefore does not prohibit transitions back to _Ready_ for simplicity. Returning to _Ready_ may nevertheless erase session-bound internal state, such as randomly generated nonces, as specified in the Algorithm description.
 
 SGR7:: States _Success_ and _Failure_ cannot be set directly using `ace.setst`: the immediates 46 and 47 are reserved (<<ACE-illegal-instruction-grounds>>).
 
@@ -3711,12 +3724,12 @@ The ACE unit is immediately available under the third model; under the other mod
 
 NOTE: When the CSK is shared across devices, CCs intended to be device-bound must set `_Locality_` to include `ChipScrt` or `DevScrt`.
 
-Except for M-mode and in the first model, CSK values must _never_ be readable by software in clear.
+Except for in M-mode and in the first model, CSK values must _never_ be readable by software in clear.
 //An implementation that permits CSK reprogramming via the `macecsk` CSR group must follow the activation rules in <<ACE-CSR-macecsk>>.
 
 [IMPORTANT]
 ====
-When a process migrates between harts, its SCCs must remain importable, requiring the destination hart to use the same CSK as the source. The OS and hypervisor must ensure that M-mode establishes this CSK on the destination hart. The mechanism for supervisor software to request this operation is platform-dependent and outside the scope of this specification.
+When a process migrates between harts, its SCCs should remain importable, requiring the destination hart to use the same CSK as the source. The OS and hypervisor should ensure that M-mode establishes this CSK on the destination hart. The mechanism for supervisor software to request this operation is platform-dependent and outside the scope of this specification.
 Under the fourth model, this requirement can be met only within the subsystem sharing the CSK, not across subsystems.
 Unless software handles the differences, it may migrate a process only between harts whose ACE units have identical values for `acemvendorid`, `acemarchid`, `acemimpid`, and `acemaxiobuflen` and implement the same extensions and Algorithms.
 ====
