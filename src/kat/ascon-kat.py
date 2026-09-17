@@ -1,20 +1,20 @@
 #!/usr/bin/env python3
-"""Known-Answer Tests for the ACE Ascon algorithms against NIST SP 800-232.
+"""Known-Answer Tests for the KLEE Ascon algorithms against NIST SP 800-232.
 
 WHAT IS UNDER TEST
 ------------------
 The *specification text* of
 
-  <<ACE-Ascon-AEAD128>>            src/ace-ISA-algorithms.adoc
-  <<ACE-Ascon-AEAD128-wsn>>        (set nonce + budget)
-  <<ACE-Ascon-AEAD128-N-masking>>  (K1 as key, N xor K2 as nonce)
-  <<ACE-Ascon-Hash256>>
-  <<ACE-Ascon-XOF128>>
-  <<ACE-Ascon-CXOF128>>
+  <<KLEE-Ascon-AEAD128>>            src/ace-ISA-algorithms.adoc
+  <<KLEE-Ascon-AEAD128-wsn>>        (set nonce + budget)
+  <<KLEE-Ascon-AEAD128-N-masking>>  (K1 as key, N xor K2 as nonce)
+  <<KLEE-Ascon-Hash256>>
+  <<KLEE-Ascon-XOF128>>
+  <<KLEE-Ascon-CXOF128>>
 
 is transcribed below, clause by clause, into an executable state machine
 (classes `AceAsconAEAD128`, `AceAsconSponge`).  Nothing is "fixed up": each
-numbered step of the .adoc is reproduced as written, on ACE *values* (little-
+numbered step of the .adoc is reproduced as written, on KLEE *values* (little-
 endian bit strings held in Python ints, per src/ace-notation.adoc, whose
 "Conventions of the Referenced Standards" table records SP 800-232 as
 "little-endian throughout ... Direct mapping").
@@ -31,7 +31,7 @@ ANCHORING (three levels, in this order)
    1025 Hash256, 1025 XOF128, 1089 CXOF128 records) with zero mismatches, so
    the interpretation of those files is not in doubt; the subset embedded here
    is representative, not exhaustive.
-3. The ACE state-machine model is checked against the official vectors
+3. The KLEE state-machine model is checked against the official vectors
    directly, and against `ref_*` on the cases official vectors do not cover
    (short tags, budget accounting, squeeze splitting).
 
@@ -49,7 +49,7 @@ Each embedded case carries its `Count` from the corresponding file.
 
 REVIEW FINDING m5, SINCE FIXED
 -----------------------------
-The intro of <<ACE-Ascon-AEAD128>> used to say "the caller is responsible for
+The intro of <<KLEE-Ascon-AEAD128>> used to say "the caller is responsible for
 applying proper padding to the AD and the plaintext ... and for truncating the
 last plaintext block".  That contradicted the state machine directly below it:
 _Enc_Last_Block_ computes `tmp <- pad(INPUT[last_blk_len-1:0], 128)` and
@@ -62,22 +62,22 @@ pad().  The intro now says exactly that, so the spec and this model agree.
 
 SECOND SPEC DISCREPANCY FOUND BY THIS HARNESS
 ---------------------------------------------
-<<ACE-Ascon-CXOF128>> says only that "the message is prepended with the
+<<KLEE-Ascon-CXOF128>> says only that "the message is prepended with the
 customization string" and that "the management and padding of the
 customization string are left to the caller".  SP 800-232 Sec. 5.3 in fact
 requires the absorbed prefix to be  bin(8*len(Z), 64) @ pad(Z, 64) -- a
-mandatory 64-bit little-endian *bit-length* field ahead of Z.  The ACE text
+mandatory 64-bit little-endian *bit-length* field ahead of Z.  The KLEE text
 never mentions that field, so a caller following it literally produces output
 that does not match the official CXOF128 vectors.  The harness models the
 SP 800-232 prefix (function `cxof_prefix`) and additionally demonstrates, as
-labelled PASSing checks, that the literal ACE reading fails the vectors.
+labelled PASSing checks, that the literal KLEE reading fails the vectors.
 
 Run directly; prints per-case PASS/FAIL and a final `KAT-RESULT:` line.
 """
 
 import sys, os
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from common import b2v, v2b, sl, cat, bin_          # noqa: F401  (ACE notation)
+from common import b2v, v2b, sl, cat, bin_          # noqa: F401  (KLEE notation)
 
 M64 = (1 << 64) - 1
 M128 = (1 << 128) - 1
@@ -130,14 +130,14 @@ def ascon_p(S, rounds):
     return S
 
 # IV constants, quoted verbatim from the .adoc "In State _Ready_" clauses.
-IV_AEAD = 0x00001000808c0001      # <<ACE-Ascon-AEAD128>>
-IV_HASH = 0x0000080100cc0002      # <<ACE-Ascon-Hash256>>
-IV_XOF  = 0x0000080000cc0003      # <<ACE-Ascon-XOF128>>
-IV_CXOF = 0x0000080000cc0004      # <<ACE-Ascon-CXOF128>>
+IV_AEAD = 0x00001000808c0001      # <<KLEE-Ascon-AEAD128>>
+IV_HASH = 0x0000080100cc0002      # <<KLEE-Ascon-Hash256>>
+IV_XOF  = 0x0000080000cc0003      # <<KLEE-Ascon-XOF128>>
+IV_CXOF = 0x0000080000cc0004      # <<KLEE-Ascon-CXOF128>>
 
 # ===================================================================== byte-string reference
 #
-# Anchor level 2.  Straight SP 800-232, byte strings, no ACE notation.
+# Anchor level 2.  Straight SP 800-232, byte strings, no KLEE notation.
 
 def _abs_ad(S, ad):
     if not ad:
@@ -220,30 +220,30 @@ def ref_xof128(msg, outlen=64):
 
 def cxof_prefix(z):
     """SP 800-232 Sec. 5.3: Ascon-CXOF128 absorbs len(Z) as a 64-bit LE integer,
-    then Z padded to the 64-bit rate, before the message.  <<ACE-Ascon-CXOF128>>
+    then Z padded to the 64-bit rate, before the message.  <<KLEE-Ascon-CXOF128>>
     leaves "the management and padding of the customization string ... to the
-    caller", so in the ACE model this prefix is caller-supplied absorbed data."""
+    caller", so in the KLEE model this prefix is caller-supplied absorbed data."""
     return v2b(8 * len(z), 8) + z + b'\x01' + bytes((-len(z) - 1) % 8)
 
 def ref_cxof128(msg, z, outlen=64):
     return ref_sponge(IV_CXOF, msg, outlen, prefix=cxof_prefix(z))
 
-# ===================================================================== ACE model: helpers
+# ===================================================================== KLEE model: helpers
 
 class Invalid(Exception):
     """The CR transitioned to Error State _Invalid_."""
 
-def ace_pad(x, n, r=128):
-    """The spec's `pad(x,r) = 0^j @ 1 @ x`, j = (-|x|-1) mod r, on ACE values.
+def kl_pad(x, n, r=128):
+    """The spec's `pad(x,r) = 0^j @ 1 @ x`, j = (-|x|-1) mod r, on KLEE values.
     With |x| = n < r this is exactly (1 << n) | x, an r-bit value."""
     j = (-n - 1) % r
     assert j + 1 + n == r
     return cat((0, j), (1, 1), (x & ((1 << n) - 1), n))
 
-# ===================================================================== ACE model: Ascon-AEAD128
+# ===================================================================== KLEE model: Ascon-AEAD128
 
 class AceAsconAEAD128:
-    """<<ACE-Ascon-AEAD128>>, and via flags <<ACE-Ascon-AEAD128-wsn>>.
+    """<<KLEE-Ascon-AEAD128>>, and via flags <<KLEE-Ascon-AEAD128-wsn>>.
 
     Every method is one architectural instruction; `self.st` is the _State_
     field.  `dsep_wrong_word` is the negative control of this harness.
@@ -259,7 +259,7 @@ class AceAsconAEAD128:
         self.last_blk_len = 0
         self.st = 'Ready'
         self.dsep_wrong_word = dsep_wrong_word
-        # -- <<ACE-Ascon-AEAD128-wsn>>: the nonce comes from the PI, and words
+        # -- <<KLEE-Ascon-AEAD128-wsn>>: the nonce comes from the PI, and words
         #    3 and 4 of `state` are initialized from it in State _Ready_.
         self.set_nonce = nonce is not None
         self.budget = budget
@@ -267,7 +267,7 @@ class AceAsconAEAD128:
             self.s[3] = sl(nonce, 63, 0)
             self.s[4] = sl(nonce, 127, 64)
 
-    # ---- budget bookkeeping (<<ACE-Ascon-AEAD128-wsn>>)
+    # ---- budget bookkeeping (<<KLEE-Ascon-AEAD128-wsn>>)
     def _spend(self, blocks):
         if self.budget is None:
             return
@@ -277,7 +277,7 @@ class AceAsconAEAD128:
             raise Invalid('budget exhausted')
         self.budget -= blocks
 
-    # ---- Form B ace.setst #ace_state_set_aux_value : tag_len
+    # ---- Form B ace.setst #kl_state_set_aux_value : tag_len
     def setst_tag_len(self, Xs):
         assert self.st == 'Ready'
         if not (64 <= Xs <= 128):
@@ -292,7 +292,7 @@ class AceAsconAEAD128:
             # Form A: no additional inputs; state[3..4] already hold the nonce.
             assert INPUT is None
         else:
-            # Form C: "If ACELEN > 128, only the 128 lsbs of INPUT are considered."
+            # Form C: "If KLLEN > 128, only the 128 lsbs of INPUT are considered."
             assert INPUT is not None
             n = INPUT & M128
             self.s[3] = sl(n, 63, 0)
@@ -366,7 +366,7 @@ class AceAsconAEAD128:
         assert self.st == 'Enc_Last_Block' and self.last_blk_len
         self._spend(1)
         L = self.last_blk_len
-        tmp = ace_pad(sl(INPUT, L - 1, 0), L, 128)
+        tmp = kl_pad(sl(INPUT, L - 1, 0), L, 128)
         self.s[0] ^= sl(tmp, 63, 0)
         self.s[1] ^= sl(tmp, 127, 64)
         tmp = cat((self.s[1], 64), (self.s[0], 64))
@@ -399,7 +399,7 @@ class AceAsconAEAD128:
         S_r = cat((self.s[1], 64), (self.s[0], 64))
         P = cat((0, 128 - L), (sl(S_r, L - 1, 0) ^ sl(INPUT, L - 1, 0), L))
         OUT = P
-        S_r ^= ace_pad(sl(P, L - 1, 0), L, 128)
+        S_r ^= kl_pad(sl(P, L - 1, 0), L, 128)
         self.s[0] = sl(S_r, 63, 0)
         self.s[1] = sl(S_r, 127, 64)
         self.st = 'Hash_Verify'
@@ -430,7 +430,7 @@ class AceAsconAEAD128:
         self.st = 'Success' if ok else 'Failure'
         return ok
 
-# --------------------------------------------------------- ACE driver sequences
+# --------------------------------------------------------- KLEE driver sequences
 
 def pad_ad_caller(ad):
     """The caller's obligation (finding m5: the AD, and only the AD)."""
@@ -438,12 +438,12 @@ def pad_ad_caller(ad):
         return b''
     return ad + b'\x01' + bytes((-len(ad) - 1) % 16)
 
-def ace_encrypt(key, nonce, ad, pt, tag_len=128, ad_chunk=1, pt_chunk=1,
+def kl_encrypt(key, nonce, ad, pt, tag_len=128, ad_chunk=1, pt_chunk=1,
                 budget=None, set_nonce=False, dsep_wrong_word=False):
-    """Drive the ACE state machine through a full encryption.
+    """Drive the KLEE state machine through a full encryption.
 
     `ad_chunk` / `pt_chunk` are the number of 128-bit blocks per ace.exec, i.e.
-    ACELEN / 128, which exercises the multi-block forms of the .adoc clauses.
+    KLLEN / 128, which exercises the multi-block forms of the .adoc clauses.
     Returns (ciphertext_bytes, tag_bytes, cc).
     """
     nv = b2v(nonce)
@@ -471,21 +471,21 @@ def ace_encrypt(key, nonce, ad, pt, tag_len=128, ad_chunk=1, pt_chunk=1,
     tag = v2b(cc.exec_tag(), 16)[:tag_len // 8]
     return ct, tag, cc
 
-def ace_encrypt_masked(K1, K2, N, ad, pt, **kw):
-    """<<ACE-Ascon-AEAD128-N-masking>>, modelled exactly as the .adoc defines it:
+def kl_encrypt_masked(K1, K2, N, ad, pt, **kw):
+    """<<KLEE-Ascon-AEAD128-N-masking>>, modelled exactly as the .adoc defines it:
     "the same states as Ascon-AEAD128 ... with the key `key` equal to `K1` and
     the nonce `N` replaced throughout by `N xor K2`".  The masking therefore
     lives entirely in the PI/initialization; no other clause changes."""
     Nm = bytes(a ^ b for a, b in zip(N, K2))
-    return ace_encrypt(K1, Nm, ad, pt, **kw)
+    return kl_encrypt(K1, Nm, ad, pt, **kw)
 
-def ace_decrypt_masked(K1, K2, N, ad, ct, tag, **kw):
+def kl_decrypt_masked(K1, K2, N, ad, ct, tag, **kw):
     Nm = bytes(a ^ b for a, b in zip(N, K2))
-    return ace_decrypt(K1, Nm, ad, ct, tag, **kw)
+    return kl_decrypt(K1, Nm, ad, ct, tag, **kw)
 
-def ace_decrypt(key, nonce, ad, ct, tag, tag_len=128, ad_chunk=1, pt_chunk=1,
+def kl_decrypt(key, nonce, ad, ct, tag, tag_len=128, ad_chunk=1, pt_chunk=1,
                 budget=None, set_nonce=False):
-    """Drive the ACE state machine through a full decryption + Hash_Verify.
+    """Drive the KLEE state machine through a full decryption + Hash_Verify.
     Returns (ok, plaintext_bytes, cc)."""
     nv = b2v(nonce)
     cc = AceAsconAEAD128(b2v(key), nonce=nv if set_nonce else None, budget=budget)
@@ -511,10 +511,10 @@ def ace_decrypt(key, nonce, ad, ct, tag, tag_len=128, ad_chunk=1, pt_chunk=1,
     ok = cc.exec_verify(b2v(tag))
     return ok, pt, cc
 
-# ===================================================================== ACE model: sponges
+# ===================================================================== KLEE model: sponges
 
 class AceAsconSponge:
-    """<<ACE-Ascon-Hash256>>, <<ACE-Ascon-XOF128>>, <<ACE-Ascon-CXOF128>>.
+    """<<KLEE-Ascon-Hash256>>, <<KLEE-Ascon-XOF128>>, <<KLEE-Ascon-CXOF128>>.
 
     The three differ only in the IV and in whether `countdown` is used, exactly
     as the .adoc states.  Rate b = 64.
@@ -565,7 +565,7 @@ class AceAsconSponge:
             self._first = False
         return OUT, nwords * 8
 
-def ace_hash256(msg, absorb_chunk=1, squeeze_acelen=256):
+def kl_hash256(msg, absorb_chunk=1, squeeze_acelen=256):
     """Drive Ascon-Hash256.  `squeeze_acelen` selects 1, 2, or 4 ace.exec's."""
     cc = AceAsconSponge(IV_HASH, use_countdown=True)
     m = msg + b'\x01' + bytes((-len(msg) - 1) % 8)
@@ -580,7 +580,7 @@ def ace_hash256(msg, absorb_chunk=1, squeeze_acelen=256):
     assert cc.st == 'Success'
     return out[:32]
 
-def ace_xof(iv, msg, outlen, prefix=b'', absorb_chunk=1, squeeze_acelen=64):
+def kl_xof(iv, msg, outlen, prefix=b'', absorb_chunk=1, squeeze_acelen=64):
     cc = AceAsconSponge(iv, use_countdown=False)
     m = prefix + msg + b'\x01' + bytes((-len(msg) - 1) % 8)
     for i in range(0, len(m), 8 * absorb_chunk):
@@ -594,13 +594,13 @@ def ace_xof(iv, msg, outlen, prefix=b'', absorb_chunk=1, squeeze_acelen=64):
     assert cc.st == 'Hash_Finalize'          # never transitions to _Success_
     return out[:outlen]
 
-def ace_xof128(msg, outlen=64, **kw):
-    return ace_xof(IV_XOF, msg, outlen, **kw)
+def kl_xof128(msg, outlen=64, **kw):
+    return kl_xof(IV_XOF, msg, outlen, **kw)
 
-def ace_cxof128(msg, z, outlen=64, **kw):
-    # <<ACE-Ascon-CXOF128>>: "the message is prepended with the customization
+def kl_cxof128(msg, z, outlen=64, **kw):
+    # <<KLEE-Ascon-CXOF128>>: "the message is prepended with the customization
     # string"; its management and padding are the caller's job.
-    return ace_xof(IV_CXOF, msg, outlen, prefix=cxof_prefix(z), **kw)
+    return kl_xof(IV_CXOF, msg, outlen, prefix=cxof_prefix(z), **kw)
 
 # ===================================================================== vectors
 #
@@ -756,33 +756,33 @@ def main():
         chk(f"ref  CXOF128  LWC_CXOF_KAT_128_512 Count={count}",
             ref_cxof128(h(msg), h(z), 64).hex(), md)
 
-    # ---------------------------------------------------------- level 3: ACE model
-    print("\n<<ACE-Ascon-AEAD128>> state machine vs official vectors")
+    # ---------------------------------------------------------- level 3: KLEE model
+    print("\n<<KLEE-Ascon-AEAD128>> state machine vs official vectors")
     for count, ad, pt, ctt, desc in AEAD_KAT:
-        ct, tag, cc = ace_encrypt(KAT_KEY, KAT_NONCE, h(ad), h(pt))
+        ct, tag, cc = kl_encrypt(KAT_KEY, KAT_NONCE, h(ad), h(pt))
         chk(f"enc  Count={count:<4} {desc}", (ct + tag).hex(), ctt)
         chk(f"     Count={count:<4} final State = Success", cc.st, "Success")
 
-    print("\n  multi-block ace.exec (ACELEN = 256 and 384) gives identical results")
+    print("\n  multi-block ace.exec (KLLEN = 256 and 384) gives identical results")
     for count, ad, pt, ctt, _ in AEAD_KAT:
-        ct, tag, _ = ace_encrypt(KAT_KEY, KAT_NONCE, h(ad), h(pt), ad_chunk=2, pt_chunk=3)
-        chk(f"enc  Count={count:<4} ACELEN=256(AD)/384(PT)", (ct + tag).hex(), ctt)
+        ct, tag, _ = kl_encrypt(KAT_KEY, KAT_NONCE, h(ad), h(pt), ad_chunk=2, pt_chunk=3)
+        chk(f"enc  Count={count:<4} KLLEN=256(AD)/384(PT)", (ct + tag).hex(), ctt)
 
     print("\nDecryption path: _Decrypt_ / _Dec_Last_Block_ / _Hash_Verify_")
     for count, ad, pt, ctt, desc in AEAD_KAT:
         blob = h(ctt)
         ct, tag = blob[:-16], blob[-16:]
-        ok, rec, cc = ace_decrypt(KAT_KEY, KAT_NONCE, h(ad), ct, tag)
+        ok, rec, cc = kl_decrypt(KAT_KEY, KAT_NONCE, h(ad), ct, tag)
         chk(f"dec  Count={count:<4} plaintext recovered", rec.hex(), pt)
         chk(f"dec  Count={count:<4} Hash_Verify -> Success", (ok, cc.st), (True, "Success"))
         # tampered tag must land in _Failure_
         bad = bytearray(tag); bad[3] ^= 0x80
-        ok2, _, cc2 = ace_decrypt(KAT_KEY, KAT_NONCE, h(ad), ct, bytes(bad))
+        ok2, _, cc2 = kl_decrypt(KAT_KEY, KAT_NONCE, h(ad), ct, bytes(bad))
         chk(f"dec  Count={count:<4} tampered tag -> Failure", (ok2, cc2.st), (False, "Failure"))
         if ct:
             # tampered ciphertext must also fail
             bad = bytearray(ct); bad[0] ^= 0x01
-            ok3, _, cc3 = ace_decrypt(KAT_KEY, KAT_NONCE, h(ad), bytes(bad), tag)
+            ok3, _, cc3 = kl_decrypt(KAT_KEY, KAT_NONCE, h(ad), bytes(bad), tag)
             chk(f"dec  Count={count:<4} tampered ciphertext -> Failure",
                 (ok3, cc3.st), (False, "Failure"))
 
@@ -792,28 +792,28 @@ def main():
         for lp in range(0, 48):
             ad = bytes((i * 11 + 1) & 0xff for i in range(la))
             pt = bytes((i * 7 + 3) & 0xff for i in range(lp))
-            ct, tag, _ = ace_encrypt(KAT_KEY, KAT_NONCE, ad, pt)
-            ok, rec, cc = ace_decrypt(KAT_KEY, KAT_NONCE, ad, ct, tag)
+            ct, tag, _ = kl_encrypt(KAT_KEY, KAT_NONCE, ad, pt)
+            ok, rec, cc = kl_decrypt(KAT_KEY, KAT_NONCE, ad, ct, tag)
             rt_ok &= ok and rec == pt and cc.st == "Success"
-            # and the ACE model must agree with the byte-string reference
+            # and the KLEE model must agree with the byte-string reference
             rt_ok &= (ct + tag) == ref_aead_encrypt(KAT_KEY, KAT_NONCE, ad, pt)
-    chk("ACE decrypt(encrypt(x)) == x and ACE == reference, 192 length pairs",
+    chk("KLEE decrypt(encrypt(x)) == x and KLEE == reference, 192 length pairs",
         rt_ok, True)
 
     print("\ntag_len truncation semantics (SP 800-232 permits tag_len >= 64;")
     print("  the official KATs use 128, so 64/96 are checked for self-consistency:")
     print("  OUTPUT = zeros(128-tag_len) @ tag[tag_len-1:0], i.e. the FIRST")
-    print("  tag_len/8 bytes of the 128-bit tag under the ACE value mapping)")
+    print("  tag_len/8 bytes of the 128-bit tag under the KLEE value mapping)")
     ad, pt = h("30313233"), h("202122232425262728292a2b2c2d2e2f30")
-    _, tag128, _ = ace_encrypt(KAT_KEY, KAT_NONCE, ad, pt)
+    _, tag128, _ = kl_encrypt(KAT_KEY, KAT_NONCE, ad, pt)
     for tl in (64, 96, 128):
-        ct, tag, cc = ace_encrypt(KAT_KEY, KAT_NONCE, ad, pt, tag_len=tl)
+        ct, tag, cc = kl_encrypt(KAT_KEY, KAT_NONCE, ad, pt, tag_len=tl)
         chk(f"tag_len={tl:<3} emitted tag == tag128[:{tl // 8}]", tag.hex(), tag128[:tl // 8].hex())
-        ok, rec, cc2 = ace_decrypt(KAT_KEY, KAT_NONCE, ad, ct, tag, tag_len=tl)
+        ok, rec, cc2 = kl_decrypt(KAT_KEY, KAT_NONCE, ad, ct, tag, tag_len=tl)
         chk(f"tag_len={tl:<3} verify accepts, plaintext recovered",
             (ok, rec == pt, cc2.st), (True, True, "Success"))
         bad = bytearray(tag); bad[0] ^= 0x01
-        ok2, _, cc3 = ace_decrypt(KAT_KEY, KAT_NONCE, ad, ct, bytes(bad), tag_len=tl)
+        ok2, _, cc3 = kl_decrypt(KAT_KEY, KAT_NONCE, ad, ct, bytes(bad), tag_len=tl)
         chk(f"tag_len={tl:<3} verify rejects a flipped bit inside the tag",
             (ok2, cc3.st), (False, "Failure"))
     for tl in (0, 8, 63, 129, 255):
@@ -839,44 +839,44 @@ def main():
         chk(f"Xs={xs:<4} -> Invalid", (got, cc.st), ("Invalid", "Invalid"))
 
     # ---------------------------------------------------------- set-nonce variant
-    print("\n<<ACE-Ascon-AEAD128-wsn>>: PI-carried nonce and the budget mechanism")
+    print("\n<<KLEE-Ascon-AEAD128-wsn>>: PI-carried nonce and the budget mechanism")
     for count, ad, pt, ctt, desc in AEAD_KAT:
-        ct, tag, cc = ace_encrypt(KAT_KEY, KAT_NONCE, h(ad), h(pt),
+        ct, tag, cc = kl_encrypt(KAT_KEY, KAT_NONCE, h(ad), h(pt),
                                   set_nonce=True, budget=64)
         chk(f"set-nonce  Count={count:<4} same ciphertext as base algorithm",
             (ct + tag).hex(), ctt)
-    # budget accounting: exactly ACELEN/128 per consuming exec, 1 per last block,
+    # budget accounting: exactly KLLEN/128 per consuming exec, 1 per last block,
     # and neither _Hash_Output_ nor _Hash_Verify_ decrements it.
     ad = h("303132333435363738393a3b3c3d3e3f40")     # 17 B -> 2 padded AD blocks
     pt = h("202122232425262728292a2b2c2d2e2f30")     # 17 B -> 1 full + 1 last blk
-    _, _, cc = ace_encrypt(KAT_KEY, KAT_NONCE, ad, pt, set_nonce=True, budget=100)
+    _, _, cc = kl_encrypt(KAT_KEY, KAT_NONCE, ad, pt, set_nonce=True, budget=100)
     chk("budget: 2 AD + 1 PT + 1 Enc_Last_Block = 4 blocks spent; tag-emit free",
         cc.budget, 96)
-    ct, tag, _ = ace_encrypt(KAT_KEY, KAT_NONCE, ad, pt, set_nonce=True, budget=100)
-    _, _, ccd = ace_decrypt(KAT_KEY, KAT_NONCE, ad, ct, tag, set_nonce=True, budget=100)
+    ct, tag, _ = kl_encrypt(KAT_KEY, KAT_NONCE, ad, pt, set_nonce=True, budget=100)
+    _, _, ccd = kl_decrypt(KAT_KEY, KAT_NONCE, ad, ct, tag, set_nonce=True, budget=100)
     chk("budget: decrypt spends the same 4 blocks; Hash_Verify free", ccd.budget, 96)
     # exactly-enough budget succeeds
-    ct2, tag2, cc2 = ace_encrypt(KAT_KEY, KAT_NONCE, ad, pt, set_nonce=True, budget=4)
+    ct2, tag2, cc2 = kl_encrypt(KAT_KEY, KAT_NONCE, ad, pt, set_nonce=True, budget=4)
     chk("budget = 4 exactly: completes, budget hits 0", (cc2.budget, cc2.st, ct2 + tag2),
         (0, "Success", ct + tag))
     # one short must trap
     for b in (0, 1, 2, 3):
         try:
-            ace_encrypt(KAT_KEY, KAT_NONCE, ad, pt, set_nonce=True, budget=b)
+            kl_encrypt(KAT_KEY, KAT_NONCE, ad, pt, set_nonce=True, budget=b)
             got = ("completed", None)
         except Invalid as e:  # noqa: F841
             got = ("Invalid", "Invalid")
         chk(f"budget = {b} (< 4 needed): no operation, Error State Invalid",
             got, ("Invalid", "Invalid"))
-    # multi-block exec spends ACELEN/128
+    # multi-block exec spends KLLEN/128
     cc = AceAsconAEAD128(b2v(KAT_KEY), nonce=b2v(KAT_NONCE), budget=10)
     cc.setst_start()
     cc.exec_ad(0, 384)
-    chk("budget: one ace.exec with ACELEN=384 spends 3 blocks", cc.budget, 7)
+    chk("budget: one ace.exec with KLLEN=384 spends 3 blocks", cc.budget, 7)
     # "No transition back to State _Ready_ is allowed": once the state machine
     # has run to _Success_ the CC is spent, and a second setst_start (which would
     # reinstall the same nonce and reuse the keystream) must not be accepted.
-    _, _, spent = ace_encrypt(KAT_KEY, KAT_NONCE, ad, pt, set_nonce=True, budget=100)
+    _, _, spent = kl_encrypt(KAT_KEY, KAT_NONCE, ad, pt, set_nonce=True, budget=100)
     try:
         spent.setst_start()
         reused = True
@@ -886,7 +886,7 @@ def main():
         (spent.st, reused), ("Success", False))
 
     # ---------------------------------------------------------- nonce masking
-    print("\n<<ACE-Ascon-AEAD128-N-masking>>: key = K1, nonce = N xor K2")
+    print("\n<<KLEE-Ascon-AEAD128-N-masking>>: key = K1, nonce = N xor K2")
     K1 = h("0f0e0d0c0b0a09080706050403020100")
     K2 = h("a5a4a3a2a1a09f9e9d9c9b9a99989796")
     N = KAT_NONCE
@@ -896,7 +896,7 @@ def main():
     #     official Ascon-AEAD128 vectors exactly, key = the KAT key.
     Z16 = bytes(16)
     for count, ad, pt, ctt, desc in AEAD_KAT:
-        ct, tag, cc = ace_encrypt_masked(KAT_KEY, Z16, KAT_NONCE, h(ad), h(pt))
+        ct, tag, cc = kl_encrypt_masked(KAT_KEY, Z16, KAT_NONCE, h(ad), h(pt))
         chk(f"masked  K2=0  Count={count:<4} reproduces the official KAT",
             (ct + tag).hex(), ctt)
 
@@ -904,41 +904,41 @@ def main():
     #     reference run on (key=K1, nonce=N xor K2), and must differ from the
     #     unmasked run on (K1, N) -- otherwise the mask is not being applied.
     for count, ad, pt, _c, desc in AEAD_KAT[:6]:
-        ct, tag, cc = ace_encrypt_masked(K1, K2, N, h(ad), h(pt))
+        ct, tag, cc = kl_encrypt_masked(K1, K2, N, h(ad), h(pt))
         chk(f"masked  Count={count:<4} == ref(key=K1, nonce=N xor K2)",
             (ct + tag).hex(), ref_aead_encrypt(K1, Nm, h(ad), h(pt)).hex())
-        unmasked, utag, _ = ace_encrypt(K1, N, h(ad), h(pt))
+        unmasked, utag, _ = kl_encrypt(K1, N, h(ad), h(pt))
         chk(f"masked  Count={count:<4} differs from the unmasked nonce N",
             (ct + tag) != (unmasked + utag), True)
         # round-trip through the masked decryption path
-        ok, rec, ccd = ace_decrypt_masked(K1, K2, N, h(ad), ct, tag)
+        ok, rec, ccd = kl_decrypt_masked(K1, K2, N, h(ad), ct, tag)
         chk(f"masked  Count={count:<4} masked decrypt recovers the plaintext",
             (ok, rec.hex(), ccd.st), (True, pt, "Success"))
 
     # (c) The combination "nonce masking + set nonce" of the .adoc's last
     #     paragraph: K1 as key, N xor K2 supplied as the PI nonce, budget rules
-    #     of <<ACE-Ascon-AEAD128-wsn>> in force.
-    ct_a, tag_a, _ = ace_encrypt_masked(K1, K2, N, h("3031"), h("2021222324"))
-    ct_b, tag_b, ccb = ace_encrypt_masked(K1, K2, N, h("3031"), h("2021222324"),
+    #     of <<KLEE-Ascon-AEAD128-wsn>> in force.
+    ct_a, tag_a, _ = kl_encrypt_masked(K1, K2, N, h("3031"), h("2021222324"))
+    ct_b, tag_b, ccb = kl_encrypt_masked(K1, K2, N, h("3031"), h("2021222324"),
                                           set_nonce=True, budget=8)
     chk("masked + set-nonce == masked with the Form C nonce", (ct_b, tag_b), (ct_a, tag_a))
     chk("masked + set-nonce spends 1 AD + 1 Enc_Last_Block block", ccb.budget, 6)
 
     # ---------------------------------------------------------- Hash256 / XOF / CXOF
-    print("\n<<ACE-Ascon-Hash256>> vs official vectors")
+    print("\n<<KLEE-Ascon-Hash256>> vs official vectors")
     for count, msg, md in HASH_KAT:
-        chk(f"Hash256  Count={count:<4} (ACELEN=256, one squeeze)",
-            ace_hash256(h(msg)).hex(), md)
+        chk(f"Hash256  Count={count:<4} (KLLEN=256, one squeeze)",
+            kl_hash256(h(msg)).hex(), md)
     print("\n  countdown: 1 / 2 / 4 ace.exec squeezes must agree")
     for count, msg, md in HASH_KAT:
-        a = ace_hash256(h(msg), squeeze_acelen=256).hex()
-        b = ace_hash256(h(msg), squeeze_acelen=128).hex()
-        c = ace_hash256(h(msg), squeeze_acelen=64).hex()
+        a = kl_hash256(h(msg), squeeze_acelen=256).hex()
+        b = kl_hash256(h(msg), squeeze_acelen=128).hex()
+        c = kl_hash256(h(msg), squeeze_acelen=64).hex()
         chk(f"Hash256  Count={count:<4} squeeze 1x256 == 2x128 == 4x64 == KAT",
             (a, b, c), (md, md, md))
-    print("\n  multi-word absorb (ACELEN = 192) agrees")
+    print("\n  multi-word absorb (KLLEN = 192) agrees")
     for count, msg, md in HASH_KAT:
-        chk(f"Hash256  Count={count:<4} ACELEN=192 absorb", ace_hash256(h(msg), absorb_chunk=3).hex(), md)
+        chk(f"Hash256  Count={count:<4} KLLEN=192 absorb", kl_hash256(h(msg), absorb_chunk=3).hex(), md)
     # countdown really stops the machine at four words
     cc = AceAsconSponge(IV_HASH, use_countdown=True)
     cc.exec_absorb(b2v(b'\x01' + bytes(7)), 64)
@@ -952,18 +952,18 @@ def main():
     chk("Hash256 countdown runs 3,2,1,0 then State = Success",
         (got, cc.st), ([2, 1, 0, 0], "Success"))
 
-    print("\n<<ACE-Ascon-XOF128>> vs official vectors (512-bit output)")
+    print("\n<<KLEE-Ascon-XOF128>> vs official vectors (512-bit output)")
     for count, msg, md in XOF_KAT:
         chk(f"XOF128   Count={count:<4} 512-bit squeeze (8 x ace.exec)",
-            ace_xof128(h(msg), 64).hex(), md)
-        chk(f"XOF128   Count={count:<4} same via ACELEN=256 squeezes",
-            ace_xof128(h(msg), 64, squeeze_acelen=256).hex(), md)
+            kl_xof128(h(msg), 64).hex(), md)
+        chk(f"XOF128   Count={count:<4} same via KLLEN=256 squeezes",
+            kl_xof128(h(msg), 64, squeeze_acelen=256).hex(), md)
     # squeeze beyond 256 bits must extend, not restart
     for count, msg, md in XOF_KAT[:3]:
         chk(f"XOF128   Count={count:<4} first 256 bits are a prefix of the 512-bit MD",
-            ace_xof128(h(msg), 32).hex(), md[:64])
+            kl_xof128(h(msg), 32).hex(), md[:64])
         chk(f"XOF128   Count={count:<4} 1024-bit squeeze matches the reference stream",
-            ace_xof128(h(msg), 128).hex(), ref_xof128(h(msg), 128).hex())
+            kl_xof128(h(msg), 128).hex(), ref_xof128(h(msg), 128).hex())
     cc = AceAsconSponge(IV_XOF, use_countdown=False)
     cc.exec_absorb(b2v(b'\x01' + bytes(7)), 64)
     cc.enter_finalize()
@@ -971,27 +971,27 @@ def main():
         cc.exec_squeeze(64)
     chk("XOF128 never transitions to _Success_ after 20 squeezes", cc.st, "Hash_Finalize")
 
-    print("\n<<ACE-Ascon-CXOF128>> vs official vectors")
+    print("\n<<KLEE-Ascon-CXOF128>> vs official vectors")
     for count, msg, z, md in CXOF_KAT:
         chk(f"CXOF128  Count={count:<4} caller-prepended customization string",
-            ace_cxof128(h(msg), h(z), 64).hex(), md)
+            kl_cxof128(h(msg), h(z), 64).hex(), md)
     chk("CXOF128 with an empty Z differs from XOF128 on the same message (IV differs)",
-        ace_cxof128(b"abc", b"", 32) != ace_xof128(b"abc", 32), True)
-    # SPEC GAP (reported, not patched): <<ACE-Ascon-CXOF128>> says only that "the
+        kl_cxof128(b"abc", b"", 32) != kl_xof128(b"abc", 32), True)
+    # SPEC GAP (reported, not patched): <<KLEE-Ascon-CXOF128>> says only that "the
     # message is prepended with the customization string" and leaves "the
     # management and padding of the customization string ... to the caller".  It
     # never states that SP 800-232 Sec. 5.3 requires the prefix to be
     #     bin(8*len(Z), 64) @ pad(Z, 64)
     # i.e. a MANDATORY 64-bit little-endian bit-length field ahead of Z.  A
-    # caller following the ACE text literally -- prepending only pad(Z,64) --
+    # caller following the KLEE text literally -- prepending only pad(Z,64) --
     # produces output that does NOT match the official vectors.  Demonstrated:
     def cxof_literal_reading(msg, z, outlen=64):
         pre = z + b'\x01' + bytes((-len(z) - 1) % 8)      # no bin(8|Z|,64) field
-        return ace_xof(IV_CXOF, msg, outlen, prefix=pre)
+        return kl_xof(IV_CXOF, msg, outlen, prefix=pre)
     for count, msg, z, md in CXOF_KAT:
         if not h(z):
             continue      # with Z empty the two readings still differ (length field = 0)
-        chk(f"CXOF128  Count={count:<4} literal ACE reading (no bin(8|Z|,64) field) "
+        chk(f"CXOF128  Count={count:<4} literal KLEE reading (no bin(8|Z|,64) field) "
             f"does NOT match the KAT -- spec gap", cxof_literal_reading(h(msg), h(z)).hex() != md, True)
 
     # ---------------------------------------------------------- negative control
@@ -1001,7 +1001,7 @@ def main():
     print("KAT-EXPECT-FAIL: dsep on state[0]")
     fired = True
     for count, ad, pt, ctt, _ in AEAD_KAT[:4]:
-        ct, tag, _ = ace_encrypt(KAT_KEY, KAT_NONCE, h(ad), h(pt), dsep_wrong_word=True)
+        ct, tag, _ = kl_encrypt(KAT_KEY, KAT_NONCE, h(ad), h(pt), dsep_wrong_word=True)
         fired &= chk_fails(f"dsep on state[0]  Count={count:<4} must differ from the KAT",
                            (ct + tag).hex(), ctt)
 

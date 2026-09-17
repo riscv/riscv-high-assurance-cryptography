@@ -1,7 +1,7 @@
-"""Curve parameters and group arithmetic for the ACE elliptic-curve KAT harness.
+"""Curve parameters and group arithmetic for the KLEE elliptic-curve KAT harness.
 
-This module is a *helper* for `ecc-kat.py`; it contains no ACE semantics, only
-the mathematics the ACE unit is specified to perform, plus the RFC-published
+This module is a *helper* for `ecc-kat.py`; it contains no KLEE semantics, only
+the mathematics the KLEE unit is specified to perform, plus the RFC-published
 domain parameters.  Everything here is checked by `ecc-kat.py` against published
 vectors (or, for the Brainpool curves, against the curve equation and the group
 order) before it is used, so a transcription error cannot pass silently.
@@ -29,9 +29,9 @@ class Weierstrass:
     """y^2 = x^3 + a*x + b over GF(p), with base point G of prime order n.
 
     Points are affine `(x, y)` tuples, or `None` for the point at infinity.
-    `bbits` is the ACE parameter `b` (the width of a field element *as
+    `bbits` is the KLEE parameter `b` (the width of a field element *as
     represented in a CR*, which for secp521r1 is 576 rather than 521), and
-    `msb_zero` the number of most significant bits the ACE representation
+    `msb_zero` the number of most significant bits the KLEE representation
     requires to be zero.
     """
 
@@ -151,7 +151,7 @@ class Edwards:
         self.name = name
         self.p, self.a, self.d = p, a % p, d % p
         self.L = L
-        self.n = L                     # ACE calls the group order n
+        self.n = L                     # KLEE calls the group order n
         self.h = cofactor
         self.bbits = bbits
         self.nbytes = (bbits + 7) // 8
@@ -290,9 +290,9 @@ P384 = Weierstrass(
     n=0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFC7634D81F4372DDF581A0DB248B0A77AECEC196ACCC52973,
     h=1, bbits=384)
 
-# secp521r1: the *mathematical* field is 521 bits, but the ACE representation
+# secp521r1: the *mathematical* field is 521 bits, but the KLEE representation
 # is 576 bits wide with the 55 most significant bits required to be zero
-# (src/ace-ISA-algorithms.adoc, <<ACE-ECC>> "Parameters").
+# (src/ace-ISA-algorithms.adoc, <<KLEE-ECC>> "Parameters").
 P521 = Weierstrass(
     'secp521r1',
     p=(1 << 521) - 1,

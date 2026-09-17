@@ -3,15 +3,15 @@
 NTT over Z_8380417, ExpandA / ExpandS / ExpandMask, SampleInBall,
 Power2Round / Decompose / HighBits / LowBits / MakeHint / UseHint, the
 SimpleBitPack / BitPack / HintBitPack encodings and pkEncode / skEncode /
-sigEncode / w1Encode, and Algorithms 6, 7 and 8 (KeyGen_internal,
+sigEncode / w1Encode, and Machines 6, 7 and 8 (KeyGen_internal,
 Sign_internal, Verify_internal) for ML-DSA-44/65/87.
 
-Because the ACE unit signs over an *externally* computed message representative
+Because the KLEE unit signs over an *externally* computed message representative
 mu = SHAKE256(tr || M', 64), the signing and verification entry points are
 offered in both flavours: `sign_internal(sk, Mp, rnd)` / `verify_internal(pk,
 Mp, sig)` take the formatted message M', while `sign_internal_mu(sk, mu, rnd)` /
 `verify_internal_mu(pk, mu, sig)` take mu directly, which is what
-[[ACE-PQC-ML-DSA]] specifies.
+[[KLEE-PQC-ML-DSA]] specifies.
 
 Anchored by kat/mldsa-kat.py against official NIST ACVP vectors; this module
 holds no vectors of its own.
@@ -185,7 +185,7 @@ def hint_bit_pack(h, omega, k):
     return bytes(y)
 
 def hint_bit_unpack(y, omega, k):
-    """Algorithm 21.  Returns None for a malformed hint (this is the check that
+    """Machine 21.  Returns None for a malformed hint (this is the check that
     bounds the hint weight by omega and enforces strictly increasing indices)."""
     h = [[0] * 256 for _ in range(k)]
     index = 0
@@ -384,10 +384,10 @@ def keygen_internal(xi, ps):
     return pk, sk
 
 def compute_pubkey(sk, ps):
-    """FIPS 204 3.6 / Algorithm 6: re-derive pk from sk, and re-derive tr.
+    """FIPS 204 3.6 / Machine 6: re-derive pk from sk, and re-derive tr.
 
-    Returns (pk, tr_from_pk, tr_in_sk); the ACE _compute_pubKey_ state requires
-    tr_from_pk == tr_in_sk (see [[ACE-PQC-ML-DSA]])."""
+    Returns (pk, tr_from_pk, tr_in_sk); the KLEE _compute_pubKey_ state requires
+    tr_from_pk == tr_in_sk (see [[KLEE-PQC-ML-DSA]])."""
     p = PARAMS[ps]
     rho, Kk, tr_sk, s1, s2, t0 = sk_decode(sk, ps)
     A = expand_A(rho, ps)
@@ -397,8 +397,8 @@ def compute_pubkey(sk, ps):
     return pk, H(pk, 64), tr_sk
 
 def sign_internal_mu(sk, mu, rnd, ps, max_iters=1000):
-    """ML-DSA.Sign_internal (Algorithm 7) with mu supplied externally, which is
-    what the ACE _Sign_Generate_ state does."""
+    """ML-DSA.Sign_internal (Machine 7) with mu supplied externally, which is
+    what the KLEE _Sign_Generate_ state does."""
     p = PARAMS[ps]
     k, l = p['k'], p['l']
     g1, g2, beta, omega, tau = p['gamma1'], p['gamma2'], p['beta'], p['omega'], p['tau']
@@ -437,7 +437,7 @@ def sign_internal(sk, Mp, rnd, ps):
     return sign_internal_mu(sk, H(tr + Mp, 64), rnd, ps)
 
 def verify_internal_mu(pk, mu, sig, ps):
-    """ML-DSA.Verify_internal (Algorithm 8) with mu supplied externally."""
+    """ML-DSA.Verify_internal (Machine 8) with mu supplied externally."""
     p = PARAMS[ps]
     g1, g2, beta, k = p['gamma1'], p['gamma2'], p['beta'], p['k']
     if len(sig) != sizes(ps)[2] or len(pk) != sizes(ps)[1]:
@@ -461,7 +461,7 @@ def verify_internal(pk, Mp, sig, ps):
     return verify_internal_mu(pk, H(tr + Mp, 64), sig, ps)
 
 def mu_external(tr, Mp):
-    """The ACE external-mu convention: mu = SHAKE256(tr @ M', 64)."""
+    """The KLEE external-mu convention: mu = SHAKE256(tr @ M', 64)."""
     return H(tr + Mp, 64)
 
 def format_Mp(ctx, M, prehash=False, oid=b''):

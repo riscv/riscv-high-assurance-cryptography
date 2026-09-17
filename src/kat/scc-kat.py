@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """Sealed Cryptographic Context (SCC) known-answer tests.
 
-Validates the sealing construction of the draft ACE specification —
-<<ACE-SCC-AEAD>>, <<ACE-SCC-key-derivation>>, <<ACE-SCC-POLYVAL>>,
-<<ACE-SCC-GCM-SIV-enc>>, <<ACE-SCC-GCM-SIV-dec>>, <<ACE-SCC-export>>,
-<<ACE-SCC-import>> and the format tables of <<ACE-data-formats>> /
-<<ACE-length-rule>> (src/ace-ISA-unpriv.adoc) — transcribed literally onto
-ACE values (little-endian; common.py conventions).
+Validates the sealing construction of the draft KLEE specification —
+<<KLEE-SCC-AEAD>>, <<KLEE-SCC-key-derivation>>, <<KLEE-SCC-POLYVAL>>,
+<<KLEE-SCC-GCM-SIV-enc>>, <<KLEE-SCC-GCM-SIV-dec>>, <<KLEE-SCC-export>>,
+<<KLEE-SCC-import>> and the format tables of <<KLEE-data-formats>> /
+<<KLEE-length-rule>> (src/ace-ISA-unpriv.adoc) — transcribed literally onto
+KLEE values (little-endian; common.py conventions).
 
 ANCHOR LEVEL — stated honestly, because it is not uniform:
 
@@ -25,7 +25,7 @@ ANCHOR LEVEL — stated honestly, because it is not uniform:
   * SCC_Encrypt/SCC_Decrypt  SELF-CONSISTENT ONLY.  The construction is a
     and the export/import    deliberate variant of AES-GCM-SIV — no nonce
     procedures               (zeros(96)) and no length block
-                             (<<ACE-SCC-AEAD>> changes 1 and 2) — so no
+                             (<<KLEE-SCC-AEAD>> changes 1 and 2) — so no
                              published vector applies.  What is tested is
                              the set of structural properties the
                              architecture relies on: round-tripping,
@@ -56,17 +56,17 @@ M32 = (1 << 32) - 1
 
 
 # ======================================================================
-# <<ACE-SCC-AEAD>>: the primitive functions, transcribed literally
+# <<KLEE-SCC-AEAD>>: the primitive functions, transcribed literally
 # ======================================================================
 
 def AESE256(K: int, B: int) -> int:
     """AES-256 encryption of the 128-bit block B under the 256-bit key K,
-    both as ACE values."""
+    both as KLEE values."""
     return b2v(aes_encrypt(v2b(K, 32), v2b(B, 16)))
 
 
 def RFC8452_KeyDeriv(key: int, nonce: int):
-    """<<ACE-SCC-key-derivation>>.
+    """<<KLEE-SCC-key-derivation>>.
 
     A[i] <- AESE256(key, nonce @ bin(i,32))
     enc_key  = A[5][63:0] @ A[4][63:0] @ A[3][63:0] @ A[2][63:0]
@@ -80,7 +80,7 @@ def RFC8452_KeyDeriv(key: int, nonce: int):
 
 
 def POLYVAL(auth_key: int, blocks) -> int:
-    """<<ACE-SCC-POLYVAL>>: tmp <- Montmul(tmp xor blocks[i], auth_key)."""
+    """<<KLEE-SCC-POLYVAL>>: tmp <- Montmul(tmp xor blocks[i], auth_key)."""
     tmp = 0
     for blk in blocks:
         tmp ^= blk
@@ -101,7 +101,7 @@ def _tag_block(S: int, sep: int) -> int:
 def _ctr_block(SIV: int, sep: int, i: int) -> int:
     """1 @ sep @ SIV[125:32] @ bin((int(SIV[31:0]) + i) mod 2**32, 32).
 
-    <<ACE-SCC-AEAD>> replaces RFC 8452's SIV[126] with an explicit segment
+    <<KLEE-SCC-AEAD>> replaces RFC 8452's SIV[126] with an explicit segment
     selector, so the two segments' keystream inputs are disjoint by
     construction.  Widths: 1 + 1 + 94 + 32 = 128.
     """
@@ -110,10 +110,10 @@ def _ctr_block(SIV: int, sep: int, i: int) -> int:
 
 
 def SCC_Encrypt(AD, N: int, sep: int, P, K: int, length_block=None):
-    """<<ACE-SCC-GCM-SIV-enc>>.
+    """<<KLEE-SCC-GCM-SIV-enc>>.
 
     length_block is not part of the spec: passing one restores the RFC 8452
-    block that <<ACE-SCC-AEAD>> deliberately omits, and exists only to drive
+    block that <<KLEE-SCC-AEAD>> deliberately omits, and exists only to drive
     the negative control.
     """
     enc_key, auth_key = RFC8452_KeyDeriv(K, N)
@@ -126,7 +126,7 @@ def SCC_Encrypt(AD, N: int, sep: int, P, K: int, length_block=None):
 
 
 def SCC_Decrypt(AD, N: int, sep: int, SIV: int, C, K: int, length_block=None):
-    """<<ACE-SCC-GCM-SIV-dec>>."""
+    """<<KLEE-SCC-GCM-SIV-dec>>."""
     enc_key, auth_key = RFC8452_KeyDeriv(K, N)
     P = [C[i] ^ AESE256(enc_key, _ctr_block(SIV, sep, i)) for i in range(len(C))]
     blocks = list(AD) + list(P) + ([] if length_block is None else [length_block])
@@ -139,7 +139,7 @@ def SCC_Decrypt(AD, N: int, sep: int, SIV: int, C, K: int, length_block=None):
 
 
 # ======================================================================
-# MDH helpers (<<ACE-metadata-header>>, <<ACE-locality-indexes>>)
+# MDH helpers (<<KLEE-metadata-header>>, <<KLEE-locality-indexes>>)
 # ======================================================================
 
 # _Locality_ occupies MDH[77:69]; within that 9-bit field the architected
@@ -162,7 +162,7 @@ def locality_field(indices) -> int:
 
 def localities_of(mdh: int):
     """The Localities that MDH._Locality_ includes, in index order 0..10 —
-    the order in which <<ACE-SCC-export>> step 1.c appends them to AD."""
+    the order in which <<KLEE-SCC-export>> step 1.c appends them to AD."""
     f = sl(mdh, 77, 69)
     out = []
     for j in range(11):
@@ -175,17 +175,17 @@ def make_mdh(algorithm=0x101, key_type=0, state=1, config_status=3,
              imp_data_len=0, localities=(), usage_policy=0):
     """Assemble a plausible MDH from the fields this harness needs."""
     return (bin_(algorithm, 12)
-            | (1 << 12)                                  # AlgorithmPolicy: enc
+            | (1 << 12)                                  # MachinePolicy: enc
             | (bin_(key_type, 2) << 19)
             | (bin_(state, 5) << 21)
-            | (bin_(config_status, 2) << 30)             # ace_cfg_complete
+            | (bin_(config_status, 2) << 30)             # kl_cfg_complete
             | (bin_(imp_data_len, 14) << 32)
             | (bin_(usage_policy, 5) << 64)
             | (locality_field(localities) << 69))
 
 
 # ======================================================================
-# <<ACE-SCC-export>> / <<ACE-SCC-import>>
+# <<KLEE-SCC-export>> / <<KLEE-SCC-import>>
 # ======================================================================
 
 def _ad_segment1(saved_MDH: int, LST: dict):
@@ -198,8 +198,8 @@ def _ad_segment1(saved_MDH: int, LST: dict):
 
 def scc_export(saved_MDH: int, content1, CSK: int, LST: dict,
                IMPQUAL=None, content2=(), length_block=None) -> bytes:
-    """<<ACE-SCC-export>>, returning the serialized SCC of
-    <<ACE-data-formats>>: MDH || SIV || Content1_CT
+    """<<KLEE-SCC-export>>, returning the serialized SCC of
+    <<KLEE-data-formats>>: MDH || SIV || Content1_CT
     [ || IMPQUAL || SIV2 || Content2_CT ].
 
     _AuxDataLen_ counts the whole variable-length section (IMPQUAL, SIV2 and
@@ -222,7 +222,7 @@ def scc_export(saved_MDH: int, content1, CSK: int, LST: dict,
 
 
 def scc_export_error_state(mdh: int, CSK: int, LST: dict) -> bytes:
-    """<<ACE-length-rule>> 2 and <<ACE-data-formats>>: a CR in an Error State
+    """<<KLEE-length-rule>> 2 and <<KLEE-data-formats>>: a CR in an Error State
     exports the MDH and SIV only — Sections 3-6 empty, len_PC = 0, 32 bytes.
     _AuxDataLen_ has been set to 0 on entering the Error State."""
     assert sl(mdh, 45, 32) == 0, 'AuxDataLen is cleared on entering an Error State'
@@ -234,17 +234,17 @@ def scc_export_error_state(mdh: int, CSK: int, LST: dict) -> bytes:
 
 def scc_import(scc: bytes, CSK: int, LST: dict, len_PC=None,
                support_ads=True, length_block=None) -> dict:
-    """<<ACE-SCC-import>>.
+    """<<KLEE-SCC-import>>.
 
     Returns a dict describing the resulting CR:
-      {'status': 'ok' | 'ace_state_import_auth',
+      {'status': 'ok' | 'kl_state_import_auth',
        'mdh', 'content1', 'imp_data_len', 'content2', 'ads_discarded'}
 
     len_PC is the length of Section 3 in blocks, which the real importer
-    derives from _Algorithm_/_AlgorithmPolicy_/_KeyType_/_StateExtension_
-    (<<ACE-length-rule>> 2); this harness is passed it directly.
+    derives from _Machine_/_MachinePolicy_/_KeyType_/_StateExtension_
+    (<<KLEE-length-rule>> 2); this harness is passed it directly.
     support_ads=False models step 5: the importer's maximum length for the
-    Algorithm is exceeded, so the SCC length is adjusted to exclude the ADS.
+    Machine is exceeded, so the SCC length is adjusted to exclude the ADS.
     """
     M = b2v(scc[0:16])
     imp = sl(M, 45, 32)
@@ -263,7 +263,7 @@ def scc_import(scc: bytes, CSK: int, LST: dict, len_PC=None,
     AD = _ad_segment1(saved_MDH, LST)                    # steps 8-9
     correct, P1 = SCC_Decrypt(AD, 0, 0, SIV, C1, CSK, length_block=length_block)
     if not correct:                                      # step 12
-        return {'status': 'ace_state_import_auth', 'mdh': None,
+        return {'status': 'kl_state_import_auth', 'mdh': None,
                 'content1': None, 'imp_data_len': 0, 'content2': None,
                 'ads_discarded': False}
 
@@ -331,7 +331,7 @@ CONTENT1 = [b2v(bytes([0x10 + i] * 16)) for i in range(4)]
 CONTENT2 = [b2v(bytes([0xA0 + i] * 16)) for i in range(2)]
 
 # The Locality sets exercised: none, one, and several (one per group,
-# which is what <<ACE-locality-indexes>> permits concurrently).
+# which is what <<KLEE-locality-indexes>> permits concurrently).
 LOC_SETS = [(), (2,), (1, 4, 6, 8, 9, 10)]
 
 
@@ -349,7 +349,7 @@ def chk(cond, desc):
 
 def main():
     global ok
-    print("SCC sealing construction (ACE <<ACE-SCC-export>> / <<ACE-SCC-import>>)")
+    print("SCC sealing construction (KLEE <<KLEE-SCC-export>> / <<KLEE-SCC-import>>)")
     print("Anchor level: AESE256, Montmul/POLYVAL and RFC8452_KeyDeriv are")
     print("  STANDARD-ANCHORED (FIPS 197 C.3; RFC 8452 App. A; RFC 8452 App. C.2).")
     print("  The sealing construction itself is a declared RFC 8452 variant (no")
@@ -429,7 +429,7 @@ def main():
         chk(bad == 0,
             f"every single-bit change in {name} fails authentication")
 
-    # Cleared plaintext on failure, per <<ACE-SCC-GCM-SIV-dec>>.
+    # Cleared plaintext on failure, per <<KLEE-SCC-GCM-SIV-dec>>.
     AD = _ad_segment1(mdh, LST)
     corr, P = SCC_Decrypt(AD, 0, 0, b2v(scc[16:32]) ^ 1,
                           [b2v(scc[32 + 16 * i:48 + 16 * i]) for i in range(n)],
@@ -439,7 +439,7 @@ def main():
 
     # A changed Locality Secret table must not open the context.
     r = scc_import(scc, CSK, LST_ALT, len_PC=n)
-    chk(r['status'] == 'ace_state_import_auth',
+    chk(r['status'] == 'kl_state_import_auth',
         "a changed Locality Secret table fails authentication")
     # ... but only when that Locality is actually selected: Locality #3 is in
     # no LOC_SET, so changing LST[3] must leave this SCC importable.
@@ -447,14 +447,14 @@ def main():
         "an unselected Locality Secret does not affect the SCC")
     # A different CSK must not open it either.
     chk(scc_import(scc, CSK ^ 1, LST, len_PC=n)['status']
-        == 'ace_state_import_auth',
+        == 'kl_state_import_auth',
         "a different CSK fails authentication")
     # An SCC sealed under one Locality set does not open under another:
     # the MDH carries the set, so this is the MDH-tamper case made explicit.
     mdh_b = make_mdh(localities=(2,))
     forged = v2b(mdh_b, 16) + scc[16:]
     chk(scc_import(forged, CSK, LST, len_PC=n)['status']
-        == 'ace_state_import_auth',
+        == 'kl_state_import_auth',
         "substituting the MDH's Locality set fails authentication")
 
     # -- (e) the implementation-data segment ---------------------------
@@ -463,7 +463,7 @@ def main():
     scc_i = scc_export(mdh_i, CONTENT1, CSK, LST,
                        IMPQUAL=IMPQUAL, content2=CONTENT2)
     chk(len(scc_i) == 32 + 16 * n + 16 * imp_len,
-        "SCC with AuxDataLen != 0 has the length of <<ACE-data-formats>>")
+        "SCC with AuxDataLen != 0 has the length of <<KLEE-data-formats>>")
     r = scc_import(scc_i, CSK, LST, len_PC=n)
     chk(r['status'] == 'ok' and r['content1'] == CONTENT1
         and r['content2'] == CONTENT2 and not r['ads_discarded'],
@@ -490,7 +490,7 @@ def main():
         and r['content2'] is None,
         "a grafted segment 2 is rejected; segment 1 imports, AuxDataLen -> 0")
     # And SIV2 itself differs between the two, which is what makes the
-    # graft detectable (the <<ACE-SCC-export>> IMPORTANT note).
+    # graft detectable (the <<KLEE-SCC-export>> IMPORTANT note).
     off = 32 + 16 * n
     chk(scc_i[off + 16:off + 32] != scc_b[off + 16:off + 32],
         "SIV2 changes when SIV changes (segment binding)")
@@ -557,7 +557,7 @@ def main():
 
     # -- (f) Error-State SCC -------------------------------------------
     # On entering an Error State the Content is cleared and AuxDataLen set
-    # to 0; ConfigStatus is ace_cfg_complete.  State 24 stands for an
+    # to 0; ConfigStatus is kl_cfg_complete.  State 24 stands for an
     # Error State here; only its presence in the MDH matters.
     for locs_e in LOC_SETS:
         mdh_e = make_mdh(state=24, localities=locs_e)
@@ -579,7 +579,7 @@ def main():
     # Determinism: the construction has no nonce, so sealing twice must give
     # the identical SCC (this is the property the 2^64-block bound rests on).
     chk(scc_export(mdh, CONTENT1, CSK, LST) == scc,
-        "sealing is deterministic (no nonce, <<ACE-SCC-AEAD>> change 2)")
+        "sealing is deterministic (no nonce, <<KLEE-SCC-AEAD>> change 2)")
 
     # -- negative control ---------------------------------------------
     print("\nKAT-EXPECT-FAIL: length-block")
@@ -591,11 +591,11 @@ def main():
           f"length-block restoring the RFC 8452 length block changes the SIV")
     chk(fired, "negative control fired: the length-block omission is observable")
     chk(scc_import(scc_lb, CSK, LST, len_PC=n)['status']
-        == 'ace_state_import_auth',
+        == 'kl_state_import_auth',
         "an SCC sealed with a length block does not import under the spec rule")
 
     # -- regression vectors for the variant ----------------------------
-    print("\nRegression vectors for the ACE sealing variant "
+    print("\nRegression vectors for the KLEE sealing variant "
           "(CSK = 000102..1f, LST[j] = 16 x (0x40+j)):")
     for locs_v in LOC_SETS:
         mdh_v, scc_v = sccs[locs_v]
@@ -610,9 +610,9 @@ def main():
           f"= {scc_export_error_state(mdh_e, CSK, LST).hex()}")
 
     print("\nSPEC-NOTE: the sealing construction has no external vectors by "
-          "design (<<ACE-SCC-AEAD>> omits both the nonce and the length "
+          "design (<<KLEE-SCC-AEAD>> omits both the nonce and the length "
           "block); only its component functions are standard-anchored.")
-    print("SPEC-NOTE: review finding m18 is fixed on BOTH sides. <<ACE-SCC-AEAD>> "
+    print("SPEC-NOTE: review finding m18 is fixed on BOTH sides. <<KLEE-SCC-AEAD>> "
           "puts the segment selector in bit 126 of each AES input the construction "
           "forms: 0 @ sep @ POLYVAL(...)[125:0] for the tag and 1 @ sep @ "
           "SIV[125:32] @ counter for the keystream, with bit 127 still separating "

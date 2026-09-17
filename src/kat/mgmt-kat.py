@@ -1,21 +1,21 @@
 #!/usr/bin/env python3
-"""Architectural-state-machine KAT for the ACE management ISA (Book 1 / Book 2).
+"""Architectural-state-machine KAT for the KLEE management ISA (Book 1 / Book 2).
 
 This harness models the *algorithm-independent* rules of the draft RISC-V ACE
 specification and checks the spec's own invariants and worked examples:
 
-  * the 128-bit MDH field layout (<<ACE-metadata-header>>) -- pack/unpack round
+  * the 128-bit MDH field layout (<<KLEE-metadata-header>>) -- pack/unpack round
     trip with walking-ones patterns on every field boundary, reserved bits zero;
   * the _UsagePolicy_ enforcement matrix and `ace.restrict*` monotonicity;
   * _Locality_ substitution chains and the substituted-never-dropped rule;
-  * the generic _State_ rules 1-14 of <<ACE-State-field>>, including the
+  * the generic _State_ rules 1-14 of <<KLEE-State-field>>, including the
     Error-State entry effects and the 32-byte Error-State export;
   * _ConfigStatus_ gating and its instruction exemption list;
-  * the provisioning / import / export flows of <<ACE-instruction-setst>>
-    against the Book 4 sequences (<<ACE-management-code-snippets>>), in both the
+  * the provisioning / import / export flows of <<KLEE-instruction-setst>>
+    against the Book 4 sequences (<<KLEE-management-code-snippets>>), in both the
     `Zklmv` (ace.mv) and `Zklmem` (ace.load / ace.store) variants, with
     interrupted-transfer resumption;
-  * ACEIOBUF window semantics (`aceiobuflen` / `aceiobuftop` / `acestart`);
+  * KLIOBUF window semantics (`kliobuflen` / `kliobuftop` / `klstart`);
   * _ExpirationDate_ evaluation points and skip conditions;
   * `ace.size` Form A.
 
@@ -37,7 +37,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from common import b2v, v2b, sl, bin_  # noqa: E402  (ACE value conventions)
+from common import b2v, v2b, sl, bin_  # noqa: E402  (KLEE value conventions)
 
 # =====================================================================
 # reporting
@@ -92,13 +92,13 @@ def expect_fail(label, name, got, want):
 
 
 # =====================================================================
-# MDH format  --  <<ACE-metadata-header>>
+# MDH format  --  <<KLEE-metadata-header>>
 # =====================================================================
 
 # (name, hi, lo, reserved?)
 MDH_FIELDS = [
-    ("Algorithm",       11,   0, False),
-    ("AlgorithmPolicy", 13,  12, False),
+    ("Machine",       11,   0, False),
+    ("MachinePolicy", 13,  12, False),
     ("Reserved0",       15,  14, True),
     ("SCProtection",    18,  16, False),
     ("KeyType",         20,  19, False),
@@ -112,7 +112,7 @@ MDH_FIELDS = [
     ("UsagePolicy",     68,  64, False),
     ("Locality",        77,  69, False),
     ("Reserved2",       79,  78, True),
-    ("AlgorithmUse",    95,  80, False),
+    ("MachineUse",    95,  80, False),
     ("ExpirationDate", 115,  96, False),
     ("Reserved3",      127, 116, True),
 ]
@@ -135,7 +135,7 @@ def mdh_new(**kw):
 
 
 def mdh_pack(m):
-    """MDH dict -> 128-bit ACE value."""
+    """MDH dict -> 128-bit KLEE value."""
     v = 0
     for name, hi, lo, _ in MDH_FIELDS:
         w = hi - lo + 1
@@ -147,7 +147,7 @@ def mdh_pack(m):
 
 
 def mdh_unpack(v):
-    """128-bit ACE value -> MDH dict."""
+    """128-bit KLEE value -> MDH dict."""
     return {name: sl(v, hi, lo) for name, hi, lo, _ in MDH_FIELDS}
 
 
@@ -165,7 +165,7 @@ def mdh_lo64(m):
 
 
 # =====================================================================
-# States, ConfigStatus, exceptions  --  <<ACE-State-field>>, <<ACE-ConfigStatus>>
+# States, ConfigStatus, exceptions  --  <<KLEE-State-field>>, <<KLEE-ConfigStatus>>
 # =====================================================================
 
 ST_UNCONFIGURED = 0
@@ -200,7 +200,7 @@ class IllegalInstruction(Exception):
 
 
 class AceException(Exception):
-    """An ACE exception (ace_exc_*), named by its mnemonic suffix."""
+    """An KLEE exception (kl_exc_*), named by its mnemonic suffix."""
 
     def __init__(self, which):
         super().__init__(which)
@@ -208,35 +208,35 @@ class AceException(Exception):
 
 
 # =====================================================================
-# toy algorithm table and the length rule  --  <<ACE-length-rule>>
+# toy algorithm table and the length rule  --  <<KLEE-length-rule>>
 # =====================================================================
 
 # A minimal, self-consistent algorithm table.  Only the *shape* matters: the
-# length rule says PI length depends on (Algorithm, AlgorithmPolicy, KeyType)
+# length rule says PI length depends on (Machine, MachinePolicy, KeyType)
 # only, SCC length on those plus StateExtension and AuxDataLen, and CRF capacity
-# on (Algorithm, AlgorithmPolicy, SCProtection) only.
-ALG_CTR = 0x011      # a symmetric cipher mode: AlgorithmPolicy = enc/dec bits
-ALG_HASH = 0x021     # a hash: AlgorithmPolicy unused (must be zero on restrict)
-ALG_SIG = 0x031      # a signature scheme: AlgorithmPolicy = sign/verify bits
+# on (Machine, MachinePolicy, SCProtection) only.
+ALG_CTR = 0x011      # a symmetric cipher mode: MachinePolicy = enc/dec bits
+ALG_HASH = 0x021     # a hash: MachinePolicy unused (must be zero on restrict)
+ALG_SIG = 0x031      # a signature scheme: MachinePolicy = sign/verify bits
 
 ALG_NAMES = {ALG_CTR: "toy-ctr", ALG_HASH: "toy-hash", ALG_SIG: "toy-sig"}
 
-# algorithms whose AlgorithmPolicy field is not an operation mask
+# algorithms whose MachinePolicy field is not an operation mask
 ALG_NO_POLICY = {ALG_HASH}
 
 MAX_SCPROTECTION = 2  # levels 0..2 implemented; 3-5 reserved, 6-7 custom
 
 
 def alg_supported(m):
-    if m["Algorithm"] not in ALG_NAMES:
+    if m["Machine"] not in ALG_NAMES:
         return False
     if m["SCProtection"] > MAX_SCPROTECTION:
         return False
-    if m["Algorithm"] in ALG_NO_POLICY:
-        if m["AlgorithmPolicy"] != 0:
+    if m["Machine"] in ALG_NO_POLICY:
+        if m["MachinePolicy"] != 0:
             return False
     else:
-        if m["AlgorithmPolicy"] == 0:
+        if m["MachinePolicy"] == 0:
             return False  # "at least one of the bits must be set"
     if m["KeyType"] > 1:
         return False      # 2 and 3 reserved
@@ -245,7 +245,7 @@ def alg_supported(m):
 
 def content_len(m):
     """Bytes of algorithm content, per the length rule's PI dependency set."""
-    alg, apol, kt = m["Algorithm"], m["AlgorithmPolicy"], m["KeyType"]
+    alg, apol, kt = m["Machine"], m["MachinePolicy"], m["KeyType"]
     if kt == 1:
         base = 16                       # a 64-bit SKID, padded to a 128-bit block
     elif alg == ALG_CTR:
@@ -285,8 +285,8 @@ def serialized_len(m):
 
 
 def crf_capacity(m):
-    """CRF capacity in bytes: (Algorithm, AlgorithmPolicy, SCProtection) only."""
-    alg, apol, sc = m["Algorithm"], m["AlgorithmPolicy"], m["SCProtection"]
+    """CRF capacity in bytes: (Machine, MachinePolicy, SCProtection) only."""
+    alg, apol, sc = m["Machine"], m["MachinePolicy"], m["SCProtection"]
     base = {ALG_CTR: 64, ALG_HASH: 48, ALG_SIG: 128}[alg]
     if alg == ALG_CTR and apol == 0b11:
         base += 16
@@ -331,7 +331,7 @@ def toy_unseal(blob, ad):
 
 
 # =====================================================================
-# Localities  --  <<ACE-Localities>>
+# Localities  --  <<KLEE-Localities>>
 # =====================================================================
 
 LOC_HW1 = ("hw1", 1, 0)     # SiPScrt(1) -> ChipFamScrt(2) -> ChipScrt(3)
@@ -378,7 +378,7 @@ def loc_active_count(locality):
 
 
 # =====================================================================
-# the modelled ACE unit
+# the modelled KLEE unit
 # =====================================================================
 
 class CR:
@@ -420,18 +420,18 @@ class CR:
 
 
 class Unit:
-    """A single ACE unit: CRF, ACEIOBUF, and the unprivileged CSRs."""
+    """A single KLEE unit: CRF, KLIOBUF, and the unprivileged CSRs."""
 
     def __init__(self, ncrs=8, maxiobuflen=256, modes=("U", "VU", "VS", "HS", "S", "M", "D"),
                  lst=None, clock=0, crf_capacity_total=1 << 20):
         self.crs = [CR() for _ in range(ncrs)]
-        self.acestart = 0
-        self.acemanagedcr = MANAGEDCR_NONE
-        self.open_op = None      # which management process is open on acemanagedcr
-        self.acemaxiobuflen = maxiobuflen
-        self.aceiobuflen = 0
-        self.aceiobuftop = 0
-        self.aceiobuf = bytearray()
+        self.klstart = 0
+        self.klmanagedcr = MANAGEDCR_NONE
+        self.open_op = None      # which management process is open on klmanagedcr
+        self.klmaxiobuflen = maxiobuflen
+        self.kliobuflen = 0
+        self.kliobuftop = 0
+        self.kliobuf = bytearray()
         self.modes = set(modes)
         self.mode = "M"
         self.clock = clock                  # hours since the ExpirationDate epoch
@@ -441,20 +441,20 @@ class Unit:
         self.crf_free = crf_capacity_total
 
     # ---------------------------------------------------------------- CSRs
-    def write_aceiobuflen(self, n):
-        n = min(n, self.acemaxiobuflen)     # WARL clamp
-        self.aceiobuflen = n
-        self.aceiobuf = bytearray(n)        # write zeroes the buffer ...
-        self.aceiobuftop = n                # ... and sets aceiobuftop
+    def write_kliobuflen(self, n):
+        n = min(n, self.klmaxiobuflen)     # WARL clamp
+        self.kliobuflen = n
+        self.kliobuf = bytearray(n)        # write zeroes the buffer ...
+        self.kliobuftop = n                # ... and sets kliobuftop
         return n
 
-    def write_aceiobuftop(self, n):
-        self.aceiobuftop = min(n, self.aceiobuflen)   # WARL clamp
-        return self.aceiobuftop
+    def write_kliobuftop(self, n):
+        self.kliobuftop = min(n, self.kliobuflen)   # WARL clamp
+        return self.kliobuftop
 
     # ---------------------------------------------------------------- gating
     def usage_allowed(self, m):
-        """The _UsagePolicy_ enforcement matrix of <<ACE-metadata-header>>."""
+        """The _UsagePolicy_ enforcement matrix of <<KLEE-metadata-header>>."""
         up = m["UsagePolicy"]
         mode = self.mode
         if mode == "D":
@@ -487,7 +487,7 @@ class Unit:
         so permitting it in a mode the _UsagePolicy_ excludes grants that mode
         nothing.  ConfigStatus gating and the Error-State no-op still apply; the
         expiration check does not, since ace.restrict* is not one of the
-        evaluation points of <<ACE-Metadata-expiration-date>>.
+        evaluation points of <<KLEE-Metadata-expiration-date>>.
         """
         if cr.cfg != CFG_COMPLETE:
             # ConfigStatus gating: usage of a not-complete CR
@@ -516,12 +516,12 @@ class Unit:
         return self.crs[k].mdh["State"]
 
     def clear(self, k):
-        """ace.clear / ace.setst #0."""
+        """kl.clear / ace.setst #0."""
         self.crs[k].clear()
-        if self.acemanagedcr == k:
-            self.acemanagedcr = MANAGEDCR_NONE
+        if self.klmanagedcr == k:
+            self.klmanagedcr = MANAGEDCR_NONE
             self.open_op = None
-        self.acestart = 0
+        self.klstart = 0
 
     def size_A(self, k):
         """ace.size Form A: size of the buffer needed to export this CR."""
@@ -541,8 +541,8 @@ class Unit:
 
     # -- management --------------------------------------------------
     def _mgmt_gate(self, k):
-        if self.acemanagedcr not in (k, MANAGEDCR_NONE):
-            raise IllegalInstruction("acemanagedcr busy with another CR")
+        if self.klmanagedcr not in (k, MANAGEDCR_NONE):
+            raise IllegalInstruction("klmanagedcr busy with another CR")
 
     def mgmt_provision_start(self, k, ml):
         self._mgmt_gate(k)
@@ -555,10 +555,10 @@ class Unit:
         bad = (m["State"] != 0 or m["StateExtension"] != 0 or m["AuxDataLen"] != 0
                or not mdh_reserved_zero(m) or m["ConfigStatus"] != CFG_COMPLETE)
         if bad:
-            cr.mdh = mdh_new(Algorithm=m["Algorithm"], AlgorithmPolicy=m["AlgorithmPolicy"],
+            cr.mdh = mdh_new(Machine=m["Machine"], MachinePolicy=m["MachinePolicy"],
                              SCProtection=m["SCProtection"], KeyType=m["KeyType"])
             cr.enter_error(ST_INVALID)
-            self.acestart = 0
+            self.klstart = 0
             return
         need = crf_capacity(m)
         if need > self.crf_free:
@@ -569,9 +569,9 @@ class Unit:
         cr.mdh["State"] = ST_READY          # provisioning always yields Ready
         cr.mdh["ConfigStatus"] = CFG_PROVISIONING
         cr.xfer = bytearray(pi_len(m) - 16)
-        self.acemanagedcr = k
+        self.klmanagedcr = k
         self.open_op = "provision"
-        self.acestart = 0
+        self.klstart = 0
         return
 
     def mgmt_import_start(self, k, ml):
@@ -585,7 +585,7 @@ class Unit:
         # fields and the algorithm triple are checked here.
         if not mdh_reserved_zero(m):
             cr.enter_error(ST_INVALID)
-            self.acestart = 0
+            self.klstart = 0
             return
         need = crf_capacity(m)
         if need > self.crf_free:
@@ -595,9 +595,9 @@ class Unit:
         cr.mdh = m
         cr.mdh["ConfigStatus"] = CFG_IMPORTING
         cr.xfer = bytearray(serialized_len(m) - 16)
-        self.acemanagedcr = k
+        self.klmanagedcr = k
         self.open_op = "import"
-        self.acestart = 0
+        self.klstart = 0
         return
 
     def mgmt_export_start(self, k):
@@ -615,13 +615,13 @@ class Unit:
         else:
             # verbatim export of a partially configured CR: no encryption, no tag
             cr.export = bytearray(cr.xfer if cr.xfer is not None else cr.content)
-        self.acemanagedcr = k
+        self.klmanagedcr = k
         self.open_op = "export"
-        self.acestart = 0
+        self.klstart = 0
         return ml
 
     def mgmt_end(self, k, ml=None):
-        """ace.mgmt #ace_cfg_management_end, completing whatever is open on this CR."""
+        """ace.mgmt #kl_cfg_management_end, completing whatever is open on this CR."""
         self._mgmt_gate(k)
         cr = self.crs[k]
         # Which process is being completed is normally implied by _ConfigStatus_;
@@ -668,9 +668,9 @@ class Unit:
             # completing an export of a not-complete CR: nothing to do
             if ml is not None and ml["ConfigStatus"] != CFG_COMPLETE:
                 cr.export = None
-        self.acemanagedcr = MANAGEDCR_NONE
+        self.klmanagedcr = MANAGEDCR_NONE
         self.open_op = None
-        self.acestart = 0
+        self.klstart = 0
 
     # -- CR-directed transfers (Zklmem) ------------------------------
     def load(self, k, mem, base, halt_after=None):
@@ -679,17 +679,17 @@ class Unit:
         if cr.cfg == CFG_COMPLETE:
             raise IllegalInstruction("ace.load on a complete CR")
         n = serialized_len(cr.mdh) - 16
-        self.acestart = min(self.acestart, n)     # acestart clamp for CR transfers
-        j = self.acestart
+        self.klstart = min(self.klstart, n)     # klstart clamp for CR transfers
+        j = self.klstart
         moved = 0
         while j < n:
             if halt_after is not None and moved >= halt_after:
-                self.acestart = j                  # prefix-complete interruption point
+                self.klstart = j                  # prefix-complete interruption point
                 return False
             cr.xfer[j:j + 16] = mem[base + j: base + j + 16]
             j += 16
             moved += 16
-        self.acestart = 0                          # cleared on successful completion
+        self.klstart = 0                          # cleared on successful completion
         return True
 
     def store(self, mem, base, k, halt_after=None):
@@ -699,80 +699,80 @@ class Unit:
             raise IllegalInstruction("ace.store on a complete CR")
         payload = cr.export if cr.export is not None else bytes(cr.xfer or b"")
         n = len(payload)
-        self.acestart = min(self.acestart, n)
-        j = self.acestart
+        self.klstart = min(self.klstart, n)
+        j = self.klstart
         moved = 0
         while j < n:
             if halt_after is not None and moved >= halt_after:
-                self.acestart = j
+                self.klstart = j
                 return False
             mem[base + j: base + j + 16] = payload[j:j + 16]
             j += 16
             moved += 16
-        self.acestart = 0
+        self.klstart = 0
         return True
 
     # -- CR-directed transfers (Zklmv) -------------------------------
     def mv_in(self, k, chunk):
-        """ace.mv Kd, Vs2 : write `chunk` at offset acestart; acestart accumulates."""
+        """ace.mv Kd, Vs2 : write `chunk` at offset klstart; klstart accumulates."""
         cr = self.crs[k]
         if cr.cfg not in (CFG_PROVISIONING, CFG_IMPORTING):
             raise IllegalInstruction("ace.mv into a CR that is not being configured")
         if len(chunk) % 16:
             cr.enter_error(ST_INVALID)
             return
-        j = self.acestart
+        j = self.klstart
         cr.xfer[j:j + len(chunk)] = chunk
-        self.acestart = j + len(chunk)   # NOT cleared: the documented ace.mv exemption
+        self.klstart = j + len(chunk)   # NOT cleared: the documented ace.mv exemption
 
     def mv_out(self, k, nbytes):
-        """ace.mv Vd, Ks1 : read `nbytes` at offset acestart; acestart accumulates."""
+        """ace.mv Vd, Ks1 : read `nbytes` at offset klstart; klstart accumulates."""
         cr = self.crs[k]
         if cr.cfg != CFG_EXPORTING:
             raise IllegalInstruction("ace.mv out of a CR that is not exporting")
         if nbytes % 16:
             cr.enter_error(ST_INVALID)
             return b""
-        j = self.acestart
+        j = self.klstart
         out = bytes(cr.export[j:j + nbytes])
-        self.acestart = j + nbytes
+        self.klstart = j + nbytes
         return out
 
-    # -- ACEIOBUF transfers ------------------------------------------
+    # -- KLIOBUF transfers ------------------------------------------
     def input_(self, mem, base, Xl, halt_after=None):
-        if self.aceiobuflen == 0:
+        if self.kliobuflen == 0:
             raise AceException("unconfigured_buffer")
-        end = min(Xl, self.aceiobuftop)
-        if Xl == 0 or self.acestart >= end:
-            return "noop"                 # acestart unchanged (the m1 reading)
-        j = self.acestart
+        end = min(Xl, self.kliobuftop)
+        if Xl == 0 or self.klstart >= end:
+            return "noop"                 # klstart unchanged (the m1 reading)
+        j = self.klstart
         moved = 0
         while j < end:
             if halt_after is not None and moved >= halt_after:
-                self.acestart = j
+                self.klstart = j
                 return False
-            self.aceiobuf[j] = mem[base + j]
+            self.kliobuf[j] = mem[base + j]
             j += 1
             moved += 1
-        self.acestart = 0
+        self.klstart = 0
         return True
 
     def output(self, mem, base, Xl, halt_after=None):
-        if self.aceiobuflen == 0:
+        if self.kliobuflen == 0:
             raise AceException("unconfigured_buffer")
-        end = min(Xl, self.aceiobuftop)
-        if Xl == 0 or self.acestart >= end:
+        end = min(Xl, self.kliobuftop)
+        if Xl == 0 or self.klstart >= end:
             return "noop"
-        j = self.acestart
+        j = self.klstart
         moved = 0
         while j < end:
             if halt_after is not None and moved >= halt_after:
-                self.acestart = j
+                self.klstart = j
                 return False
-            mem[base + j] = self.aceiobuf[j]
+            mem[base + j] = self.kliobuf[j]
             j += 1
             moved += 1
-        self.acestart = 0
+        self.klstart = 0
         return True
 
     # -- usage -------------------------------------------------------
@@ -825,16 +825,16 @@ class Unit:
 
     # -- ace.restrict* -----------------------------------------------
     def restrictl(self, k, xs):
-        """AlgorithmPolicy and SCProtection, in MDH[63:0].  Not usage-controlled."""
+        """MachinePolicy and SCProtection, in MDH[63:0].  Not usage-controlled."""
         cr = self.crs[k]
         if self._check_usage_gates(cr, usage_controlled=False) == "noop":
             return "noop"
         m = cr.mdh
-        if xs["AlgorithmPolicy"] != 0:
-            if m["Algorithm"] in ALG_NO_POLICY:
+        if xs["MachinePolicy"] != 0:
+            if m["Machine"] in ALG_NO_POLICY:
                 cr.enter_error(ST_INVALID)
                 return "invalid"
-            new, cur = xs["AlgorithmPolicy"], m["AlgorithmPolicy"]
+            new, cur = xs["MachinePolicy"], m["MachinePolicy"]
             if new & ~cur:                              # would (re)enable something
                 cr.enter_error(ST_INVALID)
                 return "invalid"
@@ -846,7 +846,7 @@ class Unit:
             if need is not None and not (new & need):
                 cr.enter_error(ST_INVALID)
                 return "invalid"
-            m["AlgorithmPolicy"] = new
+            m["MachinePolicy"] = new
         if xs["SCProtection"] != 0:
             if xs["SCProtection"] < m["SCProtection"]:
                 cr.enter_error(ST_INVALID)
@@ -855,7 +855,7 @@ class Unit:
         return "ok"
 
     def restricth(self, k, xs):
-        """Locality, UsagePolicy, ExpirationDate, AlgorithmUse, in MDH[127:64].
+        """Locality, UsagePolicy, ExpirationDate, MachineUse, in MDH[127:64].
         Not usage-controlled."""
         cr = self.crs[k]
         if self._check_usage_gates(cr, usage_controlled=False) == "noop":
@@ -888,8 +888,8 @@ class Unit:
             if m["ExpirationDate"] == 0 or ed <= m["ExpirationDate"]:
                 m["ExpirationDate"] = ed
             # a larger value is silently not copied (see the INFO line on restricth)
-        if xs["AlgorithmUse"] != 0:
-            m["AlgorithmUse"] = xs["AlgorithmUse"]
+        if xs["MachineUse"] != 0:
+            m["MachineUse"] = xs["MachineUse"]
         return "ok"
 
     def restrictv(self, k, xs):
@@ -951,7 +951,7 @@ def loc_resolve(unit, locality):
 # =====================================================================
 
 def ctr_mdh(**kw):
-    base = dict(Algorithm=ALG_CTR, AlgorithmPolicy=0b11, KeyType=0)
+    base = dict(Machine=ALG_CTR, MachinePolicy=0b11, KeyType=0)
     base.update(kw)
     return mdh_new(**base)
 
@@ -978,7 +978,7 @@ def provision(unit, k, ml, content, use_mv=False, chunk=16):
 # =====================================================================
 
 def test_mdh_format():
-    section("1.  MDH format  --  <<ACE-metadata-header>>")
+    section("1.  MDH format  --  <<KLEE-metadata-header>>")
 
     total = sum(f[1] - f[2] + 1 for f in MDH_FIELDS)
     check("MDH fields tile all 128 bits", total, 128)
@@ -1015,12 +1015,12 @@ def test_mdh_format():
     check("all-ones MDH round trips", mdh_unpack(mdh_pack(m)), m)
 
     # a realistic MDH, checked field by field against hand-computed bit positions
-    m = mdh_new(Algorithm=ALG_CTR, AlgorithmPolicy=0b01, SCProtection=2, KeyType=1,
+    m = mdh_new(Machine=ALG_CTR, MachinePolicy=0b01, SCProtection=2, KeyType=1,
                 State=ST_ENCRYPT, StateExtension=0b0101, ConfigStatus=CFG_EXPORTING,
                 AuxDataLen=3, AuxInfo=0x1234, SystemFormat=1, UsagePolicy=0b10011,
-                Locality=0b101_10_11_10, AlgorithmUse=0xBEEF, ExpirationDate=0xABCDE)
+                Locality=0b101_10_11_10, MachineUse=0xBEEF, ExpirationDate=0xABCDE)
     v = mdh_pack(m)
-    check("sample MDH: Algorithm at [11:0]", sl(v, 11, 0), ALG_CTR)
+    check("sample MDH: Machine at [11:0]", sl(v, 11, 0), ALG_CTR)
     check("sample MDH: SCProtection at [18:16]", sl(v, 18, 16), 2)
     check("sample MDH: State at [25:21]", sl(v, 25, 21), ST_ENCRYPT)
     check("sample MDH: ConfigStatus at [31:30]", sl(v, 31, 30), CFG_EXPORTING)
@@ -1040,33 +1040,33 @@ def test_mdh_format():
         check_true(f"reserved {name} bit {lo} set is caught", not mdh_reserved_zero(bad))
 
     # MDH[63:0] carries every field the length rule names
-    lo_fields = ("Algorithm", "AlgorithmPolicy", "KeyType", "StateExtension",
+    lo_fields = ("Machine", "MachinePolicy", "KeyType", "StateExtension",
                  "AuxDataLen", "SCProtection")
     check_true("every length-determining field lies in MDH[63:0]",
                all(FIELD[f][1] <= 63 for f in lo_fields))
 
     # notation cross-check: the byte string of an MDH is little-endian
     check("mdh_bytes is the little-endian image (common.v2b)",
-          mdh_bytes(mdh_new(Algorithm=0x123)).hex(),
+          mdh_bytes(mdh_new(Machine=0x123)).hex(),
           v2b(0x123, 16).hex())
     check("bin_(n, m) agrees with the field encoding", bin_(ST_ENCRYPT, 5), ST_ENCRYPT)
     check("b2v inverts mdh_bytes", b2v(mdh_bytes(m)), mdh_pack(m))
 
 
 def test_length_rule():
-    section("2.  The length rule  --  <<ACE-length-rule>>")
+    section("2.  The length rule  --  <<KLEE-length-rule>>")
 
     base = ctr_mdh()
-    # PI length depends only on Algorithm, AlgorithmPolicy, KeyType
+    # PI length depends only on Machine, MachinePolicy, KeyType
     for fld, val in (("SCProtection", 2), ("StateExtension", 0), ("UsagePolicy", 0b1111),
                      ("Locality", 0b010), ("ExpirationDate", 0x1234),
-                     ("AlgorithmUse", 0xFFFF), ("AuxInfo", 0x33)):
+                     ("MachineUse", 0xFFFF), ("AuxInfo", 0x33)):
         m = ctr_mdh(**{fld: val})
         check(f"PI length independent of {fld}", pi_len(m), pi_len(base))
 
-    # SCC length depends on Algorithm/AlgorithmPolicy/KeyType/StateExtension/AuxDataLen
+    # SCC length depends on Machine/MachinePolicy/KeyType/StateExtension/AuxDataLen
     for fld, val in (("SCProtection", 2), ("UsagePolicy", 0b1111), ("Locality", 0b010),
-                     ("ExpirationDate", 0x1234), ("AlgorithmUse", 0xFFFF),
+                     ("ExpirationDate", 0x1234), ("MachineUse", 0xFFFF),
                      ("ConfigStatus", CFG_EXPORTING)):
         m = ctr_mdh(**{fld: val})
         check(f"SCC length independent of {fld}", scc_len(m), scc_len(base))
@@ -1075,7 +1075,7 @@ def test_length_rule():
     check("SCC length grows by 16 per AuxDataLen unit",
           scc_len(ctr_mdh(AuxDataLen=4)), scc_len(base) + 64)
 
-    # CRF capacity depends only on Algorithm, AlgorithmPolicy, SCProtection
+    # CRF capacity depends only on Machine, MachinePolicy, SCProtection
     for fld, val in (("KeyType", 1), ("StateExtension", 3), ("AuxDataLen", 7),
                      ("UsagePolicy", 0b1111), ("ExpirationDate", 9)):
         m = ctr_mdh(**{fld: val})
@@ -1168,19 +1168,19 @@ def test_usage_policy():
     try:
         u.exec_(0)
         check("ace.exec in a denied mode raises privilege_violation", "no exception",
-              "ace_exc_privilege_violation")
+              "kl_exc_privilege_violation")
     except AceException as e:
         check("ace.exec in a denied mode raises privilege_violation", e.which,
               "privilege_violation")
     check("denied usage leaves State unchanged", u.getst(0), ST_READY)
-    check_true("ace.getmd* is not usage-controlled", u.getmdv(0)["Algorithm"] == ALG_CTR)
+    check_true("ace.getmd* is not usage-controlled", u.getmdv(0)["Machine"] == ALG_CTR)
     check("ace.size is not usage-controlled", u.size_A(0), scc_len(u.crs[0].mdh))
-    u.setst(0, ST_UNCONFIGURED)          # ace.clear is never usage-controlled
-    check("ace.clear is not usage-controlled", u.getst(0), ST_UNCONFIGURED)
+    u.setst(0, ST_UNCONFIGURED)          # kl.clear is never usage-controlled
+    check("kl.clear is not usage-controlled", u.getst(0), ST_UNCONFIGURED)
 
 
 def test_restrict():
-    section("4.  ace.restrict* monotonicity  --  <<ACE-instruction-restrict>>")
+    section("4.  ace.restrict* monotonicity  --  <<KLEE-instruction-restrict>>")
 
     clen = content_len(ctr_mdh())
 
@@ -1236,29 +1236,29 @@ def test_restrict():
     check("SCProtection weakening: Error-State entry cleared the content",
           u.crs[0].content, b"")
 
-    # -- AlgorithmPolicy: no disabled operation may be re-enabled
+    # -- MachinePolicy: no disabled operation may be re-enabled
     u = fresh_unit()
-    provision(u, 0, ctr_mdh(AlgorithmPolicy=0b01), b"\x11" * content_len(ctr_mdh(AlgorithmPolicy=0b01)))
-    r = u.restrictl(0, mdh_new(AlgorithmPolicy=0b11))
-    check("re-enabling an AlgorithmPolicy bit invalidates the CR", (r, u.getst(0)),
+    provision(u, 0, ctr_mdh(MachinePolicy=0b01), b"\x11" * content_len(ctr_mdh(MachinePolicy=0b01)))
+    r = u.restrictl(0, mdh_new(MachinePolicy=0b11))
+    check("re-enabling a MachinePolicy bit invalidates the CR", (r, u.getst(0)),
           ("invalid", ST_INVALID))
     u = fresh_unit()
-    provision(u, 0, ctr_mdh(AlgorithmPolicy=0b11), b"\x11" * content_len(ctr_mdh()))
-    check("narrowing AlgorithmPolicy is allowed",
-          (u.restrictl(0, mdh_new(AlgorithmPolicy=0b01)), u.crs[0].mdh["AlgorithmPolicy"]),
+    provision(u, 0, ctr_mdh(MachinePolicy=0b11), b"\x11" * content_len(ctr_mdh()))
+    check("narrowing MachinePolicy is allowed",
+          (u.restrictl(0, mdh_new(MachinePolicy=0b01)), u.crs[0].mdh["MachinePolicy"]),
           ("ok", 0b01))
-    # an algorithm that does not use AlgorithmPolicy must be given zero
+    # an algorithm that does not use MachinePolicy must be given zero
     u = fresh_unit()
-    hm = mdh_new(Algorithm=ALG_HASH, AlgorithmPolicy=0)
+    hm = mdh_new(Machine=ALG_HASH, MachinePolicy=0)
     provision(u, 0, hm, b"\x22" * content_len(hm))
-    r = u.restrictl(0, mdh_new(AlgorithmPolicy=0b01))
-    check("nonzero AlgorithmPolicy for an algorithm that does not use it invalidates",
+    r = u.restrictl(0, mdh_new(MachinePolicy=0b01))
+    check("nonzero MachinePolicy for an algorithm that does not use it invalidates",
           (r, u.getst(0)), ("invalid", ST_INVALID))
     # disabling the operation the current State requires
     u = fresh_unit()
-    provision(u, 0, ctr_mdh(AlgorithmPolicy=0b11), b"\x11" * content_len(ctr_mdh()))
+    provision(u, 0, ctr_mdh(MachinePolicy=0b11), b"\x11" * content_len(ctr_mdh()))
     u.setst(0, ST_ENCRYPT)
-    r = u.restrictl(0, mdh_new(AlgorithmPolicy=0b10))
+    r = u.restrictl(0, mdh_new(MachinePolicy=0b10))
     check("disabling the operation required by the current State invalidates",
           (r, u.getst(0)), ("invalid", ST_INVALID))
 
@@ -1332,7 +1332,7 @@ def test_restrict():
 
 
 def test_localities():
-    section("5.  Locality substitution  --  <<ACE-Localities>>")
+    section("5.  Locality substitution  --  <<KLEE-Localities>>")
 
     full = set(range(11))
     # SiPScrt unconfigured -> ChipFamScrt substituted
@@ -1384,14 +1384,14 @@ def test_localities():
     check("unresolvable Locality invalidates the CR at provisioning completion",
           u.getst(0), ST_INVALID)
 
-    info("Locality encoding [5:4] = 3 is now declared reserved by <<ACE-Localities>> "
+    info("Locality encoding [5:4] = 3 is now declared reserved by <<KLEE-Localities>> "
          "(review m9, fixed): a PI or SCC carrying it is invalid Metadata and the CR "
          "transitions to Error State Invalid. Previously the spec stated no behaviour "
          "for it and the model had to choose one.")
 
 
 def test_state_machine():
-    section("6.  Generic State rules  --  <<ACE-State-field>> rules 1-14")
+    section("6.  Generic State rules  --  <<KLEE-State-field>> rules 1-14")
 
     clen = content_len(ctr_mdh())
 
@@ -1454,8 +1454,8 @@ def test_state_machine():
               cr.mdh["ConfigStatus"], CFG_COMPLETE)
         check(f"rule 7 (State {st}): State field reflects the Error State",
               cr.mdh["State"], st)
-        check(f"rule 7 (State {st}): the MDH is retained (Algorithm survives)",
-              (cr.mdh["Algorithm"], before != 0), (ALG_CTR, True))
+        check(f"rule 7 (State {st}): the MDH is retained (Machine survives)",
+              (cr.mdh["Machine"], before != 0), (ALG_CTR, True))
         # rule 9: the export of an Error-State CR is 32 bytes
         check(f"rule 9 (State {st}): ace.size returns 32", u.size_A(0), 32)
         # rule 11: getmd* still works
@@ -1496,7 +1496,7 @@ def test_state_machine():
 
 
 def test_config_status_gating():
-    section("7.  ConfigStatus gating  --  <<ACE-ConfigStatus>>")
+    section("7.  ConfigStatus gating  --  <<KLEE-ConfigStatus>>")
 
     clen = content_len(ctr_mdh())
     ml = ctr_mdh()
@@ -1535,7 +1535,7 @@ def test_config_status_gating():
                   e.which, "privilege_violation")
 
         # the exemption list
-        check(f"exempt on a {opener} CR: ace.getmd*", u.getmdv(0)["Algorithm"], ALG_CTR)
+        check(f"exempt on a {opener} CR: ace.getmd*", u.getmdv(0)["Machine"], ALG_CTR)
         check(f"exempt on a {opener} CR: ace.getst", u.getst(0),
               ST_READY if cfg == CFG_PROVISIONING else 0)
         check(f"exempt on a {opener} CR: ace.size",
@@ -1546,7 +1546,7 @@ def test_config_status_gating():
         u.setst(0, ST_INVALID)
         check(f"exempt on a {opener} CR: setst to an Error State", u.getst(0), ST_INVALID)
         u.setst(0, ST_UNCONFIGURED)
-        check(f"exempt on a {opener} CR: setst to Unconfigured (ace.clear)",
+        check(f"exempt on a {opener} CR: setst to Unconfigured (kl.clear)",
               u.crs[0].is_unconfigured(), True)
 
     # ace.load / ace.store / ace.mv on a complete CR: illegal instruction
@@ -1583,17 +1583,17 @@ def test_management_flows():
     u = fresh_unit()
     u.mgmt_provision_start(0, ml)
     check("provision start: ConfigStatus = provisioning", u.crs[0].cfg, CFG_PROVISIONING)
-    check("provision start: acestart cleared", u.acestart, 0)
-    check("provision start: acemanagedcr holds the CR number", u.acemanagedcr, 0)
+    check("provision start: klstart cleared", u.klstart, 0)
+    check("provision start: klmanagedcr holds the CR number", u.klmanagedcr, 0)
     check("provision start: State is Ready", u.getst(0), ST_READY)
     pi = bytearray(mdh_bytes(u.crs[0].mdh) + content)
     check("ace.size Form A while provisioning is the PI length", u.size_A(0), pi_len(ml))
     u.load(0, pi, 16)                      # memory base <-> serialized offset 16
-    check("ace.load: acestart cleared on completion", u.acestart, 0)
+    check("ace.load: klstart cleared on completion", u.klstart, 0)
     u.mgmt_end(0)
     check("provision end: ConfigStatus = complete", u.crs[0].cfg, CFG_COMPLETE)
-    check("provision end: acestart cleared", u.acestart, 0)
-    check("provision end: acemanagedcr released", u.acemanagedcr, MANAGEDCR_NONE)
+    check("provision end: klstart cleared", u.klstart, 0)
+    check("provision end: klmanagedcr released", u.klmanagedcr, MANAGEDCR_NONE)
     check("provision end: content is what the PI carried", u.crs[0].content, content)
     check("ace.size Form A when complete is the SCC length", u.size_A(0), scc_len(ml))
 
@@ -1602,34 +1602,34 @@ def test_management_flows():
     u2.mgmt_provision_start(0, ml)
     starts = []
     for off in range(0, clen, 16):
-        starts.append(u2.acestart)
+        starts.append(u2.klstart)
         u2.mv_in(0, content[off:off + 16])
-    check("ace.mv accumulates acestart across instructions", starts,
+    check("ace.mv accumulates klstart across instructions", starts,
           list(range(0, clen, 16)))
-    check("ace.mv: acestart is NOT cleared on completion (the documented exemption)",
-          u2.acestart, clen)
+    check("ace.mv: klstart is NOT cleared on completion (the documented exemption)",
+          u2.klstart, clen)
     u2.mgmt_end(0)
     check("Zklmv and Zklmem provisioning agree",
           (u2.crs[0].content, u2.crs[0].cfg), (u.crs[0].content, u.crs[0].cfg))
-    check("ace.mgmt end clears the accumulated acestart", u2.acestart, 0)
+    check("ace.mgmt end clears the accumulated klstart", u2.klstart, 0)
 
     # -- export of a complete CR, then re-import ---------------------
     saved_ml = u.mgmt_export_start(0)
     check("export start: ml carries ConfigStatus = complete",
           saved_ml["ConfigStatus"], CFG_COMPLETE)
-    check("export start: acestart cleared", u.acestart, 0)
+    check("export start: klstart cleared", u.klstart, 0)
     n = scc_len(ml)
     mem = bytearray(n)
     mem[0:16] = mdh_bytes(saved_ml)         # software stores the MDH itself
     u.store(mem, 16, 0)
-    check("ace.store: acestart cleared on completion", u.acestart, 0)
+    check("ace.store: klstart cleared on completion", u.klstart, 0)
     check("ace.store wrote exactly the SCC payload", len(mem), n)
     check_true("the exported payload is not the plaintext content",
                bytes(mem[16:16 + clen]) != content)
     u.mgmt_end(0, saved_ml)
     check("export end: the CR is usable again", u.crs[0].cfg, CFG_COMPLETE)
     check("export end: the content was restored", u.crs[0].content, content)
-    check("export end: acemanagedcr released", u.acemanagedcr, MANAGEDCR_NONE)
+    check("export end: klmanagedcr released", u.klmanagedcr, MANAGEDCR_NONE)
 
     # re-import into a different CR, Zklmem
     v = fresh_unit()
@@ -1637,7 +1637,7 @@ def test_management_flows():
     check("ace.size Form B of the stored MDH is the SCC length", v.size_B(imported_ml), n)
     v.mgmt_import_start(1, imported_ml)
     check("import start: ConfigStatus = importing", v.crs[1].cfg, CFG_IMPORTING)
-    check("import start: acestart cleared", v.acestart, 0)
+    check("import start: klstart cleared", v.klstart, 0)
     v.load(1, mem, 16)
     v.mgmt_end(1, imported_ml)
     check("import end: ConfigStatus = complete", v.crs[1].cfg, CFG_COMPLETE)
@@ -1692,26 +1692,26 @@ def test_management_flows():
     # unsupported algorithm raises rather than invalidating
     p = fresh_unit()
     try:
-        p.mgmt_provision_start(0, mdh_new(Algorithm=0x777, AlgorithmPolicy=1))
-        check("an unsupported Algorithm raises ace_exc_unsupported", "none", "unsupported")
+        p.mgmt_provision_start(0, mdh_new(Machine=0x777, MachinePolicy=1))
+        check("an unsupported Machine raises kl_exc_unsupported", "none", "unsupported")
     except AceException as e:
-        check("an unsupported Algorithm raises ace_exc_unsupported", e.which, "unsupported")
+        check("an unsupported Machine raises kl_exc_unsupported", e.which, "unsupported")
     p = fresh_unit()
     try:
         p.mgmt_provision_start(0, ctr_mdh(SCProtection=5))
-        check("an unsupported SCProtection raises ace_exc_unsupported", "none", "unsupported")
+        check("an unsupported SCProtection raises kl_exc_unsupported", "none", "unsupported")
     except AceException as e:
-        check("an unsupported SCProtection raises ace_exc_unsupported", e.which, "unsupported")
+        check("an unsupported SCProtection raises kl_exc_unsupported", e.which, "unsupported")
 
     # out of memory
     p = fresh_unit(crf_capacity_total=8)
     try:
         p.mgmt_provision_start(0, ml)
-        check("insufficient CRF capacity raises ace_exc_out_of_memory", "none", "out_of_memory")
+        check("insufficient CRF capacity raises kl_exc_out_of_memory", "none", "out_of_memory")
     except AceException as e:
-        check("insufficient CRF capacity raises ace_exc_out_of_memory", e.which, "out_of_memory")
+        check("insufficient CRF capacity raises kl_exc_out_of_memory", e.which, "out_of_memory")
 
-    # acemanagedcr interlock
+    # klmanagedcr interlock
     p = fresh_unit()
     p.mgmt_provision_start(0, ml)
     try:
@@ -1735,7 +1735,7 @@ def test_management_flows():
           partial_ml["ConfigStatus"], CFG_PROVISIONING)
     out = bytearray(pi_len(ml))
     out[0:16] = mdh_bytes(partial_ml)
-    u.acestart = 0
+    u.klstart = 0
     u.store(out, 16, 0)
     check("the partial export is verbatim (unencrypted)",
           bytes(out[16:32]), content[0:16])
@@ -1755,7 +1755,7 @@ def test_management_flows():
     check("re-import of a partial export leaves the CR resumable",
           bytes(v.crs[2].xfer[0:16]), content[0:16])
     # and the resumed provisioning can be finished
-    v.acestart = 16
+    v.klstart = 16
     v.load(2, pi, 16)
     v.mgmt_end(2)
     check("a re-imported partial provisioning can be completed",
@@ -1783,9 +1783,9 @@ def test_management_flows():
 
     info("C1: the current text defines the mapping explicitly -- 'the j-th byte after "
          "the MDH is loaded to/saved from memory address Xs1 + %offset + j' -- and "
-         "ace.mgmt now clears acestart rather than setting it to 16. Modelled that way: "
+         "ace.mgmt now clears klstart rather than setting it to 16. Modelled that way: "
          "the memory base passed to ace.load/ace.store corresponds to serialized offset "
-         "16, and acestart counts payload bytes from 0.")
+         "16, and klstart counts payload bytes from 0.")
 
 
 def test_resumption():
@@ -1804,32 +1804,32 @@ def test_resumption():
     mem[16:] = blob
     done = u.load(0, mem, 16, halt_after=32)
     check("ace.load interrupted: reports incompletion", done, False)
-    check("ace.load interrupted: acestart is the prefix-complete offset", u.acestart, 32)
-    saved = u.acestart
-    u.acestart = 0xDEAD                     # a context switch clobbers the CSR
-    u.acestart = saved                      # ... and restores it
+    check("ace.load interrupted: klstart is the prefix-complete offset", u.klstart, 32)
+    saved = u.klstart
+    u.klstart = 0xDEAD                     # a context switch clobbers the CSR
+    u.klstart = saved                      # ... and restores it
     done = u.load(0, mem, 16)
     check("ace.load resumed: completes", done, True)
-    check("ace.load resumed: acestart cleared", u.acestart, 0)
+    check("ace.load resumed: klstart cleared", u.klstart, 0)
     check("ace.load resumed: every byte transferred exactly once", bytes(u.crs[0].xfer), blob)
 
     # resumption offsets both memory and CR by j
     u2 = fresh_unit()
     u2.mgmt_import_start(0, dict(ml, ConfigStatus=CFG_COMPLETE))
-    u2.acestart = 32
+    u2.klstart = 32
     u2.load(0, mem, 16)
-    check("ace.load from acestart=32 leaves the first 32 bytes untouched",
+    check("ace.load from klstart=32 leaves the first 32 bytes untouched",
           bytes(u2.crs[0].xfer[0:32]), bytes(32))
-    check("ace.load from acestart=32 places memory base+32 at payload offset 32",
+    check("ace.load from klstart=32 places memory base+32 at payload offset 32",
           bytes(u2.crs[0].xfer[32:]), blob[32:])
 
-    # acestart above the transfer size is clamped
+    # klstart above the transfer size is clamped
     u3 = fresh_unit()
     u3.mgmt_import_start(0, dict(ml, ConfigStatus=CFG_COMPLETE))
-    u3.acestart = n + 1000
+    u3.klstart = n + 1000
     u3.load(0, mem, 16)
-    check("acestart above the PI/SCC size is clamped to it (no transfer, then cleared)",
-          (u3.acestart, bytes(u3.crs[0].xfer)), (0, bytes(n)))
+    check("klstart above the PI/SCC size is clamped to it (no transfer, then cleared)",
+          (u3.klstart, bytes(u3.crs[0].xfer)), (0, bytes(n)))
 
     # -- ace.store ---------------------------------------------------
     u = fresh_unit()
@@ -1841,65 +1841,65 @@ def test_resumption():
     ref = bytes(u.crs[0].export)
     done = u.store(out, 16, 0, halt_after=16)
     check("ace.store interrupted: reports incompletion", done, False)
-    check("ace.store interrupted: acestart is the prefix-complete offset", u.acestart, 16)
+    check("ace.store interrupted: klstart is the prefix-complete offset", u.klstart, 16)
     check("ace.store interrupted: only the prefix was written",
           bytes(out[16:32]), ref[0:16])
     check("ace.store interrupted: the tail is untouched",
           bytes(out[32:]), bytes(total - 32))
-    saved = u.acestart
-    u.acestart = 0
-    u.acestart = saved
+    saved = u.klstart
+    u.klstart = 0
+    u.klstart = saved
     u.store(out, 16, 0)
     check("ace.store resumed: the whole payload is in memory", bytes(out[16:]), ref)
-    check("ace.store resumed: acestart cleared", u.acestart, 0)
+    check("ace.store resumed: klstart cleared", u.klstart, 0)
 
     # -- ace.input / ace.output --------------------------------------
     u = fresh_unit()
-    u.write_aceiobuflen(64)
+    u.write_kliobuflen(64)
     src = bytes((0x10 + i) & 0xFF for i in range(64))
     mem = bytearray(src)
     done = u.input_(mem, 0, 64, halt_after=20)
     check("ace.input interrupted: reports incompletion", done, False)
-    check("ace.input interrupted: acestart is the byte offset", u.acestart, 20)
+    check("ace.input interrupted: klstart is the byte offset", u.klstart, 20)
     check("ace.input interrupted: only the prefix landed in the buffer",
-          bytes(u.aceiobuf[0:20]), src[0:20])
+          bytes(u.kliobuf[0:20]), src[0:20])
     check("ace.input interrupted: the rest of the buffer is untouched",
-          bytes(u.aceiobuf[20:]), bytes(44))
-    saved = u.acestart
-    u.acestart = 999
-    u.acestart = saved
+          bytes(u.kliobuf[20:]), bytes(44))
+    saved = u.klstart
+    u.klstart = 999
+    u.klstart = saved
     done = u.input_(mem, 0, 64)
     check("ace.input resumed: completes", done, True)
-    check("ace.input resumed: acestart cleared on success", u.acestart, 0)
-    check("ace.input resumed: the buffer matches memory", bytes(u.aceiobuf), src)
+    check("ace.input resumed: klstart cleared on success", u.klstart, 0)
+    check("ace.input resumed: the buffer matches memory", bytes(u.kliobuf), src)
 
     dst = bytearray(64)
     done = u.output(dst, 0, 64, halt_after=48)
-    check("ace.output interrupted: acestart is the byte offset", u.acestart, 48)
+    check("ace.output interrupted: klstart is the byte offset", u.klstart, 48)
     check("ace.output interrupted: only the prefix was written", bytes(dst[0:48]), src[0:48])
     check("ace.output interrupted: the tail is untouched", bytes(dst[48:]), bytes(16))
     u.output(dst, 0, 64)
     check("ace.output resumed: memory matches the buffer", bytes(dst), src)
-    check("ace.output resumed: acestart cleared on success", u.acestart, 0)
+    check("ace.output resumed: klstart cleared on success", u.klstart, 0)
 
     # resumption offsets both sides by j
-    u.write_aceiobuflen(32)
+    u.write_kliobuflen(32)
     mem = bytearray(bytes((0xC0 + i) & 0xFF for i in range(32)))
-    u.acestart = 8
+    u.klstart = 8
     u.input_(mem, 0, 32)
-    check("ace.input at acestart=8: buffer bytes below 8 untouched",
-          bytes(u.aceiobuf[0:8]), bytes(8))
-    check("ace.input at acestart=8: memory base+j goes to buffer byte j",
-          bytes(u.aceiobuf[8:]), bytes(mem[8:]))
+    check("ace.input at klstart=8: buffer bytes below 8 untouched",
+          bytes(u.kliobuf[0:8]), bytes(8))
+    check("ace.input at klstart=8: memory base+j goes to buffer byte j",
+          bytes(u.kliobuf[8:]), bytes(mem[8:]))
 
 
-def test_aceiobuf():
-    section("10.  ACEIOBUF window semantics  --  aceiobuflen / aceiobuftop / acestart")
+def test_kliobuf():
+    section("10.  KLIOBUF window semantics  --  kliobuflen / kliobuftop / klstart")
 
     u = fresh_unit(maxiobuflen=128)
-    check("aceiobuflen out of reset is 0", u.aceiobuflen, 0)
-    check("aceiobuftop out of reset is 0", u.aceiobuftop, 0)
-    check("acestart out of reset is 0", u.acestart, 0)
+    check("kliobuflen out of reset is 0", u.kliobuflen, 0)
+    check("kliobuftop out of reset is 0", u.kliobuftop, 0)
+    check("klstart out of reset is 0", u.klstart, 0)
 
     # unconfigured buffer
     try:
@@ -1908,97 +1908,97 @@ def test_aceiobuf():
     except AceException as e:
         check("ace.input on an unconfigured buffer raises", e.which, "unconfigured_buffer")
 
-    # writing aceiobuflen zeroes the buffer and sets aceiobuftop
-    u.write_aceiobuflen(64)
-    u.aceiobuf[0:4] = b"\xFF\xFF\xFF\xFF"
-    check("aceiobuflen write sets aceiobuftop to the same value", u.aceiobuftop, 64)
-    u.write_aceiobuflen(64)                 # re-writing the same value
-    check("re-writing aceiobuflen zeroes the buffer", bytes(u.aceiobuf), bytes(64))
-    check("re-writing aceiobuflen re-sets aceiobuftop", u.aceiobuftop, 64)
+    # writing kliobuflen zeroes the buffer and sets kliobuftop
+    u.write_kliobuflen(64)
+    u.kliobuf[0:4] = b"\xFF\xFF\xFF\xFF"
+    check("kliobuflen write sets kliobuftop to the same value", u.kliobuftop, 64)
+    u.write_kliobuflen(64)                 # re-writing the same value
+    check("re-writing kliobuflen zeroes the buffer", bytes(u.kliobuf), bytes(64))
+    check("re-writing kliobuflen re-sets kliobuftop", u.kliobuftop, 64)
 
-    # m10 (fixed): without Zklio the ACEIOBUF does not exist, acemaxiobuflen
-    # reads as zero, and aceiobuflen / aceiobuftop are not present at all.
+    # m10 (fixed): without Zklio the KLIOBUF does not exist, klmaxiobuflen
+    # reads as zero, and kliobuflen / kliobuftop are not present at all.
     u_nolio = fresh_unit(maxiobuflen=0)
-    check("without Zklio: acemaxiobuflen reads 0", u_nolio.acemaxiobuflen, 0)
-    check("without Zklio: aceiobuflen cannot be made nonzero",
-          (u_nolio.write_aceiobuflen(64), u_nolio.aceiobuflen), (0, 0))
+    check("without Zklio: klmaxiobuflen reads 0", u_nolio.klmaxiobuflen, 0)
+    check("without Zklio: kliobuflen cannot be made nonzero",
+          (u_nolio.write_kliobuflen(64), u_nolio.kliobuflen), (0, 0))
 
     # WARL clamps
-    got = u.write_aceiobuflen(1000)
-    check("aceiobuflen WARL: clamped to acemaxiobuflen", (got, u.aceiobuflen), (128, 128))
-    got = u.write_aceiobuftop(1000)
-    check("aceiobuftop WARL: clamped to aceiobuflen", (got, u.aceiobuftop), (128, 128))
-    u.write_aceiobuflen(64)
-    u.write_aceiobuftop(48)
-    check("aceiobuftop below aceiobuflen is taken as written", u.aceiobuftop, 48)
-    u.write_aceiobuflen(32)                 # lowering aceiobuflen resets the top
-    check("a later aceiobuflen write overrides aceiobuftop", u.aceiobuftop, 32)
+    got = u.write_kliobuflen(1000)
+    check("kliobuflen WARL: clamped to klmaxiobuflen", (got, u.kliobuflen), (128, 128))
+    got = u.write_kliobuftop(1000)
+    check("kliobuftop WARL: clamped to kliobuflen", (got, u.kliobuftop), (128, 128))
+    u.write_kliobuflen(64)
+    u.write_kliobuftop(48)
+    check("kliobuftop below kliobuflen is taken as written", u.kliobuftop, 48)
+    u.write_kliobuflen(32)                 # lowering kliobuflen resets the top
+    check("a later kliobuflen write overrides kliobuftop", u.kliobuftop, 32)
 
-    # the window is [acestart, min(Xl, aceiobuftop))
-    u.write_aceiobuflen(64)
-    u.write_aceiobuftop(48)
+    # the window is [klstart, min(Xl, kliobuftop))
+    u.write_kliobuflen(64)
+    u.write_kliobuftop(48)
     src = bytes((i * 3 + 1) & 0xFF for i in range(64))
     mem = bytearray(src)
-    u.input_(mem, 0, 64)                    # Xl > aceiobuftop
-    check("ace.input with Xl > aceiobuftop transfers only the window",
-          bytes(u.aceiobuf[0:48]), src[0:48])
-    check("ace.input with Xl > aceiobuftop leaves bytes at/above the top untouched",
-          bytes(u.aceiobuf[48:]), bytes(16))
+    u.input_(mem, 0, 64)                    # Xl > kliobuftop
+    check("ace.input with Xl > kliobuftop transfers only the window",
+          bytes(u.kliobuf[0:48]), src[0:48])
+    check("ace.input with Xl > kliobuftop leaves bytes at/above the top untouched",
+          bytes(u.kliobuf[48:]), bytes(16))
 
-    u.write_aceiobuflen(64)
-    u.input_(mem, 0, 20)                    # Xl < aceiobuftop
-    check("ace.input with Xl < aceiobuftop transfers only Xl bytes",
-          (bytes(u.aceiobuf[0:20]), bytes(u.aceiobuf[20:])), (src[0:20], bytes(44)))
+    u.write_kliobuflen(64)
+    u.input_(mem, 0, 20)                    # Xl < kliobuftop
+    check("ace.input with Xl < kliobuftop transfers only Xl bytes",
+          (bytes(u.kliobuf[0:20]), bytes(u.kliobuf[20:])), (src[0:20], bytes(44)))
 
-    # Xl == 0 and acestart >= min(Xl, aceiobuftop): no-op, acestart unchanged
-    u.write_aceiobuflen(64)
-    u.acestart = 7
+    # Xl == 0 and klstart >= min(Xl, kliobuftop): no-op, klstart unchanged
+    u.write_kliobuflen(64)
+    u.klstart = 7
     r = u.input_(mem, 0, 0)
-    check("ace.input with Xl = 0 is a no-op with acestart unchanged", (r, u.acestart),
+    check("ace.input with Xl = 0 is a no-op with klstart unchanged", (r, u.klstart),
           ("noop", 7))
-    u.acestart = 64
+    u.klstart = 64
     r = u.input_(mem, 0, 64)
-    check("ace.input with acestart >= min(Xl, aceiobuftop) is a no-op",
-          (r, u.acestart), ("noop", 64))
-    u.acestart = 30
+    check("ace.input with klstart >= min(Xl, kliobuftop) is a no-op",
+          (r, u.klstart), ("noop", 64))
+    u.klstart = 30
     r = u.input_(mem, 0, 20)
-    check("ace.input with acestart >= Xl (Xl < top) is a no-op", (r, u.acestart),
+    check("ace.input with klstart >= Xl (Xl < top) is a no-op", (r, u.klstart),
           ("noop", 30))
-    u.acestart = 100
+    u.klstart = 100
     r = u.output(bytearray(64), 0, 64)
-    check("ace.output with acestart > aceiobuftop is a no-op with acestart unchanged",
-          (r, u.acestart), ("noop", 100))
-    # acestart is never clamped: both the equal and the strictly-greater case are
-    # no-ops that leave it alone. The pre-fix text covered only acestart = aceiobuftop
-    # in one place and clamped to aceiobuftop in another.
-    for start, label in ((64, "acestart = aceiobuftop"),
-                         (65, "acestart > aceiobuftop"),
-                         (4096, "acestart far above aceiobuftop")):
-        u.acestart = start
+    check("ace.output with klstart > kliobuftop is a no-op with klstart unchanged",
+          (r, u.klstart), ("noop", 100))
+    # klstart is never clamped: both the equal and the strictly-greater case are
+    # no-ops that leave it alone. The pre-fix text covered only klstart = kliobuftop
+    # in one place and clamped to kliobuftop in another.
+    for start, label in ((64, "klstart = kliobuftop"),
+                         (65, "klstart > kliobuftop"),
+                         (4096, "klstart far above kliobuftop")):
+        u.klstart = start
         r = u.input_(mem, 0, 64)
-        check(f"{label}: no-op, and acestart is not clamped to aceiobuftop",
-              (r, u.acestart), ("noop", start))
+        check(f"{label}: no-op, and klstart is not clamped to kliobuftop",
+              (r, u.klstart), ("noop", start))
 
     info("m1 is RESOLVED in the current text, in favour of the no-op reading modelled "
-         "here: acestart is no longer clamped for ACEIOBUF operands. If acestart >= "
-         "aceiobuftop the operand window is empty, so the instruction performs no "
-         "operation, causes no state transition, and leaves acestart unchanged -- the "
+         "here: klstart is no longer clamped for KLIOBUF operands. If klstart >= "
+         "kliobuftop the operand window is empty, so the instruction performs no "
+         "operation, causes no state transition, and leaves klstart unchanged -- the "
          "rule ace.input and ace.output already stated for their own transfers. The "
          "clamp for CR-directed transfers (ace.load/ace.store/ace.mv, bounded by the "
          "PI/SCC length) is a separate rule and is unaffected.")
 
-    # shortening is done by lowering aceiobuftop, never by raising acestart
-    u.write_aceiobuflen(64)
-    u.write_aceiobuftop(16)
-    u.acestart = 0
+    # shortening is done by lowering kliobuftop, never by raising klstart
+    u.write_kliobuflen(64)
+    u.write_kliobuftop(16)
+    u.klstart = 0
     u.input_(mem, 0, 64)
-    check("shortening via aceiobuftop transfers exactly the shortened window",
-          (bytes(u.aceiobuf[0:16]), bytes(u.aceiobuf[16:])), (src[0:16], bytes(48)))
-    check("ACELEN = aceiobuftop * 8", u.aceiobuftop * 8, 128)
+    check("shortening via kliobuftop transfers exactly the shortened window",
+          (bytes(u.kliobuf[0:16]), bytes(u.kliobuf[16:])), (src[0:16], bytes(48)))
+    check("KLLEN = kliobuftop * 8", u.kliobuftop * 8, 128)
 
 
 def test_expiration():
-    section("11.  ExpirationDate  --  <<ACE-Metadata-expiration-date>>")
+    section("11.  ExpirationDate  --  <<KLEE-Metadata-expiration-date>>")
 
     clen = content_len(ctr_mdh())
     content = b"\x77" * clen
@@ -2012,9 +2012,9 @@ def test_expiration():
     u = expired_cr()
     try:
         u.exec_(0)
-        check("ace.exec on an expired CR raises ace_state_expired", "none", "expired")
+        check("ace.exec on an expired CR raises kl_state_expired", "none", "expired")
     except AceException as e:
-        check("ace.exec on an expired CR raises ace_state_expired", e.which, "expired")
+        check("ace.exec on an expired CR raises kl_state_expired", e.which, "expired")
     check("the expired CR is in Error State Expired", u.getst(0), ST_EXPIRED)
     check("expiry performs the Error-State actions: content cleared", u.crs[0].content, b"")
     check("expiry performs the Error-State actions: AuxDataLen zeroed",
@@ -2075,7 +2075,7 @@ def test_expiration():
     u.clone(1, 0)
     check("ace.clone of an expired CR does not trigger expiry", u.getst(1), ST_READY)
     u.setst(0, ST_UNCONFIGURED)
-    check("ace.clear of an expired CR does not trigger expiry",
+    check("kl.clear of an expired CR does not trigger expiry",
           u.crs[0].is_unconfigured(), True)
 
     # the check is skipped when ConfigStatus is not complete
@@ -2103,7 +2103,7 @@ def test_expiration():
 
 
 def test_size():
-    section("12.  ace.size  --  <<ACE-instruction-size>>")
+    section("12.  ace.size  --  <<KLEE-instruction-size>>")
 
     clen = content_len(ctr_mdh())
     u = fresh_unit()
@@ -2133,7 +2133,7 @@ def test_size():
     check("Form B agrees with Form A for a complete CR",
           u.size_B(u.getmdv(0)), u.size_A(0))
     check("Form B of an unsupported algorithm returns 32 (see M2)",
-          u.size_B(mdh_new(Algorithm=0x777, AlgorithmPolicy=1)), 32)
+          u.size_B(mdh_new(Machine=0x777, MachinePolicy=1)), 32)
     check("Form B of a malformed MDH returns 32 (see M2)",
           u.size_B(mdh_unpack(mdh_pack(ctr_mdh()) | (1 << 14))), 32)
 
@@ -2155,7 +2155,7 @@ def test_negative_controls():
 
     # -- 1: a restrict that widens UsagePolicy must be caught --------
     # A plausible but wrong implementation: "replace the field if the request is
-    # nonzero", the rule the spec states for AlgorithmPolicy/SCProtection/Locality.
+    # nonzero", the rule the spec states for MachinePolicy/SCProtection/Locality.
     # Applied to UsagePolicy it widens, which ace.restrict must never do.
     def buggy_restrict_usagepolicy(cur, req):
         return req if req != 0 else cur
@@ -2182,8 +2182,8 @@ def test_negative_controls():
                 "assign-if-nonzero UsagePolicy is monotone (it is not)",
                 widened, cur)
 
-    # -- 2: an import resumed with the wrong acestart -----------------
-    ml = mdh_new(Algorithm=ALG_SIG, AlgorithmPolicy=0b11)   # a 96-byte content
+    # -- 2: an import resumed with the wrong klstart -----------------
+    ml = mdh_new(Machine=ALG_SIG, MachinePolicy=0b11)   # a 96-byte content
     n = scc_len(ml)
     content = bytes((0x20 + i) & 0xFF for i in range(content_len(ml)))
     u = fresh_unit()
@@ -2198,27 +2198,27 @@ def test_negative_controls():
     iml = mdh_unpack(b2v(bytes(mem[0:16])))
     v.mgmt_import_start(1, iml)
     v.load(1, mem, 16, halt_after=32)
-    check("the interrupted import halted at a 16-byte boundary", v.acestart, 32)
-    # WRONG: software restores an acestart from a later point of an earlier run,
+    check("the interrupted import halted at a 16-byte boundary", v.klstart, 32)
+    # WRONG: software restores an klstart from a later point of an earlier run,
     # so bytes [32, 48) are never transferred and the CR is silently sheared.
-    # (Restoring a *lower* acestart is harmless under the mapping of the fixed
+    # (Restoring a *lower* klstart is harmless under the mapping of the fixed
     # C1 rule, because the transfer is idempotent; only a higher one corrupts.)
-    v.acestart = 48
+    v.klstart = 48
     v.load(1, mem, 16)
     v.mgmt_end(1, iml)
     check("the wrongly resumed import fails authentication", v.getst(1), ST_IMPORT_AUTH)
     check("the failed import cleared the content (Error-State entry)",
           v.crs[1].content, b"")
     expect_fail("NEGCTRL-badresume",
-                "import resumed at the wrong acestart reproduces the content",
+                "import resumed at the wrong klstart reproduces the content",
                 v.crs[1].content, content)
 
     # the correctly resumed import does round trip
     w = fresh_unit()
     w.mgmt_import_start(1, iml)
     w.load(1, mem, 16, halt_after=32)
-    keep = w.acestart
-    w.acestart = keep
+    keep = w.klstart
+    w.klstart = keep
     w.load(1, mem, 16)
     w.mgmt_end(1, iml)
     check("the correctly resumed import authenticates and round trips",
@@ -2230,12 +2230,12 @@ def test_notes():
 
     info("C1 (ace.load/ace.store address mapping) reads as RESOLVED: both instructions "
          "now state 'the j-th byte after the MDH ... is loaded to / saved to memory "
-         "address Xs1 + %offset + j', ace.mgmt clears acestart at every start step, and "
+         "address Xs1 + %offset + j', ace.mgmt clears klstart at every start step, and "
          "the Book 4 import snippet now uses 16(t6) like the provisioning one.")
     info("C1 residue (NEW): ace.store still says 'Exports raw data ... starting with the "
-         "8th byte of the MDH' and 'acestart keeps track of the number of stored bytes, "
+         "8th byte of the MDH' and 'klstart keeps track of the number of stored bytes, "
          "starting from 8 or 16 depending on the use of ace.getmdl'. Both sentences "
-         "contradict the new j-after-MDH rule and the new 'ace.mgmt ... sets acestart to "
+         "contradict the new j-after-MDH rule and the new 'ace.mgmt ... sets klstart to "
          "zero'; hardware cannot observe which getmd* form software used. Delete them.")
     info("C1 residue (NEW): the ace.load description contains a paragraph describing "
          "ace.store ('ace.store copies the data from the serialized representations ...') "
@@ -2249,30 +2249,30 @@ def test_notes():
          "0. The intended rule (MDH State field zero on input, CR State Ready after) "
          "should be stated as two separate sentences.")
     info("C3 (CSK gating) reads as RESOLVED for the CSR deadlock: the illegal-instruction "
-         "list now exempts 'the macecsk group (if present)'. Still unstated: whether "
-         "ace.clear.all and the read-only identification CSRs are CSK-gated.")
+         "list now exempts 'the mklcsk group (if present)'. Still unstated: whether "
+         "kl.clearall and the read-only identification CSRs are CSK-gated.")
     info("M2 (ace.size 0 vs 32) is UNRESOLVED -- see the ace.size section above.")
-    info("m1 (acestart clamp vs no-op for ACEIOBUF instructions) is RESOLVED as the "
-         "no-op reading -- see the ACEIOBUF section above.")
+    info("m1 (klstart clamp vs no-op for KLIOBUF instructions) is RESOLVED as the "
+         "no-op reading -- see the KLIOBUF section above.")
     info("m2 (transfer granularity) is now partly settled for CR transfers: ace.load and "
-         "ace.store both say 'acestart ... is a multiple of 16 ... loads/stores data in "
+         "ace.store both say 'klstart ... is a multiple of 16 ... loads/stores data in "
          "16-byte chunks'. This model halts CR transfers only at 16-byte boundaries and "
-         "ACEIOBUF transfers at 1-byte boundaries. The forward-progress granule is still "
-         "stated as 1 byte in <<ACE-forward-progress>>, so the two should be reconciled "
+         "KLIOBUF transfers at 1-byte boundaries. The forward-progress granule is still "
+         "stated as 1 byte in <<KLEE-forward-progress>>, so the two should be reconciled "
          "explicitly.")
-    info("NEW (acemanagedcr): the new CSR is introduced in the CSR table and used by every "
+    info("NEW (klmanagedcr): the new CSR is introduced in the CSR table and used by every "
          "ace.mgmt step, but its reset value, its WARL behaviour on a software write, "
-         "and its interaction with ace.clear of the managed CR are unspecified. This "
+         "and its interaction with kl.clear of the managed CR are unspecified. This "
          "model assumes reset = 32, and that clearing the managed CR releases it.")
     info("NEW (partial export vs ace.mv): ace.mgmt export-start of a *not-complete* CR is "
          "specified to leave ConfigStatus alone (it stays provisioning/importing), yet "
          "the extraction forms of ace.mv are 'only valid if ConfigStatus is "
-         "ace_cfg_exporting'. Under the literal reading the Zklmv export loop of Book 4 "
+         "kl_cfg_exporting'. Under the literal reading the Zklmv export loop of Book 4 "
          "raises an illegal instruction for exactly the partial-export case it exists to "
          "support. Either export-start must set ConfigStatus = exporting unconditionally, "
          "or ace.mv must also accept provisioning/importing.")
     info("NEW (which process does ace.mgmt end complete?): the single "
-         "#ace_cfg_management_end immediate has to complete whichever process is "
+         "#kl_cfg_management_end immediate has to complete whichever process is "
          "open. _ConfigStatus_ identifies it in three of the four cases, but not "
          "after the export-start of a not-complete CR, which leaves _ConfigStatus_ "
          "at provisioning/importing: the same CR state then means both 'resume "
@@ -2296,7 +2296,7 @@ def test_notes():
          "by severity when two conditions coincide (e.g. an expired CR whose Locality "
          "also became unresolvable); the effect of ace.derive on the two CRs' states; "
          "the CRF-capacity discovery mechanism, which does not exist; and what "
-         "'ace.restrict* raises ace_exc_out_of_memory' leaves the CR in when the handler "
+         "'ace.restrict* raises kl_exc_out_of_memory' leaves the CR in when the handler "
          "does not free capacity.")
 
 
@@ -2315,7 +2315,7 @@ def main():
     test_config_status_gating()
     test_management_flows()
     test_resumption()
-    test_aceiobuf()
+    test_kliobuf()
     test_expiration()
     test_size()
     test_negative_controls()

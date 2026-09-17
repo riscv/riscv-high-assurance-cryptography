@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Known-answer tests for <<ACE-GCM-mode>> and <<ACE-GCM-with-IV-mode>>.
+"""Known-answer tests for <<KLEE-GCM-mode>> and <<KLEE-GCM-with-IV-mode>>.
 
 What this validates
 -------------------
@@ -9,10 +9,10 @@ REF  a straight SP 800-38D implementation on *byte strings* (big-endian counter
      blocks, GHASH over 16-byte strings).  It is anchored by the classic
      McGrew-Viega / SP 800-38D test cases 1-6 (AES-128) and 13-18 (AES-256).
 
-ACE  a model of the specification's state machine, written on ACE *values*
+KLEE  a model of the specification's state machine, written on KLEE *values*
      (little-endian bit strings, byte i at bits [8i+7:8i]) and transcribed
      literally from the text of `src/ace-ISA-algorithms.adoc`
-     ([[ACE-process-VLI]], [[ACE-GCM-mode]], [[ACE-GCM-with-IV-mode]]) under the
+     ([[KLEE-process-VLI]], [[KLEE-GCM-mode]], [[KLEE-GCM-with-IV-mode]]) under the
      conventions of `src/ace-notation.adoc`.  The model runs the real state
      sequence -- _Set_Aux_Value_ (via process_VLI, with the IV split over several
      `ace.exec`-sized transfers and, in one case, an interrupted-and-resumed
@@ -24,13 +24,13 @@ Also checked: the counter-wrap rule (Invalid exactly when `ctr` reaches
 counter field near the limit, not by looping), and GCM-with-Set-IV's `budget`
 accounting.
 
-Negative controls (declared with KAT-EXPECT-FAIL) re-run the ACE model with the
+Negative controls (declared with KAT-EXPECT-FAIL) re-run the KLEE model with the
 two halves of the length block swapped, and with a little-endian counter
 increment; both must fail against the vectors.
 
 Note on review finding M4, since FIXED: process_VLI used to write
-`acestart <- input_base` and read `input_base <- acestart` although `input_base`
-is in bits and `acestart` is architecturally a byte count.  The spec now performs
+`klstart <- input_base` and read `input_base <- klstart` although `input_base`
+is in bits and `klstart` is architecturally a byte count.  The spec now performs
 the /8 and *8 conversions explicitly, which is what the resumption model below
 implements.
 
@@ -44,7 +44,7 @@ import sys, os
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from common import (b2v, v2b, sl, cat, bswap, bin_, aes_encrypt,
-                    gmul_ghash, ace_galoismul, selftest)
+                    gmul_ghash, kl_galoismul, selftest)
 
 B = 128                      # block size in bits
 MASK32 = (1 << 32) - 1
@@ -91,7 +91,7 @@ def ref_gcm(K: bytes, IV: bytes, A: bytes, P: bytes):
 
 
 # =====================================================================
-# ACE model
+# KLEE model
 # =====================================================================
 
 class Invalid(Exception):
@@ -99,7 +99,7 @@ class Invalid(Exception):
 
 
 class GcmCC:
-    """The ACE Cryptographic Context of <<ACE-GCM-mode>> / <<ACE-GCM-with-IV-mode>>.
+    """The KLEE Cryptographic Context of <<KLEE-GCM-mode>> / <<KLEE-GCM-with-IV-mode>>.
 
     `set_iv_J0` / `budget` not None selects the GCM-with-Set-IV variant, whose
     Provisioning Input carries `J0` and `budget` and which has no
@@ -119,7 +119,7 @@ class GcmCC:
         self.J0 = 0
         self.start_ctr = 0
         self.last_blk_len = 0
-        self.acestart = 0
+        self.klstart = 0
         self.state = "Ready"
         self.set_iv = set_iv_J0 is not None
         self.budget = budget
@@ -133,7 +133,7 @@ class GcmCC:
         return b2v(aes_encrypt(self.key, v2b(v, 16)))
 
     def _absorb(self, data):
-        self.tag = ace_galoismul(self.tag ^ data, self.auth_key)
+        self.tag = kl_galoismul(self.tag ^ data, self.auth_key)
 
     def _ctr_of(self, field32):
         """`int(bswap(J0[127:96]))` -- the counter field read as a big-endian integer."""
@@ -190,40 +190,40 @@ class GcmCC:
 
     def _vli_process_block(self):
         if self.len != 96:
-            self.J0 = ace_galoismul(self.J0, self.auth_key)
+            self.J0 = kl_galoismul(self.J0, self.auth_key)
 
     def _vli_finalize(self):
         if self.len == 96:
             self.J0 = cat((bswap(bin_(1, 32), 4), 32), (sl(self.J0, 95, 0), 96))
         else:
             if self.block_base != 0:
-                self.J0 = ace_galoismul(self.J0, self.auth_key)
+                self.J0 = kl_galoismul(self.J0, self.auth_key)
             self.J0 ^= cat((bswap(bin_(self.len, 64), 8), 64), (0, 64))
-            self.J0 = ace_galoismul(self.J0, self.auth_key)
+            self.J0 = kl_galoismul(self.J0, self.auth_key)
         self.start_ctr = self._ctr_of(sl(self.J0, 127, 96))
         self.state = "Hash_Absorb"
 
-    def exec_iv(self, INPUT, ACELEN, resume=False, interrupt_after=None):
+    def exec_iv(self, INPUT, KLLEN, resume=False, interrupt_after=None):
         """Form B `ace.exec` in _Set_Aux_Value_: one transfer through process_VLI.
 
         Returns True if the instruction ran to completion, False if it was
-        interrupted (in which case `acestart` holds the byte offset reached and
+        interrupted (in which case `klstart` holds the byte offset reached and
         the caller must re-issue with resume=True).
         """
         self._require("Set_Aux_Value")
         if self.len != 0 and self.cumul_len >= self.len:
             self.state = "Invalid"
             raise Invalid("process_VLI: cumul_len >= len")
-        # M4 (fixed): the text now writes `input_base <- 8 * acestart`, converting
+        # M4 (fixed): the text now writes `input_base <- 8 * klstart`, converting
         # from the byte-counting CSR to the bit-counting local.
-        self.input_base = 8 * self.acestart if resume else 0
+        self.input_base = 8 * self.klstart if resume else 0
         iters = 0
-        while self.input_base < ACELEN:
+        while self.input_base < KLLEN:
             if self.len != 0:
-                amount = min(ACELEN - self.input_base, B - self.block_base,
+                amount = min(KLLEN - self.input_base, B - self.block_base,
                              self.len - self.cumul_len)
             else:
-                amount = min(ACELEN - self.input_base, B - self.block_base)
+                amount = min(KLLEN - self.input_base, B - self.block_base)
             chunk = sl(INPUT, self.input_base + amount - 1, self.input_base)
             # block is state (state_offset = 0), so the input is XORed in
             self.J0 ^= chunk << self.block_base
@@ -235,13 +235,13 @@ class GcmCC:
                 self.block_base = 0
             if self.len != 0 and self.cumul_len == self.len:
                 self._vli_finalize()
-                self.acestart = 0
+                self.klstart = 0
                 return True
             iters += 1
             if interrupt_after is not None and iters == interrupt_after:
-                self.acestart = self.input_base // 8      # M4: acestart <- input_base / 8
+                self.klstart = self.input_base // 8      # M4: klstart <- input_base / 8
                 return False
-        self.acestart = 0
+        self.klstart = 0
         return True
 
     # ---------------- _Hash_Absorb_ ----------------
@@ -254,11 +254,11 @@ class GcmCC:
             raise Invalid("plain GCM enters _Hash_Absorb_ from _Set_Aux_Value_")
         self.state = "Hash_Absorb"
 
-    def exec_absorb(self, INPUT, ACELEN):
+    def exec_absorb(self, INPUT, KLLEN):
         self._require("Hash_Absorb")
-        assert ACELEN % B == 0, "ACELEN must be a multiple of b"
-        self._consume(ACELEN // B)
-        for i in range(ACELEN // B):
+        assert KLLEN % B == 0, "KLLEN must be a multiple of b"
+        self._consume(KLLEN // B)
+        for i in range(KLLEN // B):
             self._absorb(sl(INPUT, B * i + B - 1, B * i))
 
     # ---------------- _Encrypt_ / _Decrypt_ ----------------
@@ -271,24 +271,24 @@ class GcmCC:
         self._require("Hash_Absorb")
         self.state = "Decrypt"
 
-    def exec_encrypt(self, INPUT, ACELEN):
+    def exec_encrypt(self, INPUT, KLLEN):
         self._require("Encrypt")
-        assert ACELEN % B == 0
-        self._consume(ACELEN // B)
+        assert KLLEN % B == 0
+        self._consume(KLLEN // B)
         out = 0
-        for i in range(ACELEN // B):
+        for i in range(KLLEN // B):
             self._bump_ctr()
             tmp = sl(INPUT, B * i + B - 1, B * i) ^ self._enc_blk(self.J0)
             self._absorb(tmp)
             out |= tmp << (B * i)
         return out
 
-    def exec_decrypt(self, INPUT, ACELEN):
+    def exec_decrypt(self, INPUT, KLLEN):
         self._require("Decrypt")
-        assert ACELEN % B == 0
-        self._consume(ACELEN // B)
+        assert KLLEN % B == 0
+        self._consume(KLLEN // B)
         out = 0
-        for i in range(ACELEN // B):
+        for i in range(KLLEN // B):
             blk = sl(INPUT, B * i + B - 1, B * i)
             self._bump_ctr()
             self._absorb(blk)
@@ -380,7 +380,7 @@ def _iv_transfers(iv, chunk):
     return out or [b""]
 
 
-def ace_encrypt(key, iv, ad, pt, iv_chunk=16, pt_chunk=16,
+def kl_encrypt(key, iv, ad, pt, iv_chunk=16, pt_chunk=16,
                 interrupt_iv=False, **kw):
     cc = GcmCC(key, **kw)
     cc.setst_set_aux_value(len(iv) * 8)
@@ -411,7 +411,7 @@ def ace_encrypt(key, iv, ad, pt, iv_chunk=16, pt_chunk=16,
     return ct, v2b(tag, 16), cc
 
 
-def ace_decrypt(key, iv, ad, ct, tag_bytes, **kw):
+def kl_decrypt(key, iv, ad, ct, tag_bytes, **kw):
     cc = GcmCC(key, **kw)
     cc.setst_set_aux_value(len(iv) * 8)
     for t in _iv_transfers(iv, 16):
@@ -434,7 +434,7 @@ def ace_decrypt(key, iv, ad, ct, tag_bytes, **kw):
     return pt, verdict, cc
 
 
-def ace_encrypt_setiv(key, J0, budget, ad, pt, **kw):
+def kl_encrypt_setiv(key, J0, budget, ad, pt, **kw):
     """GCM with Set IV: J0 and budget come from the Provisioning Input."""
     cc = GcmCC(key, set_iv_J0=J0, budget=budget, **kw)
     cc.setst_hash_absorb()                       # Form A ace.setst
@@ -571,55 +571,55 @@ for label, k, iv, a, p, c, t in VECTORS:
     check(f"REF {label}  |IV|={len(IV)}B |A|={len(A)}B |P|={len(P)}B",
           C == bytes.fromhex(c) and T == bytes.fromhex(t))
 
-# ---- 2. ACE model against the same vectors ---------------------------------
-lines.append("--- ACE model (spec state machine) vs published vectors ---")
+# ---- 2. KLEE model against the same vectors ---------------------------------
+lines.append("--- KLEE model (spec state machine) vs published vectors ---")
 for label, k, iv, a, p, c, t in VECTORS:
     K, IV, A, P = (bytes.fromhex(x) for x in (k, iv, a, p))
-    C, T, cc = ace_encrypt(K, IV, A, P)
-    check(f"ACE encrypt {label}", C == bytes.fromhex(c) and T == bytes.fromhex(t)
+    C, T, cc = kl_encrypt(K, IV, A, P)
+    check(f"KLEE encrypt {label}", C == bytes.fromhex(c) and T == bytes.fromhex(t)
           and cc.state == "Success")
 
-# ---- 3. ACE model with the IV split over several transfers, one interrupted -
-lines.append("--- ACE _Set_Aux_Value_: multi-transfer IV, interrupted transfer ---")
+# ---- 3. KLEE model with the IV split over several transfers, one interrupted -
+lines.append("--- KLEE _Set_Aux_Value_: multi-transfer IV, interrupted transfer ---")
 for label, k, iv, a, p, c, t in VECTORS:
     if len(iv) // 2 <= 12:
         continue                        # only the 60-byte IV cases are interesting
     K, IV, A, P = (bytes.fromhex(x) for x in (k, iv, a, p))
     for chunk, intr in ((16, False), (32, False), (32, True), (48, True)):
-        C, T, cc = ace_encrypt(K, IV, A, P, iv_chunk=chunk, interrupt_iv=intr)
-        check(f"ACE {label} IV in {chunk}-byte transfers"
+        C, T, cc = kl_encrypt(K, IV, A, P, iv_chunk=chunk, interrupt_iv=intr)
+        check(f"KLEE {label} IV in {chunk}-byte transfers"
               + (", interrupted+resumed" if intr else ""),
               C == bytes.fromhex(c) and T == bytes.fromhex(t))
 # a 20-byte IV forces a partial final block inside process_VLI
 K, IV, A, P = bytes.fromhex(K128), bytes(range(20)), bytes.fromhex(AAD), bytes.fromhex(P60)
 rc, rt = ref_gcm(K, IV, A, P)
-ac, at, _ = ace_encrypt(K, IV, A, P, iv_chunk=16)
-check("ACE 20-byte IV (partial final process_VLI block) matches REF",
+ac, at, _ = kl_encrypt(K, IV, A, P, iv_chunk=16)
+check("KLEE 20-byte IV (partial final process_VLI block) matches REF",
       (ac, at) == (rc, rt))
 
 # ---- 4. multi-block ace.exec chunking of the plaintext ----------------------
-lines.append("--- ACE _Encrypt_: ACELEN spanning several blocks ---")
+lines.append("--- KLEE _Encrypt_: KLLEN spanning several blocks ---")
 K, IV, A, P = bytes.fromhex(K128), bytes.fromhex(IV12), bytes.fromhex(AAD), bytes.fromhex(P60)
 rc, rt = ref_gcm(K, IV, A, P)
 for n in (1, 2, 3):
-    ac, at, _ = ace_encrypt(K, IV, A, P, pt_chunk=n)
-    check(f"ACE encrypt with ACELEN = {n} block(s) per ace.exec", (ac, at) == (rc, rt))
+    ac, at, _ = kl_encrypt(K, IV, A, P, pt_chunk=n)
+    check(f"KLEE encrypt with KLLEN = {n} block(s) per ace.exec", (ac, at) == (rc, rt))
 
 # ---- 5. decryption and _Hash_Verify_ ---------------------------------------
-lines.append("--- ACE decrypt path and _Hash_Verify_ ---")
+lines.append("--- KLEE decrypt path and _Hash_Verify_ ---")
 for label, k, iv, a, p, c, t in VECTORS:
     K, IV, A = (bytes.fromhex(x) for x in (k, iv, a))
     C, T, P = bytes.fromhex(c), bytes.fromhex(t), bytes.fromhex(p)
-    pt, verdict, _ = ace_decrypt(K, IV, A, C, T)
-    check(f"ACE decrypt {label} -> plaintext, _Success_",
+    pt, verdict, _ = kl_decrypt(K, IV, A, C, T)
+    check(f"KLEE decrypt {label} -> plaintext, _Success_",
           pt == P and verdict == "Success")
     bad = bytearray(T)
     bad[0] ^= 0x80
-    _, verdict, _ = ace_decrypt(K, IV, A, C, bytes(bad))
-    check(f"ACE decrypt {label} with corrupted tag -> _Failure_", verdict == "Failure")
+    _, verdict, _ = kl_decrypt(K, IV, A, C, bytes(bad))
+    check(f"KLEE decrypt {label} with corrupted tag -> _Failure_", verdict == "Failure")
 
 # ---- 6. bit-granular last block --------------------------------------------
-lines.append("--- ACE _Enc_Last_Block_ / _Dec_Last_Block_ with last_blk_len not a byte multiple ---")
+lines.append("--- KLEE _Enc_Last_Block_ / _Dec_Last_Block_ with last_blk_len not a byte multiple ---")
 K, IV, A = bytes.fromhex(K128), bytes.fromhex(IV12), bytes.fromhex(AAD)
 PT_FULL = bytes(range(32))                       # two whole blocks
 
@@ -729,7 +729,7 @@ for label, k, iv, a, p, c, t in VECTORS:
     # derive J0 the way the provisioning software would
     J0 = b2v(ref_j0(K, IV))
     nblk = (len(_pad16(A)) // 16) + (len(P) + 15) // 16
-    C, T, cc = ace_encrypt_setiv(K, J0, nblk, A, P)
+    C, T, cc = kl_encrypt_setiv(K, J0, nblk, A, P)
     check(f"Set-IV {label}: same ciphertext/tag as plain GCM",
           C == bytes.fromhex(c) and T == bytes.fromhex(t) and cc.state == "Success")
     check(f"Set-IV {label}: budget exactly consumed ({nblk} blocks), tag emit free",
@@ -741,10 +741,10 @@ J0 = b2v(ref_j0(K, IV))
 cc = GcmCC(K, set_iv_J0=J0, budget=10)
 cc.setst_hash_absorb()
 cc.exec_absorb(b2v(_pad16(A)), 256)              # 2 blocks
-check("Set-IV: _Hash_Absorb_ consumes ACELEN/b blocks", cc.budget == 8)
+check("Set-IV: _Hash_Absorb_ consumes KLLEN/b blocks", cc.budget == 8)
 cc.setst_encrypt()
 cc.exec_encrypt(b2v(bytes(48)), 384)             # 3 blocks
-check("Set-IV: _Encrypt_ consumes ACELEN/b blocks", cc.budget == 5)
+check("Set-IV: _Encrypt_ consumes KLLEN/b blocks", cc.budget == 5)
 cc.setst_last_block(8)
 cc.exec_enc_last_block(0)
 check("Set-IV: _Enc_Last_Block_ consumes exactly one block", cc.budget == 4)
@@ -790,12 +790,12 @@ for label, k, iv, a, p, c, t in VECTORS:
     K, IV, A, P = (bytes.fromhex(x) for x in (k, iv, a, p))
     want = (bytes.fromhex(c), bytes.fromhex(t))
     if len(A) != len(P):
-        C, T, _ = ace_encrypt(K, IV, A, P, swap_len_block=True)
+        C, T, _ = kl_encrypt(K, IV, A, P, swap_len_block=True)
         expect_fail(f"negative control: length block halves swapped  [{label}]",
                     (C, T) == want)
         n_swap += 1
     if len(P) > 0:
-        C, T, _ = ace_encrypt(K, IV, A, P, le_counter=True)
+        C, T, _ = kl_encrypt(K, IV, A, P, le_counter=True)
         expect_fail(f"negative control: little-endian counter increment  [{label}]",
                     (C, T) == want)
         n_ctr += 1
@@ -804,17 +804,17 @@ check(f"both negative controls are observable on several vectors "
 
 print("\n".join(lines))
 print()
-print("summary: REF and the ACE model both reproduce SP 800-38D / McGrew-Viega")
+print("summary: REF and the KLEE model both reproduce SP 800-38D / McGrew-Viega")
 print("         test cases 1-6 and 13-18; no functional discrepancy between the")
 print("         literal spec text and the standard was found for GCM or")
 print("         GCM-with-Set-IV.")
 print()
 print("OBSERVATIONs (editorial; no computed value changes, hence not failures):")
-print("  1. <<ACE-GCM-mode>> Parameters says \"ACELEN must be an integer multiple")
+print("  1. <<KLEE-GCM-mode>> Parameters says \"KLLEN must be an integer multiple")
 print("     of b\", but _Set_Aux_Value_ is process_VLI with granularity = b, whose")
 print("     final transfer may be shorter -- and must be, for a 96-bit IV or for")
 print("     the trailing 12 bytes of the 60-byte IV of test cases 6 and 18.  The")
-print("     blanket ACELEN rule should be scoped to the block-consuming states.")
+print("     blanket KLLEN rule should be scoped to the block-consuming states.")
 print("  2. In the _Set_Aux_Value_ overlay of the Serialized Context, the second")
 print("     sentence of the `input_base` row (\"Each time this value reaches b, the")
 print("     data in block is processed\") describes `block_base`, not `input_base`.")

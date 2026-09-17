@@ -1,6 +1,6 @@
-"""Shared utilities for the ACE KAT suite.
+"""Shared utilities for the KLEE KAT suite.
 
-Conventions follow the ACE specification's Notation chapter (src/ace-notation.adoc):
+Conventions follow the KLEE specification's Notation chapter (src/ace-notation.adoc):
 a *value* is a little-endian bit string held in a Python int; byte i of a byte
 string occupies bits [8i+7:8i] (`b2v`/`v2b`); `cat` implements the `@` operator,
 whose LEFT operand occupies the MORE significant bits; `bswap` reverses the byte
@@ -8,8 +8,8 @@ string of a value of known byte length; `bin_(n, m)` is the spec's `bin(n,m)`.
 
 The module also provides self-contained AES-128/192/256 (S-box generated
 algorithmically, so no table-transcription risk), the GHASH field multiplication
-of SP 800-38D 6.3 in both the byte-string view (`gmul_ghash`) and the ACE value
-view (`ace_galoismul`), POLYVAL's `montmul`/`mulx_polyval` per RFC 8452, and the
+of SP 800-38D 6.3 in both the byte-string view (`gmul_ghash`) and the KLEE value
+view (`kl_galoismul`), POLYVAL's `montmul`/`mulx_polyval` per RFC 8452, and the
 XTS/OCB doublings (`update_mask`, `double_ocb`).
 
 Run this file directly to execute its self-tests (FIPS 197 C.1-C.3, RFC 8452
@@ -24,11 +24,11 @@ MASK128 = (1 << 128) - 1
 # ---------------------------------------------------------------- notation
 
 def b2v(b: bytes) -> int:
-    """Byte string -> ACE value (byte i at bits [8i+7:8i])."""
+    """Byte string -> KLEE value (byte i at bits [8i+7:8i])."""
     return int.from_bytes(b, 'little')
 
 def v2b(v: int, n: int) -> bytes:
-    """ACE value -> byte string of n bytes."""
+    """KLEE value -> byte string of n bytes."""
     return v.to_bytes(n, 'little')
 
 def sl(v: int, hi: int, lo: int) -> int:
@@ -168,8 +168,8 @@ def gmul_ghash(X: bytes, Y: bytes) -> bytes:
         v = (v >> 1) ^ (0xE1 << 120) if v & 1 else v >> 1
     return z.to_bytes(16, 'big')
 
-def ace_galoismul(a: int, b: int) -> int:
-    """The spec's Galoismul on ACE values (byte order forward, bits reflected per byte)."""
+def kl_galoismul(a: int, b: int) -> int:
+    """The spec's Galoismul on KLEE values (byte order forward, bits reflected per byte)."""
     return b2v(gmul_ghash(v2b(a, 16), v2b(b, 16)))
 
 # ---------------------------------------------------------------- POLYVAL (RFC 8452)
@@ -187,7 +187,7 @@ def _clmul(a: int, b: int) -> int:
 
 def montmul(a: int, b: int) -> int:
     """The spec's Montmul: a * b * x^-128 in GF(2^128) mod x^128+x^127+x^126+x^121+1,
-    on ACE values under the fully little-endian POLYVAL representation (V[k] = coeff of x^k)."""
+    on KLEE values under the fully little-endian POLYVAL representation (V[k] = coeff of x^k)."""
     p = _clmul(a, b)
     for _ in range(128):
         if p & 1:
@@ -198,7 +198,7 @@ def montmul(a: int, b: int) -> int:
     return p & MASK128
 
 def mulx_polyval(v: int) -> int:
-    """RFC 8452's mulX_POLYVAL on an ACE value."""
+    """RFC 8452's mulX_POLYVAL on an KLEE value."""
     c = v >> 127
     v = (v << 1) & MASK128
     if c:

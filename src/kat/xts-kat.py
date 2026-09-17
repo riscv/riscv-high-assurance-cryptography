@@ -1,22 +1,22 @@
 #!/usr/bin/env python3
-"""XEX/XTS (<<ACE-XEX-XTS-modes>> and <<ACE-XTS-from-XEX>> in
+"""XEX/XTS (<<KLEE-XEX-XTS-modes>> and <<KLEE-XTS-from-XEX>> in
 src/ace-ISA-algorithms.adoc) against the IEEE 1619-2007 / SP 800-38E vectors.
 
 Three layers are checked, each against the same published vectors.
 
 REF   Plain byte-string XTS with ciphertext stealing, written from the standard.
 
-XEX   The ACE XEX CC exactly as <<ACE-XEX-XTS-modes>> specifies it:
+XEX   The KLEE XEX CC exactly as <<KLEE-XEX-XTS-modes>> specifies it:
 
           on entering _Encrypt_/_Decrypt_:  mask <- enc_blk(key2, INPUT)
           each ace.exec:  OUTPUT <- mask xor enc_blk(key1, INPUT xor mask)
                           mask  <- update_mask(mask)
 
       with the tweak supplied as `bin(i, b)`, the little-endian encoding of the
-      data unit sequence number (<<ACE-XTS-from-XEX>>, "The tweak").  This covers
+      data unit sequence number (<<KLEE-XTS-from-XEX>>, "The tweak").  This covers
       every data unit whose length is a multiple of b.
 
-CTS   The <<ACE-XTS-from-XEX>> "Ciphertext stealing" procedure implemented
+CTS   The <<KLEE-XTS-from-XEX>> "Ciphertext stealing" procedure implemented
       literally, including encryption's reordering of the last two blocks and
       decryption's clone-based ordering: one ace.clone, one *discarded* ace.exec
       on the clone to advance it from mask index m-1 to m, C_{m-1} decrypted on
@@ -90,9 +90,9 @@ def ref_xts(key1, key2, seq, data, encrypt=True):
     return out
 
 
-# ---------------------------------------------------------------- the ACE XEX CC
+# ---------------------------------------------------------------- the KLEE XEX CC
 class XexCC:
-    """An ACE XEX Crypto Context, per <<ACE-XEX-XTS-modes>>."""
+    """An KLEE XEX Crypto Context, per <<KLEE-XEX-XTS-modes>>."""
 
     def __init__(self, key1, key2, doubling=update_mask):
         self.key1, self.key2 = key1, key2
@@ -120,7 +120,7 @@ class XexCC:
         return out & MASK128
 
 
-def ace_xex(key1, key2, seq, data, encrypt=True, doubling=update_mask):
+def kl_xex(key1, key2, seq, data, encrypt=True, doubling=update_mask):
     """The plain XEX sequence: only defined when the data unit is a multiple of b."""
     assert len(data) % 16 == 0
     cc = XexCC(key1, key2, doubling)
@@ -129,11 +129,11 @@ def ace_xex(key1, key2, seq, data, encrypt=True, doubling=update_mask):
                     for i in range(0, len(data), 16))
 
 
-def ace_xts(key1, key2, seq, data, encrypt=True, doubling=update_mask):
-    """<<ACE-XTS-from-XEX>> implemented literally, stealing included."""
+def kl_xts(key1, key2, seq, data, encrypt=True, doubling=update_mask):
+    """<<KLEE-XTS-from-XEX>> implemented literally, stealing included."""
     m, s_bytes = divmod(len(data), 16)
     if s_bytes == 0:
-        return ace_xex(key1, key2, seq, data, encrypt, doubling)
+        return kl_xex(key1, key2, seq, data, encrypt, doubling)
     s = 8 * s_bytes                       # the spec measures the partial block in bits
     cc = XexCC(key1, key2, doubling)
     cc.setst(bin_(seq, 128), encrypt)
@@ -336,28 +336,28 @@ for name, k, nonce, p, c in IEEE1619 + IEEE1619_CTS:
     chk(name + " encrypt", ref_xts(k1, k2, i, bytes.fromhex(p)).hex(), c)
     chk(name + " decrypt", ref_xts(k1, k2, i, bytes.fromhex(c), False).hex(), p)
 
-print("\n== (b) ACE XEX model, full-block path (tweak = bin(i, 128))")
+print("\n== (b) KLEE XEX model, full-block path (tweak = bin(i, 128))")
 for name, k, nonce, p, c in IEEE1619:
     k1, k2 = split_keys(k)
     i = seq_of(nonce)
-    chk(name + " encrypt", ace_xex(k1, k2, i, bytes.fromhex(p)).hex(), c)
-    chk(name + " decrypt", ace_xex(k1, k2, i, bytes.fromhex(c), False).hex(), p)
+    chk(name + " encrypt", kl_xex(k1, k2, i, bytes.fromhex(p)).hex(), c)
+    chk(name + " decrypt", kl_xex(k1, k2, i, bytes.fromhex(c), False).hex(), p)
 
-print("\n== (c) <<ACE-XTS-from-XEX>> ciphertext stealing, taken literally")
+print("\n== (c) <<KLEE-XTS-from-XEX>> ciphertext stealing, taken literally")
 print("   encryption: reordered last two blocks, mask indices m-1 then m")
 print("   decryption: ace.clone + one discarded ace.exec; C_{m-1} at index m on")
 print("               the clone, CP @ C_m at index m-1 on the original")
 for name, k, nonce, p, c in IEEE1619_CTS:
     k1, k2 = split_keys(k)
     i = seq_of(nonce)
-    chk(name + " encrypt", ace_xts(k1, k2, i, bytes.fromhex(p)).hex(), c)
-    chk(name + " decrypt", ace_xts(k1, k2, i, bytes.fromhex(c), False).hex(), p)
+    chk(name + " encrypt", kl_xts(k1, k2, i, bytes.fromhex(p)).hex(), c)
+    chk(name + " decrypt", kl_xts(k1, k2, i, bytes.fromhex(c), False).hex(), p)
 
 print("\n== The stealing procedure also agrees with REF on the full-block path")
 for name, k, nonce, p, c in IEEE1619:
     k1, k2 = split_keys(k)
     i = seq_of(nonce)
-    ok = ok and ace_xts(k1, k2, i, bytes.fromhex(p)).hex() == c
+    ok = ok and kl_xts(k1, k2, i, bytes.fromhex(p)).hex() == c
 chk("s = 0 falls back to the plain XEX sequence (all full-block vectors)",
     "ok", "ok" if ok else "broken")
 
@@ -367,8 +367,8 @@ print(f"\n   {'vector':<40} {'update_mask':<14} {'NEG OCB doubling'}")
 for name, k, nonce, p, c in IEEE1619[:4] + IEEE1619_CTS[:4]:
     k1, k2 = split_keys(k)
     i = seq_of(nonce)
-    good = ace_xts(k1, k2, i, bytes.fromhex(p)).hex() == c
-    neg_wrong = ace_xts(k1, k2, i, bytes.fromhex(p),
+    good = kl_xts(k1, k2, i, bytes.fromhex(p)).hex() == c
+    neg_wrong = kl_xts(k1, k2, i, bytes.fromhex(p),
                         doubling=double_ocb).hex() != c
     ok = ok and good
     neg_fired = neg_fired or neg_wrong
@@ -398,12 +398,12 @@ rt = True
 for length in list(range(16, 80)) + [128, 129, 255, 256]:
     data = bytes((7 * n + 1) & 0xFF for n in range(length))
     for i in (0, 1, 0x123456789A):
-        ct = ace_xts(k1, k2, i, data)
+        ct = kl_xts(k1, k2, i, data)
         rt = rt and ct == ref_xts(k1, k2, i, data)
-        rt = rt and ace_xts(k1, k2, i, ct, False) == data
+        rt = rt and kl_xts(k1, k2, i, ct, False) == data
         rt = rt and ref_xts(k1, k2, i, ct, False) == data
 ok = ok and rt
-print(f"  {'ACE == REF and round-trips, lengths 16..79, 128, 129, 255, 256':<56} "
+print(f"  {'KLEE == REF and round-trips, lengths 16..79, 128, 129, 255, 256':<56} "
       f"{'PASS' if rt else 'FAIL'}")
 
 if not neg_fired:

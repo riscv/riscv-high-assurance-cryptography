@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""ECB mode (<<ACE-ECB-mode>> in src/ace-ISA-algorithms.adoc) against FIPS 197,
+"""ECB mode (<<KLEE-ECB-mode>> in src/ace-ISA-algorithms.adoc) against FIPS 197,
 SP 800-38A F.1 and GB/T 32907-2016 (SM4).
 
 Three things are checked.
@@ -8,24 +8,24 @@ REF   A plain byte-string ECB reference: split the message into b-bit blocks in
       address order and apply enc_blk/dec_blk to each.  Anchored directly on the
       published vectors.
 
-ACE   The specification's own formulation.  <<ACE-ECB-mode>> says that when
-      `ACELEN` > `b` the operation proceeds
+KLEE   The specification's own formulation.  <<KLEE-ECB-mode>> says that when
+      `KLLEN` > `b` the operation proceeds
 
-          foreach(i from 0 to ACELEN-b by b) {
+          foreach(i from 0 to KLLEN-b by b) {
             OUTPUT[i+b-1:i] <- enc_blk(key, INPUT[i+b-1:i]) }
 
       i.e. *from the blocks in the least significant positions to the most
-      significant positions*.  Under <<ACE-Notation>> byte j of a byte string sits
-      at bits [8j+7:8j], so the least significant block of the ACE value is the
+      significant positions*.  Under <<KLEE-Notation>> byte j of a byte string sits
+      at bits [8j+7:8j], so the least significant block of the KLEE value is the
       block at the lowest address, and the two views must agree.  The check builds
-      a genuine 4-block ACE value with cat() (left operand more significant, so the
+      a genuine 4-block KLEE value with cat() (left operand more significant, so the
       blocks are listed in reverse address order), runs the spec loop over bit
       slices, and compares the result to REF on the byte-string view.
 
 NEG   A negative control that processes the blocks most-significant-first, which
       reverses the block order of the byte string.  It must disagree with REF.
 
-SM4 is included because ACE names it as an instantiable block cipher, and because
+SM4 is included because KLEE names it as an instantiable block cipher, and because
 it exercises the value/byte-string mapping with a cipher whose own specification is
 written big-endian.
 
@@ -128,18 +128,18 @@ def sm4_decrypt(key, blk):
     return _sm4_block(list(reversed(sm4_key_schedule(key))), blk)
 
 
-# ---------------------------------------------------------------- REF and ACE models
+# ---------------------------------------------------------------- REF and KLEE models
 def ref_ecb(enc, key, data, bsz=16):
     """Byte-string ECB: apply the block function to each b-bit block in address order."""
     return b''.join(enc(key, data[i:i + bsz]) for i in range(0, len(data), bsz))
 
 
-def ace_ecb(enc, key, inp, acelen, b=128):
-    """State _Encrypt_/_Decrypt_ of <<ACE-ECB-mode>>, on ACE values.
+def kl_ecb(enc, key, inp, acelen, b=128):
+    """State _Encrypt_/_Decrypt_ of <<KLEE-ECB-mode>>, on KLEE values.
 
     Literally the specification's loop:
 
-        foreach(i from 0 to ACELEN-b by b) {
+        foreach(i from 0 to KLLEN-b by b) {
           OUTPUT[i+b-1:i] <- enc_blk(key, INPUT[i+b-1:i]) }
 
     Each block is taken from, and returned to, the same bit position, so the
@@ -154,14 +154,14 @@ def ace_ecb(enc, key, inp, acelen, b=128):
     return out
 
 
-def ace_ecb_bigendian_misread(enc, key, inp, acelen, b=128):
-    """Negative control: the big-endian misreading of <<ACE-Notation>>.
+def kl_ecb_bigendian_misread(enc, key, inp, acelen, b=128):
+    """Negative control: the big-endian misreading of <<KLEE-Notation>>.
 
     ECB treats every block independently, so getting the *order of the loop*
     wrong is unobservable --- the specification's "least significant positions
     first" phrasing has no effect on the result by itself.  What is observable,
     and what that phrasing exists to pin down, is the correspondence between block
-    positions in the ACE value and block offsets in the byte string.  This control
+    positions in the KLEE value and block offsets in the byte string.  This control
     takes the opposite correspondence, mapping the most significant block of the
     value to the first block of the string, and must disagree with the vector.
     """
@@ -246,14 +246,14 @@ def chk(label, got, want, column=None):
     return good
 
 
-print("== FIPS 197 Appendix C: single-block AES (REF and ACE, b = ACELEN)")
+print("== FIPS 197 Appendix C: single-block AES (REF and ACE, b = KLLEN)")
 for name, k, p, c in FIPS197:
     key, pt, ct = bytes.fromhex(k), bytes.fromhex(p), bytes.fromhex(c)
     chk(name + " encrypt", aes_encrypt(key, pt).hex(), c)
     chk(name + " decrypt", aes_decrypt(key, ct).hex(), p)
-    # the ACE model with ACELEN = b must be the bare block function
-    chk(name + " ACE model ACELEN=b",
-        v2b(ace_ecb(aes_encrypt, key, b2v(pt), 128), 16).hex(), c)
+    # the KLEE model with KLLEN = b must be the bare block function
+    chk(name + " KLEE model KLLEN=b",
+        v2b(kl_ecb(aes_encrypt, key, b2v(pt), 128), 16).hex(), c)
 
 print("\n== SP 800-38A F.1: four-block ECB, REF (byte string)")
 pt = bytes.fromhex(SP38A_PT)
@@ -262,18 +262,18 @@ for name, k, c in SP38A_F1:
     chk(name + " encrypt", ref_ecb(aes_encrypt, key, pt).hex(), c)
     chk(name + " decrypt", ref_ecb(aes_decrypt, key, bytes.fromhex(c)).hex(), SP38A_PT)
 
-print("\n== ACE multi-block rule: ACELEN = 4b, least significant block position first")
+print("\n== KLEE multi-block rule: KLLEN = 4b, least significant block position first")
 print("   (the 4-block operand is built with cat(); its LEFT part is the most")
 print("    significant, i.e. the LAST block of the byte string)")
 print("\nKAT-EXPECT-FAIL: NEG big-endian misread")
-print(f"\n   {'vector':<32} {'ACE spec order':<16} {'NEG big-endian misread'}")
+print(f"\n   {'vector':<32} {'KLEE spec order':<16} {'NEG big-endian misread'}")
 for name, k, c in SP38A_F1:
     key = bytes.fromhex(k)
     blocks = [pt[i:i + 16] for i in range(0, 64, 16)]
     # cat() takes the most significant part first: reverse the address order.
     inp = cat(*[(b2v(b), 128) for b in reversed(blocks)])
-    spec = v2b(ace_ecb(aes_encrypt, key, inp, 512), 64).hex()
-    neg = v2b(ace_ecb_bigendian_misread(aes_encrypt, key, inp, 512), 64).hex()
+    spec = v2b(kl_ecb(aes_encrypt, key, inp, 512), 64).hex()
+    neg = v2b(kl_ecb_bigendian_misread(aes_encrypt, key, inp, 512), 64).hex()
     good_spec = spec == c
     good_neg = neg != c                      # the control must NOT reproduce the vector
     ok = ok and good_spec
@@ -281,7 +281,7 @@ for name, k, c in SP38A_F1:
     print(f"   {name:<32} {'PASS' if good_spec else 'FAIL':<16} "
           f"{'FAIL' if good_neg else 'PASS (does not discriminate)'}")
     # and the decryption direction, spec order only
-    dec = v2b(ace_ecb(aes_decrypt, key,
+    dec = v2b(kl_ecb(aes_decrypt, key,
                       cat(*[(b2v(bytes.fromhex(c)[i:i + 16]), 128)
                             for i in range(48, -1, -16)]), 512), 64).hex()
     ok = ok and dec == SP38A_PT
@@ -304,7 +304,7 @@ for name, k, p, c in SM4_MULTI:
     chk(name + " REF decrypt", ref_ecb(sm4_decrypt, key, bytes.fromhex(c)).hex(), p)
     blocks = [bytes.fromhex(p)[i:i + 16] for i in range(0, len(p) // 2, 16)]
     inp = cat(*[(b2v(b), 128) for b in reversed(blocks)])
-    chk(name + " ACE model", v2b(ace_ecb(sm4_encrypt, key, inp, 128 * len(blocks)),
+    chk(name + " KLEE model", v2b(kl_ecb(sm4_encrypt, key, inp, 128 * len(blocks)),
                                  16 * len(blocks)).hex(), c)
 
 if not neg_fired:

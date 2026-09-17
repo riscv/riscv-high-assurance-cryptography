@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
-"""CMAC known-answer test: the ACE specification text against SP 800-38B / RFC 4493.
+"""CMAC known-answer test: the KLEE specification text against SP 800-38B / RFC 4493.
 
 Two independent implementations are checked against the published vectors:
 
   REF   SP 800-38B / RFC 4493 written directly on byte strings, with the
         subkey doubling over the big-endian string view as the standard
         specifies.
-  ACE   the state machine of <<ACE-CMAC-mode>> (src/ace-ISA-algorithms.adoc),
-        implemented formula-by-formula in the ACE value model of
+  KLEE   the state machine of <<KLEE-CMAC-mode>> (src/ace-ISA-algorithms.adoc),
+        implemented formula-by-formula in the KLEE value model of
         src/ace-notation.adoc (byte i of a string lives at bits [8i+7:8i];
         the left operand of @ is more significant).  gen_subkeys uses
-        `double`, the OCB3 doubling of <<ACE-OCB-mode>>.
+        `double`, the OCB3 doubling of <<KLEE-OCB-mode>>.
 
 Vectors and provenance
   * RFC 4493 section 4 (identical to SP 800-38B Appendix D.1), AES-128:
@@ -24,15 +24,15 @@ Vectors and provenance
     every key size exercises a partial final block.
 
 Checks performed
-  * REF vs published tag, and ACE vs published tag, for all 13 examples.
-  * The published subkey anchors (L, K1, K2) against ACE gen_subkeys, for
+  * REF vs published tag, and KLEE vs published tag, for all 13 examples.
+  * The published subkey anchors (L, K1, K2) against KLEE gen_subkeys, for
     all three key sizes.
   * Every path of _Hash_Absorb_Last_Block_ is covered:
       Xs = 0     empty message           (K2, all-padding block)
       Xs = b     full final block        (K1 path)
       0 < Xs < b partial final block     (K2, ocb-style padded block)
   * Both _Hash_Output_ options: the Form C `ace.exec` emit, and the Form C
-    `ace.setst #ace_state_hash_verify` comparison (Success on the right tag,
+    `ace.setst #kl_state_hash_verify` comparison (Success on the right tag,
     Failure on a tampered one).
   * The `Xs` validity rule of the Form B setst: Xs > b and Xs not a
     multiple of 8 must drive the CR to Error State _Invalid_.
@@ -86,7 +86,7 @@ def ref_cmac(K, M):
     return aes_encrypt(K, bxor(X, last))
 
 # ====================================================================== ACE
-# The state machine of <<ACE-CMAC-mode>>, transcribed step by step.
+# The state machine of <<KLEE-CMAC-mode>>, transcribed step by step.
 
 class Invalid(Exception):
     """CR transition to Error State _Invalid_."""
@@ -148,7 +148,7 @@ class AceCmac:
         return sl(INPUT, B - 1, 0) == self.hash   # Success / Failure
 
 
-def ace_cmac(K, M, double_fn=double_ocb, force_k2=False, dummy_empty_input=0):
+def kl_cmac(K, M, double_fn=double_ocb, force_k2=False, dummy_empty_input=0):
     """Drive the state machine the way software would; return the b-bit tag."""
     m = AceCmac(K, double_fn, force_k2)
     if len(M) and len(M) % 16 == 0:
@@ -236,18 +236,18 @@ def main():
         print(f"{label:10} {chk(good):6} {chk(g1):6} {chk(g2):6}")
 
     print("\nCMAC vectors (REF = SP 800-38B on byte strings; "
-          "ACE = <<ACE-CMAC-mode>> state machine):")
+          "KLEE = <<KLEE-CMAC-mode>> state machine):")
     print(f"{'case':14} {'Mlen':>5}  {'last-block path':16} "
           f"{'REF':6} {'ACE-emit':9} {'verify':7} {'tamper':7}")
     for label, K, n, want in VECTORS:
         M = MSG[:n]
         W = bytes.fromhex(want)
         r = ref_cmac(K, M)
-        m = ace_cmac(K, M)
+        m = kl_cmac(K, M)
         emitted = v2b(m.exec_output(), 16)
         good_verify = m.setst_hash_verify(b2v(W))
         bad = bytearray(W); bad[0] ^= 0x80
-        evil_verify = ace_cmac(K, M).setst_hash_verify(b2v(bytes(bad)))
+        evil_verify = kl_cmac(K, M).setst_hash_verify(b2v(bytes(bad)))
         print(f"{label:14} {n:>5}  {path_of(n):16} "
               f"{chk(r == W):6} {chk(emitted == W):9} "
               f"{chk(good_verify):7} {chk(not evil_verify):7}")
@@ -257,8 +257,8 @@ def main():
     for label, K, want in (("AES-128", K128, "BB1D6929E95937287FA37D129B756746"),
                            ("AES-192", K192, "D17DDF46ADAACDE531CAC483DE7A9367"),
                            ("AES-256", K256, "028962F61B7BF89EFC6B551F4667D983")):
-        t0 = v2b(ace_cmac(K, b'', dummy_empty_input=0).exec_output(), 16)
-        t1 = v2b(ace_cmac(K, b'', dummy_empty_input=(1 << 128) - 1).exec_output(), 16)
+        t0 = v2b(kl_cmac(K, b'', dummy_empty_input=0).exec_output(), 16)
+        t1 = v2b(kl_cmac(K, b'', dummy_empty_input=(1 << 128) - 1).exec_output(), 16)
         agree = t0 == t1 == bytes.fromhex(want)
         print(f"  {label}: INPUT = 0 and INPUT = ones(128) both give the "
               f"published tag: {chk(agree)}")
@@ -285,13 +285,13 @@ def main():
     print("KAT-EXPECT-FAIL: NC-K2full")
     print("KAT-EXPECT-FAIL: NC-lemask")
     # NC-K2full: only meaningful where the final block is full (Mlen = 16, 64).
-    fired1 = all(v2b(ace_cmac(K, MSG[:n], force_k2=True).exec_output(), 16)
+    fired1 = all(v2b(kl_cmac(K, MSG[:n], force_k2=True).exec_output(), 16)
                  != bytes.fromhex(w)
                  for lbl, K, n, w in VECTORS if n and n % 16 == 0)
     print(f"  NC-K2full (K2 used for a full final block, not K1)   : "
           f"{'FAIL as expected' if fired1 else 'MATCHED (control did not fire)'}")
     # NC-lemask: the little-endian XTS doubling instead of the big-endian double().
-    fired2 = any(v2b(ace_cmac(K, MSG[:n], double_fn=update_mask).exec_output(), 16)
+    fired2 = any(v2b(kl_cmac(K, MSG[:n], double_fn=update_mask).exec_output(), 16)
                  != bytes.fromhex(w)
                  for lbl, K, n, w in VECTORS)
     print(f"  NC-lemask (subkeys via little-endian update_mask)    : "

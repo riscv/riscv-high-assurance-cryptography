@@ -1,4 +1,4 @@
-# Build the ACE specification in the docs container, via the Qualcomm registry.
+# Build the KLEE specification in the docs container, via the Qualcomm registry.
 #
 # SPDX-License-Identifier: CC-BY-SA-4.0
 

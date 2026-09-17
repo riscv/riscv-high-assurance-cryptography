@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""Known-Answer Tests for the ACE ML-KEM algorithm (src/ace-ISA-algorithms.adoc,
-anchor [[ACE-PQC-ML-KEM]]) against FIPS 203.
+"""Known-Answer Tests for the KLEE ML-KEM algorithm (src/ace-ISA-algorithms.adoc,
+anchor [[KLEE-PQC-ML-KEM]]) against FIPS 203.
 
 What this harness validates
 ---------------------------
@@ -11,20 +11,20 @@ What this harness validates
     is anchored here, byte for byte, against official NIST ACVP vectors for all
     three parameter sets.
 
-2.  *The ACE specification text itself*: the size table <<ACE-ML-KEM-sizes>>, the
+2.  *The KLEE specification text itself*: the size table <<KLEE-ML-KEM-sizes>>, the
     state machine (Ready / GenerateKeyPair / Encapsulate / Decapsulate /
     *_Input / *_Output), the `process_VLI`-based field loading with the transfer
-    counter kept in the MDH _AlgorithmUse_ field, the unconditional Decaps with
+    counter kept in the MDH _MachineUse_ field, the unconditional Decaps with
     implicit rejection indistinguishable to the caller, and the `ace.derive`
     Form 01 flow that moves `sharedkey` into a secret field of a separately
     provisioned CC, whose _UsagePolicy_ / _Locality_ must satisfy the
     requirement recorded in this CC's _AuxInfo_ (review finding M5).
 
-3.  *Review finding M12, since FIXED*: <<ACE-PQC-ML-KEM>> now requires the
+3.  *Review finding M12, since FIXED*: <<KLEE-PQC-ML-KEM>> now requires the
     FIPS 203 section 7.2 / 7.3 input checks and splits their outcome by kind --
     a KEY check failure is a configuration error (Error State Invalid), a
     CIPHERTEXT check failure is a data error (State Failure, a valid state).
-    The misnaming of `ace_state_failure` as an "Error State" is also gone.
+    The misnaming of `kl_state_failure` as an "Error State" is also gone.
     The pre-fix behaviour (no checks at all) is retained as a labelled
     regression case.
 
@@ -58,9 +58,9 @@ def chk(name, ok, note=''):
     print(f"  {'PASS' if ok else 'FAIL'}  {name}" + (f"   [{note}]" if note else ''))
     return ok
 
-# ================================================================ ACE model
+# ================================================================ KLEE model
 #
-# MDH field positions, src/ace-ISA-unpriv.adoc <<ACE-metadata-header>>.
+# MDH field positions, src/ace-ISA-unpriv.adoc <<KLEE-metadata-header>>.
 F_ALGORITHM     = (11, 0)
 F_ALGPOLICY     = (13, 12)
 F_STATE         = (25, 21)
@@ -80,8 +80,8 @@ def mdh_set(mdh, fld, val):
     m = ((1 << (hi - lo + 1)) - 1) << lo
     return (mdh & ~m) | ((val << lo) & m)
 
-# State numbers: global ones from <<ACE-states-valid>> / <<ACE-states-error>>,
-# algorithm-specific ones from the ML-KEM state list in [[ACE-PQC-ML-KEM]].
+# State numbers: global ones from <<KLEE-states-valid>> / <<KLEE-states-error>>,
+# algorithm-specific ones from the ML-KEM state list in [[KLEE-PQC-ML-KEM]].
 S_READY, S_GENKEYPAIR, S_ENCAPSULATE, S_DECAPSULATE = 1, 2, 3, 4
 S_EK_IN, S_DK_IN, S_EK_OUT, S_CT_IN, S_CT_OUT = 5, 6, 7, 8, 9
 S_SUCCESS, S_FAILURE, S_INVALID = 22, 23, 25
@@ -91,13 +91,13 @@ OUT_STATES = {S_EK_OUT: 'encapsk', S_CT_OUT: 'ciphertext'}
 
 
 class Invalidated(Exception):
-    """The CR transitioned to Error State _Invalid_ (ace_state_invalid, 25)."""
+    """The CR transitioned to Error State _Invalid_ (kl_state_invalid, 25)."""
 
 
 class MLKEMContext:
-    """Model of an ACE Cryptographic Context running an ML-KEM algorithm.
+    """Model of an KLEE Cryptographic Context running an ML-KEM algorithm.
 
-    Only the architecturally visible behaviour of [[ACE-PQC-ML-KEM]] is modelled:
+    Only the architecturally visible behaviour of [[KLEE-PQC-ML-KEM]] is modelled:
     the MDH, the four state fields, and the state machine.  Cryptography is
     delegated to kat/fips203.py, exactly as the spec delegates it to FIPS 203.
     """
@@ -108,7 +108,7 @@ class MLKEMContext:
         # Provisioning Input is the 128-bit MDH alone (no key material).
         self.mdh = mdh_set(0, F_AUXINFO, auxinfo)
         self.mdh = mdh_set(self.mdh, F_STATE, S_READY)
-        # `validate` selects the FIPS 203 7.2/7.3 checks that <<ACE-PQC-ML-KEM>> now requires.
+        # `validate` selects the FIPS 203 7.2/7.3 checks that <<KLEE-PQC-ML-KEM>> now requires.
         self.validate = validate
         self._clear_all()
 
@@ -149,20 +149,20 @@ class MLKEMContext:
             self._clear_all()
         if state in IN_STATES or state in OUT_STATES:
             # "Upon entering an *_Input_ or *_Output_ state by using ace.setst,
-            #  the AlgorithmUse field is zeroed."
+            #  the MachineUse field is zeroed."
             self.alguse = 0
 
     def exec_input(self, data):
         """Form B `ace.exec ..., INPUT` in an _*_Input_ state: process_VLI with
-        block = state = F, b = n = len, cumul_len = AlgorithmUse (block_base and
-        input_base internal and unaliased, per <<ACE-process-VLI>>),
+        block = state = F, b = n = len, cumul_len = MachineUse (block_base and
+        input_base internal and unaliased, per <<KLEE-process-VLI>>),
         process_block = finalize = None."""
         name = IN_STATES[self.state]
         n = self.field_bits(name)
         cum = self.alguse
         if cum >= n:                       # process_VLI step 1
             self.mdh = mdh_set(self.mdh, F_STATE, S_INVALID)
-            raise Invalidated(f'{name}_Input past end (AlgorithmUse={cum} >= n={n})')
+            raise Invalidated(f'{name}_Input past end (MachineUse={cum} >= n={n})')
         amount = min(len(data) * 8, n - cum)      # bits in excess are ignored
         buf = bytearray(self.field(name).ljust(n // 8, b'\0'))
         buf[cum // 8: cum // 8 + amount // 8] = data[:amount // 8]
@@ -207,7 +207,7 @@ class MLKEMContext:
         if st == S_ENCAPSULATE:
             if self.validate and not K.check_encaps_input(self.encapsk, self.pset):
                 # FIPS 203 7.2 encapsulation key check.  A key check failure is a
-                # CONFIGURATION error -> Error State Invalid (<<ACE-PQC-ML-KEM>>).
+                # CONFIGURATION error -> Error State Invalid (<<KLEE-PQC-ML-KEM>>).
                 self.mdh = mdh_set(self.mdh, F_STATE, S_INVALID)
                 return
             self.sharedkey, self.ciphertext = K.encaps_internal(
@@ -237,7 +237,7 @@ class MLKEMContext:
         raise AssertionError(f'no Form D ace.exec defined in state {st}')
 
     def derive(self, dest_mdh, length_bytes):
-        """`ace.derive` Form 01 (<<ACE-instruction-derive>>): the output of this
+        """`ace.derive` Form 01 (<<KLEE-instruction-derive>>): the output of this
         CC's ace.exec -- the shared key -- into a secret field of a second CR.
 
         The destination CC is provisioned separately, so this models only the
@@ -249,7 +249,7 @@ class MLKEMContext:
         """
         if length_bytes > len(self.sharedkey):
             raise Invalidated('length exceeds the shared key')
-        # <<ACE-PQC-ML-KEM>>: _AuxInfo_ is a REQUIREMENT on the destination CC,
+        # <<KLEE-PQC-ML-KEM>>: _AuxInfo_ is a REQUIREMENT on the destination CC,
         # not a value copied into it.  Bits [79:64]: UsagePolicy [4:0],
         # Locality [13:5], Reserved [15:14].
         aux = mdh_get(self.mdh, F_AUXINFO)
@@ -273,7 +273,7 @@ def _raises(fn):
 
 
 def t_sizes():
-    print('\n-- Size table <<ACE-ML-KEM-sizes>> vs FIPS 203 --')
+    print('\n-- Size table <<KLEE-ML-KEM-sizes>> vs FIPS 203 --')
     table = {512: (800, 1632, 768, 32),
              768: (1184, 2400, 1088, 32),
              1024: (1568, 3168, 1568, 32)}
@@ -330,15 +330,15 @@ def t_decaps():
 
 
 def t_input_validation():
-    print('\n-- FIPS 203 7.2/7.3 input validation (<<ACE-PQC-ML-KEM>>; M12 fixed) --')
+    print('\n-- FIPS 203 7.2/7.3 input validation (<<KLEE-PQC-ML-KEM>>; M12 fixed) --')
     for v in VECTORS['ekCheck']:
         got = K.check_encaps_input(bytes.fromhex(v['ek']), v['pset'])
-        chk(f"encapsk check per FIPS 203 7.2 (<<ACE-PQC-ML-KEM>>)  {v['src']}  ({v['reason']})",
+        chk(f"encapsk check per FIPS 203 7.2 (<<KLEE-PQC-ML-KEM>>)  {v['src']}  ({v['reason']})",
             got == v['pass'], 'accepted' if got else 'REJECTED')
     for v in VECTORS['dkCheck']:
         ct = bytes(K.sizes(v['pset'])[2])
         got = K.check_decaps_input(bytes.fromhex(v['dk']), ct, v['pset'])
-        chk(f"decapsk check per FIPS 203 7.3 (<<ACE-PQC-ML-KEM>>)  {v['src']}  ({v['reason']})",
+        chk(f"decapsk check per FIPS 203 7.3 (<<KLEE-PQC-ML-KEM>>)  {v['src']}  ({v['reason']})",
             got == v['pass'], 'accepted' if got else 'REJECTED')
 
     # A hand-made malformed encapsk: one coefficient re-encoded as q (>= q).
@@ -383,23 +383,23 @@ def t_input_validation():
 
 
 def t_state_machine():
-    print('\n-- ACE state machine and process_VLI accounting --')
+    print('\n-- KLEE state machine and process_VLI accounting --')
     ps = 768
     v = VECTORS['encaps'][1]
     assert v['pset'] == ps
     ek = bytes.fromhex(v['ek'])
 
-    # chunked _encapsk_Input_ through the AlgorithmUse counter
+    # chunked _encapsk_Input_ through the MachineUse counter
     cc = MLKEMContext(ps)
     cc.setst(S_EK_IN)
-    chk('setst(_encapsk_Input_) zeroes _AlgorithmUse_', cc.alguse == 0)
+    chk('setst(_encapsk_Input_) zeroes _MachineUse_', cc.alguse == 0)
     chunks = [128, 512, 400, 144]            # 1184 bytes, uneven transfers
     off = 0
     ok = True
     for i, n in enumerate(chunks):
         cc.exec_input(ek[off:off + n]); off += n
         ok &= cc.alguse == off * 8
-    chk('chunked _encapsk_Input_: _AlgorithmUse_ tracks bits loaded',
+    chk('chunked _encapsk_Input_: _MachineUse_ tracks bits loaded',
         ok and cc.alguse == 1184 * 8, f'{cc.alguse} bits')
     chk('encapsk loaded byte-exactly by process_VLI', cc.encapsk == ek)
 
@@ -414,10 +414,10 @@ def t_state_machine():
     # a further ace.exec past completion -> Error State Invalid
     try:
         cc2.exec_input(b'\x00' * 16)
-        chk('ace.exec with _AlgorithmUse_ >= n transitions to Error State _Invalid_',
+        chk('ace.exec with _MachineUse_ >= n transitions to Error State _Invalid_',
             False)
     except Invalidated:
-        chk('ace.exec with _AlgorithmUse_ >= n transitions to Error State _Invalid_',
+        chk('ace.exec with _MachineUse_ >= n transitions to Error State _Invalid_',
             cc2.state == S_INVALID)
 
     # no ace.exec allowed in State Ready
@@ -441,7 +441,7 @@ def t_state_machine():
     out, want = b'', bytes.fromhex(v['c'])
     for n in (512, 512, 64):
         out += cc.exec_output(n)
-    chk('_ciphertext_Output_ streams the ACVP ciphertext, _AlgorithmUse_ complete',
+    chk('_ciphertext_Output_ streams the ACVP ciphertext, _MachineUse_ complete',
         out == want and cc.alguse == len(want) * 8, v['src'])
     try:
         cc.exec_output(16)
@@ -541,7 +541,7 @@ def t_negative_control():
 
 
 def main():
-    print('ACE ML-KEM known-answer tests (FIPS 203, [[ACE-PQC-ML-KEM]])')
+    print('KLEE ML-KEM known-answer tests (FIPS 203, [[KLEE-PQC-ML-KEM]])')
     t_sizes()
     t_keygen()
     t_encaps()

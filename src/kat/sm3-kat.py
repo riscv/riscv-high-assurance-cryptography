@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""SM3 KAT for the ACE specification (<<ACE-SM3>> over <<ACE-SHA-2>>/<<ACE-hash-functions>>).
+"""SM3 KAT for the KLEE specification (<<KLEE-SM3>> over <<KLEE-SHA-2>>/<<KLEE-hash-functions>>).
 
-<<ACE-SM3>> says SM3 "follows exactly the rules of the SHA-2 family (<<ACE-SHA-2>>)
+<<KLEE-SM3>> says SM3 "follows exactly the rules of the SHA-2 family (<<KLEE-SHA-2>>)
 with w = 32, b = 512, n = 256, t = 256: it has a big-endian representation with the
 same padding rule and word mapping as SHA-256, and the same state machine.  The
 initial hash value and the compression function are those of the SM3 standard."
-This harness therefore instantiates the same ACE model as kat/sha2-kat.py -- the
+This harness therefore instantiates the same KLEE model as kat/sha2-kat.py -- the
 process_VLI absorb loop, the int(bswap(block[(j+1)w-1 : jw])) word extraction, the
 caller-supplied FIPS-180-4-style padding, the block_base = 0 requirement at
 _Hash_Output_, and the generic squeeze loop -- with the GB/T 32905-2016 IV and
@@ -16,10 +16,10 @@ Checks performed:
     plan whose ace.exec cuts fall inside blocks (granularity 32 bits respected), and
     a single transfer interrupted and resumed at every process_VLI interruption
     point.  M4 (earlier review, since fixed): the spec literally assigns the bit count
-    input_base to/from the byte-counting acestart CSR; the corrected interpretation
-    acestart = input_base/8 is used here, matching the explicit /8 of _Hash_Output_.
+    input_base to/from the byte-counting klstart CSR; the corrected interpretation
+    klstart = input_base/8 is used here, matching the explicit /8 of _Hash_Output_.
   * the digest is read out over two Form C ace.exec instructions in the multi-chunk
-    plan, exercising the t/block_base accounting of <<ACE-hash-functions>>.
+    plan, exercising the t/block_base accounting of <<KLEE-hash-functions>>.
   * a length-extension-style consistency check over many message lengths against an
     independent straight byte-oriented SM3 reference written in the big-endian view
     (hashlib has no portable 'sm3', so the oracle is this second implementation plus
@@ -77,7 +77,7 @@ def sm3_compress(V, W16):
     return [v ^ x for v, x in zip(V, [A, B, C, D, E, F, G, H])]
 
 def sm3_ref(msg):
-    """Independent byte-oriented reference: plain big-endian SM3, no ACE model."""
+    """Independent byte-oriented reference: plain big-endian SM3, no KLEE model."""
     m = msg + b'\x80' + bytes((-(len(msg) + 9)) % 64) + (8 * len(msg)).to_bytes(8, 'big')
     V = list(IV_SM3)
     for i in range(0, len(m), 64):
@@ -85,7 +85,7 @@ def sm3_ref(msg):
                              for j in range(16)])
     return b''.join(v.to_bytes(4, 'big') for v in V)
 
-# ------------------------------------------------------- the ACE model
+# ------------------------------------------------------- the KLEE model
 
 def set_slice(v, hi, lo, x):
     mask = ((1 << (hi - lo + 1)) - 1) << lo
@@ -95,7 +95,7 @@ class Invalid(Exception):
     """CR transition to Error State _Invalid_."""
 
 class AceSm3:
-    """SM3 CC per <<ACE-SM3>>; all quantities are ACE little-endian values."""
+    """SM3 CC per <<KLEE-SM3>>; all quantities are KLEE little-endian values."""
     w, b, n, t = 32, 512, 256, 256
 
     def __init__(self, be_words=True):
@@ -104,11 +104,11 @@ class AceSm3:
         self.block = 0
         self.block_base = 0
         self.cumul_len = 0
-        self.acestart = 0
+        self.klstart = 0
         self.state_name = 'Hash_Absorb'
 
     def _absorb(self):
-        """absorb(): word j = int(bswap(block[(j+1)w-1 : jw])) per <<ACE-SHA-2>>."""
+        """absorb(): word j = int(bswap(block[(j+1)w-1 : jw])) per <<KLEE-SHA-2>>."""
         W = []
         for j in range(16):
             word = sl(self.block, (j + 1) * self.w - 1, j * self.w)
@@ -116,14 +116,14 @@ class AceSm3:
         self.state = sm3_compress(self.state, W)
 
     def exec_input(self, data, resume=False, interrupt_after=None):
-        """Form B ace.exec in _Hash_Absorb_ = process_VLI (<<ACE-process-VLI>>), len=0."""
+        """Form B ace.exec in _Hash_Absorb_ = process_VLI (<<KLEE-process-VLI>>), len=0."""
         assert self.state_name == 'Hash_Absorb'
-        INPUT, ACELEN = b2v(data), 8 * len(data)
-        # M4 (fixed): the spec now writes `input_base <- 8 * acestart` explicitly.
-        input_base = 8 * self.acestart if resume else 0
+        INPUT, KLLEN = b2v(data), 8 * len(data)
+        # M4 (fixed): the spec now writes `input_base <- 8 * klstart` explicitly.
+        input_base = 8 * self.klstart if resume else 0
         iters = 0
-        while input_base < ACELEN:
-            amount = min(ACELEN - input_base, self.b - self.block_base)
+        while input_base < KLLEN:
+            amount = min(KLLEN - input_base, self.b - self.block_base)
             self.block = set_slice(self.block, self.block_base + amount - 1,
                                    self.block_base,
                                    sl(INPUT, input_base + amount - 1, input_base))
@@ -134,10 +134,10 @@ class AceSm3:
                 self._absorb()
                 self.block_base = 0
             iters += 1
-            # M4 (fixed): the spec now writes `acestart <- input_base / 8`.
+            # M4 (fixed): the spec now writes `klstart <- input_base / 8`.
             if interrupt_after is not None and iters >= interrupt_after \
-                    and input_base < ACELEN:
-                self.acestart = input_base // 8
+                    and input_base < KLLEN:
+                self.klstart = input_base // 8
                 return 'interrupted'
         return 'done'
 
@@ -153,11 +153,11 @@ class AceSm3:
         self.state_name = 'Hash_Output'
 
     def exec_output(self, nbytes):
-        """Form C ace.exec squeeze loop of <<ACE-hash-functions>>."""
+        """Form C ace.exec squeeze loop of <<KLEE-hash-functions>>."""
         assert self.state_name == 'Hash_Output'
-        ACELEN, OUTPUT, output_base = 8 * nbytes, 0, 0
-        while output_base < ACELEN:
-            amount = min(ACELEN - output_base, self.t - self.block_base)
+        KLLEN, OUTPUT, output_base = 8 * nbytes, 0, 0
+        while output_base < KLLEN:
+            amount = min(KLLEN - output_base, self.t - self.block_base)
             OUTPUT |= sl(self.block, self.block_base + amount - 1,
                          self.block_base) << output_base
             output_base += amount
@@ -172,7 +172,7 @@ def caller_pad(msg):
     return (msg + b'\x80' + bytes((-(len(msg) + 9)) % 64)
             + (8 * len(msg)).to_bytes(8, 'big'))
 
-def ace_sm3(msg, plan='multi', be_words=True):
+def kl_sm3(msg, plan='multi', be_words=True):
     cc = AceSm3(be_words)
     mp = caller_pad(msg)
     if plan == 'multi':
@@ -202,29 +202,29 @@ TV = [  # GB/T 32905-2016 appendix A
 ]
 
 ok = True
-print('SM3 per <<ACE-SM3>> (= <<ACE-SHA-2>> rules with the GB/T 32905-2016 core)')
-print('NOTE (spec, M4): process_VLI resumption modeled with acestart = input_base/8.\n')
+print('SM3 per <<KLEE-SM3>> (= <<KLEE-SHA-2>> rules with the GB/T 32905-2016 core)')
+print('NOTE (spec, M4): process_VLI resumption modeled with klstart = input_base/8.\n')
 print(f'{"message":22} {"multi-chunk":12} {"interrupted":12} {"byte-oriented ref"}')
 for label, msg, exp_hex in TV:
     exp = bytes.fromhex(exp_hex)
-    a, b = ace_sm3(msg, 'multi'), ace_sm3(msg, 'interrupt')
+    a, b = kl_sm3(msg, 'multi'), kl_sm3(msg, 'interrupt')
     r = sm3_ref(msg)
     ga, gb, gr = a == exp, b == exp, r == exp
     ok &= ga and gb and gr
     print(f'{label:22} {"PASS" if ga else "FAIL":12} {"PASS" if gb else "FAIL":12} '
           f'{"PASS" if gr else "FAIL"}')
 
-# ACE model vs the independent byte-oriented reference over many lengths, covering
+# KLEE model vs the independent byte-oriented reference over many lengths, covering
 # every partial-block boundary and multi-block cases
 lens = list(range(0, 130)) + [200, 255, 256, 512, 1000]
 mism = [L for L in lens
-        if ace_sm3(bytes((i * 7 + 3) & 0xff for i in range(L))) !=
+        if kl_sm3(bytes((i * 7 + 3) & 0xff for i in range(L))) !=
            sm3_ref(bytes((i * 7 + 3) & 0xff for i in range(L)))]
 mism += [L for L in lens
-         if ace_sm3(bytes((i * 7 + 3) & 0xff for i in range(L)), 'interrupt') !=
+         if kl_sm3(bytes((i * 7 + 3) & 0xff for i in range(L)), 'interrupt') !=
             sm3_ref(bytes((i * 7 + 3) & 0xff for i in range(L)))]
 ok &= not mism
-print(f'\nACE model vs byte-oriented reference, {2 * len(lens)} messages of '
+print(f'\nKLEE model vs byte-oriented reference, {2 * len(lens)} messages of '
       f'0..1000 bytes: {"PASS" if not mism else f"FAIL {mism[:5]}"}')
 
 cc = AceSm3()
@@ -238,7 +238,7 @@ print(f'unpadded message rejected at _Hash_Output_ (block_base != 0 -> _Invalid_
       f'{"PASS" if rejected else "FAIL"}')
 
 print('KAT-EXPECT-FAIL: no-bswap')
-fired = ace_sm3(b'abc', 'multi', be_words=False) != bytes.fromhex(TV[0][2])
+fired = kl_sm3(b'abc', 'multi', be_words=False) != bytes.fromhex(TV[0][2])
 print(f'no-bswap control, SM3("abc") vs GB/T vector: '
       f'{"FAIL (expected: control is effective)" if fired else "PASS (CONTROL IS DEAD)"}')
 ok &= fired

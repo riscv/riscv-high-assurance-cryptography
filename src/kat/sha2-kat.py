@@ -1,27 +1,27 @@
 #!/usr/bin/env python3
-"""SHA-2 family KAT for the ACE specification (<<ACE-SHA-2>> over <<ACE-hash-functions>>).
+"""SHA-2 family KAT for the KLEE specification (<<KLEE-SHA-2>> over <<KLEE-hash-functions>>).
 
 WHAT IS MODELED (from the spec text, not from FIPS directly):
-  * _Hash_Absorb_ runs Subalgorithm process_VLI (<<ACE-process-VLI>>) with len = 0
+  * _Hash_Absorb_ runs Procedure process_VLI (<<KLEE-process-VLI>>) with len = 0
     (no max_length), block separate from state, state_offset = 0: the message is
     accumulated into `block` across ace.exec boundaries and `absorb()` fires each
     time block_base reaches b.
   * The j-th message word of a block is int(bswap(block[(j+1)w-1 : jw])) and the
     digest places the i-th chaining variable at bytes i*w/8 as bswap(bin(H_i, w)),
-    truncated to t bits (<<ACE-SHA-2>>, "Endianness").
+    truncated to t bits (<<KLEE-SHA-2>>, "Endianness").
   * Padding and length encoding are performed by the CALLER (finalize = None for
     stand-alone hashing); on the transition to _Hash_Output_ the model enforces
     block_base = 0 and otherwise raises Error State _Invalid_.
-  * _Hash_Output_ implements the squeeze loop of <<ACE-hash-functions>> but reads
-    `state`, not `block`: <<ACE-SHA-2>> takes the stand-alone digest from `state`
+  * _Hash_Output_ implements the squeeze loop of <<KLEE-hash-functions>> but reads
+    `state`, not `block`: <<KLEE-SHA-2>> takes the stand-alone digest from `state`
     and does not perform block[t-1:0] <- finalize().  Per-instruction copy with
-    amount = min(ACELEN - output_base, t - block_base), Success at block_base = t;
+    amount = min(KLLEN - output_base, t - block_base), Success at block_base = t;
     the digest is read out across two Form C ace.exec instructions in one plan.
   * Interruption/resumption of a Form B ace.exec is exercised at every
     interruption point of process_VLI.  M4 (earlier review, since fixed): the spec
-    literally writes `acestart <- input_base` and `input_base <- acestart`, a bit
-    count in the byte-counting acestart CSR; this model uses the CORRECTED
-    interpretation acestart <- input_base/8 and input_base <- 8*acestart, mirroring
+    literally writes `klstart <- input_base` and `input_base <- klstart`, a bit
+    count in the byte-counting klstart CSR; this model uses the CORRECTED
+    interpretation klstart <- input_base/8 and input_base <- 8*klstart, mirroring
     the explicit /8 and *8 that _Hash_Output_ already performs.
 
 COMPRESSION CORES are implemented from scratch (FIPS 180-4 sect. 6): both the
@@ -36,7 +36,7 @@ Intermediate Values" test strings: the empty string, "abc", the two-block
 448-bit message "abcdbcde..." for the 32-bit family and the two-block 896-bit
 message "abcdefghbcdefghi..." for the 64-bit family, with their published
 digests.  hashlib is used ONLY as an independent reference oracle, clearly
-labeled; the ACE model never calls it.
+labeled; the KLEE model never calls it.
 
 NEGATIVE CONTROL (KAT-EXPECT-FAIL: no-bswap): the same model with the bswap
 omitted from the message-word extraction must NOT reproduce the FIPS vector.
@@ -46,7 +46,7 @@ import os, sys, math, time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from common import b2v, v2b, sl, bswap, bin_
 
-import hashlib  # independent reference oracle ONLY -- never used by the ACE model
+import hashlib  # independent reference oracle ONLY -- never used by the KLEE model
 
 T0 = time.time()
 
@@ -132,7 +132,7 @@ H512_256 = _sha512_be(b"SHA-512/256", [h ^ 0xa5a5a5a5a5a5a5a5 for h in H512])
 assert H512_224[0] == 0x8c3d37c819544da2 and H512_224[7] == 0x1112e6ad91d692a1
 assert H512_256[0] == 0x22312194fc2bf72c and H512_256[7] == 0x0eb72ddc81c52ca2
 
-# ------------------------------------------------------- the ACE model
+# ------------------------------------------------------- the KLEE model
 
 def set_slice(v, hi, lo, x):
     """v with v[hi:lo] <- x (the assignment form of the spec's bit slices)."""
@@ -143,7 +143,7 @@ class Invalid(Exception):
     """CR transition to Error State _Invalid_."""
 
 class AceSha2:
-    """One SHA-2 CC per <<ACE-SHA-2>>; values are ACE little-endian values."""
+    """One SHA-2 CC per <<KLEE-SHA-2>>; values are KLEE little-endian values."""
 
     def __init__(self, name, be_words=True):
         self.w, iv, self.t = FN[name]
@@ -155,7 +155,7 @@ class AceSha2:
         self.block = 0
         self.block_base = 0
         self.cumul_len = 0
-        self.acestart = 0
+        self.klstart = 0
         self.state_name = 'Hash_Absorb'     # after _Ready_ -> _Hash_Absorb_
 
     def _absorb(self):
@@ -167,22 +167,22 @@ class AceSha2:
         self.state = sha2_compress(self.state, W, self.w, self.K, self.rounds)
 
     def exec_input(self, data, resume=False, interrupt_after=None):
-        """Form B ace.exec in _Hash_Absorb_ = process_VLI(<<ACE-process-VLI>>), len=0.
+        """Form B ace.exec in _Hash_Absorb_ = process_VLI(<<KLEE-process-VLI>>), len=0.
 
         Granularity (32 bits) is a caller obligation; the driver's transfer plans
         respect it.  Returns 'done' or 'interrupted'."""
         assert self.state_name == 'Hash_Absorb'
-        INPUT, ACELEN = b2v(data), 8 * len(data)
+        INPUT, KLLEN = b2v(data), 8 * len(data)
         if resume:
-            # M4 (earlier review, since fixed): spec literally `input_base <- acestart`
+            # M4 (earlier review, since fixed): spec literally `input_base <- klstart`
             # (bit count read from the byte-counting CSR); corrected: * 8.
-            input_base = 8 * self.acestart
+            input_base = 8 * self.klstart
         else:
             input_base = 0
         iters = 0
-        while input_base < ACELEN:
-            # len = 0: amount = min(ACELEN - input_base, b - block_base)
-            amount = min(ACELEN - input_base, self.b - self.block_base)
+        while input_base < KLLEN:
+            # len = 0: amount = min(KLLEN - input_base, b - block_base)
+            amount = min(KLLEN - input_base, self.b - self.block_base)
             # block != state: block[block_base+amount-1:block_base] <- INPUT[...]
             self.block = set_slice(self.block, self.block_base + amount - 1,
                                    self.block_base,
@@ -195,21 +195,21 @@ class AceSha2:
                 self.block_base = 0
             iters += 1
             # the (only) interruption point of process_VLI.
-            # M4 (fixed): the spec now writes `acestart <- input_base / 8`.
+            # M4 (fixed): the spec now writes `klstart <- input_base / 8`.
             if interrupt_after is not None and iters >= interrupt_after \
-                    and input_base < ACELEN:
-                self.acestart = input_base // 8
+                    and input_base < KLLEN:
+                self.klstart = input_base // 8
                 return 'interrupted'
         return 'done'
 
     def setst_output(self):
         """Form A ace.setst: _Hash_Absorb_ -> _Hash_Output_."""
-        # <<ACE-SHA-2>>: stand-alone hashing requires block_base = 0 here.
+        # <<KLEE-SHA-2>>: stand-alone hashing requires block_base = 0 here.
         if self.block_base != 0:
             raise Invalid('block_base != 0 on entry to _Hash_Output_')
-        # <<ACE-SHA-2>>: in stand-alone hashing the digest is taken from `state`,
+        # <<KLEE-SHA-2>>: in stand-alone hashing the digest is taken from `state`,
         # not from `block`; the entry step block[t-1:0] <- finalize() of
-        # <<ACE-hash-functions>> is NOT performed, finalize() being None here.
+        # <<KLEE-hash-functions>> is NOT performed, finalize() being None here.
         # `state_img` is `state` in the emission form of the "Endianness"
         # paragraph: chaining variable i at bytes i*w/8 as bswap(bin(H_i, w)).
         # `block` is left holding the last message block, untouched.
@@ -220,12 +220,12 @@ class AceSha2:
         self.state_name = 'Hash_Output'
 
     def exec_output(self, nbytes):
-        """Form C ace.exec squeeze loop of <<ACE-hash-functions>> _Hash_Output_,
-        reading `state` in place of `block` as <<ACE-SHA-2>> prescribes."""
+        """Form C ace.exec squeeze loop of <<KLEE-hash-functions>> _Hash_Output_,
+        reading `state` in place of `block` as <<KLEE-SHA-2>> prescribes."""
         assert self.state_name == 'Hash_Output'
-        ACELEN, OUTPUT, output_base = 8 * nbytes, 0, 0
-        while output_base < ACELEN:
-            amount = min(ACELEN - output_base, self.t - self.block_base)
+        KLLEN, OUTPUT, output_base = 8 * nbytes, 0, 0
+        while output_base < KLLEN:
+            amount = min(KLLEN - output_base, self.t - self.block_base)
             OUTPUT |= sl(self.state_img, self.block_base + amount - 1,
                          self.block_base) << output_base
             output_base += amount
@@ -237,7 +237,7 @@ class AceSha2:
 
 # ------------------------------------------------------- drivers
 
-FN = {  # name: (w, IV, t)   [parameters of <<ACE-SHA-2-parameters>>]
+FN = {  # name: (w, IV, t)   [parameters of <<KLEE-SHA-2-parameters>>]
     'SHA-224':     (32, H224,     224),
     'SHA-256':     (32, H256,     256),
     'SHA-384':     (64, H384,     384),
@@ -247,19 +247,19 @@ FN = {  # name: (w, IV, t)   [parameters of <<ACE-SHA-2-parameters>>]
 }
 
 def fips_pad(msg, w, b):
-    """FIPS 180-4 sect. 5.1 padding, applied by the CALLER per <<ACE-SHA-2>>."""
+    """FIPS 180-4 sect. 5.1 padding, applied by the CALLER per <<KLEE-SHA-2>>."""
     lb = 2 * w // 8
     return (msg + b'\x80' + bytes((-(len(msg) + 1 + lb)) % (b // 8))
             + (8 * len(msg)).to_bytes(lb, 'big'))
 
-def ace_digest(name, msg, plan, be_words=True):
+def kl_digest(name, msg, plan, be_words=True):
     """Run one message through the CC model.
 
     plan 'multi':     absorb the padded message in three ace.exec transfers cut at
                       non-block-aligned offsets (multiples of 4 bytes: granularity
                       32); read the digest with two Form C ace.exec instructions.
     plan 'interrupt': absorb in a single ace.exec that is interrupted at every
-                      process_VLI interruption point and resumed via acestart
+                      process_VLI interruption point and resumed via klstart
                       (M4-corrected units); read the digest in one instruction.
     """
     cc = AceSha2(name, be_words)
@@ -333,16 +333,16 @@ MNAME = {id(M_EMPTY): 'empty', id(M_ABC): '"abc"',
          id(M2_32): 'two-block (448b)', id(M2_64): 'two-block (896b)'}
 
 ok = True
-print('SHA-2 family per <<ACE-SHA-2>> / <<ACE-hash-functions>> / <<ACE-process-VLI>>')
-print('NOTE (spec, M4): process_VLI resumption modeled with acestart = input_base/8,')
-print('  the byte-count interpretation now stated in <<ACE-CSR-acestart>>.\n')
+print('SHA-2 family per <<KLEE-SHA-2>> / <<KLEE-hash-functions>> / <<KLEE-process-VLI>>')
+print('NOTE (spec, M4): process_VLI resumption modeled with klstart = input_base/8,')
+print('  the byte-count interpretation now stated in <<KLEE-CSR-klstart>>.\n')
 print(f'{"function":13} {"message":18} {"multi-chunk":12} {"interrupted":12} {"oracle"}')
 for name in FN:
     for msg, exp_hex in VEC[name].items():
         exp = bytes.fromhex(exp_hex)
-        a = ace_digest(name, msg, 'multi')
-        b = ace_digest(name, msg, 'interrupt')
-        # hashlib: independent reference oracle only (never part of the ACE model)
+        a = kl_digest(name, msg, 'multi')
+        b = kl_digest(name, msg, 'interrupt')
+        # hashlib: independent reference oracle only (never part of the KLEE model)
         try:
             r = hashlib.new(HASHLIB[name], msg).digest()
             orac = 'PASS' if (r == exp) else 'FAIL'
@@ -367,7 +367,7 @@ print(f'\nunpadded message rejected at _Hash_Output_ (block_base != 0 -> _Invali
 
 # negative control: word extraction without the spec's bswap must NOT match FIPS
 print('KAT-EXPECT-FAIL: no-bswap')
-bad = ace_digest('SHA-256', M_ABC, 'multi', be_words=False)
+bad = kl_digest('SHA-256', M_ABC, 'multi', be_words=False)
 fired = bad != bytes.fromhex(VEC['SHA-256'][M_ABC])
 print(f'no-bswap control, SHA-256("abc") vs FIPS vector: '
       f'{"FAIL (expected: control is effective)" if fired else "PASS (CONTROL IS DEAD)"}')

@@ -7,7 +7,7 @@ for all three parameter sets (ML-KEM-512/768/1024), plus the FIPS 203 section
 7.2 / 7.3 input-validation checks (encapsulation-key type+modulus check,
 decapsulation input checks) as separate, callable predicates.
 
-The checks are separate because the ACE draft specification does NOT require
+The checks are separate because the KLEE draft specification does NOT require
 them (spec gap M12 of an earlier review, since closed); the KAT harness exercises them
 explicitly, labelled "per FIPS 203 (spec gap M12)".
 
@@ -49,7 +49,7 @@ def J(data):                      # SHAKE256, 32 bytes
 def PRF(eta, s, b):               # SHAKE256(s || b, 64*eta)
     return hashlib.shake_256(s + bytes([b])).digest(64 * eta)
 
-# ---------------------------------------------------------------- NTT (Algorithms 9-11)
+# ---------------------------------------------------------------- NTT (Machines 9-11)
 
 def ntt(f):
     f = list(f)
@@ -80,7 +80,7 @@ def intt(f):
     return [x * 3303 % Q for x in f]      # 3303 = 128^-1 mod q
 
 def ntt_mul(f, g):
-    """MultiplyNTTs (Algorithm 11): pairwise BaseCaseMultiply."""
+    """MultiplyNTTs (Machine 11): pairwise BaseCaseMultiply."""
     h = [0] * 256
     for i in range(128):
         a0, a1 = f[2 * i], f[2 * i + 1]
@@ -95,7 +95,7 @@ def poly_add(f, g):
 def poly_sub(f, g):
     return [(a - b) % Q for a, b in zip(f, g)]
 
-# ---------------------------------------------------------------- sampling (Algorithms 7-8)
+# ---------------------------------------------------------------- sampling (Machines 7-8)
 
 def sample_ntt(seed34):
     """SampleNTT: rejection-sample a polynomial in NTT domain from SHAKE128."""
@@ -153,7 +153,7 @@ def compress(d, x):
 def decompress(d, y):
     return (Q * y + (1 << (d - 1))) >> d
 
-# ---------------------------------------------------------------- K-PKE (Algorithms 13-15)
+# ---------------------------------------------------------------- K-PKE (Machines 13-15)
 
 def _expand_A(rho, k):
     """A_hat[i][j] = SampleNTT(rho || j || i)  (FIPS 203 final, Kyber order)."""
@@ -230,7 +230,7 @@ def sizes(pset):
     k, _, _, du, dv = PARAMS[pset]
     return 384 * k + 32, 768 * k + 96, 32 * (du * k + dv), 32
 
-# ---------------------------------------------------------------- ML-KEM (Algorithms 16-18)
+# ---------------------------------------------------------------- ML-KEM (Machines 16-18)
 
 def keygen_internal(d, z, pset):
     ek, dk_pke = kpke_keygen(d, pset)
@@ -259,7 +259,7 @@ def decaps_internal(dk, c, pset, disable_implicit_rejection=False):
     return K2
 
 # ---------------------------------------------------------------- FIPS 203 7.2 / 7.3 checks
-# The ACE draft does not require these (spec gap M12); harness applies them.
+# The KLEE draft does not require these (spec gap M12); harness applies them.
 
 def check_encaps_input(ek, pset):
     """FIPS 203 7.2: encapsulation key check (type + modulus).  True = valid."""
@@ -275,7 +275,7 @@ def check_encaps_input(ek, pset):
 def check_ciphertext(c, pset):
     """FIPS 203 7.3: ciphertext type check.  True = valid.
 
-    <<ACE-PQC-ML-KEM>> treats a failure here as a DATA error (State Failure),
+    <<KLEE-PQC-ML-KEM>> treats a failure here as a DATA error (State Failure),
     separately from the key checks below.
     """
     k, _, _, du, dv = PARAMS[pset]
@@ -284,7 +284,7 @@ def check_ciphertext(c, pset):
 def check_decaps_key(dk, pset):
     """FIPS 203 7.3: decapsulation key checks (type + hash).  True = valid.
 
-    <<ACE-PQC-ML-KEM>> treats a failure here as a CONFIGURATION error
+    <<KLEE-PQC-ML-KEM>> treats a failure here as a CONFIGURATION error
     (Error State Invalid).
     """
     k = PARAMS[pset][0]

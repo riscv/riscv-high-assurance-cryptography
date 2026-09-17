@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""Known-Answer Tests for the ACE elliptic-curve algorithms (<<ACE-ECC>>, <<ACE-EdDSA>>).
+"""Known-Answer Tests for the KLEE elliptic-curve algorithms (<<KLEE-ECC>>, <<KLEE-EdDSA>>).
 
 WHAT IS BEING TESTED.  This harness does not test an implementation; it tests the
-*specification text* of `src/ace-ISA-algorithms.adoc`, sections `[[ACE-ECC]]` and
-`[[ACE-EdDSA]]`.  A model of the ACE control register -- its fields, its
+*specification text* of `src/ace-ISA-algorithms.adoc`, sections `[[KLEE-ECC]]` and
+`[[KLEE-EdDSA]]`.  A model of the KLEE control register -- its fields, its
 `block_base`-tracked "set"/"output" transfers, its state machine and its allowed
 transitions -- is built strictly from that text, and standard vectors are then
-pushed through the model exactly as a caller would drive a real ACE unit
+pushed through the model exactly as a caller would drive a real KLEE unit
 (`ace.setst` / `ace.exec` / output transfers).  If the spec's prescription
 disagreed with the standard, the model would produce the wrong answer and the
 case would FAIL.
@@ -32,8 +32,8 @@ ANCHOR LEVELS, strongest first.  Each case prints its level.
           conditions, field-retention (`Xs`) semantics, representation rules,
           retry rules.  Anchored on the spec text, not on an external vector.
 
-NOTE ON k.  A real ACE unit draws the per-signature secret k from the RBG
-(<<ACE-RBG>>) into `RndNum`; it is never supplied by software.  A signature over
+NOTE ON k.  A real KLEE unit draws the per-signature secret k from the RBG
+(<<KLEE-RBG>>) into `RndNum`; it is never supplied by software.  A signature over
 a random k has no known answer, so -- as is standard practice for ECDSA KATs --
 the model exposes the RBG as an injectable source and RFC 6979's deterministic k
 is fed in.  This tests every part of the specified computation except the draw
@@ -104,9 +104,9 @@ def negative(label, must_fail, name):
         _FAILURES.append(f'negative control {label} did not fire')
 
 
-# ==================================================================== ACE model
+# ==================================================================== KLEE model
 
-# States of <<ACE-ECC>> ("States:" list) plus the two of <<ACE-EdDSA>>.
+# States of <<KLEE-ECC>> ("States:" list) plus the two of <<KLEE-EdDSA>>.
 READY, SET_GEN, SET_SCALAR, POINT_MUL, SIGN_GEN = 1, 2, 3, 4, 5
 SIGN_VER, SET_HASH, SET_SECONDPT, SET_SIG, OUTPUT = 6, 7, 8, 9, 10
 MSG_ABSORB, SET_CTX = 11, 12
@@ -128,10 +128,10 @@ class ACEInvalid(Exception):
 def transition_targets(state, eddsa, literal):
     """The set of states reachable from `state` by a single `ace.setst`.
 
-    `literal=False` transcribes the bullet list of <<ACE-ECC>> as it now reads:
+    `literal=False` transcribes the bullet list of <<KLEE-ECC>> as it now reads:
     the five _Set_ states are named collectively, any two of them may transition
     freely, and all of them are sources for _Point_Mul_/_Sign_Generate_/
-    _Sign_Verify_.  <<ACE-EdDSA>> grants _Set_Ctx_ that same membership in words.
+    _Sign_Verify_.  <<KLEE-EdDSA>> grants _Set_Ctx_ that same membership in words.
 
     `literal=True` reproduces the pre-fix bullet list, in which _Set_Signature_
     had no exit at all (review finding M10, since resolved).  It is kept so that
@@ -181,7 +181,7 @@ def retry_required(mode, r, s, k, n):
 
 
 class CR:
-    """A model of an ACE control register holding an elliptic-curve CC."""
+    """A model of an KLEE control register holding an elliptic-curve CC."""
 
     def __init__(self, curve, b, h, j, u, v, mode,
                  policy_sign=True, policy_verify=True, literal=False):
@@ -219,7 +219,7 @@ class CR:
         self._loading = None                    # (field name, target length)
         self.state = READY
 
-    # -- ACE representation of field elements and points -----------------
+    # -- KLEE representation of field elements and points -----------------
     def _sentinel(self):
         return b'\xff' * self.fw
 
@@ -313,7 +313,7 @@ class CR:
 
     def _check_sign_entry(self):
         if not self.policy_sign:
-            raise ACEInvalid('signature generation not permitted by AlgorithmPolicy')
+            raise ACEInvalid('signature generation not permitted by MachinePolicy')
         if self.mode == 'eddsa':
             if int.from_bytes(self.scalar, 'little') == 0:
                 raise ACEInvalid('no seed configured')
@@ -331,7 +331,7 @@ class CR:
 
     def _check_verify_entry(self):
         if not self.policy_verify:
-            raise ACEInvalid('verification not permitted by AlgorithmPolicy')
+            raise ACEInvalid('verification not permitted by MachinePolicy')
         if self.mode == 'eddsa':
             if self.msg_pass == 3:                        # verification pass complete
                 return
@@ -577,7 +577,7 @@ class CR:
             self.sig = R + bytes(self.fw)                 # R only; HasSignature NOT set
             self.msg_pass = 1
         elif self._pass_xs == 1:
-            # C1 fix (<<ACE-EdDSA>>): a second instance H' recomputes r from the pass-2
+            # C1 fix (<<KLEE-EdDSA>>): a second instance H' recomputes r from the pass-2
             # message and must match the value stored in pass 1, binding the two passes;
             # otherwise the CR is invalidated and msg_pass stays at 1.
             dom = self._dom(0)
@@ -594,7 +594,7 @@ class CR:
             self._kprime = val
             # 3, not 1: signing pass 1 also records a completed pass, and were both
             # to use 1 a caller could run signing pass 1 and then enter _Sign_Verify_,
-            # which would verify against a k' that was never computed (<<ACE-EdDSA>>).
+            # which would verify against a k' that was never computed (<<KLEE-EdDSA>>).
             self.msg_pass = 3
         self._absorb = None
         self._pass_xs = None
@@ -643,7 +643,7 @@ class CR:
 
 
 # ------------------------------------------------------------ CR constructors
-# The b / h / j / u / v values are those tabulated in <<ACE-ECC>> "Parameters".
+# The b / h / j / u / v values are those tabulated in <<KLEE-ECC>> "Parameters".
 
 CURVE_PARAMS = {
     'secp256r1':       dict(b=256, h=256, j=256, u=2, v=2, mode='ecdsa'),
@@ -828,7 +828,7 @@ def fresh(curve, **kw):
 # ==================================================================== the tests
 
 def test_parameters():
-    head('Domain parameters and the b / h / j / u / v table of <<ACE-ECC>>')
+    head('Domain parameters and the b / h / j / u / v table of <<KLEE-ECC>>')
     for name, c in EC.WEIERSTRASS_CURVES.items():
         p = CURVE_PARAMS[name]
         level = 'PARAM' if name.startswith('brainpool') else 'KAT'
@@ -1075,7 +1075,7 @@ def test_state_machine():
         except ACEInvalid:
             ok = True
         chk('MODEL', f'Sign_Verify without Has{missing} -> Invalid', ok)
-    # AlgorithmPolicy
+    # MachinePolicy
     cr = fresh(c, policy_sign=False)
     load_field(cr, SET_SCALAR, v2b(3, cr.fw))
     load_field(cr, SET_HASH, v2b(1, cr.hashlen))
@@ -1084,7 +1084,7 @@ def test_state_machine():
         ok = False
     except ACEInvalid:
         ok = True
-    chk('MODEL', 'AlgorithmPolicy[0] clear: Sign_Generate -> Invalid', ok)
+    chk('MODEL', 'MachinePolicy[0] clear: Sign_Generate -> Invalid', ok)
     # block_base tracking
     cr = fresh(c)
     cr.setst(SET_SECONDPT)
@@ -1283,7 +1283,7 @@ def test_m10_dead_end():
         else:
             chk('MODEL', f'transition list {label}: Set_Signature -> Sign_Verify is reachable',
                 reachable)
-    note('M10 is RESOLVED in the current text. <<ACE-ECC>> "Allowed State Transitions"'
+    note('M10 is RESOLVED in the current text. <<KLEE-ECC>> "Allowed State Transitions"'
          ' now defines the five _Set_ states collectively, lets any two of them'
          ' transition freely, and admits all of them as sources for _Point_Mul_,'
          ' _Sign_Generate_ and _Sign_Verify_; _Point_Mul_ -> _Output_ -> _Success_ is'
@@ -1303,7 +1303,7 @@ def test_m10_dead_end():
 
 
 def test_ed25519():
-    head('Ed25519 / Ed25519ph against RFC 8032 7.1 and 7.3 (ACE two-pass model)')
+    head('Ed25519 / Ed25519ph against RFC 8032 7.1 and 7.3 (KLEE two-pass model)')
     c = EC.ED25519
     for name, seed_h, pk_h, msg_h, sig_h in RFC8032_ED25519:
         seed, pk, msg = bytes.fromhex(seed_h), bytes.fromhex(pk_h), bytes.fromhex(msg_h)
@@ -1328,7 +1328,7 @@ def test_ed25519():
         chk('MODEL', f'ed25519 {name}: msg_pass 1 after pass 0, 0 after Sign_Generate,'
             ' Output -> Success',
             r_pass1 == 1 and cr.msg_pass == 0 and cr.state == SUCCESS)
-        # --- verification through the ACE model
+        # --- verification through the KLEE model
         cr = fresh(c)
         load_field(cr, SET_SECONDPT, pk)
         load_field(cr, SET_SIG, bytes.fromhex(sig_h), chunk=32)
@@ -1518,7 +1518,7 @@ def test_sm2():
             int.from_bytes(e, 'big') == v['e'])
     except ValueError:
         info('SM3 not available from hashlib on this platform; Z_A / e taken from the'
-             ' embedded example values (the ACE unit computes neither).')
+             ' embedded example values (the KLEE unit computes neither).')
     pub = v2b(v['Px'], 32) + v2b(v['Py'], 32)
     cr = fresh(c)
     load_field(cr, SET_SCALAR, v2b(v['d'], 32))
@@ -1641,8 +1641,8 @@ def main():
     t0 = time.time()
     print(__doc__.split('\n\n')[0])
     print()
-    print('Model built from src/ace-ISA-algorithms.adoc, sections [[ACE-ECC]] and'
-          ' [[ACE-EdDSA]].')
+    print('Model built from src/ace-ISA-algorithms.adoc, sections [[KLEE-ECC]] and'
+          ' [[KLEE-EdDSA]].')
     print('Levels: [KAT] published vector | [PARAM] published parameters +'
           ' self-consistency | [MODEL] spec property.')
     print()

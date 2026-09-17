@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""OCB3 known-answer test: the ACE specification text against RFC 7253.
+"""OCB3 known-answer test: the KLEE specification text against RFC 7253.
 
 Two independent implementations are checked against the published vectors:
 
   REF   RFC 7253 written directly on byte strings (big-endian semantics),
         transcribed from sections 4.1-4.3 of the RFC.
-  ACE   the state machine of <<ACE-OCB-mode>> (src/ace-ISA-algorithms.adoc),
-        implemented formula-by-formula in the ACE value model of
+  KLEE   the state machine of <<KLEE-OCB-mode>> (src/ace-ISA-algorithms.adoc),
+        implemented formula-by-formula in the KLEE value model of
         src/ace-notation.adoc (byte i of a string lives at bits [8i+7:8i];
         the left operand of @ is more significant; bswap is byte reversal).
 
@@ -20,14 +20,14 @@ Vectors and provenance
     is 67E944D23256C5E0B6C61FA22FDF1EA2.
 
 Checks performed
-  * REF vs RFC and ACE vs RFC for all 17 sample ciphertexts (encryption).
-  * ACE internal values vs the RFC's published intermediates (anchors the
+  * REF vs RFC and KLEE vs RFC for all 17 sample ciphertexts (encryption).
+  * KLEE internal values vs the RFC's published intermediates (anchors the
     Nonce_be / bottom / Ktop / Stretch_be / offset formulas directly).
-  * ACE decryption: plaintext recovery + Hash_Verify Success on the good
+  * KLEE decryption: plaintext recovery + Hash_Verify Success on the good
     tag, Failure on a tampered tag, for every vector.  Block-multiple
     messages exercise the last_blk_len = 0 (Form D) finalize path on both
     the encrypt and decrypt sides.
-  * The RFC 7253 iterated test, run end-to-end through the ACE model.
+  * The RFC 7253 iterated test, run end-to-end through the KLEE model.
   * Negative controls (must NOT match the standard, else the test has no
     discriminating power):
       NC-double : the L-ladder derived with the little-endian update_mask
@@ -57,7 +57,7 @@ def ntz(n):
 
 
 def nonce_be(N, n):
-    """<<ACE-OCB-mode>> `nonce_be(N, n)`: the big-endian view of the n-bit nonce
+    """<<KLEE-OCB-mode>> `nonce_be(N, n)`: the big-endian view of the n-bit nonce
     bit string held in N.
 
     RFC 7253 treats the nonce as a bit string whose first bit is the most
@@ -144,8 +144,8 @@ def ref_ocb_encrypt(K, N, A, P, taglen_bits):
     return C + Tag[:taglen_bits // 8]
 
 # ====================================================================== ACE
-# The state machine of <<ACE-OCB-mode>>, transcribed step by step.  Every
-# formula is the spec's own, evaluated on ACE values.  `double_fn` and
+# The state machine of <<KLEE-OCB-mode>>, transcribed step by step.  Every
+# formula is the spec's own, evaluated on KLEE values.  `double_fn` and
 # `ktop_bswap` parameterize the negative controls; the defaults are the
 # specified behavior.
 
@@ -306,7 +306,7 @@ class AceOcb:
         return sl(INPUT, t - 1, 0) == sl(self.checksum_P, t - 1, 0)   # Success/Failure
 
 
-def ace_ocb_encrypt(K, N, A, P, taglen_bits, double_fn=double_ocb, ktop_bswap=True,
+def kl_ocb_encrypt(K, N, A, P, taglen_bits, double_fn=double_ocb, ktop_bswap=True,
                     machine_out=None, n_len_bits=None):
     """Drive the state machine the way software would; return C || truncated tag.
 
@@ -352,7 +352,7 @@ def ace_ocb_encrypt(K, N, A, P, taglen_bits, double_fn=double_ocb, ktop_bswap=Tr
     return C + v2b(tag, 16)[:taglen_bits // 8]
 
 
-def ace_ocb_decrypt(K, N, A, CT, taglen_bits, n_len_bits=None):
+def kl_ocb_decrypt(K, N, A, CT, taglen_bits, n_len_bits=None):
     """Return (recovered plaintext, Hash_Verify Success?)."""
     tlb = taglen_bits // 8
     C, tag = CT[:-tlb], CT[-tlb:]
@@ -461,10 +461,10 @@ def main():
     for sfx, la, lp, ct in VEC128:
         N, A, P, CT = nonce(sfx), S40[:la], S40[:lp], bytes.fromhex(ct)
         r = ref_ocb_encrypt(K128, N, A, P, 128)
-        a = ace_ocb_encrypt(K128, N, A, P, 128)
-        Pd, good = ace_ocb_decrypt(K128, N, A, CT, 128)
+        a = kl_ocb_encrypt(K128, N, A, P, 128)
+        Pd, good = kl_ocb_decrypt(K128, N, A, CT, 128)
         bad = bytearray(CT); bad[-1] ^= 0x40      # tamper the tag
-        _, evil = ace_ocb_decrypt(K128, N, A, bytes(bad), 128)
+        _, evil = kl_ocb_decrypt(K128, N, A, bytes(bad), 128)
         fin = 'FormD' if lp % 16 == 0 else 'last-blk'
         print(f"  %02X {la:>4} {lp:>4}  {chk(r == CT):8} {chk(a == CT):8} "
               f"{chk(Pd == P and good):8} {chk(not evil):8} {fin}"
@@ -473,30 +473,30 @@ def main():
     print("\nACE-model internal values vs RFC 7253 published intermediates "
           "(vector 0F, taglen 128):")
     ms = []
-    ace_ocb_encrypt(K128, nonce(0xF), b'', S40, 128, machine_out=ms)
+    kl_ocb_encrypt(K128, nonce(0xF), b'', S40, 128, machine_out=ms)
     for name, got in ms[0].items():
         print(f"  {name:9} {chk(got == INTER[name])}")
 
     print("\nRFC 7253 Appendix A, AEAD_AES_128_OCB_TAGLEN96 sample:")
     N, A, P, CT = VEC96[0], VEC96[1], VEC96[2], bytes.fromhex(VEC96[3])
     r = ref_ocb_encrypt(K96, N, A, P, 96)
-    a = ace_ocb_encrypt(K96, N, A, P, 96)
-    Pd, good = ace_ocb_decrypt(K96, N, A, CT, 96)
+    a = kl_ocb_encrypt(K96, N, A, P, 96)
+    Pd, good = kl_ocb_decrypt(K96, N, A, CT, 96)
     bad = bytearray(CT); bad[-1] ^= 1
-    _, evil = ace_ocb_decrypt(K96, N, A, bytes(bad), 96)
+    _, evil = kl_ocb_decrypt(K96, N, A, bytes(bad), 96)
     print(f"  REF-enc {chk(r == CT)}   ACE-enc {chk(a == CT)}   "
           f"ACE-dec {chk(Pd == P and good)}   tamper {chk(not evil)}")
 
     print("\nRFC 7253 iterated test, AEAD_AES_128_OCB_TAGLEN128, "
-          "end-to-end through the ACE model:")
+          "end-to-end through the KLEE model:")
     Kit = bytes(15) + bytes([128])                # zeros(KEYLEN-8) || num2str(TAGLEN,8)
     C = b''
     for i in range(128):
         S = bytes(i)                              # zeros(8i) = 8i bits = i bytes
-        C += ace_ocb_encrypt(Kit, (3 * i + 1).to_bytes(12, 'big'), S, S, 128)
-        C += ace_ocb_encrypt(Kit, (3 * i + 2).to_bytes(12, 'big'), b'', S, 128)
-        C += ace_ocb_encrypt(Kit, (3 * i + 3).to_bytes(12, 'big'), S, b'', 128)
-    out = ace_ocb_encrypt(Kit, (385).to_bytes(12, 'big'), C, b'', 128)
+        C += kl_ocb_encrypt(Kit, (3 * i + 1).to_bytes(12, 'big'), S, S, 128)
+        C += kl_ocb_encrypt(Kit, (3 * i + 2).to_bytes(12, 'big'), b'', S, 128)
+        C += kl_ocb_encrypt(Kit, (3 * i + 3).to_bytes(12, 'big'), S, b'', 128)
+    out = kl_ocb_encrypt(Kit, (385).to_bytes(12, 'big'), C, b'', 128)
     print(f"  |C| = {len(C)} bytes (expect 22400): {chk(len(C) == 22400)}")
     print(f"  Output = {out.hex().upper()}  {chk(out.hex().upper() == ITER_OUT_128)}")
 
@@ -506,11 +506,11 @@ def main():
     print("KAT-EXPECT-FAIL: NC-ktop")
     sfx, la, lp, ct = VEC128[7]                   # 24/24 bytes: full+partial blocks
     N, A, P, CT = nonce(sfx), S40[:la], S40[:lp], bytes.fromhex(ct)
-    nc1 = ace_ocb_encrypt(K128, N, A, P, 128, double_fn=update_mask)
+    nc1 = kl_ocb_encrypt(K128, N, A, P, 128, double_fn=update_mask)
     fired1 = nc1 != CT
     print(f"  NC-double (L-ladder via little-endian update_mask): "
           f"{'FAIL as expected' if fired1 else 'MATCHED (control did not fire)'}")
-    nc2 = ace_ocb_encrypt(K128, N, A, P, 128, ktop_bswap=False)
+    nc2 = kl_ocb_encrypt(K128, N, A, P, 128, ktop_bswap=False)
     fired2 = nc2 != CT
     print(f"  NC-ktop   (bswap dropped from Ktop input)         : "
           f"{'FAIL as expected' if fired2 else 'MATCHED (control did not fire)'}")
@@ -536,22 +536,22 @@ def main():
         keep = (-n_len) % 8
         raw = bytes((0xA5 ^ i) for i in range(q))
         N = (raw[:-1] + bytes([raw[-1] & ((0xFF << keep) & 0xFF)])) if keep else raw
-        ct = ace_ocb_encrypt(K128, N, Am, Pm, 128, n_len_bits=n_len)
-        pt, good = ace_ocb_decrypt(K128, N, Am, ct, 128, n_len_bits=n_len)
+        ct = kl_ocb_encrypt(K128, N, Am, Pm, 128, n_len_bits=n_len)
+        pt, good = kl_ocb_decrypt(K128, N, Am, ct, 128, n_len_bits=n_len)
         if keep:
             dirty = N[:-1] + bytes([N[-1] | ((1 << keep) - 1)])
-            ct2 = ace_ocb_encrypt(K128, dirty, Am, Pm, 128, n_len_bits=n_len)
+            ct2 = kl_ocb_encrypt(K128, dirty, Am, Pm, 128, n_len_bits=n_len)
             padres = chk(ct2 == ct)
         else:
             padres = '--'
         print(f"{n_len:>6}  {'--':8} {chk(pt == Pm and good):10} {padres:12}")
-    c6a = ace_ocb_encrypt(K128, bytes([0b10110100]), Am, Pm, 128, n_len_bits=6)
-    c6b = ace_ocb_encrypt(K128, bytes([0b10110000]), Am, Pm, 128, n_len_bits=6)
+    c6a = kl_ocb_encrypt(K128, bytes([0b10110100]), Am, Pm, 128, n_len_bits=6)
+    c6b = kl_ocb_encrypt(K128, bytes([0b10110000]), Am, Pm, 128, n_len_bits=6)
     print(f"  N_len = 6, distinct nonces -> distinct ciphertexts : {chk(c6a != c6b)}")
     rej = []
     for bad in (0, 5, 121, 128, 255):
         try:
-            ace_ocb_encrypt(K128, bytes(16), Am, Pm, 128, n_len_bits=bad)
+            kl_ocb_encrypt(K128, bytes(16), Am, Pm, 128, n_len_bits=bad)
             rej.append(False)
         except Invalid:
             rej.append(True)

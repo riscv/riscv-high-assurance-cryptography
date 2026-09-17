@@ -1,13 +1,13 @@
-[[ACE-pseudocode-examples]]
+[[KLEE-pseudocode-examples]]
 == Book 4. Pseudocode Examples
 
 _This chapter is informative._ The examples follow the conventions of
-<<ACE-Notation>>; in particular, a value loaded into a vector register holds the
+<<KLEE-Notation>>; in particular, a value loaded into a vector register holds the
 byte at the lowest address in its least significant bits.
 
 // ///////////////////////////////////////////////////////////////////
 
-[[ACE-management-code-snippets]]
+[[KLEE-management-code-snippets]]
 === Code for CR Configuration and Export Operations
 
 [WARNING]
@@ -23,14 +23,14 @@ These sequences can be packaged into libraries or OS APIs to avoid increasing ap
 In these examples, GPR `t6` points to the memory location where a PI or SCC is stored,
 and GPR `t0` contains the number of the CR to be configured or exported.
 
-To check whether `ace.size` returned an error, we use the `beqi` instruction from the
+To check whether `kl.size` returned an error, we use the `beqi` instruction from the
 Qualcomm Code Size Reduction Instructions, however, this can be easily replaced with a
 regular `beq` using, say, the constant 1 loaded into a different GPR, such as `s3`.
 
 ==== Provisioning
 
 The provisioning code assumes that the Content immediately follows the MDH in memory.
-The MDH of the PI carries _State_ = _Unconfigured_ (0); the completing `ace.mgmt` sets _Ready_.
+The MDH of the PI carries _State_ = _Unconfigured_ (0); the completing `kl.mgmt` sets _Ready_.
 
 *Provisioning Code (`Zklmv`)*
 ----
@@ -44,8 +44,8 @@ The MDH of the PI carries _State_ = _Unconfigured_ (0); the completing `ace.mgmt
   li         t3, 0x30              # const useful to determine Error States
 
 restart:
-  ace.mgmt   K{t0}, #ace_cfg_provisioning, s5:s4 # start provisioning, load MDH
-  ace.getst  t2, K{t0}             # get _State_ field from MDH
+  kl.mgmt   K{t0}, #kl_cfg_provisioning, s5:s4 # start provisioning, load MDH
+  kl.getst  t2, K{t0}             # get _State_ field from MDH
   beqz       t2, handle_errors     # State = 0: the CR was not opened => error
   andi       t2, t2, 0x38          # Check the three top bits of State
   beq        t3, t2, finished      # If the 3 top bits = 110, then prov. ended
@@ -57,19 +57,19 @@ vloop:
   vsetvli    s2, s1, e8, m1, ta, ma
                                    # s2 = number of bytes moved this iteration
   vle8.v     v1, (t4)              # load a chunk of the PI
-  ace.mv     K{t0}, v1             # move it into the CR
+  kl.mv     K{t0}, v1             # move it into the CR
   add        t4, t4, s2            # bump the source pointer
   sub        s1, s1, s2            # decrement the bytes still to load
-  ace.getst  t2, K{t0}
+  kl.getst  t2, K{t0}
   beqz       t2, restart           # CR cleared: must restart
   andi       t2, t2, 0x38          # Three top bits -> Error or Management
   li         t3, 0x30              # const useful to determine Error States
   beq        t3, t2, finished      # *new* Error State
   bnez       s1, vloop
 
-  ace.mgmt   K{t0}, #ace_cfg_management_end   # complete provisioning
+  kl.mgmt   K{t0}, #kl_cfg_management_end   # complete provisioning
                                    # and possibly reconstruct data
-  ace.getst  t2, K{t0}
+  kl.getst  t2, K{t0}
   bltu       t3, t2, handle_errors # catches errors at completion (e.g., SKS)
 
 finished:
@@ -85,18 +85,18 @@ finished:
   li         t3, 0x30              # const useful to determine Error States
 
 restart:
-  ace.mgmt   K{t0}, #ace_cfg_provisioning, s5:s4 # start prov. and load MDH
-  ace.getst  t2, K{t0}
+  kl.mgmt   K{t0}, #kl_cfg_provisioning, s5:s4 # start prov. and load MDH
+  kl.getst  t2, K{t0}
   beqz       t2, handle_errors
   andi       t2, t2, 0x38          # Check the three top bits of State
   beq        t3, t2, finished      # Error State?
 
   # Assume that the Content directly follows the MDH in memory.
-  ace.load   K{t0}, 16(t6)         # load rest of PI
-  ace.getst  t2, K{t0}
+  kl.load   K{t0}, 16(t6)         # load rest of PI
+  kl.getst  t2, K{t0}
   beqz       t2, restart           # CR cleared means force restart
   bltu       t3, t2, finished
-  ace.mgmt   K{t0}, #ace_cfg_management_end   # complete provisioning
+  kl.mgmt   K{t0}, #kl_cfg_management_end   # complete provisioning
                                    # and possibly reconstruct data
 finished:
 ----
@@ -106,12 +106,12 @@ finished:
 *Export Code (`Zklmv`)*
 ----
 restart:
-  ace.size    s1, K{t0}              # TOTAL size to export
+  kl.size    s1, K{t0}              # TOTAL size to export
   beqz        s1, handle_errors      # 0 means the CR is unconfigured
 
   {...}  # here code that allocates the buffer to store the exported data
 
-  ace.getmd   s5:s4, K{t0}           # get MDH, including its _State_
+  kl.getmd   s5:s4, K{t0}           # get MDH, including its _State_
   sd          s4, 0(t6)              # store MDH[63:0] to memory
   sd          s5, 8(t6)              # store MDH[127:64] to memory
 
@@ -120,16 +120,16 @@ restart:
   beq         s1, s3, finished       # in Error State we are done
   sub         s1, s1, 16             # adjust size to remove the MDH
 
-  ace.mgmt   K{t0}, #ace_cfg_exporting # start exporting
+  kl.mgmt   K{t0}, #kl_cfg_exporting # start exporting
 
   mv          t4, t6                 # destination: first byte after stored MDH
 store_loop:
   vsetvli     s2, s1, e8, m1, ta, ma # s2 = no. of bytes moved this iteration
-  ace.mv      v2, K{t0}              # move chunk out of CR, advance acestart
+  kl.mv      v2, K{t0}              # move chunk out of CR, advance klstart
   vse8.v      v2, (t4)               # store it
   add         t4, t4, s2             # bump the destination pointer
   sub         s1, s1, s2             # decrement the bytes still to store
-  ace.getst   t2, K{t0}
+  kl.getst   t2, K{t0}
   beqz        t2, restart            # CR cleared: export must be restarted
   andi        t2, t2, 0x38
   li          t3, 0x30               # to determine Error States
@@ -138,7 +138,7 @@ store_loop:
 
 finished:
   # Restore _State_ from the saved MDH.
-  ace.mgmt   K{t0}, #ace_cfg_management_end, s5:s4
+  kl.mgmt   K{t0}, #kl_cfg_management_end, s5:s4
 ----
 
 [WARNING]
@@ -152,14 +152,14 @@ Need to add support for PP and ES export.
 Until storeloop: the code is the same as in the `Zklmv` version.
 
 storeloop:
-  ace.store  0(t6), K{t0}          # store Content of PI
-  ace.getst  t2, K{t0}
+  kl.store  0(t6), K{t0}          # store Content of PI
+  kl.getst  t2, K{t0}
   beqz       t2, restart           # CR cleared means force restart
   bltu       t3, t2, handle_errors
 
 success:
 # complete export and possibly re-decrypt and reconstruct data
-  ace.mgmt   K{t0}, #ace_cfg_management_end, s5:s4
+  kl.mgmt   K{t0}, #kl_cfg_management_end, s5:s4
 ----
 
 ==== Import
@@ -169,16 +169,16 @@ success:
   ld          s4, 0(t6)         # load MDH[63:0] from memory
   ld          s5, 8(t6)         # load MDH[127:64] from memory
   li          t3, 0x30          # to determine Error States
-  ace.size    s1, s5:s4         # length of SCC/PCCC
-  beqz        s1, handle_errors # Algorithm not supported, or MDH invalid
+  kl.size    s1, s5:s4         # length of SCC/PCCC
+  beqz        s1, handle_errors # Machine not supported, or MDH invalid
 
   # s1 (the SCC length) is used above only as the support/validity gate.
   # t6 is the immutable buffer base, so a jump to restart re-derives the
-  # walking pointer t4 and the content count (via ace.size) from it.
+  # walking pointer t4 and the content count (via kl.size) from it.
 
 restart:
-  ace.mgmt   K{t0}, #ace_cfg_importing, s5:s4  # open CR for import, load MDH
-  ace.getst  t2, K{t0}
+  kl.mgmt   K{t0}, #kl_cfg_importing, s5:s4  # open CR for import, load MDH
+  kl.getst  t2, K{t0}
   beqz       t2, handle_errors
   andi       t2, t2, 0x38
   beq        t3, t2, handle_errors   # three top bits of _State_ = 110 ?
@@ -189,18 +189,18 @@ restart:
 vloop:
   vsetvli    s2, s1, e8, m1, ta, ma
   vle8.v     v2, (t4)                # load a chunk of the SCC Content
-  ace.mv     K{t0}, v2               # move it into the CR, advance acestart
+  kl.mv     K{t0}, v2               # move it into the CR, advance klstart
   add        t4, t4, s2
   sub        s1, s1, s2
-  ace.getst  t2, K{t0}
+  kl.getst  t2, K{t0}
   beqz       t2, restart             # CR cleared means force restart
   andi       t2, t2, 0x38
   beq        t3, t2, handle_errors
   bnez       s1, vloop
 
-  ace.mgmt   K{t0}, #ace_cfg_management_end, s5:s4  # decrypt and auth SCC
+  kl.mgmt   K{t0}, #kl_cfg_management_end, s5:s4  # decrypt and auth SCC
                                      # and restore original MDH
-  ace.getst  t2, K{t0}
+  kl.getst  t2, K{t0}
   bltu       t3, t2, handle_errors   # catches "Authentication Failed"
 
 success:
@@ -213,8 +213,8 @@ success:
   li         t3, 0x30               # to determine Error States
 
 restart:
-  ace.mgmt   K{t0}, #ace_cfg_importing, s5:s4 # open CR for import, load MDH
-  ace.getst  t2, K{t0}
+  kl.mgmt   K{t0}, #kl_cfg_importing, s5:s4 # open CR for import, load MDH
+  kl.getst  t2, K{t0}
   beqz       t2, handle_errors
   andi       t2, t2, 0x38
   beq        t3, t2, handle_errors  # three top bits of _State_ = 110 ?
@@ -222,32 +222,32 @@ restart:
   addi       t4, t6, 16             # walking pointer: first byte after MDH
 
 content:
-  ace.load   K{t0}, 0(t4)           # load Content into the CR
-  ace.getst  t2, K{t0}
+  kl.load   K{t0}, 0(t4)           # load Content into the CR
+  kl.getst  t2, K{t0}
   beqz       t2, restart            # CR cleared means force restart
   bltu       t3, t2, handle_errors
-  ace.mgmt   K{t0}, #ace_cfg_management_end, s5:s4  # decrypt and auth CR,
+  kl.mgmt   K{t0}, #kl_cfg_management_end, s5:s4  # decrypt and auth CR,
                                     # if necessary complete it
-  ace.getst  t2, K{t0}
+  kl.getst  t2, K{t0}
   andi       t2, t2, 0x38
-  beq        t3, t2, handle_errors  # catches `ace_state_import_auth`
+  beq        t3, t2, handle_errors  # catches `kl_state_import_auth`
 
 success:
 ----
 
-During the provisioning and import procedures, the validity of the whole MDH is checked by the opening `ace.mgmt`, which receives it in Form D (<<ACE-MVR-open>>).
-The conditions evaluated at completion — SKS resolution at provisioning, authentication at import — can still transition the CR to an Error State upon executing `ace.mgmt K{t0}, #ace_cfg_management_end`, which is why the `ace.getst` after that instruction repeats the Error-State test.
+During the provisioning and import procedures, the validity of the whole MDH is checked by the opening `kl.mgmt`, which receives it in Form D (<<KLEE-MVR-open>>).
+The conditions evaluated at completion — SKS resolution at provisioning, authentication at import — can still transition the CR to an Error State upon executing `kl.mgmt K{t0}, #kl_cfg_management_end`, which is why the `kl.getst` after that instruction repeats the Error-State test.
 
 // ////////////////////////////////////////////////////////////////////////////
 
-[[ACE-ECB-mode-example]]
+[[KLEE-ECB-mode-example]]
 === Electronic Codebook Modes (Direct Encryption/Decryption)
 
 The following pseudocode illustrates how to use an ECB CC to encrypt data with a block cipher.
-Here, as in most other examples, we assume the block cipher has a width of 128 bits (`ACELEN` is also 128).
+Here, as in most other examples, we assume the block cipher has a width of 128 bits (`KLLEN` is also 128).
 The uppercase `IMPORT` instruction is a placeholder for an import code snippet, library, or API call.
 
-[[ACE-pseudocode-ECB-encryption]]
+[[KLEE-pseudocode-ECB-encryption]]
 .Simple Example: Encryption with no Authentication
 ----
 - Call OS API to get the necessary SCC. Assume X5 points to the SCC.
@@ -255,24 +255,24 @@ The uppercase `IMPORT` instruction is a placeholder for an import code snippet, 
 
   vsetivli zero, 4, e32, m1, ta, ma        // Use 128-bit vectors
   IMPORT K0, (X5)                          // Import the SCC into CR K0
-  ace.getst X1, K0
+  kl.getst X1, K0
   if (X1 >= 24) then: handle error
 
-  ace.setst K0, #ace_state_encrypt         // Configure CR to encrypt
-  ace.getst X1, K0
+  kl.setst K0, #kl_state_encrypt         // Configure CR to encrypt
+  kl.getst X1, K0
   if (X1 >= 24) then: handle error
 
   // assume plaintext in whole blocks
   foreach(i from 0 to len_in_bytes(plaintext)/16-1) do:
     V0 ← plaintext[16*i .. 16*i+15]
-    ace.exec V0, K0, V0                   // Encrypt one block of plaintext
+    kl.exec V0, K0, V0                   // Encrypt one block of plaintext
     ciphertext[16*i .. 16*i+15] ← V0
 ----
 
-[[ACE-keystream-modes-example]]
+[[KLEE-keystream-modes-example]]
 === CTR/LFSR/XCTR/XLFSR Keystream Generation
 
-[[ACE-pseudocode-keystream-modes]]
+[[KLEE-pseudocode-keystream-modes]]
 .Encrypt with Keystream Generation
 ----
 // Acquire payload, initialize
@@ -285,12 +285,12 @@ The uppercase `IMPORT` instruction is a placeholder for an import code snippet, 
 
   // The next operations set the nonce
   V1 ← nonce
-  ace.setst K0, #ace_state_operate, V1
+  kl.setst K0, #kl_state_operate, V1
 
   // Compute keystream, use it to encrypt plaintext
   foreach(i from 0 to len_in_bytes(PT)/16-1) do:
     V0 ← PT[16*i .. 16*i+15]
-    ace.exec V1, K0
+    kl.exec V1, K0
     V1 ← V1 xor V0
     CT[16*i .. 16*i+15] ← V1
 ----
@@ -298,9 +298,9 @@ The uppercase `IMPORT` instruction is a placeholder for an import code snippet, 
 === XEX/XTS modes
 
 Only XEX encryption pseudocode is provided; decryption is similar
-(here it is also assumed `b` = `ACELEN` = 128).
+(here it is also assumed `b` = `KLLEN` = 128).
 
-[[ACE-pseudocode-basic-IV-mode]]
+[[KLEE-pseudocode-basic-IV-mode]]
 .Pseudocode for encryption in any IV-based non-authenticated mode without associated data
 ----
 // Acquire payload and SCC, initialize
@@ -312,32 +312,32 @@ Only XEX encryption pseudocode is provided; decryption is similar
   IMPORT K0, (X5)
 
   V0 ← IV
-  ace.setst K0, #ace_state_encrypt, V0   // Configure CR to encrypt, set tweak
+  kl.setst K0, #kl_state_encrypt, V0   // Configure CR to encrypt, set tweak
 
   foreach(i from 0 to floor(len_in_bytes(PT)/16)-1) do:
     V0 ← PT[16*i .. 16*i+15]
-    ace.exec V0, K0, V0                   // Encrypt one block of plaintext
+    kl.exec V0, K0, V0                   // Encrypt one block of plaintext
     CT[16*i .. 16*i+15] ← V0
 ----
 
 The loop covers whole blocks only: XEX has no partial-block state. A data unit whose length
 is not a multiple of `b` is completed by ciphertext stealing, performed in software as
-described in <<ACE-XTS-from-XEX>>.
+described in <<KLEE-XTS-from-XEX>>.
 
 //
 
-[[ACE-GCM-mode-examples]]
+[[KLEE-GCM-mode-examples]]
 === GCM Mode
 
-In <<ACE-pseudocode-GCM-encryption>> we show pseudocode for GCM encryption, again with
-`b` = `ACELEN` = 128 and `c` = 32.
+In <<KLEE-pseudocode-GCM-encryption>> we show pseudocode for GCM encryption, again with
+`b` = `KLLEN` = 128 and `c` = 32.
 
-Associated data and plaintext/ciphertext are treated differently, as <<ACE-GCM-mode>> requires.
+Associated data and plaintext/ciphertext are treated differently, as <<KLEE-GCM-mode>> requires.
 The caller zero-fills the final block of the AD beyond its actual end, and `GHASH`
 absorbs that block whole. The PT and CT must not be zero-padded if their lengths are not
 a multiple of `b`; a final block length shorter than `b` is presented in State _Enc_Last_Block_ (or _Dec_Last_Block_ for decryption), so that no keystream bit past the end of the message is absorbed into `GHASH` or written out.
 
-[[ACE-pseudocode-GCM-encryption]]
+[[KLEE-pseudocode-GCM-encryption]]
 .GCM Encryption
 ----
 // Acquire payload, initialize
@@ -348,19 +348,19 @@ a multiple of `b`; a final block length shorter than `b` is presented in State _
   vsetivli zero, 4, e32, m1, ta, ma         // Use 128-bit vectors
   IMPORT K0, (X5)               // Import (also computes the derived Auth Key)
 
-// Set the IV.  The Form B ace.setst carries its length in bits; the IV
-// itself is then absorbed by ace.exec.  One suffices for the usual 96-bit IV;
+// Set the IV.  The Form B kl.setst carries its length in bits; the IV
+// itself is then absorbed by kl.exec.  One suffices for the usual 96-bit IV;
 // a longer one takes several.  When the last byte has been absorbed the
-// Algorithm computes J0 and moves to _Hash_Absorb_ by itself, so no ace.setst
+// Machine computes J0 and moves to _Hash_Absorb_ by itself, so no kl.setst
 // is issued for that transition.
 
   X1 ← len_in_bits(IV)
 
-  ace.setst K0, #ace_state_set_aux_value, X1
+  kl.setst K0, #kl_state_set_aux_value, X1
   X2 ← X1/8                                // len_in_bytes(IV)
-  vsetvli  zero, X2, e8, m1, ta, ma        // ACELEN = 8*len_in_bytes(IV)
+  vsetvli  zero, X2, e8, m1, ta, ma        // KLLEN = 8*len_in_bytes(IV)
   V0 ← IV
-  ace.exec K0, V0
+  kl.exec K0, V0
   vsetivli zero, 4, e32, m1, ta, ma        // back to 128-bit vectors
 
 // Compute the AD contribution to the tag.  The caller has zero-filled the last
@@ -368,29 +368,29 @@ a multiple of `b`; a final block length shorter than `b` is presented in State _
 
   foreach(i from 0 to ceil(len_in_bytes(AD)/16)-1) do:
     V0 ← AD[16*i .. 16*i+15]
-    ace.exec K0, V0                       // Absorb it into GHASH
+    kl.exec K0, V0                       // Absorb it into GHASH
 
   // Encrypt the whole blocks of the plaintext
-  ace.setst K0, #ace_state_encrypt
+  kl.setst K0, #kl_state_encrypt
   PT_fullblocks ← floor(len_in_bits(PT)/128)
 
   foreach(i from 0 to PT_fullblocks-1) do:
     V0 ← PT[16*i .. 16*i+15]
-    ace.exec V1, K0, V0
+    kl.exec V1, K0, V0
     CT[16*i .. 16*i+15] ← V1
 
   // Fractional final block, if any.  The plaintext is not zero-padded here.
   X1 ← len_in_bits(PT) mod 128
   if (X1 != 0) then:
-    ace.setst K0, #ace_state_enc_last_block, X1
+    kl.setst K0, #kl_state_enc_last_block, X1
     V0 ← PT[16*PT_fullblocks .. 16*PT_fullblocks+ceil(X1/8)-1]
-    ace.exec V1, K0, V0
+    kl.exec V1, K0, V0
     CT[16*PT_fullblocks .. 16*PT_fullblocks+ceil(X1/8)-1] ← V1
 
 // Absorb the lengths, finalize the tag, and read it out
   V1 ← bswap(bin(len_in_bits(PT), 64)) @ bswap(bin(len_in_bits(AD), 64))
-  ace.setst K0, #ace_state_enc_tag_finalize, V1
-  ace.exec V2, K0                          // V2 contains the tag
+  kl.setst K0, #kl_state_enc_tag_finalize, V1
+  kl.exec V2, K0                          // V2 contains the tag
 ----
 
 Now we give the code for GCM decryption.
@@ -398,37 +398,37 @@ Now we give the code for GCM decryption.
 // reversed; States _Encrypt_ and _Enc_Last_Block_ are replaced by _Decrypt_ and
 // _Dec_Last_Block_; and the tag is finalized and verified instead of being emitted, as shown
 // below.
-Note that no `ace.exec` is issued in State _Dec_Tag_Finalize_: the recomputed tag
+Note that no `kl.exec` is issued in State _Dec_Tag_Finalize_: the recomputed tag
 stays inside the CR and is never made available to software on this path.
 
-[[ACE-pseudocode-GCM-decryption]]
+[[KLEE-pseudocode-GCM-decryption]]
 .GCM Decryption
 ----
 // Decrypt the whole blocks of the ciphertext
-  ace.setst K0, #ace_state_decrypt
+  kl.setst K0, #kl_state_decrypt
   CT_fullblocks ← floor(len_in_bits(CT)/128)
   foreach(i from 0 to CT_fullblocks-1) do:
     V0 ← CT[16*i .. 16*i+15]
-    ace.exec V1, K0, V0
+    kl.exec V1, K0, V0
     PT[16*i .. 16*i+15] ← V1
 
 // Fractional final block, if any.  The ciphertext is not zero-padded here.
   X1 ← len_in_bits(CT) mod 128
   if (X1 != 0) then:
-    ace.setst K0, #ace_state_dec_last_block, X1
+    kl.setst K0, #kl_state_dec_last_block, X1
     V0 ← CT[16*CT_fullblocks .. 16*CT_fullblocks+ceil(X1/8)-1]
-    ace.exec V1, K0, V0
+    kl.exec V1, K0, V0
     PT[16*CT_fullblocks .. 16*CT_fullblocks+ceil(X1/8)-1] ← V1
 
 // Absorb the lengths.  The tag is computed and retained inside the CR.
   V1 ← bswap(bin(len_in_bits(CT), 64)) @ bswap(bin(len_in_bits(AD), 64))
-  ace.setst K0, #ace_state_dec_tag_finalize, V1
+  kl.setst K0, #kl_state_dec_tag_finalize, V1
 
 // Supply the received tag; the comparison sets _Success_ or _Failure_
   V1 ← tag_from_payload
-  ace.setst K0, #ace_state_hash_verify, V1
-  ace.getst X1, K0
-  if (X1 != ace_state_success) then:
+  kl.setst K0, #kl_state_hash_verify, V1
+  kl.getst X1, K0
+  if (X1 != kl_state_success) then:
      handle error     // Do not use the plaintext in case of error
 ----
 
@@ -437,7 +437,7 @@ stays inside the CR and is never made available to software on this path.
 We also show how to implement GCM encryption using an ECB CC, provided the vector ISA
 supports carry-less binary multiplication.
 
-[[ACE-pseudocode-GCM-encryption-alternate]]
+[[KLEE-pseudocode-GCM-encryption-alternate]]
 .Implementing GCM encryption using an ECB CC
 ----
 // Acquire payload, initialize
@@ -449,7 +449,7 @@ supports carry-less binary multiplication.
   IMPORT K0, (X5)
   V0[95:0] ← IV                         // 96-bit IV in bytes 0..11
   V3 ← zeros(b)                         // “Auth Data 1”
-  ace.exec V4, K0, V3                   // compute H
+  kl.exec V4, K0, V3                   // compute H
   foreach(i from 0 to ceil(len_in_bytes(AD)/16)-1) do:
     V1 ← AD[16*i .. 16*i+15]
     V3 ← V3 xor V1
@@ -466,7 +466,7 @@ supports carry-less binary multiplication.
   foreach(i from 0 to ceil(len_in_bytes(PT)/16)-1) do:
     V5 ← bswap(bin(counter,32)) @ V0[95:0]
     V1 ← PT[16*i .. 16*i+15]
-    ace.exec V2, K0, V5                // create mask by encrypting the counter
+    kl.exec V2, K0, V5                // create mask by encrypting the counter
     V1 ← V1 xor V2                     // CTR encrypt
     V3 ← V3 xor V1
     V3 ← Galoismul(V4, V3)
@@ -476,17 +476,17 @@ supports carry-less binary multiplication.
   V3 ← V3 xor (bswap(bin(len_in_bits(PT),64)) @ bswap(bin(len_in_bits(AD),64)))
   V3 ← Galoismul(V4, V3)
   V5 ← bswap(bin(1,32)) @ V0[95:0]           // J0 again, for the tag mask
-  ace.exec V2, K0, V5
+  kl.exec V2, K0, V5
   tag ← V3 xor V2
 ----
 
-[[ACE-GCM-SIV-mode-examples]]
+[[KLEE-GCM-SIV-mode-examples]]
 === GCM-SIV Mode
 
-We show in <<ACE-pseudocode-GCM-SIV-encryption>> how to perform AEAD encryption with a GCM-SIV CC (with `b` = `ACELEN` = 128).
-<<ACE-pseudocode-GCM-SIV-decryption>> is the corresponding pseudocode for decryption.
+We show in <<KLEE-pseudocode-GCM-SIV-encryption>> how to perform AEAD encryption with a GCM-SIV CC (with `b` = `KLLEN` = 128).
+<<KLEE-pseudocode-GCM-SIV-decryption>> is the corresponding pseudocode for decryption.
 
-[[ACE-pseudocode-GCM-SIV-encryption]]
+[[KLEE-pseudocode-GCM-SIV-encryption]]
 .GCM-SIV Encryption
 ----
 // Acquire payload, initialize
@@ -500,53 +500,53 @@ We show in <<ACE-pseudocode-GCM-SIV-encryption>> how to perform AEAD encryption 
   IMPORT K0, (X5)
 
 // Set the nonce, which also derives enc_key and auth_key.
-// Form C ace.setst: the nonce is the vector input of ace.setst.
-//  No ace.exec is issued in this state.
+// Form C kl.setst: the nonce is the vector input of kl.setst.
+//  No kl.exec is issued in this state.
 
   V0 ← nonce
-  ace.setst K0, #ace_state_set_aux_value, V0
+  kl.setst K0, #kl_state_set_aux_value, V0
 
 // Absorb the AD and then the plaintext into POLYVAL.
 // The caller has zero-padded the last block of each.
 
-  ace.setst K0, #ace_state_hash_absorb
+  kl.setst K0, #kl_state_hash_absorb
   foreach(i from 0 to ceil(len_in_bytes(AD)/16)-1) do:
     V0 ← AD[16*i .. 16*i+15]              // Load a block of associated data
-    ace.exec K0, V0                       // Absorb it into POLYVAL
+    kl.exec K0, V0                       // Absorb it into POLYVAL
 
  foreach(i from 0 to ceil(len_in_bytes(PT)/16)-1) do:
     V0 ← PT[16*i .. 16*i+15]              // Load a block of plaintext
-    ace.exec K0, V0                       // Absorb it into POLYVAL
+    kl.exec K0, V0                       // Absorb it into POLYVAL
 
-// Finalize the SIV.  The lengths are the *input* of a Form A ace.exec in State
+// Finalize the SIV.  The lengths are the *input* of a Form A kl.exec in State
 // _Enc_Tag_Finalize_, and the SIV is its output; they are not absorbed by a
-// further ace.exec in _Hash_Absorb_.
+// further kl.exec in _Hash_Absorb_.
 
-  ace.setst K0, #ace_state_enc_tag_finalize
+  kl.setst K0, #kl_state_enc_tag_finalize
   V0 ← bin(len_in_bits(PT), 64) @ bin(len_in_bits(AD), 64)
-  ace.exec V2, K0, V0
+  kl.exec V2, K0, V0
   tag ← V2
 
 // Second pass: encrypt the whole blocks of the plaintext, with the SIV as IV
-  ace.setst K0, #ace_state_encrypt
+  kl.setst K0, #kl_state_encrypt
   PT_fullblocks ← floor(len_in_bits(PT)/128)
 
   foreach(i from 0 to PT_fullblocks-1) do:
     V0 ← PT[16*i .. 16*i+15]              // Load a block of plaintext
-    ace.exec V1, K0, V0                   // Encrypt the block
+    kl.exec V1, K0, V0                   // Encrypt the block
     CT[16*i .. 16*i+15] ← V1              // Store a block of ciphertext
 
 // Fractional final block, if any.  Here the plaintext must not be zero-padded:
 // the state exists so that no keystream bit past its end is written to CT.
   X1 ← len_in_bits(PT) mod 128
   if (X1 != 0) then:
-    ace.setst K0, #ace_state_enc_last_block, X1
+    kl.setst K0, #kl_state_enc_last_block, X1
     V0 ← PT[16*PT_fullblocks .. 16*PT_fullblocks+ceil(X1/8)-1]
-    ace.exec V1, K0, V0
+    kl.exec V1, K0, V0
     CT[16*PT_fullblocks .. 16*PT_fullblocks+ceil(X1/8)-1] ← V1
 ----
 
-[[ACE-pseudocode-GCM-SIV-decryption]]
+[[KLEE-pseudocode-GCM-SIV-decryption]]
 .GCM-SIV Decryption
 ----
 // Acquire payload, initialize
@@ -561,52 +561,52 @@ We show in <<ACE-pseudocode-GCM-SIV-encryption>> how to perform AEAD encryption 
 
 // Set the nonce
   V0 ← nonce
-  ace.setst K0, #ace_state_set_aux_value, V0
+  kl.setst K0, #kl_state_set_aux_value, V0
 
 // Set the received SIV, which serves as the IV of the decryption.
   V0 ← SIV
-  ace.setst K0, #ace_state_set_aux_value_2, V0
+  kl.setst K0, #kl_state_set_aux_value_2, V0
 
 // Absorb the AD.  The caller has zero-padded the last block.
-  ace.setst K0, #ace_state_hash_absorb
+  kl.setst K0, #kl_state_hash_absorb
   foreach(i from 0 to ceil(len_in_bytes(AD)/16)-1) do:
     V0 ← AD[16*i .. 16*i+15]
-    ace.exec K0, V0                       // Absorb it into POLYVAL
+    kl.exec K0, V0                       // Absorb it into POLYVAL
 
 // Decrypt the whole blocks; each recovered block is absorbed into POLYVAL
-  ace.setst K0, #ace_state_decrypt
+  kl.setst K0, #kl_state_decrypt
   CT_fullblocks ← floor(len_in_bits(CT)/128)
   foreach(i from 0 to CT_fullblocks-1) do:
     V0 ← CT[16*i .. 16*i+15]
-    ace.exec V1, K0, V0
+    kl.exec V1, K0, V0
     PT[16*i .. 16*i+15] ← V1
 
 // Fractional final block, if any
   X1 ← len_in_bits(CT) mod 128
   if (X1 != 0) then:
-    ace.setst K0, #ace_state_dec_last_block, X1
+    kl.setst K0, #kl_state_dec_last_block, X1
     V0 ← CT[16*CT_fullblocks .. 16*CT_fullblocks+ceil(X1/8)-1]
-    ace.exec V1, K0, V0
+    kl.exec V1, K0, V0
     PT[16*CT_fullblocks .. 16*CT_fullblocks+ceil(X1/8)-1] ← V1
 
-// Absorb the lengths and verify, with a Form B ace.exec: the recomputed SIV is
+// Absorb the lengths and verify, with a Form B kl.exec: the recomputed SIV is
 // compared internally against the one supplied above
-  ace.setst K0, #ace_state_dec_tag_finalize
+  kl.setst K0, #kl_state_dec_tag_finalize
   V0 ← bin(len_in_bits(PT), 64) @ bin(len_in_bits(AD), 64)
-  ace.exec K0, V0
-  ace.getst X1, K0
-  if (X1 != ace_state_success) then:
+  kl.exec K0, V0
+  kl.getst X1, K0
+  if (X1 != kl_state_success) then:
     handle error     // Do not use the plaintext if error
 ----
 
 //
 
-[[ACE-OCB-mode-examples]]
+[[KLEE-OCB-mode-examples]]
 === OCB Mode
 
-In this section we show pseudocode for OCB encryption and decryption (`b` = `ACELEN` = 128).
+In this section we show pseudocode for OCB encryption and decryption (`b` = `KLLEN` = 128).
 
-[[ACE-pseudocode-OCB-encryption]]
+[[KLEE-pseudocode-OCB-encryption]]
 .OCB Encryption
 ----
 // Acquire payload, initialize
@@ -624,13 +624,13 @@ In this section we show pseudocode for OCB encryption and decryption (`b` = `ACE
 
 // The next operations set the nonce
   X1 ← N_len
-  ace.setst K0, #ace_state_set_aux_value, X1
+  kl.setst K0, #kl_state_set_aux_value, X1
   V0 ← N
-  ace.exec K0, V0
+  kl.exec K0, V0
 
 // The next state change also sets the tag length
   X1 ← tag_len
-  ace.setst K0, #ace_state_hash_absorb, X1
+  kl.setst K0, #kl_state_hash_absorb, X1
 
   AD_fullblocks ← floor(AD_len/128)
   PT_fullblocks ← floor(PT_len/128)
@@ -638,55 +638,55 @@ In this section we show pseudocode for OCB encryption and decryption (`b` = `ACE
 // Compute AD contribution to tag
   foreach(i from 0 to AD_fullblocks-1) do:
     V0 ← AD[16*i .. 16*i+15]
-    ace.exec K0, V0                       // Absorb it into hash
+    kl.exec K0, V0                       // Absorb it into hash
 
   X1 ← AD_len mod 128                      // Can be zero
-  ace.setst K0, #ace_state_hash_last_block, X1
+  kl.setst K0, #kl_state_hash_last_block, X1
 
   if (X1 != 0) then:
     V0 ← AD[AD_fullblocks*16 .. AD_fullblocks*16+ceil(X1/8)-1]
-    ace.exec K0, V0                       // Absorb the last AD block
+    kl.exec K0, V0                       // Absorb the last AD block
 
 // Encrypt plaintext and continue computation of tag
-  ace.setst K0, #ace_state_encrypt
+  kl.setst K0, #kl_state_encrypt
   foreach(i from 0 to PT_fullblocks-1) do:
     V0 ← PT[16*i .. 16*i+15]
-    ace.exec V1, K0, V0
+    kl.exec V1, K0, V0
     CT[16*i .. 16*i+15] ← V1
 
   X1 ← PT_len mod 128                      // Can be zero
-  ace.setst K0, #ace_state_enc_last_block, X1
+  kl.setst K0, #kl_state_enc_last_block, X1
 
   if (X1 != 0) then:
     V0 ← PT[PT_fullblocks*16 .. PT_fullblocks*16+ceil(X1/8)-1]
-    ace.exec V1, K0, V0              // Encrypt it and absorb it into the tag
+    kl.exec V1, K0, V0              // Encrypt it and absorb it into the tag
     CT[PT_fullblocks*16 .. PT_fullblocks*16+ceil(X1/8)-1] ← V1
   else:
-    ace.exec K0                           // Form D: finalize the tag only
+    kl.exec K0                           // Form D: finalize the tag only
 
 // _Enc_Last_Block_ transitions to _Enc_Tag_Finalize_ on its own, so no
-// ace.setst is issued here.
-  ace.exec V1, K0                          // output tag
+// kl.setst is issued here.
+  kl.exec V1, K0                          // output tag
 ----
 
 Now we give the code for OCB decryption.
 OCB has no _Dec_Tag_Finalize_ state: after the last block, _Dec_Last_Block_ transitions directly to
 _Hash_Verify_, where the received tag is supplied, as shown below.
 
-[[ACE-pseudocode-OCB-decryption-difference]]
+[[KLEE-pseudocode-OCB-decryption-difference]]
 .OCB Decryption
 ----
   V1 ← tag                                 // the tag received with the message
-  ace.setst K0, #ace_state_hash_verify, V1 // compares it against checksum_P
-  ace.getst X1, K0
-  if (X1 != ace_state_success) then:       // do not use the plaintext if error
+  kl.setst K0, #kl_state_hash_verify, V1 // compares it against checksum_P
+  kl.getst X1, K0
+  if (X1 != kl_state_success) then:       // do not use the plaintext if error
      handle error
 ----
 
-[[ACE-CMAC-mode-example]]
+[[KLEE-CMAC-mode-example]]
 === CMAC Functions
 
-[[ACE-pseudocode-CMAC]]
+[[KLEE-pseudocode-CMAC]]
 .CMAC Computation
 ----
 - Info: CMAC input = *M with bit length M_len
@@ -695,7 +695,7 @@ _Hash_Verify_, where the received tag is supplied, as shown below.
   vsetivli zero, 4, e32, m1, ta, ma       // Use 128-bit vectors
   IMPORT K0, (X5)
 
-  ace.setst K0, #ace_state_hash_absorb
+  kl.setst K0, #kl_state_hash_absorb
   blocks    ← floor(M_len/128)
   remainder ← M_len mod 128
   if remainder == 0 and blocks > 0 then   // a whole number of full blocks:
@@ -704,15 +704,15 @@ _Hash_Verify_, where the received tag is supplied, as shown below.
 
   foreach(i from 0 to blocks-1) do:
     V0 ← M[16*i .. 16*i+15]
-    ace.exec K0, V0
+    kl.exec K0, V0
 
   X1 ← remainder
-  ace.setst K0, #ace_state_hash_last_block, X1
+  kl.setst K0, #kl_state_hash_last_block, X1
   if remainder != 0 then:
     V0 ← M[16*blocks .. 16*blocks+ceil(remainder/8)-1]
   else:
     V0 ← zeros(128)                      // dummy input for the empty message
-  ace.exec K0, V0                         // absorbing it moves the CC to
+  kl.exec K0, V0                         // absorbing it moves the CC to
                                         // _Hash_Output_ by itself
-  ace.exec V0, K0  // this is the value of the CMAC
+  kl.exec V0, K0  // this is the value of the CMAC
 ----

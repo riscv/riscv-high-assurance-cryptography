@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""CTR and XCTR keystream generation (<<ACE-keystream-modes>> in
+"""CTR and XCTR keystream generation (<<KLEE-keystream-modes>> in
 src/ace-ISA-algorithms.adoc) against SP 800-38A F.5 and the HCTR2 reference vectors.
 
 The specification keeps the keystream state as two separate fields, `IV` of `n`
@@ -8,7 +8,7 @@ bits and `ctr` of `j` bits, and forms the block fed to the keystream function as
     CTR  :  tmp <- keystream_block(bswap(ctr) @ IV)      with b = n + j
     XCTR :  tmp <- keystream_block(IV xor ctr)           with b = n = j
 
-Under <<ACE-Notation>> the LEFT operand of `@` occupies the more significant bits,
+Under <<KLEE-Notation>> the LEFT operand of `@` occupies the more significant bits,
 and byte i of a byte string lives at bits [8i+7:8i].  So `bswap(ctr) @ IV` puts the
 IV in the *first* bytes of the counter block and the counter, big-endian, in the
 *trailing* bytes --- which is what SP 800-38A and GCM require.  The `bswap` is
@@ -20,7 +20,7 @@ REF-CTR   SP 800-38A written directly on byte strings: counter block =
           nonce || big-endian(ctr, j bits), incremented as an integer mod 2^j.
 REF-XCTR  The HCTR2 paper's XCTR on byte strings: E_K(IV xor LE(i, 128)), the
           counter little-endian and full width, numbered from 1.
-ACE       The two formulas above evaluated on ACE values, with tick_ctr() and the
+KLEE       The two formulas above evaluated on KLEE values, with tick_ctr() and the
           Form B "set initial counter" operation (`ctr <- lsb_j(Xs)`).
 NEG       Negative control: the same CTR formula with the `bswap` dropped, i.e.
           a little-endian counter in the trailing bytes.  It must fail SP 800-38A.
@@ -77,9 +77,9 @@ def ref_xctr(key, iv, ctr0, msg):
     return out
 
 
-# ---------------------------------------------------------------- the ACE model
+# ---------------------------------------------------------------- the KLEE model
 class KeystreamCC:
-    """A CTR/XCTR CC as <<ACE-keystream-modes>> describes it, on ACE values.
+    """A CTR/XCTR CC as <<KLEE-keystream-modes>> describes it, on KLEE values.
 
     In State _Ready_ both `IV` and `ctr` are zero.  A Form C ace.setst sets the IV
     (`set_iv`), a Form B ace.setst sets the initial counter (`set_ctr`), and a
@@ -101,7 +101,7 @@ class KeystreamCC:
         self.IV = value & ((1 << self.n) - 1)
 
     def set_ctr(self, xs):
-        """Form B ace.setst, #ace_state_set_aux_value: ctr <- lsb_j(Xs)."""
+        """Form B ace.setst, #kl_state_set_aux_value: ctr <- lsb_j(Xs)."""
         self.ctr = xs & ((1 << self.j) - 1)
 
     def _tick(self):
@@ -126,14 +126,14 @@ class KeystreamCC:
         return out[:nbytes]
 
 
-def ace_ctr(key, iv_value, n, j, msg, ctr0=0, variant='spec'):
+def kl_ctr(key, iv_value, n, j, msg, ctr0=0, variant='spec'):
     cc = KeystreamCC(key, n, j, 'ctr', variant)
     cc.set_iv(iv_value)
     cc.set_ctr(ctr0)
     return bxor(cc.keystream(len(msg)), msg)
 
 
-def ace_xctr(key, iv_value, msg, ctr0=0):
+def kl_xctr(key, iv_value, msg, ctr0=0):
     cc = KeystreamCC(key, 128, 128, 'xctr')
     cc.set_iv(iv_value)
     cc.set_ctr(ctr0)
@@ -216,26 +216,26 @@ for name, k, c in SP38A_F5:
     key = bytes.fromhex(k)
     chk(name + " REF", ref_ctr(key, b'', 128, icb, SP38A_PT).hex(), c)
 
-print("\n== The ACE formula keystream_block(bswap(ctr) @ IV), n = 0, j = 128")
+print("\n== The KLEE formula keystream_block(bswap(ctr) @ IV), n = 0, j = 128")
 print("   (with no IV the whole counter block is bswap(ctr); the counter value is")
 print("    the integer whose big-endian encoding is the standard's initial block)")
 for name, k, c in SP38A_F5:
     key = bytes.fromhex(k)
-    chk(name + " ACE", ace_ctr(key, 0, 0, 128, SP38A_PT, ctr0=icb).hex(), c)
+    chk(name + " ACE", kl_ctr(key, 0, 0, 128, SP38A_PT, ctr0=icb).hex(), c)
 
 print("\n== Negative control: the same formula with bswap dropped")
 print("KAT-EXPECT-FAIL: NEG little-endian counter")
-print(f"\n   {'vector':<26} {'ACE (bswap)':<14} {'NEG little-endian counter'}")
+print(f"\n   {'vector':<26} {'KLEE (bswap)':<14} {'NEG little-endian counter'}")
 for name, k, c in SP38A_F5:
     key = bytes.fromhex(k)
-    good = ace_ctr(key, 0, 0, 128, SP38A_PT, ctr0=icb).hex() == c
-    neg_wrong = ace_ctr(key, 0, 0, 128, SP38A_PT, ctr0=icb, variant='neg').hex() != c
+    good = kl_ctr(key, 0, 0, 128, SP38A_PT, ctr0=icb).hex() == c
+    neg_wrong = kl_ctr(key, 0, 0, 128, SP38A_PT, ctr0=icb, variant='neg').hex() != c
     ok = ok and good
     neg_fired = neg_fired or neg_wrong
     print(f"   {name:<26} {'PASS' if good else 'FAIL':<14} "
           f"{'FAIL' if neg_wrong else 'PASS (does not discriminate)'}")
 
-print("\n== Nonce/counter splits: ACE vs REF-CTR [reference-consistency only]")
+print("\n== Nonce/counter splits: KLEE vs REF-CTR [reference-consistency only]")
 print("   b = n + j, IV in the first n/8 bytes, counter big-endian in the last j/8")
 key = bytes.fromhex(SP38A_F5[0][1])
 for n, j in ((96, 32), (64, 64), (120, 8), (32, 96), (112, 16)):
@@ -243,10 +243,10 @@ for n, j in ((96, 32), (64, 64), (120, 8), (32, 96), (112, 16)):
     msg = bytes(range(80))
     for ctr0 in (0, 1, 7, (1 << j) - 2):     # the last one also exercises wraparound
         r = ref_ctr(key, nonce, j, ctr0, msg)
-        a = ace_ctr(key, b2v(nonce), n, j, msg, ctr0=ctr0)
+        a = kl_ctr(key, b2v(nonce), n, j, msg, ctr0=ctr0)
         ok = ok and r == a
     chk(f"n = {n:3d}, j = {j:3d}  (4 starting counters, incl. wrap)",
-        ace_ctr(key, b2v(nonce), n, j, msg, ctr0=0).hex(),
+        kl_ctr(key, b2v(nonce), n, j, msg, ctr0=0).hex(),
         ref_ctr(key, nonce, j, 0, msg).hex())
 
 print("\n== Form B set initial counter: ctr <- lsb_j(Xs)")
@@ -267,31 +267,31 @@ chk("lsb_j truncation of Xs",
      ref_ctr(key, bytes(range(1, 13)), 32, 5, bytes(32)).hex())
 
 print("\n== XCTR [reference-implementation anchor: google/hctr2]")
-print("   HCTR2 numbers the counter from 1, while an ACE CC leaves State _Ready_")
+print("   HCTR2 numbers the counter from 1, while an KLEE CC leaves State _Ready_")
 print("   with ctr = 0, so the Form B operation supplies the initial counter 1.")
 for name, k, iv, p, c in HCTR2_XCTR:
     key, nonce = bytes.fromhex(k), bytes.fromhex(iv)
     pt, ct = bytes.fromhex(p), bytes.fromhex(c)
     chk(name + " REF", ref_xctr(key, nonce, 1, pt).hex(), c)
-    chk(name + " ACE (Form B ctr <- 1)", ace_xctr(key, b2v(nonce), pt, ctr0=1).hex(), c)
-    chk(name + " ACE decrypt round-trip",
-        ace_xctr(key, b2v(nonce), ct, ctr0=1).hex(), p)
+    chk(name + " KLEE (Form B ctr <- 1)", kl_xctr(key, b2v(nonce), pt, ctr0=1).hex(), c)
+    chk(name + " KLEE decrypt round-trip",
+        kl_xctr(key, b2v(nonce), ct, ctr0=1).hex(), p)
 
 print("\n== XCTR/CTR mutual consistency and separation")
 key = bytes.fromhex(SP38A_F5[0][1])
 iv = bytes(range(16))
 msg = bytes(range(64))
 chk("REF-XCTR == ACE-XCTR over 4 blocks, ctr from 0",
-    ref_xctr(key, iv, 0, msg).hex(), ace_xctr(key, b2v(iv), msg, ctr0=0).hex())
-# the ACE default start (ctr = 0) must differ from HCTR2's (ctr = 1): the Form B
+    ref_xctr(key, iv, 0, msg).hex(), kl_xctr(key, b2v(iv), msg, ctr0=0).hex())
+# the KLEE default start (ctr = 0) must differ from HCTR2's (ctr = 1): the Form B
 # step above is necessary, not decorative.
-differs = ace_xctr(key, b2v(iv), msg, 0) != ace_xctr(key, b2v(iv), msg, 1)
+differs = kl_xctr(key, b2v(iv), msg, 0) != kl_xctr(key, b2v(iv), msg, 1)
 ok = ok and differs
 print(f"  {'ctr=0 and ctr=1 XCTR streams differ':<52} {'PASS' if differs else 'FAIL'}")
 # CTR and XCTR must not coincide, or the specification's distinction is vacuous
 nonce = bytes(range(1, 13))
-differs = (ace_ctr(key, b2v(nonce), 96, 32, msg)
-           != ace_xctr(key, b2v(nonce + bytes(4)), msg))
+differs = (kl_ctr(key, b2v(nonce), 96, 32, msg)
+           != kl_xctr(key, b2v(nonce + bytes(4)), msg))
 ok = ok and differs
 print(f"  {'CTR and XCTR produce different keystreams':<52} "
       f"{'PASS' if differs else 'FAIL'}")

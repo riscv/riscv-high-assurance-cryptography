@@ -1,27 +1,27 @@
 #!/usr/bin/env python3
-"""KAT harness for the ACE SHA-3 family rules (SHA3-224/256/384/512, SHAKE128/256).
+"""KAT harness for the KLEE SHA-3 family rules (SHA3-224/256/384/512, SHAKE128/256).
 
 What is validated (spec anchors in src/ace-ISA-algorithms.adoc, by heading):
-  [[ACE-process-VLI]]      -- bit-accounted absorption loop, chunking across several
+  [[KLEE-process-VLI]]      -- bit-accounted absorption loop, chunking across several
                               ace.exec transfers, partial-block boundaries, and the
-                              interruption/resumption points (acestart).
-  [[ACE-hash-functions]]   -- the generic _Hash_Output_ squeeze loop, including
+                              interruption/resumption points (klstart).
+  [[KLEE-hash-functions]]   -- the generic _Hash_Output_ squeeze loop, including
                               multi-exec squeezing, resumption via
-                              output_base <- 8*acestart, and the _Success_ rule.
-  [[ACE-SHA-3]]            -- direct XOR absorption into `state` (block == state),
+                              output_base <- 8*klstart, and the _Success_ rule.
+  [[KLEE-SHA-3]]            -- direct XOR absorption into `state` (block == state),
                               the suffix-and-padding string S = D || pad10*1 with its
                               one-block (|S| = b - block_base) and two-block
                               (|S| = 2b - block_base) clauses, and the parameter table.
   src/ace-notation.adoc    -- FIPS 202 row of the conventions table: direct mapping of
                               the absorbed string, lanes little-endian (values are the
-                              ACE little-endian ints of common.py).
+                              KLEE little-endian ints of common.py).
 
 Layered anchoring:
   1. Keccak-f[1600] is implemented FROM SCRATCH below (round constants and rho
      offsets transcribed from FIPS 202 / the Keccak reference).
   2. A bit-level FIPS 202 reference sponge built on it is checked against EMBEDDED
      standard digests and against Python's hashlib (labeled reference oracle).
-  3. The ACE model (state machine + process_VLI + padding clauses, implemented
+  3. The KLEE model (state machine + process_VLI + padding clauses, implemented
      literally from the spec text) is checked against the embedded vectors, the
      reference sponge, and the hashlib oracle.
   Bit-granular cases (the two-block padding spill) have no external oracle
@@ -39,17 +39,17 @@ Embedded vector provenance:
     against the hashlib oracle (labeled [oracle]).
 
 Review finding M4, since FIXED:
-  process_VLI used to store `acestart <- input_base` (a BIT count) at its
-  interruption point although acestart is architecturally a BYTE count (cf.
+  process_VLI used to store `klstart <- input_base` (a BIT count) at its
+  interruption point although klstart is architecturally a BYTE count (cf.
   Hash_Output, which always converted correctly).  The spec now writes
-  `acestart <- input_base / 8` and resumes at `input_base <- 8 * acestart`,
+  `klstart <- input_base / 8` and resumes at `input_base <- 8 * klstart`,
   which is what this harness models; the pre-fix unit clash is retained as a
   negative control, so a regression would be caught.
 
 Negative controls (must mismatch, declared via KAT-EXPECT-FAIL):
   * suffix bit order  -- the domain suffix byte (0x06 / 0x1F) applied MSB-aligned
     (bit-reversed) instead of the FIPS 202 LSB-first convention.
-  * M4 literal units  -- acestart written as a bit count and consumed under the
+  * M4 literal units  -- klstart written as a bit count and consumed under the
     architectural byte convention on resumption.
 
 Verdict: per-case PASS/FAIL lines and a final `KAT-RESULT: PASS|FAIL`.
@@ -59,7 +59,7 @@ import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from common import b2v, v2b, sl        # ACE value conventions (do not modify common.py)
+from common import b2v, v2b, sl        # KLEE value conventions (do not modify common.py)
 
 import hashlib                          # LABELED REFERENCE ORACLE ONLY
 
@@ -94,9 +94,9 @@ def _rol64(v, s):
 
 
 def keccak_f1600(state):
-    """KECCAK-p[1600,24] on a 1600-bit ACE value.
+    """KECCAK-p[1600,24] on a 1600-bit KLEE value.
 
-    Per the FIPS 202 row of the ACE conventions table the mapping is direct:
+    Per the FIPS 202 row of the KLEE conventions table the mapping is direct:
     lane (x, y) of FIPS 202 3.1 occupies bits [64*(5y+x)+63 : 64*(5y+x)] of the
     value, each lane little-endian -- which is exactly the identity on the ACE
     little-endian integer of the state byte string.
@@ -125,8 +125,8 @@ def keccak_f1600(state):
 
 # --------------------------------------------------- FIPS 202 reference sponge
 # Bit-level, straight from FIPS 202 5.1/6: P = M || D || 1 || 0^j || 1, absorbed
-# r bits at a time; bit j of every string is bit j of its ACE value (the FIPS 202
-# h2b order coincides with the ACE little-endian convention).
+# r bits at a time; bit j of every string is bit j of its KLEE value (the FIPS 202
+# h2b order coincides with the KLEE little-endian convention).
 
 def ref_sponge(rate_bits, msg_val, msg_bits, d_bits, out_bytes):
     S = 0
@@ -156,9 +156,9 @@ def ref_hash(name, msg, out_bytes=None):
 
 
 # ------------------------------------------------------------------ parameters
-# Transcribed from the spec table [[ACE-SHA-3-parameters]].  D is the
+# Transcribed from the spec table [[KLEE-SHA-3-parameters]].  D is the
 # domain-separation suffix as a bit sequence, first-appended bit first
-# (= LSB-first in the ACE value): "01" -> (0,1), "1111" -> (1,1,1,1).
+# (= LSB-first in the KLEE value): "01" -> (0,1), "1111" -> (1,1,1,1).
 PARAMS = {
     #            c     b     t    XOF    D
     'SHA3-224': (448, 1152, 224, False, (0, 1)),
@@ -184,7 +184,7 @@ def oracle(name, msg, out_bytes=None):
     c, b, t, xof, D = PARAMS[name]
     n = out_bytes if out_bytes is not None else t // 8
     # For the fixed-output functions hashlib always returns the whole digest;
-    # a shorter request is a prefix of it (the ACE model emits a prefix too).
+    # a shorter request is a prefix of it (the KLEE model emits a prefix too).
     return _ORACLE[name](msg, n)[:n]
 
 
@@ -229,15 +229,15 @@ VECTORS = {
 MSGS = {'empty': MSG_EMPTY, 'abc': MSG_ABC, 'a3_200': MSG_A3}
 
 
-# ----------------------------------------------------------------- ACE CC model
+# ----------------------------------------------------------------- KLEE CC model
 class AceSha3CC:
-    """Model of an ACE SHA-3 crypto context, implemented literally from
-    [[ACE-SHA-3]] + [[ACE-hash-functions]] + [[ACE-process-VLI]].
+    """Model of an KLEE SHA-3 crypto context, implemented literally from
+    [[KLEE-SHA-3]] + [[KLEE-hash-functions]] + [[KLEE-process-VLI]].
 
-    `state` is the 1600-bit ACE value; for the SHA-3 family `block` == `state`
+    `state` is the 1600-bit KLEE value; for the SHA-3 family `block` == `state`
     (inputs are XORed directly into the rate, state_offset = 0) and `len` = 0
     (no maximum length enforced), so process_VLI's per-iteration amount is
-    min(ACELEN - input_base, b - block_base).
+    min(KLLEN - input_base, b - block_base).
     """
 
     def __init__(self, name):
@@ -247,7 +247,7 @@ class AceSha3CC:
         # State _Ready_: state is zeroed; block_base/input_base zero.
         self.state = 0
         self.block_base = 0                 # bits
-        self.acestart = 0                   # BYTES (architectural; M4-corrected)
+        self.klstart = 0                   # BYTES (architectural; M4-corrected)
         self.mstate = 'Ready'
         self.pad_case = None                # instrumentation: padding clause fired
 
@@ -270,16 +270,16 @@ class AceSha3CC:
                 self.state = keccak_f1600(self.state)     # absorb() = P()
                 self.block_base = 0
             # process_VLI interruption point.  The spec literally says
-            # "acestart <- input_base" although input_base is a BIT offset and
-            # acestart is architecturally a BYTE count (<<ACE-CSR-acestart>>);
-            # the corrected reading acestart <- input_base/8 is used (always
+            # "klstart <- input_base" although input_base is a BIT offset and
+            # klstart is architecturally a BYTE count (<<KLEE-CSR-klstart>>);
+            # the corrected reading klstart <- input_base/8 is used (always
             # integral here, as the spec itself argues).
             if (interrupt_at_byte is not None and input_base < acelen_bits
                     and input_base // 8 >= interrupt_at_byte):
                 if literal_units:
-                    self.acestart = input_base            # LITERAL spec text: bits
+                    self.klstart = input_base            # LITERAL spec text: bits
                 else:
-                    self.acestart = input_base // 8       # M4-corrected: bytes
+                    self.klstart = input_base // 8       # M4-corrected: bytes
                 return 'interrupted'
         return 'done'
 
@@ -290,11 +290,11 @@ class AceSha3CC:
         INPUT = b2v(data) if data else 0
         acelen = 8 * len(data)
         if resume:
-            # Spec: "If resuming an ace.exec instruction, then input_base <- acestart."
-            # acestart is architecturally a byte count, so the corrected reading is
-            # input_base <- 8 * acestart (M4).  With literal_units the stored bit
+            # Spec: "If resuming an ace.exec instruction, then input_base <- klstart."
+            # klstart is architecturally a byte count, so the corrected reading is
+            # input_base <- 8 * klstart (M4).  With literal_units the stored bit
             # count is consumed under the byte convention, exhibiting the clash.
-            input_base = 8 * self.acestart
+            input_base = 8 * self.klstart
         else:
             input_base = 0
         return self._vli_loop(INPUT, acelen, input_base, interrupt_at_byte,
@@ -325,7 +325,7 @@ class AceSha3CC:
         if wrong_suffix_bit_order:
             # NEGATIVE CONTROL: the suffix byte (0x06 / 0x1F) written MSB-aligned,
             # i.e. bit-reversed within its byte, violating the FIPS 202 h2b /
-            # ACE little-endian bit order.
+            # KLEE little-endian bit order.
             first = S & 0xFF
             first = int('{:08b}'.format(first)[::-1], 2)
             S = (S & ~0xFF) | first
@@ -350,14 +350,14 @@ class AceSha3CC:
     def exec_squeeze(self, out_bytes, resume=False, interrupt_at_byte=None):
         """Returns (status, start_byte, data) with data covering OUTPUT bytes
         [start_byte, start_byte + len(data)).  status is 'done', 'interrupted'
-        (acestart holds the resumption byte offset), or 'success' (SHA3-n
+        (klstart holds the resumption byte offset), or 'success' (SHA3-n
         transitioned to _Success_; the instruction returns, OUTPUT beyond the
         digest is not written)."""
         assert self.mstate == 'Hash_Output', self.mstate
         acelen = 8 * out_bytes
         t = self.t
-        # Spec: output_base <- 0 // upon resumption, output_base <- 8 * acestart
-        output_base = 8 * self.acestart if resume else 0
+        # Spec: output_base <- 0 // upon resumption, output_base <- 8 * klstart
+        output_base = 8 * self.klstart if resume else 0
         start_byte = output_base // 8
         OUTPUT = 0
         while output_base < acelen:
@@ -374,11 +374,11 @@ class AceSha3CC:
                             v2b(OUTPUT, output_base // 8 - start_byte))
                 self.state = keccak_f1600(self.state)     # update() = P()
                 self.block_base = 0
-                # Interruption point: acestart <- output_base / 8 (spec, correct
+                # Interruption point: klstart <- output_base / 8 (spec, correct
                 # units here).
                 if (interrupt_at_byte is not None and output_base < acelen
                         and output_base // 8 >= interrupt_at_byte):
-                    self.acestart = output_base // 8
+                    self.klstart = output_base // 8
                     return ('interrupted', start_byte,
                             v2b(OUTPUT, output_base // 8 - start_byte))
         return ('done', start_byte, v2b(OUTPUT, out_bytes - start_byte))
@@ -429,9 +429,9 @@ def negative_control(label, mismatched):
 
 
 # ------------------------------------------------------------------ test drive
-def ace_hash_oneshot(name, msg, out_bytes=None, chunks=None,
+def kl_hash_oneshot(name, msg, out_bytes=None, chunks=None,
                      interrupt=None, wrong_suffix=False, literal_units=False):
-    """Run the full ACE state machine: absorb (optionally chunked/interrupted),
+    """Run the full KLEE state machine: absorb (optionally chunked/interrupted),
     pad, squeeze out_bytes (default t/8) in one exec.  Returns (digest, cc)."""
     c, b, t, xof, D = PARAMS[name]
     cc = AceSha3CC(name)
@@ -453,7 +453,7 @@ def ace_hash_oneshot(name, msg, out_bytes=None, chunks=None,
 
 
 def main():
-    print('== shake-kat: ACE SHA-3 family rules vs FIPS 202 ==')
+    print('== shake-kat: KLEE SHA-3 family rules vs FIPS 202 ==')
     print()
     print('-- 1. reference sponge vs embedded FIPS 202 vectors and hashlib oracle --')
     for name in PARAMS:
@@ -465,14 +465,14 @@ def main():
                   oracle(name, msg, len(want)), want)
 
     print()
-    print('-- 2. ACE model, single-exec absorption --')
+    print('-- 2. KLEE model, single-exec absorption --')
     for name in PARAMS:
         for mid, msg in MSGS.items():
             want = bytes.fromhex(VECTORS[(name, mid)])
-            got, cc = ace_hash_oneshot(name, msg, out_bytes=len(want))
-            check('ACE model  %-8s %-6s' % (name, mid), got, want)
+            got, cc = kl_hash_oneshot(name, msg, out_bytes=len(want))
+            check('KLEE model  %-8s %-6s' % (name, mid), got, want)
             if not PARAMS[name][3]:
-                check_true('ACE model  %-8s %-6s reached _Success_' % (name, mid),
+                check_true('KLEE model  %-8s %-6s reached _Success_' % (name, mid),
                            cc.mstate == 'Success', 'state=%s' % cc.mstate)
 
     print()
@@ -480,21 +480,21 @@ def main():
           '(granularity 32 bits, partial-block boundaries) --')
     # SHAKE128 (rate 168 B): transfers 68+4+100+28 = 200 B; the 100-B transfer
     # crosses the 168-B block boundary mid-transfer.
-    got, _ = ace_hash_oneshot('SHAKE128', MSG_A3, out_bytes=64,
+    got, _ = kl_hash_oneshot('SHAKE128', MSG_A3, out_bytes=64,
                               chunks=[MSG_A3[:68], MSG_A3[68:72],
                                       MSG_A3[72:172], MSG_A3[172:]])
-    check('ACE chunked SHAKE128 a3_200 (68+4+100+28 B transfers)',
+    check('KLEE chunked SHAKE128 a3_200 (68+4+100+28 B transfers)',
           got, bytes.fromhex(VECTORS[('SHAKE128', 'a3_200')]))
     # SHA3-512 (rate 72 B): 12+60 hits the block boundary exactly at a transfer
     # edge; 100 crosses it mid-transfer; tail 28.
-    got, _ = ace_hash_oneshot('SHA3-512', MSG_A3,
+    got, _ = kl_hash_oneshot('SHA3-512', MSG_A3,
                               chunks=[MSG_A3[:12], MSG_A3[12:72],
                                       MSG_A3[72:172], MSG_A3[172:]])
-    check('ACE chunked SHA3-512 a3_200 (12+60+100+28 B transfers)',
+    check('KLEE chunked SHA3-512 a3_200 (12+60+100+28 B transfers)',
           got, bytes.fromhex(VECTORS[('SHA3-512', 'a3_200')]))
 
     print()
-    print('-- 4. interrupted/resumed absorption (M4-corrected acestart, in bytes) --')
+    print('-- 4. interrupted/resumed absorption (M4-corrected klstart, in bytes) --')
     # SHA3-256 (rate 136 B), one 200-B exec interrupted at the interruption point
     # after the first full block (input_base = 136 B).
     cc = AceSha3CC('SHA3-256')
@@ -502,10 +502,10 @@ def main():
     st = cc.exec_absorb(MSG_A3, interrupt_at_byte=100)
     check_true('SHA3-256 absorb interrupted at process_VLI interruption point',
                st == 'interrupted', st)
-    check_true('acestart is a BYTE count = 136 (first interruption point after '
-               'the 136-B block; M4-corrected)', cc.acestart == 136,
-               'acestart=%r' % cc.acestart)
-    st = cc.exec_absorb(MSG_A3, resume=True)     # input_base <- 8 * acestart
+    check_true('klstart is a BYTE count = 136 (first interruption point after '
+               'the 136-B block; M4-corrected)', cc.klstart == 136,
+               'klstart=%r' % cc.klstart)
+    st = cc.exec_absorb(MSG_A3, resume=True)     # input_base <- 8 * klstart
     check_true('resumed exec completes', st == 'done', st)
     cc.setst_output()
     _, _, data = cc.exec_squeeze(32)
@@ -520,7 +520,7 @@ def main():
     for name in PARAMS:
         c, b, t, xof, D = PARAMS[name]
         msg = pat[:b // 8 - 1]
-        got, cc = ace_hash_oneshot(name, msg, out_bytes=32)
+        got, cc = kl_hash_oneshot(name, msg, out_bytes=32)
         check('[oracle] %-8s rate-1-byte msg (%3d B), one-block padding'
               % (name, len(msg)), got, oracle(name, msg, 32))
         check_true('%-8s padding clause 1 fired (|S| = b - block_base = 8)'
@@ -530,7 +530,7 @@ def main():
     for name in ('SHAKE128', 'SHA3-512'):
         c, b, t, xof, D = PARAMS[name]
         msg = pat[:b // 8]
-        got, cc = ace_hash_oneshot(name, msg, out_bytes=32)
+        got, cc = kl_hash_oneshot(name, msg, out_bytes=32)
         check('[oracle] %-8s rate-exact msg (%3d B), full padding block'
               % (name, len(msg)), got, oracle(name, msg, 32))
         check_true('%-8s padding clause 1 fired (|S| = b, block_base = 0)'
@@ -541,7 +541,7 @@ def main():
     #     the architectural interface.  Exercised here through the bit-level
     #     definition of process_VLI; anchor is model-vs-reference (hashlib
     #     cannot do bit strings).
-    print('NOTE: spec observation -- the two-block padding clause of [[ACE-SHA-3]] '
+    print('NOTE: spec observation -- the two-block padding clause of [[KLEE-SHA-3]] '
           'requires b - block_base < |D| + 2, which')
     print('      cannot occur through byte-granular ace.exec transfers '
           '(b - block_base is always >= 8); it is reachable only')
@@ -580,7 +580,7 @@ def main():
     stream = oracle('SHAKE128', MSG_ABC, 512)
     check_true('[oracle] SHAKE128 abc stream prefix matches embedded vector',
                stream[:64] == bytes.fromhex(VECTORS[('SHAKE128', 'abc')]))
-    got, cc = ace_hash_oneshot('SHAKE128', MSG_ABC, out_bytes=512)
+    got, cc = kl_hash_oneshot('SHAKE128', MSG_ABC, out_bytes=512)
     check('[oracle] SHAKE128 abc 512-B squeeze, single exec', got, stream)
     check_true('SHAKE128 stays in _Hash_Output_ (XOFs never reach _Success_)',
                cc.mstate == 'Hash_Output', cc.mstate)
@@ -598,7 +598,7 @@ def main():
           out, stream)
     check_true('SHAKE128 still in _Hash_Output_ after multi-exec squeeze',
                cc.mstate == 'Hash_Output', cc.mstate)
-    # (c) interrupted/resumed squeeze: acestart = output_base / 8.
+    # (c) interrupted/resumed squeeze: klstart = output_base / 8.
     cc = AceSha3CC('SHAKE128')
     cc.setst_absorb()
     cc.exec_absorb(MSG_ABC)
@@ -606,8 +606,8 @@ def main():
     status, start, first = cc.exec_squeeze(400, interrupt_at_byte=1)
     check_true('SHAKE128 squeeze interrupted at first interruption point',
                status == 'interrupted' and start == 0, status)
-    check_true('acestart = output_base/8 = 168 (t bits = one rate)',
-               cc.acestart == 168, 'acestart=%r' % cc.acestart)
+    check_true('klstart = output_base/8 = 168 (t bits = one rate)',
+               cc.klstart == 168, 'klstart=%r' % cc.klstart)
     status, start, rest = cc.exec_squeeze(400, resume=True)
     check_true('resumed squeeze continues at byte 168',
                status == 'done' and start == 168, (status, start))
@@ -656,24 +656,24 @@ def main():
     print('-- 8. negative controls --')
     print('KAT-EXPECT-FAIL: suffix bit order')
     print('KAT-EXPECT-FAIL: M4 literal units')
-    got, _ = ace_hash_oneshot('SHA3-256', MSG_EMPTY, wrong_suffix=True)
+    got, _ = kl_hash_oneshot('SHA3-256', MSG_EMPTY, wrong_suffix=True)
     negative_control('suffix bit order (SHA3-256 suffix byte 0x06 MSB-aligned)',
                      got != bytes.fromhex(VECTORS[('SHA3-256', 'empty')]))
-    got, _ = ace_hash_oneshot('SHAKE128', MSG_EMPTY, out_bytes=64,
+    got, _ = kl_hash_oneshot('SHAKE128', MSG_EMPTY, out_bytes=64,
                               wrong_suffix=True)
     negative_control('suffix bit order (SHAKE128 suffix byte 0x1F MSB-aligned)',
                      got != bytes.fromhex(VECTORS[('SHAKE128', 'empty')]))
-    # M4 (fixed): under the PRE-FIX text acestart was stored as a bit count and
+    # M4 (fixed): under the PRE-FIX text klstart was stored as a bit count and
     # consumed under the architectural byte convention on resumption, so the tail
     # of the message was never absorbed.  Kept as a regression check.
-    got, _ = ace_hash_oneshot('SHA3-256', MSG_A3, chunks=[MSG_A3],
+    got, _ = kl_hash_oneshot('SHA3-256', MSG_A3, chunks=[MSG_A3],
                               interrupt=(0, 100), literal_units=True)
-    negative_control('M4 literal units (acestart bit count consumed as bytes)',
+    negative_control('M4 literal units (klstart bit count consumed as bytes)',
                      got != bytes.fromhex(VECTORS[('SHA3-256', 'a3_200')]))
     print('NOTE: former spec discrepancy M4, since fixed -- '
-          '[[ACE-process-VLI]] writes "acestart <- input_base" with input_base')
-    print('      in bits, while acestart is architecturally a byte count and '
-          '_Hash_Output_ correctly uses acestart <- output_base/8.')
+          '[[KLEE-process-VLI]] writes "klstart <- input_base" with input_base')
+    print('      in bits, while klstart is architecturally a byte count and '
+          '_Hash_Output_ correctly uses klstart <- output_base/8.')
     print('      This harness models the corrected byte interpretation.')
 
     print()

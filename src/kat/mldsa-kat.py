@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""Known-Answer Tests for the ACE ML-DSA algorithm (src/ace-ISA-algorithms.adoc,
-anchor [[ACE-PQC-ML-DSA]]) against FIPS 204.
+"""Known-Answer Tests for the KLEE ML-DSA algorithm (src/ace-ISA-algorithms.adoc,
+anchor [[KLEE-PQC-ML-DSA]]) against FIPS 204.
 
 What this harness validates
 ---------------------------
@@ -11,23 +11,23 @@ What this harness validates
     skEncode / sigEncode / w1Encode, KeyGen_internal, Sign_internal with its
     rejection loop, and Verify_internal).  It is anchored here, byte for byte,
     against official NIST ACVP vectors for all three parameter sets, including
-    the *external-mu* interface -- which is exactly the interface the ACE unit
+    the *external-mu* interface -- which is exactly the interface the KLEE unit
     exposes (mu = SHAKE256(tr @ M', 64) supplied through State _mu_Input_).
 
-2.  *The ACE specification text itself*: the size table <<ACE-ML-DSA-sizes>>, the
+2.  *The KLEE specification text itself*: the size table <<KLEE-ML-DSA-sizes>>, the
     `HasPrivKey` / `HasPubKey` flags and their _*_Input_ clearing rules, the
     external-mu convention with the `ctx` / `ctxlen` binding, hedged
     (rnd random) versus deterministic (rnd = 0) selection through the Form B
     `ace.setst` auxiliary `Xs`, _Sign_Generate_ via ML-DSA.Sign_internal,
     _Sign_Verify_ via ML-DSA.Verify_internal, _compute_pubKey_ with its
-    tr-consistency check, and the _AlgorithmUse_ transfer-counter rules
+    tr-consistency check, and the _MachineUse_ transfer-counter rules
     (excess bits ignored on input, past-the-end -> Error State _Invalid_).
 
-3.  *Review finding M12, since FIXED*: <<ACE-PQC-ML-DSA>> now splits a malformed
+3.  *Review finding M12, since FIXED*: <<KLEE-PQC-ML-DSA>> now splits a malformed
     `privkey`/`pubkey` (a configuration error -> Error State Invalid) from a
     well-formed value that does not verify (a data error -> State Failure, a
     valid state), no longer calls state 23 an "Error State", and states the
-    _Sign_Verify_ outcome in terms of the Boolean that FIPS 204 Algorithm 8
+    _Sign_Verify_ outcome in terms of the Boolean that FIPS 204 Machine 8
     actually returns.  This harness had already modelled that reading.
 
 Vector provenance
@@ -46,7 +46,7 @@ Vector provenance
                                   tcId 91, 92, 94, 95, 96)
     fetched 2026-08-26; each embedded record carries its own case identifier.
 
-Negative control (KAT-EXPECT-FAIL): a verifier that skips FIPS 204 Algorithm 21's
+Negative control (KAT-EXPECT-FAIL): a verifier that skips FIPS 204 Machine 21's
 malformed-hint checks (the omega bound and the canonical-encoding conditions)
 accepts a signature it must reject.
 """
@@ -66,9 +66,9 @@ def chk(name, ok, note=''):
     print(f"  {'PASS' if ok else 'FAIL'}  {name}" + (f"   [{note}]" if note else ''))
     return ok
 
-# ================================================================ ACE model
+# ================================================================ KLEE model
 
-# MDH field positions, src/ace-ISA-unpriv.adoc <<ACE-metadata-header>>.
+# MDH field positions, src/ace-ISA-unpriv.adoc <<KLEE-metadata-header>>.
 F_ALGORITHM    = (11, 0)
 F_ALGPOLICY    = (13, 12)
 F_STATE        = (25, 21)
@@ -85,7 +85,7 @@ def mdh_set(mdh, fld, val):
     m = ((1 << (hi - lo + 1)) - 1) << lo
     return (mdh & ~m) | ((val << lo) & m)
 
-# States from the ML-DSA state list in [[ACE-PQC-ML-DSA]] plus the global ones.
+# States from the ML-DSA state list in [[KLEE-PQC-ML-DSA]] plus the global ones.
 S_READY, S_GENKEYPAIR = 1, 2
 S_PK_OUT, S_PK_IN, S_CTX_IN, S_MU_IN, S_TR_IN = 3, 4, 5, 6, 7
 S_SIGN_GEN, S_SIGN_OUT, S_SIGN_VERIFY, S_SIGN_IN = 8, 9, 10, 11
@@ -96,25 +96,25 @@ IN_STATES  = {S_PK_IN: 'pubkey', S_CTX_IN: 'ctx', S_MU_IN: 'mu',
               S_TR_IN: 'tr', S_SIGN_IN: 'signature', S_SK_IN: 'privkey'}
 OUT_STATES = {S_PK_OUT: 'pubkey', S_SIGN_OUT: 'signature'}
 
-# StateExtension bit assignment for the two booleans of [[ACE-PQC-ML-DSA]]
+# StateExtension bit assignment for the two booleans of [[KLEE-PQC-ML-DSA]]
 # ("Apart from HasPrivKey and HasPubKey (which are stored in StateExtension)").
 SE_HASPRIVKEY, SE_HASPUBKEY = 1, 2
 
 
 class Invalidated(Exception):
-    """The CR transitioned to Error State _Invalid_ (ace_state_invalid, 25)."""
+    """The CR transitioned to Error State _Invalid_ (kl_state_invalid, 25)."""
 
 
 class MLDSAContext:
-    """Model of an ACE Cryptographic Context running an ML-DSA algorithm."""
+    """Model of an KLEE Cryptographic Context running an ML-DSA algorithm."""
 
     def __init__(self, ps, algpolicy=0b11, auxinfo=0):
         self.ps = ps
         self.sk_len, self.pk_len, self.sig_len = D.sizes(ps)
         if algpolicy == 0:
-            # "An AlgorithmPolicy of 0 is not valid, and it causes the CR to
+            # "An MachinePolicy of 0 is not valid, and it causes the CR to
             #  transition to Error State Invalid."
-            raise Invalidated('AlgorithmPolicy == 0 at provisioning')
+            raise Invalidated('MachinePolicy == 0 at provisioning')
         self.mdh = mdh_set(0, F_ALGPOLICY, algpolicy)
         self.mdh = mdh_set(self.mdh, F_AUXINFO, auxinfo)
         self.mdh = mdh_set(self.mdh, F_STATE, S_READY)
@@ -215,7 +215,7 @@ class MLDSAContext:
         n = self.field_bits(name)
         cum = self.alguse
         if cum >= n:
-            self._invalidate(f'{name}_Input with AlgorithmUse >= n ({cum} >= {n})')
+            self._invalidate(f'{name}_Input with MachineUse >= n ({cum} >= {n})')
         amount = min(len(data) * 8, n - cum)         # bits in excess are ignored
         buf = bytearray(getattr(self, name).ljust(n // 8, b'\0'))
         buf[cum // 8: cum // 8 + amount // 8] = data[:amount // 8]
@@ -240,7 +240,7 @@ class MLDSAContext:
         n = self.field_bits(name)
         cum = self.alguse
         if cum >= n:
-            self._invalidate(f'{name}_Output with AlgorithmUse >= n')
+            self._invalidate(f'{name}_Output with MachineUse >= n')
         if cum + nbytes * 8 > n:
             self._invalidate(f'{name}_Output transfer past the end of the field')
         out = getattr(self, name)[cum // 8: cum // 8 + nbytes]
@@ -283,7 +283,7 @@ class MLDSAContext:
         if st == S_SIGN_VERIFY:
             if not self.has_pubkey:
                 self._invalidate('Sign_Verify with HasPubKey false')
-            # <<ACE-PQC-ML-DSA>>: Verify_internal returns a Boolean only, and
+            # <<KLEE-PQC-ML-DSA>>: Verify_internal returns a Boolean only, and
             # nothing is written to `signature` on this path (M12, fixed).
             ok = D.verify_internal_mu(self.pubkey, self.mu, self.signature, self.ps)
             self.mdh = mdh_set(self.mdh, F_STATE,
@@ -295,18 +295,18 @@ class MLDSAContext:
         raise AssertionError(f'no Form D ace.exec defined in state {st}')
 
     def restrictl_algpolicy(self, mask):
-        """`ace.restrictl` on _AlgorithmPolicy_: clearing the field is not
+        """`ace.restrictl` on _MachinePolicy_: clearing the field is not
         admissible."""
         new = mdh_get(self.mdh, F_ALGPOLICY) & mask
         if new == 0:
-            self._invalidate('ace.restrictl cleared AlgorithmPolicy')
+            self._invalidate('ace.restrictl cleared MachinePolicy')
         self.mdh = mdh_set(self.mdh, F_ALGPOLICY, new)
 
 
 # ================================================================ tests
 
 def t_sizes():
-    print('\n-- Size table <<ACE-ML-DSA-sizes>> vs FIPS 204 --')
+    print('\n-- Size table <<KLEE-ML-DSA-sizes>> vs FIPS 204 --')
     for ps, want in ((44, (2560, 1312, 2420)), (65, (4032, 1952, 3309)),
                      (87, (4896, 2592, 4627))):
         chk(f'ML-DSA-{ps} (privkey, pubkey, signature)', D.sizes(ps) == want,
@@ -325,9 +325,9 @@ def t_sizes():
         chk(f'ML-DSA-{ps} Serialized Context before/after padding',
             got == total and got + pad == padded,
             f'{got} + {pad} = {got + pad} bits = {(got + pad) // 128} blocks')
-    # The AuxInfo field has "the same format as the Algorithm and
-    # AlgorithmPolicy Fields and the next two Reserved bits" -> 12 + 2 + 2 = 16.
-    chk('_AuxInfo_ is 16 bits, matching Algorithm+AlgorithmPolicy+2 Reserved',
+    # The AuxInfo field has "the same format as the Machine and
+    # MachinePolicy Fields and the next two Reserved bits" -> 12 + 2 + 2 = 16.
+    chk('_AuxInfo_ is 16 bits, matching Machine+MachinePolicy+2 Reserved',
         (F_AUXINFO[0] - F_AUXINFO[1] + 1) == 16 and
         (F_ALGORITHM[0] - F_ALGORITHM[1] + 1) +
         (F_ALGPOLICY[0] - F_ALGPOLICY[1] + 1) + 2 == 16)
@@ -353,7 +353,7 @@ def t_sign():
         chk(f"Sign_internal external-mu, {mode}  {v['src']}",
             sig is not None and sig.hex() == v['sig'])
 
-    print('   the ACE external-mu convention against the FIPS 204 external '
+    print('   the KLEE external-mu convention against the FIPS 204 external '
           'interface vectors:')
     for v in VECTORS['sigGenCtx']:
         sk = bytes.fromhex(v['sk'])
@@ -376,7 +376,7 @@ def t_verify():
 
 
 def t_state_machine():
-    print('\n-- ACE state machine, flags and _AlgorithmUse_ accounting --')
+    print('\n-- KLEE state machine, flags and _MachineUse_ accounting --')
     ps = 44
     kv = VECTORS['keyGen'][0]
     sk = bytes.fromhex(kv['sk'])
@@ -396,7 +396,7 @@ def t_state_machine():
 
     # pubkey_Output streams the public key; over-long transfer -> Invalid
     cc.setst(S_PK_OUT)
-    chk('setst(_pubkey_Output_) zeroes _AlgorithmUse_', cc.alguse == 0)
+    chk('setst(_pubkey_Output_) zeroes _MachineUse_', cc.alguse == 0)
     out = b''
     for n in (512, 512, 288):
         out += cc.exec_output(n)
@@ -441,9 +441,9 @@ def t_state_machine():
         took == 512 * 8 and cc2.privkey == sk and cc2.has_privkey)
     try:
         cc2.exec_input(b'\x00' * 8)
-        chk('ace.exec with _AlgorithmUse_ >= n -> Error State _Invalid_', False)
+        chk('ace.exec with _MachineUse_ >= n -> Error State _Invalid_', False)
     except Invalidated:
-        chk('ace.exec with _AlgorithmUse_ >= n -> Error State _Invalid_',
+        chk('ace.exec with _MachineUse_ >= n -> Error State _Invalid_',
             cc2.state == S_INVALID)
 
     # pubkey_Input does not disturb the private key
@@ -480,21 +480,21 @@ def t_state_machine():
             chk(f'_ctx_Input_ with ctxlen = {bad} -> Error State _Invalid_',
                 cc5.state == S_INVALID)
 
-    # AlgorithmPolicy
+    # MachinePolicy
     try:
         MLDSAContext(ps, algpolicy=0)
-        chk('provisioning with _AlgorithmPolicy_ = 0 -> Error State _Invalid_', False)
+        chk('provisioning with _MachinePolicy_ = 0 -> Error State _Invalid_', False)
     except Invalidated:
-        chk('provisioning with _AlgorithmPolicy_ = 0 -> Error State _Invalid_', True)
+        chk('provisioning with _MachinePolicy_ = 0 -> Error State _Invalid_', True)
     cc6 = MLDSAContext(ps, algpolicy=0b11)
     cc6.restrictl_algpolicy(0b10)
-    chk('ace.restrictl may narrow _AlgorithmPolicy_ to verify-only',
+    chk('ace.restrictl may narrow _MachinePolicy_ to verify-only',
         mdh_get(cc6.mdh, F_ALGPOLICY) == 0b10)
     try:
         cc6.restrictl_algpolicy(0b00)
-        chk('ace.restrictl clearing _AlgorithmPolicy_ -> Error State _Invalid_', False)
+        chk('ace.restrictl clearing _MachinePolicy_ -> Error State _Invalid_', False)
     except Invalidated:
-        chk('ace.restrictl clearing _AlgorithmPolicy_ -> Error State _Invalid_',
+        chk('ace.restrictl clearing _MachinePolicy_ -> Error State _Invalid_',
             cc6.state == S_INVALID)
 
 
@@ -517,7 +517,7 @@ def t_tr_recompute_on_import():
         sk[64:128] == tr_expected)
 
     def complete_import(cc):
-        """<<ACE-PQC-ML-DSA>>: on completing an import, if HasPrivKey is false
+        """<<KLEE-PQC-ML-DSA>>: on completing an import, if HasPrivKey is false
         the unit recomputes tr <- SHAKE256(pubkey, 64)."""
         if not cc.has_privkey:
             cc.tr = D.H(getattr(cc, 'pubkey', b''), 64)
@@ -619,7 +619,7 @@ def t_sign_verify_flow():
     while cc.alguse < D.sizes(ps)[2] * 8:
         n = min(1024, D.sizes(ps)[2] - cc.alguse // 8)
         out += cc.exec_output(n)
-    chk('_Sign_Output_ streams the signature, _AlgorithmUse_ complete',
+    chk('_Sign_Output_ streams the signature, _MachineUse_ complete',
         out.hex() == det['sig'] and cc.alguse == 2420 * 8)
 
     # hedged: Form B setst with Xs = 0, rnd injected from the "RBG"
@@ -700,7 +700,7 @@ def t_sign_verify_flow():
 
 def _tamper_hint_padding(sig, ps):
     """Return a signature whose hint section is non-canonically encoded: a byte
-    beyond the last declared index is non-zero.  FIPS 204 Algorithm 21 requires
+    beyond the last declared index is non-zero.  FIPS 204 Machine 21 requires
     those bytes to be zero, so this signature must be rejected."""
     p = D.PARAMS[ps]
     omega, k = p['omega'], p['k']
@@ -712,7 +712,7 @@ def _tamper_hint_padding(sig, ps):
 
 
 def t_hint_checks():
-    print('\n-- FIPS 204 Algorithm 21 hint-decoding checks --')
+    print('\n-- FIPS 204 Machine 21 hint-decoding checks --')
     ps = 44
     p = D.PARAMS[ps]
     omega, k = p['omega'], p['k']
@@ -726,7 +726,7 @@ def t_hint_checks():
     y = bytearray(sig[-(omega + k):])
     y[omega + k - 1] = omega + 1
     over = sig[:-(omega + k)] + bytes(y)
-    chk('signature declaring a hint count > omega is rejected (Algorithm 21)',
+    chk('signature declaring a hint count > omega is rejected (Machine 21)',
         D.hint_bit_unpack(bytes(y), omega, k) is None and
         D.verify_internal_mu(pk, mu, over, ps) is False, f'omega = {omega}')
 
@@ -734,7 +734,7 @@ def t_hint_checks():
     y = bytearray(sig[-(omega + k):])
     if y[omega] >= 2:
         y[0], y[1] = y[1], y[0]
-        chk('signature with non-increasing hint indices is rejected (Algorithm 21)',
+        chk('signature with non-increasing hint indices is rejected (Machine 21)',
             D.hint_bit_unpack(bytes(y), omega, k) is None)
     else:
         _results.append(True)
@@ -742,7 +742,7 @@ def t_hint_checks():
 
     # non-canonical padding
     tampered, used = _tamper_hint_padding(sig, ps)
-    chk('signature with a non-zero hint padding byte is rejected (Algorithm 21)',
+    chk('signature with a non-zero hint padding byte is rejected (Machine 21)',
         D.verify_internal_mu(pk, mu, tampered, ps) is False,
         f'{used} hint indices used of omega = {omega}')
     chk('an over-omega hint is not even encodable in a well-formed signature: '
@@ -751,7 +751,7 @@ def t_hint_checks():
 
 
 def _verify_lenient(pk, mu, sig, ps):
-    """Verify_internal with FIPS 204 Algorithm 21's malformed-hint checks removed
+    """Verify_internal with FIPS 204 Machine 21's malformed-hint checks removed
     (omega bound, monotone indices, zero padding).  Used only as the negative
     control: it must accept a signature that the conforming verifier rejects."""
     p = D.PARAMS[ps]
@@ -789,13 +789,13 @@ def t_negative_control():
     pk, mu = bytes.fromhex(v['pk']), bytes.fromhex(v['mu'])
     tampered, _ = _tamper_hint_padding(sig, ps)
     got = _verify_lenient(pk, mu, tampered, ps)
-    chk('lenient hint decoder (Algorithm 21 omega/canonicity checks removed) '
+    chk('lenient hint decoder (Machine 21 omega/canonicity checks removed) '
         'must not accept the malformed signature', got is False)
     return _results.pop()
 
 
 def main():
-    print('ACE ML-DSA known-answer tests (FIPS 204, [[ACE-PQC-ML-DSA]])')
+    print('KLEE ML-DSA known-answer tests (FIPS 204, [[KLEE-PQC-ML-DSA]])')
     t_sizes()
     t_keygen()
     t_sign()

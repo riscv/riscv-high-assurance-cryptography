@@ -1,19 +1,19 @@
 #!/usr/bin/env python3
-"""AES-GCM-SIV known-answer tests for the ACE GCM-SIV mode.
+"""AES-GCM-SIV known-answer tests for the KLEE GCM-SIV mode.
 
-Validates the GCM-SIV mode of the draft ACE specification, section
-<<ACE-GCM-SIV-mode>> (src/ace-ISA-algorithms.adoc), against RFC 8452.
+Validates the GCM-SIV mode of the draft KLEE specification, section
+<<KLEE-GCM-SIV-mode>> (src/ace-ISA-algorithms.adoc), against RFC 8452.
 
 Two independent implementations are exercised:
 
   REF   AES-GCM-SIV exactly as RFC 8452 sections 4-5 specify it, one-pass
         functions over byte strings.
-  ACE   the state machine of <<ACE-GCM-SIV-mode>>, transcribed literally:
-        ACE values (little-endian, common.py conventions), states
+  KLEE   the state machine of <<KLEE-GCM-SIV-mode>>, transcribed literally:
+        KLEE values (little-endian, common.py conventions), states
         Set_Aux_Value / Set_Aux_Value_2 / Hash_Absorb / Enc_Tag_Finalize /
         Encrypt / Enc_Last_Block / Decrypt / Dec_Last_Block /
         Dec_Tag_Finalize, with absorb(data) = { tmp ^= data;
-        tmp = Montmul(tmp, auth_key) }, chunked Hash_Absorb (ACELEN a
+        tmp = Montmul(tmp, auth_key) }, chunked Hash_Absorb (KLLEN a
         multiple of 128), the counter block
         1 @ SIV[126:32] @ bin((int(SIV[31:0])+ctr) mod 2^32, 32),
         the ctr = 2^32-1 Invalid rule and the last_blk_len rules.
@@ -33,8 +33,8 @@ big-endian (GCM-style, bswap) length encodings instead of the spec's
 little-endian bin() must change the tag.
 
 Spec notes (reported, not patched):
-  * RFC8452_KeyDeriv is defined (<<ACE-SCC-key-derivation>>) only for
-    256-bit keys via AESE256, yet <<ACE-GCM-SIV-mode>> admits k = 128 and
+  * RFC8452_KeyDeriv is defined (<<KLEE-SCC-key-derivation>>) only for
+    256-bit keys via AESE256, yet <<KLEE-GCM-SIV-mode>> admits k = 128 and
     invokes RFC8452_KeyDeriv(key, nonce) for it.  For k = 128 this harness
     implements the natural RFC 8452 derivation (AES-128, counter blocks
     0..3), which the C.1 intermediates confirm.
@@ -112,13 +112,13 @@ def ref_decrypt(key: bytes, nonce: bytes, ctag: bytes, aad: bytes):
     return True, pt
 
 # ======================================================================
-# ACE: the state machine of <<ACE-GCM-SIV-mode>>, on ACE values
+# ACE: the state machine of <<KLEE-GCM-SIV-mode>>, on KLEE values
 # ======================================================================
 
 class AceGcmSiv:
-    """Literal transcription of the <<ACE-GCM-SIV-mode>> state machine.
+    """Literal transcription of the <<KLEE-GCM-SIV-mode>> state machine.
 
-    Each method is one instruction of the spec text.  ACELEN is the bit
+    Each method is one instruction of the spec text.  KLLEN is the bit
     length of the INPUT value passed to a chunked instruction; it must be
     a multiple of 128 (b = 128) and blocks within INPUT are processed in
     increasing byte (= increasing bit-significance) order.
@@ -174,22 +174,22 @@ class AceGcmSiv:
 
     # -- instructions --------------------------------------------------
     def setst_set_aux_value(self, INPUT: int):
-        """ace.setst Form C, #ace_state_set_aux_value."""
+        """ace.setst Form C, #kl_state_set_aux_value."""
         self._goto('Set_Aux_Value')
         self.nonce = sl(INPUT, 95, 0)
         self.enc_key, self.auth_key = rfc8452_keyderiv(self.key, self.nonce)
 
     def setst_set_aux_value_2(self, INPUT: int):
-        """ace.setst Form C, #ace_state_set_aux_value_2 (SIV, decryption)."""
+        """ace.setst Form C, #kl_state_set_aux_value_2 (SIV, decryption)."""
         self._goto('Set_Aux_Value_2')
         self.SIV = INPUT & MASK128
 
     def setst_hash_absorb(self):
-        """ace.setst Form A, #ace_state_hash_absorb."""
+        """ace.setst Form A, #kl_state_hash_absorb."""
         self._goto('Hash_Absorb')
 
     def exec_hash_absorb(self, INPUT: int, acelen: int):
-        """ace.exec Form B in Hash_Absorb; absorbs ACELEN/128 blocks."""
+        """ace.exec Form B in Hash_Absorb; absorbs KLLEN/128 blocks."""
         assert self.state == 'Hash_Absorb' and acelen % 128 == 0
         for j in range(acelen // 128):
             self._absorb(sl(INPUT, 128 * j + 127, 128 * j))
@@ -197,7 +197,7 @@ class AceGcmSiv:
     def exec_enc_tag_finalize(self, INPUT: int) -> int:
         """ace.exec Form A in Enc_Tag_Finalize; INPUT is the length block."""
         self._goto('Enc_Tag_Finalize')
-        self._absorb(INPUT & MASK128)        # ACELEN > 128: 128 LSBs only
+        self._absorb(INPUT & MASK128)        # KLLEN > 128: 128 LSBs only
         self.polyval_probe = self.tmp
         self.tmp = self._enc_blk(cat((0, 1), (sl(self.tmp, 126, 96), 31),
                                      (sl(self.tmp, 95, 0) ^ self.nonce, 96)))
@@ -206,7 +206,7 @@ class AceGcmSiv:
         return self.SIV                      # OUTPUT
 
     def exec_encrypt(self, INPUT: int, acelen: int) -> int:
-        """ace.exec Form A in Encrypt; ACELEN/128 full blocks."""
+        """ace.exec Form A in Encrypt; KLLEN/128 full blocks."""
         # M2: Encrypt is reachable only via exec_enc_tag_finalize, which synthesized SIV.
         assert self.state == 'Encrypt', self.state
         assert acelen % 128 == 0
@@ -290,13 +290,13 @@ class AceGcmSiv:
 
 
 def rfc8452_keyderiv(key: bytes, nonce_v: int):
-    """<<ACE-SCC-key-derivation>>: A[i] = AESE(key, nonce @ bin(i,32)),
+    """<<KLEE-SCC-key-derivation>>: A[i] = AESE(key, nonce @ bin(i,32)),
     enc_key = A[5][63:0] @ ... @ A[2][63:0], auth_key = A[1][63:0] @ A[0][63:0].
 
     The spec defines the function for 256-bit keys only (AESE256); for
-    k = 128 (admitted by <<ACE-GCM-SIV-mode>>) this is the natural RFC 8452
+    k = 128 (admitted by <<KLEE-GCM-SIV-mode>>) this is the natural RFC 8452
     generalization: AES-128 with counter blocks 0..3.
-    Returns (enc_key as bytes, auth_key as ACE value)."""
+    Returns (enc_key as bytes, auth_key as KLEE value)."""
     n = 4 if len(key) == 16 else 6
     A = [b2v(aes_encrypt(key, v2b(cat((nonce_v, 96), (bin_(i, 32), 32)), 16)))
          for i in range(n)]
@@ -329,7 +329,7 @@ def _length_block_be(aad: bytes, pt: bytes) -> int:
     return b2v((len(aad) * 8).to_bytes(8, 'big') +
                (len(pt) * 8).to_bytes(8, 'big'))
 
-def ace_encrypt(key, nonce, aad, pt, acelen=128, length_block=None):
+def kl_encrypt(key, nonce, aad, pt, acelen=128, length_block=None):
     m = AceGcmSiv(key)
     m.setst_set_aux_value(b2v(nonce))
     m.setst_hash_absorb()
@@ -351,7 +351,7 @@ def ace_encrypt(key, nonce, aad, pt, acelen=128, length_block=None):
         ct += v2b(out, 16)[:rem]
     return bytes(ct) + v2b(tag_v, 16), m
 
-def ace_decrypt(key, nonce, aad, ctag, acelen=128, length_block=None):
+def kl_decrypt(key, nonce, aad, ctag, acelen=128, length_block=None):
     ct, tag = ctag[:-16], ctag[-16:]
     m = AceGcmSiv(key)
     m.setst_set_aux_value(b2v(nonce))
@@ -579,31 +579,31 @@ def main():
             pv = ref_polyval(auth, _pad16(aad) + _pad16(pt) + lb)
             chk(pv.hex() == v['polyval'], f"REF POLYVAL interm.  {name}")
 
-        # ACE model: encryption, ACELEN = 128
-        got, m = ace_encrypt(key, nonce, aad, pt, acelen=128)
-        chk(got == want, f"ACE encrypt 128      {name}")
+        # KLEE model: encryption, KLLEN = 128
+        got, m = kl_encrypt(key, nonce, aad, pt, acelen=128)
+        chk(got == want, f"KLEE encrypt 128      {name}")
 
-        # ACE intermediates, where the RFC gives them
+        # KLEE intermediates, where the RFC gives them
         if 'auth_key' in v:
             ek, ak = rfc8452_keyderiv(key, b2v(nonce))
             chk(v2b(ak, 16).hex() == v['auth_key'] and ek.hex() == v['enc_key'],
-                f"ACE KeyDeriv interm. {name}")
+                f"KLEE KeyDeriv interm. {name}")
             chk(v2b(m.polyval_probe, 16).hex() == v['polyval'],
-                f"ACE POLYVAL interm.  {name}")
+                f"KLEE POLYVAL interm.  {name}")
 
-        # ACE model: chunked Hash_Absorb / multi-block exec, ACELEN = 256
-        got, _ = ace_encrypt(key, nonce, aad, pt, acelen=256)
-        chk(got == want, f"ACE encrypt 256      {name}")
+        # KLEE model: chunked Hash_Absorb / multi-block exec, KLLEN = 256
+        got, _ = kl_encrypt(key, nonce, aad, pt, acelen=256)
+        chk(got == want, f"KLEE encrypt 256      {name}")
 
-        # ACE model: decryption, matching and tampered
-        st, ptd = ace_decrypt(key, nonce, aad, want, acelen=128)
-        chk(st == 'Success' and ptd == pt, f"ACE decrypt          {name}")
-        st, _ = ace_decrypt(key, nonce, aad, bad, acelen=256)
-        chk(st == 'Failure', f"ACE tampered tag     {name}")
+        # KLEE model: decryption, matching and tampered
+        st, ptd = kl_decrypt(key, nonce, aad, want, acelen=128)
+        chk(st == 'Success' and ptd == pt, f"KLEE decrypt          {name}")
+        st, _ = kl_decrypt(key, nonce, aad, bad, acelen=256)
+        chk(st == 'Failure', f"KLEE tampered tag     {name}")
         if len(want) > 16:
             badc = bytes([want[0] ^ 1]) + want[1:]
-            st, _ = ace_decrypt(key, nonce, aad, badc)
-            chk(st == 'Failure', f"ACE tampered CT      {name}")
+            st, _ = kl_decrypt(key, nonce, aad, badc)
+            chk(st == 'Failure', f"KLEE tampered CT      {name}")
 
     # -- structural rules ---------------------------------------------
     key = bytes.fromhex(VECTORS[1]['key'])
@@ -660,15 +660,15 @@ def main():
     key, nonce = bytes.fromhex(v['key']), bytes.fromhex(v['nonce'])
     aad, pt = bytes.fromhex(v['aad']), bytes.fromhex(v['pt'])
     want = bytes.fromhex(v['ct_tag'])
-    got_be, _ = ace_encrypt(key, nonce, aad, pt,
+    got_be, _ = kl_encrypt(key, nonce, aad, pt,
                             length_block=_length_block_be(aad, pt))
     fired = got_be != want
     print(f"{'FAIL (expected)' if fired else 'PASS'}  "
           f"BE-lengths GCM-style length block vs {v['src']}")
     chk(fired, "negative control fired: BE length block changes the tag")
 
-    print("\nSPEC-NOTE: RFC8452_KeyDeriv (<<ACE-SCC-key-derivation>>) is "
-          "defined for 256-bit keys only (AESE256), but <<ACE-GCM-SIV-mode>> "
+    print("\nSPEC-NOTE: RFC8452_KeyDeriv (<<KLEE-SCC-key-derivation>>) is "
+          "defined for 256-bit keys only (AESE256), but <<KLEE-GCM-SIV-mode>> "
           "admits k = 128 and calls RFC8452_KeyDeriv(key, nonce); the k = 128 "
           "derivation is underspecified.  This harness uses the natural "
           "RFC 8452 rule (AES-128, counter blocks 0..3), confirmed by the "

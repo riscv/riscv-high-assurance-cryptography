@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""KAT harness for the ACE KMAC rules (KMAC128/256, KMACXOF128/256).
+"""KAT harness for the KLEE KMAC rules (KMAC128/256, KMACXOF128/256).
 
 What is validated (spec anchors in src/ace-ISA-algorithms.adoc, by heading):
-  [[ACE-KMAC]]             -- the CC holds two provisioner-prepared rate-sized
+  [[KLEE-KMAC]]             -- the CC holds two provisioner-prepared rate-sized
                               blocks, cshake_block = bytepad(encode_string("KMAC")
                               || encode_string(S), b/8) and key_block =
                               bytepad(encode_string(K), b/8), each XORed into the
@@ -13,13 +13,13 @@ What is validated (spec anchors in src/ace-ISA-algorithms.adoc, by heading):
                               exactly ceil(L/8) bytes for KMAC (then _Success_),
                               unlimited output for KMACXOF (which uses L = 0, so
                               right_encode(0) is absorbed).
-  [[ACE-SHA-3]]            -- inherited: direct XOR absorption, P(), the
+  [[KLEE-SHA-3]]            -- inherited: direct XOR absorption, P(), the
                               one-block / two-block padding clauses.
-  [[ACE-process-VLI]]      -- chunked absorption across several ace.exec
+  [[KLEE-process-VLI]]      -- chunked absorption across several ace.exec
                               transfers, partial-block boundaries, and the
-                              interruption/resumption point (acestart).
-  [[ACE-hash-functions]]   -- the _Hash_Output_ squeeze loop, multi-exec output
-                              and resumption via output_base <- 8*acestart.
+                              interruption/resumption point (klstart).
+  [[KLEE-hash-functions]]   -- the _Hash_Output_ squeeze loop, multi-exec output
+                              and resumption via output_base <- 8*klstart.
   src/ace-notation.adoc    -- FIPS 202 row: direct mapping of the absorbed
                               string, lanes little-endian.
 
@@ -30,7 +30,7 @@ Layered anchoring:
   2. An SP 800-185 reference (left_encode / right_encode / encode_string /
      bytepad / cSHAKE / KMAC), anchored by the embedded official NIST sample
      outputs.
-  3. The ACE model (state machine from the spec text) checked against the same
+  3. The KLEE model (state machine from the spec text) checked against the same
      official outputs and against the reference on the derived cases.
   hashlib is used only as a LABELED REFERENCE ORACLE for the plain SHA-3/SHAKE
   anchors; it has no KMAC and takes no part in the KMAC checks.
@@ -49,15 +49,15 @@ Embedded vector provenance:
   * FIPS 202 anchors for the Keccak core: SHA3-256/SHAKE128/SHAKE256 of "".
 
 Review finding M4, since FIXED:
-  process_VLI used to store `acestart <- input_base` (a BIT count) although
-  acestart is architecturally a BYTE count.  The spec now converts explicitly
-  (`acestart <- input_base / 8`, resume at `input_base <- 8 * acestart`), which
+  process_VLI used to store `klstart <- input_base` (a BIT count) although
+  klstart is architecturally a BYTE count.  The spec now converts explicitly
+  (`klstart <- input_base / 8`, resume at `input_base <- 8 * klstart`), which
   is what this harness models.
 
 Negative controls (must mismatch, declared via KAT-EXPECT-FAIL):
   * left_encode  -- left_encode(L) absorbed in place of right_encode(L).
   * suffix D     -- the raw SHAKE suffix 1111 in place of the cSHAKE suffix 00.
-  * M4 literal units -- acestart written as a bit count, consumed as bytes.
+  * M4 literal units -- klstart written as a bit count, consumed as bytes.
 
 Verdict: per-case PASS/FAIL lines and a final `KAT-RESULT: PASS|FAIL`.
 """
@@ -66,7 +66,7 @@ import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from common import b2v, v2b, sl        # ACE value conventions (do not modify common.py)
+from common import b2v, v2b, sl        # KLEE value conventions (do not modify common.py)
 
 import hashlib                          # LABELED REFERENCE ORACLE (SHA-3 anchors only)
 
@@ -95,9 +95,9 @@ def _rol64(v, s):
 
 
 def keccak_f1600(state):
-    """KECCAK-p[1600,24] on a 1600-bit ACE value (lane (x,y) at bits
+    """KECCAK-p[1600,24] on a 1600-bit KLEE value (lane (x,y) at bits
     [64*(5y+x)+63 : 64*(5y+x)], each lane little-endian -- the identity on the
-    ACE little-endian integer of the state byte string)."""
+    KLEE little-endian integer of the state byte string)."""
     A = [(state >> (64 * i)) & _M64 for i in range(25)]
     for rc in _KECCAK_RC:
         C = [A[x] ^ A[x + 5] ^ A[x + 10] ^ A[x + 15] ^ A[x + 20] for x in range(5)]
@@ -145,7 +145,7 @@ def left_encode(x):
 
 
 def right_encode(x):
-    """SP 800-185 2.3.1 as restated in [[ACE-KMAC]]: x as an unsigned big-endian
+    """SP 800-185 2.3.1 as restated in [[KLEE-KMAC]]: x as an unsigned big-endian
     integer on the smallest positive number m of bytes, followed by a byte m."""
     n = max(1, (x.bit_length() + 7) // 8)
     return x.to_bytes(n, 'big') + bytes([n])
@@ -225,11 +225,11 @@ FIPS202_EMPTY = {
 }
 
 
-# ----------------------------------------------------------------- ACE CC model
+# ----------------------------------------------------------------- KLEE CC model
 class AceKmacCC:
-    """Model of an ACE KMAC crypto context, implemented literally from
-    [[ACE-KMAC]] on top of [[ACE-SHA-3]] / [[ACE-hash-functions]] /
-    [[ACE-process-VLI]].
+    """Model of an KLEE KMAC crypto context, implemented literally from
+    [[KLEE-KMAC]] on top of [[KLEE-SHA-3]] / [[KLEE-hash-functions]] /
+    [[KLEE-process-VLI]].
 
     block == state for the whole SHA-3 family, so absorbed data is XORed
     directly into the rate at block_base (state_offset = 0), and process_VLI
@@ -246,7 +246,7 @@ class AceKmacCC:
         self.L = 0
         self.state = 0                  # State _Ready_: state is zeroed
         self.block_base = 0             # bits
-        self.acestart = 0               # BYTES (architectural; M4-corrected)
+        self.klstart = 0               # BYTES (architectural; M4-corrected)
         self.emitted = 0                # bits made available in _Hash_Output_
         self.mstate = 'Ready'
         self.pad_case = None
@@ -274,12 +274,12 @@ class AceKmacCC:
                 self.state = keccak_f1600(self.state)      # absorb() = P()
                 self.block_base = 0
             # process_VLI interruption point.  The literal text says
-            # "acestart <- input_base" with input_base in BITS, while acestart is
-            # architecturally a byte count (<<ACE-CSR-acestart>>); the
-            # corrected reading acestart <- input_base/8 is used here.
+            # "klstart <- input_base" with input_base in BITS, while klstart is
+            # architecturally a byte count (<<KLEE-CSR-klstart>>); the
+            # corrected reading klstart <- input_base/8 is used here.
             if (interrupt_at_byte is not None and input_base < acelen_bits
                     and input_base // 8 >= interrupt_at_byte):
-                self.acestart = input_base if literal_units else input_base // 8
+                self.klstart = input_base if literal_units else input_base // 8
                 return 'interrupted'
         return 'done'
 
@@ -288,9 +288,9 @@ class AceKmacCC:
                     literal_units=False):
         assert self.mstate == 'Hash_Absorb', self.mstate
         INPUT = b2v(data) if data else 0
-        # "If resuming an ace.exec instruction, then input_base <- acestart",
-        # read with the M4 correction as input_base <- 8 * acestart.
-        input_base = 8 * self.acestart if resume else 0
+        # "If resuming an ace.exec instruction, then input_base <- klstart",
+        # read with the M4 correction as input_base <- 8 * klstart.
+        input_base = 8 * self.klstart if resume else 0
         return self._vli_loop(INPUT, 8 * len(data), input_base,
                               interrupt_at_byte, literal_units)
 
@@ -334,12 +334,12 @@ class AceKmacCC:
     # -- ace.exec (Form C) in _Hash_Output_
     def exec_squeeze(self, out_bytes, resume=False, interrupt_at_byte=None):
         """Returns (status, start_byte, data).  status is 'done', 'interrupted'
-        (acestart holds the resumption byte offset) or 'success' (KMAC delivered
+        (klstart holds the resumption byte offset) or 'success' (KMAC delivered
         its ceil(L/8) bytes and transitioned to _Success_)."""
         assert self.mstate == 'Hash_Output', self.mstate
         acelen = 8 * out_bytes
         limit = None if self.xof else 8 * ((self.L + 7) // 8)
-        output_base = 8 * self.acestart if resume else 0
+        output_base = 8 * self.klstart if resume else 0
         start_byte = output_base // 8
         OUTPUT = 0
         while output_base < acelen:
@@ -361,14 +361,14 @@ class AceKmacCC:
                 self.block_base = 0
                 if (interrupt_at_byte is not None and output_base < acelen
                         and output_base // 8 >= interrupt_at_byte):
-                    self.acestart = output_base // 8        # correct units here
+                    self.klstart = output_base // 8        # correct units here
                     return ('interrupted', start_byte,
                             v2b(OUTPUT, output_base // 8 - start_byte))
         return ('done', start_byte, v2b(OUTPUT, out_bytes - start_byte))
 
 
 def provision(sec, K, S):
-    """What the provisioner puts into the Provisioning Input, per [[ACE-KMAC]]."""
+    """What the provisioner puts into the Provisioning Input, per [[KLEE-KMAC]]."""
     w = RATE[sec]
     cshake_block = bytepad(encode_string(b"KMAC") + encode_string(S), w)
     key_block = bytepad(encode_string(K), w)
@@ -377,7 +377,7 @@ def provision(sec, K, S):
     return cshake_block, key_block
 
 
-def ace_kmac(sec, K, X, L, S=b'', xof=False, out_bytes=None, chunks=None,
+def kl_kmac(sec, K, X, L, S=b'', xof=False, out_bytes=None, chunks=None,
              interrupt=None, use_left_encode=False, wrong_suffix=False,
              literal_units=False):
     cb, kb = provision(sec, K, S)
@@ -440,7 +440,7 @@ def negative_control(label, mismatched):
 
 # ------------------------------------------------------------------ test drive
 def main():
-    print('== kmac-kat: ACE KMAC/KMACXOF rules vs NIST SP 800-185 ==')
+    print('== kmac-kat: KLEE KMAC/KMACXOF rules vs NIST SP 800-185 ==')
     print()
     print('-- 1. Keccak core anchored on FIPS 202 empty-message values --')
     for name, (D, rate, want) in FIPS202_EMPTY.items():
@@ -475,16 +475,16 @@ def main():
               % (label, len(X), len(S), L), got, want)
 
     print()
-    print('-- 4. ACE model vs the official sample outputs --')
+    print('-- 4. KLEE model vs the official sample outputs --')
     for label, sec, xof, K, X, S, L, exp in SAMPLES:
         want = bytes.fromhex(exp)
-        got, cc = ace_kmac(sec, K, X, L, S, xof=xof, out_bytes=len(want))
-        check('ACE model  %-20s' % label, got, want)
+        got, cc = kl_kmac(sec, K, X, L, S, xof=xof, out_bytes=len(want))
+        check('KLEE model  %-20s' % label, got, want)
         if xof:
-            check_true('ACE model  %-20s stays in _Hash_Output_ (never _Success_)'
+            check_true('KLEE model  %-20s stays in _Hash_Output_ (never _Success_)'
                        % label, cc.mstate == 'Hash_Output', cc.mstate)
         else:
-            check_true('ACE model  %-20s reached _Success_ after ceil(L/8) bytes'
+            check_true('KLEE model  %-20s reached _Success_ after ceil(L/8) bytes'
                        % label, cc.mstate == 'Success', cc.mstate)
 
     print()
@@ -493,31 +493,31 @@ def main():
     # KMAC128 rate 168 B; the 200-B message crosses the block boundary.  The
     # 100-B transfer straddles it; the first two transfers end mid-block.
     want = bytes.fromhex(SAMPLES[2][7])
-    got, _ = ace_kmac(128, KEY, DATA200, 256, TAG, out_bytes=32,
+    got, _ = kl_kmac(128, KEY, DATA200, 256, TAG, out_bytes=32,
                       chunks=[DATA200[:68], DATA200[68:72], DATA200[72:172],
                               DATA200[172:]])
-    check('ACE chunked KMAC128 sample #3 (68+4+100+28 B transfers)', got, want)
+    check('KLEE chunked KMAC128 sample #3 (68+4+100+28 B transfers)', got, want)
     # KMAC256 rate 136 B: 136 exactly fills the block at a transfer edge.
     want = bytes.fromhex(SAMPLES[5][7])
-    got, _ = ace_kmac(256, KEY, DATA200, 512, TAG, out_bytes=64,
+    got, _ = kl_kmac(256, KEY, DATA200, 512, TAG, out_bytes=64,
                       chunks=[DATA200[:136], DATA200[136:140], DATA200[140:]])
-    check('ACE chunked KMAC256 sample #6 (136+4+60 B transfers)', got, want)
+    check('KLEE chunked KMAC256 sample #6 (136+4+60 B transfers)', got, want)
     # KMACXOF128 in many small transfers.
     want = bytes.fromhex(SAMPLES[8][7])
-    got, _ = ace_kmac(128, KEY, DATA200, 256, TAG, xof=True, out_bytes=32,
+    got, _ = kl_kmac(128, KEY, DATA200, 256, TAG, xof=True, out_bytes=32,
                       chunks=[DATA200[i:i + 8] for i in range(0, 200, 8)])
-    check('ACE chunked KMACXOF128 sample #3 (25 transfers of 8 B)', got, want)
+    check('KLEE chunked KMACXOF128 sample #3 (25 transfers of 8 B)', got, want)
 
     print()
-    print('-- 6. interrupted/resumed absorption (M4-corrected acestart, bytes) --')
+    print('-- 6. interrupted/resumed absorption (M4-corrected klstart, bytes) --')
     cb, kb = provision(128, KEY, TAG)
     cc = AceKmacCC(128, cb, kb, xof=False)
     cc.setst_absorb()
     st = cc.exec_absorb(DATA200, interrupt_at_byte=100)
     check_true('KMAC128 absorb interrupted at the process_VLI interruption point',
                st == 'interrupted', st)
-    check_true('acestart is a BYTE count = 168 (the rate; first interruption '
-               'point)', cc.acestart == 168, 'acestart=%r' % cc.acestart)
+    check_true('klstart is a BYTE count = 168 (the rate; first interruption '
+               'point)', cc.klstart == 168, 'klstart=%r' % cc.klstart)
     st = cc.exec_absorb(DATA200, resume=True)
     check_true('resumed exec completes', st == 'done', st)
     cc.setst_output(256)
@@ -542,7 +542,7 @@ def main():
     # right_encode(256): the model and the reference must agree on both.
     for sec, xof, L in ((128, True, 0), (256, True, 0)):
         want = ref_kmac(sec, KEY, DATA4, 256, TAG, xof=True, out_bytes=32)
-        got, _ = ace_kmac(sec, KEY, DATA4, 256, TAG, xof=True, out_bytes=32)
+        got, _ = kl_kmac(sec, KEY, DATA4, 256, TAG, xof=True, out_bytes=32)
         check('KMACXOF%d absorbs right_encode(0) = 0001' % sec, got, want)
 
     print()
@@ -553,19 +553,19 @@ def main():
     b_ = ref_kmac(128, KEY, DATA4, 512, TAG)
     check_true('KMAC128 L=512 output is not an extension of L=256 (L is absorbed)',
                b_[:32] != a)
-    got, cc = ace_kmac(128, KEY, DATA4, 512, TAG)
-    check('ACE model KMAC128 L=512 vs reference', got, b_)
+    got, cc = kl_kmac(128, KEY, DATA4, 512, TAG)
+    check('KLEE model KMAC128 L=512 vs reference', got, b_)
     check_true('KMAC128 L=512 delivered 64 B then _Success_',
                len(got) == 64 and cc.mstate == 'Success', cc.mstate)
     # (b) L not a multiple of 8: ceil(L/8) bytes are delivered.
     for L in (255, 250, 257, 1000):
         nb = (L + 7) // 8
         want = ref_kmac(128, KEY, DATA4, L, TAG)
-        got, cc = ace_kmac(128, KEY, DATA4, L, TAG)
+        got, cc = kl_kmac(128, KEY, DATA4, L, TAG)
         check('KMAC128 L=%4d delivers ceil(L/8)=%d bytes' % (L, nb), got, want)
         check_true('KMAC128 L=%4d reached _Success_' % L,
                    cc.mstate == 'Success' and len(got) == nb, cc.mstate)
-    print('NOTE: spec observation -- [[ACE-KMAC]] says that for L not a multiple '
+    print('NOTE: spec observation -- [[KLEE-KMAC]] says that for L not a multiple '
           'of 8 "the last byte may be zero-padded in')
     print('      its significant bits".  The spec\'s own squeeze loop copies raw '
           'state bits, so the excess bits of the last')
@@ -577,7 +577,7 @@ def main():
           'checked here.')
     # Both readings agree on the significant bits:
     for L in (255, 250, 257):
-        got, _ = ace_kmac(128, KEY, DATA4, L, TAG)
+        got, _ = kl_kmac(128, KEY, DATA4, L, TAG)
         want = ref_kmac(128, KEY, DATA4, L, TAG)
         mask = (1 << (L % 8)) - 1 if L % 8 else 0xFF
         check_true('KMAC128 L=%4d: the L significant bits agree with SP 800-185'
@@ -608,8 +608,8 @@ def main():
     status, start, first = cc.exec_squeeze(400, interrupt_at_byte=1)
     check_true('KMACXOF128 squeeze interrupted after one rate',
                status == 'interrupted' and start == 0, (status, start))
-    check_true('acestart = output_base/8 = 168', cc.acestart == 168,
-               'acestart=%r' % cc.acestart)
+    check_true('klstart = output_base/8 = 168', cc.klstart == 168,
+               'klstart=%r' % cc.klstart)
     status, start, rest = cc.exec_squeeze(400, resume=True)
     check_true('resumed squeeze restarts at byte 168',
                status == 'done' and start == 168, (status, start))
@@ -641,12 +641,12 @@ def main():
           bytes.fromhex(SAMPLES[3][7]))
     # (f) L > b: output spans several applications of P().
     want = ref_kmac(256, KEY, DATA200, 4096, TAG)
-    got, cc = ace_kmac(256, KEY, DATA200, 4096, TAG)
+    got, cc = kl_kmac(256, KEY, DATA200, 4096, TAG)
     check('KMAC256 L=4096 (512 B, 4 rates of 136 B) vs reference', got, want)
     check_true('KMAC256 L=4096 reached _Success_', cc.mstate == 'Success')
 
     print()
-    print('-- 9. provisioning bounds of [[ACE-KMAC]] --')
+    print('-- 9. provisioning bounds of [[KLEE-KMAC]] --')
     for sec, kmax, smax in ((128, 163, 157), (256, 131, 125)):
         cb, kb = provision(sec, bytes(kmax), bytes(smax))
         check_true('KMAC%d: |K|=%d and |S|=%d still fit one rate block'
@@ -672,24 +672,24 @@ def main():
     print('KAT-EXPECT-FAIL: left_encode')
     print('KAT-EXPECT-FAIL: suffix D')
     print('KAT-EXPECT-FAIL: M4 literal units')
-    got, _ = ace_kmac(128, KEY, DATA4, 256, TAG, use_left_encode=True)
+    got, _ = kl_kmac(128, KEY, DATA4, 256, TAG, use_left_encode=True)
     negative_control('left_encode (left_encode(L) absorbed instead of '
                      'right_encode(L), KMAC128 #2)',
                      got != bytes.fromhex(SAMPLES[1][7]))
-    got, _ = ace_kmac(256, KEY, DATA200, 512, TAG, use_left_encode=True)
+    got, _ = kl_kmac(256, KEY, DATA200, 512, TAG, use_left_encode=True)
     negative_control('left_encode (KMAC256 #6)',
                      got != bytes.fromhex(SAMPLES[5][7]))
-    got, _ = ace_kmac(128, KEY, DATA4, 256, TAG, wrong_suffix=True)
+    got, _ = kl_kmac(128, KEY, DATA4, 256, TAG, wrong_suffix=True)
     negative_control('suffix D (raw SHAKE 1111 instead of the cSHAKE 00)',
                      got != bytes.fromhex(SAMPLES[1][7]))
-    got, _ = ace_kmac(128, KEY, DATA200, 256, TAG, chunks=[DATA200],
+    got, _ = kl_kmac(128, KEY, DATA200, 256, TAG, chunks=[DATA200],
                       interrupt=(0, 100), literal_units=True)
-    negative_control('M4 literal units (acestart bit count consumed as bytes)',
+    negative_control('M4 literal units (klstart bit count consumed as bytes)',
                      got != bytes.fromhex(SAMPLES[2][7]))
     print('NOTE: former spec discrepancy M4, since fixed -- '
-          '[[ACE-process-VLI]] writes "acestart <- input_base" with input_base')
-    print('      in bits, while acestart is architecturally a byte count and '
-          '_Hash_Output_ correctly uses acestart <- output_base/8.')
+          '[[KLEE-process-VLI]] writes "klstart <- input_base" with input_base')
+    print('      in bits, while klstart is architecturally a byte count and '
+          '_Hash_Output_ correctly uses klstart <- output_base/8.')
     print('      This harness models the corrected byte interpretation.')
 
     print()

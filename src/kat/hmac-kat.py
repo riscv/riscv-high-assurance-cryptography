@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""HMAC KAT for the ACE specification (<<ACE-HMAC>> over <<ACE-SHA-2>>/<<ACE-SHA-3>>).
+"""HMAC KAT for the KLEE specification (<<KLEE-HMAC>> over <<KLEE-SHA-2>>/<<KLEE-SHA-3>>).
 
 WHAT IS MODELED (from the spec text):
-  * Both PI variants of <<ACE-HMAC>>.
+  * Both PI variants of <<KLEE-HMAC>>.
     - NIK ("No Initial Key"): _Ready_ -> _Set_Key_ -> _Hash_Absorb_ -> ... ; in
       _Set_Key_ the b-bit K0 is loaded by one or more Form B ace.exec through
       process_VLI entered as process_VLI(b, block=K0, b, state=K0, n=b,
@@ -11,7 +11,7 @@ WHAT IS MODELED (from the spec text):
     - KIP ("Key in PI"): K0 arrives in the Provisioning Input; _Set_Key_ is absent
       and any attempt to re-key is refused (a KIP CC cannot be re-keyed).
   * K0 itself is FIPS 198-1 sect. 3: the key zero-padded to b bits, or hashed by H
-    first if longer than b bits.  Per <<ACE-HMAC>> this derivation is the
+    first if longer than b bits.  Per <<KLEE-HMAC>> this derivation is the
     PROVISIONER's job, so it is done outside the CC model, in provisioner_K0().
   * Entering _Hash_Absorb_: state <- IV of H, then `key xor ipad` is absorbed; the
     message then follows the underlying hash's own semantics (process_VLI).
@@ -19,24 +19,24 @@ WHAT IS MODELED (from the spec text):
     reinitialize state, absorb `key xor opad`, absorb inner, finalize.  Under HMAC
     the SHA-2/SM3 padding is applied INTERNALLY over the total absorbed length,
     b + cumul_len bits for the inner hash and b + d bits for the outer, using
-    cumul_len (which is maintained only under HMAC) -- <<ACE-HMAC>> and the
-    finalize() clause of <<ACE-SHA-2>>.  The tag is then squeezed by the generic
-    _Hash_Output_ loop of <<ACE-hash-functions>>.
+    cumul_len (which is maintained only under HMAC) -- <<KLEE-HMAC>> and the
+    finalize() clause of <<KLEE-SHA-2>>.  The tag is then squeezed by the generic
+    _Hash_Output_ loop of <<KLEE-hash-functions>>.
   * M4 (earlier review, since fixed): process_VLI stores the bit count input_base into
-    the byte-counting acestart CSR.  The corrected interpretation
-    (acestart = input_base/8, input_base = 8*acestart) is used throughout, and is
+    the byte-counting klstart CSR.  The corrected interpretation
+    (klstart = input_base/8, input_base = 8*klstart) is used throughout, and is
     exercised by the interrupted _Set_Key_ and _Hash_Absorb_ transfers.
 
 CORES.  SHA-224/256/384/512 are implemented FROM SCRATCH here (FIPS 180-4 sect. 6
 compression, IVs and round constants derived by exact integer arithmetic from the
-roots of the primes), and the ACE model uses only those.  For HMAC-SHA-3 the ACE
-model calls hashlib's sha3_* as the underlying H -- <<ACE-HMAC>> delegates H to
-<<ACE-SHA-3>>, which this harness does not re-derive; the HMAC LAYER (K0 padding to
+roots of the primes), and the KLEE model uses only those.  For HMAC-SHA-3 the ACE
+model calls hashlib's sha3_* as the underlying H -- <<KLEE-HMAC>> delegates H to
+<<KLEE-SHA-3>>, which this harness does not re-derive; the HMAC LAYER (K0 padding to
 the sponge rate b, ipad/opad, inner/outer flow, state machine) is still the model's
 own.  This is noted as the one place where a library primitive sits inside the model.
 
-For HMAC-SHA-3, <<ACE-HMAC>> defines b as "the input block size of the underlying
-hash function", which for a sponge is the RATE of <<ACE-SHA-3-parameters>>
+For HMAC-SHA-3, <<KLEE-HMAC>> defines b as "the input block size of the underlying
+hash function", which for a sponge is the RATE of <<KLEE-SHA-3-parameters>>
 (1088 bits for SHA3-256, 576 for SHA3-512).  That reading is confirmed here against
 the reference oracle; the alternative reading (b = digest or capacity) does not
 reproduce standard HMAC-SHA3.
@@ -124,7 +124,7 @@ SHA2 = {  # name: (w, IV, t = d)
     'SHA-384': (64, H384, 384), 'SHA-512': (64, H512, 512),
 }
 
-# ------------------------------------------------------- ACE model helpers
+# ------------------------------------------------------- KLEE model helpers
 
 def set_slice(v, hi, lo, x):
     mask = ((1 << (hi - lo + 1)) - 1) << lo
@@ -134,7 +134,7 @@ class Invalid(Exception):
     """CR transition to Error State _Invalid_."""
 
 class Sha2Core:
-    """The underlying SHA-2 hash CC (<<ACE-SHA-2>>) as driven by <<ACE-HMAC>>.
+    """The underlying SHA-2 hash CC (<<KLEE-SHA-2>>) as driven by <<KLEE-HMAC>>.
 
     `state` is the eight chaining variables; `block`/`block_base`/`cumul_len` are
     the internal-state fields the section lists, with cumul_len maintained because
@@ -155,16 +155,16 @@ class Sha2Core:
         self.cumul_len = 0
 
     def absorb(self):
-        """absorb(): word j = int(bswap(block[(j+1)w-1 : jw]))  (<<ACE-SHA-2>>)."""
+        """absorb(): word j = int(bswap(block[(j+1)w-1 : jw]))  (<<KLEE-SHA-2>>)."""
         W = [bswap(sl(self.block, (j + 1) * self.w - 1, j * self.w), self.w // 8)
              for j in range(16)]
         self.state = sha2_compress(self.state, W, self.w, self.K, self.rounds)
 
-    def _fill(self, INPUT, ACELEN, input_base, count, interrupt_after=None):
+    def _fill(self, INPUT, KLLEN, input_base, count, interrupt_after=None):
         """The process_VLI inner loop (len = 0 form), shared by all absorptions."""
         iters = 0
-        while input_base < ACELEN:
-            amount = min(ACELEN - input_base, self.b - self.block_base)
+        while input_base < KLLEN:
+            amount = min(KLLEN - input_base, self.b - self.block_base)
             self.block = set_slice(self.block, self.block_base + amount - 1,
                                    self.block_base,
                                    sl(INPUT, input_base + amount - 1, input_base))
@@ -177,15 +177,15 @@ class Sha2Core:
                 self.block_base = 0
             iters += 1
             if interrupt_after is not None and iters >= interrupt_after \
-                    and input_base < ACELEN:
-                # M4 (fixed): the spec now writes `acestart <- input_base / 8`;
+                    and input_base < KLLEN:
+                # M4 (fixed): the spec now writes `klstart <- input_base / 8`;
                 # it used to store the bit count into the byte-counting CSR.
                 return input_base // 8
         return None
 
     def exec_input(self, data, resume_from=None, interrupt_after=None):
         """Form B ace.exec in _Hash_Absorb_: the message, counted in cumul_len."""
-        # M4-corrected: input_base <- 8 * acestart on resumption.
+        # M4-corrected: input_base <- 8 * klstart on resumption.
         base = 8 * resume_from if resume_from is not None else 0
         return self._fill(b2v(data), 8 * len(data), base, True, interrupt_after)
 
@@ -196,7 +196,7 @@ class Sha2Core:
 
     def finalize_padding(self, total_bits):
         """finalize() under HMAC: FIPS 180-4 sect. 5.1 padding over `total_bits`,
-        applied internally rather than by the caller (<<ACE-HMAC>>)."""
+        applied internally rather than by the caller (<<KLEE-HMAC>>)."""
         lb = 2 * self.w // 8
         nbytes = total_bits // 8
         pad = b'\x80' + bytes((-(nbytes + 1 + lb)) % (self.b // 8)) \
@@ -206,7 +206,7 @@ class Sha2Core:
             raise Invalid('padding did not complete the block')
 
     def digest_value(self):
-        """The value of `state` in the emission form of <<ACE-SHA-2>>: chaining
+        """The value of `state` in the emission form of <<KLEE-SHA-2>>: chaining
         variable i at bytes i*w/8 as bswap(bin(H_i, w))."""
         v = 0
         for i, hi in enumerate(self.state):
@@ -216,7 +216,7 @@ class Sha2Core:
 class Sha3Core:
     """The underlying SHA-3 hash CC, with H delegated to hashlib (see header).
 
-    Only b (= the rate of <<ACE-SHA-3-parameters>>) and d matter to the HMAC layer;
+    Only b (= the rate of <<KLEE-SHA-3-parameters>>) and d matter to the HMAC layer;
     absorbed data is buffered and hashed in one call at finalization."""
     RATE = {'SHA3-224': 1152, 'SHA3-256': 1088, 'SHA3-384': 832, 'SHA3-512': 576}
 
@@ -238,7 +238,7 @@ class Sha3Core:
             cut = base + max(1, (len(data) - base) // 2)
             self.buf += data[base:cut]
             self.cumul_len += 8 * (cut - base)
-            return cut                       # acestart, in bytes (M4-corrected)
+            return cut                       # klstart, in bytes (M4-corrected)
         self.buf += data[base:]
         self.cumul_len += 8 * (len(data) - base)
         return None
@@ -247,7 +247,7 @@ class Sha3Core:
         self.buf += data
 
     def finalize_padding(self, total_bits):
-        pass                                 # pad10*1 is internal to <<ACE-SHA-3>>
+        pass                                 # pad10*1 is internal to <<KLEE-SHA-3>>
 
     def digest_value(self):
         return b2v(hashlib.new(self.name.replace('SHA3-', 'sha3_'), self.buf).digest())
@@ -255,10 +255,10 @@ class Sha3Core:
 def make_core(name):
     return Sha3Core(name) if name.startswith('SHA3') else Sha2Core(name)
 
-# ------------------------------------------------------- <<ACE-HMAC>> meta-algorithm
+# ------------------------------------------------------- <<KLEE-HMAC>> meta-algorithm
 
 def provisioner_K0(name, key, b_bits):
-    """FIPS 198-1 sect. 3, performed by whoever provisions the key, per <<ACE-HMAC>>."""
+    """FIPS 198-1 sect. 3, performed by whoever provisions the key, per <<KLEE-HMAC>>."""
     if 8 * len(key) > b_bits:
         if name.startswith('SHA3'):
             key = hashlib.new(name.replace('SHA3-', 'sha3_'), key).digest()
@@ -270,7 +270,7 @@ def provisioner_K0(name, key, b_bits):
     return key + bytes(b_bits // 8 - len(key))
 
 class AceHmac:
-    """A HMAC CC per <<ACE-HMAC>>, in either the NIK or the KIP variant."""
+    """A HMAC CC per <<KLEE-HMAC>>, in either the NIK or the KIP variant."""
 
     def __init__(self, name, variant, K0=None, swap_pads=False):
         self.h = make_core(name)
@@ -299,13 +299,13 @@ class AceHmac:
             raise Invalid('a KIP CC cannot be re-keyed')
         if self.state_name != 'Set_Key':
             raise Invalid('not in _Set_Key_')
-        INPUT, ACELEN = b2v(data), 8 * len(data)
+        INPUT, KLLEN = b2v(data), 8 * len(data)
         # M4-corrected resumption
         input_base = 8 * resume_from if resume_from is not None else 0
         iters = 0
-        while input_base < ACELEN:
+        while input_base < KLLEN:
             # len = b here, so the third term of the min is live
-            amount = min(ACELEN - input_base, self.b - self.kb_block_base,
+            amount = min(KLLEN - input_base, self.b - self.kb_block_base,
                          self.b - self.kb_cumul_len)
             self.key = set_slice(self.key, self.kb_block_base + amount - 1,
                                  self.kb_block_base,
@@ -320,8 +320,8 @@ class AceHmac:
                 return None
             iters += 1
             if interrupt_after is not None and iters >= interrupt_after \
-                    and input_base < ACELEN:
-                return input_base // 8                  # acestart, M4-corrected
+                    and input_base < KLLEN:
+                return input_base // 8                  # klstart, M4-corrected
         return None
 
     # ---- _Hash_Absorb_
@@ -351,11 +351,11 @@ class AceHmac:
         self.state_name = 'Hash_Output'
 
     def exec_output(self, nbytes):
-        """The generic _Hash_Output_ squeeze loop of <<ACE-hash-functions>>."""
+        """The generic _Hash_Output_ squeeze loop of <<KLEE-hash-functions>>."""
         assert self.state_name == 'Hash_Output'
-        ACELEN, OUTPUT, output_base = 8 * nbytes, 0, 0
-        while output_base < ACELEN:
-            amount = min(ACELEN - output_base, self.t - self.block_base)
+        KLLEN, OUTPUT, output_base = 8 * nbytes, 0, 0
+        while output_base < KLLEN:
+            amount = min(KLLEN - output_base, self.t - self.block_base)
             OUTPUT |= sl(self.block, self.block_base + amount - 1,
                          self.block_base) << output_base
             output_base += amount
@@ -365,7 +365,7 @@ class AceHmac:
                 break
         return v2b(OUTPUT, output_base // 8)
 
-def ace_hmac(name, key, msg, variant='KIP', swap_pads=False, split=True):
+def kl_hmac(name, key, msg, variant='KIP', swap_pads=False, split=True):
     """Drive a full HMAC CC and return the tag."""
     b_bits = (Sha3Core.RATE[name] if name.startswith('SHA3')
               else 16 * SHA2[name][0])
@@ -456,18 +456,18 @@ HL = {'SHA-224': 'sha224', 'SHA-256': 'sha256', 'SHA-384': 'sha384',
 # ------------------------------------------------------- run
 
 ok = True
-print('HMAC per <<ACE-HMAC>> over <<ACE-SHA-2>> / <<ACE-SHA-3>>')
-print('NOTE (spec, M4): process_VLI resumption uses acestart = input_base/8,')
-print('  the byte-count reading now stated in <<ACE-CSR-acestart>>.')
+print('HMAC per <<KLEE-HMAC>> over <<KLEE-SHA-2>> / <<KLEE-SHA-3>>')
+print('NOTE (spec, M4): process_VLI resumption uses klstart = input_base/8,')
+print('  the byte-count reading now stated in <<KLEE-CSR-klstart>>.')
 print('NOTE: for HMAC-SHA3, b = the sponge RATE (1088 / 576 bits), the reading of')
-print('  "input block size" of <<ACE-HMAC>> that matches NIST HMAC-SHA3 practice.\n')
+print('  "input block size" of <<KLEE-HMAC>> that matches NIST HMAC-SHA3 practice.\n')
 
 print(f'{"function":9} {"case":5} {"KIP (RFC 4231)":16} {"NIK (Set_Key)":15} {"oracle"}')
 for name in ('SHA-224', 'SHA-256', 'SHA-384', 'SHA-512'):
     for case, (key, data) in RFC4231.items():
         exp = bytes.fromhex(TAGS[(name, case)])
-        kip = ace_hmac(name, key, data, 'KIP')
-        nik = ace_hmac(name, key, data, 'NIK')
+        kip = kl_hmac(name, key, data, 'KIP')
+        nik = kl_hmac(name, key, data, 'NIK')
         ref = _hmac.new(key, data, HL[name]).digest()
         gk, gn, go = kip == exp, nik == exp, ref == exp
         ok &= gk and gn and go
@@ -479,13 +479,13 @@ print(f'{"function":9} {"case":5} {"KIP vs oracle":16} {"NIK vs oracle"}')
 for name in ('SHA3-256', 'SHA3-512'):
     for case, (key, data) in RFC4231.items():
         ref = _hmac.new(key, data, HL[name]).digest()
-        gk = ace_hmac(name, key, data, 'KIP') == ref
-        gn = ace_hmac(name, key, data, 'NIK') == ref
+        gk = kl_hmac(name, key, data, 'KIP') == ref
+        gn = kl_hmac(name, key, data, 'NIK') == ref
         ok &= gk and gn
         print(f'{name:9} {case:<5} {"PASS" if gk else "FAIL":16} '
               f'{"PASS" if gn else "FAIL"}')
 
-# a KIP CC refuses to be re-keyed (<<ACE-HMAC>>: "A KIP CC cannot be re-keyed")
+# a KIP CC refuses to be re-keyed (<<KLEE-HMAC>>: "A KIP CC cannot be re-keyed")
 cc = AceHmac('SHA-256', 'KIP', K0=bytes(64))
 try:
     cc.exec_set_key(bytes(64)); refused = False
@@ -508,7 +508,7 @@ print(f'NIK CC refuses _Hash_Absorb_ with K0 incomplete: '
 
 print('KAT-EXPECT-FAIL: swapped-pads')
 key, data = RFC4231[1]
-bad = ace_hmac('SHA-256', key, data, 'KIP', swap_pads=True)
+bad = kl_hmac('SHA-256', key, data, 'KIP', swap_pads=True)
 fired = bad != bytes.fromhex(TAGS[('SHA-256', 1)])
 print(f'swapped ipad/opad control, HMAC-SHA-256 case 1: '
       f'{"FAIL (expected: control is effective)" if fired else "PASS (CONTROL IS DEAD)"}')
