@@ -85,17 +85,25 @@ KLEE tries to avoid accepting risks, or suppressing useful features as much as p
 
 Direct plaintext leakage, memory-corruption attacks against the KLEE-using process, and Release of Unverified Plaintext (RUP) attacks are out of scope. KLEE cannot mitigate these threats because the processed information resides within the user's execution context; they are therefore _accepted_.
 
-=== Open Points
+=== Discussion Points
 
 These items are *not* known defects, nor a measure of the specification's maturity. They fall
 into two groups, and the distinction matters when assessing the document.
 
 Group A — items requiring closure by the RISC-V Architecture Review Committee (ARC).:::
 
-. *Opcode allocation.* The encodings use `custom-1` and `custom-2` as placeholders. KLEE needs two
-  opcodes, but the 32-bit opcode space is essentially exhausted. Since KLEE, although broadly
-  useful, is used only in specific parts of code and libraries, a mechanism such as Composable
-  Extensions would be beneficial. KLEE remains a *non-custom extension*, aiming at ratification.
+. *Opcode allocation.* The encodings are provisory.
+  We are using the opcode MISC-MEM to encode the _core instructions_, because at the moment of
+  this writing, it has two completely unused `funct3` values, but other similar “holes” can be
+  used.
+  More problematic may be the _memory instructions_, since, because of the offsets, they use all
+  the bits once opcode and funct3` are allocated. LOAD-FP and STORE-FP have 4 and 5 unused `funct3`
+  values, and we do not expect too many floating point formats to be supported by the RISC-V in
+  the scalar ISA, so we borrow `funct3` = 5, 6, and 7. +
+  A second option for `kl.size`, `kl.avail`, `kl.getmd*`, `kl.setmd*`, `kl.restrict*`, and `ace.clone`
+  is to move encoding bits [29:25] to [24:20], fixing bits [29:25] to zero,
+  thus freeing up significant space in `funtc7`.
+  The final allocation is ARC responsibility.
 
 . *`misa.L` and `mstatus[26:25]` (KLS) plklment.* Provisional, contested, and resolvable only by
   the ARC. `misa.L` may be replaced by another mechanism, such as Unified Discovery, and the
@@ -103,7 +111,10 @@ Group A — items requiring closure by the RISC-V Architecture Review Committee 
 
 . *KLEE CSR addresses.* All addresses are `0xXXX` or “(Indirect)” placeholders, to be assigned by
   the ARC, as is the `Smstateen` bit of <<KLEE-CSRs-priv>>.
-  For certain CSRs, do we need the Indirect CSR Access mechanism of `Smcsrind`/`Sscsrind` or does the ARC prefer direct access for these CSRs? In case of indirect access, the `*iselect` values are to be assigned by the ARC.
+  Some CSRs have been marked as indirect, by this meaning that
+  we envision we can use the Indirect CSR Access mechanism of `Smcsrind`/`Sscsrind`.
+  The final word, either `*iselect` values or direct CSR access and the allocation of the indices,
+  is to be determined by the ARC.
 
 . *Exception cause codes.* The ARC must allocate `mcause` values: individual causes, or a single
   KLEE cause with a subcause register. Some form of “`mvalue`” reporting the CL number is also
@@ -129,11 +140,7 @@ Group A — items requiring closure by the RISC-V Architecture Review Committee 
   `Sm`/`Ss` split of the privileged extensions (<<KLEE-priv-extensions>>).
 
 . *Discoverability of cipher/mode combinations.* Subextensions may be impractical, as argued in the
-  introduction to <<KLEE-Machines>>; `kl.avail` can also serve. We are open to use
-  Unified Discovery.
-
-. *Debug-mode interaction.* Specified in <<KLEE-interaction-with-debug>>, which we consider
-  resolved; we welcome a second opinion from the Debug task group, the ARC, or both.
+  introduction to <<KLEE-Machines>>; `kl.avail` can also serve. We are open to use Unified Discovery.
 
 . *Effective data endianness.* Clarify UBE and its interaction with MPRV/MPP in the definition of
   _effective data endianness of the current privilege mode_ (<<KLEE-Notation>>).
@@ -168,10 +175,10 @@ Group B — open design questions owned by this task group.:::
   unlimited outputs could easily be defined as Machines and, through `kl.derive`, feed a CL's
   key field. Should standard KDFs be defined?
 
-. *`kl.mv` piecewise transfers.* Is the idiom in <<KLEE-management-code-snippets>> consistent with
-  the illegal-instruction-on-completion rule and the content-only transfer model?
+//. *`kl.mv` piecewise transfers.* Is the idiom in <<KLEE-management-code-snippets>> consistent with
+//  the illegal-instruction-on-completion rule and the content-only transfer model?
 
-. *Zkr requirements.* Verify Zkr's exact scope and DRBG requirements.
+. Side channel protection and RBG requirements. Need to refer to Security Model.
 
 . *`SCC_Encrypt` security claim.* Substantiate the claim “secure for up to 2^64 128-bit blocks.”
 
@@ -194,3 +201,6 @@ Group B — open design questions owned by this task group.:::
 //  material is for, the instruction address, or quick hashes of the inputs, to hinder attempts to
 //  bring the Machine off course. Principle: an implementor may take an optional optimization path,
 //  but is then responsible for its security.
+
+. *Debug-mode interaction.* Specified in <<KLEE-interaction-with-debug>>, but more discussion seems
+   to be warranted because the authors feel they do not have the necessary insight into the Debug Specification.
