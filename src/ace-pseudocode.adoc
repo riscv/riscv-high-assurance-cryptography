@@ -23,10 +23,6 @@ These sequences can be packaged into libraries or OS APIs to avoid increasing ap
 In these examples, GPR `t6` points to the memory location where a PI or SCC is stored,
 and GPR `t0` contains the number of the CL to be configured or exported.
 
-To check whether `kl.size` returned an error, we use the `beqi` instruction from the
-Qualcomm Code Size Reduction Instructions, however, this can be easily replaced with a
-regular `beq` using, say, the constant 1 loaded into a different GPR, such as `s3`.
-
 ==== Provisioning
 
 The provisioning code assumes that the Content immediately follows the MDH in memory.
@@ -39,38 +35,37 @@ The MDH of the PI carries _State_ = _Unconfigured_ (0); the completing `kl.mgmt`
 # t5 is never modified, so the working count and pointer can be re-derived
 # from it whenever the operation is restarted.
 
-  ld         s4, 0(t6)             # load MDH[63:0] from memory
-  ld         s5, 8(t6)             # load MDH[127:64] from memory
-  li         t3, 0x30              # const useful to determine Error States
+  ld        s4, 0(t6)             # load MDH[63:0] from memory
+  ld        s5, 8(t6)             # load MDH[127:64] from memory
+  li        t3, 0x30              # const useful to determine Error States
 
 restart:
   kl.mgmt   K{t0}, #kl_cfg_provisioning, s5:s4 # start provisioning, load MDH
   kl.getst  t2, K{t0}             # get _State_ field from MDH
-  beqz       t2, handle_errors     # State = 0: the CL was not opened => error
-  andi       t2, t2, 0x38          # Check the three top bits of State
-  beq        t3, t2, finished      # If the 3 top bits = 110, then prov. ended
+  beqz      t2, handle_errors     # State = 0: the CL was not opened => error
+  andi      t2, t2, 0x38          # Check the three top bits of State
+  beq       t3, t2, finished      # If the 3 top bits = 110, then prov. ended
 
-  addi       t4, t6, 16            # source pointer: first byte after MDH
-  mv         s1, t5                # working byte count, re-derived from t5 on restart
+  addi      t4, t6, 16            # source pointer: first byte after MDH
+  mv        s1, t5                # working byte count, re-derived from t5 on restart
 
 vloop:
-  vsetvli    s2, s1, e8, m1, ta, ma
-                                   # s2 = number of bytes moved this iteration
-  vle8.v     v1, (t4)              # load a chunk of the PI
+  vsetvli   s2, s1, e8, m1, ta, ma  # s2 = number of bytes moved this iteration
+  vle8.v    v1, (t4)              # load a chunk of the PI
   kl.mv     K{t0}, v1             # move it into the CL
-  add        t4, t4, s2            # bump the source pointer
-  sub        s1, s1, s2            # decrement the bytes still to load
+  add       t4, t4, s2            # bump the source pointer
+  sub       s1, s1, s2            # decrement the bytes still to load
   kl.getst  t2, K{t0}
-  beqz       t2, restart           # CL cleared: must restart
-  andi       t2, t2, 0x38          # Three top bits -> Error or Management
-  li         t3, 0x30              # const useful to determine Error States
-  beq        t3, t2, finished      # *new* Error State
-  bnez       s1, vloop
+  beqz      t2, restart           # CL cleared: must restart
+  andi      t2, t2, 0x38          # Three top bits -> Error or Management
+  li        t3, 0x30              # const useful to determine Error States
+  beq       t3, t2, finished      # *new* Error State
+  bnez      s1, vloop
 
   kl.mgmt   K{t0}, #kl_cfg_management_end   # complete provisioning
                                    # and possibly reconstruct data
   kl.getst  t2, K{t0}
-  bltu       t3, t2, handle_errors # catches errors at completion (e.g., SKS)
+  bltu      t3, t2, handle_errors # catches errors at completion (e.g., SKS)
 
 finished:
 # Here, the code should check whether there is an Error, and in this case
@@ -80,24 +75,24 @@ finished:
 
 *Provisioning Code (`Zklmem`)*
 ----
-  ld         s4, 0(t6)             # load MDH[63:0] from memory
-  ld         s5, 8(t6)             # load MDH[127:64] from memory
-  li         t3, 0x30              # const useful to determine Error States
+  ld        s4, 0(t6)             # load MDH[63:0] from memory
+  ld        s5, 8(t6)             # load MDH[127:64] from memory
+  li        t3, 0x30              # const useful to determine Error States
 
 restart:
   kl.mgmt   K{t0}, #kl_cfg_provisioning, s5:s4 # start prov. and load MDH
   kl.getst  t2, K{t0}
-  beqz       t2, handle_errors
-  andi       t2, t2, 0x38          # Check the three top bits of State
-  beq        t3, t2, finished      # Error State?
+  beqz      t2, handle_errors
+  andi      t2, t2, 0x38          # Check the three top bits of State
+  beq       t3, t2, finished      # Error State?
 
   # Assume that the Content directly follows the MDH in memory.
   kl.load   K{t0}, 16(t6)         # load rest of PI
   kl.getst  t2, K{t0}
-  beqz       t2, restart           # CL cleared means force restart
-  bltu       t3, t2, finished
+  beqz      t2, restart           # CL cleared means force restart
+  bltu      t3, t2, finished
   kl.mgmt   K{t0}, #kl_cfg_management_end   # complete provisioning
-                                   # and possibly reconstruct data
+                                  # and possibly reconstruct data
 finished:
 ----
 
@@ -107,38 +102,38 @@ finished:
 ----
 restart:
   kl.size    s1, K{t0}              # TOTAL size to export
-  beqz        s1, handle_errors      # 0 means the CL is unconfigured
+  beqz       s1, handle_errors      # 0 means the CL is unconfigured
 
   {...}  # here code that allocates the buffer to store the exported data
 
   kl.getmd   s5:s4, K{t0}           # get MDH, including its _State_
-  sd          s4, 0(t6)              # store MDH[63:0] to memory
-  sd          s5, 8(t6)              # store MDH[127:64] to memory
+  sd         s4, 0(t6)              # store MDH[63:0] to memory
+  sd         s5, 8(t6)              # store MDH[127:64] to memory
 
-  add         t6, t6, 16             # point to next memory region
-  li          s3, 16                 # s3 = 16 (size of MDH)
-  beq         s1, s3, finished       # in Error State we are done
-  sub         s1, s1, 16             # adjust size to remove the MDH
+  add        t6, t6, 16             # point to next memory region
+  li         s3, 16                 # s3 = 16 (size of MDH)
+  beq        s1, s3, finished       # in Error State we are done
+  sub        s1, s1, 16             # adjust size to remove the MDH
 
-  kl.mgmt   K{t0}, #kl_cfg_exporting # start exporting
+  kl.mgmt    K{t0}, #kl_cfg_exporting # start exporting
 
-  mv          t4, t6                 # destination: first byte after stored MDH
+  mv         t4, t6                 # destination: first byte after stored MDH
 store_loop:
-  vsetvli     s2, s1, e8, m1, ta, ma # s2 = no. of bytes moved this iteration
+  vsetvli    s2, s1, e8, m1, ta, ma # s2 = no. of bytes moved this iteration
   kl.mv      v2, K{t0}              # move chunk out of CL, advance klstart
-  vse8.v      v2, (t4)               # store it
-  add         t4, t4, s2             # bump the destination pointer
-  sub         s1, s1, s2             # decrement the bytes still to store
+  vse8.v     v2, (t4)               # store it
+  add        t4, t4, s2             # bump the destination pointer
+  sub        s1, s1, s2             # decrement the bytes still to store
   kl.getst   t2, K{t0}
-  beqz        t2, restart            # CL cleared: export must be restarted
-  andi        t2, t2, 0x38
-  li          t3, 0x30               # to determine Error States
-  beq         t2, t3, handle_errors
-  bnez        s1, store_loop
+  beqz       t2, restart            # CL cleared: export must be restarted
+  andi       t2, t2, 0x38
+  li         t3, 0x30               # to determine Error States
+  beq        t2, t3, handle_errors
+  bnez       s1, store_loop
 
 finished:
   # Restore _State_ from the saved MDH.
-  kl.mgmt   K{t0}, #kl_cfg_management_end, s5:s4
+  kl.mgmt    K{t0}, #kl_cfg_management_end, s5:s4
 ----
 
 [WARNING]
@@ -154,8 +149,8 @@ Until storeloop: the code is the same as in the `Zklmv` version.
 storeloop:
   kl.store  0(t6), K{t0}          # store Content of PI
   kl.getst  t2, K{t0}
-  beqz       t2, restart           # CL cleared means force restart
-  bltu       t3, t2, handle_errors
+  beqz      t2, restart           # CL cleared means force restart
+  bltu      t3, t2, handle_errors
 
 success:
 # complete export and possibly re-decrypt and reconstruct data
@@ -166,11 +161,11 @@ success:
 
 *Import Code (`Zklmv`)*
 ----
-  ld          s4, 0(t6)         # load MDH[63:0] from memory
-  ld          s5, 8(t6)         # load MDH[127:64] from memory
-  li          t3, 0x30          # to determine Error States
+  ld         s4, 0(t6)         # load MDH[63:0] from memory
+  ld         s5, 8(t6)         # load MDH[127:64] from memory
+  li         t3, 0x30          # to determine Error States
   kl.size    s1, s5:s4         # length of SCC/PCCC
-  beqz        s1, handle_errors # Machine not supported, or MDH invalid
+  beqz       s1, handle_errors # Machine not supported, or MDH invalid
 
   # s1 (the SCC length) is used above only as the support/validity gate.
   # t6 is the immutable buffer base, so a jump to restart re-derives the
@@ -179,58 +174,58 @@ success:
 restart:
   kl.mgmt   K{t0}, #kl_cfg_importing, s5:s4  # open CL for import, load MDH
   kl.getst  t2, K{t0}
-  beqz       t2, handle_errors
-  andi       t2, t2, 0x38
-  beq        t3, t2, handle_errors   # three top bits of _State_ = 110 ?
+  beqz      t2, handle_errors
+  andi      t2, t2, 0x38
+  beq       t3, t2, handle_errors   # three top bits of _State_ = 110 ?
 
-  addi       t4, t6, 16              # first byte after the MDH
-  subi       s1, s1, 16              # Content size to load, without MDH
+  addi      t4, t6, 16              # first byte after the MDH
+  subi      s1, s1, 16              # Content size to load, without MDH
 
 vloop:
-  vsetvli    s2, s1, e8, m1, ta, ma
-  vle8.v     v2, (t4)                # load a chunk of the SCC Content
+  vsetvli   s2, s1, e8, m1, ta, ma
+  vle8.v    v2, (t4)                # load a chunk of the SCC Content
   kl.mv     K{t0}, v2               # move it into the CL, advance klstart
-  add        t4, t4, s2
-  sub        s1, s1, s2
+  add       t4, t4, s2
+  sub       s1, s1, s2
   kl.getst  t2, K{t0}
-  beqz       t2, restart             # CL cleared means force restart
-  andi       t2, t2, 0x38
-  beq        t3, t2, handle_errors
-  bnez       s1, vloop
+  beqz      t2, restart             # CL cleared means force restart
+  andi      t2, t2, 0x38
+  beq       t3, t2, handle_errors
+  bnez      s1, vloop
 
   kl.mgmt   K{t0}, #kl_cfg_management_end, s5:s4  # decrypt and auth SCC
-                                     # and restore original MDH
+                                    # and restore original MDH
   kl.getst  t2, K{t0}
-  bltu       t3, t2, handle_errors   # catches "Authentication Failed"
+  bltu      t3, t2, handle_errors   # catches "Authentication Failed"
 
 success:
 ----
 
 *Import Code (`Zklmem`)*
 ----
-  ld         s4, 0(t6)              # load MDH[63:0] from memory
-  ld         s5, 8(t6)              # load MDH[127:64] from memory
-  li         t3, 0x30               # to determine Error States
+  ld        s4, 0(t6)              # load MDH[63:0] from memory
+  ld        s5, 8(t6)              # load MDH[127:64] from memory
+  li        t3, 0x30               # to determine Error States
 
 restart:
   kl.mgmt   K{t0}, #kl_cfg_importing, s5:s4 # open CL for import, load MDH
   kl.getst  t2, K{t0}
-  beqz       t2, handle_errors
-  andi       t2, t2, 0x38
-  beq        t3, t2, handle_errors  # three top bits of _State_ = 110 ?
+  beqz      t2, handle_errors
+  andi      t2, t2, 0x38
+  beq       t3, t2, handle_errors  # three top bits of _State_ = 110 ?
 
-  addi       t4, t6, 16             # walking pointer: first byte after MDH
+  addi      t4, t6, 16             # walking pointer: first byte after MDH
 
 content:
   kl.load   K{t0}, 0(t4)           # load Content into the CL
   kl.getst  t2, K{t0}
-  beqz       t2, restart            # CL cleared means force restart
-  bltu       t3, t2, handle_errors
+  beqz      t2, restart            # CL cleared means force restart
+  bltu      t3, t2, handle_errors
   kl.mgmt   K{t0}, #kl_cfg_management_end, s5:s4  # decrypt and auth CL,
-                                    # if necessary complete it
+                                   # if necessary complete it
   kl.getst  t2, K{t0}
-  andi       t2, t2, 0x38
-  beq        t3, t2, handle_errors  # catches `kl_state_mgmt_auth`
+  andi      t2, t2, 0x38
+  beq       t3, t2, handle_errors  # catches `kl_state_mgmt_auth`
 
 success:
 ----
@@ -256,11 +251,11 @@ The uppercase `IMPORT` instruction is a placeholder for an import code snippet, 
   vsetivli zero, 4, e32, m1, ta, ma        // Use 128-bit vectors
   IMPORT K0, (X5)                          // Import the SCC into CL K0
   kl.getst X1, K0
-  if (X1 >= 24) then: handle error
+  if (48 <= X1 <= 55) then: handle error
 
   kl.setst K0, #kl_state_encrypt         // Configure CL to encrypt
   kl.getst X1, K0
-  if (X1 >= 24) then: handle error
+  if (48 <= X1 <= 55) then: handle error
 
   // assume plaintext in whole blocks
   foreach(i from 0 to len_in_bytes(plaintext)/16-1) do:
