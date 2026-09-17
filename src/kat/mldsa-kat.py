@@ -16,9 +16,10 @@ What this harness validates
 
 2.  *The KLEE specification text itself*: the size table <<KLEE-ML-DSA-sizes>>, the
     `HasPrivKey` / `HasPubKey` flags and their _*_Input_ clearing rules, the
-    external-mu convention with the `ctx` / `ctxlen` binding, hedged
-    (rnd random) versus deterministic (rnd = 0) selection through the Form B
-    `kl.setst` auxiliary `Xs`, _Sign_Generate_ via ML-DSA.Sign_internal,
+    external-mu convention with the `ctx` / `ctxlen` binding, the `Hedged` flag
+    that the Form B `kl.setst` auxiliary `Xs` sets in _StateExtension_ and the
+    `rnd` the `kl.exec` then draws or holds across an interruption under Rule
+    <<KLEE-AGR-progress-discard>>, _Sign_Generate_ via ML-DSA.Sign_internal,
     _Sign_Verify_ via ML-DSA.Verify_internal, _compute_pubKey_ with its
     tr-consistency check, and the _MachineUse_ transfer-counter rules
     (excess bits ignored on input, past-the-end -> Error State _Invalid_).
@@ -96,9 +97,11 @@ IN_STATES  = {S_PK_IN: 'pubkey', S_CTX_IN: 'ctx', S_MU_IN: 'mu',
               S_TR_IN: 'tr', S_SIGN_IN: 'signature', S_SK_IN: 'privkey'}
 OUT_STATES = {S_PK_OUT: 'pubkey', S_SIGN_OUT: 'signature'}
 
-# StateExtension bit assignment for the two booleans of [[KLEE-PQC-ML-DSA]]
-# ("Apart from HasPrivKey and HasPubKey (which are stored in StateExtension)").
-SE_HASPRIVKEY, SE_HASPUBKEY = 1, 2
+# StateExtension bit assignment for the three booleans of [[KLEE-PQC-ML-DSA]]
+# ("Apart from HasPrivKey, HasPubKey and Hedged (which are stored in
+# StateExtension)").  Only Hedged is given a bit number by the spec, bit 2, so
+# HasPrivKey and HasPubKey take the two below it.
+SE_HASPRIVKEY, SE_HASPUBKEY, SE_HEDGED = 1, 2, 4
 
 
 class Invalidated(Exception):
@@ -161,6 +164,10 @@ class MLDSAContext:
     def has_pubkey(self):
         return self._flag(SE_HASPUBKEY)
 
+    @property
+    def hedged(self):
+        return self._flag(SE_HEDGED)
+
     def _invalidate(self, why):
         self.mdh = mdh_set(self.mdh, F_STATE, S_INVALID)
         raise Invalidated(why)
@@ -172,7 +179,7 @@ class MLDSAContext:
                 'ctx': self.ctxlen * 8}[name]
 
     # -- instructions ---------------------------------------------------
-    def setst(self, state, aux=None, rnd=None):
+    def setst(self, state, aux=None):
         """Form A `kl.setst` (aux None) or Form B (aux = Xs)."""
         if state == S_CTX_IN:
             # "a Form B kl.setst instruction must be used where the GPR
@@ -186,19 +193,23 @@ class MLDSAContext:
         if state == S_SIGN_GEN:
             if not self.has_privkey:
                 self._invalidate('Sign_Generate entered with HasPrivKey false')
-            # "If Xs = 0 ... hedged signing is selected ... If Xs is non-zero,
-            #  then deterministic signing is selected. rnd is set to zeros(256)."
-            if aux in (None, 0):
-                if rnd is None:
-                    raise AssertionError('hedged signing needs an RBG value')
-                self.rnd = rnd                       # 256 bits from the RBG
-            else:
-                self.rnd = b'\0' * 32
+            # "If Xs = 0 ... hedged signing is selected and Hedged is set.  If Xs is
+            #  non-zero, then deterministic signing is selected and Hedged is cleared."
+            # The value of `rnd` is drawn by the kl.exec, not here.
+            self._set_flag(SE_HEDGED, aux in (None, 0))
         self.mdh = mdh_set(self.mdh, F_STATE, state)
         if state == S_READY:
             self._clear_volatile()
-        if state in IN_STATES or state in OUT_STATES:
-            self.alguse = 0
+        # AGR10: _MachineUse_ is the field P of <<KLEE-AGR-progress-discard>>, so it
+        # is zeroed on every transition of _State_, together with the material kept
+        # for an interrupted operation -- here `rnd`.  For the loading and emitting
+        # states this is also AGR7's "W is zeroed on entry".
+        self.alguse = 0
+        self.rnd = b'\0' * 32
+        if state in IN_STATES:
+            # AGR7: "entering a loading state also zeroes the field, so that
+            # reloading replaces it".
+            setattr(self, IN_STATES[state], b'')
         if state == S_SK_IN:
             # "Upon entering State privkey_Input, HasPrivKey is set to false, and
             #  pubkey is erased and HasPubKey set to false."
@@ -247,8 +258,13 @@ class MLDSAContext:
         self.alguse = cum + nbytes * 8
         return out
 
-    def exec_d(self, xi=None):
-        """Form D `kl.exec Kn|K{Xn}`."""
+    def exec_d(self, xi=None, rnd=None, halt=None):
+        """Form D `kl.exec Kn|K{Xn}`.
+
+        `rnd` is the value the RBG supplies to a hedged _Sign_Generate_; `halt`, if
+        given, is the non-zero progress a precise interrupt would record in
+        _MachineUse_ under Rule <<KLEE-AGR-progress-discard>>, leaving the operation
+        unfinished."""
         st = self.state
         if st == S_GENKEYPAIR:
             self.pubkey, self.privkey = D.keygen_internal(xi, self.ps)
@@ -272,7 +288,30 @@ class MLDSAContext:
         if st == S_SIGN_GEN:
             if not self.has_privkey:
                 self._invalidate('Sign_Generate with HasPrivKey false')
+            # "The operation is long-running: _MachineUse_ is the field P of Rule
+            #  <<KLEE-AGR-progress-discard>>.  If it is zero, rnd is drawn from an
+            #  approved random bit generator when Hedged is set and is zeros(256)
+            #  otherwise; if it is non-zero, the interrupted operation is resumed
+            #  with the rnd held.  On completion rnd is destroyed."
+            if self.alguse == 0:
+                if self.hedged:
+                    if rnd is None:
+                        raise AssertionError('hedged signing needs an RBG value')
+                    self.rnd = rnd
+                else:
+                    self.rnd = b'\0' * 32
+            elif rnd is not None:
+                raise AssertionError('a resumed operation draws no random value')
+            if halt is not None:
+                # A precise halt: P records the progress and is never zero there,
+                # `rnd` stays with it, and _State_ does not change.
+                if halt == 0:
+                    self._invalidate('Progress recorded at a halt is never zero')
+                self.alguse = halt
+                return
             sig = D.sign_internal_mu(self.privkey, self.mu, self.rnd, self.ps)
+            self.rnd = b'\0' * 32                    # destroyed on completion
+            self.alguse = 0                          # P zeroed on completion
             if sig is None:
                 self.mdh = mdh_set(self.mdh, F_STATE, S_FAILURE)
                 return
@@ -316,14 +355,16 @@ def t_sizes():
                      (87, (39168, 20736, 37016))):
         chk(f'ML-DSA-{ps} field bit sizes quoted in the spec',
             tuple(8 * x for x in D.sizes(ps)) == bits)
-    # Serialized Context arithmetic quoted by the spec.
-    for ps, total, padded in ((44, 53280, 53376), (65, 77288, 77312),
-                              (87, 99864, 99968)):
+    # Serialized Content arithmetic quoted by the spec: the listed fields, plus the
+    # MDH and the implicit padding to a multiple of 128 bits, give the byte and block
+    # totals the text states ("6672, 9664 and 12496 bytes, that is 417, 604 and 781
+    # blocks of 128 bits, including the MDH and padding").
+    for ps, nbytes, blocks in ((44, 6672, 417), (65, 9664, 604), (87, 12496, 781)):
         sk, pk, sig = D.sizes(ps)
         got = 128 + 8 * (sk + pk + sig) + 8 + 2040 + 512 + 256
         pad = -got % 128
-        chk(f'ML-DSA-{ps} Serialized Context before/after padding',
-            got == total and got + pad == padded,
+        chk(f'ML-DSA-{ps} Serialized Content, MDH and padding included',
+            (got + pad) // 8 == nbytes and (got + pad) // 128 == blocks,
             f'{got} + {pad} = {got + pad} bits = {(got + pad) // 128} blocks')
     # The AuxInfo field has "the same format as the Machine and
     # MachinePolicy Fields and the next two Reserved bits" -> 12 + 2 + 2 = 16.
@@ -610,8 +651,10 @@ def t_sign_verify_flow():
     cc.setst(S_MU_IN); cc.exec_input(bytes.fromhex(det['mu']))
     cc.setst(S_SIGN_GEN, aux=1)
     chk('setst(_Sign_Generate_, Xs != 0) selects deterministic signing '
-        '(rnd = zeros(256))', cc.rnd == bytes(32))
+        '(Hedged cleared)', cc.hedged is False)
     cc.exec_d()
+    chk('deterministic signing runs with rnd = zeros(256), destroyed on completion',
+        cc.rnd == bytes(32))
     chk(f"_Sign_Generate_ deterministic reproduces the ACVP signature  {det['src']}",
         cc.signature.hex() == det['sig'] and cc.state == S_SUCCESS)
     cc.setst(S_SIGN_OUT)
@@ -626,13 +669,15 @@ def t_sign_verify_flow():
     cc = MLDSAContext(ps)
     cc.setst(S_SK_IN); cc.exec_input(bytes.fromhex(hed['sk']))
     cc.setst(S_MU_IN); cc.exec_input(bytes.fromhex(hed['mu']))
-    cc.setst(S_SIGN_GEN, aux=0, rnd=bytes.fromhex(hed['rnd']))
-    chk('setst(_Sign_Generate_, Xs = 0) selects hedged signing (rnd from the RBG)',
-        cc.rnd == bytes.fromhex(hed['rnd']))
-    cc.exec_d()
+    cc.setst(S_SIGN_GEN, aux=0)
+    chk('setst(_Sign_Generate_, Xs = 0) selects hedged signing (Hedged set), and '
+        'rnd is still zero: it is drawn by the kl.exec',
+        cc.hedged is True and cc.rnd == bytes(32))
+    cc.exec_d(rnd=bytes.fromhex(hed['rnd']))
     chk(f"_Sign_Generate_ hedged with the vector rnd reproduces the ACVP "
         f"signature  {hed['src']}",
         cc.signature.hex() == hed['sig'] and cc.state == S_SUCCESS)
+    chk('rnd is destroyed on completion of a hedged signature', cc.rnd == bytes(32))
     chk('hedged and deterministic signatures over the same mu differ',
         D.sign_internal_mu(bytes.fromhex(hed['sk']), bytes.fromhex(hed['mu']),
                            bytes(32), ps).hex() != hed['sig'])
@@ -696,6 +741,64 @@ def t_sign_verify_flow():
     cc2.setst(S_SIGN_GEN, aux=1); cc2.exec_d()
     chk('deterministic signing is reproducible (same rejection-loop trajectory)',
         cc2.signature == sig)
+
+
+def t_progress_agr10():
+    print('\n-- Interrupted _Sign_Generate_: Rule <<KLEE-AGR-progress-discard>> '
+          '(AGR10) --')
+    ps = 44
+    hed = [v for v in VECTORS['sigGenMu'] if v['rnd'] != '00' * 32][0]
+    rnd = bytes.fromhex(hed['rnd'])
+
+    def armed(aux=0):
+        cc = MLDSAContext(ps)
+        cc.setst(S_SK_IN); cc.exec_input(bytes.fromhex(hed['sk']))
+        cc.setst(S_MU_IN); cc.exec_input(bytes.fromhex(hed['mu']))
+        cc.setst(S_SIGN_GEN, aux=aux)
+        return cc
+
+    cc = armed()
+    chk('_MachineUse_ (the field P) is zero when the operation starts', cc.alguse == 0)
+    cc.exec_d(rnd=rnd, halt=0x2A)
+    chk('a precise halt records a non-zero P in _MachineUse_, keeps the drawn rnd '
+        'and leaves _State_ at _Sign_Generate_',
+        cc.alguse == 0x2A and cc.rnd == rnd and cc.state == S_SIGN_GEN)
+    cc.exec_d()                      # resumed: draws nothing, rnd is held
+    chk('resuming with P non-zero reproduces the ACVP signature of the held rnd '
+        f"  {hed['src']}", cc.signature.hex() == hed['sig'] and cc.state == S_SUCCESS)
+    chk('on completion P is zeroed and rnd destroyed',
+        cc.alguse == 0 and cc.rnd == bytes(32))
+
+    cc = armed()
+    cc.exec_d(rnd=rnd, halt=1)
+    cc.setst(S_READY)
+    chk('a kl.setst out of _Sign_Generate_ zeroes P and destroys the held rnd',
+        cc.alguse == 0 and cc.rnd == bytes(32))
+
+    cc = armed()
+    cc.exec_d(rnd=rnd, halt=1)
+    try:
+        cc.exec_d(rnd=rnd)
+        chk('a resumed operation draws no fresh random value', False)
+    except AssertionError:
+        chk('a resumed operation draws no fresh random value', True)
+
+    cc = armed()
+    try:
+        cc.exec_d(rnd=rnd, halt=0)
+        chk('the progress recorded at a halt is never zero', False)
+    except Invalidated:
+        chk('the progress recorded at a halt is never zero', cc.state == S_INVALID)
+
+    # deterministic signing holds no random material, but P behaves the same way
+    cc = armed(aux=1)
+    cc.exec_d(halt=5)
+    chk('a halted deterministic signature keeps rnd = zeros(256) and P non-zero',
+        cc.rnd == bytes(32) and cc.alguse == 5)
+    cc.exec_d()
+    chk('it resumes to the deterministic ACVP-equivalent signature',
+        cc.state == S_SUCCESS and cc.signature == D.sign_internal_mu(
+            bytes.fromhex(hed['sk']), bytes.fromhex(hed['mu']), bytes(32), ps))
 
 
 def _tamper_hint_padding(sig, ps):
@@ -804,6 +907,7 @@ def main():
     t_compute_pubkey()
     t_tr_recompute_on_import()
     t_sign_verify_flow()
+    t_progress_agr10()
     t_hint_checks()
     control_fired = not t_negative_control()
     print()
