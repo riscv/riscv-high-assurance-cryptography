@@ -912,15 +912,10 @@ for length in list(range(16, 80)) + [128, 129, 255, 256]:
 chk("KLEE == REF and round-trips, lengths 16..79, 128, 129, 255, 256", rt, True)
 
 print()
-spec_note("<<KLEE-XTS-from-XEX>> (src/ace-ISA-machines.adoc:869) says that CP @ P_m and "
-          "CP @ C_m place the partial block \"in the least significant bits, where the "
-          "first `s` bytes of the string live\"; `s` is declared in bits a few lines "
-          "above, so this should read \"the first `s`/8 bytes\".")
-spec_note("<<KLEE-XTS-from-XEX>> (src/ace-ISA-machines.adoc:839-841) says \"the `j`-th "
-          "kl.exec issued after the tweak was set is the one that operates at mask index "
-          "`j`\", but rule AGR3 makes one kl.exec process KLLEN/b blocks, each advancing "
-          "the mask; step 1 of both procedures is naturally one multi-block instruction. "
-          "Suggest \"the `j`-th block processed after the tweak was set\".")
+info("<<KLEE-XTS-from-XEX>> now reads \"the first `s`/8 bytes of the string\" and \"the "
+     "`j`-th block processed after the tweak was set\"; both readings are the ones this "
+     "harness models, the second because rule AGR3 makes one kl.exec process KLLEN/b "
+     "blocks, each advancing the mask.")
 info("<<KLEE-tweakable>> is not exercised: <<KLEE-exec-encodings>> instantiates no "
      "tweakable block cipher, so there is no Machine, and no published vector, for it.")
 info("\"(multi-block) kl.exec instructions are expected to be of Form A\" is read with "

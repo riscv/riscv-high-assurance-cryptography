@@ -78,7 +78,7 @@ For example, an implementation may perform symmetric cipher operations (cf. <<KL
 Public-key primitives may require very large states. Emulating them in M-mode firmware avoids storing those states in the KLEE unit, provided that the relevant CLs reside in secure memory such as on-chip SRAM reserved to M-mode (see <<KLEE-CLF>> for the requirements of this memory).
 
 CL state must never be accessible in the clear to any privileged mode except M-mode and authenticated Debug mode.
-This forbids KLEE implementations in S/VS-mode or HV-mode.
+This forbids KLEE implementations in S/VS-mode or HS-mode.
 Instructions and Machines may be emulated only in M-mode.
 Trap-and-emulate and on-demand (lazy) SCC import rely on the ``*lclstatus`` CSRs (cf. <<KLEE-CSR-lclstatus>>).
 
@@ -87,7 +87,7 @@ Trap-and-emulate and on-demand (lazy) SCC import rely on the ``*lclstatus`` CSRs
 [[KLEE-RBG]]
 ==== Requirements on Random Bit Generators
 
-In certain cases either the KLEE Unit or the Machines implemented in it require an RBG.
+In certain cases either the KLEE unit or the Machines implemented in it require an RBG.
 The RBG must use an entropy source and a DRBG satisfying the requirements described in the `Zkr` specification.
 
 // ////////////////////////////////////////////////////////////////////
@@ -149,7 +149,7 @@ To claim `Zkl` conformance, the following are required:
 
 . At least one of `Zklv` or `Zklio`.
 . Support for AES128, AES192, and AES256 in ECB and GCM modes, for AES128 and AES256 in GCM-SIV mode, as well as SHA2, as defined in <<KLEE-Machines>>.
-. `Zklmem`, which may be implemented by trap-and-emulate (cf. <<KLEE-error-architecture>>); in that case the hardware raises an illegal-instruction exception for `kl.load` and `kl.store`, as for any instruction it does not implement, which the platform must deliver to M-mode, which requires `medeleg` bit 2 to be zero on such a platform (we are open to discuss alternatives); the encodings are nonetheless assigned, not reserved (<<KLEE-illegal-instruction-grounds>>); and `Zklmv` must be implemented in hardware, since the emulating code uses it to move data between memory and the CL.
+. `Zklmem`, which may be implemented by trap-and-emulate (cf. <<KLEE-error-architecture>>); in that case the hardware raises an illegal-instruction exception for `kl.load` and `kl.store`, as for any instruction it does not implement, which the platform must deliver to M-mode, which requires `medeleg` bit 2 to be zero on such a platform (we are open to discussing alternatives); the encodings are nonetheless assigned, not reserved (<<KLEE-illegal-instruction-grounds>>); and `Zklmv` must be implemented in hardware, since the emulating code uses it to move data between memory and the CL.
 
 `kl.load` and `kl.store` are present on every conforming implementation, either in hardware or emulated.
 `Zklmv` and `Zklexpire` are otherwise optional.
@@ -171,7 +171,7 @@ enables the following operations:
 * `kl.clear` (<<KLEE-instruction-clear>>) unconfigures and clears a CL. It is a management instruction, but never part of a multi-instruction management operation.
 * `kl.exec` (<<KLEE-instruction-exec>>) performs cryptographic operations as specified by the Machine configured in a CL and according to the state of the CL.
 * `kl.setst` (<<KLEE-instruction-setst>>) transitions a CC inside a CL between states of a Machine.
-* `kl.getmd*` (<<KLEE-instruction-getmd>>) reads the metadata of a CL; `kl.getmdl` is used to implement the pseudo-instruction `kl.getst` (<<KLEE-instruction-getst>>), which extracts the state of a CL from the MDH of a CL. `kl.getst` also provides error reporting.
+* `kl.getmd*` (<<KLEE-instruction-getmd>>) reads the metadata of a CL; `kl.getmdl` is used to implement the pseudo-instruction `kl.getst` (<<KLEE-instruction-getst>>), which extracts the state of a CL from its MDH. `kl.getst` also provides error reporting.
 
 <<KLEE-instruction-extension-matrix>> is the authoritative statement of which extension defines each instruction and CSR.
 
@@ -216,7 +216,7 @@ KLEE defines 32 Cryptographic Lockers (CLs), numbered 0 to 31 and denoted `K0`�
 
 CLs are per-hart architectural state, like GPRs or vector registers.
 
-CLs are not separated by privilege Mode: when a hart changes Mode, it sees the same set of CLs.
+CLs are not separated by privilege mode: when a hart changes mode, it sees the same set of CLs.
 
 Unlike a conventional register, a CL can be _unconfigured_, meaning it does not contain a CC.
 
@@ -247,8 +247,8 @@ If the implementation is (partially) emulated, only M-mode firmware can access t
 
 The CLF guarantees the confidentiality and integrity of its contents, including protection against rollback through any access not explicitly permitted by this specification.
 CLF accesses do not require hardware-level hardening against physical side-channel attacks.
-However, side-channel-protected implementations of Machines in the Machines provided by KLEE unit must protect also the CLF accesses.
-It is recommended that `SCC_KeyDeriv`, `SCC_Encrypt`, `SCC_Decrypt`, and every use of the CSK and of the keys derived from it, be implemented by the KLEE implementation with side-channel protection not weaker than the highest _SCProtection_ level, under the implementation's ordering, that it supports for any Machine.
+However, side-channel-protected implementations of the Machines provided by the KLEE unit must also protect the CLF accesses.
+It is recommended that `SCC_KeyDeriv`, `SCC_Encrypt`, `SCC_Decrypt`, and every use of the CSK and of the keys derived from it, be implemented with side-channel protection not weaker than the highest _SCProtection_ level, under the implementation's ordering, that it supports for any Machine.
 
 NOTE: While the CLF, as a memory device, must resist rollback attacks, individual CLs do not have to resist rollback via export and import, and cannot.
 While re-importing previous CC states may allow multi-time pad attacks on modes such as CTR, XCTR, and GCM, exploiting this would require a level of control over the target software that typically also implies access to plaintext.
@@ -279,7 +279,7 @@ A hart reset resets the KLEE state of the hart.
 The KLEE implementation must zeroize the KLEE state on power up.
 The software stack should also explicitly clear all KLEE state at power down, to cause the implementation to zeroize the contents of all CLs.
 
-The KLEE unit holds three 128-bit registers which hold authentication data (the `SIV`, `IMPQUAL`, and `SIV2`) of the CL being currently managed. These registers are accessed using the `kl.load`, `kl.store` and `kl.mv` instructions, as the leading bytes of the image they transfer (<<KLEE-instruction-load>>).
+The KLEE unit holds three 128-bit registers that hold authentication data (the `SIV`, `IMPQUAL`, and `SIV2`) of the CL being currently managed. These registers are accessed using the `kl.load`, `kl.store` and `kl.mv` instructions, as the leading bytes of the image they transfer (<<KLEE-instruction-load>>).
 They are zeroized by a KLEE unit reset, by `kl.clearall`, and by a `kl.mgmt` that opens an import; the `kl.mgmt` that opens an export of a CL in a Valid State writes `SIV` and, when _AuxDataLen_ {ge} 2, `IMPQUAL` and `SIV2`.
 
 [NOTE]
@@ -302,7 +302,7 @@ that can be loaded from and stored to external memory. Both mechanisms may be su
 
 When vector registers are used, the full V extension is not required. KLEE depends only on a minimal subset, termed _KLV_.
 (((KLV)))
-KLV must be fully opcode-compatible with RVV: code written for KLV executes with identical behavior under V together with Zvbc.
+KLV must be fully opcode-compatible with RVV: code written for KLV executes with identical behavior under V together with `Zvbc`.
 The current set of features is:
 
 * Vector registers of at least 128 bits.
@@ -311,7 +311,7 @@ The current set of features is:
 Therefore, KLV only requires tail-agnostic and mask-agnostic configurations, and KLEE operations on vector registers always use a tail-agnostic policy;
 Bit 25 of the `kl.exec` instruction encoding is reserved for potential future adoption of masked operations, should a compelling use case arise.
 ** Support for `LMUL` integer values of 1, 2, 4, and 8;
-** A `vsetvl`/`vsetvli`/`vsetivli` requesting a configuration KLV does not support sets `vtype.vill` and `vl` = 0, as in RVV; a KLEE instruction with a vector operand issued while `vtype.vill` is set raises an illegal-instruction exception.
+** A `vsetvl`/`vsetvli`/`vsetivli` requesting a configuration that KLV does not support sets `vtype.vill` and `vl` = 0, as in RVV; a KLEE instruction with a vector operand issued while `vtype.vill` is set raises an illegal-instruction exception.
 * Unit-strided vector loads and stores;
 * `vmv.x.s` and `vmv.s.x` and the slide instructions `vslideup.v[xi]`, `vslidedown.v[xi]`, `vslide1up.vx`, and `vslide1down.vx`, to insert data into and extract data from vector registers;
 * Vector logical operations: `vand.v[vxi]`, `vor.v[vxi]`, and `vxor.v[vxi]` (the immediate variants allow obtaining, for instance, a bitwise NOT); and
@@ -333,7 +333,7 @@ KLIOBUF is an optional architectural input/output buffer that may be used in pla
 
 KLIOBUF is not part of the CLF.
 
-Two instructions, `kl.input` and `kl.output`, load and store data from/to the KLIOBUF to/from the external memory.
+Two instructions, `kl.input` and `kl.output`, load and store data from/to the KLIOBUF to/from external memory.
 When the KLIOBUF is used, `kl.exec`, `kl.setst` and `kl.mgmt` are used in forms with implicit input and output provided by the KLIOBUF, as described in <<KLEE-usage-input-output>>.
 
 The definition of `KLLEN` for KLIOBUF inputs is given in <<KLEE-CSR-kliobuftop>>.
@@ -465,7 +465,7 @@ State 1 is the _Ready_ state.
 (((KLEE, Machine, partial states)))
 States 56–63, i.e., the states used during management operations, are called the _Partial States_, and are exactly the States that are neither _Unconfigured_ nor Complete.
 
-The following four tables define the architected values of _State_ common to all Machines we well as the _State_ when a CL defines no Machine, and the values used when managing the CCs in the CLs.
+The following four tables define the architected values of _State_ common to all Machines as well as the _State_ when a CL defines no Machine, and the values used when managing the CCs in the CLs.
 
 [[KLEE-state-off]]
 .Global CC State Numbers: Unconfigured State
@@ -491,7 +491,7 @@ Error States 54 and 55, if defined, will not necessarily have a lower priority t
 
 [[KLEE-states-error]]
 .Global CC State Numbers: Error States
-[float="center",align="center",width="100%",cols="^7%,<30%,<16%,<47%",options="header"]]
+[float="center",align="center",width="100%",cols="^7%,<30%,<16%,<47%",options="header"]
 |===
 | Value  | Mnemonic                       | State Name              | Description
 |  48    | `kl_state_unsupported`         | _Unsupported_           | Not supported (i.e., not implemented) Machine.
@@ -512,12 +512,12 @@ The rules governing the behavior of the KLEE architecture when interacting with 
 
 The _AuxDataLen_ MDH field records the length of the _Auxiliary Data Section_ (ADS) of the content, a variable-size, implementation-dependent part, as a number of 128-bit blocks. When _ADSDropped_ = 1, it retains the length of the ADS before `Content2` was dropped. Zero means that no ADS is present. The value 1 is invalid. The maximum value is 2^14^-1, corresponding to 262,128 bytes.
 
-If _AuxDataLen_ {ge} 2, a copy of the implementation qualifier from the originating machine
+If _AuxDataLen_ {ge} 2, a copy of the implementation qualifier from the originating implementation
 
 ``{fournbsp}{fournbsp}IMPQUAL := zeros(32) @ klmimpid @ klmarchid @ klmvendorid``
 
 (cf. <<KLEE-CSR-impl-ids>>) is included in the SCC.
-These 16 bytes, as well as a separate authentication tag for the ADS are counted within the length recorded by the _AuxDataLen_ field. The importing implementation uses this value to determine whether the ADS can be used.
+These 16 bytes, as well as a separate authentication tag for the ADS, are counted within the length recorded by the _AuxDataLen_ field. The importing implementation uses this value to determine whether the ADS can be used.
 
 Since an ADS contains at least an authentication tag (16 bytes) and the originating implementation qualifier (also 16 bytes), the minimum length is 32 bytes, corresponding to an _AuxDataLen_ value of 2.
 
@@ -558,20 +558,20 @@ At SCC export and import, any Locality defined by the _Locality_ field cryptogra
 |   0   | _SiPScrt_                 | Identifies the designer of the SoC. Permanent.                                         |  SoC   |   No   | [1:0]  |  1
 |   1   | _ChipFamScrt_             | Identifies specific chip (SoC) model. Must be different also when the KLEE unit is different, unless the difference is only a minor revision with the same custom algorithms (if any) and custom side-channel protection levels (if any). Permanent.                                  |  SoC   |   No   | [1:0]  |  2
 |   2   | _ChipScrt_                | Unique for each SoC. Permanent.                                                        |  SoC   |   No   | [1:0]  |  3
-|   3   | _OEMScrt_                 | Provisioned by OEM to differentiate their products from the competition.
+|   3   | _OEMScrt_                 | Provisioned by the OEM to differentiate their products from the competition.
 {empty}                               Permanent, or reconfigurable via a custom hardware authenticated mechanism.            | Device |   HW   | [3:2]  |  1
 |   4   | _ProdScrt_                | Identifies device/system type/model (product).
-{empty}                               Permanent or reconfigurable like OEMScrt.                                              | Device |   HW   | [3:2]  |  2
+{empty}                               Permanent or reconfigurable like _OEMScrt_.                                              | Device |   HW   | [3:2]  |  2
 |   5   | _DevScrt_                 | Unique device (entire system) secret. Shared across all harts in an SoC and shareable
 {empty}                               across multiple SoCs in a single device using an implementation-defined mechanism.
-{empty}                               Reconfigurable like OEMScrt.                                                           | Device |   HW   | [3:2]  |  3
+{empty}                               Reconfigurable like _OEMScrt_.                                                           | Device |   HW   | [3:2]  |  3
 2+|   No Boot Binding               | Independent of Physical or Virtual Boot Session                                       ^|  --   ^|   --   | [5:4]  |  0
 |   6   | _PhysBootScrt_            | Unique per boot session of the host hardware and its firmware stack.
 {empty}                     Configured by M-mode during the boot process of the host (see <<KLEE-CSR-mklphysbootscrt>>).     | Device |   M    | [5:4]  |  1
 |   7   | _VirtBootScrt_            | Unique per boot session of the virtual hardware and its software stack.
 Regenerated by H or higher at each virtual boot of a VM (see <<KLEE-CSR-hklvirtbootscrt>>).                                  |   VM   |  H/M   | [5:4]  |  2
 2+| Binding to Modes                |                                                                                       ^|  --   ^|   --   | [8:6]  | --
-|   8   | _MLocality_               | Configurable at M.  Useful to separate Supervisor Domains/Security States.             |  < M   |   M    |   6    |  1
+|   8   | _MLocality_               | Configurable at M. Useful to separate Supervisor Domains/Security States.             |  < M   |   M    |   6    |  1
 |   9   | _HLocality_               | The hypervisor's tag on its virtual machines, separating them from each other; it enters the bindings of a guest's exports and imports and of the hypervisor's handling of the loaded VM's CLs (see <<KLEE-CSR-hkllocality>>). Unconfigured without the H extension. |   VM   |   HS   |   7    |  1
 |  10   | _SLocality_               | The OS's Locality, separating its processes whether the OS runs at S-mode or at VS-mode: `skllocality`, for which `vskllocality` substitutes when V=1 (see <<KLEE-CSR-skllocality>>). | < (V)S |  (V)S  |   8    |  1
 |===
@@ -588,7 +588,7 @@ A PI or SCC whose _Locality_ field names an unconfigured entry, or carries the r
 
 Entry 9 is `hkllocality`, unconfigured where that register is not implemented or holds `zeros(128)` (<<KLEE-locality-csr-groups>>). Entry 10 is the register that `skllocality` designates in the current mode: `skllocality` at V=0 and, when V=1, `vskllocality`, which then substitutes for it (<<KLEE-CSR-locality-groups>>). The three entries of the SW Filter Group denote three distinct registers in every mode.
 
-Up to six architected Localities may be active concurrently: up to two from the HW Binding Group; at most one of _PhysBootScrt_ or _VirtBootScrt_; and up to three from the SW Filter Group.  The SCC generation and import algorithms described in <<KLEE-CC-management>> enforce the policies associated with these Localities.
+Up to six architected Localities may be active concurrently: up to two from the HW Binding Group; at most one of _PhysBootScrt_ or _VirtBootScrt_; and up to three from the SW Filter Group. The SCC generation and import algorithms described in <<KLEE-CC-management>> enforce the policies associated with these Localities.
 
 [[KLEE-Metadata-locality-interoperability]]
 ===== Interoperability under _Locality_ configurations
@@ -624,11 +624,11 @@ In every mode the three entries denote three different registers; no ordering or
 [[KLEE-Metadata-expiration-date]]
 ===== _ExpirationDate_ Field
 
-This field is only in effect if extension _Zklexpire_ is supported.
+This field is only in effect if extension `Zklexpire` is supported.
 
-If _Zklexpire_ is supported, the KLEE implementation must have access to a secure clock.
+If `Zklexpire` is supported, the KLEE implementation must have access to a secure clock.
 
-If _Zklexpire_ is not supported, a non-zero _ExpirationDate_ in a PI or SCC is invalid Metadata (see <<KLEE-Metadata-validity>>).
+If `Zklexpire` is not supported, a non-zero _ExpirationDate_ in a PI or SCC is invalid Metadata (see <<KLEE-Metadata-validity>>).
 
 If non-zero, the 20-bit _ExpirationDate_ field specifies the CC's expiration time as whole hours elapsed since 00:00 UTC on 1 January 2027. The maximum representable time span is approximately 119 years and 7 months. The epoch is UTC so that a CC exported on one device and imported on another expires at the same instant regardless of the local time each observes.
 
@@ -693,10 +693,10 @@ _Version_ is then set to 0 (or 1 in a future version of this specification).
 
 Support for loading system-specific formats is optional.
 The resulting CLs can be exported only in the KLEE-specified format.
-To prevent loading on different implementations, specific localities may be set, or all information may be stored in the ADS to gate it using IMPQUAL.
+To prevent loading on different implementations, specific localities may be set, or all information may be stored in the ADS to gate it using `IMPQUAL`.
 
 An implementation may support multiple system-specific formats;
-The KLEE specification does not specify how to distinguish between them: this is up to the implementation.
+the KLEE specification does not specify how to distinguish between them: this is up to the implementation.
 
 The value _Version_ = 2 is reserved.
 
@@ -757,7 +757,7 @@ KLEE provides a number of unprivileged CSRs.
 |  0xXXX           |    URW    | `kliobuflen`               | KLEE input/output buffer length in bytes.
 |  0xXXX           |    URW    | `kliobuftop`               | KLEE input/output buffer limit for current transfers in bytes.
 |  0xXXX           |    URW    | `klstart`                  | KLEE start byte index.
-|  0xXXX           |    URW    | `klmanagedcr`              | Number of the currently managed CL, or 32 if no CL is being currently managed.
+|  0xXXX           |    URW    | `klmanagedcr`              | Number of the currently managed CL, or 32 if no CL is currently being managed.
 |===
 
 // On RV32 every 64-bit KLEE CSR _X_, in this Book, is accompanied by a 32-bit CSR
@@ -946,7 +946,7 @@ If the CL it names ceases to be in a Configuration State otherwise than through 
 cleared, also by the zeroizing step of a `kl.mgmt` whose opening then fails, because it is the destination of a `kl.clone`, or because it transitions to an Error State — `klmanagedcr` is set to 32.
 Otherwise, a KLEE exception raised during a management operation that does not transition the CL to an Error State leaves `klmanagedcr` unchanged: the handler either resolves the condition or sets `klmanagedcr` to 32 itself.
 
-Internal values of `SIV`, `SIV2`, `IMPQUAL` are associated with this CL.
+Internal values of `SIV`, `SIV2` and `IMPQUAL` are associated with this CL.
 
 Values 33 and above are reserved; writing one leaves `klmanagedcr` unchanged.
 
@@ -1060,7 +1060,7 @@ Every KLEE instruction with a vector operand sets `vstart` to 0 when it retires;
 
 [[KLEE-GR-custom-locality,GR10]] GR10:: A CC whose MDH carries any custom, implementation-defined value — a custom _Machine_ (<<KLEE-Machine-field>>), a custom _SCProtection_ level (<<KLEE-SCProtection-field>>), a system-specific _Version_ (<<KLEE-Machine-version>>), or any other custom value — must name _ChipFamScrt_, or the stricter _ChipScrt_, in its _Locality_; otherwise the Metadata is invalid (see <<KLEE-Metadata-validity>>).
 +
-NOTE: Note that if the KLEE unit is implemented through emulation, different versions of KLEE firmware may have different features while running on the same hardware, and a hardware-fixed locality will not be able to distinguish it. Rule <<KLEE-GR-custom-locality>> is, however, a first line of protection against accidental abuse.
+NOTE: If the KLEE unit is implemented through emulation, different versions of KLEE firmware may have different features while running on the same hardware, and a hardware-fixed locality will not be able to distinguish them. Rule <<KLEE-GR-custom-locality>> is, however, a first line of protection against accidental abuse.
 
 [[KLEE-GR-atomic-randomness,GR11]] GR11:: A Machine that requires an internal random value, such as a signing nonce or an ephemeral scalar, generates it and consumes it within one instruction.
 No State from which the CL can be exported or cloned holds random material that could be consumed against an input other than the one it was drawn for; for an interrupted long-running operation this is ensured by Rule <<KLEE-AGR-progress-discard>> of Book 2. Rule <<KLEE-GR-opening-cr-when>> is not relaxed to obtain this.
@@ -1075,7 +1075,7 @@ _This subsection is informative._
 Broadly speaking, and setting aside error handling, *Provisioning* consists of the following three steps:
 
 . Use `kl.mgmt` (<<KLEE-instruction-mgmt>>) to prepare a CL to be provisioned, check the validity of the MDH, and load the entire MDH in the CL.
-. Use one of more `kl.mv` (<<KLEE-instruction-mv>>) to load the rest of the provisioning information into the CL.
+. Use one or more `kl.mv` (<<KLEE-instruction-mv>>) to load the rest of the provisioning information into the CL.
 . Use `kl.mgmt` to complete the provisioning process and make the CL available to software.
 
 *Importing* an SCC into a CL is similar:
@@ -1089,7 +1089,7 @@ Broadly speaking, and setting aside error handling, *Provisioning* consists of t
 . Use `kl.getmd` or `kl.getmdv` (<<KLEE-instruction-getmd>>) to get the MDH of the CL to be exported, in order to determine its size and allocate resources.
 . Store the MDH into memory.
 . Use `kl.mgmt` to prepare a CL to produce an SCC. This includes encrypting its contents and computing the authentication tag(s).
-. Use one of more `kl.mv` to store the rest of the SCC, the authentication data first, to memory.
+. Use one or more `kl.mv` to store the rest of the SCC, the authentication data first, to memory.
 . Use `kl.mgmt` to complete the export process by restoring the CL in a form available to software.
 
 A CL in an Error State takes shorter paths in both directions, since it is an MDH and nothing else
@@ -1105,14 +1105,14 @@ We also anticipate how the _State_ of a configured CL changes under management:
 .. Upon any further preemption and export, the current _State_ is saved by software in its own process space and
    the state remains `kl_cfg_ppi_exporting`.
 .. When the export terminates, the value of the _State_ before the export started is restored by software by passing it to the `kl.mgmt` that completes the export operation.
-.. If the CL is re-imported again, the value of _State_ is first saved and CL's _State_ becomes `kl_cfg_ppi_importing`.
+.. If the CL is re-imported, the value of _State_ is first saved and the CL's _State_ becomes `kl_cfg_ppi_importing`.
 .. When such a nested management operation is completed, the previous state is restored.
 .. Hence, when the last nested management operation is completed, the _State_ is restored to `kl_cfg_provisioning`.
 
 . If an export operation is initiated from a CL in a Valid State, that _State_ is saved by software, and the _State_ becomes `kl_cfg_exporting`.
 .. Nested management operations lead to States `kl_cfg_exporting` and `kl_cfg_importing`.
 
-. If an import operation is started on an SCC generated from a CL in a Valid state: the _State_ becomes `kl_cfg_importing`, and the nested management states are `kl_cfg_exporting` and `kl_cfg_importing`.
+. If an import operation is started on an SCC generated from a CL in a Valid State: the _State_ becomes `kl_cfg_importing`, and the nested management states are `kl_cfg_exporting` and `kl_cfg_importing`.
 
 The values of these States are given in <<KLEE-SC-sealing-status>>.
 
@@ -1122,7 +1122,7 @@ The values of these States are given in <<KLEE-SC-sealing-status>>.
 ==== kl.avail and kl.size
 
 _Synopsis_::
-`kl.avail` returns 1 if the Machine encoded in MDH available in the requested variant, and 0 otherwise.
+`kl.avail` returns 1 if the Machine encoded in the MDH is available in the requested variant, and 0 otherwise.
 `kl.size` returns the total size of a memory buffer that would be needed to store the data of a PI or SCC, in bytes, or 0 in case of error (such as unsupported Machine or invalid MDH).
 
 _Mnemonic_::
@@ -1182,8 +1182,8 @@ switching.
 
 The three Forms for the two instructions differ only in where the MDH is taken from,
 as the mnemonics above give:
-from the CL itself for Form A, from Bits [63:0] supplied in `Xs` (in `X[s+1] @ Xs` on RV32) for Form B,
-and from Bits [127:0] supplied in `Vs` for Form C.
+from the CL itself for Form A, from bits [63:0] supplied in `Xs` (in `X[s+1] @ Xs` on RV32) for Form B,
+and from bits [127:0] supplied in `Vs` for Form C.
 
 Let `content1_size` be the length in bytes of the `Content1` of an SCC for the _Machine_,
 _MachinePolicy_, _KeyType_ and _StateExtension_ of the MDH, and `pi_content_size` the length in bytes
@@ -1311,7 +1311,7 @@ corresponding Form of `kl.exec` leaves unused: `rd` in Form B, `rs2` in Form C.
 
 `rs1` always specifies the source or destination CL. In Forms A and B, `rs2` specifies the source GPR or vector register.
 In Forms C and D, `rd` specifies the destination GPR or vector register.
-For forms B and D, the vector length must be a multiple of 16 bytes.
+For Forms B and D, the vector length must be a multiple of 16 bytes.
 --
 //
 // In the mnemonics of variants A and B the CL is written first because it is the
@@ -1335,12 +1335,12 @@ For provisioning or import, the instruction also requires that the MDH has alrea
 
 Let `content_size` be the length in bytes of the serialized `Content` of the CL, namely the `Content` of a PI or an SCC,
 according to the base type of the image the CL holds (<<KLEE-length-rule>>).
-`content_size` is determined by `kl.mv`, from the `MDH` – either the `MDH` of the CL being exported, or the `MDH` provided by the called for provisioning or import.
+`content_size` is determined by `kl.mv`, from the `MDH` – either the `MDH` of the CL being exported, or the `MDH` provided by the caller for provisioning or import.
 
-The instruction needs to know a _ContentOffset_ value of 0, 16, or 48, to signal the start of the `Content` in the external formats depending on the MDH, the current operation, and base type of the image the CL holds (<<KLEE-length-rule>>).
+The instruction needs to know a _ContentOffset_ value of 0, 16, or 48, to signal the start of the `Content` in the external formats depending on the MDH, the current operation, and the base type of the image the CL holds (<<KLEE-length-rule>>).
 Let `content2_size` = 16 * (_AuxDataLen_ - 2) if _AuxDataLen_ {ge} 2 and _ADSDropped_ = 0, and 0 otherwise.
 
-`_ContentOffset_` is determined as follows:
+_ContentOffset_ is determined as follows:
 // the same case distinction of `kl.size` (<<KLEE-instruction-size>>) but excluding the `Content` and the MDH._ADSDropped_ never affects _ContentOffset_.
 
 . If the MDH._State_ is a Valid State or `kl_cfg_{importing|exporting}`, then:
@@ -1351,7 +1351,7 @@ Let `content2_size` = 16 * (_AuxDataLen_ - 2) if _AuxDataLen_ {ge} 2 and _ADSDro
 The _serialized image_ `S` of the CL is `Content`, `SIV {vvert} Content`, or `SIV {vvert} IMPQUAL {vvert} SIV2 {vvert} Content` for _ContentOffset_ = 0, 16, or 48, respectively, and
 `image_size` = _ContentOffset_ + `content_size`, which is the value `kl.size` reports minus 16.
 
-Let `max_admissible` be the length of the longest image of the CL's current base type that the implementation can hold for the Machine: for an image with a SCC base type, `content1_size` plus the largest `content2_size` the implementation supports (<<KLEE-instruction-size>>); for an image with a PI base type, `pi_content_size`. When _ADSDropped_ = 1, `content2_size` is zero, so no `Content2` byte is part of the image. Bytes of an SCC beyond `max_admissible` belong to an ADS that is discarded (<<KLEE-SCC-import>>) and are neither read from memory nor written to the CL.
+Let `max_admissible` be the length of the longest image of the CL's current base type that the implementation can hold for the Machine: for an image with an SCC base type, `content1_size` plus the largest `content2_size` the implementation supports (<<KLEE-instruction-size>>); for an image with a PI base type, `pi_content_size`. When _ADSDropped_ = 1, `content2_size` is zero, so no `Content2` byte is part of the image. Bytes of an SCC beyond `max_admissible` belong to an ADS that is discarded (<<KLEE-SCC-import>>) and are neither read from memory nor written to the CL.
 Let
 
 {fournbsp}{fournbsp}``image_end`` = _ContentOffset_ + `min(content_size, max_admissible)`.
@@ -1497,7 +1497,7 @@ GPRs or in a vector register (group) `Vs`.
 ===== kl.clear
 
 The instruction `kl.clear Kd|K{Xd}` is encoded as `kl.setst` (see <<KLEE-instruction-setst>>) with no auxiliary operands and the immediate for _State_ set to `kl_state_unconfigured` (as defined in <<KLEE-State-field>>).
-It marks it as _Unconfigured_ in its metadata, and releases the resources in the CLF.
+It marks the CL as _Unconfigured_ in its metadata, and releases its resources in the CLF.
 
 Clearing (i.e., unconfiguring) a CL that was not already _Unconfigured_, or whose `*lclstatus` field in effect is _Off_ (<<KLEE-CSR-lclstatus>>), sets the `*lclstatus` fields in effect for the current privilege mode, and the `KLS` fields in effect, to _Dirty_. The CL's own _State_ field becomes _Unconfigured_.
 
@@ -1520,8 +1520,8 @@ This instruction is encoded as `kl.setst` (see <<KLEE-instruction-setst>>) with 
 
 `kl.clearads` deletes any ADS from the target CL.
 This instruction is used when exporting a CL for use by some other target, possibly some different implementation.
-_AuxDataLen_ and _ADSDropped_ are set to 0. The operation therefore produces a more compact layout without ADS that a destination with a different KLEE Unit may have to drop anyway.
-Exporting a CL into a SCC in this state will result in an ADS-free SCC being generated.
+_AuxDataLen_ and _ADSDropped_ are set to 0. The operation therefore produces a more compact layout without ADS that a destination with a different KLEE unit may have to drop anyway.
+Exporting a CL into an SCC in this state will result in an ADS-free SCC being generated.
 The first usage instruction that needs to access the ADS regenerates it.
 
 [[KLEE-instruction-mgmt]]
@@ -1692,7 +1692,7 @@ _Mnemonic_::
 _Encoding_::
 +
 --
-`kl.restrict` is an R-type instruction.
+`kl.restrict*` is an R-type instruction.
 The encoding shares opcode and `funct3` with `kl.exec`, but `funct2` (i.e., the two msbs of `funct7`) is `0b01`.
 [wavedrom, , svg]
 ....
@@ -1811,7 +1811,7 @@ _Mnemonic_::
 (((KLEE, instruction, kl.clone)))
 
 _Encoding_::
-The encoding shares opcode and `funct3` with `kl.exec`, however `funct2` is 2.
+The encoding shares opcode and `funct3` with `kl.exec`, but `funct2` is 2.
 The instruction is an R-type instruction.
 +
 [wavedrom, , svg]
@@ -1858,7 +1858,7 @@ Clones the source CL `Ks` (or the CL indexed by `Xs`) into the destination CL `K
 
 * The destination CL is then cleared and the clone is created.
 
-* The destination CL becomes a perfect copy of the source CL: all internal data, including MDH and internal state, are copied verbatim:
+* The destination CL becomes a perfect copy of the source CL: all internal data, including MDH and internal state, are copied verbatim.
 The instruction achieves the same result as exporting the source CL to an SCC and importing the SCC into the destination CL.
 
 See <<KLEE-CSR-lclstatus>> for the behavior under emulation, i.e., when the source CL is _Off_ in some `*lclstatus`.
@@ -1919,7 +1919,7 @@ A transfer may occur only if the architecture allows it for the _endpoint descri
 Source._State_ {vvert} _StateExtension_, +
 {nbsp}{nbsp}Destination._Machine_ {vvert} _MachinePolicy_,
 Destination._State_ {vvert} _StateExtension_), +
-i.e. the Machines and States of both source and destination CLs must be compatible.
+i.e., the Machines and States of both source and destination CLs must be compatible.
 
 If the transfer is not allowed, then both CLs transition to Error State _Invalid_.
 
@@ -1931,16 +1931,16 @@ Some generic rules however apply:
 
 . A field configured by a SKID is never importable.
 
-. The most common case which is always allowed is when moving a computed shared secret
+. The most common case, which is always allowed, is moving a computed shared secret
 from a Machine implementing a public key agreement scheme into the key field of a Machine
 implementing a symmetric key encryption scheme.
 In order for the transfer to occur, the source Machine must be in a state where it can export
-some data either by repeated `ace.exec` instructions or because it has generated an explicit
+some data either by repeated `kl.exec` instructions or because it has generated an explicit
 shared secret. The destination Machine must be in State _Ready_.
 Both `length` and the source field's length must be at
 least as long as the destination field, and if the latter is `b` bytes long, exactly `b`
 bytes are produced by the source Machine and copied into the key field of the
-target Machine.  Such cases are always allowed.
+target Machine. Such cases are always allowed.
 
 Checks:::
 The checks of Rule <<KLEE-SGR-gate-order>> apply to both CLs. Then, each check being applied to
@@ -2201,10 +2201,10 @@ When a CL is being provisioned, exported, or imported, it is in one of the follo
 |===
 | Value    | Mnemonic                   | Description
 |   56     | `kl_cfg_provisioning`     | The CL is being configured.
-|   57     | `kl_cfg_exporting`        | The CL, which was in a _Valid_ state, has been placed in exporting mode, i.e., its contents have been encrypted and authenticated for export.
-|   58     | `kl_cfg_importing`        | The CL, which was in a _Valid_ state, has been placed in importing mode.
+|   57     | `kl_cfg_exporting`        | The CL, which was in a Valid State, has been placed in exporting mode, i.e., its contents have been encrypted and authenticated for export.
+|   58     | `kl_cfg_importing`        | The CL, which was in a Valid State, has been placed in importing mode.
 |   59     | `kl_cfg_ppi_exporting`    | The CL, whose base operation is a provisioning, has been placed in exporting mode; its image follows the format of a PI.
-|   60     | `kl_cfg_ppi_importing`    | Such an image is being reimported.
+|   60     | `kl_cfg_ppi_importing`    | Such an image is being re-imported.
 |  61-63   | (Reserved)                 | Reserved.
 |===
 
@@ -2280,7 +2280,7 @@ INSERT TIKZ HERE
 ....
 ////
 
-The following rules are generic and apply to all Machines (*SGR* means "State-Specific General Rules"):
+The following rules are generic and apply to all Machines (*SGR* means “State-Specific General Rules”):
 
 [horizontal]
 SGR1:: The MDH's _State_ field reflects the current state whenever the CC is in _Ready_, _Success_, _Failure_, or any Error State.
@@ -2341,13 +2341,13 @@ SGR13:: The MDH of a CL in the _Unconfigured_ State can be read using `kl.getmd*
 SGR14:: Exporting a CL in an Error State exports only the MDH (all fields and values), and requires no
 `kl.mgmt`:
 The MDH of a CL in an Error State is read by software using `kl.getmd*` (<<KLEE-instruction-getmd>>) and stored to memory.
-The image can be reimported with a single `kl.mgmt`, allowing software to take appropriate actions even after a context switch.
+The image can be re-imported with a single `kl.mgmt`, allowing software to take appropriate actions even after a context switch.
 
 SGR15:: If a CL is in any Error State, it can still be reconfigured, cloned, or cleared;
 apart from clearing, `kl.setst` can only be used to change the Error State.
 
 [[KLEE-SGR-usage-cr-error-state,SGR16]] SGR16:: Attempts to _use_ a CL in any Error State will not perform any operation, and in particular leave the _State_ field unchanged.
-Such an attempt can be considered an operation that would cause a transition to  Error State `kl_state_invalid`, so the _State_ field is left unchanged to allow software to address the original error condition. No history of Error States is maintained by the architecture.
+Such an attempt can be considered an operation that would cause a transition to Error State `kl_state_invalid`, so the _State_ field is left unchanged to allow software to address the original error condition. No history of Error States is maintained by the architecture.
 +
 A usage instruction with an output operand that performs no operation under this Rule or under Rule <<KLEE-SGR-gate-order>> (Error State, expiration), or that transitions its CL to an Error State during execution, writes zeros to every byte of its output window that it has not written: elements `vstart` to `vl` − 1 of `Vd` for a vector output, bytes [`klstart`, `kliobuftop`) for a KLIOBUF output. An in-place operation thus never leaves its input in place of the output it did not produce.
 
@@ -2431,7 +2431,7 @@ exceptions.
 
 [horizontal]
 State change rule for exceptions:: An illegal- or virtual-instruction exception, or a KLEE
-exception other tha `kl_exc_fatal`, makes no change to KLEE state, except the zeroizing of the
+exception other than `kl_exc_fatal`, makes no change to KLEE state, except the zeroizing of the
 target CL by an opening `kl.mgmt`, which is performed even if the instruction later raises an
 exception (<<KLEE-CL-management>>). `kl_exc_fatal` resets the KLEE state (_Fatal Conditions_ below).
 
@@ -2549,7 +2549,7 @@ Privileged Architecture, the KLEE exceptions among them are replaced as
   <<KLEE-CSK-requirements>> does not exempt, while no CSK is established or the `mklcsk` group is
   only partially written (<<KLEE-CSR-mklcsk>>).
 . *CL marked _Off_.* `kl_exc_CL_off`, on any access to the CL that <<KLEE-CSR-lclstatus>> does not
-  exempt, before any condition that depends on its contents.  M-mode resolves it or forwards it to
+  exempt, before any condition that depends on its contents. M-mode resolves it or forwards it to
   the mode that owns the _Off_ field.
 . *Usage Control.* `kl_exc_privilege_violation`, for a usage-controlled instruction in a mode that
   the _UsagePolicy_ excludes (Rule <<KLEE-SGR-usage-policy>>), and for any use, cloning or
@@ -2841,7 +2841,7 @@ In keeping with RISC-V philosophy, KLEE splits complex CL management operations 
 
 This has several effects:
 
-. The state machine for managing keys and algorithms, hidden from software in key-protection solutions on other CISC architectures (cf cite:[IBM-z-arch] “Protection of Cryptographic Keys” or cite:[intel-keylocker]), is exposed to software.
+. The state machine for managing keys and algorithms, hidden from software in key-protection solutions on other CISC architectures (cf. cite:[IBM-z-arch] “Protection of Cryptographic Keys” or cite:[intel-keylocker]), is exposed to software.
 Moving its sequencing out of hardware nevertheless significantly simplifies the hardware. However, the exposure may make the state machine managed by software more complex, and increase the set of rules the hardware must enforce, since management operations must withstand malicious attempts to tamper with them.
 . Management sequences can be interrupted between instructions by interrupts and exceptions.
 Explicit support is therefore required for context switching, process and virtual machine migration, hibernation, and interoperability between KLEE implementations.
@@ -2855,9 +2855,9 @@ This section describes how the KLEE ISA supports management of CLs and SCCs for 
 
 KLEE defines three external CC formats:
 
-. The _Provisioning Input_ (PI), loaded into a CL to create a CC; and
+. The _Provisioning Input_ (PI), loaded into a CL to create a CC.
 . The _Sealed Cryptographic Context_ (SCC), an encrypted and authenticated representation of a CC used when exporting a CL to memory for later import.
-. The _Partially Configured Cryptographic Context_ (PCCC), which is used to export a CL in the case a management operation has been preempted in order to be able to reimport its contents for a later resumption of the interrupted operation. Its format is identical to that of a PI or an SCC,
+. The _Partially Configured Cryptographic Context_ (PCCC), which is used to export a CL when a management operation has been preempted, in order to be able to re-import its contents for a later resumption of the interrupted operation. Its format is identical to that of a PI or an SCC,
 depending on the base type of the CL's Configuration State (see <<KLEE-nested-state-base-types>>), except that no additional encryption or authentication is applied.
 
 {empty}
@@ -2886,7 +2886,7 @@ Up to five sections, in this order:
 | Section | Section Name | Size                 | Description
 | 1       | `MDH`        | 128 bits             | See <<KLEE-Metadata>>.
 | 2       | `SIV`        | 128 bits             | Authentication tag for `MDH`, the Locality Secrets its _Locality_ names, and `Content1` (<<KLEE-SCC-export>>).
-| 3       | `IMPQUAL`    | 128 bits, if present | Identifies the implementation of the KLEE Unit. Non-authoritative and ignored when _ADSDropped_ = 1.
+| 3       | `IMPQUAL`    | 128 bits, if present | Identifies the implementation of the KLEE unit. Non-authoritative and ignored when _ADSDropped_ = 1.
 | 4       | `SIV2`       | 128 bits, if present | Authentication tag for `IMPQUAL`, `SIV` and `Content2`. Non-authoritative and not verified when _ADSDropped_ = 1.
 //
 | 5.a
@@ -3072,7 +3072,7 @@ NOTE: In the case we are starting an import process, `ml` must be first saved by
 `ml` is then provided to the `kl.mgmt` operation used to complete the process in order to restore the _State_ the CL was in before the import process started.
 
 A `kl.mgmt` of Form A, C or D is used to start a provisioning, resp., import process and provide `ml`.
-It performs following operations:
+It performs the following operations:
 
 .. The target CL is zeroized. Bytes of the serialized `Content` that a management operation has not yet written read as zero through every architectural access (`kl.store`, `kl.mv`, verbatim export).
 .. If `#immed7` = `kl_cfg_importing` and `ml`._State_ is an Error State, the CL is immediately
@@ -3089,7 +3089,7 @@ It performs following operations:
 .. In case of *provisioning*:
 ... `ml`._State_ must be _Unconfigured_, else the Metadata is invalid (<<KLEE-MVR-open>>). _State_ is initially set to _Unconfigured_. This means that during the pre-flight checks described below, _State_ is _Unconfigured_ until it is successfully configured.
 ... _StateExtension_ and _MachineUse_ are set to 0; the values in the PI are ignored.
-... `_AuxDataLen_` and `_ADSDropped_` must be 0. If either is non-zero in the MDH of a PI,
+... _AuxDataLen_ and _ADSDropped_ must be 0. If either is non-zero in the MDH of a PI,
 the CL is transitioned to Error State _Invalid_ (which is a Complete State) and the instruction terminates.
 .. If `ml` is invalid Metadata (see <<KLEE-MVR-open>>), the CL is transitioned to Error State _Invalid_.
 .. The implementation attempts to allocate CLF capacity according to the requirements of the _Machine_, _MachinePolicy_, and _SCProtection_ fields of the MDH, as prescribed by <<KLEE-length-rule>>. No other field must affect the amount of capacity required.
@@ -3114,7 +3114,7 @@ the entire MDH.
 Let `ml` <- the MDH of the CL.
 Software must first save this value in its local state to restore its _State_ when completing the export process.
 `kl.mgmt` can be of Form A, C or D; its auxiliary input is ignored.
-`kl.mgmt` performs following operations:
+`kl.mgmt` performs the following operations:
 
 .. If `ml`._State_ is _Unconfigured_, then: an illegal-instruction exception is raised.
 
@@ -3150,7 +3150,7 @@ which restores the CL's _State_ to the value that field held when the management
 No other field of the MDH is written from `ml`.
 
 When an SCC import or CL export completes, authentication is checked
-only if setting CL.MDH._State_ `ml`._State_  restores a Complete State.
+only if setting CL.MDH._State_ to `ml`._State_ restores a Complete State.
 The probability of accepting an incorrect _State_ is negligible.
 A nested completion only checks the base type and does not perform any authentication.
 
@@ -3170,7 +3170,7 @@ Completing a provisioning requires _AuxDataLen_ = 0 and _ADSDropped_ = 0; if CL.
 The operation makes the provisioned CL available to software by
 
 ... For _KeyType_ = 1, generating the key for the all-ones SKID (<<KLEE-KeyType-field>>) or applying the SKID resolution of <<KLEE-system-keys>>;
-... Performing any necessary readjustment of the CL's content to turn it into the format internally consumed by the KLEE Unit; and
+... Performing any necessary readjustment of the CL's content to turn it into the format internally consumed by the KLEE unit; and
 ... Setting _State_ to _Ready_, and _StateExtension_ and _MachineUse_ to 0.
 
 A process may be preempted during a CL's provisioning.
@@ -3192,7 +3192,7 @@ The semantics are:
 .... CL.MDH._State_ is set to `ml`._State_.
 .... The KLEE unit decrypts and authenticates the CL's content.
 .... If authentication fails, the target CL is transitioned to Error State _Authentication Failed_. No exception is raised. Otherwise, if _KeyType_ = 1, the SKID is resolved and the narrowing of <<KLEE-system-keys>> is applied.
-.... The KLEE unit performs any necessary readjustment of the CL's content to turn it into the format internally consumed by the KLEE Unit.
+.... The KLEE unit performs any necessary readjustment of the CL's content to turn it into the format internally consumed by the KLEE unit.
 This makes the CL available to software.
 ... If `ml`._State_ is not a Complete State (we are either importing the export of a not fully configured CL or a nested CL export):
 .... CL.MDH._State_ is set to `ml`._State_.
@@ -3212,7 +3212,7 @@ restores the internal state of the CL to the clear format it was in when the exp
 ... The contents are decrypted and authenticated as when completing an import, with the MDH held in the CL as `AD[0]` and _ADSDropped_ cleared in the copy consumed by first-segment authentication.
 ... If the `SIV` check fails, the CL transitions to Error State _Authentication Failed_ and the instruction terminates; no exception is raised. Otherwise, if _KeyType_ = 1, the SKID is resolved and the narrowing of <<KLEE-system-keys>> is applied.
 +
-NOTE: An implementation may instead restore the clear contents from an internal copy only if the outcome is identical: the copy is usable only while the CL, its MDH, `SIV` and, when _AuxDataLen_ ≥ 2, `IMPQUAL` and `SIV2` still hold the values written by the opening `kl.mgmt`, and `ml`._State_ equals the _State_ at that time.  The specification does not define any internal mechanisms by which an implementation can achieve this.
+NOTE: An implementation may instead restore the clear contents from an internal copy only if the outcome is identical: the copy is usable only while the CL, its MDH, `SIV` and, when _AuxDataLen_ ≥ 2, `IMPQUAL` and `SIV2` still hold the values written by the opening `kl.mgmt`, and `ml`._State_ equals the _State_ at that time. The specification does not define any internal mechanisms by which an implementation can achieve this.
 
 .. If `ml`._State_ is not a Complete State, no further changes to the CL's contents are made.
 --
@@ -3336,7 +3336,7 @@ for it.
 
 // ///////////////////////////////////////////////////////////////////////////
 
-==== SCC Export and Import Machines
+==== SCC Export and Import Algorithms
 
 The next few sections,
 <<KLEE-SCC-AEAD>> to <<KLEE-import-and-DIEL>>,
@@ -3359,7 +3359,7 @@ The differences with respect to AES-GCM-SIV are:
 This is intentional: the information needed to fully determine the lengths of
 all sections is already included in the MDH, and thus in the POLYVAL.
 . The optional Nonce is omitted.
-. A domain separation bit, `sep`, has been added to distinguish the two segments of the content that are sealed in a SCC: the fixed architecture-defined content (`sep` = 0) and the optional implementation-dependent content (`sep` = 1).
+. A domain separation bit, `sep`, has been added to distinguish the two segments of the content that are sealed in an SCC: the fixed architecture-defined content (`sep` = 0) and the optional implementation-dependent content (`sep` = 1).
 
 We define the Key Derivation (<<KLEE-SCC-key-derivation>>) and POLYVAL (<<KLEE-SCC-POLYVAL>>) functions first.
 The generation of an SCC from a CL (<<KLEE-SCC-export>>) and the import of an SCC into a CL (<<KLEE-SCC-import>>) are defined next.
@@ -3527,7 +3527,7 @@ function SCC_Decrypt(AD[] : array of bits(128), N : bits(96), sep: bits(1),
 NOTE:  *Design Rationale for the Sealing Construction.*
 The Locality Secrets are supplied to the AEAD as _associated data_ rather than mixed into the
 Context Sealing Key through a KDF. Both approaches bind the SCC to the Locality set, but
-using associated data is computationally less expensive. POLYVAL, requires one `Montmul`
+using associated data is computationally less expensive. POLYVAL requires one `Montmul`
 per 128-bit block and is thus significantly faster than most KDFs. This approach also
 avoids re-deriving `enc_key` and `auth_key` when the Locality set changes.
 Distinct Locality sets lead to the same SIV with collision probability 2^-126^.
@@ -3598,7 +3598,7 @@ If any of the two operations is not completed, various types of error conditions
 // ////////////////////////////////////////////////////////////////////
 
 [[KLEE-SCC-import]]
-==== Decryption and Authentication of a complete SCC into a CL
+==== Decryption and Authentication of a Complete SCC into a CL
 
 The following algorithm describes the import of the SCC of a fully configured CL as a whole.
 Steps 1 to 5 are performed by the `kl.mgmt Kd|K{Xd}, #kl_cfg_importing` that opens the import
@@ -3625,7 +3625,7 @@ Steps 1 to 5 are performed by the `kl.mgmt Kd|K{Xd}, #kl_cfg_importing` that ope
 .. `len_AD2` <- 2, ``AD2[0]`` <- ``K(i)``.`IMPQUAL`, ``AD2[1]`` <- `SIV`.
 .. If ``K(i)``.`IMPQUAL` = `zeros(32) @ klmimpid @ klmarchid @ klmvendorid` then:
 ... `len_PC2` <- the number of 128-bit blocks of `Content2` (Section 5.b of <<KLEE-SCC>>), that is ``K(i)``.MDH._AuxDataLen_ − 2.
-... `correct`, `K(i).Content2` <- `SCC_Decrypt(AD2, zeros(96), 1, `SIV2`, K(i).Content2, CSK, len_AD2, len_PC2)`.
+... `correct`, ``K(i)``.`Content2` <- `SCC_Decrypt(AD2, zeros(96), 1, SIV2, K(i).Content2, CSK, len_AD2, len_PC2)`.
 .. else:
 ... `correct` <- `false`.
  . If second-segment processing was attempted and `correct` {ne} `true`, drop `Content2` and set ``K(i)``.MDH._ADSDropped_ to 1.
@@ -3654,7 +3654,7 @@ The dependencies of the `kl.mgmt` instructions' timing are limited to very few f
 . Actual size of the SCC to export, including the implementation-dependent part.
 . `SIV` or `SIV2` authentication failures on import;
 . `IMPQUAL` mismatches on import; and
-. Attempts to import SCCs whose total length exceeds what the target machine supports for the given Machine.
+. Attempts to import SCCs whose total length exceeds what the target implementation supports for the given Machine.
   In this case, the implementation-dependent part is necessarily unsupported; it is skipped or only partially loaded, to be discarded without authenticating it; and only the architecture-dependent part is authenticated and decrypted (if the resulting _State_ is a Complete State) and used.
 
 Apart from these factors, only the number of blocks to process may affect the timing of the `kl.mgmt` instructions.
@@ -3712,7 +3712,7 @@ A handler must treat `klmanagedcr` as a hint and check the MDH of the CL it name
 [[KLEE-CSK-requirements]]
 === Architectural Requirements on the Context Sealing Key
 
-The KLEE unit must have a configured Context Sealing Key (CSK) before it can operate. Without an active CSK, every KLEE instruction and every KLEE CSR access raises `kl_exc_no_csk`, except access to the `mklcsk` CSR group, to the Locality Secret CSR groups (<<KLEE-CSR-locality-groups>>), which are configured independently of the CSK, and to the read-only identification CSRs `klmvendorid`, `klmarchid`, `klmimpid`, and `klmaxiobuflen` (<<KLEE-CSR-impl-ids>>, <<KLEE-CSR-klmaxiobuflen>>).  The latter CSRs remain readable to allow firmware to identify the KLEE unit without having to configure it.
+The KLEE unit must have a configured Context Sealing Key (CSK) before it can operate. Without an active CSK, every KLEE instruction and every KLEE CSR access raises `kl_exc_no_csk`, except access to the `mklcsk` CSR group, to the Locality Secret CSR groups (<<KLEE-CSR-locality-groups>>), which are configured independently of the CSK, and to the read-only identification CSRs `klmvendorid`, `klmarchid`, `klmimpid`, and `klmaxiobuflen` (<<KLEE-CSR-impl-ids>>, <<KLEE-CSR-klmaxiobuflen>>). The latter CSRs remain readable to allow firmware to identify the KLEE unit without having to configure it.
 
 A CSK can be set in one of four mutually exclusive ways:
 
@@ -3729,7 +3729,7 @@ Addressing and key transport are platform-specific and outside the scope of this
 
 The KLEE unit is immediately available under the third model; under the other models, it becomes available only after a CSK has been established. A hart reset resets the associated KLEE state (<<KLEE-reset-and-m-mode-only>>). In the first and second models, this includes the configurable CSK, leaving the unit unavailable until the CSK is re-established.
 
-NOTE: When the CSK is shared across devices, CCs intended to be device-bound must set `_Locality_` to include `ChipScrt` or `DevScrt`.
+NOTE: When the CSK is shared across devices, CCs intended to be device-bound must set _Locality_ to include _ChipScrt_ or _DevScrt_.
 
 Except for in M-mode and in the first model, CSK values must _never_ be readable by software in clear.
 //An implementation that permits CSK reprogramming via the `mklcsk` CSR group must follow the activation rules in <<KLEE-CSR-mklcsk>>.
@@ -3748,7 +3748,7 @@ M-mode firmware must account for the configuration model used for the CSK. Persi
 [[KLEE-reset-and-m-mode-only]]
 === KLEE Unit Reset and M-mode-only Harts
 
-An _KLEE unit reset_ of a hart resets that hart's KLEE architectural state
+A _KLEE unit reset_ of a hart resets that hart's KLEE architectural state
 (cf. <<KLEE-out-of-reset-unpriv>> and <<KLEE-out-of-reset-priv>>);
 in a KLEE unit shared by several harts it affects only that hart's state, any shared Locality Secrets excepted.
 A hart reset implies a KLEE unit reset of that hart, and so does a fatal condition, with the differences stated in <<KLEE-error-architecture>>.
