@@ -173,18 +173,17 @@ enables the following operations:
 * `kl.setst` (<<KLEE-instruction-setst>>) transitions a CC inside a CL between states of a Machine.
 * `kl.getmd*` (<<KLEE-instruction-getmd>>) reads the metadata of a CL; `kl.getmdl` is used to implement the pseudo-instruction `kl.getst` (<<KLEE-instruction-getst>>), which extracts the state of a CL from the MDH of a CL. `kl.getst` also provides error reporting.
 
-<<KLEE-instruction-extension-matrix>> is the authoritative statement of which
-extension defines each instruction and CSR.
+<<KLEE-instruction-extension-matrix>> is the authoritative statement of which extension defines each instruction and CSR.
 
 [[KLEE-instruction-extension-matrix]]
 .Instruction/CSR–extension matrix
 [width="100%",cols="<30%,^16%,<27%,<27%",options="header"]
 |===
-| Instruction / CSR         | Defined by         | With `Zklv` | With `Zklio`
-| `kl.load`, `kl.store`    | `Zklmem`        2+<| Always present: in hardware, or by trap-and-emulate, as per the conformance requirements above
+| Instruction / CSR        | Defined by         | With `Zklv` | With `Zklio`
+| `kl.size` / `kl.avail`   | `Zkl` common       | Forms A–C   | Forms A and B
 | `kl.exec`                | `Zkl` common       | Forms A–D   | Form D; Forms A–C via the substitutions of <<KLEE-usage-input-output>>
 | `kl.mv`                  | `Zklmv`         2+<| When `Zklmv` is implemented; mandatory in hardware if `Zklmem` is emulated
-| `kl.setst` (and the pseudo-instructions `kl.clear`, `kl.clearall`, `kl.clear.ads`) | `Zkl` common | Forms A–D | Forms A, B and D; Form C via substitution
+| `kl.setst` (and the pseudo-instructions `kl.clear`, `kl.clearall`, `kl.clearads`) | `Zkl` common | Forms A–D | Forms A, B and D; Form C via substitution
 | `kl.mgmt`                | `Zkl` common       | Forms A, C and D | Forms A and D; Form C via substitution
 | `kl.getmdl`, `kl.getmd` (and the pseudo-instructions `kl.getst`,
 `kl.getstx`)               | `Zkl` common    2+<| Available
@@ -194,7 +193,7 @@ extension defines each instruction and CSR.
 | `kl.restrictv`           | `Zklv`            | Available    | —
 | `kl.clone`               | `Zkl` common   2+<| Available
 | `kl.derive`              | `Zkl` common   2+<| All four `Form` values; the auxiliary input is always a GPR
-| `kl.size` / `kl.avail`   | `Zkl` common     | Forms A–C   | Forms A and B
+| `kl.load`, `kl.store`    | `Zklmem`        2+<| Always present: in hardware, or by trap-and-emulate, as per the conformance requirements above
 | `kl.input`, `kl.output`  | `Zklio`          | —           | Available
 | `klmvendorid`, `klmarchid`, `klmimpid`,
 `klmaxiobuflen`            | `Zkl` common  2+<| Always present
@@ -281,7 +280,7 @@ The KLEE implementation must zeroize the KLEE state on power up.
 The software stack should also explicitly clear all KLEE state at power down, to cause the implementation to zeroize the contents of all CLs.
 
 The KLEE unit holds three 128-bit registers which hold authentication data (the `SIV`, `IMPQUAL`, and `SIV2`) of the CL being currently managed. These registers are accessed using the `kl.load`, `kl.store` and `kl.mv` instructions, as the leading bytes of the image they transfer (<<KLEE-instruction-load>>).
-They are zeroized by an KLEE unit reset, by `kl.clearall`, and by an `kl.mgmt` that opens an import; the `kl.mgmt` that opens an export of a CL in a Valid State writes `SIV` and, when _AuxDataLen_ {ge} 2, `IMPQUAL` and `SIV2`.
+They are zeroized by an KLEE unit reset, by `kl.clearall`, and by a 'kl.mgmt` that opens an import; the `kl.mgmt` that opens an export of a CL in a Valid State writes `SIV` and, when _AuxDataLen_ {ge} 2, `IMPQUAL` and `SIV2`.
 
 [NOTE]
 ====
@@ -494,14 +493,14 @@ Error States 54 and 55, if defined, will not necessarily have a lower priority t
 .Global CC State Numbers: Error States
 [float="center",align="center",width="100%",cols="^7%,<30%,<16%,<47%",options="header"]]
 |===
-| Value  | Mnemonic                        | State Name              | Description
+| Value  | Mnemonic                       | State Name              | Description
 |  48    | `kl_state_unsupported`         | _Unsupported_           | Not supported (i.e., not implemented) Machine.
 |  49    | `kl_state_invalid`             | _Invalid_               | The CL has been invalidated by invalid Metadata or by an operation not permitted in its current State.
 |  50    | `kl_state_out_of_memory`       | _Out of Memory_         | Insufficient CLF memory for a configuration instruction. This may be set by privileged code if it does not handle CL allocation or fails to do so, returning an error instead.
 |  51    | `kl_state_mgmt_auth`           | _Authentication Failed_ | Authentication failure while completing an SCC import or a CL export.
 |  52    | `kl_state_priv_violation`      | _Privilege Violation_   | Violation of Usage Control policies.
 |  53    | `kl_state_expired`             | _Expired_               | The CL has expired.
-| 54, 55 | (Reserved)                      | {empty}                 | Reserved for future use.
+| 54, 55 | (Reserved)                     | {empty}                 | Reserved for future use.
 |===
 
 The rules governing the behavior of the KLEE architecure when interacting with CLs or SCCs in these states are defined in <<KLEE-State-management>>.
@@ -725,7 +724,7 @@ The CL also transitions to Error State _Invalid_ when, at completion of provisio
 
 All accesses to the `Content` of a CL have a 16-byte granularity: `kl.load`, `kl.store` and `kl.mv` transfer whole 16-byte blocks, and every offset and length they use, `klstart`, `content_size`, `max_admissible`, `image_size` and `image_end` (<<KLEE-instruction-load>>), is a multiple of 16 bytes.
 
-The effective address of an `kl.load` or an `kl.store` must be a multiple of 16 bytes.
+The effective address of a 'kl.load` or a 'kl.store` must be a multiple of 16 bytes.
 If it is not, no data is transferred and a load, resp. store, address-misaligned exception is
 raised on that address.
 A PI or an SCC must therefore be held at a 16-byte aligned address.
@@ -914,7 +913,7 @@ precede it:
 
 . For Forms A–C of `kl.exec`, `klstart` {ne} `vstart` {times} `SEW` / 8 at issue raises an
   illegal-instruction exception.
-. For an operand used as input, an `klstart` that is not an interruption point the Machine
+. For an operand used as input, a 'klstart` that is not an interruption point the Machine
   allows transitions the CL to Error State _Invalid_; for an operand used only as output, both this
   check and the empty-window rule yield no operation.
 
@@ -922,11 +921,11 @@ For the CL-directed transfers `kl.load`, `kl.store` and `kl.mv`, `klstart` is bo
 the length in bytes of the serialized image `S` (<<KLEE-instruction-load>>), determined from the
 first 8 bytes of the MDH; each of these instructions states the bound it applies.
 
-An _interruption point_ of a Machine in a given State is an `klstart` value that the Machine
+An _interruption point_ of a Machine in a given State is a 'klstart` value that the Machine
 can itself produce on a precise halt in that State: unless the Machine states a coarser or a
 different set, the whole multiples of its granularity within the transfer window, and 0; Procedure
 `process_VLI` (<<KLEE-process-VLI>>) defines its own, at the boundaries at which its inner loop
-yields. Writing an `klstart` value that is invalid or unsupported for the Machine, including one
+yields. Writing a 'klstart` value that is invalid or unsupported for the Machine, including one
 that is not an interruption point it allows, transitions the CL to Error State _Invalid_ when an
 instruction that relies on `klstart` is later issued or restarted.
 
@@ -945,7 +944,7 @@ once per-block state effects have been committed (Rule
 
 It contains the number of the currently managed CL, or 32 if no CL is currently being managed.
 If the CL it names ceases to be in a Configuration State otherwise than through a completing `kl.mgmt` — because it is
-cleared, also by the zeroizing step of an `kl.mgmt` whose opening then fails, because it is the destination of an `kl.clone`, or because it transitions to an Error State — `klmanagedcr` is set to 32.
+cleared, also by the zeroizing step of a 'kl.mgmt` whose opening then fails, because it is the destination of a 'kl.clone`, or because it transitions to an Error State — `klmanagedcr` is set to 32.
 Otherwise, an KLEE exception raised during a management operation that does not transition the CL to an Error State leaves `klmanagedcr` unchanged: the handler either resolves the condition or sets `klmanagedcr` to 32 itself.
 
 Internal values of `SIV`, `SIV2`, `IMPQUAL` are associated with this CL.
@@ -1060,7 +1059,7 @@ No instruction description restates them.
 | `kl.input`                  | Yes             | No  | No                   | Modifies the KLIOBUF and `klstart`, but no CL.
 | `kl.output`                 | Only `klstart` | Yes | No                   | Modifies `klstart`, but no CL.
 | `kl.clear`, `kl.clearall` | Yes             | No  | No                   .2+| Encodings of `kl.setst`; see its row above.
-| `kl.clear.ads`              | Yes             | No  | Yes
+| `kl.clearads`              | Yes             | No  | Yes
 5+| ^*^ means that the instruction is usable only in the States admitted by Rule <<KLEE-SGR-ace-load-mv-allowed>>, resp. Rule <<KLEE-SGR-ace-store-mv-allowed>>.
 |===
 
@@ -1102,13 +1101,13 @@ _This subsection is informative._
 Broadly speaking, and setting aside error handling, *Provisioning* consists of the following three steps:
 
 . Use `kl.mgmt` (<<KLEE-instruction-mgmt>>) to prepare a CL to be provisioned, check the validity of the MDH, and load the entire MDH in the CL.
-. Use `kl.load` (<<KLEE-instruction-load>>) to load the rest of the provisioning information into the CL.
+. Use a sequence of `kl.mv` (<<KLEE-instruction-mv>>) operations to load the rest of the provisioning information into the CL.
 . Use `kl.mgmt` to complete the provisioning process and make the CL available to software.
 
 *Importing* an SCC into a CL is similar:
 
 . Use `kl.mgmt` to prepare a CL to accept an SCC, check the validity of the MDH, and load the entire MDH in the CL.
-. Use `kl.load` to load the rest of the SCC, the authentication data first, into the CL.
+. Use a sequence of `kl.mv` (<<KLEE-instruction-mv>>) operations to load the rest of the SCC, the authentication data first, into the CL.
 . Use `kl.mgmt` to complete the import process by authenticating and decrypting the SCC, and make the CL available to software.
 
 *Exporting* a CL as an SCC consists of the following steps:
@@ -1116,7 +1115,7 @@ Broadly speaking, and setting aside error handling, *Provisioning* consists of t
 . Use `kl.getmd` or `kl.getmdv` (<<KLEE-instruction-getmd>>) to get the MDH of the CL to be exported, in order to determine its size and allocate resources.
 . Store the MDH into memory.
 . Use `kl.mgmt` to prepare a CL to produce an SCC. This includes encrypting its contents and computing the authentication tag(s).
-. Use `kl.store` (<<KLEE-instruction-store>>) to store the rest of the SCC, the authentication data first, to memory.
+. Use a sequence of `kl.mv` (<<KLEE-instruction-mv>>) operations to store the rest of the SCC, the authentication data first, to memory.
 . Use `kl.mgmt` to complete the export process by restoring the CL in a form available to software.
 
 A CL in an Error State takes shorter paths in both directions, since it is an MDH and nothing else
@@ -1146,7 +1145,7 @@ The values of these States are given in <<KLEE-SC-sealing-status>>.
 // ////////////////////////////////////////////////////////////////////
 
 [[KLEE-instruction-size]]
-==== kl.size/kl.avail
+==== kl.size and kl.avail
 
 _Synopsis_::
 `kl.size` returns the total size of a memory buffer that would be needed to store the data of a PI or SCC, in bytes, or 0 in case of error (such as unsupported Machine or invalid MDH).
@@ -1231,111 +1230,6 @@ Let `content2_size` = 16 * (_AuxDataLen_ - 2) if _AuxDataLen_ {ge} 2 and _ADSDro
 . If the MDH._State_ is `kl_cfg_provisioning` or `kl_cfg_ppi_{importing|exporting}`, or, for a supplied MDH, _Unconfigured_ (the MDH of a PI), then: 16 + `pi_content_size`.
 --
 
-// ////////////////////////////////////////////////////////////////////
-
-[[KLEE-instruction-load]]
-==== kl.load
-
-_Encoding_::
-`kl.load` is an I-type instruction.
-+
-[wavedrom, , svg]
-....
-{reg:[
-    { bits:  7, name: 0x2b, attr: ['custom-1'] },
-    { bits:  5, name: 'context', attr: ['Kd','K{Xd}'] },
-    { bits:  3, name: 'kl.load', attr: [0x0,0x1] },
-    { bits:  5, name: 'Xs1' },
-    { bits: 12, name: 'immed12' },
-]}
-....
-+
-`funct3` = `0b000` selects the immediate CL index in the `context` field and `funct3` = `0b001` selects the CL indexed by the GPR named by that field.
-
-_Mnemonics_::
-`kl.load{fournbsp}{nbsp}{nbsp}{nbsp}Kd|K{Xd}, %offset(Xs1)`
-
-_Description_::
-+
---
-`kl.load` imports the Content of a PI or an SCC into the CL `Kd` or `K{Xd}`.
-None of `kl.load`, `kl.store` and `kl.mv` transfers the MDH, which is carried by `kl.mgmt` and `kl.getmd*`. The authentication fields `SIV`, `IMPQUAL` and `SIV2` are the leading bytes of the image they transfer, and are held in the three per-hart registers of <<KLEE-CLF>> while the CL is under management.
-
-This instruction also requires that the CL be ready to accept information (being either provisioned or imported) and that the MDH has already been loaded by the `kl.mgmt` that opened the CL for provisioning or import (<<KLEE-instruction-mgmt>>).
-
-If the CL's _State_ is not one of the States admitted by Rule <<KLEE-SGR-ace-load-mv-allowed>> — which excludes every Complete State and the _Unconfigured_ State — or `klstart` is not a multiple of 16, an illegal-instruction exception is raised.
-
-Neither `kl.load` nor `kl.store` nor `kl.mv` is ever used on a CL in an Error State (Rule <<KLEE-SGR-error-state-CL-is-only-MDH>>, <<KLEE-error-state-transfer>>).
-
-Let `content_size` be the length in bytes of the serialized `Content` of the CL, namely the `Content` of a PI or an SCC,
-according to the base type of the image the CL holds (<<KLEE-length-rule>>).
-Since `content_size` must be determined by `kl.load` itself, the caller must have transferred at least the `MDH` into the CL beforehand.
-
-The instruction needs to know a _ContentOffset_ value of 0, 16, or 48, to signal the start of the `Content` in the external formats depending on the MDH, the current operation, and base type of the image the CL holds (<<KLEE-length-rule>>).
-Let `content2_size` = 16 * (_AuxDataLen_ - 2) if _AuxDataLen_ {ge} 2 and _ADSDropped_ = 0, and 0 otherwise.
-
-`_ContentOffset_` is computed using the same case distinction of `kl.size` (<<KLEE-instruction-size>>) but excluding the `Content` and the MDH._ADSDropped_ never affects _ContentOffset_.
-
-. If the MDH._State_ is a Valid State or `kl_cfg_{importing|exporting}`, then:
-  ..  If _AuxDataLen_ = 0, then: 16.
-  ..  If _AuxDataLen_ {ge} 2, then: 48.
-. If the MDH._State_ is `kl_cfg_provisioning` or `kl_cfg_ppi_{importing|exporting}`, then: 0.
-
-The _serialized image_ `S` of the CL is `Content`, `SIV {vvert} Content`, or `SIV {vvert} IMPQUAL {vvert} SIV2 {vvert} Content` for _ContentOffset_ = 0, 16, or 48, respectively, and
-`image_size` = _ContentOffset_ + `content_size`, which is the value `kl.size` reports minus 16.
-
-Let `max_admissible` be the length of the longest image of the CL's current base type that the implementation can hold for the Machine: for an image with a SCC base type, `content1_size` plus the largest `content2_size` the implementation supports (<<KLEE-instruction-size>>); for an image with a PI base type, `pi_content_size`. When _ADSDropped_ = 1, `content2_size` is zero, so no `Content2` byte is part of the image. Bytes of an SCC beyond `max_admissible` belong to an ADS that is discarded (<<KLEE-SCC-import>>) and are neither read from memory nor written to the CL.
-Let
-
-{fournbsp}{fournbsp}``image_end`` = _ContentOffset_ + `min(content_size, max_admissible)`.
-
-Offsets of `S` at or beyond `image_end` hold no CL data; they read as zero through every architectural access.
-`kl.load` transfers the offsets `[klstart, image_end)` of `S`: for each _j_ from `klstart` to `image_end` − 1, the byte at memory address ``Xs1 + %offset + ``_j_ is loaded into the _j_-th byte of `S`.
-`klstart` tracks a prefix-complete number of bytes loaded.
-If `klstart` {ge} `image_end`, nothing is transferred.
-
-Being related to accesses to a CL (<<KLEE-Memory-Alignment>>), `klstart`, `content_size`, `max_admissible`, `image_size` and `image_end` are all multiples of 16 bytes.
-
-When a system-defined format is used, the semantics of `kl.load` are implementation-dependent.
---
-
-// ////////////////////////////////////////////////////////////////////
-
-[[KLEE-instruction-store]]
-==== kl.store
-
-_Encoding_::
-`kl.store` is an S-type instruction.
-+
-[wavedrom, , svg]
-....
-{reg:[
-    { bits:  7, name: 0x2b, attr: ['custom-1'] },
-    { bits:  5, name: 'immed[4:0]' },
-    { bits:  3, name: 'kl.store', attr: [0x2,0x3] },
-    { bits:  5, name: 'Xs1' },
-    { bits:  5, name: 'context', attr: ['Ks2','K{Xs2}'] },
-    { bits:  7, name: 'immed[11:5]' },
-]}
-....
-
-_Mnemonic_::
-`kl.store %offset(Xs1), Ks2|K{Xs2}`
-(((KLEE, instruction, kl.store)))
-
-_Description_::
-+
---
-Let `S` be `Content` of the target CL `Ks2` or `K{Xs2}`, `SIV {vvert} Content`, or `SIV {vvert} IMPQUAL {vvert} SIV2 {vvert} Content`, depending on whether _ContentOffset_, computed as for `kl.load`, is 0, 16, or 48.
-
-The instruction exports raw data from `S`, starting with the first byte, to memory at address `%offset(Xs1)`.
-`klstart` tracks the prefix-complete number of bytes stored.
-Transfers follow the same constraints as those of `kl.load` (<<KLEE-instruction-load>>, <<KLEE-Memory-Alignment>>), with `image_size` and `image_end` as defined there. `kl.store` transfers offsets `[klstart, image_size)` of `S`: offsets below `image_end` are stored from the CL, offsets in `[image_end, image_size)` are stored as zero.
-That is, for each _j_ from `klstart` to `image_size` − 1, the _j_-th byte of `S` is stored at memory address ``Xs1 + %offset + ``_j_.
-If `klstart` {ge} `image_size`, nothing is transferred.
-
-As for `kl.load` (<<KLEE-instruction-load>>), a _State_ not admitted by Rule <<KLEE-SGR-ace-store-mv-allowed>>, or an `klstart` that violates those constraints, raises an illegal-instruction exception.
---
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -1411,9 +1305,9 @@ extract outputs from `kl.exec`, as described in <<KLEE-usage-input-output>>.
 [[KLEE-instruction-mv]]
 ==== kl.mv
 
-The `Zklmv` subextension adds dedicated move instructions between scalar/vector registers and a CL.
-The instructions in this extension are encoded as new forms of `kl.exec`:
-`r` is the CL indexing mode selector.
+// The `Zklmv` subextension adds dedicated move instructions between scalar/vector registers and a CL.
+// The instructions in this extension are encoded as new forms of `kl.exec`:
+// `r` is the CL indexing mode selector.
 
 _Mnemonics_::
 +
@@ -1452,9 +1346,44 @@ For forms B and D, the vector length must be a multiple of 16 bytes.
 _Description_::
 +
 --
-In each variant the CL is the one named by `rs1`.
+In each variant of the instruction the CL is the one named by `rs1`.
 
-*Bound.* Transfers follow the same constraints as those of `kl.load` (<<KLEE-instruction-load>>, <<KLEE-Memory-Alignment>>), with `S`, `image_end`, and _ContentOffset_ as defined there:
+`kl.mv` is never used on a CL in an Error State (Rule <<KLEE-SGR-error-state-CL-is-only-MDH>>, <<KLEE-error-state-transfer>>).
+
+`kl.mv` does not transfer the MDH, which is carried by `kl.mgmt` and `kl.getmd*`.
+The authentication fields `SIV`, `IMPQUAL` and `SIV2` are the leading bytes of the image they transfer, and are held in the three internal per-hart registers of <<KLEE-CLF>> while the CL is under management.
+
+This instruction requires that the CL be ready to accept information (being either provisioned or imported)
+or output its contents (being exported).
+If the CL's _State_ is not one of the States admitted by Rule <<KLEE-SGR-ace-load-mv-allowed>> — which excludes every Complete State and the _Unconfigured_ State — or `klstart` is not a multiple of 16, an illegal-instruction exception is raised.
+
+For provisioning or import, the instruction also requires that the MDH has already been loaded by the `kl.mgmt` that opened the CL for provisioning or import (<<KLEE-instruction-mgmt>>).
+
+Let `content_size` be the length in bytes of the serialized `Content` of the CL, namely the `Content` of a PI or an SCC,
+according to the base type of the image the CL holds (<<KLEE-length-rule>>).
+`content_size` is determined by `kl.mv`, from the `MDH` – either the `MDH` of the CL being exported, or the `MDH` provided by the called for provisioning or import.
+
+The instruction needs to know a _ContentOffset_ value of 0, 16, or 48, to signal the start of the `Content` in the external formats depending on the MDH, the current operation, and base type of the image the CL holds (<<KLEE-length-rule>>).
+Let `content2_size` = 16 * (_AuxDataLen_ - 2) if _AuxDataLen_ {ge} 2 and _ADSDropped_ = 0, and 0 otherwise.
+
+`_ContentOffset_` is determined as follows:
+// the same case distinction of `kl.size` (<<KLEE-instruction-size>>) but excluding the `Content` and the MDH._ADSDropped_ never affects _ContentOffset_.
+
+. If the MDH._State_ is a Valid State or `kl_cfg_{importing|exporting}`, then:
+  ..  If _AuxDataLen_ = 0, then: 16.
+  ..  If _AuxDataLen_ {ge} 2, then: 48.
+. If the MDH._State_ is `kl_cfg_provisioning` or `kl_cfg_ppi_{importing|exporting}`, then: 0.
+
+The _serialized image_ `S` of the CL is `Content`, `SIV {vvert} Content`, or `SIV {vvert} IMPQUAL {vvert} SIV2 {vvert} Content` for _ContentOffset_ = 0, 16, or 48, respectively, and
+`image_size` = _ContentOffset_ + `content_size`, which is the value `kl.size` reports minus 16.
+
+Let `max_admissible` be the length of the longest image of the CL's current base type that the implementation can hold for the Machine: for an image with a SCC base type, `content1_size` plus the largest `content2_size` the implementation supports (<<KLEE-instruction-size>>); for an image with a PI base type, `pi_content_size`. When _ADSDropped_ = 1, `content2_size` is zero, so no `Content2` byte is part of the image. Bytes of an SCC beyond `max_admissible` belong to an ADS that is discarded (<<KLEE-SCC-import>>) and are neither read from memory nor written to the CL.
+Let
+
+{fournbsp}{fournbsp}``image_end`` = _ContentOffset_ + `min(content_size, max_admissible)`.
+
+Offsets of `S` at or beyond `image_end` hold no CL data; they read as zero through every architectural access.
+
 `kl.mv` transfers whole 128-bit blocks, never a part of one, and each block the variant would transfer lies either wholly below `image_end` or wholly at or beyond it.
 
 * A block at an offset below `image_end` is transferred.
@@ -1473,7 +1402,7 @@ Writes to, resp., reads of, an offset at or beyond `image_end` are ignored, resp
 
 The four variants are displayed in the following table.
 For all variants, if the CL's _State_ is not one of the values in the fourth column of its row,
-an illegal-instruction exception is raised. A vector variant for which `vl * (SEW/8)` is not a multiple of 16 raises an illegal-instruction exception; the V-enabled check is performed first. `vstart` must likewise point to a multiple of 16 bytes: a vector variant for which `vstart * (SEW/8)` is not a multiple of 16 raises an illegal-instruction exception. As for `kl.load` (<<KLEE-instruction-load>>), so does an `klstart` that violates the constraints above.
+an illegal-instruction exception is raised. A vector variant for which `vl * (SEW/8)` is not a multiple of 16 raises an illegal-instruction exception; the V-enabled check is performed first. `vstart` must likewise point to a multiple of 16 bytes: a vector variant for which `vstart * (SEW/8)` is not a multiple of 16 raises an illegal-instruction exception. As for `kl.load` (<<KLEE-instruction-load>>), so does a 'klstart` that violates the constraints above.
 
 [[KLEE-mv-variants]]
 .Variants of `kl.mv`
@@ -1589,6 +1518,37 @@ Error State _Invalid_. Some values require an auxiliary operand of 64 or 128 bit
 GPRs or in a vector register (group) `Vs`.
 --
 
+[[KLEE-instruction-clear]]
+===== kl.clear
+
+The instruction `kl.clear Kd|K{Xd}` is encoded as `kl.setst` (see <<KLEE-instruction-setst>>) with no auxiliary operands and the immediate for _State_ set to `kl_state_unconfigured` (as defined in <<KLEE-State-field>>).
+It marks it as _Unconfigured_ in its metadata, and releases the resources in the CLF.
+
+Clearing (i.e., unconfiguring) a CL that was not already _Unconfigured_, or whose `*lcrstatus` field in effect is _Off_ (<<KLEE-CSR-lcrstatus>>), sets the `*lcrstatus` fields in effect for the current privilege mode, and the `KLS` fields in effect, to _Dirty_. The CL's own _State_ field becomes _Unconfigured_.
+
+[[KLEE-instruction-clearall]]
+===== kl.clearall
+
+The instruction `kl.clearall` unconfigures all the CLs, as if calling `kl.clear` on each one, and the KLIOBUF, zeroing the buffer and setting
+`kliobuflen`, `kliobuftop` and `klstart` to 0, zeroizes the three authentication registers of <<KLEE-CLF>>, and writes 32 to `klmanagedcr`.
+
+`kl.clearall` is encoded as `kl.clear` with indirect CL addressing and `Xd` = `X0`.
+
+// ////////////////////////////////////////////////////////////////////
+
+[[KLEE-instruction-clearads]]
+===== kl.clearads
+
+The instruction `kl.clearads Kd|K{Xd}` clears any ADS from the target CL `Kd` or `K{Xd}`.
+
+This instruction is encoded as `kl.setst` (see <<KLEE-instruction-setst>>) with no auxiliary operands and the immediate for _State_ set to `kl_cfg_clear_ads`, i.e., the value 64.
+
+`kl.clearads` deletes any ADS from the target CL.
+This instruction is used when exporting a CL for use by some other target, possibly some different implementation.
+_AuxDataLen_ and _ADSDropped_ are set to 0. The operation therefore produces a more compact layout without ADS that a destination with a different KLEE Unit may have to drop anyway.
+Exporting a CL into a SCC in this state will result in an ADS-free SCC being generated.
+The first usage instruction that needs to access the ADS regenerates it.
+
 [[KLEE-instruction-mgmt]]
 ==== kl.mgmt
 
@@ -1624,7 +1584,7 @@ The following values of `#immed7` apply (<<KLEE-management-immeds>>):
 * 56 (`kl_cfg_provisioning`), 57 (`kl_cfg_exporting`) and 58 (`kl_cfg_importing`) open a
   provisioning, an export and an import, respectively. For 56 and 58 the instruction receives the
   MDH of the CL, as the Forms below supply it, and changes _State_ only after loading it.
-* 59–62 are reserved. _State_ takes 59 and 60 only as the result of an `kl.mgmt` with 57 or 58.
+* 59–62 are reserved. _State_ takes 59 and 60 only as the result of a 'kl.mgmt` with 57 or 58.
 * 63 (`kl_cfg_management_end`) completes the current management operation.
 
 The MDH is supplied as follows:
@@ -1711,6 +1671,31 @@ On RV32:
 
 * The semantics of `kl.getmdv` are the same as on RV64.
 --
+
+[[KLEE-instruction-getst]]
+===== kl.getst, kl.getstx
+
+The pseudo-instructions
+(((KLEE, instruction, kl.getst)))
+`kl.getst Xd, Ks|K{Xs}`
+(((KLEE, instruction, kl.getstx)))
+`kl.getstx Xd, Ks|K{Xs}`
+return the _State_ field, resp. the _StateExtension_ field, of the metadata of the source CL.
+This is useful to determine whether a CL is in an Error State, as defined in <<KLEE-State-field>>.
+
+`kl.getst` is implemented as a read of the source CL's metadata using `kl.getmdl`,
+followed by suitable shifting and masking instructions to extract the _State_ field.
+On RV64, `kl.getst` expands to
+
+. `kl.getmdl Xd, Ks` or `K{Xs}`
+. `srli  Xd, Xd, 19`
+. `andi  Xd, Xd, 0x3F`
+
+and `kl.getstx` to
+
+. `kl.getmdl Xd, Ks` or `K{Xs}`
+. `srli  Xd, Xd, 25`
+. `andi  Xd, Xd, 0x0F`
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -1939,7 +1924,7 @@ The instruction is an R-type instruction.
     { bits:  5, name: 'Xs2' },
     { bits:  2, name: 'R' },
     { bits:  1, name: 0x1 },
-    { bits:  2, name: 'Form' },
+    { bits:  2, name: 0x0 },
     { bits:  2, name: 0x2, attr: ['funct2'] },
 ]}
 ....
@@ -1947,19 +1932,6 @@ The instruction is an R-type instruction.
 Bits [26:25], i.e., field `R`, are encoded as for `kl.clone` (<<KLEE-instruction-clone>>).
 
 The auxiliary input is always a GPR: `kl.derive` has no form without one and no vector form.
-
-Bits [29:28], i.e., field `Form`, select which endpoint is used on each side:
-
-[[KLEE-derive-forms]]
-.Endpoints selected by the `Form` field of `kl.derive`
-[float="center",align="center",width="100%",cols="^10%,<40%,<40%",options="header"]
-|===
-| `Form` | Source, in CL `Ks1`{nbsp}\|{nbsp}``K{Xs1}`` | Destination, in CL `Kd`{nbsp}\|{nbsp}``K{Xd}``
-|  `00`  | Exportable field `i`                        | Importable field `j`
-|  `01`  | Output of an `kl.exec` (`i` is zero)       | Importable field `j`
-|  `10`  | Exportable field `i`                        | Input of an `kl.exec` (`j` is zero)
-|  `11`  | Output of an `kl.exec` (`i` is zero)       | Input of an `kl.exec` (`j` is zero)
-|===
 --
 
 _Description_::
@@ -1970,66 +1942,79 @@ destination CL without making them visible to software: the output of one Machin
 input, possibly a key, of another. The source and the destination CLs must be different,
 otherwise an illegal-instruction exception is raised.
 
-The auxiliary GPR carries `length`, a number of bytes, and the indices `i` and `j`:
+The auxiliary GPR carries `length`.
 
-* On RV64, `Xs2` = `length << 32 {vvert} i << 16 {vvert} j`.
-* On RV32, the GPR pair `X[s2+1] @ X[s2]` (Rule <<KLEE-GR-multiple-GPRs>>), with
-  `X[s2]` = `i << 16 {vvert} j` and `X[s2+1]` = `length`.
+Both source and destination CLs must be in specific States: the source must be in a state
+where it can export data, and the destination must be in a state where it can import data.
 
-//
+A transfer may occur only if the architecture allows it for the _endpoint descriptor_
+(Source._Machine_{vvert}_MachinePolicy_,
+Source._State_{vvert}_StateExtension_,
+Destination._Machine_{vvert}_MachinePolicy_,
+Destination._State_{vvert}_StateExtension_),
+i.e. the Machines and States of both source and destination CLs must be compatible.
 
-Allowed pairs:::
-The number `i` selects an _exportable field_ of the source CC, a field its Machine makes available as the
-source of an `kl.derive`, and `j` an _importable field_ of the destination CC, one made
-available as the destination; each Machine numbers these fields from 1, and 0 is used on the
-side that carries an `kl.exec` endpoint.
-+
-A field from the System Key Store is never exportable,
-a field configured by a SKID is never importable, and a field that its Machine does not return
-to software through `kl.exec` may be the source of a `Form` `00` transfer only.
-+
-A transfer is allowed only if the specification lists its (source, destination) endpoint pair,
-or if software can obtain its data through `kl.exec` and its destination accepts arbitrary input
-through `kl.exec`, as for the output of a XOF squeezed into a state implemented by Procedure
-`process_VLI` (<<KLEE-process-VLI>>) or into a multi-block `kl.exec`. Either way, the block sizes
-of the endpoints, in their current States, must be compatible: one divides the other, one endpoint
-transfers any number of bytes directly from or to a field, or the destination is a `process_VLI`
-state. A listed pair depends on both Machines; it defines a minimum transfer length and may
-define an upper limit, a granularity, and constraints on the _UsagePolicy_, _Locality_,
-_ExpirationDate_ and _SCProtection_ of the destination CL, to which the source Machine may add.
+If the transfer is not allowed, then both CLs transition to Error State _Invalid_.
 
-Checks:::
-The checks of Rule <<KLEE-SGR-gate-order>> apply to both CLs. Then, each check being applied to
-the source before the destination, and with nothing transferred on any failure:
-+
-. The _State_ and _StateExtension_ of each CL must admit its endpoint, and a destination whose
-  key is written must be in State _Ready_; otherwise the offending CL, or both, transition to
-  Error State _Invalid_.
-. An index that names no allowed endpoint transitions its CL to Error State _Invalid_; a transfer that is
-  not allowed, including one that the field rules above exclude, transitions both CLs to
-  Error State _Invalid_.
-. A destination that violates the constraints of the pair or of the source Machine
-  transitions to Error State _Invalid_.
-. A transfer whose effective length (see <<KLEE-derive-rule-both-fixed-size>>) is below the pair's minimum, or violates its upper limit or granularity, transitions the destination CL to Error State _Invalid_.
+The exact semantics of the transfer, updates to the states of the two CRs as well as
+to `klstart`, `vstart`, and any other state of the hart are defined by the architecture
+for each endpoint descriptor.
 
-[[KLEE-derive-rule-both-fixed-size,Transfer Size Rules]]
-Transfer:::
-A destination field of `dest_length` bytes receives `eff_length` = min(`length`, `dest_length`)
-bytes and is zero-filled beyond them; any other destination receives `eff_length` = `length`
-bytes. `length` = 0 transfers nothing and, if the checks above pass, changes no state.
-+
-The source supplies `eff_length` bytes: the transferred part of a field is truncated to `eff_length` bytes if longer or zero-padded if shorter; a source producing output in blocks of `b` bytes produces the blocks needed to cover
-them, and the unused part of the last block is discarded. No mechanism to save the unused part is provided unless it is part of the Machine.
-+
-The destination consumes the bytes
-in its blocks of `b'` bytes, a field being a single block, and a final block shorter than `b'`
-is supplied as an `kl.exec` with that shorter input would be. Each endpoint advances as the
-`kl.exec` operations producing or consuming these blocks would advance it; a destination
-state implemented by `process_VLI` may be left open and continued with `kl.exec`.
-+
-The interruption points of an `kl.derive` (<<KLEE-CSR-klstart>>) are the `klstart` values that
-are interruption points of both endpoints, each in its current State.
+The most common case is when moving a shared secret from a Machine implementing a
+public key agreement scheme into the key field of a Machine implementing a symmetric key
+encryption scheme. In this case both `length` and the source field's length must be at
+least as long as the destination field, and if the latter is `b` bytes long, exactly `b`
+bytes are produced by the source Machine and copied into the key field of the
+target Machine.  Such cases are always allowed.
 --
+
+// Allowed pairs:::
+// The number `i` selects an _exportable field_ of the source CC, a field its Machine makes available as the
+// source of a 'kl.derive`, and `j` an _importable field_ of the destination CC, one made
+// available as the destination; each Machine numbers these fields from 1, and 0 is used on the
+// side that carries a 'kl.exec` endpoint.
+// +
+// A field from the System Key Store is never exportable,
+// a field configured by a SKID is never importable, and a field that its Machine does not return
+// to software through `kl.exec` may be the source of a `Form` `00` transfer only.
+// +
+//
+// or if software can obtain its data through `kl.exec` and its destination accepts arbitrary input
+// through `kl.exec`, as for the output of a XOF squeezed into a state implemented by Procedure
+// `process_VLI` (<<KLEE-process-VLI>>) or into a multi-block `kl.exec`. Either way, the block sizes
+// of the endpoints, in their current States, must be compatible: one divides the other, one endpoint
+// transfers any number of bytes directly from or to a field, or the destination is a `process_VLI`
+// state. A listed pair depends on both Machines; it defines a minimum transfer length and may
+// define an upper limit, a granularity, and constraints on the _UsagePolicy_, _Locality_,
+// _ExpirationDate_ and _SCProtection_ of the destination CL, to which the source Machine may add.
+
+//Checks:::
+//The checks of Rule <<KLEE-SGR-gate-order>> apply to both CLs. Then, each check being applied to
+//the source before the destination, and with nothing transferred on any failure:
+//+
+//. The _State_ and _StateExtension_ of each CL must admit its endpoint, and a destination whose
+//  key is written must be in State _Ready_; otherwise the offending CL, or both, transition to
+//  Error State _Invalid_.
+//. A destination that violates the constraints of the pair or of the source Machine
+//  transitions to Error State _Invalid_.
+//. A transfer whose effective length (see <<KLEE-derive-rule-both-fixed-size>>) is below the pair's minimum, or violates its upper limit or granularity, transitions the destination CL to Error State _Invalid_.
+// [[KLEE-derive-rule-both-fixed-size,Transfer Size Rules]]
+// Transfer:::
+// A destination field of `dest_length` bytes receives `eff_length` = min(`length`, `dest_length`)
+// bytes and is zero-filled beyond them; any other destination receives `eff_length` = `length`
+// bytes. `length` = 0 transfers nothing and, if the checks above pass, changes no state.
+// +
+// The source supplies `eff_length` bytes: the transferred part of a field is truncated to `eff_length` bytes if longer or zero-padded if shorter; a source producing output in blocks of `b` bytes produces the blocks needed to cover
+// them, and the unused part of the last block is discarded. No mechanism to save the unused part is provided unless it is part of the Machine.
+// +
+// The destination consumes the bytes
+// in its blocks of `b'` bytes, a field being a single block, and a final block shorter than `b'`
+// is supplied as a 'kl.exec` with that shorter input would be. Each endpoint advances as the
+// `kl.exec` operations producing or consuming these blocks would advance it; a destination
+// state implemented by `process_VLI` may be left open and continued with `kl.exec`.
+// +
+// The interruption points of a 'kl.derive` (<<KLEE-CSR-klstart>>) are the `klstart` values that
+// are interruption points of both endpoints, each in its current State.
 
 ////
 
@@ -2047,7 +2032,7 @@ leaks the intermediate value `V1` to software. The single instruction
 performs the same two operations, advancing both state machines exactly as the two `kl.exec`
 instructions would, and the intermediate value never leaves the KLEE unit.
 
-. *Form `01` — output of an `kl.exec` into a secret.* A key agreed or derived by the Machine in
+. *Form `01` — output of a 'kl.exec` into a secret.* A key agreed or derived by the Machine in
 `K1` becomes a key of the CC in `K2`. `K2` is provisioned beforehand in the ordinary way — a CC
 whose _KeyType_ selects a randomly generated key serves as a placeholder — and must be in State
 _Ready_; the `kl.derive` then overwrites its secret field `j`.
@@ -2056,7 +2041,7 @@ _Ready_; the `kl.derive` then overwrites its secret field `j`.
 another, for instance to give two CCs with different _UsagePolicy_ or _Locality_ the same
 underlying key. Both indices are significant here. This is the shape used by <<KLEE-PQC-ML-KEM>>.
 
-. *Form `10` — secret into the input of an `kl.exec`.* A stored secret is absorbed by the Machine
+. *Form `10` — secret into the input of a 'kl.exec`.* A stored secret is absorbed by the Machine
 in `K2`, for instance as the key of a MAC or as a customization string, without being materialized
 in a register.
 
@@ -2067,8 +2052,101 @@ open-destination rules of <<KLEE-instruction-derive>> apply.
 
 // ////////////////////////////////////////////////////////////////////
 
+[[KLEE-instructions-memory]]
+==== Memory Instructions
+
+[[KLEE-instruction-load]]
+===== kl.load
+
+_Encoding_::
+`kl.load` is an I-type instruction.
++
+[wavedrom, , svg]
+....
+{reg:[
+    { bits:  7, name: 0x2b, attr: ['custom-1'] },
+    { bits:  5, name: 'context', attr: ['Kd','K{Xd}'] },
+    { bits:  3, name: 'kl.load', attr: [0x0,0x1] },
+    { bits:  5, name: 'Xs1' },
+    { bits: 12, name: 'immed12' },
+]}
+....
++
+`funct3` = `0b000` selects the immediate CL index in the `context` field and `funct3` = `0b001` selects the CL indexed by the GPR named by that field.
+
+_Mnemonics_::
+`kl.load{fournbsp}{nbsp}{nbsp}{nbsp}Kd|K{Xd}, %offset(Xs1)`
+
+_Description_::
++
+--
+`kl.load` imports the Content of a PI or an SCC into the CL `Kd` or `K{Xd}`.
+
+`kl.load` is never used on a CL in an Error State (Rule <<KLEE-SGR-error-state-CL-is-only-MDH>>, <<KLEE-error-state-transfer>>).
+
+`kl.load` does not transfer the MDH, which is carried by `kl.mgmt`.
+The authentication fields `SIV`, `IMPQUAL` and `SIV2` are the leading bytes of the image transferred by `kl.load`, and are loaded in the three internal per-hart registers of <<KLEE-CLF>> while the CL is under management.
+
+Transfers follow the same constraints as those of `kl.mv` (<<KLEE-instruction-mv>>, <<KLEE-Memory-Alignment>>), with `S`, `image_end`, and _ContentOffset_ as defined there.
+
+`kl.load` transfers the offsets `[klstart, image_end)` of `S`: for each _j_ from `klstart` to `image_end` − 1, the byte at memory address ``Xs1 + %offset + ``_j_ is loaded into the _j_-th byte of `S`.
+`klstart` tracks a prefix-complete number of bytes loaded.
+If `klstart` {ge} `image_end`, nothing is transferred.
+
+Being related to accesses to a CL (<<KLEE-Memory-Alignment>>), `klstart`, `content_size`, `max_admissible`, `image_size` and `image_end` are all multiples of 16 bytes.
+
+When a system-defined format is used, the semantics of `kl.load` are implementation-dependent.
+--
+
+// ////////////////////////////////////////////////////////////////////
+
+[[KLEE-instruction-store]]
+===== kl.store
+
+_Encoding_::
+`kl.store` is an S-type instruction.
++
+[wavedrom, , svg]
+....
+{reg:[
+    { bits:  7, name: 0x2b, attr: ['custom-1'] },
+    { bits:  5, name: 'immed[4:0]' },
+    { bits:  3, name: 'kl.store', attr: [0x2,0x3] },
+    { bits:  5, name: 'Xs1' },
+    { bits:  5, name: 'context', attr: ['Ks2','K{Xs2}'] },
+    { bits:  7, name: 'immed[11:5]' },
+]}
+....
+
+_Mnemonic_::
+`kl.store %offset(Xs1), Ks2|K{Xs2}`
+(((KLEE, instruction, kl.store)))
+
+_Description_::
++
+--
+Let `S` be `Content` of the target CL `Ks2` or `K{Xs2}`, `SIV {vvert} Content`, or `SIV {vvert} IMPQUAL {vvert} SIV2 {vvert} Content`, depending on whether _ContentOffset_, computed as for `kl.load`, is 0, 16, or 48.
+
+`kl.store` is never used on a CL in an Error State (Rule <<KLEE-SGR-error-state-CL-is-only-MDH>>, <<KLEE-error-state-transfer>>).
+
+`kl.store` does not transfer the MDH, which is extracted from the CL by `kl.getmd*`.
+The authentication fields `SIV`, `IMPQUAL` and `SIV2` are the leading bytes of the image transferred by `kl.store`, and are taken from the three internal per-hart registers of <<KLEE-CLF>> while the CL is under management.
+
+Transfers follow the same constraints as those of `kl.mv` and `kl.load` (<<KLEE-instruction-mv>>, <<KLEE-Memory-Alignment>>), with `S`, `image_end`, and _ContentOffset_ as defined in the description of `kl.mv`.
+
+The instruction exports raw data from `S`, starting with the first byte, to memory at address `%offset(Xs1)`.
+`klstart` tracks the prefix-complete number of bytes stored.
+Transfers follow the same constraints as those of `kl.load` (<<KLEE-instruction-load>>, <<KLEE-Memory-Alignment>>), with `image_size` and `image_end` as defined there. `kl.store` transfers offsets `[klstart, image_size)` of `S`: offsets below `image_end` are stored from the CL, offsets in `[image_end, image_size)` are stored as zero.
+That is, for each _j_ from `klstart` to `image_size` − 1, the _j_-th byte of `S` is stored at memory address ``Xs1 + %offset + ``_j_.
+If `klstart` {ge} `image_size`, nothing is transferred.
+
+As for `kl.mv` and `kl.load` (<<KLEE-instruction-load>>), a _State_ not admitted by Rule <<KLEE-SGR-ace-store-mv-allowed>>, or a `klstart` that violates those constraints, raises an illegal-instruction exception.
+--
+
+// ////////////////////////////////////////////////////////////////////
+
 [[KLEE-instruction-input]]
-==== kl.input
+===== kl.input
 
 _Synopsis_::
 Load data into the KLIOBUF.
@@ -2112,7 +2190,7 @@ whereas
 Bytes below `klstart`,
 and bytes at or beyond min(`Xl`, `kliobuftop`), are not accessed on either side.
 If `Xl` = 0, or `klstart` {ge} min(`Xl`, `kliobuftop`), the operation transfers nothing.
-If `Xl` is greater than `kliobuftop`, only the bytes of the window are transferred; software can
+If `Xl` is greater tha 'kliobuftop`, only the bytes of the window are transferred; software can
 detect this case by comparing `Xl` with `kliobuftop`.
 
 The usage of `kl.input` and `kl.output` is explained in detail in
@@ -2122,7 +2200,7 @@ The usage of `kl.input` and `kl.output` is explained in detail in
 // ////////////////////////////////////////////////////////////////////
 
 [[KLEE-instruction-output]]
-==== kl.output
+===== kl.output
 
 _Synopsis_::
 Save the contents of the KLIOBUF to memory.
@@ -2155,101 +2233,6 @@ _Description_:: {empty}
 This is the output operation corresponding to `kl.input`.
 <<KLEE-iobuf-transfer-window>> of <<KLEE-instruction-input>> applies.
 --
-
-// ////////////////////////////////////////////////////////////////////
-
-[[KLEE-pseudo-instructions-detailed]]
-=== Pseudo-Instructions
-
-// ////////////////////////////////////////////////////////////////////
-
-[[KLEE-instruction-clear]]
-==== kl.clear, kl.clearall
-
-_Synopsis_::
-Clears and unconfigures a CL, or the KLEE state.
-
-_Mnemonic_::
-`kl.clear Kd|K{Xd}` +
-(((KLEE, instruction, kl.clear)))
-`kl.clearall`
-(((KLEE, instruction, kl.clearall)))
-
-_Encoding_::
-The pseudo-instructions `kl.clear`/`kl.clearall` are implemented as `kl.setst` (see <<KLEE-instruction-setst>>) with no auxiliary operands and the immediate for _State_ set to `kl_state_unconfigured` (as defined in <<KLEE-State-field>>).
-
-_Description_::
-+
---
-`kl.clear` clears and unconfigures the CL `Kd` or `K{Xd}`–and any internal copies thereof–, marks it as _Unconfigured_ in its metadata, and releases the resources in the CLF.
-
-Clearing (i.e., unconfiguring) a CL that was not already _Unconfigured_, or whose `*lcrstatus` field in effect is _Off_ (<<KLEE-CSR-lcrstatus>>), sets the `*lcrstatus` fields in effect for the current privilege mode, and the `KLS` fields in effect, to _Dirty_. The CL's own _State_ field becomes _Unconfigured_.
-
-`kl.clear` with indirect CL addressing and `Xd` = `X0` encodes `kl.clearall`.
-This instruction unconfigures all the CLs and the KLIOBUF, zeroing the buffer and setting
-`kliobuflen`, `kliobuftop` and `klstart` to 0, zeroizes the three authentication registers of <<KLEE-CLF>>, and writes 32 to `klmanagedcr`.
---
-
-// ////////////////////////////////////////////////////////////////////
-
-[[KLEE-instruction-clearads]]
-==== kl.clear.ads
-
-_Synopsis_::
-Clears any ADS from the target CL
-
-_Mnemonic_::
-`kl.clear.ads Kd|K{Xd}`
-(((KLEE, instruction, kl.clear.ads)))
-
-_Encoding_::
-This pseudo-instruction is implemented as `kl.setst` (see <<KLEE-instruction-setst>>) with no auxiliary operands and the immediate for _State_ set to `kl_cfg_clear_ads`, i.e., the value 64.
-
-_Description_::
-+
---
-`kl.clear.ads` deletes any ADS from the target CL.
-This instruction is used when exporting a CL for use by some other target, possibly some different implementation.
-_AuxDataLen_ and _ADSDropped_ are set to 0. The operation therefore produces a more compact layout without ADS that a destination with a different KLEE Unit may have to drop anyway.
-Exporting a CL into a SCC in this state will result in an ADS-free SCC being generated.
-The first usage instruction that needs to access the ADS regenerates it.
---
-
-// ////////////////////////////////////////////////////////////////////
-
-[[KLEE-instruction-getst]]
-==== kl.getst, kl.getstx
-
-_Synopsis_::
-Returns the _State_ field, resp. the _StateExtension_ field, of the metadata of the source CL.
-This is useful to determine whether a CL is in an Error State, as defined in <<KLEE-State-field>>.
-
-_Mnemonic_::
-`kl.getst Xd, Ks|K{Xs}`
-`kl.getstx Xd, Ks|K{Xs}`
-(((KLEE, instruction, kl.getstx)))
-
-_Encoding_::
-The operation is a pseudo-instruction.
-
-_Description_::
-+
---
-`kl.getst` is implemented as a read of the source CL's metadata using `kl.getmdl`,
-followed by suitable shifting and masking instructions to extract the _State_ field.
-For instance, on RV64, `kl.getst` can be implemented as
-
-. `kl.getmdl Xd, Ks` or `K{Xs}`
-. `srli  Xd, Xd, 19`
-. `andi  Xd, Xd, 0x3F`
-
-and `kl.getstx` as
-
-. `kl.getmdl Xd, Ks` or `K{Xs}`
-. `srli  Xd, Xd, 25`
-. `andi  Xd, Xd, 0x0F`
---
-
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -2365,18 +2348,18 @@ This ensures that these states can be unambiguously determined from the _State_ 
 [[KLEE-SGR-no-exec-in-ready,SGR2]] SGR2:: No `kl.exec` instruction may be executed in State _Ready_ unless the Machine explicitly allows it.
 Issuing one otherwise transitions the CL to Error State _Invalid_ (Rule <<KLEE-AGR-not-allowed-instructions>> in Book 2).
 
-SGR3:: Any transition listed in a Machine's specification may be triggered by performing an explicit `kl.setst` operation (<<KLEE-instruction-setst>>), or may be induced by certain conditions specified in the Machine's specification. Transitions to and between _Configuration_ States use `kl.mgmt`; transitions from a Configuration State use `kl.mgmt`, `kl.clear`, an Error State-setting `kl.setst`, or an `kl.clone` naming the CL as destination.
+SGR3:: Any transition listed in a Machine's specification may be triggered by performing an explicit `kl.setst` operation (<<KLEE-instruction-setst>>), or may be induced by certain conditions specified in the Machine's specification. Transitions to and between _Configuration_ States use `kl.mgmt`; transitions from a Configuration State use `kl.mgmt`, `kl.clear`, an Error State-setting `kl.setst`, or a 'kl.clone` naming the CL as destination.
 
 SGR4:: In a Valid State other than _Success_ and _Failure_, `kl.setst` may be issued with the immediate of the current State.
 When the Machine needs to prevent this, it transitions to a different State upon completing the instruction.
 
 [[KLEE-SGR-success-failure,SGR5]] SGR5:: In States _Success_ and _Failure_, only the following KLEE instructions are permitted: `kl.mgmt`, `kl.size`, `kl.avail`, `kl.setst` (subject to Rule <<KLEE-SGR-setst-in-success-failure>> below), `kl.getmd*`, `kl.getst`, `kl.clone`, `kl.restrict*`, and `kl.derive`.
-An `kl.exec` other than those permitted below, or an `kl.setst` not allowed by the architecture or by the Machine in its current _State_ and _StateExtension_, transitions the CL to Error State _Invalid_ (cf. Rule <<KLEE-AGR-not-allowed-instructions>> in Book 2).
+An `kl.exec` other than those permitted below, or a 'kl.setst` not allowed by the architecture or by the Machine in its current _State_ and _StateExtension_, transitions the CL to Error State _Invalid_ (cf. Rule <<KLEE-AGR-not-allowed-instructions>> in Book 2).
 +
 In State _Success_ `kl.exec` is also permitted solely to extract further output from a Machine that produces arbitrarily long output, such as a XOF.
 Also permitted is `kl.derive` in the following two cases: where the source endpoint is one of its exportable fields (<<KLEE-instruction-derive>>); and under the conditions of use of `kl.exec`.
 +
-A CL in State _Success_ or _Failure_ may not be the *destination* of an `kl.derive`.
+A CL in State _Success_ or _Failure_ may not be the *destination* of a 'kl.derive`.
 +
 NOTE: `ML-KEM.Decaps` (<<KLEE-PQC-ML-KEM>>) is the motivating case for this `kl.derive` behavior:
 it leaves the shared secret in `sharedkey` and
@@ -2397,7 +2380,7 @@ SGR8:: A transition from any valid state to _Ready_ using instruction `kl.setst`
 
 SGR9:: The CL state after `kl.setst` completes does not always match the instruction's immediate operand.
 Beyond Error State transitions, some operations determine the next state dynamically.
-For example, issuing `kl.setst` with an `kl_state_hash_verify` immediate and a verification parameter transitions the CL to either _Success_ or _Failure_.
+For example, issuing `kl.setst` with a 'kl_state_hash_verify` immediate and a verification parameter transitions the CL to either _Success_ or _Failure_.
 Instructions such as `kl.exec` may also cause _State_ changes.
 
 [[KLEE-SGR-clear-cr-content-error-state,SGR10]] SGR10:: Upon transitioning to an Error State, the Content of a CL beyond the MDH is cleared:
@@ -2431,7 +2414,7 @@ A usage instruction with an output operand that performs no operation under this
 
 [[KLEE-SGR-usage-cr-config-state,SGR18]] SGR18:: Usage of a CL in a Configuration State, cloning from it, and restricting it, are not allowed:
 Any attempt to do so raises KLEE exception `kl_exc_privilege_violation`.
-For a CL in a Configuration State used as the destination of an `kl.clone`, or named as both its source and its destination, see <<KLEE-instruction-clone>>.
+For a CL in a Configuration State used as the destination of a 'kl.clone`, or named as both its source and its destination, see <<KLEE-instruction-clone>>.
 
 [[KLEE-SGR-gate-order,SGR19]] SGR19:: For a usage-controlled instruction (<<KLEE-instruction-properties>>), after the illegal-instruction grounds decided without accessing the state of the KLEE unit (the first group of <<KLEE-illegal-instruction-grounds>>), `kl_exc_fatal`, `kl_exc_no_csk` and `kl_exc_CL_off` (<<KLEE-CSR-lcrstatus>>), and then the `klstart`/`vstart` check of <<KLEE-CSR-klstart>>, the conditions on a CL are evaluated in this order, and the first that applies decides the outcome:
 +
@@ -2507,7 +2490,7 @@ exceptions.
 
 [horizontal]
 State change rule for exceptions:: An illegal- or virtual-instruction exception, or an KLEE
-exception other than `kl_exc_fatal`, makes no change to KLEE state, except the zeroizing of the
+exception other tha 'kl_exc_fatal`, makes no change to KLEE state, except the zeroizing of the
 target CL by an opening `kl.mgmt`, which is performed even if the instruction later raises an
 exception (<<KLEE-CL-management>>). `kl_exc_fatal` resets the KLEE state (_Fatal Conditions_ below).
 
@@ -2630,8 +2613,8 @@ Privileged Architecture, the KLEE exceptions among them are replaced as
 . *Usage Control.* `kl_exc_privilege_violation`, for a usage-controlled instruction in a mode that
   the _UsagePolicy_ excludes (Rule <<KLEE-SGR-usage-policy>>), and for any use, cloning or
   restriction of a CL in a Configuration State (Rule <<KLEE-SGR-usage-cr-config-state>>).
-. *Insufficient CLF capacity.* `kl_exc_out_of_memory`, for an `kl.mgmt` opening a provisioning or
-  an import (<<KLEE-CL-management>>), an `kl.clone` (<<KLEE-instruction-clone>>), or an
+. *Insufficient CLF capacity.* `kl_exc_out_of_memory`, for a 'kl.mgmt` opening a provisioning or
+  an import (<<KLEE-CL-management>>), a 'kl.clone` (<<KLEE-instruction-clone>>), or an
   `kl.restrict*` raising _SCProtection_ (<<KLEE-instruction-restrict>>).
 . *Unconfigured KLIOBUF.* `kl_exc_unconfigured_buffer` (Rule <<KLEE-GR-iobuf-configured>>).
 . *Memory exceptions.* The load/store address-breakpoint, address-misaligned, page-fault,
@@ -2648,14 +2631,14 @@ The following conditions set an Error State, or make the instruction perform no 
 an exception; the algorithmic errors below are further cases. Without the Privileged Architecture,
 so are the conditions that <<KLEE-exception-error-correspondence>> maps to an Error State.
 
-. *Invalid Metadata or SKID.* _Invalid_, for an `kl.mgmt` opening a provisioning or an import on
+. *Invalid Metadata or SKID.* _Invalid_, for a 'kl.mgmt` opening a provisioning or an import on
   invalid Metadata (<<KLEE-MVR-open>>), for a SKID other than the all-ones value that the System Key
-  Store does not or may not resolve (<<KLEE-system-keys>>), and for an `kl.restrict*` request that
+  Store does not or may not resolve (<<KLEE-system-keys>>), and for a 'kl.restrict*` request that
   would widen the CC or yield invalid Metadata (<<KLEE-instruction-restrict>>).
-. *Instruction not allowed in the current State.* _Invalid_, for an `kl.exec` or `kl.setst` not
+. *Instruction not allowed in the current State.* _Invalid_, for a 'kl.exec` or `kl.setst` not
   allowed in the current _State_ and _StateExtension_, including an unsupported `#immed7` (Rules
   <<KLEE-SGR-no-exec-in-ready>> and <<KLEE-SGR-success-failure>>, <<KLEE-instruction-setst>>), and for
-  an `kl.derive` that fails its checks (<<KLEE-instruction-derive>>).
+  a 'kl.derive` that fails its checks (<<KLEE-instruction-derive>>).
 . *Invalid length or resumption point.* _Invalid_, for an input whose `kliobuftop` or `klstart`
   the Machine does not accept; no operation for an operand used only as output, and for an empty
   transfer window (<<KLEE-CSR-klstart>>, <<KLEE-usage-input-output>>).
@@ -2663,7 +2646,7 @@ so are the conditions that <<KLEE-exception-error-correspondence>> maps to an Er
   no operation (<<KLEE-Metadata-expiration-date>>).
 . *Use of a CL in an Error State.* No operation, and the _State_ is unchanged (Rule
   <<KLEE-SGR-usage-cr-error-state>>, <<KLEE-error-state-instructions>>).
-. *Explicit Error State.* The Error State that an `kl.setst` immediate names
+. *Explicit Error State.* The Error State that a 'kl.setst` immediate names
   (<<KLEE-instruction-setst>>).
 . *Unusable ADS.* Dropped at import, without rejecting the SCC (<<KLEE-SCC-import>>).
 --
@@ -2705,7 +2688,7 @@ The _State_ is unchanged: Rule <<KLEE-SGR-usage-cr-error-state>> treats the atte
 | `kl.size` | Returns 16 (<<KLEE-instruction-size>>).
 | `kl.avail`, Form A | Evaluates the MDH fields that identify the Machine (<<KLEE-instruction-size>>).
 | `kl.load`, `kl.store`, `kl.mv` | Illegal-instruction exception (Rules <<KLEE-SGR-ace-load-mv-allowed>> and <<KLEE-SGR-ace-store-mv-allowed>>).
-| Usage-controlled instructions: `kl.exec`, `kl.derive`, and `kl.setst` with an immediate other than `kl_state_unconfigured` or an Error State, including `kl.clear.ads` | No operation and no exception; the _State_ is unchanged and the unwritten part of the output window is zeroed (Rules <<KLEE-SGR-usage-cr-error-state>> and <<KLEE-SGR-gate-order>>). For `kl.derive`, an Error State on either endpoint suffices.
+| Usage-controlled instructions: `kl.exec`, `kl.derive`, and `kl.setst` with an immediate other tha 'kl_state_unconfigured` or an Error State, including `kl.clearads` | No operation and no exception; the _State_ is unchanged and the unwritten part of the output window is zeroed (Rules <<KLEE-SGR-usage-cr-error-state>> and <<KLEE-SGR-gate-order>>). For `kl.derive`, an Error State on either endpoint suffices.
 | `kl.setst` with an Error-State immediate | The CL transitions to that Error State without an exception, 54 and 55 to _Invalid_ (<<KLEE-instruction-setst>>).
 | `kl.mgmt` opening a provisioning or an import | The CL is zeroized and reconfigured (Rule <<KLEE-GR-opening-cr-when>>, <<KLEE-CL-management>>).
 | `kl.mgmt` opening an export | The CL is left unchanged and no management operation is opened (<<KLEE-CL-management>>).
@@ -2782,7 +2765,7 @@ Upon preemption, they may follow any of the behaviors described in <<KLEE-IRR-re
 The implementation must support at least one of options 3, 4 and 5 of Rule <<KLEE-IRR-resumability-options>> for these operations; under option 5 it guarantees, and documents, a minimum uninterrupted execution quantum or a maximum number of consecutive restarts of one instruction, so that repeated interruption cannot prevent completion.
 If an operation continues while the hart is preempted and the hart waits for completion before accessing the affected state, any nested interrupt handler must also wait before accessing that state.
 +
-If such an operation can advance its recorded progress towards completion of the operation, interrupt at well defined points, and resume from the recorded progress point, the progress must be recorded in the _MachineUse_ field, in an implementation-defined format; `klstart` remains reserved for byte counts (<<KLEE-CSR-klstart>>). An implementation may interrupt such an operation and record its progress only where the recorded state, including the ADS, cannot be consumed against inputs other than those the operation started with; Rule <<KLEE-AGR-progress-discard>> of Book 2 guarantees this by discarding the recorded state on any transition of the CL's _State_ other than the completion of the operation (Rule <<KLEE-GR-atomic-randomness>>). If progress is recorded, the implementation exports the data necessary to support resumption in the ADS. Any importing implementation may discard this Section and restart the operation, and must restart it on an Implementation Qualifier mismatch, or if the ADS is removed from the CL (using `kl.clear.ads`, cf. <<KLEE-instruction-clearads>>).
+If such an operation can advance its recorded progress towards completion of the operation, interrupt at well defined points, and resume from the recorded progress point, the progress must be recorded in the _MachineUse_ field, in an implementation-defined format; `klstart` remains reserved for byte counts (<<KLEE-CSR-klstart>>). An implementation may interrupt such an operation and record its progress only where the recorded state, including the ADS, cannot be consumed against inputs other than those the operation started with; Rule <<KLEE-AGR-progress-discard>> of Book 2 guarantees this by discarding the recorded state on any transition of the CL's _State_ other than the completion of the operation (Rule <<KLEE-GR-atomic-randomness>>). If progress is recorded, the implementation exports the data necessary to support resumption in the ADS. Any importing implementation may discard this Section and restart the operation, and must restart it on an Implementation Qualifier mismatch, or if the ADS is removed from the CL (using `kl.clearads`, cf. <<KLEE-instruction-clearads>>).
 +
 The architected Content of the CL does not depend on the progress of the operation: an implementation that records progress keeps every intermediate result in the ADS, and if the operation restarts, it does so from the architected Content alone.
 
@@ -2793,7 +2776,7 @@ The architected Content of the CL does not depend on the progress of the operati
 * An access to a CL used by the operation, including the issue of another KLEE instruction involving a CL used by the operation.
 * A read or write of `klstart` or an KLIOBUF CSR.
 * A read or write of a GPR or vector register that the operation writes as its destination.
-* A write to a vector register or to the KLIOBUF that the operation reads as an operand, including the issue of an `kl.input` targeting it. Scalar operands held in GPRs are captured when the instruction issues, so accessing one is not a conflicting access.
+* A write to a vector register or to the KLIOBUF that the operation reads as an operand, including the issue of a 'kl.input` targeting it. Scalar operands held in GPRs are captured when the instruction issues, so accessing one is not a conflicting access.
 
 Rules <<KLEE-IRR-resumability-options>> and <<KLEE-IRR-conflicting-access-rule>> make asynchronous execution by the attached KLEE unit invisible to same-hart program order, as <<KLEE-Memory-Model>> requires. Beyond this rule, the architecture specifies only the allowed interruption points for its instructions and Machines.
 --
@@ -2817,8 +2800,8 @@ NOTE: After each `kl.load` the caller must check whether the CL is _Unconfigured
 // This allows the error to propagate to the outermost caller.
 
 // [[KLEE-IRR-algorithms-specific,IRR9]] IRR9:: Machine-specific resumable long-running operations that transfer no data
-// in an `kl.setst`, in a (block-processing step of) `kl.exec` operation,
-// or in an `kl.derive` operation,
+// in a 'kl.setst`, in a (block-processing step of) `kl.exec` operation,
+// or in a 'kl.derive` operation,
 // must either advance its recorded progress towards completion of the operation, or restart.
 // The manner in which progress is recorded is implementation-defined, but it cannot use `klstart`
 // (for instance, it can use _MachineUse_, as in <<KLEE-ECC>> and <<KLEE-PQC>>).
@@ -3629,7 +3612,7 @@ We define `LST_eff[j]` as the value of `LST` entry j after applying these substi
 a non-implemented entry with no configured replklment contributes `zeros(128)` and makes the Metadata invalid at provisioning/import; an export is not refused on this ground, the resulting SCC being rejected at import. Entry 9 of `LST` is `hkllocality`, and entry 10 the effective register of <<KLEE-Localities>>: `skllocality`, or `vskllocality` when V=1.
 In the export and import algorithms we then replace `LST[j]` with `LST_eff[j]`.
 
-After `kl.clear.ads`, a fully configured CL has _AuxDataLen_ = 0 and _ADSDropped_ = 0 (<<KLEE-instruction-clearads>>). An SCC-shaped PCCC may instead carry _ADSDropped_ = 1 to preserve an interrupted import after `Content2` was dropped.
+After `kl.clearads`, a fully configured CL has _AuxDataLen_ = 0 and _ADSDropped_ = 0 (<<KLEE-instruction-clearads>>). An SCC-shaped PCCC may instead carry _ADSDropped_ = 1 to preserve an interrupted import after `Content2` was dropped.
 
 .Exporting a Fully Configured CL ``K(i)``
 --
