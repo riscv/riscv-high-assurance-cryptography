@@ -13,12 +13,12 @@ compression function, which are implemented from scratch here.
 
 Checks performed:
   * both GB/T 32905-2016 appendix A vectors, each absorbed two ways: a multi-chunk
-    plan whose ace.exec cuts fall inside blocks (granularity 32 bits respected), and
+    plan whose kl.exec cuts fall inside blocks (granularity 32 bits respected), and
     a single transfer interrupted and resumed at every process_VLI interruption
     point.  M4 (earlier review, since fixed): the spec literally assigns the bit count
     input_base to/from the byte-counting klstart CSR; the corrected interpretation
     klstart = input_base/8 is used here, matching the explicit /8 of _Hash_Output_.
-  * the digest is read out over two Form C ace.exec instructions in the multi-chunk
+  * the digest is read out over two Form C kl.exec instructions in the multi-chunk
     plan, exercising the t/block_base accounting of <<KLEE-hash-functions>>.
   * a length-extension-style consistency check over many message lengths against an
     independent straight byte-oriented SM3 reference written in the big-endian view
@@ -29,7 +29,7 @@ Checks performed:
 NEGATIVE CONTROL (KAT-EXPECT-FAIL: no-bswap): omitting the bswap in the message-word
 extraction must not reproduce the GB/T vector.
 
-VECTOR PROVENANCE / DISCREPANCY NOTE: GB/T 32905-2016 appendix A gives
+VECTOR PROVENANCE / DISCLEPANCY NOTE: GB/T 32905-2016 appendix A gives
   SM3("abc")          = 66c7f0f462eeedd9d1f2d46bdc10e4e24167c4875cf2f7a2297da02b8f4ba8e0
   SM3("abcd" x 16)    = debe9ff92275b8a138604889c18e5a4d6fdb70e5387e5765293dcba39c0c5732
 The first of these differs from the value quoted in this harness's commissioning
@@ -92,9 +92,9 @@ def set_slice(v, hi, lo, x):
     return (v & ~mask) | ((x << lo) & mask)
 
 class Invalid(Exception):
-    """CR transition to Error State _Invalid_."""
+    """CL transition to Error State _Invalid_."""
 
-class AceSm3:
+class KleeSm3:
     """SM3 CC per <<KLEE-SM3>>; all quantities are KLEE little-endian values."""
     w, b, n, t = 32, 512, 256, 256
 
@@ -116,7 +116,7 @@ class AceSm3:
         self.state = sm3_compress(self.state, W)
 
     def exec_input(self, data, resume=False, interrupt_after=None):
-        """Form B ace.exec in _Hash_Absorb_ = process_VLI (<<KLEE-process-VLI>>), len=0."""
+        """Form B kl.exec in _Hash_Absorb_ = process_VLI (<<KLEE-process-VLI>>), len=0."""
         assert self.state_name == 'Hash_Absorb'
         INPUT, KLLEN = b2v(data), 8 * len(data)
         # M4 (fixed): the spec now writes `input_base <- 8 * klstart` explicitly.
@@ -153,7 +153,7 @@ class AceSm3:
         self.state_name = 'Hash_Output'
 
     def exec_output(self, nbytes):
-        """Form C ace.exec squeeze loop of <<KLEE-hash-functions>>."""
+        """Form C kl.exec squeeze loop of <<KLEE-hash-functions>>."""
         assert self.state_name == 'Hash_Output'
         KLLEN, OUTPUT, output_base = 8 * nbytes, 0, 0
         while output_base < KLLEN:
@@ -173,7 +173,7 @@ def caller_pad(msg):
             + (8 * len(msg)).to_bytes(8, 'big'))
 
 def kl_sm3(msg, plan='multi', be_words=True):
-    cc = AceSm3(be_words)
+    cc = KleeSm3(be_words)
     mp = caller_pad(msg)
     if plan == 'multi':
         c1 = 4 if len(mp) > 12 else len(mp)          # 32-bit granularity
@@ -227,7 +227,7 @@ ok &= not mism
 print(f'\nKLEE model vs byte-oriented reference, {2 * len(lens)} messages of '
       f'0..1000 bytes: {"PASS" if not mism else f"FAIL {mism[:5]}"}')
 
-cc = AceSm3()
+cc = KleeSm3()
 cc.exec_input(b'abc')
 try:
     cc.setst_output(); rejected = False

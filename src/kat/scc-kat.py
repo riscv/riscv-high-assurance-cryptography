@@ -222,7 +222,7 @@ def scc_export(saved_MDH: int, content1, CSK: int, LST: dict,
 
 
 def scc_export_error_state(mdh: int, CSK: int, LST: dict) -> bytes:
-    """<<KLEE-length-rule>> 2 and <<KLEE-data-formats>>: a CR in an Error State
+    """<<KLEE-length-rule>> 2 and <<KLEE-data-formats>>: a CL in an Error State
     exports the MDH and SIV only — Sections 3-6 empty, len_PC = 0, 32 bytes.
     _AuxDataLen_ has been set to 0 on entering the Error State."""
     assert sl(mdh, 45, 32) == 0, 'AuxDataLen is cleared on entering an Error State'
@@ -236,8 +236,8 @@ def scc_import(scc: bytes, CSK: int, LST: dict, len_PC=None,
                support_ads=True, length_block=None) -> dict:
     """<<KLEE-SCC-import>>.
 
-    Returns a dict describing the resulting CR:
-      {'status': 'ok' | 'kl_state_import_auth',
+    Returns a dict describing the resulting CL:
+      {'status': 'ok' | 'kl_state_mgmt_auth',
        'mdh', 'content1', 'imp_data_len', 'content2', 'ads_discarded'}
 
     len_PC is the length of Section 3 in blocks, which the real importer
@@ -263,7 +263,7 @@ def scc_import(scc: bytes, CSK: int, LST: dict, len_PC=None,
     AD = _ad_segment1(saved_MDH, LST)                    # steps 8-9
     correct, P1 = SCC_Decrypt(AD, 0, 0, SIV, C1, CSK, length_block=length_block)
     if not correct:                                      # step 12
-        return {'status': 'kl_state_import_auth', 'mdh': None,
+        return {'status': 'kl_state_mgmt_auth', 'mdh': None,
                 'content1': None, 'imp_data_len': 0, 'content2': None,
                 'ads_discarded': False}
 
@@ -398,7 +398,7 @@ def main():
         r = scc_import(scc, CSK, LST, len_PC=len(CONTENT1))
         chk(r['status'] == 'ok' and r['content1'] == CONTENT1
             and r['mdh'] == mdh,
-            f"export -> import reproduces the CR and authenticates ({lbl})")
+            f"export -> import reproduces the CL and authenticates ({lbl})")
 
     # Different Locality sets must produce different SCCs.
     sivs = {locs: sccs[locs][1][16:32] for locs in LOC_SETS}
@@ -439,7 +439,7 @@ def main():
 
     # A changed Locality Secret table must not open the context.
     r = scc_import(scc, CSK, LST_ALT, len_PC=n)
-    chk(r['status'] == 'kl_state_import_auth',
+    chk(r['status'] == 'kl_state_mgmt_auth',
         "a changed Locality Secret table fails authentication")
     # ... but only when that Locality is actually selected: Locality #3 is in
     # no LOC_SET, so changing LST[3] must leave this SCC importable.
@@ -447,14 +447,14 @@ def main():
         "an unselected Locality Secret does not affect the SCC")
     # A different CSK must not open it either.
     chk(scc_import(scc, CSK ^ 1, LST, len_PC=n)['status']
-        == 'kl_state_import_auth',
+        == 'kl_state_mgmt_auth',
         "a different CSK fails authentication")
     # An SCC sealed under one Locality set does not open under another:
     # the MDH carries the set, so this is the MDH-tamper case made explicit.
     mdh_b = make_mdh(localities=(2,))
     forged = v2b(mdh_b, 16) + scc[16:]
     chk(scc_import(forged, CSK, LST, len_PC=n)['status']
-        == 'kl_state_import_auth',
+        == 'kl_state_mgmt_auth',
         "substituting the MDH's Locality set fails authentication")
 
     # -- (e) the implementation-data segment ---------------------------
@@ -591,7 +591,7 @@ def main():
           f"length-block restoring the RFC 8452 length block changes the SIV")
     chk(fired, "negative control fired: the length-block omission is observable")
     chk(scc_import(scc_lb, CSK, LST, len_PC=n)['status']
-        == 'kl_state_import_auth',
+        == 'kl_state_mgmt_auth',
         "an SCC sealed with a length block does not import under the spec rule")
 
     # -- regression vectors for the variant ----------------------------

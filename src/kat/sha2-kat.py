@@ -4,7 +4,7 @@
 WHAT IS MODELED (from the spec text, not from FIPS directly):
   * _Hash_Absorb_ runs Procedure process_VLI (<<KLEE-process-VLI>>) with len = 0
     (no max_length), block separate from state, state_offset = 0: the message is
-    accumulated into `block` across ace.exec boundaries and `absorb()` fires each
+    accumulated into `block` across kl.exec boundaries and `absorb()` fires each
     time block_base reaches b.
   * The j-th message word of a block is int(bswap(block[(j+1)w-1 : jw])) and the
     digest places the i-th chaining variable at bytes i*w/8 as bswap(bin(H_i, w)),
@@ -16,8 +16,8 @@ WHAT IS MODELED (from the spec text, not from FIPS directly):
     `state`, not `block`: <<KLEE-SHA-2>> takes the stand-alone digest from `state`
     and does not perform block[t-1:0] <- finalize().  Per-instruction copy with
     amount = min(KLLEN - output_base, t - block_base), Success at block_base = t;
-    the digest is read out across two Form C ace.exec instructions in one plan.
-  * Interruption/resumption of a Form B ace.exec is exercised at every
+    the digest is read out across two Form C kl.exec instructions in one plan.
+  * Interruption/resumption of a Form B kl.exec is exercised at every
     interruption point of process_VLI.  M4 (earlier review, since fixed): the spec
     literally writes `klstart <- input_base` and `input_base <- klstart`, a bit
     count in the byte-counting klstart CSR; this model uses the CORRECTED
@@ -140,9 +140,9 @@ def set_slice(v, hi, lo, x):
     return (v & ~mask) | ((x << lo) & mask)
 
 class Invalid(Exception):
-    """CR transition to Error State _Invalid_."""
+    """CL transition to Error State _Invalid_."""
 
-class AceSha2:
+class KleeSha2:
     """One SHA-2 CC per <<KLEE-SHA-2>>; values are KLEE little-endian values."""
 
     def __init__(self, name, be_words=True):
@@ -167,7 +167,7 @@ class AceSha2:
         self.state = sha2_compress(self.state, W, self.w, self.K, self.rounds)
 
     def exec_input(self, data, resume=False, interrupt_after=None):
-        """Form B ace.exec in _Hash_Absorb_ = process_VLI(<<KLEE-process-VLI>>), len=0.
+        """Form B kl.exec in _Hash_Absorb_ = process_VLI(<<KLEE-process-VLI>>), len=0.
 
         Granularity (32 bits) is a caller obligation; the driver's transfer plans
         respect it.  Returns 'done' or 'interrupted'."""
@@ -203,7 +203,7 @@ class AceSha2:
         return 'done'
 
     def setst_output(self):
-        """Form A ace.setst: _Hash_Absorb_ -> _Hash_Output_."""
+        """Form A kl.setst: _Hash_Absorb_ -> _Hash_Output_."""
         # <<KLEE-SHA-2>>: stand-alone hashing requires block_base = 0 here.
         if self.block_base != 0:
             raise Invalid('block_base != 0 on entry to _Hash_Output_')
@@ -220,7 +220,7 @@ class AceSha2:
         self.state_name = 'Hash_Output'
 
     def exec_output(self, nbytes):
-        """Form C ace.exec squeeze loop of <<KLEE-hash-functions>> _Hash_Output_,
+        """Form C kl.exec squeeze loop of <<KLEE-hash-functions>> _Hash_Output_,
         reading `state` in place of `block` as <<KLEE-SHA-2>> prescribes."""
         assert self.state_name == 'Hash_Output'
         KLLEN, OUTPUT, output_base = 8 * nbytes, 0, 0
@@ -255,14 +255,14 @@ def fips_pad(msg, w, b):
 def kl_digest(name, msg, plan, be_words=True):
     """Run one message through the CC model.
 
-    plan 'multi':     absorb the padded message in three ace.exec transfers cut at
+    plan 'multi':     absorb the padded message in three kl.exec transfers cut at
                       non-block-aligned offsets (multiples of 4 bytes: granularity
-                      32); read the digest with two Form C ace.exec instructions.
-    plan 'interrupt': absorb in a single ace.exec that is interrupted at every
+                      32); read the digest with two Form C kl.exec instructions.
+    plan 'interrupt': absorb in a single kl.exec that is interrupted at every
                       process_VLI interruption point and resumed via klstart
                       (M4-corrected units); read the digest in one instruction.
     """
-    cc = AceSha2(name, be_words)
+    cc = KleeSha2(name, be_words)
     mp = fips_pad(msg, cc.w, cc.b)
     if plan == 'multi':
         c1, c2 = 4, len(mp) // 2 - 8          # cuts inside a block, 4-byte multiples
@@ -354,7 +354,7 @@ for name in FN:
               f'{"PASS" if gb else "FAIL":12} {orac}')
 
 # spec rule: unpadded input (block_base != 0) is rejected on entry to _Hash_Output_
-cc = AceSha2('SHA-256')
+cc = KleeSha2('SHA-256')
 cc.exec_input(b'abc')                       # 3 bytes: allowed as the last transfer
 try:
     cc.setst_output()

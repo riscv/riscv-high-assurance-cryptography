@@ -18,7 +18,7 @@ What this harness validates
     `HasPrivKey` / `HasPubKey` flags and their _*_Input_ clearing rules, the
     external-mu convention with the `ctx` / `ctxlen` binding, hedged
     (rnd random) versus deterministic (rnd = 0) selection through the Form B
-    `ace.setst` auxiliary `Xs`, _Sign_Generate_ via ML-DSA.Sign_internal,
+    `kl.setst` auxiliary `Xs`, _Sign_Generate_ via ML-DSA.Sign_internal,
     _Sign_Verify_ via ML-DSA.Verify_internal, _compute_pubKey_ with its
     tr-consistency check, and the _MachineUse_ transfer-counter rules
     (excess bits ignored on input, past-the-end -> Error State _Invalid_).
@@ -102,7 +102,7 @@ SE_HASPRIVKEY, SE_HASPUBKEY = 1, 2
 
 
 class Invalidated(Exception):
-    """The CR transitioned to Error State _Invalid_ (kl_state_invalid, 25)."""
+    """The CL transitioned to Error State _Invalid_ (kl_state_invalid, 25)."""
 
 
 class MLDSAContext:
@@ -112,7 +112,7 @@ class MLDSAContext:
         self.ps = ps
         self.sk_len, self.pk_len, self.sig_len = D.sizes(ps)
         if algpolicy == 0:
-            # "An MachinePolicy of 0 is not valid, and it causes the CR to
+            # "An MachinePolicy of 0 is not valid, and it causes the CL to
             #  transition to Error State Invalid."
             raise Invalidated('MachinePolicy == 0 at provisioning')
         self.mdh = mdh_set(0, F_ALGPOLICY, algpolicy)
@@ -173,9 +173,9 @@ class MLDSAContext:
 
     # -- instructions ---------------------------------------------------
     def setst(self, state, aux=None, rnd=None):
-        """Form A `ace.setst` (aux None) or Form B (aux = Xs)."""
+        """Form A `kl.setst` (aux None) or Form B (aux = Xs)."""
         if state == S_CTX_IN:
-            # "a Form B ace.setst instruction must be used where the GPR
+            # "a Form B kl.setst instruction must be used where the GPR
             #  contains the parameter ctxlen.  Only values 0..255 are valid."
             if aux is None or not (0 <= aux <= 255):
                 self._invalidate(f'ctx_Input with invalid ctxlen {aux}')
@@ -209,7 +209,7 @@ class MLDSAContext:
             self._set_flag(SE_HASPUBKEY, False)
 
     def exec_input(self, data):
-        """Form B `ace.exec ..., INPUT` in an _*_Input_ state (process_VLI with
+        """Form B `kl.exec ..., INPUT` in an _*_Input_ state (process_VLI with
         process_block = finalize = None)."""
         name = IN_STATES[self.state]
         n = self.field_bits(name)
@@ -230,10 +230,10 @@ class MLDSAContext:
         return amount
 
     def exec_output(self, nbytes):
-        """Form C `ace.exec` in _pubkey_Output_ / _Sign_Output_.
+        """Form C `kl.exec` in _pubkey_Output_ / _Sign_Output_.
 
         NOTE the asymmetry in the spec text: on *input* "the bits in excess are
-        ignored", but on *output* an over-long transfer sends the CR to Error
+        ignored", but on *output* an over-long transfer sends the CL to Error
         State _Invalid_.  Modelled literally.
         """
         name = OUT_STATES[self.state]
@@ -248,7 +248,7 @@ class MLDSAContext:
         return out
 
     def exec_d(self, xi=None):
-        """Form D `ace.exec Kn|K{Xn}`."""
+        """Form D `kl.exec Kn|K{Xn}`."""
         st = self.state
         if st == S_GENKEYPAIR:
             self.pubkey, self.privkey = D.keygen_internal(xi, self.ps)
@@ -291,15 +291,15 @@ class MLDSAContext:
             return
 
         if st == S_READY:
-            self._invalidate('ace.exec in State Ready')
-        raise AssertionError(f'no Form D ace.exec defined in state {st}')
+            self._invalidate('kl.exec in State Ready')
+        raise AssertionError(f'no Form D kl.exec defined in state {st}')
 
     def restrictl_algpolicy(self, mask):
-        """`ace.restrictl` on _MachinePolicy_: clearing the field is not
+        """`kl.restrictl` on _MachinePolicy_: clearing the field is not
         admissible."""
         new = mdh_get(self.mdh, F_ALGPOLICY) & mask
         if new == 0:
-            self._invalidate('ace.restrictl cleared MachinePolicy')
+            self._invalidate('kl.restrictl cleared MachinePolicy')
         self.mdh = mdh_set(self.mdh, F_ALGPOLICY, new)
 
 
@@ -441,9 +441,9 @@ def t_state_machine():
         took == 512 * 8 and cc2.privkey == sk and cc2.has_privkey)
     try:
         cc2.exec_input(b'\x00' * 8)
-        chk('ace.exec with _MachineUse_ >= n -> Error State _Invalid_', False)
+        chk('kl.exec with _MachineUse_ >= n -> Error State _Invalid_', False)
     except Invalidated:
-        chk('ace.exec with _MachineUse_ >= n -> Error State _Invalid_',
+        chk('kl.exec with _MachineUse_ >= n -> Error State _Invalid_',
             cc2.state == S_INVALID)
 
     # pubkey_Input does not disturb the private key
@@ -488,13 +488,13 @@ def t_state_machine():
         chk('provisioning with _MachinePolicy_ = 0 -> Error State _Invalid_', True)
     cc6 = MLDSAContext(ps, algpolicy=0b11)
     cc6.restrictl_algpolicy(0b10)
-    chk('ace.restrictl may narrow _MachinePolicy_ to verify-only',
+    chk('kl.restrictl may narrow _MachinePolicy_ to verify-only',
         mdh_get(cc6.mdh, F_ALGPOLICY) == 0b10)
     try:
         cc6.restrictl_algpolicy(0b00)
-        chk('ace.restrictl clearing _MachinePolicy_ -> Error State _Invalid_', False)
+        chk('kl.restrictl clearing _MachinePolicy_ -> Error State _Invalid_', False)
     except Invalidated:
-        chk('ace.restrictl clearing _MachinePolicy_ -> Error State _Invalid_',
+        chk('kl.restrictl clearing _MachinePolicy_ -> Error State _Invalid_',
             cc6.state == S_INVALID)
 
 
@@ -674,9 +674,9 @@ def t_sign_verify_flow():
     # sign -> verify round trip inside one CC (GenerateKeyPair, then both roles)
     cc = MLDSAContext(ps)
     cc.setst(S_GENKEYPAIR); cc.exec_d(xi=bytes([7] * 32))
-    Mp = D.format_Mp(b'ACE', b'round trip')
+    Mp = D.format_Mp(b'KLEE', b'round trip')
     mu = D.mu_external(cc.tr, Mp)
-    cc.setst(S_CTX_IN, aux=3); cc.exec_input(b'ACE')
+    cc.setst(S_CTX_IN, aux=3); cc.exec_input(b'KLEE')
     cc.setst(S_MU_IN); cc.exec_input(mu)
     cc.setst(S_SIGN_GEN, aux=1); cc.exec_d()
     sig = cc.signature

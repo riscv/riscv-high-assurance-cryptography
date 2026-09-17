@@ -81,9 +81,9 @@ def ref_xctr(key, iv, ctr0, msg):
 class KeystreamCC:
     """A CTR/XCTR CC as <<KLEE-keystream-modes>> describes it, on KLEE values.
 
-    In State _Ready_ both `IV` and `ctr` are zero.  A Form C ace.setst sets the IV
-    (`set_iv`), a Form B ace.setst sets the initial counter (`set_ctr`), and a
-    Form C ace.exec emits one keystream block (`exec`).
+    In State _Ready_ both `IV` and `ctr` are zero.  A Form C kl.setst sets the IV
+    (`set_iv`), a Form B kl.setst sets the initial counter (`set_ctr`), and a
+    Form C kl.exec emits one keystream block (`exec`).
     """
 
     def __init__(self, key, n, j, mode='ctr', variant='spec'):
@@ -97,18 +97,18 @@ class KeystreamCC:
             assert n == j == 128, "XCTR requires b = n = j"
 
     def set_iv(self, value, acelen=None):
-        """Form C ace.setst: IV <- INPUT, keeping only the n least significant bits."""
+        """Form C kl.setst: IV <- INPUT, keeping only the n least significant bits."""
         self.IV = value & ((1 << self.n) - 1)
 
     def set_ctr(self, xs):
-        """Form B ace.setst, #kl_state_set_aux_value: ctr <- lsb_j(Xs)."""
+        """Form B kl.setst, #kl_state_set_aux_value: ctr <- lsb_j(Xs)."""
         self.ctr = xs & ((1 << self.j) - 1)
 
     def _tick(self):
         self.ctr = (self.ctr + 1) % (1 << self.j)
 
     def exec(self):
-        """One Form C ace.exec: emit a b-bit keystream block and tick the counter."""
+        """One Form C kl.exec: emit a b-bit keystream block and tick the counter."""
         if self.mode == 'ctr':
             if self.variant == 'spec':
                 blk = cat((bswap(self.ctr, self.j // 8), self.j), (self.IV, self.n))
@@ -221,7 +221,7 @@ print("   (with no IV the whole counter block is bswap(ctr); the counter value i
 print("    the integer whose big-endian encoding is the standard's initial block)")
 for name, k, c in SP38A_F5:
     key = bytes.fromhex(k)
-    chk(name + " ACE", kl_ctr(key, 0, 0, 128, SP38A_PT, ctr0=icb).hex(), c)
+    chk(name + " KLEE", kl_ctr(key, 0, 0, 128, SP38A_PT, ctr0=icb).hex(), c)
 
 print("\n== Negative control: the same formula with bswap dropped")
 print("KAT-EXPECT-FAIL: NEG little-endian counter")
@@ -281,7 +281,7 @@ print("\n== XCTR/CTR mutual consistency and separation")
 key = bytes.fromhex(SP38A_F5[0][1])
 iv = bytes(range(16))
 msg = bytes(range(64))
-chk("REF-XCTR == ACE-XCTR over 4 blocks, ctr from 0",
+chk("REF-XCTR == KLEE-XCTR over 4 blocks, ctr from 0",
     ref_xctr(key, iv, 0, msg).hex(), kl_xctr(key, b2v(iv), msg, ctr0=0).hex())
 # the KLEE default start (ctr = 0) must differ from HCTR2's (ctr = 1): the Form B
 # step above is necessary, not decorative.

@@ -7,7 +7,7 @@ WHAT IS BEING TESTED.  This harness does not test an implementation; it tests th
 `block_base`-tracked "set"/"output" transfers, its state machine and its allowed
 transitions -- is built strictly from that text, and standard vectors are then
 pushed through the model exactly as a caller would drive a real KLEE unit
-(`ace.setst` / `ace.exec` / output transfers).  If the spec's prescription
+(`kl.setst` / `kl.exec` / output transfers).  If the spec's prescription
 disagreed with the standard, the model would produce the wrong answer and the
 case would FAIL.
 
@@ -119,14 +119,14 @@ SNAME = {READY: 'Ready', SET_GEN: 'Set_Generator', SET_SCALAR: 'Set_Scalar',
          SUCCESS: 'Success', FAILURE: 'Failure'}
 
 
-class ACEInvalid(Exception):
-    """The CR transitioned to Error State _Invalid_."""
+class KLEEInvalid(Exception):
+    """The CL transitioned to Error State _Invalid_."""
 
 
 # -- the transition relation, transcribed from "Allowed State Transitions" ----
 
 def transition_targets(state, eddsa, literal):
-    """The set of states reachable from `state` by a single `ace.setst`.
+    """The set of states reachable from `state` by a single `kl.setst`.
 
     `literal=False` transcribes the bullet list of <<KLEE-ECC>> as it now reads:
     the five _Set_ states are named collectively, any two of them may transition
@@ -180,7 +180,7 @@ def retry_required(mode, r, s, k, n):
     return r == 0 or s == 0
 
 
-class CR:
+class CL:
     """A model of an KLEE control register holding an elliptic-curve CC."""
 
     def __init__(self, curve, b, h, j, u, v, mode,
@@ -265,7 +265,7 @@ class CR:
     def setst(self, target, form='A', xs=0, rand_scalar=None):
         eddsa = self.mode == 'eddsa'
         if target not in transition_targets(self.state, eddsa, self.literal):
-            raise ACEInvalid(f'{SNAME[self.state]} -> {SNAME.get(target, target)}'
+            raise KLEEInvalid(f'{SNAME[self.state]} -> {SNAME.get(target, target)}'
                              ' is not an allowed transition (Generic Rule 2)')
         if self.state == MSG_ABSORB:
             self._finalize_pass()
@@ -286,9 +286,9 @@ class CR:
                 setattr(self, fld, None)
                 setattr(self, 'has_' + fld, False)
             if target == SET_SCALAR and form == 'B' and xs != 0:
-                # random private key generated inside the CR, never disclosed
+                # random private key generated inside the CL, never disclosed
                 if rand_scalar is None:
-                    raise ACEInvalid('model needs an injected RBG value')
+                    raise KLEEInvalid('model needs an injected RBG value')
                 self.scalar = self._enc_field(rand_scalar)
             else:
                 ln = {'scalar': self.fw, 'hash': self.hashlen,
@@ -296,7 +296,7 @@ class CR:
                 self._loading = (fld, ln)
         elif target == SET_CTX:
             if xs > 255:
-                raise ACEInvalid('ctxlen > 255')
+                raise KLEEInvalid('ctxlen > 255')
             self.ctx = b''
             self._loading = ('ctx', xs) if xs else None
         elif target == MSG_ABSORB:
@@ -313,34 +313,34 @@ class CR:
 
     def _check_sign_entry(self):
         if not self.policy_sign:
-            raise ACEInvalid('signature generation not permitted by MachinePolicy')
+            raise KLEEInvalid('signature generation not permitted by MachinePolicy')
         if self.mode == 'eddsa':
             if int.from_bytes(self.scalar, 'little') == 0:
-                raise ACEInvalid('no seed configured')
+                raise KLEEInvalid('no seed configured')
             if self.msg_pass == 2:
                 return                                    # pure mode
             if self.msg_pass == 0 and self.has_hash:
                 return                                    # pre-hash mode
-            raise ACEInvalid('Sign_Generate entered with msg_pass='
+            raise KLEEInvalid('Sign_Generate entered with msg_pass='
                              f'{self.msg_pass}, HasHash={self.has_hash}')
         if not self.has_hash:
-            raise ACEInvalid('Sign_Generate requires HasHash')
+            raise KLEEInvalid('Sign_Generate requires HasHash')
         d = b2v(self.scalar)
         if not (1 <= d < self.c.n):
-            raise ACEInvalid('Scalar does not hold a configured private key')
+            raise KLEEInvalid('Scalar does not hold a configured private key')
 
     def _check_verify_entry(self):
         if not self.policy_verify:
-            raise ACEInvalid('verification not permitted by MachinePolicy')
+            raise KLEEInvalid('verification not permitted by MachinePolicy')
         if self.mode == 'eddsa':
             if self.msg_pass == 3:                        # verification pass complete
                 return
             if self.msg_pass == 0 and self.has_hash:      # pre-hash
                 return
-            raise ACEInvalid('Sign_Verify entered with msg_pass='
+            raise KLEEInvalid('Sign_Verify entered with msg_pass='
                              f'{self.msg_pass}, HasHash={self.has_hash}')
         if not (self.has_sec and self.has_hash and self.has_sig):
-            raise ACEInvalid('Sign_Verify requires HasSecondPt, HasHash, HasSignature')
+            raise KLEEInvalid('Sign_Verify requires HasSecondPt, HasHash, HasSignature')
 
     def _return_to_ready(self, form, xs):
         """The `Xs` field bits of the "Upon returning to State _Ready_" bullet.
@@ -372,16 +372,16 @@ class CR:
         self.ctx = b''
         self._r = self._kprime = None
 
-    # -- Form B ace.exec: block-tracked loading ---------------------------
+    # -- Form B kl.exec: block-tracked loading ---------------------------
     def exec_in(self, data):
         if self.state == MSG_ABSORB:
             self._absorb += data
             return
         if self._loading is None:
-            raise ACEInvalid(f'no ace.exec expected in state {SNAME[self.state]}')
+            raise KLEEInvalid(f'no kl.exec expected in state {SNAME[self.state]}')
         fld, ln = self._loading
         if self.block_base >= ln:
-            raise ACEInvalid('block_base already complete; no further ace.exec')
+            raise KLEEInvalid('block_base already complete; no further kl.exec')
         take = data[:ln - self.block_base]                # excess data ignored
         # `scalar` is zero-filled rather than absent when a Set_ state is entered,
         # so it is rebuilt from the bytes accepted so far rather than appended to.
@@ -393,11 +393,11 @@ class CR:
             self.block_base = ln
             val = getattr(self, fld)
             if fld in ('scalar', 'hash', 'sec', 'sig', 'gen') and not self.repr_ok(val):
-                raise ACEInvalid(f'{fld} violates the {self.b}-bit representation rule')
+                raise KLEEInvalid(f'{fld} violates the {self.b}-bit representation rule')
             if fld in ('sec', 'sig', 'hash'):
                 setattr(self, 'has_' + fld, True)
 
-    # -- Form D ace.exec: the operation of the current state --------------
+    # -- Form D kl.exec: the operation of the current state --------------
     def exec_run(self, rbg=None, degenerate_hook=None):
         if self.state == POINT_MUL:
             return self._point_mul()
@@ -405,18 +405,18 @@ class CR:
             return self._sign(rbg, degenerate_hook)
         if self.state == SIGN_VER:
             return self._verify()
-        raise ACEInvalid(f'Form D ace.exec not expected in {SNAME[self.state]}')
+        raise KLEEInvalid(f'Form D kl.exec not expected in {SNAME[self.state]}')
 
     def _point_mul(self):
         k = b2v(self.scalar)
         if not (1 <= k < self.c.n):
-            raise ACEInvalid('Point_Mul requires 1 <= int(Scalar) < n')
+            raise KLEEInvalid('Point_Mul requires 1 <= int(Scalar) < n')
         src = self.sec if self.has_sec else self.gen
         kind, P = self._dec_point(src)
         if kind == 'bad':
-            raise ACEInvalid('base point is not a valid encoding')
+            raise KLEEInvalid('base point is not a valid encoding')
         if kind == 'pt' and not self.c.in_subgroup(P):
-            raise ACEInvalid('base point is not on the curve / not in the subgroup')
+            raise KLEEInvalid('base point is not on the curve / not in the subgroup')
         R = self.c.mul(k, P) if kind == 'pt' else None
         self.sec = self._enc_point(R)
         self.has_sec = True
@@ -491,10 +491,10 @@ class CR:
             return False
         return X[0] % n == r
 
-    # -- Form C ace.exec: block-tracked output ----------------------------
+    # -- Form C kl.exec: block-tracked output ----------------------------
     def exec_out(self, nbytes):
         if self.state != OUTPUT:
-            raise ACEInvalid('output transfer outside State Output')
+            raise KLEEInvalid('output transfer outside State Output')
         buf = self.sig if self.out_type else self.sec
         total = self.siglen if self.out_type else self.ptlen
         chunk = buf[self.block_base:self.block_base + nbytes]
@@ -546,26 +546,26 @@ class CR:
     def _enter_msg_absorb(self, xs):
         if xs == 0:
             if not self.policy_sign:
-                raise ACEInvalid('signing pass 1 without signature-generation policy')
+                raise KLEEInvalid('signing pass 1 without signature-generation policy')
             if int.from_bytes(self.scalar, 'little') == 0:
-                raise ACEInvalid('signing pass 1 without a configured seed')
+                raise KLEEInvalid('signing pass 1 without a configured seed')
             self.msg_pass = 0
             _, prefix, _ = self._keys()
             self._absorb = self._dom(0) + prefix
         elif xs == 1:
             if self.msg_pass != 1:
-                raise ACEInvalid('signing pass 2 requires msg_pass = 1')
+                raise KLEEInvalid('signing pass 2 requires msg_pass = 1')
             _, _, A = self._keys()
             self._absorb = self._dom(0) + self.sig[:self.fw] + A
         elif xs == 2:
             if not self.policy_verify:
-                raise ACEInvalid('verification pass without verification policy')
+                raise KLEEInvalid('verification pass without verification policy')
             if not (self.has_sig and self.has_sec):
-                raise ACEInvalid('verification pass requires HasSignature and HasSecondPt')
+                raise KLEEInvalid('verification pass requires HasSignature and HasSecondPt')
             self.msg_pass = 0
             self._absorb = self._dom(0) + self.sig[:self.fw] + self.sec
         else:
-            raise ACEInvalid(f'Msg_Absorb with Xs = {xs}')
+            raise KLEEInvalid(f'Msg_Absorb with Xs = {xs}')
         self._pass_xs = xs
 
     def _finalize_pass(self):
@@ -579,7 +579,7 @@ class CR:
         elif self._pass_xs == 1:
             # C1 fix (<<KLEE-EdDSA>>): a second instance H' recomputes r from the pass-2
             # message and must match the value stored in pass 1, binding the two passes;
-            # otherwise the CR is invalidated and msg_pass stays at 1.
+            # otherwise the CL is invalidated and msg_pass stays at 1.
             dom = self._dom(0)
             msg = self._absorb[len(dom) + 2 * self.fw:]       # dom @ R @ A @ M
             _, prefix, _ = self._keys()
@@ -587,7 +587,7 @@ class CR:
             if r2 != self._r:
                 self._absorb = None
                 self._pass_xs = None
-                raise ACEInvalid('pass-2 message differs from pass-1 message')
+                raise KLEEInvalid('pass-2 message differs from pass-1 message')
             self._kprime = val
             self.msg_pass = 2
         else:                                             # pass Xs = 2: verification
@@ -642,7 +642,7 @@ class CR:
         return lhs == rhs
 
 
-# ------------------------------------------------------------ CR constructors
+# ------------------------------------------------------------ CL constructors
 # The b / h / j / u / v values are those tabulated in <<KLEE-ECC>> "Parameters".
 
 CURVE_PARAMS = {
@@ -661,7 +661,7 @@ CURVE_PARAMS = {
 def make_cr(curve, **kw):
     p = dict(CURVE_PARAMS[curve.name])
     p.update(kw)
-    return CR(curve, **p)
+    return CL(curve, **p)
 
 
 # ==================================================================== vectors
@@ -782,7 +782,7 @@ SM2_VEC = dict(
     Px=0x09F9DF311E5421A150DD7D161E4BC5C672179FAD1833FC076BB08FF356F35020,
     Py=0xCCEA490CE26775A52DC6EA718CC1AA600AED05FBF35E084A6632F6072DA9AD13,
     ZA=0xB2E14C5C79C6DF5B85F4FE7ED8DB7A262B9DA7E07CCB0EA9F4747B8CCDA8A4F3,
-    e=0xF0B43E94BA45ACCAACE692ED534382EB17E6AB5A19CE7B31F4486FDFC0D28640,
+    e=0xF0B43E94BA45ACCAKLEE692ED534382EB17E6AB5A19CE7B31F4486FDFC0D28640,
     k=0x59276E27D506861A16680F3AD9C02DCCEF3CC1FA3CDBE4CE6D54B80DEAC1BC21,
     r=0xF5A03B0648D2C4630EEAC513E1BB81A15944DA3827D5B74143AC7EACEEE720B3,
     s=0xB1B6AA29DF212FD8763182BC0D421CA1BB9038FD1F7F42D4840B69C485BBC1AA)
@@ -812,7 +812,7 @@ def drive_sign(cr, e_int, k_list, hook=None):
 
 
 def load_field(cr, state, data, chunk=None):
-    """setst into a Set_ state and stream `data` in through Form B ace.exec."""
+    """setst into a Set_ state and stream `data` in through Form B kl.exec."""
     cr.setst(state)
     if chunk is None:
         cr.exec_in(data)
@@ -919,7 +919,7 @@ def test_p521_representation():
     try:
         load_field(cr, SET_SCALAR, bad_scalar)
         ok = False
-    except ACEInvalid:
+    except KLEEInvalid:
         ok = True
     chk('MODEL', 'Scalar with a non-zero bit above bit 520 -> Invalid', ok)
     cr = fresh(c)
@@ -928,7 +928,7 @@ def test_p521_representation():
     try:
         load_field(cr, SET_SECONDPT, bad_pt)
         ok = False
-    except ACEInvalid:
+    except KLEEInvalid:
         ok = True
     chk('MODEL', 'SecondPt coordinate with a non-zero bit above bit 520 -> Invalid', ok)
     # the all-ones sentinel is explicitly exempt
@@ -936,7 +936,7 @@ def test_p521_representation():
     try:
         load_field(cr, SET_SECONDPT, b'\xff' * (2 * cr.fw))
         ok = cr.has_sec and cr._dec_point(cr.sec)[0] == 'inf'
-    except ACEInvalid:
+    except KLEEInvalid:
         ok = False
     chk('MODEL', 'point-at-infinity sentinel is exempt from the 55-zero-msb rule', ok)
     chk('MODEL', 'the sentinel is not a valid field element (all-ones > p)',
@@ -957,7 +957,7 @@ def test_point_mul_validation():
         try:
             cr.exec_run()
             ok = False
-        except ACEInvalid:
+        except KLEEInvalid:
             ok = True
         chk('MODEL', f'secp256r1: Point_Mul with {label} -> Invalid', ok)
     chk('MODEL', 'secp256r1: Point_Mul with Scalar = n-1 is accepted',
@@ -971,7 +971,7 @@ def test_point_mul_validation():
     try:
         cr.exec_run()
         ok = False
-    except ACEInvalid:
+    except KLEEInvalid:
         ok = True
     chk('MODEL', 'secp256r1: off-curve SecondPt -> Invalid (curve validation)', ok)
     # known small multiples of G
@@ -1004,7 +1004,7 @@ def _point_mul_ok(c, k):
     try:
         cr.exec_run()
         return cr.state == OUTPUT
-    except ACEInvalid:
+    except KLEEInvalid:
         return False
 
 
@@ -1041,7 +1041,7 @@ def test_state_machine():
     try:
         cr.setst(SIGN_GEN)
         ok = False
-    except ACEInvalid:
+    except KLEEInvalid:
         ok = True
     chk('MODEL', 'fresh CC (Scalar = 0, no Hash): Sign_Generate -> Invalid', ok)
     cr = fresh(c)
@@ -1049,7 +1049,7 @@ def test_state_machine():
     try:
         cr.setst(SIGN_GEN)
         ok = False
-    except ACEInvalid:
+    except KLEEInvalid:
         ok = True
     chk('MODEL', 'private key set but HasHash clear: Sign_Generate -> Invalid', ok)
     cr = fresh(c)
@@ -1057,7 +1057,7 @@ def test_state_machine():
     try:
         cr.setst(SIGN_GEN)
         ok = False
-    except ACEInvalid:
+    except KLEEInvalid:
         ok = True
     chk('MODEL', 'HasHash set but Scalar = 0: Sign_Generate -> Invalid', ok)
     # Sign_Verify entry needs HasSecondPt, HasHash, HasSignature
@@ -1072,7 +1072,7 @@ def test_state_machine():
         try:
             cr.setst(SIGN_VER)
             ok = False
-        except ACEInvalid:
+        except KLEEInvalid:
             ok = True
         chk('MODEL', f'Sign_Verify without Has{missing} -> Invalid', ok)
     # MachinePolicy
@@ -1082,7 +1082,7 @@ def test_state_machine():
     try:
         cr.setst(SIGN_GEN)
         ok = False
-    except ACEInvalid:
+    except KLEEInvalid:
         ok = True
     chk('MODEL', 'MachinePolicy[0] clear: Sign_Generate -> Invalid', ok)
     # block_base tracking
@@ -1091,14 +1091,14 @@ def test_state_machine():
     cr.exec_in(cr.default_gen[:20])
     part = (cr.block_base == 20 and not cr.has_sec)
     cr.exec_in(cr.default_gen[20:] + b'\xaa' * 9)         # excess must be ignored
-    chk('MODEL', 'block_base tracks partial loads; excess in the last ace.exec ignored',
+    chk('MODEL', 'block_base tracks partial loads; excess in the last kl.exec ignored',
         part and cr.block_base == cr.ptlen and cr.has_sec and cr.sec == cr.default_gen)
     try:
         cr.exec_in(b'\x00' * 4)
         ok = False
-    except ACEInvalid:
+    except KLEEInvalid:
         ok = True
-    chk('MODEL', 'ace.exec after block_base has reached the field length -> Invalid', ok)
+    chk('MODEL', 'kl.exec after block_base has reached the field length -> Invalid', ok)
     # output in pieces, with zero fill past the end
     cr = fresh(c)
     load_field(cr, SET_SCALAR, v2b(2, cr.fw))
@@ -1113,7 +1113,7 @@ def test_state_machine():
     try:
         cr.setst(OUTPUT)
         ok = False
-    except ACEInvalid:
+    except KLEEInvalid:
         ok = True
     chk('MODEL', 'Ready -> Output is not allowed (Generic Rule 2) -> Invalid', ok)
 
@@ -1128,7 +1128,7 @@ def test_state_machine():
         return cc
     cc = loaded()
     cc.setst(READY, form='A')
-    chk('MODEL', 'Xs: Form A ace.setst leaves Generator/Scalar/SecondPt untouched',
+    chk('MODEL', 'Xs: Form A kl.setst leaves Generator/Scalar/SecondPt untouched',
         cc.gen != cc.default_gen and cc.has_sec and b2v(cc.scalar) == 7)
     chk('MODEL', 'Form A: Signature and HasSignature retained on return to Ready',
         cc.sig is not None and cc.has_sig)
@@ -1255,7 +1255,7 @@ def test_sign_then_verify_one_cc():
     try:
         cr2.setst(SIGN_VER)
         ok = False
-    except ACEInvalid:
+    except KLEEInvalid:
         ok = True
     chk('MODEL', 'with Bit 6 the signature is discarded and Sign_Verify is refused', ok)
 
@@ -1288,7 +1288,7 @@ def test_m10_dead_end():
          ' transition freely, and admits all of them as sources for _Point_Mul_,'
          ' _Sign_Generate_ and _Sign_Verify_; _Point_Mul_ -> _Output_ -> _Success_ is'
          ' also completed. Previously _Set_Signature_ appeared in neither exit rule, so'
-         ' by Generic Rule 2 a CR that had just loaded a signature could make no legal'
+         ' by Generic Rule 2 a CL that had just loaded a signature could make no legal'
          ' move and verification was unreachable. The pre-fix relation is retained above'
          ' as a regression check.')
     # the strictness of the rest of the list is still enforced
@@ -1297,7 +1297,7 @@ def test_m10_dead_end():
     try:
         cr.setst(SIGN_VER)
         ok = False
-    except ACEInvalid:
+    except KLEEInvalid:
         ok = True
     chk('MODEL', 'literal model: Set_Signature -> Sign_Verify raises Invalid', ok)
 
@@ -1374,7 +1374,7 @@ def test_ed25519():
     try:
         cr.setst(MSG_ABSORB, form='B', xs=0)
         ok = False
-    except ACEInvalid:
+    except KLEEInvalid:
         ok = True
     chk('MODEL', 'Msg_Absorb Xs = 0 without a configured seed -> Invalid', ok)
     cr = fresh(c)
@@ -1382,7 +1382,7 @@ def test_ed25519():
     try:
         cr.setst(MSG_ABSORB, form='B', xs=1)
         ok = False
-    except ACEInvalid:
+    except KLEEInvalid:
         ok = True
     chk('MODEL', 'Msg_Absorb Xs = 1 with msg_pass != 1 -> Invalid', ok)
     cr = fresh(c)
@@ -1390,7 +1390,7 @@ def test_ed25519():
     try:
         cr.setst(MSG_ABSORB, form='B', xs=3)
         ok = False
-    except ACEInvalid:
+    except KLEEInvalid:
         ok = True
     chk('MODEL', 'Msg_Absorb with an out-of-range Xs -> Invalid', ok)
     cr = fresh(c)
@@ -1406,7 +1406,7 @@ def test_ed25519():
     chk('MODEL', 'HasRndNum is never set on the EdDSA path',
         cr.has_rnd is False and CURVE_PARAMS['ed25519']['j'] == 0)
     # C1: differing messages in the two signing passes are bound-checked; pass 2
-    # recomputes r and, on mismatch, invalidates the CR, so no signature is produced
+    # recomputes r and, on mismatch, invalidates the CL, so no signature is produced
     # and the shared-R key-recovery attack cannot be mounted.
     seed, msg = (bytes.fromhex(RFC8032_ED25519[2][1]),
                  bytes.fromhex(RFC8032_ED25519[2][3]))

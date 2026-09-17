@@ -15,7 +15,7 @@ KLEE  a model of the specification's state machine, written on KLEE *values*
      ([[KLEE-process-VLI]], [[KLEE-GCM-mode]], [[KLEE-GCM-with-IV-mode]]) under the
      conventions of `src/ace-notation.adoc`.  The model runs the real state
      sequence -- _Set_Aux_Value_ (via process_VLI, with the IV split over several
-     `ace.exec`-sized transfers and, in one case, an interrupted-and-resumed
+     `kl.exec`-sized transfers and, in one case, an interrupted-and-resumed
      transfer), _Hash_Absorb_, _Encrypt_/_Enc_Last_Block_/_Enc_Tag_Finalize_ and
      _Decrypt_/_Dec_Last_Block_/_Dec_Tag_Finalize_/_Hash_Verify_.
 
@@ -95,7 +95,7 @@ def ref_gcm(K: bytes, IV: bytes, A: bytes, P: bytes):
 # =====================================================================
 
 class Invalid(Exception):
-    """The CR transitioned to Error State _Invalid_."""
+    """The CL transitioned to Error State _Invalid_."""
 
 
 class GcmCC:
@@ -160,8 +160,8 @@ class GcmCC:
         self.J0 = cat((self._field_of(ctr), 32), (sl(self.J0, 95, 0), 96))
 
     def _consume(self, nblocks):
-        """GCM-with-Set-IV budget rule: an `ace.exec` that would take `budget`
-        below zero performs no operation and the CR transitions to _Invalid_."""
+        """GCM-with-Set-IV budget rule: an `kl.exec` that would take `budget`
+        below zero performs no operation and the CL transitions to _Invalid_."""
         if self.budget is None:
             return
         if self.budget - nblocks < 0:
@@ -176,7 +176,7 @@ class GcmCC:
     # ---------------- _Set_Aux_Value_ (process_VLI) ----------------
 
     def setst_set_aux_value(self, xs):
-        """Form B `ace.setst`, auxiliary argument = IV length in bits."""
+        """Form B `kl.setst`, auxiliary argument = IV length in bits."""
         self._require("Ready")
         if self.set_iv:
             raise Invalid("GCM with Set IV has no _Set_Aux_Value_")
@@ -204,7 +204,7 @@ class GcmCC:
         self.state = "Hash_Absorb"
 
     def exec_iv(self, INPUT, KLLEN, resume=False, interrupt_after=None):
-        """Form B `ace.exec` in _Set_Aux_Value_: one transfer through process_VLI.
+        """Form B `kl.exec` in _Set_Aux_Value_: one transfer through process_VLI.
 
         Returns True if the instruction ran to completion, False if it was
         interrupted (in which case `klstart` holds the byte offset reached and
@@ -247,7 +247,7 @@ class GcmCC:
     # ---------------- _Hash_Absorb_ ----------------
 
     def setst_hash_absorb(self):
-        """Form A `ace.setst` -- only the Set-IV variant needs it; in plain GCM
+        """Form A `kl.setst` -- only the Set-IV variant needs it; in plain GCM
         _Set_Aux_Value_'s finalize() already transitions."""
         self._require("Ready")
         if not self.set_iv:
@@ -344,13 +344,13 @@ class GcmCC:
         self.tag ^= self._enc_blk(self._ctr_blk(self.start_ctr))
 
     def setst_enc_tag_finalize(self, pt_bits, ad_bits):
-        """Form C `ace.setst`; the length block is supplied by software."""
+        """Form C `kl.setst`; the length block is supplied by software."""
         self._require("Encrypt", "Enc_Last_Block")
         self._finalize_tag(pt_bits, ad_bits)
         self.state = "Enc_Tag_Finalize"
 
     def exec_emit_tag(self):
-        """Form C `ace.exec` -- emits the tag; consumes no block of `budget`."""
+        """Form C `kl.exec` -- emits the tag; consumes no block of `budget`."""
         self._require("Enc_Tag_Finalize")
         self.state = "Success"
         return self.tag
@@ -437,7 +437,7 @@ def kl_decrypt(key, iv, ad, ct, tag_bytes, **kw):
 def kl_encrypt_setiv(key, J0, budget, ad, pt, **kw):
     """GCM with Set IV: J0 and budget come from the Provisioning Input."""
     cc = GcmCC(key, set_iv_J0=J0, budget=budget, **kw)
-    cc.setst_hash_absorb()                       # Form A ace.setst
+    cc.setst_hash_absorb()                       # Form A kl.setst
     if ad:
         padded = _pad16(ad)
         cc.exec_absorb(b2v(padded), len(padded) * 8)
@@ -597,13 +597,13 @@ ac, at, _ = kl_encrypt(K, IV, A, P, iv_chunk=16)
 check("KLEE 20-byte IV (partial final process_VLI block) matches REF",
       (ac, at) == (rc, rt))
 
-# ---- 4. multi-block ace.exec chunking of the plaintext ----------------------
+# ---- 4. multi-block kl.exec chunking of the plaintext ----------------------
 lines.append("--- KLEE _Encrypt_: KLLEN spanning several blocks ---")
 K, IV, A, P = bytes.fromhex(K128), bytes.fromhex(IV12), bytes.fromhex(AAD), bytes.fromhex(P60)
 rc, rt = ref_gcm(K, IV, A, P)
 for n in (1, 2, 3):
     ac, at, _ = kl_encrypt(K, IV, A, P, pt_chunk=n)
-    check(f"KLEE encrypt with KLLEN = {n} block(s) per ace.exec", (ac, at) == (rc, rt))
+    check(f"KLEE encrypt with KLLEN = {n} block(s) per kl.exec", (ac, at) == (rc, rt))
 
 # ---- 5. decryption and _Hash_Verify_ ---------------------------------------
 lines.append("--- KLEE decrypt path and _Hash_Verify_ ---")
@@ -666,7 +666,7 @@ for bad_len in (0, 128, 200):
     except Invalid:
         fired = True
     check(f"last_blk_len = {bad_len} -> _Invalid_", fired and cc.state == "Invalid")
-# out-of-range IV length in the Form B ace.setst
+# out-of-range IV length in the Form B kl.setst
 for bad_iv in (0, 4, 8193):
     cc = GcmCC(K)
     try:
@@ -818,7 +818,7 @@ print("     blanket KLLEN rule should be scoped to the block-consuming states.")
 print("  2. In the _Set_Aux_Value_ overlay of the Serialized Context, the second")
 print("     sentence of the `input_base` row (\"Each time this value reaches b, the")
 print("     data in block is processed\") describes `block_base`, not `input_base`.")
-print("  3. The Form C ace.setst INPUT for _Enc_Tag_Finalize_ is typeset with a")
+print("  3. The Form C kl.setst INPUT for _Enc_Tag_Finalize_ is typeset with a")
 print("     doubled `@` across the line break (`... 64)) @` / `@ bswap(...)`).")
 print()
 print(f"KAT-RESULT: {'PASS' if ok else 'FAIL'}")

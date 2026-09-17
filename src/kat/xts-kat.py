@@ -9,7 +9,7 @@ REF   Plain byte-string XTS with ciphertext stealing, written from the standard.
 XEX   The KLEE XEX CC exactly as <<KLEE-XEX-XTS-modes>> specifies it:
 
           on entering _Encrypt_/_Decrypt_:  mask <- enc_blk(key2, INPUT)
-          each ace.exec:  OUTPUT <- mask xor enc_blk(key1, INPUT xor mask)
+          each kl.exec:  OUTPUT <- mask xor enc_blk(key1, INPUT xor mask)
                           mask  <- update_mask(mask)
 
       with the tweak supplied as `bin(i, b)`, the little-endian encoding of the
@@ -18,7 +18,7 @@ XEX   The KLEE XEX CC exactly as <<KLEE-XEX-XTS-modes>> specifies it:
 
 CTS   The <<KLEE-XTS-from-XEX>> "Ciphertext stealing" procedure implemented
       literally, including encryption's reordering of the last two blocks and
-      decryption's clone-based ordering: one ace.clone, one *discarded* ace.exec
+      decryption's clone-based ordering: one kl.clone, one *discarded* kl.exec
       on the clone to advance it from mask index m-1 to m, C_{m-1} decrypted on
       the clone at index m, and CP @ C_m decrypted on the original at index m-1.
       The clone is modelled as a real copy of the CC state, so an accidental
@@ -101,19 +101,19 @@ class XexCC:
         self.doubling = doubling
 
     def setst(self, tweak_value, encrypt):
-        """Form C ace.setst: mask <- INPUT, then mask <- enc_blk(key2, mask)."""
+        """Form C kl.setst: mask <- INPUT, then mask <- enc_blk(key2, mask)."""
         self.mask = tweak_value & MASK128
         self.mask = b2v(aes_encrypt(self.key2, v2b(self.mask, 16)))
         self.encrypt = encrypt
 
     def clone(self):
-        """ace.clone: an independent CR carrying a copy of the state."""
+        """kl.clone: an independent CL carrying a copy of the state."""
         c = XexCC(self.key1, self.key2, self.doubling)
         c.mask, c.encrypt = self.mask, self.encrypt
         return c
 
     def exec(self, inp):
-        """Form A ace.exec: one block, then mask <- update_mask(mask)."""
+        """Form A kl.exec: one block, then mask <- update_mask(mask)."""
         f = aes_encrypt if self.encrypt else aes_decrypt
         out = self.mask ^ b2v(f(self.key1, v2b((inp ^ self.mask) & MASK128, 16)))
         self.mask = self.doubling(self.mask)
@@ -154,9 +154,9 @@ def kl_xts(key1, key2, seq, data, encrypt=True, doubling=update_mask):
         # 5. ... C_{m-1}, C_m, with C_m the final s bits
         out += v2b(c_m1, 16) + v2b(c_last, s_bytes)
     else:
-        # 2. clone the CR; both are at mask index m-1
+        # 2. clone the CL; both are at mask index m-1
         clone = cc.clone()
-        # 3. one discarded ace.exec advances the clone to index m
+        # 3. one discarded kl.exec advances the clone to index m
         clone.exec(0)
         # 4. C_{m-1} on the clone at mask index m, giving PP
         pp = clone.exec(last_full)
@@ -345,7 +345,7 @@ for name, k, nonce, p, c in IEEE1619:
 
 print("\n== (c) <<KLEE-XTS-from-XEX>> ciphertext stealing, taken literally")
 print("   encryption: reordered last two blocks, mask indices m-1 then m")
-print("   decryption: ace.clone + one discarded ace.exec; C_{m-1} at index m on")
+print("   decryption: kl.clone + one discarded kl.exec; C_{m-1} at index m on")
 print("               the clone, CP @ C_m at index m-1 on the original")
 for name, k, nonce, p, c in IEEE1619_CTS:
     k1, k2 = split_keys(k)
@@ -375,7 +375,7 @@ for name, k, nonce, p, c in IEEE1619[:4] + IEEE1619_CTS[:4]:
     print(f"   {name:<40} {'PASS' if good else 'FAIL':<14} "
           f"{'FAIL' if neg_wrong else 'PASS (does not discriminate)'}")
 
-print("\n== Clone independence: the discarded ace.exec must not advance the original")
+print("\n== Clone independence: the discarded kl.exec must not advance the original")
 k1, k2 = split_keys(IEEE1619_CTS[0][1])
 cc = XexCC(k1, k2)
 cc.setst(bin_(seq_of(IEEE1619_CTS[0][2]), 128), False)
@@ -385,7 +385,7 @@ clone.exec(0)
 clone.exec(0)
 same = cc.mask == before
 ok = ok and same
-print(f"  {'original mask unchanged by two ace.exec on the clone':<56} "
+print(f"  {'original mask unchanged by two kl.exec on the clone':<56} "
       f"{'PASS' if same else 'FAIL'}")
 advanced = clone.mask == update_mask(update_mask(before))
 ok = ok and advanced

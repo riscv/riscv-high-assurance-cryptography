@@ -13,7 +13,7 @@ The *specification text* of
   <<KLEE-Ascon-CXOF128>>
 
 is transcribed below, clause by clause, into an executable state machine
-(classes `AceAsconAEAD128`, `AceAsconSponge`).  Nothing is "fixed up": each
+(classes `KleeAsconAEAD128`, `KleeAsconSponge`).  Nothing is "fixed up": each
 numbered step of the .adoc is reproduced as written, on KLEE *values* (little-
 endian bit strings held in Python ints, per src/ace-notation.adoc, whose
 "Conventions of the Referenced Standards" table records SP 800-232 as
@@ -60,7 +60,7 @@ the correct reading and is what this harness models: the caller pads the AD
 only; the final PT/CT block goes through _*_Last_Block_ with the internal
 pad().  The intro now says exactly that, so the spec and this model agree.
 
-SECOND SPEC DISCREPANCY FOUND BY THIS HARNESS
+SECOND SPEC DISCLEPANCY FOUND BY THIS HARNESS
 ---------------------------------------------
 <<KLEE-Ascon-CXOF128>> says only that "the message is prepended with the
 customization string" and that "the management and padding of the
@@ -231,7 +231,7 @@ def ref_cxof128(msg, z, outlen=64):
 # ===================================================================== KLEE model: helpers
 
 class Invalid(Exception):
-    """The CR transitioned to Error State _Invalid_."""
+    """The CL transitioned to Error State _Invalid_."""
 
 def kl_pad(x, n, r=128):
     """The spec's `pad(x,r) = 0^j @ 1 @ x`, j = (-|x|-1) mod r, on KLEE values.
@@ -242,7 +242,7 @@ def kl_pad(x, n, r=128):
 
 # ===================================================================== KLEE model: Ascon-AEAD128
 
-class AceAsconAEAD128:
+class KleeAsconAEAD128:
     """<<KLEE-Ascon-AEAD128>>, and via flags <<KLEE-Ascon-AEAD128-wsn>>.
 
     Every method is one architectural instruction; `self.st` is the _State_
@@ -272,12 +272,12 @@ class AceAsconAEAD128:
         if self.budget is None:
             return
         if self.budget - blocks < 0:
-            # "performs no operation, and the CR transitions to Error State _Invalid_"
+            # "performs no operation, and the CL transitions to Error State _Invalid_"
             self.st = 'Invalid'
             raise Invalid('budget exhausted')
         self.budget -= blocks
 
-    # ---- Form B ace.setst #kl_state_set_aux_value : tag_len
+    # ---- Form B kl.setst #kl_state_set_aux_value : tag_len
     def setst_tag_len(self, Xs):
         assert self.st == 'Ready'
         if not (64 <= Xs <= 128):
@@ -302,7 +302,7 @@ class AceAsconAEAD128:
         self.s[4] ^= self.k1
         self.st = 'Hash_Absorb'
 
-    # ---- State _Hash_Absorb_, Form B ace.exec
+    # ---- State _Hash_Absorb_, Form B kl.exec
     def exec_ad(self, INPUT, acelen):
         assert self.st == 'Hash_Absorb'
         assert acelen % 128 == 0 and acelen > 0
@@ -329,7 +329,7 @@ class AceAsconAEAD128:
     def enter_decrypt(self):
         self._enter('Decrypt')
 
-    # ---- State _Encrypt_, Form A ace.exec
+    # ---- State _Encrypt_, Form A kl.exec
     def exec_encrypt(self, INPUT, acelen):
         assert self.st == 'Encrypt'
         assert acelen % 128 == 0 and acelen > 0
@@ -361,7 +361,7 @@ class AceAsconAEAD128:
             self.last_blk_len = Xs
             self.st = 'Enc_Last_Block' if nxt == 'Hash_Output' else 'Dec_Last_Block'
 
-    # ---- State _Enc_Last_Block_, Form A ace.exec, exactly one block
+    # ---- State _Enc_Last_Block_, Form A kl.exec, exactly one block
     def exec_enc_last(self, INPUT):
         assert self.st == 'Enc_Last_Block' and self.last_blk_len
         self._spend(1)
@@ -374,7 +374,7 @@ class AceAsconAEAD128:
         self.st = 'Hash_Output'
         return OUT
 
-    # ---- State _Decrypt_, Form A ace.exec
+    # ---- State _Decrypt_, Form A kl.exec
     def exec_decrypt(self, INPUT, acelen):
         assert self.st == 'Decrypt'
         assert acelen % 128 == 0 and acelen > 0
@@ -391,7 +391,7 @@ class AceAsconAEAD128:
             OUT |= tmp << (128 * i)
         return OUT
 
-    # ---- State _Dec_Last_Block_, Form A ace.exec, exactly one block
+    # ---- State _Dec_Last_Block_, Form A kl.exec, exactly one block
     def exec_dec_last(self, INPUT):
         assert self.st == 'Dec_Last_Block' and self.last_blk_len
         self._spend(1)
@@ -414,7 +414,7 @@ class AceAsconAEAD128:
         self.s[4] ^= self.k1
         return cat((self.s[4], 64), (self.s[3], 64))
 
-    # ---- State _Hash_Output_, Form C ace.exec (does NOT decrement budget)
+    # ---- State _Hash_Output_, Form C kl.exec (does NOT decrement budget)
     def exec_tag(self):
         assert self.st == 'Hash_Output'
         t = self._tag()
@@ -422,7 +422,7 @@ class AceAsconAEAD128:
         self.st = 'Success'
         return OUT
 
-    # ---- State _Hash_Verify_, Form B ace.exec (does NOT decrement budget)
+    # ---- State _Hash_Verify_, Form B kl.exec (does NOT decrement budget)
     def exec_verify(self, INPUT):
         assert self.st == 'Hash_Verify'
         t = self._tag()
@@ -442,12 +442,12 @@ def kl_encrypt(key, nonce, ad, pt, tag_len=128, ad_chunk=1, pt_chunk=1,
                 budget=None, set_nonce=False, dsep_wrong_word=False):
     """Drive the KLEE state machine through a full encryption.
 
-    `ad_chunk` / `pt_chunk` are the number of 128-bit blocks per ace.exec, i.e.
+    `ad_chunk` / `pt_chunk` are the number of 128-bit blocks per kl.exec, i.e.
     KLLEN / 128, which exercises the multi-block forms of the .adoc clauses.
     Returns (ciphertext_bytes, tag_bytes, cc).
     """
     nv = b2v(nonce)
-    cc = AceAsconAEAD128(b2v(key), nonce=nv if set_nonce else None,
+    cc = KleeAsconAEAD128(b2v(key), nonce=nv if set_nonce else None,
                          budget=budget, dsep_wrong_word=dsep_wrong_word)
     if tag_len != 128:
         cc.setst_tag_len(tag_len)
@@ -488,7 +488,7 @@ def kl_decrypt(key, nonce, ad, ct, tag, tag_len=128, ad_chunk=1, pt_chunk=1,
     """Drive the KLEE state machine through a full decryption + Hash_Verify.
     Returns (ok, plaintext_bytes, cc)."""
     nv = b2v(nonce)
-    cc = AceAsconAEAD128(b2v(key), nonce=nv if set_nonce else None, budget=budget)
+    cc = KleeAsconAEAD128(b2v(key), nonce=nv if set_nonce else None, budget=budget)
     if tag_len != 128:
         cc.setst_tag_len(tag_len)
     cc.setst_start(None if set_nonce else nv)
@@ -513,7 +513,7 @@ def kl_decrypt(key, nonce, ad, ct, tag, tag_len=128, ad_chunk=1, pt_chunk=1,
 
 # ===================================================================== KLEE model: sponges
 
-class AceAsconSponge:
+class KleeAsconSponge:
     """<<KLEE-Ascon-Hash256>>, <<KLEE-Ascon-XOF128>>, <<KLEE-Ascon-CXOF128>>.
 
     The three differ only in the IV and in whether `countdown` is used, exactly
@@ -529,7 +529,7 @@ class AceAsconSponge:
         self.st = 'Hash_Absorb'
         self._first = True        # XOF/CXOF: no permutation before the 1st word
 
-    # ---- State _Hash_Absorb_, Form B ace.exec
+    # ---- State _Hash_Absorb_, Form B kl.exec
     def exec_absorb(self, INPUT, acelen):
         assert self.st == 'Hash_Absorb'
         assert acelen % 64 == 0 and acelen > 0
@@ -544,7 +544,7 @@ class AceAsconSponge:
         if self.use_countdown:
             self.countdown = 3
 
-    # ---- State _Hash_Finalize_, Form C ace.exec
+    # ---- State _Hash_Finalize_, Form C kl.exec
     def exec_squeeze(self, acelen):
         assert self.st == 'Hash_Finalize'
         assert acelen % 64 == 0 and acelen > 0
@@ -566,8 +566,8 @@ class AceAsconSponge:
         return OUT, nwords * 8
 
 def kl_hash256(msg, absorb_chunk=1, squeeze_acelen=256):
-    """Drive Ascon-Hash256.  `squeeze_acelen` selects 1, 2, or 4 ace.exec's."""
-    cc = AceAsconSponge(IV_HASH, use_countdown=True)
+    """Drive Ascon-Hash256.  `squeeze_acelen` selects 1, 2, or 4 kl.exec's."""
+    cc = KleeAsconSponge(IV_HASH, use_countdown=True)
     m = msg + b'\x01' + bytes((-len(msg) - 1) % 8)
     for i in range(0, len(m), 8 * absorb_chunk):
         chunk = m[i:i + 8 * absorb_chunk]
@@ -581,7 +581,7 @@ def kl_hash256(msg, absorb_chunk=1, squeeze_acelen=256):
     return out[:32]
 
 def kl_xof(iv, msg, outlen, prefix=b'', absorb_chunk=1, squeeze_acelen=64):
-    cc = AceAsconSponge(iv, use_countdown=False)
+    cc = KleeAsconSponge(iv, use_countdown=False)
     m = prefix + msg + b'\x01' + bytes((-len(msg) - 1) % 8)
     for i in range(0, len(m), 8 * absorb_chunk):
         chunk = m[i:i + 8 * absorb_chunk]
@@ -763,7 +763,7 @@ def main():
         chk(f"enc  Count={count:<4} {desc}", (ct + tag).hex(), ctt)
         chk(f"     Count={count:<4} final State = Success", cc.st, "Success")
 
-    print("\n  multi-block ace.exec (KLLEN = 256 and 384) gives identical results")
+    print("\n  multi-block kl.exec (KLLEN = 256 and 384) gives identical results")
     for count, ad, pt, ctt, _ in AEAD_KAT:
         ct, tag, _ = kl_encrypt(KAT_KEY, KAT_NONCE, h(ad), h(pt), ad_chunk=2, pt_chunk=3)
         chk(f"enc  Count={count:<4} KLLEN=256(AD)/384(PT)", (ct + tag).hex(), ctt)
@@ -817,7 +817,7 @@ def main():
         chk(f"tag_len={tl:<3} verify rejects a flipped bit inside the tag",
             (ok2, cc3.st), (False, "Failure"))
     for tl in (0, 8, 63, 129, 255):
-        cc = AceAsconAEAD128(b2v(KAT_KEY))
+        cc = KleeAsconAEAD128(b2v(KAT_KEY))
         try:
             cc.setst_tag_len(tl)
             got = "accepted"
@@ -828,7 +828,7 @@ def main():
 
     print("\nlast_blk_len bounds: Xs > 127 -> Error State _Invalid_")
     for xs in (128, 129, 255):
-        cc = AceAsconAEAD128(b2v(KAT_KEY))
+        cc = KleeAsconAEAD128(b2v(KAT_KEY))
         cc.setst_start(b2v(KAT_NONCE))
         cc.enter_encrypt()
         try:
@@ -869,10 +869,10 @@ def main():
         chk(f"budget = {b} (< 4 needed): no operation, Error State Invalid",
             got, ("Invalid", "Invalid"))
     # multi-block exec spends KLLEN/128
-    cc = AceAsconAEAD128(b2v(KAT_KEY), nonce=b2v(KAT_NONCE), budget=10)
+    cc = KleeAsconAEAD128(b2v(KAT_KEY), nonce=b2v(KAT_NONCE), budget=10)
     cc.setst_start()
     cc.exec_ad(0, 384)
-    chk("budget: one ace.exec with KLLEN=384 spends 3 blocks", cc.budget, 7)
+    chk("budget: one kl.exec with KLLEN=384 spends 3 blocks", cc.budget, 7)
     # "No transition back to State _Ready_ is allowed": once the state machine
     # has run to _Success_ the CC is spent, and a second setst_start (which would
     # reinstall the same nonce and reuse the keystream) must not be accepted.
@@ -929,7 +929,7 @@ def main():
     for count, msg, md in HASH_KAT:
         chk(f"Hash256  Count={count:<4} (KLLEN=256, one squeeze)",
             kl_hash256(h(msg)).hex(), md)
-    print("\n  countdown: 1 / 2 / 4 ace.exec squeezes must agree")
+    print("\n  countdown: 1 / 2 / 4 kl.exec squeezes must agree")
     for count, msg, md in HASH_KAT:
         a = kl_hash256(h(msg), squeeze_acelen=256).hex()
         b = kl_hash256(h(msg), squeeze_acelen=128).hex()
@@ -940,7 +940,7 @@ def main():
     for count, msg, md in HASH_KAT:
         chk(f"Hash256  Count={count:<4} KLLEN=192 absorb", kl_hash256(h(msg), absorb_chunk=3).hex(), md)
     # countdown really stops the machine at four words
-    cc = AceAsconSponge(IV_HASH, use_countdown=True)
+    cc = KleeAsconSponge(IV_HASH, use_countdown=True)
     cc.exec_absorb(b2v(b'\x01' + bytes(7)), 64)
     cc.enter_finalize()
     got = []
@@ -954,7 +954,7 @@ def main():
 
     print("\n<<KLEE-Ascon-XOF128>> vs official vectors (512-bit output)")
     for count, msg, md in XOF_KAT:
-        chk(f"XOF128   Count={count:<4} 512-bit squeeze (8 x ace.exec)",
+        chk(f"XOF128   Count={count:<4} 512-bit squeeze (8 x kl.exec)",
             kl_xof128(h(msg), 64).hex(), md)
         chk(f"XOF128   Count={count:<4} same via KLLEN=256 squeezes",
             kl_xof128(h(msg), 64, squeeze_acelen=256).hex(), md)
@@ -964,7 +964,7 @@ def main():
             kl_xof128(h(msg), 32).hex(), md[:64])
         chk(f"XOF128   Count={count:<4} 1024-bit squeeze matches the reference stream",
             kl_xof128(h(msg), 128).hex(), ref_xof128(h(msg), 128).hex())
-    cc = AceAsconSponge(IV_XOF, use_countdown=False)
+    cc = KleeAsconSponge(IV_XOF, use_countdown=False)
     cc.exec_absorb(b2v(b'\x01' + bytes(7)), 64)
     cc.enter_finalize()
     for _ in range(20):

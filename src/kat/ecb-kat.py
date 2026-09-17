@@ -246,7 +246,7 @@ def chk(label, got, want, column=None):
     return good
 
 
-print("== FIPS 197 Appendix C: single-block AES (REF and ACE, b = KLLEN)")
+print("== FIPS 197 Appendix C: single-block AES (REF and KLEE, b = KLLEN)")
 for name, k, p, c in FIPS197:
     key, pt, ct = bytes.fromhex(k), bytes.fromhex(p), bytes.fromhex(c)
     chk(name + " encrypt", aes_encrypt(key, pt).hex(), c)

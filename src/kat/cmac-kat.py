@@ -31,11 +31,11 @@ Checks performed
       Xs = 0     empty message           (K2, all-padding block)
       Xs = b     full final block        (K1 path)
       0 < Xs < b partial final block     (K2, ocb-style padded block)
-  * Both _Hash_Output_ options: the Form C `ace.exec` emit, and the Form C
-    `ace.setst #kl_state_hash_verify` comparison (Success on the right tag,
+  * Both _Hash_Output_ options: the Form C `kl.exec` emit, and the Form C
+    `kl.setst #kl_state_hash_verify` comparison (Success on the right tag,
     Failure on a tampered one).
   * The `Xs` validity rule of the Form B setst: Xs > b and Xs not a
-    multiple of 8 must drive the CR to Error State _Invalid_.
+    multiple of 8 must drive the CL to Error State _Invalid_.
   * Negative controls (must NOT reproduce the standard):
       NC-K2full  : take the K2 path for a full final block instead of K1.
       NC-lemask  : derive the subkeys with the little-endian update_mask
@@ -85,13 +85,13 @@ def ref_cmac(K, M):
         X = aes_encrypt(K, bxor(X, blk))
     return aes_encrypt(K, bxor(X, last))
 
-# ====================================================================== ACE
+# ====================================================================== KLEE
 # The state machine of <<KLEE-CMAC-mode>>, transcribed step by step.
 
 class Invalid(Exception):
-    """CR transition to Error State _Invalid_."""
+    """CL transition to Error State _Invalid_."""
 
-class AceCmac:
+class KleeCmac:
     def __init__(self, key, double_fn=double_ocb, force_k2=False):
         self.keyb = key
         self.double = double_fn
@@ -140,17 +140,17 @@ class AceCmac:
             tmp = self.hash ^ body ^ K2
         self.hash = self.enc(tmp)
 
-    def exec_output(self):                        # Form C ace.exec in _Hash_Output_
+    def exec_output(self):                        # Form C kl.exec in _Hash_Output_
         return self.hash
 
-    def setst_hash_verify(self, INPUT):           # Form C ace.setst in _Hash_Output_
+    def setst_hash_verify(self, INPUT):           # Form C kl.setst in _Hash_Output_
         # the b least significant bits of INPUT are compared with hash
         return sl(INPUT, B - 1, 0) == self.hash   # Success / Failure
 
 
 def kl_cmac(K, M, double_fn=double_ocb, force_k2=False, dummy_empty_input=0):
     """Drive the state machine the way software would; return the b-bit tag."""
-    m = AceCmac(K, double_fn, force_k2)
+    m = KleeCmac(K, double_fn, force_k2)
     if len(M) and len(M) % 16 == 0:
         nfull, tail = len(M) // 16 - 1, M[-16:]   # last full block is the last block
     else:
@@ -228,7 +228,7 @@ def main():
           "(RFC 4493 section 4; NIST CMAC example file):")
     print(f"{'key':10} {'L':6} {'K1':6} {'K2':6}")
     for label, K, wl, w1, w2 in SUBKEYS:
-        L, K1, K2 = AceCmac(K).gen_subkeys()
+        L, K1, K2 = KleeCmac(K).gen_subkeys()
         rl, r1, r2 = ref_subkeys(K)
         good = (v2b(L, 16).hex().upper() == wl and rl.hex().upper() == wl)
         g1 = (v2b(K1, 16).hex().upper() == w1 and r1.hex().upper() == w1)
@@ -238,7 +238,7 @@ def main():
     print("\nCMAC vectors (REF = SP 800-38B on byte strings; "
           "KLEE = <<KLEE-CMAC-mode>> state machine):")
     print(f"{'case':14} {'Mlen':>5}  {'last-block path':16} "
-          f"{'REF':6} {'ACE-emit':9} {'verify':7} {'tamper':7}")
+          f"{'REF':6} {'KLEE-emit':9} {'verify':7} {'tamper':7}")
     for label, K, n, want in VECTORS:
         M = MSG[:n]
         W = bytes.fromhex(want)
@@ -267,14 +267,14 @@ def main():
     for Xs, why in ((136, "Xs > b"), (129, "Xs > b"), (4, "not a multiple of 8"),
                     (12, "not a multiple of 8"), (127, "not a multiple of 8")):
         try:
-            AceCmac(K128).setst_last_block(Xs)
+            KleeCmac(K128).setst_last_block(Xs)
             fired = False
         except Invalid:
             fired = True
         print(f"  Xs = {Xs:3} ({why:19}): {chk(fired)}")
     for Xs in (0, 8, 64, 120, 128):
         try:
-            AceCmac(K128).setst_last_block(Xs)
+            KleeCmac(K128).setst_last_block(Xs)
             fired = True
         except Invalid:
             fired = False

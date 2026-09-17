@@ -208,7 +208,7 @@ def mulx_polyval(v: int) -> int:
 # ---------------------------------------------------------------- XTS / OCB doublings
 
 def update_mask(v: int) -> int:
-    """XEX/XTS mask update (little-endian doubling), per ACE-XEX-XTS-modes."""
+    """XEX/XTS mask update (little-endian doubling), per KLEE-XEX-XTS-modes."""
     c = v >> 127
     v = (v << 1) & MASK128
     if c:

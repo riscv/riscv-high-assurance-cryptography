@@ -15,7 +15,7 @@ What this harness validates
     state machine (Ready / GenerateKeyPair / Encapsulate / Decapsulate /
     *_Input / *_Output), the `process_VLI`-based field loading with the transfer
     counter kept in the MDH _MachineUse_ field, the unconditional Decaps with
-    implicit rejection indistinguishable to the caller, and the `ace.derive`
+    implicit rejection indistinguishable to the caller, and the `kl.derive`
     Form 01 flow that moves `sharedkey` into a secret field of a separately
     provisioned CC, whose _UsagePolicy_ / _Locality_ must satisfy the
     requirement recorded in this CC's _AuxInfo_ (review finding M5).
@@ -91,7 +91,7 @@ OUT_STATES = {S_EK_OUT: 'encapsk', S_CT_OUT: 'ciphertext'}
 
 
 class Invalidated(Exception):
-    """The CR transitioned to Error State _Invalid_ (kl_state_invalid, 25)."""
+    """The CL transitioned to Error State _Invalid_ (kl_state_invalid, 25)."""
 
 
 class MLKEMContext:
@@ -140,7 +140,7 @@ class MLKEMContext:
 
     # -- instructions ---------------------------------------------------
     def setst(self, state):
-        """Form A `ace.setst`.  ML-KEM: "All uses of ace.setst do not require an
+        """Form A `kl.setst`.  ML-KEM: "All uses of kl.setst do not require an
         auxiliary parameter." """
         self.mdh = mdh_set(self.mdh, F_STATE, state)
         if state == S_READY:
@@ -148,12 +148,12 @@ class MLKEMContext:
             #  ciphertext and sharedkey are cleared."
             self._clear_all()
         if state in IN_STATES or state in OUT_STATES:
-            # "Upon entering an *_Input_ or *_Output_ state by using ace.setst,
+            # "Upon entering an *_Input_ or *_Output_ state by using kl.setst,
             #  the MachineUse field is zeroed."
             self.alguse = 0
 
     def exec_input(self, data):
-        """Form B `ace.exec ..., INPUT` in an _*_Input_ state: process_VLI with
+        """Form B `kl.exec ..., INPUT` in an _*_Input_ state: process_VLI with
         block = state = F, b = n = len, cumul_len = MachineUse (block_base and
         input_base internal and unaliased, per <<KLEE-process-VLI>>),
         process_block = finalize = None."""
@@ -174,7 +174,7 @@ class MLKEMContext:
         return self.alguse >= self.field_bits(name)
 
     def exec_output(self, nbytes):
-        """Form C `ace.exec` in an _*_Output_ state."""
+        """Form C `kl.exec` in an _*_Output_ state."""
         name = OUT_STATES[self.state]
         n = self.field_bits(name)
         cum = self.alguse
@@ -188,16 +188,16 @@ class MLKEMContext:
 
     def exec_d(self, rng_d=None, rng_z=None, rng_m=None,
                disable_implicit_rejection=False):
-        """Form D `ace.exec Kn|K{Xn}` in GenerateKeyPair / Encapsulate / Decapsulate.
+        """Form D `kl.exec Kn|K{Xn}` in GenerateKeyPair / Encapsulate / Decapsulate.
 
         The seeds that the spec draws from the RBG are injected here so that the
         model can be run against derandomized official vectors.
         """
         st = self.state
         if st == S_READY:
-            # "In State Ready, no ace.exec instruction is allowed."
+            # "In State Ready, no kl.exec instruction is allowed."
             self.mdh = mdh_set(self.mdh, F_STATE, S_INVALID)
-            raise Invalidated('ace.exec in state Ready')
+            raise Invalidated('kl.exec in state Ready')
 
         if st == S_GENKEYPAIR:
             self.encapsk, self.decapsk = K.keygen_internal(rng_d, rng_z, self.pset)
@@ -234,11 +234,11 @@ class MLKEMContext:
             self.mdh = mdh_set(self.mdh, F_STATE, S_SUCCESS)
             return
 
-        raise AssertionError(f'no Form D ace.exec defined in state {st}')
+        raise AssertionError(f'no Form D kl.exec defined in state {st}')
 
     def derive(self, dest_mdh, length_bytes):
-        """`ace.derive` Form 01 (<<KLEE-instruction-derive>>): the output of this
-        CC's ace.exec -- the shared key -- into a secret field of a second CR.
+        """`kl.derive` Form 01 (<<KLEE-instruction-derive>>): the output of this
+        CC's kl.exec -- the shared key -- into a secret field of a second CL.
 
         The destination CC is provisioned separately, so this models only the
         transfer and the _AuxInfo_ policy requirement.  Returns the bytes written
@@ -411,22 +411,22 @@ def t_state_machine():
     chk('excess bits of the last transfer are ignored',
         took == 160 * 8 and cc2.alguse == 1184 * 8 and cc2.encapsk == ek)
 
-    # a further ace.exec past completion -> Error State Invalid
+    # a further kl.exec past completion -> Error State Invalid
     try:
         cc2.exec_input(b'\x00' * 16)
-        chk('ace.exec with _MachineUse_ >= n transitions to Error State _Invalid_',
+        chk('kl.exec with _MachineUse_ >= n transitions to Error State _Invalid_',
             False)
     except Invalidated:
-        chk('ace.exec with _MachineUse_ >= n transitions to Error State _Invalid_',
+        chk('kl.exec with _MachineUse_ >= n transitions to Error State _Invalid_',
             cc2.state == S_INVALID)
 
-    # no ace.exec allowed in State Ready
+    # no kl.exec allowed in State Ready
     cc3 = MLKEMContext(ps)
     try:
         cc3.exec_d()
-        chk('no ace.exec allowed in State _Ready_', False)
+        chk('no kl.exec allowed in State _Ready_', False)
     except Invalidated:
-        chk('no ace.exec allowed in State _Ready_', cc3.state == S_INVALID)
+        chk('no kl.exec allowed in State _Ready_', cc3.state == S_INVALID)
 
     # Ready clears the four state fields
     cc.setst(S_READY)
@@ -481,7 +481,7 @@ def t_state_machine():
 
 
 def t_derive():
-    print('\n-- ace.derive Form 01: sharedkey -> secret field of a provisioned CC --')
+    print('\n-- kl.derive Form 01: sharedkey -> secret field of a provisioned CC --')
     ps = 768
     v = VECTORS['encaps'][1]
     # _AuxInfo_ states the policies the destination CC is REQUIRED to carry, in
@@ -498,25 +498,25 @@ def t_derive():
     dest = mdh_set(mdh_set(0, F_USAGEPOLICY, usage), F_LOCALITY, locality)
     for m in (128, 192, 256):
         key = cc.derive(dest, m // 8)
-        chk(f'ace.derive: length = {m // 8} B transfers the {m} least significant '
+        chk(f'kl.derive: length = {m // 8} B transfers the {m} least significant '
             'bits of sharedkey',
             key == cc.sharedkey[:m // 8] and len(key) == m // 8)
-    chk('ace.derive: a 256-bit key is the whole sharedkey',
+    chk('kl.derive: a 256-bit key is the whole sharedkey',
         cc.derive(dest, 32) == cc.sharedkey)
-    chk('ace.derive: length beyond the shared key is rejected',
+    chk('kl.derive: length beyond the shared key is rejected',
         _raises(lambda: cc.derive(dest, 33)))
 
     # _AuxInfo_ is a requirement on the destination, not a value copied into it.
     weak = mdh_set(mdh_set(0, F_USAGEPOLICY, usage & ~1), F_LOCALITY, locality)
-    chk('ace.derive: destination whose _UsagePolicy_ is less restrictive than '
+    chk('kl.derive: destination whose _UsagePolicy_ is less restrictive than '
         '_AuxInfo_ -> Error State Invalid, no key transferred',
         _raises(lambda: cc.derive(weak, 16)))
     weak2 = mdh_set(mdh_set(0, F_USAGEPOLICY, usage), F_LOCALITY, locality & ~2)
-    chk('ace.derive: destination whose _Locality_ is less restrictive than '
+    chk('kl.derive: destination whose _Locality_ is less restrictive than '
         '_AuxInfo_ -> Error State Invalid',
         _raises(lambda: cc.derive(weak2, 16)))
     stricter = mdh_set(mdh_set(0, F_USAGEPOLICY, usage | 0b10000), F_LOCALITY, locality)
-    chk('ace.derive: a destination stricter than _AuxInfo_ is accepted',
+    chk('kl.derive: a destination stricter than _AuxInfo_ is accepted',
         cc.derive(stricter, 16) == cc.sharedkey[:16])
 
     # the same sharedkey obtained by Decapsulate transfers the same bytes
@@ -525,7 +525,7 @@ def t_derive():
     cd.setst(S_DK_IN); cd.exec_input(bytes.fromhex(dv['dk']))
     cd.setst(S_CT_IN); cd.exec_input(bytes.fromhex(dv['c']))
     cd.setst(S_DECAPSULATE); cd.exec_d()
-    chk('ace.derive after _Decapsulate_ uses the decapsulated sharedkey',
+    chk('kl.derive after _Decapsulate_ uses the decapsulated sharedkey',
         cd.derive(dest, 16) == bytes.fromhex(dv['k'])[:16], dv['src'])
 
 

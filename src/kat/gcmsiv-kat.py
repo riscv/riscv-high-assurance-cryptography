@@ -40,8 +40,8 @@ Spec notes (reported, not patched):
     0..3), which the C.1 intermediates confirm.
   * The instruction/Form used to enter Enc_Tag_Finalize, Encrypt, Decrypt
     and Dec_Tag_Finalize is now stated (review finding m8, fixed): each is a
-    Form A ace.setst, and the value the state consumes is the INPUT of the
-    ace.exec issued *in* the state, not an argument of the transition.
+    Form A kl.setst, and the value the state consumes is the INPUT of the
+    kl.exec issued *in* the state, not an argument of the transition.
 """
 import sys, os
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -112,10 +112,10 @@ def ref_decrypt(key: bytes, nonce: bytes, ctag: bytes, aad: bytes):
     return True, pt
 
 # ======================================================================
-# ACE: the state machine of <<KLEE-GCM-SIV-mode>>, on KLEE values
+# KLEE: the state machine of <<KLEE-GCM-SIV-mode>>, on KLEE values
 # ======================================================================
 
-class AceGcmSiv:
+class KleeGcmSiv:
     """Literal transcription of the <<KLEE-GCM-SIV-mode>> state machine.
 
     Each method is one instruction of the spec text.  KLLEN is the bit
@@ -174,39 +174,39 @@ class AceGcmSiv:
 
     # -- instructions --------------------------------------------------
     def setst_set_aux_value(self, INPUT: int):
-        """ace.setst Form C, #kl_state_set_aux_value."""
+        """kl.setst Form C, #kl_state_set_aux_value."""
         self._goto('Set_Aux_Value')
         self.nonce = sl(INPUT, 95, 0)
         self.enc_key, self.auth_key = rfc8452_keyderiv(self.key, self.nonce)
 
     def setst_set_aux_value_2(self, INPUT: int):
-        """ace.setst Form C, #kl_state_set_aux_value_2 (SIV, decryption)."""
+        """kl.setst Form C, #kl_state_set_aux_value_2 (SIV, decryption)."""
         self._goto('Set_Aux_Value_2')
         self.SIV = INPUT & MASK128
 
     def setst_hash_absorb(self):
-        """ace.setst Form A, #kl_state_hash_absorb."""
+        """kl.setst Form A, #kl_state_hash_absorb."""
         self._goto('Hash_Absorb')
 
     def exec_hash_absorb(self, INPUT: int, acelen: int):
-        """ace.exec Form B in Hash_Absorb; absorbs KLLEN/128 blocks."""
+        """kl.exec Form B in Hash_Absorb; absorbs KLLEN/128 blocks."""
         assert self.state == 'Hash_Absorb' and acelen % 128 == 0
         for j in range(acelen // 128):
             self._absorb(sl(INPUT, 128 * j + 127, 128 * j))
 
     def exec_enc_tag_finalize(self, INPUT: int) -> int:
-        """ace.exec Form A in Enc_Tag_Finalize; INPUT is the length block."""
+        """kl.exec Form A in Enc_Tag_Finalize; INPUT is the length block."""
         self._goto('Enc_Tag_Finalize')
         self._absorb(INPUT & MASK128)        # KLLEN > 128: 128 LSBs only
         self.polyval_probe = self.tmp
         self.tmp = self._enc_blk(cat((0, 1), (sl(self.tmp, 126, 96), 31),
                                      (sl(self.tmp, 95, 0) ^ self.nonce, 96)))
         self.SIV = self.tmp
-        self._goto('Encrypt')                # M2: the finalize ace.exec enters Encrypt
+        self._goto('Encrypt')                # M2: the finalize kl.exec enters Encrypt
         return self.SIV                      # OUTPUT
 
     def exec_encrypt(self, INPUT: int, acelen: int) -> int:
-        """ace.exec Form A in Encrypt; KLLEN/128 full blocks."""
+        """kl.exec Form A in Encrypt; KLLEN/128 full blocks."""
         # M2: Encrypt is reachable only via exec_enc_tag_finalize, which synthesized SIV.
         assert self.state == 'Encrypt', self.state
         assert acelen % 128 == 0
@@ -221,7 +221,7 @@ class AceGcmSiv:
         return OUTPUT
 
     def setst_enc_last_block(self, Xs: int):
-        """ace.setst Form B entering Enc_Last_Block; Xs = last_blk_len."""
+        """kl.setst Form B entering Enc_Last_Block; Xs = last_blk_len."""
         self._goto('Enc_Last_Block')
         if Xs == 0 or Xs > 120 or Xs % 8 != 0:
             self._invalid()
@@ -242,7 +242,7 @@ class AceGcmSiv:
         return OUTPUT                        # zeros(128-lbl) @ ...
 
     def exec_decrypt(self, INPUT: int, acelen: int) -> int:
-        """ace.exec Form A in Decrypt; decrypt then absorb the plaintext."""
+        """kl.exec Form A in Decrypt; decrypt then absorb the plaintext."""
         if self.state != 'Decrypt':
             self._goto('Decrypt')
         assert acelen % 128 == 0
@@ -280,7 +280,7 @@ class AceGcmSiv:
         return OUTPUT
 
     def exec_dec_tag_finalize(self, INPUT: int):
-        """ace.exec Form B in Dec_Tag_Finalize; internal comparison."""
+        """kl.exec Form B in Dec_Tag_Finalize; internal comparison."""
         self._goto('Dec_Tag_Finalize')
         self._absorb(INPUT & MASK128)
         self.polyval_probe = self.tmp
@@ -310,7 +310,7 @@ def rfc8452_keyderiv(key: bytes, nonce_v: int):
 
 # -- drivers -----------------------------------------------------------
 
-def _absorb_string(m: AceGcmSiv, s: bytes, acelen: int):
+def _absorb_string(m: KleeGcmSiv, s: bytes, acelen: int):
     """Feed the zero-padded byte string s through Hash_Absorb in chunks of
     at most `acelen` bits; the final chunk covers only the remaining blocks."""
     p = _pad16(s)
@@ -330,7 +330,7 @@ def _length_block_be(aad: bytes, pt: bytes) -> int:
                (len(pt) * 8).to_bytes(8, 'big'))
 
 def kl_encrypt(key, nonce, aad, pt, acelen=128, length_block=None):
-    m = AceGcmSiv(key)
+    m = KleeGcmSiv(key)
     m.setst_set_aux_value(b2v(nonce))
     m.setst_hash_absorb()
     _absorb_string(m, aad, acelen)
@@ -353,7 +353,7 @@ def kl_encrypt(key, nonce, aad, pt, acelen=128, length_block=None):
 
 def kl_decrypt(key, nonce, aad, ctag, acelen=128, length_block=None):
     ct, tag = ctag[:-16], ctag[-16:]
-    m = AceGcmSiv(key)
+    m = KleeGcmSiv(key)
     m.setst_set_aux_value(b2v(nonce))
     m.setst_set_aux_value_2(b2v(tag))
     m.setst_hash_absorb()
@@ -609,28 +609,28 @@ def main():
     key = bytes.fromhex(VECTORS[1]['key'])
     nonce = bytes.fromhex(VECTORS[1]['nonce'])
 
-    m = AceGcmSiv(key)
+    m = KleeGcmSiv(key)
     m.setst_set_aux_value(b2v(nonce))
     m.setst_hash_absorb()
     m.exec_enc_tag_finalize(_length_block(b'', b'x' * 16))
     m.ctr = M32                              # force the saturation condition
     m.exec_encrypt(0, 128)
-    chk(m.state == 'Invalid', "ctr = 2^32-1 in Encrypt puts the CR in Invalid")
+    chk(m.state == 'Invalid', "ctr = 2^32-1 in Encrypt puts the CL in Invalid")
 
     # -- M2: a caller-chosen SIV cannot survive onto the encryption path -----
     victim_tag = bytes.fromhex(VECTORS[1]['ct_tag'])[-16:]
-    m = AceGcmSiv(key)
+    m = KleeGcmSiv(key)
     m.setst_set_aux_value(b2v(nonce))
     m.setst_set_aux_value_2(b2v(victim_tag))     # inject a chosen SIV
     m.setst_hash_absorb()
     injected = m.SIV
     m.exec_enc_tag_finalize(_length_block(b'', b''))   # mandatory before Encrypt
     chk(m.state == 'Encrypt' and m.SIV != injected,
-        "M2: the Enc_Tag_Finalize ace.exec is mandatory before Encrypt and overwrites the injected SIV")
-    chk('Encrypt' not in AceGcmSiv.TRANSITIONS['Hash_Absorb']
-        and 'Encrypt' not in AceGcmSiv.TRANSITIONS.get('Set_Aux_Value_2', ()),
-        "M2: Encrypt is not reachable by ace.setst; only the finalize ace.exec enters it")
-    m2 = AceGcmSiv(key)
+        "M2: the Enc_Tag_Finalize kl.exec is mandatory before Encrypt and overwrites the injected SIV")
+    chk('Encrypt' not in KleeGcmSiv.TRANSITIONS['Hash_Absorb']
+        and 'Encrypt' not in KleeGcmSiv.TRANSITIONS.get('Set_Aux_Value_2', ()),
+        "M2: Encrypt is not reachable by kl.setst; only the finalize kl.exec enters it")
+    m2 = KleeGcmSiv(key)
     m2.setst_set_aux_value(b2v(nonce))
     m2.setst_set_aux_value_2(b2v(victim_tag))
     m2.setst_hash_absorb()
@@ -639,17 +639,17 @@ def main():
         blocked = False
     except AssertionError:
         blocked = True
-    chk(blocked, "M2: ace.setst Hash_Absorb -> Encrypt (skipping the finalize exec) is not allowed")
+    chk(blocked, "M2: kl.setst Hash_Absorb -> Encrypt (skipping the finalize exec) is not allowed")
 
     for bad_lbl in (0, 4, 121, 128):
-        m = AceGcmSiv(key)
+        m = KleeGcmSiv(key)
         m.setst_set_aux_value(b2v(nonce))
         m.setst_hash_absorb()
         m.exec_enc_tag_finalize(_length_block(b'', b'x' * 18))
         m.exec_encrypt(0, 0)
         m.setst_enc_last_block(bad_lbl)
         chk(m.state == 'Invalid',
-            f"last_blk_len = {bad_lbl} puts the CR in Invalid")
+            f"last_blk_len = {bad_lbl} puts the CL in Invalid")
 
     # -- negative control ---------------------------------------------
     # GCM assembles its length block big-endian; the spec mandates bin()
@@ -675,14 +675,14 @@ def main():
           "C.1 intermediates.")
     print("SPEC-NOTE: review m8 is fixed. Each transition into "
           "Enc_Tag_Finalize, Decrypt and Dec_Tag_Finalize is stated to be a "
-          "Form A ace.setst, with the value the state consumes supplied as the "
-          "INPUT of the ace.exec issued in the state; the model no longer has "
+          "Form A kl.setst, with the value the state consumes supplied as the "
+          "INPUT of the kl.exec issued in the state; the model no longer has "
           "to infer the Form.")
     print("SPEC-NOTE: M2 is fixed. State Encrypt is no longer entered by "
-          "ace.setst; it is reached only from the Enc_Tag_Finalize ace.exec, "
+          "kl.setst; it is reached only from the Enc_Tag_Finalize kl.exec, "
           "which synthesizes SIV first, so a caller-chosen SIV cannot be used "
-          "as the encryption keystream (an ace.setst naming Encrypt invalidates "
-          "the CR).")
+          "as the encryption keystream (an kl.setst naming Encrypt invalidates "
+          "the CL).")
 
     print(f"\nKAT-RESULT: {'PASS' if ok else 'FAIL'}")
     return 0 if ok else 1

@@ -4,7 +4,7 @@
 WHAT IS MODELED (from the spec text):
   * Both PI variants of <<KLEE-HMAC>>.
     - NIK ("No Initial Key"): _Ready_ -> _Set_Key_ -> _Hash_Absorb_ -> ... ; in
-      _Set_Key_ the b-bit K0 is loaded by one or more Form B ace.exec through
+      _Set_Key_ the b-bit K0 is loaded by one or more Form B kl.exec through
       process_VLI entered as process_VLI(b, block=K0, b, state=K0, n=b,
       input_base, block_base, 0, cumul_len, None, None, mode=assign).  The harness
       loads K0 in several transfers and interrupts/resumes one of them.
@@ -27,9 +27,9 @@ WHAT IS MODELED (from the spec text):
     (klstart = input_base/8, input_base = 8*klstart) is used throughout, and is
     exercised by the interrupted _Set_Key_ and _Hash_Absorb_ transfers.
 
-CORES.  SHA-224/256/384/512 are implemented FROM SCRATCH here (FIPS 180-4 sect. 6
+CORES.  SHA-224/256/384/512 are implemented FROM SCLATCH here (FIPS 180-4 sect. 6
 compression, IVs and round constants derived by exact integer arithmetic from the
-roots of the primes), and the KLEE model uses only those.  For HMAC-SHA-3 the ACE
+roots of the primes), and the KLEE model uses only those.  For HMAC-SHA-3 the KLEE
 model calls hashlib's sha3_* as the underlying H -- <<KLEE-HMAC>> delegates H to
 <<KLEE-SHA-3>>, which this harness does not re-derive; the HMAC LAYER (K0 padding to
 the sponge rate b, ipad/opad, inner/outer flow, state machine) is still the model's
@@ -131,7 +131,7 @@ def set_slice(v, hi, lo, x):
     return (v & ~mask) | ((x << lo) & mask)
 
 class Invalid(Exception):
-    """CR transition to Error State _Invalid_."""
+    """CL transition to Error State _Invalid_."""
 
 class Sha2Core:
     """The underlying SHA-2 hash CC (<<KLEE-SHA-2>>) as driven by <<KLEE-HMAC>>.
@@ -184,7 +184,7 @@ class Sha2Core:
         return None
 
     def exec_input(self, data, resume_from=None, interrupt_after=None):
-        """Form B ace.exec in _Hash_Absorb_: the message, counted in cumul_len."""
+        """Form B kl.exec in _Hash_Absorb_: the message, counted in cumul_len."""
         # M4-corrected: input_base <- 8 * klstart on resumption.
         base = 8 * resume_from if resume_from is not None else 0
         return self._fill(b2v(data), 8 * len(data), base, True, interrupt_after)
@@ -269,7 +269,7 @@ def provisioner_K0(name, key, b_bits):
             key = v2b(sl(c.digest_value(), c.d - 1, 0), c.d // 8)
     return key + bytes(b_bits // 8 - len(key))
 
-class AceHmac:
+class KleeHmac:
     """A HMAC CC per <<KLEE-HMAC>>, in either the NIK or the KIP variant."""
 
     def __init__(self, name, variant, K0=None, swap_pads=False):
@@ -371,9 +371,9 @@ def kl_hmac(name, key, msg, variant='KIP', swap_pads=False, split=True):
               else 16 * SHA2[name][0])
     K0 = provisioner_K0(name, key, b_bits)
     if variant == 'KIP':
-        cc = AceHmac(name, 'KIP', K0=K0, swap_pads=swap_pads)
+        cc = KleeHmac(name, 'KIP', K0=K0, swap_pads=swap_pads)
     else:
-        cc = AceHmac(name, 'NIK', swap_pads=swap_pads)
+        cc = KleeHmac(name, 'NIK', swap_pads=swap_pads)
         # load K0 in three Form B transfers, interrupting/resuming the second
         q = len(K0) // 4
         parts = [K0[:q], K0[q:3 * q], K0[3 * q:]]
@@ -486,7 +486,7 @@ for name in ('SHA3-256', 'SHA3-512'):
               f'{"PASS" if gn else "FAIL"}')
 
 # a KIP CC refuses to be re-keyed (<<KLEE-HMAC>>: "A KIP CC cannot be re-keyed")
-cc = AceHmac('SHA-256', 'KIP', K0=bytes(64))
+cc = KleeHmac('SHA-256', 'KIP', K0=bytes(64))
 try:
     cc.exec_set_key(bytes(64)); refused = False
 except Invalid:
@@ -496,7 +496,7 @@ print(f'\nKIP CC refuses _Set_Key_ (cannot be re-keyed): '
       f'{"PASS" if refused else "FAIL"}')
 
 # NIK CC refuses to absorb before K0 is fully loaded
-cc = AceHmac('SHA-256', 'NIK')
+cc = KleeHmac('SHA-256', 'NIK')
 cc.exec_set_key(bytes(32))                     # half a K0
 try:
     cc.enter_absorb(); refused2 = False

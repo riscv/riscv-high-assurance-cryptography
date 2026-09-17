@@ -3,7 +3,8 @@
 [preface,#intro]
 == Introduction
 
-This brief introduction to the _Atomic Cryptography Extension_ (ACE) is not
+This brief introduction to the
+_Cryptographic Lockers Extensions_ (KLEE) – formerly know as the _Atomic Cryptography Extension_ (ACE) – is not
 part of the specification.
 
 The ratification plan can be found
@@ -15,11 +16,11 @@ KLEE defines an interface to high-performance cryptographic operations without g
 (((design, high performance)))
 Its development has been prompted by use cases such as content protection (including local LLM decryption), link and storage encryption, secure boot, and attestation.
 
-ACE's main features are:
+KLEE's main features are:
 
 * To mitigate key misuse, KLEE binds cryptographic secrets (such as keys) and metadata into an indivisible structure called a _Cryptographic Context_ (CC). The architecture uses the metadata to restrict each secret to a specific algorithm and, optionally, to enforce usage constraints based on the process, VM, security state, boot cycle, expiration date, or other policies.
 
-* To implement CCs, KLEE introduces _Cryptographic Registers_ (CRs)—architectural containers that conceal their secrets from software. A CC is created by _provisioning_ (i.e., writing) secrets and metadata into a CR. KLEE instructions operate on CRs instead of explicit key values. As a result, software can use keys without holding them explicitly in the process's memory, and also benefit from higher performance and side-channel-protected implementations when available.
+* To implement CCs, KLEE introduces _Cryptographic Lockers_ (CLs)—architectural containers that conceal their secrets from software. A CC is created by _provisioning_ (i.e., writing) secrets and metadata into a CL. KLEE instructions operate on CLs instead of explicit key values. As a result, software can use keys without holding them explicitly in the process's memory, and also benefit from higher performance and side-channel-protected implementations when available.
 
 * Cryptographic operations are performed _atomically_ to avoid leaking data through architectural side-channels.
   Instructions can be interrupted only between cryptographic operations, or at the points that the algorithms they execute define for their long-running operations.
@@ -34,7 +35,7 @@ ACE's main features are:
 
 * KLEE provides a secure mechanism to store a CC to memory via authenticated
   encryption, producing a _Sealed Cryptographic Context_ (SCC). Once generated,
-  an SCC can later be re-imported into a CR. If an SCC is passed to a process
+  an SCC can later be re-imported into a CL. If an SCC is passed to a process
   in place of the key value, the key is not exposed in that process' memory.
 
 
@@ -62,7 +63,7 @@ KLEE intentionally excludes the following:
 * **Key revocation:**
 This specification does not define a key revocation mechanism. The rationale is:
 
-. A revocation mechanism would impose significant implementation and performance costs, contrary to ACE’s goals of simplicity and speed.
+. A revocation mechanism would impose significant implementation and performance costs, contrary to KLEE’s goals of simplicity and speed.
 . A universal revocation mechanism would be impractical to implement because of the numerous protocols, and revocation data may be unbounded. Implementing it in the KLEE unit would require dynamic access to secure memory. Isolated software components integrated with the local software stack can provide this functionality while maintaining strong security guarantees.
 . Revocation generally applies to root keys, not derived keys such as session keys. The trusted entity that manages the root keys can therefore manage revocation. The expiration-date mechanism and _Localities_ can limit the lifetime and scope of derived keys.
 . Applications that require direct software access to root keys, such as link or storage encryption, typically run in protected environments that can implement their own revocation mechanisms.
@@ -82,7 +83,7 @@ Asset _availability_ is not an architectural goal.
 
 KLEE tries to avoid accepting risks, or suppressing useful features as much as possible. It _controls_ threats through its own mechanisms and _transfers_ residual risk—specifically, the risk of key extraction—to the privileged or trusted software and hardware environments that manage keys. For example, trusted software can employ control-flow integrity, memory encryption with integrity protection, and anti-replay mechanisms, while hardware key-management blocks can be hardened to protect entrusted keys.
 
-Direct plaintext leakage, memory-corruption attacks against the ACE-using process, and Release of Unverified Plaintext (RUP) attacks are out of scope. KLEE cannot mitigate these threats because the processed information resides within the user's execution context; they are therefore _accepted_.
+Direct plaintext leakage, memory-corruption attacks against the KLEE-using process, and Release of Unverified Plaintext (RUP) attacks are out of scope. KLEE cannot mitigate these threats because the processed information resides within the user's execution context; they are therefore _accepted_.
 
 === Open Points
 
@@ -92,7 +93,7 @@ into two groups, and the distinction matters when assessing the document.
 Group A — items requiring closure by the RISC-V Architecture Review Committee (ARC).:::
 
 . *Opcode allocation.* The encodings use `custom-1` and `custom-2` as placeholders. KLEE needs two
-  opcodes, but the 32-bit opcode space is essentially exhausted. Since ACE, although broadly
+  opcodes, but the 32-bit opcode space is essentially exhausted. Since KLEE, although broadly
   useful, is used only in specific parts of code and libraries, a mechanism such as Composable
   Extensions would be beneficial. KLEE remains a *non-custom extension*, aiming at ratification.
 
@@ -105,8 +106,8 @@ Group A — items requiring closure by the RISC-V Architecture Review Committee 
   For certain CSRs, do we need the Indirect CSR Access mechanism of `Smcsrind`/`Sscsrind` or does the ARC prefer direct access for these CSRs? In case of indirect access, the `*iselect` values are to be assigned by the ARC.
 
 . *Exception cause codes.* The ARC must allocate `mcause` values: individual causes, or a single
-  KLEE cause with a subcause register. Some form of “`mvalue`” reporting the CR number is also
-  needed; it would spare handlers from decoding direct and indirect CR references.
+  KLEE cause with a subcause register. Some form of “`mvalue`” reporting the CL number is also
+  needed; it would spare handlers from decoding direct and indirect CL references.
 
 . *KLV scope.* <<KLEE-KLV>> defines the vector subset KLEE requires, which we consider complete.
   The following questions do not block candidacy but must be resolved; we request ARC feedback.
@@ -118,7 +119,7 @@ Group A — items requiring closure by the RISC-V Architecture Review Committee 
      that divides the size, defining `EGW`/`SEW` and the `vstart` increment per iteration
      (link:https://github.com/riscv/riscv-high-assurance-cryptography/issues/96[]).
 
-. *RVWMO axiomatic integration.* <<KLEE-Memory-Model>> specifies the memory ordering of ACE's
+. *RVWMO axiomatic integration.* <<KLEE-Memory-Model>> specifies the memory ordering of KLEE's
   component memory operations informally, through prefix-completeness, and <<KLEE-resumability>>
   gives a conflicting-access rule. Integrating KLEE into RVWMO's axiomatic formalism remains to be
   done with the ARC during ratification.
@@ -153,7 +154,7 @@ Group B — open design questions owned by this task group.:::
 . *`kl.mgmt` interruptibility.* `kl.mgmt` can be relatively long-running, though not on th order of ECC
   scalar multiplication or signature verification. It is currently uninterruptible: preemption and
   resumption of `kl.mgmt` may introduce new attack vectors. Interrupting the internal encryption or decryption
-  process complicates export, as a CR may contain both encrypted and unencrypted content,
+  process complicates export, as a CL may contain both encrypted and unencrypted content,
   and unencrypted content cannot be exported as such.
   We do not currently have a secure solution to the `kl.mgmt` interruption problem.
 
@@ -164,7 +165,7 @@ Group B — open design questions owned by this task group.:::
 // One alternative is to encrypt `nonce @ constant1` and `nonce @ constant2` under the _derived encryption key_, producing `A` and `B`. The algorithms could then use `enc_key xor (B @ A)` and `auth_key xor B xor A` instead of `enc_key` and `auth_key`. This construction is non-standard, but it is secure and faster: it requires only two additional AES-256 encryptions.
 
 . *Additional inputs for random key generation.* KDFs that accept arbitrary inputs and produce
-  unlimited outputs could easily be defined as Machines and, through `kl.derive`, feed a CR's
+  unlimited outputs could easily be defined as Machines and, through `kl.derive`, feed a CL's
   key field. Should standard KDFs be defined?
 
 . *`kl.mv` piecewise transfers.* Is the idiom in <<KLEE-management-code-snippets>> consistent with
@@ -176,17 +177,17 @@ Group B — open design questions owned by this task group.:::
 
 . *Last block.* Should Rule <<KLEE-AGR-load-long-field>> handle a “last block”?
 
-. *CRF capacity.* Residual CRF capacity is not discoverable.
-  The capacity used by a CR depends on the implementation's internal representation (ADS size, number
+. *CLF capacity.* Residual CLF capacity is not discoverable.
+  The capacity used by a CL depends on the implementation's internal representation (ADS size, number
   of shares of a masked implementation), so exact requirements are impossible; the task group may
   discuss approximate mechanisms. We could extend kl.size/kl.avail to return whether there is
   sufficient capacity available for a given provision/import/clone operation, and whether implementations
-  can offer to suggest which CR to free first except a given one (for instance, the current largest, or
+  can offer to suggest which CL to free first except a given one (for instance, the current largest, or
   the one that has not been used longest). Intel may cache keys, we have to manage them explicitly.
 
 . *Random material in exportable States.* Compare and streamline Rules
   <<KLEE-IRR-long-running-no-data>>, <<KLEE-AGR-progress-discard>>, <<KLEE-GR-atomic-randomness>> and
-  <<KLEE-GR-opening-cr-when>>, and establish how to implement “No State from which the CR can be
+  <<KLEE-GR-opening-cr-when>>, and establish how to implement “No State from which the CL can be
   exported or cloned holds random material that could be consumed against an input other than the
   one it was drawn for.”
 //  An implementation may, for instance, record in the ADS the _State_ the

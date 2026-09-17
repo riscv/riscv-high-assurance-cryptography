@@ -143,16 +143,16 @@ def ref_ocb_encrypt(K, N, A, P, taglen_bits):
     Tag = bxor(E(bxor(bxor(Checksum, Offset), Ld['$'])), _ref_hash(K, A, Ld))
     return C + Tag[:taglen_bits // 8]
 
-# ====================================================================== ACE
+# ====================================================================== KLEE
 # The state machine of <<KLEE-OCB-mode>>, transcribed step by step.  Every
 # formula is the spec's own, evaluated on KLEE values.  `double_fn` and
 # `ktop_bswap` parameterize the negative controls; the defaults are the
 # specified behavior.
 
 class Invalid(Exception):
-    """CR transition to Error State _Invalid_."""
+    """CL transition to Error State _Invalid_."""
 
-class AceOcb:
+class KleeOcb:
     def __init__(self, key, double_fn=double_ocb, ktop_bswap=True):
         self.keyb = key
         self.double = double_fn
@@ -231,7 +231,7 @@ class AceOcb:
             self.offset ^= self.Lstar
             tmp = self.ocb_pad(INPUT, self.last_blk_len) ^ self.offset
             self.hash_A ^= self.enc(tmp)
-        # last_blk_len = 0: no ace.exec may be executed at all
+        # last_blk_len = 0: no kl.exec may be executed at all
 
     def enter_crypt(self):                        # entering _Encrypt_ / _Decrypt_
         n = self.N_len
@@ -301,7 +301,7 @@ class AceOcb:
         self.checksum_P = self.enc(self.checksum_P ^ tmp ^ self.Ldollar) ^ self.hash_A
         return OUTPUT
 
-    def setst_hash_verify(self, INPUT):           # Form C ace.setst -> Hash_Verify
+    def setst_hash_verify(self, INPUT):           # Form C kl.setst -> Hash_Verify
         t = self.tag_len
         return sl(INPUT, t - 1, 0) == sl(self.checksum_P, t - 1, 0)   # Success/Failure
 
@@ -314,7 +314,7 @@ def kl_ocb_encrypt(K, N, A, P, taglen_bits, double_fn=double_ocb, ktop_bswap=Tru
     length is not a multiple of 8, in which case N carries the bit string
     left-aligned in ceil(n/8) bytes.
     """
-    m = AceOcb(K, double_fn, ktop_bswap)
+    m = KleeOcb(K, double_fn, ktop_bswap)
     m.setst_nonce_len(len(N) * 8 if n_len_bits is None else n_len_bits)
     m.exec_set_nonce(b2v(N))
     m.setst_tag_len(taglen_bits)
@@ -356,7 +356,7 @@ def kl_ocb_decrypt(K, N, A, CT, taglen_bits, n_len_bits=None):
     """Return (recovered plaintext, Hash_Verify Success?)."""
     tlb = taglen_bits // 8
     C, tag = CT[:-tlb], CT[-tlb:]
-    m = AceOcb(K)
+    m = KleeOcb(K)
     m.setst_nonce_len(len(N) * 8 if n_len_bits is None else n_len_bits)
     m.exec_set_nonce(b2v(N))
     m.setst_tag_len(taglen_bits)
@@ -378,7 +378,7 @@ def kl_ocb_decrypt(K, N, A, CT, taglen_bits, n_len_bits=None):
         P += v2b(m.exec_dec_last(b2v(rest)), 16)[:len(rest)]
     else:
         m.exec_enc_last_empty()                   # Form D, same formula on decrypt
-    ok = m.setst_hash_verify(b2v(tag))            # Form C ace.setst comparison
+    ok = m.setst_hash_verify(b2v(tag))            # Form C kl.setst comparison
     return P, ok
 
 # ================================================================== vectors
@@ -456,8 +456,8 @@ def main():
 
     print("RFC 7253 Appendix A, AEAD_AES_128_OCB_TAGLEN128 "
           "(encrypt; decrypt = P recovered + verify Success + tamper Failure)")
-    print(f"{'case':>4} {'|A|':>4} {'|P|':>4}  {'REF-enc':8} {'ACE-enc':8} "
-          f"{'ACE-dec':8} {'tamper':8} finalize")
+    print(f"{'case':>4} {'|A|':>4} {'|P|':>4}  {'REF-enc':8} {'KLEE-enc':8} "
+          f"{'KLEE-dec':8} {'tamper':8} finalize")
     for sfx, la, lp, ct in VEC128:
         N, A, P, CT = nonce(sfx), S40[:la], S40[:lp], bytes.fromhex(ct)
         r = ref_ocb_encrypt(K128, N, A, P, 128)
@@ -470,7 +470,7 @@ def main():
               f"{chk(Pd == P and good):8} {chk(not evil):8} {fin}"
               % sfx)
 
-    print("\nACE-model internal values vs RFC 7253 published intermediates "
+    print("\nKLEE-model internal values vs RFC 7253 published intermediates "
           "(vector 0F, taglen 128):")
     ms = []
     kl_ocb_encrypt(K128, nonce(0xF), b'', S40, 128, machine_out=ms)
@@ -484,8 +484,8 @@ def main():
     Pd, good = kl_ocb_decrypt(K96, N, A, CT, 96)
     bad = bytearray(CT); bad[-1] ^= 1
     _, evil = kl_ocb_decrypt(K96, N, A, bytes(bad), 96)
-    print(f"  REF-enc {chk(r == CT)}   ACE-enc {chk(a == CT)}   "
-          f"ACE-dec {chk(Pd == P and good)}   tamper {chk(not evil)}")
+    print(f"  REF-enc {chk(r == CT)}   KLEE-enc {chk(a == CT)}   "
+          f"KLEE-dec {chk(Pd == P and good)}   tamper {chk(not evil)}")
 
     print("\nRFC 7253 iterated test, AEAD_AES_128_OCB_TAGLEN128, "
           "end-to-end through the KLEE model:")

@@ -3,7 +3,7 @@
 
 What is validated (spec anchors in src/ace-ISA-algorithms.adoc, by heading):
   [[KLEE-process-VLI]]      -- bit-accounted absorption loop, chunking across several
-                              ace.exec transfers, partial-block boundaries, and the
+                              kl.exec transfers, partial-block boundaries, and the
                               interruption/resumption points (klstart).
   [[KLEE-hash-functions]]   -- the generic _Hash_Output_ squeeze loop, including
                               multi-exec squeezing, resumption via
@@ -17,7 +17,7 @@ What is validated (spec anchors in src/ace-ISA-algorithms.adoc, by heading):
                               KLEE little-endian ints of common.py).
 
 Layered anchoring:
-  1. Keccak-f[1600] is implemented FROM SCRATCH below (round constants and rho
+  1. Keccak-f[1600] is implemented FROM SCLATCH below (round constants and rho
      offsets transcribed from FIPS 202 / the Keccak reference).
   2. A bit-level FIPS 202 reference sponge built on it is checked against EMBEDDED
      standard digests and against Python's hashlib (labeled reference oracle).
@@ -98,7 +98,7 @@ def keccak_f1600(state):
 
     Per the FIPS 202 row of the KLEE conventions table the mapping is direct:
     lane (x, y) of FIPS 202 3.1 occupies bits [64*(5y+x)+63 : 64*(5y+x)] of the
-    value, each lane little-endian -- which is exactly the identity on the ACE
+    value, each lane little-endian -- which is exactly the identity on the KLEE
     little-endian integer of the state byte string.
     """
     A = [(state >> (64 * i)) & _M64 for i in range(25)]     # lane i = (x=i%5, y=i//5)
@@ -230,7 +230,7 @@ MSGS = {'empty': MSG_EMPTY, 'abc': MSG_ABC, 'a3_200': MSG_A3}
 
 
 # ----------------------------------------------------------------- KLEE CC model
-class AceSha3CC:
+class KleeSha3CC:
     """Model of an KLEE SHA-3 crypto context, implemented literally from
     [[KLEE-SHA-3]] + [[KLEE-hash-functions]] + [[KLEE-process-VLI]].
 
@@ -251,7 +251,7 @@ class AceSha3CC:
         self.mstate = 'Ready'
         self.pad_case = None                # instrumentation: padding clause fired
 
-    # -- ace.setst (Form A): _Ready_ -> _Hash_Absorb_
+    # -- kl.setst (Form A): _Ready_ -> _Hash_Absorb_
     def setst_absorb(self):
         assert self.mstate == 'Ready', self.mstate
         self.mstate = 'Hash_Absorb'
@@ -283,14 +283,14 @@ class AceSha3CC:
                 return 'interrupted'
         return 'done'
 
-    # -- ace.exec (Form B) in _Hash_Absorb_
+    # -- kl.exec (Form B) in _Hash_Absorb_
     def exec_absorb(self, data, resume=False, interrupt_at_byte=None,
                     literal_units=False):
         assert self.mstate == 'Hash_Absorb', self.mstate
         INPUT = b2v(data) if data else 0
         acelen = 8 * len(data)
         if resume:
-            # Spec: "If resuming an ace.exec instruction, then input_base <- klstart."
+            # Spec: "If resuming an kl.exec instruction, then input_base <- klstart."
             # klstart is architecturally a byte count, so the corrected reading is
             # input_base <- 8 * klstart (M4).  With literal_units the stored bit
             # count is consumed under the byte convention, exhibiting the clash.
@@ -303,15 +303,15 @@ class AceSha3CC:
     def absorb_bits(self, val, nbits):
         """Bit-granular absorption through the same process_VLI loop.
 
-        process_VLI is defined in bits; only the ace.exec transfer interface
+        process_VLI is defined in bits; only the kl.exec transfer interface
         restricts amounts to whole bytes.  This entry point exercises the
         bit-level generality (needed to reach the two-block padding clause)
-        and is NOT reachable through architecturally legal ace.exec transfers.
+        and is NOT reachable through architecturally legal kl.exec transfers.
         """
         assert self.mstate == 'Hash_Absorb', self.mstate
         return self._vli_loop(val & ((1 << nbits) - 1), nbits, 0, None, False)
 
-    # -- ace.setst: _Hash_Absorb_ -> _Hash_Output_ (SHA-3 padding rules)
+    # -- kl.setst: _Hash_Absorb_ -> _Hash_Output_ (SHA-3 padding rules)
     def setst_output(self, wrong_suffix_bit_order=False):
         assert self.mstate == 'Hash_Absorb', self.mstate
         b, D = self.b, self.D
@@ -346,7 +346,7 @@ class AceSha3CC:
         self.block_base = 0
         self.mstate = 'Hash_Output'
 
-    # -- ace.exec (Form C) in _Hash_Output_
+    # -- kl.exec (Form C) in _Hash_Output_
     def exec_squeeze(self, out_bytes, resume=False, interrupt_at_byte=None):
         """Returns (status, start_byte, data) with data covering OUTPUT bytes
         [start_byte, start_byte + len(data)).  status is 'done', 'interrupted'
@@ -434,7 +434,7 @@ def kl_hash_oneshot(name, msg, out_bytes=None, chunks=None,
     """Run the full KLEE state machine: absorb (optionally chunked/interrupted),
     pad, squeeze out_bytes (default t/8) in one exec.  Returns (digest, cc)."""
     c, b, t, xof, D = PARAMS[name]
-    cc = AceSha3CC(name)
+    cc = KleeSha3CC(name)
     cc.setst_absorb()
     if chunks is None:
         chunks = [msg]
@@ -497,7 +497,7 @@ def main():
     print('-- 4. interrupted/resumed absorption (M4-corrected klstart, in bytes) --')
     # SHA3-256 (rate 136 B), one 200-B exec interrupted at the interruption point
     # after the first full block (input_base = 136 B).
-    cc = AceSha3CC('SHA3-256')
+    cc = KleeSha3CC('SHA3-256')
     cc.setst_absorb()
     st = cc.exec_absorb(MSG_A3, interrupt_at_byte=100)
     check_true('SHA3-256 absorb interrupted at process_VLI interruption point',
@@ -536,21 +536,21 @@ def main():
         check_true('%-8s padding clause 1 fired (|S| = b, block_base = 0)'
                    % name, cc.pad_case == 1, 'case=%r' % cc.pad_case)
     # (c) two-block spill clause (|S| = 2b - block_base).  Only reachable with a
-    #     bit-granular block_base: ace.exec transfers whole bytes, so
+    #     bit-granular block_base: kl.exec transfers whole bytes, so
     #     b - block_base >= 8 > |D| + 2 always, and the clause is dead code at
-    #     the architectural interface.  Exercised here through the bit-level
+    #     the architectural interfkl.  Exercised here through the bit-level
     #     definition of process_VLI; anchor is model-vs-reference (hashlib
     #     cannot do bit strings).
     print('NOTE: spec observation -- the two-block padding clause of [[KLEE-SHA-3]] '
           'requires b - block_base < |D| + 2, which')
-    print('      cannot occur through byte-granular ace.exec transfers '
+    print('      cannot occur through byte-granular kl.exec transfers '
           '(b - block_base is always >= 8); it is reachable only')
     print('      at the bit level of process_VLI.')
     for name, nbits in (('SHAKE128', 1342), ('SHA3-256', 1085), ('SHA3-512', 573)):
         c, b, t, xof, D = PARAMS[name]
         assert (b - nbits % b) < len(D) + 2
         val = b2v(pat[: (nbits + 7) // 8]) & ((1 << nbits) - 1)
-        cc = AceSha3CC(name)
+        cc = KleeSha3CC(name)
         cc.setst_absorb()
         cc.absorb_bits(val, nbits)
         cc.setst_output()
@@ -564,7 +564,7 @@ def main():
     name, nbits = 'SHA3-256', 1084          # b - block_base = 4 = |D| + 2
     c, b, t, xof, D = PARAMS[name]
     val = b2v(pat[: (nbits + 7) // 8]) & ((1 << nbits) - 1)
-    cc = AceSha3CC(name)
+    cc = KleeSha3CC(name)
     cc.setst_absorb()
     cc.absorb_bits(val, nbits)
     cc.setst_output()
@@ -585,7 +585,7 @@ def main():
     check_true('SHAKE128 stays in _Hash_Output_ (XOFs never reach _Success_)',
                cc.mstate == 'Hash_Output', cc.mstate)
     # (b) the same 512 bytes across several Form C execs (block_base persists).
-    cc = AceSha3CC('SHAKE128')
+    cc = KleeSha3CC('SHAKE128')
     cc.setst_absorb()
     cc.exec_absorb(MSG_ABC)
     cc.setst_output()
@@ -599,7 +599,7 @@ def main():
     check_true('SHAKE128 still in _Hash_Output_ after multi-exec squeeze',
                cc.mstate == 'Hash_Output', cc.mstate)
     # (c) interrupted/resumed squeeze: klstart = output_base / 8.
-    cc = AceSha3CC('SHAKE128')
+    cc = KleeSha3CC('SHAKE128')
     cc.setst_absorb()
     cc.exec_absorb(MSG_ABC)
     cc.setst_output()
@@ -614,7 +614,7 @@ def main():
     check('[oracle] SHAKE128 abc 400-B squeeze with interrupt/resume',
           first + rest, oracle('SHAKE128', MSG_ABC, 400))
     # (d) SHAKE256 multi-exec squeeze on the long message.
-    cc = AceSha3CC('SHAKE256')
+    cc = KleeSha3CC('SHAKE256')
     cc.setst_absorb()
     cc.exec_absorb(MSG_A3)
     cc.setst_output()
@@ -628,7 +628,7 @@ def main():
     print()
     print('-- 7. SHA3-n _Success_ transition after t bits --')
     # (a) digest split across two execs; _Success_ exactly at the t-th bit.
-    cc = AceSha3CC('SHA3-256')
+    cc = KleeSha3CC('SHA3-256')
     cc.setst_absorb()
     cc.exec_absorb(MSG_ABC)
     cc.setst_output()
@@ -642,7 +642,7 @@ def main():
           bytes.fromhex(VECTORS[('SHA3-256', 'abc')]))
     # (b) OUTPUT longer than the digest: the instruction returns at _Success_
     #     with only t/8 bytes written.
-    cc = AceSha3CC('SHA3-384')
+    cc = KleeSha3CC('SHA3-384')
     cc.setst_absorb()
     cc.exec_absorb(MSG_ABC)
     cc.setst_output()

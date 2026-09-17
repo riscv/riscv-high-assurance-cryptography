@@ -15,7 +15,7 @@ What is validated (spec anchors in src/ace-ISA-algorithms.adoc, by heading):
                               right_encode(0) is absorbed).
   [[KLEE-SHA-3]]            -- inherited: direct XOR absorption, P(), the
                               one-block / two-block padding clauses.
-  [[KLEE-process-VLI]]      -- chunked absorption across several ace.exec
+  [[KLEE-process-VLI]]      -- chunked absorption across several kl.exec
                               transfers, partial-block boundaries, and the
                               interruption/resumption point (klstart).
   [[KLEE-hash-functions]]   -- the _Hash_Output_ squeeze loop, multi-exec output
@@ -24,7 +24,7 @@ What is validated (spec anchors in src/ace-ISA-algorithms.adoc, by heading):
                               string, lanes little-endian.
 
 Layered anchoring:
-  1. Keccak-f[1600] implemented FROM SCRATCH here (round constants and rho
+  1. Keccak-f[1600] implemented FROM SCLATCH here (round constants and rho
      offsets are the well-known FIPS 202 tables), anchored by embedded FIPS 202
      SHA3-256 / SHAKE128 / SHAKE256 known answers.
   2. An SP 800-185 reference (left_encode / right_encode / encode_string /
@@ -226,7 +226,7 @@ FIPS202_EMPTY = {
 
 
 # ----------------------------------------------------------------- KLEE CC model
-class AceKmacCC:
+class KleeKmacCC:
     """Model of an KLEE KMAC crypto context, implemented literally from
     [[KLEE-KMAC]] on top of [[KLEE-SHA-3]] / [[KLEE-hash-functions]] /
     [[KLEE-process-VLI]].
@@ -257,7 +257,7 @@ class AceKmacCC:
         self.state ^= b2v(key_block)
         self.state = keccak_f1600(self.state)
 
-    # -- ace.setst (Form A): _Ready_ -> _Hash_Absorb_
+    # -- kl.setst (Form A): _Ready_ -> _Hash_Absorb_
     def setst_absorb(self):
         assert self.mstate == 'Ready', self.mstate
         self.mstate = 'Hash_Absorb'
@@ -283,12 +283,12 @@ class AceKmacCC:
                 return 'interrupted'
         return 'done'
 
-    # -- ace.exec (Form B) in _Hash_Absorb_
+    # -- kl.exec (Form B) in _Hash_Absorb_
     def exec_absorb(self, data, resume=False, interrupt_at_byte=None,
                     literal_units=False):
         assert self.mstate == 'Hash_Absorb', self.mstate
         INPUT = b2v(data) if data else 0
-        # "If resuming an ace.exec instruction, then input_base <- klstart",
+        # "If resuming an kl.exec instruction, then input_base <- klstart",
         # read with the M4 correction as input_base <- 8 * klstart.
         input_base = 8 * self.klstart if resume else 0
         return self._vli_loop(INPUT, 8 * len(data), input_base,
@@ -299,7 +299,7 @@ class AceKmacCC:
         continuing from the current block_base (used for right_encode(L))."""
         self._vli_loop(b2v(data) if data else 0, 8 * len(data), 0, None, False)
 
-    # -- ace.setst (Form B for KMAC, Form A for KMACXOF): -> _Hash_Output_
+    # -- kl.setst (Form B for KMAC, Form A for KMACXOF): -> _Hash_Output_
     def setst_output(self, L=0, use_left_encode=False):
         assert self.mstate == 'Hash_Absorb', self.mstate
         if self.xof:
@@ -311,7 +311,7 @@ class AceKmacCC:
             self.L = L
         enc = left_encode(self.L) if use_left_encode else right_encode(self.L)
         self._absorb_string(enc)                  # step 1, from current block_base
-        # step 2: S = D || pad10*1 with D = 00 (cSHAKE), exactly as in ACE-SHA-3.
+        # step 2: S = D || pad10*1 with D = 00 (cSHAKE), exactly as in KLEE-SHA-3.
         b, D = self.b, self.D
         room = b - self.block_base
         S_len = room if room >= len(D) + 2 else room + b
@@ -331,7 +331,7 @@ class AceKmacCC:
         self.emitted = 0
         self.mstate = 'Hash_Output'
 
-    # -- ace.exec (Form C) in _Hash_Output_
+    # -- kl.exec (Form C) in _Hash_Output_
     def exec_squeeze(self, out_bytes, resume=False, interrupt_at_byte=None):
         """Returns (status, start_byte, data).  status is 'done', 'interrupted'
         (klstart holds the resumption byte offset) or 'success' (KMAC delivered
@@ -381,7 +381,7 @@ def kl_kmac(sec, K, X, L, S=b'', xof=False, out_bytes=None, chunks=None,
              interrupt=None, use_left_encode=False, wrong_suffix=False,
              literal_units=False):
     cb, kb = provision(sec, K, S)
-    cc = AceKmacCC(sec, cb, kb, xof, wrong_suffix=wrong_suffix)
+    cc = KleeKmacCC(sec, cb, kb, xof, wrong_suffix=wrong_suffix)
     cc.setst_absorb()
     for i, ch in enumerate(chunks if chunks is not None else [X]):
         intr = interrupt[1] if (interrupt and interrupt[0] == i) else None
@@ -511,7 +511,7 @@ def main():
     print()
     print('-- 6. interrupted/resumed absorption (M4-corrected klstart, bytes) --')
     cb, kb = provision(128, KEY, TAG)
-    cc = AceKmacCC(128, cb, kb, xof=False)
+    cc = KleeKmacCC(128, cb, kb, xof=False)
     cc.setst_absorb()
     st = cc.exec_absorb(DATA200, interrupt_at_byte=100)
     check_true('KMAC128 absorb interrupted at the process_VLI interruption point',
@@ -530,7 +530,7 @@ def main():
     # Instrumented: after a 200-B message at rate 168 the block_base is 32 B;
     # right_encode(256) = 01 00 02 must land at bits [8*32 .. 8*35].
     cb, kb = provision(128, KEY, TAG)
-    cc = AceKmacCC(128, cb, kb, xof=False)
+    cc = KleeKmacCC(128, cb, kb, xof=False)
     cc.setst_absorb()
     cc.exec_absorb(DATA200)
     check_true('block_base after the 200-B message is 32 B (200 - 168)',
@@ -588,7 +588,7 @@ def main():
     check_true('KMACXOF128 sample #3 prefix matches the official 32-B output',
                want[:32] == bytes.fromhex(SAMPLES[8][7]))
     cb, kb = provision(128, KEY, TAG)
-    cc = AceKmacCC(128, cb, kb, xof=True)
+    cc = KleeKmacCC(128, cb, kb, xof=True)
     cc.setst_absorb()
     cc.exec_absorb(DATA200)
     cc.setst_output(0)
@@ -601,7 +601,7 @@ def main():
     check_true('KMACXOF128 still in _Hash_Output_ after 600 B',
                cc.mstate == 'Hash_Output', cc.mstate)
     # interrupted squeeze
-    cc = AceKmacCC(128, cb, kb, xof=True)
+    cc = KleeKmacCC(128, cb, kb, xof=True)
     cc.setst_absorb()
     cc.exec_absorb(DATA200)
     cc.setst_output(0)
@@ -617,7 +617,7 @@ def main():
           want[:400])
     # (d) KMAC output split across execs, _Success_ on the last byte.
     cb2, kb2 = provision(256, KEY, TAG)
-    cc = AceKmacCC(256, cb2, kb2, xof=False)
+    cc = KleeKmacCC(256, cb2, kb2, xof=False)
     cc.setst_absorb()
     cc.exec_absorb(DATA4)
     cc.setst_output(512)
@@ -630,7 +630,7 @@ def main():
     check('KMAC256 sample #4 split 20+44 B', d1 + d2,
           bytes.fromhex(SAMPLES[3][7]))
     # (e) an OUTPUT longer than ceil(L/8): only ceil(L/8) bytes are written.
-    cc = AceKmacCC(256, cb2, kb2, xof=False)
+    cc = KleeKmacCC(256, cb2, kb2, xof=False)
     cc.setst_absorb()
     cc.exec_absorb(DATA4)
     cc.setst_output(512)

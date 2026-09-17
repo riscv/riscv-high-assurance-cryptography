@@ -30,7 +30,7 @@ class Weierstrass:
 
     Points are affine `(x, y)` tuples, or `None` for the point at infinity.
     `bbits` is the KLEE parameter `b` (the width of a field element *as
-    represented in a CR*, which for secp521r1 is 576 rather than 521), and
+    represented in a CL*, which for secp521r1 is 576 rather than 521), and
     `msb_zero` the number of most significant bits the KLEE representation
     requires to be zero.
     """
