@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """KAT harness for the KLEE SHA-3 family rules (SHA3-224/256/384/512, SHAKE128/256).
 
-What is validated (spec anchors in src/ace-ISA-algorithms.adoc, by heading):
+What is validated (spec anchors in src/ace-ISA-machines.adoc, by heading):
   [[KLEE-process-VLI]]      -- bit-accounted absorption loop, chunking across several
                               kl.exec transfers, partial-block boundaries, and the
                               interruption/resumption points (klstart).
@@ -17,7 +17,7 @@ What is validated (spec anchors in src/ace-ISA-algorithms.adoc, by heading):
                               KLEE little-endian ints of common.py).
 
 Layered anchoring:
-  1. Keccak-f[1600] is implemented FROM SCLATCH below (round constants and rho
+  1. Keccak-f[1600] is implemented FROM SCRATCH below (round constants and rho
      offsets transcribed from FIPS 202 / the Keccak reference).
   2. A bit-level FIPS 202 reference sponge built on it is checked against EMBEDDED
      standard digests and against Python's hashlib (labeled reference oracle).
@@ -231,7 +231,7 @@ MSGS = {'empty': MSG_EMPTY, 'abc': MSG_ABC, 'a3_200': MSG_A3}
 
 # ----------------------------------------------------------------- KLEE CC model
 class KleeSha3CC:
-    """Model of an KLEE SHA-3 crypto context, implemented literally from
+    """Model of a KLEE SHA-3 crypto context, implemented literally from
     [[KLEE-SHA-3]] + [[KLEE-hash-functions]] + [[KLEE-process-VLI]].
 
     `state` is the 1600-bit KLEE value; for the SHA-3 family `block` == `state`
@@ -257,10 +257,10 @@ class KleeSha3CC:
         self.mstate = 'Hash_Absorb'
 
     # -- process_VLI inner loop, shared by exec_absorb and absorb_bits
-    def _vli_loop(self, INPUT, acelen_bits, input_base, interrupt_at_byte,
+    def _vli_loop(self, INPUT, kllen_bits, input_base, interrupt_at_byte,
                   literal_units):
-        while input_base < acelen_bits:
-            amount = min(acelen_bits - input_base, self.b - self.block_base)
+        while input_base < kllen_bits:
+            amount = min(kllen_bits - input_base, self.b - self.block_base)
             chunk = sl(INPUT, input_base + amount - 1, input_base)
             # block == state: XOR into state at block_base (state_offset = 0)
             self.state ^= chunk << self.block_base
@@ -274,7 +274,7 @@ class KleeSha3CC:
             # klstart is architecturally a BYTE count (<<KLEE-CSR-klstart>>);
             # the corrected reading klstart <- input_base/8 is used (always
             # integral here, as the spec itself argues).
-            if (interrupt_at_byte is not None and input_base < acelen_bits
+            if (interrupt_at_byte is not None and input_base < kllen_bits
                     and input_base // 8 >= interrupt_at_byte):
                 if literal_units:
                     self.klstart = input_base            # LITERAL spec text: bits
@@ -288,16 +288,16 @@ class KleeSha3CC:
                     literal_units=False):
         assert self.mstate == 'Hash_Absorb', self.mstate
         INPUT = b2v(data) if data else 0
-        acelen = 8 * len(data)
+        kllen = 8 * len(data)
         if resume:
-            # Spec: "If resuming an kl.exec instruction, then input_base <- klstart."
+            # Spec: "If resuming a kl.exec instruction, then input_base <- klstart."
             # klstart is architecturally a byte count, so the corrected reading is
             # input_base <- 8 * klstart (M4).  With literal_units the stored bit
             # count is consumed under the byte convention, exhibiting the clash.
             input_base = 8 * self.klstart
         else:
             input_base = 0
-        return self._vli_loop(INPUT, acelen, input_base, interrupt_at_byte,
+        return self._vli_loop(INPUT, kllen, input_base, interrupt_at_byte,
                               literal_units)
 
     def absorb_bits(self, val, nbits):
@@ -354,14 +354,14 @@ class KleeSha3CC:
         transitioned to _Success_; the instruction returns, OUTPUT beyond the
         digest is not written)."""
         assert self.mstate == 'Hash_Output', self.mstate
-        acelen = 8 * out_bytes
+        kllen = 8 * out_bytes
         t = self.t
         # Spec: output_base <- 0 // upon resumption, output_base <- 8 * klstart
         output_base = 8 * self.klstart if resume else 0
         start_byte = output_base // 8
         OUTPUT = 0
-        while output_base < acelen:
-            amount = min(acelen - output_base, t - self.block_base)
+        while output_base < kllen:
+            amount = min(kllen - output_base, t - self.block_base)
             chunk = sl(self.state, self.block_base + amount - 1, self.block_base)
             OUTPUT |= chunk << (output_base - 8 * start_byte)
             output_base += amount
@@ -376,7 +376,7 @@ class KleeSha3CC:
                 self.block_base = 0
                 # Interruption point: klstart <- output_base / 8 (spec, correct
                 # units here).
-                if (interrupt_at_byte is not None and output_base < acelen
+                if (interrupt_at_byte is not None and output_base < kllen
                         and output_base // 8 >= interrupt_at_byte):
                     self.klstart = output_base // 8
                     return ('interrupted', start_byte,
@@ -538,7 +538,7 @@ def main():
     # (c) two-block spill clause (|S| = 2b - block_base).  Only reachable with a
     #     bit-granular block_base: kl.exec transfers whole bytes, so
     #     b - block_base >= 8 > |D| + 2 always, and the clause is dead code at
-    #     the architectural interfkl.  Exercised here through the bit-level
+    #     the architectural interface.  Exercised here through the bit-level
     #     definition of process_VLI; anchor is model-vs-reference (hashlib
     #     cannot do bit strings).
     print('NOTE: spec observation -- the two-block padding clause of [[KLEE-SHA-3]] '

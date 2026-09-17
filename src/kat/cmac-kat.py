@@ -6,7 +6,7 @@ Two independent implementations are checked against the published vectors:
   REF   SP 800-38B / RFC 4493 written directly on byte strings, with the
         subkey doubling over the big-endian string view as the standard
         specifies.
-  KLEE   the state machine of <<KLEE-CMAC-mode>> (src/ace-ISA-algorithms.adoc),
+  KLEE   the state machine of <<KLEE-CMAC-mode>> (src/ace-ISA-machines.adoc),
         implemented formula-by-formula in the KLEE value model of
         src/ace-notation.adoc (byte i of a string lives at bits [8i+7:8i];
         the left operand of @ is more significant).  gen_subkeys uses

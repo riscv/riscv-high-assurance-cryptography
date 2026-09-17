@@ -3,7 +3,7 @@
 NTT over Z_8380417, ExpandA / ExpandS / ExpandMask, SampleInBall,
 Power2Round / Decompose / HighBits / LowBits / MakeHint / UseHint, the
 SimpleBitPack / BitPack / HintBitPack encodings and pkEncode / skEncode /
-sigEncode / w1Encode, and Machines 6, 7 and 8 (KeyGen_internal,
+sigEncode / w1Encode, and Algorithms 6, 7 and 8 (KeyGen_internal,
 Sign_internal, Verify_internal) for ML-DSA-44/65/87.
 
 Because the KLEE unit signs over an *externally* computed message representative
@@ -185,7 +185,7 @@ def hint_bit_pack(h, omega, k):
     return bytes(y)
 
 def hint_bit_unpack(y, omega, k):
-    """Machine 21.  Returns None for a malformed hint (this is the check that
+    """Algorithm 21.  Returns None for a malformed hint (this is the check that
     bounds the hint weight by omega and enforces strictly increasing indices)."""
     h = [[0] * 256 for _ in range(k)]
     index = 0
@@ -384,7 +384,7 @@ def keygen_internal(xi, ps):
     return pk, sk
 
 def compute_pubkey(sk, ps):
-    """FIPS 204 3.6 / Machine 6: re-derive pk from sk, and re-derive tr.
+    """FIPS 204 3.6 / Algorithm 6: re-derive pk from sk, and re-derive tr.
 
     Returns (pk, tr_from_pk, tr_in_sk); the KLEE _compute_pubKey_ state requires
     tr_from_pk == tr_in_sk (see [[KLEE-PQC-ML-DSA]])."""
@@ -397,7 +397,7 @@ def compute_pubkey(sk, ps):
     return pk, H(pk, 64), tr_sk
 
 def sign_internal_mu(sk, mu, rnd, ps, max_iters=1000):
-    """ML-DSA.Sign_internal (Machine 7) with mu supplied externally, which is
+    """ML-DSA.Sign_internal (Algorithm 7) with mu supplied externally, which is
     what the KLEE _Sign_Generate_ state does."""
     p = PARAMS[ps]
     k, l = p['k'], p['l']
@@ -437,7 +437,7 @@ def sign_internal(sk, Mp, rnd, ps):
     return sign_internal_mu(sk, H(tr + Mp, 64), rnd, ps)
 
 def verify_internal_mu(pk, mu, sig, ps):
-    """ML-DSA.Verify_internal (Machine 8) with mu supplied externally."""
+    """ML-DSA.Verify_internal (Algorithm 8) with mu supplied externally."""
     p = PARAMS[ps]
     g1, g2, beta, k = p['gamma1'], p['gamma2'], p['beta'], p['k']
     if len(sig) != sizes(ps)[2] or len(pk) != sizes(ps)[1]:

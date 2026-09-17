@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Known-Answer Tests for the KLEE elliptic-curve algorithms (<<KLEE-ECC>>, <<KLEE-EdDSA>>).
+"""Known-Answer Tests for the KLEE elliptic-curve Machines (<<KLEE-ECC>>, <<KLEE-EdDSA>>).
 
 WHAT IS BEING TESTED.  This harness does not test an implementation; it tests the
-*specification text* of `src/ace-ISA-algorithms.adoc`, sections `[[KLEE-ECC]]` and
+*specification text* of `src/ace-ISA-machines.adoc`, sections `[[KLEE-ECC]]` and
 `[[KLEE-EdDSA]]`.  A model of the KLEE control register -- its fields, its
 `block_base`-tracked "set"/"output" transfers, its state machine and its allowed
 transitions -- is built strictly from that text, and standard vectors are then
@@ -181,7 +181,7 @@ def retry_required(mode, r, s, k, n):
 
 
 class CL:
-    """A model of an KLEE control register holding an elliptic-curve CC."""
+    """A model of a KLEE control register holding an elliptic-curve CC."""
 
     def __init__(self, curve, b, h, j, u, v, mode,
                  policy_sign=True, policy_verify=True, literal=False):
@@ -782,7 +782,7 @@ SM2_VEC = dict(
     Px=0x09F9DF311E5421A150DD7D161E4BC5C672179FAD1833FC076BB08FF356F35020,
     Py=0xCCEA490CE26775A52DC6EA718CC1AA600AED05FBF35E084A6632F6072DA9AD13,
     ZA=0xB2E14C5C79C6DF5B85F4FE7ED8DB7A262B9DA7E07CCB0EA9F4747B8CCDA8A4F3,
-    e=0xF0B43E94BA45ACCAKLEE692ED534382EB17E6AB5A19CE7B31F4486FDFC0D28640,
+    e=0xF0B43E94BA45ACCAACE692ED534382EB17E6AB5A19CE7B31F4486FDFC0D28640,
     k=0x59276E27D506861A16680F3AD9C02DCCEF3CC1FA3CDBE4CE6D54B80DEAC1BC21,
     r=0xF5A03B0648D2C4630EEAC513E1BB81A15944DA3827D5B74143AC7EACEEE720B3,
     s=0xB1B6AA29DF212FD8763182BC0D421CA1BB9038FD1F7F42D4840B69C485BBC1AA)
@@ -1400,7 +1400,7 @@ def test_ed25519():
     try:
         cr.setst(SIGN_GEN)                                # msg_pass = 1, no Hash
         ok = False
-    except ACEInvalid:
+    except KLEEInvalid:
         ok = True
     chk('MODEL', 'Sign_Generate after only one pass (msg_pass = 1) -> Invalid', ok)
     chk('MODEL', 'HasRndNum is never set on the EdDSA path',
@@ -1419,7 +1419,7 @@ def test_ed25519():
     try:
         cr.setst(SIGN_GEN)                               # pass-2 finalize rebinds r
         ok = False
-    except ACEInvalid:
+    except KLEEInvalid:
         ok = True
     chk('MODEL', 'C1: different messages in the two signing passes -> Invalid at pass 2 '
         '(no signature emitted)', ok and cr.msg_pass == 1)
@@ -1488,7 +1488,7 @@ def test_ed448():
     try:
         cr.setst(SET_CTX, form='B', xs=256)
         ok = False
-    except ACEInvalid:
+    except KLEEInvalid:
         ok = True
     chk('MODEL', 'Set_Ctx with ctxlen > 255 -> Invalid', ok)
 
@@ -1641,7 +1641,7 @@ def main():
     t0 = time.time()
     print(__doc__.split('\n\n')[0])
     print()
-    print('Model built from src/ace-ISA-algorithms.adoc, sections [[KLEE-ECC]] and'
+    print('Model built from src/ace-ISA-machines.adoc, sections [[KLEE-ECC]] and'
           ' [[KLEE-EdDSA]].')
     print('Levels: [KAT] published vector | [PARAM] published parameters +'
           ' self-consistency | [MODEL] spec property.')

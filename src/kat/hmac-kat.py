@@ -27,7 +27,7 @@ WHAT IS MODELED (from the spec text):
     (klstart = input_base/8, input_base = 8*klstart) is used throughout, and is
     exercised by the interrupted _Set_Key_ and _Hash_Absorb_ transfers.
 
-CORES.  SHA-224/256/384/512 are implemented FROM SCLATCH here (FIPS 180-4 sect. 6
+CORES.  SHA-224/256/384/512 are implemented FROM SCRATCH here (FIPS 180-4 sect. 6
 compression, IVs and round constants derived by exact integer arithmetic from the
 roots of the primes), and the KLEE model uses only those.  For HMAC-SHA-3 the KLEE
 model calls hashlib's sha3_* as the underlying H -- <<KLEE-HMAC>> delegates H to
@@ -190,7 +190,7 @@ class Sha2Core:
         return self._fill(b2v(data), 8 * len(data), base, True, interrupt_after)
 
     def inject(self, data):
-        """Internal absorption by the algorithm itself (key blocks, padding, the
+        """Internal absorption by the Machine itself (key blocks, padding, the
         inner digest): not counted in cumul_len, which counts caller data only."""
         self._fill(b2v(data), 8 * len(data), 0, False, None)
 

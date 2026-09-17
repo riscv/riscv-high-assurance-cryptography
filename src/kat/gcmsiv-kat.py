@@ -2,7 +2,7 @@
 """AES-GCM-SIV known-answer tests for the KLEE GCM-SIV mode.
 
 Validates the GCM-SIV mode of the draft KLEE specification, section
-<<KLEE-GCM-SIV-mode>> (src/ace-ISA-algorithms.adoc), against RFC 8452.
+<<KLEE-GCM-SIV-mode>> (src/ace-ISA-machines.adoc), against RFC 8452.
 
 Two independent implementations are exercised:
 
@@ -188,10 +188,10 @@ class KleeGcmSiv:
         """kl.setst Form A, #kl_state_hash_absorb."""
         self._goto('Hash_Absorb')
 
-    def exec_hash_absorb(self, INPUT: int, acelen: int):
+    def exec_hash_absorb(self, INPUT: int, kllen: int):
         """kl.exec Form B in Hash_Absorb; absorbs KLLEN/128 blocks."""
-        assert self.state == 'Hash_Absorb' and acelen % 128 == 0
-        for j in range(acelen // 128):
+        assert self.state == 'Hash_Absorb' and kllen % 128 == 0
+        for j in range(kllen // 128):
             self._absorb(sl(INPUT, 128 * j + 127, 128 * j))
 
     def exec_enc_tag_finalize(self, INPUT: int) -> int:
@@ -205,13 +205,13 @@ class KleeGcmSiv:
         self._goto('Encrypt')                # M2: the finalize kl.exec enters Encrypt
         return self.SIV                      # OUTPUT
 
-    def exec_encrypt(self, INPUT: int, acelen: int) -> int:
+    def exec_encrypt(self, INPUT: int, kllen: int) -> int:
         """kl.exec Form A in Encrypt; KLLEN/128 full blocks."""
         # M2: Encrypt is reachable only via exec_enc_tag_finalize, which synthesized SIV.
         assert self.state == 'Encrypt', self.state
-        assert acelen % 128 == 0
+        assert kllen % 128 == 0
         OUTPUT = 0
-        for j in range(acelen // 128):
+        for j in range(kllen // 128):
             if self.ctr == M32:
                 self._invalid()
                 return 0
@@ -241,13 +241,13 @@ class KleeGcmSiv:
         self.last_blk_len = 0
         return OUTPUT                        # zeros(128-lbl) @ ...
 
-    def exec_decrypt(self, INPUT: int, acelen: int) -> int:
+    def exec_decrypt(self, INPUT: int, kllen: int) -> int:
         """kl.exec Form A in Decrypt; decrypt then absorb the plaintext."""
         if self.state != 'Decrypt':
             self._goto('Decrypt')
-        assert acelen % 128 == 0
+        assert kllen % 128 == 0
         OUTPUT = 0
-        for j in range(acelen // 128):
+        for j in range(kllen // 128):
             if self.ctr == M32:
                 self._invalid()
                 return 0
@@ -310,11 +310,11 @@ def rfc8452_keyderiv(key: bytes, nonce_v: int):
 
 # -- drivers -----------------------------------------------------------
 
-def _absorb_string(m: KleeGcmSiv, s: bytes, acelen: int):
+def _absorb_string(m: KleeGcmSiv, s: bytes, kllen: int):
     """Feed the zero-padded byte string s through Hash_Absorb in chunks of
-    at most `acelen` bits; the final chunk covers only the remaining blocks."""
+    at most `kllen` bits; the final chunk covers only the remaining blocks."""
     p = _pad16(s)
-    step = acelen // 8
+    step = kllen // 8
     for i in range(0, len(p), step):
         chunk = p[i:i + step]
         m.exec_hash_absorb(b2v(chunk), 8 * len(chunk))
@@ -329,17 +329,17 @@ def _length_block_be(aad: bytes, pt: bytes) -> int:
     return b2v((len(aad) * 8).to_bytes(8, 'big') +
                (len(pt) * 8).to_bytes(8, 'big'))
 
-def kl_encrypt(key, nonce, aad, pt, acelen=128, length_block=None):
+def kl_encrypt(key, nonce, aad, pt, kllen=128, length_block=None):
     m = KleeGcmSiv(key)
     m.setst_set_aux_value(b2v(nonce))
     m.setst_hash_absorb()
-    _absorb_string(m, aad, acelen)
-    _absorb_string(m, pt, acelen)
+    _absorb_string(m, aad, kllen)
+    _absorb_string(m, pt, kllen)
     lb = _length_block(aad, pt) if length_block is None else length_block
     tag_v = m.exec_enc_tag_finalize(lb)
     full, rem = divmod(len(pt), 16)
     ct = bytearray()
-    step = acelen // 8
+    step = kllen // 8
     body = pt[:16 * full]
     for i in range(0, len(body), step):
         chunk = body[i:i + step]
@@ -351,16 +351,16 @@ def kl_encrypt(key, nonce, aad, pt, acelen=128, length_block=None):
         ct += v2b(out, 16)[:rem]
     return bytes(ct) + v2b(tag_v, 16), m
 
-def kl_decrypt(key, nonce, aad, ctag, acelen=128, length_block=None):
+def kl_decrypt(key, nonce, aad, ctag, kllen=128, length_block=None):
     ct, tag = ctag[:-16], ctag[-16:]
     m = KleeGcmSiv(key)
     m.setst_set_aux_value(b2v(nonce))
     m.setst_set_aux_value_2(b2v(tag))
     m.setst_hash_absorb()
-    _absorb_string(m, aad, acelen)
+    _absorb_string(m, aad, kllen)
     full, rem = divmod(len(ct), 16)
     pt = bytearray()
-    step = acelen // 8
+    step = kllen // 8
     body = ct[:16 * full]
     m.exec_decrypt(0, 0)                     # enter Decrypt (m8: no stated insn)
     for i in range(0, len(body), step):
@@ -580,7 +580,7 @@ def main():
             chk(pv.hex() == v['polyval'], f"REF POLYVAL interm.  {name}")
 
         # KLEE model: encryption, KLLEN = 128
-        got, m = kl_encrypt(key, nonce, aad, pt, acelen=128)
+        got, m = kl_encrypt(key, nonce, aad, pt, kllen=128)
         chk(got == want, f"KLEE encrypt 128      {name}")
 
         # KLEE intermediates, where the RFC gives them
@@ -592,13 +592,13 @@ def main():
                 f"KLEE POLYVAL interm.  {name}")
 
         # KLEE model: chunked Hash_Absorb / multi-block exec, KLLEN = 256
-        got, _ = kl_encrypt(key, nonce, aad, pt, acelen=256)
+        got, _ = kl_encrypt(key, nonce, aad, pt, kllen=256)
         chk(got == want, f"KLEE encrypt 256      {name}")
 
         # KLEE model: decryption, matching and tampered
-        st, ptd = kl_decrypt(key, nonce, aad, want, acelen=128)
+        st, ptd = kl_decrypt(key, nonce, aad, want, kllen=128)
         chk(st == 'Success' and ptd == pt, f"KLEE decrypt          {name}")
-        st, _ = kl_decrypt(key, nonce, aad, bad, acelen=256)
+        st, _ = kl_decrypt(key, nonce, aad, bad, kllen=256)
         chk(st == 'Failure', f"KLEE tampered tag     {name}")
         if len(want) > 16:
             badc = bytes([want[0] ^ 1]) + want[1:]
@@ -681,7 +681,7 @@ def main():
     print("SPEC-NOTE: M2 is fixed. State Encrypt is no longer entered by "
           "kl.setst; it is reached only from the Enc_Tag_Finalize kl.exec, "
           "which synthesizes SIV first, so a caller-chosen SIV cannot be used "
-          "as the encryption keystream (an kl.setst naming Encrypt invalidates "
+          "as the encryption keystream (a kl.setst naming Encrypt invalidates "
           "the CL).")
 
     print(f"\nKAT-RESULT: {'PASS' if ok else 'FAIL'}")

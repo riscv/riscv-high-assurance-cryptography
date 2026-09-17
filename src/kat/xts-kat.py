@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """XEX/XTS (<<KLEE-XEX-XTS-modes>> and <<KLEE-XTS-from-XEX>> in
-src/ace-ISA-algorithms.adoc) against the IEEE 1619-2007 / SP 800-38E vectors.
+src/ace-ISA-machines.adoc) against the IEEE 1619-2007 / SP 800-38E vectors.
 
 Three layers are checked, each against the same published vectors.
 
@@ -92,7 +92,7 @@ def ref_xts(key1, key2, seq, data, encrypt=True):
 
 # ---------------------------------------------------------------- the KLEE XEX CC
 class XexCC:
-    """An KLEE XEX Crypto Context, per <<KLEE-XEX-XTS-modes>>."""
+    """A KLEE XEX Crypto Context, per <<KLEE-XEX-XTS-modes>>."""
 
     def __init__(self, key1, key2, doubling=update_mask):
         self.key1, self.key2 = key1, key2

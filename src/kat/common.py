@@ -198,7 +198,7 @@ def montmul(a: int, b: int) -> int:
     return p & MASK128
 
 def mulx_polyval(v: int) -> int:
-    """RFC 8452's mulX_POLYVAL on an KLEE value."""
+    """RFC 8452's mulX_POLYVAL on a KLEE value."""
     c = v >> 127
     v = (v << 1) & MASK128
     if c:

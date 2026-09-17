@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""ECB mode (<<KLEE-ECB-mode>> in src/ace-ISA-algorithms.adoc) against FIPS 197,
+"""ECB mode (<<KLEE-ECB-mode>> in src/ace-ISA-machines.adoc) against FIPS 197,
 SP 800-38A F.1 and GB/T 32907-2016 (SM4).
 
 Three things are checked.
@@ -134,7 +134,7 @@ def ref_ecb(enc, key, data, bsz=16):
     return b''.join(enc(key, data[i:i + bsz]) for i in range(0, len(data), bsz))
 
 
-def kl_ecb(enc, key, inp, acelen, b=128):
+def kl_ecb(enc, key, inp, kllen, b=128):
     """State _Encrypt_/_Decrypt_ of <<KLEE-ECB-mode>>, on KLEE values.
 
     Literally the specification's loop:
@@ -148,13 +148,13 @@ def kl_ecb(enc, key, inp, acelen, b=128):
     comparison in this file exercises.
     """
     out = 0
-    for i in range(0, acelen, b):
+    for i in range(0, kllen, b):
         blk = sl(inp, i + b - 1, i)
         out |= b2v(enc(key, v2b(blk, b // 8))) << i
     return out
 
 
-def kl_ecb_bigendian_misread(enc, key, inp, acelen, b=128):
+def kl_ecb_bigendian_misread(enc, key, inp, kllen, b=128):
     """Negative control: the big-endian misreading of <<KLEE-Notation>>.
 
     ECB treats every block independently, so getting the *order of the loop*
@@ -165,9 +165,9 @@ def kl_ecb_bigendian_misread(enc, key, inp, acelen, b=128):
     takes the opposite correspondence, mapping the most significant block of the
     value to the first block of the string, and must disagree with the vector.
     """
-    nblk = acelen // b
+    nblk = kllen // b
     out = 0
-    for i in range(0, acelen, b):
+    for i in range(0, kllen, b):
         blk = sl(inp, i + b - 1, i)
         res = b2v(enc(key, v2b(blk, b // 8)))
         out |= res << ((nblk - 1) * b - i)

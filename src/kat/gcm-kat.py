@@ -11,7 +11,7 @@ REF  a straight SP 800-38D implementation on *byte strings* (big-endian counter
 
 KLEE  a model of the specification's state machine, written on KLEE *values*
      (little-endian bit strings, byte i at bits [8i+7:8i]) and transcribed
-     literally from the text of `src/ace-ISA-algorithms.adoc`
+     literally from the text of `src/ace-ISA-machines.adoc`
      ([[KLEE-process-VLI]], [[KLEE-GCM-mode]], [[KLEE-GCM-with-IV-mode]]) under the
      conventions of `src/ace-notation.adoc`.  The model runs the real state
      sequence -- _Set_Aux_Value_ (via process_VLI, with the IV split over several
@@ -160,7 +160,7 @@ class GcmCC:
         self.J0 = cat((self._field_of(ctr), 32), (sl(self.J0, 95, 0), 96))
 
     def _consume(self, nblocks):
-        """GCM-with-Set-IV budget rule: an `kl.exec` that would take `budget`
+        """GCM-with-Set-IV budget rule: a `kl.exec` that would take `budget`
         below zero performs no operation and the CL transitions to _Invalid_."""
         if self.budget is None:
             return

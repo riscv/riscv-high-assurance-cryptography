@@ -49,7 +49,7 @@ def J(data):                      # SHAKE256, 32 bytes
 def PRF(eta, s, b):               # SHAKE256(s || b, 64*eta)
     return hashlib.shake_256(s + bytes([b])).digest(64 * eta)
 
-# ---------------------------------------------------------------- NTT (Machines 9-11)
+# ---------------------------------------------------------------- NTT (Algorithms 9-11)
 
 def ntt(f):
     f = list(f)
@@ -80,7 +80,7 @@ def intt(f):
     return [x * 3303 % Q for x in f]      # 3303 = 128^-1 mod q
 
 def ntt_mul(f, g):
-    """MultiplyNTTs (Machine 11): pairwise BaseCaseMultiply."""
+    """MultiplyNTTs (Algorithm 11): pairwise BaseCaseMultiply."""
     h = [0] * 256
     for i in range(128):
         a0, a1 = f[2 * i], f[2 * i + 1]
@@ -95,7 +95,7 @@ def poly_add(f, g):
 def poly_sub(f, g):
     return [(a - b) % Q for a, b in zip(f, g)]
 
-# ---------------------------------------------------------------- sampling (Machines 7-8)
+# ---------------------------------------------------------------- sampling (Algorithms 7-8)
 
 def sample_ntt(seed34):
     """SampleNTT: rejection-sample a polynomial in NTT domain from SHAKE128."""
@@ -153,7 +153,7 @@ def compress(d, x):
 def decompress(d, y):
     return (Q * y + (1 << (d - 1))) >> d
 
-# ---------------------------------------------------------------- K-PKE (Machines 13-15)
+# ---------------------------------------------------------------- K-PKE (Algorithms 13-15)
 
 def _expand_A(rho, k):
     """A_hat[i][j] = SampleNTT(rho || j || i)  (FIPS 203 final, Kyber order)."""
@@ -230,7 +230,7 @@ def sizes(pset):
     k, _, _, du, dv = PARAMS[pset]
     return 384 * k + 32, 768 * k + 96, 32 * (du * k + dv), 32
 
-# ---------------------------------------------------------------- ML-KEM (Machines 16-18)
+# ---------------------------------------------------------------- ML-KEM (Algorithms 16-18)
 
 def keygen_internal(d, z, pset):
     ek, dk_pke = kpke_keygen(d, pset)

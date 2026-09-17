@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Architectural-state-machine KAT for the KLEE management ISA (Book 1 / Book 2).
 
-This harness models the *algorithm-independent* rules of the draft RISC-V KLEE
+This harness models the *Machine-independent* rules of the draft RISC-V KLEE
 specification and checks the spec's own invariants and worked examples:
 
   * the 128-bit MDH field layout (<<KLEE-metadata-header>>) -- pack/unpack round
@@ -187,9 +187,9 @@ CFG_PROVISIONING = 1
 CFG_IMPORTING = 2
 CFG_EXPORTING = 3
 
-# algorithm-defined intermediate states used by the toy algorithms below
-ST_ENCLYPT = 7
-ST_DECLYPT = 8
+# Machine-defined intermediate States used by the toy Machines below
+ST_ENCRYPT = 7
+ST_DECRYPT = 8
 ST_ABSORB = 9
 
 MANAGEDCL_NONE = 32
@@ -200,7 +200,7 @@ class IllegalInstruction(Exception):
 
 
 class KleeException(Exception):
-    """An KLEE exception (kl_exc_*), named by its mnemonic suffix."""
+    """A KLEE exception (kl_exc_*), named by its mnemonic suffix."""
 
     def __init__(self, which):
         super().__init__(which)
@@ -208,10 +208,10 @@ class KleeException(Exception):
 
 
 # =====================================================================
-# toy algorithm table and the length rule  --  <<KLEE-length-rule>>
+# toy Machine table and the length rule  --  <<KLEE-length-rule>>
 # =====================================================================
 
-# A minimal, self-consistent algorithm table.  Only the *shape* matters: the
+# A minimal, self-consistent Machine table.  Only the *shape* matters: the
 # length rule says PI length depends on (Machine, MachinePolicy, KeyType)
 # only, SCC length on those plus StateExtension and AuxDataLen, and CLF capacity
 # on (Machine, MachinePolicy, SCProtection) only.
@@ -221,7 +221,7 @@ ALG_SIG = 0x031      # a signature scheme: MachinePolicy = sign/verify bits
 
 ALG_NAMES = {ALG_CTR: "toy-ctr", ALG_HASH: "toy-hash", ALG_SIG: "toy-sig"}
 
-# algorithms whose MachinePolicy field is not an operation mask
+# Machines whose MachinePolicy field is not an operation mask
 ALG_NO_POLICY = {ALG_HASH}
 
 MAX_SCPROTECTION = 2  # levels 0..2 implemented; 3-5 reserved, 6-7 custom
@@ -244,7 +244,7 @@ def alg_supported(m):
 
 
 def content_len(m):
-    """Bytes of algorithm content, per the length rule's PI dependency set."""
+    """Bytes of Machine content, per the length rule's PI dependency set."""
     alg, apol, kt = m["Machine"], m["MachinePolicy"], m["KeyType"]
     if kt == 1:
         base = 16                       # a 64-bit SKID, padded to a 128-bit block
@@ -255,7 +255,7 @@ def content_len(m):
     elif alg == ALG_SIG:
         base = 96 if apol == 0b11 else 64
     else:
-        raise ValueError("unsupported algorithm")
+        raise ValueError("unsupported Machine")
     if alg == ALG_CTR and apol == 0b11 and kt == 0:
         base += 16                      # both directions keep two schedules
     return base
@@ -272,7 +272,7 @@ def scc_len(m):
         return 32                       # MDH + SIV only, irrespective of every field
     n = 16 + content_len(m) + 16        # MDH + content + SIV
     if m["StateExtension"]:
-        n += 16                         # algorithm state carried across the export
+        n += 16                         # Machine state carried across the export
     n += 16 * m["AuxDataLen"]           # variable-length implementation data
     return n
 
@@ -582,7 +582,7 @@ class Unit:
             raise KleeException("unsupported")
         m = dict(ml)
         # C2 (as fixed): for import, a nonzero _State_ is legal; only reserved
-        # fields and the algorithm triple are checked here.
+        # fields and the Machine triple are checked here.
         if not mdh_reserved_zero(m):
             cr.enter_error(ST_INVALID)
             self.klstart = 0
@@ -842,7 +842,7 @@ class Unit:
                 cr.enter_error(ST_INVALID)
                 return "invalid"
             # state currently requiring an operation that would be disabled
-            need = {ST_ENCLYPT: 0b01, ST_DECLYPT: 0b10}.get(m["State"])
+            need = {ST_ENCRYPT: 0b01, ST_DECRYPT: 0b10}.get(m["State"])
             if need is not None and not (new & need):
                 cr.enter_error(ST_INVALID)
                 return "invalid"
@@ -1016,13 +1016,13 @@ def test_mdh_format():
 
     # a realistic MDH, checked field by field against hand-computed bit positions
     m = mdh_new(Machine=ALG_CTR, MachinePolicy=0b01, SCProtection=2, KeyType=1,
-                State=ST_ENCLYPT, StateExtension=0b0101, ConfigStatus=CFG_EXPORTING,
+                State=ST_ENCRYPT, StateExtension=0b0101, ConfigStatus=CFG_EXPORTING,
                 AuxDataLen=3, AuxInfo=0x1234, SystemFormat=1, UsagePolicy=0b10011,
                 Locality=0b101_10_11_10, MachineUse=0xBEEF, ExpirationDate=0xABCDE)
     v = mdh_pack(m)
     check("sample MDH: Machine at [11:0]", sl(v, 11, 0), ALG_CTR)
     check("sample MDH: SCProtection at [18:16]", sl(v, 18, 16), 2)
-    check("sample MDH: State at [25:21]", sl(v, 25, 21), ST_ENCLYPT)
+    check("sample MDH: State at [25:21]", sl(v, 25, 21), ST_ENCRYPT)
     check("sample MDH: ConfigStatus at [31:30]", sl(v, 31, 30), CFG_EXPORTING)
     check("sample MDH: AuxDataLen at [45:32]", sl(v, 45, 32), 3)
     check("sample MDH: SystemFormat at [63]", sl(v, 63, 63), 1)
@@ -1049,7 +1049,7 @@ def test_mdh_format():
     check("mdh_bytes is the little-endian image (common.v2b)",
           mdh_bytes(mdh_new(Machine=0x123)).hex(),
           v2b(0x123, 16).hex())
-    check("bin_(n, m) agrees with the field encoding", bin_(ST_ENCLYPT, 5), ST_ENCLYPT)
+    check("bin_(n, m) agrees with the field encoding", bin_(ST_ENCRYPT, 5), ST_ENCRYPT)
     check("b2v inverts mdh_bytes", b2v(mdh_bytes(m)), mdh_pack(m))
 
 
@@ -1247,17 +1247,17 @@ def test_restrict():
     check("narrowing MachinePolicy is allowed",
           (u.restrictl(0, mdh_new(MachinePolicy=0b01)), u.crs[0].mdh["MachinePolicy"]),
           ("ok", 0b01))
-    # an algorithm that does not use MachinePolicy must be given zero
+    # a Machine that does not use MachinePolicy must be given zero
     u = fresh_unit()
     hm = mdh_new(Machine=ALG_HASH, MachinePolicy=0)
     provision(u, 0, hm, b"\x22" * content_len(hm))
     r = u.restrictl(0, mdh_new(MachinePolicy=0b01))
-    check("nonzero MachinePolicy for an algorithm that does not use it invalidates",
+    check("nonzero MachinePolicy for a Machine that does not use it invalidates",
           (r, u.getst(0)), ("invalid", ST_INVALID))
     # disabling the operation the current State requires
     u = fresh_unit()
     provision(u, 0, ctr_mdh(MachinePolicy=0b11), b"\x11" * content_len(ctr_mdh()))
-    u.setst(0, ST_ENCLYPT)
+    u.setst(0, ST_ENCRYPT)
     r = u.restrictl(0, mdh_new(MachinePolicy=0b10))
     check("disabling the operation required by the current State invalidates",
           (r, u.getst(0)), ("invalid", ST_INVALID))
@@ -1403,7 +1403,7 @@ def test_state_machine():
     check("kl.size Form A of an Unconfigured CL is 0", u.size_A(0), 0)
 
     # rule 4: a transition from any valid state to Ready is always permitted
-    for st in (ST_ENCLYPT, ST_ABSORB, ST_SUCCESS, ST_FAILURE):
+    for st in (ST_ENCRYPT, ST_ABSORB, ST_SUCCESS, ST_FAILURE):
         u = fresh_unit()
         provision(u, 0, ctr_mdh(), b"\x11" * clen)
         u.crs[0].mdh["State"] = st
@@ -1421,7 +1421,7 @@ def test_state_machine():
         u = fresh_unit()
         provision(u, 0, ctr_mdh(), b"\x11" * clen)
         u.crs[0].mdh["State"] = st
-        u.setst(0, ST_ENCLYPT)
+        u.setst(0, ST_ENCRYPT)
         check(f"rule 3: State {st} -> Encrypt invalidates the CL", u.getst(0), ST_INVALID)
 
         u = fresh_unit()
@@ -1465,7 +1465,7 @@ def test_state_machine():
         check(f"rule 13 (State {st}): kl.exec is a no-op",
               (u.exec_(0), u.getst(0)), ("noop", st))
         check(f"rule 13 (State {st}): kl.setst to a valid state is a no-op",
-              (u.setst(0, ST_ENCLYPT), u.getst(0)), ("noop", st))
+              (u.setst(0, ST_ENCRYPT), u.getst(0)), ("noop", st))
 
     # rule 10: an Error-State CL can be cleared, re-provisioned and cloned
     u = fresh_unit()
@@ -1527,7 +1527,7 @@ def test_config_status_gating():
                   "privilege_violation")
         # setst to a valid state is usage and is blocked
         try:
-            u.setst(0, ST_ENCLYPT)
+            u.setst(0, ST_ENCRYPT)
             check(f"setst to a valid state on a {opener} CL raises privilege_violation",
                   "none", "privilege_violation")
         except KleeException as e:
@@ -1656,8 +1656,8 @@ def test_management_flows():
     # -- import of an SCC with a nonzero State (the C2 case) ---------
     u = fresh_unit()
     provision(u, 0, ml, content)
-    u.setst(0, ST_ENCLYPT)
-    check("a CL mid-algorithm has a nonzero State", u.getst(0), ST_ENCLYPT)
+    u.setst(0, ST_ENCRYPT)
+    check("a CL mid-operation has a nonzero State", u.getst(0), ST_ENCRYPT)
     saved = u.mgmt_export_start(0)
     mem2 = bytearray(scc_len(saved))
     mem2[0:16] = mdh_bytes(saved)
@@ -1669,12 +1669,12 @@ def test_management_flows():
     check("import start accepts a nonzero State (C2)", v.crs[1].cfg, CFG_IMPORTING)
     v.load(1, mem2, 16)
     v.mgmt_end(1, ml2)
-    check("import restores the mid-algorithm State", v.getst(1), ST_ENCLYPT)
+    check("import restores the mid-operation State", v.getst(1), ST_ENCRYPT)
     check("import restores the content", v.crs[1].content, u.crs[0].content)
 
     # provisioning, by contrast, requires State == 0
     p = fresh_unit()
-    p.mgmt_provision_start(0, ctr_mdh(State=ST_ENCLYPT))
+    p.mgmt_provision_start(0, ctr_mdh(State=ST_ENCRYPT))
     check("provision start rejects a nonzero State", p.getst(0), ST_INVALID)
     p = fresh_unit()
     p.mgmt_provision_start(0, ctr_mdh(AuxDataLen=1))
@@ -1689,7 +1689,7 @@ def test_management_flows():
     p.mgmt_import_start(0, mdh_unpack(mdh_pack(ctr_mdh()) | (1 << 14)))
     check("import start rejects a nonzero reserved field", p.getst(0), ST_INVALID)
 
-    # unsupported algorithm raises rather than invalidating
+    # an unsupported Machine raises rather than invalidating
     p = fresh_unit()
     try:
         p.mgmt_provision_start(0, mdh_new(Machine=0x777, MachinePolicy=1))
@@ -2025,7 +2025,7 @@ def test_expiration():
     # setst targeting a valid non-management state
     u = expired_cr()
     try:
-        u.setst(0, ST_ENCLYPT)
+        u.setst(0, ST_ENCRYPT)
         check("kl.setst to a valid state on an expired CL raises", "none", "expired")
     except KleeException as e:
         check("kl.setst to a valid state on an expired CL raises", e.which, "expired")
@@ -2080,14 +2080,14 @@ def test_expiration():
 
     # the check is skipped when ConfigStatus is not complete
     u = fresh_unit(clock=5000)
-    u.mgmt_import_start(0, ctr_mdh(State=ST_ENCLYPT, ExpirationDate=1000,
+    u.mgmt_import_start(0, ctr_mdh(State=ST_ENCRYPT, ExpirationDate=1000,
                                    ConfigStatus=CFG_COMPLETE))
     check("a not-complete ConfigStatus skips the expiration check at import",
-          u.getst(0), ST_ENCLYPT)
+          u.getst(0), ST_ENCRYPT)
     mem = bytearray(scc_len(ctr_mdh()))
     u.load(0, mem, 16)
     check("kl.load on an expired-but-importing CL does not trigger expiry",
-          u.getst(0), ST_ENCLYPT)
+          u.getst(0), ST_ENCRYPT)
 
     # Zklexpire absent: a nonzero ExpirationDate must be rejected, never enforced
     u = fresh_unit(clock=1 << 30)
@@ -2132,7 +2132,7 @@ def test_size():
     # Form B agrees with Form A on a well-formed MDH
     check("Form B agrees with Form A for a complete CL",
           u.size_B(u.getmdv(0)), u.size_A(0))
-    check("Form B of an unsupported algorithm returns 32 (see M2)",
+    check("Form B of an unsupported Machine returns 32 (see M2)",
           u.size_B(mdh_new(Machine=0x777, MachinePolicy=1)), 32)
     check("Form B of a malformed MDH returns 32 (see M2)",
           u.size_B(mdh_unpack(mdh_pack(ctr_mdh()) | (1 << 14))), 32)

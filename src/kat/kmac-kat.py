@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """KAT harness for the KLEE KMAC rules (KMAC128/256, KMACXOF128/256).
 
-What is validated (spec anchors in src/ace-ISA-algorithms.adoc, by heading):
+What is validated (spec anchors in src/ace-ISA-machines.adoc, by heading):
   [[KLEE-KMAC]]             -- the CC holds two provisioner-prepared rate-sized
                               blocks, cshake_block = bytepad(encode_string("KMAC")
                               || encode_string(S), b/8) and key_block =
@@ -24,7 +24,7 @@ What is validated (spec anchors in src/ace-ISA-algorithms.adoc, by heading):
                               string, lanes little-endian.
 
 Layered anchoring:
-  1. Keccak-f[1600] implemented FROM SCLATCH here (round constants and rho
+  1. Keccak-f[1600] implemented FROM SCRATCH here (round constants and rho
      offsets are the well-known FIPS 202 tables), anchored by embedded FIPS 202
      SHA3-256 / SHAKE128 / SHAKE256 known answers.
   2. An SP 800-185 reference (left_encode / right_encode / encode_string /
@@ -227,7 +227,7 @@ FIPS202_EMPTY = {
 
 # ----------------------------------------------------------------- KLEE CC model
 class KleeKmacCC:
-    """Model of an KLEE KMAC crypto context, implemented literally from
+    """Model of a KLEE KMAC crypto context, implemented literally from
     [[KLEE-KMAC]] on top of [[KLEE-SHA-3]] / [[KLEE-hash-functions]] /
     [[KLEE-process-VLI]].
 
@@ -262,10 +262,10 @@ class KleeKmacCC:
         assert self.mstate == 'Ready', self.mstate
         self.mstate = 'Hash_Absorb'
 
-    def _vli_loop(self, INPUT, acelen_bits, input_base, interrupt_at_byte,
+    def _vli_loop(self, INPUT, kllen_bits, input_base, interrupt_at_byte,
                   literal_units):
-        while input_base < acelen_bits:
-            amount = min(acelen_bits - input_base, self.b - self.block_base)
+        while input_base < kllen_bits:
+            amount = min(kllen_bits - input_base, self.b - self.block_base)
             chunk = sl(INPUT, input_base + amount - 1, input_base)
             self.state ^= chunk << self.block_base
             input_base += amount
@@ -277,7 +277,7 @@ class KleeKmacCC:
             # "klstart <- input_base" with input_base in BITS, while klstart is
             # architecturally a byte count (<<KLEE-CSR-klstart>>); the
             # corrected reading klstart <- input_base/8 is used here.
-            if (interrupt_at_byte is not None and input_base < acelen_bits
+            if (interrupt_at_byte is not None and input_base < kllen_bits
                     and input_base // 8 >= interrupt_at_byte):
                 self.klstart = input_base if literal_units else input_base // 8
                 return 'interrupted'
@@ -288,7 +288,7 @@ class KleeKmacCC:
                     literal_units=False):
         assert self.mstate == 'Hash_Absorb', self.mstate
         INPUT = b2v(data) if data else 0
-        # "If resuming an kl.exec instruction, then input_base <- klstart",
+        # "If resuming a kl.exec instruction, then input_base <- klstart",
         # read with the M4 correction as input_base <- 8 * klstart.
         input_base = 8 * self.klstart if resume else 0
         return self._vli_loop(INPUT, 8 * len(data), input_base,
@@ -337,13 +337,13 @@ class KleeKmacCC:
         (klstart holds the resumption byte offset) or 'success' (KMAC delivered
         its ceil(L/8) bytes and transitioned to _Success_)."""
         assert self.mstate == 'Hash_Output', self.mstate
-        acelen = 8 * out_bytes
+        kllen = 8 * out_bytes
         limit = None if self.xof else 8 * ((self.L + 7) // 8)
         output_base = 8 * self.klstart if resume else 0
         start_byte = output_base // 8
         OUTPUT = 0
-        while output_base < acelen:
-            amount = min(acelen - output_base, self.t - self.block_base)
+        while output_base < kllen:
+            amount = min(kllen - output_base, self.t - self.block_base)
             if limit is not None:
                 amount = min(amount, limit - self.emitted)
             chunk = sl(self.state, self.block_base + amount - 1, self.block_base)
@@ -359,7 +359,7 @@ class KleeKmacCC:
             if self.block_base == self.t:
                 self.state = keccak_f1600(self.state)       # update() = P()
                 self.block_base = 0
-                if (interrupt_at_byte is not None and output_base < acelen
+                if (interrupt_at_byte is not None and output_base < kllen
                         and output_base // 8 >= interrupt_at_byte):
                     self.klstart = output_base // 8        # correct units here
                     return ('interrupted', start_byte,

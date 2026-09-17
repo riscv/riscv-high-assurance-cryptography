@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """CTR and XCTR keystream generation (<<KLEE-keystream-modes>> in
-src/ace-ISA-algorithms.adoc) against SP 800-38A F.5 and the HCTR2 reference vectors.
+src/ace-ISA-machines.adoc) against SP 800-38A F.5 and the HCTR2 reference vectors.
 
 The specification keeps the keystream state as two separate fields, `IV` of `n`
 bits and `ctr` of `j` bits, and forms the block fed to the keystream function as
@@ -96,7 +96,7 @@ class KeystreamCC:
         else:
             assert n == j == 128, "XCTR requires b = n = j"
 
-    def set_iv(self, value, acelen=None):
+    def set_iv(self, value, kllen=None):
         """Form C kl.setst: IV <- INPUT, keeping only the n least significant bits."""
         self.IV = value & ((1 << self.n) - 1)
 
@@ -267,7 +267,7 @@ chk("lsb_j truncation of Xs",
      ref_ctr(key, bytes(range(1, 13)), 32, 5, bytes(32)).hex())
 
 print("\n== XCTR [reference-implementation anchor: google/hctr2]")
-print("   HCTR2 numbers the counter from 1, while an KLEE CC leaves State _Ready_")
+print("   HCTR2 numbers the counter from 1, while a KLEE CC leaves State _Ready_")
 print("   with ctr = 0, so the Form B operation supplies the initial counter 1.")
 for name, k, iv, p, c in HCTR2_XCTR:
     key, nonce = bytes.fromhex(k), bytes.fromhex(iv)

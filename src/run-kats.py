@@ -32,7 +32,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 # modules they import (common.py, fips203.py, fips204.py, ecc_curves.py) sit
 # beside them, which is what lets each one add its own directory to sys.path.
 KATDIR = os.path.join(HERE, 'kat')
-SCLIPTS = (sorted(f for f in os.listdir(KATDIR) if f.endswith('-kat.py'))
+SCRIPTS = (sorted(f for f in os.listdir(KATDIR) if f.endswith('-kat.py'))
            if os.path.isdir(KATDIR) else [])
 TIMEOUT = 900
 
@@ -108,13 +108,13 @@ def verdict(script):
 
 
 def main():
-    if not SCLIPTS:
+    if not SCRIPTS:
         print('no *-kat.py found in ' + KATDIR, file=sys.stderr)
         return 1
-    w = max(len(s) for s in SCLIPTS)
+    w = max(len(s) for s in SCRIPTS)
     bad, logs = [], {}
-    print(f'running {len(SCLIPTS)} known-answer tests from {KATDIR}\n')
-    for s in SCLIPTS:
+    print(f'running {len(SCRIPTS)} known-answer tests from {KATDIR}\n')
+    for s in SCRIPTS:
         ok, note, out = verdict(s)
         logs[s] = out
         print(f'  {s:<{w}}  {"ok" if ok else "FAILED":6}  {note}')
@@ -125,9 +125,9 @@ def main():
         print(f'===== {s} ' + '=' * max(0, 64 - len(s)))
         print(logs[s].rstrip() + '\n')
     if bad:
-        print(f'{len(bad)} of {len(SCLIPTS)} known-answer tests FAILED')
+        print(f'{len(bad)} of {len(SCRIPTS)} known-answer tests FAILED')
         return 1
-    print(f'all {len(SCLIPTS)} known-answer tests passed')
+    print(f'all {len(SCRIPTS)} known-answer tests passed')
     return 0
 
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Known-Answer Tests for the KLEE ML-KEM algorithm (src/ace-ISA-algorithms.adoc,
+"""Known-Answer Tests for the KLEE ML-KEM algorithm (src/ace-ISA-machines.adoc,
 anchor [[KLEE-PQC-ML-KEM]]) against FIPS 203.
 
 What this harness validates
@@ -61,7 +61,7 @@ def chk(name, ok, note=''):
 # ================================================================ KLEE model
 #
 # MDH field positions, src/ace-ISA-unpriv.adoc <<KLEE-metadata-header>>.
-F_ALGORITHM     = (11, 0)
+F_MACHINE     = (11, 0)
 F_ALGPOLICY     = (13, 12)
 F_STATE         = (25, 21)
 F_STATEEXT      = (29, 26)
@@ -69,7 +69,7 @@ F_AUXINFO       = (61, 46)
 F_USAGEPOLICY   = (68, 64)
 F_LOCALITY      = (77, 69)
 F_RES7978       = (79, 78)
-F_ALGORITHMUSE  = (95, 80)
+F_MACHINEUSE  = (95, 80)
 
 def mdh_get(mdh, fld):
     hi, lo = fld
@@ -81,7 +81,7 @@ def mdh_set(mdh, fld, val):
     return (mdh & ~m) | ((val << lo) & m)
 
 # State numbers: global ones from <<KLEE-states-valid>> / <<KLEE-states-error>>,
-# algorithm-specific ones from the ML-KEM state list in [[KLEE-PQC-ML-KEM]].
+# Machine-specific ones from the ML-KEM state list in [[KLEE-PQC-ML-KEM]].
 S_READY, S_GENKEYPAIR, S_ENCAPSULATE, S_DECAPSULATE = 1, 2, 3, 4
 S_EK_IN, S_DK_IN, S_EK_OUT, S_CT_IN, S_CT_OUT = 5, 6, 7, 8, 9
 S_SUCCESS, S_FAILURE, S_INVALID = 22, 23, 25
@@ -95,7 +95,7 @@ class Invalidated(Exception):
 
 
 class MLKEMContext:
-    """Model of an KLEE Cryptographic Context running an ML-KEM algorithm.
+    """Model of a KLEE Cryptographic Context running an ML-KEM Machine.
 
     Only the architecturally visible behaviour of [[KLEE-PQC-ML-KEM]] is modelled:
     the MDH, the four state fields, and the state machine.  Cryptography is
@@ -132,11 +132,11 @@ class MLKEMContext:
 
     @property
     def alguse(self):
-        return mdh_get(self.mdh, F_ALGORITHMUSE)
+        return mdh_get(self.mdh, F_MACHINEUSE)
 
     @alguse.setter
     def alguse(self, v):
-        self.mdh = mdh_set(self.mdh, F_ALGORITHMUSE, v)
+        self.mdh = mdh_set(self.mdh, F_MACHINEUSE, v)
 
     # -- instructions ---------------------------------------------------
     def setst(self, state):
@@ -245,7 +245,7 @@ class MLKEMContext:
         into the destination secret field.
 
         `length_bytes` is the `length` operand: a number of BYTES.  It is
-        ceil(m/8) for a destination algorithm whose key is m bits.
+        ceil(m/8) for a destination Machine whose key is m bits.
         """
         if length_bytes > len(self.sharedkey):
             raise Invalidated('length exceeds the shared key')

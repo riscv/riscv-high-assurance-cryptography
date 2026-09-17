@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Known-Answer Tests for the KLEE ML-DSA algorithm (src/ace-ISA-algorithms.adoc,
+"""Known-Answer Tests for the KLEE ML-DSA algorithm (src/ace-ISA-machines.adoc,
 anchor [[KLEE-PQC-ML-DSA]]) against FIPS 204.
 
 What this harness validates
@@ -27,7 +27,7 @@ What this harness validates
     `privkey`/`pubkey` (a configuration error -> Error State Invalid) from a
     well-formed value that does not verify (a data error -> State Failure, a
     valid state), no longer calls state 23 an "Error State", and states the
-    _Sign_Verify_ outcome in terms of the Boolean that FIPS 204 Machine 8
+    _Sign_Verify_ outcome in terms of the Boolean that FIPS 204 Algorithm 8
     actually returns.  This harness had already modelled that reading.
 
 Vector provenance
@@ -46,7 +46,7 @@ Vector provenance
                                   tcId 91, 92, 94, 95, 96)
     fetched 2026-08-26; each embedded record carries its own case identifier.
 
-Negative control (KAT-EXPECT-FAIL): a verifier that skips FIPS 204 Machine 21's
+Negative control (KAT-EXPECT-FAIL): a verifier that skips FIPS 204 Algorithm 21's
 malformed-hint checks (the omega bound and the canonical-encoding conditions)
 accepts a signature it must reject.
 """
@@ -69,12 +69,12 @@ def chk(name, ok, note=''):
 # ================================================================ KLEE model
 
 # MDH field positions, src/ace-ISA-unpriv.adoc <<KLEE-metadata-header>>.
-F_ALGORITHM    = (11, 0)
+F_MACHINE    = (11, 0)
 F_ALGPOLICY    = (13, 12)
 F_STATE        = (25, 21)
 F_STATEEXT     = (29, 26)
 F_AUXINFO      = (61, 46)
-F_ALGORITHMUSE = (95, 80)
+F_MACHINEUSE = (95, 80)
 
 def mdh_get(mdh, fld):
     hi, lo = fld
@@ -106,7 +106,7 @@ class Invalidated(Exception):
 
 
 class MLDSAContext:
-    """Model of an KLEE Cryptographic Context running an ML-DSA algorithm."""
+    """Model of a KLEE Cryptographic Context running an ML-DSA Machine."""
 
     def __init__(self, ps, algpolicy=0b11, auxinfo=0):
         self.ps = ps
@@ -139,11 +139,11 @@ class MLDSAContext:
 
     @property
     def alguse(self):
-        return mdh_get(self.mdh, F_ALGORITHMUSE)
+        return mdh_get(self.mdh, F_MACHINEUSE)
 
     @alguse.setter
     def alguse(self, v):
-        self.mdh = mdh_set(self.mdh, F_ALGORITHMUSE, v)
+        self.mdh = mdh_set(self.mdh, F_MACHINEUSE, v)
 
     def _flag(self, bit):
         return bool(mdh_get(self.mdh, F_STATEEXT) & bit)
@@ -329,7 +329,7 @@ def t_sizes():
     # MachinePolicy Fields and the next two Reserved bits" -> 12 + 2 + 2 = 16.
     chk('_AuxInfo_ is 16 bits, matching Machine+MachinePolicy+2 Reserved',
         (F_AUXINFO[0] - F_AUXINFO[1] + 1) == 16 and
-        (F_ALGORITHM[0] - F_ALGORITHM[1] + 1) +
+        (F_MACHINE[0] - F_MACHINE[1] + 1) +
         (F_ALGPOLICY[0] - F_ALGPOLICY[1] + 1) + 2 == 16)
 
 
@@ -700,7 +700,7 @@ def t_sign_verify_flow():
 
 def _tamper_hint_padding(sig, ps):
     """Return a signature whose hint section is non-canonically encoded: a byte
-    beyond the last declared index is non-zero.  FIPS 204 Machine 21 requires
+    beyond the last declared index is non-zero.  FIPS 204 Algorithm 21 requires
     those bytes to be zero, so this signature must be rejected."""
     p = D.PARAMS[ps]
     omega, k = p['omega'], p['k']
@@ -712,7 +712,7 @@ def _tamper_hint_padding(sig, ps):
 
 
 def t_hint_checks():
-    print('\n-- FIPS 204 Machine 21 hint-decoding checks --')
+    print('\n-- FIPS 204 Algorithm 21 hint-decoding checks --')
     ps = 44
     p = D.PARAMS[ps]
     omega, k = p['omega'], p['k']
@@ -726,7 +726,7 @@ def t_hint_checks():
     y = bytearray(sig[-(omega + k):])
     y[omega + k - 1] = omega + 1
     over = sig[:-(omega + k)] + bytes(y)
-    chk('signature declaring a hint count > omega is rejected (Machine 21)',
+    chk('signature declaring a hint count > omega is rejected (Algorithm 21)',
         D.hint_bit_unpack(bytes(y), omega, k) is None and
         D.verify_internal_mu(pk, mu, over, ps) is False, f'omega = {omega}')
 
@@ -734,7 +734,7 @@ def t_hint_checks():
     y = bytearray(sig[-(omega + k):])
     if y[omega] >= 2:
         y[0], y[1] = y[1], y[0]
-        chk('signature with non-increasing hint indices is rejected (Machine 21)',
+        chk('signature with non-increasing hint indices is rejected (Algorithm 21)',
             D.hint_bit_unpack(bytes(y), omega, k) is None)
     else:
         _results.append(True)
@@ -742,7 +742,7 @@ def t_hint_checks():
 
     # non-canonical padding
     tampered, used = _tamper_hint_padding(sig, ps)
-    chk('signature with a non-zero hint padding byte is rejected (Machine 21)',
+    chk('signature with a non-zero hint padding byte is rejected (Algorithm 21)',
         D.verify_internal_mu(pk, mu, tampered, ps) is False,
         f'{used} hint indices used of omega = {omega}')
     chk('an over-omega hint is not even encodable in a well-formed signature: '
@@ -751,7 +751,7 @@ def t_hint_checks():
 
 
 def _verify_lenient(pk, mu, sig, ps):
-    """Verify_internal with FIPS 204 Machine 21's malformed-hint checks removed
+    """Verify_internal with FIPS 204 Algorithm 21's malformed-hint checks removed
     (omega bound, monotone indices, zero padding).  Used only as the negative
     control: it must accept a signature that the conforming verifier rejects."""
     p = D.PARAMS[ps]
@@ -789,7 +789,7 @@ def t_negative_control():
     pk, mu = bytes.fromhex(v['pk']), bytes.fromhex(v['mu'])
     tampered, _ = _tamper_hint_padding(sig, ps)
     got = _verify_lenient(pk, mu, tampered, ps)
-    chk('lenient hint decoder (Machine 21 omega/canonicity checks removed) '
+    chk('lenient hint decoder (Algorithm 21 omega/canonicity checks removed) '
         'must not accept the malformed signature', got is False)
     return _results.pop()
 

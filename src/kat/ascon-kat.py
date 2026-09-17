@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Known-Answer Tests for the KLEE Ascon algorithms against NIST SP 800-232.
+"""Known-Answer Tests for the KLEE Ascon Machines against NIST SP 800-232.
 
 WHAT IS UNDER TEST
 ------------------
 The *specification text* of
 
-  <<KLEE-Ascon-AEAD128>>            src/ace-ISA-algorithms.adoc
+  <<KLEE-Ascon-AEAD128>>            src/ace-ISA-machines.adoc
   <<KLEE-Ascon-AEAD128-wsn>>        (set nonce + budget)
   <<KLEE-Ascon-AEAD128-N-masking>>  (K1 as key, N xor K2 as nonce)
   <<KLEE-Ascon-Hash256>>
@@ -60,7 +60,7 @@ the correct reading and is what this harness models: the caller pads the AD
 only; the final PT/CT block goes through _*_Last_Block_ with the internal
 pad().  The intro now says exactly that, so the spec and this model agree.
 
-SECOND SPEC DISCLEPANCY FOUND BY THIS HARNESS
+SECOND SPEC DISCREPANCY FOUND BY THIS HARNESS
 ---------------------------------------------
 <<KLEE-Ascon-CXOF128>> says only that "the message is prepended with the
 customization string" and that "the management and padding of the
@@ -286,7 +286,7 @@ class KleeAsconAEAD128:
         self.tag_len = Xs                     # the _State_ field is unchanged
 
     # ---- transition Ready -> Hash_Absorb
-    def setst_start(self, INPUT=None, acelen=128):
+    def setst_start(self, INPUT=None, kllen=128):
         assert self.st == 'Ready'
         if self.set_nonce:
             # Form A: no additional inputs; state[3..4] already hold the nonce.
@@ -303,10 +303,10 @@ class KleeAsconAEAD128:
         self.st = 'Hash_Absorb'
 
     # ---- State _Hash_Absorb_, Form B kl.exec
-    def exec_ad(self, INPUT, acelen):
+    def exec_ad(self, INPUT, kllen):
         assert self.st == 'Hash_Absorb'
-        assert acelen % 128 == 0 and acelen > 0
-        nblk = acelen // 128
+        assert kllen % 128 == 0 and kllen > 0
+        nblk = kllen // 128
         self._spend(nblk)
         for i in range(nblk):
             blk = sl(INPUT, 128 * i + 127, 128 * i)
@@ -330,10 +330,10 @@ class KleeAsconAEAD128:
         self._enter('Decrypt')
 
     # ---- State _Encrypt_, Form A kl.exec
-    def exec_encrypt(self, INPUT, acelen):
+    def exec_encrypt(self, INPUT, kllen):
         assert self.st == 'Encrypt'
-        assert acelen % 128 == 0 and acelen > 0
-        nblk = acelen // 128
+        assert kllen % 128 == 0 and kllen > 0
+        nblk = kllen // 128
         self._spend(nblk)
         OUT = 0
         for i in range(nblk):
@@ -375,10 +375,10 @@ class KleeAsconAEAD128:
         return OUT
 
     # ---- State _Decrypt_, Form A kl.exec
-    def exec_decrypt(self, INPUT, acelen):
+    def exec_decrypt(self, INPUT, kllen):
         assert self.st == 'Decrypt'
-        assert acelen % 128 == 0 and acelen > 0
-        nblk = acelen // 128
+        assert kllen % 128 == 0 and kllen > 0
+        nblk = kllen // 128
         self._spend(nblk)
         OUT = 0
         for i in range(nblk):
@@ -530,10 +530,10 @@ class KleeAsconSponge:
         self._first = True        # XOF/CXOF: no permutation before the 1st word
 
     # ---- State _Hash_Absorb_, Form B kl.exec
-    def exec_absorb(self, INPUT, acelen):
+    def exec_absorb(self, INPUT, kllen):
         assert self.st == 'Hash_Absorb'
-        assert acelen % 64 == 0 and acelen > 0
-        for i in range(acelen // 64):
+        assert kllen % 64 == 0 and kllen > 0
+        for i in range(kllen // 64):
             self.s[0] ^= sl(INPUT, 64 * i + 63, 64 * i)
             ascon_p(self.s, 12)
 
@@ -545,10 +545,10 @@ class KleeAsconSponge:
             self.countdown = 3
 
     # ---- State _Hash_Finalize_, Form C kl.exec
-    def exec_squeeze(self, acelen):
+    def exec_squeeze(self, kllen):
         assert self.st == 'Hash_Finalize'
-        assert acelen % 64 == 0 and acelen > 0
-        OUT, nwords = 0, acelen // 64
+        assert kllen % 64 == 0 and kllen > 0
+        OUT, nwords = 0, kllen // 64
         for i in range(nwords):
             if self.use_countdown:
                 if self.countdown != 3:
@@ -565,8 +565,8 @@ class KleeAsconSponge:
             self._first = False
         return OUT, nwords * 8
 
-def kl_hash256(msg, absorb_chunk=1, squeeze_acelen=256):
-    """Drive Ascon-Hash256.  `squeeze_acelen` selects 1, 2, or 4 kl.exec's."""
+def kl_hash256(msg, absorb_chunk=1, squeeze_kllen=256):
+    """Drive Ascon-Hash256.  `squeeze_kllen` selects 1, 2, or 4 kl.exec's."""
     cc = KleeAsconSponge(IV_HASH, use_countdown=True)
     m = msg + b'\x01' + bytes((-len(msg) - 1) % 8)
     for i in range(0, len(m), 8 * absorb_chunk):
@@ -575,12 +575,12 @@ def kl_hash256(msg, absorb_chunk=1, squeeze_acelen=256):
     cc.enter_finalize()
     out = b''
     while len(out) < 32:
-        v, n = cc.exec_squeeze(squeeze_acelen)
+        v, n = cc.exec_squeeze(squeeze_kllen)
         out += v2b(v & ((1 << (8 * n)) - 1), n)
     assert cc.st == 'Success'
     return out[:32]
 
-def kl_xof(iv, msg, outlen, prefix=b'', absorb_chunk=1, squeeze_acelen=64):
+def kl_xof(iv, msg, outlen, prefix=b'', absorb_chunk=1, squeeze_kllen=64):
     cc = KleeAsconSponge(iv, use_countdown=False)
     m = prefix + msg + b'\x01' + bytes((-len(msg) - 1) % 8)
     for i in range(0, len(m), 8 * absorb_chunk):
@@ -589,7 +589,7 @@ def kl_xof(iv, msg, outlen, prefix=b'', absorb_chunk=1, squeeze_acelen=64):
     cc.enter_finalize()
     out = b''
     while len(out) < outlen:
-        v, n = cc.exec_squeeze(squeeze_acelen)
+        v, n = cc.exec_squeeze(squeeze_kllen)
         out += v2b(v & ((1 << (8 * n)) - 1), n)
     assert cc.st == 'Hash_Finalize'          # never transitions to _Success_
     return out[:outlen]
@@ -843,7 +843,7 @@ def main():
     for count, ad, pt, ctt, desc in AEAD_KAT:
         ct, tag, cc = kl_encrypt(KAT_KEY, KAT_NONCE, h(ad), h(pt),
                                   set_nonce=True, budget=64)
-        chk(f"set-nonce  Count={count:<4} same ciphertext as base algorithm",
+        chk(f"set-nonce  Count={count:<4} same ciphertext as base Machine",
             (ct + tag).hex(), ctt)
     # budget accounting: exactly KLLEN/128 per consuming exec, 1 per last block,
     # and neither _Hash_Output_ nor _Hash_Verify_ decrements it.
@@ -892,7 +892,7 @@ def main():
     N = KAT_NONCE
     Nm = bytes(a ^ b for a, b in zip(N, K2))
 
-    # (a) Hard anchor: with K2 = 0 the masked algorithm must reproduce the
+    # (a) Hard anchor: with K2 = 0 the masked Machine must reproduce the
     #     official Ascon-AEAD128 vectors exactly, key = the KAT key.
     Z16 = bytes(16)
     for count, ad, pt, ctt, desc in AEAD_KAT:
@@ -931,9 +931,9 @@ def main():
             kl_hash256(h(msg)).hex(), md)
     print("\n  countdown: 1 / 2 / 4 kl.exec squeezes must agree")
     for count, msg, md in HASH_KAT:
-        a = kl_hash256(h(msg), squeeze_acelen=256).hex()
-        b = kl_hash256(h(msg), squeeze_acelen=128).hex()
-        c = kl_hash256(h(msg), squeeze_acelen=64).hex()
+        a = kl_hash256(h(msg), squeeze_kllen=256).hex()
+        b = kl_hash256(h(msg), squeeze_kllen=128).hex()
+        c = kl_hash256(h(msg), squeeze_kllen=64).hex()
         chk(f"Hash256  Count={count:<4} squeeze 1x256 == 2x128 == 4x64 == KAT",
             (a, b, c), (md, md, md))
     print("\n  multi-word absorb (KLLEN = 192) agrees")
@@ -957,7 +957,7 @@ def main():
         chk(f"XOF128   Count={count:<4} 512-bit squeeze (8 x kl.exec)",
             kl_xof128(h(msg), 64).hex(), md)
         chk(f"XOF128   Count={count:<4} same via KLLEN=256 squeezes",
-            kl_xof128(h(msg), 64, squeeze_acelen=256).hex(), md)
+            kl_xof128(h(msg), 64, squeeze_kllen=256).hex(), md)
     # squeeze beyond 256 bits must extend, not restart
     for count, msg, md in XOF_KAT[:3]:
         chk(f"XOF128   Count={count:<4} first 256 bits are a prefix of the 512-bit MD",

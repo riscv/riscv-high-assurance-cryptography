@@ -5,7 +5,7 @@ Two independent implementations are checked against the published vectors:
 
   REF   RFC 7253 written directly on byte strings (big-endian semantics),
         transcribed from sections 4.1-4.3 of the RFC.
-  KLEE   the state machine of <<KLEE-OCB-mode>> (src/ace-ISA-algorithms.adoc),
+  KLEE   the state machine of <<KLEE-OCB-mode>> (src/ace-ISA-machines.adoc),
         implemented formula-by-formula in the KLEE value model of
         src/ace-notation.adoc (byte i of a string lives at bits [8i+7:8i];
         the left operand of @ is more significant; bswap is byte reversal).
