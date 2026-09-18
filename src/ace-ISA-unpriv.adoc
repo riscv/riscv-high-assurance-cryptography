@@ -191,7 +191,7 @@ enables the following operations:
 | `kl.restrictl`,
 `kl.restricth`             | `Zkl` common   2+<| Available
 | `kl.restrictv`           | `Zklv`            | Available    | —
-| `kl.clone`               | `Zkl` common   2+<| Available
+| `kl.clone`, `kl.rename`, `kl.swap`  | `Zkl` common   2+<| Available
 | `kl.derive`              | `Zkl` common   2+<| All four `Form` values; the auxiliary input is always a GPR
 | `kl.load`, `kl.store`    | `Zklmem`        2+<| Always present: in hardware, or by trap-and-emulate, as per the conformance requirements above
 | `kl.input`, `kl.output`  | `Zklio`          | —           | Available
@@ -586,9 +586,10 @@ either — then the Metadata is invalid (see <<KLEE-Metadata-validity>>).
 A Locality Secret of the Boot Session Group or of the SW Filter Group whose value is `zeros(128)` is _unconfigured_ (its CSR is defined in <<KLEE-priv>>).
 A PI or SCC whose _Locality_ field names an unconfigured entry, or carries the reserved value `3` in bits [5:4], is invalid Metadata (see <<KLEE-Metadata-validity>>).
 
-Entry 9 is `hkllocality`, unconfigured where that register is not implemented or holds `zeros(128)` (<<KLEE-locality-csr-groups>>). Entry 10 is the register that `skllocality` designates in the current mode: `skllocality` at V=0 and, when V=1, `vskllocality`, which then substitutes for it (<<KLEE-CSR-locality-groups>>). The three entries of the SW Filter Group denote three distinct registers in every mode.
+Entry 9, _HLocality_, corresponds to the CSR group `hkllocality`, unconfigured where that register is not implemented or holds `zeros(128)` (<<KLEE-locality-csr-groups>>). Entry 10, _SLocality_, corresponds to the CSR group `skllocality` at V=0 and, when V=1, `vskllocality`, which then substitutes for it (<<KLEE-CSR-locality-groups>>).
+// The three entries of the SW Filter Group denote three distinct registers in every mode.
 
-Up to six architected Localities may be active concurrently: up to two from the HW Binding Group; at most one of _PhysBootScrt_ or _VirtBootScrt_; and up to three from the SW Filter Group. The SCC generation and import algorithms described in <<KLEE-CC-management>> enforce the policies associated with these Localities.
+Up to six architected Localities may be active concurrently: up to two from the HW Binding Group; at most one of _PhysBootScrt_ or _VirtBootScrt_; and up to three from the SW Filter Group. The SCC generation and import algorithms described in <<KLEE-CC-management>> enforce the policies associated with these Localities.?
 
 [[KLEE-Metadata-locality-interoperability]]
 ===== Interoperability under _Locality_ configurations
@@ -606,15 +607,17 @@ The SW Filter Group binds an SCC to the software that exports it. The register b
 | M | `hkllocality` of the VM loaded (unconfigured without the H extension) | `skllocality`
 |===
 
-Four scenarios illustrate this:
+Five scenarios illustrate this:
 
-An OS becomes a guest.::: An OS runs on a hart without the H extension and sets `skllocality`. Its state and the SCCs it exported are cloned into a virtual machine, which resumes under a hypervisor. The OS still writes `skllocality`, now reaching `vskllocality`, so entry 10 keeps its value; entry 9 was unconfigured before cloning and cannot have been named. The SCCs exported before cloning therefore import unchanged, whatever the hypervisor holds in `skllocality` and `hkllocality`, provided the new host has the same CSK (<<KLEE-CSK-requirements>>) and the CCs are not bound to the HW Binding Group, _MLocality_ or _PhysBootScrt_, which exist to prevent such migration; _VirtBootScrt_ was unconfigured too.
+Migration between hosts with the H extension.::: The guest's _SLocality_ travels with its VS CSRs, and possibly the _HLocality_ with the identity of the machine, for the destination hypervisor to install before the guest runs; each hypervisor keeps its own `skllocality`. The SCCs of the machine then import on any host with the same CSK.
 
 A hypervisor separates its virtual machines.::: The hypervisor may give each virtual machine a distinct `hkllocality`, which the guest can neither read nor write. A guest that names _HLocality_ binds its SCCs to its machine, so the SCCs of two machines differ even when the guests, cloned from one image, hold the same `vskllocality`.
 
-A hypervisor saves and restores guest CLs, or hands a CC to a guest.::: At V=0, entry 9 is the `hkllocality` of the machine loaded and entry 10 the hypervisor's `skllocality`. A save and its restore are performed at the same level, so their bindings match. Before saving, the hypervisor configures `hkllocality` for the machine and, if a guest CC names _SLocality_, its own `skllocality`, to which that export is bound; an unconfigured entry makes the restore fail as invalid Metadata. To hand a CC to a guest, the hypervisor provisions it naming _HLocality_: the export at V=0 binds it to the tag of the machine, and the import at V=1 uses the same block. A CC naming _SLocality_ cannot cross levels this way, since entry 10 denotes a different register at each level.
+M-mode separates Supervisor Domains.::: Similarly to the previous scenario, M-mode can cryptographically separate Supervisor Domains by giving them a distinct _MLocality_.
 
-Migration between hosts with the H extension.::: The guest's `vskllocality` travels with its VS CSRs, and its `hkllocality` with the identity of the machine, for the destination hypervisor to install before the guest runs; each hypervisor keeps its own `skllocality`. The SCCs of the machine then import on any host with the same CSK.
+An OS becomes a guest.::: An OS runs on a hart without the H extension and sets `skllocality`. The OS's state and SCCs exported in its memory are cloned into a virtual machine, which resumes under a hypervisor. The OS still writes `skllocality`, now reaching `vskllocality`, so entry 10 keeps its value; entry 9 was unconfigured before cloning and cannot have been named. The SCCs exported before cloning therefore import unchanged, whatever the hypervisor holds in (its) _SLocality_ and _HLocality_, provided the new host has the same CSK (<<KLEE-CSK-requirements>>) and the CCs are not bound to the HW Binding Group, _MLocality_ or _PhysBootScrt_, which exist to prevent such migration; _VirtBootScrt_ was unconfigured too.
+
+A hypervisor saves and restores guest CLs, or hands a CC to a guest.::: At V=0, entry 9 is the `hkllocality` of the machine loaded and entry 10 the hypervisor's `skllocality`. A save and its restore are performed at the same level, so their bindings match. Before saving, the hypervisor configures `hkllocality` for the machine and, if a guest CC names _SLocality_, its own `skllocality`, to which that export is bound; an unconfigured entry makes the restore fail as invalid Metadata. To hand a CC to a guest, the hypervisor provisions it naming _HLocality_: the export at V=0 binds it to the tag of the machine, and the import at V=1 uses the same block. A CC naming _SLocality_ cannot cross levels this way, since entry 10 denotes a different register at each level.
 
 In every mode the three entries denote three different registers; no ordering or exclusivity among `mkllocality`, `hkllocality`, `skllocality` and `vskllocality` is required. Host software running under a hypervisor does not name _HLocality_, whose value follows the virtual machine loaded. The same holds for _VirtBootScrt_, whose register the hypervisor sets for the machine loaded.
 
@@ -1016,24 +1019,24 @@ No instruction description restates them.
 .State modification and usage control, per instruction
 [width="100%",cols="<18%,^14%,^14%,^14%,<40%",options="header"]
 |===
-| Instruction(s)               | May modify KLEE state | May modify other state | Usage-controlled | Notes
+| Instruction(s)              | May modify KLEE state | May modify other state | Usage-controlled | Notes
 
 | `kl.load`                   | Yes             | No  | No^*^                | Updates `klstart`.
-| `kl.store`                  | Only `klstart` | Yes | No^*^                | Updates `klstart`.
+| `kl.store`                  | Only `klstart`  | Yes | No^*^                | Updates `klstart`.
 | `kl.exec`                   | Yes             | Yes | Yes                  | {empty}
 | `kl.mv`                     | Yes             | Yes | No^*^                | KLEE/other state change depends on direction. It advances `klstart` by the bytes it transfers.
 | `kl.setst`                  | Yes             | No  | Yes, except as noted | Not usage-controlled when the immediate is `kl_state_unconfigured` — that is `kl.clear` and `kl.clearall` (<<KLEE-instruction-clear>>) — or an Error State.
 // Either may be issued in any privilege mode regardless of the CC's _UsagePolicy_.
 | `kl.mgmt`                   | Yes             | No  | No                   | {empty}
-| `kl.getmd*`, `kl.getst`, `kl.getstx`    | No              | Yes | No                   | {empty}
+| `kl.getmd*`, `kl.getst`, `kl.getstx`    | No  | Yes | No                   | {empty}
 | `kl.restrict*`              | Yes             | No  | No                   | Every change it can make narrows the CC; see <<KLEE-instruction-restrict>>.
-| `kl.clone`                  | Yes             | No  | No                   | {empty}
+| `kl.clone`, `kl.rename`, `kl.swap`      | Yes | No  | No                   | {empty}
 | `kl.derive`                 | Yes             | No  | Yes                  | The _UsagePolicy_ of the source CL and that of the destination CL are evaluated independently (<<KLEE-instruction-derive>>).
-| `kl.size`, `kl.avail`      | No              | Yes | No                   | {empty}
+| `kl.size`, `kl.avail`       | No              | Yes | No                   | {empty}
 | `kl.input`                  | Yes             | No  | No                   | Modifies the KLIOBUF and `klstart`, but no CL.
-| `kl.output`                 | Only `klstart` | Yes | No                   | Modifies `klstart`, but no CL.
-| `kl.clear`, `kl.clearall` | Yes             | No  | No                   .2+| Encodings of `kl.setst`; see its row above.
-| `kl.clearads`              | Yes             | No  | Yes
+| `kl.output`                 | Only `klstart`  | Yes | No                   | Modifies `klstart`, but no CL.
+| `kl.clear`, `kl.clearall`   | Yes             | No  | No                   .2+| Encodings of `kl.setst`; see its row above.
+| `kl.clearads`               | Yes             | No  | Yes
 5+| ^*^ means that the instruction is usable only in the States admitted by Rule <<KLEE-SGR-ace-load-mv-allowed>>, resp. Rule <<KLEE-SGR-ace-store-mv-allowed>>.
 |===
 
@@ -1801,14 +1804,16 @@ resources by avoiding additional round-trips to trusted environments.
 // ////////////////////////////////////////////////////////////////////
 
 [[KLEE-instruction-clone]]
-==== kl.clone
+==== kl.clone, kl.rename, and kl.swap
 
 _Synopsis_::
 Copy a CL into another CL.
 
 _Mnemonic_::
-`kl.clone Kd|K{Xd}, Ks|K{Xs}`
+`kl.{clone, rename, swap} Kd|K{Xd}, Ks|K{Xs}`
 (((KLEE, instruction, kl.clone)))
+(((KLEE, instruction, kl.rename)))
+(((KLEE, instruction, kl.swap)))
 
 _Encoding_::
 The encoding shares opcode and `funct3` with `kl.exec`, but `funct2` is 2.
@@ -1823,14 +1828,15 @@ The instruction is an R-type instruction.
     { bits:  5, name: 'Ks|K{Xs}' },
     { bits:  5, name: 0x0 },
     { bits:  2, name: 'R' },
-    { bits:  3, name: 0x0 },
+    { bits:  2, name: 'T' },
+    { bits:  1, name: 0x0 },
     { bits:  2, name: 0x2, attr: ['funct2'] },
 ]}
 ....
 +
-Bits [26:25], i.e., field `R`, take the following values depending on how the
-CLs are given:
-+
+--
+Bits [26:25], i.e., field `R`, take the following values depending on how the CLs are given:
+
 [upperalpha]
 . `00`{nbsp}{nbsp} if the source and the output CLs are both encoded as
   immediate values.
@@ -1841,11 +1847,19 @@ CLs are given:
 . `11`{nbsp}{nbsp} if the source and the output CLs are both selected using the
   values of GPRs.
 
+Bits [28:27], i.e., field `T`, take the following values to encode the three instructions:
+
+. `00`{nbsp}{nbsp} encodes `kl.clone`.
+. `01`{nbsp}{nbsp} encodes `kl.rename`.
+. `10`{nbsp}{nbsp} encodes `kl.swap`.
+--
+
 // Comment to ensure proper indentation in the next Description
 
 _Description_::
 +
 --
+`ace.clone`:::
 Clones the source CL `Ks` (or the CL indexed by `Xs`) into the destination CL `Kd` (or the CL indexed by `Xd`):
 
 * If source and destination are the same CL the instruction performs no operation, even if the CL is _Unconfigured_ or in a Configuration State, which is excepted from Rule <<KLEE-SGR-usage-cr-config-state>>. It sets no `*lclstatus` or `KLS` field to _Dirty_ (<<KLEE-CSR-lclstatus>>).
@@ -1861,7 +1875,14 @@ Clones the source CL `Ks` (or the CL indexed by `Xs`) into the destination CL `K
 * The destination CL becomes a perfect copy of the source CL: all internal data, including MDH and internal state, are copied verbatim.
 The instruction achieves the same result as exporting the source CL to an SCC and importing the SCC into the destination CL.
 
-See <<KLEE-CSR-lclstatus>> for the behavior under emulation, i.e., when the source CL is _Off_ in some `*lclstatus`.
+`ace.rename`:::
+The source CL is renamed, i.e., takes the index of the destination CL. The old contents of the destination CL are discarded and the source index now refers to an unconfigured CL. The source CL can be unconfigured or in a Partial State, in which case `klmanagedcr` is changed to the destination index.
+
+`ace.swap`:::
+The source and destination CLs are swapped. Either CL can be unconfigured or even in a Partial State, in which case `klmanagedcr` is changed to the partial CL.
+
+
+See <<KLEE-CSR-lclstatus>> for the behavior under emulation, i.e., when the source or destination CL is _Off_ in some `*lclstatus`.
 --
 
 // ////////////////////////////////////////////////////////////////////
@@ -1890,8 +1911,8 @@ The instruction is an R-type instruction.
     { bits:  5, name: 'Ks1|K{Xs1}' },
     { bits:  5, name: 'Xs2' },
     { bits:  2, name: 'R' },
-    { bits:  1, name: 0x1 },
-    { bits:  2, name: 0x0 },
+    { bits:  2, name: 0x3 },
+    { bits:  1, name: 0x0 },
     { bits:  2, name: 0x2, attr: ['funct2'] },
 ]}
 ....
