@@ -657,7 +657,7 @@ class KleeAsconAEAD128(KleeCL):
             ('Hash_Verify', 'B'): self._x_verify,
         }
 
-    # ---- "In State _Ready_, a Form B kl.setst Kn|K{Xn}, #kl_state_set_aux_value, Xs sets
+    # ---- "In State _Ready_, a Form B kl.setst Kn, #kl_state_set_aux_value, Xs sets
     #      tag_len <- Xs.  Admissible values satisfy 64 <= Xs <= 128; any other value causes
     #      the CL to transition to Error State _Invalid_ ... The _State_ field is unchanged"
     def _c_tag_len(self, Xs, **_):

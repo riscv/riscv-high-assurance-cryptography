@@ -259,7 +259,7 @@ class MLDSAContext:
         return out
 
     def exec_d(self, xi=None, rnd=None, halt=None):
-        """Form D `kl.exec Kn|K{Xn}`.
+        """Form D `kl.exec Kn`.
 
         `rnd` is the value the RBG supplies to a hedged _Sign_Generate_; `halt`, if
         given, is the non-zero progress a precise interrupt would record in

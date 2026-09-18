@@ -466,7 +466,7 @@ class MLKEMCL(CL):
 
     # -- instructions ---------------------------------------------------
     def setst(self, immed):
-        """Form A `kl.setst Kd|K{Xd}, #immed7`.  ML-KEM: "All uses of `kl.setst` do not
+        """Form A `kl.setst Kd, #immed7`.  ML-KEM: "All uses of `kl.setst` do not
         require an auxiliary parameter." """
         if immed in (S_SUCCESS, S_FAILURE):
             # SGR7: immediates 46 and 47 are a reserved encoding, decided without
@@ -498,7 +498,7 @@ class MLKEMCL(CL):
         self.enter_error(S_INVALID)
 
     def exec_B(self, data):
-        """Form B `kl.exec Kn|K{Xn}, INPUT` in an _*_Input_ State: loads the field
+        """Form B `kl.exec Kn, INPUT` in an _*_Input_ State: loads the field
         under Rule <<KLEE-AGR-load-long-field>>, _W_ = _MachineUse_ in bytes."""
         if not self.gate():
             return
@@ -539,7 +539,7 @@ class MLKEMCL(CL):
                 self.transition(S_FAILURE)
 
     def exec_C(self, nbytes):
-        """Form C `kl.exec OUTPUT, Kn|K{Xn}` in an _*_Output_ State.  Returns the
+        """Form C `kl.exec OUTPUT, Kn` in an _*_Output_ State.  Returns the
         `OUTPUT` window of `nbytes` bytes."""
         if not self.gate():
             return bytes(nbytes)                   # SGR16: the output window is zeroed
@@ -558,7 +558,7 @@ class MLKEMCL(CL):
         return getattr(self, name)[w:w + nbytes]
 
     def exec_D(self, halt_after=None):
-        """Form D `kl.exec Kn|K{Xn}` in _GenerateKeyPair_, _Encapsulate_ or
+        """Form D `kl.exec Kn` in _GenerateKeyPair_, _Encapsulate_ or
         _Decapsulate_.
 
         `halt_after` = n halts the instruction precisely after n steps of the operation
@@ -675,7 +675,7 @@ class MLKEMCL(CL):
 
 
 def kl_derive(dest, src, length):
-    """`kl.derive Kd|K{Xd}, Ks1|K{Xs1}, Xs2`, the auxiliary GPR carrying `length`
+    """`kl.derive Kd, Ks1, Xs2`, the auxiliary GPR carrying `length`
     alone (<<KLEE-instruction-derive>>).  Returns 'retired' or 'noop'."""
     if dest is src:
         raise IllegalInstruction('kl.derive with equal CL indices')
