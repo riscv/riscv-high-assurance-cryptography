@@ -30,7 +30,9 @@ ANCHOR LEVELS, strongest first.  Each case prints its level.
               this is deliberately the weaker anchor.
   [MODEL] Properties of the specification itself: state-machine legality, entry
           conditions, field-retention (`Xs`) semantics, representation rules,
-          retry rules.  Anchored on the spec text, not on an external vector.
+          retry rules, and the `Progress` discipline of Rule
+          <<KLEE-AGR-progress-discard>> (AGR10) for the interruptible States.
+          Anchored on the spec text, not on an external vector.
 
 NOTE ON k.  A real KLEE unit draws the per-signature secret k from the RBG
 (<<KLEE-RBG>>) into `RndNum`; it is never supplied by software.  A signature over
@@ -133,6 +135,10 @@ def transition_targets(state, eddsa, literal):
     freely, and all of them are sources for _Point_Mul_/_Sign_Generate_/
     _Sign_Verify_.  <<KLEE-EdDSA>> grants _Set_Ctx_ that same membership in words.
 
+    _Ready_ is a target of every valid state because <<KLEE-ECC>> does not forbid it
+    and SGR8 then permits it; this is how a caller abandons a long-running operation,
+    which Rule <<KLEE-AGR-progress-discard>> requires to discard its Progress.
+
     `literal=True` reproduces the pre-fix bullet list, in which _Set_Signature_
     had no exit at all (review finding M10, since resolved).  It is kept so that
     test_sign_then_verify_one_cc()
@@ -155,11 +161,11 @@ def transition_targets(state, eddsa, literal):
     elif state == MSG_ABSORB and eddsa:
         t = free | ops | {MSG_ABSORB, READY}
     elif state in (POINT_MUL, SIGN_GEN):
-        t = {OUTPUT}
+        t = {OUTPUT, READY}
     elif state == OUTPUT:
-        t = {SUCCESS}
+        t = {SUCCESS, READY}
     elif state == SIGN_VER:
-        t = {SUCCESS, FAILURE}
+        t = {SUCCESS, FAILURE, READY}
     elif state in (SUCCESS, FAILURE):
         t = {READY}
     else:
@@ -209,6 +215,7 @@ class CL:
         self.rnd = None
         self.has_sec = self.has_sig = self.has_hash = self.has_rnd = False
         self.out_type = False
+        self.progress = 0                       # _MachineUse_[15:1], AGR10's field P
         self.block_base = 0
         self.msg_pass = 0
         self.ctx = b''
@@ -269,6 +276,10 @@ class CL:
                              ' is not an allowed transition (Generic Rule 2)')
         if self.state == MSG_ABSORB:
             self._finalize_pass()
+        # AGR10: P is zeroed, and the material kept for the operation destroyed, on
+        # every transition of _State_ -- including a same-State kl.setst, one to
+        # _Ready_ and one to an Error State -- and the operation restarts.
+        self.discard_progress()
         self.block_base = 0
         self._loading = None
 
@@ -310,6 +321,38 @@ class CL:
         elif target == READY:
             self._return_to_ready(form, xs)
         self.state = target
+
+    # -- AGR10: Progress, and the material that is meaningful only with it -----
+    @property
+    def machine_use(self):
+        """_MachineUse_ as <<KLEE-ECC-MachineUse>> lays it out: bit 0 OutputType,
+        bits [15:1] Progress."""
+        return (1 if self.out_type else 0) | (self.progress << 1)
+
+    def discard_progress(self):
+        """AGR10: zero P and destroy the material kept for the interrupted
+        operation.  RndNum is that material for <<KLEE-ECC>> (and `r`, `k'` for
+        <<KLEE-EdDSA>>, which keeps no random value of its own)."""
+        self.progress = 0
+        self.rnd = None
+        self.has_rnd = False
+
+    def halt(self, progress=1, k=None):
+        """A precise halt of the long-running kl.exec of the current State, under
+        <<KLEE-IRR-long-running-no-data>>: Progress records how far it got and is
+        never zero at a halt; the State does not change.  In _Sign_Generate_ the
+        per-signature secret has already been drawn into RndNum, which HasRndNum
+        records "for the duration of the operation", so the halt keeps it."""
+        if self.state not in (POINT_MUL, SIGN_GEN, SIGN_VER):
+            raise KLEEInvalid(f'{SNAME[self.state]} holds no long-running operation')
+        if progress == 0 or progress > 0x7FFF:
+            raise KLEEInvalid('Progress at a halt is non-zero and fits bits [15:1]')
+        if self.state == SIGN_GEN and self.mode != 'eddsa':
+            if k is None:
+                raise KLEEInvalid('a halted Sign_Generate holds the drawn RndNum')
+            self.rnd = v2b(k, self.j // 8)
+            self.has_rnd = True
+        self.progress = progress
 
     def _check_sign_entry(self):
         if not self.policy_sign:
@@ -420,6 +463,7 @@ class CL:
         R = self.c.mul(k, P) if kind == 'pt' else None
         self.sec = self._enc_point(R)
         self.has_sec = True
+        self.discard_progress()              # completion: P zeroed (no random material)
         self.out_type = False
         self.block_base = 0
         self.state = OUTPUT
@@ -431,7 +475,12 @@ class CL:
         n, c = self.c.n, self.c
         d = b2v(self.scalar)
         e = b2v(self.hash)
-        it = iter(rbg)
+        # "If Progress is zero, the per-signature secret k is drawn from the RBG into
+        # RndNum ...; otherwise the interrupted operation is resumed with the RndNum
+        # held" (AGR10).  A resumed operation therefore consumes no RBG value; should
+        # the held k turn out degenerate, the retry rules draw the next one.
+        held = [b2v(self.rnd)] if self.progress and self.has_rnd else []
+        it = iter(held + list(rbg or []))
         attempt = 0
         while True:
             k = next(it)
@@ -452,8 +501,7 @@ class CL:
             break
         self.sig = self._enc_field(r) + self._enc_field(s)
         self.has_sig = True
-        self.rnd = None
-        self.has_rnd = False
+        self.discard_progress()              # completion: P zeroed, RndNum destroyed
         self.out_type = True
         self.block_base = 0
         self.state = OUTPUT
@@ -464,6 +512,7 @@ class CL:
             ok = self._eddsa_verify()
         else:
             ok = self._weierstrass_verify()
+        self.discard_progress()              # completion: P zeroed
         self.state = SUCCESS if ok else FAILURE
         return ok
 
@@ -1006,6 +1055,96 @@ def _point_mul_ok(c, k):
         return cr.state == OUTPUT
     except KLEEInvalid:
         return False
+
+
+def test_progress_agr10():
+    head('Interrupted long-running operations: `Progress` and Rule '
+         '<<KLEE-AGR-progress-discard>> (AGR10)')
+    c = EC.P256
+    vec = RFC6979['secp256r1']
+    msg, hname, k, r_exp, s_exp = vec['sigs'][0]
+    e = ecdsa_e(c, hashlib.new(hname, msg.encode()).digest())
+
+    def armed():
+        """A CL in _Sign_Generate_ with the private key and Hash of the RFC vector."""
+        cr = fresh(c)
+        load_field(cr, SET_SCALAR, v2b(vec['x'], cr.fw))
+        load_field(cr, SET_HASH, v2b(e, cr.hashlen))
+        cr.setst(SIGN_GEN)
+        return cr
+
+    cr = armed()
+    chk('MODEL', 'Progress is zero while no operation is interrupted, and it is '
+        'bits [15:1] of _MachineUse_ above OutputType (bit 0)',
+        cr.progress == 0 and cr.machine_use == 0)
+    cr.halt(progress=0x1234, k=k)
+    chk('MODEL', 'a precise halt of _Sign_Generate_ records a non-zero Progress, '
+        'keeps RndNum and leaves the State alone',
+        cr.progress == 0x1234 and cr.has_rnd and b2v(cr.rnd) == k
+        and cr.state == SIGN_GEN)
+    chk('MODEL', 'Progress sits in _MachineUse_[15:1] (OutputType unaffected)',
+        cr.machine_use == 0x1234 << 1)
+    (r, s, att), _ = cr.exec_run(rbg=[]), None
+    chk('KAT', 'resuming with Progress non-zero consumes no RBG value and uses the '
+        'held RndNum: the RFC 6979 signature results',
+        r == r_exp and s == s_exp and att == 0)
+    chk('MODEL', 'on completion Progress is zeroed and RndNum destroyed',
+        cr.progress == 0 and cr.rnd is None and cr.has_rnd is False)
+
+    # Every transition of _State_ discards P and the material kept with it.
+    for label, go in (('to _Ready_ (SGR8)', lambda x: x.setst(READY)),
+                      ('to _Output_', lambda x: x.setst(OUTPUT))):
+        cr = armed()
+        cr.halt(progress=7, k=k)
+        go(cr)
+        chk('MODEL', f'a kl.setst {label} zeroes Progress, destroys RndNum and '
+            'clears HasRndNum', cr.progress == 0 and cr.rnd is None
+            and cr.has_rnd is False)
+
+    # ... and the operation then restarts, drawing a fresh value.
+    cr = armed()
+    cr.halt(progress=9, k=0xDEAD)                 # a k that is not the RFC one
+    cr.setst(READY)                               # Form A retains Scalar and Hash
+    cr.setst(SIGN_GEN)
+    r2, s2, _ = cr.exec_run(rbg=[k])
+    chk('KAT', 'after the discard the operation restarts and draws afresh (the '
+        'abandoned RndNum does not reappear)', (r2, s2) == (r_exp, s_exp))
+
+    # Point_Mul carries no random material, but its Progress behaves the same way.
+    cr = fresh(c)
+    load_field(cr, SET_SCALAR, v2b(vec['x'], cr.fw))
+    cr.setst(POINT_MUL)
+    cr.halt(progress=0x7FFF)
+    held = cr.progress
+    R = cr.exec_run()
+    chk('MODEL', 'a halted _Point_Mul_ resumes to the same point and ends with '
+        'Progress zero', held == 0x7FFF and R == c.mul_g(vec['x'])
+        and cr.progress == 0)
+
+    ok = True
+    for bad in (0, 0x8000):
+        cr = fresh(c)
+        load_field(cr, SET_SCALAR, v2b(vec['x'], cr.fw))
+        cr.setst(POINT_MUL)
+        try:
+            cr.halt(progress=bad)
+            ok = False
+        except KLEEInvalid:
+            pass
+    chk('MODEL', 'the value recorded at a halt is never zero and fits bits [15:1]', ok)
+    try:
+        cr = fresh(c)
+        cr.setst(SET_HASH)
+        cr.halt()
+        ok = False
+    except KLEEInvalid:
+        pass
+    chk('MODEL', 'only the States that run a long-running kl.exec can be interrupted',
+        ok)
+    info('`Progress` is implementation-defined, so the model only records that it is '
+         'non-zero from the first halt until completion and zero otherwise; the '
+         'precomputed multiples an implementation would export with it live in the '
+         'ADS, which <<KLEE-ECC>> leaves implementation-specific.')
 
 
 def test_retry_rules():
@@ -1655,6 +1794,7 @@ def main():
     test_p521_representation()
     test_point_mul_validation()
     test_retry_rules()
+    test_progress_agr10()
     test_state_machine()
     test_sign_then_verify_one_cc()
     test_m10_dead_end()
