@@ -18,15 +18,15 @@ kat/sha2-kat.py, transcribed from the current text, with the GB/T 32905-2016 cor
     the big-endian encoding"; process_block() takes message word
     j = int(bswap(block[(j+1)w-1 : jw])) -- the word mapping of SHA-256, which the
     FIPS 180-4 row of <<KLEE-Notation-standards>> states as "message schedule words
-    ... via bswap" (SPEC-NOTE: the paragraph of <<KLEE-SHA-2>> that spelled both out
-    is commented out in the current text).
+    ... via bswap" (SPEC-NOTE: the <<KLEE-SHA-2>> paragraph spelling both out is
+    commented out in the current text).
   * _Ready_ -> _Hash_Absorb_ by a Form A kl.setst (max_len is set by the Machine,
     <<KLEE-process-VLI>>).  In _Hash_Absorb_ each Form B kl.exec runs
     process_VLI(max_len, block, b, state, n, input_base, block_base, 0, cumul_len,
     process_block(), None, mode=assign), transcribed step by step, with max_len = 0
     except in the max_len checks.  The only interruption point is step 4.i, with
-    klstart <- input_base / 8 and resumption at input_base <- 8 * klstart; the pre-M4
-    unit clash is kept as a negative control.
+    klstart <- input_base / 8 and resumption at input_base <- 8 * klstart; a negative
+    control checks that the byte/bit conversion is load-bearing.
   * _Hash_Absorb_ -> _Hash_Output_ (Form A): block_base must be 0, else _Invalid_;
     the entry step block[t-1:0] <- finalize() is not performed; block_base <- 0.  In
     _Hash_Output_ each Form C kl.exec runs the output loop of
@@ -50,15 +50,13 @@ the platform's hashlib provides 'sm3', a labeled reference oracle.
 
 NEGATIVE CONTROLS:
   KAT-EXPECT-FAIL: no-bswap         message words taken without the bswap.
-  KAT-EXPECT-FAIL: klstart-in-bits  the pre-M4 unit clash: klstart written as a bit
-                                    count and read back as a byte count.
+  KAT-EXPECT-FAIL: klstart-in-bits  klstart written as a bit count and read back as
+                                    a byte count.
 
 VECTOR PROVENANCE: GB/T 32905-2016 appendix A gives
   SM3("abc")       = 66c7f0f462eeedd9d1f2d46bdc10e4e24167c4875cf2f7a2297da02b8f4ba8e0
   SM3("abcd" x 16) = debe9ff92275b8a138604889c18e5a4d6fdb70e5387e5765293dcba39c0c5732
-The first differs from the value quoted in this harness's commissioning brief
-(66c7f0f4a54445d3...d28b), which is not the standard's digest; the published value is
-used here and both implementations reproduce it.
+Both implementations reproduce them.
 """
 import os, sys, time
 

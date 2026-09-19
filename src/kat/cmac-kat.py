@@ -3,73 +3,56 @@
 
 Two independent implementations are checked against the published vectors:
 
-  REF   SP 800-38B / RFC 4493 written directly on byte strings, with the
-        subkey doubling over the big-endian string view as the standard
-        specifies.
+  REF   SP 800-38B / RFC 4493 written directly on byte strings, with the subkey
+        doubling over the big-endian string view.
   KLEE  the Machine of <<KLEE-CMAC-mode>> (src/ace-ISA-machines.adoc),
-        implemented formula-by-formula in the KLEE value model of
-        src/ace-notation.adoc (byte i of a string lives at bits [8i+7:8i];
-        the left operand of @ is more significant).  gen_subkeys uses
-        `double`, the OCB3 doubling of <<KLEE-OCB-mode>>.  The model is a CL
-        driven by kl.setst / kl.exec Forms and KLLEN, so it also applies the
-        General Rules for Machines (<<KLEE-Machines-other-rules>>: AGR1-AGR6)
-        and the State rules of Book 1 (<<KLEE-State-field>>: SGR2, SGR4-SGR6,
-        SGR8, SGR10, SGR16) where CMAC relies on them, and it exports and
-        imports the Serialized Content of <<KLEE-CMAC-mode>> (the plaintext of
-        `Content1`, <<KLEE-SCC>>; the sealing itself is covered by scc-kat.py).
+        implemented formula-by-formula in the value model of src/ace-notation.adoc
+        (byte i at bits [8i+7:8i]; the left operand of @ is more significant).
+        gen_subkeys uses `double`, the OCB3 doubling of <<KLEE-OCB-mode>>.  The
+        model is a CL driven by kl.setst / kl.exec Forms and KLLEN, so it also
+        applies AGR1-AGR6 (<<KLEE-Machines-other-rules>>), the State rules SGR2,
+        SGR4-SGR6, SGR8, SGR10, SGR16 (<<KLEE-State-field>>) where CMAC relies on
+        them, and the Serialized Content of <<KLEE-CMAC-mode>> (the plaintext of
+        `Content1`; the sealing itself is covered by scc-kat.py).
 
-Vectors and provenance
-  * RFC 4493 section 4 (identical to SP 800-38B Appendix D.1), AES-128:
-    subkey generation anchors (AES-128(K,0), K1, K2) and examples 1-4 with
-    Mlen = 0, 16, 40, 64 bytes.
-  * NIST "CMAC Mode for Authentication" example file (the SP 800-38B
-    example set, csrc.nist.gov .../examples/AES_CMAC.pdf), CMAC-AES192 and
-    CMAC-AES256 examples 1-4 with Mlen = 0, 16, 20, 64 bytes, including
-    their published L, K1 and K2 values.
-    The AES-128 Mlen = 20 example from the same file is included too, so
-    every key size exercises a partial final block.
+Vectors
+  * RFC 4493 section 4 (= SP 800-38B D.1), AES-128: the subkey anchors
+    AES-128(K,0), K1, K2 and examples 1-4, Mlen = 0, 16, 40, 64 bytes.
+  * NIST "CMAC Mode for Authentication" example file (AES_CMAC.pdf),
+    CMAC-AES192 and CMAC-AES256 examples 1-4, Mlen = 0, 16, 20, 64 bytes, with
+    their published L, K1, K2.  The AES-128 Mlen = 20 example is included too,
+    so every key size exercises a partial final block.
 
-Checks performed
-  * REF vs published tag, and KLEE vs published tag, for all 13 examples,
-    the KLEE model being driven two ways: one block per kl.exec with the last
-    block passed at its exact length, and every full block in a single
-    multi-block kl.exec (AGR3) with the last block passed in a 256-bit
-    operand with filler above it, which the Machine must ignore.
-  * The published subkey anchors (L, K1, K2) against KLEE gen_subkeys, for
-    all three key sizes.
-  * Every path of _Hash_Absorb_Last_Block_ is covered:
-      Xs = 0     empty message           (K2, all-padding block)
-      Xs = b     full final block        (K1 path)
-      0 < Xs < b partial final block     (K2, ocb-style padded block)
-  * Both _Hash_Output_ options: the Form C `kl.exec` emit, and the Form C
-    `kl.setst #kl_state_hash_verify` comparison (Success on the right tag,
-    Failure on a tampered one and on a truncated one).
-  * The `Xs` validity rules of the Form B setst: Xs > b, Xs not a multiple
-    of 8, and block_base != 0 must drive the CL to Error State _Invalid_.
-  * The Serialized Content: the CL is exported and re-imported after every
-    instruction of every example; every admissible field value fits its row;
-    the sizes are reported.
+Checks
+  * REF and KLEE against the published tag for all 13 examples, the KLEE model
+    driven two ways: one block per kl.exec with the last block at its exact
+    length, and every full block in a single multi-block kl.exec (AGR3) with the
+    last block in a 256-bit operand whose filler the Machine must ignore.
+  * The published subkey anchors (L, K1, K2) against gen_subkeys, all key sizes.
+  * Every path of _Hash_Absorb_Last_Block_: Xs = 0 (empty message, K2 and an
+    all-padding block), Xs = b (full final block, K1), 0 < Xs < b (K2, padded).
+  * Both _Hash_Output_ options: the Form C kl.exec emit, and the Form C
+    kl.setst #kl_state_hash_verify comparison (Success on the right tag, Failure
+    on a tampered and on a truncated one).
+  * The `Xs` rules of the Form B setst: Xs > b, Xs not a multiple of 8, and
+    block_base != 0 must drive the CL to _Invalid_.
+  * The Serialized Content: export and re-import after every instruction of
+    every example; every admissible field value fits its row.
   * State machine: instructions and Forms not allowed in the current State
     (<<KLEE-AGR-not-allowed-instructions>>, <<KLEE-SGR-no-exec-in-ready>>,
     <<KLEE-SGR-success-failure>>), the KLIOBUF substitutions of
     <<KLEE-usage-input-output>>, KLLEN not a multiple of b in _Hash_Absorb_
-    (AGR2), one block whatever KLLEN in the last-block and output States
-    (AGR3) with OUTPUT cleared beyond bit b-1, and a return to _Ready_ (SGR8).
-  * <<KLEE-derive-endpoints>>: `key` (j = 1) is the only importable field and
-    is written with the CL in State Ready; CMAC has no exportable field.
+    (AGR2), one block whatever KLLEN in the last-block and output States (AGR3)
+    with OUTPUT cleared beyond bit b-1, and a return to _Ready_ (SGR8).
+  * <<KLEE-derive-endpoints>>: `key` (j = 1) is the only importable field and is
+    written with the CL in _Ready_; CMAC has no exportable field.
   * Negative controls (must NOT reproduce the standard):
-      NC-K2full     : take the K2 path for a full final block instead of K1.
-      NC-lemask     : derive the subkeys with the little-endian update_mask
-                      instead of double() = bswap(update_mask(bswap(S))).
+      NC-K2full     : the K2 path for a full final block instead of K1.
+      NC-lemask     : subkeys from the little-endian update_mask instead of
+                      double() = bswap(update_mask(bswap(S))).
       NC-blockorder : a multi-block kl.exec taking its blocks from the most
                       significant position downwards, contrary to AGR3.
       NC-scc-drop   : the Serialized Content without its `hash` row.
-
-Review finding m6 is fixed in the spec: <<KLEE-CMAC-mode>> now states that with
-last_blk_len = 0 "INPUT is not read and the padded value is zeros(b-8) @
-0b10000000", so the undefined slice INPUT[-1:0] is gone.  The harness checks
-that reading directly, by feeding a nonzero dummy INPUT in the empty-message
-case and requiring the published tag.
 """
 import sys, os
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -483,7 +466,7 @@ def main():
               f"{chk(evil.state == S_FAILURE):7} {chk(hop_tag == W):6}")
 
     print("\nempty message (<<KLEE-CMAC-mode>>: with last_blk_len = 0 INPUT is "
-          "not read), review m6:")
+          "not read):")
     for label, K, want in (("AES-128", K128, "BB1D6929E95937287FA37D129B756746"),
                            ("AES-192", K192, "D17DDF46ADAACDE531CAC483DE7A9367"),
                            ("AES-256", K256, "028962F61B7BF89EFC6B551F4667D983")):

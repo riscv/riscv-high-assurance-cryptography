@@ -2,59 +2,45 @@
 """CTR and XCTR keystream generation (<<KLEE-keystream-modes>> in
 src/ace-ISA-machines.adoc) against SP 800-38A F.5 and the HCTR2 reference vectors.
 
-The specification keeps the keystream state as two separate fields, `IV` of `n`
-bits and `ctr` of `j` bits, and forms the block fed to the keystream function as
+The keystream state is two fields, `IV` of `n` bits and `ctr` of `j` bits, and the
+block fed to the keystream function is
 
     CTR  :  tmp <- keystream_block(bswap(ctr) @ IV)      with b = n + j
     XCTR :  tmp <- keystream_block(IV xor ctr)           with b = n = j
 
 followed by tick_ctr() and OUTPUT <- tmp.  Under <<KLEE-Notation>> the LEFT operand
-of `@` occupies the more significant bits, and byte i of a byte string lives at bits
-[8i+7:8i].  So `bswap(ctr) @ IV` puts the IV in the *first* n/8 bytes of the counter
-block and the counter, big-endian, in the *trailing* j/8 bytes, which is what
-SP 800-38A requires.  The `bswap` is load-bearing: without it the counter would be
-little-endian in those bytes.
+of `@` is the more significant and byte i of a byte string lives at bits [8i+7:8i],
+so `bswap(ctr) @ IV` puts the IV in the *first* n/8 bytes of the counter block and
+the counter, big-endian, in the *trailing* j/8 bytes, as SP 800-38A requires.  The
+`bswap` is load-bearing: without it the counter would be little-endian there.
 
 Models
 ------
-REF-CTR   SP 800-38A written directly on byte strings: counter block =
-          nonce || big-endian(ctr, j bits), incremented as an integer mod 2^j.
+REF-CTR   SP 800-38A on byte strings: counter block = nonce || big-endian(ctr, j
+          bits), incremented as an integer mod 2^j.
 REF-XCTR  The HCTR2 paper's XCTR on byte strings: E_K(IV xor LE(i, 128)), the
           counter little-endian and full width, numbered from 1.
-KLEE      A model of a Cryptographic Locker holding a CTR/XCTR CC (class
-          KeystreamCL).  It covers provisioning from a PI (the MDH first, then the key
-          or SKID) and the States _Ready_ and _Operate_ with the values of
-          <<KLEE-state-constants-symmetric>>.  It also covers the Form C kl.setst that
-          sets `IV` (keeping its n least significant bits), the Form B
+KLEE      A Cryptographic Locker holding a CTR/XCTR CC (class KeystreamCL):
+          provisioning from a PI (the MDH first, then the key or SKID), the States
+          _Ready_ and _Operate_ of <<KLEE-state-constants-symmetric>>, the Form C
+          kl.setst that sets `IV` (keeping its n least significant bits), the Form B
           `kl.setst #kl_state_set_aux_value, Xs` that sets `ctr <- lsb_j(Xs)` from a
-          64-bit Xs, and the (multi-block) Form C kl.exec.  The Machine text gives
-          only the per-block operation.  The block loop is rule AGR3 of
-          <<KLEE-Machines-other-rules>>: for i = 0, b, ..., KLLEN - b, in that order,
-          the operation produces OUTPUT[i+b-1:i].  So the keystream block for the
-          counter value ctr + q is the q-th block of the output byte string.
+          64-bit Xs, and the multi-block Form C kl.exec.  The Machine text gives
+          only the per-block operation; the block loop is AGR3
+          (<<KLEE-Machines-other-rules>>): for i = 0, b, ..., KLLEN - b, in that
+          order, the operation produces OUTPUT[i+b-1:i], so the keystream block for
+          counter ctr + q is the q-th block of the output byte string.  The
+          granularity rule is AGR2, and a kl.exec in _Ready_ falls under
+          <<KLEE-SGR-no-exec-in-ready>> and <<KLEE-AGR-not-allowed-instructions>>.
+          The allowed transitions are _Ready_ -> _Operate_ and _Operate_ -> _Ready_;
+          any other target State invalidates the CL.  The Serialized Content holds
+          `key` (or SKID) at position i, `IV` at ii and `ctr` at iii, zero-padded to
+          a multiple of 128 bits, and <<KLEE-derive-endpoints>> makes `key` (1) the
+          only importable field.
 NEG       Two negative controls, both of which must fail SP 800-38A: the CTR formula
           with the `bswap` dropped (a little-endian counter in the trailing bytes),
-          and a multi-block kl.exec that fills the blocks from the most significant
-          position down (the keystream blocks in reverse address order).
-
-What changed in the specification, and how this file follows it
-----------------------------------------------------------------
-* A Form B kl.setst carries a 64-bit operand (<<KLEE-instruction-setst>>, Rule
-  <<KLEE-GR-multiple-GPRs>>).  The former check with n = 0, j = 128 loaded the whole
-  SP 800-38A initial counter block f0f1...ff into `ctr` through that operand, which
-  cannot hold it.  F.5 is now reproduced with the splits (n, j) = (64, 64), (96, 32)
-  and (112, 16).  The Form C INPUT is the whole initial block T1, of which the
-  Machine keeps the n least significant bits (its first n/8 bytes).  Form B loads
-  the integer value of the trailing j/8 bytes.  This anchors the nonce/counter splits
-  on the standard vectors; the old file could only compare them with REF.
-* The allowed transitions are now _Ready_ -> _Operate_ and _Operate_ -> _Ready_
-  (formerly "any"), so any other target State invalidates the CL.
-* The multi-block loop is rule AGR3 and the granularity rule is AGR2.  A kl.exec in
-  _Ready_ falls under Rules <<KLEE-SGR-no-exec-in-ready>> and
-  <<KLEE-AGR-not-allowed-instructions>>.
-* The Serialized Content no longer lists the MDH: `key` (or SKID) is at position i,
-  `IV` at ii and `ctr` at iii, zero-padded to a multiple of 128 bits.
-* <<KLEE-derive-endpoints>> makes `key` (1) the only importable field.
+          and a multi-block kl.exec filling the blocks from the most significant
+          position down (keystream blocks in reverse address order).
 
 Vectors and provenance
 ----------------------
@@ -63,12 +49,15 @@ Vectors and provenance
   plaintext blocks.  Transcribed from the Linux kernel crypto/testmgr.h,
   aes_ctr_tv_template, entries commented "From NIST Special Publication 800-38A,
   Appendix F.5" (raw.githubusercontent.com/torvalds/linux, master, fetched
-  2026-08-26).
+  2026-08-26).  A Form B kl.setst carries a 64-bit operand
+  (<<KLEE-instruction-setst>>, <<KLEE-GR-multiple-GPRs>>), so F.5 is reproduced
+  with the splits (n, j) = (64, 64), (96, 32) and (112, 16): the Form C INPUT is
+  the whole initial block T1, of which the Machine keeps the n least significant
+  bits, and Form B loads the integer value of the trailing j/8 bytes.
 * XCTR: google/hctr2 test_vectors/ours/XCTR/XCTR_AES{128,256}.json
   (raw.githubusercontent.com/google/hctr2, main, fetched 2026-08-26).  These are
-  the reference vectors of the HCTR2 paper's own implementation, so XCTR here is
-  anchored on a reference implementation, not on a standards body's vectors ---
-  no NIST XCTR vectors exist.
+  the reference vectors of the HCTR2 paper's own implementation, so XCTR is
+  anchored on a reference implementation --- no NIST XCTR vectors exist.
 
 Anchor levels: CTR is standard-vector anchored for the splits (64, 64), (96, 32)
 and (112, 16), including resumption, export/import and kl.derive.  Other splits

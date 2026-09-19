@@ -13,8 +13,8 @@ WHAT IS MODELED, transcribed from the current text of src/ace-ISA-machines.adoc:
     process_block() is the FIPS 180-4 sect. 6 compression with message word
     j = int(bswap(block[(j+1)w-1 : jw])), the FIPS 180-4 row of
     <<KLEE-Notation-standards>> ("message schedule words ... via bswap").  The
-    "Endianness" paragraph that used to state both explicitly is commented out in
-    the current text (SPEC-NOTE line).
+    "Endianness" paragraph that stated both explicitly is commented out in the
+    current text (SPEC-NOTE line).
   * _Ready_ -> _Hash_Absorb_ by a Form A kl.setst: max_len is set by the Machine
     (<<KLEE-process-VLI>>, State Machine Behavior).  In _Hash_Absorb_ each Form B
     kl.exec runs process_VLI(max_len, block, b, state, n, input_base, block_base, 0,
@@ -22,9 +22,8 @@ WHAT IS MODELED, transcribed from the current text of src/ace-ISA-machines.adoc:
     (steps 1 to 4.i), with max_len = 0 ("zero if none is enforced") except in the
     max_len checks, which give the CL a small system-defined value.  The only
     interruption point is step 4.i, with klstart <- input_base / 8; resumption sets
-    input_base <- 8 * klstart (step 3).  This byte/bit conversion, once review
-    finding M4, is now explicit in the text; the pre-fix unit clash is kept as a
-    negative control.
+    input_base <- 8 * klstart (step 3).  A negative control checks that this
+    byte/bit conversion is load-bearing.
   * _Hash_Absorb_ -> _Hash_Output_ (Form A): finalize() is None; block_base must be
     0, else _Invalid_; the entry step block[t-1:0] <- finalize() is not performed;
     block_base <- 0.  In _Hash_Output_ each Form C kl.exec runs the output loop of
@@ -68,8 +67,8 @@ independent reference oracle, clearly labeled; the KLEE model never calls it.
 
 NEGATIVE CONTROLS:
   KAT-EXPECT-FAIL: no-bswap         message words taken without the bswap.
-  KAT-EXPECT-FAIL: klstart-in-bits  the pre-M4 unit clash: klstart written as a
-                                    bit count and read back as a byte count.
+  KAT-EXPECT-FAIL: klstart-in-bits  klstart written as a bit count and read back
+                                    as a byte count.
 """
 import os, sys, math, time
 

@@ -24,14 +24,13 @@ rules of <<KLEE-Machines-other-rules>>, <<KLEE-truncation-vs-length>>,
 The text is transcribed clause by clause into state machines driven one
 architectural instruction at a time: `kl.setst` and `kl.exec` by Form,
 `kl.derive`, `kl.restrictl`/`kl.restricth`, provisioning from a PI image, and
-export/import of the Serialized Content (in clear: sealing is scc-kat.py's
-business).  Only the vector Forms are driven; the KLIOBUF substitutions of
-<<KLEE-usage-input-output>> are not.  Nothing is "fixed up": every numbered step
-is reproduced as written, on KLEE *values* (little-endian bit strings held in
-Python ints, src/ace-notation.adoc), whose table of referenced standards
-(<<KLEE-Notation-standards>>) records SP 800-232 as "Little-endian throughout,
-including ||" with a "Direct mapping", which SP 800-232 Appendix A (Fig. 9: S[0:0]
-is the lsb of S0) confirms.
+export/import of the Serialized Content in clear (sealing is scc-kat.py's
+business).  Only the vector Forms are driven, not the KLIOBUF substitutions of
+<<KLEE-usage-input-output>>.  Nothing is "fixed up": every numbered step is
+reproduced as written, on KLEE *values* (little-endian bit strings held in Python
+ints, src/ace-notation.adoc).  <<KLEE-Notation-standards>> records SP 800-232 as
+"Little-endian throughout, including ||" with a "Direct mapping", which
+SP 800-232 Appendix A (Fig. 9: S[0:0] is the lsb of S0) confirms.
 
 ANCHORING (three levels, in this order)
 ---------------------------------------
@@ -46,11 +45,10 @@ ANCHORING (three levels, in this order)
    of Algorithms 3/4 (`ref_aead_bits_*`), checked against the byte version.
    SP 800-232 defines parse/pad on bit strings (Sec. 2.1) and truncates a tag to
    T[0:lambda-1] (Sec. 4.2.1); its KAT files hold byte strings and 128-bit tags
-   only, so the bit-string version is what anchors non-byte final blocks and
-   truncated tags.  During development the byte version was also run against the
-   *complete* official KAT files (1089 AEAD, 1025 Hash256, 1025 XOF128, 1089
-   CXOF128 records) with zero mismatches; the subset embedded here is
-   representative, not exhaustive.
+   only, so the bit-string version anchors non-byte final blocks and truncated
+   tags.  The byte version was also run against the *complete* official KAT files
+   (1089 AEAD, 1025 Hash256, 1025 XOF128, 1089 CXOF128 records) with zero
+   mismatches; the subset embedded here is representative, not exhaustive.
 3. The KLEE Machines are checked against the official vectors and Table 12
    directly, and against `ref_*` where no official vector exists (truncated and
    non-byte tags, non-byte final blocks, nonce masking, squeeze splitting, keys
@@ -74,8 +72,8 @@ https://nvlpubs.nist.gov/nistpubs/SpecialPublications/NIST.SP.800-232.pdf
 
 SPECIFICATION FINDINGS (reported, not patched)
 ----------------------------------------------
-Defects are printed as SPEC-NOTE lines; where the text is merely silent or
-ambiguous, the reading this model adopts is printed as an INFO line.  In short:
+Defects are printed as SPEC-NOTE lines; where the text is silent or ambiguous,
+the reading this model adopts is printed as an INFO line.  In short:
 
 * <<KLEE-Ascon-CXOF128>> leaves "the management and padding of the customization
   string" to the caller but never says that SP 800-232 Sec. 5.3 prefixes Z with
@@ -88,9 +86,9 @@ ambiguous, the reading this model adopts is printed as an INFO line.  In short:
   bits after a risk analysis.  The KLEE bound itself is transcribed as written.
 * <<KLEE-Ascon-AEAD128-wsn>> initializes state[3..4] from `nonce` "in State
   _Ready_", but `nonce` is in neither its Internal State nor its Serialized
-  Content ("Same as for Ascon-AEAD128").  Since the Machine no longer forbids
-  the return to _Ready_ (SGR8 applies), the model must keep the PI nonce to
-  re-enter _Ready_, and an imported CC cannot re-enter it at all.
+  Content ("Same as for Ascon-AEAD128").  The Machine does not forbid the return
+  to _Ready_ (SGR8 applies), so the model must keep the PI nonce to re-enter
+  _Ready_, and an imported CC cannot re-enter it at all.
 * <<KLEE-Ascon-XOF128>> speaks of "State _Hash_Output_/_Hash_Finalize_"; that
   Machine has no State _Hash_Output_.
 * The key field of <<KLEE-Ascon-AEAD128>>'s Serialized Content is "128 or 64
@@ -99,10 +97,6 @@ ambiguous, the reading this model adopts is printed as an INFO line.  In short:
   bits in one layout and not in the other.
 * <<KLEE-derive-endpoints>> lists neither Ascon-Hash256 nor the set-nonce and
   nonce-masking Machines.
-
-Earlier findings now fixed in the text: the intro of <<KLEE-Ascon-AEAD128>> says
-that the caller pads the AD only (review m5), and the nonce-masking Machine now
-lists and serializes `last_blk_len` (demonstrated below by a negative control).
 
 Run directly; prints per-case PASS/FAIL and a final `KAT-RESULT:` line.
 """
@@ -1762,7 +1756,7 @@ def main():
     cc.setst('Ready')
     st_r = cc.st
     cc, ct2, tag2 = aead_run(cc, False, None, ad579, pt579)
-    chk("SGR8: _Success_ -> _Ready_ is no longer forbidden; the restart reuses the PI nonce (the "
+    chk("SGR8: _Success_ -> _Ready_ is permitted; the restart reuses the PI nonce (the "
         "NOTE: the Machine protects the nonce's confidentiality, not against its reuse)",
         (st_r, ct2 + tag2), ('Ready', ct + tag))
     cc = provision(pi)

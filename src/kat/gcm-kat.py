@@ -27,9 +27,8 @@ Serialized Content layout and export/import, including the _Set_Aux_Value_
 overlay; the derived field `auth_key` (AGR4) on import and after a kl.derive
 into `key` (<<KLEE-derive-endpoints>>); the kl.setst/kl.exec rules of the
 Machines and of the general rules (AGR1-AGR6, SGR2-SGR16, IRR6/IRR7); and GCM
-with Set IV: key and J0 in the PI, no _Set_Aux_Value_, no block budget (removed
-from the specification), and a transition back to _Ready_ that is no longer
-prohibited.
+with Set IV: key and J0 in the PI, no _Set_Aux_Value_, no block budget, and a
+permitted transition back to _Ready_.
 
 Negative controls (declared with KAT-EXPECT-FAIL) re-run the KLEE model with the
 two halves of the length block swapped, with a little-endian counter, with the

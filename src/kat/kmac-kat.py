@@ -63,16 +63,10 @@ Embedded vector provenance:
     BouncyCastle's doFinalTest() (31a44527...b16c).
   * FIPS 202 anchors for the Keccak core: SHA3-256/SHAKE128/SHAKE256 of "".
 
-Review finding M4, since FIXED:
-  process_VLI used to store `klstart <- input_base` (a BIT count) although
-  klstart is architecturally a BYTE count.  The spec now converts explicitly
-  (`klstart <- input_base / 8`, resume at `input_base <- 8 * klstart`), which
-  this harness transcribes; the pre-fix text is kept as a negative control.
-
 Negative controls (must mismatch, declared via KAT-EXPECT-FAIL):
   * left_encode  -- left_encode(L) absorbed in place of right_encode(L).
   * suffix D     -- the raw SHAKE suffix 1111 in place of the cSHAKE suffix 00.
-  * M4 literal units -- klstart written as a bit count, consumed as bytes.
+  * klstart units -- klstart written as a bit count, consumed as bytes.
   * unpadded last byte -- ceil(L/8) raw squeezed bytes delivered instead of
     exactly L bits with the last byte zero-padded.
   * serialized field order -- the Serialized Content assembled with the `@`
@@ -1277,7 +1271,7 @@ def main():
     print('-- 13. negative controls --')
     print('KAT-EXPECT-FAIL: left_encode')
     print('KAT-EXPECT-FAIL: suffix D')
-    print('KAT-EXPECT-FAIL: M4 literal units')
+    print('KAT-EXPECT-FAIL: klstart units')
     print('KAT-EXPECT-FAIL: unpadded last byte')
     print('KAT-EXPECT-FAIL: serialized field order')
     got, _ = kl_kmac(128, KEY, DATA4, 256, TAG, use_left_encode=True)
@@ -1292,7 +1286,7 @@ def main():
                      got != bytes.fromhex(SAMPLES[1][7]))
     got, _ = kl_kmac(128, KEY, DATA200, 256, TAG, chunks=[DATA200],
                      interrupt=(0, 100), literal_units=True)
-    negative_control('M4 literal units (klstart bit count consumed as bytes)',
+    negative_control('klstart units (bit count consumed as bytes)',
                      got != bytes.fromhex(SAMPLES[2][7]))
     mism = False
     for L in (250, 1001):

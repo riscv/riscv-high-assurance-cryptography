@@ -42,9 +42,9 @@ is fed in.  This tests every part of the specified computation except the draw
 itself.  The retry rules are additionally tested end-to-end by making the model's
 first draw degenerate and checking that a *second* draw is taken and used.
 
-SPEC BUG DEMONSTRATIONS.  Where the literal text is defective, this harness keeps
-the literal behaviour visible in a labelled informational line rather than
-silently patching it (see the SPEC-NOTE lines in the output).
+SPEC NOTES.  Where the literal text is ambiguous or defective, this harness makes
+the reading it adopts visible in a labelled line rather than silently patching it
+(see the SPEC-NOTE lines in the output).
 
 Offline, stdlib only (hashlib is used for SHA-2/SHA-3/SHAKE, which the spec
 delegates to the hash extensions).
@@ -127,27 +127,19 @@ class KLEEInvalid(Exception):
 
 # -- the transition relation, transcribed from "Allowed State Transitions" ----
 
-def transition_targets(state, eddsa, literal):
+def transition_targets(state, eddsa):
     """The set of states reachable from `state` by a single `kl.setst`.
 
-    `literal=False` transcribes the bullet list of <<KLEE-ECC>> as it now reads:
-    the five _Set_ states are named collectively, any two of them may transition
-    freely, and all of them are sources for _Point_Mul_/_Sign_Generate_/
-    _Sign_Verify_.  <<KLEE-EdDSA>> grants _Set_Ctx_ that same membership in words.
+    Transcribes the bullet list of <<KLEE-ECC>>: the five _Set_ states are named
+    collectively, any two of them may transition freely, and all of them are
+    sources for _Point_Mul_/_Sign_Generate_/_Sign_Verify_.  <<KLEE-EdDSA>> grants
+    _Set_Ctx_ that same membership in words.
 
     _Ready_ is a target of every valid state because <<KLEE-ECC>> does not forbid it
     and SGR8 then permits it; this is how a caller abandons a long-running operation,
-    which Rule <<KLEE-AGR-progress-discard>> requires to discard its Progress.
-
-    `literal=True` reproduces the pre-fix bullet list, in which _Set_Signature_
-    had no exit at all (review finding M10, since resolved).  It is kept so that
-    test_sign_then_verify_one_cc()
-    test_m10_dead_end() can demonstrate what the defect was and detect a
-    regression.
+    which <<KLEE-AGR-progress-discard>> requires to discard its Progress.
     """
-    free = {SET_GEN, SET_SCALAR, SET_HASH, SET_SECONDPT}
-    if not literal:
-        free = free | {SET_SIG}
+    free = {SET_GEN, SET_SCALAR, SET_HASH, SET_SECONDPT, SET_SIG}
     if eddsa:
         free = free | {SET_CTX}
     entry = {SET_GEN, SET_SCALAR, SET_HASH, SET_SECONDPT, SET_SIG}
@@ -190,13 +182,12 @@ class CL:
     """A model of a KLEE control register holding an elliptic-curve CC."""
 
     def __init__(self, curve, b, h, j, u, v, mode,
-                 policy_sign=True, policy_verify=True, literal=False):
+                 policy_sign=True, policy_verify=True):
         self.c = curve
         self.b, self.h, self.j, self.u, self.v = b, h, j, u, v
         self.mode = mode                        # 'ecdsa' | 'sm2' | 'eddsa'
         self.policy_sign = policy_sign
         self.policy_verify = policy_verify
-        self.literal = literal
         self.fw = b // 8                        # width of a b-bit field, bytes
         self.ptlen = u * self.fw
         self.siglen = v * self.fw
@@ -271,7 +262,7 @@ class CL:
     # -- state transitions ------------------------------------------------
     def setst(self, target, form='A', xs=0, rand_scalar=None):
         eddsa = self.mode == 'eddsa'
-        if target not in transition_targets(self.state, eddsa, self.literal):
+        if target not in transition_targets(self.state, eddsa):
             raise KLEEInvalid(f'{SNAME[self.state]} -> {SNAME.get(target, target)}'
                              ' is not an allowed transition (Generic Rule 2)')
         if self.state == MSG_ABSORB:
@@ -626,7 +617,7 @@ class CL:
             self.sig = R + bytes(self.fw)                 # R only; HasSignature NOT set
             self.msg_pass = 1
         elif self._pass_xs == 1:
-            # C1 fix (<<KLEE-EdDSA>>): a second instance H' recomputes r from the pass-2
+            # <<KLEE-EdDSA>>: a second instance H' recomputes r from the pass-2
             # message and must match the value stored in pass 1, binding the two passes;
             # otherwise the CL is invalidated and msg_pass stays at 1.
             dom = self._dom(0)
@@ -1327,12 +1318,10 @@ def test_state_machine():
     cc.setst(READY, form='B', xs=(1 << 5) | 2)
     chk('MODEL', 'Xs bits 5+1: copy, then SecondPt erased and HasSecondPt False',
         cc.gen == sec0 and cc.sec is None and not cc.has_sec)
-    note('"Upon returning to State _Ready_" previously assigned *SecondPt* to both Bit 1'
-         ' and Bit 3, leaving Bit 3 with no distinct meaning, said nothing about the fate'
-         ' of `Hash`, and reset `Signature` unconditionally. All three are now fixed, with'
-         ' uniform polarity throughout: a set bit discards the field it names (Bit 3'
-         ' `Hash`, Bit 6 `Signature`) and a clear bit retains it, so Form A and Xs = 0'
-         ' retain everything and one CC can sign and then verify.')
+    note('"Upon returning to State _Ready_" has uniform polarity throughout: a set bit'
+         ' discards the field it names (Bit 3 `Hash`, Bit 6 `Signature`) and a clear bit'
+         ' retains it, so Form A and Xs = 0 retain everything and one CC can sign and'
+         ' then verify.')
 
 
 # an arbitrary valid per-signature secret; this flow checks reachability, not a KAT
@@ -1399,46 +1388,27 @@ def test_sign_then_verify_one_cc():
     chk('MODEL', 'with Bit 6 the signature is discarded and Sign_Verify is refused', ok)
 
 
-def test_m10_dead_end():
-    head('Regression check: review finding M10 (Set_Signature dead end), now FIXED')
-    # breadth-first search over the transition relation, pre-fix and current
-    for literal, label in ((True, 'pre-fix'), (False, 'current text')):
-        seen = {SET_SIG}
-        frontier = [SET_SIG]
-        while frontier:
-            nxt = []
-            for st in frontier:
-                for t in transition_targets(st, eddsa=False, literal=literal):
-                    if t not in seen:
-                        seen.add(t)
-                        nxt.append(t)
-            frontier = nxt
-        reachable = SIGN_VER in seen
-        if literal:
-            info(f'transition list {label}: states reachable from Set_Signature = '
-                 f'{sorted(SNAME[s] for s in seen - {SET_SIG}) or "(none)"}')
-            chk('MODEL', 'pre-fix relation had no legal path Set_Signature ->'
-                ' Sign_Verify (this PASS records what the defect was)', not reachable)
-        else:
-            chk('MODEL', f'transition list {label}: Set_Signature -> Sign_Verify is reachable',
-                reachable)
-    note('M10 is RESOLVED in the current text. <<KLEE-ECC>> "Allowed State Transitions"'
-         ' now defines the five _Set_ states collectively, lets any two of them'
-         ' transition freely, and admits all of them as sources for _Point_Mul_,'
-         ' _Sign_Generate_ and _Sign_Verify_; _Point_Mul_ -> _Output_ -> _Success_ is'
-         ' also completed. Previously _Set_Signature_ appeared in neither exit rule, so'
-         ' by Generic Rule 2 a CL that had just loaded a signature could make no legal'
-         ' move and verification was unreachable. The pre-fix relation is retained above'
-         ' as a regression check.')
-    # the strictness of the rest of the list is still enforced
-    cr = fresh(EC.P256, literal=True)
-    load_field(cr, SET_SIG, bytes(cr.siglen))
-    try:
-        cr.setst(SIGN_VER)
-        ok = False
-    except KLEEInvalid:
-        ok = True
-    chk('MODEL', 'literal model: Set_Signature -> Sign_Verify raises Invalid', ok)
+def test_set_signature_exits():
+    head('Every _Set_ state has an exit: Set_Signature -> Sign_Verify is reachable')
+    # breadth-first search over the transition relation
+    seen = {SET_SIG}
+    frontier = [SET_SIG]
+    while frontier:
+        nxt = []
+        for st in frontier:
+            for t in transition_targets(st, eddsa=False):
+                if t not in seen:
+                    seen.add(t)
+                    nxt.append(t)
+        frontier = nxt
+    info('states reachable from Set_Signature = '
+         f'{sorted(SNAME[s] for s in seen - {SET_SIG}) or "(none)"}')
+    chk('MODEL', 'Set_Signature -> Sign_Verify is reachable', SIGN_VER in seen)
+    note('<<KLEE-ECC>> "Allowed State Transitions" defines the five _Set_ states'
+         ' collectively, lets any two of them transition freely, and admits all of them'
+         ' as sources for _Point_Mul_, _Sign_Generate_ and _Sign_Verify_;'
+         ' _Point_Mul_ -> _Output_ -> _Success_ completes the relation. A state named in'
+         ' neither exit rule would, by Generic Rule 2, be a dead end.')
 
 
 def test_ed25519():
@@ -1797,7 +1767,7 @@ def main():
     test_progress_agr10()
     test_state_machine()
     test_sign_then_verify_one_cc()
-    test_m10_dead_end()
+    test_set_signature_exits()
     test_ed25519()
     test_ed448()
     test_sm2()

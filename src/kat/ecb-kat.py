@@ -8,46 +8,42 @@ REF    A plain byte-string ECB reference: split the message into b-bit blocks in
        address order and apply enc_blk/dec_blk to each.  Anchored directly on the
        published vectors.
 
-KLEE   The ECB Machine as the specification now states it, driven through a small
-       model of a Cryptographic Locker (class EcbCL): a PI is provisioned, the CL is
-       moved between _Ready_, _Encrypt_ and _Decrypt_ with kl.setst, and data is
-       processed with the (multi-block) Form A kl.exec, whose per-block operation
-       <<KLEE-ECB-mode>> gives as
+KLEE   The ECB Machine driven through a model of a Cryptographic Locker (class
+       EcbCL): a PI is provisioned, the CL is moved between _Ready_, _Encrypt_ and
+       _Decrypt_ with kl.setst, and data is processed with the multi-block Form A
+       kl.exec, whose per-block operation is
 
            OUTPUT <- enc_blk(key, INPUT)      resp.      OUTPUT <- dec_blk(key, INPUT)
 
-       The block loop is no longer written in the ECB text.  It is now rule AGR3 of
-       <<KLEE-Machines-other-rules>>: for i = 0, b, 2b, ..., KLLEN - b, in that
-       order, the per-block operation consumes INPUT[i+b-1:i] and produces
-       OUTPUT[i+b-1:i].  Under <<KLEE-Notation>> byte j of a byte string sits at
-       bits [8j+7:8j], so the least significant block of the KLEE value is the
-       block at the lowest address, and the byte-string view of the result must
-       equal REF.  The 4-block operands are built with cat() (left operand more
-       significant, so the blocks are listed in reverse address order).
+       The block loop is AGR3 of <<KLEE-Machines-other-rules>>: for
+       i = 0, b, 2b, ..., KLLEN - b, in that order, the per-block operation consumes
+       INPUT[i+b-1:i] and produces OUTPUT[i+b-1:i].  Under <<KLEE-Notation>> byte j
+       of a byte string sits at bits [8j+7:8j], so the least significant block of
+       the value is the block at the lowest address, and the byte-string view of the
+       result must equal REF.  The 4-block operands are built with cat() (left
+       operand more significant, so the blocks are listed in reverse address order).
 
 NEG    A negative control mapping the most significant block of the value to the
        first block of the string.  It must disagree with the vectors.
 
-RULES  Behaviour the ECB text now leaves to the general rules: a kl.exec in _Ready_
-       invalidates the CL (Rules <<KLEE-SGR-no-exec-in-ready>> and
+RULES  Behaviour the ECB text leaves to the general rules: a kl.exec in _Ready_
+       invalidates the CL (<<KLEE-SGR-no-exec-in-ready>>,
        <<KLEE-AGR-not-allowed-instructions>>); a KLLEN that is not a multiple of b
        performs no operation and invalidates the CL (AGR2), the output window is
-       zeroed (Rule <<KLEE-SGR-usage-cr-error-state>>) and the Content cleared
-       (Rule <<KLEE-SGR-clear-cr-content-error-state>>); the _MachinePolicy_ gate on
-       the transitions (<<KLEE-Machine-field>>); the return to _Ready_ (SGR8 of
-       <<KLEE-State-management>>); the KLIOBUF substitution
-       (<<KLEE-usage-input-output>>); the interruption points and resumption of a
-       multi-block kl.exec (<<KLEE-CSR-klstart>>, Rule
+       zeroed (<<KLEE-SGR-usage-cr-error-state>>) and the Content cleared
+       (<<KLEE-SGR-clear-cr-content-error-state>>); the _MachinePolicy_ gate on the
+       transitions (<<KLEE-Machine-field>>); the return to _Ready_ (SGR8); the
+       KLIOBUF substitution (<<KLEE-usage-input-output>>); the interruption points
+       and resumption of a multi-block kl.exec (<<KLEE-CSR-klstart>>,
        <<KLEE-IRR-block-iterated-instructions>>).
 
-DATA   The Provisioning Input and the Serialized Content as "Definition of a
-       Machine in KLEE" now describes them.  The PI starts with the 128-bit MDH,
-       which the Machine tables no longer list, and the key (or the 64-bit SKID of
-       <<KLEE-rules-system-keys>>) is at its position ii.  The MDH is not part of the
-       Serialized Content, where the key is at position i.  Both are zero-padded to a
-       multiple of 128 bits.  The sizes are checked against kl.size
-       (<<KLEE-instruction-size>>), hand-computed from those tables.  SKID resolution
-       and the all-ones SKID are checked against <<KLEE-KeyType-field>>,
+DATA   The Provisioning Input and the Serialized Content per "Definition of a
+       Machine in KLEE".  The PI starts with the 128-bit MDH and carries the key (or
+       the 64-bit SKID of <<KLEE-rules-system-keys>>) at position ii; the Serialized
+       Content omits the MDH and holds the key at position i.  Both are zero-padded
+       to a multiple of 128 bits.  The sizes are checked against kl.size
+       (<<KLEE-instruction-size>>), hand-computed from those tables.  SKID
+       resolution and the all-ones SKID are checked against <<KLEE-KeyType-field>>,
        <<KLEE-system-keys>> and <<KLEE-MVR-open>>.
 
 DERIVE The destination endpoint `key` (1) of <<KLEE-derive-endpoints>>, with the
@@ -78,10 +74,10 @@ Vectors and provenance
   "GB/T 32907-2016 Example 1".
 * GB/T 32907-2016 Example 2, the full 1,000,000-round iteration vector
   (-> 595298c7c6fd271f0402f804c33d3f66).  This runs in about 30 s in pure Python,
-  which fits the time budget, so the vector is used whole rather than truncated.
-  The intermediate values at rounds 100/1000/10000 are recorded alongside it as
-  reference-implementation checkpoints (they are not published constants, and are
-  labelled as such); they exist only so that a failure can be localized.
+  so the vector is used whole rather than truncated.  The intermediate values at
+  rounds 100/1000/10000 are recorded alongside it as reference-implementation
+  checkpoints (not published constants, and labelled as such); they exist only so
+  that a failure can be localized.
 * SM4 multi-block ECB: GB/T 32907-2016 A.2.1.1 and A.2.1.2, as reproduced in the
   Linux kernel crypto/testmgr.h sm4_tv_template.
 

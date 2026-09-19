@@ -1,25 +1,18 @@
 """Curve parameters and group arithmetic for the KLEE elliptic-curve KAT harness.
 
-This module is a *helper* for `ecc-kat.py`; it contains no KLEE semantics, only
-the mathematics the KLEE unit is specified to perform, plus the RFC-published
-domain parameters.  Everything here is checked by `ecc-kat.py` against published
-vectors (or, for the Brainpool curves, against the curve equation and the group
-order) before it is used, so a transcription error cannot pass silently.
+A *helper* for `ecc-kat.py`: no KLEE semantics, only the mathematics the KLEE
+unit performs plus the published domain parameters.  Everything here is checked
+by `ecc-kat.py` against published vectors (for the Brainpool curves, against the
+curve equation and the group order) before use, so a transcription error cannot
+pass silently.
 
-Provenance of the domain parameters:
-
-  * NIST P-256 / P-384 / P-521 -- SP 800-186 D.1.2 (identical to the values in
-    RFC 6979 A.2.5-A.2.7, which this harness also re-derives the public keys
-    from);
-  * brainpoolP256r1 / P384r1 / P512r1 -- RFC 5639 section 3.4, 3.6, 3.7;
-  * SM2 recommended curve -- GM/T 0003.5-2012 / GB/T 32918.5-2017 Appendix A
-    (the "sm2p256v1" parameters);
-  * Ed25519 / Ed448 -- RFC 8032 sections 5.1 and 5.2.
+Domain parameters: NIST P-256/P-384/P-521 from SP 800-186 D.1.2; brainpoolP256r1
+/P384r1/P512r1 from RFC 5639 3.4, 3.6, 3.7; the SM2 recommended curve
+("sm2p256v1") from GM/T 0003.5-2012 Appendix A; Ed25519/Ed448 from RFC 8032
+5.1 and 5.2.
 
 Weierstrass arithmetic uses Jacobian coordinates, Edwards arithmetic extended
-(a.k.a. "twisted Edwards, extended homogeneous") coordinates, so that a scalar
-multiplication needs a single modular inversion.  The formulae used are the
-standard complete/unified ones; they are exercised by every KAT in the caller.
+coordinates, so a scalar multiplication needs one modular inversion.
 """
 
 

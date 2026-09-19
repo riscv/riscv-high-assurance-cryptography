@@ -1,20 +1,18 @@
 """Shared utilities for the KLEE KAT suite.
 
-Conventions follow the KLEE specification's Notation chapter (src/ace-notation.adoc):
-a *value* is a little-endian bit string held in a Python int; byte i of a byte
-string occupies bits [8i+7:8i] (`b2v`/`v2b`); `cat` implements the `@` operator,
-whose LEFT operand occupies the MORE significant bits; `bswap` reverses the byte
-string of a value of known byte length; `bin_(n, m)` is the spec's `bin(n,m)`.
+Notation follows src/ace-notation.adoc: a *value* is a little-endian bit string
+held in a Python int, byte i at bits [8i+7:8i] (`b2v`/`v2b`); `cat` is the `@`
+operator, whose LEFT operand is the more significant; `bswap` reverses the bytes
+of a value of known length; `bin_(n, m)` is the spec's `bin(n, m)`.
 
-The module also provides self-contained AES-128/192/256 (S-box generated
-algorithmically, so no table-transcription risk), the GHASH field multiplication
-of SP 800-38D 6.3 in both the byte-string view (`gmul_ghash`) and the KLEE value
-view (`kl_galoismul`), POLYVAL's `montmul`/`mulx_polyval` per RFC 8452, and the
-XTS/OCB doublings (`update_mask`, `double_ocb`).
+Also here: self-contained AES-128/192/256 (S-box generated algorithmically, so
+no table-transcription risk), the GHASH multiplication of SP 800-38D 6.3 in the
+byte-string view (`gmul_ghash`) and the value view (`kl_galoismul`), POLYVAL's
+`montmul`/`mulx_polyval` per RFC 8452, and the XTS/OCB doublings.
 
-Run this file directly to execute its self-tests (FIPS 197 C.1-C.3, RFC 8452
-Appendix A).  Every consumer harness re-anchors these primitives through its own
-standard vectors, so an error here cannot pass silently.
+Run this file directly for its self-tests (FIPS 197 C.1-C.3, RFC 8452 App. A).
+Every consumer harness re-anchors these primitives through its own standard
+vectors, so an error here cannot pass silently.
 """
 
 import sys

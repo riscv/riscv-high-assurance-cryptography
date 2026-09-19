@@ -11,8 +11,8 @@ What this harness validates
     It is anchored here, byte for byte, against official NIST ACVP vectors for
     all three parameter sets.
 
-2.  *The KLEE specification text as it now stands*, transcribed into a model of a
-    CL holding an ML-KEM CC (class MLKEMCL):
+2.  *The KLEE specification text*, transcribed into a model of a CL holding an
+    ML-KEM CC (class MLKEMCL):
 
     - the sizes of <<KLEE-ML-KEM-sizes>>, of the Internal State and of the
       Serialized Content, and the `kl.size` values they imply

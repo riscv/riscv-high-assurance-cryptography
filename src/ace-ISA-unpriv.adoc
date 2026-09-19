@@ -757,8 +757,6 @@ KLEE provides a number of unprivileged CSRs.
 // On RV32 every 64-bit KLEE CSR _X_, in this Book, is accompanied by a 32-bit CSR
 // named _X_`h` giving access to bits [63:32] of _X_; a read or write of _X_ itself then accesses bits
 // [31:0].
-// The shadow has the same privilege as the register it shadows. The six such registers are
-// `acesivl`, `acesivh`, `acesiv2l`, `acesiv2h`, `aceiql`, `aceiqh`.
 
 If the KLEE extension is not present, none of these CSRs exists.
 While a `KLS` field in effect is Off,
@@ -1051,7 +1049,7 @@ Every KLEE instruction with a vector operand sets `vstart` to 0 when it retires;
 NOTE: If the KLEE unit is implemented through emulation, different versions of KLEE firmware may have different features while running on the same hardware, and a hardware-fixed locality will not be able to distinguish them. Rule <<KLEE-GR-custom-locality>> is, however, a first line of protection against accidental abuse.
 
 [[KLEE-GR-atomic-randomness,GR10]] GR10:: A Machine that requires an internal random value, such as a signing nonce or an ephemeral scalar, generates it and consumes it within one instruction.
-No State from which the CL can be exported or cloned holds random material that could be consumed against an input other than the one it was drawn for; for an interrupted long-running operation this is ensured by Rule <<KLEE-AGR-progress-discard>> of Book 2. Rule <<KLEE-GR-opening-cr-when>> is not relaxed to obtain this.
+No State from which the CL can be exported or cloned holds random material that could be consumed against an input other than the one it was drawn for; for an interrupted long-running operation this is ensured by Rule <<KLEE-MGR-progress-discard>> of Book 2. Rule <<KLEE-GR-opening-cr-when>> is not relaxed to obtain this.
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -2262,7 +2260,7 @@ SGR1:: The MDH's _State_ field reflects the current state whenever the CC is in 
 This ensures that these states can be unambiguously determined from the _State_ field alone, without inspecting other fields or the Content.
 
 [[KLEE-SGR-no-exec-in-ready,SGR2]] SGR2:: No `kl.exec` instruction may be executed in State _Ready_ unless the Machine explicitly allows it.
-Issuing one otherwise transitions the CL to Error State _Invalid_ (Rule <<KLEE-AGR-not-allowed-instructions>> in Book 2).
+Issuing one otherwise transitions the CL to Error State _Invalid_ (Rule <<KLEE-MGR-not-allowed-instructions>> in Book 2).
 
 SGR3:: Any transition listed in a Machine's specification may be triggered by performing an explicit `kl.setst` operation (<<KLEE-instruction-setst>>), or may be induced by certain conditions specified in the Machine's specification. Transitions to and between _Configuration_ States use `kl.mgmt`; transitions from a Configuration State use `kl.mgmt`, `kl.clear`, an Error State-setting `kl.setst`, or a `kl.clone` naming the CL as destination.
 
@@ -2270,7 +2268,7 @@ SGR4:: In a Valid State other than _Success_ and _Failure_, `kl.setst` may be is
 When the Machine needs to prevent this, it transitions to a different State upon completing the instruction.
 
 [[KLEE-SGR-success-failure,SGR5]] SGR5:: In States _Success_ and _Failure_, only the following KLEE instructions are permitted: `kl.mgmt`, `kl.size`, `kl.avail`, `kl.setst` (subject to Rule <<KLEE-SGR-setst-in-success-failure>> below), `kl.getmd*`, `kl.getst`, `kl.clone`, `kl.restrict*`, and `kl.derive`.
-A `kl.exec` other than those permitted below, or a `kl.setst` not allowed by the architecture or by the Machine in its current _State_ and _StateExtension_, transitions the CL to Error State _Invalid_ (cf. Rule <<KLEE-AGR-not-allowed-instructions>> in Book 2).
+A `kl.exec` other than those permitted below, or a `kl.setst` not allowed by the architecture or by the Machine in its current _State_ and _StateExtension_, transitions the CL to Error State _Invalid_ (cf. Rule <<KLEE-MGR-not-allowed-instructions>> in Book 2).
 +
 In State _Success_ `kl.exec` is also permitted solely to extract further output from a Machine that produces arbitrarily long output, such as a XOF.
 Also permitted is `kl.derive` in the following two cases: where the source endpoint is one of its exportable fields (<<KLEE-instruction-derive>>); and under the conditions of use of `kl.exec`.
@@ -2681,7 +2679,7 @@ Upon preemption, they may follow any of the behaviors described in <<KLEE-IRR-re
 The implementation must support at least one of options 3, 4 and 5 of Rule <<KLEE-IRR-resumability-options>> for these operations; under option 5 it guarantees, and documents, a minimum uninterrupted execution quantum or a maximum number of consecutive restarts of one instruction, so that repeated interruption cannot prevent completion.
 If an operation continues while the hart is preempted and the hart waits for completion before accessing the affected state, any nested interrupt handler must also wait before accessing that state.
 +
-If such an operation can advance its recorded progress towards completion of the operation, interrupt at well defined points, and resume from the recorded progress point, the progress must be recorded in the _MachineUse_ field, in an implementation-defined format; `klstart` remains reserved for byte counts (<<KLEE-CSR-klstart>>). An implementation may interrupt such an operation and record its progress only where the recorded state, including the ADS, cannot be consumed against inputs other than those the operation started with; Rule <<KLEE-AGR-progress-discard>> of Book 2 guarantees this by discarding the recorded state on any transition of the CL's _State_ other than the completion of the operation (Rule <<KLEE-GR-atomic-randomness>>). If progress is recorded, the implementation exports the data necessary to support resumption in the ADS. Any importing implementation may discard this Section and restart the operation, and must restart it on an Implementation Qualifier mismatch, or if the ADS is removed from the CL (using `kl.clearads`, cf. <<KLEE-instruction-clearads>>).
+If such an operation can advance its recorded progress towards completion of the operation, interrupt at well defined points, and resume from the recorded progress point, the progress must be recorded in the _MachineUse_ field, in an implementation-defined format; `klstart` remains reserved for byte counts (<<KLEE-CSR-klstart>>). An implementation may interrupt such an operation and record its progress only where the recorded state, including the ADS, cannot be consumed against inputs other than those the operation started with; Rule <<KLEE-MGR-progress-discard>> of Book 2 guarantees this by discarding the recorded state on any transition of the CL's _State_ other than the completion of the operation (Rule <<KLEE-GR-atomic-randomness>>). If progress is recorded, the implementation exports the data necessary to support resumption in the ADS. Any importing implementation may discard this Section and restart the operation, and must restart it on an Implementation Qualifier mismatch, or if the ADS is removed from the CL (using `kl.clearads`, cf. <<KLEE-instruction-clearads>>).
 +
 The architected Content of the CL does not depend on the progress of the operation: an implementation that records progress keeps every intermediate result in the ADS, and if the operation restarts, it does so from the architected Content alone.
 

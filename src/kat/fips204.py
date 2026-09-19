@@ -1,22 +1,20 @@
 """FIPS 204 (ML-DSA) -- complete reference implementation, stdlib only.
 
-NTT over Z_8380417, ExpandA / ExpandS / ExpandMask, SampleInBall,
-Power2Round / Decompose / HighBits / LowBits / MakeHint / UseHint, the
-SimpleBitPack / BitPack / HintBitPack encodings and pkEncode / skEncode /
-sigEncode / w1Encode, and Algorithms 6, 7 and 8 (KeyGen_internal,
-Sign_internal, Verify_internal) for ML-DSA-44/65/87.
+NTT over Z_8380417, ExpandA/ExpandS/ExpandMask, SampleInBall, Power2Round/
+Decompose/HighBits/LowBits/MakeHint/UseHint, the SimpleBitPack/BitPack/
+HintBitPack encodings with pkEncode/skEncode/sigEncode/w1Encode, and Alg. 6-8
+(KeyGen_internal, Sign_internal, Verify_internal) for ML-DSA-44/65/87.
 
 Because the KLEE unit signs over an *externally* computed message representative
-mu = SHAKE256(tr || M', 64), the signing and verification entry points are
-offered in both flavours: `sign_internal(sk, Mp, rnd)` / `verify_internal(pk,
-Mp, sig)` take the formatted message M', while `sign_internal_mu(sk, mu, rnd)` /
-`verify_internal_mu(pk, mu, sig)` take mu directly, which is what
-<<KLEE-PQC-ML-DSA>> specifies.  `sign_internal_mu_resumable` runs the rejection
-loop of Algorithm 7 in bounded slices, so that a model of the unit can halt and
-resume a signing operation at a loop boundary.
+mu = SHAKE256(tr || M', 64), signing and verification come in two flavours:
+`sign_internal(sk, Mp, rnd)` / `verify_internal(pk, Mp, sig)` take the formatted
+M', while `sign_internal_mu` / `verify_internal_mu` take mu directly, which is
+what <<KLEE-PQC-ML-DSA>> specifies.  `sign_internal_mu_resumable` runs the
+rejection loop of Algorithm 7 in bounded slices, so a model of the unit can halt
+and resume at a loop boundary.
 
-Throughout this module `||` and Python's `+` on bytes are FIPS 204's byte-string
-concatenation (first operand first), not the `@` of the KLEE notation.
+Here `||` and Python's `+` on bytes are FIPS 204 byte-string concatenation
+(first operand first), not the `@` of the KLEE notation.
 
 Anchored by kat/mldsa-kat.py against official NIST ACVP vectors; this module
 holds no vectors of its own.

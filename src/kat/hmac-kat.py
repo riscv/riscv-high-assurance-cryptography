@@ -22,10 +22,8 @@ WHAT IS MODELED (from the spec text):
     cumul_len (which is maintained only under HMAC) -- <<KLEE-HMAC>> and the
     finalize() clause of <<KLEE-SHA-2>>.  The tag is then squeezed by the generic
     _Hash_Output_ loop of <<KLEE-hash-functions>>.
-  * M4 (earlier review, since fixed): process_VLI stores the bit count input_base into
-    the byte-counting klstart CSR.  The corrected interpretation
-    (klstart = input_base/8, input_base = 8*klstart) is used throughout, and is
-    exercised by the interrupted _Set_Key_ and _Hash_Absorb_ transfers.
+  * process_VLI resumption uses klstart = input_base/8 and input_base = 8*klstart
+    throughout, exercised by the interrupted _Set_Key_ and _Hash_Absorb_ transfers.
 
 CORES.  SHA-224/256/384/512 are implemented FROM SCRATCH here (FIPS 180-4 sect. 6
 compression, IVs and round constants derived by exact integer arithmetic from the
@@ -178,14 +176,12 @@ class Sha2Core:
             iters += 1
             if interrupt_after is not None and iters >= interrupt_after \
                     and input_base < KLLEN:
-                # M4 (fixed): the spec now writes `klstart <- input_base / 8`;
-                # it used to store the bit count into the byte-counting CSR.
-                return input_base // 8
+                return input_base // 8          # klstart <- input_base / 8
         return None
 
     def exec_input(self, data, resume_from=None, interrupt_after=None):
         """Form B kl.exec in _Hash_Absorb_: the message, counted in cumul_len."""
-        # M4-corrected: input_base <- 8 * klstart on resumption.
+        # input_base <- 8 * klstart on resumption
         base = 8 * resume_from if resume_from is not None else 0
         return self._fill(b2v(data), 8 * len(data), base, True, interrupt_after)
 
@@ -238,7 +234,7 @@ class Sha3Core:
             cut = base + max(1, (len(data) - base) // 2)
             self.buf += data[base:cut]
             self.cumul_len += 8 * (cut - base)
-            return cut                       # klstart, in bytes (M4-corrected)
+            return cut                       # klstart, in bytes
         self.buf += data[base:]
         self.cumul_len += 8 * (len(data) - base)
         return None
@@ -300,7 +296,7 @@ class KleeHmac:
         if self.state_name != 'Set_Key':
             raise Invalid('not in _Set_Key_')
         INPUT, KLLEN = b2v(data), 8 * len(data)
-        # M4-corrected resumption
+        # resumption: input_base <- 8 * klstart
         input_base = 8 * resume_from if resume_from is not None else 0
         iters = 0
         while input_base < KLLEN:
@@ -321,7 +317,7 @@ class KleeHmac:
             iters += 1
             if interrupt_after is not None and iters >= interrupt_after \
                     and input_base < KLLEN:
-                return input_base // 8                  # klstart, M4-corrected
+                return input_base // 8                  # klstart, in bytes
         return None
 
     # ---- _Hash_Absorb_
@@ -457,8 +453,8 @@ HL = {'SHA-224': 'sha224', 'SHA-256': 'sha256', 'SHA-384': 'sha384',
 
 ok = True
 print('HMAC per <<KLEE-HMAC>> over <<KLEE-SHA-2>> / <<KLEE-SHA-3>>')
-print('NOTE (spec, M4): process_VLI resumption uses klstart = input_base/8,')
-print('  the byte-count reading now stated in <<KLEE-CSR-klstart>>.')
+print('NOTE: process_VLI resumption uses klstart = input_base/8, the byte-count')
+print('  reading stated in <<KLEE-CSR-klstart>>.')
 print('NOTE: for HMAC-SHA3, b = the sponge RATE (1088 / 576 bits), the reading of')
 print('  "input block size" of <<KLEE-HMAC>> that matches NIST HMAC-SHA3 practice.\n')
 

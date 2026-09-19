@@ -12,7 +12,7 @@ draft KLEE specification (src/ace-ISA-unpriv.adoc) -- <<KLEE-SCC-AEAD>>,
 transfer of <<KLEE-error-state-transfer>> -- transcribed literally onto KLEE
 values (little-endian; common.py conventions).
 
-ANCHOR LEVEL -- stated honestly, because it is not uniform:
+ANCHOR LEVEL (not uniform):
 
   * AESE256                  STANDARD-ANCHORED.  FIPS 197 C.3, via the
                              common.py self-test.
@@ -41,17 +41,16 @@ ANCHOR LEVEL -- stated honestly, because it is not uniform:
                              input formats, up to the one bit that `sep`
                              replaces.
   * Export / import          SELF-CONSISTENT ONLY.  No published vector
-    procedures, formats      applies.  What is tested is the set of structural
+    procedures, formats      applies; what is tested is the structural
                              properties the architecture relies on: round
                              trips, rejection of every kind of tampering,
                              Locality binding and substitution, the
                              implementation qualifier, the ADS rules including
                              _ADSDropped_ as an unauthenticated format hint,
                              the SCC-shaped PCCC, the length rule, and the
-                             Error-State transfer.  Regression vectors are
-                             embedded and checked, so that a change of the
-                             construction, of the MDH layout or of the SCC
-                             layout is visible.
+                             Error-State transfer.  Embedded regression vectors
+                             make a change of the construction, of the MDH
+                             layout or of the SCC layout visible.
 
 Vectors embedded offline, with provenance:
   * FIPS 197 Appendix C.3 (via common.selftest).
@@ -1321,8 +1320,8 @@ def main():
               != 'kl_state_mgmt_auth' for bit in flips(off1, off2, 13))
     chk(bad == 0, "a change in Content1 rejects the whole SCC")
 
-    # The segment separator (review finding m18): <<KLEE-SCC-AEAD>> puts sep
-    # in bit 126 of both AES inputs.
+    # The segment separator: <<KLEE-SCC-AEAD>> puts sep in bit 126 of both
+    # AES inputs.
     chk(_ctr_block(0, 0, 0) != _ctr_block(0, 1, 0),
         "sep separates the counter blocks even when the two SIVs are identical")
     chk(all(_ctr_block(x, sp, i).bit_length() <= 128
@@ -1338,7 +1337,7 @@ def main():
     chk(all(x != y for x, y in zip(ks0, ks1)),
         "identical SIVs yield disjoint keystreams for the two segments")
     chk(_ctr_block(0, 0, 0) == _ctr_block(1 << 126, 0, 0),
-        "SIV[126] no longer reaches the keystream input (94-bit SIV-derived IV)")
+        "SIV[126] does not reach the keystream input (94-bit SIV-derived IV)")
     chk(sl(_tag_block(MASK128, 0), 127, 126) == 0b00
         and sl(_tag_block(MASK128, 1), 127, 126) == 0b01,
         "tag input: bit 127 = 0 (RFC 8452 tag domain) and bit 126 = sep")
@@ -1353,7 +1352,7 @@ def main():
         and not SCC_Decrypt(AD1, 0, 1, t1, e1, CSK)[0],
         "a segment-1 payload does not authenticate when read with sep = 1")
     chk(_tag_block(0, 0) == _tag_block(1 << 126, 0),
-        "POLYVAL bit 126 no longer reaches the tag input (126-bit tag input)")
+        "POLYVAL bit 126 does not reach the tag input (126-bit tag input)")
 
     # ------------------------------------------------------------------
     print("\n-- _ADSDropped_, an unauthenticated format hint "
@@ -1579,10 +1578,10 @@ def main():
          "(<<KLEE-SCC-AEAD>> omits the nonce and the length block, puts sep in "
          "bit 126 of both AES inputs and clears ADSDropped in AD[0]); the "
          "RFC 8452 cross-checks above anchor everything but those deviations.")
-    info("review finding m18 stays fixed on both sides: 0 @ sep @ "
-         "POLYVAL(...)[125:0] for the tag and 1 @ sep @ SIV[125:32] @ counter "
-         "for the keystream; the price, checked above and stated in the "
-         "<<KLEE-SCC-AEAD>> NOTE, is one bit on each side.")
+    info("sep sits in bit 126 on both sides: 0 @ sep @ POLYVAL(...)[125:0] for "
+         "the tag and 1 @ sep @ SIV[125:32] @ counter for the keystream; the "
+         "price, checked above and stated in the <<KLEE-SCC-AEAD>> NOTE, is one "
+         "bit on each side.")
     spec_note("<<KLEE-SCC-AEAD>> lists three differences from AES-GCM-SIV, but "
               "SCC_Encrypt/SCC_Decrypt now have a fourth: for sep = 0, "
               "AD_auth[0][47] (ADSDropped) is cleared in a local copy. Only the "

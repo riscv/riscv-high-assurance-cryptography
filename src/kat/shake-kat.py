@@ -62,18 +62,11 @@ Embedded vector provenance:
     and are anchored at runtime against the hashlib oracle (labeled [oracle])
     or against the embedded vectors.
 
-Review finding M4, since FIXED:
-  process_VLI used to store `klstart <- input_base` (a BIT count) at its
-  interruption point although klstart is architecturally a BYTE count.  The
-  spec now writes `klstart <- input_base / 8` and resumes at
-  `input_base <- 8 * klstart`, which this harness transcribes; the pre-fix unit
-  clash is retained as a negative control.
-
 Negative controls (must mismatch, declared via KAT-EXPECT-FAIL):
   * suffix bit order  -- the domain suffix byte (0x06 / 0x1F) applied MSB-aligned
     (bit-reversed) instead of the FIPS 202 LSB-first convention.
-  * M4 literal units  -- klstart written as a bit count (pre-fix text) and
-    consumed under the architectural byte convention on resumption.
+  * klstart units     -- klstart written as a bit count and consumed under the
+    architectural byte convention on resumption.
   * serialized field order -- the Serialized Content assembled with the `@`
     operator (first field in the MORE significant bits) instead of in table order.
 
@@ -574,7 +567,7 @@ class KleeSha3CL:
             # klstart <- input_base / 8."
             if (interrupt_at is not None and input_base // 8 >= interrupt_at
                     and (input_base < KLLEN or end_halt)):
-                # literal_units: NEGATIVE CONTROL, the pre-fix text (M4)
+                # literal_units: NEGATIVE CONTROL, klstart as a bit count
                 self.hart.klstart = input_base if literal_units else input_base // 8
                 return 'interrupted'
         return 'done'
@@ -1400,7 +1393,7 @@ def main():
     print()
     print('-- 12. negative controls --')
     print('KAT-EXPECT-FAIL: suffix bit order')
-    print('KAT-EXPECT-FAIL: M4 literal units')
+    print('KAT-EXPECT-FAIL: klstart units')
     print('KAT-EXPECT-FAIL: serialized field order')
     got, _ = kl_hash_oneshot('SHA3-256', MSG_EMPTY, wrong_suffix=True)
     negative_control('suffix bit order (SHA3-256 suffix byte 0x06 MSB-aligned)',
@@ -1409,12 +1402,11 @@ def main():
                              wrong_suffix=True)
     negative_control('suffix bit order (SHAKE128 suffix byte 0x1F MSB-aligned)',
                      got != bytes.fromhex(VECTORS[('SHAKE128', 'empty')]))
-    # M4 (fixed): under the PRE-FIX text klstart was stored as a bit count; the
-    # re-execution reads it as bytes (and the current text rejects it as no
-    # interruption point).  Kept as a regression check.
+    # klstart stored as a bit count: the re-execution reads it as bytes, and the
+    # text rejects it as no interruption point.
     got, _ = kl_hash_oneshot('SHA3-256', MSG_A3, chunks=[MSG_A3],
                              interrupt=(0, 100), literal_units=True)
-    negative_control('M4 literal units (klstart bit count consumed as bytes)',
+    negative_control('klstart units (bit count consumed as bytes)',
                      got != bytes.fromhex(VECTORS[('SHA3-256', 'a3_200')]))
     cl = absorbing_cl('SHA3-256', MSG_A3[:100])
     cl2 = KleeSha3CL(Hart())

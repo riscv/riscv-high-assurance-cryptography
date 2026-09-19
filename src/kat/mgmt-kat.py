@@ -2587,8 +2587,8 @@ def test_restrict():
     check("a signature Machine with both bits zero cannot gain one", r, "invalid")
 
     # fields of Xs1 that the instruction does not name must be zero
-    for fld, which, label in (("MachineUse", "h", "_MachineUse_, which kl.restricth no longer "
-                               "changes"),
+    for fld, which, label in (("MachineUse", "h", "_MachineUse_, which kl.restricth "
+                               "does not change"),
                               ("Machine", "l", "_Machine_"),
                               ("State", "l", "_State_"),
                               ("AuxDataLen", "l", "_AuxDataLen_"),
@@ -2600,7 +2600,7 @@ def test_restrict():
     r, m, _ = run(sig_pi(), mdh_new(MachineUse=1), "l")
     check("kl.restrictl does not examine _MachineUse_, which lies in [127:64]",
           (r, m["MachineUse"]), ("ok", 0))
-    info("<<KLEE-instruction-restrict>> now says the fields of Xs1 the instruction does not name "
+    info("<<KLEE-instruction-restrict>> says the fields of Xs1 the instruction does not name "
          "'must be zero' but does not say what a non-zero one causes. Modelled as a request that "
          "cannot be honoured, hence Error State _Invalid_, like every other unsupported or "
          "invalid request of the same instruction; an illegal-instruction exception would be the "

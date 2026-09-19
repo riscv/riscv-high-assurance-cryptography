@@ -38,12 +38,6 @@ Negative controls (KAT-EXPECT-FAIL): assembling the length block with
 big-endian (GCM-style, bswap) length encodings instead of the spec's
 little-endian bin() must change the tag; and a CL imported part-way through a
 message without re-deriving enc_key and auth_key (AGR4) must not complete it.
-
-Resolved since the previous revision of this harness: RFC8452_KeyDeriv is now
-defined in <<KLEE-GCM-SIV-mode>> itself for k = 128 and k = 256 (it used to be
-the 256-bit-only SCC key derivation), and review findings m8 (the kl.setst Form
-of every transition is stated) and M2 (_Encrypt_ is reachable only through the
-_Enc_Tag_Finalize_ kl.exec) are fixed; the model follows the stated Forms.
 """
 import sys, os
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -907,7 +901,7 @@ def main():
         m = pre()
         m.setst(KL_STATE_ENCRYPT)
         chk(m.state == KL_STATE_INVALID,
-            f"M2: a kl.setst naming Encrypt in {label} invalidates the CL")
+            f"a kl.setst naming Encrypt in {label} invalidates the CL")
     m = at_encrypt()
     m.setst(KL_STATE_ENCRYPT)
     chk(m.state == KL_STATE_INVALID,

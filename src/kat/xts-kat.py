@@ -18,7 +18,7 @@ KLEE  A model of a Cryptographic Locker holding an XEX CC (class XexCL): the PI 
           each block of a kl.exec:  OUTPUT <- mask xor enc_blk(key1, INPUT xor mask)
                                     mask  <- update_mask(mask)
 
-      The block loop is rule AGR3 of <<KLEE-Machines-other-rules>>: for
+      The block loop is AGR3 of <<KLEE-Machines-other-rules>>: for
       i = 0, b, ..., KLLEN - b, *in that order*, the per-block operation consumes
       INPUT[i+b-1:i] and produces OUTPUT[i+b-1:i].  Since the mask advances with
       every block, the order is observable here, unlike in ECB.  `update_mask` is
@@ -42,27 +42,26 @@ NEG   Two negative controls, each of which must fail the vectors: OCB3's big-end
 
 RULES The behaviour the Machine text leaves to the general rules, and the parts of
       the state machine a vector can pin down: a kl.exec in _Ready_ invalidates the
-      CL (Rules <<KLEE-SGR-no-exec-in-ready>> and
+      CL (<<KLEE-SGR-no-exec-in-ready>>,
       <<KLEE-AGR-not-allowed-instructions>>); _Encrypt_ -> _Decrypt_ is *not* an
       allowed transition here (unlike <<KLEE-ECB-mode>> and <<KLEE-tweakable>>);
       _MachinePolicy_ gates the two transitions from _Ready_ (<<KLEE-Machine-field>>);
       returning to _Ready_ zeroes the mask, so the CC can be reused with a new tweak;
       a same-State kl.setst (SGR4 of <<KLEE-State-management>>) re-tweaks; a KLLEN
       that is not a multiple of b performs no operation and invalidates the CL
-      (AGR2), the output window being zeroed (Rule
-      <<KLEE-SGR-usage-cr-error-state>>) and the Content cleared (Rule
-      <<KLEE-SGR-clear-cr-content-error-state>>); KLLEN > b truncates the tweak
+      (AGR2), the output window being zeroed (<<KLEE-SGR-usage-cr-error-state>>) and
+      the Content cleared (<<KLEE-SGR-clear-cr-content-error-state>>); KLLEN > b
+      truncates the tweak
       (AGR5); the KLIOBUF substitution of <<KLEE-usage-input-output>>; the
       interruption points and resumption of a multi-block kl.exec
-      (<<KLEE-CSR-klstart>>, Rule <<KLEE-IRR-block-iterated-instructions>>).
+      (<<KLEE-CSR-klstart>>, <<KLEE-IRR-block-iterated-instructions>>).
 
-DATA  The Provisioning Input and the Serialized Content as "Definition of a Machine
-      in KLEE" now describes them: the PI begins with the 128-bit MDH, which the
-      Machine tables no longer list, and `key1` and `key2` follow at positions ii and
-      iii; the MDH is not part of the Serialized Content, where `key1`, `key2` and
-      `mask` are at positions i, ii and iii, zero-padded to a multiple of 128 bits.
-      With a SKID, position iii of the PI is empty and `mask` starts at byte 8 of
-      Content1.  Sizes are checked against kl.size (<<KLEE-instruction-size>>).
+DATA  The Provisioning Input and the Serialized Content per "Definition of a Machine
+      in KLEE": the PI begins with the 128-bit MDH, with `key1` and `key2` at
+      positions ii and iii; the Serialized Content omits the MDH and holds `key1`,
+      `key2` and `mask` at positions i, ii and iii, zero-padded to a multiple of 128
+      bits.  With a SKID, position iii of the PI is empty and `mask` starts at byte 8
+      of Content1.  Sizes are checked against kl.size (<<KLEE-instruction-size>>).
 
 DERIVE The destination endpoints `key1` (1) and `key2` (2) of
       <<KLEE-derive-endpoints>>, with the Transfer Size Rules of

@@ -1,27 +1,24 @@
 """FIPS 203 (ML-KEM) -- complete reference implementation, stdlib only.
 
-Implements K-PKE (NTT over Z_3329, ExpandA via SHAKE128, CBD sampling,
-compress/decompress, ByteEncode/ByteDecode), the derandomized ML-KEM interfaces
-KeyGen_internal(d, z), Encaps_internal(ek, m), Decaps_internal(dk, c)
-(Algorithms 16-18) and the external ones KeyGen(), Encaps(ek), Decaps(dk, c)
-(Algorithms 19-21, with the RBG passed in as a callable) for all three parameter
-sets (ML-KEM-512/768/1024), plus the FIPS 203 section 7.2 / 7.3 input checks as
-separate, callable predicates.
+K-PKE (NTT over Z_3329, ExpandA via SHAKE128, CBD sampling, compress/decompress,
+ByteEncode/ByteDecode), the derandomized interfaces KeyGen_internal(d, z),
+Encaps_internal(ek, m), Decaps_internal(dk, c) (Alg. 16-18) and the external
+KeyGen(), Encaps(ek), Decaps(dk, c) (Alg. 19-21, RBG passed in as a callable),
+for ML-KEM-512/768/1024, plus the section 7.2/7.3 input checks as separate
+predicates.
 
 Algorithms 16-18 are also available as lists of steps over a work record
-(`*_internal_steps`).  The one-shot functions are built from those lists, so the
-official vectors that anchor the one-shot functions anchor the steps as well; the
-KLEE harness halts between steps to model an interrupted long-running operation
-(Rule AGR10 of the KLEE specification).
+(`*_internal_steps`); the one-shot functions are built from those lists, so the
+official vectors anchor both.  The KLEE harness halts between steps to model an
+interrupted long-running operation (AGR10).
 
 The input checks are separate predicates because <<KLEE-PQC-ML-KEM>> performs
-them at a point of its own choosing (when `encapsk`, `decapsk` or `ciphertext`
-finishes loading) and treats the outcomes differently: a key check failure is a
-configuration error, a ciphertext check failure a data error.
+them when `encapsk`, `decapsk` or `ciphertext` finishes loading and treats the
+outcomes differently: a key check failure is a configuration error, a ciphertext
+check failure a data error.
 
-Anchored by kat/mlkem-kat.py against official NIST ACVP-Server vectors
-(internalProjection.json of ML-KEM-keyGen-FIPS203 and ML-KEM-encapDecap-FIPS203);
-this module holds no vectors of its own.
+Anchored by kat/mlkem-kat.py against official NIST ACVP-Server vectors; this
+module holds no vectors of its own.
 """
 
 import hashlib

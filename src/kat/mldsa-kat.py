@@ -24,12 +24,10 @@ What this harness validates
     tr-consistency check, and the _MachineUse_ transfer-counter rules
     (excess bits ignored on input, past-the-end -> Error State _Invalid_).
 
-3.  *Review finding M12, since FIXED*: <<KLEE-PQC-ML-DSA>> now splits a malformed
-    `privkey`/`pubkey` (a configuration error -> Error State Invalid) from a
-    well-formed value that does not verify (a data error -> State Failure, a
-    valid state), no longer calls state 23 an "Error State", and states the
-    _Sign_Verify_ outcome in terms of the Boolean that FIPS 204 Algorithm 8
-    actually returns.  This harness had already modelled that reading.
+3.  *The error/failure split*: a malformed `privkey`/`pubkey` is a configuration
+    error (-> Error State _Invalid_), while a well-formed value that does not
+    verify is a data error (-> State _Failure_, a valid state); the _Sign_Verify_
+    outcome is the Boolean that FIPS 204 Algorithm 8 returns.
 
 Vector provenance
 -----------------
@@ -323,7 +321,7 @@ class MLDSAContext:
             if not self.has_pubkey:
                 self._invalidate('Sign_Verify with HasPubKey false')
             # <<KLEE-PQC-ML-DSA>>: Verify_internal returns a Boolean only, and
-            # nothing is written to `signature` on this path (M12, fixed).
+            # nothing is written to `signature` on this path.
             ok = D.verify_internal_mu(self.pubkey, self.mu, self.signature, self.ps)
             self.mdh = mdh_set(self.mdh, F_STATE,
                                S_SUCCESS if ok else S_FAILURE)
@@ -540,15 +538,14 @@ def t_state_machine():
 
 
 def t_tr_recompute_on_import():
-    """m4/m15 (fixed): tr survives export/import of a verification-only CC.
+    """tr survives export/import of a verification-only CC.
 
-    The Serialized Context carries tr only inside privkey, so a CC configured
-    for verification only (pubkey loaded via _pubkey_Input_, tr via _tr_Input_)
-    would lose it. The spec now says that on completing an import with
-    HasPrivKey false the unit recomputes tr <- SHAKE256(pubkey, 64), so nothing
-    has to be carried and no format change is needed.
+    The Serialized Context carries tr only inside privkey, so a CC configured for
+    verification only (pubkey loaded via _pubkey_Input_, tr via _tr_Input_) would
+    lose it.  On completing an import with HasPrivKey false the unit recomputes
+    tr <- SHAKE256(pubkey, 64), so nothing has to be carried.
     """
-    print('\n-- tr across export/import of a verification-only CC (m15) --')
+    print('\n-- tr across export/import of a verification-only CC --')
     kv = VECTORS['keyGen'][0]
     ps = kv['ps']
     sk, pk = bytes.fromhex(kv['sk']), bytes.fromhex(kv['pk'])

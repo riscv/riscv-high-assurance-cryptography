@@ -11,12 +11,11 @@ Two independent implementations are checked against the published vectors:
         src/ace-notation.adoc (byte i of a string lives at bits [8i+7:8i];
         the left operand of @ is more significant; bswap is byte reversal).
         The model is a CL driven by kl.setst / kl.exec Forms and KLLEN, so it
-        also applies the General Rules for Machines (<<KLEE-Machines-other-rules>>,
-        AGR1-AGR6) and the State rules of Book 1 (<<KLEE-State-field>>: SGR2,
-        SGR4-SGR6, SGR8, SGR10, SGR16) where OCB relies on them, and it
-        exports and imports the Serialized Content of <<KLEE-OCB-mode>>
-        (the plaintext of `Content1`, <<KLEE-SCC>>; the sealing itself is
-        covered by scc-kat.py).
+        also applies AGR1-AGR6 (<<KLEE-Machines-other-rules>>) and the State
+        rules SGR2, SGR4-SGR6, SGR8, SGR10, SGR16 (<<KLEE-State-field>>) where
+        OCB relies on them, and it exports and imports the Serialized Content
+        of <<KLEE-OCB-mode>> (the plaintext of `Content1`; the sealing itself
+        is covered by scc-kat.py).
 
 Vectors and provenance
   * RFC 7253 Appendix A: the full AEAD_AES_128_OCB_TAGLEN128 sample set
@@ -55,9 +54,9 @@ Checks performed
     <<KLEE-SGR-usage-cr-error-state>>).
   * <<KLEE-derive-endpoints>>: `key` (j = 1) is the only importable field and
     is written with the CL in State Ready; OCB has no exportable field.
-  * Nonces of any bit length 6..120 (review finding m4, fixed in the spec):
-    KLEE vs the bit-string REF, which also anchors nonce_be(N, n); the
-    padding bits of byte q-1 are ignored; out-of-range N_len is rejected.
+  * Nonces of any bit length 6..120: KLEE vs the bit-string REF, which also
+    anchors nonce_be(N, n); the padding bits of byte q-1 are ignored;
+    out-of-range N_len is rejected.
   * Negative controls (must NOT match the standard, else the test has no
     discriminating power):
       NC-double     : the L-ladder derived with the little-endian update_mask
@@ -1141,9 +1140,9 @@ def main():
         rej.append(invalid(lambda: kl_ocb_encrypt(K128, bytes(15), Am, Pm, 128,
                                                   n_len=bad)) is not None)
     print(f"  N_len in {{0,5,121,128,255}} -> Error State Invalid  : {chk(all(rej))}")
-    info("review m4 is fixed: N_len may be any bit length 6..120, nonce_be(N, n) "
-         "covers the general case, and _Dec_Last_Block_ carries the index = "
-         "ones(48) guard (checked above).")
+    info("N_len may be any bit length 6..120, nonce_be(N, n) covers the general "
+         "case, and _Dec_Last_Block_ carries the index = ones(48) guard "
+         "(checked above).")
     print(f"\nKAT-RESULT: {'PASS' if ok else 'FAIL'}")
     return 0 if ok else 1
 
