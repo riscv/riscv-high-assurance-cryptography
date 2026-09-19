@@ -2,8 +2,7 @@
 #
 # SPDX-License-Identifier: CC-BY-SA-4.0
 
-DOCS      := ace.adoc
-VERSION   ?= v0.8.0
+DOCS      := Zkl.adoc
 PDF_THEME := docs-resources/themes/riscv-pdf.yml
 REQUIRES  := --require=asciidoctor-bibtex \
              --require=asciidoctor-diagram \
