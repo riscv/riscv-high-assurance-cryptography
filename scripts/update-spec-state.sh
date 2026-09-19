@@ -9,48 +9,39 @@ fi
 version="$1"
 updated_on="${2:-$(date +%Y-%m-%d)}"
 
-phase="$(./scripts/release-info.sh phase "$version")"
-milestone="$(./scripts/release-info.sh milestone "$version")"
+# Every phase name, milestone version and notice below comes from
+# scripts/release-info.sh, the single source of the canonical lifecycle phases.
+# Nothing is hard-coded here, so SPEC_STATE.md cannot drift from the PDF title
+# page or the Antora site.
+ri=./scripts/release-info.sh
+phases="draft-and-development development-complete stabilized frozen ratification-ready ratified"
 
-cat > SPEC_STATE.md <<STATE
-# Specification State
+phase="$($ri phase "$version")"
+milestone="$($ri milestone "$version")"
 
-Current milestone: ${milestone}
-Current state: ${phase}
-Current version: ${version}
-Last updated: ${updated_on}
-
-## Milestone Targets
-
-- v0.6 Developed
-- v0.8 Stable
-- v0.9 Frozen
-- v0.99 Ratification-Ready
-- v1.0 Ratified
-
-## State Definitions
-
-### Draft and Development
-
-Assume everything is subject to change. At this stage, ideas, structures, and content are still evolving. Feedback and iteration are encouraged as nothing is final, and adjustments may be frequent.
-
-### Developed
-
-Assume everything is subject to change. At this stage, ideas, structures, and content are still evolving. Feedback and iteration are encouraged as nothing is final, and adjustments may be frequent.
-
-### Stable
-
-Changes may still occur, but they should be limited in scope. The core structure and content are mostly settled, with only refinements or necessary adjustments expected. Any modifications should be carefully considered to maintain stability.
-
-### Frozen
-
-Changes are highly unlikely. A high threshold will be applied, and modifications will only be made in response to critical issues. Any other proposed changes should be addressed through a follow-on extension.
-
-### Ratification-Ready
-
-The specification is preparing for ratification. Only critical, ratification-blocking issues should be considered for change.
-
-### Ratified
-
-No changes are allowed. Any necessary or desired modifications must be addressed through a follow-on extension. Ratified extensions are never revised.
-STATE
+{
+  echo "# Specification State"
+  echo
+  echo "Current milestone: ${milestone}"
+  echo "Current state: $($ri display "$version") (${phase})"
+  echo "Current version: ${version}"
+  echo "Last updated: ${updated_on}"
+  echo
+  echo "## Milestone Targets"
+  echo
+  for p in $phases; do
+    floor="$($ri phase-floor-version "$p")"
+    if $ri is-milestone "$floor"; then
+      echo "- ${floor} $($ri display "$floor") (${p})"
+    fi
+  done
+  echo
+  echo "## State Definitions"
+  for p in $phases; do
+    floor="$($ri phase-floor-version "$p")"
+    echo
+    echo "### $($ri display "$floor")"
+    echo
+    $ri notice "$floor"
+  done
+} > SPEC_STATE.md

@@ -1,17 +1,17 @@
 # Specification State
 
 Current milestone: draft-and-development
-Current state: draft-and-development
+Current state: Draft and Development (draft-and-development)
 Current version: v0.0
 Last updated: 2026-09-19
 
 ## Milestone Targets
 
-- v0.6 Developed
-- v0.8 Stable
-- v0.9 Frozen
-- v0.99 Ratification-Ready
-- v1.0 Ratified
+- v0.6 Development Complete (development-complete)
+- v0.8 Stabilized (stabilized)
+- v0.9 Frozen (frozen)
+- v0.99 Ratification-Ready (ratification-ready)
+- v1.0 Ratified (ratified)
 
 ## State Definitions
 
@@ -19,11 +19,11 @@ Last updated: 2026-09-19
 
 Assume everything is subject to change. At this stage, ideas, structures, and content are still evolving. Feedback and iteration are encouraged as nothing is final, and adjustments may be frequent.
 
-### Developed
+### Development Complete
 
 Assume everything is subject to change. At this stage, ideas, structures, and content are still evolving. Feedback and iteration are encouraged as nothing is final, and adjustments may be frequent.
 
-### Stable
+### Stabilized
 
 Changes may still occur, but they should be limited in scope. The core structure and content are mostly settled, with only refinements or necessary adjustments expected. Any modifications should be carefully considered to maintain stability.
 
