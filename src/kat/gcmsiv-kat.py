@@ -20,7 +20,7 @@ Two independent implementations are exercised:
         Enc_Tag_Finalize kl.exec), the counter block
         1 @ SIV[126:32] @ bin((int(SIV[31:0]) + ctr) mod 2^32, 32), the
         ctr = 2^32-1 Invalid rule, the last_blk_len rules, the Serialized
-        Content, the derived fields enc_key and auth_key (AGR4) and the kl.derive
+        Content, the derived fields enc_key and auth_key (MGR4) and the kl.derive
         endpoint `key` (<<KLEE-derive-endpoints>>).  Montmul is checked against
         its definition in <<KLEE-SCC-AEAD>>.
 
@@ -37,7 +37,7 @@ Anchors (embedded, offline):
 Negative controls (KAT-EXPECT-FAIL): assembling the length block with
 big-endian (GCM-style, bswap) length encodings instead of the spec's
 little-endian bin() must change the tag; and a CL imported part-way through a
-message without re-deriving enc_key and auth_key (AGR4) must not complete it.
+message without re-deriving enc_key and auth_key (MGR4) must not complete it.
 
 Resolved since the previous revision of this harness: RFC8452_KeyDeriv is now
 defined in <<KLEE-GCM-SIV-mode>> itself for k = 128 and k = 256 (it used to be
@@ -218,7 +218,7 @@ class GcmSivCL:
 
     The MDH is reduced to _State_, _MachinePolicy_ (bit 0 encryption, bit 1
     decryption) and _KeyType_; `klstart` stands for the hart CSR.
-    `stale_derived` is a negative control: no AGR4 re-derivation at import.
+    `stale_derived` is a negative control: no MGR4 re-derivation at import.
     """
 
     def __init__(self, policy=0b11, stale_derived=False):
@@ -249,13 +249,13 @@ class GcmSivCL:
         return cl
 
     def _rederive(self):
-        """(enc_key, auth_key) <- RFC8452_KeyDeriv(k, key, nonce)  (AGR4)."""
+        """(enc_key, auth_key) <- RFC8452_KeyDeriv(k, key, nonce)  (MGR4)."""
         self.enc_key, self.auth_key = RFC8452_KeyDeriv(self.k, self.key, self.nonce)
 
     def _enter_ready(self):
         """Upon entering _Ready_: nonce, ctr, tmp, SIV <- 0."""
         self.nonce = self.ctr = self.tmp = self.SIV = 0
-        self._rederive()                      # nonce changed (AGR4)
+        self._rederive()                      # nonce changed (MGR4)
 
     def export_content(self):
         """Serialized Content: key | nonce | ctr | SIV | tmp | last_blk_len."""
@@ -284,7 +284,7 @@ class GcmSivCL:
         cl.last_blk_len = sl(content, kb + 399, kb + 384)
         cl.state = state
         if not cl.stale_derived:
-            cl._rederive()                    # AGR4, at kl_cfg_management_end
+            cl._rederive()                    # MGR4, at kl_cfg_management_end
         return cl
 
     def _invalid(self, why=''):
@@ -362,11 +362,11 @@ class GcmSivCL:
             return
         entry = self._setst_table().get((st, immed7))
         if entry is None:
-            self._invalid(f'AGR1: {NAME.get(st)} -> {NAME.get(immed7, immed7)}')
+            self._invalid(f'MGR1: {NAME.get(st)} -> {NAME.get(immed7, immed7)}')
             return
         want, fn = entry
         if form != want:
-            self._invalid(f'AGR1: Form {form}, Form {want} required')
+            self._invalid(f'MGR1: Form {form}, Form {want} required')
             return
         fn(immed7, aux)
 
@@ -377,7 +377,7 @@ class GcmSivCL:
         # "possible only if encryption (decryption) is allowed"
         bit = 1 if immed7 == KL_STATE_ENC_TAG_FINALIZE else 2
         if not self.policy & bit:
-            self._invalid('AGR1: _MachinePolicy_')
+            self._invalid('MGR1: _MachinePolicy_')
             return
         self.state = immed7
 
@@ -388,7 +388,7 @@ class GcmSivCL:
 
     def _set_siv(self, immed7, INPUT):
         self.state = immed7
-        self.SIV = INPUT & MASK128                                  # SIV <- INPUT (AGR5)
+        self.SIV = INPUT & MASK128                                  # SIV <- INPUT (MGR5)
 
     def _set_lbl(self, immed7, Xs):
         if Xs == 0 or Xs > 120 or Xs % 8:
@@ -421,14 +421,14 @@ class GcmSivCL:
             return self._invalid('SGR5')
         entry = self._exec_table().get(st)
         if entry is None:
-            return self._invalid(f'AGR1: no kl.exec in {NAME.get(st)}')
+            return self._invalid(f'MGR1: no kl.exec in {NAME.get(st)}')
         want, fn = entry
         if form != want:
-            return self._invalid(f'AGR1: Form {form} in {NAME.get(st)}')
+            return self._invalid(f'MGR1: Form {form} in {NAME.get(st)}')
         return fn(INPUT, KLLEN, resume, interrupt_after)
 
     def _blocks(self, KLLEN, resume):
-        """First block of a block-iterated kl.exec (IRR7), or None: AGR2 or a
+        """First block of a block-iterated kl.exec (IRR7), or None: MGR2 or a
         klstart that is not an interruption point."""
         if KLLEN % 128:
             return None
@@ -439,7 +439,7 @@ class GcmSivCL:
     def _x_absorb(self, INPUT, KLLEN, resume, interrupt_after):
         first = self._blocks(KLLEN, resume)
         if first is None:
-            return self._invalid('AGR2 / klstart')
+            return self._invalid('MGR2 / klstart')
         for j in range(first, KLLEN // 128):
             if interrupt_after is not None and j - first == interrupt_after:
                 self.klstart, self.halted = 16 * j, True
@@ -452,12 +452,12 @@ class GcmSivCL:
         self._finalize_tmp(INPUT)
         self.SIV = self.tmp                   # SIV <- tmp and OUTPUT <- SIV
         self.state = KL_STATE_ENCRYPT         # the state transitions to _Encrypt_
-        return self.SIV & mask(KLLEN)         # AGR6 beyond 128 bits
+        return self.SIV & mask(KLLEN)         # MGR6 beyond 128 bits
 
     def _x_crypt(self, INPUT, KLLEN, resume, interrupt_after):
         first = self._blocks(KLLEN, resume)
         if first is None:
-            return self._invalid('AGR2 / klstart')
+            return self._invalid('MGR2 / klstart')
         OUTPUT = 0
         for j in range(first, KLLEN // 128):
             if interrupt_after is not None and j - first == interrupt_after:
@@ -506,7 +506,7 @@ class GcmSivCL:
             return
         eff = min(length, self.k // 8)
         self.key = src[:eff] + bytes(self.k // 8 - eff)
-        self._rederive()                      # AGR4
+        self._rederive()                      # MGR4
 
 
 # -- drivers: <<KLEE-pseudocode-GCM-SIV-encryption>> / -decryption ---------
@@ -928,7 +928,7 @@ def main():
     _absorb_string(m, p5, 128)
     m.setst(KL_STATE_ENC_TAG_FINALIZE)
     chk(v2b(m.exec('A', _length_block(a5, p5), 128), 16) == w5[-16:],
-        "nonce <- INPUT[95:0]: bits above 95 of a 128-bit INPUT are ignored (AGR5)")
+        "nonce <- INPUT[95:0]: bits above 95 of a 128-bit INPUT are ignored (MGR5)")
     m = GcmSivCL.provisioned(k5)
     m.setst(KL_STATE_SET_AUX_VALUE, 'C', b2v(n5))
     m.setst(KL_STATE_SET_AUX_VALUE_2, 'C', 0x1234)
@@ -1021,7 +1021,7 @@ def main():
         again = m.exec('A', b2v(bytes(range(1, 17))), 128)
         chk(first >> 64 == 0 and first != 0 and again == 0 and (m.ctr, m.tmp) == snap,
             f"{label}_Last_Block: excess input ignored, OUTPUT above last_blk_len clear "
-            f"(AGR6); a second kl.exec is a no-op writing zeros")
+            f"(MGR6); a second kl.exec is a no-op writing zeros")
         m = path()
         m.setst(last, 'B', 64)
         m.exec('A', b2v(bytes(7)), 56)
@@ -1035,10 +1035,10 @@ def main():
         m = pre()
         out = m.exec(form, b2v(bytes(15)), 120)
         chk(m.state == KL_STATE_INVALID and not out,
-            f"AGR2: KLLEN = 120 in {label} -> no operation, zero output, Invalid")
+            f"MGR2: KLLEN = 120 in {label} -> no operation, zero output, Invalid")
     m = at_hash_absorb()
     m.exec('A', 0, 128)
-    chk(m.state == KL_STATE_INVALID, "AGR1: Form A kl.exec in Hash_Absorb -> Invalid")
+    chk(m.state == KL_STATE_INVALID, "MGR1: Form A kl.exec in Hash_Absorb -> Invalid")
     m = at_hash_absorb(policy=0b10)
     m.setst(KL_STATE_ENC_TAG_FINALIZE)
     chk(m.state == KL_STATE_INVALID,
@@ -1095,7 +1095,7 @@ def main():
     m.exec('A', 0, 256, resume=True)
     chk(m.state == KL_STATE_INVALID, "resuming at klstart = 8 (not an interruption point) -> Invalid")
 
-    # -- Serialized Content, export/import, AGR4 -------------------------------------
+    # -- Serialized Content, export/import, MGR4 -------------------------------------
     print()
     for kk, skid, blocks in ((key, None, 5), (k256, None, 6), (None, 0x00C0FFEE00C0FFEE, 4)):
         m = GcmSivCL.provisioned(kk, skid=skid)
@@ -1105,7 +1105,7 @@ def main():
             f"Content for {'a SKID' if skid else f'k = {8 * len(kk)}'}: {kb} + 96 + 32 + "
             f"128 + 128 + 16 bits, {blocks} blocks")
     got, _ = kl_encrypt(None, n5, a5, p5, m=GcmSivCL.provisioned(skid=0x00C0FFEE00C0FFEE))
-    chk(got == w5, "a key given by a SKID (AGR8): C.1 #15 reproduced")
+    chk(got == w5, "a key given by a SKID (MGR8): C.1 #15 reproduced")
     m = GcmSivCL.provisioned(k5)
     m.setst(KL_STATE_SET_AUX_VALUE, 'C', b2v(n5))
     m.setst(KL_STATE_HASH_ABSORB)
@@ -1158,11 +1158,11 @@ def main():
                 ct += _crypt_body(m2, rest, 128, KL_STATE_ENC_LAST_BLOCK)
                 good = ct + v2b(tag, 16) == w5
             if ctl:
-                expect_fail(f"stale-derived: import in {where} without AGR4 "
+                expect_fail(f"stale-derived: import in {where} without MGR4 "
                             f"re-derivation completes C.1 #15", good)
             else:
                 chk(good, f"export in {where}, import (enc_key/auth_key re-derived, "
-                          f"AGR4), completion: C.1 #15 reproduced")
+                          f"MGR4), completion: C.1 #15 reproduced")
 
     # -- kl.derive into `key` -------------------------------------------------------
     print()
@@ -1209,12 +1209,12 @@ def main():
           "bytes; a message of exactly 2^36 bytes cannot be processed.")
     print("INFO 2: the encryption path ends in Encrypt or Enc_Last_Block, never in "
           "Success; software returns to Ready with kl.setst (SGR8), as done here.")
-    print("INFO 3: AGR10 does not apply: no GCM-SIV State performs an IRR4 "
+    print("INFO 3: MGR10 does not apply: no GCM-SIV State performs an IRR4 "
           "instruction; block-iterated kl.exec is interrupted between blocks "
           "(IRR7) and klstart must be a multiple of 16 bytes on resumption.  A "
           "transition that _MachinePolicy_ forbids is taken to be not allowed "
-          "(AGR1).  After a kl.derive into `key` and on entering Ready, enc_key "
-          "and auth_key are re-derived (AGR4); this is not observable, since "
+          "(MGR1).  After a kl.derive into `key` and on entering Ready, enc_key "
+          "and auth_key are re-derived (MGR4); this is not observable, since "
           "Set_Aux_Value derives them again.")
     print("OBSERVATIONs (editorial): (1) the Dec_Tag_Finalize kl.exec is typeset "
           "``kl.exec Kn|K{Xn}, INPUT``` with a third backtick; (2) \"If `tmp` = "

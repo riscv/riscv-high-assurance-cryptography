@@ -29,7 +29,7 @@ What is validated (spec anchors, by heading):
   [[KLEE-hash-functions]]   -- the _Hash_Output_ squeeze loop, multi-exec output,
                               resumption via output_base <- 8 * klstart, clearing
                               of OUTPUT beyond output_base.
-  [[KLEE-Machine-rules]] (AGR1, AGR2, AGR6), [[KLEE-exec-encodings]] (Type 6,
+  [[KLEE-Machine-rules]] (MGR1, MGR2, MGR6), [[KLEE-exec-encodings]] (Type 6,
   Modes 10-13), [[KLEE-derive-endpoints]] (KMAC is no endpoint).
   src/ace-ISA-unpriv.adoc (Book 1): [[KLEE-CSR-klstart]], [[KLEE-instruction-exec]],
   [[KLEE-instruction-derive]], [[KLEE-State-management]] (SGR2, SGR5, SGR6,
@@ -590,15 +590,15 @@ class KleeKmacCL:
             return self._retire('noop')
         if self.st == KL_STATE_HASH_ABSORB:
             if form not in ('B', 'D') or inp is None or out is not None:
-                return self._invalid_exec(out)           # AGR1
+                return self._invalid_exec(out)           # MGR1
             if sew is not None:
                 assert (8 * len(inp)) % sew == 0
                 if sew < GRANULARITY:
-                    return self._invalid_exec(out)       # AGR2
+                    return self._invalid_exec(out)       # MGR2
             return self._absorb(inp, interrupt_at, end_halt, literal_units)
         if self.st == KL_STATE_HASH_OUTPUT:
             if form not in ('C', 'D') or inp is not None or out is None:
-                return self._invalid_exec(out)           # AGR1
+                return self._invalid_exec(out)           # MGR1
             return self._squeeze(out, interrupt_at, end_halt)
         # _Ready_ (SGR2) and _Success_ (SGR5: KMAC's output is not arbitrarily
         # long; KMACXOF never reaches _Success_)
@@ -679,7 +679,7 @@ class KleeKmacCL:
             self.out_bits += amount
             if limit is not None and self.out_bits == limit:
                 # exactly L bits made available (the last byte zero-padded) and
-                # the rest of OUTPUT cleared ([[KLEE-hash-functions]], AGR6);
+                # the rest of OUTPUT cleared ([[KLEE-hash-functions]], MGR6);
                 # then _Success_.
                 OUT &= (1 << output_base) - 1
                 out[:] = v2b(OUT, top)
@@ -900,7 +900,7 @@ def main():
     check('KLEE chunked KMACXOF128 sample #3 (25 transfers of 8 B)', got, want)
     cl = absorbing_cl(128, KEY, TAG)
     st = cl.exec_('B', inp=DATA200[:8], sew=8)
-    check_true('KMAC128 Form B with SEW = 8 < granularity 32 -> _Invalid_ (AGR2)',
+    check_true('KMAC128 Form B with SEW = 8 < granularity 32 -> _Invalid_ (MGR2)',
                st == 'invalid' and cl.st == KL_STATE_INVALID, (st, cl.st))
 
     print()
@@ -1126,7 +1126,7 @@ def main():
     cases.append(('same-State kl.setst in _Hash_Absorb_ -> _Invalid_',
                   cl.setst(KL_STATE_HASH_ABSORB) == 'invalid'))
     cl = squeezing_cl(128, KEY, TAG, DATA4, 256)
-    cases.append(('Form B kl.exec in _Hash_Output_ -> _Invalid_ (AGR1)',
+    cases.append(('Form B kl.exec in _Hash_Output_ -> _Invalid_ (MGR1)',
                   cl.exec_('B', inp=DATA4) == 'invalid'))
     cl = squeezing_cl(128, KEY, TAG, DATA4, 256)
     cl.exec_('C', out=bytearray(32))
@@ -1158,7 +1158,7 @@ def main():
     info('an auxiliary L of 2^32 or more (the Form B operand is XLEN bits, the field '
          '32) is not exercised: the',
          'text does not say whether it is truncated or rejected.  _KeyType_ = 1 (a '
-         'SKID in place of key_block, AGR8)',
+         'SKID in place of key_block, MGR8)',
          'is not exercised either: [[KLEE-KMAC]] gives no PI/SCC layout for it.')
 
     print()

@@ -1,0 +1,482 @@
+106d105
+< | `Zklind`        | KLEE with indirect CL addressing support for instructions other than `kl.clone`, `kl.rename`, and `kl.swap`. | <<KLEE-cryptographic-registers>>
+224,240c223
+< If the extension `Zklind` is not enabled,
+< a CL is addressed like a conventional register, i.e., via a 5-bit immediate.
+<
+< If the extension `Zklind` is enabled,
+< a CL can also be addressed indirectly, via a GPR value; an additional instruction-encoding bit selects the mode.
+<
+< Independently of `Zklind`, indirect CL addressing is always available for
+< instructions `kl.clone`, `kl.rename`, and `kl.swap` (<<KLEE-instruction-clone>>).
+<
+< [NOTE]
+< ====
+< Indirect CL addressing under `Zklind` implies that CL renaming, while still possible, would significantly increase microarchitectural complexity.
+< We posit that CL renaming is not expected to be necessary, and may even be detrimental, for KLEE.
+< First, excluding internal state changes, CLs are redefined far less frequently than GPRs or FP registers, and
+< conditional situations where a CL may take one key or a different one are uncommon.
+< Second, speculating on the results of cryptographic operations usually leads to security issues.
+< ====
+---
+> A CL is addressed via a 5-bit immediate.
+900a884
+>
+976,978c960
+< The notation `K{Xd}` denotes the CL whose index is held in GPR `Xd`.
+< `Kn|K{Xn}` indicates two alternative encodings: a 5-bit immediate CL index (`Kn`) or a CL number supplied by GPR `Xn`.
+< In every encoding that offers both, bit `r`, the _CL indexing mode selector_, chooses between them: `r` = 0 makes the 5-bit register field the CL index itself, `r` = 1 makes it the number of the GPR holding the index.
+---
+> `Kn` indicates the CL indexed by a 5-bit immediate.
+994d975
+< [horizontal]
+1073,1076d1053
+< [[KLEE-GR-GPR-indirect, GR11]] GR11:: _Use of a GPR as indirect CL index:_
+< If `Zklind` is present, when using indirect CL addressing, an indirect index outside [0..31] raises an illegal-instruction exception.
+< Using `X0` as an indirect CL index raises an illegal-instruction exception.
+<
+1145c1122
+< . `kl.{avail,size}  Xd, Ks|K{Xs}` - Size from a context.
+---
+> . `kl.{avail,size}  Xd, Ks` - Size from a context.
+1162c1139
+<     { bits:  5, name: 'Ks/K{Xs}/Xs/Vs' },
+---
+>     { bits:  5, name: 'Ks/Xs/Vs' },
+1165c1142
+<     { bits:  1, name: 'r' },
+---
+>     { bits:  1, name: 0x0 },
+1172c1149
+< The `F` field and the `r` bit may assume the following values:
+---
+> The `F` field may assume the following values:
+1174,1177c1151,1153
+< * `F` = `0b00`, `r` = `0` {implies} Form A: Size/availability from a context given as `Ks`.
+< * `F` = `0b00`, `r` = `1` {implies} Form A: Size/availability from a context given indirectly as `K{Xs}`. Only if `Zklind` is present, otherwise this is an illegal instruction.
+< * `F` = `0b01`, `r` = `0` {implies} Form B: Size/availability from MDH in one (RV64) or two (RV32) GPRs.
+< * `F` = `0b10`, `r` = `0` {implies} Form C: Size/availability from MDH in a 128-bit vector register.
+---
+> * `F` = `0b00`` {implies} Form A: Size/availability from a context given as `Ks`.
+> * `F` = `0b01`` {implies} Form B: Size/availability from MDH in one (RV64) or two (RV32) GPRs.
+> * `F` = `0b10`` {implies} Form C: Size/availability from MDH in a 128-bit vector register.
+1231,1234c1207,1210
+< . `kl.exec  Vd, Kn|K{Xn}, Vs2` {nbsp} takes an input vector and writes to an output vector.
+< . `kl.exec  {fournbsp} Kn|K{Xn}, Vs2` {nbsp} takes an input vector but does not write to an output vector.
+< . `kl.exec  Vd, Kn|K{Xn} {fournbsp}{nbsp}` {nbsp} does not take an input but writes to an output vector.
+< . `kl.exec  {fournbsp} Kn|K{Xn} {fournbsp}{nbsp}` {nbsp} does not take an input vector and does not write to an output vector.
+---
+> . `kl.exec  Vd, Kn, Vs2` {nbsp} takes an input vector and writes to an output vector.
+> . `kl.exec  {fournbsp} Kn, Vs2` {nbsp} takes an input vector but does not write to an output vector.
+> . `kl.exec  Vd, Kn {fournbsp}{nbsp}` {nbsp} does not take an input but writes to an output vector.
+> . `kl.exec  {fournbsp} Kn {fournbsp}{nbsp}` {nbsp} does not take an input vector and does not write to an output vector.
+1248c1224
+<     { bits:  5, name: "'rs1' (n)", attr: ['Kn|K{Xn}'] },
+---
+>     { bits:  5, name: "'rs1' (n)", attr: ['Kn'] },
+1250,1252c1226
+<     { bits:  1, name: 0x0 },
+<     { bits:  1, name: 'r' },
+<     { bits:  1, name: 0x0 },
+---
+>     { bits:  3, name: 0x0 },
+1267,1268d1240
+<
+< `r` is the CL indexing mode selector. Indirect CL addressing is only available when `Zklind` is present. Otherwise, `r` = 1 is an illegal instruction.
+1274c1246
+< Performs a cryptographic operation as defined by the Machine in CL `Kn` or `K{Xn}`.
+---
+> Performs a cryptographic operation as defined by the Machine in CL `Kn`.
+1293d1264
+< // `r` is the CL indexing mode selector. Indirect CL addressing is only available when `Zklind` is present. Otherwise, `r` = 1 is an illegal instruction.
+1302,1305c1273,1276
+< . `kl.mv  Kd|K{Xd}, Xs2` copies 128 bits of content from two or four GPRs into a CL.
+< . `kl.mv  Kd|K{Xd}, Vs2` copies one or more 128-bit blocks of content from a vector register into a CL.
+< . `kl.mv  Xd,  Ks1|K{Xs1}` extracts 128 bits of content from a CL into two or four GPRs.
+< . `kl.mv  Vd,  Ks1|K{Xs1}` extracts one or more 128-bit blocks of content from a CL into a vector register.
+---
+> . `kl.mv  Kd, Xs2`{nbsp}{nbsp} copies 128 bits of content from two or four GPRs into a CL.
+> . `kl.mv  Kd, Vs2`{nbsp}{nbsp} copies one or more 128-bit blocks of content from a vector register into a CL.
+> . `kl.mv  Xd, Ks1`{nbsp}{nbsp} extracts 128 bits of content from a CL into two or four GPRs.
+> . `kl.mv  Vd, Ks1`{nbsp}{nbsp} extracts one or more 128-bit blocks of content from a CL into a vector register.
+1316,1319c1287,1290
+< . `kl.mv  Kd|K{Xd}, Xs2`   is encoded as `Form` = `0b01` and `rd` = `0b00001`.
+< . `kl.mv  Kd|K{Xd}, Vs2`   is encoded as `Form` = `0b01` and `rd` = `0b00010`.
+< . `kl.mv  Xd,  Ks1|K{Xs1}` is encoded as `Form` = `0b10` and `rs2` = `0b00001`.
+< . `kl.mv  Vd,  Ks1|K{Xs1}` is encoded as `Form` = `0b10` and `rs2` = `0b00010`.
+---
+> . `kl.mv  Kd, Xs2`{nbsp}{nbsp} is encoded as `Form` = `0b01` and `rd` = `0b00001`.
+> . `kl.mv  Kd, Vs2`{nbsp}{nbsp} is encoded as `Form` = `0b01` and `rd` = `0b00010`.
+> . `kl.mv  Xd, Ks1`{nbsp}{nbsp} is encoded as `Form` = `0b10` and `rs2` = `0b00001`.
+> . `kl.mv  Vd, Ks1`{nbsp}{nbsp} is encoded as `Form` = `0b10` and `rs2` = `0b00010`.
+1324,1325d1294
+<
+< `r` is the CL indexing mode selector. Indirect CL addressing is only available when `Zklind` is present. Otherwise, `r` = 1 is an illegal instruction.
+1432,1435c1401,1404
+< . `kl.setst Kd|K{Xd}, #immed7{fournbsp}{nbsp}{nbsp}` with no auxiliary input.
+< . `kl.setst Kd|K{Xd}, #immed7, Xs{nbsp}` with auxiliary input in one or two GPRs (RV64/RV32).
+< . `kl.setst Kd|K{Xd}, #immed7, Vs{nbsp}` — in a vector register.
+< . `kl.setst Kd|K{Xd}, #immed7, Xs{nbsp}` — in two or four GPRs (RV64/RV32).
+---
+> . `kl.setst Kd, #immed7{fournbsp}{nbsp}{nbsp}`{nbsp}{nbsp} with no auxiliary input.
+> . `kl.setst Kd, #immed7, Xs{nbsp}`{nbsp}{nbsp} with auxiliary input in one or two GPRs (RV64/RV32).
+> . `kl.setst Kd, #immed7, Xs{nbsp}`{nbsp}{nbsp} with auxiliary input in two or four GPRs (RV64/RV32).
+> . `kl.setst Kd, #immed7, Vs{nbsp}`{nbsp}{nbsp} with auxiliary input in a vector register.
+1448c1417
+<     { bits:  5, name: 'Kd|K{Xd}' },
+---
+>     { bits:  5, name: 'Kd' },
+1458,1461d1426
+< `r` is the CL indexing mode selector. Indirect CL addressing is only available when `Zklind` is present. Otherwise, `r` = 1 is an illegal instruction except when encoding `kl.clearall` (<<KLEE-instruction-clearall>>).
+<
+< When `r` = 1 and the CL register is `X0`: Form A with `#immed7` = 0 is `kl.clearall` (<<KLEE-instruction-clear>>); every other combination of Form and `#immed7` is reserved.
+<
+1475c1440
+< The instruction is used to advance the Machine expressed in the CL `Kd` or `K{Xd}`
+---
+> The instruction is used to advance the Machine expressed in the CL `Kd`
+1529c1494
+< The instruction `kl.clearads Kd|K{Xd}` clears any ADS from the target CL `Kd` or `K{Xd}`.
+---
+> The instruction `kl.clearads Kd` clears any ADS from the target CL `Kd`.
+1558c1523
+< it opens a provisioning, an export or an import on the CL `Kd` or `K{Xd}`,
+---
+> it opens a provisioning, an export or an import on the CL `Kd,
+1605,1607c1570,1572
+< `kl.getmdl{nbsp}Xd, Ks|K{Xs}`(((KLEE, instruction, kl.getmdl)))
+< `kl.getmd{nbsp}{nbsp}Xd, Ks|K{Xs}`(((KLEE, instruction, kl.getmd)))
+< `kl.getmdv{nbsp}Vd, Ks|K{Xs}`(((KLEE, instruction, kl.getmdv)))
+---
+> `kl.getmdl{nbsp}Xd, Ks`(((KLEE, instruction, kl.getmdl)))
+> `kl.getmd{nbsp}{nbsp}Xd, Ks`(((KLEE, instruction, kl.getmd)))
+> `kl.getmdv{nbsp}Vd, Ks`(((KLEE, instruction, kl.getmdv)))
+1622,1626c1587,1589
+<     { bits:  5, name: 'rs1', attr: ['Ks|K{Xs}'] },
+<     { bits:  5, name: 0x00  },
+<     { bits:  1, name: 0x0 },
+<     { bits:  1, name: 'r' },
+<     { bits:  1, name: 0x0 },
+---
+>     { bits:  5, name: 'rs1', attr: ['Ks'] },
+>     { bits:  5, name: 0x0  },
+>     { bits:  3, name: 0x0 },
+1633,1634d1595
+< `r` is the CL indexing mode selector. Indirect CL addressing is only available when `Zklind` is present. Otherwise, `r` = 1 is an illegal instruction.
+<
+1649c1610
+< * `kl.getmdl` copies bits [63:0] of the MDH of CL `Ks` or `K{Xs}` into GPR `Xd`.
+---
+> * `kl.getmdl` copies bits [63:0] of the MDH of CL `Ks` into GPR `Xd`.
+1651c1612
+< * For `kl.getmd` the destination is a GPR pair. The instruction copies bits [63:0] of the MDH of CL `Ks` or `K{Xs}` into GPR `Xd` and bits [127:64] of the MDH of the CL into GPR `X[d+1]`.
+---
+> * For `kl.getmd` the destination is a GPR pair. The instruction copies bits [63:0] of the MDH of CL `Ks` into GPR `Xd` and bits [127:64] of the MDH of the CL into GPR `X[d+1]`.
+1667c1628
+< `kl.getst Xd, Ks|K{Xs}`
+---
+> `kl.getst Xd, Ks`
+1669c1630
+< `kl.getstx Xd, Ks|K{Xs}`
+---
+> `kl.getstx Xd, Ks`
+1677c1638
+< . `kl.getmdl Xd, Ks` or `K{Xs}`
+---
+> . `kl.getmdl Xd, Ks`
+1683c1644
+< . `kl.getmdl Xd, Ks` or `K{Xs}`
+---
+> . `kl.getmdl Xd, Ks`
+1699,1701c1660,1662
+< `kl.restrictl{nbsp}{nbsp}Kd|K{Xd}, Xs1`(((KLEE, instruction, kl.restrict)))
+< `kl.restricth{nbsp}{nbsp}Kd|K{Xd}, Xs1`
+< `kl.restrictv{nbsp}{nbsp}Kd|K{Xd}, Vs1`
+---
+> `kl.restrictl{nbsp}{nbsp}Kd, Xs1`(((KLEE, instruction, kl.restrict)))
+> `kl.restricth{nbsp}{nbsp}Kd, Xs1`
+> `kl.restrictv{nbsp}{nbsp}Kd, Vs1`
+1713c1674
+<     { bits:  5, name: 'Kd|K{Xd}' },
+---
+>     { bits:  5, name: 'Kd' },
+1717,1719c1678
+<     { bits:  1, name: 0x0 },
+<     { bits:  1, name: 'r' },
+<     { bits:  1, name: 0x0 },
+---
+>     { bits:  3, name: 0x0 },
+1726,1727d1684
+< `r` is the CL indexing mode selector. Indirect CL addressing is only available when `Zklind` is present. Otherwise, `r` = 1 is an illegal instruction.
+<
+1740c1697
+< The instructions narrow the policies of the CC in CL `Kd` or `K{Xd}`, with Metadata Header `md`,
+---
+> The instructions narrow the policies of the CC in CL `Kd``, with Metadata Header `md`,
+1822c1779
+< `kl.{clone, rename, swap} Kd|K{Xd}, Ks|K{Xs}`
+---
+> `kl.{clone, rename, swap} Kd, Ks`
+1835c1792
+<     { bits:  5, name: 'Kd|K{Xd}' },
+---
+>     { bits:  5, name: 'Kd' },
+1837c1794
+<     { bits:  5, name: 'Ks|K{Xs}' },
+---
+>     { bits:  5, name: 'Ks' },
+1839c1796
+<     { bits:  2, name: 'R' },
+---
+>     { bits:  2, name: 0x0 },
+1847,1860d1803
+< Bits [26:25], i.e., field `R`, take the following values depending on how the CLs are given:
+<
+< [upperalpha]
+< . `00`{nbsp}{nbsp} if the source and the output CLs are both encoded as
+<   immediate values.
+< . `01`{nbsp}{nbsp} if the source CL is encoded as immediate and the output CL
+<   is selected using a GPR.
+< . `10`{nbsp}{nbsp} if the source CL is selected using a GPR and the output CL
+<   is encoded as an immediate value.
+< . `11`{nbsp}{nbsp} if the source and the output CLs are both selected using the
+<   values of GPRs.
+<
+< _Indirect CR addressing is always available for this instruction, including `kl.rename` and `kl.swap`, in other words, also when `Zklind` is not present._
+<
+1908c1851
+< `kl.derive Kd|K{Xd}, Ks1|K{Xs1}, Xs2`
+---
+> `kl.derive Kd, Ks1, Xs2`
+1920c1863
+<     { bits:  5, name: 'Kd|K{Xd}' },
+---
+>     { bits:  5, name: 'Kd' },
+1922c1865
+<     { bits:  5, name: 'Ks1|K{Xs1}' },
+---
+>     { bits:  5, name: 'Ks1' },
+1924c1867
+<     { bits:  2, name: 'R' },
+---
+>     { bits:  2, name: 0x0 },
+1931,1933d1873
+< Bits [26:25], i.e., field `R`, are encoded as for `kl.clone` (<<KLEE-instruction-clone>>).
+< For this instruction, indirect CL addressing is only available when `Zklind` is present. Otherwise, `R` {ne} `00` is an illegal instruction.
+<
+2008,2027d1947
+< // Allowed pairs:::
+< // The number `i` selects an _exportable field_ of the source CC, a field its Machine makes available as the
+< // source of a `kl.derive`, and `j` an _importable field_ of the destination CC, one made
+< // available as the destination; each Machine numbers these fields from 1, and 0 is used on the
+< // side that carries a `kl.exec` endpoint.
+< // +
+< // A field from the System Key Store is never exportable,
+< // a field configured by a SKID is never importable, and a field that its Machine does not return
+< // to software through `kl.exec` may be the source of a `Form` `00` transfer only.
+< // +
+< //
+< // or if software can obtain its data through `kl.exec` and its destination accepts arbitrary input
+< // through `kl.exec`, as for the output of a XOF squeezed into a state implemented by Procedure
+< // `process_VLI` (<<KLEE-process-VLI>>) or into a multi-block `kl.exec`. Either way, the block sizes
+< // of the endpoints, in their current States, must be compatible: one divides the other, one endpoint
+< // transfers any number of bytes directly from or to a field, or the destination is a `process_VLI`
+< // state. A listed pair depends on both Machines; it defines a minimum transfer length and may
+< // define an upper limit, a granularity, and constraints on the _UsagePolicy_, _Locality_,
+< // _ExpirationDate_ and _SCProtection_ of the destination CL, to which the source Machine may add.
+<
+2043,2044c1963,1964
+<     { bits:  5, name: 'context', attr: ['Kd','K{Xd}'] },
+<     { bits:  3, name: 'kl.load', attr: [0x5,0x6] },
+---
+>     { bits:  5, name: 'context', attr: ['Kd'] },
+>     { bits:  3, name: 'kl.load', attr: [0x5] },
+2051,2052d1970
+< +
+< `r` is the CL indexing mode selector. Indirect CL addressing is only available when `Zklind` is present. Otherwise, `r` = 1 is an illegal instruction.
+2055c1973
+< `kl.load{fournbsp}{nbsp}{nbsp}{nbsp}Kd|K{Xd}, %offset(Xs1)`
+---
+> `kl.load{fournbsp}{nbsp}{nbsp}{nbsp}Kd, %offset(Xs1)`
+2060c1978
+< `kl.load` imports the Content of a PI or an SCC into the CL `Kd` or `K{Xd}`.
+---
+> `kl.load` imports the Content of a PI or an SCC into the CL `Kd`.
+2091,2092c2009,2010
+<     { bits:  3, name: 'kl.store', attr: [0x5,0x6] },
+<     { bits:  5, name: 'context', attr: ['Ks2','K{Xs2}'] },
+---
+>     { bits:  3, name: 'kl.store', attr: [0x5] },
+>     { bits:  5, name: 'context', attr: ['Ks2'] },
+2097,2098d2014
+< +
+< `r` is the CL indexing mode selector. Indirect CL addressing is only available when `Zklind` is present. Otherwise, `r` = 1 is an illegal instruction.
+2101c2017
+< `kl.store %offset(Xs1), Ks2|K{Xs2}`
+---
+> `kl.store %offset(Xs1), Ks2`
+2107c2023
+< Let `S` be `Content` of the target CL `Ks2` or `K{Xs2}`, `SIV {vvert} Content`, or `SIV {vvert} IMPQUAL {vvert} SIV2 {vvert} Content`, depending on whether _ContentOffset_, computed as for `kl.load`, is 0, 16, or 48.
+---
+> Let `S` be `Content` of the target CL `Ks2`, `SIV {vvert} Content`, or `SIV {vvert} IMPQUAL {vvert} SIV2 {vvert} Content`, depending on whether _ContentOffset_, computed as for `kl.load`, is 0, 16, or 48.
+2291a2208,2231
+>
+>
+> // [[KLEE-states-graph]]
+> // .Default State Transitions
+> // [tikz,,svg,float="center",align="center",preamble=true,command=lualatex]
+> // ....
+> // \usetikzlibrary{calc,trees,matrix,positioning,chains,fit,intersections}
+> // \usetikzlibrary{arrows,shapes.arrows,shapes.geometric,shapes.multipart,shapes.symbols}
+> // \tikzset{
+> //     state/.style={ rectangle, draw=black, thick, minimum height=1.66em, text centered, rounded corners=3pt},
+> //     error state/.style={ rectangle, double, draw=black, semithick, minimum height=1.66em, text centered, rounded corners=3pt},
+> //     off state/.style={ ellipse, double, draw=black, semithick, minimum height=1.66em, text centered, rounded corners=3pt},
+> //     partial state/.style={trapezium, draw=black, thick, minimum height=1.66em, text centered, rounded corners=3pt},
+> //     branch/.style={ fill, shape=circle, minimum size=3pt, inner sep=0pt},
+> //     cross line/.style={preaction={draw=white, -, shorten >=3pt, shorten <=3pt, line width=2pt}},
+> //     >=latex
+> // }
+> // \usepackage{fontspec}
+> // \setmainfont[UprightFont={Petrona-Light.ttf},
+> //              BoldFont={Petrona-Medium.ttf},
+> //              ItalicFont={Petrona-LightItalic.ttf},
+> //              BoldItalicFont={Petrona-MediumItalic.ttf},
+> //             ]{Petrona-Light.ttf}
+> // ~~~~
+2296c2236
+< [tikz,,svg,float="center",align="center",preamble=true,command=lualatex]
+---
+> [tikz,,svg,float="center",align="center",preamble=true]
+2309,2314d2248
+< \usepackage{fontspec}
+< \setmainfont[UprightFont={Petrona-Light.ttf},
+<              BoldFont={Petrona-Medium.ttf},
+<              ItalicFont={Petrona-LightItalic.ttf},
+<              BoldItalicFont={Petrona-MediumItalic.ttf},
+<             ]{Petrona-Light.ttf}
+2316c2250,2309
+< INSERT TIKZ HERE
+---
+> \begin{tikzpicture}[scale=1.1]
+>
+>   \node[off state,text width=2.5cm,minimum height=1.41cm,inner sep=0pt] at (-4.00,0)  (off) {\small\smash{Unconfigured} \hbox{\smash{(}Outermost Partial\smash{)}~}};
+>
+>   \node[partial state,text width=1.1cm,inner sep=2pt] at (0,-0.35) (nested partial)  {\small Nested Partial};
+>
+>   \node[error state, text width=1.3cm] at (0,-2)   (invalidated)    {Invalid\vphantom{g}};
+>   \node[error state] at (0,2)                      (various errors) {\scriptsize\begin{tabular}{@{}c@{}}Privilege Violation,\\Unsupported,\\Out of Memory\end{tabular}};
+>   \node[error state] at (0,3.5)                    (authfail)       {\footnotesize\begin{tabular}{@{}c@{}}Authentication\\Failed\end{tabular}};
+>   \node[error state, text width=1.3cm] at (0,-3.5) (expired)        {Expired};
+>
+>   \node[coordinate] at ($(expired.east)+(0.5,0)$)  (before expired) {};
+>
+>   \node[state, semithick, text width=1.1cm] at (3,0)      (ready)             {Ready\vphantom{g}};
+>   \node[state, semithick, text width=2.9cm] at (6.5,-1.5) (machine defined) {Machine-Defined};
+>   \node[state, semithick, text width=2.9cm] at (6.5,1.5)  (success failure)   {Success / Failure};
+>   \node[below right=0mm and -4mm of before expired]       (ignore)            {\small\textit{Expiration}};
+>
+>   \draw[-,densely dashed]   (before expired) to[out=9,in=270,looseness=0.8] (ready);
+>   \draw[-,densely dashed]   (before expired) to[out=7,in=225,looseness=0.8] (machine defined);
+>   \draw[-,densely dashed]   (before expired) to[out=3,in=230,looseness=0.6] ($(success failure.south)+(-0.501,0)$);
+>   \draw[->,densely dashed]  ($(before expired)+(-0.1,0)$) -- (expired);
+>
+>   \draw[<->,semithick,densely dotted] (off) -- (nested partial);
+>
+>   %% Loop
+>   \draw[->,semithick,densely dotted] (nested partial) to[out=10,in=90] ($(nested partial.east)+(0.75,0)$) to[out=270,in=-10] (nested partial);
+>
+>   \draw[<->,semithick,densely dotted] (off) to[out=82,in=180,looseness=0.8]  (authfail);
+>   \draw[<->,semithick,densely dotted] (off) to[out=55,in=180,looseness=0.7]  (various errors);
+>   \draw[<->,semithick,densely dotted] (off) to[out=-55,in=180,looseness=0.7] (invalidated);
+>   \draw[<->,semithick,densely dotted] (off) to[out=-82,in=180,looseness=0.8] (expired);
+>
+>   %% Loop
+>   \draw[->] ($(machine defined.south)+(-0.125,0)$) to[out=258,in=180]
+>     ($(machine defined.south)+(0,-0.7)$) to[out=0,in=282] ($(machine defined.south)+(0.125,0)$);
+>
+>   \draw[->,cross line] (machine defined) to[out=188,in=0,  looseness=1] ($(invalidated.east)+(0,-0.15)$);
+>
+>   \draw[<->] ($(success failure.south)+(-1,0)$) to[out=225,in=10,looseness=0.8]   node[pos=0.34, above, sloped, yshift=-1pt] () {\tiny Conditional} ($(ready.east)!0.5!(ready.north east)$);
+>
+>   \draw[<->,semithick,densely dotted] (off) to[out=8,in=167,looseness=0.8] (ready);
+>   \draw[<->,semithick,densely dotted, cross line] (off) to[out=-26,in=180,looseness=0.4] (machine defined);
+>   \draw[<->,semithick,densely dotted, cross line] (off) to[out=26,in=180,looseness=0.4] (success failure);
+>
+>   \draw[->,cross line] ($(machine defined.north)+(-0.5,0)$) to[out=130,in=0,looseness=1] ($(various errors.east)+(0,0)$);
+>
+>   \draw[->,cross line] ($(ready.south)+(-0.25,0)$) to[out=270,in=10,looseness=0.8] (invalidated);
+>   \draw[->,cross line] ($(ready.north)+(-0.25,0)$) to[out=90,in=-8,looseness=0.8] (various errors);
+>
+>
+>   \draw[<->,cross line] ($(machine defined.north)+(-1,0)$) to[out=135,in=-10,looseness=0.8] ($(ready.east)!0.5!(ready.south east)$);
+>   \draw[->,cross line] (machine defined) -- (success failure);
+>
+>   \draw[->,cross line] (success failure) to[out=135,in=0,looseness=0.8] (authfail);
+>   \draw[->,cross line] ($(success failure.south)+(-0.75,0)$) to[out=230,in=0,looseness=1.2] (invalidated);
+>
+>   \draw[->,cross line] (success failure) to[out=172,in=0, looseness=1] ($(various errors.east)+(0,0.15)$);
+>
+> \end{tikzpicture}
+2522,2523c2515,2516
+< . A reserved encoding, including `kl.setst` with `#immed7` 46 or 47, `kl.mgmt` with `#immed7` in 59–62 or in Form B, a reserved `#immed7` of `kl.setst` with `r` = 1 and CL register `X0` (<<KLEE-instruction-setst>>), and a KLEE instruction with a vector operand issued while `vtype.vill` is set (<<KLEE-KLV>>).
+< . An indirect CL index outside [0..31], or `X0` used as one where not expressly encoded (Rule <<KLEE-GR-GPR-indirect>>), and `kl.derive` with equal CL indices (<<KLEE-instruction-derive>>).
+---
+> . A reserved encoding, including `kl.setst` with `#immed7` 46 or 47, `kl.mgmt` with `#immed7` in 59–62 or in Form B, a reserved `#immed7` of `kl.setst`  (<<KLEE-instruction-setst>>), and a KLEE instruction with a vector operand issued while `vtype.vill` is set (<<KLEE-KLV>>).
+> . `kl.derive` with equal source and destination CLs (<<KLEE-instruction-derive>>).
+2855,2856c2848,2849
+< | `kl.exec`, Form A   | `kl.exec{nbsp}{nbsp}Vd, Kn\|K{Xn}, Vs` | `1: kl.input{nbsp}{nbsp}%offset(Xs), Xl` +
+< `2: kl.exec{nbsp}{nbsp}{nbsp}Kn\|K{Xn}` +
+---
+> | `kl.exec`, Form A   | `kl.exec{nbsp}{nbsp}Vd, Kn, Vs` | `1: kl.input{nbsp}{nbsp}%offset(Xs), Xl` +
+> `2: kl.exec{nbsp}{nbsp}{nbsp}Kn` +
+2858,2860c2851,2853
+< | `kl.exec`, Form B   | `kl.exec{fournbsp}{nbsp}{nbsp}{nbsp}Kn\|K{Xn}, Vs`     | `1: kl.input{nbsp}{nbsp}%offset(Xs), Xl` +
+< `2: kl.exec{nbsp}{nbsp}{nbsp}Kn\|K{Xn}` +
+< | `kl.exec`, Form C   | `kl.exec{nbsp}{nbsp}Vd, Kn\|K{Xn}`     | `1: kl.exec{nbsp}{nbsp}{nbsp}Kn\|K{Xn}` +
+---
+> | `kl.exec`, Form B   | `kl.exec{fournbsp}{nbsp}{nbsp}{nbsp}Kn, Vs`     | `1: kl.input{nbsp}{nbsp}%offset(Xs), Xl` +
+> `2: kl.exec{nbsp}{nbsp}{nbsp}Kn` +
+> | `kl.exec`, Form C   | `kl.exec{nbsp}{nbsp}Vd, Kn`     | `1: kl.exec{nbsp}{nbsp}{nbsp}Kn` +
+2862,2865c2855,2858
+< | `kl.setst`, Form C  | `kl.setst{nbsp}Kd\|K{Xd}, #immed, Vs` | `1: kl.input{nbsp}{nbsp}%offset(Xs), Xl` +
+< `2: kl.setst{nbsp}{nbsp}Kd\|K{Xd}, #immed` +
+< | `kl.mgmt`, Form C  | `kl.mgmt{nbsp}Kd\|K{Xd}, #immed, Vs` | `1: kl.input{nbsp}{nbsp}%offset(Xs), Xl` +
+< `2: kl.mgmt{nbsp}{nbsp}Kd\|K{Xd}, #immed` +
+---
+> | `kl.setst`, Form C  | `kl.setst{nbsp}Kd, #immed, Vs` | `1: kl.input{nbsp}{nbsp}%offset(Xs), Xl` +
+> `2: kl.setst{nbsp}{nbsp}Kd, #immed` +
+> | `kl.mgmt`, Form C  | `kl.mgmt{nbsp}Kd, #immed, Vs` | `1: kl.input{nbsp}{nbsp}%offset(Xs), Xl` +
+> `2: kl.mgmt{nbsp}{nbsp}Kd, #immed` +
+3237,3238c3230,3231
+< +
+< .. [[ace-mgmt-completes-export,Use of kl.mgmt to complete an export process]]* `*kl.mgmt*` *is used to start an export process.*
+---
+>
+> * [[ace-mgmt-completes-export,Use of kl.mgmt to complete an export process]]`*kl.mgmt*` *is used to complete an export process.*
+3256,3257d3248
+< +
+< . *If `kl_cfg_management_end` is issued when the target CL's _State_ is _Unconfigured_ or a Complete State* (i.e., no management operation open on the target CL), the instruction is an illegal instruction.
+3258a3250,3251
+> If `kl_cfg_management_end` is issued when the target CL's _State_ is _Unconfigured_ or a Complete State* (i.e., no management operation open on the target CL), the instruction is an illegal instruction.
+>
+3261d3253
+< ////
+3262a3255
+>
+3339d3331
+< ////
+3340a3333
+>
+3578c3571
+< and opening the CL for export (`kl.mgmt Kd|K{Xd}, #kl_cfg_exporting`) performs the following steps
+---
+> and opening the CL for export (`kl.mgmt Kd, #kl_cfg_exporting`) performs the following steps
+3641c3634
+< Steps 1 to 5 are performed by the `kl.mgmt Kd|K{Xd}, #kl_cfg_importing` that opens the import
+---
+> Steps 1 to 5 are performed by the `kl.mgmt Kd, #kl_cfg_importing` that opens the import
+3644c3637
+< `kl.mgmt Kd|K{Xd}, #kl_cfg_management_end`, which decrypts and authenticates the SCC.
+---
+> `kl.mgmt Kd, #kl_cfg_management_end`, which decrypts and authenticates the SCC.

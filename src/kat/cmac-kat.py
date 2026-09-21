@@ -12,7 +12,7 @@ Two independent implementations are checked against the published vectors:
         the left operand of @ is more significant).  gen_subkeys uses
         `double`, the OCB3 doubling of <<KLEE-OCB-mode>>.  The model is a CL
         driven by kl.setst / kl.exec Forms and KLLEN, so it also applies the
-        General Rules for Machines (<<KLEE-Machines-other-rules>>: AGR1-AGR6)
+        General Rules for Machines (<<KLEE-Machines-other-rules>>: MGR1-MGR6)
         and the State rules of Book 1 (<<KLEE-State-field>>: SGR2, SGR4-SGR6,
         SGR8, SGR10, SGR16) where CMAC relies on them, and it exports and
         imports the Serialized Content of <<KLEE-CMAC-mode>> (the plaintext of
@@ -33,7 +33,7 @@ Checks performed
   * REF vs published tag, and KLEE vs published tag, for all 13 examples,
     the KLEE model being driven two ways: one block per kl.exec with the last
     block passed at its exact length, and every full block in a single
-    multi-block kl.exec (AGR3) with the last block passed in a 256-bit
+    multi-block kl.exec (MGR3) with the last block passed in a 256-bit
     operand with filler above it, which the Machine must ignore.
   * The published subkey anchors (L, K1, K2) against KLEE gen_subkeys, for
     all three key sizes.
@@ -50,11 +50,11 @@ Checks performed
     instruction of every example; every admissible field value fits its row;
     the sizes are reported.
   * State machine: instructions and Forms not allowed in the current State
-    (<<KLEE-AGR-not-allowed-instructions>>, <<KLEE-SGR-no-exec-in-ready>>,
+    (<<KLEE-MGR-not-allowed-instructions>>, <<KLEE-SGR-no-exec-in-ready>>,
     <<KLEE-SGR-success-failure>>), the KLIOBUF substitutions of
     <<KLEE-usage-input-output>>, KLLEN not a multiple of b in _Hash_Absorb_
-    (AGR2), one block whatever KLLEN in the last-block and output States
-    (AGR3) with OUTPUT cleared beyond bit b-1, and a return to _Ready_ (SGR8).
+    (MGR2), one block whatever KLLEN in the last-block and output States
+    (MGR3) with OUTPUT cleared beyond bit b-1, and a return to _Ready_ (SGR8).
   * <<KLEE-derive-endpoints>>: `key` (j = 1) is the only importable field and
     is written with the CL in State Ready; CMAC has no exportable field.
   * Negative controls (must NOT reproduce the standard):
@@ -62,7 +62,7 @@ Checks performed
       NC-lemask     : derive the subkeys with the little-endian update_mask
                       instead of double() = bswap(update_mask(bswap(S))).
       NC-blockorder : a multi-block kl.exec taking its blocks from the most
-                      significant position downwards, contrary to AGR3.
+                      significant position downwards, contrary to MGR3.
       NC-scc-drop   : the Serialized Content without its `hash` row.
 
 Review finding m6 is fixed in the spec: <<KLEE-CMAC-mode>> now states that with
@@ -136,7 +136,7 @@ class Invalid(Exception):
         self.output = output
 
 
-SKS = {}                     # System Key Store: SKID -> key bytes (AGR8)
+SKS = {}                     # System Key Store: SKID -> key bytes (MGR8)
 
 
 def cmac_layout(key_bits, b=B):
@@ -257,9 +257,9 @@ class KleeCmac:
         if want is None or form not in (want, 'D'):
             self._invalid(f'kl.exec Form {form} not allowed in State {s}')
         if s == S_HASH_ABSORB:
-            if klen % B:                          # AGR2: no operation, Invalid
+            if klen % B:                          # MGR2: no operation, Invalid
                 self._invalid('KLLEN not a multiple of b')
-            order = range(0, klen, B)             # AGR3: i = 0, b, ..., KLLEN - b
+            order = range(0, klen, B)             # MGR3: i = 0, b, ..., KLLEN - b
             for i in (reversed(order) if self.msb_first else order):
                 # hash <- enc_blk(key, hash xor INPUT)
                 self.hash = self.enc(self.hash ^ sl(INPUT, i + B - 1, i))
@@ -268,7 +268,7 @@ class KleeCmac:
             out = self.hash                       # OUTPUT <- hash
             self.state = S_SUCCESS
             return out & ((1 << klen) - 1)        # bits beyond the b-th cleared
-        # _Hash_Absorb_Last_Block_: a single kl.exec, exactly one block (AGR3)
+        # _Hash_Absorb_Last_Block_: a single kl.exec, exactly one block (MGR3)
         n = self.last_blk_len
         if klen < n:
             self._invalid('KLLEN < last_blk_len')
@@ -453,7 +453,7 @@ def main():
     print("\nCMAC vectors (REF = SP 800-38B on byte strings; "
           "KLEE = the Machine of <<KLEE-CMAC-mode>>)\n"
           "  1blk  : one block per kl.exec, last block at its exact length\n"
-          "  multi : all full blocks in one kl.exec (AGR3), KLLEN = 2b with "
+          "  multi : all full blocks in one kl.exec (MGR3), KLLEN = 2b with "
           "filler above the last block\n"
           "  SCC   : export/import after every instruction")
     print(f"{'case':14} {'Mlen':>5}  {'last-block path':16} "
@@ -513,7 +513,7 @@ def main():
     cl = cl.imported(pack([(f[n], w) for n, w in cmac_layout(128)]))
     line("block_base != 0 -> Invalid", invalid(lambda: cl.setst(S_HASH_LAST, 'B', 64)))
     info("no State of <<KLEE-CMAC-mode>> can make block_base non-zero: "
-         "_Hash_Absorb_ consumes whole blocks only (Granularity: b, AGR2) and "
+         "_Hash_Absorb_ consumes whole blocks only (Granularity: b, MGR2) and "
          "CMAC has no kl.exec derive endpoint, so the check above can be reached "
          "only through an imported CC, as here.")
 
@@ -543,7 +543,7 @@ def main():
          v2b(cl.exec('C'), 16) == bytes.fromhex(VECTORS[3][3]))
 
     # ------------------------------------------------ State machine
-    print("\nState machine (AGR1-AGR6 of <<KLEE-Machines-other-rules>>, SGR rules "
+    print("\nState machine (MGR1-MGR6 of <<KLEE-Machines-other-rules>>, SGR rules "
           "of Book 1):")
     W4 = bytes.fromhex(VECTORS[3][3])             # AES-128, Mlen = 40
     cl = KleeCmac(K128)
@@ -564,7 +564,7 @@ def main():
          invalid(lambda: at_absorb().exec('C')))
     for klen in (64, 136, 200):
         cl = at_absorb()
-        line(f"KLLEN = {klen} in Hash_Absorb -> no operation, Invalid (AGR2)",
+        line(f"KLLEN = {klen} in Hash_Absorb -> no operation, Invalid (MGR2)",
              invalid(lambda: cl.exec('B', 0, klen)) and cl.state == S_INVALID)
     cl = at_absorb()
     cl.setst(S_HASH_LAST, 'B', 64)
@@ -572,7 +572,7 @@ def main():
          invalid(lambda: cl.exec('B', 0, 56)))
     info("<<KLEE-truncation-vs-length>> gives KLLEN >= last_blk_len as the only "
          "restriction on a last block without stating the consequence; the "
-         "harness applies AGR2 (no operation, Error State _Invalid_).")
+         "harness applies MGR2 (no operation, Error State _Invalid_).")
     cl = kl_cmac(K128, MSG[:40])                  # in _Hash_Output_ after one exec
     line("the kl.exec of Hash_Absorb_Last_Block moves the CL to Hash_Output, so "
          "a second one -> Invalid", cl.state == S_HASH_OUTPUT
@@ -626,7 +626,7 @@ def main():
               "says an operation may instead use \"Form D kl.exec or Form C "
               "kl.setst\"; <<KLEE-usage-input-output>> makes Form A kl.setst the "
               "substitute of Form C, which is what this harness applies.")
-    info("AGR10 (<<KLEE-AGR-progress-discard>>) does not apply: CMAC designates no "
+    info("MGR10 (<<KLEE-MGR-progress-discard>>) does not apply: CMAC designates no "
          "progress field and none of its States has an interruptible "
          "long-running instruction.")
 

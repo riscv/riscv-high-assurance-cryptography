@@ -10,7 +10,7 @@ REF   Plain byte-string XTS with ciphertext stealing, written from the standard,
 
 KLEE  A model of a Cryptographic Locker holding an XEX CC (class XexCL): the PI is
       provisioned (the MDH first, then `key1` and `key2`, or one SKID that retrieves
-      both, AGR9), the CL moves between _Ready_, _Encrypt_ and _Decrypt_, and data is
+      both, MGR9), the CL moves between _Ready_, _Encrypt_ and _Decrypt_, and data is
       processed with the (multi-block) Form A kl.exec:
 
           on entering _Encrypt_/_Decrypt_ (Form C kl.setst):
@@ -18,7 +18,7 @@ KLEE  A model of a Cryptographic Locker holding an XEX CC (class XexCL): the PI 
           each block of a kl.exec:  OUTPUT <- mask xor enc_blk(key1, INPUT xor mask)
                                     mask  <- update_mask(mask)
 
-      The block loop is rule AGR3 of <<KLEE-Machines-other-rules>>: for
+      The block loop is rule MGR3 of <<KLEE-Machines-other-rules>>: for
       i = 0, b, ..., KLLEN - b, *in that order*, the per-block operation consumes
       INPUT[i+b-1:i] and produces OUTPUT[i+b-1:i].  Since the mask advances with
       every block, the order is observable here, unlike in ECB.  `update_mask` is
@@ -43,16 +43,16 @@ NEG   Two negative controls, each of which must fail the vectors: OCB3's big-end
 RULES The behaviour the Machine text leaves to the general rules, and the parts of
       the state machine a vector can pin down: a kl.exec in _Ready_ invalidates the
       CL (Rules <<KLEE-SGR-no-exec-in-ready>> and
-      <<KLEE-AGR-not-allowed-instructions>>); _Encrypt_ -> _Decrypt_ is *not* an
+      <<KLEE-MGR-not-allowed-instructions>>); _Encrypt_ -> _Decrypt_ is *not* an
       allowed transition here (unlike <<KLEE-ECB-mode>> and <<KLEE-tweakable>>);
       _MachinePolicy_ gates the two transitions from _Ready_ (<<KLEE-Machine-field>>);
       returning to _Ready_ zeroes the mask, so the CC can be reused with a new tweak;
       a same-State kl.setst (SGR4 of <<KLEE-State-management>>) re-tweaks; a KLLEN
       that is not a multiple of b performs no operation and invalidates the CL
-      (AGR2), the output window being zeroed (Rule
+      (MGR2), the output window being zeroed (Rule
       <<KLEE-SGR-usage-cr-error-state>>) and the Content cleared (Rule
       <<KLEE-SGR-clear-cr-content-error-state>>); KLLEN > b truncates the tweak
-      (AGR5); the KLIOBUF substitution of <<KLEE-usage-input-output>>; the
+      (MGR5); the KLIOBUF substitution of <<KLEE-usage-input-output>>; the
       interruption points and resumption of a multi-block kl.exec
       (<<KLEE-CSR-klstart>>, Rule <<KLEE-IRR-block-iterated-instructions>>).
 
@@ -179,7 +179,7 @@ def build_pi(mach, keytype, key1, key2=0, policy=POL_BOTH):
     """A PI: the MDH (i), then `key1` or the SKID (ii) and `key2` (iii, empty for a SKID)."""
     k = CIPHERS[XEX_MACHINES[mach]]
     if keytype == 1:
-        content, width = key1, 64        # one SKID retrieves both keys (AGR8, AGR9)
+        content, width = key1, 64        # one SKID retrieves both keys (MGR8, MGR9)
     else:
         content, width = cat((key2, k), (key1, k)), 2 * k
     return v2b(make_mdh(mach, policy, keytype), 16) + v2b(content, padded_bytes(width))
@@ -284,7 +284,7 @@ class XexCL:
             self.mdh = fset(self.mdh, F_KEYTYPE, 0)
         elif field != ONES64 and field in self.sks:
             self.skid = field
-            self.key1, self.key2 = self.sks[field]      # one SKID, two keys (AGR9)
+            self.key1, self.key2 = self.sks[field]      # one SKID, two keys (MGR9)
         else:
             self.invalidate()            # unresolved SKID (<<KLEE-MVR-open>>)
 
@@ -354,12 +354,12 @@ class XexCL:
         if lo >= KLLEN:
             return out, klstart          # empty window: no operation
         if (self.state not in (ST_ENCRYPT, ST_DECRYPT)     # e.g. kl.exec in _Ready_
-                or KLLEN % B):                             # AGR2: granularity b
+                or KLLEN % B):                             # MGR2: granularity b
             self.invalidate()
             return out & ~window, 0
         f = aes_encrypt if self.state == ST_ENCRYPT else aes_decrypt
         key1 = v2b(self.key1, self.k() // 8)
-        positions = list(range(lo, KLLEN, B))              # AGR3: i = 0, b, ..., in order
+        positions = list(range(lo, KLLEN, B))              # MGR3: i = 0, b, ..., in order
         if self.order != 'spec':
             positions.reverse()                            # NEG: most significant first
         for q, i in enumerate(positions):
@@ -658,7 +658,7 @@ chk("update_mask(V) on the value view == IEEE 1619 5.2 on the byte-string view",
     [ref_mul_alpha(bytes([q]) + bytes(15)) for q in (1, 0x80, 0xff)])
 
 print("\n== (b) KLEE XEX CL, full-block path (tweak = bin(i, 128))")
-print("   one multi-block Form A kl.exec per data unit (AGR3), and the same data")
+print("   one multi-block Form A kl.exec per data unit (MGR3), and the same data")
 print("   unit as one Form A kl.exec per block")
 for name, k, nonce, p, c in IEEE1619:
     k1, k2 = split_keys(k)
@@ -783,7 +783,7 @@ chk("Form A kl.setst and Form D kl.exec through the KLIOBUF: vector 2",
 cl = new_xex(k1, k2)
 cl.setst(ST_ENCRYPT, 'C', bin_(i, B), 128)
 res, _ = cl.exec(b2v(data[:17]), 136)
-chk("AGR2: KLLEN = 136 -> no operation, _Invalid_, window zeroed, Content cleared",
+chk("MGR2: KLLEN = 136 -> no operation, _Invalid_, window zeroed, Content cleared",
     (cl.state, res, cl.key1), (ST_INVALID, 0, None))
 cl = new_xex(k1, k2)
 cl.setst(ST_ENCRYPT, 'C', bin_(i, B), 128)
@@ -823,7 +823,7 @@ chk("key2 = key1: the mask is the raw enc_blk(key1, T), no alpha applied",
 print("\n== (h) DATA: Provisioning Input and Serialized Content")
 print("   (sizes in bytes, worked out by hand from the tables; SCC with _AuxDataLen_ = 0)")
 SKID = 0x0123456789abcdef
-SKS = {SKID: (b2v(k1), b2v(k2))}             # one SKID, two independent keys (AGR9)
+SKS = {SKID: (b2v(k1), b2v(k2))}             # one SKID, two independent keys (MGR9)
 for cipher, kt, pi_size, c1_size in (('AES-128', 0, 48, 48), ('AES-256', 0, 80, 80),
                                      ('AES-128', 1, 32, 32)):
     kk = CIPHERS[cipher]
@@ -914,7 +914,7 @@ chk("KLEE == REF and round-trips, lengths 16..79, 128, 129, 255, 256", rt, True)
 print()
 info("<<KLEE-XTS-from-XEX>> now reads \"the first `s`/8 bytes of the string\" and \"the "
      "`j`-th block processed after the tweak was set\"; both readings are the ones this "
-     "harness models, the second because rule AGR3 makes one kl.exec process KLLEN/b "
+     "harness models, the second because rule MGR3 makes one kl.exec process KLLEN/b "
      "blocks, each advancing the mask.")
 info("<<KLEE-tweakable>> is not exercised: <<KLEE-exec-encodings>> instantiates no "
      "tweakable block cipher, so there is no Machine, and no published vector, for it.")

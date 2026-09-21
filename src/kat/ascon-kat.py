@@ -14,7 +14,7 @@ The *specification text* (src/ace-ISA-machines.adoc) of
 
 and of what binds every Machine: "Definition of a Machine in KLEE" (the MDH is
 implicit at Pos. i of every PI and is not part of the Serialized Content; PI and
-Serialized Content are implicitly zero-padded to multiples of 128 bits), the AGR
+Serialized Content are implicitly zero-padded to multiples of 128 bits), the MGR
 rules of <<KLEE-Machines-other-rules>>, <<KLEE-truncation-vs-length>>,
 <<KLEE-state-constants-symmetric>>, <<KLEE-rules-system-keys>> and
 <<KLEE-derive-endpoints>>, with the Book 1 rules they lean on
@@ -424,7 +424,7 @@ class KleeCL:
 
     MODE = None             # Type 8 (Ascon), Mode 0-5 (<<KLEE-exec-encodings>>)
     GRAN = None             # Parameters: granularity, in bits
-    MULTI = ()              # States whose clause is a per-block operation (AGR3)
+    MULTI = ()              # States whose clause is a per-block operation (MGR3)
     USES_POLICY = False     # whether the Machine uses _MachinePolicy_ (<<KLEE-Machine-field>>)
     EXPORTABLE = {}         # <<KLEE-derive-endpoints>>: source index -> admitting States
     IMPORTABLE = {}         # destination index -> (admitting States, field size in bytes)
@@ -463,7 +463,7 @@ class KleeCL:
             # for _Success_ and _Failure_).  No Ascon Machine forbids it any more.
             return self._enter_ready()
         clause = self._setst_clauses().get((self.st, immed, form))
-        if clause is None:                      # <<KLEE-AGR-not-allowed-instructions>>
+        if clause is None:                      # <<KLEE-MGR-not-allowed-instructions>>
             return self.invalidate()
         return clause(Xs=Xs, INPUT=INPUT, KLLEN=KLLEN)
 
@@ -496,7 +496,7 @@ class KleeCL:
         clause = self._exec_clauses().get((self.st, form))
         if clause is None:
             # <<KLEE-SGR-no-exec-in-ready>> in _Ready_, <<KLEE-SGR-success-failure>> in
-            # _Success_/_Failure_, <<KLEE-AGR-not-allowed-instructions>> elsewhere.
+            # _Success_/_Failure_, <<KLEE-MGR-not-allowed-instructions>> elsewhere.
             self.invalidate()
             return zeroed
         res = clause(INPUT, KLLEN, done, halt_after)
@@ -507,7 +507,7 @@ class KleeCL:
         return res & ((1 << KLLEN) - 1) if has_out else out
 
     def _blocks(self, KLLEN, b, halt_after):
-        """AGR3: "for i = 0, b, 2b, ..., KLLEN - b, in that order", from 8*klstart when resumed."""
+        """MGR3: "for i = 0, b, 2b, ..., KLLEN - b, in that order", from 8*klstart when resumed."""
         for n, i in enumerate(range(8 * self.klstart, KLLEN, b)):
             if halt_after is not None and n == halt_after:
                 self.klstart, self.halted = i // 8, True    # a prefix-complete point
@@ -515,7 +515,7 @@ class KleeCL:
             yield i
 
     def _agr2(self, KLLEN, b):
-        """AGR2: KLLEN that is not a whole multiple of `b` -> no operation, Error State _Invalid_."""
+        """MGR2: KLLEN that is not a whole multiple of `b` -> no operation, Error State _Invalid_."""
         if KLLEN % b:
             self.invalidate()
             return True
@@ -590,7 +590,7 @@ class KleeAsconAEAD128(KleeCL):
     def _provision(self, key, policy, skid):
         self.policy = policy
         self.key = key & M128
-        if skid is not None:                     # AGR8: the key field holds the 64-bit SKID
+        if skid is not None:                     # MGR8: the key field holds the 64-bit SKID
             self.key_type, self.skid = 1, skid
 
     def _defaults(self):
@@ -668,9 +668,9 @@ class KleeAsconAEAD128(KleeCL):
 
     # ---- Ready -> Hash_Absorb: "a Form C kl.setst is expected, whose INPUT sets the nonce"
     def _c_set_nonce(self, INPUT, KLLEN, **_):
-        if KLLEN < 128:                          # INFO: a short nonce breaks the granularity (AGR2)
+        if KLLEN < 128:                          # INFO: a short nonce breaks the granularity (MGR2)
             return self.invalidate()
-        # "If KLLEN > 128, only the 128 least significant bits of INPUT are considered." (AGR5)
+        # "If KLLEN > 128, only the 128 least significant bits of INPUT are considered." (MGR5)
         N = self._nonce(sl(INPUT, 127, 0))
         self.s[3] = sl(N, 63, 0)                 # . state[3] <- INPUT[63:0]
         self.s[4] = sl(N, 127, 64)               # . state[4] <- INPUT[127:64]
@@ -741,7 +741,7 @@ class KleeAsconAEAD128(KleeCL):
         self.s[1] ^= sl(tmp, 127, 64)                    # . state[1] <- state[1] xor tmp[127:64]
         tmp = cat((self.s[1], 64), (self.s[0], 64))      # . tmp <- state[1] @ state[0]
         OUTPUT = cat((0, 128 - L), (sl(tmp, L - 1, 0), L))   # . OUTPUT <- zeros(128-L) @ tmp[L-1:0]
-        # "(Only the 128 lsbs of OUTPUT are written to.)"  AGR6 clears the rest (INFO).
+        # "(Only the 128 lsbs of OUTPUT are written to.)"  MGR6 clears the rest (INFO).
         self.st = 'Hash_Output'                          # . transitions to State _Hash_Output_
         return OUTPUT
 
@@ -865,7 +865,7 @@ class KleeAsconAEAD128NonceMask(KleeAsconAEAD128):
         return N ^ self.K2       # "the nonce N replaced throughout by N xor K2"
 
     def _system_keys(self, ent):
-        self.key, self.K2 = ent  # AGR9: a single SKID retrieves both keys
+        self.key, self.K2 = ent  # MGR9: a single SKID retrieves both keys
 
     def _layout(self):
         f = ([('skid', 64), ('K2', 0)] if self.key_type       # i: "128 or 64", ii: "128 or 0"
@@ -1078,7 +1078,7 @@ def provision(pi, sks=None):
     mode, policy, kt = sl(mdh, 3, 0), sl(mdh, 13, 12), sl(mdh, 30, 29)
     if mode in (3, 4, 5):                        # "The Provisioning Input contains only the MDH."
         return {3: KleeAsconHash256, 4: KleeAsconXOF128, 5: KleeAsconCXOF128}[mode]()
-    kw = 64 if kt else 128                       # Pos. ii: "128 or 64" (AGR8)
+    kw = 64 if kt else 128                       # Pos. ii: "128 or 64" (MGR8)
     k = sl(v, 128 + kw - 1, 128)
     skid, ent = (k, (sks or {}).get(k)) if kt else (None, None)
     if mode == 0:
@@ -1410,7 +1410,7 @@ def main():
     for count, ad, pt, ctt, desc in AEAD_KAT:
         ct, tag, cc = kl_encrypt(KAT_KEY, KAT_NONCE, h(ad), h(pt))
         chk(f"enc  Count={count:<4} {desc}", ((ct + tag).hex(), cc.st), (ctt, 'Success'))
-    print("  multi-block kl.exec, AGR3: KLLEN = 256 (AD) and 384 (plaintext)")
+    print("  multi-block kl.exec, MGR3: KLLEN = 256 (AD) and 384 (plaintext)")
     for count, ad, pt, ctt, _ in AEAD_KAT:
         ct, tag, _ = kl_encrypt(KAT_KEY, KAT_NONCE, h(ad), h(pt), ad_chunk=2, pt_chunk=3)
         chk(f"enc  Count={count:<4} KLLEN=256(AD)/384(PT)", (ct + tag).hex(), ctt)
@@ -1510,7 +1510,7 @@ def main():
         cc.setst('Dec_Last_Block', 'B', Xs=xs)
         chk(f"Xs={xs:<4}-> State _{want}_", cc.st, want)
     info("KLLEN < last_blk_len breaks \"the only restriction ... KLLEN >= last_blk_len\" of "
-         "<<KLEE-truncation-vs-length>>; read as a granularity violation (AGR2)")
+         "<<KLEE-truncation-vs-length>>; read as a granularity violation (MGR2)")
     cc = aead_to('Enc_Last_Block')
     o = cc.exec('A', b2v(LAST5), 32, out=0xffffffff)
     chk("KLLEN = 32 < last_blk_len = 40 -> Invalid, output window zeroed", (cc.st, o), ('Invalid', 0))
@@ -1547,22 +1547,22 @@ def main():
             ("Form C kl.exec in _Hash_Verify_", 'Hash_Verify', lambda c: c.exec('C', 0, 128))):
         cc = aead_to(start)
         act(cc)
-        chk(f"<<KLEE-AGR-not-allowed-instructions>>: {label} -> Invalid", cc.st, 'Invalid')
+        chk(f"<<KLEE-MGR-not-allowed-instructions>>: {label} -> Invalid", cc.st, 'Invalid')
     cc = aead_to('Success')
     o = cc.exec('C', 0, 128, out=M128)
     chk("<<KLEE-SGR-success-failure>>: kl.exec in _Success_ (not a XOF) -> Invalid, output "
         "zeroed", (cc.st, o), ('Invalid', 0))
 
-    print("  AGR2 (granularity) and AGR5 (single fixed-width value)")
+    print("  MGR2 (granularity) and MGR5 (single fixed-width value)")
     for label, start, form, KLLEN in (("Form B, KLLEN = 120, in _Hash_Absorb_", 'Hash_Absorb', 'B', 120),
                                       ("Form A, KLLEN = 136, in _Encrypt_", 'Encrypt', 'A', 136),
                                       ("Form A, KLLEN = 64, in _Decrypt_", 'Decrypt', 'A', 64)):
         cc = aead_to(start)
         o = cc.exec(form, (1 << KLLEN) - 1, KLLEN, out=(1 << KLLEN) - 1)
-        chk(f"AGR2: {label} -> no operation, Invalid, output window zeroed",
+        chk(f"MGR2: {label} -> no operation, Invalid, output window zeroed",
             (cc.st, o if form == 'A' else 0), ('Invalid', 0))
     info("a nonce shorter than 128 bits in the Form C kl.setst is read as a granularity "
-         "violation (AGR2); only KLLEN > 128 is addressed by the text")
+         "violation (MGR2); only KLLEN > 128 is addressed by the text")
     cc = KleeAsconAEAD128(K)
     cc.setst('Hash_Absorb', 'C', INPUT=NN, KLLEN=64)
     chk("Form C kl.setst with KLLEN = 64 -> Invalid", cc.st, 'Invalid')
@@ -1576,11 +1576,11 @@ def main():
     cc.setst('Enc_Last_Block', 'B', Xs=8)
     o2 = cc.exec('A', b2v(pt579[16:]), 8)
     t = cc.exec('C', 0, 128)
-    chk("AGR5: nonce given with KLLEN = 256 and junk above bit 127 == Count=579",
+    chk("MGR5: nonce given with KLLEN = 256 and junk above bit 127 == Count=579",
         v2b(o1, 16) + v2b(o2, 1) + v2b(t, 16), blob579)
 
-    print("  AGR6: bits of OUTPUT beyond those a State writes are cleared")
-    info("\"(Only the 128 lsbs of OUTPUT are written to.)\" is read with AGR6: OUTPUT[KLLEN-1:128] "
+    print("  MGR6: bits of OUTPUT beyond those a State writes are cleared")
+    info("\"(Only the 128 lsbs of OUTPUT are written to.)\" is read with MGR6: OUTPUT[KLLEN-1:128] "
          "is cleared, not left as it was")
     cc = aead_to('Enc_Last_Block')
     o = cc.exec('A', b2v(LAST5), 256, out=(1 << 256) - 1)
@@ -1689,10 +1689,10 @@ def main():
     cc.klstart = 3
     cc.exec('B', b2v(a), 256)
     chk("klstart = 3, not an interruption point, on an input operand -> Invalid", cc.st, 'Invalid')
-    info("<<KLEE-AGR-progress-discard>> (AGR10) does not apply: every Ascon kl.exec reads or writes a "
+    info("<<KLEE-MGR-progress-discard>> (MGR10) does not apply: every Ascon kl.exec reads or writes a "
          "vector operand, so no State hosts an operation of <<KLEE-IRR-long-running-no-data>>; "
-         "no Ascon field is \"(derived)\" (<<KLEE-AGR-recomputed-fields>>) or loaded piecewise "
-         "(<<KLEE-AGR-load-long-field>>)")
+         "no Ascon field is \"(derived)\" (<<KLEE-MGR-recomputed-fields>>) or loaded piecewise "
+         "(<<KLEE-MGR-load-long-field>>)")
     info("the \"In State _Ready_\" initialization is performed on every entry into _Ready_: at the "
          "end of provisioning, on each SGR8 transition, and after kl.derive writes `key`")
 
@@ -1826,7 +1826,7 @@ def main():
         (32, 64, SKID_M, cc.s[0]))
     cc, ct, tag = aead_run(cc, False, KAT_NONCE, ad579, pt579,
                            after=migrate(KleeAsconAEAD128NonceMask, SKS))
-    chk("SKID-keyed (AGR9: one SKID yields K1 and K2), migrated after every instruction",
+    chk("SKID-keyed (MGR9: one SKID yields K1 and K2), migrated after every instruction",
         ct + tag, ref_aead_encrypt(K1, Nm, ad579, pt579))
     note("the key field of <<KLEE-Ascon-AEAD128>>'s Serialized Content is \"128 or 64 (padded to "
          "128)\", that of <<KLEE-Ascon-AEAD128-N-masking>> (as of every other Machine) \"128 or 64\": "
@@ -1867,7 +1867,7 @@ def main():
         got = [kl_hash256(h(msg), squeeze=s)[0].hex()
                for s in ((64,), (128,), (192,), (64, 256), (128, 64, 64))]
         chk(f"Hash256  Count={count:<4} every split == KAT", got, [md] * 5)
-    print("  multi-word absorb (AGR3, KLLEN = 192)")
+    print("  multi-word absorb (MGR3, KLLEN = 192)")
     for count, msg, md in HASH_KAT:
         chk(f"Hash256  Count={count:<4} KLLEN=192 absorb",
             kl_hash256(h(msg), absorb_chunk=3)[0].hex(), md)
@@ -1912,7 +1912,7 @@ def main():
         if not fin:
             cc.setst('Hash_Absorb', 'A')
         cc.exec(form, 0, KLLEN)
-        chk(f"AGR1/AGR2: {label} -> Invalid", cc.st, 'Invalid')
+        chk(f"MGR1/MGR2: {label} -> Invalid", cc.st, 'Invalid')
     cc = sponge_at_finalize(KleeAsconHash256, b'')
     kl_restricth(cc, 0x0003)
     chk("kl.restricth rewriting the countdown in _MachineUse_ -> Invalid "
@@ -1932,7 +1932,7 @@ def main():
     chk("State _Ready_ holds SP 800-232 Table 12", (cc.st, tuple(cc.s)),
         ('Ready', TABLE12['Ascon-XOF128']))
     info("the multi-word squeeze of Ascon-Hash256 (\"executed KLLEN/64 times\") is taken to be "
-         "inherited, with AGR3 extending its list of output positions beyond OUTPUT[255:192]")
+         "inherited, with MGR3 extending its list of output positions beyond OUTPUT[255:192]")
     for count, msg, md in XOF_KAT:
         got = [kl_xof(KleeAsconXOF128, h(msg), 64, squeeze=s)[0].hex()
                for s in ((64,), (256,), (512,), (128, 64, 192, 128))]
