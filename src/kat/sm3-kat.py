@@ -32,7 +32,7 @@ kat/sha2-kat.py, transcribed from the current text, with the GB/T 32905-2016 cor
     _Hash_Output_ each Form C kl.exec runs the output loop of
     <<KLEE-hash-functions>> reading state[...]; at block_base = t the bits of OUTPUT
     beyond output_base are cleared and the CL goes to _Success_.
-  * Error handling: <<KLEE-AGR-not-allowed-instructions>>,
+  * Error handling: <<KLEE-MGR-not-allowed-instructions>>,
     <<KLEE-SGR-no-exec-in-ready>>, <<KLEE-SGR-success-failure>>,
     <<KLEE-SGR-usage-cr-error-state>>, and the process_VLI rules (same-State
     kl.setst; cumul_len >= max_len; termination at max_len).
@@ -359,7 +359,7 @@ class KleeSm3CL:
             return 'retired', v2b(self._hash_output(KLLEN, resuming, prior), nbytes)
         # _Ready_ (<<KLEE-SGR-no-exec-in-ready>>), _Success_ of a hash function
         # (<<KLEE-SGR-success-failure>>), or a Form the State does not expect
-        # (<<KLEE-AGR-not-allowed-instructions>>)
+        # (<<KLEE-MGR-not-allowed-instructions>>)
         self._invalid()
         return 'invalid', (bytes(nbytes) if form == 'C' else None)
 
@@ -561,7 +561,7 @@ cl = fresh()
 cl.kl_setst(KL_STATE_HASH_ABSORB)
 _, out = cl.kl_exec('C', nbytes=16)
 check('Form C kl.exec in _Hash_Absorb_ -> _Invalid_, output window zeroed '
-      '(<<KLEE-AGR-not-allowed-instructions>>)',
+      '(<<KLEE-MGR-not-allowed-instructions>>)',
       cl.mdh_state == KL_STATE_INVALID and out == bytes(16))
 
 cl = fresh()
@@ -570,7 +570,7 @@ cl.kl_exec('B', PAD_ABC)
 cl.kl_setst(KL_STATE_HASH_OUTPUT)
 cl.kl_exec('B', bytes(64))
 check('Form B kl.exec in _Hash_Output_ -> _Invalid_ '
-      '(<<KLEE-AGR-not-allowed-instructions>>)', cl.mdh_state == KL_STATE_INVALID)
+      '(<<KLEE-MGR-not-allowed-instructions>>)', cl.mdh_state == KL_STATE_INVALID)
 
 cl = fresh()
 cl.kl_setst(KL_STATE_HASH_ABSORB)

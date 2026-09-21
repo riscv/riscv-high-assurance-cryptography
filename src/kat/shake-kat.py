@@ -22,7 +22,7 @@ What is validated (spec anchors, by heading):
          entry, Form B transfers, the interruption point klstart <- input_base/8,
          resumption input_base <- 8 * klstart, the rejection of a same-State
          transition, and the constraint state_offset + b <= n.
-  [[KLEE-Machine-rules]] (AGR1, AGR2), [[KLEE-truncation-vs-length]],
+  [[KLEE-Machine-rules]] (MGR1, MGR2), [[KLEE-truncation-vs-length]],
   [[KLEE-state-constants-symmetric]], [[KLEE-exec-encodings]] (Type 6, Modes
   0-5), [[KLEE-derive-endpoints]] (`kl.exec` endpoints, index 0).
   src/ace-ISA-unpriv.adoc (Book 1)
@@ -494,7 +494,7 @@ class KleeSha3CL:
                 return 'ok'
             return self._invalidate()                # e.g. _Ready_ -> _Hash_Output_
         # kl_state_hash_last_block and any other Machine State: SHA-3 has no
-        # _Hash_Absorb_Last_Block_ (AGR1).
+        # _Hash_Absorb_Last_Block_ (MGR1).
         return self._invalidate()
 
     # ---------------------------------------------------------------- kl.exec
@@ -529,15 +529,15 @@ class KleeSha3CL:
             return self._retire('noop')
         if self.st == KL_STATE_HASH_ABSORB:
             if form not in ('B', 'D') or inp is None or out is not None:
-                return self._invalid_exec(out)       # AGR1: only Form B expected
+                return self._invalid_exec(out)       # MGR1: only Form B expected
             if sew is not None:
                 assert (8 * len(inp)) % sew == 0     # KLLEN = VL * SEW
                 if sew < GRANULARITY:
-                    return self._invalid_exec(out)   # AGR2
+                    return self._invalid_exec(out)   # MGR2
             return self._absorb(inp, interrupt_at, end_halt, literal_units)
         if self.st == KL_STATE_HASH_OUTPUT:
             if form not in ('C', 'D') or inp is not None or out is None:
-                return self._invalid_exec(out)       # AGR1: only Form C expected
+                return self._invalid_exec(out)       # MGR1: only Form C expected
             return self._squeeze(out, interrupt_at, end_halt)
         # _Ready_ (SGR2) and _Success_ (SGR5: a SHA3-n does not produce
         # arbitrarily long output; SHAKE never reaches _Success_).
@@ -878,10 +878,10 @@ def main():
                                      MSG_A3[72:172], MSG_A3[172:]])
     check('KLEE chunked SHA3-512 a3_200 (12+60+100+28 B transfers)',
           got, bytes.fromhex(VECTORS[('SHA3-512', 'a3_200')]))
-    # AGR2: a vector input whose element width is below the granularity.
+    # MGR2: a vector input whose element width is below the granularity.
     cl = absorbing_cl('SHA3-256')
     st = cl.exec_('B', inp=MSG_A3[:16], sew=16)
-    check_true('SHA3-256 Form B with SEW = 16 < granularity 32 -> _Invalid_ (AGR2)',
+    check_true('SHA3-256 Form B with SEW = 16 < granularity 32 -> _Invalid_ (MGR2)',
                st == 'invalid' and cl.st == KL_STATE_INVALID, (st, cl.st))
     cl = absorbing_cl('SHA3-256')
     check_true('SHA3-256 Form B with SEW = 32 and SEW = 64 accepted',
@@ -1207,14 +1207,14 @@ def main():
                   '(no such State in SHA-3)',
                   cl.setst(KL_STATE_HASH_LAST_BLOCK, form='B', aux=8) == 'invalid'))
     cl = absorbing_cl('SHA3-256', MSG_ABC)
-    cases.append(('Form C kl.exec in _Hash_Absorb_ -> _Invalid_ (AGR1)',
+    cases.append(('Form C kl.exec in _Hash_Absorb_ -> _Invalid_ (MGR1)',
                   cl.exec_('C', out=bytearray(32)) == 'invalid'))
     cl = absorbing_cl('SHA3-256', MSG_ABC)
-    cases.append(('Form A kl.exec in _Hash_Absorb_ -> _Invalid_ (AGR1)',
+    cases.append(('Form A kl.exec in _Hash_Absorb_ -> _Invalid_ (MGR1)',
                   cl.exec_('A', inp=MSG_ABC + bytes(1),
                            out=bytearray(4)) == 'invalid'))
     cl = squeezing_cl('SHAKE256', MSG_ABC)
-    cases.append(('Form B kl.exec in _Hash_Output_ -> _Invalid_ (AGR1)',
+    cases.append(('Form B kl.exec in _Hash_Output_ -> _Invalid_ (MGR1)',
                   cl.exec_('B', inp=MSG_ABC) == 'invalid'))
     cl = squeezing_cl('SHAKE256', MSG_ABC)
     cases.append(('_Hash_Output_ -> _Hash_Absorb_ -> _Invalid_',
@@ -1248,7 +1248,7 @@ def main():
         check('_%s_ -> _Ready_ restarts SHAKE128 (abc)' % mid_state, bytes(out),
               bytes.fromhex(VECTORS[('SHAKE128', 'abc')]))
     info('a same-State kl.setst in _Hash_Output_ is permitted by SGR4 and counts as '
-         'a transition for AGR10, but',
+         'a transition for MGR10, but',
          '[[KLEE-SHA-3]] does not say whether the padding step "upon transitioning to '
          '_Hash_Output_" is then',
          'repeated; the harness does not exercise it.  The Form of the kl.setst to '

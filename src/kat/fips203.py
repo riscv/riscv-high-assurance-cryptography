@@ -12,7 +12,7 @@ Algorithms 16-18 are also available as lists of steps over a work record
 (`*_internal_steps`).  The one-shot functions are built from those lists, so the
 official vectors that anchor the one-shot functions anchor the steps as well; the
 KLEE harness halts between steps to model an interrupted long-running operation
-(Rule AGR10 of the KLEE specification).
+(Rule MGR10 of the KLEE specification).
 
 The input checks are separate predicates because <<KLEE-PQC-ML-KEM>> performs
 them at a point of its own choosing (when `encapsk`, `decapsk` or `ciphertext`

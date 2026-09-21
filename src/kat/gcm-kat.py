@@ -24,9 +24,9 @@ Also checked: the counter-wrap rule (Invalid exactly when `ctr` reaches
 `(start_ctr - 1) mod 2^32`, exercised by seeding the counter field, and in the
 middle of a multi-block kl.exec, whose completed prefix stays written); the
 Serialized Content layout and export/import, including the _Set_Aux_Value_
-overlay; the derived field `auth_key` (AGR4) on import and after a kl.derive
+overlay; the derived field `auth_key` (MGR4) on import and after a kl.derive
 into `key` (<<KLEE-derive-endpoints>>); the kl.setst/kl.exec rules of the
-Machines and of the general rules (AGR1-AGR6, SGR2-SGR16, IRR6/IRR7); and GCM
+Machines and of the general rules (MGR1-MGR6, SGR2-SGR16, IRR6/IRR7); and GCM
 with Set IV: key and J0 in the PI, no _Set_Aux_Value_, no block budget (removed
 from the specification), and a transition back to _Ready_ that is no longer
 prohibited.
@@ -245,7 +245,7 @@ def process_VLI(M, INPUT, KLLEN, *, max_len, block, b, state, n, input_base,
 
     The parameters are references: `max_len`, `block`, `state`, `input_base`,
     `block_base` and `cumul_len` name attributes of the caller Machine M.
-    `granularity` is enforced by the caller (Rule AGR2).  Returns 'invalid',
+    `granularity` is enforced by the caller (Rule MGR2).  Returns 'invalid',
     'interrupted' (klstart set), 'terminated' (after finalize) or 'done'.
     """
     g = lambda r: getattr(M, r)
@@ -299,7 +299,7 @@ class GcmCL:
     retire and is re-issued with resume=True).
 
     Negative-control switches: `le_counter` (counter read without bswap),
-    `iv_into_J0` (the IV accumulated in J0), `stale_auth_key` (no AGR4
+    `iv_into_J0` (the IV accumulated in J0), `stale_auth_key` (no MGR4
     re-derivation after `key` changes).
     """
 
@@ -397,7 +397,7 @@ class GcmCL:
         cl.last_blk_len = sl(content, kbits + 303, kbits + 288)
         cl.state = state
         if not cl.stale_auth_key:
-            cl._rederive()                    # AGR4: recomputed when an import completes
+            cl._rederive()                    # MGR4: recomputed when an import completes
         return cl
 
     # ---------------- derived field, Ready, errors ----------------
@@ -501,11 +501,11 @@ class GcmCL:
             return
         entry = self._setst_table().get((st, immed7))
         if entry is None:
-            self._invalid(f"AGR1: {STATE_NAME.get(st)} -> {STATE_NAME.get(immed7, immed7)}")
+            self._invalid(f"MGR1: {STATE_NAME.get(st)} -> {STATE_NAME.get(immed7, immed7)}")
             return
         want, fn = entry
         if form != want:
-            self._invalid(f"AGR1: Form {form} where Form {want} is required")
+            self._invalid(f"MGR1: Form {form} where Form {want} is required")
             return
         fn(immed7, aux)
 
@@ -531,7 +531,7 @@ class GcmCL:
         # "_Hash_Absorb_ -> _Encrypt_, if encryption is allowed" (and likewise decryption)
         bit = 1 if immed7 == KL_STATE_ENCRYPT else 2
         if not self.policy & bit:
-            self._invalid("AGR1: _MachinePolicy_ does not allow this path")
+            self._invalid("MGR1: _MachinePolicy_ does not allow this path")
             return
         self.state = immed7
 
@@ -551,7 +551,7 @@ class GcmCL:
         self.state = immed7
 
     def _hash_verify(self, immed7, INPUT):
-        # Form C: the value to compare against; a single 128-bit value (AGR5)
+        # Form C: the value to compare against; a single 128-bit value (MGR5)
         self.state = KL_STATE_SUCCESS if INPUT & MASK128 == self.tag else KL_STATE_FAILURE
 
     # ---------------- _Set_Aux_Value_: process_VLI ----------------
@@ -582,9 +582,9 @@ class GcmCL:
 
     def _exec_set_aux_value(self, INPUT, KLLEN, resume, interrupt_after):
         # granularity = b: every transfer but the last one (the one that reaches len)
-        # is a whole multiple of b; otherwise AGR2.
+        # is a whole multiple of b; otherwise MGR2.
         if KLLEN % B and self.cumul_len + KLLEN < self.len:
-            return self._invalid("AGR2: short transfer that is not the last")
+            return self._invalid("MGR2: short transfer that is not the last")
         if resume and self.klstart % (B // 8):
             return self._invalid("klstart is not an interruption point")
         acc = self._acc()
@@ -629,10 +629,10 @@ class GcmCL:
             return self._invalid("SGR5: kl.exec in _Success_/_Failure_")
         entry = self._exec_table().get(st)
         if entry is None:
-            return self._invalid(f"AGR1: no kl.exec in {STATE_NAME.get(st)}")
+            return self._invalid(f"MGR1: no kl.exec in {STATE_NAME.get(st)}")
         want, fn = entry
         if form != want:
-            return self._invalid(f"AGR1: Form {form} in {STATE_NAME.get(st)}")
+            return self._invalid(f"MGR1: Form {form} in {STATE_NAME.get(st)}")
         return fn(INPUT, KLLEN, resume, interrupt_after)
 
     def _first_block(self, resume):
@@ -644,7 +644,7 @@ class GcmCL:
 
     def _exec_hash_absorb(self, INPUT, KLLEN, resume, interrupt_after):
         if KLLEN % B:
-            return self._invalid("AGR2: KLLEN not a multiple of b")
+            return self._invalid("MGR2: KLLEN not a multiple of b")
         first = self._first_block(resume)
         if first is None:
             return self._invalid("klstart is not an interruption point")
@@ -657,9 +657,9 @@ class GcmCL:
         return None
 
     def _exec_crypt(self, INPUT, KLLEN, resume, interrupt_after):
-        """_Encrypt_ and _Decrypt_, applied to each b-bit block (AGR3)."""
+        """_Encrypt_ and _Decrypt_, applied to each b-bit block (MGR3)."""
         if KLLEN % B:
-            return self._invalid("AGR2: KLLEN not a multiple of b")
+            return self._invalid("MGR2: KLLEN not a multiple of b")
         first = self._first_block(resume)
         if first is None:
             return self._invalid("klstart is not an interruption point")
@@ -692,7 +692,7 @@ class GcmCL:
             return 0                  # "terminate the instruction": no operation
         if KLLEN < lbl:
             # <<KLEE-truncation-vs-length>>: the only restriction is KLLEN >= last_blk_len
-            return self._invalid("AGR2: KLLEN < last_blk_len")
+            return self._invalid("MGR2: KLLEN < last_blk_len")
         ctr = self._next_ctr()
         if ctr is None:
             return self._invalid("counter reached (start_ctr - 1) mod 2^32")
@@ -709,7 +709,7 @@ class GcmCL:
             self._set_ctr(ctr)
             OUTPUT = tmp ^ cat((0, pad), (sl(self._enc_blk(self.J0), lbl - 1, 0), lbl))
         self.last_blk_len = 0
-        return OUTPUT & mask(KLLEN)   # AGR3: one block; AGR6: the rest of OUTPUT is clear
+        return OUTPUT & mask(KLLEN)   # MGR3: one block; MGR6: the rest of OUTPUT is clear
 
     def _exec_emit_tag(self, INPUT, KLLEN, resume, interrupt_after):
         """Form C: writes the tag to OUTPUT; the state transitions to _Success_."""
@@ -735,7 +735,7 @@ class GcmCL:
         eff = min(length, dest)       # Transfer Size Rules
         self.key = src[:eff] + bytes(dest - eff)
         if not self.stale_auth_key:
-            self._rederive()          # AGR4: "again whenever a field it depends upon is modified"
+            self._rederive()          # MGR4: "again whenever a field it depends upon is modified"
 
 
 # ---------------------------------------------------------------------
@@ -966,7 +966,7 @@ for label, k, iv, a, p, c, t in VECTORS:
           C == bytes.fromhex(c) and T == bytes.fromhex(t) and cl.state == KL_STATE_SUCCESS)
 cl = GcmCL.provisioned(None, skid=0x0123456789ABCDEF)
 C, T, _ = kl_encrypt(None, bytes.fromhex(IV12), bytes.fromhex(AAD), bytes.fromhex(P60), cl=cl)
-check("KLEE encrypt tc4 with the key given by a SKID (KeyType 1, AGR8)",
+check("KLEE encrypt tc4 with the key given by a SKID (KeyType 1, MGR8)",
       (C, T) == ref_gcm(bytes.fromhex(K128), bytes.fromhex(IV12),
                         bytes.fromhex(AAD), bytes.fromhex(P60)))
 
@@ -1014,7 +1014,7 @@ check("process_VLI: kl.setst to _Set_Aux_Value_ while in it -> _Invalid_",
 cl = GcmCL.provisioned(K)
 cl.setst(KL_STATE_SET_AUX_VALUE, "B", 480)
 cl.exec("B", b2v(bytes(12)), 96)
-check("AGR2: a 96-bit transfer that does not complete a 480-bit IV -> _Invalid_",
+check("MGR2: a 96-bit transfer that does not complete a 480-bit IV -> _Invalid_",
       cl.state == KL_STATE_INVALID)
 cl = GcmCL.provisioned(K)
 cl.setst(KL_STATE_SET_AUX_VALUE, "B", 480)
@@ -1025,7 +1025,7 @@ check("resuming with klstart = 5 (not an interruption point) -> _Invalid_",
 cl = GcmCL.provisioned(K)
 cl.setst(KL_STATE_SET_AUX_VALUE, "B", 96)
 cl.exec("A", b2v(IV), 96)
-check("AGR1: a Form A kl.exec in _Set_Aux_Value_ -> _Invalid_", cl.state == KL_STATE_INVALID)
+check("MGR1: a Form A kl.exec in _Set_Aux_Value_ -> _Invalid_", cl.state == KL_STATE_INVALID)
 # Leaving _Set_Aux_Value_ by kl.setst: process_VLI performs finalize() first.
 IV20 = bytes(range(20))
 cl = GcmCL.provisioned(K)
@@ -1113,7 +1113,7 @@ run_crypt(cl, C4, 3, KL_STATE_DEC_LAST_BLOCK)
 cl.setst(KL_STATE_DEC_TAG_FINALIZE, "C", len_block(8 * len(C4), 8 * len(A)))
 cl.setst(KL_STATE_HASH_VERIFY, "C", b2v(T4) | (0xABCD << 128))
 check("_Hash_Verify_ compares only the 128 least significant bits of a longer value "
-      "(AGR5)", cl.state == KL_STATE_SUCCESS)
+      "(MGR5)", cl.state == KL_STATE_SUCCESS)
 
 # ---- 6. last blocks -----------------------------------------------------------
 section("KLEE _Enc_Last_Block_ / _Dec_Last_Block_")
@@ -1137,7 +1137,7 @@ for nbits in (8, 16, 56, 96, 120):
     check(f"round trip with last_blk_len = {nbits}",
           pt_back == b2v(PT_FULL) and pt_tail == pt_val and dd.state == KL_STATE_SUCCESS)
     check(f"last_blk_len = {nbits}: no OUTPUT bit above bit {nbits - 1} "
-          f"(no keystream leak, AGR6)", ct_tail >> nbits == 0)
+          f"(no keystream leak, MGR6)", ct_tail >> nbits == 0)
 for immed, name in ((KL_STATE_ENC_LAST_BLOCK, "Enc"), (KL_STATE_DEC_LAST_BLOCK, "Dec")):
     for bad_len in (0, 128, 200, 1, 7, 100, 127):
         cl = prologue(GcmCL.provisioned(K))
@@ -1160,7 +1160,7 @@ cl.setst(KL_STATE_ENCRYPT)
 cl.setst(KL_STATE_ENC_LAST_BLOCK, "B", 96)
 wide = cl.exec("A", b2v(P[:12] + bytes(range(1, 21))), 256)
 check("_Enc_Last_Block_ with KLLEN = 256 processes one block, ignores the excess "
-      "input and clears OUTPUT above bit 95 (AGR3, AGR6)", wide == first)
+      "input and clears OUTPUT above bit 95 (MGR3, MGR6)", wide == first)
 cl = prologue(GcmCL.provisioned(K))
 cl.setst(KL_STATE_ENCRYPT)
 cl.setst(KL_STATE_ENC_LAST_BLOCK, "B", 104)
@@ -1389,7 +1389,7 @@ check("Set-IV: the counter rule still bounds the blocks (start_ctr = 1: ctr = 2^
       states == [KL_STATE_ENCRYPT, KL_STATE_INVALID])
 
 # ---- 9. general rules ---------------------------------------------------------
-section("general rules: AGR1, AGR2, SGR2, SGR4-SGR8, SGR15, SGR16, _MachinePolicy_")
+section("general rules: MGR1, MGR2, SGR2, SGR4-SGR8, SGR15, SGR16, _MachinePolicy_")
 cl = GcmCL.provisioned(K)
 check("SGR2: kl.exec in _Ready_ -> _Invalid_ and zero output",
       cl.exec("A", b2v(P[:16]), 128) == 0 and cl.state == KL_STATE_INVALID)
@@ -1430,30 +1430,30 @@ for form, st, name in (("A", KL_STATE_HASH_ABSORB, "Form A kl.exec in _Hash_Abso
     if st != KL_STATE_HASH_ABSORB:
         cl.setst(st)
     cl.exec(form, b2v(P[:16]), 128)
-    check(f"AGR1: {name} -> _Invalid_", cl.state == KL_STATE_INVALID)
+    check(f"MGR1: {name} -> _Invalid_", cl.state == KL_STATE_INVALID)
 cl = prologue(GcmCL.provisioned(K))
 cl.setst(KL_STATE_ENCRYPT, "B", 5)
-check("AGR1: a Form B kl.setst to _Encrypt_ -> _Invalid_", cl.state == KL_STATE_INVALID)
+check("MGR1: a Form B kl.setst to _Encrypt_ -> _Invalid_", cl.state == KL_STATE_INVALID)
 cl = prologue(GcmCL.provisioned(K))
 cl.setst(KL_STATE_ENCRYPT)
 cl.setst(KL_STATE_ENC_TAG_FINALIZE, "B", 5)
-check("AGR1: a Form B kl.setst to _Enc_Tag_Finalize_ -> _Invalid_", cl.state == KL_STATE_INVALID)
+check("MGR1: a Form B kl.setst to _Enc_Tag_Finalize_ -> _Invalid_", cl.state == KL_STATE_INVALID)
 cl = prologue(GcmCL.provisioned(K))
 cl.setst(KL_STATE_ENCRYPT)
 cl.setst(KL_STATE_HASH_VERIFY, "C", 0)
-check("AGR1: _Encrypt_ -> _Hash_Verify_ is not a listed transition -> _Invalid_",
+check("MGR1: _Encrypt_ -> _Hash_Verify_ is not a listed transition -> _Invalid_",
       cl.state == KL_STATE_INVALID)
 cl = prologue(GcmCL.provisioned(K))
 cl.setst(KL_STATE_DECRYPT)
 cl.setst(KL_STATE_ENC_LAST_BLOCK, "B", 8)
-check("AGR1: _Decrypt_ -> _Enc_Last_Block_ -> _Invalid_", cl.state == KL_STATE_INVALID)
+check("MGR1: _Decrypt_ -> _Enc_Last_Block_ -> _Invalid_", cl.state == KL_STATE_INVALID)
 for st, name in ((KL_STATE_HASH_ABSORB, "_Hash_Absorb_"), (KL_STATE_ENCRYPT, "_Encrypt_"),
                  (KL_STATE_DECRYPT, "_Decrypt_")):
     cl = prologue(GcmCL.provisioned(K))
     if st != KL_STATE_HASH_ABSORB:
         cl.setst(st)
     out = cl.exec("B" if st == KL_STATE_HASH_ABSORB else "A", b2v(P[:15]), 120)
-    check(f"AGR2: KLLEN = 120 in {name} -> no operation, zero output, _Invalid_",
+    check(f"MGR2: KLLEN = 120 in {name} -> no operation, zero output, _Invalid_",
           cl.state == KL_STATE_INVALID and not out)
 cl = prologue(GcmCL.provisioned(K, policy=0b10))
 cl.setst(KL_STATE_ENCRYPT)
@@ -1479,7 +1479,7 @@ check("an Error State immediate is accepted; in an Error State kl.exec and a "
       st1 == st2 == KL_STATE_PRIV_VIOLATION and out == 0 and cl.state == KL_STATE_INVALID)
 
 # ---- 10. Serialized Content, export and import ------------------------------
-section("Serialized Content: layout, export/import, AGR4")
+section("Serialized Content: layout, export/import, MGR4")
 for k_, kt, blocks in ((128, 0, 4), (192, 0, 4), (256, 0, 5), (128, 1, 3)):
     cl = GcmCL.provisioned(bytes(k_ // 8) if kt == 0 else None,
                            skid=0x0123456789ABCDEF if kt else None)
@@ -1500,7 +1500,7 @@ ct = v2b(cl2.exec("A", b2v(P[16:48]), 256), 32)
 cl2.setst(KL_STATE_ENC_LAST_BLOCK, "B", 96)
 ct += v2b(cl2.exec("A", b2v(P[48:]), 96), 12)
 cl2.setst(KL_STATE_ENC_TAG_FINALIZE, "C", len_block(8 * len(P), 8 * len(A)))
-check("export in _Encrypt_ and import into a fresh CL: auth_key recomputed (AGR4), "
+check("export in _Encrypt_ and import into a fresh CL: auth_key recomputed (MGR4), "
       "the message completes as tc4",
       ct == rc[16:] and v2b(cl2.exec("C", KLLEN=128), 16) == rt)
 cl = GcmCL.provisioned(K)
@@ -1546,7 +1546,7 @@ for k_, length in ((128, 16), (128, 32), (256, 32)):
                         f"length = {length}]", good)
         else:
             check(f"k = {k_}: kl.derive of {length} bytes into `key` in _Ready_, "
-                  f"auth_key re-derived (AGR4), then a message matches REF", good)
+                  f"auth_key re-derived (MGR4), then a message matches REF", good)
 cl = prologue(GcmCL.provisioned(K))
 cl.derive_into_key(SRC32, 16)
 check("kl.derive into `key` of a CL not in _Ready_ -> destination _Invalid_",
@@ -1607,7 +1607,7 @@ print("INFO 1: interruption.  The model halts _Set_Aux_Value_ only at step 4.i o
 print("  process_VLI and the block-iterated states between blocks (IRR7); klstart must")
 print("  be a multiple of 16 bytes on resumption.  A short transfer is taken to be the")
 print("  last one when it reaches len (cumul_len + KLLEN >= len); any other short")
-print("  transfer violates the granularity b (AGR2).  AGR10 does not apply: no GCM")
+print("  transfer violates the granularity b (MGR2).  MGR10 does not apply: no GCM")
 print("  State performs an IRR4 instruction (all carry a vector or KLIOBUF operand).")
 print("INFO 2: GCM with Set IV.  The budget field and rule are gone, and the")
 print("  prohibition of a transition back to _Ready_ is commented out, so SGR8 applies.")
@@ -1622,7 +1622,7 @@ print("  model leaves the other 32 bits as the J0_padding named in the Internal 
 print("  paragraph, so the Content length does not depend on _State_")
 print("  (<<KLEE-length-rule>>).  A kl.setst naming _Hash_Absorb_ in _Set_Aux_Value_ is")
 print("  taken to run finalize() first (process_VLI), on the IV absorbed so far.  A")
-print("  transition that _MachinePolicy_ forbids is taken to be not allowed (AGR1).")
+print("  transition that _MachinePolicy_ forbids is taken to be not allowed (MGR1).")
 print()
 print("OBSERVATIONs (editorial; no computed value changes, hence not failures):")
 print("  1. The _Set_Aux_Value_ overlay rows are numbered iii.a-iii.d, but Pos. iii is")

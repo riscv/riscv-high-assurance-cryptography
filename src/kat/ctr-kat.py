@@ -28,7 +28,7 @@ KLEE      A model of a Cryptographic Locker holding a CTR/XCTR CC (class
           sets `IV` (keeping its n least significant bits), the Form B
           `kl.setst #kl_state_set_aux_value, Xs` that sets `ctr <- lsb_j(Xs)` from a
           64-bit Xs, and the (multi-block) Form C kl.exec.  The Machine text gives
-          only the per-block operation.  The block loop is rule AGR3 of
+          only the per-block operation.  The block loop is rule MGR3 of
           <<KLEE-Machines-other-rules>>: for i = 0, b, ..., KLLEN - b, in that order,
           the operation produces OUTPUT[i+b-1:i].  So the keystream block for the
           counter value ctr + q is the q-th block of the output byte string.
@@ -49,9 +49,9 @@ What changed in the specification, and how this file follows it
   on the standard vectors; the old file could only compare them with REF.
 * The allowed transitions are now _Ready_ -> _Operate_ and _Operate_ -> _Ready_
   (formerly "any"), so any other target State invalidates the CL.
-* The multi-block loop is rule AGR3 and the granularity rule is AGR2.  A kl.exec in
+* The multi-block loop is rule MGR3 and the granularity rule is MGR2.  A kl.exec in
   _Ready_ falls under Rules <<KLEE-SGR-no-exec-in-ready>> and
-  <<KLEE-AGR-not-allowed-instructions>>.
+  <<KLEE-MGR-not-allowed-instructions>>.
 * The Serialized Content no longer lists the MDH: `key` (or SKID) is at position i,
   `IV` at ii and `ctr` at iii, zero-padded to a multiple of 128 bits.
 * <<KLEE-derive-endpoints>> makes `key` (1) the only importable field.
@@ -303,14 +303,14 @@ class KeystreamCL:
         if KLLEN % B:
             if iobuf:                    # KLIOBUF used only as output: no operation
                 return out, klstart
-            self.invalidate()            # AGR2
+            self.invalidate()            # MGR2
             return out & ~window, 0
         if self.state != ST_OPERATE:     # e.g. kl.exec in _Ready_
             self.invalidate()
             return out & ~window, 0
         cipher, k, mode, n, j = self.params()
         key = v2b(self.key, k // 8)
-        positions = list(range(lo, KLLEN, B))      # AGR3: i = 0, b, ..., in that order
+        positions = list(range(lo, KLLEN, B))      # MGR3: i = 0, b, ..., in that order
         if self.order != 'spec':
             positions.reverse()                    # NEG: most significant block first
         for q, i in enumerate(positions):
@@ -478,7 +478,7 @@ for name, k, c in SP38A_F5:
     key = bytes.fromhex(k)
     chk(name + " REF", ref_ctr(key, b'', 128, icb, SP38A_PT).hex(), c)
 
-print("\n== KLEE: F.5 through a CL, one Form C kl.exec with KLLEN = 4b (AGR3)")
+print("\n== KLEE: F.5 through a CL, one Form C kl.exec with KLLEN = 4b (MGR3)")
 print("   Form C kl.setst #kl_state_operate with INPUT = T1 (KLLEN = 128 > n: the")
 print("   n least significant bits, the first n/8 bytes, become IV); Form B")
 print("   #kl_state_set_aux_value with Xs = the trailing j/8 bytes read big-endian")
@@ -561,7 +561,7 @@ info("Form B carries 64 bits, so for j > 64 (XCTR, or CTR with n < 64) lsb_j(Xs)
 print("\n== XCTR [reference-implementation anchor: google/hctr2]")
 print("   HCTR2 numbers the counter from 1, while a KLEE CC leaves State _Ready_")
 print("   with ctr = 0, so the Form B operation supplies the initial counter 1;")
-print("   the keystream comes from one multi-block Form C kl.exec (AGR3)")
+print("   the keystream comes from one multi-block Form C kl.exec (MGR3)")
 for name, k, iv, p, c in HCTR2_XCTR:
     key, nonce = bytes.fromhex(k), bytes.fromhex(iv)
     pt, ct = bytes.fromhex(p), bytes.fromhex(c)
@@ -642,7 +642,7 @@ info("'a Form C kl.setst instruction must be issued' is read as 'is expected', s
 cl = ctr_cl('AES-128', b2v(key), 64, 64)
 enter_operate(cl, T1, f5_ctr0(64))
 res, _ = cl.exec(136, out=(1 << 136) - 1)    # vector KLLEN = 17 bytes
-chk("AGR2 (vector): KLLEN = 136 -> no operation, _Invalid_, window zeroed",
+chk("MGR2 (vector): KLLEN = 136 -> no operation, _Invalid_, window zeroed",
     (cl.state, res), (ST_INVALID, 0))
 cl = ctr_cl('AES-128', b2v(key), 64, 64)
 enter_operate(cl, T1, f5_ctr0(64))
@@ -651,7 +651,7 @@ res, _ = cl.exec(136, out=prior, iobuf=True)  # KLIOBUF with kliobuftop = 17
 chk("KLIOBUF output only, kliobuftop = 17 -> no operation, no state change",
     (cl.state, cl.ctr, res), (ST_OPERATE, f5_ctr0(64), prior))
 info("an output-only KLIOBUF operand of invalid length performs no operation "
-     "(<<KLEE-usage-input-output>>), while AGR2 invalidates the CL for the same KLLEN "
+     "(<<KLEE-usage-input-output>>), while MGR2 invalidates the CL for the same KLLEN "
      "in a vector Form C; the specific rule is applied to the KLIOBUF case, per "
      "'except when explicitly stated otherwise'.")
 cl = ctr_cl('AES-128', b2v(key), 64, 64)

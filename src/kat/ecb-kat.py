@@ -16,7 +16,7 @@ KLEE   The ECB Machine as the specification now states it, driven through a smal
 
            OUTPUT <- enc_blk(key, INPUT)      resp.      OUTPUT <- dec_blk(key, INPUT)
 
-       The block loop is no longer written in the ECB text.  It is now rule AGR3 of
+       The block loop is no longer written in the ECB text.  It is now rule MGR3 of
        <<KLEE-Machines-other-rules>>: for i = 0, b, 2b, ..., KLLEN - b, in that
        order, the per-block operation consumes INPUT[i+b-1:i] and produces
        OUTPUT[i+b-1:i].  Under <<KLEE-Notation>> byte j of a byte string sits at
@@ -30,8 +30,8 @@ NEG    A negative control mapping the most significant block of the value to the
 
 RULES  Behaviour the ECB text now leaves to the general rules: a kl.exec in _Ready_
        invalidates the CL (Rules <<KLEE-SGR-no-exec-in-ready>> and
-       <<KLEE-AGR-not-allowed-instructions>>); a KLLEN that is not a multiple of b
-       performs no operation and invalidates the CL (AGR2), the output window is
+       <<KLEE-MGR-not-allowed-instructions>>); a KLLEN that is not a multiple of b
+       performs no operation and invalidates the CL (MGR2), the output window is
        zeroed (Rule <<KLEE-SGR-usage-cr-error-state>>) and the Content cleared
        (Rule <<KLEE-SGR-clear-cr-content-error-state>>); the _MachinePolicy_ gate on
        the transitions (<<KLEE-Machine-field>>); the return to _Ready_ (SGR8 of
@@ -266,7 +266,7 @@ class EcbCL:
         self.key = self.skid = None
         self.sks = sks or {}
         self.rng = rng or random.Random(2026)
-        self.order = order               # 'spec' (AGR3) or the NEG misreading
+        self.order = order               # 'spec' (MGR3) or the NEG misreading
 
     # ------------------------------------------------------------ helpers
     @property
@@ -357,14 +357,14 @@ class EcbCL:
         if lo >= KLLEN:
             return out, klstart          # empty window: no operation
         if (self.state not in (ST_ENCRYPT, ST_DECRYPT)     # kl.exec in _Ready_
-                or KLLEN % B):                             # AGR2: granularity b
+                or KLLEN % B):                             # MGR2: granularity b
             self.invalidate()
             return out & ~window, 0
         enc, dec, k = self.cipher()
         f = enc if self.state == ST_ENCRYPT else dec
         key = v2b(self.key, k // 8)
         nblk = KLLEN // B
-        # AGR3: i = 0, b, ..., KLLEN - b, in that order
+        # MGR3: i = 0, b, ..., KLLEN - b, in that order
         for q, i in enumerate(range(lo, KLLEN, B)):
             if halt_after is not None and q == halt_after:
                 return out, i // 8       # precise halt, prefix-complete klstart
@@ -522,7 +522,7 @@ for name, _, k, c in SP38A_F1:
     chk(name + " encrypt", ref_ecb(aes_encrypt, key, pt).hex(), c)
     chk(name + " decrypt", ref_ecb(aes_decrypt, key, bytes.fromhex(c)).hex(), SP38A_PT)
 
-print("\n== AGR3: one kl.exec with KLLEN = 4b, least significant block position first")
+print("\n== MGR3: one kl.exec with KLLEN = 4b, least significant block position first")
 print("   (the 4-block operand is built with cat(); its LEFT part is the most")
 print("    significant, i.e. the LAST block of the byte string)")
 print("\nKAT-EXPECT-FAIL: NEG big-endian misread")
@@ -614,7 +614,7 @@ cl = new_cl(cipher, k)
 cl.setst(ST_ENCRYPT)
 inp = b2v(pt[:17])
 res, _ = cl.exec(inp, 136)                   # KLLEN = 17 bytes, not a multiple of b
-chk("AGR2: KLLEN = 136 -> no operation, _Invalid_, window zeroed",
+chk("MGR2: KLLEN = 136 -> no operation, _Invalid_, window zeroed",
     (cl.state, res), (ST_INVALID, 0))
 
 cl = new_cl(cipher, k)

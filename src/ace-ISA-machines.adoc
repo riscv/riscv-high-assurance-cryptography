@@ -342,7 +342,7 @@ The state machine is defined by the following information:
 The operation may instead use Form D `kl.exec` or Form C `kl.setst`, with the required KLIOBUF setup, with other forms being prohibited.
 Issuing any other instruction that accesses a CL raises a KLEE exception.
 `kl.input` and `kl.output` are allowed because these operations do not access a CL, and thus are not directly related to a state machine.
-The precise statement of the behavior is given by Rule <<KLEE-AGR-not-allowed-instructions>> in <<KLEE-Machines-other-rules>>.
+The precise statement of the behavior is given by Rule <<KLEE-MGR-not-allowed-instructions>> in <<KLEE-Machines-other-rules>>.
 --
 
 //
@@ -388,17 +388,19 @@ The following nomenclature is specific to the Machine specifications:
 Besides the SGR (State-Specific General Rules) defined in <<KLEE-State-field>>,
 the following rules apply to all KLEE-supported Machines, except when explicitly stated otherwise.
 
+MGR means “Machine General Rules”.
+
 [horizontal]
-[[KLEE-AGR-not-allowed-instructions,AGR1]] AGR1:: If any usage instruction, or Form thereof, that may modify the state of a CL is
+[[KLEE-MGR-not-allowed-instructions,MGR1]] MGR1:: If any usage instruction, or Form thereof, that may modify the state of a CL is
 issued, which is not explicitly allowed by the current state of the Machine
 encoded in the same CL, then the CL transitions to Error State _Invalid_.
 +
 An illegal-instruction exception is raised instead only where the Form is unavailable to the
 implementation at all, rather than merely wrong for the state (<<KLEE-usage-input-output>>).
 
-AGR2:: If `KLLEN` does not satisfy the granularity constraints of the Machine in its current state — for instance, it is not a whole multiple of the block size where the Machine requires one — the instruction performs no operation and the CL transitions to Error State _Invalid_.
+MGR2:: If `KLLEN` does not satisfy the granularity constraints of the Machine in its current state — for instance, it is not a whole multiple of the block size where the Machine requires one — the instruction performs no operation and the CL transitions to Error State _Invalid_.
 
-AGR3::  In a state that processes whole blocks, one `kl.exec` performs the state's per-block operation
+MGR3::  In a state that processes whole blocks, one `kl.exec` performs the state's per-block operation
 `KLLEN`/`b` times, where `b` is the block size: for `i` = 0, `b`, `2b`, {ellipsis}, `KLLEN` − `b`,
 in that order, it consumes `INPUT[i+b-1:i]` (if it consumes inputs) and produces `OUTPUT[i+b-1:i]`
 (if it produces outputs). Blocks are therefore
@@ -409,22 +411,22 @@ process exactly one block whatever `KLLEN` is.
 +
 This rule applies to all places where `kl.exec` is used in Machine descriptions, unless it is explicitly mentioned that `kl.exec` consumes only one block.
 
-[[KLEE-AGR-recomputed-fields,AGR4]] AGR4:: A field that a Machine can derive in an inexpensive manner
+[[KLEE-MGR-recomputed-fields,MGR4]] MGR4:: A field that a Machine can derive in an inexpensive manner
 from other fields of the same CC may not be carried in the Serialized Content, and be recomputed when an import
 completes, that is by the `kl.mgmt` with `#kl_cfg_management_end`, and again whenever a field it depends upon
 is modified. A Machine states only the derivation itself, and marks such a field “(derived)” where it lists it in
 its *Internal State*.
 
-AGR5:: Where a state consumes from `INPUT` a single value of fixed width — the field it assigns, or the
+MGR5:: Where a state consumes from `INPUT` a single value of fixed width — the field it assigns, or the
 operand it is defined over — a `KLLEN` greater than that width is truncated: only that many least
 significant bits of `INPUT` are considered, and the rest are ignored. The width is not necessarily
 the block size `b`.
 
-AGR6:: When a state writes fewer than `KLLEN` bits to `OUTPUT`, the remaining bits of `OUTPUT` are
+MGR6:: When a state writes fewer than `KLLEN` bits to `OUTPUT`, the remaining bits of `OUTPUT` are
 cleared. This concerns the bits *within* the operand; the elements beyond `VL`, governed by the
 tail-agnostic policy of <<KLEE-KLV>>, are a separate matter.
 
-[[KLEE-AGR-load-long-field,AGR7]] AGR7:: A state that loads a long field from `INPUT`, or emits one to `OUTPUT`, using multiple `kl.exec`
+[[KLEE-MGR-load-long-field,MGR7]] MGR7:: A state that loads a long field from `INPUT`, or emits one to `OUTPUT`, using multiple `kl.exec`
 instructions records the amount transferred so far in a state field _W_ (e.g., _MachineUse_ of
 the MDH). Each such state names _W_ and its unit, bits or bytes. _W_ is zeroed on entry, rises
 monotonically, and is not reset when the field completes; entering a loading state also zeroes the
@@ -438,7 +440,7 @@ transitions the CL to Error State _Invalid_. Excess data in a final loading tran
 emitting `kl.exec` that would carry _W_ past the field size invalidates the CL. Where _W_ is a
 field of the MDH, `kl.restrict*` may not write it (<<KLEE-instruction-restrict>>).
 
-[[KLEE-AGR-progress-discard,AGR10]] AGR10:: _Interrupted long-running operations._
+[[KLEE-MGR-progress-discard,MGR10]] MGR10:: _Interrupted long-running operations._
 A State in which a `kl.exec` or `kl.derive` may be interrupted under Rule <<KLEE-IRR-long-running-no-data>> admits, besides `kl.setst`, only that one instruction Form.
 Each Machine designates one field _P_ that is zero whenever no such operation is interrupted and non-zero from the first precise halt of one until its completion; the encoding of the progress within _P_ is implementation-defined, and the value recorded at a halt is never zero.
 Every random value and every intermediate value kept for the operation, in a state field or in the ADS, is meaningful only while _P_ is non-zero.
@@ -453,11 +455,11 @@ The instruction issued in such a State resumes the interrupted operation if _P_ 
 System Keys modify all the Machines and their data structures in the following way:
 
 [horizontal]
-AGR8:: In a PI and in an SCC, the key field will contain the SKID of the system key in place of the value.
+MGR8:: In a PI and in an SCC, the key field will contain the SKID of the system key in place of the value.
 This field is reduced from the original key size to a 64-bit value.
 //This saves space in an SCC and allows faster export and import operations.
 
-AGR9:: For Machines that require more than one key, such as XEX/XTS, a single
+MGR9:: For Machines that require more than one key, such as XEX/XTS, a single
 SKID is used to refer to and retrieve multiple keys from the SKS.
 
 // ////////////////////////////////////////////////////////////////////
@@ -1388,7 +1390,7 @@ If `KLLEN` > 128, only the 128 least significant bits of `INPUT` are considered.
    must be compared. If the values match, the state
    transitions to _Success_; otherwise, it transitions to _Failure_.
 
-** `auth_key` is a derived field (Rule <<KLEE-AGR-recomputed-fields>>): `auth_key <- enc_blk(key, zeros(128))`.
+** `auth_key` is a derived field (Rule <<KLEE-MGR-recomputed-fields>>): `auth_key <- enc_blk(key, zeros(128))`.
 
 //
 
@@ -1618,7 +1620,7 @@ If the instruction is repeated, there is no harm either: it simply overwrites th
    performed with Form A `kl.setst` instructions. State _Encrypt_ is *not* entered by `kl.setst`:
    it is reached only from the _Enc_Tag_Finalize_ `kl.exec` above, which synthesizes `SIV` first, so
    a `kl.setst` naming _Encrypt_ is a not-allowed transition and invalidates the CL
-   (Rule <<KLEE-AGR-not-allowed-instructions>>). This prevents an externally supplied `SIV` from being
+   (Rule <<KLEE-MGR-not-allowed-instructions>>). This prevents an externally supplied `SIV` from being
    used as the encryption keystream input.
 
 ** {empty}
@@ -1726,7 +1728,7 @@ A value of zero, larger than 120, or not a multiple of 8, causes the CL to trans
 +
 If `KLLEN` > 128, only the 128 least significant bits of `INPUT` are considered.
 
-** `enc_key` and `auth_key` are derived fields (Rule <<KLEE-AGR-recomputed-fields>>):
+** `enc_key` and `auth_key` are derived fields (Rule <<KLEE-MGR-recomputed-fields>>):
 (`enc_key`, `auth_key`) <- `RFC8452_KeyDeriv(k, key, nonce)`.
 
 //
@@ -3391,7 +3393,7 @@ The *Provisioning Input* contains only the MDH.
   ** `OutputType`: Bool.
  ** `Progress`: integer, held in bits [15:1] of the MDH field _MachineUse_. Used only
     for the implementation-defined tracking of long-running operations described above; it is
-    the field _P_ of Rule <<KLEE-AGR-progress-discard>>, and `RndNum` is material of the operation under that Rule.
+    the field _P_ of Rule <<KLEE-MGR-progress-discard>>, and `RndNum` is material of the operation under that Rule.
  ** `block_base`: integer. The transfer counter of the “set” and “output”
     operations in bytes, cleared on every state change.
  ** `Generator` (X, {Y}): one or two `b`-bit strings representing the X {and Y} coordinate{s}.
@@ -3520,7 +3522,7 @@ therefore needs no flag.
 
  ** When the CC is created, i.e., provisioned, the `Generator` is set to the default parameter, and `Scalar` is set to zero.
 
- ** All the “set” and “output” operations follow Rule <<KLEE-AGR-load-long-field>> of
+ ** All the “set” and “output” operations follow Rule <<KLEE-MGR-load-long-field>> of
 <<KLEE-Machines-other-rules>>, with the progress recorded in `block_base`, in bytes.
 
  ** To transition to State _Set_Generator_, a Form A or B `kl.setst` is used.
@@ -3530,7 +3532,7 @@ therefore needs no flag.
   . A state change operation can be issued, including to states that require a set `Generator`.
 
  *** Otherwise:
-  . `Generator`, of length `ub`/8 bytes, is loaded using (multi-block) `kl.exec` instructions of Form B, following Rule <<KLEE-AGR-load-long-field>>.
+  . `Generator`, of length `ub`/8 bytes, is loaded using (multi-block) `kl.exec` instructions of Form B, following Rule <<KLEE-MGR-load-long-field>>.
   . Once it is complete, a state change operation can be issued, including to states that require a set `Generator`.
 
  ** To transition to any of the States _Set_Scalar_, _Set_Hash_, _Set_SecondPt_, or _Set_Signature_ a Form A `kl.setst` is used.
@@ -3539,7 +3541,7 @@ therefore needs no flag.
       set to False. `Scalar` has no such flag: it is simply set to zero, which is not a legal
       private key.
   *** Field _X_ is then loaded using (multi-block) `kl.exec` instructions of Form B, following
-      Rule <<KLEE-AGR-load-long-field>>, and ``Has``_X_ is set once the field is complete, where that flag exists.
+      Rule <<KLEE-MGR-load-long-field>>, and ``Has``_X_ is set once the field is complete, where that flag exists.
 
  ** It is also allowed to transition to _Set_Scalar_ using a Form B `kl.setst` with a non-zero value in the GPR.
     In this case, a random value is set, no further
@@ -3582,7 +3584,7 @@ if `r` = 0, if `r` + `k` = `n`, or if `s` = 0.
     specified in cite:[nist-fips-186-5] {sect}6.4.1; for SM2, as specified in
     cite:[GMT-0003-2-2012]. If `Progress` is zero, the per-signature secret `k` is drawn from the RBG
     (<<KLEE-RBG>>) into `RndNum`, with `HasRndNum` set for the duration of the
-    operation; otherwise the interrupted operation is resumed with the `RndNum` held (Rule <<KLEE-AGR-progress-discard>>). The retry rules above apply.
+    operation; otherwise the interrupted operation is resumed with the `RndNum` held (Rule <<KLEE-MGR-progress-discard>>). The retry rules above apply.
   . On completion, `Signature` {leftarrow} (`r`, `s`) and `HasSignature` is set;
     `RndNum` is destroyed and `HasRndNum` cleared.
   . `OutputType` {leftarrow} True, and the state transitions to _Output_.
@@ -3600,9 +3602,9 @@ if `r` = 0, if `r` + `k` = `n`, or if `s` = 0.
      This allows the KLEE implementation to determine not only which output must be written out, but also its length.
      *** If `OutputType` = False, the output is in `SecondPt`.
      *** If `OutputType` = True, the output is in `Signature`.
-   . In State _Output_, the result is emitted using (multi-block) `kl.exec` instructions of Form C, respecting Rule <<KLEE-AGR-load-long-field>>.
+   . In State _Output_, the result is emitted using (multi-block) `kl.exec` instructions of Form C, respecting Rule <<KLEE-MGR-load-long-field>>.
      . Data beyond the length of the output is replaced with zeros in the last exported part.
-     . Once the output is complete the state transitions to _Success_; this is the transition of its own that Rule <<KLEE-AGR-load-long-field>> admits.
+     . Once the output is complete the state transitions to _Success_; this is the transition of its own that Rule <<KLEE-MGR-load-long-field>> admits.
 
  ** If, after any computation, either `Generator` or `SecondPt` is the point at infinity, the corresponding field is set to the special value that encodes it.
 
@@ -3648,7 +3650,7 @@ if `r` = 0, if `r` + `k` = `n`, or if `s` = 0.
 `Progress`, bits [15:1] of _MachineUse_, is the field used following rule <<KLEE-IRR-long-running-no-data>> for Point Multiplication,
 Signature Generation and Signature Verification; what an implementation exports to allow resumption
 typically includes precomputed multiples of the base point.
-Rule <<KLEE-AGR-progress-discard>> applies: any state transition out of these States zeroes `Progress`, destroys `RndNum` and clears `HasRndNum`, and the operation restarts.
+Rule <<KLEE-MGR-progress-discard>> applies: any state transition out of these States zeroes `Progress`, destroys `RndNum` and clears `HasRndNum`, and the operation restarts.
 
 An importing implementation that keeps the Auxiliary Data Section must also be willing to trust the
 random number generator of the originating implementation. If it is not, it discards that Section
@@ -3777,7 +3779,7 @@ State Machine:::
 ** To transition to State _Set_Ctx_, a Form B `kl.setst` is used whose auxiliary
    argument `Xs` sets `ctxlen`. Values greater than 255 cause the CL to transition to
    Error State _Invalid_. If `ctxlen` {ne} 0, the `ctx` value is then loaded with
-   (multi-block) Form B `kl.exec` instructions, following Rule <<KLEE-AGR-load-long-field>>
+   (multi-block) Form B `kl.exec` instructions, following Rule <<KLEE-MGR-load-long-field>>
    as the _Set_ states of
    <<KLEE-ECC>> do, with the progress recorded in `block_base`.
 
@@ -4019,7 +4021,7 @@ These checks do not affect the implicit rejection of `ML-KEM.Decaps`: a cipherte
 type check but does not decapsulate correctly still yields the `z`-derived shared key, the state
 machine still transitions to _Success_, and the two cases remain indistinguishable to the caller.
 
- ** In States _GenerateKeyPair_, _Encapsulate_ and _Decapsulate_ the operation is long-running: _MachineUse_ is the field _P_ of Rule <<KLEE-AGR-progress-discard>>, and the `kl.exec` resumes an interrupted operation when it is non-zero.
+ ** In States _GenerateKeyPair_, _Encapsulate_ and _Decapsulate_ the operation is long-running: _MachineUse_ is the field _P_ of Rule <<KLEE-MGR-progress-discard>>, and the `kl.exec` resumes an interrupted operation when it is non-zero.
 
  ** In State _GenerateKeyPair_, Form D ``kl.exec Kn|K{Xn}`` generates a new key pair using procedure `ML-KEM.KeyGen` of cite:[nist-fips-203] (Algorithm 19).
 
@@ -4038,13 +4040,13 @@ machine still transitions to _Success_, and the two cases remain indistinguishab
 
 ** In States _encapsk_Input_, _decapsk_Input_ and _ciphertext_Input_, the fields `encapsk`,
 `decapsk` and `ciphertext` are loaded using (multi-block) `kl.exec` instructions of Form B,
-following Rule <<KLEE-AGR-load-long-field>> of <<KLEE-Machines-other-rules>>, with the progress recorded in
+following Rule <<KLEE-MGR-load-long-field>> of <<KLEE-Machines-other-rules>>, with the progress recorded in
 _MachineUse_. The size of each field in bits is 8
 times the size in bytes given in <<KLEE-ML-KEM-sizes>>, so it is determined by the KEM variant and
 the state and no variable need hold it.
 
 ** In States _encapsk_Output_ and _ciphertext_Output_, the fields `encapsk` and `ciphertext` are
-emitted using (multi-block) `kl.exec` instructions of Form C, following Rule <<KLEE-AGR-load-long-field>>, with the
+emitted using (multi-block) `kl.exec` instructions of Form C, following Rule <<KLEE-MGR-load-long-field>>, with the
 progress recorded in _MachineUse_. Both fields are public, so no restriction applies to where they
 are written.
 
@@ -4141,7 +4143,7 @@ any other value causes the CL to transition to Error State _Invalid_.
  ** `ctx`: 255 bytes (2040 bits)
  ** `mu`: 64 bytes (512 bits), contains the hashed formatted message
  ** `tr` (derived): 64 bytes (512 bits), contains the hash of the public key
- ** `rnd`: 32 bytes (256 bits), the random value of hedged signing; it is non-zero only while a hedged signing operation is interrupted (Rule <<KLEE-AGR-progress-discard>>), and zero otherwise, including for deterministic signing.
+ ** `rnd`: 32 bytes (256 bits), the random value of hedged signing; it is non-zero only while a hedged signing operation is interrupted (Rule <<KLEE-MGR-progress-discard>>), and zero otherwise, including for deterministic signing.
 
 [none]
 * The ML-DSA Machine in KLEE does not hash the message itself before signing, but only performs the subsequent hash operations.
@@ -4240,7 +4242,7 @@ When the loaded value is complete, `HasPrivKey` is set to true.
 
 ** In States _privkey_Input_, _pubkey_Input_, _ctx_Input_, _mu_Input_, _tr_Input_, and _Sign_Input_,
 the fields `privkey`, `pubkey`, `ctx`, `mu`, `tr` and `signature`, respectively, are loaded using
-(multi-block) `kl.exec` instructions of Form B, following Rule <<KLEE-AGR-load-long-field>>,
+(multi-block) `kl.exec` instructions of Form B, following Rule <<KLEE-MGR-load-long-field>>,
 with the progress recorded in _MachineUse_.
 
 ** In State _compute_pubKey_ a single D `kl.exec` instruction performs the following operations:
@@ -4258,7 +4260,7 @@ with the progress recorded in _MachineUse_.
 . If `Xs` is non-zero, then *deterministic* signing is selected and `Hedged` is cleared.
 
 ** In State _Sign_Generate_, Form D ``kl.exec Kn|K{Xn}`` generates a digital signature using procedure `ML-DSA.Sign_internal` of cite:[nist-fips-204] (Algorithm 7).
-The operation is long-running: _MachineUse_ is the field _P_ of Rule <<KLEE-AGR-progress-discard>>. If it is zero, `rnd` is drawn from an approved random bit generator when `Hedged` is set and is `zeros(256)` otherwise; if it is non-zero, the interrupted operation is resumed with the `rnd` held. On completion `rnd` is destroyed.
+The operation is long-running: _MachineUse_ is the field _P_ of Rule <<KLEE-MGR-progress-discard>>. If it is zero, `rnd` is drawn from an approved random bit generator when `Hedged` is set and is `zeros(256)` otherwise; if it is non-zero, the interrupted operation is resumed with the `rnd` held. On completion `rnd` is destroyed.
 If `HasPrivKey` is true, the output of `ML-DSA.Sign_internal` is written in `signature`, otherwise, the CL transitions to Error State _Invalid_.
 
 ** In State _Sign_Verify_, Form D ``kl.exec Kn|K{Xn}`` verifies a digital signature using procedure `ML-DSA.Verify_internal` of cite:[nist-fips-204] (Algorithm 8):
@@ -4269,7 +4271,7 @@ otherwise it transitions to State _Failure_. cite:[nist-fips-204] Algorithm 8 re
 only, so nothing is written to `signature` on this path.
 
 ** In States _pubkey_Output_ and _Sign_Output_, the fields `pubkey` and `signature` are emitted
-using (multi-block) `kl.exec` instructions of Form C, following Rule <<KLEE-AGR-load-long-field>>,
+using (multi-block) `kl.exec` instructions of Form C, following Rule <<KLEE-MGR-load-long-field>>,
 with the progress recorded in _MachineUse_.
 Entering _pubkey_Output_ while `HasPubKey` is false causes the CL to transition to Error State _Invalid_.
 

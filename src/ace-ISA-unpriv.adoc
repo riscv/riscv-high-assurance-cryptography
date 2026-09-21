@@ -98,11 +98,12 @@ The RBG must use an entropy source and a DRBG satisfying the requirements descri
 [,%header,cols="<18%,<64%,<18%"]
 |===
 | Extension       | Features                                                    | Defined in:
-| `Zklv`          | KLEE with support for vector registers.                      | <<KLEE-instructions-detailed>>
-| `Zklio`         | KLEE with support for streaming instructions.                | <<KLEE-usage-input-output>>
-| `Zklmem`        | KLEE with dedicated memory instructions.                     | <<KLEE-instruction-load>>, <<KLEE-instruction-store>>
-| `Zklmv`         | KLEE with dedicated move instructions.                       | <<KLEE-instruction-mv>>
-| `Zklexpire`     | KLEE with support for the _ExpirationDate_ metadata field.   | <<KLEE-Metadata-expiration-date>>
+| `Zklv`          | KLEE with support for vector registers.                     | <<KLEE-instructions-detailed>>
+| `Zklio`         | KLEE with support for streaming instructions.               | <<KLEE-usage-input-output>>
+| `Zklmem`        | KLEE with dedicated memory instructions.                    | <<KLEE-instruction-load>>, <<KLEE-instruction-store>>
+| `Zklmv`         | KLEE with dedicated move instructions.                      | <<KLEE-instruction-mv>>
+| `Zklexpire`     | KLEE with support for the _ExpirationDate_ metadata field.  | <<KLEE-Metadata-expiration-date>>
+| `Zklind`        | KLEE with indirect CL addressing support for instructions other than `kl.clone`, `kl.rename`, and `kl.swap`. | <<KLEE-cryptographic-registers>>
 |===
 
 The extensions defining the individual cryptographic algorithms are given in <<KLEE-exec-encodings>> in <<KLEE-Machines>>.
@@ -220,11 +221,18 @@ CLs are not separated by privilege mode: when a hart changes mode, it sees the s
 
 Unlike a conventional register, a CL can be _unconfigured_, meaning it does not contain a CC.
 
-A CL is addressed either directly, via a 5-bit immediate, or indirectly, via a GPR value; an additional instruction-encoding bit selects the mode.
+If the extension `Zklind` is not enabled,
+a CL is addressed like a conventional register, i.e., via a 5-bit immediate.
+
+If the extension `Zklind` is enabled,
+a CL can also be addressed indirectly, via a GPR value; an additional instruction-encoding bit selects the mode.
+
+Independently of `Zklind`, indirect CL addressing is always available for
+instructions `kl.clone`, `kl.rename`, and `kl.swap` (<<KLEE-instruction-clone>>).
 
 [NOTE]
 ====
-Indirect CL addressing implies that CL renaming, while still possible, would significantly increase microarchitectural complexity.
+Indirect CL addressing under `Zklind` implies that CL renaming, while still possible, would significantly increase microarchitectural complexity.
 We posit that CL renaming is not expected to be necessary, and may even be detrimental, for KLEE.
 First, excluding internal state changes, CLs are redefined far less frequently than GPRs or FP registers, and
 conditional situations where a CL may take one key or a different one are uncommon.
@@ -362,27 +370,27 @@ All _reserved_ bits, as well as bits unused by a given Machine, are zero.
 .Format of the 128-bit Metadata Header
 [width="100%",cols="^9%,^6%,18%,67%",options="header"]
 |===
-|    Field  | Size | Name              | Description
-|    [11:0] |  12  | _Machine_         | This field encodes the Machine (cryptographic primitive, mode, or protocol) that is bound to the key material. See <<KLEE-Machine-field>>.
-|   [13:12] |   2  | _MachinePolicy_ | Allowed variant(s) of the algorithms implemented by the Machine, such as, for a symmetric cipher, whether it can be used for encryption, decryption, or both. See <<KLEE-Machine-field>>.
+|    Field  | Size | Name               | Description
+|    [11:0] |  12  | _Machine_          | This field encodes the Machine (cryptographic primitive, mode, or protocol) that is bound to the key material. See <<KLEE-Machine-field>>.
+|   [13:12] |   2  | _MachinePolicy_    | Allowed variant(s) of the algorithms implemented by the Machine, such as, for a symmetric cipher, whether it can be used for encryption, decryption, or both. See <<KLEE-Machine-field>>.
 |   [15:14] |   2  | _MachineExtension_ | Reserved for future expansion of _Machine_ and _MachinePolicy_ fields.
-|   [18:16] |   3  | _SCProtection_    | Side-channel protection level. The levels of side-channel protection are defined in <<KLEE-SCProtection-field>>.
-|   [24:19] |   6  | _State_           | Current state of the CL/Machine, encoded as an integer.  See <<KLEE-State-field>>.
-|   [28:25] |   4  | _StateExtension_  | Used to extend the _State_ field with additional information. See <<KLEE-State-field>>.
-|   [30:29] |   2  | _KeyType_         | This field determines whether the key is given by value, is a system-defined key, or randomly generated. See <<KLEE-KeyType-field>>.
-|   [31:31] |   1  | Reserved          | Reserved for future use.
-|   [45:32] |  14  | _AuxDataLen_      | Zero if no ADS is present; otherwise, its length as a number of 128-bit blocks. When _ADSDropped_ = 1, this is the length before `Content2` was dropped. The value 1 is invalid.
-|   [46:46] |   1  | Reserved          | Reserved for future use.
-|   [47:47] |   1  | _ADSDropped_      | If set, `Content2` has been dropped while the SCC header layout is retained. This bit is excluded from first-segment authentication. See <<KLEE-Auxiliary-Data-Section>>.
-|   [61:48] |  14  | _AuxInfo_         | Machine-specific auxiliary information. Currently used only by ML-KEM and ML-DSA. This field is zero for Machines that do not use it.
-|   [63:62] |   2  | Reserved          | Reserved for future use.
-|   [68:64] |   5  | _UsagePolicy_     | Usage (Control) Policy. Determines which modes are allowed to use the CL.
-|   [77:69] |   9  | _Locality_        | Zero, or a value determining one or more Locality Secrets. See <<KLEE-Localities>>.
-|   [79:78] |   2  | Reserved          | Reserved for future use.
-|   [95:80] |  16  | _MachineUse_    | May be used by Machines, and, when not used by them, by implementations.
-|  [115:96] |  20  | _ExpirationDate_  | If non-zero, the expiration date of this CC. See <<KLEE-Metadata-expiration-date>>.
-| [125:116] |  10  | Reserved          | Reserved for future use.
-| [127:126] |   2  | _Version_         | MDH format version.
+|   [18:16] |   3  | _SCProtection_     | Side-channel protection level. The levels of side-channel protection are defined in <<KLEE-SCProtection-field>>.
+|   [24:19] |   6  | _State_            | Current state of the CL/Machine, encoded as an integer.  See <<KLEE-State-field>>.
+|   [28:25] |   4  | _StateExtension_   | Used to extend the _State_ field with additional information. See <<KLEE-State-field>>.
+|   [30:29] |   2  | _KeyType_          | This field determines whether the key is given by value, is a system-defined key, or randomly generated. See <<KLEE-KeyType-field>>.
+|   [31:31] |   1  | Reserved           | Reserved for future use.
+|   [45:32] |  14  | _AuxDataLen_       | Zero if no ADS is present; otherwise, its length as a number of 128-bit blocks. When _ADSDropped_ = 1, this is the length before `Content2` was dropped. The value 1 is invalid.
+|   [46:46] |   1  | Reserved           | Reserved for future use.
+|   [47:47] |   1  | _ADSDropped_       | If set, `Content2` has been dropped while the SCC header layout is retained. This bit is excluded from first-segment authentication. See <<KLEE-Auxiliary-Data-Section>>.
+|   [61:48] |  14  | _AuxInfo_          | Machine-specific auxiliary information. Currently used only by ML-KEM and ML-DSA. This field is zero for Machines that do not use it.
+|   [63:62] |   2  | Reserved           | Reserved for future use.
+|   [68:64] |   5  | _UsagePolicy_      | Usage (Control) Policy. Determines which modes are allowed to use the CL.
+|   [77:69] |   9  | _Locality_         | Zero, or a value determining one or more Locality Secrets. See <<KLEE-Localities>>.
+|   [79:78] |   2  | Reserved           | Reserved for future use.
+|   [95:80] |  16  | _MachineUse_       | May be used by Machines, and, when not used by them, by implementations.
+|  [115:96] |  20  | _ExpirationDate_   | If non-zero, the expiration date of this CC. See <<KLEE-Metadata-expiration-date>>.
+| [125:116] |  10  | Reserved           | Reserved for future use.
+| [127:126] |   2  | _Version_          | MDH format version.
 |===
 
 The fields are described in detail in the following subsections.
@@ -766,8 +774,6 @@ KLEE provides a number of unprivileged CSRs.
 // On RV32 every 64-bit KLEE CSR _X_, in this Book, is accompanied by a 32-bit CSR
 // named _X_`h` giving access to bits [63:32] of _X_; a read or write of _X_ itself then accesses bits
 // [31:0].
-// The shadow has the same privilege as the register it shadows. The six such registers are
-// `acesivl`, `acesivh`, `acesiv2l`, `acesiv2h`, `aceiql`, `aceiqh`.
 
 If the KLEE extension is not present, none of these CSRs exists.
 While a `KLS` field in effect is Off,
@@ -892,7 +898,6 @@ and <<KLEE-PQC>>, is recorded in the _MachineUse_ field instead, as Rule
 <<KLEE-IRR-long-running-no-data>> prescribes. Every other instruction leaves `klstart` unchanged,
 except `kl.mgmt` and `kl.clearall`, which clear it.
 
-
 `klstart` is the position within the transfer window at which processing starts or resumes,
 like `vstart` in the V extension; for a KLIOBUF operand the window is always
 [0, `kliobuftop`) (<<KLEE-CSR-kliobuftop>>). Software saves and restores `klstart` across
@@ -987,11 +992,8 @@ The correspondence between addresses and transfer offsets is given by each instr
 The following rules apply to all KLEE instructions, unless expressly stated otherwise.
 
 [horizontal]
-[[KLEE-GR-GPR-indirect, GR1]] GR1:: _Use of a GPR as indirect CL index:_
-An indirect index outside [0..31] raises an illegal-instruction exception.
-Using `X0` as an indirect CL index raises an illegal-instruction exception, unless this is expressly used to encode an instruction, for instance `kl.clearall`.
-
-[[KLEE-GR-multiple-GPRs,GR2]] GR2:: _Use of multiple GPRs for longer inputs:_ A 64-bit operand is one GPR on RV64 and encoded in a pair `(X[s+1],X[s])` as `X[s+1] @ X[s]` on RV32,
+[horizontal]
+[[KLEE-GR-multiple-GPRs,GR1]] GR1:: _Use of multiple GPRs for longer inputs:_ A 64-bit operand is one GPR on RV64 and encoded in a pair `(X[s+1],X[s])` as `X[s+1] @ X[s]` on RV32,
 and a 128-bit operand is encoded as `X[s+1] @ X[s]` on RV64 and using a GPR quartet on RV32
 as `X[s+3] @ X[s+2] @ X[s+1] @ X[s]`. This holds whether the operand is a source or a destination.
 The lowest register number of a pair must be even and that of a quartet a multiple of four;
@@ -999,18 +1001,18 @@ otherwise an illegal-instruction exception is raised.
 A pair or quartet is read, resp. written, as a whole.
 Here and in every instruction description, RV32 and RV64 denote an XLEN of 32, resp. 64, in the privilege mode that executes the instruction.
 
-GR3:: _If `X0` is used as a destination or source register, but not to index a CL,_ then
+GR2:: _If `X0` is used as a destination or source register, but not to index a CL,_ then
 anything written to it is discarded, and it reads as zero. When the lowest register of a
 pair or quartet is `X0`, no register of the group is written and the group reads as zero.
 
-[[KLEE-GR-klstart-vstart,GR4]] GR4:: KLEE instructions with vector operands that use `klstart` for resumption update `klstart` and `vstart` simultaneously and independently, each according to its own semantics: both denote the same point of progress, `klstart` counting it in bytes and `vstart` in elements of the width in effect. Neither is derived from the other.
+[[KLEE-GR-klstart-vstart,GR3]] GR3:: KLEE instructions with vector operands that use `klstart` for resumption update `klstart` and `vstart` simultaneously and independently, each according to its own semantics: both denote the same point of progress, `klstart` counting it in bytes and `vstart` in elements of the width in effect. Neither is derived from the other.
 This allows the KLEE unit and the vector unit to work in sync while accessing local information more efficiently, but also to explicitly “desync” the two values in certain contexts (such as in the implementation of nested CL management operations).
 +
 NOTE: For Forms A–C of `kl.exec` the hardware raises an illegal-instruction exception if `klstart` and `vstart` denote different points (<<KLEE-CSR-klstart>>). `kl.mv` keeps the two independent by design, since its `klstart` is a CL offset that accumulates across instructions while `vstart` tracks the vector register.
 +
 NOTE: The uninterruptible vector-form instructions (`kl.getmdv`, `kl.restrictv`, Form C of `kl.size` and `kl.avail`, `kl.setst`, and `kl.mgmt`) do not produce `vstart` values and therefore do not consume one (Rule <<KLEE-GR-vector-legality>>).
 
-GR5:: The _UsagePolicy_ of the MDH determines whether a certain instruction can be issued, and sometimes when, in a given privilege mode.
+GR4:: The _UsagePolicy_ of the MDH determines whether a certain instruction can be issued, and sometimes when, in a given privilege mode.
 Furthermore, certain instructions may modify the state of the CL.
 For all instructions, the authoritative table for these two properties is <<KLEE-instruction-properties>>.
 No instruction description restates them.
@@ -1040,7 +1042,7 @@ No instruction description restates them.
 5+| ^*^ means that the instruction is usable only in the States admitted by Rule <<KLEE-SGR-ace-load-mv-allowed>>, resp. Rule <<KLEE-SGR-ace-store-mv-allowed>>.
 |===
 
-[[KLEE-GR-opening-cr-when,GR6]] GR6:: _When a CL can be opened for import or export:_
+[[KLEE-GR-opening-cr-when,GR5]] GR5:: _When a CL can be opened for import or export:_
 Opening a CL for provisioning or import, as well as executing `kl.clear`, is always allowed in any State, since the
 target CL is zeroized first; opening it for export is always allowed in any Complete or Configuration
 State.
@@ -1049,24 +1051,28 @@ No Machine-specific rule may restrict whether a CL can be opened for export or f
 +
 For the restrictions on `kl.clone`, cf. <<KLEE-instruction-clone>>.
 
-[[KLEE-GR-vector-MDH-operand,GR7]] GR7:: Where a Form of a KLEE instruction carries the whole 128-bit MDH in a vector register or group, that
+[[KLEE-GR-vector-MDH-operand,GR6]] GR6:: Where a Form of a KLEE instruction carries the whole 128-bit MDH in a vector register or group, that
 operand must satisfy `VL` {times} `SEW` {ge} 128; otherwise an illegal-instruction exception is
 raised. This includes the MDH-formatted operand of `kl.restrictv` and the destination of `kl.getmdv`. <<KLEE-extensions-overview-unpriv>> records which vector extensions provide such a register.
 The same requirement applies to an MDH taken from the KLIOBUF: `kliobuftop` {ge} 16.
 
-[[KLEE-GR-iobuf-configured,GR8]] GR8:: Instructions that access the KLIOBUF, such as `kl.input` and `kl.output`, may be used only if the
+[[KLEE-GR-iobuf-configured,GR7]] GR7:: Instructions that access the KLIOBUF, such as `kl.input` and `kl.output`, may be used only if the
 KLIOBUF is enabled and `kliobuflen` is nonzero; otherwise KLEE exception
 `kl_exc_unconfigured_buffer` is raised.
 
-[[KLEE-GR-vector-legality,GR9]] GR9:: A vector register (group) operand of a KLEE instruction whose register number, when the LMUL in effect is greater than 1, is not a multiple of that LMUL is a reserved encoding and raises an illegal-instruction exception (similarly to RVV 1.0).
+[[KLEE-GR-vector-legality,GR8]] GR8:: A vector register (group) operand of a KLEE instruction whose register number, when the LMUL in effect is greater than 1, is not a multiple of that LMUL is a reserved encoding and raises an illegal-instruction exception (similarly to RVV 1.0).
 Every KLEE instruction with a vector operand sets `vstart` to 0 when it retires; on a precise halt it sets `vstart` as <<KLEE-CSR-klstart>> and Rule <<KLEE-GR-klstart-vstart>> prescribe. An instruction with a vector operand that produces no `vstart` value (`kl.getmdv`, `kl.restrictv`, Form C of `kl.size` and `kl.avail`, `kl.setst` and `kl.mgmt`), issued with `vstart` {ne} 0, either raises an illegal-instruction exception, as RVV 1.0 {sect}3.7 permits for a `vstart` value the instruction can never produce, or ignores `vstart`; which of the two is implementation-defined.
 
-[[KLEE-GR-custom-locality,GR10]] GR10:: A CC whose MDH carries any custom, implementation-defined value — a custom _Machine_ (<<KLEE-Machine-field>>), a custom _SCProtection_ level (<<KLEE-SCProtection-field>>), a system-specific _Version_ (<<KLEE-Machine-version>>), or any other custom value — must name _ChipFamScrt_, or the stricter _ChipScrt_, in its _Locality_; otherwise the Metadata is invalid (see <<KLEE-Metadata-validity>>).
+[[KLEE-GR-custom-locality,GR9]] GR9:: A CC whose MDH carries any custom, implementation-defined value — a custom _Machine_ (<<KLEE-Machine-field>>), a custom _SCProtection_ level (<<KLEE-SCProtection-field>>), a system-specific _Version_ (<<KLEE-Machine-version>>), or any other custom value — must name _ChipFamScrt_, or the stricter _ChipScrt_, in its _Locality_; otherwise the Metadata is invalid (see <<KLEE-Metadata-validity>>).
 +
 NOTE: If the KLEE unit is implemented through emulation, different versions of KLEE firmware may have different features while running on the same hardware, and a hardware-fixed locality will not be able to distinguish them. Rule <<KLEE-GR-custom-locality>> is, however, a first line of protection against accidental abuse.
 
-[[KLEE-GR-atomic-randomness,GR11]] GR11:: A Machine that requires an internal random value, such as a signing nonce or an ephemeral scalar, generates it and consumes it within one instruction.
-No State from which the CL can be exported or cloned holds random material that could be consumed against an input other than the one it was drawn for; for an interrupted long-running operation this is ensured by Rule <<KLEE-AGR-progress-discard>> of Book 2. Rule <<KLEE-GR-opening-cr-when>> is not relaxed to obtain this.
+[[KLEE-GR-atomic-randomness,GR10]] GR10:: A Machine that requires an internal random value, such as a signing nonce or an ephemeral scalar, generates it and consumes it within one instruction.
+No State from which the CL can be exported or cloned holds random material that could be consumed against an input other than the one it was drawn for; for an interrupted long-running operation this is ensured by Rule <<KLEE-MGR-progress-discard>> of Book 2. Rule <<KLEE-GR-opening-cr-when>> is not relaxed to obtain this.
+
+[[KLEE-GR-GPR-indirect, GR11]] GR11:: _Use of a GPR as indirect CL index:_
+If `Zklind` is present, when using indirect CL addressing, an indirect index outside [0..31] raises an illegal-instruction exception.
+Using `X0` as an indirect CL index raises an illegal-instruction exception.
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -1166,7 +1172,7 @@ Bit 25, `q`, selects the instruction: `q` = 0 is `kl.size`, `q` = 1 is `kl.avail
 The `F` field and the `r` bit may assume the following values:
 
 * `F` = `0b00`, `r` = `0` {implies} Form A: Size/availability from a context given as `Ks`.
-* `F` = `0b00`, `r` = `1` {implies} Form A: Size/availability from a context given indirectly as `K{Xs}`.
+* `F` = `0b00`, `r` = `1` {implies} Form A: Size/availability from a context given indirectly as `K{Xs}`. Only if `Zklind` is present, otherwise this is an illegal instruction.
 * `F` = `0b01`, `r` = `0` {implies} Form B: Size/availability from MDH in one (RV64) or two (RV32) GPRs.
 * `F` = `0b10`, `r` = `0` {implies} Form C: Size/availability from MDH in a 128-bit vector register.
 --
@@ -1259,7 +1265,7 @@ For the four Forms A–D above, the encodings are:
 
 The CL operand is always encoded in `rs1`. In each Form, unused register fields must be zero: `rd` when there is no output vector, and `rs2` when there is no input vector. Non-zero values in an unused field are reserved, except for encodings assigned to those fields by `Zklmv` (<<KLEE-instruction-mv>>).
 
-`r` is the CL indexing mode selector.
+`r` is the CL indexing mode selector. Indirect CL addressing is only available when `Zklind` is present. Otherwise, `r` = 1 is an illegal instruction.
 --
 
 _Description_::
@@ -1284,7 +1290,7 @@ extract outputs from `kl.exec`, as described in <<KLEE-usage-input-output>>.
 
 // The `Zklmv` subextension adds dedicated move instructions between scalar/vector registers and a CL.
 // The instructions in this extension are encoded as new forms of `kl.exec`:
-// `r` is the CL indexing mode selector.
+// `r` is the CL indexing mode selector. Indirect CL addressing is only available when `Zklind` is present. Otherwise, `r` = 1 is an illegal instruction.
 
 _Mnemonics_::
 +
@@ -1315,6 +1321,8 @@ corresponding Form of `kl.exec` leaves unused: `rd` in Form B, `rs2` in Form C.
 `rs1` always specifies the source or destination CL. In Forms A and B, `rs2` specifies the source GPR or vector register.
 In Forms C and D, `rd` specifies the destination GPR or vector register.
 For Forms B and D, the vector length must be a multiple of 16 bytes.
+
+`r` is the CL indexing mode selector. Indirect CL addressing is only available when `Zklind` is present. Otherwise, `r` = 1 is an illegal instruction.
 --
 //
 // In the mnemonics of variants A and B the CL is written first because it is the
@@ -1447,7 +1455,8 @@ The encodings whose `#immed7`[6:3] is `0b0111` are those of `kl.mgmt` (<<KLEE-in
 ]}
 ....
 
-`r` is the CL indexing mode selector.
+`r` is the CL indexing mode selector. Indirect CL addressing is only available when `Zklind` is present. Otherwise, `r` = 1 is an illegal instruction except when encoding `kl.clearall` (<<KLEE-instruction-clearall>>).
+
 When `r` = 1 and the CL register is `X0`: Form A with `#immed7` = 0 is `kl.clearall` (<<KLEE-instruction-clear>>); every other combination of Form and `#immed7` is reserved.
 
 The encodings of the four Forms are:
@@ -1499,7 +1508,7 @@ GPRs or in a vector register (group) `Vs`.
 [[KLEE-instruction-clear]]
 ===== kl.clear
 
-The instruction `kl.clear Kd|K{Xd}` is encoded as `kl.setst` (see <<KLEE-instruction-setst>>) with no auxiliary operands and the immediate for _State_ set to `kl_state_unconfigured` (as defined in <<KLEE-State-field>>).
+The instruction `kl.clear Kd` is encoded as `kl.setst` (see <<KLEE-instruction-setst>>) with no auxiliary operands and the `#immed7`equal to `kl_state_unconfigured` (as defined in <<KLEE-State-field>>).
 It marks the CL as _Unconfigured_ in its metadata, and releases its resources in the CLF.
 
 Clearing (i.e., unconfiguring) a CL that was not already _Unconfigured_, or whose `*lclstatus` field in effect is _Off_ (<<KLEE-CSR-lclstatus>>), sets the `*lclstatus` fields in effect for the current privilege mode, and the `KLS` fields in effect, to _Dirty_. The CL's own _State_ field becomes _Unconfigured_.
@@ -1510,7 +1519,7 @@ Clearing (i.e., unconfiguring) a CL that was not already _Unconfigured_, or whos
 The instruction `kl.clearall` unconfigures all the CLs, as if calling `kl.clear` on each one, and the KLIOBUF, zeroing the buffer and setting
 `kliobuflen`, `kliobuftop` and `klstart` to 0, zeroizes the three authentication registers of <<KLEE-CLF>>, and writes 32 to `klmanagedcr`.
 
-`kl.clearall` is encoded as `kl.clear` with indirect CL addressing and `Xd` = `X0`.
+`kl.clearall` is encoded with `r` = `1` and `rs1` = `rd` = `0`.
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -1621,7 +1630,7 @@ _Encoding_::
 ]}
 ....
 
-`r` is the CL indexing mode selector.
+`r` is the CL indexing mode selector. Indirect CL addressing is only available when `Zklind` is present. Otherwise, `r` = 1 is an illegal instruction.
 
 If bit `h` (bit 28) is 0, the instruction is `kl.getmdl`; if `h` is 1, it is `kl.getmd`.
 
@@ -1714,7 +1723,7 @@ The encoding shares opcode and `funct3` with `kl.exec`, but `funct2` (i.e., the 
 ]}
 ....
 
-`r` is the CL indexing mode selector.
+`r` is the CL indexing mode selector. Indirect CL addressing is only available when `Zklind` is present. Otherwise, `r` = 1 is an illegal instruction.
 
 If bit `h` (bit 28) is 0, the instruction is `kl.restrictl`; if `h` is 1, it is `kl.restricth`.
 
@@ -1847,6 +1856,8 @@ Bits [26:25], i.e., field `R`, take the following values depending on how the CL
 . `11`{nbsp}{nbsp} if the source and the output CLs are both selected using the
   values of GPRs.
 
+_Indirect CR addressing is always available for this instruction, including `kl.rename` and `kl.swap`, in other words, also when `Zklind` is not present._
+
 Bits [28:27], i.e., field `T`, take the following values to encode the three instructions:
 
 . `00`{nbsp}{nbsp} encodes `kl.clone`.
@@ -1918,6 +1929,7 @@ The instruction is an R-type instruction.
 ....
 
 Bits [26:25], i.e., field `R`, are encoded as for `kl.clone` (<<KLEE-instruction-clone>>).
+For this instruction, indirect CL addressing is only available when `Zklind` is present. Otherwise, `R` {ne} `00` is an illegal instruction.
 
 The auxiliary input is always a GPR: `kl.derive` has no form without one and no vector form.
 --
@@ -2036,6 +2048,8 @@ _Encoding_::
 ....
 +
 `funct3` = `0b000` selects the immediate CL index in the `context` field and `funct3` = `0b001` selects the CL indexed by the GPR named by that field.
++
+`r` is the CL indexing mode selector. Indirect CL addressing is only available when `Zklind` is present. Otherwise, `r` = 1 is an illegal instruction.
 
 _Mnemonics_::
 `kl.load{fournbsp}{nbsp}{nbsp}{nbsp}Kd|K{Xd}, %offset(Xs1)`
@@ -2080,6 +2094,8 @@ _Encoding_::
     { bits:  7, name: 'immed[11:5]' },
 ]}
 ....
++
+`r` is the CL indexing mode selector. Indirect CL addressing is only available when `Zklind` is present. Otherwise, `r` = 1 is an illegal instruction.
 
 _Mnemonic_::
 `kl.store %offset(Xs1), Ks2|K{Xs2}`
@@ -2308,7 +2324,7 @@ SGR1:: The MDH's _State_ field reflects the current state whenever the CC is in 
 This ensures that these states can be unambiguously determined from the _State_ field alone, without inspecting other fields or the Content.
 
 [[KLEE-SGR-no-exec-in-ready,SGR2]] SGR2:: No `kl.exec` instruction may be executed in State _Ready_ unless the Machine explicitly allows it.
-Issuing one otherwise transitions the CL to Error State _Invalid_ (Rule <<KLEE-AGR-not-allowed-instructions>> in Book 2).
+Issuing one otherwise transitions the CL to Error State _Invalid_ (Rule <<KLEE-MGR-not-allowed-instructions>> in Book 2).
 
 SGR3:: Any transition listed in a Machine's specification may be triggered by performing an explicit `kl.setst` operation (<<KLEE-instruction-setst>>), or may be induced by certain conditions specified in the Machine's specification. Transitions to and between _Configuration_ States use `kl.mgmt`; transitions from a Configuration State use `kl.mgmt`, `kl.clear`, an Error State-setting `kl.setst`, or a `kl.clone` naming the CL as destination.
 
@@ -2316,7 +2332,7 @@ SGR4:: In a Valid State other than _Success_ and _Failure_, `kl.setst` may be is
 When the Machine needs to prevent this, it transitions to a different State upon completing the instruction.
 
 [[KLEE-SGR-success-failure,SGR5]] SGR5:: In States _Success_ and _Failure_, only the following KLEE instructions are permitted: `kl.mgmt`, `kl.size`, `kl.avail`, `kl.setst` (subject to Rule <<KLEE-SGR-setst-in-success-failure>> below), `kl.getmd*`, `kl.getst`, `kl.clone`, `kl.restrict*`, and `kl.derive`.
-A `kl.exec` other than those permitted below, or a `kl.setst` not allowed by the architecture or by the Machine in its current _State_ and _StateExtension_, transitions the CL to Error State _Invalid_ (cf. Rule <<KLEE-AGR-not-allowed-instructions>> in Book 2).
+A `kl.exec` other than those permitted below, or a `kl.setst` not allowed by the architecture or by the Machine in its current _State_ and _StateExtension_, transitions the CL to Error State _Invalid_ (cf. Rule <<KLEE-MGR-not-allowed-instructions>> in Book 2).
 +
 In State _Success_ `kl.exec` is also permitted solely to extract further output from a Machine that produces arbitrarily long output, such as a XOF.
 Also permitted is `kl.derive` in the following two cases: where the source endpoint is one of its exportable fields (<<KLEE-instruction-derive>>); and under the conditions of use of `kl.exec`.
@@ -2727,7 +2743,7 @@ Upon preemption, they may follow any of the behaviors described in <<KLEE-IRR-re
 The implementation must support at least one of options 3, 4 and 5 of Rule <<KLEE-IRR-resumability-options>> for these operations; under option 5 it guarantees, and documents, a minimum uninterrupted execution quantum or a maximum number of consecutive restarts of one instruction, so that repeated interruption cannot prevent completion.
 If an operation continues while the hart is preempted and the hart waits for completion before accessing the affected state, any nested interrupt handler must also wait before accessing that state.
 +
-If such an operation can advance its recorded progress towards completion of the operation, interrupt at well defined points, and resume from the recorded progress point, the progress must be recorded in the _MachineUse_ field, in an implementation-defined format; `klstart` remains reserved for byte counts (<<KLEE-CSR-klstart>>). An implementation may interrupt such an operation and record its progress only where the recorded state, including the ADS, cannot be consumed against inputs other than those the operation started with; Rule <<KLEE-AGR-progress-discard>> of Book 2 guarantees this by discarding the recorded state on any transition of the CL's _State_ other than the completion of the operation (Rule <<KLEE-GR-atomic-randomness>>). If progress is recorded, the implementation exports the data necessary to support resumption in the ADS. Any importing implementation may discard this Section and restart the operation, and must restart it on an Implementation Qualifier mismatch, or if the ADS is removed from the CL (using `kl.clearads`, cf. <<KLEE-instruction-clearads>>).
+If such an operation can advance its recorded progress towards completion of the operation, interrupt at well defined points, and resume from the recorded progress point, the progress must be recorded in the _MachineUse_ field, in an implementation-defined format; `klstart` remains reserved for byte counts (<<KLEE-CSR-klstart>>). An implementation may interrupt such an operation and record its progress only where the recorded state, including the ADS, cannot be consumed against inputs other than those the operation started with; Rule <<KLEE-MGR-progress-discard>> of Book 2 guarantees this by discarding the recorded state on any transition of the CL's _State_ other than the completion of the operation (Rule <<KLEE-GR-atomic-randomness>>). If progress is recorded, the implementation exports the data necessary to support resumption in the ADS. Any importing implementation may discard this Section and restart the operation, and must restart it on an Implementation Qualifier mismatch, or if the ADS is removed from the CL (using `kl.clearads`, cf. <<KLEE-instruction-clearads>>).
 +
 The architected Content of the CL does not depend on the progress of the operation: an implementation that records progress keeps every intermediate result in the ADS, and if the operation restarts, it does so from the architected Content alone.
 

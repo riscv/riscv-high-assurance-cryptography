@@ -31,7 +31,7 @@ WHAT IS MODELED, transcribed from the current text of src/ace-ISA-machines.adoc:
     <<KLEE-hash-functions>> reading state[...] in place of block[...]; at
     block_base = t the bits of OUTPUT beyond output_base are cleared and the CL goes
     to _Success_.
-  * Error handling: <<KLEE-AGR-not-allowed-instructions>> (a State, transition or
+  * Error handling: <<KLEE-MGR-not-allowed-instructions>> (a State, transition or
     Form the Machine does not allow), <<KLEE-SGR-no-exec-in-ready>>,
     <<KLEE-SGR-success-failure>>, <<KLEE-SGR-usage-cr-error-state>> (no operation,
     output window zeroed), <<KLEE-instruction-setst>> (an unsupported #immed7), and
@@ -47,7 +47,7 @@ WHAT IS MODELED, transcribed from the current text of src/ace-ISA-machines.adoc:
     gives the hash functions (<<KLEE-instruction-derive>>,
     <<KLEE-derive-rule-both-fixed-size>>): a digest is moved into the _Hash_Absorb_
     State of another CL, which the caller then pads and finishes with kl.exec.
-  AGR10 (<<KLEE-AGR-progress-discard>>) does not apply: no SHA-2 State performs a
+  MGR10 (<<KLEE-MGR-progress-discard>>) does not apply: no SHA-2 State performs a
   long-running operation without data.
 
 COMPRESSION CORES are implemented from scratch (FIPS 180-4 sect. 6): both the
@@ -429,7 +429,7 @@ class KleeSha2CL:
             return 'retired', v2b(self._hash_output(KLLEN, resuming, prior), nbytes)
         # _Ready_ (<<KLEE-SGR-no-exec-in-ready>>), _Success_ of a hash function
         # (<<KLEE-SGR-success-failure>>), or a Form the State does not expect
-        # (<<KLEE-AGR-not-allowed-instructions>>)
+        # (<<KLEE-MGR-not-allowed-instructions>>)
         self._invalid()
         return 'invalid', (bytes(nbytes) if form == 'C' else None)
 
@@ -670,7 +670,7 @@ cl = fresh()
 cl.kl_setst(KL_STATE_HASH_ABSORB)
 _, out = cl.kl_exec('C', nbytes=16)
 check('Form C kl.exec in _Hash_Absorb_ -> _Invalid_, output window zeroed '
-      '(<<KLEE-AGR-not-allowed-instructions>>)',
+      '(<<KLEE-MGR-not-allowed-instructions>>)',
       cl.mdh_state == KL_STATE_INVALID and out == bytes(16))
 
 cl = fresh()
@@ -679,7 +679,7 @@ cl.kl_exec('B', PAD_ABC_256)
 cl.kl_setst(KL_STATE_HASH_OUTPUT)
 cl.kl_exec('B', bytes(64))
 check('Form B kl.exec in _Hash_Output_ -> _Invalid_ '
-      '(<<KLEE-AGR-not-allowed-instructions>>)', cl.mdh_state == KL_STATE_INVALID)
+      '(<<KLEE-MGR-not-allowed-instructions>>)', cl.mdh_state == KL_STATE_INVALID)
 
 cl = fresh('SHA-224')
 cl.kl_setst(KL_STATE_HASH_ABSORB)

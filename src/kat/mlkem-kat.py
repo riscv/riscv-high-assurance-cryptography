@@ -24,12 +24,12 @@ What this harness validates
       `kl.setst` immediates of <<KLEE-instruction-setst>> and Rules SGR2, SGR4-SGR8,
       SGR10 and SGR16 of <<KLEE-State-management>>;
     - the loading and emitting of the long fields under Rule
-      <<KLEE-AGR-load-long-field>>, whose counter _W_ is _MachineUse_ in BYTES;
+      <<KLEE-MGR-load-long-field>>, whose counter _W_ is _MachineUse_ in BYTES;
     - the FIPS 203 {sect}7.2 / {sect}7.3 input checks, performed when a field
       finishes loading: a key check failure is a *configuration* error (Error
       State _Invalid_), a ciphertext type check failure a *data* error (State
       _Failure_, a Valid State);
-    - the long-running operations of Rule <<KLEE-AGR-progress-discard>> (AGR10),
+    - the long-running operations of Rule <<KLEE-MGR-progress-discard>> (MGR10),
       for which _MachineUse_ is the progress field _P_: a halted operation resumes
       with the random values it drew, and every transition of the _State_ discards
       them and their intermediate values;
@@ -46,7 +46,7 @@ What this harness validates
     patched silently.
 
 The model does not use `process_VLI`: <<KLEE-PQC-ML-KEM>> loads and emits its long
-fields under Rule <<KLEE-AGR-load-long-field>> alone, with a byte counter.  The RBG
+fields under Rule <<KLEE-MGR-load-long-field>> alone, with a byte counter.  The RBG
 (<<KLEE-RBG>>) is injectable so that the derandomized official vectors can be used:
 FIPS 203 Algorithms 19 and 20 draw `d`, `z`, resp. `m`, and hand them to Algorithms
 16 and 17, which the vectors fix.  (The spec cites these as "Machine 19/20/21",
@@ -427,9 +427,9 @@ class MLKEMCL(CL):
 
     @property
     def use(self):
-        """_MachineUse_: the counter _W_ of Rule <<KLEE-AGR-load-long-field>> in the
+        """_MachineUse_: the counter _W_ of Rule <<KLEE-MGR-load-long-field>> in the
         loading and emitting States, in bytes, and the progress field _P_ of Rule
-        <<KLEE-AGR-progress-discard>> in the long-running ones."""
+        <<KLEE-MGR-progress-discard>> in the long-running ones."""
         return self.get(F_MACHINEUSE)
 
     @use.setter
@@ -437,20 +437,20 @@ class MLKEMCL(CL):
         self.put(F_MACHINEUSE, v)
 
     def discard_progress(self):
-        """AGR10: _P_ is zeroed and the material kept for the operation destroyed."""
+        """MGR10: _P_ is zeroed and the material kept for the operation destroyed."""
         self.use = 0
         self.ads = None
         self.put(F_AUXDATALEN, 0)
 
     def enter_error(self, st):
         super().enter_error(st)
-        self.use = 0                               # AGR10: a transition zeroes _P_
+        self.use = 0                               # MGR10: a transition zeroes _P_
 
     def transition(self, st):
         """A change of _State_ among the Valid States, by `kl.setst` or on completion
         of an operation."""
         self.put(F_STATE, st)
-        # AGR10 zeroes _P_ on every transition, a same-State `kl.setst` included; AGR7
+        # MGR10 zeroes _P_ on every transition, a same-State `kl.setst` included; MGR7
         # zeroes _W_ on entry into a loading or emitting State.
         self.discard_progress()
         if st == S_READY:
@@ -459,7 +459,7 @@ class MLKEMCL(CL):
             for name in FIELD_NAMES:
                 setattr(self, name, bytes(self.size[name]))
         if st in IN_FIELDS:
-            # AGR7: "entering a loading state also zeroes the field, so that reloading
+            # MGR7: "entering a loading state also zeroes the field, so that reloading
             # replaces it".
             name = IN_FIELDS[st]
             setattr(self, name, bytes(self.size[name]))
@@ -499,12 +499,12 @@ class MLKEMCL(CL):
 
     def exec_B(self, data):
         """Form B `kl.exec Kn|K{Xn}, INPUT` in an _*_Input_ State: loads the field
-        under Rule <<KLEE-AGR-load-long-field>>, _W_ = _MachineUse_ in bytes."""
+        under Rule <<KLEE-MGR-load-long-field>>, _W_ = _MachineUse_ in bytes."""
         if not self.gate():
             return
         st = self.state
         if st not in IN_FIELDS:
-            self.enter_error(S_INVALID)            # SGR2, SGR5, AGR10, AGR1
+            self.enter_error(S_INVALID)            # SGR2, SGR5, MGR10, MGR1
             return
         name = IN_FIELDS[st]
         size, w = self.size[name], self.use
@@ -551,7 +551,7 @@ class MLKEMCL(CL):
         size, w = self.size[name], self.use
         if w >= size or w + nbytes > size:
             # Nothing left to emit, or "an emitting `kl.exec` that would carry _W_ past
-            # the field size invalidates the CL" (AGR7).
+            # the field size invalidates the CL" (MGR7).
             self.enter_error(S_INVALID)
             return bytes(nbytes)
         self.use = w + nbytes
@@ -570,11 +570,11 @@ class MLKEMCL(CL):
             return 'noop'
         st = self.state
         if st not in LONG_RUNNING:
-            # SGR2 in _Ready_, SGR5 in _Success_/_Failure_, AGR1 elsewhere.
+            # SGR2 in _Ready_, SGR5 in _Success_/_Failure_, MGR1 elsewhere.
             self.enter_error(S_INVALID)
             return 'retired'
         if self.use == 0 or self.resume_redraws:
-            # AGR10: "starts a new one, drawing fresh random values, if it is zero".
+            # MGR10: "starts a new one, drawing fresh random values, if it is zero".
             work = self.start(st)
             if work is None:
                 # FIPS 203 returns its bottom value: "If `ML-KEM.KeyGen` fails, the
@@ -635,7 +635,7 @@ class MLKEMCL(CL):
 
     def export_import(self, keep_ads=True):
         """An export as an SCC and the import of that image into a CL
-        (<<KLEE-SCC-export>>, <<KLEE-SCC-import>>), modelled at the level Rule AGR10
+        (<<KLEE-SCC-export>>, <<KLEE-SCC-import>>), modelled at the level Rule MGR10
         needs: `Content1` is the *Serialized Content* table -- `decapsk`, `ciphertext`,
         `sharedkey`, in that order -- the MDH is restored with its _State_ and
         _MachineUse_, and the importer either keeps the ADS or discards it."""
@@ -648,7 +648,7 @@ class MLKEMCL(CL):
         new.encapsk = new.decapsk[384 * self.k:768 * self.k + 32]
         new.ads = copy.deepcopy(self.ads) if keep_ads else None
         if not keep_ads:
-            new.discard_progress()                 # AGR10: an import discarding the ADS
+            new.discard_progress()                 # MGR10: an import discarding the ADS
         return new
 
     # -- `kl.derive` endpoints ------------------------------------------
@@ -990,7 +990,7 @@ def t_input_validation():
 
 
 def t_state_machine():
-    print('\n-- State machine, and the long-field transfers of Rule AGR7 --')
+    print('\n-- State machine, and the long-field transfers of Rule MGR7 --')
     ps = 768
     v = vector('encaps', ps)
     ek, m = bytes.fromhex(v['ek']), bytes.fromhex(v['m'])
@@ -1022,7 +1022,7 @@ def t_state_machine():
     chk('the excess of the final loading transfer is ignored',
         cc.use == size and cc.encapsk == ek and cc.state == S_EK_IN)
     cc.setst(S_EK_IN)
-    chk('a same-State kl.setst zeroes _MachineUse_ and the field (SGR4, AGR7)',
+    chk('a same-State kl.setst zeroes _MachineUse_ and the field (SGR4, MGR7)',
         cc.use == 0 and cc.encapsk == bytes(size))
     cc.exec_B(b'\x77' * 32)
     chk('reloading replaces the field rather than combining it with the old contents',
@@ -1148,12 +1148,12 @@ def t_state_machine():
         c2 = MLKEMCL(ps)
         c2.setst(st)
         c2.exec_B(bytes(16))
-        chk(f'a Form B kl.exec in _{MLKEM_STATES[st]}_ gives _Invalid_ (AGR10: besides '
+        chk(f'a Form B kl.exec in _{MLKEM_STATES[st]}_ gives _Invalid_ (MGR10: besides '
             'kl.setst, only Form D is admitted)', c2.state == S_INVALID)
 
 
 def t_long_running():
-    print('\n-- Long-running operations: Rule AGR10, _MachineUse_ as the field P --')
+    print('\n-- Long-running operations: Rule MGR10, _MachineUse_ as the field P --')
     ps = 768
     kv = vector('keyGen', ps)
     ev = vector('encaps', ps)
@@ -1297,7 +1297,7 @@ def t_long_running():
     chk('kl.clearads keeps the _State_, removes the ADS, and the operation restarts',
         kept_state and rbg.draws == 4
         and (cc.encapsk, cc.decapsk) == K.keygen_internal(d2, z2, ps))
-    info('AGR10 does not list kl.clearads among the events that zero P, yet IRR4 makes '
+    info('MGR10 does not list kl.clearads among the events that zero P, yet IRR4 makes '
          'an operation whose ADS was removed with kl.clearads restart, and a non-zero P '
          'means "resume"; the model zeroes P on kl.clearads.')
 
@@ -1403,8 +1403,8 @@ def t_derive():
     info('No text names the source States that admit the `sharedkey` endpoint.  Read '
          'as: _Success_ and _Failure_ (SGR5, which admits kl.derive on an exportable '
          'field there) and _ciphertext_Output_, where _Encapsulate_ leaves the CC; the '
-         'long-running States admit only Form D kl.exec and kl.setst (AGR10), and no '
-         'other State admits kl.derive (AGR1).  _Failure_ is not exercised.')
+         'long-running States admit only Form D kl.exec and kl.setst (MGR10), and no '
+         'other State admits kl.derive (MGR1).  _Failure_ is not exercised.')
 
     chk('kl.derive naming the same CL twice raises an illegal-instruction exception',
         _raises(IllegalInstruction, lambda: kl_derive(src, src, 32)))

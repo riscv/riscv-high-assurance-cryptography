@@ -1465,7 +1465,7 @@ class Unit:
             self._retire()
             return g
         if expected is None or (form != "D" and form != expected):
-            self._enter_error(k, ST_INVALID)                # SGR2, SGR5, AGR1
+            self._enter_error(k, ST_INVALID)                # SGR2, SGR5, MGR1
             zero_output()
             self._retire()
             return "invalid"
@@ -3878,7 +3878,7 @@ def test_sgr():
     w = fresh()
     ready_cipher(w, 0)
     check("SGR19: an unconfigured KLIOBUF precedes the Machine's rules (KLLEN = 0 would "
-          "invalidate under AGR2)", (trap_of(w.exec_, 0, "D"), w.getst(0)),
+          "invalidate under MGR2)", (trap_of(w.exec_, 0, "D"), w.getst(0)),
           ("unconfigured_buffer", ToyCipher.ENCRYPT))
     w = fresh()
     provision(w, 0, cipher_pi())

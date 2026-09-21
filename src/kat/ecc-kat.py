@@ -31,7 +31,7 @@ ANCHOR LEVELS, strongest first.  Each case prints its level.
   [MODEL] Properties of the specification itself: state-machine legality, entry
           conditions, field-retention (`Xs`) semantics, representation rules,
           retry rules, and the `Progress` discipline of Rule
-          <<KLEE-AGR-progress-discard>> (AGR10) for the interruptible States.
+          <<KLEE-MGR-progress-discard>> (MGR10) for the interruptible States.
           Anchored on the spec text, not on an external vector.
 
 NOTE ON k.  A real KLEE unit draws the per-signature secret k from the RBG
@@ -137,7 +137,7 @@ def transition_targets(state, eddsa, literal):
 
     _Ready_ is a target of every valid state because <<KLEE-ECC>> does not forbid it
     and SGR8 then permits it; this is how a caller abandons a long-running operation,
-    which Rule <<KLEE-AGR-progress-discard>> requires to discard its Progress.
+    which Rule <<KLEE-MGR-progress-discard>> requires to discard its Progress.
 
     `literal=True` reproduces the pre-fix bullet list, in which _Set_Signature_
     had no exit at all (review finding M10, since resolved).  It is kept so that
@@ -215,7 +215,7 @@ class CL:
         self.rnd = None
         self.has_sec = self.has_sig = self.has_hash = self.has_rnd = False
         self.out_type = False
-        self.progress = 0                       # _MachineUse_[15:1], AGR10's field P
+        self.progress = 0                       # _MachineUse_[15:1], MGR10's field P
         self.block_base = 0
         self.msg_pass = 0
         self.ctx = b''
@@ -276,7 +276,7 @@ class CL:
                              ' is not an allowed transition (Generic Rule 2)')
         if self.state == MSG_ABSORB:
             self._finalize_pass()
-        # AGR10: P is zeroed, and the material kept for the operation destroyed, on
+        # MGR10: P is zeroed, and the material kept for the operation destroyed, on
         # every transition of _State_ -- including a same-State kl.setst, one to
         # _Ready_ and one to an Error State -- and the operation restarts.
         self.discard_progress()
@@ -322,7 +322,7 @@ class CL:
             self._return_to_ready(form, xs)
         self.state = target
 
-    # -- AGR10: Progress, and the material that is meaningful only with it -----
+    # -- MGR10: Progress, and the material that is meaningful only with it -----
     @property
     def machine_use(self):
         """_MachineUse_ as <<KLEE-ECC-MachineUse>> lays it out: bit 0 OutputType,
@@ -330,7 +330,7 @@ class CL:
         return (1 if self.out_type else 0) | (self.progress << 1)
 
     def discard_progress(self):
-        """AGR10: zero P and destroy the material kept for the interrupted
+        """MGR10: zero P and destroy the material kept for the interrupted
         operation.  RndNum is that material for <<KLEE-ECC>> (and `r`, `k'` for
         <<KLEE-EdDSA>>, which keeps no random value of its own)."""
         self.progress = 0
@@ -477,7 +477,7 @@ class CL:
         e = b2v(self.hash)
         # "If Progress is zero, the per-signature secret k is drawn from the RBG into
         # RndNum ...; otherwise the interrupted operation is resumed with the RndNum
-        # held" (AGR10).  A resumed operation therefore consumes no RBG value; should
+        # held" (MGR10).  A resumed operation therefore consumes no RBG value; should
         # the held k turn out degenerate, the retry rules draw the next one.
         held = [b2v(self.rnd)] if self.progress and self.has_rnd else []
         it = iter(held + list(rbg or []))
@@ -1059,7 +1059,7 @@ def _point_mul_ok(c, k):
 
 def test_progress_agr10():
     head('Interrupted long-running operations: `Progress` and Rule '
-         '<<KLEE-AGR-progress-discard>> (AGR10)')
+         '<<KLEE-MGR-progress-discard>> (MGR10)')
     c = EC.P256
     vec = RFC6979['secp256r1']
     msg, hname, k, r_exp, s_exp = vec['sigs'][0]

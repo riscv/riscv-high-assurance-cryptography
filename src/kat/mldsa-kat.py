@@ -19,7 +19,7 @@ What this harness validates
     external-mu convention with the `ctx` / `ctxlen` binding, the `Hedged` flag
     that the Form B `kl.setst` auxiliary `Xs` sets in _StateExtension_ and the
     `rnd` the `kl.exec` then draws or holds across an interruption under Rule
-    <<KLEE-AGR-progress-discard>>, _Sign_Generate_ via ML-DSA.Sign_internal,
+    <<KLEE-MGR-progress-discard>>, _Sign_Generate_ via ML-DSA.Sign_internal,
     _Sign_Verify_ via ML-DSA.Verify_internal, _compute_pubKey_ with its
     tr-consistency check, and the _MachineUse_ transfer-counter rules
     (excess bits ignored on input, past-the-end -> Error State _Invalid_).
@@ -200,14 +200,14 @@ class MLDSAContext:
         self.mdh = mdh_set(self.mdh, F_STATE, state)
         if state == S_READY:
             self._clear_volatile()
-        # AGR10: _MachineUse_ is the field P of <<KLEE-AGR-progress-discard>>, so it
+        # MGR10: _MachineUse_ is the field P of <<KLEE-MGR-progress-discard>>, so it
         # is zeroed on every transition of _State_, together with the material kept
         # for an interrupted operation -- here `rnd`.  For the loading and emitting
-        # states this is also AGR7's "W is zeroed on entry".
+        # states this is also MGR7's "W is zeroed on entry".
         self.alguse = 0
         self.rnd = b'\0' * 32
         if state in IN_STATES:
-            # AGR7: "entering a loading state also zeroes the field, so that
+            # MGR7: "entering a loading state also zeroes the field, so that
             # reloading replaces it".
             setattr(self, IN_STATES[state], b'')
         if state == S_SK_IN:
@@ -263,7 +263,7 @@ class MLDSAContext:
 
         `rnd` is the value the RBG supplies to a hedged _Sign_Generate_; `halt`, if
         given, is the non-zero progress a precise interrupt would record in
-        _MachineUse_ under Rule <<KLEE-AGR-progress-discard>>, leaving the operation
+        _MachineUse_ under Rule <<KLEE-MGR-progress-discard>>, leaving the operation
         unfinished."""
         st = self.state
         if st == S_GENKEYPAIR:
@@ -289,7 +289,7 @@ class MLDSAContext:
             if not self.has_privkey:
                 self._invalidate('Sign_Generate with HasPrivKey false')
             # "The operation is long-running: _MachineUse_ is the field P of Rule
-            #  <<KLEE-AGR-progress-discard>>.  If it is zero, rnd is drawn from an
+            #  <<KLEE-MGR-progress-discard>>.  If it is zero, rnd is drawn from an
             #  approved random bit generator when Hedged is set and is zeros(256)
             #  otherwise; if it is non-zero, the interrupted operation is resumed
             #  with the rnd held.  On completion rnd is destroyed."
@@ -744,8 +744,8 @@ def t_sign_verify_flow():
 
 
 def t_progress_agr10():
-    print('\n-- Interrupted _Sign_Generate_: Rule <<KLEE-AGR-progress-discard>> '
-          '(AGR10) --')
+    print('\n-- Interrupted _Sign_Generate_: Rule <<KLEE-MGR-progress-discard>> '
+          '(MGR10) --')
     ps = 44
     hed = [v for v in VECTORS['sigGenMu'] if v['rnd'] != '00' * 32][0]
     rnd = bytes.fromhex(hed['rnd'])

@@ -12,7 +12,7 @@ Two independent implementations are checked against the published vectors:
         the left operand of @ is more significant; bswap is byte reversal).
         The model is a CL driven by kl.setst / kl.exec Forms and KLLEN, so it
         also applies the General Rules for Machines (<<KLEE-Machines-other-rules>>,
-        AGR1-AGR6) and the State rules of Book 1 (<<KLEE-State-field>>: SGR2,
+        MGR1-MGR6) and the State rules of Book 1 (<<KLEE-State-field>>: SGR2,
         SGR4-SGR6, SGR8, SGR10, SGR16) where OCB relies on them, and it
         exports and imports the Serialized Content of <<KLEE-OCB-mode>>
         (the plaintext of `Content1`, <<KLEE-SCC>>; the sealing itself is
@@ -31,7 +31,7 @@ Checks performed
   * REF vs RFC, and KLEE vs RFC for all 17 sample ciphertexts, the KLEE model
     being driven two ways: one block per kl.exec with the last blocks passed
     at their exact length, and all full blocks of the AD and of the plaintext
-    in one multi-block kl.exec (AGR3) with filler above the nonce and the
+    in one multi-block kl.exec (MGR3) with filler above the nonce and the
     last blocks, which the Machine must ignore (<<KLEE-truncation-vs-length>>).
   * KLEE internal values vs the RFC's published intermediates.
   * KLEE decryption: plaintext recovery + Hash_Verify Success on the good
@@ -39,15 +39,15 @@ Checks performed
     last_blk_len = 0 Form D path on both sides.
   * The Serialized Content: the CL is exported and re-imported after every
     instruction of every sample (encryption and decryption), with the derived
-    L$ and L[i] recomputed on import (<<KLEE-AGR-recomputed-fields>>); every
+    L$ and L[i] recomputed on import (<<KLEE-MGR-recomputed-fields>>); every
     admissible field value fits its row; the sizes are reported.
   * The RFC 7253 iterated test, end-to-end through the KLEE model.
   * State machine: instructions and Forms not allowed in the current State
-    (<<KLEE-AGR-not-allowed-instructions>>, <<KLEE-SGR-no-exec-in-ready>>,
+    (<<KLEE-MGR-not-allowed-instructions>>, <<KLEE-SGR-no-exec-in-ready>>,
     <<KLEE-SGR-success-failure>>), the KLIOBUF substitutions of
-    <<KLEE-usage-input-output>>, KLLEN not a multiple of b (AGR2), one block
-    whatever KLLEN in the last-block, finalize and verify States (AGR3) with
-    OUTPUT cleared above the written bits (AGR6), the tag_len-bit comparison
+    <<KLEE-usage-input-output>>, KLLEN not a multiple of b (MGR2), one block
+    whatever KLLEN in the last-block, finalize and verify States (MGR3) with
+    OUTPUT cleared above the written bits (MGR6), the tag_len-bit comparison
     of Hash_Verify, the repeated nonce kl.exec, the _MachinePolicy_ gate on
     Encrypt/Decrypt (<<KLEE-Machine-field>>), the index = ones(48) guard in
     every block-consuming State, a return to Ready (SGR8), and Error State
@@ -65,7 +65,7 @@ Checks performed
       NC-ktop       : the bswap dropped from Ktop's input,
                       enc_blk(key, Nonce_be[127:6] @ zeros(6)).
       NC-blockorder : a multi-block kl.exec taking its blocks from the most
-                      significant position downwards, contrary to AGR3.
+                      significant position downwards, contrary to MGR3.
       NC-scc-drop   : the Serialized Content without its `hash_A` row.
       NC-padbyte    : the nonce padding bits cleared in byte 0 instead of
                       byte q-1 (the reading this harness used until
@@ -214,7 +214,7 @@ class Invalid(Exception):
         self.output = output
 
 
-SKS = {}                     # System Key Store: SKID -> key bytes (AGR8)
+SKS = {}                     # System Key Store: SKID -> key bytes (MGR8)
 
 
 def ocb_layout(key_bits):
@@ -433,8 +433,8 @@ class KleeOcb:
             t = self.tag_len
             out = cat((0, B - t), (sl(self.checksum_P, t - 1, 0), t))
             self.state = S_SUCCESS
-            return out & ((1 << klen) - 1)        # AGR6: bits beyond b are zero
-        # _Enc_Last_Block_ / _Dec_Last_Block_: exactly one block (AGR3)
+            return out & ((1 << klen) - 1)        # MGR6: bits beyond b are zero
+        # _Enc_Last_Block_ / _Dec_Last_Block_: exactly one block (MGR3)
         if n == 0:                                # Form D
             self.checksum_P = self.enc(self.checksum_P ^ self.offset
                                        ^ self.Ldollar) ^ self.hash_A
@@ -450,7 +450,7 @@ class KleeOcb:
             self.checksum_P = self.enc(self.checksum_P ^ tmp
                                        ^ self.Ldollar) ^ self.hash_A   # tag
         self.state = S_ENC_TAG_FIN if s == S_ENC_LAST else S_HASH_VERIFY
-        return out & ((1 << klen) - 1)            # AGR6: bits beyond b are zero
+        return out & ((1 << klen) - 1)            # MGR6: bits beyond b are zero
 
     def _set_nonce(self, INPUT, klen):
         # N <- zeros(120 - 8q) @ INPUT[8q-1:0], q = ceil(N_len/8), with the
@@ -463,10 +463,10 @@ class KleeOcb:
         self.N = cat((0, 120 - 8 * q), (img, 8 * q))
 
     def _blocks(self, s, INPUT, klen):
-        if klen % B:                              # AGR2: no operation, Invalid
+        if klen % B:                              # MGR2: no operation, Invalid
             self._invalid('KLLEN not a multiple of b')
         out = 0
-        order = range(0, klen, B)                 # AGR3: i = 0, b, ..., KLLEN - b
+        order = range(0, klen, B)                 # MGR3: i = 0, b, ..., KLLEN - b
         for i in (reversed(order) if self.msb_first else order):
             blk = sl(INPUT, i + B - 1, i)
             if self.index == ONES48:
@@ -540,7 +540,7 @@ class KleeOcb:
         new.hash_A, new.checksum_P = f.get('hash_A', 0), f['checksum_P']
         new.index, new.last_blk_len = f['index'], f['last_blk_len']
         new.tag_len = 32 * (f['tag_len'] + 2)
-        new._ladder()                             # derived fields recomputed (AGR4)
+        new._ladder()                             # derived fields recomputed (MGR4)
         new.last_ad_done = False                  # nothing records it: SPEC-NOTE
         return new
 
@@ -741,7 +741,7 @@ def main():
 
     print("RFC 7253 Appendix A, AEAD_AES_128_OCB_TAGLEN128\n"
           "  1blk  : one block per kl.exec, last blocks at their exact length\n"
-          "  multi : one kl.exec per section (AGR3), filler above nonce and last blocks\n"
+          "  multi : one kl.exec per section (MGR3), filler above nonce and last blocks\n"
           "  dec   : both ways, P recovered + Hash_Verify Success; tamper: Failure\n"
           "  SCC   : encrypt and decrypt with export/import after every instruction")
     print(f"{'case':>4} {'|A|':>4} {'|P|':>4}  {'REF-enc':8} {'KLEE-1blk':10} "
@@ -831,7 +831,7 @@ def main():
          "harmless since _Hash_Absorb_ assigns tag_len before any use.")
 
     # ------------------------------------------------ State machine
-    print("\nState machine (AGR1-AGR6 of <<KLEE-Machines-other-rules>>, SGR rules "
+    print("\nState machine (MGR1-MGR6 of <<KLEE-Machines-other-rules>>, SGR rules "
           "of Book 1); vector 0D unless stated:")
     N13, CT13 = nonce(0xD), bytes.fromhex(VEC128[13][3])
 
@@ -862,7 +862,7 @@ def main():
         cl.setst(S_DEC_LAST if dec else S_ENC_LAST, 'B', n)
         return cl, out
 
-    # -- instructions and Forms the current State does not allow (AGR1)
+    # -- instructions and Forms the current State does not allow (MGR1)
     cl = KleeOcb(K128)
     line("kl.exec in Ready -> Invalid (SGR2)",
          invalid(lambda: cl.exec('B', 0)) and cl.state == S_INVALID)
@@ -935,14 +935,14 @@ def main():
         ok2 = ok3 = False
     line("Form D kl.exec and Form A kl.setst #hash_verify (substitutions) "
          "reproduce all 16 vectors", ok2 and ok3)
-    # -- KLLEN (AGR2, AGR3, AGR6) and the last_blk_len rules
+    # -- KLLEN (MGR2, MGR3, MGR6) and the last_blk_len rules
     for klen in (64, 136, 200):
         cl = at_hash_absorb()
-        line(f"KLLEN = {klen} in Hash_Absorb -> no operation, Invalid (AGR2)",
+        line(f"KLLEN = {klen} in Hash_Absorb -> no operation, Invalid (MGR2)",
              invalid(lambda: cl.exec('B', 0, klen)) and cl.state == S_INVALID)
     cl = at_crypt()
     e = invalid(lambda: cl.exec('A', b2v(S40[:16]) | 1 << 140, 144))
-    line("KLLEN = 144 in Encrypt -> no operation, OUTPUT zero, Invalid (AGR2)",
+    line("KLLEN = 144 in Encrypt -> no operation, OUTPUT zero, Invalid (MGR2)",
          e is not None and e.output == 0 and cl.state == S_INVALID)
     for bad in (4, 12, 124, 128, 136):
         line(f"last_blk_len = {bad:3} (not a multiple of 8, or > 120) -> Invalid",
@@ -953,13 +953,13 @@ def main():
          invalid(lambda: cl.exec('B', b2v(S40[:7]), 56)))
     info("<<KLEE-truncation-vs-length>> gives KLLEN >= last_blk_len as the only "
          "restriction on a last block without stating the consequence; the "
-         "harness applies AGR2 (no operation, Error State _Invalid_).")
+         "harness applies MGR2 (no operation, Error State _Invalid_).")
     cl, _ = at_last()
     out = cl.exec('A', b2v(S40[32:]) | junk_above(64, 256), 256)
     ok1 = cl.state == S_ENC_TAG_FIN and v2b(out, 32) == CT13[32:40] + bytes(24)
     tag = cl.exec('C', klen=256)
     line("Enc_Last_Block, Enc_Tag_Finalize with KLLEN = 256: one block each, "
-         "OUTPUT above the written bits zero (AGR3, AGR6)",
+         "OUTPUT above the written bits zero (MGR3, MGR6)",
          ok1 and v2b(tag, 32) == CT13[40:] + bytes(16) and cl.state == S_SUCCESS)
     cl, pfull = at_last(dec=True)
     out = cl.exec('A', b2v(CT13[32:40]) | junk_above(64, 256), 256)
@@ -1050,7 +1050,7 @@ def main():
               "says an operation may instead use \"Form D kl.exec or Form C "
               "kl.setst\"; <<KLEE-usage-input-output>> makes Form A kl.setst the "
               "substitute of Form C, which is what this harness applies.")
-    info("AGR10 (<<KLEE-AGR-progress-discard>>) does not apply: OCB designates no "
+    info("MGR10 (<<KLEE-MGR-progress-discard>>) does not apply: OCB designates no "
          "progress field and none of its States has an interruptible "
          "long-running instruction.")
 
