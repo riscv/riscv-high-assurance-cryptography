@@ -10,9 +10,9 @@ REF   a straight SP 800-38D implementation on *byte strings* (big-endian counter
       (MSB_s, 0^s, [x]_s); it is anchored by reducing to REF on the same vectors
       and is the reference for lengths that are not whole bytes.
 
-KLEE  the two Machines of `src/ace-ISA-machines.adoc` (<<KLEE-process-VLI>>,
+KLEE  the two Machines of `src/Zkl-ISA-machines.adoc` (<<KLEE-process-VLI>>,
       <<KLEE-GCM-mode>>, <<KLEE-GCM-with-IV-mode>>), transcribed literally on
-      KLEE values (`src/ace-notation.adoc`: byte i at bits [8i+7:8i], the left
+      KLEE values (`src/Zkl-notation.adoc`: byte i at bits [8i+7:8i], the left
       operand of @ most significant) and driven by numbered kl.setst / kl.exec
       instructions with the State constants of <<KLEE-state-constants-symmetric>>.
       _Set_Aux_Value_ runs Procedure process_VLI literally (mode = xor_accumulate,

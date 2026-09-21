@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Known-Answer Tests for the KLEE ML-DSA algorithm (src/ace-ISA-machines.adoc,
+"""Known-Answer Tests for the KLEE ML-DSA algorithm (src/Zkl-ISA-machines.adoc,
 anchor [[KLEE-PQC-ML-DSA]]) against FIPS 204.
 
 What this harness validates
@@ -69,7 +69,7 @@ def chk(name, ok, note=''):
 
 # ================================================================ KLEE model
 
-# MDH field positions, src/ace-ISA-unpriv.adoc <<KLEE-metadata-header>>.
+# MDH field positions, src/Zkl-ISA-unpriv.adoc <<KLEE-metadata-header>>.
 F_MACHINE    = (11, 0)
 F_ALGPOLICY    = (13, 12)
 F_STATE        = (25, 21)

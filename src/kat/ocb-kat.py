@@ -6,9 +6,9 @@ Two independent implementations are checked against the published vectors:
   REF   RFC 7253 written directly on bit and byte strings (big-endian
         semantics), transcribed from sections 4.1-4.3 of the RFC.  The nonce
         is taken as a bit string of any length up to 120 bits (section 4.2).
-  KLEE  the Machine of <<KLEE-OCB-mode>> (src/ace-ISA-machines.adoc),
+  KLEE  the Machine of <<KLEE-OCB-mode>> (src/Zkl-ISA-machines.adoc),
         implemented formula-by-formula in the KLEE value model of
-        src/ace-notation.adoc (byte i of a string lives at bits [8i+7:8i];
+        src/Zkl-notation.adoc (byte i of a string lives at bits [8i+7:8i];
         the left operand of @ is more significant; bswap is byte reversal).
         The model is a CL driven by kl.setst / kl.exec Forms and KLLEN, so it
         also applies the General Rules for Machines (<<KLEE-Machines-other-rules>>,
@@ -1046,7 +1046,7 @@ def main():
               "harness-private flag).  Suggested: `last_blk_len <- 0` after the "
               "absorption, so that the existing last_blk_len = 0 rule rejects a "
               "second kl.exec.")
-    spec_note("Book 2, \"Definition of a Machine in KLEE\" (ace-ISA-machines.adoc:341), "
+    spec_note("Book 2, \"Definition of a Machine in KLEE\" (Zkl-ISA-machines.adoc:341), "
               "says an operation may instead use \"Form D kl.exec or Form C "
               "kl.setst\"; <<KLEE-usage-input-output>> makes Form A kl.setst the "
               "substitute of Form C, which is what this harness applies.")
