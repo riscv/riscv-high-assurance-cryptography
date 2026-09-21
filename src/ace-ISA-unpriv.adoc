@@ -36,7 +36,7 @@ Only the KLEE unit may access or modify a CC residing in a CL, in accordance wit
 
 Sealed Cryptographic Context:::
 (((Cryptographic Context, sealed)))
-To support context switching while protecting CCs outside architectural state, a CC may be *exported* from a CL as a *Sealed Cryptographic Context* (SCC)—an encrypted and authenticated representation of a CC that can later be *imported* into a CL. Export and import use a _Context Sealing Key_ (CSK), which may be programmable by M-mode. An SCC sealed under one CSK cannot be imported under a different CSK, providing cryptographic domain separation across spatial and temporal domains.
+To support context switching while protecting CCs outside architectural state, a CC may be *exported* from a CL as a *Sealed Cryptographic Context* (SCC)—an encrypted and authenticated representation of a CC that can later be *imported* into a CL. Export and import use a _Context Sealing Key_ (CSK), which may be programmable by M-mode or an authorized supervisor through the CSRs of <<KLEE-CSR-mklcsk>>. An SCC sealed under one CSK cannot be imported under a different CSK, providing cryptographic domain separation across spatial and temporal domains.
 
 Machine:::
 (((Machines)))
@@ -2566,8 +2566,8 @@ Privileged Architecture, the KLEE exceptions among them are replaced as
 <<KLEE-exception-error-correspondence>> prescribes.
 
 . *No active CSK.* `kl_exc_no_csk`, on any KLEE instruction or KLEE CSR access that
-  <<KLEE-CSK-requirements>> does not exempt, while no CSK is established or the `mklcsk` group is
-  only partially written (<<KLEE-CSR-mklcsk>>).
+  <<KLEE-CSK-requirements>> does not exempt, while no CSK is established or the CSK is
+  only partially written through `mklcsk` or `sklcsk` (<<KLEE-CSR-mklcsk>>).
 . *CL marked _Off_.* `kl_exc_CL_off`, on any access to the CL that <<KLEE-CSR-lclstatus>> does not
   exempt, before any condition that depends on its contents. M-mode resolves it or forwards it to
   the mode that owns the _Off_ field.
@@ -3546,11 +3546,23 @@ function SCC_Decrypt(AD[] : array of bits(128), N : bits(96), sep: bits(1),
 
 NOTE:  *Design Rationale for the Sealing Construction.*
 The Locality Secrets are supplied to the AEAD as _associated data_ rather than mixed into the
-Context Sealing Key through a KDF. Both approaches bind the SCC to the Locality set, but
+Context Sealing Key through a KDF. Associated data binds SCC authentication to the Locality set;
 using associated data is computationally less expensive. POLYVAL requires one `Montmul`
 per 128-bit block and is thus significantly faster than most KDFs. This approach also
 avoids re-deriving `enc_key` and `auth_key` when the Locality set changes.
 Distinct Locality sets lead to the same SIV with collision probability 2^-126^.
+
+[IMPORTANT]
+====
+Locality binding does not protect exported plaintext from software that knows the CSK.
+The encryption key is derived solely from the CSK and the fixed nonce, and the SIV is
+included in the SCC. Software knowing the CSK can therefore recover the plaintext
+from the ciphertext and SIV without knowing the Locality Secrets, by omitting the
+authentication check in <<KLEE-SCC-GCM-SIV-dec>>. The Locality Secrets influence the
+SIV and authenticated import, but are not required to reproduce the encryption
+keystream. The software requirements for granting CSK access are described in
+<<KLEE-CSK-access-handoff>>.
+====
 
 // ///////////////////////////////////////////////////////////////////////////
 
@@ -3732,11 +3744,11 @@ A handler must treat `klmanagedcr` as a hint and check the MDH of the CL it name
 [[KLEE-CSK-requirements]]
 === Architectural Requirements on the Context Sealing Key
 
-The KLEE unit must have a configured Context Sealing Key (CSK) before it can operate. Without an active CSK, every KLEE instruction and every KLEE CSR access raises `kl_exc_no_csk`, except access to the `mklcsk` CSR group, to the Locality Secret CSR groups (<<KLEE-CSR-locality-groups>>), which are configured independently of the CSK, and to the read-only identification CSRs `klmvendorid`, `klmarchid`, `klmimpid`, and `klmaxiobuflen` (<<KLEE-CSR-impl-ids>>, <<KLEE-CSR-klmaxiobuflen>>). The latter CSRs remain readable to allow firmware to identify the KLEE unit without having to configure it.
+The KLEE unit must have a configured Context Sealing Key (CSK) before it can operate. Without an active CSK, every KLEE instruction and every KLEE CSR access raises `kl_exc_no_csk`, except access to the `mklcsk` CSR group and its `sklcsk` alias, to the Locality Secret CSR groups (<<KLEE-CSR-locality-groups>>), which are configured independently of the CSK, and to the read-only identification CSRs `klmvendorid`, `klmarchid`, `klmimpid`, and `klmaxiobuflen` (<<KLEE-CSR-impl-ids>>, <<KLEE-CSR-klmaxiobuflen>>). The latter CSRs remain readable to allow firmware to identify the KLEE unit without having to configure it.
 
 A CSK can be set in one of four mutually exclusive ways:
 
-. A value programmed by M-mode through the `mklcsk` CSR group (see <<KLEE-CSR-mklcsk>>).
+. A value programmed by M-mode through the `mklcsk` CSR group, or by an authorized supervisor through its `sklcsk` alias (see <<KLEE-CSR-mklcsk>>). M-mode and HS-mode can independently deny lower-mode access to the alias using the `CSK` state-enable bit (<<KLEE-CSK-stateen>>), while permitting other KLEE operations.
 . A separate secure HW block (e.g., Caliptra cite:[caliptra]), or a port to a secure HW block, which is exclusive to M-mode, is used to configure CSK values and export them using a dedicated interface based on public key encryption.
 . A fixed, hardwired value, generated at manufacturing time (either per die or shared across batches).
 . A value generated by a secure RBG (see <<KLEE-RBG>>) at boot and not accessible to any software.
@@ -3747,20 +3759,46 @@ Under the fourth model, all harts in a well-defined subsystem of a SoC share a C
 In the second model, only M-mode may request that the secure hardware block configure its hart's CSK, using a handle or wrapped key. The clear key must not be exposed to any software, including M-mode.
 Addressing and key transport are platform-specific and outside the scope of this specification.
 
-The KLEE unit is immediately available under the third model; under the other models, it becomes available only after a CSK has been established. A hart reset resets the associated KLEE state (<<KLEE-reset-and-m-mode-only>>). In the first and second models, this includes the configurable CSK, leaving the unit unavailable until the CSK is re-established.
+The KLEE unit is immediately available under the first and third model; under the other models, it becomes available only after a CSK has been established. A hart reset resets the associated KLEE state (<<KLEE-reset-and-m-mode-only>>). In the first and second models, this includes the configurable CSK, leaving the unit unavailable until the CSK is re-established.
 
 NOTE: When the CSK is shared across devices, CCs intended to be device-bound must set _Locality_ to include _ChipScrt_ or _DevScrt_.
 
-Except for in M-mode and in the first model, CSK values must _never_ be readable by software in clear.
+Only in the first model may CSK values be readable by software in clear, through
+`mklcsk` or an authorized access to `sklcsk`, according to the implementation's
+readback policy (<<KLEE-CSR-mklcsk>>). In the other models, CSK values must _never_
+be readable by software in clear.
+
+[[KLEE-CSK-access-handoff,Granting CSK access]]
+[IMPORTANT]
+====
+Granting access to `sklcsk` gives the lower privilege control of the single CSK used
+for all imports and exports. Higher-privileged software must not rely on Localities
+to keep exported contexts confidential from software that knows or chooses that
+CSK. This applies even when CSR reads always return zero: the lower privilege can
+write a known CSK and export any contexts left in the CLs under that key.
+
+When HS-mode requests CSK access from M-mode, M-mode must complete clearing all CLs
+and then zero the entire CSK through `mklcsk` before granting access by setting
+`mstateen0.CSK`. These are software actions; setting the state-enable bit does not
+perform them automatically. HS-mode must subsequently establish a nonzero CSK
+before using the KLEE unit. The same requirements apply when HS-mode grants
+VS-mode access through `hstateen0.CSK`.
+
+Any contexts that must survive the handoff must first be saved under a CSK kept
+secret from the recipient. Higher-privileged software must not restore confidential
+contexts into CLs while the recipient controls the CSK. Revoking CSR access alone
+does not make a CSK already known to the recipient secret again; confidential use
+requires a CSK unknown to that recipient.
+====
 
 [IMPORTANT]
 ====
-When a process migrates between harts, its SCCs should remain importable, requiring the destination hart to use the same CSK as the source. The OS and hypervisor should ensure that M-mode establishes this CSK on the destination hart. The mechanism for supervisor software to request this operation is platform-dependent and outside the scope of this specification.
+When a process migrates between harts, its SCCs should remain importable, requiring the destination hart to use the same CSK as the source. Under the first model, an authorized OS or hypervisor may establish this CSK through `sklcsk` on the destination hart. Otherwise, for a configurable CSK, it must arrange for M-mode to establish the key; the mechanism for requesting that operation is platform-dependent and outside the scope of this specification.
 Under the fourth model, this requirement can be met only within the subsystem sharing the CSK, not across subsystems.
 Unless software handles the differences, it may migrate a process only between harts whose KLEE units have identical values for `klmvendorid`, `klmarchid`, `klmimpid`, and `klmaxiobuflen` and implement the same extensions and Machines.
 ====
 
-M-mode firmware must account for the configuration model used for the CSK. Persistence mechanisms for configurable CSKs are implementation-specific. Transferring a CSK to another endpoint—such as the M-mode firmware of another device, a local TPM (for example, to preserve the CSK across suspension or host hibernation), or a cloud-based HSM—*requires* an authenticated public-key wrapping mechanism. Such a mechanism is outside the scope of this specification.
+Privileged software configuring the CSK must account for its configuration model. Persistence mechanisms for configurable CSKs are implementation-specific. Transferring a CSK to another endpoint—such as the M-mode firmware of another device, a local TPM (for example, to preserve the CSK across suspension or host hibernation), or a cloud-based HSM—*requires* an authenticated public-key wrapping mechanism. Such a mechanism is outside the scope of this specification.
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -3808,7 +3846,7 @@ interface of the Debug Module defined by the RISC-V Debug specification
 In authenticated Debug mode:
 
 . KLEE instructions and CSRs are accessible with M-mode privilege, subject to the exceptions below.
-. The `mklcsk` CSR group is inaccessible for both reads and writes. Entering authenticated Debug mode neither zeroizes nor replaces the CSK; the active CSK remains available to management instructions.
+. The `mklcsk` CSR group and its `sklcsk` alias are inaccessible for both reads and writes. Entering authenticated Debug mode neither zeroizes nor replaces the CSK; the active CSK remains available to management instructions.
 . A CC may be _used_ only if bit 4 of its _UsagePolicy_ field (<<KLEE-Metadata>>) is set; bits 0–3 are not evaluated in Debug mode. Debug code is otherwise limited to management operations. It may export existing contexts as SCCs, provision and use contexts created for Debug mode, and restore the saved state before exiting. An existing CC may be used only if its _UsagePolicy_ explicitly authorizes Debug-mode use.
 
 Upon entering Debug mode while the authenticated-debug signal is _deasserted_:
@@ -3826,7 +3864,7 @@ Normal execution cannot resume after entry into unauthenticated Debug mode becau
 
 Debugging that preserves KLEE state therefore requires authenticated Debug mode. Recovery requires a hart reset, which restores access to the hardwired HW Binding values and, under the third CSK model, the hardwired CSK, followed by re-establishment of the CSK and Locality Secrets by the privileged software stack and re-provisioning of the contexts.
 
-Under the programmable CSK models, if M-mode re-establishes the same CSK, SCCs exported before entry into Debug mode become importable again, providing a complete recovery path through the ordinary context-saving mechanisms.
+Under the programmable CSK models, if M-mode (or an authorized supervisor under the first model) re-establishes the same CSK, SCCs exported before entry into Debug mode become importable again, providing a complete recovery path through the ordinary context-saving mechanisms.
 ====
 
 // ////////////////////////////////////////////////////////////////////
