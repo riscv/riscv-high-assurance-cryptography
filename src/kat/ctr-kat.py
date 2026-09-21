@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """CTR and XCTR keystream generation (<<KLEE-keystream-modes>> in
-src/ace-ISA-machines.adoc) against SP 800-38A F.5 and the HCTR2 reference vectors.
+src/Zkl-ISA-machines.adoc) against SP 800-38A F.5 and the HCTR2 reference vectors.
 
 The specification keeps the keystream state as two separate fields, `IV` of `n`
 bits and `ctr` of `j` bits, and forms the block fed to the keystream function as

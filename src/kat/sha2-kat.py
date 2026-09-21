@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """SHA-2 family KAT for the KLEE specification (<<KLEE-SHA-2>> over <<KLEE-hash-functions>>).
 
-WHAT IS MODELED, transcribed from the current text of src/ace-ISA-machines.adoc:
+WHAT IS MODELED, transcribed from the current text of src/Zkl-ISA-machines.adoc:
   * Parameters w, b, n, t from <<KLEE-SHA-2-parameters>>; the _Machine_ encodings
     Type 4, Modes 0-5 of <<KLEE-exec-encodings>>; the State values of
     <<KLEE-states-valid>>, <<KLEE-state-constants-symmetric>> and <<KLEE-states-error>>.

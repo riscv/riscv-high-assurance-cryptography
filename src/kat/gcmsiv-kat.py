@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """AES-GCM-SIV known-answer tests for the KLEE GCM-SIV Machine.
 
-Validates <<KLEE-GCM-SIV-mode>> (src/ace-ISA-machines.adoc) against RFC 8452.
+Validates <<KLEE-GCM-SIV-mode>> (src/Zkl-ISA-machines.adoc) against RFC 8452.
 
 Two independent implementations are exercised:
 
   REF   AES-GCM-SIV exactly as RFC 8452 sections 4-5 specify it, one-pass
         functions over byte strings.
   KLEE  the Machine of <<KLEE-GCM-SIV-mode>>, transcribed literally on KLEE
-        values (src/ace-notation.adoc; common.py conventions) and driven by
+        values (src/Zkl-notation.adoc; common.py conventions) and driven by
         numbered kl.setst / kl.exec instructions (State constants of
         <<KLEE-state-constants-symmetric>>): RFC8452_KeyDeriv(k, key, nonce) as
         listed in <<KLEE-GCM-SIV-KeyDeriv>>, absorb(data) = { tmp ^= data;
