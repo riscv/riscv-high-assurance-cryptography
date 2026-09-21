@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Known-Answer Tests for the KLEE ML-KEM Machines (src/ace-ISA-machines.adoc,
+"""Known-Answer Tests for the KLEE ML-KEM Machines (src/Zkl-ISA-machines.adoc,
 anchor [[KLEE-PQC-ML-KEM]]) against FIPS 203.
 
 What this harness validates
@@ -110,7 +110,7 @@ def negative(label, name, ok):
 
 # ================================================================ KLEE model
 #
-# MDH fields (hi, lo), both inclusive, from src/ace-ISA-unpriv.adoc
+# MDH fields (hi, lo), both inclusive, from src/Zkl-ISA-unpriv.adoc
 # <<KLEE-metadata-header>>.
 MDH_FIELDS = {
     'Machine':          (11, 0),

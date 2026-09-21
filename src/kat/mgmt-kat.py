@@ -2,8 +2,8 @@
 """Architectural-state-machine KAT for the KLEE management ISA (Book 1).
 
 This harness transcribes the *Machine-independent* rules of Book 1 of the draft
-RISC-V KLEE specification (src/ace-ISA-unpriv.adoc), with the exception causes
-and the *lclstatus Off gate of Book 3 (src/ace-ISA-priv.adoc), and checks the
+RISC-V KLEE specification (src/Zkl-ISA-unpriv.adoc), with the exception causes
+and the *lclstatus Off gate of Book 3 (src/Zkl-ISA-priv.adoc), and checks the
 text's own invariants and worked sequences:
 
   * the 128-bit MDH layout (<<KLEE-metadata-header>>): tiling, walking ones,

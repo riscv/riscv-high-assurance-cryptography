@@ -1,6 +1,6 @@
 """Shared utilities for the KLEE KAT suite.
 
-Conventions follow the KLEE specification's Notation chapter (src/ace-notation.adoc):
+Conventions follow the KLEE specification's Notation chapter (src/Zkl-notation.adoc):
 a *value* is a little-endian bit string held in a Python int; byte i of a byte
 string occupies bits [8i+7:8i] (`b2v`/`v2b`); `cat` implements the `@` operator,
 whose LEFT operand occupies the MORE significant bits; `bswap` reverses the byte

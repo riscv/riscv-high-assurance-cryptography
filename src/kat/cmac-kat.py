@@ -6,9 +6,9 @@ Two independent implementations are checked against the published vectors:
   REF   SP 800-38B / RFC 4493 written directly on byte strings, with the
         subkey doubling over the big-endian string view as the standard
         specifies.
-  KLEE  the Machine of <<KLEE-CMAC-mode>> (src/ace-ISA-machines.adoc),
+  KLEE  the Machine of <<KLEE-CMAC-mode>> (src/Zkl-ISA-machines.adoc),
         implemented formula-by-formula in the KLEE value model of
-        src/ace-notation.adoc (byte i of a string lives at bits [8i+7:8i];
+        src/Zkl-notation.adoc (byte i of a string lives at bits [8i+7:8i];
         the left operand of @ is more significant).  gen_subkeys uses
         `double`, the OCB3 doubling of <<KLEE-OCB-mode>>.  The model is a CL
         driven by kl.setst / kl.exec Forms and KLLEN, so it also applies the
@@ -622,7 +622,7 @@ def main():
              invalid(lambda: cl.setst(S_HASH_ABSORB, 'A')))
     info("the text names no kl.setst Form for the transition _Ready_ -> "
          "_Hash_Absorb_; the harness uses Form A, as <<KLEE-pseudocode-CMAC>> does.")
-    spec_note("Book 2, \"Definition of a Machine in KLEE\" (ace-ISA-machines.adoc:341), "
+    spec_note("Book 2, \"Definition of a Machine in KLEE\" (Zkl-ISA-machines.adoc:341), "
               "says an operation may instead use \"Form D kl.exec or Form C "
               "kl.setst\"; <<KLEE-usage-input-output>> makes Form A kl.setst the "
               "substitute of Form C, which is what this harness applies.")
