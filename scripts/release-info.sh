@@ -15,7 +15,7 @@ set -euo pipefail
 # the inception version. Between milestones, merges to main auto-advance by 0.01
 # (v0.61, v0.62, ... v0.79) up to -- but never onto -- the next manual milestone.
 
-DEFAULT_VERSION="v0.0"
+DEFAULT_VERSION="v0.6"
 DEFAULT_PHASE="draft-and-development"
 SPEC_STATE_URL="http://riscv.org/spec-state"
 
