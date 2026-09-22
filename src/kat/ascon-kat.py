@@ -3,7 +3,7 @@
 
 WHAT IS UNDER TEST
 ------------------
-The *specification text* (src/Zkl-ISA-machines.adoc) of
+The *specification text* (modules/ROOT/pages/Zkl-ISA-machines.adoc) of
 
   <<KLEE-Ascon-AEAD128>>            Ascon-AEAD128             (Type 8, Mode 0)
   <<KLEE-Ascon-AEAD128-wsn>>        Ascon-AEAD128_Nonce       (Mode 1: nonce in the PI)
@@ -28,7 +28,7 @@ export/import of the Serialized Content (in clear: sealing is scc-kat.py's
 business).  Only the vector Forms are driven; the KLIOBUF substitutions of
 <<KLEE-usage-input-output>> are not.  Nothing is "fixed up": every numbered step
 is reproduced as written, on KLEE *values* (little-endian bit strings held in
-Python ints, src/Zkl-notation.adoc), whose table of referenced standards
+Python ints, modules/ROOT/pages/Zkl-notation.adoc), whose table of referenced standards
 (<<KLEE-Notation-standards>>) records SP 800-232 as "Little-endian throughout,
 including ||" with a "Direct mapping", which SP 800-232 Appendix A (Fig. 9: S[0:0]
 is the lsb of S0) confirms.
@@ -109,7 +109,7 @@ Run directly; prints per-case PASS/FAIL and a final `KAT-RESULT:` line.
 
 import sys, os
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from common import b2v, v2b, sl, cat          # KLEE notation (src/Zkl-notation.adoc)
+from common import b2v, v2b, sl, cat          # KLEE notation (modules/ROOT/pages/Zkl-notation.adoc)
 
 M64 = (1 << 64) - 1
 M128 = (1 << 128) - 1

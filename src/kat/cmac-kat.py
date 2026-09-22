@@ -6,9 +6,9 @@ Two independent implementations are checked against the published vectors:
   REF   SP 800-38B / RFC 4493 written directly on byte strings, with the
         subkey doubling over the big-endian string view as the standard
         specifies.
-  KLEE  the Machine of <<KLEE-CMAC-mode>> (src/Zkl-ISA-machines.adoc),
+  KLEE  the Machine of <<KLEE-CMAC-mode>> (modules/ROOT/pages/Zkl-ISA-machines.adoc),
         implemented formula-by-formula in the KLEE value model of
-        src/Zkl-notation.adoc (byte i of a string lives at bits [8i+7:8i];
+        modules/ROOT/pages/Zkl-notation.adoc (byte i of a string lives at bits [8i+7:8i];
         the left operand of @ is more significant).  gen_subkeys uses
         `double`, the OCB3 doubling of <<KLEE-OCB-mode>>.  The model is a CL
         driven by kl.setst / kl.exec Forms and KLLEN, so it also applies the

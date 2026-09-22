@@ -2,7 +2,7 @@
 """Sealed Cryptographic Context (SCC) known-answer tests.
 
 Validates the sealing construction and the SCC export/import procedures of the
-draft KLEE specification (src/Zkl-ISA-unpriv.adoc) -- <<KLEE-SCC-AEAD>>,
+draft KLEE specification (modules/ROOT/pages/Zkl-ISA-unpriv.adoc) -- <<KLEE-SCC-AEAD>>,
 <<KLEE-SCC-key-derivation>>, <<KLEE-SCC-POLYVAL>>, <<KLEE-SCC-GCM-SIV-enc>>,
 <<KLEE-SCC-GCM-SIV-dec>>, <<KLEE-SCC-export>>, <<KLEE-SCC-import>>, the MDH of
 <<KLEE-metadata-header>> with the _AuxDataLen_ / _ADSDropped_ rules of

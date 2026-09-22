@@ -2,7 +2,7 @@
 """Known-Answer Tests for the KLEE elliptic-curve Machines (<<KLEE-ECC>>, <<KLEE-EdDSA>>).
 
 WHAT IS BEING TESTED.  This harness does not test an implementation; it tests the
-*specification text* of `src/Zkl-ISA-machines.adoc`, sections `[[KLEE-ECC]]` and
+*specification text* of `modules/ROOT/pages/Zkl-ISA-machines.adoc`, sections `[[KLEE-ECC]]` and
 `[[KLEE-EdDSA]]`.  A model of the KLEE control register -- its fields, its
 `block_base`-tracked "set"/"output" transfers, its state machine and its allowed
 transitions -- is built strictly from that text, and standard vectors are then
@@ -1780,7 +1780,7 @@ def main():
     t0 = time.time()
     print(__doc__.split('\n\n')[0])
     print()
-    print('Model built from src/Zkl-ISA-machines.adoc, sections [[KLEE-ECC]] and'
+    print('Model built from modules/ROOT/pages/Zkl-ISA-machines.adoc, sections [[KLEE-ECC]] and'
           ' [[KLEE-EdDSA]].')
     print('Levels: [KAT] published vector | [PARAM] published parameters +'
           ' self-consistency | [MODEL] spec property.')

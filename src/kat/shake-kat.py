@@ -2,7 +2,7 @@
 """KAT harness for the KLEE SHA-3 family Machines (SHA3-224/256/384/512, SHAKE128/256).
 
 What is validated (spec anchors, by heading):
-  src/Zkl-ISA-machines.adoc (Book 2)
+  modules/ROOT/pages/Zkl-ISA-machines.adoc (Book 2)
   [[KLEE-SHA-3]], [[KLEE-SHA-3-parameters]]
       -- parameter table (n, c, b, t, XOF, suffix D); Provisioning Input = the MDH
          only; Serialized Content = `state` (pos. i, 1600 bits) and `block_base`
@@ -25,7 +25,7 @@ What is validated (spec anchors, by heading):
   [[KLEE-Machine-rules]] (MGR1, MGR2), [[KLEE-truncation-vs-length]],
   [[KLEE-state-constants-symmetric]], [[KLEE-exec-encodings]] (Type 6, Modes
   0-5), [[KLEE-derive-endpoints]] (`kl.exec` endpoints, index 0).
-  src/Zkl-ISA-unpriv.adoc (Book 1)
+  modules/ROOT/pages/Zkl-ISA-unpriv.adoc (Book 1)
   [[KLEE-CSR-klstart]]          -- klstart written with 0 when the instruction
                                    retires; empty transfer window; interruption
                                    points (input: _Invalid_, output only: no
@@ -34,7 +34,7 @@ What is validated (spec anchors, by heading):
   [[KLEE-instruction-derive]], [[KLEE-State-management]] (SGR2, SGR5, SGR6,
   SGR7, SGR8, SGR10, SGR16), [[KLEE-resumability]] (IRR6), [[KLEE-length-rule]],
   [[KLEE-instruction-size]], [[KLEE-metadata-header]] (_Machine_, _State_).
-  src/Zkl-notation.adoc: FIPS 202 row of [[KLEE-Notation-standards]] -- direct
+  modules/ROOT/pages/Zkl-notation.adoc: FIPS 202 row of [[KLEE-Notation-standards]] -- direct
   mapping of the absorbed string, lanes little-endian (values are the KLEE
   little-endian ints of common.py).
 

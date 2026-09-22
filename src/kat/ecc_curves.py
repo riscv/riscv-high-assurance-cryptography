@@ -292,7 +292,7 @@ P384 = Weierstrass(
 
 # secp521r1: the *mathematical* field is 521 bits, but the KLEE representation
 # is 576 bits wide with the 55 most significant bits required to be zero
-# (src/Zkl-ISA-machines.adoc, <<KLEE-ECC>> "Parameters").
+# (modules/ROOT/pages/Zkl-ISA-machines.adoc, <<KLEE-ECC>> "Parameters").
 P521 = Weierstrass(
     'secp521r1',
     p=(1 << 521) - 1,
