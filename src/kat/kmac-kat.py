@@ -2,7 +2,7 @@
 """KAT harness for the KLEE KMAC Machines (KMAC128/256, KMACXOF128/256).
 
 What is validated (spec anchors, by heading):
-  src/Zkl-ISA-machines.adoc (Book 2)
+  modules/ROOT/pages/Zkl-ISA-machines.adoc (Book 2)
   [[KLEE-KMAC]]             -- parameters (n, c, b, t = b, L, granularity); the CC
                               holds two provisioner-prepared rate-sized blocks,
                               cshake_block = bytepad(encode_string("KMAC") ||
@@ -31,11 +31,11 @@ What is validated (spec anchors, by heading):
                               of OUTPUT beyond output_base.
   [[KLEE-Machine-rules]] (MGR1, MGR2, MGR6), [[KLEE-exec-encodings]] (Type 6,
   Modes 10-13), [[KLEE-derive-endpoints]] (KMAC is no endpoint).
-  src/Zkl-ISA-unpriv.adoc (Book 1): [[KLEE-CSR-klstart]], [[KLEE-instruction-exec]],
+  modules/ROOT/pages/Zkl-ISA-unpriv.adoc (Book 1): [[KLEE-CSR-klstart]], [[KLEE-instruction-exec]],
   [[KLEE-instruction-derive]], [[KLEE-State-management]] (SGR2, SGR5, SGR6,
   SGR10, SGR16), [[KLEE-resumability]] (IRR6), [[KLEE-length-rule]],
   [[KLEE-instruction-size]], [[KLEE-metadata-header]].
-  src/Zkl-notation.adoc: FIPS 202 row of [[KLEE-Notation-standards]] -- direct
+  modules/ROOT/pages/Zkl-notation.adoc: FIPS 202 row of [[KLEE-Notation-standards]] -- direct
   mapping of the absorbed string, lanes little-endian.
 
 Layered anchoring:
