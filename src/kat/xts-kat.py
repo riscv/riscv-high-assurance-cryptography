@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """XEX/XTS (<<KLEE-XEX-XTS-modes>> and <<KLEE-XTS-from-XEX>> in
-src/Zkl-ISA-machines.adoc) against the IEEE 1619-2007 / SP 800-38E vectors.
+modules/ROOT/pages/Zkl-ISA-machines.adoc) against the IEEE 1619-2007 / SP 800-38E vectors.
 
 Models
 ------

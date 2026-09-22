@@ -6,9 +6,9 @@ Two independent implementations are checked against the published vectors:
   REF   RFC 7253 written directly on bit and byte strings (big-endian
         semantics), transcribed from sections 4.1-4.3 of the RFC.  The nonce
         is taken as a bit string of any length up to 120 bits (section 4.2).
-  KLEE  the Machine of <<KLEE-OCB-mode>> (src/Zkl-ISA-machines.adoc),
+  KLEE  the Machine of <<KLEE-OCB-mode>> (modules/ROOT/pages/Zkl-ISA-machines.adoc),
         implemented formula-by-formula in the KLEE value model of
-        src/Zkl-notation.adoc (byte i of a string lives at bits [8i+7:8i];
+        modules/ROOT/pages/Zkl-notation.adoc (byte i of a string lives at bits [8i+7:8i];
         the left operand of @ is more significant; bswap is byte reversal).
         The model is a CL driven by kl.setst / kl.exec Forms and KLLEN, so it
         also applies the General Rules for Machines (<<KLEE-Machines-other-rules>>,

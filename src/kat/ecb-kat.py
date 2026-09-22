@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""ECB mode (<<KLEE-ECB-mode>> in src/Zkl-ISA-machines.adoc) against FIPS 197,
+"""ECB mode (<<KLEE-ECB-mode>> in modules/ROOT/pages/Zkl-ISA-machines.adoc) against FIPS 197,
 SP 800-38A F.1 and GB/T 32907-2016 (SM4).
 
 What is checked
@@ -748,7 +748,7 @@ chk("the example's test lets the ECB States 1, 7, 8 through",
 chk("the example's test catches every Error State (48-55)",
     all(s >= 24 for s in range(48, 56)), True)
 misread = [s for s in range(1, 48) if s >= 24]
-spec_note("<<KLEE-pseudocode-ECB-encryption>> (src/Zkl-pseudocode.adoc) tests "
+spec_note("<<KLEE-pseudocode-ECB-encryption>> (modules/ROOT/pages/Zkl-pseudocode.adoc) tests "
           "`X1 >= 24` for an error.  24 was the first Error State of the former 5-bit "
           f"_State_ field.  Error States are now 48-55 (<<KLEE-states-error>>), so the "
           f"test would report the {len(misread)} Valid States 24-47 (including "
