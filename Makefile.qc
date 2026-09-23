@@ -8,7 +8,7 @@ REQUIRES  := --require=asciidoctor-bibtex \
              --require=asciidoctor-diagram \
              --require=asciidoctor-lists \
              --require=asciidoctor-sail \
-             --require=./src/cross-page-xrefs.rb
+             --require=./scripts/cross-page-xrefs.rb
 
 DOCKER_IMG := docker-registry.qualcomm.com/proxy-cache-qcom/riscvintl/riscv-docs-base-container-image:latest
 
