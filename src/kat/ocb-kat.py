@@ -12,7 +12,7 @@ Two independent implementations are checked against the published vectors:
         the left operand of @ is more significant; bswap is byte reversal).
         The model is a CL driven by kl.setst / kl.exec Forms and KLLEN, so it
         also applies the General Rules for Machines (<<KLEE-Machines-other-rules>>,
-        MGR1-MGR6) and the State rules of Book 1 (<<KLEE-State-field>>: SGR2,
+        MGR1-MGR6) and the State rules of the Instructions chapter (<<KLEE-State-field>>: SGR2,
         SGR4-SGR6, SGR8, SGR10, SGR16) where OCB relies on them, and it
         exports and imports the Serialized Content of <<KLEE-OCB-mode>>
         (the plaintext of `Content1`, <<KLEE-SCC>>; the sealing itself is
@@ -220,7 +220,7 @@ SKS = {}                     # System Key Store: SKID -> key bytes (MGR8)
 def ocb_layout(key_bits):
     """<<KLEE-OCB-mode>> Serialized Content, rows i-xi: (field, size in bits).
     The MDH is not part of it; it is implicitly zero-padded to a multiple of
-    128 bits (Book 2, "Definition of a Machine in KLEE")."""
+    128 bits (the Machines chapter, "Definition of a Machine in KLEE")."""
     return [('key', key_bits),         # i     `key` or System Key Identifier
             ('N', 120),                # ii
             ('N_len', 7),              # iii
@@ -336,7 +336,7 @@ class KleeOcb:
         if s in (S_SUCCESS, S_FAILURE):           # <<KLEE-SGR-setst-in-success-failure>>
             self._invalid(f'kl.setst #{immed} in State {s}')
         if immed == S_HASH_VERIFY and form == 'A':
-            form = 'C'                            # KLIOBUF substitution (Book 1)
+            form = 'C'                            # KLIOBUF substitution (the Instructions chapter)
         last = {S_HASH_LAST: S_HASH_ABSORB, S_ENC_LAST: S_ENCRYPT,
                 S_DEC_LAST: S_DECRYPT}
         # Allowed State Transitions; SGR4 admits the immediate of the current State
@@ -832,7 +832,7 @@ def main():
 
     # ------------------------------------------------ State machine
     print("\nState machine (MGR1-MGR6 of <<KLEE-Machines-other-rules>>, SGR rules "
-          "of Book 1); vector 0D unless stated:")
+          "of the Instructions chapter); vector 0D unless stated:")
     N13, CT13 = nonce(0xD), bytes.fromhex(VEC128[13][3])
 
     def at_hash_absorb(K=K128, N=N13, tag_len=128, **kw):
@@ -1046,7 +1046,7 @@ def main():
               "harness-private flag).  Suggested: `last_blk_len <- 0` after the "
               "absorption, so that the existing last_blk_len = 0 rule rejects a "
               "second kl.exec.")
-    spec_note("Book 2, \"Definition of a Machine in KLEE\" (Zkl-ISA-machines.adoc:341), "
+    spec_note("the Machines chapter, \"Definition of a Machine in KLEE\" (Zkl-ISA-machines.adoc:341), "
               "says an operation may instead use \"Form D kl.exec or Form C "
               "kl.setst\"; <<KLEE-usage-input-output>> makes Form A kl.setst the "
               "substitute of Form C, which is what this harness applies.")
