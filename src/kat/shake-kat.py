@@ -2,7 +2,7 @@
 """KAT harness for the KLEE SHA-3 family Machines (SHA3-224/256/384/512, SHAKE128/256).
 
 What is validated (spec anchors, by heading):
-  modules/ROOT/pages/Zkl-ISA-machines.adoc (Book 2)
+  modules/ROOT/pages/Zkl-ISA-machines.adoc (the Machines chapter)
   [[KLEE-SHA-3]], [[KLEE-SHA-3-parameters]]
       -- parameter table (n, c, b, t, XOF, suffix D); Provisioning Input = the MDH
          only; Serialized Content = `state` (pos. i, 1600 bits) and `block_base`
@@ -25,7 +25,7 @@ What is validated (spec anchors, by heading):
   [[KLEE-Machine-rules]] (MGR1, MGR2), [[KLEE-truncation-vs-length]],
   [[KLEE-state-constants-symmetric]], [[KLEE-exec-encodings]] (Type 6, Modes
   0-5), [[KLEE-derive-endpoints]] (`kl.exec` endpoints, index 0).
-  modules/ROOT/pages/Zkl-ISA-unpriv.adoc (Book 1)
+  modules/ROOT/pages/Zkl-ISA-unpriv.adoc (the Instructions chapter)
   [[KLEE-CSR-klstart]]          -- klstart written with 0 when the instruction
                                    retires; empty transfer window; interruption
                                    points (input: _Invalid_, output only: no
@@ -282,7 +282,7 @@ ERROR_STATES = range(48, 56)
 
 
 class IllegalInstruction(Exception):
-    """An illegal-instruction exception of Book 1."""
+    """An illegal-instruction exception of the Instructions chapter."""
 
 
 class NotModelled(Exception):
@@ -338,7 +338,7 @@ class Hart:
 # ----------------------------------------------------------------- KLEE CL model
 class KleeSha3CL:
     """A CL holding a KLEE SHA-3 CC, implemented literally from [[KLEE-SHA-3]] +
-    [[KLEE-hash-functions]] + [[KLEE-process-VLI]] and the Book 1 rules.
+    [[KLEE-hash-functions]] + [[KLEE-process-VLI]] and the Instructions chapter rules.
 
     `state` is the 1600-bit KLEE value; for the SHA-3 family `block` is `state`
     (inputs are XORed directly into the rate, state_offset = 0), max_len = 0 (no

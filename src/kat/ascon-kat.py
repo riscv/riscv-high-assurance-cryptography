@@ -17,7 +17,7 @@ implicit at Pos. i of every PI and is not part of the Serialized Content; PI and
 Serialized Content are implicitly zero-padded to multiples of 128 bits), the MGR
 rules of <<KLEE-Machines-other-rules>>, <<KLEE-truncation-vs-length>>,
 <<KLEE-state-constants-symmetric>>, <<KLEE-rules-system-keys>> and
-<<KLEE-derive-endpoints>>, with the Book 1 rules they lean on
+<<KLEE-derive-endpoints>>, with the Instructions chapter rules they lean on
 (<<KLEE-State-management>>, <<KLEE-CSR-klstart>>, <<KLEE-instruction-derive>>,
 <<KLEE-instruction-restrict>>).
 

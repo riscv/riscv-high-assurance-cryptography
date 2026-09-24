@@ -13,7 +13,7 @@ Two independent implementations are checked against the published vectors:
         `double`, the OCB3 doubling of <<KLEE-OCB-mode>>.  The model is a CL
         driven by kl.setst / kl.exec Forms and KLLEN, so it also applies the
         General Rules for Machines (<<KLEE-Machines-other-rules>>: MGR1-MGR6)
-        and the State rules of Book 1 (<<KLEE-State-field>>: SGR2, SGR4-SGR6,
+        and the State rules of the Instructions chapter (<<KLEE-State-field>>: SGR2, SGR4-SGR6,
         SGR8, SGR10, SGR16) where CMAC relies on them, and it exports and
         imports the Serialized Content of <<KLEE-CMAC-mode>> (the plaintext of
         `Content1`, <<KLEE-SCC>>; the sealing itself is covered by scc-kat.py).
@@ -142,7 +142,7 @@ SKS = {}                     # System Key Store: SKID -> key bytes (MGR8)
 def cmac_layout(key_bits, b=B):
     """<<KLEE-CMAC-mode>> Serialized Content, rows i-iv: (field, size in bits).
     The MDH is not part of it; it is implicitly zero-padded to a multiple of
-    128 bits (Book 2, "Definition of a Machine in KLEE")."""
+    128 bits (the Machines chapter, "Definition of a Machine in KLEE")."""
     return [('key', key_bits),         # i    `key` or System Key Identifier
             ('hash', b),               # ii
             ('last_blk_len', 32),      # iii
@@ -226,7 +226,7 @@ class KleeCmac:
         if s in (S_SUCCESS, S_FAILURE):           # <<KLEE-SGR-setst-in-success-failure>>
             self._invalid(f'kl.setst #{immed} in State {s}')
         if immed == S_HASH_VERIFY and form == 'A':
-            form = 'C'                            # KLIOBUF substitution (Book 1)
+            form = 'C'                            # KLIOBUF substitution (the Instructions chapter)
         # Allowed State Transitions; SGR4 admits the immediate of the current State
         if immed == S_HASH_ABSORB and form == 'A' and s in (S_READY, S_HASH_ABSORB):
             pass                                  # no operation is specified
@@ -544,7 +544,7 @@ def main():
 
     # ------------------------------------------------ State machine
     print("\nState machine (MGR1-MGR6 of <<KLEE-Machines-other-rules>>, SGR rules "
-          "of Book 1):")
+          "of the Instructions chapter):")
     W4 = bytes.fromhex(VECTORS[3][3])             # AES-128, Mlen = 40
     cl = KleeCmac(K128)
     line("kl.exec in Ready -> Invalid (SGR2)",
@@ -622,7 +622,7 @@ def main():
              invalid(lambda: cl.setst(S_HASH_ABSORB, 'A')))
     info("the text names no kl.setst Form for the transition _Ready_ -> "
          "_Hash_Absorb_; the harness uses Form A, as <<KLEE-pseudocode-CMAC>> does.")
-    spec_note("Book 2, \"Definition of a Machine in KLEE\" (Zkl-ISA-machines.adoc:341), "
+    spec_note("the Machines chapter, \"Definition of a Machine in KLEE\" (Zkl-ISA-machines.adoc:341), "
               "says an operation may instead use \"Form D kl.exec or Form C "
               "kl.setst\"; <<KLEE-usage-input-output>> makes Form A kl.setst the "
               "substitute of Form C, which is what this harness applies.")

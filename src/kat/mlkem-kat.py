@@ -793,7 +793,7 @@ def t_sizes():
             'compares', d[384 * k:768 * k + 32] == e
             and d[768 * k + 32:768 * k + 64] == K.H(e))
     info('<<KLEE-PQC-ML-KEM>> calls 2448/3536/4784 B "the serialized content ..., the '
-         'MDH included", while Book 2 defines the Serialized Content as excluding the '
+         'MDH included", while the Machines chapter defines the Serialized Content as excluding the '
          'MDH; read as MDH + Content1.  An exported SCC is 16 B longer still (the SIV), '
          'which is what kl.size returns.')
     info('The internal-state sizes 3232/4704/6336 B count encapsk apart from the copy '
@@ -845,9 +845,9 @@ def t_mdh():
                   + ', '.join(f'_{n}_ ({MLKEM_LIST_GLOBAL[n]})' for n in stale)
                   + ', while <<KLEE-states-valid>> defines '
                   + ', '.join(f'_{n}_ = {BOOK1_GLOBAL[n]}' for n in stale)
-                  + ' and leaves 2-45 to the Machine; the model follows Book 1.  The '
+                  + ' and leaves 2-45 to the Machine; the model follows the Instructions chapter.  The '
                     'ECC and ML-DSA State lists carry the same stale numbers.')
-    spec_note('Book 1 says _AuxInfo_ is "currently used only by ML-KEM and ML-DSA", but '
+    spec_note('the Instructions chapter says _AuxInfo_ is "currently used only by ML-KEM and ML-DSA", but '
               '<<KLEE-PQC-ML-KEM>> now defines no use for it: its former role -- the '
               'policies required of a kl.derive destination, in the 16-bit format of '
               'MDH[79:64], which no longer fits the 14-bit field -- sits in a '

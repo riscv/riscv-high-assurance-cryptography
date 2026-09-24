@@ -206,7 +206,7 @@ def RFC8452_KeyDeriv(k: int, key: bytes, nonce: int):
 
 
 def SCC_KeyDeriv(key: bytes, nonce: int):
-    """<<KLEE-SCC-key-derivation>> (Book 1), for the cross-check at k = 256."""
+    """<<KLEE-SCC-key-derivation>> (the Instructions chapter), for the cross-check at k = 256."""
     A = [enc_blk(key, cat((nonce, 96), (bin_(i, 32), 32))) for i in range(6)]
     return (cat((sl(A[5], 63, 0), 64), (sl(A[4], 63, 0), 64),
                 (sl(A[3], 63, 0), 64), (sl(A[2], 63, 0), 64)),
@@ -1198,11 +1198,11 @@ def main():
 
     print("\nSPEC-NOTE 1: <<KLEE-GCM-SIV-mode>> says an kl.setst naming Encrypt \"is a "
           "not-allowed transition and invalidates the CL\", while SGR4 lets kl.setst "
-          "name the current State in any Valid State, and Book 4's "
+          "name the current State in any Valid State, and the Pseudocode chapter's "
           "<<KLEE-pseudocode-GCM-SIV-encryption>> issues `kl.setst K0, "
           "#kl_state_encrypt` right after the Enc_Tag_Finalize kl.exec, i.e. in "
           "Encrypt.  The model follows the Machine text (Invalid), under which the "
-          "Book 4 sequence invalidates the CL; either drop that line from Book 4 or "
+          "the Pseudocode chapter sequence invalidates the CL; either drop that line from the Pseudocode chapter or "
           "restrict the rule to kl.setst issued in a State other than Encrypt.")
     print("INFO 1: the counter rule (ctr = 2^32-1 -> Invalid) admits at most "
           "2^32 - 1 blocks per message, one fewer than RFC 8452's P_MAX = 2^36 "

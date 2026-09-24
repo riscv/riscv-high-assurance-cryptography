@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Architectural-state-machine KAT for the KLEE management ISA (Book 1).
+"""Architectural-state-machine KAT for the KLEE management ISA (the Instructions chapter).
 
-This harness transcribes the *Machine-independent* rules of Book 1 of the draft
+This harness transcribes the *Machine-independent* rules of the Instructions chapter of the draft
 RISC-V KLEE specification (modules/ROOT/pages/Zkl-ISA-unpriv.adoc), with the exception causes
-and the *lclstatus Off gate of Book 3 (modules/ROOT/pages/Zkl-ISA-priv.adoc), and checks the
+and the *lclstatus Off gate of the Privileged Architecture chapter (modules/ROOT/pages/Zkl-ISA-priv.adoc), and checks the
 text's own invariants and worked sequences:
 
   * the 128-bit MDH layout (<<KLEE-metadata-header>>): tiling, walking ones,
@@ -11,7 +11,7 @@ text's own invariants and worked sequences:
   * the _State_ numbering (<<KLEE-State-field>>, <<KLEE-SC-sealing-status>>):
     Unconfigured, Valid, Error and Partial States, the Configuration States and
     their base types (<<KLEE-nested-state-base-types>>), the kl.setst immediate
-    categories, and the State tests of the Book 4 snippets;
+    categories, and the State tests of the Pseudocode chapter snippets;
   * Metadata validity (<<KLEE-Metadata-validity>>, <<KLEE-MVR-open>>);
   * the length rule (<<KLEE-length-rule>>), kl.size and kl.avail
     (<<KLEE-instruction-size>>), including _ADSDropped_ and the serialized
@@ -2168,9 +2168,9 @@ def test_states():
     check("kl.setst #46 is a reserved encoding (SGR7), even on an Unconfigured CL",
           (trap_of(u.setst, 0, 46), trap_of(u.setst, 0, 47)), ("illegal/1", "illegal/1"))
 
-    # the State tests of the Book 4 snippets (<<KLEE-management-code-snippets>>, informative)
+    # the State tests of the Pseudocode chapter snippets (<<KLEE-management-code-snippets>>, informative)
     andi = {s for s in everything if (s & 0x38) == 0x30}
-    check("Book 4 test 'andi 0x38; beq 0x30' is true exactly on the Error States",
+    check("the Pseudocode chapter test 'andi 0x38; beq 0x30' is true exactly on the Error States",
           andi, set(ERROR_STATES))
     bltu = {s for s in everything if 0x30 < s}
     missed = sorted(set(ERROR_STATES) - bltu)
@@ -2420,7 +2420,7 @@ def test_lengths():
            for s in shapes])
     check_true("image_end = image_size whenever AuxDataLen is within the maximum",
                all(s[5] for s in shapes))
-    info("Book 1's own flows never reach image_end < image_size: an import whose "
+    info("the Instructions chapter's own flows never reach image_end < image_size: an import whose "
          "_AuxDataLen_ exceeds the maximum sets _ADSDropped_ at the opening (step 5 of "
          "<<KLEE-SCC-import>>), so the zero-filled tail of kl.store is unobservable here.")
 
