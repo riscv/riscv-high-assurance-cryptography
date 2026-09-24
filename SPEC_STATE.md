@@ -2,8 +2,8 @@
 
 Current milestone: draft-and-development
 Current state: draft-and-development
-Current version: v0.6.10
-Last updated: 2026-09-19
+Current version: v0.0
+Last updated: 2026-09-24
 
 ## Milestone Targets
 
