@@ -1217,7 +1217,7 @@ def main():
           "and auth_key are re-derived (MGR4); this is not observable, since "
           "Set_Aux_Value derives them again.")
     print("OBSERVATIONs (editorial): (1) the Dec_Tag_Finalize kl.exec is typeset "
-          "``kl.exec Kn|K{Xn}, INPUT``` with a third backtick; (2) \"If `tmp` = "
+          "``kl.exec Kn|K(Xn), INPUT``` with a third backtick; (2) \"If `tmp` = "
           "SIV match\" should read \"If `tmp` = SIV\"; (3) in Enc_Last_Block and "
           "Dec_Last_Block, `INPUT xor enc_blk(...)` xors a KLLEN-bit INPUT with a "
           "128-bit block, which the notation (|V| = |W|) does not allow when "
