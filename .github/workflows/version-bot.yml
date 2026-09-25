@@ -46,6 +46,7 @@ jobs:
       next_phase: ${{ steps.version.outputs.next_phase }}
       milestone_transition: ${{ steps.version.outputs.milestone_transition }}
       mode: ${{ steps.version.outputs.mode }}
+      stamp_committed: ${{ steps.version.outputs.stamp_committed }}
 
     steps:
       - name: Checkout repository
@@ -91,6 +92,7 @@ jobs:
           RELEASE_VERSION: ${{ github.event.inputs.release_version }}
           ALLOW_NON_MONOTONIC: ${{ github.event.inputs.allow_non_monotonic }}
           REF_NAME: ${{ github.ref_name }}
+          GITHUB_ACTOR_ID: ${{ github.actor_id }}
         run: |
           set -euo pipefail
 
@@ -100,16 +102,6 @@ jobs:
           # `sort -V` here: they order the fractional part component-wise and rank
           # v0.8 below v0.61. release-info.sh compares by centi-value.
           latest="$(./scripts/release-info.sh latest)"
-
-          # This repository's earlier tags (v0.3.1 ... v0.7.1) are three-digit
-          # and not recognized by release-info.sh, so `latest` is v0.0 until the
-          # first two-digit tag exists. Auto-incrementing from there would cut
-          # v0.01 without anyone having chosen the starting version and phase,
-          # so the first release must name its version explicitly (see #154).
-          if [[ "$latest" == "v0.0" && -z "${RELEASE_VERSION:-}" ]]; then
-            echo "::error::No two-digit version tag exists yet. Run this workflow with release_version set to the version the maintainers chose for the first release (see issue #154)." >&2
-            exit 1
-          fi
 
           # Auto-increment (`next`) refuses at a milestone gate with rc=10: the
           # 0.01 band before the next manual milestone is exhausted. That is not
@@ -163,6 +155,42 @@ jobs:
             fi
           fi
 
+          # Stamp antora.yml BEFORE the tag exists, so the tag carries a
+          # descriptor naming its own version. scripts/build-pages-site.sh
+          # publishes a tag only if `version:` equals the tag, so a tag stamped
+          # afterwards never qualifies: the versioned path published at release
+          # time is then wiped by the next push to main, which rebuilds the whole
+          # site without it. See build-pages-site.sh, step 3.
+          #
+          # Pushing to main can be refused (branch protection, or main moved
+          # since checkout). That must not fail the release, so on refusal we
+          # drop the stamp and leave it to build-pdf.yml's stamp-site-version
+          # job, which opens a PR as before -- the site version then lags until
+          # that PR merges, exactly as it did previously.
+          git config user.name "riscv-gitbot"
+          git config user.email "actions@users.noreply.github.com"
+          stamp_committed=false
+          if [[ "$REF_NAME" == "main" ]]; then
+            ./scripts/stamp-antora-version.sh "$next" "$(date +%Y-%m-%d)"
+            if git diff --quiet -- antora.yml; then
+              echo "antora.yml already names $next; nothing to stamp."
+              stamp_committed=true
+            else
+              git add antora.yml
+              git commit -q \
+                -m "chore(site): stamp Antora version $next to match the release" \
+                -m "Signed-off-by: ${GITHUB_ACTOR} <${GITHUB_ACTOR_ID}+${GITHUB_ACTOR}@users.noreply.github.com>"
+              if git push origin "HEAD:$REF_NAME"; then
+                stamp_committed=true
+                echo "Stamped antora.yml to $next on $REF_NAME before tagging."
+              else
+                echo "::warning::Could not push the antora.yml stamp to $REF_NAME; leaving it to the stamp PR. The site keeps the previous version until that PR merges."
+                git reset -q --hard "origin/$REF_NAME"
+              fi
+            fi
+          fi
+          echo "stamp_committed=$stamp_committed" >> "$GITHUB_OUTPUT"
+
           if git rev-parse -q --verify "refs/tags/$next" >/dev/null; then
             tag_sha="$(git rev-list -n1 "$next")"
             head_sha="$(git rev-parse HEAD)"
@@ -172,9 +200,7 @@ jobs:
             fi
             echo "Tag $next already exists on HEAD; reusing."
           else
-            git config user.name "riscv-gitbot"
-            git config user.email "actions@users.noreply.github.com"
-            git tag -a "$next" -m "Automated version tag for ${GITHUB_SHA}"
+            git tag -a "$next" -m "Automated version tag for $(git rev-parse HEAD)"
             git push origin "$next"
           fi
 
@@ -193,7 +219,8 @@ jobs:
           echo "milestone_transition=$milestone_transition" >> "$GITHUB_OUTPUT"
           echo "mode=$(./scripts/release-info.sh mode)" >> "$GITHUB_OUTPUT"
 
-  # Build and release the PDF for the tag just cut. These run as workflow_call rather than waiting on the tag push, which
+  # Build and release the PDF for the tag just cut, then publish the Antora site
+  # for it. These run as workflow_call rather than waiting on the tag push, which
   # is inert by design (see the checkout comment above) -- so the release chain
   # completes on the built-in GITHUB_TOKEN, with no PAT to provision in every
   # repository seeded from this template.
@@ -253,6 +280,10 @@ jobs:
         uses: peter-evans/create-pull-request@v6
         with:
           token: ${{ secrets.GHTOKEN || secrets.GITHUB_TOKEN }}
+          # The DCO check that RISC-V spec repos run requires a Signed-off-by
+          # matching the commit's author. create-pull-request authors the commit
+          # as the user who dispatched this workflow and adds no trailer, so the
+          # PR is blocked until someone amends it. Sign off as that same user.
           commit-message: |
             docs: milestone transition to ${{ needs.tag-version.outputs.next_phase }}
 
