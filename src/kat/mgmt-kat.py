@@ -759,7 +759,6 @@ class Unit:
         self.mlocality = _secret(b"mloc")
         self.hlocality = _secret(b"hloc")
         self.slocality = _secret(b"sloc")
-        self.vslocality = _secret(b"vsloc")
         self.mode = "M"
         self.V = 0
         self.kls_off = False
@@ -817,13 +816,13 @@ class Unit:
                 7: self.virtbootscrt if self.h_ext else 0,
                 8: self.mlocality,
                 9: self.hlocality if self.h_ext else 0,
-                10: self.vslocality if self.V else self.slocality}[j]
+                10: self.slocality}[j]
 
     def lst_register(self, j):
-        """The register LST entry j denotes in the current mode (for the
-        three-distinct-registers property)."""
+        """The register LST entry j denotes (for the three-distinct-registers
+        property); skllocality is shared by HS-mode and VS-mode."""
         return {8: "mkllocality", 9: "hkllocality" if self.h_ext else None,
-                10: "vskllocality" if self.V else "skllocality"}[j]
+                10: "skllocality"}[j]
 
     def lst_eff(self, j):
         """LST_eff[j]: substitution along the HW Binding chains; zeros(128) when
@@ -2718,14 +2717,14 @@ def test_localities():
     check("without H, entry 9 (HLocality) and entry 7 (VirtBootScrt) are unconfigured",
           (u.lst_eff(9), u.lst_eff(7)), (0, 0))
     u = fresh()
-    regs = {}
-    for v in (0, 1):
-        u.V = v
-        regs[v] = [u.lst_register(j) for j in (8, 9, 10)]
-    check("entry 10 is skllocality at V=0 and vskllocality at V=1; three distinct registers",
-          (regs, all(len(set(r)) == 3 for r in regs.values())),
-          ({0: ["mkllocality", "hkllocality", "skllocality"],
-            1: ["mkllocality", "hkllocality", "vskllocality"]}, True))
+    check("entries 8 to 10 denote three distinct registers",
+          [u.lst_register(j) for j in (8, 9, 10)],
+          ["mkllocality", "hkllocality", "skllocality"])
+    u.mode, u.V = "HS", 0
+    u.slocality = 0x1234                # written by HS-mode
+    u.mode, u.V = "VS", 1
+    check("skllocality is shared: the value HS-mode wrote is entry 10 at V=1",
+          u.lst_eff(10), 0x1234)
 
     # binding and LST_eff at export and import
     u = fresh()
@@ -2759,18 +2758,17 @@ def test_localities():
     scc = export(os_hart, 0)
     guest = fresh()
     guest.mode, guest.V = "VS", 1
-    guest.vslocality = os_hart.slocality          # the guest OS writes skllocality
-    guest.slocality ^= 1                          # whatever the hypervisor holds
-    guest.hlocality ^= 1
+    guest.slocality = os_hart.slocality           # the guest OS writes skllocality
+    guest.hlocality ^= 1                          # whatever the hypervisor holds
     check("an OS becomes a guest: its SCCs import unchanged at V=1", import_(guest, 0, scc),
           ST_READY)
     g1, g2 = fresh(), fresh()
     for g, tag in ((g1, 0x111), (g2, 0x222)):
         g.mode, g.V = "VS", 1
-        g.vslocality = 0x5555
+        g.slocality = 0x5555
         g.hlocality = tag
     provision(g1, 0, cipher_pi(Locality=loc(hloc=1, sloc=1)))
-    check("a hypervisor separates its VMs: same vskllocality, different hkllocality",
+    check("a hypervisor separates its VMs: same skllocality, different hkllocality",
           import_(g2, 0, export(g1, 0)), ST_MGMT_AUTH)
     hv = fresh()
     hv.mode, hv.V = "HS", 0
@@ -2779,9 +2777,13 @@ def test_localities():
     provision(hv, 1, cipher_pi(Locality=loc(sloc=1)))
     handed, sl_img = export(hv, 0), export(hv, 1)
     hv.mode, hv.V = "VS", 1
+    check("the hardware does not swap skllocality on V=1: a hypervisor that skips the "
+          "required swap lets the guest import a CC naming SLocality",
+          import_(hv, 4, sl_img), ST_READY)
+    hv.slocality ^= 1                   # the required swap: the guest's skllocality
     check("a CC provisioned at V=0 naming HLocality imports at V=1", import_(hv, 2, handed),
           ST_READY)
-    check("a CC naming SLocality cannot cross levels (entry 10 changes register)",
+    check("a CC naming SLocality cannot cross levels (skllocality changes value)",
           import_(hv, 3, sl_img), ST_MGMT_AUTH)
 
     # System Key Store narrowing
