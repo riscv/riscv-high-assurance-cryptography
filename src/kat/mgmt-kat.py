@@ -1250,7 +1250,7 @@ class Unit:
 
     def _unseal(self, k):
         """Completion of an import (<<KLEE-SCC-import>>) or of an export
-        (<<ace-mgmt-completes-export>>) with a Complete ml._State_."""
+        (<<KLEE-mgmt-completes-export>>) with a Complete ml._State_."""
         cl = self.cls[k]
         m = cl.mdh
         mach = MACHINES[m["Machine"]]

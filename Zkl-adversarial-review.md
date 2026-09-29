@@ -92,7 +92,7 @@ Counts: **2 Critical, 9 Major, 22 minor.**
 
 ## 2. Findings
 
-### C1 — `kl.derive` places no normative constraint on the destination's policies
+### **FIXED** C1 — `kl.derive` places no normative constraint on the destination's policies
 
 **Severity rationale.** This breaks the primary security property of KLEE: a key cannot outlive or escape the policy bound to it (Introduction, "binds cryptographic secrets … and metadata"). It needs no hardware attack. Any process holding a derivable CC can do it.
 
@@ -145,7 +145,7 @@ SCProtection is not raised in place (see Pass 1 below), because it selects the i
 
 ---
 
-### C2 — Debug entry: unpriv substitutes an all-zero CSK, priv declares it unconfigured
+### **FIXED** C2 — Debug entry: unpriv substitutes an all-zero CSK, priv declares it unconfigured
 
 **Severity rationale.** If the unpriv text is followed, every SCC exported after unauthenticated Debug entry, until hart reset, is sealed under a publicly known key. Every such SCC can then be decrypted offline, and SCCs with arbitrary MDH, including permissive policies, can be forged and imported. This is a total break of the sealing property. It sits in a normative list, not a Discussion item.
 
@@ -180,7 +180,7 @@ Extend unpriv 628: "A Locality Secret of the Boot Session Group or of the SW Fil
 
 ---
 
-### M1 — LOAD-FP/STORE-FP `funct3` 5/6/7 are the RVV unit-stride vector loads and stores that KLV requires
+### **FIXED**  M1 — LOAD-FP/STORE-FP `funct3` 5/6/7 are the RVV unit-stride vector loads and stores that KLV requires
 
 **Severity rationale.** This is Major rather than Critical only because the final opcode allocation is a Group A item that must change anyway. The defect itself is a hard conflict. A hart that implements `Zklv` — which requires "unit-strided vector loads and stores" (unpriv 328) — together with hardware `Zklmem` or `Zklio` cannot decode both instruction sets. The draft is therefore not implementable in its mandated configuration.
 
@@ -213,7 +213,7 @@ A related inaccuracy: MISC-MEM uses `funct3` 0 (FENCE/FENCE.TSO/PAUSE), 1 (FENCE
 
 ---
 
-### M2 — Memory-instruction encodings contradict each other and the effective-address definition
+### **FIXED** (almost) M2 — Memory-instruction encodings contradict each other and the effective-address definition
 
 **Severity rationale.** Two conforming implementations would decode the same bits differently, so this is a direct interoperability failure. Because the base register differs, a wrong decode computes a wrong effective address, which means stores go to arbitrary memory.
 
@@ -243,7 +243,7 @@ Then re-encode as follows:
 
 ---
 
-### M3 — Zklmem trap-and-emulate silently mandates `medeleg[2]` = 0
+### *STARTED TO FIX* M3 — Zklmem trap-and-emulate silently mandates `medeleg[2]` = 0
 
 **Severity rationale.** This is an undiscoverable platform constraint that conflicts with the conventional OS use of illegal-instruction delegation (Linux delegates cause 2 to S-mode). An OS that delegates cause 2 on such a platform receives `kl.load`/`kl.store` traps it cannot emulate, because only M-mode holds the emulator and the CLs. The result is broken key management or, worse, an OS that "handles" them as SIGILL.
 
@@ -269,6 +269,8 @@ In priv 98–112, add `kl_exc_emulate` to the list of non-delegable causes. Its 
 ### M4 — The per-hart SIV/IMPQUAL/SIV2 registers have no ownership check on transfers
 
 **Severity rationale.** A transfer on a CL other than the managed one silently reads or overwrites another operation's authentication registers. The in-flight CC is then lost, or a nested handler exports a wrong image. This is undefined architectural behavior on a security path, and it is reachable by ordinary user code.
+
+*NOT A PROBLEM, HOW TO HANDLE IT IS DEFINED BY THE ARCHITECTURE.*
 
 **Location.**
 
