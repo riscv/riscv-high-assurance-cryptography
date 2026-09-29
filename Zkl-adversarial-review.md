@@ -243,7 +243,7 @@ Then re-encode as follows:
 
 ---
 
-### *STARTED TO FIX* M3 — Zklmem trap-and-emulate silently mandates `medeleg[2]` = 0
+### *STARTED TO FIX, WOULD RATHER AVOID A NEW EXCEPTION TYPE* M3 — Zklmem trap-and-emulate silently mandates `medeleg[2]` = 0
 
 **Severity rationale.** This is an undiscoverable platform constraint that conflicts with the conventional OS use of illegal-instruction delegation (Linux delegates cause 2 to S-mode). An OS that delegates cause 2 on such a platform receives `kl.load`/`kl.store` traps it cannot emulate, because only M-mode holds the emulator and the CLs. The result is broken key management or, worse, an OS that "handles" them as SIGILL.
 
@@ -266,7 +266,7 @@ In priv 98–112, add `kl_exc_emulate` to the list of non-delegable causes. Its 
 
 ---
 
-### M4 — The per-hart SIV/IMPQUAL/SIV2 registers have no ownership check on transfers
+### **FIXED** M4 — The per-hart SIV/IMPQUAL/SIV2 registers have no ownership check on transfers
 
 **Severity rationale.** A transfer on a CL other than the managed one silently reads or overwrites another operation's authentication registers. The in-flight CC is then lost, or a nested handler exports a wrong image. This is undefined architectural behavior on a security path, and it is reachable by ordinary user code.
 
@@ -301,7 +301,7 @@ Provisioning and PPI states do not use the authentication registers (304), so th
 
 ---
 
-### M5 — `kl.rename` and `kl.swap` are underspecified
+### **FIXED** M5 — `kl.rename` and `kl.swap` are underspecified
 
 **Severity rationale.** These instructions move whole CCs, including partially managed ones, yet their exceptions, interaction with `klmanagedcr`, lazy-save (`*lclstatus`) behavior and uninterruptibility are undefined. The result is non-interoperable context switching and possible loss of the authoritative image of a CL.
 
@@ -340,7 +340,7 @@ Also:
 
 ---
 
-### M6 — `kl.derive`: contradictory length and invalidation rules
+### **FIXED** M6 — `kl.derive`: contradictory length and invalidation rules
 
 **Severity rationale.** The contradictions admit zero-padded (low-entropy) keys, and implementations disagree on which CL is invalidated.
 
@@ -360,7 +360,7 @@ Also:
 
 ---
 
-### M7 — The restart option permits livelock on synchronous faults
+### **FIXED** M7 — The restart option permits livelock on synchronous faults
 
 **Severity rationale.** This is a liveness defect. A `kl.load`/`kl.store` spanning N pages under memory pressure can livelock forever, because every re-execution restarts from byte 0 and re-faults on an evicted earlier page. RVV forbids this for vector memory instructions.
 
@@ -384,7 +384,7 @@ Amend klstart item 1 to "…or 0 **for an asynchronous interrupt** in an impleme
 
 ---
 
-### M8 — `Version` = 3 (system-specific format) is incoherent
+### **FIXED** M8 — `Version` = 3 (system-specific format) is incoherent
 
 **Severity rationale.** A normative hole: the system-specific import path can install arbitrary policies ("may be replaced"), with no architectural check that they are narrower, and the loader semantics are implementation-dependent. A Version-3 image is therefore a policy-bypass vector.
 
@@ -443,7 +443,7 @@ This goes before `V3 ← V3 xor V1` on the last iteration. Add a normative discl
 
 ---
 
-### minor findings
+### minor findings **ALL FIXED**
 
 | ID | Location | Defect | Resolution |
 |---|---|---|---|
