@@ -623,7 +623,7 @@ A requested Locality may be substituted, but never dropped. If no replacement ca
 because the requested entry is unconfigured and no later entry of its chain is configured
 either — then the Metadata is invalid (see <<KLEE-Metadata-validity>>).
 
-Similarly to the CSK (<<Zkl-ISA-priv.adoc#KLEE-CSR-mklcsk>>), a Locality Secret of the Boot Session Group or of the SW Filter Group whose value is all-zeros (`zeros(128)`) is _unconfigured_ (its CSR is defined in <<Zkl-ISA-priv.adoc#KLEE-priv>>), and a masked HW Binding entry (<<KLEE-interaction-with-debug>>), is _unconfigured_.
+Similarly to the CSK (<<Zkl-ISA-priv.adoc#KLEE-CSR-mklcsk>>), a Locality Secret of the Boot Session Group or of the SW Filter Group whose value is all-zeros (`zeros(128)`) is _unconfigured_ (its CSR is defined in <<Zkl-ISA-priv.adoc#KLEE-priv>>). A masked HW Binding entry (<<KLEE-interaction-with-debug>>), is _unconfigured_.
 A PI or SCC whose _Locality_ field names an unconfigured entry, or carries the reserved value `3` in bits [5:4], is invalid Metadata (see <<KLEE-Metadata-validity>>).
 
 Entry 9, _HLocality_, corresponds to the CSR group `hkllocality`, unconfigured where that register is not implemented or holds `zeros(128)` (<<Zkl-ISA-priv.adoc#KLEE-locality-csr-groups>>). Entry 10, _SLocality_, corresponds to the CSR group `skllocality` at V=0 and, when V=1, `vskllocality`, which then substitutes for it (<<Zkl-ISA-priv.adoc#KLEE-CSR-locality-groups>>).
@@ -954,7 +954,7 @@ like `vstart` in the V extension; for a KLIOBUF operand the window is always
 context switches. The KLEE implementation writes it:
 
 . on a precise halt, with a prefix-complete point of the transfer (<<KLEE-Memory-Model>>): the point
-  of progress, or 0 in an implementation that selects the restart option of Rule
+  of progress, or 0 for an asynchronous interrupt in an implementation that selects the restart option of Rule
   <<KLEE-IRR-resumability-options>> for `kl.load`, `kl.store`, `kl.input` and `kl.output`, which
   then transfer the prefix again on re-execution;
 . with 0 when an instruction that honors it retires, except for `kl.mv`, which by design advances
@@ -1031,12 +1031,14 @@ The notation `K(Xd)` denotes the CL whose index is held in GPR `Xd`.
 `Kn|K(Xn)` indicates two alternative encodings: a 5-bit immediate CL index (`Kn`) or a CL number supplied by GPR `Xn`.
 In every encoding that offers both, bit `r`, the _CL indexing mode selector_, chooses between them: `r` = 0 makes the 5-bit register field the CL index itself, `r` = 1 makes it the number of the GPR holding the index.
 
-`%offset` denotes the immediate of the corresponding base-ISA instruction format, sign-extended to
-XLEN and added to the base register. The effective address of a transfer is `X[rs1] + sext(%offset)`.
+
+`%offset` denotes the sign-extended 12-bit immediate of the instruction: bits [31:20] for `kl.load` and `kl.input` (I-type), and bits [31:25] @ [11:7] for `kl.store` and `kl.output` (S-type). The base register is always in bits [19:15] (`rs1`). The effective address of a transfer is `X[rs1] + sext(%offset)`.
 For a multi-byte or resumed transfer that value is the address corresponding to the *first* byte of
 the transfer, not to the byte at which the transfer resumes: a byte offset of `klstart` is added to
 `X[rs1] + sext(%offset)` to form the restart address.
 The correspondence between addresses and transfer offsets is given by each instruction.
+
+//
 
 [[KLEE-general-rules-instructions]]
 === General Rules
@@ -1933,7 +1935,7 @@ Bits [28:27], i.e., field `T`, take the following values to encode the three ins
 _Description_::
 +
 --
-`klce.clone`:::
+`kl.clone`:::
 Clones the source CL `Ks` (or the CL indexed by `Xs`) into the destination CL `Kd` (or the CL indexed by `Xd`):
 
 * If source and destination are the same CL the instruction performs no operation, even if the CL is _Unconfigured_ or in a Configuration State, which is excepted from Rule <<KLEE-SGR-usage-cr-config-state>>. It sets no `*lclstatus` or `KLS` field to _Dirty_ (<<Zkl-ISA-priv.adoc#KLEE-CSR-lclstatus>>).
@@ -2005,77 +2007,111 @@ _Description_::
 --
 `kl.derive` moves up to `length` bytes from an endpoint of the source CL to an endpoint of the
 destination CL without making them visible to software: the output of one Machine becomes an
-input, possibly a key, of another. The source and the destination CLs must be different,
+input, possibly a key or some other Content field, of another.
+
+There are two types of such transfer: if the data moved from the source CL to the destination CL
+can be also obtained by performed `kl.exec` instructions, then we speak of an _unrestricted transfer_;
+otherwise it is a _restricted transfer_.
+
+The source and the destination CLs must be different,
 otherwise an illegal-instruction exception is raised.
 
 The auxiliary GPR carries `length`.
 
-Both source and destination CLs must be in specific States: the source must be in a state
-where it can export data, and the destination must be in a state where it can import data.
+`kl.derive` is a usage-controlled operation of both source and destination CLs.
+Therefore, the _UsagePolicy_ fields of both endpoints are verified
+before any state change or transfer operation is performed.
+If usage is not allowed in the current privilege mode for either the source or destination CL,
+KLEE exception `kl_exc_privilege_violation` is raised per Rule <<KLEE-SGR-usage-policy>>.
 
-A transfer may occur only if the architecture allows it for the _endpoint descriptor_ +
-(Source._Machine_ {vvert} _MachinePolicy_,
-Source._State_ {vvert} _StateExtension_, +
-{nbsp}{nbsp}Destination._Machine_ {vvert} _MachinePolicy_,
-Destination._State_ {vvert} _StateExtension_), +
+Both source and destination CLs must be in specific states, as defined by the
+_State_ and _StateExtension_ metadata fields.
+The source must be in a state where it can export data, and
+the destination must be in a state where it can import data.
+These states, and only these states define the fields that are exported or imported,
+or the type of the data that would be generated or absorbed by `kl.exec` instructions.
+No parameter is passed to `kl.derive` to select the source and destination data.
+
+An _endpoint descriptor_, for both the source and the destination CL, consists of the following information: +
+(MDH._Machine_ {vvert} _MachinePolicy_, MDH._State_ {vvert} _StateExtension_, +
+{nbsp}{nbsp}{nbsp}MDH._SCProtection_,  MDH._UsagePolicy_, MDH._Locality_, MDH._ExpirationDate_).
+
+A transfer may occur only if the architecture allows it for the given pair of endpoint descriptors
+of the source and destination CLs,
 i.e., the Machines and States of both source and destination CLs must be compatible.
 
-If the transfer is not allowed, the CLs transition as the Checks below specify.
+An allowed endpoint pair may define a minimum transfer length or an upper limit, a granularity.
 
 The exact semantics of the transfer, updates to the states of the two CLs as well as
 to `klstart`, `vstart`, and any other state of the hart are defined by the architecture
 for each endpoint descriptor.
 
-Some generic rules however apply:
+If usage of the instruction is allowed, some Checks, defined below, are performed.
+If the transfer is not allowed, the CLs transition as the checks specify.
+If a transfer is allowed, then the policies of the destination CL are updated as follows.
 
-. A field configured by a SKID is never exportable.
+In what follows, “DER” means “DErivation Rule”.
 
-. The most common case, which is always allowed, is moving a computed shared secret
-from a Machine implementing a public key agreement scheme into the key field of a Machine
-implementing a symmetric key encryption scheme.
-In order for the transfer to occur, the following conditions must be satisfied:
-
-.. The destination CL must have usage policies and locality bindings that are at least as strict as the source CL.
-.. The source Machine must contain an explicit shared secret.
-.. The destination Machine must be in State _Ready_.
-.. Both `length` and the source field's length must be at
-least as long as the destination field. If the latter is `b` bytes long, exactly `b`
-bytes are produced by the source Machine and copied into the key field of the
-target Machine.
-
-. A further common case consists in piping data that can be exported by the source Machine
-by repeated `kl.exec` instructions into a hash/MAC function implemented by the destination Machine.
-This case is always allowed because it is a shortcut to pairs of `kl.exec` instructions which
-produce data from the source Machine and feed it to the destination Machine.
-This case does not put restrictions on the policies of the source or destination Machine.
-
-. A third case consists in using a Machine implementing a DBRG to generate random data
-and feed it into the key fields destination Machine. The pre-conditions are:
-.. The destination Machine must be in State _Ready_.
-.. The destination CL must have usage policies and locality bindings that are at least as strict as the source CL.
-
-* Replace 1990 with: "If the transfer is not allowed, the CLs transition as the Checks below specify."
-* Line 200: "One encoding; the auxiliary input is always a GPR."
-
-
-//
-
-NOTE: The restrictions on derived keys follow NIST SP 800-57 Part 1 Rev. 5 cite:[nist-SP-800-57-p1-r5], §6.2.1 (key-usage and cryptoperiod metadata protection), and NIST SP 800-108r1 cite:[nist-SP-800-108-r1] §8 (derived keys inherit the security strength and use constraints of the key-derivation key). These Recommendations expect derived material to inherit any constraint of its parent.
-
-Checks:::
-The checks of Rule <<KLEE-SGR-gate-order>> apply to both CLs. Then, each check being applied to
+[horizontal]
+[[KLEE-DER-checks,DER1]]DER1:: The checks of Rule <<KLEE-SGR-gate-order>> apply to both CLs, each check being applied to
 the source before the destination, and with nothing transferred on any failure:
-+
+
 . The _State_ and _StateExtension_ of each CL must admit its endpoint, and a destination whose
   key is written must be in State _Ready_; otherwise the offending CL, or both, transition to
   Error State _Invalid_.
 . A destination that violates any constraint of on the data transfer
   transitions to Error State _Invalid_.
 . A transfer whose effective length (see <<KLEE-derive-rule-both-fixed-size>>) is below the pair's minimum, or violates its upper limit or granularity, transitions the destination CL to Error State _Invalid_.
-. A destination _key_ field of `dest_length` bytes requires `length` {ge} `dest_length` and a source field or output of at least `dest_length` bytes, and receives exactly `dest_length` bytes. Otherwise the destination transitions to Error State _Invalid_ and nothing is transferred.
+. A destination _key_ field of `dest_length` bytes requires `length` {ge} `dest_length` and a source field or output of at least `dest_length` bytes,   and receives exactly `dest_length` bytes. Otherwise the destination transitions to Error State _Invalid_ and nothing is transferred.
 
-[[KLEE-derive-rule-both-fixed-size,Transfer Size Rules]]
-Transfer:::
+[[KLEE-DER-narrowing,DER2]]DER2:: Before any byte of a _restricted transfer_ is transferred, the MDH of the destination CL is narrowed by the MDH of the source CL exactly as a SKID resolution narrows a CL (<<KLEE-system-keys>>):
+
+* _UsagePolicy_ bits 0–3 of the destination become the OR of both, and bit 4 the AND of both.
+* The destination _Locality_ becomes the union of both _Localities_, taking the stricter entry in each HW Binding chain and OR-ing bits 6–8. If the two Boot Session entries are non-zero and differ, or the result names an unconfigured entry (<<KLEE-Localities>>), the destination transitions to Error State _Invalid_ and nothing is transferred.
+* If `Zklexpire` is implemented, the destination _ExpirationDate_ becomes the smaller non-zero of the two values, or 0 if both are 0.
+* If the destination _SCProtection_ is lower, in the ordering of <<KLEE-SC-protection-levels>>, than that of the source, the destination transitions to Error State _Invalid_ and nothing is transferred.
+
+DER3:: No policy narrowing is applied in case of an _unrestricted transfer_.
+
+The policy narrowing for restricted transfers follow NIST SP 800-57 Part 1 Rev. 5 cite:[nist-SP-800-57-p1-r5], §6.2.1 (key-usage and cryptoperiod metadata protection), and NIST SP 800-108r1 cite:[nist-SP-800-108-r1] §8 (derived keys inherit the security strength and use constraints of the key-derivation key). These Recommendations expect derived material to inherit any constraint of its parent.
+Any additional specific transfer defined by the Machines must respect these restrictions.
+
+[horizontal]
+[[KLEE-DER-SKID-no-export,DER4]]DER4:: A field configured by a SKID is _never_ exportable.
+No rule may be defined to export such a field.
+
+[[KLEE-DER-shared-secret,DER5]]DER5:: Moving a computed shared secret
+from a Machine implementing a public key agreement scheme into a field of a Machine
+implementing a symmetric key encryption scheme, or into a private key field of
+a Machine implementing a public key agreement scheme constitutes a _restricted transfer_.
+It is always allowed the following conditions are satisfied:
+
+.. The source Machine must contain an explicit shared secret.
+.. The destination Machine must be in a State which allows the configuration of a field.
+.. If the destination field is a symmetric key, the State must be _Ready_.
+.. Both `length` and the source field's length must be at
+least as long as the destination field. If the latter is `b` bytes long, exactly `b`
+bytes are produced by the source Machine and copied into the key field of the
+target Machine.
+
+DER6:: Data that can be exported by the source Machine by repeated `kl.exec` instructions
+can always be transferred as an _unrestricted transfer_ into a hash/MAC function implemented
+by the destination Machine.
+This case is always allowed because it is a shortcut to pairs of `kl.exec` instructions which
+produce data from the source Machine and feed it to the destination Machine.
+
+DER7:: Using a Machine implementing a DBRG to generate random data
+and feed it into a symmetric key fields of a private key of a destination Machine
+is a _restricted transfer_.
+
+//
+
+A pair defined in <<Zkl-ISA-machines.adoc#KLEE-Machines>> may further narrow but never relax any policy.
+
+An _exportable field_ is a field of the source CC that its Machine lists as the source of a `kl.derive`. An _importable field_ is a field of the destination CC that its Machine lists as a destination. Only listed (source Machine, State, field; destination Machine, State, field) pairs are allowed. Any other pair transitions both CLs to Error State _Invalid_.
+
+[horizontal]
+[[KLEE-derive-rule-both-fixed-size,DER8]]DER8:: *(Transfer Size Rule.)*
 A destination field of `dest_length` bytes receives `eff_length` = min(`length`, `dest_length`)
 bytes and is zero-filled beyond them (zero-filling does not apply to keys per the last Check above);
 any other destination receives `eff_length` = `length`
@@ -2092,16 +2128,14 @@ state implemented by `process_VLI` may be left open and continued with `kl.exec`
 +
 The interruption points of a `kl.derive` (<<KLEE-CSR-klstart>>) are the `klstart` values that
 are interruption points of both endpoints, each in its current State.
---
 
-// or if software can obtain its data through `kl.exec` and its destination accepts arbitrary input
-// through `kl.exec`, as for the output of a XOF squeezed into a state implemented by Procedure
-// `process_VLI` (<<KLEE-process-VLI>>) or into a multi-block `kl.exec`. Either way, the block sizes
-// of the endpoints, in their current States, must be compatible: one divides the other, one endpoint
-// transfers any number of bytes directly from or to a field, or the destination is a `process_VLI`
-// state. A listed pair depends on both Machines; it defines a minimum transfer length and may
-// define an upper limit, a granularity, and constraints on the _UsagePolicy_, _Locality_,
-// _ExpirationDate_ and _SCProtection_ of the destination CL, to which the source Machine may add.
+In all cases, the transfers between the endpoints must have compatible basic unit sizes.
+For instance, if the source data can be generated by multiple `kl.exec` operations, and
+it is input to the destination through `kl.exec` as well (for instance, outputting a XOF into a
+`process_VLI` (<<Zkl-ISA-machines.adoc#KLEE-process-VLI>>)),
+then one block size (source or destination) must divide the other (destination or source respectively).
+This allows the definition of well defined interruption points if needed.
+--
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -2125,9 +2159,8 @@ _Encoding_::
 ]}
 ....
 +
-`funct3` = `0b0100` selects the immediate CL index in the `context` field and `funct3` = `0b0101` selects the CL indexed by the GPR named by that field.
-+
-`r` is the CL indexing mode selector. Indirect CL addressing is only available when `Zklind` is present. Otherwise, `r` = 1 is an illegal instruction.
+`funct3` = 6 selects the immediate CL index in the `context` field and `funct3` = 7 selects the CL indexed by the GPR named by that field.
+Indirect CL addressing requires `Zklind`. Otherwise, `funct3` = 0x7 is an illegal instruction.
 
 _Mnemonics_::
 `kl.load{fournbsp}{nbsp}{nbsp}{nbsp}Kd|K(Xd), %offset(Xs1)`
@@ -2167,13 +2200,14 @@ _Encoding_::
     { bits:  7, name: 0x23, attr: ['STORE'] },
     { bits:  5, name: 'immed[4:0]' },
     { bits:  3, name: 'kl.store', attr: [0x6,0x7] },
-    { bits:  5, name: 'context', attr: ['Ks2','K(Xs2)'] },
     { bits:  5, name: 'Xs1' },
+    { bits:  5, name: 'context', attr: ['Ks2','K(Xs2)'] },
     { bits:  7, name: 'immed[11:5]' },
 ]}
 ....
 +
-`funct3` = `0b0110` selects the immediate CL index in the `context` field and `funct3` = `0b0111` selects the CL indexed by the GPR named by that field.
+`funct3` = 6 selects the immediate CL index in the `context` field and `funct3` = 7 selects the CL indexed by the GPR named by that field.
+Indirect CL addressing requires `Zklind`. Otherwise, `funct3` = 0x7 is an illegal instruction.
 
 _Mnemonic_::
 `kl.store %offset(Xs1), Ks2|K(Xs2)`
@@ -2216,7 +2250,6 @@ _Encoding_::
 +
 --
 `kl.input` is an I-type instruction.
-The base address `Xs` occupies the `rd` field and the length `Xl` the `rs1` field.
 
 [wavedrom, , svg]
 ....
@@ -3930,12 +3963,7 @@ Upon entering Debug mode while the authenticated-debug signal is _deasserted_:
 . All applicable `*lclstatus` fields are set to _Dirty_; every `KLS` field that is not Off is set to _Dirty_.
 . The software-configurable Locality Secrets — _PhysBootScrt_, _VirtBootScrt_, _MLocality_, _HLocality_, and _SLocality_ (`mklphysbootscrt`, `hklvirtbootscrt`, `mkllocality`, `hkllocality`, `skllocality`, `vskllocality`) — are zeroized. Their CSRs subsequently read as zero.
 . The HW Binding Group entries cannot be zeroized and are therefore _masked_: until the next hart reset each such entry is _unconfigured_ for this hart (<<KLEE-Localities>>). A PI or SCC whose _Locality_ names a masked entry is invalid Metadata, and chain substitution does not substitute a masked entry.
-. The CSK is zeroized _and_ unconfigured (if the KLEE Privileged Architecture is implemented, zeroizing the CSK makes it unconfigured, cf <<Zkl-ISA-priv.adoc#KLEE-CSR-mklcsk>>, here we must explicitly require both conditions). If the CSK is hardwired, or shared under the fourth model of <<KLEE-CSK-requirements>>, the KLEE unit of the hart has no active CSK until the next hart reset, and every access that <<KLEE-CSK-requirements>> does not exempt raises `kl_exc_no_csk`. A shared CSK itself is not modified. At no time does the KLEE unit use an all-zero CSK or an all-zero HW Binding entry as key material.
-
-[WARNING]
-====
-Note that the hardwired of shared CSK models in this regime may pose a security risk, because every SCC exported after unauthenticated Debug entry, until hart reset, is sealed under a publicly known key. Every such SCC can then be decrypted offline, and SCCs with arbitrary MDH, including permissive policies, can be forged and imported. This is a total break of the sealing property. Hence, we recommend that unauthenticated debug be disabled in these cases.
-====
+. The CSK is zeroized _and_ thus is essentially unconfigured. If the CSK is hardwired, or shared under the fourth model of <<KLEE-CSK-requirements>>, the KLEE unit of the hart has no active CSK until the next hart reset, and every access that <<KLEE-CSK-requirements>> does not exempt raises `kl_exc_no_csk`. A shared CSK itself is not modified. At no time does the KLEE unit use an all-zero CSK or an all-zero HW Binding entry as key material.
 
 [NOTE]
 ====

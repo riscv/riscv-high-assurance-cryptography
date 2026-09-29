@@ -92,7 +92,7 @@ Counts: **2 Critical, 9 Major, 22 minor.**
 
 ## 2. Findings
 
-### *PARTIALLY FIXED (marked FIXED in 6071269; residuals in §8)* C1 — `kl.derive` places no normative constraint on the destination's policies
+### *FIXED* C1 — `kl.derive` places no normative constraint on the destination's policies
 
 **Severity rationale.** This breaks the primary security property of KLEE: a key cannot outlive or escape the policy bound to it (Introduction, "binds cryptographic secrets … and metadata"). It needs no hardware attack. Any process holding a derivable CC can do it.
 
@@ -126,7 +126,7 @@ Counts: **2 Critical, 9 Major, 22 minor.**
 * NIST SP 800-57 Part 1 Rev. 5, §6.2.1 (key-usage and cryptoperiod metadata protection), and SP 800-108r1 §8 (derived keys inherit the security strength and use constraints of the key-derivation key) both expect derived material to inherit the constraints of its parent. The spec itself adopts this principle for SKID resolution (unpriv 3092) and for `kl.restrict*` (narrowing only, 1067). `kl.derive` is the one path that breaks it.
 * Confirmed as a false-positive candidate and rejected: the Machines chapter might contain pair-specific rules, but (i) unpriv states no general inheritance rule, and (ii) the pair constraints are described as ones the pair "may define", so absence is permitted.
 
-**Resolution.** Uncomment and repair 2040–2050, and add this Rule (normative) to §`kl.derive`, after "Checks":
+**Resolution.** Uncomment and repair 2040–2050`+34 = ~2080-2090, and add this Rule (normative) to §`kl.derive`, after "Checks":
 
 > **Derivation Narrowing Rule.** The _UsagePolicy_ checks of both endpoints precede the narrowing. Before any byte is transferred, the MDH of the destination CL is narrowed by the MDH of the source CL exactly as a SKID resolution narrows a CL (<<KLEE-system-keys>>):
 >
@@ -213,7 +213,7 @@ A related inaccuracy: MISC-MEM uses `funct3` 0 (FENCE/FENCE.TSO/PAUSE), 1 (FENCE
 
 ---
 
-### *OPEN (almost; remaining edits in §8.3)* M2 — Memory-instruction encodings contradict each other and the effective-address definition
+### *FIXED* M2 — Memory-instruction encodings contradict each other and the effective-address definition
 
 **Severity rationale.** Two conforming implementations would decode the same bits differently, so this is a direct interoperability failure. Because the base register differs, a wrong decode computes a wrong effective address, which means stores go to arbitrary memory.
 
