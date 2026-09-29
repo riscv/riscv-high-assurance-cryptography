@@ -92,7 +92,7 @@ Counts: **2 Critical, 9 Major, 22 minor.**
 
 ## 2. Findings
 
-### **FIXED** C1 — `kl.derive` places no normative constraint on the destination's policies
+### *PARTIALLY FIXED (marked FIXED in 6071269; residuals in §8)* C1 — `kl.derive` places no normative constraint on the destination's policies
 
 **Severity rationale.** This breaks the primary security property of KLEE: a key cannot outlive or escape the policy bound to it (Introduction, "binds cryptographic secrets … and metadata"). It needs no hardware attack. Any process holding a derivable CC can do it.
 
@@ -145,7 +145,7 @@ SCProtection is not raised in place (see Pass 1 below), because it selects the i
 
 ---
 
-### **FIXED** C2 — Debug entry: unpriv substitutes an all-zero CSK, priv declares it unconfigured
+### *ALMOST FIXED (delete the new WARNING, §8)* C2 — Debug entry: unpriv substitutes an all-zero CSK, priv declares it unconfigured
 
 **Severity rationale.** If the unpriv text is followed, every SCC exported after unauthenticated Debug entry, until hart reset, is sealed under a publicly known key. Every such SCC can then be decrypted offline, and SCCs with arbitrary MDH, including permissive policies, can be forged and imported. This is a total break of the sealing property. It sits in a normative list, not a Discussion item.
 
@@ -180,7 +180,7 @@ Extend unpriv 628: "A Locality Secret of the Boot Session Group or of the SW Fil
 
 ---
 
-### **FIXED**  M1 — LOAD-FP/STORE-FP `funct3` 5/6/7 are the RVV unit-stride vector loads and stores that KLV requires
+### **FIXED** M1 — LOAD-FP/STORE-FP `funct3` 5/6/7 are the RVV unit-stride vector loads and stores that KLV requires
 
 **Severity rationale.** This is Major rather than Critical only because the final opcode allocation is a Group A item that must change anyway. The defect itself is a hard conflict. A hart that implements `Zklv` — which requires "unit-strided vector loads and stores" (unpriv 328) — together with hardware `Zklmem` or `Zklio` cannot decode both instruction sets. The draft is therefore not implementable in its mandated configuration.
 
@@ -213,7 +213,7 @@ A related inaccuracy: MISC-MEM uses `funct3` 0 (FENCE/FENCE.TSO/PAUSE), 1 (FENCE
 
 ---
 
-### **FIXED** (almost) M2 — Memory-instruction encodings contradict each other and the effective-address definition
+### *OPEN (almost; remaining edits in §8.3)* M2 — Memory-instruction encodings contradict each other and the effective-address definition
 
 **Severity rationale.** Two conforming implementations would decode the same bits differently, so this is a direct interoperability failure. Because the base register differs, a wrong decode computes a wrong effective address, which means stores go to arbitrary memory.
 
@@ -243,7 +243,7 @@ Then re-encode as follows:
 
 ---
 
-### *STARTED TO FIX, WOULD RATHER AVOID A NEW EXCEPTION TYPE* M3 — Zklmem trap-and-emulate silently mandates `medeleg[2]` = 0
+### *OPEN — STARTED TO FIX, WOULD RATHER AVOID A NEW EXCEPTION TYPE (proposals in §8.4)* M3 — Zklmem trap-and-emulate silently mandates `medeleg[2]` = 0
 
 **Severity rationale.** This is an undiscoverable platform constraint that conflicts with the conventional OS use of illegal-instruction delegation (Linux delegates cause 2 to S-mode). An OS that delegates cause 2 on such a platform receives `kl.load`/`kl.store` traps it cannot emulate, because only M-mode holds the emulator and the CLs. The result is broken key management or, worse, an OS that "handles" them as SIGILL.
 
@@ -301,7 +301,7 @@ Provisioning and PPI states do not use the authentication registers (304), so th
 
 ---
 
-### **FIXED** M5 — `kl.rename` and `kl.swap` are underspecified
+### *PARTIALLY FIXED (IRR1, SGR20, Error-State table, priv 281 pending; §8)* M5 — `kl.rename` and `kl.swap` are underspecified
 
 **Severity rationale.** These instructions move whole CCs, including partially managed ones, yet their exceptions, interaction with `klmanagedcr`, lazy-save (`*lclstatus`) behavior and uninterruptibility are undefined. The result is non-interoperable context switching and possible loss of the authoritative image of a CL.
 
@@ -360,7 +360,7 @@ Also:
 
 ---
 
-### **FIXED** M7 — The restart option permits livelock on synchronous faults
+### *ALMOST FIXED (klstart item 1 pending; §8)* M7 — The restart option permits livelock on synchronous faults
 
 **Severity rationale.** This is a liveness defect. A `kl.load`/`kl.store` spanning N pages under memory pressure can livelock forever, because every re-execution restarts from byte 0 and re-faults on an evicted earlier page. RVV forbids this for vector memory instructions.
 
@@ -412,7 +412,7 @@ Also:
 
 ---
 
-### M9 — The reference pseudocode fails on every Zklmem path and several Zklmv paths
+### *DEFERRED* M9 — The reference pseudocode fails on every Zklmem path and several Zklmv paths
 
 **Severity rationale.** The pseudocode is informative and marked "being rewritten" (pseudo 17–20), but unpriv 2497 cites it as describing behavior. It is the only usage reference. The Zklmem provisioning, export and import paths *never issue the completing `kl.mgmt`*, which leaves CLs open indefinitely. Under the "do not downgrade" instruction this is Major.
 
@@ -443,32 +443,32 @@ This goes before `V3 ← V3 xor V1` on the last iteration. Add a normative discl
 
 ---
 
-### minor findings **ALL FIXED**
+### minor findings (status per row, verified in §8)
 
 | ID | Location | Defect | Resolution |
 |---|---|---|---|
-| m1 | unpriv 634 | Stray "?" after "…these Localities." | Delete. |
-| m2 | unpriv 1908, 1922, 1925 | Labels `ace.clone`/`ace.rename`/`ace.swap` (old ACE name). | `kl.clone` etc. |
-| m3 | unpriv 1892 | "Indirect CR addressing": CR is undefined (not in acronyms). | "Indirect CL addressing". |
-| m4 | unpriv 3276, 2670, 2993 | Anchor `ace-mgmt-completes-export` still uses the old prefix. | Rename to `KLEE-mgmt-completes-export`. |
-| m5 | unpriv 1376 | `kl.mv` cites only SGR21; the export direction is governed by SGR22. | "Rules SGR21 and SGR22". |
-| m6 | unpriv 1331–1358 | Variant letters A–D in the mnemonics are reused as "Forms A–D" in 1353–1355 ("In Forms A and B, `rs2`…"), but the encodings use `kl.exec` Forms B and C. | Rename the variants i–iv and fix 1353–1355. |
-| m7 | unpriv 1311 | Cites GR8 for register overlap; GR8 (1096) covers only LMUL alignment, and no Rule defines overlap. | Add an overlap Rule to GR8 or state it inline. |
-| m8 | unpriv 421, 436, 451–452 | "three … levels" but values 0–3 exist; "asd per"; the Level 3 row says "In addition to SCProtection Level 3" (should be Level 2); "ISO/IEC-17825-ISO". | Fix text. |
-| m9 | unpriv 1707–1718 | `kl.getst`/`kl.getstx` expansions given for RV64 only. On RV32 `kl.getmdl` writes a pair; the expansion from `X[d]` is the same but must be stated. | "On RV32 the same expansion applies to `X[d]`." |
-| m10 | unpriv 1685 | `kl.getmdv` does not specify the destination bits above 128 or the tail policy. | "Bits above 127 follow the tail-agnostic policy (<<KLEE-KLV>>)." |
-| m11 | unpriv 578–582 | UsagePolicy: "mode" is not defined as the effective privilege for MPRV-affected accesses; KLEE usage is not a data access, so the current mode applies. | "…the current privilege mode, unaffected by `mstatus.MPRV`." |
-| m12 | unpriv 674 | Behavior when the secure clock is unavailable or unreadable is undefined. | "If the secure clock cannot be read, a CL with non-zero _ExpirationDate_ is treated as expired." |
-| m13 | unpriv 843–846 | `klmvendorid` is not given the JEDEC bank/offset encoding of Priv ISA §3.1.2 (`mvendorid`); `klmarchid` lacks the MSB convention of §3.1.3. | Copy those encodings by reference. |
-| m14 | unpriv 798–801 | Privilege column "RO" for CSRs that U-mode reads; other rows use "URW". | "URO". |
-| m15 | unpriv 2802 | IRR7 "Handlers must not reset it to zero" gives no architectural consequence. | "…doing so is UNSPECIFIED and may transition the CL to _Invalid_." |
-| m16 | unpriv 1920 | `kl.clone` "achieves the same result as exporting … and importing". False for IMPQUAL/Locality changes and ADSDropped; also a sealing/auth-register side effect. | "has the same effect on the destination CC as an export and import would, but touches no authentication register." |
-| m17 | notation 109–145 | The Transcription section is commented out, yet `{vvert}` semantics depend on it (156, 195). | Restore it or define `{vvert}` in the live text. |
-| m18 | acronyms | Missing PCCC, KLV, KLLEN, CR, RVWMO, RVTSO. KLEE's expansion "Cryptographic Lockers Extensions" matches neither the letters nor the introduction ("Cryptographic Locker Extensions"). | Add them and align. |
-| m19 | src/Zkl.adoc 42/52, 58, 30, 112 | `:section-refsig:` defined twice; stray `:csrname: envcfg`; `:bibtex-file:` lacks `../` relative to `src/`; `[discrete]` precedes an `include::`, which has no effect. | Clean up. |
-| m20 | unpriv 3398–3404 | The Error-State short import installs "the entire MDH … without applying the checks", including an arbitrary _Locality_ and a reserved _Version_. Harmless because no Content exists, but `kl.getmd` then reports invalid Metadata as if valid. | Apply the reserved-bit checks, or state that such a CL reports _Invalid_. |
-| m21 | unpriv 1240 | `kl.size` Form B asserts that no field in [127:64] affects size; `Version` (127:126) can (see M8). | Carve out `Version`. |
-| m22 | priv 379 | Readback "at the implementation's choice" of the active CSK under the programmable models conflicts with the spirit of unpriv 3810 ("Except for in M-mode …"). It is permitted, but it must be discoverable for audit. | Make the choice discoverable, or mandate read-as-zero under models 2–4. |
+| **FIXED** m1 | unpriv 634 | Stray "?" after "…these Localities." | Delete. |
+| *OPEN* m2 | unpriv 1908, 1922, 1925 | Labels `ace.clone`/`ace.rename`/`ace.swap` (old ACE name). | `kl.clone` etc. |
+| **FIXED** m3 | unpriv 1892 | "Indirect CR addressing": CR is undefined (not in acronyms). | "Indirect CL addressing". |
+| **FIXED** m4 | unpriv 3276, 2670, 2993 | Anchor `ace-mgmt-completes-export` still uses the old prefix. | Rename to `KLEE-mgmt-completes-export`. |
+| **FIXED** m5 | unpriv 1376 | `kl.mv` cites only SGR21; the export direction is governed by SGR22. | "Rules SGR21 and SGR22". |
+| **FIXED** m6 | unpriv 1331–1358 | Variant letters A–D in the mnemonics are reused as "Forms A–D" in 1353–1355 ("In Forms A and B, `rs2`…"), but the encodings use `kl.exec` Forms B and C. | Rename the variants i–iv and fix 1353–1355. |
+| **FIXED** m7 | unpriv 1311 | Cites GR8 for register overlap; GR8 (1096) covers only LMUL alignment, and no Rule defines overlap. | Add an overlap Rule to GR8 or state it inline. |
+| *OPEN* m8 | unpriv 421, 436, 451–452 | "three … levels" but values 0–3 exist; "asd per"; the Level 3 row says "In addition to SCProtection Level 3" (should be Level 2); "ISO/IEC-17825-ISO". | Fix text. |
+| *OPEN* m9 | unpriv 1707–1718 | `kl.getst`/`kl.getstx` expansions given for RV64 only. On RV32 `kl.getmdl` writes a pair; the expansion from `X[d]` is the same but must be stated. | "On RV32 the same expansion applies to `X[d]`." |
+| **FIXED** m10 | unpriv 1685 | `kl.getmdv` does not specify the destination bits above 128 or the tail policy. | "Bits above 127 follow the tail-agnostic policy (<<KLEE-KLV>>)." |
+| **FIXED** m11 | unpriv 578–582 | UsagePolicy: "mode" is not defined as the effective privilege for MPRV-affected accesses; KLEE usage is not a data access, so the current mode applies. | "…the current privilege mode, unaffected by `mstatus.MPRV`." |
+| **FIXED** m12 | unpriv 674 | Behavior when the secure clock is unavailable or unreadable is undefined. | "If the secure clock cannot be read, a CL with non-zero _ExpirationDate_ is treated as expired." |
+| **FIXED** m13 | unpriv 843–846 | `klmvendorid` is not given the JEDEC bank/offset encoding of Priv ISA §3.1.2 (`mvendorid`); `klmarchid` lacks the MSB convention of §3.1.3. | Copy those encodings by reference. |
+| *OPEN* m14 | unpriv 798–801 | Privilege column "RO" for CSRs that U-mode reads; other rows use "URW". | "URO". |
+| **FIXED** m15 | unpriv 2802 | IRR7 "Handlers must not reset it to zero" gives no architectural consequence. | "…doing so is UNSPECIFIED and may transition the CL to _Invalid_." |
+| **FIXED** m16 | unpriv 1920 | `kl.clone` "achieves the same result as exporting … and importing". False for IMPQUAL/Locality changes and ADSDropped; also a sealing/auth-register side effect. | "has the same effect on the destination CC as an export and import would, but touches no authentication register." |
+| **FIXED** m17 | notation 109–145 | The Transcription section is commented out, yet `{vvert}` semantics depend on it (156, 195). | Restore it or define `{vvert}` in the live text. |
+| *OPEN* m18 | acronyms | Missing PCCC, KLV, KLLEN, CR, RVWMO, RVTSO. KLEE's expansion "Cryptographic Lockers Extensions" matches neither the letters nor the introduction ("Cryptographic Locker Extensions"). | Add them and align. |
+| *OPEN* m19 | src/Zkl.adoc 42/52, 58, 30, 112 | `:section-refsig:` defined twice; stray `:csrname: envcfg`; `:bibtex-file:` lacks `../` relative to `src/`; `[discrete]` precedes an `include::`, which has no effect. | Clean up. |
+| **FIXED** m20 | unpriv 3398–3404 | The Error-State short import installs "the entire MDH … without applying the checks", including an arbitrary _Locality_ and a reserved _Version_. Harmless because no Content exists, but `kl.getmd` then reports invalid Metadata as if valid. | Apply the reserved-bit checks, or state that such a CL reports _Invalid_. |
+| **FIXED** m21 | unpriv 1240 | `kl.size` Form B asserts that no field in [127:64] affects size; `Version` (127:126) can (see M8). | Carve out `Version`. |
+| **FIXED** m22 | priv 379 | Readback "at the implementation's choice" of the active CSK under the programmable models conflicts with the spirit of unpriv 3810 ("Except for in M-mode …"). It is permitted, but it must be discoverable for audit. | Make the choice discoverable, or mandate read-as-zero under models 2–4. |
 
 ---
 
@@ -614,3 +614,153 @@ Section numbers for RVV exception handling and the Debug spec are cited from mem
 * **C2 vs Debug NOTE 3884–3886 (recovery path).** Still true. Under the programmable models, SCCs exported *before* Debug entry become importable when M-mode re-establishes the same CSK. Under C2, no SCC is ever sealed with a zero key, so there are no post-Debug SCCs to strand.
 
 **(c) Final adaptations:** none required beyond Passes 1–2. The remedies in §2 are the final versions.
+
+---
+
+## 8. Verification of spec changes (commits 8f46944, 6071269)
+
+Line numbers in this section refer to the working tree at commit `2ecf127` and were verified by grep against it. "unpriv", "priv" and "pseudo" are as in the Scope section. A finding is marked **FIXED** in its title only when no normative residual remains. Editorial residuals are listed but do not block closure.
+
+### 8.1 Status per finding
+
+| Finding | Status | Residual |
+|---|---|---|
+| C1 | **Partial** | See 8.2 (C1). Exportable/importable fields are undefined, the SKID rule was inverted, and "at least as strict" has no ordering. ExpirationDate and SCProtection are unconstrained. |
+| C2 | **Fixed in substance** | The new WARNING at unpriv 3935–3938 (text at 3937) contradicts the fix and must be deleted. The informal "here we must explicitly require both conditions" should go. |
+| M1 | **FIXED** | Caveat: LOAD `funct3` 7 may be claimed by RV128 `LDU`; label it provisional in the Group A item. |
+| M2 | **Open** | Text still disagrees with the diagrams (8.3). |
+| M3 | **Open** | Still implies `medeleg[2]` = 0 (8.4). |
+| M4 | **FIXED** | Editorial only: SGR21 (2495) and SGR22 (2499) each name both States, of which only one is relevant to the rule, and the sentences lack a final period. The author's note "not a problem, handled by the architecture" is answered in 8.2 (M4). |
+| M5 | **Partial** | IRR1 (2802), SGR20 (2489), the Error-State table (2740–2757) and priv 281 were not updated. |
+| M6 | **FIXED** | — |
+| M7 | **Almost** | The klstart item 1 (955–958) still lacks "for an asynchronous interrupt". |
+| M8 | **FIXED** | Also closes m21. |
+| M9 | **Deferred** | Pseudocode changes are whitespace/comment only. Every defect listed in M9 remains (`subi`, unmasked `bltu`, `kl.size s1, s5:s4`, `kl.mgmt` in the Error-State export path, GCM tail). |
+| m1, m3–m7, m10–m13, m15–m17, m20–m22 | **FIXED** | m7: the overlap constraint is now stated inline (1330), one of the two remedies offered. m20: the new sentence at 3459–3460 ends in a truncation, "so the CL is never observed." |
+| m2 | Open | New label typo `klce.clone`::: (1936). |
+| m8 | Open | "asd per" (435) and "In addition to _SCProtection_ Level 3," in the Level 3 row (449) remain. |
+| m9 | Open | The new RV32 sentence is garbled (1748: "Or RV32, the code would similar"). |
+| m14 | Open | Now "RO/MRW/HRW" (808–811), which contradicts "Software cannot modify these values" (851) and "Read only" (811). |
+| m18 | Open | PCCC is expanded as "Partially *Provisioned* Cryptographic Context" (acronyms 63); the spec uses "Partially *Configured*" (unpriv 2982, 2994, 3043, 3088). RVWMO and RVTSO are still missing. |
+| m19 | Open | `:csrname: envcfg` (src/Zkl.adoc 57) and `[discrete]` (111) remain. |
+
+### 8.2 Residuals and newly introduced defects
+
+**C1 — `kl.derive` (unpriv 1998–2080).**
+
+1. *Stray review text in normative prose.* Lines 2057–2058 contain two bullets copied from this review: "Replace 1990 with: …" and "Line 200: …". Delete them.
+2. *SKID/SKS rule inverted.* Line 2031 now reads "A field configured by a SKID is never **exportable**". The original rule had two halves: a field from the System Key Store is never exportable, and a field configured by a SKID is never importable. Restore both:
+   > A field whose value originates from the System Key Store is never an exportable field. A field configured by a SKID is never an importable field.
+3. *Exportable/importable fields are undefined.* The pairs text was deleted rather than repaired. SGR5 (2416) still says "one of its exportable fields", so SGR5 has no meaning. Restore the definition from the C1 remedy (last paragraph of the quoted Rule).
+4. *"At least as strict" has no ordering.* Lines 2038 and 2055 use the phrase, but no text defines a strictness order for _UsagePolicy_, _Locality_, _ExpirationDate_ or _SCProtection_. The check is therefore not testable, and two implementations can disagree. Either adopt the narrowing formulation of the C1 remedy, or define strictness per field:
+   > A destination MDH is _at least as strict_ as a source MDH if and only if all of the following hold:
+   >
+   > * every _UsagePolicy_ bit 0–3 set in the source is set in the destination, and bit 4 is clear in the destination if it is clear in the source;
+   > * every Locality entry named by the source is named by the destination, or is replaced by a stricter entry of the same HW Binding chain, and bits 6–8 set in the source are set in the destination;
+   > * if `Zklexpire` is implemented and the source _ExpirationDate_ is non-zero, the destination _ExpirationDate_ is non-zero and not later;
+   > * the destination _SCProtection_ is not lower than the source's.
+   >
+   > Otherwise the destination transitions to Error State _Invalid_ and nothing is transferred.
+
+   The check-only form is preferable to the narrowing form if the TG wants the destination MDH to stay exactly as provisioned. It then needs the four bullets above.
+5. *Piping case.* Line 2050, "does not put restrictions on the policies of the source or destination Machine" reads as an exemption from the strictness check. If piping moves only public data (for example, a hash state), say so and require that the source field be non-secret. Otherwise apply the same check.
+6. *Typos:* "DBRG" (2052; DRBG), "any constraint of on the data transfer" (2072).
+
+**C2 — Debug (unpriv 3932–3938).** The replacement items (3932, 3933) are correct, and priv 381 now agrees with them. The new WARNING says that under hardwired or shared CSK models the SCCs are "sealed under a publicly known key … total break" and recommends disabling unauthenticated debug. It describes the *old* text, which the fix removed; it now contradicts items 1–2 immediately above it. Delete it. If a warning is wanted, use:
+> [NOTE] After unauthenticated Debug entry under the hardwired or shared CSK models, the KLEE unit is unavailable on this hart until the next hart reset.
+
+Minor: 626 reads "…entry (…), is _unconfigured_"; drop the comma.
+
+**M4.** The author's note says that handling is defined by the architecture. After 6071269 this is true, because SGR21/SGR22 now check `klmanagedcr`. Before that change it was not, since nothing prevented a transfer on a non-managed CL in `kl_cfg_importing`. The finding is closed by the added sentence. Suggested editorial form, per rule:
+> SGR21: In State `kl_cfg_importing` the CL must additionally be the one named by `klmanagedcr`.
+> SGR22: In State `kl_cfg_exporting` the CL must additionally be the one named by `klmanagedcr`.
+
+**M5.** The instruction text (1952–1960) now matches the remedy, but the rules that enumerate instructions were not updated:
+* IRR1 (2802): add `kl.rename` and `kl.swap` to the uninterruptible list.
+* SGR20 (2489): add both to the instructions admitted on a Partial or Configuration-State CL.
+* Error-State table (2740–2757): add a row, "`kl.rename`, `kl.swap`: moved or exchanged unchanged".
+* priv 281: add "`kl.rename` as a destination access" to the `*lclstatus` exemptions.
+
+**M7.** klstart item 1 (955–958) still reads "…or 0 in an implementation that selects the restart option … for `kl.load`, `kl.store`, `kl.input` and `kl.output`". IRR3 now forbids restart on synchronous exceptions, so the two texts contradict. Insert "for an asynchronous interrupt" after "or 0".
+
+**M3 text (unpriv 157).** "a illegal-instruction" (157) should be "an illegal-instruction". See 8.4 for the substance.
+
+**Validity list.** Typos "satosfied" (753) and "it is a valid for an import operation" (756).
+
+### 8.3 M2 — remaining edits
+
+The diagrams are now correct: `kl.store` has `Xs1` at 19:15, and `kl.input` has `Xl` at 11:7 and `Xs` at 19:15. The EA definition (1034–1035) is generalized. The prose was not brought into line with the diagrams. All of the following are needed to close M2.
+
+1. **General selector text (1032).** "In every encoding that offers both, bit `r` …" is false for the memory instructions, which select direct/indirect addressing via `funct3`. Replace with:
+   > Instructions that offer both direct (`Kd`) and indirect (`K(Xd)`) CL addressing select between them with bit `r` of the encoding, except `kl.load` and `kl.store`, which select with `funct3`. In both cases the indirect form requires `Zklind`; without `Zklind` it is an illegal instruction.
+2. **`kl.load` (2128–2130).** The text says "`funct3` = `0b0100` … `0b0101`": four-bit literals, values 4/5. The diagram shows 6/7. Replace with:
+   > `funct3` = `0b110` selects direct CL addressing, and the CL number is the `rd` field. `funct3` = `0b111` selects indirect addressing, and the CL number is `X[rd]`{nbsp}mod{nbsp}32 (requires `Zklind`).
+
+   Delete "`r` is the CL indexing mode selector … `r` = 1 is an illegal instruction" (2130). The encoding has no `r` bit.
+3. **`kl.store` (2176).** Replace the four-bit literals `0b0110`/`0b0111` with `0b110`/`0b111`, and add the same direct/indirect sentence with `rs2` in place of `rd`.
+4. **`kl.input` (2219).** "The base address `Xs` occupies the `rd` field and the length `Xl` the `rs1` field" contradicts the diagram. Replace with:
+   > The base address `Xs` occupies the `rs1` field (bits 19:15), and the length `Xl` the `rd` field (bits 11:7). `kl.input` is I-type; its offset is bits [31:20].
+5. **Consistency check.** After these edits, confirm that the EA text (1034–1035) names I-type for `kl.load` and `kl.input`, and S-type for `kl.store` and `kl.output`, now that `kl.load` sits under JALR and `kl.input` under LOAD.
+
+One further observation on the new allocation, not blocking. `kl.load` under JALR `funct3` 6/7 is an I-type encoding whose `rd` is a CL number rather than a GPR. Tools that decode JALR generically will mis-disassemble it. Mention this in the Group A item.
+
+### 8.4 M3 — proposals that avoid a new exception type
+
+**What changed.** Unpriv 157 now says that the hart raises a virtual-instruction or illegal-instruction exception "depending on the `medeleg`/`hedeleg` bits … which the platform must deliver to M-mode, which requires `medeleg` bit 2 to be zero". The introduction gained a Group A item (`kl_exc_emulate`, introduction 154) and Group B items (165, 167) ("Delegate KLEE Unit trap-and-emulate to HSx", "Eliminate kl.load and kl.store?"). The *allocation* of a new cause is therefore out of scope. The residual defect is that the text still imposes `medeleg[2]` = 0, with no way for software to discover that it must.
+
+The four options below avoid a new cause. They are ordered by recommendation.
+
+**(b) Recommended — reuse `kl_exc_CL_off`.** `kl_exc_CL_off` already exists, is already non-delegable (priv 112), and already means "M-mode must act on this CL before the instruction can proceed". Emulating `kl.load`/`kl.store` is the same situation: only M-mode holds the emulator and the CL contents.
+
+Proposed text for unpriv 157, replacing the clause after "trap-and-emulate":
+> In that case `kl.load` and `kl.store` raise `kl_exc_CL_off` regardless of the Off status of the CL they address, and `mtval` holds the instruction bits as for an illegal-instruction exception. The M-mode handler distinguishes emulation from an Off CL by decoding the instruction. Their encodings are assigned, not reserved.
+
+Add to priv §`KLEE-exceptions`, under `kl_exc_CL_off`:
+> On an implementation whose `Zklmem` is trap-and-emulated, `kl_exc_CL_off` is also raised for every `kl.load` and `kl.store`, with the priority of the first group of illegal-instruction grounds.
+
+Discovery: add one read-only bit to `klmarchid`-adjacent ID state, or define `kl.avail` to report `Zklmem` as available-by-emulation, so that software can choose between `kl.mv` and `kl.load` paths without trapping.
+
+Advantages:
+* No new cause and no new delegation bit.
+* It works unchanged under H: `hedeleg` for the cause is already read-only zero.
+* Delegation of cause 2 is untouched, so Linux keeps its SIGILL behavior for genuinely illegal instructions.
+
+Cost: the handler must decode the instruction to tell the two cases apart. It must already do so to emulate it, so the cost is one comparison.
+
+Compatibility with other text:
+* SGR/IRR rules that name `kl_exc_CL_off` as exempt for some accesses do not apply, because the exception here is raised before any CL state is consulted. State this in one sentence.
+* The context-switch order is unchanged, because an emulated `kl.load` is serviced entirely in M-mode.
+
+**(c) Keep illegal-instruction, and specify forwarding.** Keep cause 2, but replace the `medeleg` requirement with a software contract:
+> If cause 2 is delegated, the S-mode handler must forward an illegal-instruction trap whose instruction bits encode `kl.load` or `kl.store` to M-mode through the SBI (extension to be defined). Software discovers the need by …
+
+This requires an SBI extension and a discovery bit. It adds two S→M round trips per instruction, and it relies on every OS doing the forwarding. It is weaker than (b) because a non-cooperating OS turns the instruction into SIGILL.
+
+**(a) Reuse `kl_exc_unsupported`. Not suitable.** That cause is delegable, and it means that the *CL's Machine* is unsupported. Overloading it would send emulation requests to S-mode, recreating the defect.
+
+**(d) Eliminate `kl.load`/`kl.store` for the trap-and-emulate case.** This is the new Group B item "Eliminate kl.load and kl.store?". If `Zklmem` becomes hardware-only, the emulation clause and M3 disappear. Software on a hart without hardware `Zklmem` uses `kl.mv` (Zklmv) or `kl.input`/`kl.output`. This is the simplest option. It costs code size only on platforms without KLV, where the import/export loop must fall back to GPR `kl.mv` forms.
+
+**Recommendation.** Adopt (b) now, since it is a two-sentence change with no new allocation, and keep (d) as the Group B outcome if the TG prefers to remove the emulated path altogether. In either case delete "which requires `medeleg` bit 2 to be zero on such a platform" from unpriv 157.
+
+### 8.5 M9 (deferred) — no change
+
+The pseudocode diff in 8f46944 and 6071269 is whitespace and comments only. The M9 list stands as written. When the rewrite resumes, fix the Zklmem `bltu` sites first, because they make every Zklmem path skip the completing `kl.mgmt`.
+
+### 8.6 Summary
+
+* Closed: M1, M4, M6, M8, and the minors marked **FIXED** (m7 included, see 8.1).
+* Closed once the WARNING is deleted: C2.
+* One sentence remaining: M7.
+* Rule updates remaining: M5 (IRR1, SGR20, Error-State table, priv 281).
+* Open with concrete text above: C1, M2, M3.
+* Deferred: M9.
+* New defects introduced by the edits:
+  * the contradicting C2 WARNING
+  * the stray review bullets in §`kl.derive`
+  * the inverted SKID rule
+  * `klce.clone`
+  * the PCCC expansion
+  * RO/MRW/HRW on read-only ID CSRs
+  * the typos listed above
+
+The verdict moves from **NOT READY** to **NOT READY, close**. Once C1 items 1–4, the C2 WARNING, M2 and M3 are fixed, the remaining items are editorial, apart from M9, which can ship with the chapter marked informative.
