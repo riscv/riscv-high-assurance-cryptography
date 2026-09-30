@@ -92,7 +92,7 @@ Counts: **2 Critical, 9 Major, 22 minor.**
 
 ## 2. Findings
 
-### *FIXED* C1 — `kl.derive` places no normative constraint on the destination's policies
+### **FIXED** C1 — `kl.derive` places no normative constraint on the destination's policies
 
 **Severity rationale.** This breaks the primary security property of KLEE: a key cannot outlive or escape the policy bound to it (Introduction, "binds cryptographic secrets … and metadata"). It needs no hardware attack. Any process holding a derivable CC can do it.
 
@@ -145,7 +145,7 @@ SCProtection is not raised in place (see Pass 1 below), because it selects the i
 
 ---
 
-### *ALMOST FIXED (delete the new WARNING, §8)* C2 — Debug entry: unpriv substitutes an all-zero CSK, priv declares it unconfigured
+### **FIXED** C2 — Debug entry: unpriv substitutes an all-zero CSK, priv declares it unconfigured
 
 **Severity rationale.** If the unpriv text is followed, every SCC exported after unauthenticated Debug entry, until hart reset, is sealed under a publicly known key. Every such SCC can then be decrypted offline, and SCCs with arbitrary MDH, including permissive policies, can be forged and imported. This is a total break of the sealing property. It sits in a normative list, not a Discussion item.
 
@@ -213,7 +213,7 @@ A related inaccuracy: MISC-MEM uses `funct3` 0 (FENCE/FENCE.TSO/PAUSE), 1 (FENCE
 
 ---
 
-### *FIXED* M2 — Memory-instruction encodings contradict each other and the effective-address definition
+### **FIXED** M2 — Memory-instruction encodings contradict each other and the effective-address definition
 
 **Severity rationale.** Two conforming implementations would decode the same bits differently, so this is a direct interoperability failure. Because the base register differs, a wrong decode computes a wrong effective address, which means stores go to arbitrary memory.
 
@@ -243,7 +243,7 @@ Then re-encode as follows:
 
 ---
 
-### *OPEN — STARTED TO FIX, WOULD RATHER AVOID A NEW EXCEPTION TYPE (proposals in §8.4)* M3 — Zklmem trap-and-emulate silently mandates `medeleg[2]` = 0
+### *OPEN — STARTED TO FIX, WOULD RATHER AVOID A NEW EXCEPTION TYPE (proposals in §8.4, refined in §9.3)* M3 — Zklmem trap-and-emulate silently mandates `medeleg[2]` = 0
 
 **Severity rationale.** This is an undiscoverable platform constraint that conflicts with the conventional OS use of illegal-instruction delegation (Linux delegates cause 2 to S-mode). An OS that delegates cause 2 on such a platform receives `kl.load`/`kl.store` traps it cannot emulate, because only M-mode holds the emulator and the CLs. The result is broken key management or, worse, an OS that "handles" them as SIGILL.
 
@@ -301,7 +301,7 @@ Provisioning and PPI states do not use the authentication registers (304), so th
 
 ---
 
-### *PARTIALLY FIXED (IRR1, SGR20, Error-State table, priv 281 pending; §8)* M5 — `kl.rename` and `kl.swap` are underspecified
+### *PARTIALLY FIXED (IRR1, SGR20, Error-State table, priv 281 pending; §9)* M5 — `kl.rename` and `kl.swap` are underspecified
 
 **Severity rationale.** These instructions move whole CCs, including partially managed ones, yet their exceptions, interaction with `klmanagedcr`, lazy-save (`*lclstatus`) behavior and uninterruptibility are undefined. The result is non-interoperable context switching and possible loss of the authoritative image of a CL.
 
@@ -360,7 +360,7 @@ Also:
 
 ---
 
-### *ALMOST FIXED (klstart item 1 pending; §8)* M7 — The restart option permits livelock on synchronous faults
+### **FIXED** M7 — The restart option permits livelock on synchronous faults
 
 **Severity rationale.** This is a liveness defect. A `kl.load`/`kl.store` spanning N pages under memory pressure can livelock forever, because every re-execution restarts from byte 0 and re-faults on an evicted earlier page. RVV forbids this for vector memory instructions.
 
@@ -448,7 +448,7 @@ This goes before `V3 ← V3 xor V1` on the last iteration. Add a normative discl
 | ID | Location | Defect | Resolution |
 |---|---|---|---|
 | **FIXED** m1 | unpriv 634 | Stray "?" after "…these Localities." | Delete. |
-| *OPEN* m2 | unpriv 1908, 1922, 1925 | Labels `ace.clone`/`ace.rename`/`ace.swap` (old ACE name). | `kl.clone` etc. |
+| **FIXED** m2 | unpriv 1908, 1922, 1925 | Labels `ace.clone`/`ace.rename`/`ace.swap` (old ACE name). | `kl.clone` etc. |
 | **FIXED** m3 | unpriv 1892 | "Indirect CR addressing": CR is undefined (not in acronyms). | "Indirect CL addressing". |
 | **FIXED** m4 | unpriv 3276, 2670, 2993 | Anchor `ace-mgmt-completes-export` still uses the old prefix. | Rename to `KLEE-mgmt-completes-export`. |
 | **FIXED** m5 | unpriv 1376 | `kl.mv` cites only SGR21; the export direction is governed by SGR22. | "Rules SGR21 and SGR22". |
@@ -619,6 +619,8 @@ Section numbers for RVV exception handling and the Debug spec are cited from mem
 
 ## 8. Verification of spec changes (commits 8f46944, 6071269)
 
+*Superseded by §9 for every finding re-verified against commit `6eb5a7d`.*
+
 Line numbers in this section refer to the working tree at commit `2ecf127` and were verified by grep against it. "unpriv", "priv" and "pseudo" are as in the Scope section. A finding is marked **FIXED** in its title only when no normative residual remains. Editorial residuals are listed but do not block closure.
 
 ### 8.1 Status per finding
@@ -764,3 +766,124 @@ The pseudocode diff in 8f46944 and 6071269 is whitespace and comments only. The 
   * the typos listed above
 
 The verdict moves from **NOT READY** to **NOT READY, close**. Once C1 items 1–4, the C2 WARNING, M2 and M3 are fixed, the remaining items are editorial, apart from M9, which can ship with the chapter marked informative.
+
+---
+
+## 9. Second verification round (commit 6eb5a7d)
+
+Line numbers in this section refer to the working tree at commit `6eb5a7d` and were verified by grep against it. The pseudocode and the privileged chapter are unchanged since `7772b5f`.
+
+### 9.1 Status per finding
+
+| Finding | Status | Evidence / residual |
+|---|---|---|
+| C1 | **FIXED** | DER1–DER8 (unpriv 2056–2130) define the checks, the narrowing (DER2, 2067–2072, identical to the remedy), SKID non-exportability (DER4, 2080) and exportable/importable fields (2111). SGR5 (2449) now resolves. The stray review bullets and "at least as strict" are gone. Residuals are minor and listed as n1–n5 in 9.2. |
+| C2 | **FIXED** | The contradicting WARNING is deleted. Item 3966 now matches priv 381. Editorial: "zeroized _and_ thus is essentially unconfigured" — drop "essentially" in normative text ("is zeroized and is unconfigured"). |
+| M1 | **FIXED** | Unchanged. The JALR disassembly note was added to the introduction (106–107 of `Zkl-introduction.adoc`). |
+| M2 | **FIXED** | kl.load (2162–2163) and kl.store (2209–2210) now give 3-bit `funct3` 6/7 and drop the `r` bit. The contradicting kl.input sentence is deleted, and the EA text (1035) states I/S-type placement and `rs1` = base. Editorial residual: n6. |
+| M3 | **Open** | Unpriv 157 is unchanged. Refined proposal in 9.3. |
+| M4 | **FIXED** | Unchanged (2528, 2532). |
+| M5 | **Partial** | Instruction text (1954–1962) is complete. Still missing: IRR1 (2835), SGR20 (2522), Error-State table (2773–2790) and priv 281. Text in 9.4. |
+| M6 | **FIXED** | DER1 item 4 (2065) and DER8 (2114). |
+| M7 | **FIXED** | The klstart item (956–957) now reads "or 0 for an asynchronous interrupt". |
+| M8 | **FIXED** | Unchanged. |
+| M9 | **Deferred** | No pseudocode change. |
+| m2 | **FIXED** | `klce.clone` is corrected (1938). |
+| m8 | Open | "asd per" (435); "In addition to _SCProtection_ Level 3," (449). |
+| m9 | Open | "Or RV32, the code would similar" (1750). |
+| m14 | Open | "RO/MRW/HRW" (808–811) against "Software cannot modify these values" (851). |
+| m18 | Open | PCCC is corrected (acronyms 63). RVWMO and RVTSO, used in unpriv, are still absent from the acronyms. |
+| m19 | Open | `:csrname: envcfg` (src/Zkl.adoc 57) and `[discrete]` (111). |
+| m20 | Fixed; editorial | The truncated sentence "so the CL is never observed." (3493) remains. |
+| Other editorial items from §8 | Open | "satosfied" (753); "it is a valid for" (756); the comma in "a masked HW Binding entry (…), is _unconfigured_" (626); "a illegal-instruction" (157). |
+
+### 9.2 New defects introduced by 6eb5a7d
+
+**n1 — DER1 contradicts DER5 on the destination State (normative, minor).**
+* DER1 item 1 (2059–2061) says that "a destination whose key is written must be in State _Ready_".
+* DER5 (2083–2092) allows a shared secret into "a private key field of a Machine implementing a public key agreement scheme", in "a State which allows the configuration of a field", and requires _Ready_ only "if the destination field is a symmetric key".
+* A private key is a key, so DER1 forbids what DER5 permits.
+
+Resolution: in DER1 item 1, replace "a destination whose key is written must be in State _Ready_" with:
+> a destination whose symmetric key is written must be in State _Ready_, and any other destination field must be written in a State that the pair lists for it
+
+**n2 — A SKID-configured destination is not excluded (normative, minor).**
+* DER4 forbids *exporting* a SKID-configured field, but nothing forbids *importing* into one.
+* A `kl.derive` into the key field of a CL with _KeyType_ = 1 overwrites the SKS key with derived material.
+* The CL is still exported as a SKID (3179), so a later import resolves the SKS key again and silently replaces the derived key. The CC is not preserved across export and import.
+
+Resolution: extend DER4:
+> A field configured by a SKID is _never_ exportable, and a key field of a CL whose _KeyType_ is 1 is _never_ importable. No rule may be defined to export or import such a field.
+
+**n3 — "Always allowed" versus "only listed pairs are allowed" (editorial, minor).**
+* DER5 and DER6 say "always allowed", but 2111 says "Only listed … pairs are allowed. Any other pair transitions both CLs to Error State _Invalid_."
+* Resolution: add to 2111: "The transfers of Rules DER5–DER7 are listed for every pair of Machines that implement the respective schemes."
+
+**n4 — DER7 is garbled and incomplete (minor).**
+* "into a symmetric key fields of a private key of a destination Machine" should read "into a symmetric key field, or a private key field, of a destination Machine".
+* Unlike DER5, DER7 states neither that the transfer is allowed nor the destination State.
+* "DBRG" should be "DRBG" (2103).
+* Resolution: add to DER7 "It is allowed when the destination is in a State that admits the field (Rule DER1)".
+
+**n5 — Editorial.**
+* 2013: "can be also obtained by performed" should read "can also be obtained by performing".
+* 2043: "a minimum transfer length or an upper limit, a granularity" should read "a minimum transfer length, an upper limit and a granularity".
+* 2062: "any constraint of on the data transfer" should read "any constraint on the data transfer".
+* 2076: "follow" should read "follows".
+* 2087: "It is always allowed the following conditions are satisfied" should read "It is always allowed if the following conditions are satisfied".
+* DER3, DER6 and DER7 lack `[[KLEE-DER-…]]` anchors, unlike DER1, DER2, DER4, DER5 and DER8.
+* DER8's "per the last Check above" should read "per Rule DER1".
+
+**Observation on the restricted/unrestricted split (no change needed).** DER3 skips narrowing only when the data "can also be obtained" by `kl.exec`. Such data is already visible to software under the source's _UsagePolicy_, which DER1 checks first, and software could provision it in a PI with any policy. Skipping the narrowing therefore grants nothing new. This holds only if the classification belongs to the pair and not to the caller, which 2111 now ensures, because only listed pairs exist.
+
+**n6 — General selector text (editorial).** 1032 still says "In every encoding that offers both, bit `r` … chooses between them". This is false for `kl.load`/`kl.store` (selection by `funct3`) and for `kl.derive` (two-bit `R`, 2000). Append:
+> except `kl.load` and `kl.store`, which select with `funct3`, and `kl.derive`, which selects with field `R`.
+
+### 9.3 M3 — refined proposal
+
+Nothing in unpriv 157 or priv 112 changed. Re-reading priv 99, 112 and 342–343 shows that proposal (b) of 8.4 fits better than stated there. Two points are refined below: priority, and the fact that no discovery bit is needed.
+
+**Additional defect in 157.** The text says the hardware raises "a virtual-instruction or a illegal-instruction exception … depending on the `medeleg`/`hedeleg` bits". The choice between the two causes does not depend on delegation. Per the Privileged ISA (H extension, "Traps"), it depends on the privilege mode (V=1 versus V=0) and on whether the instruction would be legal in HS-mode. Delegation only decides *where* the trap is taken. The sentence is wrong independently of M3.
+
+**Proposed text, unpriv 157** (replace from "in that case" up to "not reserved"):
+> in that case `kl.load` and `kl.store` raise `kl_exc_CL_off` (<<Zkl-ISA-priv.adoc#KLEE-exceptions>>), whatever the `*lclstatus` fields of the CL they name; their encodings are nonetheless assigned, not reserved (<<KLEE-illegal-instruction-grounds>>)
+
+**Proposed text, priv 99** (append to the `kl_exc_CL_off` row):
+> On an implementation that emulates `Zklmem`, also every `kl.load` and `kl.store`.
+
+**Proposed text, priv 342** (append to the paragraph):
+> On an implementation that emulates `Zklmem`, the M-mode handler first decodes the trapping instruction. For `kl.load` or `kl.store` it emulates the instruction, and it applies the procedure above if the emulation itself accesses a CL whose field in effect is _Off_.
+
+**Why this works:**
+1. *No delegation constraint.* The cause is already read-only zero in `medeleg`/`hedeleg` (priv 112). Cause 2 keeps its conventional delegation to S-mode.
+2. *No discovery needed.* The trap never reaches S- or U-mode, so emulation is transparent to them. An optional discovery means (for example, `kl.avail` reporting `Zklmem` as emulated) is useful only as a performance hint. It is not a correctness requirement.
+3. *Priority.* Keep the table position of `kl_exc_CL_off` (priv 99), below `kl_exc_fatal` and `kl_exc_no_csk`, rather than first-group illegal-instruction priority. A fatal unit or a missing CSK is then reported before emulation is attempted, which the emulator would otherwise have to re-check. Memory exceptions (misaligned, page faults, breakpoints) are lower in the table. The emulator raises them itself while performing the component accesses, in the priv 100–106 order.
+4. *Genuinely Off CLs compose.* If the emulated instruction names a CL that is Off at S or VS level, the handler forwards `kl_exc_CL_off` exactly as priv 342 already prescribes. Only one handler is needed.
+5. *H extension.* A VS/VU-mode `kl.load` traps to M-mode. The emulator accesses guest memory with `mstatus.MPRV` = 1 and `MPV` = 1, as for any M-mode emulation of a guest load. No `hedeleg` change is needed.
+6. *`mtval`.* Priv 112–119 does not specify `mtval` for `kl_exc_CL_off`. Specify it as 0, as for the existing uses. The handler reads the instruction from memory at `mepc`, which the emulator has to do anyway for a trapped KLEE instruction.
+
+**Cost:** one decode in the handler, which the emulator needs anyway.
+
+**Alternatives** (unchanged from 8.4):
+* (c) forwarding through the SBI
+* (d) eliminating `kl.load`/`kl.store`, which is Group B item 167
+
+The Group A item `kl_exc_emulate` (introduction 154) becomes unnecessary under (b). The TG may keep it as a fallback, or close it by adopting (b).
+
+### 9.4 M5 — remaining text
+
+* **IRR1 (2835):** "Instructions `kl.mgmt`, `kl.getmd*`, `kl.restrict*`, `kl.clone`, **`kl.rename`, `kl.swap`,** non-vector `kl.mv`, `kl.size` and `kl.avail` are _uninterruptible_ …"
+* **SGR20 (2522):** after "`kl.clear`, and `kl.clearall`" insert ", and `kl.rename` and `kl.swap`, which move a CC unchanged (<<KLEE-instruction-clone>>),".
+* **Error-State table (2773–2790):** add the row
+  > `| `kl.rename`, `kl.swap` | The CC, reduced to its MDH, is moved or exchanged unchanged (<<KLEE-instruction-clone>>).`
+* **priv 281:** "… `kl.clearall`, and `kl.clone` **or `kl.rename`** as a destination access." Also extend the sentence "However, a `kl.clone` with identical source and destination …" to "`kl.clone` or `kl.rename`", to match unpriv 1955.
+
+### 9.5 Summary
+
+* **Closed in this round:** C1, C2, M2, M7 and m2. C1 and M2 were marked FIXED by the author; review confirms them, with editorial residuals.
+* **Open:** M3 (proposal in 9.3) and M5 (four rule edits in 9.4).
+* **Deferred:** M9.
+* **Minors still open:** m8, m9, m14, m18 (RVWMO/RVTSO), m19, plus the editorial items in 9.1.
+* **New defects from this commit:** n1–n6. n1 and n2 are small normative gaps in the new DER rules; the rest are editorial.
+
+**Verdict:** no Critical findings remain. With M3 and M5 closed and M9 either fixed or the chapter marked informative, the draft meets the "conditionally ready" conditions of §1.
