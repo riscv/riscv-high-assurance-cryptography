@@ -205,7 +205,7 @@ enables the following operations:
 | `kliobuflen`,
 `kliobuftop`               | `Zklio`          | —           | Available
 | `klstart`                | `Zkl` common  2+<| Always present
-| `klmanagedcr`            | `Zkl` common  2+<| Always present
+| `klmanagedcl`            | `Zkl` common  2+<| Always present
 |===
 
 // ////////////////////////////////////////////////////////////////////
@@ -432,7 +432,7 @@ The architecture defines four side-channel protection levels, with MDH encoding 
 
 |   1    | No timing leakage; simple differential side-channel protection.
 | _SCA protection is a moderate deterrent against SCA attacks._
-ISO/IEC alignment is ISO/IEC 19790:2025 Clause 7.8.2 (Levels 1–2) extended also to all other applicable physical side channels besides timing side channels, ISO/IEC 19790:2025 Clause 7.8.3 (Level 3) and Annex F, i.e. ISO/IEC 17825:2024, Clause 7.3.5-6 (and relevant Clauses 8.3-4, 9.3-4), testing limits according to ISO/IEC 17825:2024 Clause A.3. Test and documentation requirements asd per ISO/IEC 24759:2025 clauses 6.8.1-3.
+ISO/IEC alignment is ISO/IEC 19790:2025 Clause 7.8.2 (Levels 1–2) extended also to all other applicable physical side channels besides timing side channels, ISO/IEC 19790:2025 Clause 7.8.3 (Level 3) and Annex F, i.e. ISO/IEC 17825:2024, Clause 7.3.5-6 (and relevant Clauses 8.3-4, 9.3-4), testing limits according to ISO/IEC 17825:2024 Clause A.3. Test and documentation requirements as per ISO/IEC 24759:2025 clauses 6.8.1-3.
 Use the applicable CMVP metrics in NIST SP 800-140F.
 FIPS 140-3 Levels 1-3 (non-invasive security) correspond to the ISO/IEC Levels 1-3.
 Fault-injection attacks are excluded.
@@ -446,8 +446,7 @@ Fault-injection attacks are excluded.
 |   3    | No timing leakage; advanced differential side-channel protection;
 detection of injected faults with either completion with correct result without other types of physical leakage; or
 transition to a fatal error state as defined in <<KLEE-error-architecture>>.
-| In addition to _SCProtection_ Level 3,
-adds ISO/IEC 19790:2025 Level 4, clause 7.7.2.5, to above levels, to add fault-injection protection, and ISO/IEC 24759:2025 clause 6.7 for fault injection testing. Methodology according to ISO/IEC-17825:2024.
+| In addition to _SCProtection_ Level 2, adds ISO/IEC 19790:2025 Level 4, clause 7.7.2.5, to above levels, to add fault-injection protection, and ISO/IEC 24759:2025 clause 6.7 for fault injection testing. Methodology according to ISO/IEC-17825:2024.
 Similarly, FIPS 140-3 Level 4. Evidence of reliable detection of fault injection and of safe behavior upon detection of fault injection is provided.
 
 |  4-5   | Reserved for future use by the architecture. | {empty}
@@ -812,7 +811,7 @@ KLEE provides a number of unprivileged CSRs.
 |  0xXXX           |    URW       | `kliobuflen`               | KLEE input/output buffer length in bytes.
 |  0xXXX           |    URW       | `kliobuftop`               | KLEE input/output buffer limit for current transfers in bytes.
 |  0xXXX           |    URW       | `klstart`                  | KLEE start byte index.
-|  0xXXX           |    URW       | `klmanagedcr`              | Number of the currently managed CL, or 32 if no CL is currently being managed.
+|  0xXXX           |    URW       | `klmanagedcl`              | Number of the currently managed CL, or 32 if no CL is currently being managed.
 |===
 
 // On RV32 every 64-bit KLEE CSR _X_, in this Book, is accompanied by a 32-bit CSR
@@ -833,9 +832,9 @@ such register is given its maximum in its own description below.
 
 The RW CSRs constitute state that must be saved and restored at context switches, following the same software convention as `vstart`:
 
-. `klstart` and `klmanagedcr` must always be saved and restored.
+. `klstart` and `klmanagedcl` must always be saved and restored.
 . If `Zklio` is implemented, `kliobuflen` must also be saved and restored. If its saved value is non-zero, `kliobuftop` and the KLIOBUF contents up to `kliobuflen` must also be saved and restored.
-. No separate save of `SIV`, `IMPQUAL` or `SIV2` is needed: when `klmanagedcr` names a CL in State `kl_cfg_importing` or `kl_cfg_exporting`, the nested export of that CL (<<KLEE-state-save-and-restore-order>>) carries them in its image, and its nested import restores them.
+. No separate save of `SIV`, `IMPQUAL` or `SIV2` is needed: when `klmanagedcl` names a CL in State `kl_cfg_importing` or `kl_cfg_exporting`, the nested export of that CL (<<KLEE-state-save-and-restore-order>>) carries them in its image, and its nested import restores them.
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -996,25 +995,25 @@ once per-block state effects have been committed (Rule
 
 // ////////////////////////////////////////////////////////////////////
 
-[[KLEE-CSR-klmanagedcr]]
-==== `klmanagedcr`
+[[KLEE-CSR-klmanagedcl]]
+==== `klmanagedcl`
 
 {empty}
-(((CSR, `klmanagedcr`)))
-`klmanagedcr` is an XLEN-bit RW CSR, but currently only 6 bits are used.
+(((CSR, `klmanagedcl`)))
+`klmanagedcl` is an XLEN-bit RW CSR, but currently only 6 bits are used.
 
 It contains the number of the currently managed CL, or 32 if no CL is currently being managed.
 If the CL it names ceases to be in a Configuration State otherwise than through a completing `kl.mgmt` — because it is
-cleared, also by the zeroizing step of a `kl.mgmt` whose opening then fails, because it is the destination of a `kl.clone`, or because it transitions to an Error State — `klmanagedcr` is set to 32.
-Otherwise, a KLEE exception raised during a management operation that does not transition the CL to an Error State leaves `klmanagedcr` unchanged: the handler either resolves the condition or sets `klmanagedcr` to 32 itself.
+cleared, also by the zeroizing step of a `kl.mgmt` whose opening then fails, because it is the destination of a `kl.clone`, or because it transitions to an Error State — `klmanagedcl` is set to 32.
+Otherwise, a KLEE exception raised during a management operation that does not transition the CL to an Error State leaves `klmanagedcl` unchanged: the handler either resolves the condition or sets `klmanagedcl` to 32 itself.
 
 Internal values of `SIV`, `SIV2` and `IMPQUAL` are associated with this CL.
 
-Values 33 and above are reserved; writing one leaves `klmanagedcr` unchanged.
+Values 33 and above are reserved; writing one leaves `klmanagedcl` unchanged.
 
-NOTE: The `klmanagedcr` check that `kl.mgmt` performs (<<KLEE-CL-management>>) detects an accidentally
+NOTE: The `klmanagedcl` check that `kl.mgmt` performs (<<KLEE-CL-management>>) detects an accidentally
 interleaved management operation. A handler that must manage another CL while one is under management
-first saves the currently managed CL, writes 32 to `klmanagedcr`, performs its operations,
+first saves the currently managed CL, writes 32 to `klmanagedcl`, performs its operations,
 and then restores the exported CL (<<KLEE-state-save-and-restore-order>>).
 Writing 32 without completing an export loses the in-flight `SIV`, `SIV2` and `IMPQUAL` values, which the next `kl.mgmt` that opens an import or an export overwrites.
 
@@ -1575,7 +1574,7 @@ Clearing (i.e., unconfiguring) a CL that was not already _Unconfigured_, or whos
 ==== kl.clearall
 
 The instruction `kl.clearall` unconfigures all the CLs, as if calling `kl.clear` on each one, and the KLIOBUF, zeroing the buffer and setting
-`kliobuflen`, `kliobuftop` and `klstart` to 0, zeroizes the three authentication registers of <<KLEE-CLF>>, and writes 32 to `klmanagedcr`.
+`kliobuflen`, `kliobuftop` and `klstart` to 0, zeroizes the three authentication registers of <<KLEE-CLF>>, and writes 32 to `klmanagedcl`.
 
 `kl.clearall` is encoded with `r` = `1` and `rs1` = `rd` = `0`.
 
@@ -1636,7 +1635,7 @@ The MDH is supplied as follows:
 
 * Form A carries no auxiliary operand. Where the operation requires the MDH, Form A is a
   substitution (<<KLEE-usage-input-output>>) and reads it from bytes [0, 16) of the KLIOBUF,
-  ignoring `klstart`. After the `klmanagedcr` check and before any change to the CL, Rule
+  ignoring `klstart`. After the `klmanagedcl` check and before any change to the CL, Rule
   <<KLEE-GR-iobuf-configured>> applies and, with the KLIOBUF configured, `kliobuftop` < 16 raises
   an illegal-instruction exception (Rule <<KLEE-GR-vector-MDH-operand>>).
 * Form C carries the MDH in the lowest 128 bits of `Vs`.
@@ -1747,7 +1746,7 @@ and `kl.getstx` to
 . `srli  Xd, Xd, 25`
 . `andi  Xd, Xd, 0x0F`
 
-Or RV32, the code would similar, but using register pairs to obtain the _State_ and _StateExtension_ field, and applying the shift and mask operations to the lower register.
+Or RV32, the assembly code would be the same. The instruction `kl.getmdl Xd, Ks` or `K(Xs)` writes the lower 64 bits of the MDH to the register pair `X(d+1) @ Xd`, and since the _State_ and _StateExtension_ fields lie entirely in the lower 32 bits of the MDH, the shift and masking would be the same.
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -1953,11 +1952,11 @@ The instruction has the same effect on the destination CC as an export and impor
 
 `kl.rename`:::
 If `Ks` = `Kd`, no operation is performed, and no field is set to Dirty.
-Otherwise the CC of `Ks`, including any Partial or Configuration State, becomes the CC of `Kd`, the previous CC of `Kd` is discarded, and `Ks` becomes _Unconfigured_. If `klmanagedcr` = `s`, it becomes `d`. Otherwise, if `klmanagedcr` = `d`, it becomes 32. The source access is not exempt from `kl_exc_CL_off`; the destination access is exempt as for `kl.clone`. The fields in effect for both CLs are set to Dirty.
+Otherwise the CC of `Ks`, including any Partial or Configuration State, becomes the CC of `Kd`, the previous CC of `Kd` is discarded, and `Ks` becomes _Unconfigured_. If `klmanagedcl` = `s`, it becomes `d`. Otherwise, if `klmanagedcl` = `d`, it becomes 32. The source access is not exempt from `kl_exc_CL_off`; the destination access is exempt as for `kl.clone`. The fields in effect for both CLs are set to Dirty.
 
 `kl.swap`:::
 If `Ks` = `Kd`, no operation is performed.
-Otherwise the CCs of `Ks` and `Kd` are exchanged. If `klmanagedcr` ∈ {`s`,`d`}, it is replaced by the other index. Neither access is exempt from `kl_exc_CL_off`. The fields in effect for both CLs are set to Dirty.
+Otherwise the CCs of `Ks` and `Kd` are exchanged. If `klmanagedcl` {in} {`s`,`d`}, it is replaced by the other index. Neither access is exempt from `kl_exc_CL_off`. The fields in effect for both CLs are set to Dirty.
 
 Neither `kl.rename` nor `kl.swap` raises `kl_exc_out_of_memory`, and neither changes the content of any MDH.
 
@@ -2525,11 +2524,11 @@ when the CL is in a _Partial_ State.
 
 [[KLEE-SGR-zkl-load-mv-allowed,SGR21]]SGR21:: `kl.load` and `kl.mv` with a destination CL
 are allowed in States `kl_cfg_provisioning`, `kl_cfg_importing` and `kl_cfg_ppi_importing`.
-In States `kl_cfg_importing` and `kl_cfg_exporting` the CL must additionally be the one named by `klmanagedcr`
+In States `kl_cfg_importing` and `kl_cfg_exporting` the CL must additionally be the one named by `klmanagedcl`
 
 [[KLEE-SGR-zkl-store-mv-allowed,SGR22]]SGR22:: `kl.store` and `kl.mv` with a source CL
 are allowed in States `kl_cfg_exporting` and `kl_cfg_ppi_exporting`.
-In States `kl_cfg_importing` and `kl_cfg_exporting` the CL must additionally be the one named by `klmanagedcr`
+In States `kl_cfg_importing` and `kl_cfg_exporting` the CL must additionally be the one named by `klmanagedcl`
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -2646,7 +2645,7 @@ The grounds for an illegal- or virtual-instruction exception form two groups:
 
 . A usage-controlled instruction issued on a CL in State _Unconfigured_ (Rule <<KLEE-SGR-transition-to-from-unconfigured>>), including `kl.derive` with an _Unconfigured_ endpoint.
 . `kl.load`, `kl.store` or `kl.mv` on a CL whose _State_ does not admit the transfer, or with an inconsistent `klstart` (Rules <<KLEE-SGR-zkl-load-mv-allowed>> and <<KLEE-SGR-zkl-store-mv-allowed>>).
-. `kl.mgmt` when `klmanagedcr` names another CL, when opening an export on an _Unconfigured_ CL, when completing with an `ml`._State_ inconsistent with the CL's Configuration State, or when `kl_cfg_management_end` is issued with no management operation open (<<KLEE-CL-management>>).
+. `kl.mgmt` when `klmanagedcl` names another CL, when opening an export on an _Unconfigured_ CL, when completing with an `ml`._State_ inconsistent with the CL's Configuration State, or when `kl_cfg_management_end` is issued with no management operation open (<<KLEE-CL-management>>).
 . A KLIOBUF substitution that <<KLEE-usage-input-output>> forbids, including any substitution without `Zklio`, since whether a Form is a substitution depends on the operation the CL's State defines.
 . A Form A `kl.mgmt` that must take the MDH from a configured KLIOBUF with `kliobuftop` < 16 (Rule <<KLEE-GR-vector-MDH-operand>>).
 . A `kl.clone` whose source is _Unconfigured_ and differs from its destination (<<KLEE-instruction-clone>>).
@@ -2832,7 +2831,7 @@ MMR6:: For the purposes of `FENCE`, `FENCE.I`, `SFENCE.VMA` and the `.aq`/`.rl` 
 IRR means “Interruptibility and Resumability Rule.”
 
 [horizontal]
-[[KLEE-IRR-uninterruptible-instructions,IRR1]]IRR1:: Instructions `kl.mgmt`, `kl.getmd*`, `kl.restrict*`, `kl.clone`, non-vector `kl.mv`, `kl.size` and `kl.avail` are _uninterruptible_: each either completes or has no architecturally visible effect, including no writes to destination vector registers, GPRs, CL bytes, KLIOBUF bytes, or memory.
+[[KLEE-IRR-uninterruptible-instructions,IRR1]]IRR1:: Instructions `kl.mgmt`, `kl.getmd*`, `kl.restrict*`, `kl.clone`, `kl.rename`, `kl.swap`, non-vector `kl.mv`, `kl.size` and `kl.avail` are _uninterruptible_: each either completes or has no architecturally visible effect, including no writes to destination vector registers, GPRs, CL bytes, KLIOBUF bytes, or memory.
 An implementation realizes this in one of three ways:
 +
 --
@@ -3210,11 +3209,11 @@ We now proceed to describe the semantics of `kl.mgmt`.
 
 Three steps are common to every operation below and are not repeated in the description of each of them:
 
-. `kl.mgmt` first checks that `klmanagedcr` holds either the target CL's number or 32, and raises an illegal-instruction exception if it holds any other value;
-. It affects `klmanagedcr` according to the _State_ in which it leaves the target CL:
-.. if that _State_ is a Configuration State, it writes the target CL's number to `klmanagedcr`;
-.. if that _State_ is a Complete State, including any Error State, it writes 32 to `klmanagedcr`; and
-.. if the instruction raises an exception without leaving the target CL in an Error State, `klmanagedcr` is left unchanged, or set to 32 if the zeroizing step has left the target CL _Unconfigured_: the handler either resolves the condition or sets `klmanagedcr` to 32 itself (<<KLEE-CSR-klmanagedcr>>).
+. `kl.mgmt` first checks that `klmanagedcl` holds either the target CL's number or 32, and raises an illegal-instruction exception if it holds any other value;
+. It affects `klmanagedcl` according to the _State_ in which it leaves the target CL:
+.. if that _State_ is a Configuration State, it writes the target CL's number to `klmanagedcl`;
+.. if that _State_ is a Complete State, including any Error State, it writes 32 to `klmanagedcl`; and
+.. if the instruction raises an exception without leaving the target CL in an Error State, `klmanagedcl` is left unchanged, or set to 32 if the zeroizing step has left the target CL _Unconfigured_: the handler either resolves the condition or sets `klmanagedcl` to 32 itself (<<KLEE-CSR-klmanagedcl>>).
 . `kl.mgmt` also clears `klstart` (it is the duty of software to restore `klstart` to allow interrupted management operations to be resumed).
 
 Now we consider the specific semantics of `kl.mgmt` for each of the four operations it supports:
@@ -3831,7 +3830,7 @@ The timing of the processing of each block is independent of the actual data bei
 
 Lower-privileged modes may save, restore, or overwrite CLs configured by higher-privileged modes.
 Hence, higher-privileged software must clear any CLs it uses before relinquishing control to lower-privileged modes.
-If it uses the KLIOBUF, `klstart`, `klmanagedcr` or the authentication registers while a lower-privileged context's KLEE state is live, it must save that state beforehand and restore it afterwards, as at a context switch (below), so that the lower-privileged context observes its own values and none of the higher-privileged mode's data; on return to a different context the KLIOBUF holds that context's saved contents or, with `kliobuflen` = 0, nothing.
+If it uses the KLIOBUF, `klstart`, `klmanagedcl` or the authentication registers while a lower-privileged context's KLEE state is live, it must save that state beforehand and restore it afterwards, as at a context switch (below), so that the lower-privileged context observes its own values and none of the higher-privileged mode's data; on return to a different context the KLIOBUF holds that context's saved contents or, with `kliobuflen` = 0, nothing.
 When switching to a lower-privileged component, only CLs previously saved for that same component may be restored, and CLs that are not part of that component's KLEE state must be erased.
 
 _The remainder of this section is informative and non-normative._
@@ -3845,31 +3844,31 @@ This is the recommended order for saving and restoring the KLEE state.
 * Save order:
 
 . Save `klstart` first, since every later step may clear it.
-. Save the raw value of `klmanagedcr`.
+. Save the raw value of `klmanagedcl`.
 . If `Zklio` is present:
 .. Save `kliobuflen` and `kliobuftop`.
 .. If `kliobuflen` is nonzero, save the buffer contents using `kl.output` with `klstart` = 0 and `kliobuftop` raised to `kliobuflen`, since the `kl.mgmt` of a CL export may take `ml` from the KLIOBUF (<<KLEE-usage-input-output>>).
-. If the saved `klmanagedcr` is in [0..31], read the MDH of the CL it indexes using `kl.getmd*` and select the State-appropriate save path:
+. If the saved `klmanagedcl` is in [0..31], read the MDH of the CL it indexes using `kl.getmd*` and select the State-appropriate save path:
 .. If the CL is _Unconfigured_, save no CL image.
 .. If the CL is in an Error State, save its MDH using the short Error-State path (<<KLEE-error-state-transfer>>).
 .. Otherwise, export the CL using the applicable Complete- or Configuration-State path. This export precedes every other `kl.mgmt` that could overwrite the authentication registers.
-. Set `klmanagedcr` to 32, since `kl.mgmt` requires it to hold its target's number or 32.
+. Set `klmanagedcl` to 32, since `kl.mgmt` requires it to hold its target's number or 32.
 . Save every other non-Unconfigured CL using the path appropriate to its State.
 
 * Restore order:
 
-. Restore the CLs other than the CL indexed by the saved `klmanagedcr`, with the working value of `klmanagedcr` set to 32 before and after each import.
-. If the saved `klmanagedcr` is in [0..31] and an image was saved for the CL it indexes, restore that CL using the path appropriate to its saved State, with the working value of `klmanagedcr` set to 32 before opening its import.
+. Restore the CLs other than the CL indexed by the saved `klmanagedcl`, with the working value of `klmanagedcl` set to 32 before and after each import.
+. If the saved `klmanagedcl` is in [0..31] and an image was saved for the CL it indexes, restore that CL using the path appropriate to its saved State, with the working value of `klmanagedcl` set to 32 before opening its import.
 . If `Zklio` is present:
 .. Restore `kliobuflen`, which zeroes the buffer and sets `kliobuftop`.
 .. Restore the buffer contents, if saved, using `kl.input` with `klstart` = 0 and `kliobuftop` = `kliobuflen`.
 .. Restore `kliobuftop`.
-. Restore the raw saved value of `klmanagedcr`.
+. Restore the raw saved value of `klmanagedcl`.
 . Restore `klstart` last, since every earlier step may clear it.
 
 A handler that passes `ml` through the KLIOBUF configures `kliobuflen` {ge} 16 for the CL exports and imports and restores the saved value afterwards.
 
-A handler must treat `klmanagedcr` as a hint and check the MDH of the CL it names before selecting a save path. For example, user software may clear `K0`, write `klmanagedcr` = 0, and then enter a handler. Reading the all-zero MDH identifies `K0` as _Unconfigured_, so the handler saves no image for it and does not attempt an export that would raise an illegal-instruction exception.
+A handler must treat `klmanagedcl` as a hint and check the MDH of the CL it names before selecting a save path. For example, user software may clear `K0`, write `klmanagedcl` = 0, and then enter a handler. Reading the all-zero MDH identifies `K0` as _Unconfigured_, so the handler saves no image for it and does not attempt an export that would raise an illegal-instruction exception.
 
 // ////////////////////////////////////////////////////////////////////
 
@@ -3931,7 +3930,7 @@ reset. Out of KLEE unit reset:
 . All CLs are in State _Unconfigured_ with zeroized contents.
 . If `Zklio` is available, `kliobuflen` = 0 (i.e., the KLIOBUF unconfigured), `kliobuftop` = 0, and the KLIOBUF is zeroized;
 . `klstart` = 0;
-. The value of `klmanagedcr` is 32;
+. The value of `klmanagedcl` is 32;
 . The three authentication registers of <<KLEE-CLF>> are zero.
 
 // ////////////////////////////////////////////////////////////////////

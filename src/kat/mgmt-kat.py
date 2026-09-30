@@ -23,7 +23,7 @@ text's own invariants and worked sequences:
     the System Key Store narrowing (<<KLEE-system-keys>>);
   * kl.mgmt (<<KLEE-instruction-mgmt>>, <<KLEE-CL-management>>): opening a
     provisioning, an import or an export, completion, the base-type check,
-    klmanagedcr and klstart, in the Zklmem and Zklmv variants and in Forms
+    klmanagedcl and klstart, in the Zklmem and Zklmv variants and in Forms
     A, C and D;
   * nested management operations and PCCC shapes (<<KLEE-data-formats>>);
   * the short export and import of a CL in an Error State
@@ -776,7 +776,7 @@ class Unit:
         self.kliobuftop = 0
         self.kliobuf = bytearray()
         self.klstart = 0
-        self.klmanagedcr = MANAGEDCL_NONE
+        self.klmanagedcl = MANAGEDCL_NONE
         self.siv = self.impqual = self.siv2 = 0
 
     # ------------------------------------------------------------ helpers
@@ -968,8 +968,8 @@ class Unit:
     def _zeroize(self, k, dirty=True):
         was_cfg = self.cls[k].mdh["State"] in PARTIAL_STATES
         self.cls[k] = CL()
-        if self.klmanagedcr == k and was_cfg:
-            self.klmanagedcr = MANAGEDCL_NONE
+        if self.klmanagedcl == k and was_cfg:
+            self.klmanagedcl = MANAGEDCL_NONE
         if dirty:
             self._dirty(k)
 
@@ -983,13 +983,13 @@ class Unit:
         cl.c1 = cl.c2 = b""
         cl.img = None
         cl.alloc = 0
-        if self.klmanagedcr == k and was_cfg:
-            self.klmanagedcr = MANAGEDCL_NONE
+        if self.klmanagedcl == k and was_cfg:
+            self.klmanagedcl = MANAGEDCL_NONE
         self._dirty(k)
 
     def _after_mgmt(self, k):
         st = self.cls[k].mdh["State"]
-        self.klmanagedcr = k if st in PARTIAL_STATES else MANAGEDCL_NONE
+        self.klmanagedcl = k if st in PARTIAL_STATES else MANAGEDCL_NONE
         self.klstart = 0
 
     def _retire(self):
@@ -1007,7 +1007,7 @@ class Unit:
         return {"klmvendorid": self.vendorid, "klmarchid": self.archid,
                 "klmimpid": self.impid, "klmaxiobuflen": self.klmaxiobuflen,
                 "kliobuflen": self.kliobuflen, "kliobuftop": self.kliobuftop,
-                "klstart": self.klstart, "klmanagedcr": self.klmanagedcr}[name]
+                "klstart": self.klstart, "klmanagedcl": self.klmanagedcl}[name]
 
     def csr_write(self, name, value):
         self._csr_gate(name)
@@ -1022,9 +1022,9 @@ class Unit:
             self.kliobuftop = min(value, self.kliobuflen)
         elif name == "klstart":
             self.klstart = value
-        elif name == "klmanagedcr":
+        elif name == "klmanagedcl":
             if value <= MANAGEDCL_NONE:                 # 33 and above: write ignored
-                self.klmanagedcr = value
+                self.klmanagedcl = value
 
     # ------------------------------------------------------------ inspection
     def getmd(self, k):
@@ -1132,8 +1132,8 @@ class Unit:
         self._pre()
         opening = imm in (CFG_PROVISIONING, CFG_IMPORTING)
         self._off_gate(k, exempt=opening)
-        if self.klmanagedcr not in (k, MANAGEDCL_NONE):
-            raise Trap("illegal", 2, note="klmanagedcr names another CL")
+        if self.klmanagedcl not in (k, MANAGEDCL_NONE):
+            raise Trap("illegal", 2, note="klmanagedcl names another CL")
         st = self.cls[k].mdh["State"]
         if imm == CFG_EXPORTING and st == ST_UNCONFIGURED:
             raise Trap("illegal", 2, note="export opened on an Unconfigured CL")
@@ -1207,7 +1207,7 @@ class Unit:
                                     "out_of_memory": ST_OUT_OF_MEMORY}[why])
             self._after_mgmt(k)
             return why
-        self.klmanagedcr = MANAGEDCL_NONE      # the zeroizing step left the CL Unconfigured
+        self.klmanagedcl = MANAGEDCL_NONE      # the zeroizing step left the CL Unconfigured
         raise Trap(why)
 
     def _open_export(self, k):
@@ -1409,7 +1409,7 @@ class Unit:
         self.kliobuf = bytearray()
         self.kliobuflen = self.kliobuftop = self.klstart = 0
         self.siv = self.impqual = self.siv2 = 0
-        self.klmanagedcr = MANAGEDCL_NONE
+        self.klmanagedcl = MANAGEDCL_NONE
         return "cleared all"
 
     def _usage_gate(self, k, forbidden_sub=False, needs_buf=False):
@@ -2020,7 +2020,7 @@ def import_(u, k, img, via="load", form="D", halt_after=None):
 def snapshot(u):
     return (tuple(mdh_pack(c.mdh) for c in u.cls),
             tuple((c.c1, c.c2, None if c.img is None else bytes(c.img), c.alloc) for c in u.cls),
-            u.siv, u.impqual, u.siv2, u.klstart, u.klmanagedcr,
+            u.siv, u.impqual, u.siv2, u.klstart, u.klmanagedcl,
             u.kliobuflen, u.kliobuftop, bytes(u.kliobuf))
 
 
@@ -2233,7 +2233,7 @@ def test_validity():
         r = u.mgmt(3, CFG_PROVISIONING, cipher_pi(**kw))
         check(f"provisioning with invalid Metadata ({label}) -> Error State Invalid, "
               "other MDH fields zero, no CLF capacity",
-              (r, mdh_pack(u.getmd(3)), u.cls[3].alloc, u.klmanagedcr, u.klstart),
+              (r, mdh_pack(u.getmd(3)), u.cls[3].alloc, u.klmanagedcl, u.klstart),
               ("invalid", mdh_pack(mdh_new(State=ST_INVALID)), 0, MANAGEDCL_NONE, 0))
     u = fresh(zklexpire=False)
     check("provisioning with a non-zero ExpirationDate without Zklexpire -> Invalid",
@@ -2303,10 +2303,10 @@ def test_validity():
     # insufficient CLF capacity
     need = MACHINES[M_CIPHER].clf_capacity(cipher_pi())
     u = fresh(clf_total=need - 1)
-    u.csr_write("klmanagedcr", 0)
+    u.csr_write("klmanagedcl", 0)
     check("insufficient CLF capacity raises kl_exc_out_of_memory; the CL stays Unconfigured; "
-          "klmanagedcr is set to 32",
-          (trap_of(u.mgmt, 0, CFG_PROVISIONING, cipher_pi()), u.getst(0), u.klmanagedcr),
+          "klmanagedcl is set to 32",
+          (trap_of(u.mgmt, 0, CFG_PROVISIONING, cipher_pi()), u.getst(0), u.klmanagedcl),
           ("out_of_memory", 0, MANAGEDCL_NONE))
     u = fresh(clf_total=need)
     check("exactly enough CLF capacity suffices", provision(u, 0, cipher_pi()), ST_READY)
@@ -2850,8 +2850,8 @@ def test_mgmt_flows():
     u.siv, u.impqual, u.siv2 = 1, 2, 3
     check("the opening kl.mgmt reports an open provisioning",
           u.mgmt(0, CFG_PROVISIONING, m), "opened")
-    check("... State kl_cfg_provisioning, the MDH loaded, klmanagedcr = 0, klstart cleared",
-          (u.getst(0), u.getmd(0)["Locality"], u.klmanagedcr, u.klstart),
+    check("... State kl_cfg_provisioning, the MDH loaded, klmanagedcl = 0, klstart cleared",
+          (u.getst(0), u.getmd(0)["Locality"], u.klmanagedcl, u.klstart),
           (CFG_PROVISIONING, loc(hw1=2), 0, 0))
     check("... the authentication registers are untouched by provisioning",
           (u.siv, u.impqual, u.siv2), (1, 2, 3))
@@ -2862,8 +2862,8 @@ def test_mgmt_flows():
           (u.load(0, mem, BASE), u.klstart), ("done", 0))
     check("the completing kl.mgmt (Form A, native) completes the provisioning",
           u.mgmt(0, CFG_MANAGEMENT_END, form="A"), "completed")
-    check("... State Ready, StateExtension and MachineUse zero, klmanagedcr 32",
-          (u.getst(0), u.getstx(0), u.getmd(0)["MachineUse"], u.klmanagedcr),
+    check("... State Ready, StateExtension and MachineUse zero, klmanagedcl 32",
+          (u.getst(0), u.getstx(0), u.getmd(0)["MachineUse"], u.klmanagedcl),
           (ST_READY, 0, 0, MANAGEDCL_NONE))
     check("... the implementation's ADS is recorded in _AuxDataLen_",
           (u.getmd(0)["AuxDataLen"], cl_consistent(u, 0)), (ADS_BLOCKS, True))
@@ -2895,8 +2895,8 @@ def test_mgmt_flows():
     # -- export and import
     md = u.getmd(0)
     u.mgmt(0, CFG_EXPORTING)
-    check("opening an export: State kl_cfg_exporting, klmanagedcr 0, klstart 0",
-          (u.getst(0), u.klmanagedcr, u.klstart), (CFG_EXPORTING, 0, 0))
+    check("opening an export: State kl_cfg_exporting, klmanagedcl 0, klstart 0",
+          (u.getst(0), u.klmanagedcl, u.klstart), (CFG_EXPORTING, 0, 0))
     check("... the opening kl.mgmt causes no changes to any MDH field other than _State_",
           dict(u.getmd(0), State=0), dict(md, State=0))
     check("... it writes SIV, IMPQUAL and SIV2 (AuxDataLen >= 2)",
@@ -2915,7 +2915,7 @@ def test_mgmt_flows():
           ("completed", md, content))
     check("... ml is consumed only for its _State_: the other fields of ml are ignored",
           (u.getmd(0)["UsagePolicy"], u.getmd(0)["Locality"]), (0b0001, loc(hw1=2)))
-    check("... klmanagedcr is 32 again", u.klmanagedcr, MANAGEDCL_NONE)
+    check("... klmanagedcl is 32 again", u.klmanagedcl, MANAGEDCL_NONE)
 
     v = fresh()
     check("kl.size Form B of the stored MDH gives the image length",
@@ -2924,7 +2924,7 @@ def test_mgmt_flows():
     check("an opening import zeroizes the authentication registers",
           (v.mgmt(1, CFG_IMPORTING, img[0:16] and mdh_unpack(b2v(img[0:16]))),
            v.siv, v.impqual, v.siv2), ("opened", 0, 0, 0))
-    check("... State kl_cfg_importing, klmanagedcr 1", (v.getst(1), v.klmanagedcr),
+    check("... State kl_cfg_importing, klmanagedcl 1", (v.getst(1), v.klmanagedcl),
           (CFG_IMPORTING, 1))
     mem = Memory()
     mem.write(BASE, img[16:])
@@ -2968,7 +2968,7 @@ def test_mgmt_flows():
     tampered = bytearray(img)
     tampered[40] ^= 1
     check("a modified Content1 byte: Authentication Failed, no exception",
-          (import_(v, 0, bytes(tampered)), v.getmd(0)["AuxDataLen"], v.klmanagedcr),
+          (import_(v, 0, bytes(tampered)), v.getmd(0)["AuxDataLen"], v.klmanagedcl),
           (ST_MGMT_AUTH, 0, MANAGEDCL_NONE))
     widened = mdh_bytes(dict(st_md, UsagePolicy=0)) + img[16:]
     widened = mdh_bytes(dict(st_md, ExpirationDate=0)) + img[16:] \
@@ -2999,17 +2999,17 @@ def test_mgmt_flows():
          "(<<KLEE-error-state-transfer>>), and an opening that raises an exception changes no "
          "KLEE state other than the zeroized CL (the state change rule for exceptions).")
 
-    # klmanagedcr and ordering of the kl.mgmt checks
+    # klmanagedcl and ordering of the kl.mgmt checks
     u = fresh()
     u.mgmt(0, CFG_PROVISIONING, cipher_pi())
-    check("kl.mgmt on another CL while klmanagedcr = 0 is an illegal instruction",
+    check("kl.mgmt on another CL while klmanagedcl = 0 is an illegal instruction",
           (trap_of(u.mgmt, 1, CFG_PROVISIONING, cipher_pi()), u.getst(1)), ("illegal/2", 0))
     check("... also for an export or a completion",
           (trap_of(u.mgmt, 1, CFG_EXPORTING), trap_of(u.mgmt, 1, CFG_MANAGEMENT_END, mdh_new())),
           ("illegal/2", "illegal/2"))
-    check("... the klmanagedcr check precedes Rule GR8 for a Form A opening",
+    check("... the klmanagedcl check precedes Rule GR8 for a Form A opening",
           trap_of(u.mgmt, 1, CFG_PROVISIONING, form="A"), "illegal/2")
-    u.csr_write("klmanagedcr", 32)
+    u.csr_write("klmanagedcl", 32)
     check("writing 32 releases the check; the other CL can be managed",
           provision(u, 1, cipher_pi()), ST_READY)
     check("... the first CL is still being provisioned", u.getst(0), CFG_PROVISIONING)
@@ -3037,9 +3037,9 @@ def test_mgmt_flows():
     w = fresh()
     w.mgmt(0, CFG_IMPORTING, cipher_pi(State=1))
     w.csr_write("klstart", 16)
-    before = (w.getst(0), w.klmanagedcr, w.klstart)
-    check("an exception during a management operation leaves klmanagedcr and klstart unchanged",
-          (trap_of(w.mgmt, 0, CFG_MANAGEMENT_END, form="A"), (w.getst(0), w.klmanagedcr,
+    before = (w.getst(0), w.klmanagedcl, w.klstart)
+    check("an exception during a management operation leaves klmanagedcl and klstart unchanged",
+          (trap_of(w.mgmt, 0, CFG_MANAGEMENT_END, form="A"), (w.getst(0), w.klmanagedcl,
                                                               w.klstart)),
           ("unconfigured_buffer", before))
     check("Form B of kl.mgmt is reserved; Form C needs VL * SEW >= 128",
@@ -3103,7 +3103,7 @@ def test_nested():
     saved_klstart = u.klstart
     saved = u.getmd(4)
     check("the nested export opens kl_cfg_ppi_exporting",
-          (u.mgmt(4, CFG_EXPORTING), u.getst(4), u.klmanagedcr, u.klstart),
+          (u.mgmt(4, CFG_EXPORTING), u.getst(4), u.klmanagedcl, u.klstart),
           ("opened", CFG_PPI_EXPORTING, 4, 0))
     n = u.size(k=4)
     check("kl.size of the PI-shaped PCCC is the PI length", n, 16 + len(content))
@@ -3112,8 +3112,8 @@ def test_nested():
     pccc = mdh_bytes(saved) + out.read(BASE, n - 16)
     check("the PCCC is verbatim: loaded bytes in clear, the rest reads as zero",
           pccc[16:], content[:16] + bytes(16))
-    check("a nested completion restores the saved State and keeps klmanagedcr",
-          (u.mgmt(4, CFG_MANAGEMENT_END, saved), u.getst(4), u.klmanagedcr),
+    check("a nested completion restores the saved State and keeps klmanagedcl",
+          (u.mgmt(4, CFG_MANAGEMENT_END, saved), u.getst(4), u.klmanagedcl),
           ("completed", CFG_PROVISIONING, 4))
     # the double nesting of the informative text
     u.mgmt(4, CFG_EXPORTING)
@@ -3130,10 +3130,10 @@ def test_nested():
           ("opened", "illegal/2"))
     u.mgmt(4, CFG_MANAGEMENT_END, saved)
     u.setst(4, 0)
-    check("clearing the CL releases klmanagedcr", (u.getst(4), u.klmanagedcr),
+    check("clearing the CL releases klmanagedcl", (u.getst(4), u.klmanagedcl),
           (0, MANAGEDCL_NONE))
     check("reimporting the PI-shaped PCCC opens kl_cfg_ppi_importing",
-          (u.mgmt(4, CFG_IMPORTING, saved), u.getst(4), u.klmanagedcr),
+          (u.mgmt(4, CFG_IMPORTING, saved), u.getst(4), u.klmanagedcl),
           ("opened", CFG_PPI_IMPORTING, 4))
     mem2 = Memory()
     mem2.write(BASE, pccc[16:])
@@ -3181,8 +3181,8 @@ def test_nested():
     check("the SCC-shaped PCCC: the registers, the loaded ciphertext, zeros for the rest",
           pc[16:], scc[16:80] + bytes(len(scc) - 80))
     check("... and its nested completion returns to kl_cfg_importing",
-          (u.getst(2), u.klmanagedcr), (CFG_IMPORTING, 2))
-    u.csr_write("klmanagedcr", 32)
+          (u.getst(2), u.klmanagedcl), (CFG_IMPORTING, 2))
+    u.csr_write("klmanagedcl", 32)
     ready_cipher(u, 9)                               # another management operation
     export(u, 9)
     check("another export overwrote the registers", u.siv != regs[0], True)
@@ -3194,7 +3194,7 @@ def test_nested():
     u.load(2, mem3, BASE)
     u.mgmt(2, CFG_MANAGEMENT_END, s1)
     check("its completion returns to kl_cfg_importing with the registers restored",
-          (u.getst(2), (u.siv, u.impqual, u.siv2), u.klmanagedcr),
+          (u.getst(2), (u.siv, u.impqual, u.siv2), u.klmanagedcl),
           (CFG_IMPORTING, regs, 2))
     u.csr_write("klstart", k_saved)
     u.load(2, mem, BASE)
@@ -3279,9 +3279,9 @@ def test_error_states():
         v.csr_write("klstart", 48)
         v.siv = 5
         check(f"State {want}: the short import is one kl.mgmt, configures the CL, clears "
-              "klstart, leaves klmanagedcr 32 and the registers alone",
+              "klstart, leaves klmanagedcl 32 and the registers alone",
               (v.mgmt(3, CFG_IMPORTING, mdh_unpack(b2v(img))), v.getmd(3), v.klstart,
-               v.klmanagedcr, v.siv), ("short import", m, 0, 32, 5))
+               v.klmanagedcl, v.siv), ("short import", m, 0, 32, 5))
         check(f"State {want}: no kl_cfg_management_end follows (illegal instruction)",
               trap_of(v.mgmt, 3, CFG_MANAGEMENT_END, m), "illegal/2")
     u = fresh()
@@ -3309,7 +3309,7 @@ def test_error_states():
     before = u.getmd(0)
     check("kl.mgmt opening an export on an Error-State CL leaves it unchanged, opens nothing, "
           "clears klstart", (u.csr_write("klstart", 16), u.mgmt(0, CFG_EXPORTING), u.getmd(0),
-                             u.klmanagedcr, u.klstart),
+                             u.klmanagedcl, u.klstart),
           (None, "unchanged", before, 32, 0))
     check("kl.load, kl.store and kl.mv on an Error-State CL are illegal instructions",
           [trap_of(u.load, 0, Memory(), BASE), trap_of(u.store, 0, Memory(), BASE),
@@ -3624,8 +3624,8 @@ def test_kliobuf():
             "<<KLEE-iobuf-transfer-window>>")
 
     u = fresh(maxiobuflen=128)
-    check("out of reset: kliobuflen, kliobuftop, klstart 0; klmanagedcr 32",
-          [u.csr_read(c) for c in ("kliobuflen", "kliobuftop", "klstart", "klmanagedcr")],
+    check("out of reset: kliobuflen, kliobuftop, klstart 0; klmanagedcl 32",
+          [u.csr_read(c) for c in ("kliobuflen", "kliobuftop", "klstart", "klmanagedcl")],
           [0, 0, 0, 32])
     check("kl.input on an unconfigured KLIOBUF raises kl_exc_unconfigured_buffer (GR8)",
           trap_of(u.input_, Memory(), BASE, 16), "unconfigured_buffer")
@@ -3835,11 +3835,11 @@ def test_sgr():
           [trap_of(u.exec_, 0, "D"), trap_of(u.setst, 0, ST_READY),
            trap_of(u.clone, 1, 0), trap_of(u.restrict, 0, mdh_new(UsagePolicy=1))],
           ["privilege_violation"] * 4)
-    u.csr_write("klmanagedcr", 32)
+    u.csr_write("klmanagedcl", 32)
     provision(u, 2, cipher_pi())
-    u.csr_write("klmanagedcr", 0)
-    check("... cloning onto it clears it and releases klmanagedcr",
-          (u.clone(0, 2), u.getst(0), u.klmanagedcr), ("cloned", ST_READY, MANAGEDCL_NONE))
+    u.csr_write("klmanagedcl", 0)
+    check("... cloning onto it clears it and releases klmanagedcl",
+          (u.clone(0, 2), u.getst(0), u.klmanagedcl), ("cloned", ST_READY, MANAGEDCL_NONE))
     u = fresh()
     u.mgmt(3, CFG_PROVISIONING, cipher_pi())
     check("... a clone naming it as both source and destination performs no operation",
@@ -3904,16 +3904,16 @@ def test_sgr():
           [r[1:] for r in rows], [(None,) * 5] * len(rows))
     w = fresh()
     w.mgmt(0, CFG_PROVISIONING, cipher_pi())
-    check("SGR20: an Error-State kl.setst on the managed CL releases klmanagedcr",
-          (w.setst(0, ST_INVALID), w.klmanagedcr), ("error state", 32))
+    check("SGR20: an Error-State kl.setst on the managed CL releases klmanagedcl",
+          (w.setst(0, ST_INVALID), w.klmanagedcl), ("error state", 32))
 
     # kl.clear, kl.clearall
     w = fresh()
     ready_cipher(w, 0)
     w.csr_write("klstart", 32)
-    w.csr_write("klmanagedcr", 0)
-    check("kl.clear leaves klstart unchanged; klmanagedcr naming a CL not under management "
-          "stays", (w.setst(0, 0, aux=5, form="B"), w.klstart, w.klmanagedcr, w.clf_free()),
+    w.csr_write("klmanagedcl", 0)
+    check("kl.clear leaves klstart unchanged; klmanagedcl naming a CL not under management "
+          "stays", (w.setst(0, 0, aux=5, form="B"), w.klstart, w.klmanagedcl, w.clf_free()),
           ("cleared", 32, 0, w.clf_total))
     w = fresh()
     ready_cipher(w, 0)
@@ -3923,7 +3923,7 @@ def test_sgr():
     w.siv = 3
     check("kl.clearall: every CL Unconfigured, KLIOBUF zeroed, the CSRs and registers reset",
           (w.setst("X0", 0), [w.getst(k) for k in range(32)], w.kliobuflen, w.kliobuftop,
-           bytes(w.kliobuf), w.klstart, w.klmanagedcr, w.siv, w.clf_free()),
+           bytes(w.kliobuf), w.klstart, w.klmanagedcl, w.siv, w.clf_free()),
           ("cleared all", [0] * 32, 0, 0, b"", 0, 32, 0, w.clf_total))
     check("kl.setst through X0 other than Form A #0 is reserved",
           (trap_of(w.setst, "X0", 0, form="B"), trap_of(w.setst, "X0", 1)),
@@ -4247,7 +4247,7 @@ def test_error_architecture():
     check("no Privileged Architecture: an unsupported opening -> Error State Unsupported, "
           "other fields zero, klstart cleared",
           (u.mgmt(0, CFG_PROVISIONING, mdh_new(Machine=M_ABSENT, MachinePolicy=1)),
-           u.getmd(0), u.klstart, u.klmanagedcr),
+           u.getmd(0), u.klstart, u.klmanagedcl),
           ("unsupported", mdh_new(State=ST_UNSUPPORTED), 0, 32))
     u = fresh(priv=False, clf_total=10)
     check("... insufficient capacity -> Error State Out of Memory",
@@ -4261,7 +4261,7 @@ def test_error_architecture():
     u = fresh(priv=False)
     u.mgmt(0, CFG_PROVISIONING, cipher_pi())
     check("... cloning a Configuration-State source: the source takes the Error State",
-          (u.clone(1, 0), u.getst(0), u.getst(1), u.klmanagedcr),
+          (u.clone(1, 0), u.getst(0), u.getst(1), u.klmanagedcl),
           ("error", ST_PRIV_VIOLATION, 0, 32))
     cap = MACHINES[M_CIPHER].clf_capacity(cipher_pi())
     u = fresh(priv=False, clf_total=cap)
@@ -4344,7 +4344,7 @@ def test_error_architecture():
     u.lcr[9] = "off"
     check("an exempted opening that raises before zeroizing sets no field",
           (trap_of(u.mgmt, 9, CFG_PROVISIONING, cipher_pi()), u.lcr[9]), ("illegal/2", "off"))
-    u.csr_write("klmanagedcr", 32)
+    u.csr_write("klmanagedcl", 32)
     check("an exempted opening that zeroizes and then raises has set Dirty",
           (trap_of(u.mgmt, 9, CFG_PROVISIONING, mdh_new(Machine=M_ABSENT)), u.lcr[9]),
           ("unsupported", "dirty"))
@@ -4371,7 +4371,7 @@ def build_context(u):
     # an abandoned provisioning, not the managed CL
     u.mgmt(5, CFG_PROVISIONING, xof_pi())
     u.mv_in(5, 0x1111)
-    u.csr_write("klmanagedcr", 32)
+    u.csr_write("klmanagedcl", 32)
     # the managed CL: an import interrupted after SIV, IMPQUAL, SIV2 and one block
     src = fresh()
     provision(src, 0, cipher_pi(SCProtection=1, Locality=loc(boot=1)))
@@ -4395,7 +4395,7 @@ def build_context(u):
 
 def save_context(u, managed_first=True):
     """<<KLEE-state-save-and-restore-order>>, save order."""
-    ctx = {"klstart": u.csr_read("klstart"), "klmanagedcr": u.csr_read("klmanagedcr")}
+    ctx = {"klstart": u.csr_read("klstart"), "klmanagedcl": u.csr_read("klmanagedcl")}
     ctx["kliobuflen"] = u.csr_read("kliobuflen")
     ctx["kliobuftop"] = u.csr_read("kliobuftop")
     if ctx["kliobuflen"]:
@@ -4405,16 +4405,16 @@ def save_context(u, managed_first=True):
         u.output(mem, BASE, ctx["kliobuflen"])
         ctx["kliobuf"] = mem.read(BASE, ctx["kliobuflen"])
     images = {}
-    mc = ctx["klmanagedcr"]
+    mc = ctx["klmanagedcl"]
     if mc < 32 and u.getmd(mc)["State"] != ST_UNCONFIGURED:
         images[mc] = export(u, mc)
     for k in range(32):
         if k != mc and u.getst(k) != ST_UNCONFIGURED:
             # 32 before each export: a CL left in a Configuration State makes its own
-            # nested export write its number to klmanagedcr again
-            u.csr_write("klmanagedcr", 32)
+            # nested export write its number to klmanagedcl again
+            u.csr_write("klmanagedcl", 32)
             images[k] = export(u, k)
-    u.csr_write("klmanagedcr", 32)
+    u.csr_write("klmanagedcl", 32)
     ctx["images"] = images
     return ctx
 
@@ -4422,15 +4422,15 @@ def save_context(u, managed_first=True):
 def restore_context(u, ctx, managed_first=False):
     """<<KLEE-state-save-and-restore-order>>, restore order (`managed_first` inverts it,
     for a negative control)."""
-    mc = ctx["klmanagedcr"]
+    mc = ctx["klmanagedcl"]
     order = [k for k in ctx["images"] if k != mc]
     if mc in ctx["images"]:
         order = [mc] + order if managed_first else order + [mc]
     for k in order:
-        u.csr_write("klmanagedcr", 32)
+        u.csr_write("klmanagedcl", 32)
         import_(u, k, ctx["images"][k])
         if k != mc:
-            u.csr_write("klmanagedcr", 32)
+            u.csr_write("klmanagedcl", 32)
     u.csr_write("kliobuflen", ctx["kliobuflen"])
     if ctx["kliobuflen"]:
         u.csr_write("klstart", 0)
@@ -4439,7 +4439,7 @@ def restore_context(u, ctx, managed_first=False):
         mem.write(BASE, ctx["kliobuf"])
         u.input_(mem, BASE, ctx["kliobuflen"])
     u.csr_write("kliobuftop", ctx["kliobuftop"])
-    u.csr_write("klmanagedcr", mc)
+    u.csr_write("klmanagedcl", mc)
     u.csr_write("klstart", ctx["klstart"])
 
 
@@ -4452,20 +4452,20 @@ def test_save_restore():
     u.csr_write("kliobuflen", 16)
     u.siv = 4
     u.reset()
-    check("out of reset: CLs Unconfigured, KLIOBUF unconfigured, klstart 0, klmanagedcr 32, "
+    check("out of reset: CLs Unconfigured, KLIOBUF unconfigured, klstart 0, klmanagedcl 32, "
           "registers zero",
           ([u.getst(k) for k in range(32)], u.kliobuflen, u.kliobuftop, u.klstart,
-           u.klmanagedcr, (u.siv, u.impqual, u.siv2)),
+           u.klmanagedcl, (u.siv, u.impqual, u.siv2)),
           ([0] * 32, 0, 0, 0, 32, (0, 0, 0)))
-    check("klmanagedcr: writing 33 or more leaves it unchanged; 0-32 are written",
-          (u.csr_write("klmanagedcr", 33), u.klmanagedcr, u.csr_write("klmanagedcr", 4),
-           u.klmanagedcr, u.csr_write("klmanagedcr", 1 << 40), u.klmanagedcr),
+    check("klmanagedcl: writing 33 or more leaves it unchanged; 0-32 are written",
+          (u.csr_write("klmanagedcl", 33), u.klmanagedcl, u.csr_write("klmanagedcl", 4),
+           u.klmanagedcl, u.csr_write("klmanagedcl", 1 << 40), u.klmanagedcl),
           (None, 32, None, 4, None, 4))
 
     u = fresh()
     src, base_ml, mem = build_context(u)
     check("the context: K2 is being imported and is the managed CL; klstart 64",
-          (u.getst(2), u.klmanagedcr, u.klstart, u.getst(5)),
+          (u.getst(2), u.klmanagedcl, u.klstart, u.getst(5)),
           (CFG_IMPORTING, 2, 64, CFG_PROVISIONING))
     before = snapshot(u)
     ctx = save_context(u)
@@ -4475,17 +4475,17 @@ def test_save_restore():
     check("the saved images: the managed CL's SCC-shaped PCCC first, an Error State as 16 bytes",
           (list(ctx["images"])[0], len(ctx["images"][1]), sorted(ctx["images"])),
           (2, 16, [0, 1, 2, 5, 7]))
-    spec_note("<<KLEE-state-save-and-restore-order>> writes 32 to klmanagedcr once, before "
+    spec_note("<<KLEE-state-save-and-restore-order>> writes 32 to klmanagedcl once, before "
               "saving the other CLs, but the export of a CL that is itself in a Configuration "
               "State (one whose management software abandoned by writing 32) writes that CL's "
-              "number to klmanagedcr again, so the next export raises an illegal-instruction "
+              "number to klmanagedcl again, so the next export raises an illegal-instruction "
               "exception. The save order needs the same 'before and after each' wording the "
               "restore order already has for imports.")
     # another context runs, then this one is switched back in
     u.clearall()
     provision(u, 2, xof_pi())
     u.csr_write("kliobuflen", 16)
-    u.csr_write("klmanagedcr", 3)
+    u.csr_write("klmanagedcl", 3)
     u.csr_write("klstart", 8)
     u.siv = 99
     u.clearall()
@@ -4511,10 +4511,10 @@ def test_save_restore():
     check("a handler passing ml through the KLIOBUF completes an export with Form A",
           (u.mgmt(0, CFG_MANAGEMENT_END, form="A"), u.getst(0)), ("completed", ST_READY))
 
-    # the hint: klmanagedcr naming an Unconfigured CL
+    # the hint: klmanagedcl naming an Unconfigured CL
     u = fresh()
-    u.csr_write("klmanagedcr", 0)
-    check("a handler checks the MDH first: klmanagedcr = 0 naming an Unconfigured CL",
+    u.csr_write("klmanagedcl", 0)
+    check("a handler checks the MDH first: klmanagedcl = 0 naming an Unconfigured CL",
           (u.getmd(0)["State"], trap_of(u.mgmt, 0, CFG_EXPORTING)), (0, "illegal/2"))
     ctx = save_context(u)
     check("... the save path saves no image for it", ctx["images"], {})
@@ -4642,12 +4642,12 @@ def test_notes():
          "_SCProtection_ ... not implemented'. The opening kl.mgmt checks unsupported first, so "
          "the class decides between kl_exc_unsupported and Error State Invalid. Modelled as "
          "invalid (the explicit entry); kl.avail still returns 0 for it.")
-    info("klmanagedcr after an opening kl.mgmt that zeroizes the CL and then raises: "
+    info("klmanagedcl after an opening kl.mgmt that zeroizes the CL and then raises: "
          "<<KLEE-CL-management>> sets it to 32 because the CL is Unconfigured, while "
-         "<<KLEE-CSR-klmanagedcr>> sets it to 32 only when the named CL 'ceases to be in a "
+         "<<KLEE-CSR-klmanagedcl>> sets it to 32 only when the named CL 'ceases to be in a "
          "Configuration State'. They differ only if software wrote the CL's own number while "
          "the CL was not under management; this model follows <<KLEE-CL-management>> for "
-         "kl.mgmt and <<KLEE-CSR-klmanagedcr>> for kl.clear.")
+         "kl.mgmt and <<KLEE-CSR-klmanagedcl>> for kl.clear.")
     info("'kl.mgmt also clears klstart' is modelled as happening only when kl.mgmt does not "
          "raise an exception, per the state change rule for exceptions of "
          "<<KLEE-error-architecture>>.")

@@ -7,7 +7,7 @@
 * `modules/ROOT/pages/Zkl-notation.adoc`
 * `Zkl-symbols.adoc` — found only at `modules/ROOT/partials/`
 * `modules/ROOT/pages/Zkl-ISA-unpriv.adoc`
-* `modules/ROOT/pages/Zkl-ISA-algorithms.adoc` — **does not exist**; see §6
+* `modules/ROOT/pages/Zkl-ISA-machines.adoc`
 * `modules/ROOT/pages/Zkl-ISA-priv.adoc`
 * `modules/ROOT/pages/Zkl-pseudocode.adoc`
 
@@ -275,35 +275,35 @@ In priv 98–112, add `kl_exc_emulate` to the list of non-delegable causes. Its 
 **Location.**
 
 * unpriv 296–304 (registers per hart; the NOTE acknowledges overwriting only for *opening* `kl.mgmt`)
-* 988–991 (`klmanagedcr`: "Internal values of SIV … are associated with this CL")
+* 988–991 (`klmanagedcl`: "Internal values of SIV … are associated with this CL")
 * 1370–1376 (`kl.mv` State checks)
 * 2083–2108 (`kl.load`)
 * 2136–2140 (`kl.store`)
 * 828 (save rule)
-* 2566–2569 (second-group illegal-instruction grounds: only `kl.mgmt` checks `klmanagedcr`)
+* 2566–2569 (second-group illegal-instruction grounds: only `kl.mgmt` checks `klmanagedcl`)
 
 **Description / trigger.**
 
-1. `kl.mgmt K1, importing` opens an import, so `klmanagedcr` = 1 and SIV is zeroized.
-2. The code (or a buggy library sharing the hart) opens `K2` for import as well. That `kl.mgmt` fails the `klmanagedcr` check, but after `csrw klmanagedcr, 32` (permitted, 993–999) it succeeds, and `K1` remains in `kl_cfg_importing`.
-3. A `kl.load K1, …` passes SGR21: its State is `kl_cfg_importing`, and nothing checks `klmanagedcr`. It writes the SIV bytes of `K1`'s image into the per-hart SIV, which now belongs to `K2`.
+1. `kl.mgmt K1, importing` opens an import, so `klmanagedcl` = 1 and SIV is zeroized.
+2. The code (or a buggy library sharing the hart) opens `K2` for import as well. That `kl.mgmt` fails the `klmanagedcl` check, but after `csrw klmanagedcl, 32` (permitted, 993–999) it succeeds, and `K1` remains in `kl_cfg_importing`.
+3. A `kl.load K1, …` passes SGR21: its State is `kl_cfg_importing`, and nothing checks `klmanagedcl`. It writes the SIV bytes of `K1`'s image into the per-hart SIV, which now belongs to `K2`.
 4. Completion of either import authenticates against the other image's SIV.
 
-Symmetrically, `kl.store` on an exporting CL that is not `klmanagedcr` emits the SIV of another CL. The save rule at 828 assumes the SIV belongs to the CL named by `klmanagedcr`, which step 3 falsifies.
+Symmetrically, `kl.store` on an exporting CL that is not `klmanagedcl` emits the SIV of another CL. The save rule at 828 assumes the SIV belongs to the CL named by `klmanagedcl`, which step 3 falsifies.
 
 **Resolution.** Add to the second group of illegal-instruction grounds (unpriv 2568), and restate in SGR21/SGR22:
 
-> . `kl.load`, `kl.store` or `kl.mv` on a CL in `kl_cfg_importing` or `kl_cfg_exporting` whose number differs from `klmanagedcr`.
+> . `kl.load`, `kl.store` or `kl.mv` on a CL in `kl_cfg_importing` or `kl_cfg_exporting` whose number differs from `klmanagedcl`.
 
-Add to SGR21 and SGR22: "In States `kl_cfg_importing` and `kl_cfg_exporting` the CL must additionally be the one named by `klmanagedcr`."
+Add to SGR21 and SGR22: "In States `kl_cfg_importing` and `kl_cfg_exporting` the CL must additionally be the one named by `klmanagedcl`."
 
 Provisioning and PPI states do not use the authentication registers (304), so they are left unconstrained, which keeps the change minimal.
 
 ---
 
-### *PARTIALLY FIXED (IRR1, SGR20, Error-State table, priv 281 pending; §9)* M5 — `kl.rename` and `kl.swap` are underspecified
+### **FIXED** M5 — `kl.rename` and `kl.swap` are underspecified
 
-**Severity rationale.** These instructions move whole CCs, including partially managed ones, yet their exceptions, interaction with `klmanagedcr`, lazy-save (`*lclstatus`) behavior and uninterruptibility are undefined. The result is non-interoperable context switching and possible loss of the authoritative image of a CL.
+**Severity rationale.** These instructions move whole CCs, including partially managed ones, yet their exceptions, interaction with `klmanagedcl`, lazy-save (`*lclstatus`) behavior and uninterruptibility are undefined. The result is non-interoperable context switching and possible loss of the authoritative image of a CL.
 
 **Location.**
 
@@ -312,24 +312,24 @@ Provisioning and PPI states do not use the authentication registers (304), so th
 * SGR20, 2446 (partial-State allowance omits both)
 * the Error-State table, 2694–2710 (omits both)
 * priv 281 (the `*lclstatus` exemption list names only `kl.clone`)
-* unpriv 988 (`klmanagedcr` maintenance)
+* unpriv 988 (`klmanagedcl` maintenance)
 
 **Description.** The following are undefined:
 
 * the behavior when `Ks` = `Kd`
 * the exceptions raised: `kl_exc_out_of_memory` is impossible for rename but possible for swap in some representations, and `kl_exc_CL_off` depends on which operand is Off
 * whether a source in a Configuration State is allowed, which contradicts the spirit of SGR18
-* which `klmanagedcr` value results when the destination was the managed CL and is overwritten. Line 988 covers "cleared … destination of a `kl.clone`" but not rename
+* which `klmanagedcl` value results when the destination was the managed CL and is overwritten. Line 988 covers "cleared … destination of a `kl.clone`" but not rename
 * for swap when both CLs are partial, "changed to the partial CL" is ambiguous
 * whether an Off operand is exempt as for `kl.clone`, and which fields become Dirty
 
 **Resolution.** Replace 1922–1926 with:
 
 > `kl.rename`:::
-> If `Ks` = `Kd`, no operation, and no field is set to Dirty. Otherwise the CC of `Ks`, including any Partial or Configuration State, becomes the CC of `Kd`, the previous CC of `Kd` is discarded, and `Ks` becomes _Unconfigured_. If `klmanagedcr` = `s`, it becomes `d`. Otherwise, if `klmanagedcr` = `d`, it becomes 32. The source access is not exempt from `kl_exc_CL_off`; the destination access is exempt as for `kl.clone`. The fields in effect for both CLs are set to Dirty.
+> If `Ks` = `Kd`, no operation, and no field is set to Dirty. Otherwise the CC of `Ks`, including any Partial or Configuration State, becomes the CC of `Kd`, the previous CC of `Kd` is discarded, and `Ks` becomes _Unconfigured_. If `klmanagedcl` = `s`, it becomes `d`. Otherwise, if `klmanagedcl` = `d`, it becomes 32. The source access is not exempt from `kl_exc_CL_off`; the destination access is exempt as for `kl.clone`. The fields in effect for both CLs are set to Dirty.
 >
 > `kl.swap`:::
-> If `Ks` = `Kd`, no operation. Otherwise the CCs of `Ks` and `Kd` are exchanged. If `klmanagedcr` ∈ {`s`,`d`}, it is replaced by the other index. Neither access is exempt from `kl_exc_CL_off`. The fields in effect for both CLs are set to Dirty.
+> If `Ks` = `Kd`, no operation. Otherwise the CCs of `Ks` and `Kd` are exchanged. If `klmanagedcl` ∈ {`s`,`d`}, it is replaced by the other index. Neither access is exempt from `kl_exc_CL_off`. The fields in effect for both CLs are set to Dirty.
 >
 > Neither instruction raises `kl_exc_out_of_memory`, and neither changes any MDH.
 
@@ -443,34 +443,6 @@ This goes before `V3 ← V3 xor V1` on the last iteration. Add a normative discl
 
 ---
 
-### minor findings (status per row, verified in §8)
-
-| ID | Location | Defect | Resolution |
-|---|---|---|---|
-| **FIXED** m1 | unpriv 634 | Stray "?" after "…these Localities." | Delete. |
-| **FIXED** m2 | unpriv 1908, 1922, 1925 | Labels `ace.clone`/`ace.rename`/`ace.swap` (old ACE name). | `kl.clone` etc. |
-| **FIXED** m3 | unpriv 1892 | "Indirect CR addressing": CR is undefined (not in acronyms). | "Indirect CL addressing". |
-| **FIXED** m4 | unpriv 3276, 2670, 2993 | Anchor `ace-mgmt-completes-export` still uses the old prefix. | Rename to `KLEE-mgmt-completes-export`. |
-| **FIXED** m5 | unpriv 1376 | `kl.mv` cites only SGR21; the export direction is governed by SGR22. | "Rules SGR21 and SGR22". |
-| **FIXED** m6 | unpriv 1331–1358 | Variant letters A–D in the mnemonics are reused as "Forms A–D" in 1353–1355 ("In Forms A and B, `rs2`…"), but the encodings use `kl.exec` Forms B and C. | Rename the variants i–iv and fix 1353–1355. |
-| **FIXED** m7 | unpriv 1311 | Cites GR8 for register overlap; GR8 (1096) covers only LMUL alignment, and no Rule defines overlap. | Add an overlap Rule to GR8 or state it inline. |
-| *OPEN* m8 | unpriv 421, 436, 451–452 | "three … levels" but values 0–3 exist; "asd per"; the Level 3 row says "In addition to SCProtection Level 3" (should be Level 2); "ISO/IEC-17825-ISO". | Fix text. |
-| *OPEN* m9 | unpriv 1707–1718 | `kl.getst`/`kl.getstx` expansions given for RV64 only. On RV32 `kl.getmdl` writes a pair; the expansion from `X[d]` is the same but must be stated. | "On RV32 the same expansion applies to `X[d]`." |
-| **FIXED** m10 | unpriv 1685 | `kl.getmdv` does not specify the destination bits above 128 or the tail policy. | "Bits above 127 follow the tail-agnostic policy (<<KLEE-KLV>>)." |
-| **FIXED** m11 | unpriv 578–582 | UsagePolicy: "mode" is not defined as the effective privilege for MPRV-affected accesses; KLEE usage is not a data access, so the current mode applies. | "…the current privilege mode, unaffected by `mstatus.MPRV`." |
-| **FIXED** m12 | unpriv 674 | Behavior when the secure clock is unavailable or unreadable is undefined. | "If the secure clock cannot be read, a CL with non-zero _ExpirationDate_ is treated as expired." |
-| **FIXED** m13 | unpriv 843–846 | `klmvendorid` is not given the JEDEC bank/offset encoding of Priv ISA §3.1.2 (`mvendorid`); `klmarchid` lacks the MSB convention of §3.1.3. | Copy those encodings by reference. |
-| *OPEN* m14 | unpriv 798–801 | Privilege column "RO" for CSRs that U-mode reads; other rows use "URW". | "URO". |
-| **FIXED** m15 | unpriv 2802 | IRR7 "Handlers must not reset it to zero" gives no architectural consequence. | "…doing so is UNSPECIFIED and may transition the CL to _Invalid_." |
-| **FIXED** m16 | unpriv 1920 | `kl.clone` "achieves the same result as exporting … and importing". False for IMPQUAL/Locality changes and ADSDropped; also a sealing/auth-register side effect. | "has the same effect on the destination CC as an export and import would, but touches no authentication register." |
-| **FIXED** m17 | notation 109–145 | The Transcription section is commented out, yet `{vvert}` semantics depend on it (156, 195). | Restore it or define `{vvert}` in the live text. |
-| *OPEN* m18 | acronyms | Missing PCCC, KLV, KLLEN, CR, RVWMO, RVTSO. KLEE's expansion "Cryptographic Lockers Extensions" matches neither the letters nor the introduction ("Cryptographic Locker Extensions"). | Add them and align. |
-| *OPEN* m19 | src/Zkl.adoc 42/52, 58, 30, 112 | `:section-refsig:` defined twice; stray `:csrname: envcfg`; `:bibtex-file:` lacks `../` relative to `src/`; `[discrete]` precedes an `include::`, which has no effect. | Clean up. |
-| **FIXED** m20 | unpriv 3398–3404 | The Error-State short import installs "the entire MDH … without applying the checks", including an arbitrary _Locality_ and a reserved _Version_. Harmless because no Content exists, but `kl.getmd` then reports invalid Metadata as if valid. | Apply the reserved-bit checks, or state that such a CL reports _Invalid_. |
-| **FIXED** m21 | unpriv 1240 | `kl.size` Form B asserts that no field in [127:64] affects size; `Version` (127:126) can (see M8). | Carve out `Version`. |
-| **FIXED** m22 | priv 379 | Readback "at the implementation's choice" of the active CSK under the programmable models conflicts with the spirit of unpriv 3810 ("Except for in M-mode …"). It is permitted, but it must be discoverable for audit. | Make the choice discoverable, or mandate read-as-zero under models 2–4. |
-
----
 
 ## 3. Cross-document inconsistencies and missing requirements
 
@@ -528,7 +500,7 @@ Section numbers for RVV exception handling and the Debug spec are cited from mem
 
 1. **C2:** replace unpriv 3877–3878 and extend 628 (text in C2). This is a one-paragraph change that removes a total break.
 2. **C1:** add the Derivation Narrowing Rule, restore the exportable/importable definitions and the SKS rule, and repair SGR5.
-3. **M4:** add the `klmanagedcr` ownership ground (one list item plus SGR21/22).
+3. **M4:** add the `klmanagedcl` ownership ground (one list item plus SGR21/22).
 4. **M2 + M1:** fix the base-register slots and the EA text now, and correct the introduction's premise so that the ARC can allocate opcodes.
 5. **M7:** add the forward-progress requirement on synchronous faults.
 6. **M3:** specify a non-delegable emulation cause, with the number left to the ARC.
@@ -544,7 +516,7 @@ Section numbers for RVV exception handling and the Debug spec are cited from mem
 * **A2.** `modules/ROOT/pages/Zkl-symbols.adoc` does not exist. `modules/ROOT/partials/Zkl-symbols.adoc` was used; it contains only attributes.
 * **A3.** M1 assumes that a hart implementing `Zklv` implements the RVV unit-stride encodings, which unpriv 318 and 328 state.
 * **Q1.** Is execution after unauthenticated Debug entry expected to continue without reset? C2's remedy is safe either way.
-* **Q2.** Should `kl.rename` of the managed CL be allowed at all? M5 allows it, with `klmanagedcr` following the CL.
+* **Q2.** Should `kl.rename` of the managed CL be allowed at all? M5 allows it, with `klmanagedcl` following the CL.
 * **Q3.** Is `kl.derive`'s zero-fill intended for non-key destinations (for example, nonce fields)? M6 keeps it only there.
 
 ---
@@ -557,7 +529,7 @@ Section numbers for RVV exception handling and the Debug spec are cited from mem
 
 * **C1 vs SKID narrowing (unpriv 3092).** The narrowing is identical by construction. *Conflict found:* the first draft of C1 "raised" the destination SCProtection to the maximum. SCProtection selects the implementation instantiated at provisioning (unpriv 752 validity: the Machine/MachinePolicy/SCProtection combination), so it cannot be changed in place. **Adapted:** a lower destination SCProtection → Invalid, no transfer.
 * **C1 vs M6.** Both add derive Checks. Order: M6's length check, then C1's narrowing, then transfer. Both are "nothing transferred" failures, so they compose.
-* **M4 vs M5.** Rename/swap update `klmanagedcr` so that it follows the CL. The M4 ownership check then keeps holding for the moved partial CL. Compatible.
+* **M4 vs M5.** Rename/swap update `klmanagedcl` so that it follows the CL. The M4 ownership check then keeps holding for the moved partial CL. Compatible.
 * **M3 vs M1/M2.** The emulation cause is keyed to the encodings; the re-encoding in M2 changes nothing in M3.
 * **M7 vs M9.** The pseudocode's "CL cleared ⇒ restart" loops (pseudo 94, 154, 224) remain valid; M7 affects only `klstart` after synchronous faults.
 
@@ -565,8 +537,8 @@ Section numbers for RVV exception handling and the Debug spec are cited from mem
 
 * **C2 vs unpriv 3791 (CSK exemptions).** Locality/CSK CSR groups remain accessible without a CSK, so M-mode can still re-establish them under the programmable models. The hardwired model becomes unavailable until reset, which matches NOTE 3884. Compatible.
 * **C2 vs priv 453 (reset).** Hart reset restores the hardwired CSK and HW entries; "until the next hart reset" matches.
-* **M4 vs the context-switch order (unpriv 3756–3779).** The handler exports the managed CL *first* (step 3764) while `klmanagedcr` still names it, so the check passes. Restores run with `klmanagedcr` = 32 before each opening `kl.mgmt`, and the opening `kl.mgmt` then writes the target number (3134). Subsequent transfers pass. Compatible.
-* **M4 vs the hint case (3784).** User code writes `klmanagedcr` = 0 with K0 Unconfigured. Transfers on K0 already fail SGR21, and transfers on other CLs now fail the ownership check. That is the intended behavior.
+* **M4 vs the context-switch order (unpriv 3756–3779).** The handler exports the managed CL *first* (step 3764) while `klmanagedcl` still names it, so the check passes. Restores run with `klmanagedcl` = 32 before each opening `kl.mgmt`, and the opening `kl.mgmt` then writes the target number (3134). Subsequent transfers pass. Compatible.
+* **M4 vs the hint case (3784).** User code writes `klmanagedcl` = 0 with K0 Unconfigured. Transfers on K0 already fail SGR21, and transfers on other CLs now fail the ownership check. That is the intended behavior.
 
 **(c) Adaptations applied:**
 
@@ -673,9 +645,9 @@ Line numbers in this section refer to the working tree at commit `2ecf127` and w
 
 Minor: 626 reads "…entry (…), is _unconfigured_"; drop the comma.
 
-**M4.** The author's note says that handling is defined by the architecture. After 6071269 this is true, because SGR21/SGR22 now check `klmanagedcr`. Before that change it was not, since nothing prevented a transfer on a non-managed CL in `kl_cfg_importing`. The finding is closed by the added sentence. Suggested editorial form, per rule:
-> SGR21: In State `kl_cfg_importing` the CL must additionally be the one named by `klmanagedcr`.
-> SGR22: In State `kl_cfg_exporting` the CL must additionally be the one named by `klmanagedcr`.
+**M4.** The author's note says that handling is defined by the architecture. After 6071269 this is true, because SGR21/SGR22 now check `klmanagedcl`. Before that change it was not, since nothing prevented a transfer on a non-managed CL in `kl_cfg_importing`. The finding is closed by the added sentence. Suggested editorial form, per rule:
+> SGR21: In State `kl_cfg_importing` the CL must additionally be the one named by `klmanagedcl`.
+> SGR22: In State `kl_cfg_exporting` the CL must additionally be the one named by `klmanagedcl`.
 
 **M5.** The instruction text (1952–1960) now matches the remedy, but the rules that enumerate instructions were not updated:
 * IRR1 (2802): add `kl.rename` and `kl.swap` to the uninterruptible list.
