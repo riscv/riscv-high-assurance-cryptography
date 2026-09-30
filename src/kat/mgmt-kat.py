@@ -957,7 +957,7 @@ class Unit:
     def _off_gate(self, k, exempt=False):
         if self._fields_in_effect() and self.lcr.get(k) == "off":
             if not exempt:
-                raise Trap("lockers_off")
+                raise Trap("locker_off")
             return True
         return False
 
@@ -4322,13 +4322,13 @@ def test_error_architecture():
           [trap_of(u.getmd, 0), trap_of(u.size, k=0), trap_of(u.exec_, 0, "D"),
            trap_of(u.restrict, 0, 0, "h"), trap_of(u.clone, 1, 0),
            trap_of(u.mgmt, 0, CFG_EXPORTING), trap_of(u.load, 0, Memory(), BASE),
-           trap_of(u.mv_in, 0, 1)], ["CL_off"] * 8)
+           trap_of(u.mv_in, 0, 1)], ["locker_off"] * 8)
     check("the first illegal-instruction group precedes it", trap_of(u.setst, 0, 46), "illegal/1")
     u.lcr[5] = "off"
     check("it precedes the second group (kl.clone from an Off, Unconfigured locker)",
-          trap_of(u.clone, 1, 5), "CL_off")
+          trap_of(u.clone, 1, 5), "locker_off")
     check("an Off source is not exempt, whichever locker is the destination",
-          trap_of(u.clone, 5, 0), "CL_off")
+          trap_of(u.clone, 5, 0), "locker_off")
     u.lcr[0] = "clean"
     check("kl.clone naming an Off locker as destination executes and sets it Dirty",
           (u.clone(5, 0), u.lcr[5]), ("cloned", "dirty"))
